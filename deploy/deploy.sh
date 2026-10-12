@@ -136,17 +136,22 @@ if wait_health; then
 
   # 生产环境 MONAI 官方临床模型权重预热与校验（持久化存储在 imaging-models 卷中）
   echo "== [Models] 预热与校验生产环境 MONAI 深度学习权重（持久化卷 imaging-models）..."
-  docker exec heurion2-imaging-worker python3 -c "\
-import sys; sys.path.insert(0, '/app/apps/imaging-worker/src'); \
-from model_registry import OFFICIAL_MODEL_REGISTRY, pull_model, verify_model; \
-targets = [k for k in OFFICIAL_MODEL_REGISTRY if k not in ('totalsegmentator', 'vista3d', 'copd_emphysema')]; \
-print(f'正在校验 {len(targets)} 个官方临床模型权重...'); \
-for k in targets: \
-    v = verify_model(k); \
-    if not v['installed'] or not v['verified']: \
-        print(f'  拉取并校验模型: {k}...'); \
-        pull_model(k); \
-    print(f'  ✓ 就绪: {k}') \
+  docker exec heurion2-imaging-worker python3 -c "
+import sys
+sys.path.insert(0, '/app/apps/imaging-worker/src')
+from model_registry import OFFICIAL_MODEL_REGISTRY, pull_model, verify_model
+
+targets = [k for k in OFFICIAL_MODEL_REGISTRY if k not in ('totalsegmentator', 'vista3d', 'copd_emphysema')]
+print(f'正在校验 {len(targets)} 个官方临床模型权重...')
+for k in targets:
+    try:
+        v = verify_model(k)
+        if not v.get('installed') or not v.get('verified'):
+            print(f'  拉取并校验模型: {k}...')
+            pull_model(k)
+        print(f'  ✓ 就绪: {k}')
+    except Exception as e:
+        print(f'  ⚠️ 模型 {k} 预热跳过: {e}')
 " || echo "⚠️  模型预热在后台完成或由于网络重试，不影响主服务运行"
 
   # S3 备份（配置了才装定时任务）
