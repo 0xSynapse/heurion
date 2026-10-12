@@ -378,11 +378,30 @@ export function parseMimeText(rawText: string): string {
   return rawText
 }
 
+/** 智能判定正文是否为标准 HTML 富文本格式邮件 (如包含 DOCTYPE、html 骨架或 table/div 邮件模板标签) */
+export function isHtmlEmail(raw?: string): boolean {
+  if (!raw) return false
+  const s = raw.trim()
+  if (/^<!DOCTYPE\s+html/i.test(s) || /^<html[\s>]/i.test(s)) return true
+  if (/<table[\s>]/i.test(s) && /<\/table>/i.test(s)) return true
+  if (/<(div|p|span|section)[^>]*style=/i.test(s) && /<\/(div|p|span|section)>/i.test(s)) return true
+  return false
+}
+
 /** 智能探测并解码邮件正文（兼容全文本 Base64、分块 Base64、Quoted-Printable、MIME Multipart 及多字符集） */
 export function decodeEmailBody(body: string, charset?: string): string {
   if (!body) return ''
   // 1. 若正文中包含 MIME boundary 结构，优先提取正文分块
   let text = parseMimeText(body).trim()
+
+  // 若已经是 HTML 格式邮件，仅解码 Quoted-Printable，避免分段 Base64 误判破坏 HTML 结构
+  if (isHtmlEmail(text)) {
+    if (/=[0-9A-Fa-f]{2}/.test(text) || /=\r?\n/.test(text)) {
+      text = decodeQuotedPrintable(text, charset)
+    }
+    text = text.replace(/--[a-zA-Z0-9_\-=]+--?\s*$/g, '').trim()
+    return text
+  }
 
   // 2. 全文 Base64 探测与解码
   const fullDecoded = decodeBase64Chunk(text, charset)
@@ -463,23 +482,127 @@ export function formatTimeShort(dateStr?: string): string {
 export function snippetText(str?: string, max = 80): string {
   if (!str) return ''
   const decoded = decodeEmailBody(str)
-  const clean = decoded.replace(/[\r\n\t]+/g, ' ').replace(/>+[^\n]*/g, '').trim()
+  let clean = decoded
+  if (isHtmlEmail(decoded)) {
+    clean = decoded
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/<xml[^>]*>[\s\S]*?<\/xml>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+  }
+  clean = clean.replace(/[\r\n\t\s]+/g, ' ').replace(/>+[^\n]*/g, '').trim()
   return clean.length > max ? clean.slice(0, max) + '...' : clean
 }
 
 export function generateThreadQuote(msg: MailMessage): string {
   const dateStr = msg.created_at || '近期'
   const senderStr = formatSenderDisplay(msg.sender_name, msg.sender)
-  const bodyText = (msg.body || '').split('\n').map(l => `> ${l}`).join('\n')
+  let rawBody = msg.body || ''
+  if (isHtmlEmail(rawBody)) {
+    rawBody = rawBody
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/<xml[^>]*>[\s\S]*?<\/xml>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|tr|h\d)>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  }
+  const bodyText = (rawBody || '').split('\n').map(l => `> ${l}`).join('\n')
   return `\n\n------------------ 原始邮件 ------------------\n发件人: ${senderStr}\n发送时间: ${dateStr}\n收件人: ${msg.recipient}\n主题: ${decodeMimeWords(msg.subject)}\n\n${bodyText}`
 }
 
 /**
- * 格式化邮件正文为具有临床科研专业排版的 HTML
+ * 格式化邮件正文为具有临床科研专业排版的 HTML，自动兼容外部标准 HTML 富文本邮件
  */
 function formatEmailBody(raw: string): string {
   if (!raw) return ''
   const decoded = decodeEmailBody(raw)
+
+  // 1. 若为标准 HTML 邮件（如 NVIDIA 等外部系统通知），采用隔离沙箱 iframe 渲染真实排版与样式
+  if (isHtmlEmail(decoded)) {
+    let html = decoded.trim()
+    if (!/<base\s/i.test(html)) {
+      if (/<head[^>]*>/i.test(html)) {
+        html = html.replace(/<head[^>]*>/i, '$&<base target="_blank">')
+      } else {
+        html = `<base target="_blank">${html}`
+      }
+    }
+    const resetStyle = `
+      <style>
+        html, body {
+          margin: 0;
+          padding: 0;
+          background-color: transparent;
+        }
+        img { max-width: 100% !important; height: auto; }
+      </style>
+      <script>
+        window.addEventListener('DOMContentLoaded', () => {
+          const update = () => {
+            try {
+              const doc = document;
+              const h = Math.max(doc.body ? doc.body.scrollHeight : 0, doc.documentElement ? doc.documentElement.scrollHeight : 0);
+              if (h > 0 && window.frameElement) {
+                window.frameElement.style.height = (h + 30) + 'px';
+              }
+            } catch(e) {}
+          };
+          update();
+          setTimeout(update, 200);
+          setTimeout(update, 800);
+        });
+        window.addEventListener('load', () => {
+          setTimeout(() => {
+            try {
+              const doc = document;
+              const h = Math.max(doc.body ? doc.body.scrollHeight : 0, doc.documentElement ? doc.documentElement.scrollHeight : 0);
+              if (h > 0 && window.frameElement) {
+                window.frameElement.style.height = (h + 30) + 'px';
+              }
+            } catch(e) {}
+          }, 300);
+        });
+      </script>
+    `
+    if (/<head[^>]*>/i.test(html)) {
+      html = html.replace(/<head[^>]*>/i, `$&${resetStyle}`)
+    } else if (!/^<!DOCTYPE/i.test(html) && !/^<html/i.test(html)) {
+      html = `<!DOCTYPE html><html><head><meta charset="utf-8">${resetStyle}</head><body>${html}</body></html>`
+    }
+
+    return `
+      <div class="mail-html-embed-wrap" style="width: 100%; border-radius: 6px; overflow: hidden; background: #ffffff;">
+        <iframe
+          class="mail-html-frame"
+          sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+          srcdoc="${esc(html)}"
+          style="width: 100%; border: none; min-height: 480px; display: block;"
+          onload="try {
+            const doc = this.contentWindow.document;
+            const h = Math.max(doc.body ? doc.body.scrollHeight : 0, doc.documentElement ? doc.documentElement.scrollHeight : 0);
+            if (h > 0) this.style.height = (h + 30) + 'px';
+          } catch(e) {}"
+        ></iframe>
+      </div>
+    `
+  }
+
+  // 2. 原有的临床科研 Markdown / 纯文本结构化排版
   const lines = decoded.split('\n')
   const out: string[] = []
 
