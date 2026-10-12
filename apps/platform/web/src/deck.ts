@@ -622,6 +622,7 @@ export class DeckView {
       const rpr = c.marks?.find(m => m.type === 'rpr')?.attrs?.xml as string | undefined
       const sz = rpr ? /\ssz="(\d+)"/.exec(rpr)?.[1] : undefined
       const color = rpr ? /<a:srgbClr val="([0-9A-Fa-f]{6})"/.exec(rpr)?.[1] : undefined
+      const font = rpr ? (/<a:latin typeface="([^"]+)"/.exec(rpr)?.[1] ?? /<a:ea typeface="([^"]+)"/.exec(rpr)?.[1]) : undefined
       if (sz && !size) size = Number(sz) / 100
       let html = esc(c.text)
       for (const m of c.marks ?? []) {
@@ -632,7 +633,12 @@ export class DeckView {
         if (m.type === 'sub') html = `<sub>${html}</sub>`
         if (m.type === 'comment') html = `<mark class="comment" data-thread="${esc(m.attrs?.thread)}">${html}</mark>`
       }
-      return `<span data-o="${o}"${color ? ` style="color:#${color}"` : ''}>${html}</span>`
+      const styles = [
+        color ? `color:#${color}` : '',
+        font ? `font-family:${font}` : '',
+        sz ? `font-size:${Number(sz) / 100 * k}px` : '',
+      ].filter(Boolean).join(';')
+      return `<span data-o="${o}"${styles ? ` style="${styles}"` : ''}>${html}</span>`
     }).join('')
     // 还没写字的模板占位符：版式规定的字号在段落属性的 a:defRPr 里
     if (!size) { const d = /<a:defRPr\b[^>]*\ssz="(\d+)"/.exec(String(p.attrs?.ppr ?? '')); if (d) size = Number(d[1]) / 100 }

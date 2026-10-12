@@ -552,6 +552,90 @@ window.addEventListener('DOMContentLoaded', async () => {
     await activeSession.deck.load()
   }
 
+  function shapeFontSize(shape: any): number {
+    let sz: number | null = null
+    const walk = (n: any) => {
+      if (sz !== null) return
+      if (n.type === 'text') {
+        const xml = n.marks?.find((m: any) => m.type === 'rpr')?.attrs?.xml as string | undefined
+        const m = xml && /\ssz="(\d+)"/.exec(xml)
+        if (m) sz = Number(m[1]) / 100
+      }
+      n.content?.forEach(walk)
+    }
+    walk(shape)
+    return sz ?? 18
+  }
+
+  const hasBold = (shape: any): boolean => JSON.stringify(shape).includes('"type":"bold"')
+
+  // 形状文字格式化：字体、字号、加粗、对齐
+  $('selDeckFontFamily').onchange = async () => {
+    const sel = $('selDeckFontFamily') as HTMLSelectElement
+    const font = sel.value
+    if (!font || !activeSession.deck) return
+    const ids = activeSession.deck.selectionIds()
+    if (!ids.length) { alert('请先单击选中画布上的文本框或形状'); return }
+    await activeSession.deck.edit(ids.map(id => ({ op: 'set_text_style', shape_id: id, font_family: font })))
+    await activeSession.deck.load()
+  }
+
+  $('selDeckFontSize').onchange = async () => {
+    const sel = $('selDeckFontSize') as HTMLSelectElement
+    const sz = Number(sel.value)
+    if (!sz || !activeSession.deck) return
+    const ids = activeSession.deck.selectionIds()
+    if (!ids.length) { alert('请先单击选中画布上的文本框或形状'); return }
+    await activeSession.deck.edit(ids.map(id => ({ op: 'set_text_style', shape_id: id, size: sz })))
+    await activeSession.deck.load()
+  }
+
+  $('btnDeckSmaller').onclick = async () => {
+    if (!activeSession.deck) return
+    const ids = activeSession.deck.selectionIds()
+    if (!ids.length) { alert('请先单击选中画布上的文本框或形状'); return }
+    const sel = activeSession.deck.selection()
+    const now = sel?.shape ? shapeFontSize(sel.shape) : 18
+    await activeSession.deck.edit(ids.map(id => ({ op: 'set_text_style', shape_id: id, size: Math.max(8, now - 2) })))
+    await activeSession.deck.load()
+  }
+
+  $('btnDeckBigger').onclick = async () => {
+    if (!activeSession.deck) return
+    const ids = activeSession.deck.selectionIds()
+    if (!ids.length) { alert('请先单击选中画布上的文本框或形状'); return }
+    const sel = activeSession.deck.selection()
+    const now = sel?.shape ? shapeFontSize(sel.shape) : 18
+    await activeSession.deck.edit(ids.map(id => ({ op: 'set_text_style', shape_id: id, size: Math.min(120, now + 2) })))
+    await activeSession.deck.load()
+  }
+
+  $('btnDeckBold').onclick = async () => {
+    if (!activeSession.deck) return
+    const ids = activeSession.deck.selectionIds()
+    if (!ids.length) { alert('请先单击选中画布上的文本框或形状'); return }
+    const sel = activeSession.deck.selection()
+    const bold = sel?.shape ? hasBold(sel.shape) : false
+    await activeSession.deck.edit(ids.map(id => ({ op: 'set_text_style', shape_id: id, bold: !bold })))
+    await activeSession.deck.load()
+  }
+
+  $('btnDeckAlignLeft').onclick = async () => {
+    if (!activeSession.deck) return
+    const ids = activeSession.deck.selectionIds()
+    if (!ids.length) return
+    await activeSession.deck.edit(ids.map(id => ({ op: 'set_text_style', shape_id: id, align: 'left' })))
+    await activeSession.deck.load()
+  }
+
+  $('btnDeckAlignCenter').onclick = async () => {
+    if (!activeSession.deck) return
+    const ids = activeSession.deck.selectionIds()
+    if (!ids.length) return
+    await activeSession.deck.edit(ids.map(id => ({ op: 'set_text_style', shape_id: id, align: 'center' })))
+    await activeSession.deck.load()
+  }
+
   // 版面健康体检（检查重叠与文字溢出）
   const handleLayoutCheck = async () => {
     if (!activeDocId) return

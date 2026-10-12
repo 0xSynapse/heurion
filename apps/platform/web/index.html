@@ -59,9 +59,9 @@
         <button id="newDoc" class="sky block">＋ 新建文档</button>
         <div class="split">
           <button id="newDeck" class="ghost-dark">新建幻灯片</button>
-          <button id="uploadBtn" class="ghost-dark" title="导入 docx / pptx">上传文件</button>
+          <button id="uploadBtn" class="ghost-dark" title="导入 docx / pptx / pdf">上传文件</button>
         </div>
-        <input id="uploadInput" type="file" accept=".docx,.pptx" hidden>
+        <input id="uploadInput" type="file" accept=".docx,.pptx,.pdf" hidden>
       </div>
       <div class="actions" id="rsActions" hidden>
         <button id="newStudy" class="sky block" title="新建一个研究项目：方案、数据集、分析、稿件放在一起">＋ 新建研究</button>
@@ -181,9 +181,35 @@
       <span class="sep"></span>
       <button data-dk="fill" data-needs-shape title="填充色">填充</button>
       <button data-dk="color" data-needs-shape title="文字颜色">文字色</button>
+      <select id="selDeckFontFamily" data-dk="font-family" data-needs-shape class="tb-select" title="字体选择">
+        <option value="">字体 ▾</option>
+        <option value="system-ui, sans-serif">系统默认</option>
+        <option value="PingFang SC, Microsoft YaHei, sans-serif">黑体 / 苹方</option>
+        <option value="Songti SC, SimSun, serif">宋体 (Serif)</option>
+        <option value="KaiTi, STKaiti, serif">楷体 (KaiTi)</option>
+        <option value="Arial, sans-serif">Arial</option>
+        <option value="'Times New Roman', Times, serif">Times New Roman</option>
+        <option value="'Courier New', monospace">等宽代码体</option>
+      </select>
+      <select id="selDeckFontSize" data-dk="font-size" data-needs-shape class="tb-select" title="字号大小">
+        <option value="">字号 ▾</option>
+        <option value="12">12 pt</option>
+        <option value="14">14 pt</option>
+        <option value="16">16 pt</option>
+        <option value="18">18 pt</option>
+        <option value="20">20 pt</option>
+        <option value="24">24 pt</option>
+        <option value="28">28 pt</option>
+        <option value="32">32 pt</option>
+        <option value="36">36 pt</option>
+        <option value="40">40 pt</option>
+        <option value="48">48 pt</option>
+        <option value="56">56 pt</option>
+        <option value="72">72 pt</option>
+      </select>
       <button data-dk="smaller" data-needs-shape title="缩小字号">A−</button>
       <button data-dk="bigger" data-needs-shape title="放大字号">A＋</button>
-      <button data-dk="bold" data-needs-shape title="粗体"><b>B</b></button>
+      <button data-dk="bold" data-needs-shape title="粗体 (Ctrl+B)"><b>B</b></button>
       <button data-dk="align-left" data-needs-shape title="文字左对齐">≡</button>
       <button data-dk="align-center" data-needs-shape title="文字居中">☰</button>
       <span class="sep"></span>
@@ -345,6 +371,47 @@
     </div>
   </div>
 </template>
+
+<!-- 全局 AI Co-Pilot 随航助手 -->
+<button id="btnCopilotToggle" class="copilot-toggle-btn" title="唤出全局 AI Co-Pilot 随航助手 (快捷键 Cmd+J / Ctrl+J)">
+  <span class="copilot-btn-icon">✨</span>
+  <span class="copilot-btn-text">Co-Pilot</span>
+</button>
+
+<aside id="copilotDrawer" class="copilot-drawer hidden" aria-label="全局 AI Co-Pilot 随航助手">
+  <div class="copilot-header">
+    <div class="copilot-title-group">
+      <span class="copilot-icon">✨</span>
+      <div>
+        <div class="copilot-title">Heurion Co-Pilot</div>
+        <div id="copilotContextBadge" class="copilot-context-badge">全局随航助手</div>
+      </div>
+    </div>
+    <div class="copilot-actions">
+      <button id="copilotClearBtn" class="quiet small-btn" title="清空对话历史">清空</button>
+      <button id="copilotCloseBtn" class="quiet small-btn" title="收起 (Esc)">✕</button>
+    </div>
+  </div>
+
+  <div id="copilotMessages" class="copilot-messages">
+    <div class="copilot-welcome">
+      <div class="copilot-welcome-badge">✨ 全局临床科研 AI 助手</div>
+      <h4>有什么可以协助您的临床研究或写作？</h4>
+      <p class="muted small">随时为你检索 PubMed 顶刊文献、解答 GCP 规范、撰写统计分析计划 (SAP)、编写 Python 绘图代码、解读 RECIST 1.1 影像病灶。</p>
+    </div>
+  </div>
+
+  <div id="copilotQuickChips" class="copilot-quick-chips"></div>
+
+  <div class="copilot-footer">
+    <textarea id="copilotInput" placeholder="输入问题或需求（例如：帮我梳理入组标准、设计 Table 1、检索最新 NEJM 论文...）" rows="2"></textarea>
+    <div class="copilot-footer-bar">
+      <span class="muted small" style="font-size: 11px;">Enter 发送 · Shift+Enter 换行</span>
+      <button id="copilotSendBtn" class="btn primary small-btn">发送</button>
+    </div>
+  </div>
+</aside>
+
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

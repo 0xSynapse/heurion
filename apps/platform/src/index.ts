@@ -36,6 +36,7 @@ import { handleLlmProxy, LLM_PREFIX } from './harness/llm-proxy.ts'
 import { makeInvoker, type Invoke } from './http/invoke.ts'
 import { buildApi } from './http/api.ts'
 import { CrossrefClient } from './literature/crossref.ts'
+import { OpenAlexClient } from './literature/openalex.ts'
 import { FullTextClient } from './literature/fulltext.ts'
 import { PubMedClient } from './literature/pubmed.ts'
 import { handleMcp } from './mcp/server.ts'
@@ -59,6 +60,7 @@ const postcheck = new PostCheck(docs)
 
 const pubmed = new PubMedClient(fetch, config.ncbiApiKey, config.contactEmail)
 const crossref = new CrossrefClient(fetch, config.contactEmail)
+const openalex = new OpenAlexClient(fetch, config.contactEmail)
 // 开放获取全文：论断核对的补充证据、AI 写作时可读（M3）
 const fulltext = new FullTextClient(store, fetch, config.contactEmail)
 const claims = new ClaimService(docs, pubmed, fulltext)
@@ -131,6 +133,7 @@ const mcpDeps = {
   docs, ops, claims, renderer, turns: registry, secret: config.secret,
   pubmed,
   crossref,
+  openalex,
   workspaceDir: (userId: string) => pool.workspaceDir(userId),
   kb,
   memory,
@@ -172,7 +175,7 @@ const mail = new MailService(store, mailer, {
   complete: makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }),
 })
 const calendar = new CalendarService(store, mail)
-const app = buildApi({ docs, ops, turns, postcheck, crossref, pubmed, renderer, accounts, devMode: config.devMode, devUser: config.devUser, search, kb, memory, evolution, datasets, patients, shares, studies, cohort, images, access, mail, calendar, workspaceDir: userId => pool.workspaceDir(userId) })
+const app = buildApi({ docs, ops, turns, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, devUser: config.devUser, search, kb, memory, evolution, datasets, patients, shares, studies, cohort, images, access, mail, calendar, workspaceDir: userId => pool.workspaceDir(userId) })
 // MCP 的管理类工具以用户身份进程内调用同一个 HTTP 应用（AI 的权限 = 用户的权限，见 http/invoke.ts）
 ;(mcpDeps as { invoke?: Invoke }).invoke = makeInvoker(app)
 

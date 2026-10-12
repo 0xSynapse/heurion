@@ -8,7 +8,7 @@ import { getConnInfo } from '@hono/node-server/conninfo'
 import { AuthError, type Accounts } from '../auth/accounts.ts'
 import { duplicateDoc } from '../model/duplicate.ts'
 import type { SearchIndex } from '../model/search-index.ts'
-import { ExtractError } from '../kb/extract.ts'
+import { ExtractError, extractText } from '../kb/extract.ts'
 import type { KbService } from '../kb/service.ts'
 import type { DatasetService } from '../datasets/service.ts'
 import { TenantError, TenantService } from '../auth/tenants.ts'
@@ -32,13 +32,17 @@ import { exportFontsParam, withFonts } from '../convert/fonts.ts'
 import { templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
 import { newTemplateDeck } from '../ops/deck.ts'
+import { randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SlideRenderer } from '../render/slides.ts'
 import type { CrossrefClient } from '../literature/crossref.ts'
 import { importReferences, parseReferences } from '../literature/import-refs.ts'
 import type { PubMedClient } from '../literature/pubmed.ts'
-import { formatAma, normalizeDoi } from '../literature/format.ts'
+import { formatAma, formatCitation, normalizeDoi } from '../literature/format.ts'
+import type { Article } from '../literature/types.ts'
+import type { OpenAlexClient } from '../literature/openalex.ts'
+import type { DocRow } from '../store/db.ts'
 import { bindAssets, DocxImportError, importDocx } from '../convert/docx-import.ts'
 import { AnchorError, attachComment, locate, threadMarks } from '../model/anchors.ts'
 import { parseBlocks } from '../model/markdown.ts'
@@ -67,6 +71,8 @@ export interface ApiDeps {
   crossref: CrossrefClient
   /** 参考文献导入时给只有 PMID 的条目补 DOI（可选）。 */
   pubmed?: PubMedClient
+  /** OpenAlex 学术文献搜索与元数据解析（可选）。 */
+  openalex?: OpenAlexClient
   renderer: SlideRenderer
   accounts: Accounts
   /** 开发模式：允许把开发用户的数据转给正式账户。 */
@@ -877,7 +883,39 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         throw err
       }
     }
-    if (!file || !/\.docx$/i.test(file.name)) return c.json({ error: '只支持上传 .docx / .pptx' }, 400)
+    if (file && /\.pdf$/i.test(file.name)) {
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const extracted = await extractText(file.name, bytes)
+        const blocks: any[] = []
+        let first = true
+        for (const page of extracted.pages) {
+          const paras = page.split(/\n{2,}/).map(p => p.trim()).filter(Boolean)
+          for (const p of paras) {
+            if (first && p.length < 100 && !/[。！？.!?]$/.test(p)) {
+              blocks.push(schema.node('heading', { level: 1 }, [schema.text(p)]))
+              first = false
+            } else {
+              blocks.push(schema.node('paragraph', null, [schema.text(p)]))
+              first = false
+            }
+          }
+        }
+        if (blocks.length === 0) blocks.push(schema.node('paragraph', null, [schema.text('（该 PDF 没有提取到文字内容）')]))
+        const docNode = schema.node('doc', null, blocks)
+        const row = docs.create({ owner: user, title: file.name.replace(/\.pdf$/i, ''), content: docNode, source: 'import' })
+        store.putPackage(row.id, 'pdf', bytes)
+        const warnings: string[] = []
+        if (extracted.note) warnings.push(extracted.note)
+        if (extracted.doi) warnings.push(`检测到 DOI: ${extracted.doi}`)
+        if (extracted.pmid) warnings.push(`检测到 PMID: ${extracted.pmid}`)
+        return c.json({ ...row, warnings }, 201)
+      } catch (err) {
+        if (err instanceof ExtractError) return c.json({ error: err.message }, 400)
+        throw err
+      }
+    }
+    if (!file || !/\.docx$/i.test(file.name)) return c.json({ error: '只支持上传 .docx / .pptx / .pdf' }, 400)
     try {
       const imported = importDocx(new Uint8Array(await file.arrayBuffer()))
       const ids = new Map(imported.assets.map(a => [a.key, store.putAsset({ owner: user, mime: a.mime, name: a.name, bytes: a.bytes }).id]))
@@ -1158,16 +1196,90 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json(await importReferences({ store, crossref: deps.crossref, pubmed }, row.id, refs))
   })
 
-  /** 用户按 DOI 登记引用（Crossref 核实），返回 cite_id，编辑器在光标处插入引用。 */
+  /** 文献实时模糊检索（PubMed / OpenAlex），供引用搜索建议使用。 */
+  app.get('/api/citations/search', async c => {
+    const q = c.req.query('q')?.trim()
+    if (!q) return c.json({ results: [] })
+    const results: Article[] = []
+    if (deps.pubmed) {
+      try {
+        const pmHits = await deps.pubmed.search(q, 6)
+        results.push(...pmHits)
+      } catch { /* 忽略错误 */ }
+    }
+    if (results.length === 0 && deps.openalex) {
+      try {
+        const oaHits = await deps.openalex.search(q, 6)
+        results.push(...oaHits)
+      } catch { /* 忽略错误 */ }
+    }
+    return c.json({ results })
+  })
+
+  /** 用户按 DOI / PMID / 关键词模糊登记引用（Crossref / PubMed / OpenAlex 核实），返回 cite_id，编辑器在光标处插入引用。 */
   app.post('/api/docs/:id/citations', async c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
-    const { doi } = await c.req.json<{ doi?: string }>()
-    if (!doi?.trim()) return c.json({ error: 'doi 必填' }, 400)
-    const article = await deps.crossref.lookup(doi.trim())
-    if (!article) return c.json({ error: `DOI ${normalizeDoi(doi)} 在 Crossref 查不到` }, 404)
-    const cite = store.upsertCitation({ doc_id: row.id, doi: article.doi!, pmid: null, formatted: formatAma(article), url: `https://doi.org/${article.doi}` })
-    return c.json({ cite_id: cite.id, formatted: cite.formatted }, 201)
+    const body = await c.req.json<{ doi?: string; pmid?: string; query?: string; style?: 'ama' | 'apa' | 'vancouver' | 'gbt7714' }>().catch(() => ({} as any))
+    let doi = body.doi?.trim()
+    let pmid = body.pmid?.trim()
+    const query = body.query?.trim()
+
+    if (!doi && !pmid && !query) return c.json({ error: '请提供 DOI、PMID 或文献检索词 (query)' }, 400)
+
+    // 智能识别：若在 doi 字段中输入了纯数字 PMID 或 "PMID: 123456"，自动转为 pmid
+    if (doi && (/^\d{6,9}$/.test(doi) || /^pmid:?\s*\d+/i.test(doi))) {
+      pmid = doi.replace(/^pmid:?\s*/i, '').trim()
+      doi = undefined
+    }
+
+    let article: Article | null = null
+
+    if (doi) {
+      article = await deps.crossref.lookup(doi).catch(() => null)
+      if (!article && deps.openalex) article = await deps.openalex.lookup(doi).catch(() => null)
+      if (!article && deps.pubmed) {
+        const pm = await deps.pubmed.pmidForDoi(doi).catch(() => null)
+        if (pm) {
+          const list = await deps.pubmed.summaries([pm]).catch(() => [])
+          if (list.length) article = list[0] ?? null
+        }
+      }
+    }
+
+    if (!article && pmid && deps.pubmed) {
+      const cleanPmid = pmid.replace(/^pmid:?\s*/i, '').trim()
+      const list = await deps.pubmed.summaries([cleanPmid]).catch(() => [])
+      if (list.length) {
+        article = list[0] ?? null
+        if (article?.doi) {
+          const enriched = await deps.crossref.lookup(article.doi).catch(() => null)
+          if (enriched) article = enriched
+        }
+      }
+    }
+
+    if (!article && query) {
+      if (deps.pubmed) {
+        const hits = await deps.pubmed.search(query, 3).catch(() => [])
+        if (hits.length) article = hits[0] ?? null
+      }
+      if (!article && deps.openalex) {
+        const hits = await deps.openalex.search(query, 3).catch(() => [])
+        if (hits.length) article = hits[0] ?? null
+      }
+    }
+
+    if (!article) {
+      const identifier = doi ? `DOI ${normalizeDoi(doi)}` : pmid ? `PMID ${pmid}` : `检索词「${query}」`
+      return c.json({ error: `未能检索或核实到该文献 (${identifier})，请检查标识符或网络连接` }, 404)
+    }
+
+    const finalDoi = article.doi ? normalizeDoi(article.doi) : (article.pmid ? `pmid:${article.pmid}` : `ref:${randomUUID().slice(0, 8)}`)
+    const finalUrl = article.doi ? `https://doi.org/${article.doi}` : (article.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${article.pmid}/` : null)
+    const formatted = formatCitation(article, body.style ?? 'ama')
+    const cite = store.upsertCitation({ doc_id: row.id, doi: finalDoi, pmid: article.pmid ?? pmid ?? null, formatted, url: finalUrl })
+    return c.json({ cite_id: cite.id, formatted: cite.formatted, doi: cite.doi, pmid: cite.pmid }, 201)
   })
 
   /** 核对全部论断：排一个只核对、不改正文的回合。 */
@@ -1469,6 +1581,89 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.post('/api/cancel', async c => {
     await turns.cancel(c.get('user'))
     return c.json({ ok: true })
+  })
+
+  // —— 全局 Co-Pilot 随航助手 ——
+  function getOrCreateCopilotDoc(userId: string): DocRow {
+    const list = store.listDocs(userId)
+    for (const d of list) {
+      if (d.context && !d.deleted_at) {
+        try {
+          const ctx = JSON.parse(d.context) as { kind?: string }
+          if (ctx.kind === 'copilot') return d
+        } catch {}
+      }
+    }
+    const row = docs.create({
+      owner: userId,
+      title: 'Heurion Co-Pilot 随航工作台',
+      kind: 'doc',
+    })
+    store.setDocContext(row.id, { kind: 'copilot' })
+    return store.getDoc(row.id)!
+  }
+
+  app.get('/api/copilot/status', c => {
+    const user = c.get('user')
+    const doc = getOrCreateCopilotDoc(user)
+    const turnsList = store.listTurns(doc.id).slice(-30).map(t => {
+      const text = t.message
+      const userPart = text.includes('用户需求：') ? text.split('用户需求：').pop()?.trim() : text
+      return {
+        id: t.id,
+        user_message: userPart || t.message,
+        status: t.status,
+        started_at: t.started_at,
+        ended_at: t.ended_at,
+        error: t.error,
+      }
+    })
+    return c.json({ doc_id: doc.id, turns: turnsList, busy: deps.turns.isBusy(user) })
+  })
+
+  app.post('/api/copilot/chat', async c => {
+    const user = c.get('user')
+    const body = await c.req.json<{
+      message?: string
+      space?: string
+      study_id?: string
+      patient_id?: string
+      doc_id?: string
+      title?: string
+    }>().catch(() => ({} as any))
+
+    const message = body.message?.trim()
+    if (!message) return c.json({ error: 'message 必填' }, 400)
+
+    const copilotDoc = getOrCreateCopilotDoc(user)
+
+    let prompt = `［Heurion 全局 Co-Pilot 随航指令］\n`
+    if (body.space) prompt += `【当前所在工作区】${body.space}\n`
+    if (body.study_id) {
+      const st = store.getStudy(body.study_id)
+      if (st) prompt += `【关联研究项目】《${st.title}》(study_id=${st.id})\n`
+    }
+    if (body.patient_id && deps.patients) {
+      try {
+        const visible = deps.patients.list({ userId: user, via: 'user' })
+        const pt = visible.find(p => p.id === body.patient_id || p.code === body.patient_id)
+        if (pt) prompt += `【关联患者】代号 ${pt.code} (patient_id=${pt.id})\n`
+      } catch {}
+    }
+    if (body.doc_id) {
+      const d = store.getDoc(body.doc_id)
+      if (d) prompt += `【关联文档】《${d.title}》(doc_id=${d.id})\n`
+    }
+    prompt += `\n用户需求：${message}`
+
+    return streamTurn(c, deps, copilotDoc.id, prompt, { suggest: false })
+  })
+
+  app.post('/api/copilot/clear', c => {
+    const user = c.get('user')
+    const doc = getOrCreateCopilotDoc(user)
+    store.clearDocTurns(doc.id)
+    return c.json({ ok: true, doc_id: doc.id })
   })
 
   // —— 资产 ——

@@ -245,8 +245,18 @@ export interface TenantTemplateRow {
   created_by: string; created_at: string; updated_at: string
 }
 export interface StudyItemRow { study_id: string; kind: 'doc' | 'dataset'; ref_id: string; role: string; added_at: string }
-/** 研究成员（研究团队协作，docs/design/TEAM.md）：负责人只有一个（与 studies.owner 同步）；成员与研究同机构。 */
-export type StudyRole = 'owner' | 'editor' | 'viewer'
+/** 研究成员（GCP 临床试验与研究协作角色）：PI (owner) 全局管理；Sub-I/CRC/统计师/DM/放射医师可写；CRA/Auditor/viewer 只读监查。 */
+export type StudyRole =
+  | 'owner'
+  | 'sub_i'
+  | 'cra'
+  | 'crc'
+  | 'statistician'
+  | 'data_manager'
+  | 'radiologist'
+  | 'auditor'
+  | 'editor'
+  | 'viewer'
 export interface StudyMemberRow { study_id: string; user_id: string; role: StudyRole; added_by: string; added_at: string }
 
 /** 记忆演进的信号：用户改写了 AI 写的段落（edit_ai）、拒绝了 AI 的修订（reject）。整理时交给模型总结规律。 */
@@ -1871,7 +1881,7 @@ export class Store {
 
   // —— 原始文件包（修补式导出的底座：样式、编号、关系、媒体） ——
 
-  putPackage(docId: string, kind: 'docx' | 'pptx', bytes: Uint8Array): void {
+  putPackage(docId: string, kind: 'docx' | 'pptx' | 'pdf', bytes: Uint8Array): void {
     this.db.prepare('INSERT OR REPLACE INTO doc_packages (doc_id, kind, bytes) VALUES (?, ?, ?)').run(docId, kind, bytes)
   }
 
@@ -1995,6 +2005,14 @@ export class Store {
   failedTurns(docId: string): Array<Pick<TurnRow, 'id' | 'status' | 'error' | 'ended_at'>> {
     return this.db.prepare("SELECT id, status, error, ended_at FROM turns WHERE doc_id = ? AND status NOT IN ('done', 'running') ORDER BY started_at")
       .all(docId) as unknown as Array<Pick<TurnRow, 'id' | 'status' | 'error' | 'ended_at'>>
+  }
+
+  listTurns(docId: string): TurnRow[] {
+    return this.db.prepare('SELECT * FROM turns WHERE doc_id = ? ORDER BY started_at ASC').all(docId) as unknown as TurnRow[]
+  }
+
+  clearDocTurns(docId: string): void {
+    this.db.prepare('DELETE FROM turns WHERE doc_id = ?').run(docId)
   }
 
   // —— 回合队列（持久化：服务重启后排队中的任务继续执行） ——

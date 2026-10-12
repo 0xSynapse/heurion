@@ -22,7 +22,18 @@ export class StudyError extends Error {
   constructor(readonly code: string, message: string, readonly status: 400 | 403 | 404 | 409 = 400) { super(message) }
 }
 
-export const ROLE_LABELS: Record<StudyRole, string> = { owner: '负责人', editor: '可编辑', viewer: '只读' }
+export const ROLE_LABELS: Record<StudyRole, string> = {
+  owner: '主要研究者 (PI / 负责人)',
+  sub_i: '共同研究者 (Sub-I)',
+  cra: '临床监查员 (CRA，监查只读)',
+  crc: '临床协调员 (CRC)',
+  statistician: '生物统计师',
+  data_manager: '数据管理员 (DM)',
+  radiologist: '放射/影像评估员',
+  auditor: '质控/稽查员 (Auditor，只读)',
+  editor: '通用可编辑',
+  viewer: '通用只读',
+}
 
 const clean = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
 
@@ -84,7 +95,8 @@ export class StudyService {
   addMember(user: string, id: string, input: { user_id?: unknown; role?: unknown }) {
     const s = this.own(user, id, 'manage')
     const u = this.sameTenant(s, input.user_id)
-    const role = input.role === 'viewer' ? 'viewer' : 'editor'
+    const allowed: StudyRole[] = ['sub_i', 'cra', 'crc', 'statistician', 'data_manager', 'radiologist', 'auditor', 'editor', 'viewer']
+    const role: StudyRole = typeof input.role === 'string' && allowed.includes(input.role as StudyRole) ? (input.role as StudyRole) : 'editor'
     if (this.store.studyRole(id, u.id) === 'owner') throw new StudyError('bad_member', '负责人不能改成别的角色，先转交', 409)
     this.store.setStudyMember({ study_id: id, user_id: u.id, role, added_by: user })
     this.access?.invalidate()
@@ -96,8 +108,9 @@ export class StudyService {
     const cur = this.store.studyRole(id, target)
     if (!cur) throw new StudyError('not_found', '研究里没有这位成员', 404)
     if (cur === 'owner') throw new StudyError('bad_member', '负责人不能改成别的角色，先转交', 409)
-    if (roleIn !== 'editor' && roleIn !== 'viewer') throw new StudyError('bad_role', '角色只能是 editor / viewer')
-    this.store.setStudyMember({ study_id: id, user_id: target, role: roleIn, added_by: user })
+    const allowed: StudyRole[] = ['sub_i', 'cra', 'crc', 'statistician', 'data_manager', 'radiologist', 'auditor', 'editor', 'viewer']
+    if (!allowed.includes(roleIn as StudyRole)) throw new StudyError('bad_role', '角色不合法')
+    this.store.setStudyMember({ study_id: id, user_id: target, role: roleIn as StudyRole, added_by: user })
     this.access?.invalidate()
     return this.members(user, id)
   }

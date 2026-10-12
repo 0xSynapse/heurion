@@ -13,8 +13,30 @@ import { icon } from './icons.ts'
 type Api = <T = any>(path: string, opts?: RequestInit) => Promise<T>
 type Notice = (msg: string, error?: boolean) => void
 
-type Role = 'owner' | 'editor' | 'viewer'
-const ROLE_LABEL: Record<Role, string> = { owner: '负责人', editor: '可编辑', viewer: '只读' }
+type Role = 'owner' | 'sub_i' | 'cra' | 'crc' | 'statistician' | 'data_manager' | 'radiologist' | 'auditor' | 'editor' | 'viewer'
+const ROLE_LABEL: Record<string, string> = {
+  owner: '主要研究者 (PI)',
+  sub_i: '共同研究者 (Sub-I)',
+  cra: '临床监查员 (CRA)',
+  crc: '临床协调员 (CRC)',
+  statistician: '生物统计师',
+  data_manager: '数据管理员 (DM)',
+  radiologist: '放射/影像评估医师',
+  auditor: '质控/稽查员 (Auditor)',
+  editor: '可编辑',
+  viewer: '只读',
+}
+const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
+  { value: 'sub_i', label: '共同研究者 (Sub-I)' },
+  { value: 'cra', label: '临床监查员 (CRA，监查只读)' },
+  { value: 'crc', label: '临床协调员 (CRC)' },
+  { value: 'statistician', label: '生物统计师' },
+  { value: 'data_manager', label: '数据管理员 (DM)' },
+  { value: 'radiologist', label: '放射/影像评估医师' },
+  { value: 'auditor', label: '质控/稽查员 (Auditor，只读)' },
+  { value: 'editor', label: '通用可编辑' },
+  { value: 'viewer', label: '通用只读' },
+]
 interface StudyLite { id: string; title: string; design: string | null; status: 'planning' | 'ongoing' | 'completed'; docs: number; datasets: number; my_role: Role; shared: boolean; shared_by: string | null; members: number }
 interface Member { user_id: string; name: string; role: Role; me: boolean }
 interface Study {
@@ -156,10 +178,46 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
             ${w(`<button class="quiet small-btn" data-unlink="dataset:${d.dataset_id}" title="移出研究（数据集回到上传者的「全部数据集」里）">移出</button>`)}</li>`).join('')}</ul>`
             : '<p class="muted small">上传 CSV、Excel、SAS、SPSS、Stata。在这个研究的文档里和 AI 对话时，会自动带上这些数据集。</p>'}
         </section>
-        <section class="rs-card wide">
-          <div class="rs-card-head"><h3>分析</h3><span class="muted small">用本研究数据集画的图，点开看代码与数据来源</span></div>
-          ${s.analyses.length ? `<div class="rs-analyses">${s.analyses.map(a => `<button class="rs-fig" data-fig="${a.asset_id}" title="${esc(a.name)}"><img src="/api/assets/${a.asset_id}?token=${encodeURIComponent(hooks.token())}" alt="${esc(a.name)}"><span>${esc(a.name.split('/').pop())}<br><span class="muted">${members.length > 1 && a.by ? `${esc(a.by)} · ` : ''}${esc(a.datasets.join('、'))} · ${date(a.created_at)}</span></span></button>`).join('')}</div>`
-            : '<p class="muted small">还没有分析。打开论文或新建一份文档，在对话里让 AI 用研究数据做 Table 1、生存曲线、回归，画的图会出现在这里。</p>'}
+        <section class="rs-card wide rs-folder-card">
+          <div class="rs-card-head">
+            <h3><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>项目图表与成果文件夹</h3>
+            <span class="muted small" style="margin-left:auto;">📁 figures/ · 共 ${s.analyses.length} 份产出</span>
+          </div>
+          <div class="rs-folder-browser">
+            <div class="rs-folder-header">
+              <span class="rs-folder-path">📂 项目根目录 / <b>figures/</b></span>
+              <span class="grow"></span>
+              <span class="muted small">点开任意图表查看底层 Python 统计代码与数据溯源</span>
+            </div>
+            ${s.analyses.length ? `
+              <div class="rs-folder-files">
+                ${s.analyses.map(a => {
+                  const filename = a.name.split('/').pop() || a.name
+                  const ext = filename.split('.').pop() || 'png'
+                  return `
+                    <div class="rs-file-item" data-fig="${a.asset_id}" title="点击查看代码与溯源：${esc(a.name)}">
+                      <div class="rs-file-preview">
+                        <img src="/api/assets/${a.asset_id}?token=${encodeURIComponent(hooks.token())}" alt="${esc(a.name)}">
+                        <span class="rs-file-badge">${esc(ext.toUpperCase())}</span>
+                      </div>
+                      <div class="rs-file-info">
+                        <b class="rs-file-name">${esc(filename)}</b>
+                        <div class="rs-file-meta">
+                          ${a.has_code ? '<span class="pill green" title="可复现开源统计脚本">Python 脚本</span>' : ''}
+                          <span>${esc(a.datasets.join('、') || '研究数据')}</span>
+                          <span class="muted">${date(a.created_at)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  `
+                }).join('')}
+              </div>
+            ` : `
+              <div class="rs-folder-empty">
+                <p class="muted small">📁 图表文件夹当前为空。在方案/论文中对话让 AI 绘制 Table 1、Kaplan-Meier 生存曲线、森林图或影像分析图后，成果将自动归档至本文件夹。</p>
+              </div>
+            `}
+          </div>
         </section>
         <section class="rs-card wide">
           <div class="rs-card-head"><h3>稿件</h3>${w('<button class="small-btn" data-new="manuscript">＋ 新建论文</button><button class="small-btn" data-new="slides">＋ 新建幻灯片</button>')}</div>
@@ -175,20 +233,21 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
   /** 入组患者卡片：入组名单、待确认的 AI 入组提议、研究数据集（过期提示）。 */
   /** 成员卡片：负责人可加人（本机构同事）、改角色、移出、转交；其他人看名单、可退出。 */
   function membersCard(members: Member[], candidates: Array<{ user_id: string; name: string; username: string }>, isOwner: boolean): string {
+    const roleSelectOptions = (cur: Role) => ROLE_OPTIONS.map(opt => `<option value="${opt.value}"${cur === opt.value ? ' selected' : ''}>${esc(opt.label)}</option>`).join('')
     const row = (m: Member) => `<li class="rs-item rs-member"><span class="collab-avatar role-${m.role}" aria-hidden="true">${esc(m.name.slice(0, 1).toUpperCase())}</span><b>${esc(m.name)}${m.me ? ' <span class="muted small">（我）</span>' : ''}</b>
       ${isOwner && m.role !== 'owner'
-        ? `<select data-mrole="${m.user_id}" aria-label="${esc(m.name)} 的角色"><option value="editor"${m.role === 'editor' ? ' selected' : ''}>可编辑</option><option value="viewer"${m.role === 'viewer' ? ' selected' : ''}>只读</option></select>
-           <button class="quiet small-btn" data-mtransfer="${m.user_id}" data-mname="${esc(m.name)}" title="把负责人转交给 ${esc(m.name)}">转交</button>
+        ? `<select data-mrole="${m.user_id}" aria-label="${esc(m.name)} 的角色">${roleSelectOptions(m.role)}</select>
+           <button class="quiet small-btn" data-mtransfer="${m.user_id}" data-mname="${esc(m.name)}" title="把主要研究者 (PI) 转交给 ${esc(m.name)}">转交 PI</button>
            <button class="quiet small-btn" data-mremove="${m.user_id}" data-mname="${esc(m.name)}">移出</button>`
-        : `<span class="rs-kind">${ROLE_LABEL[m.role]}</span>`}</li>`
+        : `<span class="rs-kind role-badge-${m.role}">${ROLE_LABEL[m.role] ?? m.role}</span>`}</li>`
     return `<section class="rs-card wide" id="rsMembers">
-      <div class="rs-card-head"><h3>成员<span class="muted small"> · ${members.length} 人</span></h3>${isOwner ? '' : '<button class="quiet small-btn" data-act="leave">退出研究</button>'}</div>
+      <div class="rs-card-head"><h3>临床研究项目成员<span class="muted small"> · ${members.length} 人</span></h3>${isOwner ? '' : '<button class="quiet small-btn" data-act="leave">退出研究</button>'}</div>
       <ul class="rs-list">${members.map(row).join('')}</ul>
       ${isOwner ? (candidates.length
         ? `<div class="row rs-addmember"><select id="rsAddUser" aria-label="加成员">${candidates.map(u => `<option value="${u.user_id}">${esc(u.name)}（${esc(u.username)}）</option>`).join('')}</select>
-            <select id="rsAddRole" aria-label="角色"><option value="editor">可编辑</option><option value="viewer">只读</option></select><button class="small-btn" data-act="addmember">＋ 加成员</button></div>`
-        : `<p class="muted small">${members.length > 1 ? '本机构的同事都已在研究里。' : '同机构的同事可以加进研究（可编辑 / 只读）。你的机构里还没有其他同事——机构管理员可在「机构管理」里邀请。'}</p>`) : ''}
-      <p class="muted small">成员能看研究里的文档、数据集和分析；可编辑成员能改文档、上传数据、生成研究数据集。入组患者仍要求操作者在患者的诊疗组里。</p>
+            <select id="rsAddRole" aria-label="角色">${ROLE_OPTIONS.map(opt => `<option value="${opt.value}">${esc(opt.label)}</option>`).join('')}</select><button class="small-btn" data-act="addmember">＋ 加成员</button></div>`
+        : `<p class="muted small">${members.length > 1 ? '本机构的同事都已在研究里。' : '同机构的同事可以按 GCP 角色加进研究（Sub-I、CRA、CRC、统计师、DM、放射医师等）。你的机构里还没有其他同事——机构管理员可在「机构管理」里邀请。'}</p>`) : ''}
+      <p class="muted small">成员权限制度：PI 享有全局管理权；Sub-I、CRC、生物统计师、数据管理员及放射医师具备协同编写与分析权限；CRA 及质控稽查员享有受试者隐私脱敏后的只读监查与数据核对 (SDV) 权限。</p>
     </section>`
   }
 
@@ -1690,7 +1749,7 @@ ${modelsDesc}
     const el = e.target as HTMLInputElement | HTMLSelectElement
     const id = current
     if (el.dataset.mrole) {
-      try { await api(`/api/studies/${id}/members/${el.dataset.mrole}`, { method: 'PATCH', body: JSON.stringify({ role: el.value }) }); notice(`已改为「${el.value === 'viewer' ? '只读' : '可编辑'}」`) } catch (err) { notice((err as Error).message, true); void openStudy(id) }
+      try { await api(`/api/studies/${id}/members/${el.dataset.mrole}`, { method: 'PATCH', body: JSON.stringify({ role: el.value }) }); notice(`已改为「${ROLE_LABEL[el.value] ?? el.value}」`) } catch (err) { notice((err as Error).message, true); void openStudy(id) }
       return
     }
     if (el.id === 'rsAddUser' || el.id === 'rsAddRole') return

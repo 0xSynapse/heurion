@@ -118,6 +118,7 @@ export const DeckOp = z.discriminatedUnion('op', [
     paragraph: z.number().int().min(0).optional().describe('只改第几段（从 0 起）；缺省改整个形状'),
     color: COLOR.optional(),
     size: z.number().min(6).max(200).optional().describe('字号（pt）'),
+    font_family: z.string().optional().describe('字体名称，如 Arial, SimSun, SimHei, KaiTi, Roboto, PingFang SC'),
     bold: z.boolean().optional(),
     italic: z.boolean().optional(),
     align: z.enum(['left', 'center', 'right', 'justify']).optional(),
@@ -630,7 +631,7 @@ function applyOne(tr: Transform, op: DeckOp, ctx: DeckContext): string[] {
       const theme = slideAt(tr, hit.pos)?.attrs.theme as string | null
       const style: TextStyle = {
         color: op.color !== undefined ? color(op.color, theme) : undefined,
-        size: op.size, bold: op.bold, italic: op.italic, align: op.align,
+        size: op.size, font_family: op.font_family, bold: op.bold, italic: op.italic, align: op.align,
       }
       if (style.color === 'none') throw new OpError('invalid_color', '文字颜色不能是 none')
       let index = 0
@@ -854,7 +855,7 @@ function slideAt(tr: Transform, pos: number): PMNode | null {
   return $pos.depth >= 1 ? $pos.node(1) : tr.doc.nodeAt(pos)
 }
 
-interface TextStyle { color?: string; size?: number; bold?: boolean; italic?: boolean; align?: 'left' | 'center' | 'right' | 'justify' }
+interface TextStyle { color?: string; size?: number; font_family?: string; bold?: boolean; italic?: boolean; align?: 'left' | 'center' | 'right' | 'justify' }
 
 /** a:rPr 片段设颜色：替换顶层的填充（不动 a:ln 里的线条填充）。 */
 export function rprWithColor(xml: string, hex: string): string {
@@ -873,6 +874,19 @@ function rprWithSize(xml: string, size: number): string {
   return /\ssz="[^"]*"/.test(xml) ? xml.replace(/\ssz="[^"]*"/, ` sz="${sz}"`) : xml.replace(/^<a:rPr\b/, `<a:rPr sz="${sz}"`)
 }
 
+export function rprWithFont(xml: string, font: string): string {
+  const escFont = font.replace(/"/g, '&quot;')
+  const fontTags = `<a:latin typeface="${escFont}"/><a:ea typeface="${escFont}"/>`
+  const self = /^(<a:rPr\b[^>]*?)\s*\/>$/.exec(xml.trim())
+  if (self) return `${self[1]}>${fontTags}</a:rPr>`
+  let res = xml
+  if (/<a:latin\b[^>]*\/>/.test(res)) res = res.replace(/<a:latin\b[^>]*\/>/, `<a:latin typeface="${escFont}"/>`)
+  else res = res.replace(/<\/a:rPr>/, `<a:latin typeface="${escFont}"/></a:rPr>`)
+  if (/<a:ea\b[^>]*\/>/.test(res)) res = res.replace(/<a:ea\b[^>]*\/>/, `<a:ea typeface="${escFont}"/>`)
+  else res = res.replace(/<\/a:rPr>/, `<a:ea typeface="${escFont}"/></a:rPr>`)
+  return res
+}
+
 const ALGN = { left: 'l', center: 'ctr', right: 'r', justify: 'just' } as const
 
 function styledParagraph(p: PMNode, style: TextStyle): PMNode {
@@ -880,10 +894,11 @@ function styledParagraph(p: PMNode, style: TextStyle): PMNode {
   p.forEach(child => {
     if (!child.isText) { content.push(child); return }
     let marks = child.marks
-    if (style.color || style.size) {
+    if (style.color || style.size || style.font_family) {
       let xml = (marks.find(m => m.type.name === 'rpr')?.attrs.xml as string | undefined) ?? `<a:rPr ${A_NS} lang="zh-CN" dirty="0"/>`
       if (style.color) xml = rprWithColor(xml, style.color)
       if (style.size) xml = rprWithSize(xml, style.size)
+      if (style.font_family) xml = rprWithFont(xml, style.font_family)
       marks = deckSchema.marks.rpr!.create({ xml }).addToSet(marks.filter(m => m.type.name !== 'rpr'))
     }
     for (const [key, type] of [['bold', deckSchema.marks.bold!], ['italic', deckSchema.marks.italic!]] as const) {

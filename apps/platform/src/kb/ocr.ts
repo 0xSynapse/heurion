@@ -1,11 +1,25 @@
 import { execFile } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { createWorker } from 'tesseract.js'
 
 const run = promisify(execFile)
+
+const PDFTOPPM_CANDIDATES = [
+  'pdftoppm',
+  '/opt/homebrew/bin/pdftoppm',
+  '/usr/local/bin/pdftoppm',
+  '/usr/bin/pdftoppm',
+]
+
+function resolvePdftoppm(): string {
+  for (const p of PDFTOPPM_CANDIDATES) {
+    if (p.startsWith('/') && existsSync(p)) return p
+  }
+  return 'pdftoppm'
+}
 
 /** 给扫描页做 OCR：返回页码（1 起）→ 文字。onPage 报进度（第几页 / 共几页）。 */
 export type Ocr = (pdf: Uint8Array, pages: number[], onPage?: (done: number, total: number) => void) => Promise<Map<number, string>>
@@ -24,8 +38,12 @@ export function localOcr(cacheDir: string, langs = 'chi_sim+eng'): Ocr {
     try {
       const file = join(dir, 'in.pdf')
       writeFileSync(file, pdf)
+      const bin = resolvePdftoppm()
       for (const [i, page] of pages.entries()) {
-        await run('pdftoppm', ['-r', '200', '-gray', '-png', '-f', String(page), '-l', String(page), file, join(dir, `p${page}`)], { timeout: 120_000 })
+        await run(bin, ['-r', '200', '-gray', '-png', '-f', String(page), '-l', String(page), file, join(dir, `p${page}`)], {
+          timeout: 120_000,
+          env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}` },
+        })
         const img = readdirSync(dir).find(f => f.startsWith(`p${page}-`) || f === `p${page}.png`)
         if (img) {
           const { data } = await worker.recognize(join(dir, img))

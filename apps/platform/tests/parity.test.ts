@@ -240,6 +240,10 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/studies/:sid/publication-bundle': 'SCI 投稿级成果包一键全量导出打包 (.zip) 二进制文件流，由浏览器界面直接下载',
   'POST /api/datasets/:did/nomogram': '预后预测列线图 (Nomogram) 标尺映射与矢量图生成，由界面交互弹窗计算与渲染',
   'POST /api/datasets/:did/roc-dca': 'ROC 诊断效能对比与 DCA 临床决策净获益曲线分析，由界面交互弹窗渲染',
+  'GET /api/citations/search': '文献模糊搜索自动联想补全（供用户界面弹窗使用，AI 直接调 pubmed_search/openalex_search）',
+  'GET /api/copilot/status': '全局 Co-Pilot 随航助手状态与历史查询（界面随航抽屉展示用）',
+  'POST /api/copilot/chat': '全局 Co-Pilot 随航助手用户发起对话入口（由用户输入触发回合）',
+  'POST /api/copilot/clear': '全局 Co-Pilot 随航助手清空会话（用户界面操作）',
 }
 
 describe('人机对等：每个接口（AI 的权限 = 用户的权限）', () => {

@@ -1,5 +1,6 @@
 import { themeAllowed } from '../model/org-templates.ts'
 import { Access, allows } from '../research/access.ts'
+import { randomUUID } from 'node:crypto'
 import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, relative, isAbsolute } from 'node:path'
@@ -368,7 +369,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       'set_paragraphs {shape_id, paragraphs:[{text, lvl?}]}（逐段改写多段文字，未改的字保留原有颜色、加粗、引用与评论标记）；' +
       'add_shape {slide_id, markdown?, x, y, w, h, font_size?, geometry?: rect|roundRect|ellipse, fill?, color?}（文本框；带 geometry / fill 即色块卡片，卡片自带居中文本容器，直接传 markdown 即可，严禁在同一位置叠加新建文本框！修改已有形状文本必须用 set_text 或 replace_text）；' +
       'set_xfrm {shape_id, x?, y?, w?, h?}；delete_shape {shape_id}；set_z {shape_id, to: front|back|forward|backward}；' +
-      'set_fill {shape_id, color}；set_background {slide_id, color}；set_text_style {shape_id, paragraph?, color?, size?, bold?, italic?, align?}；' +
+      'set_fill {shape_id, color}；set_background {slide_id, color}；set_text_style {shape_id, paragraph?, color?, size?, font_family?, bold?, italic?, align?}；' +
       'add_image {slide_id, asset_id, x, y, w, h?}（图片先用 asset_upload 上传；h 缺省按原图比例）；' +
       'add_table {slide_id, x, y, w, rows:[[...]], header?, font_size?}（表头用主题强调色；之后用 table_set_cells 改单元格）；' +
       'table_insert_rows {shape_id, at, rows?} / table_delete_rows {shape_id, at, count?} / table_insert_cols {shape_id, at, cells?} / table_delete_cols {shape_id, at, count?}（新行列沿用相邻格式）；' +
@@ -563,17 +564,69 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
   }, async ({ doi }) => json(await deps.crossref.lookup(doi) ?? { found: false, doi: normalizeDoi(doi) }))
 
   server.registerTool('insert_citation', {
-    description: '为文档登记一条引用（DOI 必须能在 Crossref 或 OpenAlex 查到），返回 cite_id。正文里写 [@c:<cite_id>] 引用它；编号与参考文献表由平台生成。',
-    inputSchema: { doc_id: z.string(), doi: z.string().min(1), pmid: z.string().optional(), style: z.enum(['ama', 'apa', 'vancouver', 'gbt7714']).optional() },
-  }, async ({ doc_id, doi, pmid, style }) => {
+    description: '为文档登记一条引用（支持 DOI、PMID 或标题模糊搜索），返回 cite_id。正文里写 [@c:<cite_id>] 引用它；编号与参考文献表由平台生成。',
+    inputSchema: {
+      doc_id: z.string(),
+      doi: z.string().optional().describe('文献 DOI'),
+      pmid: z.string().optional().describe('PubMed ID (PMID)'),
+      query: z.string().optional().describe('文献标题或关键词模糊检索'),
+      style: z.enum(['ama', 'apa', 'vancouver', 'gbt7714']).optional(),
+    },
+  }, async ({ doc_id, doi, pmid, query, style }) => {
     const denied = ctx.check(doc_id, 'write')
     if (denied) return denied
-    let article = await deps.crossref.lookup(doi)
-    if (!article && deps.openalex) article = await deps.openalex.lookup(doi)
-    if (!article) return fail('doi_not_found', `DOI ${normalizeDoi(doi)} 在 Crossref/OpenAlex 查不到，不能作为引用`, { hint: '用 pubmed_search 或 openalex_search 找到真实文献的 DOI。' })
+    let d = doi?.trim()
+    let p = pmid?.trim()
+    const q = query?.trim()
+    if (!d && !p && !q) return fail('missing_identifier', '必须提供 doi、pmid 或 query 之一')
+    if (d && (/^\d{6,9}$/.test(d) || /^pmid:?\s*\d+/i.test(d))) {
+      p = d.replace(/^pmid:?\s*/i, '').trim()
+      d = undefined
+    }
+
+    let article: any = null
+    if (d) {
+      article = await deps.crossref.lookup(d).catch(() => null)
+      if (!article && deps.openalex) article = await deps.openalex.lookup(d).catch(() => null)
+      if (!article && typeof deps.pubmed?.pmidForDoi === 'function' && typeof deps.pubmed?.summaries === 'function') {
+        const foundPmid = await deps.pubmed.pmidForDoi(d).catch(() => null)
+        if (foundPmid) {
+          const list = await deps.pubmed.summaries([foundPmid]).catch(() => [])
+          if (list.length) article = list[0] ?? null
+        }
+      }
+    }
+    if (!article && p && typeof deps.pubmed?.summaries === 'function') {
+      const cleanPmid = p.replace(/^pmid:?\s*/i, '').trim()
+      const list = await deps.pubmed.summaries([cleanPmid]).catch(() => [])
+      if (list.length) {
+        article = list[0] ?? null
+        if (article?.doi) {
+          const enriched = await deps.crossref.lookup(article.doi).catch(() => null)
+          if (enriched) article = enriched
+        }
+      }
+    }
+    if (!article && q) {
+      if (typeof deps.pubmed?.search === 'function') {
+        const hits = await deps.pubmed.search(q, 3).catch(() => [])
+        if (hits.length) article = hits[0] ?? null
+      }
+      if (!article && typeof deps.openalex?.search === 'function') {
+        const hits = await deps.openalex.search(q, 3).catch(() => [])
+        if (hits.length) article = hits[0] ?? null
+      }
+    }
+    if (!article) {
+      const code = d ? 'doi_not_found' : p ? 'pmid_not_found' : 'citation_not_found'
+      return fail(code, `文献在 Crossref/PubMed/OpenAlex 查不到 (${d ? `DOI ${normalizeDoi(d)}` : p ? `PMID ${p}` : `检索词 ${q}`})，不能作为引用`, { hint: '用 pubmed_search 或 openalex_search 找到真实文献后登记。' })
+    }
+
     const formatted = formatCitation(article, style ?? 'ama')
-    const row = store.upsertCitation({ doc_id, doi: article.doi!, pmid: pmid ?? null, formatted, url: `https://doi.org/${article.doi}` })
-    return json({ cite_id: row.id, marker: `[@c:${row.id}]`, formatted: row.formatted })
+    const finalDoi = article.doi ? normalizeDoi(article.doi) : (article.pmid ? `pmid:${article.pmid}` : `ref:${randomUUID().slice(0, 8)}`)
+    const finalUrl = article.doi ? `https://doi.org/${article.doi}` : (article.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${article.pmid}/` : null)
+    const row = store.upsertCitation({ doc_id, doi: finalDoi, pmid: article.pmid ?? p ?? null, formatted, url: finalUrl })
+    return json({ cite_id: row.id, marker: `[@c:${row.id}]`, formatted: row.formatted, doi: row.doi, pmid: row.pmid })
   })
 
   server.registerTool('import_references', {

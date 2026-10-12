@@ -12,11 +12,22 @@ import type { AssetRow, DatasetRow, DocRow, Store, StudyRole } from '../store/db
 export type Level = 'read' | 'write' | 'manage'
 export type ResourceRole = StudyRole
 
-const RANK: Record<ResourceRole, number> = { viewer: 1, editor: 2, owner: 3 }
+const RANK: Record<ResourceRole, number> = {
+  viewer: 1,
+  auditor: 1,
+  cra: 1, // 临床监查员 (CRA)：只读监查与数据核对 (SDV)
+  editor: 2,
+  crc: 2, // 临床协调员 (CRC)：入组、访视记录、eCRF 录入
+  sub_i: 2, // 共同研究者 (Sub-I)：方案编写、病人评估、数据分析
+  statistician: 2, // 生物统计师：统计分析计划、Table 1、生存分析、绘图
+  data_manager: 2, // 数据管理员 (DM)：数据清洗、字典管理、逻辑核查
+  radiologist: 2, // 放射/影像评估员：影像阅片、RECIST 1.1 靶病灶测量、3D 分割
+  owner: 3, // 主要研究者 (PI / 负责人)：研究全局管理、成员增删、终审发布
+}
 const NEED: Record<Level, number> = { read: 1, write: 2, manage: 3 }
 
 /** 角色是否够某一级访问 */
-export const allows = (role: ResourceRole | null | undefined, level: Level): boolean => !!role && RANK[role] >= NEED[level]
+export const allows = (role: ResourceRole | null | undefined, level: Level): boolean => !!role && (RANK[role] ?? 0) >= NEED[level]
 
 interface Context { kind?: string; study_id?: string }
 const contextOf = (doc: Pick<DocRow, 'context'>): Context | null => {
@@ -64,7 +75,7 @@ export class Access {
 
   /** 研究里的文档 / 数据集的「删除」：研究负责人，或创建者本人（仍有编辑权时） */
   canDelete(user: string, row: { owner: string }, role: ResourceRole | null): boolean {
-    return role === 'owner' || (role === 'editor' && row.owner === user)
+    return role === 'owner' || (allows(role, 'write') && row.owner === user)
   }
 
   /** 图片资产可读：主人；用我能读的数据集画的分析图；被我能读的研究文档引用 */

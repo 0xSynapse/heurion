@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -8,6 +8,20 @@ import { importPptx } from '../convert/pptx-import.ts'
 import type { Ocr } from './ocr.ts'
 
 const run = promisify(execFile)
+
+const PDFTOTEXT_CANDIDATES = [
+  'pdftotext',
+  '/opt/homebrew/bin/pdftotext',
+  '/usr/local/bin/pdftotext',
+  '/usr/bin/pdftotext',
+]
+
+function resolvePdftotext(): string {
+  for (const p of PDFTOTEXT_CANDIDATES) {
+    if (p.startsWith('/') && existsSync(p)) return p
+  }
+  return 'pdftotext'
+}
 
 /** 抽取结果：按页的文字（docx / txt 没有页的概念，记为第 1 页），以及能识别出的 DOI / PMID。 */
 export interface Extracted {
@@ -80,7 +94,12 @@ export async function pdfPages(bytes: Uint8Array): Promise<string[]> {
   try {
     const file = join(dir, 'in.pdf')
     writeFileSync(file, bytes)
-    const { stdout } = await run('pdftotext', ['-enc', 'UTF-8', file, '-'], { maxBuffer: 256 * 1024 * 1024, timeout: 120_000 })
+    const bin = resolvePdftotext()
+    const { stdout } = await run(bin, ['-enc', 'UTF-8', file, '-'], {
+      maxBuffer: 256 * 1024 * 1024,
+      timeout: 120_000,
+      env: { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}` },
+    })
     const pages = stdout.split('\f')
     if (pages.length > 1 && pages.at(-1)!.trim() === '') pages.pop()
     return pages

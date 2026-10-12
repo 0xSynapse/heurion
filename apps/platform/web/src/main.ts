@@ -23,6 +23,7 @@ import { applyTheme, mountThemeSwitch } from './theme.ts'
 import { photoFigure } from './photos.ts'
 import { openPhotoSearch, photoSearchEnabled } from './unsplash.ts'
 import { openHelpGuide, importHelpAsDoc } from './help.ts'
+import { initCopilot } from './copilot.ts'
 import { icon } from './icons.ts'
 
 const TOKEN = storedToken()
@@ -296,6 +297,11 @@ const mailUi = initMail(api, (m, e) => showNotice(m, e), {
   openCalendar: async () => {
     spaces.set('calendar')
   },
+})
+
+initCopilot({
+  token: () => TOKEN,
+  activeDoc: () => session ? { id: session.docId, title: detail?.title || '未命名文档' } : null,
 })
 
 // 资料库页打开时，图标栏高亮「资料库」而不是当前空间
@@ -740,15 +746,44 @@ async function initDeckToolbar(): Promise<void> {
   syncDeckToolbar()
 }
 
+function shapeFontFamily(shape: any): string {
+  let font: string | null = null
+  const walk = (n: any) => {
+    if (font !== null) return
+    if (n.type === 'text') {
+      const xml = n.marks?.find((m: any) => m.type === 'rpr')?.attrs?.xml as string | undefined
+      const m = xml && (/<a:latin typeface="([^"]+)"/.exec(xml)?.[1] ?? /<a:ea typeface="([^"]+)"/.exec(xml)?.[1])
+      if (m) font = m
+    }
+    n.content?.forEach(walk)
+  }
+  walk(shape)
+  return font ?? ''
+}
+
 function syncDeckToolbar(): void {
   const sel = session?.deck?.selection()
-  for (const b of document.querySelectorAll<HTMLButtonElement>('#deckToolbar [data-needs-shape]')) b.disabled = !sel
+  for (const b of document.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('#deckToolbar [data-needs-shape]')) b.disabled = !sel
   const isTable = sel?.shape.attrs?.kind === 'table'
   for (const b of document.querySelectorAll<HTMLButtonElement>('#deckToolbar [data-needs-table]')) b.hidden = !isTable
   const isChart = sel?.shape.attrs?.kind === 'chart' && !!sel.shape.attrs.chart
   for (const b of document.querySelectorAll<HTMLButtonElement>('#deckToolbar [data-needs-chart]')) b.hidden = !isChart
   const n = session?.deck?.selectionIds().length ?? 0
   for (const b of document.querySelectorAll<HTMLButtonElement>('#arrangeMenu [data-distribute]')) b.disabled = n < 3
+  if (sel?.shape) {
+    const boldBtn = document.querySelector<HTMLButtonElement>('#deckToolbar [data-dk="bold"]')
+    if (boldBtn) boldBtn.classList.toggle('active', hasBold(sel.shape))
+    const fontSel = document.querySelector<HTMLSelectElement>('#selDeckFontFamily')
+    if (fontSel) {
+      const f = shapeFontFamily(sel.shape)
+      fontSel.value = Array.from(fontSel.options).some(o => o.value === f) ? f : ''
+    }
+    const szSel = document.querySelector<HTMLSelectElement>('#selDeckFontSize')
+    if (szSel) {
+      const sz = shapeFontSize(sel.shape)
+      szSel.value = Array.from(szSel.options).some(o => o.value === String(sz)) ? String(sz) : ''
+    }
+  }
 }
 
 /** 颜色板：当前页主题的颜色（以主题记号提交，换主题时跟着变）+ 自定义颜色。 */
@@ -954,6 +989,22 @@ $('deckToolbar').onclick = async e => {
   }
 }
 
+$('deckToolbar').onchange = async e => {
+  const selEl = (e.target as HTMLElement).closest('select') as HTMLSelectElement | null
+  const deck = session?.deck
+  if (!selEl || !deck) return
+  const currentSel = deck.selection()
+  const id = currentSel?.shape.attrs?.id as string | undefined
+  if (!id) return
+  const ids = deck.selectionIds()
+  const each = (op: Record<string, unknown>) => ids.map(shape_id => ({ ...op, shape_id }))
+  if (selEl.id === 'selDeckFontFamily' && selEl.value) {
+    await deck.edit(each({ op: 'set_text_style', font_family: selEl.value }))
+  } else if (selEl.id === 'selDeckFontSize' && selEl.value) {
+    await deck.edit(each({ op: 'set_text_style', size: Number(selEl.value) }))
+  }
+}
+
 // —— 工具栏 ——
 
 $('toolbar').onclick = e => {
@@ -968,10 +1019,24 @@ $('toolbar').onclick = e => {
 }
 async function addCitation(): Promise<void> {
   if (!session?.editor) return
-  const doi = await askText({ title: '插入引用', label: 'DOI', placeholder: '10.1056/NEJMoa2307563', confirm: '核实并插入', hint: '经 Crossref 核实后登记，在光标处插入引用编号；参考文献表自动生成。' })
-  if (!doi?.trim()) return
+  const input = await askText({
+    title: '插入引用文献',
+    label: 'DOI / PMID / 论文标题或关键词',
+    placeholder: '例如 10.1056/NEJMoa2307563 或 38215162 或 Osimertinib in NSCLC',
+    confirm: '核实并插入',
+    hint: '支持输入 DOI、PubMed ID (PMID) 或论文标题关键词。系统将通过 PubMed / Crossref / OpenAlex 权威比对并自动插入引用编号。',
+  })
+  if (!input?.trim()) return
   try {
-    const r = await api(`/api/docs/${session.docId}/citations`, { method: 'POST', body: JSON.stringify({ doi }) })
+    const raw = input.trim()
+    const isPmid = /^\d{6,9}$/.test(raw) || /^pmid:?\s*\d+/i.test(raw)
+    const isDoi = /\b10\.\d{4,9}\//.test(raw)
+    const payload: Record<string, string> = {}
+    if (isDoi) payload.doi = raw
+    else if (isPmid) payload.pmid = raw.replace(/^pmid:?\s*/i, '')
+    else payload.query = raw
+
+    const r = await api(`/api/docs/${session.docId}/citations`, { method: 'POST', body: JSON.stringify(payload) })
     session.editor?.insertCitation(r.cite_id)
     showNotice(`已插入引用：${r.formatted}`)
     scheduleRefresh()

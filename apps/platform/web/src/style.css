@@ -906,6 +906,19 @@ button.block { width: 100%; padding: 10px 12px; }
 .rs-analyses { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
 .rs-fig { display: flex; flex-direction: column; gap: 6px; padding: 8px; text-align: left; font-size: 12px; }
 .rs-fig img { width: 100%; height: 120px; object-fit: contain; background: #fff; }
+.rs-folder-browser { border: 1px solid var(--line); border-radius: 6px; background: var(--bg-alt, rgba(0,0,0,0.02)); overflow: hidden; }
+.rs-folder-header { background: var(--hover, rgba(0,0,0,0.03)); padding: 8px 12px; display: flex; align-items: center; border-bottom: 1px solid var(--line); font-size: 12px; }
+.rs-folder-path { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono, monospace); color: var(--text); font-size: 12px; }
+.rs-folder-files { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; padding: 14px; }
+.rs-file-item { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: all 0.15s ease; }
+.rs-file-item:hover { border-color: var(--mint); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+.rs-file-preview { position: relative; width: 100%; height: 130px; background: #fff; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid var(--line); overflow: hidden; }
+.rs-file-preview img { width: 100%; height: 100%; object-fit: contain; padding: 6px; }
+.rs-file-badge { position: absolute; top: 6px; right: 6px; font-size: 9.5px; font-weight: 600; padding: 2px 6px; border-radius: 3px; background: rgba(0,0,0,0.65); color: #fff; }
+.rs-file-info { padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 5px; }
+.rs-file-name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.rs-file-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+.rs-folder-empty { padding: 32px 16px; text-align: center; }
 .rs-soon { opacity: .7; border-style: dashed; }
 @media (max-width: 900px) { .rs-grid { grid-template-columns: 1fr; } }
 
@@ -1191,7 +1204,16 @@ button.block { width: 100%; padding: 10px 12px; }
 .shared-pill { font-size: 10.5px; padding: 0 6px; margin-left: 6px; border: 1px solid var(--green-line); color: var(--mint-text); background: var(--green-soft); vertical-align: 1px; }
 .collab-avatar { display: inline-grid; place-items: center; width: 24px; height: 24px; flex: none; font-size: 11.5px; font-weight: 600; color: var(--text); background: var(--raised); border: 1px solid var(--line-strong); }
 .collab-avatar.role-owner { background: var(--mint); color: var(--mint-ink); border-color: var(--mint); }
+.collab-avatar.role-sub_i { background: #3b82f6; color: #fff; border-color: #2563eb; }
+.collab-avatar.role-cra { background: #8b5cf6; color: #fff; border-color: #7c3aed; }
+.collab-avatar.role-crc { background: #f97316; color: #fff; border-color: #ea580c; }
+.collab-avatar.role-statistician { background: #6366f1; color: #fff; border-color: #4f46e5; }
+.collab-avatar.role-data_manager { background: #eab308; color: #2e2600; border-color: #ca8a04; }
+.collab-avatar.role-radiologist { background: #06b6d4; color: #022c34; border-color: #0891b2; }
+.collab-avatar.role-auditor { background: #64748b; color: #fff; border-color: #475569; }
 .collab-avatar.role-viewer { color: var(--muted); border-style: dashed; }
+.role-badge-owner { background: rgba(45, 212, 191, 0.12); color: var(--mint-text); border-color: var(--mint); }
+.role-badge-cra, .role-badge-auditor { border-style: dashed; opacity: 0.9; }
 .doc-collab { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
 .doc-collab .collab-avatar { width: 22px; height: 22px; font-size: 11px; margin-left: -6px; box-shadow: 0 0 0 2px var(--bg); }
 .doc-collab .collab-avatar:first-child { margin-left: 0; }
@@ -6367,6 +6389,213 @@ svg.mail-star-icon-filled polygon {
   background: var(--raised);
   color: var(--mint-text);
   box-shadow: 0 0 8px rgba(10, 122, 85, 0.15);
+}
+
+/* —— 全局 AI Co-Pilot 随航助手 —— */
+.copilot-toggle-btn {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  border-radius: 28px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border: 1px solid var(--mint);
+  color: var(--mint-text);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 500;
+  font-size: 13px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.copilot-toggle-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(45, 212, 191, 0.28);
+}
+.copilot-btn-icon { font-size: 15px; }
+.copilot-btn-text { letter-spacing: 0.2px; }
+
+.copilot-drawer {
+  position: fixed;
+  bottom: 76px;
+  right: 24px;
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  height: 600px;
+  max-height: calc(100vh - 100px);
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.copilot-drawer.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(14px) scale(0.98);
+}
+.copilot-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-alt, rgba(255, 255, 255, 0.02));
+}
+.copilot-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.copilot-icon { font-size: 18px; }
+.copilot-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.copilot-context-badge {
+  font-size: 10.5px;
+  color: var(--mint-text);
+  background: var(--green-soft);
+  border: 1px solid var(--green-line);
+  padding: 1px 6px;
+  border-radius: 4px;
+  display: inline-block;
+}
+.copilot-actions { display: flex; align-items: center; gap: 4px; }
+.copilot-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  scroll-behavior: smooth;
+}
+.copilot-welcome {
+  background: var(--hover, rgba(255, 255, 255, 0.02));
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
+  margin-bottom: 6px;
+}
+.copilot-welcome-badge {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--mint-text);
+  margin-bottom: 6px;
+}
+.copilot-welcome h4 { margin: 0 0 6px; font-size: 13.5px; font-weight: 500; }
+.copilot-welcome p { margin: 0; line-height: 1.6; }
+.copilot-msg {
+  display: flex;
+  flex-direction: column;
+  max-width: 92%;
+  gap: 3px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.copilot-msg.user {
+  align-self: flex-end;
+  background: var(--mint);
+  color: var(--mint-ink);
+  padding: 7px 11px;
+  border-radius: 12px 12px 2px 12px;
+}
+.copilot-msg.assistant {
+  align-self: flex-start;
+  background: var(--raised, var(--hover));
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 12px 12px 12px 2px;
+  border: 1px solid var(--line);
+}
+.copilot-msg.assistant pre {
+  background: rgba(0, 0, 0, 0.25);
+  padding: 6px 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 11.5px;
+}
+.copilot-msg.assistant code {
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  background: rgba(0, 0, 0, 0.15);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.copilot-msg-tool {
+  font-size: 11px;
+  color: var(--mint-text);
+  border: 1px solid var(--green-line);
+  background: var(--green-soft);
+  padding: 2px 6px;
+  border-radius: 4px;
+  align-self: flex-start;
+  margin: 2px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.copilot-quick-chips {
+  padding: 6px 12px 8px;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  white-space: nowrap;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+.copilot-quick-chips::-webkit-scrollbar { height: 4px; }
+.copilot-quick-chips::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 2px; }
+.copilot-chip {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  padding: 2px 9px;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex: none;
+}
+.copilot-chip:hover {
+  border-color: var(--mint);
+  color: var(--mint-text);
+  background: var(--hover);
+}
+.copilot-footer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.copilot-footer textarea {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 7px 9px;
+  resize: none;
+  outline: none;
+  box-sizing: border-box;
+}
+.copilot-footer textarea:focus { border-color: var(--mint); }
+.copilot-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 
