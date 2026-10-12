@@ -244,11 +244,12 @@ def load_nifti(path_or_bytes: Union[str, bytes, io.BytesIO]) -> Tuple[np.ndarray
             else:
                 raise
 
-    if data.ndim == 4:
-        data = data[..., 0]
-    # NIfTI is typically (X, Y, Z); transpose to (Z, Y, X) for axial slice processing
-    vol_zyx = np.transpose(data, (2, 1, 0))
-    spacing_zyx = (float(zooms[2]), float(zooms[1]), float(zooms[0]))
+    try:
+        from .spatial_canonicalizer import to_canonical_lps
+    except (ImportError, ValueError):
+        from spatial_canonicalizer import to_canonical_lps
+
+    vol_zyx, affine_lps, spacing_zyx = to_canonical_lps(data, nimg.affine)
     return vol_zyx, spacing_zyx
 
 def load_dicom_series(folder_path: str) -> Tuple[np.ndarray, Tuple[float, float, float], Dict[str, Any]]:
@@ -409,12 +410,28 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
 
     valid_slices = max(shape_groups.values(), key=len)
 
-    # 3. Sort slices by physical coordinates
+    # 3. Sort slices by physical coordinates along the slice normal
+    first = valid_slices[0]
+    iop = getattr(first, "ImageOrientationPatient", None)
+    slice_normal = np.array([0.0, 0.0, 1.0])
+    if iop is not None and len(iop) >= 6:
+        try:
+            rx, ry, rz = [float(str(x).replace(",", ".")) for x in iop[:3]]
+            cx, cy, cz = [float(str(x).replace(",", ".")) for x in iop[3:6]]
+            r_vec = np.array([rx, ry, rz])
+            c_vec = np.array([cx, cy, cz])
+            n_vec = np.cross(r_vec, c_vec)
+            if np.linalg.norm(n_vec) > 1e-4:
+                slice_normal = n_vec / np.linalg.norm(n_vec)
+        except Exception:
+            pass
+
     def slice_sort_key(s):
         try:
             pos = getattr(s, "ImagePositionPatient", None)
             if pos is not None and len(pos) >= 3:
-                return (0, float(str(pos[2]).replace(",", ".")))
+                p_vec = np.array([float(str(x).replace(",", ".")) for x in pos[:3]])
+                return (0, float(np.dot(p_vec, slice_normal)))
         except Exception:
             pass
         try:
@@ -479,15 +496,41 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
         slice_arrays.append(arr * s_slope + s_intercept)
 
     vol = np.stack(slice_arrays, axis=0)
+    try:
+        from .spatial_canonicalizer import build_dicom_affine, to_canonical_lps, check_anatomical_orientation_sanity
+    except (ImportError, ValueError):
+        from spatial_canonicalizer import build_dicom_affine, to_canonical_lps, check_anatomical_orientation_sanity
+
+    # Construct patient coordinate affine from DICOM IOP and IPP headers
+    iop = [float(v) for v in getattr(first, "ImageOrientationPatient", [1, 0, 0, 0, 1, 0])]
+    ipp_list = [[float(v) for v in getattr(s, "ImagePositionPatient", [0, 0, 0])] for s in valid_slices]
+    ps = (float(first.PixelSpacing[0]), float(first.PixelSpacing[1])) if hasattr(first, "PixelSpacing") else (spacing[1], spacing[2])
+    aff = build_dicom_affine(iop, ipp_list, ps)
+
+    # Reorient to canonical LPS+ (Z, Y, X)
+    vol_xyz = np.transpose(vol, (2, 1, 0))
+    vol_lps, aff_lps, spacing_lps = to_canonical_lps(vol_xyz, aff)
+
+    patient_pos = str(getattr(first, "PatientPosition", "HFS"))
+    modality_str = str(getattr(first, "Modality", "CT"))
+    orientation_qa = check_anatomical_orientation_sanity(vol_lps, modality=modality_str, patient_position=patient_pos)
+
     meta = {
-        "modality": str(getattr(first, "Modality", "CT")),
+        "modality": modality_str,
         "slices_count": len(valid_slices),
-        "rows": vol.shape[1],
-        "cols": vol.shape[2],
+        "rows": vol_lps.shape[1],
+        "cols": vol_lps.shape[2],
         "series_description": str(getattr(first, "SeriesDescription", "")),
         "body_part_examined": str(getattr(first, "BodyPartExamined", "")),
+        "convolution_kernel": str(getattr(first, "ConvolutionKernel", "")),
+        "patient_position": patient_pos,
+        "kvp": getattr(first, "KVP", None),
+        "tube_current": getattr(first, "XRayTubeCurrent", None),
+        "window_center": getattr(first, "WindowCenter", None),
+        "window_width": getattr(first, "WindowWidth", None),
+        "orientation_qa": orientation_qa
     }
-    return vol, spacing, scrub_dicom_metadata(meta, "ANON-STUDY")
+    return vol_lps, spacing_lps, scrub_dicom_metadata(meta, "ANON-STUDY")
 
 def load_volume(source: Union[str, bytes, io.BytesIO], filename: Optional[str] = None) -> Tuple[np.ndarray, Tuple[float, float, float], str]:
     """

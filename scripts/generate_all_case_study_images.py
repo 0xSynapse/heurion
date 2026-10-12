@@ -74,11 +74,12 @@ def generate_case_1_baseline_hrct():
     import sys, base64
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", "imaging-worker", "src")))
     from bronchiectasis import analyze_bronchiectasis_and_mucus
+    from spatial_canonicalizer import to_canonical_lps
 
     img = nib.load(os.path.join(DATA_DIR, "chest_lung_ct.nii.gz"))
     data = img.get_fdata(dtype=np.float32)
-    vol_zyx = np.transpose(data, (2, 1, 0)) # (269, 512, 512)
-    res = analyze_bronchiectasis_and_mucus(vol_zyx, spacing=(1.5, 0.8, 0.8), is_baseline_severe=True)
+    vol_zyx, aff_lps, sp = to_canonical_lps(data, img.affine)
+    res = analyze_bronchiectasis_and_mucus(vol_zyx, spacing=sp, is_baseline_severe=True)
 
     b64_str = res["key_slice_png_base64"]
     if "," in b64_str:

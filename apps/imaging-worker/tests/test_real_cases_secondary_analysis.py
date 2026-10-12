@@ -298,11 +298,12 @@ class TestRealCasesSecondaryAnalysis:
         ct_file = DATA_DIR / "chest_lung_ct.nii.gz"
         assert ct_file.exists(), f"Missing chest CT: {ct_file}"
 
+        # In canonical LPS+ coordinate space (Anterior=0, Posterior=511), the companion vessel is at (122, 271, 315)
         res = self.engine.analyze_file(
             file_path=str(ct_file),
             model_name="lung_nodule_segmenter",
             window_preset="lung",
-            prompt_point={"z": 122, "y": 240, "x": 315}
+            prompt_point={"z": 122, "y": 271, "x": 315}
         )
 
         assert res["status"] == "success"
