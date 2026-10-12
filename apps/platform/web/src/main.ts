@@ -455,7 +455,7 @@ async function uploadFileWithProgress(file: File): Promise<any> {
           const pct = Math.round((ev.loaded / ev.total) * 100)
           if (percentEl) percentEl.textContent = `${pct}%`
           if (barEl) barEl.style.width = `${pct}%`
-          if (statusEl && pct >= 100) statusEl.textContent = '文件传输完成，正在进行高保真解析与切片渲染...'
+          if (statusEl && pct >= 100) statusEl.textContent = '文件传输完成，正在解析文档结构...'
         }
       }
       xhr.onload = () => {
@@ -2131,9 +2131,28 @@ function renderCites(): void {
 
 // —— 杂项 ——
 
+const SIDE_COLLAPSED_KEY = 'heurion.side-collapsed'
+
+function setSideCollapsed(collapsed: boolean): void {
+  const app = $('app')
+  app.classList.toggle('side-collapsed', collapsed)
+  const toggleBtn = $('sideToggle')
+  if (toggleBtn) {
+    toggleBtn.setAttribute('aria-expanded', String(!collapsed))
+    toggleBtn.classList.toggle('active', !collapsed)
+    toggleBtn.title = collapsed ? '展开右侧栏 (快捷键 Cmd+] / Ctrl+])' : '收起右侧栏 (快捷键 Cmd+] / Ctrl+])'
+  }
+  try {
+    localStorage.setItem(SIDE_COLLAPSED_KEY, collapsed ? 'true' : 'false')
+  } catch {}
+}
+
 function switchTab(id: string): void {
-  document.querySelectorAll<HTMLButtonElement>('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === id))
+  document.querySelectorAll<HTMLButtonElement>('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === id))
   document.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('active', p.id === id))
+  if ($('app').classList.contains('side-collapsed')) {
+    setSideCollapsed(false)
+  }
 }
 document.querySelector<HTMLElement>('.tabs')!.onclick = e => {
   const tab = (e.target as HTMLElement).closest('button')?.dataset.tab
@@ -2195,21 +2214,69 @@ function friendlyError(message: string): string {
   return message.slice(0, 300)
 }
 
-// —— 窄屏（手机 / 平板竖屏）：左栏与右栏变成滑出面板 ——
+// —— 左右栏面板交互（窄屏滑出、桌面折叠） ——
 {
   const app = $('app')
   const setPanel = (which: 'nav' | 'side' | null) => {
     app.classList.toggle('nav-open', which === 'nav')
     app.classList.toggle('side-open', which === 'side')
   }
+
+  const toggleSide = () => {
+    if (window.innerWidth <= 900) {
+      const willOpen = !app.classList.contains('side-open')
+      setPanel(willOpen ? 'side' : null)
+    } else {
+      setSideCollapsed(!app.classList.contains('side-collapsed'))
+    }
+  }
+
+  const closeSide = () => {
+    if (window.innerWidth <= 900) {
+      setPanel(null)
+    } else {
+      setSideCollapsed(true)
+    }
+  }
+
   $('navToggle').onclick = () => setPanel(app.classList.contains('nav-open') ? null : 'nav')
-  $('sideToggle').onclick = () => setPanel(app.classList.contains('side-open') ? null : 'side')
-  $('sideClose').onclick = () => setPanel(null)
+  $('sideToggle').onclick = toggleSide
+  $('sideClose').onclick = closeSide
+  const sideCollapseBtn = document.getElementById('sideCollapseBtn')
+  if (sideCollapseBtn) sideCollapseBtn.onclick = closeSide
+
   $('scrim').onclick = () => setPanel(null)
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !document.querySelector('.dialog:not([hidden])')) setPanel(null) })
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !document.querySelector('.dialog:not([hidden])')) {
+      setPanel(null)
+    }
+    // 快捷键 Cmd+] / Ctrl+] 或 Cmd+\ / Ctrl+\ 快速展开/收起右侧 AI 对话栏
+    if ((e.metaKey || e.ctrlKey) && (e.key === ']' || e.key === '}' || e.key === '\\')) {
+      if (!app.classList.contains('no-doc')) {
+        e.preventDefault()
+        toggleSide()
+      }
+    }
+  })
+
   // 在列表里点开文档、新建后收起左栏
   $('docList').addEventListener('click', e => { if ((e.target as HTMLElement).closest('li[data-id]')) setPanel(null) })
   for (const id of ['newDoc', 'newDeck']) $(id).addEventListener('click', () => setPanel(null))
+
+  // 初始化恢复右侧栏折叠状态
+  try {
+    const savedCollapsed = localStorage.getItem(SIDE_COLLAPSED_KEY)
+    if (savedCollapsed === 'true') {
+      setSideCollapsed(true)
+    } else {
+      const toggleBtn = $('sideToggle')
+      if (toggleBtn) {
+        toggleBtn.setAttribute('aria-expanded', 'true')
+        toggleBtn.classList.add('active')
+      }
+    }
+  } catch {}
 }
 
 // —— 左侧边栏宽度手工拖拽调整与记忆 ——
@@ -2282,5 +2349,79 @@ function initNavResizer(): void {
   })
 }
 
+// —— 右侧边栏宽度手工拖拽调整与记忆 ——
+function initSideResizer(): void {
+  const SIDE_WIDTH_KEY = 'heurion.side-width'
+  const DEFAULT_WIDTH = 400
+  const MIN_WIDTH = 300
+  const MAX_WIDTH = 800
+
+  const applyWidth = (w: number) => {
+    document.documentElement.style.setProperty('--side-width', `${w}px`)
+  }
+
+  // 初始化时读取已保存的宽度
+  try {
+    const saved = localStorage.getItem(SIDE_WIDTH_KEY)
+    if (saved) {
+      const num = parseInt(saved, 10)
+      if (num >= MIN_WIDTH && num <= MAX_WIDTH) {
+        applyWidth(num)
+      }
+    }
+  } catch {}
+
+  const resizer = document.getElementById('sideResizer')
+  if (!resizer) return
+
+  let startX = 0
+  let startW = DEFAULT_WIDTH
+
+  const onPointerMove = (e: PointerEvent) => {
+    // 右栏在右侧，向左拖拽（dx 为负）使右栏变宽
+    const dx = e.clientX - startX
+    const maxAllowed = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - 350))
+    const newW = Math.max(MIN_WIDTH, Math.min(maxAllowed, startW - dx))
+    applyWidth(newW)
+  }
+
+  const onPointerUp = (e: PointerEvent) => {
+    resizer.classList.remove('dragging')
+    document.body.classList.remove('side-resizing')
+    window.removeEventListener('pointermove', onPointerMove)
+    window.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('pointercancel', onPointerUp)
+
+    const dx = e.clientX - startX
+    const maxAllowed = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - 350))
+    const finalW = Math.max(MIN_WIDTH, Math.min(maxAllowed, startW - dx))
+    try {
+      localStorage.setItem(SIDE_WIDTH_KEY, `${finalW}px`)
+    } catch {}
+  }
+
+  resizer.addEventListener('pointerdown', (e: PointerEvent) => {
+    e.preventDefault()
+    startX = e.clientX
+    const side = document.querySelector<HTMLElement>('section.side')
+    startW = side ? side.getBoundingClientRect().width : DEFAULT_WIDTH
+    resizer.classList.add('dragging')
+    document.body.classList.add('side-resizing')
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerUp)
+  })
+
+  // 双击手柄快速恢复默认 400px 宽度
+  resizer.addEventListener('dblclick', () => {
+    applyWidth(DEFAULT_WIDTH)
+    try {
+      localStorage.removeItem(SIDE_WIDTH_KEY)
+    } catch {}
+  })
+}
+
 initNavResizer()
+initSideResizer()
 
