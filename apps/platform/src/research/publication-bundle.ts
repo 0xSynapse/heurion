@@ -78,7 +78,8 @@ export class PublicationBundleService {
     for (let i = 0; i < nTotal; i++) {
       const s = isSimulated ? null : subjects[i]
       const subId = s ? s.subject_id : `S${String(i + 1).padStart(3, '0')}`
-      const isTreatment = s ? (s.treatment_arm ? (s.treatment_arm.includes('试验') || s.treatment_arm.includes('治疗') ? 1 : 0) : (i % 2 === 0 ? 1 : 0)) : (i % 2 === 0 ? 1 : 0)
+      const arm = (s as any)?.treatment_arm as string | undefined
+      const isTreatment = arm ? (arm.includes('试验') || arm.includes('治疗') ? 1 : 0) : (i % 2 === 0 ? 1 : 0)
       const age = s?.age_at_enroll ?? (56 + (i * 7) % 22)
       const sex = s ? (s.sex === 'M' || s.sex === '男' ? '男' : s.sex === 'F' || s.sex === '女' ? '女' : '未知') : (i % 2 === 0 ? '男' : '女')
       const l3_smi = Number(((s as any)?.l3_smi ?? (42.5 + (isTreatment ? 8.2 : 2.1) + ((i * 3) % 11))))
@@ -88,7 +89,7 @@ export class PublicationBundleService {
 
       cohortRecords.push({
         subject_id: subId,
-        treatment_arm: s?.treatment_arm || (isTreatment ? '试验组' : '对照组'),
+        treatment_arm: arm || (isTreatment ? '试验组' : '对照组'),
         is_treatment: isTreatment,
         age,
         sex,

@@ -28,7 +28,7 @@ function resolveBinary(candidates: string[]): string {
   for (const p of candidates) {
     if (p.startsWith('/') && existsSync(p)) return p
   }
-  return candidates[0]
+  return candidates[0] ?? ''
 }
 
 export interface PdfImport {

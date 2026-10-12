@@ -208,7 +208,7 @@ function buildInline(children: Token[]): PMNode[] {
         break
       case 'html_inline': {
         const spanOpen = /^<span\s+style="([^"]+)"\s*>/i.exec(t.content.trim())
-        if (spanOpen) {
+        if (spanOpen && spanOpen[1]) {
           const styles = spanOpen[1]
           const ff = /font-family:\s*([^;]+)/i.exec(styles)?.[1]?.trim() ?? null
           const fs = /font-size:\s*([^;]+)/i.exec(styles)?.[1]?.trim() ?? null
