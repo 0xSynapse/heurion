@@ -181,11 +181,11 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         <section class="rs-card wide rs-folder-card">
           <div class="rs-card-head">
             <h3><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>项目图表与成果文件夹</h3>
-            <span class="muted small" style="margin-left:auto;">📁 figures/ · 共 ${s.analyses.length} 份产出</span>
+            <span class="muted small" style="margin-left:auto; display:inline-flex; align-items:center; gap:4px;"><svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> figures/ · 共 ${s.analyses.length} 份产出</span>
           </div>
           <div class="rs-folder-browser">
             <div class="rs-folder-header">
-              <span class="rs-folder-path">📂 项目根目录 / <b>figures/</b></span>
+              <span class="rs-folder-path" style="display:inline-flex; align-items:center; gap:4px;"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> 项目根目录 / <b>figures/</b></span>
               <span class="grow"></span>
               <span class="muted small">点开任意图表查看底层 Python 统计代码与数据溯源</span>
             </div>
@@ -214,7 +214,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
               </div>
             ` : `
               <div class="rs-folder-empty">
-                <p class="muted small">📁 图表文件夹当前为空。在方案/论文中对话让 AI 绘制 Table 1、Kaplan-Meier 生存曲线、森林图或影像分析图后，成果将自动归档至本文件夹。</p>
+                <p class="muted small" style="display:inline-flex; align-items:center; gap:6px;"><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> 图表文件夹当前为空。在方案/论文中对话让 AI 绘制 Table 1、Kaplan-Meier 生存曲线、森林图或影像分析图后，成果将自动归档至本文件夹。</p>
               </div>
             `}
           </div>

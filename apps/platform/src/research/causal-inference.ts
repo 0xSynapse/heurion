@@ -52,9 +52,13 @@ export function calculateEValue(input: EValueInput): EValueResult {
     throw new Error('因果效应比值及置信区间上下限必须为大于 0 的正数')
   }
 
-  // If OR and not rare outcome, approximate RR using sqrt(OR) or keep direct for HR/RR
+  // B10 修复：对非罕见结局 (rare_outcome === false) 的 OR，按 VanderWeele & Ding (2017) 标准公式转换为近似 RR
   let rr = estimate
   let rr_ci_bound = estimate < 1.0 ? ci_upper : ci_lower
+  if (effect_type === 'OR' && !rare_outcome) {
+    rr = Math.sqrt(estimate)
+    rr_ci_bound = Math.sqrt(rr_ci_bound)
+  }
 
   // Invert protective effect (< 1.0) to risk ratio > 1.0 for calculation
   const point_rr = rr < 1.0 ? 1.0 / rr : rr
@@ -69,19 +73,30 @@ export function calculateEValue(input: EValueInput): EValueResult {
   const e_point = Math.round(computeE(point_rr) * 100) / 100
   const e_ci = ci_rr > 1.0 ? Math.round(computeE(ci_rr) * 100) / 100 : 1.0
 
+  const isProtective = estimate < 1.0
+  const crossesNull = (ci_lower <= 1.0 && ci_upper >= 1.0)
+  const effectDescZh = isProtective ? '保护效应' : '风险/危害效应'
+  const effectDescEn = isProtective ? 'protective effect' : 'risk association'
+
+  const ciExplanationZh = crossesNull
+    ? `由于 95% 置信区间跨越无效参考线 1.0（尚未达到统计学显著），置信区间对应的 E-value 保守下限为 1.00。`
+    : `即便针对置信区间最保守边界，未测量混杂亦需达到 ${e_ci.toFixed(2)} 倍强度才足以推翻该统计学显著效应。`
+
+  const ciExplanationEn = crossesNull
+    ? `Because the 95% confidence interval crosses 1.0, the lower-bound E-value is 1.00.`
+    : `Even for the conservative confidence interval limit, an unmeasured confounder must reach ${e_ci.toFixed(2)}-fold association to explain away the finding.`
+
   const defense_zh = `本研究测得调整后 ${effect_type} = ${estimate.toFixed(2)} (95% CI: ${ci_lower.toFixed(2)} - ${ci_upper.toFixed(2)})，` +
     `计算对应的 VanderWeele E-value 点估计为 ${e_point.toFixed(2)}（置信区间下限为 ${e_ci.toFixed(2)}）。` +
     `这一量化证据表明，任何未被观察测量的潜在残留混杂因素，必须同时与研究暴露和主要临床结局产生至少 ${e_point.toFixed(2)} 倍的关联强度，` +
-    `且在充分校正了既有全部协变量后依然维持该强关联，才足以将当前显著的保护效应推翻至无统计学差异；` +
-    `即便针对置信区间最保守边界，未测量混杂亦需达到 ${e_ci.toFixed(2)} 倍强度。` +
-    `鉴于本研究已全面校正了关键人口学、临床疾病严重度及 3D 影像学解剖表型，存在如此高强度未知独立混杂因子的可能性极低，` +
-    `证实本研究报告的因果效应估计具有高度的稳健性与抗偏倚能力。`
+    `且在充分校正了既有全部协变量后依然维持该强关联，才足以将当前观测到的${effectDescZh}完全解释为混杂偏倚；` +
+    `${ciExplanationZh}本研究结论具备高度的稳健性与抗偏倚能力。`
 
   const defense_en = `The observed multivariable-adjusted ${effect_type} was ${estimate.toFixed(2)} (95% CI: ${ci_lower.toFixed(2)}-${ci_upper.toFixed(2)}). ` +
     `The calculated E-value was ${e_point.toFixed(2)} for the point estimate and ${e_ci.toFixed(2)} for the confidence interval limit. ` +
     `This indicates that an unmeasured confounder would need an association with both the exposure and outcome of at least ${e_point.toFixed(2)}-fold each, ` +
-    `above and beyond the measured clinical, biochemical, and 3D imaging covariates, to fully explain away the observed association. ` +
-    `These findings demonstrate robust causal resilience against potential unmeasured residual confounding.`
+    `above and beyond the measured baseline covariates, to fully explain away the observed ${effectDescEn}. ` +
+    `${ciExplanationEn} These findings demonstrate robust causal resilience against potential unmeasured residual confounding.`
 
   return {
     effect_type,

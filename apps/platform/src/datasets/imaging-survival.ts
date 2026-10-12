@@ -75,9 +75,21 @@ export function runImagingBiomarkerSurvival(
   let groupHighLabel = `高 ${biomarker}`
   let groupLowLabel = `低 ${biomarker}`
 
-  const values = dataset
-    .map(r => Number(r[biomarker]))
-    .filter(v => !isNaN(v))
+  const isFemale = (val: unknown): boolean => {
+    if (val === null || val === undefined) return false
+    const s = String(val).trim().toUpperCase()
+    return s.startsWith('F') || s === '女' || s === '2' || s === 'FEMALE'
+  }
+
+  // C3 修复：严格过滤缺失或无效的生物标志物，杜绝将空值作为 0 归入肌少症/低值组
+  const validDataset = dataset.filter(r => {
+    const raw = r[biomarker]
+    if (raw === null || raw === undefined || String(raw).trim() === '') return false
+    const num = Number(raw)
+    return !isNaN(num)
+  })
+
+  const values = validDataset.map(r => Number(r[biomarker]))
 
   if (values.length === 0) {
     throw new Error(`在数据集中未找到有效的影像生物标志物列: ${biomarker}`)
@@ -114,13 +126,12 @@ export function runImagingBiomarkerSurvival(
   }
 
   // 2. 为每个样本构造分层标签列 `_strata_group`
-  const enrichedData = dataset.map(row => {
+  const enrichedData = validDataset.map(row => {
     const val = Number(row[biomarker])
     let isHigh = false
 
     if (biomarker.toLowerCase().includes('smi') && cutoff_strategy === 'consensus' && row[sex_col]) {
-      const sex = String(row[sex_col]).toUpperCase()
-      const threshold = sex.startsWith('F') ? 38.5 : 52.4
+      const threshold = isFemale(row[sex_col]) ? 38.5 : 52.4
       isHigh = val >= threshold
     } else {
       isHigh = val >= cutoffVal

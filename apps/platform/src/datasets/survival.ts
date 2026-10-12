@@ -484,9 +484,14 @@ export function calculateCoxRegression(
   labels: Record<string, string> = {}
 ): CoxRegressionResult {
   const valid = records.filter(r => {
-    if (r.time < 0 || isNaN(r.time) || (r.event !== 0 && r.event !== 1)) return false
+    const rawTime = r.time
+    if (rawTime === null || rawTime === undefined || String(rawTime).trim() === '') return false
+    const timeNum = Number(rawTime)
+    if (isNaN(timeNum) || timeNum < 0 || (r.event !== 0 && r.event !== 1)) return false
     for (const c of covariates) {
-      const v = Number(r[c])
+      const rawC = r[c]
+      if (rawC === null || rawC === undefined || String(rawC).trim() === '') return false
+      const v = Number(rawC)
       if (isNaN(v)) return false
     }
     return true
@@ -542,35 +547,44 @@ export function calculateCoxRegression(
     let lastTime = -1
     const n = sample_size
 
-    for (let i = 0; i < n; i++) {
-      const xi = X[i]!
-      // 计算 theta_i = exp(beta^T * xi)
-      let linearPred = 0
-      for (let j = 0; j < p; j++) linearPred += beta[j]! * xi[j]!
-      // 限制以防溢出
-      linearPred = Math.max(-25, Math.min(25, linearPred))
-      const theta = Math.exp(linearPred)
-
-      sumW += theta
-      for (let j = 0; j < p; j++) {
-        sumWX[j] += theta * xi[j]!
-        for (let k = 0; k < p; k++) {
-          sumWXX[j]![k]! += theta * xi[j]! * xi[k]!
-        }
+    let i = 0
+    while (i < n) {
+      // C4 修复：按 Breslow 方法处理并列时间，首先将所有满足 T_k >= t_i 的受试者加入当前风险集
+      let j = i
+      while (j < n && time[j] === time[i]) {
+        j++
       }
-
-      if (event[i] === 1) {
-        // 在该事件时间点增加贡献
-        for (let j = 0; j < p; j++) {
-          const a_j = sumWX[j]! / sumW
-          U[j] += xi[j]! - a_j
-          for (let k = 0; k < p; k++) {
-            const a_k = sumWX[k]! / sumW
-            const b_jk = sumWXX[j]![k]! / sumW
-            I[j]![k]! += b_jk - a_j * a_k
+      for (let k = i; k < j; k++) {
+        const xk = X[k]!
+        let linearPred = 0
+        for (let m = 0; m < p; m++) linearPred += beta[m]! * xk[m]!
+        linearPred = Math.max(-25, Math.min(25, linearPred))
+        const theta = Math.exp(linearPred)
+        sumW += theta
+        for (let m = 0; m < p; m++) {
+          sumWX[m] += theta * xk[m]!
+          for (let q = 0; q < p; q++) {
+            sumWXX[m]![q]! += theta * xk[m]! * xk[q]!
           }
         }
       }
+
+      // 对该并列时间点内的所有事件累积梯度 U 与信息矩阵 I
+      for (let k = i; k < j; k++) {
+        if (event[k] === 1) {
+          const xk = X[k]!
+          for (let m = 0; m < p; m++) {
+            const a_m = sumWX[m]! / sumW
+            U[m] += xk[m]! - a_m
+            for (let q = 0; q < p; q++) {
+              const a_q = sumWX[q]! / sumW
+              const b_mq = sumWXX[m]![q]! / sumW
+              I[m]![q] += b_mq - a_m * a_q
+            }
+          }
+        }
+      }
+      i = j
     }
 
     // 简单对角正则化防奇异
@@ -671,14 +685,16 @@ export function calculateCoxRegression(
     }
   }
   const c_index = totalPairs > 0 ? Number((concordant / totalPairs).toFixed(3)) : 0.5
-  const minP = Math.min(...covResults.map(r => r.p_value))
+  // C6 修复：计算真实的多变量 Wald 检验统计量（df = p），不再使用各协变量单因素最小 P 值冒充整体模型 P 值
+  const waldChi2 = covResults.reduce((acc, c) => acc + Math.pow(c.beta / Math.max(c.se, 1e-6), 2), 0)
+  const p_value_overall = Number(chiSquareUpperPValue(waldChi2, p).toFixed(4))
 
   return {
     covariates: covResults,
     sample_size,
     events_count,
     c_index,
-    p_value_overall: minP
+    p_value_overall
   }
 }
 
@@ -1024,10 +1040,14 @@ export function generateSurvivalNarrative(
     return `${g.label} group (median survival: ${medStr}, n=${g.total_n}, events=${g.events_n})`
   })
 
-  narrative += `Survival outcomes were significantly compared across ${groupsKm.length} cohorts: ${gStrs.join(' versus ')}.`
+  // B9 修复：不再无条件声称“显著”，依据真实 P 值判定是否具备统计学显著性
+  narrative += `Survival outcomes were compared across ${groupsKm.length} cohorts: ${gStrs.join(' versus ')}.`
 
   if (logRank) {
-    narrative += ` Kaplan-Meier survival curves demonstrated a statistically significant difference between the groups (Log-rank test Chi-Square = ${logRank.chi2}, df = ${logRank.df}, P = ${logRank.p_value_formatted}).`
+    const isSig = logRank.p_value < 0.05
+    narrative += isSig
+      ? ` Kaplan-Meier survival curves demonstrated a statistically significant difference between the groups (Log-rank test Chi-Square = ${logRank.chi2}, df = ${logRank.df}, P = ${logRank.p_value_formatted}).`
+      : ` Kaplan-Meier survival curves showed no statistically significant difference between the groups (Log-rank test Chi-Square = ${logRank.chi2}, df = ${logRank.df}, P = ${logRank.p_value_formatted}).`
   }
 
   if (cox && cox.covariates.length > 0) {
@@ -1043,16 +1063,34 @@ export function generateSurvivalMarkdownTable(
   groupsKm: KmGroupResult[],
   timeUnit = 'Months'
 ): string {
+  // C7 修复：根据时间单位自动适配 1 年与 3 年对应里程碑点，避免在 Days/Years 单位下显示错误
+  const normUnit = timeUnit.toLowerCase()
+  let m1Label = '1-Year Rate'
+  let m3Label = '3-Year Rate'
+  let m1Time = 12
+  let m3Time = 36
+  if (normUnit.startsWith('day')) {
+    m1Label = '1-Year Rate (365d)'
+    m3Label = '3-Year Rate (1095d)'
+    m1Time = 365
+    m3Time = 1095
+  } else if (normUnit.startsWith('year')) {
+    m1Label = '1-Year Rate'
+    m3Label = '3-Year Rate'
+    m1Time = 1
+    m3Time = 3
+  }
+
   let md = `### Kaplan-Meier Survival Analysis Summary\n\n`
-  md += `| Group | Total (N) | Events (%) | Median (${timeUnit}) | 95% CI | 1-Year Rate | 3-Year Rate |\n`
+  md += `| Group | Total (N) | Events (%) | Median (${timeUnit}) | 95% CI | ${m1Label} | ${m3Label} |\n`
   md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: |\n`
 
   for (const g of groupsKm) {
     const med = g.median_time !== null ? String(g.median_time) : 'NR'
     const ci = g.median_ci[0] !== null && g.median_ci[1] !== null ? `${g.median_ci[0]}–${g.median_ci[1]}` : '—'
-    const r12 = g.milestone_survival[12]?.surv_formatted || '—'
-    const r36 = g.milestone_survival[36]?.surv_formatted || '—'
-    md += `| **${g.label}** | ${g.total_n} | ${g.events_n} (${g.event_rate.toFixed(1)}%) | ${med} | ${ci} | ${r12} | ${r36} |\n`
+    const r1 = g.milestone_survival[m1Time]?.surv_formatted || '—'
+    const r3 = g.milestone_survival[m3Time]?.surv_formatted || '—'
+    md += `| **${g.label}** | ${g.total_n} | ${g.events_n} (${g.event_rate.toFixed(1)}%) | ${med} | ${ci} | ${r1} | ${r3} |\n`
   }
 
   return md
@@ -1080,7 +1118,10 @@ export function generateSurvivalAnalysis(
   const cleaned: Array<{ time: number; event: number; group: string; [k: string]: unknown }> = []
 
   for (const r of records) {
-    const t = Number(r[time_col])
+    // C2 修复：严格剔除空字符串、null 或 undefined 的时间列，杜绝被隐式转为 0
+    const rawT = r[time_col]
+    if (rawT === null || rawT === undefined || String(rawT).trim() === '') continue
+    const t = Number(rawT)
     const e = normalizeEventStatus(r[event_col])
     if (isNaN(t) || t < 0 || e === null) continue
 

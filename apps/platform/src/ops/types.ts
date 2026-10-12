@@ -39,6 +39,16 @@ export const DocOp = z.discriminatedUnion('op', [
     style: z.string().nullable().optional().describe('Word 段落样式名，如 Quote'),
   }),
   z.object({
+    op: z.literal('set_text_style'),
+    id: z.string().min(1).describe('段落或标题 id'),
+    font_family: z.string().optional().describe('字体名称，如 PingFang SC, SimSun, Arial, Times New Roman'),
+    size: z.union([z.number(), z.string()]).optional().describe('字号大小（如 16 或 "16px"）'),
+    bold: z.boolean().optional().describe('是否加粗'),
+    italic: z.boolean().optional().describe('是否斜体'),
+    color: z.string().optional().describe('文字颜色十六进制或颜色名'),
+    range: z.object({ from: z.number().int().min(0), to: z.number().int().min(0) }).optional().describe('选区相对段落起点，缺省为整段'),
+  }),
+  z.object({
     op: z.literal('table_set_cells'),
     id: z.string().min(1),
     cells: z.array(z.object({

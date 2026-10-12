@@ -43,6 +43,7 @@ export interface NomogramOptions {
     year3?: number // 默认 0.75
     year5?: number // 默认 0.60
   }
+  c_index?: number
 }
 
 export interface NomogramResult {
@@ -234,7 +235,7 @@ export function buildNomogram(options: NomogramOptions): NomogramResult {
     max_total_points: maxTotalPossiblePoints,
     survival_scale: survivalScale,
     svg,
-    c_index_estimate: 0.78,
+    c_index_estimate: options.c_index,
     academic_narrative: narrative
   }
 }
@@ -412,14 +413,15 @@ export function calculateRocCurve(
     const p2 = rocPoints[i]!
     auc += (p2.fpr - p1.fpr) * ((p1.tpr + p2.tpr) / 2)
   }
-  auc = Math.max(0.5, Math.min(1.0, Number(auc.toFixed(3))))
+  // C8 修复：真实呈现 AUC 与 95% CI，不再强制截断钳制在 0.5，杜绝掩盖劣于随机猜测的模型
+  auc = Math.max(0.0, Math.min(1.0, Number(auc.toFixed(3))))
 
   // Hanley & McNeil 方差估计 95% 置信区间
-  const q1 = auc / (2 - auc)
+  const q1 = auc / (2 - Math.min(auc, 1.99))
   const q2 = (2 * auc * auc) / (1 + auc)
   const v = (auc * (1 - auc) + (numPos - 1) * (q1 - auc * auc) + (numNeg - 1) * (q2 - auc * auc)) / (numPos * numNeg)
   const se = Math.sqrt(Math.max(0, v))
-  const ciLow = Math.max(0.5, Number((auc - 1.96 * se).toFixed(3)))
+  const ciLow = Math.max(0.0, Number((auc - 1.96 * se).toFixed(3)))
   const ciHigh = Math.min(1.0, Number((auc + 1.96 * se).toFixed(3)))
 
   return {

@@ -125,8 +125,21 @@ export function initCopilot(hooks: CopilotHooks) {
         headers: { Authorization: `Bearer ${hooks.token()}` },
       })
       if (!res.ok) return
-      const data = await res.json() as { turns?: Array<{ id: string; user_message: string; status: string }> }
-      if (data.turns && data.turns.length > 0) {
+      const data = await res.json() as {
+        messages?: Array<{ id: string; role: 'user' | 'assistant'; text: string }>
+        turns?: Array<{ id: string; user_message: string; status: string }>
+      }
+      if (data.messages && data.messages.length > 0) {
+        msgs!.innerHTML = ''
+        for (const m of data.messages) {
+          if (m.role === 'user') {
+            appendUserMsg(m.text)
+          } else {
+            appendAssistantMsg(m.text)
+          }
+        }
+      } else if (data.turns && data.turns.length > 0) {
+        msgs!.innerHTML = ''
         for (const t of data.turns) {
           appendUserMsg(t.user_message)
           if (t.status === 'error') {
@@ -330,4 +343,7 @@ export function initCopilot(hooks: CopilotHooks) {
       renderChips()
     }
   })
+
+  // 初始化时静默预加载历史聊天记录
+  void loadHistory()
 }

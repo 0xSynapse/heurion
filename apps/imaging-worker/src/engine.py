@@ -1027,13 +1027,9 @@ class MONAIEngine:
         excluding heart, mediastinum, chest wall, and ribs).
         """
         cache_key = f"{sample_id_or_path}:{model_name or 'default'}"
+        # C14 修复：掩膜缓存严格以完整路径+模型+尺寸复合唯一键管理，彻底移除跨患者的 basename 浅层碰撞
         if cache_key in self.mask_cache and self.mask_cache[cache_key].shape == vol.shape:
             return self.mask_cache[cache_key]
-        if sample_id_or_path in self.mask_cache and self.mask_cache[sample_id_or_path].shape == vol.shape:
-            return self.mask_cache[sample_id_or_path]
-        base_k = os.path.basename(sample_id_or_path)
-        if base_k in self.mask_cache and self.mask_cache[base_k].shape == vol.shape:
-            return self.mask_cache[base_k]
 
         mask = self.extract_mask_for_model(
             volume=vol,
@@ -1043,9 +1039,6 @@ class MONAIEngine:
         )
         mask = mask.astype(np.uint8)
         self.mask_cache[cache_key] = mask
-        self.mask_cache[sample_id_or_path] = mask
-        if base_k != sample_id_or_path:
-            self.mask_cache[base_k] = mask
         return mask
 
     def register_volume(

@@ -142,28 +142,49 @@ export class CohortService {
     const active = subjects.filter(s => s.status === 'active')
     const modelName = input.model_id || 'lung_nodule_segmenter'
 
-    let pids = input.patient_ids
-    if (!pids || !pids.length) {
+    let pids: string[]
+    if (input.patient_ids && input.patient_ids.length > 0) {
+      // H19 修复：严格校验传入的受试者 ID 必须属于当前研究有效入组受试者，防范跨研究越权访问
+      const activePids = new Set(active.map(s => s.patient_id))
+      const invalid = input.patient_ids.filter(p => !activePids.has(p))
+      if (invalid.length > 0) {
+        throw new StudyError('invalid_patient_ids', `受试者 [${invalid.join(', ')}] 未在当前研究有效入组，拒绝跨研究访问`)
+      }
+      pids = input.patient_ids
+    } else {
       pids = active.map(s => s.patient_id)
     }
     if (!pids.length) throw new StudyError('empty_cohort', '该研究暂无活跃入组受试者')
 
+    // B1 修复：绝不使用写死的演示 sample_id（chest_lung_ct）或编造的 1.72m/68kg 人口学数据
     const cases = pids.map(pid => {
       const subj = active.find(s => s.patient_id === pid)
-      let sampleId = 'chest_lung_ct'
-      if (modelName.includes('whole_body') || modelName.includes('totalsegmentator')) {
-        sampleId = 'whole_body_ct'
-      } else if (modelName.includes('spleen') || modelName.includes('liver')) {
-        sampleId = 'spleen_test'
+      let filePath: string | undefined = undefined
+      let sampleId: string | undefined = undefined
+
+      try {
+        const pData = this.patients.read(a, pid)
+        const imgRecord = pData.records?.find(r => r.kind === 'imaging' && (r.file_id || (r as any).imaging_data?.file_path))
+        if (imgRecord) {
+          filePath = (imgRecord as any).imaging_data?.file_path || (imgRecord.file_id ? `/app/data/platform/files/${imgRecord.file_id}` : undefined)
+        }
+      } catch {}
+
+      if ((input as any).file_paths?.[pid]) {
+        filePath = (input as any).file_paths[pid]
+      } else if ((input as any).sample_ids?.[pid]) {
+        sampleId = (input as any).sample_ids[pid]
       }
+
       return {
         subject_id: subj?.subject_id || pid,
         patient_id: pid,
         sample_id: sampleId,
+        file_path: filePath,
         model_name: modelName,
-        patient_sex: subj?.sex || 'M',
-        patient_height_m: 1.72,
-        patient_weight_kg: 68.0,
+        patient_sex: subj?.sex || undefined,
+        patient_height_m: undefined,
+        patient_weight_kg: undefined,
       }
     })
 

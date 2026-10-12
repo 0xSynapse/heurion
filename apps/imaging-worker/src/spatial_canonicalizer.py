@@ -122,14 +122,10 @@ def check_anatomical_orientation_sanity(
             "message": f"{modality} modality: Hounsfield unit bone distribution heuristics not applicable."
         }
 
+    # In canonical LPS+ space (Z, Y, X), Y axis is strictly Anterior -> Posterior.
+    # Therefore, regardless of whether the patient was scanned supine (HFS/FFS) or prone (HFP/FFP),
+    # the anatomical spine is always posterior (higher Y indices, bottom half).
     pos = str(patient_position).upper()
-    if pos in ("HFP", "FFP"):  # Prone position: spine is expected anteriorly/top
-        return {
-            "status": "pass",
-            "patient_position": pos,
-            "anomaly_detected": False,
-            "message": f"Patient scanned in prone position ({pos}). Inverted gravity distribution expected."
-        }
 
     z_dim, y_dim, x_dim = vol_zyx.shape
     if z_dim < 5:
@@ -147,18 +143,20 @@ def check_anatomical_orientation_sanity(
     if top_bone > bot_bone * 2.5 and top_bone > 1000:
         return {
             "status": "warning",
+            "patient_position": pos,
             "anomaly_detected": True,
             "top_bone_voxels": top_bone,
             "bot_bone_voxels": bot_bone,
-            "message": "解剖方位可疑异常：仰卧位 CT 骨质高密度区显著偏向前侧（胸壁侧），疑似头信息与实际体位不一致，建议人工复核。原始体素与坐标矩阵已完整保留。"
+            "message": "解剖方位可疑异常：CT 骨质高密度区显著偏向前侧（胸壁侧），疑似头信息与实际体位不一致，建议人工复核。原始体素与坐标矩阵已完整保留。"
         }
 
     return {
         "status": "pass",
+        "patient_position": pos,
         "anomaly_detected": False,
         "top_bone_voxels": top_bone,
         "bot_bone_voxels": bot_bone,
-        "message": "解剖方位正常：高密度骨骼结构符合仰卧位后侧（脊柱侧）分布。"
+        "message": "解剖方位正常：高密度骨骼结构符合后侧（脊柱侧）分布。"
     }
 
 

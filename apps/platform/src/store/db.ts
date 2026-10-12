@@ -2013,6 +2013,7 @@ export class Store {
 
   clearDocTurns(docId: string): void {
     this.db.prepare('DELETE FROM turns WHERE doc_id = ?').run(docId)
+    this.db.prepare('DELETE FROM messages WHERE doc_id = ?').run(docId)
   }
 
   // —— 回合队列（持久化：服务重启后排队中的任务继续执行） ——

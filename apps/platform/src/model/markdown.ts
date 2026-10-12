@@ -207,6 +207,19 @@ function buildInline(children: Token[]): PMNode[] {
         out.push(schema.node('citation', { cite_id: (t.meta as { cite_id: string }).cite_id }))
         break
       case 'html_inline': {
+        const spanOpen = /^<span\s+style="([^"]+)"\s*>/i.exec(t.content.trim())
+        if (spanOpen) {
+          const styles = spanOpen[1]
+          const ff = /font-family:\s*([^;]+)/i.exec(styles)?.[1]?.trim() ?? null
+          const fs = /font-size:\s*([^;]+)/i.exec(styles)?.[1]?.trim() ?? null
+          const clr = /color:\s*([^;]+)/i.exec(styles)?.[1]?.trim() ?? null
+          add('text_style', { font_family: ff, font_size: fs, color: clr })
+          break
+        }
+        if (/^<\/span>$/i.test(t.content.trim())) {
+          remove('text_style')
+          break
+        }
         const m = /^<(\/?)(sup|sub|u|br)\s*\/?>$/i.exec(t.content.trim())
         if (!m) { out.push(schema.text(t.content, marks)); break }
         const tag = m[2]!.toLowerCase()
@@ -307,10 +320,17 @@ function serializeTable(node: PMNode, indent: string): string {
   return [line(rows[0]!), `${indent}|${' --- |'.repeat(width)}`, ...rows.slice(1).map(line)].join('\n')
 }
 
-const MARK_ORDER = ['link', 'bold', 'italic', 'underline', 'sup', 'sub', 'code']
+const MARK_ORDER = ['link', 'text_style', 'bold', 'italic', 'underline', 'sup', 'sub', 'code']
 
 function openMark(m: Mark): string {
   switch (m.type.name) {
+    case 'text_style': {
+      const styles: string[] = []
+      if (m.attrs.font_family) styles.push(`font-family:${m.attrs.font_family}`)
+      if (m.attrs.font_size) styles.push(`font-size:${m.attrs.font_size}`)
+      if (m.attrs.color) styles.push(`color:${m.attrs.color}`)
+      return styles.length ? `<span style="${styles.join(';')}">` : ''
+    }
     case 'bold': return '**'
     case 'italic': return '*'
     case 'underline': return '<u>'
@@ -324,6 +344,13 @@ function openMark(m: Mark): string {
 
 function closeMark(m: Mark): string {
   switch (m.type.name) {
+    case 'text_style': {
+      const styles: string[] = []
+      if (m.attrs.font_family) styles.push(`font-family:${m.attrs.font_family}`)
+      if (m.attrs.font_size) styles.push(`font-size:${m.attrs.font_size}`)
+      if (m.attrs.color) styles.push(`color:${m.attrs.color}`)
+      return styles.length ? '</span>' : ''
+    }
     case 'bold': return '**'
     case 'italic': return '*'
     case 'underline': return '</u>'

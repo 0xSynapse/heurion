@@ -625,6 +625,77 @@ export class Editor {
 
   readonly commands = {
     mark: (name: 'bold' | 'italic' | 'underline' | 'sup' | 'sub') => this.run(toggleMark(schema.marks[name]!)),
+    setFontFamily: (fontFamily: string) => {
+      const { from, to, empty } = this.view.state.selection
+      let tr = this.view.state.tr
+      if (empty) {
+        const mark = fontFamily ? schema.marks.text_style!.create({ font_family: fontFamily }) : null
+        if (mark) tr = tr.addStoredMark(mark)
+        else tr = tr.removeStoredMark(schema.marks.text_style!)
+      } else {
+        if (fontFamily) {
+          tr = tr.addMark(from, to, schema.marks.text_style!.create({ font_family: fontFamily }))
+        } else {
+          tr = tr.removeMark(from, to, schema.marks.text_style!)
+        }
+      }
+      this.view.dispatch(tr)
+      this.view.focus()
+    },
+    setFontSize: (fontSize: string) => {
+      const { from, to, empty } = this.view.state.selection
+      let tr = this.view.state.tr
+      if (empty) {
+        const mark = fontSize ? schema.marks.text_style!.create({ font_size: fontSize }) : null
+        if (mark) tr = tr.addStoredMark(mark)
+        else tr = tr.removeStoredMark(schema.marks.text_style!)
+      } else {
+        if (fontSize) {
+          tr = tr.addMark(from, to, schema.marks.text_style!.create({ font_size: fontSize }))
+        } else {
+          tr = tr.removeMark(from, to, schema.marks.text_style!)
+        }
+      }
+      this.view.dispatch(tr)
+      this.view.focus()
+    },
+    setTextColor: (color: string) => {
+      const { from, to, empty } = this.view.state.selection
+      let tr = this.view.state.tr
+      if (empty) {
+        const mark = color ? schema.marks.text_style!.create({ color }) : null
+        if (mark) tr = tr.addStoredMark(mark)
+        else tr = tr.removeStoredMark(schema.marks.text_style!)
+      } else {
+        if (color) {
+          tr = tr.addMark(from, to, schema.marks.text_style!.create({ color }))
+        } else {
+          tr = tr.removeMark(from, to, schema.marks.text_style!)
+        }
+      }
+      this.view.dispatch(tr)
+      this.view.focus()
+    },
+    activeTextStyle: (): { fontFamily: string; fontSize: string; color: string } => {
+      const state = this.view.state
+      const marks = state.storedMarks || state.selection.$from.marks()
+      const styleMark = marks.find(m => m.type === schema.marks.text_style!)
+      return {
+        fontFamily: (styleMark?.attrs.font_family as string) || '',
+        fontSize: (styleMark?.attrs.font_size as string) || '',
+        color: (styleMark?.attrs.color as string) || '',
+      }
+    },
+    isMarkActive: (name: 'bold' | 'italic' | 'underline' | 'sup' | 'sub'): boolean => {
+      const state = this.view.state
+      const markType = schema.marks[name]
+      if (!markType) return false
+      const { from, to, empty } = state.selection
+      if (empty) {
+        return Boolean(markType.isInSet(state.storedMarks || state.selection.$from.marks()))
+      }
+      return state.doc.rangeHasMark(from, to, markType)
+    },
     paragraph: () => this.run(setBlock(schema.nodes.paragraph!)),
     heading: (level: number) => this.run(setBlock(schema.nodes.heading!, level)),
     bulletList: () => this.run(toggleList(schema.nodes.bullet_list!)),

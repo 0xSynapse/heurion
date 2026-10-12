@@ -467,6 +467,19 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
     except Exception:
         dz = 1.0
 
+    if len(valid_slices) >= 2:
+        try:
+            pos0 = getattr(valid_slices[0], "ImagePositionPatient", None)
+            pos1 = getattr(valid_slices[1], "ImagePositionPatient", None)
+            if pos0 is not None and pos1 is not None and len(pos0) >= 3 and len(pos1) >= 3:
+                p0 = np.array([float(str(x).replace(",", ".")) for x in pos0[:3]], dtype=np.float64)
+                p1 = np.array([float(str(x).replace(",", ".")) for x in pos1[:3]], dtype=np.float64)
+                dz_phys = float(abs(np.dot(p1 - p0, slice_normal)))
+                if dz_phys > 1e-4:
+                    dz = dz_phys
+        except Exception:
+            pass
+
     spacing = (dz, dy, dx)
 
     default_slope = 1.0
@@ -507,9 +520,15 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
     ps = (float(first.PixelSpacing[0]), float(first.PixelSpacing[1])) if hasattr(first, "PixelSpacing") else (spacing[1], spacing[2])
     aff = build_dicom_affine(iop, ipp_list, ps)
 
+    # Convert DICOM LPS affine to RAS affine before passing to nibabel's to_canonical_lps.
+    # DICOM Patient Coordinate System is LPS (+X=Left, +Y=Posterior, +Z=Superior).
+    # nibabel interprets affines in RAS (+X=Right, +Y=Anterior, +Z=Superior).
+    # Multiplying by diag(-1, -1, 1, 1) converts the coordinate frame from LPS to RAS.
+    aff_ras = np.diag([-1.0, -1.0, 1.0, 1.0]) @ aff
+
     # Reorient to canonical LPS+ (Z, Y, X)
     vol_xyz = np.transpose(vol, (2, 1, 0))
-    vol_lps, aff_lps, spacing_lps = to_canonical_lps(vol_xyz, aff)
+    vol_lps, aff_lps, spacing_lps = to_canonical_lps(vol_xyz, aff_ras)
 
     patient_pos = str(getattr(first, "PatientPosition", "HFS"))
     modality_str = str(getattr(first, "Modality", "CT"))

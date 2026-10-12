@@ -1251,7 +1251,10 @@ async def run_upload_analysis(
                 )
     elif fn_lower.endswith((".dcm", ".dicom")):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            dcm_path = os.path.join(tmp_dir, file.filename or "slice.dcm")
+            safe_filename = os.path.basename(file.filename or "slice.dcm") or "slice.dcm"
+            dcm_path = os.path.realpath(os.path.join(tmp_dir, safe_filename))
+            if not dcm_path.startswith(os.path.realpath(tmp_dir)):
+                raise HTTPException(status_code=400, detail="非法文件名路径 (Path traversal detected)")
             with open(dcm_path, "wb") as f_out:
                 f_out.write(content)
             with INFERENCE_SEMAPHORE:

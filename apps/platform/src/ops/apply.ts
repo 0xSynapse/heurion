@@ -73,6 +73,8 @@ function applyOne(tr: Transform, op: DocOp, ctx: ApplyContext): string[] {
       return move(tr, op.ids, op.after)
     case 'set_block_style':
       return setStyle(tr, op)
+    case 'set_text_style':
+      return setTextStyle(tr, op)
     case 'table_set_cells':
     case 'table_insert_rows':
     case 'table_delete_rows':
@@ -508,6 +510,33 @@ function setStyle(tr: Transform, op: Extract<DocOp, { op: 'set_block_style' }>):
   if (op.align !== undefined) attrs.align = op.align
   if (op.style !== undefined) attrs.style = op.style
   tr.setNodeMarkup(target.pos, type, attrs)
+  return [op.id]
+}
+
+function setTextStyle(tr: Transform, op: Extract<DocOp, { op: 'set_text_style' }>): string[] {
+  const target = find(tr, op.id)
+  if (!target.node.isTextblock) throw new OpError('invalid_structure', `set_text_style 只能用于段落或标题，${op.id} 是 ${target.node.type.name}`)
+
+  const from = target.pos + 1 + (op.range ? Math.max(0, op.range.from) : 0)
+  const to = target.pos + 1 + (op.range ? Math.min(target.node.content.size, op.range.to) : target.node.content.size)
+  if (from >= to) return [op.id]
+
+  if (op.bold !== undefined) {
+    if (op.bold) tr.addMark(from, to, schema.marks.bold!.create())
+    else tr.removeMark(from, to, schema.marks.bold!)
+  }
+  if (op.italic !== undefined) {
+    if (op.italic) tr.addMark(from, to, schema.marks.italic!.create())
+    else tr.removeMark(from, to, schema.marks.italic!)
+  }
+  if (op.font_family || op.size || op.color) {
+    const sizeStr = op.size !== undefined ? (typeof op.size === 'number' ? `${op.size}px` : op.size) : null
+    tr.addMark(from, to, schema.marks.text_style!.create({
+      font_family: op.font_family ?? null,
+      font_size: sizeStr,
+      color: op.color ?? null,
+    }))
+  }
   return [op.id]
 }
 

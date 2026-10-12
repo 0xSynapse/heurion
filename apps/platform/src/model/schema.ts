@@ -156,6 +156,32 @@ export const schema = new Schema({
       inclusive: false,
       toDOM: mark => ['mark', { class: 'comment', 'data-thread': mark.attrs.thread as string }, 0],
     },
+    /** 文字字体与字号样式（字体名称、字号大小、颜色） */
+    text_style: {
+      attrs: {
+        font_family: { default: null },
+        font_size: { default: null },
+        color: { default: null },
+      },
+      parseDOM: [{
+        tag: 'span[style]',
+        getAttrs: (dom: HTMLElement | string) => {
+          if (typeof dom === 'string') return false
+          const fontFamily = dom.style.fontFamily || null
+          const fontSize = dom.style.fontSize || null
+          const color = dom.style.color || null
+          if (!fontFamily && !fontSize && !color) return false
+          return { font_family: fontFamily, font_size: fontSize, color }
+        },
+      }],
+      toDOM: mark => {
+        const styles: string[] = []
+        if (mark.attrs.font_family) styles.push(`font-family:${mark.attrs.font_family}`)
+        if (mark.attrs.font_size) styles.push(`font-size:${mark.attrs.font_size}`)
+        if (mark.attrs.color) styles.push(`color:${mark.attrs.color}`)
+        return ['span', { style: styles.join(';') }, 0]
+      },
+    },
   },
 })
 

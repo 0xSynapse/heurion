@@ -470,7 +470,8 @@ export function mannWhitneyUTest(group1: number[], group2: number[]): { u: numbe
   // 连续性修正
   const diff = Math.abs(u - meanU)
   const z = (Math.max(0, diff - 0.5)) / sdU
-  const p = Math.max(0, Math.min(1, 2 * erfc(z / Math.SQRT2)))
+  // C1 修复：两尾 P 值为 2 * P(Z >= z) = 2 * (0.5 * erfc(z/√2)) = erfc(z/√2)，避免双倍放大 P 值
+  const p = Math.max(0, Math.min(1, erfc(z / Math.SQRT2)))
 
   return { u, z, p }
 }

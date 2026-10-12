@@ -276,12 +276,56 @@ def extract_mucus_locations(
     return cluster_info_list[:6], lobar_vols, summary_text
 
 
+def measure_bronchial_wall_thickness(
+    slice_hu: np.ndarray,
+    cx: int,
+    cy: int,
+    r_px: float,
+    dx: float,
+    num_rays: int = 16
+) -> Optional[float]:
+    """
+    Measures authentic bronchial wall thickness by radial sampling from lumen boundary
+    to outer wall-parenchyma transition.
+    Returns measured thickness in mm, or None if not reliably measurable.
+    """
+    h, w = slice_hu.shape
+    if r_px < 1.5 or not (0 <= cx < w and 0 <= cy < h):
+        return None
+
+    wall_thicknesses_px = []
+    max_search_px = int(max(r_px * 1.5, 10.0 / max(dx, 0.1)))
+
+    for angle in np.linspace(0, 2 * np.pi, num_rays, endpoint=False):
+        cos_a = np.cos(angle)
+        sin_a = np.sin(angle)
+
+        ray_dists = np.arange(0, max_search_px + 1)
+        xs = np.clip(np.round(cx + (r_px + ray_dists) * cos_a).astype(int), 0, w - 1)
+        ys = np.clip(np.round(cy + (r_px + ray_dists) * sin_a).astype(int), 0, h - 1)
+        profile = slice_hu[ys, xs]
+
+        in_wall = profile >= -450.0
+        if not in_wall[0]:
+            continue
+
+        outer_transitions = np.where(~in_wall)[0]
+        if len(outer_transitions) > 0 and outer_transitions[0] > 0:
+            wall_thicknesses_px.append(float(outer_transitions[0]))
+
+    if len(wall_thicknesses_px) >= 4:
+        med_px = float(np.median(wall_thicknesses_px))
+        thick_mm = round(med_px * dx, 1)
+        if 0.4 <= thick_mm <= 8.0:
+            return thick_mm
+    return None
+
+
 def detect_airway_artery_pairs(
     slice_hu: np.ndarray,
     airway_mask: np.ndarray,
     spacing_xy: Tuple[float, float],
-    target_hint: Optional[Tuple[int, int]] = None,
-    is_baseline_severe: bool = False
+    target_hint: Optional[Tuple[int, int]] = None
 ) -> Dict[str, Any]:
     """
     Automated Airway-Artery Matching (AAM) Algorithm:
@@ -349,8 +393,6 @@ def detect_airway_artery_pairs(
                 # In physiological thoracic anatomy, signet rings have 1.05 <= BAR <= 2.6
                 hint_pen = np.hypot(cy - target_hint[0], cx - target_hint[1]) * 0.05 if target_hint else 0.0
                 score = (d_mm * 1.2) + (10.0 - abs(bar - 1.50) * 2.0) - (dist_mm * 0.15) - hint_pen
-                if is_baseline_severe and cx < w * 0.52 and cy > h * 0.40:
-                    score += 15.0
 
                 candidates.append({
                     "br_cx": cx, "br_cy": cy, "br_d_mm": d_mm, "br_r_px": int(round(r_px)),
@@ -392,8 +434,8 @@ def detect_airway_artery_pairs(
             "bronchus_diameter_mm": round(float(d_mm), 1),
             "artery_center": None,
             "artery_diameter_mm": None,
-            "bar": 1.0,
-            "dist_mm": 0.0,
+            "bar": None,
+            "dist_mm": None,
             "br_p1": (int(cx - r_px), int(cy)),
             "br_p2": (int(cx + r_px), int(cy)),
             "art_p1": None,
@@ -412,7 +454,6 @@ def analyze_bronchiectasis_and_mucus(
     ham_threshold_hu: float = 70.0,
     bar_cutoff: float = 1.10,
     return_masks: bool = False,
-    is_baseline_severe: bool = False,
     metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
@@ -509,36 +550,26 @@ def analyze_bronchiectasis_and_mucus(
     total_ham_voxels = int(np.sum(ham_plugs_np))
     total_tib_voxels = int(np.sum(mucus_plugs_np & (~ham_plugs_np)))
 
+    # Authentic voxel-counted volumes
     mucus_vol_cm3 = round(total_mucus_voxels * vx_vol_cm3, 2)
     ham_vol_cm3 = round(total_ham_voxels * vx_vol_cm3, 2)
     tib_vol_cm3 = round(total_tib_voxels * vx_vol_cm3, 2)
 
-    # Physiological safety guardrail:
-    if is_baseline_severe:
-        mucus_vol_cm3 = 18.50
-        ham_vol_cm3 = 12.44
-        tib_vol_cm3 = 6.06
-    elif mucus_vol_cm3 > 35.0:
-        ratio = 18.5 / max(mucus_vol_cm3, 1.0)
-        mucus_vol_cm3 = 18.50
-        ham_vol_cm3 = round(min(ham_vol_cm3 * ratio, 12.44), 2)
-        tib_vol_cm3 = round(max(mucus_vol_cm3 - ham_vol_cm3, 0.0), 2)
+    airway_vol_cm3 = round(float(np.sum(patent_np) * vx_vol_cm3), 2)
+    total_lumen_vol = airway_vol_cm3 + mucus_vol_cm3
+    occlusion_rate_pct = round((mucus_vol_cm3 / max(total_lumen_vol, 1e-6)) * 100.0, 1) if total_lumen_vol > 0 else 0.0
+    occlusion_rate_pct = min(occlusion_rate_pct, 100.0)
 
-    airway_vol_cm3 = round(max(min(float(np.sum(patent_np) * vx_vol_cm3 * 0.08), 260.0), 185.0), 2)
-    occlusion_rate_pct = round((mucus_vol_cm3 / (airway_vol_cm3 + 1e-6)) * 100.0, 1)
-    if is_baseline_severe:
-        occlusion_rate_pct = 10.0
-    elif occlusion_rate_pct > 100.0:
-        occlusion_rate_pct = 100.0
-
-    # 6. Find key slice with maximum mucus impaction
+    # 6. Find key slice with maximum mucus impaction or patent airway
     mucus_per_slice = np.sum(mucus_plugs_np, axis=(1, 2))
-    if is_baseline_severe and volume.shape[0] >= 173:
-        key_slice_idx = 172
-    elif np.max(mucus_per_slice) > 0:
+    if np.max(mucus_per_slice) > 0:
         key_slice_idx = int(np.argmax(mucus_per_slice))
     else:
-        key_slice_idx = volume.shape[0] // 2
+        airway_per_slice = np.sum(patent_np, axis=(1, 2))
+        if np.max(airway_per_slice) > 0:
+            key_slice_idx = int(np.argmax(airway_per_slice))
+        else:
+            key_slice_idx = volume.shape[0] // 2
 
     # Extract spatial and anatomical locations of mucus plugs
     mucus_nodule_locations, lobar_distribution, distribution_summary = extract_mucus_locations(
@@ -564,14 +595,13 @@ def analyze_bronchiectasis_and_mucus(
         slice_hu=volume[key_slice_idx],
         airway_mask=key_airway_envelope,
         spacing_xy=(spacing[1], spacing[2]),
-        target_hint=target_hint,
-        is_baseline_severe=is_baseline_severe
+        target_hint=target_hint
     )
 
     # Clinical Radiologist Smart Scrolling: if key slice lacks clear companion artery
     # or shows partial lumen occlusion (BAR <= 1.05) while mucus is present in the volume,
     # search adjacent slices (+-1 to +-8) to land on the clearest diagnostic signet ring cross-section (BAR > 1.05)
-    if (not aam_res.get("has_companion_artery")) or (total_mucus_voxels > 0 and aam_res.get("bar", 0.0) <= 1.05):
+    if (not aam_res.get("has_companion_artery")) or (total_mucus_voxels > 0 and (aam_res.get("bar") is None or aam_res.get("bar", 0.0) <= 1.05)):
         search_offsets = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8]
         for off in search_offsets:
             cand_z = key_slice_idx + off
@@ -580,10 +610,9 @@ def analyze_bronchiectasis_and_mucus(
                     slice_hu=volume[cand_z],
                     airway_mask=patent_np[cand_z] | mucus_plugs_np[cand_z],
                     spacing_xy=(spacing[1], spacing[2]),
-                    target_hint=target_hint,
-                    is_baseline_severe=is_baseline_severe
+                    target_hint=target_hint
                 )
-                if cand_aam.get("has_companion_artery") and cand_aam.get("bar", 0.0) > 1.05:
+                if cand_aam.get("has_companion_artery") and cand_aam.get("bar") is not None and cand_aam.get("bar", 0.0) > 1.05:
                     key_slice_idx = cand_z
                     aam_res = cand_aam
                     key_patent = patent_np[key_slice_idx]
@@ -592,57 +621,55 @@ def analyze_bronchiectasis_and_mucus(
                     break
 
     if aam_res.get("found"):
-        bronchus_caliber_mm = aam_res["bronchus_diameter_mm"]
+        bronchus_caliber_mm = aam_res.get("bronchus_diameter_mm")
         if aam_res.get("has_companion_artery"):
-            artery_caliber_mm = aam_res["artery_diameter_mm"]
-            bar_ratio = aam_res["bar"]
-            if total_mucus_voxels > 0 and bar_ratio <= 1.0:
-                bar_ratio = round(max(bar_ratio * 1.45, 1.35), 2)
-                artery_caliber_mm = round(bronchus_caliber_mm / bar_ratio, 1)
+            artery_caliber_mm = aam_res.get("artery_diameter_mm")
+            bar_ratio = aam_res.get("bar")
         else:
-            default_bar = 1.45 if total_mucus_voxels > 0 else 0.95
-            artery_caliber_mm = round(bronchus_caliber_mm / default_bar, 1)
-            bar_ratio = default_bar
+            artery_caliber_mm = None
+            bar_ratio = None
     else:
-        # Fallback if no airway segmented on slice
-        bronchus_caliber_mm = 8.5
-        artery_caliber_mm = 5.8
-        bar_ratio = 1.45 if total_mucus_voxels > 0 else 0.95
-        w_sl, h_sl = volume.shape[2], volume.shape[1]
-        cx_fb, cy_fb = w_sl // 3, h_sl // 2
-        aam_res = {
-            "found": True,
-            "has_companion_artery": True,
-            "bronchus_center": (cx_fb, cy_fb),
-            "bronchus_diameter_mm": bronchus_caliber_mm,
-            "artery_center": (cx_fb + 14, cy_fb - 2),
-            "artery_diameter_mm": artery_caliber_mm,
-            "bar": bar_ratio,
-            "dist_mm": 11.2,
-            "br_p1": (cx_fb - 8, cy_fb),
-            "br_p2": (cx_fb + 8, cy_fb),
-            "art_p1": (cx_fb + 10, cy_fb - 2),
-            "art_p2": (cx_fb + 18, cy_fb - 2)
-        }
+        bronchus_caliber_mm = None
+        artery_caliber_mm = None
+        bar_ratio = None
 
-    wall_thickness_mm = round(min(max(bronchus_caliber_mm * 0.28, 1.8), 3.2), 1)
-    wall_to_lumen_ratio = round(wall_thickness_mm / max(bronchus_caliber_mm, 0.1), 2)
+    # Authentic wall thickness measurement (radial sampling outward from lumen border)
+    wall_thickness_mm = None
+    wall_to_lumen_ratio = None
+    if aam_res.get("found") and bronchus_caliber_mm is not None:
+        bc_x, bc_y = aam_res.get("bronchus_center", (0, 0))
+        r_px = bronchus_caliber_mm / (2.0 * max(spacing[2], 0.1))
+        wall_thickness_mm = measure_bronchial_wall_thickness(
+            volume[key_slice_idx], bc_x, bc_y, r_px, spacing[2]
+        )
+        if wall_thickness_mm is not None:
+            wall_to_lumen_ratio = round(wall_thickness_mm / max(bronchus_caliber_mm, 0.1), 2)
 
     # 8. Morphological phenotype classification
-    if bar_ratio > 2.0:
-        phenotype = "囊状支气管扩张 (Cystic / Saccular Bronchiectasis)"
-    elif bar_ratio > 1.5:
-        phenotype = "静脉曲张状支气管扩张 (Varicose Bronchiectasis)"
-    elif bar_ratio > bar_cutoff:
-        phenotype = "柱状支气管扩张 (Cylindrical Bronchiectasis)"
+    if bar_ratio is not None:
+        if bar_ratio > 2.0:
+            phenotype = "囊状支气管扩张 (Cystic / Saccular Bronchiectasis)"
+        elif bar_ratio > 1.5:
+            phenotype = "静脉曲张状支气管扩张 (Varicose Bronchiectasis)"
+        elif bar_ratio > bar_cutoff:
+            phenotype = "柱状支气管扩张 (Cylindrical Bronchiectasis)"
+        else:
+            phenotype = "正常气道管径 (No Significant Dilation)"
+    elif bronchus_caliber_mm is not None:
+        if bronchus_caliber_mm > 15.0:
+            phenotype = "重度支气管扩张 (伴行动脉未见清晰截面)"
+        elif bronchus_caliber_mm > 10.0:
+            phenotype = "支气管管径增粗 (伴行动脉未见清晰截面)"
+        else:
+            phenotype = "气道管径未见异常 (伴行动脉未见清晰截面)"
     else:
-        phenotype = "正常气道管径 (No Significant Dilation)"
+        phenotype = "关键层未见明确气道截面 (未测得)"
 
     # 9. Clinical Signs & Scoring
     signs_detected = []
-    if bar_ratio > bar_cutoff:
+    if bar_ratio is not None and bar_ratio > bar_cutoff:
         signs_detected.append(f"印戒征 (Signet Ring Sign, BAR = {bar_ratio} > 1.0)")
-    if wall_to_lumen_ratio > 0.20:
+    if wall_to_lumen_ratio is not None and wall_to_lumen_ratio > 0.20:
         signs_detected.append(f"双轨征 (Tram-track Sign, 管壁厚度比 {wall_to_lumen_ratio} > 0.20)")
     if mucus_vol_cm3 > 1.0:
         signs_detected.append(f"指套征 (Finger-in-glove Sign, 分支粘液嵌顿 {mucus_vol_cm3} cm³)")
@@ -653,23 +680,35 @@ def analyze_bronchiectasis_and_mucus(
     if distribution_summary and distribution_summary != "双肺散在":
         signs_detected.append(f"优势肺叶分布: {distribution_summary}")
 
-    # Bhalla Mucoid Score (0 to 2) and Reiff Score (0 to 18)
-    if is_baseline_severe or occlusion_rate_pct >= 50.0 or mucus_vol_cm3 >= 15.0:
+    # Reiff Score (0 to 18): sum across lobes based on actual lobar involvement
+    reiff_score = 0
+    for l_key, l_vol in lobar_distribution.items():
+        if l_vol >= 4.0:
+            reiff_score += 3
+        elif l_vol >= 1.5:
+            reiff_score += 2
+        elif l_vol > 0.05:
+            reiff_score += 1
+    if bar_ratio is not None and bar_ratio > bar_cutoff and reiff_score == 0:
+        reiff_score = 2 if bar_ratio > 1.5 else 1
+
+    # Bhalla Mucoid Score (0 to 2) and Severity
+    if occlusion_rate_pct >= 40.0 or mucus_vol_cm3 >= 10.0:
         bhalla_score = "2 (重度广泛完全嵌顿 / Total Occlusion)"
-        reiff_score = 12
         severity = "重度支气管扩张伴广泛粘液嵌顿 (Severe Impaction)"
-    elif occlusion_rate_pct >= 20.0 or mucus_vol_cm3 >= 3.0:
+    elif occlusion_rate_pct >= 15.0 or mucus_vol_cm3 >= 2.0:
         bhalla_score = "1 (部分支气管粘液栓塞 / Partial Plugging)"
-        reiff_score = 7
         severity = "中度支气管扩张伴粘液栓塞 (Moderate Plugging)"
+    elif bar_ratio is not None and bar_ratio > bar_cutoff:
+        bhalla_score = "0 (管腔通畅 / No Significant Plugging)"
+        severity = "轻度支气管扩张 (Mild Bronchiectasis)"
     else:
         bhalla_score = "0 (管腔通畅 / No Significant Plugging)"
-        reiff_score = 2
-        severity = "轻度支气管扩张 (Mild Bronchiectasis)"
+        severity = "未见明显支气管扩张 (No Significant Bronchiectasis)"
 
-    # 10. Build Calipers and Diagnostic Badges for PACS Presentation State
+    # 10. Build Calipers and Diagnostic Badges for PACS Presentation State (Authentic only)
     calipers = []
-    if aam_res.get("found") and aam_res.get("br_p1") and aam_res.get("br_p2"):
+    if aam_res.get("found") and aam_res.get("br_p1") and aam_res.get("br_p2") and bronchus_caliber_mm is not None:
         calipers.append({
             "name": "Bronchus Lumen Caliper",
             "type": "bronchus",
@@ -679,7 +718,7 @@ def analyze_bronchiectasis_and_mucus(
             "color": (56, 189, 248, 255),
             "tick_len": 5
         })
-        if aam_res.get("has_companion_artery") and aam_res.get("art_p1") and aam_res.get("art_p2"):
+        if aam_res.get("has_companion_artery") and aam_res.get("art_p1") and aam_res.get("art_p2") and artery_caliber_mm is not None:
             calipers.append({
                 "name": "Companion Artery Caliper",
                 "type": "companion_artery",
@@ -692,19 +731,18 @@ def analyze_bronchiectasis_and_mucus(
 
     # Diagnostic callout badge
     badges = []
-    if aam_res.get("found"):
+    if aam_res.get("found") and bronchus_caliber_mm is not None:
         anchor_x = (aam_res["br_p1"][0] + (aam_res["art_p1"][0] if aam_res.get("art_p1") else aam_res["br_p2"][0])) // 2
         anchor_y = aam_res["br_p1"][1]
 
-        badge_title = f"BAR: {bar_ratio:.2f} ({'印戒征阳性' if bar_ratio > bar_cutoff else '管径比正常'})"
-        if aam_res.get("has_companion_artery"):
+        if bar_ratio is not None and artery_caliber_mm is not None:
+            badge_title = f"BAR: {bar_ratio:.2f} ({'印戒征阳性' if bar_ratio > bar_cutoff else '管径比正常'})"
             badge_sub = f"支气管 {bronchus_caliber_mm:.1f}mm / 伴行动脉 {artery_caliber_mm:.1f}mm"
         else:
-            badge_sub = f"支气管 {bronchus_caliber_mm:.1f}mm (伴行动脉未见清晰截面)"
+            badge_title = f"支气管径: {bronchus_caliber_mm:.1f}mm"
+            badge_sub = "伴行动脉未检出截面 (BAR未测得)"
 
-        if is_baseline_severe:
-            badge_detail = "局部粘液栓: 完全阻塞 (右肺下叶前基底段)"
-        elif mucus_nodule_locations:
+        if mucus_nodule_locations:
             badge_detail = f"局部粘液栓: {occlusion_rate_pct}% 阻塞 ({mucus_nodule_locations[0]['segment']})"
         else:
             badge_detail = "支气管管腔通畅"
@@ -726,10 +764,15 @@ def analyze_bronchiectasis_and_mucus(
         (key_ham, (217, 70, 239, 230))      # Magenta: High-attenuation mucus HAM
     ]
 
+    bar_str = f"{bar_ratio:.2f}" if bar_ratio is not None else "未测得"
+    br_str = f"{bronchus_caliber_mm:.1f}mm" if bronchus_caliber_mm is not None else "未测得"
+    art_str = f"{artery_caliber_mm:.1f}mm" if artery_caliber_mm is not None else "未检出"
+    wt_str = f"{wall_to_lumen_ratio}" if wall_to_lumen_ratio is not None else "未测得"
+
     hud_lines = [
         f"计算加速: {dev_info.get('accelerator', str(device))} | 关键断面: 第 #{key_slice_idx} 层",
         f"形态分型: {phenotype}",
-        f"BAR 扩张比: {bar_ratio} (支气管: {bronchus_caliber_mm}mm / 伴行动脉: {artery_caliber_mm}mm) | 管壁厚度比: {wall_to_lumen_ratio}",
+        f"BAR 扩张比: {bar_str} (支气管: {br_str} / 伴行动脉: {art_str}) | 管壁厚度比: {wt_str}",
         f"粘液栓体积: {mucus_vol_cm3} cm3 (HAM高密度: {ham_vol_cm3} cm3) | 阻塞率: {occlusion_rate_pct}%",
         f"优势分布: {distribution_summary}",
         f"Bhalla 粘液分级: {bhalla_score} | Reiff 严重度评分: {reiff_score}/18"
@@ -787,6 +830,9 @@ def analyze_bronchiectasis_and_mucus(
                 f"     - 局部 CT 值: 均值 `{n['mean_hu']} HU` (峰值 `{n['max_hu']} HU`)\n"
             )
 
+    bar_md = f"`{bar_ratio}`" if bar_ratio is not None else "`未测得 (未检出伴行动脉)`"
+    wt_md = f"`{wall_to_lumen_ratio}`" if wall_to_lumen_ratio is not None else "`未测得`"
+
     res = {
         "status": "success",
         "analysis_type": "bronchiectasis_and_mucus",
@@ -816,7 +862,7 @@ def analyze_bronchiectasis_and_mucus(
             "aam_detection": {
                 "pair_found": aam_res.get("found", False),
                 "has_companion_artery": aam_res.get("has_companion_artery", False),
-                "distance_mm": aam_res.get("dist_mm", 0.0)
+                "distance_mm": aam_res.get("dist_mm", 0.0) if aam_res.get("dist_mm") is not None else 0.0
             }
         },
         "key_slice_png_base64": b64_str,
@@ -838,8 +884,8 @@ def analyze_bronchiectasis_and_mucus(
             f"- **计算加速设备**: `{dev_info.get('accelerator')}` (耗时: {elapsed}s)\n"
             f"- **病理形态分型**: **{phenotype}**\n"
             f"- **临床严重度**: **{severity}**\n"
-            f"- **支气管-伴行动脉径比 (BAR)**: `{bar_ratio}` (正常参考值 $\\le 1.0$；$> 1.1$ 确诊扩张)\n"
-            f"- **管壁增厚比 (Wall/Lumen)**: `{wall_to_lumen_ratio}` (正常参考值 $< 0.20$)\n"
+            f"- **支气管-伴行动脉径比 (BAR)**: {bar_md} (正常参考值 $\\le 1.0$；$> 1.1$ 确诊扩张)\n"
+            f"- **管壁增厚比 (Wall/Lumen)**: {wt_md} (正常参考值 $< 0.20$)\n"
             f"- **粘液栓总体积**: `{mucus_vol_cm3} cm³` (高密度粘液栓 HAM: `{ham_vol_cm3} cm³`)\n"
             f"- **气道管腔阻塞率**: `{occlusion_rate_pct}%`\n"
             f"- **Bhalla 临床评分**: `{bhalla_score}` | **Reiff 评分**: `{reiff_score}/18`\n"

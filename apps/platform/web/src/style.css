@@ -185,6 +185,8 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .doclist li .item-menu:hover:not(:disabled) { color: var(--text); background: var(--line-strong); }
 .doclist li.group { color: var(--muted); font-size: 12px; margin-top: 8px; }
 .doclist li.group .caret { width: 12px; font-size: 10px; }
+.doclist li.group .kind.folder { width: 15px; height: 15px; flex: none; color: var(--mint-text); }
+.doclist li.group:hover .kind.folder { color: var(--text); }
 .doclist li.group .count { font-weight: 400; font-size: 11px; opacity: .7; background: transparent; color: var(--muted); }
 .doclist li.group-label { color: var(--muted); font-size: 11px; padding: 2px 12px; cursor: default; }
 .doclist li.group-label:hover { background: transparent; }
@@ -238,8 +240,80 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .toolbar button, .toolbar select { border: 0; border-right: 1px solid var(--line); background: transparent; padding: 7px 11px; min-width: 34px; color: var(--text-2); white-space: nowrap; flex: none; }
 .toolbar > :last-child { border-right: 0; }
 .toolbar button:hover:not(:disabled), .toolbar select:hover { background: var(--hover); color: var(--text); border-color: var(--line); }
-.toolbar button.on { background: var(--teal); color: var(--mint-text); }
+.toolbar button.on, .toolbar button.active { background: var(--teal); color: var(--mint-text); }
 .toolbar .sep { width: 1px; align-self: stretch; background: var(--line-strong); margin: 0; }
+
+/* 上传进度条弹窗 */
+.upload-progress-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.upload-progress-modal[hidden] {
+  display: none !important;
+}
+.upload-progress-card {
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  width: 380px;
+  max-width: 90vw;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.upload-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.upload-progress-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upload-progress-percent {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mint-text);
+  font-family: monospace;
+}
+.upload-progress-track {
+  width: 100%;
+  height: 6px;
+  background: var(--line-strong);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.upload-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #06b6d4);
+  transition: width 0.2s ease;
+  border-radius: 3px;
+}
+.upload-progress-status {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.spinner-icon {
+  animation: spin 1s linear infinite;
+  color: var(--mint-text);
+}
 
 .banner, .suggest-banner, .turn-banner, .nudge { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 24px 0; padding: 7px 8px 7px 14px; border: 1px solid var(--green-line); background: var(--green-soft); font-size: 13px; color: var(--text); }
 .suggest-banner .dot, .turn-banner .dot { width: 7px; height: 7px; background: var(--mint); flex: none; }

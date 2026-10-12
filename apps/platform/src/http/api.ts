@@ -44,6 +44,7 @@ import type { Article } from '../literature/types.ts'
 import type { OpenAlexClient } from '../literature/openalex.ts'
 import type { DocRow } from '../store/db.ts'
 import { bindAssets, DocxImportError, importDocx } from '../convert/docx-import.ts'
+import { importPdf, PdfImportError } from '../convert/pdf-import.ts'
 import { AnchorError, attachComment, locate, threadMarks } from '../model/anchors.ts'
 import { parseBlocks } from '../model/markdown.ts'
 import type { CommitEvent, Documents } from '../model/runtime.ts'
@@ -886,32 +887,17 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (file && /\.pdf$/i.test(file.name)) {
       try {
         const bytes = new Uint8Array(await file.arrayBuffer())
-        const extracted = await extractText(file.name, bytes)
-        const blocks: any[] = []
-        let first = true
-        for (const page of extracted.pages) {
-          const paras = page.split(/\n{2,}/).map(p => p.trim()).filter(Boolean)
-          for (const p of paras) {
-            if (first && p.length < 100 && !/[。！？.!?]$/.test(p)) {
-              blocks.push(schema.node('heading', { level: 1 }, [schema.text(p)]))
-              first = false
-            } else {
-              blocks.push(schema.node('paragraph', null, [schema.text(p)]))
-              first = false
-            }
-          }
-        }
-        if (blocks.length === 0) blocks.push(schema.node('paragraph', null, [schema.text('（该 PDF 没有提取到文字内容）')]))
-        const docNode = schema.node('doc', null, blocks)
-        const row = docs.create({ owner: user, title: file.name.replace(/\.pdf$/i, ''), content: docNode, source: 'import' })
+        const imported = await importPdf(bytes, file.name)
+        const ids = new Map(imported.assets.map(a => [a.key, store.putAsset({ owner: user, mime: a.mime, name: a.name, bytes: a.bytes }).id]))
+        const boundDoc = bindAssets(imported.doc, ids)
+        const row = docs.create({ owner: user, title: file.name.replace(/\.pdf$/i, ''), content: boundDoc, source: 'import' })
         store.putPackage(row.id, 'pdf', bytes)
-        const warnings: string[] = []
-        if (extracted.note) warnings.push(extracted.note)
-        if (extracted.doi) warnings.push(`检测到 DOI: ${extracted.doi}`)
-        if (extracted.pmid) warnings.push(`检测到 PMID: ${extracted.pmid}`)
+        const warnings = [...imported.warnings]
+        if (imported.doi) warnings.push(`检测到 DOI: ${imported.doi}`)
+        if (imported.pmid) warnings.push(`检测到 PMID: ${imported.pmid}`)
         return c.json({ ...row, warnings }, 201)
       } catch (err) {
-        if (err instanceof ExtractError) return c.json({ error: err.message }, 400)
+        if (err instanceof PdfImportError) return c.json({ error: err.message }, 400)
         throw err
       }
     }
@@ -1606,6 +1592,20 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/copilot/status', c => {
     const user = c.get('user')
     const doc = getOrCreateCopilotDoc(user)
+    const rawMessages = store.listMessages(doc.id)
+    const messages = rawMessages.slice(-50).map(m => {
+      let text = m.text
+      if (m.role === 'user' && text.includes('用户需求：')) {
+        text = text.split('用户需求：').pop()?.trim() || text
+      }
+      return {
+        id: m.id,
+        role: m.role,
+        text,
+        turn_id: m.turn_id,
+        created_at: m.created_at,
+      }
+    })
     const turnsList = store.listTurns(doc.id).slice(-30).map(t => {
       const text = t.message
       const userPart = text.includes('用户需求：') ? text.split('用户需求：').pop()?.trim() : text
@@ -1618,7 +1618,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         error: t.error,
       }
     })
-    return c.json({ doc_id: doc.id, turns: turnsList, busy: deps.turns.isBusy(user) })
+    return c.json({ doc_id: doc.id, messages, turns: turnsList, busy: deps.turns.isBusy(user) })
   })
 
   app.post('/api/copilot/chat', async c => {

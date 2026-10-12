@@ -67,10 +67,10 @@ let anchor: SelectionAnchor | null = null
 let pendingAnchor: { node_id: string; snippet: string; paragraph?: number; range?: { from: number; to: number } } | null = null
 let refreshTimer: number | undefined
 
-// —— 文档列表 ——
-
 const ICON_DOC = '<svg class="kind doc" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-label="文档"><path d="M4 1.75h5.5L12.5 4.75v9.5H4z"/><path d="M9.25 1.75v3.25h3.25M6 8h4.5M6 10.75h4.5"/></svg>'
 const ICON_DECK = '<svg class="kind deck" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-label="幻灯片"><rect x="1.75" y="2.75" width="12.5" height="8.5" rx="1.5"/><path d="M8 11.25v2.5M5.5 13.75h5"/></svg>'
+const ICON_FOLDER = '<svg class="kind folder" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-label="项目文件夹"><path d="M1.75 3.5A1 1 0 0 1 2.75 2.5h3.69c.35 0 .68.18.87.48l.94 1.52H13.25a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1v-9z"/></svg>'
+const ICON_FOLDER_OPEN = '<svg class="kind folder open" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-label="打开的项目文件夹"><path d="M1.75 4A1 1 0 0 1 2.75 3h3.69c.35 0 .68.18.87.48l.94 1.52H13.25a1 1 0 0 1 1 1v1.5H1.75V4z"/><path d="M1.75 6.5h11.75a1 1 0 0 1 .98 1.2l-1.1 4.5a1 1 0 0 1-.98.8H2.5a1 1 0 0 1-.98-.8l-1.1-4.5a1 1 0 0 1 .98-1.2h.35z"/></svg>'
 
 // —— 左栏：文档仓库（项目分组、搜索、回收站） ——
 
@@ -88,7 +88,7 @@ async function loadDocs(): Promise<void> {
   const groups = projects.map(p => {
     const items = docRows.filter(d => d.project_id === p.id)
     const open = !collapsed.has(p.id)
-    return `<li class="group${open ? ' open' : ''}" data-project="${p.id}"><span class="caret">${open ? '▾' : '▸'}</span><span class="label">${esc(p.name)}</span><span class="count">${items.length}</span><button class="item-menu" data-project-menu="${p.id}" title="项目操作" aria-label="项目操作">⋯</button></li>${open ? items.map(docItem).join('') : ''}`
+    return `<li class="group${open ? ' open' : ''}" data-project="${p.id}"><span class="caret">${open ? '▾' : '▸'}</span>${open ? ICON_FOLDER_OPEN : ICON_FOLDER}<span class="label">${esc(p.name)}</span><span class="count">${items.length}</span><button class="item-menu" data-project-menu="${p.id}" title="项目操作" aria-label="项目操作">⋯</button></li>${open ? items.map(docItem).join('') : ''}`
   }).join('')
   $('docList').innerHTML = (loose.length && projects.length ? '<li class="group-label">未分组</li>' : '') + loose.map(docItem).join('') + groups
     + (docRows.length === 0 ? '<li class="nav-empty">还没有文档</li>' : '')
@@ -420,15 +420,84 @@ async function createDoc(kind: 'doc' | 'deck', renameNow = true): Promise<void> 
 $('newDoc').onclick = () => void createDoc('doc')
 $('newDeck').onclick = () => void createDoc('deck')
 
-$('uploadBtn').onclick = () => $('uploadInput').click()
+let isUploading = false
+async function uploadFileWithProgress(file: File): Promise<any> {
+  if (isUploading) return
+  isUploading = true
+  const btn = $('uploadBtn') as HTMLButtonElement | null
+  if (btn) btn.disabled = true
+
+  const modal = $('uploadProgressModal')
+  const nameEl = $('uploadProgressFileName')
+  const percentEl = $('uploadProgressPercent')
+  const barEl = $('uploadProgressBar')
+  const statusEl = $('uploadProgressStatus')
+
+  if (modal && nameEl && percentEl && barEl && statusEl) {
+    nameEl.textContent = `正在导入: ${file.name}`
+    percentEl.textContent = '0%'
+    barEl.style.width = '0%'
+    statusEl.textContent = '正在传输文件，请勿重复操作...'
+    modal.hidden = false
+  }
+
+  const fd = new FormData()
+  fd.append('file', file)
+
+  try {
+    const d = await new Promise<any>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', '/api/docs')
+      if (TOKEN) xhr.setRequestHeader('Authorization', `Bearer ${TOKEN}`)
+
+      xhr.upload.onprogress = ev => {
+        if (ev.lengthComputable) {
+          const pct = Math.round((ev.loaded / ev.total) * 100)
+          if (percentEl) percentEl.textContent = `${pct}%`
+          if (barEl) barEl.style.width = `${pct}%`
+          if (statusEl && pct >= 100) statusEl.textContent = '文件传输完成，正在进行高保真解析与切片渲染...'
+        }
+      }
+      xhr.onload = () => {
+        if (xhr.status === 401) {
+          if (TOKEN) signOut()
+          reject(new Error('请先登录'))
+          return
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)) }
+          catch { resolve({}) }
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText)
+            reject(new Error(err.error || err.message || `上传失败 (HTTP ${xhr.status})`))
+          } catch {
+            reject(new Error(`上传失败 (HTTP ${xhr.status})`))
+          }
+        }
+      }
+      xhr.onerror = () => reject(new Error('网络请求异常'))
+      xhr.onabort = () => reject(new Error('上传已取消'))
+      xhr.send(fd)
+    })
+    return d
+  } finally {
+    isUploading = false
+    if (btn) btn.disabled = false
+    if (modal) modal.hidden = true
+  }
+}
+
+$('uploadBtn').onclick = () => {
+  if (isUploading) return
+  $('uploadInput').click()
+}
 $<HTMLInputElement>('uploadInput').onchange = async e => {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  const fd = new FormData()
-  fd.append('file', file)
   try {
-    const d = await api('/api/docs', { method: 'POST', body: fd })
+    const d = await uploadFileWithProgress(file)
     await loadDocs()
     await open(d.id)
     if (d.warnings?.length) showNotice(`导入提示：${d.warnings.join('；')}`)
@@ -1007,15 +1076,26 @@ $('deckToolbar').onchange = async e => {
 
 // —— 工具栏 ——
 
-$('toolbar').onclick = e => {
+$('toolbar').onclick = async e => {
   const btn = (e.target as HTMLElement).closest('button')
   const cmd = btn?.dataset.cmd
   if (!cmd || !session?.editor) return
   const c = session.editor.commands as Record<string, (...a: any[]) => void>
   if (cmd === 'image') { $('imageInput').click(); return }
   if (cmd === 'cite') { void addCitation(); return }
-  if (['bold', 'italic', 'underline', 'sup', 'sub'].includes(cmd)) session.editor.commands.mark(cmd as 'bold')
-  else c[cmd]?.()
+  if (cmd === 'color') {
+    const color = await pickColor(btn, 'clinical', true)
+    if (color && session?.editor) {
+      session.editor.commands.setTextColor(color === 'none' ? '' : (color.startsWith('#') ? color : `#${color}`))
+    }
+    return
+  }
+  if (['bold', 'italic', 'underline', 'sup', 'sub'].includes(cmd)) {
+    session.editor.commands.mark(cmd as 'bold')
+    syncToolbar()
+  } else {
+    c[cmd]?.()
+  }
 }
 async function addCitation(): Promise<void> {
   if (!session?.editor) return
@@ -1057,10 +1137,35 @@ $<HTMLSelectElement>('blockType').onchange = e => {
   if (v === 'p') session.editor.commands.paragraph()
   else session.editor.commands.heading(Number(v.slice(1)))
 }
+const docFf = $<HTMLSelectElement>('docFontFamily')
+if (docFf) docFf.onchange = () => session?.editor?.commands.setFontFamily(docFf.value)
+const docFs = $<HTMLSelectElement>('docFontSize')
+if (docFs) docFs.onchange = () => session?.editor?.commands.setFontSize(docFs.value)
+
 function syncToolbar(): void {
   if (!session?.editor) return
   const t = session.editor.blockType()
-  $<HTMLSelectElement>('blockType').value = ['p', 'h1', 'h2', 'h3'].includes(t) ? t : 'p'
+  const bt = $<HTMLSelectElement>('blockType')
+  if (bt) bt.value = ['p', 'h1', 'h2', 'h3'].includes(t) ? t : 'p'
+
+  const fontSel = $<HTMLSelectElement>('docFontFamily')
+  const szSel = $<HTMLSelectElement>('docFontSize')
+  const style = session.editor.commands.activeTextStyle()
+  if (fontSel) {
+    const f = style.fontFamily
+    fontSel.value = Array.from(fontSel.options).some(o => o.value === f) ? f : ''
+  }
+  if (szSel) {
+    const sz = style.fontSize
+    szSel.value = Array.from(szSel.options).some(o => o.value === sz) ? sz : ''
+  }
+
+  const boldBtn = document.querySelector<HTMLButtonElement>('#toolbar [data-cmd="bold"]')
+  if (boldBtn) boldBtn.classList.toggle('active', session.editor.commands.isMarkActive('bold'))
+  const italicBtn = document.querySelector<HTMLButtonElement>('#toolbar [data-cmd="italic"]')
+  if (italicBtn) italicBtn.classList.toggle('active', session.editor.commands.isMarkActive('italic'))
+  const underlineBtn = document.querySelector<HTMLButtonElement>('#toolbar [data-cmd="underline"]')
+  if (underlineBtn) underlineBtn.classList.toggle('active', session.editor.commands.isMarkActive('underline'))
 }
 
 // —— 通知 ——

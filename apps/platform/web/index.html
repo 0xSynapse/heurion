@@ -130,9 +130,31 @@
         <option value="h2">标题 2</option>
         <option value="h3">标题 3</option>
       </select>
+      <select id="docFontFamily" class="tb-select" title="字体选择">
+        <option value="">字体 ▾</option>
+        <option value="system-ui, sans-serif">系统默认</option>
+        <option value="PingFang SC, Microsoft YaHei, sans-serif">黑体 / 苹方</option>
+        <option value="Songti SC, SimSun, serif">宋体 (Serif)</option>
+        <option value="KaiTi, STKaiti, serif">楷体 (KaiTi)</option>
+        <option value="Arial, sans-serif">Arial</option>
+        <option value="'Times New Roman', Times, serif">Times New Roman</option>
+        <option value="'Courier New', monospace">等宽代码体</option>
+      </select>
+      <select id="docFontSize" class="tb-select" title="字号大小">
+        <option value="">字号 ▾</option>
+        <option value="12px">12 px (小四)</option>
+        <option value="14px">14 px (五号)</option>
+        <option value="16px">16 px (正文)</option>
+        <option value="18px">18 px (中四)</option>
+        <option value="20px">20 px (小二)</option>
+        <option value="24px">24 px (二号)</option>
+        <option value="28px">28 px (一号)</option>
+        <option value="32px">32 px (初号)</option>
+      </select>
       <button data-cmd="bold" title="粗体 ⌘B"><b>B</b></button>
       <button data-cmd="italic" title="斜体 ⌘I"><i>I</i></button>
       <button data-cmd="underline" title="下划线 ⌘U"><u>U</u></button>
+      <button data-cmd="color" title="文字颜色">颜色</button>
       <button data-cmd="sup" title="上标">x²</button>
       <button data-cmd="sub" title="下标">x₂</button>
       <span class="sep"></span>
@@ -411,6 +433,22 @@
     </div>
   </div>
 </aside>
+
+<div id="uploadProgressModal" class="upload-progress-modal" hidden>
+  <div class="upload-progress-card">
+    <div class="upload-progress-header">
+      <div class="upload-progress-title">
+        <svg class="spinner-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-linecap="round"/></svg>
+        <span id="uploadProgressFileName">正在上传文件...</span>
+      </div>
+      <span id="uploadProgressPercent" class="upload-progress-percent">0%</span>
+    </div>
+    <div class="upload-progress-track">
+      <div id="uploadProgressBar" class="upload-progress-bar" style="width: 0%;"></div>
+    </div>
+    <div id="uploadProgressStatus" class="upload-progress-status">正在传输中，请勿重复操作...</div>
+  </div>
+</div>
 
 <script type="module" src="/src/main.ts"></script>
 </body>

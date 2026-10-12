@@ -102,10 +102,14 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     }
 
     if (patientRow && !sample_id && !file_path) {
-      const tags = patientRow.tags || []
-      const isAbdomen = (model_id && (model_id.includes('spleen') || model_id.includes('liver') || model_id.includes('abdomen'))) ||
-        tags.some((t: string) => t.includes('腹') || t.includes('肝') || t.includes('脾'))
-      sample_id = isAbdomen ? 'spleen_test' : 'chest_lung_ct'
+      // B5 修复：真实检查患者是否有关联的影像记录或附件文件，绝不允许将合成体模作为患者扫描分析并写入病历
+      const imgRec = patientRow.records?.find((r: any) => r.kind === 'imaging' && (r.file_id || r.imaging_data?.file_path))
+      if (imgRec) {
+        file_path = imgRec.imaging_data?.file_path || (imgRec.file_id ? `/app/data/platform/files/${imgRec.file_id}` : undefined)
+      }
+      if (!file_path && !sample_id) {
+        return fail('patient_imaging_not_found', '该患者档案中未检出真实的影像数据文件 (DICOM/NIfTI)。严禁使用合成演示体模写入真实患者病历。')
+      }
     }
     
     let resultData: any
@@ -1178,37 +1182,16 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
   }, async ({ study_id, patient_ids, model_id, save_as_dataset, dataset_name }) => {
     try {
       const a = { userId: claims.u, via: 'ai' as const, space: 'work' as const }
-      if (deps.cohort) {
-        const res = await deps.cohort.imagingBatchAnalyze(a, study_id, {
-          patient_ids,
-          model_id,
-          save_as_dataset,
-          dataset_name,
-        })
-        return json(res)
+      if (!deps.cohort) {
+        return fail('cohort_service_unavailable', '队列研究批量分析服务未就绪，禁止生成虚构受试者数据')
       }
-
-      // Fallback if cohort service not directly injected: call imaging worker directly
-      const resp = await fetch(`${workerUrl}/api/v1/cohort/batch-analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          study_id,
-          cases: (patient_ids && patient_ids.length > 0)
-            ? patient_ids.map(pid => ({ subject_id: pid, patient_id: pid, sample_id: 'chest_lung_ct', model_name: model_id || 'lung_nodule_segmenter' }))
-            : [
-                { subject_id: 'SUBJ_001', sample_id: 'chest_lung_ct', model_name: model_id || 'lung_nodule_segmenter' },
-                { subject_id: 'SUBJ_002', sample_id: 'whole_body_ct', model_name: 'whole_body_ct_segmenter' }
-              ]
-        }),
-        signal: AbortSignal.timeout(60000),
+      const res = await deps.cohort.imagingBatchAnalyze(a, study_id, {
+        patient_ids,
+        model_id,
+        save_as_dataset,
+        dataset_name,
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('batch_analyze_failed', `队列影像批量分析失败 HTTP ${resp.status}: ${errText}`)
-      }
-      const data = await resp.json()
-      return json(data)
+      return json(res)
     } catch (err) {
       return fail('batch_analyze_error', `批量分析执行异常：${err instanceof Error ? err.message : String(err)}`)
     }

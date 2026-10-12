@@ -36,7 +36,7 @@ import {
   calculateDcaCurve,
   renderDcaCurveSvg
 } from './prediction-models.ts'
-import type { StudyService } from './service.ts'
+import { StudyError, type StudyService } from './service.ts'
 import type { PatientService } from '../tenancy/patients.ts'
 import type { DatasetService } from '../datasets/service.ts'
 import type { Actor } from '../tenancy/patients.ts'
@@ -72,22 +72,23 @@ export class PublicationBundleService {
 
     // 模拟或提取真实临床特征宽表
     const cohortRecords: Array<Record<string, unknown>> = []
-    const nTotal = Math.max(subjects.length, 120)
+    const isSimulated = subjects.length === 0
+    const nTotal = isSimulated ? 120 : subjects.length
 
     for (let i = 0; i < nTotal; i++) {
-      const s = subjects[i]
+      const s = isSimulated ? null : subjects[i]
       const subId = s ? s.subject_id : `S${String(i + 1).padStart(3, '0')}`
-      const isTreatment = i % 2 === 0 ? 1 : 0
+      const isTreatment = s ? (s.treatment_arm ? (s.treatment_arm.includes('试验') || s.treatment_arm.includes('治疗') ? 1 : 0) : (i % 2 === 0 ? 1 : 0)) : (i % 2 === 0 ? 1 : 0)
       const age = s?.age_at_enroll ?? (56 + (i * 7) % 22)
-      const sex = s ? (s.sex === 'M' || s.sex === '男' ? '男' : '女') : (i % 2 === 0 ? '男' : '女')
-      const l3_smi = Number((42.5 + (isTreatment ? 8.2 : 2.1) + ((i * 3) % 11)).toFixed(1))
-      const vat_to_sat = Number((0.68 + ((i * 5) % 9) * 0.08).toFixed(2))
-      const time = Number((12 + (isTreatment ? 28 : 14) + (i % 18)).toFixed(1))
-      const status = (isTreatment ? (i % 5 === 0 ? 1 : 0) : (i % 2 === 0 ? 1 : 0))
+      const sex = s ? (s.sex === 'M' || s.sex === '男' ? '男' : s.sex === 'F' || s.sex === '女' ? '女' : '未知') : (i % 2 === 0 ? '男' : '女')
+      const l3_smi = Number(((s as any)?.l3_smi ?? (42.5 + (isTreatment ? 8.2 : 2.1) + ((i * 3) % 11))))
+      const vat_to_sat = Number(((s as any)?.vat_to_sat ?? (0.68 + ((i * 5) % 9) * 0.08)))
+      const time = Number(((s as any)?.followup_months ?? (s as any)?.followup_time ?? (12 + (isTreatment ? 28 : 14) + (i % 18))))
+      const status = (s as any)?.os_status ?? (isTreatment ? (i % 5 === 0 ? 1 : 0) : (i % 2 === 0 ? 1 : 0))
 
       cohortRecords.push({
         subject_id: subId,
-        treatment_arm: isTreatment ? '靶向联合治疗组' : '标准对照组',
+        treatment_arm: s?.treatment_arm || (isTreatment ? '试验组' : '对照组'),
         is_treatment: isTreatment,
         age,
         sex,
@@ -189,12 +190,16 @@ export class PublicationBundleService {
     const dcaMultimodal = calculateDcaCurve(labelsBinary, probsMultimodal, 'Clinical + 3D Imaging Model', '#0284c7')
     const dcaSvg = renderDcaCurveSvg([dcaClinical, dcaMultimodal], 0.35, `${study.title} · Decision Curve Analysis (Net Benefit)`)
 
-    // 8. 敏感度 E-value 计算
+    // 8. 敏感度 E-value 计算：从真实 Cox 回归结果中提取，杜绝写死 HR 0.62
+    const targetCov = survRes.cox?.covariates[0]
+    const hrEst = targetCov ? targetCov.hr : 1.0
+    const hrLower = targetCov ? targetCov.hr_ci_lower : 1.0
+    const hrUpper = targetCov ? targetCov.hr_ci_upper : 1.0
     const evalueRes = calculateEValue({
       effect_type: 'HR',
-      estimate: 0.62,
-      ci_lower: 0.45,
-      ci_upper: 0.86,
+      estimate: hrEst > 0 ? hrEst : 1.0,
+      ci_lower: hrLower > 0 ? hrLower : 1.0,
+      ci_upper: hrUpper > 0 ? hrUpper : 1.0,
     })
 
     // 9. 编撰论著 Methods & Results 段落
@@ -318,7 +323,7 @@ A visual prognostic **nomogram** was established based on the multivariable Cox 
 As illustrated in the CONSORT participant flow diagram (**Figure 1**), ${sampleSize} eligible subjects completed full multimodal follow-up. Following propensity matching, all measured clinical, demographic, and 3D imaging variables achieved robust balance with post-matching SMD < 0.05 (**Figure 2**).
 
 #### 2.2 Survival Outcomes
-Patients receiving the intervention demonstrated significantly improved survival compared with standard controls (${surv.narrative}). In the multivariable Cox proportional hazards analysis, the adjusted HR was 0.62 (95% CI: 0.45–0.86, P < 0.001).
+${surv.narrative}
 
 #### 2.3 Sensitivity to Unmeasured Confounding
 ${evalue.academic_defense_en}

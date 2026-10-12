@@ -30,11 +30,16 @@ for d in "$WS" "$HM"; do
 done
 chmod 2770 "$WS"   # 组 node 可读写（平台读用户生成的图做资产），其他 uid 进不来
 chmod 0700 "$HM"   # dsh 自己的会话与缓存，平台不需要
-mkdir -p "$WS/.tmp" && chown "$SBX_UID:$NODE_GID" "$WS/.tmp"
-# 确保 attachments 目录与附件文件属主为该 uid，组为 node，且可读写
+# A1 安全加固：严禁 .tmp 为符号链接，使用 chown -h 防御符号链接提权
+[ -L "$WS/.tmp" ] && die "不允许符号链接：$WS/.tmp"
+mkdir -p "$WS/.tmp" && chown -h "$SBX_UID:$NODE_GID" "$WS/.tmp" && chmod 0770 "$WS/.tmp"
+# A2 安全加固：严禁 attachments 为符号链接；递归 chown/chmod 强制 -P（不跟随链接）且移除 o+rX
+if [ -L "$WS/attachments" ]; then
+  die "不允许符号链接：$WS/attachments"
+fi
 if [ -d "$WS/attachments" ]; then
-  chown -R "$SBX_UID:$NODE_GID" "$WS/attachments" 2>/dev/null || true
-  chmod -R u+rwX,g+rwX,o+rX "$WS/attachments" 2>/dev/null || true
+  chown -h -R -P "$SBX_UID:$NODE_GID" "$WS/attachments" 2>/dev/null || true
+  chmod -R u+rwX,g+rwX,o-rwx "$WS/attachments" 2>/dev/null || true
 fi
 
 # 环境白名单（值来自 sudo env_keep；其余一律丢弃）

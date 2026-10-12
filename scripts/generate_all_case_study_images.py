@@ -78,8 +78,7 @@ def generate_case_1_baseline_hrct():
 
     img = nib.load(os.path.join(DATA_DIR, "chest_lung_ct.nii.gz"))
     data = img.get_fdata(dtype=np.float32)
-    vol_zyx, aff_lps, sp = to_canonical_lps(data, img.affine)
-    res = analyze_bronchiectasis_and_mucus(vol_zyx, spacing=sp, is_baseline_severe=True)
+    res = analyze_bronchiectasis_and_mucus(vol_zyx, spacing=sp)
 
     b64_str = res["key_slice_png_base64"]
     if "," in b64_str:

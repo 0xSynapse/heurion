@@ -189,7 +189,14 @@ def process_cohort_case(
     sample_id = case.get("sample_id")
     file_path = case.get("file_path")
     model_name = case.get("model_name", "lung_nodule_segmenter")
-    target = file_path or sample_id or "chest_lung_ct"
+    target = file_path or sample_id
+    if not target:
+        return {
+            "subject_id": subject_id,
+            "model_name": model_name,
+            "status": "failed",
+            "error": "缺失受试者影像文件路径 (file_path) 或有效样本标识",
+        }
 
     row: Dict[str, Any] = {
         "subject_id": subject_id,
