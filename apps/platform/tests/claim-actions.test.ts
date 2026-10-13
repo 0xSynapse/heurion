@@ -145,15 +145,19 @@ describe('论断核对临床闭环 (Claim Actions & Exemption)', () => {
             '## 讨论',
             '',
             '既往研究显示戒酒干预可使复发率降低 35%。',
+            '',
+            '文献报道同类人群饮酒比例达 65.0%，而本研究表 1 中仅为 51.1%。',
           ].join('\n'),
         },
       ],
     }, { actor: 'user', turnId: null })
 
     const ev = await claimService.evidence(doc.id)
-    // 表格单元格 40.4% 与研究结果段自报数据均不进入 unsourced；仅讨论段引述既往研究漏标引用进入 unsourced
-    expect(ev.unsourced).toHaveLength(1)
+    // 1. 表格单元格 40.4% 与纯自报句子（本研究共纳入 45 例...）不进入 unsourced
+    // 2. 引述外部研究的句子、以及含外部研究对比的混合句均保留在 unsourced 中，绝不漏报
+    expect(ev.unsourced).toHaveLength(2)
     expect(ev.unsourced[0]!.sentence).toContain('既往研究显示戒酒干预可使复发率降低 35%')
+    expect(ev.unsourced[1]!.sentence).toContain('文献报道同类人群饮酒比例达 65.0%')
 
     // 即便模型对某条 unsourced 误传 missing_citation 但在理由中写明属于本研究自报基线数据，也不挂评论
     const res = claimService.report(doc.id, [

@@ -66,34 +66,22 @@ function sentences(block: PMNode): Sentence[] {
 
 const hash = (s: string) => createHash('sha1').update(s).digest('hex').slice(0, 10)
 
-/** 章节标题属于本研究自身方法、结果、基线或病例描述时，段内无引用数值默认属于本研究数据而非漏标外部文献。 */
-const OWN_DATA_SECTION =
-  /(?:^|\b)(?:methods?|materials?\s+and\s+methods?|patients?\s+and\s+methods?|study\s+population|study\s+design|statistical\s+analysis|results?|findings?|baseline|case\s+report|case\s+presentation|abstract)(?:\b|$)|研究方法|材料与方法|对象与方法|研究对象|临床资料|统计方法|统计学分析|结果|研究结果|基线特征|基线资料|病例介绍|病例资料|病历摘要|摘要/i
-
-/** 句中明确提及外部研究时，即使在结果/方法段也仍需核查是否漏标引用。 */
+/** 句中含外部研究或外部对比词时，即便同时提到「本研究/表 1」也可能是半句缺引用，需保留给模型判断。 */
 const EXTERNAL_STUDY_CUE =
-  /(?:既往研究|另有研究|文献报道|指南推荐|荟萃分析|系统评价|\b(?:previous|prior|earlier|other)\s+stud(?:y|ies)\b|\breported\s+that\b|\bmeta-analysis\b|\bsystematic\s+review\b)/i
+  /(?:既往|另有研究|文献|指南|荟萃分析|系统评价|报道|显示.*可使|提示.*风险|\b(?:previous|prior|earlier|other)\s+stud(?:y|ies)\b|\b(?:literature|guidelines?|reported|meta-analysis|systematic\s+review)\b)/i
 
-/** 句中明确指向本研究自身数据、队列、图表或病例特征，不应作为「缺文献引用」报错。 */
+/** 纯粹描述本研究自身队列、样本或图表的句子（不含外部文献对比），不应作为「缺文献引用」报错。 */
 const OWN_STUDY_SENTENCE =
   /(?:本研究|本队列|本组|我院|我科|本中心|我中心|本文|表\s*\d+|图\s*\d+|\b(?:Table|Fig(?:ure)?)\s*\d+|\b(?:our|this|present|current)\s+(?:study|cohort|trial|analysis|patients?|population|data|series|center|hospital)\b|\bwe\s+(?:enrolled|included|analyzed|observed|found|recruited|evaluated|retrospectively)\b)/i
 
 export function extractClaims(doc: PMNode, numbers: Map<string, number>): { claims: Claim[]; unsourced: Claim[] } {
   const claims: Claim[] = []
   const unsourced: Claim[] = []
-  let inOwnDataSection = false
 
   const visit = (node: PMNode, inTable: boolean) => {
     if (node.type.name === 'figure' || node.type.name === 'code_block') return
     if (node.type.name === 'table') {
       node.forEach(child => visit(child, true))
-      return
-    }
-    if (node.type.name === 'heading') {
-      const headingText = node.textContent.trim()
-      if (headingText) {
-        inOwnDataSection = OWN_DATA_SECTION.test(headingText)
-      }
       return
     }
     if (!node.isTextblock) {
@@ -121,8 +109,7 @@ export function extractClaims(doc: PMNode, numbers: Map<string, number>): { clai
         node.type.name !== 'heading' &&
         !PLACEHOLDER.test(plain) &&
         NUMERIC.test(plain) &&
-        !OWN_STUDY_SENTENCE.test(plain) &&
-        (!inOwnDataSection || EXTERNAL_STUDY_CUE.test(plain))
+        !(OWN_STUDY_SENTENCE.test(plain) && !EXTERNAL_STUDY_CUE.test(plain))
       ) {
         unsourced.push(claim)
       }
