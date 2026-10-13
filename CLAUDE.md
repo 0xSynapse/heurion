@@ -1,6 +1,6 @@
 # Heurion 2.0 — 协作约定
 
-- 现行架构见 `docs/PLATFORM.md`；代码在 `apps/platform`。`docs/DESIGN.md` 是已停用的 S 系列路线的决策记录。
+- 现行架构见 `docs/PLATFORM.md`；代码在 `apps/platform`。`docs/archive/DESIGN_S_SERIES.md` 是已停用的 S 系列路线的决策记录。
 - 通用智能体能力（对话循环、工具执行、LLM 调用、子代理、压缩）一律交给 dsh，不在本仓库重复实现。
 - 文档模型、结构化编辑操作与写前守卫是平台核心，由本仓库实现并经 MCP 暴露给 dsh。AI 对文档的写入只能经操作层（`apps/platform/src/ops/`）；不要增加「用文件整体替换文档」的入口。
 - dsh 依赖锁定精确版本；升级单独提交，并跑 `pnpm test` 和 `pnpm --filter @heurion2/platform e2e`。

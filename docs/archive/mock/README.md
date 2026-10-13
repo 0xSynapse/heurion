@@ -3,7 +3,7 @@
 实现 S 线与 M1 相关前端时，请以这份 Mock 为布局、状态和交互的参考。
 
 - **源文件**：`workbench.dc.html`（Design canvas 的 `.dc.html` 格式，依赖 canvas 运行时，不能直接在浏览器打开；用来查看结构、样式 token、示例数据和状态逻辑，`renderVals()` 里就是全部状态与数据）
-- **设计依据**：[docs/DESIGN.md](../DESIGN.md) §5（前端形态）、§4（统一编辑框架）、§7（引用规范）
+- **设计依据**：[DESIGN_S_SERIES.md](../DESIGN_S_SERIES.md) §5（前端形态）、§4（统一编辑框架）、§7（引用规范）
 - 可交互版本在 owner 的 Design canvas 中，未公开；实现以本目录源文件与本说明为准，需要演示时向 owner 申请。
 
 ## 布局

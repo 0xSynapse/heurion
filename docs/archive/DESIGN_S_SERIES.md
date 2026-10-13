@@ -1,10 +1,10 @@
 # Heurion 2.0 设计
 
-**版本：** v0.4（2026-10-01）· **跟踪：** epic [#16](https://github.com/0xaicrypto/heurion2/issues/16) · **现行架构：** [PLATFORM.md](PLATFORM.md) · **前端 Mock：** [docs/mock/README.md](mock/README.md) · **1.0 迁移：** [MIGRATION_PLAN.md](MIGRATION_PLAN.md)
+**版本：** v0.4（2026-10-01）· **跟踪：** epic [#16](https://github.com/0xaicrypto/heurion2/issues/16) · **现行架构：** [PLATFORM.md](../PLATFORM.md) · **前端 Mock：** [mock/README.md](mock/README.md) · **1.0 迁移：** [MIGRATION_PLAN.md](../MIGRATION_PLAN.md)
 
 Heurion 2.0 让用户用 AI 快速编辑 Word/PPT 医学文档，并在编辑中检索、规范引用医学文献。执行层是 DeepSeek Harness（dsh）TypeScript SDK `@deepseek-ai/dsh-sdk-client@0.2.0-rc.2`（npm `next`，MIT），heurion 是管理面。
 
-> **已停用（2026-10-01）：** 本文描述的 S 系列路线（dsh 在工作区用 python 改文件、heurion 写后审计与合并、Collabora 编辑面）已停用，代码由 `apps/platform` 取代。现行架构见 [PLATFORM.md](PLATFORM.md)。本文保留为决策记录：§5 的产品规则（评论即指令、用户优先、引用规范）在平台中延续，§10 的风险与评审结论是平台设计的输入。
+> **已停用（2026-10-01）：** 本文描述的 S 系列路线（dsh 在工作区用 python 改文件、heurion 写后审计与合并、Collabora 编辑面）已停用，代码由 `apps/platform` 取代。现行架构见 [PLATFORM.md](../PLATFORM.md)。本文保留为决策记录：§5 的产品规则（评论即指令、用户优先、引用规范）在平台中延续，§10 的风险与评审结论是平台设计的输入。
 
 **目录**
 
