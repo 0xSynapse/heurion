@@ -1599,6 +1599,15 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
 
   // —— 全局 Co-Pilot 随航助手 ——
   function getOrCreateCopilotDoc(userId: string): DocRow {
+    const existing = (store as any).getCopilotDoc
+      ? (store as any).getCopilotDoc(userId)
+      : (store as any).db
+          ?.prepare(
+            "SELECT * FROM docs WHERE owner = ? AND deleted_at IS NULL AND json_extract(context, '$.kind') = 'copilot' ORDER BY created_at DESC LIMIT 1",
+          )
+          .get(userId)
+    if (existing) return existing as DocRow
+
     const list = store.listDocs(userId)
     for (const d of list) {
       if (d.context && !d.deleted_at) {
@@ -1820,8 +1829,10 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
 function streamTurn(c: Context<{ Variables: { user: string } }>, deps: ApiDeps, docId: string, message: string, opts: TurnOptions = {}) {
   const user = c.get('user')
   if (c.req.query('async')) {
+    const wasBusy = opts.lane === 'copilot' ? deps.turns.isCopilotBusy(user) : deps.turns.isBusy(user, docId)
     void deps.turns.submit(user, docId, message, undefined, opts)
-    return c.json({ queued: opts.lane === 'copilot' ? deps.turns.isCopilotBusy(user) : deps.turns.isBusy(user, docId) }, 202)
+    const queued = wasBusy || deps.turns.queueIds(user).includes(docId)
+    return c.json({ queued }, 202)
   }
   return streamSSE(c, async stream => {
     // 串行写出，结束前等全部写完

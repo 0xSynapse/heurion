@@ -1,3 +1,4 @@
+import type { Node as PMNode } from 'prosemirror-model'
 import { attachComment, AnchorError } from '../model/anchors.ts'
 import type { Documents } from '../model/runtime.ts'
 import { relevantPassages, type FullTextClient } from '../literature/fulltext.ts'
@@ -122,6 +123,9 @@ export class ClaimService {
     const cites = new Map(store.listCitations(docId).map(c => [c.id, c]))
     const hasAbstract = (claim: Claim) => claim.cite_ids.some(id => { const row = cites.get(id); return !!(row && (store.getAbstract(row.doi)?.abstract || store.getFullText(row.doi)?.text)) })
     const out: Array<{ claim_id: string; status: 'recorded' | 'commented' | 'unchanged' | 'stale' | 'no_evidence'; comment_id?: string }> = []
+    let doc = this.docs.get(docId)
+    const commentOps: Array<{ op: 'claim_comment'; thread: string }> = []
+    const pendingChecks: Array<() => void> = []
     for (const r of results) {
       const claim = byId.get(r.claim_id)
       if (!claim) { out.push({ claim_id: r.claim_id, status: 'stale' }); continue }
@@ -136,27 +140,41 @@ export class ClaimService {
       }
       const noEvidence = r.verdict === 'unclear' && (r.no_evidence === true || !hasAbstract(claim))
       let commentId: string | null = null
-      if (r.verdict !== 'supported' && r.verdict !== 'exempted' && !noEvidence) commentId = this.comment(docId, claim, r.verdict, r.reason)
-      store.putClaimCheck({ doc_id: docId, claim_id: r.claim_id, node_id: claim.node_id, sentence: claim.sentence, verdict: r.verdict, reason: noEvidence ? `（没有可核对的证据）${r.reason}` : r.reason, comment_id: commentId, rev: this.docs.rev(docId) })
+      if (r.verdict !== 'supported' && r.verdict !== 'exempted' && !noEvidence) {
+        const res = this.prepareComment(docId, doc, claim, r.verdict, r.reason)
+        doc = res.doc
+        commentId = res.commentId
+        if (res.anchored) commentOps.push({ op: 'claim_comment', thread: res.commentId })
+      }
+      const cId = commentId
+      pendingChecks.push(() => {
+        store.putClaimCheck({ doc_id: docId, claim_id: r.claim_id, node_id: claim.node_id, sentence: claim.sentence, verdict: r.verdict, reason: noEvidence ? `（没有可核对的证据）${r.reason}` : r.reason, comment_id: cId, rev: this.docs.rev(docId) })
+      })
       out.push({ claim_id: r.claim_id, status: noEvidence ? 'no_evidence' : commentId ? 'commented' : 'recorded', ...(commentId ? { comment_id: commentId } : {}) })
     }
+    if (commentOps.length > 0) {
+      this.docs.commit(docId, doc, { actor: 'system', turnId: null, ops: commentOps })
+    }
+    for (const put of pendingChecks) put()
     return out
   }
 
-  private comment(docId: string, claim: Claim, verdict: ClaimVerdict, reason: string): string | null {
+  private prepareComment(docId: string, doc: PMNode, claim: Claim, verdict: ClaimVerdict, reason: string): { commentId: string; doc: PMNode; anchored: boolean } {
     const store = this.docs.store
     const label = { unsupported: '所引文献不支持该论断', unclear: '无法从所引文献判断', missing_citation: '数值型论断缺少出处', supported: '', exempted: '' }[verdict]
     const row = store.addComment({ doc_id: docId, node_id: claim.node_id, snippet: claim.snippet })
+    let nextDoc = doc
+    let anchored = false
     try {
-      const anchored = attachComment(this.docs.get(docId), claim.node_id, claim.snippet, row.id)
-      this.docs.commit(docId, anchored.doc, { actor: 'system', turnId: null, ops: [{ op: 'claim_comment', thread: row.id }] })
+      nextDoc = attachComment(doc, claim.node_id, claim.snippet, row.id).doc
+      anchored = true
     } catch (err) {
       if (!(err instanceof AnchorError)) throw err
       // 找不到锚定文字：退化为整块锚点
       store.db.prepare('UPDATE comments SET snippet = \'\' WHERE id = ?').run(row.id)
     }
     store.addReply(row.id, 'ai', `论断核对：${label}。${reason}\n句子：${claim.sentence}`)
-    return row.id
+    return { commentId: row.id, doc: nextDoc, anchored }
   }
 }
 

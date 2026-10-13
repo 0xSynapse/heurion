@@ -197,7 +197,8 @@ export function parseMimeText(rawText: string): string {
   const boundaryMatch = rawText.match(/boundary="?([^"\r\n;]+)"?/i)
   if (boundaryMatch) {
     const boundary = boundaryMatch[1]!.trim()
-    const parts = rawText.split(new RegExp(`--${boundary}(?:--)?`))
+    const escapedBoundary = boundary.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const parts = rawText.split(new RegExp(`--${escapedBoundary}(?:--)?`))
     // 优先寻找 text/plain
     for (const part of parts) {
       const split = part.split(/\r?\n\r?\n/)
@@ -934,6 +935,15 @@ export class MailService {
     const byEmail = this.store.getUserByEmail(clean)
     if (byEmail) return byEmail
 
+    const atIdx = clean.indexOf('@')
+    const domainPart = atIdx >= 0 ? clean.slice(atIdx + 1) : ''
+    const isInternalDomain =
+      atIdx < 0 ||
+      domainPart === this.domain.toLowerCase() ||
+      domainPart === 'heurion.org' ||
+      domainPart === 'heurion.com' ||
+      domainPart === 'heurion.med'
+
     const heurionMatch = clean.match(/^(?:dr[._-])?([a-z0-9_.-]+)@(heurion\.org|heurion\.com)$/)
     if (heurionMatch && heurionMatch[1]) {
       const username = heurionMatch[1]
@@ -948,9 +958,10 @@ export class MailService {
       const uname = u.username.toLowerCase()
       const unameStripped = uname.replace(/^dr[._-]/, '')
       const workPrefix = (u.work_email_prefix || '').toLowerCase()
+      if (u.email && u.email.toLowerCase() === clean) return true
+      if (!isInternalDomain) return false
       if (workPrefix && (`${workPrefix}@${this.domain}` === clean || `${workPrefix}@heurion.org` === clean || `dr.${workPrefix}@heurion.org` === clean)) return true
       if (workPrefix && workPrefix === cleanUser) return true
-      if (u.email && u.email.toLowerCase() === clean) return true
       if (uname === clean || unameStripped === cleanUser) return true
       if (`${uname}@${this.domain}` === clean || `${unameStripped}@${this.domain}` === clean) return true
       if (`dr.${uname}@${this.domain}` === clean) return true

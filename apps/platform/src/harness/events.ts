@@ -54,7 +54,7 @@ export function mapNotification(n: HarnessNotification, sessionId: string): UiEv
       return out
     }
     case 'tool/result': {
-      const message = data.message as { toolCallId?: string; isError?: boolean; code?: string; source?: { toolCallId?: string }; content?: unknown } | undefined
+      const message = data.message as { toolCallId?: string; isError?: boolean; code?: string; error?: unknown; source?: { toolCallId?: string }; content?: unknown } | undefined
       const event: Extract<UiEvent, { type: 'tool_result' }> = {
         type: 'tool_result',
         callId: message?.toolCallId ?? message?.source?.toolCallId ?? '',
@@ -62,7 +62,7 @@ export function mapNotification(n: HarnessNotification, sessionId: string): UiEv
       }
       // MCP 工具的显式失败码（validation_error / unit_not_found …）——前端据此展示具体原因。
       if (typeof message?.code === 'string' && message.code) event.code = message.code
-      if (event.isError) Object.assign(event, describeToolError(message?.content))
+      if (event.isError) Object.assign(event, describeToolError(message?.content, message?.error ?? (data as { error?: unknown }).error))
       return [event]
     }
     case 'turn/end': {
@@ -87,14 +87,50 @@ function describeError(e: { message?: string; code?: string }): string {
   return (e.code && ERROR_HINTS[e.code]) ?? e.message ?? e.code ?? 'AI 回合失败'
 }
 
+export function extractToolOutput(rec: unknown, isError = false): string {
+  if (typeof rec === 'string') return rec
+  if (Array.isArray(rec)) {
+    const texts = rec.map(c => (c && typeof c === 'object' && 'text' in c ? String((c as { text: unknown }).text) : '')).filter(Boolean)
+    return texts.join('\n')
+  }
+  if (rec && typeof rec === 'object') {
+    const obj = rec as { content?: unknown; text?: unknown; error?: unknown; isError?: boolean }
+    const texts: string[] = []
+    if (Array.isArray(obj.content)) {
+      for (const c of obj.content) {
+        if (c && typeof c === 'object' && 'text' in c && (c as { text: unknown }).text) {
+          texts.push(String((c as { text: unknown }).text))
+        }
+      }
+    } else if (typeof obj.content === 'string' && obj.content) {
+      texts.push(obj.content)
+    } else if (typeof obj.text === 'string' && obj.text) {
+      texts.push(obj.text)
+    }
+    if (texts.length === 0 && (isError || obj.isError) && obj.error !== undefined && obj.error !== null) {
+      if (typeof obj.error === 'string') texts.push(obj.error)
+      else if (typeof obj.error === 'object' && 'message' in obj.error && typeof (obj.error as { message: unknown }).message === 'string') {
+        texts.push((obj.error as { message: string }).message)
+      }
+    }
+    return texts.join('\n')
+  }
+  return ''
+}
+
 /**
  * 工具失败的原因：平台 MCP 工具返回 `{code, message, hint}`（dsh 包成 "Error: {...}"）；
  * 参数校验失败等其他错误取第一行。给用户看的是 message，code / hint 放在悬停提示里。
  */
-export function describeToolError(content: unknown): { code?: string; message?: string; hint?: string } {
-  const text = Array.isArray(content)
-    ? content.map(c => (c && typeof c === 'object' && 'text' in c ? String((c as { text: unknown }).text) : '')).join('\n')
-    : typeof content === 'string' ? content : ''
+export function describeToolError(content: unknown, fallbackError?: unknown): { code?: string; message?: string; hint?: string } {
+  let text = extractToolOutput(content, true)
+  if (!text && fallbackError !== undefined && fallbackError !== null) {
+    text = typeof fallbackError === 'string'
+      ? fallbackError
+      : typeof fallbackError === 'object' && 'message' in fallbackError && typeof (fallbackError as { message: unknown }).message === 'string'
+      ? (fallbackError as { message: string }).message
+      : ''
+  }
   if (!text) return {}
   const body = text.replace(/^\s*Error:\s*/, '')
   try {

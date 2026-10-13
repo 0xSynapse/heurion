@@ -250,7 +250,7 @@ let deckId = ''
 // —— 10. 导出 docx 能被 LibreOffice 打开（需要 podman 与 heurion2:dev 镜像，否则跳过） ——
 {
   const { execFileSync } = await import('node:child_process')
-  const { mkdtempSync, writeFileSync, existsSync } = await import('node:fs')
+  const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   let engine: string | null = null
@@ -260,15 +260,19 @@ let deckId = ''
   if (!engine) console.log('- 跳过 LibreOffice 校验：没有 podman/docker 或 heurion2:dev 镜像')
   else {
     const dir = mkdtempSync(join(tmpdir(), 'heurion-e2e-'))
-    for (const [name, id, ext] of [['drafted', doc.id, 'docx'], ['imported', imported.id, 'docx'], ['deck', deckId, 'pptx']] as const) {
-      const bytes = new Uint8Array(await (await fetch(`${BASE}/api/docs/${id}/export.${ext}`, { headers: H })).arrayBuffer())
-      writeFileSync(join(dir, `${name}.${ext}`), bytes)
-    }
     try {
-      execFileSync(engine, ['run', '--rm', '-v', `${dir}:/x:Z`, '--user', 'root', '--entrypoint', 'bash', 'heurion2:dev', '-c',
-        'export HOME=/tmp && cd /x && for f in *.docx *.pptx; do timeout 120 soffice --headless --convert-to pdf --outdir /x "$f" >/dev/null 2>&1; done'], { stdio: 'ignore', timeout: 600_000 })
-    } catch { /* 结果按产物判断 */ }
-    check('导出：LibreOffice 能打开 docx 与 pptx 并转成 PDF', existsSync(join(dir, 'drafted.pdf')) && existsSync(join(dir, 'imported.pdf')) && existsSync(join(dir, 'deck.pdf')), dir)
+      for (const [name, id, ext] of [['drafted', doc.id, 'docx'], ['imported', imported.id, 'docx'], ['deck', deckId, 'pptx']] as const) {
+        const bytes = new Uint8Array(await (await fetch(`${BASE}/api/docs/${id}/export.${ext}`, { headers: H })).arrayBuffer())
+        writeFileSync(join(dir, `${name}.${ext}`), bytes)
+      }
+      try {
+        execFileSync(engine, ['run', '--rm', '-v', `${dir}:/x:Z`, '--user', 'root', '--entrypoint', 'bash', 'heurion2:dev', '-c',
+          'export HOME=/tmp && cd /x && for f in *.docx *.pptx; do timeout 120 soffice "-env:UserInstallation=file:///x/lo-profile" --headless --convert-to pdf --outdir /x "$f" >/dev/null 2>&1; done'], { stdio: 'ignore', timeout: 600_000 })
+      } catch { /* 结果按产物判断 */ }
+      check('导出：LibreOffice 能打开 docx 与 pptx 并转成 PDF', existsSync(join(dir, 'drafted.pdf')) && existsSync(join(dir, 'imported.pdf')) && existsSync(join(dir, 'deck.pdf')), dir)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   }
 }
 

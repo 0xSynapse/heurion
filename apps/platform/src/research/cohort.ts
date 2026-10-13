@@ -156,6 +156,10 @@ export class CohortService {
     }
     if (!pids.length) throw new StudyError('empty_cohort', '该研究暂无活跃入组受试者')
 
+    if ((input as any).file_paths !== undefined) {
+      throw new StudyError('invalid_input', '不允许直接传入服务器文件路径 file_paths')
+    }
+
     // B1 修复：绝不使用写死的演示 sample_id（chest_lung_ct）或编造的 1.72m/68kg 人口学数据
     const cases = pids.map(pid => {
       const subj = active.find(s => s.patient_id === pid)
@@ -164,16 +168,15 @@ export class CohortService {
 
       try {
         const pData = this.patients.read(a, pid)
-        const imgRecord = pData.records?.find(r => r.kind === 'imaging' && (r.file_id || (r as any).imaging_data?.file_path))
-        if (imgRecord) {
-          filePath = (imgRecord as any).imaging_data?.file_path || (imgRecord.file_id ? `/app/data/platform/files/${imgRecord.file_id}` : undefined)
+        const imgRecord = pData.records?.find(r => r.kind === 'imaging' && r.file_id && /^[A-Za-z0-9_-]+$/.test(r.file_id))
+        if (imgRecord?.file_id) {
+          filePath = `/app/data/platform/files/${imgRecord.file_id}`
         }
       } catch {}
 
-      if ((input as any).file_paths?.[pid]) {
-        filePath = (input as any).file_paths[pid]
-      } else if ((input as any).sample_ids?.[pid]) {
-        sampleId = (input as any).sample_ids[pid]
+      const rawSample = (input as any).sample_ids?.[pid]
+      if (typeof rawSample === 'string' && /^[A-Za-z0-9_-]+$/.test(rawSample)) {
+        sampleId = rawSample
       }
 
       return {

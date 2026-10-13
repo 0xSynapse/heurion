@@ -9,8 +9,8 @@ export class DiagramError extends Error {}
 
 const MAX_SVG = 512 * 1024
 
-export function checkSvg(svg: string): void {
-  if (svg.length > MAX_SVG) throw new DiagramError('SVG 超过 512KB')
+export function checkSvg(svg: string, maxBytes = MAX_SVG): void {
+  if (svg.length > maxBytes) throw new DiagramError(`SVG 超过 ${Math.round(maxBytes / 1024)}KB`)
   if (!/<svg\b/i.test(svg)) throw new DiagramError('不是 SVG（缺少 <svg> 根元素）')
   if (/<script\b/i.test(svg)) throw new DiagramError('SVG 里不能有 <script>')
   if (/<foreignObject\b/i.test(svg)) throw new DiagramError('SVG 里不能有 <foreignObject>，文字请用 <text>')
@@ -24,8 +24,8 @@ export function checkSvg(svg: string): void {
 }
 
 /** 渲染成 PNG；width 是输出像素宽度（高度按 SVG 比例）。 */
-export function renderSvg(svg: string, width = 1600): { png: Uint8Array; width: number; height: number } {
-  checkSvg(svg)
+export function renderSvg(svg: string, width = 1600, opts?: { maxBytes?: number }): { png: Uint8Array; width: number; height: number } {
+  checkSvg(svg, opts?.maxBytes)
   const w = Math.max(200, Math.min(4096, Math.round(width)))
   let r: Resvg
   try {

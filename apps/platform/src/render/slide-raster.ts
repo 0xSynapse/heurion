@@ -349,5 +349,5 @@ export function renderSlideToSvg(opts: RenderSlideOptions): string {
 /** 渲染一页 Slide 为高质量 PNG。 */
 export function renderSlideToPng(opts: RenderSlideOptions, width = 1600): Uint8Array {
   const svg = renderSlideToSvg(opts)
-  return renderSvg(svg, width).png
+  return renderSvg(svg, width, { maxBytes: 25 * 1024 * 1024 }).png
 }

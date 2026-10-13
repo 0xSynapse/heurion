@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DeepSeekHarness, type HarnessNotification, type RunResult } from '@deepseek-ai/dsh-sdk-client'
 import { issueToken } from '../auth/token.ts'
@@ -50,24 +50,26 @@ export class HarnessPool {
     return dir
   }
 
-  /** 该用户 dsh 的 home（隔离模式下与工作区一起交给启动器）。 */
-  homeDir(userId: string): string {
-    return `${this.config.dshHomesDir}/${safeName(userId)}`
+  /** 该用户 dsh 的 home（隔离模式下与工作区一起交给启动器；多并发 slot 各自独立防锁冲突）。 */
+  homeDir(userId: string, slot = 'default'): string {
+    const base = this.config.dshHomesDir || join(this.config.dataDir, 'dsh-homes')
+    const suffix = slot !== 'default' ? `${safeName(userId)}_${safeName(slot)}` : safeName(userId)
+    return `${base}/${suffix}`
   }
 
   /** 隔离模式：启动器参数（uid、工作区、该用户自己的 dsh home、真正的 dsh）。 */
-  private sandboxEnv(userId: string): NodeJS.ProcessEnv {
+  private sandboxEnv(userId: string, slot = 'default'): NodeJS.ProcessEnv {
     if (!this.config.sandbox) return {}
     if (!this.sandboxUid) throw new Error('隔离模式需要 sandboxUid')
     return {
       HEURION_SANDBOX_UID: String(this.sandboxUid(userId)),
       HEURION_SANDBOX_WORKSPACE: this.workspaceDir(userId),
-      HEURION_SANDBOX_HOME: `${this.config.dshHomesDir}/${safeName(userId)}`,
+      HEURION_SANDBOX_HOME: this.homeDir(userId, slot),
       HEURION_DSH_BIN: realDshBin(),
     }
   }
 
-  private childEnv(userId: string, generation: string): NodeJS.ProcessEnv {
+  private childEnv(userId: string, generation: string, slot = 'default'): NodeJS.ProcessEnv {
     return {
       PATH: process.env.PATH ?? '/usr/bin:/bin',
       HOME: process.env.HOME ?? this.config.dshHome,
@@ -81,7 +83,7 @@ export class HarnessPool {
       // 不加载 dsh office 技能：文档编辑只走 MCP
       DSH_PRIMARY_RUNTIME: '',
       PIP_NO_INDEX: '1',
-      ...this.sandboxEnv(userId),
+      ...this.sandboxEnv(userId, slot),
     }
   }
 
@@ -93,33 +95,42 @@ export class HarnessPool {
     return this.entry(userId, slot).generation
   }
 
+  getOrCreate(userId: string, slot = 'default'): Entry {
+    return this.entry(userId, slot)
+  }
+
   private entry(userId: string, slot = 'default'): Entry {
     const key = this.entryKey(userId, slot)
-    let e = this.entries.get(key)
-    if (!e) {
-      const cwd = this.workspaceDir(userId)
-      const generation = randomUUID()
-      e = {
-        harness: new DeepSeekHarness({
-          profile: 'sdk',
-          patches: [PROFILE_PATCH],
-          // 隔离模式：dsh home 每个用户一份（由启动器以该 uid 建好），SDK 启动的是隔离启动器
-          dshHome: this.config.sandbox ? `${this.config.dshHomesDir}/${safeName(userId)}` : this.config.dshHome,
-          ...(this.config.sandbox ? { dshBin: SANDBOX_LAUNCH } : {}),
-          cwd,
-          processCwd: cwd,
-          env: this.childEnv(userId, generation),
-          provider: this.config.provider,
-          model: this.config.model,
-          initializeTimeoutMs: 60_000,
-        }),
-        sessionId: null,
-        lastUsed: Date.now(),
-        busy: false,
-        generation,
-      }
-      this.entries.set(key, e)
+    const existing = this.entries.get(key)
+    if (existing) {
+      existing.lastUsed = Date.now()
+      return existing
     }
+    const cwd = this.workspaceDir(userId)
+    const generation = randomUUID()
+    const dshHome = this.config.sandbox || (this.config.sandbox !== false && slot !== 'default') || slot !== 'default'
+      ? this.homeDir(userId, slot)
+      : this.config.dshHome
+    const e: Entry = {
+      harness: new DeepSeekHarness({
+        profile: 'sdk',
+        patches: [PROFILE_PATCH],
+        // 隔离模式或多并发 slot：dsh home 按用户与 slot 隔离，防并发进程争抢锁
+        dshHome,
+        ...(this.config.sandbox ? { dshBin: SANDBOX_LAUNCH } : {}),
+        cwd,
+        processCwd: cwd,
+        env: this.childEnv(userId, generation, slot),
+        provider: this.config.provider,
+        model: this.config.model,
+        initializeTimeoutMs: 60_000,
+      }),
+      sessionId: null,
+      lastUsed: Date.now(),
+      busy: false,
+      generation,
+    }
+    this.entries.set(key, e)
     return e
   }
 
@@ -167,12 +178,14 @@ export class HarnessPool {
       const e = this.entries.get(key)
       if (!e) return
       this.entries.delete(key)
-      await e.harness.close()
+      await e.harness.close().catch(() => {})
       return
     }
     const targets = [...this.entries.entries()].filter(([k]) => k.startsWith(`${userId}#`))
-    for (const [key, e] of targets) {
+    for (const [key] of targets) {
       this.entries.delete(key)
+    }
+    for (const [, e] of targets) {
       await e.harness.close().catch(() => {})
     }
   }

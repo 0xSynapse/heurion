@@ -23,6 +23,7 @@ export interface EvidenceCitation {
   cite_id?: string
   pmid?: string | null
   doi?: string | null
+  url?: string | null
   title: string
   authors: string[]
   year?: number | string

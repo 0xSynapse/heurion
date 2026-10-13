@@ -29,6 +29,7 @@ let activeSession: {
 let token = localStorage.getItem('omnicanvas_token') || ''
 
 const $ = (id: string) => document.getElementById(id)!
+const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
 
 /** 确保会话合法性，自动获取签名 Token */
 async function ensureSession(): Promise<string> {
@@ -110,7 +111,7 @@ async function loadDocList() {
       item.innerHTML = `
         <div style="display:flex; align-items:center; gap:8px; overflow:hidden;">
           <span style="display:inline-flex; align-items:center; color:var(--gw-text-muted);">${d.kind === 'deck' ? ICON_DECK : ICON_DOC}</span>
-          <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${d.title || '未命名'}</span>
+          <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(d.title || '未命名')}</span>
         </div>
         <span style="font-size:11px; color:var(--gw-text-muted);">${d.kind === 'deck' ? '幻灯片' : '文档'}</span>
       `
@@ -139,8 +140,8 @@ function renderFilmstrip(slides: Array<{ id: string; index: number; layoutName: 
     item.innerHTML = `
       <div class="gw-filmstrip-num">${idx + 1}</div>
       <div class="gw-filmstrip-card">
-        <div class="gw-filmstrip-title">${s.title}</div>
-        <div class="gw-filmstrip-layout">${s.layoutName}</div>
+        <div class="gw-filmstrip-title">${esc(s.title)}</div>
+        <div class="gw-filmstrip-layout">${esc(s.layoutName)}</div>
       </div>
     `
     item.onclick = () => {
@@ -154,7 +155,9 @@ function renderFilmstrip(slides: Array<{ id: string; index: number; layoutName: 
 
 /** 打开指定文档或幻灯片画布 */
 async function openDoc(docId: string) {
+  if (activeSession.editor) activeSession.editor.destroy()
   if (activeSession.provider) activeSession.provider.destroy()
+  if (activeSession.ydoc) activeSession.ydoc.destroy()
   if (activeSession.deck) activeSession.deck.destroy()
   activeSession = {}
 
@@ -227,11 +230,13 @@ async function openDoc(docId: string) {
         const updated = await editChartData(chart)
         if (!updated || !activeDocId || !activeSession.deck) return
         const rev = activeSession.deck.rev
+        const ops: Array<Record<string, unknown>> = [{ op: 'chart_set_data', shape_id: shapeId, ...updated }]
+        if (updated.type !== chart.type) ops.push({ op: 'chart_set_type', shape_id: shapeId, type: updated.type })
         await api(`/api/docs/${activeDocId}/edit`, {
           method: 'POST',
           body: JSON.stringify({
             base_rev: rev,
-            ops: [{ op: 'chart_set_data', shape_id: shapeId, chart: updated }],
+            ops,
           }),
         })
         await activeSession.deck.load()

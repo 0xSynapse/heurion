@@ -39,8 +39,16 @@ export async function handleLlmProxy(deps: LlmProxyDeps, req: IncomingMessage, r
   }
   headers.set('x-api-key', deps.apiKey)
   const rest = (req.url ?? '').slice(LLM_PREFIX.length)
+  let decodedRest = rest
+  try { decodedRest = decodeURIComponent(rest) } catch { return fail(400, '非法请求路径') }
+  if (rest.includes('..') || decodedRest.includes('..') || (rest && !rest.startsWith('/') && !rest.startsWith('?'))) {
+    return fail(400, '非法请求路径')
+  }
   const controller = new AbortController()
-  res.on('close', () => controller.abort())
+  res.on('close', () => { if (!res.writableEnded) controller.abort() })
+  req.on('aborted', () => controller.abort())
+  req.on('close', () => { if (!req.complete || req.socket?.destroyed) controller.abort() })
+  ;(req as unknown as { raw?: IncomingMessage }).raw?.on?.('close', () => controller.abort())
   let upstream: Response
   try {
     upstream = await fetch(deps.upstream.replace(/\/$/, '') + rest, {

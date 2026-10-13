@@ -85,11 +85,30 @@ const relsPath = (part: string) => part.replace(/([^/]+)$/, '_rels/$1.rels')
 
 interface Geometry { x: number; y: number; w: number; h: number; rot: number }
 
+const MAX_ZIP_BYTES = 150 * 1024 * 1024
+const MAX_ZIP_ENTRIES = 2500
+
+export function safeUnzipPptx(bytes: Uint8Array): Record<string, Uint8Array> {
+  let totalBytes = 0
+  let entries = 0
+  return unzipSync(bytes, {
+    filter(file) {
+      entries++
+      totalBytes += file.originalSize ?? 0
+      if (entries > MAX_ZIP_ENTRIES || totalBytes > MAX_ZIP_BYTES) {
+        throw new PptxImportError('PPTX_INVALID: zip 解压体积或条目数超限')
+      }
+      return true
+    },
+  })
+}
+
 export function importPptx(bytes: Uint8Array): PptxImport {
   let files: Record<string, Uint8Array>
   try {
-    files = unzipSync(bytes)
-  } catch {
+    files = safeUnzipPptx(bytes)
+  } catch (err) {
+    if (err instanceof PptxImportError) throw err
     throw new PptxImportError('不是有效的 pptx 文件（zip 解析失败）')
   }
   const text = (name: string) => files[name] ? strFromU8(files[name]!) : null

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type { Node as PMNode } from 'prosemirror-model'
 import { renderSlideToPng } from './slide-raster.ts'
@@ -119,7 +119,16 @@ export class SlideRenderer {
 
   /** 渲染整份 deck，返回每页 PNG 的路径（按页序）。 */
   render(key: string, input: RenderInput): Promise<string[]> {
-    const dir = join(this.cacheDir, key)
+    const root = resolve(this.cacheDir)
+    const dir = resolve(root, key)
+    const segments = key.split('/')
+    if (
+      !key ||
+      segments.some(s => !/^[a-zA-Z0-9._-]+$/.test(s) || s === '.' || s === '..') ||
+      !dir.startsWith(root + sep)
+    ) {
+      return Promise.reject(new Error(`Invalid render cache key: ${key}`))
+    }
     const cached = existsSync(dir) ? readdirSync(dir).filter(f => /^slide-\d+\.png$/.test(f)).sort((a, b) => Number(/\d+/.exec(a)![0]) - Number(/\d+/.exec(b)![0])) : []
     if (cached.length > 0) return Promise.resolve(cached.map(f => join(dir, f)))
     let job = this.inflight.get(key)
@@ -162,10 +171,10 @@ export class SlideRenderer {
       if (mode === 'local') {
         const soffice = this.sofficeBin ?? 'soffice'
         const pdftoppm = this.pdftoppmBin ?? 'pdftoppm'
-        const script = `export HOME=/tmp && "${soffice}" --headless --convert-to pdf --outdir "$D" "$D/deck.pptx" >/dev/null 2>&1 && "${pdftoppm}" -png -r 72 "$D/deck.pdf" "$D/slide"`
+        const script = `export HOME=/tmp && "${soffice}" "-env:UserInstallation=file://$D/lo-profile" --headless --convert-to pdf --outdir "$D" "$D/deck.pptx" >/dev/null 2>&1 && "${pdftoppm}" -png -r 72 "$D/deck.pdf" "$D/slide"`
         await run('bash', ['-c', script], { env: enhancedEnv({ D: dir }), timeout: 180_000 })
       } else if (mode === 'container') {
-        const script = 'export HOME=/tmp && soffice --headless --convert-to pdf --outdir "$D" "$D/deck.pptx" >/dev/null 2>&1 && pdftoppm -png -r 72 "$D/deck.pdf" "$D/slide"'
+        const script = 'export HOME=/tmp && soffice "-env:UserInstallation=file:///x/lo-profile" --headless --convert-to pdf --outdir "$D" "$D/deck.pptx" >/dev/null 2>&1 && pdftoppm -png -r 72 "$D/deck.pdf" "$D/slide"'
         await run(this.engine, ['run', '--rm', '-v', `${dir}:/x:Z`, '--user', 'root', '-e', 'D=/x', '--entrypoint', 'bash', this.image, '-c', script], { timeout: 300_000 })
       }
 
@@ -176,7 +185,10 @@ export class SlideRenderer {
           .sort((a, b) => a.n - b.n)
           .map(({ f, n }) => {
             const target = join(dir, `slide-${n}.png`)
-            if (f !== `slide-${n}.png`) writeFileSync(target, readFileSync(join(dir, f)))
+            if (f !== `slide-${n}.png`) {
+              writeFileSync(target, readFileSync(join(dir, f)))
+              rmSync(join(dir, f), { force: true })
+            }
             return target
           })
       }
@@ -184,6 +196,10 @@ export class SlideRenderer {
       // LibreOffice 执行失败或环境不可靠时，自动降级至内置引擎
       if (source.getDoc) return this.renderBuiltin(dir, source)
       throw err
+    } finally {
+      for (const temp of ['lo-profile', 'deck.pdf', 'deck.pptx']) {
+        try { rmSync(join(dir, temp), { recursive: true, force: true }) } catch { /* ignore */ }
+      }
     }
 
     // 兜底至内置引擎

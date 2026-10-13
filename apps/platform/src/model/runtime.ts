@@ -60,39 +60,61 @@ export const schemaFor = (kind: DocKind) => kind === 'deck' ? deckSchema : schem
 
 export function stateToDoc(state: Uint8Array, kind: DocKind = 'doc'): PMNode {
   const ydoc = new Y.Doc()
-  Y.applyUpdate(ydoc, state)
-  return yXmlFragmentToProseMirrorRootNode(ydoc.getXmlFragment(BODY), schemaFor(kind))
+  try {
+    Y.applyUpdate(ydoc, state)
+    return yXmlFragmentToProseMirrorRootNode(ydoc.getXmlFragment(BODY), schemaFor(kind))
+  } finally {
+    ydoc.destroy()
+  }
 }
 
 function docToState(doc: PMNode): Uint8Array {
   const ydoc = new Y.Doc()
-  ydoc.transact(() => writeFragment(ydoc, doc))
-  return Y.encodeStateAsUpdate(ydoc)
+  try {
+    ydoc.transact(() => writeFragment(ydoc, doc))
+    return Y.encodeStateAsUpdate(ydoc)
+  } finally {
+    ydoc.destroy()
+  }
 }
 
 /**
  * 把模型写入 Y.Doc：updateYFragment 做最小差异，然后读回核对。y-prosemirror 1.3.7 在行内原子节点（引用）
  * 之后的文字只改格式时不更新格式属性（实测：粗体 → 评论标记无效）。修补在原有 Yjs 元素上进行——
  * 用临时 Y.Doc 生成目标内容的 Yjs 表示作参照，只补格式与元素属性，不删不换元素：协作者在同一段的并发输入、
- * 回合撤销（UndoManager 追踪的元素）都不受影响。结构对不上时才退回整块重写（目前已知问题不会走到）。
+ * 回合撤销（UndoManager 追踪的元素）都不受影响。结构对不上时才退回最小范围重写（保留未变前后缀）。
  */
 export function writeFragment(ydoc: Y.Doc, next: PMNode): void {
   const fragment = ydoc.getXmlFragment(BODY)
   updateYFragment(ydoc, fragment, next, { mapping: new Map(), isOMark: new Map() } as never)
   let got = yXmlFragmentToProseMirrorRootNode(fragment, next.type.schema)
   if (got.eq(next)) return
-  if (got.childCount === next.childCount) {
-    const reference = referenceFragment(next)
-    for (let i = 0; i < next.childCount; i++) {
-      if (!got.child(i).eq(next.child(i))) syncAttributes(fragment.get(i), reference.get(i))
-    }
+  if (got.childCount === next.childCount && fragment.length === next.childCount) {
+    withReferenceFragment(next, reference => {
+      for (let i = 0; i < next.childCount; i++) {
+        if (!got.child(i).eq(next.child(i))) syncAttributes(fragment.get(i), reference.get(i))
+      }
+    })
     got = yXmlFragmentToProseMirrorRootNode(fragment, next.type.schema)
     if (got.eq(next)) return
   }
-  // 兜底：结构本身对不上，整块重写不一致的顶层块
-  if (got.childCount !== next.childCount) {
-    fragment.delete(0, fragment.length)
-    fragment.insert(0, freshElements(next, 0, next.childCount))
+  // 兜底：结构本身对不上，最小范围重写不一致的顶层块
+  if (got.childCount !== next.childCount || fragment.length !== next.childCount) {
+    const minLen = Math.min(got.childCount, next.childCount, fragment.length)
+    let pre = 0
+    while (pre < minLen && got.child(pre).eq(next.child(pre))) pre++
+    let suf = 0
+    while (
+      suf < minLen - pre &&
+      got.child(got.childCount - 1 - suf).eq(next.child(next.childCount - 1 - suf))
+    ) {
+      suf++
+    }
+    const delCount = fragment.length - pre - suf
+    if (delCount > 0) fragment.delete(pre, delCount)
+    if (next.childCount - pre - suf > 0) {
+      fragment.insert(pre, freshElements(next, pre, next.childCount - suf))
+    }
     return
   }
   for (let i = 0; i < next.childCount; i++) {
@@ -102,11 +124,15 @@ export function writeFragment(ydoc: Y.Doc, next: PMNode): void {
   }
 }
 
-/** 目标内容在临时 Y.Doc 里的 Yjs 表示（y-prosemirror 自己的编码，作格式属性的参照）。 */
-function referenceFragment(doc: PMNode): Y.XmlFragment {
+/** 目标内容在临时 Y.Doc 里的 Yjs 表示（y-prosemirror 自己的编码，作格式属性的参照），用完即销毁。 */
+function withReferenceFragment<T>(doc: PMNode, fn: (frag: Y.XmlFragment) => T): T {
   const tmp = new Y.Doc()
-  tmp.transact(() => updateYFragment(tmp, tmp.getXmlFragment(BODY), doc, { mapping: new Map(), isOMark: new Map() } as never))
-  return tmp.getXmlFragment(BODY)
+  try {
+    tmp.transact(() => updateYFragment(tmp, tmp.getXmlFragment(BODY), doc, { mapping: new Map(), isOMark: new Map() } as never))
+    return fn(tmp.getXmlFragment(BODY))
+  } finally {
+    tmp.destroy()
+  }
 }
 
 type YNode = Y.XmlElement | Y.XmlText | Y.XmlHook
@@ -146,7 +172,9 @@ function syncAttributes(live: YNode | undefined, reference: YNode | undefined): 
 function freshElements(doc: PMNode, from: number, to: number): Y.XmlElement[] {
   const nodes: PMNode[] = []
   for (let i = from; i < to; i++) nodes.push(doc.child(i))
-  return referenceFragment(doc.type.create(doc.attrs, nodes)).toArray().map(el => (el as Y.XmlElement).clone())
+  return withReferenceFragment(doc.type.create(doc.attrs, nodes), frag =>
+    frag.toArray().map(el => (el as Y.XmlElement).clone()),
+  )
 }
 
 /** 服务端提交的 Yjs origin（区别于浏览器经协同网关送来的更新）。 */
@@ -193,6 +221,12 @@ export class Documents extends EventEmitter<{ commit: [CommitEvent]; 'commit-det
 
   constructor(readonly store: Store) {
     super()
+    this.setMaxListeners(0)
+  }
+
+  /** 判断文档是否已加载在内存中（供冷索引等只读场景判断，不触发加载）。 */
+  isLoaded(docId: string): boolean {
+    return this.loaded.has(docId)
   }
 
   /** 钉住文档（活跃 WebSocket 连接或 AI 回合期间），增加引用计数，防止空闲驱逐。 */
@@ -375,6 +409,7 @@ export class Documents extends EventEmitter<{ commit: [CommitEvent]; 'commit-det
     if (entry?.um.canUndo()) {
       this.flush(docId)
       while (entry.um.canUndo()) entry.um.undo()
+      if (l.timer) { clearTimeout(l.timer); l.timer = null }
       entry.um.destroy()
       l.turnUndo.delete(turnId)
       this.store.markTurnReverted(turnId, docId)

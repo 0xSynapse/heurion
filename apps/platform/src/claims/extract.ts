@@ -16,7 +16,8 @@ export interface Claim {
   cite_ids: string[]
 }
 
-const NUMERIC = /\b(HR|OR|RR|CI|IQR|SD)\b|\d+(\.\d+)?\s*[%％]|[nN]\s*[=＝]\s*\d+|\b[Pp]\s*[<=＜＝]\s*0?\.\d+|\d+\s*例/
+const NUMERIC = /(?:\b(?:HR|OR|RR|CI|IQR|SD)\b(?=[^\n。！？；!?]*\d))|\d+(\.\d+)?\s*[%％]|[nN]\s*[=＝]\s*\d+|\b[Pp]\s*[<=＜＝]\s*0?\.\d+|\d+\s*例/
+const PLACEHOLDER = /(?:待定|待填|待补充|待确认|TODO|TBD|\[待|【待)/i
 /** 句末：中文句号类，或英文句点 / 问叹号后跟空白或结尾（避免把 0.74 断开）。 */
 const END = /[。！？；!?]|\.(?=\s|$)/
 
@@ -85,7 +86,7 @@ export function extractClaims(doc: PMNode, numbers: Map<string, number>): { clai
       const snippet = runs.map(r => r.trim()).sort((a, b) => b.length - a.length)[0] ?? ''
       const claim: Claim = { claim_id: `k${hash(`${nodeId}|${plain}`)}`, node_id: nodeId, sentence, snippet, cite_ids: cites }
       if (cites.length > 0) claims.push(claim)
-      else if (NUMERIC.test(plain)) unsourced.push(claim)
+      else if (node.type.name !== 'heading' && !PLACEHOLDER.test(plain) && NUMERIC.test(plain)) unsourced.push(claim)
     }
     return false
   })

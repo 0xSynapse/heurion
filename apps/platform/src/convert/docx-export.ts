@@ -1,9 +1,9 @@
-import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
+import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import type { CitationRow, CommentRow } from '../store/db.ts'
 import { citationOrder } from '../views/read.ts'
-import { bodyChildrenRaw } from './docx-import.ts'
+import { bodyChildrenRaw, safeUnzipDocx } from './docx-import.ts'
 
 /**
  * 平台模型 → docx（PLATFORM.md §6 导出）：修补式。
@@ -98,7 +98,7 @@ ${[1, 2, 3, 4, 5, 6].map(heading).join('')}
 function styleIndex(stylesXml: string | null): Map<string, string> {
   const map = new Map<string, string>()
   if (!stylesXml) return map
-  for (const m of stylesXml.matchAll(/<w:style\b[^>]*w:styleId="([^"]+)"[^>]*>[\s\S]*?<w:name w:val="([^"]+)"/g)) {
+  for (const m of stylesXml.matchAll(/<w:style\b[^>]*w:styleId="([^"]+)"[^>]*>(?:(?!<\/w:style>)[\s\S])*?<w:name w:val="([^"]+)"/g)) {
     map.set(m[2]!.toLowerCase(), m[1]!)
     map.set(m[1]!.toLowerCase(), m[1]!)
   }
@@ -138,7 +138,7 @@ const IMAGE_EXT: Record<string, string> = {
 
 export function exportDocx(input: ExportInput): ExportResult {
   const warnings: string[] = []
-  const pkg = new Package(input.pkg ? unzipSync(input.pkg) : template())
+  const pkg = new Package(input.pkg ? safeUnzipDocx(input.pkg) : template())
   const originalXml = pkg.text('word/document.xml')
   const styles = styleIndex(pkg.text('word/styles.xml'))
   const baseline = new Map<string, PMNode>()
@@ -186,7 +186,7 @@ export function exportDocx(input: ExportInput): ExportResult {
 
   // 编号：新列表优先沿用原文件里同类列表的 abstractNum 与段落样式；没有时用平台自己的（ids 9000+）
   let numberingXml = pkg.text('word/numbering.xml')
-  const abstractOf = new Map([...(numberingXml ?? '').matchAll(/<w:num\b[^>]*w:numId="(\d+)"[^>]*>[\s\S]*?<w:abstractNumId w:val="(\d+)"/g)].map(m => [m[1]!, m[2]!]))
+  const abstractOf = new Map([...(numberingXml ?? '').matchAll(/<w:num\b[^>]*w:numId="(\d+)"[^>]*>(?:(?!<\/w:num>)[\s\S])*?<w:abstractNumId w:val="(\d+)"/g)].map(m => [m[1]!, m[2]!]))
   const listTemplate = new Map<string, { abstractId: string; pStyle: string | null }>()
   input.baseline?.descendants(n => {
     if (!/_list$/.test(n.type.name) || listTemplate.has(n.type.name)) return true

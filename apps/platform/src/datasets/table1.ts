@@ -375,9 +375,9 @@ export function welchTTest(group1: number[], group2: number[]): { t: number; df:
 
 /** 多组连续变量比较：单因素方差分析 One-way ANOVA */
 export function oneWayAnova(groups: number[][]): { F: number; df1: number; df2: number; p: number } {
-  const k = groups.length
   const validGroups = groups.filter(g => g.length > 0)
-  if (validGroups.length < 2) return { F: 0, df1: 1, df2: 1, p: 1.0 }
+  const k = validGroups.length
+  if (k < 2) return { F: 0, df1: 1, df2: 1, p: 1.0 }
 
   const totalN = validGroups.reduce((acc, g) => acc + g.length, 0)
   if (totalN <= k) return { F: 0, df1: k - 1, df2: 1, p: 1.0 }
@@ -478,9 +478,9 @@ export function mannWhitneyUTest(group1: number[], group2: number[]): { u: numbe
 
 /** 多组非正态连续变量比较：Kruskal-Wallis 秩和检验 */
 export function kruskalWallisTest(groups: number[][]): { H: number; df: number; p: number } {
-  const k = groups.length
   const validGroups = groups.filter(g => g.length > 0)
-  if (validGroups.length < 2) return { H: 0, df: 1, p: 1.0 }
+  const k = validGroups.length
+  if (k < 2) return { H: 0, df: 1, p: 1.0 }
 
   type Item = { val: number; groupIdx: number }
   const combined: Item[] = []
@@ -1114,7 +1114,8 @@ export function generateTable1FromData(
   mdLines.push('')
 
   // 标头行
-  mdLines.push(`| ${headers.join(' | ')} |`)
+  const escMd = (s: string) => String(s).replace(/\|/g, '\\|')
+  mdLines.push(`| ${headers.map(escMd).join(' | ')} |`)
   // 对齐行：首列左对齐，其余居中
   const alignTokens = headers.map((_, idx) => (idx === 0 ? ':---' : ':---:'))
   mdLines.push(`| ${alignTokens.join(' | ')} |`)
@@ -1138,7 +1139,7 @@ export function generateTable1FromData(
     if (calcSmd) {
       cells.push(row.indent === 0 ? (row.smd_formatted ?? '') : '')
     }
-    mdLines.push(`| ${cells.join(' | ')} |`)
+    mdLines.push(`| ${cells.map(escMd).join(' | ')} |`)
   }
 
   mdLines.push('')

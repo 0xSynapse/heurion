@@ -790,8 +790,32 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
         context: z.record(z.any()).optional().describe('附加参数（如特定检索词、分组变量等）'),
       },
     }, async ({ role, task, doc_id, dataset_id, section, context }) => {
+      if (doc_id) {
+        const accessErr = ctx.check(doc_id, role === 'literature_researcher' ? 'write' : 'read')
+        if (accessErr) return accessErr
+      }
       const active = ctx.activeTurn(doc_id)
-      const targetDocId = doc_id ?? active?.docId
+      let targetDocId = doc_id
+      if (!targetDocId && active?.docId) {
+        const activeRow = store.getDoc(active.docId)
+        let isCopilot = false
+        try {
+          isCopilot = activeRow?.context ? JSON.parse(activeRow.context)?.kind === 'copilot' : false
+        } catch {}
+        if (!isCopilot || role === 'fact_checker') {
+          const checkPerm = role === 'literature_researcher' ? 'write' : 'read'
+          if (!ctx.check(active.docId, checkPerm)) {
+            targetDocId = active.docId
+          } else if (role === 'fact_checker') {
+            return ctx.check(active.docId, 'read')!
+          }
+        }
+      }
+
+      if (deps.subagents && !deps.subagents.access && deps.access) {
+        deps.subagents.access = deps.access
+      }
+
       const subagentId = 'sub_' + randomUUID().replace(/-/g, '').slice(0, 8)
       const roleLabel = SUBAGENT_ROLE_LABELS[role] ?? role
 
@@ -871,6 +895,19 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
     if (origin?.kind !== 'cohort') return null
     if (!deps.patients) return fail('patients_unavailable', '患者模块未启用')
     try { deps.patients.assertAi(aiActor()); return null } catch (err) { return patientFail(err) }
+  }
+
+  if (deps.subagents) {
+    deps.subagents.cohortGuard = origin => {
+      const blocked = cohortGuard(origin ?? null)
+      if (!blocked) return null
+      try {
+        const parsed = JSON.parse(blocked.content[0]?.text ?? '{}')
+        return parsed.message ?? '患者队列数据受机构隐私策略保护'
+      } catch {
+        return '患者队列数据受机构隐私策略保护'
+      }
+    }
   }
 
   server.registerTool('dataset_list', {
@@ -957,17 +994,18 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
       })
 
       let insertResult: { doc_id: string; rev: number; inserted: boolean } | undefined
-      if (doc_id && anchor_id) {
-        const docRow = store.getDoc(doc_id)
-        if (docRow && (!access || access.canDoc(claims.u, docRow, 'write'))) {
+      if (doc_id && anchor_id && !ctx.check(doc_id, 'write')) {
+        try {
+          const mode = ctx.activeTurn(doc_id)?.mode === 'suggest' ? 'suggest' : 'apply'
           const edit = deps.ops.edit({
             doc_id,
-            base_rev: docRow.rev,
-            mode: 'apply',
+            base_rev: deps.docs.rev(doc_id),
+            mode,
             ops: [{ op: 'insert_after', anchor_id, markdown: res.markdown }],
           }, { actor: 'ai', turnId: ctx.turnId })
+          ctx.touch(doc_id)
           insertResult = { doc_id, rev: edit.rev, inserted: true }
-        }
+        } catch {}
       }
 
       return json({
@@ -1013,18 +1051,19 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
       })
 
       let insertResult: { doc_id: string; rev: number; inserted: boolean } | undefined
-      if (doc_id && anchor_id) {
-        const docRow = store.getDoc(doc_id)
-        if (docRow && (!access || access.canDoc(claims.u, docRow, 'write'))) {
+      if (doc_id && anchor_id && !ctx.check(doc_id, 'write')) {
+        try {
           const insertText = `${res.markdown_table}\n\n${res.narrative}`
+          const mode = ctx.activeTurn(doc_id)?.mode === 'suggest' ? 'suggest' : 'apply'
           const edit = deps.ops.edit({
             doc_id,
-            base_rev: docRow.rev,
-            mode: 'apply',
+            base_rev: deps.docs.rev(doc_id),
+            mode,
             ops: [{ op: 'insert_after', anchor_id, markdown: insertText }],
           }, { actor: 'ai', turnId: ctx.turnId })
+          ctx.touch(doc_id)
           insertResult = { doc_id, rev: edit.rev, inserted: true }
-        }
+        } catch {}
       }
 
       return json({
@@ -1075,22 +1114,23 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
       })
 
       let insertResult: { doc_id: string; rev: number; inserted: boolean } | undefined
-      if (doc_id) {
-        const docRow = store.getDoc(doc_id)
-        if (docRow && (!access || access.canDoc(claims.u, docRow, 'write'))) {
+      if (doc_id && !ctx.check(doc_id, 'write')) {
+        try {
           const docNode = deps.docs.get(doc_id)
           const targetAnchor = anchor_id || (docNode && docNode.childCount > 0 ? (docNode.lastChild?.attrs.id as string) : undefined)
           if (targetAnchor) {
             const insertText = res.publication_report_markdown
+            const mode = ctx.activeTurn(doc_id)?.mode === 'suggest' ? 'suggest' : 'apply'
             const edit = deps.ops.edit({
               doc_id,
-              base_rev: docRow.rev,
-              mode: 'apply',
+              base_rev: deps.docs.rev(doc_id),
+              mode,
               ops: [{ op: 'insert_after', anchor_id: targetAnchor, markdown: insertText }],
             }, { actor: 'ai', turnId: ctx.turnId })
+            ctx.touch(doc_id)
             insertResult = { doc_id, rev: edit.rev, inserted: true }
           }
-        }
+        } catch {}
       }
 
       return json({
@@ -1550,7 +1590,7 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
     if (turn && turn.memory === false) return fail('memory_off', '本轮不使用记忆', { hint: '告诉用户本轮关了记忆；需要整理时请用户打开记忆后再说。' })
     try {
       const r = await deps.evolution.review(claims.u)
-      for (const m of r.proposed) deps.turns.notify(claims.u, { type: 'memory', result: 'proposed', memory: m })
+      for (const m of r.proposed) ctx.notify({ type: 'memory', result: 'proposed', memory: m })
       const KIND = { merge: '合并', update: '改写', archive: '归档' } as const
       return json({
         result: 'reviewed',
@@ -1659,13 +1699,14 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims): McpServer {
   if (!deps.access) { deps.access = new Access(store); deps.access.docText = id => JSON.stringify(docs.get(id).toJSON()) }
   if (deps.datasets && !deps.datasets.access) deps.datasets.access = deps.access
   if (deps.images && !deps.images.access) deps.images.access = deps.access
+  if (deps.subagents && !deps.subagents.access) deps.subagents.access = deps.access
   const ctx = new Ctx(deps, claims)
   const server = new McpServer({ name: 'heurion', version: '0.1.0' }, { instructions: INSTRUCTIONS })
 
   registerCanvasTools(server, ctx)
   registerHealthcareTools(server, ctx)
   registerImagingTools(server, { store, claims, patients: deps.patients, studies: deps.studies, datasets: deps.datasets, cohort: deps.cohort })
-  registerAdminTools(server, { store, turns: deps.turns, invoke: deps.invoke, workspaceDir: deps.workspaceDir }, claims.u)
+  registerAdminTools(server, { store, turns: deps.turns, invoke: deps.invoke, workspaceDir: deps.workspaceDir, generation: claims.s }, claims.u)
   return server
 }
 

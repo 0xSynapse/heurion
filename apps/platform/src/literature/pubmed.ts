@@ -33,7 +33,7 @@ export class PubMedClient {
   /** NCBI 无 API key 时限 3 次/秒：429 按退避重试。 */
   private async get(url: string): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
-      const res = await this.fetchImpl(url)
+      const res = await this.fetchImpl(url, { signal: AbortSignal.timeout(15_000) })
       if (res.status !== 429 || attempt >= 3) return res
       await new Promise(r => setTimeout(r, 400 * (attempt + 1)))
     }
@@ -101,7 +101,7 @@ function toArticle(d: SummaryDoc): Article {
   return {
     pmid: d.uid,
     doi: doi ? doi.toLowerCase() : null,
-    title: d.title ?? '',
+    title: decodeXmlText(d.title ?? ''),
     authors: (d.authors ?? []).map(a => a.name),
     journal: d.source ?? d.fulljournalname ?? '',
     year: (d.pubdate ?? '').slice(0, 4),

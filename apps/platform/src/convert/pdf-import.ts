@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { DOMParser, type Element as XElement, type Node as XNode } from '@xmldom/xmldom'
 import type { Mark as PMMark, Node as PMNode } from 'prosemirror-model'
@@ -189,8 +189,11 @@ export async function importPdfPoppler(bytes: Uint8Array, filename: string, opts
     } catch (err) {
       throw new PdfImportError(`无法解析这个 PDF：${(err as Error).message.slice(0, 160)}`)
     }
+    const rootDir = resolve(dir)
     const pages = parsePdfXml(xml, src => {
-      const path = src.startsWith('/') ? src : join(dir, src)
+      if (!src) return null
+      const path = resolve(rootDir, src)
+      if (!path.startsWith(rootDir + sep)) return null
       if (!existsSync(path)) return null
       return { bytes: new Uint8Array(readFileSync(path)), mime: /\.jpe?g$/i.test(path) ? 'image/jpeg' : 'image/png' }
     })

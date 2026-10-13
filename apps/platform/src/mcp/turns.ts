@@ -21,6 +21,7 @@ export type TurnNotice =
 
 export interface ActiveTurn {
   turnId: string
+  id?: string
   /** 回合所在文档（项目记忆按它找项目）。 */
   docId?: string
   /** 本回合能不能用记忆（实例开启、用户没暂停、本轮没关）。 */
@@ -38,20 +39,43 @@ export class TurnRegistry {
   private readonly byUser = new Map<string, ActiveTurn>()
   private readonly byGen = new Map<string, ActiveTurn>()
   private readonly byDoc = new Map<string, ActiveTurn>()
+  private readonly genOwners = new Map<string, string>()
 
   begin(userId: string, turn: ActiveTurn, generation?: string): void {
+    if (!turn.id) turn.id = turn.turnId
     this.byUser.set(userId, turn)
-    if (generation) this.byGen.set(generation, turn)
+    if (generation) {
+      this.byGen.set(generation, turn)
+      this.genOwners.set(generation, userId)
+    }
     if (turn.docId) this.byDoc.set(`${userId}#${turn.docId}`, turn)
   }
 
   end(userId: string, turnId: string): void {
-    if (this.byUser.get(userId)?.turnId === turnId) this.byUser.delete(userId)
+    const matches = (t: ActiveTurn | undefined) => !!t && (t.turnId === turnId || t.id === turnId)
     for (const [k, t] of this.byGen) {
-      if (t.turnId === turnId) this.byGen.delete(k)
+      if (matches(t)) {
+        this.byGen.delete(k)
+        this.genOwners.delete(k)
+      }
     }
     for (const [k, t] of this.byDoc) {
-      if (t.turnId === turnId) this.byDoc.delete(k)
+      if (matches(t)) this.byDoc.delete(k)
+    }
+    if (matches(this.byUser.get(userId))) {
+      this.byUser.delete(userId)
+      for (const [gen, t] of this.byGen) {
+        if (this.genOwners.get(gen) === userId) {
+          this.byUser.set(userId, t)
+          return
+        }
+      }
+      for (const [k, t] of this.byDoc) {
+        if (k.startsWith(`${userId}#`)) {
+          this.byUser.set(userId, t)
+          return
+        }
+      }
     }
   }
 

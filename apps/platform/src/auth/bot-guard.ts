@@ -59,7 +59,7 @@ export class BotGuard {
     const salt = `${randomBytes(12).toString('hex')}?issued=${now}&expires=${now + this.ttl}`
     const n = randomBytes(4).readUInt32BE() % (maxnumber + 1)
     const challenge = sha256(salt + n)
-    return { algorithm: 'SHA-256', challenge, salt, maxnumber, signature: this.sign(challenge) }
+    return { algorithm: 'SHA-256', challenge, salt, maxnumber, signature: this.sign(`${challenge}:${salt}`) }
   }
 
   /** 核对；不通过抛 BotError（并记一次来源失败）。 */
@@ -68,17 +68,24 @@ export class BotGuard {
       if (typeof honeypot === 'string' && honeypot.trim() !== '') throw new BotError('honeypot')
       const { challenge, salt, number, signature } = solution ?? {}
       if (!challenge || !salt || typeof number !== 'number' || !signature) throw new BotError('missing')
-      if (!this.signatureOk(challenge, signature)) throw new BotError('signature')
+      if (!this.signatureOk(`${challenge}:${salt}`, signature)) throw new BotError('signature')
       const params = new URLSearchParams(salt.split('?')[1] ?? '')
       const issued = Number(params.get('issued'))
       const expires = Number(params.get('expires'))
-      if (!issued || !expires || now > expires) throw new BotError('expired')
+      if (!issued || !expires || now > expires || expires > now + this.ttl + 5000 || issued > now + 5000) throw new BotError('expired')
       if (now - issued < this.minDelay) throw new BotError('too_fast')
       if (sha256(salt + number) !== challenge) throw new BotError('wrong')
       this.prune(now)
       if (this.used.has(signature)) throw new BotError('replay')
       this.used.set(signature, expires)
     } catch (err) {
+      if (this.failures.size >= 5000) {
+        for (const [k, v] of this.failures) if (v.reset <= now) this.failures.delete(k)
+        if (this.failures.size >= 5000) {
+          const oldest = this.failures.keys().next().value
+          if (oldest !== undefined) this.failures.delete(oldest)
+        }
+      }
       const f = this.failures.get(source)
       if (!f || f.reset <= now) this.failures.set(source, { count: 1, reset: now + 60 * 60_000 })
       else f.count++
@@ -86,12 +93,12 @@ export class BotGuard {
     }
   }
 
-  private sign(challenge: string): string {
-    return createHmac('sha256', `bot-guard:${this.opts.secret}`).update(challenge).digest('hex')
+  private sign(payload: string): string {
+    return createHmac('sha256', `bot-guard:${this.opts.secret}`).update(payload).digest('hex')
   }
 
-  private signatureOk(challenge: string, signature: string): boolean {
-    const a = Buffer.from(this.sign(challenge))
+  private signatureOk(payload: string, signature: string): boolean {
+    const a = Buffer.from(this.sign(payload))
     const b = Buffer.from(signature)
     return a.length === b.length && timingSafeEqual(a, b)
   }

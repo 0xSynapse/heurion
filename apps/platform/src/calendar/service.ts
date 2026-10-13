@@ -106,15 +106,16 @@ export class CalendarService {
   }
 
   /** 首次访问用户初始化种子日程 */
-  private ensureSeed(userId: string, username: string): void {
+  private ensureSeed(userId: string, _username: string): void {
+    if (this.store.getUserSetting(userId, 'calendar_seeded') === '1') return
     const existing = this.store.listCalendarEvents(userId)
-    if (existing.length > 0) return
+    if (existing.length > 0) {
+      this.store.setUserSetting(userId, 'calendar_seeded', '1')
+      return
+    }
 
     // 基于当前日期动态安排未来几天的合理日程
     const now = new Date()
-    const y = now.getFullYear()
-    const m = String(now.getMonth() + 1).padStart(2, '0')
-    const d = now.getDate()
 
     // 辅助格式化时间
     const dateStr = (offsetDays: number, hour: number, minute: number) => {
@@ -218,5 +219,6 @@ export class CalendarService {
     for (const item of seedEvents) {
       this.store.createCalendarEvent(item)
     }
+    this.store.setUserSetting(userId, 'calendar_seeded', '1')
   }
 }

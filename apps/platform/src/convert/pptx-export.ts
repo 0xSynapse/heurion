@@ -1,11 +1,11 @@
-import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
+import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { DECK_THEMES } from '../model/deck-themes.ts'
 import { chartWorkbook, newChartXml, patchChart, readChart, type ChartData } from './pptx-chart.ts'
 import type { CitationRow } from '../store/db.ts'
 import { citationOrder } from '../views/read.ts'
-import { childrenRaw } from './pptx-import.ts'
+import { childrenRaw, safeUnzipPptx } from './pptx-import.ts'
 
 /**
  * deck 模型 → pptx（PLATFORM.md §7）：修补式，以原始文件包为底座。
@@ -287,7 +287,7 @@ function newShapeXml(shape: PMNode, nvId: number, numbers: Map<string, number>, 
 
 export function exportPptx(input: PptxExportInput): { bytes: Uint8Array; warnings: string[] } {
   const warnings: string[] = []
-  const files = unzipSync(input.pkg)
+  const files = safeUnzipPptx(input.pkg)
   const text = (name: string) => files[name] ? strFromU8(files[name]!) : ''
   const put = (name: string, content: string) => { files[name] = strToU8(content) }
   const order = citationOrder(input.doc)
@@ -404,7 +404,7 @@ export function exportPptx(input: PptxExportInput): { bytes: Uint8Array; warning
   input.doc.forEach(slide => {
     const before = baseline.get(slide.attrs.id as string)
     let part = slide.attrs.part as string | null
-    if (part && files[part]) {
+    if (part && /^ppt\/slides\/slide\d+\.xml$/.test(part) && files[part]) {
       keptParts.add(part)
       if (!(before && before.eq(slide))) {
         const r = slideRels(part, text(part.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels')) || EMPTY_RELS)
@@ -434,12 +434,13 @@ export function exportPptx(input: PptxExportInput): { bytes: Uint8Array; warning
   })
 
   // 删掉的页：移除部件、关系与内容类型
+  const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   for (const [part, rid] of relOf) {
     if (keptParts.has(part)) continue
     delete files[part]
     delete files[part.replace(/slides\/(slide\d+\.xml)$/, 'slides/_rels/$1.rels')]
-    presRels = presRels.replace(new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*?(?:/>|>\\s*</Relationship>)`), '')
-    contentTypes = contentTypes.replace(new RegExp(`<Override PartName="/${part.replace(/[.]/g, '\\.')}"[^>]*?(?:/>|>\\s*</Override>)`), '')
+    presRels = presRels.replace(new RegExp(`<Relationship\\b[^>]*Id="${escRe(rid)}"[^>]*?(?:/>|>\\s*</Relationship>)`), '')
+    contentTypes = contentTypes.replace(new RegExp(`<Override PartName="/${escRe(part)}"[^>]*?(?:/>|>\\s*</Override>)`), '')
   }
 
   // 页序与页数都没变时不重写列表（原文件的写法可能带扩展属性）

@@ -7,6 +7,7 @@ export function makeComplete(opts: { upstream: string; apiKey: string; model: st
   return async (system: string, user: string): Promise<string> => {
     let last: Error | null = null
     for (let attempt = 0; attempt < 3; attempt++) {
+      let noRetry = false
       try {
         const res = await fetch(opts.upstream.replace(/\/$/, '') + '/messages', {
           method: 'POST',
@@ -14,11 +15,15 @@ export function makeComplete(opts: { upstream: string; apiKey: string; model: st
           body: JSON.stringify({ model: opts.model, max_tokens: 8000, temperature: 0, system, messages: [{ role: 'user', content: user }] }),
           signal: AbortSignal.timeout(opts.timeoutMs ?? 180_000),
         })
-        if (!res.ok) throw new Error(`模型服务 ${res.status}：${(await res.text()).slice(0, 200)}`)
+        if (!res.ok) {
+          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 404) noRetry = true
+          throw new Error(`模型服务 ${res.status}：${(await res.text()).slice(0, 200)}`)
+        }
         const body = await res.json() as { content?: Array<{ type: string; text?: string }> }
         return (body.content ?? []).filter(c => c.type === 'text').map(c => c.text ?? '').join('')
       } catch (err) {
         last = err as Error
+        if (noRetry) break
         if (attempt < 2) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)))
       }
     }

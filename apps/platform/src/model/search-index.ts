@@ -1,4 +1,4 @@
-import type { Documents } from './runtime.ts'
+import { schemaFor, stateToDoc, type Documents } from './runtime.ts'
 
 /**
  * 文档全文索引（R2）：提交后防抖更新（同一文档 2 秒内多次提交只索引一次）；启动时补齐没有索引的文档。
@@ -22,13 +22,35 @@ export class SearchIndex {
 
   schedule(docId: string): void {
     clearTimeout(this.timers.get(docId))
-    this.timers.set(docId, setTimeout(() => { this.timers.delete(docId); this.reindex(docId) }, this.delayMs))
+    const timer = setTimeout(() => { this.timers.delete(docId); this.reindex(docId) }, this.delayMs)
+    timer.unref?.()
+    this.timers.set(docId, timer)
   }
 
   reindex(docId: string): void {
     const row = this.docs.store.getDoc(docId)
-    if (!row) { this.docs.store.unindexDoc(docId); return }
-    const doc = this.docs.get(docId)
+    if (!row || row.deleted_at) { this.docs.store.unindexDoc(docId); return }
+    if (row.context) {
+      try {
+        if (JSON.parse(row.context)?.kind === 'copilot') {
+          this.docs.store.unindexDoc(docId)
+          return
+        }
+      } catch { /* ignore */ }
+    }
+    let doc
+    if (this.docs.isLoaded(docId)) {
+      doc = this.docs.get(docId)
+    } else {
+      const snap = (row as { snapshot?: string | null }).snapshot
+      if (snap) {
+        try { doc = schemaFor(row.kind).nodeFromJSON(JSON.parse(snap)) } catch { /* fallback */ }
+      }
+      if (!doc) {
+        const state = this.docs.store.getState(docId)
+        doc = state ? stateToDoc(state, row.kind) : this.docs.get(docId)
+      }
+    }
     this.docs.store.indexDoc(row, doc.textBetween(0, doc.content.size, '\n', ' '))
   }
 

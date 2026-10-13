@@ -57,6 +57,7 @@ export class FullTextClient {
       try {
         const xmlUrl = `${PMC_OPENDATA}/${meta.xml_url.replace(/^s3:\/\/pmc-oa-opendata\//, '').split('?')[0]}`
         const res = await this.fetchImpl(xmlUrl, { signal: AbortSignal.timeout(35_000) })
+        if (res.status === 429 || res.status >= 500) throw new Error(`HTTP ${res.status}`)
         if (res.ok) {
           const xmlRaw = await res.text()
           const parsed = extractFromPmcXml(xmlRaw)
@@ -64,7 +65,8 @@ export class FullTextClient {
             return { source: 'pmc', url: `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid}/`, license: meta.license_code ?? null, text: parsed }
           }
         }
-      } catch {
+      } catch (err) {
+        if (err instanceof Error && /^HTTP (429|5\d\d)$/.test(err.message)) throw err
         // XML 解析失败时平滑降级到下方 text_url
       }
     }
@@ -72,6 +74,7 @@ export class FullTextClient {
     if (!meta.text_url) return null
     const url = `${PMC_OPENDATA}/${meta.text_url.replace(/^s3:\/\/pmc-oa-opendata\//, '').split('?')[0]}`
     const res = await this.fetchImpl(url, { signal: AbortSignal.timeout(30_000) })
+    if (res.status === 429 || res.status >= 500) throw new Error(`HTTP ${res.status}`)
     if (!res.ok) return null
     return { source: 'pmc', url: `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid}/`, license: meta.license_code ?? null, text: await res.text() }
   }
@@ -82,7 +85,10 @@ export class FullTextClient {
     const pdf = u?.best_oa_location?.url_for_pdf
     if (!pdf) return null
     const res = await this.fetchImpl(pdf, { signal: AbortSignal.timeout(45_000) })
+    if (res.status === 429 || res.status >= 500) throw new Error(`HTTP ${res.status}`)
     if (!res.ok || !(res.headers.get('content-type') ?? '').includes('pdf')) return null
+    const contentLen = Number(res.headers.get('content-length') ?? 0)
+    if (contentLen > 40 * 1024 * 1024) return null
     const bytes = new Uint8Array(await res.arrayBuffer())
     if (bytes.length > 40 * 1024 * 1024) return null
     const text = (await pdfPages(bytes)).join('\n\n')

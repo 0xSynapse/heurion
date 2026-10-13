@@ -1,4 +1,5 @@
 import { Schema, type DOMOutputSpec, type Node as PMNode } from 'prosemirror-model'
+import { sanitizeHref } from './schema.ts'
 
 /**
  * deck 插件的模型（PLATFORM.md §7）：幻灯片 → 形状 → 段落。与 doc 共用平台基础设施
@@ -94,7 +95,7 @@ export const deckSchema = new Schema({
     sup: { excludes: 'sub', toDOM: () => ['sup', 0] },
     sub: { excludes: 'sup', toDOM: () => ['sub', 0] },
     code: { toDOM: () => ['code', 0] },
-    link: { attrs: { href: {} }, inclusive: false, toDOM: m => ['a', { href: m.attrs.href as string }, 0] },
+    link: { attrs: { href: {} }, inclusive: false, toDOM: m => ['a', { href: sanitizeHref(m.attrs.href) }, 0] },
     comment: { attrs: { thread: {} }, excludes: '', inclusive: false, toDOM: m => ['mark', { class: 'comment', 'data-thread': m.attrs.thread as string }, 0] },
     /** 原始文字段格式（a:rPr，字号、颜色、字体…），导出时沿用。 */
     rpr: { attrs: { xml: {} }, toDOM: () => ['span', 0] },

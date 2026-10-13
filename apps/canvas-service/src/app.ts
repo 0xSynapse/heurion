@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { getRequestListener } from '@hono/node-server'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -501,6 +502,7 @@ export function createCanvasApp(deps: CanvasAppDeps) {
 /** 创建包含 MCP 端点与 HTTP API 的完整 Node.js Request Handler */
 export function buildCanvasHandler(deps: CanvasAppDeps) {
   const app = createCanvasApp(deps)
+  const listener = getRequestListener(app.fetch)
   const turnRegistry = new TurnRegistry()
   const canvasDeps: CanvasMcpDeps = {
     docs: deps.docs,
@@ -544,8 +546,6 @@ export function buildCanvasHandler(deps: CanvasAppDeps) {
     }
 
     // 转交 Hono 处理
-    const { getRequestListener } = await import('@hono/node-server')
-    const listener = getRequestListener(app.fetch)
-    listener(req, res)
+    return listener(req, res)
   }
 }

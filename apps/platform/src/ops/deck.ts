@@ -193,7 +193,7 @@ export function deckTargetIds(op: DeckOp): string[] {
 
 export function deckOpTexts(op: DeckOp): string[] {
   switch (op.op) {
-    case 'add_slide': return [op.title ?? '', op.body ?? '']
+    case 'add_slide': return [op.title ?? '', op.body ?? '', op.body2 ?? '']
     case 'set_text': case 'add_shape': case 'set_notes': return [op.markdown ?? '']
     case 'set_paragraphs': return op.paragraphs.map(p => p.text)
     case 'add_table': return op.rows.flat()

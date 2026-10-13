@@ -517,8 +517,20 @@ function setTextStyle(tr: Transform, op: Extract<DocOp, { op: 'set_text_style' }
   const target = find(tr, op.id)
   if (!target.node.isTextblock) throw new OpError('invalid_structure', `set_text_style 只能用于段落或标题，${op.id} 是 ${target.node.type.name}`)
 
-  const from = target.pos + 1 + (op.range ? Math.max(0, op.range.from) : 0)
-  const to = target.pos + 1 + (op.range ? Math.min(target.node.content.size, op.range.to) : target.node.content.size)
+  let from: number
+  let to: number
+  if (op.range) {
+    const map = textMap(target.node, target.pos)
+    if (map.text.length === 0 || op.range.from >= op.range.to || op.range.from >= map.text.length) return [op.id]
+    const startIdx = Math.max(0, op.range.from)
+    const endIdx = Math.min(map.text.length, op.range.to) - 1
+    if (startIdx > endIdx) return [op.id]
+    from = map.from[startIdx]!
+    to = map.to[endIdx]!
+  } else {
+    from = target.pos + 1
+    to = target.pos + 1 + target.node.content.size
+  }
   if (from >= to) return [op.id]
 
   if (op.bold !== undefined) {
@@ -530,12 +542,36 @@ function setTextStyle(tr: Transform, op: Extract<DocOp, { op: 'set_text_style' }
     else tr.removeMark(from, to, schema.marks.italic!)
   }
   if (op.font_family || op.size || op.color) {
-    const sizeStr = op.size !== undefined ? (typeof op.size === 'number' ? `${op.size}px` : op.size) : null
-    tr.addMark(from, to, schema.marks.text_style!.create({
-      font_family: op.font_family ?? null,
-      font_size: sizeStr,
-      color: op.color ?? null,
-    }))
+    const sizeStr = op.size !== undefined ? (typeof op.size === 'number' ? `${op.size}px` : op.size) : undefined
+    const textStyleType = schema.marks.text_style!
+    const spans: Array<{ from: number; to: number; attrs: Record<string, unknown> }> = []
+    tr.doc.nodesBetween(from, to, (node, pos) => {
+      if (!node.isText) return
+      const nFrom = Math.max(from, pos)
+      const nTo = Math.min(to, pos + node.nodeSize)
+      if (nFrom >= nTo) return
+      const existing = textStyleType.isInSet(node.marks)
+      spans.push({
+        from: nFrom,
+        to: nTo,
+        attrs: {
+          font_family: op.font_family ?? (existing?.attrs.font_family as string | null) ?? null,
+          font_size: sizeStr ?? (existing?.attrs.font_size as string | null) ?? null,
+          color: op.color ?? (existing?.attrs.color as string | null) ?? null,
+        },
+      })
+    })
+    if (spans.length > 0) {
+      for (const s of spans) {
+        tr.addMark(s.from, s.to, textStyleType.create(s.attrs))
+      }
+    } else {
+      tr.addMark(from, to, textStyleType.create({
+        font_family: op.font_family ?? null,
+        font_size: sizeStr ?? null,
+        color: op.color ?? null,
+      }))
+    }
   }
   return [op.id]
 }

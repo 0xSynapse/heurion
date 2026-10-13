@@ -34,6 +34,17 @@ function domAttrs(node: PMNode, extra: Record<string, string | null | undefined>
 const textAlign = (node: PMNode) => node.attrs.align ? `text-align:${node.attrs.align}` : null
 const styleClass = (node: PMNode) => node.attrs.style ? `style-${String(node.attrs.style).replace(/\s+/g, '-')}` : null
 
+export function isSafeHref(raw: unknown): boolean {
+  if (typeof raw !== 'string') return false
+  const cleaned = raw.replace(/[\u0000-\u0020]+/g, '')
+  return Boolean(cleaned) && !/^(?:javascript|vbscript|data):/i.test(cleaned)
+}
+
+export function sanitizeHref(raw: unknown): string {
+  const s = typeof raw === 'string' ? raw.trim() : ''
+  return isSafeHref(s) ? s : '#'
+}
+
 export const schema = new Schema({
   nodes: {
     doc: { content: 'block+' },
@@ -146,8 +157,14 @@ export const schema = new Schema({
     link: {
       attrs: { href: {} },
       inclusive: false,
-      parseDOM: [{ tag: 'a[href]', getAttrs: dom => ({ href: (dom as HTMLElement).getAttribute('href') }) }],
-      toDOM: mark => ['a', { href: mark.attrs.href as string, target: '_blank', rel: 'noopener' }, 0],
+      parseDOM: [{
+        tag: 'a[href]',
+        getAttrs: dom => {
+          const href = (dom as HTMLElement).getAttribute('href')
+          return isSafeHref(href) ? { href } : false
+        },
+      }],
+      toDOM: mark => ['a', { href: sanitizeHref(mark.attrs.href), target: '_blank', rel: 'noopener' }, 0],
     },
     /** 评论锚点：同一段文字可同时挂多条线程。 */
     comment: {

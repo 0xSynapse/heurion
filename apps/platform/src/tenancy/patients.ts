@@ -201,6 +201,25 @@ class TenantPatientDb {
     return `P-${String(row.value).padStart(4, '0')}`
   }
 
+  private savepointLevel = 0
+
+  transaction<T>(fn: () => T): T {
+    const sp = `sp_${this.savepointLevel + 1}`
+    this.db.exec(`SAVEPOINT ${sp}`)
+    this.savepointLevel++
+    try {
+      const res = fn()
+      this.db.exec(`RELEASE SAVEPOINT ${sp}`)
+      return res
+    } catch (err) {
+      this.db.exec(`ROLLBACK TO SAVEPOINT ${sp}`)
+      this.db.exec(`RELEASE SAVEPOINT ${sp}`)
+      throw err
+    } finally {
+      this.savepointLevel--
+    }
+  }
+
   close(): void { this.db.close() }
 }
 
@@ -571,44 +590,46 @@ export class PatientService {
     this.noAiReview(a, c, '纳入本院')
     if (c.tenantKind === 'personal') throw new PatientError('personal', '纳入本院只在医院端', 400)
     const view = this.sharedView(src.tenantId, src.patientId, src.scope)
-    const p = this.create(a, { sex: view.sex, birth_year: view.birth_year, tags: view.tags })
-    const origin = `share:${src.shareId}`
-    const srcDb = this.dbFor(src.tenantId)
-    const recordMap = new Map<string, string>()
-    for (const r of view.records) {
-      let fid: string | null = null
-      if (r.file_id) {
-        const f = srcDb.db.prepare('SELECT * FROM files WHERE id = ?').get(r.file_id) as { id: string; name_enc: string; mime: string; size: number; sha256: string } | undefined
-        if (f && existsSync(join(srcDb.files, f.id))) {
-          fid = rid('pf')
-          const bytes = this.keys.decrypt(src.tenantId, readFileSync(join(srcDb.files, f.id)))
-          writeFileSync(join(c.db.files, fid), this.keys.encrypt(c.tenantId, bytes))
-          c.db.db.prepare('INSERT INTO files (id, patient_id, name_enc, mime, size, sha256, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-            .run(fid, p.id, this.keys.encryptText(c.tenantId, this.keys.decryptText(src.tenantId, f.name_enc) ?? 'report')!, f.mime, f.size, f.sha256, a.userId, now())
+    return c.db.transaction(() => {
+      const p = this.create(a, { sex: view.sex, birth_year: view.birth_year, tags: view.tags })
+      const origin = `share:${src.shareId}`
+      const srcDb = this.dbFor(src.tenantId)
+      const recordMap = new Map<string, string>()
+      for (const r of view.records) {
+        let fid: string | null = null
+        if (r.file_id) {
+          const f = srcDb.db.prepare('SELECT * FROM files WHERE id = ?').get(r.file_id) as { id: string; name_enc: string; mime: string; size: number; sha256: string } | undefined
+          if (f && existsSync(join(srcDb.files, f.id))) {
+            fid = rid('pf')
+            const bytes = this.keys.decrypt(src.tenantId, readFileSync(join(srcDb.files, f.id)))
+            writeFileSync(join(c.db.files, fid), this.keys.encrypt(c.tenantId, bytes))
+            c.db.db.prepare('INSERT INTO files (id, patient_id, name_enc, mime, size, sha256, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+              .run(fid, p.id, this.keys.encryptText(c.tenantId, this.keys.decryptText(src.tenantId, f.name_enc) ?? 'report')!, f.mime, f.size, f.sha256, a.userId, now())
+          }
         }
+        const srcRec = srcDb.db.prepare('SELECT text_enc, report_time FROM records WHERE id = ?').get(r.id) as { text_enc: string | null; report_time: string | null }
+        const text = this.keys.decryptText(src.tenantId, srcRec.text_enc)
+        const id = rid('rc')
+        c.db.db.prepare(`INSERT INTO records (id, patient_id, kind, title, report_date, report_time, file_id, status, text_enc, extraction, extraction_note, created_by, created_at, confirmed_by, confirmed_at, origin)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, 'skipped', ?, ?, ?, ?, ?, ?)`)
+          .run(id, p.id, r.kind, r.title, r.report_date, srcRec.report_time, fid, this.keys.encryptText(c.tenantId, text), '来自知家家庭分享（家人已确认）', a.userId, now(), a.userId, now(), origin)
+        recordMap.set(r.id, id)
       }
-      const srcRec = srcDb.db.prepare('SELECT text_enc, report_time FROM records WHERE id = ?').get(r.id) as { text_enc: string | null; report_time: string | null }
-      const text = this.keys.decryptText(src.tenantId, srcRec.text_enc)
-      const id = rid('rc')
-      c.db.db.prepare(`INSERT INTO records (id, patient_id, kind, title, report_date, report_time, file_id, status, text_enc, extraction, extraction_note, created_by, created_at, confirmed_by, confirmed_at, origin)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, 'skipped', ?, ?, ?, ?, ?, ?)`)
-        .run(id, p.id, r.kind, r.title, r.report_date, srcRec.report_time, fid, this.keys.encryptText(c.tenantId, text), '来自知家家庭分享（家人已确认）', a.userId, now(), a.userId, now(), origin)
-      recordMap.set(r.id, id)
-    }
-    const ins = c.db.db.prepare(`INSERT INTO labs (id, patient_id, record_id, test_key, test_name, value_num, value_text, unit, ref_low, ref_high, ref_text, flag, collected_on, collected_at, status, source, locator, created_by, created_at, confirmed_by, confirmed_at, origin)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?)`)
-    for (const l of view.labs) {
-      const rec = l.record_id ? recordMap.get(l.record_id) ?? null : null
-      ins.run(rid('lb'), p.id, rec, l.test_key, l.test_name, l.value_num, l.value_text, l.unit, l.ref_low, l.ref_high, l.ref_text, l.flag, l.collected_on, l.collected_at,
-        // 有报告原件的 → share；家人手工录入（没有原件）的仍标 manual
-        rec || l.source !== 'manual' ? 'share' : 'manual', l.locator ? JSON.stringify(l.locator) : null, a.userId, now(), a.userId, now(), origin)
-    }
-    for (const d of view.documents) {
-      const id = copyDoc(d.doc_id, d.kind)
-      if (id) this.linkDoc({ ...a, via: 'user' }, p.id, id, 'other')
-    }
-    this.log(c, a, p.id, 'import_share', src.shareId)
-    return p
+      const ins = c.db.db.prepare(`INSERT INTO labs (id, patient_id, record_id, test_key, test_name, value_num, value_text, unit, ref_low, ref_high, ref_text, flag, collected_on, collected_at, status, source, locator, created_by, created_at, confirmed_by, confirmed_at, origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?)`)
+      for (const l of view.labs) {
+        const rec = l.record_id ? recordMap.get(l.record_id) ?? null : null
+        ins.run(rid('lb'), p.id, rec, l.test_key, l.test_name, l.value_num, l.value_text, l.unit, l.ref_low, l.ref_high, l.ref_text, l.flag, l.collected_on, l.collected_at,
+          // 有报告原件的 → share；家人手工录入（没有原件）的仍标 manual
+          rec || l.source !== 'manual' ? 'share' : 'manual', l.locator ? JSON.stringify(l.locator) : null, a.userId, now(), a.userId, now(), origin)
+      }
+      for (const d of view.documents) {
+        const id = copyDoc(d.doc_id, d.kind)
+        if (id) this.linkDoc({ ...a, via: 'user' }, p.id, id, 'other')
+      }
+      this.log(c, a, p.id, 'import_share', src.shareId)
+      return p
+    })
   }
 
   /** 守卫用的成员标记（特殊人群判定）：内部读取，不记访问日志、不做诊疗组校验——调用方是写前守卫。 */
@@ -697,18 +718,15 @@ export class PatientService {
 
     // 1. 加密存入机构独立患者文件目录 (关键截面原图)
     writeFileSync(join(c.db.files, fid), this.keys.encrypt(c.tenantId, pngBuffer))
-    c.db.db.prepare('INSERT INTO files (id, patient_id, name_enc, mime, size, sha256, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(fid, patientId, this.keys.encryptText(c.tenantId, `${input.title || '影像分析'}-key-slice.png`)!, 'image/png', pngBuffer.byteLength, sha, a.userId, now())
 
-    // 1b. 若提供了原始 3D 体素扫描序列文件（例如上传的或 sample 的 .nii.gz），同样加密保存入患者文件库
     let rawFid: string | undefined
+    let rawBuf: Buffer | undefined
+    let rawSha: string | undefined
     if (input.raw_volume_file && input.raw_volume_file.bytes.byteLength > 0) {
       rawFid = rid('pf')
-      const rawBuf = Buffer.from(input.raw_volume_file.bytes)
-      const rawSha = createHash('sha256').update(rawBuf).digest('hex')
+      rawBuf = Buffer.from(input.raw_volume_file.bytes)
+      rawSha = createHash('sha256').update(rawBuf).digest('hex')
       writeFileSync(join(c.db.files, rawFid), this.keys.encrypt(c.tenantId, rawBuf))
-      c.db.db.prepare('INSERT INTO files (id, patient_id, name_enc, mime, size, sha256, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(rawFid, patientId, this.keys.encryptText(c.tenantId, input.raw_volume_file.name || 'raw-scan.nii.gz')!, input.raw_volume_file.mime || 'application/gzip', rawBuf.byteLength, rawSha, a.userId, now())
     }
 
     // 2. 存入文档资产库（具有全局 asset_id，支持在 Markdown 或 OmniCanvas 中直接使用）
@@ -751,25 +769,36 @@ export class PatientService {
 
     // 当有原始扫描文件时，records.file_id 指向 rawFid，使「原件」按钮直接下载原始体素文件；否则指向切片图
     const primaryFileId = rawFid ?? fid
-    c.db.db.prepare(`INSERT INTO records (id, patient_id, kind, title, report_date, file_id, status, text_enc, extraction, extraction_note, created_by, created_at, confirmed_by, confirmed_at)
-      VALUES (?, ?, 'imaging', ?, ?, ?, 'confirmed', ?, 'done', ?, ?, ?, ?, ?)`)
-      .run(recId, patientId, (input.title || '医学影像量化分析').trim().slice(0, 120), input.report_date && DATE.test(input.report_date) ? input.report_date : null, primaryFileId,
-        encText, summaryNote.slice(0, 200), a.userId, now(), a.userId, now())
+    const createdRec = c.db.transaction(() => {
+      c.db.db.prepare('INSERT INTO files (id, patient_id, name_enc, mime, size, sha256, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(fid, patientId, this.keys.encryptText(c.tenantId, `${input.title || '影像分析'}-key-slice.png`)!, 'image/png', pngBuffer.byteLength, sha, a.userId, now())
 
-    // 4. 若有阳性征象需要新增标签，合并到 patients.tags
-    if (input.add_tags && input.add_tags.length > 0) {
-      const pRow = c.db.db.prepare('SELECT tags FROM patients WHERE id = ?').get(patientId) as { tags: string } | undefined
-      if (pRow) {
-        const curTags = JSON.parse(pRow.tags || '[]') as string[]
-        const mergedTags = Array.from(new Set([...curTags, ...input.add_tags.map(t => t.trim()).filter(Boolean)]))
-        c.db.db.prepare('UPDATE patients SET tags = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(mergedTags), now(), patientId)
+      if (rawFid && rawBuf && rawSha && input.raw_volume_file) {
+        c.db.db.prepare('INSERT INTO files (id, patient_id, name_enc, mime, size, sha256, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(rawFid, patientId, this.keys.encryptText(c.tenantId, input.raw_volume_file.name || 'raw-scan.nii.gz')!, input.raw_volume_file.mime || 'application/gzip', rawBuf.byteLength, rawSha, a.userId, now())
       }
-    }
 
-    c.db.db.prepare('UPDATE patients SET updated_at = ? WHERE id = ?').run(now(), patientId)
-    this.log(c, a, patientId, 'imaging_analyze', recId)
+      c.db.db.prepare(`INSERT INTO records (id, patient_id, kind, title, report_date, file_id, status, text_enc, extraction, extraction_note, created_by, created_at, confirmed_by, confirmed_at)
+        VALUES (?, ?, 'imaging', ?, ?, ?, 'confirmed', ?, 'done', ?, ?, ?, ?, ?)`)
+        .run(recId, patientId, (input.title || '医学影像量化分析').trim().slice(0, 120), input.report_date && DATE.test(input.report_date) ? input.report_date : null, primaryFileId,
+          encText, summaryNote.slice(0, 200), a.userId, now(), a.userId, now())
 
-    const createdRec = c.db.db.prepare('SELECT * FROM records WHERE id = ?').get(recId) as unknown as RecordRow
+      // 4. 若有阳性征象需要新增标签，合并到 patients.tags
+      if (input.add_tags && input.add_tags.length > 0) {
+        const pRow = c.db.db.prepare('SELECT tags FROM patients WHERE id = ?').get(patientId) as { tags: string } | undefined
+        if (pRow) {
+          const curTags = JSON.parse(pRow.tags || '[]') as string[]
+          const mergedTags = Array.from(new Set([...curTags, ...input.add_tags.map(t => t.trim()).filter(Boolean)]))
+          c.db.db.prepare('UPDATE patients SET tags = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(mergedTags), now(), patientId)
+        }
+      }
+
+      c.db.db.prepare('UPDATE patients SET updated_at = ? WHERE id = ?').run(now(), patientId)
+      this.log(c, a, patientId, 'imaging_analyze', recId)
+
+      return c.db.db.prepare('SELECT * FROM records WHERE id = ?').get(recId) as unknown as RecordRow
+    })
+
     return {
       record: { ...createdRec, text_enc: undefined, imaging_data: imagingPayload } as any,
       asset_id: asset.id,
@@ -2089,27 +2118,31 @@ ${followAssetId ? `- **随访关键切片**: ![随访关键切片](asset:${follo
     // AI 生成的报告草稿：不论机构设置，都只能由医生本人确认 / 驳回
     if (rec.origin === 'ai_report' && a.via !== 'user') throw new PatientError('needs_human_review', 'AI 生成的报告须医生本人确认', 403)
     if (!input.accept) {
-      c.db.db.prepare("UPDATE records SET status = 'rejected', confirmed_by = ?, confirmed_at = ? WHERE id = ?").run(a.userId, now(), recordId)
-      c.db.db.prepare("UPDATE labs SET status = 'rejected', confirmed_by = ?, confirmed_at = ? WHERE record_id = ? AND status = 'pending'").run(a.userId, now(), recordId)
-      this.log(c, a, patientId, 'record_reject', recordId)
+      c.db.transaction(() => {
+        c.db.db.prepare("UPDATE records SET status = 'rejected', confirmed_by = ?, confirmed_at = ? WHERE id = ?").run(a.userId, now(), recordId)
+        c.db.db.prepare("UPDATE labs SET status = 'rejected', confirmed_by = ?, confirmed_at = ? WHERE record_id = ? AND status = 'pending'").run(a.userId, now(), recordId)
+        this.log(c, a, patientId, 'record_reject', recordId)
+      })
       return
     }
     const date = typeof input.report_date === 'string' && DATE.test(input.report_date) ? input.report_date : rec.report_date
     const undated = (c.db.db.prepare("SELECT COUNT(*) AS n FROM labs WHERE record_id = ? AND status = 'pending' AND collected_on IS NULL").get(recordId) as { n: number }).n
     if (!date && undated) throw new PatientError('date_required', '这份报告没有日期，请填写报告上的日期（YYYY-MM-DD）')
-    c.db.db.prepare("UPDATE records SET status = 'confirmed', report_date = ?, confirmed_by = ?, confirmed_at = ? WHERE id = ?").run(date, a.userId, now(), recordId)
-    c.db.db.prepare("UPDATE labs SET collected_on = COALESCE(collected_on, ?) WHERE record_id = ? AND status = 'pending'").run(date, recordId)
-    // 同日同项已有确认值：医生选了「替换」的，旧值标为已被更正；数值完全相同的（同一结果重复出现）去掉这条；其余都保留
-    let dups = 0
-    for (const l of (c.db.db.prepare("SELECT * FROM labs WHERE record_id = ? AND status = 'pending'").all(recordId) as Array<Record<string, unknown>>).map(labOf)) {
-      if (l.replaces) { c.db.db.prepare("UPDATE labs SET status = 'superseded' WHERE id = ? AND patient_id = ? AND status = 'confirmed'").run(l.replaces, patientId); continue }
-      const same = this.sameDay(c.db, patientId, l).find(o => o.std_value === l.std_value && o.value_text === l.value_text)
-      if (same) { c.db.db.prepare("UPDATE labs SET status = 'rejected', confirmed_by = ?, confirmed_at = ? WHERE id = ?").run(a.userId, now(), l.id); dups++ }
-    }
-    if (dups) this.log(c, a, patientId, 'lab_duplicate_skip', String(dups))
-    c.db.db.prepare("UPDATE labs SET status = 'confirmed', confirmed_by = ?, confirmed_at = ? WHERE record_id = ? AND status = 'pending'").run(a.userId, now(), recordId)
-    c.db.db.prepare('UPDATE patients SET updated_at = ? WHERE id = ?').run(now(), patientId)
-    this.log(c, a, patientId, 'record_confirm', recordId)
+    c.db.transaction(() => {
+      c.db.db.prepare("UPDATE records SET status = 'confirmed', report_date = ?, confirmed_by = ?, confirmed_at = ? WHERE id = ?").run(date, a.userId, now(), recordId)
+      c.db.db.prepare("UPDATE labs SET collected_on = COALESCE(collected_on, ?) WHERE record_id = ? AND status = 'pending'").run(date, recordId)
+      // 同日同项已有确认值：医生选了「替换」的，旧值标为已被更正；数值完全相同的（同一结果重复出现）去掉这条；其余都保留
+      let dups = 0
+      for (const l of (c.db.db.prepare("SELECT * FROM labs WHERE record_id = ? AND status = 'pending'").all(recordId) as Array<Record<string, unknown>>).map(labOf)) {
+        if (l.replaces) { c.db.db.prepare("UPDATE labs SET status = 'superseded' WHERE id = ? AND patient_id = ? AND status = 'confirmed'").run(l.replaces, patientId); continue }
+        const same = this.sameDay(c.db, patientId, l).find(o => o.std_value === l.std_value && o.value_text === l.value_text)
+        if (same) { c.db.db.prepare("UPDATE labs SET status = 'rejected', confirmed_by = ?, confirmed_at = ? WHERE id = ?").run(a.userId, now(), l.id); dups++ }
+      }
+      if (dups) this.log(c, a, patientId, 'lab_duplicate_skip', String(dups))
+      c.db.db.prepare("UPDATE labs SET status = 'confirmed', confirmed_by = ?, confirmed_at = ? WHERE record_id = ? AND status = 'pending'").run(a.userId, now(), recordId)
+      c.db.db.prepare('UPDATE patients SET updated_at = ? WHERE id = ?').run(now(), patientId)
+      this.log(c, a, patientId, 'record_confirm', recordId)
+    })
   }
 
   /** 改一条待确认的化验（审核时修正提取错误）。 */
@@ -2398,52 +2431,56 @@ ${followAssetId ? `- **随访关键切片**: ![随访关键切片](asset:${follo
    */
   setSubjectVars(a: Actor, studyId: string, rows: SubjectVarInput[]): { written: number; cleared: number; skipped: Array<{ subject_id: string; var_id: string; reason: string }> } {
     const c = this.ctx(a)
-    const out = { written: 0, cleared: 0, skipped: [] as Array<{ subject_id: string; var_id: string; reason: string }> }
-    const pidOf = new Map<string, string | null>()
-    const resolve = (subjectId: string): string | null => {
-      if (pidOf.has(subjectId)) return pidOf.get(subjectId)!
-      const e = c.db.db.prepare("SELECT patient_id FROM enrollments WHERE study_id = ? AND subject_id = ? AND status = 'active'").get(studyId, subjectId) as { patient_id: string } | undefined
-      const pid = e && this.teamRole(c.db, e.patient_id, a.userId) ? e.patient_id : null
-      pidOf.set(subjectId, pid)
-      return pid
-    }
-    const upsert = c.db.db.prepare(`INSERT INTO subject_vars (study_id, patient_id, var_id, value_num, value_text, source, source_ref, method, status, entered_by, entered_via, entered_at, verified_by, verified_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unverified', ?, ?, ?, NULL, NULL)
-      ON CONFLICT(study_id, patient_id, var_id) DO UPDATE SET value_num = excluded.value_num, value_text = excluded.value_text, source = excluded.source, source_ref = excluded.source_ref,
-        method = excluded.method, status = 'unverified', entered_by = excluded.entered_by, entered_via = excluded.entered_via, entered_at = excluded.entered_at, verified_by = NULL, verified_at = NULL`)
-    const del = c.db.db.prepare('DELETE FROM subject_vars WHERE study_id = ? AND patient_id = ? AND var_id = ?')
-    const touched = new Set<string>()
-    for (const r of rows) {
-      const pid = resolve(r.subject_id)
-      if (!pid) { out.skipped.push({ subject_id: r.subject_id, var_id: r.var_id, reason: '受试者不在本研究，或你不在其诊疗组' }); continue }
-      if (r.value === null) {
-        if (Number(del.run(studyId, pid, r.var_id).changes)) out.cleared++
-      } else {
-        upsert.run(studyId, pid, r.var_id, typeof r.value === 'number' ? r.value : null, typeof r.value === 'string' ? r.value : null,
-          r.source, JSON.stringify(r.source_ref ?? {}), r.method ?? null, a.userId, a.via, now())
-        out.written++
+    return c.db.transaction(() => {
+      const out = { written: 0, cleared: 0, skipped: [] as Array<{ subject_id: string; var_id: string; reason: string }> }
+      const pidOf = new Map<string, string | null>()
+      const resolve = (subjectId: string): string | null => {
+        if (pidOf.has(subjectId)) return pidOf.get(subjectId)!
+        const e = c.db.db.prepare("SELECT patient_id FROM enrollments WHERE study_id = ? AND subject_id = ? AND status = 'active'").get(studyId, subjectId) as { patient_id: string } | undefined
+        const pid = e && this.teamRole(c.db, e.patient_id, a.userId) ? e.patient_id : null
+        pidOf.set(subjectId, pid)
+        return pid
       }
-      touched.add(pid)
-    }
-    for (const pid of touched) this.log(c, a, pid, 'study_var_set', `研究 ${studyId}`)
-    return out
+      const upsert = c.db.db.prepare(`INSERT INTO subject_vars (study_id, patient_id, var_id, value_num, value_text, source, source_ref, method, status, entered_by, entered_via, entered_at, verified_by, verified_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unverified', ?, ?, ?, NULL, NULL)
+        ON CONFLICT(study_id, patient_id, var_id) DO UPDATE SET value_num = excluded.value_num, value_text = excluded.value_text, source = excluded.source, source_ref = excluded.source_ref,
+          method = excluded.method, status = 'unverified', entered_by = excluded.entered_by, entered_via = excluded.entered_via, entered_at = excluded.entered_at, verified_by = NULL, verified_at = NULL`)
+      const del = c.db.db.prepare('DELETE FROM subject_vars WHERE study_id = ? AND patient_id = ? AND var_id = ?')
+      const touched = new Set<string>()
+      for (const r of rows) {
+        const pid = resolve(r.subject_id)
+        if (!pid) { out.skipped.push({ subject_id: r.subject_id, var_id: r.var_id, reason: '受试者不在本研究，或你不在其诊疗组' }); continue }
+        if (r.value === null) {
+          if (Number(del.run(studyId, pid, r.var_id).changes)) out.cleared++
+        } else {
+          upsert.run(studyId, pid, r.var_id, typeof r.value === 'number' ? r.value : null, typeof r.value === 'string' ? r.value : null,
+            r.source, JSON.stringify(r.source_ref ?? {}), r.method ?? null, a.userId, a.via, now())
+          out.written++
+        }
+        touched.add(pid)
+      }
+      for (const pid of touched) this.log(c, a, pid, 'study_var_set', `研究 ${studyId}`)
+      return out
+    })
   }
 
   /** 核实研究变量：只有研究者本人（非 AI）可以；记录核实人与时间。返回核实条数。 */
   verifySubjectVars(a: Actor, studyId: string, items: Array<{ subject_id: string; var_id: string }>): { verified: number } {
     if (a.via !== 'user') throw new PatientError('forbidden', 'AI 不能核实研究变量，需研究者本人确认', 403)
     const c = this.ctx(a)
-    const stmt = c.db.db.prepare(`UPDATE subject_vars SET status = 'verified', verified_by = ?, verified_at = ?
-      WHERE study_id = ? AND var_id = ? AND status = 'unverified' AND patient_id = (SELECT patient_id FROM enrollments WHERE study_id = ? AND subject_id = ? AND status = 'active')`)
-    let verified = 0
-    const at = now()
-    for (const it of items) {
-      const e = c.db.db.prepare("SELECT patient_id FROM enrollments WHERE study_id = ? AND subject_id = ? AND status = 'active'").get(studyId, it.subject_id) as { patient_id: string } | undefined
-      if (!e || !this.teamRole(c.db, e.patient_id, a.userId)) continue
-      const n = Number(stmt.run(a.userId, at, studyId, it.var_id, studyId, it.subject_id).changes)
-      if (n) { verified += n; this.log(c, a, e.patient_id, 'study_var_verify', `研究 ${studyId} · ${it.var_id}`) }
-    }
-    return { verified }
+    return c.db.transaction(() => {
+      const stmt = c.db.db.prepare(`UPDATE subject_vars SET status = 'verified', verified_by = ?, verified_at = ?
+        WHERE study_id = ? AND var_id = ? AND status = 'unverified' AND patient_id = (SELECT patient_id FROM enrollments WHERE study_id = ? AND subject_id = ? AND status = 'active')`)
+      let verified = 0
+      const at = now()
+      for (const it of items) {
+        const e = c.db.db.prepare("SELECT patient_id FROM enrollments WHERE study_id = ? AND subject_id = ? AND status = 'active'").get(studyId, it.subject_id) as { patient_id: string } | undefined
+        if (!e || !this.teamRole(c.db, e.patient_id, a.userId)) continue
+        const n = Number(stmt.run(a.userId, at, studyId, it.var_id, studyId, it.subject_id).changes)
+        if (n) { verified += n; this.log(c, a, e.patient_id, 'study_var_verify', `研究 ${studyId} · ${it.var_id}`) }
+      }
+      return { verified }
+    })
   }
 
   /** 研究变量清单（只含操作者在诊疗组里的在组受试者）。 */
@@ -2457,11 +2494,13 @@ ${followAssetId ? `- **随访关键切片**: ![随访关键切片](asset:${follo
   dropStudy(a: Actor, studyId: string): void {
     let c: ReturnType<PatientService['ctx']>
     try { c = this.ctx(a) } catch { return }
-    for (const r of c.db.db.prepare("SELECT patient_id FROM enrollments WHERE study_id = ? AND status = 'active'").all(studyId) as Array<{ patient_id: string }>) this.log(c, a, r.patient_id, 'unenroll', `研究 ${studyId} 已删除`)
-    c.db.db.prepare('DELETE FROM enrollments WHERE study_id = ?').run(studyId)
-    c.db.db.prepare('DELETE FROM subject_vars WHERE study_id = ?').run(studyId)
-    c.db.db.prepare("UPDATE proposals SET status = 'rejected', resolved_by = ?, resolved_at = ? WHERE status = 'pending' AND kind IN ('enroll', 'unenroll') AND json_extract(payload, '$.study_id') = ?").run(a.userId, now(), studyId)
-    c.db.db.prepare('DELETE FROM seq WHERE name = ?').run(`subject:${studyId}`)
+    c.db.transaction(() => {
+      for (const r of c.db.db.prepare("SELECT patient_id FROM enrollments WHERE study_id = ? AND status = 'active'").all(studyId) as Array<{ patient_id: string }>) this.log(c, a, r.patient_id, 'unenroll', `研究 ${studyId} 已删除`)
+      c.db.db.prepare('DELETE FROM enrollments WHERE study_id = ?').run(studyId)
+      c.db.db.prepare('DELETE FROM subject_vars WHERE study_id = ?').run(studyId)
+      c.db.db.prepare("UPDATE proposals SET status = 'rejected', resolved_by = ?, resolved_at = ? WHERE status = 'pending' AND kind IN ('enroll', 'unenroll') AND json_extract(payload, '$.study_id') = ?").run(a.userId, now(), studyId)
+      c.db.db.prepare('DELETE FROM seq WHERE name = ?').run(`subject:${studyId}`)
+    })
   }
 
   /** 关掉所有库连接（测试 / 停机）。 */

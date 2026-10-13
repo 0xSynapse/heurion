@@ -29,7 +29,7 @@ export interface GatewayDeps {
 }
 
 export function attachCollab(server: Server, deps: GatewayDeps): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true })
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 10 * 1024 * 1024 })
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const m = /^\/collab\/([^/]+)$/.exec(url.pathname)
@@ -57,8 +57,23 @@ function send(ws: WebSocket, encoder: encoding.Encoder): void {
   if (ws.readyState === ws.OPEN) ws.send(encoding.toUint8Array(encoder))
 }
 
+const HEARTBEAT_MS = 30_000
+
 /** writable=false（研究里的只读成员）：只同步服务端的内容给他，丢弃他发来的修改。 */
 function connect(ws: WebSocket, ydoc: Y.Doc, writable = true, onClose?: () => void): void {
+  let alive = true
+  let closed = false
+  ws.on('pong', () => { alive = true })
+  const heartbeat = setInterval(() => {
+    if (!alive) {
+      ws.terminate()
+      return
+    }
+    alive = false
+    if (ws.readyState === ws.OPEN) ws.ping()
+  }, HEARTBEAT_MS)
+  heartbeat.unref?.()
+
   const onUpdate = (update: Uint8Array, origin: unknown) => {
     if (origin === ws) return
     const encoder = encoding.createEncoder()
@@ -87,8 +102,12 @@ function connect(ws: WebSocket, ydoc: Y.Doc, writable = true, onClose?: () => vo
   })
   ws.on('error', err => {
     console.warn('[collab] ws error', err)
+    ws.terminate()
   })
   ws.on('close', () => {
+    if (closed) return
+    closed = true
+    clearInterval(heartbeat)
     ydoc.off('update', onUpdate)
     onClose?.()
   })

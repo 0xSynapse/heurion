@@ -15,10 +15,13 @@ if (process.env.HF_ENDPOINT) env.remoteHost = process.env.HF_ENDPOINT.replace(/\
 let loading: Promise<FeatureExtractionPipeline> | null = null
 
 export function loadModel(onProgress?: (p: { file?: string; progress?: number; status?: string }) => void): Promise<FeatureExtractionPipeline> {
-  loading ??= pipeline('feature-extraction', MODEL, {
+  loading ??= (pipeline('feature-extraction', MODEL, {
     dtype: DTYPE,
     progress_callback: onProgress as never,
-  }) as unknown as Promise<FeatureExtractionPipeline>
+  }) as unknown as Promise<FeatureExtractionPipeline>).catch(err => {
+    loading = null
+    throw err
+  })
   return loading
 }
 

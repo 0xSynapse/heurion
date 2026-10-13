@@ -37,7 +37,7 @@ export class OpService {
   constructor(
     private readonly docs: Documents,
     /** 知家红线守卫（PATIENT.md §3）：按归属查成员标记（孕产 / 哺乳 / 儿童年龄）；没有接入时特殊人群规则不启用。 */
-    private readonly phrMember?: (owner: string, patientId: string) => PhrMember | null,
+    private readonly phrMember?: (owner: string, patientId: string, space?: 'work' | 'personal') => PhrMember | null,
   ) {}
 
   /** deck 的版式与页面尺寸（来自原始文件包；按文档缓存）。 */
@@ -184,10 +184,10 @@ export class OpService {
 
   /** 患者红线守卫（知家成员的「健康档案」，doc context doc_kind=archive）：只对 AI。 */
   private guardPatientRedlines(batch: EditBatch | DeckEditBatch, textsOf: (op: unknown) => string[], row: { owner: string; context: string | null }): void {
-    let ctx: { kind?: string; doc_kind?: string; patient_id?: string } | null = null
+    let ctx: { kind?: string; doc_kind?: string; patient_id?: string; space?: 'work' | 'personal' } | null = null
     try { ctx = row.context ? JSON.parse(row.context) : null } catch { /* 无归属：不适用 */ }
     if (ctx?.kind !== 'patient' || (ctx.doc_kind !== 'archive' && ctx.doc_kind !== 'brief')) return
-    const member = ctx.patient_id && this.phrMember ? this.phrMember(row.owner, ctx.patient_id) : null
+    const member = ctx.patient_id && this.phrMember ? this.phrMember(row.owner, ctx.patient_id, ctx.space === 'work' ? 'work' : 'personal') : null
     batch.ops.forEach((op, i) => {
       for (const text of textsOf(op)) guardPhrRedlines(text, i, member)
     })

@@ -225,6 +225,53 @@ describe('Subagent 多专家架构协同服务 (SubagentService)', () => {
     expect(report.phi_count).toBeGreaterThanOrEqual(1)
     expect(report.total_claims_audited).toBeGreaterThanOrEqual(1)
   })
+
+  it('fact_checker: 忽略章节标题与待定占位符，并将问题论断直接挂载为正文评论', async () => {
+    const { env, subagents } = makeTestEnv('## 1. 背景与目的')
+    const cite = env.store.upsertCitation({
+      doc_id: env.docId,
+      pmid: '37123456',
+      doi: '10.1056/nejmoa2301234',
+      formatted: 'McMurray et al. NEJM 2023.',
+      url: null,
+    })
+
+    const p1 = env.docs.get(env.docId).child(0).attrs.id as string
+    env.ops.edit({
+      doc_id: env.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p1,
+        markdown: [
+          '## 1. 背景与目的',
+          '',
+          '主要终点：OS / PFS（待定）；次要终点：客观缓解率、安全性。',
+          '',
+          `研究显示达格列净降低主要复合终点风险达 99%[@c:${cite.id}]。`,
+          '',
+          '既往队列报道 5 年生存率提高 42%。',
+        ].join('\n'),
+      }],
+    }, { actor: 'user', turnId: null })
+
+    const report = (await subagents.delegate('u1', {
+      role: 'fact_checker',
+      task: '核查正文论断并在有问题处添加评论',
+      doc_id: env.docId,
+    })) as VerificationReport
+
+    // 标题「1. 背景与目的」和占位符「待定」不应被误判为论断，只有后两句被审查
+    expect(report.total_claims_audited).toBe(2)
+    expect(report.unsupported_count).toBe(1)
+    expect(report.unclear_count).toBe(1)
+
+    // 验证有问题的论断已自动在文档上生成打开状态的 AI 评论
+    const comments = env.store.listComments(env.docId).filter(c => c.status === 'open')
+    expect(comments.length).toBe(2)
+    expect(comments.some(c => c.replies.some(r => r.text.includes('论断核对：')))).toBe(true)
+  })
 })
 
 describe('MCP delegate_task 协议集成与事件流', () => {

@@ -1,6 +1,6 @@
 import MarkdownIt, { type StateInline, type Token } from 'markdown-it'
 import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model'
-import { schema } from './schema.ts'
+import { isSafeHref, schema } from './schema.ts'
 
 /**
  * 平台的 markdown 方言（PLATFORM.md §6.1）：CommonMark + GFM 表格 + 引用 `[@c:<cite_id>]`
@@ -198,7 +198,11 @@ function buildInline(children: Token[]): PMNode[] {
       case 'strong_close': remove('bold'); break
       case 'em_open': add('italic'); break
       case 'em_close': remove('italic'); break
-      case 'link_open': add('link', { href: t.attrGet('href') ?? '' }); break
+      case 'link_open': {
+        const href = t.attrGet('href') ?? ''
+        if (isSafeHref(href)) add('link', { href })
+        break
+      }
       case 'link_close': remove('link'); break
       case 'code_inline':
         out.push(schema.text(t.content, schema.marks.code!.create().addToSet(marks)))

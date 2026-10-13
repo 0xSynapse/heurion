@@ -39,7 +39,7 @@ export class PatientClaimService {
   createClaimCode(a: Actor, patientId: string): { claim_id: string; code: string; expires_at: string } {
     const t = this.tenants.of(a.userId, 'work')
     if (t.kind !== 'org') throw new PatientError('org_only', '生成认领码只能在医院机构内操作', 403)
-    this.patients.read(a, patientId)
+    this.patients.assertEditable({ ...a, space: 'work' }, patientId)
 
     const code = generateCode()
     const expiresAt = new Date(Date.now() + 24 * 3600_000).toISOString()
@@ -107,6 +107,9 @@ export class PatientClaimService {
     const t = this.tenants.of(a.userId, 'work')
     const claim = this.store.getClaim(claimId)
     if (!claim || claim.tenant_id !== t.id) throw new PatientError('not_found', '认领申请不存在', 404)
+    if (this.tenants.roleOf(a.userId, 'work') !== 'admin') {
+      this.patients.assertEditable({ ...a, space: 'work' }, claim.patient_id)
+    }
 
     if (claim.status !== 'requested') {
       throw new PatientError('invalid_status', `当前认领状态为 ${claim.status}，无法确认`, 400)
@@ -128,20 +131,22 @@ export class PatientClaimService {
       }
     }
 
-    // 写入正式关联
-    const link = this.store.addPersonLink({
-      tenant_id: t.id,
-      hospital_patient_id: claim.patient_id,
-      claimant_user_id: claim.claimant_user_id,
-      claimant_patient_id: claim.claimant_patient_id,
-      claim_id: claim.id,
-      verified_by: a.userId,
-    })
+    const link = this.store.transaction(() => {
+      const created = this.store.addPersonLink({
+        tenant_id: t.id,
+        hospital_patient_id: claim.patient_id,
+        claimant_user_id: claim.claimant_user_id!,
+        claimant_patient_id: claim.claimant_patient_id!,
+        claim_id: claim.id,
+        verified_by: a.userId,
+      })
 
-    this.store.updateClaim(claim.id, {
-      status: 'confirmed',
-      confirmed_by: a.userId,
-      confirmed_at: new Date().toISOString(),
+      this.store.updateClaim(claim.id, {
+        status: 'confirmed',
+        confirmed_by: a.userId,
+        confirmed_at: new Date().toISOString(),
+      })
+      return created
     })
 
     // 在患者和知家两端分别记审计日志
@@ -163,20 +168,25 @@ export class PatientClaimService {
     const isHospital = t.id === claim.tenant_id
     const isClaimant = a.userId === claim.claimant_user_id
     if (!isHospital && !isClaimant) throw new PatientError('not_found', '认领申请不存在', 404)
-
-    this.store.updateClaim(claim.id, {
-      status: 'revoked',
-      revoked_by: a.userId,
-      revoked_at: new Date().toISOString(),
-    })
-
-    // 如果已经有关联的 person_link，一并解除
-    const links = this.store.listLinksForHospitalPatient(claim.tenant_id, claim.patient_id)
-    for (const l of links) {
-      if (l.claim_id === claim.id && l.status === 'active') {
-        this.store.revokePersonLink(l.id, a.userId)
-      }
+    if (isHospital && !isClaimant && this.tenants.roleOf(a.userId, a.space ?? 'work') !== 'admin') {
+      this.patients.assertEditable({ ...a, space: 'work' }, claim.patient_id)
     }
+
+    this.store.transaction(() => {
+      this.store.updateClaim(claim.id, {
+        status: 'revoked',
+        revoked_by: a.userId,
+        revoked_at: new Date().toISOString(),
+      })
+
+      // 如果已经有关联的 person_link，一并解除
+      const links = this.store.listLinksForHospitalPatient(claim.tenant_id, claim.patient_id)
+      for (const l of links) {
+        if (l.claim_id === claim.id && l.status === 'active') {
+          this.store.revokePersonLink(l.id, a.userId)
+        }
+      }
+    })
 
     return { ok: true }
   }

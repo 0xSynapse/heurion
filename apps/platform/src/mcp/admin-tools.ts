@@ -286,6 +286,7 @@ export interface AdminToolDeps {
   turns: TurnRegistry
   invoke?: Invoke
   workspaceDir: (userId: string) => string
+  generation?: string
 }
 
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
@@ -296,8 +297,9 @@ const fail = (code: string, message: string, extra: Record<string, unknown> = {}
 })
 class ToolFail extends Error { constructor(readonly code: string, message: string) { super(message) } }
 
-export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userId: string): void {
+export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userId: string, generation?: string): void {
   const { store } = deps
+  const gen = generation ?? deps.generation
   /** 工作区里的文件（不能出工作区，≤20MB） */
   const file = (p: unknown): WorkspaceFile => {
     if (typeof p !== 'string' || !p) throw new ToolFail('missing_file', '需要 file_path（工作区里的文件）')
@@ -335,13 +337,13 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
           const body = op.body?.(args, file)
           const stored = !body ? null : 'json' in body ? { json: body.json } : 'bytes' in body ? { bytes_b64: Buffer.from(body.bytes).toString('base64'), mime: body.mime }
             : { form: body.form, ...(body.file ? { file: { b64: Buffer.from(body.file.bytes).toString('base64'), name: body.file.name, mime: body.file.mime } } : {}) }
-          const turn = deps.turns.active(userId)
+          const turn = deps.turns.active(userId, gen)
           const row = store.addPendingAction({
             user_id: userId, tool: spec.name, action: args.action, method: op.method, path: op.path(args), body: stored ? JSON.stringify(stored) : null,
             summary: op.summary?.(args) ?? `${spec.name}.${args.action}`, reason: typeof args.reason === 'string' ? args.reason : null,
             editable: op.editable ? JSON.stringify(op.editable(args)) : null, doc_id: turn?.docId ?? null, turn_id: turn?.turnId ?? null,
           })
-          deps.turns.notify(userId, { type: 'action', action: { id: row.id, tool: row.tool, action: row.action, summary: row.summary, reason: row.reason, editable: op.editable ? op.editable(args) : null, status: 'pending', created_at: row.created_at } })
+          deps.turns.notify(userId, { type: 'action', action: { id: row.id, tool: row.tool, action: row.action, summary: row.summary, reason: row.reason, editable: op.editable ? op.editable(args) : null, status: 'pending', created_at: row.created_at } }, gen)
           return json({ status: 'pending_confirmation', action_id: row.id, summary: row.summary, message: '这是高风险操作，已在对话里给用户生成确认卡；用户确认后平台才会执行。向用户说明为什么要做，然后等待，不要重复提交。之后用 action_status 查结果。' })
         }
         const r = await deps.invoke(userId, op.method, op.path(args), op.body?.(args, file))

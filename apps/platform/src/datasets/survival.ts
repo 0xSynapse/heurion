@@ -551,7 +551,7 @@ export function calculateCoxRegression(
     while (i < n) {
       // C4 修复：按 Breslow 方法处理并列时间，首先将所有满足 T_k >= t_i 的受试者加入当前风险集
       let j = i
-      while (j < n && time[j] === time[i]) {
+      while (j < n && Math.abs(time[j]! - time[i]!) < 1e-9) {
         j++
       }
       for (let k = i; k < j; k++) {
@@ -606,33 +606,43 @@ export function calculateCoxRegression(
     }
   }
 
-  // 计算协方差矩阵 (Hessian 逆矩阵)
+  // 计算协方差矩阵 (Hessian 逆矩阵)，同样采用 Breslow 并列时间处理
   const I_final = Array.from({ length: p }, () => new Array(p).fill(0))
   let sumW = 0
   const sumWX = new Array(p).fill(0)
   const sumWXX = Array.from({ length: p }, () => new Array(p).fill(0))
 
-  for (let i = 0; i < sample_size; i++) {
-    const xi = X[i]!
-    let linearPred = 0
-    for (let j = 0; j < p; j++) linearPred += beta[j]! * xi[j]!
-    const theta = Math.exp(Math.max(-25, Math.min(25, linearPred)))
-    sumW += theta
-    for (let j = 0; j < p; j++) {
-      sumWX[j] += theta * xi[j]!
-      for (let k = 0; k < p; k++) {
-        sumWXX[j]![k]! += theta * xi[j]! * xi[k]!
-      }
+  let idx = 0
+  while (idx < sample_size) {
+    let j = idx
+    while (j < sample_size && Math.abs(time[j]! - time[idx]!) < 1e-9) {
+      j++
     }
-    if (event[i] === 1) {
-      for (let j = 0; j < p; j++) {
-        const a_j = sumWX[j]! / sumW
-        for (let k = 0; k < p; k++) {
-          const a_k = sumWX[k]! / sumW
-          I_final[j]![k]! += (sumWXX[j]![k]! / sumW) - a_j * a_k
+    for (let k = idx; k < j; k++) {
+      const xk = X[k]!
+      let linearPred = 0
+      for (let m = 0; m < p; m++) linearPred += beta[m]! * xk[m]!
+      const theta = Math.exp(Math.max(-25, Math.min(25, linearPred)))
+      sumW += theta
+      for (let m = 0; m < p; m++) {
+        sumWX[m] += theta * xk[m]!
+        for (let q = 0; q < p; q++) {
+          sumWXX[m]![q]! += theta * xk[m]! * xk[q]!
         }
       }
     }
+    for (let k = idx; k < j; k++) {
+      if (event[k] === 1) {
+        for (let m = 0; m < p; m++) {
+          const a_m = sumWX[m]! / sumW
+          for (let q = 0; q < p; q++) {
+            const a_q = sumWX[q]! / sumW
+            I_final[m]![q]! += (sumWXX[m]![q]! / sumW) - a_m * a_q
+          }
+        }
+      }
+    }
+    idx = j
   }
   for (let j = 0; j < p; j++) I_final[j]![j]! += 1e-7
 
@@ -685,9 +695,14 @@ export function calculateCoxRegression(
     }
   }
   const c_index = totalPairs > 0 ? Number((concordant / totalPairs).toFixed(3)) : 0.5
-  // C6 修复：计算真实的多变量 Wald 检验统计量（df = p），不再使用各协变量单因素最小 P 值冒充整体模型 P 值
-  const waldChi2 = covResults.reduce((acc, c) => acc + Math.pow(c.beta / Math.max(c.se, 1e-6), 2), 0)
-  const p_value_overall = Number(chiSquareUpperPValue(waldChi2, p).toFixed(4))
+  // 计算真实的多变量联合 Wald 检验统计量 beta^T * I_final * beta（df = p）
+  let waldChi2 = 0
+  for (let r = 0; r < p; r++) {
+    for (let c = 0; c < p; c++) {
+      waldChi2 += beta[r]! * I_final[r]![c]! * beta[c]!
+    }
+  }
+  const p_value_overall = Number(chiSquareUpperPValue(Math.max(0, waldChi2), p).toFixed(4))
 
   return {
     covariates: covResults,
@@ -821,7 +836,7 @@ export function renderKmCurveSvg(
   const plotH = H - margin.top - margin.bottom
 
   // 最大时间与刻度
-  let maxT = Math.max(...result.groups.map(g => g.timeline[g.timeline.length - 1]?.time || 0), 10)
+  let maxT = result.groups.reduce((m, g) => Math.max(m, g.timeline[g.timeline.length - 1]?.time || 0), 10)
   maxT = Math.ceil(maxT * 1.05) // 预留 5% 留白
 
   const xScale = (t: number) => margin.left + (t / maxT) * plotW
@@ -943,8 +958,8 @@ export function renderForestPlotSvg(
   const plotW = colX.plotRight - colX.plotLeft
 
   // 寻找 HR CI 的最大最小值确定坐标轴范围
-  let minHr = Math.min(...cox.covariates.map(c => c.hr_ci_lower), 0.5)
-  let maxHr = Math.max(...cox.covariates.map(c => c.hr_ci_upper), 2.0)
+  let minHr = cox.covariates.reduce((m, c) => Math.min(m, c.hr_ci_lower), 0.5)
+  let maxHr = cox.covariates.reduce((m, c) => Math.max(m, c.hr_ci_upper), 2.0)
   minHr = Math.max(0.1, minHr * 0.8)
   maxHr = Math.min(10.0, maxHr * 1.2)
 
@@ -1063,6 +1078,7 @@ export function generateSurvivalMarkdownTable(
   groupsKm: KmGroupResult[],
   timeUnit = 'Months'
 ): string {
+  const escMd = (s: string) => String(s).replace(/\|/g, '\\|')
   // C7 修复：根据时间单位自动适配 1 年与 3 年对应里程碑点，避免在 Days/Years 单位下显示错误
   const normUnit = timeUnit.toLowerCase()
   let m1Label = '1-Year Rate'
@@ -1082,7 +1098,7 @@ export function generateSurvivalMarkdownTable(
   }
 
   let md = `### Kaplan-Meier Survival Analysis Summary\n\n`
-  md += `| Group | Total (N) | Events (%) | Median (${timeUnit}) | 95% CI | ${m1Label} | ${m3Label} |\n`
+  md += `| Group | Total (N) | Events (%) | Median (${escMd(timeUnit)}) | 95% CI | ${m1Label} | ${m3Label} |\n`
   md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: |\n`
 
   for (const g of groupsKm) {
@@ -1090,7 +1106,7 @@ export function generateSurvivalMarkdownTable(
     const ci = g.median_ci[0] !== null && g.median_ci[1] !== null ? `${g.median_ci[0]}–${g.median_ci[1]}` : '—'
     const r1 = g.milestone_survival[m1Time]?.surv_formatted || '—'
     const r3 = g.milestone_survival[m3Time]?.surv_formatted || '—'
-    md += `| **${g.label}** | ${g.total_n} | ${g.events_n} (${g.event_rate.toFixed(1)}%) | ${med} | ${ci} | ${r1} | ${r3} |\n`
+    md += `| **${escMd(g.label)}** | ${g.total_n} | ${g.events_n} (${g.event_rate.toFixed(1)}%) | ${med} | ${ci} | ${r1} | ${r3} |\n`
   }
 
   return md
@@ -1166,7 +1182,7 @@ export function generateSurvivalAnalysis(
   }
 
   // 风险表
-  const maxTime = Math.max(...cleaned.map(c => c.time), 10)
+  const maxTime = cleaned.reduce((m, c) => (c.time > m ? c.time : m), 10)
   const risk_table = buildNumberAtRiskTable(groupsKm, maxTime, 6)
 
   // 渲染 SVG 图表

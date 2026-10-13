@@ -54,8 +54,8 @@ import { Unsplash } from './images/unsplash.ts'
 const store = new Store(config.dbPath)
 const docs = new Documents(store)
 // 知家红线守卫的成员标记：patients 在下面才创建，晚绑定（OpService 里可选调用）
-let phrMemberLookup: ((owner: string, patientId: string) => { tags: string[]; birth_year: number | null } | null) | null = null
-const ops = new OpService(docs, (owner, pid) => phrMemberLookup?.(owner, pid) ?? null)
+let phrMemberLookup: ((owner: string, patientId: string, space?: 'work' | 'personal') => { tags: string[]; birth_year: number | null } | null) | null = null
+const ops = new OpService(docs, (owner, pid, space) => phrMemberLookup?.(owner, pid, space) ?? null)
 const registry = new TurnRegistry()
 const pool = new HarnessPool(config, userId => store.sandboxUid(userId))
 const postcheck = new PostCheck(docs)
@@ -110,7 +110,7 @@ const patients = new PatientService(config.tenantsDir, new TenantService(store, 
   { pages: reportPages, complete: makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }) },
   // 成员的「健康档案」文档：建档即建并关联（知家 V0，PATIENT.md §12）
   ({ owner, title, patientId }) => docs.create({ owner, title }).id)
-phrMemberLookup = (owner, pid) => patients.memberMarkers(owner, pid)
+phrMemberLookup = (owner, pid, space) => patients.memberMarkers(owner, pid, space)
 // 访问判定（研究团队协作）：研究里的文档、数据集、分析图按成员角色共享；接口、MCP、协同、服务层共用这一个
 const access = new Access(store)
 access.docText = id => JSON.stringify(docs.get(id).toJSON())
@@ -125,15 +125,15 @@ const turns = new TurnService(docs, pool, registry, {
   idleTimeoutMs: config.turnIdleTimeoutMs, memory, alerts,
   phrGuard: docId => {
     const row = store.getDoc(docId)
-    let ctx: { kind?: string; doc_kind?: string; patient_id?: string } | null = null
+    let ctx: { kind?: string; doc_kind?: string; patient_id?: string; space?: 'work' | 'personal' } | null = null
     try { ctx = row?.context ? JSON.parse(row.context) : null } catch { /* 无归属 */ }
     if (!row || ctx?.kind !== 'patient' || (ctx.doc_kind !== 'archive' && ctx.doc_kind !== 'brief')) return undefined
-    return patients.memberMarkers(row.owner, ctx.patient_id!)
+    return patients.memberMarkers(row.owner, ctx.patient_id!, ctx.space === 'work' ? 'work' : 'personal')
   },
 })
 // 知家分享给医生（docs/design/SHARING.md）：界面与 MCP 共用一个实例
 const shares = new ShareService(store, patients.tenantService, patients, docs)
-const subagents = new SubagentService({ docs, store, claims, pubmed, openalex, fulltext, datasets, cohort })
+const subagents = new SubagentService({ docs, store, claims, pubmed, openalex, fulltext, datasets, cohort, access })
 const mcpDeps = {
   docs, ops, claims, renderer, turns: registry, secret: config.secret,
   pubmed,
@@ -274,6 +274,7 @@ server.listen(config.port, () => {
 
 const shutdown = async () => {
   docs.flushAll()
+  search.flush()
   server.close()
   await pool.closeAll()
   process.exit(0)

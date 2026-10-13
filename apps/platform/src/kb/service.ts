@@ -66,7 +66,7 @@ export class KbService {
   private async process(id: string): Promise<void> {
     const file = this.store.getKbFile(id)
     if (!file) return
-    if (file.chunks === 0 || file.status === 'pending' || file.status === 'extracting' || file.status === 'ocr') {
+    if (file.chunks === 0) {
       this.store.updateKbFile(id, { status: 'extracting', note: null })
       const bytes = this.store.getKbBytes(id)!
       const extracted = await extractText(file.name, bytes, {
@@ -84,13 +84,18 @@ export class KbService {
       return
     }
     this.store.updateKbFile(id, { status: 'embedding' })
-    for (let batch = this.store.kbChunksToEmbed(id, 32); batch.length > 0; batch = this.store.kbChunksToEmbed(id, 32)) {
-      const vectors = await this.embedder.embed(batch.map(c => c.text))
-      batch.forEach((c, i) => this.store.setKbEmbedding(c.id, vectors[i]!))
-      this.store.updateKbFile(id, { embedded: this.store.countKbEmbedded(id) })
+    try {
+      for (let batch = this.store.kbChunksToEmbed(id, 32); batch.length > 0; batch = this.store.kbChunksToEmbed(id, 32)) {
+        const vectors = await this.embedder.embed(batch.map(c => c.text))
+        batch.forEach((c, i) => this.store.setKbEmbedding(c.id, vectors[i]!))
+        this.store.updateKbFile(id, { embedded: this.store.countKbEmbedded(id) })
+      }
+      const done = this.store.getKbFile(id)!
+      this.store.updateKbFile(id, { status: 'ready', note: done.note?.startsWith('向量化服务') ? null : done.note })
+    } catch {
+      const fallback = this.store.getKbFile(id)!
+      this.store.updateKbFile(id, { status: 'ready', note: fallback.note ?? '向量化服务暂不可用，先支持关键词检索，稍后自动补上' })
     }
-    const done = this.store.getKbFile(id)!
-    this.store.updateKbFile(id, { status: 'ready', note: done.note?.startsWith('向量化服务') ? null : done.note })
   }
 
   /**

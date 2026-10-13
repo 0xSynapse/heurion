@@ -233,10 +233,7 @@ export class DatasetService {
 
   /** 生存分析：根据时间列、事件列与分组变量拟合 KM 生存曲线与 Cox 比例风险回归 */
   survival(user: string, id: string, opts: SurvivalOptions): SurvivalAnalysisResult {
-    const dataset = this.get(user, id)
-    const row = this.own(user, id, 'read')
-    const csvFile = this.csvPath(row)
-    if (!existsSync(csvFile)) throw new DatasetError('not_ready', '数据集尚未处理完成')
+    const { dataset, path: csvFile } = this.readyCsv(user, id)
 
     const csvText = readFileSync(csvFile, 'utf8')
     const parsed = parseCsv(csvText)
@@ -265,10 +262,7 @@ export class DatasetService {
 
   /** 影像生物标志物生存分析：以 L3 SMI / VAT / 影像组学球形度等指标为切点拟合 KM 曲线与多变量 Cox 回归 */
   imagingSurvival(user: string, id: string, req: ImagingSurvivalRequest): ImagingSurvivalResponse {
-    const dataset = this.get(user, id)
-    const row = this.own(user, id, 'read')
-    const csvFile = this.csvPath(row)
-    if (!existsSync(csvFile)) throw new DatasetError('not_ready', '数据集尚未处理完成')
+    const { path: csvFile } = this.readyCsv(user, id)
 
     const csvText = readFileSync(csvFile, 'utf8')
     const parsed = parseCsv(csvText)

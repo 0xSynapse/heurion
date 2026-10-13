@@ -80,16 +80,24 @@ let projects: Array<{ id: string; name: string }> = []
 const collapsed = new Set<string>(JSON.parse((() => { try { return localStorage.getItem('heurion.collapsed') ?? '[]' } catch { return '[]' } })()))
 const saveCollapsed = () => { try { localStorage.setItem('heurion.collapsed', JSON.stringify([...collapsed])) } catch { /* 忽略 */ } }
 
-const docItem = (d: any) => `<li data-id="${d.id}" class="${d.id === session?.docId ? 'active' : ''}" title="${esc(d.title)}">${d.kind === 'deck' ? ICON_DECK : ICON_DOC}<span class="label">${esc(d.title)}</span><button class="item-menu" data-doc-menu="${d.id}" title="更多操作" aria-label="更多操作">⋯</button></li>`
+const isCopilotDoc = (d: any): boolean => {
+  if (!d?.context) return false
+  if (typeof d.context === 'object') return d.context.kind === 'copilot'
+  try { return JSON.parse(d.context)?.kind === 'copilot' } catch { return false }
+}
+
+const docItem = (d: any) => `<li data-id="${esc(d.id)}" class="${d.id === session?.docId ? 'active' : ''}" title="${esc(d.title)}">${d.kind === 'deck' ? ICON_DECK : ICON_DOC}<span class="label">${esc(d.title)}</span><button class="item-menu" data-doc-menu="${esc(d.id)}" title="更多操作" aria-label="更多操作">⋯</button></li>`
 
 async function loadDocs(): Promise<void> {
-  ;[docRows, projects] = await Promise.all([api<any[]>('/api/docs'), api<any[]>('/api/projects')])
+  const [rawDocs, projs] = await Promise.all([api<any[]>('/api/docs'), api<any[]>('/api/projects')])
+  docRows = rawDocs.filter(d => !isCopilotDoc(d))
+  projects = projs
   if ($<HTMLInputElement>('docSearch').value.trim()) { void runSearch(); return }
   const loose = docRows.filter(d => !d.project_id)
   const groups = projects.map(p => {
     const items = docRows.filter(d => d.project_id === p.id)
     const open = !collapsed.has(p.id)
-    return `<li class="group${open ? ' open' : ''}" data-project="${p.id}"><span class="caret">${open ? '▾' : '▸'}</span>${open ? ICON_FOLDER_OPEN : ICON_FOLDER}<span class="label">${esc(p.name)}</span><span class="count">${items.length}</span><button class="item-menu" data-project-menu="${p.id}" title="项目操作" aria-label="项目操作">⋯</button></li>${open ? items.map(docItem).join('') : ''}`
+    return `<li class="group${open ? ' open' : ''}" data-project="${esc(p.id)}"><span class="caret">${open ? '▾' : '▸'}</span>${open ? ICON_FOLDER_OPEN : ICON_FOLDER}<span class="label">${esc(p.name)}</span><span class="count">${items.length}</span><button class="item-menu" data-project-menu="${esc(p.id)}" title="项目操作" aria-label="项目操作">⋯</button></li>${open ? items.map(docItem).join('') : ''}`
   }).join('')
   $('docList').innerHTML = (loose.length && projects.length ? '<li class="group-label">未分组</li>' : '') + loose.map(docItem).join('') + groups
     + (docRows.length === 0 ? '<li class="nav-empty">还没有文档</li>' : '')
@@ -105,7 +113,7 @@ async function runSearch(): Promise<void> {
   const mark = (s: string) => esc(s).replace(/\[([^\]]*)\]/g, '<mark>$1</mark>')
   $('docList').innerHTML = hits.length === 0
     ? `<li class="nav-empty">没有找到「${esc(q)}」</li>`
-    : hits.map(h => `<li data-id="${h.doc_id}" class="hit${h.doc_id === session?.docId ? ' active' : ''}" title="${esc(h.title)}">${h.kind === 'deck' ? ICON_DECK : ICON_DOC}<span class="hit-text"><span class="label">${esc(h.title)}</span><span class="snippet">${mark(h.snippet)}</span></span></li>`).join('')
+    : hits.map(h => `<li data-id="${esc(h.doc_id)}" class="hit${h.doc_id === session?.docId ? ' active' : ''}" title="${esc(h.title)}">${h.kind === 'deck' ? ICON_DECK : ICON_DOC}<span class="hit-text"><span class="label">${esc(h.title)}</span><span class="snippet">${mark(h.snippet)}</span></span></li>`).join('')
 }
 $('docSearch').oninput = () => { clearTimeout(searchTimer); searchTimer = window.setTimeout(() => void runSearch(), 200) }
 $('docSearch').onkeydown = e => { if (e.key === 'Escape') { $<HTMLInputElement>('docSearch').value = ''; void loadDocs() } }
@@ -590,6 +598,7 @@ function showPage(cls: string, title: string): HTMLElement {
 
 /** 离开文档（打开患者页时）：关掉编辑器，清空中间区域与对话。 */
 function leaveDoc(): void {
+  openSeq++
   // 没打开文档：AI 栏收起（对话要基于一份文档），顶栏不显示导出与同步状态
   $('app').classList.add('no-doc')
   close()
@@ -617,7 +626,11 @@ let docPatient: string | null = null
 /** 当前文档事件流收到 hello 的次数（大于 1 说明是断线重连）。 */
 let streamHellos = 0
 
+/** 单调递增打开序号（防止并发 open(docId) 导致旧连接泄漏）。 */
+let openSeq = 0
+
 async function open(docId: string): Promise<void> {
+  const seq = ++openSeq
   streamHellos = 0
   $('app').classList.remove('no-doc')
   refImportHtml = ''
@@ -632,11 +645,16 @@ async function open(docId: string): Promise<void> {
   $('page').innerHTML = ''
   $('page').className = 'page'
   const meta = await api(`/api/docs/${docId}`)
+  if (seq !== openSeq) return
+  close()
   const stream = new EventSource(`/api/docs/${docId}/stream?token=${encodeURIComponent(TOKEN)}`)
   stream.onmessage = e => onStreamEvent(JSON.parse(e.data))
   const onCommentClick = (thread: string) => {
     switchTab('commentPane')
-    document.querySelector(`[data-cid="${CSS.escape(thread)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const card = document.querySelector(`#comments [data-cid="${CSS.escape(thread)}"]`)
+    card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    card?.classList.add('card-highlight')
+    setTimeout(() => card?.classList.remove('card-highlight'), 1600)
   }
   if (meta.kind === 'deck') {
     const deck = new DeckView($('page'), {
@@ -650,6 +668,7 @@ async function open(docId: string): Promise<void> {
     $('page').classList.add('deck')
     setSyncStatus('synced')
     await deck.load()
+    if (seq !== openSeq) return
   } else {
     const ydoc = new Y.Doc()
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
@@ -669,8 +688,10 @@ async function open(docId: string): Promise<void> {
       },
       onCommentClick,
       onClaimClick: claimId => {
-        switchTab('reviewPane')
-        const card = document.querySelector(`.review-card[data-cid="${CSS.escape(claimId)}"]`)
+        switchTab('commentPane')
+        const check = (detail?.claim_checks ?? []).find((c: any) => c.claim_id === claimId)
+        const targetId = check?.comment_id ?? claimId
+        const card = document.querySelector(`#comments [data-cid="${CSS.escape(targetId)}"]`)
         card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
         card?.classList.add('card-highlight')
         setTimeout(() => card?.classList.remove('card-highlight'), 1600)
@@ -706,6 +727,7 @@ async function open(docId: string): Promise<void> {
   $('exportPptxBtn').hidden = meta.kind !== 'deck'
   for (const b of ['exportBtn', 'sendBtn']) $<HTMLButtonElement>(b).disabled = false
   await loadDocs()
+  if (seq !== openSeq) return
   await refresh(true)
 }
 
@@ -714,12 +736,18 @@ function renderCollaborators(list: Array<{ name: string; role: string }>, readOn
   const el = $('docCollab')
   el.hidden = list.length < 2 && !readOnly
   const ROLE: Record<string, string> = { owner: '负责人', editor: '可编辑', viewer: '只读' }
-  el.innerHTML = list.slice(0, 5).map(m => `<span class="collab-avatar role-${esc(m.role)}" title="${esc(m.name)} · ${ROLE[m.role] ?? ''}">${esc(m.name.slice(0, 1).toUpperCase())}</span>`).join('')
+  el.innerHTML = list.slice(0, 5).map(m => `<span class="collab-avatar role-${esc(m.role)}" title="${esc(m.name)} · ${esc(ROLE[m.role] ?? '')}">${esc(m.name.slice(0, 1).toUpperCase())}</span>`).join('')
     + (list.length > 5 ? `<span class="collab-more">+${list.length - 5}</span>` : '')
     + (readOnly ? '<span class="pill off collab-ro" title="你在这个研究里是只读成员：能看、能评论，不能修改">只读</span>' : '')
 }
 
 function close(): void {
+  activeSubagentTask = null
+  subagentCards.clear()
+  resetAllRosterStatuses()
+  clearAllChatImages()
+  callLabels.clear()
+  turnChanges.clear()
   if (!session) return
   session.stream.close()
   session.editor?.destroy()
@@ -772,9 +800,16 @@ async function refresh(full: boolean): Promise<void> {
   $('docTitle').textContent = d.title
   if (full) {
     setBusy(d.busy)
+    if (!turnUi) {
+      $('chatLog').innerHTML = ''
+      renderSubagentWelcome()
+    }
     const failed = new Map<string, { status: string; error: string | null }>((d.failed_turns ?? []).map((t: any) => [t.id, t]))
     for (const m of d.messages) {
-      addMsg(m.role, displayMessage(m.text), m.role === 'assistant' && d.revertable.includes(m.turn_id) ? m.turn_id : null)
+      if (m.turn_id && $('chatLog').querySelector(`.msg.${CSS.escape(m.role)}[data-turn-id="${CSS.escape(m.turn_id)}"]`)) {
+        continue
+      }
+      addMsg(m.role, displayMessage(m.text), m.role === 'assistant' && d.revertable.includes(m.turn_id) ? m.turn_id : null, m.turn_id ?? null)
       // 没正常完成的回合：在该轮用户消息后标出原因（刷新页面后也看得到）
       const f = m.role === 'user' && m.turn_id ? failed.get(m.turn_id) : undefined
       if (f) {
@@ -788,7 +823,6 @@ async function refresh(full: boolean): Promise<void> {
   }
   renderComments()
   renderSuggestions()
-  renderReview()
   renderVersions()
   renderCites()
   syncRevertButtons()
@@ -1238,10 +1272,11 @@ function lightMarkdown(text: string): string {
   return esc(text).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`\n]+)`/g, '<code>$1</code>')
 }
 
-function addMsg(role: 'user' | 'assistant', text: string, revertTurn: string | null = null): HTMLElement {
+function addMsg(role: 'user' | 'assistant', text: string, revertTurn: string | null = null, msgTurnId: string | null = revertTurn): HTMLElement {
   $('chatSubagentWelcome')?.remove()
   const div = document.createElement('div')
   div.className = `msg ${role}`
+  if (msgTurnId) div.dataset.turnId = msgTurnId
   if (role === 'assistant') {
     div.innerHTML = lightMarkdown(text)
     if (docPatient && /影像|病灶|切片|RECIST|CT|MRI|长径|短径|密度|结节|支气管|粘液栓|MPR/i.test(text)) {
@@ -1260,7 +1295,7 @@ function addMsg(role: 'user' | 'assistant', text: string, revertTurn: string | n
     if (ids.length) {
       const row = document.createElement('div')
       row.className = 'msg-images'
-      row.innerHTML = ids.map(id => `<a href="/api/assets/${id}?token=${encodeURIComponent(TOKEN)}" target="_blank" rel="noreferrer"><img src="/api/assets/${id}?token=${encodeURIComponent(TOKEN)}" alt="图片"></a>`).join('')
+      row.innerHTML = ids.map(id => `<a href="/api/assets/${encodeURIComponent(id)}?token=${encodeURIComponent(TOKEN)}" target="_blank" rel="noreferrer"><img src="/api/assets/${encodeURIComponent(id)}?token=${encodeURIComponent(TOKEN)}" alt="图片"></a>`).join('')
       div.appendChild(row)
     }
   }
@@ -1780,10 +1815,10 @@ function renderSubagentDone(ev: { id: string; role: string; summary: string; out
       contentHtml = `
         <div class="subagent-fc-verdict verdict-${esc(verdict)}">${verdictLabel}</div>
         <div class="subagent-fc-grid">
-          <div class="fc-metric"><span class="fc-val">${out.total_claims_audited ?? 0}</span><span class="fc-label">核验论断</span></div>
-          <div class="fc-metric"><span class="fc-val ok">${out.supported_count ?? 0}</span><span class="fc-label">文献完全吻合</span></div>
-          <div class="fc-metric"><span class="fc-val ${out.unsupported_count ? 'danger' : ''}">${out.unsupported_count ?? 0}</span><span class="fc-label">无证据/冲突</span></div>
-          <div class="fc-metric"><span class="fc-val ${out.phi_detected ? 'danger' : 'ok'}">${out.phi_detected ? `检出 ${out.phi_count}` : '无敏感信息'}</span><span class="fc-label">PHI 敏感脱敏</span></div>
+          <div class="fc-metric"><span class="fc-val">${esc(out.total_claims_audited ?? 0)}</span><span class="fc-label">核验论断</span></div>
+          <div class="fc-metric"><span class="fc-val ok">${esc(out.supported_count ?? 0)}</span><span class="fc-label">文献完全吻合</span></div>
+          <div class="fc-metric"><span class="fc-val ${out.unsupported_count ? 'danger' : ''}">${esc(out.unsupported_count ?? 0)}</span><span class="fc-label">无证据/冲突</span></div>
+          <div class="fc-metric"><span class="fc-val ${out.phi_detected ? 'danger' : 'ok'}">${out.phi_detected ? `检出 ${esc(out.phi_count)}` : '无敏感信息'}</span><span class="fc-label">PHI 敏感脱敏</span></div>
         </div>
         ${issues.length > 0 ? `
           <div class="subagent-issues-title">需作者关注的论断核验项（${issues.length} 处）：</div>
@@ -1816,7 +1851,7 @@ let lastAssistant: HTMLElement | null = null
 function renderTurnEvent(ev: any): void {
   switch (ev.type) {
     case 'queued': addStep(`排队中（第 ${ev.position} 位）：${displayMessage(ev.message).slice(0, 40)}`); void loadQueue(); break
-    case 'turn':
+    case 'turn': {
       activeSubagentTask = null
       resetAllRosterStatuses()
       subagentCards.clear()
@@ -1824,10 +1859,16 @@ function renderTurnEvent(ev: any): void {
       lastAssistant = null
       setBusy(true)
       hideTurnBanner()
-      addMsg('user', displayMessage(ev.message))
+      const existingUserMsg = ev.turn_id
+        ? $('chatLog').querySelector(`.msg.user[data-turn-id="${CSS.escape(ev.turn_id)}"]`)
+        : null
+      if (!existingUserMsg) {
+        addMsg('user', displayMessage(ev.message), null, ev.turn_id ?? null)
+      }
       startTurnUi(ev.turn_id ?? null)
       break
-    case 'assistant': lastAssistant = addMsg('assistant', ev.text); break
+    }
+    case 'assistant': lastAssistant = addMsg('assistant', ev.text, null, turnUi?.turnId ?? null); break
     case 'subagent_start': renderSubagentStart(ev); break
     case 'subagent_step': renderSubagentStep(ev); break
     case 'subagent_done': renderSubagentDone(ev); break
@@ -1869,21 +1910,18 @@ function renderTurnEvent(ev: any): void {
       if (ev.docs.includes(session?.docId) && ev.status !== 'error') {
         void refresh(false).then(() => {
           if (detail?.suggestions?.length > 0) {
-            // 自动切换到审查面板，让用户直接看到右侧的审查卡片
-            switchTab('reviewPane')
             if (lastAssistant) {
               const bar = document.createElement('div')
               bar.className = 'chat-turn-review-bar'
               bar.innerHTML = `
                 <span class="badge-pill rev"><span class="dot"></span> AI 提出了 ${detail.suggestions.length} 处修订</span>
-                <button class="btn-jump-review">在审查面板逐条查看并采纳 →</button>
+                <button class="btn-jump-review">在正文中定位并采纳 →</button>
               `
               bar.querySelector('button')?.addEventListener('click', () => {
-                switchTab('reviewPane')
-                const firstCard = document.querySelector('.review-card')
-                firstCard?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                firstCard?.classList.add('ai-flash')
-                setTimeout(() => firstCard?.classList.remove('ai-flash'), 1400)
+                const firstSug = document.querySelector('[data-suggest-group]')
+                firstSug?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                firstSug?.classList.add('ai-flash')
+                setTimeout(() => firstSug?.classList.remove('ai-flash'), 1400)
               })
               lastAssistant.appendChild(bar)
             }
@@ -1912,8 +1950,8 @@ function renderChatImages(): void {
     return
   }
   const imgsHtml = chatImages.map(i => {
-    const src = i.previewUrl || `/api/assets/${i.id}?token=${encodeURIComponent(TOKEN)}`
-    return `<span class="chat-img" data-id="${i.id}"><img src="${src}" alt="${esc(i.name)}"><button class="chip-x" aria-label="移除">✕</button></span>`
+    const src = i.previewUrl || `/api/assets/${encodeURIComponent(i.id)}?token=${encodeURIComponent(TOKEN)}`
+    return `<span class="chat-img" data-id="${esc(i.id)}"><img src="${esc(src)}" alt="${esc(i.name)}"><button class="chip-x" aria-label="移除">✕</button></span>`
   }).join('')
 
   const patientAction = docPatient
@@ -2197,8 +2235,13 @@ $('queueList').onclick = e => {
   const t = e.target as HTMLElement
   const cancel = t.closest('[data-cancel]') as HTMLElement | null
   if (cancel) { void cancelJob(cancel.dataset.cancel!); return }
-  const open = t.closest('[data-open]') as HTMLElement | null
-  if (open && open.dataset.open !== session?.docId) document.querySelector<HTMLElement>(`li[data-id="${CSS.escape(open.dataset.open!)}"]`)?.click()
+  const openEl = t.closest('[data-open]') as HTMLElement | null
+  if (openEl && openEl.dataset.open && openEl.dataset.open !== session?.docId) {
+    const docId = openEl.dataset.open
+    const li = $('docList').querySelector<HTMLElement>(`li[data-id="${CSS.escape(docId)}"]`)
+    if (li) li.click()
+    else void open(docId)
+  }
 }
 $('queueClear').onclick = async () => {
   await api('/api/cancel', { method: 'POST' }).catch(err => showNotice((err as Error).message, true))
@@ -2261,8 +2304,14 @@ $('newCommentAsk').onclick = () => void saveComment(true)
 
 function renderComments(): void {
   const list: any[] = detail?.comments ?? []
+  const openCount = list.filter(c => c.status === 'open').length
+  const badge = document.getElementById('commentBadge')
+  if (badge) {
+    badge.textContent = String(openCount)
+    badge.hidden = openCount === 0
+  }
   $('comments').innerHTML = list.length === 0
-    ? '<div class="muted">在正文中选中文字即可评论；写上 @heurion 由 AI 自动处理</div>'
+    ? '<div class="muted">在正文中选中文字即可评论；写上 @heurion 由 AI 自动处理。审查发现的论断问题也会自动在此生成评论。</div>'
     : list.map(c => {
       const isClaim = c.replies.some((r: any) => r.role === 'ai' && r.text.includes('论断核对：'))
       let suggestion: string | null = null
@@ -2271,9 +2320,9 @@ function renderComments(): void {
         if (m) { suggestion = m[1]?.trim() ?? null; break }
       }
       return `
-    <div class="card ${c.status}${isClaim ? ' claim-comment-card' : ''}" data-cid="${c.id}">
-      <div class="quote ${c.anchor.located ? '' : 'lost'}">${esc(c.anchor.text || c.snippet || '（整块）')}${c.anchor.located ? '' : ' · 锚点已移除'}</div>
-      ${c.replies.map((r: any) => `<div class="reply ${r.role}"><b>${r.role === 'ai' ? (isClaim ? 'Heurion 论断核验' : 'Heurion') : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}
+    <div class="card ${esc(c.status)}${isClaim ? ' claim-comment-card' : ''}" data-cid="${esc(c.id)}">
+      <div class="quote ${c.anchor.located ? '' : 'lost'}" ${c.anchor.located ? 'data-locate="1" title="点击定位到正文位置"' : ''}>${esc(c.anchor.text || c.snippet || '（整块）')}${c.anchor.located ? '' : ' · 锚点已移除'}</div>
+      ${c.replies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? (isClaim ? 'Heurion 论断核验' : 'Heurion') : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}
       ${isClaim && suggestion && c.status === 'open' ? `
         <div class="claim-suggestion-box">
           <div class="claim-suggestion-title">AI 纠正建议</div>
@@ -2290,6 +2339,20 @@ function renderComments(): void {
 }
 
 $('comments').onclick = async e => {
+  const quoteEl = (e.target as HTMLElement).closest('.quote[data-locate]') as HTMLElement | null
+  if (quoteEl) {
+    const card = quoteEl.closest('[data-cid]') as HTMLElement | null
+    const cid = card?.dataset.cid
+    if (cid) {
+      const check = (detail?.claim_checks ?? []).find((c: any) => c.comment_id === cid)
+      const target = document.querySelector(`[data-comment~="${CSS.escape(cid)}"]`)
+        ?? (check ? document.querySelector(`.claim-warn-text[data-claim-id="${CSS.escape(check.claim_id)}"]`) : null)
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      target?.classList.add('ai-flash')
+      setTimeout(() => target?.classList.remove('ai-flash'), 1400)
+    }
+    return
+  }
   const btn = (e.target as HTMLElement).closest('button[data-act]') as HTMLButtonElement | null
   if (!btn || !session) return
   const card = btn.closest('[data-cid]') as HTMLElement
@@ -2363,130 +2426,14 @@ $('suggestBanner').onclick = e => {
   }
 }
 
-// —— 伴随审查面板（AI 修订与论断核查卡片流） ——
-
-function renderReview(): void {
-  const groups: any[] = detail?.suggestions ?? []
-  const checks: any[] = detail?.claim_checks ?? []
-  const flagged = checks.filter(c => c.verdict !== 'supported')
-  const total = groups.length + flagged.length
-
-  const badge = document.getElementById('reviewBadge')
-  if (badge) {
-    badge.textContent = String(total)
-    badge.hidden = total === 0
-  }
-
-  const btnAcceptAll = document.getElementById('reviewAcceptAll')
-  const btnRejectAll = document.getElementById('reviewRejectAll')
-  if (btnAcceptAll) btnAcceptAll.hidden = groups.length === 0
-  if (btnRejectAll) btnRejectAll.hidden = groups.length === 0
-
-  const container = document.getElementById('reviewCards')
-  if (!container) return
-
-  if (total === 0) {
-    container.innerHTML = `
-      <div class="review-empty">
-        <div class="empty-icon">✓</div>
-        <div class="empty-title">当前无待处理修订或论断警示</div>
-        <div class="muted">AI 提出的修订和文献论断核查将在此实时伴随呈现</div>
-      </div>`
-    return
-  }
-
-  const parts: string[] = []
-
-  // 1. AI 修订卡片（墨黑底色高对比度，绿色标与采纳/拒绝）
-  for (const g of groups) {
-    let delText = ''
-    let insText = ''
-    const domEls = document.querySelectorAll(`[data-suggest-group="${CSS.escape(g.group)}"]`)
-    domEls.forEach(el => {
-      const del = el.querySelector('.diff-del')
-      if (del) delText = del.textContent || ''
-      const ins = el.querySelector('.diff-ins')
-      if (ins) insText = ins.textContent || ''
-    })
-
-    parts.push(`
-      <div class="review-card ai-card" data-group="${esc(g.group)}">
-        <div class="card-top">
-          <span class="badge-pill rev"><span class="dot"></span> AI 修订 · 待采纳</span>
-          <span class="card-meta">#${esc(g.group.slice(0, 6))}</span>
-        </div>
-        <div class="card-title">根据最新证据量化表述</div>
-        <div class="card-desc">补充定量效应值与精确置信区间，替换模糊陈述（涉及 ${g.inserts} 增 / ${g.deletes} 删）</div>
-        ${(delText || insText) ? `
-          <div class="diff-preview">
-            ${delText ? `<div class="diff-del-row"><span class="tag-del">原内容</span><del>${esc(delText)}</del></div>` : ''}
-            ${insText ? `<div class="diff-ins-row"><span class="tag-ins">修订</span><ins>${esc(insText)}</ins></div>` : ''}
-          </div>` : ''}
-        <div class="card-actions">
-          <button class="btn-review-accept" data-act="accept" data-group="${esc(g.group)}">采纳</button>
-          <button class="btn-review-reject" data-act="reject" data-group="${esc(g.group)}">拒绝</button>
-          <button class="btn-review-locate" data-act="locate-rev" data-group="${esc(g.group)}">定位正文</button>
-        </div>
-      </div>`)
-  }
-
-  // 2. 论断核查卡片（暖黄警示标，展示反差与文献限制）
-  for (const c of flagged) {
-    parts.push(`
-      <div class="review-card claim-card ${esc(c.verdict)}" data-cid="${esc(c.claim_id)}">
-        <div class="card-top">
-          <span class="badge-pill claim"><span class="dot"></span> 论断核查 · 文献依据</span>
-          <span class="verdict-tag ${esc(c.verdict)}">${VERDICT[c.verdict] ?? c.verdict}</span>
-        </div>
-        <div class="claim-sentence">「${esc(c.sentence)}」</div>
-        <div class="claim-reason">${esc(c.reason)}</div>
-        <div class="card-actions">
-          <button class="btn-claim-locate" data-act="locate-claim" data-cid="${esc(c.claim_id)}">定位正文</button>
-        </div>
-      </div>`)
-  }
-
-  container.innerHTML = parts.join('')
-}
-
-document.getElementById('reviewCards')?.addEventListener('click', async e => {
-  const btn = (e.target as HTMLElement).closest('button[data-act]') as HTMLButtonElement | null
-  if (!btn || !session) return
-  const act = btn.dataset.act
-  const group = btn.dataset.group
-  const cid = btn.dataset.cid
-  if (act === 'accept' && group) {
-    await resolveSuggestion(group, true)
-  } else if (act === 'reject' && group) {
-    await resolveSuggestion(group, false)
-  } else if (act === 'locate-rev' && group) {
-    const el = document.querySelector(`[data-suggest-group="${CSS.escape(group)}"]`)
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    el?.classList.add('ai-flash')
-    setTimeout(() => el?.classList.remove('ai-flash'), 1400)
-  } else if (act === 'locate-claim' && cid) {
-    const el = document.querySelector(`.claim-warn-text[data-claim-id="${CSS.escape(cid)}"]`)
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    el?.classList.add('ai-flash')
-    setTimeout(() => el?.classList.remove('ai-flash'), 1400)
-  }
-})
-
-document.getElementById('reviewAcceptAll')?.addEventListener('click', () => {
-  void resolveSuggestion('all', true)
-})
-document.getElementById('reviewRejectAll')?.addEventListener('click', () => {
-  void resolveSuggestion('all', false)
-})
-
 // —— 版本与引用 ——
 
 const SOURCE: Record<string, string> = { create: '新建', import: '导入', turn: 'AI', user: '保存', restore: '回滚' }
 
 function renderVersions(): void {
   $('versions').innerHTML = `<div class="row" style="margin-bottom:8px"><button id="saveVersion">保存当前为版本</button></div>` +
-    (detail?.versions ?? []).map((v: any) => `<div class="vitem"><div><b>v${v.seq}</b> · ${SOURCE[v.source] ?? v.source} · ${esc(v.note)}<div class="muted">rev ${v.rev} · ${new Date(v.created_at).toLocaleString()}</div></div>
-      <div class="row"><button data-diff="${v.seq}">对比</button><button data-restore="${v.seq}">回滚</button></div></div>`).join('')
+    (detail?.versions ?? []).map((v: any) => `<div class="vitem"><div><b>v${esc(v.seq)}</b> · ${esc(SOURCE[v.source] ?? v.source)} · ${esc(v.note)}<div class="muted">rev ${esc(v.rev)} · ${new Date(v.created_at).toLocaleString()}</div></div>
+      <div class="row"><button data-diff="${esc(v.seq)}">对比</button><button data-restore="${esc(v.seq)}">回滚</button></div></div>`).join('')
   $('saveVersion').onclick = async () => {
     if (!session) return
     await api(`/api/docs/${session.docId}/save`, { method: 'POST' })
@@ -2508,8 +2455,8 @@ $('versions').onclick = async e => {
   if (d.diff) {
     const r = await api(`/api/docs/${session.docId}/diff?from=${d.diff}`)
     const label: Record<string, string> = { added: '新增', removed: '删除', modified: '修改' }
-    $('diffView').innerHTML = `<h4>v${d.diff} → 当前</h4>` + (r.changes.length === 0 ? '<div class="muted">无变化</div>' : r.changes.map((c: any) =>
-      `<div class="${c.kind}">[${label[c.kind]}] ${esc(c.kind === 'removed' ? c.before : c.after)}${c.kind === 'modified' ? `<div class="muted">原：${esc(c.before)}</div>` : ''}</div>`).join(''))
+    $('diffView').innerHTML = `<h4>v${esc(d.diff)} → 当前</h4>` + (r.changes.length === 0 ? '<div class="muted">无变化</div>' : r.changes.map((c: any) =>
+      `<div class="${esc(c.kind)}">[${esc(label[c.kind] ?? c.kind)}] ${esc(c.kind === 'removed' ? c.before : c.after)}${c.kind === 'modified' ? `<div class="muted">原：${esc(c.before)}</div>` : ''}</div>`).join(''))
   }
 }
 
@@ -2523,17 +2470,21 @@ function renderCites(): void {
   const checks: any[] = detail?.claim_checks ?? []
   const counts = checks.reduce((m: Record<string, number>, c: any) => { m[c.verdict] = (m[c.verdict] ?? 0) + 1; return m }, {})
   const summary = checks.length === 0 ? '<span class="muted">还没有核对过</span>'
-    : Object.entries(counts).map(([v, n]) => `<span class="verdict ${v}">${VERDICT[v] ?? v} ${n}</span>`).join(' ')
+    : Object.entries(counts).map(([v, n]) => `<span class="verdict ${esc(v)}">${esc(VERDICT[v] ?? v)} ${n}</span>`).join(' ')
   const flagged = checks.filter(c => c.verdict !== 'supported').map(c =>
-    `<div class="claim"><span class="verdict ${c.verdict}">${VERDICT[c.verdict] ?? c.verdict}</span> ${esc(c.sentence)}<div class="muted">${esc(c.reason)}</div></div>`).join('')
+    `<div class="claim"><span class="verdict ${esc(c.verdict)}">${esc(VERDICT[c.verdict] ?? c.verdict)}</span> ${esc(c.sentence)}<div class="muted">${esc(c.reason)}</div></div>`).join('')
   $('cites').innerHTML = `<div class="card"><div class="row"><b>论断核对</b><span class="grow"></span><button id="verifyBtn" class="ai">核对全部论断</button></div>
       <div class="muted" style="margin:4px 0">对照所引文献的 PubMed 摘要逐句核对；有问题的句子会挂一条 AI 评论，不会自动改写。</div>
       <div>${summary}</div>${flagged}</div>` +
     `<div class="card"><div class="row"><b>参考文献</b><span class="grow"></span><button id="refImportBtn" title="从 Zotero / EndNote / Mendeley / PubMed 导出的文件，或每行一个 DOI / PMID">导入参考文献</button>
       <input type="file" id="refImportInput" accept=".ris,.bib,.nbib,.txt,.xml,.enw" hidden></div>
       <div class="muted" style="margin:4px 0">导入后登记在这里（未使用），你和 AI 都能直接引用；每条按 DOI 核实，查不到的会列出来。</div><div id="refImportResult">${refImportHtml}</div></div>` +
-    (list.length === 0 ? '<div class="muted">AI 通过文献检索登记的引用会显示在这里</div>' : list.map(c =>
-      `<div class="card"><b>${c.number ? `[${c.number}]` : '未使用'}</b> ${esc(c.formatted)} <a href="${esc(c.url || `https://doi.org/${c.doi}`)}" target="_blank" rel="noopener">原文</a></div>`).join(''))
+    (list.length === 0 ? '<div class="muted">AI 通过文献检索登记的引用会显示在这里</div>' : list.map(c => {
+      const candidateUrl = typeof c.url === 'string' && /^https?:\/\//i.test(c.url)
+        ? c.url
+        : (c.doi ? `https://doi.org/${encodeURIComponent(String(c.doi))}` : '')
+      return `<div class="card"><b>${c.number ? `[${esc(c.number)}]` : '未使用'}</b> ${esc(c.formatted)}${candidateUrl ? ` <a href="${esc(candidateUrl)}" target="_blank" rel="noopener">原文</a>` : ''}</div>`
+    }).join(''))
   $('refImportBtn').onclick = () => $('refImportInput').click()
   $<HTMLInputElement>('refImportInput').onchange = async e => {
     const input = e.target as HTMLInputElement

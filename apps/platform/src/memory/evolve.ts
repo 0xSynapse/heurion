@@ -85,9 +85,10 @@ export class MemoryEvolution {
 
     const alias = new Map<string, string>()
     memories.forEach((m, i) => alias.set(`m${i + 1}`, m.id))
+    const batch = signals.slice(0, 40)
     const input = {
       memories: memories.map((m, i) => ({ id: `m${i + 1}`, kind: MEMORY_KINDS[m.kind], content: m.content, used: m.use_count, last_used_days: days(m.last_used_at), age_days: days(m.created_at), user_said_explicitly: Boolean(m.explicit) })),
-      signals: signals.slice(0, 40).map((x, i) => ({ id: `s${i + 1}`, type: x.s.kind, ai_text: x.s.ai_text.slice(0, 600), user_text: x.user!.slice(0, 600) })),
+      signals: batch.map((x, i) => ({ id: `s${i + 1}`, type: x.s.kind, ai_text: x.s.ai_text.slice(0, 600), user_text: x.user!.slice(0, 600) })),
       messages: messages.slice(0, 30).map((m, i) => ({ id: `u${i + 1}`, text: m.text.slice(0, 400) })),
       dismissed: this.store.listMemoryChanges(owner, ['dismissed'], 20).map(c => c.content ?? c.reason),
     }
@@ -125,9 +126,9 @@ export class MemoryEvolution {
       changes.push(this.store.addMemoryChange({ owner, action: 'archive', target_ids: [m.id], content: null, reason: `${STALE_DAYS} 天以上没有用到` }))
       pendingTargets.add(m.id)
     }
-    this.store.consumeMemorySignals(signals.map(x => x.s.id))
+    this.store.consumeMemorySignals(batch.map(x => x.s.id))
     this.store.setUserSetting(owner, LAST_REVIEW, new Date().toISOString())
-    return { proposed, changes, signals: signals.length, messages: messages.length }
+    return { proposed, changes, signals: batch.length, messages: messages.length }
   }
 
   /** 采纳一条整理建议（只能由用户做）。目标记忆已经变了（被删、被改）就作废。 */

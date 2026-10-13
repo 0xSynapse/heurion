@@ -44,7 +44,7 @@ const ABNORMAL = /(?:偏高|偏低|超标|阳性|高于参考|低于参考|超�
 /** 特殊人群（孕产 / 哺乳 / 儿童）的用药建议（含问句口径的「可以吃」）。 */
 const SPECIAL_MED = /(?:(?:建议|应当?|需要|推荐|不妨)[^。]{0,16}(?:吃|服用|口服|使用|注射|外用|喝)|(?:可以|能不能|能否|该不该|要不要)(?:吃|用|服|喝|打))/
 
-const sentences = (text: string): string[] => text.split(/(?<=[。！？；!?])/)
+const sentences = (text: string): string[] => text.split(/(?<=[。！？；!?])|\r?\n/)
 
 /** 分句之间的连接词：转折、递进、插入的个人判断（引述不跨过它们）。 */
 const CONNECTOR = /(?:但是|不过|然而|可是|另外|而且|并且|同时|此外|其实|所以|因此|我看|我觉得|我认为|个人认为|但)/
@@ -90,47 +90,56 @@ function throwAdvice(kind: 'diag' | 'dosage', opIndex: number): never {
 
 /** 对一段 AI 拟写入的文字做红线检查；违规抛 OpError（带失败码与 hint）。 */
 export function guardPhrRedlines(text: string, opIndex: number, member: PhrMember | null): void {
-  for (const s of sentences(text)) {
-    // 引述只豁免它所在的分句：按逗号与连接词拆成分句逐个查（「医生说按时吃药，另外建议加到 2 片」后一句照拦）
-    for (const part of clauses(s)) {
-      const advice = adviceViolation(part.text)
-      if (advice && !part.quoted) throwAdvice(advice, opIndex)
+  for (const para of text.split(/\r?\n+/)) {
+    const sents = sentences(para).map(x => x.trim()).filter(Boolean)
+    for (let i = 0; i < sents.length; i++) {
+      const s = sents[i]!
+      // 引述只豁免它所在的分句：按逗号与连接词拆成分句逐个查（「医生说按时吃药，另外建议加到 2 片」后一句照拦）
+      for (const part of clauses(s)) {
+        const advice = adviceViolation(part.text)
+        if (advice && !part.quoted) throwAdvice(advice, opIndex)
+      }
+      if (STAT.test(s) && ASSERT.test(s) && !/\[@c:[a-z0-9]+\]/.test(s)) {
+        throw new OpError('unsourced_claim', '这句统计性论断没有出处', {
+          op_index: opIndex,
+          hint: '用 pubmed_search 找证据 → insert_citation 登记 → 正文写返回的 [@c:id]；或改写为不含统计结论的记录。',
+        })
+      }
+      if (CRITICAL.test(s) && !SEEK.test(s)) {
+        throw new OpError('emergency_overreach', '出现急症表现的描述但缺少就医引导', {
+          op_index: opIndex,
+          hint: '涉及急症表现时只记录事实，并写明「出现这些情况请立即就医 / 拨打 120」；不要展开分析。',
+        })
+      }
+      if (ONCO.test(s) && ONCO_INTERPRET.test(s)) {
+        throw new OpError('presentation_tier', '肿瘤相关内容不要做解读性展开', {
+          op_index: opIndex,
+          hint: '只记录数值、日期与医生交代；解读与随访安排由医生进行，可写「具体听复查医生的建议」。',
+        })
+      }
+      if (ABNORMAL.test(s)) {
+        const win = sents.slice(i, i + 3).join('')
+        if (!SEEK.test(win) && !GUIDE.test(win)) {
+          throw new OpError('guidance_required', '提到异常指标但没有引导就医', {
+            op_index: opIndex,
+            hint: '在本块末尾加一句「以上异常项建议带上原始报告咨询医生」。',
+          })
+        }
+      }
     }
-    if (STAT.test(s) && ASSERT.test(s) && !/\[@c:[a-z0-9]+\]/.test(s)) {
-      throw new OpError('unsourced_claim', '这句统计性论断没有出处', {
-        op_index: opIndex,
-        hint: '用 pubmed_search 找证据 → insert_citation 登记 → 正文写返回的 [@c:id]；或改写为不含统计结论的记录。',
-      })
-    }
-    if (CRITICAL.test(s) && !SEEK.test(s)) {
-      throw new OpError('emergency_overreach', '出现急症表现的描述但缺少就医引导', {
-        op_index: opIndex,
-        hint: '涉及急症表现时只记录事实，并写明「出现这些情况请立即就医 / 拨打 120」；不要展开分析。',
-      })
-    }
-    if (ONCO.test(s) && ONCO_INTERPRET.test(s)) {
-      throw new OpError('presentation_tier', '肿瘤相关内容不要做解读性展开', {
-        op_index: opIndex,
-        hint: '只记录数值、日期与医生交代；解读与随访安排由医生进行，可写「具体听复查医生的建议」。',
-      })
-    }
-  }
-  if (ABNORMAL.test(text) && !SEEK.test(text) && !GUIDE.test(text)) {
-    throw new OpError('guidance_required', '提到异常指标但没有引导就医', {
-      op_index: opIndex,
-      hint: '在本块末尾加一句「以上异常项建议带上原始报告咨询医生」。',
-    })
   }
   if (member) {
     const year = new Date().getFullYear()
     const special = member.tags.includes('孕产') || member.tags.includes('哺乳') || (member.birth_year !== null && year - member.birth_year < 12)
     if (special) {
       for (const s of sentences(text)) {
-        if (SPECIAL_MED.test(s) && !QUOTED.test(s)) {
-          throw new OpError('special_population', '对孕产 / 哺乳 / 儿童成员不能给用药建议', {
-            op_index: opIndex,
-            hint: '这类成员的用药与检查必须由医生决定：医生交代的可以记录（写明「医生交代」），其余改为建议咨询医生。',
-          })
+        for (const part of clauses(s)) {
+          if (SPECIAL_MED.test(part.text) && !part.quoted) {
+            throw new OpError('special_population', '对孕产 / 哺乳 / 儿童成员不能给用药建议', {
+              op_index: opIndex,
+              hint: '这类成员的用药与检查必须由医生决定：医生交代的可以记录（写明「医生交代」），其余改为建议咨询医生。',
+            })
+          }
         }
       }
     }
@@ -160,7 +169,11 @@ function replyHardLine(s: string, member: PhrMember | null): string | null {
   if (ONCO.test(s) && ONCO_INTERPRET.test(s)) return 'oncology'
   if (member) {
     const special = member.tags.includes('孕产') || member.tags.includes('哺乳') || (member.birth_year !== null && new Date().getFullYear() - member.birth_year < 12)
-    if (special && SPECIAL_MED.test(s) && !QUOTED.test(s)) return 'special_population'
+    if (special) {
+      for (const part of clauses(s)) {
+        if (SPECIAL_MED.test(part.text) && !part.quoted) return 'special_population'
+      }
+    }
   }
   return null
 }

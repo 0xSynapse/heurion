@@ -456,8 +456,9 @@ export class Store {
    * 顶层事务或内层保存点在异常时自动 ROLLBACK 并抛出，成功时 RELEASE。
    */
   transaction<T>(fn: () => T): T {
-    const sp = `sp_${++this.savepointLevel}`
+    const sp = `sp_${this.savepointLevel + 1}`
     this.db.exec(`SAVEPOINT ${sp}`)
+    this.savepointLevel++
     try {
       const res = fn()
       this.db.exec(`RELEASE SAVEPOINT ${sp}`)
@@ -767,6 +768,7 @@ export class Store {
     if (!mailCols.includes('attachments')) {
       this.db.exec('ALTER TABLE mail_messages ADD COLUMN attachments TEXT')
     }
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_mail_user_thread ON mail_messages (user_id, thread_id)')
     this.db.exec("UPDATE mail_messages SET delivery_status = 'simulated', delivery_note = '本地开发模拟：未配置外网发信服务 (SMTP/RESEND_API_KEY)' WHERE folder = 'sent' AND delivery_status IS NULL")
   }
 
@@ -785,20 +787,26 @@ export class Store {
     return this.db.prepare('SELECT id, owner, title, kind, rev, created_at, updated_at, project_id, deleted_at, context FROM docs WHERE id = ?').get(id) as DocRow | undefined
   }
 
+  getCopilotDoc(owner: string): DocRow | undefined {
+    return this.db.prepare("SELECT id, owner, title, kind, rev, created_at, updated_at, project_id, deleted_at, context FROM docs WHERE owner = ? AND deleted_at IS NULL AND json_extract(context, '$.kind') = 'copilot' ORDER BY created_at DESC LIMIT 1").get(owner) as DocRow | undefined
+  }
+
   // —— 用户 ——
 
   /** 用户名比较不区分大小写（username_key）。第一个用户自动成为管理员。 */
   /** 新用户：tenant 给定时加入该租户，否则建一个个人租户（本人为机构管理员）。 */
   createUser(input: { id?: string; username: string; display_name: string; password_hash: string; role?: UserRow['role']; status?: UserRow['status']; imported_from?: string | null; email?: string | null; tenant?: { id: string; role: UserRow['tenant_role'] } }): UserRow {
-    const id = input.id ?? ('u' + randomUUID().replace(/-/g, '').slice(0, 15))
-    const role = input.role ?? (this.countUsers() === 0 ? 'admin' : 'user')
-    const tenant = input.tenant ?? { id: this.createTenant({ name: `${input.display_name}（个人）`, kind: 'personal', created_by: id }).id, role: 'admin' as const }
-    // 个人注册：个人空间就是工作空间；经邀请注册进机构的：个人空间等知家用到再建
-    const personal = input.tenant ? null : tenant.id
-    this.db.prepare(`INSERT INTO users (id, username, username_key, display_name, password_hash, role, status, created_at, imported_from, email, tenant_id, tenant_role, personal_tenant_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(id, input.username, userKey(input.username), input.display_name, input.password_hash, role, input.status ?? 'active', now(), input.imported_from ?? null, input.email ?? null, tenant.id, tenant.role, personal)
-    return this.getUser(id)!
+    return this.transaction(() => {
+      const id = input.id ?? ('u' + randomUUID().replace(/-/g, '').slice(0, 15))
+      const role = input.role ?? (this.countUsers() === 0 ? 'admin' : 'user')
+      const tenant = input.tenant ?? { id: this.createTenant({ name: `${input.display_name}（个人）`, kind: 'personal', created_by: id }).id, role: 'admin' as const }
+      // 个人注册：个人空间就是工作空间；经邀请注册进机构的：个人空间等知家用到再建
+      const personal = input.tenant ? null : tenant.id
+      this.db.prepare(`INSERT INTO users (id, username, username_key, display_name, password_hash, role, status, created_at, imported_from, email, tenant_id, tenant_role, personal_tenant_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, input.username, userKey(input.username), input.display_name, input.password_hash, role, input.status ?? 'active', now(), input.imported_from ?? null, input.email ?? null, tenant.id, tenant.role, personal)
+      return this.getUser(id)!
+    })
   }
 
   // —— 租户（机构） ——
@@ -952,9 +960,11 @@ export class Store {
 
   /** 开发期的数据（所有者是开发用户）转给一个正式账户。 */
   transferOwnership(from: string, to: string): { docs: number; assets: number } {
-    const docs = Number(this.db.prepare('UPDATE docs SET owner = ? WHERE owner = ?').run(to, from).changes)
-    const assets = Number(this.db.prepare('UPDATE assets SET owner = ? WHERE owner = ?').run(to, from).changes)
-    return { docs, assets }
+    return this.transaction(() => {
+      const docs = Number(this.db.prepare('UPDATE docs SET owner = ? WHERE owner = ?').run(to, from).changes)
+      const assets = Number(this.db.prepare('UPDATE assets SET owner = ? WHERE owner = ?').run(to, from).changes)
+      return { docs, assets }
+    })
   }
 
   /** 正常文档（不含回收站）。 */
@@ -1234,20 +1244,24 @@ export class Store {
   }
 
   deleteMemory(id: string): void {
-    this.db.prepare('DELETE FROM memories WHERE id = ?').run(id)
-    this.db.prepare('DELETE FROM memory_events WHERE memory_id = ?').run(id)
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM memories WHERE id = ?').run(id)
+      this.db.prepare('DELETE FROM memory_events WHERE memory_id = ?').run(id)
+    })
   }
 
   /** 清空：owner 给定时只清这个用户，否则清全部（管理员停用记忆）。 */
   clearMemories(owner?: string): number {
-    if (owner) {
-      this.db.prepare('DELETE FROM memory_events WHERE owner = ?').run(owner)
-      this.db.prepare('DELETE FROM memory_signals WHERE owner = ?').run(owner)
-      this.db.prepare('DELETE FROM memory_changes WHERE owner = ?').run(owner)
-      return Number(this.db.prepare('DELETE FROM memories WHERE owner = ?').run(owner).changes)
-    }
-    this.db.exec('DELETE FROM memory_events; DELETE FROM memory_signals; DELETE FROM memory_changes')
-    return Number(this.db.prepare('DELETE FROM memories').run().changes)
+    return this.transaction(() => {
+      if (owner) {
+        this.db.prepare('DELETE FROM memory_events WHERE owner = ?').run(owner)
+        this.db.prepare('DELETE FROM memory_signals WHERE owner = ?').run(owner)
+        this.db.prepare('DELETE FROM memory_changes WHERE owner = ?').run(owner)
+        return Number(this.db.prepare('DELETE FROM memories WHERE owner = ?').run(owner).changes)
+      }
+      this.db.exec('DELETE FROM memory_events; DELETE FROM memory_signals; DELETE FROM memory_changes')
+      return Number(this.db.prepare('DELETE FROM memories').run().changes)
+    })
   }
 
   addMemoryEvent(e: Omit<MemoryEventRow, 'id' | 'at'>): void {
@@ -1431,12 +1445,14 @@ export class Store {
   // —— 临床研究 ——
 
   addStudy(s: Pick<StudyRow, 'owner' | 'title' | 'design' | 'status' | 'summary'>): StudyRow {
-    const id = 'st' + randomUUID().replace(/-/g, '').slice(0, 10)
-    const t = now()
-    const tenant = this.getUser(s.owner)?.tenant_id ?? null
-    this.db.prepare('INSERT INTO studies (id, owner, title, design, status, summary, created_at, updated_at, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, s.owner, s.title, s.design, s.status, s.summary, t, t, tenant)
-    this.db.prepare("INSERT INTO study_members (study_id, user_id, role, added_by, added_at) VALUES (?, ?, 'owner', ?, ?)").run(id, s.owner, s.owner, t)
-    return this.getStudy(id)!
+    return this.transaction(() => {
+      const id = 'st' + randomUUID().replace(/-/g, '').slice(0, 10)
+      const t = now()
+      const tenant = this.getUser(s.owner)?.tenant_id ?? null
+      this.db.prepare('INSERT INTO studies (id, owner, title, design, status, summary, created_at, updated_at, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, s.owner, s.title, s.design, s.status, s.summary, t, t, tenant)
+      this.db.prepare("INSERT INTO study_members (study_id, user_id, role, added_by, added_at) VALUES (?, ?, 'owner', ?, ?)").run(id, s.owner, s.owner, t)
+      return this.getStudy(id)!
+    })
   }
 
   getStudy(id: string): StudyRow | undefined {
@@ -1508,8 +1524,10 @@ export class Store {
   }
 
   addStudyItem(i: Omit<StudyItemRow, 'added_at'>): void {
-    this.db.prepare('INSERT INTO study_items (study_id, kind, ref_id, role, added_at) VALUES (?, ?, ?, ?, ?)').run(i.study_id, i.kind, i.ref_id, i.role, now())
-    this.db.prepare('UPDATE studies SET updated_at = ? WHERE id = ?').run(now(), i.study_id)
+    this.transaction(() => {
+      this.db.prepare('INSERT INTO study_items (study_id, kind, ref_id, role, added_at) VALUES (?, ?, ?, ?, ?)').run(i.study_id, i.kind, i.ref_id, i.role, now())
+      this.db.prepare('UPDATE studies SET updated_at = ? WHERE id = ?').run(now(), i.study_id)
+    })
   }
 
   removeStudyItem(studyId: string, kind: StudyItemRow['kind'], refId: string): boolean {
@@ -1656,15 +1674,19 @@ export class Store {
 
   /** 删除项目：里面的文档回到「未分组」（不删文档）。 */
   deleteProject(id: string): void {
-    this.db.prepare('UPDATE docs SET project_id = NULL WHERE project_id = ?').run(id)
-    this.db.prepare('DELETE FROM projects WHERE id = ?').run(id)
+    this.transaction(() => {
+      this.db.prepare('UPDATE docs SET project_id = NULL WHERE project_id = ?').run(id)
+      this.db.prepare('DELETE FROM projects WHERE id = ?').run(id)
+    })
   }
 
   // —— 全文搜索（FTS5 trigram：3 个字及以上走索引；1–2 个字退回 LIKE） ——
 
   indexDoc(doc: { id: string; owner: string; title: string }, body: string): void {
-    this.db.prepare('DELETE FROM docs_fts WHERE doc_id = ?').run(doc.id)
-    this.db.prepare('INSERT INTO docs_fts (doc_id, owner, title, body) VALUES (?, ?, ?, ?)').run(doc.id, doc.owner, doc.title, body)
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM docs_fts WHERE doc_id = ?').run(doc.id)
+      this.db.prepare('INSERT INTO docs_fts (doc_id, owner, title, body) VALUES (?, ?, ?, ?)').run(doc.id, doc.owner, doc.title, body)
+    })
   }
 
   unindexDoc(id: string): void {
@@ -1702,7 +1724,10 @@ export class Store {
   }
 
   deleteDoc(id: string): void {
-    this.db.prepare('DELETE FROM docs WHERE id = ?').run(id)
+    this.transaction(() => {
+      this.unindexDoc(id)
+      this.db.prepare('DELETE FROM docs WHERE id = ?').run(id)
+    })
   }
 
   /**
@@ -1826,26 +1851,28 @@ export class Store {
 
   /** 将某条论断标记为临床经验豁免（关闭关联评论并豁免后续文献比对）。 */
   exemptClaim(docId: string, claimId: string, reason = '已标记为临床经验/无需出处，豁免文献核对'): void {
-    const existing = this.getClaimCheck(docId, claimId)
-    if (existing) {
-      this.db.prepare('UPDATE claim_checks SET verdict = ?, reason = ? WHERE doc_id = ? AND claim_id = ?')
-        .run('exempted', reason, docId, claimId)
-      if (existing.comment_id) {
-        this.addReply(existing.comment_id, 'user', `【临床经验豁免】：${reason}`)
-        this.setCommentStatus(docId, existing.comment_id, 'resolved', 'user')
+    this.transaction(() => {
+      const existing = this.getClaimCheck(docId, claimId)
+      if (existing) {
+        this.db.prepare('UPDATE claim_checks SET verdict = ?, reason = ? WHERE doc_id = ? AND claim_id = ?')
+          .run('exempted', reason, docId, claimId)
+        if (existing.comment_id) {
+          this.addReply(existing.comment_id, 'user', `【临床经验豁免】：${reason}`)
+          this.setCommentStatus(docId, existing.comment_id, 'resolved', 'user')
+        }
+      } else {
+        this.putClaimCheck({
+          doc_id: docId,
+          claim_id: claimId,
+          node_id: '',
+          sentence: '',
+          verdict: 'exempted',
+          reason,
+          comment_id: null,
+          rev: 0,
+        })
       }
-    } else {
-      this.putClaimCheck({
-        doc_id: docId,
-        claim_id: claimId,
-        node_id: '',
-        sentence: '',
-        verdict: 'exempted',
-        reason,
-        comment_id: null,
-        rev: 0,
-      })
-    }
+    })
   }
 
   // —— AI 回合开始前的状态（撤销本轮的持久化依据） ——
@@ -2012,8 +2039,10 @@ export class Store {
   }
 
   clearDocTurns(docId: string): void {
-    this.db.prepare('DELETE FROM turns WHERE doc_id = ?').run(docId)
-    this.db.prepare('DELETE FROM messages WHERE doc_id = ?').run(docId)
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM turns WHERE doc_id = ?').run(docId)
+      this.db.prepare('DELETE FROM messages WHERE doc_id = ?').run(docId)
+    })
   }
 
   // —— 回合队列（持久化：服务重启后排队中的任务继续执行） ——
@@ -2092,15 +2121,27 @@ export class Store {
     const target = this.getMailMessage(userId, targetId)
     if (!target) return []
     const cleanSubject = target.subject.replace(/^(?:(?:\s*(?:re|fwd|fw|回复|转发)[：:]\s*)+)/i, '').trim().toLowerCase()
-    const allUserMails = this.db.prepare(`
-      SELECT * FROM mail_messages 
-      WHERE user_id = ? AND folder != 'trash'
-      ORDER BY created_at ASC, rowid ASC
-    `).all(userId) as unknown as MailMessageRow[]
+    const threadKey = target.thread_id || target.id
+    const likeSub = cleanSubject ? `%${cleanSubject.replace(/[%_\\]/g, m => '\\' + m)}%` : ''
+    const candidates = (cleanSubject
+      ? this.db.prepare(`
+          SELECT * FROM mail_messages 
+          WHERE user_id = ? AND folder != 'trash'
+            AND (id = ? OR thread_id = ? OR thread_id = ? OR in_reply_to = ? OR id = ? OR lower(subject) LIKE ? ESCAPE '\\')
+          ORDER BY created_at ASC, rowid ASC
+        `).all(userId, target.id, threadKey, target.id, target.id, target.in_reply_to ?? '', likeSub)
+      : this.db.prepare(`
+          SELECT * FROM mail_messages 
+          WHERE user_id = ? AND folder != 'trash'
+            AND (id = ? OR thread_id = ? OR thread_id = ? OR in_reply_to = ? OR id = ?)
+          ORDER BY created_at ASC, rowid ASC
+        `).all(userId, target.id, threadKey, target.id, target.id, target.in_reply_to ?? '')
+    ) as unknown as MailMessageRow[]
 
-    const thread = allUserMails.filter(m => {
+    const thread = candidates.filter(m => {
       if (m.id === target.id) return true
       if (target.thread_id && m.thread_id && target.thread_id === m.thread_id) return true
+      if (m.thread_id === target.id || target.thread_id === m.id) return true
       if (m.in_reply_to === target.id || target.in_reply_to === m.id) return true
       const sub = m.subject.replace(/^(?:(?:\s*(?:re|fwd|fw|回复|转发)[：:]\s*)+)/i, '').trim().toLowerCase()
       if (sub === cleanSubject) {
