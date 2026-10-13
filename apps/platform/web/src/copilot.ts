@@ -115,7 +115,7 @@ export function initCopilot(hooks: CopilotHooks) {
   function updateContextBadge() {
     if (!badge) return
     const ctx = detectContext()
-    badge.textContent = `📍 ${ctx.space}${ctx.title ? ` · 《${ctx.title.slice(0, 10)}》` : ''}`
+    badge.textContent = `${ctx.space}${ctx.title ? ` · 《${ctx.title.slice(0, 10)}》` : ''}`
   }
 
   async function loadHistory() {
@@ -266,9 +266,9 @@ export function initCopilot(hooks: CopilotHooks) {
               msgs!.scrollTop = msgs!.scrollHeight
             } else if (ev.type === 'tool_call') {
               assistant.toolEl.style.display = 'inline-flex'
-              assistant.toolEl.textContent = `⚙️ 正在调用: ${ev.name}...`
+              assistant.toolEl.textContent = `正在调用: ${ev.name}...`
             } else if (ev.type === 'tool_result') {
-              assistant.toolEl.textContent = `✓ 工具 ${ev.callId ? '' : ''}执行完毕`
+              assistant.toolEl.textContent = `工具执行完毕`
             } else if (ev.type === 'error') {
               assistant.textEl.innerHTML = `<span style="color:var(--danger);">${esc(ev.message || '发生错误')}</span>`
             } else if (ev.type === 'done') {
@@ -301,7 +301,7 @@ export function initCopilot(hooks: CopilotHooks) {
         })
         msgs.innerHTML = `
           <div class="copilot-welcome">
-            <div class="copilot-welcome-badge">✨ 全局临床科研 AI 助手</div>
+            <div class="copilot-welcome-badge">全局临床科研 AI 助手</div>
             <h4>有什么可以协助您的临床研究或写作？</h4>
             <p class="muted small">随时为你检索 PubMed 顶刊文献、解答 GCP 规范、撰写统计分析计划 (SAP)、编写 Python 绘图代码、解读 RECIST 1.1 影像病灶。</p>
           </div>

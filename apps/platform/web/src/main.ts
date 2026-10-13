@@ -1461,11 +1461,11 @@ const SUBAGENT_PROMPTS: Record<string, string> = {
   audit: '委派质控核查专家全面核验当前正文所有医学论断与引用文献的一致性，核查数字真实性并执行 PHI 敏感数据脱敏排查。',
 }
 
-function roleMeta(role: string): { label: string; badgeClass: string; icon: string } {
-  if (role === 'literature_researcher') return { label: '文献证据专家', badgeClass: 'lit', icon: '📚' }
-  if (role === 'biostatistician') return { label: '生信统计专家', badgeClass: 'stat', icon: '📊' }
-  if (role === 'fact_checker') return { label: '质控核查专家', badgeClass: 'fc', icon: '🛡️' }
-  return { label: role, badgeClass: 'lit', icon: '🤖' }
+function roleMeta(role: string): { label: string; badgeClass: string } {
+  if (role === 'literature_researcher') return { label: '文献证据专家', badgeClass: 'lit' }
+  if (role === 'biostatistician') return { label: '生信统计专家', badgeClass: 'stat' }
+  if (role === 'fact_checker') return { label: '质控核查专家', badgeClass: 'fc' }
+  return { label: role, badgeClass: 'lit' }
 }
 
 function updateRosterStatus(role: string, status: 'ready' | 'running'): void {
@@ -1556,14 +1556,14 @@ function renderDeliverables(): void {
         extraPreview = `<div class="deliverable-snippet">样本量 N = ${item.output.sample_size} · ${item.output.analysis_type === 'survival' ? 'KM 生存分析' : 'Table 1 基线表'}</div>`
       } else if (item.role === 'fact_checker' && item.output.verdict) {
         const v = item.output.verdict
-        const vText = v === 'pass' ? '✓ 核验全部通过' : v === 'warning' ? '⚠️ 存在存疑或轻微出入' : '❌ 发现未支持的论断'
+        const vText = v === 'pass' ? '核验全部通过' : v === 'warning' ? '存在存疑或轻微出入' : '发现未支持的论断'
         extraPreview = `<div class="deliverable-snippet ${v === 'pass' ? 'ok' : 'warn'}">${vText}（核验 ${item.output.total_claims_audited ?? 0} 条论断）</div>`
       }
     }
     return `
       <div class="deliverable-card card-${meta.badgeClass}">
         <div class="deliv-head">
-          <span class="rc-badge ${meta.badgeClass}">${meta.icon} ${esc(meta.label)}</span>
+          <span class="rc-badge ${meta.badgeClass}">${esc(meta.label)}</span>
           <span class="deliv-time">${esc(item.time)}</span>
         </div>
         <div class="deliv-summary">${esc(item.summary)}</div>
@@ -1590,7 +1590,7 @@ function renderSubagentWelcome(): void {
           <span class="wc-badge lit">文献证据</span>
           <span class="wc-action">委派 →</span>
         </div>
-        <div class="wc-name">📚 文献证据专家</div>
+        <div class="wc-name">文献证据专家</div>
         <div class="wc-desc">检索 PubMed/OpenAlex，提炼核心结论并注册标准 AMA 引用</div>
       </div>
       <div class="welcome-card" data-subagent-act="table1">
@@ -1598,7 +1598,7 @@ function renderSubagentWelcome(): void {
           <span class="wc-badge stat">生信统计</span>
           <span class="wc-action">委派 →</span>
         </div>
-        <div class="wc-name">📊 Table 1 基线表</div>
+        <div class="wc-name">Table 1 基线表</div>
         <div class="wc-desc">自动分析数据集，生成顶级期刊规范的三线基线特征表</div>
       </div>
       <div class="welcome-card" data-subagent-act="audit">
@@ -1606,7 +1606,7 @@ function renderSubagentWelcome(): void {
           <span class="wc-badge fc">对抗质控</span>
           <span class="wc-action">核验 →</span>
         </div>
-        <div class="wc-name">🛡️ 质控核查专家</div>
+        <div class="wc-name">质控核查专家</div>
         <div class="wc-desc">严格审查医学论断证据吻合度、数字真实性与 PHI 敏感隐私</div>
       </div>
     </div>
@@ -1707,7 +1707,7 @@ function renderSubagentStep(ev: { id: string; role: string; step: string; status
   }
   const item = document.createElement('div')
   item.className = `subagent-step-item status-${ev.status ?? 'info'}`
-  const iconSpan = ev.status === 'ok' ? '✓' : ev.status === 'warn' ? '⚠️' : '▸'
+  const iconSpan = ev.status === 'ok' ? '●' : ev.status === 'warn' ? '▲' : '▸'
   item.innerHTML = `<span class="subagent-step-bullet">${iconSpan}</span><span class="subagent-step-msg">${esc(ev.step)}</span>`
   state.stepsList.appendChild(item)
   $('chatLog').scrollTop = 1e9
@@ -1721,12 +1721,12 @@ function renderSubagentDone(ev: { id: string; role: string; summary: string; out
 
   const state = subagentCards.get(ev.id)
   if (!state) {
-    addStep(`  ✓ [${ev.role}] ${ev.summary}`, 'ok')
+    addStep(`  [${ev.role}] ${ev.summary}`, 'ok')
     return
   }
 
   state.statusEl.className = 'subagent-status status-done'
-  state.statusEl.innerHTML = '✓ 交付完成'
+  state.statusEl.innerHTML = '已交付'
 
   const out = ev.output
   if (out && typeof out === 'object') {
@@ -1782,7 +1782,7 @@ function renderSubagentDone(ev: { id: string; role: string; summary: string; out
       `
     } else if (ev.role === 'fact_checker') {
       const verdict = out.verdict || 'pass'
-      const verdictLabel = verdict === 'pass' ? '✓ 核验全部通过' : verdict === 'warning' ? '⚠️ 存在存疑或轻微出入' : '❌ 发现未支持的论断'
+      const verdictLabel = verdict === 'pass' ? '核验全部通过' : verdict === 'warning' ? '存在存疑或轻微出入' : '发现未支持的论断'
       const issues = Array.isArray(out.issues) ? out.issues : []
       contentHtml = `
         <div class="subagent-fc-verdict verdict-${esc(verdict)}">${verdictLabel}</div>
@@ -1790,7 +1790,7 @@ function renderSubagentDone(ev: { id: string; role: string; summary: string; out
           <div class="fc-metric"><span class="fc-val">${out.total_claims_audited ?? 0}</span><span class="fc-label">核验论断</span></div>
           <div class="fc-metric"><span class="fc-val ok">${out.supported_count ?? 0}</span><span class="fc-label">文献完全吻合</span></div>
           <div class="fc-metric"><span class="fc-val ${out.unsupported_count ? 'danger' : ''}">${out.unsupported_count ?? 0}</span><span class="fc-label">无证据/冲突</span></div>
-          <div class="fc-metric"><span class="fc-val ${out.phi_detected ? 'danger' : 'ok'}">${out.phi_detected ? `⚠️ 检出 ${out.phi_count}` : '✓ 安全'}</span><span class="fc-label">PHI 敏感脱敏</span></div>
+          <div class="fc-metric"><span class="fc-val ${out.phi_detected ? 'danger' : 'ok'}">${out.phi_detected ? `检出 ${out.phi_count}` : '无敏感信息'}</span><span class="fc-label">PHI 敏感脱敏</span></div>
         </div>
         ${issues.length > 0 ? `
           <div class="subagent-issues-title">需作者关注的论断核验项（${issues.length} 处）：</div>
