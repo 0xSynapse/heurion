@@ -33,6 +33,11 @@
 	}
 }
 
+# www 跳到正式域名（Cloudflare 代理回源时用 www 的 SNI，必须有自己的证书，否则 525）
+www.{$HOSTNAME} {
+	redir https://{$HOSTNAME}{uri} permanent
+}
+
 # 直接访问 IP 等其他主机名：跳到正式域名
 :80 {
 	redir https://{$HOSTNAME}{uri} permanent
