@@ -641,7 +641,6 @@ async function open(docId: string): Promise<void> {
   turnUi = null
   $('chatLog').innerHTML = ''
   renderSubagentWelcome()
-  renderDeliverables()
   $('page').innerHTML = ''
   $('page').className = 'page'
   const meta = await api(`/api/docs/${docId}`)
@@ -744,7 +743,6 @@ function renderCollaborators(list: Array<{ name: string; role: string }>, readOn
 function close(): void {
   activeSubagentTask = null
   subagentCards.clear()
-  resetAllRosterStatuses()
   clearAllChatImages()
   callLabels.clear()
   turnChanges.clear()
@@ -1507,128 +1505,7 @@ $('turnBanner').onclick = async e => {
   }
 }
 
-interface DeliverableItem {
-  id: string
-  role: string
-  role_label: string
-  summary: string
-  output?: any
-  time: string
-}
 let activeSubagentTask: { role: string; role_label: string; task: string } | null = null
-const docDeliverables = new Map<string, DeliverableItem[]>()
-
-function roleMeta(role: string): { label: string; badgeClass: string } {
-  if (role === 'literature_researcher') return { label: '文献证据专家', badgeClass: 'lit' }
-  if (role === 'biostatistician') return { label: '生信统计专家', badgeClass: 'stat' }
-  if (role === 'fact_checker') return { label: '质控核查专家', badgeClass: 'fc' }
-  return { label: role, badgeClass: 'lit' }
-}
-
-function updateRosterStatus(role: string, status: 'ready' | 'running'): void {
-  const map: Record<string, string> = {
-    literature_researcher: 'rosterStatusLit',
-    biostatistician: 'rosterStatusStat',
-    fact_checker: 'rosterStatusFc',
-  }
-  const id = map[role]
-  if (!id) return
-  const el = document.getElementById(id)
-  if (!el) return
-  if (status === 'running') {
-    el.className = 'rc-status running'
-    el.textContent = '● 协同执行中…'
-  } else {
-    el.className = 'rc-status ready'
-    el.textContent = '● 随时待命'
-  }
-}
-
-function resetAllRosterStatuses(): void {
-  updateRosterStatus('literature_researcher', 'ready')
-  updateRosterStatus('biostatistician', 'ready')
-  updateRosterStatus('fact_checker', 'ready')
-}
-
-function getDeliverables(docId: string): DeliverableItem[] {
-  let list = docDeliverables.get(docId)
-  if (!list) {
-    try {
-      const saved = localStorage.getItem(`heurion.deliverables.${docId}`)
-      if (saved) {
-        list = JSON.parse(saved)
-        docDeliverables.set(docId, list!)
-      }
-    } catch {}
-  }
-  return list ?? []
-}
-
-function saveDeliverables(docId: string, list: DeliverableItem[]): void {
-  docDeliverables.set(docId, list)
-  try {
-    localStorage.setItem(`heurion.deliverables.${docId}`, JSON.stringify(list.slice(0, 50)))
-  } catch {}
-}
-
-function recordDeliverable(ev: { id: string; role: string; role_label?: string; summary: string; output?: any }): void {
-  const docId = session?.docId
-  if (!docId) return
-  const list = [...getDeliverables(docId)]
-  if (list.some(d => d.id === ev.id)) return
-  const meta = roleMeta(ev.role)
-  list.unshift({
-    id: ev.id,
-    role: ev.role,
-    role_label: ev.role_label || meta.label,
-    summary: ev.summary,
-    output: ev.output,
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-  })
-  saveDeliverables(docId, list)
-  renderDeliverables()
-}
-
-function renderDeliverables(): void {
-  const docId = session?.docId
-  const list = docId ? getDeliverables(docId) : []
-  const badge = $('subagentBadge')
-  if (badge) {
-    badge.hidden = list.length === 0
-    badge.textContent = String(list.length)
-  }
-  const container = $('subagentDeliverablesList')
-  if (!container) return
-  if (list.length === 0) {
-    container.innerHTML = '<div class="empty-hint">当前文档暂无专家交付成果。可在下方快捷操作或专家协同面板中发起。</div>'
-    return
-  }
-  container.innerHTML = list.map(item => {
-    const meta = roleMeta(item.role)
-    let extraPreview = ''
-    if (item.output) {
-      if (item.role === 'literature_researcher' && Array.isArray(item.output.citations) && item.output.citations.length > 0) {
-        extraPreview = `<div class="deliverable-snippet">${item.output.citations.length} 篇引用文献已提炼并登记</div>`
-      } else if (item.role === 'biostatistician' && item.output.sample_size) {
-        extraPreview = `<div class="deliverable-snippet">样本量 N = ${item.output.sample_size} · ${item.output.analysis_type === 'survival' ? 'KM 生存分析' : 'Table 1 基线表'}</div>`
-      } else if (item.role === 'fact_checker' && item.output.verdict) {
-        const v = item.output.verdict
-        const vText = v === 'pass' ? '核验全部通过' : v === 'warning' ? '存在存疑或轻微出入' : '发现未支持的论断'
-        extraPreview = `<div class="deliverable-snippet ${v === 'pass' ? 'ok' : 'warn'}">${vText}（核验 ${item.output.total_claims_audited ?? 0} 条论断）</div>`
-      }
-    }
-    return `
-      <div class="deliverable-card card-${meta.badgeClass}">
-        <div class="deliv-head">
-          <span class="rc-badge ${meta.badgeClass}">${esc(meta.label)}</span>
-          <span class="deliv-time">${esc(item.time)}</span>
-        </div>
-        <div class="deliv-summary">${esc(item.summary)}</div>
-        ${extraPreview}
-      </div>
-    `
-  }).join('')
-}
 
 function renderSubagentWelcome(): void {
   const chatLog = $('chatLog')
@@ -1712,7 +1589,6 @@ function formatMarkdownTableHtml(md: string): string {
 
 function renderSubagentStart(ev: { id: string; role: string; role_label: string; task: string }): void {
   activeSubagentTask = { role: ev.role, role_label: ev.role_label || ev.role, task: ev.task }
-  updateRosterStatus(ev.role, 'running')
   renderQueue()
   if (turnUi) {
     turnUi.count++
@@ -1772,9 +1648,7 @@ function renderSubagentStep(ev: { id: string; role: string; step: string; status
 
 function renderSubagentDone(ev: { id: string; role: string; summary: string; output?: any }): void {
   activeSubagentTask = null
-  updateRosterStatus(ev.role, 'ready')
   renderQueue()
-  recordDeliverable(ev)
 
   const state = subagentCards.get(ev.id)
   if (!state) {
@@ -1882,7 +1756,6 @@ function renderTurnEvent(ev: any): void {
     case 'queued': addStep(`排队中（第 ${ev.position} 位）：${displayMessage(ev.message).slice(0, 40)}`); void loadQueue(); break
     case 'turn': {
       activeSubagentTask = null
-      resetAllRosterStatuses()
       subagentCards.clear()
       void loadQueue()
       lastAssistant = null
@@ -1931,7 +1804,6 @@ function renderTurnEvent(ev: any): void {
     }
     case 'turn_done':
       activeSubagentTask = null
-      resetAllRosterStatuses()
       setBusy(false)
       void loadQueue()
       finishTurnUi(ev.status)
