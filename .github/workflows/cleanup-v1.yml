@@ -21,14 +21,23 @@ jobs:
     steps:
       - name: 确认
         run: '[ "${{ inputs.confirm }}" = "DELETE-V1" ] || { echo "::error::需要输入 DELETE-V1"; exit 1; }'
-      - uses: webfactory/ssh-agent@v0.9.0
-        with: { ssh-private-key: '${{ secrets.VPS_SSH_KEY }}' }
+      - name: 启动主 VPS SSH Agent
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          eval "$(ssh-agent -s)" >/dev/null
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
       - name: 清理主 VPS 上的 1.0
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "CONFIRM=DELETE-V1 bash /opt/heurion2/scripts/cleanup-v1.sh"
-      - uses: webfactory/ssh-agent@v0.9.0
-        with: { ssh-private-key: '${{ secrets.WORKER_VPS_SSH_KEY || secrets.VPS_SSH_KEY }}' }
+      - name: 加载 Worker VPS SSH Key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.WORKER_VPS_SSH_KEY || secrets.VPS_SSH_KEY }}
+        run: |
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
       - name: 停掉执行面 worker VPS（2.0 的计算在平台容器里的 dsh）
         env:
           WORKER_HOST: ${{ secrets.WORKER_VPS_HOST }}
