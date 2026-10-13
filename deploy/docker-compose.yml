@@ -1,8 +1,24 @@
 # Heurion 2.0 生产部署（单机 Docker Compose，替换 1.0 所在的同一台 VPS）。
 #   heurion2  平台（编辑器页面 + REST/SSE + 协同 WebSocket + MCP + 每用户 dsh 子进程 + LibreOffice 渲染）
 #   embedder  本地嵌入服务（bge-m3，模型在镜像里），只在内部网络可达
+#   doc-parser  PDF 结构化解析（Docling，模型在镜像里），只接入无外网的 internal 网络
 #   caddy     反向代理 + 自动 HTTPS（Let's Encrypt），唯一对外暴露 80/443 的容器
 # 由 deploy.sh 用 `docker compose -p heurion2 --env-file .env.production` 调用。
+#
+# 内存预算（8 GB 物理内存，给系统 / Docker / 页缓存留约 1 GB）：各服务 mem_limit（物理内存上限）合计 6.93 GB ≤ 7 GB。
+# 实测在 macOS（Apple Silicon）本机进程 RSS 上测得，Linux 容器里的数值会有出入（2026-10-13）：
+#   服务            mem_limit  memswap_limit  实测 / 估计常驻                                   依据
+#   heurion2        2.0g       3.5g           空闲 0.2 GB（实测）；每个活跃用户的 dsh 进程约 0.2 GB、  实测 + 估计
+#                                             LibreOffice 渲染约 0.4 GB、统计计算 Python 按需（估计）
+#   embedder        1.0g       2.0g           稳定 0.8 GB；加载模型和批量嵌入时瞬时 2.4 GB（实测）    实测
+#   imaging-worker  2.2g       3.3g           空闲 0.26 GB；胸部 CT 分析峰值 3.06 GB（实测）          实测
+#   doc-parser      1.6g       3.0g           预热后 0.6–1.0 GB；纯文字 PDF 峰值 1.3 GB；含扫描页       实测（公式识别已关）
+#                                             的 PDF（OCR）峰值 2.3–3.1 GB（实测）
+#   caddy           128m       128m           约 30–50 MB（估计）
+# 峰值压不进 mem_limit 的服务：imaging-worker（3D 体积推理）、doc-parser（扫描页 OCR）、embedder（模型加载）。
+# 做法是 memswap_limit 允许超出部分用 swap（deploy.sh 保证机器至少有 4 GB swap）：峰值时变慢而不是被 OOM 杀掉。
+# 若几个峰值同时出现、swap 也用尽，被杀的容器自动重启；doc-parser / embedder 不可用期间平台自动降级
+# （PDF 导入走 poppler、资料库只用关键词检索），imaging-worker 没有降级路径。扩到 16 GB 后按 doc-parser README 放宽。
 
 x-logging: &default-logging
   driver: json-file
@@ -18,7 +34,8 @@ services:
     container_name: heurion2
     restart: unless-stopped
     logging: *default-logging
-    mem_limit: 3.5g
+    mem_limit: 2g
+    memswap_limit: 3.5g
     # AI 代码出站白名单（入口用 iptables 只放行本机平台端口）
     cap_add: [NET_ADMIN]
     env_file: [.env.production]
@@ -29,6 +46,7 @@ services:
       - PORT=8787
       - EMBEDDING_URL=http://embedder:8003
       - IMAGING_WORKER_URL=http://imaging-worker:8004
+      - DOC_PARSER_URL=http://doc-parser:8005
     volumes:
       # 平台数据：SQLite（文档、版本、评论、资料库、记忆、账户）、用户工作区、渲染缓存、OCR 语言模型
       - data:/app/data
@@ -37,20 +55,24 @@ services:
         condition: service_started
       imaging-worker:
         condition: service_started
+      # 只等容器启动，不等预热：预热完成前平台的 PDF 导入自动走 poppler 兜底
+      doc-parser:
+        condition: service_started
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 30s
       retries: 3
-    networks: [web]
+    networks: [web, parser]
 
   embedder:
     image: ${EMBEDDER_IMAGE:-heurion2-embedder:latest}
     container_name: heurion2-embedder
     restart: unless-stopped
     logging: *default-logging
-    mem_limit: 2.5g
+    mem_limit: 1g
+    memswap_limit: 2g
     networks: [web]
     # 不映射端口：只给平台用（嵌入服务没起来时平台退回关键词检索）
 
@@ -59,7 +81,8 @@ services:
     container_name: heurion2-imaging-worker
     restart: unless-stopped
     logging: *default-logging
-    mem_limit: 2.8g
+    mem_limit: 2.2g
+    memswap_limit: 3.3g
     environment:
       - PORT=8004
       - OMP_NUM_THREADS=2
@@ -77,12 +100,42 @@ services:
       retries: 3
     # 不映射端口：只在内部网络给平台与 MCP 代理调用
 
+  doc-parser:
+    image: ${DOC_PARSER_IMAGE:-heurion2-doc-parser:latest}
+    container_name: heurion2-doc-parser
+    restart: unless-stopped
+    logging: *default-logging
+    # 8 GB 机器上关闭公式识别（DOC_PARSER_FORMULA=0，模型仍在镜像里）；内存数字见文件开头的预算表
+    mem_limit: 1.6g
+    memswap_limit: 3g
+    environment:
+      - DOC_PARSER_FORMULA=0
+      # 分段解析：每段 2 页，长文档的峰值不再随页数增长（实测 16 页：不分段 3.5 GB，分段 3.1 GB）
+      - DOC_PARSER_PAGE_CHUNK=2
+      # glibc 每线程内存池限制为 2 个，减少碎片；服务每次解析后还会 malloc_trim 归还内存
+      - MALLOC_ARENA_MAX=2
+      - DOC_PARSER_HOST=0.0.0.0
+      - DOC_PARSER_PORT=8005
+      - DOC_PARSER_THREADS=2
+      - OMP_NUM_THREADS=2
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    # 只接入 internal 网络：没有出网路由，文档内容在网络层面就发不出去；也不映射端口
+    networks: [parser]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
   caddy:
     image: caddy:2.8-alpine
     container_name: heurion2-caddy
     restart: unless-stopped
     logging: *default-logging
-    mem_limit: 256m
+    mem_limit: 128m
+    memswap_limit: 128m
     ports:
       - "80:80"
       - "443:443"
@@ -104,3 +157,7 @@ volumes:
 networks:
   web:
     driver: bridge
+  # 平台 ↔ doc-parser 专用：internal 网络没有默认网关，容器无法访问外网
+  parser:
+    driver: bridge
+    internal: true

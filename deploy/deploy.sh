@@ -12,7 +12,8 @@ cd "$DIR"
 : "${HEURION2_IMAGE:?需要 HEURION2_IMAGE}"
 : "${EMBEDDER_IMAGE:?需要 EMBEDDER_IMAGE}"
 : "${IMAGING_WORKER_IMAGE:?需要 IMAGING_WORKER_IMAGE}"
-export HEURION2_IMAGE EMBEDDER_IMAGE IMAGING_WORKER_IMAGE
+: "${DOC_PARSER_IMAGE:?需要 DOC_PARSER_IMAGE}"
+export HEURION2_IMAGE EMBEDDER_IMAGE IMAGING_WORKER_IMAGE DOC_PARSER_IMAGE
 [ -f .env.production ] || { echo "缺少 $DIR/.env.production" >&2; exit 1; }
 chmod 600 .env.production
 
@@ -36,6 +37,7 @@ HOSTNAME=$(grep '^HOSTNAME=' .env.production | head -1 | cut -d= -f2-)
 PREV_APP=$(docker inspect --format '{{.Image}}' heurion2 2>/dev/null || true)
 PREV_EMB=$(docker inspect --format '{{.Image}}' heurion2-embedder 2>/dev/null || true)
 PREV_IMG=$(docker inspect --format '{{.Image}}' heurion2-imaging-worker 2>/dev/null || true)
+PREV_DOCP=$(docker inspect --format '{{.Image}}' heurion2-doc-parser 2>/dev/null || true)
 
 # 磁盘空间保障函数：拉取新镜像前/后释放未在运行的旧镜像、历史构建缓存与系统临时数据
 reclaim_disk_space() {
@@ -177,7 +179,7 @@ if [ "$CUTOVER" -eq 1 ]; then
 fi
 if [ -n "$PREV_APP" ]; then
   echo "↩️  回滚到上一个镜像 $PREV_APP"
-  HEURION2_IMAGE="$PREV_APP" EMBEDDER_IMAGE="${PREV_EMB:-$EMBEDDER_IMAGE}" IMAGING_WORKER_IMAGE="${PREV_IMG:-$IMAGING_WORKER_IMAGE}" "${COMPOSE[@]}" up -d
+  HEURION2_IMAGE="$PREV_APP" EMBEDDER_IMAGE="${PREV_EMB:-$EMBEDDER_IMAGE}" IMAGING_WORKER_IMAGE="${PREV_IMG:-$IMAGING_WORKER_IMAGE}" DOC_PARSER_IMAGE="${PREV_DOCP:-$DOC_PARSER_IMAGE}" "${COMPOSE[@]}" up -d
   wait_health && echo "↩️  已回滚并恢复健康，请查日志修复后再发" || echo "❌ 回滚后仍不健康，需要人工介入"
 fi
 exit 1

@@ -53,6 +53,10 @@ export const config = {
   mailDomain: process.env.MAIL_DOMAIN || 'heurion.org',
   /** 本地嵌入服务（apps/embedder，bge-m3）；为空时资料库只用关键词检索。 */
   embeddingUrl: env('EMBEDDING_URL', 'http://127.0.0.1:8003'),
+  /** 本地 PDF 结构化解析服务（apps/doc-parser，Docling）；设为空字符串（DOC_PARSER_URL=off）则 PDF 导入只用 poppler。 */
+  docParserUrl: process.env.DOC_PARSER_URL === 'off' ? '' : env('DOC_PARSER_URL', 'http://127.0.0.1:8005'),
+  /** 单个 PDF 的解析超时（CPU 上 Docling 每页约 1–3 秒，长文档需要更久） */
+  docParserTimeoutMs: Number(env('DOC_PARSER_TIMEOUT_MS', String(10 * 60_000))),
   /**
    * AI 代码隔离（容器里开启）：每个平台用户的 dsh 进程及它执行的代码以专属 uid 运行（deploy/sandbox/heurion-sandbox-exec），
    * 读不到平台的数据库、密钥和其他用户的工作区。本机开发（macOS）不开。

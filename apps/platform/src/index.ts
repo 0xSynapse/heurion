@@ -8,6 +8,7 @@ import { createMailer } from './auth/mailer.ts'
 import { Alerts } from './ops-alert/alerts.ts'
 import { SearchIndex } from './model/search-index.ts'
 import { HttpEmbedder } from './kb/embedder.ts'
+import { HttpDocParser } from './convert/doc-parser.ts'
 import { localImageOcr, localOcr } from './kb/ocr.ts'
 import { extractText } from './kb/extract.ts'
 import { KbService } from './kb/service.ts'
@@ -68,6 +69,8 @@ const renderer = new SlideRenderer(config.renderDir)
 // 参考资料库：本地嵌入服务（apps/embedder）可选，不在时只用关键词检索
 const embedder = config.embeddingUrl ? new HttpEmbedder(config.embeddingUrl) : null
 const kb = new KbService(store, embedder, localOcr(config.ocrCacheDir))
+// PDF 导入主路径：本地 doc-parser 服务（apps/doc-parser，Docling）；不在 / 未就绪时退回 poppler
+const docParser = config.docParserUrl ? new HttpDocParser(config.docParserUrl, { timeoutMs: config.docParserTimeoutMs }) : null
 kb.resume()
 // 记忆（R3）：相似去重与按相关度注入用同一个嵌入服务，不在时按文本
 const memory = new MemoryService(store, embedder)
@@ -175,7 +178,7 @@ const mail = new MailService(store, mailer, {
   complete: makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }),
 })
 const calendar = new CalendarService(store, mail)
-const app = buildApi({ docs, ops, turns, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, devUser: config.devUser, search, kb, memory, evolution, datasets, patients, shares, studies, cohort, images, access, mail, calendar, workspaceDir: userId => pool.workspaceDir(userId) })
+const app = buildApi({ docs, ops, turns, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, devUser: config.devUser, search, kb, memory, evolution, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, workspaceDir: userId => pool.workspaceDir(userId) })
 // MCP 的管理类工具以用户身份进程内调用同一个 HTTP 应用（AI 的权限 = 用户的权限，见 http/invoke.ts）
 ;(mcpDeps as { invoke?: Invoke }).invoke = makeInvoker(app)
 

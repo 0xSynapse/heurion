@@ -44,7 +44,9 @@ import type { Article } from '../literature/types.ts'
 import type { OpenAlexClient } from '../literature/openalex.ts'
 import type { DocRow } from '../store/db.ts'
 import { bindAssets, DocxImportError, importDocx } from '../convert/docx-import.ts'
+import type { DocParser } from '../convert/doc-parser.ts'
 import { importPdf, PdfImportError } from '../convert/pdf-import.ts'
+import type { Ocr } from '../kb/ocr.ts'
 import { AnchorError, attachComment, locate, threadMarks } from '../model/anchors.ts'
 import { parseBlocks } from '../model/markdown.ts'
 import type { CommitEvent, Documents } from '../model/runtime.ts'
@@ -105,6 +107,10 @@ export interface ApiDeps {
   access?: Access
   /** 邮件工作流服务。 */
   mail?: MailService
+  /** PDF 导入时给扫描页做 OCR（kb/ocr.ts）；不给时扫描页退回整页图片。 */
+  pdfOcr?: Ocr
+  /** PDF 导入主路径：本地 doc-parser 服务（Docling）；不给或不可用时退回 poppler */
+  docParser?: DocParser | null
   /** 日历与排期服务。 */
   calendar?: CalendarService
   devUser: string
@@ -638,6 +644,10 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.patch('/api/patients/:ptid/labs/:lid', async c => {
     try { return c.json(pt(c).editLab(me(c), c.req.param('ptid'), c.req.param('lid'), await c.req.json())) } catch (err) { return patientFailure(c, err) }
   })
+  /** 报告文字（审核前预览，如 AI 生成的报告草稿全文；与 AI 的 report_read 相同，敏感信息已打码）。 */
+  app.get('/api/patients/:ptid/records/:rcid/text', c => {
+    try { return c.json(pt(c).recordText(me(c), c.req.param('ptid'), c.req.param('rcid'))) } catch (err) { return patientFailure(c, err) }
+  })
   /** 审核时对照原件补一项化验（挂在这份报告上）。 */
   app.post('/api/patients/:ptid/records/:rcid/labs', async c => {
     try { return c.json(pt(c).addRecordLab(me(c), c.req.param('ptid'), c.req.param('rcid'), await c.req.json()), 201) } catch (err) { return patientFailure(c, err) }
@@ -887,7 +897,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (file && /\.pdf$/i.test(file.name)) {
       try {
         const bytes = new Uint8Array(await file.arrayBuffer())
-        const imported = await importPdf(bytes, file.name)
+        const imported = await importPdf(bytes, file.name, { ocr: deps.pdfOcr, docParser: deps.docParser })
         const ids = new Map(imported.assets.map(a => [a.key, store.putAsset({ owner: user, mime: a.mime, name: a.name, bytes: a.bytes }).id]))
         const boundDoc = bindAssets(imported.doc, ids)
         const row = docs.create({ owner: user, title: file.name.replace(/\.pdf$/i, ''), content: boundDoc, source: 'import' })
@@ -895,7 +905,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         const warnings = [...imported.warnings]
         if (imported.doi) warnings.push(`检测到 DOI: ${imported.doi}`)
         if (imported.pmid) warnings.push(`检测到 PMID: ${imported.pmid}`)
-        return c.json({ ...row, warnings }, 201)
+        return c.json({ ...row, warnings, importEngine: imported.engine, ...(imported.fallbackReason ? { importFallbackReason: imported.fallbackReason } : {}) }, 201)
       } catch (err) {
         if (err instanceof PdfImportError) return c.json({ error: err.message }, 400)
         throw err

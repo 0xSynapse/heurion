@@ -19,6 +19,7 @@ env:
   APP_IMAGE: ghcr.io/0xaicrypto/heurion2
   EMBEDDER_IMAGE: ghcr.io/0xaicrypto/heurion2-embedder
   IMAGING_WORKER_IMAGE: ghcr.io/0xaicrypto/heurion2-imaging-worker
+  DOC_PARSER_IMAGE: ghcr.io/0xaicrypto/heurion2-doc-parser
 
 jobs:
   test:
@@ -81,6 +82,15 @@ jobs:
           tags: ${{ env.IMAGING_WORKER_IMAGE }}:${{ steps.vars.outputs.sha }},${{ env.IMAGING_WORKER_IMAGE }}:latest
           cache-from: type=gha,scope=imaging
           cache-to: type=gha,mode=max,scope=imaging
+      - name: PDF 解析服务镜像（Docling，构建期下载模型）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/doc-parser/Dockerfile
+          push: true
+          tags: ${{ env.DOC_PARSER_IMAGE }}:${{ steps.vars.outputs.sha }},${{ env.DOC_PARSER_IMAGE }}:latest
+          cache-from: type=gha,scope=doc-parser
+          cache-to: type=gha,mode=max,scope=doc-parser
 
   deploy:
     name: 部署到生产
@@ -158,7 +168,7 @@ jobs:
           # 镜像是私有包：本次部署用 GITHUB_TOKEN 登录 GHCR 拉取
           echo "$GHCR_TOKEN" | $SSH "$HOST" "docker login ghcr.io -u ${{ github.actor }} --password-stdin"
           $SSH "$HOST" "cd /opt/heurion2 && chmod 600 .env.production && chmod +x scripts/*.sh && \
-            HEURION2_IMAGE=${APP_IMAGE}:${SHA} EMBEDDER_IMAGE=${EMBEDDER_IMAGE}:${SHA} IMAGING_WORKER_IMAGE=${IMAGING_WORKER_IMAGE}:${SHA} bash scripts/deploy.sh"
+            HEURION2_IMAGE=${APP_IMAGE}:${SHA} EMBEDDER_IMAGE=${EMBEDDER_IMAGE}:${SHA} IMAGING_WORKER_IMAGE=${IMAGING_WORKER_IMAGE}:${SHA} DOC_PARSER_IMAGE=${DOC_PARSER_IMAGE}:${SHA} bash scripts/deploy.sh"
       - name: AI 代码隔离自检（容器里以两个测试 uid 尝试读密钥、数据库、别人的工作区）
         env:
           HOST: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
