@@ -116,4 +116,54 @@ describe('论断核对临床闭环 (Claim Actions & Exemption)', () => {
     expect(c?.status).toBe('resolved')
     expect(c?.replies.some(r => r.text.includes('已将「降低 15%」替换为「降低 30%」'))).toBe(true)
   })
+
+  it('表格单元格数值与本研究自报数据不误报为 missing_citation，不挂无意义评论', async () => {
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const doc = docs.create({ owner: 'u1', title: '队列研究' })
+    const claimService = new ClaimService(docs, {} as PubMedClient)
+    const ops = new OpService(docs)
+
+    const p1 = docs.get(doc.id).child(0).attrs.id as string
+    ops.edit({
+      doc_id: doc.id,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [
+        {
+          op: 'replace_block',
+          id: p1,
+          markdown: [
+            '| 特征 | 比例 |',
+            '| --- | --- |',
+            '| 饮酒（从不） | 40.4% |',
+            '',
+            '## 研究结果',
+            '',
+            '本研究共纳入 45 例患者，表 1 显示从不饮酒者占 40.4%。',
+            '',
+            '## 讨论',
+            '',
+            '既往研究显示戒酒干预可使复发率降低 35%。',
+          ].join('\n'),
+        },
+      ],
+    }, { actor: 'user', turnId: null })
+
+    const ev = await claimService.evidence(doc.id)
+    // 表格单元格 40.4% 与研究结果段自报数据均不进入 unsourced；仅讨论段引述既往研究漏标引用进入 unsourced
+    expect(ev.unsourced).toHaveLength(1)
+    expect(ev.unsourced[0]!.sentence).toContain('既往研究显示戒酒干预可使复发率降低 35%')
+
+    // 即便模型对某条 unsourced 误传 missing_citation 但在理由中写明属于本研究自报基线数据，也不挂评论
+    const res = claimService.report(doc.id, [
+      {
+        claim_id: ev.unsourced[0]!.claim_id,
+        verdict: 'missing_citation',
+        reason: '属本研究自报基线数据，无需挂文献引用。',
+      },
+    ])
+    expect(res[0]?.status).toBe('recorded')
+    expect(store.listComments(doc.id, 'open')).toHaveLength(0)
+  })
 })

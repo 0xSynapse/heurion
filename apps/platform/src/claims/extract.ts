@@ -66,13 +66,42 @@ function sentences(block: PMNode): Sentence[] {
 
 const hash = (s: string) => createHash('sha1').update(s).digest('hex').slice(0, 10)
 
+/** 章节标题属于本研究自身方法、结果、基线或病例描述时，段内无引用数值默认属于本研究数据而非漏标外部文献。 */
+const OWN_DATA_SECTION =
+  /(?:^|\b)(?:methods?|materials?\s+and\s+methods?|patients?\s+and\s+methods?|study\s+population|study\s+design|statistical\s+analysis|results?|findings?|baseline|case\s+report|case\s+presentation|abstract)(?:\b|$)|研究方法|材料与方法|对象与方法|研究对象|临床资料|统计方法|统计学分析|结果|研究结果|基线特征|基线资料|病例介绍|病例资料|病历摘要|摘要/i
+
+/** 句中明确提及外部研究时，即使在结果/方法段也仍需核查是否漏标引用。 */
+const EXTERNAL_STUDY_CUE =
+  /(?:既往研究|另有研究|文献报道|指南推荐|荟萃分析|系统评价|\b(?:previous|prior|earlier|other)\s+stud(?:y|ies)\b|\breported\s+that\b|\bmeta-analysis\b|\bsystematic\s+review\b)/i
+
+/** 句中明确指向本研究自身数据、队列、图表或病例特征，不应作为「缺文献引用」报错。 */
+const OWN_STUDY_SENTENCE =
+  /(?:本研究|本队列|本组|我院|我科|本中心|我中心|本文|表\s*\d+|图\s*\d+|\b(?:Table|Fig(?:ure)?)\s*\d+|\b(?:our|this|present|current)\s+(?:study|cohort|trial|analysis|patients?|population|data|series|center|hospital)\b|\bwe\s+(?:enrolled|included|analyzed|observed|found|recruited|evaluated|retrospectively)\b)/i
+
 export function extractClaims(doc: PMNode, numbers: Map<string, number>): { claims: Claim[]; unsourced: Claim[] } {
   const claims: Claim[] = []
   const unsourced: Claim[] = []
-  doc.descendants(node => {
-    if (!node.isTextblock) return true
+  let inOwnDataSection = false
+
+  const visit = (node: PMNode, inTable: boolean) => {
+    if (node.type.name === 'figure' || node.type.name === 'code_block') return
+    if (node.type.name === 'table') {
+      node.forEach(child => visit(child, true))
+      return
+    }
+    if (node.type.name === 'heading') {
+      const headingText = node.textContent.trim()
+      if (headingText) {
+        inOwnDataSection = OWN_DATA_SECTION.test(headingText)
+      }
+      return
+    }
+    if (!node.isTextblock) {
+      node.forEach(child => visit(child, inTable))
+      return
+    }
     const nodeId = node.attrs.id as string | null
-    if (!nodeId || node.attrs.suggest === 'delete') return false
+    if (!nodeId || node.attrs.suggest === 'delete') return
     for (const s of sentences(node)) {
       const cites = [...new Set(s.parts.filter(p => p.cite).map(p => p.cite!))]
       const sentence = s.parts.map(p => p.cite ? `[${numbers.get(p.cite) ?? '?'}]` : p.text).join('').trim()
@@ -85,10 +114,21 @@ export function extractClaims(doc: PMNode, numbers: Map<string, number>): { clai
       }
       const snippet = runs.map(r => r.trim()).sort((a, b) => b.length - a.length)[0] ?? ''
       const claim: Claim = { claim_id: `k${hash(`${nodeId}|${plain}`)}`, node_id: nodeId, sentence, snippet, cite_ids: cites }
-      if (cites.length > 0) claims.push(claim)
-      else if (node.type.name !== 'heading' && !PLACEHOLDER.test(plain) && NUMERIC.test(plain)) unsourced.push(claim)
+      if (cites.length > 0) {
+        claims.push(claim)
+      } else if (
+        !inTable &&
+        node.type.name !== 'heading' &&
+        !PLACEHOLDER.test(plain) &&
+        NUMERIC.test(plain) &&
+        !OWN_STUDY_SENTENCE.test(plain) &&
+        (!inOwnDataSection || EXTERNAL_STUDY_CUE.test(plain))
+      ) {
+        unsourced.push(claim)
+      }
     }
-    return false
-  })
+  }
+
+  doc.forEach(child => visit(child, false))
   return { claims, unsourced }
 }

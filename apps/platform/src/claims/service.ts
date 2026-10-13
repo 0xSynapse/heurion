@@ -134,21 +134,25 @@ export class ClaimService {
         out.push({ claim_id: r.claim_id, status: 'unchanged' })
         continue
       }
-      if (prev && prev.verdict === r.verdict && (r.verdict === 'supported' || prev.comment_id)) {
+      const selfReported =
+        r.verdict === 'missing_citation' &&
+        /(?:本研究|自报|自身队列|本队列|基线数据|表格单元格|无需引用|不需引用|不应挂.*引用|无需改动)/.test(r.reason)
+      const effectiveVerdict: ClaimVerdict = selfReported ? 'supported' : r.verdict
+      if (prev && prev.verdict === effectiveVerdict && (effectiveVerdict === 'supported' || prev.comment_id)) {
         out.push({ claim_id: r.claim_id, status: 'unchanged', ...(prev.comment_id ? { comment_id: prev.comment_id } : {}) })
         continue
       }
-      const noEvidence = r.verdict === 'unclear' && (r.no_evidence === true || !hasAbstract(claim))
+      const noEvidence = effectiveVerdict === 'unclear' && (r.no_evidence === true || !hasAbstract(claim))
       let commentId: string | null = null
-      if (r.verdict !== 'supported' && r.verdict !== 'exempted' && !noEvidence) {
-        const res = this.prepareComment(docId, doc, claim, r.verdict, r.reason)
+      if (effectiveVerdict !== 'supported' && effectiveVerdict !== 'exempted' && !noEvidence) {
+        const res = this.prepareComment(docId, doc, claim, effectiveVerdict, r.reason)
         doc = res.doc
         commentId = res.commentId
         if (res.anchored) commentOps.push({ op: 'claim_comment', thread: res.commentId })
       }
       const cId = commentId
       pendingChecks.push(() => {
-        store.putClaimCheck({ doc_id: docId, claim_id: r.claim_id, node_id: claim.node_id, sentence: claim.sentence, verdict: r.verdict, reason: noEvidence ? `（没有可核对的证据）${r.reason}` : r.reason, comment_id: cId, rev: this.docs.rev(docId) })
+        store.putClaimCheck({ doc_id: docId, claim_id: r.claim_id, node_id: claim.node_id, sentence: claim.sentence, verdict: effectiveVerdict, reason: noEvidence ? `（没有可核对的证据）${r.reason}` : r.reason, comment_id: cId, rev: this.docs.rev(docId) })
       })
       out.push({ claim_id: r.claim_id, status: noEvidence ? 'no_evidence' : commentId ? 'commented' : 'recorded', ...(commentId ? { comment_id: commentId } : {}) })
     }
@@ -183,7 +187,7 @@ export function verifyPrompt(docId: string): string {
   return (
     `请核对文档 ${docId} 中带引用的论断，只核对、不修改正文：\n` +
     `1. 调用 verify_claims（doc_id="${docId}"），按 next_cursor 翻页直到取完；\n` +
-    `2. ${CLAIM_CRITERIA}unsourced 里的数值句判为 missing_citation；\n` +
+    `2. ${CLAIM_CRITERIA}对 unsourced 里的无引用数值句：只有确实在引述外部既往研究、流行病学统计或指南结论却漏标文献时才判为 missing_citation；若属于本研究自身队列/病例数据、样本量、图表结果或自报基线特征，原本就无需挂文献引用，请判为 supported（不挂评论），切勿机械标为 missing_citation；\n` +
     `3. 每页判断完就用 claim_report 提交；\n` +
     `4. 最后用两三句话总结核对结果：几条不支持（已挂评论）、几条缺少可核对的证据（列出句子开头，建议补充全文或更直接的文献）。`
   )

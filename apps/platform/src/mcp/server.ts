@@ -689,7 +689,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
 
   server.registerTool('claim_report', {
     description:
-      '提交论断核对结果。verdict：supported / unsupported / unclear / missing_citation（unsourced 的数值句）。' +
+      '提交论断核对结果。verdict：supported / unsupported / unclear / missing_citation（仅限引述外部研究或背景数据却漏标文献的数值句；若属本研究自身队列、基线表格或自报结果无需挂引用，应判为 supported）。' +
       '不支持、缺出处、有证据但不足以判断的 unclear，平台会在该句挂一条 AI 评论供用户决定是否修改；' +
       '没有可核对证据的 unclear（无摘要或摘要没涉及）标 no_evidence=true，只记录不挂评论，在总结里汇总。reason 用中文写明依据。',
     inputSchema: {
