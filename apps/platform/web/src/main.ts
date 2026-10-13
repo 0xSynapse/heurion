@@ -501,12 +501,43 @@ $<HTMLInputElement>('uploadInput').onchange = async e => {
     const d = await uploadFileWithProgress(file)
     await loadDocs()
     await open(d.id)
+    const summary = d.kind === 'deck'
+      ? `已成功导入为演示文稿幻灯片（《${d.title}》）`
+      : `已成功导入结构化文档（《${d.title}》）`
+    showNotice(summary)
     if (d.warnings?.length) showNotice(`导入提示：${d.warnings.join('；')}`)
   } catch (err) {
     showNotice(`导入失败：${(err as Error).message}`, true)
   }
   input.value = ''
 }
+
+// 支持将文档或演示文稿直接拖拽至窗口上传
+window.addEventListener('dragover', e => {
+  if (e.dataTransfer?.types?.includes('Files')) {
+    e.preventDefault()
+  }
+})
+
+window.addEventListener('drop', async e => {
+  const file = e.dataTransfer?.files?.[0]
+  if (!file) return
+  if (!/\.(pdf|docx|pptx)$/i.test(file.name)) return
+  e.preventDefault()
+  if (isUploading) return
+  try {
+    const d = await uploadFileWithProgress(file)
+    await loadDocs()
+    await open(d.id)
+    const summary = d.kind === 'deck'
+      ? `已成功导入为演示文稿幻灯片（《${d.title}》）`
+      : `已成功导入结构化文档（《${d.title}》）`
+    showNotice(summary)
+    if (d.warnings?.length) showNotice(`导入提示：${d.warnings.join('；')}`)
+  } catch (err) {
+    showNotice(`导入失败：${(err as Error).message}`, true)
+  }
+})
 
 // —— 打开文档：Yjs 同步 + 编辑器 + 文档事件流 ——
 

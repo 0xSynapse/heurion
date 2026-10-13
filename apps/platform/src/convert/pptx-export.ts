@@ -95,6 +95,36 @@ function runProps(marks: readonly Mark[], forceSup = false): string {
   xml = setAttr(xml, 'a:rPr', 'i', has('italic') ? '1' : /\si="/.test(xml) ? '0' : null)
   xml = setAttr(xml, 'a:rPr', 'u', has('underline') ? 'sng' : null)
   xml = setAttr(xml, 'a:rPr', 'baseline', has('sup') || forceSup ? '30000' : has('sub') ? '-25000' : null)
+
+  const ts = marks.find(m => m.type.name === 'text_style')
+  if (ts) {
+    const { font_family, font_size, color } = ts.attrs as { font_family?: string; font_size?: string | number; color?: string }
+    if (font_size) {
+      const pt = typeof font_size === 'number' ? font_size : parseFloat(font_size)
+      if (Number.isFinite(pt) && pt > 0) {
+        xml = setAttr(xml, 'a:rPr', 'sz', String(Math.round(pt * 100)))
+      }
+    }
+    if (color) {
+      const hex = color.replace(/^#/, '').toUpperCase()
+      if (/^[0-9A-F]{6}$/i.test(hex)) {
+        xml = xml.replace(/<a:solidFill>[\s\S]*?<\/a:solidFill>/g, '')
+        const fillTag = `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>`
+        if (xml.endsWith('/>')) xml = xml.slice(0, -2) + '>' + fillTag + '</a:rPr>'
+        else xml = xml.replace(/<\/a:rPr>$/, fillTag + '</a:rPr>')
+      }
+    }
+    if (font_family) {
+      const fam = font_family.trim()
+      if (fam) {
+        xml = xml.replace(/<a:(latin|ea|cs)\b[^>]*\/?>/g, '')
+        const fontTags = `<a:latin typeface="${esc(fam)}"/><a:ea typeface="${esc(fam)}"/>`
+        if (xml.endsWith('/>')) xml = xml.slice(0, -2) + '>' + fontTags + '</a:rPr>'
+        else xml = xml.replace(/<\/a:rPr>$/, fontTags + '</a:rPr>')
+      }
+    }
+  }
+
   return xml
 }
 
@@ -103,6 +133,12 @@ function paragraphXml(p: PMNode, numbers: Map<string, number>): string {
   const lvl = p.attrs.lvl as number
   if (ppr) ppr = setAttr(ppr, 'a:pPr', 'lvl', lvl > 0 ? String(lvl) : null)
   else if (lvl > 0) ppr = `<a:pPr lvl="${lvl}"/>`
+  const align = p.attrs.align as string | null
+  const algn = align === 'center' ? 'ctr' : align === 'right' ? 'r' : align === 'left' ? 'l' : null
+  if (algn) {
+    if (ppr) ppr = setAttr(ppr, 'a:pPr', 'algn', algn)
+    else ppr = `<a:pPr algn="${algn}"/>`
+  }
   let runs = ''
   let lastMarks: readonly Mark[] = []
   p.forEach(c => {

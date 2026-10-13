@@ -902,19 +902,25 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         const bytes = new Uint8Array(await file.arrayBuffer())
         const imported = await importPdf(bytes, file.name, { ocr: deps.pdfOcr, docParser: deps.docParser })
         const ids = new Map(imported.assets.map(a => [a.key, store.putAsset({ owner: user, mime: a.mime, name: a.name, bytes: a.bytes }).id]))
+        const baseTitle = file.name.replace(/\.pdf$/i, '').trim()
+        const isGenericName = /^(未命名|文档|document|untitled|draft|\d+|[a-f0-9-]{12,}|s\d{5}-\d{3}-\d{5}-[a-z0-9]|pmc\d+|nihms\d+|arxiv[\d.-]+)$/i.test(baseTitle)
+        const docTitle = (isGenericName && imported.title && imported.title.length >= 4) ? imported.title : (baseTitle || '未命名文档')
+
         if (imported.kind === 'deck') {
           const boundDoc = bindDeckAssets(imported.doc, ids)
-          const row = docs.create({ owner: user, title: file.name.replace(/\.pdf$/i, ''), kind: 'deck', content: boundDoc, source: 'import' })
+          const row = docs.create({ owner: user, title: docTitle, kind: 'deck', content: boundDoc, source: 'import' })
           store.putPackage(row.id, 'pptx', pptxTemplate(DEFAULT_THEME))
           const warnings = [...imported.warnings]
+          if (imported.title && isGenericName) warnings.unshift(`已自动识别演示文稿标题：《${docTitle}》`)
           if (imported.doi) warnings.push(`检测到 DOI: ${imported.doi}`)
           if (imported.pmid) warnings.push(`检测到 PMID: ${imported.pmid}`)
           return c.json({ ...place(row), warnings, importEngine: imported.engine, ...(imported.fallbackReason ? { importFallbackReason: imported.fallbackReason } : {}) }, 201)
         }
         const boundDoc = bindAssets(imported.doc, ids)
-        const row = docs.create({ owner: user, title: file.name.replace(/\.pdf$/i, ''), content: boundDoc, source: 'import' })
+        const row = docs.create({ owner: user, title: docTitle, content: boundDoc, source: 'import' })
         store.putPackage(row.id, 'pdf', bytes)
         const warnings = [...imported.warnings]
+        if (imported.title && isGenericName) warnings.unshift(`已自动识别论文标题：《${docTitle}》`)
         if (imported.doi) warnings.push(`检测到 DOI: ${imported.doi}`)
         if (imported.pmid) warnings.push(`检测到 PMID: ${imported.pmid}`)
         return c.json({ ...place(row), warnings, importEngine: imported.engine, ...(imported.fallbackReason ? { importFallbackReason: imported.fallbackReason } : {}) }, 201)

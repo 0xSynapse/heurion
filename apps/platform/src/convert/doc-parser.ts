@@ -91,13 +91,14 @@ const CAPTION = /^(fig(ure)?\.?|图|表|table)\s*\d/i
  * - 图片作为资产（figure 节点 asset_id 先填 key，调用方 bindAssets 换成资产 id），图注写在 caption。
  * - 扫描页：OCR 识别出文字的在开头注明「请核对」；OCR 也没识别出文字的退回整页图并在开头注明。
  */
-export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNode; assets: ImportedAsset[]; warnings: string[]; text: string } {
+export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNode; assets: ImportedAsset[]; warnings: string[]; text: string; title?: string | null } {
   const assets: ImportedAsset[] = []
   const warnings: string[] = [...(r.warnings ?? [])]
   const notes: string[] = []
   const para = (t: string, attrs: Record<string, unknown> | null = null) => schema.node('paragraph', attrs, t ? [schema.text(t)] : [])
   const nodes: PMNode[] = []
   const textParts: string[] = []
+  let detectedTitle: string | null = null
   let figN = 0
 
   // OCR 也没识别出文字的扫描页：整页图按页码插在后续页内容之前
@@ -128,6 +129,9 @@ export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNo
       case 'heading': {
         const text = b.text.trim()
         if (!text) break
+        if (!detectedTitle && (b.level === 1 || !detectedTitle) && text.length >= 4 && text.length <= 250) {
+          detectedTitle = text
+        }
         nodes.push(schema.node('heading', { level: Math.min(Math.max(Math.round(b.level) || 1, 1), 6) }, [schema.text(text)]))
         textParts.push(text)
         break
@@ -192,5 +196,5 @@ export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNo
     warnings.push('PDF 中没有可识别的文字或图片')
   }
   warnings.push(...notes)
-  return { doc: schema.node('doc', null, nodes), assets, warnings, text: textParts.join('\n') }
+  return { doc: schema.node('doc', null, nodes), assets, warnings, text: textParts.join('\n'), title: detectedTitle }
 }

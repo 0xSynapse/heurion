@@ -27,6 +27,7 @@ function resolveBinary(name: string): string {
 
 export interface PdfImport {
   kind: 'doc' | 'deck'
+  title?: string | null
   doc: PMNode
   assets: ImportedAsset[]
   warnings: string[]
@@ -94,15 +95,25 @@ export interface PdfPage {
 const DOI_RE = /\b(10\.\d{4,9}\/[^\s"<>,;]+[^\s"<>,;.)\]])/i
 const PMID_RE = /\bPMID:?\s*(\d{6,9})\b/i
 
-/** 快速检测 PDF 是否为横屏演示文稿（宽幅比 > 1.15，例如 16:9 或 4:3 幻灯片） */
+/** 快速检测 PDF 是否为横屏演示文稿（宽幅比 > 1.15，例如 16:9 或 4:3 幻灯片，支持 /Rotate 旋转角计算） */
 export function isDeckPdf(bytes: Uint8Array): boolean {
-  const s = Buffer.from(bytes.slice(0, Math.min(bytes.length, 65536))).toString('latin1')
+  const limit = Math.min(bytes.length, 512 * 1024)
+  const s = Buffer.from(bytes.slice(0, limit)).toString('latin1')
   const matches = [...s.matchAll(/\/MediaBox\s*\[\s*([0-9.-]+)\s+([0-9.-]+)\s+([0-9.-]+)\s+([0-9.-]+)\s*\]/g)]
   if (matches.length > 0) {
     let landscape = 0
+    const rotateMatch = /\/Rotate\s+(\d+)/.exec(s)
+    const rotate = rotateMatch ? parseInt(rotateMatch[1]!, 10) : 0
+    const isRotated = rotate === 90 || rotate === 270
+
     for (const m of matches) {
-      const w = Math.abs(parseFloat(m[3]!) - parseFloat(m[1]!))
-      const h = Math.abs(parseFloat(m[4]!) - parseFloat(m[2]!))
+      let w = Math.abs(parseFloat(m[3]!) - parseFloat(m[1]!))
+      let h = Math.abs(parseFloat(m[4]!) - parseFloat(m[2]!))
+      if (isRotated) {
+        const tmp = w
+        w = h
+        h = tmp
+      }
       if (w > h * 1.15) landscape++
     }
     return landscape > matches.length / 2
@@ -131,6 +142,7 @@ export async function importPdf(bytes: Uint8Array, filename: string, opts: PdfIm
         const head = built.text.slice(0, 6000)
         return {
           kind: 'doc',
+          title: built.title ?? null,
           doc: assignIds(built.doc, new Set()),
           assets: built.assets,
           warnings: built.warnings,
@@ -218,6 +230,7 @@ export async function importPdfPoppler(bytes: Uint8Array, filename: string, opts
 
     return {
       kind: isDeck ? 'deck' : 'doc',
+      title: built.title ?? null,
       doc: assignIds(built.doc, new Set()),
       assets: built.assets,
       warnings,
@@ -367,13 +380,29 @@ export function isScannedPage(p: PdfPage): boolean {
 
 // —— 演示文稿（Deck）版面还原 ——
 
+export function extractDeckTitle(pages: PdfPage[]): string | null {
+  const p1 = pages.find(p => !isScannedPage(p))
+  if (!p1 || !p1.lines.length) return null
+  const candidates = p1.lines.filter(l => {
+    const t = l.text.trim()
+    return t.length >= 2 && t.length <= 120 && !/^\d+$/.test(t)
+  })
+  if (!candidates.length) return null
+  const maxSz = Math.max(...candidates.map(l => l.size))
+  const titleLines = candidates.filter(l => l.size >= maxSz - 2)
+  if (!titleLines.length) return null
+  titleLines.sort((a, b) => a.top - b.top || a.left - b.left)
+  return titleLines.map(l => l.text).join(' ').trim() || null
+}
+
 export function buildPdfDeck(
   pages: PdfPage[],
   ctx: { baseName: string; ocrText?: Map<number, string>; pageImages?: Map<number, Uint8Array> },
-): { doc: PMNode; assets: ImportedAsset[]; warnings: string[] } {
+): { doc: PMNode; assets: ImportedAsset[]; warnings: string[]; title?: string | null } {
   const assets: ImportedAsset[] = []
   const warnings: string[] = []
   const slides: PMNode[] = []
+  const title = extractDeckTitle(pages)
   let figN = 0
   let shapeN = 0
 
@@ -533,6 +562,22 @@ export function buildPdfDeck(
       let curRuns: PdfRun[] = []
       let prevLine: PdfLine | null = null
 
+      const shapeMid = minX + w / 2
+      let isCentered = false
+      if (c.lines.length > 0) {
+        let centerDev = 0
+        for (const l of c.lines) {
+          const lMid = l.left + l.width / 2
+          centerDev += Math.abs(lMid - shapeMid)
+        }
+        const avgDev = centerDev / c.lines.length
+        if (avgDev < Math.max(14, w * 0.08) && w >= 60) {
+          isCentered = true
+        }
+      }
+      const alignAttr = isCentered ? 'center' : null
+      const pprAttr = isCentered ? '<a:pPr algn="ctr"/>' : null
+
       const flushPara = () => {
         if (!curRuns.length) return
         const inlines: PMNode[] = []
@@ -547,7 +592,7 @@ export function buildPdfDeck(
           marks.push(deckSchema.marks.rpr.create({ xml: rprXml }))
           inlines.push(deckSchema.text(run.text, marks))
         }
-        if (inlines.length) paras.push(deckSchema.node('paragraph', null, inlines))
+        if (inlines.length) paras.push(deckSchema.node('paragraph', { align: alignAttr, ppr: pprAttr }, inlines))
         curRuns = []
       }
 
@@ -600,7 +645,7 @@ export function buildPdfDeck(
   }
 
   const doc = deckSchema.node('doc', null, slides)
-  return { doc, assets, warnings }
+  return { doc, assets, warnings, title }
 }
 
 // —— 竖版文档（Doc）版面还原 ——
@@ -684,13 +729,84 @@ function tableOf(rows: PdfLine[][]): { rows: string[][]; header: boolean } | nul
   return { rows: out, header: rows[0]!.every(l => l.bold) }
 }
 
+/**
+ * 依据学术论文分栏结构重排文本行阅读顺序：
+ * 避免左右双栏在相同垂直 top 时被简单扫描行交替穿插（行1左 + 行1右）。
+ */
+export function orderPageLines(lines: PdfLine[], pageW: number, pageH: number): PdfLine[] {
+  if (lines.length < 8 || pageW <= 0) return [...lines].sort((a, b) => a.top - b.top || a.left - b.left)
+
+  const midX = pageW / 2
+  const col1Lines: PdfLine[] = []
+  const col2Lines: PdfLine[] = []
+  const spanLines: PdfLine[] = []
+
+  for (const l of lines) {
+    const isCol1 = l.left < midX * 0.95 && (l.left + l.width) <= midX + 15
+    const isCol2 = l.left >= midX - 15 && (l.left + l.width) > midX * 1.05
+    if (isCol1) col1Lines.push(l)
+    else if (isCol2) col2Lines.push(l)
+    else spanLines.push(l)
+  }
+
+  // 双栏页面：左右栏均有较多行，且跨栏行占少数
+  if (col1Lines.length < 4 || col2Lines.length < 4 || (col1Lines.length + col2Lines.length) < lines.length * 0.5) {
+    return [...lines].sort((a, b) => a.top - b.top || a.left - b.left)
+  }
+
+  // 顶端通栏区域（如标题、作者、摘要）
+  let topCutoff = 0
+  const topSpanners = spanLines.filter(l => l.top < Math.min(...col1Lines.map(c => c.top), ...col2Lines.map(c => c.top)) + 5)
+  if (topSpanners.length > 0) {
+    topCutoff = Math.max(...topSpanners.map(l => l.top + l.height))
+  }
+
+  // 底端通栏区域（如脚注、页底图注）
+  let botCutoff = pageH
+  const botSpanners = spanLines.filter(l => l.top > Math.max(...col1Lines.map(c => c.top + c.height), ...col2Lines.map(c => c.top + c.height)) - 5)
+  if (botSpanners.length > 0) {
+    botCutoff = Math.min(...botSpanners.map(l => l.top))
+  }
+
+  const topBand = lines.filter(l => l.top < topCutoff).sort((a, b) => a.top - b.top || a.left - b.left)
+  const botBand = lines.filter(l => l.top >= botCutoff).sort((a, b) => a.top - b.top || a.left - b.left)
+
+  const midLines = lines.filter(l => l.top >= topCutoff && l.top < botCutoff)
+  const midCol1 = midLines.filter(l => col1Lines.includes(l)).sort((a, b) => a.top - b.top || a.left - b.left)
+  const midCol2 = midLines.filter(l => col2Lines.includes(l)).sort((a, b) => a.top - b.top || a.left - b.left)
+  const midSpan = midLines.filter(l => !col1Lines.includes(l) && !col2Lines.includes(l)).sort((a, b) => a.top - b.top || a.left - b.left)
+
+  // 顺序：顶端通栏 -> 左栏自上而下 -> 右栏自上而下 -> 中部通栏 -> 底端通栏
+  return [...topBand, ...midCol1, ...midCol2, ...midSpan, ...botBand]
+}
+
+export function extractDocTitle(pages: PdfPage[]): string | null {
+  const p1 = pages.find(p => !isScannedPage(p))
+  if (!p1 || !p1.lines.length) return null
+  const candidates = p1.lines.filter(l => {
+    if (p1.height > 0 && l.top > p1.height * 0.42) return false
+    const t = l.text.trim()
+    if (t.length < 4 || t.length > 250) return false
+    if (/^(journal|volume|vol\.|issue|issn|isbn|doi:|https?:|page\s*\d|published|received|accepted|abstract|contents\b|arxiv:)/i.test(t)) return false
+    if (/^\d+(\.\d+)*\s*$/i.test(t)) return false
+    return true
+  })
+  if (!candidates.length) return null
+  const maxSz = Math.max(...candidates.map(l => l.size))
+  const titleLines = candidates.filter(l => l.size >= maxSz - 1.5)
+  if (!titleLines.length) return null
+  titleLines.sort((a, b) => a.top - b.top || a.left - b.left)
+  return titleLines.map(l => l.text).join(' ').trim() || null
+}
+
 export function buildPdfDoc(
   pages: PdfPage[],
   ctx: { baseName: string; ocrText?: Map<number, string>; pageImages?: Map<number, Uint8Array> },
-): { doc: PMNode; assets: ImportedAsset[]; warnings: string[] } {
+): { doc: PMNode; assets: ImportedAsset[]; warnings: string[]; title?: string | null } {
   const assets: ImportedAsset[] = []
   const warnings: string[] = []
   const notes: string[] = []
+  const title = extractDocTitle(pages)
   const drop = edgeLines(pages)
   const textLines = pages.filter(p => !isScannedPage(p)).flatMap(p => p.lines.filter(l => !drop.has(l)))
   const body = bodySize(textLines)
@@ -728,7 +844,8 @@ export function buildPdfDoc(
       continue
     }
 
-    const lines = page.lines.filter(l => !drop.has(l))
+    const rawLines = page.lines.filter(l => !drop.has(l))
+    const lines = orderPageLines(rawLines, page.width, page.height)
     const rows = rowsOf(lines)
     let cur: Block | null = null
     let prev: PdfLine | null = null
@@ -839,5 +956,5 @@ export function buildPdfDoc(
     warnings.push('PDF 中没有文字层，也没有可提取的图片')
   }
   if (notes.length) warnings.push(...notes)
-  return { doc: schema.node('doc', null, nodes), assets, warnings }
+  return { doc: schema.node('doc', null, nodes), assets, warnings, title }
 }

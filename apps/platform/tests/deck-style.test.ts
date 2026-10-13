@@ -344,4 +344,21 @@ describe('对齐与分布（人与 AI 同一套操作）', () => {
     t.edit([{ op: 'align_shapes', shape_ids: [b], align: 'center' }])
     expect(at(b).x).toBe(Math.round((12192000 - at(b).w) / 2))
   })
+
+  it('text_style 与 align：字号、颜色、字体族与段落居中导出为合法 PPTX XML', () => {
+    const t = deck()
+    const sid = t.slide(0).attrs.id as string
+    const shapeId = t.edit([{ op: 'add_shape', slide_id: sid, markdown: '自定义样式标题', x: 100, y: 100, w: 400, h: 60 }]).results[0]!.ids[0]!
+    t.edit([
+      { op: 'set_text_style', shape_id: shapeId, paragraph: 0, font_family: 'Arial', size: 28, color: 'FF5733', align: 'center' }
+    ])
+
+    const { text } = t.exported()
+    const slideXml = text('ppt/slides/slide1.xml')
+    expect(wellFormed(slideXml)).toEqual([])
+    expect(slideXml).toContain('sz="2800"')
+    expect(slideXml).toContain('val="FF5733"')
+    expect(slideXml).toContain('typeface="Arial"')
+    expect(slideXml).toContain('algn="ctr"')
+  })
 })

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Node as PMNode } from 'prosemirror-model'
 import { describe, expect, it } from 'vitest'
-import { buildPdfDeck, buildPdfDoc, importPdf, type PdfLine, type PdfPage } from '../src/convert/pdf-import.ts'
+import { buildPdfDeck, buildPdfDoc, extractDeckTitle, extractDocTitle, importPdf, isDeckPdf, orderPageLines, type PdfLine, type PdfPage } from '../src/convert/pdf-import.ts'
 import { deckPdf, pdf, type PdfItem } from './fixtures.ts'
 
 /** 本机或容器里是否有 poppler 的 pdftohtml（集成测试依赖它） */
@@ -264,4 +264,69 @@ describe('PDF 版面 → 文档（不依赖 poppler）', () => {
     expect(doc.textContent).toContain('第 1 页为扫描页，未识别文字')
     expect(warnings.length).toBeGreaterThan(0)
   })
+
+  it('orderPageLines：学术论文双栏排版按阅读顺序排列，避免左右栏交叉错行', () => {
+    // 页面宽度 600，高 800；顶部通栏标题与摘要，中间左右双栏
+    const title = line('Multi-omics Profiling in Bronchiectasis', 50, { left: 80, width: 440, size: 22, bold: true })
+    const abstract = line('Abstract: We conducted a clinical cohort study.', 80, { left: 80, width: 440, size: 10 })
+
+    // 左栏 (left: 60..240)
+    const l1 = line('Left Column Line 1', 120, { left: 60, width: 180, size: 10 })
+    const l2 = line('Left Column Line 2', 135, { left: 60, width: 180, size: 10 })
+    const l3 = line('Left Column Line 3', 150, { left: 60, width: 180, size: 10 })
+    const l4 = line('Left Column Line 4', 165, { left: 60, width: 180, size: 10 })
+
+    // 右栏 (left: 320..500)，垂直高度与左栏完全一致
+    const r1 = line('Right Column Line 1', 120, { left: 320, width: 180, size: 10 })
+    const r2 = line('Right Column Line 2', 135, { left: 320, width: 180, size: 10 })
+    const r3 = line('Right Column Line 3', 150, { left: 320, width: 180, size: 10 })
+    const r4 = line('Right Column Line 4', 165, { left: 320, width: 180, size: 10 })
+
+    // 输入无序的行列表
+    const allLines = [l3, r2, title, r4, l1, abstract, r1, l4, l2, r3]
+    const ordered = orderPageLines(allLines, 600, 800)
+
+    // 预期顺序：Title -> Abstract -> L1 -> L2 -> L3 -> L4 -> R1 -> R2 -> R3 -> R4
+    expect(ordered[0]!.text).toBe('Multi-omics Profiling in Bronchiectasis')
+    expect(ordered[1]!.text).toBe('Abstract: We conducted a clinical cohort study.')
+    const orderedTexts = ordered.map(l => l.text)
+    const l1Idx = orderedTexts.indexOf('Left Column Line 1')
+    const l4Idx = orderedTexts.indexOf('Left Column Line 4')
+    const r1Idx = orderedTexts.indexOf('Right Column Line 1')
+    const r4Idx = orderedTexts.indexOf('Right Column Line 4')
+
+    // 左栏的所有行必须排在右栏第 1 行之前
+    expect(l4Idx).toBeLessThan(r1Idx)
+    expect(l1Idx).toBeLessThan(l4Idx)
+    expect(r1Idx).toBeLessThan(r4Idx)
+  })
+
+  it('extractDocTitle 与 extractDeckTitle：精准提取首要大标题，过滤期刊刊名与页眉', () => {
+    const p1 = page(1, [
+      line('Journal of Clinical Investigation 2026; Vol 136', 20, { size: 9 }),
+      line('Deep Learning in Computed Tomography', 80, { size: 24, bold: true }),
+      line('John Doe, Jane Smith', 115, { size: 11 }),
+      line('Department of Radiology, Medical Center', 130, { size: 9 }),
+    ])
+    const docTitle = extractDocTitle([p1])
+    expect(docTitle).toBe('Deep Learning in Computed Tomography')
+
+    const slide1 = page(1, [
+      line('Q3 Quarterly Strategic Roadmap', 100, { size: 32, bold: true }),
+      line('Author: Product Team', 200, { size: 16 }),
+    ])
+    const deckTitle = extractDeckTitle([slide1])
+    expect(deckTitle).toBe('Q3 Quarterly Strategic Roadmap')
+  })
+
+  it('isDeckPdf：支持 /Rotate 90 与 /Rotate 270 旋转角的横屏演示文稿探测', () => {
+    // 原始 MediaBox 为竖屏 A4 (0 0 595 842)，但带 /Rotate 90，在屏幕上呈现为横屏 (842 x 595)
+    const rawPdf = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Page /MediaBox [0 0 595 842] /Rotate 90 >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF')
+    expect(isDeckPdf(new Uint8Array(rawPdf))).toBe(true)
+
+    // 正常竖屏且未旋转
+    const normalPortrait = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Page /MediaBox [0 0 595 842] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF')
+    expect(isDeckPdf(new Uint8Array(normalPortrait))).toBe(false)
+  })
 })
+
