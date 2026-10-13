@@ -1,6 +1,6 @@
 name: Deploy Staging
 
-# 预发环境：push 到 staging 分支时构建镜像并部署到预发服务器（STAGING_HOST，域名 staging.heurion.org）。
+# 预发环境：手动触发，构建镜像并部署到预发服务器（STAGING_HOST，域名 staging.heurion.org）。
 # 用来在不影响生产（deploy-v2.yml，只由 main 触发）的前提下走通整条 CI → 镜像 → 部署 → 自检流程。
 # 与生产的区别：
 #   - 镜像只打 commit sha 标签，不移动 latest；
@@ -9,10 +9,10 @@ name: Deploy Staging
 #   - 默认不发邮件（只读 STAGING_RESEND_API_KEY，不设时平台发信直接报错）；
 #   - 不清 Cloudflare 缓存（预发域名不走 Cloudflare 代理）。
 # 预发服务器以后要转为生产时，先 `docker compose -p heurion2 down -v` 清掉预发的卷，再恢复生产数据。
+# 2026-10-13 起 Hetzner 服务器转为生产，预发只能手动触发（Actions → Deploy Staging → Run workflow），
+# 且 STAGING_HOST 必须指向一台不跑生产的机器，否则会用预发配置覆盖生产。
 on:
-  push:
-    branches: [staging]
-    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
 
 concurrency:
   group: deploy-staging
