@@ -42,7 +42,7 @@ import { TenantError, TenantService } from '../auth/tenants.ts'
 import type { MemoryEvolution } from '../memory/evolve.ts'
 import { MemoryError, type MemoryService } from '../memory/service.ts'
 import { DiagramError, renderSvg } from '../render/diagram.ts'
-import type { TurnRegistry } from './turns.ts'
+import type { TurnRegistry, TurnNotice } from './turns.ts'
 import type { ImageService } from '../images/service.ts'
 import { UnsplashError } from '../images/unsplash.ts'
 import { registerImagingTools } from './imaging-tools.ts'
@@ -135,7 +135,19 @@ class Ctx {
   constructor(readonly deps: McpDeps, readonly claims: TokenClaims) {}
 
   get turnId(): string | null {
-    return this.deps.turns.active(this.claims.u)?.turnId ?? null
+    return this.deps.turns.active(this.claims.u, this.claims.s)?.turnId ?? null
+  }
+
+  activeTurn(docId?: string) {
+    return this.deps.turns.active(this.claims.u, this.claims.s, docId)
+  }
+
+  touch(docId: string) {
+    this.deps.turns.touch(this.claims.u, docId, this.claims.s)
+  }
+
+  notify(notice: TurnNotice) {
+    this.deps.turns.notify(this.claims.u, notice, this.claims.s)
   }
 
   /** 访问判定（AI 代表当前用户：能力随用户在研究里的角色） */
@@ -197,7 +209,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       if (!DECK_THEMES[key] || !themeAllowed(key, claims.u)) return fail('theme_not_found', `没有模板「${key}」`, { hint: '用 deck_templates 查可用模板' })
       const row = docs.create({ owner: claims.u, title, kind: 'deck', content: newTemplateDeck(title, key) })
       store.putPackage(row.id, 'pptx', pptxTemplate(key))
-      deps.turns.touch(claims.u, row.id)
+      ctx.touch(row.id)
       return json({ doc_id: row.id, kind: 'deck', title, rev: 0, template: key, layouts: LAYOUTS.map(l => `${l.name}：${l.hint}`) })
     }
     const row = docs.create({ owner: claims.u, title })
@@ -212,7 +224,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
         throw err
       }
     }
-    deps.turns.touch(claims.u, row.id)
+    ctx.touch(row.id)
     return json({ doc_id: row.id, title, rev: docs.rev(row.id) })
   })
 
@@ -286,10 +298,10 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     if (denied) return denied
     if (store.getDoc(args.doc_id)!.kind === 'deck') return fail('wrong_tool', '这是幻灯片文档，请用 deck_edit')
     try {
-      const forced = deps.turns.active(claims.u)?.mode
+      const forced = ctx.activeTurn(args.doc_id)?.mode
       const mode = forced === 'suggest' ? 'suggest' : args.mode ?? 'apply'
-      const result = deps.ops.edit({ ...args, mode }, { actor: 'ai', turnId: ctx.turnId, answering: deps.turns.active(claims.u)?.answering ?? null })
-      deps.turns.touch(claims.u, args.doc_id)
+      const result = deps.ops.edit({ ...args, mode }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null })
+      ctx.touch(args.doc_id)
       return json({
         rev: result.rev,
         results: result.results,
@@ -394,10 +406,10 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     const denied = ctx.check(args.doc_id, 'write') ?? deckOnly(args.doc_id)
     if (denied) return denied
     try {
-      const forced = deps.turns.active(claims.u)?.mode
+      const forced = ctx.activeTurn(args.doc_id)?.mode
       const mode = forced === 'suggest' ? 'suggest' : args.mode ?? 'apply'
-      const result = deps.ops.edit({ ...args, mode }, { actor: 'ai', turnId: ctx.turnId, answering: deps.turns.active(claims.u)?.answering ?? null })
-      deps.turns.touch(claims.u, args.doc_id)
+      const result = deps.ops.edit({ ...args, mode }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null })
+      ctx.touch(args.doc_id)
       return json({ rev: result.rev, results: result.results, changed: result.changes.length, mode })
     } catch (err) {
       if (err instanceof OpError) return fail(err.code, err.message, err.extra)
@@ -506,7 +518,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     if (denied) return denied
     if (!store.getComment(doc_id, comment_id)) return fail('comment_not_found', `评论 ${comment_id} 不存在`)
     const reply = store.addReply(comment_id, 'ai', body, ctx.turnId)
-    deps.turns.notify(claims.u, { type: 'comment_reply', doc_id, comment_id })
+    ctx.notify({ type: 'comment_reply', doc_id, comment_id })
     return json({ comment_id, reply_id: reply.id })
   })
 
@@ -520,11 +532,11 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     if (!c) return fail('comment_not_found', `评论 ${comment_id} 不存在`)
     if (c.status === 'resolved') return fail('already_resolved', '线程已关闭')
     if (c.replies.at(-1)?.role !== 'ai') return fail('reply_required', '关闭前先用 comment_reply 说明处理结果')
-    if (deps.turns.active(claims.u)?.touched.has(doc_id)) {
+    if (ctx.activeTurn(doc_id)?.touched.has(doc_id)) {
       return fail('user_confirms_changes', '本回合已修改文档：线程保持 open，由用户确认后关闭', { hint: '只有判断无需修改时才由你关闭线程。' })
     }
     store.setCommentStatus(doc_id, comment_id, 'resolved', 'ai')
-    deps.turns.notify(claims.u, { type: 'comment_reply', doc_id, comment_id })
+    ctx.notify({ type: 'comment_reply', doc_id, comment_id })
     return json({ comment_id, status: 'resolved' })
   })
 
@@ -689,7 +701,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     const denied = ctx.check(doc_id, 'write')
     if (denied) return denied
     const out = deps.claims.report(doc_id, results)
-    if (out.some(r => r.status === 'commented')) deps.turns.notify(claims.u, { type: 'comment_reply', doc_id, comment_id: '' })
+    if (out.some(r => r.status === 'commented')) ctx.notify({ type: 'comment_reply', doc_id, comment_id: '' })
     return json({ results: out, note: out.some(r => r.status === 'stale') ? 'stale：该句已被修改或不存在，请重新 verify_claims' : undefined })
   })
 
@@ -1019,7 +1031,7 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
   }
   // AI 的患者库空间跟着本轮对话的文档走：知家成员的档案 / 简报（个人空间）→ personal，其余 → 工作空间；不能跨空间读
   const turnSpace = (): 'work' | 'personal' => {
-    const docId = deps.turns.active(claims.u)?.docId
+    const docId = ctx.activeTurn()?.docId
     const row = docId ? store.getDoc(docId) : undefined
     let c: { kind?: string; space?: string; doc_kind?: string } | null = null
     try { c = row?.context ? JSON.parse(row.context) : null } catch { /* 无归属 */ }
@@ -1394,11 +1406,11 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
     },
   }, async ({ content, kind, scope, reason, explicit }) => {
     if (!deps.memory) return fail('memory_unavailable', '记忆未启用')
-    const turn = deps.turns.active(claims.u)
+    const turn = ctx.activeTurn()
     if (turn && turn.memory === false) return fail('memory_off', '本轮不使用记忆（用户关闭或已暂停）', { hint: '不要提议记忆，正常完成任务即可。' })
     try {
       const r = await deps.memory.propose(claims.u, { content, kind, scope: scope ?? 'global', reason, explicit }, { docId: turn?.docId ?? null, turnId: turn?.turnId ?? null, source: 'turn', actor: 'ai' })
-      if (r.result === 'proposed' || r.result === 'active') deps.turns.notify(claims.u, { type: 'memory', result: r.result, memory: r.memory })
+      if (r.result === 'proposed' || r.result === 'active') ctx.notify({ type: 'memory', result: r.result, memory: r.memory })
       const said = { proposed: '已提议，等用户确认', active: '已记住（用户明确要求，直接生效）', merged: '已有相同的记忆，未重复添加', previously_rejected: '用户之前拒绝过这条，不再提议' }[r.result]
       return json({ result: r.result, message: said })
     } catch (err) {
@@ -1423,7 +1435,7 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
       if (r.result === 'ambiguous') {
         return json({ result: 'ambiguous', message: '有多条相近的记忆，先跟用户确认要忘哪几条（复述内容，不要提 id）', candidates: r.candidates.map(m => ({ id: m.id, content: m.content, status: m.status })) })
       }
-      for (const m of r.memories) deps.turns.notify(claims.u, { type: 'memory', result: 'forgotten', memory: m })
+      for (const m of r.memories) ctx.notify({ type: 'memory', result: 'forgotten', memory: m })
       return json({ result: 'forgotten', forgotten: r.memories.map(m => m.content), message: '已彻底删除，之后的对话不再使用' })
     } catch (err) {
       if (err instanceof MemoryError) return fail(err.code, err.message, err.hint ? { hint: err.hint } : {})
@@ -1436,7 +1448,7 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
     inputSchema: { query: z.string().min(1) },
   }, async ({ query }) => {
     if (!deps.memory) return fail('memory_unavailable', '记忆未启用')
-    const turn = deps.turns.active(claims.u)
+    const turn = ctx.activeTurn()
     if ((turn && turn.memory === false) || !deps.memory.active(claims.u)) return fail('memory_off', '本轮不使用记忆', { hint: '不要依赖记忆，按本轮要求完成。' })
     const hits = await deps.memory.search(claims.u, query, turn?.docId ?? null)
     return json(hits.map(m => ({ kind: m.kind, scope: m.scope, content: m.content })))
@@ -1449,7 +1461,7 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
     inputSchema: {},
   }, async () => {
     if (!deps.evolution) return fail('review_unavailable', '记忆整理不可用')
-    const turn = deps.turns.active(claims.u)
+    const turn = ctx.activeTurn()
     if (turn && turn.memory === false) return fail('memory_off', '本轮不使用记忆', { hint: '告诉用户本轮关了记忆；需要整理时请用户打开记忆后再说。' })
     try {
       const r = await deps.evolution.review(claims.u)

@@ -194,7 +194,7 @@ describe('数据隔离：另一个用户访问一律 404', () => {
     }
     // A 的数据没被动过
     expect((await t.call('GET', `/api/docs/${doc.id}`, a.token)).data.title).toBe('A 的文档')
-    expect((await t.call('GET', `/api/queue`, b.token)).data).toEqual({ running: null, queued: [] })
+    expect((await t.call('GET', `/api/queue`, b.token)).data).toEqual({ running: null, active: [], queued: [] })
     expect(t.accounts.userFor(b.token)).toBe(b.user.id)
   })
 

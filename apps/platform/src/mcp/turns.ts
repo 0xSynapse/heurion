@@ -31,25 +31,38 @@ export interface ActiveTurn {
 }
 
 export class TurnRegistry {
-  private readonly turns = new Map<string, ActiveTurn>()
+  private readonly byUser = new Map<string, ActiveTurn>()
+  private readonly byGen = new Map<string, ActiveTurn>()
+  private readonly byDoc = new Map<string, ActiveTurn>()
 
-  begin(userId: string, turn: ActiveTurn): void {
-    this.turns.set(userId, turn)
+  begin(userId: string, turn: ActiveTurn, generation?: string): void {
+    this.byUser.set(userId, turn)
+    if (generation) this.byGen.set(generation, turn)
+    if (turn.docId) this.byDoc.set(`${userId}#${turn.docId}`, turn)
   }
 
   end(userId: string, turnId: string): void {
-    if (this.turns.get(userId)?.turnId === turnId) this.turns.delete(userId)
+    if (this.byUser.get(userId)?.turnId === turnId) this.byUser.delete(userId)
+    for (const [k, t] of this.byGen) {
+      if (t.turnId === turnId) this.byGen.delete(k)
+    }
+    for (const [k, t] of this.byDoc) {
+      if (t.turnId === turnId) this.byDoc.delete(k)
+    }
   }
 
-  active(userId: string): ActiveTurn | undefined {
-    return this.turns.get(userId)
+  active(userId: string, generation?: string, docId?: string): ActiveTurn | undefined {
+    if (generation && this.byGen.has(generation)) return this.byGen.get(generation)
+    if (docId && this.byDoc.has(`${userId}#${docId}`)) return this.byDoc.get(`${userId}#${docId}`)
+    return this.byUser.get(userId)
   }
 
-  touch(userId: string, docId: string): void {
-    this.turns.get(userId)?.touched.add(docId)
+  touch(userId: string, docId: string, generation?: string): void {
+    this.active(userId, generation, docId)?.touched.add(docId)
   }
 
-  notify(userId: string, notice: TurnNotice): void {
-    this.turns.get(userId)?.notify(notice)
+  notify(userId: string, notice: TurnNotice, generation?: string): void {
+    const docId = 'doc_id' in notice ? notice.doc_id : undefined
+    this.active(userId, generation, docId)?.notify(notice)
   }
 }

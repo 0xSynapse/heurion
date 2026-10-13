@@ -952,7 +952,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json({
       ...row,
       rev: docs.rev(row.id),
-      busy: turns.isBusy(c.get('user')),
+      busy: turns.isBusy(c.get('user'), row.id),
       versions: store.listVersions(row.id),
       messages: store.listMessages(row.id),
       failed_turns: store.failedTurns(row.id),
@@ -1348,7 +1348,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.post('/api/docs/:id/versions/:seq/restore', c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
-    if (turns.isBusy(c.get('user'))) return c.json({ error: 'AI 正在编辑，先取消或等待完成' }, 409)
+    if (turns.isBusy(c.get('user'), row.id)) return c.json({ error: 'AI 正在编辑，先取消或等待完成' }, 409)
     return c.json({ version: docs.restore(row.id, Number(c.req.param('seq'))), rev: docs.rev(row.id) })
   })
 
@@ -1383,7 +1383,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       turns.events.on('event', onTurn)
       deps.postcheck.on('notice', onNotice)
       stream.onAbort(() => { closed = true; wake?.() })
-      await stream.writeSSE({ data: JSON.stringify({ type: 'hello', rev: docs.rev(row.id), busy: turns.isBusy(c.get('user')) }) })
+      await stream.writeSSE({ data: JSON.stringify({ type: 'hello', rev: docs.rev(row.id), busy: turns.isBusy(c.get('user'), row.id) }) })
       try {
         while (!closed) {
           if (queue.length === 0) await new Promise<void>(r => { wake = r; setTimeout(r, 25_000) })
@@ -1646,7 +1646,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         error: t.error,
       }
     })
-    return c.json({ doc_id: doc.id, messages, turns: turnsList, busy: deps.turns.isBusy(user) })
+    return c.json({ doc_id: doc.id, messages, turns: turnsList, busy: deps.turns.isCopilotBusy(user) })
   })
 
   app.post('/api/copilot/chat', async c => {
@@ -1684,7 +1684,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     }
     prompt += `\n用户需求：${message}`
 
-    return streamTurn(c, deps, copilotDoc.id, prompt, { suggest: false })
+    return streamTurn(c, deps, copilotDoc.id, prompt, { suggest: false, lane: 'copilot' })
   })
 
   app.post('/api/copilot/clear', c => {
@@ -1821,7 +1821,7 @@ function streamTurn(c: Context<{ Variables: { user: string } }>, deps: ApiDeps, 
   const user = c.get('user')
   if (c.req.query('async')) {
     void deps.turns.submit(user, docId, message, undefined, opts)
-    return c.json({ queued: deps.turns.isBusy(user) }, 202)
+    return c.json({ queued: opts.lane === 'copilot' ? deps.turns.isCopilotBusy(user) : deps.turns.isBusy(user, docId) }, 202)
   }
   return streamSSE(c, async stream => {
     // 串行写出，结束前等全部写完

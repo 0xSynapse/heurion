@@ -68,6 +68,8 @@ export interface TurnOptions {
   commentId?: string
   /** false = 本轮不用记忆（不注入、memory_* 工具不可用、不产生提议）。 */
   memory?: boolean
+  /** 通道：copilot 走全局随航快车道，doc 走文档编辑通道（默认 doc）。 */
+  lane?: 'copilot' | 'doc'
 }
 
 interface Job {
@@ -84,6 +86,7 @@ interface Running {
   job: Job
   turnId: string | null
   startedAt: string
+  slot: string
   /** 让正在等待的 dsh 调用立即失败（进程卡住、close 不返回时也能放行队列）。 */
   abort: (reason: Error) => void
 }
@@ -102,6 +105,7 @@ export interface QueueItem {
 
 export interface QueueView {
   running: QueueItem | null
+  active?: QueueItem[]
   queued: QueueItem[]
 }
 
@@ -109,29 +113,40 @@ export interface QueueView {
  * 一轮 AI 编辑（PLATFORM.md §6.5）：登记回合 → dsh 执行（经 MCP 读写文档，改动实时提交）
  * → 回合结束为本回合改过的每份文档打一个版本快照。守卫已在每次写入前执行，没有落版前审计 / 丢弃。
  *
- * 每个用户一个 FIFO 队列（一个用户一个 dsh 进程）：对话、评论「让 AI 处理」、@heurion 自动触发
- * 都排进同一队列。所有回合事件同时发到 events（文档的 SSE 流转发给页面）。
- * 排队中的任务持久化在 turn_queue：服务重启后继续执行；用户可以逐个取消排队任务或只停止当前任务。
+ * 双轨制任务调度：
+ * 1. Co-Pilot 独立快车道：opts.lane === 'copilot'，走专属 slot（'copilot'），不阻塞文档任务，也不被文档排队阻塞。
+ * 2. 文档并发进程池：按 (userId, docId) 隔离，同一文档保证严格串行（防自身版本冲突），不同文档之间池化并行（默认最多 2 个并发）。
  */
 export class TurnService {
   readonly events = new EventEmitter<{ event: [TurnBusEvent] }>()
   private readonly cancelling = new Set<string>()
   private readonly timedOut = new Set<string>()
   private readonly idleTimeoutMs: number
+  private readonly maxDocConcurrency: number
   private readonly memory: MemoryService | null
   private readonly alerts: Alerts | null
   /** 知家红线（PATIENT.md §3）：返回 undefined = 不是知家文档（不检查）；null = 是知家文档但没有特殊标记；对象 = 有孕产 / 哺乳 / 儿童标记。 */
   private readonly phrGuard: ((docId: string) => PhrMember | null | undefined) | null
   private readonly queues = new Map<string, Job[]>()
-  private readonly running = new Map<string, Running>()
+  /** 各用户正在执行的文档任务：userId -> (docId -> Running) */
+  private readonly running = new Map<string, Map<string, Running>>()
+  /** 各用户正在执行的 Co-Pilot 随航任务：userId -> Running */
+  private readonly copilotRunning = new Map<string, Running>()
 
   constructor(
     private readonly docs: Documents,
     private readonly pool: HarnessPool,
     private readonly registry: TurnRegistry,
-    opts: { idleTimeoutMs?: number; memory?: MemoryService; alerts?: Alerts; phrGuard?: (docId: string) => PhrMember | null | undefined } = {},
+    opts: {
+      idleTimeoutMs?: number
+      memory?: MemoryService
+      alerts?: Alerts
+      phrGuard?: (docId: string) => PhrMember | null | undefined
+      maxDocConcurrency?: number
+    } = {},
   ) {
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 5 * 60_000
+    this.maxDocConcurrency = opts.maxDocConcurrency ?? 2
     this.memory = opts.memory ?? null
     this.alerts = opts.alerts ?? null
     this.phrGuard = opts.phrGuard ?? null
@@ -151,15 +166,24 @@ export class TurnService {
     return { interrupted, requeued: rows.length }
   }
 
-  isBusy(userId: string): boolean {
-    return this.running.has(userId)
+  /** 指定文档是否正在执行；不传 docId 时表示该用户是否有任意文档任务在执行。 */
+  isBusy(userId: string, docId?: string): boolean {
+    if (docId) {
+      return this.running.get(userId)?.has(docId) ?? false
+    }
+    return (this.running.get(userId)?.size ?? 0) > 0
+  }
+
+  /** 全局 Co-Pilot 随航通道是否正忙。 */
+  isCopilotBusy(userId: string): boolean {
+    return this.copilotRunning.has(userId)
   }
 
   queued(userId: string): number {
     return this.queues.get(userId)?.length ?? 0
   }
 
-  /** 当前用户的队列：正在执行的一个 + 排队中的（按执行顺序）。 */
+  /** 当前用户的队列：正在执行的所有文档任务 + 排队中的（按执行顺序）。 */
   view(userId: string): QueueView {
     const item = (job: Job, since: string, turnId?: string | null): QueueItem => ({
       id: job.id,
@@ -170,9 +194,11 @@ export class TurnService {
       since,
       ...(turnId !== undefined ? { turn_id: turnId } : {}),
     })
-    const r = this.running.get(userId)
+    const runningList = [...(this.running.get(userId)?.values() ?? [])]
+    const active = runningList.map(r => item(r.job, r.startedAt, r.turnId))
     return {
-      running: r ? item(r.job, r.startedAt, r.turnId) : null,
+      running: active[0] ?? null,
+      active,
       queued: (this.queues.get(userId) ?? []).map(j => item(j, j.enqueuedAt)),
     }
   }
@@ -181,11 +207,56 @@ export class TurnService {
   submit(userId: string, docId: string, message: string, emit: (e: UiEvent) => void = () => {}, opts: TurnOptions = {}): Promise<void> {
     const target = this.docs.store.getDoc(docId)
     if (!target || target.deleted_at) return Promise.reject(new Error(`doc ${docId} not found`))
+    if (opts.lane === 'copilot') {
+      return this.submitCopilot(userId, docId, message, emit, opts)
+    }
     return new Promise(resolve => {
       const job = { id: 'q' + randomUUID().replace(/-/g, '').slice(0, 11), docId, message, opts, enqueuedAt: new Date().toISOString() }
       this.push(userId, job, emit, resolve, true)
       void this.drain(userId)
     })
+  }
+
+  /** Co-Pilot 专用独立随航通道：不入排队队列，直接走 copilot slot 快速执行。 */
+  private async submitCopilot(userId: string, docId: string, message: string, emit: (e: UiEvent) => void, opts: TurnOptions): Promise<void> {
+    const publish = (e: UiEvent) => {
+      emit(e)
+      this.events.emit('event', { userId, docId, event: e })
+    }
+    // 若该用户当前有正在跑的上一条随航提问，优雅中断上一轮，接入新一轮
+    const prev = this.copilotRunning.get(userId)
+    if (prev) {
+      this.cancelling.add(prev.job.id)
+      prev.abort(new Error('superseded'))
+      await this.pool.cancel(userId, 'copilot').catch(() => {})
+    }
+
+    let abort: (reason: Error) => void = () => {}
+    const aborted = new Promise<never>((_, reject) => { abort = reject })
+    aborted.catch(() => {})
+
+    const job: Job = {
+      id: 'cp' + randomUUID().replace(/-/g, '').slice(0, 10),
+      docId,
+      message,
+      opts,
+      enqueuedAt: new Date().toISOString(),
+      emit: publish,
+      done: () => {},
+    }
+    const r: Running = { job, turnId: null, startedAt: new Date().toISOString(), slot: 'copilot', abort }
+    this.copilotRunning.set(userId, r)
+
+    try {
+      await this.execute(userId, job, r, aborted, 'copilot')
+    } catch (err) {
+      job.emit({ type: 'error', message: String((err as Error).message ?? err) })
+    } finally {
+      if (this.copilotRunning.get(userId) === r) {
+        this.copilotRunning.delete(userId)
+      }
+      job.emit({ type: 'done' })
+    }
   }
 
   private push(userId: string, base: Omit<Job, 'emit' | 'done'>, emit: (e: UiEvent) => void, done: () => void, persist: boolean): void {
@@ -200,30 +271,71 @@ export class TurnService {
     if (persist) {
       this.docs.store.enqueueJob({ id: job.id, user_id: userId, doc_id: job.docId, message: job.message, opts: JSON.stringify(job.opts), enqueued_at: job.enqueuedAt })
     }
-    if (this.running.has(userId)) publish({ type: 'queued', position: q.length, message: job.message })
+    const runningMap = this.running.get(userId)
+    const isDocRunning = runningMap?.has(base.docId) ?? false
+    const isFull = (runningMap?.size ?? 0) >= this.maxDocConcurrency
+    if (isDocRunning || isFull) {
+      publish({ type: 'queued', position: q.length, message: job.message })
+    }
   }
 
   private async drain(userId: string): Promise<void> {
-    if (this.running.has(userId)) return
-    const job = this.queues.get(userId)?.shift()
+    const q = this.queues.get(userId)
+    if (!q || q.length === 0) return
+
+    let runningMap = this.running.get(userId)
+    if (!runningMap) {
+      runningMap = new Map<string, Running>()
+      this.running.set(userId, runningMap)
+    }
+    if (runningMap.size >= this.maxDocConcurrency) return
+
+    // 寻找队列中第一个「目标文档当前未在执行」的任务（保证同一文档严格串行安全）
+    const jobIndex = q.findIndex(j => !runningMap!.has(j.docId))
+    if (jobIndex === -1) return
+
+    const [job] = q.splice(jobIndex, 1)
     if (!job) return
     this.docs.store.dequeueJob(job.id)
+
     // 排队期间文档被删了 / 进了回收站：跳过
     const target = this.docs.store.getDoc(job.docId)
-    if (!target || target.deleted_at) { job.done(); void this.drain(userId); return }
+    if (!target || target.deleted_at) {
+      job.done()
+      void this.drain(userId)
+      return
+    }
+
+    // 分配可用的 slot（doc_0, doc_1 ...）
+    const usedSlots = new Set([...runningMap.values()].map(r => r.slot))
+    let slot = 'doc_0'
+    for (let i = 0; i < this.maxDocConcurrency; i++) {
+      const candidate = `doc_${i}`
+      if (!usedSlots.has(candidate)) { slot = candidate; break }
+    }
+
     let abort: (reason: Error) => void = () => {}
     const aborted = new Promise<never>((_, reject) => { abort = reject })
     aborted.catch(() => {})
-    const r: Running = { job, turnId: null, startedAt: new Date().toISOString(), abort }
-    this.running.set(userId, r)
-    try {
-      await this.execute(userId, job, r, aborted)
-    } catch (err) {
-      job.emit({ type: 'error', message: String((err as Error).message ?? err) })
-    } finally {
-      this.running.delete(userId)
-      job.emit({ type: 'done' })
-      job.done()
+    const r: Running = { job, turnId: null, startedAt: new Date().toISOString(), slot, abort }
+    runningMap.set(job.docId, r)
+
+    void (async () => {
+      try {
+        await this.execute(userId, job, r, aborted, slot)
+      } catch (err) {
+        job.emit({ type: 'error', message: String((err as Error).message ?? err) })
+      } finally {
+        runningMap!.delete(job.docId)
+        if (runningMap!.size === 0) this.running.delete(userId)
+        job.emit({ type: 'done' })
+        job.done()
+        void this.drain(userId)
+      }
+    })()
+
+    // 若仍有富余并发配额且队列有可用任务，继续调度
+    if (runningMap.size < this.maxDocConcurrency && q.length > 0) {
       void this.drain(userId)
     }
   }
@@ -239,7 +351,7 @@ export class TurnService {
     return job.message
   }
 
-  private async execute(userId: string, job: Job, r: Running, aborted: Promise<never>): Promise<void> {
+  private async execute(userId: string, job: Job, r: Running, aborted: Promise<never>, slot = 'default'): Promise<void> {
     const { docId, message, emit, opts } = job
     const store = this.docs.store
     const doc = store.getDoc(docId)
@@ -250,14 +362,15 @@ export class TurnService {
     r.turnId = turn.id
     const touched = new Set<string>()
     const memoryOn = opts.memory !== false && !!this.memory?.active(userId)
-    this.registry.begin(userId, { turnId: turn.id, docId, touched, notify: n => emit(n), mode: opts.suggest ? 'suggest' : 'apply', answering: opts.commentId ?? null, memory: memoryOn })
+    const gen = this.pool.generation?.(userId, slot)
+    this.registry.begin(userId, { turnId: turn.id, docId, touched, notify: n => emit(n), mode: opts.suggest ? 'suggest' : 'apply', answering: opts.commentId ?? null, memory: memoryOn }, gen)
     // 无响应超时：dsh 的任何通知（模型输出、工具调用 / 结果）或本回合的提交都算动静
     let lastActivity = Date.now()
     const watchdog = setInterval(() => {
       if (Date.now() - lastActivity < this.idleTimeoutMs) return
       clearInterval(watchdog)
-      this.timedOut.add(userId)
-      void this.stopRunning(userId)
+      this.timedOut.add(job.id)
+      void this.stopJob(userId, r)
     }, Math.min(30_000, Math.max(5, this.idleTimeoutMs / 4)))
     const onCommit = (e: CommitEvent) => {
       if (e.turnId !== turn.id) return
@@ -268,7 +381,7 @@ export class TurnService {
     this.docs.on('commit', onCommit)
     emit({ type: 'turn', turn_id: turn.id, message })
 
-    const history = this.pool.liveSession(userId) === null ? this.recentHistory(docId) : ''
+    const history = this.pool.liveSession(userId, slot) === null ? this.recentHistory(docId) : ''
     store.addMessage(docId, 'user', message, turn.id)
     const suggestNote = opts.suggest ? '本轮的修改会作为待用户采纳的修订提交。' : ''
     const memoryBlock = memoryOn ? await this.memory!.forPrompt(userId, docId, message) : ''
@@ -278,7 +391,6 @@ export class TurnService {
     const phr = this.phrGuard?.(docId)
     const styleNote = phr !== undefined ? PHR_STYLE : ''
     const prompt = `${history}（当前文档：doc_id=${docId}，《${doc.title}》，rev=${this.docs.rev(docId)}）${suggestNote}${memoryNote}\n\n${memoryBlock}${styleNote}${message}`
-
 
     let status: 'done' | 'error' | 'cancelled' | 'timeout' = 'done'
     let failure: string | null = null
@@ -300,7 +412,7 @@ export class TurnService {
             }
             emit(e)
           }
-        }),
+        }, slot),
         aborted,
       ])
       // 落库的历史同样过守卫：违规回复不进消息记录
@@ -309,7 +421,7 @@ export class TurnService {
       }
       if (modelError) { status = 'error'; failure = modelError }
     } catch (err) {
-      status = this.timedOut.has(userId) ? 'timeout' : this.cancelling.has(userId) ? 'cancelled' : 'error'
+      status = this.timedOut.has(job.id) ? 'timeout' : this.cancelling.has(job.id) ? 'cancelled' : 'error'
       const kept = '已提交的修改保留，可撤销本轮或按版本回滚。'
       failure = status === 'timeout'
         ? `模型服务 ${Math.round(this.idleTimeoutMs / 60_000) || '<1'} 分钟无响应，已自动停止`
@@ -332,21 +444,33 @@ export class TurnService {
       // 取消不算故障；出错、超时交给运维告警（模型认证 / 余额问题立即发，其余短时间内多次才发）
       if ((status === 'error' || status === 'timeout') && failure) this.alerts?.turnFailed(failure)
       emit({ type: 'turn_done', turn_id: turn.id, status, docs: [...touched] })
-      this.cancelling.delete(userId)
-      this.timedOut.delete(userId)
+      this.cancelling.delete(job.id)
+      this.timedOut.delete(job.id)
       this.docs.unpin(docId)
     }
   }
 
-  /** 取消当前回合并清空排队。 */
+  /** 取消当前用户的全部任务并清空排队。 */
   async cancel(userId: string): Promise<void> {
     for (const job of this.queues.get(userId) ?? []) this.drop(job)
     this.queues.delete(userId)
-    await this.stopRunning(userId)
+    const runningMap = this.running.get(userId)
+    if (runningMap) {
+      for (const r of runningMap.values()) {
+        await this.stopJob(userId, r).catch(() => {})
+      }
+      runningMap.clear()
+      this.running.delete(userId)
+    }
+    const cp = this.copilotRunning.get(userId)
+    if (cp) {
+      await this.stopJob(userId, cp).catch(() => {})
+      this.copilotRunning.delete(userId)
+    }
   }
 
   /**
-   * 取消一个任务：排队中的直接移出；正在执行的只停止它（结束 dsh 进程，下一次任务重新拉起），
+   * 取消一个任务：排队中的直接移出；正在执行的只停止它（结束其 slot 进程，下一次任务重新拉起），
    * 排在后面的任务照常执行。返回 false 表示找不到（已经执行完）。
    */
   async cancelJob(userId: string, jobId: string): Promise<boolean> {
@@ -357,8 +481,18 @@ export class TurnService {
       this.drop(job!)
       return true
     }
-    if (this.running.get(userId)?.job.id === jobId) {
-      await this.stopRunning(userId)
+    const runningMap = this.running.get(userId)
+    if (runningMap) {
+      for (const r of runningMap.values()) {
+        if (r.job.id === jobId) {
+          await this.stopJob(userId, r)
+          return true
+        }
+      }
+    }
+    const cp = this.copilotRunning.get(userId)
+    if (cp && cp.job.id === jobId) {
+      await this.stopJob(userId, cp)
       return true
     }
     return false
@@ -371,13 +505,11 @@ export class TurnService {
     job.done()
   }
 
-  private async stopRunning(userId: string): Promise<void> {
-    const r = this.running.get(userId)
-    if (!r) return
-    this.cancelling.add(userId)
+  private async stopJob(userId: string, r: Running): Promise<void> {
+    this.cancelling.add(r.job.id)
     // 先放行队列，再关闭进程：进程卡住时 close 可能很久不返回
     r.abort(new Error('cancelled'))
-    await this.pool.cancel(userId).catch(() => {})
+    await this.pool.cancel(userId, r.slot).catch(() => {})
   }
 
   /** 新会话首轮带上最近 6 条对话。 */

@@ -1722,7 +1722,9 @@ $<HTMLTextAreaElement>('chatInput').onkeydown = e => { if (e.key === 'Enter' && 
 // 「停止」只停当前任务，排在后面的照常执行；清空排队在任务队列里
 $('cancelBtn').onclick = async () => {
   await loadQueue() // 刚发送的任务可能还不在缓存里
-  if (queue.running) await cancelJob(queue.running.id)
+  const activeList = queue.active ?? (queue.running ? [queue.running] : [])
+  const currentRunning = activeList.find(item => item.doc_id === session?.docId) ?? queue.running
+  if (currentRunning) await cancelJob(currentRunning.id)
 }
 
 const suggestCheckbox = $<HTMLInputElement>('suggestMode')
@@ -1747,7 +1749,7 @@ if (suggestCheckbox) {
 // —— 任务队列（同一用户的所有文档共用一个队列） ——
 
 interface QueueItem { id: string; doc_id: string; doc_title: string; label: string; suggest: boolean; since: string }
-let queue: { running: QueueItem | null; queued: QueueItem[] } = { running: null, queued: [] }
+let queue: { running: QueueItem | null; active?: QueueItem[]; queued: QueueItem[] } = { running: null, active: [], queued: [] }
 
 async function loadQueue(): Promise<void> {
   if (!TOKEN) return
@@ -1755,8 +1757,10 @@ async function loadQueue(): Promise<void> {
     queue = await api('/api/queue')
   } catch { return }
   renderQueue()
-  // 忙碌状态只按刚取到的队列设置（不用缓存，免得发送后被旧数据覆盖）
-  setBusy(!!queue.running)
+  // 忙碌状态只按刚取到的队列设置：判断当前打开的文档是否正在执行
+  const activeList = queue.active ?? (queue.running ? [queue.running] : [])
+  const isCurrentDocBusy = !!session?.docId && activeList.some(item => item.doc_id === session?.docId)
+  setBusy(isCurrentDocBusy)
 }
 
 function elapsed(since: string): string {
@@ -1765,22 +1769,27 @@ function elapsed(since: string): string {
 }
 
 function renderQueue(): void {
-  const items = [...(queue.running ? [{ ...queue.running, running: true }] : []), ...queue.queued.map(q => ({ ...q, running: false }))]
+  const activeList = queue.active ?? (queue.running ? [queue.running] : [])
+  const items = [...activeList.map(r => ({ ...r, running: true })), ...queue.queued.map(q => ({ ...q, running: false }))]
   // 面板常驻：空闲时只显示一行，有任务时展开
   $('queuePanel').classList.toggle('idle', items.length === 0)
   $('queueClear').hidden = items.length === 0
-  $('queueSummary').textContent = items.length === 0 ? '空闲' : `${queue.running ? '1 个执行中' : ''}${queue.running && queue.queued.length ? '，' : ''}${queue.queued.length ? `${queue.queued.length} 个排队` : ''}`
-  $('queueList').innerHTML = items.map((q, i) => `
+  const runningCount = activeList.length
+  $('queueSummary').textContent = items.length === 0 ? '空闲' : `${runningCount > 0 ? `${runningCount} 个执行中` : ''}${runningCount > 0 && queue.queued.length ? '，' : ''}${queue.queued.length ? `${queue.queued.length} 个排队` : ''}`
+  $('queueList').innerHTML = items.map(q => {
+    const queuePos = q.running ? '执行中' : `第 ${queue.queued.findIndex(x => x.id === q.id) + 1} 位`
+    return `
     <li class="${q.running ? 'running' : ''}">
       <div class="queue-main">
-        <span class="queue-state">${q.running ? '执行中' : `第 ${i + (queue.running ? 0 : 1)} 位`}</span>
+        <span class="queue-state">${queuePos}</span>
         <span class="queue-doc${q.doc_id === session?.docId ? ' here' : ''}" data-open="${esc(q.doc_id)}" title="打开这份文档">《${esc(q.doc_title)}》</span>
         ${q.suggest ? '<span class="queue-tag">修订</span>' : ''}
         <div class="queue-label" title="${esc(q.label)}">${esc(q.label)}</div>
         <div class="muted">${q.running ? '已运行' : '已等待'} ${elapsed(q.since)}</div>
       </div>
       <button data-cancel="${esc(q.id)}">${q.running ? '停止' : '取消'}</button>
-    </li>`).join('')
+    </li>`
+  }).join('')
 }
 
 async function cancelJob(id: string): Promise<void> {
@@ -1808,7 +1817,8 @@ let queueTick = 0
 setInterval(() => {
   if (document.hidden) return
   queueTick++
-  if (queue.running || queue.queued.length > 0 || queueTick % 5 === 0) void loadQueue()
+  const activeList = queue.active ?? (queue.running ? [queue.running] : [])
+  if (activeList.length > 0 || queue.queued.length > 0 || queueTick % 5 === 0) void loadQueue()
 }, 2000)
 void loadQueue()
 

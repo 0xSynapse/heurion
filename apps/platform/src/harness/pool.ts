@@ -85,8 +85,17 @@ export class HarnessPool {
     }
   }
 
-  private entry(userId: string): Entry {
-    let e = this.entries.get(userId)
+  private entryKey(userId: string, slot = 'default'): string {
+    return `${userId}#${slot}`
+  }
+
+  generation(userId: string, slot = 'default'): string {
+    return this.entry(userId, slot).generation
+  }
+
+  private entry(userId: string, slot = 'default'): Entry {
+    const key = this.entryKey(userId, slot)
+    let e = this.entries.get(key)
     if (!e) {
       const cwd = this.workspaceDir(userId)
       const generation = randomUUID()
@@ -109,27 +118,36 @@ export class HarnessPool {
         busy: false,
         generation,
       }
-      this.entries.set(userId, e)
+      this.entries.set(key, e)
     }
     return e
   }
 
-  /** 令牌里的进程代号是否仍是该用户当前的 dsh 进程。 */
+  /** 令牌里的进程代号是否仍是该用户当前的任意一个有效 dsh 进程。 */
   isLive(userId: string, generation: string): boolean {
-    return this.entries.get(userId)?.generation === generation
+    for (const [key, e] of this.entries) {
+      if (key.startsWith(`${userId}#`) && e.generation === generation) return true
+    }
+    return false
   }
 
-  isBusy(userId: string): boolean {
-    return this.entries.get(userId)?.busy ?? false
+  isBusy(userId: string, slot?: string): boolean {
+    if (slot !== undefined) {
+      return this.entries.get(this.entryKey(userId, slot))?.busy ?? false
+    }
+    for (const [key, e] of this.entries) {
+      if (key.startsWith(`${userId}#`) && e.busy) return true
+    }
+    return false
   }
 
   /** null 表示下一次 run 会开新会话（调用方应补上历史上下文）。 */
-  liveSession(userId: string): string | null {
-    return this.entries.get(userId)?.sessionId ?? null
+  liveSession(userId: string, slot = 'default'): string | null {
+    return this.entries.get(this.entryKey(userId, slot))?.sessionId ?? null
   }
 
-  async run(userId: string, prompt: string, onNotification: (n: HarnessNotification, sessionId: string) => void): Promise<RunResult> {
-    const e = this.entry(userId)
+  async run(userId: string, prompt: string, onNotification: (n: HarnessNotification, sessionId: string) => void, slot = 'default'): Promise<RunResult> {
+    const e = this.entry(userId, slot)
     if (e.busy) throw new Error('busy')
     e.busy = true
     e.lastUsed = Date.now()
@@ -143,23 +161,37 @@ export class HarnessPool {
     }
   }
 
-  async cancel(userId: string): Promise<void> {
-    const e = this.entries.get(userId)
-    if (!e) return
-    this.entries.delete(userId)
-    await e.harness.close()
+  async cancel(userId: string, slot?: string): Promise<void> {
+    if (slot !== undefined) {
+      const key = this.entryKey(userId, slot)
+      const e = this.entries.get(key)
+      if (!e) return
+      this.entries.delete(key)
+      await e.harness.close()
+      return
+    }
+    const targets = [...this.entries.entries()].filter(([k]) => k.startsWith(`${userId}#`))
+    for (const [key, e] of targets) {
+      this.entries.delete(key)
+      await e.harness.close().catch(() => {})
+    }
   }
 
   private async reapIdle(): Promise<void> {
     const cutoff = Date.now() - this.config.harnessIdleMs
-    for (const [userId, e] of this.entries) {
-      if (!e.busy && e.lastUsed < cutoff) await this.cancel(userId).catch(() => {})
+    for (const [key, e] of this.entries) {
+      if (!e.busy && e.lastUsed < cutoff) {
+        this.entries.delete(key)
+        await e.harness.close().catch(() => {})
+      }
     }
   }
 
   async closeAll(): Promise<void> {
     clearInterval(this.reaper)
-    await Promise.allSettled([...this.entries.keys()].map(id => this.cancel(id)))
+    const all = [...this.entries.values()]
+    this.entries.clear()
+    await Promise.allSettled(all.map(e => e.harness.close().catch(() => {})))
   }
 }
 

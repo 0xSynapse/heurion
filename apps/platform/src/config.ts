@@ -76,6 +76,8 @@ export const config = {
   harnessIdleMs: Number(env('HARNESS_IDLE_MS', String(10 * 60_000))),
   /** 回合无响应超时：模型 / 工具连续这么久没有任何动静，自动停止该回合，放行队列。 */
   turnIdleTimeoutMs: Number(env('TURN_IDLE_TIMEOUT_MS', String(5 * 60_000))),
+  /** 每个用户允许并发执行的文档任务数（默认 2 个，超出排队；Co-Pilot 随航走独立快车道，不占此配额）。 */
+  maxDocConcurrency: Math.max(1, Number(env('MAX_DOC_CONCURRENCY', '2'))),
 }
 
 if (process.env.NODE_ENV === 'production' && config.secret === 'dev-secret-not-for-production-use!') {
