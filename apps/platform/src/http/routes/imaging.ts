@@ -17,8 +17,23 @@ export interface ImagingRouteContext {
 /**
  * 注册 MONAI 医学影像微服务与患者影像量化分析相关路由：
  * 包含硬件状态、模型列表、样本查看、正交 MPR/3D 差分热力图、
- * 全身解剖 L3/肌少症分割、靶病灶 RECIST 1.1 自动量化评估与报告生成。
+ * L3 体成分（HU 阈值法）测量、靶病灶测量与影像所见报告生成（不给诊断结论）。
  */
+/**
+ * 把影像微服务的错误如实转给调用方：缺参数 / 影像不存在 / 模型不可用（400 / 404 / 422 / 501）原样返回状态码与原因，
+ * 其它错误为 502。
+ */
+export async function workerFail(c: Context, resp: Response, code: string): Promise<Response> {
+  let message = ''
+  try {
+    const text = await resp.text()
+    try { const j = JSON.parse(text); message = typeof j.detail === 'string' ? j.detail : j.detail ? JSON.stringify(j.detail) : (j.message ?? j.error ?? text) } catch { message = text }
+  } catch {}
+  const pass = [400, 404, 422, 501].includes(resp.status)
+  const prefix = resp.status === 501 ? '模型不可用：' : resp.status === 404 ? '影像或样本不存在：' : resp.status === 400 || resp.status === 422 ? '请求参数有误：' : `影像微服务出错（HTTP ${resp.status}）：`
+  return c.json({ error: code, worker_status: resp.status, message: `${prefix}${String(message).slice(0, 500)}` }, (pass ? resp.status : 502) as any)
+}
+
 export function registerImagingRoutes(
   app: Hono<{ Variables: { user: string } }>,
   ctx: ImagingRouteContext
@@ -29,7 +44,7 @@ export function registerImagingRoutes(
   app.get('/api/imaging/status', async c => {
     try {
       const resp = await fetch(`${imagingWorkerUrl}/health`, { signal: AbortSignal.timeout(3000) })
-      if (!resp.ok) return c.json({ error: 'imaging_worker_error', status: 'error' }, 502)
+      if (!resp.ok) return workerFail(c, resp, 'imaging_worker_error')
       return c.json(await resp.json())
     } catch (err: any) {
       return c.json({ error: 'imaging_worker_offline', message: err.message, status: 'offline' }, 503)
@@ -39,7 +54,7 @@ export function registerImagingRoutes(
   app.get('/api/imaging/models', async c => {
     try {
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/models`, { signal: AbortSignal.timeout(3000) })
-      if (!resp.ok) return c.json({ error: 'imaging_worker_error' }, 502)
+      if (!resp.ok) return workerFail(c, resp, 'imaging_worker_error')
       return c.json(await resp.json())
     } catch (err: any) {
       return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
@@ -49,7 +64,7 @@ export function registerImagingRoutes(
   app.get('/api/imaging/samples', async c => {
     try {
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/samples`, { signal: AbortSignal.timeout(3000) })
-      if (!resp.ok) return c.json({ error: 'imaging_worker_error' }, 502)
+      if (!resp.ok) return workerFail(c, resp, 'imaging_worker_error')
       return c.json(await resp.json())
     } catch (err: any) {
       return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
@@ -155,7 +170,8 @@ export function registerImagingRoutes(
     try {
       const patientId = c.req.query('patient_id')
       const recordId = c.req.query('record_id') || c.req.query('file_id')
-      let sampleId = c.req.query('sample_id') || 'chest_lung_ct'
+      // 不使用默认演示样本：患者影像取患者档案里的原始文件；只有明确给出 sample_id 时才用样本
+      let sampleId = c.req.query('sample_id') || undefined
       const filePath = c.req.query('file_path') || undefined
       const modelName = c.req.query('model_name') || undefined
 
@@ -163,6 +179,7 @@ export function registerImagingRoutes(
         const volId = await ensureVolumeOnWorker(c, patientId, recordId)
         if (volId) sampleId = volId
       }
+      if (!sampleId && !filePath) return c.json({ error: 'no_image', message: '这条记录没有可用的影像文件（未上传原始影像，或文件无法载入）；平台不会用演示样本代替' }, 404)
 
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/mpr/info`, {
         method: 'POST',
@@ -170,7 +187,7 @@ export function registerImagingRoutes(
         body: JSON.stringify({ sample_id: sampleId, file_path: filePath, model_name: modelName }),
         signal: AbortSignal.timeout(15000),
       })
-      if (!resp.ok) return c.json({ error: 'mpr_info_failed' }, resp.status as any)
+      if (!resp.ok) return workerFail(c, resp, 'mpr_info_failed')
       return c.json(await resp.json())
     } catch (err: any) {
       return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
@@ -184,13 +201,14 @@ export function registerImagingRoutes(
         const volId = await ensureVolumeOnWorker(c, body.patient_id, body.record_id || body.file_id)
         if (volId) body.sample_id = volId
       }
+      if (!body.sample_id && !body.file_path && !body.volume_id) return c.json({ error: 'no_image', message: '没有可用的影像（请提供患者影像记录、sample_id 或 file_path；平台不会用演示样本代替）' }, 404)
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/mpr/info`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(15000),
       })
-      if (!resp.ok) return c.json({ error: 'mpr_info_failed' }, resp.status as any)
+      if (!resp.ok) return workerFail(c, resp, 'mpr_info_failed')
       return c.json(await resp.json())
     } catch (err: any) {
       return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
@@ -204,13 +222,14 @@ export function registerImagingRoutes(
         const volId = await ensureVolumeOnWorker(c, body.patient_id, body.record_id || body.file_id)
         if (volId) body.sample_id = volId
       }
+      if (!body.sample_id && !body.file_path && !body.volume_id) return c.json({ error: 'no_image', message: '没有可用的影像（请提供患者影像记录、sample_id 或 file_path；平台不会用演示样本代替）' }, 404)
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/mpr/slice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(20000),
       })
-      if (!resp.ok) return c.json({ error: 'mpr_slice_failed' }, resp.status as any)
+      if (!resp.ok) return workerFail(c, resp, 'mpr_slice_failed')
       const data = await resp.json()
 
       if (body.save_asset && (body.custom_png_base64 || data.slice_png_base64)) {
@@ -256,7 +275,7 @@ export function registerImagingRoutes(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) return c.json({ error: 'mpr_diff_failed' }, resp.status as any)
+      if (!resp.ok) return workerFail(c, resp, 'mpr_diff_failed')
       const data = await resp.json()
 
       if (body.save_asset && data.slice_png_base64) {
@@ -291,7 +310,7 @@ export function registerImagingRoutes(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) return c.json({ error: 'radiomics_failed' }, resp.status as any)
+      if (!resp.ok) return workerFail(c, resp, 'radiomics_failed')
       const data = await resp.json()
       return c.json(data)
     } catch (err: any) {
@@ -308,7 +327,7 @@ export function registerImagingRoutes(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) return c.json({ error: 'interactive_segment_failed' }, resp.status as any)
+      if (!resp.ok) return workerFail(c, resp, 'interactive_segment_failed')
       const data = await resp.json()
 
       if (body.save_asset && data.slice_png_base64) {
@@ -324,7 +343,7 @@ export function registerImagingRoutes(
           bytes: pngBuf,
         })
         data.asset_id = asset.id
-        data.markdown_insert = `![${body.label || `MONAI VISTA-3D 交互分割 #${sliceIdx}`}](asset:${asset.id})`
+        data.markdown_insert = `![${body.label || `交互点选分割 #${sliceIdx}`}](asset:${asset.id})`
       }
 
       return c.json(data)
@@ -342,7 +361,7 @@ export function registerImagingRoutes(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) return c.json({ error: 'whole_body_failed' }, resp.status as any)
+      if (!resp.ok) return workerFail(c, resp, 'whole_body_failed')
       const data = await resp.json()
 
       if (body.save_asset && data.key_slice_png_base64) {
@@ -358,7 +377,7 @@ export function registerImagingRoutes(
           bytes: pngBuf,
         })
         data.asset_id = asset.id
-        data.markdown_insert = `![${body.label || `TotalSegmentator L3 体成分分析切片 #${sliceIdx}`}](asset:${asset.id})`
+        data.markdown_insert = `![${body.label || `L3 体成分（HU 阈值法）切片 #${sliceIdx}`}](asset:${asset.id})`
       }
 
       return c.json(data)
@@ -376,7 +395,7 @@ export function registerImagingRoutes(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) return c.json({ error: 'deformable_registration_failed' }, resp.status as any)
+      if (!resp.ok) return workerFail(c, resp, 'deformable_registration_failed')
       const data = await resp.json()
       return c.json(data)
     } catch (err: any) {
@@ -393,7 +412,7 @@ export function registerImagingRoutes(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) return c.json({ error: 'pet_ct_fusion_failed' }, resp.status as any)
+      if (!resp.ok) return workerFail(c, resp, 'pet_ct_fusion_failed')
       const data = await resp.json()
 
       if (body.save_asset && data.fusion_png_base64) {
@@ -427,7 +446,7 @@ export function registerImagingRoutes(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) return c.json({ error: 'rtstruct_delineate_failed' }, resp.status as any)
+      if (!resp.ok) return workerFail(c, resp, 'rtstruct_delineate_failed')
       const data = await resp.json()
 
       if (body.save_asset && data.rtstruct_png_base64) {
@@ -524,10 +543,7 @@ export function registerImagingRoutes(
           body: formData,
           signal: AbortSignal.timeout(60000),
         })
-        if (!resp.ok) {
-          const errText = await resp.text().catch(() => '')
-          return c.json({ error: 'imaging_inference_failed', message: `影像推理失败 HTTP ${resp.status}: ${errText}` }, 502)
-        }
+        if (!resp.ok) return workerFail(c, resp, 'imaging_inference_failed')
         resultData = await resp.json()
       } else if (sampleId) {
         const resp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/sample`, {
@@ -544,10 +560,7 @@ export function registerImagingRoutes(
           }),
           signal: AbortSignal.timeout(60000),
         })
-        if (!resp.ok) {
-          const errText = await resp.text().catch(() => '')
-          return c.json({ error: 'imaging_inference_failed', message: `影像样本推理失败 HTTP ${resp.status}: ${errText}` }, 502)
-        }
+        if (!resp.ok) return workerFail(c, resp, 'imaging_inference_failed')
         resultData = await resp.json()
       } else {
         const resp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/benchmark`, {
@@ -563,10 +576,7 @@ export function registerImagingRoutes(
           }),
           signal: AbortSignal.timeout(60000),
         })
-        if (!resp.ok) {
-          const errText = await resp.text().catch(() => '')
-          return c.json({ error: 'imaging_inference_failed', message: `模拟推理失败 HTTP ${resp.status}: ${errText}` }, 502)
-        }
+        if (!resp.ok) return workerFail(c, resp, 'imaging_inference_failed')
         resultData = await resp.json()
       }
 
@@ -578,10 +588,11 @@ export function registerImagingRoutes(
       const rm = resultData.recist_metrics
       const barRatio = rawMetrics.broncho_arterial_ratio ?? rawMetrics.bar_ratio
       const hasSignet = barRatio !== undefined ? barRatio > (barCutoff || 1.10) : Boolean(rawMetrics.signet_ring_sign)
-      const hamVol = rawMetrics.high_attenuation_mucus_cm3 ?? rawMetrics.ham_volume_mm3 ?? 0
-      const hasHam = hamVol > 0 || Boolean(rawMetrics.high_attenuation_mucus_ham)
-      const mucusVol = rawMetrics.total_mucus_volume_cm3 ?? rawMetrics.mucus_plug_volume_mm3 ?? 0
-      const occlusionRate = rawMetrics.airway_occlusion_rate_pct ?? rawMetrics.airway_mucus_occlusion_pct ?? 0
+      // 测值缺失保持 null（不以 0 或其它测值代替）
+      const hamVol: number | null = rawMetrics.high_attenuation_mucus_cm3 ?? rawMetrics.ham_volume_mm3 ?? null
+      const hasHam = (hamVol ?? 0) > 0 || Boolean(rawMetrics.high_attenuation_mucus_ham)
+      const mucusVol: number | null = rawMetrics.total_mucus_volume_cm3 ?? rawMetrics.mucus_plug_volume_mm3 ?? null
+      const occlusionRate: number | null = rawMetrics.airway_occlusion_rate_pct ?? rawMetrics.airway_mucus_occlusion_pct ?? null
       const hasTreeInBud = Boolean(rawMetrics.tree_in_bud_volume_cm3 > 0 || rawMetrics.tree_in_bud_sign)
 
       const normalizedMetrics = {
@@ -592,54 +603,45 @@ export function registerImagingRoutes(
         high_attenuation_mucus_cm3: hamVol,
         high_attenuation_mucus_ham: hasHam,
         airway_occlusion_rate_pct: occlusionRate,
-        longest_diameter_mm: rm?.longest_diameter_mm ?? rawMetrics.bronchus_caliber_mm ?? 0,
-        short_axis_mm: rm?.short_axis_mm ?? rawMetrics.artery_caliber_mm ?? 0,
+        longest_diameter_mm: rm?.longest_diameter_mm ?? null,
+        short_axis_mm: rm?.short_axis_mm ?? null,
         total_volume_cm3: rm?.total_volume_cm3 ?? mucusVol,
-        key_slice_index: resultData.key_slice_index ?? rm?.key_slice_index ?? 0,
-        lung_rads: rm?.lung_rads,
+        key_slice_index: resultData.key_slice_index ?? rm?.key_slice_index ?? null,
         has_lesion: rm?.has_lesion,
       }
 
+      // 只记录影像所见（测值与征象），不写诊断、分级结论或随访建议；自动标签也只用所见
       const findings: string[] = []
       const tagsToAdd: string[] = []
 
       if (barRatio !== undefined) {
         if (hasSignet) {
-          findings.push(`印戒征阳性 (BAR ${barRatio.toFixed(2)} > ${barCutoff || 1.10})`)
-          tagsToAdd.push('支气管扩张')
+          findings.push(`支气管 / 伴行动脉径比 BAR ${barRatio.toFixed(2)}（> ${barCutoff || 1.10}）`)
+          tagsToAdd.push('BAR 增大')
         }
         if (hasHam) {
-          findings.push(`高密度粘液栓 (HAM) 阳性 (${hamVol} cm³，提示 ABPA 变应性支气管肺曲霉病)`)
-          tagsToAdd.push('ABPA疑诊')
+          findings.push(`高密度粘液栓${hamVol !== null ? ` ${hamVol} cm³` : ''}`)
+          tagsToAdd.push('高密度粘液栓')
         }
-        if (mucusVol > 0) {
-          findings.push(`支气管管腔粘液栓体积 ${mucusVol} cm³ (管腔阻塞率 ${occlusionRate}%)`)
+        if (mucusVol !== null && mucusVol > 0) {
+          findings.push(`支气管管腔粘液栓体积 ${mucusVol} cm³${occlusionRate !== null ? `（管腔阻塞率 ${occlusionRate}%）` : ''}`)
         }
         if (hasTreeInBud) {
-          findings.push('树芽征 (Tree-in-Bud) 细支气管炎表现阳性')
+          findings.push('树芽征（算法标注）')
         }
       } else if (rm && (rm.has_lesion === false || rm.longest_diameter_mm === 0)) {
-        findings.push(`胸部 CT 扫描未检出 ≥ 3 mm 实质性肺结节`)
-        findings.push(`临床评级: Lung-RADS 1 类 (阴性，恶性风险 < 1%)`)
-        findings.push(`随访指引: 建议 12 个月后常规安排低剂量胸部 CT (LDCT) 复查`)
-        tagsToAdd.push('Lung-RADS 1类(阴性)')
+        findings.push('算法未检出 ≥ 3 mm 实性肺结节')
       } else if (rm && rm.longest_diameter_mm > 0) {
-        findings.push(`RECIST 1.1 靶病灶最大截面长径 ${rm.longest_diameter_mm} mm (短径 ${rm.short_axis_mm} mm)`)
-        findings.push(`3D 病灶体积 ${rm.total_volume_cm3} cm³ (关键截面第 #${rm.key_slice_index} 层)`)
-        if (rm.lung_rads) {
-          findings.push(`临床评级: ${rm.lung_rads.name} (${rm.lung_rads.description})`)
-          findings.push(`随访指引: ${rm.lung_rads.recommendation}`)
-          tagsToAdd.push(rm.lung_rads.name)
-        } else {
-          tagsToAdd.push('局灶性结节')
-        }
+        findings.push(`靶病灶最大截面长径 ${rm.longest_diameter_mm} mm${rm.short_axis_mm !== undefined ? `（短径 ${rm.short_axis_mm} mm）` : ''}`)
+        if (rm.total_volume_cm3 !== undefined) findings.push(`病灶体积 ${rm.total_volume_cm3} cm³${rm.key_slice_index !== undefined ? `（关键截面第 #${rm.key_slice_index} 层）` : ''}`)
+        tagsToAdd.push('肺结节')
       }
 
       const defaultTitle = modelId === 'bronchiectasis_mucus_analyzer' || resultData.model_name?.includes('bronchiectasis')
-        ? '胸部 HRCT 支气管扩张与粘液栓定量分析'
+        ? '胸部 HRCT 支气管与粘液栓定量分析'
         : (rm?.has_lesion === false || rm?.longest_diameter_mm === 0)
-        ? '胸部 CT 平扫筛查 (Lung-RADS 1类 阴性)'
-        : `${resultData.modality || 'CT'} 3D 靶病灶 RECIST 1.1 量化分析`
+        ? '胸部 CT 结节检测（未检出 ≥ 3 mm 实性结节）'
+        : `${resultData.modality || 'CT'} 靶病灶三维量化分析`
 
       let rawVolume: { name: string; bytes: Uint8Array; mime?: string } | undefined
       if (fileBuffer) {
@@ -665,7 +667,8 @@ export function registerImagingRoutes(
       }
 
       const saved = pt(c).addImagingRecord(me(c), patientId, {
-        title: title || defaultTitle,
+        // 演示样本不是该患者的影像：标题明确标注
+        title: `${!fileBuffer && sampleId ? '【演示样本】' : ''}${title || defaultTitle}`,
         report_date: reportDate || new Date().toISOString().slice(0, 10),
         model_id: modelId || resultData.model_name || 'bronchiectasis_mucus_analyzer',
         sample_id: sampleId || null,

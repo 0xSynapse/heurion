@@ -199,7 +199,7 @@ export class CalendarService {
       {
         user_id: userId,
         tenant_id: null,
-        title: '【随访】PT-SARCO-003 恶液质肌少症营养支持与化疗耐受评估',
+        title: '【随访】PT-SARCO-003 营养支持与化疗耐受评估（低 SMI）',
         description: '复测 L3 SMI 骨骼肌指数，评估握力变化及化疗血液学毒副反应风险。',
         start_time: dateStr(3, 10, 0),
         end_time: dateStr(3, 11, 0),

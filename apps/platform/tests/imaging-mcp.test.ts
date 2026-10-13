@@ -270,6 +270,10 @@ beforeAll(async () => {
           try {
             if (typeof init?.body === 'string') body = JSON.parse(init.body)
           } catch {}
+          // 模拟 worker：不可用模型返回 501
+          if (body.model_name === 'covid19_lung_infection') {
+            return new Response(JSON.stringify({ detail: '模型 covid19_lung_infection 不可用：未实现' }), { status: 501, headers: { 'Content-Type': 'application/json' } })
+          }
           const isBronch = body.model_name === 'bronchiectasis_mucus_analyzer' || body.model_id === 'bronchiectasis_mucus_analyzer' || body.sample_id === 'chest_lung_ct'
           const isSpleen = body.sample_id === 'spleen_test' || body.model_id === 'spleen_segmenter'
 
@@ -484,10 +488,22 @@ describe('MONAI 医学影像分析 MCP 工具套件 (imaging_*)', () => {
 
   it('4. imaging_analyze: 运行 3D 体素病灶分割与 RECIST 量化，并自动沉淀出版级关键切片资产', async () => {
     const { env, call } = await connectImagingMcp()
+    // 不再默认使用演示样本：既没有影像也没有显式 benchmark 时报错
+    const none = await call('imaging_analyze', { model_id: 'lung_nodule_segmenter' })
+    expect(none.isError).toBe(true)
+    expect(none.data.error).toBe('no_image')
+    // 不可用的模型：如实转出 worker 的 501 与原因
+    const off = await call('imaging_analyze', { model_id: 'covid19_lung_infection', sample_id: 'some_sample' })
+    expect(off.isError).toBe(true)
+    expect(off.data.worker_status).toBe(501)
+    expect(off.data.message).toContain('模型不可用')
+    expect(off.data.message).toContain('未实现')
+
     const res = await call('imaging_analyze', {
       model_id: 'lung_nodule_segmenter',
       window_preset: 'lung',
       z_slices: 32,
+      benchmark: true,
       label: '图 1 靶病灶基线 RECIST 切片',
     })
 
@@ -733,11 +749,11 @@ describe('MONAI 医学影像分析 MCP 工具套件 (imaging_*)', () => {
     expect(reportRes.isError).toBe(false)
     expect(reportRes.data.status).toBe('success')
     expect(reportRes.data.patient_id).toBe(patient.id)
-    expect(reportRes.data.urgency).toBe('high')
+    expect(reportRes.data.urgency).toBeUndefined()
     expect(reportRes.data.saved_record_id).toBeDefined()
-    expect(reportRes.data.full_report_markdown).toContain('全景多模态影像诊断报告单')
-    expect(reportRes.data.full_report_markdown).toContain('高密度粘液栓 HAM')
-    expect(reportRes.data.full_report_markdown).toContain('变应性支气管肺曲霉病')
+    expect(reportRes.data.full_report_markdown).toContain('影像量化所见报告')
+    expect(reportRes.data.full_report_markdown).toContain('高密度粘液栓')
+    expect(reportRes.data.full_report_markdown).not.toContain('变应性支气管肺曲霉病')
     expect(reportRes.data.full_report_markdown).toContain('1820')
 
     // 验证病历档案中多了一份 confirmed 的诊断报告
@@ -809,13 +825,30 @@ describe('MONAI 医学影像分析 MCP 工具套件 (imaging_*)', () => {
     expect(res.data.body_composition).toBeDefined()
     expect(res.data.body_composition.skeletal_muscle_area_cm2).toBeGreaterThan(0)
     expect(res.data.body_composition.skeletal_muscle_index_cm2_m2).toBeGreaterThan(0)
-    expect(res.data.body_composition.smi_cutoff).toBe(52.4)
+    // 平台不判定肌少症：切点与判定字段置空
+    expect(res.data.body_composition.smi_cutoff).toBeNull()
+    expect(res.data.body_composition.sarcopenia_detected).toBeNull()
     expect(res.data.body_composition.visceral_adipose_cm2).toBeGreaterThan(0)
     expect(res.data.organ_volumetry_cm3).toBeDefined()
     expect(res.data.organ_volumetry_cm3.liver).toBeGreaterThan(0)
     expect(res.data.asset_id).toBeDefined()
     expect(res.data.markdown_insert).toContain(`asset:${res.data.asset_id}`)
     expect(res.data.summary_markdown).toContain('TotalSegmentator')
+  }, 30000)
+
+  it('14b. imaging_whole_body_segment: 未提供身高 / 性别时 SMI 与肌少症判断置空并给出提示，不代入缺省值', async () => {
+    const { call } = await connectImagingMcp()
+    const res = await call('imaging_whole_body_segment', { sample_id: 'chest_lung_ct', save_asset: false })
+    expect(res.isError).toBe(false)
+    const bc = res.data.body_composition
+    expect(bc.skeletal_muscle_index_cm2_m2).toBeNull()
+    expect(bc.smi_cutoff).toBeNull()
+    expect(bc.sarcopenia_detected).toBeNull()
+    expect(bc.sarcopenia_status).toBeNull()
+    // 与身高无关的测值保留
+    expect(bc.skeletal_muscle_area_cm2).toBeGreaterThan(0)
+    expect(res.data.data_warnings.join('')).toContain('未提供患者身高')
+    expect(res.data.summary_markdown).toContain('数据提示')
   }, 30000)
 
   it('15. imaging_deformable_register: 3D 可变形多模态弹性配准与密集位移场矢量计算', async () => {
@@ -840,13 +873,22 @@ describe('MONAI 医学影像分析 MCP 工具套件 (imaging_*)', () => {
 
   it('16. imaging_pet_ct_fuse: PET-CT 代谢解剖融合、SUV 定量与假彩色渲染', async () => {
     const { call } = await connectImagingMcp()
+    // PET 须已是 SUV、须给 ROI 或生理性摄取排除说明、CT 与 PET 都要给
+    const noSuv = await call('imaging_pet_ct_fuse', { ct_sample_id: 'ct_a', pet_sample_id: 'pet_a', pet_values_are_suv: false, physiological_exclusion_note: 'x' })
+    expect(noSuv.data.error).toBe('suv_required')
+    const noRoi = await call('imaging_pet_ct_fuse', { ct_sample_id: 'ct_a', pet_sample_id: 'pet_a', pet_values_are_suv: true })
+    expect(noRoi.data.error).toBe('roi_required')
+    const noPet = await call('imaging_pet_ct_fuse', { ct_sample_id: 'ct_a', pet_values_are_suv: true, physiological_exclusion_note: 'x' })
+    expect(noPet.data.error).toBe('no_image')
+
     const res = await call('imaging_pet_ct_fuse', {
-      sample_id: 'pet_ct_pair',
-      suv_threshold_ratio: 0.41,
+      ct_sample_id: 'ct_a',
+      pet_sample_id: 'pet_a',
+      pet_values_are_suv: true,
+      physiological_exclusion_note: '已排除脑、心肌、膀胱区域',
       alpha: 0.55,
-      colormap: 'turbo',
       save_asset: true,
-      label: '图 9 肿瘤原发灶 PET-CT 代谢融合切片',
+      label: '图 9 PET-CT 融合切片',
     })
 
     expect(res.isError).toBe(false)
@@ -861,13 +903,17 @@ describe('MONAI 医学影像分析 MCP 工具套件 (imaging_*)', () => {
 
   it('17. imaging_rtstruct_delineate: 放疗靶区 (GTV/CTV/PTV) 勾画、骨解剖屏障阻断与 RT-STRUCT', async () => {
     const { call } = await connectImagingMcp()
+    // 必须提供 GTV 掩膜，平台不自动勾画
+    const noGtv = await call('imaging_rtstruct_delineate', { sample_id: 'ct_a' })
+    expect(noGtv.data.error).toBe('gtv_required')
+
     const res = await call('imaging_rtstruct_delineate', {
-      sample_id: 'pet_ct_pair',
+      sample_id: 'ct_a',
+      gtv_mask_sample_id: 'gtv_a',
       ctv_margin_mm: 6.0,
       ptv_margin_mm: 4.0,
-      clip_bone_barrier: true,
       save_asset: true,
-      label: '图 10 放疗多靶区三维勾画切片',
+      label: '图 10 GTV / CTV / PTV 轮廓',
     })
 
     expect(res.isError).toBe(false)
@@ -980,11 +1026,11 @@ describe('MONAI 医学影像分析 MCP 工具套件 (imaging_*)', () => {
     expect(summaryRes.data.status).toBe('success')
     expect(summaryRes.data.recist_category).toBe('PR')
     expect(summaryRes.data.percent_change_ld).toBe('-40%')
-    expect(summaryRes.data.markdown_table).toContain('PR (部分缓解')
+    expect(summaryRes.data.markdown_table).toContain('PR（部分缓解）（按 RECIST 1.1 阈值计算，未经阅片确认）')
     expect(summaryRes.data.doc_section_markdown).toContain('实体瘤靶病灶随访疗效评估 (RECIST 1.1)')
     expect(summaryRes.data.academic_statement).toContain('部分缓解')
-    expect(summaryRes.data.diff_asset_id).toBeDefined()
-    expect(summaryRes.data.markdown_insert).toContain(`asset:${summaryRes.data.diff_asset_id}`)
+    // 两期记录都没有影像来源（sample_id）：不生成差图，也不用演示样本代替
+    expect(summaryRes.data.diff_asset_id).toBeUndefined()
 
     // 19.5 同步验证同义别名工具 imaging_patient_recist_summary
     const aliasRes = await call('imaging_patient_recist_summary', {

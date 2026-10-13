@@ -50,8 +50,8 @@ describe('影像生物标志物生存分析套件 (Imaging Biomarker Survival Su
     })
 
     expect(res.biomarker).toBe('smi')
-    expect(res.stratification_groups.group_high.name).toContain('Normal SMI')
-    expect(res.stratification_groups.group_low.name).toContain('Sarcopenia')
+    expect(res.stratification_groups.group_high.name).toBe('SMI ≥ 52.4 cm²/m²')
+    expect(res.stratification_groups.group_low.name).toBe('SMI < 52.4 cm²/m²')
     expect(res.stratification_groups.group_high.sample_size).toBe(7)
     expect(res.stratification_groups.group_low.sample_size).toBe(7)
 
@@ -63,8 +63,8 @@ describe('影像生物标志物生存分析套件 (Imaging Biomarker Survival Su
 
     // 矢量图形与学术报告
     expect(res.km_svg).toContain('<svg')
-    expect(res.km_svg).toContain('Normal SMI')
-    expect(res.km_svg).toContain('Sarcopenia')
+    expect(res.km_svg).toContain('SMI ≥ 52.4')
+    expect(res.km_svg).not.toContain('Sarcopenia')
     expect(res.forest_plot_svg).toContain('<svg')
     expect(res.publication_report_markdown).toContain('影像生物标志物临床预后与生存分析报告')
     expect(res.publication_report_markdown).toContain('smi')

@@ -55,7 +55,7 @@ describe('GEO (Generative Engine Optimization) 与 AI 搜索引擎标准化文�
     expect(content).toContain('TotalSegmentator')
     expect(content).toContain('CONSORT 2010')
     expect(content).toContain('STROBE')
-    expect(content).toContain('Sandboxed Python/R')
+    expect(content).toContain('Sandboxed Python 3')
   })
 
   it('官网 index.html 包含 Schema.org JSON-LD 结构化数据与对比模块', () => {

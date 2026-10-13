@@ -1046,7 +1046,7 @@ export class MailService {
         starred: 1,
         calendar_event_id: null,
         created_at: isoHoursAgo(2),
-        body: `### 患者复查随访通知 · PT-BRONCHO-001 (变应性支气管肺曲霉病 ABPA)
+        body: `### 患者复查随访通知 · PT-BRONCHO-001
 
 尊敬的主诊医师：
 
@@ -1205,7 +1205,7 @@ export class MailService {
         sender: 'nutrition.prehab@heurion.org',
         sender_name: '临床营养与药学监护组',
         recipient: myEmail,
-        subject: '【营养随访】PT-SARCO-003 恶液质重度肌少症全肠内营养支持 (ONS) 与首剂化疗耐受随访',
+        subject: '【营养随访】PT-SARCO-003 低 SMI 患者全肠内营养支持 (ONS) 与首剂化疗耐受随访',
         category: 'followup',
         patient_id: 'PT-SARCO-003',
         patient_code: 'PT-SARCO-003',
@@ -1216,7 +1216,7 @@ export class MailService {
         calendar_event_id: null,
         created_at: isoHoursAgo(48),
 
-        body: `### 恶性肿瘤重度肌少症多学科随访 · PT-SARCO-003
+        body: `### 低 SMI 患者多学科随访 · PT-SARCO-003
 
 - **患者信息**：64岁男性，胰腺癌局部进展期，L3 骨骼肌质量指数 **SMI = 29.92 cm²/m²**，肌肉辐射衰减 **MA = 26.4 HU**，实测握力 19 kg；
 - **干预措施**：化疗首剂下调 20%，联合高蛋白全肠内营养支持 (ONS) 8 周；

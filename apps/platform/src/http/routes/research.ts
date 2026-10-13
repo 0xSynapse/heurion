@@ -5,12 +5,13 @@ import { StudyError, type StudyService } from '../../research/service.ts'
 import { PatientError, type PatientService, type Actor } from '../../tenancy/patients.ts'
 import { CohortService } from '../../research/cohort.ts'
 import { EcrfService } from '../../research/ecrf.ts'
-import { renderConsortSvg, renderConsortMermaid, type ConsortDiagramData } from '../../research/consort.ts'
+import { renderConsortSvg, renderConsortMermaid, renderEnrollmentFlowSvg, renderEnrollmentFlowMermaid, type ConsortDiagramData, type EnrollmentFlowData } from '../../research/consort.ts'
 import { calculateEValue, generateLovePlotSvg, type EValueInput, type LovePlotConfig } from '../../research/causal-inference.ts'
 import { DatasetError, type DatasetService, type Table1Options, type SurvivalOptions } from '../../datasets/service.ts'
 import { exportTable1ToDocx } from '../../datasets/table1-docx.ts'
 import { buildNomogram, calculateRocCurve, renderRocCurveSvg, calculateDcaCurve, renderDcaCurveSvg } from '../../research/prediction-models.ts'
 import { PublicationBundleService, type PublicationBundleOptions } from '../../research/publication-bundle.ts'
+import { SubjectVarService } from '../../research/subject-vars.ts'
 
 export interface ResearchRouteContext {
   store: Store
@@ -82,37 +83,28 @@ export function registerResearchRoutes(
     }
   })
 
-  /** CONSORT 2010 临床入组纳排流向图：获取默认流向图或通过 query 自定义参数 */
+  /**
+   * 受试者流向图：只用平台真实入组记录（在组 / 已移出）。
+   * 平台没有筛选人数与排除原因记录，也没有治疗分组登记，因此不画筛选 / 排除环节与分组；
+   * 需要完整 CONSORT 图时由用户经 POST 接口提供自己的纳排数据。
+   */
   app.get('/api/studies/:sid/cohort/consort', c => {
     try {
       const sid = c.req.param('sid')
       const study = st().get(c.get('user'), sid)
       const listRes = co().list(me(c), sid)
-      const enrolledCount = listRes.active
-      const totalAssessed = Math.max(enrolledCount, Number(c.req.query('assessed')) || (enrolledCount > 0 ? enrolledCount * 3 + 14 : 68))
-      const totalExcluded = Math.max(0, totalAssessed - enrolledCount)
-      const e1 = Math.round(totalExcluded * 0.46)
-      const e2 = Math.round(totalExcluded * 0.34)
-      const e3 = totalExcluded - e1 - e2
-      const half1 = Math.ceil(enrolledCount / 2)
-      const half2 = enrolledCount - half1
-
-      const diagramData: ConsortDiagramData = {
-        title: `${study.title} · CONSORT 2010 试验入组流向图`,
-        total_assessed: totalAssessed,
-        exclusions: totalExcluded > 0 ? [
-          { reason: '未达入选标准（年龄或基线生化指标不符）', count: e1 },
-          { reason: '合并既往恶性肿瘤或严重禁忌症', count: e2 },
-          { reason: '失访或知情同意签署不全', count: e3 },
-        ] : [],
-        eligible_total: enrolledCount,
-        arms: [
-          { name: '干预治疗组 (Intervention)', allocated: half1, analyzed: half1 },
-          { name: '对照观察组 (Comparator)', allocated: half2, analyzed: half2 },
-        ],
+      const withdrawn = listRes.subjects.filter(s => s.status === 'withdrawn').length
+      const diagramData: EnrollmentFlowData = {
+        title: `${study.title} · Participant Flow`,
+        enrolled_ever: listRes.active + withdrawn,
+        withdrawn,
+        inaccessible: 0,
+        analyzed: listRes.active,
+        arms: [],
+        note: '平台未记录筛选人数、排除原因与治疗分组，因此未绘制 Assessed / Excluded / Allocation 环节。',
       }
-      const svg = renderConsortSvg(diagramData)
-      const mermaid = renderConsortMermaid(diagramData)
+      const svg = renderEnrollmentFlowSvg(diagramData)
+      const mermaid = renderEnrollmentFlowMermaid(diagramData)
       if (c.req.query('format') === 'svg') {
         return c.body(svg, 200, { 'Content-Type': 'image/svg+xml' })
       }
@@ -186,6 +178,35 @@ export function registerResearchRoutes(
       const res = await ecrf.saveDataset(me(c), sid, body)
       return c.json(res, 201)
     } catch (err) { return cohortFailure(c, err) }
+  })
+
+  // —— 研究变量（来源与核实状态）：录入 / 导入一律 unverified，只有研究者本人能核实 ——
+  const subjectVars = ctx.studies && ctx.patients ? new SubjectVarService(ctx.studies, ctx.patients, datasets ?? null) : null
+  const sv = () => { if (!subjectVars) throw new StudyError('unavailable', '研究变量需要启用患者模块', 400); return subjectVars }
+  const varFailure = (c: Context, err: unknown) => err instanceof DatasetError
+    ? c.json({ error: err.message, code: err.code }, err.code === 'not_found' ? 404 : err.code === 'forbidden' ? 403 : 400)
+    : cohortFailure(c, err)
+  app.get('/api/studies/:sid/vars', c => { try { return c.json(sv().list(me(c), c.req.param('sid'))) } catch (err) { return varFailure(c, err) } })
+  /** eCRF 手工录入：{entries: [{subject_id, var_id, value}]}；value 为 null 清除 */
+  app.post('/api/studies/:sid/vars/manual', async c => {
+    try {
+      const body = await c.req.json<{ entries?: unknown }>().catch(() => ({} as { entries?: unknown }))
+      const entries = Array.isArray(body.entries) ? body.entries.filter((e): e is { subject_id: string; var_id: string; value: unknown } => !!e && typeof e === 'object' && typeof (e as any).subject_id === 'string' && typeof (e as any).var_id === 'string') : []
+      if (!entries.length) throw new StudyError('bad_entries', 'entries 不能为空')
+      return c.json(sv().manual(me(c), c.req.param('sid'), entries))
+    } catch (err) { return varFailure(c, err) }
+  })
+  /** 从数据集按列映射导入：{dataset_id, subject_col, mapping: {var_id: column}} */
+  app.post('/api/studies/:sid/vars/import-dataset', async c => {
+    try { return c.json(sv().importDataset(me(c), c.req.param('sid'), await c.req.json())) } catch (err) { return varFailure(c, err) }
+  })
+  /** 从影像分析记录导入影像变量：{var_ids?, which?: baseline | latest} */
+  app.post('/api/studies/:sid/vars/import-imaging', async c => {
+    try { return c.json(sv().importImaging(me(c), c.req.param('sid'), await c.req.json().catch(() => ({})))) } catch (err) { return varFailure(c, err) }
+  })
+  /** 研究者核实：{items: [{subject_id, var_id}]} 或 {var_id}（核实该变量下全部未核实的值） */
+  app.post('/api/studies/:sid/vars/verify', async c => {
+    try { return c.json(sv().verify(me(c), c.req.param('sid'), await c.req.json().catch(() => ({})))) } catch (err) { return varFailure(c, err) }
   })
 
   // —— SCI 投稿级成果包一键全量导出打包 (.zip) ——
@@ -318,18 +339,8 @@ export function registerResearchRoutes(
         })
         return c.json(res)
       }
-      const preds = [
-        { variable: 'treatment', label: '治疗方案 (Treatment)', beta: -0.68, type: 'binary' as const, min_val: 0, max_val: 1 },
-        { variable: 'l3_smi', label: 'L3 骨骼肌 SMI (cm²/m²)', beta: -0.045, type: 'continuous' as const, min_val: 30, max_val: 65 },
-        { variable: 'vat_to_sat', label: '脂肪比 (VAT/SAT)', beta: 0.72, type: 'continuous' as const, min_val: 0.4, max_val: 1.8 },
-        { variable: 'age', label: '年龄 (周岁)', beta: 0.038, type: 'continuous' as const, min_val: 40, max_val: 85 }
-      ]
-      const res = buildNomogram({
-        title: body.title || `${ds.name} · 1/3/5年预后列线图 (Nomogram)`,
-        predictors: preds,
-        baseline_survival: body.baseline_survival
-      })
-      return c.json(res)
+      // 不再用写死的 β 系数画「示例」列线图：没有真实拟合的模型系数就拒绝
+      return c.json({ error: '需要提供由真实模型拟合得到的预测因子与系数 (predictors)；平台不会用示例系数生成列线图' }, 400)
     } catch (err) { return datasetFailure(c, err) }
   })
 
@@ -339,9 +350,14 @@ export function registerResearchRoutes(
     const body = await c.req.json<any>().catch(() => ({}))
     try {
       const ds = datasets.get(c.get('user'), did)
-      const labels = body.labels || [1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1, 0]
-      const probs1 = body.scores_baseline || [0.8, 0.2, 0.7, 0.3, 0.6, 0.75, 0.2, 0.4, 0.85, 0.1, 0.65, 0.35, 0.7, 0.8, 0.3, 0.25, 0.9, 0.15, 0.7, 0.4]
-      const probs2 = body.scores_multimodal || [0.92, 0.12, 0.88, 0.18, 0.79, 0.89, 0.15, 0.28, 0.95, 0.05, 0.82, 0.22, 0.86, 0.91, 0.18, 0.15, 0.96, 0.08, 0.85, 0.28]
+      // 结局标签与两组模型预测概率必须来自真实数据，不提供示例数组
+      const isNumArr = (x: unknown): x is number[] => Array.isArray(x) && x.length > 0 && x.every(v => typeof v === 'number' && Number.isFinite(v))
+      const labels = body.labels
+      const probs1 = body.scores_baseline
+      const probs2 = body.scores_multimodal
+      if (!isNumArr(labels) || !isNumArr(probs1) || !isNumArr(probs2) || probs1.length !== labels.length || probs2.length !== labels.length) {
+        return c.json({ error: '需要提供等长的真实结局标签 (labels) 与两组模型预测概率 (scores_baseline、scores_multimodal)；平台不会用示例数据生成 ROC / DCA' }, 400)
+      }
 
       const roc1 = calculateRocCurve(labels, probs1, body.model1_name || '临床基线模型 (Clinical Baseline)', '#94a3b8')
       const roc2 = calculateRocCurve(labels, probs2, body.model2_name || '临床 + 3D 影像组学融合模型', '#0284c7')

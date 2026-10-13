@@ -2,7 +2,7 @@
  * 影像生物标志物与临床生存分析端到端贯通套件 (Imaging Biomarker Survival Suite)
  * 
  * 面向放射科医生与肿瘤临床科研团队：
- * 将 TotalSegmentator 骨骼肌与体成分指标 (L3 SMI / VAT / SAT) 及 IBSI 3D 影像组学特征 (Sphericity / Entropy)
+ * 将体成分指标（HU 阈值法测得的骨骼肌与脂肪面积、SMI） (L3 SMI / VAT / SAT) 及 IBSI 3D 影像组学特征 (Sphericity / Entropy)
  * 一键转换为生存分析模型，拟合 Kaplan-Meier 生存曲线并运行多变量 Cox 风险回归。
  */
 
@@ -81,7 +81,7 @@ export function runImagingBiomarkerSurvival(
     return s.startsWith('F') || s === '女' || s === '2' || s === 'FEMALE'
   }
 
-  // C3 修复：严格过滤缺失或无效的生物标志物，杜绝将空值作为 0 归入肌少症/低值组
+  // C3 修复：严格过滤缺失或无效的生物标志物，杜绝将空值作为 0 归入低值组
   const validDataset = dataset.filter(r => {
     const raw = r[biomarker]
     if (raw === null || raw === undefined || String(raw).trim() === '') return false
@@ -104,10 +104,10 @@ export function runImagingBiomarkerSurvival(
     groupLowLabel = `${biomarker} < ${cutoffVal}`
   } else if (cutoff_strategy === 'consensus') {
     if (biomarker.toLowerCase().includes('smi')) {
-      // Prado / Martin 全球共识切点 (男性 52.4 cm²/m², 女性 38.5 cm²/m²)
+      // 文献切点（Prado / Martin：男性 52.4 cm²/m²）；只做分组，不据此判定肌少症
       cutoffVal = 52.4
-      groupHighLabel = '骨骼肌量正常 (Normal SMI)'
-      groupLowLabel = '肌少症 (Sarcopenia / Low SMI)'
+      groupHighLabel = 'SMI ≥ 52.4 cm²/m²'
+      groupLowLabel = 'SMI < 52.4 cm²/m²'
     } else if (biomarker.toLowerCase().includes('vat_to_sat') || biomarker.toLowerCase().includes('ratio')) {
       // 内脏型肥胖切点 (VAT/SAT > 1.0)
       cutoffVal = 1.0
@@ -171,7 +171,7 @@ export function runImagingBiomarkerSurvival(
   const totalEvents = survResult.groups.reduce((acc, g) => acc + g.events_n, 0)
   const baseReport = `${survResult.markdown_table}\n\n${survResult.narrative}`
   const consensusNote = (biomarker.toLowerCase().includes('smi') && cutoff_strategy === 'consensus')
-    ? ' (Prado / Martin 国际肌少症临床共识切点: 男 52.4 cm²/m², 女 38.5 cm²/m²)'
+    ? ' (切点出处: Prado / Martin 文献, 男 52.4 cm²/m²；分组不等于肌少症诊断)'
     : ''
   const customReport = `## 影像生物标志物临床预后与生存分析报告 (Radiomics & Body Composition Prognostic Report)
 

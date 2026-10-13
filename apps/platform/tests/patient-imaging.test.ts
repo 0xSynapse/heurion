@@ -268,7 +268,7 @@ describe('患者影像量化分析与病历关联 (Patient Imaging Integration)'
     expect(prRes.recist?.category_name).toContain('部分缓解')
     expect(prRes.recist?.percent_change_ld).toBe(-34.0)
     expect(prRes.recist?.diff_ld_mm).toBe(-17.0)
-    expect(prRes.summary_markdown).toContain('PR (部分缓解 (Partial Response))')
+    expect(prRes.summary_markdown).toContain('PR（部分缓解）（按 RECIST 1.1 阈值计算，未经阅片确认）')
     expect(prRes.summary_markdown).toContain('| **最大截面长径 (LD)** | 50 mm | 33 mm | -17 mm | **-34%** |')
     expect(prRes.record_id).toBeTruthy() // 验证生成了病历记录
 
@@ -352,9 +352,11 @@ describe('患者影像量化分析与病历关联 (Patient Imaging Integration)'
     })
 
     expect(res.recist?.target_type).toBe('bronchiectasis_mucus')
-    expect(res.recist?.category).toBe('PR')
-    expect(res.recist?.category_name).toContain('显著改善')
-    expect(res.recist?.interpretation).toContain('高密度粘液栓 (HAM) 已完全消失')
+    // 气道粘液栓不是 RECIST 靶病灶：分类不适用并说明原因，只描述测量变化
+    expect(res.recist?.category).toBe('NA')
+    expect(res.recist?.na_reason).toContain('不是 RECIST 1.1 靶病灶')
+    expect(res.recist?.interpretation).toContain('高密度粘液栓体积由')
+    expect(res.summary_markdown).not.toMatch(/显著改善|曲霉|建议临床维持/)
   })
 
   it('6. HTTP API: POST /api/patients/:ptid/imaging/compare 端点测试', async () => {
@@ -476,7 +478,8 @@ describe('患者影像量化分析与病历关联 (Patient Imaging Integration)'
 
     expect(chain.ok).toBe(true)
     expect(chain.syndrome_key).toBe('abpa_bronchiectasis')
-    expect(chain.clinical_urgency).toBe('high')
+    // 不再输出临床紧迫度判断
+    expect('clinical_urgency' in chain).toBe(false)
     expect(chain.criteria_table.length).toBeGreaterThanOrEqual(5)
     
     // 验证影像与化验阳性证据
@@ -492,10 +495,12 @@ describe('患者影像量化分析与病历关联 (Patient Imaging Integration)'
     // 验证缺漏待查项识别 (烟曲霉特异性 sIgE)
     const sigeRow = chain.criteria_table.find(r => r.criterion.includes('烟曲霉特异性 IgE'))
     expect(sigeRow?.status).toBe('missing')
-    expect(chain.suggested_workup.some(w => w.includes('烟曲霉'))).toBe(true)
-
-    // 验证 Markdown 报告片段生成
-    expect(chain.summary_markdown).toContain('变应性支气管肺曲霉病')
+    // 不给检查 / 诊疗建议，不给诊断结论
+    expect(chain.suggested_workup).toEqual([])
+    expect(chain.diagnostic_impression).toBe('上述所见需结合临床与实验室检查判断。')
+    expect(chain.syndrome).not.toMatch(/ABPA|曲霉/)
+    expect(chain.summary_markdown).not.toMatch(/高度符合|强烈提示|确诊|抗真菌/)
+    expect(chain.summary_markdown).toContain('不构成诊断')
     expect(chain.summary_markdown).toContain('高密度粘液栓')
     expect(chain.summary_markdown).toContain('1480')
   })
@@ -773,12 +778,23 @@ describe('患者影像量化分析与病历关联 (Patient Imaging Integration)'
 
     expect(reportRes.ok).toBe(true)
     expect(reportRes.saved_record_id).toBeTruthy()
-    expect(reportRes.urgency).toBe('high')
-    expect(reportRes.full_report_markdown).toContain('全景多模态影像诊断报告单')
-    expect(reportRes.full_report_markdown).toContain('高密度粘液栓 HAM')
-    expect(reportRes.full_report_markdown).toContain('变应性支气管肺曲霉病')
-    expect(reportRes.full_report_markdown).toContain('血清总 IgE')
-    expect(reportRes.full_report_markdown).toContain('1560')
+    expect('urgency' in reportRes).toBe(false)
+    const md = reportRes.full_report_markdown
+    expect(md).toContain('影像量化所见报告')
+    // 只列实测值：高密度粘液栓、BAR、最高 CT 值、长径等
+    expect(md).toContain('**高密度粘液栓**：可见（最高 94.5 HU）')
+    expect(md).toContain('**支气管 / 伴行动脉径比 (BAR)**：1.84')
+    expect(md).toContain('**最大长径**：7.2 mm')
+    expect(md).toContain('血清总 IgE')
+    expect(md).toContain('1560')
+    // 记录里没有的测值不写，也不代入典型值（管径 8.5 / 5.8 mm、平均 38.6 HU）
+    expect(md).not.toContain('支气管内径')
+    expect(md).not.toMatch(/8\.5 mm|5\.8 mm|38\.6 HU/)
+    // 不给诊断结论与治疗建议；检查方法不写死扫描参数
+    expect(md).not.toMatch(/ABPA|曲霉|高度符合|确诊|抗真菌|气道廓清|复查|会诊|螺距|准直层厚|512×512/)
+    expect(md).toContain('上述所见需结合临床与实验室检查判断')
+    expect(md).not.toContain('NaN')
+    expect(reportRes.recommendations).toBe('')
 
     // 验证新保存的病历记录
     const patientDetail = t.svc.read(a, patient.id)
@@ -834,8 +850,8 @@ describe('患者影像量化分析与病历关联 (Patient Imaging Integration)'
     const apiData = await apiRes.json()
     expect(apiData.ok).toBe(true)
     expect(apiData.findings).toContain('高密度粘液栓')
-    expect(apiData.impression).toContain('ABPA')
-    expect(apiData.recommendations).toBeTruthy()
+    expect(apiData.impression).toBe('上述所见需结合临床与实验室检查判断。')
+    expect(apiData.recommendations).toBe('')
   })
 
   it('12. HTTP API: POST /api/imaging/whole-body TotalSegmentator 全身体素 104 类分割与肌少症量化', async () => {

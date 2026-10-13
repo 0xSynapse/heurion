@@ -38,10 +38,11 @@ export interface NomogramOptions {
     min_val?: number
     max_val?: number
   }>
+  /** 模型拟合得到的基线生存率 S0(t)；必须由调用方提供，缺哪年就不输出哪年的绝对生存概率 */
   baseline_survival?: {
-    year1?: number // 默认 0.90
-    year3?: number // 默认 0.75
-    year5?: number // 默认 0.60
+    year1?: number
+    year3?: number
+    year5?: number
   }
   c_index?: number
 }
@@ -58,6 +59,8 @@ export interface NomogramResult {
   svg: string
   c_index_estimate?: number
   academic_narrative: string
+  /** 是否输出了绝对生存概率（提供了有效的基线生存率时才为 true） */
+  absolute_survival: boolean
 }
 
 export interface RocCurvePoint {
@@ -120,7 +123,7 @@ export function buildNomogram(options: NomogramOptions): NomogramResult {
   const {
     title = 'Prognostic Nomogram for Overall Survival',
     predictors: rawPreds,
-    baseline_survival = { year1: 0.90, year3: 0.75, year5: 0.60 }
+    baseline_survival = {}
   } = options
 
   if (!rawPreds.length) {
@@ -184,9 +187,11 @@ export function buildNomogram(options: NomogramOptions): NomogramResult {
 
   // 典型概率刻度
   const probTicks = [0.95, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]
-  const s0_1 = baseline_survival.year1 ?? 0.90
-  const s0_3 = baseline_survival.year3 ?? 0.75
-  const s0_5 = baseline_survival.year5 ?? 0.60
+  // 不提供默认基线生存率：缺失或不在 (0, 1) 内的年份不输出绝对生存概率，只保留总分（线性预测）标尺
+  const validS0 = (v: unknown): number | null => typeof v === 'number' && v > 0 && v < 1 ? v : null
+  const s0_1 = validS0(baseline_survival.year1)
+  const s0_3 = validS0(baseline_survival.year3)
+  const s0_5 = validS0(baseline_survival.year5)
 
   const getPointsForProb = (s0: number, pTarget: number): number | null => {
     if (pTarget <= 0 || pTarget >= 1 || s0 <= 0 || s0 >= 1) return null
@@ -201,13 +206,13 @@ export function buildNomogram(options: NomogramOptions): NomogramResult {
   }
 
   probTicks.forEach(pVal => {
-    const pt1 = getPointsForProb(s0_1, pVal)
+    const pt1 = s0_1 === null ? null : getPointsForProb(s0_1, pVal)
     if (pt1 !== null) survivalScale.year1.push({ total_points: pt1, prob: pVal })
 
-    const pt3 = getPointsForProb(s0_3, pVal)
+    const pt3 = s0_3 === null ? null : getPointsForProb(s0_3, pVal)
     if (pt3 !== null) survivalScale.year3.push({ total_points: pt3, prob: pVal })
 
-    const pt5 = getPointsForProb(s0_5, pVal)
+    const pt5 = s0_5 === null ? null : getPointsForProb(s0_5, pVal)
     if (pt5 !== null) survivalScale.year5.push({ total_points: pt5, prob: pVal })
   })
 
@@ -225,9 +230,12 @@ export function buildNomogram(options: NomogramOptions): NomogramResult {
   })
 
   const topVar = evaluatedPreds.reduce((prev, curr) => (curr.points_range! > prev.points_range! ? curr : prev), evaluatedPreds[0]!)
-  const narrative = `Based on the multivariable prognostic model, a clinical nomogram was constructed to predict 1-, 3-, and 5-year overall survival. ` +
-    `Among the included predictors, ${topVar.label} exerted the largest impact on prognosis (assigned 100 points). ` +
-    `By summing individual scores across all parameters on the Total Points ruler, clinicians can directly read estimated survival probabilities from the bottom calibrated scales.`
+  const absolute = s0_1 !== null || s0_3 !== null || s0_5 !== null
+  const narrative = `A nomogram was drawn from the supplied model coefficients. ` +
+    `Among the included predictors, ${topVar.label} has the widest point range (100 points). ` +
+    (absolute
+      ? `Absolute survival probabilities are shown only for the time points whose baseline survival was supplied.`
+      : `Baseline survival was not supplied, so only total points (a linear predictor / relative risk scale) are shown, without absolute survival probabilities.`)
 
   return {
     title,
@@ -236,7 +244,8 @@ export function buildNomogram(options: NomogramOptions): NomogramResult {
     survival_scale: survivalScale,
     svg,
     c_index_estimate: options.c_index,
-    academic_narrative: narrative
+    academic_narrative: narrative,
+    absolute_survival: absolute,
   }
 }
 
@@ -251,7 +260,13 @@ export function renderNomogramSvg(data: {
 }): string {
   const W = 800
   const rowHeight = 44
-  const numRows = 1 + data.predictors.length + 1 + 3 // Points + Predictors + Total Points + 3 Survival Scales
+  // 只画有数据的生存概率标尺；一条都没有时留一行说明
+  const scales = [
+    { label: '1-Year Survival Prob.', data: data.survival_scale.year1, color: '#059669' },
+    { label: '3-Year Survival Prob.', data: data.survival_scale.year3, color: '#0284c7' },
+    { label: '5-Year Survival Prob.', data: data.survival_scale.year5, color: '#dc2626' },
+  ].filter(sc => sc.data.length > 0)
+  const numRows = 1 + data.predictors.length + 1 + Math.max(1, scales.length) // Points + Predictors + Total Points + Survival Scales
   const H = 70 + numRows * rowHeight + 35
 
   const leftMargin = 170
@@ -306,11 +321,9 @@ export function renderNomogramSvg(data: {
   currentY += rowHeight
 
   // 4. Survival Probability Scales
-  const scales = [
-    { label: '1-Year Survival Prob.', data: data.survival_scale.year1, color: '#059669' },
-    { label: '3-Year Survival Prob.', data: data.survival_scale.year3, color: '#0284c7' },
-    { label: '5-Year Survival Prob.', data: data.survival_scale.year5, color: '#dc2626' },
-  ]
+  if (!scales.length) {
+    svg += `<text x="${leftMargin}" y="${currentY + 4}" font-size="11" fill="#64748b">Baseline survival not supplied: absolute survival probabilities are not shown.</text>`
+  }
 
   scales.forEach(sc => {
     svg += `<text x="${leftMargin - 15}" y="${currentY + 4}" font-size="11.5" font-weight="600" fill="${sc.color}" text-anchor="end">${sc.label}</text>`

@@ -263,6 +263,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           <button class="small-btn" data-act="consort" title="查看出版级 CONSORT 2010 试验入组纳排流向图 (Figure 1)">${icon('chart', { size: 13 })} CONSORT 流程图</button>
           <button class="small-btn" data-act="evalue" title="因果推断敏感度分析与顶刊审稿回复论述">${icon('evidence', { size: 13 })} 因果推断 E-value</button>
           <button class="small-btn" data-act="ecrf" title="Auto-eCRF 多模态影像与临床指标批量提取与溯源">${icon('write', { size: 13 })} Auto-eCRF 批量回填</button>
+          <button class="small-btn" data-act="vars" title="分组、随访、结局与影像变量：来源与核实状态；投稿材料只用已核实的值">${icon('check', { size: 13 })} 研究变量</button>
           ${canEdit ? `<button class="small-btn" data-act="screen">＋ 筛选入组</button>${active.length ? '<button class="small-btn" data-act="gen">生成研究数据集</button>' : ''}` : ''}
         </div></div>
       ${c.pending.length ? `<div class="banner pt-pending"><span class="dot"></span>AI 建议了 ${c.pending.length} 项入组 / 移出，待你确认</div>
@@ -273,7 +274,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         ${d.shape === 'wide' ? `
           <button class="small-btn primary" data-export-table1="${d.dataset_id}" title="一键导出符合医学期刊标准的原生 Word (.docx) Table 1 基线三线表">${icon('download', { size: 13 })} 导出 Table 1</button>
           <button class="small-btn" data-survival="${d.dataset_id}" data-dsname="${esc(d.name)}" title="KM 生存曲线与 Cox 比例风险森林图分析">${icon('chart', { size: 13 })} 生存分析 & 森林图</button>
-          <button class="small-btn" data-nomogram="${d.dataset_id}" data-dsname="${esc(d.name)}" title="预后预测列线图 (Nomogram) 与 ROC/DCA 预测效能">${icon('chart', { size: 13 })} Nomogram & ROC</button>
+          ${/* 列线图 / ROC-DCA 入口暂不开放：需要真实拟合的模型系数与预测概率，界面没有输入流程（接口保留） */ ''}
         ` : ''}
         ${d.stale ? `<span class="flag-L small">入组或化验有变化，数据集已过期</span>${canEdit ? `<button class="small-btn" data-regen="${d.shape}">刷新</button>` : ''}` : '<span class="muted small">最新</span>'}</div>`).join('')}
       ${c.subjects.length ? `<div class="ds-scroll"><table class="users rs-subjects"><thead><tr><th>研究编号</th><th>代号</th><th>性别</th><th>入组时年龄</th><th>诊断标签</th><th>入组日期</th><th></th></tr></thead><tbody>
@@ -449,12 +450,12 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     const dlg = $('dialog')
     dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="CONSORT 2010 流向图">
       <div class="dialog-head">
-        <h2>CONSORT 2010 试验入组筛选流向图 (Figure 1)</h2>
+        <h2>受试者流向图 (Figure 1)</h2>
         <button class="quiet" data-close aria-label="关闭">✕</button>
       </div>
       <div class="dialog-body" style="display:flex;flex-direction:column;gap:12px;">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <span class="muted small">医学顶级期刊 (NEJM / Lancet / JAMA) 论文 Figure 1 标准入组流向图</span>
+          <span class="muted small">只含平台入组记录（入组 / 移出 / 在组）；筛选与排除环节需按原始纳排记录补充</span>
           <span class="grow"></span>
           <button class="small-btn" id="rsConsortCopyMermaid">${icon('copy', { size: 13 })} 复制 Mermaid 代码</button>
           <button class="small-btn primary" id="rsConsortDownloadSvg">${icon('download', { size: 13 })} 下载矢量 SVG</button>
@@ -1194,6 +1195,95 @@ ${modelsDesc}
   }
 
   /** Auto-eCRF 多模态影像与临床指标批量提取与溯源弹窗 */
+  /** 研究变量：查看来源与核实状态；手工录入、从数据集 / 影像记录导入；研究者核实（投稿材料只用已核实的值） */
+  async function varsDialog(studyId: string): Promise<void> {
+    let canEdit = false
+    try { canEdit = (await api<{ my_role?: Role }>(`/api/studies/${studyId}`)).my_role !== 'viewer' } catch {}
+    type Var = { id: string; label: string; type: string; unit?: string; sources: string[] }
+    type Val = { subject_id: string; var_id: string; value: number | string | null; source: string; source_ref: Record<string, unknown>; method: string | null; status: string; entered_via: string }
+    type VarList = { variables: Var[]; sources: Record<string, string>; subjects: string[]; values: Val[]; summary: Array<{ var_id: string; label: string; entered: number; verified: number; missing: number }> }
+    const dlg = $('dialog')
+    const close = () => { dlg.hidden = true; dlg.innerHTML = '' }
+    const render = async () => {
+      let data: VarList
+      try { data = await api<VarList>(`/api/studies/${studyId}/vars`) } catch (err) { notice((err as Error).message, true); close(); return }
+      const valOf = (sid: string, vid: string) => data.values.find(v => v.subject_id === sid && v.var_id === vid)
+      const manualVars = data.variables.filter(v => v.sources.includes('ecrf_manual'))
+      const cell = (sid: string, v: Var) => {
+        const x = valOf(sid, v.id)
+        const badge = x ? `<span class="${x.status === 'verified' ? 'muted' : 'flag-L'} small" title="${esc(`${data.sources[x.source] ?? x.source}${x.method ? ' · ' + x.method : ''}${x.entered_via === 'ai' ? ' · AI 录入' : ''}`)}">${x.status === 'verified' ? '已核实' : '未核实'}</span>` : ''
+        if (canEdit && v.sources.includes('ecrf_manual')) {
+          return `<td><input class="rs-var-in" data-sid="${esc(sid)}" data-vid="${v.id}" value="${esc(x?.value === null || x?.value === undefined ? '' : String(x.value))}" style="width:80px"> ${badge}</td>`
+        }
+        return `<td>${x ? esc(String(x.value)) : '<span class="muted">—</span>'} ${badge}</td>`
+      }
+      dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="研究变量">
+        <div class="dialog-head"><h2>研究变量</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
+        <div class="dialog-body" style="display:flex;flex-direction:column;gap:12px;">
+          <div class="muted small">每个值记录来源与核实状态。录入、导入（含 AI）都是「未核实」，研究者核实后才会用于投稿材料包；未录入的保持缺失，不补值。影像变量只能从影像分析记录导入实测值（没有身高的记录不采用 SMI）。</div>
+          <table class="help-table"><thead><tr><th>变量</th><th>已录入</th><th>已核实</th><th>无可用值</th>${canEdit ? '<th></th>' : ''}</tr></thead><tbody>
+            ${data.summary.map(r => `<tr><td>${esc(r.label)}</td><td>${r.entered}</td><td>${r.verified}</td><td>${r.missing}</td>${canEdit ? `<td>${r.entered > r.verified ? `<button class="small-btn" data-verify="${r.var_id}">核实全部未核实</button>` : ''}</td>` : ''}</tr>`).join('')}
+          </tbody></table>
+          ${canEdit ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <button class="small-btn" id="rsVarImg">从影像分析记录导入影像变量</button>
+            <span class="muted small">从数据集导入：</span>
+            <select id="rsVarDs"><option value="">选择数据集…</option></select>
+            <input id="rsVarSubj" placeholder="研究编号列名" value="subject_id" style="width:110px">
+            ${manualVars.map(v => `<input class="rs-var-map" data-vid="${v.id}" placeholder="${esc(v.label)} 列名" style="width:120px">`).join('')}
+            <button class="small-btn" id="rsVarDsGo">导入</button>
+          </div>` : ''}
+          <div class="ds-scroll" style="max-height:340px;border:1px solid var(--line);border-radius:6px;">
+            <table class="help-table"><thead><tr><th>研究编号</th>${data.variables.map(v => `<th>${esc(v.label)}${v.unit ? `（${esc(v.unit)}）` : ''}</th>`).join('')}</tr></thead>
+            <tbody>${data.subjects.map(sid => `<tr><td>${esc(sid)}</td>${data.variables.map(v => cell(sid, v)).join('')}</tr>`).join('') || `<tr><td colspan="${data.variables.length + 1}" class="muted">还没有入组受试者</td></tr>`}</tbody></table>
+          </div>
+          ${canEdit ? '<div style="display:flex;justify-content:flex-end;"><button class="small-btn primary" id="rsVarSave">保存手工录入</button></div>' : ''}
+        </div></div>`
+      dlg.hidden = false
+      dlg.onclick = async e => {
+        const t = e.target as HTMLElement
+        if (e.target === dlg || t.closest('[data-close]')) { close(); return }
+        const vid = t.closest<HTMLElement>('[data-verify]')?.dataset.verify
+        try {
+          if (vid) {
+            const r = await api<{ verified: number }>(`/api/studies/${studyId}/vars/verify`, { method: 'POST', body: JSON.stringify({ var_id: vid }) })
+            notice(`已核实 ${r.verified} 个值`); await render(); return
+          }
+          if (t.id === 'rsVarImg') {
+            const r = await api<{ written: number; skipped: unknown[] }>(`/api/studies/${studyId}/vars/import-imaging`, { method: 'POST', body: '{}' })
+            notice(`已导入 ${r.written} 个影像变量（未核实），${r.skipped.length} 个缺测值或不可用`); await render(); return
+          }
+          if (t.id === 'rsVarDsGo') {
+            const mapping: Record<string, string> = {}
+            dlg.querySelectorAll<HTMLInputElement>('.rs-var-map').forEach(i => { if (i.value.trim()) mapping[i.dataset.vid!] = i.value.trim() })
+            const r = await api<{ written: number; skipped: unknown[]; empty_cells: number }>(`/api/studies/${studyId}/vars/import-dataset`, { method: 'POST', body: JSON.stringify({ dataset_id: ($('rsVarDs') as HTMLSelectElement).value, subject_col: ($('rsVarSubj') as HTMLInputElement).value.trim(), mapping }) })
+            notice(`已导入 ${r.written} 个值（未核实），空单元格 ${r.empty_cells} 个未写入，${r.skipped.length} 个无法解析`); await render(); return
+          }
+          if (t.id === 'rsVarSave') {
+            const entries: Array<{ subject_id: string; var_id: string; value: string | null }> = []
+            dlg.querySelectorAll<HTMLInputElement>('.rs-var-in').forEach(i => {
+              const before = valOf(i.dataset.sid!, i.dataset.vid!)
+              const now = i.value.trim()
+              const prev = before?.value === null || before?.value === undefined ? '' : String(before.value)
+              if (now !== prev) entries.push({ subject_id: i.dataset.sid!, var_id: i.dataset.vid!, value: now === '' ? null : now })
+            })
+            if (!entries.length) { notice('没有改动'); return }
+            const r = await api<{ written: number; cleared: number; skipped: Array<{ subject_id: string; reason: string }> }>(`/api/studies/${studyId}/vars/manual`, { method: 'POST', body: JSON.stringify({ entries }) })
+            notice(`已保存 ${r.written} 个值（未核实）${r.cleared ? `，清除 ${r.cleared} 个` : ''}${r.skipped.length ? `；${r.skipped.length} 个未保存：${r.skipped[0]!.reason}` : ''}`, r.skipped.length > 0)
+            await render(); return
+          }
+        } catch (err) { notice((err as Error).message, true) }
+      }
+      if (canEdit) {
+        try {
+          const list = await api<Array<{ id: string; name: string; status: string }>>('/api/datasets')
+          const sel = $('rsVarDs') as HTMLSelectElement
+          for (const d of list.filter(d => d.status === 'ready')) sel.insertAdjacentHTML('beforeend', `<option value="${esc(d.id)}">${esc(d.name)}</option>`)
+        } catch {}
+      }
+    }
+    await render()
+  }
+
   async function ecrfDialog(studyId: string): Promise<void> {
     const dlg = $('dialog')
     dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="Auto-eCRF 批量回填">
@@ -1203,7 +1293,7 @@ ${modelsDesc}
       </div>
       <div class="dialog-body" style="display:flex;flex-direction:column;gap:14px;">
         <div class="muted small">
-          全自动巡航提取入组受试者的多期 3D 影像生物标志物（RECIST 1.1 / L3 SMI 肌少症 / 脂肪比 / BAR / HAM）及生化检验数据，全量配备单元格置信度与切片层号穿透溯源，直接生成医学宽表。
+          全自动巡航提取入组受试者的多期 3D 影像生物标志物（病灶长径 / L3 SMI / 脂肪比 / BAR / 高密度粘液栓）及生化检验数据，全量配备单元格置信度与切片层号穿透溯源，直接生成医学宽表。
         </div>
 
         <div id="rsEcrfLoading" class="muted small" style="padding:20px;text-align:center;">正在载入多模态 eCRF 字典模版…</div>
@@ -1503,9 +1593,9 @@ ${modelsDesc}
       summary: '提取病灶 IBSI 规范化 107 项高维影像组学特征，结合 LASSO 特征降维与 Cox 比例风险回归构建无进展生存期 (PFS) 预测模型。'
     },
     smi: {
-      title: '消化系统恶性肿瘤 TotalSegmentator L3 骨骼肌质量指数 (SMI) 与化疗不良反应关联分析',
+      title: '消化系统恶性肿瘤 L3 骨骼肌质量指数 (SMI) 与化疗不良反应关联分析',
       design: 'prospective_cohort',
-      summary: '基于腹部 CT L3 椎体层面深度学习自动分割测量 SMI、骨骼肌衰减值 (SMD) 与内脏脂肪指数，评估重度肌少症与剂量毒性相关性。'
+      summary: '基于腹部 CT L3 层面测量 SMI、骨骼肌平均 CT 值与内脏脂肪指数，分析其与剂量毒性的相关性。'
     }
   }
 
@@ -1708,6 +1798,7 @@ ${modelsDesc}
     if (act === 'consort') { void consortDialog(id); return }
     if (act === 'evalue') { evalueDialog(id); return }
     if (act === 'ecrf') { void ecrfDialog(id); return }
+    if (act === 'vars') { void varsDialog(id); return }
     if (act === 'attach') { $('rsMore').hidden = true; await attachExisting(s); return }
     if (act === 'addmember') {
       const user = ($('rsAddUser') as HTMLSelectElement).value, role = ($('rsAddRole') as HTMLSelectElement).value

@@ -33,6 +33,7 @@ import { DatasetError, type DatasetService } from '../datasets/service.ts'
 import type { KbService } from '../kb/service.ts'
 import { StudyError, type StudyService } from '../research/service.ts'
 import { CohortService } from '../research/cohort.ts'
+import { SubjectVarService } from '../research/subject-vars.ts'
 import { PatientError, type PatientService } from '../tenancy/patients.ts'
 import { ShareService } from '../tenancy/shares.ts'
 import { PatientClaimService } from '../tenancy/claims.ts'
@@ -941,7 +942,7 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
   })
 
   server.registerTool('dataset_imaging_survival', {
-    description: '影像标志物与生存分析端到端贯通工具：将体成分骨骼肌指标 (L3 SMI / VAT / SAT) 或 3D 影像组学特征 (Sphericity 球形度 / 熵) 自动进行医学共识切点（如 Prado 肌少症切点）或中位数分层，拟合 Kaplan-Meier 生存曲线并运行多变量 Cox 比例风险回归模型。' +
+    description: '影像标志物与生存分析端到端贯通工具：将体成分骨骼肌指标 (L3 SMI / VAT / SAT) 或 3D 影像组学特征 (Sphericity 球形度 / 熵) 按文献切点（如 Prado SMI 切点，仅用于分组，不等于肌少症诊断）或中位数分层，拟合 Kaplan-Meier 生存曲线并运行多变量 Cox 比例风险回归模型。' +
       '返回结构化生存数据、Log-rank 显著性检验、多变量 Cox HR (95% CI)、出版级 KM 曲线 SVG、Forest Plot 森林图 SVG 及面向放射科与肿瘤专科医师的学术论著叙述。支持一键插入文档。',
     inputSchema: {
       dataset_id: z.string().describe('数据集 ID'),
@@ -1328,6 +1329,39 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
     const r = await svc.dataset(aiActor(), study_id, opts)
     return { dataset_id: r.dataset.id, name: r.dataset.name, version: r.dataset.version, rows: r.dataset.rows, cols: r.dataset.cols, status: r.dataset.status, unchanged: r.unchanged, skipped: r.skipped }
   }))
+
+  // —— 研究变量（分组、随访、结局、影像变量）：AI 只能录入为「未核实」，核实须研究者本人在界面完成 ——
+  const subjectVars = deps.studies && deps.patients ? new SubjectVarService(deps.studies, deps.patients, deps.datasets ?? null) : null
+  const svCall = async (fn: (svc: SubjectVarService) => unknown) => {
+    if (!subjectVars) return fail('cohort_unavailable', '研究变量需要启用患者模块')
+    try { return json(await fn(subjectVars)) } catch (err) {
+      if (err instanceof StudyError) return fail(err.code, err.message)
+      if (err instanceof DatasetError) return datasetFail(err)
+      return patientFail(err)
+    }
+  }
+  server.registerTool('study_vars_list', {
+    description: '研究变量清单：每位受试者的分组、随访时间、结局、PFS、影像变量的值，及其来源（数据集导入 / eCRF 手工录入 / 影像分析记录）、方法与核实状态（verified / unverified）。发表材料只使用 verified 的值。',
+    inputSchema: { study_id: z.string() },
+  }, async ({ study_id }) => svCall(svc => svc.list(aiActor(), study_id)))
+  server.registerTool('study_vars_set', {
+    description: '录入研究变量（eCRF 手工录入）。只能录入用户明确提供的值，不得推测或补值；value 为 null 表示清除。AI 写入的值一律为「未核实」，须研究者本人在研究页核实后才会用于发表材料。影像变量（l3_smi、vat_to_sat）不能手工录入，只能从影像分析记录导入。',
+    inputSchema: {
+      study_id: z.string(),
+      entries: z.array(z.object({ subject_id: z.string(), var_id: z.enum(['treatment_arm', 'followup_months', 'os_status', 'pfs_months', 'pfs_status']), value: z.union([z.string(), z.number(), z.null()]) })).min(1).max(2000),
+    },
+  }, async ({ study_id, entries }) => svCall(svc => svc.manual(aiActor(), study_id, entries)))
+  server.registerTool('study_vars_import_dataset', {
+    description: '从研究数据集按列映射导入研究变量：subject_col 是研究编号列，mapping 是 变量 id → 列名。空单元格不写入、不覆盖（不补值）。导入的值为「未核实」。影像变量不能从数据集导入。',
+    inputSchema: {
+      study_id: z.string(), dataset_id: z.string(), subject_col: z.string(),
+      mapping: z.record(z.enum(['treatment_arm', 'followup_months', 'os_status', 'pfs_months', 'pfs_status']), z.string()),
+    },
+  }, async ({ study_id, ...input }) => svCall(svc => svc.importDataset(aiActor(), study_id, input as { dataset_id: string; subject_col: string; mapping: Record<string, string> })))
+  server.registerTool('study_vars_import_imaging', {
+    description: '从受试者的影像分析记录导入影像变量（l3_smi、vat_to_sat）的实测值，记录分析记录 id 与算法方法；记录里没有身高时不采用 SMI。which：baseline=最早一次（默认），latest=最近一次。导入的值为「未核实」。',
+    inputSchema: { study_id: z.string(), var_ids: z.array(z.enum(['l3_smi', 'vat_to_sat'])).optional(), which: z.enum(['baseline', 'latest']).optional() },
+  }, async ({ study_id, var_ids, which }) => svCall(svc => svc.importImaging(aiActor(), study_id, { var_ids, which })))
 
   server.registerTool('kb_search', {
     description:

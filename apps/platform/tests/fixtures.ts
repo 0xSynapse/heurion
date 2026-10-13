@@ -31,3 +31,65 @@ export const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 export const IMAGE_REL = '<Relationship Id="rId20" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>'
 
 export const drawing = (rid = 'rId20') => `<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="9525" cy="9525"/><wp:docPr id="1" name="Picture 1" descr="图"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="${rid}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`
+
+// —— 最小 PDF 生成器（测试 PDF 导入用，不依赖外部库） ——
+
+/** 页面上的一个元素：文字（F1 常规 / F2 粗体 Helvetica）、图片（RGB 原始像素）或直线 */
+export type PdfItem =
+  | { text: string; x: number; y: number; size: number; bold?: boolean }
+  | { image: { w: number; h: number; rgb: [number, number, number] }; x: number; y: number; width: number; height: number }
+
+/** 生成 A4（595×842pt）多页 PDF；y 为从页面顶部向下的距离，便于书写。 */
+export function pdf(pages: PdfItem[][]): Uint8Array {
+  const objs: Array<string | Uint8Array[]> = []
+  const add = (o: string | Uint8Array[]) => { objs.push(o); return objs.length }
+  const enc = new TextEncoder()
+  const esc = (s: string) => s.replace(/[\\()]/g, m => `\\${m}`)
+  const catalog = add('')
+  const pagesObj = add('')
+  const f1 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>')
+  const f2 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>')
+  const kids: number[] = []
+  for (const items of pages) {
+    const xobjs: string[] = []
+    let content = ''
+    for (const it of items) {
+      if ('text' in it) {
+        content += `BT /${it.bold ? 'F2' : 'F1'} ${it.size} Tf ${it.x} ${842 - it.y} Td (${esc(it.text)}) Tj ET\n`
+      } else {
+        const { w, h, rgb } = it.image
+        const px = new Uint8Array(w * h * 3)
+        for (let i = 0; i < w * h; i++) {
+          // 加一点渐变，避免被当成纯色块
+          px[i * 3] = (rgb[0] + (i % w) * 3) & 255; px[i * 3 + 1] = (rgb[1] + Math.floor(i / w) * 3) & 255; px[i * 3 + 2] = rgb[2]
+        }
+        const id = add([enc.encode(`<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length ${px.length} >>\nstream\n`), px, enc.encode('\nendstream')])
+        const name = `Im${xobjs.length + 1}`
+        xobjs.push(`/${name} ${id} 0 R`)
+        content += `q ${it.width} 0 0 ${it.height} ${it.x} ${842 - it.y - it.height} cm /${name} Do Q\n`
+      }
+    }
+    // 内容流按 WinAnsi 单字节编码（• = 0x95），其余字符按 Latin-1
+    const bytes = Uint8Array.from([...content].map(ch => ch === '\u2022' ? 0x95 : ch.charCodeAt(0) & 255))
+    const stream = add([enc.encode(`<< /Length ${bytes.length} >>\nstream\n`), bytes, enc.encode('endstream')])
+    kids.push(add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 595 842] /Contents ${stream} 0 R /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> /XObject << ${xobjs.join(' ')} >> >> >>`))
+  }
+  objs[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`
+  objs[pagesObj - 1] = `<< /Type /Pages /Kids [${kids.map(k => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`
+
+  const chunks: Uint8Array[] = [enc.encode('%PDF-1.4\n')]
+  let offset = chunks[0]!.length
+  const offsets: number[] = []
+  objs.forEach((o, i) => {
+    offsets.push(offset)
+    const parts = typeof o === 'string' ? [enc.encode(o)] : o
+    const all = [enc.encode(`${i + 1} 0 obj\n`), ...parts, enc.encode('\nendobj\n')]
+    for (const p of all) { chunks.push(p); offset += p.length }
+  })
+  const xref = `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objs.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${offset}\n%%EOF\n`
+  chunks.push(enc.encode(xref))
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0))
+  let pos = 0
+  for (const c of chunks) { out.set(c, pos); pos += c.length }
+  return out
+}

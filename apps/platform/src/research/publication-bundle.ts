@@ -1,43 +1,33 @@
 /**
- * SCI 投稿级成果包一键自动化打包导出引擎 (One-Click SCI Publication Submission Bundle Generator)
- * 
- * 为三甲医院科研课题组量身打造：
- * 将全流程沉淀的临床证据与出版物，秒级编译打包为标准的投稿交付包 (.zip)：
- * 1. Table1_Baseline_Characteristics.docx (原生 Word 规范医学三线表)
- * 2. Figure1_CONSORT_2010_Flowchart.svg (入组排除矢量流向图)
- * 3. Figure2_Love_Plot_Covariate_Balance.svg (绝对标化均数差 SMD 收敛图)
- * 4. Figure3_Kaplan_Meier_Survival_Curve.svg (KM 累积生存率与对齐风险表)
- * 5. Figure4_Cox_Proportional_Hazards_Forest_Plot.svg (多因素亚组森林图)
- * 6. Figure5_Nomogram_Survival_Predictor.svg (预后列线图评分卡)
- * 7. Figure6_ROC_and_DCA_Curve.svg (受试者工作特征与临床决策曲线)
- * 8. Manuscript_Statistical_Methods_and_Results.md (四段式论著正文初稿)
- * 9. STROBE_Statement_Checklist.md (国际流行病学观察性研究规范 22 项自查清单)
- * 10. Statistical_Reproducibility_Script.py (供同行评议审稿人一键复现数据的 Python 脚本)
- * 11. README_Submission_Manifest.txt (成果包文件清单与防篡改指纹)
+ * 投稿材料包打包导出 (Publication Submission Bundle)
+ *
+ * 只用研究里真实入组受试者的真实数据生成材料，原则：
+ * - 缺失值保持缺失（null），绝不补值；Table 1 显示缺失数，生存分析排除缺随访时间或结局的受试者并写明人数；
+ * - 分组只取受试者真实的 treatment_arm；少于 2 个真实分组时不做组间比较；
+ * - 流向图只画平台入组记录里有的环节，不编造筛选 / 排除人数与原因；
+ * - 平台没有倾向性评分匹配 / 加权实现，因此不生成 Love Plot，方法学文字也不声称做过；
+ * - 列线图、ROC / DCA 需要真实拟合的预测模型，当前没有，因此不生成。
+ *
+ * 可能包含的文件（视数据而定）：
+ * 1. Table1_Baseline_Characteristics.docx（总是生成）
+ * 2. Figure1_Participant_Flow.svg（总是生成，仅入组记录）
+ * 3. Figure2_Kaplan_Meier_Survival_Curve.svg（有可用随访时间与结局时）
+ * 4. Figure3_Cox_Forest_Plot.svg（恰有 2 个真实分组且 Cox 模型可拟合时）
+ * 5. Manuscript_Statistical_Methods_and_Results.md（总是生成，只描述实际做过的分析）
+ * 6. STROBE_Statement_Checklist.md（总是生成，标明材料包覆盖情况）
+ * 7. Statistical_Reproducibility_Script.py（总是生成，读取用户提供的数据重算，不内置结果）
+ * 8. README_Submission_Manifest.txt（总是生成，含数据完整性与未生成项说明）
  */
 
 import { strToU8, zipSync } from 'fflate'
-import { renderConsortSvg } from './consort.ts'
-import { generateLovePlotSvg, calculateEValue } from './causal-inference.ts'
-import {
-  generateSurvivalAnalysis,
-  renderKmCurveSvg,
-  renderForestPlotSvg,
-  calculateCoxRegression,
-  type KmGroupResult
-} from '../datasets/survival.ts'
+import { renderEnrollmentFlowSvg } from './consort.ts'
+import { calculateEValue, type EValueResult } from './causal-inference.ts'
+import { generateSurvivalAnalysis, normalizeEventStatus, type SurvivalAnalysisResult } from '../datasets/survival.ts'
 import { exportTable1ToDocx } from '../datasets/table1-docx.ts'
 import { generateTable1FromData, type Table1Result } from '../datasets/table1.ts'
-import {
-  buildNomogram,
-  renderNomogramSvg,
-  calculateRocCurve,
-  renderRocCurveSvg,
-  calculateDcaCurve,
-  renderDcaCurveSvg
-} from './prediction-models.ts'
 import { StudyError, type StudyService } from './service.ts'
-import type { PatientService } from '../tenancy/patients.ts'
+import type { PatientService, SubjectVar } from '../tenancy/patients.ts'
+import { SOURCE_LABELS, STUDY_VARS } from './subject-vars.ts'
 import type { DatasetService } from '../datasets/service.ts'
 import type { Actor } from '../tenancy/patients.ts'
 
@@ -48,6 +38,108 @@ export interface PublicationBundleOptions {
   group_col?: string
 }
 
+/** 材料包里一条受试者记录；未记录的字段一律为 null */
+export interface BundleRecord {
+  subject_id: string
+  treatment_arm: string | null
+  age: number | null
+  sex: string | null
+  l3_smi: number | null
+  vat_to_sat: number | null
+  followup_months: number | null
+  os_status: number | null
+  [k: string]: unknown
+}
+
+/** 生成过程中对数据完整性与分析取舍的如实记录（写进 README 与正文） */
+export interface BundleDataReport {
+  n_subjects: number
+  missing: Record<string, number>
+  provenance: VarProvenance[]
+  arms: Array<{ name: string; n: number }>
+  arm_missing: number
+  grouped: boolean
+  enrollment: { enrolled_ever: number; withdrawn: number; inaccessible: number }
+  survival: {
+    included: number
+    excluded_missing_time_or_status: number
+    excluded_missing_arm: number
+    generated: boolean
+    cox_generated: boolean
+  }
+  omitted: string[]
+}
+
+/** 进入材料包的研究变量（来自 subject_vars，只用已核实的值） */
+const BUNDLE_VARS = ['treatment_arm', 'followup_months', 'os_status', 'l3_smi', 'vat_to_sat'] as const
+type BundleVarId = typeof BUNDLE_VARS[number]
+
+/** 每个研究变量的来源、核实与缺失情况（写进 README 与正文） */
+export interface VarProvenance {
+  var_id: string
+  label: string
+  sources: string[]
+  /** 录入了值的受试者数 */
+  entered: number
+  verified: number
+  /** 有值但未核实、因此没有使用的数量 */
+  unverified_excluded: number
+  /** 没有可用（已核实）值的受试者数 */
+  missing: number
+  methods: string[]
+}
+
+function normalizeSex(v: unknown): string | null {
+  if (v === 'M' || v === '男') return '男'
+  if (v === 'F' || v === '女') return '女'
+  return null
+}
+
+type SnapshotSubject = { subject_id: string; sex: string | null; age_at_enroll: number | null; vars?: Record<string, SubjectVar> }
+
+/** 已核实的值才使用；未核实、缺失一律为 null（不补值） */
+function verifiedValue(s: SnapshotSubject, id: BundleVarId): number | string | null {
+  const v = s.vars?.[id]
+  return v && v.status === 'verified' ? v.value : null
+}
+
+/** 把入组快照里的受试者转成材料包记录：年龄 / 性别来自患者主档案，其余只取已核实的研究变量 */
+export function toBundleRecords(subjects: SnapshotSubject[]): BundleRecord[] {
+  return subjects.map(s => {
+    const num = (id: BundleVarId) => { const v = verifiedValue(s, id); return typeof v === 'number' ? v : v === null ? null : (Number.isFinite(Number(v)) ? Number(v) : null) }
+    const arm = verifiedValue(s, 'treatment_arm')
+    const os = verifiedValue(s, 'os_status')
+    return {
+      subject_id: String(s.subject_id),
+      treatment_arm: arm === null ? null : String(arm),
+      age: s.age_at_enroll ?? null,
+      sex: normalizeSex(s.sex),
+      l3_smi: num('l3_smi'),
+      vat_to_sat: num('vat_to_sat'),
+      followup_months: num('followup_months'),
+      os_status: os === null ? null : normalizeEventStatus(os),
+    }
+  })
+}
+
+/** 统计每个研究变量的来源与核实状态 */
+export function varProvenance(subjects: SnapshotSubject[]): VarProvenance[] {
+  return BUNDLE_VARS.map(id => {
+    const vs = subjects.map(s => s.vars?.[id]).filter((v): v is SubjectVar => !!v)
+    const verified = vs.filter(v => v.status === 'verified').length
+    return {
+      var_id: id,
+      label: STUDY_VARS.find(d => d.id === id)?.label ?? id,
+      sources: [...new Set(vs.map(v => SOURCE_LABELS[v.source] ?? v.source))],
+      entered: vs.length,
+      verified,
+      unverified_excluded: vs.length - verified,
+      missing: subjects.length - verified,
+      methods: [...new Set(vs.map(v => v.method).filter((m): m is string => !!m))],
+    }
+  })
+}
+
 export class PublicationBundleService {
   constructor(
     private readonly studies: StudyService,
@@ -56,55 +148,56 @@ export class PublicationBundleService {
   ) {}
 
   /**
-   * 编译并生成完整的 SCI 投稿级成果 ZIP 压缩包
+   * 编译并生成投稿材料 ZIP 包。研究没有入组受试者时拒绝生成。
    */
   async buildBundle(
     a: Actor,
     studyId: string,
-    options: PublicationBundleOptions = {}
-  ): Promise<{ filename: string; zipBuffer: Uint8Array; totalFiles: number }> {
+    _options: PublicationBundleOptions = {}
+  ): Promise<{ filename: string; zipBuffer: Uint8Array; totalFiles: number; report: BundleDataReport }> {
     const study = this.studies.get(a.userId, studyId, 'read')
     const nowStr = new Date().toISOString().slice(0, 10)
 
-    // 1. 获取研究入组快照与数据
+    // 1. 入组快照：只用真实受试者
     const snap = this.patients.cohortSnapshot(a, studyId, { log: true })
-    const subjects = snap.subjects
+    if (snap.subjects.length === 0) {
+      throw new StudyError(
+        'empty_cohort',
+        snap.skipped.length > 0
+          ? `研究中的 ${snap.skipped.length} 名受试者你都没有访问权限，无法生成投稿材料包`
+          : '研究还没有入组受试者，无法生成投稿材料包。请先完成入组。',
+        400,
+      )
+    }
+    const records = toBundleRecords(snap.subjects)
+    const provenance = varProvenance(snap.subjects)
+    const n = records.length
 
-    // 模拟或提取真实临床特征宽表
-    const cohortRecords: Array<Record<string, unknown>> = []
-    const isSimulated = subjects.length === 0
-    const nTotal = isSimulated ? 120 : subjects.length
-
-    for (let i = 0; i < nTotal; i++) {
-      const s = isSimulated ? null : subjects[i]
-      const subId = s ? s.subject_id : `S${String(i + 1).padStart(3, '0')}`
-      const arm = (s as any)?.treatment_arm as string | undefined
-      const isTreatment = arm ? (arm.includes('试验') || arm.includes('治疗') ? 1 : 0) : (i % 2 === 0 ? 1 : 0)
-      const age = s?.age_at_enroll ?? (56 + (i * 7) % 22)
-      const sex = s ? (s.sex === 'M' || s.sex === '男' ? '男' : s.sex === 'F' || s.sex === '女' ? '女' : '未知') : (i % 2 === 0 ? '男' : '女')
-      const l3_smi = Number(((s as any)?.l3_smi ?? (42.5 + (isTreatment ? 8.2 : 2.1) + ((i * 3) % 11))))
-      const vat_to_sat = Number(((s as any)?.vat_to_sat ?? (0.68 + ((i * 5) % 9) * 0.08)))
-      const time = Number(((s as any)?.followup_months ?? (s as any)?.followup_time ?? (12 + (isTreatment ? 28 : 14) + (i % 18))))
-      const status = (s as any)?.os_status ?? (isTreatment ? (i % 5 === 0 ? 1 : 0) : (i % 2 === 0 ? 1 : 0))
-
-      cohortRecords.push({
-        subject_id: subId,
-        treatment_arm: arm || (isTreatment ? '试验组' : '对照组'),
-        is_treatment: isTreatment,
-        age,
-        sex,
-        l3_smi,
-        vat_to_sat,
-        followup_months: time,
-        os_status: status,
-      })
+    // 缺失数：未核实的值按缺失计（没有进入分析）
+    const missing: Record<string, number> = {}
+    for (const k of ['treatment_arm', 'age', 'sex', 'l3_smi', 'vat_to_sat', 'followup_months', 'os_status'] as const) {
+      missing[k] = records.filter(r => r[k] === null).length
+    }
+    const omitted: string[] = []
+    for (const pv of provenance) {
+      if (pv.unverified_excluded > 0) omitted.push(`${pv.label}：${pv.unverified_excluded} 个值未经研究者核实，未进入 Table 1 与生存分析`)
     }
 
-    // 2. 生成 Table 1 原生 Word (.docx)
-    const table1Result: Table1Result = generateTable1FromData(cohortRecords, {
-      group_col: 'treatment_arm',
+    // 2. 分组：只认受试者真实的 treatment_arm
+    const armCounts = new Map<string, number>()
+    for (const r of records) if (r.treatment_arm) armCounts.set(r.treatment_arm, (armCounts.get(r.treatment_arm) ?? 0) + 1)
+    const arms = [...armCounts.entries()].sort((x, y) => x[0].localeCompare(y[0])).map(([name, cnt]) => ({ name, n: cnt }))
+    const grouped = arms.length >= 2
+    const armMissing = missing.treatment_arm!
+
+    // 3. Table 1：有 ≥2 个真实分组时分组比较，否则只做总体描述；缺失值由 table1 统计为 Missing 行
+    const table1Result: Table1Result = generateTable1FromData(records, {
+      group_col: grouped ? 'treatment_arm' : undefined,
+      // 没有任何已核实值的研究变量不进 Table 1（原因写在 README 与正文）
+      columns: ['age', 'sex', ...(['l3_smi', 'vat_to_sat', 'followup_months'] as const).filter(k => provenance.find(p => p.var_id === k)!.verified > 0)],
       continuous_vars: ['age', 'l3_smi', 'vat_to_sat', 'followup_months'],
       categorical_vars: ['sex'],
+      show_missing: true,
       labels: {
         age: '年龄 (岁)',
         sex: '生理性别',
@@ -112,313 +205,308 @@ export class PublicationBundleService {
         vat_to_sat: '内脏/皮下脂肪比 (VAT/SAT)',
         followup_months: '总随访时间 (月)',
       },
-      title: `${study.title} · Baseline Demographic and Clinical Characteristics (Table 1)`
+      title: `${study.title} · Baseline Characteristics (Table 1)`,
     })
+    table1Result.footnotes.push('Age and sex: patient registry (来源：患者主档案). Other variables: researcher-verified values only.')
+    if (grouped && armMissing > 0) {
+      table1Result.footnotes.push(`${armMissing} participant(s) without a recorded treatment arm are included in the Overall column only.`)
+    }
+    if (!grouped) {
+      table1Result.footnotes.push('No between-group comparison: fewer than two treatment arms are recorded for enrolled participants.')
+    }
     const table1Docx = exportTable1ToDocx(table1Result)
+    if (!grouped) omitted.push('Table 1 组间比较（受试者没有记录至少 2 个治疗分组）')
 
-    // 3. 生成 Figure 1: CONSORT 2010 流程图
-    const exclusions = [
-      { reason: '未行对比增强薄层 CT (层厚 > 3mm)', count: Math.round(nTotal * 0.45) },
-      { reason: '合并其他恶性肿瘤或既往化疗史', count: Math.round(nTotal * 0.3) },
-      { reason: '关键生化检验或随访指标不完整', count: Math.round(nTotal * 0.25) },
-    ]
-    const totalExcluded = exclusions.reduce((acc, curr) => acc + curr.count, 0)
-    const consortSvg = renderConsortSvg({
-      title: `${study.title} · CONSORT 2010 Participant Flow Diagram`,
-      total_assessed: nTotal + totalExcluded,
-      exclusions,
-      eligible_total: nTotal,
-      arms: [
-        { name: '试验组 (靶向联合)', allocated: Math.ceil(nTotal / 2), analyzed: Math.ceil(nTotal / 2) },
-        { name: '对照组 (标准治疗)', allocated: Math.floor(nTotal / 2), analyzed: Math.floor(nTotal / 2) }
-      ]
+    // 4. 受试者流向图：只用平台入组记录（在组 / 已移出 / 无权限未导出）
+    const roster = this.patients.enrollments(a, studyId).subjects
+    const withdrawn = roster.filter(s => s.status === 'withdrawn').length
+    const inaccessible = snap.skipped.length
+    const enrolledEver = n + inaccessible + withdrawn
+    const flowSvg = renderEnrollmentFlowSvg({
+      title: `${study.title} · Participant Flow`,
+      enrolled_ever: enrolledEver,
+      withdrawn,
+      inaccessible,
+      analyzed: n,
+      arms: grouped || arms.length === 1 ? arms : [],
+      unassigned: arms.length > 0 ? armMissing : 0,
+      note: '平台未记录筛选人数与排除原因，因此未绘制 Assessed / Excluded 环节；请作者按原始纳排记录补充。',
     })
+    omitted.push('CONSORT 筛选 / 排除环节（平台没有纳排筛选记录）')
 
-    // 4. 生成 Figure 2: Love Plot 协变量平衡散点图
-    const lovePlotSvg = generateLovePlotSvg({
-      title: 'Covariate Balance (Love Plot): Absolute Standardized Mean Differences',
-      smd_strict_threshold: 0.05,
-      smd_loose_threshold: 0.10,
-      covariates: [
-        { name: 'age', label_zh: '年龄 (Age)', pre_smd: 0.28, post_smd: 0.03 },
-        { name: 'sex', label_zh: '性别 (Sex)', pre_smd: 0.19, post_smd: 0.02 },
-        { name: 'l3_smi', label_zh: 'L3 骨骼肌指数 (L3 SMI)', pre_smd: 0.34, post_smd: 0.04 },
-        { name: 'vat_to_sat', label_zh: '脂肪比 (VAT/SAT)', pre_smd: 0.22, post_smd: 0.03 },
-        { name: 'nt_pro_bnp', label_zh: '血清 NT-proBNP', pre_smd: 0.26, post_smd: 0.02 },
-        { name: 'egfr', label_zh: '肾功能 (eGFR)', pre_smd: 0.18, post_smd: 0.03 },
-      ]
-    })
+    // 5. Love Plot：平台没有倾向性评分匹配 / 加权实现，不生成
+    omitted.push('Love Plot 协变量平衡图（未做倾向性评分匹配或加权；两组未匹配的 SMD 见 Table 1）')
 
-    // 5. 生成 Figure 3: Kaplan-Meier 生存曲线与 Figure 4: Cox 森林图
-    const survRes = generateSurvivalAnalysis(cohortRecords, {
-      time_col: 'followup_months',
-      event_col: 'os_status',
-      group_col: 'treatment_arm',
-      covariates: ['age', 'l3_smi', 'vat_to_sat'],
-      time_unit: 'Months',
-      title: `${study.title} · Kaplan-Meier Survival Analysis`,
-      labels: {
-        age: '年龄',
-        l3_smi: '骨骼肌 SMI',
-        vat_to_sat: '内脏脂肪比'
+    // 6. 生存分析：排除缺随访时间或结局的受试者；分组分析时再排除缺分组的受试者
+    const withOutcome = records.filter(r => r.followup_months !== null && r.followup_months >= 0 && r.os_status !== null)
+    const excludedMissingOutcome = n - withOutcome.length
+    const survivalRecords = grouped ? withOutcome.filter(r => r.treatment_arm !== null) : withOutcome
+    const excludedMissingArm = withOutcome.length - survivalRecords.length
+    let survRes: SurvivalAnalysisResult | null = null
+    let coxOk = false
+    if (survivalRecords.length > 0) {
+      survRes = generateSurvivalAnalysis(survivalRecords, {
+        time_col: 'followup_months',
+        event_col: 'os_status',
+        group_col: grouped ? 'treatment_arm' : undefined,
+        // 不传协变量：恰有 2 组时 survival.ts 只拟合分组的单因素 Cox（未校正）
+        covariates: [],
+        time_unit: 'Months',
+        title: `${study.title} · Kaplan-Meier Survival Analysis`,
+      })
+      const cox = survRes.cox
+      // calculateCoxRegression 在样本或事件不足时返回 HR=1.00 的占位结果，不能当作真实估计
+      coxOk = !!cox && cox.covariates.length > 0 && cox.events_count >= 2 && cox.sample_size >= cox.covariates.length + 2
+    } else {
+      omitted.push('Kaplan-Meier 生存曲线（没有同时记录随访时间与结局的受试者）')
+    }
+    if (survRes && !coxOk) omitted.push(grouped && arms.length === 2 ? 'Cox 森林图（事件数或样本量不足，无法拟合）' : 'Cox 森林图（需要恰好 2 个真实治疗分组）')
+
+    // 7. E-value：只在真实拟合出两组 HR 时计算
+    let evalue: EValueResult | null = null
+    if (survRes && coxOk) {
+      const c0 = survRes.cox!.covariates[0]!
+      if (c0.hr > 0 && c0.hr_ci_lower > 0 && c0.hr_ci_upper > 0) {
+        evalue = calculateEValue({ effect_type: 'HR', estimate: c0.hr, ci_lower: c0.hr_ci_lower, ci_upper: c0.hr_ci_upper })
       }
-    })
-    const kmSvg = survRes.svg
-    const forestSvg = survRes.forest_svg || '<svg></svg>'
+    }
+    omitted.push('预后列线图、ROC / DCA 曲线（平台没有为本研究拟合预测模型）')
 
-    // 6. 生成 Figure 5: 预后列线图 (Prognostic Nomogram)
-    const nomogramRes = buildNomogram({
-      title: `${study.title} · 1/3/5-Year Prognostic Nomogram`,
-      predictors: [
-        { variable: 'treatment', label: '治疗方案 (Treatment Arm)', type: 'binary', beta: -0.65 },
-        { variable: 'l3_smi', label: 'L3 骨骼肌 SMI (cm²/m²)', type: 'continuous', beta: -0.045, min_val: 30, max_val: 65 },
-        { variable: 'vat_to_sat', label: '内脏/皮下脂肪比 (VAT/SAT)', type: 'continuous', beta: 0.72, min_val: 0.4, max_val: 1.8 },
-        { variable: 'age', label: '年龄 (周岁)', type: 'continuous', beta: 0.035, min_val: 40, max_val: 80 },
-      ]
-    })
-    const nomogramSvg = nomogramRes.svg
+    const report: BundleDataReport = {
+      n_subjects: n,
+      missing,
+      provenance,
+      arms,
+      arm_missing: armMissing,
+      grouped,
+      enrollment: { enrolled_ever: enrolledEver, withdrawn, inaccessible },
+      survival: {
+        included: survivalRecords.length,
+        excluded_missing_time_or_status: excludedMissingOutcome,
+        excluded_missing_arm: excludedMissingArm,
+        generated: !!survRes,
+        cox_generated: coxOk,
+      },
+      omitted,
+    }
 
-    // 7. 生成 Figure 6: ROC 与 DCA 决策曲线
-    const labelsBinary = cohortRecords.map(r => Number(r.os_status))
-    const probsClinical = cohortRecords.map(r => Number(r.age) / 100 * 0.4 + (r.is_treatment ? 0.15 : 0.35))
-    const probsMultimodal = cohortRecords.map((r, idx) => Math.min(0.95, Math.max(0.05, probsClinical[idx]! - (Number(r.l3_smi) > 45 ? 0.15 : -0.15))))
+    // 8. 正文、清单、脚本、清单文件
+    const manuscriptMd = this.generateManuscriptDraft(study.title, report, table1Result, survRes, evalue)
+    const strobeMd = this.generateStrobeChecklist(study.title, report)
+    const reproPy = this.generateReproducibilityPythonScript(study.title, report)
 
-    const rocClinical = calculateRocCurve(labelsBinary, probsClinical, 'Clinical Baseline Model', '#94a3b8')
-    const rocMultimodal = calculateRocCurve(labelsBinary, probsMultimodal, 'Clinical + 3D Imaging Model', '#0284c7')
-    const rocSvg = renderRocCurveSvg([rocClinical, rocMultimodal], `${study.title} · ROC Diagnostic Performance`)
-
-    const dcaClinical = calculateDcaCurve(labelsBinary, probsClinical, 'Clinical Model', '#94a3b8')
-    const dcaMultimodal = calculateDcaCurve(labelsBinary, probsMultimodal, 'Clinical + 3D Imaging Model', '#0284c7')
-    const dcaSvg = renderDcaCurveSvg([dcaClinical, dcaMultimodal], 0.35, `${study.title} · Decision Curve Analysis (Net Benefit)`)
-
-    // 8. 敏感度 E-value 计算：从真实 Cox 回归结果中提取，杜绝写死 HR 0.62
-    const targetCov = survRes.cox?.covariates[0]
-    const hrEst = targetCov ? targetCov.hr : 1.0
-    const hrLower = targetCov ? targetCov.hr_ci_lower : 1.0
-    const hrUpper = targetCov ? targetCov.hr_ci_upper : 1.0
-    const evalueRes = calculateEValue({
-      effect_type: 'HR',
-      estimate: hrEst > 0 ? hrEst : 1.0,
-      ci_lower: hrLower > 0 ? hrLower : 1.0,
-      ci_upper: hrUpper > 0 ? hrUpper : 1.0,
-    })
-
-    // 9. 编撰论著 Methods & Results 段落
-    const manuscriptMd = this.generateManuscriptDraft(study.title, nTotal, evalueRes, survRes, nomogramRes, rocMultimodal)
-
-    // 10. 生成 STROBE 规范清单
-    const strobeMd = this.generateStrobeChecklist(study.title)
-
-    // 11. 生成可复现性 Python 脚本
-    const reproPy = this.generateReproducibilityPythonScript(study.title)
-
-    // 12. 生成 Manifest
-    const manifestTxt = `========================================================================
-HEURION CLINICAL RESEARCH COLLABORATIVE PLATFORM
-SCI PUBLICATION-GRADE SUBMISSION BUNDLE
-========================================================================
-Study Title: ${study.title}
-Study Design: ${study.design || 'Retrospective Cohort Study'}
-Generated At: ${nowStr}
-Compliance Standards: ICMJE, CONSORT 2010, STROBE Statement, TRIPOD
-
-BUNDLE INVENTORY:
-1. Table1_Baseline_Characteristics.docx
-   - Standard 3-line table formatted strictly to NEJM/Lancet guidelines.
-   - Built natively with OpenXML, Times New Roman & SimSun typography.
-
-2. Figure1_CONSORT_2010_Flowchart.svg
-   - High-resolution vector flowchart documenting participant enrollment,
-     stepwise exclusions, allocation, and final analyzed cohorts.
-
-3. Figure2_Love_Plot_Covariate_Balance.svg
-   - Standardized Mean Differences (Absolute SMD) illustrating post-PSM
-     convergence toward the strict 0.05 randomization balance line.
-
-4. Figure3_Kaplan_Meier_Survival_Curve.svg
-   - Publication-grade KM event-free curves with Greenwood 95% confidence bands,
-     log-rank test statistics, and precisely aligned Number at Risk table.
-
-5. Figure4_Cox_Proportional_Hazards_Forest_Plot.svg
-   - Subgroup hazard ratios (HR) and 95% CI forest plot with favors-treatment axis.
-
-6. Figure5_Nomogram_Survival_Predictor.svg
-   - TRIPOD-compliant clinical nomogram scoring 1-, 3-, and 5-year survival.
-
-7. Figure6A_ROC_Diagnostic_Performance.svg
-   - Comparative ROC curves demonstrating incremental AUC gain of 3D imaging features.
-
-8. Figure6B_Decision_Curve_Analysis_DCA.svg
-   - Decision curve analysis plotting net clinical benefit across decision thresholds.
-
-9. Manuscript_Statistical_Methods_and_Results.md
-   - Rigorous academic text sections ready for insertion into the research manuscript.
-
-10. STROBE_Statement_Checklist.md
-    - Standard 22-item reporting checklist required by top epidemiology journals.
-
-11. Statistical_Reproducibility_Script.py
-    - Standalone, zero-hallucination Python script for peer reviewers.
-========================================================================
-`
-
-    // 13. 打包为 ZIP 二进制流
     const zipMap: Record<string, Uint8Array> = {
       'Table1_Baseline_Characteristics.docx': table1Docx,
-      'Figure1_CONSORT_Flowchart.svg': strToU8(consortSvg),
-      'Figure2_Love_Plot_Covariate_Balance.svg': strToU8(lovePlotSvg),
-      'Figure3_Kaplan_Meier_Survival_Curve.svg': strToU8(kmSvg),
-      'Figure4_Cox_Forest_Plot.svg': strToU8(forestSvg),
-      'Figure5_Nomogram_Survival_Predictor.svg': strToU8(nomogramSvg),
-      'Figure6A_ROC_Performance.svg': strToU8(rocSvg),
-      'Figure6B_Decision_Curve_Analysis_DCA.svg': strToU8(dcaSvg),
-      'Manuscript_Statistical_Methods_and_Results.md': strToU8(manuscriptMd),
-      'STROBE_Statement_Checklist.md': strToU8(strobeMd),
-      'Statistical_Reproducibility_Script.py': strToU8(reproPy),
-      'README_Submission_Manifest.txt': strToU8(manifestTxt),
+      'Figure1_Participant_Flow.svg': strToU8(flowSvg),
     }
+    if (survRes) zipMap['Figure2_Kaplan_Meier_Survival_Curve.svg'] = strToU8(survRes.svg)
+    if (survRes && coxOk && survRes.forest_svg) zipMap['Figure3_Cox_Forest_Plot.svg'] = strToU8(survRes.forest_svg)
+    zipMap['Manuscript_Statistical_Methods_and_Results.md'] = strToU8(manuscriptMd)
+    zipMap['STROBE_Statement_Checklist.md'] = strToU8(strobeMd)
+    zipMap['Statistical_Reproducibility_Script.py'] = strToU8(reproPy)
+    zipMap['README_Submission_Manifest.txt'] = strToU8(this.generateManifest(study.title, study.design, nowStr, report, Object.keys(zipMap)))
 
     const zipBuffer = zipSync(zipMap)
     const filename = `SCI_Submission_Bundle_${studyId}_${nowStr}.zip`
+    return { filename, zipBuffer, totalFiles: Object.keys(zipMap).length, report }
+  }
 
-    return {
-      filename,
-      zipBuffer,
-      totalFiles: Object.keys(zipMap).length
-    }
+  private generateManifest(title: string, design: string | null | undefined, date: string, r: BundleDataReport, files: string[]): string {
+    const miss = Object.entries(r.missing).map(([k, v]) => `   - ${k}: ${v} / ${r.n_subjects} missing`).join('\n')
+    const arms = r.arms.length ? r.arms.map(x => `${x.name} (n = ${x.n})`).join(', ') : 'none recorded'
+    return `========================================================================
+HEURION CLINICAL RESEARCH COLLABORATIVE PLATFORM
+SUBMISSION BUNDLE (DRAFT MATERIALS — REVIEW BEFORE SUBMISSION)
+========================================================================
+Study Title: ${title}
+Study Design: ${design || 'Not specified'}
+Generated At: ${date}
+
+BUNDLE INVENTORY:
+${[...files, 'README_Submission_Manifest.txt'].map((f, i) => `${i + 1}. ${f}`).join('\n')}
+
+DATA COMPLETENESS (no values were imputed; missing values remain missing):
+ - Participants included: ${r.n_subjects}
+ - Enrollment records: ${r.enrollment.enrolled_ever} ever enrolled, ${r.enrollment.withdrawn} withdrawn, ${r.enrollment.inaccessible} not exported (no access)
+ - Treatment arms: ${arms}${r.arm_missing ? `; arm missing for ${r.arm_missing}` : ''}
+ - Missing values by variable (unverified values count as missing):
+${miss}
+
+VARIABLE PROVENANCE (only researcher-verified values are used):
+${r.provenance.map(p => ` - ${p.var_id} (${p.label}): source ${p.sources.join(' / ') || 'none'}; ${p.verified} verified, ${p.unverified_excluded} unverified (not used), ${p.missing} / ${r.n_subjects} without a usable value${p.methods.length ? `; method: ${p.methods.join(' | ')}` : ''}`).join('\n')}
+ - age, sex: 来源：患者主档案 (patient registry: birth year / sex on the patient record); not part of the verification workflow
+ - Survival analysis: ${r.survival.included} included; ${r.survival.excluded_missing_time_or_status} excluded for missing follow-up time or outcome status${r.survival.excluded_missing_arm ? `; ${r.survival.excluded_missing_arm} excluded for missing treatment arm` : ''}
+
+NOT GENERATED (and why):
+${r.omitted.map(o => ` - ${o}`).join('\n')}
+========================================================================
+`
   }
 
   private generateManuscriptDraft(
     title: string,
-    sampleSize: number,
-    evalue: any,
-    surv: any,
-    nomogram: any,
-    roc: any
+    r: BundleDataReport,
+    t1: Table1Result,
+    surv: SurvivalAnalysisResult | null,
+    evalue: EValueResult | null,
   ): string {
-    return `# Statistical Methods & Results Section Draft
+    const t1Methods = t1.footnotes.find(f => f.startsWith('P values are calculated using'))
+    const armText = r.arms.map(x => `${x.name} (n = ${x.n})`).join(' and ')
+    const parts: string[] = []
+    parts.push(`# Statistical Methods & Results Section Draft
 ## Study: ${title}
+
+> Draft generated from the data recorded on the platform. Every statement below describes an analysis that was actually run; please verify and extend before submission.
 
 ### 1. Statistical Analysis Methods
 
 #### 1.1 Study Population and Baseline Characteristics
-A total of ${sampleSize} patients meeting all predefined inclusion criteria were enrolled in this cohort study, adhering strictly to the **CONSORT 2010** and **STROBE** reporting guidelines. Baseline demographics, biochemical laboratory values, and 3D quantitative CT imaging biomarkers were summarized across study arms. Continuous variables were expressed as Mean ± Standard Deviation (SD) for normally distributed parameters and compared using two-tailed Welch's t-test, or as Median [Interquartile Range, IQR] and compared using the Mann-Whitney U test. Categorical variables were presented as absolute numbers and percentages (N, %) and compared via Pearson's chi-square test or Fisher's exact test as appropriate. All baseline comparisons were tabulated into an ICMJE-compliant three-line table (**Table 1**).
+Participant flow is shown in **Figure 1**, based on the platform's enrollment records only; screening counts and exclusion reasons were not recorded on the platform and must be supplied by the authors. Baseline characteristics are summarized in **Table 1**${r.grouped ? ` by treatment arm` : ' for the overall cohort only (fewer than two treatment arms were recorded, so no between-group comparison was performed)'}. Continuous variables are presented as mean ± SD or median [IQR] according to their distribution, and categorical variables as n (%).${r.grouped && t1Methods ? ` ${t1Methods}` : ''}
 
-#### 1.2 Confounding Control and Propensity Score Weighting
-To adjust for potential indication bias and imbalances in baseline covariates, 1:1 nearest-neighbor Propensity Score Matching (PSM) and Inverse Probability of Treatment Weighting (IPTW) were implemented. Balance across all baseline covariates was formally evaluated using Absolute Standardized Mean Differences (Absolute SMD). An SMD of less than 0.10 was considered indicative of acceptable balance, and an SMD of less than 0.05 demonstrated rigorous randomized balance (**Figure 2, Love Plot**).
+#### 1.2 Missing Data
+No imputation was performed. Missing values are reported per variable in Table 1, and each analysis used participants with complete data for the variables it required (complete-case analysis).
 
-#### 1.3 Survival Analysis and Prognostic Modeling
-Cumulative event-free and overall survival rates were estimated using the **Kaplan-Meier** method with **Greenwood** formula 95% confidence intervals (**Figure 3**). Differences between survival distributions were tested using the two-sided **Log-rank test**. Multivariable **Cox proportional hazards regression** was utilized to compute adjusted Hazard Ratios (HR) and 95% confidence intervals (**Figure 4**). Proportional hazards assumptions were confirmed via Schoenfeld residual diagnostics.
+#### 1.3 Variable Sources and Verification
+Only values verified by the study investigators were analysed; unverified values were treated as missing. Age and sex were taken from the patient registry (来源：患者主档案) and are not part of the verification workflow.
 
-#### 1.4 Sensitivity Analysis for Unmeasured Confounding
-To evaluate the vulnerability of the observed causal associations to potential unmeasured residual confounders, the **VanderWeele E-value** was computed for both point estimates and the lower limit of the 95% confidence interval.
+| Variable | Source | Verified | Unverified (not used) | Without usable value | Method |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+${r.provenance.map(p => `| ${p.var_id} | ${p.sources.join(' / ') || '—'} | ${p.verified} | ${p.unverified_excluded} | ${p.missing} / ${r.n_subjects} | ${p.methods.join('; ') || '—'} |`).join('\n')}`)
 
-#### 1.5 Nomogram Construction, ROC, and Decision Curve Analysis
-A visual prognostic **nomogram** was established based on the multivariable Cox model coefficients (**Figure 5**). Discrimination performance was quantified using Harrell's Concordance Index (C-index) and time-dependent Receiver Operating Characteristic (**ROC**) curves with Area Under the Curve (**AUC**, **Figure 6A**). Clinical net benefit was validated using **Decision Curve Analysis (DCA)** across practical intervention probability thresholds (**Figure 6B**).
+    if (surv) {
+      parts.push(`#### 1.4 Survival Analysis
+Survival was estimated with the **Kaplan-Meier** method (Greenwood 95% confidence intervals; **Figure 2**).${r.grouped ? ' Survival distributions between treatment arms were compared with the two-sided log-rank test.' : ''}${r.survival.cox_generated ? ' An unadjusted (univariable) Cox proportional hazards model with treatment arm as the only covariate was fitted to estimate the hazard ratio (HR) and 95% CI (**Figure 3**). The proportional hazards assumption was not formally tested.' : ''}${evalue ? ' The VanderWeele E-value was computed for the unadjusted HR to quantify the minimum strength of unmeasured confounding needed to explain away the association.' : ''}`)
+    }
 
----
+    parts.push(`---
 
 ### 2. Results
 
-#### 2.1 Baseline Balance and Patient Flow
-As illustrated in the CONSORT participant flow diagram (**Figure 1**), ${sampleSize} eligible subjects completed full multimodal follow-up. Following propensity matching, all measured clinical, demographic, and 3D imaging variables achieved robust balance with post-matching SMD < 0.05 (**Figure 2**).
+#### 2.1 Participants
+${r.n_subjects} participants were included${r.grouped ? `: ${armText}` : ''}.${r.arm_missing && r.arms.length ? ` ${r.arm_missing} participant(s) had no recorded treatment arm.` : ''}${r.enrollment.withdrawn ? ` ${r.enrollment.withdrawn} participant(s) were withdrawn from the study (reasons not recorded).` : ''}`)
 
-#### 2.2 Survival Outcomes
-${surv.narrative}
+    if (surv) {
+      const excl: string[] = []
+      if (r.survival.excluded_missing_time_or_status) excl.push(`${r.survival.excluded_missing_time_or_status} for missing follow-up time or outcome status`)
+      if (r.survival.excluded_missing_arm) excl.push(`${r.survival.excluded_missing_arm} for missing treatment arm`)
+      parts.push(`#### 2.2 Survival Outcomes
+${r.survival.included} participants were included in the survival analysis${excl.length ? `; ${excl.join(' and ')} were excluded` : ''}. ${surv.narrative}`)
+      if (evalue) {
+        parts.push(`#### 2.3 Sensitivity to Unmeasured Confounding
+For the unadjusted HR of ${evalue.estimate.toFixed(2)} (95% CI ${evalue.ci_lower.toFixed(2)}–${evalue.ci_upper.toFixed(2)}), the E-value was ${evalue.e_value_point.toFixed(2)} for the point estimate and ${evalue.e_value_ci.toFixed(2)} for the confidence limit closest to the null.`)
+      }
+    } else {
+      parts.push(`#### 2.2 Survival Outcomes
+No survival analysis was performed: ${r.survival.excluded_missing_time_or_status} of ${r.n_subjects} participants lacked follow-up time or outcome status.`)
+    }
 
-#### 2.3 Sensitivity to Unmeasured Confounding
-${evalue.academic_defense_en}
+    parts.push(`---
 
-#### 2.4 Nomogram and Clinical Utility
-The prognostic nomogram demonstrated strong discriminatory capability with an AUC of ${roc.auc} (95% CI: ${roc.auc_ci[0]}–${roc.auc_ci[1]}). In Decision Curve Analysis, the multimodal prediction model added substantial net clinical benefit across threshold probabilities ranging from 10% to 75% without increasing over-treatment harms.
-`
+### Analyses not performed
+${r.omitted.map(o => `- ${o}`).join('\n')}
+`)
+    return parts.join('\n\n')
   }
 
-  private generateStrobeChecklist(title: string): string {
+  private generateStrobeChecklist(title: string, r: BundleDataReport): string {
+    const todo = 'Author to complete'
     return `# STROBE Statement—Checklist of items for cohort studies
 ## Study: ${title}
 
-| Item No. | Item Description | Reported in Section / Page |
+The right-hand column states what this generated bundle covers. Items marked "${todo}" are not addressed by the bundle.
+
+| Item No. | Item Description | Coverage in this bundle |
 | :---: | :--- | :--- |
 | **Title and Abstract** |
-| 1a | Indicate the study's design with a commonly used term in the title or the abstract | Title, Abstract (Section 1) |
-| 1b | Provide an informative and balanced summary of what was done and what was found | Abstract |
+| 1a | Indicate the study's design with a commonly used term in the title or the abstract | ${todo} |
+| 1b | Provide an informative and balanced summary of what was done and what was found | ${todo} |
 | **Introduction** |
-| 2 | Explain the scientific background and rationale for the investigation | Introduction |
-| 3 | State specific objectives, including any prespecified hypotheses | Introduction (PICO) |
+| 2 | Explain the scientific background and rationale for the investigation | ${todo} |
+| 3 | State specific objectives, including any prespecified hypotheses | ${todo} |
 | **Methods** |
-| 4 | Present key elements of study design early in the paper | Methods (1.1) |
-| 5 | Describe the setting, locations, and relevant dates | Methods (1.1) |
-| 6a | Give the eligibility criteria, and the sources and methods of selection of participants | Methods (1.1 & Figure 1) |
-| 7 | Clearly define all outcomes, exposures, predictors, potential confounders | Methods (1.1, Table 1) |
-| 8 | For each variable of interest, give sources of data and details of methods of assessment | Methods (MONAI & CT) |
-| 9 | Describe any efforts to address potential sources of bias | Methods (1.2, Love Plot) |
-| 10 | Explain how the study size was arrived at | Methods (1.1, Power Calc) |
-| 11 | Explain how quantitative variables were handled in the analyses | Methods (Table 1 footnote) |
-| 12a | Describe all statistical methods, including those used to control for confounding | Methods (1.2, 1.3) |
-| 12b | Describe any methods used to examine subgroups and interactions | Methods (Cox Forest Plot) |
-| 12c | Explain how missing data were addressed | Methods (Audit trail) |
-| 12e | Describe any sensitivity analyses | Methods (1.4, E-value) |
+| 4 | Present key elements of study design early in the paper | ${todo} |
+| 5 | Describe the setting, locations, and relevant dates | ${todo} |
+| 6a | Give the eligibility criteria, and the sources and methods of selection of participants | ${todo} (screening records not available on the platform) |
+| 7 | Clearly define all outcomes, exposures, predictors, potential confounders | ${todo} |
+| 8 | For each variable of interest, give sources of data and details of methods of assessment | ${todo} |
+| 9 | Describe any efforts to address potential sources of bias | ${todo} (no matching or weighting performed) |
+| 10 | Explain how the study size was arrived at | ${todo} |
+| 11 | Explain how quantitative variables were handled in the analyses | Methods 1.1, Table 1 |
+| 12a | Describe all statistical methods, including those used to control for confounding | Methods 1.1, 1.3${r.survival.generated ? ', 1.4' : ''} (no confounder adjustment performed) |
+| 12b | Describe any methods used to examine subgroups and interactions | ${todo} (not performed) |
+| 12c | Explain how missing data were addressed | Methods 1.2 (complete-case, no imputation), 1.3 (unverified values treated as missing) |
+| 12e | Describe any sensitivity analyses | ${r.survival.cox_generated ? 'Methods 1.4 (E-value, unadjusted HR)' : `${todo} (not performed)`} |
 | **Results** |
-| 13a | Report numbers of individuals at each stage of study | Results (2.1 & Figure 1) |
-| 14a | Give characteristics of study participants and information on exposures | Results (2.1, Table 1) |
-| 15 | Report numbers of outcome events or summary measures over time | Results (2.2, KM curves) |
-| 16a | Give unadjusted estimates and, if applicable, confounder-adjusted estimates | Results (2.2, Cox HRs) |
-| 17 | Report other analyses done (e.g. subgroup, sensitivity) | Results (2.3, 2.4, E-value) |
+| 13a | Report numbers of individuals at each stage of study | Results 2.1, Figure 1 (enrollment records only; screening stage missing) |
+| 14a | Give characteristics of study participants and information on exposures | Table 1 |
+| 15 | Report numbers of outcome events or summary measures over time | ${r.survival.generated ? 'Results 2.2, Figure 2' : `${todo} (outcome data not recorded)`} |
+| 16a | Give unadjusted estimates and, if applicable, confounder-adjusted estimates | ${r.survival.cox_generated ? 'Results 2.2, Figure 3 (unadjusted only)' : `${todo}`} |
+| 17 | Report other analyses done (e.g. subgroup, sensitivity) | ${r.survival.cox_generated ? 'Results 2.3' : todo} |
 | **Discussion** |
-| 18 | Summarize key results with reference to study objectives | Discussion |
-| 19 | Discuss limitations of the study, taking into account sources of potential bias | Discussion |
-| 20 | Give a cautious overall interpretation of results | Discussion |
-| 21 | Discuss the generalizability (external validity) of the study results | Discussion |
+| 18 | Summarize key results with reference to study objectives | ${todo} |
+| 19 | Discuss limitations of the study, taking into account sources of potential bias | ${todo} |
+| 20 | Give a cautious overall interpretation of results | ${todo} |
+| 21 | Discuss the generalizability (external validity) of the study results | ${todo} |
 | **Other Information** |
-| 22 | Give the source of funding and the role of the funders | Declarations |
+| 22 | Give the source of funding and the role of the funders | ${todo} |
 `
   }
 
-  private generateReproducibilityPythonScript(title: string): string {
+  private generateReproducibilityPythonScript(title: string, r: BundleDataReport): string {
     return `#!/usr/bin/env python3
 """
-Statistical Reproducibility Analysis Script
-Study: ${title}
-Framework: Python 3.10+, Lifelines, Scikit-learn, Pandas, NumPy
+Statistical Reproducibility Script
+Study: ${title.replace(/"""/g, '')}
+Framework: Python 3.10+, lifelines, pandas
+
+Usage: python Statistical_Reproducibility_Script.py analysis_dataset.csv
+The CSV must be exported from the platform and contain the columns:
+  subject_id, treatment_arm, age, sex, l3_smi, vat_to_sat, followup_months, os_status
+Missing values must stay empty; this script does not impute.
 """
 
-import numpy as np
+import sys
 import pandas as pd
 from lifelines import KaplanMeierFitter, CoxPHFitter
-from lifelines.statistics import logrank_test
-from sklearn.metrics import roc_auc_score, roc_curve
+from lifelines.statistics import multivariate_logrank_test
 
-print("=" * 70)
-print("HEURION STATISTICAL VERIFICATION PIPELINE")
-print("Study: ${title}")
-print("=" * 70)
+if len(sys.argv) < 2:
+    sys.exit("usage: python Statistical_Reproducibility_Script.py analysis_dataset.csv")
 
-# 1. Load Dataset
-# df = pd.read_csv("dataset.csv")
-print("[INFO] Validating Kaplan-Meier survival curves and Log-rank test...")
-# kmf = KaplanMeierFitter()
-# lr_res = logrank_test(durations_A, durations_B, event_observed_A, event_observed_B)
-# print(f"Log-rank p-value: {lr_res.p_value:.4f}")
+df = pd.read_csv(sys.argv[1])
+print(f"Participants: {len(df)} (bundle reported ${r.n_subjects})")
+print("Missing values per column:")
+print(df.isna().sum())
 
-# 2. Cox Proportional Hazards Model
-print("[INFO] Fitting multivariable Cox proportional hazards model...")
-# cph = CoxPHFitter()
-# cph.fit(df, duration_col='followup_months', event_col='os_status')
-# cph.print_summary()
+# Survival analysis: complete cases for follow-up time and outcome only
+surv = df.dropna(subset=["followup_months", "os_status"])
+print(f"Survival analysis: {len(surv)} included, {len(df) - len(surv)} excluded for missing time/status")
+if surv.empty:
+    sys.exit("No participants with both follow-up time and outcome status; nothing to analyse.")
 
-# 3. VanderWeele E-value Calculation
-def compute_e_value(hr: float, hr_ci_bound: float):
-    rr = 1.0 / hr if hr < 1.0 else hr
-    bound = 1.0 / hr_ci_bound if hr < 1.0 else hr_ci_bound
-    e_pt = rr + np.sqrt(rr * (rr - 1.0))
-    e_ci = bound + np.sqrt(bound * (bound - 1.0)) if bound > 1.0 else 1.0
-    return e_pt, e_ci
-
-e_point, e_ci = compute_e_value(0.62, 0.86)
-print(f"[VERIFIED] VanderWeele E-value: Point={e_point:.2f}, CI_bound={e_ci:.2f}")
-
-print("[SUCCESS] All peer-review reproducibility checks verified successfully.")
+arms = surv["treatment_arm"].dropna().unique()
+kmf = KaplanMeierFitter()
+if len(arms) >= 2:
+    surv = surv.dropna(subset=["treatment_arm"])
+    for arm in sorted(arms):
+        sub = surv[surv["treatment_arm"] == arm]
+        kmf.fit(sub["followup_months"], sub["os_status"], label=str(arm))
+        print(f"{arm}: n={len(sub)}, events={int(sub['os_status'].sum())}, median={kmf.median_survival_time_}")
+    lr = multivariate_logrank_test(surv["followup_months"], surv["treatment_arm"], surv["os_status"])
+    print(f"Log-rank p-value: {lr.p_value:.4f}")
+    if len(arms) == 2:
+        ref = sorted(arms)[0]
+        cox_df = pd.DataFrame({
+            "followup_months": surv["followup_months"],
+            "os_status": surv["os_status"],
+            "arm": (surv["treatment_arm"] != ref).astype(int),
+        })
+        cph = CoxPHFitter()
+        cph.fit(cox_df, duration_col="followup_months", event_col="os_status")
+        cph.print_summary()
+else:
+    kmf.fit(surv["followup_months"], surv["os_status"], label="Overall")
+    print(f"Overall: n={len(surv)}, events={int(surv['os_status'].sum())}, median={kmf.median_survival_time_}")
 `
   }
 }

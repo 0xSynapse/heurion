@@ -265,7 +265,7 @@ describe('临床科研 HTTP API 端点集成测试', async () => {
     expect(docXml).toContain('Left Ventricular Ejection Fraction')
   })
 
-  it('3. GET /api/studies/:sid/cohort/consort 生成出版级流向图', async () => {
+  it('3. GET /api/studies/:sid/cohort/consort 只用真实入组记录，不编造排除人数与分组', async () => {
     const res = await app.request(`/api/studies/${study.id}/cohort/consort?assessed=500`, {
       method: 'GET',
       headers: { Authorization: authToken },
@@ -274,9 +274,14 @@ describe('临床科研 HTTP API 端点集成测试', async () => {
     expect(res.status).toBe(200)
     const body = await res.json() as any
     expect(body.svg).toContain('<svg')
-    expect(body.svg).toContain('CONSORT 2010')
+    expect(body.svg).toContain('Participant Flow')
     expect(body.mermaid).toContain('graph TD')
-    expect(body.data.total_assessed).toBe(500)
+    // assessed 参数不再被用来推算排除人数；没有筛选 / 排除 / 分组记录就不画
+    expect(body.data.total_assessed).toBeUndefined()
+    expect(body.data.arms).toEqual([])
+    expect(body.data.analyzed).toBe(body.data.enrolled_ever - body.data.withdrawn)
+    expect(body.svg).not.toMatch(/Assessed for eligibility|Excluded: n|未达入选标准|合并既往恶性肿瘤|干预治疗组|对照观察组|失访/)
+    expect(body.mermaid).not.toMatch(/排除人群|干预治疗组|对照观察组/)
 
     // 测试 ?format=svg 直接返回矢量图
     const resSvg = await app.request(`/api/studies/${study.id}/cohort/consort?format=svg`, {
@@ -376,11 +381,52 @@ describe('临床科研 HTTP API 端点集成测试', async () => {
     const firstRow = body.rows[0]
     expect(firstRow.subject_id).toBeDefined()
     // 检查是否有 3D 切片层号溯源信息
+    // 没有影像量化记录时如实为缺失，不做「分割回填估算」
     const smiCell = firstRow.variables.l3_smi
     expect(smiCell).toBeDefined()
-    expect(smiCell.confidence).toBeGreaterThan(0.8)
+    expect(smiCell.value).toBeNull()
+    expect(smiCell.confidence).toBe(0)
     expect(smiCell.source_type).toBe('imaging')
-    expect(smiCell.source_slice_index).toBeDefined()
+    expect(smiCell.source_slice_index).toBeUndefined()
+    expect(firstRow.variables.vat_to_sat_ratio.value).toBeNull()
+    expect(body.dataset_wide_preview[0].l3_smi).toBeNull()
+  })
+
+  it('7b. eCRF 的治疗分组、结局与随访没有登记来源时为 null，不按序号取模生成', async () => {
+    const res = await app.request(`/api/studies/${study.id}/ecrf/extract`, {
+      method: 'POST',
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ variable_ids: ['treatment_arm', 'os_status', 'followup_months', 'age'] }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    for (const row of body.rows) {
+      expect(row.variables.treatment_arm.value).toBeNull()
+      expect(row.variables.os_status.value).toBeNull()
+      expect(row.variables.followup_months.value).toBeNull()
+      expect(row.variables.followup_months.formatted).toBe('—')
+    }
+    expect(body.rows[0].variables.age.value).not.toBeNull()
+    expect(body.summary.missing_cells).toBe(body.rows.length * 3)
+  })
+
+  it('7c. 列线图与 ROC/DCA 不再用示例系数 / 示例数据：缺输入时返回 400', async () => {
+    const nomo = await app.request(`/api/datasets/${dsUpload.dataset.id}/nomogram`, {
+      method: 'POST', headers: { Authorization: authToken, 'Content-Type': 'application/json' }, body: '{}',
+    })
+    expect(nomo.status).toBe(400)
+    expect((await nomo.json() as any).error).toContain('predictors')
+
+    const roc = await app.request(`/api/datasets/${dsUpload.dataset.id}/roc-dca`, {
+      method: 'POST', headers: { Authorization: authToken, 'Content-Type': 'application/json' }, body: '{}',
+    })
+    expect(roc.status).toBe(400)
+
+    const ok = await app.request(`/api/datasets/${dsUpload.dataset.id}/roc-dca`, {
+      method: 'POST', headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labels: [1, 0, 1, 0], scores_baseline: [0.7, 0.4, 0.6, 0.3], scores_multimodal: [0.8, 0.2, 0.9, 0.1] }),
+    })
+    expect(ok.status).toBe(200)
   })
 
   it('8. POST /api/studies/:sid/ecrf/save-dataset 保存为宽表研究数据集', async () => {

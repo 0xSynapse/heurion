@@ -2,6 +2,8 @@
  * 患者（第二期）：左栏「患者」页签、患者页（概览 / 化验 / 报告 / 待确认）、上传报告与审核、诊疗组、紧急访问、访问记录。
  * 患者在平台里只有代号；「代号 → 姓名」的备注只存在这台电脑的浏览器里（localStorage），平台不保存。
  */
+import { ENGINE_GROUP, ENGINE_LABEL, ENGINE_STYLE, modelOptionTag } from './imaging-engine.ts'
+import { caliperMeasure, formatMeasure, largeEnough, NO_SPACING_NOTE, planeSpacing, roiMeasure, type Measure, type Plane, type Spacing, type VoxelSpacing } from './mpr-measure.ts'
 import { photoFigure } from './photos.ts'
 import { askConfirm, askText } from './dialogs.ts'
 import { icon } from './icons.ts'
@@ -26,6 +28,8 @@ interface Lab {
 interface RecordRow {
   id: string; kind: string; title: string; report_date: string | null; file_id: string | null; status: 'pending' | 'confirmed' | 'rejected'
   extraction: string | null; extraction_note: string | null; created_at: string
+  /** ai_report = AI 生成的报告草稿 */
+  origin?: string | null
   imaging_data?: {
     model_id?: string
     sample_id?: string | null
@@ -188,7 +192,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           ${d.tags.map(t => `<span class="chip">${esc(t)}</span>`).join('')}${canEdit ? '<button class="quiet small-btn" data-act="tags">编辑</button>' : ''}</div>
         ${d.access === 'break_glass' ? '<div class="notice">紧急访问（只读，24 小时内有效，已记入访问日志）</div>' : d.access === 'tenant' ? '<div class="muted small">机构设置为全员可见：你可以查看，修改需要加入诊疗组</div>' : ''}
         <div class="row pt-actions">
-          ${canEdit ? `<button class="primary" data-act="imaging" title="使用 MONAI 深度学习模型对胸部/腹部 CT 或 MRI 进行定量分析（支气管扩张、粘液栓、RECIST 1.1 靶病灶等）并沉淀至患者档案">${icon('scan')} 影像分析</button>` : ''}
+          ${canEdit ? `<button class="primary" data-act="imaging" title="对 CT / MRI 做量化测量（规则算法、定量 CT 或深度学习模型，按模型如实标注）并存入患者档案">${icon('scan')} 影像分析</button>` : ''}
           ${canEdit ? `<button data-act="upload" title="化验单、出院小结、病理报告（PDF、扫描件、手机照片）：自动提取，审核后进入化验表">上传化验单 / 报告</button><input type="file" id="ptUpload" accept="${ACCEPT}" multiple hidden>` : ''}
           <button data-act="report" title="新建一份病例报告并关联到这位患者；对话框里会填好建议的指令，由你确认后发送">写病例报告</button>
           ${d.access === 'owner' ? `<span class="grow"></span><div class="menu-wrap"><button data-act="ptmore" aria-haspopup="menu">更多 ▾</button>
@@ -223,7 +227,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
       const m = (imgData.metrics || imgData.raw_metrics || {}) as Record<string, any>
       const isHAM = Boolean(m.high_attenuation_mucus || (m.ham_max_hu && m.ham_max_hu > 70) || (m.high_attenuation_mucus_cm3 && m.high_attenuation_mucus_cm3 > 0))
-      const isNegative = m.has_lesion === false || (m.lung_rads && m.lung_rads.category === '1') || (m.longest_diameter_mm === 0)
+      const isNegative = m.has_lesion === false || (m.longest_diameter_mm === 0)
       const isHighRiskNodule = !isNegative && Boolean(m.longest_diameter_mm && m.longest_diameter_mm >= 8)
       const igeLab = d.latest_labs.find(l => l.test_key === 'ige' || l.test_name.includes('IgE'))
 
@@ -233,43 +237,41 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           <div class="pt-proactive-banner alert-ham">
             <div class="pt-proactive-main">
               <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px">
-                <span class="pt-proactive-pill high">临床高危主动预警 (Clinical Decision Support)</span>
-                <span class="muted small">高密度粘液栓 (HAM) · CT &gt; 70 HU</span>
+                <span class="pt-proactive-pill medium">影像所见</span>
+                <span class="muted small">高密度粘液栓 · 算法测得 CT 值 &gt; 70 HU</span>
               </div>
               <div style="font-weight: 600; font-size: 13.5px; color: #FCA5A5; margin-bottom: 4px">
-                检出支气管管腔高密度粘液栓嵌顿，高度疑似变应性支气管肺曲霉病 (ABPA)
+                算法测得支气管管腔高密度粘液栓
               </div>
               <div class="muted small" style="line-height: 1.5; color: var(--text-1)">
-                3D 体素测值显示嵌顿物 CT 衰减均值超标（高密度粘液栓 HAM）${igeLab ? `，已协同关联患者近期异常总 IgE (${igeLab.value_num ?? igeLab.std_value} ${igeLab.unit || 'kU/L'})` : ''}。系统已触发 ABPA 临床多模态确诊因果链，建议立即开具全景报告或完善曲霉 sIgE 复查。
+                量化记录显示管腔内粘液栓 CT 值高于 70 HU${igeLab ? `；近期总 IgE ${igeLab.value_num ?? igeLab.std_value} ${igeLab.unit || 'kU/L'}` : ''}。上述所见需结合临床与实验室检查判断。
               </div>
             </div>
             <div class="pt-proactive-actions">
-              <button class="primary small-btn" data-generate-full-report="${latestImg.id}">${icon('report')} 一键生成全景诊断报告</button>
-              <button class="small-btn quiet" data-open-evidence="${latestImg.id}">${icon('evidence')} 查看多模态因果链</button>
+              <button class="primary small-btn" data-generate-full-report="${latestImg.id}">${icon('report')} 生成影像所见报告</button>
+              <button class="small-btn quiet" data-open-evidence="${latestImg.id}">${icon('evidence')} 查看指标对照</button>
             </div>
           </div>
         `
       } else if (isHighRiskNodule) {
-        const radsBadge = m.lung_rads ? esc(m.lung_rads.name) : 'Lung-RADS 评估'
-        const radsDesc = m.lung_rads?.description ? esc(m.lung_rads.description) : `实性靶病灶长径超标 (${m.longest_diameter_mm} mm &gt; 8 mm)`
-        const radsRec = m.lung_rads?.recommendation ? `临床随访指引：${esc(m.lung_rads.recommendation)}。` : '建议结合临床症状生成全景诊断报告指导多学科会诊 (MDT)。'
+                const radsDesc = `长径 ${m.longest_diameter_mm} mm（≥ 8 mm）`
         proactiveBanner = `
           <div class="pt-proactive-banner alert-nodule">
             <div class="pt-proactive-main">
               <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px">
-                <span class="pt-proactive-pill ${m.lung_rads?.category === '4B' ? 'high' : 'medium'}">结节风险分层 · ${radsBadge}</span>
+                <span class="pt-proactive-pill medium">结节测量</span>
                 <span class="muted small">${radsDesc}</span>
               </div>
               <div style="font-weight: 600; font-size: 13.5px; color: #FDE68A; margin-bottom: 4px">
-                检出局灶性实性/亚实性结节 (长径 ${m.longest_diameter_mm} mm)，符合 ${radsBadge} 特征
+                算法测得结节，长径 ${m.longest_diameter_mm} mm
               </div>
               <div class="muted small" style="line-height: 1.5; color: var(--text-1)">
-                经 MONAI 3D 卷积体素网络测得病灶长径 ${m.longest_diameter_mm} mm（三维体积 ${m.total_volume_cm3 ?? '--'} cm³）。${radsRec}
+                量化记录：长径 ${m.longest_diameter_mm} mm，三维体积 ${m.total_volume_cm3 ?? '--'} cm³。上述所见需结合临床与实验室检查判断。
               </div>
             </div>
             <div class="pt-proactive-actions">
-              <button class="primary small-btn" data-generate-full-report="${latestImg.id}">${icon('report')} 一键生成全景诊断报告</button>
-              <button class="small-btn quiet" data-open-evidence="${latestImg.id}">${icon('evidence')} 查看多模态因果链</button>
+              <button class="primary small-btn" data-generate-full-report="${latestImg.id}">${icon('report')} 生成影像所见报告</button>
+              <button class="small-btn quiet" data-open-evidence="${latestImg.id}">${icon('evidence')} 查看指标对照</button>
             </div>
           </div>
         `
@@ -294,7 +296,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
             <div class="row" style="align-items: center; justify-content: space-between"><b>${esc(latestImg.title)}</b><span class="muted small">${esc(latestImg.report_date || '')}</span></div>
             <div class="muted small" style="margin: 6px 0 10px; line-height: 1.5">${esc(latestImg.extraction_note || '已完成三维体素分割与定量测量')}</div>
             <div class="row" style="gap: 8px; flex-wrap: wrap">
-              <button class="primary small-btn" data-generate-full-report="${latestImg.id}" title="一键生成三甲医院标准四段式全景影像多模态诊断报告（含 3D 定量、RECIST 1.1、化验因果链，并支持存入病历与打印导出）">${icon('report')} 全景诊断报告</button>
+              <button class="primary small-btn" data-generate-full-report="${latestImg.id}" title="生成影像量化所见报告（只列实测值与相关化验，不含诊断结论；AI 生成的存为待医生确认的草稿）">${icon('report')} 影像所见报告</button>
               <button class="small-btn quiet" data-img-report="${latestImg.id}">${icon('write')} 基于此影像写报告</button>
               <button class="small-btn" data-img-canvas="${latestImg.id}">${icon('deck')} 会诊 Slide</button>
               <button class="small-btn quiet" data-open-mpr="${latestImg.id}" title="进入 3D 多平面重建 (MPR) 互动切片浏览器">${icon('mpr')} 3D 切片</button>
@@ -371,7 +373,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     const anyNoduleRec = scanRecords.find(r => {
       const imgD = (r.imaging_data || {}) as Record<string, any>
       const nm = (imgD.metrics || imgD.raw_metrics || {}) as Record<string, any>
-      const isNeg = nm.has_lesion === false || (nm.lung_rads && nm.lung_rads.category === '1') || (nm.longest_diameter_mm === 0)
+      const isNeg = nm.has_lesion === false || (nm.longest_diameter_mm === 0)
       return !isNeg && Boolean(nm.longest_diameter_mm && nm.longest_diameter_mm >= 8)
     })
     const igeLab = d.latest_labs.find(l => l.test_key === 'ige' || l.test_name.includes('IgE'))
@@ -382,45 +384,43 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         <div class="pt-proactive-banner alert-ham" style="margin-top: 10px">
           <div class="pt-proactive-main">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px">
-              <span class="pt-proactive-pill high">${icon('shield')} 临床高危主动预警 (Clinical Decision Support)</span>
-              <span class="muted small">高密度粘液栓 (HAM) · CT &gt; 70 HU</span>
+              <span class="pt-proactive-pill medium">影像所见</span>
+              <span class="muted small">高密度粘液栓 · 算法测得 CT 值 &gt; 70 HU</span>
             </div>
             <div style="font-weight: 600; font-size: 13.5px; color: #FCA5A5; margin-bottom: 4px">
-              检出支气管管腔高密度粘液栓嵌顿，高度疑似变应性支气管肺曲霉病 (ABPA)
+              算法测得支气管管腔高密度粘液栓
             </div>
             <div class="muted small" style="line-height: 1.5; color: var(--text-1)">
-              3D 体素测值显示嵌顿物 CT 衰减均值超标（高密度粘液栓 HAM）${igeLab ? `，已协同关联患者近期异常总 IgE (${igeLab.value_num ?? igeLab.std_value} ${igeLab.unit || 'kU/L'})` : ''}。系统已触发 ABPA 临床多模态确诊因果链，建议立即开具全景报告或完善曲霉 sIgE 复查。
+              量化记录显示管腔内粘液栓 CT 值高于 70 HU${igeLab ? `；近期总 IgE ${igeLab.value_num ?? igeLab.std_value} ${igeLab.unit || 'kU/L'}` : ''}。上述所见需结合临床与实验室检查判断。
             </div>
           </div>
           <div class="pt-proactive-actions">
-            <button class="primary small-btn" data-generate-full-report="${anyHamRec.id}">${icon('report')} 一键生成全景诊断报告</button>
-            <button class="small-btn quiet" data-open-evidence="${anyHamRec.id}">${icon('evidence')} 查看多模态因果链</button>
+            <button class="primary small-btn" data-generate-full-report="${anyHamRec.id}">${icon('report')} 生成影像所见报告</button>
+            <button class="small-btn quiet" data-open-evidence="${anyHamRec.id}">${icon('evidence')} 查看指标对照</button>
           </div>
         </div>
       `
     } else if (anyNoduleRec) {
       const imgD = (anyNoduleRec.imaging_data || {}) as Record<string, any>
       const nm = (imgD.metrics || imgD.raw_metrics || {}) as Record<string, any>
-      const radsBadge = nm.lung_rads ? esc(nm.lung_rads.name) : 'Lung-RADS 评估'
-      const radsDesc = nm.lung_rads?.description ? esc(nm.lung_rads.description) : `实性靶病灶长径超标 (${nm.longest_diameter_mm} mm &gt; 8 mm)`
-      const radsRec = nm.lung_rads?.recommendation ? `临床随访指引：${esc(nm.lung_rads.recommendation)}。` : '建议结合临床指征生成全景诊断报告指导多学科会诊 (MDT)。'
+            const radsDesc = `长径 ${nm.longest_diameter_mm} mm（≥ 8 mm）`
       sectionAlertBanner = `
         <div class="pt-proactive-banner alert-nodule" style="margin-top: 10px">
           <div class="pt-proactive-main">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px">
-              <span class="pt-proactive-pill ${nm.lung_rads?.category === '4B' ? 'high' : 'medium'}">${icon('info')} 结节风险分层 · ${radsBadge}</span>
+              <span class="pt-proactive-pill medium">${icon('info')} 结节测量</span>
               <span class="muted small">${radsDesc}</span>
             </div>
             <div style="font-weight: 600; font-size: 13.5px; color: #FDE68A; margin-bottom: 4px">
-              检出局灶性实性/亚实性结节 (长径 ${nm.longest_diameter_mm} mm)，符合 ${radsBadge} 特征
+              算法测得结节，长径 ${nm.longest_diameter_mm} mm
             </div>
             <div class="muted small" style="line-height: 1.5; color: var(--text-1)">
-              经 MONAI 3D 卷积体素网络测得病灶长径 ${nm.longest_diameter_mm} mm（三维体积 ${nm.total_volume_cm3 ?? '--'} cm³）。${radsRec}
+              量化记录：长径 ${nm.longest_diameter_mm} mm，三维体积 ${nm.total_volume_cm3 ?? '--'} cm³。上述所见需结合临床与实验室检查判断。
             </div>
           </div>
           <div class="pt-proactive-actions">
-            <button class="primary small-btn" data-generate-full-report="${anyNoduleRec.id}">${icon('report')} 一键生成全景诊断报告</button>
-            <button class="small-btn quiet" data-open-evidence="${anyNoduleRec.id}">${icon('evidence')} 查看多模态因果链</button>
+            <button class="primary small-btn" data-generate-full-report="${anyNoduleRec.id}">${icon('report')} 生成影像所见报告</button>
+            <button class="small-btn quiet" data-open-evidence="${anyNoduleRec.id}">${icon('evidence')} 查看指标对照</button>
           </div>
         </div>
       `
@@ -487,14 +487,14 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
                   </div>
                   <div class="pt-imaging-metrics">
                     ${data.model_id === 'recist_longitudinal_comparator' ? `
-                      <span class="pt-imaging-badge" style="background: rgba(16,185,129,0.18); color: #34D399; font-weight: 700">${icon('compare')} 随访疗效评定 (${esc(m.recist_category || 'RECIST')})</span>
+                      <span class="pt-imaging-badge" style="background: rgba(16,185,129,0.18); color: #34D399; font-weight: 700">${icon('compare')} 随访测量对比 · RECIST ${m.recist_category && m.recist_category !== 'NA' ? `${esc(m.recist_category)}（未经阅片确认）` : '不适用'}</span>
                       <span class="pt-imaging-pill ${m.recist_category === 'PR' || m.recist_category === 'CR' ? 'ok' : m.recist_category === 'PD' ? 'alert' : ''}">长径变化: ${m.percent_change_ld > 0 ? `+${m.percent_change_ld}%` : `${m.percent_change_ld}%`}</span>
                       <span class="pt-imaging-pill">体积变化: ${m.percent_change_volume > 0 ? `+${m.percent_change_volume}%` : `${m.percent_change_volume}%`}</span>
                       ${m.vdt ? `<span class="pt-imaging-pill ${m.vdt.clinical_alert ? 'alert' : 'ok'}">VDT: ${m.vdt.days !== null ? `${m.vdt.days} 天` : esc(m.vdt.label)}</span>` : ''}
                     ` : isBronchiectasis ? `
-                      ${m.bar_ratio ? `<span class="pt-imaging-pill ${m.signet_ring_sign ? 'alert' : 'ok'}">BAR 印戒征: ${m.bar_ratio}${m.signet_ring_sign ? ' (阳性)' : ''}</span>` : ''}
+                      ${m.bar_ratio ? `<span class="pt-imaging-pill ${m.signet_ring_sign ? 'alert' : 'ok'}">BAR: ${m.bar_ratio}${m.signet_ring_sign ? '（> 1.10）' : ''}</span>` : ''}
                       ${m.total_mucus_volume_cm3 !== undefined ? `<span class="pt-imaging-pill">粘液栓体积: ${m.total_mucus_volume_cm3} cm³</span>` : ''}
-                      ${m.high_attenuation_mucus_cm3 ? `<span class="pt-imaging-pill alert">高密度粘液栓 HAM: ${m.high_attenuation_mucus_cm3} cm³ (ABPA疑诊)</span>` : ''}
+                      ${m.high_attenuation_mucus_cm3 ? `<span class="pt-imaging-pill alert">高密度粘液栓: ${m.high_attenuation_mucus_cm3} cm³</span>` : ''}
                       ${m.airway_occlusion_rate_pct !== undefined ? `<span class="pt-imaging-pill">管腔阻塞率: ${m.airway_occlusion_rate_pct}%</span>` : ''}
                       ${m.wall_to_lumen_ratio ? `<span class="pt-imaging-pill">管壁/管腔比: ${m.wall_to_lumen_ratio}</span>` : ''}
                       ${m.primary_location || m.distribution_summary ? `
@@ -508,12 +508,11 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
                       ` : ''}
                     ` : `
                       ${m.has_lesion === false || (m.longest_diameter_mm === 0) ? `
-                        <span class="pt-imaging-pill ok">Lung-RADS 1 类 (阴性/无活动性结节)</span>
+                        <span class="pt-imaging-pill ok">算法未检出可测量结节</span>
                       ` : `
                         ${m.nodule_type_zh ? `<span class="pt-imaging-badge" style="background: rgba(147, 51, 234, 0.15); color: #c084fc; border: 1px solid rgba(147, 51, 234, 0.3)">${esc(m.nodule_type_zh)}</span>` : ''}
-                        ${m.lung_rads ? `<span class="pt-imaging-pill ${m.lung_rads.category === '4B' || m.lung_rads.category === '4A' ? 'alert' : 'ok'}">${esc(m.lung_rads.name)}</span>` : ''}
-                        ${m.longest_diameter_mm ? `<span class="pt-imaging-pill alert">RECIST 1.1 长径: ${m.longest_diameter_mm} mm</span>` : ''}
-                        ${m.solid_core_diameter_mm ? `<span class="pt-imaging-pill" style="border-color: rgba(251, 146, 60, 0.4); color: #fb923c">实性核心: ${m.solid_core_diameter_mm} mm${m.consolidation_tumor_ratio ? ` (CTR ${Math.round(m.consolidation_tumor_ratio * 100)}%)` : ''}</span>` : ''}
+                        ${m.longest_diameter_mm ? `<span class="pt-imaging-pill alert">长径: ${m.longest_diameter_mm} mm</span>` : ''}
+                        ${m.solid_core_diameter_mm ? `<span class="pt-imaging-pill" style="border-color: rgba(251, 146, 60, 0.4); color: #fb923c">实性核心: ${m.solid_core_diameter_mm} mm${typeof m.consolidation_tumor_ratio === 'number' ? ` (CTR ${Math.round(m.consolidation_tumor_ratio * 100)}%)` : ''}</span>` : ''}
                         ${m.short_axis_mm ? `<span class="pt-imaging-pill">短径: ${m.short_axis_mm} mm</span>` : ''}
                         ${m.total_volume_cm3 ? `<span class="pt-imaging-pill">3D 体积: ${m.total_volume_cm3} cm³</span>` : ''}
                         ${m.key_slice_index !== undefined ? `<span class="pt-imaging-pill">最大截面: #${m.key_slice_index} 层</span>` : ''}
@@ -522,7 +521,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
                   </div>
                   ${r.extraction_note ? `<div class="pt-imaging-note muted small">${esc(r.extraction_note)}</div>` : ''}
                   <div class="pt-imaging-actions">
-                    <button class="primary small-btn" data-generate-full-report="${r.id}" title="一键生成三甲医院标准四段式全景影像多模态诊断报告（含 3D 定量、RECIST 1.1、化验因果链，并支持存入病历与打印导出）">${icon('report')} 全景诊断报告</button>
+                    <button class="primary small-btn" data-generate-full-report="${r.id}" title="生成影像量化所见报告（只列实测值与相关化验，不含诊断结论；AI 生成的存为待医生确认的草稿）">${icon('report')} 影像所见报告</button>
                     ${data.model_id !== 'recist_longitudinal_comparator' ? `<button class="small-btn quiet" data-open-mpr="${r.id}" title="打开 3D 多平面重建 (MPR) 互动浏览器：实时滑动轴位/冠状位/矢状位连续切片、切换窗宽窗位并定位病灶">${icon('mpr')} 3D 切片 (MPR)</button>` : ''}
                     <button class="small-btn quiet" data-open-evidence="${r.id}" title="查看多模态因果诊断链 (影像 + 化验 + 病史)">${icon('evidence')} 因果诊断链</button>
                     <button class="small-btn quiet" data-export-standard="${r.id}" title="导出 HL7 FHIR 或 DICOM SR 标准医学交换格式">${icon('download')} 导出标准数据</button>
@@ -545,13 +544,32 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         <table class="users"><thead><tr><th>报告日期</th><th>类型</th><th>标题</th><th>状态</th><th></th></tr></thead><tbody>
           ${otherRecords.map(r => `<tr data-rec="${r.id}"><td>${esc(r.report_date ?? '—')}</td><td>${esc(KIND[r.kind] ?? r.kind)}</td>
             <td>${esc(r.title)}${r.extraction_note ? `<div class="muted small">${esc(r.extraction_note)}</div>` : ''}</td>
-            <td><span class="pill ${r.status === 'confirmed' ? 'ok' : 'off'}">${STATUS[r.status]}</span> <span class="muted small">${EXTRACT[r.extraction ?? ''] ?? ''}</span></td>
+            <td><span class="pill ${r.status === 'confirmed' ? 'ok' : 'off'}">${STATUS[r.status]}</span>${aiDraftBadge(r)} <span class="muted small">${EXTRACT[r.extraction ?? ''] ?? ''}</span></td>
             <td class="actions">${r.file_id ? `<button data-file="${r.file_id}">原件</button>` : ''}</td></tr>`).join('')}
         </tbody></table>
       </div>
     ` : ''
 
     return imagingHtml + otherHtml
+  }
+
+  /** 待确认页：展开 AI 报告草稿时载入全文（只载入一次） */
+  document.addEventListener('toggle', e => {
+    const box = e.target as HTMLElement
+    if (!(box instanceof HTMLDetailsElement) || !box.open || !box.dataset.aiPreview || box.dataset.loaded) return
+    const body = box.querySelector<HTMLElement>('.pt-ai-preview-body')
+    const pid = current
+    if (!body || !pid) return
+    box.dataset.loaded = '1'
+    api<{ text: string | null }>(`/api/patients/${pid}/records/${box.dataset.aiPreview}/text`)
+      .then(r => { body.textContent = r.text ?? '（这份报告没有文字内容）' })
+      .catch(err => { body.textContent = `载入失败：${(err as Error).message}`; delete box.dataset.loaded })
+  }, true)
+
+  /** AI 生成的报告草稿标识：须医生本人确认后才进入病历（AI 不能确认） */
+  function aiDraftBadge(r: RecordRow): string {
+    if (r.origin !== 'ai_report') return ''
+    return r.status === 'pending' ? ' <span class="pill warn" title="AI 生成的报告草稿，须医生本人核对后确认">AI 草稿 · 待医生确认</span>' : ' <span class="pill" title="AI 生成、已由医生确认">AI 生成</span>'
   }
 
   function reviewView(d: Detail, labs: Lab[], canEdit: boolean): string {
@@ -564,9 +582,13 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       return `<div class="pt-review" data-rec="${r.id}">
         <div class="pt-review-file">${r.file_id ? `<iframe title="原件" src="${fileUrl(r.file_id)}"></iframe><a href="${fileUrl(r.file_id)}" target="_blank" rel="noreferrer" class="small">在新标签页打开原件</a>` : ''}</div>
         <div class="pt-review-data">
-          <div class="row"><b>${esc(r.title)}</b><span class="muted small">${esc(KIND[r.kind] ?? r.kind)}</span><span class="grow"></span>
+          <div class="row"><b>${esc(r.title)}</b>${aiDraftBadge(r)}<span class="muted small">${esc(KIND[r.kind] ?? r.kind)}</span><span class="grow"></span>
             <label class="small">报告日期 <input type="date" class="pt-date" value="${esc(r.report_date ?? '')}" ${canEdit ? '' : 'disabled'}></label></div>
           ${busy ? '<div class="muted">正在提取，稍候…</div>' : r.extraction_note ? `<div class="muted small">${esc(r.extraction_note)}</div>` : ''}
+          ${r.origin === 'ai_report' ? `<details class="pt-ai-preview" data-ai-preview="${r.id}">
+            <summary><span class="pill warn">AI 草稿 · 待医生确认</span> 展开查看全文（确认或驳回前请核对）</summary>
+            <div class="pt-ai-preview-body" style="white-space: pre-wrap; font-size: 12.5px; line-height: 1.6; max-height: 480px; overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 6px; margin-top: 6px">正在载入…</div>
+          </details>` : ''}
           ${rows.length ? `<table class="chart-grid pt-edit"><thead><tr><th>项目</th><th>结果</th><th>单位</th><th>参考低</th><th>参考高</th><th>页</th><th></th></tr></thead><tbody>
             ${rows.map(l => `<tr data-lab="${l.id}" class="${l.locator?.verified === false ? 'pt-unverified' : ''}">
               <td><input data-f="test_name" value="${esc(l.test_name)}" ${canEdit ? '' : 'disabled'}></td><td><input data-f="value" value="${esc(value(l))}" ${canEdit ? '' : 'disabled'}></td>
@@ -655,9 +677,9 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       }
       promptText += `\n【核心量化指标】\n`
       if (isBronchiectasis) {
-        if (m.bar_ratio) promptText += `- 支气管-伴行动脉比 (BAR): ${m.bar_ratio} (${m.signet_ring_sign ? '印戒征阳性，确诊支气管扩张' : '正常'})\n`
+        if (m.bar_ratio) promptText += `- 支气管-伴行动脉比 (BAR): ${m.bar_ratio} (${m.signet_ring_sign ? '> 1.10' : '≤ 1.10'})\n`
         if (m.total_mucus_volume_cm3 !== undefined) promptText += `- 气道粘液栓总体积: ${m.total_mucus_volume_cm3} cm³\n`
-        if (m.high_attenuation_mucus_cm3) promptText += `- 高密度粘液栓 (HAM) 体积: ${m.high_attenuation_mucus_cm3} cm³ (强烈提示变应性支气管肺曲霉病 ABPA 疑诊)\n`
+        if (m.high_attenuation_mucus_cm3) promptText += `- 高密度粘液栓 (HAM) 体积: ${m.high_attenuation_mucus_cm3} cm³\n`
         if (m.airway_occlusion_rate_pct !== undefined) promptText += `- 气道管腔阻塞率: ${m.airway_occlusion_rate_pct}%\n`
         if (m.wall_to_lumen_ratio) promptText += `- 管壁增厚比 (Wall/Lumen): ${m.wall_to_lumen_ratio}\n`
         if (m.primary_location) promptText += `- 粘液栓主要解剖位置: ${m.primary_location}\n`
@@ -713,9 +735,9 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       }
       promptText += `\n【核心量化指标】\n`
       if (isBronchiectasis) {
-        if (m.bar_ratio) promptText += `- BAR 印戒征比值: ${m.bar_ratio} (${m.signet_ring_sign ? '确诊支气管扩张' : '正常'})\n`
+        if (m.bar_ratio) promptText += `- BAR 印戒征比值: ${m.bar_ratio} (${m.signet_ring_sign ? '> 1.10' : '≤ 1.10'})\n`
         if (m.total_mucus_volume_cm3 !== undefined) promptText += `- 气道粘液栓总体积: ${m.total_mucus_volume_cm3} cm³ (阻塞率: ${m.airway_occlusion_rate_pct}%)\n`
-        if (m.high_attenuation_mucus_cm3) promptText += `- 高密度粘液栓 HAM: ${m.high_attenuation_mucus_cm3} cm³ (强烈提示变应性支气管肺曲霉病 ABPA)\n`
+        if (m.high_attenuation_mucus_cm3) promptText += `- 高密度粘液栓 HAM: ${m.high_attenuation_mucus_cm3} cm³\n`
         if (m.primary_location) promptText += `- 主要解剖部位: ${m.primary_location}\n`
         if (m.distribution_summary) promptText += `- 优势分布肺叶: ${m.distribution_summary}\n`
       } else {
@@ -727,7 +749,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       promptText += `1. 封面页：${d.code} 影像多学科会诊 (MDT)\n`
       promptText += `2. 临床指标与病灶测量页：三维容积、BAR 比值与管壁厚度对比\n`
       promptText += `3. 关键截面影像插图页：插入 /api/assets/${assetId || ''} 截面图并标注病灶解剖定位与阻塞率\n`
-      promptText += `4. MDT 诊疗与随访决策页：排痰引流 (ACT) 方案、ABPA 鉴别与后续影像复查时间点\n\n`
+      promptText += `4. 讨论要点页：只列影像所见与待讨论问题，不写诊断结论与治疗方案（由会诊医师填写）\n\n`
       promptText += `请使用 deck_edit 工具按此结构生成或修改幻灯片各页内容。`
 
       hooks.prefillChat(promptText)
@@ -801,15 +823,12 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       engine_type?: string
       body_part?: string
       is_ready?: boolean
+      unavailable_reason?: string | null
       compatible_samples?: string[]
-    }> = modelsData.models || []
-
-    const dlModels = modelsList.filter(m => (m.engine_type || 'deep_learning') !== 'quantitative_ct')
-    const qcModels = modelsList.filter(m => m.engine_type === 'quantitative_ct')
+    }> = [...(modelsData.models || []), ...(modelsData.planned_models || [])]
 
     const renderOption = (m: any, isSelected: boolean) => {
       const ready = m.is_ready !== false
-      const engineTag = m.engine_type === 'quantitative_ct' ? '[物理测量]' : '[深度学习]'
       const modalityTag = `[${esc(m.modality || 'CT')}]`
       const selectedAttr = isSelected ? 'selected' : ''
       const disabledAttr = !ready ? 'disabled style="color: var(--text-muted)"' : ''
@@ -820,10 +839,11 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           data-window="${esc(m.recommended_window || 'lung')}"
           data-target="${esc(m.target || '')}"
           data-ready="${ready ? 'true' : 'false'}"
+          data-reason="${esc(m.unavailable_reason || '')}"
           data-samples="${esc((m.compatible_samples || []).join(','))}"
           ${selectedAttr}
           ${disabledAttr}>
-          ${esc(m.name)} ${modalityTag} ${engineTag}${!ready ? ' (权重待部署)' : ''}
+          ${esc(m.name)} ${modalityTag} ${esc(modelOptionTag(m))}
         </option>`
     }
 
@@ -870,36 +890,18 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
               返回上传本地文件
             </button>
           </div>
-          <select id="imgSampleSelect" class="pt-dlg-select" style="width: 100%; padding: 7px 10px">
+          <select id="imgSampleSelect" class="pt-dlg-select" style="width: 100%; padding: 7px 10px" ${samples.length ? '' : 'disabled'}>
             ${samples.length ? samples.map((s, idx) => `
-              <option value="${esc(s.id)}" ${s.id === 'chest_lung_ct' || idx === 0 ? 'selected' : ''}>
+              <option value="${esc(s.id)}" ${idx === 0 ? 'selected' : ''}>
                 ${esc(s.name)} [${esc(s.modality)}] ${s.size_mb ? `(${s.size_mb} MB)` : ''}
               </option>
-            `).join('') : `
-              <option value="chest_lung_ct" selected>全胸部 HRCT 扫描 (269层 512x512，83.6MB)</option>
-              <option value="lidc_lung_nodule_ct">LIDC 肺孤立性结节 CT (133层 512x512，36.2MB)</option>
-              <option value="copd_emphysema_ct">慢阻肺 COPD 吸气相 HRCT (350层 350x350，30.6MB)</option>
-              <option value="liver_tumor_ct">肝脏肿瘤强化 CT (588层 512x512，207.6MB)</option>
-              <option value="spleen_test">腹部增强 CT 扫描 (96层 512x512，29.6MB)</option>
-              <option value="cardiac_heart_mri">左心房高分辨心脏 MRI (130层 320x320，14.8MB)</option>
-              <option value="brats_brain_mri">BraTS 脑胶质瘤多模态 MRI (155层 240x240，9.4MB)</option>
-              <option value="hippocampus_brain_mri">海马区脑高分辨 MRI (37层 36x57，0.1MB)</option>
-              <option value="prostate_mri">前列腺 T2 加权 MRI (19层 320x320，3.4MB)</option>
-            `}
+            `).join('') : '<option value="" selected>影像服务没有列出可用的演示样本</option>'}
           </select>
-          <div class="pt-sample-chips" style="margin-top: 8px">
+          ${samples.length ? `<div class="pt-sample-chips" style="margin-top: 8px">
             <span class="muted small">快捷选择：</span>
-            <button type="button" class="pt-sample-chip active" data-sid="chest_lung_ct">${icon('lung', { size: 12 })} 全胸部 HRCT</button>
-            <button type="button" class="pt-sample-chip" data-sid="lidc_lung_nodule_ct">${icon('lung', { size: 12 })} LIDC 肺结节 CT</button>
-            <button type="button" class="pt-sample-chip" data-sid="copd_emphysema_ct">${icon('lung', { size: 12 })} 慢阻肺 COPD</button>
-            <button type="button" class="pt-sample-chip" data-sid="liver_tumor_ct">${icon('abdomen', { size: 12 })} 肝脏肿瘤 CT</button>
-            <button type="button" class="pt-sample-chip" data-sid="spleen_test">${icon('abdomen', { size: 12 })} 腹部增强 CT</button>
-            <button type="button" class="pt-sample-chip" data-sid="cardiac_heart_mri">${icon('scan', { size: 12 })} 心脏 MRI</button>
-            <button type="button" class="pt-sample-chip" data-sid="brats_brain_mri">${icon('brain', { size: 12 })} BraTS 脑胶质瘤</button>
-            <button type="button" class="pt-sample-chip" data-sid="hippocampus_brain_mri">${icon('brain', { size: 12 })} 海马区 MRI</button>
-            <button type="button" class="pt-sample-chip" data-sid="prostate_mri">${icon('scan', { size: 12 })} 前列腺 T2-MRI</button>
-          </div>
-          <div class="muted small" style="margin-top: 6px; font-size: 11.5px">预置真实临床三维体素扫描数据。系统将完整 3D 原始体素序列加密归档至该患者档案。</div>
+            ${samples.slice(0, 9).map((s, idx) => `<button type="button" class="pt-sample-chip${idx === 0 ? ' active' : ''}" data-sid="${esc(s.id)}">${icon('scan', { size: 12 })} ${esc(s.name)}</button>`).join('')}
+          </div>` : ''}
+          <div class="muted small" style="margin-top: 6px; font-size: 11.5px">演示样本是公开数据集影像，不是该患者的影像；分析记录会标注「演示样本」。</div>
         </div>
       </div>
 
@@ -930,12 +932,12 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           <div>
             <label class="small muted">支气管-伴行动脉比 (BAR) 扩张切点</label>
             <input type="number" id="imgBarCutoff" step="0.05" value="1.10" style="width: 100%; padding: 4px 6px">
-            <span class="muted small" style="font-size: 11px">参考值: &gt;1.10 确诊印戒征扩张</span>
+            <span class="muted small" style="font-size: 11px">阈值: &gt; 1.10（Fleischner）</span>
           </div>
           <div>
             <label class="small muted">高密度粘液栓 (HAM) CT 阈值 (HU)</label>
             <input type="number" id="imgHamThreshold" step="5" value="70.0" style="width: 100%; padding: 4px 6px">
-            <span class="muted small" style="font-size: 11px">参考值: &ge;70 HU 强烈提示 ABPA</span>
+            <span class="muted small" style="font-size: 11px">阈值: &ge; 70 HU（高密度粘液栓定义）</span>
           </div>
           <div>
             <label class="small muted">常规粘液栓 CT 阈值范围 (HU)</label>
@@ -1007,13 +1009,12 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
       if (win && windowSelect) windowSelect.value = win
 
-      const engineBadge = engine === 'quantitative_ct'
-        ? `<span class="pt-imaging-badge" style="background: rgba(147, 51, 234, 0.15); color: #c084fc; border: 1px solid rgba(147, 51, 234, 0.3)">定量物理测量</span>`
-        : `<span class="pt-imaging-badge" style="background: rgba(16, 185, 129, 0.18); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3)">深度学习</span>`
+      // 按 worker 返回的 engine_type 如实显示三类：深度学习 / 定量 CT / 规则算法
+      const engineBadge = `<span class="pt-imaging-badge" style="${ENGINE_STYLE[engine ?? ''] ?? ''}">${esc(ENGINE_LABEL[engine ?? ''] ?? '类型未标注')}</span>`
 
       const readyBadge = ready
-        ? `<span class="pt-imaging-badge" style="background: rgba(56, 189, 248, 0.12); color: var(--blue)">算法权重已就绪</span>`
-        : `<span class="pt-imaging-badge alert" style="background: rgba(239, 68, 68, 0.15); color: #ef4444">算法待安装</span>`
+        ? `<span class="pt-imaging-badge" style="background: rgba(56, 189, 248, 0.12); color: var(--blue)">可用</span>`
+        : `<span class="pt-imaging-badge alert" style="background: rgba(239, 68, 68, 0.15); color: #ef4444">不可用：${esc(opt.dataset.reason || '未就绪')}</span>`
 
       if (modelDesc) {
         modelDesc.innerHTML = `
@@ -1037,7 +1038,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
     const filterModelsForSample = () => {
       const isUpload = currentSourceMode === 'upload'
-      const sid = isUpload ? null : (sampleSelect ? sampleSelect.value : 'chest_lung_ct')
+      const sid = isUpload ? null : (sampleSelect?.value || null)
       const uploadedFile = fileInputEl?.files?.[0]
       const fn = uploadedFile?.name?.toLowerCase() || ''
 
@@ -1132,21 +1133,14 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       }
       if (!preferredModelId && filtered.length > 0 && filtered[0]) preferredModelId = filtered[0].id
 
-      // Separate into quantitative and deep learning
-      const qc = filtered.filter(m => m.engine_type === 'quantitative_ct')
-      const dl = filtered.filter(m => (m.engine_type || 'deep_learning') !== 'quantitative_ct')
-
+      // 按引擎类型分组：规则算法 / 定量 CT / 深度学习；其它类型单列
       let html = ''
-      if (qc.length > 0) {
-        html += `<optgroup label="定量放射学物理测量 (几何拓扑与阈值)">`
-        html += qc.map(m => renderOption(m, m.id === preferredModelId)).join('')
-        html += `</optgroup>`
+      for (const [type, label] of Object.entries(ENGINE_GROUP)) {
+        const group = filtered.filter(m => (m.engine_type ?? '') === type)
+        if (group.length) html += `<optgroup label="${label}">${group.map(m => renderOption(m, m.id === preferredModelId)).join('')}</optgroup>`
       }
-      if (dl.length > 0) {
-        html += `<optgroup label="MONAI 深度学习模型 (PyTorch 神经架构)">`
-        html += dl.map(m => renderOption(m, m.id === preferredModelId)).join('')
-        html += `</optgroup>`
-      }
+      const other = filtered.filter(m => !ENGINE_GROUP[m.engine_type ?? ''])
+      if (other.length) html += `<optgroup label="类型未标注">${other.map(m => renderOption(m, m.id === preferredModelId)).join('')}</optgroup>`
       if (!html && filtered.length > 0) {
         html = filtered.map(m => renderOption(m, m.id === preferredModelId)).join('')
       }
@@ -1386,12 +1380,8 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     const modelName = imgData.model_id || imgData.model_name || (r?.title?.includes('支气管') ? 'bronchiectasis_mucus_analyzer' : undefined)
     const rawFileId = imgData.raw_file_id || r?.file_id
     const isPatientRealScan = Boolean(patientId && r && (rawFileId || r.id))
-    let sampleId = imgData.sample_id || 'chest_lung_ct'
-    const rawName = imgData.raw_file_name || r?.title || ''
-    if (!isPatientRealScan) {
-      if (rawName.includes('spleen')) sampleId = 'spleen_test'
-      else if (rawName.includes('prostate')) sampleId = 'prostate_mri'
-    }
+    // 只用记录里真实的样本 ID，不按文件名猜、不用默认演示样本
+    const sampleId: string = imgData.sample_id || ''
 
     let mprInfo: any = null
     try {
@@ -1400,7 +1390,8 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         qParams.set('patient_id', patientId)
         if (r?.id) qParams.set('record_id', r.id)
         if (rawFileId) qParams.set('file_id', rawFileId)
-      } else {
+        if (sampleId) qParams.set('sample_id', sampleId)
+      } else if (sampleId) {
         qParams.set('sample_id', sampleId)
       }
       if (modelName) qParams.set('model_name', modelName)
@@ -1410,8 +1401,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       if (bodyEl) {
         bodyEl.innerHTML = `
           <div style="padding: 24px; text-align: center; color: #FCA5A5">
-            <p>无法连接 3D 影像切片服务：${esc(err.message || '服务离线')}</p>
-            <p class="muted small" style="margin-top: 8px">请确保 MONAI 影像计算节点在 8004 端口正常运行。</p>
+            <p>无法载入影像：${esc(err.message || '影像服务离线')}</p>
             <button class="primary small-btn" style="margin-top: 14px" data-close>关闭</button>
           </div>`
       }
@@ -1419,7 +1409,8 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     }
 
     const dims = mprInfo.dimensions || { z: 269, y: 512, x: 512 }
-    const voxelSpacing = mprInfo.voxel_spacing_mm || { dz: 1.25, dy: 0.898, dx: 0.898 }
+    // 没有体素间距时为 null：不用默认值换算（手动测量以像素显示）
+    const voxelSpacing: VoxelSpacing | null = mprInfo.voxel_spacing_mm || null
     const planes: Record<string, { total_slices: number; default_slice: number; label: string }> = mprInfo.planes || {
       axial: { total_slices: dims.z, default_slice: Math.floor(dims.z / 2), label: '轴位 (Axial)' },
       coronal: { total_slices: dims.y, default_slice: Math.floor(dims.y / 2), label: '冠状位 (Coronal)' },
@@ -1509,7 +1500,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           <div class="pt-mpr-sidebar-section" style="margin-top: auto; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px">
             <div class="pt-mpr-sidebar-title">报告插图与资产沉淀</div>
             <button class="primary small-btn" id="mprSaveAssetBtn" style="width: 100%" title="保存当前 MPR 正交切片为平台资产并生成 Markdown 引用">${icon('save')} 保存切片为文档资产</button>
-            <button class="small-btn quiet" id="mprGenReportBtn" style="margin-top: 6px; width: 100%; border: 1px solid rgba(45,212,191,0.35); color: var(--teal)" title="聚合当前病灶参数、窗宽窗位与切片截图，一键生成规范放射学诊断报告草案并可落库为正式病历">${icon('report')} 一键生成放射诊断报告</button>
+            <button class="small-btn quiet" id="mprGenReportBtn" style="margin-top: 6px; width: 100%; border: 1px solid rgba(45,212,191,0.35); color: var(--teal)" title="汇总当前病灶测值、窗宽窗位与切片截图，生成影像所见草稿（不含诊断结论）">${icon('report')} 生成影像所见草稿</button>
             <div id="mprSaveNotice" class="muted small" style="display: none; margin-top: 6px; word-break: break-all"></div>
           </div>
         </div>
@@ -1532,7 +1523,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
             </div>
             <div class="pt-mpr-hud-right" id="mprHudRight">
               ${esc(mprInfo.modality || 'CT')}<br>
-              Voxel: ${voxelSpacing.dx}×${voxelSpacing.dy}×${voxelSpacing.dz} mm
+              ${voxelSpacing ? `Voxel: ${voxelSpacing.dx}×${voxelSpacing.dy}×${voxelSpacing.dz} mm` : NO_SPACING_NOTE}
             </div>
             <div class="pt-mpr-hud-bottom">
               鼠标滚轮上下滚动或按键盘 ↑/↓ 即可连贯浏览连续切片
@@ -1589,7 +1580,8 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       y1: number
       x2: number
       y2: number
-      distanceMm: number
+      /** 有间距时为 mm，否则为 px */
+      measure: Measure
     }
 
     interface RoiAnnot {
@@ -1598,36 +1590,23 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       y1: number
       x2: number
       y2: number
-      areaMm2: number
+      /** 有间距时为 mm²，否则为 px² */
+      measure: Measure
     }
 
     type AnnotItem = CaliperAnnot | RoiAnnot
     const sliceAnnotations = new Map<string, AnnotItem[]>()
     const annotKey = (plane: string, slice: number) => `${plane}:${slice}`
 
-    function getSpacing(): { hSp: number; vSp: number } {
+    function getSpacing(): Spacing | null {
       const curData = sliceCache.get(`${sampleId}:${currentPlane}:${currentSlice}:${currentWindow}:${overlayMask}`)
-      let hSp = curData?.pixel_spacing_mm?.horizontal
-      let vSp = curData?.pixel_spacing_mm?.vertical
-      if (!hSp || !vSp) {
-        if (currentPlane === 'axial') {
-          hSp = voxelSpacing.dx || 0.75
-          vSp = voxelSpacing.dy || 0.75
-        } else if (currentPlane === 'coronal') {
-          hSp = voxelSpacing.dx || 0.75
-          vSp = voxelSpacing.dz || 0.75
-        } else {
-          hSp = voxelSpacing.dy || 0.75
-          vSp = voxelSpacing.dz || 0.75
-        }
-      }
-      return { hSp: Number(hSp) || 0.75, vSp: Number(vSp) || 0.75 }
+      return planeSpacing(curData?.pixel_spacing_mm, voxelSpacing, currentPlane as Plane)
     }
 
     function drawAnnotItem(ctx: CanvasRenderingContext2D, item: AnnotItem): void {
       ctx.save()
       if (item.type === 'caliper') {
-        const { x1, y1, x2, y2, distanceMm } = item
+        const { x1, y1, x2, y2, measure } = item
         const dx = x2 - x1
         const dy = y2 - y1
         const len = Math.hypot(dx, dy)
@@ -1654,7 +1633,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
         const midX = (x1 + x2) / 2
         const midY = (y1 + y2) / 2
-        const text = `LD: ${distanceMm.toFixed(1)} mm`
+        const text = `LD: ${formatMeasure(measure)}`
         ctx.font = 'bold 12px monospace, sans-serif'
         const textMetrics = ctx.measureText(text)
         const padX = 6
@@ -1681,7 +1660,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         ctx.textBaseline = 'middle'
         ctx.fillText(text, midX, by + boxH / 2)
       } else if (item.type === 'roi') {
-        const { x1, y1, x2, y2, areaMm2 } = item
+        const { x1, y1, x2, y2, measure } = item
         const rx = Math.min(x1, x2)
         const ry = Math.min(y1, y2)
         const rw = Math.abs(x2 - x1)
@@ -1699,8 +1678,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         ctx.stroke()
         ctx.setLineDash([])
 
-        const cmText = areaMm2 >= 100 ? ` (${(areaMm2 / 100).toFixed(2)} cm²)` : ''
-        const text = `ROI: ${areaMm2.toFixed(1)} mm²${cmText}`
+        const text = `ROI: ${formatMeasure(measure)}`
         ctx.font = 'bold 12px monospace, sans-serif'
         const textMetrics = ctx.measureText(text)
         const padX = 6
@@ -1752,8 +1730,8 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       }
       const parts: string[] = []
       for (const it of items) {
-        if (it.type === 'caliper') parts.push(`卡尺: ${it.distanceMm}mm`)
-        else if (it.type === 'roi') parts.push(`ROI: ${it.areaMm2}mm²`)
+        if (it.type === 'caliper') parts.push(`卡尺: ${formatMeasure(it.measure)}`)
+        else if (it.type === 'roi') parts.push(`ROI: ${formatMeasure(it.measure)}`)
       }
       measureSummary.textContent = parts.join(' | ')
     }
@@ -1779,29 +1757,12 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       if (!isDrawing || currentTool === 'browse') return
       ev.preventDefault()
       const { x, y } = getCanvasCoords(ev)
-      const { hSp, vSp } = getSpacing()
+      const sp = getSpacing()
 
       if (currentTool === 'caliper') {
-        const distMm = Math.hypot((x - dragStart.x) * hSp, (y - dragStart.y) * vSp)
-        redrawCanvas({
-          type: 'caliper',
-          x1: dragStart.x,
-          y1: dragStart.y,
-          x2: x,
-          y2: y,
-          distanceMm: Math.round(distMm * 10) / 10,
-        })
+        redrawCanvas({ type: 'caliper', x1: dragStart.x, y1: dragStart.y, x2: x, y2: y, measure: caliperMeasure(x - dragStart.x, y - dragStart.y, sp) })
       } else if (currentTool === 'roi') {
-        const wMm = Math.abs(x - dragStart.x) * hSp
-        const hMm = Math.abs(y - dragStart.y) * vSp
-        redrawCanvas({
-          type: 'roi',
-          x1: dragStart.x,
-          y1: dragStart.y,
-          x2: x,
-          y2: y,
-          areaMm2: Math.round(wMm * hMm * 10) / 10,
-        })
+        redrawCanvas({ type: 'roi', x1: dragStart.x, y1: dragStart.y, x2: x, y2: y, measure: roiMeasure(x - dragStart.x, y - dragStart.y, sp) })
       }
     })
 
@@ -1816,36 +1777,20 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       if (!isDrawing || currentTool === 'browse') return
       isDrawing = false
       const { x, y } = getCanvasCoords(ev)
-      const { hSp, vSp } = getSpacing()
+      const sp = getSpacing()
       const key = annotKey(currentPlane, currentSlice)
       const existing = sliceAnnotations.get(key) || []
 
       if (currentTool === 'caliper') {
-        const distMm = Math.hypot((x - dragStart.x) * hSp, (y - dragStart.y) * vSp)
-        if (distMm >= 1.5) {
-          existing.push({
-            type: 'caliper',
-            x1: dragStart.x,
-            y1: dragStart.y,
-            x2: x,
-            y2: y,
-            distanceMm: Math.round(distMm * 10) / 10,
-          })
+        const measure = caliperMeasure(x - dragStart.x, y - dragStart.y, sp)
+        if (largeEnough(measure)) {
+          existing.push({ type: 'caliper', x1: dragStart.x, y1: dragStart.y, x2: x, y2: y, measure })
           sliceAnnotations.set(key, existing)
         }
       } else if (currentTool === 'roi') {
-        const wMm = Math.abs(x - dragStart.x) * hSp
-        const hMm = Math.abs(y - dragStart.y) * vSp
-        const area = wMm * hMm
-        if (area >= 4.0) {
-          existing.push({
-            type: 'roi',
-            x1: dragStart.x,
-            y1: dragStart.y,
-            x2: x,
-            y2: y,
-            areaMm2: Math.round(area * 10) / 10,
-          })
+        const measure = roiMeasure(x - dragStart.x, y - dragStart.y, sp)
+        if (largeEnough(measure)) {
+          existing.push({ type: 'roi', x1: dragStart.x, y1: dragStart.y, x2: x, y2: y, measure })
           sliceAnnotations.set(key, existing)
         }
       }
@@ -1969,15 +1914,18 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       const planeMap: Record<string, string> = { axial: 'AXIAL (轴位)', coronal: 'CORONAL (冠状位)', sagittal: 'SAGITTAL (矢状位)' }
       hudLeft.innerHTML = `MPR // ${planeMap[currentPlane] || currentPlane.toUpperCase()}<br>Slice #${data.slice_index} / ${data.total_slices}<br>${esc(data.window?.preset || currentWindow).toUpperCase()} WIN`
 
-      const hSp = data.pixel_spacing_mm?.horizontal || voxelSpacing.dx
-      const vSp = data.pixel_spacing_mm?.vertical || voxelSpacing.dz
-      const lesionArea = data.lesion_area_mm2 !== undefined ? data.lesion_area_mm2 : Math.round((data.lesion_pixel_count || 0) * hSp * vSp * 10) / 10
+      // 病灶面积：worker 给了 mm² 就用；否则只有有间距时才换算，没有间距时以像素显示
+      const sp = planeSpacing(data.pixel_spacing_mm, voxelSpacing, currentPlane as Plane)
+      const lesionMeasure: Measure = data.lesion_area_mm2 !== undefined && data.lesion_area_mm2 !== null
+        ? { value: Number(data.lesion_area_mm2), unit: 'mm²' }
+        : roiMeasure(data.lesion_pixel_count || 0, 1, sp)
+      const lesionArea = formatMeasure(lesionMeasure)
 
-      hudRight.innerHTML = `512×512<br>Voxel: ${hSp}×${vSp} mm${lesionArea > 0 ? `<br><span style="color:#FCA5A5">病灶面积: ${lesionArea} mm²</span>` : ''}`
+      hudRight.innerHTML = `512×512<br>${sp ? `Pixel: ${sp.h}×${sp.v} mm` : NO_SPACING_NOTE}${lesionMeasure.value > 0 ? `<br><span style="color:#FCA5A5">病灶面积: ${lesionArea}</span>` : ''}`
 
       if (data.lesion_present && data.lesion_pixel_count > 0) {
         lesionBadge.className = 'pt-mpr-status-badge has-lesion'
-        lesionBadge.innerHTML = `${icon('target', { size: 12 })} 病灶检出 (${lesionArea} mm²)`
+        lesionBadge.innerHTML = `${icon('target', { size: 12 })} 病灶检出 (${lesionArea})`
       } else {
         lesionBadge.className = 'pt-mpr-status-badge no-lesion'
         lesionBadge.innerHTML = `无明显高密度病灶`
@@ -2184,7 +2132,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       }
     })
 
-    // 一键生成结构化放射学诊断报告草案
+    // 生成影像所见草稿（只列测值，不给诊断）
     const genReportBtn = dlg.querySelector('#mprGenReportBtn') as HTMLButtonElement
     genReportBtn?.addEventListener('click', async () => {
       // 1. 如果本次尚未手动保存任何切片，自动把当前层切片保存为资产，作为报告关键插图
@@ -2231,7 +2179,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           console.warn('Auto-save current slice for report failed', e)
         } finally {
           genReportBtn.disabled = false
-          genReportBtn.innerHTML = `${icon('report')} 一键生成放射诊断报告`
+          genReportBtn.innerHTML = `${icon('report')} 生成影像所见草稿`
         }
       }
 
@@ -2246,19 +2194,19 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
       const findingsList: string[] = []
       if (isBronch) {
-        if (m.bar_ratio) findingsList.push(`- **支气管-伴行动脉比 (BAR)**: ${m.bar_ratio} (${m.signet_ring_sign ? '印戒征阳性，提示支气管显著扩张' : '正常'})`)
+        if (m.bar_ratio) findingsList.push(`- **支气管-伴行动脉比 (BAR)**: ${m.bar_ratio} (${m.signet_ring_sign ? '> 1.10' : '≤ 1.10'})`)
         if (m.total_mucus_volume_cm3 !== undefined) findingsList.push(`- **支气管管腔粘液栓总体积**: ${m.total_mucus_volume_cm3} cm³`)
-        if (m.high_attenuation_mucus_cm3) findingsList.push(`- **高密度粘液栓 (HAM)**: ${m.high_attenuation_mucus_cm3} cm³ (CT 衰减值 > 70HU，提示曲霉定植或 ABPA)`)
+        if (m.high_attenuation_mucus_cm3) findingsList.push(`- **高密度粘液栓 (HAM)**: ${m.high_attenuation_mucus_cm3} cm³（CT 值 > 70 HU）`)
         if (m.airway_occlusion_rate_pct !== undefined) findingsList.push(`- **受累气道管腔平均阻塞率**: ${m.airway_occlusion_rate_pct}%`)
         if (m.primary_location) findingsList.push(`- **病灶解剖定位**: ${m.primary_location}`)
       } else {
-        if (m.longest_diameter_mm) findingsList.push(`- **RECIST 1.1 靶病灶最大横截面长径**: ${m.longest_diameter_mm} mm`)
+        if (m.longest_diameter_mm) findingsList.push(`- **靶病灶最大横截面长径**: ${m.longest_diameter_mm} mm`)
         if (m.short_axis_mm) findingsList.push(`- **最大横截面垂直短径**: ${m.short_axis_mm} mm`)
-        if (m.total_volume_cm3) findingsList.push(`- **3D 肿瘤总体积 (Volume)**: ${m.total_volume_cm3} cm³`)
+        if (m.total_volume_cm3) findingsList.push(`- **病灶三维体积**: ${m.total_volume_cm3} cm³`)
         if (m.key_slice_index !== undefined) findingsList.push(`- **靶病灶中心层号**: 第 #${m.key_slice_index} 层`)
       }
       if (curData && curData.lesion_present && curData.lesion_pixel_count > 0) {
-        findingsList.push(`- **当前浏览视口截面测量**: ${planeNameMap[currentPlane]} 第 #${currentSlice} 层，病灶检出截面积约为 ${Math.round((curData.lesion_pixel_count || 0) * (curData.pixel_spacing_mm?.horizontal || 1) * (curData.pixel_spacing_mm?.vertical || 1) * 10) / 10} mm²`)
+        findingsList.push(`- **当前浏览视口截面测量**: ${planeNameMap[currentPlane]} 第 #${currentSlice} 层，病灶截面积 ${formatMeasure(roiMeasure(curData.lesion_pixel_count || 0, 1, planeSpacing(curData.pixel_spacing_mm, voxelSpacing, currentPlane as Plane)))}`)
       }
 
       const manualFindings: string[] = []
@@ -2269,9 +2217,9 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         const pName = planeNameMap[pl] || pl
         for (const it of items) {
           if (it.type === 'caliper') {
-            manualFindings.push(`- **手动测距卡尺 (${pName} 第 #${sl} 层)**: 靶病灶直径 ${it.distanceMm} mm`)
+            manualFindings.push(`- **手动测距卡尺 (${pName} 第 #${sl} 层)**: 长度 ${formatMeasure(it.measure)}`)
           } else if (it.type === 'roi') {
-            manualFindings.push(`- **手动感兴趣区截面 (${pName} 第 #${sl} 层)**: 病灶截面积 ${it.areaMm2} mm² (${(it.areaMm2 / 100).toFixed(2)} cm²)`)
+            manualFindings.push(`- **手动感兴趣区截面 (${pName} 第 #${sl} 层)**: 面积 ${formatMeasure(it.measure)}`)
           }
         }
       }
@@ -2279,63 +2227,38 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         findingsList.push(...manualFindings)
       }
 
-      let impression = ''
-      let recommendations = ''
-      if (isBronch) {
-        impression = `1. 符合双肺多发性支气管扩张影像改变，以${m.primary_location || '双下肺'}为著；\n2. 支气管管腔内多发粘液栓嵌顿${m.high_attenuation_mucus_cm3 ? '，伴高密度粘液栓 (HAM)，高度提示变应性支气管肺曲霉病 (ABPA)' : ''}。`
-        recommendations = `1. 建议临床结合血常规嗜酸性粒细胞计数、血清总 IgE 与曲霉特异性 IgE (sIgE) 检查排查 ABPA；\n2. 建议规范气道廓清治疗，并于治疗 3 个月后复查胸部 HRCT 评估粘液栓吸收转归。`
-      } else {
-        const rads = m.lung_rads
-        if (m.has_lesion === false || m.longest_diameter_mm === 0 || (rads && rads.category === '1')) {
-          impression = `1. 胸部 CT 平扫未见确切活动性实质性占位（未检出 ≥ 3 mm 实质性肺结节）；\n2. 临床分级: ${rads?.name || 'Lung-RADS 1 类'} (阴性 / 无活动性结节，恶性风险 < 1%)。`
-          recommendations = `1. 遵照 Lung-RADS 1 类指引建议 12 个月后常规安排低剂量 CT (LDCT) 复查；\n2. 建议结合临床病史定期体检随访。`
-        } else {
-          impression = `1. ${r?.title || '肺实质局灶性结节'}，经 MONAI 3D 卷积体素量化网络测得长径约 ${m.longest_diameter_mm || '--'} mm，3D 体积约 ${m.total_volume_cm3 || '--'} cm³${rads ? `，符合 ${rads.name} (${rads.description})` : ''}；\n2. 鉴别诊断需结合炎性肉芽肿、错构瘤及早期浸润病变综合评估。`
-          recommendations = `1. ${rads?.recommendation || '建议呼吸/胸外科专科医师结合既往基线检查对比疗效评估；'}\n2. 后续复查建议利用双期 3D 刚性配准与差分吸收热力图动态追踪病灶消长；\n3. 影像 AI 测值仅供辅助参考，请以执业医师处方及临床处置方案为准。`
-        }
-      }
+      // 只写影像所见：不给诊断结论、分级与处置建议
+      const impression = '上述所见需结合临床与实验室检查判断。'
+      // 只写影像元数据里有的体素间距（没有时不写，不用默认值）
+      const spacingText = voxelSpacing ? `；体素间距 ${voxelSpacing.dx}×${voxelSpacing.dy}×${voxelSpacing.dz} mm` : `；${NO_SPACING_NOTE}，手动测量以像素记录`
 
-      if (manualFindings.length > 0) {
-        impression += `\n3. 经交互式测距卡尺与 ROI 复核，关键切片测值 (${manualFindings.map(n => n.replace(/^- \*\*|\*\*: /g, '')).join('; ')})，人工测量与深度学习分割高度印证。`
-      }
-
-      const reportMarkdown = `# 放射学结构化影像诊断报告草案
+      const reportMarkdown = `# 影像所见草稿
 
 **患者代号**: \`${esc(d.code)}\`  
-**性别**: ${d.sex === 'M' ? '男' : d.sex === 'F' ? '女' : '未知'} | **出生年份**: ${d.birth_year || '--'}  
+**性别**: ${d.sex === 'M' ? '男' : d.sex === 'F' ? '女' : '未记录'} | **出生年份**: ${d.birth_year || '--'}  
 **检查时间**: ${reportDate}  
-**检查序列与模态**: ${esc(modality)} (薄层连续扫描，矩阵 512×512，层厚间距 ${voxelSpacing.dx}×${voxelSpacing.dy}×${voxelSpacing.dz} mm)  
-**重建与视口技术**: 3D 多平面重建 (MPR)；主要观察窗: ${winNameMap[currentWindow] || currentWindow.toUpperCase()}  
+**模态**: ${esc(modality)}${spacingText}  
+**观察方式**: 多平面重建 (MPR)；观察窗 ${winNameMap[currentWindow] || currentWindow.toUpperCase()}  
 
 ---
 
 ### 一、 影像所见 (Findings)
-${findingsList.length > 0 ? findingsList.join('\n') : '- 肺实质未见明显活动性浸润影，各叶支气管通畅，未见明确占位征象。'}
+${findingsList.length > 0 ? findingsList.join('\n') : '- 该影像记录没有可用的量化测值。'}
 
 ---
 
-### 二、 关键切片影像图谱 (Key Slice Atlas)
+### 二、 关键切片 (Key Slices)
 ${savedSlices.map(s => `- **${esc(s.label)}**:\n  ${s.mdText}`).join('\n\n')}
 
 ---
 
-### 三、 诊断印象 (Impression)
+### 三、 说明
 ${impression}
 
----
-
-### 四、 临床建议 (Recommendations)
-${recommendations}
-
----
-
-> **医疗器械软件 (SaMD) 与临床合规声明 (Regulatory & Clinical Disclaimer)**:
-> 1. 本影像报告及相关三维体素量化测量（包括 RECIST 1.1 径线、Lung-RADS 评级、BAR 支气管伴行动脉比、粘液栓密度 HU 统计）均由 Heurion 医学影像 AI 算法与 MONAI 深度学习推理核心辅助生成；
-> 2. 本报告所载全部影像测量数据、临床评级及随访指引仅供具备合法资质的执业医师临床决策参考，不单独作为确定性疾病诊断依据，亦不构成任何直接用药处方或医疗干预方案；
-> 3. 最终临床诊断结论、用药方案与手术治疗决策必须由主管执业医师结合患者现场体征、组织病理金标准及全面临床病史综合审定、签字确认并负专业责任。
+> 本草稿只列出算法量化测值与手动测量值，不包含诊断结论与治疗建议，须由执业医师审阅。
 `
 
-      showRadiologyReportDraftDialog(patientId, d, `${d.code} 放射学影像诊断报告 (${reportDate})`, reportMarkdown)
+      showRadiologyReportDraftDialog(patientId, d, `${d.code} 影像所见草稿 (${reportDate})`, reportMarkdown)
     })
 
     // 初始加载第一张切片
@@ -2350,7 +2273,7 @@ ${recommendations}
       <div class="dialog-card pt-rad-report-dialog" role="dialog" aria-modal="true" style="max-width: 780px; width: 92vw; max-height: 88vh; display: flex; flex-direction: column">
         <div class="dialog-head">
           <div style="display: flex; align-items: center; gap: 10px">
-            <h2>${icon('report', { size: 18 })} 放射学结构化诊断报告草案</h2>
+            <h2>${icon('report', { size: 18 })} 影像所见草稿</h2>
             <span class="muted small">${esc(d.code)}</span>
           </div>
           <button class="quiet" data-close-draft aria-label="关闭">✕</button>
@@ -2414,7 +2337,7 @@ ${recommendations}
         })
         statusEl.innerHTML = `<span style="color: var(--teal)">${icon('check')} 文档已成功落库归档！<a href="#/docs/${doc.id}" style="color: var(--blue); margin-left: 8px; text-decoration: underline" target="_blank">${icon('link')} 打开文档进行富文本编辑与排版</a></span>`
         saveBtn.innerHTML = `${icon('check')} 已落库归档`
-        notice('放射诊断报告已落库并与患者关联！')
+        notice('影像所见草稿已存入并与患者关联')
         void openPatient(patientId, true)
       } catch (err: any) {
         saveBtn.disabled = false
@@ -2531,7 +2454,7 @@ ${recommendations}
                     <input type="checkbox" id="dualOverlayMask" checked> 半透明病灶高亮
                   </label>
                   <label style="cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #10B981; font-weight: 600">
-                    <input type="checkbox" id="dualDiffHeatmap"> ${icon('layers')} 叠加 3D 差分吸收热力图 (吸收/进展)
+                    <input type="checkbox" id="dualDiffHeatmap"> ${icon('layers')} 叠加 CT 值差分图（CT 值升高 / 降低）
                   </label>
                 </div>
               </div>
@@ -2634,8 +2557,9 @@ ${recommendations}
     })
 
     // 双联 MPR 状态管理
-    let bSample = 'chest_lung_ct'
-    let fSample = 'chest_lung_ct'
+    // 只用记录里真实的样本 ID；没有就为空（服务端会如实返回「没有可用影像」，不用演示样本代替）
+    let bSample = ''
+    let fSample = ''
     let bReal = false
     let fReal = false
     let bRec: RecordRow | undefined
@@ -2665,8 +2589,9 @@ ${recommendations}
         return
       }
       hud.style.display = 'flex'
-      if (trendEl) trendEl.textContent = data.statistics_3d.dominant_trend || '计算完成'
-      if (detailEl) detailEl.innerHTML = `<span style="color:#10B981">● 吸收退缩:</span> ${data.statistics_3d.regressed_volume_cm3} cm³ · <span style="color:#EF4444">● 浸润增大:</span> ${data.statistics_3d.progressed_volume_cm3} cm³ (灵敏度 ±${data.threshold_hu || 50} HU)`
+      // 只显示 HU 变化体积，不给吸收 / 进展之类的趋势结论
+      if (trendEl) trendEl.textContent = 'CT 值变化体积'
+      if (detailEl) detailEl.innerHTML = `<span style="color:#10B981">● CT 值降低 &gt; ${data.threshold_hu || 50} HU:</span> ${data.statistics_3d.hu_decreased_volume_cm3 ?? '—'} cm³ · <span style="color:#EF4444">● CT 值升高 &gt; ${data.threshold_hu || 50} HU:</span> ${data.statistics_3d.hu_increased_volume_cm3 ?? '—'} cm³（要求两期同网格，未做配准时差值无解剖意义）`
     }
 
     async function loadComparison() {
@@ -2710,8 +2635,8 @@ ${recommendations}
       fData = (fRec?.imaging_data || {}) as Record<string, any>
       bReal = Boolean(patientId && bRec && (bData.raw_file_id || bRec.file_id || bRec.id))
       fReal = Boolean(patientId && fRec && (fData.raw_file_id || fRec.file_id || fRec.id))
-      bSample = bData.sample_id || (bData.raw_file_name?.includes('spleen') ? 'spleen_test' : bData.raw_file_name?.includes('prostate') ? 'prostate_mri' : 'chest_lung_ct')
-      fSample = fData.sample_id || (fData.raw_file_name?.includes('spleen') ? 'spleen_test' : fData.raw_file_name?.includes('prostate') ? 'prostate_mri' : 'chest_lung_ct')
+      bSample = bData.sample_id || ''
+      fSample = fData.sample_id || ''
 
       // 设置标题
       const bTitleEl = dlg.querySelector('#baseTitleText')
@@ -3047,7 +2972,7 @@ ${recommendations}
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 14px">
           <div>
             <div style="display: flex; align-items: center; gap: 10px">
-              <span class="pt-recist-badge ${cat}">${esc(rec.category)} · ${esc(rec.category_name)}</span>
+              <span class="pt-recist-badge ${cat}">${rec.category === 'NA' ? `RECIST 不适用 · ${esc(rec.na_reason ?? '')}` : `${esc(rec.category_name)} · ${esc(rec.recist_note ?? '按 RECIST 1.1 阈值计算，未经阅片确认')}`}</span>
               <span class="muted small">随访间隔 <b>${res.interval_days}</b> 天</span>
             </div>
             <div style="font-size: 13px; color: var(--text-1); margin-top: 6px">
@@ -3163,7 +3088,7 @@ ${recommendations}
               <td>${rec.followup_volume_cm3 ?? '--'} cm³</td>
               <td>${rec.diff_volume_cm3 !== undefined ? `${rec.diff_volume_cm3 > 0 ? '+' : ''}${rec.diff_volume_cm3} cm³` : '--'}</td>
               <td><b style="color: ${cat === 'pr' || cat === 'cr' ? '#34D399' : cat === 'pd' ? '#F87171' : 'var(--text)'}">${signVol}</b></td>
-              <td>MONAI 深度学习测量</td>
+              <td>影像分析记录测值</td>
             </tr>
             ${rec.vdt ? `
               <tr>
@@ -3238,13 +3163,6 @@ ${recommendations}
   }
 
   function renderEvidenceChainContent(container: HTMLElement, data: any, patientId: string, d: Detail | Patient, onInjectReport?: (md: string) => void) {
-    const urg = data.clinical_urgency || 'routine'
-    const urgMap: Record<string, { label: string; cls: string }> = {
-      high: { label: `${icon('shield')} 高紧迫度 · 强烈提示临床干预`, cls: 'high' },
-      medium: { label: `${icon('info')} 中度 · 建议密切随访与补充检验`, cls: 'medium' },
-      routine: { label: `${icon('check')} 常规 · 稳定随访状态`, cls: 'routine' },
-    }
-    const urgencyBadge = urgMap[urg] || urgMap.routine!
     const criteria = data.criteria_table || []
     const labs = data.matched_labs || []
     const workup = data.suggested_workup || []
@@ -3254,7 +3172,6 @@ ${recommendations}
         <div class="pt-evidence-header-card">
           <div style="flex: 1; min-width: 260px">
             <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
-              <span class="pt-evidence-urgency-badge ${urgencyBadge.cls}">${urgencyBadge.label}</span>
               <span class="muted small">${esc(data.record_title || '医学影像')}</span>
             </div>
             <h3 style="margin: 8px 0 6px; font-size: 16px; color: var(--text)">${icon('evidence', { size: 16 })} ${esc(data.syndrome || '多模态因果诊断链')}</h3>
@@ -3262,14 +3179,14 @@ ${recommendations}
             <div class="muted small" style="margin-top: 6px">${esc(data.match_summary || '')}</div>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
-            <button class="primary small-btn" id="evGenFullReportBtn">${icon('report')} 生成全景影像诊断报告</button>
+            <button class="primary small-btn" id="evGenFullReportBtn">${icon('report')} 生成影像所见报告</button>
             <button class="small-btn quiet" id="evCopyMdBtn">${icon('copy')} 复制 Markdown</button>
             <button class="small-btn quiet" id="evInjectReportBtn">${icon('write')} 注入病例报告草案</button>
           </div>
         </div>
 
         <div>
-          <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--text-2)">${icon('template')} 临床确诊依据对照表 (Clinical Criteria Matrix)</div>
+          <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px; color: var(--text-2)">${icon('template')} 指标与参考阈值对照（不构成诊断）</div>
           <table class="pt-evidence-table">
             <thead>
               <tr>
@@ -3394,14 +3311,14 @@ ${recommendations}
       <div class="dialog-card pt-full-report-dialog" role="dialog" aria-modal="true">
         <div class="dialog-head no-print">
           <div style="display: flex; align-items: center; gap: 10px">
-            <h2>${icon('hospital', { size: 18 })} 全景多模态影像诊断报告</h2>
+            <h2>${icon('hospital', { size: 18 })} 影像量化所见报告</h2>
             <span class="muted small">${esc(d.code)}</span>
           </div>
           <button class="quiet" data-close aria-label="关闭">✕</button>
         </div>
         <div class="dialog-body" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 20px">
           <div class="muted small" style="text-align: center; padding: 36px">
-            <div class="pt-img-dlg-loading">正在调取 MONAI 3D 量化体素、RECIST 靶病灶长短径及多模态实验室化验，撰写全景结构化诊断报告...</div>
+            <div class="pt-img-dlg-loading">正在汇总影像量化测值与相关化验…</div>
           </div>
         </div>
       </div>`
@@ -3418,13 +3335,6 @@ ${recommendations}
       const body = dlg.querySelector('.dialog-body')
       if (!body) return
 
-      const urg = res.urgency || 'routine'
-      const urgBadge = urg === 'high'
-        ? `<span class="pt-evidence-urgency-badge high">${icon('shield')} 临床高危 · 强烈提示专科干预</span>`
-        : urg === 'medium'
-        ? `<span class="pt-evidence-urgency-badge medium">${icon('info')} 密切随访</span>`
-        : `<span class="pt-evidence-urgency-badge routine">${icon('check')} 常规评估</span>`
-
       const m = res.metrics || {}
       const ev = res.evidence || {}
       const matchedLabs: any[] = ev.matched_labs || []
@@ -3438,7 +3348,6 @@ ${recommendations}
             <button class="small-btn quiet" data-view="markdown">${icon('write')} Markdown 源码编辑</button>
           </div>
           <div style="display: flex; gap: 8px; align-items: center">
-            ${urgBadge}
             <button class="small-btn quiet" id="btnCopyFullReportMd">${icon('copy')} 复制 Markdown</button>
             <button class="small-btn primary" id="btnPrintFullReport">${icon('print')} 打印 / 导出 PDF</button>
           </div>
@@ -3447,7 +3356,7 @@ ${recommendations}
         <!-- 格式化排版区 (同时作为打印区域) -->
         <div id="fullReportPrintArea" class="pt-report-paper" style="display: block">
           <div class="pt-report-hospital-head">
-            <div class="pt-report-hospital-title">${icon('hospital')} Heurion 临床影像诊断中心 · 全景多模态影像诊断报告</div>
+            <div class="pt-report-hospital-title">${icon('hospital')} 影像量化所见报告</div>
             <div class="pt-report-hospital-sub">Medical Imaging &amp; Multimodal Diagnostic Report · 依据 RECIST 1.1 / Fleischner / CARE 规范生成</div>
           </div>
 
@@ -3485,13 +3394,13 @@ ${recommendations}
               ${m.bar_ratio !== undefined ? `
                 <div class="pt-report-metric-card ${m.bar_ratio > 1.10 ? 'alert' : ''}">
                   <div class="pt-report-metric-title">支气管-伴行动脉比 (BAR)</div>
-                  <div class="pt-report-metric-value">${m.bar_ratio} ${m.bar_ratio > 1.10 ? '(印戒征+)' : ''}</div>
+                  <div class="pt-report-metric-value">${m.bar_ratio} ${m.bar_ratio > 1.10 ? '(> 1.10)' : ''}</div>
                 </div>
               ` : ''}
               ${m.high_attenuation_mucus_cm3 !== undefined || m.ham_density_confirmed ? `
                 <div class="pt-report-metric-card alert">
                   <div class="pt-report-metric-title">高密度粘液栓 (HAM)</div>
-                  <div class="pt-report-metric-value">${m.high_attenuation_mucus_cm3 ? `${m.high_attenuation_mucus_cm3} cm³` : '阳性 (>70HU)'}</div>
+                  <div class="pt-report-metric-value">${m.high_attenuation_mucus_cm3 ? `${m.high_attenuation_mucus_cm3} cm³` : '可见 (>70 HU)'}</div>
                 </div>
               ` : ''}
               ${m.key_slice_index !== undefined ? `
@@ -3506,19 +3415,18 @@ ${recommendations}
           <!-- 多模态实验室化验 -->
           ${matchedLabs.length > 0 ? `
             <div class="pt-report-sec">
-              <div class="pt-report-sec-h">二、 协同实验室化验与因果依据链 (Multimodal Correlation)</div>
+              <div class="pt-report-sec-h">二、 相关化验 (Laboratory)</div>
               <table class="pt-evidence-table">
                 <thead>
-                  <tr><th>关键化验项目</th><th>测得数值</th><th>状态标识</th><th>采样日期</th><th>临床因果关联解读</th></tr>
+                  <tr><th>化验项目</th><th>测得数值</th><th>相对参考区间</th><th>采样日期</th></tr>
                 </thead>
                 <tbody>
                   ${matchedLabs.map(l => `
                     <tr>
                       <td><b>${esc(l.test_name)}</b></td>
                       <td>${esc(l.value)} ${esc(l.unit || '')}</td>
-                      <td><span class="${l.flag === 'H' ? 'flag-H' : l.flag === 'L' ? 'flag-L' : 'muted'}">${l.flag === 'H' ? '↑ 升高' : l.flag === 'L' ? '↓ 降低' : '正常'}</span></td>
+                      <td><span class="${l.flag === 'H' ? 'flag-H' : l.flag === 'L' ? 'flag-L' : 'muted'}">${l.flag === 'H' ? '↑ 高于' : l.flag === 'L' ? '↓ 低于' : '未超出 / 未标注'}</span></td>
                       <td class="muted small">${esc(l.date)}</td>
-                      <td style="font-size: 12px">${esc(l.clinical_significance)}</td>
                     </tr>
                   `).join('')}
                 </tbody>
@@ -3532,26 +3440,16 @@ ${recommendations}
             <div style="font-size: 13px; line-height: 1.7; white-space: pre-line">${esc(res.findings)}</div>
           </div>
 
-          <!-- 诊断结论与印象 -->
+          <!-- 说明：不给诊断结论与处置建议 -->
           <div class="pt-report-sec">
-            <div class="pt-report-sec-h">四、 影像学诊断印象 (Impression &amp; Conclusion)</div>
-            <div class="pt-report-impression-box">
-              <div style="font-size: 13px; font-weight: 600; line-height: 1.7; white-space: pre-line">${esc(res.impression)}</div>
-            </div>
-          </div>
-
-          <!-- 临床处置与随访建议 -->
-          <div class="pt-report-sec">
-            <div class="pt-report-sec-h">五、 临床处置与随访建议 (Recommendations)</div>
-            <div class="pt-report-recommendations-box">
-              <div style="font-size: 13px; line-height: 1.7; white-space: pre-line">${esc(res.recommendations)}</div>
-            </div>
+            <div class="pt-report-sec-h">四、 说明</div>
+            <div style="font-size: 13px; line-height: 1.7; white-space: pre-line">${esc(res.impression)}</div>
           </div>
 
           <!-- 报告落款 -->
           <div class="pt-report-signature-row">
-            <div>报告时间: <b>${esc(res.exam_date)}</b> · 诊断引擎: <b>MONAI 3D Quantitative Core</b></div>
-            <div>审核状态: <span class="pill ok">${icon('check', { size: 12 })} 已存入病历记录 (${esc(res.saved_record_id || '已归档')})</span></div>
+            <div>检查日期: <b>${esc(res.exam_date)}</b></div>
+            <div>${!res.saved_record_id ? '<span class="pill">未存入病历</span>' : res.saved_status === 'pending' ? '<span class="pill warn">AI 草稿 · 待医生在「待确认」中确认</span>' : `<span class="pill ok">${icon('check', { size: 12 })} 已存入病历</span>`}</div>
           </div>
         </div>
 
@@ -4051,16 +3949,16 @@ ${recommendations}
             <b>[NSCLC 靶向评估]</b> PT-NSCLC-002 · 58岁女 · EGFR 19del 奥希替尼 12 周随访 (RECIST 1.1 PR · 3D 容积 -78.2%)
           </span>
         </button>
-        <button data-pt-preset="abpa" title="点击快速进入或新建变应性支气管肺曲霉病 (ABPA) 患者档案">
+        <button data-pt-preset="abpa" title="打开或新建示例患者：支气管与粘液栓影像测量">
           <span style="display:flex;align-items:center;gap:8px;">
             ${icon('scan', { size: 16 })}
-            <b>[ABPA 支扩与粘液栓]</b> PT-BRONCHO-001 · 52岁男 · BAR 1.45 印戒征 · HAM 粘液栓 12.44 cm³ (3D 容积吸收 74.9%)
+            <b>[示例 · 支气管与粘液栓测量]</b> PT-BRONCHO-001 · 52岁男 · BAR 1.45 · 高密度粘液栓 12.44 cm³
           </span>
         </button>
-        <button data-pt-preset="sarco" title="点击快速进入或新建全腹实质脏器与骨骼肌减少症 TotalSegmentator L3 患者档案">
+        <button data-pt-preset="sarco" title="打开或新建示例患者：腹部脏器容积与 L3 体成分测量">
           <span style="display:flex;align-items:center;gap:8px;">
             ${icon('users', { size: 16 })}
-            <b>[全腹实质与肌少症]</b> PT-ABDOMEN-003 · 52岁男 · 脾肿大 680 cm³ · TotalSegmentator L3 SMI 29.9 cm²/m² · 化疗安全评估
+            <b>[示例 · 腹部脏器与 L3 体成分]</b> PT-ABDOMEN-003 · 52岁男 · 脾体积 680 cm³ · L3 SMI 29.9 cm²/m²
           </span>
         </button>
         <button data-pt-preset="prostate" title="点击快速进入或新建盆腔前列腺多参数 T2-MRI (PI-RADS v2.1) 患者档案">
@@ -4134,7 +4032,7 @@ ${recommendations}
               code: 'PT-BRONCHO-001',
               sex: '男',
               birth_year: '1974',
-              tags: ['支气管扩张', 'ABPA', '变态反应', '哮喘']
+              tags: ['示例患者', '支气管扩张', '哮喘']
             })
           })
           notice('已创建典型案例患者档案：PT-BRONCHO-001')
@@ -4158,7 +4056,7 @@ ${recommendations}
               code: 'PT-ABDOMEN-003',
               sex: '男',
               birth_year: '1974',
-              tags: ['脾脏肿大', 'Splenomegaly', '肌少症', 'TotalSegmentator-L3', '化疗安全评估']
+              tags: ['示例患者', 'L3 体成分', '化疗中']
             })
           })
           notice('已创建典型案例患者档案：PT-ABDOMEN-003')

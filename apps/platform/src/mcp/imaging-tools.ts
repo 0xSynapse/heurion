@@ -9,6 +9,17 @@ import type { CohortService } from '../research/cohort.ts'
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] })
 const json = (value: unknown) => text(JSON.stringify(value, null, 2))
+/** 影像微服务错误如实转给 AI：400/422 参数有误、404 影像不存在、501 模型不可用 */
+async function workerToolFail(code: string, resp: Response) {
+  let detail = ''
+  try { const t = await resp.text(); try { const j = JSON.parse(t); detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail ?? j) } catch { detail = t } } catch {}
+  const kind = resp.status === 501 ? '模型不可用' : resp.status === 404 ? '影像或样本不存在' : resp.status === 400 || resp.status === 422 ? '请求参数有误' : '影像微服务出错'
+  return fail(code, `${kind}（HTTP ${resp.status}）：${detail.slice(0, 500)}`, { worker_status: resp.status })
+}
+
+/** 不使用默认演示样本：既没有样本也没有文件时直接报错 */
+const noImage = (what = '影像') => fail('no_image', `缺少${what}：请提供 sample_id 或 file_path（平台不会用默认演示样本代替）`)
+
 const fail = (code: string, message: string, extra: Record<string, unknown> = {}) => ({
   content: [{ type: 'text' as const, text: JSON.stringify({ error: code, message, ...extra }, null, 2) }],
   isError: true,
@@ -39,7 +50,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
   }, async () => {
     try {
       const resp = await fetch(`${workerUrl}/health`, { signal: AbortSignal.timeout(3000) })
-      if (!resp.ok) return fail('imaging_worker_error', `影像微服务返回 HTTP ${resp.status}`)
+      if (!resp.ok) return await workerToolFail('imaging_worker_error', resp)
       const data = await resp.json()
       return json(data)
     } catch (err) {
@@ -51,12 +62,12 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
 
   // 2. 临床分割与检测模型清单
   server.registerTool('imaging_models', {
-    description: '获取 MONAI 影像计算节点当前支持的临床深度学习模型清单（例如肺结节分割、腹部多器官分割、脑胶质瘤 BraTS 等）。',
+    description: '获取影像分析模型清单：每个模型的 engine_type（deep_learning 深度学习 / quantitative_ct 定量 CT / rule_based 规则算法）、是否可用（is_ready）与不可用原因（unavailable_reason）。不可用的模型调用时影像微服务返回 501。',
     inputSchema: {},
   }, async () => {
     try {
       const resp = await fetch(`${workerUrl}/api/v1/models`, { signal: AbortSignal.timeout(3000) })
-      if (!resp.ok) return fail('imaging_worker_error', `获取模型失败 HTTP ${resp.status}`)
+      if (!resp.ok) return await workerToolFail('imaging_worker_error', resp)
       const data = await resp.json()
       return json(data)
     } catch (err) {
@@ -67,22 +78,21 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
   // 3. 核心工具：3D 影像分析、RECIST 1.1 量化与关键截面插图生成
   server.registerTool('imaging_analyze', {
     description:
-      '运行 MONAI 3D 医学影像分析与 RECIST 1.1 肿瘤测量：' +
-      '调度硬件加速器（M4 Pro GPU / CUDA）执行 3D 卷积分割，提取最大横截面关键层（Key Slice），' +
-      '自动生成带有半透明轮廓、测距卡尺与 5cm 标尺的高清 PNG，并自动保存为当前用户的文档资产。' +
-      '返回 asset_id、RECIST 测量指标（长径、短径、体积）以及直接可插入 Markdown 的图片语法。',
+      '用指定模型分析影像（模型可能是规则算法、定量 CT 或深度学习，以 imaging_models 的 engine_type 为准），' +
+      '提取最大横截面关键层，生成带轮廓与标尺的 PNG 并保存为用户资产；返回 asset_id、长径 / 短径 / 体积等测值和 Markdown 图片语法。' +
+      '必须提供 sample_id 或 file_path（或绑定有影像文件的患者）；模型不可用时返回 501 及原因。只给测值与所见，不给诊断。',
     inputSchema: {
       patient_id: z.string().optional().describe('患者 ID（指定时自动提取患者背景、关联最新扫描并在推理完成后自动归档为患者的新影像记录）'),
-      model_id: z.string().optional().describe('指定的临床模型 ID，例如 bronchiectasis_mucus_analyzer (支气管扩张与粘液栓), spleen_segmenter, lung_nodule_segmenter, liver_lesion_segmenter, brain_tumor_brats'),
-      sample_id: z.string().optional().describe('预置临床样本 ID，例如 chest_lung_ct (真实全胸部 HRCT 269层), spleen_test (真实人体腹部 CT 96层) 或 prostate_mri (真实人体前列腺 MRI)'),
+      model_id: z.string().optional().describe('模型 ID（先用 imaging_models 查看可用模型与类型），例如 bronchiectasis_mucus_analyzer（规则算法）、lung_nodule_segmenter（规则算法）、spleen_segmenter（深度学习）、liver_lesion_segmenter（BTCV 器官分割：肝脏，不识别病灶）'),
+      sample_id: z.string().optional().describe('预置样本 ID（与 file_path 二选一，必须提供其一）'),
       file_path: z.string().optional().describe('本地 DICOM 序列目录或 NIfTI (.nii/.nii.gz) 文件的绝对路径'),
       window_preset: z.enum(['lung', 'abdomen', 'brain', 'mediastinum']).optional().describe('CT 窗宽窗位预设'),
-      benchmark: z.boolean().optional().describe('是否运行 3D 高拟真解剖体素基准测试（未指定 sample_id/file_path 时缺省为 true）'),
+      benchmark: z.boolean().optional().describe('是否运行合成体模基准测试（仅用于测试性能；必须显式设为 true，不能写入患者病历）'),
       z_slices: z.number().int().min(16).max(256).optional().describe('扫描层数，缺省 48'),
       bar_cutoff: z.number().optional().describe('支气管-伴行动脉比 (BAR) 印戒征扩张切点，缺省 1.10'),
       mucus_min_hu: z.number().optional().describe('常规粘液栓 CT 阈值下限 (HU)，缺省 10.0'),
       mucus_max_hu: z.number().optional().describe('常规粘液栓 CT 阈值上限 (HU)，缺省 75.0'),
-      ham_threshold_hu: z.number().optional().describe('高密度粘液栓 (HAM) CT 阈值 (HU)，缺省 70.0 (提示 ABPA)'),
+      ham_threshold_hu: z.number().optional().describe('高密度粘液栓 (HAM) CT 阈值 (HU)，缺省 70.0'),
       label: z.string().max(60).optional().describe('生成的图注标签，例如「图 1 基线靶病灶 RECIST 截面」'),
     },
   }, async ({ patient_id, model_id, sample_id, file_path, window_preset, benchmark, z_slices, bar_cutoff, mucus_min_hu, mucus_max_hu, ham_threshold_hu, label }) => {
@@ -100,6 +110,8 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         return fail('patient_permission_denied', err.message || String(err))
       }
     }
+
+    if (!patientRow && !sample_id && !file_path && !benchmark) return noImage()
 
     if (patientRow && !sample_id && !file_path) {
       // B5 修复：真实检查患者是否有关联的影像记录或附件文件，绝不允许将合成体模作为患者扫描分析并写入病历
@@ -169,10 +181,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         body: JSON.stringify(reqBody),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('inference_failed', `MONAI 推理失败 HTTP ${resp.status}: ${errText}`)
-      }
+      if (!resp.ok) return await workerToolFail('inference_failed', resp)
       resultData = await resp.json()
     } catch (err) {
       return fail('imaging_worker_offline', `调用 MONAI 计算节点失败：${err instanceof Error ? err.message : String(err)}`, {
@@ -194,27 +203,28 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     })
 
     const recist = resultData.recist_metrics || {}
-    const ld = recist.longest_diameter_mm ?? 0
-    const vol = recist.total_volume_cm3 ?? 0
-    const sliceIdx = recist.key_slice_index ?? 0
-    const rads = recist.lung_rads
-    const figCaption = label || (recist.has_lesion === false ? '图 1 胸部 CT 扫描横截面（未检出局灶性病灶）' : `图 1 目标病灶 RECIST 1.1 关键截面图（长径 ${ld} mm，体积 ${vol} cm³）`)
+    // 缺失测值保持 null；分级（Lung-RADS 等）与诊断性文字不再使用
+    const ld: number | null = recist.longest_diameter_mm ?? null
+    const vol: number | null = recist.total_volume_cm3 ?? null
+    const sliceIdx: number | null = recist.key_slice_index ?? null
+    const fmtMm = (v: unknown, unit: string) => v === null || v === undefined ? '未测得' : `${v} ${unit}`
+    const sliceText = sliceIdx === null ? '' : `第 #${sliceIdx} 层，`
+    const figCaption = label || (recist.has_lesion === false ? '图 1 CT 横截面（算法未检出可测量病灶）' : `图 1 病灶关键截面（长径 ${fmtMm(ld, 'mm')}，体积 ${fmtMm(vol, 'cm³')}）`)
     const figNote = recist.has_lesion === false
-      ? `图 1 胸部 CT 平扫解剖横截面（第 #${sliceIdx} 层，未检出 ≥ 3 mm 实质结节，Lung-RADS 1 类阴性）`
-      : `图 1 3D MONAI CT 肿瘤靶病灶自动分割与最大横截面量化标尺（第 #${sliceIdx} 层，长径 ${ld} mm，短径 ${recist.short_axis_mm ?? 0} mm，总体积 ${vol} cm³${rads ? `，${rads.name}` : ''}）`
+      ? `图 1 CT 横截面（${sliceText}算法未检出可测量病灶）`
+      : `图 1 病灶分割与最大横截面测量（${sliceText}长径 ${fmtMm(ld, 'mm')}，短径 ${fmtMm(recist.short_axis_mm, 'mm')}，体积 ${fmtMm(vol, 'cm³')}）`
 
     let savedRecordId: string | undefined
     if (patientRow && deps.patients) {
       const findings: string[] = []
-      if (recist.has_lesion && ld > 0) findings.push(`RECIST 1.1 靶病灶长径 ${ld} mm，体积 ${vol} cm³`)
-      if (rads?.name) findings.push(rads.name)
-      if (resultData.clinical_ai_report?.diagnostic_assessment) {
-        findings.push(resultData.clinical_ai_report.diagnostic_assessment.replace(/[【】]/g, '').trim())
-      }
+      if (recist.has_lesion && ld !== null && ld > 0) findings.push(`靶病灶长径 ${ld} mm，体积 ${fmtMm(vol, 'cm³')}`)
+      // 影像 AI 报告只取「影像所见」描述（worker 已不再给诊断评估）
+      const aiFindings = resultData.clinical_ai_report?.findings_description
+      if (typeof aiFindings === 'string' && aiFindings.trim()) findings.push(aiFindings.trim())
+      // 自动标签只用所见，不打诊断标签
       const addTags: string[] = []
-      if (rads?.category === '4B' || rads?.category === '4A') addTags.push('肺结节待查')
-      if (resultData.metrics?.signet_ring_sign) addTags.push('支气管扩张')
-      if (resultData.metrics?.high_attenuation_mucus_ham) addTags.push('ABPA疑诊')
+      if (resultData.metrics?.signet_ring_sign) addTags.push('BAR 增大')
+      if (resultData.metrics?.high_attenuation_mucus_ham) addTags.push('高密度粘液栓')
 
       try {
         const saved = deps.patients.addImagingRecord(patientAiActor, patientRow.id, {
@@ -251,10 +261,9 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       duration_sec: resultData.inference_duration_sec,
       recist_metrics: {
         longest_diameter_mm: ld,
-        short_axis_mm: recist.short_axis_mm ?? 0,
+        short_axis_mm: recist.short_axis_mm ?? null,
         total_volume_cm3: vol,
         key_slice_index: sliceIdx,
-        lung_rads: recist.lung_rads,
         has_lesion: recist.has_lesion,
       },
       markdown_insert: `![${figCaption}](asset:${asset.id} "${figNote}")`,
@@ -311,21 +320,19 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       '三大正交切面（轴位 Axial、冠状位 Coronal、矢状位 Sagittal）的总层数与中心推荐层，' +
       '以及病灶的三维空间包围盒 (Bounding Box) 和推荐窗位。',
     inputSchema: {
-      sample_id: z.string().optional().describe('预置临床样本 ID，例如 chest_lung_ct (全胸部 HRCT 269层), spleen_test, prostate_mri'),
+      sample_id: z.string().optional().describe('预置样本 ID（与 file_path 二选一，必须提供其一）'),
       file_path: z.string().optional().describe('本地 DICOM 序列目录或 NIfTI (.nii/.nii.gz) 文件的绝对路径'),
     },
   }, async ({ sample_id, file_path }) => {
+    if (!sample_id && !file_path) return noImage()
     try {
       const resp = await fetch(`${workerUrl}/api/v1/mpr/info`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sample_id: sample_id || 'chest_lung_ct', file_path }),
+        body: JSON.stringify({ sample_id, file_path }),
         signal: AbortSignal.timeout(10000),
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('mpr_info_failed', `获取 3D 体积信息失败 HTTP ${resp.status}: ${errText}`)
-      }
+      if (!resp.ok) return await workerToolFail('mpr_info_failed', resp)
       const data = await resp.json()
       return json({
         status: 'success',
@@ -344,7 +351,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       '与 MONAI 病灶半透明红色遮罩 (Mask Overlay)。切片将自动渲染带有 5cm 标尺、层号 HUD 与物理分辨率的高清图像，' +
       '并直接保存为用户文档资产，返回 asset_id、病灶面积与可直接插入 Markdown 报告的图片语法。',
     inputSchema: {
-      sample_id: z.string().optional().describe('预置临床样本 ID，例如 chest_lung_ct, spleen_test, prostate_mri'),
+      sample_id: z.string().optional().describe('预置样本 ID（与 file_path 二选一，必须提供其一）'),
       file_path: z.string().optional().describe('本地 DICOM 序列目录或 NIfTI 文件的绝对路径'),
       plane: z.enum(['axial', 'coronal', 'sagittal']).optional().describe('正交切片平面：axial (轴位/横断面), coronal (冠状位/额状面), sagittal (矢状位/侧面)。缺省为 axial'),
       slice_index: z.number().int().min(0).optional().describe('切片层号索引 (0 到 total_slices - 1)。如不提供，则自动定位至病灶中心切片或正中层'),
@@ -354,13 +361,14 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       label: z.string().max(80).optional().describe('生成的图注标签，例如「图 2 轴位第 115 层支气管扩张病灶」'),
     },
   }, async ({ sample_id, file_path, plane, slice_index, window_preset, overlay_mask, save_asset, label }) => {
+    if (!sample_id && !file_path) return noImage()
     let resultData: any
     try {
       const resp = await fetch(`${workerUrl}/api/v1/mpr/slice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sample_id: sample_id || 'chest_lung_ct',
+          sample_id,
           file_path,
           plane: plane || 'axial',
           slice_index,
@@ -369,10 +377,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         }),
         signal: AbortSignal.timeout(15000),
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('mpr_slice_failed', `提取 MPR 切片失败 HTTP ${resp.status}: ${errText}`)
-      }
+      if (!resp.ok) return await workerToolFail('mpr_slice_failed', resp)
       resultData = await resp.json()
     } catch (err) {
       return fail('imaging_worker_offline', `连接影像微服务失败：${err instanceof Error ? err.message : String(err)}`)
@@ -460,8 +465,8 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     patient_id: z.string().describe('患者 ID'),
     baseline_record_id: z.string().optional().describe('基线影像记录 ID（如不提供则自动选择最早的基线影像）'),
     followup_record_id: z.string().optional().describe('随访影像记录 ID（如不提供则自动选择最新的随访影像）'),
-    include_diff_slice: z.boolean().optional().describe('是否同时生成 3D 刚性配准差分吸收热力图切片并保存为图片资产，缺省为 true'),
-    label: z.string().max(80).optional().describe('生成的差分切片图注标签，例如「图 2 靶向治疗 3 个月随访 3D 差分热力图」'),
+    include_diff_slice: z.boolean().optional().describe('两期记录都有影像来源时，是否同时生成 CT 值差图切片（不配准、要求同网格），缺省 true'),
+    label: z.string().max(80).optional().describe('差图图注标签'),
   }
 
   const handleRecistSummary = async ({
@@ -537,20 +542,21 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       '| :--- | :--- | :--- | :--- | :--- | :--- |',
       `| **基线 (Baseline)** | ${b.date || '-'} | ${b.title || '基线影像'} | ${bLd} mm | ${bVol} cm³ | 基线测值 |`,
       `| **随访 (Follow-up)** | ${f.date || '-'} | ${f.title || '随访影像'} | ${fLd} mm | ${fVol} cm³ | 随访复查 |`,
-      `| **动态演化** | 间隔 ${comp.interval_days ?? 0} 天 | RECIST 1.1: **${rec.category || 'SD'} (${rec.category_name || '疾病稳定'})** | **${pctLd}** | **${pctVol}** | ${rec.interpretation || ''} |`,
+      `| **动态演化** | 间隔 ${comp.interval_days ?? 0} 天 | RECIST 1.1: **${rec.category === 'NA' || !rec.category ? `不适用（${rec.na_reason ?? '条件不满足'}）` : `${rec.category_name}（${rec.recist_note}）`}** | **${pctLd}** | **${pctVol}** | ${rec.interpretation || ''} |`,
     ].join('\n')
 
     let diffAssetId: string | undefined
     let diffMarkdownInsert: string | undefined
 
-    if (include_diff_slice !== false && claims.p.includes('write')) {
+    // 差分图只在两期记录都有可用影像来源（sample_id）时生成；没有就不画，不用演示样本代替
+    if (include_diff_slice !== false && claims.p.includes('write') && b.imaging_data?.sample_id && f.imaging_data?.sample_id) {
       try {
         const resp = await fetch(`${workerUrl}/api/v1/mpr/diff-slice`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            baseline_id: b.imaging_data?.sample_id || 'chest_lung_ct',
-            followup_id: f.imaging_data?.sample_id || 'chest_lung_ct',
+            baseline_id: b.imaging_data.sample_id,
+            followup_id: f.imaging_data.sample_id,
             plane: 'axial',
             slice_index: fm.key_slice_index ?? bm.key_slice_index ?? 24,
             threshold_hu: 50,
@@ -570,8 +576,8 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
               bytes: pngBuf,
             })
             diffAssetId = asset.id
-            const figCaption = label || `图 靶病灶纵向随访 3D 刚性配准差分热力图 (${rec.category || 'RECIST 1.1'})`
-            const figNote = `3D 差分热力图（间隔 ${comp.interval_days ?? 0} 天，长径变化 ${pctLd}，体积变化 ${pctVol}，疗效评定: ${rec.category || 'SD'} ${rec.category_name || ''}）`
+            const figCaption = label || `图 靶病灶两期 CT 值差图`
+            const figNote = `两期 CT 值差图（未配准；间隔 ${comp.interval_days ?? 0} 天，长径变化 ${pctLd}，体积变化 ${pctVol}，RECIST 1.1: ${rec.category === 'NA' || !rec.category ? '不适用' : `${rec.category_name}，未经阅片确认`}）`
             diffMarkdownInsert = `![${figCaption}](asset:${asset.id} "${figNote}")`
           }
         }
@@ -616,14 +622,14 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
 
   server.registerTool('imaging_get_recist_summary', {
     description:
-      '获取患者随访的 RECIST 1.1 疗效评估摘要、长径与三维体积变化百分比、学术陈述与差分吸收热力图：' +
-      '自主对比基线检查与随访检查，输出包含对比宽表、RECIST 等级 (CR/PR/SD/PD) 与出版级切片资产的 Markdown 片段，' +
+      '获取患者随访的测量对比摘要：长径与体积变化百分比、RECIST 1.1 分类（条件不满足时为「不适用」，均未经阅片确认），以及可选的两期 CT 值差图：' +
+      '对比基线与随访检查，输出对比表与切片资产的 Markdown 片段，' +
       '供 AI 智能体直接插入临床科研方案、病历观察或论文疗效讨论章节。',
     inputSchema: recistSummarySchema,
   }, handleRecistSummary)
 
   server.registerTool('imaging_patient_recist_summary', {
-    description: '获取患者 RECIST 1.1 疗效评估总结及可直接插入科研文稿的 Markdown 宽表与差分热力图（同 imaging_get_recist_summary）。',
+    description: '获取患者随访测量对比摘要与 Markdown 对比表（同 imaging_get_recist_summary）。',
     inputSchema: recistSummarySchema,
   }, handleRecistSummary)
 
@@ -631,11 +637,10 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
   // 8. 多模态因果诊断证据链分析 (imaging_evidence_chain)
   server.registerTool('imaging_evidence_chain', {
     description:
-      '多模态因果诊断证据链分析：' +
-      '自动将患者医学影像量化病征（如支气管扩张/高密度粘液栓 HAM、或肺结节占位 RECIST 1.1）' +
-      '与患者实际化验检验指标（嗜酸性粒细胞 EOS、血清总 IgE、曲霉特异性 sIgE、肿瘤标志物 CEA/CYFRA21-1、炎症指标 CRP/WBC）' +
-      '及既往病史标签进行因果三角校验，评估临床指南确诊符合度（如 ISHAM ABPA 标准、RECIST 1.1），' +
-      '输出结构化临床证据矩阵、缺漏待查项目建议与诊断印象 Markdown。',
+      '影像测值与化验指标对照：' +
+      '把患者影像量化测值（BAR、高密度粘液栓、结节长径 / 体积等）与化验（嗜酸粒细胞、总 IgE、sIgE、肿瘤标志物、CRP 等）' +
+      '对照所列参考阈值，输出「达到 / 未达到 / 缺少数据」的对照表与化验相对参考区间的方向。' +
+      '不给诊断结论与处置建议；诊断由医师结合临床判断。',
     inputSchema: {
       patient_id: z.string().describe('患者 ID'),
       record_id: z.string().optional().describe('待评估的医学影像记录 ID（如不传则自动选择最新的一份影像分析）'),
@@ -657,16 +662,15 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     }
   })
 
-  // 9. 3D 体素刚性配准与差分吸收热力图切片 (imaging_diff_slice)
+  // 9. 两期逐体素 CT 值差图 (imaging_diff_slice)：不做配准，要求同网格，不给趋势结论
   server.registerTool('imaging_diff_slice', {
     description:
-      '提取两期 3D 纵向随访 CT 之间的体素刚性配准与差分吸收热力图切片 (Difference Heatmap Overlay)：' +
-      '将随访 CT 空间三线性插值对齐至基线 CT 坐标系，计算三维体素差分矩阵 (ΔHU = Followup - Baseline)。' +
-      '生成叠加差分吸收热力图的切片（绿色为吸收退缩区域 ΔHU < -thresh，红色为进展增大/浸润区域 ΔHU > thresh），' +
-      '并返回全容积 3D 吸收体素量、新发浸润体素量、净变化体积与总体动态演变趋势。',
+      '两期影像逐体素 CT 值差图（随访 − 基线）。不做配准：两期体素网格（形状与间距）必须一致，否则影像微服务返回 400；' +
+      '即使网格一致，未配准时体位差异也会产生差值。红色 = CT 值升高超过阈值，绿色 = 降低超过阈值；' +
+      '只返回 CT 值升高 / 降低的体积，不给吸收、进展等趋势结论。',
     inputSchema: {
-      baseline_sample_id: z.string().optional().describe('基线样本 ID，缺省为 chest_lung_ct'),
-      followup_sample_id: z.string().optional().describe('随访样本 ID，缺省为 chest_lung_ct'),
+      baseline_sample_id: z.string().optional().describe('基线样本 ID（不提供时须提供 baseline_file_path）'),
+      followup_sample_id: z.string().optional().describe('随访样本 ID（不提供时须提供 followup_file_path）'),
       baseline_file_path: z.string().optional().describe('基线 3D 影像本地文件路径'),
       followup_file_path: z.string().optional().describe('随访 3D 影像本地文件路径'),
       plane: z.enum(['axial', 'coronal', 'sagittal']).optional().describe('正交切片平面：axial, coronal, sagittal，缺省为 axial'),
@@ -677,14 +681,16 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       label: z.string().max(80).optional().describe('图注说明'),
     },
   }, async ({ baseline_sample_id, followup_sample_id, baseline_file_path, followup_file_path, plane, slice_index, window_preset, threshold_hu, save_asset, label }) => {
+    if (!baseline_sample_id && !baseline_file_path) return noImage('基线影像')
+    if (!followup_sample_id && !followup_file_path) return noImage('随访影像')
     let resultData: any
     try {
       const resp = await fetch(`${workerUrl}/api/v1/mpr/diff-slice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          baseline_id: baseline_sample_id || 'chest_lung_ct',
-          followup_id: followup_sample_id || 'chest_lung_ct',
+          baseline_id: baseline_sample_id,
+          followup_id: followup_sample_id,
           baseline_path: baseline_file_path,
           followup_path: followup_file_path,
           plane: plane || 'axial',
@@ -694,10 +700,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         }),
         signal: AbortSignal.timeout(20000),
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('mpr_diff_failed', `计算 3D 差分热力图失败 HTTP ${resp.status}: ${errText}`)
-      }
+      if (!resp.ok) return await workerToolFail('mpr_diff_failed', resp)
       resultData = await resp.json()
     } catch (err) {
       return fail('imaging_worker_offline', `连接影像微服务失败：${err instanceof Error ? err.message : String(err)}`)
@@ -722,8 +725,8 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         bytes: pngBuffer,
       })
       assetId = asset.id
-      const figCaption = label || `图 3D 差分热力图 ${planeZh}第 ${resultData.slice_index} 层`
-      const figNote = `3D 差分热力图（吸收: ${resultData.statistics_3d?.regressed_volume_cm3} cm³, 进展: ${resultData.statistics_3d?.progressed_volume_cm3} cm³, 总体演变: ${resultData.statistics_3d?.dominant_trend}）`
+      const figCaption = label || `图 两期 CT 值差图 ${planeZh}第 ${resultData.slice_index} 层`
+      const figNote = `两期 CT 值差图（未配准，仅供目视；CT 值升高 ${resultData.statistics_3d?.hu_increased_volume_cm3 ?? '—'} cm³，降低 ${resultData.statistics_3d?.hu_decreased_volume_cm3 ?? '—'} cm³）`
       markdownInsert = `![${figCaption}](asset:${asset.id} "${figNote}")`
     }
 
@@ -778,11 +781,12 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     description:
       '根据患者的医学影像资料（MONAI 3D 病灶量化、RECIST 1.1 靶病灶长短径、CT值分布、关键截面切片）' +
       '与实验室化验（总 IgE、嗜酸粒细胞、肿瘤标志物等）及既往病史，一键生成符合三甲医院与国际放射学标准的' +
-      '《全景多模态影像诊断报告》，涵盖检查方法、影像学所见、影像诊断印象与鉴别处置建议，并可自动存入患者病历档案。',
+      '影像量化所见报告：检查方法（只写影像元数据里有的参数）、影像所见（只列实测值）与相关化验数值；' +
+      '不包含诊断结论与治疗建议，可存入患者病历档案。',
     inputSchema: {
       patient_id: z.string().describe('患者 ID'),
       record_id: z.string().optional().describe('指定的医学影像记录 ID，缺省为最新影像记录'),
-      save_to_records: z.boolean().optional().describe('是否将生成的全景报告自动存入患者病历记录档案中（默认为 true）'),
+      save_to_records: z.boolean().optional().describe('是否存入患者病历（默认 true）。AI 生成的报告存为「待医生确认」的草稿，AI 不能确认，须医生本人在患者页「待确认」里确认'),
       title: z.string().optional().describe('自定义报告标题'),
     },
   }, async ({ patient_id, record_id, save_to_records, title }) => {
@@ -801,8 +805,8 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         title: result.title,
         exam_date: result.exam_date,
         modality: result.modality,
-        urgency: result.urgency,
         saved_record_id: result.saved_record_id,
+        saved_status: result.saved_status,
         findings: result.findings,
         impression: result.impression,
         recommendations: result.recommendations,
@@ -814,50 +818,45 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     }
   })
 
-  // 12. 3D 影像组学定量特征抽取 (imaging_radiomics)
+  // 12. 3D 影像组学定量特征抽取 (imaging_radiomics)：必须提供 ROI 掩膜
   server.registerTool('imaging_radiomics', {
     description:
-      '提取 IBSI 标准 3D 影像组学多维定量生物标志物 (Shape 几何形态、一阶直方图统计、GLCM 灰度共生矩阵、GLRLM 灰度游程矩阵)。' +
-      '支持从预置样本、本地路径或患者影像中提取 46 项量化特征，输出扁平特征行（可直接沉淀为科研数据集行）与排版精美的临床报告。',
+      '在给定 ROI 内提取影像组学特征（形状、一阶统计、GLCM、GLRLM）。必须提供 ROI 掩膜来源：' +
+      '掩膜文件 / 掩膜样本，或已对同一影像运行过的分割模型名（使用其缓存结果）；没有掩膜时影像微服务返回 400，不会自动圈定病灶。',
     inputSchema: {
-      sample_id: z.string().optional().describe('预置临床样本 ID，例如 chest_lung_ct, spleen_test, prostate_mri'),
-      file_path: z.string().optional().describe('本地 DICOM 序列目录或 NIfTI 文件的绝对路径'),
-      model_name: z.string().optional().describe('用于靶病灶自动分割的模型名称，缺省 lung_nodule_segmenter'),
+      sample_id: z.string().optional().describe('影像样本 ID（与 file_path 二选一，必须提供其一）'),
+      file_path: z.string().optional().describe('影像文件路径（DICOM 目录或 NIfTI）'),
+      mask_file_path: z.string().optional().describe('ROI 掩膜文件路径（与影像同网格）'),
+      mask_sample_id: z.string().optional().describe('ROI 掩膜样本 ID'),
+      model_name: z.string().optional().describe('已对该影像运行过的分割模型名（使用其缓存的分割结果作为 ROI）'),
       num_bins: z.number().int().min(8).max(64).optional().describe('纹理矩阵离散化区间数，缺省 16'),
     },
-  }, async ({ sample_id, file_path, model_name, num_bins }) => {
+  }, async ({ sample_id, file_path, mask_file_path, mask_sample_id, model_name, num_bins }) => {
+    if (!sample_id && !file_path) return noImage()
+    if (!mask_file_path && !mask_sample_id && !model_name) return fail('mask_required', '影像组学必须提供 ROI 掩膜（mask_file_path / mask_sample_id），或已运行过的分割模型名 model_name')
     try {
       const resp = await fetch(`${workerUrl}/api/v1/analyze/radiomics`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sample_id: sample_id || (!file_path ? 'chest_lung_ct' : undefined),
-          file_path,
-          model_name: model_name || 'lung_nodule_segmenter',
-          num_bins: num_bins || 16,
-        }),
+        body: JSON.stringify({ sample_id, file_path, mask_file_path, mask_sample_id, model_name, num_bins: num_bins || 16 }),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('radiomics_failed', `影像组学特征提取失败 HTTP ${resp.status}: ${errText}`)
-      }
-      const data = await resp.json()
-      return json(data)
+      if (!resp.ok) return await workerToolFail('radiomics_failed', resp)
+      return json(await resp.json())
     } catch (err: any) {
       return fail('imaging_worker_offline', `连接影像微服务失败：${err instanceof Error ? err.message : String(err)}`)
     }
   })
 
-  // 13. 交互式点选万物分割 (imaging_interactive_segment - MONAI VISTA-3D)
+  // 13. 交互式点选分割 (imaging_interactive_segment)：经典方法，非神经网络
   server.registerTool('imaging_interactive_segment', {
     description:
-      '运行 MONAI VISTA-3D 范式交互式点选万物分割：' +
-      '支持接收前景正样本点（Foreground Positive Click，如病灶中心）与背景负样本点（Background Negative Click，如需剔除的邻近骨质/血管），' +
-      '结合 3D 边界框约束即时自适应分割任意非标解剖结构或疑难病灶。' +
+      '交互式点选分割（经典方法，非神经网络）：以前景点（如病灶中心）的 CT 值为种子，' +
+      'hu_likelihood_gradient 模式按种子 CT 值的高斯似然 × Sobel 梯度加权距离衰减打分后阈值化；fast 模式按 CT 值容差 + 距离范围；' +
+      '背景点用于剔除邻近结构。' +
       '自动生成带有点击标记与半透明轮廓的高清切片资产，返回 RECIST 测值、3D 体积与可直接插入报告的 Markdown 语法。',
     inputSchema: {
-      sample_id: z.string().optional().describe('预置临床样本 ID，例如 chest_lung_ct, spleen_test, prostate_mri'),
+      sample_id: z.string().optional().describe('预置样本 ID（与 file_path 二选一，必须提供其一）'),
       file_path: z.string().optional().describe('本地 DICOM 序列目录或 NIfTI 文件的绝对路径'),
       points: z.array(z.object({
         z: z.number().int().describe('层号索引 Z'),
@@ -877,31 +876,29 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       plane: z.enum(['axial', 'coronal', 'sagittal']).optional().describe('显示平面，缺省 axial'),
       slice_index: z.number().int().optional().describe('指定渲染切片层号（缺省自动对齐至点击层或最大截面）'),
       save_asset: z.boolean().optional().describe('是否将带轮廓切片保存为用户文档资产，缺省 true'),
-      label: z.string().max(80).optional().describe('图注标签，例如「图 3 VISTA-3D 交互点选分割截面」'),
-      mode: z.enum(['deep', 'fast']).optional().describe('分割模式：deep (MedSAM / VISTA-3D 深度解剖语义模式), fast (快速启发式 EDT 模式)，缺省为 deep'),
+      label: z.string().max(80).optional().describe('图注标签，例如「图 3 交互点选分割截面」'),
+      mode: z.enum(['hu_likelihood_gradient', 'deep', 'fast']).optional().describe('分割模式：hu_likelihood_gradient（HU 似然 + 梯度的经典交互分割，非神经网络，缺省），fast（CT 值容差 + 距离范围）；deep 已弃用，请使用 hu_likelihood_gradient（仍作为别名接受）'),
     },
   }, async ({ sample_id, file_path, points, bbox, window_preset, plane, slice_index, save_asset, label, mode }) => {
+    if (!sample_id && !file_path) return noImage()
     let resultData: any
     try {
       const resp = await fetch(`${workerUrl}/api/v1/analyze/interactive-segment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sample_id: sample_id || (!file_path ? 'chest_lung_ct' : undefined),
+          sample_id,
           file_path,
           points: points || [{ z: 115, y: 256, x: 256, is_positive: true }],
           bbox,
           window_preset: window_preset || 'lung',
           plane: plane || 'axial',
           slice_index,
-          mode: mode || 'deep',
+          mode: !mode || mode === 'deep' ? 'hu_likelihood_gradient' : mode,
         }),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('interactive_segment_failed', `交互式分割失败 HTTP ${resp.status}: ${errText}`)
-      }
+      if (!resp.ok) return await workerToolFail('interactive_segment_failed', resp)
       resultData = await resp.json()
     } catch (err) {
       return fail('imaging_worker_offline', `连接影像微服务失败：${err instanceof Error ? err.message : String(err)}`)
@@ -918,52 +915,69 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         bytes: pngBuf,
       })
       resultData.asset_id = asset.id
-      resultData.markdown_insert = `![${label || `MONAI VISTA-3D 交互分割 #${resultData.key_slice_index}`}](asset:${asset.id})`
+      resultData.markdown_insert = `![${label || `交互点选分割 #${resultData.key_slice_index}`}](asset:${asset.id})`
     }
 
     return json(resultData)
   })
 
-  // 14. TotalSegmentator 全身体素 104 类解剖分割与肌少症量化 (imaging_whole_body_segment)
+  // 14. HU 阈值法体成分分析 (imaging_whole_body_segment)：非 TotalSegmentator 神经网络，不判定肌少症
   server.registerTool('imaging_whole_body_segment', {
     description:
-      '运行 TotalSegmentator 全身体素 104 类解剖结构分割与 L3 断面肌少症 (Sarcopenia) 量化评估：' +
-      '提取骨骼肌面积 (SMA cm²)、骨骼肌质量指数 (SMI cm²/m²)、Prado 诊断阈值分层、内脏脂肪 (VAT) 与皮下脂肪 (SAT)、' +
-      'VAT/SAT 比值、肌肉衰减密度 (HU，评估肌脂肪浸润 Myosteatosis) 以及全腹部与胸腔主要器官 (肝/脾/肾/肺/骨骼) 3D 容积。' +
-      '自动生成多组织颜色编码切片与出版级 Markdown 分析报告。',
+      'HU 阈值法体成分分析（经典方法，不是 TotalSegmentator 神经网络）：按 HU 区间划分骨骼肌、内脏脂肪、皮下脂肪；' +
+      '未给 L3 层号时用启发式选层（未做椎体识别）。输出骨骼肌面积 (cm²)、SMI（需提供身高，否则为空）、VAT / SAT 面积与比值、肌肉平均 CT 值。' +
+      '平台不判定肌少症（相关字段置空）；阈值法分不开肝、脾、肾，不输出这些器官体积。生成颜色编码切片与 Markdown 测值摘要。',
     inputSchema: {
-      sample_id: z.string().optional().describe('预置临床样本 ID，例如 chest_lung_ct, spleen_test'),
+      sample_id: z.string().optional().describe('预置样本 ID（与 file_path 二选一，必须提供其一）'),
       file_path: z.string().optional().describe('本地 DICOM 序列目录或 NIfTI 文件的绝对路径'),
-      patient_sex: z.enum(['M', 'F']).optional().describe('患者性别 (M/F)，用于肌少症切点分层（男性 52.4 cm²/m²，女性 38.5 cm²/m²），缺省 M'),
-      patient_height_m: z.number().positive().optional().describe('患者身高（米），用于计算 SMI，缺省 1.72'),
-      patient_weight_kg: z.number().positive().optional().describe('患者体重（千克），缺省 68.0'),
+      patient_sex: z.enum(['M', 'F']).optional().describe('患者性别 (M/F)，可选，仅随结果记录（平台不据此判定肌少症）'),
+      patient_height_m: z.number().positive().optional().describe('患者身高（米），用于计算 SMI；不提供时不计算 SMI'),
+      patient_weight_kg: z.number().positive().optional().describe('患者体重（千克），可选'),
       l3_slice_index: z.number().int().optional().describe('指定第三腰椎 L3 椎体横截面层号（缺省由算法自动依据骨骼体素峰值识别）'),
       save_asset: z.boolean().optional().describe('是否将带颜色编码的切片图保存为用户资产，缺省 true'),
       label: z.string().max(80).optional().describe('图注标签，例如「图 4 L3 层面骨骼肌与内脏脂肪量化」'),
     },
   }, async ({ sample_id, file_path, patient_sex, patient_height_m, patient_weight_kg, l3_slice_index, save_asset, label }) => {
+    if (!sample_id && !file_path) return noImage()
     let resultData: any
     try {
       const resp = await fetch(`${workerUrl}/api/v1/analyze/whole-body`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sample_id: sample_id || (!file_path ? 'chest_lung_ct' : undefined),
+          sample_id,
           file_path,
-          patient_sex: patient_sex || 'M',
-          patient_height_m: patient_height_m || 1.72,
-          patient_weight_kg: patient_weight_kg || 68.0,
+          // 性别 / 身高 / 体重缺失时不代入典型值（SMI 依赖身高）
+          patient_sex: patient_sex ?? null,
+          patient_height_m: patient_height_m ?? null,
+          patient_weight_kg: patient_weight_kg ?? null,
           l3_slice_index,
         }),
         signal: AbortSignal.timeout(30000),
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('whole_body_failed', `全身体素分割失败 HTTP ${resp.status}: ${errText}`)
-      }
+      if (!resp.ok) return await workerToolFail('whole_body_failed', resp)
       resultData = await resp.json()
     } catch (err) {
       return fail('imaging_worker_offline', `连接影像微服务失败：${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    // 平台不判定肌少症：肌少症相关字段一律置空；缺身高时 SMI 置空（不以缺省身高计算）
+    const warnings: string[] = []
+    const bc = resultData?.body_composition as Record<string, unknown> | undefined
+    if (bc) {
+      if (patient_height_m === undefined) {
+        bc.skeletal_muscle_index_cm2_m2 = null
+        warnings.push('未提供患者身高：SMI 无法计算，已置空')
+      }
+      bc.smi_cutoff = null
+      bc.sarcopenia_detected = null
+      bc.sarcopenia_status = null
+      bc.sarcopenic_obesity = null
+      warnings.push('平台不判定肌少症，相关字段已置空；切片图与 summary_markdown 中如出现肌少症字样不可引用')
+      resultData.data_warnings = warnings
+      if (typeof resultData.summary_markdown === 'string') {
+        resultData.summary_markdown = `> **数据提示**：${warnings.join('；')}。\n\n${resultData.summary_markdown}`
+      }
     }
 
     if (save_asset !== false && resultData.key_slice_png_base64 && claims.p.includes('write')) {
@@ -978,50 +992,39 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         bytes: pngBuf,
       })
       resultData.asset_id = asset.id
-      resultData.markdown_insert = `![${label || `TotalSegmentator L3 体成分分析切片 #${sliceIdx}`}](asset:${asset.id})`
+      resultData.markdown_insert = `![${label || `L3 体成分（HU 阈值法）切片 #${sliceIdx}`}](asset:${asset.id})`
     }
 
     return json(resultData)
   })
 
-  // 15. 3D 可变形多模态影像弹性配准 (imaging_deformable_register)
+  // 15. 可变形配准 (imaging_deformable_register)：用请求给出的两套真实影像，要求同一体素网格
   server.registerTool('imaging_deformable_register', {
     description:
-      '运行 3D 可变形多模态影像弹性配准（B-样条 / 自由形变 FFD / Demons 密集位移场矢量）：' +
-      '输入固定影像 (fixed volume) 与浮动影像 (moving volume)，计算密集三维形变位移场 (DVF)、' +
-      '归一化互相关 (NCC) 与均方误差 (MSE) 优化改善指标，并输出形变对齐切片与流体矢量场叠加渲染图。',
+      '对两套影像做可变形配准，输出位移场统计与配准后切片。固定图像与浮动图像都必须给出（样本 ID 或文件路径），' +
+      '且须在同一体素网格（不同网格先重采样），否则影像微服务返回 400。',
     inputSchema: {
-      fixed_sample_id: z.string().optional().describe('固定图像预置样本 ID，例如 pet_ct_pair 或 chest_lung_ct'),
-      moving_sample_id: z.string().optional().describe('浮动图像预置样本 ID'),
-      fixed_file_path: z.string().optional().describe('固定图像 NIfTI 文件路径'),
-      moving_file_path: z.string().optional().describe('浮动图像 NIfTI 文件路径'),
-      grid_spacing_voxels: z.number().int().positive().optional().describe('B-样条控制网格间距（体素），默认 8'),
-      iterations: z.number().int().positive().optional().describe('优化迭代次数，默认 15'),
-      regularization_weight: z.number().positive().optional().describe('平滑正则化系数，默认 0.1'),
-      save_asset: z.boolean().optional().describe('是否保存形变位移场及配准后切片为用户资产，缺省 true'),
-      label: z.string().max(80).optional().describe('图注标签，例如「图 1 3D 可变形配准位移场与对齐图」'),
+      fixed_sample_id: z.string().optional().describe('固定图像样本 ID（与 fixed_file_path 二选一）'),
+      moving_sample_id: z.string().optional().describe('浮动图像样本 ID（与 moving_file_path 二选一）'),
+      fixed_file_path: z.string().optional().describe('固定图像文件路径'),
+      moving_file_path: z.string().optional().describe('浮动图像文件路径'),
+      iterations: z.number().int().positive().optional().describe('迭代次数，默认 10'),
+      smoothing_sigma: z.number().positive().optional().describe('位移场平滑 sigma，默认 1.0'),
+      save_asset: z.boolean().optional().describe('是否保存配准后切片为用户资产，缺省 true'),
+      label: z.string().max(80).optional().describe('图注标签'),
     },
-  }, async ({ fixed_sample_id, moving_sample_id, fixed_file_path, moving_file_path, grid_spacing_voxels, iterations, regularization_weight, save_asset, label }) => {
+  }, async ({ fixed_sample_id, moving_sample_id, fixed_file_path, moving_file_path, iterations, smoothing_sigma, save_asset, label }) => {
+    if (!fixed_sample_id && !fixed_file_path) return noImage('固定图像')
+    if (!moving_sample_id && !moving_file_path) return noImage('浮动图像')
     let resultData: any
     try {
       const resp = await fetch(`${workerUrl}/api/v1/registration/deformable`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fixed_sample_id: fixed_sample_id || (!fixed_file_path ? 'pet_ct_pair' : undefined),
-          moving_sample_id: moving_sample_id || (!moving_file_path ? 'pet_ct_pair' : undefined),
-          fixed_file_path,
-          moving_file_path,
-          grid_spacing_voxels: grid_spacing_voxels || 8,
-          iterations: iterations || 15,
-          regularization_weight: regularization_weight || 0.1,
-        }),
-        signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({ fixed_sample_id, moving_sample_id, fixed_file_path, moving_file_path, iterations: iterations ?? 10, smoothing_sigma: smoothing_sigma ?? 1.0 }),
+        signal: AbortSignal.timeout(60000),
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('registration_failed', `可变形配准失败 HTTP ${resp.status}: ${errText}`)
-      }
+      if (!resp.ok) return await workerToolFail('registration_failed', resp)
       resultData = await resp.json()
     } catch (err) {
       return fail('imaging_worker_offline', `连接影像微服务失败：${err instanceof Error ? err.message : String(err)}`)
@@ -1039,49 +1042,48 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         bytes: pngBuf,
       })
       resultData.asset_id = asset.id
-      resultData.markdown_insert = `![${label || `3D 可变形配准对齐切片 #${sliceIdx}`}](asset:${asset.id})`
+      resultData.markdown_insert = `![${label || `可变形配准后切片 #${sliceIdx}`}](asset:${asset.id})`
     }
 
     return json(resultData)
   })
 
-  // 16. PET-CT 代谢-解剖融合与定量摄取 (imaging_pet_ct_fuse)
+  // 16. PET-CT 融合与 SUV 统计 (imaging_pet_ct_fuse)：真实 CT + PET，同网格；PET 须已是 SUV；须给 ROI 或生理性摄取排除说明
   server.registerTool('imaging_pet_ct_fuse', {
     description:
-      '运行 PET-CT 代谢-解剖多模态影像融合与病灶摄取定量分析：' +
-      '提取肿瘤区域最大标准摄取值 (SUVmax)、平均摄取值 (SUVmean)、代谢肿瘤体积 (MTV cm³)、' +
-      '总病灶糖酵解量 (TLG = SUVmean × MTV) 及肝脏背景本底值，' +
-      '生成高对比度 Turbo/Hot 彩色代谢热力图与解剖 CT 的透明度融合切片 (Alpha Blended Overlay) 与放射科结构化融合报告。',
+      'PET-CT 融合显示与 SUV 统计（SUVmax / SUVmean / 阈值体积）。CT 与 PET 都必须给出且在同一网格（先配准重采样）；' +
+      'PET 体素值必须已换算为 SUV（本接口不做换算，需设 pet_values_are_suv=true 确认）；' +
+      '统计范围必须给 ROI 掩膜，或用 physiological_exclusion_note 说明已如何排除生理性摄取。条件不满足时影像微服务返回 400。不给诊断结论。',
     inputSchema: {
-      sample_id: z.string().optional().describe('预置样本 ID，例如 pet_ct_pair'),
-      ct_file_path: z.string().optional().describe('CT 解剖序列绝对路径'),
-      pet_file_path: z.string().optional().describe('PET 代谢序列绝对路径'),
-      suv_threshold_ratio: z.number().min(0.05).max(0.95).optional().describe('代谢肿瘤体积 (MTV) 划分阈值（相对于 SUVmax 比例，默认 0.41 即 41% 临界线）'),
-      alpha: z.number().min(0.1).max(0.95).optional().describe('PET 代谢热力图叠加透明度 (0.0~1.0)，默认 0.55'),
-      colormap: z.string().optional().describe('PET 假彩色映射表，默认 turbo'),
+      ct_sample_id: z.string().optional().describe('CT 样本 ID（与 ct_file_path 二选一）'),
+      ct_file_path: z.string().optional().describe('CT 文件路径'),
+      pet_sample_id: z.string().optional().describe('PET 样本 ID（与 pet_file_path 二选一）'),
+      pet_file_path: z.string().optional().describe('PET 文件路径'),
+      pet_values_are_suv: z.boolean().describe('确认 PET 体素值已是 SUV（必须为 true）'),
+      roi_mask_file_path: z.string().optional().describe('统计用 ROI 掩膜文件（与 CT 同网格）'),
+      roi_mask_sample_id: z.string().optional().describe('统计用 ROI 掩膜样本 ID'),
+      physiological_exclusion_note: z.string().optional().describe('没有 ROI 时必填：说明 PET 体积已如何排除生理性摄取'),
+      tracer: z.string().optional().describe('示踪剂，如 18F-FDG'),
+      suv_threshold: z.number().positive().optional().describe('阈值体积使用的 SUV 阈值，默认 2.5'),
+      key_slice_index: z.number().int().optional().describe('显示的层号'),
+      alpha: z.number().min(0.1).max(0.95).optional().describe('PET 叠加透明度，默认 0.55'),
       save_asset: z.boolean().optional().describe('是否保存融合切片为用户资产，缺省 true'),
-      label: z.string().max(80).optional().describe('图注标签，例如「图 2 肿瘤原发灶 PET-CT 代谢融合切片」'),
+      label: z.string().max(80).optional().describe('图注标签'),
     },
-  }, async ({ sample_id, ct_file_path, pet_file_path, suv_threshold_ratio, alpha, colormap, save_asset, label }) => {
+  }, async ({ ct_sample_id, ct_file_path, pet_sample_id, pet_file_path, pet_values_are_suv, roi_mask_file_path, roi_mask_sample_id, physiological_exclusion_note, tracer, suv_threshold, key_slice_index, alpha, save_asset, label }) => {
+    if (!ct_sample_id && !ct_file_path) return noImage('CT 影像')
+    if (!pet_sample_id && !pet_file_path) return noImage('PET 影像')
+    if (pet_values_are_suv !== true) return fail('suv_required', 'PET 体素值必须已换算为 SUV，并设 pet_values_are_suv=true 确认')
+    if (!roi_mask_file_path && !roi_mask_sample_id && !physiological_exclusion_note?.trim()) return fail('roi_required', '需提供 ROI 掩膜，或用 physiological_exclusion_note 说明已如何排除生理性摄取')
     let resultData: any
     try {
       const resp = await fetch(`${workerUrl}/api/v1/registration/pet-ct-fusion`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sample_id: sample_id || (!ct_file_path ? 'pet_ct_pair' : undefined),
-          ct_file_path,
-          pet_file_path,
-          suv_threshold_ratio: suv_threshold_ratio || 0.41,
-          alpha: alpha || 0.55,
-          colormap: colormap || 'turbo',
-        }),
-        signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({ ct_sample_id, ct_file_path, pet_sample_id, pet_file_path, pet_values_are_suv, roi_mask_file_path, roi_mask_sample_id, physiological_exclusion_note, tracer, suv_threshold, key_slice_index, alpha }),
+        signal: AbortSignal.timeout(60000),
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('pet_ct_fusion_failed', `PET-CT 融合失败 HTTP ${resp.status}: ${errText}`)
-      }
+      if (!resp.ok) return await workerToolFail('pet_ct_fusion_failed', resp)
       resultData = await resp.json()
     } catch (err) {
       return fail('imaging_worker_offline', `连接影像微服务失败：${err instanceof Error ? err.message : String(err)}`)
@@ -1099,49 +1101,40 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         bytes: pngBuf,
       })
       resultData.asset_id = asset.id
-      resultData.markdown_insert = `![${label || `PET-CT 代谢解剖融合切片 #${sliceIdx}`}](asset:${asset.id})`
+      resultData.markdown_insert = `![${label || `PET-CT 融合切片 #${sliceIdx}`}](asset:${asset.id})`
     }
 
     return json(resultData)
   })
 
-  // 17. 放疗靶区智能勾画与 DICOM RT-STRUCT 导出 (imaging_rtstruct_delineate)
+  // 17. 放疗靶区外扩 (imaging_rtstruct_delineate)：必须提供 GTV 掩膜，平台不自动勾画 GTV
   server.registerTool('imaging_rtstruct_delineate', {
     description:
-      '放疗靶区三维智能勾画与 DICOM RT-STRUCT 导出：' +
-      '基于肿瘤病灶自动生成大体肿瘤区 (GTV)、依据临床浸润边界并严格受皮质骨 (Cortical Bone) 和胸膜外空气解剖物理屏障约束剪裁的临床靶区 (CTV，默认膨胀 6mm 并骨屏障扣除)、' +
-      '以及考虑摆位与器官运动误差的计划靶区 (PTV，默认外扩 5mm)。' +
-      '计算各类靶区三维体积 (cm³)，输出多靶区彩色轮廓叠加渲染切片与放疗物理师/放疗医师审核报告。',
+      '由医生提供的 GTV 掩膜按给定边距外扩生成 CTV / PTV 并计算体积、输出轮廓叠加切片。' +
+      '必须提供 CT 影像与同网格的 GTV 掩膜（掩膜文件或样本）；不自动勾画 GTV。外扩结果须由放疗医师 / 物理师审核。',
     inputSchema: {
-      sample_id: z.string().optional().describe('预置样本 ID，例如 pet_ct_pair 或 chest_lung_ct'),
-      file_path: z.string().optional().describe('CT 序列路径'),
-      ctv_margin_mm: z.number().min(0).max(30).optional().describe('GTV 到 CTV 临床浸润外扩距离（毫米），默认 6.0'),
-      ptv_margin_mm: z.number().min(0).max(30).optional().describe('CTV 到 PTV 摆位误差外扩距离（毫米），默认 5.0'),
-      clip_bone_barrier: z.boolean().optional().describe('是否开启皮质骨 (HU > 250) 解剖屏障阻断剪裁（防止肿瘤靶区不符合解剖规律侵入正常致密骨），默认 true'),
-      slice_index: z.number().int().optional().describe('指定切片层号（默认位于肿瘤中心层）'),
-      save_asset: z.boolean().optional().describe('是否保存勾画渲染切片为用户资产，缺省 true'),
-      label: z.string().max(80).optional().describe('图注标签，例如「图 3 放疗靶区 (GTV/CTV/PTV) 勾画轮廓」'),
+      sample_id: z.string().optional().describe('CT 样本 ID（与 file_path 二选一）'),
+      file_path: z.string().optional().describe('CT 文件路径'),
+      gtv_mask_file_path: z.string().optional().describe('GTV 掩膜文件（与 CT 同网格）'),
+      gtv_mask_sample_id: z.string().optional().describe('GTV 掩膜样本 ID'),
+      ctv_margin_mm: z.number().min(0).max(30).optional().describe('GTV→CTV 外扩（mm），默认 6'),
+      ptv_margin_mm: z.number().min(0).max(30).optional().describe('CTV→PTV 外扩（mm），默认 4'),
+      key_slice_index: z.number().int().optional().describe('显示的层号'),
+      save_asset: z.boolean().optional().describe('是否保存轮廓切片为用户资产，缺省 true'),
+      label: z.string().max(80).optional().describe('图注标签'),
     },
-  }, async ({ sample_id, file_path, ctv_margin_mm, ptv_margin_mm, clip_bone_barrier, slice_index, save_asset, label }) => {
+  }, async ({ sample_id, file_path, gtv_mask_file_path, gtv_mask_sample_id, ctv_margin_mm, ptv_margin_mm, key_slice_index, save_asset, label }) => {
+    if (!sample_id && !file_path) return noImage('CT 影像')
+    if (!gtv_mask_file_path && !gtv_mask_sample_id) return fail('gtv_required', '必须提供 GTV 掩膜（gtv_mask_file_path 或 gtv_mask_sample_id）；平台不自动勾画 GTV')
     let resultData: any
     try {
       const resp = await fetch(`${workerUrl}/api/v1/rtstruct/delineate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sample_id: sample_id || (!file_path ? 'pet_ct_pair' : undefined),
-          file_path,
-          ctv_margin_mm: ctv_margin_mm !== undefined ? ctv_margin_mm : 6.0,
-          ptv_margin_mm: ptv_margin_mm !== undefined ? ptv_margin_mm : 5.0,
-          clip_bone_barrier: clip_bone_barrier !== false,
-          slice_index,
-        }),
-        signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({ sample_id, file_path, gtv_mask_file_path, gtv_mask_sample_id, ctv_margin_mm: ctv_margin_mm ?? 6.0, ptv_margin_mm: ptv_margin_mm ?? 4.0, key_slice_index }),
+        signal: AbortSignal.timeout(60000),
       })
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => '')
-        return fail('rtstruct_delineate_failed', `靶区勾画失败 HTTP ${resp.status}: ${errText}`)
-      }
+      if (!resp.ok) return await workerToolFail('rtstruct_delineate_failed', resp)
       resultData = await resp.json()
     } catch (err) {
       return fail('imaging_worker_offline', `连接影像微服务失败：${err instanceof Error ? err.message : String(err)}`)
@@ -1159,7 +1152,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         bytes: pngBuf,
       })
       resultData.asset_id = asset.id
-      resultData.markdown_insert = `![${label || `放疗靶区 (GTV/CTV/PTV) 勾画切片 #${sliceIdx}`}](asset:${asset.id})`
+      resultData.markdown_insert = `![${label || `GTV / CTV / PTV 轮廓切片 #${sliceIdx}`}](asset:${asset.id})`
     }
 
     return json(resultData)
@@ -1169,8 +1162,8 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
   server.registerTool('imaging_cohort_batch_analyze', {
     description:
       '临床研究队列级批量医学影像量化与科研宽表生成流水线：' +
-      '对研究入组的活跃受试者（或指定患者列表）批量发起高通量 3D 卷积分割与 RECIST / TotalSegmentator 量化。' +
-      '提取病灶长径、短径、体积、Lung-RADS、L3 骨骼肌指数 SMI、肌少症与内脏脂肪比例等结构化多模态指标，' +
+      '对研究入组的活跃受试者（或指定患者列表）批量调用影像量化分析。' +
+      '提取病灶长径、短径、体积、L3 骨骼肌指数 SMI（需身高）与内脏脂肪比例等测值（不含分级与肌少症判定），' +
       '自动生成 Wide-Format 科研宽表 CSV，并沉淀为研究数据集供统计分析、Table 1 基线表或生存分析使用。',
     inputSchema: {
       study_id: z.string().describe('临床研究 ID'),

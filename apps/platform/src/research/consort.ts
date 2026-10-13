@@ -215,3 +215,112 @@ function escapeXml(unsafe: string): string {
     }
   })
 }
+
+// —— 仅基于平台真实入组记录的受试者流向图 ——
+
+export interface EnrollmentFlowData {
+  title?: string
+  /** 平台入组记录中曾入组本研究的受试者数（在组 + 已移出） */
+  enrolled_ever: number
+  /** 入组记录状态为「已移出」的受试者数（平台不记录移出原因） */
+  withdrawn: number
+  /** 在组但当前操作者不在诊疗组、未纳入导出的受试者数 */
+  inaccessible: number
+  /** 实际纳入本次材料包的受试者数 */
+  analyzed: number
+  /** 按受试者真实 treatment_arm 的分组人数；无分组信息时为空 */
+  arms: Array<{ name: string; n: number }>
+  /** 缺少分组信息的受试者数（有分组时才有意义） */
+  unassigned?: number
+  /** 图下方说明（如「平台未记录筛选与排除原因」） */
+  note?: string
+}
+
+/**
+ * 受试者流向图（SVG）。与 renderConsortSvg 不同，这里不画「评估筛选 / 排除原因」环节，
+ * 也不画失访、依从性等没有记录来源的格子：每个数字都必须来自平台入组记录。
+ */
+export function renderEnrollmentFlowSvg(data: EnrollmentFlowData): string {
+  const { title = 'Participant Flow', enrolled_ever, withdrawn, inaccessible, analyzed, arms, unassigned = 0, note } = data
+  const width = 860
+  const cx = width / 2
+  const boxW = 300
+  const boxH = 60
+  const font = 'font-family="Times New Roman, STSong, serif"'
+  const parts: string[] = []
+  let y = 90
+
+  const box = (x: number, top: number, w: number, line1: string, line2: string, stroke = '#475569') => {
+    parts.push(`<rect x="${x}" y="${top}" width="${w}" height="${boxH}" rx="4" fill="#f8fafc" stroke="${stroke}" stroke-width="1.6" />`)
+    parts.push(`<text x="${x + w / 2}" y="${top + 25}" text-anchor="middle" ${font} font-weight="bold" font-size="14" fill="#0f172a">${escapeXml(line1)}</text>`)
+    parts.push(`<text x="${x + w / 2}" y="${top + 46}" text-anchor="middle" ${font} font-size="13" fill="#334155">${escapeXml(line2)}</text>`)
+  }
+  const arrow = (x1: number, y1: number, x2: number, y2: number) => {
+    parts.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)" />`)
+  }
+  // 侧枝：从主干引出到右侧说明框，centerY 为侧枝所在高度
+  const sideBox = (centerY: number, text: string) => {
+    const sx = cx + boxW / 2 + 30
+    parts.push(`<line x1="${cx}" y1="${centerY}" x2="${sx}" y2="${centerY}" stroke="#475569" stroke-width="1.4" marker-end="url(#arrow)" />`)
+    parts.push(`<rect x="${sx}" y="${centerY - 18}" width="${width - sx - 20}" height="36" rx="4" fill="#fff7ed" stroke="#c2410c" stroke-width="1.2" />`)
+    parts.push(`<text x="${sx + 10}" y="${centerY + 5}" ${font} font-size="12" fill="#7c2d12">${escapeXml(text)}</text>`)
+  }
+
+  box(cx - boxW / 2, y, boxW, '入组受试者 (Enrolled)', `n = ${enrolled_ever}`)
+  const sides: string[] = []
+  if (withdrawn > 0) sides.push(`移出研究 (Withdrawn): n = ${withdrawn}，原因未记录`)
+  if (inaccessible > 0) sides.push(`无访问权限未导出: n = ${inaccessible}`)
+  const gap = 50 + sides.length * 44
+  sides.forEach((t, i) => sideBox(y + boxH + 30 + i * 44, t))
+  arrow(cx, y + boxH, cx, y + boxH + gap)
+  y += boxH + gap
+  box(cx - boxW / 2, y, boxW, '纳入本次分析 (Included)', `n = ${analyzed}`, '#2563eb')
+
+  if (arms.length > 0) {
+    const n = arms.length + (unassigned > 0 ? 1 : 0)
+    const armW = Math.min(240, (width - 40 - (n - 1) * 20) / n)
+    const totalW = n * armW + (n - 1) * 20
+    const startX = cx - totalW / 2
+    const branchY = y + boxH + 25
+    const armsY = branchY + 30
+    parts.push(`<line x1="${cx}" y1="${y + boxH}" x2="${cx}" y2="${branchY}" stroke="#475569" stroke-width="1.6" />`)
+    const items = [...arms.map(a => ({ name: a.name, n: a.n })), ...(unassigned > 0 ? [{ name: '分组缺失 (Arm missing)', n: unassigned }] : [])]
+    const centers = items.map((_, i) => startX + i * (armW + 20) + armW / 2)
+    parts.push(`<line x1="${centers[0]}" y1="${branchY}" x2="${centers[centers.length - 1]}" y2="${branchY}" stroke="#475569" stroke-width="1.6" />`)
+    items.forEach((it, i) => {
+      arrow(centers[i]!, branchY, centers[i]!, armsY)
+      box(startX + i * (armW + 20), armsY, armW, it.name, `n = ${it.n}`, '#10b981')
+    })
+    y = armsY
+  }
+  y += boxH + 30
+  if (note) {
+    parts.push(`<text x="${cx}" y="${y}" text-anchor="middle" ${font} font-size="12" fill="#64748b">${escapeXml(note)}</text>`)
+    y += 20
+  }
+  const height = y + 10
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#475569" />
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="#ffffff" />
+  <text x="${cx}" y="40" text-anchor="middle" ${font} font-size="20" font-weight="bold" fill="#0f172a">${escapeXml(title)}</text>
+  <text x="${cx}" y="62" text-anchor="middle" ${font} font-size="13" fill="#64748b">数据来源：平台入组记录（不含筛选 / 排除环节）</text>
+  ${parts.join('\n  ')}
+</svg>`
+}
+
+/** 受试者流向图的 Mermaid 版本（与 renderEnrollmentFlowSvg 同口径，只含入组记录里有的环节） */
+export function renderEnrollmentFlowMermaid(data: EnrollmentFlowData): string {
+  const q = (s: string) => s.replace(/"/g, "'")
+  let m = 'graph TD\n'
+  m += `  A["入组受试者 (Enrolled)<br><b>n = ${data.enrolled_ever}</b>"] --> C["<b>纳入分析 (Included)</b><br>n = ${data.analyzed}"]\n`
+  if (data.withdrawn > 0) m += `  A -.-> W["移出研究 (Withdrawn)<br>n = ${data.withdrawn}，原因未记录"]\n`
+  if (data.inaccessible > 0) m += `  A -.-> X["无访问权限未导出<br>n = ${data.inaccessible}"]\n`
+  data.arms.forEach((a, i) => { m += `  C --> G${i}["${q(a.name)}<br>n = ${a.n}"]\n` })
+  if (data.arms.length > 0 && (data.unassigned ?? 0) > 0) m += `  C --> GU["分组缺失 (Arm missing)<br>n = ${data.unassigned}"]\n`
+  return m
+}

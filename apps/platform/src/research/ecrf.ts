@@ -8,6 +8,7 @@
  * 4. 一键沉淀为防篡改研究快照数据集，无缝直通 Table 1、CONSORT、Love Plot 与 KM 生存分析。
  */
 
+import { SOURCE_LABELS } from './subject-vars.ts'
 import type { DatasetService, DatasetView } from '../datasets/service.ts'
 import type { Actor, PatientService } from '../tenancy/patients.ts'
 import { StudyError, type StudyService } from './service.ts'
@@ -68,14 +69,14 @@ export const DEFAULT_ECRF_DICTIONARY: EcrfVariableDefinition[] = [
   { id: 'pfs_months', name_zh: '无进展生存期', name_en: 'PFS Months', category: 'survival', unit: '月', description: '自入组至肿瘤进展或因病死亡时间', default_checked: false },
   { id: 'treatment_arm', name_zh: '治疗方案分组', name_en: 'Treatment Arm', category: 'demographics', unit: '', description: '临床干预组 (1=试验药/联合治疗, 0=标准对照)', default_checked: true },
 
-  // 3. 3D 影像生物标志物 (MONAI & TotalSegmentator)
+  // 3. 影像测值（取自影像分析记录）
   { id: 'recist_longest_diam_mm', name_zh: 'RECIST 靶病灶长径', name_en: 'RECIST SOD Long Diameter', category: 'imaging', unit: 'mm', description: '基线靶病灶最大单径线 (mm)', default_checked: true },
   { id: 'tumor_volume_cm3', name_zh: '病灶立体三维容积', name_en: 'Tumor 3D Volume', category: 'imaging', unit: 'cm³', description: 'MONAI 3D 深度网络体素分割总容积', default_checked: true },
-  { id: 'l3_smi', name_zh: 'L3 骨骼肌质量指数 (SMI)', name_en: 'L3 Skeletal Muscle Index', category: 'imaging', unit: 'cm²/m²', description: '第三腰椎层面肌少症定量指标 (Prado 切点)', default_checked: true },
+  { id: 'l3_smi', name_zh: 'L3 骨骼肌质量指数 (SMI)', name_en: 'L3 Skeletal Muscle Index', category: 'imaging', unit: 'cm²/m²', description: 'L3 层面骨骼肌面积 / 身高²（需身高）', default_checked: true },
   { id: 'vat_to_sat_ratio', name_zh: '内脏/皮下脂肪比 (VAT/SAT)', name_en: 'VAT/SAT Ratio', category: 'imaging', unit: '', description: '腹型肥胖与心血管代谢风险比值 (阈值 1.0)', default_checked: true },
   { id: 'vat_cm2', name_zh: '内脏脂肪面积 (VAT)', name_en: 'Visceral Adipose Tissue Area', category: 'imaging', unit: 'cm²', description: 'L3 断面腹腔深层脂肪面积', default_checked: false },
   { id: 'bar_ratio', name_zh: '支气管-伴行动脉径比 (BAR)', name_en: 'Broncho-Arterial Ratio', category: 'imaging', unit: '', description: '印戒征确诊指标 (正常 ≤1.0, >1.1 提示扩张)', default_checked: true },
-  { id: 'ham_volume_cm3', name_zh: '高密度粘液栓容积 (HAM)', name_en: 'High-Attenuation Mucus Volume', category: 'imaging', unit: 'cm³', description: 'ABPA 强特异性嵌顿粘液总体积', default_checked: false },
+  { id: 'ham_volume_cm3', name_zh: '高密度粘液栓容积 (HAM)', name_en: 'High-Attenuation Mucus Volume', category: 'imaging', unit: 'cm³', description: 'CT 值高于阈值的管腔粘液栓总体积', default_checked: false },
 
   // 4. 协同实验室生化指标 (Lab Tests)
   { id: 'nt_pro_bnp', name_zh: '血清 NT-proBNP', name_en: 'Serum NT-proBNP', category: 'lab', unit: 'pg/mL', description: '心功能衰竭关键诊断指标', default_checked: true },
@@ -212,7 +213,7 @@ export class EcrfService {
             formatted: val !== null ? `${val} 岁` : '—',
             confidence: val !== null ? 0.99 : 0.0,
             source_type: 'demographics',
-            source_detail: val !== null ? '病历出生日期计算' : '缺失出生日期记录',
+            source_detail: val !== null ? '来源：患者主档案（出生年份）' : '患者主档案缺出生年份',
             extracted_at: nowIso,
           }
         } else if (v.id === 'sex') {
@@ -222,7 +223,7 @@ export class EcrfService {
             formatted: val || '—',
             confidence: val !== null ? 0.99 : 0.0,
             source_type: 'demographics',
-            source_detail: val !== null ? '受试者主档案' : '缺失性别记录',
+            source_detail: val !== null ? '来源：患者主档案' : '患者主档案缺性别',
             extracted_at: nowIso,
           }
         } else if (v.category === 'lab') {
@@ -254,15 +255,15 @@ export class EcrfService {
             }
           }
         } else if (v.category === 'imaging') {
-          // 真实影像生物标志物提取（优先匹配真实影像记录，缺失时使用 MONAI 分割模型回填估算）
-          const foundImg = s.imaging?.find(ir => {
-            const m = (ir.payload?.metrics as Record<string, any>) || ir.payload || {}
-            return m[v.id] !== undefined
-          })
+          // 只取真实影像量化记录里的值；没有记录就是缺失，不做任何估算回填
+          const metricsOf = (ir: { payload: Record<string, unknown> }) => ((ir.payload?.metrics as Record<string, unknown>) || ir.payload || {})
+          const hasValue = (x: unknown) => x !== null && x !== undefined && String(x).trim() !== ''
+          const foundImg = s.imaging?.find(ir => hasValue(metricsOf(ir)[v.id]))
           if (foundImg) {
-            const m = (foundImg.payload?.metrics as Record<string, any>) || foundImg.payload || {}
-            const val = m[v.id]
-            const slice = m.key_slice_index ?? m.slice_index ?? 128
+            const m = metricsOf(foundImg)
+            const val = m[v.id] as number | string
+            const rawSlice = m.key_slice_index ?? m.slice_index
+            const slice = typeof rawSlice === 'number' && Number.isFinite(rawSlice) ? rawSlice : undefined
             cellAudit = {
               value: val,
               formatted: `${val} ${v.unit}`.trim(),
@@ -275,27 +276,34 @@ export class EcrfService {
               extracted_at: nowIso,
             }
           } else {
-            // MONAI 解剖影像分割模型回填估算
-            const synthVal = v.id === 'l3_smi' ? 48.5 + (idx * 3.2) % 12 : v.id === 'vat_to_sat_ratio' ? 0.85 + (idx * 0.15) % 0.6 : 1.0
             cellAudit = {
-              value: Number(synthVal.toFixed(2)),
-              formatted: `${synthVal.toFixed(2)} ${v.unit}`.trim(),
-              confidence: 0.92,
+              value: null,
+              formatted: '—',
+              confidence: 0.0,
               source_type: 'imaging',
-              source_slice_index: 100 + idx * 10,
-              source_detail: 'MONAI 解剖分割自动化回填',
+              source_detail: '未找到对应的影像量化记录',
               extracted_at: nowIso,
             }
           }
-        } else {
-          // 生存结局与分组 (survival / clinical)
-          const defVal = v.id === 'treatment_arm' ? (idx % 2 === 0 ? 1 : 0) : v.id === 'os_status' ? (idx % 3 === 0 ? 1 : 0) : 24.0
+        } else if (s.vars?.[v.id]) {
+          // 研究变量（分组、随访、结局）：取自研究变量登记，标明来源与核实状态
+          const sv = s.vars[v.id]!
           cellAudit = {
-            value: defVal,
-            formatted: `${defVal} ${v.unit}`.trim(),
-            confidence: 0.95,
+            value: sv.value,
+            formatted: `${sv.value}${v.unit ? ` ${v.unit}` : ''}`,
+            confidence: sv.status === 'verified' ? 1 : 0.5,
             source_type: 'clinical',
-            source_detail: '临床队列基线随访登记',
+            source_detail: `${SOURCE_LABELS[sv.source] ?? sv.source} · ${sv.status === 'verified' ? '已核实' : '未核实'}`,
+            extracted_at: nowIso,
+          }
+        } else {
+          // 生存结局与治疗分组：没有研究变量登记时如实返回缺失
+          cellAudit = {
+            value: null,
+            formatted: '—',
+            confidence: 0.0,
+            source_type: 'clinical',
+            source_detail: '未登记该研究变量，请在「研究变量」中录入或导入',
             extracted_at: nowIso,
           }
         }

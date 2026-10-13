@@ -1,5 +1,5 @@
 import type { DatasetService, DatasetView } from '../datasets/service.ts'
-import type { Actor, LabRow, PatientService } from '../tenancy/patients.ts'
+import type { Actor, LabRow, PatientService, SubjectVar } from '../tenancy/patients.ts'
 import { StudyError, type StudyService } from './service.ts'
 
 /**
@@ -117,7 +117,7 @@ export class CohortService {
 
   /**
    * 队列级批量 3D 医学影像量化与科研宽表生成流水线：
-   * 调取 MONAI Worker 进行高通量 3D 卷积 / RECIST 测量 / 全身解剖肌少症量化，
+   * 调取影像微服务做病灶测量与 L3 体成分（HU 阈值法）测量（不判定肌少症），
    * 汇聚成宽表 CSV，并自动作为科研数据集归入研究。
    */
   async imagingBatchAnalyze(a: Actor, studyId: string, input: {
@@ -278,16 +278,19 @@ function wide(subjects: Subject[], relativeDays = false) {
       ['longest_diameter_latest_mm', 'RECIST 靶病灶长径最近 (mm)'],
       ['total_volume_baseline_cm3', '靶病灶三维体积基线 (cm³)'],
       ['total_volume_latest_cm3', '靶病灶三维体积最近 (cm³)'],
-      ['lung_rads_latest', 'Lung-RADS 分级 (最近)'],
-      ['smi_baseline_cm2_m2', '骨骼肌指数 SMI 基线 (cm²/m²)'],
-      ['smi_latest_cm2_m2', '骨骼肌指数 SMI 最近 (cm²/m²)'],
-      ['sarcopenia_baseline', '肌少症阳性 (基线)'],
       ['vat_to_sat_ratio_baseline', '内脏与皮下脂肪比 VAT/SAT (基线)'],
       ['imaging_scans_n', '影像检查次数'],
     ]
     for (const [col, lab] of imgCols) {
       header.push(col); labels[col] = lab
     }
+  }
+
+  const hasSmi = subjects.some(s => s.vars?.l3_smi?.status === 'verified')
+  if (hasSmi) {
+    header.push('l3_smi_verified', 'l3_smi_source')
+    labels.l3_smi_verified = 'L3 骨骼肌指数 SMI（已核实，cm²/m²）'
+    labels.l3_smi_source = 'SMI 来源'
   }
 
   const rows = subjects.map(s => {
@@ -309,26 +312,37 @@ function wide(subjects: Subject[], relativeDays = false) {
       const m1 = firstScan?.metrics || {}
       const m2 = lastScan?.metrics || {}
       const bc1 = m1.body_composition || {}
-      const bc2 = m2.body_composition || {}
-      const rads2 = m2.lung_rads || {}
 
       r.push(
         m1.longest_diameter_mm ?? null,
         m2.longest_diameter_mm ?? null,
         m1.total_volume_cm3 ?? null,
         m2.total_volume_cm3 ?? null,
-        rads2.category ?? null,
-        bc1.skeletal_muscle_index_cm2_m2 ?? null,
-        bc2.skeletal_muscle_index_cm2_m2 ?? null,
-        bc1.sarcopenia_detected !== undefined ? (bc1.sarcopenia_detected ? 1 : 0) : null,
         bc1.vat_to_sat_ratio ?? null,
         scans.length
       )
     }
 
+    // SMI：只取研究者已核实的研究变量值，并注明来源；平台不判定肌少症
+    if (hasSmi) {
+      const v = s.vars?.l3_smi
+      const ok = v && v.status === 'verified'
+      r.push(ok ? v.value : null, ok ? smiSource(v) : null)
+    }
+
     return r
   })
   return { header, rows, labels }
+}
+
+/** SMI 来源说明：影像分析记录 id、日期与方法 */
+function smiSource(v: SubjectVar): string {
+  const ref = v.source_ref ?? {}
+  const parts = [v.source === 'imaging_analysis' ? '影像分析记录' : v.source]
+  if (ref.imaging_record_id) parts.push(String(ref.imaging_record_id))
+  if (ref.report_date) parts.push(String(ref.report_date))
+  if (v.method) parts.push(v.method)
+  return `${parts.join(' · ')}（已核实）`
 }
 
 /** 长表：每次化验一行（标准单位；没法换算的保留原单位并标出）。 */
