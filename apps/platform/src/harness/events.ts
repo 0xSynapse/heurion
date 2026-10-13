@@ -22,6 +22,10 @@ export type UiEvent =
   | { type: 'action'; action: import('../mcp/turns.ts').ActionCard }
   | { type: 'error'; message: string }
   | { type: 'done' }
+  /** Subagent 子专家协同事件：开始、执行步、完成。 */
+  | { type: 'subagent_start'; id: string; role: string; role_label: string; task: string }
+  | { type: 'subagent_step'; id: string; role: string; step: string; status?: 'ok' | 'warn' | 'info' }
+  | { type: 'subagent_done'; id: string; role: string; summary: string; output?: unknown }
 
 interface Block { type: string; text?: string; id?: string; name?: string; arguments?: string }
 

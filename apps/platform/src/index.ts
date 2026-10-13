@@ -31,6 +31,7 @@ import { ClaimService } from './claims/service.ts'
 import { SlideRenderer } from './render/slides.ts'
 import { attachCollab } from './collab/gateway.ts'
 import { PostCheck } from './collab/postcheck.ts'
+import { SubagentService } from './subagents/service.ts'
 import { config } from './config.ts'
 import { HarnessPool } from './harness/pool.ts'
 import { handleLlmProxy, LLM_PREFIX } from './harness/llm-proxy.ts'
@@ -132,6 +133,7 @@ const turns = new TurnService(docs, pool, registry, {
 })
 // 知家分享给医生（docs/design/SHARING.md）：界面与 MCP 共用一个实例
 const shares = new ShareService(store, patients.tenantService, patients, docs)
+const subagents = new SubagentService({ docs, store, claims, pubmed, openalex, fulltext, datasets, cohort })
 const mcpDeps = {
   docs, ops, claims, renderer, turns: registry, secret: config.secret,
   pubmed,
@@ -149,6 +151,7 @@ const mcpDeps = {
   fulltext,
   images,
   access,
+  subagents,
   isLiveSession: (userId: string, generation: string) => pool.isLive(userId, generation),
 }
 

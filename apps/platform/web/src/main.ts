@@ -1327,6 +1327,15 @@ const TOOL_LABELS: Record<string, (a: any) => string> = {
   asset_upload: () => '上传图片',
   read_image: () => '查看图片附件',
   bash: () => '运行计算',
+  delegate_task: a => {
+    const roleMap: Record<string, string> = {
+      literature_researcher: '文献证据专家',
+      biostatistician: '生信统计专家',
+      fact_checker: '质控核查专家',
+    }
+    const roleName = roleMap[a?.role] ?? (a?.role || '子专家')
+    return `委派【${roleName}】：${a?.task?.slice(0, 36) ?? ''}`
+  },
 }
 
 function toolLabel(name: string, args: string): string {
@@ -1339,7 +1348,7 @@ function toolLabel(name: string, args: string): string {
 
 // —— 回合的界面状态：工作过程（折叠）、本轮改动（摘要条）、重试 ——
 
-let turnUi: { steps: HTMLDetailsElement; count: number; retries: number; turnId: string | null } | null = null
+let turnUi: { steps: HTMLDetailsElement; count: number; retries: number; subagents: number; turnId: string | null } | null = null
 /** 工具调用 id → 人话名称（工具失败时说清是哪一步）。 */
 const callLabels = new Map<string, string>()
 /** 每轮 AI 改动的块（提交事件带回合 id）。 */
@@ -1351,14 +1360,16 @@ function startTurnUi(turnId: string | null): void {
   steps.open = true
   steps.innerHTML = '<summary>工作中…</summary>'
   $('chatLog').appendChild(steps)
-  turnUi = { steps, count: 0, retries: 0, turnId }
+  turnUi = { steps, count: 0, retries: 0, subagents: 0, turnId }
 }
 
 const DONE_LABEL: Record<string, string> = { done: '已完成', error: '出错了', timeout: '超时停止', cancelled: '已停止', interrupted: '被中断' }
 
 function finishTurnUi(status: string): void {
   if (!turnUi) return
-  turnUi.steps.querySelector('summary')!.textContent = `${DONE_LABEL[status] ?? status} · ${turnUi.count} 步${turnUi.retries ? `（${turnUi.retries} 步调整后重试）` : ''}`
+  const subagentInfo = turnUi.subagents > 0 ? `（含 ${turnUi.subagents} 位专家协同）` : ''
+  const retryInfo = turnUi.retries ? `（${turnUi.retries} 步调整后重试）` : ''
+  turnUi.steps.querySelector('summary')!.textContent = `${DONE_LABEL[status] ?? status} · ${turnUi.count} 步${subagentInfo}${retryInfo}`
   turnUi.steps.open = false
   turnUi.steps.classList.toggle('failed', status !== 'done')
   turnUi = null
@@ -1429,12 +1440,209 @@ $('turnBanner').onclick = async e => {
   }
 }
 
+interface SubagentCardState {
+  card: HTMLElement
+  stepsList: HTMLElement
+  statusEl: HTMLElement
+  resultBox: HTMLElement
+  role: string
+}
+const subagentCards = new Map<string, SubagentCardState>()
+
+function formatMarkdownTableHtml(md: string): string {
+  const lines = md.trim().split('\n').map(l => l.trim()).filter(Boolean)
+  if (!lines.some(l => l.includes('|'))) {
+    return `<pre class="subagent-mono-block">${esc(md)}</pre>`
+  }
+  let isHeader = true
+  let headerHtml = ''
+  let bodyHtml = ''
+
+  for (const line of lines) {
+    if (!line.includes('|')) continue
+    if (/^\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?$/.test(line)) {
+      isHeader = false
+      continue
+    }
+    const cols = line.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
+    if (isHeader) {
+      headerHtml += `<tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr>`
+    } else {
+      bodyHtml += `<tr>${cols.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`
+    }
+  }
+
+  if (!headerHtml && !bodyHtml) {
+    return `<pre class="subagent-mono-block">${esc(md)}</pre>`
+  }
+
+  return `<table class="subagent-data-table">${headerHtml ? `<thead>${headerHtml}</thead>` : ''}<tbody>${bodyHtml}</tbody></table>`
+}
+
+function renderSubagentStart(ev: { id: string; role: string; role_label: string; task: string }): void {
+  if (turnUi) {
+    turnUi.count++
+    turnUi.subagents++
+  }
+  const card = document.createElement('div')
+  card.className = `subagent-card role-${esc(ev.role)}`
+  card.id = `subagent-${esc(ev.id)}`
+
+  const header = document.createElement('div')
+  header.className = 'subagent-header'
+  header.innerHTML = `
+    <div class="subagent-title-row">
+      <span class="subagent-role-pill role-${esc(ev.role)}">${esc(ev.role_label || ev.role)}</span>
+      <span class="subagent-task" title="${esc(ev.task)}">${esc(ev.task)}</span>
+    </div>
+    <span class="subagent-status status-running"><span class="subagent-pulse"></span>协同中…</span>
+  `
+
+  const stepsList = document.createElement('div')
+  stepsList.className = 'subagent-steps'
+
+  const resultBox = document.createElement('div')
+  resultBox.className = 'subagent-result-box'
+  resultBox.hidden = true
+
+  card.appendChild(header)
+  card.appendChild(stepsList)
+  card.appendChild(resultBox)
+
+  const parent = turnUi?.steps ?? $('chatLog')
+  parent.appendChild(card)
+  $('chatLog').scrollTop = 1e9
+
+  subagentCards.set(ev.id, {
+    card,
+    stepsList,
+    statusEl: header.querySelector('.subagent-status') as HTMLElement,
+    resultBox,
+    role: ev.role,
+  })
+}
+
+function renderSubagentStep(ev: { id: string; role: string; step: string; status?: 'ok' | 'warn' | 'info' }): void {
+  const state = subagentCards.get(ev.id)
+  if (!state) {
+    addStep(`  [${ev.role}] ${ev.step}`, ev.status === 'warn' ? 'warn' : ev.status === 'ok' ? 'ok' : '')
+    return
+  }
+  const item = document.createElement('div')
+  item.className = `subagent-step-item status-${ev.status ?? 'info'}`
+  const iconSpan = ev.status === 'ok' ? '✓' : ev.status === 'warn' ? '⚠️' : '▸'
+  item.innerHTML = `<span class="subagent-step-bullet">${iconSpan}</span><span class="subagent-step-msg">${esc(ev.step)}</span>`
+  state.stepsList.appendChild(item)
+  $('chatLog').scrollTop = 1e9
+}
+
+function renderSubagentDone(ev: { id: string; role: string; summary: string; output?: any }): void {
+  const state = subagentCards.get(ev.id)
+  if (!state) {
+    addStep(`  ✓ [${ev.role}] ${ev.summary}`, 'ok')
+    return
+  }
+
+  state.statusEl.className = 'subagent-status status-done'
+  state.statusEl.innerHTML = '✓ 交付完成'
+
+  const out = ev.output
+  if (out && typeof out === 'object') {
+    state.resultBox.hidden = false
+    const details = document.createElement('details')
+    details.className = 'subagent-output-details'
+    details.open = true
+
+    let roleTitle = '成果交付'
+    if (ev.role === 'literature_researcher') roleTitle = '文献检索与引注包'
+    else if (ev.role === 'biostatistician') roleTitle = '生信统计报表 (Table 1 / KM)'
+    else if (ev.role === 'fact_checker') roleTitle = '证据核验与合规审查报告'
+
+    let contentHtml = ''
+    if (ev.role === 'literature_researcher') {
+      const citations = Array.isArray(out.citations) ? out.citations : []
+      contentHtml = `
+        <div class="subagent-output-summary">${esc(ev.summary)}</div>
+        ${out.clinical_synthesis ? `<div class="subagent-synthesis-callout"><strong>临床综合分析：</strong>${lightMarkdown(out.clinical_synthesis)}</div>` : ''}
+        ${citations.length > 0 ? `
+          <div class="subagent-citations-title">登记与引用建议（共 ${citations.length} 篇）：</div>
+          <div class="subagent-citation-cards">
+            ${citations.map((c: any) => `
+              <div class="subagent-citation-card">
+                <div class="cite-header">
+                  <span class="cite-title">${esc(c.title || '无题')}</span>
+                  ${c.cite_id ? `<span class="cite-marker-pill" title="文档引用标记">[@c:${esc(c.cite_id)}]</span>` : ''}
+                </div>
+                <div class="cite-meta">
+                  <span>${esc(Array.isArray(c.authors) ? c.authors.slice(0, 3).join(', ') + (c.authors.length > 3 ? ' 等' : '') : c.authors || '')}</span>
+                  ${c.journal ? `<span> · <i>${esc(c.journal)}</i></span>` : ''}
+                  ${c.year ? `<span> (${esc(String(c.year))})</span>` : ''}
+                  ${c.pmid ? `<span class="cite-badge pmid">PMID: ${esc(String(c.pmid))}</span>` : ''}
+                  ${c.doi ? `<span class="cite-badge doi">DOI: ${esc(String(c.doi))}</span>` : ''}
+                </div>
+                ${c.evidence_quote ? `<div class="cite-quote">“${esc(c.evidence_quote)}”</div>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+      `
+    } else if (ev.role === 'biostatistician') {
+      const mdTable = out.markdown_table ? formatMarkdownTableHtml(out.markdown_table) : ''
+      contentHtml = `
+        <div class="subagent-output-summary">${esc(ev.summary)}</div>
+        <div class="subagent-stat-meta">
+          <span>数据集：<b>${esc(out.dataset_name || out.dataset_id || '未命名')}</b></span>
+          <span>样本量：<b>N = ${esc(String(out.sample_size ?? '-'))}</b></span>
+          <span>分析类型：<b>${esc(out.analysis_type === 'survival' ? 'Kaplan-Meier 生存分析' : out.analysis_type === 'table1' ? 'Table 1 基线特征' : '统计汇总')}</b></span>
+        </div>
+        ${mdTable ? `<div class="subagent-table-wrapper">${mdTable}</div>` : ''}
+        ${out.clinical_interpretation ? `<div class="subagent-stat-callout"><strong>统计学与临床释义：</strong>${lightMarkdown(out.clinical_interpretation)}</div>` : ''}
+      `
+    } else if (ev.role === 'fact_checker') {
+      const verdict = out.verdict || 'pass'
+      const verdictLabel = verdict === 'pass' ? '✓ 核验全部通过' : verdict === 'warning' ? '⚠️ 存在存疑或轻微出入' : '❌ 发现未支持的论断'
+      const issues = Array.isArray(out.issues) ? out.issues : []
+      contentHtml = `
+        <div class="subagent-fc-verdict verdict-${esc(verdict)}">${verdictLabel}</div>
+        <div class="subagent-fc-grid">
+          <div class="fc-metric"><span class="fc-val">${out.total_claims_audited ?? 0}</span><span class="fc-label">核验论断</span></div>
+          <div class="fc-metric"><span class="fc-val ok">${out.supported_count ?? 0}</span><span class="fc-label">文献完全吻合</span></div>
+          <div class="fc-metric"><span class="fc-val ${out.unsupported_count ? 'danger' : ''}">${out.unsupported_count ?? 0}</span><span class="fc-label">无证据/冲突</span></div>
+          <div class="fc-metric"><span class="fc-val ${out.phi_detected ? 'danger' : 'ok'}">${out.phi_detected ? `⚠️ 检出 ${out.phi_count}` : '✓ 安全'}</span><span class="fc-label">PHI 敏感脱敏</span></div>
+        </div>
+        ${issues.length > 0 ? `
+          <div class="subagent-issues-title">需作者关注的论断核验项（${issues.length} 处）：</div>
+          <div class="subagent-issue-list">
+            ${issues.map((iss: any) => `
+              <div class="subagent-issue-item verdict-${esc(iss.verdict)}">
+                <div class="issue-sentence">「${esc(iss.sentence)}」</div>
+                <div class="issue-reason"><b>原因：</b>${esc(iss.reason)}</div>
+                ${iss.suggestion ? `<div class="issue-fix"><b>修改建议：</b>${esc(iss.suggestion)}</div>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+      `
+    } else {
+      contentHtml = `<div class="subagent-output-summary">${esc(ev.summary)}</div>`
+    }
+
+    details.innerHTML = `
+      <summary class="subagent-output-summary-btn">${roleTitle} · 成果交付</summary>
+      <div class="subagent-output-content">${contentHtml}</div>
+    `
+    state.resultBox.appendChild(details)
+  }
+  $('chatLog').scrollTop = 1e9
+}
+
 let lastAssistant: HTMLElement | null = null
 
 function renderTurnEvent(ev: any): void {
   switch (ev.type) {
     case 'queued': addStep(`排队中（第 ${ev.position} 位）：${displayMessage(ev.message).slice(0, 40)}`); void loadQueue(); break
     case 'turn':
+      subagentCards.clear()
       void loadQueue()
       lastAssistant = null
       setBusy(true)
@@ -1443,6 +1651,9 @@ function renderTurnEvent(ev: any): void {
       startTurnUi(ev.turn_id ?? null)
       break
     case 'assistant': lastAssistant = addMsg('assistant', ev.text); break
+    case 'subagent_start': renderSubagentStart(ev); break
+    case 'subagent_step': renderSubagentStep(ev); break
+    case 'subagent_done': renderSubagentDone(ev); break
     case 'tool_call': {
       if (turnUi) turnUi.count++
       const label = toolLabel(String(ev.name), String(ev.arguments ?? ''))

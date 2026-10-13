@@ -14,6 +14,10 @@ export type TurnNotice =
   | { type: 'memory'; result: 'proposed' | 'active' | 'forgotten'; memory: MemoryRow }
   /** AI 发起了需要用户确认的高风险操作：对话里显示确认卡。 */
   | { type: 'action'; action: ActionCard }
+  /** Subagent 子专家协同过程通知。 */
+  | { type: 'subagent_start'; id: string; role: string; role_label: string; task: string; doc_id?: string }
+  | { type: 'subagent_step'; id: string; role: string; step: string; status?: 'ok' | 'warn' | 'info'; doc_id?: string }
+  | { type: 'subagent_done'; id: string; role: string; summary: string; output?: unknown; doc_id?: string }
 
 export interface ActiveTurn {
   turnId: string

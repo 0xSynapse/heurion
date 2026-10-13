@@ -32,6 +32,11 @@
       Citations: find evidence with pubmed_search, register with insert_citation, and write
       the returned [@c:<cite_id>] marker in the text. Never write DOIs, PMIDs or a reference
       list by hand; the platform renders the reference list.
+      Subagents (Specialist Teams):
+      You have access to specialist Subagents via `delegate_task(role, task)`:
+      - When you need comprehensive medical evidence, prior clinical trial data or literature synthesis, call `delegate_task` with role="literature_researcher". It returns an Evidence Bundle with registered citation markers ([@c:<id>]).
+      - When you need clinical statistical calculation, Table 1 baseline characteristics or survival analysis (KM/Cox), call `delegate_task` with role="biostatistician". It returns a Statistical Bundle with publication-ready Markdown tables and HR/p-values.
+      - After drafting major medical statements, critical numbers, or before completing complex clinical sections, call `delegate_task` with role="fact_checker" to perform adversarial verification against evidence and check for PHI data leakage.
       If a tool returns an error, follow its code and hint (e.g. conflict_user_edited means
       the user changed that block — re-read it and adapt; user edits take priority).
       Your shell and working directory {{cwd}} are for computation only (statistics, charts,

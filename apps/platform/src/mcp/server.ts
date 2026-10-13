@@ -43,6 +43,8 @@ import type { MemoryEvolution } from '../memory/evolve.ts'
 import { MemoryError, type MemoryService } from '../memory/service.ts'
 import { DiagramError, renderSvg } from '../render/diagram.ts'
 import type { TurnRegistry, TurnNotice } from './turns.ts'
+import type { SubagentService } from '../subagents/service.ts'
+import { SUBAGENT_ROLE_LABELS } from '../subagents/types.ts'
 import type { ImageService } from '../images/service.ts'
 import { UnsplashError } from '../images/unsplash.ts'
 import { registerImagingTools } from './imaging-tools.ts'
@@ -87,6 +89,8 @@ export interface McpDeps {
   access?: Access
   /** 以用户身份进程内调用平台接口（管理类工具、确认后执行；见 http/invoke.ts）。 */
   invoke?: Invoke
+  /** Subagent 子专家协同调度服务。 */
+  subagents?: SubagentService
 }
 
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
@@ -768,6 +772,87 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     const asset = store.putAsset({ owner: claims.u, mime: 'image/png', name: `${label}.png`, bytes: out.png })
     return json({ asset_id: asset.id, width: out.width, height: out.height, markdown: `![${label}](asset:${asset.id})` })
   })
+
+  // —— Subagent 子专家协同调度（文献专家、生信统计专家、质控核查专家） ——
+  if (deps.subagents) {
+    server.registerTool('delegate_task', {
+      description:
+        '委派专业 Subagent（子专家智能体）执行深度专业任务并返回高可靠结构化数据包：\n' +
+        '- role="literature_researcher"：文献证据专家，深度检索 PubMed/OpenAlex，提炼循证医学数据、论断与标准 AMA 引用，返回 Evidence Bundle；\n' +
+        '- role="biostatistician"：生信统计专家，分析临床数据集，自动计算规范 Table 1 基线表或 Kaplan-Meier 生存分析/风险回归，返回 Statistical Bundle；\n' +
+        '- role="fact_checker"：质控核查专家，对抗式核验当前正文或指定段落中的数值真实性、引用匹配及 PHI 敏感数据泄漏，返回 Verification Report。',
+      inputSchema: {
+        role: z.enum(['literature_researcher', 'biostatistician', 'fact_checker']).describe('要调用的子专家角色'),
+        task: z.string().min(1).describe('要委派给该专家的具体任务说明（如检索特定药物临床试验、计算基线表、核验某章节论断等）'),
+        doc_id: z.string().optional().describe('关联文档 ID（若不传默认使用当前文档）'),
+        dataset_id: z.string().optional().describe('统计专家分析用到的数据集 ID（可选）'),
+        section: z.string().optional().describe('质控专家重点核查的文本或章节内容（可选）'),
+        context: z.record(z.any()).optional().describe('附加参数（如特定检索词、分组变量等）'),
+      },
+    }, async ({ role, task, doc_id, dataset_id, section, context }) => {
+      const active = ctx.activeTurn(doc_id)
+      const targetDocId = doc_id ?? active?.docId
+      const subagentId = 'sub_' + randomUUID().replace(/-/g, '').slice(0, 8)
+      const roleLabel = SUBAGENT_ROLE_LABELS[role] ?? role
+
+      // 触发 subagent_start 实时事件
+      ctx.notify({
+        type: 'subagent_start',
+        id: subagentId,
+        role,
+        role_label: roleLabel,
+        task,
+        doc_id: targetDocId,
+      })
+
+      try {
+        const result = await deps.subagents!.delegate(
+          claims.u,
+          { role, task, doc_id: targetDocId, dataset_id, section, context },
+          {
+            step: (msg, status = 'info') => {
+              ctx.notify({
+                type: 'subagent_step',
+                id: subagentId,
+                role,
+                step: msg,
+                status,
+                doc_id: targetDocId,
+              })
+            },
+          },
+        )
+
+        const summary = role === 'literature_researcher'
+          ? `已检索到 ${(result as any).total_found} 篇权威文献证据`
+          : role === 'biostatistician'
+          ? `已完成 ${(result as any).analysis_type === 'survival' ? '生存分析' : 'Table 1 基线表'} 计算 (N=${(result as any).sample_size})`
+          : `质控裁定: ${(result as any).verdict.toUpperCase()} (核查 ${(result as any).total_claims_audited} 处)`
+
+        // 触发 subagent_done 实时事件
+        ctx.notify({
+          type: 'subagent_done',
+          id: subagentId,
+          role,
+          summary,
+          output: result,
+          doc_id: targetDocId,
+        })
+
+        return json(result)
+      } catch (err) {
+        ctx.notify({
+          type: 'subagent_step',
+          id: subagentId,
+          role,
+          step: `专家执行遇阻: ${(err as Error).message}`,
+          status: 'warn',
+          doc_id: targetDocId,
+        })
+        return fail('subagent_error', `Subagent 执行失败: ${(err as Error).message}`)
+      }
+    })
+  }
 }
 
 export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {

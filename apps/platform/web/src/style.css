@@ -616,6 +616,353 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .step.retry { white-space: normal; }
 .step.retry button { font-size: 12px; padding: 2px 12px; margin: 2px 0 6px; }
 
+/* —— Subagent 多专家协同卡片与成果交付 —— */
+.subagent-card {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: var(--bg-deep);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--mint);
+  border-radius: 0;
+  font-size: 12px;
+}
+.subagent-card.role-literature_researcher {
+  border-left-color: #38bdf8;
+}
+.subagent-card.role-biostatistician {
+  border-left-color: #a78bfa;
+}
+.subagent-card.role-fact_checker {
+  border-left-color: #f59e0b;
+}
+
+.subagent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.subagent-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.subagent-role-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  background: var(--hover);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+.subagent-role-pill.role-literature_researcher {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.35);
+}
+.subagent-role-pill.role-biostatistician {
+  background: rgba(167, 139, 250, 0.12);
+  color: #a78bfa;
+  border-color: rgba(167, 139, 250, 0.35);
+}
+.subagent-role-pill.role-fact_checker {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.subagent-task {
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.subagent-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.subagent-status.status-running {
+  color: var(--mint-text);
+}
+.subagent-status.status-done {
+  color: var(--ok);
+  font-weight: 500;
+}
+.subagent-pulse {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mint);
+  animation: subagent-pulse-anim 1.4s infinite ease-in-out;
+}
+@keyframes subagent-pulse-anim {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+.subagent-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding-left: 2px;
+}
+.subagent-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.subagent-step-item.status-ok { color: var(--ok); }
+.subagent-step-item.status-warn { color: var(--warn); }
+.subagent-step-bullet {
+  font-size: 9px;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.subagent-step-msg {
+  flex: 1;
+  word-break: break-word;
+}
+
+.subagent-result-box {
+  margin-top: 6px;
+  border-top: 1px dashed var(--line);
+  padding-top: 4px;
+}
+.subagent-output-details {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  margin-top: 4px;
+}
+.subagent-output-summary-btn {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 2px 0;
+  outline: none;
+  user-select: none;
+}
+.subagent-output-summary-btn:hover {
+  color: var(--text);
+}
+.subagent-output-content {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.subagent-output-summary {
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.subagent-synthesis-callout, .subagent-stat-callout {
+  background: var(--hover-tint);
+  border-left: 2px solid var(--mint);
+  padding: 6px 8px;
+  margin: 6px 0;
+  font-size: 11.5px;
+}
+.subagent-citations-title, .subagent-issues-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin: 8px 0 4px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.subagent-citation-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.subagent-citation-card {
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+}
+.cite-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+.cite-title {
+  font-weight: 500;
+  color: var(--text);
+  font-size: 12px;
+}
+.cite-marker-pill {
+  font-family: var(--mono);
+  font-size: 10px;
+  background: rgba(0, 255, 147, 0.1);
+  border: 1px solid rgba(0, 255, 147, 0.3);
+  color: var(--mint-text);
+  padding: 1px 4px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+.cite-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+.cite-badge {
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid var(--line-strong);
+  color: var(--text-2);
+}
+.cite-badge.pmid {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.25);
+  color: #38bdf8;
+}
+.cite-quote {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-2);
+  margin-top: 4px;
+  border-left: 2px solid var(--line-strong);
+  padding-left: 6px;
+}
+
+.subagent-stat-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.subagent-table-wrapper {
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.subagent-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.subagent-data-table th, .subagent-data-table td {
+  border: 1px solid var(--line-strong);
+  padding: 4px 6px;
+  text-align: left;
+}
+.subagent-data-table th {
+  background: var(--raised);
+  color: var(--text);
+  font-weight: 600;
+}
+.subagent-mono-block {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  margin: 6px 0;
+}
+
+.subagent-fc-verdict {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+}
+.subagent-fc-verdict.verdict-pass {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border-left: 3px solid var(--ok);
+}
+.subagent-fc-verdict.verdict-warning {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-left: 3px solid var(--warn);
+}
+.subagent-fc-verdict.verdict-fail {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-left: 3px solid var(--danger);
+}
+.subagent-fc-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin: 6px 0;
+}
+.fc-metric {
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  padding: 4px 6px;
+  text-align: center;
+}
+.fc-val {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fc-val.ok { color: var(--ok); }
+.fc-val.danger { color: var(--danger); }
+.fc-label {
+  font-size: 9.5px;
+  color: var(--muted);
+}
+.subagent-issue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.subagent-issue-item {
+  background: var(--bg-deep);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.subagent-issue-item.verdict-unsupported {
+  border-left-color: var(--danger);
+}
+.issue-sentence {
+  font-weight: 500;
+  color: var(--text);
+}
+.issue-reason {
+  color: var(--text-2);
+  margin-top: 2px;
+}
+.issue-fix {
+  color: var(--mint-text);
+  margin-top: 2px;
+}
+
 .composer { margin: 0; padding: 10px 12px 12px; border-top: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: 6px; position: relative; transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s; }
 .composer.composer-drag-over { border-color: var(--teal) !important; background: rgba(45, 212, 191, 0.06) !important; box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.25), 0 4px 16px rgba(0, 0, 0, 0.3) !important; }
 .composer.composer-drag-over::after { content: '释放以添加影像截图 / 图表'; position: absolute; inset: 4px; background: rgba(15, 23, 42, 0.88); backdrop-filter: blur(4px); border: 2px dashed var(--teal); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--teal); font-size: 13.5px; font-weight: 600; pointer-events: none; z-index: 20; }
