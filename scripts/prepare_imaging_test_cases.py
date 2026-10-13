@@ -184,6 +184,23 @@ def convert_nifti_to_dicom(
         )
 
 
+def write_test_info(case_dir: Path, test_id: str, source: str, notes: list) -> None:
+    """写出测试用例说明。只写数据来源与用途，不编造任何临床信息（姓名、主诉、诊断、分期、疗效等）。"""
+    info = {
+        "test_id": test_id,
+        "data_source": source,
+        "clinical_information": "无：公开数据集样本不附带临床信息，DICOM 头中的姓名与日期均为测试占位值",
+        "notes": notes,
+    }
+    (case_dir / "patient_info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    lines = "\n".join(f"- {n}" for n in notes)
+    (case_dir / "README.md").write_text(
+        f"# 测试用例 {test_id}\n\n- **数据来源**：{source}\n"
+        f"- **临床信息**：无（DICOM 头中的姓名与日期均为测试占位值）\n\n## 说明\n{lines}\n",
+        encoding="utf-8",
+    )
+
+
 def main():
     print("==================================================================")
     print("🚀 Heurion 原始医学影像测试文件生成与归档系统")
@@ -193,9 +210,9 @@ def main():
     BASE_DIR.mkdir(parents=True, exist_ok=True)
 
     # -------------------------------------------------------------
-    # 1. 患者李想 · 基线胸部高分辨 CT (Patient 01: Chest CT Baseline)
+    # 1. 测试用例 01 · 公开胸部 CT 样本
     # -------------------------------------------------------------
-    p1_base_dir = BASE_DIR / "01_Patient_LiXiang_Chest_CT_Baseline"
+    p1_base_dir = BASE_DIR / "01_Test_Chest_CT"
     p1_base_dcm = p1_base_dir / "dicom"
     p1_base_nii = p1_base_dir / "nifti"
     p1_base_nii.mkdir(parents=True, exist_ok=True)
@@ -205,7 +222,7 @@ def main():
         nii_path=SOURCE_DATA / "chest_lung_ct.nii.gz",
         out_dicom_dir=p1_base_dcm,
         patient_id="P-1001",
-        patient_name="LI^XIANG",
+        patient_name="TEST^CHEST001",
         patient_sex="M",
         birth_date="19740518",
         study_date="20260315",
@@ -217,65 +234,25 @@ def main():
         window_width=1500,
     )
 
-    (p1_base_dir / "patient_info.json").write_text(json.dumps({
-        "patient_id": "P-1001",
-        "name": "李想",
-        "gender": "男",
-        "birth_date": "1974-05-18",
-        "age": 52,
-        "modality": "CT",
-        "body_part": "Chest / Thorax",
-        "study_date": "2026-03-15",
-        "study_type": "基线初诊胸部高分辨CT平扫 (Baseline HRCT)",
-        "clinical_findings": [
-            "双肺下叶及右肺中叶支气管扩张伴高密度粘液栓形成 (HAM, CT值 80-110 HU)",
-            "右下肺后基底段实性孤立小结节 (最大截面长径 7.2mm，短径 5.4mm)",
-            "双肺门未见明显肿大淋巴结，胸膜无增厚积液"
-        ],
-        "suggested_presets": ["lung (肺窗: -600/1500)", "mediastinum (纵隔窗: 40/350)"],
-        "recommended_tests": [
-            "使用系统「影像量化分析」运行 3D MONAI 模型分割支扩病灶与结节",
-            "测试正交 MPR 三视图 (轴位/冠状位/矢状位) 交互切片滚动",
-            "验证 NiiVue WebGL 3D 容积渲染效果"
-        ]
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    (p1_base_dir / "README.md").write_text("""# 患者 01: 李想 · 基线胸部高分辨CT (Baseline HRCT)
-
-- **患者代号**: `P-1001`
-- **姓名**: 李想 (LI XIANG)
-- **性别/年龄**: 男 / 52 岁
-- **检查日期**: 2026-03-15
-- **扫描部位**: 胸部 / 肺部 (Thorax)
-- **设备模态**: CT (层厚 1.25mm, 512×512×269 体素)
-
-## 📁 目录包含文件:
-1. `dicom/`: 完整 269 张切片 DICOM 序列 (`CT_0001.dcm` ~ `CT_0269.dcm`)，符合 DICOM PS 3.3 规范，带有完整的空间定位与肺窗/纵隔窗参数。
-2. `nifti/chest_lung_baseline.nii.gz`: 原始标准 3D NIfTI 压缩体积文件。
-3. `patient_info.json`: 结构化临床与病灶描述。
-
-## 🎯 临床病灶与推荐手工测试:
-- **征象 1 (支气管扩张与粘液栓)**: 双肺下叶及右肺中叶有明显的粘液栓嵌顿。
-- **征象 2 (肺实性小结节)**: 右下肺实性小结节，长径约 7.2mm。
-- **测试方法**:
-  - 在 Heurion Web 端上传 `chest_lung_baseline.nii.gz` 或导入 DICOM，点击「🔍 影像量化分析」；
-  - 观察 MONAI 自动识别出病灶并标出 RECIST 1.1 最大截面切片。
-""", encoding="utf-8")
+    write_test_info(p1_base_dir, "TEST-CHEST-001", "公开数据集样本 chest_lung_ct（胸部 CT）", [
+        "用于测试上传、DICOM 解析、三正交 MPR 与 NiiVue 渲染",
+        "样本不附带病灶标注或临床结论，算法输出需自行核对",
+    ])
 
     # -------------------------------------------------------------
-    # 2. 患者李想 · 治疗后随访胸部 CT (Patient 01: Chest CT Followup)
+    # 2. 测试用例 01 · 人工合成的第二期数据（不是真实随访）
     # -------------------------------------------------------------
-    p1_fup_dir = BASE_DIR / "01_Patient_LiXiang_Chest_CT_Followup"
+    p1_fup_dir = BASE_DIR / "01_Test_Chest_CT_Synthetic_Second_Phase"
     p1_fup_dcm = p1_fup_dir / "dicom"
     p1_fup_nii = p1_fup_dir / "nifti"
     p1_fup_nii.mkdir(parents=True, exist_ok=True)
 
-    # 构造治疗随访 3D 变化: 粘液栓部分吸收消退 (模拟治疗3个月后疗效)
+    # 合成第二期数据：仅用于测试双期对比界面，不是真实随访，也不代表任何治疗效果
     def simulate_followup_absorption(vol: np.ndarray) -> np.ndarray:
         vol_copy = vol.copy()
-        # 针对高密度粘液栓区域 (>70 HU)，模拟吸收退缩
+        # 把 65–130 HU 体素按固定公式衰减（人工构造的差异）
         mask = (vol_copy > 65.0) & (vol_copy < 130.0)
-        vol_copy[mask] = vol_copy[mask] * 0.45 - 250.0  # 吸收变稀疏
+        vol_copy[mask] = vol_copy[mask] * 0.45 - 250.0  # 人工衰减
         return vol_copy
 
     img_fup = nib.load(str(SOURCE_DATA / "chest_lung_ct.nii.gz"))
@@ -287,57 +264,27 @@ def main():
         nii_path=p1_fup_nii / "chest_lung_followup.nii.gz",
         out_dicom_dir=p1_fup_dcm,
         patient_id="P-1001",
-        patient_name="LI^XIANG",
+        patient_name="TEST^CHEST001",
         patient_sex="M",
         birth_date="19740518",
         study_date="20260620",
         study_time="141500",
         modality="CT",
-        study_desc="Thorax HRCT Follow-up Assessment",
-        series_desc="Axial Lung Window 1.25mm Followup 3M",
+        study_desc="SYNTHETIC second phase (not a real follow-up)",
+        series_desc="Synthetic HU attenuation test",
         window_center=-600,
         window_width=1500,
     )
 
-    (p1_fup_dir / "patient_info.json").write_text(json.dumps({
-        "patient_id": "P-1001",
-        "name": "李想",
-        "gender": "男",
-        "study_date": "2026-06-20",
-        "study_type": "治疗3个月后随访复查胸部CT (Follow-up HRCT)",
-        "clinical_findings": [
-            "对比 2026-03-15 基线检查：双肺支气管高密度粘液栓大部分吸收消散 (部分缓解 PR)",
-            "右下肺小结节大小无明显增大，维持约 7.0mm (病情稳定 SD)",
-            "未见新发浸润实变灶"
-        ],
-        "recommended_tests": [
-            "在随访对比工作台中，选择 基线(2026-03-15) 与 本次随访(2026-06-20)",
-            "验证双联 MPR (Dual-Scrubber) 联动切片滑动与滚轮同步",
-            "勾选「🎨 叠加 3D 差分吸收热力图」，观察绿色吸收消退区域的体素分布与统计数据",
-            "测试一键导出 HL7 FHIR 与 DICOM SR 标准交换格式"
-        ]
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    (p1_fup_dir / "README.md").write_text("""# 患者 01: 李想 · 治疗后随访胸部CT (Follow-up HRCT)
-
-- **患者代号**: `P-1001`
-- **检查日期**: 2026-06-20 (抗炎祛痰规范治疗 3 个月后)
-- **扫描部位**: 胸部 / 肺部 (Thorax)
-
-## 📁 目录包含文件:
-1. `dicom/`: 随访复查的 269 张 DICOM 图像序列。
-2. `nifti/chest_lung_followup.nii.gz`: 随访 3D NIfTI 文件。
-3. `patient_info.json`: 疗效对比与随访特征。
-
-## 🎯 推荐手工测试场景:
-- **随访疗效比对**: 在 Heurion 多期随访对比工作台中，同时载入基线与此随访数据；
-- **3D 差分吸收热力图**: 开启差分热力图，即可直观看到大片绿色（病灶吸收吸收退缩 $\Delta HU < -50$）的解剖分布！
-""", encoding="utf-8")
+    write_test_info(p1_fup_dir, "TEST-CHEST-001-SYNTH", "由 chest_lung_ct 人工合成（把 65–130 HU 体素按固定公式衰减）", [
+        "这是合成数据，不是真实随访扫描，不代表任何治疗效果",
+        "仅用于测试双期对比界面与差分图功能是否能运行",
+    ])
 
     # -------------------------------------------------------------
-    # 3. 患者王伟 · 全腹平扫及增强 CT (Patient 02: Abdominal Spleen CT)
+    # 3. 测试用例 02 · 公开腹部 CT 样本
     # -------------------------------------------------------------
-    p2_dir = BASE_DIR / "02_Patient_WangWei_Abdomen_CT"
+    p2_dir = BASE_DIR / "02_Test_Abdomen_CT"
     p2_dcm = p2_dir / "dicom"
     p2_nii = p2_dir / "nifti"
     p2_nii.mkdir(parents=True, exist_ok=True)
@@ -347,7 +294,7 @@ def main():
         nii_path=SOURCE_DATA / "spleen_test.nii.gz",
         out_dicom_dir=p2_dcm,
         patient_id="P-1002",
-        patient_name="WANG^WEI",
+        patient_name="TEST^ABDOMEN002",
         patient_sex="M",
         birth_date="19800822",
         study_date="20260410",
@@ -359,44 +306,15 @@ def main():
         window_width=400,
     )
 
-    (p2_dir / "patient_info.json").write_text(json.dumps({
-        "patient_id": "P-1002",
-        "name": "王伟",
-        "gender": "男",
-        "age": 46,
-        "modality": "CT",
-        "body_part": "Abdomen (腹部 / 脾脏)",
-        "study_date": "2026-04-10",
-        "clinical_findings": [
-            "脾脏形态饱满、体积明显肿大 (Splenomegaly)",
-            "脾实质密度均匀，CT值约 42-48 HU，未见明确占位性病变",
-            "肝实质密度正常，胆囊、胰腺未见异常"
-        ],
-        "suggested_presets": ["abdomen (腹窗: 40/400)"],
-        "recommended_tests": [
-            "测试腹部软组织窗 (WW 400 / WL 40) 的图像对比度与质感",
-            "测试实质器官的 3D 体积分割与 RECIST 短径测量"
-        ]
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    (p2_dir / "README.md").write_text("""# 患者 02: 王伟 · 腹部平扫CT (Abdominal Spleen CT)
-
-- **患者代号**: `P-1002`
-- **姓名**: 王伟 (WANG WEI)
-- **性别/年龄**: 男 / 46 岁
-- **检查日期**: 2026-04-10
-- **设备模态**: CT (层厚 5.0mm, 512×512×96 体素)
-
-## 📁 目录包含文件:
-1. `dicom/`: 96 张腹部 CT 切片 DICOM 序列 (`CT_0001.dcm` ~ `CT_0096.dcm`)。
-2. `nifti/abdomen_spleen_ct.nii.gz`: 腹部 NIfTI 体积文件。
-3. `patient_info.json`: 脾脏病灶描述。
-""", encoding="utf-8")
+    write_test_info(p2_dir, "TEST-ABDOMEN-002", "公开数据集样本 spleen_test（腹部 CT）", [
+        "用于测试腹部窗显示与 MONAI 脾脏分割",
+        "样本不附带临床信息，不要据此写任何诊断描述",
+    ])
 
     # -------------------------------------------------------------
-    # 4. 患者张敏 · 前列腺多参数磁共振 (Patient 03: Prostate MRI)
+    # 4. 测试用例 03 · 公开前列腺 T2 MRI 样本
     # -------------------------------------------------------------
-    p3_dir = BASE_DIR / "03_Patient_ZhangMin_Prostate_MRI"
+    p3_dir = BASE_DIR / "03_Test_Prostate_MRI"
     p3_dcm = p3_dir / "dicom"
     p3_nii = p3_dir / "nifti"
     p3_nii.mkdir(parents=True, exist_ok=True)
@@ -406,7 +324,7 @@ def main():
         nii_path=SOURCE_DATA / "prostate_mri.nii.gz",
         out_dicom_dir=p3_dcm,
         patient_id="P-1003",
-        patient_name="ZHANG^MIN",
+        patient_name="TEST^PROSTATE003",
         patient_sex="M",
         birth_date="19611105",
         study_date="20260512",
@@ -418,38 +336,10 @@ def main():
         window_width=1000,
     )
 
-    (p3_dir / "patient_info.json").write_text(json.dumps({
-        "patient_id": "P-1003",
-        "name": "张敏",
-        "gender": "男",
-        "age": 65,
-        "modality": "MR",
-        "body_part": "Pelvis / Prostate (盆腔前列腺)",
-        "study_date": "2026-05-12",
-        "clinical_findings": [
-            "前列腺移行区增生伴结节形成，外周带信号略欠均匀",
-            "包膜连续完整，双侧精囊腺未见明确受累征象",
-            "PI-RADS 评分为 2-3 分"
-        ],
-        "recommended_tests": [
-            "测试 MR 模态影像的灰度自适应与动态窗宽调节",
-            "测试前列腺区域轮廓勾画与轴位层厚浏览"
-        ]
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    (p3_dir / "README.md").write_text("""# 患者 03: 张敏 · 前列腺多参数磁共振 (Prostate T2 MRI)
-
-- **患者代号**: `P-1003`
-- **姓名**: 张敏 (ZHANG MIN)
-- **性别/年龄**: 男 / 65 岁
-- **检查日期**: 2026-05-12
-- **设备模态**: MR (层厚 3.0mm, 384×384×19 体素)
-
-## 📁 目录包含文件:
-1. `dicom/`: 19 张高分辨 T2 轴位切片 DICOM 序列 (`MR_0001.dcm` ~ `MR_0019.dcm`)。
-2. `nifti/prostate_t2_mri.nii.gz`: 前列腺磁共振 NIfTI 文件。
-3. `patient_info.json`: 结构化临床与 PI-RADS 评估。
-""", encoding="utf-8")
+    write_test_info(p3_dir, "TEST-PROSTATE-003", "公开数据集样本 prostate_mri（盆腔 T2 MRI）", [
+        "用于测试 MR 模态显示与窗宽调节",
+        "MONAI 前列腺模型在该样本上目前输出为空，不要据此写分区或评分结论",
+    ])
 
     # -------------------------------------------------------------
     # 5. TCIA 真实肺癌 CT 数据集 (Patient 04: TCIA 4D-Lung)
@@ -518,39 +408,39 @@ def main():
     top_readme = BASE_DIR / "README.md"
     top_readme.write_text("""# 🏥 Heurion 医学影像手工测试文件包 (Clinical Imaging Test Datasets)
 
-本文件夹按**「同一患者归档到同一子目录」**组织，包含不同病种、模态（CT、高分辨 HRCT、MRI）与纵向随访检查，方便您在电脑上进行手工测试、拖拽上传、三维渲染及跨期随访比对。
+本文件夹收录公开数据集样本转换出的测试文件（CT、MRI），以及一份人工合成的第二期数据，用于手工测试上传、三维渲染与双期对比界面。样本不附带临床信息，DICOM 头中的姓名与日期均为测试占位值；合成数据不是真实随访。
 
 ---
 
-## 📂 患者与检查目录结构
+## 📂 测试用例目录结构
 
 ```text
 medical_imaging_test_cases/
-├── 01_Patient_LiXiang_Chest_CT_Baseline/       # 患者1: 李想 · 基线胸部高分辨CT (支扩伴高密度粘液栓 HAM、肺小结节)
+├── 01_Test_Chest_CT/       # 公开胸部 CT 样本
 │   ├── dicom/                                  # 269 张标准 DICOM 切片序列 (CT_0001.dcm ~ CT_0269.dcm)
 │   ├── nifti/chest_lung_baseline.nii.gz        # 原始 3D NIfTI 体积
-│   ├── patient_info.json                       # 患者信息与病灶结构化描述
+│   ├── patient_info.json                       # 数据来源与用途说明
 │   └── README.md
 │
-├── 01_Patient_LiXiang_Chest_CT_Followup/       # 患者1: 李想 · 治疗3个月后随访CT (粘液栓显著吸收退缩)
-│   ├── dicom/                                  # 269 张随访 DICOM 切片序列
-│   ├── nifti/chest_lung_followup.nii.gz        # 随访 3D NIfTI 体积
-│   ├── patient_info.json                       # 随访疗效描述
+├── 01_Test_Chest_CT_Synthetic_Second_Phase/       # 人工合成的第二期（不是真实随访）
+│   ├── dicom/                                  # 269 张合成 DICOM 切片序列
+│   ├── nifti/chest_lung_followup.nii.gz        # 合成 3D NIfTI 体积
+│   ├── patient_info.json                       # 合成方法说明
 │   └── README.md
 │
-├── 02_Patient_WangWei_Abdomen_CT/              # 患者2: 王伟 · 腹部全容积CT平扫 (脾脏明显肿大)
+├── 02_Test_Abdomen_CT/              # 公开腹部 CT 样本
 │   ├── dicom/                                  # 96 张腹窗 DICOM 切片序列
 │   ├── nifti/abdomen_spleen_ct.nii.gz          # 腹部 3D NIfTI 体积
 │   ├── patient_info.json
 │   └── README.md
 │
-├── 03_Patient_ZhangMin_Prostate_MRI/           # 患者3: 张敏 · 前列腺多参数磁共振 (T2-weighted MRI)
+├── 03_Test_Prostate_MRI/           # 公开前列腺 T2 MRI 样本
 │   ├── dicom/                                  # 19 张盆腔薄层 T2 DICOM 序列 (MR_0001.dcm ~ MR_0019.dcm)
 │   ├── nifti/prostate_t2_mri.nii.gz            # 前列腺 MRI 3D 体积
 │   ├── patient_info.json
 │   └── README.md
 │
-└── 04_Patient_TCIA_100_HM10395_Lung_Cancer_CT/ # 患者4: TCIA 国际癌症影像公开数据集 (真实机房原生DICOM)
+└── 04_Patient_TCIA_100_HM10395_Lung_Cancer_CT/ # TCIA 4D-Lung 公开数据集原生 DICOM
     ├── dicom/                                  # 50 张未改动的 TCIA 真实 CT 原生序列
     ├── LICENSE                                 # TCIA 许可协议
     └── patient_info.json
@@ -564,23 +454,22 @@ medical_imaging_test_cases/
 1. 在 Heurion 网页端打开任意患者详情页；
 2. 拖拽 `nifti/` 下的 `.nii.gz` 或 `dicom/` 文件夹上传；
 3. 点击 **「🔍 影像量化分析」**：
-   - 触发 MONAI 3D 深度分割模型；
-   - 自动生成出版级最大横截面关键切片 (Key Slice)；
-   - 输出 RECIST 1.1 靶病灶长短径与容积测量。
+   - 运行所选模型或量化算法（完成度不一，结果需对照原图核对）；
+   - 查看关键切片与 RECIST 径线、体积等测量值。
 
-### 场景 2: 双期 3D 体素配准与差分吸收热力图 (Difference Heatmap Overlay)
+### 场景 2: 双期对比与差分图（使用合成第二期数据，仅测试功能）
 1. 在患者主页点击 **「📈 多期影像随访对比」**；
-2. 基线选择 `01_Patient_LiXiang_Chest_CT_Baseline`，随访选择 `01_Patient_LiXiang_Chest_CT_Followup`；
+2. 基线选择 `01_Test_Chest_CT`，随访选择 `01_Test_Chest_CT_Synthetic_Second_Phase`；
 3. 切换至 **「🖥️ 双联 MPR 联动切片 (Dual-Scrubber)」**：
-   - 勾选 **「🎨 叠加 3D 差分吸收热力图」**；
-   - 观察图像中大片标注的 **🟢 吸收退缩区域** 与演变趋势 HUD 栏；
+   - 勾选差分图叠加；
+   - 差异来自人工衰减，只用来确认界面与计算能运行，不代表任何病灶变化；
    - 滑动滚轮或拖动切片条，体验左右双屏的按比例锁定同步。
 
 ### 场景 3: 国际标准医学数据交换导出
 1. 在随访对比窗口右上角点击：
    - **`[📥 导出 FHIR]`**：下载 HL7 FHIR R4 标准的 `DiagnosticReport` / `ImagingStudy` JSON 资源；
    - **`[💾 导出 DICOM SR]`**：下载 DICOM PS 3.3 TID 1500 结构化测量报告 JSON。
-2. 可直接在院内 PACS 或区域卫生平台中做互操作性验证。
+2. DICOM SR 导出为 JSON 表示，不是二进制 DICOM 文件，不能直接导入 PACS。
 
 ### 场景 4: 本地医学影像软件直接打开
 本目录下的所有 DICOM 文件均包含完整的 DICOM Header，可直接使用以下任意医学查看器直接拖入打开：

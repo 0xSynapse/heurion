@@ -33,208 +33,161 @@ interface SlideData {
   notes?: string;
 }
 
+// 幻灯片内容以当前代码的实际能力为准：不写编造的病例、研究数据与测量值；
+// 配图只引用 scripts/generate_all_case_study_images.py 在公开数据集样本上生成的 demo-*.png。
 const SLIDES: SlideData[] = [
   {
     title: '临床科研，从数据沉淀到成果发表的全流程工作台',
-    subtitle: '下一代 AI 原生临床科研智能工作台与医学协作操作系统 (Clinical Research AI Workstation)',
+    subtitle: '面向临床科研的 AI 辅助工作台 (Clinical Research AI Workstation)',
     layout: 'cover',
     category: 'OVERVIEW - 平台总览',
-    body: '汇报人：Heurion 联合研发与医学科研团队 | 医学智能研究中心\n官方主页：https://heurion.org | 工作台入口：https://heurion.org/app\n底层引擎：@heurion2/platform + apps/imaging-worker (MONAI / PyTorch)',
+    body: '汇报人：Heurion 团队\n官方主页：https://heurion.org | 工作台入口：https://heurion.org/app\n底层组成：@heurion2/platform + apps/imaging-worker (MONAI / PyTorch)',
     diagramKey: 'cover_pipeline',
-    notes: '开场引入：介绍 Heurion 2.0 作为专为临床科学家打造的一体化工作台，贯通从患者入组纳排、3D 影像量化、隔离沙箱统计，到发表级 Table 1 与 PubMed 验真的全生命周期。'
+    notes: '开场：Heurion 把患者入组、影像量化、沙箱统计、Table 1 与引用核验放在同一个工作台里。所有 AI 输出都需要作者审阅确认，平台不提供诊断。'
   },
   {
-    title: '为什么通用 AI 无法支撑严肃临床科研？卡在四个关键环节',
-    subtitle: '通用 LLM (ChatGPT / Claude) 缺乏医学专用基础设施，存在四大致命阻碍',
+    title: '通用 AI 用于临床科研的四个难点',
+    subtitle: '通用聊天工具缺少面向临床科研的数据、计算与引用基础设施',
     layout: 'two_col',
     category: 'CHALLENGE - 行业痛点',
-    body: '### 通用大模型的四大致命短板\n- **1. 数据孤岛与隐私失控**：公有大模型云端传输存在 PHI 违规风险，缺乏去标识化机制\n- **2. 队列圈定与分析断层**：无法关联多表 EMR 库，不能进行 3D 体素级医学运算与统计\n- **3. 课题记忆断代**：单次对话窗口用尽后，研究假设、纳排口径与分期标准全被遗忘\n- **4. 引用凭空捏造与改动黑盒**：幻觉虚构假 PMID/DOI，全篇覆写抹杀医生既有论述',
-    body2: '### Heurion 2.0 的专业破局解法\n- **1. Zero-PHI 本地隔离沙箱**：正则与 NLP 拦截 18 位身份证与病案号，受试者学术编码 S001...\n- **2. 数据库级动态纳排**：秒级交并筛选，自动生成符合 CONSORT 2010 标准的矢量流程图\n- **3. 课题级自主记忆演进**：持续沉淀 8 类核心知识，人机协同越用越准\n- **4. NCBI PubMed 实时交叉验真**：直连官方接口校验效应量，行内红绿 Diff 与写前守卫',
+    body: '### 通用大模型的四个难点\n- **1. 隐私**：直接粘贴病历有泄露风险，缺少去标识流程\n- **2. 队列与计算**：不能直接查询结构化数据，也不能处理三维影像\n- **3. 记忆**：对话窗口用尽后，研究假设与纳排口径需要反复交代\n- **4. 引用**：可能虚构 PMID/DOI，整段改写难以追踪',
+    body2: '### Heurion 的做法\n- **1. 去标识与 PHI 扫描**：入组即分配 S001... 编号；基于规则的 PHI 扫描工具检出身份证号、手机号、病案号等\n- **2. 结构化纳排**：组合条件筛选队列，按真实入组记录生成 CONSORT 流向图\n- **3. 课题记忆**：AI 只能提议记忆条目，经作者确认后生效\n- **4. 引用核验与写前守卫**：正式引用只能来自已登记的 PubMed / Crossref 记录，修改以行内差异呈现',
     diagramKey: 'pain_vs_solution',
-    notes: '强调走访数十家三甲医院的真实反馈：临床医生需要的是零泄露风险、有真实体素计算、不造假文献的专业科研工作台。'
+    notes: '强调平台的定位是辅助：减少重复劳动与常见错误，结论与责任仍在研究者。'
   },
   {
-    title: '双服务解耦架构与高可信医学智能底座',
-    subtitle: '微服务解耦、无网络隔离计算沙箱、MONAI 影像微服务与纯 Rust 4K 光栅化',
+    title: '系统架构',
+    subtitle: '平台服务、影像计算服务与隔离沙箱',
     layout: 'diagram_focused',
     category: 'ARCHITECTURE - 系统架构',
-    body: '- **@heurion2/platform (:8787)**：承载 Hono REST API、Yjs CRDT 毫秒协同网关、多租户隔离与 PubMed 验真引擎\n- **apps/imaging-worker (:8004)**：Project MONAI + PyTorch 物理体素运算环境，部署 19 类真实本地权重模型\n- **无网络隔离沙箱 (apps/platform/src/harness)**：Linux/macOS 独立 UID 运行 Python/R 环境，执行统计运算与原生 Word 导出\n- **自闭环光栅化 (@resvg/resvg-js)**：纯 Rust WASM 引擎，无需 LibreOffice 依赖，秒级将矢量幻灯片渲染为 4K 高保真图像',
+    body: '- **@heurion2/platform (:8787)**：Hono REST API、Yjs 协同、多租户隔离、文档操作层与引用守卫、MCP 服务\n- **apps/imaging-worker (:8004)**：MONAI + PyTorch 影像计算服务，接入多款 MONAI Model Zoo 官方权重与若干阈值法算法，完成度不一\n- **隔离沙箱**：每个平台用户一个独立 Linux 用户，运行 Python 统计环境（pandas、statsmodels、lifelines 等，未安装 R），出站网络只放行平台端口\n- **部署方式**：单机 Docker Compose',
     diagramKey: 'system_architecture',
-    notes: '展示技术选型的硬核优势：Monorepo 解耦、Yjs CRDT 毫秒协同、纯 Rust 4K 渲染、以及无网安全隔离沙箱。'
+    notes: '说明各组件职责与隔离边界；如被问到 R，如实说明当前只提供 Python。'
   },
   {
-    title: '患者数据资产化：多模态 OCR 建档与因果时间轴 (PHR)',
-    subtitle: '门诊化验单、出院小结结构化提取，24 个月纵向追踪与加密授权共享',
-    layout: 'image_text',
+    title: '患者数据建档与化验追踪',
+    subtitle: '化验单、出院小结 OCR 提取，纵向追踪与受控分享',
+    layout: 'content',
     category: 'DATA ASSET - 患者档案',
-    image: 'real-case-5-diagnostic-chain.png',
-    body: '- **多模态 OCR 结构化提取**：手机拍照化验单、出院小结扫描件秒级识别指标数值与参考区间（如总 IgE 1250 kU/L）\n- **纵向时间轴趋势对齐**：跨周期复查数据自动对齐，点击化验项目即刻展现 24 个月动态折线图\n- **知家 (PHR) 空间与加密 Claims 共享**：基于限时限范围口令（PhrClaim），患者扫码将就诊数据安全注入课题池\n- **全链路 Zero-PHI 隐私防线**：18 位身份证、电话与病案号自动脱敏，从源头杜绝临床隐私泄露风险',
+    body: '- **OCR 结构化提取**：上传化验单、出院小结图片或 PDF，提取指标数值与参考区间，结果经人工核对后入库\n- **纵向趋势**：同一指标跨时间点对齐，查看趋势图并可回到原件核对\n- **知家 (PHR) 与限时授权**：患者通过限时、限范围的口令把资料分享给研究团队\n- **去标识**：患者以研究代号建档；医生添加的备注名只保存在本机浏览器',
     diagramKey: 'data_ingestion_flow',
-    notes: '现场演示展示 PT-CHEST-001 患者因果诊断链，总 IgE 1250kU/L 与 CT 粘液栓的结合。'
+    notes: '现场演示请使用演示数据，不要使用真实患者资料。'
   },
   {
-    title: 'MONAI 3D 体素医学影像量化与三正交切片联动 (MPR)',
-    subtitle: '真 3D 物理体素空间计算，颠覆 2D 截图粗糙估算，实现亚毫米级精准测量',
+    title: '三维影像：方向规范与三正交 MPR',
+    subtitle: '统一到 LPS 方向，按物理间距显示与测量',
     layout: 'image_text',
-    category: 'IMAGING AI - 3D 影像量化',
-    image: 'real-case-2-mpr-3view.png',
-    body: '- **物理体素空间真 3D 计算**：自动解析 DICOM Slice Thickness 与 Spacing，杜绝屏幕像素误判\n- **MPR 三正交切片毫秒级联动**：Axial、Coronal、Sagittal 十字交叉准星拖拽，三维解剖实时响应\n- **预设标准化亨氏单位 (HU) 窗宽窗位**：\n  - 肺窗 (-600 / 1500 HU)、纵隔窗 (40 / 400 HU)\n  - 腹部软组织窗 (40 / 350 HU)、骨窗 (300 / 1500 HU)\n- **19 类真实本地权重部署**：单卷 CT 脾脏体积测定平均推理时间 < 1.2 秒',
+    category: 'IMAGING - 3D 影像',
+    image: 'demo-chest-mpr-3view.png',
+    body: '- **方向规范**：NIfTI / DICOM 统一转换到 LPS：轴位上方为前、图像左侧为患者右\n- **物理间距**：保留原始体素间距，长度、面积与体积按真实间距换算\n- **三正交切片**：轴位、冠状位、矢状位联动浏览，提供肺窗、纵隔窗、腹部窗、骨窗与脑窗预设\n- **配图**：公开数据集样本 chest_lung_ct 的三正交重建，十字定位在体数据几何中心，无病灶标注',
     diagramKey: 'mpr_coordinate_diagram',
-    notes: '演示 3D MPR 阅片器，展示三视图十字准星亚毫米级拖拽联动。'
+    notes: '配图为公开数据集样本上的实际输出，不是临床病例。'
   },
   {
-    title: '实体瘤 RECIST 1.1 自动评估与 3D 影像组学 (Radiomics)',
-    subtitle: '肿瘤最大横截面自动寻优、长短轴测量、三维容积积分与 IBSI 特征提取',
+    title: 'MONAI 脾脏分割（公开样本上的实际推理）',
+    subtitle: 'MONAI Model Zoo 官方 spleen_ct 3D-UNet 权重',
     layout: 'image_text',
-    category: 'RECIST 1.1 - 实体瘤评估',
-    image: 'real-case-nsclc-1-baseline-recist.png',
-    body: '- **RECIST 1.1 靶病灶三维标定**：\n  - 算法自动定位肿瘤最大横截面中心层 (Key Slice，如第 138 层)\n  - 自动拟合最大长径 (Long Axis: 48.2mm) 与垂直短轴 (Short Axis: 32.6mm)\n  - 3D 实体瘤容积精确积分 (Volume: 34.8 cm³)\n- **IBSI 国际标准影像组学 (Radiomics)**：\n  - 提取球形度、表面积体积比、灰度非均匀性 GLCM / GLRLM 共 107 项特征\n- **结构化放射学报告一键归档**：直接作为科研变量并入后续统计宽表',
+    category: 'IMAGING - 模型推理',
+    image: 'demo-spleen-monai-segmentation.png',
+    body: '- **数据**：公开数据集样本 spleen_test（腹部 CT）\n- **算法**：spleen_ct 3D-UNet 滑窗推理 + RECIST 径线与体积计算\n- **本次结果**：分割体积 127.89 cm³，最大截面最长径 87.8 mm\n- **模型现状**：其他已接入的模型完成度不一（如前列腺在现有样本上输出为空），对外只展示已验证的结果',
     diagramKey: 'recist_pipeline_diagram',
-    notes: '展示奥希替尼晚期非小细胞肺癌患者基线 CT 的 RECIST 标定。'
+    notes: '数值来自 scripts/generate_all_case_study_images.py 的实际运行结果，可以现场复现。'
   },
   {
-    title: '双期三维刚性配准与差分吸收热力图 (Diff Heatmap)',
-    subtitle: '红绿双色直观展示肿瘤退缩（Regression）与进展（Progression），RECIST 智能裁决',
+    title: 'RECIST 1.1 径线测量与影像组学特征',
+    subtitle: '基于分割掩膜的最长径、体积与 46 项组学特征',
     layout: 'image_text',
-    category: 'FOLLOW-UP - 随访差分',
-    image: 'real-case-nsclc-3-diff-heatmap.png',
-    body: '- **3D 刚性空间互信息配准**：消除基线与复查 CT 呼吸体位导致的切片不对齐\n- **体素级差分吸收热力图 (Diff Heatmap)**：\n  - 绿色冷色调区域：HU 显著下降与吸收坏死，代表肿瘤退缩 (Regression, 体积缩小 58.3%)\n  - 红色暖色调区域：HU 升高与浸润进展 (Progression)\n- **RECIST 疗效智能判定**：长径缩小 > 30%，判定为部分缓解 (PR)\n- **双屏联动同步阅片**：左右分屏滚动，自动对齐同一解剖结构',
-    diagramKey: 'diff_heatmap_diagram',
-    notes: '红绿差分图极其具有视觉冲击力，突出奥希替尼治疗 3 个月后的肿瘤坏死吸收。'
+    category: 'IMAGING - 量化测量',
+    image: 'demo-lidc-nodule-recist.png',
+    body: '- **数据**：公开数据集样本 lidc_lung_nodule_ct，ROI 使用样本附带的结节标注掩膜\n- **RECIST 测量**：最大截面层最长径 31.2 mm、垂直方向最大跨度 26.2 mm、体积 7.47 cm³；疗效分级由医师判定\n- **影像组学**：形状、一阶统计、GLCM、GLRLM 共 46 项特征，可存入研究数据集；尚未与 IBSI 参考值做一致性校验\n- **单一时间点**：不涉及疗效评估与随访对比',
+    diagramKey: 'radiomics_card_diagram',
+    notes: '强调 ROI 是样本附带的标注，不是平台自动检出。'
   },
   {
-    title: '全身 104 类全器官分割与 L3 骨骼肌指数 (SMI)',
-    subtitle: '挖掘 CT 平扫潜藏的营养、代谢与化疗药物毒性预警生物标志物',
-    layout: 'image_text',
-    category: 'SARCOPENIA - 肌少症量化',
-    image: 'real-case-4-l3-smi.png',
-    body: '- **自动定位 L3 椎体中点切片**：杜绝人工选层的观察者间误差\n- **骨骼肌与脂肪分层密度量化**：\n  - 骨骼肌截面积 (SMA, -29~+150 HU): 98.4 cm²\n  - 骨骼肌指数 (SMI = SMA / 身高²): 34.2 cm²/m² (严重隐匿性肌少症预警)\n  - 内脏脂肪 (VAT) 与皮下脂肪 (SAT) 面积比自动测定\n- **药代动力学 (PK) 与化疗毒性预警**：\n  - 关联化疗药物清除率下调，提示 3 级以上严重不良事件发生率增加 2.8 倍',
-    diagramKey: 'sarcopenia_diagram',
-    notes: '展示平扫 CT 挖掘隐匿性肌少症生物标志物的临床与科研双重价值。'
-  },
-  {
-    title: '多维受试者圈定与 CONSORT 2010 矢量流程图',
-    layout: 'image_text',
+    title: '受试者纳排与 CONSORT 流向图',
+    layout: 'content',
     category: 'COHORT - 课题纳排',
-    image: 'real-case-research-1-protocol-cohort.png',
-    body: '- **PICO 框架驱动的多维纳排引擎**：\n  - 支持 ICD 编码、用药、年龄/性别、检验区间 (eGFR, NT-proBNP) 及影像指标 (LVEF <= 40%) 的复杂交并集\n- **学术受试者去标识化追踪 (S001...S1420)**：\n  - 自动解耦临床病案号，生成唯一科研代号，符合伦理审查\n- **CONSORT 2010 / STROBE 矢量图秒级生成**：\n  - 记录初始筛查人数 (N=2,150) 与各项具体排除原因与人数 (排除 730 例)\n  - 导出高清 SVG 与 Mermaid 矢量图，直接插入论文 Methods',
+    body: '- **组合条件筛选**：按人口学、诊断标签、化验区间与影像测量值组合筛选候选受试者\n- **去标识编号**：入组即分配 S001... 研究编号\n- **CONSORT 2010 流向图**：默认只画平台真实入组记录（入组 / 移出 / 在组）；筛选、排除与分组人数由研究者按原始记录填写，平台不估算\n- **导出**：SVG 矢量图与 Mermaid 源码',
     diagramKey: 'consort_flow_diagram',
-    notes: '展示心衰队列入组纳排流程，强调严格记录排除原因对顶刊投稿的关键意义。'
+    notes: '流向图中的人数必须来自真实记录。'
   },
   {
-    title: '发表级 Table 1 原生 Word (.docx) 三线表导出',
-    subtitle: '告别手工制表复制粘贴，严格符合 NEJM / Lancet 顶刊三线表排版规范',
-    layout: 'image_text',
+    title: '发表级 Table 1 原生 Word (.docx) 导出',
+    subtitle: '三线表排版与统计检验自动选择',
+    layout: 'content',
     category: 'EVIDENCE - 原生三线表',
-    image: 'real-case-research-2-table1-baseline.png',
-    body: '- **真原生 Word 格式 (Native OpenXML .docx)**：\n  - 严格顶底 1.5pt、栏目线 0.5pt，宋体 / Times New Roman 排版\n- **智能统计学检验方法自适应**：\n  - 正态连续变量: Mean ± SD (Student\'s t-test)\n  - 偏态连续变量: Median [IQR] (Mann-Whitney U 检验)\n  - 分类变量: n (%)，频数 < 5 自动采用 Fisher 精确检验，否则卡方检验\n- **倾向评分匹配 (PSM) 与绝对 SMD 平衡**：\n  - 匹配后标准化均数差 SMD < 0.05，基线协变量完全均衡',
+    body: '- **原生 Word 格式 (OpenXML)**：三线表、宋体 / Times New Roman 排版与统计脚注\n- **检验方法自适应**：\n  - 正态连续变量：Mean ± SD (t 检验)\n  - 偏态连续变量：Median [IQR] (Mann-Whitney U 检验)\n  - 分类变量：n (%)，期望频数小时用 Fisher 精确检验，否则卡方检验\n- **组间平衡**：两组比较时可给出标准化均数差 (SMD)；平台不提供倾向评分匹配',
     diagramKey: 'table1_pipeline_diagram',
-    notes: '现场双击打开下载的 Word 文件，展示完全免手工二次排版的震撼效果。'
+    notes: '如被问到 PSM，如实说明目前不提供，需在沙箱中自行编写。'
   },
   {
-    title: '因果推断、Kaplan-Meier 生存分析与预测模型',
-    subtitle: '在隔离沙箱内秒级运行 Python/R 高级统计学算子，完成审稿人混杂敏感度抗辩',
+    title: '生存分析与 E-value 敏感性分析',
+    subtitle: '在隔离沙箱中运行 Python 统计脚本',
     layout: 'two_col',
-    category: 'STATISTICS - 因果与生存分析',
-    body: '### 因果推断与混杂偏倚控制\n- **Love Plot 绝对 SMD 均衡图**：匹配后散点全部收敛至 SMD < 0.1 警戒线内\n- **VanderWeele E-value 未测混杂敏感度抗辩**：\n  - 计算得 E-value = 2.45 (CI 1.76)\n  - 自动输出中英双语顶刊审稿人抗辩陈述：“需存在 RR >= 2.45 的未测混杂才可能推翻当前结论”',
-    body2: '### 生存分析与 TRIPOD 预测模型\n- **Kaplan-Meier 累积无事件生存曲线**：\n  - 24 个月 MACE 事件曲线，带风险人数表，Log-rank P < 0.001\n- **多因素 Cox 比例风险回归森林图**：\n  - 达格列净暴露 HR 0.74 (95% CI 0.65-0.85)\n- **TRIPOD 规范临床预测模型**：\n  - LASSO 特征降维、Logistic 回归、ROC 曲线 (AUC)、校准曲线与决策曲线分析 (DCA)',
+    category: 'STATISTICS - 统计分析',
+    body: '### 生存分析\n- **Kaplan-Meier 曲线**：带风险人数表与 Log-rank 检验\n- **Cox 比例风险回归**：输出 HR 与 95% CI，可绘制森林图\n- 所有图表只用研究中真实入组受试者的数据生成',
+    body2: '### 未测混杂敏感性分析\n- **VanderWeele E-value**：由效应量计算点估计与置信区间界限对应的 E-value\n- **结果表述**：生成中英文描述段落，供作者回复审稿意见时参考修改\n- **暂未开放**：列线图、ROC / DCA 与倾向评分匹配',
     diagramKey: 'causal_survival_diagram',
-    notes: '展示高级统计沙箱能力，包括 KM 曲线与审稿人最关注的 E-value 混杂抗辩。'
+    notes: '演示时使用演示数据集，并说明暂未开放的功能。'
   },
   {
-    title: '严肃学术引证防伪：PubMed 实时核验与写前守卫',
-    subtitle: '直连 NCBI 官方数据库逐字核验效应量，彻底杜绝 AI 虚构伪文献',
+    title: '引用核验与写前守卫',
+    subtitle: '正式引用只能来自已登记的文献记录',
     layout: 'diagram_focused',
-    category: 'GROUNDING - 学术验真',
-    body: '### 三重防护坚守医学科研真实性底线\n- **1. NCBI PubMed / Europe PMC / OpenAlex 直连交叉核验**：\n  - 论文引用的每一篇参考文献必须绑定官方真实 PMID 与 DOI\n- **2. 细粒度命题级论断核查 (verify_claims)**：\n  - 抽取正文效应量数据（HR 0.74, 95% CI 0.65-0.85），直连 PubMed XML 全文校验，标记支持状态\n- **3. 写前守卫 (Write Guards) 与人类优先权**：\n  - AI 提议的文字通过行内红绿 Diff (Character-level Diff) 呈现，保留医生核心观点\n  - 评论锚点长效保全，人类批注在 AI 修订后依然吸附精准',
+    category: 'GROUNDING - 引用核验',
+    body: '### 三道防护\n- **1. 文献登记**：引用须经 PubMed / Crossref / Europe PMC 检索登记后才能插入正文\n- **2. 论断核查 (verify_claims)**：抽取正文中的效应量（HR、OR、95% CI 等）与已登记文献比对，标记支持状态\n- **3. 写前守卫**：AI 的修改以行内差异呈现，由作者逐条采纳；未登记的引用标记在操作层被拦截',
     diagramKey: 'pubmed_guard_diagram',
-    notes: '强调顶刊投稿绝不能出现假文献，Heurion 采用底层拦截技术彻底消除幻觉风险。'
+    notes: '核验能降低虚构引用的风险，但仍需作者阅读原文。'
   },
   {
-    title: '文档与演示文稿一体化双模协同与课题记忆演进',
-    subtitle: '同一套科研数据底座，同步产出 IMRAD 论文手稿与 16:9 学术答辩幻灯片',
+    title: '文档与幻灯片双模协同、课题记忆',
+    subtitle: '同一份课题内容，产出论文手稿与汇报幻灯片',
     layout: 'two_col',
     category: 'WORKSPACE - 双模协同',
-    body: '### Docs & Slides 双模协同设计器\n- **形态一键平滑切换**：\n  - 课题内容既可作为 IMRAD 论文长文排版，亦可一键转为 16:9 学术汇报幻灯片\n- **8 种学术标准版式与医院定制主题**：\n  - 封面、两栏、图文、大数字、致谢\n  - 三甲医院定制专属院徽水印与科室色谱\n- **纯 Rust WASM 渲染器**：秒级输出 4K 高清幻灯片',
-    body2: '### 课题级自主记忆演进系统\n- **机器在环 (Machine-in-the-loop) 动态沉淀**：\n  - 深度观察研究者的每次修订、确认与选择\n  - 沉淀 8 类核心知识：研究假设、诊断口径、排除标准细节、特定亚组偏好\n- **去伪存真与自我淘汰**：\n  - 自动识别过期口径并退役，杜绝传统 Agent 记忆发散膨胀',
+    body: '### Docs & Slides\n- 论文长文与 16:9 幻灯片两种形态\n- 多种学术版式与主题\n- 导出 Word / PPTX',
+    body2: '### 课题记忆\n- AI 从修订与确认中提出记忆条目（研究假设、变量定义、偏好）\n- 条目经作者确认后生效，可更新或退役',
     diagramKey: 'dual_mode_memory_diagram',
-    notes: '展示双模一体设计，同一份科研数据底座，既出学术论文，又出答辩 PPT。'
+    notes: '记忆的生效权在作者。'
   },
   {
-    title: '端到端实战标杆：DAPA-HF 心衰多中心研究闭环',
-    subtitle: '从万级患者库到 NEJM 级别论文与汇报材料的一站式飞轮闭环',
-    layout: 'image_text',
-    category: 'BENCHMARK - 标杆闭环',
-    image: 'real-case-research-5-research-loop.png',
-    body: '- **1. PICO 方案圈定**：从 2,150 例门诊档案中筛选 1,420 例达标受试者 (S001~S1420)\n- **2. 3D 影像匹配**：提取心脏超声与腹部 CT 参数，对齐 24 个月生化指标\n- **3. 倾向评分匹配**：1:1 PSM 匹配，一键生成符合顶刊规范的 Table 1 原生 Word 三线表\n- **4. 沙箱高级统计**：24 个月 KM 曲线 (P<0.001)、Cox 回归森林图 (HR 0.74)、E-value 混杂抗辩 (2.45)\n- **5. 成果双模生成**：PubMed 验真支持下一键输出 SCI 投稿草稿与答辩幻灯片',
-    diagramKey: 'dapa_hf_flywheel',
-    notes: '串联全流程飞轮，展示从原始数据到高质量论文生成的完整闭环。'
-  },
-  {
-    title: '为什么临床医学科研，需要专用智能工作台？',
-    subtitle: '七大核心维度全面超越通用大模型与传统单点工具 (SPSS / Excel / PACS)',
+    title: '与通用大模型、传统工具的对比',
+    subtitle: '按当前已实现的能力对比',
     layout: 'content',
-    category: 'COMPARISON - 竞品对比',
-    body: `### 七大核心维度横向测评对比
+    category: 'COMPARISON - 对比',
+    body: `### 对比
 
-| 评估维度 | Heurion 2.0 临床科研工作台 | 通用大模型 (ChatGPT / Claude) | 传统单点工具 (SPSS / Excel / PACS) |
+| 评估维度 | Heurion | 通用大模型 (ChatGPT / Claude) | 传统工具 (SPSS / Excel / PACS) |
 | :--- | :--- | :--- | :--- |
-| **文献真实性校验** | **直连 PubMed/EuropePMC 交叉核验，假引注 100% 拦截** | 存在严重“幻觉”，虚构不存在的 DOI/PMID | 纯手工逐篇检索查验，耗费海量人工 |
-| **3D 体素医学影像** | **原生集成 MONAI 3D、RECIST 1.1、MPR 切片联动与差分热力图** | 仅支持 2D 截图视见，无三维体素，物理尺寸误判 | 需额外安装独立庞大的离线 PACS，与科研脱节 |
-| **隐私合规 Zero-PHI** | **独立无网络沙箱，S001... 学术去标识化，零公网留存** | 医疗数据上传至外部商业模型服务器，违规风险高 | 文件虽在本地，但缺乏自动化脱敏与加密共享 |
-| **受试者多维纳排** | **秒级多表交并过滤，全自动生成 CONSORT 流程图** | 无法关联复杂多表，无法计算精确人群交并与剔除数 | 依赖手工在 Excel 写复杂公式或数据库写 SQL |
-| **顶刊标准 Table 1** | **一键导出原生 Word (.docx) 1.5pt/0.5pt 三线表与检验脚注** | 仅能生成 Markdown 或 HTML，需人工繁琐排版 | 需手动将统计分析输出逐行复制粘帖至 Word |
-| **严谨统计计算沙箱** | **内嵌 Linux/macOS 独立 UID 隔离 Python/R 计算环境** | 仅能输出 Python 代码段，无法在本地安全执行 | 需手动操作交互界面，各模块之间缺乏连续数据流 |
-| **AI 智能体协同协议** | **原生标准化 Model Context Protocol (MCP)** | 仅支持通识 Chat，无医学科研专用工具箱 | 无 AI 接口与 Agent 扩展支持 |`,
+| **引用核验** | 正式引用来自已登记记录，无法核实的会被标出 | 可能虚构 DOI/PMID | 人工逐篇检索 |
+| **三维影像** | MONAI 分割、RECIST 径线与体积、三正交 MPR | 只能看二维截图 | 需另装 PACS 或 3D Slicer |
+| **隐私** | 入组去标识、PHI 扫描、统计代码在隔离沙箱运行 | 直接粘贴病历有泄露风险 | 本地文件，缺少自动去标识 |
+| **纳排与流向图** | 组合筛选，按真实入组记录生成 CONSORT 图 | 不能直接查询数据 | 手写 SQL 或 Excel 公式 |
+| **Table 1** | 原生 Word 三线表与检验脚注 | 输出 Markdown 需重新排版 | 手工复制到 Word |
+| **统计计算** | 隔离沙箱运行 Python | 只给代码，不负责执行 | 手动操作界面 |
+| **Agent 接入** | 提供 MCP 服务 | 通用对话 | 无 |`,
     diagramKey: 'comparison_matrix_diagram',
-    notes: '对比表格条理分明，直击各类竞品与替代方案的痛处。'
+    notes: '对比只列当前已实现的能力。'
   },
   {
-    title: '持续演进的临床科研智能基础设施',
-    subtitle: '从单工作台单点突破，走向多中心联邦医学科研协作网络与合规私有化落地',
+    title: '路线图',
+    subtitle: '已就绪的能力与规划中的方向',
     layout: 'closing',
-    category: 'ROADMAP - 演进与交付',
-    body: '从单工作台单点突破，走向多中心联邦医学科研智能网络\n\n- **Phase 1 (已就绪)**：患者数据资产化、受试者纳排、MONAI 3D 量化、原生 Table 1 与 CONSORT\n- **Phase 2 (已就绪)**：Docs & Slides 双模协同、纯 Rust 4K 渲染、PubMed 交叉验真、MCP 生产级接入\n- **Phase 3 (推进中)**：科室多中心课题联邦协作网络、电子化知情同意书 (e-Consent) 与 eCRF 质控\n- **Phase 4 (前瞻布局)**：真实世界证据 (RWE) 主动发现与多模态虚拟患者队列 (Digital Twin Cohort)\n\n官方联系：support@heurion.org | 平台体验：https://heurion.org/app\n感谢各位专家与评委！欢迎交流提问。',
+    category: 'ROADMAP - 路线图',
+    body: '- **已就绪**：患者建档与去标识、受试者纳排、MONAI 脾脏分割与 RECIST 测量、原生 Table 1 与 CONSORT 流向图、引用核验、Docs & Slides、MCP 接入\n- **实验中**：形变配准、PET-CT 与放疗靶区演示（目前只在合成数据上运行）、多款 MONAI 模型的验证\n- **规划中**：多中心协作、列线图与 ROC / DCA、倾向评分匹配\n\n官方联系：support@heurion.org | 平台体验：https://heurion.org/app\n感谢聆听，欢迎交流。',
     diagramKey: 'roadmap_airgap_diagram',
-    notes: '收尾展望：强调私有化 Airgap 部署能力，欢迎试用与合作。'
+    notes: '如实区分已就绪、实验中与规划中的能力。'
   }
 ];
 
-// SVG Diagram Builders styled with Heurion Mantle dark/mint colors (#06110d, #08150f, #1e2925, #00ff93, #06b680, #0298fe, #f5b544)
-// Pure technical style: NO EMOJI
+// 幻灯片配图用的 HTML 示意（纯文字说明，不含编造数据）
 const DIAGRAMS: Record<string, string> = {
   cover_pipeline: `
     <div class="diagram-wrap">
-      <div class="mock-pipeline-bar">
-        <span class="pipe-step done">阶段 1: 患者健康档案 (PHR & 多模态 OCR) [完成]</span>
-        <span class="pipe-arrow">-&gt;</span>
-        <span class="pipe-step done">阶段 2: 受试者纳排与 MONAI 3D 量化 (S001...) [完成]</span>
-        <span class="pipe-arrow">-&gt;</span>
-        <span class="pipe-step done">阶段 3: 课题记忆演进 (8条结论) [完成]</span>
-        <span class="pipe-arrow">-&gt;</span>
-        <span class="pipe-step active">阶段 4: 发表级 Table 1 三线表与证据链</span>
-      </div>
       <div class="diagram-cards-row">
-        <div class="diag-card">
-          <div class="diag-card-h">模块 01 / 数据汇聚</div>
-          <div class="diag-card-title">化验单 OCR & PHR</div>
-          <div class="diag-card-desc">门诊住院病历秒级数字化，时间轴纵向追踪</div>
-        </div>
-        <div class="diag-card">
-          <div class="diag-card-h">模块 02 / 空间计算</div>
-          <div class="diag-card-title">MONAI 3D & MPR</div>
-          <div class="diag-card-desc">19 类深度学习权重，实体瘤 RECIST 1.1 自动标定</div>
-        </div>
-        <div class="diag-card">
-          <div class="diag-card-h">模块 03 / 隔离统计</div>
-          <div class="diag-card-title">无网沙箱 Python/R</div>
-          <div class="diag-card-desc">原生 Word 三线表，KM 曲线与 E-value 敏感度抗辩</div>
-        </div>
-        <div class="diag-card">
-          <div class="diag-card-h">模块 04 / 顶刊发表</div>
-          <div class="diag-card-title">PubMed 验真 & 双模</div>
-          <div class="diag-card-desc">直连 NCBI 校验效应量，论文手稿与 16:9 幻灯片同步</div>
-        </div>
+        <div class="diag-card"><div class="diag-card-h">模块 01 / 数据</div><div class="diag-card-title">化验单 OCR & PHR</div><div class="diag-card-desc">病历与化验单结构化提取，人工核对后入库</div></div>
+        <div class="diag-card"><div class="diag-card-h">模块 02 / 影像</div><div class="diag-card-title">MONAI & MPR</div><div class="diag-card-desc">分割、RECIST 径线与体积、三正交浏览</div></div>
+        <div class="diag-card"><div class="diag-card-h">模块 03 / 统计</div><div class="diag-card-title">隔离沙箱 Python</div><div class="diag-card-desc">原生 Word 三线表、KM 曲线、E-value</div></div>
+        <div class="diag-card"><div class="diag-card-h">模块 04 / 写作</div><div class="diag-card-title">引用核验 & 双模</div><div class="diag-card-desc">登记文献才能引用，手稿与幻灯片同步</div></div>
       </div>
     </div>
   `,
@@ -243,48 +196,22 @@ const DIAGRAMS: Record<string, string> = {
     <div class="diagram-wrap">
       <div class="diagram-split">
         <div class="diag-side red">
-          <div class="diag-side-h">[通用大模型四大致命软肋]</div>
+          <div class="diag-side-h">[通用大模型的难点]</div>
           <div class="diag-node-list">
-            <div class="diag-node red">
-              <b>1. 数据孤岛与隐私失控</b>
-              <span>公网 API 传输患者真实个人健康信息 (PHI)，严重违背临床伦理与 HIPAA 法规</span>
-            </div>
-            <div class="diag-node red">
-              <b>2. 队列圈定与分析断层</b>
-              <span>通用 Chat 界面无法直接穿透 EMR/LIS 多表关联，缺乏 3D 体素医学图像运算</span>
-            </div>
-            <div class="diag-node red">
-              <b>3. 课题记忆断代与遗忘</b>
-              <span>上下文窗口耗尽即丢失既定研究假设、排除口径与亚组划分，被迫反复交代</span>
-            </div>
-            <div class="diag-node red">
-              <b>4. 引用凭空捏造与改动黑盒</b>
-              <span>大模型“幻觉”虚构 fake PMID/DOI；全篇覆写抹杀医生深思熟虑的核心批注</span>
-            </div>
+            <div class="diag-node red"><b>1. 隐私</b><span>直接粘贴病历有泄露风险</span></div>
+            <div class="diag-node red"><b>2. 队列与计算</b><span>不能查询结构化数据，不能处理三维影像</span></div>
+            <div class="diag-node red"><b>3. 记忆</b><span>窗口用尽后需要反复交代研究背景</span></div>
+            <div class="diag-node red"><b>4. 引用</b><span>可能虚构 PMID/DOI</span></div>
           </div>
         </div>
-        <div class="diag-center-divider">
-          <span class="chasm-tag">VS</span>
-        </div>
+        <div class="diag-center-divider"><span class="chasm-tag">VS</span></div>
         <div class="diag-side green">
-          <div class="diag-side-h">[Heurion 2.0 专用医学智能工作台解决方案]</div>
+          <div class="diag-side-h">[Heurion 的做法]</div>
           <div class="diag-node-list">
-            <div class="diag-node green">
-              <b>1. Zero-PHI 本地隔离计算</b>
-              <span>正则 + NLP 拦截 18 位身份证与病案号；受试者专属学术编号 (S001...S1420)</span>
-            </div>
-            <div class="diag-node green">
-              <b>2. 数据库级动态纳排与 3D 量化</b>
-              <span>秒级交并过滤，自动输出 CONSORT 2010 矢量流程图；原生 MONAI 3D 体素测量</span>
-            </div>
-            <div class="diag-node green">
-              <b>3. 课题级自主记忆演进系统</b>
-              <span>深度观察医生修订，沉淀 8 类核心知识；具备去伪存真与自我淘汰机制</span>
-            </div>
-            <div class="diag-node green">
-              <b>4. NCBI PubMed 实时交叉验真</b>
-              <span>直连 PubMed XML 逐字比对 HR/OR/95%CI；行内红绿差异比对与写前守卫拦截</span>
-            </div>
+            <div class="diag-node green"><b>1. 去标识与 PHI 扫描</b><span>S001... 研究编号；规则扫描身份证号、手机号、病案号</span></div>
+            <div class="diag-node green"><b>2. 结构化纳排与影像量化</b><span>组合筛选；MONAI 分割与 RECIST 测量</span></div>
+            <div class="diag-node green"><b>3. 课题记忆</b><span>AI 提议，作者确认后生效</span></div>
+            <div class="diag-node green"><b>4. 引用核验</b><span>登记文献才能引用，修改以行内差异呈现</span></div>
           </div>
         </div>
       </div>
@@ -293,340 +220,102 @@ const DIAGRAMS: Record<string, string> = {
 
   system_architecture: `
     <div class="diagram-wrap">
-      <div class="arch-container">
-        <div class="arch-layer top">
-          <div class="arch-layer-title">[1. 交互与呈现层] (Web Frontend - apps/platform/web)</div>
-          <div class="arch-grid-3">
-            <div class="arch-box">ProseMirror 医学文档协同画布 (IMRAD 规范)</div>
-            <div class="arch-box">16:9 Deck 幻灯片设计器 (8类版式与主题)</div>
-            <div class="arch-box">NiiVue WebGL2 3D 体绘制 + 2D MPR 阅片器</div>
-          </div>
-        </div>
-        <div class="arch-arrow-down">| WebSocket (CRDT) & REST API 毫秒级双向通道 |</div>
-        <div class="arch-layer mid">
-          <div class="arch-layer-title">[2. 调度与业务中枢] (@heurion2/platform :8787)</div>
-          <div class="arch-grid-4">
-            <div class="arch-box">Hono 高性能 REST 服务</div>
-            <div class="arch-box">Yjs CRDT 分布式无锁网关</div>
-            <div class="arch-box">多租户隔离与 PhrClaim 授权</div>
-            <div class="arch-box">PubMed / PMC / OpenAlex 验真</div>
-          </div>
-        </div>
-        <div class="arch-split-bottom">
-          <div class="arch-col left">
-            <div class="arch-col-title">[3. 3D 影像微服务] (:8004)</div>
-            <div class="arch-sub-box">Project MONAI & PyTorch (CUDA/MPS)</div>
-            <div class="arch-sub-box">19 类深度学习权重 (RECIST 1.1 / TotalSegmentator)</div>
-            <div class="arch-sub-box">3D MPR 切片提取 & 双期差分热力图</div>
-          </div>
-          <div class="arch-col center">
-            <div class="arch-col-title">[4. 纯 Rust 光栅化引擎]</div>
-            <div class="arch-sub-box">@resvg/resvg-js (WASM / Native)</div>
-            <div class="arch-sub-box">秒级输出 4K 高保真幻灯片预览图</div>
-            <div class="arch-sub-box">免安装 LibreOffice / 无头浏览器依赖</div>
-          </div>
-          <div class="arch-col right">
-            <div class="arch-col-title">[5. 隔离计算沙箱] (Harness)</div>
-            <div class="arch-sub-box">Linux/macOS 独立 UID 无外网沙箱</div>
-            <div class="arch-sub-box">Python/R: lifelines, tableone, MatchIt</div>
-            <div class="arch-sub-box">原生 Word (.docx) 顶刊三线表导出</div>
-          </div>
-        </div>
+      <div class="diagram-cards-row">
+        <div class="diag-card"><div class="diag-card-h">平台服务</div><div class="diag-card-title">@heurion2/platform</div><div class="diag-card-desc">REST API、协同、多租户、操作层与引用守卫、MCP</div></div>
+        <div class="diag-card"><div class="diag-card-h">影像服务</div><div class="diag-card-title">imaging-worker</div><div class="diag-card-desc">MONAI + PyTorch；模型完成度不一</div></div>
+        <div class="diag-card"><div class="diag-card-h">隔离沙箱</div><div class="diag-card-title">独立 Linux 用户</div><div class="diag-card-desc">Python 统计环境，出站只放行平台端口</div></div>
+        <div class="diag-card"><div class="diag-card-h">部署</div><div class="diag-card-title">Docker Compose</div><div class="diag-card-desc">单机部署，Caddy 反向代理</div></div>
       </div>
     </div>
   `,
 
   data_ingestion_flow: `
     <div class="diagram-wrap">
-      <div class="flow-steps-horizontal">
-        <div class="flow-step">
-          <div class="flow-step-num">01</div>
-          <div class="flow-step-body">
-            <b>多模态文件上传</b>
-            <span>化验单、出院小结、检查单 (PDF/JPG/PNG)</span>
-          </div>
-        </div>
-        <div class="flow-arrow">-&gt;</div>
-        <div class="flow-step warn">
-          <div class="flow-step-num">02</div>
-          <div class="flow-step-body">
-            <b>Zero-PHI 脱敏扫描</b>
-            <span>正则/NLP 截断身份证号、病案号与电话</span>
-          </div>
-        </div>
-        <div class="flow-arrow">-&gt;</div>
-        <div class="flow-step active">
-          <div class="flow-step-num">03</div>
-          <div class="flow-step-body">
-            <b>多模态 OCR 结构化</b>
-            <span>自动解析检验项目、数值、参考区间与高低</span>
-          </div>
-        </div>
-        <div class="flow-arrow">-&gt;</div>
-        <div class="flow-step">
-          <div class="flow-step-num">04</div>
-          <div class="flow-step-body">
-            <b>时间轴纵向数据库</b>
-            <span>多期复查自动对齐，24 个月动态趋势折线图</span>
-          </div>
-        </div>
-        <div class="flow-arrow">-&gt;</div>
-        <div class="flow-step highlight">
-          <div class="flow-step-num">05</div>
-          <div class="flow-step-body">
-            <b>因果诊断链沉淀</b>
-            <span>总 IgE 异常 -&gt; CT 粘液栓 -&gt; ABPA 诊断</span>
-          </div>
-        </div>
+      <div class="diagram-cards-row">
+        <div class="diag-card"><div class="diag-card-h">步骤 1</div><div class="diag-card-title">上传原件</div><div class="diag-card-desc">图片或 PDF</div></div>
+        <div class="diag-card"><div class="diag-card-h">步骤 2</div><div class="diag-card-title">OCR 提取</div><div class="diag-card-desc">指标、数值、单位与参考区间</div></div>
+        <div class="diag-card"><div class="diag-card-h">步骤 3</div><div class="diag-card-title">人工核对</div><div class="diag-card-desc">待确认卡逐项确认后入库</div></div>
+        <div class="diag-card"><div class="diag-card-h">步骤 4</div><div class="diag-card-title">纵向追踪</div><div class="diag-card-desc">趋势图，可回到原件核对</div></div>
       </div>
     </div>
   `,
 
   mpr_coordinate_diagram: `
     <div class="diagram-wrap">
-      <div class="mpr-flow-box">
-        <div class="mpr-flow-step">
-          <b>步骤 1. DICOM 3D 体素阵列</b>
-          <span>读取 Pixel Spacing 与 Slice Thickness，构建空间变换仿射矩阵</span>
-        </div>
-        <div class="mpr-flow-arrow">-&gt;</div>
-        <div class="mpr-flow-step active">
-          <b>步骤 2. MPR 三正交切片联动提取</b>
-          <span>轴位 (Axial) / 冠状位 (Coronal) / 矢状位 (Sagittal) 十字准星亚毫米联动</span>
-        </div>
-        <div class="mpr-flow-arrow">-&gt;</div>
-        <div class="mpr-flow-step">
-          <b>步骤 3. 亨氏单位 (HU) 窗宽窗位映射</b>
-          <span>肺窗 (-600/1500) | 纵隔窗 (40/400) | 腹部窗 (40/350) | 骨窗 (300/1500)</span>
-        </div>
-        <div class="mpr-flow-arrow">-&gt;</div>
-        <div class="mpr-flow-step highlight">
-          <b>步骤 4. MONAI 深度学习推理</b>
-          <span>真 3D 体积积分计算（脾脏 680.4 cm³、肺结节容积），杜绝像素尺寸估算误判</span>
-        </div>
+      <div class="diagram-cards-row">
+        <div class="diag-card"><div class="diag-card-h">轴位</div><div class="diag-card-title">上 A / 左 R</div><div class="diag-card-desc">前在上，患者右在图像左</div></div>
+        <div class="diag-card"><div class="diag-card-h">冠状位</div><div class="diag-card-title">上 S / 左 R</div><div class="diag-card-desc">头侧在上</div></div>
+        <div class="diag-card"><div class="diag-card-h">矢状位</div><div class="diag-card-title">上 S / 左 A</div><div class="diag-card-desc">头侧在上，前在左</div></div>
       </div>
     </div>
   `,
 
   recist_pipeline_diagram: `
     <div class="diagram-wrap">
-      <div class="pipeline-block-flow">
-        <div class="p-block">
-          <span class="p-badge">Step 1</span>
-          <b>3D 肿瘤分割掩膜</b>
-          <span>MONAI NSCLC 靶病灶分割与边缘高保真提取</span>
-        </div>
-        <div class="p-arrow">-&gt;</div>
-        <div class="p-block">
-          <span class="p-badge">Step 2</span>
-          <b>Key Slice 关键层定位</b>
-          <span>沿 Z 轴自动寻优横截面积最大的层面 (第 138 层)</span>
-        </div>
-        <div class="p-arrow">-&gt;</div>
-        <div class="p-block active">
-          <span class="p-badge">Step 3</span>
-          <b>长短轴严格拟合</b>
-          <span>最大长径: 48.2mm<br>垂直短轴: 32.6mm</span>
-        </div>
-        <div class="p-arrow">-&gt;</div>
-        <div class="p-block highlight">
-          <span class="p-badge">Step 4</span>
-          <b>IBSI 影像组学</b>
-          <span>形态学、GLCM 灰度共生矩阵等 107 项量化指标</span>
-        </div>
+      <div class="diagram-cards-row">
+        <div class="diag-card"><div class="diag-card-h">输入</div><div class="diag-card-title">CT 体数据</div><div class="diag-card-desc">统一到 LPS 方向</div></div>
+        <div class="diag-card"><div class="diag-card-h">分割</div><div class="diag-card-title">模型或标注掩膜</div><div class="diag-card-desc">模型输出需人工核对</div></div>
+        <div class="diag-card"><div class="diag-card-h">测量</div><div class="diag-card-title">最长径与体积</div><div class="diag-card-desc">按真实体素间距换算</div></div>
       </div>
     </div>
   `,
 
-  diff_heatmap_diagram: `
+  radiomics_card_diagram: `
     <div class="diagram-wrap">
-      <div class="diff-schema-grid">
-        <div class="diff-item">
-          <b>基线 CT (T0)</b>
-          <span>奥希替尼靶向治疗前<br>靶病灶长径 48.2mm</span>
-        </div>
-        <div class="diff-math">+</div>
-        <div class="diff-item">
-          <b>3月随访 CT (T1)</b>
-          <span>靶向治疗 3 个月后<br>病灶退缩至 28.1mm</span>
-        </div>
-        <div class="diff-math">-&gt; 3D 互信息配准 -&gt;</div>
-        <div class="diff-item result">
-          <b>体素级差分吸收热力图</b>
-          <span style="color: #00ff93;">[冷色绿斑]: 吸收退缩 (容积变化 -58.3%)</span><br>
-          <span style="color: #ef4444;">[暖色红斑]: 进展外侵 (Progression)</span><br>
-          <span style="color: #38bdf8;">[RECIST 1.1 裁决]: 部分缓解 (PR)</span>
-        </div>
-      </div>
-    </div>
-  `,
-
-  sarcopenia_diagram: `
-    <div class="diagram-wrap">
-      <div class="sarco-step-flow">
-        <div class="s-step">
-          <b>1. 全身解剖定位</b>
-          <span>TotalSegmentator 104 类解剖先验，自下而上精准识别 L3 椎体中点</span>
-        </div>
-        <div class="s-arrow">-&gt;</div>
-        <div class="s-step">
-          <b>2. 肌肉与脂肪密度分层</b>
-          <span>骨骼肌 SMA (-29~150 HU): 98.4 cm²<br>内脏脂肪 VAT (-150~-50 HU)</span>
-        </div>
-        <div class="s-arrow">-&gt;</div>
-        <div class="s-step active">
-          <b>3. 骨骼肌指数 (SMI) 计算</b>
-          <span>SMI = 98.4 / 1.70² = 34.2 cm²/m²<br>（国际临界值 &lt; 55，诊断重度肌少症）</span>
-        </div>
-        <div class="s-arrow">-&gt;</div>
-        <div class="s-step alert">
-          <b>4. 药代毒性预警 (PK Warning)</b>
-          <span>化疗清除率显著下调，3 级以上严重不良事件风险增加 2.8 倍</span>
-        </div>
+      <div class="diagram-cards-row">
+        <div class="diag-card"><div class="diag-card-h">形状</div><div class="diag-card-title">15 项</div><div class="diag-card-desc">体积、表面积、球形度等</div></div>
+        <div class="diag-card"><div class="diag-card-h">一阶统计</div><div class="diag-card-title">18 项</div><div class="diag-card-desc">均值、分位数、偏度、峰度、熵等</div></div>
+        <div class="diag-card"><div class="diag-card-h">纹理</div><div class="diag-card-title">GLCM 6 / GLRLM 7</div><div class="diag-card-desc">尚未与 IBSI 参考值校验</div></div>
       </div>
     </div>
   `,
 
   consort_flow_diagram: `
     <div class="diagram-wrap">
-      <div class="consort-visual-box">
-        <div class="consort-node top">
-          <b>初始筛查受试者人群 (Assessed for eligibility)</b>
-          <span>N = 2,150 例门诊与住院原始档案</span>
-        </div>
-        <div class="consort-branch">
-          <div class="consort-line-down"></div>
-          <div class="consort-node-excl">
-            <b>剔除不满足条件 (Excluded, n = 730)</b>
-            <ul>
-              <li>未满足纳入标准 (eGFR &lt; 30 mL/min): n = 540</li>
-              <li>撤回知情同意书: n = 120</li>
-              <li>其他严重并发症: n = 70</li>
-            </ul>
-          </div>
-        </div>
-        <div class="consort-node bottom">
-          <b>最终达标纳入课题队列 (Enrolled Cohort)</b>
-          <span>N = 1,420 例心衰受试者 (去标识化学术代号 S001 ~ S1420)</span>
-        </div>
+      <div class="diagram-cards-row">
+        <div class="diag-card"><div class="diag-card-h">平台记录</div><div class="diag-card-title">入组 / 移出 / 在组</div><div class="diag-card-desc">默认只画真实入组记录</div></div>
+        <div class="diag-card"><div class="diag-card-h">研究者填写</div><div class="diag-card-title">筛选与排除</div><div class="diag-card-desc">按原始纳排记录填写，平台不估算</div></div>
+        <div class="diag-card"><div class="diag-card-h">导出</div><div class="diag-card-title">SVG / Mermaid</div><div class="diag-card-desc">可直接插入论文</div></div>
       </div>
     </div>
   `,
 
   table1_pipeline_diagram: `
     <div class="diagram-wrap">
-      <div class="table1-flow-row">
-        <div class="t1-step">
-          <b>阶段 1: 变量分布自适应检验</b>
-          <span>Shapiro-Wilk 检验：正态输出 Mean±SD (t检验)；偏态输出 Median[IQR] (Mann-Whitney)</span>
-        </div>
-        <div class="t1-arrow">-&gt;</div>
-        <div class="t1-step">
-          <b>阶段 2: 倾向评分匹配 (PSM)</b>
-          <span>1:1 最邻近卡钳匹配，平衡混杂协变量，SMD 全部收敛至 &lt; 0.05</span>
-        </div>
-        <div class="t1-arrow">-&gt;</div>
-        <div class="t1-step active">
-          <b>阶段 3: 原生 Word (.docx) 生成</b>
-          <span>顶线/底线 1.5pt、栏目线 0.5pt、宋体 / Times New Roman、统计检验脚注</span>
-        </div>
+      <div class="diagram-cards-row">
+        <div class="diag-card"><div class="diag-card-h">检验选择</div><div class="diag-card-title">正态性判断</div><div class="diag-card-desc">t 检验 / Mann-Whitney U / 卡方 / Fisher</div></div>
+        <div class="diag-card"><div class="diag-card-h">组间比较</div><div class="diag-card-title">p 值与 SMD</div><div class="diag-card-desc">两组时可给出 SMD</div></div>
+        <div class="diag-card"><div class="diag-card-h">导出</div><div class="diag-card-title">原生 .docx</div><div class="diag-card-desc">三线表与统计脚注</div></div>
       </div>
     </div>
   `,
 
   causal_survival_diagram: `
     <div class="diagram-wrap">
-      <div class="causal-split">
-        <div class="cs-box">
-          <div class="cs-title">[因果推断与混杂抗辩] (Causal Inference)</div>
-          <div class="cs-content">
-            <b>[Love Plot 绝对标准化均数差 (SMD)]</b><br>
-            <span>匹配前粗散点发散，匹配后全部收敛至 SMD &lt; 0.1 达标线内</span><br><br>
-            <b>[VanderWeele E-value 未测混杂抗辩]</b><br>
-            <span>计算得 E-value = 2.45（95% CI 下限 1.76），自动输出中英双语顶刊审稿人抗辩陈述</span>
-          </div>
-        </div>
-        <div class="cs-box">
-          <div class="cs-title">[生存分析与预测模型] (Survival & TRIPOD)</div>
-          <div class="cs-content">
-            <b>[24 个月 Kaplan-Meier 累积无事件生存曲线]</b><br>
-            <span>达格列净组显著优于对照组，Log-rank P &lt; 0.001，附带风险人数表</span><br><br>
-            <b>[多因素 Cox 比例风险回归与森林图]</b><br>
-            <span>主要复合终点风险降低 26% (HR 0.74, 95% CI 0.65-0.85)，亚组高度一致</span>
-          </div>
-        </div>
+      <div class="diagram-cards-row">
+        <div class="diag-card"><div class="diag-card-h">生存分析</div><div class="diag-card-title">KM 与 Log-rank</div><div class="diag-card-desc">带风险人数表</div></div>
+        <div class="diag-card"><div class="diag-card-h">回归</div><div class="diag-card-title">Cox 比例风险</div><div class="diag-card-desc">HR 与 95% CI，森林图</div></div>
+        <div class="diag-card"><div class="diag-card-h">敏感性分析</div><div class="diag-card-title">E-value</div><div class="diag-card-desc">点估计与置信区间界限</div></div>
       </div>
     </div>
   `,
 
   pubmed_guard_diagram: `
     <div class="diagram-wrap">
-      <div class="guard-flow-container">
-        <div class="g-step">
-          <span class="g-num">Gate 1</span>
-          <b>引文与效应量抽取</b>
-          <span>AI 从文稿中提取 [PMID: 31535829] 及 HR 0.74 (0.65-0.85)</span>
-        </div>
-        <div class="g-arrow">-&gt;</div>
-        <div class="g-step active">
-          <span class="g-num">Gate 2</span>
-          <b>NCBI 官方 XML 直连核验</b>
-          <span>调用 E-Utilities API 拉取真实论文 XML 全文与摘要</span>
-        </div>
-        <div class="g-arrow">-&gt;</div>
-        <div class="g-step highlight">
-          <span class="g-num">Gate 3</span>
-          <b>命题逐字核查与写前守卫</b>
-          <span>数据 100% 吻合标记 Supported；行内红绿 Diff 确认，防止假文献</span>
-        </div>
-      </div>
-      <div class="guard-mock-diff">
-        <div class="diff-title">[行内微观差异比对] (Character-level Diff Preview)</div>
-        <div class="diff-body">
-          达格列净暴露组复合心力衰竭再住院风险
-          <span class="diff-del">显著下降</span>
-          <span class="diff-ins">降低 26%（HR 0.74, 95% CI 0.65–0.85, P&lt;0.001）</span>
-          <span class="diff-badge-ok">[PubMed 官方核验通过: PMID 31535829]</span>
-        </div>
+      <div class="diagram-cards-row">
+        <div class="diag-card"><div class="diag-card-h">防护 1</div><div class="diag-card-title">文献登记</div><div class="diag-card-desc">PubMed / Crossref / Europe PMC 检索登记</div></div>
+        <div class="diag-card"><div class="diag-card-h">防护 2</div><div class="diag-card-title">论断核查</div><div class="diag-card-desc">效应量与登记文献比对，标记支持状态</div></div>
+        <div class="diag-card"><div class="diag-card-h">防护 3</div><div class="diag-card-title">写前守卫</div><div class="diag-card-desc">未登记引用在操作层被拦截</div></div>
       </div>
     </div>
   `,
 
   dual_mode_memory_diagram: `
     <div class="diagram-wrap">
-      <div class="dual-mode-grid">
-        <div class="dm-card">
-          <div class="dm-h">[模式 1] IMRAD 论文排版模式 (Docs)</div>
-          <span>段落稳定 Block ID，规范医学结构化排版，批注评论长效锚定</span>
-        </div>
-        <div class="dm-sync">
-          <span class="sync-icon">&lt;-&gt;</span>
-          <span class="sync-text">单一 Yjs CRDT 数据模型<br>毫秒级双向无锁同步</span>
-        </div>
-        <div class="dm-card">
-          <div class="dm-h">[模式 2] 16:9 演示文稿模式 (Slides)</div>
-          <span>8 种学术版式、院徽水印定制、纯 Rust WASM 4K 极速光栅化</span>
-        </div>
-      </div>
-      <div class="memory-engine-bar">
-        <b>[课题自主记忆演进系统]:</b>
-        <span>观察医生采纳行为 -&gt; 沉淀 8 类核心口径 (纳排标准、终点定义、统计偏好) -&gt; 过期口径自动退役淘汰</span>
-      </div>
-    </div>
-  `,
-
-  dapa_hf_flywheel: `
-    <div class="diagram-wrap">
-      <div class="flywheel-flow">
-        <div class="fw-node">1. PICO 纳排<br><span>2,150 筛选 1,420 例</span></div>
-        <div class="fw-arrow">-&gt;</div>
-        <div class="fw-node">2. 影像与多模态<br><span>超声/CT 与 24月生化</span></div>
-        <div class="fw-arrow">-&gt;</div>
-        <div class="fw-node active">3. PSM 与 Table 1<br><span>原生 Word 三线表</span></div>
-        <div class="fw-arrow">-&gt;</div>
-        <div class="fw-node">4. 沙箱统计<br><span>KM 曲线 & E-value</span></div>
-        <div class="fw-arrow">-&gt;</div>
-        <div class="fw-node highlight">5. 论文与幻灯片<br><span>双模一键导出</span></div>
+      <div class="diagram-cards-row">
+        <div class="diag-card"><div class="diag-card-h">Docs</div><div class="diag-card-title">论文手稿</div><div class="diag-card-desc">导出 Word</div></div>
+        <div class="diag-card"><div class="diag-card-h">Slides</div><div class="diag-card-title">汇报幻灯片</div><div class="diag-card-desc">导出 PPTX</div></div>
+        <div class="diag-card"><div class="diag-card-h">Memory</div><div class="diag-card-title">课题记忆</div><div class="diag-card-desc">AI 提议，作者确认</div></div>
       </div>
     </div>
   `,
@@ -634,10 +323,10 @@ const DIAGRAMS: Record<string, string> = {
   comparison_matrix_diagram: `
     <div class="diagram-wrap">
       <div class="radar-badges-row">
-        <div class="r-badge mint">[文献真实性]: 100% PubMed 交叉验真</div>
-        <div class="r-badge cyan">[3D 体素影像]: 原生 MONAI & RECIST 1.1</div>
-        <div class="r-badge green">[隐私合规]: 独立 UID 无网沙箱 Zero-PHI</div>
-        <div class="r-badge yellow">[成果交付]: 原生 Word 三线表 + 16:9 幻灯片</div>
+        <div class="r-badge mint">[引用]: 登记文献才能引用</div>
+        <div class="r-badge cyan">[影像]: MONAI 分割与 RECIST 测量</div>
+        <div class="r-badge green">[隐私]: 去标识 + 隔离沙箱</div>
+        <div class="r-badge yellow">[交付]: 原生 Word 三线表 + 幻灯片</div>
       </div>
     </div>
   `,
@@ -646,14 +335,9 @@ const DIAGRAMS: Record<string, string> = {
     <div class="diagram-wrap">
       <div class="roadmap-grid">
         <div class="rm-phases">
-          <div class="rm-p done"><b>Phase 1 (已就绪)</b>: 患者档案沉淀、受试者纳排、MONAI 3D 量化、原生 Table 1 与 CONSORT 流程图</div>
-          <div class="rm-p done"><b>Phase 2 (已就绪)</b>: Docs & Slides 双模协同、纯 Rust 4K 渲染、PubMed 交叉验真、MCP 生产级接入</div>
-          <div class="rm-p active"><b>Phase 3 (推进中)</b>: 科室多中心课题联邦协作网络、电子化知情同意 (e-Consent) 与 eCRF 自动化质控</div>
-          <div class="rm-p"><b>Phase 4 (前瞻布局)</b>: 真实世界证据 (RWE) 主动发现与多模态虚拟患者队列 (Digital Twin Cohort)</div>
-        </div>
-        <div class="rm-airgap">
-          <div class="airgap-title">[医院物理隔离私有化交付架构] (Airgap)</div>
-          <div class="airgap-box">零公网外联 · Docker Compose 一键拉起 · 兼容国产化软硬件 · GPU/MPS 硬件加速</div>
+          <div class="rm-p done"><b>已就绪</b>: 患者建档、受试者纳排、MONAI 脾脏分割与 RECIST 测量、原生 Table 1 与 CONSORT、引用核验、MCP</div>
+          <div class="rm-p active"><b>实验中</b>: 形变配准、PET-CT 与放疗靶区演示（合成数据）、更多 MONAI 模型的验证</div>
+          <div class="rm-p"><b>规划中</b>: 多中心协作、列线图与 ROC / DCA、倾向评分匹配</div>
         </div>
       </div>
     </div>

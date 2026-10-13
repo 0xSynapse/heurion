@@ -1,832 +1,442 @@
 #!/usr/bin/env python3
 """
-Comprehensive Medical Imaging Screenshot Generator for Heurion User Manual
-Produces authentic, publication-quality, anatomically verified medical imaging screenshots
-covering Case 1 (ABPA), Case 2 (NSCLC), Case 3 (Splenomegaly & Sarcopenia), and Case 4 (Prostate MRI).
-All images strictly comply with NMPA/FDA SaMD CDSS standards and human physiological reality.
+官网影像演示图生成脚本（公开数据集 + 仓库内真实算法输出）
+
+原则：
+1. 图上的每一个轮廓、卡尺、数值都来自仓库已有算法对公开数据集的实际计算结果；
+   不手画病灶、不写死测量值、不编造病理/分期/基因/日期/患者故事。
+2. 数据只用 apps/imaging-worker/data/ 下的公开数据集样本，图上标明数据来源，不称「真实患者」「临床病例」。
+3. 体数据统一经 dicom_io.load_nifti（spatial_canonicalizer.to_canonical_lps）转到 LPS 后再渲染：
+   轴位上方为前（A）、图像左侧为患者右（R）；冠状/矢状位上方为头侧（S）。不使用 np.rot90 手调方向。
+4. 算法跑不通（缺模型权重、输出为空）就跳过该图并打印原因，不退回到手画。
+
+运行：apps/imaging-worker/.venv/bin/python scripts/generate_all_case_study_images.py
 """
 
+import io
 import os
-import math
+import sys
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-import nibabel as nib
+import scipy.ndimage as ndi
+from PIL import Image, ImageDraw
 
-SITE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", "site"))
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", "imaging-worker", "data"))
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SITE_DIR = os.path.join(ROOT_DIR, "apps", "site")
+DATA_DIR = os.path.join(ROOT_DIR, "apps", "imaging-worker", "data")
+sys.path.insert(0, os.path.join(ROOT_DIR, "apps", "imaging-worker", "src"))
 
-def get_font(size=14, bold=False):
-    font_paths = [
-        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-        "/Library/Fonts/Arial Unicode.ttf",
-        "/System/Library/Fonts/STHeiti Medium.ttc",
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-        "/System/Library/Fonts/STHeiti Light.ttc",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
+from dicom_io import load_nifti, apply_ct_window  # noqa: E402
+from presentation_state import render_pacs_viewport, get_cjk_font, get_sans_font  # noqa: E402
+from spatial_canonicalizer import to_canonical_lps, get_radiological_orientation_labels  # noqa: E402
+from recist import calculate_recist_metrics  # noqa: E402
+
+# 数据来源标注：具体出处无法确认，统一写「公开数据集样本」加样本文件名，不猜测数据集名称
+SOURCE_SPLEEN = "公开数据集样本 spleen_test（腹部 CT）"
+SOURCE_CHEST = "公开数据集样本 chest_lung_ct（胸部 CT）"
+SOURCE_LIDC = "公开数据集样本 lidc_lung_nodule_ct（胸部 CT，附带结节标注掩膜）"
+DISCLAIMER = "公开数据集上的算法输出演示，非临床病例，不构成诊断意见"
+
+# 统一配色
+COL_BG = (7, 14, 23)
+COL_TEXT = (226, 232, 240)
+COL_MUTED = (148, 163, 184)
+COL_ACCENT = (56, 189, 248)
+COL_WARN = (251, 191, 36)
+
+
+# ---------------------------------------------------------------------------
+# 通用渲染工具
+# ---------------------------------------------------------------------------
+
+def font(size: int):
+    f, _ = get_cjk_font(size=size)
+    return f
+
+
+def text_width(f, s: str) -> int:
+    b = f.getbbox(s)
+    return b[2] - b[0]
+
+
+def wrap_text(f, s: str, max_w: int) -> List[str]:
+    """按像素宽度逐字折行（中英混排）。"""
+    lines, cur = [], ""
+    for ch in s:
+        if text_width(f, cur + ch) > max_w and cur:
+            lines.append(cur)
+            cur = ch
+        else:
+            cur += ch
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def add_caption_panel(img: Image.Image, title: str, lines: List[str]) -> Image.Image:
+    """在图像下方追加说明栏：数据来源、算法与免责声明。自动折行，保证文字不溢出。"""
+    w = img.width
+    f_title, f_body = font(14), font(12)
+    pad = 14
+    body: List[Tuple[str, Tuple[int, int, int]]] = []
+    for ln in lines:
+        col = COL_WARN if ln.startswith("注") else COL_MUTED
+        for sub in wrap_text(f_body, ln, w - 2 * pad):
+            body.append((sub, col))
+    h = pad + 20 + len(body) * 17 + pad
+    out = Image.new("RGB", (w, img.height + h), COL_BG)
+    out.paste(img.convert("RGB"), (0, 0))
+    d = ImageDraw.Draw(out)
+    d.line([(0, img.height), (w, img.height)], fill=(30, 58, 95), width=1)
+    y = img.height + pad
+    d.text((pad, y), title, fill=COL_TEXT, font=f_title)
+    y += 22
+    for s, col in body:
+        d.text((pad, y), s, fill=col, font=f_body)
+        y += 17
+    return out
+
+
+def mask_outline(mask2d: np.ndarray) -> np.ndarray:
+    m = mask2d > 0
+    return m & ~ndi.binary_erosion(m, iterations=1)
+
+
+def save_png(img: Image.Image, name: str) -> str:
+    path = os.path.join(SITE_DIR, name)
+    img.convert("RGB").save(path, format="PNG", optimize=True)
+    print(f"  已保存: {path} ({img.width}x{img.height})")
+    return path
+
+
+def png_bytes_to_image(png: bytes) -> Image.Image:
+    return Image.open(io.BytesIO(png)).convert("RGB")
+
+
+def load_mask_lps(path: str, ref_shape: Tuple[int, int, int]) -> Tuple[np.ndarray, Tuple[float, float, float]]:
+    m, sp = load_nifti(path)
+    assert m.shape == ref_shape, f"掩膜尺寸 {m.shape} 与影像 {ref_shape} 不一致"
+    return (m > 0.5).astype(np.uint8), sp
+
+
+# ---------------------------------------------------------------------------
+# 图 1：MONAI 3D-UNet 脾脏分割（spleen_test）
+# ---------------------------------------------------------------------------
+
+def generate_spleen_monai() -> Optional[Dict[str, Any]]:
+    print("[1] MONAI 脾脏分割（spleen_ct 官方权重）...")
+    import nibabel as nib
+    from device import get_optimal_device
+    from engine import MonaiNeuralInferencePipeline
+
+    path = os.path.join(DATA_DIR, "spleen_test.nii.gz")
+    vol, sp = load_nifti(path)
+
+    pipe = MonaiNeuralInferencePipeline(get_optimal_device())
+    try:
+        # 传文件路径：由 MONAI 变换处理方向与重采样，并逆变换回原始体素网格
+        mask_file_zyx, meta = pipe.infer_spleen(path)
+    except RuntimeError as e:
+        print(f"  跳过：{e}")
+        return None
+    # infer_spleen 返回的是原文件数组顺序的 (Z, Y, X)；转回 (X, Y, Z) 后与影像走同一套 LPS 规范化
+    affine = nib.load(path).affine
+    mask_lps, _, _ = to_canonical_lps(np.transpose(mask_file_zyx, (2, 1, 0)).astype(np.float32), affine)
+    mask = (mask_lps > 0.5).astype(np.uint8)
+    if mask.sum() == 0:
+        print("  跳过：模型输出为空")
+        return None
+
+    rec = calculate_recist_metrics(mask, sp)
+    z = rec["key_slice_index"]
+    sl = apply_ct_window(vol[z], "abdomen")
+    cal = rec["caliper_longest"]
+    calipers = [{
+        "p1": cal["p1"], "p2": cal["p2"], "value_mm": rec["longest_diameter_mm"],
+        "color": (0, 220, 255, 255), "tick_len": 5,
+    }]
+    hud = [
+        "模型: MONAI spleen_ct_segmentation 3D-UNet（官方权重）",
+        f"推理: {meta['accelerator']} | 耗时 {meta['inference_duration_sec']} s",
+        f"分割体积: {rec['total_volume_cm3']} cm3（{int(mask.sum()):,} 体素）",
+        f"关键层（最大截面）最长径: {rec['longest_diameter_mm']} mm",
+        f"数据: {SOURCE_SPLEEN}",
     ]
-    for p in font_paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                pass
-    return ImageFont.load_default()
-
-def draw_hud_box(draw, x, y, w, h, bg_rgba=(11, 19, 32, 230), border_rgba=(30, 58, 95, 255)):
-    draw.rectangle([x, y, x + w, y + h], fill=bg_rgba, outline=border_rgba, width=1)
-
-def draw_scale_bar(draw, w, h, scale_bar_mm=50.0, pixel_spacing_mm=0.8):
-    scale_px = int(scale_bar_mm / pixel_spacing_mm)
-    margin_x = w - scale_px - 25
-    margin_y = h - 25
-    draw.line([(margin_x, margin_y), (margin_x + scale_px, margin_y)], fill=(255, 255, 255, 240), width=3)
-    draw.text((margin_x + scale_px // 2 - 14, margin_y - 18), "5 cm", fill=(255, 255, 255, 240), font=get_font(12, bold=True))
-
-def draw_caliper(draw, p1, p2, label_text, color=(0, 240, 255, 255), tick_len=6, label_offset_y=-16, label_offset_x=0):
-    x1, y1 = p1
-    x2, y2 = p2
-    draw.line([p1, p2], fill=color, width=2)
-    dx = x2 - x1
-    dy = y2 - y1
-    dist = math.hypot(dx, dy)
-    if dist > 0:
-        nx = -dy / dist * tick_len
-        ny = dx / dist * tick_len
-        draw.line([(x1 - nx, y1 - ny), (x1 + nx, y1 + ny)], fill=color, width=2)
-        draw.line([(x2 - nx, y2 - ny), (x2 + nx, y2 + ny)], fill=color, width=2)
-        mx = int((x1 + x2) / 2) + label_offset_x
-        my = int((y1 + y2) / 2) + label_offset_y
-        font = get_font(11, bold=True)
-        bbox = font.getbbox(label_text)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        lx = mx - tw // 2
-        draw.rectangle([lx - 4, my - 2, lx + tw + 4, my + th + 3], fill=(6, 17, 13, 230), outline=color, width=1)
-        draw.text((lx, my), label_text, fill=color, font=font)
-
-# =============================================================
-# CASE 1: 变应性支气管肺曲霉病 (ABPA) · 李想 (PT-BRONCHO-001)
-# =============================================================
-
-def generate_case_1_baseline_hrct():
-    print("Generating real-case-1-baseline-hrct.png (authentic algorithm inference on Slice #172)...")
-    import sys, base64
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", "imaging-worker", "src")))
-    from bronchiectasis import analyze_bronchiectasis_and_mucus
-    from spatial_canonicalizer import to_canonical_lps
-
-    img = nib.load(os.path.join(DATA_DIR, "chest_lung_ct.nii.gz"))
-    data = img.get_fdata(dtype=np.float32)
-    res = analyze_bronchiectasis_and_mucus(vol_zyx, spacing=sp)
-
-    b64_str = res["key_slice_png_base64"]
-    if "," in b64_str:
-        b64_str = b64_str.split(",", 1)[1]
-
-    out_path = os.path.join(SITE_DIR, "real-case-1-baseline-hrct.png")
-    with open(out_path, "wb") as f:
-        f.write(base64.b64decode(b64_str))
-    print(f"Saved authentic algorithm inference screenshot: {out_path}")
-
-def generate_case_1_mpr_3view():
-    print("Generating real-case-2-mpr-3view.png (ABPA right lower lobe bronchiectasis focus)...")
-    img = nib.load(os.path.join(DATA_DIR, "chest_lung_ct.nii.gz"))
-    data = img.get_fdata(dtype=np.float32)
-    
-    wl, ww = -600, 1500
-    vmin = wl - ww / 2
-    vmax = wl + ww / 2
-    
-    ax_slice = np.rot90(data[:, :, 114])
-    cor_slice = np.rot90(data[:, 227, :])
-    sag_slice = np.rot90(data[197, :, :])
-    
-    def process_plane(sl):
-        norm = np.clip((sl - vmin) / (vmax - vmin), 0, 1)
-        u8 = (norm * 255).astype(np.uint8)
-        return Image.fromarray(u8).convert("RGBA")
-    
-    im_ax = process_plane(ax_slice).resize((266, 266), Image.Resampling.LANCZOS)
-    im_cor = process_plane(cor_slice).resize((266, 266), Image.Resampling.LANCZOS)
-    im_sag = process_plane(sag_slice).resize((266, 266), Image.Resampling.LANCZOS)
-    
-    out_im = Image.new("RGBA", (860, 340), (7, 14, 23, 255))
-    draw = ImageDraw.Draw(out_im)
-    
-    draw.text((16, 12), "HEURION 3D MPR // 诊断级三正交切片交互浏览器 (Triple Orthogonal Planes)", fill=(224, 231, 255, 255), font=get_font(13, bold=True))
-    draw.text((16, 30), "标准肺窗 (W:1500 L:-600) · 空间各向同性体素 1x1x1 mm · 三维准星自动聚焦右肺下叶支扩与粘液栓", fill=(148, 163, 184, 230), font=get_font(11))
-    
-    coords = [
-        (16, 56, im_ax, "横断面 (Axial #114/269)", (56, 189, 248, 255), 102, 147),
-        (297, 56, im_cor, "冠状面 (Coronal #256/512)", (52, 211, 153, 255), 102, 152),
-        (578, 56, im_sag, "矢状面 (Sagittal #256/512)", (251, 191, 36, 255), 117, 152),
-    ]
-    for x, y, im, title, col, target_x, target_y in coords:
-        draw.rectangle([x - 1, y - 1, x + 267, y + 267], outline=(30, 41, 59, 255), width=1)
-        out_im.paste(im, (x, y))
-        draw.text((x + 6, y + 6), title, fill=col, font=get_font(11, bold=True))
-        draw.line([(x + 200, y + 250), (x + 250, y + 250)], fill=(255, 255, 255, 200), width=2)
-        draw.text((x + 215, y + 236), "5 cm", fill=(255, 255, 255, 200), font=get_font(10))
-        cx, cy = x + target_x, y + target_y
-        draw.line([(cx - 10, cy), (cx - 3, cy)], fill=(0, 240, 255, 200), width=1)
-        draw.line([(cx + 3, cy), (cx + 10, cy)], fill=(0, 240, 255, 200), width=1)
-        draw.line([(cx, cy - 10), (cx, cy - 3)], fill=(0, 240, 255, 200), width=1)
-        draw.line([(cx, cy + 3), (cx, cy + 10)], fill=(0, 240, 255, 200), width=1)
-    
-    out_path = os.path.join(SITE_DIR, "real-case-2-mpr-3view.png")
-    out_im.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-def generate_case_1_diff_heatmap():
-    print("Generating real-case-3-diff-heatmap.png...")
-    img = nib.load(os.path.join(DATA_DIR, "chest_lung_ct.nii.gz"))
-    data = img.get_fdata(dtype=np.float32)
-    slice_data = np.rot90(data[:, :, 114])
-    
-    wl, ww = -600, 1500
-    vmin = wl - ww / 2
-    vmax = wl + ww / 2
-    norm = np.clip((slice_data - vmin) / (vmax - vmin), 0, 1)
-    base_img = Image.fromarray((norm * 255).astype(np.uint8)).convert("RGBA")
-    
-    # Difference Heatmap: Green resorption zone precisely over right lower lobe bronchial tree
-    diff_overlay = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-    d_draw = ImageDraw.Draw(diff_overlay)
-    
-    bx, by = 197, 284
-    # Resorbed mucus zone in deep green (18.50 cm3 -> 4.60 cm3, 74.9% PR)
-    d_draw.ellipse([bx - 8, by - 8, bx + 8, by + 8], fill=(0, 229, 153, 140), outline=(0, 255, 170, 220), width=2)
-    # Remaining small residual mucus core (4.60 cm3)
-    d_draw.ellipse([bx - 3, by - 3, bx + 3, by + 3], fill=(245, 158, 11, 120), outline=(245, 158, 11, 200), width=1)
-    
-    base_img = Image.alpha_composite(base_img, diff_overlay)
-    draw = ImageDraw.Draw(base_img)
-    
-    # HUD Box at top
-    draw_hud_box(draw, 10, 10, 492, 95)
-    draw.text((16, 14), "HEURION 3D VOXEL DIFF // 随访双期三维空间配准与差分吸收热力图", fill=(52, 211, 153, 255), font=get_font(12, bold=True))
-    draw.text((16, 32), "基线期: 2026-07-01 -> 随访期: 2026-10-01 (激素及抗真菌规范治疗3个月)", fill=(203, 213, 225, 240), font=get_font(11))
-    draw.text((16, 48), "[+] 绿色吸收消退: 粘液栓容积由 18.50 cm3 降至 4.60 cm3 (吸收率 74.9% 显著吸收)", fill=(0, 255, 170, 255), font=get_font(11, bold=True))
-    draw.text((16, 64), "疗效评定: 3D 容积吸收评估达到 PR / 显著好转 (Volumetric Absorption >= 50%)", fill=(0, 255, 170, 255), font=get_font(11, bold=True))
-    draw.text((16, 80), "残留病灶排查: 远端气道引流良好，无新增粘液栓或小叶中心结节", fill=(203, 213, 225, 240), font=get_font(11))
-    
-    draw_scale_bar(draw, 512, 512)
-    
-    out_path = os.path.join(SITE_DIR, "real-case-3-diff-heatmap.png")
-    base_img.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-def generate_case_1_l3_smi():
-    print("Generating real-case-4-l3-smi.png (authentic abdominal L3 level for normal muscle baseline)...")
-    from scipy.ndimage import binary_fill_holes
-    img = nib.load(os.path.join(DATA_DIR, "spleen_test.nii.gz"))
-    data = img.get_fdata(dtype=np.float32)
-    # Slice #48 is the true L3 vertebra cross-section
-    slice_data = np.rot90(data[:, :, 48])
-    
-    wl, ww = 40, 400
-    vmin = wl - ww / 2
-    vmax = wl + ww / 2
-    norm = np.clip((slice_data - vmin) / (vmax - vmin), 0, 1)
-    base_img = Image.fromarray((norm * 255).astype(np.uint8)).convert("RGBA")
-    
-    # Authentic tissue segmentation masks from CT HU values
-    body_mask = slice_data > -700.0
-    bone_mask = (slice_data > 200.0) & body_mask
-    fat_mask = (slice_data >= -190.0) & (slice_data <= -30.0) & body_mask
-    muscle_mask = (slice_data >= -29.0) & (slice_data <= 150.0) & body_mask & (~bone_mask)
-    inner_cavity = binary_fill_holes(muscle_mask | bone_mask)
-    vat_mask = fat_mask & inner_cavity & (~bone_mask) & (~muscle_mask)
-    sat_mask = fat_mask & (~inner_cavity)
-    
-    overlay = np.zeros((512, 512, 4), dtype=np.uint8)
-    overlay[muscle_mask] = [239, 68, 68, 140]  # Skeletal muscle (coral red)
-    overlay[vat_mask] = [245, 158, 11, 120]     # VAT (amber)
-    overlay[sat_mask] = [14, 165, 233, 90]      # SAT (sky blue)
-    overlay[bone_mask] = [254, 240, 138, 180]   # Bone (warm gold)
-    
-    seg_overlay = Image.fromarray(overlay, mode="RGBA")
-    base_img = Image.alpha_composite(base_img, seg_overlay)
-    draw = ImageDraw.Draw(base_img)
-    
-    # HUD Box at top left
-    draw_hud_box(draw, 10, 10, 325, 115)
-    draw.text((16, 14), "TotalSegmentator L3 Body Composition", fill=(255, 255, 255, 255), font=get_font(11, bold=True))
-    draw.text((16, 30), "Level: L3 Lumbar 中位截面 | 补充腹部扫描序列", fill=(148, 163, 184, 240), font=get_font(10))
-    draw.text((16, 46), "Skeletal Muscle (SMA): 174.39 cm2 (肌肉储备充盈)", fill=(52, 211, 153, 255), font=get_font(10, bold=True))
-    draw.text((16, 62), "Muscle Index (SMI): 56.94 cm2/m2 (Prado共识 >52.4)", fill=(52, 211, 153, 255), font=get_font(10, bold=True))
-    draw.text((16, 78), "Muscle Attenuation (MA): 46.8 HU (肌肉质量正常，无脂肪变性)", fill=(203, 213, 225, 240), font=get_font(10))
-    draw.text((16, 94), "Status: 骨骼肌量正常 (Normal Muscularity，可耐受足疗程)", fill=(52, 211, 153, 255), font=get_font(10, bold=True))
-    
-    # Legend at top right
-    draw_hud_box(draw, 345, 10, 157, 85)
-    draw.rectangle([355, 18, 367, 28], fill=(239, 68, 68, 220))
-    draw.text((374, 16), "Skeletal Muscle", fill=(255, 255, 255, 255), font=get_font(10))
-    draw.rectangle([355, 34, 367, 44], fill=(245, 158, 11, 220))
-    draw.text((374, 32), "Visceral Fat (VAT)", fill=(255, 255, 255, 255), font=get_font(10))
-    draw.rectangle([355, 50, 367, 60], fill=(14, 165, 233, 220))
-    draw.text((374, 48), "Subcut Fat (SAT)", fill=(255, 255, 255, 255), font=get_font(10))
-    draw.rectangle([355, 66, 367, 76], fill=(254, 240, 138, 220))
-    draw.text((374, 64), "Spine Bone (L3)", fill=(255, 255, 255, 255), font=get_font(10))
-    
-    draw_scale_bar(draw, 512, 512)
-    
-    out_path = os.path.join(SITE_DIR, "real-case-4-l3-smi.png")
-    base_img.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-def generate_case_1_diagnostic_chain():
-    print("Generating real-case-5-diagnostic-chain.png...")
-    out_im = Image.new("RGBA", (860, 280), (7, 14, 23, 255))
-    draw = ImageDraw.Draw(out_im)
-    
-    draw.text((16, 12), "HEURION MULTIMODAL EVIDENCE CHAIN // 多模态因果诊断链与证据闭环 (ABPA 真实病例)", fill=(224, 231, 255, 255), font=get_font(13, bold=True))
-    
-    pillars = [
-        (16, 45, 260, 220, "[1] 3D HRCT 影像定量证据", [
-            "- 印戒征 (BAR): 1.45 (重度支气管扩张)",
-            "- 高密度粘液栓 (HAM): 12.44 cm3 (98 HU)",
-            "- 总粘液容积: 18.50 -> 4.60 cm3 (PR 74.9%)",
-            "- 嵌顿位置: 右肺下叶基底段 (指套征)",
-            "- 严重度评分: Bhalla 2级 / Reiff 12分",
-            "证据权重: 影像学特征支柱 (Weight 0.95)"
-        ], (20, 184, 166, 255)),
-        (300, 45, 260, 220, "[2] 实验室多模态生化与免疫", [
-            "- 嗜酸粒细胞: 1.12 x 10^9/L (显著升高)",
-            "- 血清总 IgE: 1820 kU/L (超上限 18 倍)",
-            "- 烟曲霉特异性 sIgE: 4 级强阳性 (+++)",
-            "- 肺功能 FEV1%: 58.4% (中重度阻塞障碍)",
-            "- 诊断符合: 满足 Rosenberg-Patterson",
-            "证据权重: 实验室高度吻合 (Weight 0.98)"
-        ], (168, 85, 247, 255)),
-        (584, 45, 260, 220, "[3] 临床综合诊断与处置闭环", [
-            "确诊: 变应性支气管肺曲霉病 (ABPA)",
-            "临床分期: 急性活动加重期 (Stage 1)",
-            "方案: 专科指导口服激素联合抗真菌治疗",
-            "随访: 3个月复查粘液栓吸收良好 (74.9% PR)",
-            "获益: 避免误诊为细菌感染与反复盲目使用抗生素",
-            "互操作标准: 导出 DICOM SR 与 FHIR"
-        ], (34, 197, 94, 255)),
-    ]
-    
-    for x, y, w, h, title, lines, header_col in pillars:
-        draw_hud_box(draw, x, y, w, h, bg_rgba=(11, 20, 36, 230), border_rgba=(30, 58, 95, 240))
-        draw.rectangle([x, y, x + w, y + 26], fill=header_col)
-        draw.text((x + 8, y + 6), title, fill=(255, 255, 255, 255), font=get_font(11, bold=True))
-        
-        ly = y + 36
-        for line in lines[:-1]:
-            col = (255, 110, 110, 255) if "超上限" in line or "升高" in line or "阻塞" in line else (203, 213, 225, 240)
-            if "PR" in line or "符合" in line or "获益" in line or "良好" in line:
-                col = (52, 211, 153, 255)
-            draw.text((x + 10, ly), line, fill=col, font=get_font(10))
-            ly += 25
-        draw.text((x + 10, y + h - 22), lines[-1], fill=(56, 189, 248, 255), font=get_font(10, bold=True))
-        
-    draw.text((280, 140), ">>", fill=(148, 163, 184, 200), font=get_font(14, bold=True))
-    draw.text((564, 140), ">>", fill=(148, 163, 184, 200), font=get_font(14, bold=True))
-    
-    out_path = os.path.join(SITE_DIR, "real-case-5-diagnostic-chain.png")
-    out_im.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-# =============================================================
-# CASE 2: 晚期肺腺癌 EGFR 突变靶向评估 · 100_HM10395 (PT-NSCLC-002)
-# =============================================================
-
-def generate_nsclc_1_baseline_recist():
-    print("Generating real-case-nsclc-1-baseline-recist.png (true upper lobe slice #215)...")
-    img = nib.load(os.path.join(DATA_DIR, "chest_lung_ct.nii.gz"))
-    data = img.get_fdata(dtype=np.float32)
-    # Slice #215 is the true upper thoracic level (aortic arch, trachea, right upper lobe apex)
-    slice_data = np.rot90(data[:, :, 215])
-    
-    wl, ww = -600, 1500
-    vmin = wl - ww / 2
-    vmax = wl + ww / 2
-    norm = np.clip((slice_data - vmin) / (vmax - vmin), 0, 1)
-    base_img = Image.fromarray((norm * 255).astype(np.uint8)).convert("RGBA")
-    
-    # Tumor in Right Upper Lobe (anatomical right is image left: cx=195, cy=240)
-    # At 0.8 mm/px: 42.0 mm = 52.5 px (radius 26 px)
-    tumor_overlay = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-    t_draw = ImageDraw.Draw(tumor_overlay)
-    
-    cx, cy = 195, 245
-    t_draw.ellipse([cx - 26, cy - 20, cx + 26, cy + 20], fill=(255, 77, 79, 130), outline=(255, 77, 79, 220), width=2)
-    # Spiculation lines extending into lung parenchyma
-    for angle in [30, 80, 130, 210, 260, 320]:
-        rad = math.radians(angle)
-        ex = cx + int(34 * math.cos(rad))
-        ey = cy + int(26 * math.sin(rad))
-        t_draw.line([(cx + int(24 * math.cos(rad)), cy + int(18 * math.sin(rad))), (ex, ey)], fill=(255, 77, 79, 180), width=1)
-    
-    # 4R Lymph Node (Right paratracheal, next to trachea: lx=242, cy=235)
-    # At 0.8 mm/px: 18.0 mm = 22.5 px (radius 11 px)
-    lx, ly = 242, 235
-    t_draw.ellipse([lx - 11, ly - 11, lx + 11, ly + 11], fill=(245, 158, 11, 140), outline=(245, 158, 11, 230), width=2)
-    
-    base_img = Image.alpha_composite(base_img, tumor_overlay)
-    draw = ImageDraw.Draw(base_img)
-    
-    # Draw Calipers (strictly calibrated to 0.8 mm/px and cleanly staggered)
-    draw_caliper(draw, (cx - 26, cy), (cx + 26, cy), "LD: 42.0 mm (靶病灶 #1)", color=(0, 240, 255, 255), label_offset_y=-24, label_offset_x=-30)
-    draw_caliper(draw, (lx, ly - 11), (lx, ly + 11), "短径: 18.0 mm (4R淋巴结)", color=(251, 191, 36, 255), label_offset_y=16, label_offset_x=45)
-    
-    # HUD Box at top
-    draw_hud_box(draw, 10, 10, 492, 95)
-    draw.text((16, 14), "HEURION CHEST-CT // 肺癌靶病灶 RECIST 1.1 临床测量 (3D 边界智能检出与卡尺标定)", fill=(56, 189, 248, 255), font=get_font(12, bold=True))
-    draw.text((16, 32), "【RECIST 1.1 临床量化】3D 肺腺癌靶病灶智能检出与卡尺标定 | 断面层位: 第 #215 层 (右上肺尖段)", fill=(203, 213, 225, 240), font=get_font(11))
-    draw.text((16, 48), "病理分型: 浸润性腺癌 (cT2bN2M0, EGFR 19del) | 基线扫描: 2026-06-15", fill=(203, 213, 225, 240), font=get_font(11))
-    draw.text((16, 64), "靶病灶 1 (右上肺实质肿块): 42.0 mm x 31.5 mm | 3D 标注容积: 28.50 cm3 (38 HU)", fill=(255, 110, 110, 255), font=get_font(11))
-    draw.text((16, 80), "靶病灶 2 (4R 纵隔淋巴结): 短径 18.0 mm (阳性 >=15mm) | 基线 SOD: 60.0 mm", fill=(251, 191, 36, 255), font=get_font(11))
-    
-    draw_scale_bar(draw, 512, 512)
-    
-    out_path = os.path.join(SITE_DIR, "real-case-nsclc-1-baseline-recist.png")
-    base_img.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-def generate_nsclc_2_mpr_3view():
-    print("Generating real-case-nsclc-2-mpr-3view.png (upper thoracic apex focus)...")
-    img = nib.load(os.path.join(DATA_DIR, "chest_lung_ct.nii.gz"))
-    data = img.get_fdata(dtype=np.float32)
-    
-    wl, ww = -600, 1500
-    vmin = wl - ww / 2
-    vmax = wl + ww / 2
-    
-    ax_slice = np.rot90(data[:, :, 215])
-    cor_slice = np.rot90(data[:, 245, :])
-    sag_slice = np.rot90(data[195, :, :])
-    
-    def process_plane(sl):
-        norm = np.clip((sl - vmin) / (vmax - vmin), 0, 1)
-        u8 = (norm * 255).astype(np.uint8)
-        return Image.fromarray(u8).convert("RGBA")
-    
-    im_ax = process_plane(ax_slice).resize((266, 266), Image.Resampling.LANCZOS)
-    im_cor = process_plane(cor_slice).resize((266, 266), Image.Resampling.LANCZOS)
-    im_sag = process_plane(sag_slice).resize((266, 266), Image.Resampling.LANCZOS)
-    
-    out_im = Image.new("RGBA", (860, 340), (7, 14, 23, 255))
-    draw = ImageDraw.Draw(out_im)
-    
-    draw.text((16, 12), "HEURION 3D MPR // 诊断级三正交切片交互浏览器 (Triple Orthogonal Planes)", fill=(224, 231, 255, 255), font=get_font(13, bold=True))
-    draw.text((16, 30), "标准肺窗 (W:1500 L:-600) · 空间各向同性体素 1x1x1 mm · 三维准星自动聚焦右上肺原发灶", fill=(148, 163, 184, 230), font=get_font(11))
-    
-    coords = [
-        (16, 56, im_ax, "横断面 (Axial #215/269)", (56, 189, 248, 255)),
-        (297, 56, im_cor, "冠状面 (Coronal #245/512)", (52, 211, 153, 255)),
-        (578, 56, im_sag, "矢状面 (Sagittal #195/512)", (251, 191, 36, 255)),
-    ]
-    for x, y, im, title, col in coords:
-        draw.rectangle([x - 1, y - 1, x + 267, y + 267], outline=(30, 41, 59, 255), width=1)
-        out_im.paste(im, (x, y))
-        draw.text((x + 6, y + 6), title, fill=col, font=get_font(11, bold=True))
-        draw.line([(x + 200, y + 250), (x + 250, y + 250)], fill=(255, 255, 255, 200), width=2)
-        draw.text((x + 215, y + 236), "5 cm", fill=(255, 255, 255, 200), font=get_font(10))
-        cx, cy = x + 133, y + 133
-        draw.line([(cx - 10, cy), (cx - 3, cy)], fill=(0, 240, 255, 200), width=1)
-        draw.line([(cx + 3, cy), (cx + 10, cy)], fill=(0, 240, 255, 200), width=1)
-        draw.line([(cx, cy - 10), (cx, cy - 3)], fill=(0, 240, 255, 200), width=1)
-        draw.line([(cx, cy + 3), (cx, cy + 10)], fill=(0, 240, 255, 200), width=1)
-    
-    out_path = os.path.join(SITE_DIR, "real-case-nsclc-2-mpr-3view.png")
-    out_im.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-def generate_nsclc_3_diff_heatmap():
-    print("Generating real-case-nsclc-3-diff-heatmap.png...")
-    img = nib.load(os.path.join(DATA_DIR, "chest_lung_ct.nii.gz"))
-    data = img.get_fdata(dtype=np.float32)
-    slice_data = np.rot90(data[:, :, 215])
-    
-    wl, ww = -600, 1500
-    vmin = wl - ww / 2
-    vmax = wl + ww / 2
-    norm = np.clip((slice_data - vmin) / (vmax - vmin), 0, 1)
-    base_img = Image.fromarray((norm * 255).astype(np.uint8)).convert("RGBA")
-    
-    diff_overlay = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-    d_draw = ImageDraw.Draw(diff_overlay)
-    
-    cx, cy = 195, 245
-    # Green negative difference zone (regression zone: 42x31mm -> 24x15mm)
-    d_draw.ellipse([cx - 24, cy - 18, cx + 24, cy + 18], fill=(0, 229, 153, 140), outline=(0, 255, 170, 220), width=2)
-    d_draw.ellipse([cx - 13, cy - 8, cx + 13, cy + 8], fill=(245, 158, 11, 100), outline=(245, 158, 11, 200), width=1)
-    
-    # 4R Lymph node regression (18mm -> 9mm)
-    lx, ly = 242, 235
-    d_draw.ellipse([lx - 10, ly - 8, lx + 10, ly + 8], fill=(0, 229, 153, 130), outline=(0, 255, 170, 200), width=1)
-    
-    base_img = Image.alpha_composite(base_img, diff_overlay)
-    draw = ImageDraw.Draw(base_img)
-    
-    # HUD Box at top
-    draw_hud_box(draw, 10, 10, 492, 95)
-    draw.text((16, 14), "HEURION 3D VOXEL DIFF // 靶向治疗12周随访：非刚性形变配准与差分吸收热力图", fill=(52, 211, 153, 255), font=get_font(12, bold=True))
-    draw.text((16, 32), "基线期: 2026-06-15 -> 随访期: 2026-09-15 (第三代 EGFR-TKI 甲磺酸奥希替尼 12周)", fill=(203, 213, 225, 240), font=get_font(11))
-    draw.text((16, 48), "[+] 绿色吸收好转: 靶病灶长径和 60.0 mm 降至 33.0 mm (降幅 -45.0% 显著缩小)", fill=(0, 255, 170, 255), font=get_font(11, bold=True))
-    draw.text((16, 64), "RECIST 1.1 疗效评定: 部分缓解 (Partial Response, PR) | 3D 容积吸收率 -78.2%", fill=(0, 255, 170, 255), font=get_font(11, bold=True))
-    draw.text((16, 80), "非靶病灶与新病灶排查: 全肺及纵隔无新发病灶，胸膜及心包无积液", fill=(203, 213, 225, 240), font=get_font(11))
-    
-    draw_scale_bar(draw, 512, 512)
-    
-    out_path = os.path.join(SITE_DIR, "real-case-nsclc-3-diff-heatmap.png")
-    base_img.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-def generate_nsclc_4_radiomics_feature():
-    print("Generating real-case-nsclc-4-radiomics-feature.png...")
-    out_im = Image.new("RGBA", (860, 340), (7, 14, 23, 255))
-    draw = ImageDraw.Draw(out_im)
-    
-    draw.text((16, 12), "HEURION RADIOMICS // IBSI 107项国际标准高维影像组学表型提取与演变矩阵", fill=(224, 231, 255, 255), font=get_font(13, bold=True))
-    draw.text((16, 30), "病灶 ROI 提取: 右上肺腺癌靶病灶 | 标准化规范: IBSI (Image Biomarker Standardisation Initiative)", fill=(148, 163, 184, 230), font=get_font(11))
-    
-    cards = [
-        (16, 56, 266, 268, "一阶灰度统计与形态学 (18+16项)", [
-            ("3D 总体积 (Mesh Volume)", "28.5 cm3 -> 6.2 cm3", "-78.2% ↓"),
-            ("球形度 (Sphericity)", "0.58 -> 0.82", "+41.4% ↑"),
-            ("表面积体积比 (Surface/Vol)", "0.78 -> 0.46", "-41.0% ↓"),
-            ("均值强度 (Mean Intensity)", "38.2 HU -> 21.4 HU", "-44.0% ↓"),
-            ("偏度 (Skewness)", "0.84 -> 0.12", "对称化"),
-            ("峰度 (Kurtosis)", "3.42 -> 2.05", "平坦化"),
-        ]),
-        (297, 56, 266, 268, "灰度共生矩阵 GLCM & 纹理 (24项)", [
-            ("联合熵 (Joint Entropy)", "4.82 -> 2.14", "异质性减退"),
-            ("角二阶矩/能量 (Energy)", "0.012 -> 0.045", "+275% ↑"),
-            ("对比度 (Contrast)", "28.6 -> 11.2", "-60.8% ↓"),
-            ("自相关系数 (Correlation)", "0.62 -> 0.88", "空间匀质化"),
-            ("逆差矩 (Homogeneity / IDM)", "0.34 -> 0.78", "+129% ↑"),
-            ("灰度方差 (Variance)", "142.5 -> 48.0", "离散度收敛"),
-        ]),
-        (578, 56, 266, 268, "高阶矩阵与小波多尺度特征 (49项)", [
-            ("灰度游程短游程增强 (SRE)", "0.89 -> 0.62", "-30.3% ↓"),
-            ("灰度区域大小低灰度强调 (LZE)", "0.45 -> 0.81", "+80.0% ↑"),
-            ("邻域灰度差粗糙度 (Coarseness)", "0.008 -> 0.024", "+200% ↑"),
-            ("小波低频特征 (Wavelet-LL)", "能量收敛", "坏死吸收"),
-            ("小波高频特征 (Wavelet-HH)", "细结构衰退", "边缘钝化"),
-            ("靶向应答生物标志物", "符合有效表型", "PR 良好预后"),
-        ]),
-    ]
-    
-    for x, y, w, h, title, rows in cards:
-        draw_hud_box(draw, x, y, w, h, bg_rgba=(11, 20, 36, 230), border_rgba=(30, 58, 95, 240))
-        draw.text((x + 10, y + 8), title, fill=(56, 189, 248, 255), font=get_font(11, bold=True))
-        draw.line([(x + 10, y + 26), (x + w - 10, y + 26)], fill=(30, 48, 75, 255), width=1)
-        
-        ry = y + 34
-        for name, val, tag in rows:
-            draw.text((x + 10, ry), name, fill=(203, 213, 225, 240), font=get_font(10))
-            draw.text((x + 10, ry + 13), val, fill=(255, 255, 255, 255), font=get_font(10, bold=True))
-            draw.text((x + w - 75, ry + 13), tag, fill=(52, 211, 153, 255), font=get_font(10, bold=True))
-            ry += 38
-            
-    out_path = os.path.join(SITE_DIR, "real-case-nsclc-4-radiomics-feature.png")
-    out_im.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-def generate_nsclc_5_diagnostic_chain():
-    print("Generating real-case-nsclc-5-diagnostic-chain.png...")
-    out_im = Image.new("RGBA", (860, 280), (7, 14, 23, 255))
-    draw = ImageDraw.Draw(out_im)
-    
-    draw.text((16, 12), "HEURION MULTIMODAL EVIDENCE CHAIN // 多模态因果诊断链与证据闭环 (NSCLC 靶向疗效)", fill=(224, 231, 255, 255), font=get_font(13, bold=True))
-    
-    pillars = [
-        (16, 45, 260, 220, "[1] 3D CT 影像定量与 RECIST 1.1", [
-            "- 靶病灶 1 (右上肺): 42 -> 24 mm (-42.9%)",
-            "- 靶病灶 2 (4R淋巴结): 18 -> 9 mm (<10mm)",
-            "- 长径和 (SOD): 60.0 -> 33.0 mm (-45.0%)",
-            "- 3D 肿瘤容积: 28.5 -> 6.2 cm3 (-78.2%)",
-            "- RECIST 1.1 疗效评定: 部分缓解 (PR)",
-            "证据权重: 影像客观金标准 (Weight 0.98)"
-        ], (20, 184, 166, 255)),
-        (300, 45, 260, 220, "[2] 组织与外周血基因突变 NGS", [
-            "- 病理诊断: 浸润性肺腺癌 (cT2bN2M0)",
-            "- 驱动基因: EGFR 19外显子缺失突变",
-            "- 变异细节: E746_A750del (丰度 42.6%)",
-            "- 耐药突变: T790M / C797S 全阴性",
-            "- 预后分层: 对第三代 EGFR-TKI 高度敏感",
-            "证据权重: 分子靶点金标准 (Weight 0.99)"
-        ], (168, 85, 247, 255)),
-        (584, 45, 260, 220, "[3] 临床综合诊断与处置闭环", [
-            "确诊: EGFR突变晚期非小细胞肺癌 (PR)",
-            "评估: 奥希替尼 12 周一线单药靶向治疗显著获益",
-            "处置: 维持一线单药奥希替尼 80mg qd 治疗",
-            "随访: 遵指南 8~12 周复查薄层增强 CT",
-            "免创伤: 规避过早挽救性放疗过度介入",
-            "互操作标准: 导出 DICOM SR 与 FHIR"
-        ], (34, 197, 94, 255)),
-    ]
-    
-    for x, y, w, h, title, lines, header_col in pillars:
-        draw_hud_box(draw, x, y, w, h, bg_rgba=(11, 20, 36, 230), border_rgba=(30, 58, 95, 240))
-        draw.rectangle([x, y, x + w, y + 26], fill=header_col)
-        draw.text((x + 8, y + 6), title, fill=(255, 255, 255, 255), font=get_font(11, bold=True))
-        
-        ly = y + 36
-        for line in lines[:-1]:
-            col = (255, 110, 110, 255) if "-" in line and ("-" in line or "PR" in line) else (203, 213, 225, 240)
-            if "PR" in line or "获益" in line or "敏感" in line:
-                col = (52, 211, 153, 255)
-            draw.text((x + 10, ly), line, fill=col, font=get_font(10))
-            ly += 25
-        draw.text((x + 10, y + h - 22), lines[-1], fill=(56, 189, 248, 255), font=get_font(10, bold=True))
-        
-    draw.text((280, 140), ">>", fill=(148, 163, 184, 200), font=get_font(14, bold=True))
-    draw.text((564, 140), ">>", fill=(148, 163, 184, 200), font=get_font(14, bold=True))
-    
-    out_path = os.path.join(SITE_DIR, "real-case-nsclc-5-diagnostic-chain.png")
-    out_im.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-# =============================================================
-# CASE 3: 全腹平扫 CT 脾脏显著肿大伴重度肌少症 · 王伟 (PT-ABDOMEN-003)
-# =============================================================
-
-def generate_sarco_1_l3_muscle_fat():
-    print("Generating real-case-sarco-1-l3-muscle-fat.png (Wang Wei authentic L3 slice #48)...")
-    from scipy.ndimage import binary_fill_holes
-    img = nib.load(os.path.join(DATA_DIR, "spleen_test.nii.gz"))
-    data = img.get_fdata(dtype=np.float32)
-    # Slice #48 of 96 slices is the true L3 vertebral level
-    slice_data = np.rot90(data[:, :, 48])
-    
-    wl, ww = 40, 400
-    vmin = wl - ww / 2
-    vmax = wl + ww / 2
-    norm = np.clip((slice_data - vmin) / (vmax - vmin), 0, 1)
-    base_img = Image.fromarray((norm * 255).astype(np.uint8)).convert("RGBA")
-    
-    # Authentic tissue segmentation masks from CT HU values
-    body_mask = slice_data > -700.0
-    bone_mask = (slice_data > 200.0) & body_mask
-    fat_mask = (slice_data >= -190.0) & (slice_data <= -30.0) & body_mask
-    muscle_mask = (slice_data >= -29.0) & (slice_data <= 150.0) & body_mask & (~bone_mask)
-    inner_cavity = binary_fill_holes(muscle_mask | bone_mask)
-    vat_mask = fat_mask & inner_cavity & (~bone_mask) & (~muscle_mask)
-    sat_mask = fat_mask & (~inner_cavity)
-    
-    overlay = np.zeros((512, 512, 4), dtype=np.uint8)
-    overlay[muscle_mask] = [239, 68, 68, 140]  # Skeletal muscle (coral red)
-    overlay[vat_mask] = [245, 158, 11, 120]     # VAT (amber)
-    overlay[sat_mask] = [14, 165, 233, 90]      # SAT (sky blue)
-    overlay[bone_mask] = [254, 240, 138, 180]   # Bone (warm gold)
-    
-    seg_overlay = Image.fromarray(overlay, mode="RGBA")
-    base_img = Image.alpha_composite(base_img, seg_overlay)
-    draw = ImageDraw.Draw(base_img)
-    
-    # Top Left HUD
-    draw_hud_box(draw, 10, 10, 325, 122)
-    draw.text((16, 14), "TotalSegmentator L3 Body Composition", fill=(255, 255, 255, 255), font=get_font(11, bold=True))
-    draw.text((16, 30), "Level: L3 Lumbar (#48/96) | 全腹CT平扫", fill=(148, 163, 184, 240), font=get_font(10))
-    draw.text((16, 44), "解剖特征: 脾脏形态饱满弥漫肿大 (680.0 cm3, 长径14.2cm)", fill=(56, 189, 248, 255), font=get_font(10))
-    draw.text((16, 58), "Skeletal Muscle (SMA): 88.50 cm2 (骨骼肌严重损耗)", fill=(239, 68, 68, 255), font=get_font(10, bold=True))
-    draw.text((16, 72), "Muscle Index (SMI): 29.92 cm2/m2 (远低于52.4界值)", fill=(245, 158, 11, 255), font=get_font(10, bold=True))
-    draw.text((16, 86), "Muscle Attenuation (MA): 26.4 HU (肌脂肪浸润)", fill=(251, 146, 60, 255), font=get_font(10))
-    draw.text((16, 100), "Visceral/Subcut (VAT/SAT): 2.09 (内脏蓄脂恶液质表型)", fill=(234, 179, 8, 255), font=get_font(10))
-    draw.text((16, 114), "Status: 重度恶液质肌少症 (Severe Sarcopenia)", fill=(239, 68, 68, 255), font=get_font(10, bold=True))
-    
-    # Top Right Legend
-    draw_hud_box(draw, 345, 10, 157, 85)
-    draw.rectangle([355, 18, 367, 28], fill=(239, 68, 68, 220))
-    draw.text((374, 16), "Skeletal Muscle", fill=(255, 255, 255, 255), font=get_font(10))
-    draw.rectangle([355, 34, 367, 44], fill=(245, 158, 11, 220))
-    draw.text((374, 32), "Visceral Fat (VAT)", fill=(255, 255, 255, 255), font=get_font(10))
-    draw.rectangle([355, 50, 367, 60], fill=(14, 165, 233, 220))
-    draw.text((374, 48), "Subcut Fat (SAT)", fill=(255, 255, 255, 255), font=get_font(10))
-    draw.rectangle([355, 66, 367, 76], fill=(254, 240, 138, 220))
-    draw.text((374, 64), "Spine Bone (L3)", fill=(255, 255, 255, 255), font=get_font(10))
-    
-    draw_scale_bar(draw, 512, 512)
-    
-    out_path = os.path.join(SITE_DIR, "real-case-sarco-1-l3-muscle-fat.png")
-    base_img.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-def generate_sarco_2_pk_toxicity_risk():
-    print("Generating real-case-sarco-2-pk-toxicity-risk.png (CDSS compliant, no unlawful dose)...")
-    out_im = Image.new("RGBA", (860, 340), (7, 14, 23, 255))
-    draw = ImageDraw.Draw(out_im)
-    
-    draw.text((16, 12), "HEURION ONCO-PHARMA // 肿瘤药代动力学毒性预警与多学科 (MDT) 预康复决策", fill=(224, 231, 255, 255), font=get_font(13, bold=True))
-    draw.text((16, 30), "临床模型: 骨骼肌组织分布容积 (Vd) 清除率校正 | 适应证: 腹部实质脏器肿大待查伴高代谢消耗状态", fill=(148, 163, 184, 230), font=get_font(11))
-    
-    # Left: PK Toxicity Warning
-    draw_hud_box(draw, 16, 56, 404, 268, bg_rgba=(20, 15, 28, 240), border_rgba=(185, 28, 28, 240))
-    draw.rectangle([16, 56, 420, 84], fill=(220, 38, 38, 255))
-    draw.text((26, 62), "[高危预警] 药代动力学 (PK) 毒性高危预警 (DLT High Risk)", fill=(255, 255, 255, 255), font=get_font(12, bold=True))
-    
-    pk_lines = [
-        ("传统体表面积 (BSA = 1.62 m2)", "常规全量给予面临致命性游离血药峰浓度"),
-        ("骨骼肌分布容积 (Vd)", "严重萎缩导致药物分布容积缩窄，清除率下降 44.5%"),
-        ("3~4 级骨髓抑制预测概率", "72% (中性粒细胞缺乏伴发热 FN 极高危)"),
-        ("早期治疗非计划中断风险", "68% (前 2 周期严重毒性导致治疗终止高危)"),
-        ("肌脂肪浸润 (MA = 26.4 HU)", "异位脂质干扰线粒体脂肪酸 β-氧化与代谢代偿"),
-        ("MDT 预警建议", "提示常规全量化疗严重毒性高危，提请临床审慎评估"),
-    ]
-    ry = 94
-    for title, desc in pk_lines:
-        col = (248, 113, 113, 255) if "72%" in desc or "高危" in desc else (203, 213, 225, 240)
-        draw.text((26, ry), f"- {title}:", fill=(241, 245, 249, 255), font=get_font(10, bold=True))
-        draw.text((26, ry + 14), f"  {desc}", fill=col, font=get_font(10))
-        ry += 35
-        
-    # Right: MDT Clinical Prehabilitation Decision
-    draw_hud_box(draw, 440, 56, 404, 268, bg_rgba=(11, 24, 22, 240), border_rgba=(16, 185, 129, 240))
-    draw.rectangle([440, 56, 844, 84], fill=(16, 185, 129, 255))
-    draw.text((450, 62), "[方案闭环] MDT 临床决策闭环与个体化预康复方案", fill=(255, 255, 255, 255), font=get_font(12, bold=True))
-    
-    mdt_lines = [
-        ("化疗耐受性 MDT 评估", "建议结合 ECOG 评分与机体成分审慎制定方案，规避严重毒性"),
-        ("全肠内营养支持 (ONS)", "每日热量 30 kcal/kg，高蛋白 1.5 g/kg/d 强化补充"),
-        ("免疫抗炎营养素干预", "补充支链氨基酸 (BCAA) 与欧米伽-3 PUFA (拮抗促炎状态)"),
-        ("运动预康复 (Prehabilitation)", "低负荷抗阻力握力与弹力带训练，保护肌力储备"),
-        ("动态体成分随访", "每 2 周期化疗复查 L3 SMI，视肌量恢复再动态评估"),
-        ("临床获益目标", "化疗耐受率从 28% 提升至 85%，显著降低非计划中断"),
-    ]
-    ry = 94
-    for title, desc in mdt_lines:
-        col = (52, 211, 153, 255) if "提升至" in desc or "ONS" in title or "规避" in desc else (203, 213, 225, 240)
-        draw.text((450, ry), f"[+] {title}:", fill=(241, 245, 249, 255), font=get_font(10, bold=True))
-        draw.text((450, ry + 14), f"    {desc}", fill=col, font=get_font(10))
-        ry += 35
-        
-    out_path = os.path.join(SITE_DIR, "real-case-sarco-2-pk-toxicity-risk.png")
-    out_im.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-def generate_sarco_3_diagnostic_chain():
-    print("Generating real-case-sarco-3-diagnostic-chain.png (Splenomegaly & Sarcopenia)...")
-    out_im = Image.new("RGBA", (860, 280), (7, 14, 23, 255))
-    draw = ImageDraw.Draw(out_im)
-    
-    draw.text((16, 12), "HEURION MULTIMODAL EVIDENCE CHAIN // 多模态因果诊断链与证据闭环 (脾肿大合并恶液质肌少症)", fill=(224, 231, 255, 255), font=get_font(13, bold=True))
-    
-    pillars = [
-        (16, 45, 260, 220, "[1] TotalSegmentator L3 体成分量化", [
-            "- L3 SMI: 29.92 cm2/m2 (Prado <52.4)",
-            "- AWGS 极端标准: 29.92 < 38.5 cm2/m2",
-            "- 辐射衰减 (MA): 26.4 HU (重度肌脂肪变性)",
-            "- 内脏/皮下脂肪比: 2.09 (内脏蓄脂表型)",
-            "- 评定: 重度恶液质肌少症 (Severe Sarcopenia)",
-            "证据权重: 3D 体素金标准 (Weight 0.98)"
-        ], (239, 68, 68, 255)),
-        (300, 45, 260, 220, "[2] 临床恶液质衰弱与脏器特征", [
-            "- 全腹影像: 脾脏弥漫肿大 680.0 cm3 (长径14.2cm)",
-            "- 实质状态: 正常肝脏 54.2 HU / 胰腺 44.8 HU",
-            "- 体质指数: BMI 18.25 kg/m2 (明显消瘦)",
-            "- 握力实测: 右手 19 kg (参考下限 28kg)",
-            "- 生化异常: 白蛋白 31.2 g/L, CRP 28 mg/L",
-            "证据权重: 临床病理多模态 (Weight 0.96)"
-        ], (245, 158, 11, 255)),
-        (584, 45, 260, 220, "[3] MDT 综合预后评估与临床决策", [
-            "预警: 全量化疗致死性毒性风险 72%",
-            "建议: MDT 审慎评估化疗耐受性与感染防护",
-            "营养: 全肠内营养 ONS 30 kcal/kg/d + BCAA",
-            "康复: 抗阻力运动预康复保护肌量储备",
-            "获益: 避免早期致死性中性粒细胞缺乏发热",
-            "互操作标准: 导出 DICOM SR 与 FHIR"
-        ], (34, 197, 94, 255)),
-    ]
-    
-    for x, y, w, h, title, lines, header_col in pillars:
-        draw_hud_box(draw, x, y, w, h, bg_rgba=(11, 20, 36, 230), border_rgba=(30, 58, 95, 240))
-        draw.rectangle([x, y, x + w, y + 26], fill=header_col)
-        draw.text((x + 8, y + 6), title, fill=(255, 255, 255, 255), font=get_font(11, bold=True))
-        
-        ly = y + 36
-        for line in lines[:-1]:
-            col = (255, 110, 110, 255) if "72%" in line or "消瘦" in line or "重度" in line else (203, 213, 225, 240)
-            if "审慎评估" in line or "获益" in line or "ONS" in line or "正常" in line:
-                col = (52, 211, 153, 255)
-            draw.text((x + 10, ly), line, fill=col, font=get_font(10))
-            ly += 25
-        draw.text((x + 10, y + h - 22), lines[-1], fill=(56, 189, 248, 255), font=get_font(10, bold=True))
-        
-    draw.text((280, 140), ">>", fill=(148, 163, 184, 200), font=get_font(14, bold=True))
-    draw.text((564, 140), ">>", fill=(148, 163, 184, 200), font=get_font(14, bold=True))
-    
-    out_path = os.path.join(SITE_DIR, "real-case-sarco-3-diagnostic-chain.png")
-    out_im.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-# =============================================================
-# CASE 4: 前列腺薄层 T2-MRI · 张敏 (PT-PROSTATE-004)
-# =============================================================
-
-def generate_prostate_1_t2_mri():
-    print("Generating real-case-prostate-1-t2-mri.png...")
-    img_path = os.path.join(DATA_DIR, "prostate_mri.nii.gz")
-    if not os.path.exists(img_path):
-        img_path = "/Users/huizhao/Downloads/medical_imaging_test_cases/03_Patient_ZhangMin_Prostate_MRI/nifti/prostate_t2_mri.nii.gz"
-    img = nib.load(img_path)
-    data = img.get_fdata(dtype=np.float32)
-    # data shape is (384, 384, 19), slice 9 is center
-    slice_data = np.rot90(data[:, :, 9])
-    
-    p99 = np.percentile(slice_data, 99)
-    p1 = np.percentile(slice_data, 1)
-    norm = np.clip((slice_data - p1) / max(p99 - p1, 1e-4), 0, 1)
-    slice_uint8 = (norm * 255).astype(np.uint8)
-    
-    base_img = Image.fromarray(slice_uint8).resize((512, 512), Image.Resampling.LANCZOS).convert("RGBA")
-    
-    seg_overlay = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-    s_draw = ImageDraw.Draw(seg_overlay)
-    
-    cx, cy = 256, 275
-    # Peripheral Zone (PZ) in Cyan (calibrated to 48 mm = 96 px at 0.5 mm/px)
-    s_draw.ellipse([cx - 48, cy - 38, cx + 48, cy + 38], fill=(14, 165, 233, 40), outline=(14, 165, 233, 220), width=2)
-    # Transition Zone (TZ - BPH hyperplastic nodule) in Amber
-    s_draw.ellipse([cx - 30, cy - 24, cx + 30, cy + 24], fill=(245, 158, 11, 70), outline=(245, 158, 11, 220), width=2)
-    
-    base_img = Image.alpha_composite(base_img, seg_overlay)
-    draw = ImageDraw.Draw(base_img)
-    
-    # 48 mm = 96 px at 0.5 mm/px
-    draw_caliper(draw, (cx - 48, cy + 46), (cx + 48, cy + 46), "前列腺横径 4.8 cm", color=(56, 189, 248, 255))
-    
-    # Top HUD Box
-    draw_hud_box(draw, 10, 10, 492, 105)
-    draw.text((16, 14), "HEURION PELVIC MRI // 前列腺解剖分带与 PI-RADS v2.1 结构化量化评估", fill=(56, 189, 248, 255), font=get_font(12, bold=True))
-    draw.text((16, 32), "【解剖分带量化】MONAI 3D 前列腺神经网络分割就绪 | 序列: 轴位薄层 T2-WI (0.5x0.5x3.0 mm)", fill=(203, 213, 225, 240), font=get_font(11))
-    draw.text((16, 48), "前列腺总容积: 48.60 cm3 (增大) | 移行区容积: 28.20 cm3 | 移行区指数 (TZI): 0.58 (>0.50)", fill=(250, 204, 21, 255), font=get_font(11, bold=True))
-    draw.text((16, 64), "PI-RADS v2.1 定级: 2 类 (移行区边界光整良性增生结节，外周带高信号均匀)", fill=(52, 211, 153, 255), font=get_font(11, bold=True))
-    draw.text((16, 80), "PSAD: 0.12 ng/mL/cm3 (<0.15 阈值) | CDSS建议: 门诊常规随访，规避非必要穿刺活检 (TRUS)", fill=(52, 211, 153, 255), font=get_font(11))
-    
-    draw_scale_bar(draw, 512, 512, pixel_spacing_mm=0.5)
-    
-    out_path = os.path.join(SITE_DIR, "real-case-prostate-1-t2-mri.png")
-    base_img.convert("RGB").save(out_path, format="PNG", optimize=True)
-    print(f"Saved: {out_path}")
-
-# =============================================================
-# REAL MONAI NEURAL INFERENCE: 官方 MONAI 3D-UNet 脾脏真实模型推理
-# =============================================================
-
-def generate_spleen_monai_real_inference():
-    print("Generating real-monai-spleen-inference.png via true PyTorch 3D-UNet pipeline on Metal (MPS)...")
-    import urllib.request
-    import json
-    import base64
-
-    # Connect to live imaging-worker running genuine MONAI 3D-UNet weights
-    req = urllib.request.Request(
-        "http://127.0.0.1:8004/api/v1/analyze/sample",
-        data=json.dumps({"sample_id": "spleen_test", "model_name": "spleen_segmenter"}).encode("utf-8"),
-        headers={"Content-Type": "application/json"}
+    png, _ = render_pacs_viewport(
+        slice_uint8=sl, plane="axial", slice_idx=z, total_slices=vol.shape[0],
+        physical_loc_mm=float(z * sp[0]), spacing_xy=(sp[1], sp[2]), slice_thickness_mm=sp[0],
+        window_info={"center": 40, "width": 400, "name": "abdomen"},
+        calipers=calipers, title_banner="HEURION IMAGING // MONAI SPLEEN SEGMENTATION",
+        hud_lines=hud, overlays_rgba=[(mask[z] > 0, (168, 85, 247, 110)), (mask_outline(mask[z]), (216, 180, 254, 255))],
     )
-    with urllib.request.urlopen(req) as resp:
-        res = json.loads(resp.read().decode("utf-8"))
+    img = add_caption_panel(png_bytes_to_image(png), "脾脏自动分割与体积测量", [
+        f"数据来源：{SOURCE_SPLEEN}，体素间距 {sp[2]:.3f}×{sp[1]:.3f}×{sp[0]:.2f} mm。",
+        "算法：engine.MonaiNeuralInferencePipeline.infer_spleen（MONAI 官方 spleen_ct 3D-UNet 权重，滑窗推理）"
+        " → recist.calculate_recist_metrics（体积与最大截面最长径）。紫色为模型分割结果，青色卡尺为算法给出的最长径。",
+        f"注：{DISCLAIMER}。",
+    ])
+    save_png(img, "demo-spleen-monai-segmentation.png")
+    return {"volume_cm3": rec["total_volume_cm3"], "ld_mm": rec["longest_diameter_mm"], "slice": z,
+            "voxels": int(mask.sum()), "duration_s": meta["inference_duration_sec"], "accelerator": meta["accelerator"]}
 
-    b64_str = res["key_slice_png_base64"]
-    if "," in b64_str:
-        b64_str = b64_str.split(",", 1)[1]
-    
-    out_path = os.path.join(SITE_DIR, "real-monai-spleen-inference.png")
-    with open(out_path, "wb") as f:
-        f.write(base64.b64decode(b64_str))
-    print(f"Saved REAL MONAI Inference Image: {out_path} ({res['neural_info']})")
 
-def main():
+# ---------------------------------------------------------------------------
+# 图 2：三正交 MPR（chest_lung_ct），十字定位于体数据几何中心
+# ---------------------------------------------------------------------------
+
+def generate_chest_mpr() -> Dict[str, Any]:
+    print("[2] 三正交 MPR（LPS 规范方向）...")
+    vol, sp = load_nifti(os.path.join(DATA_DIR, "chest_lung_ct.nii.gz"))
+    dz, dy, dx = sp
+    zdim, ydim, xdim = vol.shape
+    # 定位点取体数据几何中心，不依赖任何病灶或气道检测算法
+    z, cy, cx = zdim // 2, ydim // 2, xdim // 2
+    focus_note = f"十字定位：体数据几何中心（z={z}, y={cy}, x={cx}）"
+
+    win = apply_ct_window(vol, "lung")
+    # LPS (Z,Y,X)：z 增大向头侧，y 增大向后，x 增大向患者左
+    axial = win[z]                       # 行=前→后，列=右→左：上 A、左 R
+    coronal = win[::-1, cy, :]           # 行=头→足，列=右→左：上 S、左 R
+    sagittal = win[::-1, :, cx]          # 行=头→足，列=前→后：上 S、左 A
+    panels = [
+        ("axial", axial, (dy, dx), (cy, cx), f"轴位 #{z}/{zdim}"),
+        ("coronal", coronal, (dz, dx), (zdim - 1 - z, cx), f"冠状位 #{cy}/{ydim}"),
+        ("sagittal", sagittal, (dz, dy), (zdim - 1 - z, cy), f"矢状位 #{cx}/{xdim}"),
+    ]
+    size = 340
+    gap = 12
+    head = 44
+    out = Image.new("RGB", (3 * size + 4 * gap, head + size + gap), COL_BG)
+    d = ImageDraw.Draw(out)
+    d.text((gap, 10), "三正交多平面重建（MPR）· 肺窗 W1500 / L-600 · 按物理间距等比例显示", fill=COL_TEXT, font=font(14))
+    f_lab, f_cmp = font(12), get_sans_font(size=13, bold=True)
+    for i, (plane, img2d, (sr, sc), (fr, fc), label) in enumerate(panels):
+        h_mm, w_mm = img2d.shape[0] * sr, img2d.shape[1] * sc
+        scale = size / max(h_mm, w_mm)
+        ph, pw = int(round(h_mm * scale)), int(round(w_mm * scale))
+        tile = Image.fromarray(img2d).resize((pw, ph), Image.Resampling.BILINEAR).convert("RGB")
+        ox = gap + i * (size + gap) + (size - pw) // 2
+        oy = head + (size - ph) // 2
+        d.rectangle([gap + i * (size + gap) - 1, head - 1, gap + i * (size + gap) + size, head + size], outline=(30, 41, 59))
+        out.paste(tile, (ox, oy))
+        # 十字线（中间留空，不遮挡目标）
+        px = ox + (fc + 0.5) * sc * scale
+        py = oy + (fr + 0.5) * sr * scale
+        for a, b in [((px - 14, py), (px - 4, py)), ((px + 4, py), (px + 14, py)),
+                     ((px, py - 14), (px, py - 4)), ((px, py + 4), (px, py + 14))]:
+            d.line([a, b], fill=(0, 240, 255), width=2)
+        # 方位标识
+        cmp_lab = get_radiological_orientation_labels(plane)
+        bx, by = gap + i * (size + gap), head
+        d.text((bx + size // 2 - 5, by + 4), cmp_lab["top"], fill=(255, 235, 59), font=f_cmp)
+        d.text((bx + size // 2 - 5, by + size - 20), cmp_lab["bottom"], fill=(255, 235, 59), font=f_cmp)
+        d.text((bx + 5, by + size // 2 - 8), cmp_lab["left"], fill=(255, 235, 59), font=f_cmp)
+        d.text((bx + size - 16, by + size // 2 - 8), cmp_lab["right"], fill=(255, 235, 59), font=f_cmp)
+        d.text((bx + 6, by + size - 20), label, fill=COL_ACCENT, font=f_lab)
+        # 5 cm 比例尺
+        bar = 50.0 * scale
+        d.line([(bx + size - 12 - bar, by + size - 26), (bx + size - 12, by + size - 26)], fill=(255, 255, 255), width=2)
+        d.text((bx + size - 12 - bar, by + size - 42), "5 cm", fill=(255, 255, 255), font=f_lab)
+    img = add_caption_panel(out, "三正交多平面重建", [
+        f"数据来源：{SOURCE_CHEST}，体素间距 {dx:.3f}×{dy:.3f}×{dz:.2f} mm。",
+        "处理：dicom_io.load_nifti 统一到 LPS 方向后直接取三个正交平面，按物理间距等比例缩放；未做任何病灶标注。"
+        + focus_note + "。",
+        f"注：{DISCLAIMER}。",
+    ])
+    save_png(img, "demo-chest-mpr-3view.png")
+    return {"focus": (z, cy, cx)}
+
+
+# ---------------------------------------------------------------------------
+# 图 3、4：lidc_lung_nodule_ct 结节 —— 样本附带标注掩膜上的 RECIST 测量与影像组学特征
+# ---------------------------------------------------------------------------
+
+def run_lidc() -> Tuple[np.ndarray, np.ndarray, Tuple[float, float, float]]:
+    vol, sp = load_nifti(os.path.join(DATA_DIR, "lidc_lung_nodule_ct.nii.gz"))
+    mask, msp = load_mask_lps(os.path.join(DATA_DIR, "lidc_lung_nodule_mask.nii.gz"), vol.shape)
+    assert np.allclose(sp, msp, atol=1e-3), "掩膜与影像体素间距不一致"
+    return vol, mask, sp
+
+
+def generate_lidc_recist(vol: np.ndarray, mask: np.ndarray, sp: Tuple[float, float, float]) -> Dict[str, Any]:
+    print("[3] 肺结节 RECIST 测量（recist.py，样本附带标注掩膜）...")
+    rec = calculate_recist_metrics(mask, sp)
+    z = rec["key_slice_index"]
+    sl = apply_ct_window(vol[z], "lung")
+    cal = rec["caliper_longest"]
+    m2 = mask[z] > 0
+
+    hud = [
+        "ROI: 样本附带的结节标注掩膜（非自动检出）",
+        f"关键层（最大截面）: #{z}",
+        f"最长径 LD: {rec['longest_diameter_mm']} mm | 垂直方向最大跨度: {rec['short_axis_mm']} mm",
+        f"标注体积: {rec['total_volume_cm3']} cm3",
+        f"数据: 公开数据集样本 lidc_lung_nodule_ct",
+    ]
+    ys, xs = np.where(m2)
+    cyc, cxc = int(ys.mean()), int(xs.mean())
+    png, _ = render_pacs_viewport(
+        slice_uint8=sl, plane="axial", slice_idx=z, total_slices=vol.shape[0],
+        physical_loc_mm=float(z * sp[0]), spacing_xy=(sp[1], sp[2]), slice_thickness_mm=sp[0],
+        window_info={"center": -600, "width": 1500, "name": "lung"},
+        title_banner="HEURION CHEST-CT // RECIST 1.1 MEASUREMENT",
+        hud_lines=hud, overlays_rgba=[(mask_outline(m2), (255, 77, 79, 255))],
+    )
+    full = png_bytes_to_image(png)
+    # 放大视窗：以标注中心为准裁出 96×96 像素并 5 倍放大（只裁剪不旋转，方位与左图一致）
+    half = 48
+    y0 = int(np.clip(cyc - half, 0, sl.shape[0] - 2 * half))
+    x0 = int(np.clip(cxc - half, 0, sl.shape[1] - 2 * half))
+    k = full.height // (2 * half)
+    crop = Image.fromarray(sl[y0:y0 + 2 * half, x0:x0 + 2 * half]).resize((2 * half * k, 2 * half * k), Image.Resampling.BILINEAR).convert("RGBA")
+    ov = np.zeros((2 * half * k, 2 * half * k, 4), dtype=np.uint8)
+    m_crop = np.kron(m2[y0:y0 + 2 * half, x0:x0 + 2 * half].astype(np.uint8), np.ones((k, k), dtype=np.uint8)) > 0
+    ov[m_crop] = (255, 77, 79, 70)
+    ov[mask_outline(m_crop)] = (255, 77, 79, 255)
+    crop = Image.alpha_composite(crop, Image.fromarray(ov, mode="RGBA")).convert("RGB")
+    dc = ImageDraw.Draw(crop)
+    p1 = ((cal["p1"][0] - x0 + 0.5) * k, (cal["p1"][1] - y0 + 0.5) * k)
+    p2 = ((cal["p2"][0] - x0 + 0.5) * k, (cal["p2"][1] - y0 + 0.5) * k)
+    dc.line([p1, p2], fill=(0, 220, 255), width=3)
+    vx, vy = p2[0] - p1[0], p2[1] - p1[1]
+    nrm = max(float(np.hypot(vx, vy)), 1e-4)
+    nx, ny = -vy / nrm * 9, vx / nrm * 9
+    for p in (p1, p2):
+        dc.line([(p[0] - nx, p[1] - ny), (p[0] + nx, p[1] + ny)], fill=(0, 220, 255), width=3)
+    f_lab = font(15)
+    lab = f"LD {rec['longest_diameter_mm']} mm"
+    lx, ly = min(max(p2[0] + 12, 8), crop.width - text_width(f_lab, lab) - 12), min(max(p2[1] - 10, 8), crop.height - 28)
+    dc.rectangle([lx - 4, ly - 2, lx + text_width(f_lab, lab) + 4, ly + 20], fill=(15, 23, 42))
+    dc.text((lx, ly), lab, fill=(0, 230, 255), font=f_lab)
+    cmp_lab = get_radiological_orientation_labels("axial")
+    f_c = get_sans_font(size=14, bold=True)
+    dc.text((crop.width // 2 - 5, 6), cmp_lab["top"], fill=(255, 235, 59), font=f_c)
+    dc.text((crop.width // 2 - 5, crop.height - 22), cmp_lab["bottom"], fill=(255, 235, 59), font=f_c)
+    dc.text((6, crop.height // 2 - 8), cmp_lab["left"], fill=(255, 235, 59), font=f_c)
+    dc.text((crop.width - 18, crop.height // 2 - 8), cmp_lab["right"], fill=(255, 235, 59), font=f_c)
+    bar = 10.0 / sp[2] * k  # 1 cm
+    dc.line([(crop.width - 16 - bar, crop.height - 30), (crop.width - 16, crop.height - 30)], fill=(255, 255, 255), width=3)
+    dc.text((crop.width - 16 - bar, crop.height - 48), "1 cm", fill=(255, 255, 255), font=font(12))
+    dc.text((8, 8), f"放大 ×{k}", fill=COL_ACCENT, font=font(13))
+    # 在全图上标出放大区域
+    dfull = ImageDraw.Draw(full)
+    dfull.rectangle([x0, y0, x0 + 2 * half, y0 + 2 * half], outline=(0, 220, 255), width=1)
+
+    combo = Image.new("RGB", (full.width + crop.width + 12, full.height), COL_BG)
+    combo.paste(full, (0, 0))
+    combo.paste(crop, (full.width + 12, 0))
+    img = add_caption_panel(combo, "肺结节 RECIST 1.1 径线与体积测量", [
+        f"数据来源：{SOURCE_LIDC}，层厚 {sp[0]} mm，像素间距 {sp[2]:.3f} mm。",
+        "算法：recist.calculate_recist_metrics —— 在样本附带的结节标注掩膜上选最大截面层，经凸包求最长径（青色卡尺）、"
+        "计算垂直方向最大跨度与三维体积。红色轮廓为样本附带的标注，不是本平台自动分割的结果。",
+        "仅此一个时间点：本图不涉及疗效评估，也没有随访对比。",
+        f"注：{DISCLAIMER}。",
+    ])
+    save_png(img, "demo-lidc-nodule-recist.png")
+    return {"slice": z, "ld_mm": rec["longest_diameter_mm"], "short_mm": rec["short_axis_mm"],
+            "volume_cm3": rec["total_volume_cm3"]}
+
+
+def generate_lidc_radiomics(vol: np.ndarray, mask: np.ndarray, sp: Tuple[float, float, float]) -> Dict[str, Any]:
+    print("[4] 肺结节影像组学特征（radiomics.py）...")
+    from radiomics import extract_radiomics_features
+    num_bins = 16
+    r = extract_radiomics_features(vol, mask, spacing=sp, num_bins=num_bins)
+    g = r["feature_groups"]
+    sh, fo, gl, rl = g["shape_3d"], g["first_order"], g["glcm"], g["glrlm"]
+    cards = [
+        (f"三维形状（{len(sh)} 项，节选）", [
+            ("体积", f"{sh['volume_cm3']} cm3"),
+            ("表面积", f"{sh['surface_area_mm2']} mm2"),
+            ("面积体积比", f"{sh['surface_to_volume_ratio']} /mm"),
+            ("球形度", f"{sh['sphericity']}"),
+            ("最大三维径", f"{sh['max_3d_diameter_mm']} mm"),
+            ("伸长率 / 扁平度", f"{sh['elongation']} / {sh['flatness']}"),
+        ]),
+        (f"一阶统计（{len(fo)} 项，节选）", [
+            ("均值 ± 标准差", f"{fo['mean']} ± {fo['std']} HU"),
+            ("中位数", f"{fo['median']} HU"),
+            ("P10 / P90", f"{fo['p10']} / {fo['p90']} HU"),
+            ("偏度", f"{fo['skewness']}"),
+            ("峰度", f"{fo['kurtosis']}"),
+            ("熵", f"{fo['entropy']}"),
+        ]),
+        (f"纹理 GLCM {len(gl)} 项 / GLRLM {len(rl)} 项（节选）", [
+            ("GLCM 对比度", f"{gl['contrast']}"),
+            ("GLCM 同质性", f"{gl['homogeneity']}"),
+            ("GLCM 联合熵", f"{gl['joint_entropy']}"),
+            ("GLCM 相关性", f"{gl['correlation']}"),
+            ("GLRLM 短游程优势", f"{rl['short_run_emphasis']}"),
+            ("GLRLM 游程百分比", f"{rl['run_percentage']}"),
+        ]),
+    ]
+    W, gap, cw = 1012, 14, 0
+    cw = (W - 4 * gap) // 3
+    head = 52
+    row_h = 40
+    ch = 36 + 6 * row_h + 8
+    out = Image.new("RGB", (W, head + ch + gap), COL_BG)
+    d = ImageDraw.Draw(out)
+    d.text((gap, 10), f"三维影像组学特征（共计算 {r['feature_count']} 项，以下为节选）", fill=COL_TEXT, font=font(16))
+    d.text((gap, 32), f"ROI：样本附带的结节标注掩膜（{r['lesion_voxel_count']} 体素）· 纹理灰度离散 {num_bins} 级 · 单一时间点",
+           fill=COL_MUTED, font=font(12))
+    f_t, f_k, f_v = font(13), font(12), get_sans_font(size=13, bold=True)
+    for i, (title, rows) in enumerate(cards):
+        x = gap + i * (cw + gap)
+        y = head
+        d.rectangle([x, y, x + cw, y + ch], fill=(11, 20, 36), outline=(30, 58, 95))
+        d.text((x + 10, y + 9), title, fill=COL_ACCENT, font=f_t)
+        d.line([(x + 10, y + 30), (x + cw - 10, y + 30)], fill=(30, 48, 75))
+        ry = y + 38
+        for k_, v_ in rows:
+            d.text((x + 10, ry), k_, fill=(203, 213, 225), font=f_k)
+            d.text((x + 10, ry + 16), v_, fill=(255, 255, 255), font=f_v)
+            ry += row_h
+    img = add_caption_panel(out, "影像组学特征提取", [
+        f"数据来源：{SOURCE_LIDC}；ROI 与上一张 RECIST 图相同。",
+        "算法：radiomics.extract_radiomics_features —— 三维形状、一阶直方图统计、GLCM 与 GLRLM 纹理特征，全部数值为本次实际计算结果。"
+        "该实现尚未与 IBSI 参考数据集或 PyRadiomics 做一致性校验。",
+        f"注：{DISCLAIMER}；单一时间点，不含治疗前后对比。",
+    ])
+    save_png(img, "demo-lidc-nodule-radiomics.png")
+    return {"feature_count": r["feature_count"], "sphericity": sh["sphericity"], "volume_cm3": sh["volume_cm3"],
+            "max3d_mm": sh["max_3d_diameter_mm"], "mean_hu": fo["mean"]}
+
+
+# ---------------------------------------------------------------------------
+# 未生成的图（如实记录原因，不退回手画）
+# ---------------------------------------------------------------------------
+
+SKIPPED = {
+    "疗效差分热力图（原 real-case-3 / real-case-nsclc-3）": "需要同一受试者两次随访扫描，公开数据集中没有，不伪造。",
+    "L3 体成分 / SMI（原 real-case-4 / real-case-sarco-1）": "totalsegmentator.py 实为 HU 阈值法（肌肉掩膜混入肝肾肠等软组织，L3 层由骨量最大层近似），"
+        "且样本无身高数据，SMI 无从计算；不作为算法输出展示。",
+    "前列腺 T2 MRI 分区（原 real-case-prostate-1）": "MONAI prostate_mri 权重在 prostate_mri 样本上推理输出为空掩膜（0 体素）。",
+    "支气管扩张 / 粘液栓定量图": "bronchiectasis.py 为启发式阈值法，在 chest_lung_ct 上关键层落在肺门、粘液候选区可能为血管或淋巴结，经决定不对外展示。",
+    "诊断链 / PK 毒性信息图（原 *_diagnostic_chain、sarco-2）": "属于编造的临床叙事，没有数据支撑。",
+}
+
+
+def main() -> None:
     os.makedirs(SITE_DIR, exist_ok=True)
-    print("==================================================================")
-    print("Generating All Publication-Grade Case Study Screenshots...")
-    print(f"Target Directory: {SITE_DIR}")
-    print("==================================================================")
-    
-    # Real Neural Inference (Official MONAI 3D-UNet)
-    generate_spleen_monai_real_inference()
-    
-    # Case 1: ABPA
-    generate_case_1_baseline_hrct()
-    generate_case_1_mpr_3view()
-    generate_case_1_diff_heatmap()
-    generate_case_1_l3_smi()
-    generate_case_1_diagnostic_chain()
-    
-    # Case 2: NSCLC
-    generate_nsclc_1_baseline_recist()
-    generate_nsclc_2_mpr_3view()
-    generate_nsclc_3_diff_heatmap()
-    generate_nsclc_4_radiomics_feature()
-    generate_nsclc_5_diagnostic_chain()
-    
-    # Case 3: Sarcopenia & Splenomegaly
-    generate_sarco_1_l3_muscle_fat()
-    generate_sarco_2_pk_toxicity_risk()
-    generate_sarco_3_diagnostic_chain()
-    
-    # Case 4: Prostate MRI
-    generate_prostate_1_t2_mri()
-    
-    print("\nAll case study images successfully generated with authentic real/prototype clarity!")
+    t0 = time.time()
+    print(f"输出目录: {SITE_DIR}")
+    summary: Dict[str, Any] = {}
+    summary["spleen"] = generate_spleen_monai()
+    summary["mpr"] = generate_chest_mpr()
+    lv, lm, lsp = run_lidc()
+    summary["lidc_recist"] = generate_lidc_recist(lv, lm, lsp)
+    summary["lidc_radiomics"] = generate_lidc_radiomics(lv, lm, lsp)
+    print("\n== 关键数值（均为本次计算结果）==")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+    print("\n== 未生成的图 ==")
+    for k, v in SKIPPED.items():
+        print(f"  {k}: {v}")
+    print(f"\n完成，用时 {time.time() - t0:.1f}s")
+
 
 if __name__ == "__main__":
     main()
