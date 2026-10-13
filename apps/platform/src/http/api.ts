@@ -946,22 +946,25 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/docs/:id', c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
+    const user = c.get('user')
     const doc = docs.get(row.id)
     const order = citationOrder(doc)
     const marks = threadMarks(doc)
+    const messages = store.listMessages(row.id)
     return c.json({
       ...row,
       rev: docs.rev(row.id),
-      busy: turns.isBusy(c.get('user'), row.id),
+      busy: turns.isBusy(user, row.id),
+      active_turn: turns.activeTurn?.(user, row.id) ?? null,
       versions: store.listVersions(row.id),
-      messages: store.listMessages(row.id),
+      messages,
       failed_turns: store.failedTurns(row.id),
       suggestions: pendingGroups(doc),
       claim_checks: store.listClaimChecks(row.id),
       // 研究共享：我的角色、协作者（顶栏显示）
-      my_role: access.docRole(c.get('user'), row),
+      my_role: access.docRole(user, row),
       collaborators: (() => { const st = access.studyOfDoc(row); return st ? store.studyMembers(st).map(m => ({ user_id: m.user_id, name: store.getUser(m.user_id)?.display_name ?? m.user_id, role: m.role })) : [] })(),
-      revertable: [...new Set(store.listMessages(row.id).map(m => m.turn_id).filter((t): t is string => !!t))].filter(t => docs.canRevertTurn(row.id, t)),
+      revertable: [...new Set(messages.map(m => m.turn_id).filter((t): t is string => !!t))].filter(t => docs.canRevertTurn(row.id, t)),
       citations: store.listCitations(row.id).map(x => ({ ...x, number: order.includes(x.id) ? order.indexOf(x.id) + 1 : null })),
       comments: store.listComments(row.id).map(x => ({ ...x, anchor: locate(doc, x, marks) })),
     })
@@ -1693,7 +1696,11 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     }
     prompt += `\n用户需求：${message}`
 
-    return streamTurn(c, deps, copilotDoc.id, prompt, { suggest: false, lane: 'copilot' })
+    return streamTurn(c, deps, copilotDoc.id, prompt, {
+      suggest: false,
+      lane: 'copilot',
+      ...(body.doc_id ? { contextDocId: body.doc_id } : {}),
+    })
   })
 
   app.post('/api/copilot/clear', c => {

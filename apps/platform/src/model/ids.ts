@@ -8,9 +8,14 @@ const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz'
 export function newId(taken: Set<string>): string {
   for (let len = 4; ; len++) {
     for (let attempt = 0; attempt < 20; attempt++) {
-      const bytes = randomBytes(len)
+      const bytes = randomBytes(len * 2)
       let id = ''
-      for (const b of bytes) id += ALPHABET[b % 36]
+      for (const b of bytes) {
+        if (b >= 252) continue
+        id += ALPHABET[b % 36]
+        if (id.length === len) break
+      }
+      if (id.length < len) continue
       // 首字符用字母：避免与数字、序号混淆
       if (!/^[a-z]/.test(id)) continue
       if (!taken.has(id)) {

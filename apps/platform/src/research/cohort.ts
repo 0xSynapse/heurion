@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { extname, join } from 'node:path'
 import type { DatasetService, DatasetView } from '../datasets/service.ts'
 import type { Actor, LabRow, PatientService, SubjectVar } from '../tenancy/patients.ts'
 import { StudyError, type StudyService } from './service.ts'
@@ -160,83 +163,96 @@ export class CohortService {
       throw new StudyError('invalid_input', '不允许直接传入服务器文件路径 file_paths')
     }
 
-    // B1 修复：绝不使用写死的演示 sample_id（chest_lung_ct）或编造的 1.72m/68kg 人口学数据
-    const cases = pids.map(pid => {
-      const subj = active.find(s => s.patient_id === pid)
-      let filePath: string | undefined = undefined
-      let sampleId: string | undefined = undefined
+    const tempDir = mkdtempSync(join(tmpdir(), 'heurion-cohort-img-'))
+    try {
+      // B1 修复：绝不使用写死的演示 sample_id（chest_lung_ct）或编造的 1.72m/68kg 人口学数据
+      const cases = pids.map(pid => {
+        const subj = active.find(s => s.patient_id === pid)
+        let filePath: string | undefined = undefined
+        let sampleId: string | undefined = undefined
 
-      try {
-        const pData = this.patients.read(a, pid)
-        const imgRecord = pData.records?.find(r => r.kind === 'imaging' && r.file_id && /^[A-Za-z0-9_-]+$/.test(r.file_id))
-        if (imgRecord?.file_id) {
-          filePath = `/app/data/platform/files/${imgRecord.file_id}`
+        try {
+          const pData = this.patients.read(a, pid)
+          const imgRecord = pData.records?.find(r => r.kind === 'imaging' && r.file_id && /^[A-Za-z0-9_-]+$/.test(r.file_id))
+          if (imgRecord?.file_id) {
+            try {
+              const dec = this.patients.file(a, pid, imgRecord.file_id)
+              const ext = extname(dec.name || '').replace(/[^a-zA-Z0-9.]/g, '') || '.nii.gz'
+              const tmpPath = join(tempDir, `${imgRecord.file_id}${ext}`)
+              writeFileSync(tmpPath, dec.bytes)
+              filePath = tmpPath
+            } catch {
+              filePath = `/app/data/platform/files/${imgRecord.file_id}`
+            }
+          }
+        } catch {}
+
+        const rawSample = (input as any).sample_ids?.[pid]
+        if (typeof rawSample === 'string' && /^[A-Za-z0-9_-]+$/.test(rawSample)) {
+          sampleId = rawSample
         }
-      } catch {}
 
-      const rawSample = (input as any).sample_ids?.[pid]
-      if (typeof rawSample === 'string' && /^[A-Za-z0-9_-]+$/.test(rawSample)) {
-        sampleId = rawSample
+        return {
+          subject_id: subj?.subject_id || pid,
+          patient_id: pid,
+          sample_id: sampleId,
+          file_path: filePath,
+          model_name: modelName,
+          patient_sex: subj?.sex || undefined,
+          patient_height_m: undefined,
+          patient_weight_kg: undefined,
+        }
+      })
+
+      const imagingWorkerUrl = (process.env.IMAGING_WORKER_URL || 'http://127.0.0.1:8004').replace(/\/+$/, '')
+      const resp = await fetch(`${imagingWorkerUrl}/api/v1/cohort/batch-analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ study_id: studyId, cases }),
+        signal: AbortSignal.timeout(60000),
+      })
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '')
+        throw new StudyError('batch_analyze_failed', `队列影像批量分析失败 HTTP ${resp.status}: ${errText}`)
+      }
+      const res = await resp.json()
+
+      let datasetView: DatasetView | undefined
+      if (input.save_as_dataset !== false && this.datasets) {
+        const dName = input.dataset_name || `${study.title} · 队列影像量化宽表`
+        const { dataset } = this.datasets.upload(
+          a.userId,
+          `cohort-imaging-${studyId}.csv`,
+          Buffer.from(res.csv_content, 'utf8'),
+          {
+            name: dName,
+            origin: {
+              kind: 'cohort',
+              study_id: studyId,
+              shape: 'wide',
+              generated_at: new Date().toISOString(),
+              fingerprint: `${studyId}-${Date.now()}`,
+              subjects: cases.length,
+              trusted_columns: res.columns,
+            } as never
+          }
+        )
+        await this.datasets.idle()
+        try {
+          this.studies.link(a.userId, studyId, { kind: 'dataset', ref_id: dataset.id })
+        } catch (err) {
+          if (!(err instanceof StudyError && err.code === 'in_other_study')) throw err
+        }
+        datasetView = this.datasets.get(a.userId, dataset.id)
       }
 
       return {
-        subject_id: subj?.subject_id || pid,
-        patient_id: pid,
-        sample_id: sampleId,
-        file_path: filePath,
-        model_name: modelName,
-        patient_sex: subj?.sex || undefined,
-        patient_height_m: undefined,
-        patient_weight_kg: undefined,
+        ...res,
+        study_id: studyId,
+        dataset: datasetView,
       }
-    })
-
-    const imagingWorkerUrl = (process.env.IMAGING_WORKER_URL || 'http://127.0.0.1:8004').replace(/\/+$/, '')
-    const resp = await fetch(`${imagingWorkerUrl}/api/v1/cohort/batch-analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ study_id: studyId, cases }),
-      signal: AbortSignal.timeout(60000),
-    })
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => '')
-      throw new StudyError('batch_analyze_failed', `队列影像批量分析失败 HTTP ${resp.status}: ${errText}`)
-    }
-    const res = await resp.json()
-
-    let datasetView: DatasetView | undefined
-    if (input.save_as_dataset !== false && this.datasets) {
-      const dName = input.dataset_name || `${study.title} · 队列影像量化宽表`
-      const { dataset } = this.datasets.upload(
-        a.userId,
-        `cohort-imaging-${studyId}.csv`,
-        Buffer.from(res.csv_content, 'utf8'),
-        {
-          name: dName,
-          origin: {
-            kind: 'cohort',
-            study_id: studyId,
-            shape: 'wide',
-            generated_at: new Date().toISOString(),
-            fingerprint: `${studyId}-${Date.now()}`,
-            subjects: cases.length,
-            trusted_columns: res.columns,
-          } as never
-        }
-      )
-      await this.datasets.idle()
-      try {
-        this.studies.link(a.userId, studyId, { kind: 'dataset', ref_id: dataset.id })
-      } catch (err) {
-        if (!(err instanceof StudyError && err.code === 'in_other_study')) throw err
-      }
-      datasetView = this.datasets.get(a.userId, dataset.id)
-    }
-
-    return {
-      ...res,
-      study_id: studyId,
-      dataset: datasetView,
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
     }
   }
 }

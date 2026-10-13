@@ -817,6 +817,35 @@ async function refresh(full: boolean): Promise<void> {
         addRetry(m.turn_id)
       }
     }
+    if (d.busy && d.active_turn && !turnUi) {
+      startTurnUi(d.active_turn.turn_id ?? null)
+      const curUi = turnUi as { steps: HTMLDetailsElement } | null
+      if (d.active_turn.last_step && curUi) {
+        const sum = curUi.steps.querySelector('summary')
+        if (sum) sum.textContent = d.active_turn.last_step
+      }
+      if (d.active_turn.subagent) {
+        const sub = d.active_turn.subagent
+        renderTurnEvent({
+          type: 'subagent_start',
+          id: sub.id,
+          role: sub.role,
+          role_label: sub.role_label,
+          task: sub.task,
+          doc_id: session.docId,
+        })
+        for (const s of sub.steps ?? []) {
+          renderTurnEvent({
+            type: 'subagent_step',
+            id: sub.id,
+            role: sub.role,
+            step: s.step,
+            status: s.status,
+            doc_id: session.docId,
+          })
+        }
+      }
+    }
   }
   if (session?.editor && d.claim_checks) {
     session.editor.setClaimChecks(d.claim_checks)

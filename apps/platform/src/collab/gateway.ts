@@ -47,7 +47,13 @@ export function attachCollab(server: Server, deps: GatewayDeps): WebSocketServer
       // 连接上记下用户：合批落库时据此知道是谁改的（记忆信号只记在本人名下）
       ;(ws as WebSocket & { heurionUser?: string }).heurionUser = user
       deps.docs.pin(docId)
-      connect(ws, deps.docs.ydoc(docId), allows(role, 'write'), () => deps.docs.unpin(docId))
+      const canWrite = () => {
+        const cur = deps.docs.store.getDoc(docId)
+        if (!cur || cur.deleted_at) return false
+        const curRole = deps.role ? deps.role(user, cur) : (cur.owner === user ? 'owner' : null)
+        return curRole ? allows(curRole, 'write') : false
+      }
+      connect(ws, deps.docs.ydoc(docId), canWrite, () => deps.docs.unpin(docId))
     })
   })
   return wss
@@ -60,7 +66,7 @@ function send(ws: WebSocket, encoder: encoding.Encoder): void {
 const HEARTBEAT_MS = 30_000
 
 /** writable=false（研究里的只读成员）：只同步服务端的内容给他，丢弃他发来的修改。 */
-function connect(ws: WebSocket, ydoc: Y.Doc, writable = true, onClose?: () => void): void {
+function connect(ws: WebSocket, ydoc: Y.Doc, writable: boolean | (() => boolean) = true, onClose?: () => void): void {
   let alive = true
   let closed = false
   ws.on('pong', () => { alive = true })
@@ -88,8 +94,9 @@ function connect(ws: WebSocket, ydoc: Y.Doc, writable = true, onClose?: () => vo
       const decoder = decoding.createDecoder(new Uint8Array(data))
       const type = decoding.readVarUint(decoder)
       if (type !== MSG_SYNC) return
+      const isWritable = typeof writable === 'function' ? writable() : writable
       // 只读：只处理 step1（客户端请求服务端状态），step2 / update（客户端的修改）丢弃
-      if (!writable && decoding.peekVarUint(decoder) !== syncProtocol.messageYjsSyncStep1) return
+      if (!isWritable && decoding.peekVarUint(decoder) !== syncProtocol.messageYjsSyncStep1) return
       const encoder = encoding.createEncoder()
       encoding.writeVarUint(encoder, MSG_SYNC)
       // 连接对象本身作为 origin：Documents 据此识别为浏览器编辑；广播时跳过发起方

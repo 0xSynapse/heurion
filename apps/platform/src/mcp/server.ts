@@ -796,18 +796,19 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       }
       const active = ctx.activeTurn(doc_id)
       let targetDocId = doc_id
-      if (!targetDocId && active?.docId) {
-        const activeRow = store.getDoc(active.docId)
+      const candidateDocId = active?.contextDocId ?? active?.docId
+      if (!targetDocId && candidateDocId) {
+        const activeRow = store.getDoc(candidateDocId)
         let isCopilot = false
         try {
           isCopilot = activeRow?.context ? JSON.parse(activeRow.context)?.kind === 'copilot' : false
         } catch {}
         if (!isCopilot || role === 'fact_checker') {
           const checkPerm = role === 'literature_researcher' ? 'write' : 'read'
-          if (!ctx.check(active.docId, checkPerm)) {
-            targetDocId = active.docId
+          if (!ctx.check(candidateDocId, checkPerm)) {
+            targetDocId = candidateDocId
           } else if (role === 'fact_checker') {
-            return ctx.check(active.docId, 'read')!
+            return ctx.check(candidateDocId, 'read')!
           }
         }
       }

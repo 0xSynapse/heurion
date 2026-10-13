@@ -30,11 +30,43 @@ export type Ocr = (pdf: Uint8Array, pages: number[], onPage?: (done: number, tot
  */
 export function localOcr(cacheDir: string, langs = 'chi_sim+eng'): Ocr {
   mkdirSync(cacheDir, { recursive: true })
+  let workerPromise: ReturnType<typeof createWorker> | null = null
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+  let activeTasks = 0
+
+  const acquireWorker = () => {
+    activeTasks++
+    if (idleTimer) {
+      clearTimeout(idleTimer)
+      idleTimer = null
+    }
+    if (!workerPromise) {
+      workerPromise = createWorker(langs, 1, { cachePath: cacheDir }).catch(err => {
+        workerPromise = null
+        throw err
+      })
+    }
+    return workerPromise
+  }
+
+  const releaseWorker = () => {
+    activeTasks = Math.max(0, activeTasks - 1)
+    if (activeTasks === 0 && workerPromise) {
+      idleTimer = setTimeout(() => {
+        const w = workerPromise
+        workerPromise = null
+        idleTimer = null
+        if (w) void w.then(inst => inst.terminate()).catch(() => {})
+      }, 60_000)
+      idleTimer.unref?.()
+    }
+  }
+
   return async (pdf, pages, onPage) => {
     const out = new Map<number, string>()
     if (pages.length === 0) return out
     const dir = mkdtempSync(join(tmpdir(), 'heurion-ocr-'))
-    const worker = await createWorker(langs, 1, { cachePath: cacheDir })
+    const worker = await acquireWorker()
     try {
       const file = join(dir, 'in.pdf')
       writeFileSync(file, pdf)
@@ -54,7 +86,7 @@ export function localOcr(cacheDir: string, langs = 'chi_sim+eng'): Ocr {
       }
       return out
     } finally {
-      await worker.terminate()
+      releaseWorker()
       rmSync(dir, { recursive: true, force: true })
     }
   }

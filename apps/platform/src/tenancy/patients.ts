@@ -667,7 +667,8 @@ export class PatientService {
     const dup = c.db.db.prepare(`SELECT r.title, r.report_date, f.created_at FROM files f LEFT JOIN records r ON r.file_id = f.id WHERE f.patient_id = ? AND f.sha256 = ? AND COALESCE(r.status, '') != 'rejected'`).get(patientId, sha) as { title: string | null; report_date: string | null; created_at: string } | undefined
     if (dup) throw new PatientError('duplicate', `这份报告已经上传过（${dup.created_at.slice(0, 10)} 上传${dup.title ? `，「${dup.title}」` : ''}${dup.report_date ? `，报告日期 ${dup.report_date}` : ''}）`, 409)
     const fid = rid('pf')
-    writeFileSync(join(c.db.files, fid), this.keys.encrypt(c.tenantId, Buffer.from(input.bytes)))
+    const rawBuf = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength)
+    writeFileSync(join(c.db.files, fid), this.keys.encrypt(c.tenantId, rawBuf))
     c.db.db.prepare('INSERT INTO files (id, patient_id, name_enc, mime, size, sha256, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(fid, patientId, this.keys.encryptText(c.tenantId, input.name)!, input.mime, input.bytes.byteLength, sha, a.userId, now())
     const recId = rid('rc')

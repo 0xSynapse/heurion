@@ -24,6 +24,8 @@ export interface ActiveTurn {
   id?: string
   /** 回合所在文档（项目记忆按它找项目）。 */
   docId?: string
+  /** Co-Pilot 等随航通道关联的当前打开文档 ID。 */
+  contextDocId?: string
   /** 本回合能不能用记忆（实例开启、用户没暂停、本轮没关）。 */
   memory?: boolean
   /** 本回合写过的文档。 */

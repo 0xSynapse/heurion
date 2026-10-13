@@ -1316,7 +1316,17 @@ export class Store {
 
   listDepartments(tenantId: string): Array<DepartmentRow & { members: string[] }> {
     const rows = this.db.prepare('SELECT * FROM tenant_departments WHERE tenant_id = ? ORDER BY created_at').all(tenantId) as unknown as DepartmentRow[]
-    return rows.map(d => ({ ...d, members: (this.db.prepare('SELECT user_id FROM department_members WHERE department_id = ? ORDER BY added_at').all(d.id) as Array<{ user_id: string }>).map(r => r.user_id) }))
+    if (rows.length === 0) return []
+    const memberRows = this.db.prepare(
+      'SELECT dm.department_id, dm.user_id FROM department_members dm JOIN tenant_departments d ON d.id = dm.department_id WHERE d.tenant_id = ? ORDER BY dm.added_at',
+    ).all(tenantId) as Array<{ department_id: string; user_id: string }>
+    const byDept = new Map<string, string[]>()
+    for (const m of memberRows) {
+      let arr = byDept.get(m.department_id)
+      if (!arr) { arr = []; byDept.set(m.department_id, arr) }
+      arr.push(m.user_id)
+    }
+    return rows.map(d => ({ ...d, members: byDept.get(d.id) ?? [] }))
   }
 
   getDepartment(id: string): DepartmentRow | undefined {
@@ -1992,7 +2002,17 @@ export class Store {
     const rows = (status
       ? this.db.prepare('SELECT * FROM comments WHERE doc_id = ? AND status = ? ORDER BY created_at').all(docId, status)
       : this.db.prepare('SELECT * FROM comments WHERE doc_id = ? ORDER BY created_at').all(docId)) as unknown as Array<Omit<CommentRow, 'replies'>>
-    return rows.map(r => ({ ...r, replies: this.replies(r.id) }))
+    if (rows.length === 0) return []
+    const replyRows = this.db.prepare(
+      'SELECT r.* FROM comment_replies r JOIN comments c ON c.id = r.comment_id WHERE c.doc_id = ? ORDER BY r.created_at, r.rowid',
+    ).all(docId) as unknown as ReplyRow[]
+    const byComment = new Map<string, ReplyRow[]>()
+    for (const rep of replyRows) {
+      let arr = byComment.get(rep.comment_id)
+      if (!arr) { arr = []; byComment.set(rep.comment_id, arr) }
+      arr.push(rep)
+    }
+    return rows.map(r => ({ ...r, replies: byComment.get(r.id) ?? [] }))
   }
 
   private replies(commentId: string): ReplyRow[] {

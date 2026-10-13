@@ -70,6 +70,8 @@ export interface TurnOptions {
   memory?: boolean
   /** 通道：copilot 走全局随航快车道，doc 走文档编辑通道（默认 doc）。 */
   lane?: 'copilot' | 'doc'
+  /** Co-Pilot 等随航通道关联的当前打开文档 ID。 */
+  contextDocId?: string
 }
 
 interface Job {
@@ -82,11 +84,21 @@ interface Job {
   done: () => void
 }
 
+export interface ActiveSubagentSnapshot {
+  id: string
+  role: string
+  role_label: string
+  task: string
+  steps: Array<{ step: string; status?: 'ok' | 'warn' | 'info' }>
+}
+
 interface Running {
   job: Job
   turnId: string | null
   startedAt: string
   slot: string
+  lastStep?: string
+  subagent?: ActiveSubagentSnapshot | null
   /** 让正在等待的 dsh 调用立即失败（进程卡住、close 不返回时也能放行队列）。 */
   abort: (reason: Error) => void
 }
@@ -181,6 +193,25 @@ export class TurnService {
       return this.running.get(userId)?.has(docId) ?? false
     }
     return (this.running.get(userId)?.size ?? 0) > 0
+  }
+
+  /** 获取指定文档当前正在执行的实时回合快照（供前端切回文档或重连时恢复进度与子代理卡片）。 */
+  activeTurn(userId: string, docId: string): {
+    turn_id: string | null
+    message: string
+    started_at: string
+    last_step?: string
+    subagent?: ActiveSubagentSnapshot | null
+  } | null {
+    const r = this.running.get(userId)?.get(docId)
+    if (!r) return null
+    return {
+      turn_id: r.turnId,
+      message: r.job.message,
+      started_at: r.startedAt,
+      ...(r.lastStep ? { last_step: r.lastStep } : {}),
+      ...(r.subagent ? { subagent: r.subagent } : {}),
+    }
   }
 
   /** 全局 Co-Pilot 随航通道是否正忙。 */
@@ -394,8 +425,32 @@ export class TurnService {
       r.turnId = turn.id
       const turnId = turn.id
       const memoryOn = opts.memory !== false && !!this.memory?.active(userId)
+      const emitWithState = (e: UiEvent) => {
+        if (e.type === 'tool_call') r.lastStep = e.name
+        else if (e.type === 'subagent_start') {
+          r.subagent = { id: e.id, role: e.role, role_label: e.role_label, task: e.task, steps: [] }
+          r.lastStep = `正在委派：${e.role_label}`
+        } else if (e.type === 'subagent_step' && r.subagent && r.subagent.id === e.id) {
+          r.subagent.steps.push({ step: e.step, status: e.status })
+          r.lastStep = `[${r.subagent.role_label}] ${e.step}`
+        } else if (e.type === 'subagent_done' && r.subagent && r.subagent.id === e.id) {
+          r.subagent = null
+          r.lastStep = `${e.role} 协同完成`
+        }
+        emit(e)
+      }
+      const activeTurnObj = {
+        turnId,
+        docId,
+        ...(opts.contextDocId ? { contextDocId: opts.contextDocId } : {}),
+        touched,
+        notify: (n: UiEvent) => emitWithState(n),
+        mode: (opts.suggest ? 'suggest' : 'apply') as 'apply' | 'suggest',
+        answering: opts.commentId ?? null,
+        memory: memoryOn,
+      }
       const gen = this.pool.generation?.(userId, slot)
-      this.registry.begin(userId, { turnId, docId, touched, notify: n => emit(n), mode: opts.suggest ? 'suggest' : 'apply', answering: opts.commentId ?? null, memory: memoryOn }, gen)
+      this.registry.begin(userId, activeTurnObj, gen)
       // 无响应超时：dsh 的任何通知（模型输出、工具调用 / 结果）或本回合的提交都算动静
       let lastActivity = Date.now()
       watchdog = setInterval(() => {
@@ -408,10 +463,10 @@ export class TurnService {
         if (e.turnId !== turnId) return
         lastActivity = Date.now()
         touched.add(e.docId)
-        emit({ type: 'doc_updated', doc_id: e.docId, rev: e.rev, changes: e.changes.length })
+        emitWithState({ type: 'doc_updated', doc_id: e.docId, rev: e.rev, changes: e.changes.length })
       }
       this.docs.on('commit', onCommit)
-      emit({ type: 'turn', turn_id: turnId, message })
+      emitWithState({ type: 'turn', turn_id: turnId, message })
 
       const history = this.pool.liveSession(userId, slot) === null ? this.recentHistory(docId) : ''
       store.addMessage(docId, 'user', message, turnId)
@@ -426,6 +481,12 @@ export class TurnService {
 
       if (this.cancelling.has(job.id) || this.timedOut.has(job.id)) throw new Error('cancelled')
 
+      // 若 memory.forPrompt 期间进程池槽位被回收重建，重新同步最新 generation
+      const runGen = this.pool.generation?.(userId, slot)
+      if (runGen && runGen !== gen) {
+        this.registry.begin(userId, activeTurnObj, runGen)
+      }
+
       const result = await Promise.race([
         this.pool.run(userId, prompt, (n, sessionId) => {
           lastActivity = Date.now()
@@ -437,10 +498,10 @@ export class TurnService {
               // 知家红线（对话比档案宽松）：只去掉越线的句子、补提醒；只记触发的规则，不记内容
               const f = filterPhrReply(e.text, phr)
               if (f.codes.length) console.warn(`[知家红线] 回复已过滤：${f.codes.join('、')}（doc ${docId}）`)
-              emit({ type: 'assistant', text: f.text })
+              emitWithState({ type: 'assistant', text: f.text })
               continue
             }
-            emit(e)
+            emitWithState(e)
           }
         }, slot),
         aborted,
