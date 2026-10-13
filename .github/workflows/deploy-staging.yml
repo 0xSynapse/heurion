@@ -9,7 +9,7 @@ name: Deploy Staging
 #   - 默认不发邮件（只读 STAGING_RESEND_API_KEY，不设时平台发信直接报错）；
 #   - 不清 Cloudflare 缓存（预发域名不走 Cloudflare 代理）。
 # 预发服务器以后要转为生产时，先 `docker compose -p heurion2 down -v` 清掉预发的卷，再恢复生产数据。
-# 2026-10-13 起 Hetzner 服务器转为生产，预发只能手动触发（Actions → Deploy Staging → Run workflow），
+# 2026-10-13 起原预发服务器转为生产，预发只能手动触发（Actions → Deploy Staging → Run workflow），
 # 且 STAGING_HOST 必须指向一台不跑生产的机器，否则会用预发配置覆盖生产。
 on:
   workflow_dispatch:

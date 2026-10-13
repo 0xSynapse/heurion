@@ -1,11 +1,11 @@
-# Heurion 2.0 生产部署（单机 Docker Compose，Hetzner 独立服务器）。
+# Heurion 2.0 生产部署（单机 Docker Compose）。
 #   heurion2  平台（编辑器页面 + REST/SSE + 协同 WebSocket + MCP + 每用户 dsh 子进程 + LibreOffice 渲染）
 #   embedder  本地嵌入服务（bge-m3，模型在镜像里），只在内部网络可达
 #   doc-parser  PDF 结构化解析（Docling，模型在镜像里），只接入无外网的 internal 网络
 #   caddy     反向代理 + 自动 HTTPS（Let's Encrypt），唯一对外暴露 80/443 的容器
 # 由 deploy.sh 用 `docker compose -p heurion2 --env-file .env.production` 调用。
 #
-# 内存预算（Hetzner 独立服务器：Ryzen 5 3600 6 核 12 线程、64 GB、RAID1 NVMe，2026-10-13 起）：
+# 内存预算（2026-10-13 起的生产服务器；换机器时按新机器的内存与核数重新分配）：
 # 各服务 mem_limit 合计约 34 GB，给系统、Docker、页缓存留约 30 GB。memswap_limit 等于 mem_limit，即不用 swap：
 # 超过上限就是真的异常（泄漏、超大输入），宁可让容器重启也不拖慢整机。
 #   服务            mem_limit  实测峰值（2026-10-13，macOS 进程 RSS，Linux 容器里会有出入）
@@ -14,7 +14,7 @@
 #   imaging-worker  16g        胸部 CT 分析峰值 3.06 GB；全身分割与更大的体积留足余量
 #   doc-parser      6g         开公式识别后空闲约 1.1 GB；含扫描页 PDF 峰值约 3 GB 以上
 #   caddy           256m       约 30–50 MB
-# CPU：12 线程，影像 6、PDF 解析 4，其余给平台和嵌入服务。
+# CPU：影像 6 线程、PDF 解析 4 线程，其余给平台和嵌入服务。
 
 x-logging: &default-logging
   driver: json-file

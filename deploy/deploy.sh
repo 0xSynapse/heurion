@@ -17,7 +17,7 @@ export HEURION2_IMAGE EMBEDDER_IMAGE IMAGING_WORKER_IMAGE DOC_PARSER_IMAGE
 [ -f .env.production ] || { echo "缺少 $DIR/.env.production" >&2; exit 1; }
 chmod 600 .env.production
 
-# 自动 Swap 检查（小内存机器至少要有 2GB Swap 防 OOM；生产服务器已有 31GB，这一步会跳过）
+# 自动 Swap 检查（小内存机器至少要有 2GB Swap 防 OOM；已有足够 swap 时跳过）
 SWAP_TOTAL_MB=$(free -m 2>/dev/null | awk '/^Swap:/ {print $2}' || echo 0)
 if [ -n "$SWAP_TOTAL_MB" ] && [ "$SWAP_TOTAL_MB" -lt 2048 ]; then
   if [ ! -f /swapfile ] && command -v fallocate >/dev/null 2>&1; then

@@ -64,7 +64,7 @@ uv run pytest                                # 测试；没下载模型时需要
 
 | 环境变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `DOC_PARSER_FORMULA` | `1` | 公式识别；生产 compose 设为 `1`（64 GB 服务器），内存紧的机器设为 `0` |
+| `DOC_PARSER_FORMULA` | `1` | 公式识别；生产 compose 设为 `1`，内存紧的机器设为 `0` |
 | `DOC_PARSER_PAGE_CHUNK` | `0`（不分段） | 每段页数；compose 设为 `2` |
 | `DOC_PARSER_THREADS` | `4`（镜像里 `2`） | CPU 线程数 |
 | `DOC_PARSER_MODELS_DIR` | `data/doc-parser-models` / `/models` | 模型目录 |
@@ -145,5 +145,5 @@ ssh target 'docker load < /opt/heurion2/doc-parser.tar.gz'
 - 行内格式（粗体、斜体、上下标、链接）暂不保留；行内公式随段落以纯文字输出。
 - 公式在平台里没有专用节点，用代码样式段落（`style: 'Code'`）保存 `$$LaTeX$$` 源码。
 - CPU 上每页约 0.5–3 秒；单个请求串行处理（避免并发时内存翻倍）。
-- 内存紧的机器（如 8 GB）上扫描页多的 PDF 峰值会超过 `mem_limit`，要靠 swap（`memswap_limit`），这时会明显变慢；被 OOM 杀掉时容器自动重启，期间平台退回 poppler。生产服务器（64 GB）的上限见 `deploy/docker-compose.yml`。
+- 内存紧的机器（如 8 GB）上扫描页多的 PDF 峰值会超过 `mem_limit`，要靠 swap（`memswap_limit`），这时会明显变慢；被 OOM 杀掉时容器自动重启，期间平台退回 poppler。生产服务器的上限见 `deploy/docker-compose.yml`。
 - OCR 模型在第一次遇到扫描页时才加载（预热 PDF 没有位图），首个扫描页多约 1 秒。
