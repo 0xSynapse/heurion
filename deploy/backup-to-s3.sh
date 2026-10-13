@@ -3,7 +3,8 @@
 #   backup-to-s3.sh daily               数据库在线快照（node:sqlite backup，不直接拷正在写的库）
 #   backup-to-s3.sh weekly              用户工作区（dsh 的文件、图）
 #   backup-to-s3.sh upload-dir <目录> <前缀>   上传一个目录（切换时的 1.0 全量备份）
-# 环境（.env.production）：S3_ENDPOINT、S3_REGION、S3_ACCESS_KEY、S3_SECRET_KEY、S3_BUCKET；保留 BACKUP_RETAIN_DAYS（30）/ BACKUP_RETAIN_WEEKS（8）
+# 环境（.env.production）：S3_ENDPOINT、S3_REGION、S3_ACCESS_KEY、S3_SECRET_KEY、S3_BUCKET；保留 BACKUP_RETAIN_DAYS（7）/ BACKUP_RETAIN_WEEKS（4），
+# 总量上限 BACKUP_MAX_GB（8，留在 Cloudflare R2 免费的 10 GB 以内），超出时从最旧的删，每类至少留 BACKUP_MIN_KEEP（2）份
 set -euo pipefail
 
 # 只从 .env.production 读备份要用的变量（S3_*、BACKUP_*），不整体 source：
@@ -79,13 +80,13 @@ case "$MODE" in
     docker exec heurion2 rm -rf /tmp/hb /tmp/tenants-backup.tar.gz
     rclone copy "$TMP/tenants-$STAMP.tar.gz" "$DEST/tenants/" --s3-no-check-bucket
     echo "✓ 患者库备份：tenants-$STAMP.tar.gz"
-    KEEP="${BACKUP_RETAIN_DAYS:-30}"; PREFIXES="db tenants" ;;
+    KEEP="${BACKUP_RETAIN_DAYS:-7}"; PREFIXES="db tenants" ;;
   weekly)
     # 工作区与数据集（上传的研究数据表）
     docker run --rm -v heurion2_data:/data:ro alpine sh -c 'cd /data && tar czf - platform/workspaces $( [ -d platform/datasets ] && echo platform/datasets )' > "$TMP/workspaces-$STAMP.tar.gz"
     rclone copy "$TMP/workspaces-$STAMP.tar.gz" "$DEST/workspaces/" --s3-no-check-bucket
     echo "✓ 工作区备份：workspaces-$STAMP.tar.gz"
-    KEEP="${BACKUP_RETAIN_WEEKS:-8}"; PREFIXES=workspaces ;;
+    KEEP="${BACKUP_RETAIN_WEEKS:-4}"; PREFIXES=workspaces ;;
   *) echo "usage: $0 daily|weekly|upload-dir <dir> <prefix>"; exit 2 ;;
 esac
 
@@ -94,5 +95,33 @@ for PREFIX in $PREFIXES; do
   rclone lsf "$DEST/$PREFIX/" 2>/dev/null | sort -r | tail -n +$((KEEP + 1)) \
     | while read -r f; do rclone deletefile "$DEST/$PREFIX/$f" 2>/dev/null || true; done || true
 done
+
+# 总量上限：按文件名里的时间戳找全部备份里最旧的一份删掉，直到总量不超过上限；每类至少留 MIN_KEEP 份
+MAX_BYTES=$(( ${BACKUP_MAX_GB:-8} * 1024 * 1024 * 1024 ))
+MIN_KEEP="${BACKUP_MIN_KEEP:-2}"
+total_bytes() { rclone size "$DEST" --json --s3-no-check-bucket 2>/dev/null | sed -n 's/.*"bytes":\([0-9]*\).*/\1/p'; }
+OVER=0
+while :; do
+  TOTAL=$(total_bytes); TOTAL=${TOTAL:-0}
+  [ "$TOTAL" -le "$MAX_BYTES" ] && break
+  OLDEST=""; OLDEST_STAMP=""
+  for PREFIX in db tenants workspaces; do
+    FILES=$(rclone lsf "$DEST/$PREFIX/" 2>/dev/null | sort || true)
+    COUNT=$(printf '%s\n' "$FILES" | grep -c . || true)
+    [ "$COUNT" -gt "$MIN_KEEP" ] || continue
+    F=$(printf '%s\n' "$FILES" | head -1)
+    STAMP=$(printf '%s' "$F" | sed -n 's/^[a-z]*-\([0-9]\{8\}-[0-9]\{6\}\).*/\1/p')
+    if [ -z "$OLDEST_STAMP" ] || [[ "$STAMP" < "$OLDEST_STAMP" ]]; then OLDEST="$PREFIX/$F"; OLDEST_STAMP="$STAMP"; fi
+  done
+  if [ -z "$OLDEST" ]; then OVER=1; break; fi
+  echo "超过 ${BACKUP_MAX_GB:-8} GB 上限（当前 $((TOTAL / 1024 / 1024)) MB）：删除 $OLDEST"
+  rclone deletefile "$DEST/$OLDEST" --s3-no-check-bucket
+done
+echo "备份总量：$(( $(total_bytes || echo 0) / 1024 / 1024 )) MB / 上限 ${BACKUP_MAX_GB:-8} GB"
+if [ "$OVER" -eq 1 ]; then
+  echo "[BACKUP-WARN] 每类只剩 $MIN_KEEP 份仍超过上限，需要调大 BACKUP_MAX_GB 或换付费额度" >&2
+  status warn "over size cap with minimum copies"
+  exit 0
+fi
 status ok "backup $MODE"
 echo "[BACKUP-OK] $MODE"
