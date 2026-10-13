@@ -160,8 +160,8 @@ for k in targets:
   if grep -q '^S3_ACCESS_KEY=' .env.production && grep -q '^S3_BUCKET=.' .env.production; then
     command -v rclone >/dev/null 2>&1 || curl -fsSL https://rclone.org/install.sh | bash
     ( crontab -l 2>/dev/null | grep -v 'heurion2/scripts/backup-to-s3.sh' || true
-      echo "20 2 * * * cd $DIR && set -a && . ./.env.production && set +a && bash $DIR/scripts/backup-to-s3.sh daily >> /var/log/heurion2-backup.log 2>&1"
-      echo "20 3 * * 0 cd $DIR && set -a && . ./.env.production && set +a && bash $DIR/scripts/backup-to-s3.sh weekly >> /var/log/heurion2-backup.log 2>&1"
+      echo "20 2 * * * bash $DIR/scripts/backup-to-s3.sh daily >> /var/log/heurion2-backup.log 2>&1"
+      echo "20 3 * * 0 bash $DIR/scripts/backup-to-s3.sh weekly >> /var/log/heurion2-backup.log 2>&1"
     ) | crontab -
     echo "✓ S3 备份定时任务（每天 02:20 数据库，每周日 03:20 工作区）"
   else

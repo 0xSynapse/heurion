@@ -6,6 +6,17 @@
 # 环境（.env.production）：S3_ENDPOINT、S3_REGION、S3_ACCESS_KEY、S3_SECRET_KEY、S3_BUCKET；保留 BACKUP_RETAIN_DAYS（30）/ BACKUP_RETAIN_WEEKS（8）
 set -euo pipefail
 
+# 只从 .env.production 读备份要用的变量（S3_*、BACKUP_*），不整体 source：
+# 文件里有 `EMAIL_FROM=Heurion <no-reply@heurion.org>` 这类 shell 不能直接执行的行。已经在环境里的变量优先。
+ENV_FILE="${HEURION_ENV_FILE:-/opt/heurion2/.env.production}"
+if [ -f "$ENV_FILE" ]; then
+  while IFS='=' read -r k v; do
+    case "$k" in
+      S3_*|BACKUP_*) [ -n "${!k:-}" ] || export "$k=$v" ;;
+    esac
+  done < "$ENV_FILE"
+fi
+
 STATUS_FILE="${BACKUP_STATUS_FILE:-/opt/heurion2/backup-status.json}"
 status() { printf '{"last_run":"%s","status":"%s","message":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" > "$STATUS_FILE"; }
 
