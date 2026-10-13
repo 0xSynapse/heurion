@@ -620,9 +620,10 @@ export class DeckView {
       if (c.type === 'hard_break') return `<br data-o="${o}">`
       if (c.type === 'citation') return `<sup class="cite" data-o="${o}" data-atom data-cite="${esc(c.attrs!.cite_id)}" contenteditable="false">[${this.numbers.get(c.attrs!.cite_id) ?? '?'}]</sup>`
       const rpr = c.marks?.find(m => m.type === 'rpr')?.attrs?.xml as string | undefined
-      const sz = rpr ? /\ssz="(\d+)"/.exec(rpr)?.[1] : undefined
-      const color = rpr ? /<a:srgbClr val="([0-9A-Fa-f]{6})"/.exec(rpr)?.[1] : undefined
-      const font = rpr ? (/<a:latin typeface="([^"]+)"/.exec(rpr)?.[1] ?? /<a:ea typeface="([^"]+)"/.exec(rpr)?.[1]) : undefined
+      const ts = c.marks?.find(m => m.type === 'text_style')?.attrs as { font_family?: string; font_size?: string; color?: string } | undefined
+      const sz = rpr ? /\ssz="(\d+)"/.exec(rpr)?.[1] : ts?.font_size ? String(Math.round(parseFloat(ts.font_size) * 100)) : undefined
+      const color = rpr ? /<a:srgbClr val="([0-9A-Fa-f]{6})"/.exec(rpr)?.[1] : ts?.color ? ts.color.replace(/^#/, '') : undefined
+      const font = rpr ? (/<a:latin typeface="([^"]+)"/.exec(rpr)?.[1] ?? /<a:ea typeface="([^"]+)"/.exec(rpr)?.[1]) : ts?.font_family
       if (sz && !size) size = Number(sz) / 100
       let html = esc(c.text)
       for (const m of c.marks ?? []) {

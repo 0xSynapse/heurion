@@ -39,8 +39,8 @@ export type PdfItem =
   | { text: string; x: number; y: number; size: number; bold?: boolean }
   | { image: { w: number; h: number; rgb: [number, number, number] }; x: number; y: number; width: number; height: number }
 
-/** 生成 A4（595×842pt）多页 PDF；y 为从页面顶部向下的距离，便于书写。 */
-export function pdf(pages: PdfItem[][]): Uint8Array {
+/** 生成多页 PDF；默认 A4（595×842pt）；y 为从页面顶部向下的距离，便于书写。 */
+export function pdf(pages: PdfItem[][], dim: { w: number; h: number } = { w: 595, h: 842 }): Uint8Array {
   const objs: Array<string | Uint8Array[]> = []
   const add = (o: string | Uint8Array[]) => { objs.push(o); return objs.length }
   const enc = new TextEncoder()
@@ -55,7 +55,7 @@ export function pdf(pages: PdfItem[][]): Uint8Array {
     let content = ''
     for (const it of items) {
       if ('text' in it) {
-        content += `BT /${it.bold ? 'F2' : 'F1'} ${it.size} Tf ${it.x} ${842 - it.y} Td (${esc(it.text)}) Tj ET\n`
+        content += `BT /${it.bold ? 'F2' : 'F1'} ${it.size} Tf ${it.x} ${dim.h - it.y} Td (${esc(it.text)}) Tj ET\n`
       } else {
         const { w, h, rgb } = it.image
         const px = new Uint8Array(w * h * 3)
@@ -66,13 +66,13 @@ export function pdf(pages: PdfItem[][]): Uint8Array {
         const id = add([enc.encode(`<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length ${px.length} >>\nstream\n`), px, enc.encode('\nendstream')])
         const name = `Im${xobjs.length + 1}`
         xobjs.push(`/${name} ${id} 0 R`)
-        content += `q ${it.width} 0 0 ${it.height} ${it.x} ${842 - it.y - it.height} cm /${name} Do Q\n`
+        content += `q ${it.width} 0 0 ${it.height} ${it.x} ${dim.h - it.y - it.height} cm /${name} Do Q\n`
       }
     }
     // 内容流按 WinAnsi 单字节编码（• = 0x95），其余字符按 Latin-1
     const bytes = Uint8Array.from([...content].map(ch => ch === '\u2022' ? 0x95 : ch.charCodeAt(0) & 255))
     const stream = add([enc.encode(`<< /Length ${bytes.length} >>\nstream\n`), bytes, enc.encode('endstream')])
-    kids.push(add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 595 842] /Contents ${stream} 0 R /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> /XObject << ${xobjs.join(' ')} >> >> >>`))
+    kids.push(add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${dim.w} ${dim.h}] /Contents ${stream} 0 R /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> /XObject << ${xobjs.join(' ')} >> >> >>`))
   }
   objs[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`
   objs[pagesObj - 1] = `<< /Type /Pages /Kids [${kids.map(k => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`
@@ -92,4 +92,9 @@ export function pdf(pages: PdfItem[][]): Uint8Array {
   let pos = 0
   for (const c of chunks) { out.set(c, pos); pos += c.length }
   return out
+}
+
+/** 生成 16:9（960×540pt）演示文稿 PDF */
+export function deckPdf(pages: PdfItem[][]): Uint8Array {
+  return pdf(pages, { w: 960, h: 540 })
 }

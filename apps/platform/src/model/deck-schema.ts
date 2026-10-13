@@ -98,6 +98,21 @@ export const deckSchema = new Schema({
     comment: { attrs: { thread: {} }, excludes: '', inclusive: false, toDOM: m => ['mark', { class: 'comment', 'data-thread': m.attrs.thread as string }, 0] },
     /** 原始文字段格式（a:rPr，字号、颜色、字体…），导出时沿用。 */
     rpr: { attrs: { xml: {} }, toDOM: () => ['span', 0] },
+    /** 字体与字号样式（字体名称、字号大小、颜色） */
+    text_style: {
+      attrs: {
+        font_family: { default: null },
+        font_size: { default: null },
+        color: { default: null },
+      },
+      toDOM: mark => {
+        const styles: string[] = []
+        if (mark.attrs.font_family) styles.push(`font-family:${mark.attrs.font_family}`)
+        if (mark.attrs.font_size) styles.push(`font-size:${mark.attrs.font_size}`)
+        if (mark.attrs.color) styles.push(`color:${mark.attrs.color}`)
+        return ['span', { style: styles.join(';') }, 0]
+      },
+    },
   },
 })
 

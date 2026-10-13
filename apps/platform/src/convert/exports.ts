@@ -38,7 +38,8 @@ export function pptxFor(docs: Documents, docId: string) {
   const doc = withoutPending(docs.get(docId))
   const stored = store.getPackage(docId)
   // 平台模板的 deck：按当前模板重新生成底座（版式几何、母版配色跟着模板走）
-  const pkg = !stored || isPlatformPackage(stored) ? pptxTemplate((doc.firstChild?.attrs.theme as string | null) ?? undefined) : stored
+  const isZip = !!(stored && stored.length >= 4 && stored[0] === 0x50 && stored[1] === 0x4B)
+  const pkg = !stored || !isZip || isPlatformPackage(stored) ? pptxTemplate((doc.firstChild?.attrs.theme as string | null) ?? undefined) : stored
   return exportPptx({
     doc,
     baseline: baselineOf(docs, docId),

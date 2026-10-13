@@ -48,8 +48,9 @@ export class OpService {
     let info = this.deckInfo.get(docId)
     if (!info) {
       const pkg = this.docs.store.getPackage(docId)
+      const isZip = !!(pkg && pkg.length >= 4 && pkg[0] === 0x50 && pkg[1] === 0x4B)
       info = !pkg ? { layouts: [], size: { cx: 12192000, cy: 6858000 }, platform: false }
-        : isPlatformPackage(pkg) ? { layouts: templateLayouts(DEFAULT_THEME), size: { cx: 12192000, cy: 6858000 }, platform: true }
+        : !isZip || isPlatformPackage(pkg) ? { layouts: templateLayouts(DEFAULT_THEME), size: { cx: 12192000, cy: 6858000 }, platform: true }
           : { ...readLayouts(pkg), platform: false }
       this.deckInfo.set(docId, info)
     }

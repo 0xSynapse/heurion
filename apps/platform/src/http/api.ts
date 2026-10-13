@@ -879,6 +879,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       return c.json(place(docs.create({ owner: user, title, content })), 201)
     }
     const form = await c.req.parseBody()
+    const project = projectOf(c, typeof form.project_id === 'string' ? form.project_id : null)
+    if (project === false) return c.json({ error: '项目不存在' }, 404)
+    const place = (row: { id: string }) => { if (project) store.setDocProject(row.id, project); return store.getDoc(row.id)! }
     const file = form.file instanceof File ? form.file : null
     if (file && /\.pptx$/i.test(file.name)) {
       try {
@@ -888,7 +891,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         const row = docs.create({ owner: user, title: file.name.replace(/\.pptx$/i, ''), kind: 'deck', content: bindDeckAssets(imported.doc, ids), source: 'import' })
         store.putNodeSrc(row.id, imported.src)
         store.putPackage(row.id, 'pptx', bytes)
-        return c.json({ ...row, warnings: imported.warnings }, 201)
+        return c.json({ ...place(row), warnings: imported.warnings }, 201)
       } catch (err) {
         if (err instanceof PptxImportError) return c.json({ error: err.message }, 400)
         throw err
@@ -899,13 +902,22 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         const bytes = new Uint8Array(await file.arrayBuffer())
         const imported = await importPdf(bytes, file.name, { ocr: deps.pdfOcr, docParser: deps.docParser })
         const ids = new Map(imported.assets.map(a => [a.key, store.putAsset({ owner: user, mime: a.mime, name: a.name, bytes: a.bytes }).id]))
+        if (imported.kind === 'deck') {
+          const boundDoc = bindDeckAssets(imported.doc, ids)
+          const row = docs.create({ owner: user, title: file.name.replace(/\.pdf$/i, ''), kind: 'deck', content: boundDoc, source: 'import' })
+          store.putPackage(row.id, 'pptx', pptxTemplate(DEFAULT_THEME))
+          const warnings = [...imported.warnings]
+          if (imported.doi) warnings.push(`检测到 DOI: ${imported.doi}`)
+          if (imported.pmid) warnings.push(`检测到 PMID: ${imported.pmid}`)
+          return c.json({ ...place(row), warnings, importEngine: imported.engine, ...(imported.fallbackReason ? { importFallbackReason: imported.fallbackReason } : {}) }, 201)
+        }
         const boundDoc = bindAssets(imported.doc, ids)
         const row = docs.create({ owner: user, title: file.name.replace(/\.pdf$/i, ''), content: boundDoc, source: 'import' })
         store.putPackage(row.id, 'pdf', bytes)
         const warnings = [...imported.warnings]
         if (imported.doi) warnings.push(`检测到 DOI: ${imported.doi}`)
         if (imported.pmid) warnings.push(`检测到 PMID: ${imported.pmid}`)
-        return c.json({ ...row, warnings, importEngine: imported.engine, ...(imported.fallbackReason ? { importFallbackReason: imported.fallbackReason } : {}) }, 201)
+        return c.json({ ...place(row), warnings, importEngine: imported.engine, ...(imported.fallbackReason ? { importFallbackReason: imported.fallbackReason } : {}) }, 201)
       } catch (err) {
         if (err instanceof PdfImportError) return c.json({ error: err.message }, 400)
         throw err

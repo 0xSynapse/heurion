@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { DOMParser, type Element as XElement, type Node as XNode } from '@xmldom/xmldom'
-import type { Node as PMNode } from 'prosemirror-model'
+import type { Mark as PMMark, Node as PMNode } from 'prosemirror-model'
 import type { Ocr } from '../kb/ocr.ts'
+import { deckSchema, emu } from '../model/deck-schema.ts'
 import { assignIds } from '../model/ids.ts'
 import { schema } from '../model/schema.ts'
 import { docParserToDoc, type DocParser } from './doc-parser.ts'
@@ -25,6 +26,7 @@ function resolveBinary(name: string): string {
 }
 
 export interface PdfImport {
+  kind: 'doc' | 'deck'
   doc: PMNode
   assets: ImportedAsset[]
   warnings: string[]
@@ -48,6 +50,15 @@ export class PdfImportError extends Error {}
 
 // —— pdftohtml -xml 的版面元素 ——
 
+export interface PdfRun {
+  text: string
+  size: number
+  bold: boolean
+  italic: boolean
+  color?: string
+  family?: string
+}
+
 export interface PdfLine {
   top: number
   left: number
@@ -55,7 +66,11 @@ export interface PdfLine {
   height: number
   size: number
   bold: boolean
+  italic?: boolean
   text: string
+  color?: string
+  family?: string
+  runs?: PdfRun[]
 }
 
 export interface PdfImage {
@@ -79,14 +94,35 @@ export interface PdfPage {
 const DOI_RE = /\b(10\.\d{4,9}\/[^\s"<>,;]+[^\s"<>,;.)\]])/i
 const PMID_RE = /\bPMID:?\s*(\d{6,9})\b/i
 
+/** 快速检测 PDF 是否为横屏演示文稿（宽幅比 > 1.15，例如 16:9 或 4:3 幻灯片） */
+export function isDeckPdf(bytes: Uint8Array): boolean {
+  const s = Buffer.from(bytes.slice(0, Math.min(bytes.length, 65536))).toString('latin1')
+  const matches = [...s.matchAll(/\/MediaBox\s*\[\s*([0-9.-]+)\s+([0-9.-]+)\s+([0-9.-]+)\s+([0-9.-]+)\s*\]/g)]
+  if (matches.length > 0) {
+    let landscape = 0
+    for (const m of matches) {
+      const w = Math.abs(parseFloat(m[3]!) - parseFloat(m[1]!))
+      const h = Math.abs(parseFloat(m[4]!) - parseFloat(m[2]!))
+      if (w > h * 1.15) landscape++
+    }
+    return landscape > matches.length / 2
+  }
+  return false
+}
+
 /**
- * PDF 导入为可编辑文档。主路径是本地 doc-parser 服务（Docling：版面分析、表格结构、公式、扫描页 OCR）；
- * 服务没配置、未就绪（模型未加载 / 预热中）或解析失败时退回 poppler 启发式方案，结果里的 engine 记录用了哪条路径。
+ * PDF 导入为可编辑文档或演示文稿。
+ * 1. 若为横屏演示文稿（16:9 / 4:3），自动导入为幻灯片（kind='deck'），保留 2D 画布坐标、形状、段落与图文排版，完全可就地编辑；
+ * 2. 若为竖版文档，且本地 doc-parser 服务就绪，优先由 Docling 解析为结构化文档；
+ * 3. 服务未配置或未就绪时由 poppler 启发式解析，绝不使用整页截图替代文本。
  */
 export async function importPdf(bytes: Uint8Array, filename: string, opts: PdfImportOptions = {}): Promise<PdfImport> {
   const baseName = filename.replace(/\.pdf$/i, '').trim() || '文档'
   let fallbackReason = '未配置文档解析服务'
-  if (opts.docParser) {
+
+  const fastDeck = isDeckPdf(bytes)
+  // 若确定不是演示文稿且配置了 docParser 服务，优先尝试 Docling 服务
+  if (!fastDeck && opts.docParser) {
     if (!(await opts.docParser.ready())) fallbackReason = '文档解析服务未就绪'
     else {
       try {
@@ -94,28 +130,34 @@ export async function importPdf(bytes: Uint8Array, filename: string, opts: PdfIm
         const built = docParserToDoc(r, baseName)
         const head = built.text.slice(0, 6000)
         return {
-          doc: assignIds(built.doc, new Set()), assets: built.assets, warnings: built.warnings,
-          doi: DOI_RE.exec(head)?.[1] ?? null, pmid: PMID_RE.exec(head)?.[1] ?? null,
-          pageCount: r.page_count, engine: 'docling',
+          kind: 'doc',
+          doc: assignIds(built.doc, new Set()),
+          assets: built.assets,
+          warnings: built.warnings,
+          doi: DOI_RE.exec(head)?.[1] ?? null,
+          pmid: PMID_RE.exec(head)?.[1] ?? null,
+          pageCount: r.page_count,
+          engine: 'docling',
         }
       } catch (err) {
         fallbackReason = `文档解析服务出错：${(err as Error).message.slice(0, 160)}`
       }
     }
   }
+
   const out = await importPdfPoppler(bytes, filename, opts)
-  if (opts.docParser) out.warnings.unshift(`${fallbackReason}，已改用基础解析（版面还原可能不完整）`)
-  return { ...out, fallbackReason }
+  if (out.kind === 'doc' && opts.docParser) {
+    out.warnings.unshift(`${fallbackReason}，已改用基础解析（版面还原可能不完整）`)
+    out.fallbackReason = fallbackReason
+  }
+  return out
 }
 
 /**
  * poppler 兜底方案：
- * 1. pdftohtml -xml 取每行文字的位置、字号、粗细，以及嵌入图片（含位置）；
- * 2. 按字号 / 粗细识别标题层级，按行距与缩进合并段落、去断行连字符，识别列表与按列对齐的表格，
- *    删除各页重复的页眉页脚和页码；
- * 3. 只插入 PDF 里真正的嵌入图片；几乎没有文字层的页视为扫描页：有 OCR 时识别成文字，
- *    没有时退回整页图片，并在文档开头注明。
- * 原始 PDF 由调用方另存为文件包。
+ * 1. pdftohtml -xml 提取每页文字位置、字号、粗细、颜色、图片；
+ * 2. 若横宽比 > 1.15，按幻灯片构建为 deckSchema（可点击拖拽的卡片与文本框、原版颜色与字号）；
+ * 3. 若为竖版文档，按层级解析标题、段落、列表、表格与嵌入图片，杜绝整页截图。
  */
 export async function importPdfPoppler(bytes: Uint8Array, filename: string, opts: PdfImportOptions = {}): Promise<PdfImport> {
   const dir = mkdtempSync(join(tmpdir(), 'heurion-pdf-import-'))
@@ -162,14 +204,28 @@ export async function importPdfPoppler(bytes: Uint8Array, filename: string, opts
       }
     }
 
-    const built = buildPdfDoc(pages, { baseName, ocrText, pageImages })
+    const landscapePages = pages.filter(p => p.width > p.height * 1.15).length
+    const isDeck = pages.length > 0 && landscapePages > pages.length / 2
+
+    const built = isDeck
+      ? buildPdfDeck(pages, { baseName, ocrText, pageImages })
+      : buildPdfDoc(pages, { baseName, ocrText, pageImages })
     warnings.push(...built.warnings)
 
     const head = pages.slice(0, 2).flatMap(p => p.lines.map(l => l.text)).join('\n')
     const doi = DOI_RE.exec(head)?.[1] ?? null
     const pmid = PMID_RE.exec(head)?.[1] ?? null
 
-    return { doc: assignIds(built.doc, new Set()), assets: built.assets, warnings, doi, pmid, pageCount: pages.length, engine: 'poppler' }
+    return {
+      kind: isDeck ? 'deck' : 'doc',
+      doc: assignIds(built.doc, new Set()),
+      assets: built.assets,
+      warnings,
+      doi,
+      pmid,
+      pageCount: pages.length,
+      engine: 'poppler',
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -194,30 +250,110 @@ function allBold(n: XNode, inB = false): boolean {
   return true
 }
 
+function hasItalic(n: XNode): boolean {
+  for (let c = n.firstChild; c; c = c.nextSibling) {
+    if (c.nodeType === 1 && ((c as XElement).tagName === 'i' || (c as XElement).tagName === 'em')) return true
+    if (hasItalic(c)) return true
+  }
+  return false
+}
+
+interface FontMeta {
+  size: number
+  bold: boolean
+  italic: boolean
+  color?: string
+  family?: string
+}
+
 export function parsePdfXml(xml: string, loadImage: (src: string) => { bytes: Uint8Array; mime: string } | null): PdfPage[] {
   const dom = new DOMParser().parseFromString(xml.replace(/<!DOCTYPE[^>]*>/, ''), 'text/xml')
-  const fonts = new Map<string, { size: number; bold: boolean }>()
+  const fonts = new Map<string, FontMeta>()
   const pages: PdfPage[] = []
   const pageEls = dom.getElementsByTagName('page')
   for (let i = 0; i < pageEls.length; i++) {
     const pe = pageEls[i]!
     const page: PdfPage = { number: num(pe, 'number') || i + 1, width: num(pe, 'width'), height: num(pe, 'height'), lines: [], images: [] }
+    const rawItems: Array<{ top: number; left: number; width: number; height: number; size: number; bold: boolean; italic: boolean; color?: string; family?: string; text: string }> = []
+
     for (let c = pe.firstChild; c; c = c.nextSibling) {
       if (c.nodeType !== 1) continue
       const e = c as XElement
       if (e.tagName === 'fontspec') {
-        // fontspec 在整个文件里按 id 全局有效
-        fonts.set(e.getAttribute('id') ?? '', { size: num(e, 'size'), bold: /bold|black|heavy|semibold|demi/i.test(e.getAttribute('family') ?? '') })
+        const fam = e.getAttribute('family') ?? ''
+        const color = e.getAttribute('color') ?? undefined
+        fonts.set(e.getAttribute('id') ?? '', {
+          size: num(e, 'size'),
+          bold: /bold|black|heavy|semibold|demi/i.test(fam),
+          italic: /italic|oblique/i.test(fam),
+          family: fam || undefined,
+          color: color ? color.replace(/^#/, '').toUpperCase() : undefined,
+        })
       } else if (e.tagName === 'text') {
         const text = textOf(e).replace(/[\u0000-\u0008\u000b-\u001f]/g, '').replace(/\s+/g, ' ').trim()
         if (!text) continue
-        const f = fonts.get(e.getAttribute('font') ?? '') ?? { size: num(e, 'height'), bold: false }
-        page.lines.push({ top: num(e, 'top'), left: num(e, 'left'), width: num(e, 'width'), height: num(e, 'height'), size: f.size, bold: f.bold || allBold(e), text })
+        const f = fonts.get(e.getAttribute('font') ?? '') ?? { size: num(e, 'height'), bold: false, italic: false }
+        rawItems.push({
+          top: num(e, 'top'),
+          left: num(e, 'left'),
+          width: num(e, 'width'),
+          height: num(e, 'height'),
+          size: f.size,
+          bold: f.bold || allBold(e),
+          italic: f.italic || hasItalic(e),
+          color: f.color,
+          family: f.family,
+          text,
+        })
       } else if (e.tagName === 'image') {
         const img = loadImage(e.getAttribute('src') ?? '')
         if (img) page.images.push({ top: num(e, 'top'), left: num(e, 'left'), width: num(e, 'width'), height: num(e, 'height'), ...img })
       }
     }
+
+    // 缝合同一水平线上的连续碎片（如 poppler 分割中英文字体）
+    rawItems.sort((a, b) => a.top - b.top || a.left - b.left)
+    const lines: PdfLine[] = []
+    for (const item of rawItems) {
+      const last = lines.at(-1)
+      if (last && Math.abs(last.top - item.top) <= Math.max(3, Math.min(last.height, item.height) * 0.4)
+          && item.left >= last.left - 2 && item.left <= last.left + last.width + Math.max(25, last.size * 2)) {
+        const needsSpace = !/[　-〿㐀-鿿]/.test(last.text.slice(-1)) && !/[　-〿㐀-鿿]/.test(item.text[0] ?? '')
+        last.width = Math.max(last.width, item.left + item.width - last.left)
+        last.height = Math.max(last.height, item.height)
+        last.text = needsSpace ? `${last.text} ${item.text}` : `${last.text}${item.text}`
+        last.runs!.push({
+          text: (needsSpace ? ' ' : '') + item.text,
+          size: item.size,
+          bold: item.bold,
+          italic: item.italic,
+          color: item.color,
+          family: item.family,
+        })
+      } else {
+        lines.push({
+          top: item.top,
+          left: item.left,
+          width: item.width,
+          height: item.height,
+          size: item.size,
+          bold: item.bold,
+          italic: item.italic,
+          color: item.color,
+          family: item.family,
+          text: item.text,
+          runs: [{
+            text: item.text,
+            size: item.size,
+            bold: item.bold,
+            italic: item.italic,
+            color: item.color,
+            family: item.family,
+          }],
+        })
+      }
+    }
+    page.lines = lines
     pages.push(page)
   }
   return pages
@@ -229,7 +365,245 @@ export function isScannedPage(p: PdfPage): boolean {
   return chars < 20
 }
 
-// —— 版面 → 结构化文档 ——
+// —— 演示文稿（Deck）版面还原 ——
+
+export function buildPdfDeck(
+  pages: PdfPage[],
+  ctx: { baseName: string; ocrText?: Map<number, string>; pageImages?: Map<number, Uint8Array> },
+): { doc: PMNode; assets: ImportedAsset[]; warnings: string[] } {
+  const assets: ImportedAsset[] = []
+  const warnings: string[] = []
+  const slides: PMNode[] = []
+  let figN = 0
+  let shapeN = 0
+
+  for (const page of pages) {
+    const pageW = page.width || 960
+    const pageH = page.height || 540
+
+    if (isScannedPage(page)) {
+      const rendered = ctx.pageImages?.get(page.number)
+      const largest = [...page.images].sort((a, b) => b.width * b.height - a.width * a.height)[0]
+      const img = rendered ? { bytes: rendered, mime: 'image/png' } : largest ? { bytes: largest.bytes, mime: largest.mime } : null
+      const ocr = ctx.ocrText?.get(page.number)
+      const shapes: PMNode[] = []
+      if (img) {
+        const key = `pdf_slide_${page.number}`
+        assets.push({ key, name: `${ctx.baseName}_p${page.number}.${img.mime === 'image/jpeg' ? 'jpg' : 'png'}`, mime: img.mime, bytes: img.bytes })
+        shapes.push(deckSchema.node('shape', {
+          id: `sh_${page.number}_scan`,
+          kind: 'image',
+          asset_id: key,
+          x: 0,
+          y: 0,
+          w: emu(pageW),
+          h: emu(pageH),
+        }))
+      }
+      const notes = ocr ? deckSchema.node('notes', null, [deckSchema.node('paragraph', null, [deckSchema.text(ocr)])]) : null
+      const slideContent = notes ? [...shapes, notes] : shapes
+      slides.push(deckSchema.node('slide', { id: `s_${page.number}` }, slideContent))
+      continue
+    }
+
+    const shapes: PMNode[] = []
+
+    // 1. 背景色检测：分析文本颜色，若大部分文字为白色/浅色，则判断该页为暗色主题
+    let lightCharCount = 0
+    let totalCharCount = 0
+    for (const l of page.lines) {
+      const len = l.text.replace(/\s/g, '').length
+      totalCharCount += len
+      if (l.color) {
+        const hex = l.color.replace(/^#/, '')
+        if (hex.length === 6) {
+          const r = parseInt(hex.slice(0, 2), 16)
+          const g = parseInt(hex.slice(2, 4), 16)
+          const b = parseInt(hex.slice(4, 6), 16)
+          if ((r * 0.299 + g * 0.587 + b * 0.114) > 170) lightCharCount += len
+        }
+      }
+    }
+    const isDarkBg = totalCharCount > 0 && lightCharCount / totalCharCount > 0.4
+    const slideBg = isDarkBg ? '0B131E' : null
+
+    // 2. 嵌入图片：背景大图优先作为最底层 shape，其余图片按坐标转为 image shape
+    const validImages = page.images.filter(im => im.width >= 16 && im.height >= 16)
+    const bgImgs: typeof validImages = []
+    const contentImgs: typeof validImages = []
+    for (const im of validImages) {
+      if (im.width >= pageW * 0.75 && im.height >= pageH * 0.75) bgImgs.push(im)
+      else contentImgs.push(im)
+    }
+
+    for (const im of bgImgs) {
+      const key = `pdf_img_${page.number}_${++figN}`
+      assets.push({ key, name: `${ctx.baseName}_img${figN}.${im.mime === 'image/jpeg' ? 'jpg' : 'png'}`, mime: im.mime, bytes: im.bytes })
+      shapes.push(deckSchema.node('shape', {
+        id: `sh_${page.number}_bg_${figN}`,
+        kind: 'image',
+        asset_id: key,
+        x: emu(im.left),
+        y: emu(im.top),
+        w: emu(im.width),
+        h: emu(im.height),
+      }))
+    }
+
+    for (const im of contentImgs) {
+      const key = `pdf_img_${page.number}_${++figN}`
+      assets.push({ key, name: `${ctx.baseName}_img${figN}.${im.mime === 'image/jpeg' ? 'jpg' : 'png'}`, mime: im.mime, bytes: im.bytes })
+      shapes.push(deckSchema.node('shape', {
+        id: `sh_${page.number}_img_${figN}`,
+        kind: 'image',
+        asset_id: key,
+        x: emu(im.left),
+        y: emu(im.top),
+        w: emu(im.width),
+        h: emu(im.height),
+      }))
+    }
+
+    // 3. 文字行聚类成独立文本框 shape
+    const sortedLines = [...page.lines].sort((a, b) => a.top - b.top || a.left - b.left)
+    interface Cluster {
+      lines: PdfLine[]
+      minX: number
+      minY: number
+      maxX: number
+      maxY: number
+    }
+    const clusters: Cluster[] = []
+
+    for (const l of sortedLines) {
+      let matched: Cluster | null = null
+      let bestDist = Infinity
+
+      for (const c of clusters) {
+        const vGap = l.top - c.maxY
+        const maxVGap = Math.min(48, Math.max(l.height, 14) * 2.2)
+        if (vGap < -Math.max(l.height, 10) * 0.5 || vGap > maxVGap) continue
+
+        const clusterW = c.maxX - c.minX
+        const leftDiff = Math.abs(l.left - c.minX)
+        const overlap = Math.min(l.left + l.width, c.maxX) - Math.max(l.left, c.minX)
+
+        const isHorizNear = leftDiff <= Math.max(28, l.size * 1.5) || overlap >= Math.min(l.width, clusterW) * 0.3
+        // 跨列保护：横向差值明显且不重叠时不合并（多栏卡片）
+        if (leftDiff > 60 && overlap <= 0) continue
+
+        // 语义隔离
+        if (l.top > pageH * 0.88 && c.minY < pageH * 0.75) continue
+        if (c.lines.some(cl => cl.size >= 26) && l.size <= 12 && vGap > 20) continue
+
+        if (isHorizNear) {
+          const dist = Math.abs(vGap) + leftDiff * 0.5
+          if (dist < bestDist) {
+            bestDist = dist
+            matched = c
+          }
+        }
+      }
+
+      if (matched) {
+        matched.lines.push(l)
+        matched.minX = Math.min(matched.minX, l.left)
+        matched.minY = Math.min(matched.minY, l.top)
+        matched.maxX = Math.max(matched.maxX, l.left + l.width)
+        matched.maxY = Math.max(matched.maxY, l.top + l.height)
+      } else {
+        clusters.push({
+          lines: [l],
+          minX: l.left,
+          minY: l.top,
+          maxX: l.left + l.width,
+          maxY: l.top + l.height,
+        })
+      }
+    }
+
+    // 4. 将聚类构建为具有可编辑文本段落的 shape 节点
+    for (const c of clusters) {
+      const minX = Math.round(c.minX)
+      const minY = Math.round(c.minY)
+      const w = Math.max(50, Math.round(c.maxX - c.minX + 16))
+      const h = Math.max(20, Math.round(c.maxY - c.minY + 8))
+
+      const paras: PMNode[] = []
+      let curRuns: PdfRun[] = []
+      let prevLine: PdfLine | null = null
+
+      const flushPara = () => {
+        if (!curRuns.length) return
+        const inlines: PMNode[] = []
+        for (const run of curRuns) {
+          if (!run.text) continue
+          const marks: PMMark[] = []
+          if (run.bold) marks.push(deckSchema.marks.bold.create())
+          if (run.italic) marks.push(deckSchema.marks.italic.create())
+          const sz = Math.round((run.size || 14) * 100)
+          const col = run.color ? run.color.replace(/^#/, '').toUpperCase() : null
+          const rprXml = `<a:rPr sz="${sz}"${col ? `><a:solidFill><a:srgbClr val="${col}"/></a:solidFill></a:rPr>` : '/>'}`
+          marks.push(deckSchema.marks.rpr.create({ xml: rprXml }))
+          inlines.push(deckSchema.text(run.text, marks))
+        }
+        if (inlines.length) paras.push(deckSchema.node('paragraph', null, inlines))
+        curRuns = []
+      }
+
+      for (const line of c.lines) {
+        const lineRuns = line.runs && line.runs.length > 0 ? line.runs : [{
+          text: line.text,
+          size: line.size,
+          bold: line.bold,
+          italic: line.italic ?? false,
+          color: line.color,
+          family: line.family,
+        }]
+
+        const isBullet = /^[•·▪◦‣∙●○■□►▸✓–—-]\s+/.test(line.text)
+        const gap = prevLine ? line.top - (prevLine.top + prevLine.height) : 0
+        const isSameFlow = prevLine !== null && !isBullet && gap < Math.max(prevLine.height, line.height) * 0.7 && Math.abs(prevLine.size - line.size) < 2
+
+        if (isSameFlow) {
+          if (curRuns.length > 0) {
+            const last = curRuns[curRuns.length - 1]!
+            const needsSpace = !/[　-〿㐀-鿿]/.test(last.text.slice(-1)) && !/[　-〿㐀-鿿]/.test(lineRuns[0]?.text?.[0] ?? '')
+            if (needsSpace) last.text += ' '
+          }
+          curRuns.push(...lineRuns)
+        } else {
+          flushPara()
+          curRuns.push(...lineRuns)
+        }
+        prevLine = line
+      }
+      flushPara()
+
+      if (!paras.length) continue
+
+      shapes.push(deckSchema.node('shape', {
+        id: `sh_${page.number}_txt_${++shapeN}`,
+        kind: 'text',
+        x: emu(minX),
+        y: emu(minY),
+        w: emu(w),
+        h: emu(h),
+      }, paras))
+    }
+
+    slides.push(deckSchema.node('slide', { id: `s_${page.number}`, bg: slideBg }, shapes))
+  }
+
+  if (!slides.length) {
+    slides.push(deckSchema.node('slide', { id: 's_1' }, []))
+  }
+
+  const doc = deckSchema.node('doc', null, slides)
+  return { doc, assets, warnings }
+}
+
+// —— 竖版文档（Doc）版面还原 ——
 
 type Block =
   | { kind: 'heading'; level: number; text: string; top: number }
@@ -239,23 +613,19 @@ type Block =
   | { kind: 'figure'; key: string; caption: string; top: number }
 
 const BULLET = /^[•·▪◦‣∙●○■□►▸✓–—-]\s+/
-// 「1. 」「1) 」「(1) 」后须有空格（避免把 3.5 mg 当成编号）；「1、」「（1）」可直接接文字
 const ORDERED = /^(?:(\d{1,3})[.)]\s+|(\d{1,3})[、）]\s*|[（(](\d{1,3})[）)]\s*|([a-z])[.)]\s+)(?=\S)/
 const SENTENCE_END = /[.。!！?？:：;；]$/
 const CJK = /[　-〿㐀-鿿＀-￯]/
 
-/** 把下一行接到上一行：去断行连字符，中文之间不加空格 */
 function joinLine(prev: string, next: string): string {
   if (/[A-Za-z]-$/.test(prev) && /^[a-z]/.test(next)) return prev.slice(0, -1) + next
   if (CJK.test(prev.slice(-1)) && CJK.test(next[0] ?? '')) return prev + next
   return `${prev} ${next}`
 }
 
-/** 页眉页脚用的归一化：数字统一替换，便于跨页比对「第 3 页」「Page 3」之类 */
 const normEdge = (t: string) => t.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().toLowerCase()
 const PAGE_NUMBER = /^(?:page\s*)?#(?:\s*(?:of|\/)\s*#)?$|^第\s*#\s*页(?:\s*[,，/]?\s*共\s*#\s*页)?$|^-\s*#\s*-$|^#$/
 
-/** 找出各页重复出现在页面上下边缘的行（页眉、页脚、页码） */
 function edgeLines(pages: PdfPage[]): Set<PdfLine> {
   const drop = new Set<PdfLine>()
   const counts = new Map<string, number>()
@@ -276,7 +646,6 @@ function edgeLines(pages: PdfPage[]): Set<PdfLine> {
   return drop
 }
 
-/** 正文字号：按字符数加权的众数 */
 function bodySize(lines: PdfLine[]): number {
   const w = new Map<number, number>()
   for (const l of lines) w.set(Math.round(l.size), (w.get(Math.round(l.size)) ?? 0) + l.text.length)
@@ -285,7 +654,6 @@ function bodySize(lines: PdfLine[]): number {
   return best || 12
 }
 
-/** 同一行（top 相近）的连续元素归成一组；表格识别按组进行 */
 function rowsOf(lines: PdfLine[]): PdfLine[][] {
   const rows: PdfLine[][] = []
   for (const l of lines) {
@@ -297,7 +665,6 @@ function rowsOf(lines: PdfLine[]): PdfLine[][] {
   return rows
 }
 
-/** 把一段连续的多单元格行转成表格：按各单元格左边界聚成列 */
 function tableOf(rows: PdfLine[][]): { rows: string[][]; header: boolean } | null {
   const lefts = rows.flat().map(l => l.left).sort((a, b) => a - b)
   const cols: number[] = []
@@ -312,7 +679,6 @@ function tableOf(rows: PdfLine[][]): { rows: string[][]; header: boolean } | nul
     }
     return cells
   })
-  // 大多数行要填满至少一半的列，否则更像是错位的正文
   const filled = out.filter(r => r.filter(Boolean).length >= Math.ceil(cols.length / 2)).length
   if (filled < out.length * 0.7) return null
   return { rows: out, header: rows[0]!.every(l => l.bold) }
@@ -329,9 +695,8 @@ export function buildPdfDoc(
   const textLines = pages.filter(p => !isScannedPage(p)).flatMap(p => p.lines.filter(l => !drop.has(l)))
   const body = bodySize(textLines)
 
-  // 标题候选：字号明显大于正文，或与正文同号但整行加粗的短行
   const isHeadingLine = (l: PdfLine) => {
-    if (l.text.length > 120 || SENTENCE_END.test(l.text) && !/^\d+(\.\d+)*\.?\s/.test(l.text)) return false
+    if (l.text.length > 120 || (SENTENCE_END.test(l.text) && !/^\d+(\.\d+)*\.?\s/.test(l.text))) return false
     if (l.size >= body * 1.15) return true
     return l.bold && l.size >= body * 0.95 && l.text.length <= 80 && !BULLET.test(l.text)
   }
@@ -371,7 +736,6 @@ export function buildPdfDoc(
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]!
-      // 表格：连续 ≥2 行，每行 ≥2 个分离的单元格
       if (row.length >= 2) {
         let j = i
         while (j < rows.length && rows[j]!.length >= 2) j++
@@ -392,7 +756,6 @@ export function buildPdfDoc(
 
         if (isHeadingLine(l)) {
           const c = cur as Block | null
-          // 换行的长标题：同字号、紧挨着的上一行也是标题时接上
           if (c?.kind === 'heading' && sameFlow && prev && isHeadingLine(prev)) { c.text = joinLine(c.text, l.text) }
           else { flush(); cur = { kind: 'heading', level: levelOf(l), text: l.text, top: l.top } }
           prev = l
@@ -417,10 +780,8 @@ export function buildPdfDoc(
 
         const c = cur as Block | null
         if (c?.kind === 'list' && sameFlow && prev && l.left > prev.left - 2 && !SENTENCE_END.test(c.items.at(-1)!)) {
-          // 列表项的续行（比列表符号缩进）
           c.items[c.items.length - 1] = joinLine(c.items.at(-1)!, l.text)
         } else if (c?.kind === 'paragraph' && sameFlow && prev && !(SENTENCE_END.test(prev.text) && (l.left > prev.left + l.size * 1.2 || prev.width < l.width * 0.6))) {
-          // 同段续行；上一行以句末标点结束且本行首行缩进 / 上一行明显较短时另起一段
           c.text = joinLine(c.text, l.text)
         } else {
           flush()
@@ -431,7 +792,6 @@ export function buildPdfDoc(
     }
     flush()
 
-    // 嵌入图片：过滤装饰性小图，按纵向位置插到最近的文字块前；紧随其后的「图 N / Figure N」段落作为题注
     const imgs = page.images.filter(im => im.width >= 32 && im.height >= 32).sort((a, b) => a.top - b.top)
     for (const im of imgs) {
       const key = `pdf_img_${page.number}_${++figN}`
@@ -449,7 +809,6 @@ export function buildPdfDoc(
     blocks.push(...pageBlocks)
   }
 
-  // 跨页续段：上一页最后一段没以句末标点结束、下一页第一块是段落时合并
   const merged: Block[] = []
   for (const b of blocks) {
     const last = merged.at(-1)

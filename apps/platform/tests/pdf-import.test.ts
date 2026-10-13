@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Node as PMNode } from 'prosemirror-model'
 import { describe, expect, it } from 'vitest'
-import { buildPdfDoc, importPdf, type PdfLine, type PdfPage } from '../src/convert/pdf-import.ts'
-import { pdf, type PdfItem } from './fixtures.ts'
+import { buildPdfDeck, buildPdfDoc, importPdf, type PdfLine, type PdfPage } from '../src/convert/pdf-import.ts'
+import { deckPdf, pdf, type PdfItem } from './fixtures.ts'
 
 /** 本机或容器里是否有 poppler 的 pdftohtml（集成测试依赖它） */
 const hasPoppler = (() => {
@@ -149,6 +149,84 @@ describe.skipIf(!hasPoppler)('PDF 导入为可编辑文档（poppler）', () => 
     expect(types(doc)).toContain('bullet_list')
     expect(types(doc).filter(t => t === 'figure').length).toBe(2)
     expect(store.getPackage(row.id)?.length).toBe(samplePdf().length)
+  })
+
+  it('横版演示文稿 PDF 自动识别为幻灯片（kind=deck）：生成独立 shape 形状与 EMU 坐标，支持编辑', async () => {
+    const deckBytes = deckPdf([
+      [
+        { text: 'HEURION 2.0 ROADMAP', x: 80, y: 50, size: 24, bold: true },
+        { text: 'Continuously evolving infrastructure for clinical research', x: 80, y: 85, size: 14 },
+        { text: 'Live - Data and cohorts', x: 80, y: 180, size: 12, bold: true },
+        { text: 'Lab report OCR and PHR.', x: 80, y: 200, size: 10 },
+        { text: 'Live - 3D imaging', x: 340, y: 180, size: 12, bold: true },
+        { text: 'MONAI and PyTorch.', x: 340, y: 200, size: 10 },
+        { text: 'Milestone - Evidence', x: 600, y: 180, size: 12, bold: true },
+        { text: 'Table 1 in Word.', x: 600, y: 200, size: 10 },
+        { text: 'Try it at heurion.org', x: 80, y: 480, size: 10 },
+      ],
+    ])
+    const r = await importPdf(deckBytes, '路线图.pdf')
+    expect(r.kind).toBe('deck')
+    expect(r.pageCount).toBe(1)
+    expect(r.doc.childCount).toBe(1)
+    const slide = r.doc.child(0)
+    expect(slide.type.name).toBe('slide')
+
+    // 形状数量：标题、副标题/正文、3 个横向卡片、页脚；各卡片独立成 shape
+    const shapes: PMNode[] = []
+    slide.forEach(n => { if (n.type.name === 'shape') shapes.push(n) })
+    expect(shapes.length).toBeGreaterThanOrEqual(4)
+    expect(shapes.every(s => s.attrs.kind === 'text')).toBe(true)
+
+    // EMU 坐标已换算
+    expect(shapes[0]!.attrs.x).toBeGreaterThan(0)
+    expect(shapes[0]!.attrs.y).toBeGreaterThan(0)
+
+    // 卡片之间保持分离，未被错误合并成一个大段落
+    const texts = shapes.map(s => s.textContent)
+    expect(texts.some(t => t.includes('Data and cohorts'))).toBe(true)
+    expect(texts.some(t => t.includes('3D imaging'))).toBe(true)
+    expect(texts.some(t => t.includes('Evidence'))).toBe(true)
+    const cardData = shapes.find(s => s.textContent.includes('Data and cohorts'))!
+    expect(cardData.textContent).not.toContain('3D imaging')
+  })
+
+  it('HTTP 上传演示文稿 PDF：自动创建 kind=deck，支持画布交互与幻灯片底座', async () => {
+    const { Store } = await import('../src/store/db.ts')
+    const { Documents } = await import('../src/model/runtime.ts')
+    const { OpService } = await import('../src/ops/service.ts')
+    const { PostCheck } = await import('../src/collab/postcheck.ts')
+    const { SlideRenderer } = await import('../src/render/slides.ts')
+    const { Accounts } = await import('../src/auth/accounts.ts')
+    const { issueToken } = await import('../src/auth/token.ts')
+    const { buildApi } = await import('../src/http/api.ts')
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const user = store.createUser({ username: 'deck_u', display_name: 'U', password_hash: 'x' })
+    const app = buildApi({
+      docs, ops: new OpService(docs), turns: {} as any, postcheck: new PostCheck(docs), crossref: {} as any,
+      renderer: new SlideRenderer(mkdtempSync(join(tmpdir(), 'deck-render-'))),
+      accounts: new Accounts(store, { secret: 'test-secret', devMode: true, devToken: 'dev', devUser: user.id }),
+      devMode: true, devUser: user.id,
+    })
+    const token = `Bearer ${issueToken('test-secret', { u: user.id, d: '*', p: ['read', 'write'], aud: 'web', ttlSeconds: 3600, v: user.token_version })}`
+
+    const deckBytes = deckPdf([
+      [
+        { text: 'SLIDE 1 TITLE', x: 80, y: 50, size: 24, bold: true },
+        { text: 'Bullet point 1', x: 80, y: 150, size: 14 },
+      ],
+    ])
+    const form = new FormData()
+    form.append('file', new File([deckBytes as Uint8Array<ArrayBuffer>], '汇报.pdf', { type: 'application/pdf' }))
+    const res = await app.request('/api/docs', { method: 'POST', headers: { Authorization: token }, body: form })
+    expect(res.status).toBe(201)
+    const row = await res.json() as { id: string; title: string; kind: string }
+    expect(row.title).toBe('汇报')
+    expect(row.kind).toBe('deck')
+    const doc = docs.get(row.id)
+    expect(doc.child(0).type.name).toBe('slide')
+    expect(store.getPackage(row.id)).not.toBeNull()
   })
 })
 
