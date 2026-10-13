@@ -6,6 +6,7 @@ name: Deploy Staging
 #   - 镜像只打 commit sha 标签，不移动 latest；
 #   - 独立的 HEURION_SECRET（STAGING_HEURION_SECRET），数据与生产完全隔离；
 #   - 不配 S3：预发不做备份，也不会写进生产的备份目录；
+#   - 默认不发邮件（只读 STAGING_RESEND_API_KEY，不设时平台发信直接报错）；
 #   - 不清 Cloudflare 缓存（预发域名不走 Cloudflare 代理）。
 # 预发服务器以后要转为生产时，先 `docker compose -p heurion2 down -v` 清掉预发的卷，再恢复生产数据。
 on:
@@ -115,7 +116,8 @@ jobs:
         env:
           HEURION_SECRET: ${{ secrets.STAGING_HEURION_SECRET }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          # 预发可能载有生产数据的副本：默认不配发信（STAGING_RESEND_API_KEY 不设），避免真实用户收到预发发出的邮件
+          RESEND_API_KEY: ${{ secrets.STAGING_RESEND_API_KEY }}
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
         run: |
           for v in HEURION_SECRET DEEPSEEK_API_KEY; do
