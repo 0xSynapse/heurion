@@ -627,6 +627,8 @@ async function open(docId: string): Promise<void> {
   hideTurnBanner()
   turnUi = null
   $('chatLog').innerHTML = ''
+  renderSubagentWelcome()
+  renderDeliverables()
   $('page').innerHTML = ''
   $('page').className = 'page'
   const meta = await api(`/api/docs/${docId}`)
@@ -1237,6 +1239,7 @@ function lightMarkdown(text: string): string {
 }
 
 function addMsg(role: 'user' | 'assistant', text: string, revertTurn: string | null = null): HTMLElement {
+  $('chatSubagentWelcome')?.remove()
   const div = document.createElement('div')
   div.className = `msg ${role}`
   if (role === 'assistant') {
@@ -1440,6 +1443,177 @@ $('turnBanner').onclick = async e => {
   }
 }
 
+interface DeliverableItem {
+  id: string
+  role: string
+  role_label: string
+  summary: string
+  output?: any
+  time: string
+}
+let activeSubagentTask: { role: string; role_label: string; task: string } | null = null
+const docDeliverables = new Map<string, DeliverableItem[]>()
+
+const SUBAGENT_PROMPTS: Record<string, string> = {
+  lit: '委派文献证据专家检索关于当前文档主题的最新权威 RCT 文献，提取核心临床结论并注册引注标记。',
+  table1: '委派生信统计专家分析当前数据集，按主要分组变量生成符合 NEJM/Lancet 出版标准的 Table 1 基线特征表。',
+  survival: '委派生信统计专家对当前临床队列进行 Kaplan-Meier 生存分析，输出中位生存时间与 Log-rank 显著性检验。',
+  audit: '委派质控核查专家全面核验当前正文所有医学论断与引用文献的一致性，核查数字真实性并执行 PHI 敏感数据脱敏排查。',
+}
+
+function roleMeta(role: string): { label: string; badgeClass: string; icon: string } {
+  if (role === 'literature_researcher') return { label: '文献证据专家', badgeClass: 'lit', icon: '📚' }
+  if (role === 'biostatistician') return { label: '生信统计专家', badgeClass: 'stat', icon: '📊' }
+  if (role === 'fact_checker') return { label: '质控核查专家', badgeClass: 'fc', icon: '🛡️' }
+  return { label: role, badgeClass: 'lit', icon: '🤖' }
+}
+
+function updateRosterStatus(role: string, status: 'ready' | 'running'): void {
+  const map: Record<string, string> = {
+    literature_researcher: 'rosterStatusLit',
+    biostatistician: 'rosterStatusStat',
+    fact_checker: 'rosterStatusFc',
+  }
+  const id = map[role]
+  if (!id) return
+  const el = document.getElementById(id)
+  if (!el) return
+  if (status === 'running') {
+    el.className = 'rc-status running'
+    el.textContent = '● 协同执行中…'
+  } else {
+    el.className = 'rc-status ready'
+    el.textContent = '● 随时待命'
+  }
+}
+
+function resetAllRosterStatuses(): void {
+  updateRosterStatus('literature_researcher', 'ready')
+  updateRosterStatus('biostatistician', 'ready')
+  updateRosterStatus('fact_checker', 'ready')
+}
+
+function getDeliverables(docId: string): DeliverableItem[] {
+  let list = docDeliverables.get(docId)
+  if (!list) {
+    try {
+      const saved = localStorage.getItem(`heurion.deliverables.${docId}`)
+      if (saved) {
+        list = JSON.parse(saved)
+        docDeliverables.set(docId, list!)
+      }
+    } catch {}
+  }
+  return list ?? []
+}
+
+function saveDeliverables(docId: string, list: DeliverableItem[]): void {
+  docDeliverables.set(docId, list)
+  try {
+    localStorage.setItem(`heurion.deliverables.${docId}`, JSON.stringify(list.slice(0, 50)))
+  } catch {}
+}
+
+function recordDeliverable(ev: { id: string; role: string; role_label?: string; summary: string; output?: any }): void {
+  const docId = session?.docId
+  if (!docId) return
+  const list = [...getDeliverables(docId)]
+  if (list.some(d => d.id === ev.id)) return
+  const meta = roleMeta(ev.role)
+  list.unshift({
+    id: ev.id,
+    role: ev.role,
+    role_label: ev.role_label || meta.label,
+    summary: ev.summary,
+    output: ev.output,
+    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  })
+  saveDeliverables(docId, list)
+  renderDeliverables()
+}
+
+function renderDeliverables(): void {
+  const docId = session?.docId
+  const list = docId ? getDeliverables(docId) : []
+  const badge = $('subagentBadge')
+  if (badge) {
+    badge.hidden = list.length === 0
+    badge.textContent = String(list.length)
+  }
+  const container = $('subagentDeliverablesList')
+  if (!container) return
+  if (list.length === 0) {
+    container.innerHTML = '<div class="empty-hint">当前文档暂无专家交付成果。可在下方快捷操作或专家协同面板中发起。</div>'
+    return
+  }
+  container.innerHTML = list.map(item => {
+    const meta = roleMeta(item.role)
+    let extraPreview = ''
+    if (item.output) {
+      if (item.role === 'literature_researcher' && Array.isArray(item.output.citations) && item.output.citations.length > 0) {
+        extraPreview = `<div class="deliverable-snippet">${item.output.citations.length} 篇引用文献已提炼并登记</div>`
+      } else if (item.role === 'biostatistician' && item.output.sample_size) {
+        extraPreview = `<div class="deliverable-snippet">样本量 N = ${item.output.sample_size} · ${item.output.analysis_type === 'survival' ? 'KM 生存分析' : 'Table 1 基线表'}</div>`
+      } else if (item.role === 'fact_checker' && item.output.verdict) {
+        const v = item.output.verdict
+        const vText = v === 'pass' ? '✓ 核验全部通过' : v === 'warning' ? '⚠️ 存在存疑或轻微出入' : '❌ 发现未支持的论断'
+        extraPreview = `<div class="deliverable-snippet ${v === 'pass' ? 'ok' : 'warn'}">${vText}（核验 ${item.output.total_claims_audited ?? 0} 条论断）</div>`
+      }
+    }
+    return `
+      <div class="deliverable-card card-${meta.badgeClass}">
+        <div class="deliv-head">
+          <span class="rc-badge ${meta.badgeClass}">${meta.icon} ${esc(meta.label)}</span>
+          <span class="deliv-time">${esc(item.time)}</span>
+        </div>
+        <div class="deliv-summary">${esc(item.summary)}</div>
+        ${extraPreview}
+      </div>
+    `
+  }).join('')
+}
+
+function renderSubagentWelcome(): void {
+  const chatLog = $('chatLog')
+  if (!chatLog || chatLog.querySelector('.msg') || $('chatSubagentWelcome')) return
+  const welcome = document.createElement('div')
+  welcome.id = 'chatSubagentWelcome'
+  welcome.className = 'chat-subagent-welcome'
+  welcome.innerHTML = `
+    <div class="welcome-header">
+      <div class="welcome-title"><span class="welcome-pulse"></span>临床专家智能体协同网络 (Subagents) 已就绪</div>
+      <div class="welcome-subtitle">由主写作者 (Lead Writer) 调度多位医学专家深度协同。点击下方卡片或输入框上方快捷指令，即刻分工协作：</div>
+    </div>
+    <div class="welcome-grid">
+      <div class="welcome-card" data-subagent-act="lit">
+        <div class="wc-header">
+          <span class="wc-badge lit">文献证据</span>
+          <span class="wc-action">委派 →</span>
+        </div>
+        <div class="wc-name">📚 文献证据专家</div>
+        <div class="wc-desc">检索 PubMed/OpenAlex，提炼核心结论并注册标准 AMA 引用</div>
+      </div>
+      <div class="welcome-card" data-subagent-act="table1">
+        <div class="wc-header">
+          <span class="wc-badge stat">生信统计</span>
+          <span class="wc-action">委派 →</span>
+        </div>
+        <div class="wc-name">📊 Table 1 基线表</div>
+        <div class="wc-desc">自动分析数据集，生成顶级期刊规范的三线基线特征表</div>
+      </div>
+      <div class="welcome-card" data-subagent-act="audit">
+        <div class="wc-header">
+          <span class="wc-badge fc">对抗质控</span>
+          <span class="wc-action">核验 →</span>
+        </div>
+        <div class="wc-name">🛡️ 质控核查专家</div>
+        <div class="wc-desc">严格审查医学论断证据吻合度、数字真实性与 PHI 敏感隐私</div>
+      </div>
+    </div>
+  `
+  chatLog.appendChild(welcome)
+}
+
 interface SubagentCardState {
   card: HTMLElement
   stepsList: HTMLElement
@@ -1480,6 +1654,9 @@ function formatMarkdownTableHtml(md: string): string {
 }
 
 function renderSubagentStart(ev: { id: string; role: string; role_label: string; task: string }): void {
+  activeSubagentTask = { role: ev.role, role_label: ev.role_label || ev.role, task: ev.task }
+  updateRosterStatus(ev.role, 'running')
+  renderQueue()
   if (turnUi) {
     turnUi.count++
     turnUi.subagents++
@@ -1537,6 +1714,11 @@ function renderSubagentStep(ev: { id: string; role: string; step: string; status
 }
 
 function renderSubagentDone(ev: { id: string; role: string; summary: string; output?: any }): void {
+  activeSubagentTask = null
+  updateRosterStatus(ev.role, 'ready')
+  renderQueue()
+  recordDeliverable(ev)
+
   const state = subagentCards.get(ev.id)
   if (!state) {
     addStep(`  ✓ [${ev.role}] ${ev.summary}`, 'ok')
@@ -1642,6 +1824,8 @@ function renderTurnEvent(ev: any): void {
   switch (ev.type) {
     case 'queued': addStep(`排队中（第 ${ev.position} 位）：${displayMessage(ev.message).slice(0, 40)}`); void loadQueue(); break
     case 'turn':
+      activeSubagentTask = null
+      resetAllRosterStatuses()
       subagentCards.clear()
       void loadQueue()
       lastAssistant = null
@@ -1683,6 +1867,8 @@ function renderTurnEvent(ev: any): void {
       break
     }
     case 'turn_done':
+      activeSubagentTask = null
+      resetAllRosterStatuses()
       setBusy(false)
       void loadQueue()
       finishTurnUi(ev.status)
@@ -1989,12 +2175,14 @@ function renderQueue(): void {
   $('queueSummary').textContent = items.length === 0 ? '空闲' : `${runningCount > 0 ? `${runningCount} 个执行中` : ''}${runningCount > 0 && queue.queued.length ? '，' : ''}${queue.queued.length ? `${queue.queued.length} 个排队` : ''}`
   $('queueList').innerHTML = items.map(q => {
     const queuePos = q.running ? '执行中' : `第 ${queue.queued.findIndex(x => x.id === q.id) + 1} 位`
+    const isCurrentDocActive = q.running && q.doc_id === session?.docId && activeSubagentTask
     return `
     <li class="${q.running ? 'running' : ''}">
       <div class="queue-main">
         <span class="queue-state">${queuePos}</span>
         <span class="queue-doc${q.doc_id === session?.docId ? ' here' : ''}" data-open="${esc(q.doc_id)}" title="打开这份文档">《${esc(q.doc_title)}》</span>
         ${q.suggest ? '<span class="queue-tag">修订</span>' : ''}
+        ${isCurrentDocActive ? `<div class="queue-subagent-tag"><span class="subagent-pulse"></span>协同中：${esc(activeSubagentTask!.role_label)}</div>` : ''}
         <div class="queue-label" title="${esc(q.label)}">${esc(q.label)}</div>
         <div class="muted">${q.running ? '已运行' : '已等待'} ${elapsed(q.since)}</div>
       </div>
@@ -2411,6 +2599,20 @@ document.querySelector<HTMLElement>('.tabs')!.onclick = e => {
   const tab = (e.target as HTMLElement).closest('button')?.dataset.tab
   if (tab) switchTab(tab)
 }
+
+document.addEventListener('click', e => {
+  const target = (e.target as HTMLElement).closest('[data-subagent-act]') as HTMLElement | null
+  if (!target) return
+  const act = target.dataset.subagentAct
+  if (!act || !SUBAGENT_PROMPTS[act]) return
+  switchTab('chatPane')
+  const input = $<HTMLTextAreaElement>('chatInput')
+  if (input) {
+    input.value = SUBAGENT_PROMPTS[act]
+    input.focus()
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+})
 
 $('exportBtn').onclick = e => {
   e.stopPropagation()
