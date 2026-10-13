@@ -299,13 +299,6 @@
           <span class="grow"></span>
           <label class="toggle-sm" title="这一轮不使用、也不新增记忆"><input type="checkbox" id="noMemory"> 不用记忆</label>
         </div>
-        <div class="composer-subagent-bar">
-          <span class="subagent-bar-label">委派专家：</span>
-          <button type="button" class="subagent-chip chip-lit" data-subagent-act="lit" title="委派文献专家检索 PubMed / OpenAlex 并登记正规引用">文献检索</button>
-          <button type="button" class="subagent-chip chip-stat" data-subagent-act="table1" title="委派生信统计专家分析数据集，生成出版级 Table 1 基线表">Table 1 基线表</button>
-          <button type="button" class="subagent-chip chip-stat" data-subagent-act="survival" title="委派生信统计专家计算 Kaplan-Meier 生存率与 Log-rank 检验">KM 生存分析</button>
-          <button type="button" class="subagent-chip chip-fc" data-subagent-act="audit" title="委派质控核查专家核验全文论断真实性并排查 PHI 隐私">质控核查全篇</button>
-        </div>
         <div class="kb-picked" id="kbPicked" hidden></div>
         <div class="kb-picked" id="dsPicked" hidden></div>
         <div class="kb-picked" id="ptPicked" hidden></div>
@@ -327,7 +320,7 @@
     <div class="tabpane" id="subagentPane">
       <div class="subagent-hub-header">
         <div class="subagent-hub-title">临床医学专家协同智能体 (Subagents)</div>
-        <div class="subagent-hub-desc">由 Lead Writer 调度三位专家协同作业：双翼输入 + 对抗质控</div>
+        <div class="subagent-hub-desc">由 Master Agent 主脑按需自动调度协同：双翼循证/统计输入 + 背靠背对抗质控</div>
       </div>
       <div class="subagent-roster" id="subagentRoster">
         <div class="roster-card card-lit">
@@ -337,7 +330,7 @@
           </div>
           <div class="rc-desc">深度检索 PubMed / OpenAlex 提取权威 RCT 证据与关键效应量（HR/OR/P值），自动注册标准 AMA 引用。</div>
           <div class="rc-actions">
-            <button type="button" class="small-btn quiet rc-btn" data-subagent-act="lit">委派文献检索 →</button>
+            <span class="rc-auto-tag">主脑自动调度</span>
           </div>
         </div>
         <div class="roster-card card-stat">
@@ -347,8 +340,7 @@
           </div>
           <div class="rc-desc">深度分析临床数据集，输出顶级医学期刊规范的 Table 1 基线特征三线表或 Kaplan-Meier 累积生存率与 Log-rank 检验。</div>
           <div class="rc-actions">
-            <button type="button" class="small-btn quiet rc-btn" data-subagent-act="table1">生成 Table 1 →</button>
-            <button type="button" class="small-btn quiet rc-btn" data-subagent-act="survival">拟合 KM 曲线 →</button>
+            <span class="rc-auto-tag">主脑自动调度</span>
           </div>
         </div>
         <div class="roster-card card-fc">
@@ -358,14 +350,14 @@
           </div>
           <div class="rc-desc">扮演批判性审稿人，对抗式核查正文数字出处真实性、文献吻合度与排查 PHI 个人敏感隐私泄漏。</div>
           <div class="rc-actions">
-            <button type="button" class="small-btn quiet rc-btn" data-subagent-act="audit">一键质控全篇 →</button>
+            <span class="rc-auto-tag">主脑自动调度</span>
           </div>
         </div>
       </div>
       <div class="subagent-deliverables-section">
         <div class="deliverables-title">本篇文档专家成果交付记录</div>
         <div class="deliverables-list" id="subagentDeliverablesList">
-          <div class="empty-hint">当前文档暂无专家交付成果。可在对话中委派专家或点击上方卡片一键发起。</div>
+          <div class="empty-hint">当前文档暂无专家交付成果。在对话中向 Heurion 提出研究写作需求时，主脑将自动激活对应专家协同。</div>
         </div>
       </div>
     </div>

@@ -1454,13 +1454,6 @@ interface DeliverableItem {
 let activeSubagentTask: { role: string; role_label: string; task: string } | null = null
 const docDeliverables = new Map<string, DeliverableItem[]>()
 
-const SUBAGENT_PROMPTS: Record<string, string> = {
-  lit: '委派文献证据专家检索关于当前文档主题的最新权威 RCT 文献，提取核心临床结论并注册引注标记。',
-  table1: '委派生信统计专家分析当前数据集，按主要分组变量生成符合 NEJM/Lancet 出版标准的 Table 1 基线特征表。',
-  survival: '委派生信统计专家对当前临床队列进行 Kaplan-Meier 生存分析，输出中位生存时间与 Log-rank 显著性检验。',
-  audit: '委派质控核查专家全面核验当前正文所有医学论断与引用文献的一致性，核查数字真实性并执行 PHI 敏感数据脱敏排查。',
-}
-
 function roleMeta(role: string): { label: string; badgeClass: string } {
   if (role === 'literature_researcher') return { label: '文献证据专家', badgeClass: 'lit' }
   if (role === 'biostatistician') return { label: '生信统计专家', badgeClass: 'stat' }
@@ -1582,29 +1575,29 @@ function renderSubagentWelcome(): void {
   welcome.innerHTML = `
     <div class="welcome-header">
       <div class="welcome-title"><span class="welcome-pulse"></span>临床专家智能体协同网络 (Subagents) 已就绪</div>
-      <div class="welcome-subtitle">由主写作者 (Lead Writer) 调度多位医学专家深度协同。点击下方卡片或输入框上方快捷指令，即刻分工协作：</div>
+      <div class="welcome-subtitle">由主写作者 (Master Agent) 自动识别临床意图并自主调度专家协同。直接向 Heurion 提出您的写作与科研需求即可：</div>
     </div>
     <div class="welcome-grid">
-      <div class="welcome-card" data-subagent-act="lit">
+      <div class="welcome-card">
         <div class="wc-header">
           <span class="wc-badge lit">文献证据</span>
-          <span class="wc-action">委派 →</span>
+          <span class="wc-action">自动调度</span>
         </div>
         <div class="wc-name">文献证据专家</div>
         <div class="wc-desc">检索 PubMed/OpenAlex，提炼核心结论并注册标准 AMA 引用</div>
       </div>
-      <div class="welcome-card" data-subagent-act="table1">
+      <div class="welcome-card">
         <div class="wc-header">
           <span class="wc-badge stat">生信统计</span>
-          <span class="wc-action">委派 →</span>
+          <span class="wc-action">自动调度</span>
         </div>
         <div class="wc-name">Table 1 基线表</div>
         <div class="wc-desc">自动分析数据集，生成顶级期刊规范的三线基线特征表</div>
       </div>
-      <div class="welcome-card" data-subagent-act="audit">
+      <div class="welcome-card">
         <div class="wc-header">
           <span class="wc-badge fc">对抗质控</span>
-          <span class="wc-action">核验 →</span>
+          <span class="wc-action">自动调度</span>
         </div>
         <div class="wc-name">质控核查专家</div>
         <div class="wc-desc">严格审查医学论断证据吻合度、数字真实性与 PHI 敏感隐私</div>
@@ -2599,20 +2592,6 @@ document.querySelector<HTMLElement>('.tabs')!.onclick = e => {
   const tab = (e.target as HTMLElement).closest('button')?.dataset.tab
   if (tab) switchTab(tab)
 }
-
-document.addEventListener('click', e => {
-  const target = (e.target as HTMLElement).closest('[data-subagent-act]') as HTMLElement | null
-  if (!target) return
-  const act = target.dataset.subagentAct
-  if (!act || !SUBAGENT_PROMPTS[act]) return
-  switchTab('chatPane')
-  const input = $<HTMLTextAreaElement>('chatInput')
-  if (input) {
-    input.value = SUBAGENT_PROMPTS[act]
-    input.focus()
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  }
-})
 
 $('exportBtn').onclick = e => {
   e.stopPropagation()
