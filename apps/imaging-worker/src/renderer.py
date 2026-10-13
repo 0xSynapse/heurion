@@ -18,11 +18,12 @@ def render_key_slice_png(
     lesion_name: str = "Target Lesion",
     scale_bar_mm: float = 50.0, # 5cm scale bar
     pixel_spacing_mm: float = 0.8,
-    prompt_points: Optional[list] = None
+    prompt_points: Optional[list] = None,
+    method_label: Optional[str] = None
 ) -> bytes:
     """
-    Renders a publication-ready radiological key-slice image with contour mask overlay,
-    RECIST measurement caliper, prompt click markers, diagnostic HUD overlay, and clinical scale bar.
+    渲染关键层面图：掩膜叠加、最大长径卡尺、提示点、HUD 与比例尺。
+    HUD 只显示 recist 中实际存在的字段，并标注实际使用的方法（method_label）；空值显示 n/a。
     """
     h, w = ct_slice_uint8.shape
     
@@ -43,42 +44,40 @@ def render_key_slice_png(
     font_caliper, _ = get_cjk_font(size=11 if h >= 400 else 9)
     font_scale = get_sans_font(size=10, bold=True)
 
-    # 4. Diagnostic HUD banner (top left)
+    # 4. HUD（左上角）：按实际方法与字段显示
+    def _v(val, unit=""):
+        if val is None:
+            return "n/a"
+        return f"{val}{(' ' + unit) if unit else ''}"
+
     key_slice = recist.get("key_slice_index", 0)
-    vol = recist.get("total_volume_cm3", 0.0)
-    ld = recist.get("longest_diameter_mm", 0.0)
+    vol = recist.get("total_volume_cm3")
+    ld = recist.get("longest_diameter_mm")
     ctr = recist.get("consolidation_tumor_ratio")
-    rads = recist.get("lung_rads")
-    
+
     is_vessel = recist.get("is_vessel", False)
     clean_lesion_name = sanitize_text(lesion_name, supports_cjk)
     hud_lines = [
-        "HEURION IMAGING // MONAI 3D",
+        f"HEURION IMAGING // {method_label}" if method_label else "HEURION IMAGING",
         f"Modality: {modality} | Slice: #{key_slice}",
         f"Target: {clean_lesion_name}",
     ]
     if is_vessel:
-        hud_lines.append(f"Vessel Caliber: {ld} mm | Normal Vasculature")
-        hud_lines.append("ACR Lung-RADS: Normal Anatomy (Not a Nodule)")
-    elif ctr is not None and recist.get("solid_core_diameter_mm", 0.0) > 0:
-        solid_ld = recist.get("solid_core_diameter_mm", 0.0)
-        hud_lines.append(f"RECIST LD: {ld} mm | Solid: {solid_ld} mm (CTR: {int(ctr*100)}%)")
-        if rads and isinstance(rads, dict):
-            rads_name = sanitize_text(rads.get('name', ''), supports_cjk)
-            hud_lines.append(f"ACR Lung-RADS: {rads_name}")
-    else:
-        hud_lines.append(f"RECIST LD: {ld} mm | Vol: {vol} cm3")
-        if rads and isinstance(rads, dict):
-            rads_name = sanitize_text(rads.get('name', ''), supports_cjk)
-            hud_lines.append(f"ACR Lung-RADS: {rads_name}")
+        hud_lines.append("Suspected vessel cross-section (not measured)")
+    elif isinstance(ld, (int, float)) or isinstance(vol, (int, float)):
+        line = f"Axial LD: {_v(ld, 'mm')} | Vol: {_v(vol, 'cm3')}"
+        solid_ld = recist.get("solid_core_diameter_mm")
+        if ctr is not None and isinstance(solid_ld, (int, float)) and solid_ld > 0:
+            line += f" | Solid: {solid_ld} mm (CTR {int(ctr * 100)}%)"
+        hud_lines.append(line)
 
     qc = recist.get("quality_control")
     if qc and isinstance(qc, dict):
         slice_th = qc.get("slice_thickness_mm")
         if qc.get("tier") == "thick_slice_warning":
-            hud_lines.append(f"QC ALERT: Slice {slice_th} mm (Thick - Recommend HRCT)")
+            hud_lines.append(f"QC: Slice {slice_th} mm (thick, partial-volume effect)")
         elif slice_th:
-            hud_lines.append(f"Scan QC: Slice {slice_th} mm ({'HRCT' if qc.get('is_thin_slice') else 'Standard'})")
+            hud_lines.append(f"QC: Slice {slice_th} mm")
 
     hud_box_w = min(360, w - 20)
     hud_box_h = 16 + len(hud_lines) * 16
@@ -139,17 +138,14 @@ def render_key_slice_png(
             # Midpoint text
             mx = int((p1[0] + p2[0]) / 2)
             my = int((p1[1] + p2[1]) / 2) - 16
-            if is_vessel:
-                label = f"Vessel: {length_mm} mm (Normal)"
-            else:
-                label = f"Total LD: {length_mm} mm"
+            label = f"LD: {length_mm} mm"
             draw.text((mx, my), label, fill=(0, 240, 255, 255), font=font_caliper)
 
     # Inner solid core caliper if subsolid nodule (suppressed for normal blood vessels)
     if not is_vessel:
         solid_caliper = recist.get("solid_core_caliper")
-        solid_ld = recist.get("solid_core_diameter_mm", 0.0)
-        if solid_caliper and "p1" in solid_caliper and "p2" in solid_caliper and solid_ld > 0:
+        solid_ld = recist.get("solid_core_diameter_mm")
+        if solid_caliper and "p1" in solid_caliper and "p2" in solid_caliper and isinstance(solid_ld, (int, float)) and solid_ld > 0:
             sp1 = tuple(solid_caliper["p1"])
             sp2 = tuple(solid_caliper["p2"])
             draw.line([sp1, sp2], fill=(251, 146, 60, 255), width=2)

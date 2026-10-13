@@ -1,6 +1,8 @@
 """
 Heurion 2.0 - 3D Radiomics Feature Extraction Engine
-Conforms to IBSI (Image Biomarker Standardisation Initiative) specifications.
+特征定义参照 IBSI 命名，但本实现未做 IBSI 参考数据集的一致性验证，数值不保证与 IBSI 参考值或 PyRadiomics 一致。
+表面积为体素面法（统计暴露体素面），不是三角网格（marching cubes）表面积。
+ROI 为空或体素不足时对应特征返回 None，不填 0。
 
 Extracts quantitative multi-dimensional imaging biomarkers:
 1. 3D Morphological / Shape Features (Volume, Surface Area, Sphericity, Compactness, Axes, Diameters)
@@ -15,12 +17,31 @@ import numpy as np
 import scipy.ndimage as ndi
 
 
+def _max_pairwise_distance(pts: np.ndarray) -> float:
+    """点集两两最大距离：优先在三维凸包顶点上穷举；点共面/共线导致凸包失败时对全部点分块精确计算。"""
+    from scipy.spatial import ConvexHull
+
+    cand = pts
+    if len(pts) >= 5:
+        try:
+            cand = pts[ConvexHull(pts).vertices]
+        except Exception:
+            cand = pts
+    best = 0.0
+    chunk = 2048
+    for i in range(0, len(cand), chunk):
+        block = cand[i:i + chunk]
+        d2 = np.sum((block[:, None, :] - cand[None, :, :]) ** 2, axis=-1)
+        best = max(best, float(np.max(d2)))
+    return float(np.sqrt(best))
+
+
 def compute_shape_features(
     mask: np.ndarray,
     spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0)
 ) -> Dict[str, float]:
     """
-    Computes IBSI-compliant 3D morphological and shape features.
+    3D 形态特征（体素面法表面积；未经 IBSI 一致性验证）。
     
     Args:
         mask: 3D binary numpy array (Z, Y, X) where >0 represents the lesion ROI
@@ -35,20 +56,20 @@ def compute_shape_features(
     if voxel_count == 0:
         return {
             "voxel_count": 0,
-            "volume_cm3": 0.0,
-            "volume_mm3": 0.0,
-            "surface_area_mm2": 0.0,
-            "surface_to_volume_ratio": 0.0,
-            "sphericity": 0.0,
-            "compactness_1": 0.0,
-            "compactness_2": 0.0,
-            "spherical_disproportion": 0.0,
-            "major_axis_length_mm": 0.0,
-            "minor_axis_length_mm": 0.0,
-            "least_axis_length_mm": 0.0,
-            "elongation": 0.0,
-            "flatness": 0.0,
-            "max_3d_diameter_mm": 0.0,
+            "volume_cm3": None,
+            "volume_mm3": None,
+            "surface_area_mm2": None,
+            "surface_to_volume_ratio": None,
+            "sphericity": None,
+            "compactness_1": None,
+            "compactness_2": None,
+            "spherical_disproportion": None,
+            "major_axis_length_mm": None,
+            "minor_axis_length_mm": None,
+            "least_axis_length_mm": None,
+            "elongation": None,
+            "flatness": None,
+            "max_3d_diameter_mm": None,
         }
 
     volume_mm3 = voxel_count * voxel_volume_mm3
@@ -76,8 +97,7 @@ def compute_shape_features(
     if surface_area_mm2 > 0:
         surface_to_volume_ratio = surface_area_mm2 / volume_mm3
         sphericity = (math.pi ** (1.0 / 3.0) * ((6.0 * volume_mm3) ** (2.0 / 3.0))) / surface_area_mm2
-        # Bound sphericity <= 1.0 (numerical discretization artifact guard)
-        sphericity = min(1.0, max(0.0, sphericity))
+        # 不钳制：体素面法高估表面积，球形度通常偏低；如出现 >1 也如实输出
         compactness_1 = volume_mm3 / (math.sqrt(math.pi) * (surface_area_mm2 ** 1.5))
         compactness_2 = sphericity ** 3.0
         spherical_disproportion = 1.0 / sphericity if sphericity > 0 else 0.0
@@ -113,31 +133,20 @@ def compute_shape_features(
     elongation = math.sqrt(float(eigenvals[1]) / float(eigenvals[0])) if eigenvals[0] > 0 else 1.0
     flatness = math.sqrt(float(eigenvals[2]) / float(eigenvals[0])) if eigenvals[0] > 0 else 1.0
 
-    # Maximum 3D Diameter (Feret Max)
-    # Extract surface points to keep pairwise distance fast
+    # 最大三维径 (Feret Max)：表面体素中心两两最大距离。
+    # 最远点对必在凸包顶点上，先求凸包再在顶点间穷举，结果确定且精确
     struct = ndi.generate_binary_structure(3, 1)
     eroded = ndi.binary_erosion(binary_mask, structure=struct)
     surface_mask = binary_mask & (~eroded)
     sz, sy, sx = np.where(surface_mask > 0)
-    
-    if len(sz) > 0:
+
+    if len(sz) > 1:
         surf_pts = np.stack([
             sz.astype(np.float64) * dz,
             sy.astype(np.float64) * dy,
             sx.astype(np.float64) * dx
         ], axis=1)
-        
-        # Subsample if surface points count is very large (> 1000)
-        if len(surf_pts) > 800:
-            sub_indices = np.random.choice(len(surf_pts), size=800, replace=False)
-            eval_pts = surf_pts[sub_indices]
-        else:
-            eval_pts = surf_pts
-            
-        # Pairwise distance matrix maximum
-        diff = eval_pts[:, np.newaxis, :] - eval_pts[np.newaxis, :, :]
-        dist_sq = np.sum(diff ** 2, axis=-1)
-        max_3d_diameter_mm = float(np.sqrt(np.max(dist_sq)))
+        max_3d_diameter_mm = _max_pairwise_distance(surf_pts)
     else:
         max_3d_diameter_mm = 0.0
 
@@ -167,7 +176,7 @@ def compute_first_order_features(
     num_bins: int = 32
 ) -> Dict[str, float]:
     """
-    Computes IBSI-compliant first-order intensity statistics and histogram features.
+    一阶灰度统计与直方图特征（未经 IBSI 一致性验证）。
     
     Args:
         volume: 3D numpy array of image intensities (e.g. HU for CT, signal intensity for MRI)
@@ -181,24 +190,24 @@ def compute_first_order_features(
     
     if n == 0:
         return {
-            "mean": 0.0,
-            "std": 0.0,
-            "variance": 0.0,
-            "skewness": 0.0,
-            "kurtosis": 0.0,
-            "median": 0.0,
-            "min": 0.0,
-            "max": 0.0,
-            "range": 0.0,
-            "iqr": 0.0,
-            "p10": 0.0,
-            "p90": 0.0,
-            "mad": 0.0,
-            "rms": 0.0,
-            "energy": 0.0,
-            "total_energy": 0.0,
-            "entropy": 0.0,
-            "uniformity": 0.0,
+            "mean": None,
+            "std": None,
+            "variance": None,
+            "skewness": None,
+            "kurtosis": None,
+            "median": None,
+            "min": None,
+            "max": None,
+            "range": None,
+            "iqr": None,
+            "p10": None,
+            "p90": None,
+            "mad": None,
+            "rms": None,
+            "energy": None,
+            "total_energy": None,
+            "entropy": None,
+            "uniformity": None,
         }
 
     mean_val = float(np.mean(roi_voxels))
@@ -300,12 +309,12 @@ def compute_glcm_features(
     binary_mask = (mask > 0)
     if np.sum(binary_mask) < 2:
         return {
-            "contrast": 0.0,
-            "dissimilarity": 0.0,
-            "homogeneity": 0.0,
-            "energy_asm": 0.0,
-            "joint_entropy": 0.0,
-            "correlation": 0.0,
+            "contrast": None,
+            "dissimilarity": None,
+            "homogeneity": None,
+            "energy_asm": None,
+            "joint_entropy": None,
+            "correlation": None,
         }
 
     discrete = discretize_roi(volume, binary_mask, num_bins=num_bins)
@@ -347,12 +356,12 @@ def compute_glcm_features(
     total_pairs = np.sum(P_accum)
     if total_pairs <= 0:
         return {
-            "contrast": 0.0,
-            "dissimilarity": 0.0,
-            "homogeneity": 0.0,
-            "energy_asm": 0.0,
-            "joint_entropy": 0.0,
-            "correlation": 0.0,
+            "contrast": None,
+            "dissimilarity": None,
+            "homogeneity": None,
+            "energy_asm": None,
+            "joint_entropy": None,
+            "correlation": None,
         }
 
     P = P_accum / total_pairs
@@ -418,13 +427,13 @@ def compute_glrlm_features(
     nv = int(np.sum(binary_mask))
     if nv < 2:
         return {
-            "short_run_emphasis": 0.0,
-            "long_run_emphasis": 0.0,
-            "gray_level_nonuniformity": 0.0,
-            "run_length_nonuniformity": 0.0,
-            "run_percentage": 0.0,
-            "low_gray_run_emphasis": 0.0,
-            "high_gray_run_emphasis": 0.0,
+            "short_run_emphasis": None,
+            "long_run_emphasis": None,
+            "gray_level_nonuniformity": None,
+            "run_length_nonuniformity": None,
+            "run_percentage": None,
+            "low_gray_run_emphasis": None,
+            "high_gray_run_emphasis": None,
         }
 
     discrete = discretize_roi(volume, binary_mask, num_bins=num_bins)
@@ -472,13 +481,13 @@ def compute_glrlm_features(
     total_runs = float(np.sum(R_accum))
     if total_runs <= 0:
         return {
-            "short_run_emphasis": 0.0,
-            "long_run_emphasis": 0.0,
-            "gray_level_nonuniformity": 0.0,
-            "run_length_nonuniformity": 0.0,
-            "run_percentage": 0.0,
-            "low_gray_run_emphasis": 0.0,
-            "high_gray_run_emphasis": 0.0,
+            "short_run_emphasis": None,
+            "long_run_emphasis": None,
+            "gray_level_nonuniformity": None,
+            "run_length_nonuniformity": None,
+            "run_percentage": None,
+            "low_gray_run_emphasis": None,
+            "high_gray_run_emphasis": None,
         }
 
     # Grids: gray level i (0 to num_bins-1), run length l (1 to max_dim)
@@ -528,7 +537,7 @@ def extract_radiomics_features(
     num_bins: int = 16
 ) -> Dict[str, Any]:
     """
-    Extracts all IBSI-compliant 3D radiomics features:
+    提取 3D 影像组学特征（未经 IBSI 一致性验证）：
     - 3D Shape & Morphology
     - First-order Histogram Statistics
     - GLCM Texture
@@ -537,6 +546,19 @@ def extract_radiomics_features(
     Returns structured grouped features, a flat dictionary suitable for dataset rows/CSV,
     and a formatted clinical Markdown report.
     """
+    if int(np.sum(mask > 0)) == 0:
+        # ROI 为空：没有可计算的特征，直接报错状态，不填 0
+        return {
+            "status": "error",
+            "error": "ROI 掩膜为空，未计算影像组学特征",
+            "lesion_voxel_count": 0,
+            "feature_count": 0,
+            "voxel_spacing_mm": list(spacing),
+            "feature_groups": None,
+            "features_flat": {},
+            "markdown_report": "",
+        }
+
     shape_feats = compute_shape_features(mask, spacing=spacing)
     first_order_feats = compute_first_order_features(volume, mask, spacing=spacing)
     glcm_feats = compute_glcm_features(volume, mask, num_bins=num_bins)
@@ -555,47 +577,48 @@ def extract_radiomics_features(
 
     # Build rich Markdown report
     markdown_report = (
-        "### 3D 影像组学定量特征分析报告 (IBSI 标准)\n\n"
+        "### 3D 影像组学定量特征\n\n"
+        "> 特征定义参照 IBSI 命名，未经 IBSI 参考数据集一致性验证；表面积为体素面法。\n\n"
         f"**体素空间分布**: `{volume.shape[0]} 层 × {volume.shape[1]} × {volume.shape[2]}` | "
         f"**分辨率**: `{spacing[0]} × {spacing[1]} × {spacing[2]} mm` | "
         f"**病灶体素计数**: `{shape_feats['voxel_count']}`\n\n"
         "#### 1. 3D 几何形态学参数 (Morphology & Shape)\n"
-        "| 参数指标 | 测量值 | 单位/范围 | 临床与病理参考意义 |\n"
+        "| 参数指标 | 测量值 | 单位/范围 | 定义 |\n"
         "| :--- | :--- | :--- | :--- |\n"
         f"| **病灶体积 (Volume)** | **`{shape_feats['volume_cm3']} cm³`** ({shape_feats['volume_mm3']} mm³) | cm³ | 靶病灶三维空间总体积 |\n"
-        f"| **表面积 (Surface Area)** | `{shape_feats['surface_area_mm2']} mm²` | mm² | 3D 网格表面接触面积 |\n"
-        f"| **面容比 (Surface-to-Volume)** | `{shape_feats['surface_to_volume_ratio']}` | mm⁻¹ | 边缘浸润与不规则度量化 |\n"
-        f"| **球形度 (Sphericity)** | **`{shape_feats['sphericity']}`** | 0~1.0 (1=规整球形) | 越低代表病灶形态越分叶/毛刺/浸润 |\n"
+        f"| **表面积 (Surface Area)** | `{shape_feats['surface_area_mm2']} mm²` | mm² | 体素面法：暴露体素面面积之和（非网格表面） |\n"
+        f"| **面容比 (Surface-to-Volume)** | `{shape_feats['surface_to_volume_ratio']}` | mm⁻¹ | 表面积 / 体积 |\n"
+        f"| **球形度 (Sphericity)** | **`{shape_feats['sphericity']}`** | 理想球为 1 | π^(1/3)·(6V)^(2/3) / A；体素面法表面积偏大，数值偏低 |\n"
         f"| **紧凑度 (Compactness 1/2)** | `{shape_feats['compactness_1']}` / `{shape_feats['compactness_2']}` | 相对指数 | 体素聚集度与离散度指标 |\n"
-        f"| **最大三维空间径 (Feret Max)** | **`{shape_feats['max_3d_diameter_mm']} mm`** | mm | RECIST 3D 空间极限跨度 |\n"
+        f"| **最大三维空间径 (Feret Max)** | **`{shape_feats['max_3d_diameter_mm']} mm`** | mm | 表面体素中心两两最大距离（凸包顶点精确计算） |\n"
         f"| **主惯性轴三维长径 (Major/Minor/Least)** | `{shape_feats['major_axis_length_mm']} / {shape_feats['minor_axis_length_mm']} / {shape_feats['least_axis_length_mm']}` | mm | 等效三维椭球体三轴长度 |\n"
-        f"| **伸长率 / 扁平度 (Elongation / Flatness)** | `{shape_feats['elongation']} / {shape_feats['flatness']}` | 0~1.0 | 病灶拉长条状与盘状扁平度 |\n\n"
+        f"| **伸长率 / 扁平度 (Elongation / Flatness)** | `{shape_feats['elongation']} / {shape_feats['flatness']}` | 0~1.0 | 协方差特征值之比的平方根 |\n\n"
         "#### 2. 一阶直方图与灰度分布统计 (First-order Histogram)\n"
-        "| 参数指标 | 测量值 | 临床/物理量量化说明 |\n"
+        "| 参数指标 | 测量值 | 定义 |\n"
         "| :--- | :--- | :--- |\n"
-        f"| **平均密度 (Mean HU)** | `{first_order_feats['mean']} ± {first_order_feats['std']} HU` | 均值与标准差，反映整体密度密度分布 |\n"
+        f"| **平均密度 (Mean HU)** | `{first_order_feats['mean']} ± {first_order_feats['std']} HU` | ROI 内灰度均值与标准差 |\n"
         f"| **中位数 / 四分位距 (Median / IQR)** | `{first_order_feats['median']} HU` (IQR: `{first_order_feats['iqr']}`) | 抗偏态中位水平与核心 50% 离散跨度 |\n"
         f"| **极值跨度 (Min ~ Max [Range])** | `[{first_order_feats['min']}, {first_order_feats['max']}]` (跨度: `{first_order_feats['range']} HU`) | 最低与最高密度边界 |\n"
         f"| **第 10 / 90 百分位数 (P10 / P90)** | `P10: {first_order_feats['p10']} HU` / `P90: {first_order_feats['p90']} HU` | 消除单点噪点的有效密度区间 |\n"
-        f"| **偏度 (Skewness)** | `{first_order_feats['skewness']}` | 0 为对称，>0 提示高密度(钙化/实变)偏斜，<0 提示低密度(坏死/囊变)偏斜 |\n"
+        f"| **偏度 (Skewness)** | `{first_order_feats['skewness']}` | 灰度分布三阶标准矩，0 为对称 |\n"
         f"| **峰度 (Kurtosis)** | `{first_order_feats['kurtosis']}` | 正态分布基准为 3.0，>3 呈尖峰厚尾分布 |\n"
-        f"| **信息熵 / 均匀度 (Entropy / Uniformity)** | `{first_order_feats['entropy']} bit` / `{first_order_feats['uniformity']}` | 灰度异质性与微环境混杂度量化 |\n\n"
+        f"| **信息熵 / 均匀度 (Entropy / Uniformity)** | `{first_order_feats['entropy']} bit` / `{first_order_feats['uniformity']}` | 直方图熵与各灰度级概率平方和 |\n\n"
         "#### 3. 灰度共生矩阵微观纹理 (GLCM Texture)\n"
-        "| 参数指标 | 测量值 | 纹理病理学解释 |\n"
+        "| 参数指标 | 测量值 | 定义 |\n"
         "| :--- | :--- | :--- |\n"
-        f"| **对比度 (Contrast)** | `{glcm_feats['contrast']}` | 相邻体素灰度反差强度，越高代表局部纹理落差剧烈 |\n"
-        f"| **同质性 (Homogeneity / IDM)** | **`{glcm_feats['homogeneity']}`** | 局部均一性程度，越接近 1 代表内部质地越均匀 |\n"
-        f"| **能量 / 二阶角动量 (Energy ASM)** | `{glcm_feats['energy_asm']}` | 灰度对频繁共现度，质地规则时显著升高 |\n"
-        f"| **联合熵 (Joint Entropy)** | `{glcm_feats['joint_entropy']}` | 灰度空间相关性混乱度，高异质性肿瘤通常显著升高 |\n"
+        f"| **对比度 (Contrast)** | `{glcm_feats['contrast']}` | Σ(i−j)²·P(i,j) |\n"
+        f"| **同质性 (Homogeneity / IDM)** | **`{glcm_feats['homogeneity']}`** | Σ P(i,j)/(1+(i−j)²) |\n"
+        f"| **能量 / 二阶角动量 (Energy ASM)** | `{glcm_feats['energy_asm']}` | Σ P(i,j)² |\n"
+        f"| **联合熵 (Joint Entropy)** | `{glcm_feats['joint_entropy']}` | 共生矩阵概率分布的熵 |\n"
         f"| **空间相关性 (Correlation)** | `{glcm_feats['correlation']}` | 灰度沿空间方向的线性依赖性 |\n\n"
         "#### 4. 灰度游程矩阵宏观异质性 (GLRLM Texture)\n"
-        "| 参数指标 | 测量值 | 结构学解释 |\n"
+        "| 参数指标 | 测量值 | 定义 |\n"
         "| :--- | :--- | :--- |\n"
-        f"| **短游程优势度 (Short Run Emphasis, SRE)** | `{glrlm_feats['short_run_emphasis']}` | 细颗粒及微细结构占比 |\n"
-        f"| **长游程优势度 (Long Run Emphasis, LRE)** | `{glrlm_feats['long_run_emphasis']}` | 均质连续粗大块状区域占比 |\n"
+        f"| **短游程优势度 (Short Run Emphasis, SRE)** | `{glrlm_feats['short_run_emphasis']}` | Σ R(i,j)/j² / 游程总数 |\n"
+        f"| **长游程优势度 (Long Run Emphasis, LRE)** | `{glrlm_feats['long_run_emphasis']}` | Σ R(i,j)·j² / 游程总数 |\n"
         f"| **灰度不均一性 (GLN)** | `{glrlm_feats['gray_level_nonuniformity']}` | 各灰度级游程分布离散度 |\n"
         f"| **游程长度不均一性 (RLN)** | `{glrlm_feats['run_length_nonuniformity']}` | 长度空间分布多样性 |\n"
-        f"| **游程百分比 (Run Percentage, RP)** | `{glrlm_feats['run_percentage']}` | 游程数与总扫描点之比，高值对应精细纹理 |\n"
+        f"| **游程百分比 (Run Percentage, RP)** | `{glrlm_feats['run_percentage']}` | 游程总数 / (3 × ROI 体素数)，3 个扫描方向 |\n"
     )
 
     return {

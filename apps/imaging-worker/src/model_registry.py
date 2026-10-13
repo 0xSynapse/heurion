@@ -26,25 +26,30 @@ class ModelSpec:
     engine_type: str = "deep_learning"  # "deep_learning" or "quantitative_ct"
     body_part: str = "chest"  # "chest", "abdomen", "brain", "pelvis", "cardiac", "pathology", "whole_body", "breast", "endoscopy", "general"
     category: str = "胸部与呼吸科"
+    # 引擎（engine.MonaiNeuralInferencePipeline.NEURAL_LOADERS）中是否真有该权重的加载与推理路径。
+    # 只有加载+推理路径存在、且本地权重 SHA-256 校验通过时才算 is_ready；权重文件存在本身不代表可用。
+    engine_implemented: bool = False
 
 OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
     "spleen_ct": ModelSpec(
         name="spleen_ct",
         display_name="MONAI 脾脏全自动三维分割与体积测算模型 (3D-UNet)",
         modality="Abdomen CT",
-        version="v0.4.0",
+        version="v0.5.3",
         size_mb=18.4,
         sha256="502c312893994ec071a85c4f2e7d83a43f7789969faa73dae62f1291177f50fe",
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/spleen_ct_segmentation_v0.5.3.zip"
         ],
-        description="基于 MONAI 3D-UNet 架构的腹部薄层 CT 脾脏全自动三维分割与体积/RECIST径线测量。",
+        description="MONAI spleen_ct_segmentation bundle（3D-UNet）腹部 CT 脾脏分割，输出脾脏体积与径线。",
         architecture="UNet-3D",
-        clinical_targets=["脾脏体积", "脾大 (Splenomegaly)", "门静脉高压"],
+        clinical_targets=["脾脏分割", "脾脏体积"],
+        # 文件名沿用旧缓存名；实际内容来自 spleen_ct_segmentation_v0.5.3 bundle 的 models/model.pt
         file_name="spleen_ct_v0.4.0.pt",
         engine_type="deep_learning",
         body_part="abdomen",
-        category="腹部、消化与泌尿"
+        category="腹部、消化与泌尿",
+        engine_implemented=True
     ),
     "lung_nodule_ct": ModelSpec(
         name="lung_nodule_ct",
@@ -56,27 +61,11 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/lung_nodule_ct_detection_v0.5.9.zip"
         ],
-        description="胸部薄层 CT 肺实质结节检出与分割，支持磨玻璃、部分实性与实性结节量化与 Lung-RADS 评估。",
+        description="MONAI lung_nodule_ct_detection bundle（RetinaNet 检测）。本引擎尚未接入该权重的推理路径。",
         architecture="RetinaNet-UNet-3D",
         clinical_targets=["肺结节", "磨玻璃结节 (GGO)", "部分实性结节 (PSN)", "实性结节 (SN)"],
         file_name="lung_nodule_ct_v0.5.9.pt",
         engine_type="deep_learning",
-        body_part="chest",
-        category="胸部与呼吸科"
-    ),
-    "bronchiectasis_mucus_analyzer": ModelSpec(
-        name="bronchiectasis_mucus_analyzer",
-        display_name="支气管扩张与粘液栓 (Mucus Plug) 定量分析 (BAR印戒征 / 阻塞率 / HAM)",
-        modality="Chest HRCT",
-        version="v1.0.0",
-        size_mb=0.0,
-        sha256="",
-        urls=[],
-        description="高分辨胸部 HRCT 支气管伴行动脉径比 (BAR 印戒征)、高密度粘液栓 (HAM) 与气道分支拓扑嵌顿三维量化。",
-        architecture="Quantitative-CT-Radiomics-3D",
-        clinical_targets=["支气管扩张 (BAR)", "高密度粘液栓 (HAM)", "变应性支气管肺曲霉病 (ABPA)", "气道树芽征"],
-        file_name="bronchiectasis.py",
-        engine_type="quantitative_ct",
         body_part="chest",
         category="胸部与呼吸科"
     ),
@@ -90,13 +79,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/swin_unetr_btcv_segmentation_v0.5.0.zip"
         ],
-        description="BTCV 腹部 13 类关键实质器官（肝、脾、双肾、胰腺、胆囊、食管、胃、主动脉、下腔静脉、门静脉等）高精度语义分割。",
+        description="MONAI swin_unetr_btcv_segmentation bundle，BTCV 腹部 13 类器官（肝、脾、双肾、胰腺、胆囊、食管、胃、主动脉、下腔静脉、门静脉/脾静脉、双侧肾上腺）分割。",
         architecture="SwinUNETR-Large",
         clinical_targets=["肝脏", "脾脏", "双肾", "胰腺", "腹部大血管"],
         file_name="swinunetr_btcv_v0.5.0.pt",
         engine_type="deep_learning",
         body_part="abdomen",
-        category="腹部、消化与泌尿"
+        category="腹部、消化与泌尿",
+        engine_implemented=True
     ),
     "brats_mri": ModelSpec(
         name="brats_mri",
@@ -108,13 +98,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/brats_mri_segmentation_v0.4.8.zip"
         ],
-        description="精细提取全肿瘤 (WT)、水肿浸润区、增强肿瘤核心 (ET) 与坏死区 (TC)，辅助神经外科手术边界评估。",
+        description="MONAI brats_mri_segmentation bundle（SegResNet），输入须为 4 通道 MRI（通道顺序 T1c, T1, T2, FLAIR），输出 TC/WT/ET 三个子区。",
         architecture="SegResNet-3D",
         clinical_targets=["全脑胶质瘤 (WT)", "肿瘤增强核心 (ET)", "坏死囊变区 (TC)"],
         file_name="brats_mri_v0.4.8.pt",
         engine_type="deep_learning",
         body_part="brain",
-        category="颅脑与神经系统"
+        category="颅脑与神经系统",
+        engine_implemented=True
     ),
     "wholebody_ct": ModelSpec(
         name="wholebody_ct",
@@ -126,13 +117,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/wholeBody_ct_segmentation_v0.1.9.zip"
         ],
-        description="覆盖胸腹盆骨骼、大血管与内脏器官的全景 CT 快速分割基础模型。",
+        description="MONAI wholeBody_ct_segmentation bundle（SegResNet，104 类结构，1.5 mm 高分辨率版权重）。",
         architecture="SegResNet-3D",
         clinical_targets=["胸部器官", "腹部器官", "纵隔血管", "骨骼解剖"],
         file_name="wholebody_ct_v0.1.9.pt",
         engine_type="deep_learning",
         body_part="whole_body",
-        category="骨科与全身体素"
+        category="骨科与全身体素",
+        engine_implemented=True
     ),
     "prostate_mri": ModelSpec(
         name="prostate_mri",
@@ -144,13 +136,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/prostate_mri_anatomy_v0.3.2.zip"
         ],
-        description="前列腺 T2W MRI 多通道解剖分割，精准划分外周带 (PZ) 与移行带 (TZ)，辅助 PI-RADS 评估。",
+        description="MONAI prostate_mri_anatomy bundle（3D UNet），T2W MRI 前列腺中央腺体与外周带分割。",
         architecture="UNet-3D",
-        clinical_targets=["前列腺全腺体", "外周带 (PZ)", "移行带 (TZ)", "PI-RADS 靶区定位"],
+        clinical_targets=["前列腺全腺体", "中央腺体", "外周带 (PZ)"],
         file_name="prostate_mri_v0.3.2.pt",
         engine_type="deep_learning",
         body_part="pelvis",
-        category="腹部、消化与泌尿"
+        category="腹部、消化与泌尿",
+        engine_implemented=True
     ),
     "renal_structures_cect": ModelSpec(
         name="renal_structures_cect",
@@ -180,13 +173,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/ventricular_short_axis_3label_v0.3.2.zip"
         ],
-        description="心脏短轴稳态自由进动 (SSFP) 序列左心室 (LV)、右心室 (RV) 和心肌 (MYO) 腔室形态分割与射血分数测算。",
+        description="MONAI ventricular_short_axis_3label bundle（2D UNet，TorchScript），短轴 cine SSFP 逐层分割左室血池、心肌、右室血池。单期相输入不能计算射血分数。",
         architecture="UNet-2D/3D",
-        clinical_targets=["左心室内膜", "左心室心肌", "右心室内膜", "心室容积/射血分数 (LVEF)"],
+        clinical_targets=["左室血池", "左室心肌", "右室血池"],
         file_name="ventricular_short_axis_v0.3.2.pt",
         engine_type="deep_learning",
         body_part="cardiac",
-        category="心血管系统"
+        category="心血管系统",
+        engine_implemented=True
     ),
     "wholebrainseg_large_unest": ModelSpec(
         name="wholebrainseg_large_unest",
@@ -320,16 +314,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         modality="Body CT",
         version="v2.0.5",
         size_mb=480.0,
-        sha256="a4b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1",
-        urls=[
-            "https://github.com/wasserth/TotalSegmentator/releases/download/v2.0.5/totalsegmentator_weights.pt",
-            "https://zenodo.org/records/6802614/files/totalsegmentator_v2.pt"
-        ],
+        # 无官方单文件权重与可核对的 SHA-256（TotalSegmentator 以 nnU-Net 多折权重包分发），本引擎未接入，仅作规划项
+        sha256="",
+        urls=[],
         description="覆盖全身 117 种器官、骨骼、大血管与肌肉群的全景 CT 分割基础模型，用于精准解剖包络与假阳性剔除。",
         architecture="nnUNet-ResNet50-3D",
         clinical_targets=["双肺五叶", "气管树", "纵隔大血管", "肝脾胰肾", "骨骼肋骨系统"],
         file_name="totalsegmentator_v2.0.5.pt",
-        engine_type="quantitative_ct",
+        engine_type="deep_learning",
         body_part="whole_body",
         category="骨科与全身体素"
     ),
@@ -343,31 +335,13 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://api.ngc.nvidia.com/v2/models/nvidia/monaihosting/vista3d/versions/0.5.7/files/vista3d_v0.5.7.zip"
         ],
-        description="支持医生在 MPR 画布上实时点选（正负提示点）或 ROI 框选，实现毫秒级自适应 3D 边界区域生长与 RECIST 测算。",
+        description="MONAI VISTA-3D bundle 权重。本引擎尚未接入其推理路径；平台的交互分割为 HU 区域生长规则算法，不使用该模型。",
         architecture="VISTA-3D-Transformer",
         clinical_targets=["任意未知靶病灶", "淋巴结转移灶", "软组织肉瘤", "囊实性混合占位"],
         file_name="vista3d_v0.5.7.pt",
         engine_type="deep_learning",
         body_part="general",
         category="交互式万物分割"
-    ),
-    "copd_emphysema": ModelSpec(
-        name="copd_emphysema",
-        display_name="COPD GOLD 2024 肺气肿低衰减区 (LAA-950%) 容积定量模型",
-        modality="Chest CT",
-        version="v1.1.0",
-        size_mb=185.0,
-        sha256="b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3",
-        urls=[
-            "https://github.com/Project-MONAI/model-zoo/releases/download/v0.1.0/copd_emphysema_v1.1.0.pt"
-        ],
-        description="全自动双肺实质容积提取，并在吸气末 CT 上量化 <-950 HU 低衰减区容积占比及 GOLD 1~4 级肺气肿分度。",
-        architecture="DenseNet121-3D-Parenchyma",
-        clinical_targets=["慢性阻塞性肺疾病 (COPD)", "肺气肿容积", "低衰减区 (LAA-950%)"],
-        file_name="copd_emphysema_v1.1.0.pt",
-        engine_type="quantitative_ct",
-        body_part="chest",
-        category="胸部与呼吸科"
     )
 }
 
@@ -386,6 +360,19 @@ def compute_sha256(file_path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
+_SHA_CACHE: Dict[str, tuple] = {}
+
+def _cached_sha256(file_path: Path) -> str:
+    """按 (路径, 大小, 修改时间) 缓存哈希，避免每次查询都重算大文件。"""
+    st = file_path.stat()
+    key = str(file_path)
+    hit = _SHA_CACHE.get(key)
+    if hit and hit[0] == st.st_size and hit[1] == st.st_mtime:
+        return hit[2]
+    digest = compute_sha256(file_path)
+    _SHA_CACHE[key] = (st.st_size, st.st_mtime, digest)
+    return digest
+
 def get_model_status(name: str) -> Dict[str, Any]:
     """Inspects the local presence, size, and integrity of a registered model."""
     spec = OFFICIAL_MODEL_REGISTRY.get(name)
@@ -396,15 +383,16 @@ def get_model_status(name: str) -> Dict[str, Any]:
     local_file = cache_dir / spec.file_name
     meta_file = cache_dir / f"{spec.file_name}.meta.json"
 
-    installed = local_file.exists() and local_file.stat().st_size > 1024 * 1024
+    installed = local_file.exists() and local_file.stat().st_size > 0
     size_bytes = local_file.stat().st_size if installed else 0
     size_mb = round(size_bytes / (1024 * 1024), 2)
 
+    # 校验只认登记的真实 SHA-256；没有登记哈希的条目一律视为未校验
     verified = False
     actual_sha = None
     if installed:
-        actual_sha = compute_sha256(local_file)
-        verified = (actual_sha.lower() == spec.sha256.lower())
+        actual_sha = _cached_sha256(local_file)
+        verified = bool(spec.sha256) and (actual_sha.lower() == spec.sha256.lower())
 
     meta = {}
     if meta_file.exists():
@@ -414,11 +402,17 @@ def get_model_status(name: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # For quantitative CT algorithms built into the codebase, they are natively ready
-    is_quant = (spec.engine_type == "quantitative_ct")
-    effective_installed = True if is_quant else installed
-    effective_verified = True if is_quant else verified
-    is_ready = (effective_installed and effective_verified)
+    # is_ready 由「引擎确有该权重的加载与推理路径」且「本地权重哈希校验通过」共同决定，
+    # 不因 engine_type 或文件存在而自动就绪
+    is_ready = bool(spec.engine_implemented and installed and verified)
+    if not spec.engine_implemented:
+        unavailable_reason = "引擎未实现该模型的加载与推理路径"
+    elif not installed:
+        unavailable_reason = "本地权重未安装"
+    elif not verified:
+        unavailable_reason = "本地权重 SHA-256 校验未通过"
+    else:
+        unavailable_reason = None
 
     return {
         "name": spec.name,
@@ -432,9 +426,11 @@ def get_model_status(name: str) -> Dict[str, Any]:
         "expected_size_mb": spec.size_mb,
         "expected_sha256": spec.sha256,
         "clinical_targets": spec.clinical_targets,
-        "installed": effective_installed,
-        "verified": effective_verified,
+        "installed": installed,
+        "verified": verified,
+        "engine_implemented": spec.engine_implemented,
         "is_ready": is_ready,
+        "unavailable_reason": unavailable_reason,
         "actual_sha256": actual_sha,
         "local_path": str(local_file) if installed else None,
         "local_size_mb": size_mb,
@@ -472,6 +468,9 @@ def pull_model(
                 "message": f"模型 '{spec.display_name}' 已在本地就绪",
                 "model": stat
             }
+
+    if not spec.urls:
+        raise RuntimeError(f"模型 '{name}' 没有登记可核对的官方权重下载地址，无法拉取。")
 
     download_success = False
     last_error = None
@@ -521,7 +520,7 @@ def pull_model(
     if not download_success:
         raise RuntimeError(
             f"无法从官方仓库下载模型 '{name}' 权重: {last_error}。"
-            "根据医疗 SaMD 质控规范，已严格禁止算法层退化为伪造权重或启发式规则。"
+            "不会以其他权重或规则算法替代。"
         )
 
     actual_sha = compute_sha256(local_file)

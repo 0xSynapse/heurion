@@ -11,7 +11,8 @@ from scipy.ndimage import (
     binary_dilation,
     generate_binary_structure,
     iterate_structure,
-    label
+    label,
+    distance_transform_edt
 )
 
 try:
@@ -58,67 +59,6 @@ def apply_turbo_colormap(norm_vals: np.ndarray) -> np.ndarray:
     return np.stack([r, g, b], axis=-1)
 
 
-def generate_synthetic_pet_ct_pair(
-    shape: Tuple[int, int, int] = (36, 96, 96),
-    spacing: Tuple[float, float, float] = (2.0, 1.0, 1.0)
-) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
-    """
-    Synthesizes a realistic paired CT and PET dataset:
-    - CT: Thoraco-abdominal volume with anatomy (-1000 to +450 HU)
-    - PET: Metabolic volume in SUV units (0.0 to 12.5 SUV) with hypermetabolic malignant tumor
-    """
-    z_dim, y_dim, x_dim = shape
-    ct_vol = np.full(shape, -1000.0, dtype=np.float32)
-    pet_vol = np.full(shape, 0.2, dtype=np.float32) # physiological background SUV
-
-    z_coords, y_coords, x_coords = np.meshgrid(
-        np.arange(z_dim), np.arange(y_dim), np.arange(x_dim), indexing="ij"
-    )
-    cy, cx = y_dim // 2, x_dim // 2
-
-    # Body contour
-    body = ((y_coords - cy) / (y_dim * 0.44))**2 + ((x_coords - cx) / (x_dim * 0.44))**2 <= 1.0
-    ct_vol[body] = 40.0
-    pet_vol[body] = 0.8 + np.random.normal(0, 0.1, int(np.sum(body))) # soft tissue background SUV
-
-    # Bilateral lungs
-    left_lung = ((y_coords - cy) / (y_dim * 0.26))**2 + ((x_coords - (cx - int(x_dim * 0.2))) / (x_dim * 0.16))**2 <= 1.0
-    right_lung = ((y_coords - cy) / (y_dim * 0.26))**2 + ((x_coords - (cx + int(x_dim * 0.2))) / (x_dim * 0.16))**2 <= 1.0
-    ct_vol[left_lung] = -700.0
-    ct_vol[right_lung] = -700.0
-    pet_vol[left_lung] = 0.35 # low lung background
-    pet_vol[right_lung] = 0.35
-
-    # Spine bone in posterior
-    spine = ((y_coords - (cy + int(y_dim * 0.28))) / (y_dim * 0.08))**2 + ((x_coords - cx) / (x_dim * 0.08))**2 <= 1.0
-    ct_vol[spine] = 450.0
-
-    # Hypermetabolic malignant tumor in right lung / hilar region
-    tz = z_dim // 2
-    ty = cy + 2
-    tx = cx + int(x_dim * 0.18)
-    tumor_radius = 8.0
-    dist_sq = (
-        ((z_coords - tz) / (tumor_radius * 0.7))**2 +
-        ((y_coords - ty) / tumor_radius)**2 +
-        ((x_coords - tx) / (tumor_radius * 1.2))**2
-    )
-    tumor_mask = dist_sq <= 1.0
-
-    # CT hyperdense lesion
-    ct_vol[tumor_mask] = 55.0 + np.random.normal(0, 8, int(np.sum(tumor_mask)))
-    # PET hypermetabolism (SUV peaks at 11.8)
-    tumor_suv = 11.8 * np.exp(-1.5 * dist_sq[tumor_mask])
-    pet_vol[tumor_mask] = np.maximum(pet_vol[tumor_mask], tumor_suv)
-
-    meta = {
-        "tumor_center": (tz, ty, tx),
-        "tumor_radius": tumor_radius,
-        "max_suv_ground_truth": 11.8,
-    }
-    return ct_vol, pet_vol, meta
-
-
 def compute_normalized_cross_correlation(vol1: np.ndarray, vol2: np.ndarray) -> float:
     """Computes Normalized Cross Correlation (NCC, -1.0 to 1.0) between two 3D volumes."""
     v1 = vol1.astype(np.float64)
@@ -140,8 +80,10 @@ def run_3d_deformable_registration(
     smoothing_sigma: float = 1.0
 ) -> Dict[str, Any]:
     """
-    Executes 3D Deformable B-Spline / Demons Dense Vector Displacement Field (DDF) registration.
-    Aligns moving volume to fixed volume, returns warped volume, displacement field, and deformation metrics.
+    简化 Demons 稠密位移场 (DDF) 形变配准（单分辨率，非 B 样条）：
+    每次迭代以固定图像梯度计算光流力 (diff·∇F / |∇F|²)，高斯平滑后累加到位移场，
+    再对位移场做一次高斯平滑作为正则，按体素坐标重采样移动图像。
+    位移在体素坐标中求解，未按各轴物理间距加权；输出的 mm 位移量按 spacing 换算。
     """
     t0 = time.time()
     z_dim, y_dim, x_dim = fixed_vol.shape
@@ -162,7 +104,7 @@ def run_3d_deformable_registration(
 
     current_warped = moving_vol.copy()
 
-    # Multi-resolution gradient descent on displacement field
+    # 单分辨率迭代（无图像金字塔）
     for it in range(iterations):
         diff = fixed_vol - current_warped
         # Spatial gradients of fixed image
@@ -220,7 +162,7 @@ def run_3d_deformable_registration(
 
     hud_bg = [(8, 8), (270, 96)]
     draw.rounded_rectangle(hud_bg, radius=4, fill=(15, 23, 42, 215), outline=(51, 65, 85, 255))
-    draw.text((16, 12), "3D Deformable DDF Registration", font=font_bold, fill=(241, 245, 249, 255))
+    draw.text((16, 12), "Simplified Demons DDF Registration", font=font_bold, fill=(241, 245, 249, 255))
     draw.text((16, 28), f"Key Slice: #{key_slice_idx}/{z_dim} | Spacing: {spacing[1]}mm", font=font_reg, fill=(148, 163, 184, 255))
     draw.text((16, 44), f"NCC: {round(initial_ncc, 3)} -> {round(final_ncc, 3)} (+{round(final_ncc - initial_ncc, 3)})", font=font_reg, fill=(52, 211, 153, 255))
     draw.text((16, 60), f"MSE Drop: {round(max(0.0, (initial_mse - final_mse) / max(initial_mse, 1e-4) * 100.0), 1)}%", font=font_reg, fill=(250, 204, 21, 255))
@@ -233,6 +175,8 @@ def run_3d_deformable_registration(
 
     return {
         "status": "success",
+        "method": "simplified_demons_ddf",
+        "method_zh": "简化 Demons 稠密位移场（单分辨率，固定图像梯度光流力 + 高斯平滑正则）",
         "iterations_completed": iterations,
         "elapsed_sec": elapsed,
         "initial_ncc": round(initial_ncc, 4),
@@ -254,7 +198,7 @@ def run_3d_deformable_registration(
             "magnitude_map": disp_magnitude_mm,
         },
         "summary_markdown": (
-            f"### 3D 可形变配准 (Deformable B-Spline / DDF) 报告\n"
+            f"### 3D 形变配准（简化 Demons 稠密位移场）报告\n"
             f"- **初始归一化互相关 (NCC)**: `{round(initial_ncc, 4)}` → **配准后 NCC**: `{round(final_ncc, 4)}` (提升 `{round(final_ncc - initial_ncc, 4)}`)\n"
             f"- **均方误差 (MSE) 降幅**: `{round(max(0.0, (initial_mse - final_mse) / max(initial_mse, 1e-4) * 100.0), 1)}%` (耗时 `{elapsed}s`)\n"
             f"- **最大位移形变量**: `{round(max_displacement_mm, 2)} mm` (平均位移: `{round(mean_displacement_mm, 2)} mm`)\n"
@@ -268,35 +212,73 @@ def compute_pet_metrics_and_fusion(
     spacing: Tuple[float, float, float] = (1.5, 0.8, 0.8),
     suv_threshold: float = 2.5,
     key_slice_index: Optional[int] = None,
-    alpha: float = 0.55
+    alpha: float = 0.55,
+    roi_mask: Optional[np.ndarray] = None,
+    physiological_exclusion_note: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    Computes Standardized Uptake Value (SUV) metrics and generates an alpha-blended PET-CT color fusion key-slice:
-    - SUV_max (Peak metabolic uptake)
-    - SUV_mean (Average uptake in tumor)
-    - MTV (Metabolic Tumor Volume in cm³)
-    - TLG (Total Lesion Glycolysis = MTV * SUV_mean)
+    在给定 ROI 内计算 SUV 指标并生成 PET-CT 融合关键层：
+    - SUV_max / SUV_mean（ROI 内 >= suv_threshold 的体素）
+    - MTV（cm³）与 TLG = MTV × SUV_mean
+
+    全体积阈值会把脑、膀胱、肾、心肌等生理性摄取计入 MTV，因此调用方必须二选一：
+    - roi_mask：只在该 ROI 内统计；
+    - physiological_exclusion_note：不给 ROI 时，说明 pet_volume 已如何排除生理性摄取（原文写入结果）。
+    两者都没有时报错。
+
+    metadata（可选）：
+    - "tracer" 或 "Radiopharmaceutical"：示踪剂名称，没有就不写；
+    - "Units"：PET 体素单位。BQML 等非 SUV 单位直接报错；未提供时标注「未校验 SUV 换算」。
     """
     t0 = time.time()
     z_dim, y_dim, x_dim = ct_volume.shape
     voxel_vol_cm3 = (spacing[0] * spacing[1] * spacing[2]) / 1000.0
+    meta = metadata or {}
 
-    # Metabolic tumor mask (SUV >= suv_threshold, typically 2.5)
-    metabolic_mask = pet_volume >= suv_threshold
-    suv_max = round(float(np.max(pet_volume)), 2)
+    if roi_mask is not None:
+        roi = np.asarray(roi_mask).astype(bool)
+        if roi.shape != pet_volume.shape:
+            raise ValueError(f"roi_mask 形状 {roi.shape} 与 PET 体积 {pet_volume.shape} 不一致")
+        if not np.any(roi):
+            raise ValueError("roi_mask 为空，无法计算 SUV 指标")
+        roi_desc = "调用方提供的 ROI"
+    elif physiological_exclusion_note and str(physiological_exclusion_note).strip():
+        roi = np.ones(pet_volume.shape, dtype=bool)
+        roi_desc = f"全体积（调用方说明：{str(physiological_exclusion_note).strip()}）"
+    else:
+        raise ValueError(
+            "未提供 roi_mask 或生理性摄取排除说明：全体积阈值会把脑、膀胱等生理性摄取计入 MTV，拒绝计算"
+        )
+
+    tracer = meta.get("tracer") or meta.get("Radiopharmaceutical")
+    units = meta.get("Units")
+    units_norm = str(units).strip().upper().replace("/", "") if units else None
+    if units_norm in ("BQML", "BQ", "CNTS", "COUNTS"):
+        raise ValueError(f"PET 体素单位为 {units}，不是 SUV；需先按注射剂量、衰变与体重换算为 SUV")
+    if units_norm in ("GML", "SUV", "SUVBW"):
+        suv_note = f"PET 单位标记为 {units}，按 SUV 使用；换算过程未在本模块复核"
+        suv_units_verified = True
+    else:
+        suv_note = "未校验 PET 体素值是否为 SUV（缺少单位/剂量/衰变/体重信息），按输入值直接计算"
+        suv_units_verified = False
+
+    # ROI 内阈值分割的代谢体积
+    pet_in_roi = np.where(roi, pet_volume, -np.inf)
+    metabolic_mask = roi & (pet_volume >= suv_threshold)
+    suv_max = round(float(np.max(pet_volume[roi])), 2)
 
     if np.any(metabolic_mask):
         suv_mean = round(float(np.mean(pet_volume[metabolic_mask])), 2)
         mtv_cm3 = round(float(np.sum(metabolic_mask)) * voxel_vol_cm3, 2)
         tlg = round(mtv_cm3 * suv_mean, 2)
-        # Select key slice with highest SUV peak
-        z_suv_max = [float(np.max(pet_volume[z])) for z in range(z_dim)]
-        peak_z = int(np.argmax(z_suv_max))
     else:
-        suv_mean = 0.0
+        # ROI 内没有达到阈值的体素：不输出均值与体积
+        suv_mean = None
         mtv_cm3 = 0.0
-        tlg = 0.0
-        peak_z = z_dim // 2
+        tlg = None
+    # 关键层：ROI 内 SUV 峰值所在层
+    peak_z = int(np.unravel_index(int(np.argmax(pet_in_roi)), pet_volume.shape)[0])
 
     chosen_slice_idx = key_slice_index if key_slice_index is not None and 0 <= key_slice_index < z_dim else peak_z
 
@@ -332,11 +314,11 @@ def compute_pet_metrics_and_fusion(
     # 3. Clinical HUD Box
     hud_bg = [(8, 8), (260, 96)]
     draw.rounded_rectangle(hud_bg, radius=4, fill=(15, 23, 42, 215), outline=(51, 65, 85, 255))
-    draw.text((16, 12), "PET-CT Metabolic Fusion (18F-FDG)", font=font_bold, fill=(241, 245, 249, 255))
+    draw.text((16, 12), f"PET-CT Fusion{f' ({tracer})' if tracer else ''}", font=font_bold, fill=(241, 245, 249, 255))
     draw.text((16, 28), f"Key Slice: #{chosen_slice_idx}/{z_dim} | Spacing: {spacing[1]}mm", font=font_reg, fill=(148, 163, 184, 255))
-    draw.text((16, 44), f"SUV_max: {suv_max} | SUV_mean: {suv_mean}", font=font_reg, fill=(251, 146, 60, 255))
+    draw.text((16, 44), f"SUV_max: {suv_max} | SUV_mean: {suv_mean if suv_mean is not None else '--'}", font=font_reg, fill=(251, 146, 60, 255))
     draw.text((16, 60), f"MTV (Metabolic Vol): {mtv_cm3} cm³", font=font_reg, fill=(250, 204, 21, 255))
-    draw.text((16, 76), f"TLG (Total Glycolysis): {tlg} g", font=font_reg, fill=(52, 211, 153, 255))
+    draw.text((16, 76), f"TLG: {tlg if tlg is not None else '--'}", font=font_reg, fill=(52, 211, 153, 255))
 
     # 4. SUV Heatmap Colorbar (Right side)
     cb_x = w - 24
@@ -365,15 +347,21 @@ def compute_pet_metrics_and_fusion(
         "mtv_cm3": mtv_cm3,
         "tlg": tlg,
         "tlg_g": tlg,
+        "tracer": tracer,
+        "roi": roi_desc,
+        "suv_units_verified": suv_units_verified,
+        "suv_note": suv_note,
         "fusion_png_base64": png_to_base64(png_bytes),
         "fusion_png_size_bytes": len(png_bytes),
         "summary_markdown": (
-            f"**18F-FDG PET-CT 代谢融合定量报告**\n"
-            f"- **最高摄取峰值 (SUV_max)**: `{suv_max}` (切点阈值: `{suv_threshold}`)\n"
-            f"- **肿瘤平均摄取 (SUV_mean)**: `{suv_mean}`\n"
-            f"- **代谢肿瘤体积 (MTV)**: `{mtv_cm3} cm³`\n"
-            f"- **总病灶糖酵解量 (TLG)**: `{tlg} g`\n"
-            f"- **最大代谢横截面**: 第 `#{chosen_slice_idx}` 层\n"
+            f"**PET-CT 融合定量{f'（{tracer}）' if tracer else ''}**\n"
+            f"- **统计范围**: {roi_desc}\n"
+            f"- **SUV_max**: `{suv_max}`（阈值 `{suv_threshold}`）\n"
+            f"- **SUV_mean（≥阈值体素）**: `{suv_mean if suv_mean is not None else '无达到阈值的体素'}`\n"
+            f"- **MTV**: `{mtv_cm3} cm³`\n"
+            f"- **TLG**: `{tlg if tlg is not None else '--'}`\n"
+            f"- **SUV 峰值所在层**: 第 `#{chosen_slice_idx}` 层\n"
+            f"- **单位说明**: {suv_note}\n"
         )
     }
 
@@ -387,42 +375,50 @@ def delineate_radiotherapy_targets(
     key_slice_index: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Delineates clinical Radiation Therapy (RT-STRUCT) Target Volumes:
-    - GTV (Gross Tumor Volume): Gross macroscopic tumor core
-    - CTV (Clinical Target Volume): GTV expanded by clinical margin (e.g. +6mm), strictly clipped by anatomical barriers (e.g., cortical bones/ribs HU > 250 and pleural cavity boundary)
-    - PTV (Planning Target Volume): CTV expanded by setup uncertainty margin (e.g. +4mm)
+    由 GTV 掩膜按物理间距各向异性外扩得到 CTV / PTV（几何外扩，未做剂量学或规范符合性验证）：
+    - GTV：调用方提供的掩膜，为空时报错；
+    - CTV：GTV 的欧氏距离（按各轴 spacing 计算）<= ctv_margin_mm 的区域，
+      去除 > 250 HU 的骨性体素与体外空气（与图像边界相连的 < -500 HU 连通域），再并回 GTV；
+      肺组织不被裁剪；裁剪只是逐体素掩膜，不是沿解剖屏障的测地距离外扩；
+    - PTV：CTV 的欧氏距离 <= ptv_margin_mm 的区域，去除体外空气，再并回 CTV。
     """
     t0 = time.time()
     z_dim, y_dim, x_dim = ct_volume.shape
     voxel_vol_cm3 = (spacing[0] * spacing[1] * spacing[2]) / 1000.0
+    sampling = tuple(float(v) for v in spacing)
 
-    gtv_mask = metabolic_or_lesion_mask.astype(bool)
+    gtv_mask = np.asarray(metabolic_or_lesion_mask).astype(bool)
+    if gtv_mask.shape != ct_volume.shape:
+        raise ValueError(f"GTV 掩膜形状 {gtv_mask.shape} 与 CT 体积 {ct_volume.shape} 不一致")
     if not np.any(gtv_mask):
-        # Fallback default sphere target in center if empty
-        cz, cy, cx = z_dim // 2, y_dim // 2, x_dim // 2
-        gz, gy, gx = np.meshgrid(np.arange(z_dim), np.arange(y_dim), np.arange(x_dim), indexing="ij")
-        gtv_mask = (((gz - cz) / 4.0)**2 + ((gy - cy) / 8.0)**2 + ((gx - cx) / 8.0)**2) <= 1.0
+        raise ValueError("GTV 掩膜为空，无法外扩靶区")
 
     # 1. GTV Volume in cm³
     gtv_voxels = int(np.sum(gtv_mask))
     gtv_vol_cm3 = round(gtv_voxels * voxel_vol_cm3, 2)
 
-    # 2. CTV Expansion with Anatomical Barrier Clipping
-    # Convert physical margin in mm to structuring element iterations
-    ctv_steps = max(1, int(round(ctv_margin_mm / max(spacing[1], 0.1))))
-    struct_elem = generate_binary_structure(3, 1)
-    ctv_raw = binary_dilation(gtv_mask, structure=struct_elem, iterations=ctv_steps)
-
-    # Anatomical barriers: cortical bone / spine (HU > 250) and external air boundary
+    # 体外空气：与层面边界相连的 < -500 HU 连通域（肺不与边界相连，不会被当作体外空气）
+    low = ct_volume < -500.0
+    lbl, n_lbl = label(low)
+    border_ids = np.unique(np.concatenate([
+        lbl[:, 0, :].ravel(), lbl[:, -1, :].ravel(), lbl[:, :, 0].ravel(), lbl[:, :, -1].ravel()
+    ]))
+    border_ids = border_ids[border_ids > 0]
+    external_air = np.isin(lbl, border_ids) if border_ids.size else np.zeros_like(low)
     bone_barrier = ct_volume > 250.0
-    air_barrier = ct_volume < -850.0
-    ctv_mask = ctv_raw & (~bone_barrier) & (~air_barrier)
+
+    # 2. CTV：按物理距离各向异性外扩
+    dist_from_gtv = distance_transform_edt(~gtv_mask, sampling=sampling)
+    ctv_raw = dist_from_gtv <= ctv_margin_mm
+    ctv_mask = (ctv_raw & ~bone_barrier & ~external_air) | gtv_mask
+    bone_voxels_removed = int(np.sum(ctv_raw & bone_barrier & ~gtv_mask))
+    air_voxels_removed = int(np.sum(ctv_raw & external_air & ~gtv_mask))
     ctv_voxels = int(np.sum(ctv_mask))
     ctv_vol_cm3 = round(ctv_voxels * voxel_vol_cm3, 2)
 
-    # 3. PTV Expansion for Linear Accelerator Delivery
-    ptv_steps = max(1, int(round(ptv_margin_mm / max(spacing[1], 0.1))))
-    ptv_mask = binary_dilation(ctv_mask, structure=struct_elem, iterations=ptv_steps) & (~air_barrier)
+    # 3. PTV：CTV 再按物理距离外扩
+    dist_from_ctv = distance_transform_edt(~ctv_mask, sampling=sampling)
+    ptv_mask = ((dist_from_ctv <= ptv_margin_mm) & ~external_air) | ctv_mask
     ptv_voxels = int(np.sum(ptv_mask))
     ptv_vol_cm3 = round(ptv_voxels * voxel_vol_cm3, 2)
 
@@ -460,7 +456,7 @@ def delineate_radiotherapy_targets(
     # HUD Box
     hud_bg = [(8, 8), (280, 100)]
     draw.rounded_rectangle(hud_bg, radius=4, fill=(15, 23, 42, 215), outline=(51, 65, 85, 255))
-    draw.text((16, 12), "DICOM RT-STRUCT Target Delineation", font=font_bold, fill=(241, 245, 249, 255))
+    draw.text((16, 12), "Geometric Target Expansion", font=font_bold, fill=(241, 245, 249, 255))
     draw.text((16, 28), f"Key Slice: #{key_slice_index}/{z_dim} | Margin: CTV +{ctv_margin_mm}mm, PTV +{ptv_margin_mm}mm", font=font_reg, fill=(148, 163, 184, 255))
     draw.text((16, 46), f"GTV (Gross Tumor): {gtv_vol_cm3} cm³", font=font_reg, fill=(248, 113, 113, 255))
     draw.text((16, 62), f"CTV (Clinical Target): {ctv_vol_cm3} cm³", font=font_reg, fill=(52, 211, 153, 255))
@@ -490,7 +486,9 @@ def delineate_radiotherapy_targets(
         "ptv_volume_cm3": ptv_vol_cm3,
         "ctv_margin_mm": ctv_margin_mm,
         "ptv_margin_mm": ptv_margin_mm,
-        "bone_barrier_clipped": True,
+        "ctv_bone_voxels_removed": bone_voxels_removed,
+        "ctv_external_air_voxels_removed": air_voxels_removed,
+        "expansion_method": "按各轴物理间距的欧氏距离变换外扩；CTV 逐体素去除 >250 HU 骨性体素与体外空气；未做剂量学或规范符合性验证",
         "rtstruct_png_base64": png_to_base64(png_bytes),
         "rtstruct_png_size_bytes": len(png_bytes),
         "dicom_rt_roi_metadata": {
@@ -499,10 +497,10 @@ def delineate_radiotherapy_targets(
             "PTV": {"roi_number": 3, "roi_name": "PTV_Planning", "volume_cm3": ptv_vol_cm3, "display_color": [56, 189, 248]},
         },
         "summary_markdown": (
-            f"### 放疗靶区 (DICOM RT-STRUCT) 自动勾画与解剖屏障裁剪报告\n"
-            f"- **肉眼肿瘤区 (GTV)**: `{gtv_vol_cm3} cm³` (第 `#{key_slice_index}` 层最大截面)\n"
-            f"- **临床靶区 (CTV)**: `{ctv_vol_cm3} cm³` (外扩 `+{ctv_margin_mm}mm`，严格沿胸膜与皮质骨边缘解剖裁剪)\n"
-            f"- **计划靶区 (PTV)**: `{ptv_vol_cm3} cm³` (外扩 `+{ptv_margin_mm}mm` 摆位不确定度裕度)\n"
-            f"- **放疗处方剂量规划基础**: 满足 ICRU 50/62 与 AAPM TG-101 规范。\n"
+            f"### 靶区几何外扩结果\n"
+            f"- **GTV（输入掩膜）**: `{gtv_vol_cm3} cm³`（第 `#{key_slice_index}` 层截面最大）\n"
+            f"- **CTV**: `{ctv_vol_cm3} cm³`（物理距离外扩 `+{ctv_margin_mm}mm`，去除骨性体素 {bone_voxels_removed} 个、体外空气体素 {air_voxels_removed} 个）\n"
+            f"- **PTV**: `{ptv_vol_cm3} cm³`（CTV 再外扩 `+{ptv_margin_mm}mm`）\n"
+            f"- **说明**: 纯几何外扩，未做剂量学或规范符合性验证。\n"
         )
     }

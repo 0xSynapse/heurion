@@ -9,12 +9,30 @@ import numpy as np
 from typing import Dict, Any, Tuple, Optional, List
 
 
+def _primary_kernel_name(kernel: Any) -> str:
+    """
+    取卷积核的主名称。Siemens 常把卷积核存成多值字段（如 ['Br64d', '3']，第二项为迭代重建强度），
+    读出来可能是序列，也可能是被 str() 过的 "['Br64d', '3']"。
+    """
+    if kernel is None:
+        return ""
+    if isinstance(kernel, (list, tuple)) or (hasattr(kernel, "__iter__") and not isinstance(kernel, (str, bytes))):
+        items = [str(x).strip() for x in kernel if str(x).strip()]
+        return items[0] if items else ""
+    text = str(kernel).strip()
+    m = re.match(r"^\[\s*'([^']*)'", text)
+    if m:
+        return m.group(1).strip()
+    return text.split("\\")[0].strip()
+
+
 def parse_reconstruction_kernel(kernel_str: Optional[str]) -> Dict[str, Any]:
     """
     Parses vendor reconstruction kernel (Siemens, GE, Philips, Canon, UIH)
     and classifies sharpness and edge-overshoot risk.
     Uses exact vendor tables and regex matching instead of single-character substring checks.
     """
+    kernel_str = _primary_kernel_name(kernel_str)
     if not kernel_str:
         return {
             "raw": "UNKNOWN",
@@ -100,6 +118,35 @@ def parse_reconstruction_kernel(kernel_str: Optional[str]) -> Dict[str, Any]:
     }
 
 
+def segment_lungs(volume_zyx: np.ndarray, voxel_vol_cm3: float) -> Optional[np.ndarray]:
+    """
+    经典阈值法双肺分割：取 < -400 HU 的三维连通域，去掉碰到层面四边的连通域（体外空气、检查床下方空气），
+    保留最大的一到两个（两肺可能经气管连成一个），逐层填洞把肺内血管纳入肺容积。
+    分不出来（例如视野裁切到肺、肺与边界相连）时返回 None，不给估计值。
+    """
+    from scipy.ndimage import label, binary_fill_holes, sum as ndimage_sum
+
+    air = volume_zyx < -400.0
+    lbl, n = label(air)
+    if n == 0:
+        return None
+    border = set(np.unique(np.concatenate([
+        lbl[:, 0, :].ravel(), lbl[:, -1, :].ravel(), lbl[:, :, 0].ravel(), lbl[:, :, -1].ravel()
+    ])).tolist())
+    sizes = ndimage_sum(air, lbl, range(1, n + 1))
+    candidates = sorted(
+        ((float(sz), i + 1) for i, sz in enumerate(sizes) if (i + 1) not in border and sz * voxel_vol_cm3 > 50.0),
+        reverse=True,
+    )
+    if not candidates:
+        return None
+    keep = [idx for sz, idx in candidates[:2] if sz >= 0.1 * candidates[0][0]]
+    mask = np.isin(lbl, keep)
+    for z in range(mask.shape[0]):
+        mask[z] = binary_fill_holes(mask[z])
+    return mask
+
+
 def assess_ct_quality(
     volume_zyx: np.ndarray,
     spacing_zyx: Tuple[float, float, float],
@@ -134,33 +181,35 @@ def assess_ct_quality(
     if dz > 1.5:
         warnings.append(f"扫描层厚 ({dz}mm) 超过 HRCT 诊断标准 (<=1.5mm)，外周细支气管可能存在部分容积效应假象。")
         
-    # 2. Inspiratory adequacy estimation
+    # 2. 吸气程度估计：先分割双肺，再按肺容积判断（不能直接数全视野的低密度体素，体外空气会被算进去）
     z_dim, y_dim, x_dim = volume_zyx.shape
     z_span_mm = float(z_dim * dz)
-
-    # Count aerated lung volume (HU between -1000 and -500, accommodating emphysema)
-    aerated_mask = (volume_zyx >= -1000.0) & (volume_zyx <= -500.0)
-    aerated_voxels = int(np.sum(aerated_mask))
     voxel_vol_cm3 = (dz * dy * dx) / 1000.0
-    total_lung_vol_cm3 = round(float(aerated_voxels * voxel_vol_cm3), 1)
+    lung_mask = segment_lungs(volume_zyx, voxel_vol_cm3)
+    total_lung_vol_cm3: Optional[float] = None
+    if lung_mask is not None:
+        total_lung_vol_cm3 = round(float(np.sum(lung_mask) * voxel_vol_cm3), 1)
 
-    mean_aerated_hu = float(np.mean(volume_zyx[aerated_mask])) if aerated_voxels > 100 else -750.0
-
+    insp_adequate: Optional[bool]
     if z_span_mm < 180.0:
         insp_status = f"局灶/靶区扫描 (纵向覆盖 {z_span_mm:.0f}mm, 全肺通气容积不适用)"
-        insp_adequate = True
+        insp_adequate = None
+    elif total_lung_vol_cm3 is None:
+        insp_status = "未能分割双肺（视野可能裁切到肺），吸气程度未评估"
+        insp_adequate = None
+        warnings.append("未能分割出完整双肺，吸气程度未评估。")
     elif total_lung_vol_cm3 >= 2800.0:
         insp_status = "充分深吸气相 (Adequate Inspiration)"
         insp_adequate = True
-    elif total_lung_vol_cm3 >= 1800.0 or mean_aerated_hu < -820.0:
+    elif total_lung_vol_cm3 >= 1800.0:
         insp_status = "中度吸气相 (Submaximal Inspiration)"
         insp_adequate = True
     else:
         insp_status = "吸气不足或严重肺容积降低 (Suboptimal Inspiration)"
         insp_adequate = False
-        warnings.append("全肺通气容积偏低，下肺野可能出现坠积样假性密度增高，建议结合临床与前片鉴别。")
+        warnings.append("全肺容积偏低，下肺野可能出现坠积样密度增高，建议结合临床与前片鉴别。")
 
-    # 3. Motion artifact index (gradient orientation entropy in lung-cardiac boundary)
+    # 3. 运动伪影指数：实验性指标，未经验证，仅作提示，不参与通过判定与可信度
     motion_index = 0.08
     if z_dim > 10:
         mid_z = z_dim // 2
@@ -170,13 +219,11 @@ def assess_ct_quality(
         blur_ratio = float(np.sum((grad_mag > 10.0) & (grad_mag < 40.0)) / max(np.sum(grad_mag >= 40.0), 1.0))
         motion_index = round(min(max(blur_ratio * 0.1, 0.02), 0.85), 3)
 
-    motion_level = "无明显搏动伪影" if motion_index < 0.25 else ("轻度心跳搏动重影" if motion_index < 0.50 else "明显呼吸/心跳运动伪影")
-    if motion_index >= 0.50:
-        warnings.append(f"心缘周围检测到运动模糊或搏动双边影（运动指数 {motion_index}），邻近心缘结构测量可能受干扰。")
+    motion_level = ("无明显搏动伪影" if motion_index < 0.25 else ("轻度心跳搏动重影" if motion_index < 0.50 else "明显呼吸/心跳运动伪影")) + "（实验性指标）"
 
-    # Overall QA pass criteria
-    is_acceptable = (dz <= 3.0) and (total_lung_vol_cm3 >= 1500.0 or z_span_mm < 180.0)
-    confidence_score = round(max(min(1.0 - (dz - 1.0) * 0.1 - (0.2 if not insp_adequate else 0.0) - motion_index * 0.2, 1.0), 0.5), 2)
+    # 总体判定：层厚 + 吸气程度（未评估时不扣分）
+    is_acceptable = (dz <= 3.0) and (insp_adequate is not False)
+    confidence_score = round(max(min(1.0 - (dz - 1.0) * 0.1 - (0.2 if insp_adequate is False else 0.0), 1.0), 0.5), 2)
 
     return {
         "status": "pass" if is_acceptable else "warning",

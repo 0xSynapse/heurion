@@ -2,6 +2,7 @@ import os
 import io
 import base64
 import time
+import tempfile
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
@@ -14,10 +15,10 @@ try:
     from .renderer import render_key_slice_png, png_to_base64
     from .radiomics import extract_radiomics_features
     from .interactive import interactive_segment_3d
-    from .totalsegmentator import analyze_whole_body_ct, generate_synthetic_whole_body_ct
     from .font_utils import get_cjk_font, get_sans_font, sanitize_text
     from .clinical_bridge import extract_clinical_features
     from .clinical_ai_agent import generate_clinical_ai_report
+    from .spatial_canonicalizer import to_canonical_lps
 except (ImportError, ValueError):
     from device import get_optimal_device, get_device_info
     from dicom_io import apply_ct_window, CT_WINDOWS
@@ -25,48 +26,45 @@ except (ImportError, ValueError):
     from renderer import render_key_slice_png, png_to_base64
     from radiomics import extract_radiomics_features
     from interactive import interactive_segment_3d
-    from totalsegmentator import analyze_whole_body_ct, generate_synthetic_whole_body_ct
     from font_utils import get_cjk_font, get_sans_font, sanitize_text
     from clinical_bridge import extract_clinical_features
     from clinical_ai_agent import generate_clinical_ai_report
+    from spatial_canonicalizer import to_canonical_lps
+
+
+class ModelUnavailableError(RuntimeError):
+    """模型未实现、或权重未安装/未通过校验时抛出；不做任何替代或降级。"""
+
 
 def generate_synthetic_ct_volume(
     shape: Tuple[int, int, int] = (48, 128, 128),
     spacing: Tuple[float, float, float] = (1.5, 0.8, 0.8)
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Synthesizes a realistic 3D thoracic/abdominal CT volume with HU values and an organic target lesion:
-    - Air background: -1000 HU
-    - Body wall / soft tissue: +40 HU
-    - Lung parenchyma: -650 HU
-    - Spine / ribs: +450 HU
-    - Target Lesion: +55 HU
+    合成体模（仅供单元测试与 benchmark 测速，不是任何真实患者数据）：
+    - 背景空气 -1000 HU，体壁软组织 +40 HU，肺 -650 HU，脊柱 +450 HU，一个 +55 HU 的椭球靶区。
+    调用方对外输出时必须带 is_synthetic: true。
     """
     z_dim, y_dim, x_dim = shape
     volume = np.full(shape, -1000.0, dtype=np.float32)
     mask = np.zeros(shape, dtype=np.uint8)
 
-    # 3D coordinate grids
     z_coords, y_coords, x_coords = np.meshgrid(
         np.arange(z_dim), np.arange(y_dim), np.arange(x_dim), indexing="ij"
     )
     cy, cx = y_dim // 2, x_dim // 2
 
-    # Ellipsoidal body contour
     body_mask = ((y_coords - cy) / (y_dim * 0.42))**2 + ((x_coords - cx) / (x_dim * 0.42))**2 <= 1.0
-    volume[body_mask] = 40.0 # soft tissue
+    volume[body_mask] = 40.0
 
-    # Bilateral lungs
     left_lung = ((y_coords - cy) / (y_dim * 0.28))**2 + ((x_coords - (cx - x_dim * 0.2)) / (x_dim * 0.16))**2 <= 1.0
     right_lung = ((y_coords - cy) / (y_dim * 0.28))**2 + ((x_coords - (cx + x_dim * 0.2)) / (x_dim * 0.16))**2 <= 1.0
     volume[left_lung] = -650.0
     volume[right_lung] = -650.0
 
-    # Spine bone in posterior
     spine = ((y_coords - (cy + y_dim * 0.3)) / (y_dim * 0.08))**2 + ((x_coords - cx) / (x_dim * 0.08))**2 <= 1.0
     volume[spine] = 450.0
 
-    # Organic target lesion in right lung / liver zone
     lz = z_dim // 2
     ly = cy + 4
     lx = cx + int(x_dim * 0.2)
@@ -76,7 +74,6 @@ def generate_synthetic_ct_volume(
         ((x_coords - lx) / 12.0)**2
     ) <= 1.0
 
-    # Add slight noise
     noise = np.random.normal(0, 12, shape).astype(np.float32)
     volume += noise
 
@@ -87,6 +84,66 @@ def generate_synthetic_ct_volume(
 
 import scipy.ndimage as ndi
 from scipy.ndimage import label
+
+
+# ---------------------------------------------------------------------------
+# 空间几何：规范 LPS+ (Z, Y, X) 体积与 NIfTI 之间的统一换算
+# ---------------------------------------------------------------------------
+
+def canonical_lps_affine(spacing: Tuple[float, float, float]) -> np.ndarray:
+    """
+    规范体积 vol_zyx（z: 下→上，y: 前→后，x: 右→左）转置成 (X, Y, Z) 写入 NIfTI 时使用的仿射。
+    NIfTI 世界坐标是 RAS（+x 指向患者右、+y 指向前），数组 X 轴朝患者左、Y 轴朝后，
+    因此 X、Y 两列取负号；方向码为 ('L', 'P', 'S')，与 spatial_canonicalizer.to_canonical_lps 的目标一致。
+    """
+    dz, dy, dx = [float(s) for s in spacing]
+    return np.diag([-dx, -dy, dz, 1.0])
+
+
+def write_canonical_nifti(vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> str:
+    """把规范 LPS+ 体积写成临时 NIfTI（带正确方向的仿射），返回路径；调用方负责删除。"""
+    import nibabel as nib
+    vol_xyz = np.transpose(np.asarray(vol_zyx, dtype=np.float32), (2, 1, 0))
+    tmp = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
+    tmp.close()
+    nib.save(nib.Nifti1Image(vol_xyz, canonical_lps_affine(spacing)), tmp.name)
+    return tmp.name
+
+
+def nifti_array_to_canonical(arr_xyz: np.ndarray, affine: np.ndarray) -> np.ndarray:
+    """模型在文件原生网格上的输出（X, Y, Z）按文件仿射转回规范 LPS+ (Z, Y, X)。"""
+    vol_zyx, _, _ = to_canonical_lps(np.asarray(arr_xyz), affine)
+    return vol_zyx
+
+
+def display_plane_slice(vol_zyx: np.ndarray, plane: str, index: int) -> np.ndarray:
+    """
+    从规范 LPS+ 体积取出一个可直接显示的 2D 截面（放射学约定，全工程统一使用本函数）：
+    - 轴位：上 A、下 P、左 R、右 L —— 规范体积行 = y(前→后)、列 = x(右→左)，原样输出；
+    - 冠状位：上 S、下 I、左 R、右 L —— 行为 z(下→上)，需上下翻转使 S 在上；
+    - 矢状位：上 S、下 I、左 A、右 P —— 行为 z(下→上) 需上下翻转，列为 y(前→后)。
+    与 spatial_canonicalizer.get_radiological_orientation_labels 的方位标注一致。
+    """
+    plane = (plane or "axial").lower()
+    if plane == "axial":
+        return vol_zyx[index, :, :]
+    if plane == "coronal":
+        return vol_zyx[::-1, index, :]
+    if plane == "sagittal":
+        return vol_zyx[::-1, :, index]
+    raise ValueError(f"未知截面方向: {plane}")
+
+
+def _plane_geometry(shape: Tuple[int, int, int], spacing: Tuple[float, float, float], plane: str) -> Tuple[int, float, float, str]:
+    """返回 (该方向总层数, 显示图竖直像素间距, 水平像素间距, 中文标签)。"""
+    z_dim, y_dim, x_dim = shape
+    dz, dy, dx = spacing
+    if plane == "axial":
+        return z_dim, dy, dx, "轴位 (Axial)"
+    if plane == "coronal":
+        return y_dim, dz, dx, "冠状位 (Coronal)"
+    return x_dim, dz, dy, "矢状位 (Sagittal)"
+
 
 def extract_largest_component(binary_mask: np.ndarray) -> np.ndarray:
     """Extracts the largest 3D connected component, removing scattered noise."""
@@ -100,37 +157,30 @@ def extract_largest_component(binary_mask: np.ndarray) -> np.ndarray:
     largest_label = int(np.argmax(counts))
     return (labeled == largest_label).astype(np.uint8)
 
+
 def segment_pulmonary_nodules(
     volume: np.ndarray,
-    spacing: Tuple[float, float, float] = (1.5, 0.8, 0.8),
+    spacing: Tuple[float, float, float],
     prompt_point: Optional[Dict[str, int]] = None
 ) -> Tuple[np.ndarray, Dict[str, Any], str]:
     """
-    Clinically accurate pulmonary nodule segmentation and screening pipeline:
-    1. Extracts true 3D lung parenchyma envelope (strictly excluding chest wall, ribs, spine, and mediastinum)
-    2. Supports interactive point click (VISTA-3D adaptive growing) if prompt_point is provided
-    3. Otherwise detects intraparenchymal soft-tissue candidates (-150 to +120 HU) and filters out branching vessels
-    4. Categorizes with international Lung-RADS 1~4 criteria and RECIST 1.1 calipers
-    5. Returns (binary_mask, recist_metrics, lesion_label)
+    肺结节候选的 HU 阈值 + 形态学筛查（规则算法，非深度学习模型）：
+    1. 由解剖分区阈值法得到肺实质包络（排除胸壁、骨与纵隔）；
+    2. 给定种子点时，在种子点附近有限范围内做 HU 区域生长（interactive.interactive_segment_3d）；
+    3. 否则在肺实质内取 -150 ~ +120 HU 的候选连通域，按等效直径、致密度、长宽比过滤管状血管；
+    4. 返回 (二值掩膜, 测量值, 标签文字)。测量值只含径线/体积/密度分型，不含分级与处置建议。
     """
     dz, dy, dx = [float(s) for s in spacing]
     voxel_vol_mm3 = dz * dy * dx
     z_dim, y_dim, x_dim = volume.shape
 
-    # Mode A: Doctor interactive click-to-measure
+    # 模式 A：种子点交互测量
     if prompt_point and "z" in prompt_point and "y" in prompt_point and "x" in prompt_point:
-        try:
-            from .interactive import interactive_segment_3d
-        except (ImportError, ValueError):
-            from interactive import interactive_segment_3d
-
         pz = int(prompt_point["z"])
         py = int(prompt_point["y"])
         px = int(prompt_point["x"])
 
-        # Focal nodule / target bounding box constraint (radius 18mm XY, 12mm Z)
-        # In thoracic imaging, solitary nodules are defined as <= 30mm diameter (Fleischner Society).
-        # Bounding the interactive seed prevents unbounded flood-fill across the whole vascular tree.
+        # 以种子点为中心限定生长范围（XY 半径 18mm、Z 半径 12mm），防止沿血管树无界扩散
         rz = max(3, int(np.ceil(12.0 / dz)))
         ry = max(8, int(np.ceil(18.0 / dy)))
         rx = max(8, int(np.ceil(18.0 / dx)))
@@ -148,16 +198,13 @@ def segment_pulmonary_nodules(
         )
         mask = res["mask"]
         recist = calculate_subsolid_metrics(volume, mask, spacing=spacing, key_slice_idx=pz)
-        ld = recist["longest_diameter_mm"]
-        solid_d = recist.get("solid_core_diameter_mm", 0.0)
-        solid_desc = f", 实性核心 {solid_d}mm" if solid_d > 0 else ""
-        nodule_type_zh = recist.get("nodule_type_zh", "靶结节")
-        rads = recist.get("lung_rads", {})
+        ld = recist.get("longest_diameter_mm")
+        nodule_type_zh = recist.get("nodule_type_zh", "种子点区域")
         if recist.get("is_vessel"):
-            return mask, recist, f"正常肺血管分支断面 (伴行血管, 非肺结节, {ld}mm)"
-        return mask, recist, f"交互式靶结节测量 ({nodule_type_zh}, {rads.get('name', '')}, {ld}mm{solid_desc})"
+            return mask, recist, f"种子点区域（{nodule_type_zh}）"
+        return mask, recist, f"种子点区域生长测量（{nodule_type_zh}，最大层面长径 {ld} mm）"
 
-    # Mode B: Automatic anatomical atlas lung envelope screening
+    # 模式 B：肺实质包络内自动筛查
     try:
         from .totalsegmentator import extract_anatomical_compartments_3d
     except (ImportError, ValueError):
@@ -168,42 +215,28 @@ def segment_pulmonary_nodules(
     bone_mask = compartments["bone_skeleton"]
     mediastinum_mask = compartments["mediastinum_central"]
 
-    if np.any(lung_mask):
-        intraparenchymal_zone = lung_mask & (~bone_mask) & (~mediastinum_mask)
-        lung_cands_3d = (volume >= -150.0) & (volume <= 120.0) & intraparenchymal_zone
-    else:
-        lung_cands_3d = np.zeros(volume.shape, dtype=bool)
-        for z in range(z_dim):
-            sl = volume[z]
-            body = ndi.binary_fill_holes(sl > -450.0)
-            if np.sum(body) < 1000:
-                continue
-            lung_air = (sl >= -980.0) & (sl <= -450.0) & body
-            if lung_air.sum() > 300:
-                env = ndi.binary_fill_holes(lung_air)
-                env_clean = ndi.binary_erosion(env, iterations=2)
-                cands = (sl >= -150.0) & (sl <= 120.0) & env_clean
-                lung_cands_3d[z] = cands
-
-    lbl, n_feats = ndi.label(lung_cands_3d)
     empty_recist = {
         "total_volume_cm3": 0.0,
         "key_slice_index": z_dim // 2,
-        "longest_diameter_mm": 0.0,
-        "short_axis_mm": 0.0,
+        "key_slice_basis": "无候选，取层面中点仅用于显示",
+        "longest_diameter_mm": None,
+        "short_axis_mm": None,
         "caliper_longest": None,
         "caliper_short": None,
         "has_lesion": False,
-        "lung_rads": {
-            "category": "1",
-            "name": "Lung-RADS 1 类",
-            "description": "阴性表现 (双肺野清晰，未见确切实性结节或明显占位)",
-            "recommendation": "常规年度低剂量 CT 筛查"
-        }
     }
+    no_candidate_label = "阈值法未检出符合形态条件的候选结节"
 
+    if not np.any(lung_mask):
+        empty_recist["key_slice_basis"] = "未分割出肺实质，取层面中点仅用于显示"
+        return np.zeros_like(volume, dtype=np.uint8), empty_recist, "未分割出肺实质，未做结节筛查"
+
+    intraparenchymal_zone = lung_mask & (~bone_mask) & (~mediastinum_mask)
+    lung_cands_3d = (volume >= -150.0) & (volume <= 120.0) & intraparenchymal_zone
+
+    lbl, n_feats = ndi.label(lung_cands_3d)
     if n_feats == 0:
-        return np.zeros_like(volume, dtype=np.uint8), empty_recist, "未见高危肺结节 (Lung-RADS 1 类 阴性)"
+        return np.zeros_like(volume, dtype=np.uint8), empty_recist, no_candidate_label
 
     counts = np.bincount(lbl.flat)
     counts[0] = 0
@@ -211,13 +244,12 @@ def segment_pulmonary_nodules(
     vols_mm3 = counts[1:] * voxel_vol_mm3
     d_equivs_mm = 2.0 * ((3.0 * vols_mm3) / (4.0 * np.pi)) ** (1.0 / 3.0)
 
-    # Clinically meaningful nodule diameter range: 4mm to 30mm (Fleischner Society & ACR Lung-RADS)
+    # 候选等效直径范围 4~30 mm
     valid_indices = np.where((d_equivs_mm >= 4.0) & (d_equivs_mm <= 30.0))[0] + 1
     if len(valid_indices) == 0:
-        return np.zeros_like(volume, dtype=np.uint8), empty_recist, "未见高危肺结节 (Lung-RADS 1 类 阴性)"
+        return np.zeros_like(volume, dtype=np.uint8), empty_recist, no_candidate_label
 
-    # Distinguish spherical nodules from branching tubular blood vessels
-    # Real nodules: compact, solid/subsolid (solidity >= 0.20), non-branching (aspect ratio <= 2.5), max box dimension <= 32mm
+    # 区分团块状候选与分支管状血管：外接盒最大边 <= 32mm、致密度 >= 0.20、长宽比 <= 2.5
     all_boxes = ndi.find_objects(lbl, max_label=n_feats)
     candidates = []
     for idx in valid_indices:
@@ -236,623 +268,516 @@ def segment_pulmonary_nodules(
         solidity = vol_i / (vol_box + 1e-4)
         d_i = d_equivs_mm[idx - 1]
 
-        # Clinical nodule discriminators:
-        # 1. Bounding box max dimension must be <= 32mm (a nodule cannot span centimeters across the lung)
-        # 2. 3D Solidity must be >= 0.20 (spherical/ellipsoid lesions have solidity 0.25-0.55; hollow branching vessels have < 0.05)
-        # 3. Aspect ratio must be <= 2.5 (cylindrical/branching vessels exceed 3.0)
         if max_dim <= 32.0 and solidity >= 0.20 and aspect_ratio <= 2.5:
-            # Anatomical atlas boundary check: reject candidates overlapping dense bone or central mediastinum
             cand_mask_i = (lbl == idx)
             cand_voxels = counts[idx]
             if cand_voxels > 0 and np.any(bone_mask):
-                bone_overlap = np.sum(cand_mask_i & bone_mask) / cand_voxels
-                if bone_overlap > 0.15:
+                if np.sum(cand_mask_i & bone_mask) / cand_voxels > 0.15:
                     continue
             if cand_voxels > 0 and np.any(mediastinum_mask):
-                med_overlap = np.sum(cand_mask_i & mediastinum_mask) / cand_voxels
-                if med_overlap > 0.25:
+                if np.sum(cand_mask_i & mediastinum_mask) / cand_voxels > 0.25:
                     continue
 
             score = vol_i * solidity / (aspect_ratio ** 1.2)
             candidates.append((idx, score, d_i, vol_i, aspect_ratio, solidity))
 
-    # Genuine negative exit: if no candidates pass compactness criteria, return Lung-RADS 1 negative!
     if not candidates:
-        return np.zeros_like(volume, dtype=np.uint8), empty_recist, "未见高危肺结节 (Lung-RADS 1 类 阴性)"
+        return np.zeros_like(volume, dtype=np.uint8), empty_recist, no_candidate_label
 
     candidates.sort(key=lambda x: x[1], reverse=True)
     best_idx = candidates[0][0]
     best_mask = (lbl == best_idx).astype(np.uint8)
 
     recist = calculate_subsolid_metrics(volume, best_mask, spacing=spacing)
-    ld = recist["longest_diameter_mm"]
-    solid_d = recist.get("solid_core_diameter_mm", 0.0)
-    nodule_type_zh = recist.get("nodule_type_zh", "肺结节")
-    rads = recist.get("lung_rads", {})
-    solid_desc = f", 实性核心 {solid_d}mm" if solid_d > 0 else ""
-    lesion_label = f"{nodule_type_zh} ({rads.get('name', '')}, {ld}mm{solid_desc})"
+    ld = recist.get("longest_diameter_mm")
+    nodule_type_zh = recist.get("nodule_type_zh", "候选结节")
+    lesion_label = f"阈值法候选结节（{nodule_type_zh}，最大层面长径 {ld} mm）"
 
     return best_mask, recist, lesion_label
 
 
+# MONAI wholeBody_ct_segmentation bundle 的 105 个输出通道定义（取自 bundle metadata.json，0 为背景）
+WHOLEBODY_CT_LABELS: Tuple[str, ...] = (
+    'background', 'spleen', 'kidney_right', 'kidney_left', 'gallbladder', 'liver', 'stomach', 'aorta',
+    'inferior_vena_cava', 'portal_vein_and_splenic_vein', 'pancreas', 'adrenal_gland_right', 'adrenal_gland_left',
+    'lung_upper_lobe_left', 'lung_lower_lobe_left', 'lung_upper_lobe_right', 'lung_middle_lobe_right',
+    'lung_lower_lobe_right', 'vertebrae_L5', 'vertebrae_L4', 'vertebrae_L3', 'vertebrae_L2', 'vertebrae_L1',
+    'vertebrae_T12', 'vertebrae_T11', 'vertebrae_T10', 'vertebrae_T9', 'vertebrae_T8', 'vertebrae_T7',
+    'vertebrae_T6', 'vertebrae_T5', 'vertebrae_T4', 'vertebrae_T3', 'vertebrae_T2', 'vertebrae_T1',
+    'vertebrae_C7', 'vertebrae_C6', 'vertebrae_C5', 'vertebrae_C4', 'vertebrae_C3', 'vertebrae_C2',
+    'vertebrae_C1', 'esophagus', 'trachea', 'heart_myocardium', 'heart_atrium_left', 'heart_ventricle_left',
+    'heart_atrium_right', 'heart_ventricle_right', 'pulmonary_artery', 'brain', 'iliac_artery_left',
+    'iliac_artery_right', 'iliac_vena_left', 'iliac_vena_right', 'small_bowel', 'duodenum', 'colon',
+    'rib_left_1', 'rib_left_2', 'rib_left_3', 'rib_left_4', 'rib_left_5', 'rib_left_6', 'rib_left_7',
+    'rib_left_8', 'rib_left_9', 'rib_left_10', 'rib_left_11', 'rib_left_12', 'rib_right_1', 'rib_right_2',
+    'rib_right_3', 'rib_right_4', 'rib_right_5', 'rib_right_6', 'rib_right_7', 'rib_right_8', 'rib_right_9',
+    'rib_right_10', 'rib_right_11', 'rib_right_12', 'humerus_left', 'humerus_right', 'scapula_left',
+    'scapula_right', 'clavicula_left', 'clavicula_right', 'femur_left', 'femur_right', 'hip_left', 'hip_right',
+    'sacrum', 'face', 'gluteus_maximus_left', 'gluteus_maximus_right', 'gluteus_medius_left',
+    'gluteus_medius_right', 'gluteus_minimus_left', 'gluteus_minimus_right', 'autochthon_left',
+    'autochthon_right', 'iliopsoas_left', 'iliopsoas_right', 'urinary_bladder',
+)
+
+# BTCV 13 类器官标签（swin_unetr_btcv_segmentation bundle）
+BTCV_ORGAN_LABELS: Dict[int, str] = {
+    1: "脾脏 (Spleen)", 2: "右肾 (Right Kidney)", 3: "左肾 (Left Kidney)",
+    4: "胆囊 (Gallbladder)", 5: "食管 (Esophagus)", 6: "肝脏 (Liver)",
+    7: "胃 (Stomach)", 8: "主动脉 (Aorta)", 9: "下腔静脉 (IVC)",
+    10: "门静脉与脾静脉 (Portal & Splenic Vein)", 11: "胰腺 (Pancreas)",
+    12: "右肾上腺 (Right Adrenal)", 13: "左肾上腺 (Left Adrenal)"
+}
+
+# BraTS bundle 要求的输入通道顺序（brats_mri_segmentation metadata.json channel_def）
+BRATS_CHANNEL_ORDER: Tuple[str, ...] = ("T1c", "T1", "T2", "FLAIR")
+
+
 class MonaiNeuralInferencePipeline:
     """
-    Genuine MONAI Deep Learning Inference Engine.
-    Executes real PyTorch 3D neural network models on Apple Silicon Metal (MPS), NVIDIA CUDA, or CPU.
-    Strictly forbids heuristic rule fallbacks or synthetic mask generation.
+    MONAI bundle 权重推理。每个模型按对应 bundle 的 inference 配置做预处理与推理；
+    权重未安装或 SHA-256 校验未通过时直接报错，不做任何替代或降级。
+    输入一律是规范 LPS+ (Z, Y, X) 体积，以带正确方向仿射的 NIfTI 交给 MONAI，输出经 Invertd 回到同一网格。
     """
+
+    # 引擎内确有加载与推理路径的登记模型 -> 加载函数名（与 model_registry 的 engine_implemented 必须一致）
+    NEURAL_LOADERS: Dict[str, str] = {
+        "spleen_ct": "get_spleen_model",
+        "swinunetr_btcv": "get_btcv_model",
+        "prostate_mri": "get_prostate_model",
+        "brats_mri": "get_brats_model",
+        "ventricular_short_axis": "get_cardiac_model",
+        "wholebody_ct": "get_wholebody_model",
+    }
+
     def __init__(self, device: torch.device):
         self.device = device
-        self.models: Dict[str, torch.nn.Module] = {}
-        self._spleen_pre = None
-        self._spleen_post = None
+        self.models: Dict[str, Any] = {}
 
-    def _init_spleen_transforms(self):
-        if self._spleen_pre is not None:
-            return
-        from monai.transforms import (
-            Compose, LoadImaged, EnsureChannelFirstd, Orientationd,
-            Spacingd, ScaleIntensityRanged, EnsureTyped, Invertd, AsDiscreted
-        )
-        self._spleen_pre = Compose([
-            LoadImaged(keys="image"),
-            EnsureChannelFirstd(keys="image"),
-            Orientationd(keys="image", axcodes="RAS"),
-            Spacingd(keys="image", pixdim=[1.5, 1.5, 2.0], mode="bilinear"),
-            ScaleIntensityRanged(keys="image", a_min=-57, a_max=164, b_min=0, b_max=1, clip=True),
-            EnsureTyped(keys="image")
-        ])
-        self._spleen_post = Compose([
-            Invertd(
-                keys="pred",
-                transform=self._spleen_pre,
-                orig_keys="image",
-                meta_key_postfix="meta_dict",
-                nearest_interp=False,
-                to_tensor=True
-            ),
-            AsDiscreted(keys="pred", argmax=True)
-        ])
+    # ---- 权重 ----
+    def _verified_weights(self, registry_name: str) -> Tuple[Path, Dict[str, Any]]:
+        try:
+            from .model_registry import get_model_status
+        except (ImportError, ValueError):
+            from model_registry import get_model_status
+        status = get_model_status(registry_name)
+        if not status.get("is_ready"):
+            raise ModelUnavailableError(
+                f"模型权重 '{registry_name}' 不可用：{status.get('unavailable_reason') or '未登记'}。"
+                "请先通过模型管理拉取并校验官方权重。"
+            )
+        return Path(status["local_path"]), status
+
+    def _base_meta(self, registry_name: str, architecture: str, t0: float) -> Dict[str, Any]:
+        _, status = self._verified_weights(registry_name)
+        return {
+            "real_neural_inference": True,
+            "neural_architecture": architecture,
+            "weights_registry_name": registry_name,
+            "weights_version": status.get("version"),
+            "weights_sha256": status.get("actual_sha256"),
+            "weights_source": "MONAI Model Zoo bundle",
+            "inference_duration_sec": round(time.time() - t0, 3),
+            "accelerator": str(self.device),
+        }
+
+    def _load_state_dict_model(self, key: str, registry_name: str, build) -> torch.nn.Module:
+        if key in self.models:
+            return self.models[key]
+        weights_path, _ = self._verified_weights(registry_name)
+        model = build().to(self.device)
+        sd = torch.load(str(weights_path), map_location=self.device, weights_only=False)
+        model.load_state_dict(sd)
+        model.eval()
+        self.models[key] = model
+        return model
 
     def get_spleen_model(self) -> torch.nn.Module:
-        if "spleen" in self.models:
-            return self.models["spleen"]
-
-        try:
-            from .model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        except (ImportError, ValueError):
-            from model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-
-        spec = OFFICIAL_MODEL_REGISTRY.get("spleen_ct")
-        file_name = spec.file_name if spec else "spleen_ct_v0.4.0.pt"
-        weights_path = get_model_cache_dir() / file_name
-
-        if not weights_path.exists() or weights_path.stat().st_size < 1024 * 1024:
-            raise RuntimeError(
-                f"MONAI 脾脏分割模型官方神经网络权重缺失 ({weights_path})。"
-                "为确保医疗准确性，算法层严禁退化为启发式规则伪造输出。请先通过模型管理中心下载官方权重。"
-            )
-
         from monai.networks.nets import UNet
-        model = UNet(
-            spatial_dims=3,
-            in_channels=1,
-            out_channels=2,
-            channels=[16, 32, 64, 128, 256],
-            strides=[2, 2, 2, 2],
-            num_res_units=2,
-            norm="batch"
-        ).to(self.device)
-
-        sd = torch.load(str(weights_path), map_location=self.device)
-        model.load_state_dict(sd)
-        model.eval()
-        self.models["spleen"] = model
-        return model
-
-    def infer_spleen(
-        self,
-        volume_or_path: Any,
-        spacing: Tuple[float, float, float] = (5.0, 0.703125, 0.703125)
-    ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        """
-        Executes genuine MONAI 3D-UNet tensor inference on device (MPS / CUDA / CPU).
-        Returns:
-            - clean_mask: 3D uint8 binary mask matching input volume shape (Z, Y, X)
-            - metadata: execution timing, positive voxels, architecture, accelerator
-        """
-        t0 = time.time()
-        temp_path = None
-        if isinstance(volume_or_path, str) and os.path.exists(volume_or_path):
-            nii_path = volume_or_path
-        else:
-            vol_zyx = volume_or_path
-            vol_xyz = np.transpose(vol_zyx, (2, 1, 0))
-            dz, dy, dx = spacing
-            affine = np.diag([dx, dy, dz, 1.0])
-            import nibabel as nib
-            import tempfile
-            nii = nib.Nifti1Image(vol_xyz, affine)
-            tmp = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
-            nib.save(nii, tmp.name)
-            temp_path = tmp.name
-            nii_path = temp_path
-
-        try:
-            self._init_spleen_transforms()
-            model = self.get_spleen_model()
-            data_dict = self._spleen_pre({"image": nii_path})
-            in_tensor = data_dict["image"].unsqueeze(0).to(self.device)
-
-            from monai.inferers import sliding_window_inference
-            with torch.no_grad():
-                val_output = sliding_window_inference(
-                    inputs=in_tensor,
-                    roi_size=[96, 96, 96],
-                    sw_batch_size=4,
-                    predictor=model,
-                    overlap=0.25
-                )
-
-            # Move tensor to CPU before Invertd to avoid Apple Silicon Metal float64 limitation
-            data_dict["pred"] = val_output[0].cpu().float()
-            post_dict = self._spleen_post(data_dict)
-            mask_xyz = post_dict["pred"][0].numpy().astype(np.uint8)
-            # Transpose from NIfTI (X, Y, Z) to (Z, Y, X) for standard axial slice indexing
-            mask_zyx = np.transpose(mask_xyz, (2, 1, 0))
-            clean_mask = extract_largest_component(mask_zyx)
-            duration = round(time.time() - t0, 3)
-
-            return clean_mask, {
-                "real_neural_inference": True,
-                "neural_architecture": "MONAI 3D-UNet (spleen_ct_v0.5.3, 148 layers)",
-                "weights_source": "Official MONAI Model Zoo",
-                "inference_duration_sec": duration,
-                "positive_voxels": int(np.sum(clean_mask == 1)),
-                "accelerator": str(self.device)
-            }
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
+        return self._load_state_dict_model("spleen", "spleen_ct", lambda: UNet(
+            spatial_dims=3, in_channels=1, out_channels=2,
+            channels=[16, 32, 64, 128, 256], strides=[2, 2, 2, 2],
+            num_res_units=2, norm="batch"
+        ))
 
     def get_btcv_model(self) -> torch.nn.Module:
-        if "btcv" in self.models:
-            return self.models["btcv"]
-        try:
-            from .model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        except (ImportError, ValueError):
-            from model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        spec = OFFICIAL_MODEL_REGISTRY.get("swinunetr_btcv")
-        file_name = spec.file_name if spec else "swinunetr_btcv_v0.5.0.pt"
-        weights_path = get_model_cache_dir() / file_name
-        if not weights_path.exists() or weights_path.stat().st_size < 1024 * 1024:
-            raise RuntimeError(f"MONAI SwinUNETR 多器官分割官方权重缺失 ({weights_path})。")
         from monai.networks.nets import SwinUNETR
-        model = SwinUNETR(in_channels=1, out_channels=14, feature_size=48).to(self.device)
-        sd = torch.load(str(weights_path), map_location=self.device, weights_only=False)
-        model.load_state_dict(sd)
-        model.eval()
-        self.models["btcv"] = model
-        return model
-
-    def infer_btcv(
-        self,
-        volume_or_path: Any,
-        spacing: Tuple[float, float, float] = (1.5, 0.8, 0.8),
-        target_classes: Optional[List[int]] = None
-    ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        t0 = time.time()
-        temp_path = None
-        if isinstance(volume_or_path, str) and os.path.exists(volume_or_path):
-            nii_path = volume_or_path
-        else:
-            vol_zyx = volume_or_path.astype(np.float32)
-            vol_xyz = np.transpose(vol_zyx, (2, 1, 0))
-            dz, dy, dx = spacing
-            affine = np.diag([dx, dy, dz, 1.0])
-            import nibabel as nib, tempfile
-            nii = nib.Nifti1Image(vol_xyz, affine)
-            tmp = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
-            nib.save(nii, tmp.name)
-            temp_path = tmp.name
-            nii_path = temp_path
-
-        try:
-            from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, ScaleIntensityRanged, EnsureTyped, Invertd, AsDiscreted
-            from monai.inferers import sliding_window_inference
-            pre = Compose([
-                LoadImaged(keys="image"),
-                EnsureChannelFirstd(keys="image"),
-                ScaleIntensityRanged(keys="image", a_min=-175, a_max=250, b_min=0.0, b_max=1.0, clip=True),
-                EnsureTyped(keys="image", device=self.device)
-            ])
-            post = Compose([
-                Invertd(keys="pred", transform=pre, orig_keys="image", nearest_interp=False, to_tensor=True),
-                AsDiscreted(keys="pred", argmax=True)
-            ])
-            model = self.get_btcv_model()
-            data_dict = pre({"image": nii_path})
-            in_tensor = data_dict["image"].unsqueeze(0).to(self.device)
-
-            with torch.no_grad():
-                val_output = sliding_window_inference(
-                    inputs=in_tensor,
-                    roi_size=[96, 96, 96],
-                    sw_batch_size=1,
-                    predictor=model,
-                    overlap=0.25
-                )
-
-            data_dict["pred"] = val_output[0].cpu().float()
-            post_dict = post(data_dict)
-            mask_xyz = post_dict["pred"][0].numpy().astype(np.uint8)
-            mask_zyx = np.transpose(mask_xyz, (2, 1, 0))
-            duration = round(time.time() - t0, 3)
-
-            dz, dy, dx = spacing
-            vox_cm3 = (dz * dy * dx) / 1000.0
-            organ_names = {
-                1: "脾脏 (Spleen)", 2: "右肾 (Right Kidney)", 3: "左肾 (Left Kidney)",
-                4: "胆囊 (Gallbladder)", 5: "食管 (Esophagus)", 6: "肝脏 (Liver)",
-                7: "胃 (Stomach)", 8: "主动脉 (Aorta)", 9: "下腔静脉 (IVC)",
-                10: "门静脉 (Portal Vein)", 11: "胰腺 (Pancreas)",
-                12: "右肾上腺 (Right Adrenal)", 13: "左肾上腺 (Left Adrenal)"
-            }
-            organ_volumetry = {}
-            for cls_idx, o_name in organ_names.items():
-                cnt = int(np.sum(mask_zyx == cls_idx))
-                organ_volumetry[o_name] = round(cnt * vox_cm3, 2)
-
-            if target_classes:
-                binary_mask = np.isin(mask_zyx, target_classes).astype(np.uint8)
-                if np.sum(binary_mask) == 0:
-                    binary_mask = (mask_zyx > 0).astype(np.uint8)
-            else:
-                binary_mask = (mask_zyx > 0).astype(np.uint8)
-            clean_mask = extract_largest_component(binary_mask)
-
-            return clean_mask, {
-                "real_neural_inference": True,
-                "neural_architecture": "MONAI SwinUNETR (BTCV 13 Organs, 159 layers)",
-                "weights_source": "Official MONAI Model Zoo",
-                "inference_duration_sec": duration,
-                "positive_voxels": int(np.sum(clean_mask == 1)),
-                "organ_volumetry": organ_volumetry,
-                "accelerator": str(self.device)
-            }
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
+        return self._load_state_dict_model("btcv", "swinunetr_btcv", lambda: SwinUNETR(
+            in_channels=1, out_channels=14, feature_size=48
+        ))
 
     def get_prostate_model(self) -> torch.nn.Module:
-        if "prostate" in self.models:
-            return self.models["prostate"]
-        try:
-            from .model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        except (ImportError, ValueError):
-            from model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        spec = OFFICIAL_MODEL_REGISTRY.get("prostate_mri")
-        file_name = spec.file_name if spec else "prostate_mri_v0.3.2.pt"
-        weights_path = get_model_cache_dir() / file_name
-        if not weights_path.exists() or weights_path.stat().st_size < 1024 * 1024:
-            raise RuntimeError(f"MONAI 前列腺 MRI 分割官方权重缺失 ({weights_path})。")
         from monai.networks.nets import UNet
-        model = UNet(
+        return self._load_state_dict_model("prostate", "prostate_mri", lambda: UNet(
             spatial_dims=3, in_channels=1, out_channels=3,
-            channels=[16, 32, 64, 128, 256, 512],
-            strides=[2, 2, 2, 2, 2], num_res_units=4, norm="batch"
-        ).to(self.device)
-        sd = torch.load(str(weights_path), map_location=self.device, weights_only=False)
-        model.load_state_dict(sd)
-        model.eval()
-        self.models["prostate"] = model
-        return model
-
-    def infer_prostate(
-        self,
-        volume_or_path: Any,
-        spacing: Tuple[float, float, float] = (3.0, 0.5, 0.5)
-    ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        t0 = time.time()
-        temp_path = None
-        if isinstance(volume_or_path, str) and os.path.exists(volume_or_path):
-            nii_path = volume_or_path
-        else:
-            vol_zyx = volume_or_path.astype(np.float32)
-            vol_xyz = np.transpose(vol_zyx, (2, 1, 0))
-            dz, dy, dx = spacing
-            affine = np.diag([dx, dy, dz, 1.0])
-            import nibabel as nib, tempfile
-            nii = nib.Nifti1Image(vol_xyz, affine)
-            tmp = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
-            nib.save(nii, tmp.name)
-            temp_path = tmp.name
-            nii_path = temp_path
-
-        try:
-            from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, ScaleIntensityRanged, EnsureTyped, Invertd, AsDiscreted
-            from monai.inferers import sliding_window_inference
-            pre = Compose([
-                LoadImaged(keys="image"),
-                EnsureChannelFirstd(keys="image"),
-                ScaleIntensityRanged(keys="image", a_min=0, a_max=500, b_min=0.0, b_max=1.0, clip=True),
-                EnsureTyped(keys="image", device=self.device)
-            ])
-            post = Compose([
-                Invertd(keys="pred", transform=pre, orig_keys="image", nearest_interp=False, to_tensor=True),
-                AsDiscreted(keys="pred", argmax=True)
-            ])
-            model = self.get_prostate_model()
-            data_dict = pre({"image": nii_path})
-            in_tensor = data_dict["image"].unsqueeze(0).to(self.device)
-
-            with torch.no_grad():
-                val_output = sliding_window_inference(
-                    inputs=in_tensor,
-                    roi_size=[32, 64, 64],
-                    sw_batch_size=1,
-                    predictor=model,
-                    overlap=0.25
-                )
-
-            data_dict["pred"] = val_output[0].cpu().float()
-            post_dict = post(data_dict)
-            mask_xyz = post_dict["pred"][0].numpy().astype(np.uint8)
-            mask_zyx = np.transpose(mask_xyz, (2, 1, 0))
-            duration = round(time.time() - t0, 3)
-
-            dz, dy, dx = spacing
-            vox_cm3 = (dz * dy * dx) / 1000.0
-            pz_vol = round(float(np.sum(mask_zyx == 1)) * vox_cm3, 2)
-            tz_vol = round(float(np.sum(mask_zyx == 2)) * vox_cm3, 2)
-            total_vol = round(pz_vol + tz_vol, 2)
-
-            binary_mask = (mask_zyx > 0).astype(np.uint8)
-            clean_mask = extract_largest_component(binary_mask)
-
-            return clean_mask, {
-                "real_neural_inference": True,
-                "neural_architecture": "MONAI 3D-UNet (Prostate MRI PZ/TZ, 278 layers)",
-                "weights_source": "Official MONAI Model Zoo",
-                "inference_duration_sec": duration,
-                "positive_voxels": int(np.sum(clean_mask == 1)),
-                "peripheral_zone_cm3": pz_vol,
-                "transition_zone_cm3": tz_vol,
-                "total_prostate_cm3": total_vol,
-                "accelerator": str(self.device)
-            }
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
+            channels=[16, 32, 64, 128, 256, 512], strides=[2, 2, 2, 2, 2],
+            num_res_units=4, norm="batch", act="prelu", dropout=0.15
+        ))
 
     def get_brats_model(self) -> torch.nn.Module:
-        if "brats" in self.models:
-            return self.models["brats"]
-        try:
-            from .model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        except (ImportError, ValueError):
-            from model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        spec = OFFICIAL_MODEL_REGISTRY.get("brats_mri")
-        file_name = spec.file_name if spec else "brats_mri_v0.4.8.pt"
-        weights_path = get_model_cache_dir() / file_name
-        if not weights_path.exists() or weights_path.stat().st_size < 1024 * 1024:
-            raise RuntimeError(f"MONAI BraTS 胶质瘤官方权重缺失 ({weights_path})。")
         from monai.networks.nets import SegResNet
-        model = SegResNet(
-            spatial_dims=3, in_channels=4, out_channels=3,
-            init_filters=16, blocks_down=[1, 2, 2, 4], blocks_up=[1, 1, 1]
-        ).to(self.device)
-        sd = torch.load(str(weights_path), map_location=self.device, weights_only=False)
-        model.load_state_dict(sd)
-        model.eval()
-        self.models["brats"] = model
-        return model
+        return self._load_state_dict_model("brats", "brats_mri", lambda: SegResNet(
+            spatial_dims=3, in_channels=4, out_channels=3, init_filters=16,
+            blocks_down=[1, 2, 2, 4], blocks_up=[1, 1, 1], dropout_prob=0.2
+        ))
 
-    def infer_brats(
-        self,
-        volume_or_path: Any,
-        spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0)
-    ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        t0 = time.time()
-        temp_path = None
-        if isinstance(volume_or_path, str) and os.path.exists(volume_or_path):
-            nii_path = volume_or_path
-        else:
-            vol_zyx = volume_or_path.astype(np.float32)
-            vol_xyz = np.transpose(vol_zyx, (2, 1, 0))
-            dz, dy, dx = spacing
-            affine = np.diag([dx, dy, dz, 1.0])
-            import nibabel as nib, tempfile
-            nii = nib.Nifti1Image(vol_xyz, affine)
-            tmp = tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False)
-            nib.save(nii, tmp.name)
-            temp_path = tmp.name
-            nii_path = temp_path
-
-        try:
-            from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, ScaleIntensityRanged, EnsureTyped
-            from monai.inferers import sliding_window_inference
-            pre = Compose([
-                LoadImaged(keys="image"),
-                EnsureChannelFirstd(keys="image"),
-                ScaleIntensityRanged(keys="image", a_min=0, a_max=800, b_min=0.0, b_max=1.0, clip=True),
-                EnsureTyped(keys="image", device=self.device)
-            ])
-            model = self.get_brats_model()
-            data_dict = pre({"image": nii_path})
-            img_tensor = data_dict["image"]
-            if img_tensor.shape[0] == 1:
-                img_tensor = img_tensor.repeat(4, 1, 1, 1)
-            in_tensor = img_tensor.unsqueeze(0).to(self.device)
-
-            with torch.no_grad():
-                val_output = sliding_window_inference(
-                    inputs=in_tensor,
-                    roi_size=[64, 64, 64],
-                    sw_batch_size=1,
-                    predictor=model,
-                    overlap=0.25
-                )
-
-            probs = torch.sigmoid(val_output[0]).cpu().numpy()
-            wt_mask_xyz = (probs[1] > 0.5).astype(np.uint8)
-            mask_zyx = np.transpose(wt_mask_xyz, (2, 1, 0))
-            clean_mask = extract_largest_component(mask_zyx)
-            duration = round(time.time() - t0, 3)
-
-            dz, dy, dx = spacing
-            vox_cm3 = (dz * dy * dx) / 1000.0
-            wt_vol = round(float(np.sum(probs[1] > 0.5)) * vox_cm3, 2)
-            tc_vol = round(float(np.sum(probs[0] > 0.5)) * vox_cm3, 2)
-            et_vol = round(float(np.sum(probs[2] > 0.5)) * vox_cm3, 2)
-
-            return clean_mask, {
-                "real_neural_inference": True,
-                "neural_architecture": "MONAI SegResNet (BraTS Glioma Subregions, 83 layers)",
-                "weights_source": "Official MONAI Model Zoo",
-                "inference_duration_sec": duration,
-                "positive_voxels": int(np.sum(clean_mask == 1)),
-                "whole_tumor_cm3": wt_vol,
-                "tumor_core_cm3": tc_vol,
-                "enhancing_tumor_cm3": et_vol,
-                "accelerator": str(self.device)
-            }
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
+    def get_wholebody_model(self) -> torch.nn.Module:
+        from monai.networks.nets import SegResNet
+        return self._load_state_dict_model("wholebody", "wholebody_ct", lambda: SegResNet(
+            spatial_dims=3, in_channels=1, out_channels=105, init_filters=32,
+            blocks_down=[1, 2, 2, 4], blocks_up=[1, 1, 1], dropout_prob=0.2
+        ))
 
     def get_cardiac_model(self) -> Any:
         if "cardiac" in self.models:
             return self.models["cardiac"]
-        try:
-            from .model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        except (ImportError, ValueError):
-            from model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        spec = OFFICIAL_MODEL_REGISTRY.get("ventricular_short_axis")
-        file_name = spec.file_name if spec else "ventricular_short_axis_v0.3.2.pt"
-        weights_path = get_model_cache_dir() / file_name
-        if not weights_path.exists():
-            raise RuntimeError(f"MONAI 心脏短轴 Cine-MRI 权重缺失 ({weights_path})。")
+        weights_path, _ = self._verified_weights("ventricular_short_axis")
+        # 该 bundle 发布的是 TorchScript 模型
         model = torch.jit.load(str(weights_path), map_location=self.device)
         model.eval()
         self.models["cardiac"] = model
         return model
 
-    def infer_cardiac(
+    # ---- 通用 3D 推理：规范体积 -> 临时 NIfTI -> bundle 预处理 -> 滑窗 -> Invertd 回原网格 ----
+    def _run_3d_bundle(
         self,
-        volume_or_path: Any,
-        spacing: Tuple[float, float, float] = (1.5, 0.8, 0.8)
-    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        vol_zyx: np.ndarray,
+        spacing: Tuple[float, float, float],
+        spatial_transforms: List[Any],
+        model: torch.nn.Module,
+        roi_size: List[int],
+        sw_batch_size: int,
+        overlap: float,
+        invert_probabilities: bool,
+        sw_mode: str = "constant",
+        padding_mode: str = "constant",
+        label_postprocess=None,
+    ) -> np.ndarray:
+        """
+        invert_probabilities=True：softmax 概率经 Invertd（双线性）回原网格后再 argmax（spleen / BTCV bundle 的做法）；
+        False：在模型网格上 argmax（可选标签后处理）后以最近邻 Invertd 回原网格（wholeBody / prostate）。
+        返回规范 LPS+ (Z, Y, X) 的整数标签图。
+        """
+        from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, EnsureTyped, Invertd
+        from monai.inferers import sliding_window_inference
+
+        nii_path = write_canonical_nifti(vol_zyx, spacing)
+        try:
+            pre = Compose([
+                LoadImaged(keys="image"),
+                EnsureChannelFirstd(keys="image"),
+                *spatial_transforms,
+                EnsureTyped(keys="image"),
+            ])
+            data = pre({"image": nii_path})
+            in_tensor = data["image"].unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                logits = sliding_window_inference(
+                    inputs=in_tensor, roi_size=roi_size, sw_batch_size=sw_batch_size,
+                    predictor=model, overlap=overlap, mode=sw_mode, padding_mode=padding_mode,
+                )
+            # Invertd 在 CPU 上执行（Apple MPS 不支持 float64）
+            logits = logits[0].detach().cpu().float()
+            if invert_probabilities:
+                data["pred"] = torch.softmax(logits, dim=0)
+                inv = Invertd(keys="pred", transform=pre, orig_keys="image", nearest_interp=False, to_tensor=True)
+                pred = inv(data)["pred"]
+                labels_xyz = torch.argmax(pred, dim=0).numpy().astype(np.uint8)
+            else:
+                lab = torch.argmax(logits, dim=0, keepdim=True)
+                if label_postprocess is not None:
+                    lab = label_postprocess(lab)
+                data["pred"] = lab.float()
+                inv = Invertd(keys="pred", transform=pre, orig_keys="image", nearest_interp=True, to_tensor=True)
+                pred = inv(data)["pred"]
+                labels_xyz = np.rint(pred[0].numpy()).astype(np.uint8)
+        finally:
+            if os.path.exists(nii_path):
+                os.remove(nii_path)
+
+        labels_zyx = np.transpose(labels_xyz, (2, 1, 0))
+        if labels_zyx.shape != tuple(vol_zyx.shape):
+            raise RuntimeError(f"模型输出网格 {labels_zyx.shape} 与输入体积 {vol_zyx.shape} 不一致，拒绝输出")
+        return labels_zyx
+
+    def infer_spleen(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """spleen_ct_segmentation bundle：RAS、1.5×1.5×2.0 mm、HU -57~164 归一化、96³ 滑窗 overlap 0.5。"""
+        from monai.transforms import Orientationd, Spacingd, ScaleIntensityRanged
         t0 = time.time()
-        if isinstance(volume_or_path, str) and os.path.exists(volume_or_path):
-            try:
-                from .dicom_io import load_volume
-            except (ImportError, ValueError):
-                from dicom_io import load_volume
-            vol_zyx, spacing, _ = load_volume(volume_or_path)
-        else:
-            vol_zyx = np.array(volume_or_path, dtype=np.float32)
+        model = self.get_spleen_model()
+        labels = self._run_3d_bundle(
+            vol_zyx, spacing,
+            [Orientationd(keys="image", axcodes="RAS"),
+             Spacingd(keys="image", pixdim=[1.5, 1.5, 2.0], mode="bilinear"),
+             ScaleIntensityRanged(keys="image", a_min=-57, a_max=164, b_min=0, b_max=1, clip=True)],
+            model, roi_size=[96, 96, 96], sw_batch_size=4, overlap=0.5, invert_probabilities=True,
+        )
+        mask = (labels == 1).astype(np.uint8)
+        meta = self._base_meta("spleen_ct", "MONAI 3D UNet (spleen_ct_segmentation bundle)", t0)
+        meta["positive_voxels"] = int(mask.sum())
+        meta["postprocessing"] = "softmax → Invertd → argmax（与 bundle 一致，未做额外连通域筛选）"
+        return mask, meta
 
-        model = self.get_cardiac_model()
-        import torch.nn.functional as F
-        masks = []
-        with torch.no_grad():
-            for z in range(vol_zyx.shape[0]):
-                sl = torch.from_numpy(vol_zyx[z]).unsqueeze(0).unsqueeze(0).to(self.device).float()
-                h, w = sl.shape[-2], sl.shape[-1]
-                sl_norm = (sl - sl.mean()) / (sl.std() + 1e-5)
-                sl_resized = F.interpolate(sl_norm, size=(64, 64), mode="bilinear")
-                out = model(sl_resized)
-                pred = torch.argmax(out, dim=1, keepdim=True).float()
-                pred_orig = F.interpolate(pred, size=(h, w), mode="nearest").squeeze().cpu().numpy().astype(np.uint8)
-                masks.append(pred_orig)
-        mask_zyx = np.stack(masks, axis=0)
-        clean_mask = extract_largest_component((mask_zyx > 0).astype(np.uint8))
-        duration = round(time.time() - t0, 3)
-
+    def infer_btcv(
+        self,
+        vol_zyx: np.ndarray,
+        spacing: Tuple[float, float, float],
+        target_classes: Optional[List[int]] = None
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        swin_unetr_btcv_segmentation bundle：RAS、1.5×1.5×2.0 mm、HU -175~250 归一化、96³ 滑窗 overlap 0.5。
+        target_classes 给定时只返回这些类别；这些类别为空就返回空掩膜，不回退到其他器官。
+        """
+        from monai.transforms import Orientationd, Spacingd, ScaleIntensityRanged
+        t0 = time.time()
+        model = self.get_btcv_model()
+        labels = self._run_3d_bundle(
+            vol_zyx, spacing,
+            [Orientationd(keys="image", axcodes="RAS"),
+             Spacingd(keys="image", pixdim=[1.5, 1.5, 2.0], mode="bilinear"),
+             ScaleIntensityRanged(keys="image", a_min=-175, a_max=250, b_min=0.0, b_max=1.0, clip=True)],
+            model, roi_size=[96, 96, 96], sw_batch_size=4, overlap=0.5, invert_probabilities=True,
+        )
         dz, dy, dx = spacing
         vox_cm3 = (dz * dy * dx) / 1000.0
-        total_vol = round(float(np.sum(clean_mask == 1)) * vox_cm3, 2)
-        lv_vol = round(float(np.sum(mask_zyx == 1)) * vox_cm3, 2)
-        myo_vol = round(float(np.sum(mask_zyx == 2)) * vox_cm3, 2)
-        rv_vol = round(float(np.sum(mask_zyx == 3)) * vox_cm3, 2)
-
-        return clean_mask, {
-            "real_neural_inference": True,
-            "neural_architecture": "MONAI TorchScript (Ventricular Short Axis Cine SSFP, 4 Classes)",
-            "weights_source": "Official MONAI Model Zoo",
-            "inference_duration_sec": duration,
-            "positive_voxels": int(np.sum(clean_mask == 1)),
-            "lv_cavity_cm3": lv_vol,
-            "myocardium_cm3": myo_vol,
-            "rv_cavity_cm3": rv_vol,
-            "total_cardiac_volume_cm3": total_vol,
-            "estimated_lvef_percent": 58.5,
-            "accelerator": str(self.device)
-        }
-
-    def get_wholebody_model(self) -> torch.nn.Module:
-        if "wholebody" in self.models:
-            return self.models["wholebody"]
-        try:
-            from .model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        except (ImportError, ValueError):
-            from model_registry import get_model_cache_dir, OFFICIAL_MODEL_REGISTRY
-        spec = OFFICIAL_MODEL_REGISTRY.get("wholebody_ct")
-        file_name = spec.file_name if spec else "wholebody_ct_v0.1.9.pt"
-        weights_path = get_model_cache_dir() / file_name
-        if not weights_path.exists():
-            raise RuntimeError(f"MONAI 全身 CT SegResNet 权重缺失 ({weights_path})。")
-        from monai.networks.nets import SegResNet
-        model = SegResNet(
-            spatial_dims=3, in_channels=1, out_channels=105,
-            init_filters=32, blocks_down=[1, 2, 2, 4], blocks_up=[1, 1, 1]
-        ).to(self.device)
-        sd = torch.load(str(weights_path), map_location=self.device, weights_only=False)
-        model.load_state_dict(sd)
-        model.eval()
-        self.models["wholebody"] = model
-        return model
-
-    def infer_wholebody(
-        self,
-        volume_or_path: Any,
-        spacing: Tuple[float, float, float] = (1.5, 0.8, 0.8)
-    ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        t0 = time.time()
-        if isinstance(volume_or_path, str) and os.path.exists(volume_or_path):
-            try:
-                from .dicom_io import load_volume
-            except (ImportError, ValueError):
-                from dicom_io import load_volume
-            vol_zyx, spacing, _ = load_volume(volume_or_path)
+        organ_volumetry = {name: round(int(np.sum(labels == idx)) * vox_cm3, 2) for idx, name in BTCV_ORGAN_LABELS.items()}
+        if target_classes:
+            mask = np.isin(labels, target_classes).astype(np.uint8)
         else:
-            vol_zyx = np.array(volume_or_path, dtype=np.float32)
+            mask = (labels > 0).astype(np.uint8)
+        meta = self._base_meta("swinunetr_btcv", "MONAI SwinUNETR (swin_unetr_btcv_segmentation bundle, BTCV 13 类器官)", t0)
+        meta["positive_voxels"] = int(mask.sum())
+        meta["organ_volumetry"] = organ_volumetry
+        meta["target_classes"] = list(target_classes) if target_classes else None
+        return mask, meta
 
-        model = self.get_wholebody_model()
-        import torch.nn.functional as F
+    def infer_prostate(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        prostate_mri_anatomy bundle：RAS、0.5 mm 各向同性、ScaleIntensity(0~1) + NormalizeIntensity、96³ 滑窗 overlap 0.5；
+        argmax 后对标签 1、2 各保留最大连通域。标签：1 = 中央腺体，2 = 外周带。
+        """
+        from monai.transforms import Orientationd, Spacingd, ScaleIntensityd, NormalizeIntensityd
+        t0 = time.time()
+        model = self.get_prostate_model()
+
+        def keep_lcc(lab: torch.Tensor) -> torch.Tensor:
+            # 等价于 bundle 的 KeepLargestConnectedComponentd(applied_labels=[1, 2])：各标签独立保留最大连通域
+            arr = lab.cpu().numpy()[0]
+            out = np.zeros_like(arr)
+            for k in (1, 2):
+                comp = extract_largest_component((arr == k).astype(np.uint8))
+                out[comp > 0] = k
+            # 在原张量上就地写回，保留 MetaTensor 的空间变换记录，供 Invertd 使用
+            res = lab.clone()
+            res[0] = torch.from_numpy(out).to(res.dtype)
+            return res
+        labels = self._run_3d_bundle(
+            vol_zyx, spacing,
+            [Orientationd(keys="image", axcodes="RAS"),
+             Spacingd(keys="image", pixdim=[0.5, 0.5, 0.5], mode="bilinear"),
+             ScaleIntensityd(keys="image", minv=0, maxv=1),
+             NormalizeIntensityd(keys="image")],
+            model, roi_size=[96, 96, 96], sw_batch_size=4, overlap=0.5, invert_probabilities=False,
+            label_postprocess=keep_lcc,
+        )
+        dz, dy, dx = spacing
+        vox_cm3 = (dz * dy * dx) / 1000.0
+        cg_vol = round(float(np.sum(labels == 1)) * vox_cm3, 2)
+        pz_vol = round(float(np.sum(labels == 2)) * vox_cm3, 2)
+        meta = self._base_meta("prostate_mri", "MONAI 3D UNet (prostate_mri_anatomy bundle)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(labels > 0)),
+            "central_gland_cm3": cg_vol,
+            "peripheral_zone_cm3": pz_vol,
+            "total_prostate_cm3": round(cg_vol + pz_vol, 2),
+            "label_map": {"1": "central gland", "2": "peripheral zone"},
+        })
+        return labels.astype(np.uint8), meta
+
+    def infer_brats(self, file_path: str, channel_order: Optional[List[str]]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        brats_mri_segmentation bundle：输入 4 通道 MRI，通道顺序须为 T1c, T1, T2, FLAIR；
+        预处理仅 NormalizeIntensity(nonzero, channel_wise)；240×240×160 滑窗 overlap 0.5；sigmoid 阈值 0.5。
+        bundle 按 1 mm 各向同性数据训练且不做重采样，体素间距偏离 1 mm 时报错。
+        单通道不得复制冒充多序列；未声明通道顺序时报错。
+        返回规范 LPS+ 下的标签图：1 = 全肿瘤 (WT) 内非核心部分，2 = 肿瘤核心 (TC) 内非增强部分，3 = 增强肿瘤 (ET)。
+        """
+        import nibabel as nib
+        from monai.transforms import NormalizeIntensity
+        from monai.inferers import sliding_window_inference
+
+        if not file_path or not os.path.exists(str(file_path)):
+            raise ValueError("BraTS 推理需要原始 4 通道 MRI 文件路径（单通道体积不能用于该模型）")
+        if not channel_order:
+            raise ValueError(f"BraTS 推理需声明输入文件的通道顺序（例如 ['FLAIR','T1','T1c','T2']），模型要求顺序为 {list(BRATS_CHANNEL_ORDER)}")
+        order = [str(c).strip() for c in channel_order]
+        norm = {c.upper().replace("GD", "C").replace("CE", "C"): i for i, c in enumerate(order)}
+        missing = [c for c in BRATS_CHANNEL_ORDER if c.upper() not in norm]
+        if missing or len(order) != 4:
+            raise ValueError(f"通道顺序声明须恰好包含 {list(BRATS_CHANNEL_ORDER)} 四个序列，缺少: {missing}")
+
+        t0 = time.time()
+        nimg = nib.load(str(file_path))
+        data = np.asarray(nimg.get_fdata(dtype=np.float32))
+        if data.ndim != 4 or data.shape[3] != 4:
+            raise ValueError(f"BraTS 推理需要 4 通道体积，当前数据形状为 {data.shape}；缺序列时不能推理")
+        zooms = nimg.header.get_zooms()[:3]
+        if any(abs(float(z) - 1.0) > 0.1 for z in zooms):
+            raise ValueError(f"BraTS bundle 要求 1 mm 各向同性输入，当前体素间距 {tuple(float(z) for z in zooms)}，请先重采样")
+
+        idx = [norm[c.upper()] for c in BRATS_CHANNEL_ORDER]
+        img = torch.from_numpy(np.transpose(data[..., idx], (3, 0, 1, 2)).copy())
+        img = NormalizeIntensity(nonzero=True, channel_wise=True)(img)
+        model = self.get_brats_model()
         with torch.no_grad():
-            in_t = torch.from_numpy(vol_zyx).unsqueeze(0).unsqueeze(0).to(self.device).float()
-            in_t = torch.clamp((in_t + 1000.0) / 2000.0, 0.0, 1.0)
-            orig_shape = in_t.shape[2:]
-            small_t = F.interpolate(in_t, size=(min(32, orig_shape[0]), 64, 64), mode="trilinear")
-            logits = model(small_t)
-            pred_small = torch.argmax(logits, dim=1, keepdim=True).float()
-            pred_full = F.interpolate(pred_small, size=orig_shape, mode="nearest").squeeze().cpu().numpy().astype(np.uint8)
+            logits = sliding_window_inference(
+                inputs=torch.as_tensor(img).unsqueeze(0).to(self.device).float(),
+                roi_size=[240, 240, 160], sw_batch_size=1, predictor=model, overlap=0.5,
+            )
+        probs = torch.sigmoid(logits[0]).cpu().numpy()
+        tc_xyz, wt_xyz, et_xyz = probs[0] > 0.5, probs[1] > 0.5, probs[2] > 0.5
+        lab_xyz = np.zeros(tc_xyz.shape, dtype=np.uint8)
+        lab_xyz[wt_xyz] = 1
+        lab_xyz[tc_xyz] = 2
+        lab_xyz[et_xyz] = 3
+        # 输出在文件原生网格上，按文件仿射转回规范 LPS+
+        labels = nifti_array_to_canonical(lab_xyz, nimg.affine).astype(np.uint8)
 
-        clean_mask = extract_largest_component((pred_full > 0).astype(np.uint8))
-        if np.sum(clean_mask) == 0:
-            clean_mask = extract_largest_component((vol_zyx >= -150.0).astype(np.uint8))
-        duration = round(time.time() - t0, 3)
+        vox_cm3 = float(np.prod(zooms)) / 1000.0
+        meta = self._base_meta("brats_mri", "MONAI SegResNet (brats_mri_segmentation bundle, 4 通道)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(labels > 0)),
+            "whole_tumor_cm3": round(float(np.sum(wt_xyz)) * vox_cm3, 2),
+            "tumor_core_cm3": round(float(np.sum(tc_xyz)) * vox_cm3, 2),
+            "enhancing_tumor_cm3": round(float(np.sum(et_xyz)) * vox_cm3, 2),
+            "input_channel_order_declared": order,
+            "model_channel_order": list(BRATS_CHANNEL_ORDER),
+        })
+        return labels, meta
 
-        return clean_mask, {
-            "real_neural_inference": True,
-            "neural_architecture": "MONAI SegResNet-3D (WholeBody CT 105 Classes, 83 layers)",
-            "weights_source": "Official MONAI Model Zoo",
-            "inference_duration_sec": duration,
-            "positive_voxels": int(np.sum(clean_mask == 1)),
-            "accelerator": str(self.device)
+    def infer_cardiac(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        ventricular_short_axis_3label bundle：整体 ScaleIntensity 到 0~1，逐层 2D 推理（SliceInferer，roi 256×256，不缩放图像）。
+        标签：1 = 左室血池，2 = 心肌，3 = 右室血池。模型只适用于短轴 cine SSFP；单期相不能计算射血分数。
+        """
+        from monai.transforms import ScaleIntensity
+        from monai.inferers import SliceInferer
+        t0 = time.time()
+        model = self.get_cardiac_model()
+        # (Z, Y, X) -> NIfTI 式 (X, Y, Z)，逐个 Z 层做 2D 推理
+        vol_xyz = np.transpose(np.asarray(vol_zyx, dtype=np.float32), (2, 1, 0))
+        img = ScaleIntensity()(torch.from_numpy(vol_xyz.copy())).unsqueeze(0).unsqueeze(0).to(self.device).float()
+        inferer = SliceInferer(roi_size=[256, 256], spatial_dim=2)
+        with torch.no_grad():
+            out = inferer(img, model)
+        lab_xyz = torch.argmax(out[0], dim=0).cpu().numpy().astype(np.uint8)
+        labels = np.transpose(lab_xyz, (2, 1, 0))
+
+        dz, dy, dx = spacing
+        vox_ml = (dz * dy * dx) / 1000.0
+        meta = self._base_meta("ventricular_short_axis", "MONAI 2D UNet TorchScript (ventricular_short_axis_3label bundle)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(labels > 0)),
+            "lv_pool_ml": round(float(np.sum(labels == 1)) * vox_ml, 2),
+            "myocardium_ml": round(float(np.sum(labels == 2)) * vox_ml, 2),
+            "rv_pool_ml": round(float(np.sum(labels == 3)) * vox_ml, 2),
+            "label_map": {"1": "lv_pool", "2": "myocardium", "3": "rv_pool"},
+            "input_requirement": "模型训练于心脏短轴 cine SSFP 图像；输入不是短轴 cine（例如 MSD Task02 左心房 MRI）时输出没有解剖意义",
+        })
+        return labels, meta
+
+    def infer_wholebody(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        wholeBody_ct_segmentation bundle（高分辨率版权重）：RAS、1.5 mm 各向同性、NormalizeIntensity(nonzero)、
+        ScaleIntensity(-1~1)、96³ 高斯加权滑窗 overlap 0.25、replicate 填充；argmax 后最近邻 Invertd。
+        全分辨率推理内存占用较大（输出 105 通道），资源不足时会直接报错，不缩小体积凑合推理。
+        """
+        from monai.transforms import Orientationd, Spacingd, NormalizeIntensityd, ScaleIntensityd
+        t0 = time.time()
+        model = self.get_wholebody_model()
+        labels = self._run_3d_bundle(
+            vol_zyx, spacing,
+            [Orientationd(keys="image", axcodes="RAS"),
+             Spacingd(keys="image", pixdim=[1.5, 1.5, 1.5], mode="bilinear"),
+             NormalizeIntensityd(keys="image", nonzero=True),
+             ScaleIntensityd(keys="image", minv=-1.0, maxv=1.0)],
+            model, roi_size=[96, 96, 96], sw_batch_size=1, overlap=0.25, invert_probabilities=False,
+            sw_mode="gaussian", padding_mode="replicate",
+        )
+        dz, dy, dx = spacing
+        vox_cm3 = (dz * dy * dx) / 1000.0
+        counts = np.bincount(labels.ravel(), minlength=len(WHOLEBODY_CT_LABELS))
+        structures = {
+            WHOLEBODY_CT_LABELS[i]: round(int(counts[i]) * vox_cm3, 2)
+            for i in range(1, len(WHOLEBODY_CT_LABELS)) if counts[i] > 0
         }
+        meta = self._base_meta("wholebody_ct", "MONAI SegResNet (wholeBody_ct_segmentation bundle, 104 类结构)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(labels > 0)),
+            "structure_volumes_cm3": structures,
+        })
+        return labels, meta
+
+
+# 规则算法（阈值/形态学/区域生长）模型：真实计算，但不是神经网络；输出中如实标注方法
+RULE_BASED_MODELS = {
+    "bronchiectasis_mucus_analyzer", "bronchiectasis",
+    "lung_nodule_segmenter",
+    "copd_emphysema_analyzer", "copd_emphysema",
+    "whole_body_ct_segmenter", "totalsegmentator",
+    "vertebra_segmenter",
+    "vista3d_interactive_segmenter", "vista3d", "interactive_region_growing",
+}
+
+# 没有真实实现的模型：调用即报「未实现」，不做阈值替代
+NOT_IMPLEMENTED_MODELS: Dict[str, str] = {
+    "lung_airway_segmenter": "气道树分割模型未接入",
+    "airway_unet": "气道树分割模型未接入",
+    "airway": "气道树分割模型未接入",
+    "lung_lobe_segmenter": "肺叶分割模型未接入",
+    "covid19_lung_infection": "病毒性肺炎病灶分割模型未接入",
+    "covid19": "病毒性肺炎病灶分割模型未接入",
+    "coronary_artery_calcification": "缺少心脏/冠状动脉区域来源，无法按标准 Agatston 方法逐病灶计分，已下线",
+    "brain_subcortical_segmenter": "全脑结构分割模型（UNEST）未接入推理路径",
+    "wholebrainseg_large_unest": "全脑结构分割模型（UNEST）未接入推理路径",
+    "stroke_ischemic_lesion": "脑梗死分割模型未接入",
+    "intracranial_hemorrhage_ct": "颅内出血检测模型未接入",
+    "valve_landmarks": "瓣膜地标模型未接入推理路径",
+    "breast_density": "乳腺密度分类模型未接入推理路径",
+    "pathology_tumor_detection": "病理 WSI 模型未接入推理路径",
+    "pathology_nuclei": "病理细胞核模型未接入推理路径",
+    "endoscopic_tool": "内镜器械分割模型未接入推理路径",
+    "renal_structures_cect": "肾脏精细结构模型未接入推理路径",
+    "pancreas_ct_dints": "DiNTS 胰腺模型未接入推理路径",
+}
+
+# BTCV 器官子集（如实标注为 BTCV 器官分割，不是病灶/肿瘤模型）
+BTCV_ORGAN_SUBSETS: Dict[str, Tuple[List[int], str]] = {
+    "pancreas_tumor_segmenter": ([11], "BTCV 器官分割：胰腺"),
+    "kidney_tumor_segmenter": ([2, 3], "BTCV 器官分割：双肾"),
+    "liver_lesion_segmenter": ([6], "BTCV 器官分割：肝脏"),
+    "liver_ct": ([6], "BTCV 器官分割：肝脏"),
+}
+
+INTERPRETATION_HINT = "需结合临床与实验室检查判断"
+
+
+def _empty_measurements(key_slice_idx: int, basis: str) -> Dict[str, Any]:
+    """没有病灶径线可测的分析：径线/体积字段为空，只保留关键层号及其依据。"""
+    return {
+        "longest_diameter_mm": None,
+        "short_axis_mm": None,
+        "total_volume_cm3": None,
+        "caliper_longest": None,
+        "caliper_short": None,
+        "key_slice_index": int(key_slice_idx),
+        "key_slice_basis": basis,
+        "has_lesion": None,
+    }
+
+
+def _fmt(v: Any, unit: str = "") -> str:
+    if v is None:
+        return "n/a"
+    return f"{v}{(' ' + unit) if unit else ''}"
 
 
 class MONAIEngine:
@@ -861,20 +786,27 @@ class MONAIEngine:
         self.device_info = get_device_info()
         self.volume_cache: Dict[str, Tuple[np.ndarray, Tuple[float, float, float], str]] = {}
         self.mask_cache: Dict[str, np.ndarray] = {}
+        self.mask_method_cache: Dict[str, str] = {}
         self.neural_pipeline = MonaiNeuralInferencePipeline(self.device)
 
+    # ------------------------------------------------------------------
+    # MPR 叠加掩膜：只显示真实模型输出或明确标注的规则算法结果
+    # ------------------------------------------------------------------
     def extract_mask_for_model(
         self,
         volume: np.ndarray,
         spacing: Tuple[float, float, float],
         model_name: str,
         sample_id_or_path: Optional[str] = None
-    ) -> np.ndarray:
-        """Extracts a valid 3D binary mask for any of the 27 supported clinical models."""
-        f_path = sample_id_or_path if (isinstance(sample_id_or_path, str) and os.path.exists(sample_id_or_path)) else None
-        is_lung = any(k in str(sample_id_or_path).lower() for k in ("lung", "chest", "mucus")) or (float(np.min(volume)) < -500 and float(np.mean(volume)) < -150)
+    ) -> Tuple[Optional[np.ndarray], Optional[str]]:
+        """
+        返回 (掩膜, 叠加方法说明)。没有真实实现的模型返回 (None, None)，MPR 不显示叠加。
+        规则算法的掩膜在说明里标「阈值示意」。
+        """
+        if model_name in NOT_IMPLEMENTED_MODELS:
+            return None, None
 
-        if model_name in ("bronchiectasis_mucus_analyzer", "bronchiectasis", "lung_airway_segmenter", "airway_unet", "airway", "lung_lobe_segmenter"):
+        if model_name in ("bronchiectasis_mucus_analyzer", "bronchiectasis"):
             try:
                 from .bronchiectasis import analyze_bronchiectasis_and_mucus
             except (ImportError, ValueError):
@@ -883,136 +815,66 @@ class MONAIEngine:
             mask = b_res.get("mucus_mask")
             if mask is None:
                 mask = b_res.get("mask")
-            if mask is not None:
-                return mask.astype(np.uint8)
-            mask, _, _ = segment_pulmonary_nodules(volume, spacing)
-            return mask.astype(np.uint8)
+            if mask is None:
+                return None, None
+            return mask.astype(np.uint8), "阈值示意：粘液栓 HU 阈值/形态学候选"
 
         if model_name in ("whole_body_ct_segmenter", "totalsegmentator"):
             try:
                 from .totalsegmentator import analyze_whole_body_ct
-                wb_res = analyze_whole_body_ct(volume=volume, spacing=spacing)
-                mask = wb_res.get("mask")
-                if mask is not None:
-                    return mask.astype(np.uint8)
-            except Exception:
-                pass
-            return extract_largest_component((volume >= -150.0).astype(np.uint8))
+            except (ImportError, ValueError):
+                from totalsegmentator import analyze_whole_body_ct
+            wb_res = analyze_whole_body_ct(volume=volume, spacing=spacing)
+            mask = wb_res.get("mask")
+            if mask is None:
+                return None, None
+            return mask.astype(np.uint8), "阈值示意：HU 阈值体成分"
 
         if model_name == "lung_nodule_segmenter":
             mask, _, _ = segment_pulmonary_nodules(volume, spacing)
-            return mask.astype(np.uint8)
+            return mask.astype(np.uint8), "阈值示意：肺结节候选 HU/形态学筛查"
 
         if model_name in ("copd_emphysema_analyzer", "copd_emphysema"):
-            lung_mask = (volume >= -980.0) & (volume <= -400.0)
-            em_mask = (lung_mask & (volume <= -950.0)).astype(np.uint8)
-            return em_mask
-
-        if model_name in ("covid19_lung_infection", "covid19"):
-            lung_mask = (volume >= -950.0) & (volume <= -100.0)
-            inf_mask = ((volume >= -700.0) & (volume <= 50.0) & lung_mask).astype(np.uint8)
-            return inf_mask
-
-        if model_name in ("spleen_segmenter", "spleen_ct"):
-            mask, _ = self.neural_pipeline.infer_spleen(f_path or volume, spacing=spacing)
-            return mask.astype(np.uint8)
-
-        if model_name in ("multi_organ_ct", "swinunetr_btcv"):
-            mask, _ = self.neural_pipeline.infer_btcv(f_path or volume, spacing=spacing)
-            return mask.astype(np.uint8)
-
-        if model_name in ("pancreas_tumor_segmenter", "pancreas_ct_dints"):
-            mask, _ = self.neural_pipeline.infer_btcv(f_path or volume, spacing=spacing, target_classes=[11])
-            return mask.astype(np.uint8)
-
-        if model_name in ("kidney_tumor_segmenter", "renal_structures_cect"):
-            mask, _ = self.neural_pipeline.infer_btcv(f_path or volume, spacing=spacing, target_classes=[2, 3])
-            return mask.astype(np.uint8)
-
-        if model_name in ("liver_lesion_segmenter", "liver_ct"):
-            mask, _ = self.neural_pipeline.infer_btcv(f_path or volume, spacing=spacing, target_classes=[6])
-            return mask.astype(np.uint8)
-
-        if model_name in ("prostate_mri_segmenter", "prostate_mri"):
-            mask, _ = self.neural_pipeline.infer_prostate(f_path or volume, spacing=spacing)
-            return mask.astype(np.uint8)
-
-        if model_name in ("brain_tumor_brats", "brats_mri"):
-            mask, _ = self.neural_pipeline.infer_brats(f_path or volume, spacing=spacing)
-            return mask.astype(np.uint8)
-
-        if model_name in ("brain_subcortical_segmenter", "wholebrainseg_large_unest"):
-            b_tissue = (volume >= 20.0) & (volume <= 45.0) if np.min(volume) < -100 else (volume > np.mean(volume) * 0.5)
-            return extract_largest_component(b_tissue.astype(np.uint8))
-
-        if model_name == "stroke_ischemic_lesion":
-            core = (volume >= 18.0) & (volume <= 32.0)
-            return extract_largest_component(core.astype(np.uint8))
-
-        if model_name == "intracranial_hemorrhage_ct":
-            hem = (volume >= 50.0) & (volume <= 95.0)
-            return extract_largest_component(hem.astype(np.uint8))
-
-        if model_name in ("cardiac_mri_segmentation", "ventricular_short_axis"):
-            mask, _ = self.neural_pipeline.infer_cardiac(f_path or volume, spacing=spacing)
-            return mask.astype(np.uint8)
-
-        if model_name == "valve_landmarks":
-            c_mask = (volume >= 30.0) & (volume <= 120.0)
-            return extract_largest_component(c_mask.astype(np.uint8))
-
-        if model_name == "coronary_artery_calcification":
-            z_dim, y_dim, x_dim = volume.shape
-            cardiac_roi = np.zeros_like(volume, dtype=bool)
-            cardiac_roi[int(0.20 * z_dim):int(0.80 * z_dim), int(0.25 * y_dim):int(0.62 * y_dim), int(0.28 * x_dim):int(0.72 * x_dim)] = True
-            cardiac_roi = cardiac_roi & (volume > -100.0)
-            c_cands = (volume >= 130.0) & (volume <= 1200.0) & cardiac_roi
-            lbl, n_feats = ndi.label(c_cands)
-            if n_feats == 0:
-                return np.zeros_like(volume, dtype=np.uint8)
-            dz, dy, dx = spacing
-            c_counts = np.bincount(lbl.flat)
-            c_counts[0] = 0
-            vols_mm3 = c_counts[1:] * (dz * dy * dx)
-            plaque_indices = np.where((vols_mm3 >= 2.0) & (vols_mm3 <= 600.0))[0] + 1
-            if len(plaque_indices) == 0:
-                return np.zeros_like(volume, dtype=np.uint8)
-            return np.isin(lbl, plaque_indices).astype(np.uint8)
-
-        if model_name in ("monai_wholebody_ct", "wholebody_ct"):
-            mask, _ = self.neural_pipeline.infer_wholebody(f_path or volume, spacing=spacing)
-            return mask.astype(np.uint8)
+            try:
+                from .quality_assurance import segment_lungs
+            except (ImportError, ValueError):
+                from quality_assurance import segment_lungs
+            lung = segment_lungs(volume, float(np.prod(spacing)) / 1000.0)
+            if lung is None:
+                return None, None
+            return (lung & (volume <= -950.0)).astype(np.uint8), "阈值示意：肺内 ≤ -950 HU 低衰减区"
 
         if model_name == "vertebra_segmenter":
-            bone = (volume >= 220.0).astype(np.uint8)
-            return extract_largest_component(bone)
+            bone = extract_largest_component((volume >= 220.0).astype(np.uint8))
+            return bone, "阈值示意：≥ 220 HU 骨最大连通域"
 
-        if model_name == "breast_density":
-            fgt = (volume > np.mean(volume)) & (volume < np.max(volume) * 0.95)
-            return extract_largest_component(fgt.astype(np.uint8))
+        if model_name in ("spleen_segmenter", "spleen_ct"):
+            mask, _ = self.neural_pipeline.infer_spleen(volume, spacing)
+            return mask, "MONAI spleen_ct_segmentation 推理"
 
-        if model_name == "pathology_tumor_detection":
-            hi_dens = (volume > np.median(volume)).astype(np.uint8)
-            return extract_largest_component(hi_dens)
+        if model_name in ("multi_organ_ct", "swinunetr_btcv"):
+            mask, _ = self.neural_pipeline.infer_btcv(volume, spacing)
+            return mask, "MONAI swin_unetr_btcv 推理"
 
-        if model_name == "pathology_nuclei":
-            nuc = (volume > np.percentile(volume, 65)).astype(np.uint8)
-            return extract_largest_component(nuc)
+        if model_name in BTCV_ORGAN_SUBSETS:
+            classes, title = BTCV_ORGAN_SUBSETS[model_name]
+            mask, _ = self.neural_pipeline.infer_btcv(volume, spacing, target_classes=classes)
+            return mask, f"{title}（MONAI swin_unetr_btcv 推理）"
 
-        if model_name == "endoscopic_tool":
-            tool_specular = (volume > np.percentile(volume, 80)).astype(np.uint8)
-            return extract_largest_component(tool_specular)
+        if model_name in ("prostate_mri_segmenter", "prostate_mri"):
+            labels, _ = self.neural_pipeline.infer_prostate(volume, spacing)
+            return (labels > 0).astype(np.uint8), "MONAI prostate_mri_anatomy 推理"
 
-        if model_name in ("vista3d_interactive_segmenter", "vista3d"):
-            fg = (volume > np.median(volume)).astype(np.uint8)
-            return extract_largest_component(fg)
+        if model_name in ("cardiac_mri_segmentation", "ventricular_short_axis", "cardiac_anatomy_segmenter"):
+            labels, _ = self.neural_pipeline.infer_cardiac(volume, spacing)
+            return (labels > 0).astype(np.uint8), "MONAI ventricular_short_axis_3label 推理"
 
-        if is_lung:
-            mask, _, _ = segment_pulmonary_nodules(volume, spacing)
-            return mask.astype(np.uint8)
+        if model_name in ("monai_wholebody_ct", "wholebody_ct"):
+            labels, _ = self.neural_pipeline.infer_wholebody(volume, spacing)
+            return (labels > 0).astype(np.uint8), "MONAI wholeBody_ct_segmentation 推理"
 
-        fg = (volume > np.median(volume)).astype(np.uint8)
-        return extract_largest_component(fg)
+        # BraTS 需要 4 通道原始文件，交互分割需要种子点：MPR 叠加不支持；其他未知模型同样不叠加
+        return None, None
 
     def get_or_compute_mask(
         self,
@@ -1020,25 +882,25 @@ class MONAIEngine:
         vol: np.ndarray,
         spacing: Tuple[float, float, float],
         model_name: Optional[str] = None
-    ) -> np.ndarray:
+    ) -> Optional[np.ndarray]:
         """
-        Retrieves a cached 3D segmentation mask or executes the corresponding clinical model
-        to extract the authentic 3D lesion mask (strictly inside anatomical boundaries,
-        excluding heart, mediastinum, chest wall, and ribs).
+        取缓存或运行指定模型得到叠加掩膜；未指定模型时不叠加（返回 None）。
+        缓存以「完整路径/样本 ID + 模型」为键，避免跨患者混用。
         """
-        cache_key = f"{sample_id_or_path}:{model_name or 'default'}"
-        # C14 修复：掩膜缓存严格以完整路径+模型+尺寸复合唯一键管理，彻底移除跨患者的 basename 浅层碰撞
+        if not model_name:
+            return None
+        cache_key = f"{sample_id_or_path}:{model_name}"
         if cache_key in self.mask_cache and self.mask_cache[cache_key].shape == vol.shape:
             return self.mask_cache[cache_key]
 
-        mask = self.extract_mask_for_model(
-            volume=vol,
-            spacing=spacing,
-            model_name=model_name or "default",
-            sample_id_or_path=sample_id_or_path
+        mask, method = self.extract_mask_for_model(
+            volume=vol, spacing=spacing, model_name=model_name, sample_id_or_path=sample_id_or_path
         )
+        if mask is None:
+            return None
         mask = mask.astype(np.uint8)
         self.mask_cache[cache_key] = mask
+        self.mask_method_cache[cache_key] = method or ""
         return mask
 
     def register_volume(
@@ -1066,34 +928,25 @@ class MONAIEngine:
     def analyze_file(
         self,
         file_path: str,
-        model_name: str = "spleen_segmenter",
+        model_name: Optional[str] = None,
         window_preset: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
-        """Loads a NIfTI or DICOM dataset and runs MONAI analysis."""
+        """读取 NIfTI 或 DICOM 并运行指定模型；模型必须由调用方给出。"""
+        if not model_name:
+            raise ValueError("缺少 model_name：请指定要运行的分析模型")
         try:
-            from .dicom_io import load_nifti, load_dicom_series
+            from .dicom_io import load_volume
         except (ImportError, ValueError):
-            from dicom_io import load_nifti, load_dicom_series
-        if os.path.isdir(file_path):
-            vol, spacing, meta = load_dicom_series(file_path)
-            modality = meta.get("modality", "CT")
-        elif file_path.endswith((".nii", ".nii.gz")):
-            vol, spacing = load_nifti(file_path)
-            modality = "MRI" if "mri" in file_path.lower() else "CT"
-        else:
-            raise ValueError(f"Unsupported file format: {file_path}")
+            from dicom_io import load_volume
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"影像文件不存在: {file_path}")
+        vol, spacing, modality = load_volume(file_path)
+        if kwargs.get("modality"):
+            modality = str(kwargs.pop("modality"))
 
-        # Choose window preset based on model if not provided
         if not window_preset:
-            if "lung" in model_name:
-                window_preset = "lung"
-            elif "brain" in model_name:
-                window_preset = "brain"
-            elif "liver" in model_name:
-                window_preset = "abdomen"
-            else:
-                window_preset = "abdomen"
+            window_preset = "lung" if "lung" in model_name else ("brain" if "brain" in model_name else "abdomen")
 
         return self.analyze_volume(
             volume=vol,
@@ -1108,39 +961,38 @@ class MONAIEngine:
     def analyze_volume(
         self,
         volume: np.ndarray,
-        spacing: Tuple[float, float, float] = (1.5, 0.8, 0.8),
-        model_name: str = "lung_nodule_segmenter",
-        window_preset: str = "lung",
+        spacing: Tuple[float, float, float],
+        model_name: Optional[str] = None,
+        window_preset: Optional[str] = None,
         modality: str = "CT",
         **kwargs
     ) -> Dict[str, Any]:
         """
-        Executes end-to-end MONAI inference on a 3D medical volume:
-        1. Preprocessing & tensor transfer to accelerator (MPS / CUDA)
-        2. 3D Segmentation inference on device
-        3. RECIST 1.1 / Broncho-Arterial Ratio & Mucus quantification
-        4. Key-slice PNG generation with clinical overlay HUD
+        在规范 LPS+ 体积上运行指定模型：
+        1. 神经网络模型按 MONAI bundle 推理；规则算法如实标注方法；未实现的模型直接报错；
+        2. 测量值（径线、体积、密度或专项量化）；没有病灶径线的分析，径线字段为空；
+        3. 关键层面 PNG；
+        4. 影像所见描述（只写测量所见，不给诊断结论与处置建议）。
         """
+        if not model_name:
+            raise ValueError("缺少 model_name：请指定要运行的分析模型")
+        if model_name in NOT_IMPLEMENTED_MODELS:
+            raise ModelUnavailableError(f"模型 '{model_name}' 未实现：{NOT_IMPLEMENTED_MODELS[model_name]}")
+
         if not window_preset:
-            if "lung" in (model_name or ""):
+            if "lung" in model_name or "copd" in model_name or "bronch" in model_name:
                 window_preset = "lung"
-            elif "brain" in (model_name or ""):
+            elif "brain" in model_name:
                 window_preset = "brain"
-            elif "liver" in (model_name or "") or "spleen" in (model_name or ""):
-                window_preset = "abdomen"
             else:
                 window_preset = "abdomen"
 
-        if model_name in ("bronchiectasis_mucus_analyzer", "bronchiectasis", "lung_airway_segmenter", "airway_unet", "airway", "lung_lobe_segmenter"):
+        if model_name in ("bronchiectasis_mucus_analyzer", "bronchiectasis"):
             try:
                 from .bronchiectasis import analyze_bronchiectasis_and_mucus
             except (ImportError, ValueError):
                 from bronchiectasis import analyze_bronchiectasis_and_mucus
-            b_args: Dict[str, Any] = {
-                "volume": volume,
-                "spacing": spacing,
-                "window_preset": window_preset or "lung"
-            }
+            b_args: Dict[str, Any] = {"volume": volume, "spacing": spacing, "window_preset": window_preset or "lung"}
             for k in ("mucus_min_hu", "mucus_max_hu", "ham_threshold_hu", "bar_cutoff"):
                 if k in kwargs and kwargs[k] is not None:
                     try:
@@ -1148,30 +1000,11 @@ class MONAIEngine:
                     except (ValueError, TypeError):
                         pass
             b_res = analyze_bronchiectasis_and_mucus(**b_args)
-            if model_name in ("lung_airway_segmenter", "airway_unet", "airway"):
-                b_res["model_name"] = "lung_airway_segmenter"
-                b_res["modality"] = "Chest HRCT"
-                b_res["summary_markdown"] = (
-                    b_res.get("summary_markdown", "")
-                    .replace("支气管扩张与气道粘液栓定量分析", "全气道树三维拓扑重建与支气管管壁量化")
-                )
-            elif model_name == "lung_lobe_segmenter":
-                b_res["model_name"] = "lung_lobe_segmenter"
-                b_res["modality"] = "Chest CT"
-                b_res["summary_markdown"] = (
-                    b_res.get("summary_markdown", "")
-                    .replace("支气管扩张与气道粘液栓定量分析", "双肺 5 大解剖肺叶容积与气道拓扑分布量化")
-                )
-            else:
-                b_res["model_name"] = "bronchiectasis_mucus_analyzer"
-                b_res["modality"] = "Chest HRCT"
-            b_res["recist_metrics"] = {
-                "longest_diameter_mm": b_res["metrics"]["bronchus_caliber_mm"],
-                "short_axis_mm": b_res["metrics"]["artery_caliber_mm"],
-                "total_volume_cm3": b_res["metrics"]["total_mucus_volume_cm3"],
-                "key_slice_index": b_res["key_slice_index"],
-                "has_lesion": True
-            }
+            b_res["model_name"] = "bronchiectasis_mucus_analyzer"
+            b_res["modality"] = modality
+            b_res["engine_type"] = "rule_based"
+            # 支扩分析没有病灶径线：管径、动脉径与粘液栓容积留在 metrics 里，不塞进 RECIST 字段
+            b_res["recist_metrics"] = _empty_measurements(b_res.get("key_slice_index", volume.shape[0] // 2), "支扩/粘液栓分析选取的关键层面")
             return b_res
 
         if model_name in ("whole_body_ct_segmenter", "totalsegmentator"):
@@ -1179,10 +1012,7 @@ class MONAIEngine:
                 from .totalsegmentator import analyze_whole_body_ct
             except (ImportError, ValueError):
                 from totalsegmentator import analyze_whole_body_ct
-            wb_args: Dict[str, Any] = {
-                "volume": volume,
-                "spacing": spacing,
-            }
+            wb_args: Dict[str, Any] = {"volume": volume, "spacing": spacing}
             if "patient_sex" in kwargs and kwargs["patient_sex"]:
                 wb_args["patient_sex"] = str(kwargs["patient_sex"])
             if "patient_height_m" in kwargs and kwargs["patient_height_m"] is not None:
@@ -1192,452 +1022,330 @@ class MONAIEngine:
             if "l3_slice_index" in kwargs and kwargs["l3_slice_index"] is not None:
                 wb_args["l3_slice_index"] = int(kwargs["l3_slice_index"])
             wb_res = analyze_whole_body_ct(**wb_args)
-            wb_res["recist_metrics"] = {
-                "longest_diameter_mm": round(float(np.sqrt(wb_res["body_composition"]["skeletal_muscle_area_cm2"] * 100.0)), 1),
-                "short_axis_mm": round(float(np.sqrt(wb_res["body_composition"]["visceral_adipose_cm2"] * 100.0)), 1),
-                "total_volume_cm3": wb_res["organ_volumetry_cm3"]["liver"],
-                "key_slice_index": wb_res["l3_vertebra_slice_index"],
-                "has_lesion": wb_res["body_composition"]["sarcopenia_detected"],
-            }
+            wb_res["engine_type"] = "rule_based"
+            # 体成分分析没有病灶径线；recist_metrics 只保留层号，径线与体积为空，不用肌肉面积等冒充
+            wb_res["recist_metrics"] = _empty_measurements(wb_res.get("l3_vertebra_slice_index", volume.shape[0] // 2), "L3 层（启发式选层）")
             return wb_res
 
         t0 = time.time()
-        tensor_vol = torch.from_numpy(volume).to(self.device)
         neural_meta: Dict[str, Any] = {}
-        
-        # Multi-model clinical inference logic
+        extra_md = ""
+        extra_feature_fields: Dict[str, Any] = {}
+        engine_type = "deep_learning"
+
         if model_name == "lung_nodule_segmenter":
             prompt_pt = kwargs.get("prompt_point") or kwargs.get("click_point")
             mask_np, recist, lesion_label = segment_pulmonary_nodules(volume, spacing, prompt_point=prompt_pt)
             key_slice_idx = recist["key_slice_index"]
+            engine_type = "rule_based"
             neural_meta = {
                 "real_neural_inference": False,
-                "neural_architecture": "Anatomical Lung Parenchyma Envelope & HU Morphological Screening",
-                "weights_source": "Quantitative Pulmonary Windowing (Lung-RADS v1.1)",
+                "method": "肺实质包络内 HU 阈值 (-150~+120 HU) + 形态学筛查；给定种子点时为有限范围 HU 区域生长",
                 "positive_voxels": int(np.sum(mask_np > 0)),
-                "accelerator": str(self.device)
+                "accelerator": "cpu",
             }
+
         elif model_name in ("copd_emphysema_analyzer", "copd_emphysema"):
             try:
                 from .recist import calculate_emphysema_metrics
+                from .quality_assurance import segment_lungs
             except (ImportError, ValueError):
                 from recist import calculate_emphysema_metrics
-            em_res = calculate_emphysema_metrics(volume, spacing=spacing)
-            lung_mask = (volume >= -980.0) & (volume <= -400.0)
-            mask_np = (lung_mask & (volume <= -950.0)).astype(np.uint8)
-            if np.sum(mask_np) == 0:
-                mask_np = lung_mask.astype(np.uint8)
-            z_dim = volume.shape[0]
-            slice_sums = np.sum(mask_np, axis=(1, 2))
-            key_slice_idx = int(np.argmax(slice_sums)) if np.max(slice_sums) > 0 else z_dim // 2
-            recist = {
-                "longest_diameter_mm": round(em_res.get("laa_percent", 0.0), 1),
-                "short_axis_mm": round(em_res.get("emphysema_volume_liters", 0.0), 2),
-                "total_volume_cm3": round(em_res.get("total_lung_volume_liters", 0.0) * 1000.0, 1),
-                "key_slice_index": key_slice_idx,
-                "has_lesion": em_res.get("laa_percent", 0.0) >= 5.0,
-                "lung_rads": {
-                    "category": em_res.get("gold_stage", "GOLD 0"),
-                    "name": f"慢阻肺 {em_res.get('gold_stage', 'GOLD 0')}",
-                    "description": em_res.get("gold_grade_zh", "低衰减区分析"),
-                    "recommendation": em_res.get("recommendation", "常规随访")
-                },
-                "emphysema": em_res,
-                "quality_control": em_res.get("quality_control", {})
-            }
-            lesion_label = f"肺气肿低衰减区 ({em_res.get('gold_grade_zh', 'GOLD评估')})"
+                from quality_assurance import segment_lungs
+            thr = float(kwargs.get("emphysema_hu_threshold") or -950.0)
+            em_res = calculate_emphysema_metrics(volume, spacing=spacing, emphysema_hu_threshold=thr)
+            lung_mask = segment_lungs(volume, float(np.prod(spacing)) / 1000.0)
+            engine_type = "quantitative_ct"
+            if lung_mask is None:
+                mask_np = np.zeros(volume.shape, dtype=np.uint8)
+                key_slice_idx, basis = volume.shape[0] // 2, "未分割出双肺，取层面中点仅用于显示"
+            else:
+                mask_np = (lung_mask & (volume <= thr)).astype(np.uint8)
+                laa_per_slice = np.sum(mask_np, axis=(1, 2))
+                if laa_per_slice.max() > 0:
+                    key_slice_idx, basis = int(np.argmax(laa_per_slice)), "低衰减区面积最大的层面"
+                else:
+                    key_slice_idx, basis = int(np.argmax(np.sum(lung_mask, axis=(1, 2)))), "肺面积最大的层面（无低衰减区体素）"
+            # LAA% 等定量放在 emphysema 字段；不输出 GOLD 分级（GOLD 依据肺功能，CT 不能确定）
+            recist = _empty_measurements(key_slice_idx, basis)
+            recist["emphysema"] = em_res
+            recist["quality_control"] = em_res.get("quality_control", {})
+            extra_feature_fields["emphysema"] = em_res
+            lesion_label = f"肺内 ≤{thr:.0f} HU 低衰减区"
             neural_meta = {
                 "real_neural_inference": False,
-                "neural_architecture": "Quantitative CT (COPD GOLD 2024 LAA-950%)",
-                "weights_source": "GOLD 2024 Criteria",
+                "method": f"quality_assurance.segment_lungs 阈值法肺分割 + 肺内 ≤{thr:.0f} HU 体素计数 (LAA%)",
                 "positive_voxels": int(np.sum(mask_np > 0)),
-                "accelerator": str(self.device)
+                "accelerator": "cpu",
             }
-        elif model_name in ("covid19_lung_infection", "covid19"):
-            lung_mask = (volume >= -950.0) & (volume <= -100.0)
-            ggo = (volume >= -700.0) & (volume <= -300.0) & lung_mask
-            cons = (volume > -300.0) & (volume <= 50.0) & lung_mask
-            mask_np = (ggo | cons).astype(np.uint8)
-            if np.sum(mask_np) < 10:
-                mask_np = extract_largest_component(((volume >= -800.0) & (volume <= -200.0)).astype(np.uint8))
-            recist = calculate_recist_metrics(mask_np, spacing=spacing)
-            key_slice_idx = recist["key_slice_index"]
-            pct = round(min(100.0, float(recist["total_volume_cm3"]) / max(1.0, float(np.sum(lung_mask)) * np.prod(spacing) / 1000.0) * 100.0), 1) if np.sum(lung_mask) > 100 else 12.5
-            severity = "轻型 (Mild)" if pct < 15 else ("普通型 (Moderate)" if pct < 50 else "重型 (Severe)")
-            recist["covid19"] = {
-                "infection_percentage": pct,
-                "severity_stage": severity,
-                "involvement_volume_cm3": recist["total_volume_cm3"]
-            }
-            lesion_label = f"病毒性肺炎磨玻璃与实变累及区 ({severity}, 累及 {pct}%)"
-            neural_meta = {
-                "real_neural_inference": False,
-                "neural_architecture": "Pulmonary Ground-Glass Opacity & Consolidation Quantitative Volumetry",
-                "weights_source": "Quantitative Chest CT Radiomics",
-                "positive_voxels": int(np.sum(mask_np > 0)),
-                "infection_percentage": pct,
-                "accelerator": str(self.device)
-            }
+            extra_md += (
+                f"- **双肺容积**: `{_fmt(em_res.get('total_lung_volume_liters'), 'L')}`\n"
+                f"- **低衰减区 (≤{thr:.0f} HU)**: `{_fmt(em_res.get('emphysema_volume_liters'), 'L')}`，LAA% `{_fmt(em_res.get('laa_percent'), '%')}`\n"
+                f"- **Perc15**: `{_fmt(em_res.get('perc15_hu'), 'HU')}`\n"
+            )
+            if em_res.get("error"):
+                extra_md += f"- **说明**: {em_res['error']}\n"
+
         elif model_name in ("spleen_segmenter", "spleen_ct"):
-            f_path = kwargs.get("file_path")
-            mask_np, neural_meta = self.neural_pipeline.infer_spleen(f_path or volume, spacing=spacing)
-            lesion_label = "脾脏实质 (MONAI 3D-UNet 真实神经分割)"
+            mask_np, neural_meta = self.neural_pipeline.infer_spleen(volume, spacing)
+            lesion_label = "脾脏（MONAI spleen_ct_segmentation 分割）"
             recist = calculate_recist_metrics(mask_np, spacing=spacing)
             key_slice_idx = recist["key_slice_index"]
+
         elif model_name in ("multi_organ_ct", "swinunetr_btcv"):
-            f_path = kwargs.get("file_path")
-            mask_np, neural_meta = self.neural_pipeline.infer_btcv(f_path or volume, spacing=spacing)
-            lesion_label = "腹部 13 器官解剖 (MONAI SwinUNETR 真实神经分割)"
+            mask_np, neural_meta = self.neural_pipeline.infer_btcv(volume, spacing)
+            lesion_label = "BTCV 腹部 13 类器官（MONAI SwinUNETR 分割）"
             recist = calculate_recist_metrics(mask_np, spacing=spacing)
             key_slice_idx = recist["key_slice_index"]
-        elif model_name in ("pancreas_tumor_segmenter", "pancreas_ct_dints"):
-            f_path = kwargs.get("file_path")
-            mask_np, neural_meta = self.neural_pipeline.infer_btcv(f_path or volume, spacing=spacing, target_classes=[11])
-            if np.sum(mask_np) < 10:
-                mask_np = np.zeros_like(volume, dtype=np.uint8)
-                lesion_label = "胰腺实质 (当前扫描视野未包含完整胰腺解剖或未见明确病灶)"
-            else:
-                lesion_label = "胰腺实质与占位病灶 (MONAI DiNTS / SwinUNETR 真实神经分割)"
+
+        elif model_name in BTCV_ORGAN_SUBSETS:
+            classes, title = BTCV_ORGAN_SUBSETS[model_name]
+            mask_np, neural_meta = self.neural_pipeline.infer_btcv(volume, spacing, target_classes=classes)
+            # 目标类别为空就是空结果，不回退到其他器官
+            lesion_label = title if np.any(mask_np) else f"{title}（模型未分割出该器官）"
             recist = calculate_recist_metrics(mask_np, spacing=spacing)
             key_slice_idx = recist["key_slice_index"]
-            neural_meta["neural_architecture"] = "MONAI DiNTS (Pancreas CT, 498 layers)"
-            neural_meta["pancreas_volume_cm3"] = recist["total_volume_cm3"]
-        elif model_name in ("kidney_tumor_segmenter", "renal_structures_cect"):
-            f_path = kwargs.get("file_path")
-            mask_np, neural_meta = self.neural_pipeline.infer_btcv(f_path or volume, spacing=spacing, target_classes=[2, 3])
-            if np.sum(mask_np) < 10:
-                mask_np = np.zeros_like(volume, dtype=np.uint8)
-                lesion_label = "双肾实质 (当前扫描视野未包含完整双肾解剖或未见明确病灶)"
-            else:
-                lesion_label = "双肾实质精细解剖与占位病灶 (MONAI SegResNet CECT / SwinUNETR)"
-            recist = calculate_recist_metrics(mask_np, spacing=spacing)
-            key_slice_idx = recist["key_slice_index"]
-            neural_meta["neural_architecture"] = "MONAI SegResNet (Renal Structures CECT, 148 layers)"
-            neural_meta["kidneys_volume_cm3"] = recist["total_volume_cm3"]
-        elif model_name in ("liver_lesion_segmenter", "liver_ct"):
-            f_path = kwargs.get("file_path")
-            mask_np, neural_meta = self.neural_pipeline.infer_btcv(f_path or volume, spacing=spacing, target_classes=[6])
-            if np.sum(mask_np) < 10:
-                mask_np = np.zeros_like(volume, dtype=np.uint8)
-                lesion_label = "肝实质与局灶病灶 (当前扫描视野未包含完整肝脏解剖或未见明确病灶)"
-            else:
-                lesion_label = "肝脏实质与占位病灶 (MONAI SwinUNETR / LiTS 真实神经分割)"
-            recist = calculate_recist_metrics(mask_np, spacing=spacing)
-            key_slice_idx = recist["key_slice_index"]
-            neural_meta["neural_architecture"] = "MONAI SwinUNETR (Liver Segment, Class 6)"
-            neural_meta["liver_volume_cm3"] = recist["total_volume_cm3"]
+
         elif model_name in ("prostate_mri_segmenter", "prostate_mri"):
-            f_path = kwargs.get("file_path")
-            mask_np, neural_meta = self.neural_pipeline.infer_prostate(f_path or volume, spacing=spacing)
-            lesion_label = "前列腺腺体分带 (PZ/TZ，MONAI 3D-UNet 真实神经分割)"
+            labels_np, neural_meta = self.neural_pipeline.infer_prostate(volume, spacing)
+            mask_np = (labels_np > 0).astype(np.uint8)
+            lesion_label = "前列腺中央腺体与外周带（MONAI prostate_mri_anatomy 分割）"
             recist = calculate_recist_metrics(mask_np, spacing=spacing)
             key_slice_idx = recist["key_slice_index"]
+
         elif model_name in ("brain_tumor_brats", "brats_mri"):
-            f_path = kwargs.get("file_path")
-            mask_np, neural_meta = self.neural_pipeline.infer_brats(f_path or volume, spacing=spacing)
-            lesion_label = "脑胶质瘤全肿瘤区 (MONAI SegResNet 真实神经分割)"
+            labels_np, neural_meta = self.neural_pipeline.infer_brats(kwargs.get("file_path"), kwargs.get("channel_order"))
+            if labels_np.shape != volume.shape:
+                raise RuntimeError(f"BraTS 输出网格 {labels_np.shape} 与显示体积 {volume.shape} 不一致")
+            mask_np = (labels_np > 0).astype(np.uint8)
+            lesion_label = "BraTS 肿瘤子区（WT/TC/ET，MONAI SegResNet 分割）"
             recist = calculate_recist_metrics(mask_np, spacing=spacing)
             key_slice_idx = recist["key_slice_index"]
+
         elif model_name in ("cardiac_mri_segmentation", "ventricular_short_axis", "cardiac_anatomy_segmenter"):
-            f_path = kwargs.get("file_path")
-            mask_np, neural_meta = self.neural_pipeline.infer_cardiac(f_path or volume, spacing=spacing)
+            labels_np, neural_meta = self.neural_pipeline.infer_cardiac(volume, spacing)
+            mask_np = (labels_np > 0).astype(np.uint8)
             recist = calculate_recist_metrics(mask_np, spacing=spacing)
             key_slice_idx = recist["key_slice_index"]
-            dz, dy, dx = spacing
-            voxel_ml = (dz * dy * dx) / 1000.0
-            lv_vox = int(np.sum(mask_np == 1))
-            myo_vox = int(np.sum(mask_np == 2))
-            rv_vox = int(np.sum(mask_np == 3))
-            lv_vol = round(lv_vox * voxel_ml, 1) if lv_vox > 0 else round(recist["total_volume_cm3"], 1)
-            myo_mass = round(myo_vox * voxel_ml * 1.05, 1) if myo_vox > 0 else round(recist["total_volume_cm3"] * 1.05, 1)
-            rv_vol = round(rv_vox * voxel_ml, 1) if rv_vox > 0 else 0.0
+            lv, myo, rv = neural_meta["lv_pool_ml"], neural_meta["myocardium_ml"], neural_meta["rv_pool_ml"]
             recist["cardiac"] = {
-                "lv_cavity_volume_ml": lv_vol,
-                "rv_cavity_volume_ml": rv_vol,
-                "myocardial_mass_g": myo_mass,
-                "cine_phase_notice": "单期相短轴磁共振；精确射血分数 (LVEF) 需载入完整心动周期双期相 (ED/ES) 序列计算"
+                "lv_pool_volume_ml": lv,
+                "rv_pool_volume_ml": rv,
+                "myocardium_volume_ml": myo,
+                # 心肌质量 = 心肌体积 × 1.05 g/mL（心肌密度常数）
+                "myocardial_mass_g": round(myo * 1.05, 1) if myo else None,
+                "ejection_fraction": None,
+                "ejection_fraction_note": "单期相图像无法计算射血分数",
+                "input_requirement": neural_meta["input_requirement"],
             }
-            lesion_label = f"心脏短轴心室腔与心肌分割 (左室腔: {lv_vol} mL, 心肌质量: {myo_mass} g)"
-        elif model_name == "coronary_artery_calcification":
-            # Isolate anterior cardiac mediastinum (strictly exclude posterior spine, ribs, and sternum)
-            z_dim, y_dim, x_dim = volume.shape
-            cardiac_roi = np.zeros_like(volume, dtype=bool)
-            z_min, z_max = int(0.20 * z_dim), int(0.80 * z_dim)
-            y_min, y_max = int(0.25 * y_dim), int(0.62 * y_dim)
-            x_min, x_max = int(0.28 * x_dim), int(0.72 * x_dim)
-            cardiac_roi[z_min:z_max, y_min:y_max, x_min:x_max] = True
-            cardiac_roi = cardiac_roi & (volume > -100.0)
+            lesion_label = "心室血池与心肌（MONAI ventricular_short_axis_3label 分割）"
 
-            c_cands = (volume >= 130.0) & (volume <= 1200.0) & cardiac_roi
-            lbl, n_feats = ndi.label(c_cands)
-            mask_np = np.zeros_like(volume, dtype=np.uint8)
-            agatston = 0.0
-
-            if n_feats > 0:
-                dz, dy, dx = spacing
-                vox_mm3 = dz * dy * dx
-                c_counts = np.bincount(lbl.flat)
-                c_counts[0] = 0
-                vols_mm3 = c_counts[1:] * vox_mm3
-                # Coronary plaques are focal (typically 2 mm3 to 600 mm3). Anything >= 800 mm3 is sternum/spine bone!
-                plaque_indices = np.where((vols_mm3 >= 2.0) & (vols_mm3 <= 600.0))[0] + 1
-                if len(plaque_indices) > 0:
-                    mask_np = np.isin(lbl, plaque_indices).astype(np.uint8)
-                    mean_plaque_hu = float(np.mean(volume[mask_np > 0]))
-                    factor = 1 if mean_plaque_hu < 200 else (2 if mean_plaque_hu < 300 else (3 if mean_plaque_hu < 400 else 4))
-                    agatston = round(float(np.sum(mask_np) * vox_mm3 / 1000.0) * 10.0 * factor, 1)
-
-            recist = calculate_recist_metrics(mask_np, spacing=spacing)
-            key_slice_idx = recist["key_slice_index"]
-            vox_cnt = int(np.sum(mask_np > 0))
-            if agatston == 0.0:
-                risk_str = "极低心血管事件风险 (0分)"
-                lesion_label = "冠状动脉未见确切钙化斑块 (Agatston CAC: 0分, 极低心血管事件风险)"
-            elif agatston <= 10.0:
-                risk_str = "微量钙化 / 极低风险 (1-10分)"
-                lesion_label = f"冠状动脉钙化斑块 (Agatston CAC: {agatston}, {risk_str})"
-            elif agatston <= 100.0:
-                risk_str = "轻度斑块 / 轻度狭窄可能 (11-100分)"
-                lesion_label = f"冠状动脉钙化斑块 (Agatston CAC: {agatston}, {risk_str})"
-            elif agatston <= 400.0:
-                risk_str = "中度斑块 / 中度病变风险 (101-400分)"
-                lesion_label = f"冠状动脉钙化斑块 (Agatston CAC: {agatston}, {risk_str})"
-            else:
-                risk_str = "重度广泛钙化 / 冠心病高危 (>400分)"
-                lesion_label = f"冠状动脉钙化斑块 (Agatston CAC: {agatston}, {risk_str})"
-
-            recist["agatston"] = {
-                "agatston_score": agatston,
-                "plaque_volume_mm3": round(recist["total_volume_cm3"] * 1000.0, 1),
-                "risk_stratum": risk_str
-            }
-            neural_meta = {
-                "real_neural_inference": False,
-                "neural_architecture": "Quantitative CT (Coronary Artery Calcification / Agatston CAC)",
-                "weights_source": "Standard Agatston Radiomics (HU > 130)",
-                "agatston_score": agatston,
-                "positive_voxels": vox_cnt,
-                "accelerator": str(self.device)
-            }
         elif model_name in ("monai_wholebody_ct", "wholebody_ct"):
-            f_path = kwargs.get("file_path")
-            mask_np, neural_meta = self.neural_pipeline.infer_wholebody(f_path or volume, spacing=spacing)
+            labels_np, neural_meta = self.neural_pipeline.infer_wholebody(volume, spacing)
+            mask_np = (labels_np > 0).astype(np.uint8)
             recist = calculate_recist_metrics(mask_np, spacing=spacing)
             key_slice_idx = recist["key_slice_index"]
-            lesion_label = "MONAI 全身 CT 多器官全景解剖分割 (SegResNet-3D, 105 Classes)"
+            lesion_label = "全身 104 类解剖结构（MONAI wholeBody_ct_segmentation 分割）"
+
         elif model_name == "vertebra_segmenter":
-            bone = (volume >= 220.0).astype(np.uint8)
-            mask_np = extract_largest_component(bone)
-            recist = calculate_recist_metrics(mask_np, spacing=spacing)
-            key_slice_idx = recist["key_slice_index"]
-            mean_bmd = round(float(np.mean(volume[mask_np > 0])), 1) if np.sum(mask_np > 0) > 0 else 142.0
-            t_score = round((mean_bmd - 120.0) / 35.0, 1)
-            bmd_diag = "骨量正常" if mean_bmd >= 120.0 else ("骨量减少 (Osteopenia)" if mean_bmd >= 80.0 else "骨质疏松 (Osteoporosis)")
-            recist["spine"] = {
-                "mean_bmd_hu": mean_bmd,
-                "t_score_estimate": t_score,
-                "bmd_diagnosis": bmd_diag
-            }
-            lesion_label = f"全脊柱椎骨骨皮质与松质骨 (BMD: {mean_bmd} HU, {bmd_diag})"
-            neural_meta = {
-                "real_neural_inference": False,
-                "neural_architecture": "Quantitative CT (QCT) Trabecular Bone Mineral Density",
-                "weights_source": "Quantitative CT Cancellous Bone Attenuation",
-                "vertebra_volume_cm3": recist["total_volume_cm3"],
-                "positive_voxels": int(np.sum(mask_np > 0)),
-                "accelerator": str(self.device)
-            }
-        elif model_name in ("vista3d_interactive_segmenter", "vista3d"):
+            engine_type = "rule_based"
+            mask_np = extract_largest_component((volume >= 220.0).astype(np.uint8))
             prompt_pt = kwargs.get("prompt_point") or kwargs.get("click_point")
-            if prompt_pt and isinstance(prompt_pt, (list, tuple)) and len(prompt_pt) >= 2:
-                z_target = int(prompt_pt[0]) if len(prompt_pt) >= 3 else volume.shape[0] // 2
-                y_target = int(prompt_pt[-2])
-                x_target = int(prompt_pt[-1])
-                z_target = max(0, min(volume.shape[0] - 1, z_target))
-                y_target = max(0, min(volume.shape[1] - 1, y_target))
-                x_target = max(0, min(volume.shape[2] - 1, x_target))
-                seed_val = float(volume[z_target, y_target, x_target])
-                tol = 45.0
-                roi_mask = (volume >= seed_val - tol) & (volume <= seed_val + tol)
-                mask_np = extract_largest_component(roi_mask.astype(np.uint8))
+            roi_radius_mm = float(kwargs.get("roi_radius_mm") or 5.0)
+            roi_mean = None
+            roi_info = None
+            if isinstance(prompt_pt, dict) and all(k in prompt_pt for k in ("z", "y", "x")):
+                pz = int(np.clip(int(prompt_pt["z"]), 0, volume.shape[0] - 1))
+                py, px = int(prompt_pt["y"]), int(prompt_pt["x"])
+                _, dy, dx = spacing
+                yy, xx = np.ogrid[:volume.shape[1], :volume.shape[2]]
+                disk = ((yy - py) * dy) ** 2 + ((xx - px) * dx) ** 2 <= roi_radius_mm ** 2
+                if np.any(disk):
+                    roi_mean = round(float(np.mean(volume[pz][disk])), 1)
+                    roi_info = {"z": pz, "y": py, "x": px, "radius_mm": roi_radius_mm, "pixels": int(np.sum(disk))}
+                key_slice_idx, basis = pz, "ROI 所在层面"
             else:
-                fg = (volume > np.median(volume)).astype(np.uint8)
-                mask_np = extract_largest_component(fg)
-            recist = calculate_recist_metrics(mask_np, spacing=spacing)
-            key_slice_idx = recist["key_slice_index"]
-            lesion_label = "医生交互提示点选分割 (种子点区域生长与密度自适应)"
+                bone_per_slice = np.sum(mask_np, axis=(1, 2))
+                key_slice_idx = int(np.argmax(bone_per_slice)) if bone_per_slice.max() > 0 else volume.shape[0] // 2
+                basis = "骨阈值面积最大的层面（未提供 ROI）"
+            recist = _empty_measurements(key_slice_idx, basis)
+            # 只给松质骨 ROI 的平均 CT 值（单位 HU），不换算 mg/cm³、不估算 T 值、不做骨量判定
+            recist["spine"] = {
+                "roi_mean_hu": roi_mean,
+                "unit": "HU",
+                "roi": roi_info,
+                "method": "调用方给定的椎体松质骨种子点处、同层圆形 ROI 内 CT 值平均；未提供 ROI 时为空",
+            }
+            lesion_label = "骨 ≥220 HU 阈值示意" + (f"；松质骨 ROI 平均 {roi_mean} HU" if roi_mean is not None else "；未提供松质骨 ROI")
             neural_meta = {
                 "real_neural_inference": False,
-                "neural_architecture": "Interactive Seeded Region Growing & HU Intensity Adaptive Contouring",
-                "weights_source": "Heurion Interactive Radiomics Engine",
-                "prompt_point": prompt_pt,
+                "method": "骨 HU ≥ 220 最大连通域（显示用）+ 手动圆形 ROI 平均 HU",
                 "positive_voxels": int(np.sum(mask_np > 0)),
-                "accelerator": str(self.device)
+                "accelerator": "cpu",
+            }
+            extra_md += f"- **松质骨 ROI 平均 CT 值**: `{_fmt(roi_mean, 'HU')}`（{recist['spine']['method']}）\n"
+
+        elif model_name in ("vista3d_interactive_segmenter", "vista3d", "interactive_region_growing"):
+            engine_type = "rule_based"
+            prompt_pt = kwargs.get("prompt_point") or kwargs.get("click_point")
+            if isinstance(prompt_pt, dict) and all(k in prompt_pt for k in ("z", "y", "x")):
+                seed = (int(prompt_pt["z"]), int(prompt_pt["y"]), int(prompt_pt["x"]))
+            elif isinstance(prompt_pt, (list, tuple)) and len(prompt_pt) == 3:
+                seed = tuple(int(v) for v in prompt_pt)
+            else:
+                raise ValueError("HU 区域生长需要种子点 prompt_point={z, y, x}")
+            seed = tuple(int(np.clip(s, 0, volume.shape[i] - 1)) for i, s in enumerate(seed))
+            seed_val = float(volume[seed])
+            tol = 45.0
+            band = (volume >= seed_val - tol) & (volume <= seed_val + tol)
+            lbl, _ = ndi.label(band)
+            mask_np = (lbl == lbl[seed]).astype(np.uint8) if lbl[seed] > 0 else np.zeros(volume.shape, dtype=np.uint8)
+            recist = calculate_recist_metrics(mask_np, spacing=spacing)
+            key_slice_idx = recist["key_slice_index"]
+            lesion_label = "种子点 HU 区域生长（±45 HU 连通域）"
+            neural_meta = {
+                "real_neural_inference": False,
+                "method": f"HU 区域生长：种子点 {seed} 处 CT 值 {round(seed_val, 1)} HU ±{tol} HU，取与种子点连通的区域（不是 VISTA-3D 模型）",
+                "prompt_point": list(seed),
+                "positive_voxels": int(np.sum(mask_np > 0)),
+                "accelerator": "cpu",
             }
         else:
-            raise RuntimeError(
-                f"模型 '{model_name}' 的真实深度学习神经网络权重尚未安装。"
-                "为确保医疗准确性与合规性，系统已严格禁止算法层退化为启发式规则伪造输出。"
-                "请先通过模型管理中心安装该模型的官方 MONAI 权重后再次运行。"
-            )
-        
-        # Prepare 2D key slice image with windowing
+            raise ModelUnavailableError(f"模型 '{model_name}' 未实现或未登记，不会以其他算法替代。")
+
+        if model_name in ("vista3d_interactive_segmenter", "vista3d"):
+            model_name = "interactive_region_growing"
+
+        key_slice_idx = int(np.clip(int(key_slice_idx), 0, volume.shape[0] - 1))
+        method_label = neural_meta.get("neural_architecture") if neural_meta.get("real_neural_inference") else (
+            "Rule-based (HU threshold)" if engine_type == "rule_based" else "Quantitative CT (HU threshold)"
+        )
+
         ct_windowed = apply_ct_window(volume, window_name=window_preset)
-        key_slice_ct = ct_windowed[key_slice_idx]
-        key_slice_mask = mask_np[key_slice_idx]
-        
-        # Render publication-grade PNG
         png_bytes = render_key_slice_png(
-            ct_slice_uint8=key_slice_ct,
-            mask_slice_2d=key_slice_mask,
+            ct_slice_uint8=ct_windowed[key_slice_idx],
+            mask_slice_2d=mask_np[key_slice_idx],
             recist=recist,
             modality=f"{modality} ({window_preset.title()} Window)",
             lesion_name=lesion_label,
             scale_bar_mm=50.0,
-            pixel_spacing_mm=spacing[1]
+            pixel_spacing_mm=spacing[2],
+            method_label=method_label,
         )
-        
+
         elapsed_sec = round(time.time() - t0, 3)
-        rads_info = recist.get("lung_rads")
-        rads_md = f"- **临床评级 (Lung-RADS)**: `{rads_info.get('name')}` ({rads_info.get('description', '')})\n- **影像随访指引**: `{rads_info.get('recommendation', '')}`\n" if rads_info else ""
-        subsolid_md = ""
-        if recist.get("solid_core_diameter_mm", 0.0) > 0:
-            ctr_pct = int(recist.get("consolidation_tumor_ratio", 0.0) * 100)
-            subsolid_md = (
-                f"- **结节亚型分类**: `{recist.get('nodule_type_zh', '混合磨玻璃/亚实性结节')}`\n"
-                f"- **实性核心长径 (d_solid)**: `{recist.get('solid_core_diameter_mm')} mm` (实性占比 CTR: `{ctr_pct}%`)\n"
-            )
-        elif recist.get("nodule_type") == "pure_ggo":
-            subsolid_md = f"- **结节亚型分类**: `{recist.get('nodule_type_zh', '纯磨玻璃结节')}` (无实性浸润核心，CTR 0%)\n"
 
         neural_md = ""
         if neural_meta.get("real_neural_inference"):
             neural_md = (
-                f"- **深度神经网络**: `{neural_meta.get('neural_architecture')}` (真实 PyTorch 权重推理)\n"
-                f"- **真实验证体素**: `{recist['total_volume_cm3']} cm³` (阳性体素点数: `{neural_meta.get('positive_voxels', 0)}` 点)\n"
+                f"- **神经网络**: `{neural_meta.get('neural_architecture')}`（权重版本 {neural_meta.get('weights_version')}，SHA-256 已校验）\n"
+                f"- **分割体积**: `{_fmt(recist.get('total_volume_cm3'), 'cm³')}`（体素数 `{neural_meta.get('positive_voxels', 0)}`）\n"
             )
-            if "organ_volumetry" in neural_meta:
+            if neural_meta.get("organ_volumetry"):
                 organ_lines = "".join([f"  - {k}: `{v} cm³`\n" for k, v in neural_meta["organ_volumetry"].items() if v > 0])
                 if organ_lines:
-                    neural_md += f"- **腹部 13 器官精细容积 (BTCV)**:\n{organ_lines}"
-            if "peripheral_zone_cm3" in neural_meta:
+                    neural_md += f"- **BTCV 各器官分割体积**:\n{organ_lines}"
+            if "central_gland_cm3" in neural_meta:
                 neural_md += (
-                    f"- **前列腺腺体分带容积**:\n"
-                    f"  - 全腺体容积: `{neural_meta['total_prostate_cm3']} cm³`\n"
-                    f"  - 外周带 (PZ): `{neural_meta['peripheral_zone_cm3']} cm³`\n"
-                    f"  - 移行带 (TZ): `{neural_meta['transition_zone_cm3']} cm³`\n"
+                    f"- **前列腺分带体积**: 全腺体 `{neural_meta['total_prostate_cm3']} cm³`，"
+                    f"中央腺体 `{neural_meta['central_gland_cm3']} cm³`，外周带 `{neural_meta['peripheral_zone_cm3']} cm³`\n"
                 )
             if "whole_tumor_cm3" in neural_meta:
                 neural_md += (
-                    f"- **脑胶质瘤多亚区容积 (BraTS)**:\n"
-                    f"  - 全肿瘤 (WT): `{neural_meta['whole_tumor_cm3']} cm³`\n"
-                    f"  - 肿瘤核心 (TC): `{neural_meta['tumor_core_cm3']} cm³`\n"
-                    f"  - 增强核心 (ET): `{neural_meta['enhancing_tumor_cm3']} cm³`\n"
+                    f"- **BraTS 子区体积**: WT `{neural_meta['whole_tumor_cm3']} cm³`，"
+                    f"TC `{neural_meta['tumor_core_cm3']} cm³`，ET `{neural_meta['enhancing_tumor_cm3']} cm³`\n"
                 )
-            if "covid19" in recist:
-                c19 = recist["covid19"]
-                neural_md += f"- **病毒性肺炎定量**: 累及占比 `{c19['infection_percentage']}%` ({c19['severity_stage']})，受累容积 `{c19['involvement_volume_cm3']} cm³`\n"
-            if "agatston" in recist:
-                ag = recist["agatston"]
-                neural_md += f"- **冠脉钙化评分 (CAC)**: Agatston `{ag['agatston_score']}` 分 ({ag['risk_stratum']})，斑块容积 `{ag['plaque_volume_mm3']} mm³`\n"
             if "cardiac" in recist:
                 card = recist["cardiac"]
-                lv_v = card.get("lv_cavity_volume_ml", "--")
-                rv_v = card.get("rv_cavity_volume_ml", "--")
-                myo_g = card.get("myocardial_mass_g", "--")
-                notice = card.get("cine_phase_notice", "")
-                notice_str = f" ({notice})" if notice else ""
-                neural_md += f"- **心脏解剖量化**: 左室腔容积 `{lv_v} mL`，右室腔 `{rv_v} mL`，心肌质量 `{myo_g} g`{notice_str}\n"
-            if "spine" in recist:
-                sp = recist["spine"]
-                neural_md += f"- **脊柱骨密度量化**: 椎骨小梁 BMD `{sp['mean_bmd_hu']} HU` (T-score 估算: `{sp['t_score_estimate']}`，{sp['bmd_diagnosis']})\n"
+                neural_md += (
+                    f"- **心室分割体积**: 左室血池 `{card['lv_pool_volume_ml']} mL`，右室血池 `{card['rv_pool_volume_ml']} mL`，"
+                    f"心肌 `{card['myocardium_volume_ml']} mL`（按 1.05 g/mL 折合 `{_fmt(card['myocardial_mass_g'], 'g')}`）；{card['ejection_fraction_note']}\n"
+                    f"- **输入要求**: {card['input_requirement']}\n"
+                )
+            if neural_meta.get("structure_volumes_cm3"):
+                neural_md += f"- **分割出的结构数**: `{len(neural_meta['structure_volumes_cm3'])}` 类\n"
+        else:
+            neural_md = f"- **方法**: {neural_meta.get('method', '')}\n"
 
-        # Step 2: Clinical Feature Structural Extraction
-        b64_key_slice = png_to_base64(png_bytes)
+        # 结构化特征（测量值）
         try:
             clinical_feats = extract_clinical_features(
                 volume=volume,
-                mask=mask_np,
+                mask=(mask_np > 0).astype(np.uint8),
                 spacing=spacing,
                 modality=modality,
                 target_name=lesion_label,
-                window_preset=window_preset
+                window_preset=window_preset,
+                lung_nodule_context=(model_name == "lung_nodule_segmenter"),
             )
-        except Exception:
-            clinical_feats = {
-                "has_lesion": bool(np.sum(mask_np > 0) > 0),
-                "target_name": lesion_label,
-                "modality": modality,
-                "physical_metrics": recist,
-                "density_metrics": None,
-                "subsolid_metrics": None,
-                "quality_control": recist.get("quality_control", {}),
-                "key_slice_png_base64": b64_key_slice
-            }
-
-        # Step 3: Multimodal AI Clinical Reasoning Agent
-        patient_ctx = kwargs.get("patient_context")
-        try:
-            clinical_ai = generate_clinical_ai_report(
-                features=clinical_feats,
-                patient_context=patient_ctx,
-                key_slice_png_base64=b64_key_slice
-            )
+            clinical_feats.update(extra_feature_fields)
         except Exception as e:
-            clinical_ai = {
-                "findings_description": f"检出目标病灶，RECIST 1.1 长径 {recist.get('longest_diameter_mm')}mm，三维体积 {recist.get('total_volume_cm3')}cm³。",
-                "diagnostic_assessment": f"评估分级: {rads_info.get('name') if rads_info else '常规病灶'}",
-                "management_recommendations": rads_info.get('recommendation', '建议专科随访') if rads_info else "建议结合临床会诊",
-                "guideline_applied": "Clinical Radiomics Standard",
-                "risk_level": "moderate",
-                "reasoning_engine": "fallback"
-            }
+            clinical_feats = {"status": "error", "error": f"结构化特征提取失败: {e}"}
 
-        ai_report_md = (
-            f"\n\n### 多模态 AI 临床会诊意见 ({clinical_ai.get('guideline_applied', '')})\n"
-            f"#### 1. 【影像所见描述】\n"
-            f"{clinical_ai.get('findings_description', '')}\n\n"
-            f"#### 2. 【影像分级与恶性风险判断】\n"
-            f"{clinical_ai.get('diagnostic_assessment', '')}\n\n"
-            f"#### 3. 【下一步临床处置与随访建议】\n"
-            f"{clinical_ai.get('management_recommendations', '')}\n"
-        )
+        # 影像所见描述：失败时如实返回错误，不编造所见
+        patient_ctx = kwargs.get("patient_context")
+        if clinical_feats.get("status") == "error":
+            clinical_ai = {"status": "error", "error": f"报告生成失败：{clinical_feats['error']}"}
+        else:
+            try:
+                clinical_ai = generate_clinical_ai_report(
+                    features=clinical_feats,
+                    patient_context=patient_ctx,
+                    key_slice_png_base64=None
+                )
+            except Exception as e:
+                clinical_ai = {"status": "error", "error": f"报告生成失败：{e}"}
+
+        if clinical_ai.get("status") == "error":
+            ai_report_md = f"\n\n### 影像所见\n{clinical_ai['error']}\n"
+        else:
+            ai_report_md = (
+                f"\n\n### 影像所见（按测量值生成）\n"
+                f"{clinical_ai.get('findings_description', '')}\n\n"
+                f"{clinical_ai.get('interpretation_note', INTERPRETATION_HINT)}\n"
+            )
+
+        ld = recist.get("longest_diameter_mm")
+        measure_md = ""
+        if isinstance(ld, (int, float)) and recist.get("has_lesion"):
+            measure_md = (
+                f"- **关键层面最大长径**: `{ld} mm`（垂直短径 `{_fmt(recist.get('short_axis_mm'), 'mm')}`）\n"
+                f"- **分割总体积**: `{_fmt(recist.get('total_volume_cm3'), 'cm³')}`\n"
+            )
 
         return {
             "status": "success",
             "model_name": model_name,
+            "engine_type": engine_type,
             "modality": modality,
             "accelerator": self.device_info.get("accelerator", str(self.device)),
             "device_type": self.device.type,
             "inference_duration_sec": elapsed_sec,
-            "real_neural_inference": neural_meta.get("real_neural_inference", False),
+            "real_neural_inference": bool(neural_meta.get("real_neural_inference", False)),
             "neural_info": neural_meta,
             "volume_dimensions": list(volume.shape),
             "voxel_spacing_mm": list(spacing),
             "recist_metrics": recist,
             "clinical_features": clinical_feats,
             "clinical_ai_report": clinical_ai,
-            "key_slice_png_base64": b64_key_slice,
+            "key_slice_png_base64": png_to_base64(png_bytes),
             "key_slice_png_size_bytes": len(png_bytes),
             "summary_markdown": (
-                f"**MONAI 3D 影像分析报告**\n"
-                f"- **计算加速设备**: `{self.device_info.get('accelerator')}` (耗时: {elapsed_sec}s)\n"
-                f"- **分析模型**: `{model_name}` ({lesion_label})\n"
+                f"**影像分析结果（科研用途）**\n"
+                f"- **分析模型**: `{model_name}`（{lesion_label}）\n"
                 f"{neural_md}"
-                f"- **体素扫描维度**: `{volume.shape[0]} 层 × {volume.shape[1]} × {volume.shape[2]}` (层厚: {spacing[0]}mm)\n"
-                f"- **最大横截面 (Key Slice)**: 第 `#{key_slice_idx}` 层\n"
-                f"{subsolid_md}"
-                f"- **RECIST 1.1 最大长径**: `{recist['longest_diameter_mm']} mm`\n"
-                f"- **垂直短径**: `{recist['short_axis_mm']} mm`\n"
-                f"- **病灶总体积**: `{recist['total_volume_cm3']} cm³`\n"
-                f"{rads_md}"
+                f"- **体积维度**: `{volume.shape[0]} 层 × {volume.shape[1]} × {volume.shape[2]}`（层厚 {spacing[0]} mm）\n"
+                f"- **关键层面**: 第 `#{key_slice_idx}` 层（{recist.get('key_slice_basis', '分割面积最大的层面')}）\n"
+                f"{measure_md}"
+                f"{extra_md}"
                 f"{ai_report_md}"
             )
         }
 
     def load_volume_data(self, sample_id_or_path: str) -> Tuple[np.ndarray, Tuple[float, float, float], str]:
-        """Loads a volume from memory cache, sample_id, benchmark, or file path."""
-        # 1. In-memory volume cache check
+        """按内存缓存 -> data 目录样本 ID -> 文件/目录路径的顺序读取体积；都找不到就报错，不生成合成体。"""
+        if not sample_id_or_path:
+            raise ValueError("缺少影像来源：请提供 sample_id、volume_id 或 file_path")
         if hasattr(self, "volume_cache") and sample_id_or_path in self.volume_cache:
             return self.volume_cache[sample_id_or_path]
 
@@ -1648,7 +1356,6 @@ class MONAIEngine:
 
         data_dir = Path(__file__).resolve().parent.parent / "data"
 
-        # 2. Check if sample ID exists in data dir (.nii.gz, .nii, .zip, .gz)
         for ext in (".nii.gz", ".nii", ".zip", ".gz"):
             p = data_dir / f"{sample_id_or_path}{ext}"
             if p.exists():
@@ -1656,32 +1363,26 @@ class MONAIEngine:
                 self.volume_cache[sample_id_or_path] = (vol, spacing, modality)
                 return vol, spacing, modality
 
-        # 3. Check if direct file/dir path
         if os.path.exists(sample_id_or_path):
             vol, spacing, modality = load_volume(sample_id_or_path)
             self.volume_cache[sample_id_or_path] = (vol, spacing, modality)
             return vol, spacing, modality
 
-        # Fallback to high-fidelity synthetic volume
-        vol, _ = generate_synthetic_ct_volume(shape=(48, 128, 128), spacing=(1.5, 0.8, 0.8))
-        return vol, (1.5, 0.8, 0.8), "CT"
+        raise FileNotFoundError(f"找不到影像: '{sample_id_or_path}'（不在内存缓存、样本目录或文件系统中）")
 
     def get_mpr_info(self, sample_id_or_path: str, model_name: Optional[str] = None) -> Dict[str, Any]:
-        """Returns 3D volume dimensions, spacing, slice counts and bounding box."""
+        """体积维度、间距、各方向层数；指定模型时附带该模型掩膜的中心与外接盒。"""
         vol, spacing, modality = self.load_volume_data(sample_id_or_path)
         z_dim, y_dim, x_dim = vol.shape
         dz, dy, dx = spacing
 
-        is_lung = any(k in sample_id_or_path.lower() for k in ("lung", "chest", "mucus")) or (float(np.min(vol)) < -500 and float(np.mean(vol)) < -150)
         lesion_mask = self.get_or_compute_mask(sample_id_or_path, vol, spacing, model_name=model_name)
-        z_idx, y_idx, x_idx = np.where(lesion_mask > 0)
+        overlay_method = self.mask_method_cache.get(f"{sample_id_or_path}:{model_name}") if lesion_mask is not None else None
+        idx = np.where(lesion_mask > 0) if lesion_mask is not None else (np.array([]),) * 3
+        z_idx, y_idx, x_idx = idx
 
         if len(z_idx) > 10:
-            center = {
-                "axial": int(np.median(z_idx)),
-                "coronal": int(np.median(y_idx)),
-                "sagittal": int(np.median(x_idx))
-            }
+            center = {"axial": int(np.median(z_idx)), "coronal": int(np.median(y_idx)), "sagittal": int(np.median(x_idx))}
             bbox = {
                 "z_min": int(np.min(z_idx)), "z_max": int(np.max(z_idx)),
                 "y_min": int(np.min(y_idx)), "y_max": int(np.max(y_idx)),
@@ -1689,7 +1390,7 @@ class MONAIEngine:
             }
         else:
             center = {"axial": z_dim // 2, "coronal": y_dim // 2, "sagittal": x_dim // 2}
-            bbox = {"z_min": 0, "z_max": z_dim - 1, "y_min": 0, "y_max": y_dim - 1, "x_min": 0, "x_max": x_dim - 1}
+            bbox = None
 
         return {
             "modality": modality,
@@ -1702,8 +1403,61 @@ class MONAIEngine:
             },
             "center_slice": center,
             "bounding_box": bbox,
-            "recommended_windows": ["lung", "mediastinum", "bone"] if is_lung else ["abdomen", "mediastinum", "bone"]
+            "overlay_model": model_name if lesion_mask is not None else None,
+            "overlay_method": overlay_method,
+            "recommended_windows": ["lung", "mediastinum", "abdomen", "bone"] if str(modality).upper() == "CT" else [],
         }
+
+    def _render_mpr_png(
+        self,
+        raw_slice: np.ndarray,
+        overlays: List[Tuple[np.ndarray, Tuple[int, int, int, int]]],
+        v_spacing: float,
+        h_spacing: float,
+        window_preset: str,
+        hud: List[str],
+    ) -> Tuple[bytes, int, int, float, float]:
+        """窗宽窗位 + 叠加 + 物理比例重采样 + 比例尺 + HUD，返回 (png, 宽, 高, 水平间距, 竖直间距)。"""
+        ct_uint8 = apply_ct_window(np.ascontiguousarray(raw_slice), window_name=window_preset)
+        h, w = ct_uint8.shape
+        base_img = Image.fromarray(ct_uint8).convert("RGBA")
+        over = np.zeros((h, w, 4), dtype=np.uint8)
+        any_over = False
+        for m, color in overlays:
+            mb = np.ascontiguousarray(m) > 0
+            if np.any(mb):
+                over[mb] = color
+                any_over = True
+        if any_over:
+            base_img = Image.alpha_composite(base_img, Image.fromarray(over, mode="RGBA"))
+
+        # 冠状/矢状位层厚与面内间距不同，按真实毫米比例重采样，避免压扁
+        physical_aspect = (h * v_spacing) / max(w * h_spacing, 1e-4)
+        target_w = 512
+        target_h = max(128, min(1024, int(round(target_w * physical_aspect))))
+        if (target_w, target_h) != (w, h):
+            base_img = base_img.resize((target_w, target_h), resample=Image.Resampling.BILINEAR)
+            h_spacing = (w * h_spacing) / target_w
+            v_spacing = (h * v_spacing) / target_h
+            w, h = target_w, target_h
+
+        font, supports_cjk = get_cjk_font(13)
+        font_sm = get_sans_font(11, bold=True)
+        draw = ImageDraw.Draw(base_img)
+        scale_bar_mm = 50.0 if w >= 256 else 20.0
+        scale_px = int(scale_bar_mm / max(h_spacing, 0.01))
+        margin_x = w - scale_px - 15
+        margin_y = h - 20
+        draw.line([(margin_x, margin_y), (margin_x + scale_px, margin_y)], fill=(255, 255, 255, 220), width=2)
+        draw.text((margin_x, margin_y - 14), f"{int(scale_bar_mm / 10)} cm", fill=(255, 255, 255, 220), font=font_sm)
+        y_off = 10
+        for line in hud:
+            draw.text((12, y_off), sanitize_text(line, supports_cjk), fill=(230, 235, 245, 230), font=font)
+            y_off += 16
+
+        buf = io.BytesIO()
+        base_img.convert("RGB").save(buf, format="PNG", optimize=True)
+        return buf.getvalue(), w, h, h_spacing, v_spacing
 
     def extract_mpr_slice(
         self,
@@ -1714,120 +1468,53 @@ class MONAIEngine:
         overlay: bool = True,
         model_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Extracts an arbitrary orthogonal 2D slice with CT windowing and optional lesion mask overlay."""
+        """取任一正交截面（放射学显示方向），可叠加指定模型的掩膜；未指定模型不叠加。"""
         vol, spacing, modality = self.load_volume_data(sample_id_or_path)
-        z_dim, y_dim, x_dim = vol.shape
-        dz, dy, dx = spacing
 
         plane = (plane or "axial").lower()
         if plane not in ("axial", "coronal", "sagittal"):
-            plane = "axial"
+            raise ValueError(f"未知截面方向: {plane}")
 
-        is_lung = any(k in sample_id_or_path.lower() for k in ("lung", "chest", "mucus")) or (window_preset == "lung") or (float(np.min(vol)) < -500 and float(np.mean(vol)) < -150)
-        mask = None
-        if overlay:
-            mask = self.get_or_compute_mask(sample_id_or_path, vol, spacing, model_name=model_name)
+        mask = self.get_or_compute_mask(sample_id_or_path, vol, spacing, model_name=model_name) if overlay else None
+        overlay_method = self.mask_method_cache.get(f"{sample_id_or_path}:{model_name}") if mask is not None else None
 
+        window_defaulted = False
         if not window_preset:
-            window_preset = "lung" if is_lung else "abdomen"
+            window_preset = "abdomen"
+            window_defaulted = True
 
-        if plane == "axial":
-            total = z_dim
-            idx = z_dim // 2 if slice_index is None else max(0, min(z_dim - 1, slice_index))
-            raw_slice = vol[idx, :, :]
-            mask_slice = mask[idx, :, :] if mask is not None else None
-            v_spacing = dy
-            h_spacing = dx
-            plane_label = "轴位 (Axial)"
-        elif plane == "coronal":
-            total = y_dim
-            idx = y_dim // 2 if slice_index is None else max(0, min(y_dim - 1, slice_index))
-            # Superior (head) at top
-            raw_slice = np.flipud(vol[:, idx, :])
-            mask_slice = np.flipud(mask[:, idx, :]) if mask is not None else None
-            v_spacing = dz
-            h_spacing = dx
-            plane_label = "冠状位 (Coronal)"
-        else: # sagittal
-            total = x_dim
-            idx = x_dim // 2 if slice_index is None else max(0, min(x_dim - 1, slice_index))
-            raw_slice = np.flipud(vol[:, :, idx])
-            mask_slice = np.flipud(mask[:, :, idx]) if mask is not None else None
-            v_spacing = dz
-            h_spacing = dy
-            plane_label = "矢状位 (Sagittal)"
+        total, v_spacing, h_spacing, plane_label = _plane_geometry(vol.shape, spacing, plane)
+        idx = total // 2 if slice_index is None else max(0, min(total - 1, int(slice_index)))
+        raw_slice = display_plane_slice(vol, plane, idx)
+        mask_slice = display_plane_slice(mask, plane, idx) if mask is not None else None
 
-        orig_v_spacing = v_spacing
-        orig_h_spacing = h_spacing
-
-        ct_uint8 = apply_ct_window(raw_slice, window_name=window_preset)
-        h, w = ct_uint8.shape
-
-        base_img = Image.fromarray(ct_uint8).convert("RGBA")
-        lesion_present = False
-        lesion_px = 0
-        if mask_slice is not None:
-            mask_bool = mask_slice > 0
-            lesion_px = int(np.sum(mask_bool))
-            if lesion_px > 0:
-                lesion_present = True
-                mask_rgba = np.zeros((h, w, 4), dtype=np.uint8)
-                mask_rgba[mask_bool] = [255, 77, 79, 110]
-                mask_img = Image.fromarray(mask_rgba, mode="RGBA")
-                base_img = Image.alpha_composite(base_img, mask_img)
-
-        # 物理几何各向同性校正与高分辨率重采样 (Isometric Physical Aspect Ratio Resampling)
-        # 针对冠状位/矢状位切片，层厚 (dz) 与面内像素间距不同，必须按真实解剖毫米比例消除压缩扁平畸变
-        physical_aspect = (h * v_spacing) / max(w * h_spacing, 1e-4)
-        target_w = 512
-        target_h = int(round(target_w * physical_aspect))
-        target_h = max(128, min(1024, target_h))
-        if (target_w, target_h) != (w, h):
-            base_img = base_img.resize((target_w, target_h), resample=Image.Resampling.BILINEAR)
-            h_spacing = (w * h_spacing) / target_w
-            v_spacing = (h * v_spacing) / target_h
-            w, h = target_w, target_h
-
-        font, supports_cjk = get_cjk_font(13)
-        font_sm = get_sans_font(11, bold=True)
-
-        draw = ImageDraw.Draw(base_img)
-        scale_bar_mm = 50.0 if w >= 256 else 20.0
-        scale_px = int(scale_bar_mm / max(h_spacing, 0.01))
-        margin_x = w - scale_px - 15
-        margin_y = h - 20
-        draw.line([(margin_x, margin_y), (margin_x + scale_px, margin_y)], fill=(255, 255, 255, 220), width=2)
-        draw.text((margin_x, margin_y - 14), f"{int(scale_bar_mm / 10)} cm", fill=(255, 255, 255, 220), font=font_sm)
-
+        lesion_px = int(np.sum(mask_slice > 0)) if mask_slice is not None else 0
         win = CT_WINDOWS.get(window_preset, {"level": 40, "width": 400})
-        display_plane = sanitize_text(plane_label, supports_cjk)
         hud = [
-            f"MPR // {display_plane} #{idx}/{total}",
+            f"MPR // {plane_label} #{idx}/{total}",
             f"{window_preset.title()} Window (W:{win['width']} L:{win['level']})",
-            f"Voxel: {round(h_spacing, 2)}x{round(v_spacing, 2)} mm"
+            f"Voxel: {round(h_spacing, 2)}x{round(v_spacing, 2)} mm",
         ]
-        y_off = 10
-        for l in hud:
-            clean_l = sanitize_text(l, supports_cjk)
-            draw.text((12, y_off), clean_l, fill=(230, 235, 245, 230), font=font)
-            y_off += 16
-
-        buf = io.BytesIO()
-        base_img.convert("RGB").save(buf, format="PNG", optimize=True)
-        png_bytes = buf.getvalue()
-
-        area_mm2 = round(lesion_px * float(orig_h_spacing) * float(orig_v_spacing), 1)
+        if overlay_method:
+            hud.append(overlay_method)
+        png_bytes, w, h, out_h_spacing, out_v_spacing = self._render_mpr_png(
+            raw_slice, [(mask_slice, (255, 77, 79, 110))] if mask_slice is not None else [],
+            v_spacing, h_spacing, window_preset, hud,
+        )
 
         return {
             "plane": plane,
             "slice_index": idx,
             "total_slices": total,
-            "window": {"preset": window_preset, "level": win["level"], "width": win["width"]},
+            "window": {"preset": window_preset, "level": win["level"], "width": win["width"], "defaulted": window_defaulted},
             "dimensions": {"width": w, "height": h},
-            "pixel_spacing_mm": {"horizontal": round(float(h_spacing), 3), "vertical": round(float(v_spacing), 3)},
-            "lesion_present": lesion_present,
+            "pixel_spacing_mm": {"horizontal": round(float(out_h_spacing), 3), "vertical": round(float(out_v_spacing), 3)},
+            "orientation_labels": _orientation_labels(plane),
+            "overlay_model": model_name if mask is not None else None,
+            "overlay_method": overlay_method,
+            "lesion_present": lesion_px > 0,
             "lesion_pixel_count": lesion_px,
-            "lesion_area_mm2": area_mm2,
+            "lesion_area_mm2": round(lesion_px * float(h_spacing) * float(v_spacing), 1),
             "slice_png_base64": png_to_base64(png_bytes),
             "slice_png_size_bytes": len(png_bytes)
         }
@@ -1842,165 +1529,76 @@ class MONAIEngine:
         threshold_hu: float = 50.0,
     ) -> Dict[str, Any]:
         """
-        Aligns longitudinal 3D volumes (Followup -> Baseline) and computes a 3D difference heatmap:
-        - Green overlay: Regression/Absorption (HU decreased significantly)
-        - Red overlay: Progression/Infiltration/New Lesion (HU increased significantly)
+        基线与随访的逐体素 CT 值差图（随访 − 基线）。
+        本函数不做配准：两次扫描的体素网格（形状与间距）必须一致，否则报错；
+        即使网格一致，未配准时体位差异也会产生差值，因此只输出「未配准，仅供目视」的差值分布，不给进展/吸收等趋势结论。
+        红色 = CT 值升高超过阈值，绿色 = CT 值降低超过阈值。
         """
-        vol_b, spacing_b, mod_b = self.load_volume_data(baseline_id_or_path)
-        vol_f, spacing_f, mod_f = self.load_volume_data(followup_id_or_path)
-
-        # 3D Trilinear Resampling of Follow-up onto Baseline grid if shapes differ
-        if vol_f.shape != vol_b.shape:
-            f_tensor = torch.from_numpy(vol_f).unsqueeze(0).unsqueeze(0).float()
-            vol_f_aligned = torch.nn.functional.interpolate(
-                f_tensor, size=vol_b.shape, mode="trilinear", align_corners=False
-            ).squeeze(0).squeeze(0).numpy()
-        else:
-            vol_f_aligned = vol_f
+        if not baseline_id_or_path or not followup_id_or_path:
+            raise ValueError("缺少基线或随访影像")
+        vol_b, spacing_b, _ = self.load_volume_data(baseline_id_or_path)
+        vol_f, spacing_f, _ = self.load_volume_data(followup_id_or_path)
+        if vol_f.shape != vol_b.shape or not np.allclose(spacing_b, spacing_f, atol=1e-3):
+            raise ValueError(
+                f"基线 {vol_b.shape}/{tuple(round(float(s), 3) for s in spacing_b)} 与随访 "
+                f"{vol_f.shape}/{tuple(round(float(s), 3) for s in spacing_f)} 体素网格不一致；未配准的体积不能逐体素比较，请先完成配准"
+            )
 
         dz, dy, dx = spacing_b
         voxel_vol_cm3 = (dz * dy * dx) / 1000.0
+        diff = vol_f - vol_b
+        body_mask = (vol_b > -900.0) | (vol_f > -900.0)
+        decreased_3d = (diff < -threshold_hu) & body_mask
+        increased_3d = (diff > threshold_hu) & body_mask
 
-        # Calculate voxel-level difference (Followup - Baseline)
-        diff = vol_f_aligned - vol_b
+        n_dec = int(np.sum(decreased_3d))
+        n_inc = int(np.sum(increased_3d))
 
-        # Anatomical mask to exclude ambient background air (< -900 HU in both)
-        body_mask = (vol_b > -900.0) | (vol_f_aligned > -900.0)
-
-        # Absorption / Regression: was higher density in baseline, now absorbed/cleared
-        regressed_3d = (diff < -threshold_hu) & body_mask & (vol_b > -400.0)
-        # Progression / Infiltration: was normal/air before, now consolidated or tumor grew
-        progressed_3d = (diff > threshold_hu) & body_mask & (vol_f_aligned > -400.0)
-
-        total_regressed_voxels = int(np.sum(regressed_3d))
-        total_progressed_voxels = int(np.sum(progressed_3d))
-        regressed_vol_cm3 = round(total_regressed_voxels * voxel_vol_cm3, 2)
-        progressed_vol_cm3 = round(total_progressed_voxels * voxel_vol_cm3, 2)
-        net_change_cm3 = round(progressed_vol_cm3 - regressed_vol_cm3, 2)
-
-        if total_regressed_voxels > total_progressed_voxels * 1.3:
-            trend = "显著退缩吸收 (Significant Regression)"
-        elif total_progressed_voxels > total_regressed_voxels * 1.3:
-            trend = "进展增大/新发浸润 (Progression / Infiltration)"
-        else:
-            trend = "相对稳定 / 局灶变化 (Stable / Mixed Response)"
-
-        z_dim, y_dim, x_dim = vol_b.shape
         plane = (plane or "axial").lower()
         if plane not in ("axial", "coronal", "sagittal"):
-            plane = "axial"
-
-        is_lung = any(k in f"{baseline_id_or_path} {followup_id_or_path}".lower() for k in ("lung", "chest", "mucus"))
+            raise ValueError(f"未知截面方向: {plane}")
+        window_defaulted = False
         if not window_preset:
-            window_preset = "lung" if is_lung else "abdomen"
+            window_preset = "abdomen"
+            window_defaulted = True
 
-        if plane == "axial":
-            total = z_dim
-            idx = z_dim // 2 if slice_index is None else max(0, min(z_dim - 1, slice_index))
-            raw_slice = vol_f_aligned[idx, :, :]
-            reg_slice = regressed_3d[idx, :, :]
-            prog_slice = progressed_3d[idx, :, :]
-            v_spacing, h_spacing = dy, dx
-            plane_label = "轴位 (Axial)"
-        elif plane == "coronal":
-            total = y_dim
-            idx = y_dim // 2 if slice_index is None else max(0, min(y_dim - 1, slice_index))
-            raw_slice = np.flipud(vol_f_aligned[:, idx, :])
-            reg_slice = np.flipud(regressed_3d[:, idx, :])
-            prog_slice = np.flipud(progressed_3d[:, idx, :])
-            v_spacing, h_spacing = dz, dx
-            plane_label = "冠状位 (Coronal)"
-        else:
-            total = x_dim
-            idx = x_dim // 2 if slice_index is None else max(0, min(x_dim - 1, slice_index))
-            raw_slice = np.flipud(vol_f_aligned[:, :, idx])
-            reg_slice = np.flipud(regressed_3d[:, :, idx])
-            prog_slice = np.flipud(progressed_3d[:, :, idx])
-            v_spacing, h_spacing = dz, dy
-            plane_label = "矢状位 (Sagittal)"
-
-        ct_uint8 = apply_ct_window(raw_slice, window_name=window_preset)
-        h, w = ct_uint8.shape
-        base_img = Image.fromarray(ct_uint8).convert("RGBA")
-
-        # Color overlay: Green for Regression, Red for Progression
-        overlay_rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        slice_reg_px = int(np.sum(reg_slice))
-        slice_prog_px = int(np.sum(prog_slice))
-
-        if slice_reg_px > 0:
-            overlay_rgba[reg_slice] = [16, 185, 129, 140]  # Green #10B981
-        if slice_prog_px > 0:
-            overlay_rgba[prog_slice] = [239, 68, 68, 140]  # Red #EF4444
-
-        if slice_reg_px > 0 or slice_prog_px > 0:
-            over_img = Image.fromarray(overlay_rgba, mode="RGBA")
-            base_img = Image.alpha_composite(base_img, over_img)
-
-        # 物理几何各向同性校正与高分辨率重采样
-        physical_aspect = (h * v_spacing) / max(w * h_spacing, 1e-4)
-        target_w = 512
-        target_h = int(round(target_w * physical_aspect))
-        target_h = max(128, min(1024, target_h))
-        if (target_w, target_h) != (w, h):
-            base_img = base_img.resize((target_w, target_h), resample=Image.Resampling.BILINEAR)
-            h_spacing = (w * h_spacing) / target_w
-            v_spacing = (h * v_spacing) / target_h
-            w, h = target_w, target_h
-
-        font, supports_cjk = get_cjk_font(13)
-        font_sm = get_sans_font(11, bold=True)
-
-        draw = ImageDraw.Draw(base_img)
-        scale_bar_mm = 50.0 if w >= 256 else 20.0
-        scale_px = int(scale_bar_mm / max(h_spacing, 0.01))
-        margin_x = w - scale_px - 15
-        margin_y = h - 20
-        draw.line([(margin_x, margin_y), (margin_x + scale_px, margin_y)], fill=(255, 255, 255, 220), width=2)
-        draw.text((margin_x, margin_y - 14), f"{int(scale_bar_mm / 10)} cm", fill=(255, 255, 255, 220), font=font_sm)
+        total, v_spacing, h_spacing, plane_label = _plane_geometry(vol_b.shape, spacing_b, plane)
+        idx = total // 2 if slice_index is None else max(0, min(total - 1, int(slice_index)))
+        raw_slice = display_plane_slice(vol_f, plane, idx)
+        dec_slice = display_plane_slice(decreased_3d, plane, idx)
+        inc_slice = display_plane_slice(increased_3d, plane, idx)
 
         win = CT_WINDOWS.get(window_preset, {"level": 40, "width": 400})
-        display_plane = plane_label if supports_cjk else plane.upper()
-        if supports_cjk:
-            hud = [
-                f"3D 体素差分 // {display_plane} #{idx}/{total}",
-                f"{window_preset.title()} (W:{win['width']} L:{win['level']}) · 阈值 ±{int(threshold_hu)} HU",
-                f"吸收改善: {regressed_vol_cm3} cm3 | 进展增大: {progressed_vol_cm3} cm3",
-            ]
-        else:
-            hud = [
-                f"3D Voxel Diff // {display_plane} #{idx}/{total}",
-                f"{window_preset.title()} (W:{win['width']} L:{win['level']}) · Thresh ±{int(threshold_hu)} HU",
-                f"[+] Regr: {regressed_vol_cm3} cm3 | [-] Prog: {progressed_vol_cm3} cm3",
-            ]
-        y_off = 10
-        for l in hud:
-            draw.text((12, y_off), l, fill=(230, 235, 245, 230), font=font)
-            y_off += 16
-
-        buf = io.BytesIO()
-        base_img.convert("RGB").save(buf, format="PNG", optimize=True)
-        png_bytes = buf.getvalue()
+        hud = [
+            f"体素差值（未配准，仅供目视）// {plane_label} #{idx}/{total}",
+            f"{window_preset.title()} (W:{win['width']} L:{win['level']}) · 阈值 ±{int(threshold_hu)} HU",
+            "红: CT 值升高  绿: CT 值降低",
+        ]
+        png_bytes, w, h, out_h_spacing, out_v_spacing = self._render_mpr_png(
+            raw_slice, [(dec_slice, (16, 185, 129, 140)), (inc_slice, (239, 68, 68, 140))],
+            v_spacing, h_spacing, window_preset, hud,
+        )
 
         return {
             "plane": plane,
             "slice_index": idx,
             "total_slices": total,
-            "window": {"preset": window_preset, "level": win["level"], "width": win["width"]},
+            "registered": False,
+            "registration_note": "未配准，仅供目视：差值同时包含体位/呼吸差异，不能据此判断病灶进展或吸收",
+            "window": {"preset": window_preset, "level": win["level"], "width": win["width"], "defaulted": window_defaulted},
             "dimensions": {"width": w, "height": h},
-            "pixel_spacing_mm": {"horizontal": round(float(h_spacing), 3), "vertical": round(float(v_spacing), 3)},
+            "pixel_spacing_mm": {"horizontal": round(float(out_h_spacing), 3), "vertical": round(float(out_v_spacing), 3)},
+            "orientation_labels": _orientation_labels(plane),
             "threshold_hu": threshold_hu,
             "statistics_3d": {
-                "total_regressed_voxels": total_regressed_voxels,
-                "total_progressed_voxels": total_progressed_voxels,
-                "regressed_volume_cm3": regressed_vol_cm3,
-                "progressed_volume_cm3": progressed_vol_cm3,
-                "net_change_volume_cm3": net_change_cm3,
-                "dominant_trend": trend
+                "hu_increased_voxels": n_inc,
+                "hu_decreased_voxels": n_dec,
+                "hu_increased_volume_cm3": round(n_inc * voxel_vol_cm3, 2),
+                "hu_decreased_volume_cm3": round(n_dec * voxel_vol_cm3, 2),
             },
             "slice_metrics": {
-                "regressed_pixels": slice_reg_px,
-                "progressed_pixels": slice_prog_px
+                "hu_increased_pixels": int(np.sum(inc_slice)),
+                "hu_decreased_pixels": int(np.sum(dec_slice)),
             },
             "slice_png_base64": png_to_base64(png_bytes),
             "slice_png_size_bytes": len(png_bytes)
@@ -2012,44 +1610,45 @@ class MONAIEngine:
         volume: Optional[np.ndarray] = None,
         mask: Optional[np.ndarray] = None,
         spacing: Optional[Tuple[float, float, float]] = None,
-        model_name: str = "lung_nodule_segmenter",
+        model_name: Optional[str] = None,
         num_bins: int = 16,
+        mask_id_or_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Extracts 3D IBSI-compliant radiomics biomarkers from a volume and its lesion mask.
-        If volume or mask is not provided, loads volume and performs automatic segmentation.
+        影像组学特征。掩膜必须来自调用方：直接传入 mask、给出掩膜文件/样本（mask_id_or_path），
+        或指定 model_name 使用本引擎已为该影像计算并缓存的分割结果。三者都没有就报错，不用阈值临时造掩膜。
         """
         if volume is None:
-            if sample_id_or_path:
-                volume, detected_spacing, modality = self.load_volume_data(sample_id_or_path)
-                if spacing is None:
-                    spacing = detected_spacing
-            else:
-                volume, synth_mask = generate_synthetic_ct_volume(shape=(48, 128, 128), spacing=(1.5, 0.8, 0.8))
-                if mask is None:
-                    mask = synth_mask
-                if spacing is None:
-                    spacing = (1.5, 0.8, 0.8)
-
+            if not sample_id_or_path:
+                raise ValueError("缺少影像：请提供 sample_id / file_path 或直接传入体积")
+            volume, detected_spacing, _ = self.load_volume_data(sample_id_or_path)
+            if spacing is None:
+                spacing = detected_spacing
         if spacing is None:
-            spacing = (1.5, 0.8, 0.8)
+            raise ValueError("缺少体素间距 spacing")
 
+        mask_source = "caller_array"
+        if mask is None and mask_id_or_path:
+            m_vol, m_spacing, _ = self.load_volume_data(mask_id_or_path)
+            if m_vol.shape != volume.shape:
+                raise ValueError(f"掩膜网格 {m_vol.shape} 与影像 {volume.shape} 不一致")
+            mask = (m_vol > 0.5).astype(np.uint8)
+            mask_source = f"mask_file:{mask_id_or_path}"
+        if mask is None and model_name and sample_id_or_path:
+            cache_key = f"{sample_id_or_path}:{model_name}"
+            cached = self.mask_cache.get(cache_key)
+            if cached is not None and cached.shape == volume.shape:
+                mask = cached
+                mask_source = f"cached_segmentation:{model_name}"
         if mask is None:
-            tensor_vol = torch.from_numpy(volume).to(self.device)
-            if "lung" in model_name:
-                pred_mask_tensor = (tensor_vol > -150.0) & (tensor_vol < 180.0)
-                cx = volume.shape[2] // 2
-                roi = torch.zeros_like(pred_mask_tensor)
-                roi[:, :, cx:] = True
-                pred_mask_tensor = pred_mask_tensor & roi
-            elif "brain" in model_name:
-                pred_mask_tensor = (tensor_vol > 60.0) & (tensor_vol < 220.0)
-            else:
-                pred_mask_tensor = (tensor_vol > 30.0) & (tensor_vol < 110.0)
-            raw_mask_np = pred_mask_tensor.cpu().numpy().astype(np.uint8)
-            mask = extract_largest_component(raw_mask_np)
+            raise ValueError("缺少 ROI 掩膜：请提供掩膜文件，或先用指定模型对该影像完成分割")
+        if not np.any(mask):
+            raise ValueError("ROI 掩膜为空，无法计算影像组学特征")
 
-        return extract_radiomics_features(volume=volume, mask=mask, spacing=spacing, num_bins=num_bins)
+        res = extract_radiomics_features(volume=volume, mask=mask, spacing=spacing, num_bins=num_bins)
+        if isinstance(res, dict):
+            res["mask_source"] = mask_source
+        return res
 
     def run_interactive_segmentation(
         self,
@@ -2062,34 +1661,27 @@ class MONAIEngine:
         window_preset: Optional[str] = "lung",
         plane: str = "axial",
         slice_index: Optional[int] = None,
-        mode: str = "deep",
+        mode: str = "hu_likelihood_gradient",
     ) -> Dict[str, Any]:
         """
-        Executes interactive click/prompt-based segmentation (VISTA-3D paradigm):
-        Takes foreground/background prompt points and/or bounding boxes,
-        extracts the 3D lesion mask, computes RECIST 1.1 metrics,
-        and renders a high-definition 2D slice with contour and prompt point markers.
-        Supports dual-track execution:
-        - "deep": MedSAM / VISTA-3D semantic geodesic likelihood with anatomical boundaries
-        - "fast": Fast heuristic EDT for sub-50ms CPU interaction
+        交互式种子点分割（interactive.interactive_segment_3d 的 HU 区域生长，不是 VISTA-3D 模型）：
+        根据正/负提示点与可选外接盒得到 3D 掩膜，计算径线与体积，并渲染关键层面。
+        window_preset 为 lung/mediastinum 时以阈值法肺实质包络作为生长约束。
         """
         modality = "CT"
         if volume is None:
-            if sample_id_or_path:
-                volume, detected_spacing, modality = self.load_volume_data(sample_id_or_path)
-                if spacing is None:
-                    spacing = detected_spacing
-            else:
-                volume, _ = generate_synthetic_ct_volume(shape=(48, 128, 128), spacing=(1.5, 0.8, 0.8))
-                if spacing is None:
-                    spacing = (1.5, 0.8, 0.8)
-
+            if not sample_id_or_path:
+                raise ValueError("缺少影像：请提供 sample_id / file_path 或直接传入体积")
+            volume, detected_spacing, modality = self.load_volume_data(sample_id_or_path)
+            if spacing is None:
+                spacing = detected_spacing
         if spacing is None:
-            spacing = (1.5, 0.8, 0.8)
+            raise ValueError("缺少体素间距 spacing")
+        if not points and not bbox:
+            raise ValueError("交互分割需要至少一个提示点或外接盒")
 
-        # Anatomical prior extraction (TotalSegmentator atlas mask)
         anatomical_prior = None
-        if window_preset in ("lung", "mediastinum") or (sample_id_or_path and "lung" in str(sample_id_or_path)):
+        if window_preset in ("lung", "mediastinum"):
             try:
                 from .totalsegmentator import extract_anatomical_compartments_3d
             except (ImportError, ValueError):
@@ -2113,25 +1705,25 @@ class MONAIEngine:
         key_slice_idx = slice_index if slice_index is not None else seg_res["key_slice_index"]
         key_slice_idx = int(np.clip(key_slice_idx, 0, volume.shape[0] - 1))
 
-        # Windowing and slice extraction
         ct_windowed = apply_ct_window(volume, window_name=window_preset or "lung")
-        ct_slice = ct_windowed[key_slice_idx]
-        mask_slice = mask[key_slice_idx]
-
         png_bytes = render_key_slice_png(
-            ct_slice_uint8=ct_slice,
-            mask_slice_2d=mask_slice,
+            ct_slice_uint8=ct_windowed[key_slice_idx],
+            mask_slice_2d=mask[key_slice_idx],
             recist=recist,
-            modality=f"{modality} (VISTA-3D Interactive)",
-            lesion_name="交互式点选靶病灶 (VISTA-3D ROI)",
+            modality=f"{modality} ({(window_preset or 'lung').title()} Window)",
+            lesion_name="交互式种子点区域 (HU 区域生长)",
             scale_bar_mm=50.0,
-            pixel_spacing_mm=spacing[1],
+            pixel_spacing_mm=spacing[2],
             prompt_points=points,
+            method_label="Interactive HU region growing",
         )
 
+        ld = recist.get("longest_diameter_mm")
         return {
             "status": "success",
-            "model_name": "vista3d_interactive_segmenter",
+            "model_name": "interactive_region_growing",
+            "engine_type": "rule_based",
+            "method": "interactive.interactive_segment_3d：种子点 CT 值自适应窗口的区域生长（非 VISTA-3D 模型）",
             "engine_mode": seg_res.get("engine_mode", mode),
             "voxel_count": seg_res["voxel_count"],
             "volume_cm3": seg_res["volume_cm3"],
@@ -2144,16 +1736,19 @@ class MONAIEngine:
             "slice_png_base64": png_to_base64(png_bytes),
             "slice_png_size_bytes": len(png_bytes),
             "summary_markdown": (
-                f"**MONAI VISTA-3D 交互式点选分割结果**\n"
-                f"- **交互提示点**: 正样本点 (Foreground) `{seg_res['positive_prompts_count']}` 个，"
-                f"负样本点 (Background) `{seg_res['negative_prompts_count']}` 个\n"
-                f"- **自适应灰度靶区**: `{seg_res['target_hu']} ± {seg_res['tolerance_hu']} HU`\n"
-                f"- **病灶总体积**: **`{seg_res['volume_cm3']} cm³`** ({seg_res['voxel_count']} 个体素)\n"
-                f"- **RECIST 1.1 最大截面长径**: `{recist['longest_diameter_mm']} mm` (垂直短径: `{recist['short_axis_mm']} mm`)\n"
-                f"- **显示截面**: 第 `#{key_slice_idx}` 层 (已自动标定提示点与半透明红圈轮廓)"
+                f"**交互式种子点分割（HU 区域生长）**\n"
+                f"- **提示点**: 正样本 `{seg_res['positive_prompts_count']}` 个，负样本 `{seg_res['negative_prompts_count']}` 个\n"
+                f"- **生长灰度范围**: `{seg_res['target_hu']} ± {seg_res['tolerance_hu']} HU`\n"
+                f"- **分割体积**: `{seg_res['volume_cm3']} cm³`（{seg_res['voxel_count']} 个体素）\n"
+                f"- **关键层面最大长径**: `{_fmt(ld, 'mm')}`（垂直短径 `{_fmt(recist.get('short_axis_mm'), 'mm')}`）\n"
+                f"- **显示层面**: 第 `#{key_slice_idx}` 层"
             )
         }
 
 
-
-
+def _orientation_labels(plane: str) -> Dict[str, str]:
+    try:
+        from .spatial_canonicalizer import get_radiological_orientation_labels
+    except (ImportError, ValueError):
+        from spatial_canonicalizer import get_radiological_orientation_labels
+    return get_radiological_orientation_labels(plane)

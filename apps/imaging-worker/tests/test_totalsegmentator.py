@@ -56,11 +56,14 @@ def test_analyze_whole_body_ct_sarcopenia_male_and_female():
     bc_m = res_m["body_composition"]
     assert bc_m["skeletal_muscle_area_cm2"] > 0
     assert bc_m["skeletal_muscle_index_cm2_m2"] > 0
-    assert bc_m["smi_cutoff"] == 52.4
+    # 平台不判定肌少症，不输出切点与判定字段
+    assert "smi_cutoff" not in bc_m and "sarcopenia_detected" not in bc_m
     assert bc_m["visceral_adipose_cm2"] > 0
     assert bc_m["subcutaneous_adipose_cm2"] > 0
     assert bc_m["vat_to_sat_ratio"] > 0
-    assert res_m["organ_volumetry_cm3"]["liver"] > 500.0
+    # 阈值法分不开肝脾肾，不输出器官体积，也不钳制到「正常范围」
+    assert res_m["organ_volumetry_cm3"]["liver"] is None
+    assert res_m["organ_volumetry_cm3"]["spleen"] is None
 
     # Test Female profile
     res_f = analyze_whole_body_ct(
@@ -72,10 +75,21 @@ def test_analyze_whole_body_ct_sarcopenia_male_and_female():
         l3_slice_index=16
     )
     bc_f = res_f["body_composition"]
-    assert bc_f["smi_cutoff"] == 38.5
+    assert bc_f["skeletal_muscle_index_cm2_m2"] > 0
     assert res_f["key_slice_png_size_bytes"] > 500
-    assert "TotalSegmentator" in res_f["summary_markdown"]
-    assert "Sarcopenia" in res_f["summary_markdown"]
+    assert "HU 阈值法" in res_f["summary_markdown"]
+    assert "不是 TotalSegmentator" in res_f["summary_markdown"]
+
+
+def test_analyze_whole_body_ct_without_height_or_sex():
+    """缺身高、性别时不代入缺省值：SMI、切点、肌少症判定均为空，并给出提示。"""
+    vol, _ = generate_synthetic_whole_body_ct(shape=(32, 64, 64), spacing=(2.0, 1.0, 1.0))
+    res = analyze_whole_body_ct(volume=vol, spacing=(2.0, 1.0, 1.0), l3_slice_index=16)
+    bc = res["body_composition"]
+    assert bc["skeletal_muscle_area_cm2"] > 0
+    assert bc["skeletal_muscle_index_cm2_m2"] is None
+    assert "sarcopenia_detected" not in bc
+    assert res["data_warnings"] == ["缺身高：未计算 SMI"]
 
 
 def test_engine_integration_whole_body_segmenter():
@@ -92,7 +106,9 @@ def test_engine_integration_whole_body_segmenter():
     assert res["model_name"] == "whole_body_ct_segmenter"
     assert "body_composition" in res
     assert "organ_volumetry_cm3" in res
-    assert res["recist_metrics"]["total_volume_cm3"] > 0
+    # 体成分分析没有病灶径线，不再用肌肉面积、肝体积冒充
+    assert res["recist_metrics"]["total_volume_cm3"] is None
+    assert res["body_composition"]["skeletal_muscle_index_cm2_m2"] > 0
 
 
 def test_api_whole_body_endpoint():
@@ -105,6 +121,11 @@ def test_api_whole_body_endpoint():
         "patient_height_m": 1.70,
         "patient_weight_kg": 65.0
     }
+    # 没有给出影像时不再用合成体冒充，直接 400
+    resp_missing = client.post("/api/v1/analyze/whole-body", json=payload)
+    assert resp_missing.status_code == 400
+
+    payload["sample_id"] = "spleen_test"
     resp = client.post("/api/v1/analyze/whole-body", json=payload)
     assert resp.status_code == 200
     data = resp.json()

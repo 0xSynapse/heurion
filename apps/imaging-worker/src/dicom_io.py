@@ -513,6 +513,10 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
         from .spatial_canonicalizer import build_dicom_affine, to_canonical_lps, check_anatomical_orientation_sanity
     except (ImportError, ValueError):
         from spatial_canonicalizer import build_dicom_affine, to_canonical_lps, check_anatomical_orientation_sanity
+    try:
+        from .quality_assurance import _primary_kernel_name
+    except (ImportError, ValueError):
+        from quality_assurance import _primary_kernel_name
 
     # Construct patient coordinate affine from DICOM IOP and IPP headers
     iop = [float(v) for v in getattr(first, "ImageOrientationPatient", [1, 0, 0, 0, 1, 0])]
@@ -541,7 +545,7 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
         "cols": vol_lps.shape[2],
         "series_description": str(getattr(first, "SeriesDescription", "")),
         "body_part_examined": str(getattr(first, "BodyPartExamined", "")),
-        "convolution_kernel": str(getattr(first, "ConvolutionKernel", "")),
+        "convolution_kernel": _primary_kernel_name(getattr(first, "ConvolutionKernel", "")),
         "patient_position": patient_pos,
         "kvp": getattr(first, "KVP", None),
         "tube_current": getattr(first, "XRayTubeCurrent", None),

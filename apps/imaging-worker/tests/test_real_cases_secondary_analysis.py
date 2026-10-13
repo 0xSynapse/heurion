@@ -8,7 +8,8 @@ from src.clinical_bridge import extract_clinical_features
 from src.clinical_ai_agent import (
     build_clinical_prompt,
     generate_clinical_ai_report,
-    evaluate_evidence_based_clinical_guidelines,
+    describe_measured_findings,
+    INTERPRETATION_NOTE,
 )
 from src.engine import MONAIEngine
 
@@ -20,8 +21,8 @@ class TestRealCasesSecondaryAnalysis:
     Automated test suite using authentic downloaded clinical cases to validate:
     1. MONAI 3D tensor to physical quantitative clinical features bridge
     2. Radiodensity (HU) statistics, morphology, and CT quality control
-    3. Multimodal AI clinical guideline reasoning (Lung-RADS, GOLD, RECIST, Baveno VII)
-    4. Clinical recommendation appropriateness across different patient risk contexts
+    3. 影像所见报告只写实测所见，不给诊断结论、分级与处置建议
+    4. 患者信息只使用调用方实际提供的字段
     """
 
     @classmethod
@@ -93,13 +94,12 @@ class TestRealCasesSecondaryAnalysis:
         assert qc["slice_thickness_mm"] == 2.5
         assert qc["tier"] in ("acceptable", "thick_slice_warning")
 
-    def test_lidc_clinical_ai_guideline_reasoning(self):
+    def test_lidc_findings_report_has_no_diagnosis_or_advice(self):
         """
-        Validates Step 3: Multimodal Clinical AI reasoning on the LIDC lung nodule.
-        Verifies:
-        - High-risk smoking patient gets Lung-RADS 4B assessment
-        - Three standardized sections are populated with objective measurements
-        - Management includes MDT consult, PET-CT, and biopsy/surgery
+        LIDC 结节的所见报告：
+        - 所见描述包含关键层号、径线、体积、CT 值等实测数据
+        - 不输出 Lung-RADS 分级、恶性风险、risk_level 与处置建议
+        - 统一提示语
         """
         ct_file = DATA_DIR / "lidc_lung_nodule_ct.nii.gz"
         mask_file = DATA_DIR / "lidc_lung_nodule_mask.nii.gz"
@@ -119,46 +119,25 @@ class TestRealCasesSecondaryAnalysis:
             target_name="肺孤立性实性结节"
         )
 
-        patient = {
-            "age": 62,
-            "sex": "男",
-            "smoking_history": "吸烟史 30 年 (30包·年)",
-            "symptoms": "刺激性干咳，活动后气促，偶见痰中带血丝",
-            "prior_cancer": "无恶性肿瘤病史"
-        }
-
-        report = generate_clinical_ai_report(feats, patient_context=patient)
-
-        # Assert 3 standardized sections exist
-        assert "findings_description" in report
-        assert "diagnostic_assessment" in report
-        assert "management_recommendations" in report
-
+        report = generate_clinical_ai_report(feats, patient_context={"age": 62, "sex": "男"})
         findings = report["findings_description"]
-        assessment = report["diagnostic_assessment"]
-        mgmt = report["management_recommendations"]
+        phys = feats["physical_metrics"]
 
-        # 1. 【影像所见描述】 must state key slice, RECIST dimensions, volume, HU
-        assert str(feats["physical_metrics"]["key_slice_index"]) in findings
-        assert "mm" in findings
-        assert "cm³" in findings or "cm3" in findings or "HU" in findings
+        assert f"#{phys['key_slice_index']}" in findings
+        assert f"{phys['longest_diameter_mm']} mm" in findings
+        assert f"{phys['total_volume_cm3']} cm³" in findings
+        assert f"{feats['density_metrics']['mean_hu']} HU" in findings
+        assert report["interpretation_note"] == INTERPRETATION_NOTE
 
-        # 2. 【影像分级与恶性风险判断】 must assign Lung-RADS 4B for a >30mm solid lesion
-        assert "Lung-RADS 4B" in assessment or "4B" in assessment
-        assert "恶性" in assessment or "浸润" in assessment
-        assert report["risk_level"] in ("high", "very_high")
+        for key in ("diagnostic_assessment", "management_recommendations", "risk_level", "rads_category", "gold_stage"):
+            assert key not in report
+        for word in ("Lung-RADS", "恶性", "浸润", "活检", "穿刺", "随访", "手术", "右/左肺"):
+            assert word not in findings
 
-        # 3. 【下一步临床处置与随访建议】 must include actionable procedures
-        assert any(k in mgmt for k in ("PET-CT", "增强", "穿刺", "活检", "会诊", "手术"))
-
-    def test_patient_context_risk_differentiation(self):
-        """
-        Validates that clinical reasoning properly considers patient risk factors:
-        A sub-centimeter nodule in a heavy smoker warrants closer scrutiny than an incidental finding in a young non-smoker.
-        """
+    def test_patient_context_only_provided_fields(self):
+        """未提供的患者字段不写入提示，不代入默认的年龄/性别/吸烟史/症状。"""
         dummy_vol = np.full((32, 64, 64), -700.0, dtype=np.float32)
         dummy_mask = np.zeros((32, 64, 64), dtype=np.uint8)
-        # 7mm solid nodule
         dummy_vol[16, 30:35, 30:35] = 45.0
         dummy_mask[16, 30:35, 30:35] = 1
 
@@ -170,24 +149,41 @@ class TestRealCasesSecondaryAnalysis:
             target_name="肺实性结节"
         )
 
-        prompt_high_risk = build_clinical_prompt(feats, {
+        prompt_empty = build_clinical_prompt(feats, None)
+        for word in ("62", "30包", "吸烟", "干咳", "男", "患者信息"):
+            assert word not in prompt_empty
+
+        prompt = build_clinical_prompt(feats, {
             "age": 68,
-            "sex": "男",
             "smoking_history": "重度吸烟 40 年",
-            "symptoms": "咳嗽痰血",
             "prior_cancer": "喉癌术后"
         })
-        assert "重度吸烟 40 年" in prompt_high_risk
-        assert "喉癌术后" in prompt_high_risk
+        assert "重度吸烟 40 年" in prompt
+        assert "喉癌术后" in prompt
+        assert "68" in prompt
+        assert "性别" not in prompt
+        assert "症状" not in prompt
 
-        prompt_low_risk = build_clinical_prompt(feats, {
-            "age": 24,
-            "sex": "女",
-            "smoking_history": "不吸烟",
-            "symptoms": "入职体检无症状",
-            "prior_cancer": "无"
-        })
-        assert "不吸烟" in prompt_low_risk
+    def test_empty_mask_findings(self):
+        """掩膜为空时只说明未检出，不编造测量。"""
+        vol = np.full((8, 16, 16), -800.0, dtype=np.float32)
+        mask = np.zeros((8, 16, 16), dtype=np.uint8)
+        feats = extract_clinical_features(vol, mask, spacing=(1.0, 1.0, 1.0), modality="CT", target_name="肺结节")
+        res = describe_measured_findings(feats)
+        assert "未检出" in res["findings_description"]
+        assert "mm" not in res["findings_description"]
+
+    def test_non_lung_target_skips_subsolid_and_vessel(self):
+        """非肺结节场景（如腹部器官）不做实性成分与血管截面判定。"""
+        vol = np.full((16, 32, 32), 40.0, dtype=np.float32)
+        mask = np.zeros((16, 32, 32), dtype=np.uint8)
+        mask[6:10, 10:20, 10:20] = 1
+        feats = extract_clinical_features(vol, mask, spacing=(1.0, 1.0, 1.0), modality="CT", target_name="脾脏实质")
+        assert feats["subsolid_metrics"] is None
+        assert feats["density_metrics"] is not None
+
+        feats_lung = extract_clinical_features(vol, mask, spacing=(1.0, 1.0, 1.0), modality="CT", target_name="肺结节")
+        assert feats_lung["subsolid_metrics"] is not None
 
     def test_copd_emphysema_secondary_analysis(self):
         """
@@ -212,15 +208,13 @@ class TestRealCasesSecondaryAnalysis:
 
         assert em["total_lung_volume_liters"] > 1.0
         assert 0.0 <= em["laa_percent"] <= 100.0
-        assert "GOLD" in em["gold_stage"]
+        assert "gold_stage" not in em
 
-        # Check secondary AI report
+        # 所见报告不输出 GOLD 分级
         assert "clinical_ai_report" in res
         ai_rep = res["clinical_ai_report"]
         assert "findings_description" in ai_rep
-        assert "diagnostic_assessment" in ai_rep
-        assert "management_recommendations" in ai_rep
-        assert "GOLD" in ai_rep.get("guideline_applied", "") or "慢阻肺" in ai_rep.get("diagnostic_assessment", "")
+        assert "GOLD" not in ai_rep["findings_description"]
 
     def test_spleen_real_scan_secondary_analysis(self):
         """
@@ -249,8 +243,11 @@ class TestRealCasesSecondaryAnalysis:
 
         assert "clinical_ai_report" in res
         ai_rep = res["clinical_ai_report"]
-        assert "脾脏" in ai_rep["diagnostic_assessment"] or "脾" in ai_rep["diagnostic_assessment"]
-        assert any(k in ai_rep["management_recommendations"] for k in ("门静脉", "肝", "血常规", "随访", "随诊", "门诊"))
+        findings = ai_rep["findings_description"]
+        assert f"{feats['physical_metrics']['total_volume_cm3']} cm³" in findings
+        for word in ("脾大", "脾肿大", "轮廓光整", "密度均匀", "未见占位", "门静脉"):
+            assert word not in findings
+        assert feats["subsolid_metrics"] is None
 
     def test_end_to_end_analyze_file_with_lidc_and_patient_context(self):
         """
@@ -280,25 +277,21 @@ class TestRealCasesSecondaryAnalysis:
         assert "clinical_ai_report" in res
         assert len(res["key_slice_png_base64"]) > 1000
 
-        # Markdown report must contain the 3 sections
-        md = res["summary_markdown"]
-        assert "【影像所见描述】" in md
-        assert "【影像分级与恶性风险判断】" in md
-        assert "【下一步临床处置与随访建议】" in md
+        ai_rep = res["clinical_ai_report"]
+        assert ai_rep["findings_description"]
+        assert "management_recommendations" not in ai_rep
+        # 提示中只出现调用方提供的患者信息
+        assert "45包·年" in ai_rep["structured_prompt"]
 
-    def test_vessel_cross_section_exclusion_from_lung_rads(self):
+    def test_vessel_cross_section_not_measured_as_nodule(self):
         """
-        Validates clinical guideline rule (Fleischner 2017 & ACR Lung-RADS v2022):
-        Normal anatomical structures (pulmonary vessel cross-sections) must NOT be misclassified
-        as pulmonary nodules and must NOT receive a Lung-RADS nodule category.
-        
-        Uses the exact clinical scenario reported: Slice #122 at (z=122, y=240, x=315)
-        accompanied by the signet-ring bronchus lumen.
+        启发式判为疑似血管截面时：不伪造实性核心 / CTR，不输出 Lung-RADS 或「恶性风险为零」，
+        如实标注「疑似血管截面，未做结节测量」。
+        点击位置为 canonical LPS+ 空间 (z=122, y=271, x=315)。
         """
         ct_file = DATA_DIR / "chest_lung_ct.nii.gz"
         assert ct_file.exists(), f"Missing chest CT: {ct_file}"
 
-        # In canonical LPS+ coordinate space (Anterior=0, Posterior=511), the companion vessel is at (122, 271, 315)
         res = self.engine.analyze_file(
             file_path=str(ct_file),
             model_name="lung_nodule_segmenter",
@@ -308,25 +301,19 @@ class TestRealCasesSecondaryAnalysis:
 
         assert res["status"] == "success"
         recist = res["recist_metrics"]
-        
-        # 1. Structural anatomy identification
         assert recist.get("is_vessel") is True
-        assert recist["nodule_type"] == "normal_vessel"
-        assert "正常肺血管" in recist["nodule_type_zh"]
-        assert recist["vessel_info"]["has_companion_bronchus"] is True
+        assert recist["nodule_type"] == "suspected_vessel"
+        assert "未做结节测量" in recist["nodule_type_zh"]
+        assert recist["solid_core_diameter_mm"] is None
+        assert recist["consolidation_tumor_ratio"] is None
+        assert "lung_rads" not in recist
+        assert "pathology_risk" not in recist
+        assert recist["vessel_info"]["reasons"]
 
-        # 2. ACR Lung-RADS exclusion
-        rads = recist["lung_rads"]
-        assert rads["category"] == "not_applicable"
-        assert "正常解剖结构" in rads["name"]
-
-        # 3. Multimodal Clinical AI agent reasoning
         ai_rep = res["clinical_ai_report"]
-        assert ai_rep["risk_level"] == "none"
-        assert "正常解剖结构" in ai_rep["diagnostic_assessment"]
-        assert "不适用 Lung-RADS" in ai_rep["diagnostic_assessment"]
-        assert any(k in ai_rep["management_recommendations"] for k in ("无需", "正常", "生理性", "过度"))
+        assert "疑似血管截面" in ai_rep["findings_description"]
+        assert "恶性" not in ai_rep["findings_description"]
+        assert "印戒征" not in ai_rep["findings_description"] or "触发判据" in ai_rep["findings_description"]
+        assert "risk_level" not in ai_rep
 
-        # 4. Key slice overlay generated
         assert len(res["key_slice_png_base64"]) > 1000
-

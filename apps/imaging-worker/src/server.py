@@ -17,20 +17,18 @@ def parse_flexible_float(v: Any, default: Optional[float] = None) -> Optional[fl
 
 try:
     from .device import get_device_info
-    from .engine import MONAIEngine, generate_synthetic_ct_volume
+    from .engine import MONAIEngine, generate_synthetic_ct_volume, ModelUnavailableError
     from .recist import calculate_volume_doubling_time, calculate_subsolid_metrics, calculate_emphysema_metrics
     from .model_registry import list_registered_models, pull_model, verify_model, get_model_status
     from .dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from .task_queue import task_manager, TaskStage, batch_process_cohort
-    from .clinical_audit import run_all_clinical_audits
 except (ImportError, ValueError):
     from device import get_device_info
-    from engine import MONAIEngine, generate_synthetic_ct_volume
+    from engine import MONAIEngine, generate_synthetic_ct_volume, ModelUnavailableError
     from recist import calculate_volume_doubling_time, calculate_subsolid_metrics, calculate_emphysema_metrics
     from model_registry import list_registered_models, pull_model, verify_model, get_model_status
     from dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from task_queue import task_manager, TaskStage, batch_process_cohort
-    from clinical_audit import run_all_clinical_audits
 
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -61,9 +59,23 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 # 限制最大并发执行数为 2（可由 IMAGING_CONCURRENCY 调节），防止突发并发直接打爆 GPU VRAM 或物理内存导致 OOM Kill。
 INFERENCE_SEMAPHORE = threading.Semaphore(int(os.environ.get("IMAGING_CONCURRENCY", "2")))
 
+
+def raise_http(exc: Exception, prefix: str) -> None:
+    """把引擎异常如实映射为 HTTP 状态：缺影像 404、参数/输入问题 400、模型不可用 501，其余 500。"""
+    if isinstance(exc, HTTPException):
+        raise exc
+    if isinstance(exc, FileNotFoundError):
+        raise HTTPException(status_code=404, detail=f"{prefix}: {exc}")
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=f"{prefix}: {exc}")
+    if isinstance(exc, ModelUnavailableError):
+        raise HTTPException(status_code=501, detail=f"{prefix}: {exc}")
+    raise HTTPException(status_code=500, detail=f"{prefix}: {exc}")
+
 class BenchmarkRequest(BaseModel):
     model_name: Optional[str] = "lung_nodule_segmenter"
     window_preset: Optional[str] = "lung"
+    # 以下为合成体模尺寸，仅用于测速/联调
     z_slices: Optional[int] = 48
     y_dim: Optional[int] = 128
     x_dim: Optional[int] = 128
@@ -73,10 +85,11 @@ class BenchmarkRequest(BaseModel):
     bar_cutoff: Optional[Union[float, str]] = 1.10
 
 class SampleRequest(BaseModel):
-    sample_id: Optional[str] = "spleen_test"
+    sample_id: Optional[str] = None
     volume_id: Optional[str] = None
     click_point: Optional[Dict[str, int]] = None
-    model_name: Optional[str] = "spleen_segmenter"
+    model_name: Optional[str] = None
+    channel_order: Optional[List[str]] = None
     window_preset: Optional[str] = None
     patient_context: Optional[Dict[str, Any]] = None
     mucus_min_hu: Optional[Union[float, str]] = 10.0
@@ -86,7 +99,9 @@ class SampleRequest(BaseModel):
 
 class FileAnalysisRequest(BaseModel):
     file_path: str
-    model_name: Optional[str] = "spleen_segmenter"
+    model_name: Optional[str] = None
+    channel_order: Optional[List[str]] = None
+    modality: Optional[str] = None
     window_preset: Optional[str] = None
     click_point: Optional[Dict[str, int]] = None
     patient_context: Optional[Dict[str, Any]] = None
@@ -96,13 +111,13 @@ class FileAnalysisRequest(BaseModel):
     bar_cutoff: Optional[Union[float, str]] = 1.10
 
 class MprInfoRequest(BaseModel):
-    sample_id: Optional[str] = "chest_lung_ct"
+    sample_id: Optional[str] = None
     volume_id: Optional[str] = None
     file_path: Optional[str] = None
     model_name: Optional[str] = None
 
 class MprSliceRequest(BaseModel):
-    sample_id: Optional[str] = "chest_lung_ct"
+    sample_id: Optional[str] = None
     volume_id: Optional[str] = None
     file_path: Optional[str] = None
     plane: Optional[str] = "axial"  # axial, coronal, sagittal
@@ -112,8 +127,8 @@ class MprSliceRequest(BaseModel):
     model_name: Optional[str] = None
 
 class DiffSliceRequest(BaseModel):
-    baseline_id: Optional[str] = "chest_lung_ct"
-    followup_id: Optional[str] = "chest_lung_ct"
+    baseline_id: Optional[str] = None
+    followup_id: Optional[str] = None
     baseline_volume_id: Optional[str] = None
     followup_volume_id: Optional[str] = None
     baseline_path: Optional[str] = None
@@ -124,9 +139,12 @@ class DiffSliceRequest(BaseModel):
     threshold_hu: Optional[float] = 50.0
 
 class RadiomicsRequest(BaseModel):
-    sample_id: Optional[str] = "chest_lung_ct"
+    sample_id: Optional[str] = None
     file_path: Optional[str] = None
-    model_name: Optional[str] = "lung_nodule_segmenter"
+    # ROI 掩膜来源：掩膜文件/样本，或已对该影像运行过的分割模型名（使用其缓存结果）
+    mask_file_path: Optional[str] = None
+    mask_sample_id: Optional[str] = None
+    model_name: Optional[str] = None
     num_bins: Optional[int] = 16
 
 class InteractivePromptPoint(BaseModel):
@@ -136,42 +154,56 @@ class InteractivePromptPoint(BaseModel):
     is_positive: bool = True
 
 class InteractiveSegmentRequest(BaseModel):
-    sample_id: Optional[str] = "chest_lung_ct"
+    sample_id: Optional[str] = None
     file_path: Optional[str] = None
     points: Optional[List[InteractivePromptPoint]] = None
     bbox: Optional[Dict[str, int]] = None
     window_preset: Optional[str] = "lung"
     plane: Optional[str] = "axial"
     slice_index: Optional[int] = None
-    mode: Optional[str] = "deep"
+    mode: Optional[str] = "hu_likelihood_gradient"
 
 class WholeBodyAnalysisRequest(BaseModel):
-    sample_id: Optional[str] = "chest_lung_ct"
+    sample_id: Optional[str] = None
     file_path: Optional[str] = None
-    patient_sex: Optional[str] = "M"
-    patient_height_m: Optional[float] = 1.72
-    patient_weight_kg: Optional[float] = 68.0
+    patient_sex: Optional[str] = None
+    patient_height_m: Optional[float] = None
+    patient_weight_kg: Optional[float] = None
     l3_slice_index: Optional[int] = None
     z_slices: Optional[int] = 64
     y_dim: Optional[int] = 128
     x_dim: Optional[int] = 128
 
 class DeformableRegistrationRequest(BaseModel):
-    fixed_sample_id: Optional[str] = "chest_lung_ct"
-    moving_sample_id: Optional[str] = "chest_lung_ct"
+    fixed_sample_id: Optional[str] = None
+    moving_sample_id: Optional[str] = None
+    fixed_file_path: Optional[str] = None
+    moving_file_path: Optional[str] = None
     iterations: Optional[int] = 10
     smoothing_sigma: Optional[float] = 1.0
 
 class PetCtFusionRequest(BaseModel):
-    ct_sample_id: Optional[str] = "chest_lung_ct"
+    ct_sample_id: Optional[str] = None
+    ct_file_path: Optional[str] = None
     pet_sample_id: Optional[str] = None
+    pet_file_path: Optional[str] = None
+    # PET 体素值必须已换算为 SUV（本接口不做 Bq/mL -> SUV 换算），调用方需显式确认
+    pet_values_are_suv: Optional[bool] = False
+    # 统计范围：ROI 掩膜（与 CT 同网格）或说明 PET 体积已如何排除生理性摄取，二者必须给一个
+    roi_mask_file_path: Optional[str] = None
+    roi_mask_sample_id: Optional[str] = None
+    physiological_exclusion_note: Optional[str] = None
+    tracer: Optional[str] = None
     suv_threshold: Optional[float] = 2.5
     key_slice_index: Optional[int] = None
     alpha: Optional[float] = 0.55
 
 class RtStructRequest(BaseModel):
-    sample_id: Optional[str] = "chest_lung_ct"
+    sample_id: Optional[str] = None
     file_path: Optional[str] = None
+    # 靶区掩膜（GTV）来源：与 CT 同网格的掩膜文件或样本
+    gtv_mask_file_path: Optional[str] = None
+    gtv_mask_sample_id: Optional[str] = None
     ctv_margin_mm: Optional[float] = 6.0
     ptv_margin_mm: Optional[float] = 4.0
     key_slice_index: Optional[int] = None
@@ -186,10 +218,10 @@ class CohortCaseItem(BaseModel):
     patient_id: Optional[str] = None
     sample_id: Optional[str] = None
     file_path: Optional[str] = None
-    model_name: Optional[str] = "lung_nodule_segmenter"
-    patient_sex: Optional[str] = "M"
-    patient_height_m: Optional[float] = 1.72
-    patient_weight_kg: Optional[float] = 68.0
+    model_name: Optional[str] = None
+    patient_sex: Optional[str] = None
+    patient_height_m: Optional[float] = None
+    patient_weight_kg: Optional[float] = None
 
 class CohortBatchAnalysisRequest(BaseModel):
     study_id: Optional[str] = None
@@ -209,9 +241,8 @@ def compute_volume_doubling_time(req: VolumeDoublingTimeRequest = Body(...)):
 @app.post("/api/v1/cohort/batch-analyze")
 def batch_analyze_cohort_endpoint(req: CohortBatchAnalysisRequest = Body(...)):
     """
-    Executes high-throughput multi-modal 3D imaging batch analysis for a research cohort.
-    Extracts lesion diameters, volumetry, Lung-RADS, and body composition indices,
-    returning structured JSON and wide-format CSV for clinical trial data frames.
+    队列批量分析：逐例运行调用方指定的模型，汇总测量值为宽表（JSON + CSV）。
+    缺影像、缺模型的病例标为 failed，不代入任何默认样本或人口学数据。
     """
     if not req.cases:
         raise HTTPException(status_code=400, detail="队列受试者病例列表不能为空")
@@ -225,20 +256,25 @@ def batch_analyze_cohort_endpoint(req: CohortBatchAnalysisRequest = Body(...)):
             )
         return res
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"队列批量分析执行失败: {str(exc)}")
+        raise_http(exc, "队列批量分析执行失败")
 
 
 class EmphysemaRequest(BaseModel):
-    sample_id: Optional[str] = "chest_lung_ct"
+    sample_id: Optional[str] = None
     file_path: Optional[str] = None
     emphysema_hu_threshold: Optional[float] = -950.0
 
 
 @app.post("/api/v1/recist/emphysema")
 def compute_emphysema_endpoint(req: EmphysemaRequest = Body(...)):
-    """Computes Low Attenuation Area (LAA%) and COPD GOLD 2024 emphysema severity metrics."""
-    target_id = req.file_path or req.sample_id or "chest_lung_ct"
-    vol, spacing, _ = engine.load_volume_data(target_id)
+    """肺内低衰减区定量（LAA%、Perc15）；不输出 GOLD 分级。"""
+    target_id = req.file_path or req.sample_id
+    if not target_id:
+        raise HTTPException(status_code=400, detail="缺少影像：请提供 sample_id 或 file_path")
+    try:
+        vol, spacing, _ = engine.load_volume_data(target_id)
+    except Exception as e:
+        raise_http(e, "读取影像失败")
     return calculate_emphysema_metrics(
         volume=vol,
         spacing=spacing,
@@ -258,347 +294,115 @@ def health_check():
 
 @app.get("/api/v1/models")
 def list_clinical_models(include_all: bool = False):
+    """
+    分析模型清单。is_ready 规则：
+    - deep_learning：引擎确有该权重的加载与推理路径，且本地权重 SHA-256 校验通过（见 model_registry.get_model_status）；
+    - rule_based / quantitative_ct：引擎内有真实实现的阈值/形态学/定量算法，名称中如实标明方法；
+    - 没有实现的模型 is_ready=False，并给出原因。
+    """
     reg = list_registered_models()
     reg_map = {m["name"]: m for m in reg}
 
-    raw_models = [
-        # 1. 胸部与呼吸系统 (Thoracic & Pulmonology)
-        {
-            "id": "bronchiectasis_mucus_analyzer",
-            "name": "支气管扩张与粘液栓 (Mucus Plug) 定量分析 (BAR印戒征 / 阻塞率 / HAM)",
-            "category": "胸部与呼吸科",
-            "engine_type": "quantitative_ct",
-            "body_part": "chest",
-            "modality": "Chest HRCT",
-            "target": "支气管-动脉径比 (BAR)、粘液栓容积、解剖肺叶肺段定位、树芽征",
-            "recommended_window": "lung",
-            "compatible_samples": ["chest_lung_ct", "nsclc_lung_ct"],
-            "is_ready": True
-        },
-        {
-            "id": "lung_nodule_segmenter",
-            "name": "肺结节与肺实变检出与分割 (MONAI 3D RetinaNet / UNet)",
-            "category": "胸部与呼吸科",
-            "engine_type": "deep_learning",
-            "body_part": "chest",
-            "modality": "Chest CT",
-            "target": "肺实质实性/磨玻璃结节 (RECIST 1.1 最大径与三维体积)",
-            "recommended_window": "lung",
-            "compatible_samples": ["chest_lung_ct", "nsclc_lung_ct"],
-            "is_ready": reg_map.get("lung_nodule_ct", {}).get("is_ready", False)
-        },
-        {
-            "id": "copd_emphysema_analyzer",
-            "name": "慢阻肺 GOLD 2024 肺气肿与双肺低衰减区 (LAA%) 定量分析",
-            "category": "胸部与呼吸科",
-            "engine_type": "quantitative_ct",
-            "body_part": "chest",
-            "modality": "Chest CT / HRCT",
-            "target": "全肺容积、低衰减区 (LAA-950%) 占比、GOLD 严重度分级",
-            "recommended_window": "lung",
-            "compatible_samples": ["chest_lung_ct", "nsclc_lung_ct"],
-            "is_ready": True
-        },
-        {
-            "id": "lung_airway_segmenter",
-            "name": "全气道树三维拓扑重建 (MONAI AirwayUNet)",
-            "category": "胸部与呼吸科",
-            "engine_type": "quantitative_ct",
-            "body_part": "chest",
-            "modality": "Chest HRCT",
-            "target": "主气管至亚段细支气管管腔三维骨架与管壁厚度",
-            "recommended_window": "lung",
-            "compatible_samples": ["chest_lung_ct"],
-            "is_ready": True
-        },
-        {
-            "id": "lung_lobe_segmenter",
-            "name": "5 大解剖肺叶分割与肺容积积分 (MONAI V-Net)",
-            "category": "胸部与呼吸科",
-            "engine_type": "deep_learning",
-            "body_part": "chest",
-            "modality": "Chest CT",
-            "target": "双肺 5 大肺叶 (RUL, RML, RLL, LUL, LLL) 体积及占比",
-            "recommended_window": "lung",
-            "compatible_samples": ["chest_lung_ct"],
-            "is_ready": True
-        },
-        {
-            "id": "covid19_lung_infection",
-            "name": "病毒性肺炎磨玻璃实变影定量 (MONAI COVID-Net)",
-            "category": "胸部与呼吸科",
-            "engine_type": "deep_learning",
-            "body_part": "chest",
-            "modality": "Chest CT",
-            "target": "磨玻璃影 (GGO)、网格影与实变受累百分比",
-            "recommended_window": "lung",
-            "compatible_samples": ["chest_lung_ct"],
-            "is_ready": True
-        },
-
-        # 2. 腹部、消化与泌尿系统 (Abdomen & Pelvis)
-        {
-            "id": "spleen_segmenter",
-            "name": "腹部实质脏器与脾脏分割 (MONAI 3D-UNet)",
-            "category": "腹部、消化与泌尿",
-            "engine_type": "deep_learning",
-            "body_part": "abdomen",
-            "modality": "Abdominal CT",
-            "target": "脾脏三维体积、脾肿大定量与创伤破裂评估",
-            "recommended_window": "abdomen",
-            "compatible_samples": ["spleen_test"],
-            "is_ready": reg_map.get("spleen_ct", {}).get("is_ready", False)
-        },
-        {
-            "id": "multi_organ_ct",
-            "name": "全腹部 13 器官多任务解剖分割 (MONAI SwinUNETR)",
-            "category": "腹部、消化与泌尿",
-            "engine_type": "deep_learning",
-            "body_part": "abdomen",
-            "modality": "Abdominal CT",
-            "target": "肝、脾、双肾、胰腺、胆囊、胃、主动脉、下腔静脉等 13 类解剖结构",
-            "recommended_window": "abdomen",
-            "compatible_samples": ["spleen_test"],
-            "is_ready": reg_map.get("swinunetr_btcv", {}).get("is_ready", False)
-        },
-        {
-            "id": "prostate_mri_segmenter",
-            "name": "前列腺外周带/移行带与 PI-RADS 3D 分带 (MONAI 3D-UNet)",
-            "category": "腹部、消化与泌尿",
-            "engine_type": "deep_learning",
-            "body_part": "pelvis",
-            "modality": "Pelvic MRI (T2/ADC)",
-            "target": "前列腺外周带 (PZ)、移行带 (TZ) 分割与体积测算",
-            "recommended_window": "abdomen",
-            "compatible_samples": ["prostate_mri"],
-            "is_ready": reg_map.get("prostate_mri", {}).get("is_ready", False)
-        },
-        {
-            "id": "pancreas_tumor_segmenter",
-            "name": "胰腺实质与胰腺肿瘤分割 (MONAI DiNTS)",
-            "category": "腹部、消化与泌尿",
-            "engine_type": "deep_learning",
-            "body_part": "abdomen",
-            "modality": "Abdominal CT",
-            "target": "胰腺实质、胰头/胰体/胰尾、胰腺导管腺癌与囊性占位",
-            "recommended_window": "abdomen",
-            "compatible_samples": ["spleen_test"],
-            "is_ready": reg_map.get("pancreas_ct_dints", {}).get("is_ready", False)
-        },
-        {
-            "id": "kidney_tumor_segmenter",
-            "name": "肾脏精细解剖与肿瘤分割 (MONAI SegResNet)",
-            "category": "腹部、消化与泌尿",
-            "engine_type": "deep_learning",
-            "body_part": "abdomen",
-            "modality": "Abdominal CECT",
-            "target": "肾实质、肾盂输尿管、肾血管与肾肿瘤/占位",
-            "recommended_window": "abdomen",
-            "compatible_samples": ["spleen_test"],
-            "is_ready": reg_map.get("renal_structures_cect", {}).get("is_ready", False)
-        },
-        {
-            "id": "liver_lesion_segmenter",
-            "name": "肝脏实质与局灶病灶/转移瘤分割 (MONAI UNet)",
-            "category": "腹部、消化与泌尿",
-            "engine_type": "deep_learning",
-            "body_part": "abdomen",
-            "modality": "Abdominal CT",
-            "target": "肝实质体积、原发性肝癌 (HCC) 与转移瘤靶病灶",
-            "recommended_window": "abdomen",
-            "compatible_samples": ["spleen_test"],
-            "is_ready": False
-        },
-
-        # 3. 颅脑与中枢神经系统 (Brain & Neurology)
-        {
-            "id": "brain_tumor_brats",
-            "name": "脑胶质瘤多序列亚区精细分割 (MONAI BraTS SegResNet)",
-            "category": "颅脑与神经系统",
-            "engine_type": "deep_learning",
-            "body_part": "brain",
-            "modality": "Brain MRI (T1, T1c, T2, FLAIR)",
-            "target": "强化肿瘤 (ET)、瘤周水肿 (ED) 与坏死核心 (NCR)",
-            "recommended_window": "brain",
-            "compatible_samples": [],
-            "is_ready": reg_map.get("brats_mri", {}).get("is_ready", False)
-        },
-        {
-            "id": "brain_subcortical_segmenter",
-            "name": "全脑多结构 MRI 大规模分割 (MONAI Large UNEST)",
-            "category": "颅脑与神经系统",
-            "engine_type": "deep_learning",
-            "body_part": "brain",
-            "modality": "Brain T1 MRI",
-            "target": "双侧海马体、杏仁核、丘脑体积与阿尔茨海默病量化",
-            "recommended_window": "brain",
-            "compatible_samples": [],
-            "is_ready": False
-        },
-        {
-            "id": "stroke_ischemic_lesion",
-            "name": "急性脑卒中缺血梗死灶测定 (MONAI UNet)",
-            "category": "颅脑与神经系统",
-            "engine_type": "deep_learning",
-            "body_part": "brain",
-            "modality": "Brain MRI (DWI/FLAIR)",
-            "target": "急性脑梗死缺血半暗带与核心梗死容积",
-            "recommended_window": "brain",
-            "compatible_samples": [],
-            "is_ready": False
-        },
-        {
-            "id": "intracranial_hemorrhage_ct",
-            "name": "急诊颅内出血与血肿检出 (MONAI DenseNet)",
-            "category": "颅脑与神经系统",
-            "engine_type": "deep_learning",
-            "body_part": "brain",
-            "modality": "Brain Head CT",
-            "target": "硬膜下、硬膜外、脑实质内及蛛网膜下腔出血",
-            "recommended_window": "brain",
-            "compatible_samples": [],
-            "is_ready": False
-        },
-
-        # 4. 心血管系统 (Cardiovascular)
-        {
-            "id": "cardiac_mri_segmentation",
-            "name": "心脏短轴 Cine-MRI 心室腔室分割与射血分数 (MONAI UNet)",
-            "category": "心血管系统",
-            "engine_type": "deep_learning",
-            "body_part": "cardiac",
-            "modality": "Cardiac MRI (CINE)",
-            "target": "左心室舒张/收缩末容积、心肌质量与射血分数 (LVEF)",
-            "recommended_window": "mediastinum",
-            "compatible_samples": [],
-            "is_ready": reg_map.get("ventricular_short_axis", {}).get("is_ready", False)
-        },
-        {
-            "id": "valve_landmarks",
-            "name": "心脏超声/CT 瓣膜关键解剖地标检测 (MONAI Heatmap-UNet)",
-            "category": "心血管系统",
-            "engine_type": "deep_learning",
-            "body_part": "cardiac",
-            "modality": "Cardiac CT/Echo",
-            "target": "主动脉瓣与二尖瓣解剖关键铰链点与瓣尖 3D 热图地标定位",
-            "recommended_window": "mediastinum",
-            "compatible_samples": [],
-            "is_ready": False
-        },
-        {
-            "id": "coronary_artery_calcification",
-            "name": "冠状动脉钙化积分 (CAC / Agatston 评分)",
-            "category": "心血管系统",
-            "engine_type": "quantitative_ct",
-            "body_part": "cardiac",
-            "modality": "Cardiac CT",
-            "target": "左前降支、回旋支、右冠状动脉钙化积分与冠心病风险分层",
-            "recommended_window": "mediastinum",
-            "compatible_samples": [],
-            "is_ready": True
-        },
-
-        # 5. 骨科与全身体素 (Musculoskeletal & Whole-Body)
-        {
-            "id": "whole_body_ct_segmenter",
-            "name": "TotalSegmentator 全身体素 117 类解剖结构分割与 L3 肌少症评估",
-            "category": "骨科与全身体素",
-            "engine_type": "quantitative_ct",
-            "body_part": "whole_body",
-            "modality": "Whole-Body CT",
-            "target": "全身体素骨骼、主要内脏系统与主要肌群 (L3 SMI 骨骼肌指数)",
-            "recommended_window": "bone",
-            "compatible_samples": ["spleen_test"],
-            "is_ready": True
-        },
-        {
-            "id": "monai_wholebody_ct",
-            "name": "MONAI 全身 CT 多器官全景分割模型 (SegResNet-3D)",
-            "category": "骨科与全身体素",
-            "engine_type": "deep_learning",
-            "body_part": "whole_body",
-            "modality": "Whole-Body CT",
-            "target": "覆盖胸腹盆骨骼、大血管与内脏器官的全景 CT 快速分割",
-            "recommended_window": "bone",
-            "compatible_samples": [],
-            "is_ready": reg_map.get("wholebody_ct", {}).get("is_ready", False)
-        },
-        {
-            "id": "vertebra_segmenter",
-            "name": "全脊柱 24 节椎骨与椎间盘分割 (Spine-Segmenter)",
-            "category": "骨科与全身体素",
-            "engine_type": "deep_learning",
-            "body_part": "bone",
-            "modality": "Spine CT",
-            "target": "颈椎、胸椎、腰椎各节椎体骨折压缩与椎间隙测量",
-            "recommended_window": "bone",
-            "compatible_samples": [],
-            "is_ready": True
-        },
-
-        # 6. 病理、内窥镜与钼靶 (Pathology, Endoscopy & Mammography)
-        {
-            "id": "breast_density",
-            "name": "MONAI 乳腺钼靶 X 射线致密度与 BI-RADS 分类 (DenseNet-2D)",
-            "category": "乳腺钼靶与妇科",
-            "engine_type": "deep_learning",
-            "body_part": "breast",
-            "modality": "Mammography (MG)",
-            "target": "符合 ACR BI-RADS 第 5 版标准的乳腺数字化 X 射线摄影腺体致密度四分类",
-            "recommended_window": "abdomen",
-            "compatible_samples": [],
-            "is_ready": False
-        },
-        {
-            "id": "pathology_tumor_detection",
-            "name": "MONAI 数字病理全视野切片 (WSI) 肿瘤微转移灶检出 (ResNet/FPN)",
-            "category": "病理与微观形态",
-            "engine_type": "deep_learning",
-            "body_part": "pathology",
-            "modality": "Digital Pathology (WSI)",
-            "target": "前哨淋巴结转移、微浸润灶与肿瘤细胞团全自动检出",
-            "recommended_window": "abdomen",
-            "compatible_samples": [],
-            "is_ready": False
-        },
-        {
-            "id": "pathology_nuclei",
-            "name": "MONAI 病理切片细胞核多类别精细分割与表型分类 (HoVer-Net)",
-            "category": "病理与微观形态",
-            "engine_type": "deep_learning",
-            "body_part": "pathology",
-            "modality": "Digital Pathology",
-            "target": "肿瘤浸润淋巴细胞 (TILs)、核异型性、核质比与细胞增殖指数",
-            "recommended_window": "abdomen",
-            "compatible_samples": [],
-            "is_ready": False
-        },
-        {
-            "id": "endoscopic_tool",
-            "name": "MONAI 微创腹腔镜/胸腔镜手术器械动态语义分割 (ToolNet)",
-            "category": "微创外科与内窥镜",
-            "engine_type": "deep_learning",
-            "body_part": "endoscopy",
-            "modality": "Endoscopic Video",
-            "target": "抓持钳、超声刀、电凝钩与吸引器等器械实时像素级分割与遮蔽",
-            "recommended_window": "abdomen",
-            "compatible_samples": [],
-            "is_ready": False
-        },
-
-        # 7. 交互式万物分割 (Interactive)
-        {
-            "id": "vista3d_interactive_segmenter",
-            "name": "MONAI VISTA-3D 医生交互式点选/提示万物分割 (Click-to-Segment)",
-            "category": "交互式万物分割",
-            "engine_type": "deep_learning",
-            "body_part": "general",
-            "modality": "CT / MRI / PET 通用",
-            "target": "任意解剖结构或病灶的正负点选提示与 3D 自适应区域生长分割",
-            "recommended_window": "lung",
-            "compatible_samples": [],
-            "is_ready": reg_map.get("vista3d", {}).get("is_ready", False)
+    def dl(registry_name: str) -> Dict[str, Any]:
+        st = reg_map.get(registry_name, {})
+        return {
+            "weights_registry_name": registry_name,
+            "is_ready": bool(st.get("is_ready", False)),
+            "unavailable_reason": st.get("unavailable_reason") if st else "未登记权重",
         }
+
+    def off(reason: str) -> Dict[str, Any]:
+        return {"is_ready": False, "unavailable_reason": reason}
+
+    ready = {"is_ready": True, "unavailable_reason": None}
+
+    raw_models = [
+        # 1. 胸部
+        {"id": "bronchiectasis_mucus_analyzer", "name": "支气管扩张与粘液栓定量（HU 阈值/形态学规则算法：支气管-动脉径比、粘液栓容积）",
+         "category": "胸部与呼吸科", "engine_type": "rule_based", "body_part": "chest", "modality": "Chest HRCT",
+         "target": "支气管-动脉径比 (BAR)、粘液栓容积", "recommended_window": "lung", **ready},
+        {"id": "lung_nodule_segmenter", "name": "肺结节候选筛查与测量（HU 阈值 + 形态学规则算法，非深度学习）",
+         "category": "胸部与呼吸科", "engine_type": "rule_based", "body_part": "chest", "modality": "Chest CT",
+         "target": "肺实质内团块状候选的最大层面长径、体积与密度分型", "recommended_window": "lung", **ready},
+        {"id": "copd_emphysema_analyzer", "name": "肺气肿 CT 密度定量（阈值法肺分割 + LAA-950%、Perc15）",
+         "category": "胸部与呼吸科", "engine_type": "quantitative_ct", "body_part": "chest", "modality": "Chest CT",
+         "target": "双肺容积、≤-950 HU 低衰减区容积与占比（不做 GOLD 分级）", "recommended_window": "lung", **ready},
+        {"id": "lung_airway_segmenter", "name": "气道树分割", "category": "胸部与呼吸科", "engine_type": "deep_learning",
+         "body_part": "chest", "modality": "Chest CT", "target": "气道树", "recommended_window": "lung", **off("未实现")},
+        {"id": "lung_lobe_segmenter", "name": "肺叶分割", "category": "胸部与呼吸科", "engine_type": "deep_learning",
+         "body_part": "chest", "modality": "Chest CT", "target": "五个肺叶", "recommended_window": "lung", **off("未实现")},
+        {"id": "covid19_lung_infection", "name": "病毒性肺炎病灶分割", "category": "胸部与呼吸科", "engine_type": "deep_learning",
+         "body_part": "chest", "modality": "Chest CT", "target": "磨玻璃影/实变", "recommended_window": "lung", **off("未实现")},
+
+        # 2. 腹盆部
+        {"id": "spleen_segmenter", "name": "脾脏分割（MONAI spleen_ct_segmentation，3D UNet）",
+         "category": "腹部、消化与泌尿", "engine_type": "deep_learning", "body_part": "abdomen", "modality": "Abdominal CT",
+         "target": "脾脏体积与径线", "recommended_window": "abdomen", **dl("spleen_ct")},
+        {"id": "multi_organ_ct", "name": "BTCV 腹部 13 类器官分割（MONAI SwinUNETR）",
+         "category": "腹部、消化与泌尿", "engine_type": "deep_learning", "body_part": "abdomen", "modality": "Abdominal CT",
+         "target": "肝、脾、双肾、胰腺、胆囊、胃、主动脉、下腔静脉等 13 类器官体积", "recommended_window": "abdomen", **dl("swinunetr_btcv")},
+        {"id": "pancreas_tumor_segmenter", "name": "BTCV 器官分割：胰腺（MONAI SwinUNETR BTCV 第 11 类）",
+         "category": "腹部、消化与泌尿", "engine_type": "deep_learning", "body_part": "abdomen", "modality": "Abdominal CT",
+         "target": "胰腺器官体积（不识别病灶）", "recommended_window": "abdomen", **dl("swinunetr_btcv")},
+        {"id": "kidney_tumor_segmenter", "name": "BTCV 器官分割：双肾（MONAI SwinUNETR BTCV 第 2、3 类）",
+         "category": "腹部、消化与泌尿", "engine_type": "deep_learning", "body_part": "abdomen", "modality": "Abdominal CT",
+         "target": "双肾器官体积（不识别病灶）", "recommended_window": "abdomen", **dl("swinunetr_btcv")},
+        {"id": "liver_lesion_segmenter", "name": "BTCV 器官分割：肝脏（MONAI SwinUNETR BTCV 第 6 类）",
+         "category": "腹部、消化与泌尿", "engine_type": "deep_learning", "body_part": "abdomen", "modality": "Abdominal CT",
+         "target": "肝脏器官体积（不识别病灶）", "recommended_window": "abdomen", **dl("swinunetr_btcv")},
+        {"id": "prostate_mri_segmenter", "name": "前列腺分带分割（MONAI prostate_mri_anatomy，3D UNet：中央腺体/外周带）",
+         "category": "腹部、消化与泌尿", "engine_type": "deep_learning", "body_part": "pelvis", "modality": "Pelvic MRI (T2W)",
+         "target": "前列腺中央腺体与外周带体积", "recommended_window": "abdomen", **dl("prostate_mri")},
+
+        # 3. 颅脑
+        {"id": "brain_tumor_brats", "name": "BraTS 胶质瘤子区分割（MONAI SegResNet，需 4 通道 MRI 并声明通道顺序）",
+         "category": "颅脑与神经系统", "engine_type": "deep_learning", "body_part": "brain", "modality": "Brain MRI (T1c, T1, T2, FLAIR)",
+         "target": "肿瘤核心 (TC)、全肿瘤 (WT)、增强肿瘤 (ET) 体积", "recommended_window": "brain", **dl("brats_mri")},
+        {"id": "brain_subcortical_segmenter", "name": "全脑结构分割（UNEST）", "category": "颅脑与神经系统",
+         "engine_type": "deep_learning", "body_part": "brain", "modality": "Brain T1 MRI", "target": "脑结构",
+         "recommended_window": "brain", **dl("wholebrainseg_large_unest")},
+        {"id": "stroke_ischemic_lesion", "name": "脑梗死分割", "category": "颅脑与神经系统", "engine_type": "deep_learning",
+         "body_part": "brain", "modality": "Brain MRI", "target": "梗死区", "recommended_window": "brain", **off("未实现")},
+        {"id": "intracranial_hemorrhage_ct", "name": "颅内出血检测", "category": "颅脑与神经系统", "engine_type": "deep_learning",
+         "body_part": "brain", "modality": "Head CT", "target": "颅内出血", "recommended_window": "brain", **off("未实现")},
+
+        # 4. 心血管
+        {"id": "cardiac_mri_segmentation", "name": "心室短轴 cine MRI 分割（MONAI ventricular_short_axis_3label：左室血池/心肌/右室血池）",
+         "category": "心血管系统", "engine_type": "deep_learning", "body_part": "cardiac", "modality": "Cardiac MRI (短轴 cine SSFP)",
+         "target": "单期相左室血池、心肌、右室血池体积（单期相不能计算射血分数）", "recommended_window": "mediastinum",
+         **dl("ventricular_short_axis")},
+        {"id": "valve_landmarks", "name": "瓣膜地标检测", "category": "心血管系统", "engine_type": "deep_learning",
+         "body_part": "cardiac", "modality": "Cardiac CT", "target": "瓣膜地标", "recommended_window": "mediastinum",
+         **dl("valve_landmarks")},
+        {"id": "coronary_artery_calcification", "name": "冠状动脉钙化积分", "category": "心血管系统", "engine_type": "quantitative_ct",
+         "body_part": "cardiac", "modality": "Cardiac CT", "target": "Agatston 积分", "recommended_window": "mediastinum",
+         **off("已下线：缺少心脏/冠状动脉区域来源，无法按标准 Agatston 方法逐病灶计分")},
+
+        # 5. 全身与骨
+        {"id": "whole_body_ct_segmenter", "name": "L3 层体成分测量（HU 阈值法骨骼肌/内脏脂肪/皮下脂肪面积，非 TotalSegmentator 模型）",
+         "category": "骨科与全身体素", "engine_type": "rule_based", "body_part": "whole_body", "modality": "Abdominal CT",
+         "target": "启发式 L3 层骨骼肌面积、SMI（需身高）、脂肪面积", "recommended_window": "abdomen", **ready},
+        {"id": "monai_wholebody_ct", "name": "全身 104 类结构分割（MONAI wholeBody_ct_segmentation，SegResNet 1.5 mm）",
+         "category": "骨科与全身体素", "engine_type": "deep_learning", "body_part": "whole_body", "modality": "CT",
+         "target": "器官、骨骼、血管、肌肉 104 类结构体积", "recommended_window": "bone", **dl("wholebody_ct")},
+        {"id": "vertebra_segmenter", "name": "椎体松质骨 ROI 平均 CT 值（手动 ROI；骨 ≥220 HU 阈值示意）",
+         "category": "骨科与全身体素", "engine_type": "rule_based", "body_part": "bone", "modality": "CT",
+         "target": "松质骨 ROI 平均 HU（不换算骨密度、不估算 T 值）", "recommended_window": "bone", **ready},
+
+        # 6. 其他模态
+        {"id": "breast_density", "name": "乳腺密度分类", "category": "乳腺钼靶与妇科", "engine_type": "deep_learning",
+         "body_part": "breast", "modality": "Mammography", "target": "腺体密度", "recommended_window": "abdomen", **dl("breast_density")},
+        {"id": "pathology_tumor_detection", "name": "病理 WSI 肿瘤区域检测", "category": "病理与微观形态", "engine_type": "deep_learning",
+         "body_part": "pathology", "modality": "WSI", "target": "肿瘤区域", "recommended_window": "abdomen", **dl("pathology_tumor_detection")},
+        {"id": "pathology_nuclei", "name": "病理细胞核分割与分类", "category": "病理与微观形态", "engine_type": "deep_learning",
+         "body_part": "pathology", "modality": "WSI", "target": "细胞核", "recommended_window": "abdomen", **dl("pathology_nuclei")},
+        {"id": "endoscopic_tool", "name": "内镜器械分割", "category": "微创外科与内窥镜", "engine_type": "deep_learning",
+         "body_part": "endoscopy", "modality": "Endoscopic Video", "target": "器械", "recommended_window": "abdomen", **dl("endoscopic_tool")},
+
+        # 7. 交互
+        {"id": "vista3d_interactive_segmenter", "name": "种子点 HU 区域生长（规则算法，非 VISTA-3D 模型）",
+         "category": "交互式分割", "engine_type": "rule_based", "body_part": "general", "modality": "CT",
+         "target": "与种子点连通、CT 值在 ±45 HU 内的区域", "recommended_window": "lung", **ready},
     ]
 
     active_models = [m for m in raw_models if m.get("is_ready") is True] if not include_all else raw_models
@@ -613,116 +417,42 @@ def list_clinical_models(include_all: bool = False):
 
 @app.get("/api/v1/samples")
 def list_samples():
+    """列出 data 目录中真实存在的公开数据集样本；缺失的样本不生成、不列出。"""
+    catalog = [
+        ("chest_lung_ct", "公开数据集胸部 CT（薄层）", "Chest CT", "bronchiectasis_mucus_analyzer", "lung", None),
+        ("lidc_lung_nodule_ct", "LIDC-IDRI 胸部 CT（TCIA 病例 0001，含放射科医师结节标注）", "Chest CT", "lung_nodule_segmenter", "lung", None),
+        ("copd_emphysema_ct", "公开数据集胸部 CT（用于肺气肿密度定量）", "Chest CT", "copd_emphysema_analyzer", "lung", None),
+        ("liver_tumor_ct", "公开数据集肝脏 CT（LiTS / MSD Task03）", "Abdominal CT", "liver_lesion_segmenter", "abdomen", None),
+        ("spleen_test", "公开数据集腹部增强 CT（96 层 512×512）", "Abdominal CT", "spleen_segmenter", "abdomen", None),
+        ("cardiac_heart_mri", "MSD Task02 左心房 MRI（不是短轴 cine，与心室分割模型不匹配）", "Cardiac MRI", None, "mediastinum",
+         "该样本不是短轴 cine SSFP，平台内没有与之匹配的模型"),
+        ("brats_brain_mri", "公开数据集脑肿瘤多序列 MRI（BraTS，4 通道）", "Brain MRI", "brain_tumor_brats", "brain",
+         "通道顺序未在文件中登记；调用 BraTS 模型时需通过 channel_order 声明"),
+        ("hippocampus_brain_mri", "MSD Task04 海马区 MRI", "Brain MRI", None, "brain", "平台内没有与之匹配的模型"),
+        ("prostate_mri", "公开数据集前列腺 MRI（单通道体积，19 层 384×384）", "Pelvic MRI", "prostate_mri_segmenter", "abdomen", None),
+    ]
     samples = []
-    chest_path = DATA_DIR / "chest_lung_ct.nii.gz"
-    spleen_path = DATA_DIR / "spleen_test.nii.gz"
-    mri_path = DATA_DIR / "prostate_mri.nii.gz"
-
-    if not chest_path.exists() and not spleen_path.exists():
-        try:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            try:
-                from .bronchiectasis import generate_synthetic_bronchiectasis_ct
-            except (ImportError, ValueError):
-                from bronchiectasis import generate_synthetic_bronchiectasis_ct
-            import nibabel as nib
-            vol, spacing, _ = generate_synthetic_bronchiectasis_ct(shape=(48, 128, 128), spacing=(1.5, 0.8, 0.8))
-            nib.save(nib.Nifti1Image(vol, np.diag([*spacing, 1.0])), str(chest_path))
-        except Exception:
-            pass
-
-    if chest_path.exists():
-        samples.append({
-            "id": "chest_lung_ct",
-            "name": "真实临床全胸部 HRCT 扫描 (薄层高分辨重构)",
-            "modality": "Chest HRCT",
-            "default_model": "bronchiectasis_mucus_analyzer",
-            "default_window": "lung",
-            "size_mb": round(chest_path.stat().st_size / (1024 * 1024), 1)
-        })
-    lidc_path = DATA_DIR / "lidc_lung_nodule_ct.nii.gz"
-    if lidc_path.exists():
-        samples.append({
-            "id": "lidc_lung_nodule_ct",
-            "name": "真实临床 LIDC 肺孤立性实性结节胸部 CT (TCIA 金标准病例 0001)",
-            "modality": "Chest CT",
-            "default_model": "lung_nodule_segmenter",
-            "default_window": "lung",
-            "size_mb": round(lidc_path.stat().st_size / (1024 * 1024), 1)
-        })
-    copd_path = DATA_DIR / "copd_emphysema_ct.nii.gz"
-    if copd_path.exists():
-        samples.append({
-            "id": "copd_emphysema_ct",
-            "name": "真实临床慢阻肺 COPD 吸气相 HRCT 扫描 (全肺容积与 LAA-950% 肺气肿定量)",
-            "modality": "Chest CT",
-            "default_model": "copd_emphysema_analyzer",
-            "default_window": "lung",
-            "size_mb": round(copd_path.stat().st_size / (1024 * 1024), 1)
-        })
-    liver_path = DATA_DIR / "liver_tumor_ct.nii.gz"
-    if liver_path.exists():
-        samples.append({
-            "id": "liver_tumor_ct",
-            "name": "真实临床肝脏肿瘤强化 CT 扫描 (LiTS / MSD Task03 肝实质与局灶病灶)",
-            "modality": "Abdominal CT",
-            "default_model": "liver_lesion_segmenter",
-            "default_window": "abdomen",
-            "size_mb": round(liver_path.stat().st_size / (1024 * 1024), 1)
-        })
-    if spleen_path.exists():
-        samples.append({
-            "id": "spleen_test",
-            "name": "真实临床腹部增强 CT 扫描 (96层 512x512)",
-            "modality": "Abdominal CT",
-            "default_model": "spleen_segmenter",
-            "default_window": "abdomen",
-            "size_mb": round(spleen_path.stat().st_size / (1024 * 1024), 1)
-        })
-    cardiac_path = DATA_DIR / "cardiac_heart_mri.nii.gz"
-    if cardiac_path.exists():
-        samples.append({
-            "id": "cardiac_heart_mri",
-            "name": "真实临床左心房高分辨心脏 MRI (MSD Task02 心肌与心室构型)",
-            "modality": "Cardiac MRI",
-            "default_model": "cardiac_mri_segmentation",
-            "default_window": "mediastinum",
-            "size_mb": round(cardiac_path.stat().st_size / (1024 * 1024), 1)
-        })
-    brats_path = DATA_DIR / "brats_brain_mri.nii.gz"
-    if brats_path.exists():
-        samples.append({
-            "id": "brats_brain_mri",
-            "name": "真实临床 BraTS 脑胶质母细胞瘤多模态 MRI (4通道 T1/T1c/T2/FLAIR)",
-            "modality": "Brain MRI",
-            "default_model": "brain_tumor_brats",
-            "default_window": "brain",
-            "size_mb": round(brats_path.stat().st_size / (1024 * 1024), 1)
-        })
-    hippo_path = DATA_DIR / "hippocampus_brain_mri.nii.gz"
-    if hippo_path.exists():
-        samples.append({
-            "id": "hippocampus_brain_mri",
-            "name": "真实临床海马区脑高分辨 MRI (MSD Task04 阿尔茨海默与记忆功能区)",
-            "modality": "Brain MRI",
-            "default_model": "brain_tumor_segmenter",
-            "default_window": "brain",
-            "size_mb": round(hippo_path.stat().st_size / (1024 * 1024), 1)
-        })
-    if mri_path.exists():
-        samples.append({
-            "id": "prostate_mri",
-            "name": "真实临床前列腺 T2 加权 MRI (19层 320x320)",
-            "modality": "Pelvic MRI",
-            "default_model": "prostate_mri_segmenter",
-            "default_window": "abdomen",
-            "size_mb": round(mri_path.stat().st_size / (1024 * 1024), 1)
-        })
+    for sid, name, modality, default_model, window, note in catalog:
+        path = DATA_DIR / f"{sid}.nii.gz"
+        if not path.exists():
+            continue
+        item = {
+            "id": sid,
+            "name": name,
+            "modality": modality,
+            "default_model": default_model,
+            "default_window": window,
+            "is_synthetic": False,
+            "size_mb": round(path.stat().st_size / (1024 * 1024), 1),
+        }
+        if note:
+            item["note"] = note
+        samples.append(item)
     return {"samples": samples}
  
 @app.get("/api/v1/samples/{sample_id}/file")
 def get_sample_file(sample_id: str):
-    """Streams the raw 3D volume sample file (.nii.gz)."""
+    """下载样本原始文件；样本不存在返回 404，不生成任何替代数据。"""
     if not re.match(r"^[a-zA-Z0-9_\-]+$", sample_id):
         raise HTTPException(status_code=400, detail="Invalid sample_id format")
     for ext in (".nii.gz", ".nii", ".zip", ".gz"):
@@ -733,25 +463,6 @@ def get_sample_file(sample_id: str):
                 media_type="application/gzip",
                 filename=f"{sample_id}{ext}"
             )
-    if "lung" in sample_id or "chest" in sample_id or "spleen" in sample_id or "prostate" in sample_id:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        import nibabel as nib
-        if "lung" in sample_id or "chest" in sample_id:
-            try:
-                from .bronchiectasis import generate_synthetic_bronchiectasis_ct
-            except (ImportError, ValueError):
-                from bronchiectasis import generate_synthetic_bronchiectasis_ct
-            vol, spacing, _ = generate_synthetic_bronchiectasis_ct(shape=(48, 128, 128), spacing=(1.5, 0.8, 0.8))
-        else:
-            try:
-                from .engine import generate_synthetic_ct_volume
-            except (ImportError, ValueError):
-                from engine import generate_synthetic_ct_volume
-            vol, _ = generate_synthetic_ct_volume(shape=(32, 128, 128), spacing=(1.5, 0.8, 0.8))
-            spacing = (1.5, 0.8, 0.8)
-        tgt = DATA_DIR / f"{sample_id}.nii.gz"
-        nib.save(nib.Nifti1Image(vol, np.diag([*spacing, 1.0])), str(tgt))
-        return FileResponse(path=str(tgt), media_type="application/gzip", filename=f"{sample_id}.nii.gz")
     raise HTTPException(status_code=404, detail=f"Sample '{sample_id}' not found in data directory")
 
 @app.post("/api/v1/volume/upload")
@@ -803,27 +514,37 @@ def get_volume_status(volume_id: str):
         "modality": modality
     }
 
+
+def _require_target(*candidates: Optional[str]) -> str:
+    """取第一个给出的影像来源；都没有则 400。"""
+    for c in candidates:
+        if c:
+            return c
+    raise HTTPException(status_code=400, detail="缺少影像来源：请提供 file_path、volume_id 或 sample_id")
+
+
 @app.post("/api/v1/mpr/info")
 def get_mpr_volume_info(req: MprInfoRequest = Body(...)):
     """Returns 3D volume dimensions, spacing, slice counts and bounding box for a volume."""
-    target = req.file_path or req.volume_id or req.sample_id or "chest_lung_ct"
+    target = _require_target(req.file_path, req.volume_id, req.sample_id)
     try:
         return engine.get_mpr_info(target, model_name=req.model_name)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read volume info: {str(e)}")
+        raise_http(e, "读取体积信息失败")
 
 @app.get("/api/v1/mpr/info")
-def get_mpr_volume_info_get(sample_id: str = "chest_lung_ct", model_name: Optional[str] = None):
+def get_mpr_volume_info_get(sample_id: Optional[str] = None, model_name: Optional[str] = None):
     """GET variant for retrieving volume MPR info by sample_id."""
+    target = _require_target(sample_id)
     try:
-        return engine.get_mpr_info(sample_id, model_name=model_name)
+        return engine.get_mpr_info(target, model_name=model_name)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read volume info: {str(e)}")
+        raise_http(e, "读取体积信息失败")
 
 @app.post("/api/v1/mpr/slice")
 def get_mpr_slice(req: MprSliceRequest = Body(...)):
     """Extracts an arbitrary orthogonal 2D slice (Axial/Coronal/Sagittal) with windowing & overlay."""
-    target = req.file_path or req.volume_id or req.sample_id or "chest_lung_ct"
+    target = _require_target(req.file_path, req.volume_id, req.sample_id)
     try:
         return engine.extract_mpr_slice(
             sample_id_or_path=target,
@@ -834,13 +555,16 @@ def get_mpr_slice(req: MprSliceRequest = Body(...)):
             model_name=req.model_name
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to extract MPR slice: {str(e)}")
+        raise_http(e, "提取 MPR 截面失败")
 
 @app.post("/api/v1/mpr/diff-slice")
 def get_diff_slice(req: DiffSliceRequest = Body(...)):
-    """Extracts a registered 3D difference slice with regression/progression heatmap."""
-    base_target = req.baseline_path if req.baseline_path and os.path.exists(req.baseline_path) else (req.baseline_volume_id or req.baseline_id or "chest_lung_ct")
-    follow_target = req.followup_path if req.followup_path and os.path.exists(req.followup_path) else (req.followup_volume_id or req.followup_id or "chest_lung_ct")
+    """基线/随访逐体素 CT 值差图（未配准，仅供目视，不给趋势结论）。"""
+    for p in (req.baseline_path, req.followup_path):
+        if p and not os.path.exists(p):
+            raise HTTPException(status_code=404, detail=f"影像文件不存在: {p}")
+    base_target = _require_target(req.baseline_path, req.baseline_volume_id, req.baseline_id)
+    follow_target = _require_target(req.followup_path, req.followup_volume_id, req.followup_id)
     try:
         return engine.extract_diff_slice(
             baseline_id_or_path=base_target,
@@ -851,47 +575,52 @@ def get_diff_slice(req: DiffSliceRequest = Body(...)):
             threshold_hu=req.threshold_hu if req.threshold_hu is not None else 50.0
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to extract diff slice: {str(e)}")
+        raise_http(e, "生成差值截面失败")
 
 @app.post("/api/v1/analyze/benchmark")
 def run_benchmark_analysis(req: BenchmarkRequest = Body(...)):
-    """Generates synthetic anatomical volume and runs MONAI inference on device."""
+    """在合成体模上运行指定算法，用于测速与联调；输出带 is_synthetic: true，不代表任何真实数据。"""
     model_name = req.model_name or "lung_nodule_segmenter"
-    if model_name in ("bronchiectasis_mucus_analyzer", "bronchiectasis"):
-        try:
-            from .bronchiectasis import generate_synthetic_bronchiectasis_ct
-        except (ImportError, ValueError):
-            from bronchiectasis import generate_synthetic_bronchiectasis_ct
-        vol, _, _ = generate_synthetic_bronchiectasis_ct(
-            shape=(req.z_slices or 48, req.y_dim or 128, req.x_dim or 128),
-            spacing=(1.5, 0.8, 0.8)
-        )
-        return engine.analyze_volume(
-            volume=vol,
-            spacing=(1.5, 0.8, 0.8),
-            model_name="bronchiectasis_mucus_analyzer",
-            window_preset="lung",
-            mucus_min_hu=req.mucus_min_hu,
-            mucus_max_hu=req.mucus_max_hu,
-            ham_threshold_hu=req.ham_threshold_hu,
-            bar_cutoff=req.bar_cutoff
-        )
-
-    vol, _ = generate_synthetic_ct_volume(
-        shape=(req.z_slices, req.y_dim, req.x_dim),
-        spacing=(1.5, 0.8, 0.8)
-    )
-    result = engine.analyze_volume(
-        volume=vol,
-        spacing=(1.5, 0.8, 0.8),
-        model_name=model_name,
-        window_preset=req.window_preset or "lung"
-    )
+    try:
+        if model_name in ("bronchiectasis_mucus_analyzer", "bronchiectasis"):
+            try:
+                from .bronchiectasis import generate_synthetic_bronchiectasis_ct
+            except (ImportError, ValueError):
+                from bronchiectasis import generate_synthetic_bronchiectasis_ct
+            vol, _, _ = generate_synthetic_bronchiectasis_ct(
+                shape=(req.z_slices or 48, req.y_dim or 128, req.x_dim or 128),
+                spacing=(1.5, 0.8, 0.8)
+            )
+            result = engine.analyze_volume(
+                volume=vol,
+                spacing=(1.5, 0.8, 0.8),
+                model_name="bronchiectasis_mucus_analyzer",
+                window_preset="lung",
+                mucus_min_hu=req.mucus_min_hu,
+                mucus_max_hu=req.mucus_max_hu,
+                ham_threshold_hu=req.ham_threshold_hu,
+                bar_cutoff=req.bar_cutoff
+            )
+        else:
+            vol, _ = generate_synthetic_ct_volume(
+                shape=(req.z_slices or 48, req.y_dim or 128, req.x_dim or 128),
+                spacing=(1.5, 0.8, 0.8)
+            )
+            result = engine.analyze_volume(
+                volume=vol,
+                spacing=(1.5, 0.8, 0.8),
+                model_name=model_name,
+                window_preset=req.window_preset or "lung"
+            )
+    except Exception as e:
+        raise_http(e, "合成体模测试失败")
+    result["is_synthetic"] = True
+    result["data_source"] = "synthetic_phantom"
     return result
 
 @app.post("/api/v1/analyze/bronchiectasis")
 def run_bronchiectasis_analysis(req: BenchmarkRequest = Body(...)):
-    """Specialized endpoint for HRCT Bronchiectasis & Mucus Plug quantification."""
+    """支扩/粘液栓算法在合成体模上的联调接口；输出带 is_synthetic: true。真实影像请用 /analyze/sample 或 /analyze/file。"""
     try:
         from .bronchiectasis import generate_synthetic_bronchiectasis_ct
     except (ImportError, ValueError):
@@ -900,7 +629,7 @@ def run_bronchiectasis_analysis(req: BenchmarkRequest = Body(...)):
         shape=(req.z_slices or 48, req.y_dim or 128, req.x_dim or 128),
         spacing=(1.5, 0.8, 0.8)
     )
-    return engine.analyze_volume(
+    result = engine.analyze_volume(
         volume=vol,
         spacing=(1.5, 0.8, 0.8),
         model_name="bronchiectasis_mucus_analyzer",
@@ -910,83 +639,58 @@ def run_bronchiectasis_analysis(req: BenchmarkRequest = Body(...)):
         ham_threshold_hu=req.ham_threshold_hu,
         bar_cutoff=req.bar_cutoff
     )
+    result["is_synthetic"] = True
+    result["data_source"] = "synthetic_phantom"
+    return result
+
+
+def _sample_file(sample_id: str) -> Optional[Path]:
+    for ext in (".nii.gz", ".nii"):
+        p = DATA_DIR / f"{sample_id}{ext}"
+        if p.exists():
+            return p
+    return None
+
 
 @app.post("/api/v1/analyze/sample")
 def run_sample_analysis(req: SampleRequest = Body(...)):
-    """Runs MONAI inference on a pre-loaded clinical sample or in-memory cached volume."""
+    """在内存缓存的体积或 data 目录样本上运行指定模型；缺样本 404，缺模型 400。"""
+    if not req.model_name:
+        raise HTTPException(status_code=400, detail="缺少 model_name：请指定要运行的分析模型")
     vol_id = req.volume_id or req.sample_id
-    if vol_id and engine.has_volume(vol_id):
-        vol, spacing, modality = engine.volume_cache[vol_id]
-        model_name = req.model_name
-        if not model_name:
-            model_name = "lung_nodule_segmenter" if ("lung" in str(vol_id).lower() or "chest" in str(vol_id).lower()) else "spleen_segmenter"
-        sample_file = DATA_DIR / f"{vol_id}.nii.gz"
-        if not sample_file.exists():
-            sample_file = DATA_DIR / f"{vol_id}.nii"
-        f_path = str(sample_file) if sample_file.exists() else None
-        with INFERENCE_SEMAPHORE:
-            return engine.analyze_volume(
-                volume=vol,
-                spacing=spacing,
-                model_name=model_name,
-                window_preset=req.window_preset,
-                prompt_point=req.click_point,
-                patient_context=req.patient_context,
-                mucus_min_hu=req.mucus_min_hu,
-                mucus_max_hu=req.mucus_max_hu,
-                ham_threshold_hu=req.ham_threshold_hu,
-                bar_cutoff=req.bar_cutoff,
-                file_path=f_path
-            )
-
-    sample_id = req.sample_id or "spleen_test"
-    sample_file = DATA_DIR / f"{sample_id}.nii.gz"
-    if not sample_file.exists():
-        sample_file = DATA_DIR / f"{sample_id}.nii"
-    if not sample_file.exists():
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        import nibabel as nib
-        if "lung" in sample_id or "chest" in sample_id:
-            try:
-                from .bronchiectasis import generate_synthetic_bronchiectasis_ct
-            except (ImportError, ValueError):
-                from bronchiectasis import generate_synthetic_bronchiectasis_ct
-            vol, spacing, _ = generate_synthetic_bronchiectasis_ct(shape=(48, 128, 128), spacing=(1.5, 0.8, 0.8))
-        else:
-            try:
-                from .engine import generate_synthetic_ct_volume
-            except (ImportError, ValueError):
-                from engine import generate_synthetic_ct_volume
-            vol, _ = generate_synthetic_ct_volume(shape=(32, 128, 128), spacing=(1.5, 0.8, 0.8))
-            spacing = (1.5, 0.8, 0.8)
-        tgt = DATA_DIR / f"{sample_id}.nii.gz"
-        nib.save(nib.Nifti1Image(vol, np.diag([*spacing, 1.0])), str(tgt))
-        sample_file = tgt
-
-    model_name = req.model_name
-    if not model_name:
-        if "lung" in sample_id or "chest" in sample_id:
-            model_name = "lung_nodule_segmenter"
-        elif "spleen" in sample_id:
-            model_name = "spleen_segmenter"
-        else:
-            model_name = "liver_lesion_segmenter"
-
+    if not vol_id:
+        raise HTTPException(status_code=400, detail="缺少 sample_id 或 volume_id")
+    common = dict(
+        window_preset=req.window_preset,
+        prompt_point=req.click_point,
+        patient_context=req.patient_context,
+        mucus_min_hu=req.mucus_min_hu,
+        mucus_max_hu=req.mucus_max_hu,
+        ham_threshold_hu=req.ham_threshold_hu,
+        bar_cutoff=req.bar_cutoff,
+        channel_order=req.channel_order,
+    )
     try:
+        if engine.has_volume(vol_id):
+            vol, spacing, modality = engine.volume_cache[vol_id]
+            sample_file = _sample_file(vol_id)
+            with INFERENCE_SEMAPHORE:
+                return engine.analyze_volume(
+                    volume=vol,
+                    spacing=spacing,
+                    model_name=req.model_name,
+                    modality=modality,
+                    file_path=str(sample_file) if sample_file else None,
+                    **common
+                )
+
+        sample_file = _sample_file(vol_id)
+        if sample_file is None:
+            raise HTTPException(status_code=404, detail=f"样本 '{vol_id}' 不存在")
         with INFERENCE_SEMAPHORE:
-            return engine.analyze_file(
-                file_path=str(sample_file),
-                model_name=model_name,
-                window_preset=req.window_preset,
-                prompt_point=req.click_point,
-                patient_context=req.patient_context,
-                mucus_min_hu=req.mucus_min_hu,
-                mucus_max_hu=req.mucus_max_hu,
-                ham_threshold_hu=req.ham_threshold_hu,
-                bar_cutoff=req.bar_cutoff
-            )
+            return engine.analyze_file(file_path=str(sample_file), model_name=req.model_name, **common)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
+        raise_http(e, "分析失败")
 
 def validate_safe_medical_path(file_path: Optional[str]) -> Optional[str]:
     """Validates that file_path does not traverse into prohibited system paths."""
@@ -1006,44 +710,52 @@ def validate_safe_medical_path(file_path: Optional[str]) -> Optional[str]:
 
 @app.post("/api/v1/analyze/file")
 def run_file_analysis(req: FileAnalysisRequest = Body(...)):
-    """Runs MONAI inference on a specified local file path."""
+    """在本地文件上运行指定模型。"""
     safe_path = validate_safe_medical_path(req.file_path)
     if not safe_path:
         raise HTTPException(status_code=400, detail="file_path is required")
+    if not req.model_name:
+        raise HTTPException(status_code=400, detail="缺少 model_name：请指定要运行的分析模型")
     try:
         with INFERENCE_SEMAPHORE:
             return engine.analyze_file(
                 file_path=safe_path,
-                model_name=req.model_name or "spleen_segmenter",
+                model_name=req.model_name,
                 window_preset=req.window_preset,
                 prompt_point=req.click_point,
                 patient_context=req.patient_context,
                 mucus_min_hu=req.mucus_min_hu,
                 mucus_max_hu=req.mucus_max_hu,
                 ham_threshold_hu=req.ham_threshold_hu,
-                bar_cutoff=req.bar_cutoff
+                bar_cutoff=req.bar_cutoff,
+                channel_order=req.channel_order,
+                modality=req.modality,
             )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
+        raise_http(e, "分析失败")
 
 @app.post("/api/v1/analyze/radiomics")
 def run_radiomics_analysis(req: RadiomicsRequest = Body(...)):
-    """Extracts 3D IBSI-compliant radiomics features (Shape, First-order, GLCM, GLRLM)."""
-    target = req.file_path or req.sample_id
+    """影像组学特征；ROI 掩膜必须由调用方提供（掩膜文件/样本，或已运行过的分割模型）。"""
+    target = _require_target(req.file_path, req.sample_id)
+    mask_src = req.mask_file_path or req.mask_sample_id
+    if req.mask_file_path:
+        validate_safe_medical_path(req.mask_file_path)
     try:
         with INFERENCE_SEMAPHORE:
             return engine.extract_radiomics(
                 sample_id_or_path=target,
-                model_name=req.model_name or "lung_nodule_segmenter",
-                num_bins=req.num_bins or 16
+                model_name=req.model_name,
+                num_bins=req.num_bins or 16,
+                mask_id_or_path=mask_src,
             )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Radiomics extraction failed: {str(e)}")
+        raise_http(e, "影像组学特征提取失败")
 
 @app.post("/api/v1/analyze/interactive-segment")
 def run_interactive_segmentation_endpoint(req: InteractiveSegmentRequest = Body(...)):
-    """Executes MONAI VISTA-3D style interactive click-prompt segmentation."""
-    target = req.file_path or req.sample_id
+    """交互式种子点分割（HU 区域生长，非 VISTA-3D 模型）。"""
+    target = _require_target(req.file_path, req.sample_id)
     points_dict = [p.model_dump() if hasattr(p, "model_dump") else p.dict() for p in (req.points or [])]
     try:
         return engine.run_interactive_segmentation(
@@ -1053,132 +765,165 @@ def run_interactive_segmentation_endpoint(req: InteractiveSegmentRequest = Body(
             window_preset=req.window_preset,
             plane=req.plane or "axial",
             slice_index=req.slice_index,
-            mode=req.mode or "deep",
+            mode=req.mode or "hu_likelihood_gradient",
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Interactive segmentation failed: {str(e)}")
+        raise_http(e, "交互分割失败")
 
 @app.post("/api/v1/analyze/whole-body")
 def run_whole_body_analysis_endpoint(req: WholeBodyAnalysisRequest = Body(...)):
-    """Executes MONAI TotalSegmentator 104-class multi-organ and L3 sarcopenia analysis."""
+    """L3 层 HU 阈值法体成分测量（非 TotalSegmentator 模型）。"""
     target = req.file_path or (str(DATA_DIR / f"{req.sample_id}.nii.gz") if req.sample_id else None)
     if target and os.path.exists(target):
-        return engine.analyze_file(
-            file_path=target,
-            model_name="whole_body_ct_segmenter",
-            patient_sex=req.patient_sex,
-            patient_height_m=req.patient_height_m,
-            patient_weight_kg=req.patient_weight_kg,
-            l3_slice_index=req.l3_slice_index
-        )
+        try:
+            return engine.analyze_file(
+                file_path=target,
+                model_name="whole_body_ct_segmenter",
+                patient_sex=req.patient_sex,
+                patient_height_m=req.patient_height_m,
+                patient_weight_kg=req.patient_weight_kg,
+                l3_slice_index=req.l3_slice_index
+            )
+        except Exception as e:
+            raise_http(e, "体成分分析失败")
+    # 没有给出真实影像时不再用合成体数据冒充分析结果
+    raise HTTPException(status_code=400, detail="缺少影像文件：请提供 file_path 或有效的 sample_id")
+
+
+def _load_required(label: str, *candidates: Optional[str]):
+    """读取必需的影像；未给出 400，找不到 404。"""
+    target = next((c for c in candidates if c), None)
+    if not target:
+        raise HTTPException(status_code=400, detail=f"缺少{label}：请提供 sample_id 或 file_path")
     try:
-        from .totalsegmentator import generate_synthetic_whole_body_ct, analyze_whole_body_ct
-    except (ImportError, ValueError):
-        from totalsegmentator import generate_synthetic_whole_body_ct, analyze_whole_body_ct
-    vol, _ = generate_synthetic_whole_body_ct(
-        shape=(req.z_slices or 64, req.y_dim or 128, req.x_dim or 128),
-        spacing=(1.5, 0.8, 0.8)
-    )
-    return analyze_whole_body_ct(
-        volume=vol,
-        spacing=(1.5, 0.8, 0.8),
-        patient_sex=req.patient_sex or "M",
-        patient_height_m=req.patient_height_m or 1.72,
-        patient_weight_kg=req.patient_weight_kg or 68.0,
-        l3_slice_index=req.l3_slice_index
-    )
+        return engine.load_volume_data(target)
+    except Exception as e:
+        raise_http(e, f"读取{label}失败")
+
 
 @app.post("/api/v1/registration/deformable")
 def run_deformable_registration_endpoint(req: DeformableRegistrationRequest = Body(...)):
-    """Executes 3D Deformable B-Spline / Demons Dense Vector Displacement Field registration."""
+    """在请求给出的固定/浮动影像上做形变配准；两者须为同一体素网格（本接口不做重采样）。"""
     try:
         from .registration import run_3d_deformable_registration
-        from .totalsegmentator import generate_synthetic_whole_body_ct
     except (ImportError, ValueError):
         from registration import run_3d_deformable_registration
-        from totalsegmentator import generate_synthetic_whole_body_ct
 
-    fixed_vol, _ = generate_synthetic_whole_body_ct(shape=(32, 64, 64), spacing=(2.0, 1.0, 1.0))
-    moving_vol = np.roll(fixed_vol, shift=(1, 2, -1), axis=(0, 1, 2))
-
-    res = run_3d_deformable_registration(
-        fixed_vol=fixed_vol,
-        moving_vol=moving_vol,
-        spacing=(2.0, 1.0, 1.0),
-        iterations=req.iterations or 10,
-        smoothing_sigma=req.smoothing_sigma or 1.0
-    )
-    return {
-        "status": res["status"],
-        "iterations_completed": res["iterations_completed"],
-        "elapsed_sec": res["elapsed_sec"],
-        "initial_ncc": res["initial_ncc"],
-        "final_ncc": res["final_ncc"],
-        "ncc_improvement": res["ncc_improvement"],
-        "initial_mse": res["initial_mse"],
-        "final_mse": res["final_mse"],
-        "mse_reduction_percent": res["mse_reduction_percent"],
-        "max_displacement_mm": res["max_displacement_mm"],
-        "mean_displacement_mm": res["mean_displacement_mm"],
-        "key_slice_index": res.get("key_slice_index", 0),
-        "registered_slice_png_base64": res.get("registered_slice_png_base64"),
-        "registered_slice_png_size_bytes": res.get("registered_slice_png_size_bytes", 0),
-        "summary_markdown": (
-            f"### 3D 可形变配准 (Deformable B-Spline / DDF) 报告\n"
-            f"- **初始归一化互相关 (NCC)**: `{res['initial_ncc']}` → **配准后 NCC**: `{res['final_ncc']}` (提升 `{res['ncc_improvement']}`)\n"
-            f"- **均方误差 (MSE) 降幅**: `{res['mse_reduction_percent']}%` (耗时 `{res['elapsed_sec']}s`)\n"
-            f"- **最大位移形变量**: `{res['max_displacement_mm']} mm` (平均位移: `{res['mean_displacement_mm']} mm`)\n"
+    fixed_vol, fixed_sp, _ = _load_required("固定图像", req.fixed_file_path, req.fixed_sample_id)
+    moving_vol, moving_sp, _ = _load_required("浮动图像", req.moving_file_path, req.moving_sample_id)
+    if fixed_vol.shape != moving_vol.shape or not np.allclose(fixed_sp, moving_sp, atol=1e-3):
+        raise HTTPException(
+            status_code=400,
+            detail=f"固定图像 {fixed_vol.shape} 与浮动图像 {moving_vol.shape} 体素网格不一致；请先重采样到同一网格"
         )
-    }
+
+    try:
+        with INFERENCE_SEMAPHORE:
+            res = run_3d_deformable_registration(
+                fixed_vol=fixed_vol,
+                moving_vol=moving_vol,
+                spacing=tuple(fixed_sp),
+                iterations=req.iterations or 10,
+                smoothing_sigma=req.smoothing_sigma or 1.0
+            )
+    except Exception as e:
+        raise_http(e, "配准失败")
+    keys = (
+        "status", "method", "method_zh", "iterations_completed", "elapsed_sec", "initial_ncc", "final_ncc",
+        "ncc_improvement", "initial_mse", "final_mse", "mse_reduction_percent", "max_displacement_mm",
+        "mean_displacement_mm", "key_slice_index", "registered_slice_png_base64", "registered_slice_png_size_bytes",
+        "summary_markdown",
+    )
+    out = {k: res.get(k) for k in keys if k in res}
+    out["fixed_source"] = req.fixed_file_path or req.fixed_sample_id
+    out["moving_source"] = req.moving_file_path or req.moving_sample_id
+    return out
 
 @app.post("/api/v1/registration/pet-ct-fusion")
 def run_pet_ct_fusion_endpoint(req: PetCtFusionRequest = Body(...)):
-    """Computes PET SUV metabolic quantification and alpha-blended PET-CT color fusion."""
+    """在请求给出的 CT 与 PET 上计算 SUV 指标与融合图；PET 须已换算为 SUV 且与 CT 同一网格。"""
     try:
-        from .registration import generate_synthetic_pet_ct_pair, compute_pet_metrics_and_fusion
+        from .registration import compute_pet_metrics_and_fusion
     except (ImportError, ValueError):
-        from registration import generate_synthetic_pet_ct_pair, compute_pet_metrics_and_fusion
+        from registration import compute_pet_metrics_and_fusion
 
-    ct_vol, pet_vol, _ = generate_synthetic_pet_ct_pair(shape=(36, 96, 96), spacing=(2.0, 1.0, 1.0))
-    return compute_pet_metrics_and_fusion(
-        ct_volume=ct_vol,
-        pet_volume=pet_vol,
-        spacing=(2.0, 1.0, 1.0),
-        suv_threshold=req.suv_threshold or 2.5,
-        key_slice_index=req.key_slice_index,
-        alpha=req.alpha or 0.55
-    )
+    ct_vol, ct_sp, _ = _load_required("CT 影像", req.ct_file_path, req.ct_sample_id)
+    pet_vol, pet_sp, _ = _load_required("PET 影像", req.pet_file_path, req.pet_sample_id)
+    if not req.pet_values_are_suv:
+        raise HTTPException(status_code=400, detail="PET 体素值须已换算为 SUV；请确认后设置 pet_values_are_suv=true")
+    if ct_vol.shape != pet_vol.shape or not np.allclose(ct_sp, pet_sp, atol=1e-3):
+        raise HTTPException(status_code=400, detail=f"CT {ct_vol.shape} 与 PET {pet_vol.shape} 体素网格不一致；请先配准并重采样到同一网格")
+    roi_mask = None
+    if req.roi_mask_file_path or req.roi_mask_sample_id:
+        roi_vol, _, _ = _load_required("ROI 掩膜", req.roi_mask_file_path, req.roi_mask_sample_id)
+        if roi_vol.shape != ct_vol.shape:
+            raise HTTPException(status_code=400, detail=f"ROI 掩膜 {roi_vol.shape} 与 CT {ct_vol.shape} 网格不一致")
+        roi_mask = roi_vol > 0.5
+    elif not req.physiological_exclusion_note:
+        raise HTTPException(status_code=400, detail="需提供 ROI 掩膜，或说明 PET 体积已如何排除生理性摄取 (physiological_exclusion_note)")
+    metadata: Dict[str, Any] = {"Units": "SUV"}
+    if req.tracer:
+        metadata["tracer"] = req.tracer
+    try:
+        return compute_pet_metrics_and_fusion(
+            ct_volume=ct_vol,
+            pet_volume=pet_vol,
+            spacing=tuple(ct_sp),
+            suv_threshold=req.suv_threshold or 2.5,
+            key_slice_index=req.key_slice_index,
+            alpha=req.alpha or 0.55,
+            roi_mask=roi_mask,
+            physiological_exclusion_note=req.physiological_exclusion_note,
+            metadata=metadata,
+        )
+    except Exception as e:
+        raise_http(e, "PET-CT 计算失败")
 
 @app.post("/api/v1/rtstruct/delineate")
 def run_rtstruct_delineation_endpoint(req: RtStructRequest = Body(...)):
-    """Delineates GTV, CTV, PTV radiotherapy targets with anatomical barrier clipping."""
+    """以调用方给出的 GTV 掩膜为起点做 CTV/PTV 外扩；CT 与掩膜须为同一网格。"""
     try:
-        from .registration import generate_synthetic_pet_ct_pair, delineate_radiotherapy_targets
+        from .registration import delineate_radiotherapy_targets
     except (ImportError, ValueError):
-        from registration import generate_synthetic_pet_ct_pair, delineate_radiotherapy_targets
+        from registration import delineate_radiotherapy_targets
 
-    ct_vol, pet_vol, _ = generate_synthetic_pet_ct_pair(shape=(36, 96, 96), spacing=(2.0, 1.0, 1.0))
-    metabolic_mask = pet_vol >= 2.5
-    return delineate_radiotherapy_targets(
-        ct_volume=ct_vol,
-        metabolic_or_lesion_mask=metabolic_mask,
-        spacing=(2.0, 1.0, 1.0),
-        ctv_margin_mm=req.ctv_margin_mm or 6.0,
-        ptv_margin_mm=req.ptv_margin_mm or 4.0,
-        key_slice_index=req.key_slice_index
-    )
+    ct_vol, ct_sp, _ = _load_required("CT 影像", req.file_path, req.sample_id)
+    mask_vol, _, _ = _load_required("GTV 掩膜", req.gtv_mask_file_path, req.gtv_mask_sample_id)
+    if mask_vol.shape != ct_vol.shape:
+        raise HTTPException(status_code=400, detail=f"GTV 掩膜 {mask_vol.shape} 与 CT {ct_vol.shape} 网格不一致")
+    gtv = mask_vol > 0.5
+    if not np.any(gtv):
+        raise HTTPException(status_code=400, detail="GTV 掩膜为空")
+    try:
+        return delineate_radiotherapy_targets(
+            ct_volume=ct_vol,
+            metabolic_or_lesion_mask=gtv,
+            spacing=tuple(ct_sp),
+            ctv_margin_mm=req.ctv_margin_mm or 6.0,
+            ptv_margin_mm=req.ptv_margin_mm or 4.0,
+            key_slice_index=req.key_slice_index
+        )
+    except Exception as e:
+        raise_http(e, "靶区外扩失败")
 
 @app.post("/api/v1/analyze/upload")
 async def run_upload_analysis(
     file: UploadFile = File(...),
-    model_name: str = Form("bronchiectasis_mucus_analyzer"),
+    model_name: str = Form(...),
     window_preset: Optional[str] = Form(None),
     mucus_min_hu: Optional[str] = Form(None),
     mucus_max_hu: Optional[str] = Form(None),
     ham_threshold_hu: Optional[str] = Form(None),
     bar_cutoff: Optional[str] = Form(None),
 ):
-    """Uploads a .nii, .nii.gz, .dcm, or .zip (DICOM series archive) file and executes MONAI inference."""
+    """上传 .nii/.nii.gz/.dcm/.zip/.tar.gz 影像并运行指定模型（model_name 必填）。"""
+    try:
+        return await _run_upload_analysis(file, model_name, window_preset, mucus_min_hu, mucus_max_hu, ham_threshold_hu, bar_cutoff)
+    except Exception as e:
+        raise_http(e, "分析失败")
+
+
+async def _run_upload_analysis(file, model_name, window_preset, mucus_min_hu, mucus_max_hu, ham_threshold_hu, bar_cutoff):
     fn_lower = file.filename.lower() if file.filename else ""
     content = await file.read()
 
@@ -1302,9 +1047,9 @@ class DicomAnonymizeRequest(BaseModel):
     retain_dates: Optional[bool] = False
 
 class AsyncTaskSubmitRequest(BaseModel):
-    sample_id: Optional[str] = "chest_lung_ct"
+    sample_id: Optional[str] = None
     file_path: Optional[str] = None
-    model_name: Optional[str] = "lung_nodule_segmenter"
+    model_name: Optional[str] = None
     window_preset: Optional[str] = None
     mucus_min_hu: Optional[float] = 10.0
     mucus_max_hu: Optional[float] = 75.0
@@ -1393,9 +1138,13 @@ async def anonymize_dicom_endpoint(
 
 @app.post("/api/v1/tasks/analyze")
 def submit_async_analysis(req: AsyncTaskSubmitRequest = Body(...)):
-    """Submits a heavy 3D DICOM inference task to the background queue, returning immediate task_id."""
-    target_id = req.file_path or req.sample_id or "chest_lung_ct"
-    
+    """提交后台分析任务；影像来源与模型均须由调用方给出。"""
+    target_id = req.file_path or req.sample_id
+    if not target_id:
+        raise HTTPException(status_code=400, detail="缺少影像来源：请提供 file_path 或 sample_id")
+    if not req.model_name:
+        raise HTTPException(status_code=400, detail="缺少 model_name：请指定要运行的分析模型")
+
     def _execute(progress_cb=None):
         if progress_cb:
             progress_cb(TaskStage.EXTRACTING, 20)
@@ -1405,7 +1154,8 @@ def submit_async_analysis(req: AsyncTaskSubmitRequest = Body(...)):
         res = engine.analyze_volume(
             vol,
             spacing=spacing,
-            model_name=req.model_name or "lung_nodule_segmenter",
+            model_name=req.model_name,
+            modality=modality,
             window_preset=req.window_preset,
             mucus_min_hu=req.mucus_min_hu,
             mucus_max_hu=req.mucus_max_hu,
@@ -1418,7 +1168,7 @@ def submit_async_analysis(req: AsyncTaskSubmitRequest = Body(...)):
 
     task = task_manager.submit_task(
         runner_fn=_execute,
-        model_name=req.model_name or "lung_nodule_segmenter",
+        model_name=req.model_name,
         input_source=target_id
     )
     return {
@@ -1452,18 +1202,6 @@ def cancel_task_endpoint(task_id: str):
     if not success:
         raise HTTPException(status_code=400, detail=f"无法取消任务 '{task_id}' (已完成或不存在)")
     return {"status": "cancelled", "task_id": task_id}
-
-@app.get("/api/v1/clinical/audit-cases")
-def audit_cases_endpoint(cases_dir: Optional[str] = "/Users/huizhao/Downloads/medical_imaging_test_cases"):
-    """
-    Executes full clinical benchmark audit across all 4 downloaded test cases,
-    validating physiological plausibility, anatomical scan boundaries,
-    and SaMD clinical decision support compliance against doctor feedback.
-    """
-    try:
-        return run_all_clinical_audits(cases_root_dir=cases_dir or "/Users/huizhao/Downloads/medical_imaging_test_cases")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"临床审计执行异常: {str(e)}")
 
 def start_server():
     port = int(os.environ.get("PORT", "8004"))

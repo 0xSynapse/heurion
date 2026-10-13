@@ -125,20 +125,14 @@ def detect_pulmonary_vessel_cross_section(
     search_radius_mm: float = 18.0
 ) -> Dict[str, Any]:
     """
-    Rigorously detects whether a segmented structure in thoracic CT is a cross-section
-    of a normal pulmonary blood vessel rather than a pathological solitary nodule.
+    启发式判断分割目标是否更像肺血管横截面而非孤立结节（未经临床验证，仅作提示）。
 
-    Radiological Criteria (Fleischner Society & ACR Lung-RADS v2022 Normal Anatomy Exclusion):
-    1. Caliber: In-plane diameter <= 7.0 mm (typical peripheral branching vessels 2-6mm).
-    2. Companion Bronchus (Signet-Ring Sign / 印戒征):
-       In normal lung anatomy, pulmonary arteries travel in parallel with a companion bronchus.
-       In cross-section, this produces the classic "Signet-Ring" appearance: the opaque artery dot
-       is immediately adjacent (within 1.2mm to 8.5mm) to a round patent air lumen (HU <= -780) of comparable caliber.
-    3. Longitudinal Z-Axis Continuity & Branching:
-       Unlike isolated nodules (which terminate in lung air within 2-4 slices), blood vessels continue
-       continuously across adjacent slices (Z-span) and merge into the pulmonary vascular tree.
-    4. Tubularity / Branching Tree Connection:
-       Connects towards the hilar vascular trunk or displays 3D continuous tubular flow.
+    判据（均为本实现自定的阈值，不是 Fleischner / Lung-RADS 的条文）：
+    1. 关键层等效直径 <= 9.5 mm 才进入判定；
+    2. 关键层上距中心 1.2~8.5 mm 内存在面积 2~45 mm² 的含气腔（<= -780 HU），视为可能的伴行支气管；
+    3. 以中心为种子的 -150~250 HU 软组织连通域在 z 向跨度 >= 7.5 mm 或触及搜索框上下界；
+    4. 该连通域触及搜索框面内边界且等效直径 <= 7.5 mm。
+    任一判据成立即标记 is_vessel，reasons 列出实际触发的判据与测值。
     """
     dz, dy, dx = [float(s) for s in spacing]
     is_lung = float(np.min(volume)) < -500.0 and float(np.mean(volume)) < -150.0
@@ -264,38 +258,33 @@ def calculate_subsolid_metrics(
     key_slice_idx: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Calculates dual-channel subsolid / GGO quantitative metrics according to
-    ACR Lung-RADS v2022 and Fleischner Society guidelines:
-    1. Total lesion boundary (longest diameter, volume)
-    2. Solid core boundary (longest diameter d_solid, solid core volume)
-    3. Consolidation-to-Tumor Ratio (CTR = d_solid / d_total)
-    4. Categorization:
-       - pure_ggo (纯磨玻璃结节, pGGN): d_solid == 0
-       - part_solid (部分实性/亚实性结节, PSN): 0 < CTR < 0.8
-       - solid (实性结节, SN): CTR >= 0.8 or predominantly solid
-    5. Lung-RADS v2022 risk stratification based on d_solid and total diameter
-    6. CT slice thickness quality control (QC) & thin-slice HRCT recommendation
-    7. Fleischner 2024 / WHO 2021 pathology invasiveness risk stratification
+    结节整体与实性成分的双通道测量（只给测量值，不做 Lung-RADS 分类、不给病理倾向与随访建议）：
+    1. 整体边界：关键层最大长径、垂直短径、体积；
+    2. 实性成分：掩膜内 >= solid_hu_threshold（默认 -150 HU，本实现自定阈值）的体素，测其关键层长径与体积；
+    3. CTR = 实性成分长径 / 整体长径；
+    4. 按测量值的密度分型（启发式）：无实性体素为 pure_ggo；CTR >= 0.8 或实性体素占 >= 75% 为 solid；否则 part_solid；
+    5. 层厚质控说明。
+    Lung-RADS 分类依赖随访对比、病灶位置等单次 CT 测量之外的信息，这里不输出分类，由使用者按原始指南自行判读。
     """
     dz, dy, dx = [float(s) for s in spacing]
     slice_thickness_mm = round(dz, 2)
     if slice_thickness_mm <= 1.5:
         qc_tier = "optimal"
-        qc_badge = "HRCT 薄层标准"
-        qc_desc = "薄层高分辨率扫描 (≤1.5mm)，满足 Fleischner 与 Lung-RADS v2022 精准测定与实性核心界定标准"
+        qc_badge = "薄层"
+        qc_desc = f"薄层扫描 ({slice_thickness_mm}mm ≤ 1.5mm)"
         qc_warning = None
     elif slice_thickness_mm <= 2.5:
         qc_tier = "acceptable"
         qc_badge = "常规层厚"
-        qc_desc = f"常规切片层厚 ({slice_thickness_mm}mm)，具有良好临床参考价值"
+        qc_desc = f"常规切片层厚 ({slice_thickness_mm}mm)"
         qc_warning = None
     else:
         qc_tier = "thick_slice_warning"
-        qc_badge = "厚层质控警示"
+        qc_badge = "厚层"
         qc_desc = f"扫描层厚偏厚 ({slice_thickness_mm}mm > 2.5mm)"
         qc_warning = (
-            f"当前扫描层厚较厚 ({slice_thickness_mm}mm)，部分容积效应可能导致磨玻璃及亚实性结节微小实性核心 (d_solid) 测值偏差，"
-            f"建议行薄层 HRCT (≤1.25mm) 靶扫描复查以明确病灶侵袭性。"
+            f"当前扫描层厚较厚 ({slice_thickness_mm}mm)，部分容积效应可能使磨玻璃成分与微小实性成分的测值产生偏差；"
+            f"薄层 HRCT (≤1.25mm) 重建可减小该偏差。"
         )
 
     quality_control = {
@@ -310,25 +299,13 @@ def calculate_subsolid_metrics(
 
     total_metrics = calculate_recist_metrics(mask, spacing=spacing)
     if not total_metrics.get("has_lesion", False) or total_metrics.get("longest_diameter_mm", 0.0) == 0.0:
+        # 掩膜为空（或关键层不足两个体素）：没有可测目标，测量值置空
         total_metrics["nodule_type"] = "none"
-        total_metrics["nodule_type_zh"] = "无活动性病灶"
-        total_metrics["solid_core_diameter_mm"] = 0.0
-        total_metrics["solid_core_volume_cm3"] = 0.0
+        total_metrics["nodule_type_zh"] = "掩膜内无可测目标"
+        total_metrics["solid_core_diameter_mm"] = None
+        total_metrics["solid_core_volume_cm3"] = None
         total_metrics["solid_core_caliper"] = None
-        total_metrics["consolidation_tumor_ratio"] = 0.0
-        total_metrics["lung_rads"] = {
-            "category": "1",
-            "name": "Lung-RADS 1 类",
-            "description": "阴性表现 (双肺未见活动性结节或明显占位)",
-            "recommendation": "常规年度低剂量 CT (LDCT) 筛查"
-        }
-        total_metrics["pathology_risk"] = {
-            "risk_level": "none",
-            "risk_level_en": "None",
-            "tendency": "未见占位性病变",
-            "tendency_en": "No Lesion Detected",
-            "rationale": "双肺实质未见确切活动性结节或占位。"
-        }
+        total_metrics["consolidation_tumor_ratio"] = None
         total_metrics["quality_control"] = quality_control
         return total_metrics
 
@@ -337,11 +314,8 @@ def calculate_subsolid_metrics(
     solid_count = int(np.sum(solid_voxels))
 
     total_ld = total_metrics["longest_diameter_mm"]
-    total_vol = total_metrics["total_volume_cm3"]
 
-    # 0. Normal Anatomical Structure Exclusion: Pulmonary Vessel Cross-Section Filter
-    # In accordance with Fleischner Society & ACR Lung-RADS v2022 guidelines,
-    # normal anatomical structures (vessels, bones, pleura) must NOT be misclassified as lung nodules.
+    # 启发式血管截面判定（见 detect_pulmonary_vessel_cross_section）
     target_slice = key_slice_idx if key_slice_idx is not None else total_metrics.get("key_slice_index")
     vessel_check = detect_pulmonary_vessel_cross_section(
         volume=volume,
@@ -350,32 +324,23 @@ def calculate_subsolid_metrics(
         key_slice_idx=target_slice
     )
     if vessel_check.get("is_vessel", False):
-        reasons_str = "，".join(vessel_check.get("reasons", ["伴行支气管印戒征", "3D管状连续延伸"]))
+        # 判为疑似血管截面：不做结节测量（实性成分、CTR、密度分型均不输出），
+        # 掩膜本身的几何测量保留，供叠加图与人工复核
         total_metrics["is_vessel"] = True
         total_metrics["vessel_info"] = vessel_check
-        total_metrics["nodule_type"] = "normal_vessel"
-        total_metrics["nodule_type_zh"] = "正常肺血管截面 (非结节)"
-        total_metrics["solid_core_diameter_mm"] = total_ld
-        total_metrics["solid_core_volume_cm3"] = total_vol
-        total_metrics["solid_core_caliper"] = total_metrics.get("caliper_longest")
-        total_metrics["consolidation_tumor_ratio"] = 1.0
-        total_metrics["lung_rads"] = {
-            "category": "not_applicable",
-            "name": "正常解剖结构 (非肺结节)",
-            "description": f"正常肺血管分支断面 (管径 {total_ld}mm，{reasons_str})",
-            "recommendation": "确认为正常肺血管解剖投影，严格排除于肺结节范畴，无需进行 Lung-RADS 随访或过度复查"
-        }
-        total_metrics["pathology_risk"] = {
-            "risk_level": "none",
-            "risk_level_en": "None (Normal Vasculature)",
-            "tendency": "正常肺血管分支 (伴行动脉/静脉)",
-            "tendency_en": "Normal Pulmonary Vasculature",
-            "rationale": f"该高密度点位于支气管血管束，经 3D 拓扑分析见纵向管状延伸与伴行气道 ({reasons_str})，确认为正常血管横截面，恶性风险为零。"
-        }
+        total_metrics["nodule_type"] = "suspected_vessel"
+        total_metrics["nodule_type_zh"] = "疑似血管截面，未做结节测量"
+        total_metrics["solid_core_diameter_mm"] = None
+        total_metrics["solid_core_volume_cm3"] = None
+        total_metrics["solid_core_caliper"] = None
+        total_metrics["consolidation_tumor_ratio"] = None
+        total_metrics["measurement_note"] = (
+            "启发式血管判定成立（" + "，".join(vessel_check.get("reasons", [])) + "），未做结节测量；该判定未经验证，需人工复核"
+        )
         total_metrics["quality_control"] = quality_control
         return total_metrics
 
-    # Attenuation statistics
+    # 掩膜内 CT 值统计
     attenuations = volume[nodule_voxels]
     mean_hu = round(float(np.mean(attenuations)), 1)
     max_hu = round(float(np.max(attenuations)), 1)
@@ -383,151 +348,31 @@ def calculate_subsolid_metrics(
 
     if solid_count == 0:
         nodule_type = "pure_ggo"
-        nodule_type_zh = "纯磨玻璃结节 (pGGN)"
+        nodule_type_zh = "纯磨玻璃密度 (掩膜内无 ≥{:.0f} HU 体素)".format(solid_hu_threshold)
         solid_ld = 0.0
         solid_vol = 0.0
         solid_caliper = None
         ctr = 0.0
-
-        if total_ld < 30.0:
-            rads = {
-                "category": "2",
-                "name": "Lung-RADS 2 类",
-                "description": f"良性外观纯磨玻璃结节 (长径 {total_ld}mm <30mm)",
-                "recommendation": "建议 12 个月后低剂量 CT (LDCT) 常规年度随访"
-            }
-        else:
-            rads = {
-                "category": "3",
-                "name": "Lung-RADS 3 类",
-                "description": f"可能良性纯磨玻璃结节 (长径 {total_ld}mm ≥30mm)",
-                "recommendation": "建议 6 个月后低剂量 CT 复查，评估病灶大小与密度改变"
-            }
-        pathology_risk = {
-            "risk_level": "low",
-            "risk_level_en": "Low",
-            "tendency": "不典型腺瘤样增生 (AAH) 或原位腺癌 (AIS) 倾向",
-            "tendency_en": "AAH / AIS Spectrum",
-            "rationale": "纯磨玻璃病变以伏壁生长为主，几乎无血管侵犯，以常规年度动态随访为主，避免过度手术。"
-        }
     else:
         solid_metrics = calculate_recist_metrics(solid_voxels.astype(np.uint8), spacing=spacing)
         solid_ld = solid_metrics["longest_diameter_mm"]
         solid_vol = solid_metrics["total_volume_cm3"]
         solid_caliper = solid_metrics.get("caliper_longest")
+        ctr = round(float(solid_ld / total_ld), 2) if total_ld > 0 else None
 
-        ctr = round(min(1.0, float(solid_ld / max(total_ld, 0.01))), 2)
-
-        if ctr >= 0.8 or solid_count >= int(0.75 * np.sum(nodule_voxels)):
+        if (ctr is not None and ctr >= 0.8) or solid_count >= int(0.75 * np.sum(nodule_voxels)):
             nodule_type = "solid"
-            nodule_type_zh = "实性结节 (Solid)"
-            if total_ld < 6.0:
-                rads = {
-                    "category": "2",
-                    "name": "Lung-RADS 2 类",
-                    "description": f"良性外观实性微小结节 (长径 {total_ld}mm <6mm)",
-                    "recommendation": "建议 12 个月后低剂量 CT 常规随访"
-                }
-                pathology_risk = {
-                    "risk_level": "low",
-                    "risk_level_en": "Low",
-                    "tendency": "良性炎性肉芽肿/错构瘤倾向",
-                    "tendency_en": "Benign Granuloma / Hamartoma",
-                    "rationale": "长径 <6mm 的微小实性结节恶性率 <1%，建议 12 个月低剂量 CT 常规随访。"
-                }
-            elif total_ld < 8.0:
-                rads = {
-                    "category": "3",
-                    "name": "Lung-RADS 3 类",
-                    "description": f"可能良性实性结节 (长径 {total_ld}mm 在 6-8mm 区间)",
-                    "recommendation": "建议 6 个月后低剂量 CT 复查"
-                }
-                pathology_risk = {
-                    "risk_level": "low_to_intermediate",
-                    "risk_level_en": "Low-to-Intermediate",
-                    "tendency": "良性结节倾向，需警惕早期实性肿瘤",
-                    "tendency_en": "Indolent / Early Tumor Potential",
-                    "rationale": "长径 6-8mm 实性结节恶性概率约 1%~2%，建议 6 个月低剂量 CT 动态对比倍增情况。"
-                }
-            elif total_ld < 15.0:
-                rads = {
-                    "category": "4A",
-                    "name": "Lung-RADS 4A 类",
-                    "description": f"中度可疑实性病灶 (长径 {total_ld}mm 在 8-15mm 区间)",
-                    "recommendation": "建议 3 个月后低剂量 CT 复查或专科评估 PET-CT"
-                }
-                pathology_risk = {
-                    "risk_level": "intermediate_high",
-                    "risk_level_en": "Intermediate-High",
-                    "tendency": "中度可疑恶性肿瘤/浸润性结节",
-                    "tendency_en": "Suspicious Malignant Nodule",
-                    "rationale": "长径 8-15mm 实性结节恶性率约 5%~15%，建议 3 个月严密复查或专科评估 PET-CT / 穿刺。"
-                }
-            else:
-                rads = {
-                    "category": "4B",
-                    "name": "Lung-RADS 4B 类",
-                    "description": f"高度恶性可疑实性病灶 (长径 {total_ld}mm ≥15mm 或实性肿块)",
-                    "recommendation": "强烈建议胸外科/呼吸介入专科急会诊，评估胸部增强 CT、穿刺活检或微创手术"
-                }
-                pathology_risk = {
-                    "risk_level": "high",
-                    "risk_level_en": "High",
-                    "tendency": "高度恶性浸润性肺癌/转移瘤可疑",
-                    "tendency_en": "Highly Suspicious Invasive Carcinoma",
-                    "rationale": "长径 ≥15mm 实性占位恶性概率高，强烈建议胸外科急会诊，结合增强 CT 与病理确诊。"
-                }
+            nodule_type_zh = "实性密度为主"
         else:
             nodule_type = "part_solid"
-            nodule_type_zh = "亚实性/混合磨玻璃结节 (Part-Solid)"
-            # Subsolid classification is dictated by solid core diameter d_solid (Lung-RADS v2022 & Fleischner 2024)
-            if solid_ld < 5.0:
-                rads = {
-                    "category": "3",
-                    "name": "Lung-RADS 3 类",
-                    "description": f"亚实性结节 (实性核心 {solid_ld}mm <5mm，总长径 {total_ld}mm，CTR {int(ctr*100)}%)",
-                    "recommendation": "建议 6 个月后低剂量 CT 复查，观察实性核心有无增大"
-                }
-                pathology_risk = {
-                    "risk_level": "intermediate_low",
-                    "risk_level_en": "Intermediate-Low",
-                    "tendency": "微浸润性腺癌 (MIA) 或原位腺癌 (AIS) 倾向",
-                    "tendency_en": "Suspected MIA / AIS",
-                    "rationale": "实性成分 <5mm，微浸润或伏壁生长为主，建议 3~6 个月薄层 HRCT 观察实性成分倍增趋势。"
-                }
-            elif solid_ld < 8.0:
-                rads = {
-                    "category": "4A",
-                    "name": "Lung-RADS 4A 类",
-                    "description": f"可疑浸润性亚实性结节 (实性核心 {solid_ld}mm 在 5-8mm，总长径 {total_ld}mm)",
-                    "recommendation": "建议 3 个月后胸部高分辨 CT (HRCT) 复查或呼吸内科专科门诊评估"
-                }
-                pathology_risk = {
-                    "risk_level": "intermediate_high",
-                    "risk_level_en": "Intermediate-High",
-                    "tendency": "早期浸润性腺癌 (IA) 可能性大",
-                    "tendency_en": "Probable Invasive Adenocarcinoma (IA)",
-                    "rationale": "实性核心达到 5~8mm，病理浸润风险显著升高，建议呼吸内科或胸外科门诊专科评估，考虑胸部增强 CT 或穿刺活检。"
-                }
-            else:
-                rads = {
-                    "category": "4B",
-                    "name": "Lung-RADS 4B 类",
-                    "description": f"高危亚实性病灶 (实性核心 {solid_ld}mm ≥8mm，浸润性腺癌高风险)",
-                    "recommendation": "强烈建议胸外科/呼吸介入专科会诊，评估 PET-CT、CT 引导下经皮肺穿刺活检或外科手术"
-                }
-                pathology_risk = {
-                    "risk_level": "high",
-                    "risk_level_en": "High",
-                    "tendency": "浸润性肺腺癌高危",
-                    "tendency_en": "High Risk Invasive Adenocarcinoma (IA)",
-                    "rationale": "实性核心 ≥8mm，浸润性及转移风险高，强烈建议胸外科急会诊，评估 PET-CT 及微创手术切除。"
-                }
+            nodule_type_zh = "部分实性 (磨玻璃与实性成分混合)"
 
-    res = {
+    return {
         **total_metrics,
         "nodule_type": nodule_type,
         "nodule_type_zh": nodule_type_zh,
+        "nodule_type_method": f"按掩膜内 CT 值阈值 ({solid_hu_threshold:.0f} HU) 与 CTR 的启发式分型，非指南定义",
+        "solid_hu_threshold": solid_hu_threshold,
         "solid_core_diameter_mm": solid_ld,
         "solid_core_volume_cm3": solid_vol,
         "solid_core_caliper": solid_caliper,
@@ -535,12 +380,9 @@ def calculate_subsolid_metrics(
         "mean_attenuation_hu": mean_hu,
         "max_attenuation_hu": max_hu,
         "min_attenuation_hu": min_hu,
-        "lung_rads": rads,
-        "pathology_risk": pathology_risk,
         "quality_control": quality_control,
         "has_lesion": True
     }
-    return res
 
 
 def calculate_volume_doubling_time(
@@ -549,92 +391,51 @@ def calculate_volume_doubling_time(
     days_interval: float
 ) -> Dict[str, Any]:
     """
-    Computes Schwartz Volume Doubling Time (VDT) and clinical proliferation risk:
-    Formula: VDT = (days_interval * ln(2)) / ln(V2 / V1)
-    
-    Clinical Risk Categories (Fleischner Society & BTS Guidelines):
-    - VDT < 400 days: Rapid aggressive proliferation (High malignancy suspicion)
-    - 400 <= VDT <= 600 days: Intermediate proliferation rate
-    - VDT > 600 days: Indolent / Slow proliferation (Typically benign or low-grade)
-    - V2 <= V1: Stable / Regressed (No progression)
+    Schwartz 体积倍增时间：VDT = (间隔天数 × ln2) / ln(V2 / V1)。
+    只输出计算值与体积变化方向，不按 VDT 区间给恶性风险判断或处置建议。
     """
     if baseline_vol_cm3 <= 0 or followup_vol_cm3 <= 0 or days_interval <= 0:
         return {
             "vdt_days": None,
-            "volume_change_cm3": round(followup_vol_cm3 - baseline_vol_cm3, 3),
+            "volume_change_cm3": None,
             "volume_change_percent": None,
             "category": "indeterminate",
-            "risk_level": "none",
-            "label": "无法计算 (数据不足或时间间隔为0)",
-            "description": "需要两次随访且有明确体积与随访间隔日期方可计算倍增时间。",
-            "clinical_alert": False,
-            "recommendation": "维持既定临床随访计划"
+            "label": "无法计算",
+            "description": "需要两次测量均为正体积且随访间隔大于 0 天方可计算倍增时间。",
         }
 
     vol_diff = round(followup_vol_cm3 - baseline_vol_cm3, 3)
     pct_change = round(((followup_vol_cm3 - baseline_vol_cm3) / baseline_vol_cm3) * 100.0, 1)
 
-    if followup_vol_cm3 <= baseline_vol_cm3:
-        if followup_vol_cm3 <= baseline_vol_cm3 * 0.75:
-            cat = "regressed"
-            label = f"体积显著缩小 (缩小 {abs(pct_change)}%)"
-            desc = "病灶体积较基线缩小 >25%，符合治疗有效或炎性吸收表现。"
-        else:
-            cat = "stable"
-            label = "体积相对稳定"
-            desc = f"病灶体积变化在标准测量误差范围内 ({pct_change}%)，未见明确增大。"
+    if followup_vol_cm3 < baseline_vol_cm3:
         return {
             "vdt_days": None,
             "volume_change_cm3": vol_diff,
             "volume_change_percent": pct_change,
-            "category": cat,
-            "risk_level": "low",
-            "label": label,
-            "description": desc,
-            "clinical_alert": False,
-            "recommendation": "按原定临床方案维持常规影像随访"
+            "category": "decreased",
+            "label": f"体积缩小 {abs(pct_change)}%",
+            "description": f"随访体积较基线缩小 {abs(pct_change)}%（{days_interval:g} 天），体积未增长，不计算倍增时间。",
+        }
+    if followup_vol_cm3 == baseline_vol_cm3:
+        return {
+            "vdt_days": None,
+            "volume_change_cm3": 0.0,
+            "volume_change_percent": 0.0,
+            "category": "unchanged",
+            "label": "体积无变化",
+            "description": "两次测量体积相同，不计算倍增时间。",
         }
 
-    # Volume increased: V2 > V1
     vdt = (days_interval * np.log(2.0)) / np.log(followup_vol_cm3 / baseline_vol_cm3)
     vdt_days = round(float(vdt), 1)
-
-    if vdt_days < 400.0:
-        return {
-            "vdt_days": vdt_days,
-            "volume_change_cm3": vol_diff,
-            "volume_change_percent": pct_change,
-            "category": "rapid_growth",
-            "risk_level": "critical_high",
-            "label": f"急速倍增 ({vdt_days}天, 恶性高危)",
-            "description": f"体积倍增时间仅 {vdt_days} 天 (<400天，体积增大 +{pct_change}%)，符合恶性实体肿瘤快速增殖特征。",
-            "clinical_alert": True,
-            "recommendation": "强烈建议立即提交肺部肿瘤 MDT 疑难病案会诊，并由胸外科评估穿刺活检或胸腔镜切除手术"
-        }
-    elif vdt_days <= 600.0:
-        return {
-            "vdt_days": vdt_days,
-            "volume_change_cm3": vol_diff,
-            "volume_change_percent": pct_change,
-            "category": "intermediate_growth",
-            "risk_level": "medium_warning",
-            "label": f"中度增殖 ({vdt_days}天, 需警惕)",
-            "description": f"体积倍增时间为 {vdt_days} 天 (400-600天区间，体积增大 +{pct_change}%)，提示病灶持续缓慢增殖，不能排除浸润性病变。",
-            "clinical_alert": False,
-            "recommendation": "建议 3 个月后低剂量高分辨 CT 严密随访，若实性成分继续增大建议穿刺介入"
-        }
-    else:
-        return {
-            "vdt_days": vdt_days,
-            "volume_change_cm3": vol_diff,
-            "volume_change_percent": pct_change,
-            "category": "indolent_growth",
-            "risk_level": "low_indolent",
-            "label": f"惰性/缓慢增殖 ({vdt_days}天, 良性倾向)",
-            "description": f"体积倍增时间长达 {vdt_days} 天 (>600天，体积增大 +{pct_change}%)，多见于良性错构瘤/硬化性血管瘤或惰性原位癌。",
-            "clinical_alert": False,
-            "recommendation": "建议维持 6-12 个月常规年度低剂量 CT 随访"
-        }
+    return {
+        "vdt_days": vdt_days,
+        "volume_change_cm3": vol_diff,
+        "volume_change_percent": pct_change,
+        "category": "increased",
+        "label": f"体积增大 {pct_change}%，VDT {vdt_days} 天",
+        "description": f"随访体积较基线增大 {pct_change}%（{days_interval:g} 天），Schwartz 体积倍增时间 {vdt_days} 天。",
+    }
 
 
 def calculate_emphysema_metrics(
@@ -643,90 +444,73 @@ def calculate_emphysema_metrics(
     emphysema_hu_threshold: float = -950.0
 ) -> Dict[str, Any]:
     """
-    Calculates Low Attenuation Area (LAA%) and COPD GOLD 2024 emphysema severity metrics:
-    1. Bilateral lung volume (Liters)
-    2. Emphysema volume <= -950 HU (Liters)
-    3. LAA-950% = (V_emphysema / V_total_lung) * 100%
-    4. GOLD 2024 COPD Emphysema Index Grade:
-       - LAA < 5%: Normal / Trace
-       - 5% <= LAA < 10%: Mild (GOLD Grade 1)
-       - 10% <= LAA < 20%: Moderate (GOLD Grade 2)
-       - LAA >= 20%: Severe / Diffuse (GOLD Grade 3-4)
+    肺实质低衰减区定量（只输出量化值，不做 GOLD 分级——GOLD 依据肺功能，不能由 CT 推出）：
+    1. 双肺容积（L）：quality_assurance.segment_lungs 的阈值法肺分割（含肺内大气道）；
+    2. 低衰减区容积：肺掩膜内 <= emphysema_hu_threshold（默认 -950 HU）；
+    3. LAA% = 低衰减区容积 / 双肺容积 × 100%；
+    4. 肺掩膜内平均 CT 值与 Perc15（第 15 百分位 CT 值）。
+    肺分割失败时返回空值和原因，不给估计值。
     """
+    try:
+        from .quality_assurance import segment_lungs
+    except (ImportError, ValueError):
+        from quality_assurance import segment_lungs
+
     dz, dy, dx = [float(s) for s in spacing]
     voxel_vol_cm3 = (dz * dy * dx) / 1000.0
     voxel_vol_liters = voxel_vol_cm3 / 1000.0
-
-    # 3D lung mask (-980 to -400 HU)
-    lung_mask = (volume >= -980.0) & (volume <= -400.0)
-    total_lung_voxels = int(np.sum(lung_mask))
 
     slice_thickness_mm = round(dz, 2)
     quality_control = {
         "slice_thickness_mm": slice_thickness_mm,
         "is_thin_slice": slice_thickness_mm <= 1.5,
-        "warning": None if slice_thickness_mm <= 2.0 else f"层厚 {slice_thickness_mm}mm 偏厚，可能影响小气道低衰减区精细勾画"
+        "warning": None if slice_thickness_mm <= 2.0 else f"层厚 {slice_thickness_mm}mm 偏厚，部分容积效应会抬高小低衰减区的 CT 值，LAA% 可能偏低"
+    }
+    method = {
+        "lung_segmentation": "quality_assurance.segment_lungs（先去掉首尾不含人体的填充层）：< -400 HU 三维连通域，去除触及层面边界的体外空气，保留最大一到两个，逐层填洞（含肺内大气道）",
+        "laa_threshold_hu": emphysema_hu_threshold,
     }
 
-    if total_lung_voxels < 500:
+    # 去掉首尾不含人体（无 > -400 HU 体素）的填充层，避免肺经全空气填充层与体外空气连通而分割失败
+    body_slices = np.where(np.any(volume > -400.0, axis=(1, 2)))[0]
+    lung_mask = None
+    if body_slices.size > 0:
+        z0, z1 = int(body_slices[0]), int(body_slices[-1]) + 1
+        sub_mask = segment_lungs(volume[z0:z1], voxel_vol_cm3)
+        if sub_mask is not None:
+            lung_mask = np.zeros(volume.shape, dtype=bool)
+            lung_mask[z0:z1] = sub_mask
+    if lung_mask is None or int(np.sum(lung_mask)) == 0:
         return {
-            "total_lung_volume_liters": 0.0,
-            "emphysema_volume_liters": 0.0,
-            "laa_percent": 0.0,
-            "gold_stage": "GOLD 0",
-            "gold_grade": "indeterminate",
-            "gold_grade_zh": "未检测到有效双肺野 (数据不足)",
-            "clinical_impression": "CT 数据未能有效提取完整双肺实质，请确认扫描范围包含全胸廓。",
-            "recommendation": "CT 数据未能有效提取完整双肺实质，请确认扫描范围包含全胸廓。",
-            "mean_lung_attenuation_hu": 0.0,
+            "status": "lung_segmentation_failed",
+            "error": "未能分割出双肺（视野裁切到肺或肺与图像边界相连），不输出低衰减区定量",
+            "total_lung_volume_liters": None,
+            "emphysema_volume_liters": None,
+            "laa_percent": None,
+            "mean_lung_attenuation_hu": None,
+            "perc15_hu": None,
+            "emphysema_hu_threshold": emphysema_hu_threshold,
+            "method": method,
             "quality_control": quality_control
         }
 
-    emphysema_mask = lung_mask & (volume <= emphysema_hu_threshold)
-    emphysema_voxels = int(np.sum(emphysema_mask))
+    total_lung_voxels = int(np.sum(lung_mask))
+    lung_hu = volume[lung_mask]
+    emphysema_voxels = int(np.sum(lung_hu <= emphysema_hu_threshold))
 
     total_lung_liters = round(total_lung_voxels * voxel_vol_liters, 2)
     emphysema_liters = round(emphysema_voxels * voxel_vol_liters, 3)
-    laa_pct = round((emphysema_voxels / max(total_lung_voxels, 1)) * 100.0, 1)
-
-    mean_hu = round(float(np.mean(volume[lung_mask])), 1)
-
-    if laa_pct < 5.0:
-        gold_grade = "normal_or_trace"
-        gold_grade_zh = "正常 / 痕量低衰减区 (LAA% < 5%)"
-        gold_stage = "GOLD 0/1"
-        clinical_impression = f"双肺透亮度正常，低衰减区占比 {laa_pct}% (<5%)，未见确切弥漫性肺气肿改变。"
-        recommendation = "常规戒烟宣教与生活方式指导，无需特殊慢阻肺药物干预。"
-    elif laa_pct < 10.0:
-        gold_grade = "mild"
-        gold_grade_zh = "轻度肺气肿 (LAA% 5%~10%)"
-        gold_stage = "GOLD Grade 1"
-        clinical_impression = f"双肺实质见轻度低衰减透亮区，占全肺容积 {laa_pct}%，符合早期肺气肿或小气道功能障碍影像表现。"
-        recommendation = "建议行肺功能通气检查 (FEV1/FVC)，严格戒烟并避免粉尘接触。"
-    elif laa_pct < 20.0:
-        gold_grade = "moderate"
-        gold_grade_zh = "中度肺气肿 (LAA% 10%~20%)"
-        gold_stage = "GOLD Grade 2"
-        clinical_impression = f"双肺见广泛低衰减区 (LAA% 达 {laa_pct}%)，伴局灶肺大泡倾向，提示中度肺气肿改变。"
-        recommendation = "建议呼吸内科专科门诊就诊，结合肺功能测定评估长效支气管舒张剂吸入治疗。"
-    else:
-        gold_grade = "severe"
-        gold_grade_zh = "重度 / 弥漫性肺气肿 (LAA% ≥ 20%)"
-        gold_stage = "GOLD Grade 3-4"
-        clinical_impression = f"双肺野显著过度膨胀，广泛低衰减区破坏，LAA% 达 {laa_pct}% (体积 {emphysema_liters} L)，提示重度肺气肿并重度通气功能受损风险。"
-        recommendation = "强烈建议呼吸重症或肺康复专科就诊，全面评估肺容量、血气分析及肺减容/康复综合治疗。"
+    laa_pct = round((emphysema_voxels / total_lung_voxels) * 100.0, 1)
 
     return {
+        "status": "success",
         "total_lung_volume_liters": total_lung_liters,
         "emphysema_volume_liters": emphysema_liters,
         "laa_percent": laa_pct,
-        "gold_grade": gold_grade,
-        "gold_grade_zh": gold_grade_zh,
-        "gold_stage": gold_stage,
-        "clinical_impression": clinical_impression,
-        "recommendation": recommendation,
-        "mean_lung_attenuation_hu": mean_hu,
+        "mean_lung_attenuation_hu": round(float(np.mean(lung_hu)), 1),
+        "perc15_hu": round(float(np.percentile(lung_hu, 15)), 1),
         "emphysema_hu_threshold": emphysema_hu_threshold,
+        "findings": f"双肺容积 {total_lung_liters} L，≤{emphysema_hu_threshold:.0f} HU 低衰减区 {emphysema_liters} L，占 {laa_pct}%。",
+        "method": method,
         "quality_control": quality_control
     }
-

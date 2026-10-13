@@ -198,14 +198,16 @@ def generate_synthetic_whole_body_ct(
 def analyze_whole_body_ct(
     volume: np.ndarray,
     spacing: Tuple[float, float, float] = (1.5, 0.8, 0.8),
-    patient_sex: str = "M",
-    patient_height_m: float = 1.72,
-    patient_weight_kg: float = 68.0,
+    patient_sex: Optional[str] = None,
+    patient_height_m: Optional[float] = None,
+    patient_weight_kg: Optional[float] = None,
     l3_slice_index: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Executes comprehensive TotalSegmentator whole-body multi-organ segmentation
-    and L3 level sarcopenia / body composition biomarker extraction.
+    HU 阈值法体成分分析（非 TotalSegmentator 神经网络模型）：
+    - 骨骼肌 / 内脏脂肪 / 皮下脂肪按 HU 区间划分；未给 L3 层号时取下段骨像素最多的一层（启发式选层，未做椎体识别）。
+    - SMI 需要身高、肌少症判定需要性别；缺失时不代入缺省值，相应结果为空。
+    - 阈值法分不开肝、脾、肾，不输出这些器官体积；肺容积用质控模块的双肺分割计算。
     """
     t0 = time.time()
     z_dim, y_dim, x_dim = volume.shape
@@ -264,42 +266,36 @@ def analyze_whole_body_ct(
 
     # Muscle Radiodensity / Attenuation (Mean HU at L3, indicates Myosteatosis)
     muscle_hu_vals = l3_slice_ct[l3_muscle]
-    muscle_attenuation_mean_hu = round(float(np.mean(muscle_hu_vals)), 1) if len(muscle_hu_vals) > 0 else 42.0
+    muscle_attenuation_mean_hu: Optional[float] = round(float(np.mean(muscle_hu_vals)), 1) if len(muscle_hu_vals) > 0 else None
 
-    # Skeletal Muscle Index (SMI = SMA / Height^2 in cm²/m²)
-    height_sq = max(patient_height_m * patient_height_m, 1.0)
-    smi_val = round(sma_cm2 / height_sq, 2)
+    # SMI = SMA / 身高²（cm²/m²）；没有身高就不计算
+    smi_val: Optional[float] = None
+    if patient_height_m is not None and patient_height_m > 0:
+        smi_val = round(sma_cm2 / (patient_height_m * patient_height_m), 2)
 
-    # Prado & Martin Consensus Sarcopenia Criteria
-    is_male = patient_sex.upper().startswith("M")
-    sarcopenia_cutoff = 52.4 if is_male else 38.5
-    is_sarcopenic = bool(smi_val < sarcopenia_cutoff)
-    sarcopenia_risk = "肌少症阳性 (Sarcopenia Positive)" if is_sarcopenic else "骨骼肌量正常 (Normal Muscularity)"
+    # 不由平台判定肌少症：切点因人群而异，由研究者在分析时自行选择，这里只输出 SMI 数值
+    is_sarcopenic: Optional[bool] = None
+    sarcopenia_cutoff: Optional[float] = None
+    sarcopenia_risk = "未判定（平台只提供 SMI 数值，切点由研究者选择）"
 
-    # Myosteatosis (Muscle Fat Infiltration, cutoff < 41 HU in normal BMI or < 33 in overweight)
-    is_myosteatotic = bool(muscle_attenuation_mean_hu < 40.0)
+    # 肌脂肪浸润：肌肉平均 HU < 40（未按 BMI 分层，近似判断）
+    is_myosteatotic: Optional[bool] = bool(muscle_attenuation_mean_hu < 40.0) if muscle_attenuation_mean_hu is not None else None
 
-    # Sarcopenic Obesity risk: High VAT + Low Muscle Mass
-    sarcopenic_obesity = bool(is_sarcopenic and (vat_cm2 > 100.0 or vat_to_sat_ratio > 1.0))
+    sarcopenic_obesity: Optional[bool] = None
 
-    # 4. Multi-Organ 3D Volumetry (TotalSegmentator Groupings)
-    # Estimate 3D volumes of major parenchymal organs based on standard HU distributions
-    liver_voxels = int(np.sum((volume >= 40.0) & (volume <= 125.0) & body_mask & (~bone_mask)))
-    spleen_voxels = int(np.sum((volume >= 35.0) & (volume <= 85.0) & body_mask & (~bone_mask)))
-    kidneys_voxels = int(np.sum((volume >= 30.0) & (volume <= 90.0) & body_mask & (~bone_mask)))
-    lungs_voxels = int(np.sum((volume <= -400.0) & body_mask))
-    bones_voxels = int(np.sum(bone_mask))
-
-    # Scaling to realistic anatomical volumes based on body size
-    liver_vol_cm3 = round(min(max(liver_voxels * voxel_vol_cm3 * 0.35, 1150.0), 2200.0), 1)
-    spleen_vol_cm3 = round(min(max(spleen_voxels * voxel_vol_cm3 * 0.08, 120.0), 1200.0), 1)
-    kidneys_vol_cm3 = round(min(max(kidneys_voxels * voxel_vol_cm3 * 0.06, 220.0), 400.0), 1)
-    lungs_vol_cm3 = round(min(max(lungs_voxels * voxel_vol_cm3 * 0.85, 2800.0), 5200.0), 1)
-    bones_vol_cm3 = round(bones_voxels * voxel_vol_cm3, 1)
-
-    # Splenomegaly & Hepatomegaly evaluation
-    splenomegaly = bool(spleen_vol_cm3 > 350.0)
-    hepatomegaly = bool(liver_vol_cm3 > 1800.0)
+    # 4. 器官体积：阈值法无法区分肝、脾、肾，不输出；肺用双肺分割，骨用 >200 HU 阈值
+    try:
+        from .quality_assurance import segment_lungs
+    except (ImportError, ValueError):
+        from quality_assurance import segment_lungs
+    lung_mask = segment_lungs(volume, voxel_vol_cm3)
+    lungs_vol_cm3: Optional[float] = round(float(np.sum(lung_mask) * voxel_vol_cm3), 1) if lung_mask is not None else None
+    bones_vol_cm3 = round(int(np.sum(bone_mask)) * voxel_vol_cm3, 1)
+    liver_vol_cm3: Optional[float] = None
+    spleen_vol_cm3: Optional[float] = None
+    kidneys_vol_cm3: Optional[float] = None
+    splenomegaly: Optional[bool] = None
+    hepatomegaly: Optional[bool] = None
 
     # 5. Render key L3 axial slice PNG with multi-tissue HUD and color-coded overlays
     png_bytes = render_totalsegmentator_l3_slice(
@@ -363,19 +359,19 @@ def analyze_whole_body_ct(
         "volume_dimensions": list(volume.shape),
         "voxel_spacing_mm": list(spacing),
         "l3_vertebra_slice_index": l3_slice_index,
+        "method": "HU 阈值法体成分分析，非 TotalSegmentator 神经网络模型；L3 层为启发式选层（下段骨像素最多的一层），未做椎体识别",
+        "data_warnings": [w for w in [
+            None if patient_height_m else "缺身高：未计算 SMI",
+                    ] if w],
         "body_composition": {
             "skeletal_muscle_area_cm2": sma_cm2,
             "skeletal_muscle_index_cm2_m2": smi_val,
-            "smi_cutoff": sarcopenia_cutoff,
-            "sarcopenia_detected": is_sarcopenic,
-            "sarcopenia_status": sarcopenia_risk,
             "myosteatosis_detected": is_myosteatotic,
             "muscle_radiodensity_hu": muscle_attenuation_mean_hu,
             "visceral_adipose_cm2": vat_cm2,
             "subcutaneous_adipose_cm2": sat_cm2,
             "total_adipose_cm2": tat_cm2,
             "vat_to_sat_ratio": vat_to_sat_ratio,
-            "sarcopenic_obesity": sarcopenic_obesity,
         },
         "organ_volumetry_cm3": {
             "liver": liver_vol_cm3,
@@ -385,6 +381,7 @@ def analyze_whole_body_ct(
             "skeleton_bones": bones_vol_cm3,
             "splenomegaly": splenomegaly,
             "hepatomegaly": hepatomegaly,
+            "note": "肝、脾、肾体积需真实器官分割模型，阈值法不计算；骨为 >200 HU 阈值体积（含钙化与对比剂）",
         },
         "key_slice_png_base64": png_to_base64(png_bytes),
         "key_slice_png_size_bytes": len(png_bytes),
@@ -401,13 +398,13 @@ def render_totalsegmentator_l3_slice(
     l3_index: int,
     total_slices: int,
     sma_cm2: float,
-    smi_val: float,
+    smi_val: Optional[float],
     vat_cm2: float,
     sat_cm2: float,
     vat_to_sat_ratio: float,
-    muscle_hu: float,
+    muscle_hu: Optional[float],
     sarcopenia_risk: str,
-    is_sarcopenic: bool,
+    is_sarcopenic: Optional[bool],
     pixel_spacing_mm: float
 ) -> bytes:
     """
@@ -442,14 +439,14 @@ def render_totalsegmentator_l3_slice(
     # Top-Left HUD Header
     hud_bg = [(8, 8), (280, 112)]
     draw.rounded_rectangle(hud_bg, radius=4, fill=(15, 23, 42, 210), outline=(51, 65, 85, 255))
-    draw.text((16, 12), "TotalSegmentator L3 Body Composition", font=font_bold, fill=(241, 245, 249, 255))
-    draw.text((16, 28), f"Level: L3 Lumbar (#{l3_index}/{total_slices})", font=font_reg, fill=(148, 163, 184, 255))
+    draw.text((16, 12), "Body Composition (HU threshold)", font=font_bold, fill=(241, 245, 249, 255))
+    draw.text((16, 28), f"Slice: #{l3_index}/{total_slices} (heuristic L3)", font=font_reg, fill=(148, 163, 184, 255))
     draw.text((16, 44), f"Skeletal Muscle (SMA): {sma_cm2} cm2", font=font_reg, fill=(248, 113, 113, 255))
-    draw.text((16, 60), f"Muscle Index (SMI): {smi_val} cm2/m2", font=font_reg, fill=(251, 146, 60, 255))
+    smi_text = f"{smi_val} cm2/m2" if smi_val is not None else "n/a (height missing)"
+    draw.text((16, 60), f"Muscle Index (SMI): {smi_text}", font=font_reg, fill=(251, 146, 60, 255))
     draw.text((16, 76), f"Visceral Fat (VAT): {vat_cm2} cm2 (VAT/SAT: {vat_to_sat_ratio})", font=font_reg, fill=(250, 204, 21, 255))
-    status_color = (239, 68, 68, 255) if is_sarcopenic else (52, 211, 153, 255)
-    clean_risk = sanitize_text(sarcopenia_risk, supports_cjk)
-    draw.text((16, 92), f"Status: {clean_risk}", font=font_cjk, fill=status_color)
+    status_color = (239, 68, 68, 255) if is_sarcopenic else ((52, 211, 153, 255) if is_sarcopenic is False else (148, 163, 184, 255))
+    draw.text((16, 92), "Research use only, no diagnosis", font=font_reg, fill=(148, 163, 184, 255))
 
     # Top-Right Color Legend
     legend_bg = [(w - 145, 8), (w - 8, 92)]
@@ -486,72 +483,67 @@ def generate_totalsegmentator_report_markdown(
     volume_shape: Tuple[int, int, int],
     spacing: Tuple[float, float, float],
     l3_index: int,
-    patient_sex: str,
-    height_m: float,
-    weight_kg: float,
+    patient_sex: Optional[str],
+    height_m: Optional[float],
+    weight_kg: Optional[float],
     sma_cm2: float,
-    smi_val: float,
-    sarcopenia_cutoff: float,
+    smi_val: Optional[float],
+    sarcopenia_cutoff: Optional[float],
     sarcopenia_risk: str,
-    is_sarcopenic: bool,
-    is_myosteatotic: bool,
-    sarcopenic_obesity: bool,
+    is_sarcopenic: Optional[bool],
+    is_myosteatotic: Optional[bool],
+    sarcopenic_obesity: Optional[bool],
     vat_cm2: float,
     sat_cm2: float,
     tat_cm2: float,
     vat_to_sat_ratio: float,
-    muscle_hu: float,
-    liver_vol_cm3: float,
-    spleen_vol_cm3: float,
-    kidneys_vol_cm3: float,
-    lungs_vol_cm3: float,
-    bones_vol_cm3: float,
-    splenomegaly: bool,
-    hepatomegaly: bool
+    muscle_hu: Optional[float],
+    liver_vol_cm3: Optional[float],
+    spleen_vol_cm3: Optional[float],
+    kidneys_vol_cm3: Optional[float],
+    lungs_vol_cm3: Optional[float],
+    bones_vol_cm3: Optional[float],
+    splenomegaly: Optional[bool],
+    hepatomegaly: Optional[bool]
 ) -> str:
-    """Formats full markdown analysis report with tables and risk stratification."""
-    sarc_badge = "**肌少症阳性**" if is_sarcopenic else "**骨骼肌储备正常**"
-    steat_badge = "**肌脂肪浸润 (Myosteatosis)**" if is_myosteatotic else "**肌质密度正常**"
-    obesity_badge = "**肌少性肥胖风险 (Sarcopenic Obesity)**" if sarcopenic_obesity else "**脂肪分布均衡**"
+    """生成体成分分析报告（Markdown）。缺失项写「未测得 / 未评估」，不代入典型值。"""
+    def fmt(v: Optional[float], unit: str = "") -> str:
+        return f"`{v}{(' ' + unit) if unit else ''}`" if v is not None else "未测得"
 
-    return f"""### TotalSegmentator 全身体素 104 类解剖分割与肌少症分析报告
+    sex_text = patient_sex if patient_sex else "未提供"
+    height_text = f"{height_m}m" if height_m else "未提供"
+    weight_text = f"{weight_kg}kg" if weight_kg else "未提供"
+    cutoff_text = f"Prado 切点: {sarcopenia_cutoff} cm²/m²" if sarcopenia_cutoff is not None else "缺性别，未取切点"
+    steat_text = "未测得" if is_myosteatotic is None else ("提示肌脂肪浸润 (<40 HU)" if is_myosteatotic else "肌肉密度未见降低")
+    obesity_text = "未评估" if sarcopenic_obesity is None else ("提示肌少性肥胖" if sarcopenic_obesity else "未见肌少性肥胖")
 
-- **推理引擎**: `MONAI TotalSegmentator + PyTorch` ({accelerator}, 耗时: `{elapsed_sec}s`)
-- **体素维度**: `{volume_shape[0]} 层 × {volume_shape[1]} × {volume_shape[2]}` (层厚: `{spacing[0]}mm`, 体素间距: `{spacing[1]} × {spacing[2]}mm`)
-- **定位基准**: 第三腰椎 (L3 椎体层面: `#{l3_index}`) | 性别: `{patient_sex}` | 身高: `{height_m}m` | 体重: `{weight_kg}kg`
+    return f"""### 体成分分析报告（HU 阈值法）
 
----
+> 方法说明：本结果由 HU 阈值划分骨骼肌、内脏脂肪、皮下脂肪得到，**不是 TotalSegmentator 神经网络分割**；L3 层为启发式选层（下段骨像素最多的一层），未做椎体识别，请人工核对层面。仅供科研参考。
 
-#### 1. L3 层面骨骼肌质量与肌少症 (Sarcopenia) 定量评估
+- **计算设备**: `{accelerator}`（耗时 `{elapsed_sec}s`）
+- **体素维度**: `{volume_shape[0]} 层 × {volume_shape[1]} × {volume_shape[2]}`（层厚 `{spacing[0]}mm`，像素间距 `{spacing[1]} × {spacing[2]}mm`）
+- **分析层面**: `#{l3_index}`（启发式 L3） | 性别: {sex_text} | 身高: {height_text} | 体重: {weight_text}
 
-| 生物标志物 (Biomarker) | 实测数值 | 临床参考阈值 | 风险状态分层 |
-| :--- | :--- | :--- | :--- |
-| **骨骼肌总面积 (SMA)** | `{sma_cm2} cm²` | 男性基线 > 130 cm² | {sarc_badge} |
-| **骨骼肌质量指数 (SMI)** | **`{smi_val} cm²/m²`** | **Prado 诊断阈值: {sarcopenia_cutoff} cm²/m²** | **{sarcopenia_risk}** |
-| **肌肉平均衰减密度** | `{muscle_hu} HU` | 正常 > 40 HU (脂肪浸润 < 40 HU) | {steat_badge} |
-| **内脏脂肪面积 (VAT)** | `{vat_cm2} cm²` | 正常 < 100 cm² (腹型肥胖 > 100) | {'内脏脂肪超标' if vat_cm2 > 100 else '正常'} |
-| **皮下脂肪面积 (SAT)** | `{sat_cm2} cm²` | 正常参考 120-220 cm² | 正常范围 |
-| **脂肪总面积 (TAT)** | `{tat_cm2} cm²` | VAT + SAT 合计容积 | 代谢综合征风险量化 |
-| **内脏/皮下脂肪比 (VAT/SAT)** | **`{vat_to_sat_ratio}`** | **切点比值: 1.0 (心血管高风险)** | {obesity_badge} |
+#### 1. 分析层面体成分
 
----
+| 指标 | 测值 | 参考 / 说明 |
+| :--- | :--- | :--- |
+| 骨骼肌面积 (SMA) | {fmt(sma_cm2, 'cm²')} | -29 ~ +150 HU |
+| 骨骼肌指数 (SMI) | {fmt(smi_val, 'cm²/m²')} | SMA / 身高²；不做肌少症判定，切点由研究者选择 |
+| 肌肉平均密度 | {fmt(muscle_hu, 'HU')} | {steat_text} |
+| 内脏脂肪面积 (VAT) | {fmt(vat_cm2, 'cm²')} | -190 ~ -30 HU，腹壁肌层以内 |
+| 皮下脂肪面积 (SAT) | {fmt(sat_cm2, 'cm²')} | -190 ~ -30 HU，腹壁肌层以外 |
+| 脂肪总面积 (TAT) | {fmt(tat_cm2, 'cm²')} | VAT + SAT |
+| VAT/SAT | {fmt(vat_to_sat_ratio)} | 内脏 / 皮下脂肪面积比 |
 
-#### 2. 多器官全景三维容积表 (TotalSegmentator Volumetry)
+#### 2. 体积
 
-| 解剖器官系统 | 三维容积 (cm³) | 临床生理参考范围 | 状态判定 |
-| :--- | :--- | :--- | :--- |
-| **肝脏实质 (Liver)** | `{liver_vol_cm3} cm³` | 1200 ~ 1700 cm³ | {'肝肿大 (Hepatomegaly)' if hepatomegaly else '正常'} |
-| **脾脏 (Spleen)** | `{spleen_vol_cm3} cm³` | 150 ~ 300 cm³ | {'脾肿大 (Splenomegaly)' if splenomegaly else '正常'} |
-| **双侧肾脏 (Kidneys)** | `{kidneys_vol_cm3} cm³` | 240 ~ 360 cm³ | 双肾体积对称良好 |
-| **全肺容积 (Lungs)** | `{lungs_vol_cm3} cm³` | 3200 ~ 4800 cm³ | 通气储备良好 |
-| **全身骨骼容积 (Bones)** | `{bones_vol_cm3} cm³` | 依骨质密度与骨架尺寸 | 脊柱/骨盆骨质连续完整 |
-
----
-
-#### 3. 临床科研与抗肿瘤治疗建议
-1. **恶病质 (Cachexia) 风险监测**: 本次 L3 SMI 实测值为 `{smi_val} cm²/m²` ({sarcopenia_risk})。骨骼肌减少是肿瘤化疗剂量耐受不良及术后并发症的重要独立预后因子。
-2. **肌质评估**: 骨骼肌 HU 值为 `{muscle_hu} HU`，{'提示肌纤维间脂质沉积浸润 (Myosteatosis)，肌肉收缩质量下降' if is_myosteatotic else '肌纤维密度良好，未见显著肌脂肪沉积'}。
-3. **代谢综合征与心血管风险**: VAT/SAT 比值为 `{vat_to_sat_ratio}`，{'提示明显中心型内脏脂肪蓄积，建议进行降糖降脂与心血管代谢综合管理' if vat_to_sat_ratio > 1.0 else '内脏与皮下脂肪比值正常'}。
+| 结构 | 体积 | 说明 |
+| :--- | :--- | :--- |
+| 双肺 | {fmt(lungs_vol_cm3, 'cm³')} | 阈值法双肺分割（排除体外空气） |
+| 骨 | {fmt(bones_vol_cm3, 'cm³')} | >200 HU 阈值体积，含钙化与对比剂 |
+| 肝 / 脾 / 肾 | 未计算 | 阈值法无法区分，需真实器官分割模型 |
 """
 
 

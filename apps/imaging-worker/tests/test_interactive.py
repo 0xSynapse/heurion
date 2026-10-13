@@ -73,13 +73,19 @@ def test_interactive_segment_api_endpoint():
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "success"
-    assert data["model_name"] == "vista3d_interactive_segmenter"
+    assert data["model_name"] == "interactive_region_growing"
+    assert data["engine_type"] == "rule_based"
     assert "slice_png_base64" in data
     assert data["slice_png_base64"].startswith("data:image/png;base64,")
     assert "recist_metrics" in data
     assert data["positive_prompts_count"] == 1
     assert data["negative_prompts_count"] == 0
-    assert "MONAI VISTA-3D" in data["summary_markdown"]
+    assert "HU 区域生长" in data["summary_markdown"]
+    assert "VISTA-3D 交互" not in data["summary_markdown"]
+
+    # 无提示点、无影像：如实报错
+    assert client.post("/api/v1/analyze/interactive-segment", json={"sample_id": "chest_lung_ct", "points": []}).status_code == 400
+    assert client.post("/api/v1/analyze/interactive-segment", json={"points": [{"z": 1, "y": 1, "x": 1}]}).status_code == 400
 
 
 def test_models_list_contains_advanced_architectures():
@@ -94,7 +100,7 @@ def test_models_list_contains_advanced_architectures():
 def test_interactive_segment_dual_track_modes():
     vol, gt_mask = generate_synthetic_ct_volume(shape=(32, 64, 64), spacing=(2.0, 1.0, 1.0))
     
-    # 1. Deep Semantic Geodesic Mode (Default)
+    # 1. CT 值似然 + 梯度模式（默认；旧名 "deep" 为别名，如实返回真实模式名）
     res_deep = interactive_segment_3d(
         volume=vol,
         spacing=(2.0, 1.0, 1.0),
@@ -102,7 +108,8 @@ def test_interactive_segment_dual_track_modes():
         mode="deep"
     )
     assert res_deep["status"] == "success"
-    assert res_deep["engine_mode"] == "deep"
+    assert res_deep["engine_mode"] == "hu_likelihood_gradient"
+    assert "非神经网络" in res_deep["method"]
     assert res_deep["voxel_count"] > 50
 
     # 2. Fast Heuristic EDT Mode
@@ -130,3 +137,19 @@ def test_interactive_segment_dual_track_modes():
     # Ensure mask is strictly within anatomical prior
     assert np.all((res_prior["mask"] > 0) <= prior)
 
+
+
+def test_interactive_segment_requires_prompt_points():
+    vol, _ = generate_synthetic_ct_volume(shape=(16, 32, 32), spacing=(2.0, 1.0, 1.0))
+    # 无提示点：报错，不默认取中心种子
+    with pytest.raises(ValueError):
+        interactive_segment_3d(volume=vol, spacing=(2.0, 1.0, 1.0))
+    # 只有包围盒、没有正提示点：报错
+    with pytest.raises(ValueError):
+        interactive_segment_3d(volume=vol, spacing=(2.0, 1.0, 1.0),
+                               bbox={'z_min': 0, 'z_max': 4, 'y_min': 0, 'y_max': 4, 'x_min': 0, 'x_max': 4})
+    # 坐标缺失：报错，不补中心
+    with pytest.raises(ValueError):
+        interactive_segment_3d(volume=vol, spacing=(2.0, 1.0, 1.0), points=[{'z': 8, 'y': 16, 'is_positive': True}])
+    with pytest.raises(ValueError):
+        interactive_segment_3d(volume=vol, spacing=(2.0, 1.0, 1.0), points=[{'z': 8, 'y': 16, 'x': 16}], mode="medsam")

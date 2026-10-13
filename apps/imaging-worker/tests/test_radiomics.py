@@ -70,17 +70,43 @@ def test_empty_mask_handling():
     mask = np.zeros((16, 32, 32), dtype=np.uint8)
     
     res = extract_radiomics_features(vol, mask, spacing=(1.0, 1.0, 1.0))
-    assert res["status"] == "success"
+    # ROI 为空：报错状态，不填 0
+    assert res["status"] == "error"
     assert res["lesion_voxel_count"] == 0
-    assert res["feature_groups"]["shape_3d"]["volume_cm3"] == 0.0
-    assert res["feature_groups"]["first_order"]["mean"] == 0.0
+    assert res["features_flat"] == {}
+    assert compute_first_order_features(vol, mask)["mean"] is None
+    assert compute_shape_features(mask)["sphericity"] is None
+
+
+def test_feret_diameter_deterministic_and_exact():
+    mask = np.zeros((20, 40, 40), dtype=np.uint8)
+    mask[4:16, 6:30, 10:22] = 1
+    spacing = (2.0, 0.8, 0.8)
+    a = compute_shape_features(mask, spacing=spacing)["max_3d_diameter_mm"]
+    b = compute_shape_features(mask, spacing=spacing)["max_3d_diameter_mm"]
+    expected = np.sqrt((11 * 2.0) ** 2 + (23 * 0.8) ** 2 + (11 * 0.8) ** 2)
+    assert a == b == round(float(expected), 2)
+
+
+def test_sphericity_not_clamped():
+    # 单体素立方体：球形度 = π^(1/3)·6^(2/3)/6 ≈ 0.806，按公式如实输出
+    mask = np.zeros((5, 5, 5), dtype=np.uint8)
+    mask[2, 2, 2] = 1
+    sph = compute_shape_features(mask)["sphericity"]
+    assert sph == round(float(np.pi ** (1 / 3) * 6 ** (2 / 3) / 6), 4)
+    assert "IBSI 标准" not in extract_radiomics_features(np.zeros((5, 5, 5), dtype=np.float32) + mask * 10, mask)["markdown_report"]
 
 
 def test_radiomics_api_endpoint():
     client = TestClient(app)
+    # 没有 ROI 掩膜来源：不再用 HU 阈值临时造掩膜，直接 400
+    res_no_mask = client.post("/api/v1/analyze/radiomics", json={"sample_id": "lidc_lung_nodule_ct", "num_bins": 16})
+    assert res_no_mask.status_code == 400
+
+    # 使用放射科医师标注的真实掩膜
     res = client.post("/api/v1/analyze/radiomics", json={
-        "sample_id": "chest_lung_ct",
-        "model_name": "lung_nodule_segmenter",
+        "sample_id": "lidc_lung_nodule_ct",
+        "mask_sample_id": "lidc_lung_nodule_mask",
         "num_bins": 16
     })
     assert res.status_code == 200

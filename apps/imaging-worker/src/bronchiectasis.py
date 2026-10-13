@@ -118,12 +118,11 @@ def extract_mucus_locations(
     ham_threshold_hu: float = 70.0
 ) -> Tuple[List[Dict[str, Any]], Dict[str, float], str]:
     """
-    Analyzes spatial and anatomical locations of detected mucus plugs:
-    - Vectorized 3D Lobar mapping (RUL, RML, RLL, LUL, LLL)
-    - Fast bounding-box connected components for top impaction clusters
-    - Airway hierarchy (Central/Proximal vs Peripheral Tree-in-Bud)
-    - Slice range & 3D centroid calculation
-    - Local attenuation metrics (Mean HU, HAM status)
+    粘液栓的空间分布：
+    - 左右 × 上/中/下肺野的启发式分区：按层面在扫描范围内的相对高度三等分（上 ≥0.62，中 0.38–0.62，下 <0.38），
+      不是肺叶/肺段分割；canonical LPS 下 z=0 为足侧、z 增大朝头侧，相对高度取 z/层数
+      （旧实现把 z/层数 < 0.38 当上叶，上下颠倒）；
+    - 主要粘液栓连通域的层面范围、质心、体积、CT 值，以及是否靠近通畅大气道（中心/外周）。
     """
     z_dim, y_dim, x_dim = volume.shape
     vx_vol_cm3 = (spacing[0] * spacing[1] * spacing[2]) / 1000.0
@@ -133,29 +132,18 @@ def extract_mucus_locations(
         return [], {}, "未检测到明显气道粘液栓"
 
     cx = x_dim // 2
-    cy = y_dim // 2
 
-    # Fast vectorized lobar breakdown across all mucus voxels
+    # LPS：x 小为患者右侧；z=0 为足侧，相对高度 = z/层数（越大越靠头侧）
     is_right_m = x_coords_m <= cx
-    z_norm_m = z_coords_m / max(z_dim, 1)
-    is_upper_m = z_norm_m < 0.38
-    is_mid_m = (z_norm_m >= 0.38) & (z_norm_m < 0.62)
-    is_lower_m = z_norm_m >= 0.62
-    is_anterior_m = y_coords_m < cy
+    height_m = z_coords_m / max(z_dim, 1)
+    zone_idx_m = np.where(height_m >= 0.62, 0, np.where(height_m >= 0.38, 1, 2))
 
-    rul_cnt = int(np.sum(is_right_m & is_upper_m))
-    rml_cnt = int(np.sum(is_right_m & is_mid_m & is_anterior_m))
-    rll_cnt = int(np.sum(is_right_m & (is_lower_m | (is_mid_m & (~is_anterior_m)))))
-    lul_cnt = int(np.sum((~is_right_m) & (is_upper_m | (is_mid_m & is_anterior_m))))
-    lll_cnt = int(np.sum((~is_right_m) & (is_lower_m | (is_mid_m & (~is_anterior_m)))))
-
-    lobar_vols = {
-        "右肺上叶 (RUL)": round(float(rul_cnt * vx_vol_cm3), 2),
-        "右肺中叶 (RML)": round(float(rml_cnt * vx_vol_cm3), 2),
-        "右肺下叶 (RLL)": round(float(rll_cnt * vx_vol_cm3), 2),
-        "左肺上叶 (LUL)": round(float(lul_cnt * vx_vol_cm3), 2),
-        "左肺下叶 (LLL)": round(float(lll_cnt * vx_vol_cm3), 2),
-    }
+    zone_names = ("上肺野", "中肺野", "下肺野")
+    lobar_vols = {}
+    for side_name, side_sel in (("右", is_right_m), ("左", ~is_right_m)):
+        for zi, zname in enumerate(zone_names):
+            cnt = int(np.sum(side_sel & (zone_idx_m == zi)))
+            lobar_vols[f"{side_name}{zname}"] = round(float(cnt * vx_vol_cm3), 2)
 
     # Connected components clustering for dominant plugs
     labeled, num_clusters = label(mucus_mask)
@@ -206,49 +194,22 @@ def extract_mucus_locations(
         is_ham = bool(max_hu >= ham_threshold_hu)
 
         is_right = bool(cx_c <= cx)
-        side = "右肺" if is_right else "左肺"
-        z_norm = float(cz / max(z_dim, 1))
-        is_anterior = bool(cy_c < cy)
-
-        if is_right:
-            if z_norm < 0.38:
-                lobe_key = "右肺上叶 (RUL)"
-                segment = "尖段/前段" if is_anterior else "后段"
-            elif z_norm < 0.62:
-                if is_anterior:
-                    lobe_key = "右肺中叶 (RML)"
-                    segment = "内侧段/外侧段"
-                else:
-                    lobe_key = "右肺下叶 (RLL)"
-                    segment = "背段 (S6)"
-            else:
-                lobe_key = "右肺下叶 (RLL)"
-                segment = "后基底段/外侧基底段" if not is_anterior else "前基底段"
-        else:
-            if z_norm < 0.38:
-                lobe_key = "左肺上叶 (LUL)"
-                segment = "尖后段/前段"
-            elif z_norm < 0.62:
-                if is_anterior:
-                    lobe_key = "左肺上叶 (LUL)"
-                    segment = "舌叶 (Lingula)"
-                else:
-                    lobe_key = "左肺下叶 (LLL)"
-                    segment = "背段 (S6)"
-            else:
-                lobe_key = "左肺下叶 (LLL)"
-                segment = "后外侧基底段" if not is_anterior else "前内基底段"
+        side = "右" if is_right else "左"
+        height = float(cz / max(z_dim, 1))
+        zone = "上肺野" if height >= 0.62 else ("中肺野" if height >= 0.38 else "下肺野")
+        lobe_key = f"{side}{zone}"
 
         central_overlap = float(np.sum(dilated_central[sl][sub_labeled]))
         is_central = bool((central_overlap / max(c_voxels, 1)) > 0.25)
-        zone_type = "中心支气管嵌顿 (指套征)" if is_central else "外周细支气管栓塞 (树芽征)"
+        zone_type = "靠近通畅大气道（中心）" if is_central else "远离通畅大气道（外周）"
 
         cluster_info_list.append({
             "cluster_id": int(c_id),
             "lobe": lobe_key,
-            "segment": segment,
-            "location_name": f"{side}{lobe_key.split(' ')[0][2:]} {segment}",
-            "full_location": f"{side}{lobe_key.split(' ')[0][2:]} {segment} · {zone_type}",
+            "zone": lobe_key,
+            "zone_method": "按层面高度的启发式分区，非肺叶分割",
+            "location_name": f"{lobe_key}（启发式分区）",
+            "full_location": f"{lobe_key}（启发式分区） · {zone_type}",
             "zone_type": zone_type,
             "is_central": bool(is_central),
             "slice_range": f"第 #{z_min} ~ #{z_max} 层",
@@ -270,9 +231,9 @@ def extract_mucus_locations(
         for l_name, l_vol in sorted_lobes:
             if l_vol > 0:
                 pct = round((l_vol / total_mucus_vol) * 100, 1)
-                predominant_lobes.append(f"{l_name.split(' ')[0]} ({pct}%)")
+                predominant_lobes.append(f"{l_name} ({pct}%)")
 
-    summary_text = "、".join(predominant_lobes[:2]) if predominant_lobes else "双肺散在"
+    summary_text = ("、".join(predominant_lobes[:2]) + "（按层面高度的启发式分区）") if predominant_lobes else "双肺散在"
     return cluster_info_list[:6], lobar_vols, summary_text
 
 
@@ -598,10 +559,10 @@ def analyze_bronchiectasis_and_mucus(
         target_hint=target_hint
     )
 
-    # Clinical Radiologist Smart Scrolling: if key slice lacks clear companion artery
-    # or shows partial lumen occlusion (BAR <= 1.05) while mucus is present in the volume,
-    # search adjacent slices (+-1 to +-8) to land on the clearest diagnostic signet ring cross-section (BAR > 1.05)
-    if (not aam_res.get("has_companion_artery")) or (total_mucus_voxels > 0 and (aam_res.get("bar") is None or aam_res.get("bar", 0.0) <= 1.05)):
+    # 关键层没有检出伴行动脉时，取最近的、能检出气道-动脉配对的相邻层（±8 层内）。
+    # 选层只看「是否检出配对」与距离，不看 BAR 大小，避免挑选最支持阳性结论的层面（选择偏倚）。
+    key_slice_offset = 0
+    if not aam_res.get("has_companion_artery"):
         search_offsets = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8]
         for off in search_offsets:
             cand_z = key_slice_idx + off
@@ -612,8 +573,9 @@ def analyze_bronchiectasis_and_mucus(
                     spacing_xy=(spacing[1], spacing[2]),
                     target_hint=target_hint
                 )
-                if cand_aam.get("has_companion_artery") and cand_aam.get("bar") is not None and cand_aam.get("bar", 0.0) > 1.05:
+                if cand_aam.get("has_companion_artery") and cand_aam.get("bar") is not None:
                     key_slice_idx = cand_z
+                    key_slice_offset = off
                     aam_res = cand_aam
                     key_patent = patent_np[key_slice_idx]
                     key_mucus = mucus_plugs_np[key_slice_idx]
@@ -645,42 +607,39 @@ def analyze_bronchiectasis_and_mucus(
         if wall_thickness_mm is not None:
             wall_to_lumen_ratio = round(wall_thickness_mm / max(bronchus_caliber_mm, 0.1), 2)
 
-    # 8. Morphological phenotype classification
+    # 8. BAR 分档（只描述测值所在区间，不给柱状/曲张/囊状等形态学诊断）
     if bar_ratio is not None:
         if bar_ratio > 2.0:
-            phenotype = "囊状支气管扩张 (Cystic / Saccular Bronchiectasis)"
+            phenotype = f"BAR {bar_ratio} (> 2.0)"
         elif bar_ratio > 1.5:
-            phenotype = "静脉曲张状支气管扩张 (Varicose Bronchiectasis)"
+            phenotype = f"BAR {bar_ratio} (1.5–2.0)"
         elif bar_ratio > bar_cutoff:
-            phenotype = "柱状支气管扩张 (Cylindrical Bronchiectasis)"
+            phenotype = f"BAR {bar_ratio} ({bar_cutoff}–1.5)"
         else:
-            phenotype = "正常气道管径 (No Significant Dilation)"
+            phenotype = f"BAR {bar_ratio} (≤ {bar_cutoff})"
     elif bronchus_caliber_mm is not None:
-        if bronchus_caliber_mm > 15.0:
-            phenotype = "重度支气管扩张 (伴行动脉未见清晰截面)"
-        elif bronchus_caliber_mm > 10.0:
-            phenotype = "支气管管径增粗 (伴行动脉未见清晰截面)"
-        else:
-            phenotype = "气道管径未见异常 (伴行动脉未见清晰截面)"
+        phenotype = f"支气管内径 {bronchus_caliber_mm} mm（伴行动脉未见清晰截面，BAR 未测得）"
     else:
         phenotype = "关键层未见明确气道截面 (未测得)"
+    phenotype_method = "按单层 BAR 测值分档，仅描述测值区间，非影像形态学分型"
 
-    # 9. Clinical Signs & Scoring
+    # 9. 征象（按测值阈值的启发式标注，未经验证）
     signs_detected = []
     if bar_ratio is not None and bar_ratio > bar_cutoff:
-        signs_detected.append(f"印戒征 (Signet Ring Sign, BAR = {bar_ratio} > 1.0)")
+        signs_detected.append(f"印戒征 (启发式: BAR = {bar_ratio} > {bar_cutoff})")
     if wall_to_lumen_ratio is not None and wall_to_lumen_ratio > 0.20:
-        signs_detected.append(f"双轨征 (Tram-track Sign, 管壁厚度比 {wall_to_lumen_ratio} > 0.20)")
+        signs_detected.append(f"双轨征 (启发式: 管壁厚度/内径 {wall_to_lumen_ratio} > 0.20)")
     if mucus_vol_cm3 > 1.0:
-        signs_detected.append(f"指套征 (Finger-in-glove Sign, 分支粘液嵌顿 {mucus_vol_cm3} cm³)")
+        signs_detected.append(f"指套征 (启发式: 气道内粘液样密度 {mucus_vol_cm3} cm³ > 1.0 cm³)")
     if total_tib_voxels > 30:
-        signs_detected.append(f"树芽征 (Tree-in-bud Sign, 外周细支气管炎性结节 {tib_vol_cm3} cm³)")
+        signs_detected.append(f"树芽征 (启发式: 外周细支气管内粘液样密度 {tib_vol_cm3} cm³)")
     if ham_vol_cm3 > 0.5:
-        signs_detected.append(f"高密度粘液栓 (HAM Sign, 提示 ABPA/变应性支气管肺曲霉病可能)")
+        signs_detected.append(f"高密度粘液 (≥{ham_threshold_hu:.0f} HU 体积 {ham_vol_cm3} cm³)")
     if distribution_summary and distribution_summary != "双肺散在":
-        signs_detected.append(f"优势肺叶分布: {distribution_summary}")
+        signs_detected.append(f"粘液栓主要分布: {distribution_summary}")
 
-    # Reiff Score (0 to 18): sum across lobes based on actual lobar involvement
+    # 累及肺野启发式评分（6 个启发式肺野 × 0–3 分，借用 Reiff 0–18 量程）：按各肺野粘液栓体积计分。
+    # 原始 Reiff 评分按各肺叶支扩形态类型计分，此处并非该定义，未经验证。
     reiff_score = 0
     for l_key, l_vol in lobar_distribution.items():
         if l_vol >= 4.0:
@@ -689,22 +648,14 @@ def analyze_bronchiectasis_and_mucus(
             reiff_score += 2
         elif l_vol > 0.05:
             reiff_score += 1
-    if bar_ratio is not None and bar_ratio > bar_cutoff and reiff_score == 0:
-        reiff_score = 2 if bar_ratio > 1.5 else 1
 
-    # Bhalla Mucoid Score (0 to 2) and Severity
+    # 粘液栓分级：按阻塞率和粘液体积的启发式阈值，未经验证；只写阈值依据，不给严重度诊断
     if occlusion_rate_pct >= 40.0 or mucus_vol_cm3 >= 10.0:
-        bhalla_score = "2 (重度广泛完全嵌顿 / Total Occlusion)"
-        severity = "重度支气管扩张伴广泛粘液嵌顿 (Severe Impaction)"
+        bhalla_score = "2 (阻塞率 ≥40% 或粘液体积 ≥10 cm³)"
     elif occlusion_rate_pct >= 15.0 or mucus_vol_cm3 >= 2.0:
-        bhalla_score = "1 (部分支气管粘液栓塞 / Partial Plugging)"
-        severity = "中度支气管扩张伴粘液栓塞 (Moderate Plugging)"
-    elif bar_ratio is not None and bar_ratio > bar_cutoff:
-        bhalla_score = "0 (管腔通畅 / No Significant Plugging)"
-        severity = "轻度支气管扩张 (Mild Bronchiectasis)"
+        bhalla_score = "1 (阻塞率 ≥15% 或粘液体积 ≥2 cm³)"
     else:
-        bhalla_score = "0 (管腔通畅 / No Significant Plugging)"
-        severity = "未见明显支气管扩张 (No Significant Bronchiectasis)"
+        bhalla_score = "0 (阻塞率 <15% 且粘液体积 <2 cm³)"
 
     # 10. Build Calipers and Diagnostic Badges for PACS Presentation State (Authentic only)
     calipers = []
@@ -736,14 +687,14 @@ def analyze_bronchiectasis_and_mucus(
         anchor_y = aam_res["br_p1"][1]
 
         if bar_ratio is not None and artery_caliber_mm is not None:
-            badge_title = f"BAR: {bar_ratio:.2f} ({'印戒征阳性' if bar_ratio > bar_cutoff else '管径比正常'})"
+            badge_title = f"BAR: {bar_ratio:.2f} ({'> ' if bar_ratio > bar_cutoff else '≤ '}{bar_cutoff})"
             badge_sub = f"支气管 {bronchus_caliber_mm:.1f}mm / 伴行动脉 {artery_caliber_mm:.1f}mm"
         else:
             badge_title = f"支气管径: {bronchus_caliber_mm:.1f}mm"
             badge_sub = "伴行动脉未检出截面 (BAR未测得)"
 
         if mucus_nodule_locations:
-            badge_detail = f"局部粘液栓: {occlusion_rate_pct}% 阻塞 ({mucus_nodule_locations[0]['segment']})"
+            badge_detail = f"局部粘液栓: {occlusion_rate_pct}% 阻塞 ({mucus_nodule_locations[0]['zone']}, 启发式分区)"
         else:
             badge_detail = "支气管管腔通畅"
 
@@ -771,11 +722,11 @@ def analyze_bronchiectasis_and_mucus(
 
     hud_lines = [
         f"计算加速: {dev_info.get('accelerator', str(device))} | 关键断面: 第 #{key_slice_idx} 层",
-        f"形态分型: {phenotype}",
+        f"BAR 分档: {phenotype}",
         f"BAR 扩张比: {bar_str} (支气管: {br_str} / 伴行动脉: {art_str}) | 管壁厚度比: {wt_str}",
         f"粘液栓体积: {mucus_vol_cm3} cm3 (HAM高密度: {ham_vol_cm3} cm3) | 阻塞率: {occlusion_rate_pct}%",
         f"优势分布: {distribution_summary}",
-        f"Bhalla 粘液分级: {bhalla_score} | Reiff 严重度评分: {reiff_score}/18"
+        f"粘液栓分级(启发式): {bhalla_score} | 累及肺野评分(启发式, 0-18): {reiff_score}"
     ]
 
     physical_loc_mm = float(key_slice_idx * spacing[0])
@@ -790,7 +741,7 @@ def analyze_bronchiectasis_and_mucus(
         window_info={"center": -600, "width": 1500, "name": "lung"},
         calipers=calipers,
         diagnostic_badges=badges,
-        title_banner="HEURION CHEST-CT // BRONCHIECTASIS & MUCUS AI (CLINICAL PACS)",
+        title_banner="HEURION CHEST-CT // AIRWAY & MUCUS QUANTIFICATION (RESEARCH)",
         hud_lines=hud_lines,
         overlays_rgba=overlays_rgba
     )
@@ -853,7 +804,10 @@ def analyze_bronchiectasis_and_mucus(
             "airway_occlusion_rate_pct": occlusion_rate_pct,
             "bhalla_mucoid_score": bhalla_score,
             "reiff_score": reiff_score,
-            "severity_classification": severity,
+            "score_method": "启发式：粘液栓分级按阻塞率和粘液体积、累及肺野评分按各启发式肺野粘液体积计算，并非 Bhalla/Reiff 原始定义，未经验证",
+            "zone_method": "按层面高度的启发式分区（上/中/下肺野），非肺叶分割",
+            "morphological_phenotype_method": phenotype_method,
+            "key_slice_offset": key_slice_offset,
             "signs_detected": signs_detected,
             "lobar_distribution": lobar_distribution,
             "distribution_summary": distribution_summary,
@@ -862,7 +816,7 @@ def analyze_bronchiectasis_and_mucus(
             "aam_detection": {
                 "pair_found": aam_res.get("found", False),
                 "has_companion_artery": aam_res.get("has_companion_artery", False),
-                "distance_mm": aam_res.get("dist_mm", 0.0) if aam_res.get("dist_mm") is not None else 0.0
+                "distance_mm": aam_res.get("dist_mm")
             }
         },
         "key_slice_png_base64": b64_str,
@@ -880,26 +834,22 @@ def analyze_bronchiectasis_and_mucus(
         },
         "qa_report": qa_report,
         "summary_markdown": (
-            f"### 支气管扩张与粘液栓 (Mucus Plug) 深度分析报告\n\n"
+            f"### 气道与粘液栓定量结果\n\n"
             f"- **计算加速设备**: `{dev_info.get('accelerator')}` (耗时: {elapsed}s)\n"
-            f"- **病理形态分型**: **{phenotype}**\n"
-            f"- **临床严重度**: **{severity}**\n"
-            f"- **支气管-伴行动脉径比 (BAR)**: {bar_md} (正常参考值 $\\le 1.0$；$> 1.1$ 确诊扩张)\n"
-            f"- **管壁增厚比 (Wall/Lumen)**: {wt_md} (正常参考值 $< 0.20$)\n"
-            f"- **粘液栓总体积**: `{mucus_vol_cm3} cm³` (高密度粘液栓 HAM: `{ham_vol_cm3} cm³`)\n"
+            f"- **BAR 分档**: **{phenotype}**\n"
+            f"- **支气管-伴行动脉径比 (BAR)**: {bar_md} (本实现以 BAR > {bar_cutoff} 计为管径比升高)\n"
+            f"- **管壁厚度/内径比**: {wt_md} (本实现阈值 0.20)\n"
+            f"- **粘液栓总体积**: `{mucus_vol_cm3} cm³` (≥{ham_threshold_hu:.0f} HU 高密度部分: `{ham_vol_cm3} cm³`)\n"
             f"- **气道管腔阻塞率**: `{occlusion_rate_pct}%`\n"
-            f"- **Bhalla 临床评分**: `{bhalla_score}` | **Reiff 评分**: `{reiff_score}/18`\n"
+            f"- **粘液栓分级（启发式）**: `{bhalla_score}` | **累及肺野评分（启发式，0–18）**: `{reiff_score}`\n"
             f"- **CT 质控分级**: `{qa_report.get('protocol_tier')}` (可信度: {qa_report.get('quality_confidence_score')})\n"
-            f"- **解剖肺叶分布统计**:\n" +
+            f"- **粘液栓分布（按层面高度的启发式分区，非肺叶分割）**:\n" +
             (lobar_md if lobar_md else "  - 双肺未见明显粘液栓聚集\n") +
-            f"- **主要粘液栓/结节空间解剖定位 (Top {len(mucus_nodule_locations)})**:\n" +
+            f"- **主要粘液栓位置 (Top {len(mucus_nodule_locations)})**:\n" +
             (nodule_md if nodule_md else "  - 未检测到孤立粘液结节\n") +
-            f"- **典型影像学征象**:\n" +
+            f"- **按测值阈值标注的征象（启发式，未经验证）**:\n" +
             "".join([f"  - {s}\n" for s in signs_detected]) +
-            f"\n> **治疗与随访建议**：\n"
-            f"> 1. 规范气道清除技术 (Airway Clearance Techniques, ACT，如振动排痰、体位引流)；\n"
-            f"> 2. 若伴高密度粘液栓 (HAM) 或复发性喘息，建议查血嗜酸粒细胞与总 IgE 排查变应性支气管肺曲霉病 (ABPA)；\n"
-            f"> 3. 建议每 6-12 个月复查胸部低剂量 HRCT 进行动态粘液栓与管径追踪。"
+            f"\n> 上述所见需结合临床与实验室检查判断。"
         )
     }
 

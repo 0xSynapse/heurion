@@ -36,7 +36,7 @@ class AsyncTask:
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
     duration_sec: Optional[float] = None
-    model_name: str = "lung_nodule_segmenter"
+    model_name: Optional[str] = None
     input_source: str = "volume"
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
@@ -185,11 +185,15 @@ def process_cohort_case(
     case: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Processes a single patient/subject scan within a cohort batch."""
-    subject_id = case.get("subject_id") or case.get("patient_id") or "SUBJ_001"
+    subject_id = case.get("subject_id") or case.get("patient_id")
     sample_id = case.get("sample_id")
     file_path = case.get("file_path")
-    model_name = case.get("model_name", "lung_nodule_segmenter")
+    model_name = case.get("model_name")
     target = file_path or sample_id
+    if not subject_id:
+        return {"subject_id": None, "model_name": model_name, "status": "failed", "error": "缺失受试者标识 (subject_id / patient_id)"}
+    if not model_name:
+        return {"subject_id": subject_id, "model_name": None, "status": "failed", "error": "缺失分析模型 (model_name)"}
     if not target:
         return {
             "subject_id": subject_id,
@@ -206,21 +210,20 @@ def process_cohort_case(
     try:
         vol, spacing, modality = engine.load_volume_data(target)
         if model_name in ("whole_body_ct_segmenter", "totalsegmentator"):
+            # 人口学信息只传调用方实际给出的字段，缺失即不传，不代入默认性别/身高/体重
+            demo = {k: case[k] for k in ("patient_sex", "patient_height_m", "patient_weight_kg") if case.get(k) is not None}
             res = engine.analyze_volume(
                 volume=vol,
                 spacing=spacing,
                 model_name=model_name,
                 modality=modality,
-                patient_sex=case.get("patient_sex", "M"),
-                patient_height_m=case.get("patient_height_m", 1.72),
-                patient_weight_kg=case.get("patient_weight_kg", 68.0),
+                **demo,
             )
-            bc = res.get("body_composition", {})
-            ov = res.get("organ_volumetry_cm3", {})
+            bc = res.get("body_composition", {}) or {}
+            ov = res.get("organ_volumetry_cm3", {}) or {}
             row.update({
                 "sma_cm2": bc.get("skeletal_muscle_area_cm2"),
                 "smi_cm2_m2": bc.get("skeletal_muscle_index_cm2_m2"),
-                "sarcopenia": 1 if bc.get("sarcopenia_detected") else 0,
                 "vat_cm2": bc.get("visceral_adipose_cm2"),
                 "sat_cm2": bc.get("subcutaneous_adipose_cm2"),
                 "vat_to_sat_ratio": bc.get("vat_to_sat_ratio"),
@@ -235,15 +238,21 @@ def process_cohort_case(
                 model_name=model_name,
                 modality=modality,
             )
-            rec = res.get("recist_metrics", {})
-            rads = rec.get("lung_rads", {})
+            rec = res.get("recist_metrics", {}) or {}
+            has_lesion = rec.get("has_lesion")
             row.update({
                 "longest_diameter_mm": rec.get("longest_diameter_mm"),
                 "short_axis_mm": rec.get("short_axis_mm"),
                 "total_volume_cm3": rec.get("total_volume_cm3"),
-                "has_lesion": 1 if rec.get("has_lesion") else 0,
-                "lung_rads": rads.get("category", "1"),
+                "has_lesion": None if has_lesion is None else (1 if has_lesion else 0),
             })
+            em = rec.get("emphysema")
+            if isinstance(em, dict):
+                row.update({
+                    "laa_percent": em.get("laa_percent"),
+                    "total_lung_volume_liters": em.get("total_lung_volume_liters"),
+                    "perc15_hu": em.get("perc15_hu"),
+                })
     except Exception as exc:
         row["status"] = "failed"
         row["error"] = str(exc)
@@ -269,7 +278,7 @@ def batch_process_cohort(
         results.append(row)
 
     all_keys = []
-    priority = ["subject_id", "status", "longest_diameter_mm", "short_axis_mm", "total_volume_cm3", "lung_rads", "smi_cm2_m2", "sarcopenia", "vat_to_sat_ratio"]
+    priority = ["subject_id", "status", "longest_diameter_mm", "short_axis_mm", "total_volume_cm3", "smi_cm2_m2", "vat_to_sat_ratio"]
     for p in priority:
         if any(p in r for r in results) and p not in all_keys:
             all_keys.append(p)

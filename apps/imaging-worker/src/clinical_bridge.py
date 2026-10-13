@@ -86,7 +86,8 @@ def extract_clinical_features(
     modality: str = "CT",
     target_name: str = "lesion",
     window_preset: Optional[str] = None,
-    solid_hu_threshold: float = -150.0
+    solid_hu_threshold: float = -150.0,
+    lung_nodule_context: Optional[bool] = None
 ) -> Dict[str, Any]:
     """
     Transforms raw MONAI 3D output tensors (pred_mask and volume) into structured clinical features.
@@ -94,10 +95,16 @@ def extract_clinical_features(
     1. Physical volume calculations (voxel volume = dx * dy * dz, total mm3 and cm3).
     2. RECIST 1.1 caliper dimensions on the maximum area 2D key slice.
     3. Radiodensity distribution (HU metrics, percentiles, solid vs GGO vs calcification composition).
-    4. Subsolid & consolidation ratio (CTR = solid_diameter / total_diameter).
+    4. 仅在肺结节场景（lung_nodule_context）：实性成分与 CTR、启发式血管截面判定；
+       其他部位（腹部器官、脑、骨等）不做这两项，subsolid_metrics 为 None。
     5. CT scan quality control (slice thickness and partial volume risk).
-    6. Publication-grade key slice overlay rendering.
+    6. Key slice overlay rendering.
+
+    lung_nodule_context 为 None 时按 target_name 是否含「结节 / nodule / 肺血管」判断。
     """
+    if lung_nodule_context is None:
+        name_l = str(target_name).lower()
+        lung_nodule_context = ("结节" in name_l) or ("nodule" in name_l) or ("肺血管" in name_l)
     dz, dy, dx = [float(s) for s in spacing]
     voxel_vol_mm3 = dz * dy * dx
     total_voxels = int(np.sum(mask > 0))
@@ -109,20 +116,19 @@ def extract_clinical_features(
     if slice_thickness_mm <= 1.5:
         qc_tier = "optimal"
         qc_badge = "HRCT 薄层标准"
-        qc_desc = f"薄层高分辨率扫描 ({slice_thickness_mm}mm ≤ 1.5mm)，满足 Fleischner 与 Lung-RADS 精确测量标准。"
+        qc_desc = f"薄层扫描 ({slice_thickness_mm}mm ≤ 1.5mm)。"
         qc_warning = None
     elif slice_thickness_mm <= 2.5:
         qc_tier = "acceptable"
         qc_badge = "常规层厚"
-        qc_desc = f"常规切片层厚 ({slice_thickness_mm}mm)，具有临床参考价值。"
+        qc_desc = f"常规切片层厚 ({slice_thickness_mm}mm)。"
         qc_warning = None
     else:
         qc_tier = "thick_slice_warning"
-        qc_badge = "厚层质控警示"
+        qc_badge = "厚层"
         qc_desc = f"扫描层厚偏厚 ({slice_thickness_mm}mm > 2.5mm)。"
         qc_warning = (
-            f"扫描层厚偏厚 ({slice_thickness_mm}mm)，部分容积效应可能导致病灶边界及微小浸润成分测值偏差，"
-            f"建议行薄层 HRCT (≤1.25mm) 靶扫描复查。"
+            f"扫描层厚偏厚 ({slice_thickness_mm}mm)，部分容积效应可能使病灶边界及微小实性成分的测值产生偏差。"
         )
 
     qc_info = {
@@ -225,65 +231,18 @@ def extract_clinical_features(
             }
         }
 
-        # Subsolid / Lung Nodule morphology analysis
-        solid_mask = (mask > 0) & (volume >= solid_hu_threshold)
-        solid_vox_count = int(np.sum(solid_mask))
-        solid_vol_mm3 = round(solid_vox_count * voxel_vol_mm3, 2)
-        solid_vol_cm3 = round(solid_vol_mm3 / 1000.0, 3)
-
-        if solid_vox_count > 0:
-            solid_key_slice = solid_mask[key_slice_idx] > 0
-            if np.sum(solid_key_slice) >= 2:
-                s_ld, s_sa, s_caliper, _ = calculate_convex_hull_diameters(solid_key_slice, dy, dx)
-            else:
-                solid_slice_areas = np.sum(solid_mask, axis=(1, 2))
-                s_key_idx = int(np.argmax(solid_slice_areas))
-                s_ld, s_sa, s_caliper, _ = calculate_convex_hull_diameters(solid_mask[s_key_idx] > 0, dy, dx)
-        else:
-            s_ld, s_sa, s_caliper = 0.0, 0.0, None
-
-        ctr = round(min(1.0, float(s_ld / max(longest_d_mm, 0.01))), 2)
-
-        vessel_check = detect_pulmonary_vessel_cross_section(
-            volume=volume,
-            mask=mask,
-            spacing=spacing,
-            key_slice_idx=key_slice_idx
-        )
-        is_vessel = vessel_check.get("is_vessel", False)
-
-        if is_vessel:
-            morphology = "normal_vessel"
-            morphology_zh = "正常肺血管分支断面 (非肺结节)"
-            target_name = "正常肺血管分支断面 (伴行血管, 非肺结节)"
-        elif solid_vox_count == 0 or s_ld == 0.0:
-            morphology = "pure_ggo"
-            morphology_zh = "纯磨玻璃结节 (pGGN)"
-        elif calc_pct >= 50.0:
-            morphology = "calcified"
-            morphology_zh = "钙化结节 (良性特征)"
-        elif ctr < 0.8:
-            morphology = "part_solid"
-            morphology_zh = "部分实性/亚实性结节 (PSN)"
-        else:
-            morphology = "solid"
-            morphology_zh = "实性结节 (SN)"
-
-        subsolid_metrics = {
-            "morphological_type": morphology,
-            "morphological_type_zh": morphology_zh,
-            "solid_core_diameter_mm": s_ld,
-            "solid_core_short_axis_mm": s_sa,
-            "solid_core_volume_cm3": solid_vol_cm3,
-            "consolidation_tumor_ratio": ctr,
-            "solid_caliper": s_caliper,
-            "is_vessel": is_vessel,
-            "vessel_info": vessel_check,
-        }
+        # 实性成分 / CTR / 血管截面判定只对肺结节有意义；其他部位不做
+        if lung_nodule_context:
+            subsolid_metrics = _lung_nodule_subsolid_metrics(
+                volume, mask, spacing, key_slice_idx, longest_d_mm,
+                voxel_vol_mm3, calc_pct, solid_hu_threshold
+            )
+            if subsolid_metrics.get("is_vessel"):
+                target_name = "疑似血管截面 (启发式判定，未做结节测量)"
 
     # 4. Key Slice Overlay Rendering
     if not window_preset:
-        if "lung" in target_name.lower() or "chest" in target_name.lower():
+        if lung_nodule_context or "lung" in target_name.lower() or "chest" in target_name.lower():
             window_preset = "lung"
         elif "brain" in target_name.lower():
             window_preset = "brain"
@@ -307,10 +266,6 @@ def extract_clinical_features(
         "solid_core_diameter_mm": subsolid_metrics.get("solid_core_diameter_mm") if subsolid_metrics else None,
         "quality_control": qc_info,
         "is_vessel": subsolid_metrics.get("is_vessel", False) if subsolid_metrics else False,
-        "lung_rads": {
-            "category": "not_applicable",
-            "name": "正常解剖结构 (非肺结节)"
-        } if (subsolid_metrics and subsolid_metrics.get("is_vessel")) else None,
         "has_lesion": True,
     }
 
@@ -335,4 +290,83 @@ def extract_clinical_features(
         "quality_control": qc_info,
         "key_slice_png_base64": png_to_base64(png_bytes),
         "key_slice_png_size_bytes": len(png_bytes),
+    }
+
+
+def _lung_nodule_subsolid_metrics(
+    volume: np.ndarray,
+    mask: np.ndarray,
+    spacing: Tuple[float, float, float],
+    key_slice_idx: int,
+    longest_d_mm: float,
+    voxel_vol_mm3: float,
+    calc_pct: float,
+    solid_hu_threshold: float
+) -> Dict[str, Any]:
+    """
+    肺结节场景的实性成分测量与启发式血管截面判定。
+    判为疑似血管时不输出实性成分与 CTR（不做结节测量）。
+    """
+    dz, dy, dx = [float(s) for s in spacing]
+    vessel_check = detect_pulmonary_vessel_cross_section(
+        volume=volume,
+        mask=mask,
+        spacing=spacing,
+        key_slice_idx=key_slice_idx
+    )
+    if vessel_check.get("is_vessel", False):
+        return {
+            "morphological_type": "suspected_vessel",
+            "morphological_type_zh": "疑似血管截面，未做结节测量",
+            "solid_core_diameter_mm": None,
+            "solid_core_short_axis_mm": None,
+            "solid_core_volume_cm3": None,
+            "consolidation_tumor_ratio": None,
+            "solid_caliper": None,
+            "is_vessel": True,
+            "vessel_info": vessel_check,
+        }
+
+    solid_mask = (mask > 0) & (volume >= solid_hu_threshold)
+    solid_vox_count = int(np.sum(solid_mask))
+    solid_vol_cm3 = round(solid_vox_count * voxel_vol_mm3 / 1000.0, 3)
+
+    if solid_vox_count > 0:
+        solid_key_slice = solid_mask[key_slice_idx] > 0
+        if np.sum(solid_key_slice) >= 2:
+            s_ld, s_sa, s_caliper, _ = calculate_convex_hull_diameters(solid_key_slice, dy, dx)
+        else:
+            solid_slice_areas = np.sum(solid_mask, axis=(1, 2))
+            s_key_idx = int(np.argmax(solid_slice_areas))
+            s_ld, s_sa, s_caliper, _ = calculate_convex_hull_diameters(solid_mask[s_key_idx] > 0, dy, dx)
+    else:
+        s_ld, s_sa, s_caliper = 0.0, 0.0, None
+
+    ctr = round(float(s_ld / longest_d_mm), 2) if longest_d_mm > 0 else None
+
+    # 按测量值的启发式密度分型（阈值为本实现自定，非指南定义）
+    if solid_vox_count == 0 or s_ld == 0.0:
+        morphology = "pure_ggo"
+        morphology_zh = "纯磨玻璃密度"
+    elif calc_pct >= 50.0:
+        morphology = "calcified"
+        morphology_zh = "钙化密度为主 (≥130 HU 体素占 ≥50%)"
+    elif ctr is not None and ctr < 0.8:
+        morphology = "part_solid"
+        morphology_zh = "部分实性 (磨玻璃与实性成分混合)"
+    else:
+        morphology = "solid"
+        morphology_zh = "实性密度为主"
+
+    return {
+        "morphological_type": morphology,
+        "morphological_type_zh": morphology_zh,
+        "morphology_method": f"按掩膜内 CT 值阈值 ({solid_hu_threshold:.0f} HU) 与 CTR 的启发式分型，非指南定义",
+        "solid_core_diameter_mm": s_ld,
+        "solid_core_short_axis_mm": s_sa,
+        "solid_core_volume_cm3": solid_vol_cm3,
+        "consolidation_tumor_ratio": ctr,
+        "solid_caliper": s_caliper,
+        "is_vessel": False,
+        "vessel_info": vessel_check,
     }

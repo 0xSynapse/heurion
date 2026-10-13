@@ -66,6 +66,7 @@ def test_api_health_and_benchmark():
     assert res_bench.status_code == 200
     bench_data = res_bench.json()
     assert bench_data["status"] == "success"
+    assert bench_data["is_synthetic"] is True
     assert "recist_metrics" in bench_data
     assert "key_slice_png_base64" in bench_data
     assert bench_data["key_slice_png_base64"].startswith("data:image/png;base64,")
@@ -80,13 +81,21 @@ def test_api_models_and_samples():
     assert res_samples.status_code == 200
     samples = res_samples.json()["samples"]
     assert len(samples) >= 1
-    sample_id = samples[0]["id"]
+    assert all(s["is_synthetic"] is False for s in samples)
+    ids = [s["id"] for s in samples]
+    assert "lidc_lung_nodule_ct" in ids
 
-    res_sample_ana = client.post("/api/v1/analyze/sample", json={"sample_id": sample_id})
+    # 缺模型 400；样本不存在 404（不再生成合成体顶替）
+    assert client.post("/api/v1/analyze/sample", json={"sample_id": "lidc_lung_nodule_ct"}).status_code == 400
+    assert client.post("/api/v1/analyze/sample", json={"sample_id": "no_such_sample", "model_name": "lung_nodule_segmenter"}).status_code == 404
+    assert client.get("/api/v1/samples/no_such_sample/file").status_code == 404
+
+    res_sample_ana = client.post("/api/v1/analyze/sample", json={"sample_id": "lidc_lung_nodule_ct", "model_name": "lung_nodule_segmenter"})
     assert res_sample_ana.status_code == 200
     data = res_sample_ana.json()
     assert data["status"] == "success"
-    assert data["recist_metrics"]["longest_diameter_mm"] > 0
+    assert data["engine_type"] == "rule_based"
+    assert data["real_neural_inference"] is False
     assert data["key_slice_png_base64"].startswith("data:image/png;base64,")
 
 def test_bronchiectasis_and_mucus_analysis():
@@ -100,7 +109,12 @@ def test_bronchiectasis_and_mucus_analysis():
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "success"
+    assert data["is_synthetic"] is True
     assert data["analysis_type"] == "bronchiectasis_and_mucus"
+    # 支扩分析没有病灶径线：RECIST 字段为空，只保留关键层号
+    assert data["recist_metrics"]["longest_diameter_mm"] is None
+    assert data["recist_metrics"]["has_lesion"] is None
+    assert isinstance(data["recist_metrics"]["key_slice_index"], int)
     assert "metrics" in data
     assert data["metrics"]["broncho_arterial_ratio"] is not None
     assert 0.5 <= data["metrics"]["broncho_arterial_ratio"] <= 3.0
@@ -121,7 +135,9 @@ def test_subsolid_metrics_calculations():
     assert res_ggo["nodule_type"] == "pure_ggo"
     assert res_ggo["solid_core_diameter_mm"] == 0.0
     assert res_ggo["consolidation_tumor_ratio"] == 0.0
-    assert res_ggo["lung_rads"]["category"] == "2"
+    # 不再输出 Lung-RADS 分类与病理倾向，只给测量值
+    assert "lung_rads" not in res_ggo
+    assert "pathology_risk" not in res_ggo
 
     # 2. Part-solid / subsolid: outer rim -450 HU, central core +40 HU (> -150 HU)
     vol_part = np.full((16, 32, 32), -800.0, dtype=np.float32)
@@ -137,25 +153,26 @@ def test_subsolid_metrics_calculations():
     assert res_part["nodule_type"] == "part_solid"
     assert res_part["solid_core_diameter_mm"] > 0.0
     assert 0.0 < res_part["consolidation_tumor_ratio"] < 0.8
-    assert res_part["lung_rads"]["category"] in ["3", "4A", "4B"]
+    assert res_part["solid_core_diameter_mm"] == 7.1  # 6x6 体素实性核心对角线
+    assert "lung_rads" not in res_part
 
-    # 3. Schwartz Volume Doubling Time (VDT)
-    # Rapid growth: doubling in 180 days (<400)
-    vdt_rapid = calculate_volume_doubling_time(baseline_vol_cm3=1.0, followup_vol_cm3=2.0, days_interval=180.0)
-    assert vdt_rapid["vdt_days"] == 180.0
-    assert vdt_rapid["category"] == "rapid_growth"
-    assert vdt_rapid["clinical_alert"] is True
+    # 3. Schwartz 体积倍增时间：只给计算值，不按区间给恶性风险或建议
+    vdt_up = calculate_volume_doubling_time(baseline_vol_cm3=1.0, followup_vol_cm3=2.0, days_interval=180.0)
+    assert vdt_up["vdt_days"] == 180.0
+    assert vdt_up["category"] == "increased"
+    for key in ("risk_level", "clinical_alert", "recommendation"):
+        assert key not in vdt_up
 
-    # Indolent growth: doubling in 800 days (>600)
     vdt_slow = calculate_volume_doubling_time(baseline_vol_cm3=1.0, followup_vol_cm3=2.0, days_interval=800.0)
     assert vdt_slow["vdt_days"] == 800.0
-    assert vdt_slow["category"] == "indolent_growth"
-    assert vdt_slow["clinical_alert"] is False
 
-    # Regressed / stable
-    vdt_regr = calculate_volume_doubling_time(baseline_vol_cm3=2.0, followup_vol_cm3=1.0, days_interval=100.0)
-    assert vdt_regr["category"] == "regressed"
-    assert vdt_regr["vdt_days"] is None
+    vdt_down = calculate_volume_doubling_time(baseline_vol_cm3=2.0, followup_vol_cm3=1.0, days_interval=100.0)
+    assert vdt_down["category"] == "decreased"
+    assert vdt_down["vdt_days"] is None
+    assert vdt_down["volume_change_percent"] == -50.0
+
+    vdt_bad = calculate_volume_doubling_time(baseline_vol_cm3=0.0, followup_vol_cm3=1.0, days_interval=100.0)
+    assert vdt_bad["vdt_days"] is None and vdt_bad["volume_change_cm3"] is None
 
 
 def test_vdt_endpoint():
@@ -168,11 +185,11 @@ def test_vdt_endpoint():
     assert res.status_code == 200
     data = res.json()
     assert data["vdt_days"] == 120.0
-    assert data["clinical_alert"] is True
-    assert data["category"] == "rapid_growth"
+    assert data["category"] == "increased"
+    assert "clinical_alert" not in data
 
 
-def test_quality_control_and_pathology_risk():
+def test_quality_control_without_pathology_risk():
     from recist import calculate_subsolid_metrics
     vol = np.full((16, 32, 32), -800.0, dtype=np.float32)
     mask = np.zeros((16, 32, 32), dtype=np.uint8)
@@ -184,8 +201,7 @@ def test_quality_control_and_pathology_risk():
     assert res_thin["quality_control"]["is_thin_slice"] is True
     assert res_thin["quality_control"]["tier"] == "optimal"
     assert res_thin["quality_control"]["warning"] is None
-    assert res_thin["pathology_risk"]["risk_level"] == "low"
-    assert "AAH" in res_thin["pathology_risk"]["tendency"]
+    assert "pathology_risk" not in res_thin
 
     # Case B: Thick-slice (5.0 mm) -> triggers warning
     res_thick = calculate_subsolid_metrics(vol, mask, spacing=(5.0, 0.8, 0.8))
@@ -196,18 +212,29 @@ def test_quality_control_and_pathology_risk():
 
 def test_emphysema_metrics_and_endpoint():
     from recist import calculate_emphysema_metrics
-    # Synthesize volume with bilateral lungs and emphysema area
+    # 合成体：体外空气 -1000（与边界相连）、软组织体壁、两侧封闭的肺 -850，其中一块 -970
     vol = np.full((24, 64, 64), -1000.0, dtype=np.float32)
-    # Lung body
-    vol[:, 10:54, 10:54] = -750.0
-    # Emphysema region (HU <= -950)
-    vol[:, 20:30, 20:30] = -970.0
+    vol[:, 6:58, 6:58] = 40.0
+    vol[2:22, 14:50, 12:30] = -850.0
+    vol[2:22, 14:50, 34:52] = -850.0
+    vol[4:20, 20:30, 14:24] = -970.0
 
-    em = calculate_emphysema_metrics(vol, spacing=(1.5, 0.8, 0.8))
-    assert em["total_lung_volume_liters"] > 0
-    assert em["emphysema_volume_liters"] > 0
-    assert em["laa_percent"] > 0
-    assert "GOLD" in em["gold_stage"]
+    # 体素取大一些，使每侧肺超过 segment_lungs 的 50 cm³ 最小体积
+    em = calculate_emphysema_metrics(vol, spacing=(5.0, 2.0, 2.0))
+    assert em["status"] == "success"
+    vx_l = 5.0 * 2.0 * 2.0 / 1e6
+    lung_vox = 2 * 20 * 36 * 18
+    laa_vox = 16 * 10 * 10
+    assert em["total_lung_volume_liters"] == round(lung_vox * vx_l, 2)
+    assert em["laa_percent"] == round(laa_vox / lung_vox * 100.0, 1)
+    assert "gold_stage" not in em
+    assert "recommendation" not in em
+
+    # 分不出肺（低密度区与图像边界相连）时返回空值与原因，不给估计值
+    open_vol = np.full((24, 64, 64), -850.0, dtype=np.float32)
+    em_fail = calculate_emphysema_metrics(open_vol, spacing=(1.5, 0.8, 0.8))
+    assert em_fail["status"] == "lung_segmentation_failed"
+    assert em_fail["laa_percent"] is None
 
     # Test API endpoint
     client = TestClient(app)
@@ -218,7 +245,7 @@ def test_emphysema_metrics_and_endpoint():
     assert res.status_code == 200
     data = res.json()
     assert "laa_percent" in data
-    assert "gold_stage" in data
+    assert "gold_stage" not in data
     assert "total_lung_volume_liters" in data
 
 
@@ -231,18 +258,23 @@ def test_strict_neural_inference_and_missing_weight_rejection():
     res_copd = engine.analyze_volume(volume=vol, spacing=(1.5, 0.8, 0.8), model_name="copd_emphysema_analyzer")
     assert res_copd["status"] == "success"
     assert "emphysema" in res_copd["recist_metrics"]
+    # LAA% 不再塞进径线字段，也不输出 GOLD 分级
+    assert res_copd["recist_metrics"]["longest_diameter_mm"] is None
+    assert res_copd["recist_metrics"]["short_axis_mm"] is None
+    assert "lung_rads" not in res_copd["recist_metrics"]
+    assert "GOLD" not in res_copd["summary_markdown"]
     assert res_copd["key_slice_png_base64"].startswith("data:image/png;base64,")
 
     # Test Real Neural Inference for installed MONAI Spleen 3D-UNet model
     res_spleen = engine.analyze_volume(volume=vol, spacing=(1.5, 0.8, 0.8), model_name="spleen_segmenter")
     assert res_spleen["status"] == "success"
     assert res_spleen["real_neural_inference"] is True
-    assert "MONAI 3D-UNet" in res_spleen["neural_info"]["neural_architecture"]
+    assert "spleen_ct_segmentation" in res_spleen["neural_info"]["neural_architecture"]
 
     # Verify that requesting an uninstalled model strictly raises RuntimeError rather than degrading to heuristic fake rules
     with pytest.raises(RuntimeError) as exc_info:
         engine.analyze_volume(volume=vol, spacing=(1.5, 0.8, 0.8), model_name="uninstalled_custom_model")
-    assert "权重尚未安装" in str(exc_info.value)
+    assert "未实现" in str(exc_info.value)
 
 
 def test_model_registry_and_endpoints():
@@ -551,3 +583,29 @@ def test_qa_kernel_classification():
     assert canon_fc18["category"] == "smooth_mediastinum"
 
 
+
+
+def test_qa_lung_volume_excludes_external_air():
+    """质控肺容积只计双肺，不把体外空气算进去；样例胸部 CT 应落在成人正常肺容积范围内。"""
+    from dicom_io import load_nifti
+    from quality_assurance import assess_ct_quality
+    vol, sp = load_nifti(os.path.join(os.path.dirname(__file__), "..", "data", "chest_lung_ct.nii.gz"))
+    qa = assess_ct_quality(vol, sp, {})
+    assert qa["total_lung_volume_cm3"] is not None
+    assert 2500.0 <= qa["total_lung_volume_cm3"] <= 8000.0
+
+
+def test_qa_lung_volume_unavailable_when_not_segmentable():
+    """分不出肺时不给估计值，吸气程度标为未评估。"""
+    from quality_assurance import assess_ct_quality
+    vol = np.full((200, 64, 64), -1000.0, dtype=np.float32)
+    qa = assess_ct_quality(vol, (1.0, 1.0, 1.0), {})
+    assert qa["total_lung_volume_cm3"] is None
+    assert qa["is_inspiratory_adequate"] is None
+
+
+def test_qa_kernel_multivalue_siemens():
+    """Siemens 多值卷积核字段取主名称再分类。"""
+    from quality_assurance import parse_reconstruction_kernel
+    assert parse_reconstruction_kernel(["Br64d", "3"])["category"] == "sharp_lung"
+    assert parse_reconstruction_kernel("['Br40d', '3']")["category"] == "smooth_mediastinum"
