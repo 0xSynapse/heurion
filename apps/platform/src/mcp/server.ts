@@ -24,7 +24,7 @@ import { relevantPassages, type FullTextClient } from '../literature/fulltext.ts
 import { importReferences, parseReferences } from '../literature/import-refs.ts'
 import { OpenAlexClient } from '../literature/openalex.ts'
 import type { PubMedClient } from '../literature/pubmed.ts'
-import { locate, threadMarks } from '../model/anchors.ts'
+import { AnchorError, attachComment, locate, threadMarks } from '../model/anchors.ts'
 import type { Documents } from '../model/runtime.ts'
 import type { OpService } from '../ops/service.ts'
 import { DocOp, OpError } from '../ops/types.ts'
@@ -512,6 +512,53 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
         }
       }),
     })
+  })
+
+  server.registerTool('comment_add', {
+    description:
+      '基于语义理解在文档指定块（段落、标题或表格）上挂载一条 AI 审查评论。' +
+      '仅在确实发现需要作者注意的问题时使用（例如：引述外部研究却漏标引用、表格内百分比加总或分母 N 不一致、正文与图表数字矛盾、统计或临床逻辑漏洞）；' +
+      '若正文或表格数据正常（如本研究自身队列的常规基线数据），切勿挂载无意义评论。若可一键替换修正，可在末尾附【建议修改为】：<纠正文本>。',
+    inputSchema: {
+      doc_id: z.string(),
+      node_id: z.string().min(1).describe('段落、标题或表格块 id（从 doc_read 获取）'),
+      snippet: z.string().max(500).optional().describe('块内要高亮锚定的原文片段；若锚定整块或表格可省略'),
+      text: z.string().min(1).max(10_000).describe('评论内容：简明指出具体问题与修改建议'),
+    },
+  }, async ({ doc_id, node_id, snippet, text: body }) => {
+    const denied = ctx.check(doc_id, 'write', 'read')
+    if (denied) return denied
+    let doc = docs.get(doc_id)
+    let blockExists = false
+    doc.descendants(node => {
+      if (node.attrs?.id === node_id) {
+        blockExists = true
+        return false
+      }
+      return true
+    })
+    if (!blockExists) return fail('block_not_found', `块 ${node_id} 不存在，请先调用 doc_read 确认最新块 id`)
+    const cleanSnippet = (snippet ?? '').trim()
+    // 同一块、同一锚点文字若已有打开状态的相同评论则直接复用，避免重复挂评论
+    const existing = store.listComments(doc_id, 'open').find(
+      c => c.node_id === node_id && c.snippet === cleanSnippet && c.replies.some(r => r.text === body),
+    )
+    if (existing) {
+      return json({ comment_id: existing.id, status: 'unchanged' })
+    }
+    const row = store.addComment({ doc_id, node_id, snippet: cleanSnippet })
+    if (cleanSnippet) {
+      try {
+        const nextDoc = attachComment(doc, node_id, cleanSnippet, row.id).doc
+        docs.commit(doc_id, nextDoc, { actor: 'system', turnId: ctx.turnId, ops: [{ op: 'claim_comment', thread: row.id }] })
+      } catch (err) {
+        if (!(err instanceof AnchorError)) throw err
+        store.db.prepare("UPDATE comments SET snippet = '' WHERE id = ?").run(row.id)
+      }
+    }
+    const reply = store.addReply(row.id, 'ai', body, ctx.turnId)
+    ctx.notify({ type: 'comment_reply', doc_id, comment_id: row.id })
+    return json({ comment_id: row.id, reply_id: reply.id, status: 'commented' })
   })
 
   server.registerTool('comment_reply', {

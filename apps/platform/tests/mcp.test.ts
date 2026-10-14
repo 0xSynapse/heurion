@@ -184,6 +184,28 @@ describe('评论规则', () => {
     await t.call('comment_reply', { doc_id: t.docId, comment_id: c.id, text: '已改' })
     expect((await t.call('comment_resolve', { doc_id: t.docId, comment_id: c.id })).body.code).toBe('user_confirms_changes')
   })
+
+  it('comment_add：模型基于语义理解直接在指定块和文字片段挂评论，且重复调用不重复创建', async () => {
+    const t = await connect('表 1 显示三分类饮酒比例分别为 40.4%、2.5% 与 51.1%。')
+    const node = t.docs.get(t.docId).child(0).attrs.id as string
+    const first = await t.call('comment_add', {
+      doc_id: t.docId,
+      node_id: node,
+      snippet: '40.4%、2.5% 与 51.1%',
+      text: '数据自洽提示：三项百分比加总为 94.0%，且 40.4% (19/47) 与总样本量 N=45 的分母不一致，建议核对原始数据。',
+    })
+    expect(first.body.status).toBe('commented')
+    expect(first.body.comment_id).toBeTruthy()
+
+    const dup = await t.call('comment_add', {
+      doc_id: t.docId,
+      node_id: node,
+      snippet: '40.4%、2.5% 与 51.1%',
+      text: '数据自洽提示：三项百分比加总为 94.0%，且 40.4% (19/47) 与总样本量 N=45 的分母不一致，建议核对原始数据。',
+    })
+    expect(dup.body.status).toBe('unchanged')
+    expect(t.store.listComments(t.docId, 'open')).toHaveLength(1)
+  })
 })
 
 describe('论断核对', () => {

@@ -185,10 +185,11 @@ export class ClaimService {
 /** 「核对全部论断」回合的提示。 */
 export function verifyPrompt(docId: string): string {
   return (
-    `请核对文档 ${docId} 中带引用的论断，只核对、不修改正文：\n` +
-    `1. 调用 verify_claims（doc_id="${docId}"），按 next_cursor 翻页直到取完；\n` +
-    `2. ${CLAIM_CRITERIA}对 unsourced 里的无引用数值句：只有确实在引述外部既往研究、流行病学统计或指南结论却漏标文献时才判为 missing_citation；若属于本研究自身队列/病例数据、样本量、图表结果或自报基线特征，原本就无需挂文献引用，请判为 supported（不挂评论），切勿机械标为 missing_citation；\n` +
-    `3. 每页判断完就用 claim_report 提交；\n` +
-    `4. 最后用两三句话总结核对结果：几条不支持（已挂评论）、几条缺少可核对的证据（列出句子开头，建议补充全文或更直接的文献）。`
+    `请核对并审查文档 ${docId}，只把真正有问题、需要作者注意的地方挂为评论，不直接修改正文：\n` +
+    `1. 带引用论断核对：调用 verify_claims（doc_id="${docId}"），按 next_cursor 翻页直到取完；${CLAIM_CRITERIA}每页判断完用 claim_report 提交；\n` +
+    `2. 全文语义理解与数据自洽性审查：结合 doc_read 通读全文与表格，通过语义理解甄别潜在问题——\n` +
+    `   - 对本研究自身队列/病例数据、样本量、自报基线表格（如 Table 1），原本就不应挂外部文献引用，若无异常切勿挂任何评论（不要机械判为 missing_citation）；\n` +
+    `   - 若发现真正的问题（例如：① 引言/讨论引述外部既往研究或指南数据却漏标引用；② 表内百分比加总异常、频数与总样本量 N 的分母不一致；③ 正文描述与表/图中的数字矛盾；④ 统计量与 P 值/置信区间前后矛盾），请用 comment_add（或对 unsourced 外部论断用 claim_report）在对应块/片段上直接挂载评论说明原因与建议；\n` +
+    `3. 最后用两三句话总结核对结果：几处文献不支持或数据异常（已挂评论）、几处缺少可核对的摘要证据。`
   )
 }
