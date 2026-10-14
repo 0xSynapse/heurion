@@ -217,4 +217,50 @@ describe('临床科研生存分析套件 (Survival Analysis Suite)', () => {
     expect(res.narrative).toContain('Log-rank')
     expect(res.markdown_table).toContain('| **靶向联合治疗组** |')
   })
+
+  it('8. 边界与精度回归测试：Infinity 过滤、三组超几何协方差 Log-Rank 与分类协变量自动编码', () => {
+    // (a) Infinity / NaN 时间点安全过滤，不触发死循环
+    const withInf = [
+      ...clinicalCohort,
+      { ptid: 'P_INF', arm: 'Treatment', os_months: Infinity, status: 1, age: 60, stage: 2 },
+    ]
+    const resInf = generateSurvivalAnalysis(withInf, {
+      time_col: 'os_months',
+      event_col: 'status',
+      group_col: 'arm',
+    })
+    expect(resInf.groups.reduce((s, g) => s + g.total_n, 0)).toBe(20)
+    const infRisk = buildNumberAtRiskTable(resInf.groups, Infinity, 5)
+    expect(infRisk.time_points).toEqual([0])
+
+    // (b) 3 组精确超几何协方差 Log-Rank 检验
+    const g1 = calculateSingleGroupKm(
+      [{ time: 5, event: 1 }, { time: 10, event: 1 }, { time: 15, event: 0 }, { time: 20, event: 1 }],
+      'A', 'Group A',
+    )
+    const g2 = calculateSingleGroupKm(
+      [{ time: 8, event: 1 }, { time: 12, event: 0 }, { time: 18, event: 1 }, { time: 25, event: 0 }],
+      'B', 'Group B',
+    )
+    const g3 = calculateSingleGroupKm(
+      [{ time: 10, event: 0 }, { time: 22, event: 0 }, { time: 30, event: 1 }, { time: 35, event: 0 }],
+      'C', 'Group C',
+    )
+    const lr3 = calculateLogRankTest([g1, g2, g3])
+    expect(lr3.df).toBe(2)
+    expect(lr3.chi2).toBeGreaterThan(0)
+    expect(lr3.p_value).toBeGreaterThan(0)
+    expect(lr3.p_value).toBeLessThanOrEqual(1)
+
+    // (c) 含字符串分类协变量（如 sex='Male'/'Female'）的 Cox 回归自动编码
+    const coxWithStr = clinicalCohort.map((r, idx) => ({
+      time: r.os_months,
+      event: r.status,
+      sex: idx % 2 === 0 ? 'Male' : 'Female',
+      age: r.age,
+    }))
+    const coxRes = calculateCoxRegression(coxWithStr, ['sex', 'age'])
+    expect(coxRes.sample_size).toBe(20)
+    expect(coxRes.covariates.length).toBe(2)
+  })
 })

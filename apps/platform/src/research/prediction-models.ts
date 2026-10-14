@@ -193,14 +193,20 @@ export function buildNomogram(options: NomogramOptions): NomogramResult {
   const s0_3 = validS0(baseline_survival.year3)
   const s0_5 = validS0(baseline_survival.year5)
 
+  const totalLpSpan = evaluatedPreds.reduce(
+    (sum, p) => sum + Math.abs(p.beta) * Math.max(0, p.max_val - p.min_val),
+    0,
+  )
+  // 以各协变量取值区间中点为基线生存率 S0(t) 的参考中心 (LP_ref = 0)，最低风险点 (0 分) 对应 LP_min = -0.5 * totalLpSpan
+  const lpMinCentered = -0.5 * Math.max(totalLpSpan, 1e-6)
+
   const getPointsForProb = (s0: number, pTarget: number): number | null => {
     if (pTarget <= 0 || pTarget >= 1 || s0 <= 0 || s0 >= 1) return null
     // pTarget = s0 ^ exp(LP) => log(pTarget) = exp(LP) * log(s0) => exp(LP) = log(pTarget) / log(s0)
     const ratio = Math.log(pTarget) / Math.log(s0)
     if (ratio <= 0) return null
     const lp = Math.log(ratio)
-    // 粗略线性预测中心化映射到总分尺度
-    const pts = Math.round((lp + 1.2) * (maxTotalPossiblePoints / 3.0))
+    const pts = Math.round((lp - lpMinCentered) * scale)
     if (pts < 0 || pts > maxTotalPossiblePoints * 1.1) return null
     return pts
   }

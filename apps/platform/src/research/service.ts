@@ -209,6 +209,7 @@ export class StudyService {
     } else {
       const ds = this.store.getDataset(ref)
       if (!ds || ds.owner !== owner) throw new StudyError('not_found', '数据集不存在', 404)
+      if (ds.status === 'review') throw new StudyError('needs_review', '数据集含有待确认的身份信息列，请先在「数据」里完成去标识处理后再归入研究', 409)
     }
     const cur = this.store.studyOf(kind, ref)
     if (cur?.study_id === id) return

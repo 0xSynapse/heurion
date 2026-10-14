@@ -167,20 +167,27 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
   }
 
   // —— 患者页 ——
+  let openPatientSeq = 0
 
   async function openPatient(id: string, keepTab = false, initialTab?: 'overview' | 'labs' | 'records' | 'docs' | 'review'): Promise<void> {
     if (!id) return
     if (current !== id) hooks.leaveDoc()
     current = id
+    const seq = ++openPatientSeq
     if (!keepTab) tab = initialTab || 'overview'
     if (poll) { clearTimeout(poll); poll = null }
     let d: Detail
-    try { d = await api<Detail>(`/api/patients/${id}`) } catch (err) { notice((err as Error).message, true); current = null; return }
+    try { d = await api<Detail>(`/api/patients/${id}`) } catch (err) {
+      if (seq === openPatientSeq) { notice((err as Error).message, true); current = null }
+      return
+    }
+    if (seq !== openPatientSeq || current !== id) return
     const page = $('page')
     page.className = 'page patient-page'
     $('docTitle').textContent = label(d)
     renderList()
     const pendingLabs = tab === 'review' || tab === 'labs' ? await api<Lab[]>(`/api/patients/${id}/labs?pending=1`) : []
+    if (seq !== openPatientSeq || current !== id) return
     const confirmedLabs = tab === 'labs' ? pendingLabs.filter(l => l.status === 'confirmed') : []
     const pendingCount = d.records.filter(r => r.status === 'pending').length + d.pending_proposals.length
     const canEdit = d.access === 'owner' || d.access === 'member'
@@ -311,7 +318,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     }
 
     return `<section><h3 class="mem-h">摘要</h3>
-        ${canEdit ? `<textarea id="ptSummary" rows="4" placeholder="病史要点、用药、随访计划（只用代号，不写姓名）">${esc(d.summary ?? '')}</textarea>` : `<div class="pt-summary">${esc(d.summary ?? '（无）')}</div>`}</section>
+        ${canEdit ? `<textarea id="ptSummary" data-pid="${esc(d.id)}" rows="4" placeholder="病史要点、用药、随访计划（只用代号，不写姓名）">${esc(d.summary ?? '')}</textarea>` : `<div class="pt-summary">${esc(d.summary ?? '（无）')}</div>`}</section>
       ${imgWidget}
       <section><h3 class="mem-h">最近化验</h3>${d.latest_labs.length === 0 ? '<div class="muted">还没有已确认的化验。点「上传化验单 / 报告」，自动提取后在「待确认」里审核。</div>' : `<table class="users pt-labs">
         <thead><tr><th>项目</th><th>结果</th><th>参考范围</th><th>日期</th></tr></thead><tbody>
@@ -3855,14 +3862,16 @@ ${impression}
   })
   document.getElementById('page')!.addEventListener('blur', async e => {
     const ta = e.target as HTMLTextAreaElement
-    if (ta.id !== 'ptSummary' || !current) return
-    try { await api(`/api/patients/${current}`, { method: 'PATCH', body: JSON.stringify({ summary: ta.value }) }) } catch (err) { notice((err as Error).message, true) }
+    const targetPid = ta.dataset?.pid || current
+    if (ta.id !== 'ptSummary' || !targetPid) return
+    try { await api(`/api/patients/${targetPid}`, { method: 'PATCH', body: JSON.stringify({ summary: ta.value }) }) } catch (err) { notice((err as Error).message, true) }
   }, true)
 
   /** 家庭分享收件箱：中间区域显示卡片列表，点开看只读视图。 */
   async function openShares(focus?: string): Promise<void> {
     hooks.leaveDoc()
     current = null
+    openPatientSeq++
     if (poll) { clearTimeout(poll); poll = null }
     await loadShares()
     const page = $('page')
@@ -4149,7 +4158,7 @@ ${impression}
     /** 机构开了患者模块才显示「＋ 引用患者」 */
     setPickEnabled(on: boolean): void { document.getElementById('ptPickBtn')!.hidden = !on },
     /** 打开文档时：患者页失效 */
-    leave(): void { current = null; if (poll) { clearTimeout(poll); poll = null } if (!$('patientList').hidden) renderList() },
+    leave(): void { current = null; openPatientSeq++; if (poll) { clearTimeout(poll); poll = null } if (!$('patientList').hidden) renderList() },
     /** 打开患者页（从病例报告回到患者，可直达指定页签） */
     async open(id: string, initialTab?: 'overview' | 'labs' | 'records' | 'docs' | 'review'): Promise<void> { hooks.goSpace('patients'); await openPatient(id, false, initialTab) },
     /** 进入患者空间（左侧图标栏）：刷新列表；中间区域显示患者或引导页 */

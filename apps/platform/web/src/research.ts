@@ -123,18 +123,25 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
   }
 
   // —— 研究页 ——
+  let openStudySeq = 0
 
   async function openStudy(id: string): Promise<void> {
     // 从研究里的文档回来、或在文档里点研究：先关掉文档（AI 栏收起，顶栏不再显示文档的东西）
     if (!$('page').classList.contains('study-page')) hooks.leaveDoc()
     current = id
+    const seq = ++openStudySeq
     if (poll) { clearTimeout(poll); poll = null }
     let s: Study
-    try { s = await api<Study>(`/api/studies/${id}`) } catch (err) { notice((err as Error).message, true); current = null; return }
+    try { s = await api<Study>(`/api/studies/${id}`) } catch (err) {
+      if (seq === openStudySeq) { notice((err as Error).message, true); current = null }
+      return
+    }
+    if (seq !== openStudySeq || current !== id) return
     // 入组名单（机构没开患者模块时没有）
     let cohort: Cohort | null = null
     let cohortOff = ''
     try { cohort = await api<Cohort>(`/api/studies/${id}/cohort`) } catch (err) { cohortOff = (err as Error).message }
+    if (seq !== openStudySeq || current !== id) return
     const page = $('page')
     page.className = 'page study-page'
     $('docTitle').textContent = s.title
@@ -146,8 +153,9 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     const w = (html: string) => canEdit ? html : ''
     const members = await api<{ members: Member[] }>(`/api/studies/${id}/members`).then(r => r.members).catch(() => [] as Member[])
     const candidates = isOwner ? await api<Array<{ user_id: string; name: string; username: string }>>(`/api/studies/${id}/candidates`).catch(() => []) : []
-    const docRow = (d: Study['docs'][number]) => `<li class="rs-item" data-opendoc="${d.doc_id}"><span class="rs-kind">${d.kind === 'deck' ? '幻灯片' : ROLES[d.role] ?? '文档'}</span><b>${esc(d.title)}</b><span class="muted small">${members.length > 1 && d.created_by ? `${esc(d.created_by)} · ` : ''}更新于 ${date(d.updated_at)}</span>
-        ${w(`<button class="quiet small-btn" data-unlink="doc:${d.doc_id}" title="移出研究（文档回到创建者的文档列表）">移出</button>`)}</li>`
+    if (seq !== openStudySeq || current !== id) return
+    const docRow = (d: Study['docs'][number]) => `<li class="rs-item" data-opendoc="${esc(d.doc_id)}"><span class="rs-kind">${d.kind === 'deck' ? '幻灯片' : ROLES[d.role] ?? '文档'}</span><b>${esc(d.title)}</b><span class="muted small">${members.length > 1 && d.created_by ? `${esc(d.created_by)} · ` : ''}更新于 ${date(d.updated_at)}</span>
+        ${w(`<button class="quiet small-btn" data-unlink="doc:${esc(d.doc_id)}" title="移出研究（文档回到创建者的文档列表）">移出</button>`)}</li>`
     const protocols = docsOf(['protocol'])
     const manuscripts = docsOf(['manuscript', 'slides', 'other'])
     const ro = canEdit ? '' : ' disabled'
@@ -716,7 +724,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
       const populate = (sel: HTMLSelectElement, candidates: string[], defMatch: (n: string) => boolean) => {
         sel.innerHTML = candidates.map(c => {
           const lbl = ds.labels?.[c] || c
-          return `<option value="${c}">${esc(lbl)} (${c})</option>`
+          return `<option value="${esc(c)}">${esc(lbl)} (${esc(c)})</option>`
         }).join('')
         const matched = candidates.find(defMatch)
         if (matched) sel.value = matched
@@ -772,20 +780,21 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           // Stats cards
           let statsHtml = ''
           if (logRank) {
+            const chi2Num = Number(logRank.chi2)
             statsHtml += `<div style="border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--panel);">
               <div class="muted small">Log-rank 显著性检验</div>
-              <div style="font-size:20px;font-weight:700;color:#0284c7;margin-top:2px;">${esc(logRank.p_value_formatted)}</div>
-              <div class="muted small">Chi2 = ${logRank.chi2.toFixed(2)}, df = ${logRank.df}</div>
+              <div style="font-size:20px;font-weight:700;color:#0284c7;margin-top:2px;">${esc(String(logRank.p_value_formatted ?? ''))}</div>
+              <div class="muted small">Chi2 = ${Number.isFinite(chi2Num) ? chi2Num.toFixed(2) : '—'}, df = ${Number(logRank.df) || 0}</div>
             </div>`
           }
           if (groupList.length > 0) {
             for (const g of groupList) {
-              const med = g.median_time !== null && g.median_time !== undefined ? `${g.median_time} ${timeUnit}` : '未达 (NR)'
-              const rate = typeof g.event_rate === 'number' ? g.event_rate.toFixed(1) : g.event_rate
+              const med = g.median_time !== null && g.median_time !== undefined ? `${esc(String(g.median_time))} ${esc(String(timeUnit))}` : '未达 (NR)'
+              const rate = typeof g.event_rate === 'number' ? g.event_rate.toFixed(1) : esc(String(g.event_rate ?? ''))
               statsHtml += `<div style="border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--panel);">
-                <div class="muted small">${esc(g.label || g.group || '分层组')} (n=${g.total_n})</div>
+                <div class="muted small">${esc(g.label || g.group || '分层组')} (n=${Number(g.total_n) || 0})</div>
                 <div style="font-size:20px;font-weight:700;color:var(--text);margin-top:2px;">中位生存: ${med}</div>
-                <div class="muted small">事件发生率: ${rate}% (${g.events_n}/${g.total_n})</div>
+                <div class="muted small">事件发生率: ${rate}% (${Number(g.events_n) || 0}/${Number(g.total_n) || 0})</div>
               </div>`
             }
           }

@@ -2,9 +2,9 @@
  * Subagent（子智能体）协同调度服务
  *
  * 实现了「双翼 · 一核 · 一门」多智能体流水线：
- * 1. 📚 literature_researcher（文献专家）：检索 PubMed/OpenAlex，提炼临床证据与标准 AMA 引用，产出 Evidence Bundle
- * 2. 📊 biostatistician（生信统计专家）：基于本地数据集生成 NEJM/Lancet 级 Table 1 基线表或 KM 生存分析，产出 Statistical Bundle
- * 3. 🛡️ fact_checker（质控核查专家）：对抗式核查论断真实性、数字一致性与 PHI 敏感数据泄漏，产出 Verification Report
+ * 1. literature_researcher（文献专家）：检索 PubMed/OpenAlex，提炼临床证据与标准 AMA 引用，产出 Evidence Bundle
+ * 2. biostatistician（生信统计专家）：基于本地数据集生成 NEJM/Lancet 级 Table 1 基线表或 KM 生存分析，产出 Statistical Bundle
+ * 3. fact_checker（质控核查专家）：对抗式核查论断真实性、数字一致性与 PHI 敏感数据泄漏，产出 Verification Report
  */
 
 import type { Documents } from '../model/runtime.ts'
@@ -45,6 +45,10 @@ export interface SubagentDeps {
 
 export type SubagentServiceDeps = SubagentDeps
 
+export interface SubagentDelegateOptions {
+  cohortGuard?: (origin?: { kind: string } | null) => string | null
+}
+
 export class SubagentService {
   constructor(private readonly deps: SubagentDeps) {}
 
@@ -68,12 +72,13 @@ export class SubagentService {
     userId: string,
     params: SubagentTaskParams,
     onProgress: SubagentProgress = { step: () => {} },
+    opts?: SubagentDelegateOptions,
   ): Promise<SubagentResult> {
     switch (params.role) {
       case 'literature_researcher':
         return this.runLiteratureResearcher(userId, params, onProgress)
       case 'biostatistician':
-        return this.runBiostatistician(userId, params, onProgress)
+        return this.runBiostatistician(userId, params, onProgress, opts)
       case 'fact_checker':
         return this.runFactChecker(userId, params, onProgress)
       default:
@@ -237,6 +242,7 @@ export class SubagentService {
     userId: string,
     params: SubagentTaskParams,
     onProgress: SubagentProgress,
+    opts?: SubagentDelegateOptions,
   ): Promise<StatisticalBundle> {
     onProgress.step('正在定位临床数据集与变量配置...', 'info')
     if (!this.deps.datasets) {
@@ -277,7 +283,8 @@ export class SubagentService {
     }
 
     const dataset = this.deps.datasets.get(userId, datasetId)
-    const guardReason = this.deps.cohortGuard?.(dataset.origin as any)
+    const activeCohortGuard = opts?.cohortGuard ?? this.deps.cohortGuard
+    const guardReason = activeCohortGuard?.(dataset.origin as any)
     if (guardReason) {
       onProgress.step(`数据集受机构隐私策略限制: ${guardReason}`, 'warn')
       return {

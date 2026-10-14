@@ -268,8 +268,14 @@ export function decodeEmailBody(body: string, charset?: string): string {
     text = decodeQuotedPrintable(text, charset)
   }
 
-  // 5. 清理残留的 MIME boundary 标记
-  text = text.replace(/--[a-zA-Z0-9_\-=]+--?\s*$/g, '').trim()
+  // 5. 清理残留的 MIME boundary 标记（仅在尾部 200 字符窗口内匹配，避免长正文回溯）
+  if (text.length <= 200) {
+    text = text.replace(/--[a-zA-Z0-9_\-=]+--?\s*$/, '').trim()
+  } else {
+    const head = text.slice(0, -200)
+    const tail = text.slice(-200).replace(/--[a-zA-Z0-9_\-=]+--?\s*$/, '')
+    text = (head + tail).trim()
+  }
   return text
 }
 

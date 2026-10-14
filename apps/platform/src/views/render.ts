@@ -1,5 +1,6 @@
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { serializeBlocks } from '../model/markdown.ts'
+import { sanitizeHref } from '../model/schema.ts'
 import type { CitationRow } from '../store/db.ts'
 import { citationOrder } from './read.ts'
 
@@ -9,6 +10,7 @@ import { citationOrder } from './read.ts'
  */
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+const SAFE_ALIGN = new Set(['left', 'center', 'right', 'justify'])
 
 interface RenderContext {
   numbers: Map<string, number>
@@ -25,7 +27,7 @@ function wrap(html: string, marks: readonly Mark[]): string {
       case 'sup': out = `<sup>${out}</sup>`; break
       case 'sub': out = `<sub>${out}</sub>`; break
       case 'code': out = `<code>${out}</code>`; break
-      case 'link': out = `<a href="${esc(String(m.attrs.href))}" target="_blank" rel="noopener">${out}</a>`; break
+      case 'link': out = `<a href="${esc(sanitizeHref(m.attrs.href))}" target="_blank" rel="noopener">${out}</a>`; break
       case 'comment': out = `<mark class="comment" data-thread="${esc(String(m.attrs.thread))}">${out}</mark>`; break
     }
   }
@@ -47,7 +49,8 @@ function inline(node: PMNode, ctx: RenderContext): string {
 
 function block(node: PMNode, ctx: RenderContext): string {
   const id = node.attrs.id ? ` data-id="${esc(String(node.attrs.id))}"` : ''
-  const align = node.attrs.align ? ` style="text-align:${esc(String(node.attrs.align))}"` : ''
+  const rawAlign = typeof node.attrs.align === 'string' ? node.attrs.align.trim().toLowerCase() : ''
+  const align = SAFE_ALIGN.has(rawAlign) ? ` style="text-align:${rawAlign}"` : ''
   const children = () => { let s = ''; node.forEach(c => { s += block(c, ctx) }); return s }
   switch (node.type.name) {
     case 'paragraph': {
@@ -55,17 +58,22 @@ function block(node: PMNode, ctx: RenderContext): string {
       return `<p${id}${cls}${align}>${inline(node, ctx) || '<br>'}</p>`
     }
     case 'heading': {
-      const level = Math.min(6, Math.max(1, node.attrs.level as number))
+      const level = Math.min(6, Math.max(1, Number(node.attrs.level) || 1))
       return `<h${level}${id}${align}>${inline(node, ctx)}</h${level}>`
     }
     case 'bullet_list': return `<ul${id}>${children()}</ul>`
-    case 'ordered_list': return `<ol${id} start="${node.attrs.start ?? 1}">${children()}</ol>`
+    case 'ordered_list': {
+      const start = Math.max(1, Math.floor(Number(node.attrs.start) || 1))
+      return `<ol${id} start="${start}">${children()}</ol>`
+    }
     case 'list_item': return `<li${id}>${children()}</li>`
     case 'table': return `<table${id}>${children()}</table>`
     case 'table_row': return `<tr>${children()}</tr>`
     case 'table_cell': {
       const tag = node.attrs.header ? 'th' : 'td'
-      const span = `${(node.attrs.colspan as number) > 1 ? ` colspan="${node.attrs.colspan}"` : ''}${(node.attrs.rowspan as number) > 1 ? ` rowspan="${node.attrs.rowspan}"` : ''}`
+      const colspan = Math.floor(Number(node.attrs.colspan) || 1)
+      const rowspan = Math.floor(Number(node.attrs.rowspan) || 1)
+      const span = `${colspan > 1 ? ` colspan="${colspan}"` : ''}${rowspan > 1 ? ` rowspan="${rowspan}"` : ''}`
       return `<${tag}${span}>${children()}</${tag}>`
     }
     case 'figure': {
@@ -91,7 +99,7 @@ export function renderHtml(doc: PMNode, citations: CitationRow[], assetUrl: (id:
   doc.forEach(n => { body += block(n, { numbers, assetUrl }) })
   if (list.length > 0) {
     body += `<section class="references"><h2>参考文献</h2><ol>${list.map(c =>
-      `<li>${esc(c.formatted)} <a href="${esc(c.url ?? `https://doi.org/${c.doi}`)}" target="_blank" rel="noopener">原文</a></li>`).join('')}</ol></section>`
+      `<li>${esc(c.formatted)} <a href="${esc(sanitizeHref(c.url ?? `https://doi.org/${c.doi}`))}" target="_blank" rel="noopener">原文</a></li>`).join('')}</ol></section>`
   }
   return body
 }

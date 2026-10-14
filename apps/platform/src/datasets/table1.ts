@@ -756,9 +756,9 @@ export function generateTable1FromData(
   const calcPValue = include_p_value && groupNames.length >= 2
   const calcSmd = include_smd && isTwoGroups
 
-  // 组计数
+  // 组计数（使用无原型字典，防止 CSV 中出现 __proto__ / constructor 等分类值污染原型链）
   const totalN = records.length
-  const groupCounts: Record<string, number> = {}
+  const groupCounts: Record<string, number> = Object.create(null)
   for (const g of groupNames) groupCounts[g] = 0
   for (const r of records) {
     if (group_col) {
@@ -812,7 +812,7 @@ export function generateTable1FromData(
           validCount++
           const str = String(v).trim()
           uniqueVals.add(str)
-          if (!isNaN(Number(str))) numCount++
+          if (Number.isFinite(Number(str))) numCount++
         }
       }
       // 数值比例 > 80% 且唯一值数量 > 5 视为连续型，否则视为分类型
@@ -825,7 +825,7 @@ export function generateTable1FromData(
 
     // 统计各组与总体缺失
     let missingTotal = 0
-    const missingByGroup: Record<string, { count: number; percentage: number }> = {}
+    const missingByGroup: Record<string, { count: number; percentage: number }> = Object.create(null)
     for (const g of groupNames) missingByGroup[g] = { count: 0, percentage: 0 }
 
     for (const r of records) {
@@ -853,14 +853,14 @@ export function generateTable1FromData(
           const v = r[col]
           if (v !== undefined && v !== null && String(v).trim() !== '') {
             const num = Number(v)
-            if (!isNaN(num)) out.push(num)
+            if (Number.isFinite(num)) out.push(num)
           }
         }
         return out
       }
 
       const overallVals = extractVals()
-      const groupVals: Record<string, number[]> = {}
+      const groupVals: Record<string, number[]> = Object.create(null)
       for (const g of groupNames) {
         groupVals[g] = extractVals(r => String(r[group_col!] ?? '').trim() === g)
       }
@@ -878,7 +878,7 @@ export function generateTable1FromData(
         }
       }
 
-      const groupSummaries: Record<string, string> = {}
+      const groupSummaries: Record<string, string> = Object.create(null)
       for (const g of groupNames) {
         const s = summarizeContinuous(groupVals[g] ?? [])
         groupSummaries[g] = formatContinuousVal(s)
@@ -959,7 +959,7 @@ export function generateTable1FromData(
       })
 
       if (show_missing && missingTotal > 0) {
-        const missingGroups: Record<string, string> = {}
+        const missingGroups: Record<string, string> = Object.create(null)
         for (const g of groupNames) {
           const m = missingByGroup[g]!
           missingGroups[g] = `${m.count} (${m.percentage.toFixed(pctDecimals)}%)`
@@ -986,12 +986,12 @@ export function generateTable1FromData(
       const levels = Array.from(categorySet).sort()
 
       // 各组与总体的频数
-      const overallCategoryCounts: Record<string, number> = {}
-      const groupCategoryCounts: Record<string, Record<string, number>> = {}
+      const overallCategoryCounts: Record<string, number> = Object.create(null)
+      const groupCategoryCounts: Record<string, Record<string, number>> = Object.create(null)
       for (const lvl of levels) {
         overallCategoryCounts[lvl] = 0
         for (const g of groupNames) {
-          if (!groupCategoryCounts[g]) groupCategoryCounts[g] = {}
+          if (!groupCategoryCounts[g]) groupCategoryCounts[g] = Object.create(null)
           groupCategoryCounts[g]![lvl] = 0
         }
       }
@@ -1033,13 +1033,15 @@ export function generateTable1FromData(
       }
 
       // 变量主行
+      const emptyGroupMap: Record<string, string> = Object.create(null)
+      for (const g of groupNames) emptyGroupMap[g] = ''
       tableRows.push({
         variable: col,
         label: `${colLabel}, n (%)`,
         type: 'categorical',
         indent: 0,
         overall: '',
-        groups: Object.fromEntries(groupNames.map(g => [g, ''])),
+        groups: emptyGroupMap,
         test_method: testMethod,
         p_value: pValue,
         p_value_formatted: formatP(pValue, pDecimals),
@@ -1057,7 +1059,7 @@ export function generateTable1FromData(
         const lvlLabel = labels[`${col}.${lvl}`] ?? labels[lvl] ?? lvl
         const cntOverall = overallCategoryCounts[lvl] ?? 0
         const pctOverall = totalN > 0 ? (cntOverall / totalN) * 100 : 0
-        const groupTexts: Record<string, string> = {}
+        const groupTexts: Record<string, string> = Object.create(null)
         for (const g of groupNames) {
           const cnt = groupCategoryCounts[g]![lvl] ?? 0
           const denom = groupCounts[g]!
@@ -1078,7 +1080,7 @@ export function generateTable1FromData(
       }
 
       if (show_missing && missingTotal > 0) {
-        const missingGroups: Record<string, string> = {}
+        const missingGroups: Record<string, string> = Object.create(null)
         for (const g of groupNames) {
           const m = missingByGroup[g]!
           missingGroups[g] = `${m.count} (${m.percentage.toFixed(pctDecimals)}%)`

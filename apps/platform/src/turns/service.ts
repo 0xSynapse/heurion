@@ -527,15 +527,19 @@ export class TurnService {
       if (watchdog) clearInterval(watchdog)
       if (onCommit) this.docs.off('commit', onCommit)
       if (turn) {
-        this.registry.end(userId, turn.id)
+        try { this.registry.end(userId, turn.id) } catch {}
         for (const id of touched) {
-          const v = this.docs.snapshot(id, 'turn', message.slice(0, 80), turn.id)
-          if (v) emit({ type: 'version', doc_id: id, seq: v.seq })
+          try {
+            const v = this.docs.snapshot(id, 'turn', message.slice(0, 80), turn.id)
+            if (v) emit({ type: 'version', doc_id: id, seq: v.seq })
+          } catch {}
         }
-        store.endTurn(turn.id, status, failure)
+        try { store.endTurn(turn.id, status, failure) } catch {}
         // 取消不算故障；出错、超时交给运维告警（模型认证 / 余额问题立即发，其余短时间内多次才发）
-        if ((status === 'error' || status === 'timeout') && failure) this.alerts?.turnFailed(failure)
-        emit({ type: 'turn_done', turn_id: turn.id, status, docs: [...touched] })
+        if ((status === 'error' || status === 'timeout') && failure) {
+          try { this.alerts?.turnFailed(failure) } catch {}
+        }
+        try { emit({ type: 'turn_done', turn_id: turn.id, status, docs: [...touched] }) } catch {}
       }
       this.cancelling.delete(job.id)
       this.timedOut.delete(job.id)

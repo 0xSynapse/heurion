@@ -2,9 +2,9 @@
  * Subagent（子专家智能体）架构规范与类型定义
  *
  * 遵循「双翼 · 一核 · 一门」多智能体协同流水线：
- * - 📚 literature_researcher（文献证据专家）：检索 PubMed/OpenAlex，提炼临床证据包与标准 AMA 引注
- * - 📊 biostatistician（生信统计专家）：分析数据集，生成出版级 Table 1 基线表、KM 生存曲线与统计学指标
- * - 🛡️ fact_checker（质控核查专家）：对抗式核验正文与证据的一致性、数字真实性与 PHI 敏感数据
+ * - literature_researcher（文献证据专家）：检索 PubMed/OpenAlex，提炼临床证据包与标准 AMA 引注
+ * - biostatistician（生信统计专家）：分析数据集，生成出版级 Table 1 基线表、KM 生存曲线与统计学指标
+ * - fact_checker（质控核查专家）：对抗式核验正文与证据的一致性、数字真实性与 PHI 敏感数据
  */
 
 export type SubagentRole = 'literature_researcher' | 'biostatistician' | 'fact_checker'

@@ -254,7 +254,11 @@ export class Documents extends EventEmitter<{ commit: [CommitEvent]; 'commit-det
     for (const [docId, l] of [...this.loaded.entries()]) {
       if ((l.pins ?? 0) > 0) continue
       if (now - (l.lastAccessed ?? 0) < idleMs) continue
-      this.flush(docId)
+      try {
+        this.flush(docId)
+      } catch (err) {
+        console.error(`[runtime] evictIdle flush error for ${docId}:`, err)
+      }
       this.unload(docId)
       count++
     }
@@ -270,7 +274,7 @@ export class Documents extends EventEmitter<{ commit: [CommitEvent]; 'commit-det
     const content = assignIds(input.content ?? empty, new Set())
     const row = this.store.createDoc({ id: input.id, owner: input.owner, title: input.title, kind, state: docToState(content) })
     this.store.addVersion({ docId: row.id, rev: 0, source: input.source ?? 'create', note: input.source === 'import' ? '导入' : '新建', state: this.store.getState(row.id)! })
-    this.emit('created', row)
+    try { this.emit('created', row) } catch (err) { console.error('[runtime] created listener error:', err) }
     return row
   }
 
@@ -294,7 +298,9 @@ export class Documents extends EventEmitter<{ commit: [CommitEvent]; 'commit-det
       if (typeof who === 'string') loaded.editors.add(who)
       // 浏览器编辑（或回合撤销）：合批落库
       if (loaded.timer) clearTimeout(loaded.timer)
-      loaded.timer = setTimeout(() => { this.flush(docId) }, USER_FLUSH_MS)
+      loaded.timer = setTimeout(() => {
+        try { this.flush(docId) } catch (err) { console.error(`[runtime] timer flush error for ${docId}:`, err) }
+      }, USER_FLUSH_MS)
       loaded.timer.unref?.()
     })
     l = loaded
@@ -350,9 +356,13 @@ export class Documents extends EventEmitter<{ commit: [CommitEvent]; 'commit-det
     l.rev = rev
     l.committed = after
     const event: CommitEvent = { docId, rev, actor: meta.actor, turnId: meta.turnId, changes, user: meta.user ?? null }
-    this.emit('commit', event)
+    try { this.emit('commit', event) } catch (err) { console.error('[runtime] commit listener error:', err) }
     // 带改前 / 改后文档的版本（服务端内部用，例如记忆演进收集「用户改了 AI 写的段落」；不推给浏览器）
-    this.emit('commit-detail', { event, before, after, ops: meta.ops } satisfies CommitDetail)
+    try {
+      this.emit('commit-detail', { event, before, after, ops: meta.ops } satisfies CommitDetail)
+    } catch (err) {
+      console.error('[runtime] commit-detail listener error:', err)
+    }
     return event
   }
 

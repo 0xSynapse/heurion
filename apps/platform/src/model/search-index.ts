@@ -16,13 +16,28 @@ export class SearchIndex {
   backfill(): number {
     const have = this.docs.store.indexedDocIds()
     const missing = this.docs.store.allDocIds().filter(id => !have.has(id))
-    for (const id of missing) this.reindex(id)
-    return missing.length
+    let count = 0
+    for (const id of missing) {
+      try {
+        this.reindex(id)
+        count++
+      } catch (err) {
+        console.error(`[search-index] backfill error for ${id}:`, err)
+      }
+    }
+    return count
   }
 
   schedule(docId: string): void {
     clearTimeout(this.timers.get(docId))
-    const timer = setTimeout(() => { this.timers.delete(docId); this.reindex(docId) }, this.delayMs)
+    const timer = setTimeout(() => {
+      this.timers.delete(docId)
+      try {
+        this.reindex(docId)
+      } catch (err) {
+        console.error(`[search-index] reindex error for ${docId}:`, err)
+      }
+    }, this.delayMs)
     timer.unref?.()
     this.timers.set(docId, timer)
   }
@@ -56,7 +71,10 @@ export class SearchIndex {
 
   /** 立即处理所有等待中的更新（测试、关闭服务前用）。 */
   flush(): void {
-    for (const [id, t] of this.timers) { clearTimeout(t); this.reindex(id) }
+    for (const [id, t] of this.timers) {
+      clearTimeout(t)
+      try { this.reindex(id) } catch (err) { console.error(`[search-index] flush error for ${id}:`, err) }
+    }
     this.timers.clear()
   }
 }

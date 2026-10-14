@@ -71,11 +71,36 @@ export function registerImagingRoutes(
     }
   })
 
+  const handleImagingError = (c: Context, err: any) => {
+    if (err && typeof err === 'object' && typeof err.status === 'number' && typeof err.code === 'string') {
+      return patientFailure(c, err)
+    }
+    return c.json({ error: 'imaging_worker_offline', message: err?.message ?? String(err) }, 503)
+  }
+
+  const verifyPtVolumeString = (c: any, id: unknown) => {
+    if (typeof id !== 'string' || !id.startsWith('pt_')) return
+    const parts = id.split('_')
+    const ptId = parts[1]
+    if (!ptId || parts.length < 3 || !parts[2]) {
+      throw Object.assign(new Error('患者影像不存在'), { code: 'not_found', status: 404 })
+    }
+    pt(c).read(me(c), ptId)
+  }
+
+  const verifyBodyVolumeAccess = (c: any, body: Record<string, any>) => {
+    if (!body || typeof body !== 'object') return
+    for (const k of ['sample_id', 'volume_id', 'baseline_id', 'followup_id', 'ct_sample_id', 'pet_sample_id']) {
+      verifyPtVolumeString(c, body[k])
+    }
+  }
+
   async function ensureVolumeOnWorker(c: any, patientId: string, recordIdOrFileId?: string | null): Promise<string | null> {
     if (!patientId) return null
+    const user = me(c)
+    // 鉴权失败直接向上抛出 PatientError（严禁吞没异常后降级）
+    const detail = pt(c).read(user, patientId)
     try {
-      const user = me(c)
-      const detail = pt(c).read(user, patientId)
       let fileId: string | null = null
       let fileName = 'volume.zip'
 
@@ -132,7 +157,10 @@ export function registerImagingRoutes(
         return null
       }
       return volumeId
-    } catch (err) {
+    } catch (err: any) {
+      if (err && typeof err === 'object' && typeof err.status === 'number' && typeof err.code === 'string') {
+        throw err
+      }
       console.error('[imaging] ensureVolumeOnWorker error:', err)
       return null
     }
@@ -152,17 +180,21 @@ export function registerImagingRoutes(
             'Content-Disposition': `attachment; filename="${encodeURIComponent(f.name)}"`,
           })
         }
+        return c.json({ error: 'sample_not_found' }, 404)
+      }
+      if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) {
+        return c.json({ error: 'sample_not_found' }, 404)
       }
 
-      const resp = await fetch(`${imagingWorkerUrl}/api/v1/samples/${id}/file`, { signal: AbortSignal.timeout(20000) })
+      const resp = await fetch(`${imagingWorkerUrl}/api/v1/samples/${encodeURIComponent(id)}/file`, { signal: AbortSignal.timeout(20000) })
       if (!resp.ok) return c.json({ error: 'sample_not_found' }, 404)
       const mime = resp.headers.get('content-type') || 'application/gzip'
       return c.body(new Uint8Array(await resp.arrayBuffer()), 200, {
         'Content-Type': mime,
-        'Content-Disposition': `attachment; filename="${id}.nii.gz"`,
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(id)}.nii.gz"`,
       })
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 
@@ -175,6 +207,7 @@ export function registerImagingRoutes(
       const filePath = c.req.query('file_path') || undefined
       const modelName = c.req.query('model_name') || undefined
 
+      verifyPtVolumeString(c, sampleId)
       if (patientId) {
         const volId = await ensureVolumeOnWorker(c, patientId, recordId)
         if (volId) sampleId = volId
@@ -190,13 +223,14 @@ export function registerImagingRoutes(
       if (!resp.ok) return workerFail(c, resp, 'mpr_info_failed')
       return c.json(await resp.json())
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 
   app.post('/api/imaging/mpr/info', async c => {
     try {
       const body = await c.req.json().catch(() => ({}))
+      verifyBodyVolumeAccess(c, body)
       if (body.patient_id) {
         const volId = await ensureVolumeOnWorker(c, body.patient_id, body.record_id || body.file_id)
         if (volId) body.sample_id = volId
@@ -211,13 +245,14 @@ export function registerImagingRoutes(
       if (!resp.ok) return workerFail(c, resp, 'mpr_info_failed')
       return c.json(await resp.json())
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 
   app.post('/api/imaging/mpr/slice', async c => {
     try {
       const body = await c.req.json().catch(() => ({}))
+      verifyBodyVolumeAccess(c, body)
       if (body.patient_id) {
         const volId = await ensureVolumeOnWorker(c, body.patient_id, body.record_id || body.file_id)
         if (volId) body.sample_id = volId
@@ -252,13 +287,14 @@ export function registerImagingRoutes(
 
       return c.json(data)
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 
   app.post('/api/imaging/mpr/diff-slice', async c => {
     try {
       const body = await c.req.json().catch(() => ({}))
+      verifyBodyVolumeAccess(c, body)
       if (body.patient_id) {
         if (body.baseline_record_id || body.baseline_file_id) {
           const bVolId = await ensureVolumeOnWorker(c, body.patient_id, body.baseline_record_id || body.baseline_file_id)
@@ -297,13 +333,14 @@ export function registerImagingRoutes(
 
       return c.json(data)
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 
   app.post('/api/imaging/radiomics', async c => {
     try {
       const body = await c.req.json().catch(() => ({}))
+      verifyBodyVolumeAccess(c, body)
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/radiomics`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -314,13 +351,14 @@ export function registerImagingRoutes(
       const data = await resp.json()
       return c.json(data)
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 
   app.post('/api/imaging/interactive-segment', async c => {
     try {
       const body = await c.req.json().catch(() => ({}))
+      verifyBodyVolumeAccess(c, body)
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/interactive-segment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -348,13 +386,14 @@ export function registerImagingRoutes(
 
       return c.json(data)
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 
   app.post('/api/imaging/whole-body', async c => {
     try {
       const body = await c.req.json().catch(() => ({}))
+      verifyBodyVolumeAccess(c, body)
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/whole-body`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -382,13 +421,14 @@ export function registerImagingRoutes(
 
       return c.json(data)
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 
   app.post('/api/imaging/registration/deformable', async c => {
     try {
       const body = await c.req.json().catch(() => ({}))
+      verifyBodyVolumeAccess(c, body)
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/registration/deformable`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -399,13 +439,14 @@ export function registerImagingRoutes(
       const data = await resp.json()
       return c.json(data)
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 
   app.post('/api/imaging/registration/pet-ct-fusion', async c => {
     try {
       const body = await c.req.json().catch(() => ({}))
+      verifyBodyVolumeAccess(c, body)
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/registration/pet-ct-fusion`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -433,13 +474,14 @@ export function registerImagingRoutes(
 
       return c.json(data)
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 
   app.post('/api/imaging/rtstruct/delineate', async c => {
     try {
       const body = await c.req.json().catch(() => ({}))
+      verifyBodyVolumeAccess(c, body)
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/rtstruct/delineate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -467,7 +509,7 @@ export function registerImagingRoutes(
 
       return c.json(data)
     } catch (err: any) {
-      return c.json({ error: 'imaging_worker_offline', message: err.message }, 503)
+      return handleImagingError(c, err)
     }
   })
 

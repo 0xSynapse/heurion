@@ -672,7 +672,14 @@ export class Store {
       body TEXT, summary TEXT NOT NULL, reason TEXT, editable TEXT, doc_id TEXT, turn_id TEXT, status TEXT NOT NULL,
       result TEXT, created_at TEXT NOT NULL, decided_at TEXT, decided_by TEXT
     );
-    CREATE INDEX IF NOT EXISTS pending_actions_user ON pending_actions (user_id, status);`)
+    CREATE INDEX IF NOT EXISTS pending_actions_user ON pending_actions (user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_comments_doc_status ON comments (doc_id, status);
+    CREATE INDEX IF NOT EXISTS idx_comment_replies_comment ON comment_replies (comment_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_doc_created ON messages (doc_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_turns_doc_status ON turns (doc_id, status);
+    CREATE INDEX IF NOT EXISTS idx_op_log_turn ON op_log (turn_id);
+    CREATE INDEX IF NOT EXISTS idx_turn_queue_user ON turn_queue (user_id);
+    CREATE INDEX IF NOT EXISTS idx_docs_owner_deleted ON docs (owner, deleted_at);`)
     this.db.exec('CREATE INDEX IF NOT EXISTS users_tenant ON users (tenant_id)')
     // 科室与知家分享（docs/design/SHARING.md）
     this.db.exec(`CREATE TABLE IF NOT EXISTS tenant_departments (

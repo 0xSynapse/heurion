@@ -303,6 +303,23 @@ describe('Table 1: 临床队列端到端三线表生成', () => {
     expect(sexMissing).toBeDefined()
     expect(sexMissing!.overall).toContain('1 (4.5%)')
   })
+
+  it('分类值或分组名包含 __proto__ / constructor 时不污染原型链且统计正常', () => {
+    const specialRows = [
+      { arm: '__proto__', cat: 'constructor', age: 50 },
+      { arm: '__proto__', cat: 'toString', age: 54 },
+      { arm: 'constructor', cat: '__proto__', age: 60 },
+      { arm: 'constructor', cat: 'valueOf', age: 64 },
+    ]
+    const table = generateTable1FromData(specialRows, {
+      group_col: 'arm',
+      columns: ['age', 'cat'],
+      categorical_vars: ['cat'],
+      continuous_vars: ['age'],
+    })
+    expect(table.groups.map(g => g.count)).toEqual([2, 2])
+    expect(({} as any).count).toBeUndefined()
+  })
 })
 
 describe('Table 1: 与 DatasetService 集成', () => {

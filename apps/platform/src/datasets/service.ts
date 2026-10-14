@@ -185,6 +185,7 @@ export class DatasetService {
   /** 前 limit 行（预览）。 */
   preview(owner: string, id: string, limit = 50): { header: string[]; rows: string[][] } {
     const d = this.own(owner, id)
+    if (d.status === 'review' && d.owner !== owner) throw new DatasetError('needs_review', '这个数据集有疑似身份信息的列，上传者还没处理，暂不能预览')
     if (!existsSync(this.csvPath(d))) return { header: [], rows: [] }
     const records = parseCsv(readHead(this.csvPath(d), limit + 1))
     return { header: records[0] ?? [], rows: records.slice(1, limit + 1) }

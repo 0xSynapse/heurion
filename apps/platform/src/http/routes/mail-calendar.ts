@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import type { Context, Hono } from 'hono'
 import type { Documents } from '../../model/runtime.ts'
 import type { Store } from '../../store/db.ts'
@@ -382,8 +383,16 @@ export function registerMailCalendarRoutes(
   // 外部来信 Webhook (支持 Cloudflare Email Routing / Resend Inbound 等投递给各医生专属邮箱，如 hui@heurion.org)
   app.post('/api/mail/inbound', async c => {
     const secret = process.env.MAIL_INBOUND_SECRET
-    if (secret && c.req.header('x-inbound-secret') !== secret && c.req.header('authorization') !== `Bearer ${secret}`) {
-      return c.json({ error: 'unauthorized' }, 401)
+    if (!secret && process.env.NODE_ENV === 'production') {
+      return c.json({ error: 'inbound_webhook_not_configured' }, 503)
+    }
+    if (secret) {
+      const provided = c.req.header('x-inbound-secret') || (c.req.header('authorization')?.startsWith('Bearer ') ? c.req.header('authorization')!.slice(7) : '')
+      const secBuf = Buffer.from(secret, 'utf8')
+      const provBuf = Buffer.from(provided, 'utf8')
+      if (secBuf.length !== provBuf.length || !timingSafeEqual(secBuf, provBuf)) {
+        return c.json({ error: 'unauthorized' }, 401)
+      }
     }
     const body = await c.req.json().catch(() => ({}))
     const from = body.from || body.sender || ''
@@ -401,7 +410,7 @@ export function registerMailCalendarRoutes(
       category: body.category || 'general',
     })
     if (!res.success) return c.json({ ok: false, error: res.reason }, 404)
-    return c.json({ ok: true, id: res.message?.id, forwarded_to: res.forwardedTo }, 201)
+    return c.json({ ok: true, id: res.message?.id }, 201)
   })
 
   // —— 日历与随访排期、科研项目进度 (Calendar) ——

@@ -532,17 +532,21 @@ function formatEmailBody(raw: string): string {
   if (!raw) return ''
   const decoded = decodeEmailBody(raw)
 
-  // 1. 若为标准 HTML 邮件（如 NVIDIA 等外部系统通知），采用隔离沙箱 iframe 渲染真实排版与样式
+  // 1. 若为标准 HTML 邮件（如 NVIDIA 等外部系统通知），采用无脚本隔离沙箱 iframe 渲染真实排版与样式
   if (isHtmlEmail(decoded)) {
-    let html = decoded.trim()
+    let html = decoded
+      .trim()
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     if (!/<base\s/i.test(html)) {
       if (/<head[^>]*>/i.test(html)) {
-        html = html.replace(/<head[^>]*>/i, '$&<base target="_blank">')
+        html = html.replace(/<head[^>]*>/i, '$&<base target="_blank" rel="noopener noreferrer">')
       } else {
-        html = `<base target="_blank">${html}`
+        html = `<base target="_blank" rel="noopener noreferrer">${html}`
       }
     }
     const resetStyle = `
+      <meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none';">
       <style>
         html, body {
           margin: 0;
@@ -551,33 +555,6 @@ function formatEmailBody(raw: string): string {
         }
         img { max-width: 100% !important; height: auto; }
       </style>
-      <script>
-        window.addEventListener('DOMContentLoaded', () => {
-          const update = () => {
-            try {
-              const doc = document;
-              const h = Math.max(doc.body ? doc.body.scrollHeight : 0, doc.documentElement ? doc.documentElement.scrollHeight : 0);
-              if (h > 0 && window.frameElement) {
-                window.frameElement.style.height = (h + 30) + 'px';
-              }
-            } catch(e) {}
-          };
-          update();
-          setTimeout(update, 200);
-          setTimeout(update, 800);
-        });
-        window.addEventListener('load', () => {
-          setTimeout(() => {
-            try {
-              const doc = document;
-              const h = Math.max(doc.body ? doc.body.scrollHeight : 0, doc.documentElement ? doc.documentElement.scrollHeight : 0);
-              if (h > 0 && window.frameElement) {
-                window.frameElement.style.height = (h + 30) + 'px';
-              }
-            } catch(e) {}
-          }, 300);
-        });
-      </script>
     `
     if (/<head[^>]*>/i.test(html)) {
       html = html.replace(/<head[^>]*>/i, `$&${resetStyle}`)
@@ -589,7 +566,8 @@ function formatEmailBody(raw: string): string {
       <div class="mail-html-embed-wrap" style="width: 100%; border-radius: 6px; overflow: hidden; background: #ffffff;">
         <iframe
           class="mail-html-frame"
-          sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+          title="邮件内容预览"
+          sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
           srcdoc="${esc(html)}"
           style="width: 100%; border: none; min-height: 480px; display: block;"
           onload="try {

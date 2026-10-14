@@ -31,13 +31,26 @@ export interface GatewayDeps {
 export function attachCollab(server: Server, deps: GatewayDeps): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 10 * 1024 * 1024 })
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    const url = new URL(req.url ?? '/', 'http://localhost')
-    const m = /^\/collab\/([^/]+)$/.exec(url.pathname)
-    if (!m) return
-    const docId = decodeURIComponent(m[1]!)
-    const user = deps.authenticate(url.searchParams.get('token') ?? '')
-    const row = deps.docs.store.getDoc(docId)
-    const role = user && row ? (deps.role ? deps.role(user, row) : row.owner === user ? 'owner' : null) : null
+    let docId = ''
+    let user: string | null = null
+    let row: DocRow | undefined
+    let role: ResourceRole | null = null
+    try {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const m = /^\/collab\/([^/]+)$/.exec(url.pathname)
+      if (!m) {
+        socket.destroy()
+        return
+      }
+      docId = decodeURIComponent(m[1]!)
+      user = deps.authenticate(url.searchParams.get('token') ?? '')
+      row = deps.docs.store.getDoc(docId)
+      role = user && row ? (deps.role ? deps.role(user, row) : row.owner === user ? 'owner' : null) : null
+    } catch {
+      socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
     if (!user || !row || !role || row.kind !== 'doc' || row.deleted_at) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
       socket.destroy()

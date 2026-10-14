@@ -211,7 +211,7 @@ export function calculateSingleGroupKm(
   groupLabel: string,
   milestones: number[] = [12, 24, 36, 60]
 ): KmGroupResult {
-  const valid = records.filter(r => r.time >= 0 && !isNaN(r.time) && (r.event === 0 || r.event === 1))
+  const valid = records.filter(r => Number.isFinite(r.time) && r.time >= 0 && (r.event === 0 || r.event === 1))
   const total_n = valid.length
   const events_n = valid.filter(r => r.event === 1).length
   const censored_n = total_n - events_n
@@ -369,7 +369,7 @@ export function calculateSingleGroupKm(
   }
 }
 
-/** 多组 Log-Rank 检验 (Mantel-Haenszel) */
+/** 多组 Log-Rank 检验 (Mantel-Haenszel 超几何协方差矩阵精确法) */
 export function calculateLogRankTest(
   groupsKm: KmGroupResult[]
 ): LogRankResult {
@@ -393,9 +393,11 @@ export function calculateLogRankTest(
   const eventTimes = Array.from(allEventTimesSet).sort((a, b) => a - b)
 
   const G = groupsKm.length
+  const df = G - 1
   const observedTotals = new Array(G).fill(0)
   const expectedTotals = new Array(G).fill(0)
-  let varianceG1 = 0 // 2 组时的精确方差
+  // 前 G-1 组的超几何协方差矩阵 V ((G-1) x (G-1))
+  const covMatrix: number[][] = Array.from({ length: df }, () => new Array(df).fill(0))
 
   for (const t of eventTimes) {
     let totalRiskAtT = 0
@@ -432,28 +434,45 @@ export function calculateLogRankTest(
       expectedTotals[i] += e_it
     }
 
-    if (G === 2) {
-      const n1 = risksAtT[0]!
-      const n2 = risksAtT[1]!
-      const v = (n1 * n2 * totalEventsAtT * (totalRiskAtT - totalEventsAtT)) / (Math.pow(totalRiskAtT, 2) * (totalRiskAtT - 1))
-      varianceG1 += v
+    const commonFactor = (totalEventsAtT * (totalRiskAtT - totalEventsAtT)) / (Math.pow(totalRiskAtT, 2) * (totalRiskAtT - 1))
+    for (let g = 0; g < df; g++) {
+      const ng = risksAtT[g]!
+      for (let h = 0; h < df; h++) {
+        const nh = risksAtT[h]!
+        if (g === h) {
+          covMatrix[g]![h]! += ng * (totalRiskAtT - ng) * commonFactor
+        } else {
+          covMatrix[g]![h]! -= ng * nh * commonFactor
+        }
+      }
     }
   }
 
   let chi2 = 0
-  const df = G - 1
 
   if (G === 2) {
+    const varianceG1 = covMatrix[0]![0]!
     if (varianceG1 > 1e-9) {
       chi2 = Math.pow(observedTotals[0]! - expectedTotals[0]!, 2) / varianceG1
     } else {
       chi2 = 0
     }
   } else {
-    // 多组简易近似 sum((O_i - E_i)^2 / E_i)
-    for (let i = 0; i < G; i++) {
-      if (expectedTotals[i]! > 1e-9) {
-        chi2 += Math.pow(observedTotals[i]! - expectedTotals[i]!, 2) / expectedTotals[i]!
+    // 多组精确二次型 (O - E)^T V^{-1} (O - E)
+    const diffVec = Array.from({ length: df }, (_, i) => observedTotals[i]! - expectedTotals[i]!)
+    const solved = solveLinearSystem(covMatrix, diffVec)
+    if (solved) {
+      let q = 0
+      for (let i = 0; i < df; i++) {
+        q += diffVec[i]! * solved[i]!
+      }
+      chi2 = Math.max(0, q)
+    } else {
+      // 矩阵奇异（如某组全程 0 风险集）时退回非奇异子集对角近似
+      for (let i = 0; i < G; i++) {
+        if (expectedTotals[i]! > 1e-9) {
+          chi2 += Math.pow(observedTotals[i]! - expectedTotals[i]!, 2) / expectedTotals[i]!
+        }
       }
     }
   }
@@ -483,16 +502,46 @@ export function calculateCoxRegression(
   covariates: string[],
   labels: Record<string, string> = {}
 ): CoxRegressionResult {
+  // 对包含非数值型字符串（如 'Male'/'Female'）的分类协变量进行自动数值编码
+  const categoryEncoding = new Map<string, Map<string, number>>()
+  for (const c of covariates) {
+    let hasNonNumeric = false
+    const distinct = new Set<string>()
+    for (const r of records) {
+      const rawC = r[c]
+      if (rawC === null || rawC === undefined || String(rawC).trim() === '') continue
+      const s = String(rawC).trim()
+      distinct.add(s)
+      if (!Number.isFinite(Number(s))) hasNonNumeric = true
+    }
+    if (hasNonNumeric && distinct.size >= 2) {
+      const sortedLevels = Array.from(distinct).sort()
+      const map = new Map<string, number>()
+      sortedLevels.forEach((lvl, idx) => map.set(lvl, idx))
+      categoryEncoding.set(c, map)
+    }
+  }
+
+  const encodeCovariate = (c: string, rawC: unknown): number => {
+    if (rawC === null || rawC === undefined) return NaN
+    const s = String(rawC).trim()
+    if (s === '') return NaN
+    const map = categoryEncoding.get(c)
+    if (map) {
+      const mapped = map.get(s)
+      return mapped !== undefined ? mapped : NaN
+    }
+    return Number(s)
+  }
+
   const valid = records.filter(r => {
     const rawTime = r.time
     if (rawTime === null || rawTime === undefined || String(rawTime).trim() === '') return false
     const timeNum = Number(rawTime)
-    if (isNaN(timeNum) || timeNum < 0 || (r.event !== 0 && r.event !== 1)) return false
+    if (!Number.isFinite(timeNum) || timeNum < 0 || (r.event !== 0 && r.event !== 1)) return false
     for (const c of covariates) {
-      const rawC = r[c]
-      if (rawC === null || rawC === undefined || String(rawC).trim() === '') return false
-      const v = Number(rawC)
-      if (isNaN(v)) return false
+      const v = encodeCovariate(c, r[c])
+      if (!Number.isFinite(v)) return false
     }
     return true
   })
@@ -526,8 +575,8 @@ export function calculateCoxRegression(
   // 排序：时间从大到小排序方便累积风险集计算
   valid.sort((a, b) => b.time - a.time)
 
-  const X: number[][] = valid.map(r => covariates.map(c => Number(r[c])))
-  const time = valid.map(r => r.time)
+  const X: number[][] = valid.map(r => covariates.map(c => encodeCovariate(c, r[c])))
+  const time = valid.map(r => Number(r.time))
   const event = valid.map(r => r.event)
 
   // 初始化回归系数 beta 为 0
@@ -776,13 +825,17 @@ export function buildNumberAtRiskTable(
   maxTime: number,
   numIntervals = 5
 ): NumberAtRiskTable {
-  const step = Math.ceil(maxTime / numIntervals) || 1
+  const safeMax = Number.isFinite(maxTime) && maxTime > 0 ? maxTime : 0
+  const safeIntervals = Math.max(1, Math.min(50, Math.floor(numIntervals) || 5))
+  const step = safeMax > 0 ? (Math.ceil(safeMax / safeIntervals) || 1) : 1
   const time_points: number[] = []
-  for (let t = 0; t <= maxTime; t += step) {
+  for (let t = 0; t <= safeMax && time_points.length <= safeIntervals + 2; t += step) {
     time_points.push(t)
   }
-  if (time_points[time_points.length - 1]! < maxTime) {
-    time_points.push(maxTime)
+  if (time_points.length === 0) {
+    time_points.push(0)
+  } else if (time_points[time_points.length - 1]! < safeMax) {
+    time_points.push(safeMax)
   }
 
   const tableGroups = groupsKm.map(g => {
@@ -1139,7 +1192,7 @@ export function generateSurvivalAnalysis(
     if (rawT === null || rawT === undefined || String(rawT).trim() === '') continue
     const t = Number(rawT)
     const e = normalizeEventStatus(r[event_col])
-    if (isNaN(t) || t < 0 || e === null) continue
+    if (!Number.isFinite(t) || t < 0 || e === null) continue
 
     const grp = group_col && r[group_col] !== undefined && r[group_col] !== null ? String(r[group_col]).trim() : 'Overall'
     cleaned.push({

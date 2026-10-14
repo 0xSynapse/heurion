@@ -878,6 +878,21 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       })
 
       try {
+        const perRequestCohortGuard = (origin?: { kind: string } | null): string | null => {
+          if (origin?.kind !== 'cohort') return null
+          if (!deps.patients) return '患者模块未启用'
+          try {
+            const curDocId = ctx.activeTurn()?.docId
+            const row = curDocId ? store.getDoc(curDocId) : undefined
+            let c: { kind?: string; space?: string; doc_kind?: string } | null = null
+            try { c = row?.context ? JSON.parse(row.context) : null } catch {}
+            const space = c?.kind === 'patient' && (c.space === 'personal' || (!c.space && (c.doc_kind === 'archive' || c.doc_kind === 'brief'))) ? 'personal' : 'work'
+            deps.patients.assertAi({ userId: claims.u, via: 'ai', turnId: ctx.turnId, space })
+            return null
+          } catch (err) {
+            return (err as Error).message || '患者队列数据受机构隐私策略保护'
+          }
+        }
         const result = await deps.subagents!.delegate(
           claims.u,
           { role, task, doc_id: targetDocId, dataset_id, section, context },
@@ -893,6 +908,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
               })
             },
           },
+          { cohortGuard: perRequestCohortGuard },
         )
 
         const summary = role === 'literature_researcher'
@@ -945,19 +961,6 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
     try { deps.patients.assertAi(aiActor()); return null } catch (err) { return patientFail(err) }
   }
 
-  if (deps.subagents) {
-    deps.subagents.cohortGuard = origin => {
-      const blocked = cohortGuard(origin ?? null)
-      if (!blocked) return null
-      try {
-        const parsed = JSON.parse(blocked.content[0]?.text ?? '{}')
-        return parsed.message ?? '患者队列数据受机构隐私策略保护'
-      } catch {
-        return '患者队列数据受机构隐私策略保护'
-      }
-    }
-  }
-
   server.registerTool('dataset_list', {
     description: '列出用户上传的数据集（大样本表格：CSV / Excel / SAS / SPSS / Stata 导入）。只有 status=ready 的能分析。',
     inputSchema: {},
@@ -977,7 +980,21 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
       const d = deps.datasets.get(claims.u, dataset_id)
       const blocked = cohortGuard(d.origin)
       if (blocked) return blocked
-      return json({ dataset_id: d.id, name: d.name, rows: d.rows, status: d.status, truncated: d.truncated, columns: d.columns.map(c => ({ ...c, label: d.labels[c.name] ?? c.label })) })
+      return json({
+        dataset_id: d.id,
+        name: d.name,
+        rows: d.rows,
+        status: d.status,
+        truncated: d.truncated,
+        columns: d.columns.map(c => {
+          const base = { ...c, label: d.labels[c.name] ?? c.label }
+          if (d.status === 'review' && c.phi) {
+            delete base.top
+            delete base.range
+          }
+          return base
+        }),
+      })
     } catch (err) { return datasetFail(err) }
   })
 
