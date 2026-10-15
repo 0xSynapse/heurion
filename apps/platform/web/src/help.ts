@@ -668,12 +668,15 @@ export const HELP_SECTIONS: HelpSection[] = [
 
       <div class="help-grid-2">
         <div class="help-feature-card">
-          <div class="hfc-title">${icon('scan', { size: 14 })} 深度学习（MONAI 官方权重，权重校验通过才可用）</div>
+          <div class="hfc-title">${icon('scan', { size: 14 })} 深度学习（16 款 MONAI 官方权重全量接入，SHA-256 校验通过后真实推理）</div>
           <div class="hfc-desc">
             <ul>
-              <li><b>脾脏分割</b>（spleen_ct_segmentation，3D UNet）；</li>
-              <li><b>BTCV 腹部 13 类器官分割</b>（SwinUNETR）；「胰腺 / 双肾 / 肝脏」选项就是 BTCV 器官分割中对应的类别，只给器官体积，<b>不识别病灶</b>；</li>
-              <li>前列腺分带、BraTS 胶质瘤子区（需 4 通道 MRI 并声明通道顺序）、心室短轴单期相分割（单期相不能计算射血分数）、全身 104 类结构分割等，以模型列表显示的可用状态为准。</li>
+              <li><b>脾脏分割</b>（<code>spleen_ct</code>，3D UNet，腹部 CT 脾脏三维分割与体积计算）；</li>
+              <li><b>BTCV 腹部 13 类器官分割</b>（<code>swinunetr_btcv</code>，SwinUNETR）；「胰腺 / 双肾 / 肝脏」选项就是 BTCV 器官分割中对应的类别，只给器官体积，<b>不识别病灶</b>；</li>
+              <li><b>全身 104 类结构分割</b>（<code>wholebody_ct</code>，SegResNet）与 <b>VISTA-3D 全身 127 类通用分割基础模型</b>（<code>vista3d</code>，SegResNetDS2，支持全身解剖结构自动分割）；</li>
+              <li><b>胸部与腹部专科模型</b>：<b>肺结节 CT RetinaNet 三维检测</b>（<code>lung_nodule_ct</code>，3D ResNet-50 FPN 候选框与置信度检测）、<b>胰腺与胰腺肿瘤分割</b>（<code>pancreas_ct_dints</code>，DiNTS 网络分割胰腺实质与病灶）、<b>增强 CT 肾脏子结构分割</b>（<code>renal_structures_cect</code>，皮质 / 髓质 / 肾盂分区分量）；</li>
+              <li><b>神经与前列腺 MRI 模型</b>：<b>BraTS 脑胶质瘤子区分割</b>（<code>brats_mri</code>，SegResNet，需 4 通道 MRI 并声明通道顺序）、<b>全脑 133 类精细脑区分割</b>（<code>wholebrainseg_large_unest</code>，UNesT 层次化 Transformer，T1 MRI 皮层与核团定量）、<b>前列腺分带</b>（<code>prostate_mri</code>，中央腺体与外周带分割）；</li>
+              <li><b>心脏、乳腺、病理与内镜模型</b>：<b>心室短轴单期相分割</b>（<code>ventricular_short_axis</code>，单期相不能计算射血分数）、<b>心脏二尖瓣与主动脉瓣关键点定位</b>（<code>valve_landmarks</code>，三维热力图坐标提取）、<b>乳腺钼靶 BI-RADS 腺体致密度分级</b>（<code>breast_density</code>，InceptionV3 四分类）、<b>病理切片肿瘤转移灶检测</b>（<code>pathology_tumor_detection</code>，ResNet-18 瓦片热力图）、<b>病理切片细胞核分类与计数</b>（<code>pathology_nuclei</code>，HoVerNet 核分割与四类分型统计）、<b>内镜手术器械尖端分割</b>（<code>endoscopic_tool</code>，FlexibleUNet 器械掩膜与尖端定位）。均以模型列表显示的可用状态为准。</li>
             </ul>
           </div>
         </div>
@@ -1466,6 +1469,43 @@ export const HELP_SECTIONS: HelpSection[] = [
 
       <h4>11.7 临床雷达扫描动效与边栏批注交互 (Mantle Radar & Margin Anchors)</h4>
       <p>核验启动时，页面展示现代极客墨绿雷达波脉冲扫描动效 (Radar Wave)，实时反馈文献全文索引与证据链检索进度；核验完毕后，与正文 ProseMirror 物理锚点实现像素级吸附对齐，支持点击卡片平滑滚动定位正文，提供顶级学术科研级审校体验。</p>
+
+      <h4>11.8 基于 Google PAT 架构的四阶段多维学术核查流水线 (4-Stage PAT Verification Pipeline)</h4>
+      <p>参考学术审校架构（<code>arXiv:2606.28277v1</code>），平台将「论断核验 (<code>verify_claims</code>)」与「事实核查员 (<code>fact_checker</code> Subagent)」升级为四阶段协同流水线：</p>
+      <ul class="help-list-steps">
+        <li>
+          <span class="step-num">1</span>
+          <div>
+            <b>阶段一：章节角色感知切分与全表数值摘要提取 (Section-Aware Segmentation &amp; Table Summary)</b>：
+            自动识别手稿各段落所属的 IMRaD 学术章节角色（<code>abstract</code> 摘要、<code>introduction</code> 引言、<code>methods</code> 方法、<code>results</code> 结果、<code>discussion</code> 讨论、<code>conclusion</code> 结论），并同步遍历全文数据表（如 Table 1 基线特征表），提取总样本量 N、分组例数与关键百分比摘要，作为全文自洽校验的基准锚点。
+          </div>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <div>
+            <b>阶段二：自适应核查预算分级 (Adaptive Verification Budgeting)</b>：
+            根据论断类型动态分配核查深度：<code>high</code>（同时包含参考文献引用与具体统计数值，或存在跨章节数值比对需求，启动深度全文/表格核对与外部检索验证）、<code>medium</code>（纯定性引用或普通结果陈述）、<code>light</code>（常规背景过渡句）。
+          </div>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <div>
+            <b>阶段三：三路并行专项核查通道 (Parallel Specialized Passes)</b>：
+            <ul>
+              <li><b>通道 A · 外部文献事实与数值对齐</b>：支持百分比与小数形式的自动数值等价归一化（例如正文写 <code>0.68</code> 与文献原文 <code>68%</code> 自动识别为等价，避免机械字符串报错），引入方向性与结论极性矛盾检测（如正文称「显著降低 / 提前终止」而文献原文为「无显著差异 / 按设计完成全部随访」时直接标记矛盾），并在本地引文信息不足时自动调用 PubMed / Europe PMC 实时外部检索补全证据；</li>
+              <li><b>通道 B · 跨章节与正文-表格内部自洽核查</b>：自动比对正文（摘要、方法、结果、讨论）中出现的总样本量 N 及分组比例，与手稿内嵌数据表（如 Table 1）中的实际统计数字是否一致；一旦发现诸如摘要写 <code>n=120</code> 而结果或表格写 <code>n=128</code> 等前后矛盾，立即生成 <code>internal_inconsistency</code> 专项修正建议；</li>
+              <li><b>通道 C · 章节角色感知的缺出处外部论断甄别与候选文献推荐</b>：在 <code>Results</code> 与 <code>Methods</code> 章节对本研究队列数据免除无谓的缺出处报错；而在 <code>Introduction</code> 与 <code>Discussion</code> 章节严格筛查未标引用的外部统计数值主张，并自动检索推荐匹配的 PubMed / Crossref 候选参考文献（含标题、作者、年份、DOI/PMID）。</li>
+            </ul>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">4</span>
+          <div>
+            <b>阶段四：跨章节去重与三级严重度排序 (Deduplication &amp; Severity Ranking)</b>：
+            对核查发现的问题按锚点与语义去重，并划分为 <code>critical</code>（致命：文献数据直接矛盾、跨章节样本量或表格数值前后不一致、PHI 隐私泄露）、<code>major</code>（重要：引言/讨论外部统计论断缺少文献支撑）、<code>minor</code>（次要：开源全文未覆盖需人工复核的细节），辅助作者优先处理高风险审稿问题。
+          </div>
+        </li>
+      </ul>
     `
   },
   {
@@ -1514,7 +1554,7 @@ export const HELP_SECTIONS: HelpSection[] = [
     title: '版本发布更新日志 (Release Notes)',
     badge: '更新里程碑',
     icon: icon('sparkles', { size: 16 }),
-    summary: '记录 Heurion 从 v2.0 到 v2.7 核心版本演进、临床影像量化、文献论断核验、生物统计、零 PHI 隐私与交互设计里程碑。',
+    summary: '记录 Heurion 从 v2.0 到 v2.8 核心版本演进、临床影像量化、文献论断核验、生物统计、零 PHI 隐私与交互设计里程碑。',
     contentHtml: `
       <div class="help-section-head">
         <h3>13. 版本发布更新日志 (Release Notes & Milestones)</h3>
@@ -1523,7 +1563,19 @@ export const HELP_SECTIONS: HelpSection[] = [
       <p class="help-lead">Heurion 始终秉承「临床医生与科研人员的专业辅助伙伴」定位，每个版本均历经三甲临床专家严苛验证与医学数据安全审查。</p>
 
       <div class="help-release-card">
-        <div class="help-release-badge current">v2.7 Pro (当前最新版本 · 2026年10月)</div>
+        <div class="help-release-badge current">v2.8 Pro (当前最新版本 · 2026年10月)</div>
+        <div class="help-release-title">16 款 MONAI 官方预训练权重全量集成与 Google PAT 四阶段学术核查流水线升级</div>
+        <ul class="help-release-list">
+          <li><b>16 款 MONAI Model Zoo 官方预训练权重全量集成与生产适配</b>：除脾脏分割（<code>spleen_ct</code>）、腹部 13 器官（<code>swinunetr_btcv</code>）、全身 104 类结构（<code>wholebody_ct</code>）、BraTS 脑胶质瘤（<code>brats_mri</code>）、前列腺（<code>prostate_mri</code>）与心室短轴（<code>ventricular_short_axis</code>）外，新增接入肺结节 CT RetinaNet 三维检测（<code>lung_nodule_ct</code>）、胰腺及胰腺肿瘤 DiNTS 分割（<code>pancreas_ct_dints</code>）、增强 CT 肾脏子结构分割（<code>renal_structures_cect</code>）、全脑 133 类精细脑区 UNesT 分割（<code>wholebrainseg_large_unest</code>）、VISTA-3D 全身 127 类通用分割（<code>vista3d</code>）、心脏瓣膜关键点定位（<code>valve_landmarks</code>）、乳腺钼靶 BI-RADS 致密度分级（<code>breast_density</code>）、病理切片肿瘤检测（<code>pathology_tumor_detection</code>）、病理细胞核 HoVerNet 分类计数（<code>pathology_nuclei</code>）及内镜手术器械分割（<code>endoscopic_tool</code>）；所有模型均通过 SHA-256 权重校验并在患者影像分析工作台开放调用。</li>
+          <li><b>基于 Google PAT 架构（arXiv:2606.28277v1）的四阶段引文与论断核查引擎</b>：重构 <code>verify_claims</code> 与 <code>fact_checker</code> Subagent，引入「Stage 1 章节角色感知与全表数值摘要提取 -> Stage 2 自适应核查预算分级（<code>high</code> / <code>medium</code> / <code>light</code>）-> Stage 3 三路并行专项核查 -> Stage 4 跨章节去重与三级严重度排序（<code>critical</code> / <code>major</code> / <code>minor</code>）」。</li>
+          <li><b>跨章节正文-表格内部自洽核查与数值等价性归一</b>：自动比对摘要、方法、结果与 Table 1 数据表之间的总样本量 N 与分组百分比，精准拦截前后样本量或比例不一致；支持百分比与小数等价匹配（如 <code>68%</code> 与 <code>0.68</code>）及方向性矛盾检测。</li>
+          <li><b>缺出处外部论断实时检索补全与候选文献推荐</b>：结合 IMRaD 章节角色区分「本研究队列结果」与「外部文献主张」，对引言和讨论中缺失引用的外部统计论断自动检索 PubMed / Crossref 并推荐匹配候选参考文献。</li>
+          <li><b>影像模型诚实降级与器官体积语义校准</b>：对未提供公开预训练权重的 5 项任务明确标注不可用并返回 HTTP 501；对复用 BTCV 器官分割的胰腺/双肾/肝脏选项明确标注仅提供器官体积定量，不谎称病灶分割。</li>
+        </ul>
+      </div>
+
+      <div class="help-release-card">
+        <div class="help-release-badge">v2.7 Pro (2026年10月)</div>
         <div class="help-release-title">SCI 投稿出版包一键打包、原生 Word Table 1 导出、因果推断 E-value 与 Auto-eCRF 溯源</div>
         <ul class="help-release-list">
           <li><b>一键导出 SCI 投稿出版包 (.zip) (One-Click SCI Publication Bundle)</b>：只用研究真实入组受试者的数据打包投稿材料草稿（Table 1、受试者流向图、视数据生成的 KM 曲线与 Cox 森林图、方法与结果草稿、STROBE 覆盖清单、复现脚本与 README）；缺失不补，无数据支撑的图表不生成并说明原因。</li>
@@ -1624,7 +1676,7 @@ export const HELP_SECTIONS: HelpSection[] = [
 export function buildHelpMarkdown(): string {
   return `# Heurion 临床智能工作站 · 全流程使用手册与操作指南
 
-> **版本**：v2.7 Pro  
+> **版本**：v2.8 Pro  
 > **适用人群**：呼吸科、胸外科、放射影像科、泌尿外科、肿瘤科临床医师与医学科研人员  
 > **核心架构**：零 PHI 医学隐私 · MONAI 3D 深度量化 · 引用文献全链路核验 · 临床随访排期日历 · 专属科研邮箱 · 自动化生物统计与 SCI 投稿出版包
 
@@ -1803,7 +1855,7 @@ Heurion 专为临床与医学科研打造，采用三栏自适应现代架构：
    - 自动解析体素空间几何间距 (Voxel Spacing) 与矩阵维度，入库前清除常见身份标签。
 4. **MONAI 模型与量化算法现状**（各项完成度不一，输出仅供科研参考）：
    - **模型类型**：模型列表按影像服务返回的类型标注「深度学习 / 定量 CT / 规则算法」，不可用的模型显示原因（调用时返回 501）；
-   - **深度学习**：脾脏分割、BTCV 腹部 13 类器官分割（「胰腺 / 双肾 / 肝脏」选项即 BTCV 对应类别，只给器官体积，不识别病灶）、前列腺分带、BraTS、心室短轴单期相分割、全身 104 类结构分割等，以列表中的可用状态为准；
+   - **深度学习（16 款 MONAI 官方权重全量接入，经 SHA-256 校验通过后执行真实推理）**：脾脏分割（\`spleen_ct\`）、BTCV 腹部 13 类器官分割（\`swinunetr_btcv\`，「胰腺 / 双肾 / 肝脏」选项即 BTCV 对应类别，只给器官体积，不识别病灶）、全身 104 类结构分割（\`wholebody_ct\`）、VISTA-3D 全身 127 类通用分割（\`vista3d\`）、肺结节 CT RetinaNet 三维检测（\`lung_nodule_ct\`）、胰腺及胰腺肿瘤 DiNTS 分割（\`pancreas_ct_dints\`）、增强 CT 肾脏子结构分割（\`renal_structures_cect\`）、BraTS 脑胶质瘤子区分割（\`brats_mri\`，需 4 通道 MRI）、全脑 133 类精细脑区 UNesT 分割（\`wholebrainseg_large_unest\`）、前列腺分带（\`prostate_mri\`）、心室短轴单期相分割（\`ventricular_short_axis\`）、心脏二尖瓣与主动脉瓣关键点定位（\`valve_landmarks\`）、乳腺钼靶 BI-RADS 腺体致密度分级（\`breast_density\`）、病理切片肿瘤检测（\`pathology_tumor_detection\`）、病理切片细胞核分类与计数（\`pathology_nuclei\`）及内镜手术器械尖端分割（\`endoscopic_tool\`），均以列表中的可用状态为准；
    - **规则算法 / 定量 CT**：支气管-动脉径比与粘液栓容积、肺结节候选、L3 体成分（不判定肌少症）、椎体 ROI 平均 CT 值、交互式区域生长；肺气肿 LAA-950%（不做 GOLD 分级）；
    - **已下线 / 未实现**：冠脉钙化积分（已下线）、病毒性肺炎、气道树、肺叶、脑梗死、颅内出血（未实现，不提供入口）。
 5. **诊断级交互式 MPR 三正交切片浏览器**：
@@ -2008,6 +2060,16 @@ Heurion 专为临床与医学科研打造，采用三栏自适应现代架构：
 ### 11.6 临床雷达扫描与批注卡片联动
 核验过程中采用墨绿科技雷达波扫描动画展示检索与匹配进度；核验结果与正文锚点实现像素级高精度吸附对齐，红色虚线下划线直观警示，打造沉浸式专业学术审校环境。
 
+### 11.7 基于 Google PAT 架构的四阶段多维学术核查流水线 (4-Stage PAT Verification Pipeline)
+参考学术审校架构（\`arXiv:2606.28277v1\`），平台将「论断核验 (\`verify_claims\`)」与「事实核查员 (\`fact_checker\` Subagent)」升级为四阶段协同流水线：
+1. **Stage 1：章节角色感知切分与全表数值摘要提取**：自动识别手稿各段落所属的 IMRaD 学术章节角色（\`abstract\`、\`introduction\`、\`methods\`、\`results\`、\`discussion\`、\`conclusion\`），并同步遍历全文数据表（如 Table 1 基线特征表），提取总样本量 N、分组例数与关键百分比摘要作为全文自洽校验锚点；
+2. **Stage 2：自适应核查预算分级**：按论断复杂度分配 \`high\`（同时含引用与具体统计数值或需跨章节数值比对）、\`medium\`（定性引用或一般结果陈述）与 \`light\`（普通过渡句）三级核查深度；
+3. **Stage 3：三路并行专项核查通道**：
+   - **通道 A（外部文献事实与数值对齐）**：支持百分比与小数等价归一化（如 \`0.68\` 与 \`68%\` 自动识别等价）、方向性与结论极性矛盾检测，以及本地证据不足时的 PubMed / Europe PMC 实时外部检索补全；
+   - **通道 B（跨章节与正文-表格内部自洽核查）**：自动核对摘要、方法、结果与 Table 1 数据表之间的总样本量 N 与分组比例，拦截前后样本量或比例不一致（\`internal_inconsistency\`）；
+   - **通道 C（章节角色感知的缺出处外部论断甄别与候选文献推荐）**：对 \`Results\` / \`Methods\` 本研究自报数据免除误报，对 \`Introduction\` / \`Discussion\` 缺失引用的外部统计主张自动检索并推荐匹配的 PubMed / Crossref 候选参考文献；
+4. **Stage 4：跨章节去重与三级严重度排序**：按锚点与语义去重后划分为 \`critical\`（致命）、\`major\`（重要）、\`minor\`（次要）三级严重度，辅助作者优先修复核心审稿问题。
+
 ---
 
 ## 十二、 常见问题解答 (FAQ)
@@ -2023,7 +2085,14 @@ Heurion 专为临床与医学科研打造，采用三栏自适应现代架构：
 
 ## 十三、 版本更新日志 (Release Notes)
 
-### v2.7 Pro (当前最新版本 · 2026年10月)
+### v2.8 Pro (当前最新版本 · 2026年10月)
+- **16 款 MONAI Model Zoo 官方预训练权重全量集成与生产适配**：除脾脏分割（\`spleen_ct\`）、腹部 13 器官（\`swinunetr_btcv\`）、全身 104 类结构（\`wholebody_ct\`）、BraTS 脑胶质瘤（\`brats_mri\`）、前列腺（\`prostate_mri\`）与心室短轴（\`ventricular_short_axis\`）外，新增接入肺结节 CT RetinaNet 三维检测（\`lung_nodule_ct\`）、胰腺及胰腺肿瘤 DiNTS 分割（\`pancreas_ct_dints\`）、增强 CT 肾脏子结构分割（\`renal_structures_cect\`）、全脑 133 类精细脑区 UNesT 分割（\`wholebrainseg_large_unest\`）、VISTA-3D 全身 127 类通用分割（\`vista3d\`）、心脏瓣膜关键点定位（\`valve_landmarks\`）、乳腺钼靶 BI-RADS 致密度分级（\`breast_density\`）、病理切片肿瘤检测（\`pathology_tumor_detection\`）、病理细胞核 HoVerNet 分类计数（\`pathology_nuclei\`）及内镜手术器械分割（\`endoscopic_tool\`）；均经 SHA-256 校验并在患者影像分析工作台开放调用。
+- **基于 Google PAT 架构（arXiv:2606.28277v1）的四阶段引文与论断核查引擎**：重构 \`verify_claims\` 与 \`fact_checker\` Subagent，引入 Stage 1 章节角色感知与全表数值摘要提取、Stage 2 自适应核查预算分级（\`high\` / \`medium\` / \`light\`）、Stage 3 三路并行专项核查与 Stage 4 跨章节去重及三级严重度排序（\`critical\` / \`major\` / \`minor\`）。
+- **跨章节正文-表格内部自洽核查与数值等价性归一**：自动比对摘要、方法、结果与 Table 1 数据表之间的总样本量 N 与分组百分比，拦截前后样本量或比例不一致；支持百分比与小数等价匹配（如 \`68%\` 与 \`0.68\`）及方向性矛盾检测。
+- **缺出处外部论断实时检索补全与候选文献推荐**：结合 IMRaD 章节角色区分「本研究队列结果」与「外部文献主张」，对引言和讨论中缺失引用的外部统计论断自动检索 PubMed / Crossref 并推荐匹配候选参考文献。
+- **影像模型诚实降级与器官体积语义校准**：对未提供公开预训练权重的 5 项任务明确标注不可用并返回 HTTP 501；对复用 BTCV 器官分割的胰腺/双肾/肝脏选项明确标注仅提供器官体积定量，不谎称病灶分割。
+
+### v2.7 Pro (2026年10月)
 - **一键导出 SCI 投稿出版包 (.zip) (One-Click SCI Publication Bundle)**：只用研究真实入组受试者的数据打包投稿材料草稿（Table 1、受试者流向图、视数据生成的 KM 曲线与 Cox 森林图、方法与结果草稿、STROBE 覆盖清单、复现脚本与 README）；缺失不补，无数据支撑的图表不生成并说明原因。
 - **临床预后列线图与 ROC/DCA（暂未开放）**：需要基于真实拟合的预测模型，入口已隐藏。
 - **未测混杂敏感性分析 (VanderWeele E-value)**：计算点估计与置信区间界限的 E-value，并生成中英文结果表述段落；平台不提供倾向评分匹配。
@@ -2096,7 +2165,7 @@ export function openHelpGuide(initialSectionId = 'overview'): void {
       <div class="dialog-head help-head">
         <div class="help-head-title">
           <h2>${icon('file', { size: 18 })} Heurion 临床智能工作站 · 全流程使用手册</h2>
-          <span class="help-version-pill">v2.7 Pro</span>
+          <span class="help-version-pill">v2.8 Pro</span>
         </div>
         <div class="help-head-actions">
           <div class="help-search-wrap">

@@ -455,11 +455,53 @@ describe('产品使用手册与操作指南 (Product Help & Documentation)', () 
     expect(md).toContain('### 11.4 AI 纠错修改建议与「一键替换正文」 (One-Click Quick Patch)')
     expect(md).toContain('### 11.5 专家「临床经验豁免」机制 (Clinical Experience Exemption)')
     expect(md).toContain('### 11.6 临床雷达扫描与批注卡片联动')
+    expect(md).toContain('### 11.7 基于 Google PAT 架构的四阶段多维学术核查流水线 (4-Stage PAT Verification Pipeline)')
+    expect(md).toContain('arXiv:2606.28277v1')
+    expect(md).toContain('internal_inconsistency')
     expect(md).toContain('[@c:citation_id]')
     expect(md).toContain('<table-wrap>')
     expect(md).toContain('【建议修改为】：')
     expect(md).toContain('一键替换正文')
     expect(md).toContain('标为临床经验')
+    expect(html).toContain('11.8 基于 Google PAT 架构的四阶段多维学术核查流水线 (4-Stage PAT Verification Pipeline)')
+    expect(html).toContain('arXiv:2606.28277v1')
+    expect(html).toContain('internal_inconsistency')
+  })
+
+  it('12. v2.8 Pro 版本更新日志与 16 款 MONAI 官方权重全量接入文档验证', () => {
+    const imgSec = HELP_SECTIONS.find(s => s.id === 'imaging')!
+    const relSec = HELP_SECTIONS.find(s => s.id === 'releasenotes')!
+    const md = buildHelpMarkdown()
+
+    const monaiBundles = [
+      'spleen_ct',
+      'swinunetr_btcv',
+      'wholebody_ct',
+      'vista3d',
+      'lung_nodule_ct',
+      'pancreas_ct_dints',
+      'renal_structures_cect',
+      'brats_mri',
+      'wholebrainseg_large_unest',
+      'prostate_mri',
+      'ventricular_short_axis',
+      'valve_landmarks',
+      'breast_density',
+      'pathology_tumor_detection',
+      'pathology_nuclei',
+      'endoscopic_tool',
+    ]
+    for (const bundleId of monaiBundles) {
+      expect(imgSec.contentHtml).toContain(bundleId)
+      expect(relSec.contentHtml).toContain(bundleId)
+      expect(md).toContain(bundleId)
+    }
+
+    expect(relSec.contentHtml).toContain('v2.8 Pro (当前最新版本 · 2026年10月)')
+    expect(relSec.contentHtml).toContain('16 款 MONAI Model Zoo 官方预训练权重全量集成与生产适配')
+    expect(relSec.contentHtml).toContain('基于 Google PAT 架构（arXiv:2606.28277v1）的四阶段引文与论断核查引擎')
+    expect(md).toContain('### v2.8 Pro (当前最新版本 · 2026年10月)')
+    expect(md).toContain('> **版本**：v2.8 Pro')
   })
 })
 
