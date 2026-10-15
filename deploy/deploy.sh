@@ -136,25 +136,10 @@ if wait_health; then
     echo "✓ 已切换到 2.0。1.0 的卷与 /opt/heurion 仍保留，确认无误后运行 cleanup-v1 清理。"
   fi
 
-  # 生产环境 MONAI 官方临床模型权重预热与校验（持久化存储在 imaging-models 卷中）
-  echo "== [Models] 预热与校验生产环境 MONAI 深度学习权重（持久化卷 imaging-models）..."
-  docker exec heurion2-imaging-worker python3 -c "
-import sys
-sys.path.insert(0, '/app/apps/imaging-worker/src')
-from model_registry import OFFICIAL_MODEL_REGISTRY, pull_model, verify_model
-
-targets = [k for k in OFFICIAL_MODEL_REGISTRY if k not in ('totalsegmentator', 'vista3d', 'copd_emphysema')]
-print(f'正在校验 {len(targets)} 个官方临床模型权重...')
-for k in targets:
-    try:
-        v = verify_model(k)
-        if not v.get('installed') or not v.get('verified'):
-            print(f'  拉取并校验模型: {k}...')
-            pull_model(k)
-        print(f'  ✓ 就绪: {k}')
-    except Exception as e:
-        print(f'  ⚠️ 模型 {k} 预热跳过: {e}')
-" || echo "⚠️  模型预热在后台完成或由于网络重试，不影响主服务运行"
+  # 生产环境 MONAI 官方临床模型权重预热与校验（持久化存储在 imaging-models 卷中，4 线程并发拉取，后台执行不阻塞发布）
+  echo "== [Models] 启动生产环境 16 款 MONAI 深度学习权重并发校验与后台预热（持久化卷 imaging-models）..."
+  docker exec heurion2-imaging-worker python3 /app/apps/imaging-worker/src/bake_models.py || true
+  docker exec -d heurion2-imaging-worker python3 /app/apps/imaging-worker/src/bake_models.py --all || echo "⚠️  后台模型预热启动跳过，不影响主服务运行"
 
   # S3 备份（配置了才装定时任务）
   if grep -q '^S3_ACCESS_KEY=' .env.production && grep -q '^S3_BUCKET=.' .env.production; then

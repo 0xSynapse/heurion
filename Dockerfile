@@ -18,16 +18,22 @@ ENV PATH=/opt/compute/bin:$PATH
 RUN npm install -g pnpm@12.5.1
 
 WORKDIR /app
-COPY . .
-RUN pnpm install --frozen-lockfile --filter @heurion2/platform... \
-    && pnpm --filter @heurion2/platform build \
-    && chmod -R a+rX /app \
-    && mkdir -p /app/data && chown -R node:node /app/data
+# 先只拷贝依赖清单与补丁，确保仅修改业务代码时不会使 pnpm install 与 OCR 语言包缓存失效
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY patches ./patches
+COPY packages/canvas-ui/package.json ./packages/canvas-ui/
+COPY apps/platform/package.json ./apps/platform/
+RUN pnpm install --frozen-lockfile --filter @heurion2/platform...
 
-# OCR 语言模型（简中 + 英文）构建时下载进镜像：扫描件 OCR 不依赖运行时联网
+# OCR 语言模型（简中 + 英文）构建时下载进镜像（置于 COPY . . 之前，避免改代码重复下载）
 RUN mkdir -p /opt/ocr-cache && cd /app/apps/platform \
     && node -e "import('tesseract.js').then(async ({ createWorker }) => { const w = await createWorker('chi_sim+eng', 1, { cachePath: '/opt/ocr-cache' }); await w.terminate() })" \
     && ls -la /opt/ocr-cache && chmod -R a+rX /opt/ocr-cache
+
+COPY . .
+RUN pnpm --filter @heurion2/platform build \
+    && chmod -R a+rX /app \
+    && mkdir -p /app/data && chown -R node:node /app/data
 
 # AI 代码隔离：平台以 node 运行；每个平台用户的 dsh 及其执行的代码经 sudo + 启动器降到专属 uid
 COPY deploy/sandbox/heurion-sandbox-exec /usr/local/bin/heurion-sandbox-exec

@@ -29,20 +29,19 @@ RUN uv venv /opt/venv && \
 COPY apps/doc-parser/pyproject.toml apps/doc-parser/README.md ./
 RUN uv pip install --no-cache --python /opt/venv/bin/python -r pyproject.toml
 
-# 3. 代码
-COPY apps/doc-parser/src ./src
+# 3. 先仅拷贝模型预下载脚本，确保修改 parser.py / server.py 时不会使 1.5GB 模型下载缓存失效
+COPY apps/doc-parser/src/__init__.py apps/doc-parser/src/settings.py apps/doc-parser/src/prefetch_models.py ./src/
 
 # 4. 构建期预下载模型（版面、表格结构、RapidOCR，默认也含公式模型）到 /models；这是唯一联网的步骤。
-#    HF_HUB_DISABLE_XET=1：Xet 传输在部分网络下会卡住，改用普通 HTTPS 下载。
-#    WITH_FORMULA=1（默认）：公式模型（640 MB）也打进镜像，运行时用 DOC_PARSER_FORMULA 开关，
-#    以后内存够了（16 GB 机器）改环境变量即可开启，不用重建镜像；镜像体积敏感时用 --build-arg WITH_FORMULA=0。
-#    下载器会顺带拉取版面模型的 ONNX 版（171 MB），当前走 PyTorch 引擎用不到（已实测删掉后解析正常），删掉。
 ARG WITH_FORMULA=1
 RUN HF_HUB_DISABLE_XET=1 python -m src.prefetch_models --output /models $([ "$WITH_FORMULA" = "1" ] || echo --no-formula) && \
     rm -rf /models/docling-project--docling-layout-heron-onnx && \
     chmod -R a+rX /models
 
-# 5. 运行期离线：Hugging Face / transformers 离线模式（代码里也会再设一次）；artifacts_path 指向 /models
+# 5. 再拷贝全部业务代码
+COPY apps/doc-parser/src ./src
+
+# 6. 运行期离线：Hugging Face / transformers 离线模式（代码里也会再设一次）；artifacts_path 指向 /models
 ENV HF_HUB_OFFLINE=1 \
     MALLOC_ARENA_MAX=2 \
     TRANSFORMERS_OFFLINE=1 \

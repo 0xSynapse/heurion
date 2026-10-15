@@ -62,8 +62,12 @@ jobs:
           file: Dockerfile
           push: true
           tags: ${{ env.APP_IMAGE }}:${{ steps.vars.outputs.sha }},${{ env.APP_IMAGE }}:latest
-          cache-from: type=gha,scope=app
-          cache-to: type=gha,mode=max,scope=app
+          cache-from: |
+            type=registry,ref=${{ env.APP_IMAGE }}:latest
+            type=gha,scope=app
+          cache-to: |
+            type=inline
+            type=gha,mode=min,scope=app
       - name: 嵌入服务镜像（含 bge-m3 模型）
         uses: docker/build-push-action@v7
         with:
@@ -71,8 +75,12 @@ jobs:
           file: apps/embedder/Dockerfile
           push: true
           tags: ${{ env.EMBEDDER_IMAGE }}:${{ steps.vars.outputs.sha }},${{ env.EMBEDDER_IMAGE }}:latest
-          cache-from: type=gha,scope=embedder
-          cache-to: type=gha,mode=max,scope=embedder
+          cache-from: |
+            type=registry,ref=${{ env.EMBEDDER_IMAGE }}:latest
+            type=gha,scope=embedder
+          cache-to: |
+            type=inline
+            type=gha,mode=min,scope=embedder
       - name: 医学影像 Worker 镜像（MONAI + PyTorch CPU）
         uses: docker/build-push-action@v7
         with:
@@ -80,8 +88,12 @@ jobs:
           file: apps/imaging-worker/Dockerfile
           push: true
           tags: ${{ env.IMAGING_WORKER_IMAGE }}:${{ steps.vars.outputs.sha }},${{ env.IMAGING_WORKER_IMAGE }}:latest
-          cache-from: type=gha,scope=imaging
-          cache-to: type=gha,mode=max,scope=imaging
+          cache-from: |
+            type=registry,ref=${{ env.IMAGING_WORKER_IMAGE }}:latest
+            type=gha,scope=imaging
+          cache-to: |
+            type=inline
+            type=gha,mode=min,scope=imaging
       - name: PDF 解析服务镜像（Docling，构建期下载模型）
         uses: docker/build-push-action@v7
         with:
@@ -89,8 +101,12 @@ jobs:
           file: apps/doc-parser/Dockerfile
           push: true
           tags: ${{ env.DOC_PARSER_IMAGE }}:${{ steps.vars.outputs.sha }},${{ env.DOC_PARSER_IMAGE }}:latest
-          cache-from: type=gha,scope=doc-parser
-          cache-to: type=gha,mode=max,scope=doc-parser
+          cache-from: |
+            type=registry,ref=${{ env.DOC_PARSER_IMAGE }}:latest
+            type=gha,scope=doc-parser
+          cache-to: |
+            type=inline
+            type=gha,mode=min,scope=doc-parser
 
   deploy:
     name: 部署到生产

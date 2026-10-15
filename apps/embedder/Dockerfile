@@ -7,9 +7,10 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 # pnpm-workspace.yaml 登记了依赖补丁（patchedDependencies），安装时要读到补丁文件
 COPY patches ./patches
-COPY apps/embedder ./apps/embedder
+COPY apps/embedder/package.json ./apps/embedder/
 RUN pnpm install --frozen-lockfile --filter @heurion2/embedder...
 
+COPY apps/embedder ./apps/embedder
 ENV EMBED_CACHE_DIR=/models \
     EMBED_HOST=0.0.0.0 \
     EMBED_PORT=8003

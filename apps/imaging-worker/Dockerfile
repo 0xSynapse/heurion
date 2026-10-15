@@ -45,28 +45,29 @@ RUN uv pip install --no-cache --python /opt/venv/bin/python \
       "einops>=0.7.0" \
       "python-multipart>=0.0.32"
 
-# 3. 复制代码与创建模型和数据目录
-COPY apps/imaging-worker/src /app/apps/imaging-worker/src
-RUN mkdir -p /app/apps/imaging-worker/data /app/models
-
+# 3. 先仅拷贝模型注册表与预热脚本，并默认仅烘焙轻量核心基座权重 (spleen_ct 23MB)；
+#    其余大体积模型权重（合计 ~2.3GB）在生产环境持久化卷 imaging-models 中并发预热并长期保留，
+#    从而避免每次修改 engine.py / server.py 时在 CI 构建期重复串行下载和上传 2.3GB 镜像层。
+RUN mkdir -p /app/apps/imaging-worker/src /app/apps/imaging-worker/data /app/models
 ENV HEURION_MODEL_DIR=/app/models
-
-# 预先下载核心基座临床模型（脾脏、脑胶质瘤、肺结节、全身多器官、前列腺、SwinUNETR）
-# 确保生产环境容器无需等待网络拉取即可立即执行真实 3D 卷积推理
+COPY apps/imaging-worker/src/model_registry.py apps/imaging-worker/src/bake_models.py /app/apps/imaging-worker/src/
 RUN python3 /app/apps/imaging-worker/src/bake_models.py
+
+# 4. 复制其余业务源码
+COPY apps/imaging-worker/src /app/apps/imaging-worker/src
 
 WORKDIR /app/apps/imaging-worker
 
-# 4. 创建非 root 用户运行，确保隔离安全性并赋予模型目录与数据目录写权限
+# 5. 创建非 root 用户运行，确保隔离安全性并赋予模型目录与数据目录写权限
 RUN useradd -m -u 1000 imaginguser && \
     chown -R imaginguser:imaginguser /app /opt/venv
 
 USER imaginguser
 EXPOSE 8004
 
-# 5. 健康检查
+# 6. 健康检查
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8004/health')"
 
-# 6. 单 Worker 启动，控制最大并发防止 3D 体素操作突发内存翻倍
+# 7. 单 Worker 启动，控制最大并发防止 3D 体素操作突发内存翻倍
 CMD ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "8004", "--workers", "1"]
