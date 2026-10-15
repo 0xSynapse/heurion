@@ -777,6 +777,23 @@ export class Store {
     }
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_mail_user_thread ON mail_messages (user_id, thread_id)')
     this.db.exec("UPDATE mail_messages SET delivery_status = 'simulated', delivery_note = '本地开发模拟：未配置外网发信服务 (SMTP/RESEND_API_KEY)' WHERE folder = 'sent' AND delivery_status IS NULL")
+    // 清理早期版本自动注入的演示种子邮件与日历事件（仅删未关联真实日程/邮件的种子行）
+    this.db.exec(`
+      DELETE FROM mail_messages
+       WHERE calendar_event_id IS NULL
+         AND sender IN ('followup@heurion.org', 'research.dapa-hf@heurion.org', 'oncology.followup@heurion.org', 'irb.research@heurion.org', 'nutrition.prehab@heurion.org')
+         AND (patient_id IN ('PT-BRONCHO-001', 'PT-NSCLC-002', 'PT-SARCO-003') OR study_id = 'DAPA-HF-RCT-2019');
+      DELETE FROM calendar_events
+       WHERE mail_id IS NULL
+         AND (patient_id IN ('PT-BRONCHO-001', 'PT-NSCLC-002', 'PT-SARCO-003') OR study_id = 'DAPA-HF-RCT-2019')
+         AND title IN (
+           '【随访】PT-BRONCHO-001 气道CT与高密度粘液栓复查',
+           '【科研】DAPA-HF 课题入组质控与 PSM 平衡评审会',
+           '【随访】PT-NSCLC-002 奥希替尼靶向 RECIST 1.1 疗效评估',
+           '【科研】DSMB 独立数据监查委员会中期审查闭门会议',
+           '【随访】PT-SARCO-003 营养支持与化疗耐受评估（低 SMI）'
+         );
+    `)
   }
 
 
@@ -2057,12 +2074,12 @@ export class Store {
 
   /** 文档里没有正常完成的回合（对话记录里标出失败原因）。 */
   failedTurns(docId: string): Array<Pick<TurnRow, 'id' | 'status' | 'error' | 'ended_at'>> {
-    return this.db.prepare("SELECT id, status, error, ended_at FROM turns WHERE doc_id = ? AND status NOT IN ('done', 'running') ORDER BY started_at")
+    return this.db.prepare("SELECT id, status, error, ended_at FROM turns WHERE doc_id = ? AND status NOT IN ('done', 'running') ORDER BY started_at, rowid")
       .all(docId) as unknown as Array<Pick<TurnRow, 'id' | 'status' | 'error' | 'ended_at'>>
   }
 
   listTurns(docId: string): TurnRow[] {
-    return this.db.prepare('SELECT * FROM turns WHERE doc_id = ? ORDER BY started_at ASC').all(docId) as unknown as TurnRow[]
+    return this.db.prepare('SELECT * FROM turns WHERE doc_id = ? ORDER BY started_at ASC, rowid ASC').all(docId) as unknown as TurnRow[]
   }
 
   clearDocTurns(docId: string): void {

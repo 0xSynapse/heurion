@@ -605,21 +605,7 @@ export function registerImagingRoutes(
         if (!resp.ok) return workerFail(c, resp, 'imaging_inference_failed')
         resultData = await resp.json()
       } else {
-        const resp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/benchmark`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model_name: modelId || 'bronchiectasis_mucus_analyzer',
-            window_preset: windowPreset || 'lung',
-            bar_cutoff: barCutoff,
-            mucus_min_hu: mucusMinHu,
-            mucus_max_hu: mucusMaxHu,
-            ham_threshold_hu: hamThresholdHu,
-          }),
-          signal: AbortSignal.timeout(60000),
-        })
-        if (!resp.ok) return workerFail(c, resp, 'imaging_inference_failed')
-        resultData = await resp.json()
+        return c.json({ error: 'no_image', message: '请上传该患者真实的医学影像文件 (NIfTI / DICOM)' }, 400)
       }
 
       const b64Data = String(resultData.key_slice_png_base64 || '').replace(/^data:image\/png;base64,/, '')

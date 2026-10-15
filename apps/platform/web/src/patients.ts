@@ -803,13 +803,11 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
     let statusData: any = null
     let modelsData: any = { models: [] }
-    let samplesData: any = { samples: [] }
 
     try {
-      [statusData, modelsData, samplesData] = await Promise.all([
+      [statusData, modelsData] = await Promise.all([
         api<any>('/api/imaging/status').catch(() => null),
         api<any>('/api/imaging/models').catch(() => ({ models: [] })),
-        api<any>('/api/imaging/samples').catch(() => ({ samples: [] })),
       ])
     } catch {}
 
@@ -819,7 +817,6 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       ? `${devInfo.accelerator || 'GPU / Metal 统一内存加速'}${devInfo.total_unified_ram_gb ? ` · ${devInfo.total_unified_ram_gb}GB 统一内存` : ''}`
       : '计算节点离线 (端口 8004 未连接)'
 
-    const samples: Array<{ id: string; name: string; modality: string; size_mb?: number }> = samplesData.samples || []
     const modelsList: Array<{
       id: string
       name: string
@@ -831,7 +828,6 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       body_part?: string
       is_ready?: boolean
       unavailable_reason?: string | null
-      compatible_samples?: string[]
     }> = [...(modelsData.models || []), ...(modelsData.planned_models || [])]
 
     const renderOption = (m: any, isSelected: boolean) => {
@@ -847,7 +843,6 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           data-target="${esc(m.target || '')}"
           data-ready="${ready ? 'true' : 'false'}"
           data-reason="${esc(m.unavailable_reason || '')}"
-          data-samples="${esc((m.compatible_samples || []).join(','))}"
           ${selectedAttr}
           ${disabledAttr}>
           ${esc(m.name)} ${modalityTag} ${esc(modelOptionTag(m))}
@@ -871,9 +866,6 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       <div class="field">
         <div class="row" style="justify-content: space-between; align-items: baseline; margin-bottom: 6px">
           <label><b>影像数据来源</b> <span class="muted small" style="font-weight: normal">（上传该患者的 CT/MR 影像文件）</span></label>
-          <button type="button" class="quiet small" id="btnToggleDemoSample" style="font-size: 11.5px; color: var(--blue); cursor: pointer; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--hover)">
-            ${icon('scan', { size: 12 })} 暂无影像？载入演示样本快速体验
-          </button>
         </div>
 
         <div id="imgUploadBox" style="margin-top: 4px">
@@ -888,27 +880,6 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
             ${icon('info', { size: 13, style: 'margin-top: 2px; color: var(--blue); flex-shrink: 0' })}
             <span><b>交互提示：</b>选定影像后，系统智能推荐适配专科。因 3D 影像体量大且消耗 GPU 算力，选定文件不会自动立即分析；请确认下方模型参数后，点击弹窗底部<b>「开始 MONAI 3D 量化推理」</b>按钮启动运算。</span>
           </div>
-        </div>
-
-        <div id="imgSampleBox" hidden style="margin-top: 4px; padding: 12px 14px; background: var(--hover); border: 1px solid var(--line); border-radius: 6px">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px">
-            <span class="small" style="font-weight: 600; color: var(--text)">临床测试演示样本（一键体验）</span>
-            <button type="button" class="quiet small" id="btnBackToUpload" style="font-size: 11.5px; color: var(--blue); text-decoration: underline; cursor: pointer; padding: 0">
-              返回上传本地文件
-            </button>
-          </div>
-          <select id="imgSampleSelect" class="pt-dlg-select" style="width: 100%; padding: 7px 10px" ${samples.length ? '' : 'disabled'}>
-            ${samples.length ? samples.map((s, idx) => `
-              <option value="${esc(s.id)}" ${idx === 0 ? 'selected' : ''}>
-                ${esc(s.name)} [${esc(s.modality)}] ${s.size_mb ? `(${s.size_mb} MB)` : ''}
-              </option>
-            `).join('') : '<option value="" selected>影像服务没有列出可用的演示样本</option>'}
-          </select>
-          ${samples.length ? `<div class="pt-sample-chips" style="margin-top: 8px">
-            <span class="muted small">快捷选择：</span>
-            ${samples.slice(0, 9).map((s, idx) => `<button type="button" class="pt-sample-chip${idx === 0 ? ' active' : ''}" data-sid="${esc(s.id)}">${icon('scan', { size: 12 })} ${esc(s.name)}</button>`).join('')}
-          </div>` : ''}
-          <div class="muted small" style="margin-top: 6px; font-size: 11.5px">演示样本是公开数据集影像，不是该患者的影像；分析记录会标注「演示样本」。</div>
         </div>
       </div>
 
@@ -992,16 +963,9 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         </button>
       </div>`
 
-    // 影像来源模式：默认优先本地上传 ('upload')，点击辅助链接可切换为临床测试样本 ('sample')
-    let currentSourceMode: 'upload' | 'sample' = 'upload'
-    const btnToggleDemo = body.querySelector('#btnToggleDemoSample') as HTMLButtonElement | null
-    const btnBackToUpload = body.querySelector('#btnBackToUpload') as HTMLButtonElement | null
-    const sampleBox = body.querySelector('#imgSampleBox') as HTMLElement
-    const uploadBox = body.querySelector('#imgUploadBox') as HTMLElement
     const modelSelect = body.querySelector('#imgModelSelect') as HTMLSelectElement
     const windowSelect = body.querySelector('#imgWindowSelect') as HTMLSelectElement
     const modelDesc = body.querySelector('#imgModelDesc') as HTMLElement
-    const sampleSelect = body.querySelector('#imgSampleSelect') as HTMLSelectElement
 
     let currentSpecialty = 'auto'
 
@@ -1043,68 +1007,37 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       }
     }
 
-    const filterModelsForSample = () => {
-      const isUpload = currentSourceMode === 'upload'
-      const sid = isUpload ? null : (sampleSelect?.value || null)
+    const filterModels = () => {
       const uploadedFile = fileInputEl?.files?.[0]
       const fn = uploadedFile?.name?.toLowerCase() || ''
-
-      // Sync active state of sample chips
-      body.querySelectorAll('.pt-sample-chip').forEach(btn => {
-        const el = btn as HTMLElement
-        el.classList.toggle('active', !isUpload && el.dataset.sid === sid)
-      })
 
       let matchedCategory = currentSpecialty
       let autoMatchedLabel = ''
       if (currentSpecialty === 'auto') {
-        if (!isUpload) {
-          if (sid === 'chest_lung_ct' || sid === 'lidc_lung_nodule_ct' || sid === 'copd_emphysema_ct' || sid === 'nsclc_lung_ct') {
-            matchedCategory = 'chest'
-            autoMatchedLabel = '胸部与呼吸'
-          } else if (sid === 'spleen_test' || sid === 'liver_tumor_ct') {
-            matchedCategory = 'abdomen'
-            autoMatchedLabel = '腹部与消化'
-          } else if (sid === 'prostate_mri') {
-            matchedCategory = 'abdomen'
-            autoMatchedLabel = '前列腺与盆腔'
-          } else if (sid === 'brats_brain_mri' || sid === 'hippocampus_brain_mri') {
-            matchedCategory = 'brain'
-            autoMatchedLabel = '颅脑多模态 MRI'
-          } else if (sid === 'cardiac_heart_mri') {
-            matchedCategory = 'brain'
-            autoMatchedLabel = '心血管高分辨 MRI'
-          } else {
-            matchedCategory = 'all'
-          }
+        if (/lung|chest|thorax|pulm|hrct|bronch|nodule|copd|abpa|pneumo/.test(fn)) {
+          matchedCategory = 'chest'
+          autoMatchedLabel = '胸部与呼吸'
+        } else if (/abdom|spleen|liver|pancrea|kidney|renal|kits/.test(fn)) {
+          matchedCategory = 'abdomen'
+          autoMatchedLabel = '腹部与消化'
+        } else if (/prostat|pelvi|tz|bph/.test(fn)) {
+          matchedCategory = 'abdomen'
+          autoMatchedLabel = '前列腺与盆腔'
+        } else if (/brain|neuro|head|cranial|brats|glioma|stroke|hippo/.test(fn)) {
+          matchedCategory = 'brain'
+          autoMatchedLabel = '颅脑与神经'
+        } else if (/cardiac|heart|cine|valve|coronary|lvef/.test(fn)) {
+          matchedCategory = 'brain'
+          autoMatchedLabel = '心血管'
+        } else if (/whole|total|body|spine|bone|vertebra/.test(fn)) {
+          matchedCategory = 'whole_body'
+          autoMatchedLabel = '全身与骨骼'
         } else {
-          // Smart inference from uploaded filename
-          if (/lung|chest|thorax|pulm|hrct|bronch|nodule|copd|abpa|pneumo/.test(fn)) {
-            matchedCategory = 'chest'
-            autoMatchedLabel = '胸部与呼吸'
-          } else if (/abdom|spleen|liver|pancrea|kidney|renal|kits/.test(fn)) {
-            matchedCategory = 'abdomen'
-            autoMatchedLabel = '腹部与消化'
-          } else if (/prostat|pelvi|tz|bph/.test(fn)) {
-            matchedCategory = 'abdomen'
-            autoMatchedLabel = '前列腺与盆腔'
-          } else if (/brain|neuro|head|cranial|brats|glioma|stroke|hippo/.test(fn)) {
-            matchedCategory = 'brain'
-            autoMatchedLabel = '颅脑与神经'
-          } else if (/cardiac|heart|cine|valve|coronary|lvef/.test(fn)) {
-            matchedCategory = 'brain'
-            autoMatchedLabel = '心血管'
-          } else if (/whole|total|body|spine|bone|vertebra/.test(fn)) {
-            matchedCategory = 'whole_body'
-            autoMatchedLabel = '全身与骨骼'
-          } else {
-            matchedCategory = 'all'
-            if (uploadedFile) autoMatchedLabel = '全专科覆盖'
-          }
+          matchedCategory = 'all'
+          if (uploadedFile) autoMatchedLabel = '全专科覆盖'
         }
       }
 
-      // Filter models based on matchedCategory
       const filtered = modelsList.filter(m => {
         if (matchedCategory === 'all') return true
         if (matchedCategory === 'chest') return m.body_part === 'chest' || m.body_part === 'whole_body' || m.body_part === 'general'
@@ -1115,32 +1048,17 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         return true
       })
 
-      // Determine default selected model
       let preferredModelId = ''
-      if (!isUpload) {
-        if (sid === 'chest_lung_ct') preferredModelId = 'bronchiectasis_mucus_analyzer'
-        else if (sid === 'lidc_lung_nodule_ct') preferredModelId = 'lung_nodule_segmenter'
-        else if (sid === 'copd_emphysema_ct') preferredModelId = 'copd_emphysema_analyzer'
-        else if (sid === 'liver_tumor_ct') preferredModelId = 'liver_lesion_segmenter'
-        else if (sid === 'cardiac_heart_mri') preferredModelId = 'cardiac_mri_segmentation'
-        else if (sid === 'brats_brain_mri') preferredModelId = 'brain_tumor_brats'
-        else if (sid === 'hippocampus_brain_mri') preferredModelId = 'brain_tumor_segmenter'
-        else if (sid === 'nsclc_lung_ct') preferredModelId = 'nsclc_recist_analyzer'
-        else if (sid === 'spleen_test') preferredModelId = 'multi_organ_ct'
-        else if (sid === 'prostate_mri') preferredModelId = 'prostate_mri_segmenter'
-      } else {
-        if (/bronch|mucus|ham|abpa/.test(fn)) preferredModelId = 'bronchiectasis_mucus_analyzer'
-        else if (/nodule/.test(fn)) preferredModelId = 'lung_nodule_segmenter'
-        else if (/copd|emphysema/.test(fn)) preferredModelId = 'copd_emphysema_analyzer'
-        else if (/liver|hepatic/.test(fn)) preferredModelId = 'liver_lesion_segmenter'
-        else if (/cardiac|heart/.test(fn)) preferredModelId = 'cardiac_mri_segmentation'
-        else if (/spleen/.test(fn)) preferredModelId = 'spleen_segmenter'
-        else if (/prostat/.test(fn)) preferredModelId = 'prostate_mri_segmenter'
-        else if (/brain|brats|hippo/.test(fn)) preferredModelId = 'brain_tumor_brats'
-      }
+      if (/bronch|mucus|ham|abpa/.test(fn)) preferredModelId = 'bronchiectasis_mucus_analyzer'
+      else if (/nodule/.test(fn)) preferredModelId = 'lung_nodule_segmenter'
+      else if (/copd|emphysema/.test(fn)) preferredModelId = 'copd_emphysema_analyzer'
+      else if (/liver|hepatic/.test(fn)) preferredModelId = 'liver_lesion_segmenter'
+      else if (/cardiac|heart/.test(fn)) preferredModelId = 'cardiac_mri_segmentation'
+      else if (/spleen/.test(fn)) preferredModelId = 'spleen_segmenter'
+      else if (/prostat/.test(fn)) preferredModelId = 'prostate_mri_segmenter'
+      else if (/brain|brats|hippo/.test(fn)) preferredModelId = 'brain_tumor_brats'
       if (!preferredModelId && filtered.length > 0 && filtered[0]) preferredModelId = filtered[0].id
 
-      // 按引擎类型分组：规则算法 / 定量 CT / 深度学习；其它类型单列
       let html = ''
       for (const [type, label] of Object.entries(ENGINE_GROUP)) {
         const group = filtered.filter(m => (m.engine_type ?? '') === type)
@@ -1169,23 +1087,6 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       updateModelUI()
     }
 
-    btnToggleDemo?.addEventListener('click', () => {
-      currentSourceMode = 'sample'
-      uploadBox.hidden = true
-      sampleBox.hidden = false
-      if (btnToggleDemo) btnToggleDemo.hidden = true
-      filterModelsForSample()
-    })
-
-    btnBackToUpload?.addEventListener('click', () => {
-      currentSourceMode = 'upload'
-      uploadBox.hidden = false
-      sampleBox.hidden = true
-      if (btnToggleDemo) btnToggleDemo.hidden = false
-      filterModelsForSample()
-    })
-
-    sampleSelect?.addEventListener('change', filterModelsForSample)
     modelSelect?.addEventListener('change', updateModelUI)
 
     // Specialty tabs event delegation
@@ -1194,22 +1095,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         body.querySelectorAll('.pt-specialty-tab').forEach(b => b.classList.remove('active'))
         tabBtn.classList.add('active')
         currentSpecialty = (tabBtn as HTMLElement).dataset.cat || 'auto'
-        filterModelsForSample()
-      })
-    })
-
-    // Sample quick chips
-    body.querySelectorAll('.pt-sample-chip').forEach(chipBtn => {
-      chipBtn.addEventListener('click', () => {
-        const sid = (chipBtn as HTMLElement).dataset.sid
-        if (sid && sampleSelect) {
-          sampleSelect.value = sid
-          currentSourceMode = 'sample'
-          sampleBox.hidden = false
-          uploadBox.hidden = true
-          if (btnToggleDemo) btnToggleDemo.hidden = true
-          filterModelsForSample()
-        }
+        filterModels()
       })
     })
 
@@ -1240,7 +1126,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           inferredHint = ` · 序列已选定 (将在点击底部【开始推理】上传并执行分析)`
         }
         fileNameEl.innerHTML = `${icon('file', { size: 12 })} 已选文件: <b>${esc(f.name)}</b> (${(f.size / (1024 * 1024)).toFixed(1)} MB)${inferredHint}`
-        filterModelsForSample()
+        filterModels()
       }
     }
 
@@ -1268,7 +1154,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     }
 
     // Initial trigger to sync UI
-    filterModelsForSample()
+    filterModels()
 
     // 启动分析按钮
     const btnRun = body.querySelector('#btnRunImaging') as HTMLButtonElement
@@ -1276,8 +1162,6 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     const progressMsg = body.querySelector('#imgProgressMsg') as HTMLElement
 
     btnRun?.addEventListener('click', async () => {
-      const isUpload = currentSourceMode === 'upload'
-      const sampleId = (body.querySelector('#imgSampleSelect') as HTMLSelectElement)?.value
       const modelId = (body.querySelector('#imgModelSelect') as HTMLSelectElement)?.value || 'bronchiectasis_mucus_analyzer'
       const windowPreset = (body.querySelector('#imgWindowSelect') as HTMLSelectElement)?.value
       const parseSafeInput = (val: string | undefined, def: number): number => {
@@ -1295,8 +1179,8 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       const fileInput = body.querySelector('#imgFileInput') as HTMLInputElement
       const uploadedFile = fileInput?.files?.[0]
 
-      if (isUpload && !uploadedFile) {
-        notice('请先选择或拖拽要上传的 CT/MRI 影像文件 (.nii / .nii.gz / .gz / .dcm / .zip / .tar.gz 序列包)，或点击右上角载入演示样本快速体验。', true)
+      if (!uploadedFile) {
+        notice('请先选择或拖拽要上传的患者 CT/MRI 影像文件 (.nii / .nii.gz / .gz / .dcm / .zip / .tar.gz 序列包)。', true)
         return
       }
 
@@ -1305,34 +1189,17 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       progressMsg.textContent = `正在传输体素数据并调度 ${devAccel} 执行 3D 卷积分割...`
 
       try {
-        if (isUpload && uploadedFile) {
-          const fd = new FormData()
-          fd.append('file', uploadedFile)
-          fd.append('model_id', modelId)
-          fd.append('window_preset', windowPreset)
-          fd.append('bar_cutoff', String(barCutoff))
-          fd.append('mucus_min_hu', String(mucusMin))
-          fd.append('mucus_max_hu', String(mucusMax))
-          fd.append('ham_threshold_hu', String(hamThresh))
-          if (reportDate) fd.append('report_date', reportDate)
-          fd.append('auto_tag', String(autoTag))
-          await api(`/api/patients/${patientId}/imaging/analyze`, { method: 'POST', body: fd })
-        } else {
-          await api(`/api/patients/${patientId}/imaging/analyze`, {
-            method: 'POST',
-            body: JSON.stringify({
-              sample_id: sampleId,
-              model_id: modelId,
-              window_preset: windowPreset,
-              bar_cutoff: barCutoff,
-              mucus_min_hu: mucusMin,
-              mucus_max_hu: mucusMax,
-              ham_threshold_hu: hamThresh,
-              report_date: reportDate,
-              auto_tag: autoTag,
-            })
-          })
-        }
+        const fd = new FormData()
+        fd.append('file', uploadedFile)
+        fd.append('model_id', modelId)
+        fd.append('window_preset', windowPreset)
+        fd.append('bar_cutoff', String(barCutoff))
+        fd.append('mucus_min_hu', String(mucusMin))
+        fd.append('mucus_max_hu', String(mucusMax))
+        fd.append('ham_threshold_hu', String(hamThresh))
+        if (reportDate) fd.append('report_date', reportDate)
+        fd.append('auto_tag', String(autoTag))
+        await api(`/api/patients/${patientId}/imaging/analyze`, { method: 'POST', body: fd })
 
         notice('影像量化分析完成！已生成关键截面并加密存入患者档案。')
         close()
@@ -3948,34 +3815,7 @@ ${impression}
         <button class="welcome-card" data-pw="upload"><b>上传报告与影像</b><span>化验单、出院小结原件或 DICOM 影像自动解析</span></button>
         ${list[0]
           ? `<button class="welcome-card" data-pw="open"><b>打开最近患者</b><span>打开 ${esc(label(list[0]))}</span></button>`
-          : `<button class="welcome-card" data-pw="guide"><b>标杆案例导览</b><span>查阅 4 大典型病种 3D 量化与诊断证据链</span></button>`}
-      </div>
-      <h2>试试快速体验 4 大典型临床标杆案例</h2>
-      <div class="welcome-examples">
-        <button data-pt-preset="nsclc" title="点击快速进入或新建晚期非小细胞肺癌 (NSCLC) 靶向随访患者档案">
-          <span style="display:flex;align-items:center;gap:8px;">
-            ${icon('nsclc', { size: 16 })}
-            <b>[NSCLC 靶向评估]</b> PT-NSCLC-002 · 58岁女 · EGFR 19del 奥希替尼 12 周随访 (RECIST 1.1 PR · 3D 容积 -78.2%)
-          </span>
-        </button>
-        <button data-pt-preset="abpa" title="打开或新建示例患者：支气管与粘液栓影像测量">
-          <span style="display:flex;align-items:center;gap:8px;">
-            ${icon('scan', { size: 16 })}
-            <b>[示例 · 支气管与粘液栓测量]</b> PT-BRONCHO-001 · 52岁男 · BAR 1.45 · 高密度粘液栓 12.44 cm³
-          </span>
-        </button>
-        <button data-pt-preset="sarco" title="打开或新建示例患者：腹部脏器容积与 L3 体成分测量">
-          <span style="display:flex;align-items:center;gap:8px;">
-            ${icon('users', { size: 16 })}
-            <b>[示例 · 腹部脏器与 L3 体成分]</b> PT-ABDOMEN-003 · 52岁男 · 脾体积 680 cm³ · L3 SMI 29.9 cm²/m²
-          </span>
-        </button>
-        <button data-pt-preset="prostate" title="点击快速进入或新建盆腔前列腺多参数 T2-MRI (PI-RADS v2.1) 患者档案">
-          <span style="display:flex;align-items:center;gap:8px;">
-            ${icon('scan', { size: 16 })}
-            <b>[前列腺 MRI 评估]</b> PT-PROSTATE-004 · 68岁男 · T2 MRI 腺体 48.6 cm³ (TZI 0.58) · PI-RADS 2 类良性增生
-          </span>
-        </button>
+          : `<button class="welcome-card" data-pw="guide"><b>算法与工作流指南</b><span>查阅 3D 影像量化与患者建档手册</span></button>`}
       </div>
       <div style="margin-top: 28px; text-align: center;">
         <button class="linkish small muted" data-guide-action="open">查阅 Heurion 临床工作站 3D 影像量化与患者全流程手册 ↗</button>
@@ -3984,7 +3824,7 @@ ${impression}
   }
 
   document.getElementById('page')!.addEventListener('click', async e => {
-    const b = (e.target as HTMLElement).closest<HTMLElement>('[data-pw], [data-pt-preset], [data-guide-action], [data-guide-topic]')
+    const b = (e.target as HTMLElement).closest<HTMLElement>('[data-pw], [data-guide-action], [data-guide-topic]')
     if (!b || !document.getElementById('page')!.classList.contains('pt-welcome')) return
     if (b.dataset.guideAction === 'open') { openHelpGuide('casestudy'); return }
     if (b.dataset.guideAction === 'import') {
@@ -4005,102 +3845,6 @@ ${impression}
       return
     }
     if (b.dataset.pw === 'guide') { openHelpGuide('casestudy'); return }
-    if (b.dataset.ptPreset === 'nsclc') {
-      const existing = list.find(p => p.tags.some(t => /nsclc|肺癌|egfr/i.test(t)) || p.code === 'PT-NSCLC-002')
-      if (existing) {
-        await openPatient(existing.id)
-      } else {
-        try {
-          const created = await api<Patient>('/api/patients', {
-            method: 'POST',
-            body: JSON.stringify({
-              code: 'PT-NSCLC-002',
-              sex: '女',
-              birth_year: '1968',
-              tags: ['NSCLC', 'EGFR-19del', '奥希替尼靶向治疗', 'cT2bN2M0']
-            })
-          })
-          notice('已创建典型案例患者档案：PT-NSCLC-002')
-          await loadList()
-          await openPatient(created.id)
-        } catch (err) {
-          notice((err as Error).message, true)
-        }
-      }
-      return
-    }
-    if (b.dataset.ptPreset === 'abpa') {
-      const existing = list.find(p => p.tags.some(t => /abpa|曲霉|支气管/i.test(t)) || p.code === 'PT-BRONCHO-001')
-      if (existing) {
-        await openPatient(existing.id)
-      } else {
-        try {
-          const created = await api<Patient>('/api/patients', {
-            method: 'POST',
-            body: JSON.stringify({
-              code: 'PT-BRONCHO-001',
-              sex: '男',
-              birth_year: '1974',
-              tags: ['示例患者', '支气管扩张', '哮喘']
-            })
-          })
-          notice('已创建典型案例患者档案：PT-BRONCHO-001')
-          await loadList()
-          await openPatient(created.id)
-        } catch (err) {
-          notice((err as Error).message, true)
-        }
-      }
-      return
-    }
-    if (b.dataset.ptPreset === 'sarco') {
-      const existing = list.find(p => p.tags.some(t => /sarco|肌少症|恶液质|脾大|abdomen/i.test(t)) || p.code === 'PT-SARCO-003' || p.code === 'PT-ABDOMEN-003')
-      if (existing) {
-        await openPatient(existing.id)
-      } else {
-        try {
-          const created = await api<Patient>('/api/patients', {
-            method: 'POST',
-            body: JSON.stringify({
-              code: 'PT-ABDOMEN-003',
-              sex: '男',
-              birth_year: '1974',
-              tags: ['示例患者', 'L3 体成分', '化疗中']
-            })
-          })
-          notice('已创建典型案例患者档案：PT-ABDOMEN-003')
-          await loadList()
-          await openPatient(created.id)
-        } catch (err) {
-          notice((err as Error).message, true)
-        }
-      }
-      return
-    }
-    if (b.dataset.ptPreset === 'prostate' || b.dataset.ptPreset === 'ipf') {
-      const existing = list.find(p => p.tags.some(t => /prostate|前列腺|pi-rads|bph|ipf/i.test(t)) || p.code === 'PT-PROSTATE-004' || p.code === 'PT-IPF-004')
-      if (existing) {
-        await openPatient(existing.id)
-      } else {
-        try {
-          const created = await api<Patient>('/api/patients', {
-            method: 'POST',
-            body: JSON.stringify({
-              code: 'PT-PROSTATE-004',
-              sex: '男',
-              birth_year: '1958',
-              tags: ['前列腺增生', 'BPH', 'PI-RADS-2', '盆腔T2-MRI', '规避过度活检']
-            })
-          })
-          notice('已创建典型案例患者档案：PT-PROSTATE-004')
-          await loadList()
-          await openPatient(created.id)
-        } catch (err) {
-          notice((err as Error).message, true)
-        }
-      }
-      return
-    }
   })
 
   // —— 左栏页签 ——

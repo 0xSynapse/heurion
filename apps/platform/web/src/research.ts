@@ -1590,24 +1590,6 @@ ${modelsDesc}
     }
   }
 
-  const STUDY_PRESETS: Record<string, { title: string; design: string; summary: string }> = {
-    hfrep: {
-      title: 'SGLT2 抑制剂在射血分数降低心衰 (HFrEF) 中的心血管终点真实世界研究',
-      design: 'retrospective_cohort',
-      summary: '评估 SGLT2 抑制剂在 HFrEF 患者中的全因死亡率与心衰再住院风险 (MACE) 生存分析与倾向评分匹配 (PSM)。'
-    },
-    radiomics: {
-      title: '晚期非小细胞肺癌免疫治疗应答的 3D CT 影像组学特征与预后模型',
-      design: 'retrospective_cohort',
-      summary: '提取病灶 IBSI 规范化 107 项高维影像组学特征，结合 LASSO 特征降维与 Cox 比例风险回归构建无进展生存期 (PFS) 预测模型。'
-    },
-    smi: {
-      title: '消化系统恶性肿瘤 L3 骨骼肌质量指数 (SMI) 与化疗不良反应关联分析',
-      design: 'prospective_cohort',
-      summary: '基于腹部 CT L3 层面测量 SMI、骨骼肌平均 CT 值与内脏脂肪指数，分析其与剂量毒性的相关性。'
-    }
-  }
-
   function showWelcome(): void {
     current = null
     const page = $('page')
@@ -1623,27 +1605,6 @@ ${modelsDesc}
         ${list[0]
           ? `<button class="welcome-card" data-rw="open"><b>打开最近研究</b><span>打开「${esc(list[0].title)}」</span></button>`
           : `<button class="welcome-card" data-rw="cohort"><b>筛选入组队列</b><span>从患者库多维条件筛选入组生成研究数据集</span></button>`}
-      </div>
-      <h2>试试典型科研课题与分析范例</h2>
-      <div class="welcome-examples">
-        <button data-study-preset="hfrep" title="点击体验 SGLT2 抑制剂在 HFrEF 患者中的心血管终点真实世界研究课题">
-          <span style="display:flex;align-items:center;gap:8px;">
-            <svg class="ui-icon" width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5l1.5 3 3.5.5-2.5 2.5.5 3.5-3-1.5-3 1.5.5-3.5-2.5-2.5 3.5-.5z"/></svg>
-            <b>[真实世界队列]</b> SGLT2 抑制剂在射血分数降低心衰 (HFrEF) 患者中的多中心队列与主要心血管不良事件 (MACE) 生存分析
-          </span>
-        </button>
-        <button data-study-preset="radiomics" title="点击体验晚期非小细胞肺癌 3D 影像组学特征与预后模型课题">
-          <span style="display:flex;align-items:center;gap:8px;">
-            ${icon('nsclc', { size: 16 })}
-            <b>[肿瘤影像组学]</b> 晚期非小细胞肺癌免疫治疗应答预测：IBSI 107 项组学特征提取与 LASSO-Cox 风险回归建模
-          </span>
-        </button>
-        <button data-study-preset="smi" title="点击体验消化系统恶性肿瘤骨骼肌质量指数 (SMI) 与并发症关联分析课题">
-          <span style="display:flex;align-items:center;gap:8px;">
-            ${icon('users', { size: 16 })}
-            <b>[机体成分代谢]</b> 消化系统恶性肿瘤 L3 骨骼肌质量指数 (SMI) 与术后并发症及化疗耐受性关联分析
-          </span>
-        </button>
       </div>
       <div style="margin-top: 28px; text-align: center; display: flex; justify-content: center; align-items: center; gap: 16px;">
         <button class="linkish small muted" data-guide-action="open">查阅 Heurion 临床科研工作流与生物统计分析指南 ↗</button>
@@ -1696,7 +1657,7 @@ ${modelsDesc}
     const page = $('page')
     const t = e.target as HTMLElement
     if (page.classList.contains('rs-welcome')) {
-      const b = t.closest<HTMLElement>('[data-rw], [data-study-preset], [data-guide-action]')
+      const b = t.closest<HTMLElement>('[data-rw], [data-guide-action]')
       if (!b) return
       if (b.dataset.guideAction === 'open') { openHelpGuide('overview'); return }
       if (b.dataset.rw === 'new') { createDialog(); return }
@@ -1719,27 +1680,6 @@ ${modelsDesc}
           if (screenBtn) screenBtn.click()
         } else {
           createDialog()
-        }
-        return
-      }
-      if (b.dataset.studyPreset) {
-        const p = STUDY_PRESETS[b.dataset.studyPreset]
-        if (!p) return
-        const existing = list.find(s => s.title.includes(p.title.slice(0, 10)) || s.title === p.title)
-        if (existing) {
-          await openStudy(existing.id)
-        } else {
-          try {
-            const created = await api<{ id: string }>('/api/studies', {
-              method: 'POST',
-              body: JSON.stringify(p)
-            })
-            notice(`已创建科研课题：${p.title}`)
-            await loadList()
-            await openStudy(created.id)
-          } catch (err) {
-            notice((err as Error).message, true)
-          }
         }
         return
       }
