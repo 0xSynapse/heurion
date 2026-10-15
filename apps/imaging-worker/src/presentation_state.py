@@ -11,46 +11,10 @@ from PIL import Image, ImageDraw, ImageFont
 from typing import Dict, Any, Tuple, Optional, List
 try:
     from .spatial_canonicalizer import get_radiological_orientation_labels
+    from .font_utils import get_cjk_font, get_sans_font
 except (ImportError, ValueError):
     from spatial_canonicalizer import get_radiological_orientation_labels
-
-
-def get_sans_font(size: int = 12, bold: bool = False):
-    try:
-        from PIL import ImageFont
-        font_names = [
-            "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
-            "Arial Bold.ttf" if bold else "Arial.ttf",
-            "Helvetica-Bold.ttf" if bold else "Helvetica.ttf"
-        ]
-        for name in font_names:
-            try:
-                return ImageFont.truetype(name, size)
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return ImageFont.load_default()
-
-
-def get_cjk_font(size: int = 12):
-    try:
-        from PIL import ImageFont
-        cjk_candidates = [
-            "/System/Library/Fonts/PingFang.ttc",
-            "/System/Library/Fonts/STHeiti Light.ttc",
-            "/System/Library/Fonts/Hiragino Sans GB.ttc",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
-        ]
-        for path in cjk_candidates:
-            try:
-                return ImageFont.truetype(path, size), True
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return get_sans_font(size=size), False
+    from font_utils import get_cjk_font, get_sans_font
 
 
 def build_presentation_state_payload(
@@ -131,38 +95,15 @@ def render_pacs_viewport(
     font_scale = get_sans_font(size=11, bold=True)
     font_title = get_sans_font(size=13 if h >= 400 else 10, bold=True)
 
-    # 1. Semi-transparent Diagnostic HUD Banner at top
-    hud_h = 115 if h >= 400 else 85
-    hud_overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    hud_draw = ImageDraw.Draw(hud_overlay)
-    hud_draw.rectangle([0, 0, w, hud_h], fill=(15, 23, 42, 215))
-    hud_draw.line([(0, hud_h), (w, hud_h)], fill=(56, 189, 248, 160), width=1)
-    base_img = Image.alpha_composite(base_img, hud_overlay)
-    draw = ImageDraw.Draw(base_img)
-
-    if title_banner:
-        draw.text((12, 6), title_banner, fill=(56, 189, 248, 255), font=font_title)
-
-    if hud_lines:
-        y_pos = 24 if h >= 400 else 18
-        line_step = 15 if h >= 400 else 11
-        for line in hud_lines:
-            draw.text((12, y_pos), line, fill=(241, 245, 249, 245), font=font_hud)
-            y_pos += line_step
-
-    # 2. PACS Standard 4-direction Compass Markers (A/P/L/R)
+    # 1. PACS Standard 4-direction Compass Markers (A/P/L/R) on unobstructed slice
     compass = get_radiological_orientation_labels(plane)
     top_label, bot_label = compass["top"], compass["bottom"]
     left_label, right_label = compass["left"], compass["right"]
 
-    compass_color = (255, 235, 59, 230) # High-visibility radiological yellow
-    # Top marker (just below HUD banner)
-    draw.text((w // 2 - 6, hud_h + 6), top_label, fill=compass_color, font=font_compass)
-    # Bottom marker
+    compass_color = (255, 235, 59, 230)  # High-visibility radiological yellow
+    draw.text((w // 2 - 6, 6), top_label, fill=compass_color, font=font_compass)
     draw.text((w // 2 - 6, h - 22), bot_label, fill=compass_color, font=font_compass)
-    # Left marker
     draw.text((8, h // 2 - 8), left_label, fill=compass_color, font=font_compass)
-    # Right marker
     draw.text((w - 20, h // 2 - 8), right_label, fill=compass_color, font=font_compass)
 
     # 3. Bottom-Left Corner PACS Metadata
@@ -252,6 +193,26 @@ def render_pacs_viewport(
             draw.text((text_x, elbow_y - 2), t2, fill=(56, 189, 248, 255), font=font_hud)
             if t3:
                 draw.text((text_x, elbow_y + 14), t3, fill=(251, 146, 60, 255), font=font_hud)
+
+    # 7. Diagnostic HUD Header Banner placed ABOVE the slice viewport (no occlusion)
+    if title_banner or hud_lines:
+        n_lines = len(hud_lines) if hud_lines else 0
+        line_step = 16 if h >= 400 else 12
+        y_start = 26 if h >= 400 else 18
+        hud_h = max(y_start + n_lines * line_step + 10, 40)
+        out_img = Image.new("RGBA", (w, hud_h + h), (7, 14, 23, 255))
+        hud_draw = ImageDraw.Draw(out_img)
+        hud_draw.rectangle([0, 0, w, hud_h - 1], fill=(11, 19, 35, 255))
+        hud_draw.line([(0, hud_h - 1), (w, hud_h - 1)], fill=(56, 189, 248, 180), width=1)
+        if title_banner:
+            hud_draw.text((12, 6), title_banner, fill=(56, 189, 248, 255), font=font_title)
+        if hud_lines:
+            y_pos = y_start
+            for line in hud_lines:
+                hud_draw.text((12, y_pos), line, fill=(241, 245, 249, 255), font=font_hud)
+                y_pos += line_step
+        out_img.paste(base_img, (0, hud_h))
+        base_img = out_img
 
     buf = io.BytesIO()
     base_img.convert("RGB").save(buf, format="PNG", optimize=True)

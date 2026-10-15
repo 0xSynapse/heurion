@@ -982,8 +982,8 @@ export const HELP_SECTIONS: HelpSection[] = [
         <div class="help-case-caption">
           <ul>
             <li><b>数据</b>：公开数据集样本 <code>spleen_test</code>（腹部 CT，体素 0.703×0.703×5.0 mm）；</li>
-            <li><b>算法</b>：MONAI 官方 spleen_ct 3D-UNet 权重滑窗推理，随后用 <code>recist.calculate_recist_metrics</code> 计算体积与最大截面最长径；</li>
-            <li><b>本次结果</b>：分割 51,737 个体素，体积 127.89 cm³；最大截面在第 76 层，最长径 87.8 mm。</li>
+            <li><b>算法</b>：MONAI 官方 spleen_ct 3D-UNet 权重滑窗推理，随后复用 <code>recist.calculate_recist_metrics</code> 的三维体素体积与二维凸包最大径几何算法计算器官体积与最大截面长径（器官形态学体积与长径量化，非肿瘤 RECIST 评估）；</li>
+            <li><b>本次结果</b>：分割 50,830 个体素，体积 125.65 cm³；最大截面在第 77 层，最长径 85.9 mm。</li>
           </ul>
         </div>
       </div>
@@ -1875,8 +1875,8 @@ Heurion 专为临床与医学科研打造，采用三栏自适应现代架构：
 - 图片：[公开腹部 CT 样本上的 MONAI 脾脏分割结果](/site/demo-spleen-monai-segmentation.png)
 
 - **数据**：公开数据集样本 \`spleen_test\`（腹部 CT，体素 0.703×0.703×5.0 mm）；
-- **算法**：MONAI 官方 spleen_ct 3D-UNet 权重滑窗推理，随后用 \`recist.calculate_recist_metrics\` 计算体积与最大截面最长径；
-- **本次结果**：分割 51,737 个体素，体积 127.89 cm³；最大截面在第 76 层，最长径 87.8 mm。
+- **算法**：MONAI 官方 spleen_ct 3D-UNet 权重滑窗推理，随后复用 \`recist.calculate_recist_metrics\` 的三维体素体积与二维凸包最大径几何算法计算器官体积与最大截面长径（器官形态学体积与长径量化，非肿瘤 RECIST 评估）；
+- **本次结果**：分割 50,830 个体素，体积 125.65 cm³；最大截面在第 77 层，最长径 85.9 mm。
 
 ### 8.2 三正交多平面重建 (MPR)
 

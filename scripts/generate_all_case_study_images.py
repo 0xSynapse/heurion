@@ -62,16 +62,25 @@ def text_width(f, s: str) -> int:
 
 
 def wrap_text(f, s: str, max_w: int) -> List[str]:
-    """按像素宽度逐字折行（中英混排）。"""
+    """按像素宽度折行（中英混排时保持英文单词、标识符与数字词组不断裂）。"""
+    import re
+    tokens = re.findall(r"[A-Za-z0-9_.\-+×/]+|\s+|.", s)
     lines, cur = [], ""
-    for ch in s:
-        if text_width(f, cur + ch) > max_w and cur:
-            lines.append(cur)
-            cur = ch
+    for tok in tokens:
+        if text_width(f, cur + tok) > max_w and cur:
+            lines.append(cur.rstrip())
+            cur = tok.lstrip()
+            while text_width(f, cur) > max_w and len(cur) > 1:
+                # 单个超长 token 兜底按字符切分
+                cut = 1
+                while cut < len(cur) and text_width(f, cur[:cut + 1]) <= max_w:
+                    cut += 1
+                lines.append(cur[:cut])
+                cur = cur[cut:]
         else:
-            cur += ch
+            cur += tok
     if cur:
-        lines.append(cur)
+        lines.append(cur.rstrip())
     return lines
 
 
@@ -127,7 +136,6 @@ def load_mask_lps(path: str, ref_shape: Tuple[int, int, int]) -> Tuple[np.ndarra
 
 def generate_spleen_monai() -> Optional[Dict[str, Any]]:
     print("[1] MONAI 脾脏分割（spleen_ct 官方权重）...")
-    import nibabel as nib
     from device import get_optimal_device
     from engine import MonaiNeuralInferencePipeline
 
@@ -136,15 +144,12 @@ def generate_spleen_monai() -> Optional[Dict[str, Any]]:
 
     pipe = MonaiNeuralInferencePipeline(get_optimal_device())
     try:
-        # 传文件路径：由 MONAI 变换处理方向与重采样，并逆变换回原始体素网格
-        mask_file_zyx, meta = pipe.infer_spleen(path)
+        # 传规范 LPS (Z, Y, X) 体数据与间距：由 MONAI 变换处理方向与重采样，并逆变换回规范 LPS 网格
+        mask, meta = pipe.infer_spleen(vol, sp)
     except RuntimeError as e:
         print(f"  跳过：{e}")
         return None
-    # infer_spleen 返回的是原文件数组顺序的 (Z, Y, X)；转回 (X, Y, Z) 后与影像走同一套 LPS 规范化
-    affine = nib.load(path).affine
-    mask_lps, _, _ = to_canonical_lps(np.transpose(mask_file_zyx, (2, 1, 0)).astype(np.float32), affine)
-    mask = (mask_lps > 0.5).astype(np.uint8)
+    mask = (mask > 0).astype(np.uint8)
     if mask.sum() == 0:
         print("  跳过：模型输出为空")
         return None
@@ -174,7 +179,8 @@ def generate_spleen_monai() -> Optional[Dict[str, Any]]:
     img = add_caption_panel(png_bytes_to_image(png), "脾脏自动分割与体积测量", [
         f"数据来源：{SOURCE_SPLEEN}，体素间距 {sp[2]:.3f}×{sp[1]:.3f}×{sp[0]:.2f} mm。",
         "算法：engine.MonaiNeuralInferencePipeline.infer_spleen（MONAI 官方 spleen_ct 3D-UNet 权重，滑窗推理）"
-        " → recist.calculate_recist_metrics（体积与最大截面最长径）。紫色为模型分割结果，青色卡尺为算法给出的最长径。",
+        " → 复用 recist.calculate_recist_metrics 的三维体素体积与二维凸包最大径几何算法（器官形态学体积与长径量化，非肿瘤 RECIST 评估）。"
+        "紫色为模型分割结果，青色卡尺为算法给出的最大截面最长径。",
         f"注：{DISCLAIMER}。",
     ])
     save_png(img, "demo-spleen-monai-segmentation.png")
@@ -277,28 +283,31 @@ def generate_lidc_recist(vol: np.ndarray, mask: np.ndarray, sp: Tuple[float, flo
     ]
     ys, xs = np.where(m2)
     cyc, cxc = int(ys.mean()), int(xs.mean())
+    # 左图渲染纯 512×512 切片视窗，顶部 HUD 横幅统一放在左右双图上方，避免遮挡前胸壁且保证左右高度严格一致
     png, _ = render_pacs_viewport(
         slice_uint8=sl, plane="axial", slice_idx=z, total_slices=vol.shape[0],
         physical_loc_mm=float(z * sp[0]), spacing_xy=(sp[1], sp[2]), slice_thickness_mm=sp[0],
         window_info={"center": -600, "width": 1500, "name": "lung"},
-        title_banner="HEURION CHEST-CT // RECIST 1.1 MEASUREMENT",
-        hud_lines=hud, overlays_rgba=[(mask_outline(m2), (255, 77, 79, 255))],
+        title_banner=None,
+        hud_lines=None, overlays_rgba=[(mask_outline(m2), (255, 77, 79, 255))],
     )
     full = png_bytes_to_image(png)
-    # 放大视窗：以标注中心为准裁出 96×96 像素并 5 倍放大（只裁剪不旋转，方位与左图一致）
+    # 放大视窗：以标注中心为准裁出 96×96 像素并等比放大至与左图相同高度（512×512），方位与左图完全一致
     half = 48
     y0 = int(np.clip(cyc - half, 0, sl.shape[0] - 2 * half))
     x0 = int(np.clip(cxc - half, 0, sl.shape[1] - 2 * half))
-    k = full.height // (2 * half)
-    crop = Image.fromarray(sl[y0:y0 + 2 * half, x0:x0 + 2 * half]).resize((2 * half * k, 2 * half * k), Image.Resampling.BILINEAR).convert("RGBA")
-    ov = np.zeros((2 * half * k, 2 * half * k, 4), dtype=np.uint8)
-    m_crop = np.kron(m2[y0:y0 + 2 * half, x0:x0 + 2 * half].astype(np.uint8), np.ones((k, k), dtype=np.uint8)) > 0
+    panel_sz = full.height
+    scale = panel_sz / float(2 * half)
+    crop = Image.fromarray(sl[y0:y0 + 2 * half, x0:x0 + 2 * half]).resize((panel_sz, panel_sz), Image.Resampling.BILINEAR).convert("RGBA")
+    ov = np.zeros((panel_sz, panel_sz, 4), dtype=np.uint8)
+    m_patch = (m2[y0:y0 + 2 * half, x0:x0 + 2 * half].astype(np.uint8) * 255)
+    m_crop = np.array(Image.fromarray(m_patch).resize((panel_sz, panel_sz), Image.Resampling.NEAREST)) > 127
     ov[m_crop] = (255, 77, 79, 70)
     ov[mask_outline(m_crop)] = (255, 77, 79, 255)
     crop = Image.alpha_composite(crop, Image.fromarray(ov, mode="RGBA")).convert("RGB")
     dc = ImageDraw.Draw(crop)
-    p1 = ((cal["p1"][0] - x0 + 0.5) * k, (cal["p1"][1] - y0 + 0.5) * k)
-    p2 = ((cal["p2"][0] - x0 + 0.5) * k, (cal["p2"][1] - y0 + 0.5) * k)
+    p1 = ((cal["p1"][0] - x0 + 0.5) * scale, (cal["p1"][1] - y0 + 0.5) * scale)
+    p2 = ((cal["p2"][0] - x0 + 0.5) * scale, (cal["p2"][1] - y0 + 0.5) * scale)
     dc.line([p1, p2], fill=(0, 220, 255), width=3)
     vx, vy = p2[0] - p1[0], p2[1] - p1[1]
     nrm = max(float(np.hypot(vx, vy)), 1e-4)
@@ -308,7 +317,7 @@ def generate_lidc_recist(vol: np.ndarray, mask: np.ndarray, sp: Tuple[float, flo
     f_lab = font(15)
     lab = f"LD {rec['longest_diameter_mm']} mm"
     lx, ly = min(max(p2[0] + 12, 8), crop.width - text_width(f_lab, lab) - 12), min(max(p2[1] - 10, 8), crop.height - 28)
-    dc.rectangle([lx - 4, ly - 2, lx + text_width(f_lab, lab) + 4, ly + 20], fill=(15, 23, 42))
+    dc.rectangle([lx - 4, ly - 2, lx + text_width(f_lab, lab) + 4, ly + 22], fill=(15, 23, 42))
     dc.text((lx, ly), lab, fill=(0, 230, 255), font=f_lab)
     cmp_lab = get_radiological_orientation_labels("axial")
     f_c = get_sans_font(size=14, bold=True)
@@ -316,17 +325,29 @@ def generate_lidc_recist(vol: np.ndarray, mask: np.ndarray, sp: Tuple[float, flo
     dc.text((crop.width // 2 - 5, crop.height - 22), cmp_lab["bottom"], fill=(255, 235, 59), font=f_c)
     dc.text((6, crop.height // 2 - 8), cmp_lab["left"], fill=(255, 235, 59), font=f_c)
     dc.text((crop.width - 18, crop.height // 2 - 8), cmp_lab["right"], fill=(255, 235, 59), font=f_c)
-    bar = 10.0 / sp[2] * k  # 1 cm
-    dc.line([(crop.width - 16 - bar, crop.height - 30), (crop.width - 16, crop.height - 30)], fill=(255, 255, 255), width=3)
-    dc.text((crop.width - 16 - bar, crop.height - 48), "1 cm", fill=(255, 255, 255), font=font(12))
-    dc.text((8, 8), f"放大 ×{k}", fill=COL_ACCENT, font=font(13))
+    bar = 10.0 / sp[2] * scale  # 1 cm
+    dc.line([(crop.width - 16 - bar, crop.height - 22), (crop.width - 16, crop.height - 22)], fill=(255, 255, 255), width=3)
+    dc.text((crop.width - 16 - bar, crop.height - 38), "1 cm", fill=(255, 255, 255), font=font(12))
+    dc.text((10, 6), f"局部放大 ×{scale:.1f}", fill=COL_ACCENT, font=font(13))
     # 在全图上标出放大区域
     dfull = ImageDraw.Draw(full)
     dfull.rectangle([x0, y0, x0 + 2 * half, y0 + 2 * half], outline=(0, 220, 255), width=1)
 
-    combo = Image.new("RGB", (full.width + crop.width + 12, full.height), COL_BG)
-    combo.paste(full, (0, 0))
-    combo.paste(crop, (full.width + 12, 0))
+    gap_x = 12
+    total_w = full.width + gap_x + crop.width
+    hud_h = 26 + len(hud) * 16 + 10
+    combo = Image.new("RGB", (total_w, hud_h + panel_sz), COL_BG)
+    dcombo = ImageDraw.Draw(combo)
+    dcombo.rectangle([0, 0, total_w, hud_h - 1], fill=(11, 19, 35))
+    dcombo.line([(0, hud_h - 1), (total_w, hud_h - 1)], fill=(56, 189, 248), width=1)
+    dcombo.text((12, 6), "HEURION CHEST-CT // RECIST 1.1 MEASUREMENT", fill=COL_ACCENT, font=get_sans_font(size=13, bold=True))
+    f_hud = font(12)
+    hy = 26
+    for line in hud:
+        dcombo.text((12, hy), line, fill=(241, 245, 249), font=f_hud)
+        hy += 16
+    combo.paste(full, (0, hud_h))
+    combo.paste(crop, (full.width + gap_x, hud_h))
     img = add_caption_panel(combo, "肺结节 RECIST 1.1 径线与体积测量", [
         f"数据来源：{SOURCE_LIDC}，层厚 {sp[0]} mm，像素间距 {sp[2]:.3f} mm。",
         "算法：recist.calculate_recist_metrics —— 在样本附带的结节标注掩膜上选最大截面层，经凸包求最长径（青色卡尺）、"

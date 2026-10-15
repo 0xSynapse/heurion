@@ -5,27 +5,28 @@ from typing import Tuple, Optional
 from PIL import ImageFont
 
 _CACHED_CJK_FONT_PATH: Optional[str] = None
+_CACHED_CJK_FONT_INDEX: int = 0
 _CACHED_SANS_FONT_PATH: Optional[str] = None
 _CHECKED_FONTS = False
 
 CJK_CANDIDATE_PATHS = [
     # Linux (Debian, Ubuntu, CentOS, Fedora, Alpine)
-    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/source-han-sans/SourceHanSansCN-Regular.otf",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
     "/usr/share/fonts/cjkuni-uming/uming.ttc",
     "/usr/share/fonts/truetype/arphic/uming.ttc",
     "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-    "/usr/share/fonts/opentype/source-han-sans/SourceHanSansCN-Regular.otf",
-    # macOS
-    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-    "/Library/Fonts/Arial Unicode.ttf",
-    "/System/Library/Fonts/STHeiti Medium.ttc",
+    # macOS (prioritize pure vector CJK fonts without mixed bitmap strikes)
     "/System/Library/Fonts/PingFang.ttc",
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc",
     "/System/Library/Fonts/STHeiti Light.ttc",
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
     "/System/Library/Fonts/Supplemental/Songti.ttc",
     # Windows
     "C:/Windows/Fonts/msyh.ttc",
@@ -59,17 +60,31 @@ SANS_BOLD_CANDIDATE_PATHS = [
 
 
 def _detect_cjk_font() -> Optional[str]:
-    global _CACHED_CJK_FONT_PATH
+    global _CACHED_CJK_FONT_PATH, _CACHED_CJK_FONT_INDEX
     if _CACHED_CJK_FONT_PATH is not None:
-        return _CACHED_CJK_FONT_PATH
+        return _CACHED_CJK_FONT_PATH or None
 
-    for path in CJK_CANDIDATE_PATHS:
+    # On macOS 14/15+, PingFang.ttc lives in /System/Library/AssetsV2
+    candidates = list(CJK_CANDIDATE_PATHS)
+    for pf_match in glob.glob("/System/Library/AssetsV2/**/PingFang.ttc", recursive=True):
+        candidates.insert(0, pf_match)
+
+    for path in candidates:
         if os.path.exists(path):
+            idx = 3 if path.endswith("PingFang.ttc") else 0
             try:
-                f = ImageFont.truetype(path, 14)
+                f = ImageFont.truetype(path, 14, index=idx)
+            except Exception:
+                idx = 0
+                try:
+                    f = ImageFont.truetype(path, 14, index=0)
+                except Exception:
+                    continue
+            try:
                 mask = f.getmask("支气管扩张")
                 if mask.getbbox() and mask.getbbox()[2] > 10:
                     _CACHED_CJK_FONT_PATH = path
+                    _CACHED_CJK_FONT_INDEX = idx
                     return path
             except Exception:
                 continue
@@ -83,6 +98,7 @@ def _detect_cjk_font() -> Optional[str]:
                     mask = f.getmask("支气管扩张")
                     if mask.getbbox() and mask.getbbox()[2] > 10:
                         _CACHED_CJK_FONT_PATH = match
+                        _CACHED_CJK_FONT_INDEX = 0
                         return match
                 except Exception:
                     continue
@@ -99,9 +115,12 @@ def get_cjk_font(size: int = 14) -> Tuple[ImageFont.FreeTypeFont | ImageFont.Ima
     cjk_path = _detect_cjk_font()
     if cjk_path:
         try:
-            return ImageFont.truetype(cjk_path, size), True
+            return ImageFont.truetype(cjk_path, size, index=_CACHED_CJK_FONT_INDEX), True
         except Exception:
-            pass
+            try:
+                return ImageFont.truetype(cjk_path, size), True
+            except Exception:
+                pass
 
     # Fallback to sans font or default font
     sans_font = get_sans_font(size=size, bold=False)

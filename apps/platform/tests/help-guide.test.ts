@@ -148,7 +148,7 @@ describe('产品使用手册与操作指南 (Product Help & Documentation)', () 
     expect(html).toContain('不是临床病例')
     expect(html).toContain('lidc_lung_nodule_ct')
     expect(html).not.toContain('demo-chest-airway-mucus.png')
-    expect(html).toContain('127.89 cm³')
+    expect(html).toContain('125.65 cm³')
     expect(html).toContain('31.2 mm')
     // 已移除的编造病例与伪造图片不得再出现
     for (const s of ['PT-NSCLC-002', 'PT-ABDOMEN-003', 'PT-PROSTATE-004', '奥希替尼', '29.92 cm²/m²', '48.60 cm³', 'real-case-nsclc', 'real-case-sarco', 'real-case-prostate', 'real-case-3-diff-heatmap', 'diagnostic-chain.png']) {
