@@ -199,6 +199,44 @@ def test_models_endpoint_honest():
     assert set(NOT_IMPLEMENTED_MODELS) >= {"coronary_artery_calcification", "lung_lobe_segmenter"}
 
 
+def test_all_15_monai_zoo_weights_implemented_and_exposed(engine):
+    expected_16 = {
+        "spleen_ct",
+        "swinunetr_btcv",
+        "brats_mri",
+        "lung_nodule_ct",
+        "wholebody_ct",
+        "prostate_mri",
+        "pancreas_ct_dints",
+        "renal_structures_cect",
+        "wholebrainseg_large_unest",
+        "vista3d",
+        "breast_density",
+        "pathology_tumor_detection",
+        "pathology_nuclei",
+        "endoscopic_tool",
+        "ventricular_short_axis",
+        "valve_landmarks",
+    }
+    implemented = {k for k, v in OFFICIAL_MODEL_REGISTRY.items() if v.engine_implemented}
+    assert implemented == expected_16
+    assert set(MonaiNeuralInferencePipeline.NEURAL_LOADERS.keys()) == expected_16
+
+    client = TestClient(app)
+    data = client.get("/api/v1/models", params={"include_all": True}).json()
+    exposed_weights = {m["weights_registry_name"] for m in data["models"] if m.get("weights_registry_name")}
+    assert expected_16.issubset(exposed_weights)
+
+    # 验证轻量 2D/3D 模型的真实权重推理管线能正常产出结构化指标
+    vol_small, _ = generate_synthetic_ct_volume(shape=(16, 64, 64), spacing=(2.0, 1.0, 1.0))
+    for model_id in ("valve_landmarks", "breast_density", "pathology_tumor_detection", "endoscopic_tool"):
+        reg_name = model_id
+        if get_model_status(reg_name)["is_ready"]:
+            res = engine.analyze_volume(volume=vol_small, spacing=(2.0, 1.0, 1.0), model_name=model_id)
+            assert res["engine_type"] == "deep_learning"
+            assert res["neural_info"]["real_neural_inference"] is True
+
+
 def test_removed_and_strict_endpoints():
     client = TestClient(app)
     assert client.get("/api/v1/clinical/audit-cases").status_code == 404
@@ -209,3 +247,4 @@ def test_removed_and_strict_endpoints():
         "baseline_path": "/nonexistent/a.nii.gz", "followup_id": "lidc_lung_nodule_ct"}).status_code == 404
     assert client.post("/api/v1/tasks/analyze", json={"model_name": "lung_nodule_segmenter"}).status_code == 400
     assert client.post("/api/v1/recist/emphysema", json={}).status_code == 400
+

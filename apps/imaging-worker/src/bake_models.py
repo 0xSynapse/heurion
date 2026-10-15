@@ -6,9 +6,9 @@ src_dir = Path(__file__).resolve().parent
 if str(src_dir) not in sys.path:
     sys.path.insert(0, str(src_dir))
 
-from model_registry import pull_model
+from model_registry import OFFICIAL_MODEL_REGISTRY, pull_model
 
-MODELS = ['spleen_ct', 'brats_mri', 'lung_nodule_ct', 'wholebody_ct', 'prostate_mri']
+MODELS = [k for k, v in OFFICIAL_MODEL_REGISTRY.items() if v.engine_implemented]
 
 def main():
     for m in MODELS:

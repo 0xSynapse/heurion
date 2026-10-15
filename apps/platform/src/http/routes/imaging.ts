@@ -624,6 +624,7 @@ export function registerImagingRoutes(
       const hasTreeInBud = Boolean(rawMetrics.tree_in_bud_volume_cm3 > 0 || rawMetrics.tree_in_bud_sign)
 
       const normalizedMetrics = {
+        ...(rm && typeof rm === 'object' ? rm : {}),
         ...rawMetrics,
         bar_ratio: barRatio,
         signet_ring_sign: hasSignet,
@@ -657,17 +658,44 @@ export function registerImagingRoutes(
         if (hasTreeInBud) {
           findings.push('树芽征（算法标注）')
         }
+      } else if (rm?.pancreas) {
+        findings.push(`胰腺实质体积 ${rm.pancreas.pancreas_volume_cm3 ?? rm.pancreas.organ_or_lesion_volume_cm3 ?? 0} cm³`)
+        if ((rm.pancreas.tumor_volume_cm3 ?? 0) > 0) {
+          findings.push(`胰腺占位体积 ${rm.pancreas.tumor_volume_cm3} cm³（最大长径 ${rm.longest_diameter_mm ?? 0} mm）`)
+        }
+      } else if (rm?.kidney) {
+        if (rm.kidney.cortex_volume_cm3 !== undefined) {
+          findings.push(`肾脏总体积 ${rm.kidney.total_renal_volume_cm3} cm³（皮质 ${rm.kidney.cortex_volume_cm3} cm³，髓质 ${rm.kidney.medulla_volume_cm3} cm³，肾盂肾盏 ${rm.kidney.pelvis_calyces_volume_cm3} cm³）`)
+        } else if (rm.kidney.organ_or_lesion_volume_cm3 !== undefined) {
+          findings.push(`肾脏体积 ${rm.kidney.organ_or_lesion_volume_cm3} cm³`)
+        }
+      } else if (rm?.neuro?.brain_structures_detected !== undefined) {
+        findings.push(`全脑 133 解剖结构分割：检出 ${rm.neuro.brain_structures_detected} 个脑区结构，分割总体积 ${rm.neuro.segmented_brain_volume_cm3} cm³`)
+      } else if (rm?.vista3d) {
+        findings.push(`VISTA-3D 3D 自动分割：检出 ${rm.vista3d.structures_detected} 类解剖结构，总体积 ${rm.vista3d.total_segmented_volume_cm3} cm³`)
+      } else if (rm?.cardiac_valve_landmarks) {
+        findings.push(`心脏瓣膜 3D 关键点回归：定位 ${rm.cardiac_valve_landmarks.landmarks_count} 个解剖标志点，标志点最大间距 ${rm.cardiac_valve_landmarks.inter_commissural_distance_mm} mm`)
+      } else if (rm?.breast_density) {
+        findings.push(`乳腺密度分类量化：预测类别 ${rm.breast_density.predicted_birads_class}（置信度 ${((rm.breast_density.confidence ?? 0) * 100).toFixed(1)}%）`)
+      } else if (rm?.pathology_tumor) {
+        findings.push(`病理切片肿瘤检测：区块最高肿瘤概率 ${((rm.pathology_tumor.max_tumor_probability ?? 0) * 100).toFixed(1)}%，高概率区块占比 ${((rm.pathology_tumor.high_probability_fraction ?? 0) * 100).toFixed(1)}%`)
+      } else if (rm?.pathology_nuclei) {
+        findings.push(`病理细胞核分割：细胞核面积占比 ${((rm.pathology_nuclei.nuclei_area_fraction ?? 0) * 100).toFixed(1)}%（主类：${rm.pathology_nuclei.predominant_cell_class}）`)
+      } else if (rm?.endoscopy) {
+        findings.push(`内镜器械分割：器械区域占比 ${((rm.endoscopy.tool_area_fraction ?? 0) * 100).toFixed(2)}%`)
       } else if (rm && (rm.has_lesion === false || rm.longest_diameter_mm === 0)) {
         findings.push('算法未检出 ≥ 3 mm 实性肺结节')
       } else if (rm && rm.longest_diameter_mm > 0) {
         findings.push(`靶病灶最大截面长径 ${rm.longest_diameter_mm} mm${rm.short_axis_mm !== undefined ? `（短径 ${rm.short_axis_mm} mm）` : ''}`)
         if (rm.total_volume_cm3 !== undefined) findings.push(`病灶体积 ${rm.total_volume_cm3} cm³${rm.key_slice_index !== undefined ? `（关键截面第 #${rm.key_slice_index} 层）` : ''}`)
-        tagsToAdd.push('肺结节')
+        if (!modelId || modelId.includes('lung') || modelId.includes('nodule')) {
+          tagsToAdd.push('肺结节')
+        }
       }
 
       const defaultTitle = modelId === 'bronchiectasis_mucus_analyzer' || resultData.model_name?.includes('bronchiectasis')
         ? '胸部 HRCT 支气管与粘液栓定量分析'
-        : (rm?.has_lesion === false || rm?.longest_diameter_mm === 0)
+        : (rm?.has_lesion === false || rm?.longest_diameter_mm === 0) && (!modelId || modelId.includes('lung') || modelId.includes('nodule'))
         ? '胸部 CT 结节检测（未检出 ≥ 3 mm 实性结节）'
         : `${resultData.modality || 'CT'} 靶病灶三维量化分析`
 

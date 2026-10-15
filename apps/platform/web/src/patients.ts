@@ -1014,24 +1014,27 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       let matchedCategory = currentSpecialty
       let autoMatchedLabel = ''
       if (currentSpecialty === 'auto') {
-        if (/lung|chest|thorax|pulm|hrct|bronch|nodule|copd|abpa|pneumo/.test(fn)) {
+        if (/lung|chest|thorax|pulm|hrct|bronch|nodule|copd|abpa|pneumo|breast|mammo|birads/.test(fn)) {
           matchedCategory = 'chest'
           autoMatchedLabel = '胸部与呼吸'
-        } else if (/abdom|spleen|liver|pancrea|kidney|renal|kits/.test(fn)) {
+        } else if (/abdom|spleen|liver|pancrea|kidney|renal|kits|endoscop|laparo|cholec/.test(fn)) {
           matchedCategory = 'abdomen'
           autoMatchedLabel = '腹部与消化'
         } else if (/prostat|pelvi|tz|bph/.test(fn)) {
           matchedCategory = 'abdomen'
           autoMatchedLabel = '前列腺与盆腔'
-        } else if (/brain|neuro|head|cranial|brats|glioma|stroke|hippo/.test(fn)) {
+        } else if (/brain|neuro|head|cranial|brats|glioma|stroke|hippo|unest|subcortical/.test(fn)) {
           matchedCategory = 'brain'
           autoMatchedLabel = '颅脑与神经'
         } else if (/cardiac|heart|cine|valve|coronary|lvef/.test(fn)) {
           matchedCategory = 'brain'
           autoMatchedLabel = '心血管'
-        } else if (/whole|total|body|spine|bone|vertebra/.test(fn)) {
+        } else if (/whole|total|body|spine|bone|vertebra|pathol|camelyon|nuclei|hovernet|wsi/.test(fn)) {
           matchedCategory = 'whole_body'
           autoMatchedLabel = '全身与骨骼'
+        } else if (/vista/.test(fn)) {
+          matchedCategory = 'interactive'
+          autoMatchedLabel = '交互式分割'
         } else {
           matchedCategory = 'all'
           if (uploadedFile) autoMatchedLabel = '全专科覆盖'
@@ -1040,24 +1043,33 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
       const filtered = modelsList.filter(m => {
         if (matchedCategory === 'all') return true
-        if (matchedCategory === 'chest') return m.body_part === 'chest' || m.body_part === 'whole_body' || m.body_part === 'general'
-        if (matchedCategory === 'abdomen') return m.body_part === 'abdomen' || m.body_part === 'pelvis' || m.body_part === 'whole_body' || m.body_part === 'general'
+        if (matchedCategory === 'chest') return m.body_part === 'chest' || m.body_part === 'breast' || m.body_part === 'whole_body' || m.body_part === 'general'
+        if (matchedCategory === 'abdomen') return m.body_part === 'abdomen' || m.body_part === 'pelvis' || m.body_part === 'endoscopy' || m.body_part === 'whole_body' || m.body_part === 'general'
         if (matchedCategory === 'brain') return m.body_part === 'brain' || m.body_part === 'cardiac'
-        if (matchedCategory === 'whole_body') return m.body_part === 'whole_body' || m.body_part === 'bone'
+        if (matchedCategory === 'whole_body') return m.body_part === 'whole_body' || m.body_part === 'bone' || m.body_part === 'pathology'
         if (matchedCategory === 'interactive') return m.body_part === 'general' || m.id.includes('vista') || m.id.includes('interactive')
         return true
       })
 
       let preferredModelId = ''
       if (/bronch|mucus|ham|abpa/.test(fn)) preferredModelId = 'bronchiectasis_mucus_analyzer'
-      else if (/nodule/.test(fn)) preferredModelId = 'lung_nodule_segmenter'
+      else if (/nodule/.test(fn)) preferredModelId = filtered.some(m => m.id === 'lung_nodule_ct') ? 'lung_nodule_ct' : 'lung_nodule_segmenter'
       else if (/copd|emphysema/.test(fn)) preferredModelId = 'copd_emphysema_analyzer'
+      else if (/pancrea/.test(fn)) preferredModelId = filtered.some(m => m.id === 'pancreas_ct_dints') ? 'pancreas_ct_dints' : 'pancreas_tumor_segmenter'
+      else if (/renal|kidney|kits/.test(fn)) preferredModelId = filtered.some(m => m.id === 'renal_structures_cect') ? 'renal_structures_cect' : 'kidney_tumor_segmenter'
       else if (/liver|hepatic/.test(fn)) preferredModelId = 'liver_lesion_segmenter'
+      else if (/valve/.test(fn)) preferredModelId = 'valve_landmarks'
       else if (/cardiac|heart/.test(fn)) preferredModelId = 'cardiac_mri_segmentation'
       else if (/spleen/.test(fn)) preferredModelId = 'spleen_segmenter'
       else if (/prostat/.test(fn)) preferredModelId = 'prostate_mri_segmenter'
+      else if (/unest|subcortical/.test(fn)) preferredModelId = 'brain_subcortical_segmenter'
       else if (/brain|brats|hippo/.test(fn)) preferredModelId = 'brain_tumor_brats'
-      if (!preferredModelId && filtered.length > 0 && filtered[0]) preferredModelId = filtered[0].id
+      else if (/breast|mammo|birads/.test(fn)) preferredModelId = 'breast_density'
+      else if (/nuclei|hovernet/.test(fn)) preferredModelId = 'pathology_nuclei'
+      else if (/pathol|camelyon|wsi/.test(fn)) preferredModelId = 'pathology_tumor_detection'
+      else if (/endoscop|laparo|cholec/.test(fn)) preferredModelId = 'endoscopic_tool'
+      else if (/vista/.test(fn)) preferredModelId = filtered.some(m => m.id === 'vista3d') ? 'vista3d' : 'vista3d_interactive_segmenter'
+      if ((!preferredModelId || !filtered.some(m => m.id === preferredModelId)) && filtered.length > 0 && filtered[0]) preferredModelId = filtered[0].id
 
       let html = ''
       for (const [type, label] of Object.entries(ENGINE_GROUP)) {

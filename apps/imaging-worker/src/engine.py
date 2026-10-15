@@ -346,6 +346,16 @@ class MonaiNeuralInferencePipeline:
         "brats_mri": "get_brats_model",
         "ventricular_short_axis": "get_cardiac_model",
         "wholebody_ct": "get_wholebody_model",
+        "lung_nodule_ct": "get_lung_nodule_model",
+        "renal_structures_cect": "get_renal_model",
+        "wholebrainseg_large_unest": "get_unest_model",
+        "pancreas_ct_dints": "get_pancreas_dints_model",
+        "pathology_tumor_detection": "get_pathology_tumor_model",
+        "pathology_nuclei": "get_pathology_nuclei_model",
+        "valve_landmarks": "get_valve_landmarks_model",
+        "breast_density": "get_breast_density_model",
+        "endoscopic_tool": "get_endoscopic_tool_model",
+        "vista3d": "get_vista3d_model",
     }
 
     def __init__(self, device: torch.device):
@@ -384,7 +394,10 @@ class MonaiNeuralInferencePipeline:
             return self.models[key]
         weights_path, _ = self._verified_weights(registry_name)
         model = build().to(self.device)
-        sd = torch.load(str(weights_path), map_location=self.device, weights_only=False)
+        ckpt = torch.load(str(weights_path), map_location=self.device, weights_only=False)
+        sd = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else (
+            ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+        )
         model.load_state_dict(sd)
         model.eval()
         self.models[key] = model
@@ -435,6 +448,92 @@ class MonaiNeuralInferencePipeline:
         model.eval()
         self.models["cardiac"] = model
         return model
+
+    def get_renal_model(self) -> torch.nn.Module:
+        from monai.networks.nets import SegResNet
+        return self._load_state_dict_model("renal", "renal_structures_cect", lambda: SegResNet(
+            spatial_dims=3, in_channels=3, out_channels=6, init_filters=32,
+            blocks_down=[1, 2, 2, 4], blocks_up=[1, 1, 1], dropout_prob=0.2, upsample_mode="deconv"
+        ))
+
+    def get_pancreas_dints_model(self) -> torch.nn.Module:
+        if "pancreas_dints" in self.models:
+            return self.models["pancreas_dints"]
+        try:
+            from .monai_bundle_nets import build_dints_from_state_dict
+        except (ImportError, ValueError):
+            from monai_bundle_nets import build_dints_from_state_dict
+        weights_path, _ = self._verified_weights("pancreas_ct_dints")
+        ckpt = torch.load(str(weights_path), map_location=self.device, weights_only=False)
+        sd = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+        model = build_dints_from_state_dict(sd, self.device)
+        self.models["pancreas_dints"] = model
+        return model
+
+    def get_unest_model(self) -> torch.nn.Module:
+        try:
+            from .monai_bundle_nets import UNesT
+        except (ImportError, ValueError):
+            from monai_bundle_nets import UNesT
+        return self._load_state_dict_model("unest", "wholebrainseg_large_unest", lambda: UNesT(
+            in_channels=1, out_channels=133, patch_size=4, depths=(2, 2, 8),
+            embed_dim=(128, 256, 512), num_heads=(4, 8, 16), feature_size=16,
+            norm_name="instance", res_block=True
+        ))
+
+    def get_lung_nodule_model(self) -> Any:
+        if "lung_nodule_ct" in self.models:
+            return self.models["lung_nodule_ct"]
+        try:
+            from .monai_bundle_nets import build_lung_nodule_retinanet_detector
+        except (ImportError, ValueError):
+            from monai_bundle_nets import build_lung_nodule_retinanet_detector
+        weights_path, _ = self._verified_weights("lung_nodule_ct")
+        ckpt = torch.load(str(weights_path), map_location=self.device, weights_only=False)
+        sd = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+        detector = build_lung_nodule_retinanet_detector(sd, self.device)
+        self.models["lung_nodule_ct"] = detector
+        return detector
+
+    def get_valve_landmarks_model(self) -> torch.nn.Module:
+        try:
+            from .monai_bundle_nets import PointRegressor
+        except (ImportError, ValueError):
+            from monai_bundle_nets import PointRegressor
+        return self._load_state_dict_model("valve_landmarks", "valve_landmarks", lambda: PointRegressor(
+            in_shape=[1, 256, 256], out_shape=[2, 10], channels=[8, 16, 32, 64, 128], strides=[2, 2, 2, 2, 2]
+        ))
+
+    def get_breast_density_model(self) -> torch.nn.Module:
+        try:
+            from .monai_bundle_nets import BreastDensityInceptionV3
+        except (ImportError, ValueError):
+            from monai_bundle_nets import BreastDensityInceptionV3
+        return self._load_state_dict_model("breast_density", "breast_density", lambda: BreastDensityInceptionV3(num_classes=4))
+
+    def get_pathology_tumor_model(self) -> torch.nn.Module:
+        try:
+            from .monai_bundle_nets import PathologyResNet18FC
+        except (ImportError, ValueError):
+            from monai_bundle_nets import PathologyResNet18FC
+        return self._load_state_dict_model("pathology_tumor", "pathology_tumor_detection", lambda: PathologyResNet18FC(num_classes=1))
+
+    def get_pathology_nuclei_model(self) -> torch.nn.Module:
+        from monai.networks.nets import HoVerNet
+        return self._load_state_dict_model("pathology_nuclei", "pathology_nuclei", lambda: HoVerNet(
+            mode="fast", in_channels=3, out_classes=5
+        ))
+
+    def get_endoscopic_tool_model(self) -> torch.nn.Module:
+        from monai.networks.nets import FlexibleUNet
+        return self._load_state_dict_model("endoscopic_tool", "endoscopic_tool", lambda: FlexibleUNet(
+            in_channels=3, out_channels=2, backbone="efficientnet-b2",
+            spatial_dims=2, pretrained=False, is_pad=False, pre_conv=None
+        ))
+
+    def get_vista3d_model(self) -> torch.nn.Module:
+        from monai.networks.nets import vista3d132
+        return self._load_state_dict_model("vista3d", "vista3d", lambda: vista3d132(in_channels=1))
 
     # ---- 通用 3D 推理：规范体积 -> 临时 NIfTI -> bundle 预处理 -> 滑窗 -> Invertd 回原网格 ----
     def _run_3d_bundle(
@@ -716,6 +815,403 @@ class MonaiNeuralInferencePipeline:
         })
         return labels, meta
 
+    def infer_renal(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        renalStructures_CECT_segmentation bundle：SegResNet (in_channels=3, out_channels=6, upsample_mode='deconv')。
+        类别：1 = 肾动脉, 2 = 肾静脉, 3 = 输尿管/肾盂, 4 = 肾占位/囊肿, 5 = 肾实质。
+        """
+        from monai.transforms import Orientationd, Spacingd, ScaleIntensityRanged, Lambdad
+        t0 = time.time()
+        model = self.get_renal_model()
+        labels = self._run_3d_bundle(
+            vol_zyx, spacing,
+            [Orientationd(keys="image", axcodes="LPS"),
+             Spacingd(keys="image", pixdim=[1.2, 1.2, 1.2], mode="bilinear"),
+             ScaleIntensityRanged(keys="image", a_min=-1000.0, a_max=1000.0, b_min=0.0, b_max=1.0, clip=True),
+             Lambdad(keys="image", func=lambda x: x.repeat(3, 1, 1, 1) if x.shape[0] == 1 else x[:3])],
+            model, roi_size=[96, 96, 96], sw_batch_size=2, overlap=0.5, invert_probabilities=False,
+        )
+        dz, dy, dx = spacing
+        vox_cm3 = (dz * dy * dx) / 1000.0
+        renal_labels = {
+            1: "肾动脉 (Renal Artery)",
+            2: "肾静脉 (Renal Vein)",
+            3: "输尿管与肾盂 (Ureter & Pelvis)",
+            4: "肾占位/囊肿 (Neoplasm/Cyst)",
+            5: "肾实质 (Renal Parenchyma)",
+        }
+        renal_vols = {name: round(int(np.sum(labels == idx)) * vox_cm3, 2) for idx, name in renal_labels.items()}
+        meta = self._base_meta("renal_structures_cect", "MONAI SegResNet (renalStructures_CECT_segmentation bundle)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(labels > 0)),
+            "renal_volumes_cm3": renal_vols,
+            "input_note": "单期相 CECT 自动广播为 3 通道输入；提供动脉/静脉/排泄三期配准体积时可分别对应三通道",
+        })
+        return labels.astype(np.uint8), meta
+
+    def infer_pancreas_dints(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        pancreas_ct_dints_segmentation bundle：DiNTS 3D NAS，输出 3 类（0=背景, 1=胰腺实质, 2=胰腺病灶/占位）。
+        """
+        from monai.transforms import Orientationd, Spacingd, ScaleIntensityRanged
+        t0 = time.time()
+        model = self.get_pancreas_dints_model()
+        labels = self._run_3d_bundle(
+            vol_zyx, spacing,
+            [Orientationd(keys="image", axcodes="RAS"),
+             Spacingd(keys="image", pixdim=[1.5, 1.5, 1.5], mode="bilinear"),
+             ScaleIntensityRanged(keys="image", a_min=-87.0, a_max=199.0, b_min=0.0, b_max=1.0, clip=True)],
+            model, roi_size=[96, 96, 96], sw_batch_size=1, overlap=0.5, invert_probabilities=False,
+        )
+        dz, dy, dx = spacing
+        vox_cm3 = (dz * dy * dx) / 1000.0
+        parenchyma_cm3 = round(int(np.sum(labels == 1)) * vox_cm3, 2)
+        lesion_cm3 = round(int(np.sum(labels == 2)) * vox_cm3, 2)
+        meta = self._base_meta("pancreas_ct_dints", "MONAI DiNTS-3D NAS (pancreas_ct_dints_segmentation bundle)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(labels > 0)),
+            "pancreas_parenchyma_cm3": parenchyma_cm3,
+            "pancreas_lesion_cm3": lesion_cm3,
+            "label_map": {"1": "pancreas_parenchyma", "2": "pancreas_lesion"},
+        })
+        return labels.astype(np.uint8), meta
+
+    def infer_unest(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        wholeBrainSeg_Large_UNEST_segmentation bundle：UNesT 3D 133 通道（132 类脑结构 + 背景）。
+        预处理：NormalizeIntensityd(nonzero=True, channel_wise=True)，96³ 滑窗推理。
+        """
+        from monai.transforms import NormalizeIntensityd
+        t0 = time.time()
+        model = self.get_unest_model()
+        labels = self._run_3d_bundle(
+            vol_zyx, spacing,
+            [NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True)],
+            model, roi_size=[96, 96, 96], sw_batch_size=2, overlap=0.5, invert_probabilities=False,
+        )
+        dz, dy, dx = spacing
+        vox_cm3 = (dz * dy * dx) / 1000.0
+        counts = np.bincount(labels.ravel(), minlength=133)
+        nonzero_classes = int(np.sum(counts[1:] > 0))
+        meta = self._base_meta("wholebrainseg_large_unest", "MONAI UNesT-Large (wholeBrainSeg_Large_UNEST_segmentation, 132 类脑结构)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(labels > 0)),
+            "segmented_structure_count": nonzero_classes,
+            "total_brain_parenchyma_cm3": round(float(np.sum(labels > 0)) * vox_cm3, 2),
+        })
+        return labels.astype(np.uint8), meta
+
+    def infer_lung_nodule_ct(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        lung_nodule_ct_detection bundle：3D ResNet50-FPN RetinaNet 检测器。
+        输入 HU [-1024, 300] 线性归一化到 [0, 1]；输出三维候选检测框及置信度。
+        """
+        t0 = time.time()
+        detector = self.get_lung_nodule_model()
+        vol_xyz = np.transpose(np.asarray(vol_zyx, dtype=np.float32), (2, 1, 0))
+        scaled = np.clip((vol_xyz - (-1024.0)) / (300.0 - (-1024.0)), 0.0, 1.0).astype(np.float32)
+        in_tensor = torch.from_numpy(scaled).unsqueeze(0).to(self.device)
+        use_sw = bool(np.prod(scaled.shape) > (128 * 128 * 64))
+        with torch.no_grad():
+            preds = detector([in_tensor], use_inferer=use_sw)
+        det = preds[0] if preds else {}
+        boxes_t = det.get("boxes", torch.empty((0, 6)))
+        scores_t = det.get("labels_scores", det.get("scores", torch.empty((0,))))
+        boxes_np = boxes_t.detach().cpu().numpy() if hasattr(boxes_t, "detach") else np.asarray(boxes_t)
+        scores_np = scores_t.detach().cpu().numpy() if hasattr(scores_t, "detach") else np.asarray(scores_t)
+
+        mask_zyx = np.zeros(vol_zyx.shape, dtype=np.uint8)
+        detections: List[Dict[str, Any]] = []
+        dz, dy, dx = spacing
+        z_dim, y_dim, x_dim = vol_zyx.shape
+
+        if len(scores_np) > 0:
+            order = np.argsort(-scores_np)
+            thr = 0.15 if float(scores_np[order[0]]) >= 0.15 else max(0.05, float(scores_np[order[0]]) * 0.8)
+            for idx in order[:10]:
+                sc = float(scores_np[idx])
+                if sc < thr:
+                    continue
+                x1, y1, z1, x2, y2, z2 = [float(v) for v in boxes_np[idx]]
+                ix1, ix2 = max(0, int(np.floor(x1))), min(x_dim, int(np.ceil(x2)))
+                iy1, iy2 = max(0, int(np.floor(y1))), min(y_dim, int(np.ceil(y2)))
+                iz1, iz2 = max(0, int(np.floor(z1))), min(z_dim, int(np.ceil(z2)))
+                if ix2 > ix1 and iy2 > iy1 and iz2 > iz1:
+                    cz, cy, cx = (iz1 + iz2 - 1) / 2.0, (iy1 + iy2 - 1) / 2.0, (ix1 + ix2 - 1) / 2.0
+                    rz, ry, rx = max(1.0, (iz2 - iz1) / 2.0), max(1.0, (iy2 - iy1) / 2.0), max(1.0, (ix2 - ix1) / 2.0)
+                    zz, yy, xx = np.ogrid[iz1:iz2, iy1:iy2, ix1:ix2]
+                    ell = ((zz - cz) / rz) ** 2 + ((yy - cy) / ry) ** 2 + ((xx - cx) / rx) ** 2 <= 1.0
+                    mask_zyx[iz1:iz2, iy1:iy2, ix1:ix2][ell] = 1
+                    diam_mm = round(float(max((ix2 - ix1) * dx, (iy2 - iy1) * dy, (iz2 - iz1) * dz)), 1)
+                    detections.append({
+                        "box_zyx": [iz1, iy1, ix1, iz2, iy2, ix2],
+                        "score": round(sc, 3),
+                        "diameter_mm": diam_mm,
+                    })
+
+        meta = self._base_meta("lung_nodule_ct", "MONAI 3D RetinaNet (lung_nodule_ct_detection bundle)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(mask_zyx > 0)),
+            "detected_nodule_count": len(detections),
+            "detections": detections,
+        })
+        return mask_zyx, meta
+
+    def infer_vista3d(
+        self,
+        vol_zyx: np.ndarray,
+        spacing: Tuple[float, float, float],
+        prompt_point: Optional[Any] = None,
+        label_prompt: Optional[int] = None,
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        vista3d bundle（vista3d132）：支持 3D 提示点交互式分割或类别索引分割。
+        以提示点（未提供时取体积中心）为中心截取 64³~96³ 局部立方体送入 vista3d132。
+        """
+        t0 = time.time()
+        model = self.get_vista3d_model()
+        z_dim, y_dim, x_dim = vol_zyx.shape
+        if isinstance(prompt_point, dict) and all(k in prompt_point for k in ("z", "y", "x")):
+            pz, py, px = int(prompt_point["z"]), int(prompt_point["y"]), int(prompt_point["x"])
+        elif isinstance(prompt_point, (list, tuple)) and len(prompt_point) == 3:
+            pz, py, px = int(prompt_point[0]), int(prompt_point[1]), int(prompt_point[2])
+        else:
+            pz, py, px = z_dim // 2, y_dim // 2, x_dim // 2
+        pz = int(np.clip(pz, 0, z_dim - 1))
+        py = int(np.clip(py, 0, y_dim - 1))
+        px = int(np.clip(px, 0, x_dim - 1))
+
+        vmin, vmax = float(np.min(vol_zyx)), float(np.max(vol_zyx))
+        if vmin < -200.0:
+            norm_vol = np.clip((vol_zyx - (-1000.0)) / 2000.0, 0.0, 1.0).astype(np.float32)
+        else:
+            norm_vol = ((vol_zyx - vmin) / max(vmax - vmin, 1e-5)).astype(np.float32)
+
+        win = 64
+        half = win // 2
+        z0, y0, x0 = max(0, min(z_dim - win, pz - half)), max(0, min(y_dim - win, py - half)), max(0, min(x_dim - win, px - half))
+        z1, y1, x1 = min(z_dim, z0 + win), min(y_dim, y0 + win), min(x_dim, x0 + win)
+        sub = norm_vol[z0:z1, y0:y1, x0:x1]
+        pad_z, pad_y, pad_x = max(0, win - sub.shape[0]), max(0, win - sub.shape[1]), max(0, win - sub.shape[2])
+        if pad_z or pad_y or pad_x:
+            sub = np.pad(sub, ((0, pad_z), (0, pad_y), (0, pad_x)), mode="constant")
+
+        inp = torch.from_numpy(sub).unsqueeze(0).unsqueeze(0).to(self.device)
+        pts = torch.tensor([[[float(pz - z0), float(py - y0), float(px - x0)]]], device=self.device)
+        lbls = torch.tensor([[1]], device=self.device)
+        with torch.no_grad():
+            if label_prompt is not None:
+                cls_vec = torch.tensor([int(label_prompt)], device=self.device)
+                logits = model(input_images=inp, class_vector=cls_vec)
+            else:
+                logits = model(input_images=inp, point_coords=pts, point_labels=lbls)
+        prob = torch.sigmoid(logits[0, 0]).detach().cpu().numpy()
+        pred_sub = (prob[: z1 - z0, : y1 - y0, : x1 - x0] > 0.5).astype(np.uint8)
+        mask_zyx = np.zeros(vol_zyx.shape, dtype=np.uint8)
+        mask_zyx[z0:z1, y0:y1, x0:x1] = pred_sub
+
+        meta = self._base_meta("vista3d", "MONAI VISTA-3D (vista3d132 3D foundation model)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(mask_zyx > 0)),
+            "prompt_point_zyx": [pz, py, px],
+            "label_prompt": label_prompt,
+        })
+        return mask_zyx, meta
+
+    def infer_valve_landmarks(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        valve_landmarks bundle：PointRegressor (in_shape=[1, 256, 256], out_shape=[2, 10])，
+        预测心脏瓣膜 10 个关键解剖地标的二维平面坐标，并在掩膜中绘制地标靶点。
+        """
+        t0 = time.time()
+        model = self.get_valve_landmarks_model()
+        z_dim, y_dim, x_dim = vol_zyx.shape
+        key_z = z_dim // 2
+        sl = np.asarray(vol_zyx[key_z], dtype=np.float32)
+        smin, smax = float(sl.min()), float(sl.max())
+        sl_norm = (sl - smin) / max(smax - smin, 1e-5)
+        sl_t = torch.from_numpy(sl_norm).unsqueeze(0).unsqueeze(0).to(self.device)
+        sl_256 = torch.nn.functional.interpolate(sl_t, size=(256, 256), mode="bilinear", align_corners=False)
+        with torch.no_grad():
+            coords = model(sl_256)[0].detach().cpu().numpy()  # shape (2, 10)
+
+        mask_zyx = np.zeros(vol_zyx.shape, dtype=np.uint8)
+        landmarks: List[Dict[str, Any]] = []
+        yy, xx = np.ogrid[:y_dim, :x_dim]
+        radius_px = max(2, int(round(min(y_dim, x_dim) * 0.025)))
+        for idx in range(coords.shape[1]):
+            raw_y, raw_x = float(coords[0, idx]), float(coords[1, idx])
+            if -1.5 <= raw_y <= 1.5 and -1.5 <= raw_x <= 1.5:
+                # 归一化坐标或像素坐标自适应映射回原图尺寸
+                norm_y = (raw_y + 1.0) / 2.0 if raw_y < 0 else (raw_y if raw_y <= 1.0 else raw_y / 256.0)
+                norm_x = (raw_x + 1.0) / 2.0 if raw_x < 0 else (raw_x if raw_x <= 1.0 else raw_x / 256.0)
+                py = int(np.clip(round(norm_y * (y_dim - 1)), 0, y_dim - 1))
+                px = int(np.clip(round(norm_x * (x_dim - 1)), 0, x_dim - 1))
+            else:
+                py = int(np.clip(round(raw_y / 256.0 * (y_dim - 1)), 0, y_dim - 1))
+                px = int(np.clip(round(raw_x / 256.0 * (x_dim - 1)), 0, x_dim - 1))
+            disk = (yy - py) ** 2 + (xx - px) ** 2 <= radius_px ** 2
+            mask_zyx[key_z][disk] = 1
+            landmarks.append({"index": idx + 1, "y": py, "x": px, "raw": [round(raw_y, 3), round(raw_x, 3)]})
+
+        meta = self._base_meta("valve_landmarks", "MONAI PointRegressor (valve_landmarks bundle, 10 个瓣膜地标)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(mask_zyx > 0)),
+            "key_slice_index": key_z,
+            "landmark_count": len(landmarks),
+            "landmarks": landmarks,
+        })
+        return mask_zyx, meta
+
+    def infer_breast_density(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        breast_density_classification bundle：InceptionV3 4 分类（ACR BI-RADS A/B/C/D 腺体致密度）。
+        """
+        t0 = time.time()
+        model = self.get_breast_density_model()
+        z_dim, y_dim, x_dim = vol_zyx.shape
+        key_z = z_dim // 2
+        sl = np.asarray(vol_zyx[key_z], dtype=np.float32)
+        smin, smax = float(sl.min()), float(sl.max())
+        sl_norm = (sl - smin) / max(smax - smin, 1e-5)
+        sl_t = torch.from_numpy(sl_norm).unsqueeze(0).unsqueeze(0).repeat(1, 3, 1, 1).to(self.device)
+        sl_299 = torch.nn.functional.interpolate(sl_t, size=(299, 299), mode="bilinear", align_corners=False)
+        with torch.no_grad():
+            logits = model(sl_299)[0].detach().cpu()
+            probs = torch.softmax(logits, dim=0).numpy()
+
+        birads_names = [
+            "BI-RADS A (脂肪型 Almost entirely fatty)",
+            "BI-RADS B (散在纤维腺体型 Scattered fibroglandular)",
+            "BI-RADS C (不均匀致密型 Heterogeneously dense)",
+            "BI-RADS D (极度致密型 Extremely dense)",
+        ]
+        pred_idx = int(np.argmax(probs))
+        prob_map = {birads_names[i]: round(float(probs[i]), 4) for i in range(4)}
+
+        mask_zyx = np.zeros(vol_zyx.shape, dtype=np.uint8)
+        fg = sl_norm > 0.15
+        if np.any(fg):
+            thr = float(np.percentile(sl_norm[fg], 65.0))
+            mask_zyx[key_z] = ((sl_norm >= thr) & fg).astype(np.uint8)
+
+        meta = self._base_meta("breast_density", "MONAI InceptionV3 (breast_density_classification bundle)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(mask_zyx > 0)),
+            "predicted_birads": birads_names[pred_idx],
+            "predicted_confidence": round(float(probs[pred_idx]), 4),
+            "birads_probabilities": prob_map,
+            "key_slice_index": key_z,
+        })
+        return mask_zyx, meta
+
+    def infer_pathology_tumor(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        pathology_tumor_detection bundle：ResNet18 + 1×1 Conv 全卷积切片肿瘤区域概率推理。
+        输入图像线性缩放至 [-1, 1]，使用滑窗网格输出肿瘤转移灶热图与高概率区域掩膜。
+        """
+        t0 = time.time()
+        model = self.get_pathology_tumor_model()
+        z_dim, y_dim, x_dim = vol_zyx.shape
+        key_z = z_dim // 2
+        sl = np.asarray(vol_zyx[key_z], dtype=np.float32)
+        smin, smax = float(sl.min()), float(sl.max())
+        sl_norm = ((sl - smin) / max(smax - smin, 1e-5)) * 2.0 - 1.0  # [-1, 1]
+        sl_t = torch.from_numpy(sl_norm.astype(np.float32)).unsqueeze(0).unsqueeze(0).repeat(1, 3, 1, 1).to(self.device)
+        # 在 224×224 块网格上评估肿瘤概率并上采样回原切片尺寸
+        sl_grid = torch.nn.functional.interpolate(sl_t, size=(224, 224), mode="bilinear", align_corners=False)
+        with torch.no_grad():
+            # 提取 AdaptiveAvgPool2d 之前的 7×7 空间特征图并通过 1×1 fc 卷积生成空间概率图
+            feat = model.features[:-1](sl_grid)
+            spatial_logits = model.fc(feat)
+            spatial_probs = torch.sigmoid(spatial_logits)
+            up_probs = torch.nn.functional.interpolate(spatial_probs, size=(y_dim, x_dim), mode="bilinear", align_corners=False)[0, 0].detach().cpu().numpy()
+
+        mask_zyx = np.zeros(vol_zyx.shape, dtype=np.uint8)
+        mask_zyx[key_z] = (up_probs >= 0.5).astype(np.uint8)
+        meta = self._base_meta("pathology_tumor_detection", "MONAI ResNet18-FCN (pathology_tumor_detection bundle)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(mask_zyx > 0)),
+            "max_tumor_probability": round(float(up_probs.max()), 4),
+            "mean_tumor_probability": round(float(up_probs.mean()), 4),
+            "key_slice_index": key_z,
+        })
+        return mask_zyx, meta
+
+    def infer_pathology_nuclei(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        pathology_nuclei_segmentation_classification bundle：HoVerNet (mode='fast', out_classes=5)。
+        256×256 输入块输出中心 164×164 细胞核分割与 4 类表型（肿瘤上皮/炎症淋巴/结缔/坏死/良性上皮）。
+        """
+        t0 = time.time()
+        model = self.get_pathology_nuclei_model()
+        z_dim, y_dim, x_dim = vol_zyx.shape
+        key_z = z_dim // 2
+        sl = np.asarray(vol_zyx[key_z], dtype=np.float32)
+        smin, smax = float(sl.min()), float(sl.max())
+        sl_norm = (sl - smin) / max(smax - smin, 1e-5)
+        sl_t = torch.from_numpy(sl_norm.astype(np.float32)).unsqueeze(0).unsqueeze(0).repeat(1, 3, 1, 1).to(self.device)
+        sl_256 = torch.nn.functional.interpolate(sl_t, size=(256, 256), mode="bilinear", align_corners=False)
+        with torch.no_grad():
+            out = model(sl_256)
+            np_logits = out["nucleus_prediction"]  # (1, 2, 164, 164)
+            tp_logits = out["type_prediction"]     # (1, 5, 164, 164)
+            np_prob = torch.softmax(np_logits, dim=1)[:, 1:2]
+            tp_cls = torch.argmax(tp_logits, dim=1, keepdim=True).float()
+            up_np = torch.nn.functional.interpolate(np_prob, size=(y_dim, x_dim), mode="bilinear", align_corners=False)[0, 0].detach().cpu().numpy()
+            up_tp = torch.nn.functional.interpolate(tp_cls, size=(y_dim, x_dim), mode="nearest")[0, 0].detach().cpu().numpy().astype(np.uint8)
+
+        nuc_mask = (up_np >= 0.5).astype(np.uint8)
+        typed_slice = np.where(nuc_mask > 0, np.maximum(up_tp, 1), 0).astype(np.uint8)
+        labels_zyx = np.zeros(vol_zyx.shape, dtype=np.uint8)
+        labels_zyx[key_z] = typed_slice
+
+        type_names = {
+            1: "肿瘤细胞核 (Neoplastic)",
+            2: "炎性/淋巴细胞核 (Inflammatory)",
+            3: "结缔/间质细胞核 (Connective)",
+            4: "坏死/凋亡核 (Dead)",
+            5: "非肿瘤上皮核 (Epithelial)",
+        }
+        type_pixels = {name: int(np.sum(typed_slice == k)) for k, name in type_names.items()}
+        meta = self._base_meta("pathology_nuclei", "MONAI HoVerNet (pathology_nuclei_segmentation_classification bundle)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(labels_zyx > 0)),
+            "nuclear_type_pixels": type_pixels,
+            "key_slice_index": key_z,
+        })
+        return labels_zyx, meta
+
+    def infer_endoscopic_tool(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        endoscopic_tool_segmentation bundle：FlexibleUNet (efficientnet-b2 backbone, 736×480 输入)，
+        分割微创内镜视野中的手术器械区域。
+        """
+        t0 = time.time()
+        model = self.get_endoscopic_tool_model()
+        z_dim, y_dim, x_dim = vol_zyx.shape
+        key_z = z_dim // 2
+        sl = np.asarray(vol_zyx[key_z], dtype=np.float32)
+        smin, smax = float(sl.min()), float(sl.max())
+        sl_norm = (sl - smin) / max(smax - smin, 1e-5)
+        sl_t = torch.from_numpy(sl_norm.astype(np.float32)).unsqueeze(0).unsqueeze(0).repeat(1, 3, 1, 1).to(self.device)
+        sl_resized = torch.nn.functional.interpolate(sl_t, size=(736, 480), mode="bilinear", align_corners=False)
+        with torch.no_grad():
+            logits = model(sl_resized)
+            probs = torch.softmax(logits, dim=1)[:, 1:2]
+            up_prob = torch.nn.functional.interpolate(probs, size=(y_dim, x_dim), mode="bilinear", align_corners=False)[0, 0].detach().cpu().numpy()
+
+        mask_zyx = np.zeros(vol_zyx.shape, dtype=np.uint8)
+        mask_zyx[key_z] = (up_prob >= 0.5).astype(np.uint8)
+        coverage = round(float(np.mean(mask_zyx[key_z] > 0)) * 100.0, 2)
+        meta = self._base_meta("endoscopic_tool", "MONAI FlexibleUNet EfficientNet-B2 (endoscopic_tool_segmentation bundle)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(mask_zyx > 0)),
+            "tool_coverage_pct": coverage,
+            "key_slice_index": key_z,
+        })
+        return mask_zyx, meta
+
 
 # 规则算法（阈值/形态学/区域生长）模型：真实计算，但不是神经网络；输出中如实标注方法
 RULE_BASED_MODELS = {
@@ -724,7 +1220,7 @@ RULE_BASED_MODELS = {
     "copd_emphysema_analyzer", "copd_emphysema",
     "whole_body_ct_segmenter", "totalsegmentator",
     "vertebra_segmenter",
-    "vista3d_interactive_segmenter", "vista3d", "interactive_region_growing",
+    "vista3d_interactive_segmenter", "interactive_region_growing",
 }
 
 # 没有真实实现的模型：调用即报「未实现」，不做阈值替代
@@ -736,17 +1232,8 @@ NOT_IMPLEMENTED_MODELS: Dict[str, str] = {
     "covid19_lung_infection": "病毒性肺炎病灶分割模型未接入",
     "covid19": "病毒性肺炎病灶分割模型未接入",
     "coronary_artery_calcification": "缺少心脏/冠状动脉区域来源，无法按标准 Agatston 方法逐病灶计分，已下线",
-    "brain_subcortical_segmenter": "全脑结构分割模型（UNEST）未接入推理路径",
-    "wholebrainseg_large_unest": "全脑结构分割模型（UNEST）未接入推理路径",
     "stroke_ischemic_lesion": "脑梗死分割模型未接入",
     "intracranial_hemorrhage_ct": "颅内出血检测模型未接入",
-    "valve_landmarks": "瓣膜地标模型未接入推理路径",
-    "breast_density": "乳腺密度分类模型未接入推理路径",
-    "pathology_tumor_detection": "病理 WSI 模型未接入推理路径",
-    "pathology_nuclei": "病理细胞核模型未接入推理路径",
-    "endoscopic_tool": "内镜器械分割模型未接入推理路径",
-    "renal_structures_cect": "肾脏精细结构模型未接入推理路径",
-    "pancreas_ct_dints": "DiNTS 胰腺模型未接入推理路径",
 }
 
 # BTCV 器官子集（如实标注为 BTCV 器官分割，不是病灶/肿瘤模型）
@@ -873,6 +1360,46 @@ class MONAIEngine:
             labels, _ = self.neural_pipeline.infer_wholebody(volume, spacing)
             return (labels > 0).astype(np.uint8), "MONAI wholeBody_ct_segmentation 推理"
 
+        if model_name in ("renal_structures_cect", "renal_cect_segmenter"):
+            labels, _ = self.neural_pipeline.infer_renal(volume, spacing)
+            return (labels > 0).astype(np.uint8), "MONAI renalStructures_CECT_segmentation 推理"
+
+        if model_name in ("pancreas_ct_dints", "pancreas_dints_segmenter"):
+            labels, _ = self.neural_pipeline.infer_pancreas_dints(volume, spacing)
+            return (labels > 0).astype(np.uint8), "MONAI pancreas_ct_dints_segmentation 推理"
+
+        if model_name in ("brain_subcortical_segmenter", "wholebrainseg_large_unest"):
+            labels, _ = self.neural_pipeline.infer_unest(volume, spacing)
+            return (labels > 0).astype(np.uint8), "MONAI wholeBrainSeg_Large_UNEST 推理"
+
+        if model_name in ("lung_nodule_ct", "monai_lung_nodule_detector"):
+            mask, _ = self.neural_pipeline.infer_lung_nodule_ct(volume, spacing)
+            return mask, "MONAI lung_nodule_ct_detection (3D RetinaNet) 推理"
+
+        if model_name in ("vista3d", "monai_vista3d"):
+            mask, _ = self.neural_pipeline.infer_vista3d(volume, spacing)
+            return mask, "MONAI VISTA-3D 推理"
+
+        if model_name == "valve_landmarks":
+            mask, _ = self.neural_pipeline.infer_valve_landmarks(volume, spacing)
+            return mask, "MONAI valve_landmarks 推理"
+
+        if model_name == "breast_density":
+            mask, _ = self.neural_pipeline.infer_breast_density(volume, spacing)
+            return mask, "MONAI breast_density_classification 推理"
+
+        if model_name == "pathology_tumor_detection":
+            mask, _ = self.neural_pipeline.infer_pathology_tumor(volume, spacing)
+            return mask, "MONAI pathology_tumor_detection 推理"
+
+        if model_name == "pathology_nuclei":
+            labels, _ = self.neural_pipeline.infer_pathology_nuclei(volume, spacing)
+            return (labels > 0).astype(np.uint8), "MONAI pathology_nuclei (HoVerNet) 推理"
+
+        if model_name == "endoscopic_tool":
+            mask, _ = self.neural_pipeline.infer_endoscopic_tool(volume, spacing)
+            return mask, "MONAI endoscopic_tool_segmentation 推理"
+
         # BraTS 需要 4 通道原始文件，交互分割需要种子点：MPR 叠加不支持；其他未知模型同样不叠加
         return None, None
 
@@ -982,7 +1509,7 @@ class MONAIEngine:
         if not window_preset:
             if "lung" in model_name or "copd" in model_name or "bronch" in model_name:
                 window_preset = "lung"
-            elif "brain" in model_name:
+            elif "brain" in model_name or "unest" in model_name:
                 window_preset = "brain"
             else:
                 window_preset = "abdomen"
@@ -1147,6 +1674,78 @@ class MONAIEngine:
             key_slice_idx = recist["key_slice_index"]
             lesion_label = "全身 104 类解剖结构（MONAI wholeBody_ct_segmentation 分割）"
 
+        elif model_name in ("renal_structures_cect", "renal_cect_segmenter"):
+            labels_np, neural_meta = self.neural_pipeline.infer_renal(volume, spacing)
+            mask_np = (labels_np > 0).astype(np.uint8)
+            recist = calculate_recist_metrics(mask_np, spacing=spacing)
+            key_slice_idx = recist["key_slice_index"]
+            lesion_label = "肾实质/肾血管/输尿管与占位（MONAI renalStructures_CECT_segmentation 分割）"
+
+        elif model_name in ("pancreas_ct_dints", "pancreas_dints_segmenter"):
+            labels_np, neural_meta = self.neural_pipeline.infer_pancreas_dints(volume, spacing)
+            mask_np = (labels_np > 0).astype(np.uint8)
+            recist = calculate_recist_metrics(mask_np, spacing=spacing)
+            key_slice_idx = recist["key_slice_index"]
+            lesion_label = "胰腺实质与胰腺占位（MONAI pancreas_ct_dints_segmentation 分割）"
+
+        elif model_name in ("brain_subcortical_segmenter", "wholebrainseg_large_unest"):
+            labels_np, neural_meta = self.neural_pipeline.infer_unest(volume, spacing)
+            mask_np = (labels_np > 0).astype(np.uint8)
+            recist = calculate_recist_metrics(mask_np, spacing=spacing)
+            key_slice_idx = recist["key_slice_index"]
+            lesion_label = "全脑 132 类皮层与皮层下核团（MONAI wholeBrainSeg_Large_UNEST 分割）"
+
+        elif model_name in ("lung_nodule_ct", "monai_lung_nodule_detector"):
+            mask_np, neural_meta = self.neural_pipeline.infer_lung_nodule_ct(volume, spacing)
+            recist = calculate_recist_metrics(mask_np, spacing=spacing)
+            key_slice_idx = recist["key_slice_index"]
+            lesion_label = f"MONAI 3D RetinaNet 检出肺结节候选（检出 {neural_meta.get('detected_nodule_count', 0)} 个）"
+
+        elif model_name in ("vista3d", "monai_vista3d"):
+            prompt_pt = kwargs.get("prompt_point") or kwargs.get("click_point")
+            label_prompt = kwargs.get("label_prompt")
+            mask_np, neural_meta = self.neural_pipeline.infer_vista3d(volume, spacing, prompt_point=prompt_pt, label_prompt=label_prompt)
+            recist = calculate_recist_metrics(mask_np, spacing=spacing)
+            key_slice_idx = recist["key_slice_index"]
+            lesion_label = "MONAI VISTA-3D 三维交互分割区域"
+
+        elif model_name == "valve_landmarks":
+            mask_np, neural_meta = self.neural_pipeline.infer_valve_landmarks(volume, spacing)
+            key_slice_idx = int(neural_meta.get("key_slice_index", volume.shape[0] // 2))
+            recist = _empty_measurements(key_slice_idx, "瓣膜关键地标检测中心层面")
+            recist["valve_landmarks"] = neural_meta.get("landmarks", [])
+            lesion_label = "心脏瓣膜 10 个解剖地标点（MONAI valve_landmarks 回归）"
+
+        elif model_name == "breast_density":
+            mask_np, neural_meta = self.neural_pipeline.infer_breast_density(volume, spacing)
+            key_slice_idx = int(neural_meta.get("key_slice_index", volume.shape[0] // 2))
+            recist = _empty_measurements(key_slice_idx, "乳腺致密度分类代表层面")
+            recist["breast_density"] = {
+                "predicted_birads": neural_meta.get("predicted_birads"),
+                "predicted_confidence": neural_meta.get("predicted_confidence"),
+                "probabilities": neural_meta.get("birads_probabilities"),
+            }
+            lesion_label = f"乳腺致密度分类：{neural_meta.get('predicted_birads')}（MONAI InceptionV3）"
+
+        elif model_name == "pathology_tumor_detection":
+            mask_np, neural_meta = self.neural_pipeline.infer_pathology_tumor(volume, spacing)
+            recist = calculate_recist_metrics(mask_np, spacing=spacing)
+            key_slice_idx = int(neural_meta.get("key_slice_index", recist["key_slice_index"]))
+            lesion_label = f"数字病理肿瘤高概率区（峰值概率 {neural_meta.get('max_tumor_probability')}，MONAI ResNet18-FCN）"
+
+        elif model_name == "pathology_nuclei":
+            labels_np, neural_meta = self.neural_pipeline.infer_pathology_nuclei(volume, spacing)
+            mask_np = (labels_np > 0).astype(np.uint8)
+            recist = calculate_recist_metrics(mask_np, spacing=spacing)
+            key_slice_idx = int(neural_meta.get("key_slice_index", recist["key_slice_index"]))
+            lesion_label = "数字病理细胞核分割与表型分类（MONAI HoVerNet）"
+
+        elif model_name == "endoscopic_tool":
+            mask_np, neural_meta = self.neural_pipeline.infer_endoscopic_tool(volume, spacing)
+            recist = calculate_recist_metrics(mask_np, spacing=spacing)
+            key_slice_idx = int(neural_meta.get("key_slice_index", recist["key_slice_index"]))
+            lesion_label = f"内镜手术器械分割（视野占比 {neural_meta.get('tool_coverage_pct')}%，MONAI FlexibleUNet）"
+
         elif model_name == "vertebra_segmenter":
             engine_type = "rule_based"
             mask_np = extract_largest_component((volume >= 220.0).astype(np.uint8))
@@ -1185,7 +1784,7 @@ class MONAIEngine:
             }
             extra_md += f"- **松质骨 ROI 平均 CT 值**: `{_fmt(roi_mean, 'HU')}`（{recist['spine']['method']}）\n"
 
-        elif model_name in ("vista3d_interactive_segmenter", "vista3d", "interactive_region_growing"):
+        elif model_name in ("vista3d_interactive_segmenter", "interactive_region_growing"):
             engine_type = "rule_based"
             prompt_pt = kwargs.get("prompt_point") or kwargs.get("click_point")
             if isinstance(prompt_pt, dict) and all(k in prompt_pt for k in ("z", "y", "x")):
@@ -1213,7 +1812,7 @@ class MONAIEngine:
         else:
             raise ModelUnavailableError(f"模型 '{model_name}' 未实现或未登记，不会以其他算法替代。")
 
-        if model_name in ("vista3d_interactive_segmenter", "vista3d"):
+        if model_name == "vista3d_interactive_segmenter":
             model_name = "interactive_region_growing"
 
         key_slice_idx = int(np.clip(int(key_slice_idx), 0, volume.shape[0] - 1))
@@ -1264,6 +1863,25 @@ class MONAIEngine:
                 )
             if neural_meta.get("structure_volumes_cm3"):
                 neural_md += f"- **分割出的结构数**: `{len(neural_meta['structure_volumes_cm3'])}` 类\n"
+            if neural_meta.get("renal_volumes_cm3"):
+                renal_lines = "".join([f"  - {k}: `{v} cm³`\n" for k, v in neural_meta["renal_volumes_cm3"].items() if v > 0])
+                if renal_lines:
+                    neural_md += f"- **肾脏精细结构体积**:\n{renal_lines}"
+            if "pancreas_parenchyma_cm3" in neural_meta:
+                neural_md += (
+                    f"- **DiNTS 胰腺分割**: 胰腺实质 `{neural_meta['pancreas_parenchyma_cm3']} cm³`，"
+                    f"胰腺占位/肿物 `{neural_meta['pancreas_lesion_cm3']} cm³`\n"
+                )
+            if "segmented_structure_count" in neural_meta:
+                neural_md += (
+                    f"- **UNEST 全脑结构分割**: 检出 `{neural_meta['segmented_structure_count']}` 类脑解剖结构，"
+                    f"脑实质总体积 `{neural_meta.get('total_brain_parenchyma_cm3')} cm³`\n"
+                )
+            if "predicted_birads" in neural_meta:
+                neural_md += (
+                    f"- **BI-RADS 腺体致密度分类**: `{neural_meta['predicted_birads']}`"
+                    f"（置信度 `{round(float(neural_meta.get('predicted_confidence', 0.0)) * 100, 1)}%`）\n"
+                )
         else:
             neural_md = f"- **方法**: {neural_meta.get('method', '')}\n"
 

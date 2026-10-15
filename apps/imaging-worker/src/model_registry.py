@@ -53,7 +53,7 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
     ),
     "lung_nodule_ct": ModelSpec(
         name="lung_nodule_ct",
-        display_name="MONAI Model Zoo 肺结节检出与分割模型 (RetinaNet / UNet)",
+        display_name="MONAI Model Zoo 肺结节检出模型 (3D RetinaNet)",
         modality="Chest CT",
         version="v0.5.9",
         size_mb=79.83,
@@ -61,13 +61,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/lung_nodule_ct_detection_v0.5.9.zip"
         ],
-        description="MONAI lung_nodule_ct_detection bundle（RetinaNet 检测）。本引擎尚未接入该权重的推理路径。",
-        architecture="RetinaNet-UNet-3D",
+        description="MONAI lung_nodule_ct_detection bundle（3D ResNet50-FPN RetinaNet），胸部 CT 肺结节三维候选框检出与置信度评分。",
+        architecture="RetinaNet-3D",
         clinical_targets=["肺结节", "磨玻璃结节 (GGO)", "部分实性结节 (PSN)", "实性结节 (SN)"],
         file_name="lung_nodule_ct_v0.5.9.pt",
         engine_type="deep_learning",
         body_part="chest",
-        category="胸部与呼吸科"
+        category="胸部与呼吸科",
+        engine_implemented=True
     ),
     "swinunetr_btcv": ModelSpec(
         name="swinunetr_btcv",
@@ -155,13 +156,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/renalStructures_CECT_segmentation_v0.1.0.zip"
         ],
-        description="基于增强期薄层 CT 提取肾实质、肾盂、肾静脉和肾肿瘤亚区，辅助保肾手术 (PN) 规划。",
+        description="MONAI renalStructures_CECT_segmentation bundle（SegResNet），提取肾动脉、肾静脉、输尿管/肾盂、肾占位与肾实质。",
         architecture="SegResNet-3D",
         clinical_targets=["肾实质", "肾盂输尿管", "肾血管", "肾占位/囊肿"],
         file_name="renal_structures_cect_v0.1.0.pt",
         engine_type="deep_learning",
         body_part="abdomen",
-        category="腹部、消化与泌尿"
+        category="腹部、消化与泌尿",
+        engine_implemented=True
     ),
     "ventricular_short_axis": ModelSpec(
         name="ventricular_short_axis",
@@ -192,13 +194,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/wholeBrainSeg_Large_UNEST_segmentation_v0.2.3.zip"
         ],
-        description="基于 Transformer-UNEST 架构的高精细全脑 133 类灰白质解剖亚核团分割，支持阿尔茨海默病与神经退行性病变海马体积评估。",
+        description="MONAI wholeBrainSeg_Large_UNEST_segmentation bundle，全脑 132 类灰白质与皮层下核团精细解剖分割。",
         architecture="UNEST-Large-3D",
         clinical_targets=["大脑皮层", "白质", "双侧海马体", "脑室系统", "基底节区"],
         file_name="wholebrainseg_large_unest_v0.2.3.pt",
         engine_type="deep_learning",
         body_part="brain",
-        category="颅脑与神经系统"
+        category="颅脑与神经系统",
+        engine_implemented=True
     ),
     "pancreas_ct_dints": ModelSpec(
         name="pancreas_ct_dints",
@@ -210,13 +213,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/pancreas_ct_dints_segmentation_v0.4.3.zip"
         ],
-        description="基于可微神经架构搜索 (DiNTS) 的胰腺实质与占位病灶三维细粒度分割，突破小器官低对比度分割瓶颈。",
+        description="MONAI pancreas_ct_dints_segmentation bundle，基于可微神经架构搜索 (DiNTS) 的胰腺实质与胰腺肿瘤三维分割。",
         architecture="DiNTS-3D-NAS",
         clinical_targets=["胰腺实质", "胰头/胰体/胰尾", "胰腺囊实性占位", "胰腺导管腺癌 (PDAC)"],
         file_name="pancreas_ct_dints_v0.4.3.pt",
         engine_type="deep_learning",
         body_part="abdomen",
-        category="腹部、消化与泌尿"
+        category="腹部、消化与泌尿",
+        engine_implemented=True
     ),
     "pathology_tumor_detection": ModelSpec(
         name="pathology_tumor_detection",
@@ -228,13 +232,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/pathology_tumor_detection_v0.5.7.zip"
         ],
-        description="针对淋巴结与实体肿瘤 HE 染色高倍率全视野数字病理切片 (WSI) 的微转移灶全自动检出与定位。",
-        architecture="TorchVision-ResNet / FPN",
+        description="MONAI pathology_tumor_detection bundle（ResNet18 网格滑窗概率图），针对数字病理切片的肿瘤区域检出。",
+        architecture="ResNet18-FCN-2D",
         clinical_targets=["前哨淋巴结转移", "微浸润灶", "肿瘤细胞团", "病理分期辅助"],
         file_name="pathology_tumor_detection_v0.5.7.pt",
         engine_type="deep_learning",
         body_part="pathology",
-        category="病理与微观形态"
+        category="病理与微观形态",
+        engine_implemented=True
     ),
     "pathology_nuclei": ModelSpec(
         name="pathology_nuclei",
@@ -246,13 +251,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/pathology_nuclei_segmentation_classification_v0.2.1.zip"
         ],
-        description="HE 染色数字病理多组织细胞核分割与表型分类（肿瘤细胞核、淋巴细胞、成纤维细胞、上皮细胞核）。",
-        architecture="HoVer-Net / UNet-2D",
+        description="MONAI pathology_nuclei_segmentation_classification bundle（HoVer-Net fast 模式），细胞核分割与 4 类表型分类。",
+        architecture="HoVer-Net-2D",
         clinical_targets=["肿瘤浸润淋巴细胞 (TILs)", "核异型性", "核质比测算", "细胞增殖指数"],
         file_name="pathology_nuclei_v0.2.1.pt",
         engine_type="deep_learning",
         body_part="pathology",
-        category="病理与微观形态"
+        category="病理与微观形态",
+        engine_implemented=True
     ),
     "valve_landmarks": ModelSpec(
         name="valve_landmarks",
@@ -264,13 +270,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/valve_landmarks_v0.4.3.zip"
         ],
-        description="主动脉瓣与二尖瓣解剖关键铰链点与瓣尖 3D 热图地标定位，辅助 TAVR/TMVR 经导管瓣膜置换术前规划。",
-        architecture="Heatmap-Regression-UNet",
+        description="MONAI valve_landmarks bundle（PointRegressor 2D），逐帧/逐层回归心脏瓣膜 10 个关键解剖地标坐标。",
+        architecture="PointRegressor-2D",
         clinical_targets=["主动脉瓣环", "二尖瓣前后瓣叶地标", "冠状动脉开口高度", "瓣膜置换规划"],
         file_name="valve_landmarks_v0.4.3.pt",
         engine_type="deep_learning",
         body_part="cardiac",
-        category="心血管系统"
+        category="心血管系统",
+        engine_implemented=True
     ),
     "breast_density": ModelSpec(
         name="breast_density",
@@ -282,13 +289,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/breast_density_classification_v0.1.5.zip"
         ],
-        description="符合 ACR BI-RADS 第 5 版标准的乳腺数字化 X 射线摄影 (CC/MLO) 腺体致密度四分类 (a, b, c, d)。",
-        architecture="DenseNet-Classifier-2D",
+        description="MONAI breast_density_classification bundle（InceptionV3），ACR BI-RADS 乳腺致密度四分类（A/B/C/D 概率分布）。",
+        architecture="InceptionV3-2D",
         clinical_targets=["BI-RADS 腺体致密度", "脂肪型", "散在纤维腺体型", "不均匀致密型", "极度致密型"],
         file_name="breast_density_v0.1.5.pt",
         engine_type="deep_learning",
         body_part="breast",
-        category="乳腺钼靶与妇科"
+        category="乳腺钼靶与妇科",
+        engine_implemented=True
     ),
     "endoscopic_tool": ModelSpec(
         name="endoscopic_tool",
@@ -300,13 +308,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://github.com/Project-MONAI/model-zoo/releases/download/hosting_storage_v1/endoscopic_tool_segmentation_v0.5.5.zip"
         ],
-        description="内窥镜微创手术视频中抓持钳、超声刀、电凝钩与吸引器等手术器械实时像素级分割与跟踪遮蔽。",
-        architecture="ToolNet-SegResNet-2D",
+        description="MONAI endoscopic_tool_segmentation bundle（FlexibleUNet EfficientNet-B2），内镜图像/序列中手术器械像素级分割。",
+        architecture="FlexibleUNet-EfficientNetB2",
         clinical_targets=["抓钳", "超声刀", "双极电凝", "视野遮挡剔除", "术中安全边界"],
         file_name="endoscopic_tool_v0.5.5.pt",
         engine_type="deep_learning",
         body_part="endoscopy",
-        category="微创外科与内窥镜"
+        category="微创外科与内窥镜",
+        engine_implemented=True
     ),
     "totalsegmentator": ModelSpec(
         name="totalsegmentator",
@@ -327,7 +336,7 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
     ),
     "vista3d": ModelSpec(
         name="vista3d",
-        display_name="MONAI VISTA-3D 医生交互式点选/涂抹通用分割基座模型",
+        display_name="MONAI VISTA-3D 医生交互式点选/多类别三维分割基座模型",
         modality="Multi-modality (CT / MRI)",
         version="v0.5.7",
         size_mb=831.57,
@@ -335,13 +344,14 @@ OFFICIAL_MODEL_REGISTRY: Dict[str, ModelSpec] = {
         urls=[
             "https://api.ngc.nvidia.com/v2/models/nvidia/monaihosting/vista3d/versions/0.5.7/files/vista3d_v0.5.7.zip"
         ],
-        description="MONAI VISTA-3D bundle 权重。本引擎尚未接入其推理路径；平台的交互分割为 HU 区域生长规则算法，不使用该模型。",
+        description="MONAI VISTA-3D bundle（vista3d132），支持 3D 提示点交互式分割与类别提示分割。",
         architecture="VISTA-3D-Transformer",
         clinical_targets=["任意未知靶病灶", "淋巴结转移灶", "软组织肉瘤", "囊实性混合占位"],
         file_name="vista3d_v0.5.7.pt",
         engine_type="deep_learning",
         body_part="general",
-        category="交互式万物分割"
+        category="交互式万物分割",
+        engine_implemented=True
     )
 }
 
