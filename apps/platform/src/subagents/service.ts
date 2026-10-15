@@ -19,12 +19,21 @@ import type { CohortService } from '../research/cohort.ts'
 import type { Access } from '../research/access.ts'
 import { formatAma, normalizeDoi } from '../literature/format.ts'
 import { scanPhi } from '../ops/phi-scan.ts'
+import {
+  classifySectionRole,
+  classifyVerificationTier,
+  EXTERNAL_STUDY_CUE,
+  extractTableSummaries,
+  type SectionRole,
+  type TableSummary,
+} from '../claims/extract.ts'
 import type {
   EvidenceBundle,
   EvidenceCitation,
   StatisticalBundle,
   VerificationReport,
   ClaimCheckIssue,
+  IssueSeverity,
   SubagentProgress,
   SubagentResult,
   SubagentTaskParams,
@@ -404,14 +413,18 @@ export class SubagentService {
   }
 
   /**
-   * 质控核查专家：对抗式筛查正文论断与数字真实性、引用匹配及 PHI 风险
+   * 质控核查专家（Google PAT 四阶段学术审查流水线）：
+   * - Stage 1：章节感知切分（intro / methods / results / discussion）与表格结构化数值提取
+   * - Stage 2：自适应核查预算分级（high / medium / light）
+   * - Stage 3：多维并行专项核查（Pass A 外部文献对齐与数值等价性/方向性核验 + 实时检索兜底；Pass B 跨章节与正文-表格自洽性核验；Pass C 章节感知的缺出处外部论断核验）
+   * - Stage 4：跨章节去重、严重度分级（critical / major / minor）与全局汇总
    */
   private async runFactChecker(
     userId: string,
     params: SubagentTaskParams,
     onProgress: SubagentProgress,
   ): Promise<VerificationReport> {
-    onProgress.step('正在提取文档正文与关键临床论断...', 'info')
+    onProgress.step('正在按章节解析文档结构、表格数值摘要与关键临床论断 (Stage 1 & 2)...', 'info')
     const docId = params.doc_id
     if (!docId) {
       throw new Error('质控核查专家必须指定 doc_id 目标文档')
@@ -433,10 +446,11 @@ export class SubagentService {
     const phiFindings = scanPhi(docText)
     const phiDetected = phiFindings.length > 0
 
-    // 2. 论断核对与数字比对（分页拉取全部论断）
-    onProgress.step('正在核对带引用论断与文献摘要的忠实度...', 'info')
+    // 2. 分页拉取全部论断与表格摘要（Stage 1 & Stage 2）
+    onProgress.step('正在执行多维专项核查：外部文献对齐、正文-表格自洽性与缺出处溯源 (Stage 3)...', 'info')
     const allClaims: Awaited<ReturnType<ClaimService['evidence']>>['claims'] = []
     const allUnsourced: Awaited<ReturnType<ClaimService['evidence']>>['unsourced'] = []
+    let docTables: TableSummary[] = []
     let cursor: number | undefined = 0
     while (cursor !== undefined) {
       const page: Awaited<ReturnType<ClaimService['evidence']>> = await this.deps.claims.evidence(docId, cursor).catch(() => ({
@@ -449,30 +463,43 @@ export class SubagentService {
       allClaims.push(...(page.claims ?? []))
       if (cursor === 0) {
         allUnsourced.push(...(page.unsourced ?? []))
+        if (page.tables) docTables = page.tables
       }
       cursor = page.next_cursor !== null && page.next_cursor !== undefined ? page.next_cursor : undefined
     }
+    if (docTables.length === 0) {
+      try {
+        docTables = extractTableSummaries(doc)
+      } catch {}
+    }
 
     const sectionFilter = params.section?.trim()
+    const matchesSection = (item: { node_id: string; sentence: string; section_title?: string }) =>
+      item.node_id === sectionFilter ||
+      Boolean(item.section_title && item.section_title.includes(sectionFilter!)) ||
+      item.sentence.includes(sectionFilter!)
+
     const claims =
-      sectionFilter && allClaims.some(c => c.node_id === sectionFilter || c.sentence.includes(sectionFilter))
-        ? allClaims.filter(c => c.node_id === sectionFilter || c.sentence.includes(sectionFilter))
+      sectionFilter && allClaims.some(matchesSection)
+        ? allClaims.filter(matchesSection)
         : allClaims
     const unsourced =
-      sectionFilter && allUnsourced.some(u => u.node_id === sectionFilter || u.sentence.includes(sectionFilter))
-        ? allUnsourced.filter(u => u.node_id === sectionFilter || u.sentence.includes(sectionFilter))
+      sectionFilter && allUnsourced.some(matchesSection)
+        ? allUnsourced.filter(matchesSection)
         : allUnsourced
 
     const existingChecks = new Map(
       this.deps.store.listClaimChecks(docId).map(chk => [chk.claim_id, chk]),
     )
 
-    const issues: ClaimCheckIssue[] = []
+    const rawIssues: ClaimCheckIssue[] = []
     const reportBatch: Array<{ claim_id: string; verdict: 'supported' | 'unsupported' | 'missing_citation'; reason: string }> = []
     let supportedCount = 0
     let unsupportedCount = 0
     let unclearCount = 0
+    let liveGroundedCount = 0
 
+    // —— Stage 3 Pass A：外部文献对齐（含数值等价性 74% <-> 0.74、效应方向矛盾检测与实时检索补全） ——
     for (const c of claims) {
       const existing = existingChecks.get(c.claim_id)
       if (existing?.verdict === 'exempted') {
@@ -480,28 +507,53 @@ export class SubagentService {
         continue
       }
 
+      const tier = c.verification_tier ?? classifyVerificationTier(c.sentence, c.citations.length, c.section_role ?? 'other')
+      let citationsText = c.citations.map(x => `${x.reference} ${x.abstract ?? ''} ${x.fulltext?.passages.join(' ') ?? ''}`).join(' ')
+
       if (c.no_abstract) {
-        unclearCount++
-        continue
+        // 对缺少摘要的高优先级引文尝试通过 PubMed / OpenAlex 实时检索补全摘要证据（最多 2 处）
+        if (liveGroundedCount < 2 && c.citations.length > 0) {
+          const grounded = await this.groundCitationAbstract(c.citations)
+          if (grounded) {
+            citationsText += ` ${grounded}`
+            liveGroundedCount++
+          }
+        }
+        if (citationsText.trim().length <= 50) {
+          unclearCount++
+          continue
+        }
       }
 
-      // 提取句子中的数字指标（如 76.5%、HR 0.65、p=0.01），排除 4 位年份（19xx / 20xx）
-      const rawNumbers = c.sentence.match(/\b\d+(?:\.\d+)?%?|\bHR\s*=?\s*\d+(?:\.\d+)?/gi) ?? []
+      // 剥离句内引用标号 [1] 及图表编号（表 1 / Table 1 / Fig 2）后再提取数值指标，排除 4 位年份（19xx / 20xx）
+      const sentenceWithoutMarkers = c.sentence
+        .replace(/\[\d+(?:\s*[,，\-–]\s*\d+)*\]/g, ' ')
+        .replace(/(?:表|图|\bTable|\bFig(?:ure)?\.?)\s*\d+/gi, ' ')
+      const rawNumbers = sentenceWithoutMarkers.match(/\b\d+(?:\.\d+)?[%％]?|\b(?:HR|OR|RR)\s*=?\s*\d+(?:\.\d+)?/gi) ?? []
       const numbersInSentence = rawNumbers.filter(num => !/^(?:19|20)\d{2}$/.test(num.trim()))
-      const citationsText = c.citations.map(x => `${x.reference} ${x.abstract ?? ''} ${x.fulltext?.passages.join(' ') ?? ''}`).join(' ')
 
-      // 如果句中有明确数值指标，但引用的摘要/全文中找不到该数值，判定为数字偏差风险
-      const missingNumbers = numbersInSentence.filter(num => !citationsText.includes(num))
-      if (missingNumbers.length > 0 && citationsText.length > 50) {
+      // 核对数值等价性（支持 74% <-> 0.74、尾随零 0.50 <-> 0.5 等）
+      const missingNumbers = numbersInSentence.filter(num => !this.isNumberMatchedInEvidence(num, citationsText))
+      const directionConflict = this.detectDirectionalityContradiction(c.sentence, citationsText)
+
+      if ((missingNumbers.length > 0 || directionConflict) && citationsText.length > 50) {
         unsupportedCount++
+        const reason = missingNumbers.length > 0
+          ? `正文中提及的数值 [${missingNumbers.join(', ')}] 未在所引文献摘要或结果中核验到对应出处${directionConflict ? `；且${directionConflict}` : ''}。`
+          : `正文结论方向与所引文献矛盾：${directionConflict}。`
+        const severity: IssueSeverity = tier === 'high' ? 'critical' : 'major'
         const issue: ClaimCheckIssue = {
           claim_id: c.claim_id,
           sentence: c.sentence,
           verdict: 'unsupported',
-          reason: `正文中提及的数值 [${missingNumbers.join(', ')}] 未在所引文献摘要或结果中核验到对应出处。`,
-          suggestion: `核实数值是否与原始文献一致，或补充对应临床试验来源。`,
+          reason,
+          suggestion: `核实数值与效应方向是否与原始文献一致，或补充对应临床试验来源。`,
+          severity,
+          category: 'literature_mismatch',
+          ...(c.section_title ? { section_title: c.section_title } : {}),
+          verification_tier: tier,
         }
-        issues.push(issue)
+        rawIssues.push(issue)
         reportBatch.push({
           claim_id: c.claim_id,
           verdict: 'unsupported',
@@ -519,18 +571,47 @@ export class SubagentService {
       }
     }
 
-    // 缺出处的数值句：自动挂载评论以便用户直接在「评论」面板处理或标为临床经验
-    for (const u of unsourced.slice(0, 5)) {
+    // —— Stage 3 Pass B：跨章节与正文-表格内部自洽性核查（样本量 N、表内百分比引用对齐） ——
+    const internalIssues = this.auditInternalConsistency(doc, docTables)
+    for (const intIss of internalIssues) {
+      rawIssues.push(intIss)
+    }
+
+    // —— Stage 3 Pass C：章节角色感知的缺出处外部论断核查 + 实时候选文献推荐 ——
+    const prioritizedUnsourced = [...unsourced].sort((a, b) => {
+      const rankRole = (r?: SectionRole) => (r === 'intro' || r === 'discussion' ? 0 : r === 'other' ? 1 : 2)
+      const rankTier = (t?: string) => (t === 'high' ? 0 : t === 'medium' ? 1 : 2)
+      return rankRole(a.section_role) - rankRole(b.section_role) || rankTier(a.verification_tier) - rankTier(b.verification_tier)
+    })
+
+    for (const u of prioritizedUnsourced.slice(0, 5)) {
       const existing = existingChecks.get(u.claim_id)
       if (existing?.verdict === 'exempted') continue
       unclearCount++
+      const tier = u.verification_tier ?? classifyVerificationTier(u.sentence, 0, u.section_role ?? 'other')
+      let candidateCitations: ClaimCheckIssue['candidate_citations']
+      if (liveGroundedCount < 2 && (tier === 'high' || EXTERNAL_STUDY_CUE.test(u.sentence))) {
+        const candidates = await this.groundUnsourcedClaim(u.sentence)
+        if (candidates.length > 0) {
+          candidateCitations = candidates
+          liveGroundedCount++
+        }
+      }
       const reason = '该句包含具体临床统计数值，但缺少明确的参考文献引用标注。'
-      issues.push({
+      const candidateHint = candidateCitations?.length
+        ? ` 检索到候选文献：${candidateCitations.map(c => `${c.title}${c.pmid ? ` (PMID:${c.pmid})` : ''}`).join('；')}`
+        : ''
+      rawIssues.push({
         claim_id: u.claim_id,
         sentence: u.sentence,
         verdict: 'no_evidence',
         reason,
-        suggestion: '建议补充权威文献支撑或声明为本研究队列数据。',
+        suggestion: `建议补充权威文献支撑或声明为本研究队列数据。${candidateHint}`.trim(),
+        severity: u.section_role === 'intro' || u.section_role === 'discussion' || EXTERNAL_STUDY_CUE.test(u.sentence) ? 'major' : 'minor',
+        category: 'missing_citation',
+        ...(u.section_title ? { section_title: u.section_title } : {}),
+        verification_tier: tier,
+        ...(candidateCitations ? { candidate_citations: candidateCitations } : {}),
       })
       reportBatch.push({
         claim_id: u.claim_id,
@@ -547,34 +628,62 @@ export class SubagentService {
       }
     }
 
-    // 若检出 PHI 隐私数据，同样加入问题清单
+    // 若检出 PHI 隐私数据，作为最高严重度（critical）加入问题清单
     if (phiDetected) {
       for (const f of phiFindings.slice(0, 5)) {
-        issues.push({
+        rawIssues.push({
           sentence: f.redacted || f.description,
           verdict: 'unsupported',
           reason: `检出疑似患者敏感个人健康信息（${f.description}）`,
           suggestion: '请立即脱敏或移除患者个人身份信息（PHI）。',
+          severity: 'critical',
+          category: 'phi_leak',
         })
       }
     }
 
+    // —— Stage 4：全局合成、跨章节重复问题去重与严重度排序 ——
+    const seenKeys = new Set<string>()
+    const issues: ClaimCheckIssue[] = []
+    for (const iss of rawIssues) {
+      const normKey = `${iss.category ?? iss.verdict}:${iss.sentence.replace(/\s+/g, '').toLowerCase()}`
+      if (seenKeys.has(normKey)) continue
+      seenKeys.add(normKey)
+      issues.push(iss)
+    }
+    const severityOrder: Record<IssueSeverity, number> = { critical: 0, major: 1, minor: 2 }
+    issues.sort((a, b) => severityOrder[a.severity ?? 'minor'] - severityOrder[b.severity ?? 'minor'])
+
     const totalAudited = claims.length + unsourced.length
     let verdict: 'pass' | 'warning' | 'fail' = 'pass'
-    if (phiDetected || unsupportedCount > 0) {
+    if (phiDetected || unsupportedCount > 0 || internalIssues.some(i => i.severity === 'critical')) {
       verdict = 'fail'
     } else if (issues.length > 0) {
       verdict = 'warning'
     }
 
-    onProgress.step(`质控审核完成：${supportedCount} 条论断吻合，${issues.length} 处需关注（裁定: ${verdict.toUpperCase()}）`, verdict === 'pass' ? 'ok' : 'warn')
+    onProgress.step(
+      `质控审核完成 (Stage 4)：${supportedCount} 条论断吻合，${issues.length} 处需关注（裁定: ${verdict.toUpperCase()}）`,
+      verdict === 'pass' ? 'ok' : 'warn',
+    )
 
+    const severityTag = (s?: IssueSeverity) => (s === 'critical' ? '[严重]' : s === 'major' ? '[主要]' : '[次要]')
     const summary = [
       `【质控审查裁定】：${verdict === 'pass' ? '[通过] 全部核验通过 (Pass)' : verdict === 'warning' ? '[警告] 存在存疑点，建议复核 (Warning)' : '[未通过] 发现数据不符或隐私风险，需立即修正 (Fail)'}`,
-      `- 论断核验总量：${totalAudited} 处（文献支持：${supportedCount}，数据不符：${unsupportedCount}，缺出处：${unsourced.length}）`,
+      `- 论断核验总量：${totalAudited} 处（文献支持：${supportedCount}，数据不符：${unsupportedCount}，缺出处：${unsourced.length}${internalIssues.length > 0 ? `，正文-表格自洽异常：${internalIssues.length}` : ''}）`,
       `- PHI 患者隐私扫描：${phiDetected ? `[隐私告警] 检出 ${phiFindings.length} 处疑似敏感信息泄漏！` : '[通过] 未检出患者隐私数据'}`,
-      issues.length > 0 ? `\n【重点发现的问题清单】：\n` + issues.map((iss, i) => `${i + 1}. 「${iss.sentence}」\n   问题：${iss.reason}\n   建议：${iss.suggestion || '请核实修改'}`).join('\n') : '',
-    ].filter(Boolean).join('\n')
+      issues.length > 0
+        ? `\n【重点发现的问题清单】：\n` +
+          issues
+            .map(
+              (iss, i) =>
+                `${i + 1}. ${severityTag(iss.severity)}${iss.section_title ? `【${iss.section_title}】` : ''}「${iss.sentence}」\n   问题：${iss.reason}\n   建议：${iss.suggestion || '请核实修改'}`,
+            )
+            .join('\n')
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
 
     return {
       role: 'fact_checker',
@@ -583,10 +692,200 @@ export class SubagentService {
       supported_count: supportedCount,
       unsupported_count: unsupportedCount,
       unclear_count: unclearCount,
+      internal_inconsistency_count: internalIssues.length,
+      live_grounded_count: liveGroundedCount,
       phi_detected: phiDetected,
       phi_count: phiFindings.length,
       issues,
       summary,
+    }
+  }
+
+  /**
+   * Stage 3 Pass A 辅助：判断正文中的数值（如 74%、0.74、HR=0.65、1,250）是否在所引文献证据中匹配（含百分比与小数等价性）。
+   */
+  private isNumberMatchedInEvidence(rawNum: string, evidenceText: string): boolean {
+    const trimmed = rawNum.trim()
+    if (!trimmed) return true
+    if (evidenceText.includes(trimmed)) return true
+
+    // 提取纯数字/百分比核心部分（如 "HR=0.65" -> "0.65"）
+    const coreMatch = /(\d+(?:,\d{3})*(?:\.\d+)?)\s*([%％])?/.exec(trimmed)
+    if (!coreMatch || !coreMatch[1]) return evidenceText.includes(trimmed)
+
+    const numPart = coreMatch[1].replace(/,/g, '')
+    const isPercent = Boolean(coreMatch[2])
+    const val = Number(numPart)
+    if (Number.isNaN(val)) return evidenceText.includes(trimmed)
+
+    // 1. 直接匹配去逗号数字或规范化小数（如 12.0 <-> 12，0.50 <-> 0.5）
+    if (evidenceText.includes(numPart) || evidenceText.includes(String(val))) return true
+
+    // 2. 百分比与小数等价转换（如 74% <-> 0.74，74.5% <-> 0.745）
+    if (isPercent && val > 0 && val <= 100) {
+      const dec = val / 100
+      const candidates = [
+        dec.toFixed(2),
+        dec.toFixed(3),
+        String(Number(dec.toFixed(4))),
+        `${val.toFixed(1)}%`,
+        `${Math.round(val)}%`,
+      ]
+      if (candidates.some(c => evidenceText.includes(c))) return true
+    } else if (!isPercent && val > 0 && val < 1) {
+      const pct = Number((val * 100).toFixed(2))
+      const candidates = [`${pct}%`, `${pct.toFixed(1)}%`, `${Math.round(pct)}%`]
+      if (candidates.some(c => evidenceText.includes(c))) return true
+    }
+
+    return false
+  }
+
+  /**
+   * Stage 3 Pass A 辅助：检测正文效应方向（显著改善/降低）与文献摘要（无显著差异）是否存在直接方向性矛盾。
+   */
+  private detectDirectionalityContradiction(sentence: string, evidenceText: string): string | null {
+    const claimsPositiveSignificance =
+      /(?:显著(?:降低|延长|改善|提高|优于|减少)|明显(?:降低|延长|改善|优于)|\bsignificantly\s+(?:reduced|improved|prolonged|increased|lowered|decreased)\b)/i.test(
+        sentence,
+      )
+    const evidenceStatesNoSignificance =
+      /(?:无显著(?:性)?差异|差异无统计学意义|未见显著差异|\bno\s+statistically\s+significant\s+difference\b|\bno\s+significant\s+difference\b|\bdid\s+not\s+significantly\s+(?:reduce|improve|prolong|differ)\b)/i.test(
+        evidenceText,
+      )
+    if (claimsPositiveSignificance && evidenceStatesNoSignificance) {
+      return '正文声称存在显著效应，但所引文献报告差异无统计学意义（no significant difference）'
+    }
+    return null
+  }
+
+  /**
+   * Stage 3 Pass B：跨章节与正文-表格内部自洽性核查（比对正文样本量 N 与表格样本量 N、表 1 引用百分比对齐）。
+   */
+  private auditInternalConsistency(doc: any, tables: TableSummary[]): ClaimCheckIssue[] {
+    const issues: ClaimCheckIssue[] = []
+    if (!tables || tables.length === 0) return issues
+
+    const allTableSampleSizes = new Set<number>()
+    const allTableNumbers = new Set<string>()
+    for (const t of tables) {
+      for (const n of t.sample_sizes) allTableSampleSizes.add(n)
+      for (const num of t.numbers) allTableNumbers.add(num)
+    }
+    const sumOfSubgroupN =
+      tables[0] && tables[0].sample_sizes.length >= 2
+        ? tables[0].sample_sizes.reduce((acc, v) => acc + v, 0)
+        : 0
+    if (sumOfSubgroupN > 0) allTableSampleSizes.add(sumOfSubgroupN)
+
+    let currentSectionTitle = ''
+    const visit = (node: any, inTable: boolean) => {
+      if (!node) return
+      if (node.type?.name === 'table') return
+      if (node.type?.name === 'heading' && !inTable) {
+        const h = String(node.textContent ?? '').trim()
+        if (h) currentSectionTitle = h
+        return
+      }
+      if (!node.isTextblock) {
+        if (typeof node.forEach === 'function') {
+          node.forEach((child: any) => visit(child, inTable))
+        }
+        return
+      }
+      const text = String(node.textContent ?? '').trim()
+      if (!text) return
+
+      // 1. 核对正文声明的总样本量 N 与表格样本量是否矛盾
+      if (allTableSampleSizes.size > 0) {
+        const cohortMatch =
+          /(?:本研究|研究|本队列|共|总计|最终)\s*(?:共)?(?:纳入|入组|收集|分析)[^\d。！？；!?]{0,10}(\d+)\s*例/.exec(text) ??
+          /\b(?:enrolled|included|analyzed)\s+(?:a\s+total\s+of\s+)?(\d+)\s+(?:patients|subjects|cases|participants)\b/i.exec(text)
+        if (cohortMatch && cohortMatch[1]) {
+          const proseN = Number(cohortMatch[1])
+          if (proseN > 0 && !allTableSampleSizes.has(proseN) && !allTableNumbers.has(String(proseN))) {
+            issues.push({
+              sentence: text,
+              verdict: 'unsupported',
+              reason: `正文声明的总样本量（${proseN} 例）与文档表格中声明的样本量（N=${[...allTableSampleSizes].join(' / ')}）不一致。`,
+              suggestion: '请核对正文与 Table 1 基线表中的总样本量 N 及亚组样本量加总是否一致。',
+              severity: 'critical',
+              category: 'internal_inconsistency',
+              ...(currentSectionTitle ? { section_title: currentSectionTitle } : {}),
+              verification_tier: 'high',
+            })
+          }
+        }
+      }
+
+      // 2. 核对明确引用「表 1 / Table 1」的句子中的百分比是否出现在表格中
+      if (/(?:表\s*1\b|\bTable\s*1\b)/i.test(text) && tables[0] && tables[0].numbers.length > 0) {
+        const pctMatches = text.match(/\b\d+(?:\.\d+)?[%％]/g) ?? []
+        const tableEvidence = tables[0].numbers.join(' ')
+        const missingPcts = pctMatches.filter(p => !this.isNumberMatchedInEvidence(p, tableEvidence))
+        if (pctMatches.length > 0 && missingPcts.length === pctMatches.length) {
+          issues.push({
+            sentence: text,
+            verdict: 'unsupported',
+            reason: `正文引用表 1 描述的百分比 [${missingPcts.join(', ')}] 与表 1 单元格中的实际数值不符。`,
+            suggestion: '请对照表 1 核实该变量的实际频数与百分比。',
+            severity: 'major',
+            category: 'internal_inconsistency',
+            ...(currentSectionTitle ? { section_title: currentSectionTitle } : {}),
+            verification_tier: 'high',
+          })
+        }
+      }
+    }
+
+    if (typeof doc?.forEach === 'function') {
+      doc.forEach((child: any) => visit(child, false))
+    }
+    return issues
+  }
+
+  /**
+   * Stage 3/4 实时检索兜底：当文档中的引用没有缓存摘要时，提取标题关键词通过 PubMed / OpenAlex 检索补全摘要。
+   */
+  private async groundCitationAbstract(
+    citations: Array<{ reference: string; abstract: string | null }>,
+  ): Promise<string | null> {
+    const ref = citations[0]?.reference?.trim()
+    if (!ref || !this.deps.pubmed || typeof this.deps.pubmed.search !== 'function') return null
+    try {
+      const results = await this.deps.pubmed.search(ref.slice(0, 120), 1)
+      const hit = results?.[0]
+      if (hit?.pmid && typeof this.deps.pubmed.abstract === 'function') {
+        const abs = await this.deps.pubmed.abstract(hit.pmid)
+        if (abs) return abs
+      }
+    } catch {}
+    return null
+  }
+
+  /**
+   * Stage 3/4 实时检索兜底：针对缺出处的外部定量论断，检索候选权威文献供作者核对引用。
+   */
+  private async groundUnsourcedClaim(
+    sentence: string,
+  ): Promise<Array<{ pmid?: string | null; doi?: string | null; title: string; year?: string | number }>> {
+    if (!this.deps.pubmed || typeof this.deps.pubmed.search !== 'function') return []
+    try {
+      const q = sentence
+        .replace(/[^\w\u4e00-\u9fa5\s.-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 90)
+      if (q.length < 6) return []
+      const hits = await this.deps.pubmed.search(q, 2)
+      return (hits ?? []).slice(0, 2).map(h => ({
+        pmid: h.pmid ?? null,
+        doi: h.doi ?? null,
+        title: h.title,
+        year: h.year,
+      }))
+    } catch {
+      return []
     }
   }
 

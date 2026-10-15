@@ -52,12 +52,20 @@ export interface StatisticalBundle {
   clinical_interpretation: string
 }
 
+export type IssueSeverity = 'critical' | 'major' | 'minor'
+export type IssueCategory = 'literature_mismatch' | 'internal_inconsistency' | 'missing_citation' | 'phi_leak'
+
 export interface ClaimCheckIssue {
   claim_id?: string
   sentence: string
   verdict: 'unsupported' | 'unclear' | 'no_evidence'
   reason: string
   suggestion?: string
+  severity?: IssueSeverity
+  category?: IssueCategory
+  section_title?: string
+  verification_tier?: 'light' | 'medium' | 'high'
+  candidate_citations?: Array<{ pmid?: string | null; doi?: string | null; title: string; year?: string | number }>
 }
 
 export interface VerificationReport {
@@ -67,6 +75,8 @@ export interface VerificationReport {
   supported_count: number
   unsupported_count: number
   unclear_count: number
+  internal_inconsistency_count?: number
+  live_grounded_count?: number
   phi_detected: boolean
   phi_count: number
   issues: ClaimCheckIssue[]

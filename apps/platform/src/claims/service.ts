@@ -5,11 +5,18 @@ import { relevantPassages, type FullTextClient } from '../literature/fulltext.ts
 import type { PubMedClient } from '../literature/pubmed.ts'
 import type { ClaimVerdict } from '../store/db.ts'
 import { citationOrder } from '../views/read.ts'
-import { extractClaims, type Claim } from './extract.ts'
+import {
+  extractClaims,
+  extractTableSummaries,
+  type Claim,
+  type SectionRole,
+  type TableSummary,
+  type VerificationTier,
+} from './extract.ts'
 
 /**
  * 论断核对（M1，PLATFORM.md §5.5）。分工：
- * - 平台：抽出带引用的句子与「缺出处」的数值句，为每条引用取 PubMed 摘要作为证据（缓存）；
+ * - 平台：抽出带引用的句子与「缺出处」的数值句，附带章节角色（Stage 1）、核查预算分级（Stage 2）与全表数值摘要，为每条引用取 PubMed 摘要作为证据（缓存）；
  * - 调用方模型：逐条判断「支持 / 不支持 / 无法判断」，经 claim_report 提交；
  * - 平台：不支持、无法判断、缺出处的论断以 AI 评论挂到该句，由用户决定是否修改（不自动改写）。
  */
@@ -30,11 +37,14 @@ export function fitAbstract(abstract: string, max = ABSTRACT_MAX): string {
 
 /**
  * 论断核对的判定标准（verifyPrompt 与 C2 评测共用，改这里两边一起变）。
- * v3（2026-10-03，按 C2 评测）：理由里指出不符就必须判不支持；没有可核对的证据单独标出，不逐句挂评论；理由用中文。
+ * v4（Google PAT 四阶段学术审稿工作流）：
+ * - 关注数值等价性（如 74% 与 0.74）与效应方向性矛盾；
+ * - 结合章节角色（section_role）与核查预算分级（verification_tier: high/medium/light）分配审查力度；
+ * - 理由用中文，明确给出【建议修改为】纠正文本。
  */
 export const CLAIM_CRITERIA =
   '逐条只依据所引文献的摘要（以及给出的开放获取全文与表格片段）判断，不凭记忆补充：' +
-  'supported = 摘要或全文/表格支持该句的说法与数字；' +
+  'supported = 摘要或全文/表格支持该句的说法与数字（注意百分比与小数等价性，如 74% 与 0.74 视为一致）；' +
   'unsupported = 摘要或全文/表格与该句矛盾，或数字、结论、人群、药物 / 干预、效应方向任何一处对不上——只要你的理由里指出了某处不符，结论就必须是 unsupported，不能是 unclear；若为特定亚组/分层，请对照对应表格列核对；' +
   'unclear = 证据涉及该句的内容，但信息不足以确认或否定。' +
   '没有摘要和全文片段，或它们根本没涉及该句说的内容时，判 unclear 并标 no_evidence=true（这类不会逐句挂评论，只在总结里汇总）。' +
@@ -44,6 +54,9 @@ export interface ClaimEvidence {
   claim_id: string
   node_id: string
   sentence: string
+  section_title?: string
+  section_role?: SectionRole
+  verification_tier?: VerificationTier
   citations: Array<{ cite_id: string; number: number | null; reference: string; abstract: string | null
     /** 开放获取全文里与该句最相关的片段（摘要之外的证据；没有开放全文时缺省）。 */
     fulltext?: { source: string; passages: string[] } }>
@@ -55,10 +68,12 @@ export interface ClaimEvidence {
 export class ClaimService {
   constructor(private readonly docs: Documents, private readonly pubmed: PubMedClient, private readonly fulltext: FullTextClient | null = null) {}
 
-  private extract(docId: string): { claims: Claim[]; unsourced: Claim[] } {
+  private extract(docId: string): { claims: Claim[]; unsourced: Claim[]; tables: TableSummary[] } {
     const doc = this.docs.get(docId)
     const order = citationOrder(doc)
-    return extractClaims(doc, new Map(order.map((id, i) => [id, i + 1])))
+    const { claims, unsourced } = extractClaims(doc, new Map(order.map((id, i) => [id, i + 1])))
+    const tables = extractTableSummaries(doc)
+    return { claims, unsourced, tables }
   }
 
   private async abstractFor(doi: string, pmid: string | null): Promise<string | null> {
@@ -76,9 +91,23 @@ export class ClaimService {
     return abstract
   }
 
-  /** 一页待核对的论断（带证据）+ 缺出处的数值句。 */
-  async evidence(docId: string, cursor = 0): Promise<{ rev: number; claims: ClaimEvidence[]; unsourced: Array<{ claim_id: string; node_id: string; sentence: string }>; total: number; next_cursor: number | null }> {
-    const { claims, unsourced } = this.extract(docId)
+  /** 一页待核对的论断（带证据）+ 缺出处的数值句 + 文档表格数值摘要（首页）。 */
+  async evidence(docId: string, cursor = 0): Promise<{
+    rev: number
+    claims: ClaimEvidence[]
+    unsourced: Array<{
+      claim_id: string
+      node_id: string
+      sentence: string
+      section_title?: string
+      section_role?: SectionRole
+      verification_tier?: VerificationTier
+    }>
+    tables?: TableSummary[]
+    total: number
+    next_cursor: number | null
+  }> {
+    const { claims, unsourced, tables } = this.extract(docId)
     const store = this.docs.store
     const cites = new Map(store.listCitations(docId).map(c => [c.id, c]))
     const order = citationOrder(this.docs.get(docId))
@@ -99,13 +128,31 @@ export class ClaimService {
       }
       const last = store.getClaimCheck(docId, c.claim_id)?.verdict
       const noAbstract = citations.every(x => !x.abstract && !x.fulltext)
-      out.push({ claim_id: c.claim_id, node_id: c.node_id, sentence: c.sentence, citations, ...(noAbstract ? { no_abstract: true as const } : {}), ...(last ? { last_verdict: last } : {}) })
+      out.push({
+        claim_id: c.claim_id,
+        node_id: c.node_id,
+        sentence: c.sentence,
+        ...(c.section_title ? { section_title: c.section_title } : {}),
+        ...(c.section_role ? { section_role: c.section_role } : {}),
+        ...(c.verification_tier ? { verification_tier: c.verification_tier } : {}),
+        citations,
+        ...(noAbstract ? { no_abstract: true as const } : {}),
+        ...(last ? { last_verdict: last } : {}),
+      })
     }
     const next = cursor + PAGE < claims.length ? cursor + PAGE : null
     return {
       rev: this.docs.rev(docId),
       claims: out,
-      unsourced: cursor === 0 ? unsourced.map(u => ({ claim_id: u.claim_id, node_id: u.node_id, sentence: u.sentence })) : [],
+      unsourced: cursor === 0 ? unsourced.map(u => ({
+        claim_id: u.claim_id,
+        node_id: u.node_id,
+        sentence: u.sentence,
+        ...(u.section_title ? { section_title: u.section_title } : {}),
+        ...(u.section_role ? { section_role: u.section_role } : {}),
+        ...(u.verification_tier ? { verification_tier: u.verification_tier } : {}),
+      })) : [],
+      ...(cursor === 0 && tables.length > 0 ? { tables } : {}),
       total: claims.length,
       next_cursor: next,
     }
@@ -182,14 +229,15 @@ export class ClaimService {
   }
 }
 
-/** 「核对全部论断」回合的提示。 */
+/** 「核对全部论断」回合的提示（基于 Google PAT 四阶段多智能体学术审查工作流）。 */
 export function verifyPrompt(docId: string): string {
   return (
-    `请核对并审查文档 ${docId}，只把真正有问题、需要作者注意的地方挂为评论，不直接修改正文：\n` +
-    `1. 带引用论断核对：调用 verify_claims（doc_id="${docId}"），按 next_cursor 翻页直到取完；${CLAIM_CRITERIA}每页判断完用 claim_report 提交；\n` +
-    `2. 全文语义理解与数据自洽性审查：结合 doc_read 通读全文与表格，通过语义理解甄别潜在问题——\n` +
-    `   - 对本研究自身队列/病例数据、样本量、自报基线表格（如 Table 1），原本就不应挂外部文献引用，若无异常切勿挂任何评论（不要机械判为 missing_citation）；\n` +
-    `   - 若发现真正的问题（例如：① 引言/讨论引述外部既往研究或指南数据却漏标引用；② 表内百分比加总异常、频数与总样本量 N 的分母不一致；③ 正文描述与表/图中的数字矛盾；④ 统计量与 P 值/置信区间前后矛盾），请用 comment_add（或对 unsourced 外部论断用 claim_report）在对应块/片段上直接挂载评论说明原因与建议；\n` +
-    `3. 最后用两三句话总结核对结果：几处文献不支持或数据异常（已挂评论）、几处缺少可核对的摘要证据。`
+    `请按四阶段学术审稿工作流核对并审查文档 ${docId}，只把真正有问题、需要作者注意的地方挂为评论，不直接修改正文：\n` +
+    `1. [Stage 1 & 2 章节感知与预算分级核对]：调用 verify_claims（doc_id="${docId}"），按 next_cursor 翻页直到取完；结合每条论断的 section_role（intro/methods/results/discussion）与 verification_tier（high/medium/light）分配审查力度，重点深挖 high 级统计与定量论断；${CLAIM_CRITERIA}每页判断完用 claim_report 提交；\n` +
+    `2. [Stage 3 多维专项审查（文献对齐 / 正文-表格自洽 / 外部论断溯源）]：结合 verify_claims 返回的 tables 摘要与 doc_read 通读全文：\n` +
+    `   - Pass A（外部文献对齐）：核实数值（含百分比与小数等价性）及效应方向是否与所引文献一致；若文献缺失摘要，可调用 pubmed_search 实时检索补全证据；\n` +
+    `   - Pass B（跨章节与正文-表格自洽）：核对摘要、方法、结果及表格（如 Table 1）之间的总样本量 N、亚组频数/百分比加总、HR/OR/P 值是否前后一致；\n` +
+    `   - Pass C（缺出处外部论断甄别）：对本研究自身队列、方法与结果数据切勿机械判为 missing_citation；对引言/讨论中引述外部研究或指南数据却漏标引用的句子，用 claim_report 标记并可通过 pubmed_search 推荐候选文献；\n` +
+    `3. [Stage 4 全局汇总与严重度分级]：对跨章节重复问题去重，按严重度（严重 Critical / 主要 Major / 次要 Minor）在两三句话内总结核对结果。`
   )
 }
