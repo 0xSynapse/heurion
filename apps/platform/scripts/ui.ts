@@ -17,6 +17,9 @@ const doc = await api('/api/docs', { method: 'POST', body: JSON.stringify({ titl
 const browser = await chromium.launch({ channel: 'chromium' }).catch(() => chromium.launch())
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
 const errors: string[] = []; page.on('pageerror', e => errors.push(e.message)); page.on('console', m => { if (m.type() === 'error') errors.push(m.text()) })
+/** 文档与幻灯片列表、「新建幻灯片」在「写作」空间里；应用默认进入的是「患者」空间。 */
+const toWrite = async () => { if (await page.locator('#navDocs').getAttribute('aria-selected') !== 'true') await page.click('#navDocs') }
+const reload = async () => { await page.reload(); await toWrite() }
 await page.goto(B + '/app')
 // 没有令牌时是登录页；测试用开发令牌（开发模式）
 ok('未登录时显示登录页', await page.locator('#authScreen').isVisible())
@@ -24,6 +27,7 @@ await page.evaluate(t => localStorage.setItem('heurion.token', t), process.env.H
 await page.reload()
 await page.waitForSelector('.welcome')
 ok('打开文档前显示欢迎页', await page.locator('.welcome .welcome-card').count() === 3)
+await toWrite()
 await page.click(`li[data-id="${doc.id}"]`)
 await page.waitForSelector('.ProseMirror p')
 await page.waitForFunction(() => document.getElementById('syncStatus')!.textContent === '已同步')
@@ -128,7 +132,7 @@ ok('导出 docx 含图片', docx.ok && (await docx.arrayBuffer()).byteLength > 0
 // 幻灯片：新建 → 查看器渲染页面与形状；精确预览（有渲染环境时）
 const deck = await api('/api/docs', { method: 'POST', body: JSON.stringify({ title: 'UI 幻灯片 ' + Date.now(), kind: 'deck' }) })
 await api(`/api/docs/${deck.id}/edit`, { method: 'POST', body: JSON.stringify({ base_rev: 0, ops: [{ op: 'add_slide', after: (await api(`/api/docs/${deck.id}/deck`)).doc.content[0].attrs.id, title: '研究设计', body: '- 多中心随机双盲\n- 17,604 例' }] }) })
-await page.reload()
+await reload()
 await page.click(`li[data-id="${deck.id}"]`)
 await page.waitForSelector('.slide .shape', { timeout: 5000 }).catch(() => {})
 ok('幻灯片查看器渲染页面与形状', await page.locator('.slide-wrap').count() === 2 && (await page.locator('.slide').nth(1).innerText()).includes('17,604 例'))
@@ -433,7 +437,7 @@ await page.route('**/api/images/search?*', r => r.fulfill({ json: { total: 2, pa
 ] } }))
 let photoPost: any = null
 await page.route('**/slides/*/photo', r => { photoPost = { url: r.request().url(), body: r.request().postDataJSON() }; return r.fulfill({ status: 201, json: { shape_id: 'x', asset_id: 'a', rev: 1, credit: { text: 'Photo by Ada Lab on Unsplash' } } }) })
-await page.reload()
+await reload()
 await page.click(`li[data-id="${deck.id}"]`)
 await page.waitForSelector('.slide .shape')
 await page.click('[data-dk="image"]')
@@ -451,6 +455,7 @@ await page.unroute('**/slides/*/photo')
 await remove(deck.id)
 
 // 新建幻灯片先选模板
+await toWrite()
 await page.click('#newDeck')
 await page.waitForSelector('.tpl-grid')
 await page.click('.tpl-card[data-tpl="paper"]')
@@ -464,7 +469,7 @@ await remove(created.id)
 
 // 长文档：三栏各自滚动，对话输入框始终在可视区域内（不被正文撑到页面最底下）
 const long = await api('/api/docs', { method: 'POST', body: JSON.stringify({ title: 'UI 长文档 ' + Date.now(), markdown: '# 长文档\n\n' + Array.from({ length: 80 }, (_, i) => `第 ${i + 1} 段：心力衰竭需要长期管理与随访。`).join('\n\n') }) })
-await page.reload()
+await reload()
 await page.click(`li[data-id="${long.id}"]`)
 await page.waitForSelector('.ProseMirror p')
 await wait(600)
@@ -477,7 +482,7 @@ const projName = 'UI 项目 ' + Date.now()
 const repoDoc = await api('/api/docs', { method: 'POST', body: JSON.stringify({ title: 'UI 仓库文档 ' + Date.now(), markdown: '# 仓库\n\n独特的检索词：沙库巴曲缬沙坦脑啡肽酶。' }) })
 const proj = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name: projName }) })
 await api(`/api/docs/${repoDoc.id}`, { method: 'PATCH', body: JSON.stringify({ project_id: proj.id }) })
-await page.reload()
+await reload()
 await page.waitForSelector(`li.group[data-project="${proj.id}"]`)
 ok('左栏按项目分组', await page.locator(`li.group[data-project="${proj.id}"] + li[data-id="${repoDoc.id}"]`).count() === 1)
 await wait(2600) // 全文索引防抖
@@ -547,7 +552,8 @@ await page.click('.rail-btn[data-space="research"]')
 await page.click('#datasetsBtn')
 await page.waitForSelector('#page.datasets-page .pg-head h1')
 ok('数据集是工作区页面（不是弹窗）', await page.locator('#dialog:not([hidden])').count() === 0 && await page.locator('#app.no-doc').count() === 1)
-await page.setInputFiles('#dsInput', { name: dsFile, mimeType: 'text/csv', buffer: Buffer.from('姓名,age,sex,bili\n张三,54,F,1.2\n李四,61,M,0.8\n王五,47,F,2.3\n赵六,70,M,1.1\n') })
+// 内容带时间戳：服务端对同一用户的相同文件去重，上次中途失败留下的数据集会让重跑拿不到身份信息确认步骤
+await page.setInputFiles('#dsInput', { name: dsFile, mimeType: 'text/csv', buffer: Buffer.from(`姓名,age,sex,bili\n张三,54,F,1.2\n李四,61,M,0.8\n王五,47,F,2.3\n赵六,70,M,1.1\n钱七,58,F,${(Date.now() % 1000) / 100}\n`) })
 await page.waitForSelector('#page.datasets-page #dsPhiOk', { timeout: 30000 }).catch(() => {})
 ok('上传后有身份信息列：直接进入详情页处理', await page.locator('#page.datasets-page .ds-phi').innerText().catch(() => '').then(t => t.includes('姓名')))
 await page.click('#dsPhiOk')

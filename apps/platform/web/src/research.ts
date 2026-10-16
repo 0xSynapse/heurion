@@ -125,6 +125,9 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
   // —— 研究页 ——
   let openStudySeq = 0
 
+  /** open() 进行中的标记（每次调用一个新对象，后一次覆盖前一次）。 */
+  let opening: object | null = null
+
   async function openStudy(id: string): Promise<void> {
     // 从研究里的文档回来、或在文档里点研究：先关掉文档（AI 栏收起，顶栏不再显示文档的东西）
     if (!$('page').classList.contains('study-page')) hooks.leaveDoc()
@@ -1834,11 +1837,22 @@ ${modelsDesc}
   return {
     async enter(): Promise<void> {
       await loadList()
+      // 正在从别处打开某个研究（open 先切空间再加载研究）：列表先回来时不能显示欢迎页，
+      // 否则 showWelcome 清掉 current，正在加载的研究会被当作已取消而不显示
+      if (opening) return
       if (current && $('page').classList.contains('study-page') && !$('page').classList.contains('rs-welcome')) return
       showWelcome()
     },
     leave(): void { current = null; if (poll) { clearTimeout(poll); poll = null } },
-    /** 从研究里的文档回到研究页 */
-    async open(id: string): Promise<void> { hooks.goSpace('research'); await openStudy(id) },
+    /** 从研究里的文档、数据集详情或患者页打开某个研究 */
+    async open(id: string): Promise<void> {
+      const token = opening = {}
+      try {
+        hooks.goSpace('research')
+        await openStudy(id)
+      } finally {
+        if (opening === token) opening = null
+      }
+    },
   }
 }

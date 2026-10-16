@@ -119,7 +119,8 @@ export function initCopilot(hooks: CopilotHooks) {
   }
 
   async function loadHistory() {
-    if (historyLoaded) return
+    // 未登录（登录页）时不预取：没有令牌必然 401；登录后页面会重新加载
+    if (historyLoaded || !hooks.token()) return
     try {
       const res = await fetch('/api/copilot/status', {
         headers: { Authorization: `Bearer ${hooks.token()}` },

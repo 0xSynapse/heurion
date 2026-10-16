@@ -2235,8 +2235,14 @@ function placeFab(): void {
   const fh = fr.height || 28
   let top = anchor.rect.top - main.top - fh - 8
   if (top < 8) top = anchor.rect.top - main.top + 28
+  let rawLeft = anchor.rect.left - main.left + anchor.rect.width / 2 - fw / 2
+  if (!anchor.snippet && !anchor.blocked) {
+    // 整个形状的评论：放在形状右侧（右边放不下就放左侧），不压住选中框顶部居中的拖动手柄
+    top = anchor.rect.top - main.top
+    const right = anchor.rect.left - main.left + anchor.rect.width + 8
+    rawLeft = right + fw <= main.width - 8 ? right : anchor.rect.left - main.left - fw - 8
+  }
   top = Math.max(8, Math.min(top, Math.max(8, main.height - fh - 8)))
-  const rawLeft = anchor.rect.left - main.left + anchor.rect.width / 2 - fw / 2
   const left = Math.max(8, Math.min(rawLeft, Math.max(8, main.width - fw - 8)))
   fab.style.top = `${Math.round(top)}px`
   fab.style.left = `${Math.round(left)}px`
