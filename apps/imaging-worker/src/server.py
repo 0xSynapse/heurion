@@ -919,6 +919,37 @@ def run_rtstruct_delineation_endpoint(req: RtStructRequest = Body(...)):
     except Exception as e:
         raise_http(e, "靶区外扩失败")
 
+ACTIVE_UPLOAD_JOBS: Dict[str, Dict[str, Any]] = {}
+
+
+def _update_upload_job(job_id: Optional[str], stage: str, percent: int, detail: str = "", status: str = "running"):
+    if not job_id:
+        return
+    now = time.time()
+    entry = ACTIVE_UPLOAD_JOBS.get(job_id) or {"job_id": job_id, "started_at": now}
+    entry.update({
+        "status": status,
+        "stage": stage,
+        "percent": int(percent),
+        "detail": detail,
+        "updated_at": now,
+    })
+    ACTIVE_UPLOAD_JOBS[job_id] = entry
+    if len(ACTIVE_UPLOAD_JOBS) > 200:
+        cutoff = now - 1800
+        for k in [k for k, v in list(ACTIVE_UPLOAD_JOBS.items()) if v.get("updated_at", 0) < cutoff]:
+            ACTIVE_UPLOAD_JOBS.pop(k, None)
+
+
+@app.get("/api/v1/analyze/jobs/{job_id}")
+async def get_upload_job_progress(job_id: str):
+    """Non-blocking endpoint returning live stage/percent telemetry for an in-flight upload analysis job."""
+    entry = ACTIVE_UPLOAD_JOBS.get(job_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return entry
+
+
 @app.post("/api/v1/analyze/upload")
 async def run_upload_analysis(
     file: UploadFile = File(...),
@@ -928,16 +959,24 @@ async def run_upload_analysis(
     mucus_max_hu: Optional[str] = Form(None),
     ham_threshold_hu: Optional[str] = Form(None),
     bar_cutoff: Optional[str] = Form(None),
+    job_id: Optional[str] = Form(None),
 ):
     """上传 .nii/.nii.gz/.dcm/.zip/.tar.gz 影像并运行指定模型（model_name 必填）。"""
     try:
-        return await _run_upload_analysis(file, model_name, window_preset, mucus_min_hu, mucus_max_hu, ham_threshold_hu, bar_cutoff)
+        return await _run_upload_analysis(
+            file, model_name, window_preset, mucus_min_hu, mucus_max_hu, ham_threshold_hu, bar_cutoff, job_id=job_id
+        )
     except Exception as e:
+        if job_id:
+            _update_upload_job(job_id, "推理异常中断", 100, str(e), status="failed")
         raise_http(e, "分析失败")
 
 
-async def _run_upload_analysis(file, model_name, window_preset, mucus_min_hu, mucus_max_hu, ham_threshold_hu, bar_cutoff):
+async def _run_upload_analysis(
+    file, model_name, window_preset, mucus_min_hu, mucus_max_hu, ham_threshold_hu, bar_cutoff, job_id: Optional[str] = None
+):
     filename = file.filename or ""
+    _update_upload_job(job_id, "接收并校验上传影像字节流", 10, f"正在读取 {filename} ...")
     content = await file.read()
     return await run_in_threadpool(
         _run_upload_analysis_sync,
@@ -949,10 +988,21 @@ async def _run_upload_analysis(file, model_name, window_preset, mucus_min_hu, mu
         mucus_max_hu,
         ham_threshold_hu,
         bar_cutoff,
+        job_id,
     )
 
 
-def _run_upload_analysis_sync(content: bytes, filename: str, model_name, window_preset, mucus_min_hu, mucus_max_hu, ham_threshold_hu, bar_cutoff):
+def _run_upload_analysis_sync(
+    content: bytes,
+    filename: str,
+    model_name,
+    window_preset,
+    mucus_min_hu,
+    mucus_max_hu,
+    ham_threshold_hu,
+    bar_cutoff,
+    job_id: Optional[str] = None,
+):
     fn_lower = filename.lower() if filename else ""
 
     f_mucus_min = parse_flexible_float(mucus_min_hu)
@@ -960,10 +1010,14 @@ def _run_upload_analysis_sync(content: bytes, filename: str, model_name, window_
     f_ham_thresh = parse_flexible_float(ham_threshold_hu)
     f_bar_cutoff = parse_flexible_float(bar_cutoff)
 
+    def _progress_cb(stage: str, pct: int, detail: str = ""):
+        _update_upload_job(job_id, stage, pct, detail, status="running")
+
     is_zip = fn_lower.endswith(".zip") or (len(content) >= 4 and content[:4] == b"PK\x03\x04")
     is_dicom_magic = len(content) >= 132 and content[128:132] == b"DICM"
 
     if is_zip:
+        _progress_cb("解包 DICOM ZIP 序列归档", 14, f"正在校验并解压 {filename} ...")
         with tempfile.TemporaryDirectory() as tmp_dir:
             zip_path = os.path.join(tmp_dir, "upload.zip")
             with open(zip_path, "wb") as f_out:
@@ -983,17 +1037,21 @@ def _run_upload_analysis_sync(content: bytes, filename: str, model_name, window_
             if os.path.exists(zip_path):
                 os.remove(zip_path)
             with INFERENCE_SEMAPHORE:
-                return engine.analyze_file(
+                res = engine.analyze_file(
                     file_path=tmp_dir,
                     model_name=model_name,
                     window_preset=window_preset,
                     mucus_min_hu=f_mucus_min,
                     mucus_max_hu=f_mucus_max,
                     ham_threshold_hu=f_ham_thresh,
-                    bar_cutoff=f_bar_cutoff
+                    bar_cutoff=f_bar_cutoff,
+                    progress_cb=_progress_cb,
                 )
+                _update_upload_job(job_id, "分析完成", 100, "已完成三维量化分析与关键截面生成", status="completed")
+                return res
     elif fn_lower.endswith((".tar.gz", ".tgz", ".tar")):
         import tarfile
+        _progress_cb("解包 TAR 序列归档", 14, f"正在校验并解压 {filename} ...")
         with tempfile.TemporaryDirectory() as tmp_dir:
             tar_path = os.path.join(tmp_dir, "upload.tar.gz")
             with open(tar_path, "wb") as f_out:
@@ -1016,15 +1074,18 @@ def _run_upload_analysis_sync(content: bytes, filename: str, model_name, window_
             if os.path.exists(tar_path):
                 os.remove(tar_path)
             with INFERENCE_SEMAPHORE:
-                return engine.analyze_file(
+                res = engine.analyze_file(
                     file_path=tmp_dir,
                     model_name=model_name,
                     window_preset=window_preset,
                     mucus_min_hu=f_mucus_min,
                     mucus_max_hu=f_mucus_max,
                     ham_threshold_hu=f_ham_thresh,
-                    bar_cutoff=f_bar_cutoff
+                    bar_cutoff=f_bar_cutoff,
+                    progress_cb=_progress_cb,
                 )
+                _update_upload_job(job_id, "分析完成", 100, "已完成三维量化分析与关键截面生成", status="completed")
+                return res
     elif fn_lower.endswith((".dcm", ".dicom", ".ima")) or is_dicom_magic:
         with tempfile.TemporaryDirectory() as tmp_dir:
             safe_filename = os.path.basename(filename or "slice.dcm") or "slice.dcm"
@@ -1036,15 +1097,18 @@ def _run_upload_analysis_sync(content: bytes, filename: str, model_name, window_
             with open(dcm_path, "wb") as f_out:
                 f_out.write(content)
             with INFERENCE_SEMAPHORE:
-                return engine.analyze_file(
+                res = engine.analyze_file(
                     file_path=tmp_dir,
                     model_name=model_name,
                     window_preset=window_preset,
                     mucus_min_hu=f_mucus_min,
                     mucus_max_hu=f_mucus_max,
                     ham_threshold_hu=f_ham_thresh,
-                    bar_cutoff=f_bar_cutoff
+                    bar_cutoff=f_bar_cutoff,
+                    progress_cb=_progress_cb,
                 )
+                _update_upload_job(job_id, "分析完成", 100, "已完成三维量化分析与关键截面生成", status="completed")
+                return res
     else:
         is_gz = fn_lower.endswith((".nii.gz", ".gz")) or (len(content) >= 2 and content[:2] == b"\x1f\x8b")
         suffix = ".nii.gz" if is_gz else ".nii"
@@ -1053,15 +1117,18 @@ def _run_upload_analysis_sync(content: bytes, filename: str, model_name, window_
             tmp_path = tmp.name
         try:
             with INFERENCE_SEMAPHORE:
-                return engine.analyze_file(
+                res = engine.analyze_file(
                     file_path=tmp_path,
                     model_name=model_name,
                     window_preset=window_preset,
                     mucus_min_hu=f_mucus_min,
                     mucus_max_hu=f_mucus_max,
                     ham_threshold_hu=f_ham_thresh,
-                    bar_cutoff=f_bar_cutoff
+                    bar_cutoff=f_bar_cutoff,
+                    progress_cb=_progress_cb,
                 )
+                _update_upload_job(job_id, "分析完成", 100, "已完成三维量化分析与关键截面生成", status="completed")
+                return res
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)

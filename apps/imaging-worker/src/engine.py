@@ -564,7 +564,10 @@ class MonaiNeuralInferencePipeline:
         eff_invert_probs = bool(invert_probabilities) and not is_cpu and int(vol_zyx.shape[0]) > 2
 
         nii_path = write_canonical_nifti(vol_zyx, spacing)
+        cb = getattr(self, "_active_progress_cb", None)
         try:
+            if cb:
+                cb("空间重采样与强度归一化", 45, f"正在将 {vol_zyx.shape[0]}×{vol_zyx.shape[1]}×{vol_zyx.shape[2]} 体素重采样至模型标准空间...")
             pre = Compose([
                 LoadImaged(keys="image"),
                 EnsureChannelFirstd(keys="image"),
@@ -573,6 +576,9 @@ class MonaiNeuralInferencePipeline:
             ])
             data = pre({"image": nii_path})
             in_tensor = data["image"].unsqueeze(0).to(self.device)
+            if cb:
+                grid_shape = tuple(int(s) for s in in_tensor.shape[2:])
+                cb("MONAI 3D 滑窗卷积推理", 62, f"正在对重采样网格 {grid_shape[0]}×{grid_shape[1]}×{grid_shape[2]} 执行 {roi_size[0]}³ 滑窗推理...")
             with torch.no_grad():
                 logits = sliding_window_inference(
                     inputs=in_tensor, roi_size=roi_size, sw_batch_size=sw_batch_size,
@@ -581,6 +587,8 @@ class MonaiNeuralInferencePipeline:
             # Invertd 在 CPU 上执行（Apple MPS 不支持 float64）
             logits = logits[0].detach().cpu().float()
             del in_tensor
+            if cb:
+                cb("逆变换重投影至患者原空间网格", 80, "正在执行 Invertd 空间逆变换与三维连通域后处理...")
             if eff_invert_probs:
                 data["pred"] = torch.softmax(logits, dim=0)
                 del logits
@@ -1477,6 +1485,9 @@ class MONAIEngine:
         """读取 NIfTI 或 DICOM 并运行指定模型；模型必须由调用方给出。"""
         if not model_name:
             raise ValueError("缺少 model_name：请指定要运行的分析模型")
+        progress_cb = kwargs.get("progress_cb")
+        if callable(progress_cb):
+            progress_cb("解析 DICOM / NIfTI 体素矩阵", 18, "正在读取影像文件并校验空间仿射矩阵...")
         try:
             from .dicom_io import load_volume
         except (ImportError, ValueError):
@@ -1486,6 +1497,12 @@ class MONAIEngine:
         vol, spacing, modality = load_volume(file_path)
         if kwargs.get("modality"):
             modality = str(kwargs.pop("modality"))
+        if callable(progress_cb):
+            progress_cb(
+                "LPS+ 空间规范化完成",
+                32,
+                f"已载入 {vol.shape[0]}×{vol.shape[1]}×{vol.shape[2]} ({modality}) 体素序列，体素间距 {round(float(spacing[0]), 2)}×{round(float(spacing[1]), 2)}×{round(float(spacing[2]), 2)} mm",
+            )
 
         if not window_preset:
             window_preset = "lung" if "lung" in model_name else ("brain" if "brain" in model_name else "abdomen")
@@ -1520,6 +1537,11 @@ class MONAIEngine:
             raise ValueError("缺少 model_name：请指定要运行的分析模型")
         if model_name in NOT_IMPLEMENTED_MODELS:
             raise ModelUnavailableError(f"模型 '{model_name}' 未实现：{NOT_IMPLEMENTED_MODELS[model_name]}")
+
+        progress_cb = kwargs.get("progress_cb")
+        if callable(progress_cb):
+            progress_cb("调度 MONAI 模型与权重", 38, f"正在准备模型 {model_name} 并初始化推理管线...")
+        self.neural_pipeline._active_progress_cb = progress_cb if callable(progress_cb) else None
 
         if not window_preset:
             if "lung" in model_name or "copd" in model_name or "bronch" in model_name:
@@ -1835,6 +1857,8 @@ class MONAIEngine:
             "Rule-based (HU threshold)" if engine_type == "rule_based" else "Quantitative CT (HU threshold)"
         )
 
+        if callable(progress_cb):
+            progress_cb("量化体积积分与关键截面渲染", 88, f"已定位关键截面 #{key_slice_idx}，正在渲染高清标注截面与量化指标...")
         ct_windowed = apply_ct_window(volume, window_name=window_preset)
         png_bytes = render_key_slice_png(
             ct_slice_uint8=ct_windowed[key_slice_idx],

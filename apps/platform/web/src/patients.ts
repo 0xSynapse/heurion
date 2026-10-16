@@ -168,6 +168,70 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
   // —— 患者页 ——
   let openPatientSeq = 0
+  let imgJobPoll: ReturnType<typeof setTimeout> | null = null
+  const notifiedCompletedJobs = new Set<string>()
+
+  async function syncPatientImagingJobBanner(id: string, d?: Detail | Patient): Promise<void> {
+    if (imgJobPoll) { clearTimeout(imgJobPoll); imgJobPoll = null }
+    if (current !== id) return
+    try {
+      const res = await api<{ active: any; latest: any }>(`/api/patients/${id}/imaging/jobs`)
+      if (current !== id) return
+      const banner = document.getElementById('ptImagingJobBanner')
+      if (!banner) return
+      const active = res?.active
+      const latest = res?.latest
+      if (active && active.status === 'running') {
+        const pct = Math.max(5, Math.min(99, Number(active.percent) || 15))
+        banner.hidden = false
+        banner.innerHTML = `
+          <div style="margin-top: 8px; padding: 10px 14px; border: 1px solid rgba(56, 189, 248, 0.35); background: rgba(56, 189, 248, 0.08); border-radius: 6px">
+            <div class="row" style="align-items: center; gap: 10px">
+              <span class="dot" style="background: var(--mint)"></span>
+              <b style="font-size: 13px">后台 MONAI 3D 影像推理进行中：${esc(active.stage || '正在执行三维体素分割')}</b>
+              <span style="font-family: var(--mono); font-size: 12px; color: var(--blue)">${pct}% · 已耗时 ${active.elapsed_sec || 1}s</span>
+              <span class="grow"></span>
+              <button class="small-btn primary" data-act="imaging">查看进度弹窗</button>
+            </div>
+            <div style="height: 5px; background: var(--hover); border-radius: 3px; overflow: hidden; margin: 6px 0 4px">
+              <div style="height: 100%; width: ${pct}%; background: linear-gradient(90deg, var(--blue), var(--mint)); transition: width 0.35s ease"></div>
+            </div>
+            <div class="muted small" style="font-size: 11.5px">${esc(active.detail || `模型：${active.model_id} · 文件：${active.file_name}`)}</div>
+          </div>`
+        imgJobPoll = setTimeout(() => { void syncPatientImagingJobBanner(id, d) }, 1500)
+      } else if (latest && latest.status === 'completed' && latest.ended_at && Date.now() - latest.ended_at < 60_000 && !notifiedCompletedJobs.has(latest.job_id)) {
+        notifiedCompletedJobs.add(latest.job_id)
+        banner.hidden = true
+        banner.innerHTML = ''
+        const dlg = document.getElementById('dialog')
+        if (dlg && dlg.hidden) {
+          notice('后台 MONAI 3D 影像量化分析已完成，结果已自动存入患者档案。')
+          tab = 'records'
+          await loadList()
+          await openPatient(id, true)
+        }
+      } else if (latest && latest.status === 'failed' && latest.ended_at && Date.now() - latest.ended_at < 120_000 && !notifiedCompletedJobs.has(latest.job_id)) {
+        banner.hidden = false
+        banner.innerHTML = `
+          <div style="margin-top: 8px; padding: 10px 14px; border: 1px solid rgba(239, 68, 68, 0.45); background: rgba(239, 68, 68, 0.08); border-radius: 6px">
+            <div class="row" style="align-items: center; gap: 10px">
+              <span class="dot" style="background: #ef4444"></span>
+              <b style="font-size: 13px; color: #ef4444">最近一次影像分析未完成：${esc(latest.error || '推理异常中断')}</b>
+              <span class="grow"></span>
+              <button class="small-btn quiet" id="btnDismissImgJobErr">知道了</button>
+              <button class="small-btn primary" data-act="imaging">重新分析</button>
+            </div>
+          </div>`
+        banner.querySelector('#btnDismissImgJobErr')?.addEventListener('click', () => {
+          notifiedCompletedJobs.add(latest.job_id)
+          banner.hidden = true
+        })
+      } else {
+        banner.hidden = true
+        banner.innerHTML = ''
+      }
+    } catch {}
+  }
 
   async function openPatient(id: string, keepTab = false, initialTab?: 'overview' | 'labs' | 'records' | 'docs' | 'review'): Promise<void> {
     if (!id) return
@@ -176,6 +240,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     const seq = ++openPatientSeq
     if (!keepTab) tab = initialTab || 'overview'
     if (poll) { clearTimeout(poll); poll = null }
+    if (imgJobPoll) { clearTimeout(imgJobPoll); imgJobPoll = null }
     let d: Detail
     try { d = await api<Detail>(`/api/patients/${id}`) } catch (err) {
       if (seq === openPatientSeq) { notice((err as Error).message, true); current = null }
@@ -206,11 +271,13 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
             <div class="dropdown" id="ptMore" hidden><button data-act="claim">就诊认领与知家绑定</button><button data-act="team">诊疗组</button><button data-act="log">访问记录</button><button data-act="delete" class="danger-text">删除患者</button></div></div>` : ''}
         </div>
         ${pendingCount ? `<div class="banner pt-pending"><span class="dot"></span>${d.records.filter(r => r.status === 'pending').length} 份报告、${d.pending_proposals.length} 条 AI 提议待确认<button data-tab="review">去审核</button></div>` : ''}
+        <div id="ptImagingJobBanner" hidden></div>
       </div>
       <div class="tabs pt-tabs">${(['overview', 'labs', 'records', 'docs', 'review'] as const).map(t => `<button data-tab="${t}" class="${t === tab ? 'active' : ''}">${{ overview: '概览', labs: '化验', records: `原始报告 / 影像${d.records.filter(r => r.kind === 'imaging').length ? ` (${d.records.filter(r => r.kind === 'imaging').length})` : ''}`, docs: `病例报告${d.documents.length ? ` (${d.documents.length})` : ''}`, review: `待确认${pendingCount ? ` (${pendingCount})` : ''}` }[t]}</button>`).join('')}</div>
       <div class="pt-body">${tab === 'overview' ? overview(d, canEdit) : tab === 'labs' ? labsView(confirmedLabs) : tab === 'records' ? recordsView(d) : tab === 'docs' ? docsView(d) : reviewView(d, pendingLabs, canEdit)}</div>`
     // 还在提取的报告：隔几秒刷新
     if (d.records.some(r => r.extraction === 'queued' || r.extraction === 'running')) poll = setTimeout(() => { if (current === id) void openPatient(id, true) }, 3000)
+    void syncPatientImagingJobBanner(id, d)
   }
 
   function overview(d: Detail, canEdit: boolean): string {
@@ -798,16 +865,48 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         </div>
       </div>`
     dlg.hidden = false
-    const close = () => { dlg.hidden = true; dlg.innerHTML = '' }
-    dlg.onclick = ev => { if (ev.target === dlg || (ev.target as HTMLElement).closest('[data-close]')) close() }
+    let isRunning = false
+    let modalPollTimer: number | null = null
+    const stopModalPoll = () => {
+      if (modalPollTimer) {
+        window.clearInterval(modalPollTimer)
+        modalPollTimer = null
+      }
+    }
+    const close = () => {
+      stopModalPoll()
+      dlg.hidden = true
+      dlg.innerHTML = ''
+    }
+    dlg.onclick = ev => {
+      if (ev.target === dlg) {
+        if (isRunning) {
+          notice('3D 影像推理正在进行中，为防误触已锁定背景点击；如需离开窗口请点击【转入后台运行】。')
+          return
+        }
+        close()
+        return
+      }
+      if ((ev.target as HTMLElement).closest('[data-close]')) {
+        if (isRunning) {
+          close()
+          notice('已转入后台继续执行 MONAI 3D 推理，可在患者页顶部横幅实时查看进度。')
+          void syncPatientImagingJobBanner(patientId, d)
+          return
+        }
+        close()
+      }
+    }
 
     let statusData: any = null
     let modelsData: any = { models: [] }
+    let jobsData: { active: any } = { active: null }
 
     try {
-      [statusData, modelsData] = await Promise.all([
+      ;[statusData, modelsData, jobsData] = await Promise.all([
         api<any>('/api/imaging/status').catch(() => null),
         api<any>('/api/imaging/models').catch(() => ({ models: [] })),
+        api<{ active: any }>(`/api/patients/${patientId}/imaging/jobs`).catch(() => ({ active: null })),
       ])
     } catch {}
 
@@ -949,15 +1048,21 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       </div>
 
       <div id="imgProgressBox" hidden style="margin-top: 8px; padding: 12px; border: 1px solid var(--line); background: var(--panel); border-radius: 4px">
-        <div class="row" style="align-items: center; gap: 10px">
-          <span class="dot" id="imgProgressDot" style="background: var(--mint)"></span>
-          <b id="imgProgressMsg">正在调度 ${esc(devAccel)} 执行 3D 卷积推理...</b>
+        <div class="row" style="align-items: center; justify-content: space-between; gap: 10px">
+          <div class="row" style="align-items: center; gap: 10px">
+            <span class="dot" id="imgProgressDot" style="background: var(--mint)"></span>
+            <b id="imgProgressMsg">正在调度 ${esc(devAccel)} 执行 3D 卷积推理...</b>
+          </div>
+          <span class="small" id="imgProgressPct" style="font-weight: 600; color: var(--blue)">12%</span>
         </div>
-        <div class="muted small" id="imgProgressSub" style="margin-top: 4px">包含三维体素分割、支气管伴行动脉测距 (BAR)、粘液栓体积积分与高清关键截面渲染。</div>
+        <div style="margin-top: 8px; height: 6px; border-radius: 999px; background: var(--line); overflow: hidden">
+          <div id="imgProgressBar" style="height: 100%; width: 12%; background: linear-gradient(90deg, var(--blue), var(--teal)); transition: width 0.35s ease"></div>
+        </div>
+        <div class="muted small" id="imgProgressSub" style="margin-top: 6px">包含三维体素分割、支气管伴行动脉测距 (BAR)、粘液栓体积积分与高清关键截面渲染。推理期间已锁定背景防误触，您也可以点击下方【转入后台运行】离开窗口。</div>
       </div>
 
       <div class="row end" style="margin-top: 14px; gap: 10px">
-        <button type="button" data-close>取消</button>
+        <button type="button" id="btnCancelImaging" data-close>取消</button>
         <button type="button" class="primary" id="btnRunImaging" ${isHealthy ? '' : 'disabled'}>
           ${icon('sparkles')} 开始 MONAI 3D 量化推理并存入档案
         </button>
@@ -1168,12 +1273,105 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     // Initial trigger to sync UI
     filterModels()
 
-    // 启动分析按钮
+    // 启动分析按钮与进度同步
     const btnRun = body.querySelector('#btnRunImaging') as HTMLButtonElement
+    const btnCancel = body.querySelector('#btnCancelImaging') as HTMLButtonElement
     const progressBox = body.querySelector('#imgProgressBox') as HTMLElement
     const progressDot = body.querySelector('#imgProgressDot') as HTMLElement
     const progressMsg = body.querySelector('#imgProgressMsg') as HTMLElement
+    const progressPct = body.querySelector('#imgProgressPct') as HTMLElement
+    const progressBar = body.querySelector('#imgProgressBar') as HTMLElement
     const progressSub = body.querySelector('#imgProgressSub') as HTMLElement
+
+    const renderJobProgress = (stageText: string, pctVal: number, detailText: string) => {
+      const pct = Math.max(5, Math.min(100, Math.round(pctVal || 12)))
+      progressBox.hidden = false
+      progressBox.style.borderColor = 'var(--line)'
+      progressBox.style.background = 'var(--panel)'
+      if (progressDot) progressDot.style.background = 'var(--mint)'
+      progressMsg.style.color = ''
+      progressMsg.textContent = stageText
+      if (progressPct) progressPct.textContent = `${pct}%`
+      if (progressBar) progressBar.style.width = `${pct}%`
+      if (progressSub) progressSub.textContent = detailText
+    }
+
+    const setModalRunningState = (running: boolean) => {
+      isRunning = running
+      if (btnCancel) btnCancel.textContent = running ? '转入后台运行' : '取消'
+      if (btnRun) btnRun.disabled = running || !isHealthy
+    }
+
+    const startModalJobPolling = (attachOnly: boolean, fallbackStartTs = Date.now()) => {
+      stopModalPoll()
+      modalPollTimer = window.setInterval(async () => {
+        if (dlg.hidden) {
+          stopModalPoll()
+          return
+        }
+        try {
+          const res = await api<{ active: any; latest: any }>(`/api/patients/${patientId}/imaging/jobs`)
+          const a = res?.active
+          if (a && a.status === 'running') {
+            const sec = Math.max(1, a.elapsed_sec ?? Math.round((Date.now() - fallbackStartTs) / 1000))
+            renderJobProgress(
+              `${a.stage || '正在执行 MONAI 3D 推理'}（已耗时 ${sec}s）`,
+              a.percent || 15,
+              a.detail || '包含三维体素分割、解剖结构体积积分与高清关键截面渲染；如需浏览其他页面可点击下方【转入后台运行】。',
+            )
+            return
+          }
+          if (attachOnly) {
+            const latest = res?.latest
+            if (latest && latest.status === 'failed') {
+              stopModalPoll()
+              setModalRunningState(false)
+              const errText = latest.error || latest.detail || '未知错误'
+              progressBox.hidden = false
+              progressBox.style.borderColor = 'rgba(239, 68, 68, 0.45)'
+              progressBox.style.background = 'rgba(239, 68, 68, 0.08)'
+              if (progressDot) progressDot.style.background = '#ef4444'
+              progressMsg.style.color = '#ef4444'
+              progressMsg.textContent = `影像分析未完成：${errText}`
+              if (progressSub) {
+                progressSub.textContent = '请重新选择影像文件并确认模型参数后再次点击推理。'
+              }
+            } else if (!a || (latest && latest.status === 'completed')) {
+              stopModalPoll()
+              setModalRunningState(false)
+              notice('MONAI 3D 影像量化分析已完成！已生成关键截面并加密存入患者档案。')
+              close()
+              tab = 'records'
+              await loadList()
+              await openPatient(patientId, true)
+            }
+          }
+        } catch {
+          // Ignore transient poll error while inference is running
+        }
+      }, 1200)
+    }
+
+    // 如果打开弹窗时该患者已有后台正在运行的影像分析任务，自动恢复进度显示
+    if (jobsData?.active && jobsData.active.status === 'running') {
+      const a = jobsData.active
+      if (a.model_id && modelSelect && Array.from(modelSelect.options).some(o => o.value === a.model_id)) {
+        modelSelect.value = a.model_id
+        updateModelUI()
+      }
+      if (fileNameEl && a.file_name) {
+        fileNameEl.style.display = 'block'
+        fileNameEl.innerHTML = `${icon('file', { size: 12 })} 后台正在处理文件: <b>${esc(a.file_name)}</b>`
+      }
+      setModalRunningState(true)
+      const sec = Math.max(1, a.elapsed_sec ?? 1)
+      renderJobProgress(
+        `${a.stage || '正在执行 MONAI 3D 推理'}（已耗时 ${sec}s）`,
+        a.percent || 15,
+        a.detail || '已自动恢复正在执行的后台 3D 推理进度；如需离开窗口可点击下方【转入后台运行】。',
+      )
+      startModalJobPolling(true, a.started_at || Date.now())
+    }
 
     btnRun?.addEventListener('click', async () => {
       const modelId = (body.querySelector('#imgModelSelect') as HTMLSelectElement)?.value || 'bronchiectasis_mucus_analyzer'
@@ -1198,22 +1396,14 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         return
       }
 
-      btnRun.disabled = true
-      progressBox.hidden = false
-      progressBox.style.borderColor = 'var(--line)'
-      progressBox.style.background = 'var(--panel)'
-      if (progressDot) progressDot.style.background = 'var(--mint)'
-      progressMsg.style.color = ''
-      progressMsg.textContent = `正在传输体素数据并调度 ${devAccel} 执行 3D 卷积分割...`
-      if (progressSub) {
-        progressSub.textContent = '包含三维体素分割、解剖结构体积积分与高清关键截面渲染，请勿关闭窗口。'
-      }
-
       const startTs = Date.now()
-      const timer = window.setInterval(() => {
-        const sec = Math.max(1, Math.round((Date.now() - startTs) / 1000))
-        progressMsg.textContent = `正在调度 ${devAccel} 执行 3D 卷积分割（已耗时 ${sec}s）...`
-      }, 1000)
+      setModalRunningState(true)
+      renderJobProgress(
+        `正在传输体素数据并调度 ${devAccel}...`,
+        12,
+        `正在上传 ${uploadedFile.name} 并初始化 MONAI 3D 计算图；推理期间已锁定背景防误触，您也可点击【转入后台运行】。`,
+      )
+      startModalJobPolling(false, startTs)
 
       try {
         const fd = new FormData()
@@ -1228,26 +1418,34 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         fd.append('auto_tag', String(autoTag))
         await api(`/api/patients/${patientId}/imaging/analyze`, { method: 'POST', body: fd })
 
-        window.clearInterval(timer)
+        stopModalPoll()
+        setModalRunningState(false)
         notice('影像量化分析完成！已生成关键截面并加密存入患者档案。')
-        close()
-        tab = 'records'
+        if (!dlg.hidden) close()
         await loadList()
-        await openPatient(patientId, true)
+        if (current === patientId) {
+          tab = 'records'
+          await openPatient(patientId, true)
+        }
       } catch (err: any) {
-        window.clearInterval(timer)
-        btnRun.disabled = false
+        stopModalPoll()
+        setModalRunningState(false)
         const errText = err?.message || String(err) || '未知错误'
-        progressBox.hidden = false
-        progressBox.style.borderColor = 'rgba(239, 68, 68, 0.45)'
-        progressBox.style.background = 'rgba(239, 68, 68, 0.08)'
-        if (progressDot) progressDot.style.background = '#ef4444'
-        progressMsg.style.color = '#ef4444'
-        progressMsg.textContent = `影像分析未完成：${errText}`
-        if (progressSub) {
-          progressSub.textContent = '请检查所选影像文件格式与模型输入要求（或切换适配模型）后重新点击推理。'
+        if (!dlg.hidden) {
+          progressBox.hidden = false
+          progressBox.style.borderColor = 'rgba(239, 68, 68, 0.45)'
+          progressBox.style.background = 'rgba(239, 68, 68, 0.08)'
+          if (progressDot) progressDot.style.background = '#ef4444'
+          progressMsg.style.color = '#ef4444'
+          progressMsg.textContent = `影像分析未完成：${errText}`
+          if (progressSub) {
+            progressSub.textContent = '请检查所选影像文件格式与模型输入要求（或切换适配模型）后重新点击推理。'
+          }
         }
         notice(`影像分析失败: ${errText}`, true)
+        if (current === patientId) {
+          void syncPatientImagingJobBanner(patientId, d)
+        }
       }
     })
   }

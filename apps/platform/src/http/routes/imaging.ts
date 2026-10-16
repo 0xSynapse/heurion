@@ -517,7 +517,59 @@ export function registerImagingRoutes(
     }
   })
 
+  interface ImagingJobState {
+    job_id: string
+    patient_id: string
+    model_id: string
+    file_name: string
+    status: 'running' | 'completed' | 'failed'
+    stage: string
+    detail: string
+    percent: number
+    started_at: number
+    ended_at?: number
+    record_id?: string
+    error?: string
+  }
+
+  const patientImagingJobs = new Map<string, ImagingJobState>()
+
+  app.get('/api/patients/:ptid/imaging/jobs', async c => {
+    try {
+      const patientId = c.req.param('ptid')
+      pt(c).read(me(c), patientId)
+      const job = patientImagingJobs.get(patientId)
+      if (!job) {
+        return c.json({ active: null, latest: null })
+      }
+      if (job.status === 'running') {
+        try {
+          const wResp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/jobs/${encodeURIComponent(job.job_id)}`, {
+            signal: AbortSignal.timeout(1500),
+          })
+          if (wResp.ok) {
+            const wData = await wResp.json()
+            if (typeof wData.stage === 'string' && wData.stage) job.stage = wData.stage
+            if (typeof wData.detail === 'string' && wData.detail) job.detail = wData.detail
+            if (typeof wData.percent === 'number' && wData.percent > job.percent && wData.percent < 98) {
+              job.percent = wData.percent
+            }
+          }
+        } catch {}
+      }
+      const elapsedSec = Math.max(1, Math.round(((job.ended_at || Date.now()) - job.started_at) / 1000))
+      const payload = { ...job, elapsed_sec: elapsedSec }
+      return c.json({
+        active: job.status === 'running' ? payload : null,
+        latest: payload,
+      })
+    } catch (err) {
+      return handleImagingError(c, err)
+    }
+  })
+
   app.post('/api/patients/:ptid/imaging/analyze', async c => {
+    let activeJob: ImagingJobState | null = null
     try {
       const contentType = c.req.header('content-type') || ''
       let sampleId: string | undefined
@@ -572,12 +624,36 @@ export function registerImagingRoutes(
       const patientId = c.req.param('ptid')
       pt(c).assertEditable(me(c), patientId)
 
+      const existing = patientImagingJobs.get(patientId)
+      if (existing && existing.status === 'running' && Date.now() - existing.started_at < 300_000) {
+        return c.json({
+          error: 'imaging_job_running',
+          message: '该患者当前已有正在运行的 3D 影像推理任务，请等待其完成',
+          job: { ...existing, elapsed_sec: Math.max(1, Math.round((Date.now() - existing.started_at) / 1000)) },
+        }, 409)
+      }
+
+      const jobId = `imgjob_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+      activeJob = {
+        job_id: jobId,
+        patient_id: patientId,
+        model_id: modelId || 'bronchiectasis_mucus_analyzer',
+        file_name: fileName || sampleId || 'scan.nii.gz',
+        status: 'running',
+        stage: '正在传输体素序列至计算微服务',
+        detail: `已接收 ${fileName || sampleId || '影像序列'}，正在调度 MONAI 推理管线...`,
+        percent: 12,
+        started_at: Date.now(),
+      }
+      patientImagingJobs.set(patientId, activeJob)
+
       let resultData: any
       if (fileBuffer) {
         const formData = new FormData()
         const blob = new Blob([new Uint8Array(fileBuffer)], { type: 'application/octet-stream' })
         formData.append('file', blob, fileName || 'scan.nii.gz')
         formData.append('model_name', modelId || 'bronchiectasis_mucus_analyzer')
+        formData.append('job_id', jobId)
         if (windowPreset) formData.append('window_preset', windowPreset)
         if (barCutoff !== undefined && !isNaN(barCutoff)) formData.append('bar_cutoff', String(barCutoff))
         if (mucusMinHu !== undefined && !isNaN(mucusMinHu)) formData.append('mucus_min_hu', String(mucusMinHu))
@@ -589,9 +665,24 @@ export function registerImagingRoutes(
           body: formData,
           signal: AbortSignal.timeout(300000),
         })
-        if (!resp.ok) return workerFail(c, resp, 'imaging_inference_failed')
+        if (!resp.ok) {
+          const failResp = await workerFail(c, resp, 'imaging_inference_failed')
+          try {
+            const failJson = await failResp.clone().json()
+            activeJob.status = 'failed'
+            activeJob.error = failJson.message || `HTTP ${resp.status}`
+            activeJob.ended_at = Date.now()
+          } catch {
+            activeJob.status = 'failed'
+            activeJob.error = `HTTP ${resp.status}`
+            activeJob.ended_at = Date.now()
+          }
+          return failResp
+        }
         resultData = await resp.json()
       } else if (sampleId) {
+        activeJob.stage = '正在加载样本并执行 MONAI 推理'
+        activeJob.percent = 45
         const resp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/sample`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -606,14 +697,36 @@ export function registerImagingRoutes(
           }),
           signal: AbortSignal.timeout(300000),
         })
-        if (!resp.ok) return workerFail(c, resp, 'imaging_inference_failed')
+        if (!resp.ok) {
+          const failResp = await workerFail(c, resp, 'imaging_inference_failed')
+          try {
+            const failJson = await failResp.clone().json()
+            activeJob.status = 'failed'
+            activeJob.error = failJson.message || `HTTP ${resp.status}`
+            activeJob.ended_at = Date.now()
+          } catch {
+            activeJob.status = 'failed'
+            activeJob.error = `HTTP ${resp.status}`
+            activeJob.ended_at = Date.now()
+          }
+          return failResp
+        }
         resultData = await resp.json()
       } else {
+        patientImagingJobs.delete(patientId)
         return c.json({ error: 'no_image', message: '请上传该患者真实的医学影像文件 (NIfTI / DICOM)' }, 400)
       }
 
+      activeJob.stage = '正在加密写入患者病历与影像档案'
+      activeJob.percent = 95
+
       const b64Data = String(resultData.key_slice_png_base64 || '').replace(/^data:image\/png;base64,/, '')
-      if (!b64Data) return c.json({ error: 'no_image_output', message: '影像计算未返回切片图像' }, 500)
+      if (!b64Data) {
+        activeJob.status = 'failed'
+        activeJob.error = '影像计算未返回切片图像'
+        activeJob.ended_at = Date.now()
+        return c.json({ error: 'no_image_output', message: '影像计算未返回切片图像' }, 500)
+      }
       const pngBuffer = Buffer.from(b64Data, 'base64')
 
       const rawMetrics = resultData.metrics || {}
@@ -740,8 +853,18 @@ export function registerImagingRoutes(
         add_tags: autoTag && tagsToAdd.length > 0 ? tagsToAdd : undefined,
       })
 
+      if (activeJob) {
+        activeJob.status = 'completed'
+        activeJob.percent = 100
+        activeJob.stage = '分析完成并已加密存入患者档案'
+        activeJob.detail = `已生成关键截面与量化指标（记录 #${saved.record.id}）`
+        activeJob.record_id = saved.record.id
+        activeJob.ended_at = Date.now()
+      }
+
       return c.json({
         ok: true,
+        job_id: activeJob?.job_id,
         record: saved.record,
         asset_id: saved.asset_id,
         file_id: saved.file_id,
@@ -750,7 +873,12 @@ export function registerImagingRoutes(
         findings,
         tags_added: autoTag ? tagsToAdd : [],
       }, 201)
-    } catch (err) {
+    } catch (err: any) {
+      if (activeJob && activeJob.status === 'running') {
+        activeJob.status = 'failed'
+        activeJob.error = err?.message || String(err)
+        activeJob.ended_at = Date.now()
+      }
       return handleImagingError(c, err)
     }
   })
