@@ -173,7 +173,7 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 | --- | --- | --- |
 | 模型 | ProseMirror schema（`model/schema.ts`）+ Yjs | 标题 / 段落（样式名、对齐）/ 有序与无序列表（可嵌套）/ 表格（colspan、rowspan、表头）/ 图（资产）/ 不可编辑块 / 引用原子节点；mark：粗、斜、下划线、上下标、代码、链接、评论 |
 | 写入 | prosemirror-transform 在内存应用 → `updateYFragment` 最小差异写入 Y.Doc | 未改动的节点在 Yjs 里保持原样（P1 编辑器同步的前提）；Node 中无 DOM 运行已验证 |
-| 内容格式 | markdown 方言（`model/markdown.ts`） | CommonMark + GFM 表格 + `[@c:id]` + `![说明](asset:<id> "图注")` + `<sup>/<sub>/<u>/<br>`；读视图带 `{#id}` 前缀，写入时忽略 |
+| 内容格式 | markdown 方言（`model/markdown.ts`） | CommonMark + GFM 表格 + `[@c:id]` + `![说明](asset:<id> "图注")` + `<sup>/<sub>/<u>/<br>`；读视图带 `{#id}` 前缀，写入时忽略；表格按逻辑网格书写，单元格恰为 `^` / `<` 表示与上方 / 左侧合并（字面量写 `\^` `\<`），普通导出里合并位置留空 |
 | 导入 | 自写 OOXML 解析（`convert/docx-import.ts`） | 标题（样式名 / outlineLvl / 中文「标题 N」）、列表（numbering.xml，相邻同类列表合并）、表格（gridSpan / vMerge）、格式、超链接、图片（入资产库）、修订（接受插入、丢弃删除）、内容控件、题注并回图；含文本框 / 嵌入对象 / 脚注的段落整段落为 opaque（避免修改后重新生成丢内容）；含域代码（EndNote / Zotero 等）的段落仍可编辑，导入时提示修改后域变为文字；其余落为 opaque。每个顶层块保存**逐字节原文** |
 | PDF 导入 | `convert/pdf-import.ts` + `convert/doc-parser.ts` | 主路径调本地 doc-parser（Docling）：标题（含层级推断）、段落、列表、表格（规则网格、表头行）、图（入资产库 + 图注）、公式（schema 无公式节点，存为 `style: 'Code'` 段落里的 `$$LaTeX$$`）；扫描页由 OCR 出文字并在开头注明，OCR 也没识别出文字才插整页图。服务不可用时退回 poppler（`pdftohtml -xml` 启发式）。原始 PDF 存为文件包 |
 | 导出 | 修补式（`convert/docx-export.ts`） | 以原始文件包为底座（样式、编号、关系、媒体、页面设置）；导入后**未改动的块原样写回**（与图混排的段落：拆出的图也原样跟随时才整段写回，避免图重复），改过 / 新增的块按模型生成，新列表沿用原文件同类列表的编号定义与段落样式；新建文档用内置模板（宋体 / Times New Roman、标题样式）。引用为上标 [n] + 参考文献表；open 评论写入 comments.xml；图片嵌入 |
@@ -244,7 +244,7 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | `delete` | `ids` | 删除最后一个块时留空段落 |
 | `move` | `ids, after`（null = 文档开头） | |
 | `set_block_style` | `id, type?, level?, align?, style?` | 段落 ↔ 标题、级别、对齐、Word 样式名 |
-| `table_set_cells` / `table_insert_rows` / `table_delete_rows` / `table_insert_cols` / `table_delete_cols` | `id, …` | 单元格内容为行内 markdown；列下标按逻辑列（计入 colspan），含跨行合并的表格不支持增删列 |
+| `table_set_cells` / `table_insert_rows` / `table_delete_rows` / `table_insert_cols` / `table_delete_cols` | `id, …` | 单元格内容为行内 markdown（多段落写作 `{#id} 段一<br>{#id} 段二`，按位置沿用原段落 id 与属性）；行列号按逻辑网格（计入 colspan / rowspan，与读视图一致），写合并单元格用左上角坐标；增删行列时合并区随之伸缩 |
 
 `mode: 'suggest'`：修改作为待采纳修订提交（块级：改动的块 = 原块待删除 + 新块待新增；新增块待新增；删除的块留在原位待删除；同一批共享修订组）。页面勾选「修订模式」时回合在服务端强制 suggest，不依赖模型传参。修订中的块不能再被 AI 修改（`pending_suggestion`）；读视图标出 `⟨待采纳·新增 / 删除⟩`；导出按「未采纳」处理。
 

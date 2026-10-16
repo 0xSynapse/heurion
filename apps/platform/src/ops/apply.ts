@@ -1,8 +1,9 @@
 import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model'
 import { Transform } from 'prosemirror-transform'
 import { assignIds, indexById, stripIds } from '../model/ids.ts'
-import { MarkdownError, parseBlocks, parseInline, serializeBlock } from '../model/markdown.ts'
+import { MarkdownError, parseBlocks, parseCell, parseInline, serializeBlock } from '../model/markdown.ts'
 import { schema } from '../model/schema.ts'
+import { buildFromGrid, readGrid, type Grid, type GridCell } from '../model/table-grid.ts'
 import { OpError, type DocOp } from './types.ts'
 
 export interface OpResult {
@@ -111,10 +112,9 @@ function applyOne(tr: Transform, op: DocOp, ctx: ApplyContext, targetedIds: Set<
     case 'table_set_cells':
     case 'table_insert_rows':
     case 'table_delete_rows':
-      return tableOp(tr, op, ctx)
     case 'table_insert_cols':
     case 'table_delete_cols':
-      return tableColOp(tr, op, ctx)
+      return tableOp(tr, op, ctx)
   }
 }
 
@@ -681,95 +681,108 @@ function setTextStyle(tr: Transform, op: Extract<DocOp, { op: 'set_text_style' }
   return [op.id]
 }
 
-function cellNode(markdown: string, attrs: Record<string, unknown>, taken: Set<string>): PMNode {
-  const inline = parseInline(markdown)
-  return schema.node('table_cell', attrs, [assignIds(schema.node('paragraph', null, inline), taken)])
+/**
+ * 单元格新内容：段落之间用读视图的 `{#id}` 前缀分隔（见 markdown.ts parseCell）。
+ * 第 i 段沿用原单元格第 i 段的属性与 id（段落样式、对齐不丢，docx 导出仍按原段落处理），多出的段落新分配 id。
+ */
+function cellContent(markdown: string, old: PMNode | null, taken: Set<string>): PMNode[] {
+  const paras = parseCell(markdown)
+  return paras.map((p, i) => {
+    const prev = old && i < old.childCount ? old.child(i) : null
+    return prev ? prev.type.create(prev.attrs, p.content, prev.marks) : assignIds(p, taken)
+  })
 }
 
-function tableOp(tr: Transform, op: Extract<DocOp, { op: 'table_set_cells' | 'table_insert_rows' | 'table_delete_rows' }>, ctx: ApplyContext): string[] {
-  const target = find(tr, op.id)
-  if (target.node.type.name !== 'table') throw new OpError('invalid_structure', `${op.id} 不是表格`)
-  const rows: PMNode[][] = []
-  target.node.forEach(row => {
-    const cells: PMNode[] = []
-    row.forEach(c => cells.push(c))
-    rows.push(cells)
-  })
-  const width = Math.max(...rows.map(r => r.length))
-  if (op.op === 'table_set_cells') {
-    for (const c of op.cells) {
-      const cell = rows[c.row]?.[c.col]
-      if (!cell) throw new OpError('cell_not_found', `表格 ${op.id} 没有单元格 (${c.row}, ${c.col})`, { hint: `表格共 ${rows.length} 行、${width} 列；行列下标从 0 开始。要加列先用 table_insert_cols。` })
-      rows[c.row]![c.col] = cellNode(c.markdown, cell.attrs, ctx.taken)
-    }
-  } else if (op.op === 'table_insert_rows') {
-    if (op.at > rows.length) throw new OpError('cell_not_found', `插入位置 ${op.at} 超出表格行数 ${rows.length}`)
-    const fresh = op.rows.map(r => Array.from({ length: Math.max(width, r.length) }, (_, i) => cellNode(r[i] ?? '', {}, ctx.taken)))
-    rows.splice(op.at, 0, ...fresh)
-  } else {
-    if (op.at + op.count > rows.length) throw new OpError('cell_not_found', `要删除的行超出表格范围（共 ${rows.length} 行）`)
-    if (op.count >= rows.length) throw new OpError('invalid_structure', '不能删除表格的全部行', { hint: '要删除整张表请用 delete。' })
-    rows.splice(op.at, op.count)
-  }
-  const table = schema.node('table', target.node.attrs, rows.map(cells => schema.node('table_row', null, cells)))
+function tableTarget(tr: Transform, id: string): { node: PMNode; pos: number; grid: Grid } {
+  const target = find(tr, id)
+  if (target.node.type.name !== 'table') throw new OpError('invalid_structure', `${id} 不是表格`)
+  return { ...target, grid: readGrid(target.node) }
+}
+
+function replaceTable(tr: Transform, target: { node: PMNode; pos: number }, cells: GridCell[], height: number, id: string): string[] {
+  const table = buildFromGrid(cells, height, target.node.attrs)
+  if ('emptyRow' in table) throw new OpError('invalid_structure', `操作后表格第 ${table.emptyRow} 行没有单元格`, { hint: '请用 replace_block 整表替换。' })
   tr.replaceWith(target.pos, target.pos + target.node.nodeSize, table)
-  return [op.id]
+  return [id]
 }
 
 /**
- * 增删列：按逻辑列（计入 colspan）定位。跨越插入点的合并单元格加宽一列；删除范围内的格移除，
- * 部分落在范围内的合并单元格收窄。含跨行合并（rowspan）的表格各行列位不对齐，拒绝并提示整表替换。
+ * 表格操作一律按逻辑网格坐标（计入 colspan / rowspan，与 doc_read 的表格视图一致）。
+ * 增删行列时合并单元格随之伸缩：插入点落在合并区内部则合并区扩展；删除范围部分覆盖合并区则合并区收缩，
+ * 合并区起点被删时内容保留、起点移到删除范围之后。
  */
-function tableColOp(tr: Transform, op: Extract<DocOp, { op: 'table_insert_cols' | 'table_delete_cols' }>, ctx: ApplyContext): string[] {
-  const target = find(tr, op.id)
-  if (target.node.type.name !== 'table') throw new OpError('invalid_structure', `${op.id} 不是表格`)
-  let hasRowspan = false
-  let width = 0
-  target.node.forEach(row => {
-    let w = 0
-    row.forEach(c => {
-      w += c.attrs.colspan as number
-      if ((c.attrs.rowspan as number) > 1) hasRowspan = true
-    })
-    width = Math.max(width, w)
-  })
-  if (hasRowspan) throw new OpError('invalid_structure', `表格 ${op.id} 含跨行合并单元格，不能按列增删`, { hint: '请用 replace_block 整表替换。' })
-  const rows: PMNode[] = []
-  let r = 0
-  target.node.forEach(row => {
-    const cells: PMNode[] = []
-    let start = 0
-    if (op.op === 'table_insert_cols') {
-      if (op.at > width) throw new OpError('cell_not_found', `插入位置 ${op.at} 超出表格列数 ${width}`)
-      let placed = false
-      const fresh = (neighbor: PMNode | null) => cellNode(op.cells?.[r] ?? '', { header: neighbor?.attrs.header ?? false }, ctx.taken)
-      row.forEach(c => {
-        const span = c.attrs.colspan as number
-        if (!placed && start === op.at) { cells.push(fresh(c)); placed = true }
-        if (!placed && start < op.at && op.at < start + span) {
-          // 插入点落在合并单元格内部：该格加宽一列，内容写进同一格时不另起新格
-          cells.push(c.type.create({ ...c.attrs, colspan: span + 1 }, c.content, c.marks))
-          placed = true
-        } else cells.push(c)
-        start += span
-      })
-      if (!placed) cells.push(fresh(row.lastChild))
-    } else {
-      if (op.at + op.count > width) throw new OpError('cell_not_found', `要删除的列超出表格范围（共 ${width} 列）`)
-      if (op.count >= width) throw new OpError('invalid_structure', '不能删除表格的全部列', { hint: '要删除整张表请用 delete。' })
-      const end = op.at + op.count
-      row.forEach(c => {
-        const span = c.attrs.colspan as number
-        const kept = span - Math.max(0, Math.min(start + span, end) - Math.max(start, op.at))
-        if (kept === span) cells.push(c)
-        else if (kept > 0) cells.push(c.type.create({ ...c.attrs, colspan: kept }, c.content, c.marks))
-        start += span
-      })
-      if (cells.length === 0) throw new OpError('invalid_structure', `删除后第 ${r} 行没有单元格`, { hint: '请用 replace_block 整表替换。' })
+function tableOp(tr: Transform, op: Extract<DocOp, { op: 'table_set_cells' | 'table_insert_rows' | 'table_delete_rows' | 'table_insert_cols' | 'table_delete_cols' }>, ctx: ApplyContext): string[] {
+  const target = tableTarget(tr, op.id)
+  const { grid } = target
+  const shape = `表格共 ${grid.height} 行、${grid.width} 列；行列下标从 0 开始，按合并后的逻辑网格计。`
+  const cells = grid.cells.map(c => ({ ...c }))
+  const blank = (top: number, left: number, header: boolean, markdown = ''): GridCell =>
+    ({ node: schema.node('table_cell', { header }, cellContent(markdown, null, ctx.taken)), top, left, rowspan: 1, colspan: 1 })
+
+  switch (op.op) {
+    case 'table_set_cells': {
+      for (const c of op.cells) {
+        const cell = grid.at(c.row, c.col)
+        if (!cell) throw new OpError('cell_not_found', `表格 ${op.id} 没有单元格 (${c.row}, ${c.col})`, { hint: `${shape}要加列先用 table_insert_cols。` })
+        if (cell.top !== c.row || cell.left !== c.col) {
+          throw new OpError('cell_not_found', `单元格 (${c.row}, ${c.col}) 已并入 (${cell.top}, ${cell.left}) 的合并单元格`, { hint: `请写合并单元格的左上角 (${cell.top}, ${cell.left})。` })
+        }
+        const i = cells.findIndex(x => x.top === cell.top && x.left === cell.left)
+        cells[i] = { ...cells[i]!, node: cell.node.type.create(cell.node.attrs, cellContent(c.markdown, cells[i]!.node, ctx.taken)) }
+      }
+      return replaceTable(tr, target, cells, grid.height, op.id)
     }
-    rows.push(row.type.create(row.attrs, cells))
-    r++
-  })
-  tr.replaceWith(target.pos, target.pos + target.node.nodeSize, schema.node('table', target.node.attrs, rows))
-  return [op.id]
+    case 'table_insert_rows': {
+      if (op.at > grid.height) throw new OpError('cell_not_found', `插入位置 ${op.at} 超出表格行数 ${grid.height}`)
+      const n = op.rows.length
+      if (op.rows.some(r => r.length > grid.width)) throw new OpError('invalid_structure', `新行的单元格数超过表格列数 ${grid.width}`, { hint: '要加列先用 table_insert_cols。' })
+      for (const c of cells) {
+        if (c.top >= op.at) c.top += n
+        else if (c.top + c.rowspan > op.at) c.rowspan += n
+      }
+      for (let k = 0; k < n; k++) {
+        for (let col = 0; col < grid.width; col++) {
+          // 被向下延伸的合并单元格覆盖的位置不另建单元格
+          const covering = grid.at(op.at - 1, col)
+          if (covering && op.at > 0 && op.at < covering.top + covering.rowspan) continue
+          cells.push(blank(op.at + k, col, false, op.rows[k]![col] ?? ''))
+        }
+      }
+      return replaceTable(tr, target, cells, grid.height + n, op.id)
+    }
+    case 'table_insert_cols': {
+      if (op.at > grid.width) throw new OpError('cell_not_found', `插入位置 ${op.at} 超出表格列数 ${grid.width}`)
+      for (const c of cells) {
+        if (c.left >= op.at) c.left += 1
+        else if (c.left + c.colspan > op.at) c.colspan += 1
+      }
+      for (let row = 0; row < grid.height; row++) {
+        const covering = grid.at(row, op.at - 1)
+        if (covering && op.at > 0 && op.at < covering.left + covering.colspan) continue
+        const neighbor = grid.at(row, op.at) ?? grid.at(row, op.at - 1)
+        cells.push(blank(row, op.at, (neighbor?.node.attrs.header as boolean | undefined) ?? false, op.cells?.[row] ?? ''))
+      }
+      return replaceTable(tr, target, cells, grid.height, op.id)
+    }
+    case 'table_delete_rows':
+    case 'table_delete_cols': {
+      const rows = op.op === 'table_delete_rows'
+      const size = rows ? grid.height : grid.width
+      const unit = rows ? '行' : '列'
+      if (op.at + op.count > size) throw new OpError('cell_not_found', `要删除的${unit}超出表格范围（共 ${size} ${unit}）`)
+      if (op.count >= size) throw new OpError('invalid_structure', `不能删除表格的全部${unit}`, { hint: '要删除整张表请用 delete。' })
+      const end = op.at + op.count
+      const kept: GridCell[] = []
+      for (const c of cells) {
+        const start = rows ? c.top : c.left
+        const span = rows ? c.rowspan : c.colspan
+        const overlap = Math.max(0, Math.min(start + span, end) - Math.max(start, op.at))
+        if (overlap === span) continue
+        const next = start < op.at ? start : start >= end ? start - op.count : op.at
+        if (rows) kept.push({ ...c, top: next, rowspan: span - overlap })
+        else kept.push({ ...c, left: next, colspan: span - overlap })
+      }
+      return replaceTable(tr, target, kept, rows ? grid.height - op.count : grid.height, op.id)
+    }
+  }
 }

@@ -1,11 +1,14 @@
 import MarkdownIt, { type StateInline, type Token } from 'markdown-it'
 import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model'
 import { isSafeHref, schema } from './schema.ts'
+import { readGrid } from './table-grid.ts'
 
 /**
  * 平台的 markdown 方言（PLATFORM.md §6.1）：CommonMark + GFM 表格 + 引用 `[@c:<cite_id>]`
  * + 读视图里的块 id 前缀 `{#id}`（写入时忽略）+ 资产图 `![alt](asset:<id> "图注")`
  * + 行内 `<sup> <sub> <u> <br>`。样式（标题级别以外）不进 markdown，由专用 op 修改。
+ * 表格按逻辑网格书写：每行列数相同；单元格内容恰为 `^` 表示与上方单元格合并、`<` 表示与左侧合并
+ * （字面量写作 `\^` `\<`）；单元格内多个段落写作 `{#id} 第一段<br>{#id} 第二段`（读视图给出，新段落可省略 id）。
  */
 
 const ID_PREFIX_LINE = /^(\s*)\{#[a-z][a-z0-9]{2,15}\}[ \t]?/gm
@@ -28,7 +31,8 @@ function idPrefixRule(state: StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x7b /* { */) return false
   const m = ID_PREFIX_INLINE.exec(state.src.slice(state.pos))
   if (!m) return false
-  if (!silent) { /* 丢弃：id 由平台管理 */ }
+  // id 由平台管理，内容丢弃；留一个空标记供表格单元格识别段落边界（buildInline 忽略它）
+  if (!silent) state.push('id_marker', '', 0)
   state.pos += m[0].length
   return true
 }
@@ -47,6 +51,32 @@ export function parseBlocks(source: string): PMNode[] {
   const tokens = md.parse(source.replace(ID_PREFIX_LINE, '$1'), {})
   const [nodes] = buildBlocks(tokens, 0, null)
   return nodes
+}
+
+/** 解析单元格内容：`<br>` 后紧跟 `{#id}` 处分段，其余 `<br>` 为段内换行。至少返回一个段落。 */
+export function parseCell(source: string): PMNode[] {
+  const tokens = md.parseInline(source, {})[0]?.children ?? []
+  return cellParagraphs(tokens)
+}
+
+function cellParagraphs(children: Token[]): PMNode[] {
+  const isBr = (t: Token) => t.type === 'hardbreak' || (t.type === 'html_inline' && /^<br\s*\/?>$/i.test(t.content.trim()))
+  const segments: Token[][] = [[]]
+  for (const t of children) {
+    const cur = segments[segments.length - 1]!
+    if (t.type === 'id_marker') {
+      // 只在段首或换行后才算段落边界；文字中间的 {#id} 照旧丢弃
+      const meaningful = cur.filter(x => !(x.type === 'text' && !x.content.trim()))
+      const last = meaningful[meaningful.length - 1]
+      if (last && isBr(last)) {
+        cur.splice(cur.lastIndexOf(last))
+        segments.push([])
+      }
+      continue
+    }
+    cur.push(t)
+  }
+  return segments.map(seg => schema.node('paragraph', null, buildInline(seg)))
 }
 
 /** 解析为行内内容（replace_text 的替换文本、表格单元格）。 */
@@ -139,28 +169,66 @@ function buildBlocks(tokens: Token[], start: number, closeType: string | null, c
 }
 
 function buildTable(tokens: Token[], start: number): [PMNode, number] {
-  const rows: PMNode[] = []
-  let cells: PMNode[] = []
+  // 先收集逻辑网格：每格为内容或合并标记（^ 向上、< 向左）
+  type Slot = { header: boolean; paras: PMNode[] } | '^' | '<'
+  const grid: Slot[][] = []
+  let row: Slot[] = []
   let i = start
   while (i < tokens.length) {
     const t = tokens[i]!
-    if (t.type === 'table_close') return [schema.node('table', null, rows), i + 1]
-    if (t.type === 'tr_open') cells = []
-    else if (t.type === 'tr_close') rows.push(schema.node('table_row', null, cells))
+    if (t.type === 'table_close') return [tableFromSlots(grid), i + 1]
+    if (t.type === 'tr_open') row = []
+    else if (t.type === 'tr_close') grid.push(row)
     else if (t.type === 'th_open' || t.type === 'td_open') {
-      const content = buildInline(tokens[i + 1]!.children ?? [])
-      cells.push(schema.node('table_cell', { header: t.type === 'th_open' }, [schema.node('paragraph', null, content)]))
+      const inline = tokens[i + 1]!
+      const raw = inline.content.trim()
+      row.push(raw === '^' || raw === '<' ? raw : { header: t.type === 'th_open', paras: cellParagraphs(inline.children ?? []) })
       i += 3
       continue
     }
     i++
   }
   throw new MarkdownError('表格结构不完整')
+
+  function tableFromSlots(slots: Slot[][]): PMNode {
+    // owner[r][c]：该位置归属的起点单元格（行, 列）
+    const owner: Array<Array<[number, number]>> = slots.map(() => [])
+    slots.forEach((cells, r) => cells.forEach((slot, c) => {
+      if (slot === '<') {
+        if (c === 0 || !owner[r]![c - 1]) throw new MarkdownError(`表格第 ${r} 行第 ${c} 列的 < 左侧没有可合并的单元格`)
+        owner[r]![c] = owner[r]![c - 1]!
+      } else if (slot === '^') {
+        if (r === 0 || !owner[r - 1]![c]) throw new MarkdownError(`表格第 ${r} 行第 ${c} 列的 ^ 上方没有可合并的单元格`)
+        owner[r]![c] = owner[r - 1]![c]!
+      } else owner[r]![c] = [r, c]
+    }))
+    // 每个起点实际占用的格数，用来核对合并区是矩形（不能多出伸到矩形外的格）
+    const area = new Map<string, number>()
+    owner.forEach(cells => cells.forEach(o => area.set(`${o[0]},${o[1]}`, (area.get(`${o[0]},${o[1]}`) ?? 0) + 1)))
+    const rows: PMNode[][] = slots.map(() => [])
+    slots.forEach((cells, r) => cells.forEach((slot, c) => {
+      if (typeof slot === 'string') return
+      let colspan = 1
+      while (owner[r]![c + colspan]?.[0] === r && owner[r]![c + colspan]?.[1] === c) colspan++
+      let rowspan = 1
+      while (owner[r + rowspan]?.[c]?.[0] === r && owner[r + rowspan]?.[c]?.[1] === c) rowspan++
+      // 合并区必须是矩形
+      for (let dr = 0; dr < rowspan; dr++) for (let dc = 0; dc < colspan; dc++) {
+        const o = owner[r + dr]?.[c + dc]
+        if (!o || o[0] !== r || o[1] !== c) throw new MarkdownError(`表格第 ${r} 行第 ${c} 列的合并区域不是矩形`)
+      }
+      if (area.get(`${r},${c}`) !== rowspan * colspan) throw new MarkdownError(`表格第 ${r} 行第 ${c} 列的合并区域不是矩形`)
+      rows[r]!.push(schema.node('table_cell', { header: slot.header, colspan, rowspan }, slot.paras))
+    }))
+    const empty = rows.findIndex(r => r.length === 0)
+    if (empty !== -1) throw new MarkdownError(`表格第 ${empty} 行全部被合并，没有单元格`)
+    return schema.node('table', null, rows.map(r => schema.node('table_row', null, r)))
+  }
 }
 
 /** 只含一个图片的段落 → figure 块（资产图）。 */
 function asFigure(children: Token[]): PMNode | null {
-  const meaningful = children.filter(c => !(c.type === 'text' && !c.content.trim()) && c.type !== 'softbreak')
+  const meaningful = children.filter(c => !(c.type === 'text' && !c.content.trim()) && c.type !== 'softbreak' && c.type !== 'id_marker')
   if (meaningful.length !== 1 || meaningful[0]!.type !== 'image') return null
   const img = meaningful[0]!
   const src = String(img.attrGet('src') ?? '')
@@ -281,7 +349,7 @@ export function serializeBlock(node: PMNode, opts: SerializeOptions, indent: str
       return head + lines.join('\n')
     }
     case 'table':
-      return (opts.ids && node.attrs.id ? `${indent}{#${node.attrs.id}}${pending ? ' ' + pending.trimEnd() : ''}\n` : '') + serializeTable(node, indent)
+      return (opts.ids && node.attrs.id ? `${indent}{#${node.attrs.id}}${pending ? ' ' + pending.trimEnd() : ''}\n` : '') + serializeTable(node, indent, opts)
     case 'figure': {
       const caption = node.attrs.caption ? ` "${String(node.attrs.caption).replace(/"/g, '\\"')}"` : ''
       return `${indent}${pre}![${node.attrs.alt ?? ''}](asset:${node.attrs.asset_id}${caption})`
@@ -307,21 +375,31 @@ function serializeListItem(item: PMNode, marker: string, opts: SerializeOptions,
   return parts.join('\n')
 }
 
-function serializeTable(node: PMNode, indent: string): string {
+/**
+ * 表格按逻辑网格输出（每行列数相同）。读视图（ids）里被合并覆盖的位置写 `^`（与上方合并）或 `<`（与左侧合并），
+ * 并给单元格内每个段落加 `{#id}`；普通导出里覆盖位置留空。
+ */
+function serializeTable(node: PMNode, indent: string, opts: SerializeOptions): string {
+  const grid = readGrid(node)
+  if (grid.height === 0) return ''
   const rows: string[][] = []
-  node.forEach(row => {
+  for (let r = 0; r < grid.height; r++) {
     const cells: string[] = []
-    row.forEach(cell => {
-      const parts: string[] = []
-      cell.forEach(p => parts.push(serializeInline(p)))
-      cells.push(parts.join('<br>').replace(/\|/g, '\\|'))
-    })
+    for (let c = 0; c < grid.width; c++) {
+      const cell = grid.at(r, c)
+      if (!cell) cells.push('')
+      else if (cell.top !== r || cell.left !== c) cells.push(opts.ids ? (cell.left !== c ? '<' : '^') : '')
+      else {
+        const parts: string[] = []
+        cell.node.forEach(p => parts.push((opts.ids && p.attrs.id ? `{#${p.attrs.id}} ` : '') + serializeInline(p)))
+        const text = parts.join('<br>').replace(/\|/g, '\\|')
+        cells.push(text === '^' || text === '<' ? `\\${text}` : text)
+      }
+    }
     rows.push(cells)
-  })
-  if (rows.length === 0) return ''
-  const width = Math.max(...rows.map(r => r.length))
-  const line = (r: string[]) => `${indent}| ${Array.from({ length: width }, (_, i) => r[i] ?? '').join(' | ')} |`
-  return [line(rows[0]!), `${indent}|${' --- |'.repeat(width)}`, ...rows.slice(1).map(line)].join('\n')
+  }
+  const line = (r: string[]) => `${indent}| ${r.join(' | ')} |`
+  return [line(rows[0]!), `${indent}|${' --- |'.repeat(grid.width)}`, ...rows.slice(1).map(line)].join('\n')
 }
 
 const MARK_ORDER = ['link', 'text_style', 'bold', 'italic', 'underline', 'sup', 'sub', 'code']

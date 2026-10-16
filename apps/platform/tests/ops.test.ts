@@ -141,18 +141,11 @@ describe('doc_edit 操作', () => {
     expectOpError(() => ops.edit({ doc_id: docId, base_rev: 3, mode: 'apply', ops: [{ op: 'table_delete_cols', id: table, at: 0, count: 1 }] }, { actor: 'ai', turnId: null }), 'invalid_structure')
   })
 
-  it('表格增删列：合并单元格内插列加宽、删列收窄；含跨行合并时拒绝', () => {
-    // 首行前两格合并（colspan=2）：| a(2列) | c |，第二行 | 1 | 2 | 3 |
-    const [base] = parseBlocks('| a | b | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |')
-    const withSpan = (rowspan: number) => {
-      const r0 = base!.child(0)
-      const merged = r0.child(0).type.create({ ...r0.child(0).attrs, colspan: 2, rowspan }, r0.child(0).content)
-      const r1 = rowspan > 1 ? base!.child(1).type.create(null, [base!.child(1).child(2)]) : base!.child(1)
-      return base!.type.create(base!.attrs, [r0.type.create(r0.attrs, [merged, r0.child(2)]), r1])
-    }
+  it('表格增删列：合并单元格内插列加宽、删列收窄', () => {
     const { docs, ops } = setup()
-    const d2 = docs.create({ owner: 'u1', title: 't', content: schema.node('doc', null, [withSpan(1)]) }).id
+    const d2 = docs.create({ owner: 'u1', title: 't', content: schema.node('doc', null, parseBlocks('| a | < | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |')) }).id
     const table = docs.get(d2).child(0).attrs.id as string
+    expect(docs.get(d2).child(0).child(0).child(0).attrs.colspan).toBe(2)
     ops.edit({ doc_id: d2, base_rev: 0, mode: 'apply', ops: [{ op: 'table_insert_cols', id: table, at: 1 }] }, { actor: 'ai', turnId: null })
     let t = docs.get(d2).child(0)
     expect(t.child(0).child(0).attrs.colspan).toBe(3)
@@ -162,10 +155,80 @@ describe('doc_edit 操作', () => {
     t = docs.get(d2).child(0)
     expect(t.child(0).child(0).attrs.colspan).toBe(1)
     expect(t.child(1).textContent).toBe('23')
+  })
 
-    const row3 = docs.create({ owner: 'u1', title: 't', content: schema.node('doc', null, [withSpan(2)]) })
-    const t3 = docs.get(row3.id).child(0).attrs.id as string
-    expectOpError(() => ops.edit({ doc_id: row3.id, base_rev: 0, mode: 'apply', ops: [{ op: 'table_insert_cols', id: t3, at: 1 }] }, { actor: 'ai', turnId: null }), 'invalid_structure')
+  describe('表格逻辑网格（跨行合并）', () => {
+    // 第 1 行第 0 列向下合并 2 行：AI 读到的视图与操作坐标一致
+    const SPAN = '| a | b | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| ^ | 5 | 6 |'
+    const mk = () => {
+      const t = setup(SPAN)
+      const table = t.docs.get(t.docId).child(0).attrs.id as string
+      const edit = (rev: number, op: Record<string, unknown>) => t.ops.edit({ doc_id: t.docId, base_rev: rev, mode: 'apply', ops: [{ id: table, ...op } as never] }, { actor: 'ai', turnId: null })
+      const md = () => serializeBlocks([t.docs.get(t.docId).child(0)])
+      return { ...t, table, edit, md }
+    }
+
+    it('读视图按网格对齐，合并位置写 ^，单元格段落带 id；按视图坐标写入命中正确的格', () => {
+      const t = mk()
+      const view = read({ doc: t.docs.get(t.docId), citations: [], comments: [], rev: 0 } as never)
+      expect(view).toMatch(/\| \^ \| \{#[a-z0-9]+\} 5 \| \{#[a-z0-9]+\} 6 \|/)
+      t.edit(0, { op: 'table_set_cells', cells: [{ row: 2, col: 1, markdown: 'X' }] })
+      expect(t.md()).toContain('|  | X | 6 |')
+      const e = expectOpError(() => t.edit(1, { op: 'table_set_cells', cells: [{ row: 2, col: 0, markdown: 'Y' }] }), 'cell_not_found')
+      expect(String(e.extra.hint)).toContain('(1, 0)')
+    })
+
+    it('删除合并起点所在行：内容保留、下方行不错位', () => {
+      const t = mk()
+      t.edit(0, { op: 'table_delete_rows', at: 1, count: 1 })
+      const tbl = t.docs.get(t.docId).child(0)
+      expect(tbl.childCount).toBe(2)
+      expect(tbl.child(1).childCount).toBe(3)
+      expect(tbl.child(1).textContent).toBe('156')
+      expect(tbl.child(1).child(0).attrs.rowspan).toBe(1)
+    })
+
+    it('在合并范围内插入行：合并区加高，新行只建未被覆盖的格', () => {
+      const t = mk()
+      t.edit(0, { op: 'table_insert_rows', at: 2, rows: [['忽略', 'p', 'q']] })
+      const tbl = t.docs.get(t.docId).child(0)
+      expect(tbl.child(1).child(0).attrs.rowspan).toBe(3)
+      expect(tbl.child(2).childCount).toBe(2)
+      expect(tbl.child(2).textContent).toBe('pq')
+      expect(t.md()).not.toContain('忽略')
+    })
+
+    it('replace_block 用读视图的 markdown 原样写回：合并与段落结构保留', () => {
+      const t = mk()
+      const before = t.docs.get(t.docId).child(0)
+      const view = serializeBlocks([before], { ids: true }).replace(/^\{#[a-z0-9]+\}\n/, '')
+      t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id: t.table, markdown: view }] }, { actor: 'ai', turnId: null })
+      const after = t.docs.get(t.docId).child(0)
+      expect(after.child(1).child(0).attrs.rowspan).toBe(2)
+      expect(serializeBlocks([after])).toBe(serializeBlocks([before]))
+    })
+
+    it('单元格多段落：table_set_cells 按 {#id} 分段并沿用原段落 id；replace_text 可直接改单元格段落', () => {
+      const t = setup('| 项目 |\n| --- |\n| 甲 |')
+      const tbl = t.docs.get(t.docId).child(0)
+      const pid = tbl.child(1).child(0).child(0).attrs.id as string
+      t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'table_set_cells', id: tbl.attrs.id as string, cells: [{ row: 1, col: 0, markdown: `{#${pid}} 第一段<br>{#zzzz} 第二段<br>续行` }] }] }, { actor: 'ai', turnId: null })
+      const cell = t.docs.get(t.docId).child(0).child(1).child(0)
+      expect(cell.childCount).toBe(2)
+      expect(cell.child(0).attrs.id).toBe(pid)
+      expect(cell.child(0).textContent).toBe('第一段')
+      expect(cell.child(1).childCount).toBe(3) // 第二段 + 换行 + 续行
+      t.ops.edit({ doc_id: t.docId, base_rev: 1, mode: 'apply', ops: [{ op: 'replace_text', id: pid, find: '第一', replace: '首' }] }, { actor: 'ai', turnId: null })
+      expect(t.docs.get(t.docId).child(0).child(1).child(0).child(0).textContent).toBe('首段')
+    })
+
+    it('markdown 合并标记：非矩形或无处可并时报错，\\^ 是字面量', () => {
+      expect(() => parseBlocks('| ^ | b |\n| --- | --- |')).toThrow(/上方没有/)
+      expect(() => parseBlocks('| a | b |\n| --- | --- |\n| ^ | < |')).toThrow(/矩形/)
+      const [tbl] = parseBlocks('| a | \\^ |\n| --- | --- |')
+      expect(tbl!.child(0).childCount).toBe(2)
+      expect(tbl!.child(0).child(1).textContent).toBe('^')
+    })
   })
 
   it('结构守卫：不能在列表项后插入标题', () => {
