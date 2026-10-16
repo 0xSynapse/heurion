@@ -196,4 +196,33 @@ describe('docx 导出：图、不可编辑段落、列表样式', () => {
     expect(strFromU8(files['[Content_Types].xml']!)).toContain('Extension="png"')
     expect(strFromU8(files['[Content_Types].xml']!)).toContain('Extension="svg"')
   })
+
+  it('单列表单型表格（如申报书章节表）修改后导出不注入 <w:tblHeader/>，且单元格内 <br> 拆分为独立段落 <w:p>', () => {
+    const formTable = `<w:tbl><w:tr><w:tc>${p('一、国内外开展现状（请详细阐述技术背景）')}</w:tc></w:tr><w:tr><w:tc>${p('二、开展该技术的目的、意义和必要性')}</w:tc></w:tr></w:tbl>`
+    const t = importInto(docx(formTable))
+    const tbl = t.docs.get(t.docId).child(0)
+    expect(tbl.type.name).toBe('table')
+    expect(tbl.child(0).child(0).attrs.header).toBe(false)
+
+    const tblId = tbl.attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: tblId,
+        markdown: '| **一、国内外开展现状**<br>（一）国外开展现状：第一段内容。<br>（二）国内开展现状：第二段内容。 |\n| --- |\n| **二、开展该技术的目的、意义和必要性**<br>第三段内容。 |',
+      }],
+    }, { actor: 'ai', turnId: null })
+
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).not.toContain('<w:tblHeader/>')
+    expect(body).not.toContain('<w:br/>')
+    const firstRowMatch = body.match(/<w:tr>[\s\S]*?<\/w:tr>/)
+    expect(firstRowMatch).not.toBeNull()
+    const firstRowParas = firstRowMatch![0].match(/<w:p\b/g) ?? []
+    expect(firstRowParas.length).toBe(3)
+  })
 })
+

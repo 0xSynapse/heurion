@@ -368,6 +368,11 @@ export function exportDocx(input: ExportInput): ExportResult {
   const table = (node: PMNode): string => {
     const src = unchanged(node)
     if (src) return src
+    const origTbl = input.src(node.attrs.id as string)
+    const firstTrMatch = origTbl ? /<w:tr\b[\s\S]*?<\/w:tr>/.exec(origTbl) : null
+    const origHasTblHeader = firstTrMatch
+      ? /<w:tblHeader(?:\s+w:val="(?!0|false|off)[^"]*")?\s*\/>/.test(firstTrMatch[0])
+      : null
     // 网格：rowspan 用 vMerge 续行单元格补位
     const width = Math.max(1, ...Array.from({ length: node.childCount }, (_, r) => {
       let w = 0
@@ -377,7 +382,7 @@ export function exportDocx(input: ExportInput): ExportResult {
     const carry = new Map<number, { left: number; span: number }>()
     const colW = Math.floor(9000 / width)
     const rows: string[] = []
-    node.forEach(row => {
+    node.forEach((row, _o, ri) => {
       const cells: string[] = []
       let col = 0
       const pushContinue = () => {
@@ -393,13 +398,45 @@ export function exportDocx(input: ExportInput): ExportResult {
         const span = cell.attrs.colspan as number
         const rowspan = cell.attrs.rowspan as number
         let paras = ''
-        cell.forEach(p => { paras += paragraph(p) })
+        cell.forEach(p => {
+          const v = verbatim(p)
+          if (v) {
+            paras += v
+            return
+          }
+          let hasBr = false
+          p.forEach(ch => { if (ch.type.name === 'hard_break') hasBr = true })
+          const hasCommentBound = [...lastPara.values()].includes(p)
+          if (hasBr && !hasCommentBound && p.type.name === 'paragraph') {
+            let seg: PMNode[] = []
+            p.forEach(ch => {
+              if (ch.type.name === 'hard_break') {
+                paras += paragraph(p.type.create({ ...p.attrs, id: null }, seg, p.marks))
+                seg = []
+              } else {
+                seg.push(ch)
+              }
+            })
+            paras += paragraph(p.type.create({ ...p.attrs, id: null }, seg, p.marks))
+          } else {
+            paras += paragraph(p)
+          }
+        })
         cells.push(`<w:tc><w:tcPr><w:tcW w:w="${colW * span}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ''}${rowspan > 1 ? '<w:vMerge w:val="restart"/>' : ''}</w:tcPr>${paras || '<w:p/>'}</w:tc>`)
         if (rowspan > 1) carry.set(col, { left: rowspan - 1, span })
         col += span
       })
       pushContinue()
-      rows.push(`<w:tr>${row.firstChild?.attrs.header ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}${cells.join('')}</w:tr>`)
+      let isRepeatHeader = false
+      if (ri === 0 && row.firstChild?.attrs.header && origHasTblHeader !== false && row.childCount >= 2) {
+        let allShort = true
+        row.forEach(cell => {
+          if (cell.childCount > 1 || cell.textContent.length > 80) allShort = false
+          cell.forEach(p => p.forEach(ch => { if (ch.type.name === 'hard_break') allShort = false }))
+        })
+        isRepeatHeader = allShort
+      }
+      rows.push(`<w:tr>${isRepeatHeader ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}${cells.join('')}</w:tr>`)
     })
     const border = (side: string) => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`
     return `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(border).join('')}</w:tblBorders><w:tblLook w:val="04A0"/></w:tblPr><w:tblGrid>${Array.from({ length: width }, () => `<w:gridCol w:w="${colW}"/>`).join('')}</w:tblGrid>${rows.join('')}</w:tbl>`

@@ -310,6 +310,11 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     const merging = new Map<number, { row: number; cell: number }>()
     const rowCells: Array<Array<{ attrs: Record<string, unknown>; content: PMNode[] }>> = []
     children(tbl).filter(c => local(c) === 'tr').forEach((tr, ri) => {
+      const trPr = child(tr, 'trPr')
+      const tblHeaderEl = trPr && child(trPr, 'tblHeader')
+      const explicitHeader = tblHeaderEl
+        ? !/^(0|false|off)$/i.test(wAttr(tblHeaderEl, 'val') ?? '1')
+        : null
       const cells: Array<{ attrs: Record<string, unknown>; content: PMNode[] }> = []
       let col = 0
       for (const tc of children(tr).filter(c => local(c) === 'tc')) {
@@ -331,12 +336,24 @@ export function importDocx(bytes: Uint8Array): DocxImport {
           const figures: PMNode[] = []
           paras.push(schema.node('paragraph', null, inlineOf(p, figures)))
         }
-        const attrs = { colspan: span, rowspan: 1, header: ri === 0 }
+        const attrs = { colspan: span, rowspan: 1, header: false }
         cells.push({ attrs, content: paras.length > 0 ? paras : [schema.node('paragraph')] })
         if (vMerge === 'restart') merging.set(col, { row: ri, cell: cells.length - 1 })
         else merging.delete(col)
         col += span
       }
+      const isShortMultiColFirstRow = ri === 0 && cells.length >= 2 && cells.every(c => {
+        if (c.content.length > 2) return false
+        let len = 0
+        let hasBr = false
+        for (const p of c.content) {
+          len += p.textContent.length
+          p.forEach(ch => { if (ch.type.name === 'hard_break') hasBr = true })
+        }
+        return !hasBr && len <= 80
+      })
+      const isHeader = explicitHeader !== null ? explicitHeader : isShortMultiColFirstRow
+      for (const c of cells) c.attrs.header = isHeader
       rowCells.push(cells)
     })
     for (const cells of rowCells) {
