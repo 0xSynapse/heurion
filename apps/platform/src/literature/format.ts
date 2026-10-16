@@ -73,8 +73,27 @@ export function formatGbt7714(a: Article): string {
   return parts.filter(Boolean).join(' ')
 }
 
+/** 清理文献元数据中的 HTML/JATS 标签、转义实体与多余换行空白。 */
+export function cleanBibText(raw: string): string {
+  return raw
+    .replace(/<\/?(?:i|b|u|em|strong|sup|sub|scp|span|p)\b[^>]*>/gi, '')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 /** 按指定格式生成引用文本（默认 AMA）。 */
-export function formatCitation(a: Article, style: CitationStyle = 'ama'): string {
+export function formatCitation(raw: Article, style: CitationStyle = 'ama'): string {
+  const a: Article = {
+    ...raw,
+    title: cleanBibText(raw.title),
+    journal: cleanBibText(raw.journal),
+    authors: raw.authors.map(cleanBibText).filter(Boolean),
+  }
   switch (style) {
     case 'vancouver': return formatVancouver(a)
     case 'apa': return formatApa(a)

@@ -1,4 +1,4 @@
-import { normalizeDoi } from './format.ts'
+import { cleanBibText, normalizeDoi } from './format.ts'
 import type { Article, FetchLike } from './types.ts'
 
 interface CrossrefWork {
@@ -33,9 +33,9 @@ function toArticle(w: CrossrefWork): Article {
   return {
     pmid: null,
     doi: normalizeDoi(w.DOI),
-    title: w.title?.[0] ?? '',
+    title: cleanBibText(w.title?.[0] ?? ''),
     authors,
-    journal: w['short-container-title']?.[0] ?? w['container-title']?.[0] ?? '',
+    journal: cleanBibText(w['short-container-title']?.[0] ?? w['container-title']?.[0] ?? ''),
     year: String(w.issued?.['date-parts']?.[0]?.[0] ?? ''),
     ...(w.volume ? { volume: w.volume } : {}),
     ...(w.issue ? { issue: w.issue } : {}),

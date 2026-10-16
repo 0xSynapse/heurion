@@ -47,7 +47,7 @@ export function applyOps(doc: PMNode, ops: DocOp[], ctx: ApplyContext): { doc: P
         break
       case 'move':
         for (const id of op.ids) targetedIds.add(id)
-        targetedIds.add(op.after)
+        if (op.after) targetedIds.add(op.after)
         break
     }
   }

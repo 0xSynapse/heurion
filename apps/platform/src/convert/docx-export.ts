@@ -1,6 +1,7 @@
 import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
+import { cleanBibText } from '../literature/format.ts'
 import type { CitationRow, CommentRow } from '../store/db.ts'
 import { citationOrder } from '../views/read.ts'
 import { bodyChildrenRaw, safeUnzipDocx } from './docx-import.ts'
@@ -455,26 +456,57 @@ export function exportDocx(input: ExportInput): ExportResult {
     }
   }
 
-  let body = ''
-  input.doc.forEach(n => { body += block(n) })
-
-  // 参考文献表（平台生成；若正文末尾已有「参考文献 / References」标题则直接追加条目，避免重复标题）
+  // 参考文献表（平台生成；若正文末尾已有「参考文献 / References」标题或段落及空行/旧静态条目则去重）
   const byId = new Map(input.citations.map(c => [c.id, c]))
   const used = order.filter(id => byId.has(id))
+  const refTitleRe = /^(?:[一二三四五六七八九十\d]+[.、\s]*)?(?:参考文献|references|bibliography)[:：]?$/i
+  let bodyEndIdx = input.doc.childCount
+  let hasTrailingRefHeading = false
   if (used.length > 0) {
-    const lastNode = input.doc.lastChild
-    const hasTrailingRefHeading = Boolean(
-      lastNode &&
-      lastNode.type.name === 'heading' &&
-      /^(?:\d+[.、\s]*)?(?:参考文献|references)$/i.test(lastNode.textContent.trim()),
-    )
+    let i = input.doc.childCount - 1
+    let firstRefIdx = -1
+    while (i >= 0) {
+      const n = input.doc.child(i)
+      const txt = n.textContent.trim()
+      if (n.type.name === 'paragraph' && txt === '' && n.childCount === 0) {
+        i--
+        continue
+      }
+      if (n.type.name === 'paragraph' && /^\[\d+\]\s+\S/.test(txt)) {
+        i--
+        continue
+      }
+      if ((n.type.name === 'heading' || n.type.name === 'paragraph') && refTitleRe.test(txt)) {
+        firstRefIdx = i
+        i--
+        continue
+      }
+      break
+    }
+    if (firstRefIdx !== -1) {
+      const candidate = input.doc.child(firstRefIdx)
+      if (candidate.type.name === 'heading') {
+        bodyEndIdx = firstRefIdx + 1
+        hasTrailingRefHeading = true
+      } else {
+        bodyEndIdx = firstRefIdx
+      }
+    }
+  }
+
+  let body = ''
+  input.doc.forEach((n, _off, idx) => {
+    if (idx < bodyEndIdx) body += block(n)
+  })
+
+  if (used.length > 0) {
     if (!hasTrailingRefHeading) {
       const h = headingStyle(1)
       if (!styles.has(h.toLowerCase())) missingHeading.add(1)
       body += `<w:p><w:pPr><w:pStyle w:val="${esc(h)}"/></w:pPr><w:r><w:t>参考文献</w:t></w:r></w:p>`
     }
     used.forEach((id, i) => {
-      body += `<w:p><w:pPr><w:ind w:left="440" w:hanging="440"/></w:pPr><w:r><w:t xml:space="preserve">[${i + 1}] ${esc(byId.get(id)!.formatted)}</w:t></w:r></w:p>`
+      body += `<w:p><w:pPr><w:ind w:left="440" w:hanging="440"/></w:pPr><w:r><w:t xml:space="preserve">[${i + 1}] ${esc(cleanBibText(byId.get(id)!.formatted))}</w:t></w:r></w:p>`
     })
   }
 
