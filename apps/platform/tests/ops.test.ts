@@ -231,6 +231,51 @@ describe('doc_edit 操作', () => {
     })
   })
 
+  describe('表格合并拆分、表头与样式', () => {
+    const mk = (md = '| a | b | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |') => {
+      const t = setup(md)
+      const table = () => t.docs.get(t.docId).child(0)
+      const edit = (op: Record<string, unknown>) => t.ops.edit({ doc_id: t.docId, base_rev: t.docs.rev(t.docId), mode: 'apply', ops: [{ id: table().attrs.id, ...op } as never] }, { actor: 'ai', turnId: null })
+      return { ...t, table, edit }
+    }
+
+    it('合并：内容按阅读顺序合并、空格跳过；拆分：恢复网格并补空格', () => {
+      const t = mk()
+      t.edit({ op: 'table_merge_cells', row: 1, col: 0, rows: 2, cols: 2 })
+      expect(serializeBlocks([t.table()], { ids: true })).toMatch(/\| \{#\w+\} 1<br>\{#\w+\} 2<br>\{#\w+\} 4<br>\{#\w+\} 5 \| < \| \{#\w+\} 3 \|\n\| \^ \| < \| \{#\w+\} 6 \|/)
+      expectOpError(() => t.edit({ op: 'table_merge_cells', row: 0, col: 1, rows: 2, cols: 1 }), 'invalid_structure')
+      t.edit({ op: 'table_split_cell', row: 1, col: 0 })
+      const tbl = t.table()
+      expect(tbl.child(1).childCount).toBe(3)
+      expect(tbl.child(2).childCount).toBe(3)
+      expect(tbl.child(1).child(0).childCount).toBe(4)
+    })
+
+    it('表头：设定行数写入 header 与 header_rows；跨过边界的合并单元格拒绝', () => {
+      const t = mk()
+      t.edit({ op: 'table_set_header', rows: 2 })
+      expect(t.table().attrs.header_rows).toBe(2)
+      expect(t.table().child(1).child(0).attrs.header).toBe(true)
+      expect(t.table().child(2).child(0).attrs.header).toBe(false)
+      t.edit({ op: 'table_set_header', rows: 0 })
+      t.edit({ op: 'table_merge_cells', row: 0, col: 0, rows: 2, cols: 1 })
+      expectOpError(() => t.edit({ op: 'table_set_header', rows: 1 }), 'invalid_structure')
+    })
+
+    it('样式：列宽、底纹、垂直对齐；增删列时列宽同步', () => {
+      const t = mk()
+      t.edit({ op: 'table_set_style', col_widths: [1, 2, 3], cells: [{ row: 1, col: 1, background: '#d9e2f3', valign: 'center' }] })
+      expect(t.table().attrs.col_widths).toBe('1,2,3')
+      expect(t.table().child(1).child(1).attrs.background).toBe('D9E2F3')
+      expect(t.table().child(1).child(1).attrs.valign).toBe('center')
+      t.edit({ op: 'table_delete_cols', at: 0, count: 1 })
+      expect(t.table().attrs.col_widths).toBe('2,3')
+      t.edit({ op: 'table_insert_cols', at: 2 })
+      expect(t.table().attrs.col_widths).toBe('2,3,2.5')
+      expectOpError(() => t.edit({ op: 'table_set_style', col_widths: [1, 2] }), 'invalid_structure')
+    })
+  })
+
   it('结构守卫：不能在列表项后插入标题', () => {
     const { docs, ops, docId } = setup(SAMPLE)
     const item = docs.get(docId).child(3).child(0).attrs.id as string

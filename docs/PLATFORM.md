@@ -245,6 +245,9 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | `move` | `ids, after`（null = 文档开头） | |
 | `set_block_style` | `id, type?, level?, align?, style?` | 段落 ↔ 标题、级别、对齐、Word 样式名 |
 | `table_set_cells` / `table_insert_rows` / `table_delete_rows` / `table_insert_cols` / `table_delete_cols` | `id, …` | 单元格内容为行内 markdown（多段落写作 `{#id} 段一<br>{#id} 段二`，按位置沿用原段落 id 与属性）；行列号按逻辑网格（计入 colspan / rowspan，与读视图一致），写合并单元格用左上角坐标；增删行列时合并区随之伸缩 |
+| `table_merge_cells` / `table_split_cell` | `id, row, col, rows?, cols?` | 合并区须完整包住已有合并单元格，内容按阅读顺序并入左上角（跳过空格）；拆分时补空格并沿用底纹、对齐 |
+| `table_set_header` | `id, rows` | 开头 rows 行设为表头并记入 `header_rows`，docx 导出按此加跨页重复（优先于导入 / 自动规则，单列表格也照办）；合并单元格不能跨过表头边界 |
+| `table_set_style` | `id, col_widths?, cells?[{row, col, background?, valign?}]` | 列宽为相对比例（导出按原表总宽或 9000 twip 分配，增删列时同步）；底纹 / 垂直对齐覆盖原文件的单元格属性，`null` 恢复原样；文字左中右对齐用 `set_block_style` 改单元格段落 |
 
 `mode: 'suggest'`：修改作为待采纳修订提交（块级：改动的块 = 原块待删除 + 新块待新增；新增块待新增；删除的块留在原位待删除；同一批共享修订组）。页面勾选「修订模式」时回合在服务端强制 suggest，不依赖模型传参。修订中的块不能再被 AI 修改（`pending_suggestion`）；读视图标出 `⟨待采纳·新增 / 删除⟩`；导出按「未采纳」处理。
 

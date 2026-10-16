@@ -2,7 +2,7 @@ import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model'
 import { Transform } from 'prosemirror-transform'
 import { assignIds, indexById, stripIds } from '../model/ids.ts'
 import { MarkdownError, parseBlocks, parseCell, parseInline, serializeBlock } from '../model/markdown.ts'
-import { schema } from '../model/schema.ts'
+import { colWidths, schema } from '../model/schema.ts'
 import { buildFromGrid, readGrid, type Grid, type GridCell } from '../model/table-grid.ts'
 import { OpError, type DocOp } from './types.ts'
 
@@ -43,6 +43,10 @@ export function applyOps(doc: PMNode, ops: DocOp[], ctx: ApplyContext): { doc: P
       case 'table_delete_rows':
       case 'table_insert_cols':
       case 'table_delete_cols':
+      case 'table_merge_cells':
+      case 'table_split_cell':
+      case 'table_set_header':
+      case 'table_set_style':
         targetedIds.add(op.id)
         break
       case 'delete':
@@ -114,6 +118,10 @@ function applyOne(tr: Transform, op: DocOp, ctx: ApplyContext, targetedIds: Set<
     case 'table_delete_rows':
     case 'table_insert_cols':
     case 'table_delete_cols':
+    case 'table_merge_cells':
+    case 'table_split_cell':
+    case 'table_set_header':
+    case 'table_set_style':
       return tableOp(tr, op, ctx)
   }
 }
@@ -699,8 +707,8 @@ function tableTarget(tr: Transform, id: string): { node: PMNode; pos: number; gr
   return { ...target, grid: readGrid(target.node) }
 }
 
-function replaceTable(tr: Transform, target: { node: PMNode; pos: number }, cells: GridCell[], height: number, id: string): string[] {
-  const table = buildFromGrid(cells, height, target.node.attrs)
+function replaceTable(tr: Transform, target: { node: PMNode; pos: number }, cells: GridCell[], height: number, id: string, attrs: Record<string, unknown> = target.node.attrs): string[] {
+  const table = buildFromGrid(cells, height, attrs)
   if ('emptyRow' in table) throw new OpError('invalid_structure', `操作后表格第 ${table.emptyRow} 行没有单元格`, { hint: '请用 replace_block 整表替换。' })
   tr.replaceWith(target.pos, target.pos + target.node.nodeSize, table)
   return [id]
@@ -711,13 +719,22 @@ function replaceTable(tr: Transform, target: { node: PMNode; pos: number }, cell
  * 增删行列时合并单元格随之伸缩：插入点落在合并区内部则合并区扩展；删除范围部分覆盖合并区则合并区收缩，
  * 合并区起点被删时内容保留、起点移到删除范围之后。
  */
-function tableOp(tr: Transform, op: Extract<DocOp, { op: 'table_set_cells' | 'table_insert_rows' | 'table_delete_rows' | 'table_insert_cols' | 'table_delete_cols' }>, ctx: ApplyContext): string[] {
+function tableOp(tr: Transform, op: Extract<DocOp, { op: `table_${string}` }>, ctx: ApplyContext): string[] {
   const target = tableTarget(tr, op.id)
   const { grid } = target
   const shape = `表格共 ${grid.height} 行、${grid.width} 列；行列下标从 0 开始，按合并后的逻辑网格计。`
   const cells = grid.cells.map(c => ({ ...c }))
   const blank = (top: number, left: number, header: boolean, markdown = ''): GridCell =>
     ({ node: schema.node('table_cell', { header }, cellContent(markdown, null, ctx.taken)), top, left, rowspan: 1, colspan: 1 })
+  const origin = (row: number, col: number): GridCell => {
+    const cell = grid.at(row, col)
+    if (!cell) throw new OpError('cell_not_found', `表格 ${op.id} 没有单元格 (${row}, ${col})`, { hint: shape })
+    if (cell.top !== row || cell.left !== col) throw new OpError('cell_not_found', `单元格 (${row}, ${col}) 已并入 (${cell.top}, ${cell.left}) 的合并单元格`, { hint: `请写合并单元格的左上角 (${cell.top}, ${cell.left})。` })
+    return cells.find(x => x.top === row && x.left === col)!
+  }
+  // 设定过列宽时增删列同步调整（新列取平均宽度）
+  const widths = colWidths(target.node)
+  const withWidths = (ws: number[] | null) => ({ ...target.node.attrs, col_widths: ws ? ws.join(',') : null })
 
   switch (op.op) {
     case 'table_set_cells': {
@@ -762,7 +779,8 @@ function tableOp(tr: Transform, op: Extract<DocOp, { op: 'table_set_cells' | 'ta
         const neighbor = grid.at(row, op.at) ?? grid.at(row, op.at - 1)
         cells.push(blank(row, op.at, (neighbor?.node.attrs.header as boolean | undefined) ?? false, op.cells?.[row] ?? ''))
       }
-      return replaceTable(tr, target, cells, grid.height, op.id)
+      const ws = widths?.length === grid.width ? [...widths.slice(0, op.at), widths.reduce((a, b) => a + b, 0) / widths.length, ...widths.slice(op.at)] : null
+      return replaceTable(tr, target, cells, grid.height, op.id, widths ? withWidths(ws) : target.node.attrs)
     }
     case 'table_delete_rows':
     case 'table_delete_cols': {
@@ -782,7 +800,65 @@ function tableOp(tr: Transform, op: Extract<DocOp, { op: 'table_set_cells' | 'ta
         if (rows) kept.push({ ...c, top: next, rowspan: span - overlap })
         else kept.push({ ...c, left: next, colspan: span - overlap })
       }
-      return replaceTable(tr, target, kept, rows ? grid.height - op.count : grid.height, op.id)
+      if (rows) return replaceTable(tr, target, kept, grid.height - op.count, op.id)
+      const ws = widths?.length === grid.width ? [...widths.slice(0, op.at), ...widths.slice(end)] : null
+      return replaceTable(tr, target, kept, grid.height, op.id, widths ? withWidths(ws) : target.node.attrs)
+    }
+    case 'table_merge_cells': {
+      const end = { row: op.row + op.rows, col: op.col + op.cols }
+      if (end.row > grid.height || end.col > grid.width) throw new OpError('cell_not_found', `合并区域超出表格范围`, { hint: shape })
+      if (op.rows === 1 && op.cols === 1) throw new OpError('invalid_structure', '合并区域至少要有两个单元格')
+      const inside = (c: GridCell) => c.top >= op.row && c.left >= op.col && c.top + c.rowspan <= end.row && c.left + c.colspan <= end.col
+      const overlaps = (c: GridCell) => c.top < end.row && c.top + c.rowspan > op.row && c.left < end.col && c.left + c.colspan > op.col
+      const hit = cells.filter(overlaps)
+      const partial = hit.find(c => !inside(c))
+      if (partial) throw new OpError('invalid_structure', `合并区域切到了 (${partial.top}, ${partial.left}) 的合并单元格`, { hint: '合并区域要完整包住已有的合并单元格；可先 table_split_cell 拆开。' })
+      const head = origin(op.row, op.col)
+      // 内容按阅读顺序合在左上角单元格里，跳过空单元格
+      const paras: PMNode[] = []
+      for (const c of hit.sort((a, b) => a.top - b.top || a.left - b.left)) {
+        if (c.node.childCount === 1 && c.node.firstChild!.content.size === 0) continue
+        c.node.forEach(p => paras.push(p))
+      }
+      const merged: GridCell = { ...head, rowspan: op.rows, colspan: op.cols, node: head.node.type.create(head.node.attrs, paras.length > 0 ? paras : [assignIds(schema.node('paragraph'), ctx.taken)]) }
+      return replaceTable(tr, target, [...cells.filter(c => !overlaps(c)), merged], grid.height, op.id)
+    }
+    case 'table_split_cell': {
+      const head = origin(op.row, op.col)
+      if (head.rowspan === 1 && head.colspan === 1) throw new OpError('invalid_structure', `单元格 (${op.row}, ${op.col}) 没有合并，不需要拆分`)
+      const out = cells.filter(c => c !== head)
+      out.push({ ...head, rowspan: 1, colspan: 1 })
+      for (let r = head.top; r < head.top + head.rowspan; r++) {
+        for (let c = head.left; c < head.left + head.colspan; c++) {
+          if (r === head.top && c === head.left) continue
+          const fresh = blank(r, c, head.node.attrs.header as boolean)
+          // 拆出来的格沿用原合并单元格的底纹与对齐
+          out.push({ ...fresh, node: fresh.node.type.create({ ...fresh.node.attrs, background: head.node.attrs.background, valign: head.node.attrs.valign }, fresh.node.content) })
+        }
+      }
+      return replaceTable(tr, target, out, grid.height, op.id)
+    }
+    case 'table_set_header': {
+      if (op.rows > grid.height) throw new OpError('cell_not_found', `表格只有 ${grid.height} 行`)
+      const straddle = cells.find(c => c.top < op.rows && c.top + c.rowspan > op.rows)
+      if (straddle) throw new OpError('invalid_structure', `(${straddle.top}, ${straddle.left}) 的合并单元格跨过了表头边界`, { hint: '先 table_split_cell 拆开，或调整表头行数。' })
+      const out = cells.map(c => ({ ...c, node: c.node.type.create({ ...c.node.attrs, header: c.top < op.rows }, c.node.content, c.node.marks) }))
+      return replaceTable(tr, target, out, grid.height, op.id, { ...target.node.attrs, header_rows: op.rows })
+    }
+    case 'table_set_style': {
+      let attrs = target.node.attrs
+      if (op.col_widths !== undefined) {
+        if (op.col_widths && op.col_widths.length !== grid.width) throw new OpError('invalid_structure', `col_widths 有 ${op.col_widths.length} 项，表格有 ${grid.width} 列`)
+        attrs = withWidths(op.col_widths)
+      }
+      for (const c of op.cells ?? []) {
+        const cell = origin(c.row, c.col)
+        const next = { ...cell.node.attrs }
+        if (c.background !== undefined) next.background = c.background === null ? null : c.background.replace(/^#/, '').toUpperCase()
+        if (c.valign !== undefined) next.valign = c.valign
+        cell.node = cell.node.type.create(next, cell.node.content, cell.node.marks)
+      }
+      return replaceTable(tr, target, cells, grid.height, op.id, attrs)
     }
   }
 }

@@ -288,7 +288,9 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       'replace_text {id, find, replace, occurrence?}（块内替换，小改动首选：find 即守卫，不受 base_rev 限制；只改变化的字）；delete {ids}；' +
       'move {ids, after}；set_block_style {id, type?, level?, align?, style?}；' +
       'set_text_style {id, font_family?, size?, bold?, italic?, color?, range?}（修改文字字体、字号、粗体、斜体、颜色）；' +
-      'table_set_cells {id, cells:[{row, col, markdown}]}；table_insert_rows {id, at, rows}；table_delete_rows {id, at, count}；table_insert_cols {id, at, cells?}；table_delete_cols {id, at, count}。' +
+      'table_set_cells {id, cells:[{row, col, markdown}]}；table_insert_rows {id, at, rows}；table_delete_rows {id, at, count}；table_insert_cols {id, at, cells?}；table_delete_cols {id, at, count}；' +
+      'table_merge_cells {id, row, col, rows, cols}（内容并入左上角）；table_split_cell {id, row, col}；table_set_header {id, rows}（开头几行作表头、导出跨页重复，0 = 无）；' +
+      'table_set_style {id, col_widths?: 相对宽度数组, cells?: [{row, col, background?: #RRGGBB / 空串去底纹, valign?: top|center|bottom}]}；单元格文字左中右对齐用 set_block_style 作用在单元格段落 id 上。' +
       '表格行列号按 doc_read 视图的逻辑网格计（`^` = 与上方合并、`<` = 与左侧合并，写入合并单元格用其左上角坐标；增删行列时合并区自动伸缩）。' +
       '单元格里每个段落带 {#id}：只改几个字时对该段落 id 用 replace_text（保留原格式）；整格重写才用 table_set_cells（段落写作 {#id} 第一段<br>{#id} 第二段）。' +
       '会移除 open 评论锚点时，需把线程 id 放进 ack_comments 并在线程里说明。',

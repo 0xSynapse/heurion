@@ -19,6 +19,14 @@ const blockAttrs = {
   suggest_of: { default: null },
 }
 
+/** 表格的列相对宽度（col_widths 属性，逗号分隔的正数）；未设定或格式不对返回 null。 */
+export function colWidths(table: PMNode): number[] | null {
+  const raw = table.attrs.col_widths as string | null
+  if (!raw) return null
+  const ws = raw.split(',').map(Number)
+  return ws.length > 0 && ws.every(w => Number.isFinite(w) && w > 0) ? ws : null
+}
+
 /** 浏览器渲染用的通用属性（data-id、修订状态）。 */
 function domAttrs(node: PMNode, extra: Record<string, string | null | undefined> = {}): Record<string, string> {
   const out: Record<string, string> = {}
@@ -87,11 +95,17 @@ export const schema = new Schema({
     table: {
       group: 'block',
       content: 'table_row+',
-      attrs: { ...blockAttrs },
+      // header_rows：显式设定的重复表头行数（null = 按导入 / 自动规则）；col_widths：各列相对宽度，逗号分隔（null = 沿用原文件或平均分）
+      attrs: { ...blockAttrs, header_rows: { default: null }, col_widths: { default: null } },
       isolating: true,
       tableRole: 'table',
       parseDOM: [{ tag: 'table' }],
-      toDOM: (node): DOMOutputSpec => ['table', domAttrs(node), ['tbody', 0]],
+      toDOM: (node): DOMOutputSpec => {
+        const widths = colWidths(node)
+        if (!widths) return ['table', domAttrs(node), ['tbody', 0]]
+        const sum = widths.reduce((a, b) => a + b, 0)
+        return ['table', domAttrs(node), ['colgroup', ...widths.map(w => ['col', { style: `width:${(w / sum * 100).toFixed(2)}%` }] as DOMOutputSpec)], ['tbody', 0]]
+      },
     },
     table_row: {
       content: 'table_cell+',
@@ -101,7 +115,8 @@ export const schema = new Schema({
     },
     table_cell: {
       content: 'paragraph+',
-      attrs: { colspan: { default: 1 }, rowspan: { default: 1 }, colwidth: { default: null }, header: { default: false } },
+      // background：底纹色（6 位十六进制，'' = 去掉底纹，null = 沿用原文件）；valign：top / center / bottom（null = 沿用原文件）
+      attrs: { colspan: { default: 1 }, rowspan: { default: 1 }, colwidth: { default: null }, header: { default: false }, background: { default: null }, valign: { default: null } },
       isolating: true,
       tableRole: 'cell',
       parseDOM: ['td', 'th'].map(tag => ({
@@ -112,10 +127,17 @@ export const schema = new Schema({
           header: tag === 'th',
         }),
       })),
-      toDOM: (node): DOMOutputSpec => [node.attrs.header ? 'th' : 'td', {
-        ...(node.attrs.colspan !== 1 ? { colspan: String(node.attrs.colspan) } : {}),
-        ...(node.attrs.rowspan !== 1 ? { rowspan: String(node.attrs.rowspan) } : {}),
-      }, 0],
+      toDOM: (node): DOMOutputSpec => {
+        const style = [
+          node.attrs.background ? `background-color:#${node.attrs.background}` : '',
+          node.attrs.valign ? `vertical-align:${node.attrs.valign === 'center' ? 'middle' : node.attrs.valign}` : '',
+        ].filter(Boolean).join(';')
+        return [node.attrs.header ? 'th' : 'td', {
+          ...(node.attrs.colspan !== 1 ? { colspan: String(node.attrs.colspan) } : {}),
+          ...(node.attrs.rowspan !== 1 ? { rowspan: String(node.attrs.rowspan) } : {}),
+          ...(style ? { style } : {}),
+        }, 0]
+      },
     },
     /** 图：引用平台资产（浏览器里由 NodeView 渲染图片地址）。 */
     figure: {

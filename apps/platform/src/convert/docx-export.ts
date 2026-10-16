@@ -2,6 +2,7 @@ import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { cleanBibText } from '../literature/format.ts'
+import { colWidths } from '../model/schema.ts'
 import { readGrid, type GridCell } from '../model/table-grid.ts'
 import { looksLikeHeaderRow } from '../model/table-header.ts'
 import type { CitationRow, CommentRow } from '../store/db.ts'
@@ -142,13 +143,16 @@ const IMAGE_EXT: Record<string, string> = {
 /** rPr 子元素在 schema 里的顺序（CT_RPr）；Word 对顺序敏感，合并后按此排序。 */
 const RPR_ORDER = ['rStyle', 'rFonts', 'b', 'bCs', 'i', 'iCs', 'caps', 'smallCaps', 'strike', 'dstrike', 'outline', 'shadow', 'emboss', 'imprint', 'noProof', 'snapToGrid', 'vanish', 'webHidden', 'color', 'spacing', 'w', 'kern', 'position', 'sz', 'szCs', 'highlight', 'u', 'effect', 'bdr', 'shd', 'fitText', 'vertAlign', 'rtl', 'cs', 'em', 'lang', 'eastAsianLayout', 'specVanish', 'oMath']
 
-/** 合并两段 rPr 子元素原文：同名元素以 over 为准，结果按 schema 顺序排列。 */
-function mergeRPr(base: string, over: string): string {
+/** tcPr 中 tcW / gridSpan / vMerge 之后的子元素顺序（CT_TcPr）。 */
+const TCPR_ORDER = ['tcBorders', 'shd', 'noWrap', 'tcMar', 'textDirection', 'tcFitText', 'vAlign', 'hideMark']
+
+/** 合并两段子元素原文：同名元素以 over 为准，结果按给定的 schema 顺序排列。 */
+function mergeEls(base: string, over: string, order: string[]): string {
   const name = (el: string) => /^<w:([A-Za-z]+)/.exec(el)?.[1] ?? ''
   const els = new Map<string, string>()
   for (const el of elementChildrenRaw(`<x>${base}</x>`)) els.set(name(el), el)
   for (const el of elementChildrenRaw(`<x>${over}</x>`)) els.set(name(el), el)
-  const rank = (n: string) => { const i = RPR_ORDER.indexOf(n); return i === -1 ? RPR_ORDER.length : i }
+  const rank = (n: string) => { const i = order.indexOf(n); return i === -1 ? order.length : i }
   return [...els.entries()].sort((a, b) => rank(a[0]) - rank(b[0])).map(e => e[1]).join('')
 }
 
@@ -257,7 +261,7 @@ export function exportDocx(input: ExportInput): ExportResult {
       else if (m.type.name === 'code') p += '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>'
       else if (m.type.name === 'link') p += '<w:rStyle w:val="Hyperlink"/>'
     }
-    if (base) p = mergeRPr(base, p)
+    if (base) p = mergeEls(base, p, RPR_ORDER)
     return p ? `<w:rPr>${p}</w:rPr>` : ''
   }
 
@@ -444,15 +448,22 @@ export function exportDocx(input: ExportInput): ExportResult {
     const grid = readGrid(node)
     const width = Math.max(1, grid.width)
     // 列宽：列数没变沿用原表各列宽度；列数变了按原表总宽平均分；新表 9000 twip 平均分
+    // 显式设定过列宽（table_set_style）时按比例分配总宽
     const total = orig && orig.grid.length > 0 ? orig.grid.reduce((a, b) => a + b, 0) : 9000
-    const colWs = orig && orig.grid.length === width ? orig.grid : Array.from({ length: width }, () => Math.floor(total / width))
+    const set = colWidths(node)
+    const colWs = set && set.length === width
+      ? set.map(w => Math.floor(total * w / set.reduce((a, b) => a + b, 0)))
+      : orig && orig.grid.length === width ? orig.grid : Array.from({ length: width }, () => Math.floor(total / width))
     const spanW = (left: number, span: number) => colWs.slice(left, left + span).reduce((a, b) => a + b, 0)
 
     // 重复表头行：单列表格（表单型，如申报书章节表）一律不加；
     // 多列且原文件显式标注过 → 沿用模型里开头连续的 header 行（不受长度限制）；显式未标注 → 不加；
     // 无原文件（新建表格）→ 仅首行且符合共用的表头规则时才加
+    // table_set_header 显式设定的行数优先
     let headerRows = 0
-    if (width < 2) {
+    if (node.attrs.header_rows !== null && node.attrs.header_rows !== undefined) {
+      headerRows = Math.min(node.attrs.header_rows as number, grid.height)
+    } else if (width < 2) {
       // 不加
     } else if (origHasTblHeader === true) {
       while (headerRows < node.childCount && node.child(headerRows).firstChild?.attrs.header) headerRows++
@@ -482,7 +493,12 @@ export function exportDocx(input: ExportInput): ExportResult {
       const raw = srcCell ? orig!.tcPr.get(keyOf(srcCell)!) ?? '' : ''
       const inner = raw ? innerOf(raw) : ''
       const cnf = elementChildrenRaw(`<x>${inner}</x>`).find(k => /^<w:cnfStyle\b/.test(k)) ?? ''
-      const rest = stripEls(inner, ['cnfStyle', 'tcW', 'gridSpan', 'hMerge', 'vMerge', 'tcPrChange'])
+      let rest = stripEls(inner, ['cnfStyle', 'tcW', 'gridSpan', 'hMerge', 'vMerge', 'tcPrChange'])
+      // 显式设定的底纹 / 垂直对齐覆盖原文件（'' = 去掉底纹）
+      const bg = cell.node.attrs.background as string | null
+      const va = cell.node.attrs.valign as string | null
+      const over = (bg ? `<w:shd w:val="clear" w:color="auto" w:fill="${esc(bg)}"/>` : '') + (va ? `<w:vAlign w:val="${va}"/>` : '')
+      if (bg !== null || va !== null) rest = mergeEls(bg !== null ? stripEls(rest, ['shd']) : rest, over, TCPR_ORDER)
       const merge = continuation ? '<w:vMerge/>' : cell.rowspan > 1 ? '<w:vMerge w:val="restart"/>' : ''
       return `<w:tcPr>${cnf}<w:tcW w:w="${spanW(cell.left, cell.colspan)}" w:type="dxa"/>${cell.colspan > 1 ? `<w:gridSpan w:val="${cell.colspan}"/>` : ''}${merge}${rest}</w:tcPr>`
     }

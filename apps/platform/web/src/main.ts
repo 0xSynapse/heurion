@@ -1003,6 +1003,14 @@ function syncDeckToolbar(): void {
 }
 
 /** 颜色板：当前页主题的颜色（以主题记号提交，换主题时跟着变）+ 自定义颜色。 */
+/** pickColor 的结果（主题色键名或 6 位十六进制）→ 6 位十六进制；'none' 返回 ''。 */
+function colorHex(c: string, themeKey = 'clinical'): string {
+  if (c === 'none') return ''
+  if (/^#?[0-9a-fA-F]{6}$/.test(c)) return c.replace(/^#/, '').toUpperCase()
+  const t = (deckThemes[themeKey] ?? deckThemes.clinical) as Record<string, string> | undefined
+  return (t?.[c] ?? '').toUpperCase()
+}
+
 function pickColor(anchor: HTMLElement, themeKey: string, allowNone: boolean): Promise<string | null> {
   return new Promise(resolve => {
     document.querySelector('.color-pop')?.remove()
@@ -1229,10 +1237,24 @@ $('toolbar').onclick = async e => {
   const c = session.editor.commands as Record<string, (...a: any[]) => void>
   if (cmd === 'image') { $('imageInput').click(); return }
   if (cmd === 'cite') { void addCitation(); return }
+  if (cmd === 'tableMerge') {
+    if (!session.editor.commands.tableMerge()) showNotice('先拖选两个以上相邻的单元格再合并')
+    return
+  }
+  if (cmd === 'tableSplit') {
+    if (!session.editor.commands.tableSplit()) showNotice('光标所在的单元格没有合并，无需拆分')
+    return
+  }
+  if (cmd === 'tableBackground') {
+    const color = await pickColor(btn, 'clinical', true)
+    if (color && session?.editor) session.editor.commands.tableBackground(colorHex(color))
+    return
+  }
   if (cmd === 'color') {
     const color = await pickColor(btn, 'clinical', true)
     if (color && session?.editor) {
-      session.editor.commands.setTextColor(color === 'none' ? '' : (color.startsWith('#') ? color : `#${color}`))
+      const hex = colorHex(color)
+      session.editor.commands.setTextColor(hex ? `#${hex}` : '')
     }
     return
   }
@@ -1305,6 +1327,9 @@ function syncToolbar(): void {
     const sz = style.fontSize
     szSel.value = Array.from(szSel.options).some(o => o.value === sz) ? sz : ''
   }
+
+  // 光标在表格里时才显示表格工具
+  $('tableTools').hidden = !session.editor.commands.inTable()
 
   const boldBtn = document.querySelector<HTMLButtonElement>('#toolbar [data-cmd="bold"]')
   if (boldBtn) boldBtn.classList.toggle('active', session.editor.commands.isMarkActive('bold'))

@@ -81,6 +81,36 @@ export const DocOp = z.discriminatedUnion('op', [
     at: z.number().int().min(0),
     count: z.number().int().min(1).default(1),
   }),
+  z.object({
+    op: z.literal('table_merge_cells'),
+    id: z.string().min(1),
+    row: z.number().int().min(0),
+    col: z.number().int().min(0),
+    rows: z.number().int().min(1).default(1).describe('合并区域的行数'),
+    cols: z.number().int().min(1).default(1).describe('合并区域的列数'),
+  }),
+  z.object({
+    op: z.literal('table_split_cell'),
+    id: z.string().min(1),
+    row: z.number().int().min(0).describe('合并单元格左上角的行'),
+    col: z.number().int().min(0).describe('合并单元格左上角的列'),
+  }),
+  z.object({
+    op: z.literal('table_set_header'),
+    id: z.string().min(1),
+    rows: z.number().int().min(0).describe('开头几行作为表头（跨页重复）；0 = 没有表头'),
+  }),
+  z.object({
+    op: z.literal('table_set_style'),
+    id: z.string().min(1),
+    col_widths: z.array(z.number().positive()).nullable().optional().describe('各列相对宽度（如 [1, 3] 表示 1:3）；null = 恢复默认'),
+    cells: z.array(z.object({
+      row: z.number().int().min(0),
+      col: z.number().int().min(0),
+      background: z.string().regex(/^(#?[0-9a-fA-F]{6})?$/).nullable().optional().describe('底纹色 #RRGGBB；空串 = 去掉底纹；null = 恢复原样'),
+      valign: z.enum(['top', 'center', 'bottom']).nullable().optional(),
+    })).optional(),
+  }),
 ])
 
 export type DocOp = z.infer<typeof DocOp>

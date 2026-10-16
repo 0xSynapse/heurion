@@ -364,3 +364,26 @@ describe('docx 导出：导入表格修改后保留原格式', () => {
   })
 })
 
+describe('docx 导出：表格样式设定', () => {
+  it('显式表头行数、列宽比例、底纹与垂直对齐写进 docx；单列表格显式设了表头也加', () => {
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const ops = new OpService(docs)
+    const row = docs.create({ owner: 'u', title: 't', content: schema.node('doc', null, parseBlocks('| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\n| 单列 |\n| --- |\n| x |')) })
+    const t1 = docs.get(row.id).child(0).attrs.id as string
+    const t2 = docs.get(row.id).child(1).attrs.id as string
+    ops.edit({ doc_id: row.id, base_rev: 0, mode: 'apply', ops: [
+      { op: 'table_set_header', id: t1, rows: 2 },
+      { op: 'table_set_style', id: t1, col_widths: [1, 3], cells: [{ row: 2, col: 1, background: 'FFEEAA', valign: 'bottom' }] },
+      { op: 'table_set_header', id: t2, rows: 1 },
+    ] }, { actor: 'ai', turnId: null })
+    const out = exportDocx({ doc: docs.get(row.id), baseline: null, pkg: null, src: () => null, citations: [], comments: [], asset: () => null })
+    const body = bodyOf(out.bytes)
+    const [tbl1, tbl2] = body.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g)!
+    expect(tbl1!.match(/<w:tblHeader\/>/g)!.length).toBe(2)
+    expect(tbl1).toContain('<w:gridCol w:w="2250"/><w:gridCol w:w="6750"/>')
+    expect(tbl1).toContain('<w:shd w:val="clear" w:color="auto" w:fill="FFEEAA"/><w:vAlign w:val="bottom"/>')
+    expect(tbl2!.match(/<w:tblHeader\/>/g)!.length).toBe(1)
+  })
+})
+

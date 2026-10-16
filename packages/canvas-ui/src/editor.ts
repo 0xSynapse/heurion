@@ -6,7 +6,7 @@ import { keymap } from 'prosemirror-keymap'
 import type { Node as PMNode, NodeType } from 'prosemirror-model'
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list'
 import { EditorState, Plugin, PluginKey, TextSelection, type Command } from 'prosemirror-state'
-import { goToNextCell, tableEditing } from 'prosemirror-tables'
+import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, CellSelection, deleteColumn, deleteRow, findTable, goToNextCell, isInTable, mergeCells, setCellAttr, splitCell, tableEditing } from 'prosemirror-tables'
 import { Decoration, DecorationSet, EditorView, type NodeView } from 'prosemirror-view'
 import { askText } from './dialogs.ts'
 import { redo, undo, ySyncPlugin, ySyncPluginKey, yUndoPlugin } from 'y-prosemirror'
@@ -591,6 +591,46 @@ const insertTable: Command = (state, dispatch) => {
   return true
 }
 
+/** 首行设为 / 取消表头（并记下显式表头行数，导出时据此决定跨页重复）。 */
+const toggleHeaderRow: Command = (state, dispatch) => {
+  if (!isInTable(state)) return false
+  const t = findTable(state.selection.$from)
+  const first = t?.node.firstChild
+  if (!t || !first) return false
+  let allHeader = true
+  first.forEach(cell => { if (!cell.attrs.header) allHeader = false })
+  const on = !allHeader
+  if (dispatch) {
+    const tr = state.tr
+    first.forEach((cell, off) => { tr.setNodeMarkup(t.pos + 2 + off, undefined, { ...cell.attrs, header: on }) })
+    tr.setNodeMarkup(t.pos, undefined, { ...t.node.attrs, header_rows: on ? 1 : 0 })
+    dispatch(tr)
+  }
+  return true
+}
+
+/**
+ * 加列后让新格跟随所在行的表头状态（prosemirror-tables 新建的格不带 header 属性，表头行里会混进普通格）。
+ * 加列不改变行数，所以按行号对回加列前每行是否整行为表头。
+ */
+const keepRowHeaders = (add: Command): Command => (state, dispatch, view) => {
+  if (!isInTable(state)) return false
+  const before = findTable(state.selection.$from)
+  const rowHeader: boolean[] = []
+  before?.node.forEach(row => { let all = row.childCount > 0; row.forEach(c => { if (!c.attrs.header) all = false }); rowHeader.push(all) })
+  return add(state, dispatch && (tr => {
+    const after = findTable(tr.selection.$from)
+    if (after) {
+      after.node.forEach((row, rowOff, r) => {
+        row.forEach((cell, cellOff) => {
+          if (cell.attrs.header !== rowHeader[r]) tr.setNodeMarkup(after.pos + 1 + rowOff + 1 + cellOff, undefined, { ...cell.attrs, header: rowHeader[r] ?? false })
+        })
+      })
+    }
+    dispatch(tr)
+  }), view)
+}
+
 const rules = inputRules({
   rules: [
     new InputRule(/^(#{1,6})\s$/, (state, match, start, end) => {
@@ -725,8 +765,10 @@ export class Editor {
 
   /** 当前选区是否在单个块内（可评论），给出锚点。 */
   private reportSelection(): void {
-    const { from, to, empty, $from, $to } = this.view.state.selection
-    if (empty) { this.opts.onSelection(null); return }
+    const sel = this.view.state.selection
+    const { from, to, empty, $from, $to } = sel
+    // 拖选单元格（合并、设底纹等表格操作）不是要评论，不弹提示
+    if (empty || sel instanceof CellSelection) { this.opts.onSelection(null); return }
     if (!$from.parent.isTextblock || $from.parent !== $to.parent) {
       // 与 Claude Docs 一致：评论只能落在一个段落内
       const start = this.view.coordsAtPos(from)
@@ -771,9 +813,10 @@ export class Editor {
     this.view.focus()
   }
 
-  run(command: Command): void {
-    command(this.view.state, this.view.dispatch, this.view)
+  run(command: Command): boolean {
+    const ok = command(this.view.state, this.view.dispatch, this.view)
     this.view.focus()
+    return ok
   }
 
   readonly commands = {
@@ -854,6 +897,20 @@ export class Editor {
     bulletList: () => this.run(toggleList(schema.nodes.bullet_list!)),
     orderedList: () => this.run(toggleList(schema.nodes.ordered_list!)),
     table: () => this.run(insertTable),
+    /** 光标是否在表格里（工具栏据此显示表格工具）。 */
+    inTable: (): boolean => isInTable(this.view.state),
+    tableAddRowBefore: () => this.run(addRowBefore),
+    tableAddRowAfter: () => this.run(addRowAfter),
+    tableAddColBefore: () => this.run(keepRowHeaders(addColumnBefore)),
+    tableAddColAfter: () => this.run(keepRowHeaders(addColumnAfter)),
+    tableDeleteRow: () => this.run(deleteRow),
+    tableDeleteCol: () => this.run(deleteColumn),
+    /** 合并需要先拖选多个单元格。 */
+    tableMerge: (): boolean => this.run(mergeCells),
+    tableSplit: (): boolean => this.run(splitCell),
+    tableToggleHeader: () => this.run(toggleHeaderRow),
+    /** 底纹：hex 为 6 位十六进制（不带 #），'' 去掉底纹。 */
+    tableBackground: (hex: string) => this.run(setCellAttr('background', hex.replace(/^#/, '').toUpperCase())),
     undo: () => this.run(undo),
     redo: () => this.run(redo),
   }
