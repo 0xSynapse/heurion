@@ -4118,8 +4118,11 @@ ${impression}
       : all.map(p => `<label><input type="checkbox" value="${p.id}" ${picked.some(x => x.id === p.id) ? 'checked' : ''}> ${esc(label(p))} <span class="muted small">${esc(p.tags.slice(0, 2).join('、'))}</span></label>`).join('')
     document.body.append(menu)
     const r = anchor.getBoundingClientRect()
-    menu.style.left = `${Math.max(8, r.left)}px`
-    menu.style.bottom = `${window.innerHeight - r.top + 6}px`
+    const mr = menu.getBoundingClientRect()
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - (mr.width || 240) - 8))}px`
+    menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`
+    menu.style.maxHeight = `${Math.max(140, r.top - 16)}px`
+    menu.style.overflowY = 'auto'
     menu.onchange = ev => {
       const box = ev.target as HTMLInputElement
       const p = all.find(y => y.id === box.value)!

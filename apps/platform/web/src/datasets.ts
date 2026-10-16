@@ -250,8 +250,11 @@ export function initDatasets(api: Api, notice: (msg: string, error?: boolean) =>
       + '<hr><button data-manage>上传与管理数据…</button>'
     document.body.append(menu)
     const r = anchor.getBoundingClientRect()
-    menu.style.left = `${Math.max(8, r.left)}px`
-    menu.style.bottom = `${window.innerHeight - r.top + 6}px`
+    const mr = menu.getBoundingClientRect()
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - (mr.width || 240) - 8))}px`
+    menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`
+    menu.style.maxHeight = `${Math.max(140, r.top - 16)}px`
+    menu.style.overflowY = 'auto'
     menu.onchange = e => {
       const box = e.target as HTMLInputElement
       const x = ready.find(y => y.id === box.value)!

@@ -130,9 +130,16 @@ export async function pickLayout(api: (path: string) => Promise<any>, anchor: HT
   pop.setAttribute('role', 'menu')
   pop.innerHTML = `<div class="layout-pop-head">选择版式 · ${esc(t.label)}</div><div class="layout-grid">${t.layouts.map(l => `<button role="menuitem" data-layout="${esc(l.name)}" title="${esc(l.hint)}">${layoutSvg(t, l.key)}<span>${esc(l.name)}</span></button>`).join('')}</div>`
   const r = anchor.getBoundingClientRect()
-  pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 500))}px`
-  pop.style.top = `${r.bottom + 6}px`
   document.body.appendChild(pop)
+  const mr = pop.getBoundingClientRect()
+  const mw = mr.width || 492
+  const mh = mr.height || 300
+  const left = Math.max(8, Math.min(r.left, innerWidth - mw - 8))
+  const top = r.bottom + 6 + mh > innerHeight - 8 ? Math.max(8, innerHeight - mh - 8) : Math.max(8, r.bottom + 6)
+  pop.style.left = `${Math.round(left)}px`
+  pop.style.top = `${Math.round(top)}px`
+  pop.style.maxHeight = `${Math.max(160, innerHeight - 16)}px`
+  pop.style.overflowY = 'auto'
   return new Promise(resolve => {
     const done = (v: string | null) => { pop.remove(); document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', key); resolve(v) }
     const outside = (e: MouseEvent) => { if (!pop.contains(e.target as Node) && e.target !== anchor) done(null) }

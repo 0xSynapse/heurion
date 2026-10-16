@@ -120,18 +120,59 @@ async function runSearch(): Promise<void> {
 $('docSearch').oninput = () => { clearTimeout(searchTimer); searchTimer = window.setTimeout(() => void runSearch(), 200) }
 $('docSearch').onkeydown = e => { if (e.key === 'Escape') { $<HTMLInputElement>('docSearch').value = ''; void loadDocs() } }
 
-/** 小菜单（固定定位在按钮旁边）。 */
+/** 将浮动弹层限制在可视窗口内（靠近底边自动向上翻转，靠近右边自动向左收缩）。 */
+function placeFixedPopup(menu: HTMLElement, anchorRect: DOMRect, preferRight = false): void {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const pad = 8
+  const mr = menu.getBoundingClientRect()
+  const mw = mr.width || 160
+  const mh = mr.height || 140
+  let left = preferRight ? anchorRect.right - 4 : anchorRect.left
+  if (left + mw > vw - pad) {
+    left = preferRight ? Math.max(pad, anchorRect.left - mw + 4) : Math.max(pad, vw - mw - pad)
+  }
+  left = Math.max(pad, left)
+
+  let top = preferRight ? anchorRect.top : anchorRect.bottom + 6
+  if (top + mh > vh - pad) {
+    const flipped = preferRight ? anchorRect.bottom - mh : anchorRect.top - mh - 6
+    top = flipped >= pad ? flipped : Math.max(pad, vh - mh - pad)
+  }
+  top = Math.max(pad, top)
+  Object.assign(menu.style, {
+    position: 'fixed',
+    left: `${Math.round(left)}px`,
+    top: `${Math.round(top)}px`,
+    right: 'auto',
+    bottom: 'auto',
+    maxHeight: `${Math.max(120, vh - pad * 2)}px`,
+    overflowY: 'auto',
+  })
+}
+
+/** 小菜单（固定定位在按钮旁边，自动适配屏幕与窗口边界）。 */
 function popMenu(anchor: HTMLElement, items: Array<[string, () => void | Promise<void>, boolean?]>): void {
   document.querySelector('.pop-menu')?.remove()
   const menu = document.createElement('div')
   menu.className = 'pop-menu'
   menu.innerHTML = items.map(([label, , danger], i) => `<button data-i="${i}" class="${danger ? 'danger-text' : ''}">${esc(label)}</button>`).join('')
   const r = anchor.getBoundingClientRect()
-  Object.assign(menu.style, { left: `${r.right - 4}px`, top: `${r.top}px` })
   document.body.appendChild(menu)
-  const close = () => { menu.remove(); document.removeEventListener('mousedown', outside) }
+  placeFixedPopup(menu, r, true)
+  const close = () => {
+    menu.remove()
+    document.removeEventListener('mousedown', outside)
+    document.removeEventListener('keydown', onKey)
+    window.removeEventListener('resize', close)
+  }
   const outside = (e: MouseEvent) => { if (!menu.contains(e.target as Node)) close() }
-  setTimeout(() => document.addEventListener('mousedown', outside))
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+  setTimeout(() => {
+    document.addEventListener('mousedown', outside)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', close, { once: true })
+  })
   menu.onclick = e => {
     const b = (e.target as HTMLElement).closest('[data-i]') as HTMLElement | null
     if (!b) return
@@ -966,9 +1007,8 @@ function pickColor(anchor: HTMLElement, themeKey: string, allowNone: boolean): P
     pop.innerHTML = `<div class="swatches">${swatches.map(([v, hex, label]) => `<button data-c="${v}" title="${label}" style="background:#${hex}"></button>`).join('')}</div>
       <div class="color-row">${allowNone ? '<button data-c="none">无填充</button>' : ''}<label>自定义 <input type="color" value="#${t?.accent ?? '0EA5E9'}"></label></div>`
     const r = anchor.getBoundingClientRect()
-    pop.style.left = `${r.left}px`
-    pop.style.top = `${r.bottom + 6}px`
     document.body.appendChild(pop)
+    placeFixedPopup(pop, r, false)
     const done = (v: string | null) => { pop.remove(); document.removeEventListener('mousedown', outside); resolve(v) }
     const outside = (e: MouseEvent) => { if (!pop.contains(e.target as Node)) done(null) }
     setTimeout(() => document.addEventListener('mousedown', outside))
@@ -1111,15 +1151,15 @@ $('deckToolbar').onclick = async e => {
       if (!await photoSearchEnabled(api)) { $('deckImageInput').click(); break }
       const menu = $('imageMenu')
       const r = btn.getBoundingClientRect()
-      Object.assign(menu.style, { position: 'fixed', left: `${r.left}px`, top: `${r.bottom + 6}px`, right: 'auto' })
       menu.hidden = !menu.hidden
+      if (!menu.hidden) placeFixedPopup(menu, r, false)
       break
     }
     case 'chart': {
       const menu = $('chartMenu')
       const r = btn.getBoundingClientRect()
-      Object.assign(menu.style, { position: 'fixed', left: `${r.left}px`, top: `${r.bottom + 6}px`, right: 'auto' })
       menu.hidden = !menu.hidden
+      if (!menu.hidden) placeFixedPopup(menu, r, false)
       break
     }
     case 'chart-data': if (id && sel!.shape.attrs?.chart) await editChart(deck, id, sel!.shape.attrs.chart as ChartData); break
@@ -1140,8 +1180,8 @@ $('deckToolbar').onclick = async e => {
       // 工具条横向可滚动（会裁掉里面的下拉），菜单按按钮位置固定定位
       const menu = $('arrangeMenu')
       const r = btn.getBoundingClientRect()
-      Object.assign(menu.style, { position: 'fixed', left: `${r.left}px`, top: `${r.bottom + 6}px`, right: 'auto' })
       menu.hidden = !menu.hidden
+      if (!menu.hidden) placeFixedPopup(menu, r, false)
       syncDeckToolbar()
       break
     }

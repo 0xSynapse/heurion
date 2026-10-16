@@ -175,8 +175,11 @@ export function initLibrary(api: Api, token: () => string, notice: (msg: string,
       + '<hr><button data-manage>管理资料库…</button>'
     document.body.append(menu)
     const r = anchor.getBoundingClientRect()
-    menu.style.left = `${Math.max(8, r.left)}px`
-    menu.style.bottom = `${window.innerHeight - r.top + 6}px`
+    const mr = menu.getBoundingClientRect()
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - (mr.width || 240) - 8))}px`
+    menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`
+    menu.style.maxHeight = `${Math.max(140, r.top - 16)}px`
+    menu.style.overflowY = 'auto'
     menu.onchange = e => {
       const box = e.target as HTMLInputElement
       const f = files.find(x => x.id === box.value)!
