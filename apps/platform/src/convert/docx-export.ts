@@ -2,10 +2,11 @@ import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { cleanBibText } from '../literature/format.ts'
+import { readGrid, type GridCell } from '../model/table-grid.ts'
 import { looksLikeHeaderRow } from '../model/table-header.ts'
 import type { CitationRow, CommentRow } from '../store/db.ts'
 import { citationOrder } from '../views/read.ts'
-import { bodyChildrenRaw, safeUnzipDocx } from './docx-import.ts'
+import { bodyChildrenRaw, elementChildrenRaw, safeUnzipDocx } from './docx-import.ts'
 
 /**
  * 平台模型 → docx（PLATFORM.md §6 导出）：修补式。
@@ -138,6 +139,19 @@ const IMAGE_EXT: Record<string, string> = {
   'image/webp': 'webp',
 }
 
+/** rPr 子元素在 schema 里的顺序（CT_RPr）；Word 对顺序敏感，合并后按此排序。 */
+const RPR_ORDER = ['rStyle', 'rFonts', 'b', 'bCs', 'i', 'iCs', 'caps', 'smallCaps', 'strike', 'dstrike', 'outline', 'shadow', 'emboss', 'imprint', 'noProof', 'snapToGrid', 'vanish', 'webHidden', 'color', 'spacing', 'w', 'kern', 'position', 'sz', 'szCs', 'highlight', 'u', 'effect', 'bdr', 'shd', 'fitText', 'vertAlign', 'rtl', 'cs', 'em', 'lang', 'eastAsianLayout', 'specVanish', 'oMath']
+
+/** 合并两段 rPr 子元素原文：同名元素以 over 为准，结果按 schema 顺序排列。 */
+function mergeRPr(base: string, over: string): string {
+  const name = (el: string) => /^<w:([A-Za-z]+)/.exec(el)?.[1] ?? ''
+  const els = new Map<string, string>()
+  for (const el of elementChildrenRaw(`<x>${base}</x>`)) els.set(name(el), el)
+  for (const el of elementChildrenRaw(`<x>${over}</x>`)) els.set(name(el), el)
+  const rank = (n: string) => { const i = RPR_ORDER.indexOf(n); return i === -1 ? RPR_ORDER.length : i }
+  return [...els.entries()].sort((a, b) => rank(a[0]) - rank(b[0])).map(e => e[1]).join('')
+}
+
 export function exportDocx(input: ExportInput): ExportResult {
   const warnings: string[] = []
   const pkg = new Package(input.pkg ? safeUnzipDocx(input.pkg) : template())
@@ -231,7 +245,8 @@ export function exportDocx(input: ExportInput): ExportResult {
   const missingHeading = new Set<number>()
   let nextDocPr = 90_001
 
-  const runProps = (marks: readonly Mark[], extra = ''): string => {
+  /** base：沿用的原文 run 属性（rPr 的子元素原文，不含粗斜体等由 mark 表达的属性），与 mark 合并后按 schema 顺序输出。 */
+  const runProps = (marks: readonly Mark[], extra = '', base = ''): string => {
     let p = extra
     for (const m of marks) {
       if (m.type.name === 'bold') p += '<w:b/>'
@@ -242,13 +257,14 @@ export function exportDocx(input: ExportInput): ExportResult {
       else if (m.type.name === 'code') p += '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>'
       else if (m.type.name === 'link') p += '<w:rStyle w:val="Hyperlink"/>'
     }
+    if (base) p = mergeRPr(base, p)
     return p ? `<w:rPr>${p}</w:rPr>` : ''
   }
 
-  const textRuns = (text: string, marks: readonly Mark[]): string =>
-    text.split('\t').map((part, i) => `${i > 0 ? `<w:r>${runProps(marks)}<w:tab/></w:r>` : ''}${part ? `<w:r>${runProps(marks)}<w:t xml:space="preserve">${esc(part)}</w:t></w:r>` : ''}`).join('')
+  const textRuns = (text: string, marks: readonly Mark[], base = ''): string =>
+    text.split('\t').map((part, i) => `${i > 0 ? `<w:r>${runProps(marks, '', base)}<w:tab/></w:r>` : ''}${part ? `<w:r>${runProps(marks, '', base)}<w:t xml:space="preserve">${esc(part)}</w:t></w:r>` : ''}`).join('')
 
-  const inline = (para: PMNode): string => {
+  const inline = (para: PMNode, baseRPr = ''): string => {
     let out = ''
     const activeHere = new Set<string>()
     para.forEach(child => {
@@ -262,7 +278,7 @@ export function exportDocx(input: ExportInput): ExportResult {
         activeHere.add(t)
       }
       let run = ''
-      if (child.isText) run = textRuns(child.text!, child.marks)
+      if (child.isText) run = textRuns(child.text!, child.marks, baseRPr)
       else if (child.type.name === 'hard_break') run = '<w:r><w:br/></w:r>'
       else if (child.type.name === 'citation') {
         const n = citeNumber.get(child.attrs.cite_id as string)
@@ -367,23 +383,71 @@ export function exportDocx(input: ExportInput): ExportResult {
     return `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r>${drawing}</w:r></w:p>${caption}`
   }
 
+  /**
+   * 导入表格的原始格式：按位置把原表 XML 与基线表格对齐，以单元格首段 id 为键记下
+   * 单元格属性（tcPr）、所在行属性（trPr）与段落原文；段落 id 在表格操作中保持不变，所以增删行列后仍能找回。
+   */
+  interface TableSrc {
+    tblPr: string
+    grid: number[]
+    tcPr: Map<string, string>
+    trPr: Map<string, string>
+    para: Map<string, string>
+  }
+  const isVMergeContinue = (tc: string) => /<w:vMerge(?:\s+w:val="continue")?\s*\/>/.test(elementChildrenRaw(tc).find(k => /^<w:tcPr\b/.test(k)) ?? '')
+  const tableSrc = (node: PMNode): TableSrc | null => {
+    const id = node.attrs.id as string
+    const xml = input.src(id)
+    const base = baseline.get(id)
+    if (!xml || !base || base.type.name !== 'table') return null
+    const kids = elementChildrenRaw(xml)
+    const out: TableSrc = {
+      tblPr: kids.find(k => /^<w:tblPr\b/.test(k)) ?? '',
+      grid: [...(kids.find(k => /^<w:tblGrid\b/.test(k)) ?? '').matchAll(/<w:gridCol\b[^>]*?w:w="(\d+)"/g)].map(m => Number(m[1])),
+      tcPr: new Map(), trPr: new Map(), para: new Map(),
+    }
+    let bi = 0
+    for (const tr of kids.filter(k => /^<w:tr\b/.test(k))) {
+      const trKids = elementChildrenRaw(tr)
+      // 与导入一致：vMerge 续行格不对应模型里的单元格；整行都是续行格的行在模型里不存在
+      const tcs = trKids.filter(k => /^<w:tc\b/.test(k) && !isVMergeContinue(k))
+      if (tcs.length === 0) continue
+      const brow = base.maybeChild(bi++)
+      if (!brow) break
+      const trPr = trKids.find(k => /^<w:trPr\b/.test(k)) ?? ''
+      tcs.forEach((tc, ci) => {
+        const bcell = brow.maybeChild(ci)
+        const key = bcell?.firstChild?.attrs.id as string | undefined
+        if (!bcell || !key) return
+        const tcKids = elementChildrenRaw(tc)
+        out.tcPr.set(key, tcKids.find(k => /^<w:tcPr\b/.test(k)) ?? '')
+        out.trPr.set(key, trPr)
+        const ps = tcKids.filter(k => /^<w:p\b/.test(k))
+        if (ps.length === bcell.childCount) bcell.forEach((p, _o, i) => { if (p.attrs.id) out.para.set(p.attrs.id as string, ps[i]!) })
+      })
+    }
+    return out
+  }
+
+  const innerOf = (el: string) => elementChildrenRaw(el).join('')
+  const stripEls = (inner: string, names: string[]) =>
+    elementChildrenRaw(`<x>${inner}</x>`).filter(k => !names.some(n => new RegExp(`^<w:${n}\\b`).test(k))).join('')
+
   const table = (node: PMNode): string => {
     const src = unchanged(node)
     if (src) return src
-    const origTbl = input.src(node.attrs.id as string)
-    const firstTrMatch = origTbl ? /<w:tr\b[\s\S]*?<\/w:tr>/.exec(origTbl) : null
+    const orig = tableSrc(node)
+    const firstTrMatch = orig ? /<w:tr\b[\s\S]*?<\/w:tr>/.exec(input.src(node.attrs.id as string)!) : null
     const origHasTblHeader = firstTrMatch
       ? /<w:tblHeader(?:\s+w:val="(?!0|false|off)[^"]*")?\s*\/>/.test(firstTrMatch[0])
       : null
-    // 网格：rowspan 用 vMerge 续行单元格补位
-    const width = Math.max(1, ...Array.from({ length: node.childCount }, (_, r) => {
-      let w = 0
-      node.child(r).forEach(c => { w += c.attrs.colspan as number })
-      return w
-    }))
-    const carry = new Map<number, { left: number; span: number }>()
-    const colW = Math.floor(9000 / width)
-    const rows: string[] = []
+    const grid = readGrid(node)
+    const width = Math.max(1, grid.width)
+    // 列宽：列数没变沿用原表各列宽度；列数变了按原表总宽平均分；新表 9000 twip 平均分
+    const total = orig && orig.grid.length > 0 ? orig.grid.reduce((a, b) => a + b, 0) : 9000
+    const colWs = orig && orig.grid.length === width ? orig.grid : Array.from({ length: width }, () => Math.floor(total / width))
+    const spanW = (left: number, span: number) => colWs.slice(left, left + span).reduce((a, b) => a + b, 0)
+
     // 重复表头行：单列表格（表单型，如申报书章节表）一律不加；
     // 多列且原文件显式标注过 → 沿用模型里开头连续的 header 行（不受长度限制）；显式未标注 → 不加；
     // 无原文件（新建表格）→ 仅首行且符合共用的表头规则时才加
@@ -397,50 +461,111 @@ export function exportDocx(input: ExportInput): ExportResult {
       node.firstChild.forEach(cell => { const ps: PMNode[] = []; cell.forEach(p => ps.push(p)); cells.push(ps) })
       if (looksLikeHeaderRow(cells)) headerRows = 1
     }
-    node.forEach((row, _o, ri) => {
-      const cells: string[] = []
-      let col = 0
-      const pushContinue = () => {
-        while (carry.has(col)) {
-          const c = carry.get(col)!
-          cells.push(`<w:tc><w:tcPr><w:tcW w:w="${colW * c.span}" w:type="dxa"/>${c.span > 1 ? `<w:gridSpan w:val="${c.span}"/>` : ''}<w:vMerge/></w:tcPr><w:p/></w:tc>`)
-          if (--c.left === 0) carry.delete(col)
-          col += c.span
+
+    const keyOf = (cell: GridCell) => cell.node.firstChild?.attrs.id as string | undefined
+    // 新加的单元格没有原文：借同一列最近的有原文的单元格（先往上找，再往下找）
+    const fmtSource = (cell: GridCell): GridCell | null => {
+      if (!orig) return null
+      const k = keyOf(cell)
+      if (k && orig.tcPr.has(k)) return cell
+      for (const dir of [-1, 1]) {
+        for (let r = cell.top + dir; r >= 0 && r < grid.height; r += dir) {
+          const other = grid.at(r, cell.left)
+          const ok = other && keyOf(other)
+          if (ok && orig.tcPr.has(ok)) return other
         }
       }
-      row.forEach(cell => {
-        pushContinue()
-        const span = cell.attrs.colspan as number
-        const rowspan = cell.attrs.rowspan as number
-        let paras = ''
-        cell.forEach(p => {
-          let hasBr = false
-          p.forEach(ch => { if (ch.type.name === 'hard_break') hasBr = true })
-          // 原样写回的段落与批注收尾段落不拆分，交给 paragraph() 处理
-          if (hasBr && !commentEndParas.has(p) && p.type.name === 'paragraph' && !unchanged(p)) {
-            let seg: PMNode[] = []
-            p.forEach(ch => {
-              if (ch.type.name === 'hard_break') {
-                paras += paragraph(p.type.create({ ...p.attrs, id: null }, seg, p.marks))
-                seg = []
-              } else {
-                seg.push(ch)
-              }
-            })
-            paras += paragraph(p.type.create({ ...p.attrs, id: null }, seg, p.marks))
-          } else {
-            paras += paragraph(p)
+      return null
+    }
+    const tcPrXml = (cell: GridCell, continuation: boolean): string => {
+      const srcCell = fmtSource(cell)
+      const raw = srcCell ? orig!.tcPr.get(keyOf(srcCell)!) ?? '' : ''
+      const inner = raw ? innerOf(raw) : ''
+      const cnf = elementChildrenRaw(`<x>${inner}</x>`).find(k => /^<w:cnfStyle\b/.test(k)) ?? ''
+      const rest = stripEls(inner, ['cnfStyle', 'tcW', 'gridSpan', 'hMerge', 'vMerge', 'tcPrChange'])
+      const merge = continuation ? '<w:vMerge/>' : cell.rowspan > 1 ? '<w:vMerge w:val="restart"/>' : ''
+      return `<w:tcPr>${cnf}<w:tcW w:w="${spanW(cell.left, cell.colspan)}" w:type="dxa"/>${cell.colspan > 1 ? `<w:gridSpan w:val="${cell.colspan}"/>` : ''}${merge}${rest}</w:tcPr>`
+    }
+    const trPrXml = (r: number): string => {
+      let raw = ''
+      if (orig) {
+        for (let rr = r; rr >= 0 && !raw; rr--) {
+          for (const c of grid.cells) {
+            const k = c.top === rr ? keyOf(c) : undefined
+            if (k && orig.trPr.has(k)) { raw = orig.trPr.get(k)!; break }
           }
-        })
-        cells.push(`<w:tc><w:tcPr><w:tcW w:w="${colW * span}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ''}${rowspan > 1 ? '<w:vMerge w:val="restart"/>' : ''}</w:tcPr>${paras || '<w:p/>'}</w:tc>`)
-        if (rowspan > 1) carry.set(col, { left: rowspan - 1, span })
-        col += span
+        }
+      }
+      // 行属性里的表头标记由上面的规则决定；网格前后空位会打乱逻辑网格，一并去掉
+      let inner = raw ? stripEls(innerOf(raw), ['tblHeader', 'gridBefore', 'gridAfter', 'wBefore', 'wAfter', 'trPrChange', 'ins', 'del']) : ''
+      if (r < headerRows) {
+        const at = inner.search(/<w:(tblCellSpacing|jc|hidden)\b/)
+        inner = at === -1 ? inner + '<w:tblHeader/>' : inner.slice(0, at) + '<w:tblHeader/>' + inner.slice(at)
+      }
+      return inner ? `<w:trPr>${inner}</w:trPr>` : ''
+    }
+
+    // 单元格段落：未改的段落写回原文；改过或新加的沿用原段落（或借来的格式源首段）的段落属性与首个 run 的字符属性
+    const fmtOf = (paraId: string | undefined, fallbackCell: GridCell | null) => {
+      const raw = (paraId && orig?.para.get(paraId)) ?? (fallbackCell && orig ? orig.para.get(keyOf(fallbackCell)!) : undefined)
+      if (!raw) return null
+      const pKids = elementChildrenRaw(raw)
+      const pPrRaw = pKids.find(k => /^<w:pPr\b/.test(k)) ?? ''
+      const firstRun = pKids.find(k => /^<w:r\b/.test(k)) ?? ''
+      const rPrRaw = elementChildrenRaw(firstRun).find(k => /^<w:rPr\b/.test(k)) ?? ''
+      return {
+        pPr: pPrRaw ? stripEls(innerOf(pPrRaw), ['pPrChange', 'sectPr']) : '',
+        rPr: rPrRaw ? stripEls(innerOf(rPrRaw), ['b', 'bCs', 'i', 'iCs', 'u', 'vertAlign', 'rStyle', 'rPrChange', 'ins', 'del']) : '',
+      }
+    }
+    const genPara = (p: PMNode, fmt: { pPr: string; rPr: string } | null) => {
+      // 段落自带样式或对齐（如 set_block_style 改过）时按模型生成；否则沿用原段落属性
+      const ppr = !fmt || p.attrs.style || p.attrs.align ? pPr(p) : fmt.pPr ? `<w:pPr>${fmt.pPr}</w:pPr>` : ''
+      return `<w:p>${ppr}${inline(p, fmt?.rPr ?? '')}</w:p>`
+    }
+    const cellParas = (cell: GridCell): string => {
+      const fallback = fmtSource(cell)
+      let paras = ''
+      cell.node.forEach(p => {
+        const id = p.attrs.id as string | undefined
+        const before = id ? baseline.get(id) : undefined
+        if (id && before?.eq(p) && orig?.para.has(id)) {
+          paras += orig.para.get(id)!
+          return
+        }
+        const fmt = fmtOf(id, fallback)
+        let hasBr = false
+        p.forEach(ch => { if (ch.type.name === 'hard_break') hasBr = true })
+        // 单元格里改过的段落按换行拆成独立段落（批注收尾段落不拆，以免批注范围错位）
+        if (hasBr && !commentEndParas.has(p) && p.type.name === 'paragraph') {
+          let seg: PMNode[] = []
+          p.forEach(ch => {
+            if (ch.type.name === 'hard_break') {
+              paras += genPara(p.type.create({ ...p.attrs, id: null }, seg, p.marks), fmt)
+              seg = []
+            } else seg.push(ch)
+          })
+          paras += genPara(p.type.create({ ...p.attrs, id: null }, seg, p.marks), fmt)
+        } else paras += genPara(p, fmt)
       })
-      pushContinue()
-      rows.push(`<w:tr>${ri < headerRows ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}${cells.join('')}</w:tr>`)
-    })
+      return paras || '<w:p/>'
+    }
+
+    const rows: string[] = []
+    for (let r = 0; r < grid.height; r++) {
+      let tcs = ''
+      for (let c = 0; c < width;) {
+        const cell = grid.at(r, c)
+        if (!cell) { c++; continue }
+        if (cell.top !== r) tcs += `<w:tc>${tcPrXml(cell, true)}<w:p/></w:tc>`
+        else tcs += `<w:tc>${tcPrXml(cell, false)}${cellParas(cell)}</w:tc>`
+        c = cell.left + cell.colspan
+      }
+      rows.push(`<w:tr>${trPrXml(r)}${tcs}</w:tr>`)
+    }
     const border = (side: string) => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`
-    return `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(border).join('')}</w:tblBorders><w:tblLook w:val="04A0"/></w:tblPr><w:tblGrid>${Array.from({ length: width }, () => `<w:gridCol w:w="${colW}"/>`).join('')}</w:tblGrid>${rows.join('')}</w:tbl>`
+    const tblPr = orig?.tblPr || `<w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(border).join('')}</w:tblBorders><w:tblLook w:val="04A0"/></w:tblPr>`
+    return `<w:tbl>${tblPr}<w:tblGrid>${colWs.map(w => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>${rows.join('')}</w:tbl>`
   }
 
   const list = (node: PMNode, ilvl: number, numId: string | null): string => {

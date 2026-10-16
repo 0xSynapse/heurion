@@ -49,9 +49,20 @@ const wAttr = (el: XElement | undefined, name: string) => el?.getAttributeNS(W, 
 export function bodyChildrenRaw(xml: string): string[] {
   const open = /<w:body\b[^>]*>/.exec(xml)
   if (!open) return []
+  return childrenFrom(xml, open.index + open[0].length)
+}
+
+/** 一个元素（原始 XML 字符串）的直接子元素原文；自闭合元素返回空数组。 */
+export function elementChildrenRaw(xml: string): string[] {
+  const open = /^\s*<[A-Za-z_][\w.:-]*\b(?:[^>"']|"[^"]*"|'[^']*')*?(\/?)>/.exec(xml)
+  if (!open || open[1] === '/') return []
+  return childrenFrom(xml, open[0].length)
+}
+
+function childrenFrom(xml: string, from: number): string[] {
   const out: string[] = []
   const tag = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<(\/?)([A-Za-z_][\w.:-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*?(\/?)>/g
-  tag.lastIndex = open.index + open[0].length
+  tag.lastIndex = from
   let depth = 0
   let start = -1
   for (let m = tag.exec(xml); m; m = tag.exec(xml)) {
@@ -59,7 +70,7 @@ export function bodyChildrenRaw(xml: string): string[] {
     const closing = m[1] === '/'
     const selfClosing = m[3] === '/'
     if (closing) {
-      if (depth === 0) break // </w:body>
+      if (depth === 0) break // 父元素的结束标签
       depth--
       if (depth === 0) out.push(xml.slice(start, m.index + m[0].length))
     } else if (selfClosing) {

@@ -307,3 +307,60 @@ describe('文献文本清理', () => {
     expect(store.listCitations(row.id)[0]!.formatted).toBe('Smith & Jones. Nature.')
   })
 })
+
+describe('docx 导出：导入表格修改后保留原格式', () => {
+  const TBL_PR = '<w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="8000" w:type="dxa"/><w:jc w:val="center"/></w:tblPr>'
+  const GRID = '<w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="6000"/></w:tblGrid>'
+  const SHD = '<w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/>'
+  const RPR = '<w:rFonts w:ascii="Arial" w:eastAsia="黑体"/><w:sz w:val="21"/>'
+  const cellP = (text: string) => `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr>${RPR}</w:rPr><w:t xml:space="preserve">${text}</w:t></w:r></w:p>`
+  const tc = (text: string, w: number, extra = '') => `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${extra}${SHD}</w:tcPr>${cellP(text)}</w:tc>`
+  const TABLE = `<w:tbl>${TBL_PR}${GRID}`
+    + `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>${tc('项目', 2000)}${tc('内容', 6000)}</w:tr>`
+    + `<w:tr>${tc('甲', 2000, '<w:vMerge w:val="restart"/>')}${tc('第一行', 6000)}</w:tr>`
+    + `<w:tr>${tc('', 2000, '<w:vMerge/>')}${tc('第二行', 6000)}</w:tr></w:tbl>`
+
+  const setupTable = () => {
+    const t = importInto(docx(TABLE))
+    const tbl = t.docs.get(t.docId).child(0)
+    return { ...t, tblId: tbl.attrs.id as string, cellPara: (r: number, c: number) => tbl.child(r).child(c).child(0).attrs.id as string }
+  }
+
+  it('改一个单元格：表格样式、列宽、行高、底纹、跨行合并与未改单元格原文全部保留；改过的格沿用段落与字体属性', () => {
+    const t = setupTable()
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: t.cellPara(1, 1), find: '第一行', replace: '第一行（已改）' }] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain(TBL_PR)
+    expect(body).toContain(GRID)
+    expect(body).toContain('<w:trHeight w:val="400"/>')
+    expect(body.match(/w:fill="D9E2F3"/g)!.length).toBe(6)
+    expect(body).toContain(cellP('第二行'))
+    expect(body).toContain(`<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr>${RPR}</w:rPr><w:t xml:space="preserve">第一行（已改）</w:t></w:r></w:p>`)
+    expect(body).toContain('<w:vMerge w:val="restart"/>')
+    expect(body).toContain('<w:vMerge/>')
+    const back = importDocx(t.exportNow().bytes).doc.child(0)
+    expect(back.child(1).child(0).attrs.rowspan).toBe(2)
+  })
+
+  it('加一行：新行沿用上方同列单元格的底纹与字体；合并区加高', () => {
+    const t = setupTable()
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'table_insert_rows', id: t.tblId, at: 2, rows: [['', '新增行']] }] }, { actor: 'ai', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain(GRID)
+    expect(body.match(/w:fill="D9E2F3"/g)!.length).toBe(8)
+    expect(body).toContain(`<w:rPr>${RPR}</w:rPr><w:t xml:space="preserve">新增行</w:t>`)
+    const back = importDocx(t.exportNow().bytes).doc.child(0)
+    expect(back.child(1).child(0).attrs.rowspan).toBe(3)
+    expect(back.childCount).toBe(4)
+  })
+
+  it('加一列：保留表格样式，按原表总宽平均分列宽', () => {
+    const t = setupTable()
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'table_insert_cols', id: t.tblId, at: 2, cells: ['备注', '', ''] }] }, { actor: 'ai', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain(TBL_PR)
+    expect(body.match(/<w:gridCol w:w="2666"\/>/g)!.length).toBe(3)
+    expect(body).toContain('备注')
+  })
+})
+
