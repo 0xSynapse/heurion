@@ -117,6 +117,57 @@ describe('doc_edit 操作', () => {
     expect(after.child(4).textContent).toContain('0.75')
   })
 
+  it('表格增删列：单列表格加一列后可写第二列；按逻辑列处理合并单元格；不能删光', () => {
+    const { docs, ops, docId } = setup('| 项目 |\n| --- |\n| 甲 |')
+    const table = docs.get(docId).child(0).attrs.id as string
+    ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: [
+      { op: 'table_insert_cols', id: table, at: 1, cells: ['说明'] },
+      { op: 'table_set_cells', id: table, cells: [{ row: 1, col: 1, markdown: '乙' }] },
+    ] }, { actor: 'ai', turnId: null })
+    let t = docs.get(docId).child(0)
+    expect(t.child(0).childCount).toBe(2)
+    expect(t.child(0).child(1).textContent).toBe('说明')
+    expect(t.child(0).child(1).attrs.header).toBe(true)
+    expect(t.child(1).child(1).textContent).toBe('乙')
+
+    ops.edit({ doc_id: docId, base_rev: 1, mode: 'apply', ops: [{ op: 'table_insert_cols', id: table, at: 0 }] }, { actor: 'ai', turnId: null })
+    t = docs.get(docId).child(0)
+    expect(t.child(1).textContent).toBe('甲乙')
+    expect(t.child(1).childCount).toBe(3)
+
+    ops.edit({ doc_id: docId, base_rev: 2, mode: 'apply', ops: [{ op: 'table_delete_cols', id: table, at: 0, count: 2 }] }, { actor: 'ai', turnId: null })
+    t = docs.get(docId).child(0)
+    expect(t.child(1).textContent).toBe('乙')
+    expectOpError(() => ops.edit({ doc_id: docId, base_rev: 3, mode: 'apply', ops: [{ op: 'table_delete_cols', id: table, at: 0, count: 1 }] }, { actor: 'ai', turnId: null }), 'invalid_structure')
+  })
+
+  it('表格增删列：合并单元格内插列加宽、删列收窄；含跨行合并时拒绝', () => {
+    // 首行前两格合并（colspan=2）：| a(2列) | c |，第二行 | 1 | 2 | 3 |
+    const [base] = parseBlocks('| a | b | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |')
+    const withSpan = (rowspan: number) => {
+      const r0 = base!.child(0)
+      const merged = r0.child(0).type.create({ ...r0.child(0).attrs, colspan: 2, rowspan }, r0.child(0).content)
+      const r1 = rowspan > 1 ? base!.child(1).type.create(null, [base!.child(1).child(2)]) : base!.child(1)
+      return base!.type.create(base!.attrs, [r0.type.create(r0.attrs, [merged, r0.child(2)]), r1])
+    }
+    const { docs, ops } = setup()
+    const d2 = docs.create({ owner: 'u1', title: 't', content: schema.node('doc', null, [withSpan(1)]) }).id
+    const table = docs.get(d2).child(0).attrs.id as string
+    ops.edit({ doc_id: d2, base_rev: 0, mode: 'apply', ops: [{ op: 'table_insert_cols', id: table, at: 1 }] }, { actor: 'ai', turnId: null })
+    let t = docs.get(d2).child(0)
+    expect(t.child(0).child(0).attrs.colspan).toBe(3)
+    expect(t.child(0).childCount).toBe(2)
+    expect(t.child(1).childCount).toBe(4)
+    ops.edit({ doc_id: d2, base_rev: 1, mode: 'apply', ops: [{ op: 'table_delete_cols', id: table, at: 0, count: 2 }] }, { actor: 'ai', turnId: null })
+    t = docs.get(d2).child(0)
+    expect(t.child(0).child(0).attrs.colspan).toBe(1)
+    expect(t.child(1).textContent).toBe('23')
+
+    const row3 = docs.create({ owner: 'u1', title: 't', content: schema.node('doc', null, [withSpan(2)]) })
+    const t3 = docs.get(row3.id).child(0).attrs.id as string
+    expectOpError(() => ops.edit({ doc_id: row3.id, base_rev: 0, mode: 'apply', ops: [{ op: 'table_insert_cols', id: t3, at: 1 }] }, { actor: 'ai', turnId: null }), 'invalid_structure')
+  })
+
   it('结构守卫：不能在列表项后插入标题', () => {
     const { docs, ops, docId } = setup(SAMPLE)
     const item = docs.get(docId).child(3).child(0).attrs.id as string

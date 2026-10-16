@@ -244,7 +244,7 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | `delete` | `ids` | 删除最后一个块时留空段落 |
 | `move` | `ids, after`（null = 文档开头） | |
 | `set_block_style` | `id, type?, level?, align?, style?` | 段落 ↔ 标题、级别、对齐、Word 样式名 |
-| `table_set_cells` / `table_insert_rows` / `table_delete_rows` | `id, …` | 单元格内容为行内 markdown |
+| `table_set_cells` / `table_insert_rows` / `table_delete_rows` / `table_insert_cols` / `table_delete_cols` | `id, …` | 单元格内容为行内 markdown；列下标按逻辑列（计入 colspan），含跨行合并的表格不支持增删列 |
 
 `mode: 'suggest'`：修改作为待采纳修订提交（块级：改动的块 = 原块待删除 + 新块待新增；新增块待新增；删除的块留在原位待删除；同一批共享修订组）。页面勾选「修订模式」时回合在服务端强制 suggest，不依赖模型传参。修订中的块不能再被 AI 修改（`pending_suggestion`）；读视图标出 `⟨待采纳·新增 / 删除⟩`；导出按「未采纳」处理。
 

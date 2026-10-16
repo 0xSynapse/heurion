@@ -288,7 +288,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       'replace_text {id, find, replace, occurrence?}（块内替换，小改动首选：find 即守卫，不受 base_rev 限制；只改变化的字）；delete {ids}；' +
       'move {ids, after}；set_block_style {id, type?, level?, align?, style?}；' +
       'set_text_style {id, font_family?, size?, bold?, italic?, color?, range?}（修改文字字体、字号、粗体、斜体、颜色）；' +
-      'table_set_cells {id, cells:[{row, col, markdown}]}；table_insert_rows {id, at, rows}；table_delete_rows {id, at, count}。' +
+      'table_set_cells {id, cells:[{row, col, markdown}]}；table_insert_rows {id, at, rows}；table_delete_rows {id, at, count}；table_insert_cols {id, at, cells?}；table_delete_cols {id, at, count}（列下标按合并后的逻辑列计）。' +
       '会移除 open 评论锚点时，需把线程 id 放进 ack_comments 并在线程里说明。',
     inputSchema: {
       doc_id: z.string(),

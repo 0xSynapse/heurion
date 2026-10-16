@@ -69,6 +69,18 @@ export const DocOp = z.discriminatedUnion('op', [
     at: z.number().int().min(0),
     count: z.number().int().min(1).default(1),
   }),
+  z.object({
+    op: z.literal('table_insert_cols'),
+    id: z.string().min(1),
+    at: z.number().int().min(0).describe('插入位置（列下标，等于列数时追加到最右）'),
+    cells: z.array(z.string()).optional().describe('新列自上而下每行的单元格行内 markdown；缺省为空'),
+  }),
+  z.object({
+    op: z.literal('table_delete_cols'),
+    id: z.string().min(1),
+    at: z.number().int().min(0),
+    count: z.number().int().min(1).default(1),
+  }),
 ])
 
 export type DocOp = z.infer<typeof DocOp>
@@ -125,6 +137,8 @@ export function opTexts(op: DocOp): string[] {
       return op.cells.map(c => c.markdown)
     case 'table_insert_rows':
       return op.rows.flat()
+    case 'table_insert_cols':
+      return op.cells ?? []
     default:
       return []
   }

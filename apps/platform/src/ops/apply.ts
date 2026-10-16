@@ -40,6 +40,8 @@ export function applyOps(doc: PMNode, ops: DocOp[], ctx: ApplyContext): { doc: P
       case 'table_set_cells':
       case 'table_insert_rows':
       case 'table_delete_rows':
+      case 'table_insert_cols':
+      case 'table_delete_cols':
         targetedIds.add(op.id)
         break
       case 'delete':
@@ -110,6 +112,9 @@ function applyOne(tr: Transform, op: DocOp, ctx: ApplyContext, targetedIds: Set<
     case 'table_insert_rows':
     case 'table_delete_rows':
       return tableOp(tr, op, ctx)
+    case 'table_insert_cols':
+    case 'table_delete_cols':
+      return tableColOp(tr, op, ctx)
   }
 }
 
@@ -694,7 +699,7 @@ function tableOp(tr: Transform, op: Extract<DocOp, { op: 'table_set_cells' | 'ta
   if (op.op === 'table_set_cells') {
     for (const c of op.cells) {
       const cell = rows[c.row]?.[c.col]
-      if (!cell) throw new OpError('cell_not_found', `表格 ${op.id} 没有单元格 (${c.row}, ${c.col})`, { hint: `表格共 ${rows.length} 行；行列下标从 0 开始。` })
+      if (!cell) throw new OpError('cell_not_found', `表格 ${op.id} 没有单元格 (${c.row}, ${c.col})`, { hint: `表格共 ${rows.length} 行、${width} 列；行列下标从 0 开始。要加列先用 table_insert_cols。` })
       rows[c.row]![c.col] = cellNode(c.markdown, cell.attrs, ctx.taken)
     }
   } else if (op.op === 'table_insert_rows') {
@@ -708,5 +713,63 @@ function tableOp(tr: Transform, op: Extract<DocOp, { op: 'table_set_cells' | 'ta
   }
   const table = schema.node('table', target.node.attrs, rows.map(cells => schema.node('table_row', null, cells)))
   tr.replaceWith(target.pos, target.pos + target.node.nodeSize, table)
+  return [op.id]
+}
+
+/**
+ * 增删列：按逻辑列（计入 colspan）定位。跨越插入点的合并单元格加宽一列；删除范围内的格移除，
+ * 部分落在范围内的合并单元格收窄。含跨行合并（rowspan）的表格各行列位不对齐，拒绝并提示整表替换。
+ */
+function tableColOp(tr: Transform, op: Extract<DocOp, { op: 'table_insert_cols' | 'table_delete_cols' }>, ctx: ApplyContext): string[] {
+  const target = find(tr, op.id)
+  if (target.node.type.name !== 'table') throw new OpError('invalid_structure', `${op.id} 不是表格`)
+  let hasRowspan = false
+  let width = 0
+  target.node.forEach(row => {
+    let w = 0
+    row.forEach(c => {
+      w += c.attrs.colspan as number
+      if ((c.attrs.rowspan as number) > 1) hasRowspan = true
+    })
+    width = Math.max(width, w)
+  })
+  if (hasRowspan) throw new OpError('invalid_structure', `表格 ${op.id} 含跨行合并单元格，不能按列增删`, { hint: '请用 replace_block 整表替换。' })
+  const rows: PMNode[] = []
+  let r = 0
+  target.node.forEach(row => {
+    const cells: PMNode[] = []
+    let start = 0
+    if (op.op === 'table_insert_cols') {
+      if (op.at > width) throw new OpError('cell_not_found', `插入位置 ${op.at} 超出表格列数 ${width}`)
+      let placed = false
+      const fresh = (neighbor: PMNode | null) => cellNode(op.cells?.[r] ?? '', { header: neighbor?.attrs.header ?? false }, ctx.taken)
+      row.forEach(c => {
+        const span = c.attrs.colspan as number
+        if (!placed && start === op.at) { cells.push(fresh(c)); placed = true }
+        if (!placed && start < op.at && op.at < start + span) {
+          // 插入点落在合并单元格内部：该格加宽一列，内容写进同一格时不另起新格
+          cells.push(c.type.create({ ...c.attrs, colspan: span + 1 }, c.content, c.marks))
+          placed = true
+        } else cells.push(c)
+        start += span
+      })
+      if (!placed) cells.push(fresh(row.lastChild))
+    } else {
+      if (op.at + op.count > width) throw new OpError('cell_not_found', `要删除的列超出表格范围（共 ${width} 列）`)
+      if (op.count >= width) throw new OpError('invalid_structure', '不能删除表格的全部列', { hint: '要删除整张表请用 delete。' })
+      const end = op.at + op.count
+      row.forEach(c => {
+        const span = c.attrs.colspan as number
+        const kept = span - Math.max(0, Math.min(start + span, end) - Math.max(start, op.at))
+        if (kept === span) cells.push(c)
+        else if (kept > 0) cells.push(c.type.create({ ...c.attrs, colspan: kept }, c.content, c.marks))
+        start += span
+      })
+      if (cells.length === 0) throw new OpError('invalid_structure', `删除后第 ${r} 行没有单元格`, { hint: '请用 replace_block 整表替换。' })
+    }
+    rows.push(row.type.create(row.attrs, cells))
+    r++
+  })
+  tr.replaceWith(target.pos, target.pos + target.node.nodeSize, schema.node('table', target.node.attrs, rows))
   return [op.id]
 }

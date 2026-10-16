@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, isAbsolute, join, relative } from 'node:path'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -351,8 +351,12 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
         if (op.save) {
           const rel = op.save(args)
           const out = join(deps.workspaceDir(userId), rel)
-          mkdirSync(join(out, '..'), { recursive: true })
+          // 隔离模式下 dsh 以该用户专属 uid 运行：目录与文件要让它能读（与 data/、.datasets/ 一致）
+          const dir = join(out, '..')
+          mkdirSync(dir, { recursive: true })
+          chmodSync(dir, 0o2777)
           writeFileSync(out, r.bytes)
+          chmodSync(out, 0o644)
           return json({ saved: rel, bytes: r.bytes.byteLength, message: `已导出到工作区 ${rel}` })
         }
         return json(r.json ?? (r.text || { ok: true }))
