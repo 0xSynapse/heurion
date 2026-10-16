@@ -38,6 +38,7 @@ RUN uv pip install --no-cache --python /opt/venv/bin/python \
       "pydantic>=2.10.0" \
       "monai>=1.3.0" \
       "pydicom>=2.4.0" \
+      "python-gdcm>=3.0.24" \
       "nibabel>=5.2.0" \
       "numpy>=1.26.0" \
       "pillow>=10.2.0" \

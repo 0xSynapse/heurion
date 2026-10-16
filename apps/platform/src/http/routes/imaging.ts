@@ -43,7 +43,7 @@ export function registerImagingRoutes(
 
   app.get('/api/imaging/status', async c => {
     try {
-      const resp = await fetch(`${imagingWorkerUrl}/health`, { signal: AbortSignal.timeout(3000) })
+      const resp = await fetch(`${imagingWorkerUrl}/health`, { signal: AbortSignal.timeout(8000) })
       if (!resp.ok) return workerFail(c, resp, 'imaging_worker_error')
       return c.json(await resp.json())
     } catch (err: any) {
@@ -53,7 +53,7 @@ export function registerImagingRoutes(
 
   app.get('/api/imaging/models', async c => {
     try {
-      const resp = await fetch(`${imagingWorkerUrl}/api/v1/models`, { signal: AbortSignal.timeout(3000) })
+      const resp = await fetch(`${imagingWorkerUrl}/api/v1/models`, { signal: AbortSignal.timeout(8000) })
       if (!resp.ok) return workerFail(c, resp, 'imaging_worker_error')
       return c.json(await resp.json())
     } catch (err: any) {
@@ -63,7 +63,7 @@ export function registerImagingRoutes(
 
   app.get('/api/imaging/samples', async c => {
     try {
-      const resp = await fetch(`${imagingWorkerUrl}/api/v1/samples`, { signal: AbortSignal.timeout(3000) })
+      const resp = await fetch(`${imagingWorkerUrl}/api/v1/samples`, { signal: AbortSignal.timeout(8000) })
       if (!resp.ok) return workerFail(c, resp, 'imaging_worker_error')
       return c.json(await resp.json())
     } catch (err: any) {
@@ -75,7 +75,11 @@ export function registerImagingRoutes(
     if (err && typeof err === 'object' && typeof err.status === 'number' && typeof err.code === 'string') {
       return patientFailure(c, err)
     }
-    return c.json({ error: 'imaging_worker_offline', message: err?.message ?? String(err) }, 503)
+    const msg = String(err?.message ?? err ?? '')
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError' || /timeout|timed out|aborted/i.test(msg)) {
+      return c.json({ error: 'imaging_inference_timeout', message: '3D 影像推理耗时超过阈值，请稍后重试或切换轻量模型' }, 504)
+    }
+    return c.json({ error: 'imaging_worker_offline', message: `影像计算微服务连接异常：${msg}` }, 503)
   }
 
   const verifyPtVolumeString = (c: any, id: unknown) => {
@@ -583,7 +587,7 @@ export function registerImagingRoutes(
         const resp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/upload`, {
           method: 'POST',
           body: formData,
-          signal: AbortSignal.timeout(60000),
+          signal: AbortSignal.timeout(300000),
         })
         if (!resp.ok) return workerFail(c, resp, 'imaging_inference_failed')
         resultData = await resp.json()
@@ -600,7 +604,7 @@ export function registerImagingRoutes(
             mucus_max_hu: mucusMaxHu,
             ham_threshold_hu: hamThresholdHu,
           }),
-          signal: AbortSignal.timeout(60000),
+          signal: AbortSignal.timeout(300000),
         })
         if (!resp.ok) return workerFail(c, resp, 'imaging_inference_failed')
         resultData = await resp.json()
@@ -747,7 +751,7 @@ export function registerImagingRoutes(
         tags_added: autoTag ? tagsToAdd : [],
       }, 201)
     } catch (err) {
-      return patientFailure(c, err)
+      return handleImagingError(c, err)
     }
   })
 

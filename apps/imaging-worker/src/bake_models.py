@@ -12,7 +12,7 @@ from model_registry import OFFICIAL_MODEL_REGISTRY, pull_model, verify_model
 
 # All 16 implemented MONAI Model Zoo weights with remote URLs
 ALL_IMPLEMENTED_MODELS = [
-    k for k, v in OFFICIAL_MODEL_REGISTRY.items() if v.engine_implemented and v.download_url
+    k for k, v in OFFICIAL_MODEL_REGISTRY.items() if v.engine_implemented and v.urls
 ]
 
 # During Docker image build (default), only bake the lightweight core baseline weight (spleen_ct, 23 MB)

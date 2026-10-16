@@ -43,9 +43,11 @@ async function api<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
     throw new Error('请先登录')
   }
   if (!res.ok) {
-    const e = await res.json().catch(() => ({})) as { error?: string; message?: string }
-    // 影像等接口用 { error: 代码, message: 说明 }：有说明时显示说明
-    throw new Error(e.message || e.error || res.statusText)
+    const raw = await res.text().catch(() => '')
+    let e: { error?: string; message?: string; detail?: string } = {}
+    try { e = JSON.parse(raw) } catch {}
+    // 影像等接口用 { error: 代码, message: 说明 }：有说明时显示说明；HTTP/2 下 statusText 为空时回退状态码
+    throw new Error(e.message || e.detail || e.error || raw.trim().slice(0, 200) || res.statusText || `请求失败 (HTTP ${res.status})`)
   }
   return (res.headers.get('content-type')?.includes('json') ? res.json() : res.text()) as Promise<T>
 }

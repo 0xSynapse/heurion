@@ -140,6 +140,14 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   const mail = deps.mail ?? new MailService(store)
   const calendar = deps.calendar ?? new CalendarService(store, mail)
   const app = new Hono<{ Variables: { user: string } }>()
+  app.onError((err, c) => {
+    const anyErr = err as any
+    if (anyErr && typeof anyErr.status === 'number' && typeof anyErr.code === 'string') {
+      return c.json({ error: anyErr.message, message: anyErr.message, code: anyErr.code }, anyErr.status as any)
+    }
+    console.error('[api.onError]', err)
+    return c.json({ error: 'internal_error', message: err?.message || '服务器内部错误' }, 500)
+  })
   /** 进程内 AI 调用的来源（审计写 via / confirmed_by；患者操作按来源走审核门） */
   const viaByReq = new WeakMap<Request, ViaInfo>()
   const invoke: Invoke = makeInvoker(app)

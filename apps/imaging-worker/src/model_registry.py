@@ -373,14 +373,48 @@ def compute_sha256(file_path: Path) -> str:
 _SHA_CACHE: Dict[str, tuple] = {}
 
 def _cached_sha256(file_path: Path) -> str:
-    """按 (路径, 大小, 修改时间) 缓存哈希，避免每次查询都重算大文件。"""
+    """按 (路径, 大小, 修改时间) 缓存哈希，并优先复用同名 .meta.json 中已记录的哈希，避免容器冷启动时重算 2.2GB 权重文件。"""
     st = file_path.stat()
     key = str(file_path)
     hit = _SHA_CACHE.get(key)
     if hit and hit[0] == st.st_size and hit[1] == st.st_mtime:
         return hit[2]
+    meta_file = Path(f"{file_path}.meta.json")
+    if meta_file.exists():
+        try:
+            with open(meta_file, "r", encoding="utf-8") as mf:
+                meta = json.load(mf)
+            saved_sha = meta.get("actual_sha256")
+            saved_mtime = meta.get("pulled_at")
+            saved_size = meta.get("size_bytes")
+            if (
+                isinstance(saved_sha, str)
+                and len(saved_sha) == 64
+                and (
+                    (saved_size is not None and int(saved_size) == st.st_size)
+                    or (saved_mtime is not None and abs(float(saved_mtime) - st.st_mtime) < 1.0)
+                )
+            ):
+                _SHA_CACHE[key] = (st.st_size, st.st_mtime, saved_sha)
+                return saved_sha
+        except Exception:
+            pass
     digest = compute_sha256(file_path)
     _SHA_CACHE[key] = (st.st_size, st.st_mtime, digest)
+    try:
+        meta_data = {}
+        if meta_file.exists():
+            with open(meta_file, "r", encoding="utf-8") as mf:
+                meta_data = json.load(mf)
+        meta_data.update({
+            "pulled_at": str(st.st_mtime),
+            "size_bytes": st.st_size,
+            "actual_sha256": digest,
+        })
+        with open(meta_file, "w", encoding="utf-8") as mf:
+            json.dump(meta_data, mf, indent=2)
+    except Exception:
+        pass
     return digest
 
 def get_model_status(name: str) -> Dict[str, Any]:

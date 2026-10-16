@@ -555,8 +555,13 @@ class MonaiNeuralInferencePipeline:
         False：在模型网格上 argmax（可选标签后处理）后以最近邻 Invertd 回原网格（wholeBody / prostate）。
         返回规范 LPS+ (Z, Y, X) 的整数标签图。
         """
+        import gc
         from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, EnsureTyped, Invertd
         from monai.inferers import sliding_window_inference
+
+        is_cpu = self.device.type == "cpu"
+        eff_overlap = min(float(overlap), 0.25) if is_cpu else float(overlap)
+        eff_invert_probs = bool(invert_probabilities) and not is_cpu and int(vol_zyx.shape[0]) > 2
 
         nii_path = write_canonical_nifti(vol_zyx, spacing)
         try:
@@ -571,26 +576,31 @@ class MonaiNeuralInferencePipeline:
             with torch.no_grad():
                 logits = sliding_window_inference(
                     inputs=in_tensor, roi_size=roi_size, sw_batch_size=sw_batch_size,
-                    predictor=model, overlap=overlap, mode=sw_mode, padding_mode=padding_mode,
+                    predictor=model, overlap=eff_overlap, mode=sw_mode, padding_mode=padding_mode,
                 )
             # Invertd 在 CPU 上执行（Apple MPS 不支持 float64）
             logits = logits[0].detach().cpu().float()
-            if invert_probabilities:
+            del in_tensor
+            if eff_invert_probs:
                 data["pred"] = torch.softmax(logits, dim=0)
+                del logits
                 inv = Invertd(keys="pred", transform=pre, orig_keys="image", nearest_interp=False, to_tensor=True)
                 pred = inv(data)["pred"]
                 labels_xyz = torch.argmax(pred, dim=0).numpy().astype(np.uint8)
             else:
                 lab = torch.argmax(logits, dim=0, keepdim=True)
+                del logits
                 if label_postprocess is not None:
                     lab = label_postprocess(lab)
                 data["pred"] = lab.float()
                 inv = Invertd(keys="pred", transform=pre, orig_keys="image", nearest_interp=True, to_tensor=True)
                 pred = inv(data)["pred"]
                 labels_xyz = np.rint(pred[0].numpy()).astype(np.uint8)
+            del data, pred
         finally:
             if os.path.exists(nii_path):
                 os.remove(nii_path)
+            gc.collect()
 
         labels_zyx = np.transpose(labels_xyz, (2, 1, 0))
         if labels_zyx.shape != tuple(vol_zyx.shape):
@@ -650,7 +660,8 @@ class MonaiNeuralInferencePipeline:
 
     def infer_prostate(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        prostate_mri_anatomy bundle：RAS、0.5 mm 各向同性、ScaleIntensity(0~1) + NormalizeIntensity、96³ 滑窗 overlap 0.5；
+        prostate_mri_anatomy bundle：RAS、0.5 mm 各向同性（大视野输入时限制最大重采样网格以避免内存爆炸）、
+        ScaleIntensity(0~1) + NormalizeIntensity、96³ 滑窗 overlap 0.5；
         argmax 后对标签 1、2 各保留最大连通域。标签：1 = 中央腺体，2 = 外周带。
         """
         from monai.transforms import Orientationd, Spacingd, ScaleIntensityd, NormalizeIntensityd
@@ -668,16 +679,18 @@ class MonaiNeuralInferencePipeline:
             res = lab.clone()
             res[0] = torch.from_numpy(out).to(res.dtype)
             return res
+        dz, dy, dx = spacing
+        xy_pix = max(0.5, float(vol_zyx.shape[1] * dy) / 256.0, float(vol_zyx.shape[2] * dx) / 256.0)
+        z_pix = max(0.5, float(vol_zyx.shape[0] * dz) / 192.0)
         labels = self._run_3d_bundle(
             vol_zyx, spacing,
             [Orientationd(keys="image", axcodes="RAS"),
-             Spacingd(keys="image", pixdim=[0.5, 0.5, 0.5], mode="bilinear"),
+             Spacingd(keys="image", pixdim=[xy_pix, xy_pix, z_pix], mode="bilinear"),
              ScaleIntensityd(keys="image", minv=0, maxv=1),
              NormalizeIntensityd(keys="image")],
             model, roi_size=[96, 96, 96], sw_batch_size=4, overlap=0.5, invert_probabilities=False,
             label_postprocess=keep_lcc,
         )
-        dz, dy, dx = spacing
         vox_cm3 = (dz * dy * dx) / 1000.0
         cg_vol = round(float(np.sum(labels == 1)) * vox_cm3, 2)
         pz_vol = round(float(np.sum(labels == 2)) * vox_cm3, 2)
@@ -879,14 +892,16 @@ class MonaiNeuralInferencePipeline:
     def infer_unest(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         wholeBrainSeg_Large_UNEST_segmentation bundle：UNesT 3D 133 通道（132 类脑结构 + 背景）。
-        预处理：NormalizeIntensityd(nonzero=True, channel_wise=True)，96³ 滑窗推理。
+        预处理：Orientationd(RAS) + Spacingd(1.5mm) + NormalizeIntensityd(nonzero=True, channel_wise=True)，96³ 滑窗推理。
         """
-        from monai.transforms import NormalizeIntensityd
+        from monai.transforms import Orientationd, Spacingd, NormalizeIntensityd
         t0 = time.time()
         model = self.get_unest_model()
         labels = self._run_3d_bundle(
             vol_zyx, spacing,
-            [NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True)],
+            [Orientationd(keys="image", axcodes="RAS"),
+             Spacingd(keys="image", pixdim=[1.5, 1.5, 1.5], mode="bilinear"),
+             NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True)],
             model, roi_size=[96, 96, 96], sw_batch_size=2, overlap=0.5, invert_probabilities=False,
         )
         dz, dy, dx = spacing

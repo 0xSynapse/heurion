@@ -25,7 +25,8 @@ import nibabel as nib
 def build_dicom_affine(
     iop: List[float],
     ipp_list: List[List[float]],
-    pixel_spacing: Tuple[float, float]
+    pixel_spacing: Tuple[float, float],
+    default_dz: float = 1.0,
 ) -> np.ndarray:
     """
     Constructs standardized 4x4 patient coordinate affine matrix from DICOM headers:
@@ -42,7 +43,9 @@ def build_dicom_affine(
     else:
         s = np.array([0.0, 0.0, 1.0], dtype=np.float64)
 
-    dy, dx = float(pixel_spacing[0]), float(pixel_spacing[1])
+    dy = float(pixel_spacing[0]) if float(pixel_spacing[0]) > 1e-5 else 1.0
+    dx = float(pixel_spacing[1]) if float(pixel_spacing[1]) > 1e-5 else 1.0
+    fallback_dz = float(default_dz) if float(default_dz) > 1e-4 else 1.0
 
     # Compute physical slice spacing along normal vector
     if len(ipp_list) >= 2:
@@ -50,9 +53,9 @@ def build_dicom_affine(
         p1 = np.array(ipp_list[1], dtype=np.float64)
         dz = float(abs(np.dot(p1 - p0, s)))
         if dz < 1e-4:
-            dz = 1.0
+            dz = fallback_dz
     else:
-        dz = 1.0
+        dz = fallback_dz
 
     ipp0 = np.array(ipp_list[0], dtype=np.float64) if ipp_list else np.zeros(3, dtype=np.float64)
 

@@ -950,10 +950,10 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
       <div id="imgProgressBox" hidden style="margin-top: 8px; padding: 12px; border: 1px solid var(--line); background: var(--panel); border-radius: 4px">
         <div class="row" style="align-items: center; gap: 10px">
-          <span class="dot" style="background: var(--mint)"></span>
+          <span class="dot" id="imgProgressDot" style="background: var(--mint)"></span>
           <b id="imgProgressMsg">正在调度 ${esc(devAccel)} 执行 3D 卷积推理...</b>
         </div>
-        <div class="muted small" style="margin-top: 4px">包含三维体素分割、支气管伴行动脉测距 (BAR)、粘液栓体积积分与高清关键截面渲染。</div>
+        <div class="muted small" id="imgProgressSub" style="margin-top: 4px">包含三维体素分割、支气管伴行动脉测距 (BAR)、粘液栓体积积分与高清关键截面渲染。</div>
       </div>
 
       <div class="row end" style="margin-top: 14px; gap: 10px">
@@ -1062,8 +1062,8 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       else if (/cardiac|heart/.test(fn)) preferredModelId = 'cardiac_mri_segmentation'
       else if (/spleen/.test(fn)) preferredModelId = 'spleen_segmenter'
       else if (/prostat/.test(fn)) preferredModelId = 'prostate_mri_segmenter'
-      else if (/unest|subcortical/.test(fn)) preferredModelId = 'brain_subcortical_segmenter'
-      else if (/brain|brats|hippo/.test(fn)) preferredModelId = 'brain_tumor_brats'
+      else if (/brats/.test(fn)) preferredModelId = 'brain_tumor_brats'
+      else if (/brain|neuro|head|hippo|unest|subcortical/.test(fn)) preferredModelId = 'brain_subcortical_segmenter'
       else if (/breast|mammo|birads/.test(fn)) preferredModelId = 'breast_density'
       else if (/nuclei|hovernet/.test(fn)) preferredModelId = 'pathology_nuclei'
       else if (/pathol|camelyon|wsi/.test(fn)) preferredModelId = 'pathology_tumor_detection'
@@ -1171,7 +1171,9 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     // 启动分析按钮
     const btnRun = body.querySelector('#btnRunImaging') as HTMLButtonElement
     const progressBox = body.querySelector('#imgProgressBox') as HTMLElement
+    const progressDot = body.querySelector('#imgProgressDot') as HTMLElement
     const progressMsg = body.querySelector('#imgProgressMsg') as HTMLElement
+    const progressSub = body.querySelector('#imgProgressSub') as HTMLElement
 
     btnRun?.addEventListener('click', async () => {
       const modelId = (body.querySelector('#imgModelSelect') as HTMLSelectElement)?.value || 'bronchiectasis_mucus_analyzer'
@@ -1198,7 +1200,20 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
       btnRun.disabled = true
       progressBox.hidden = false
+      progressBox.style.borderColor = 'var(--line)'
+      progressBox.style.background = 'var(--panel)'
+      if (progressDot) progressDot.style.background = 'var(--mint)'
+      progressMsg.style.color = ''
       progressMsg.textContent = `正在传输体素数据并调度 ${devAccel} 执行 3D 卷积分割...`
+      if (progressSub) {
+        progressSub.textContent = '包含三维体素分割、解剖结构体积积分与高清关键截面渲染，请勿关闭窗口。'
+      }
+
+      const startTs = Date.now()
+      const timer = window.setInterval(() => {
+        const sec = Math.max(1, Math.round((Date.now() - startTs) / 1000))
+        progressMsg.textContent = `正在调度 ${devAccel} 执行 3D 卷积分割（已耗时 ${sec}s）...`
+      }, 1000)
 
       try {
         const fd = new FormData()
@@ -1213,15 +1228,26 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         fd.append('auto_tag', String(autoTag))
         await api(`/api/patients/${patientId}/imaging/analyze`, { method: 'POST', body: fd })
 
+        window.clearInterval(timer)
         notice('影像量化分析完成！已生成关键截面并加密存入患者档案。')
         close()
         tab = 'records'
         await loadList()
         await openPatient(patientId, true)
       } catch (err: any) {
+        window.clearInterval(timer)
         btnRun.disabled = false
-        progressBox.hidden = true
-        notice(`影像分析失败: ${err.message || String(err)}`, true)
+        const errText = err?.message || String(err) || '未知错误'
+        progressBox.hidden = false
+        progressBox.style.borderColor = 'rgba(239, 68, 68, 0.45)'
+        progressBox.style.background = 'rgba(239, 68, 68, 0.08)'
+        if (progressDot) progressDot.style.background = '#ef4444'
+        progressMsg.style.color = '#ef4444'
+        progressMsg.textContent = `影像分析未完成：${errText}`
+        if (progressSub) {
+          progressSub.textContent = '请检查所选影像文件格式与模型输入要求（或切换适配模型）后重新点击推理。'
+        }
+        notice(`影像分析失败: ${errText}`, true)
       }
     })
   }

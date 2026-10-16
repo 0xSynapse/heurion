@@ -32,6 +32,7 @@ except (ImportError, ValueError):
 
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 import tempfile
 import zipfile
 import shutil
@@ -283,7 +284,7 @@ def compute_emphysema_endpoint(req: EmphysemaRequest = Body(...)):
 
 
 @app.get("/health")
-def health_check():
+async def health_check():
     dev_info = get_device_info()
     return {
         "status": "healthy",
@@ -293,7 +294,7 @@ def health_check():
     }
 
 @app.get("/api/v1/models")
-def list_clinical_models(include_all: bool = False):
+async def list_clinical_models(include_all: bool = False):
     """
     分析模型清单。is_ready 规则：
     - deep_learning：引擎确有该权重的加载与推理路径，且本地权重 SHA-256 校验通过（见 model_registry.get_model_status）；
@@ -503,7 +504,7 @@ async def upload_volume(
 
     content = await file.read()
     try:
-        vol, spacing, modality = load_volume(content, filename=file.filename)
+        vol, spacing, modality = await run_in_threadpool(load_volume, content, file.filename)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to decode imaging file '{file.filename}': {str(e)}")
 
@@ -936,15 +937,33 @@ async def run_upload_analysis(
 
 
 async def _run_upload_analysis(file, model_name, window_preset, mucus_min_hu, mucus_max_hu, ham_threshold_hu, bar_cutoff):
-    fn_lower = file.filename.lower() if file.filename else ""
+    filename = file.filename or ""
     content = await file.read()
+    return await run_in_threadpool(
+        _run_upload_analysis_sync,
+        content,
+        filename,
+        model_name,
+        window_preset,
+        mucus_min_hu,
+        mucus_max_hu,
+        ham_threshold_hu,
+        bar_cutoff,
+    )
+
+
+def _run_upload_analysis_sync(content: bytes, filename: str, model_name, window_preset, mucus_min_hu, mucus_max_hu, ham_threshold_hu, bar_cutoff):
+    fn_lower = filename.lower() if filename else ""
 
     f_mucus_min = parse_flexible_float(mucus_min_hu)
     f_mucus_max = parse_flexible_float(mucus_max_hu)
     f_ham_thresh = parse_flexible_float(ham_threshold_hu)
     f_bar_cutoff = parse_flexible_float(bar_cutoff)
 
-    if fn_lower.endswith(".zip"):
+    is_zip = fn_lower.endswith(".zip") or (len(content) >= 4 and content[:4] == b"PK\x03\x04")
+    is_dicom_magic = len(content) >= 132 and content[128:132] == b"DICM"
+
+    if is_zip:
         with tempfile.TemporaryDirectory() as tmp_dir:
             zip_path = os.path.join(tmp_dir, "upload.zip")
             with open(zip_path, "wb") as f_out:
@@ -1006,9 +1025,11 @@ async def _run_upload_analysis(file, model_name, window_preset, mucus_min_hu, mu
                     ham_threshold_hu=f_ham_thresh,
                     bar_cutoff=f_bar_cutoff
                 )
-    elif fn_lower.endswith((".dcm", ".dicom")):
+    elif fn_lower.endswith((".dcm", ".dicom", ".ima")) or is_dicom_magic:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            safe_filename = os.path.basename(file.filename or "slice.dcm") or "slice.dcm"
+            safe_filename = os.path.basename(filename or "slice.dcm") or "slice.dcm"
+            if not safe_filename.lower().endswith((".dcm", ".dicom", ".ima")):
+                safe_filename = f"{safe_filename}.dcm"
             dcm_path = os.path.realpath(os.path.join(tmp_dir, safe_filename))
             if not dcm_path.startswith(os.path.realpath(tmp_dir)):
                 raise HTTPException(status_code=400, detail="非法文件名路径 (Path traversal detected)")
@@ -1069,7 +1090,7 @@ class AsyncTaskSubmitRequest(BaseModel):
     bar_cutoff: Optional[float] = 1.10
 
 @app.get("/api/v1/models/registry")
-def get_registered_models_endpoint():
+async def get_registered_models_endpoint():
     """Lists official MONAI foundation models, clinical targets, and local installation status."""
     models = list_registered_models()
     return {
@@ -1108,7 +1129,7 @@ async def anonymize_dicom_endpoint(
         content = await file.read()
         fn = file.filename or "series.zip"
         if fn.lower().endswith(".zip"):
-            out_bytes, report = anonymize_dicom_zip(content, anonymous_id=anonymous_id)
+            out_bytes, report = await run_in_threadpool(anonymize_dicom_zip, content, None, anonymous_id)
             tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
             tmp_out.write(out_bytes)
             tmp_out.close()
@@ -1127,7 +1148,7 @@ async def anonymize_dicom_endpoint(
                 tmp_in_path = tmp_in.name
             tmp_out_path = tmp_in_path + ".anon.dcm"
             try:
-                res = anonymize_dicom_file(tmp_in_path, tmp_out_path, anonymous_id=anonymous_id)
+                res = await run_in_threadpool(anonymize_dicom_file, tmp_in_path, tmp_out_path, anonymous_id)
                 return FileResponse(
                     path=tmp_out_path,
                     filename=f"anonymized_{anonymous_id}.dcm",
@@ -1140,11 +1161,11 @@ async def anonymize_dicom_endpoint(
     elif file_path and os.path.exists(file_path):
         if file_path.lower().endswith(".zip"):
             dst_zip = file_path + ".anon.zip"
-            _, report = anonymize_dicom_zip(file_path, dst_zip_path=dst_zip, anonymous_id=anonymous_id)
+            _, report = await run_in_threadpool(anonymize_dicom_zip, file_path, dst_zip, anonymous_id)
             return report
         else:
             dst_dcm = file_path + ".anon.dcm"
-            return anonymize_dicom_file(file_path, dst_dcm, anonymous_id=anonymous_id)
+            return await run_in_threadpool(anonymize_dicom_file, file_path, dst_dcm, anonymous_id)
     else:
         raise HTTPException(status_code=400, detail="必须提供上传文件或已存在的 DICOM 文件路径")
 

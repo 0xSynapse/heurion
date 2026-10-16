@@ -23,7 +23,13 @@ def get_optimal_device() -> torch.device:
         return torch.device("cuda")
     return torch.device("cpu")
 
+_DEVICE_INFO_CACHE: dict = {}
+
 def get_device_info() -> dict:
+    force = os.environ.get("IMAGING_DEVICE", "").strip().lower()
+    if force in _DEVICE_INFO_CACHE:
+        return dict(_DEVICE_INFO_CACHE[force])
+
     device = get_optimal_device()
     info = {
         "device_type": device.type,
@@ -53,4 +59,5 @@ def get_device_info() -> dict:
         info["accelerator"] = "CPU (Multi-threaded)"
         info["cpu_count"] = os.cpu_count()
 
+    _DEVICE_INFO_CACHE[force] = dict(info)
     return info

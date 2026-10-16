@@ -285,16 +285,19 @@ def load_dicom_series(folder_path: str) -> Tuple[np.ndarray, Tuple[float, float,
         files = [p for p in glob.glob(os.path.join(folder_path, "*")) if not os.path.basename(p).startswith(".") and not p.lower().endswith(".zip")]
     
     slices = []
+    last_err: Optional[str] = None
     for f in files:
         try:
             ds = pydicom.dcmread(f, force=True)
-            if hasattr(ds, "pixel_array"):
-                slices.append(ds)
-        except Exception:
+            _safe_read_pixel_array(ds)
+            slices.append(ds)
+        except Exception as e:
+            last_err = f"{os.path.basename(f)}: {e}"
             continue
             
     if not slices:
-        raise ValueError(f"在影像路径 ({folder_path}) 中未找到合法的 DICOM 切片文件")
+        detail = f"（原因：{last_err}）" if last_err else ""
+        raise ValueError(f"在影像路径 ({folder_path}) 中未找到合法的 DICOM 切片文件{detail}")
         
     return _build_volume_from_slices(slices)
 
@@ -316,6 +319,7 @@ def load_dicom_from_zip(zip_source: Union[str, bytes, io.BytesIO]) -> Tuple[np.n
             return vol, spacing, {"modality": modality, "slices_count": vol.shape[0], "rows": vol.shape[1], "cols": vol.shape[2]}
 
     slices = []
+    last_err: Optional[str] = None
     for name in zf.namelist():
         if "__MACOSX" in name or "/._" in name or name.split("/")[-1].startswith("."):
             continue
@@ -324,52 +328,97 @@ def load_dicom_from_zip(zip_source: Union[str, bytes, io.BytesIO]) -> Tuple[np.n
             try:
                 raw_bytes = zf.read(name)
                 ds = pydicom.dcmread(io.BytesIO(raw_bytes), force=True)
-                if hasattr(ds, "pixel_array"):
-                    slices.append(ds)
-            except Exception:
+                _safe_read_pixel_array(ds)
+                slices.append(ds)
+            except Exception as e:
+                last_err = f"{os.path.basename(name)}: {e}"
                 continue
 
     if not slices:
-        raise ValueError("ZIP 序列包中未解析出合法的 DICOM 影像切片")
+        detail = f"（原因：{last_err}）" if last_err else ""
+        raise ValueError(f"ZIP 序列包中未解析出合法的 DICOM 影像切片{detail}")
 
     return _build_volume_from_slices(slices)
 
+
+def _safe_read_pixel_array(ds: Any) -> np.ndarray:
+    """
+    Safely decodes ds.pixel_array, filling in standard defaults for anonymized/stripped DICOM files
+    that omit PhotometricInterpretation or SamplesPerPixel.
+    """
+    if not hasattr(ds, "PhotometricInterpretation") or not getattr(ds, "PhotometricInterpretation", None):
+        ds.PhotometricInterpretation = "MONOCHROME2"
+    if not hasattr(ds, "SamplesPerPixel") or not getattr(ds, "SamplesPerPixel", None):
+        ds.SamplesPerPixel = 1
+    return _normalize_dicom_pixel_array(ds.pixel_array)
+
+
+def _normalize_dicom_pixel_array(arr: np.ndarray) -> np.ndarray:
+    """
+    Normalizes a DICOM dataset's pixel_array into a 3D float32 stack (Z_frames, Y, X):
+    - 2D (Y, X) -> (1, Y, X)
+    - 3D RGB/RGBA (Y, X, 3|4) with Y, X > 4 -> luminance (1, Y, X)
+    - 3D multi-frame (Z, Y, X) -> (Z, Y, X)
+    - 4D multi-frame RGB/RGBA (Z, Y, X, 3|4) -> luminance (Z, Y, X)
+    """
+    a = np.asarray(arr, dtype=np.float32)
+    if a.ndim == 2:
+        return a[np.newaxis, :, :]
+    if a.ndim == 3:
+        if a.shape[-1] in (3, 4) and a.shape[0] > 4 and a.shape[1] > 4:
+            gray = 0.299 * a[..., 0] + 0.587 * a[..., 1] + 0.114 * a[..., 2]
+            return gray[np.newaxis, :, :]
+        return a
+    if a.ndim == 4:
+        if a.shape[-1] in (3, 4):
+            return 0.299 * a[..., 0] + 0.587 * a[..., 1] + 0.114 * a[..., 2]
+        return a.reshape((-1, a.shape[-2], a.shape[-1]))
+    if a.ndim > 4:
+        return a.reshape((-1, a.shape[-2], a.shape[-1]))
+    raise ValueError(f"不支持的 DICOM 像素矩阵维度: {a.shape}")
+
+
 def load_dicom_file(file_source: Union[str, bytes, io.BytesIO]) -> Tuple[np.ndarray, Tuple[float, float, float], Dict[str, Any]]:
     """
-    Reads a single DICOM file (multi-frame 3D or single slice).
+    Reads a single DICOM file (multi-frame 3D, single slice, or RGB DICOM).
     """
     import pydicom
     if isinstance(file_source, bytes):
         file_source = io.BytesIO(file_source)
     ds = pydicom.dcmread(file_source, force=True)
-    if not hasattr(ds, "pixel_array"):
+    if not hasattr(ds, "PixelData") and not hasattr(ds, "FloatPixelData") and not hasattr(ds, "DoubleFloatPixelData"):
         raise ValueError("DICOM 文件不包含体素矩阵数据 (pixel_array)")
 
-    pixel_array = ds.pixel_array
-    slope = float(str(getattr(ds, "RescaleSlope", 1.0)).replace(",", "."))
-    intercept = float(str(getattr(ds, "RescaleIntercept", 0.0)).replace(",", "."))
+    pixel_array = _safe_read_pixel_array(ds)
+    try:
+        slope = float(str(getattr(ds, "RescaleSlope", 1.0)).replace(",", "."))
+    except Exception:
+        slope = 1.0
+    try:
+        intercept = float(str(getattr(ds, "RescaleIntercept", 0.0)).replace(",", "."))
+    except Exception:
+        intercept = 0.0
     raw_spacing = getattr(ds, "PixelSpacing", [1.0, 1.0])
     try:
         dy = float(str(raw_spacing[0]).replace(",", "."))
         dx = float(str(raw_spacing[1]).replace(",", "."))
+        if dy <= 1e-5 or dx <= 1e-5:
+            dy, dx = 1.0, 1.0
     except Exception:
         dy, dx = 1.0, 1.0
     raw_thick = getattr(ds, "SliceThickness", 1.0)
     try:
         dz = float(str(raw_thick).replace(",", "."))
+        if dz <= 1e-5:
+            dz = 1.0
     except Exception:
         dz = 1.0
     spacing = (dz, dy, dx)
 
-    if pixel_array.ndim == 3:
-        vol = pixel_array.astype(np.float32) * slope + intercept
-    elif pixel_array.ndim == 2:
-        vol = (pixel_array.astype(np.float32) * slope + intercept)[np.newaxis, :, :]
-    else:
-        vol = pixel_array[0].astype(np.float32) * slope + intercept
+    vol = pixel_array * slope + intercept
 
     meta = {
-        "modality": getattr(ds, "Modality", "CT"),
+        "modality": str(getattr(ds, "Modality", "CT") or "CT"),
         "slices_count": vol.shape[0],
         "rows": vol.shape[1],
         "cols": vol.shape[2],
@@ -380,6 +429,7 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
     """
     Robustly groups slices by SeriesInstanceUID and matrix dimensions, selects dominant 3D series,
     sorts slices by physical Z-coordinate, and stacks into a 3D NumPy array.
+    Supports single-slice 2D, multi-slice 2D series, multi-frame 3D DICOMs, and RGB DICOMs.
     """
     if not slices:
         raise ValueError("未检测到有效 DICOM 切片")
@@ -390,39 +440,52 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
         uid = str(getattr(s, "SeriesInstanceUID", "default_series"))
         series_groups.setdefault(uid, []).append(s)
 
-    # Dominant series with the largest number of slices
-    best_series = max(series_groups.values(), key=len)
+    def _series_frame_count(s_list: list) -> int:
+        total = 0
+        for s in s_list:
+            try:
+                nf = int(getattr(s, "NumberOfFrames", 1) or 1)
+                total += max(1, nf)
+            except Exception:
+                total += 1
+        return total
 
-    # 2. Filter out slices with inconsistent matrix shapes
+    # Dominant series with the largest total number of slices/frames
+    best_series = max(series_groups.values(), key=_series_frame_count)
+
+    # 2. Filter out slices with inconsistent matrix shapes (Y, X)
     shape_groups: Dict[Tuple[int, int], list] = {}
+    last_decode_err: Optional[str] = None
     for s in best_series:
         try:
-            arr = s.pixel_array
-            if arr.ndim == 2:
-                shape_groups.setdefault(arr.shape, []).append(s)
-            elif arr.ndim == 3 and arr.shape[0] == 1:
-                shape_groups.setdefault(arr.shape[1:], []).append(s)
-        except Exception:
+            arr3d = _safe_read_pixel_array(s)
+            yx_shape = (int(arr3d.shape[1]), int(arr3d.shape[2]))
+            shape_groups.setdefault(yx_shape, []).append(s)
+        except Exception as e:
+            last_decode_err = str(e)
             continue
 
     if not shape_groups:
-        raise ValueError("无法从选定 DICOM 序列中读取 2D 体素切片矩阵")
+        detail = f"（解码错误：{last_decode_err}）" if last_decode_err else ""
+        raise ValueError(f"无法从选定 DICOM 序列中读取体素切片矩阵{detail}")
 
-    valid_slices = max(shape_groups.values(), key=len)
+    valid_slices = max(shape_groups.values(), key=_series_frame_count)
 
     # 3. Sort slices by physical coordinates along the slice normal
     first = valid_slices[0]
-    iop = getattr(first, "ImageOrientationPatient", None)
+    iop_raw = getattr(first, "ImageOrientationPatient", None)
+    iop: List[float] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
     slice_normal = np.array([0.0, 0.0, 1.0])
-    if iop is not None and len(iop) >= 6:
+    if iop_raw is not None:
         try:
-            rx, ry, rz = [float(str(x).replace(",", ".")) for x in iop[:3]]
-            cx, cy, cz = [float(str(x).replace(",", ".")) for x in iop[3:6]]
-            r_vec = np.array([rx, ry, rz])
-            c_vec = np.array([cx, cy, cz])
-            n_vec = np.cross(r_vec, c_vec)
-            if np.linalg.norm(n_vec) > 1e-4:
-                slice_normal = n_vec / np.linalg.norm(n_vec)
+            if len(iop_raw) >= 6:
+                parsed_iop = [float(str(x).replace(",", ".")) for x in iop_raw[:6]]
+                r_vec = np.array(parsed_iop[:3])
+                c_vec = np.array(parsed_iop[3:6])
+                n_vec = np.cross(r_vec, c_vec)
+                if np.linalg.norm(n_vec) > 1e-4:
+                    iop = parsed_iop
+                    slice_normal = n_vec / np.linalg.norm(n_vec)
         except Exception:
             pass
 
@@ -436,14 +499,14 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
             pass
         try:
             loc = getattr(s, "SliceLocation", None)
-            if loc is not None:
+            if loc is not None and str(loc).strip() != "":
                 return (1, float(str(loc).replace(",", ".")))
         except Exception:
             pass
         try:
             inst = getattr(s, "InstanceNumber", None)
-            if inst is not None:
-                return (2, int(inst))
+            if inst is not None and str(inst).strip() != "":
+                return (2, int(str(inst).strip()))
         except Exception:
             pass
         return (3, 0)
@@ -451,19 +514,24 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
     valid_slices.sort(key=slice_sort_key)
 
     first = valid_slices[0]
-    raw_spacing = getattr(first, "PixelSpacing", [1.0, 1.0])
+    raw_spacing = getattr(first, "PixelSpacing", None)
+    dy, dx = 1.0, 1.0
     try:
-        if isinstance(raw_spacing, (list, tuple)) and len(raw_spacing) >= 2:
-            dy = float(str(raw_spacing[0]).replace(",", "."))
-            dx = float(str(raw_spacing[1]).replace(",", "."))
-        else:
-            dy, dx = 1.0, 1.0
+        if raw_spacing is not None and len(raw_spacing) >= 2:
+            dy_cand = float(str(raw_spacing[0]).replace(",", "."))
+            dx_cand = float(str(raw_spacing[1]).replace(",", "."))
+            if dy_cand > 1e-5 and dx_cand > 1e-5:
+                dy, dx = dy_cand, dx_cand
     except Exception:
         dy, dx = 1.0, 1.0
 
-    raw_thick = getattr(first, "SliceThickness", 1.0)
+    raw_thick = getattr(first, "SliceThickness", None)
+    dz = 1.0
     try:
-        dz = float(str(raw_thick).replace(",", "."))
+        if raw_thick is not None and str(raw_thick).strip() != "":
+            dz_cand = float(str(raw_thick).replace(",", "."))
+            if dz_cand > 1e-5:
+                dz = dz_cand
     except Exception:
         dz = 1.0
 
@@ -485,30 +553,57 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
     default_slope = 1.0
     default_intercept = 0.0
     try:
-        default_slope = float(str(getattr(first, "RescaleSlope", 1.0)).replace(",", "."))
+        rs = getattr(first, "RescaleSlope", None)
+        if rs is not None and str(rs).strip() != "":
+            default_slope = float(str(rs).replace(",", "."))
     except Exception:
         pass
     try:
-        default_intercept = float(str(getattr(first, "RescaleIntercept", 0.0)).replace(",", "."))
+        ri = getattr(first, "RescaleIntercept", None)
+        if ri is not None and str(ri).strip() != "":
+            default_intercept = float(str(ri).replace(",", "."))
     except Exception:
         pass
 
     slice_arrays = []
+    ipp_list: List[List[float]] = []
+    frame_idx = 0
     for s in valid_slices:
-        arr = s.pixel_array.astype(np.float32)
-        if arr.ndim == 3 and arr.shape[0] == 1:
-            arr = arr[0]
+        arr3d = _safe_read_pixel_array(s)
         try:
-            s_slope = float(str(getattr(s, "RescaleSlope", default_slope)).replace(",", "."))
+            rs = getattr(s, "RescaleSlope", None)
+            s_slope = float(str(rs).replace(",", ".")) if rs is not None and str(rs).strip() != "" else default_slope
         except Exception:
             s_slope = default_slope
         try:
-            s_intercept = float(str(getattr(s, "RescaleIntercept", default_intercept)).replace(",", "."))
+            ri = getattr(s, "RescaleIntercept", None)
+            s_intercept = float(str(ri).replace(",", ".")) if ri is not None and str(ri).strip() != "" else default_intercept
         except Exception:
             s_intercept = default_intercept
-        slice_arrays.append(arr * s_slope + s_intercept)
+        scaled = arr3d * s_slope + s_intercept
+        slice_arrays.append(scaled)
 
-    vol = np.stack(slice_arrays, axis=0)
+        base_ipp = None
+        try:
+            raw_ipp = getattr(s, "ImagePositionPatient", None)
+            if raw_ipp is not None and len(raw_ipp) >= 3:
+                base_ipp = [float(str(v).replace(",", ".")) for v in raw_ipp[:3]]
+        except Exception:
+            base_ipp = None
+
+        for f_i in range(scaled.shape[0]):
+            if base_ipp is not None:
+                step_vec = slice_normal * (f_i * dz)
+                ipp_list.append([
+                    base_ipp[0] + float(step_vec[0]),
+                    base_ipp[1] + float(step_vec[1]),
+                    base_ipp[2] + float(step_vec[2]),
+                ])
+            else:
+                ipp_list.append([0.0, 0.0, float(frame_idx) * dz])
+            frame_idx += 1
+
+    vol = np.concatenate(slice_arrays, axis=0)
     try:
         from .spatial_canonicalizer import build_dicom_affine, to_canonical_lps, check_anatomical_orientation_sanity
     except (ImportError, ValueError):
@@ -519,10 +614,8 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
         from quality_assurance import _primary_kernel_name
 
     # Construct patient coordinate affine from DICOM IOP and IPP headers
-    iop = [float(v) for v in getattr(first, "ImageOrientationPatient", [1, 0, 0, 0, 1, 0])]
-    ipp_list = [[float(v) for v in getattr(s, "ImagePositionPatient", [0, 0, 0])] for s in valid_slices]
-    ps = (float(first.PixelSpacing[0]), float(first.PixelSpacing[1])) if hasattr(first, "PixelSpacing") else (spacing[1], spacing[2])
-    aff = build_dicom_affine(iop, ipp_list, ps)
+    ps = (dy, dx)
+    aff = build_dicom_affine(iop, ipp_list, ps, default_dz=dz)
 
     # Convert DICOM LPS affine to RAS affine before passing to nibabel's to_canonical_lps.
     # DICOM Patient Coordinate System is LPS (+X=Left, +Y=Posterior, +Z=Superior).
@@ -534,15 +627,15 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
     vol_xyz = np.transpose(vol, (2, 1, 0))
     vol_lps, aff_lps, spacing_lps = to_canonical_lps(vol_xyz, aff_ras)
 
-    patient_pos = str(getattr(first, "PatientPosition", "HFS"))
-    modality_str = str(getattr(first, "Modality", "CT"))
+    patient_pos = str(getattr(first, "PatientPosition", "HFS") or "HFS")
+    modality_str = str(getattr(first, "Modality", "CT") or "CT")
     orientation_qa = check_anatomical_orientation_sanity(vol_lps, modality=modality_str, patient_position=patient_pos)
 
     meta = {
         "modality": modality_str,
-        "slices_count": len(valid_slices),
-        "rows": vol_lps.shape[1],
-        "cols": vol_lps.shape[2],
+        "slices_count": int(vol_lps.shape[0]),
+        "rows": int(vol_lps.shape[1]),
+        "cols": int(vol_lps.shape[2]),
         "series_description": str(getattr(first, "SeriesDescription", "")),
         "body_part_examined": str(getattr(first, "BodyPartExamined", "")),
         "convolution_kernel": _primary_kernel_name(getattr(first, "ConvolutionKernel", "")),
