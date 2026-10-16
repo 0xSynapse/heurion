@@ -44,11 +44,17 @@ export function outline(input: { doc: PMNode; docId: string; title: string; rev:
   }
   headings.forEach(({ b, i }, k) => {
     const level = b.attrs.level as number
+    const isDelete = b.attrs.suggest === 'delete'
     let end = blocks.length
-    for (const h of headings.slice(k + 1)) if ((h.b.attrs.level as number) <= level) { end = h.i; break }
-    const body = blocks.slice(i + 1, end)
+    for (const h of headings.slice(k + 1)) {
+      if (!isDelete && h.b.attrs.suggest === 'delete') continue
+      if ((h.b.attrs.level as number) <= level) { end = h.i; break }
+    }
+    const rawBody = blocks.slice(i + 1, end)
+    const body = isDelete ? rawBody : rawBody.filter(x => x.attrs.suggest !== 'delete')
     const chars = body.reduce((s, x) => s + plainText(x).length, 0)
-    lines.push(`${'  '.repeat(level - 1)}${'#'.repeat(level)} {#${b.attrs.id}} ${plainText(b)}（${body.length} 块，${chars} 字）`)
+    const tag = b.attrs.suggest === 'insert' ? '⟨待采纳·新增⟩ ' : b.attrs.suggest === 'delete' ? '⟨待采纳·删除⟩ ' : ''
+    lines.push(`${'  '.repeat(level - 1)}${'#'.repeat(level)} {#${b.attrs.id}} ${tag}${plainText(b)}（${body.length} 块，${chars} 字）`)
   })
   return lines.join('\n')
 }

@@ -15,6 +15,8 @@ export interface OpResult {
 export interface ApplyContext {
   /** 文档里已占用的 id（新分配的 id 会加入）。 */
   taken: Set<string>
+  /** base_rev 之后被用户改过的块 id（AI 整章替换时不静默覆盖这些块）。 */
+  userEditedIds?: Set<string>
 }
 
 /**
@@ -24,9 +26,34 @@ export interface ApplyContext {
 export function applyOps(doc: PMNode, ops: DocOp[], ctx: ApplyContext): { doc: PMNode; results: OpResult[] } {
   const tr = new Transform(doc)
   const results: OpResult[] = []
+  const targetedIds = new Set<string>()
+  for (const op of ops) {
+    switch (op.op) {
+      case 'insert_after':
+      case 'insert_before':
+        targetedIds.add(op.anchor_id)
+        break
+      case 'replace_block':
+      case 'replace_text':
+      case 'set_block_style':
+      case 'set_text_style':
+      case 'table_set_cells':
+      case 'table_insert_rows':
+      case 'table_delete_rows':
+        targetedIds.add(op.id)
+        break
+      case 'delete':
+        for (const id of op.ids) targetedIds.add(id)
+        break
+      case 'move':
+        for (const id of op.ids) targetedIds.add(id)
+        targetedIds.add(op.after)
+        break
+    }
+  }
   ops.forEach((op, index) => {
     try {
-      results.push({ op_index: index, op: op.op, ids: applyOne(tr, op, ctx) })
+      results.push({ op_index: index, op: op.op, ids: applyOne(tr, op, ctx, targetedIds) })
     } catch (err) {
       if (err instanceof OpError) throw new OpError(err.code, err.message, { op_index: index, ...err.extra })
       if (err instanceof MarkdownError) throw new OpError('invalid_markdown', err.message, { op_index: index })
@@ -57,13 +84,17 @@ function topIds(nodes: readonly PMNode[]): string[] {
   return nodes.map(n => n.attrs.id as string).filter(Boolean)
 }
 
-function applyOne(tr: Transform, op: DocOp, ctx: ApplyContext): string[] {
+function normalizeHeadingTitle(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function applyOne(tr: Transform, op: DocOp, ctx: ApplyContext, targetedIds: Set<string>): string[] {
   switch (op.op) {
     case 'insert_after':
     case 'insert_before':
       return insert(tr, op.anchor_id, op.markdown, op.op === 'insert_after', ctx)
     case 'replace_block':
-      return replaceBlock(tr, op.id, op.markdown, ctx)
+      return replaceBlock(tr, op.id, op.markdown, ctx, targetedIds)
     case 'replace_text':
       return replaceText(tr, op)
     case 'delete':
@@ -89,6 +120,18 @@ function insert(tr: Transform, anchorId: string, markdown: string, after: boolea
   const $pos = tr.doc.resolve(anchor.pos)
   const parent = $pos.parent
   const index = $pos.index()
+  // 锚点是标题且在标题后插入多块内容时，若 AI 把同名同级标题重复写在开头，自动去掉首块避免重复章节标题
+  if (
+    after &&
+    anchor.node.type.name === 'heading' &&
+    nodes.length > 1 &&
+    nodes[0]!.type.name === 'heading' &&
+    nodes[0]!.attrs.level === anchor.node.attrs.level &&
+    normalizeHeadingTitle(nodes[0]!.textContent) === normalizeHeadingTitle(anchor.node.textContent)
+  ) {
+    ctx.taken.delete(nodes[0]!.attrs.id as string)
+    nodes = nodes.slice(1)
+  }
   // 锚点是列表项、内容是一个列表 → 插入其中的列表项
   if (anchor.node.type.name === 'list_item' && nodes.length === 1 && /_list$/.test(nodes[0]!.type.name)) {
     const items: PMNode[] = []
@@ -108,7 +151,7 @@ function insert(tr: Transform, anchorId: string, markdown: string, after: boolea
   return topIds(nodes)
 }
 
-function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyContext): string[] {
+function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyContext, targetedIds: Set<string>): string[] {
   const target = find(tr, id)
   if (target.node.type.name === 'opaque') {
     throw new OpError('node_not_editable', `块 ${id} 是不可编辑内容（${target.node.attrs.description}）`, { hint: '不可编辑块只能移动或删除。' })
@@ -136,13 +179,70 @@ function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyCon
   }
   const $pos = tr.doc.resolve(target.pos)
   const index = $pos.index()
+
+  // 当目标块是顶层章节标题且替换内容是以同级标题开头的多块章节全文时，
+  // 若该章节原有的正文块未被同批次其他操作显式引用，则一并替换该章节正文，防止残留旧章节导致章节重复。
+  let replaceEndIndex = index + 1
+  let replaceEndPos = target.pos + target.node.nodeSize
+  if (
+    $pos.depth === 0 &&
+    target.node.type.name === 'heading' &&
+    nodes.length > 1 &&
+    nodes[0]!.type.name === 'heading' &&
+    nodes[0]!.attrs.level === target.node.attrs.level
+  ) {
+    const parent = $pos.parent
+    const level = target.node.attrs.level as number
+    const hasSubheadings = nodes.slice(1).some(n => n.type.name === 'heading')
+    const newHeadingTitles = new Set(
+      nodes
+        .slice(1)
+        .filter(n => n.type.name === 'heading')
+        .map(n => `${n.attrs.level}:${normalizeHeadingTitle(n.textContent)}`),
+    )
+    let scanIdx = index + 1
+    let scanPos = replaceEndPos
+    let canAbsorb = true
+    while (scanIdx < parent.childCount) {
+      const sib = parent.child(scanIdx)
+      if (sib.type.name === 'heading') {
+        const sibLevel = sib.attrs.level as number
+        const sibKey = `${sibLevel}:${normalizeHeadingTitle(sib.textContent)}`
+        if (sibLevel <= level) {
+          if (!newHeadingTitles.has(sibKey)) break
+        } else if (!hasSubheadings) {
+          break
+        }
+      }
+      let bad = sib.type.name === 'opaque' || Boolean(sib.attrs.suggest)
+      sib.descendants(d => {
+        const did = d.attrs.id as string | null
+        if (did && (targetedIds.has(did) || ctx.userEditedIds?.has(did))) bad = true
+        if (d.marks.some(m => m.type.name === 'comment')) bad = true
+        return !bad
+      })
+      const sid = sib.attrs.id as string | null
+      if (sid && (targetedIds.has(sid) || ctx.userEditedIds?.has(sid))) bad = true
+      if (bad) {
+        canAbsorb = false
+        break
+      }
+      scanPos += sib.nodeSize
+      scanIdx++
+    }
+    if (canAbsorb && scanIdx > index + 1) {
+      replaceEndIndex = scanIdx
+      replaceEndPos = scanPos
+    }
+  }
+
   const fragment = Fragment.from(nodes)
-  if (!$pos.parent.canReplace(index, index + 1, fragment)) {
+  if (!$pos.parent.canReplace(index, replaceEndIndex, fragment)) {
     throw new OpError('invalid_structure', `块 ${id} 不能替换成这些内容`, {
       hint: nodes.length === 0 ? '替换为空会让容器变空；要删除请用 delete。' : '检查块类型是否适合所在容器。',
     })
   }
-  tr.replaceWith(target.pos, target.pos + target.node.nodeSize, fragment)
+  tr.replaceWith(target.pos, replaceEndPos, fragment)
   return topIds(nodes)
 }
 

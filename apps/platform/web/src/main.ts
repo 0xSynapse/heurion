@@ -125,6 +125,16 @@ function placeFixedPopup(menu: HTMLElement, anchorRect: DOMRect, preferRight = f
   const vw = window.innerWidth
   const vh = window.innerHeight
   const pad = 8
+  Object.assign(menu.style, {
+    position: 'fixed',
+    left: '0px',
+    top: '0px',
+    right: 'auto',
+    bottom: 'auto',
+    maxHeight: `${Math.max(120, vh - pad * 2)}px`,
+    maxWidth: `${Math.max(150, vw - pad * 2)}px`,
+    overflowY: 'auto',
+  })
   const mr = menu.getBoundingClientRect()
   const mw = mr.width || 160
   const mh = mr.height || 140
@@ -140,15 +150,8 @@ function placeFixedPopup(menu: HTMLElement, anchorRect: DOMRect, preferRight = f
     top = flipped >= pad ? flipped : Math.max(pad, vh - mh - pad)
   }
   top = Math.max(pad, top)
-  Object.assign(menu.style, {
-    position: 'fixed',
-    left: `${Math.round(left)}px`,
-    top: `${Math.round(top)}px`,
-    right: 'auto',
-    bottom: 'auto',
-    maxHeight: `${Math.max(120, vh - pad * 2)}px`,
-    overflowY: 'auto',
-  })
+  menu.style.left = `${Math.round(left)}px`
+  menu.style.top = `${Math.round(top)}px`
 }
 
 /** 小菜单（固定定位在按钮旁边，自动适配屏幕与窗口边界）。 */
@@ -164,13 +167,16 @@ function popMenu(anchor: HTMLElement, items: Array<[string, () => void | Promise
     menu.remove()
     document.removeEventListener('mousedown', outside)
     document.removeEventListener('keydown', onKey)
+    document.removeEventListener('scroll', onScroll, true)
     window.removeEventListener('resize', close)
   }
   const outside = (e: MouseEvent) => { if (!menu.contains(e.target as Node)) close() }
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+  const onScroll = (e: Event) => { if (!menu.contains(e.target as Node)) close() }
   setTimeout(() => {
     document.addEventListener('mousedown', outside)
     document.addEventListener('keydown', onKey)
+    document.addEventListener('scroll', onScroll, true)
     window.addEventListener('resize', close, { once: true })
   })
   menu.onclick = e => {
@@ -2209,8 +2215,16 @@ function placeFab(): void {
   fab.style.display = 'block'
   fab.textContent = anchor.blocked ?? (anchor.snippet ? '评论' : '评论此形状')
   fab.classList.toggle('blocked', !!anchor.blocked)
-  fab.style.top = `${anchor.rect.top - main.top - 36}px`
-  fab.style.left = `${anchor.rect.left - main.left + anchor.rect.width / 2 - 24}px`
+  const fr = fab.getBoundingClientRect()
+  const fw = fr.width || 64
+  const fh = fr.height || 28
+  let top = anchor.rect.top - main.top - fh - 8
+  if (top < 8) top = anchor.rect.top - main.top + 28
+  top = Math.max(8, Math.min(top, Math.max(8, main.height - fh - 8)))
+  const rawLeft = anchor.rect.left - main.left + anchor.rect.width / 2 - fw / 2
+  const left = Math.max(8, Math.min(rawLeft, Math.max(8, main.width - fw - 8)))
+  fab.style.top = `${Math.round(top)}px`
+  fab.style.left = `${Math.round(left)}px`
 }
 $('scroller').addEventListener('scroll', () => { $('commentFab').style.display = 'none' })
 
@@ -2489,7 +2503,9 @@ document.querySelector<HTMLElement>('.tabs')!.onclick = e => {
 
 $('exportBtn').onclick = e => {
   e.stopPropagation()
-  $('exportMenu').hidden = !$('exportMenu').hidden
+  const menu = $('exportMenu')
+  menu.hidden = !menu.hidden
+  if (!menu.hidden) placeFixedPopup(menu, $('exportBtn').getBoundingClientRect(), false)
 }
 document.addEventListener('click', () => { $('exportMenu').hidden = true })
 // 导出字体：Mac（苹方、宋体-简）/ Windows（微软雅黑、等线、宋体）；默认按当前电脑，选过的记在本机
@@ -2505,9 +2521,27 @@ $('exportFonts').onclick = e => {
   const v = (e.target as HTMLElement).closest<HTMLElement>('[data-fonts]')?.dataset.fonts
   if (v) { try { localStorage.setItem(FONTS_KEY, v) } catch { /* 无痕模式 */ } renderExportFonts() }
 }
-$('exportDocxBtn').onclick = () => { if (session) location.href = `/api/docs/${session.docId}/export.docx?token=${encodeURIComponent(TOKEN)}&fonts=${exportFonts()}` }
+async function ensureSuggestionsResolvedBeforeExport(): Promise<void> {
+  if (!session || !detail?.suggestions?.length) return
+  const count = detail.suggestions.length
+  const accept = await askConfirm({
+    title: '导出前处理待采纳修订',
+    message: `当前文档有 ${count} 处待采纳修订（编辑区目前显示的是修订后的内容）。是否先全部采纳后再导出，使导出的文件与编辑区显示一致？（点「取消」将按未采纳前的原稿导出）`,
+    confirm: '全部采纳并导出',
+  })
+  if (accept) await resolveSuggestion('all', true)
+}
+$('exportDocxBtn').onclick = async () => {
+  if (!session) return
+  await ensureSuggestionsResolvedBeforeExport()
+  location.href = `/api/docs/${session.docId}/export.docx?token=${encodeURIComponent(TOKEN)}&fonts=${exportFonts()}`
+}
 $('exportPptxBtn').onclick = () => { if (session) location.href = `/api/docs/${session.docId}/export.pptx?token=${encodeURIComponent(TOKEN)}&fonts=${exportFonts()}` }
-$('exportMdBtn').onclick = () => { if (session) location.href = `/api/docs/${session.docId}/export.md?token=${encodeURIComponent(TOKEN)}` }
+$('exportMdBtn').onclick = async () => {
+  if (!session) return
+  await ensureSuggestionsResolvedBeforeExport()
+  location.href = `/api/docs/${session.docId}/export.md?token=${encodeURIComponent(TOKEN)}`
+}
 // 开发者：读视图（用户菜单里，仅开发模式）
 document.addEventListener('heurion:readview', async () => {
   if (!session) { showNotice('先打开一份文档'); return }

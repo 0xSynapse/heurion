@@ -1123,6 +1123,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/docs/:id/read', c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
+    docs.flush(row.id)
     if (row.kind === 'deck') return c.text(deckRead(docs.get(row.id), docs.rev(row.id)))
     return c.text(read({ doc: docs.get(row.id), docId: row.id, rev: docs.rev(row.id), comments: store.listComments(row.id, 'open') }))
   })
@@ -1130,6 +1131,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/docs/:id/export.md', c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
+    docs.flush(row.id)
     return c.body(exportMarkdown(withoutPending(docs.get(row.id)), store.listCitations(row.id)), 200, {
       'Content-Type': 'text/markdown; charset=utf-8',
       'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(row.title)}.md`,

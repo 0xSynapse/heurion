@@ -104,7 +104,10 @@ export class OpService {
           return a && bytes ? { mime: a.mime, bytes } : null
         },
       })
-      : applyOps(before, batch.ops as DocOp[], { taken })
+      : applyOps(before, batch.ops as DocOp[], {
+        taken,
+        userEditedIds: ai ? store.userTouchedSince(batch.doc_id, batch.base_rev + 1) : undefined,
+      })
     const results = applied.results
     let after = batch.mode === 'suggest'
       ? toSuggestion(before, applied.doc, `g${randomBytes(4).toString('hex')}`)

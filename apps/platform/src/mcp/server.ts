@@ -303,7 +303,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     if (store.getDoc(args.doc_id)!.kind === 'deck') return fail('wrong_tool', '这是幻灯片文档，请用 deck_edit')
     try {
       const forced = ctx.activeTurn(args.doc_id)?.mode
-      const mode = forced === 'suggest' ? 'suggest' : args.mode ?? 'apply'
+      const mode = forced ?? args.mode ?? 'apply'
       const result = deps.ops.edit({ ...args, mode }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null })
       ctx.touch(args.doc_id)
       return json({

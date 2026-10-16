@@ -399,3 +399,54 @@ describe('代码审查回归（2026-10-01）', () => {
     expect(env.docs.get(env.docId).child(0).textContent).toBe('心力衰竭影响约 2% 的成年人。')
   })
 })
+
+describe('章节防重复守卫（导出与编辑一致性）', () => {
+  it('replace_block 针对章节标题传入整章（标题 + 多段正文）时自动替换旧章节正文，不残留旧段落', () => {
+    const md = `# 引言\n\n旧引言第一段。\n\n旧引言第二段。\n\n# 方法\n\n方法原稿。`
+    const { docs, ops, docId } = setup(md)
+    const [h1] = ids(docs, docId)
+    ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: h1!,
+        markdown: `# 引言\n\n新引言第一段。\n\n新引言第二段。`,
+      }],
+    }, { actor: 'ai', turnId: null })
+
+    const exported = exportMarkdown(docs.get(docId), [])
+    expect(exported).toContain('新引言第一段。')
+    expect(exported).toContain('新引言第二段。')
+    expect(exported).not.toContain('旧引言第一段。')
+    expect(exported).not.toContain('旧引言第二段。')
+    expect(exported).toContain('# 方法')
+    expect(exported).toContain('方法原稿。')
+  })
+
+  it('insert_after 针对章节标题插入带同名同级标题的整章内容时自动剥离重复标题', () => {
+    const md = `# 引言\n\n# 方法\n\n方法原稿。`
+    const { docs, ops, docId } = setup(md)
+    const [h1] = ids(docs, docId)
+    ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'insert_after',
+        anchor_id: h1!,
+        markdown: `# 引言\n\n补充的引言正文。`,
+      }],
+    }, { actor: 'ai', turnId: null })
+
+    const doc = docs.get(docId)
+    const headings: string[] = []
+    doc.forEach(n => {
+      if (n.type.name === 'heading') headings.push(n.textContent)
+    })
+    expect(headings).toEqual(['引言', '方法'])
+    expect(exportMarkdown(doc, [])).toContain('补充的引言正文。')
+  })
+})
+

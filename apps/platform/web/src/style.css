@@ -253,7 +253,7 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .user-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-role { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caret { color: var(--muted); font-size: 11px; }
-.user-menu { position: absolute; left: 8px; right: 8px; bottom: calc(100% + 4px); background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); box-shadow: var(--shadow); padding: 4px; z-index: 20; display: flex; flex-direction: column; }
+.user-menu { position: absolute; left: 8px; right: 8px; bottom: calc(100% + 4px); max-height: calc(100vh - 72px); max-height: calc(100dvh - 72px); overflow-y: auto; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); box-shadow: var(--shadow); padding: 4px; z-index: 20; display: flex; flex-direction: column; }
 .user-menu button { border: 0; background: transparent; text-align: left; padding: 8px 10px; font-size: 13px; color: var(--text-2); }
 .user-menu button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .user-menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
@@ -7162,6 +7162,7 @@ svg.mail-star-icon-filled polygon {
   max-width: calc(100vw - 32px);
   height: 600px;
   max-height: calc(100vh - 100px);
+  max-height: calc(100dvh - 100px);
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 12px;
@@ -7178,6 +7179,7 @@ svg.mail-star-icon-filled polygon {
   }
   .app:not(.side-collapsed):not(.no-doc) ~ .copilot-drawer {
     right: calc(var(--side-width, 400px) + 24px);
+    max-width: calc(100vw - var(--side-width, 400px) - 40px);
   }
 }
 .copilot-drawer.hidden {

@@ -3838,7 +3838,25 @@ ${impression}
     }
 
     const act = t.closest<HTMLElement>('[data-act]')?.dataset.act
-    if (act === 'ptmore') { const m = document.getElementById('ptMore'); if (m) m.hidden = !m.hidden; return }
+    if (act === 'ptmore') {
+      const m = document.getElementById('ptMore') as HTMLElement | null
+      const btn = t.closest<HTMLElement>('[data-act="ptmore"]')
+      if (m) {
+        m.hidden = !m.hidden
+        if (!m.hidden && btn) {
+          Object.assign(m.style, { position: 'fixed', left: '0px', top: '0px', right: 'auto', bottom: 'auto' })
+          const br = btn.getBoundingClientRect()
+          const mr = m.getBoundingClientRect()
+          const mw = mr.width || 190
+          const mh = mr.height || 160
+          const left = Math.max(8, Math.min(br.right - mw, window.innerWidth - mw - 8))
+          const top = br.bottom + 6 + mh > window.innerHeight - 8 ? Math.max(8, br.top - mh - 6) : Math.max(8, br.bottom + 6)
+          m.style.left = `${Math.round(left)}px`
+          m.style.top = `${Math.round(top)}px`
+        }
+      }
+      return
+    }
     document.getElementById('ptMore')?.setAttribute('hidden', '')
     try {
       if (act === 'compare-imaging') {
@@ -4117,11 +4135,21 @@ ${impression}
       ? '<div class="muted small kb-picker-empty">诊疗组里还没有患者</div>'
       : all.map(p => `<label><input type="checkbox" value="${p.id}" ${picked.some(x => x.id === p.id) ? 'checked' : ''}> ${esc(label(p))} <span class="muted small">${esc(p.tags.slice(0, 2).join('、'))}</span></label>`).join('')
     document.body.append(menu)
+    menu.style.left = '0px'
+    menu.style.top = '0px'
     const r = anchor.getBoundingClientRect()
     const mr = menu.getBoundingClientRect()
-    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - (mr.width || 240) - 8))}px`
-    menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`
-    menu.style.maxHeight = `${Math.max(140, r.top - 16)}px`
+    const mw = mr.width || 240
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - mw - 8))}px`
+    if (r.top >= window.innerHeight - r.bottom) {
+      menu.style.top = 'auto'
+      menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`
+      menu.style.maxHeight = `${Math.max(120, r.top - 16)}px`
+    } else {
+      menu.style.bottom = 'auto'
+      menu.style.top = `${Math.max(8, r.bottom + 6)}px`
+      menu.style.maxHeight = `${Math.max(120, window.innerHeight - r.bottom - 16)}px`
+    }
     menu.style.overflowY = 'auto'
     menu.onchange = ev => {
       const box = ev.target as HTMLInputElement
@@ -4129,10 +4157,10 @@ ${impression}
       picked = box.checked ? [...picked, { id: p.id, label: label(p) }].slice(0, 10) : picked.filter(x => x.id !== p.id)
       renderPicked()
     }
-    const done = () => { menu.remove(); document.removeEventListener('mousedown', away); document.removeEventListener('keydown', onKey) }
+    const done = () => { menu.remove(); document.removeEventListener('mousedown', away); document.removeEventListener('keydown', onKey); window.removeEventListener('resize', done) }
     const away = (ev: MouseEvent) => { if (!menu.contains(ev.target as Node) && ev.target !== anchor) done() }
     const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') done() }
-    setTimeout(() => { document.addEventListener('mousedown', away); document.addEventListener('keydown', onKey) })
+    setTimeout(() => { document.addEventListener('mousedown', away); document.addEventListener('keydown', onKey); window.addEventListener('resize', done, { once: true }) })
   }
 
   return {

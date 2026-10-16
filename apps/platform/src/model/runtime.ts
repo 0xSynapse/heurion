@@ -86,7 +86,72 @@ function docToState(doc: PMNode): Uint8Array {
  */
 export function writeFragment(ydoc: Y.Doc, next: PMNode): void {
   const fragment = ydoc.getXmlFragment(BODY)
-  updateYFragment(ydoc, fragment, next, { mapping: new Map(), isOMark: new Map() } as never)
+  if (fragment.length === 0) {
+    updateYFragment(ydoc, fragment, next, { mapping: new Map(), isOMark: new Map() } as never)
+  } else {
+    const before = yXmlFragmentToProseMirrorRootNode(fragment, next.type.schema)
+    if (before.eq(next) && fragment.length === next.childCount) return
+    const liveEls = fragment.toArray()
+    const nextNodes: PMNode[] = []
+    next.forEach(c => nextNodes.push(c))
+
+    if (liveEls.length === before.childCount) {
+      // 按 (nodeName, id) 求最长公共子序列（LCS），保持未移动块的 Y.XmlElement 身份不变，
+      // 防止在顶部/中间增删章节且同时修改后续章节时 y-prosemirror 错位覆盖并复制章节。
+      const seenLive = new Set<string>()
+      const liveKeys = liveEls.map(el => {
+        if (!(el instanceof Y.XmlElement)) return null
+        const id = el.getAttribute('id')
+        if (!id) return null
+        const k = `${el.nodeName}:${id}`
+        if (seenLive.has(k)) return null
+        seenLive.add(k)
+        return k
+      })
+      const seenNext = new Set<string>()
+      const nextKeys = nextNodes.map(n => {
+        const id = n.attrs.id as string | null
+        if (!id) return null
+        const k = `${n.type.name}:${id}`
+        if (seenNext.has(k)) return null
+        seenNext.add(k)
+        return k
+      })
+
+      const nextIdxByKey = new Map<string, number>()
+      nextKeys.forEach((k, j) => { if (k) nextIdxByKey.set(k, j) })
+
+      // 候选匹配对 (liveIdx, nextIdx)，对 nextIdx 求最长递增子序列（LIS）即得 LCS
+      const pairs: Array<{ liveIdx: number; nextIdx: number }> = []
+      liveKeys.forEach((k, i) => {
+        if (!k) return
+        const j = nextIdxByKey.get(k)
+        if (j !== undefined) pairs.push({ liveIdx: i, nextIdx: j })
+      })
+      const matchedPairs = longestIncreasingByNext(pairs)
+      const keepLive = new Set(matchedPairs.map(p => p.liveIdx))
+      const nextToLive = new Map(matchedPairs.map(p => [p.nextIdx, p.liveIdx]))
+
+      // 1) 从后往前删掉不在 LCS 中的旧块
+      for (let i = liveEls.length - 1; i >= 0; i--) {
+        if (!keepLive.has(i)) fragment.delete(i, 1)
+      }
+      // 2) 从前往后插入新块，并对保留且有变化的块就地更新
+      for (let j = 0; j < nextNodes.length; j++) {
+        const origIdx = nextToLive.get(j)
+        if (origIdx === undefined) {
+          fragment.insert(j, freshElements(next, j, j + 1))
+        } else if (!before.child(origIdx).eq(nextNodes[j]!)) {
+          const el = fragment.get(j) as Y.XmlElement
+          const mapping = buildIdMapping(el, nextNodes[j]!)
+          updateYFragment(ydoc, el as unknown as Y.XmlFragment, nextNodes[j]!, { mapping, isOMark: new Map() } as never)
+        }
+      }
+    } else {
+      updateYFragment(ydoc, fragment, next, { mapping: new Map(), isOMark: new Map() } as never)
+    }
+  }
+
   let got = yXmlFragmentToProseMirrorRootNode(fragment, next.type.schema)
   if (got.eq(next)) return
   if (got.childCount === next.childCount && fragment.length === next.childCount) {
@@ -122,6 +187,55 @@ export function writeFragment(ydoc: Y.Doc, next: PMNode): void {
     fragment.delete(i, 1)
     fragment.insert(i, freshElements(next, i, i + 1))
   }
+}
+
+function longestIncreasingByNext(pairs: Array<{ liveIdx: number; nextIdx: number }>): Array<{ liveIdx: number; nextIdx: number }> {
+  if (pairs.length === 0) return []
+  const tails: number[] = []
+  const prev = new Int32Array(pairs.length).fill(-1)
+  for (let i = 0; i < pairs.length; i++) {
+    const x = pairs[i]!.nextIdx
+    let lo = 0
+    let hi = tails.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (pairs[tails[mid]!]!.nextIdx < x) lo = mid + 1
+      else hi = mid
+    }
+    if (lo > 0) prev[i] = tails[lo - 1]!
+    tails[lo] = i
+  }
+  const res: Array<{ liveIdx: number; nextIdx: number }> = []
+  let k = tails[tails.length - 1]!
+  while (k !== -1) {
+    res.push(pairs[k]!)
+    k = prev[k]!
+  }
+  return res.reverse()
+}
+
+function buildIdMapping(rootEl: Y.XmlElement, rootNode: PMNode): Map<Y.XmlElement, PMNode> {
+  const pmById = new Map<string, PMNode>()
+  const walkPm = (n: PMNode) => {
+    const id = n.attrs?.id as string | null
+    if (id) pmById.set(`${n.type.name}:${id}`, n)
+    n.forEach(walkPm)
+  }
+  walkPm(rootNode)
+  const mapping = new Map<Y.XmlElement, PMNode>()
+  const walkY = (el: Y.XmlElement) => {
+    const id = el.getAttribute('id')
+    if (id) {
+      const match = pmById.get(`${el.nodeName}:${id}`)
+      if (match) mapping.set(el, match)
+    }
+    for (let i = 0; i < el.length; i++) {
+      const child = el.get(i)
+      if (child instanceof Y.XmlElement) walkY(child)
+    }
+  }
+  walkY(rootEl)
+  return mapping
 }
 
 /** 目标内容在临时 Y.Doc 里的 Yjs 表示（y-prosemirror 自己的编码，作格式属性的参照），用完即销毁。 */

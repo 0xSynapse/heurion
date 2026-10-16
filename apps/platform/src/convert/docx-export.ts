@@ -458,13 +458,21 @@ export function exportDocx(input: ExportInput): ExportResult {
   let body = ''
   input.doc.forEach(n => { body += block(n) })
 
-  // 参考文献表（平台生成）
+  // 参考文献表（平台生成；若正文末尾已有「参考文献 / References」标题则直接追加条目，避免重复标题）
   const byId = new Map(input.citations.map(c => [c.id, c]))
   const used = order.filter(id => byId.has(id))
   if (used.length > 0) {
-    const h = headingStyle(1)
-    if (!styles.has(h.toLowerCase())) missingHeading.add(1)
-    body += `<w:p><w:pPr><w:pStyle w:val="${esc(h)}"/></w:pPr><w:r><w:t>参考文献</w:t></w:r></w:p>`
+    const lastNode = input.doc.lastChild
+    const hasTrailingRefHeading = Boolean(
+      lastNode &&
+      lastNode.type.name === 'heading' &&
+      /^(?:\d+[.、\s]*)?(?:参考文献|references)$/i.test(lastNode.textContent.trim()),
+    )
+    if (!hasTrailingRefHeading) {
+      const h = headingStyle(1)
+      if (!styles.has(h.toLowerCase())) missingHeading.add(1)
+      body += `<w:p><w:pPr><w:pStyle w:val="${esc(h)}"/></w:pPr><w:r><w:t>参考文献</w:t></w:r></w:p>`
+    }
     used.forEach((id, i) => {
       body += `<w:p><w:pPr><w:ind w:left="440" w:hanging="440"/></w:pPr><w:r><w:t xml:space="preserve">[${i + 1}] ${esc(byId.get(id)!.formatted)}</w:t></w:r></w:p>`
     })

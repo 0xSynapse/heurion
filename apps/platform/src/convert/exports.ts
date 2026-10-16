@@ -14,6 +14,7 @@ function baselineOf(docs: Documents, docId: string) {
 
 /** 导出 docx：导入的文档以原始文件包为底座、未改动的块原样写回。 */
 export function docxFor(docs: Documents, docId: string) {
+  docs.flush(docId)
   const store = docs.store
   const pkg = store.getPackage(docId)
   return exportDocx({
@@ -34,6 +35,7 @@ export function docxFor(docs: Documents, docId: string) {
 
 /** 导出 pptx：以原始文件包（平台新建的 deck 为模板）为底座、未改动的页与形状原样写回。 */
 export function pptxFor(docs: Documents, docId: string) {
+  docs.flush(docId)
   const store = docs.store
   const doc = withoutPending(docs.get(docId))
   const stored = store.getPackage(docId)

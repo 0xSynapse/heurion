@@ -70,7 +70,14 @@ const idPlugin = new Plugin({
       if (!id || seen.has(id)) {
         const fresh = clientId()
         tr ??= state.tr
-        tr.setNodeMarkup(pos, undefined, { ...node.attrs, id: fresh, suggest: null, suggest_group: null, suggest_of: null })
+        const keepInsert = Boolean(id && seen.has(id) && node.attrs.suggest === 'insert' && node.attrs.suggest_group)
+        tr.setNodeMarkup(pos, undefined, {
+          ...node.attrs,
+          id: fresh,
+          suggest: keepInsert ? 'insert' : null,
+          suggest_group: keepInsert ? node.attrs.suggest_group : null,
+          suggest_of: null,
+        })
         seen.add(fresh)
       } else seen.add(id)
       return true
@@ -405,7 +412,14 @@ function setBlock(type: NodeType, level?: number): Command {
     if (dispatch) {
       const tr = state.tr
       for (const { pos, node } of targets) {
-        const attrs: Record<string, unknown> = { id: node.attrs.id, align: node.attrs.align, style: node.attrs.style }
+        const attrs: Record<string, unknown> = {
+          id: node.attrs.id,
+          align: node.attrs.align,
+          style: node.attrs.style,
+          suggest: node.attrs.suggest,
+          suggest_group: node.attrs.suggest_group,
+          suggest_of: node.attrs.suggest_of,
+        }
         if (type.name === 'heading') attrs.level = level ?? 1
         tr.setNodeMarkup(pos, type, attrs)
       }

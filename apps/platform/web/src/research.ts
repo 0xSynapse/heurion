@@ -1740,7 +1740,23 @@ ${modelsDesc}
     if (nd) { await newDoc(nd as 'protocol' | 'manuscript' | 'slides', s); return }
     const act = t.closest<HTMLElement>('[data-act]')?.dataset.act
     if (act === 'bundle') { void downloadPublicationBundle(id, s.title); return }
-    if (act === 'more') { $('rsMore').hidden = !$('rsMore').hidden; return }
+    if (act === 'more') {
+      const m = $('rsMore')
+      const btn = t.closest<HTMLElement>('[data-act="more"]')
+      m.hidden = !m.hidden
+      if (!m.hidden && btn) {
+        Object.assign(m.style, { position: 'fixed', left: '0px', top: '0px', right: 'auto', bottom: 'auto' })
+        const br = btn.getBoundingClientRect()
+        const mr = m.getBoundingClientRect()
+        const mw = mr.width || 190
+        const mh = mr.height || 140
+        const left = Math.max(8, Math.min(br.right - mw, window.innerWidth - mw - 8))
+        const top = br.bottom + 6 + mh > window.innerHeight - 8 ? Math.max(8, br.top - mh - 6) : Math.max(8, br.bottom + 6)
+        m.style.left = `${Math.round(left)}px`
+        m.style.top = `${Math.round(top)}px`
+      }
+      return
+    }
     if (act === 'upload') { ($('rsUpload') as HTMLInputElement).click(); return }
     if (act === 'screen') { screenDialog(id); return }
     if (act === 'gen') { datasetDialog(id); return }

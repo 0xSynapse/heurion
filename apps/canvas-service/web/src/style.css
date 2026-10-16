@@ -605,8 +605,8 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 
 /* —— 浮层：下拉、弹出菜单、颜色板 —— */
 .menu-wrap { position: relative; }
-.dropdown, .pop-menu, .color-pop { z-index: 80; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); box-shadow: var(--shadow); padding: 4px; }
-.dropdown { position: absolute; right: 0; top: calc(100% + 6px); min-width: 190px; display: flex; flex-direction: column; z-index: 20; }
+.dropdown, .pop-menu, .color-pop { z-index: 80; background: var(--panel); color: var(--text); border: 1px solid var(--line-strong); box-shadow: var(--shadow); padding: 4px; max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); max-width: calc(100vw - 16px); overflow-y: auto; }
+.dropdown { position: absolute; right: 0; top: calc(100% + 6px); min-width: 190px; max-height: min(420px, calc(100dvh - 76px)); display: flex; flex-direction: column; z-index: 20; }
 .dropdown button, .pop-menu button { border: 0; background: transparent; display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; text-align: left; font-size: 13px; color: var(--text-2); }
 .dropdown button:hover:not(:disabled), .pop-menu button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 .pop-menu { position: fixed; display: flex; flex-direction: column; min-width: 150px; }

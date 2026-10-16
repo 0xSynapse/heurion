@@ -59,4 +59,59 @@ describe('Yjs 写入核对：原地修补格式', () => {
     while (undo.canUndo()) undo.undo()
     expect(text(ydoc)).toBe('HR 0.80。尾。')
   })
+
+  it('前部插入新章节且尾部同时修改时：按块 id 对齐，不覆写中间章节的 Y.XmlElement，并发编辑不产生重复章节', () => {
+    const initial = schema.node('doc', null, [
+      schema.node('heading', { id: 'h1', level: 1 }, [schema.text('引言')]),
+      schema.node('paragraph', { id: 'p1' }, [schema.text('引言段落。')]),
+      schema.node('heading', { id: 'h2', level: 1 }, [schema.text('方法')]),
+      schema.node('paragraph', { id: 'p2' }, [schema.text('方法段落。')]),
+      schema.node('heading', { id: 'h3', level: 1 }, [schema.text('讨论')]),
+      schema.node('paragraph', { id: 'p3' }, [schema.text('讨论原稿。')]),
+    ])
+    const ydoc = new Y.Doc()
+    ydoc.transact(() => writeFragment(ydoc, initial))
+    const frag = ydoc.getXmlFragment('body')
+    const h2ElemBefore = frag.get(2)
+    const p2ElemBefore = frag.get(3)
+    const p3ElemBefore = frag.get(5)
+
+    // 模拟远端客户端同时在「方法段落」末尾输入文字
+    const remote = new Y.Doc()
+    Y.applyUpdate(remote, Y.encodeStateAsUpdate(ydoc))
+    remote.transact(() => {
+      const remoteP2 = (remote.getXmlFragment('body').get(3) as Y.XmlElement).get(0) as Y.XmlText
+      remoteP2.insert(remoteP2.length, '补充说明。')
+    })
+
+    // 服务端在同一批次中：在「引言」后插入新章节，并修改「讨论」段落
+    const updated = schema.node('doc', null, [
+      schema.node('heading', { id: 'h1', level: 1 }, [schema.text('引言')]),
+      schema.node('paragraph', { id: 'p1' }, [schema.text('引言段落。')]),
+      schema.node('heading', { id: 'h_new', level: 1 }, [schema.text('研究背景')]),
+      schema.node('paragraph', { id: 'p_new' }, [schema.text('新增背景段落。')]),
+      schema.node('heading', { id: 'h2', level: 1 }, [schema.text('方法')]),
+      schema.node('paragraph', { id: 'p2' }, [schema.text('方法段落。')]),
+      schema.node('heading', { id: 'h3', level: 1 }, [schema.text('讨论')]),
+      schema.node('paragraph', { id: 'p3' }, [schema.text('讨论修订稿。')]),
+    ])
+    ydoc.transact(() => writeFragment(ydoc, updated))
+
+    // 中间「方法」章节的 Y.XmlElement 身份保持不变，尾部「讨论」段落也是原地更新
+    expect(frag.get(4)).toBe(h2ElemBefore)
+    expect(frag.get(5)).toBe(p2ElemBefore)
+    expect(frag.get(7)).toBe(p3ElemBefore)
+
+    // 合并远端并发修改后，章节顺序与数量完全正确，无重复章节
+    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(remote, Y.encodeStateVector(ydoc)))
+    const merged = stateToDoc(Y.encodeStateAsUpdate(ydoc))
+    const headings: string[] = []
+    merged.forEach(n => {
+      if (n.type.name === 'heading') headings.push(n.textContent)
+    })
+    expect(headings).toEqual(['引言', '研究背景', '方法', '讨论'])
+    expect(merged.child(5).textContent).toBe('方法段落。补充说明。')
+    expect(merged.child(7).textContent).toBe('讨论修订稿。')
+  })
 })
+

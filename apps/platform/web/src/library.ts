@@ -174,11 +174,21 @@ export function initLibrary(api: Api, token: () => string, notice: (msg: string,
       : files.map(f => `<label><input type="checkbox" value="${f.id}" ${picked.some(p => p.id === f.id) ? 'checked' : ''}> ${esc(f.name)}</label>`).join(''))
       + '<hr><button data-manage>管理资料库…</button>'
     document.body.append(menu)
+    menu.style.left = '0px'
+    menu.style.top = '0px'
     const r = anchor.getBoundingClientRect()
     const mr = menu.getBoundingClientRect()
-    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - (mr.width || 240) - 8))}px`
-    menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`
-    menu.style.maxHeight = `${Math.max(140, r.top - 16)}px`
+    const mw = mr.width || 240
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - mw - 8))}px`
+    if (r.top >= window.innerHeight - r.bottom) {
+      menu.style.top = 'auto'
+      menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`
+      menu.style.maxHeight = `${Math.max(120, r.top - 16)}px`
+    } else {
+      menu.style.bottom = 'auto'
+      menu.style.top = `${Math.max(8, r.bottom + 6)}px`
+      menu.style.maxHeight = `${Math.max(120, window.innerHeight - r.bottom - 16)}px`
+    }
     menu.style.overflowY = 'auto'
     menu.onchange = e => {
       const box = e.target as HTMLInputElement
@@ -189,10 +199,10 @@ export function initLibrary(api: Api, token: () => string, notice: (msg: string,
     menu.onclick = e => {
       if ((e.target as HTMLElement).closest('[data-manage]')) { close(); void openLibrary() }
     }
-    const close = () => { menu.remove(); document.removeEventListener('mousedown', away); document.removeEventListener('keydown', onKey) }
+    const close = () => { menu.remove(); document.removeEventListener('mousedown', away); document.removeEventListener('keydown', onKey); window.removeEventListener('resize', close) }
     const away = (e: MouseEvent) => { if (!menu.contains(e.target as Node) && e.target !== anchor) close() }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
-    setTimeout(() => { document.addEventListener('mousedown', away); document.addEventListener('keydown', onKey) })
+    setTimeout(() => { document.addEventListener('mousedown', away); document.addEventListener('keydown', onKey); window.addEventListener('resize', close, { once: true }) })
   }
 
   document.getElementById('libraryBtn')!.onclick = () => void openLibrary()

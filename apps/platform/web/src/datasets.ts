@@ -249,11 +249,21 @@ export function initDatasets(api: Api, notice: (msg: string, error?: boolean) =>
       : ready.map(x => `<label><input type="checkbox" value="${x.id}" ${picked.some(p => p.id === x.id) ? 'checked' : ''}> ${esc(x.name)} <span class="muted small">${x.rows.toLocaleString()} 行</span></label>`).join(''))
       + '<hr><button data-manage>上传与管理数据…</button>'
     document.body.append(menu)
+    menu.style.left = '0px'
+    menu.style.top = '0px'
     const r = anchor.getBoundingClientRect()
     const mr = menu.getBoundingClientRect()
-    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - (mr.width || 240) - 8))}px`
-    menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`
-    menu.style.maxHeight = `${Math.max(140, r.top - 16)}px`
+    const mw = mr.width || 240
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - mw - 8))}px`
+    if (r.top >= window.innerHeight - r.bottom) {
+      menu.style.top = 'auto'
+      menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`
+      menu.style.maxHeight = `${Math.max(120, r.top - 16)}px`
+    } else {
+      menu.style.bottom = 'auto'
+      menu.style.top = `${Math.max(8, r.bottom + 6)}px`
+      menu.style.maxHeight = `${Math.max(120, window.innerHeight - r.bottom - 16)}px`
+    }
     menu.style.overflowY = 'auto'
     menu.onchange = e => {
       const box = e.target as HTMLInputElement
@@ -262,10 +272,10 @@ export function initDatasets(api: Api, notice: (msg: string, error?: boolean) =>
       renderPicked()
     }
     menu.onclick = e => { if ((e.target as HTMLElement).closest('[data-manage]')) { done(); void openList() } }
-    const done = () => { menu.remove(); document.removeEventListener('mousedown', away); document.removeEventListener('keydown', onKey) }
+    const done = () => { menu.remove(); document.removeEventListener('mousedown', away); document.removeEventListener('keydown', onKey); window.removeEventListener('resize', done) }
     const away = (e: MouseEvent) => { if (!menu.contains(e.target as Node) && e.target !== anchor) done() }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') done() }
-    setTimeout(() => { document.addEventListener('mousedown', away); document.addEventListener('keydown', onKey) })
+    setTimeout(() => { document.addEventListener('mousedown', away); document.addEventListener('keydown', onKey); window.addEventListener('resize', done, { once: true }) })
   }
 
   // —— 文档里的分析图：代码与数据来源 ——
