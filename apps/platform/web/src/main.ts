@@ -2350,6 +2350,17 @@ async function resolveSuggestion(group: string, accept: boolean): Promise<void> 
 // 待采纳修订：在正文上方、对话输入框上方及最新 AI 回复中同步展示醒目审查条；逐处采纳 / 拒绝在正文里的修订条上
 let suggestCursor = -1
 
+// 审查条是插在修订块正前方（或单元格开头）的挂件：高亮紧随其后的同组块，其次是所在的同组容器，
+// 不能用全局第一个同组块，否则跨章节的修订会高亮到别处
+function suggestBlockNearBar(bar: HTMLElement, group: string): HTMLElement | null {
+  const sel = `[data-suggest-group="${CSS.escape(group)}"]:not(.suggest-paired-delete)`
+  for (let el = bar.nextElementSibling; el; el = el.nextElementSibling) {
+    if (el.matches(sel)) return el as HTMLElement
+    if (el.matches('.suggest-bar')) break
+  }
+  return bar.parentElement?.closest<HTMLElement>(sel) ?? null
+}
+
 function jumpToSuggestion(step = 1): void {
   const bars = Array.from(document.querySelectorAll<HTMLElement>('.suggest-bar[data-suggest-bar-group]'))
   const targets = bars.length > 0
@@ -2361,9 +2372,7 @@ function jumpToSuggestion(step = 1): void {
   target.scrollIntoView({ behavior: 'smooth', block: 'center' })
   target.classList.add('ai-flash')
   const group = target.dataset.suggestBarGroup ?? target.dataset.suggestGroup
-  const blk = group
-    ? document.querySelector<HTMLElement>(`[data-suggest-group="${CSS.escape(group)}"]:not(.suggest-paired-delete)`)
-    : null
+  const blk = group && target.dataset.suggestBarGroup ? suggestBlockNearBar(target, group) : null
   blk?.classList.add('ai-flash')
   setTimeout(() => {
     target.classList.remove('ai-flash')
@@ -2372,6 +2381,8 @@ function jumpToSuggestion(step = 1): void {
 }
 
 function attachChatReviewBar(container: HTMLElement, count: number): void {
+  // 待采纳计数是全文档的总数，对话里只保留一条审查条（挂在最新的回复上），避免多条计数互相矛盾
+  document.querySelectorAll('#chatLog .chat-turn-review-bar').forEach(el => el.remove())
   container.querySelector('.chat-turn-review-bar')?.remove()
   const bar = document.createElement('div')
   bar.className = 'chat-turn-review-bar'
@@ -2409,10 +2420,12 @@ function renderSuggestions(): void {
   if (chatSummary) {
     chatSummary.textContent = `${groups.length} 处修订待采纳（采纳后生效与导出）`
   }
-  const existingBar = document.querySelector<HTMLElement>('#chatLog .chat-turn-review-bar')
-  if (existingBar) {
-    const pill = existingBar.querySelector('.badge-pill.rev')
-    if (pill) pill.innerHTML = `<span class="dot"></span> AI 提出了 ${groups.length} 处待采纳修订（采纳后正式生效）`
+  const existingBars = document.querySelectorAll<HTMLElement>('#chatLog .chat-turn-review-bar')
+  if (existingBars.length > 0) {
+    existingBars.forEach(bar => {
+      const pill = bar.querySelector('.badge-pill.rev')
+      if (pill) pill.innerHTML = `<span class="dot"></span> AI 提出了 ${groups.length} 处待采纳修订（采纳后正式生效）`
+    })
   } else {
     const assistantMsgs = document.querySelectorAll<HTMLElement>('#chatLog .msg.assistant:not(.error)')
     const lastMsg = assistantMsgs[assistantMsgs.length - 1]

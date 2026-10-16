@@ -3,6 +3,7 @@ import { strFromU8, unzipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { assignIds } from '../model/ids.ts'
 import { schema } from '../model/schema.ts'
+import { looksLikeHeaderRow } from '../model/table-header.ts'
 
 /**
  * docx → 平台模型（PLATFORM.md §7.1）。
@@ -342,17 +343,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
         else merging.delete(col)
         col += span
       }
-      const isShortMultiColFirstRow = ri === 0 && cells.length >= 2 && cells.every(c => {
-        if (c.content.length > 2) return false
-        let len = 0
-        let hasBr = false
-        for (const p of c.content) {
-          len += p.textContent.length
-          p.forEach(ch => { if (ch.type.name === 'hard_break') hasBr = true })
-        }
-        return !hasBr && len <= 80
-      })
-      const isHeader = explicitHeader !== null ? explicitHeader : isShortMultiColFirstRow
+      const isHeader = explicitHeader !== null ? explicitHeader : ri === 0 && looksLikeHeaderRow(cells.map(c => c.content))
       for (const c of cells) c.attrs.header = isHeader
       rowCells.push(cells)
     })

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { cleanBibText } from '../literature/format.ts'
 
 /**
  * 平台存储（PLATFORM.md §3 存储层）：
@@ -1977,7 +1978,9 @@ export class Store {
 
   // —— 引用 ——
 
-  upsertCitation(input: { doc_id: string; doi: string; pmid: string | null; formatted: string; url: string | null }): CitationRow {
+  upsertCitation(raw: { doc_id: string; doi: string; pmid: string | null; formatted: string; url: string | null }): CitationRow {
+    // 入库前统一清理 HTML 标签与转义实体，所有输出（HTML、markdown、docx、MCP）共用干净文本
+    const input = { ...raw, formatted: cleanBibText(raw.formatted) }
     const existing = this.db.prepare('SELECT * FROM citations WHERE doc_id = ? AND doi = ?').get(input.doc_id, input.doi) as CitationRow | undefined
     if (existing) {
       if (input.formatted && input.formatted !== existing.formatted) {
@@ -1985,7 +1988,7 @@ export class Store {
           .run(input.formatted, input.pmid, input.url, existing.id)
         return this.db.prepare('SELECT * FROM citations WHERE id = ?').get(existing.id) as unknown as CitationRow
       }
-      return existing
+      return { ...existing, formatted: cleanBibText(existing.formatted) }
     }
     const id = 'c' + randomUUID().replace(/-/g, '').slice(0, 7)
     this.db.prepare('INSERT INTO citations (id, doc_id, doi, pmid, formatted, url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -2004,7 +2007,9 @@ export class Store {
   }
 
   listCitations(docId: string): CitationRow[] {
-    return this.db.prepare('SELECT * FROM citations WHERE doc_id = ? ORDER BY created_at').all(docId) as unknown as CitationRow[]
+    // 兼容清理逻辑上线前已入库、仍带原始实体的旧记录
+    return (this.db.prepare('SELECT * FROM citations WHERE doc_id = ? ORDER BY created_at').all(docId) as unknown as CitationRow[])
+      .map(c => ({ ...c, formatted: cleanBibText(c.formatted) }))
   }
 
   // —— 评论 ——

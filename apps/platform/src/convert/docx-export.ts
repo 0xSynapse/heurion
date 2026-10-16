@@ -2,6 +2,7 @@ import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { cleanBibText } from '../literature/format.ts'
+import { looksLikeHeaderRow } from '../model/table-header.ts'
 import type { CitationRow, CommentRow } from '../store/db.ts'
 import { citationOrder } from '../views/read.ts'
 import { bodyChildrenRaw, safeUnzipDocx } from './docx-import.ts'
@@ -223,6 +224,7 @@ export function exportDocx(input: ExportInput): ExportResult {
   input.doc.descendants(n => {
     if (n.isTextblock) n.forEach(c => c.marks.forEach(m => { if (m.type.name === 'comment' && openComments.has(m.attrs.thread as string)) lastPara.set(m.attrs.thread as string, n) }))
   })
+  const commentEndParas = new Set(lastPara.values())
   const started = new Set<string>()
 
   const headingStyle = (level: number) => styles.get(`heading ${level}`) ?? styles.get(`标题 ${level}`) ?? `Heading${level}`
@@ -382,6 +384,19 @@ export function exportDocx(input: ExportInput): ExportResult {
     const carry = new Map<number, { left: number; span: number }>()
     const colW = Math.floor(9000 / width)
     const rows: string[] = []
+    // 重复表头行：单列表格（表单型，如申报书章节表）一律不加；
+    // 多列且原文件显式标注过 → 沿用模型里开头连续的 header 行（不受长度限制）；显式未标注 → 不加；
+    // 无原文件（新建表格）→ 仅首行且符合共用的表头规则时才加
+    let headerRows = 0
+    if (width < 2) {
+      // 不加
+    } else if (origHasTblHeader === true) {
+      while (headerRows < node.childCount && node.child(headerRows).firstChild?.attrs.header) headerRows++
+    } else if (origHasTblHeader === null && node.firstChild?.firstChild?.attrs.header) {
+      const cells: PMNode[][] = []
+      node.firstChild.forEach(cell => { const ps: PMNode[] = []; cell.forEach(p => ps.push(p)); cells.push(ps) })
+      if (looksLikeHeaderRow(cells)) headerRows = 1
+    }
     node.forEach((row, _o, ri) => {
       const cells: string[] = []
       let col = 0
@@ -399,15 +414,10 @@ export function exportDocx(input: ExportInput): ExportResult {
         const rowspan = cell.attrs.rowspan as number
         let paras = ''
         cell.forEach(p => {
-          const v = verbatim(p)
-          if (v) {
-            paras += v
-            return
-          }
           let hasBr = false
           p.forEach(ch => { if (ch.type.name === 'hard_break') hasBr = true })
-          const hasCommentBound = [...lastPara.values()].includes(p)
-          if (hasBr && !hasCommentBound && p.type.name === 'paragraph') {
+          // 原样写回的段落与批注收尾段落不拆分，交给 paragraph() 处理
+          if (hasBr && !commentEndParas.has(p) && p.type.name === 'paragraph' && !unchanged(p)) {
             let seg: PMNode[] = []
             p.forEach(ch => {
               if (ch.type.name === 'hard_break') {
@@ -427,16 +437,7 @@ export function exportDocx(input: ExportInput): ExportResult {
         col += span
       })
       pushContinue()
-      let isRepeatHeader = false
-      if (ri === 0 && row.firstChild?.attrs.header && origHasTblHeader !== false && row.childCount >= 2) {
-        let allShort = true
-        row.forEach(cell => {
-          if (cell.childCount > 1 || cell.textContent.length > 80) allShort = false
-          cell.forEach(p => p.forEach(ch => { if (ch.type.name === 'hard_break') allShort = false }))
-        })
-        isRepeatHeader = allShort
-      }
-      rows.push(`<w:tr>${isRepeatHeader ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}${cells.join('')}</w:tr>`)
+      rows.push(`<w:tr>${ri < headerRows ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}${cells.join('')}</w:tr>`)
     })
     const border = (side: string) => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="auto"/>`
     return `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(border).join('')}</w:tblBorders><w:tblLook w:val="04A0"/></w:tblPr><w:tblGrid>${Array.from({ length: width }, () => `<w:gridCol w:w="${colW}"/>`).join('')}</w:tblGrid>${rows.join('')}</w:tbl>`
@@ -500,8 +501,12 @@ export function exportDocx(input: ExportInput): ExportResult {
   let bodyEndIdx = input.doc.childCount
   let hasTrailingRefHeading = false
   if (used.length > 0) {
+    // 只有与本文档某条引用文本一致的 [n] 条目才视为平台上次导出的静态参考文献表；
+    // 遇到对不上的条目即视为用户自己写的文献表，停止扫描，其内容全部保留
+    const knownRefs = new Set(input.citations.map(c => cleanBibText(c.formatted)))
     let i = input.doc.childCount - 1
     let firstRefIdx = -1
+    let foreignEntry = false
     while (i >= 0) {
       const n = input.doc.child(i)
       const txt = n.textContent.trim()
@@ -509,7 +514,12 @@ export function exportDocx(input: ExportInput): ExportResult {
         i--
         continue
       }
-      if (n.type.name === 'paragraph' && /^\[\d+\]\s+\S/.test(txt)) {
+      const entry = n.type.name === 'paragraph' ? /^\[\d+\]\s+(\S[\s\S]*)$/.exec(txt) : null
+      if (entry) {
+        if (!knownRefs.has(cleanBibText(entry[1]!))) {
+          foreignEntry = true
+          break
+        }
         i--
         continue
       }
@@ -520,6 +530,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       }
       break
     }
+    // 用户文献表位于末尾标题之后：不复用该标题，原样保留并另附平台参考文献表
+    if (foreignEntry && firstRefIdx === -1) warnings.push('正文末尾已有未由平台生成的参考文献条目，已原样保留并另附平台参考文献表')
     if (firstRefIdx !== -1) {
       const candidate = input.doc.child(firstRefIdx)
       if (candidate.type.name === 'heading') {

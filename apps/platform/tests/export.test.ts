@@ -1,6 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { exportDocx } from '../src/convert/docx-export.ts'
+import { cleanBibText } from '../src/literature/format.ts'
 import { bindAssets, importDocx } from '../src/convert/docx-import.ts'
 import { attachComment } from '../src/model/anchors.ts'
 import { parseBlocks } from '../src/model/markdown.ts'
@@ -226,3 +227,83 @@ describe('docx 导出：图、不可编辑段落、列表样式', () => {
   })
 })
 
+describe('docx 导出：参考文献去重与重复表头', () => {
+  const REFS_DOC = (entries: string[]) => docx([
+    p('心衰是常见病。'),
+    p('参考文献', '<w:pStyle w:val="Heading1"/>'),
+    ...entries.map(e => p(e)),
+  ].join(''))
+
+  const cite = (t: ReturnType<typeof importInto>) => {
+    const c = t.store.upsertCitation({ doc_id: t.docId, doi: '10.1056/x', pmid: null, formatted: 'Doe J. Trial. N Engl J Med. 2020.', url: null })
+    const para = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [
+      { op: 'replace_text', id: para, find: '常见病', replace: `常见病[@c:${c.id}]` },
+    ] }, { actor: 'user', turnId: null })
+  }
+
+  it('末尾是用户自己写的文献表：插入一条引用后导出，原条目全部保留并另附平台参考文献表', () => {
+    const t = importInto(REFS_DOC(['[1] Smith A. Foo study. Lancet. 2001.', '[2] Lee B. Bar trial. JAMA. 2002.']))
+    cite(t)
+    const out = t.exportNow()
+    const body = bodyOf(out.bytes)
+    expect(body).toContain('Smith A. Foo study')
+    expect(body).toContain('Lee B. Bar trial')
+    expect(body).toContain('[1] Doe J. Trial. N Engl J Med. 2020.')
+    expect(out.warnings.some(w => w.includes('未由平台生成的参考文献条目'))).toBe(true)
+  })
+
+  it('末尾是平台上次导出的文献表：复用标题、不重复输出条目', () => {
+    const t = importInto(REFS_DOC(['[1] Doe J. Trial. N Engl J Med. 2020.']))
+    cite(t)
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body.match(/Doe J\. Trial/g)!.length).toBe(1)
+    expect(body.match(/参考文献/g)!.length).toBe(1)
+  })
+
+  it('原文件显式标注的重复表头（含长文本、两行）在修改单元格后保留', () => {
+    const hdr = '<w:trPr><w:tblHeader/></w:trPr>'
+    const long = '项目名称（请填写完整的课题全称及编号，不超过一百字，并注明所属学科、承担单位、起止年月与经费来源等信息）'
+    const tbl = `<w:tbl><w:tr>${hdr}<w:tc>${p(long)}</w:tc><w:tc>${p('负责人')}</w:tc></w:tr>`
+      + `<w:tr>${hdr}<w:tc>${p('甲')}</w:tc><w:tc>${p('乙')}</w:tc></w:tr>`
+      + `<w:tr><w:tc>${p('数据1')}</w:tc><w:tc>${p('数据2')}</w:tc></w:tr></w:tbl>`
+    const t = importInto(docx(tbl))
+    const table = t.docs.get(t.docId).child(0)
+    const cell = table.child(2).child(0).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [
+      { op: 'replace_text', id: cell, find: '数据1', replace: '数据一' },
+    ] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain('数据一')
+    expect(body.match(/<w:tblHeader\/>/g)?.length).toBe(2)
+  })
+
+  it('单列表单型表格即使原文件显式标注了表头，修改后导出也不加重复表头', () => {
+    const tbl = `<w:tbl><w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc>${p('一、国内外开展现状（请详细阐述技术背景）')}</w:tc></w:tr>`
+      + `<w:tr><w:tc>${p('二、开展该技术的目的、意义和必要性')}</w:tc></w:tr></w:tbl>`
+    const t = importInto(docx(tbl))
+    const cell = t.docs.get(t.docId).child(0).child(1).child(0).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [
+      { op: 'replace_text', id: cell, find: '目的', replace: '目标' },
+    ] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain('目标')
+    expect(body).not.toContain('<w:tblHeader/>')
+  })
+})
+
+describe('文献文本清理', () => {
+  it('&amp; 最后解码，双重转义只解一层', () => {
+    expect(cleanBibText('&amp;lt;5 mm')).toBe('&lt;5 mm')
+    expect(cleanBibText('Smith &amp; Jones <i>Nature</i>')).toBe('Smith & Jones Nature')
+  })
+
+  it('引用入库与读取都返回清理后的文本（覆盖 HTML、markdown、MCP 输出）', () => {
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const row = docs.create({ owner: 'u', title: 't', content: schema.node('doc', null, parseBlocks('正文')) })
+    const c = store.upsertCitation({ doc_id: row.id, doi: '10.1/x', pmid: null, formatted: 'Smith &amp; Jones. <i>Nature</i>.', url: null })
+    expect(c.formatted).toBe('Smith & Jones. Nature.')
+    expect(store.listCitations(row.id)[0]!.formatted).toBe('Smith & Jones. Nature.')
+  })
+})

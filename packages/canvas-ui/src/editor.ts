@@ -259,6 +259,44 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
     }
   }
 
+  // 新表保留了原表全部行、且每行保留了原有全部单元格时，才能只在新表上叠加 Diff；
+  // 否则被删的行/列在新表里无处呈现，必须让原表以删除样式保持可见
+  const tableShapeKept = (del: PMNode, ins: PMNode): boolean => {
+    if (del.childCount > ins.childCount) return false
+    for (let r = 0; r < del.childCount; r++) {
+      if (del.child(r).childCount > ins.child(r).childCount) return false
+    }
+    return true
+  }
+
+  // 非文本块容器（列表等）：新块按位置覆盖原块全部子节点、且对应子节点可逐一比对时，才能隐藏原块只看叠加 Diff
+  const canOverlay = (del: PMNode, ins: PMNode): boolean => {
+    if (del.type !== ins.type || del.childCount > ins.childCount) return false
+    for (let i = 0; i < del.childCount; i++) {
+      const d = del.child(i)
+      const n = ins.child(i)
+      if (d.isTextblock && n.isTextblock) continue
+      if (d.isTextblock || n.isTextblock || d.isLeaf || n.isLeaf) {
+        if (!d.eq(n)) return false
+      } else if (!canOverlay(d, n)) return false
+    }
+    return true
+  }
+
+  const renderOverlayDiff = (del: PMNode, ins: PMNode, insPos: number, decos: Decoration[]) => {
+    let pos = insPos + 1
+    for (let i = 0; i < ins.childCount; i++) {
+      const n = ins.child(i)
+      const d = i < del.childCount ? del.child(i) : null
+      if (!d) decos.push(Decoration.node(pos, pos + n.nodeSize, { class: 'diff-ins-block' }))
+      else if (!d.eq(n)) {
+        if (n.isTextblock) renderTextblockInlineDiff(d, n, pos, decos)
+        else renderOverlayDiff(d, n, pos, decos)
+      }
+      pos += n.nodeSize
+    }
+  }
+
   const makeSuggestBar = (group: string, keySuffix: string, pos: number, label = 'AI 修订 · 待采纳'): Decoration =>
     Decoration.widget(pos, () => {
       const bar = document.createElement('div')
@@ -321,7 +359,7 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
           // 隐藏原删除块（由新块呈现行内划线 Diff）
           decos.push(Decoration.node(del.pos, del.pos + del.node.nodeSize, { class: 'suggest-paired-delete' }))
           renderTextblockInlineDiff(del.node, ins.node, ins.pos, decos)
-        } else if (del && ins.node.type.name === 'table' && del.node.type.name === 'table') {
+        } else if (del && ins.node.type.name === 'table' && del.node.type.name === 'table' && tableShapeKept(del.node, ins.node)) {
           pairedDeletes.add(del)
           // 隐藏原整表（避免大表格在编辑区重复展示两份），在新表内按单元格呈现行内 Diff 与采纳条
           decos.push(Decoration.node(del.pos, del.pos + del.node.nodeSize, { class: 'suggest-paired-delete' }))
@@ -387,11 +425,15 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
           for (const cPos of changedCellBarPositions.slice(0, 6)) {
             decos.push(makeSuggestBar(group, `cell-${cPos}`, cPos, '表格内容已修订 · 待采纳'))
           }
-        } else if (del && ins.node.type === del.node.type) {
+        } else if (del && del.node.type.name !== 'table' && canOverlay(del.node, ins.node)) {
           pairedDeletes.add(del)
           decos.push(Decoration.node(del.pos, del.pos + del.node.nodeSize, { class: 'suggest-paired-delete' }))
-          decos.push(Decoration.node(ins.pos, ins.pos + ins.node.nodeSize, { class: 'diff-ins-block' }))
+          const before = decos.length
+          renderOverlayDiff(del.node, ins.node, ins.pos, decos)
+          // 子节点逐一相同（只改了块属性）时整体加修订边框，免得用户看不出改动
+          if (decos.length === before) decos.push(Decoration.node(ins.pos, ins.pos + ins.node.nodeSize, { class: 'diff-ins-block' }))
         } else {
+          // 结构对不上（删了列表项、表格行/列，或换成了别的块）：原块保持删除样式可见，新块整体标为插入
           decos.push(Decoration.node(ins.pos, ins.pos + ins.node.nodeSize, { class: 'diff-ins-block' }))
         }
       }

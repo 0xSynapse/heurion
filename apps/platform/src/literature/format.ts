@@ -77,11 +77,12 @@ export function formatGbt7714(a: Article): string {
 export function cleanBibText(raw: string): string {
   return raw
     .replace(/<\/?(?:i|b|u|em|strong|sup|sub|scp|span|p)\b[^>]*>/gi, '')
-    .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#0*39;|&apos;/gi, "'")
+    // &amp; 必须最后解码，否则 &amp;lt; 会被解码两次
+    .replace(/&amp;/gi, '&')
     .replace(/\s+/g, ' ')
     .trim()
 }
