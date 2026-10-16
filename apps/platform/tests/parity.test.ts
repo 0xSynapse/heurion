@@ -181,6 +181,7 @@ const NOT_FOR_AI: Record<string, string> = {
   'GET /api/images': '界面用来决定是否显示搜图入口；AI 从 image_search 返回的 unsplash_unconfigured 得知图库没配置',
   'GET /api/imaging/samples': '界面用来获取可供医生体验的临床预置样本列表（如 chest_lung_ct 269层）；AI 可直接通过 imaging_analyze 的 sample_id 指定',
   'GET /api/imaging/samples/:id/file': '预置 3D 样本体素文件二进制下载流，由界面下载；AI 读量化指标与关键截面',
+  'GET /api/patients/:ptid/imaging/jobs': '界面用来实时轮询患者后台 3D 影像推理阶段与进度条状态；AI 调用 imaging_analyze 时直接获取完整分析结果',
   // 知家分享原件图片由界面展示
   'GET /api/shares/:shid/assets/:aid': '图片二进制资产由界面渲染展示；AI 读打码后的文字内容（share_file / share_read）',
   // 机构患者认领码绑定的人机分界

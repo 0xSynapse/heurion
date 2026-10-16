@@ -51,7 +51,33 @@ def main(argv: list[str] | None = None) -> int:
         with_easyocr=False,
     )
 
-    from .parser import check_models, ensure_models
+    try:
+        from .parser import check_models, ensure_models
+    except ModuleNotFoundError:
+        model_dirs = {
+            "layout": "docling-project--docling-layout-heron",
+            "tableformer": "docling-project--docling-models",
+            "code_formula": "docling-project--CodeFormulaV2",
+            "ocr": "RapidOcr",
+        }
+        required_models = {
+            "layout": "版面分析（docling-layout-heron）",
+            "tableformer": "表格结构（TableFormer）",
+            "ocr": "OCR（RapidOCR / PP-OCR，扫描页用）",
+        }
+
+        def check_models(models_dir: Path) -> dict[str, bool]:
+            return {
+                k: (models_dir / d).is_dir() and any((models_dir / d).iterdir())
+                for k, d in model_dirs.items()
+            }
+
+        def ensure_models(models_dir: Path) -> dict[str, bool]:
+            present = check_models(models_dir)
+            missing = [required_models[k] for k in required_models if not present[k]]
+            if missing:
+                raise RuntimeError(f"模型目录 {models_dir} 缺少：{'、'.join(missing)}。")
+            return present
 
     ensure_models(out)
     for name, ok in check_models(out).items():
