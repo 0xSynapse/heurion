@@ -225,6 +225,56 @@ export function diffWords(a: string, b: string): DiffOp[] {
 
 /** 待采纳修订：在视图层将成对的增删块投影为行内字符级 Diff，并在块前呈现精致审查条 */
 function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
+  const renderTextblockInlineDiff = (delNode: PMNode, insNode: PMNode, insPos: number, decos: Decoration[]) => {
+    const ops = diffWords(delNode.textContent, insNode.textContent)
+    let charOffset = 0
+    let hasWordDiff = false
+    for (const op of ops) {
+      if (op.kind === 'equal') {
+        charOffset += op.text.length
+      } else if (op.kind === 'delete') {
+        hasWordDiff = true
+        const widgetPos = charOffsetToPos(insNode, insPos, charOffset)
+        const delText = op.text
+        decos.push(Decoration.widget(widgetPos, () => {
+          const el = document.createElement('del')
+          el.className = 'diff-del'
+          el.textContent = delText
+          el.title = '原删除内容'
+          return el
+        }, { side: -1, key: `del-${insPos}-${charOffset}` }))
+      } else if (op.kind === 'insert') {
+        hasWordDiff = true
+        const from = charOffsetToPos(insNode, insPos, charOffset)
+        const to = charOffsetToPos(insNode, insPos, charOffset + op.text.length)
+        if (to > from) {
+          decos.push(Decoration.inline(from, to, { class: 'diff-ins' }))
+        }
+        charOffset += op.text.length
+      }
+    }
+    // 仅变更了引用角标 [@c:...] 或行内样式（纯文本未变）时，对整块加修订高亮边框以便用户识别
+    if (!hasWordDiff) {
+      decos.push(Decoration.node(insPos, insPos + insNode.nodeSize, { class: 'diff-ins-block' }))
+    }
+  }
+
+  const makeSuggestBar = (group: string, keySuffix: string, pos: number, label = 'AI 修订 · 待采纳'): Decoration =>
+    Decoration.widget(pos, () => {
+      const bar = document.createElement('div')
+      bar.className = 'suggest-bar'
+      bar.dataset.suggestBarGroup = group
+      bar.contentEditable = 'false'
+      bar.innerHTML = `<span class="badge-pill rev"><span class="dot"></span> ${label}</span><button data-a="1" class="btn-sm-accept">采纳</button><button data-a="0" class="btn-sm-reject">拒绝</button>`
+      bar.addEventListener('mousedown', e => {
+        const btn = (e.target as HTMLElement).closest('button')
+        if (!btn) return
+        e.preventDefault()
+        onSuggestion(group, btn.dataset.a === '1')
+      })
+      return bar
+    }, { side: -1, key: `sg-${group}-${keySuffix}`, ignoreSelection: true })
+
   const build = (doc: PMNode) => {
     const decos: Decoration[] = []
 
@@ -270,31 +320,77 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
           pairedDeletes.add(del)
           // 隐藏原删除块（由新块呈现行内划线 Diff）
           decos.push(Decoration.node(del.pos, del.pos + del.node.nodeSize, { class: 'suggest-paired-delete' }))
-
-          const ops = diffWords(del.node.textContent, ins.node.textContent)
-          let charOffset = 0
-          for (const op of ops) {
-            if (op.kind === 'equal') {
-              charOffset += op.text.length
-            } else if (op.kind === 'delete') {
-              const widgetPos = charOffsetToPos(ins.node, ins.pos, charOffset)
-              const delText = op.text
-              decos.push(Decoration.widget(widgetPos, () => {
-                const el = document.createElement('del')
-                el.className = 'diff-del'
-                el.textContent = delText
-                el.title = '原删除内容'
-                return el
-              }, { side: -1, key: `del-${ins.pos}-${charOffset}` }))
-            } else if (op.kind === 'insert') {
-              const from = charOffsetToPos(ins.node, ins.pos, charOffset)
-              const to = charOffsetToPos(ins.node, ins.pos, charOffset + op.text.length)
-              if (to > from) {
-                decos.push(Decoration.inline(from, to, { class: 'diff-ins' }))
+          renderTextblockInlineDiff(del.node, ins.node, ins.pos, decos)
+        } else if (del && ins.node.type.name === 'table' && del.node.type.name === 'table') {
+          pairedDeletes.add(del)
+          // 隐藏原整表（避免大表格在编辑区重复展示两份），在新表内按单元格呈现行内 Diff 与采纳条
+          decos.push(Decoration.node(del.pos, del.pos + del.node.nodeSize, { class: 'suggest-paired-delete' }))
+          const changedCellBarPositions: number[] = []
+          let rowPos = ins.pos + 1
+          for (let r = 0; r < ins.node.childCount; r++) {
+            const insRow = ins.node.child(r)
+            const delRow = r < del.node.childCount ? del.node.child(r) : null
+            if (!delRow) {
+              decos.push(Decoration.node(rowPos, rowPos + insRow.nodeSize, { class: 'diff-ins-block' }))
+              if (insRow.childCount > 0 && insRow.child(0).childCount > 0) {
+                changedCellBarPositions.push(rowPos + 2)
               }
-              charOffset += op.text.length
+            } else {
+              let cellPos = rowPos + 1
+              for (let c = 0; c < insRow.childCount; c++) {
+                const insCell = insRow.child(c)
+                const delCell = c < delRow.childCount ? delRow.child(c) : null
+                if (!delCell) {
+                  decos.push(Decoration.node(cellPos, cellPos + insCell.nodeSize, { class: 'diff-ins-block' }))
+                  changedCellBarPositions.push(cellPos + 1)
+                } else if (!delCell.eq(insCell)) {
+                  decos.push(Decoration.node(cellPos, cellPos + insCell.nodeSize, { class: 'diff-modified-cell' }))
+                  changedCellBarPositions.push(cellPos + 1)
+                  let pPos = cellPos + 1
+                  for (let p = 0; p < insCell.childCount; p++) {
+                    const insP = insCell.child(p)
+                    const delP = p < delCell.childCount ? delCell.child(p) : null
+                    if (delP && insP.isTextblock && delP.isTextblock) {
+                      if (!delP.eq(insP)) {
+                        renderTextblockInlineDiff(delP, insP, pPos, decos)
+                      }
+                    } else {
+                      decos.push(Decoration.node(pPos, pPos + insP.nodeSize, { class: 'diff-ins-block' }))
+                    }
+                    pPos += insP.nodeSize
+                  }
+                  if (delCell.childCount > insCell.childCount) {
+                    const removedTexts: string[] = []
+                    for (let p = insCell.childCount; p < delCell.childCount; p++) {
+                      const t = delCell.child(p).textContent.trim()
+                      if (t) removedTexts.push(t)
+                    }
+                    if (removedTexts.length > 0) {
+                      const delSummary = removedTexts.join(' ')
+                      const endPos = Math.max(cellPos + 1, pPos - 1)
+                      decos.push(Decoration.widget(endPos, () => {
+                        const el = document.createElement('del')
+                        el.className = 'diff-del'
+                        el.textContent = delSummary
+                        el.title = '原删除段落'
+                        return el
+                      }, { side: 1, key: `tdel-${cellPos}` }))
+                    }
+                  }
+                }
+                cellPos += insCell.nodeSize
+              }
             }
+            rowPos += insRow.nodeSize
           }
+          // 在修改的单元格内部直接放置采纳条（方便长表格局部修改时就地采纳）
+          for (const cPos of changedCellBarPositions.slice(0, 6)) {
+            decos.push(makeSuggestBar(group, `cell-${cPos}`, cPos, '表格内容已修订 · 待采纳'))
+          }
+        } else if (del && ins.node.type === del.node.type) {
+          pairedDeletes.add(del)
+          decos.push(Decoration.node(del.pos, del.pos + del.node.nodeSize, { class: 'suggest-paired-delete' }))
+          decos.push(Decoration.node(ins.pos, ins.pos + ins.node.nodeSize, { class: 'diff-ins-block' }))
         } else {
           decos.push(Decoration.node(ins.pos, ins.pos + ins.node.nodeSize, { class: 'diff-ins-block' }))
         }
@@ -306,21 +402,22 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
         }
       }
 
-      const firstBlock = inserts[0] ?? deletes.find(d => !pairedDeletes.has(d))
-      if (firstBlock) {
-        decos.push(Decoration.widget(firstBlock.pos, () => {
-          const bar = document.createElement('div')
-          bar.className = 'suggest-bar'
-          bar.contentEditable = 'false'
-          bar.innerHTML = '<span class="badge-pill rev"><span class="dot"></span> AI 修订 · 待采纳</span><button data-a="1" class="btn-sm-accept">采纳</button><button data-a="0" class="btn-sm-reject">拒绝</button>'
-          bar.addEventListener('mousedown', e => {
-            const btn = (e.target as HTMLElement).closest('button')
-            if (!btn) return
-            e.preventDefault()
-            onSuggestion(group, btn.dataset.a === '1')
-          })
-          return bar
-        }, { side: -1, key: `sg-${group}`, ignoreSelection: true }))
+      const visibleBlocks = [
+        ...inserts,
+        ...deletes.filter(d => !pairedDeletes.has(d)),
+      ].sort((a, b) => a.pos - b.pos)
+
+      let prevEnd = -1
+      for (const blk of visibleBlocks) {
+        // 连续相邻的同组块只在该连续片段开头放一条审查条；跨章节的多处修改则在每处上方都放审查条
+        if (prevEnd === -1 || blk.pos > prevEnd + 2) {
+          const barPos = blk.node.type.name === 'list_item' ? blk.pos + 1 : blk.pos
+          const label = visibleBlocks.length > 1
+            ? `AI 修订（同批共 ${visibleBlocks.length} 处）· 待采纳`
+            : 'AI 修订 · 待采纳'
+          decos.push(makeSuggestBar(group, `blk-${barPos}`, barPos, label))
+        }
+        prevEnd = blk.pos + blk.node.nodeSize
       }
     }
 

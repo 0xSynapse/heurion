@@ -277,11 +277,11 @@ export function serializeBlock(node: PMNode, opts: SerializeOptions, indent: str
         const marker = node.type.name === 'bullet_list' ? '-' : `${n++}.`
         lines.push(serializeListItem(item, marker, opts, indent))
       })
-      const head = opts.ids && node.attrs.id ? `${indent}{#${node.attrs.id}}\n` : ''
+      const head = opts.ids && node.attrs.id ? `${indent}{#${node.attrs.id}}${pending ? ' ' + pending.trimEnd() : ''}\n` : ''
       return head + lines.join('\n')
     }
     case 'table':
-      return (opts.ids && node.attrs.id ? `${indent}{#${node.attrs.id}}\n` : '') + serializeTable(node, indent)
+      return (opts.ids && node.attrs.id ? `${indent}{#${node.attrs.id}}${pending ? ' ' + pending.trimEnd() : ''}\n` : '') + serializeTable(node, indent)
     case 'figure': {
       const caption = node.attrs.caption ? ` "${String(node.attrs.caption).replace(/"/g, '\\"')}"` : ''
       return `${indent}${pre}![${node.attrs.alt ?? ''}](asset:${node.attrs.asset_id}${caption})`

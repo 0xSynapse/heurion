@@ -652,6 +652,9 @@ function leaveDoc(): void {
   $('app').classList.add('no-doc')
   close()
   hideTurnBanner()
+  $('suggestBanner').hidden = true
+  const csb = document.getElementById('chatSuggestBanner')
+  if (csb) csb.hidden = true
   turnUi = null
   $('chatLog').innerHTML = ''
   $('page').className = 'page'
@@ -1859,21 +1862,8 @@ function renderTurnEvent(ev: any): void {
       if (ev.docs.includes(session?.docId) && ev.status !== 'error') {
         void refresh(false).then(() => {
           if (detail?.suggestions?.length > 0) {
-            if (lastAssistant) {
-              const bar = document.createElement('div')
-              bar.className = 'chat-turn-review-bar'
-              bar.innerHTML = `
-                <span class="badge-pill rev"><span class="dot"></span> AI 提出了 ${detail.suggestions.length} 处修订</span>
-                <button class="btn-jump-review">在正文中定位并采纳 →</button>
-              `
-              bar.querySelector('button')?.addEventListener('click', () => {
-                const firstSug = document.querySelector('[data-suggest-group]')
-                firstSug?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                firstSug?.classList.add('ai-flash')
-                setTimeout(() => firstSug?.classList.remove('ai-flash'), 1400)
-              })
-              lastAssistant.appendChild(bar)
-            }
+            const targetMsg = lastAssistant ?? addMsg('assistant', '（已生成待采纳修订，请确认采纳或拒绝）', null, ev.turn_id ?? null)
+            attachChatReviewBar(targetMsg, detail.suggestions.length)
           } else if (detail?.revertable.includes(ev.turn_id)) {
             attachRevert(lastAssistant ?? addMsg('assistant', '（本轮已完成）'), ev.turn_id)
             showTurnBanner(ev.turn_id)
@@ -2357,31 +2347,96 @@ async function resolveSuggestion(group: string, accept: boolean): Promise<void> 
   }
 }
 
-// 待采纳修订：只在有修订时出现在正文上方（不单设页签）；逐处采纳 / 拒绝在正文里的修订条上
+// 待采纳修订：在正文上方、对话输入框上方及最新 AI 回复中同步展示醒目审查条；逐处采纳 / 拒绝在正文里的修订条上
 let suggestCursor = -1
+
+function jumpToSuggestion(step = 1): void {
+  const bars = Array.from(document.querySelectorAll<HTMLElement>('.suggest-bar[data-suggest-bar-group]'))
+  const targets = bars.length > 0
+    ? bars
+    : Array.from(document.querySelectorAll<HTMLElement>('[data-suggest-group]:not(.suggest-paired-delete)'))
+  if (targets.length === 0) return
+  suggestCursor = (suggestCursor + step + targets.length) % targets.length
+  const target = targets[suggestCursor]!
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  target.classList.add('ai-flash')
+  const group = target.dataset.suggestBarGroup ?? target.dataset.suggestGroup
+  const blk = group
+    ? document.querySelector<HTMLElement>(`[data-suggest-group="${CSS.escape(group)}"]:not(.suggest-paired-delete)`)
+    : null
+  blk?.classList.add('ai-flash')
+  setTimeout(() => {
+    target.classList.remove('ai-flash')
+    blk?.classList.remove('ai-flash')
+  }, 1400)
+}
+
+function attachChatReviewBar(container: HTMLElement, count: number): void {
+  container.querySelector('.chat-turn-review-bar')?.remove()
+  const bar = document.createElement('div')
+  bar.className = 'chat-turn-review-bar'
+  bar.innerHTML = `
+    <span class="badge-pill rev"><span class="dot"></span> AI 提出了 ${count} 处待采纳修订（采纳后正式生效）</span>
+    <div class="chat-turn-review-actions">
+      <button type="button" class="btn-jump-review secondary" data-act="jump">定位查看</button>
+      <button type="button" class="btn-jump-review secondary" data-act="reject">全部拒绝</button>
+      <button type="button" class="btn-jump-review" data-act="accept">全部采纳</button>
+    </div>
+  `
+  bar.addEventListener('click', e => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-act]')
+    if (!btn) return
+    if (btn.dataset.act === 'jump') jumpToSuggestion(1)
+    else if (btn.dataset.act === 'accept') void resolveSuggestion('all', true)
+    else if (btn.dataset.act === 'reject') void resolveSuggestion('all', false)
+  })
+  container.appendChild(bar)
+}
 
 function renderSuggestions(): void {
   const groups: any[] = detail?.suggestions ?? []
   $('suggestBanner').hidden = groups.length === 0
-  if (groups.length === 0) { suggestCursor = -1; return }
+  const chatBanner = document.getElementById('chatSuggestBanner')
+  const chatSummary = document.getElementById('chatSuggestSummary')
+  if (chatBanner) chatBanner.hidden = groups.length === 0
+  if (groups.length === 0) {
+    suggestCursor = -1
+    document.querySelectorAll('#chatLog .chat-turn-review-bar').forEach(el => el.remove())
+    return
+  }
   const blocks = groups.reduce((n, g) => n + g.inserts + g.deletes, 0)
-  $('suggestSummary').textContent = `${groups.length} 处待采纳修订（涉及 ${blocks} 块）· AI 的修改需你采纳后生效`
-  if (suggestCursor >= groups.length) suggestCursor = groups.length - 1
+  $('suggestSummary').textContent = `${groups.length} 处待采纳修订（涉及 ${blocks} 块）· 请点击「全部采纳」或正文内「采纳」使其正式生效`
+  if (chatSummary) {
+    chatSummary.textContent = `${groups.length} 处修订待采纳（采纳后生效与导出）`
+  }
+  const existingBar = document.querySelector<HTMLElement>('#chatLog .chat-turn-review-bar')
+  if (existingBar) {
+    const pill = existingBar.querySelector('.badge-pill.rev')
+    if (pill) pill.innerHTML = `<span class="dot"></span> AI 提出了 ${groups.length} 处待采纳修订（采纳后正式生效）`
+  } else {
+    const assistantMsgs = document.querySelectorAll<HTMLElement>('#chatLog .msg.assistant:not(.error)')
+    const lastMsg = assistantMsgs[assistantMsgs.length - 1]
+    if (lastMsg) attachChatReviewBar(lastMsg, groups.length)
+  }
 }
 
 $('suggestBanner').onclick = e => {
   const t = (e.target as HTMLElement).closest('button') as HTMLButtonElement | null
   if (!t) return
-  const groups: any[] = detail?.suggestions ?? []
   if (t.dataset.all) { void resolveSuggestion('all', t.dataset.all === '1'); return }
-  if (t.dataset.nav && groups.length > 0) {
-    suggestCursor = (suggestCursor + Number(t.dataset.nav) + groups.length) % groups.length
-    const el = document.querySelector(`[data-suggest-group="${CSS.escape(groups[suggestCursor].group)}"]`)
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    el?.classList.add('ai-flash')
-    setTimeout(() => el?.classList.remove('ai-flash'), 1200)
+  if (t.dataset.nav) {
+    jumpToSuggestion(Number(t.dataset.nav))
   }
 }
+
+document.getElementById('chatSuggestBanner')?.addEventListener('click', e => {
+  const t = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-chat-sug]')
+  if (!t) return
+  const act = t.dataset.chatSug
+  if (act === 'jump') jumpToSuggestion(1)
+  else if (act === 'accept') void resolveSuggestion('all', true)
+  else if (act === 'reject') void resolveSuggestion('all', false)
+})
 
 // —— 版本与引用 ——
 
@@ -2536,7 +2591,11 @@ $('exportDocxBtn').onclick = async () => {
   await ensureSuggestionsResolvedBeforeExport()
   location.href = `/api/docs/${session.docId}/export.docx?token=${encodeURIComponent(TOKEN)}&fonts=${exportFonts()}`
 }
-$('exportPptxBtn').onclick = () => { if (session) location.href = `/api/docs/${session.docId}/export.pptx?token=${encodeURIComponent(TOKEN)}&fonts=${exportFonts()}` }
+$('exportPptxBtn').onclick = async () => {
+  if (!session) return
+  await ensureSuggestionsResolvedBeforeExport()
+  location.href = `/api/docs/${session.docId}/export.pptx?token=${encodeURIComponent(TOKEN)}&fonts=${exportFonts()}`
+}
 $('exportMdBtn').onclick = async () => {
   if (!session) return
   await ensureSuggestionsResolvedBeforeExport()

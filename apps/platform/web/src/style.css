@@ -412,7 +412,8 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .ProseMirror .ai-flash { background: rgba(0, 255, 147, .25); border-radius: 3px; }
 .ProseMirror .suggest-paired-delete { display: none !important; }
 .ProseMirror [data-suggest="delete"] { background: var(--danger-soft); text-decoration: line-through; text-decoration-color: var(--danger); opacity: .8; }
-.ProseMirror [data-suggest="insert"] { background: rgba(0, 229, 153, 0.06); border-left: 3px solid #00E599; padding-left: 8px; }
+.ProseMirror :not(table)[data-suggest="insert"] { background: rgba(0, 229, 153, 0.06); border-left: 3px solid #00E599; padding-left: 8px; }
+.ProseMirror td.diff-modified-cell, .ProseMirror th.diff-modified-cell { background: rgba(0, 229, 153, 0.05); box-shadow: inset 3px 0 0 #00E599; }
 .ProseMirror .diff-del-block { background: var(--danger-soft); border-left: 3px solid var(--danger); color: var(--danger); text-decoration: line-through; padding: 4px 8px; }
 .ProseMirror .diff-ins-block { background: rgba(0, 229, 153, 0.06); border-left: 3px solid #00E599; padding: 4px 8px; }
 
@@ -1244,19 +1245,26 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .small { font-size: 12px; }
 .small-btn { font-size: 12px; padding: 3px 8px; }
 
-/* 对话消息内 AI 修订卡片快捷导流条 */
+/* 对话消息内 AI 修订卡片快捷导流条与输入框上方常驻待采纳横幅 */
 .chat-turn-review-bar {
   margin-top: 10px;
   padding: 8px 12px;
-  background: var(--raised);
+  background: var(--green-soft);
   border: 1px solid var(--green-line);
   border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .chat-turn-review-bar .badge-pill { font-size: 11.5px; }
+.chat-turn-review-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 .btn-jump-review {
   background: var(--mint);
   color: var(--mint-ink);
@@ -1269,6 +1277,38 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
   transition: filter 0.15s ease;
 }
 .btn-jump-review:hover { filter: brightness(1.1); }
+.btn-jump-review.secondary {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  font-weight: 500;
+}
+
+.chat-suggest-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--green-line);
+  background: var(--green-soft);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+.chat-suggest-banner .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 6px var(--mint);
+  flex: none;
+}
+.chat-suggest-text {
+  font-weight: 600;
+  color: var(--mint-text);
+}
 
 
 /* 任务队列 */
