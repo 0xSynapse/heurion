@@ -900,6 +900,9 @@ async function refresh(full: boolean): Promise<void> {
   if (session?.editor && d.claim_checks) {
     session.editor.setClaimChecks(d.claim_checks)
   }
+  if (session?.editor && d.citation_numbering) {
+    session.editor.setCitationNumbering(d.citation_numbering)
+  }
   renderComments()
   renderSuggestions()
   renderVersions()
@@ -2518,6 +2521,14 @@ $('versions').onclick = async e => {
 
 const VERDICT: Record<string, string> = { supported: '支持', unsupported: '不支持', unclear: '无法判断', missing_citation: '缺出处' }
 
+/** 平台引用合并进正文末尾用户自己的文献表时的说明（引用页常驻、导出时提示）；没有合并返回 null。 */
+function refMergeText(): string | null {
+  const n = detail?.citation_numbering
+  if (!n || !n.user_refs) return null
+  return `正文末尾已有你自己的参考文献表（${n.user_refs} 条）：平台引用已合并进去，从 [${n.user_refs + 1}] 起编号`
+    + (n.duplicates ? `；其中 ${n.duplicates} 条与表中已有文献相同，沿用原编号` : '')
+}
+
 /** 最近一次导入参考文献的结果（重绘引用页时保留）。 */
 let refImportHtml = ''
 
@@ -2534,7 +2545,7 @@ function renderCites(): void {
       <div>${summary}</div>${flagged}</div>` +
     `<div class="card"><div class="row"><b>参考文献</b><span class="grow"></span><button id="refImportBtn" title="从 Zotero / EndNote / Mendeley / PubMed 导出的文件，或每行一个 DOI / PMID">导入参考文献</button>
       <input type="file" id="refImportInput" accept=".ris,.bib,.nbib,.txt,.xml,.enw" hidden></div>
-      <div class="muted" style="margin:4px 0">导入后登记在这里（未使用），你和 AI 都能直接引用；每条按 DOI 核实，查不到的会列出来。</div><div id="refImportResult">${refImportHtml}</div></div>` +
+      <div class="muted" style="margin:4px 0">导入后登记在这里（未使用），你和 AI 都能直接引用；每条按 DOI 核实，查不到的会列出来。</div>${refMergeText() ? `<div class="ref-merge-note">${esc(refMergeText())}；导出 Word / Markdown 时合并成一份文献表。</div>` : ''}<div id="refImportResult">${refImportHtml}</div></div>` +
     (list.length === 0 ? '<div class="muted">AI 通过文献检索登记的引用会显示在这里</div>' : list.map(c => {
       const candidateUrl = typeof c.url === 'string' && /^https?:\/\//i.test(c.url)
         ? c.url
@@ -2633,6 +2644,8 @@ async function ensureSuggestionsResolvedBeforeExport(): Promise<void> {
 $('exportDocxBtn').onclick = async () => {
   if (!session) return
   await ensureSuggestionsResolvedBeforeExport()
+  const merge = refMergeText()
+  if (merge) showNotice(`${merge}。`)
   location.href = `/api/docs/${session.docId}/export.docx?token=${encodeURIComponent(TOKEN)}&fonts=${exportFonts()}`
 }
 $('exportPptxBtn').onclick = async () => {
@@ -2643,6 +2656,8 @@ $('exportPptxBtn').onclick = async () => {
 $('exportMdBtn').onclick = async () => {
   if (!session) return
   await ensureSuggestionsResolvedBeforeExport()
+  const merge = refMergeText()
+  if (merge) showNotice(`${merge}。`)
   location.href = `/api/docs/${session.docId}/export.md?token=${encodeURIComponent(TOKEN)}`
 }
 // 开发者：读视图（用户菜单里，仅开发模式）

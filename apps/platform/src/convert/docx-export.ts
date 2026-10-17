@@ -1,11 +1,11 @@
 import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
+import { referencePlan } from '../model/references.ts'
 import { colWidths } from '../model/schema.ts'
 import { readGrid, type GridCell } from '../model/table-grid.ts'
 import { looksLikeHeaderRow } from '../model/table-header.ts'
 import type { CitationRow, CommentRow } from '../store/db.ts'
-import { citationOrder } from '../views/read.ts'
 import { bodyChildrenRaw, elementChildrenRaw, safeUnzipDocx } from './docx-import.ts'
 
 /**
@@ -248,8 +248,9 @@ export function exportDocx(input: ExportInput): ExportResult {
   }
 
   // 引用编号与评论
-  const order = citationOrder(input.doc)
-  const citeNumber = new Map(order.map((id, i) => [id, i + 1]))
+  // 引用编号与参考文献表：正文末尾已有用户自己的文献表时，平台引用接在其后编号（见 model/references.ts）
+  const refPlan = referencePlan(input.doc, input.citations)
+  const citeNumber = refPlan.numbers
   const openComments = new Map(input.comments.filter(c => c.status === 'open').map(c => [c.id, c]))
   const commentIds = new Map<string, number>()
   let nextCommentId = Math.max(-1, ...[...(pkg.text('word/comments.xml') ?? '').matchAll(/<w:comment\b[^>]*w:id="(\d+)"/g)].map(m => Number(m[1]))) + 1
@@ -669,75 +670,37 @@ export function exportDocx(input: ExportInput): ExportResult {
     }
   }
 
-  // 参考文献表（平台生成；若正文末尾已有「参考文献 / References」标题或段落及空行/旧静态条目则去重）
+  // 参考文献表：去掉上次导出追加的平台条目后，① 末尾有用户自己的文献表 → 平台条目接在其后，沿用其最后一条的段落与字体格式；
+  // ② 末尾只有「参考文献」标题 → 复用标题；③ 都没有 → 另起「参考文献」标题
   const byId = new Map(input.citations.map(c => [c.id, c]))
-  const used = order.filter(id => byId.has(id))
-  const refTitleRe = /^(?:[一二三四五六七八九十\d]+[.、\s]*)?(?:参考文献|references|bibliography)[:：]?$/i
-  let bodyEndIdx = input.doc.childCount
-  let hasTrailingRefHeading = false
-  if (used.length > 0) {
-    // 与本文档某条引用文本一致、或带着某条引用 DOI 的 [n] 条目，视为平台上次导出的静态参考文献表
-    // （引用文本后来更新过也认得出）；遇到对不上的条目即视为用户自己写的文献表，停止扫描，其内容全部保留
-    const norm = (t: string) => t.replace(/\s+/g, ' ').trim()
-    const knownRefs = new Set(input.citations.map(c => norm(c.formatted)))
-    const knownDois = new Set(input.citations.map(c => c.doi.toLowerCase()).filter(d => d.startsWith('10.')))
-    const isKnownRef = (text: string) => {
-      if (knownRefs.has(norm(text))) return true
-      return [...text.matchAll(/\b10\.\d{4,9}\/[^\s,;]+/g)].some(m => knownDois.has(m[0].replace(/[.)\]]+$/, '').toLowerCase()))
-    }
-    let i = input.doc.childCount - 1
-    let firstRefIdx = -1
-    let foreignEntry = false
-    while (i >= 0) {
-      const n = input.doc.child(i)
-      const txt = n.textContent.trim()
-      if (n.type.name === 'paragraph' && txt === '' && n.childCount === 0) {
-        i--
-        continue
-      }
-      const entry = n.type.name === 'paragraph' ? /^\[\d+\]\s+(\S[\s\S]*)$/.exec(txt) : null
-      if (entry) {
-        if (!isKnownRef(entry[1]!)) {
-          foreignEntry = true
-          break
-        }
-        i--
-        continue
-      }
-      if ((n.type.name === 'heading' || n.type.name === 'paragraph') && refTitleRe.test(txt)) {
-        firstRefIdx = i
-        i--
-        continue
-      }
-      break
-    }
-    // 用户文献表位于末尾标题之后：不复用该标题，原样保留并另附平台参考文献表
-    if (foreignEntry && firstRefIdx === -1) warnings.push('正文末尾已有未由平台生成的参考文献条目，已原样保留并另附平台参考文献表')
-    if (firstRefIdx !== -1) {
-      const candidate = input.doc.child(firstRefIdx)
-      if (candidate.type.name === 'heading') {
-        bodyEndIdx = firstRefIdx + 1
-        hasTrailingRefHeading = true
-      } else {
-        bodyEndIdx = firstRefIdx
-      }
-    }
-  }
-
   let body = ''
   input.doc.forEach((n, _off, idx) => {
-    if (idx < bodyEndIdx) body += block(n)
+    if (idx < refPlan.bodyEnd) body += block(n)
   })
-
-  if (used.length > 0) {
-    if (!hasTrailingRefHeading) {
+  if (refPlan.append.length > 0) {
+    let pprXml = '<w:pPr><w:ind w:left="440" w:hanging="440"/></w:pPr>'
+    let rprXml = ''
+    if (refPlan.userCount > 0) {
+      const last = input.doc.child(refPlan.bodyEnd - 1)
+      const src = last.attrs.id ? input.src(last.attrs.id as string) : null
+      if (src) {
+        const kids = elementChildrenRaw(src)
+        pprXml = kids.find(k => /^<w:pPr\b/.test(k)) ?? ''
+        rprXml = childEl(kids.find(k => /^<w:r\b/.test(k)), 'rPr') ?? ''
+      }
+      warnings.push(refPlan.duplicates > 0
+        ? `正文末尾已有参考文献表（${refPlan.userCount} 条）：平台引用已合并进去，从 [${refPlan.userCount + 1}] 起编号；其中 ${refPlan.duplicates} 条与表中已有文献相同，沿用原编号`
+        : `正文末尾已有参考文献表（${refPlan.userCount} 条）：平台引用已合并进去，从 [${refPlan.userCount + 1}] 起编号`)
+    } else if (!refPlan.hasHeading) {
       const h = headingStyle(1)
       if (!styles.has(h.toLowerCase())) missingHeading.add(1)
       body += `<w:p><w:pPr><w:pStyle w:val="${esc(h)}"/></w:pPr><w:r><w:t>参考文献</w:t></w:r></w:p>`
     }
-    used.forEach((id, i) => {
-      body += `<w:p><w:pPr><w:ind w:left="440" w:hanging="440"/></w:pPr><w:r><w:t xml:space="preserve">[${i + 1}] ${esc(byId.get(id)!.formatted)}</w:t></w:r></w:p>`
-    })
+    for (const { id, n } of refPlan.append) {
+      body += `<w:p>${pprXml}<w:r>${rprXml}<w:t xml:space="preserve">[${n}] ${esc(byId.get(id)!.formatted)}</w:t></w:r></w:p>`
+    }
+  } else if (refPlan.userCount > 0 && refPlan.duplicates > 0) {
+    warnings.push(`正文里的引用都已在末尾的参考文献表中（${refPlan.duplicates} 条），沿用表中编号`)
   }
 
   // document.xml：沿用原文件的根元素（命名空间）与页面设置

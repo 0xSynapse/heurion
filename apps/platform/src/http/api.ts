@@ -56,7 +56,8 @@ import { pendingGroups, resolveSuggestions, withoutPending } from '../ops/sugges
 import { EditBatch, OpError } from '../ops/types.ts'
 import { DeckEditBatch } from '../ops/deck.ts'
 import { commentPrompt, wantsAi, phrBriefPrompt, type TurnBusEvent, type TurnOptions, type TurnService } from '../turns/service.ts'
-import { citationOrder, diff, read } from '../views/read.ts'
+import { referencePlan } from '../model/references.ts'
+import { diff, read } from '../views/read.ts'
 import { deckRead } from '../views/deck.ts'
 import { exportMarkdown, renderHtml } from '../views/render.ts'
 import { themePhoto } from '../model/theme-photos.ts'
@@ -956,7 +957,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (!row) return c.json({ error: 'not found' }, 404)
     const user = c.get('user')
     const doc = docs.get(row.id)
-    const order = citationOrder(doc)
+    const citationRows = store.listCitations(row.id)
+    const refPlan = referencePlan(doc, citationRows)
     const marks = threadMarks(doc)
     const messages = store.listMessages(row.id)
     return c.json({
@@ -973,7 +975,14 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       my_role: access.docRole(user, row),
       collaborators: (() => { const st = access.studyOfDoc(row); return st ? store.studyMembers(st).map(m => ({ user_id: m.user_id, name: store.getUser(m.user_id)?.display_name ?? m.user_id, role: m.role })) : [] })(),
       revertable: [...new Set(messages.map(m => m.turn_id).filter((t): t is string => !!t))].filter(t => docs.canRevertTurn(row.id, t)),
-      citations: store.listCitations(row.id).map(x => ({ ...x, number: order.includes(x.id) ? order.indexOf(x.id) + 1 : null })),
+      citations: citationRows.map(x => ({ ...x, number: refPlan.numbers.get(x.id) ?? null })),
+      // 编辑器按同一规则实时编号（model/references.ts numberCitations）；user_refs > 0 表示平台引用合并进了正文末尾用户自己的文献表
+      citation_numbering: {
+        offset: refPlan.userCount,
+        fixed: Object.fromEntries([...refPlan.numbers].filter(([id]) => !refPlan.append.some(a => a.id === id))),
+        user_refs: refPlan.userCount,
+        duplicates: refPlan.duplicates,
+      },
       comments: store.listComments(row.id).map(x => ({ ...x, anchor: locate(doc, x, marks) })),
     })
   })

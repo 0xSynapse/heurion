@@ -28,7 +28,8 @@ import { AnchorError, attachComment, locate, threadMarks } from '../model/anchor
 import type { Documents } from '../model/runtime.ts'
 import type { OpService } from '../ops/service.ts'
 import { DocOp, OpError } from '../ops/types.ts'
-import { citationOrder, diff, outline, read, ReadError, search } from '../views/read.ts'
+import { referencePlan } from '../model/references.ts'
+import { diff, outline, read, ReadError, search } from '../views/read.ts'
 import { DatasetError, type DatasetService } from '../datasets/service.ts'
 import type { KbService } from '../kb/service.ts'
 import { StudyError, type StudyService } from '../research/service.ts'
@@ -719,9 +720,11 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
   }, async ({ doc_id }) => {
     const denied = ctx.check(doc_id, 'read')
     if (denied) return denied
-    const order = citationOrder(docs.get(doc_id))
-    return json(store.listCitations(doc_id).map(c => ({
-      cite_id: c.id, number: order.includes(c.id) ? order.indexOf(c.id) + 1 : null, doi: c.doi, formatted: c.formatted,
+    // 编号与导出一致：正文末尾有用户自己的文献表时，平台引用接在其后编号
+    const rows = store.listCitations(doc_id)
+    const numbers = referencePlan(docs.get(doc_id), rows).numbers
+    return json(rows.map(c => ({
+      cite_id: c.id, number: numbers.get(c.id) ?? null, doi: c.doi, formatted: c.formatted,
     })))
   })
 

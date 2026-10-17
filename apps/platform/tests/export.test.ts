@@ -242,15 +242,18 @@ describe('docx 导出：参考文献去重与重复表头', () => {
     ] }, { actor: 'user', turnId: null })
   }
 
-  it('末尾是用户自己写的文献表：插入一条引用后导出，原条目全部保留并另附平台参考文献表', () => {
+  it('末尾是用户自己写的文献表：平台引用合并进去，接着编号，不另起标题', () => {
     const t = importInto(REFS_DOC(['[1] Smith A. Foo study. Lancet. 2001.', '[2] Lee B. Bar trial. JAMA. 2002.']))
     cite(t)
     const out = t.exportNow()
     const body = bodyOf(out.bytes)
     expect(body).toContain('Smith A. Foo study')
     expect(body).toContain('Lee B. Bar trial')
-    expect(body).toContain('[1] Doe J. Trial. N Engl J Med. 2020.')
-    expect(out.warnings.some(w => w.includes('未由平台生成的参考文献条目'))).toBe(true)
+    expect(body).toContain('[3] Doe J. Trial. N Engl J Med. 2020.')
+    expect(body).toContain('<w:vertAlign w:val="superscript"/></w:rPr><w:t>[3]</w:t>')
+    expect(body.match(/参考文献/g)!.length).toBe(1)
+    expect(body.indexOf('Lee B. Bar trial')).toBeLessThan(body.indexOf('[3] Doe J.'))
+    expect(out.warnings.some(w => w.includes('平台引用已合并进去，从 [3] 起编号'))).toBe(true)
   })
 
   it('末尾是平台上次导出的文献表：复用标题、不重复输出条目', () => {

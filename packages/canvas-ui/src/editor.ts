@@ -11,6 +11,7 @@ import { Decoration, DecorationSet, EditorView, type NodeView } from 'prosemirro
 import { askText } from './dialogs.ts'
 import { redo, undo, ySyncPlugin, ySyncPluginKey, yUndoPlugin } from 'y-prosemirror'
 import type * as Y from 'yjs'
+import { citationOrderOf, numberCitations } from '../../../apps/platform/src/model/references.ts'
 import { ADDRESSABLE, schema } from '../../../apps/platform/src/model/schema.ts'
 
 /**
@@ -86,17 +87,25 @@ const idPlugin = new Plugin({
   },
 })
 
-/** 引用编号：按正文首次出现顺序（NodeView 忽略自身 DOM 变化，编号由插件视图刷新）。 */
-const citePlugin = new Plugin({
+/**
+ * 引用编号：按正文首次出现顺序（NodeView 忽略自身 DOM 变化，编号由插件视图刷新）。
+ * 与导出同一规则（model/references.ts）：正文末尾有用户自己的文献表时，服务端给出偏移量与沿用编号，这里接着编。
+ */
+export interface CitationNumbering { offset: number; fixed: Record<string, number> }
+const citeKey = new PluginKey<CitationNumbering>('cite-numbering')
+const citePlugin = new Plugin<CitationNumbering>({
+  key: citeKey,
+  state: {
+    init: () => ({ offset: 0, fixed: {} }),
+    apply: (tr, value) => tr.getMeta(citeKey) ?? value,
+  },
   view: view => {
     const renumber = () => {
-      const order: string[] = []
-      view.state.doc.descendants(n => {
-        if (n.type.name === 'citation' && !order.includes(n.attrs.cite_id as string)) order.push(n.attrs.cite_id as string)
-      })
+      const { offset, fixed } = citeKey.getState(view.state)!
+      const numbers = numberCitations(citationOrderOf(view.state.doc), offset, fixed)
       view.dom.querySelectorAll<HTMLElement>('sup.cite').forEach(el => {
-        const n = order.indexOf(el.dataset.cite ?? '') + 1
-        el.textContent = `[${n || '?'}]`
+        const n = numbers.get(el.dataset.cite ?? '')
+        el.textContent = `[${n ?? '?'}]`
       })
     }
     renumber()
@@ -924,6 +933,11 @@ export class Editor {
   scrollToThread(thread: string): void {
     const el = this.view.dom.querySelector(`mark.comment[data-thread="${CSS.escape(thread)}"]`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
+  /** 服务端给出的引用编号规则（正文末尾有用户自己的文献表时接着编号）。 */
+  setCitationNumbering(numbering: CitationNumbering): void {
+    this.view.dispatch(this.view.state.tr.setMeta(citeKey, numbering))
   }
 
   setClaimChecks(checks: ClaimCheckItem[]): void {

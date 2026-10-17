@@ -4,7 +4,7 @@ import type { Documents } from '../model/runtime.ts'
 import { relevantPassages, type FullTextClient } from '../literature/fulltext.ts'
 import type { PubMedClient } from '../literature/pubmed.ts'
 import type { ClaimVerdict } from '../store/db.ts'
-import { citationOrder } from '../views/read.ts'
+import { referencePlan } from '../model/references.ts'
 import {
   extractClaims,
   extractTableSummaries,
@@ -70,8 +70,8 @@ export class ClaimService {
 
   private extract(docId: string): { claims: Claim[]; unsourced: Claim[]; tables: TableSummary[] } {
     const doc = this.docs.get(docId)
-    const order = citationOrder(doc)
-    const { claims, unsourced } = extractClaims(doc, new Map(order.map((id, i) => [id, i + 1])))
+    // 编号与导出一致（正文末尾有用户自己的文献表时接在其后编号）
+    const { claims, unsourced } = extractClaims(doc, referencePlan(doc, this.docs.store.listCitations(docId)).numbers)
     const tables = extractTableSummaries(doc)
     return { claims, unsourced, tables }
   }
@@ -110,7 +110,7 @@ export class ClaimService {
     const { claims, unsourced, tables } = this.extract(docId)
     const store = this.docs.store
     const cites = new Map(store.listCitations(docId).map(c => [c.id, c]))
-    const order = citationOrder(this.docs.get(docId))
+    const numbers = referencePlan(this.docs.get(docId), [...cites.values()]).numbers
     const page = claims.slice(cursor, cursor + PAGE)
     const out: ClaimEvidence[] = []
     for (const c of page) {
@@ -122,7 +122,7 @@ export class ClaimService {
         const full = this.fulltext ? await this.fulltext.get(row.doi).catch(() => null) : null
         const passages = full ? relevantPassages(full.text, c.sentence) : []
         citations.push({
-          cite_id: id, number: order.includes(id) ? order.indexOf(id) + 1 : null, reference: row.formatted, abstract: abstract ? fitAbstract(abstract) : null,
+          cite_id: id, number: numbers.get(id) ?? null, reference: row.formatted, abstract: abstract ? fitAbstract(abstract) : null,
           ...(passages.length ? { fulltext: { source: full!.source === 'pmc' ? 'PMC 开放获取全文' : '开放获取全文（Unpaywall）', passages } } : {}),
         })
       }

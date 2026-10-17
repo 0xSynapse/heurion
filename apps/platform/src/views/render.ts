@@ -2,7 +2,7 @@ import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { serializeBlocks } from '../model/markdown.ts'
 import { sanitizeHref } from '../model/schema.ts'
 import type { CitationRow } from '../store/db.ts'
-import { citationOrder } from './read.ts'
+import { referencePlan } from '../model/references.ts'
 
 /**
  * 面向人的渲染：HTML 预览与 markdown 导出。引用按文中首次出现顺序编号，
@@ -87,29 +87,35 @@ function block(node: PMNode, ctx: RenderContext): string {
   }
 }
 
-function numbering(doc: PMNode, citations: CitationRow[]): { numbers: Map<string, number>; list: CitationRow[] } {
+/** 与 docx 导出同一套编号与文献表合并规则（model/references.ts）。 */
+function numbering(doc: PMNode, citations: CitationRow[]) {
   const byId = new Map(citations.map(c => [c.id, c]))
-  const order = citationOrder(doc).filter(id => byId.has(id))
-  return { numbers: new Map(order.map((id, i) => [id, i + 1])), list: order.map(id => byId.get(id)!) }
+  const plan = referencePlan(doc, citations)
+  return { plan, numbers: plan.numbers, list: plan.append.map(a => ({ n: a.n, c: byId.get(a.id)! })) }
 }
 
 export function renderHtml(doc: PMNode, citations: CitationRow[], assetUrl: (id: string) => string): string {
-  const { numbers, list } = numbering(doc, citations)
+  const { plan, numbers, list } = numbering(doc, citations)
   let body = ''
-  doc.forEach(n => { body += block(n, { numbers, assetUrl }) })
+  doc.forEach((n, _o, i) => { if (i < plan.bodyEnd) body += block(n, { numbers, assetUrl }) })
   if (list.length > 0) {
-    body += `<section class="references"><h2>参考文献</h2><ol>${list.map(c =>
-      `<li>${esc(c.formatted)} <a href="${esc(sanitizeHref(c.url ?? `https://doi.org/${c.doi}`))}" target="_blank" rel="noopener">原文</a></li>`).join('')}</ol></section>`
+    const items = list.map(({ c }) => `<li>${esc(c.formatted)} <a href="${esc(sanitizeHref(c.url ?? `https://doi.org/${c.doi}`))}" target="_blank" rel="noopener">原文</a></li>`).join('')
+    // 合并进用户的文献表 / 复用已有标题时不再另起标题；编号接着用户的表
+    const heading = plan.userCount > 0 || plan.hasHeading ? '' : '<h2>参考文献</h2>'
+    body += `<section class="references">${heading}<ol start="${list[0]!.n}">${items}</ol></section>`
   }
   return body
 }
 
-/** markdown 导出：引用替换成 [n]，末尾追加参考文献表。 */
+/** markdown 导出：引用替换成 [n]，末尾追加参考文献表（与 docx 同一套合并规则）。 */
 export function exportMarkdown(doc: PMNode, citations: CitationRow[]): string {
-  const { numbers, list } = numbering(doc, citations)
+  const { plan, numbers, list } = numbering(doc, citations)
   const blocks: PMNode[] = []
-  doc.forEach(n => blocks.push(n))
+  doc.forEach((n, _o, i) => { if (i < plan.bodyEnd) blocks.push(n) })
   let md = serializeBlocks(blocks).replace(/\[@c:([a-z0-9]+)\]/g, (_m, id: string) => `[${numbers.get(id) ?? '?'}]`)
-  if (list.length > 0) md += `\n\n## 参考文献\n\n${list.map((c, i) => `${i + 1}. ${c.formatted}`).join('\n')}`
+  if (list.length > 0) {
+    const heading = plan.userCount > 0 || plan.hasHeading ? '' : '## 参考文献\n\n'
+    md += `\n\n${heading}${list.map(({ n, c }) => `[${n}] ${c.formatted}`).join('\n\n')}`
+  }
   return md + '\n'
 }
