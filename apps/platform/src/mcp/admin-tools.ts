@@ -37,6 +37,12 @@ interface Op {
 
 interface ToolSpec { name: string; description: string; input: Record<string, z.ZodTypeAny>; actions: Record<string, Op> }
 
+/** 只对本进程拥有的路径改权限（别的 uid 的文件 chmod 会 EPERM）；拿不到 uid 的平台（Windows）不改。 */
+export function chmodIfOwned(path: string, mode: number): void {
+  if (typeof process.getuid !== 'function') return
+  if (statSync(path).uid === process.getuid()) chmodSync(path, mode)
+}
+
 export interface WorkspaceFile { bytes: Uint8Array; name: string; mime: string }
 
 const enc = (v: unknown) => encodeURIComponent(String(v ?? ''))
@@ -351,12 +357,13 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
         if (op.save) {
           const rel = op.save(args)
           const out = join(deps.workspaceDir(userId), rel)
-          // 隔离模式下 dsh 以该用户专属 uid 运行：目录与文件要让它能读（与 data/、.datasets/ 一致）
+          // 隔离模式下 dsh 以该用户专属 uid 运行：平台建的目录与文件要让它能读（与 data/、.datasets/ 一致）。
+          // AI 自己建的 exports/ 或同名文件属主是它的 uid（组 node 可写），平台改不了权限也不需要改，否则会 EPERM
           const dir = join(out, '..')
           mkdirSync(dir, { recursive: true })
-          chmodSync(dir, 0o2777)
+          chmodIfOwned(dir, 0o2777)
           writeFileSync(out, r.bytes)
-          chmodSync(out, 0o644)
+          chmodIfOwned(out, 0o644)
           return json({ saved: rel, bytes: r.bytes.byteLength, message: `已导出到工作区 ${rel}` })
         }
         return json(r.json ?? (r.text || { ok: true }))

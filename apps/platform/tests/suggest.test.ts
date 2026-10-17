@@ -86,3 +86,31 @@ describe('suggest 模式', () => {
     expect(accepted.child(1).textContent).toContain('3')
   })
 })
+
+describe('删除多个相邻块的修订：保持原文顺序', () => {
+  it('删掉三段：修订里按原顺序显示，拒绝后原样恢复', () => {
+    const t = setup('前言。\n\n第一段。\n\n第二段。\n\n第三段。\n\n结尾。')
+    const del = ids(t.docs, t.docId).slice(1, 4)
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'delete', ids: del }] }, { actor: 'ai', turnId: null })
+    expect(blocks(t.docs.get(t.docId)).map(b => b.text)).toEqual(['前言。', '第一段。', '第二段。', '第三段。', '结尾。'])
+    const rejected = resolveSuggestions(t.docs.get(t.docId), null, false)
+    expect(blocks(rejected).map(b => [b.id, b.text])).toEqual(blocks(t.docs.get(t.docId)).map(b => [b.id, b.text]))
+    expect(blocks(rejected).every(b => b.suggest === null)).toBe(true)
+  })
+
+  it('开头连续删除（没有未删的前一个兄弟）也保持顺序', () => {
+    const t = setup('第一段。\n\n第二段。\n\n第三段。')
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'delete', ids: ids(t.docs, t.docId).slice(0, 2) }] }, { actor: 'ai', turnId: null })
+    expect(blocks(resolveSuggestions(t.docs.get(t.docId), null, false)).map(b => b.text)).toEqual(['第一段。', '第二段。', '第三段。'])
+  })
+
+  it('改写整个列表后拒绝：列表项按原顺序回来', () => {
+    const t = setup('前言。\n\n- 苹果\n- 香蕉\n- 樱桃')
+    const list = t.docs.get(t.docId).child(1).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_block', id: list, markdown: '- 苹果\n- 葡萄\n- 香蕉\n- 樱桃' }] }, { actor: 'ai', turnId: null })
+    const items = (doc: ReturnType<typeof t.docs.get>) => { const o: string[] = []; doc.descendants(n => { if (n.type.name === 'list_item') { o.push(n.textContent); return false } return true }); return o }
+    expect(items(resolveSuggestions(t.docs.get(t.docId), null, false))).toEqual(['苹果', '香蕉', '樱桃'])
+    expect(items(resolveSuggestions(t.docs.get(t.docId), null, true))).toEqual(['苹果', '葡萄', '香蕉', '樱桃'])
+  })
+})
+

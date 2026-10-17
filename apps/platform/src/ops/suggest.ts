@@ -45,26 +45,28 @@ export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNo
     tr.setNodeMarkup(pos, undefined, { ...node.attrs, suggest: 'insert', suggest_group: group, suggest_of: null })
   }
 
-  // ③ 删除的块（只放回最外层）：插回原位置——前一个仍在的兄弟之后，否则父块开头
+  // ③ 删除的块（只放回最外层）：插回原位置——原文里紧挨着的前一个兄弟之后，否则父块开头。
+  // 按文档顺序放回，连续删除的几块里前一块已先放回，所以锚点可以是它（若都锚到同一个未删兄弟，会倒序）
   const removed = new Set(changes.filter(x => x.kind === 'removed').map(x => x.node_id))
-  const restore: Array<{ node: PMNode; prevSibling: string | null; parent: string | null }> = []
+  const restore: Array<{ node: PMNode; prevSiblings: string[]; parent: string | null }> = []
   before.descendants((node, pos) => {
     if (!node.attrs.id || !removed.has(node.attrs.id as string)) return true
     const $pos = before.resolve(pos)
     for (let d = $pos.depth; d > 0; d--) if (removed.has($pos.node(d).attrs.id as string)) return false
     const parent = $pos.parent
-    let prevSibling: string | null = null
+    // 由近到远的前面兄弟：最近的那个若没能放回（或没有 id），退到更前面的
+    const prevSiblings: string[] = []
     for (let i = $pos.index() - 1; i >= 0; i--) {
       const sib = parent.child(i).attrs.id as string | null
-      if (sib && !removed.has(sib)) { prevSibling = sib; break }
+      if (sib) prevSiblings.push(sib)
     }
-    restore.push({ node, prevSibling, parent: $pos.depth === 0 ? null : (parent.attrs.id as string | null) ?? null })
+    restore.push({ node, prevSiblings, parent: $pos.depth === 0 ? null : (parent.attrs.id as string | null) ?? null })
     return false
   })
   for (const r of restore) {
     const node = r.node.type.create({ ...r.node.attrs, suggest: 'delete', suggest_group: group, suggest_of: null }, r.node.content, r.node.marks)
     const index = indexById(tr.doc)
-    const anchor = r.prevSibling ? index.get(r.prevSibling) : undefined
+    const anchor = r.prevSiblings.map(id => index.get(id)).find(Boolean)
     try {
       if (anchor) tr.insert(anchor.pos + anchor.node.nodeSize, node)
       else if (r.parent && index.get(r.parent)) tr.insert(index.get(r.parent)!.pos + 1, node)
