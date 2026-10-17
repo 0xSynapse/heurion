@@ -29,7 +29,7 @@ export class CrossrefClient {
 }
 
 function toArticle(w: CrossrefWork): Article {
-  const authors = (w.author ?? []).map(a => a.name ?? [a.family, initials(a.given)].filter(Boolean).join(' '))
+  const authors = (w.author ?? []).map(a => cleanBibText(a.name ?? [a.family, initials(a.given)].filter(Boolean).join(' '))).filter(Boolean)
   return {
     pmid: null,
     doi: normalizeDoi(w.DOI),

@@ -298,13 +298,23 @@ describe('文献文本清理', () => {
     expect(cleanBibText('Smith &amp; Jones <i>Nature</i>')).toBe('Smith & Jones Nature')
   })
 
-  it('引用入库与读取都返回清理后的文本（覆盖 HTML、markdown、MCP 输出）', () => {
+  it('只清理一次：入库原样保存，旧记录由一次性迁移清理，重复执行不会再解码', () => {
+    expect(cleanBibText('&lt;i&gt;x&lt;/i&gt; &#38; &#x26;')).toBe('<i>x</i> & &')
     const store = new Store(':memory:')
     const docs = new Documents(store)
     const row = docs.create({ owner: 'u', title: 't', content: schema.node('doc', null, parseBlocks('正文')) })
-    const c = store.upsertCitation({ doc_id: row.id, doi: '10.1/x', pmid: null, formatted: 'Smith &amp; Jones. <i>Nature</i>.', url: null })
-    expect(c.formatted).toBe('Smith & Jones. Nature.')
-    expect(store.listCitations(row.id)[0]!.formatted).toBe('Smith & Jones. Nature.')
+    // 清理过的文本里本身就含字面量「&lt;」（来源是双重转义）：入库与读取都不能再解码
+    const c = store.upsertCitation({ doc_id: row.id, doi: '10.1/x', pmid: null, formatted: 'Dose &lt;5 mg. Nature.', url: null })
+    expect(c.formatted).toBe('Dose &lt;5 mg. Nature.')
+    expect(store.listCitations(row.id)[0]!.formatted).toBe('Dose &lt;5 mg. Nature.')
+    // 旧记录：迁移标记清掉后模拟上线前的脏数据，迁移只跑一次
+    store.insertCitation({ ...c, id: 'cold1', doi: '10.1/y', formatted: 'Smith &amp; Jones. <i>Nature</i>.' })
+    ;(store as unknown as { db: { prepare(s: string): { run(...a: unknown[]): void } } }).db.prepare("DELETE FROM app_settings WHERE key = 'migration.citations_clean_text'").run()
+    store.cleanLegacyCitations()
+    const after = () => store.listCitations(row.id).map(x => x.formatted)
+    expect(after()).toEqual(['Dose <5 mg. Nature.', 'Smith & Jones. Nature.'])
+    store.cleanLegacyCitations()
+    expect(after()).toEqual(['Dose <5 mg. Nature.', 'Smith & Jones. Nature.'])
   })
 })
 
@@ -384,6 +394,48 @@ describe('docx 导出：表格样式设定', () => {
     expect(tbl1).toContain('<w:gridCol w:w="2250"/><w:gridCol w:w="6750"/>')
     expect(tbl1).toContain('<w:shd w:val="clear" w:color="auto" w:fill="FFEEAA"/><w:vAlign w:val="bottom"/>')
     expect(tbl2!.match(/<w:tblHeader\/>/g)!.length).toBe(1)
+  })
+})
+
+describe('代码审查回归（2026-10-17）', () => {
+  it('引用文本更新过：末尾的旧平台文献表按 DOI 认出，不会出现两份参考文献表', () => {
+    const t = importInto(docx([
+      p('心衰是常见病。'),
+      p('参考文献', '<w:pStyle w:val="Heading1"/>'),
+      p('[1] Doe J. Old title. N Engl J Med. 2020. doi:10.1056/x'),
+    ].join('')))
+    const c = t.store.upsertCitation({ doc_id: t.docId, doi: '10.1056/x', pmid: null, formatted: 'Doe J. New title. N Engl J Med. 2020. doi:10.1056/x', url: null })
+    const para = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: para, find: '常见病', replace: `常见病[@c:${c.id}]` }] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).not.toContain('Old title')
+    expect(body.match(/参考文献/g)!.length).toBe(1)
+    expect(body).toContain('[1] Doe J. New title')
+  })
+
+  it('显式表头后在上方插入普通行：不再重复表头；删掉开头的表头行：剩下的表头行照常重复', () => {
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const ops = new OpService(docs)
+    const row = docs.create({ owner: 'u', title: 't', content: schema.node('doc', null, parseBlocks('| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |')) })
+    const tid = docs.get(row.id).child(0).attrs.id as string
+    const edit = (op: Record<string, unknown>) => ops.edit({ doc_id: row.id, base_rev: docs.rev(row.id), mode: 'apply', ops: [{ id: tid, ...op } as never] }, { actor: 'ai', turnId: null })
+    const headers = () => bodyOf(exportDocx({ doc: docs.get(row.id), baseline: null, pkg: null, src: () => null, citations: [], comments: [], asset: () => null }).bytes).match(/<w:tblHeader\/>/g)?.length ?? 0
+    edit({ op: 'table_set_header', rows: 2 })
+    expect(headers()).toBe(2)
+    edit({ op: 'table_delete_rows', at: 0, count: 1 })
+    expect(headers()).toBe(1)
+    edit({ op: 'table_insert_rows', at: 0, rows: [['x', 'y']] })
+    expect(headers()).toBe(0)
+  })
+
+  it('单元格段落改对齐：只覆盖 jc，原段落的样式、间距、缩进保留', () => {
+    const PPR = '<w:pStyle w:val="TableText"/><w:spacing w:before="60"/><w:ind w:left="120"/>'
+    const tbl = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:p><w:pPr>${PPR}</w:pPr><w:r><w:t>甲</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>乙</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`
+    const t = importInto(docx(tbl))
+    const pid = t.docs.get(t.docId).child(0).child(0).child(0).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'set_block_style', id: pid, align: 'center' }] }, { actor: 'ai', turnId: null })
+    expect(bodyOf(t.exportNow().bytes)).toContain(`<w:pPr>${PPR}<w:jc w:val="center"/></w:pPr>`)
   })
 })
 

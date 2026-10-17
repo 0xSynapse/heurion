@@ -222,6 +222,23 @@ describe('doc_edit 操作', () => {
       expect(t.docs.get(t.docId).child(0).child(1).child(0).child(0).textContent).toBe('首段')
     })
 
+    it('table_set_cells 按写入的 {#id} 对回段落：删掉第一段时第二段保留自己的 id 与属性', () => {
+      const t = setup('| 项目 |\n| --- |\n| 甲 |')
+      const tbl = t.docs.get(t.docId).child(0)
+      const tid = tbl.attrs.id as string
+      const p1 = tbl.child(1).child(0).child(0).attrs.id as string
+      t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'table_set_cells', id: tid, cells: [{ row: 1, col: 0, markdown: `{#${p1}} 标题<br>{#new1} 正文` }] }] }, { actor: 'ai', turnId: null })
+      t.ops.edit({ doc_id: t.docId, base_rev: 1, mode: 'apply', ops: [{ op: 'set_block_style', id: p1, align: 'center' }] }, { actor: 'ai', turnId: null })
+      const p2 = t.docs.get(t.docId).child(0).child(1).child(0).child(1).attrs.id as string
+      expect(p2).not.toBe(p1)
+      t.ops.edit({ doc_id: t.docId, base_rev: 2, mode: 'apply', ops: [{ op: 'table_set_cells', id: tid, cells: [{ row: 1, col: 0, markdown: `{#${p2}} 正文（改）` }] }] }, { actor: 'ai', turnId: null })
+      const cell = t.docs.get(t.docId).child(0).child(1).child(0)
+      expect(cell.childCount).toBe(1)
+      expect(cell.child(0).attrs.id).toBe(p2)
+      expect(cell.child(0).attrs.align).toBe(null)
+      expect(cell.child(0).textContent).toBe('正文（改）')
+    })
+
     it('markdown 合并标记：非矩形或无处可并时报错，\\^ 是字面量', () => {
       expect(() => parseBlocks('| ^ | b |\n| --- | --- |')).toThrow(/上方没有/)
       expect(() => parseBlocks('| a | b |\n| --- | --- |\n| ^ | < |')).toThrow(/矩形/)
@@ -251,10 +268,10 @@ describe('doc_edit 操作', () => {
       expect(tbl.child(1).child(0).childCount).toBe(4)
     })
 
-    it('表头：设定行数写入 header 与 header_rows；跨过边界的合并单元格拒绝', () => {
+    it('表头：设定行数写入单元格 header 并标记显式；跨过边界的合并单元格拒绝', () => {
       const t = mk()
       t.edit({ op: 'table_set_header', rows: 2 })
-      expect(t.table().attrs.header_rows).toBe(2)
+      expect(t.table().attrs.header_explicit).toBe(true)
       expect(t.table().child(1).child(0).attrs.header).toBe(true)
       expect(t.table().child(2).child(0).attrs.header).toBe(false)
       t.edit({ op: 'table_set_header', rows: 0 })

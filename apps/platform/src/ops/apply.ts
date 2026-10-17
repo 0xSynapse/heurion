@@ -691,13 +691,22 @@ function setTextStyle(tr: Transform, op: Extract<DocOp, { op: 'set_text_style' }
 
 /**
  * 单元格新内容：段落之间用读视图的 `{#id}` 前缀分隔（见 markdown.ts parseCell）。
- * 第 i 段沿用原单元格第 i 段的属性与 id（段落样式、对齐不丢，docx 导出仍按原段落处理），多出的段落新分配 id。
+ * 写了 id 的段落按 id 对回原单元格里的段落，沿用其属性与 id（段落样式、对齐不丢，docx 导出仍按原段落处理）；
+ * id 对不上或重复的段落新分配 id。整格都没写 id（如直接写一句话）时按位置对回。
  */
 function cellContent(markdown: string, old: PMNode | null, taken: Set<string>): PMNode[] {
-  const paras = parseCell(markdown)
-  return paras.map((p, i) => {
-    const prev = old && i < old.childCount ? old.child(i) : null
-    return prev ? prev.type.create(prev.attrs, p.content, prev.marks) : assignIds(p, taken)
+  const parsed = parseCell(markdown)
+  const oldById = new Map<string, PMNode>()
+  old?.forEach(p => { if (p.attrs.id) oldById.set(p.attrs.id as string, p) })
+  const byId = parsed.some(x => x.id)
+  const used = new Set<string>()
+  return parsed.map(({ para, id }, i) => {
+    let prev: PMNode | null = null
+    if (byId) {
+      const hit = id ? oldById.get(id) : undefined
+      if (hit && !used.has(id!)) { prev = hit; used.add(id!) }
+    } else if (old && i < old.childCount) prev = old.child(i)
+    return prev ? prev.type.create(prev.attrs, para.content, prev.marks) : assignIds(para, taken)
   })
 }
 
@@ -843,7 +852,7 @@ function tableOp(tr: Transform, op: Extract<DocOp, { op: `table_${string}` }>, c
       const straddle = cells.find(c => c.top < op.rows && c.top + c.rowspan > op.rows)
       if (straddle) throw new OpError('invalid_structure', `(${straddle.top}, ${straddle.left}) 的合并单元格跨过了表头边界`, { hint: '先 table_split_cell 拆开，或调整表头行数。' })
       const out = cells.map(c => ({ ...c, node: c.node.type.create({ ...c.node.attrs, header: c.top < op.rows }, c.node.content, c.node.marks) }))
-      return replaceTable(tr, target, out, grid.height, op.id, { ...target.node.attrs, header_rows: op.rows })
+      return replaceTable(tr, target, out, grid.height, op.id, { ...target.node.attrs, header_explicit: true })
     }
     case 'table_set_style': {
       let attrs = target.node.attrs

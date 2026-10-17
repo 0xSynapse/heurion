@@ -1,7 +1,6 @@
 import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
-import { cleanBibText } from '../literature/format.ts'
 import { colWidths } from '../model/schema.ts'
 import { readGrid, type GridCell } from '../model/table-grid.ts'
 import { looksLikeHeaderRow } from '../model/table-header.ts'
@@ -142,6 +141,9 @@ const IMAGE_EXT: Record<string, string> = {
 
 /** rPr 子元素在 schema 里的顺序（CT_RPr）；Word 对顺序敏感，合并后按此排序。 */
 const RPR_ORDER = ['rStyle', 'rFonts', 'b', 'bCs', 'i', 'iCs', 'caps', 'smallCaps', 'strike', 'dstrike', 'outline', 'shadow', 'emboss', 'imprint', 'noProof', 'snapToGrid', 'vanish', 'webHidden', 'color', 'spacing', 'w', 'kern', 'position', 'sz', 'szCs', 'highlight', 'u', 'effect', 'bdr', 'shd', 'fitText', 'vertAlign', 'rtl', 'cs', 'em', 'lang', 'eastAsianLayout', 'specVanish', 'oMath']
+
+/** pPr 子元素在 schema 里的顺序（CT_PPr）。 */
+const PPR_ORDER = ['pStyle', 'keepNext', 'keepLines', 'pageBreakBefore', 'framePr', 'widowControl', 'numPr', 'suppressLineNumbers', 'pBdr', 'shd', 'tabs', 'suppressAutoHyphens', 'kinsoku', 'wordWrap', 'overflowPunct', 'topLinePunct', 'autoSpaceDE', 'autoSpaceDN', 'bidi', 'adjustRightInd', 'snapToGrid', 'spacing', 'ind', 'contextualSpacing', 'mirrorIndents', 'suppressOverlap', 'jc', 'textDirection', 'textAlignment', 'textboxTightWrap', 'outlineLvl', 'divId', 'cnfStyle', 'rPr', 'sectPr', 'pPrChange']
 
 /** tcPr 中 tcW / gridSpan / vMerge 之后的子元素顺序（CT_TcPr）。 */
 const TCPR_ORDER = ['tcBorders', 'shd', 'noWrap', 'tcMar', 'textDirection', 'tcFitText', 'vAlign', 'hideMark']
@@ -456,17 +458,24 @@ export function exportDocx(input: ExportInput): ExportResult {
       : orig && orig.grid.length === width ? orig.grid : Array.from({ length: width }, () => Math.floor(total / width))
     const spanW = (left: number, span: number) => colWs.slice(left, left + span).reduce((a, b) => a + b, 0)
 
-    // 重复表头行：单列表格（表单型，如申报书章节表）一律不加；
-    // 多列且原文件显式标注过 → 沿用模型里开头连续的 header 行（不受长度限制）；显式未标注 → 不加；
-    // 无原文件（新建表格）→ 仅首行且符合共用的表头规则时才加
-    // table_set_header 显式设定的行数优先
+    // 重复表头行（Word 只认表格开头连续的几行）：
+    // 显式设定过（table_set_header / 工具栏）→ 开头连续的表头行；
+    // 否则单列表格（表单型，如申报书章节表）一律不加；多列且原文件显式标注过 → 开头连续的表头行（不受长度限制）；
+    // 原文件显式未标注 → 不加；无原文件（新建表格）→ 仅首行且符合共用的表头规则时才加
+    let leading = 0
+    while (leading < node.childCount) {
+      let all = node.child(leading).childCount > 0
+      node.child(leading).forEach(c => { if (!c.attrs.header) all = false })
+      if (!all) break
+      leading++
+    }
     let headerRows = 0
-    if (node.attrs.header_rows !== null && node.attrs.header_rows !== undefined) {
-      headerRows = Math.min(node.attrs.header_rows as number, grid.height)
+    if (node.attrs.header_explicit) {
+      headerRows = leading
     } else if (width < 2) {
       // 不加
     } else if (origHasTblHeader === true) {
-      while (headerRows < node.childCount && node.child(headerRows).firstChild?.attrs.header) headerRows++
+      headerRows = leading
     } else if (origHasTblHeader === null && node.firstChild?.firstChild?.attrs.header) {
       const cells: PMNode[][] = []
       node.firstChild.forEach(cell => { const ps: PMNode[] = []; cell.forEach(p => ps.push(p)); cells.push(ps) })
@@ -535,9 +544,10 @@ export function exportDocx(input: ExportInput): ExportResult {
       }
     }
     const genPara = (p: PMNode, fmt: { pPr: string; rPr: string } | null) => {
-      // 段落自带样式或对齐（如 set_block_style 改过）时按模型生成；否则沿用原段落属性
-      const ppr = !fmt || p.attrs.style || p.attrs.align ? pPr(p) : fmt.pPr ? `<w:pPr>${fmt.pPr}</w:pPr>` : ''
-      return `<w:p>${ppr}${inline(p, fmt?.rPr ?? '')}</w:p>`
+      // 沿用原段落属性；段落自带样式或对齐（如 set_block_style 改过）时只覆盖 pStyle / jc，间距、缩进等照旧
+      const own = p.attrs.style || p.attrs.align ? innerOf(pPr(p)) : ''
+      const merged = !fmt ? own : own ? mergeEls(fmt.pPr, own, PPR_ORDER) : fmt.pPr
+      return `<w:p>${merged ? `<w:pPr>${merged}</w:pPr>` : ''}${inline(p, fmt?.rPr ?? '')}</w:p>`
     }
     const cellParas = (cell: GridCell): string => {
       const fallback = fmtSource(cell)
@@ -642,9 +652,15 @@ export function exportDocx(input: ExportInput): ExportResult {
   let bodyEndIdx = input.doc.childCount
   let hasTrailingRefHeading = false
   if (used.length > 0) {
-    // 只有与本文档某条引用文本一致的 [n] 条目才视为平台上次导出的静态参考文献表；
-    // 遇到对不上的条目即视为用户自己写的文献表，停止扫描，其内容全部保留
-    const knownRefs = new Set(input.citations.map(c => cleanBibText(c.formatted)))
+    // 与本文档某条引用文本一致、或带着某条引用 DOI 的 [n] 条目，视为平台上次导出的静态参考文献表
+    // （引用文本后来更新过也认得出）；遇到对不上的条目即视为用户自己写的文献表，停止扫描，其内容全部保留
+    const norm = (t: string) => t.replace(/\s+/g, ' ').trim()
+    const knownRefs = new Set(input.citations.map(c => norm(c.formatted)))
+    const knownDois = new Set(input.citations.map(c => c.doi.toLowerCase()).filter(d => d.startsWith('10.')))
+    const isKnownRef = (text: string) => {
+      if (knownRefs.has(norm(text))) return true
+      return [...text.matchAll(/\b10\.\d{4,9}\/[^\s,;]+/g)].some(m => knownDois.has(m[0].replace(/[.)\]]+$/, '').toLowerCase()))
+    }
     let i = input.doc.childCount - 1
     let firstRefIdx = -1
     let foreignEntry = false
@@ -657,7 +673,7 @@ export function exportDocx(input: ExportInput): ExportResult {
       }
       const entry = n.type.name === 'paragraph' ? /^\[\d+\]\s+(\S[\s\S]*)$/.exec(txt) : null
       if (entry) {
-        if (!knownRefs.has(cleanBibText(entry[1]!))) {
+        if (!isKnownRef(entry[1]!)) {
           foreignEntry = true
           break
         }
@@ -696,7 +712,7 @@ export function exportDocx(input: ExportInput): ExportResult {
       body += `<w:p><w:pPr><w:pStyle w:val="${esc(h)}"/></w:pPr><w:r><w:t>参考文献</w:t></w:r></w:p>`
     }
     used.forEach((id, i) => {
-      body += `<w:p><w:pPr><w:ind w:left="440" w:hanging="440"/></w:pPr><w:r><w:t xml:space="preserve">[${i + 1}] ${esc(cleanBibText(byId.get(id)!.formatted))}</w:t></w:r></w:p>`
+      body += `<w:p><w:pPr><w:ind w:left="440" w:hanging="440"/></w:pPr><w:r><w:t xml:space="preserve">[${i + 1}] ${esc(byId.get(id)!.formatted)}</w:t></w:r></w:p>`
     })
   }
 

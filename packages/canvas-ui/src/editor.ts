@@ -591,7 +591,7 @@ const insertTable: Command = (state, dispatch) => {
   return true
 }
 
-/** 首行设为 / 取消表头（并记下显式表头行数，导出时据此决定跨页重复）。 */
+/** 首行设为 / 取消表头（并标记表头为显式设定，导出时据此决定跨页重复）。 */
 const toggleHeaderRow: Command = (state, dispatch) => {
   if (!isInTable(state)) return false
   const t = findTable(state.selection.$from)
@@ -603,7 +603,7 @@ const toggleHeaderRow: Command = (state, dispatch) => {
   if (dispatch) {
     const tr = state.tr
     first.forEach((cell, off) => { tr.setNodeMarkup(t.pos + 2 + off, undefined, { ...cell.attrs, header: on }) })
-    tr.setNodeMarkup(t.pos, undefined, { ...t.node.attrs, header_rows: on ? 1 : 0 })
+    tr.setNodeMarkup(t.pos, undefined, { ...t.node.attrs, header_explicit: true })
     dispatch(tr)
   }
   return true

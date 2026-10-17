@@ -682,6 +682,7 @@ export class Store {
     CREATE INDEX IF NOT EXISTS idx_turn_queue_user ON turn_queue (user_id);
     CREATE INDEX IF NOT EXISTS idx_docs_owner_deleted ON docs (owner, deleted_at);`)
     this.db.exec('CREATE INDEX IF NOT EXISTS users_tenant ON users (tenant_id)')
+    this.cleanLegacyCitations()
     // 科室与知家分享（docs/design/SHARING.md）
     this.db.exec(`CREATE TABLE IF NOT EXISTS tenant_departments (
       id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL
@@ -1978,9 +1979,8 @@ export class Store {
 
   // —— 引用 ——
 
-  upsertCitation(raw: { doc_id: string; doi: string; pmid: string | null; formatted: string; url: string | null }): CitationRow {
-    // 入库前统一清理 HTML 标签与转义实体，所有输出（HTML、markdown、docx、MCP）共用干净文本
-    const input = { ...raw, formatted: cleanBibText(raw.formatted) }
+  /** formatted 由已清理的文献元数据生成（清理在抓取器里做一次），这里原样存。 */
+  upsertCitation(input: { doc_id: string; doi: string; pmid: string | null; formatted: string; url: string | null }): CitationRow {
     const existing = this.db.prepare('SELECT * FROM citations WHERE doc_id = ? AND doi = ?').get(input.doc_id, input.doi) as CitationRow | undefined
     if (existing) {
       if (input.formatted && input.formatted !== existing.formatted) {
@@ -1988,7 +1988,7 @@ export class Store {
           .run(input.formatted, input.pmid, input.url, existing.id)
         return this.db.prepare('SELECT * FROM citations WHERE id = ?').get(existing.id) as unknown as CitationRow
       }
-      return { ...existing, formatted: cleanBibText(existing.formatted) }
+      return existing
     }
     const id = 'c' + randomUUID().replace(/-/g, '').slice(0, 7)
     this.db.prepare('INSERT INTO citations (id, doc_id, doi, pmid, formatted, url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -2006,10 +2006,24 @@ export class Store {
     this.db.prepare('INSERT INTO node_src (doc_id, node_id, xml) SELECT ?, node_id, xml FROM node_src WHERE doc_id = ?').run(to, from)
   }
 
+  /**
+   * 一次性迁移：清理逻辑放到抓取器之前入库的引用可能带 HTML 标签 / 转义实体，在这里清理一遍。
+   * cleanBibText 不是幂等的，用 app_settings 里的标记保证只执行一次。
+   */
+  cleanLegacyCitations(): void {
+    const KEY = 'migration.citations_clean_text'
+    if (this.db.prepare('SELECT 1 FROM app_settings WHERE key = ?').get(KEY)) return
+    const rows = this.db.prepare('SELECT id, formatted FROM citations').all() as Array<{ id: string; formatted: string }>
+    const update = this.db.prepare('UPDATE citations SET formatted = ? WHERE id = ?')
+    for (const r of rows) {
+      const clean = cleanBibText(r.formatted)
+      if (clean !== r.formatted) update.run(clean, r.id)
+    }
+    this.db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?)').run(KEY, new Date().toISOString())
+  }
+
   listCitations(docId: string): CitationRow[] {
-    // 兼容清理逻辑上线前已入库、仍带原始实体的旧记录
-    return (this.db.prepare('SELECT * FROM citations WHERE doc_id = ? ORDER BY created_at').all(docId) as unknown as CitationRow[])
-      .map(c => ({ ...c, formatted: cleanBibText(c.formatted) }))
+    return this.db.prepare('SELECT * FROM citations WHERE doc_id = ? ORDER BY created_at').all(docId) as unknown as CitationRow[]
   }
 
   // —— 评论 ——

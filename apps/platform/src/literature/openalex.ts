@@ -1,4 +1,4 @@
-import { normalizeDoi } from './format.ts'
+import { cleanBibText, normalizeDoi } from './format.ts'
 import type { Article, FetchLike } from './types.ts'
 
 interface OpenAlexAuthor {
@@ -57,9 +57,9 @@ export class OpenAlexClient {
       return {
         pmid,
         doi,
-        title: w.title ?? w.display_name ?? 'Untitled',
-        authors: (w.authorships ?? []).map(a => a.author?.display_name).filter((name): name is string => Boolean(name)),
-        journal: w.primary_location?.source?.display_name ?? 'Unknown Journal',
+        title: cleanBibText(w.title ?? w.display_name ?? 'Untitled'),
+        authors: (w.authorships ?? []).map(a => a.author?.display_name).filter((name): name is string => Boolean(name)).map(cleanBibText),
+        journal: cleanBibText(w.primary_location?.source?.display_name ?? 'Unknown Journal'),
         year: w.publication_year ? String(w.publication_year) : '',
         volume: w.biblio?.volume ?? undefined,
         issue: w.biblio?.issue ?? undefined,
@@ -96,9 +96,9 @@ export class OpenAlexClient {
       return {
         pmid,
         doi: parsedDoi,
-        title: w.title ?? w.display_name ?? 'Untitled',
-        authors: (w.authorships ?? []).map(a => a.author?.display_name).filter((name): name is string => Boolean(name)),
-        journal: w.primary_location?.source?.display_name ?? 'Unknown Journal',
+        title: cleanBibText(w.title ?? w.display_name ?? 'Untitled'),
+        authors: (w.authorships ?? []).map(a => a.author?.display_name).filter((name): name is string => Boolean(name)).map(cleanBibText),
+        journal: cleanBibText(w.primary_location?.source?.display_name ?? 'Unknown Journal'),
         year: w.publication_year ? String(w.publication_year) : '',
         volume: w.biblio?.volume ?? undefined,
         issue: w.biblio?.issue ?? undefined,

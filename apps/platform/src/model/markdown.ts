@@ -31,8 +31,8 @@ function idPrefixRule(state: StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x7b /* { */) return false
   const m = ID_PREFIX_INLINE.exec(state.src.slice(state.pos))
   if (!m) return false
-  // id 由平台管理，内容丢弃；留一个空标记供表格单元格识别段落边界（buildInline 忽略它）
-  if (!silent) state.push('id_marker', '', 0)
+  // id 由平台管理，内容丢弃；留一个空标记（meta 里带 id）供表格单元格识别段落边界与对回原段落（buildInline 忽略它）
+  if (!silent) state.push('id_marker', '', 0).meta = { id: /\{#([a-z][a-z0-9]{2,15})\}/.exec(m[0])![1] }
   state.pos += m[0].length
   return true
 }
@@ -53,30 +53,35 @@ export function parseBlocks(source: string): PMNode[] {
   return nodes
 }
 
-/** 解析单元格内容：`<br>` 后紧跟 `{#id}` 处分段，其余 `<br>` 为段内换行。至少返回一个段落。 */
-export function parseCell(source: string): PMNode[] {
+/**
+ * 解析单元格内容：`<br>` 后紧跟 `{#id}` 处分段，其余 `<br>` 为段内换行。至少返回一个段落。
+ * 每段带上它前面写的 id（没写为 null），供 table_set_cells 对回原段落。
+ */
+export function parseCell(source: string): Array<{ para: PMNode; id: string | null }> {
   const tokens = md.parseInline(source, {})[0]?.children ?? []
   return cellParagraphs(tokens)
 }
 
-function cellParagraphs(children: Token[]): PMNode[] {
+function cellParagraphs(children: Token[]): Array<{ para: PMNode; id: string | null }> {
   const isBr = (t: Token) => t.type === 'hardbreak' || (t.type === 'html_inline' && /^<br\s*\/?>$/i.test(t.content.trim()))
-  const segments: Token[][] = [[]]
+  const segments: Array<{ tokens: Token[]; id: string | null }> = [{ tokens: [], id: null }]
   for (const t of children) {
     const cur = segments[segments.length - 1]!
     if (t.type === 'id_marker') {
       // 只在段首或换行后才算段落边界；文字中间的 {#id} 照旧丢弃
-      const meaningful = cur.filter(x => !(x.type === 'text' && !x.content.trim()))
+      const meaningful = cur.tokens.filter(x => !(x.type === 'text' && !x.content.trim()))
       const last = meaningful[meaningful.length - 1]
-      if (last && isBr(last)) {
-        cur.splice(cur.lastIndexOf(last))
-        segments.push([])
+      const id = (t.meta as { id: string }).id
+      if (!last) cur.id ??= id
+      else if (isBr(last)) {
+        cur.tokens.splice(cur.tokens.lastIndexOf(last))
+        segments.push({ tokens: [], id })
       }
       continue
     }
-    cur.push(t)
+    cur.tokens.push(t)
   }
-  return segments.map(seg => schema.node('paragraph', null, buildInline(seg)))
+  return segments.map(seg => ({ para: schema.node('paragraph', null, buildInline(seg.tokens)), id: seg.id }))
 }
 
 /** 解析为行内内容（replace_text 的替换文本、表格单元格）。 */
@@ -182,7 +187,7 @@ function buildTable(tokens: Token[], start: number): [PMNode, number] {
     else if (t.type === 'th_open' || t.type === 'td_open') {
       const inline = tokens[i + 1]!
       const raw = inline.content.trim()
-      row.push(raw === '^' || raw === '<' ? raw : { header: t.type === 'th_open', paras: cellParagraphs(inline.children ?? []) })
+      row.push(raw === '^' || raw === '<' ? raw : { header: t.type === 'th_open', paras: cellParagraphs(inline.children ?? []).map(x => x.para) })
       i += 3
       continue
     }

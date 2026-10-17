@@ -1,3 +1,4 @@
+import { cleanBibText } from './format.ts'
 import type { Article, FetchLike } from './types.ts'
 
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
@@ -101,9 +102,10 @@ function toArticle(d: SummaryDoc): Article {
   return {
     pmid: d.uid,
     doi: doi ? doi.toLowerCase() : null,
-    title: decodeXmlText(d.title ?? ''),
-    authors: (d.authors ?? []).map(a => a.name),
-    journal: d.source ?? d.fulljournalname ?? '',
+    // 进入平台的文献元数据在这里清理一次（标签、实体、空白）
+    title: cleanBibText(d.title ?? ''),
+    authors: (d.authors ?? []).map(a => cleanBibText(a.name)).filter(Boolean),
+    journal: cleanBibText(d.source ?? d.fulljournalname ?? ''),
     year: (d.pubdate ?? '').slice(0, 4),
     ...(d.volume ? { volume: d.volume } : {}),
     ...(d.issue ? { issue: d.issue } : {}),

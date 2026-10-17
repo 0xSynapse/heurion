@@ -73,28 +73,30 @@ export function formatGbt7714(a: Article): string {
   return parts.filter(Boolean).join(' ')
 }
 
-/** 清理文献元数据中的 HTML/JATS 标签、转义实体与多余换行空白。 */
+const NAMED_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
+
+/** 单遍解码 XML / HTML 实体：每个实体只解一次（`&amp;lt;` → `&lt;`，不会再变成 `<`）。 */
+export function decodeEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (whole, ent: string) => {
+    if (ent[0] !== '#') return NAMED_ENTITIES[ent.toLowerCase()] ?? whole
+    const code = ent[1] === 'x' || ent[1] === 'X' ? parseInt(ent.slice(2), 16) : parseInt(ent.slice(1), 10)
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole
+  })
+}
+
+/**
+ * 清理文献元数据中的 HTML/JATS 标签、转义实体与多余换行空白。
+ * 不是幂等的（解码会改变含字面量 `&lt;` 的文本），所以只在抓取器把外部元数据转成 Article 时调用一次；
+ * 之后的格式化、入库、导出都直接使用清理过的文本。
+ */
 export function cleanBibText(raw: string): string {
-  return raw
-    .replace(/<\/?(?:i|b|u|em|strong|sup|sub|scp|span|p)\b[^>]*>/gi, '')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#0*39;|&apos;/gi, "'")
-    // &amp; 必须最后解码，否则 &amp;lt; 会被解码两次
-    .replace(/&amp;/gi, '&')
+  return decodeEntities(raw.replace(/<\/?(?:i|b|u|em|strong|sup|sub|scp|span|p)\b[^>]*>/gi, ''))
     .replace(/\s+/g, ' ')
     .trim()
 }
 
-/** 按指定格式生成引用文本（默认 AMA）。 */
-export function formatCitation(raw: Article, style: CitationStyle = 'ama'): string {
-  const a: Article = {
-    ...raw,
-    title: cleanBibText(raw.title),
-    journal: cleanBibText(raw.journal),
-    authors: raw.authors.map(cleanBibText).filter(Boolean),
-  }
+/** 按指定格式生成引用文本（默认 AMA）。Article 的文字字段已由抓取器清理过，这里不再清理。 */
+export function formatCitation(a: Article, style: CitationStyle = 'ama'): string {
   switch (style) {
     case 'vancouver': return formatVancouver(a)
     case 'apa': return formatApa(a)

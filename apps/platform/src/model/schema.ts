@@ -95,8 +95,10 @@ export const schema = new Schema({
     table: {
       group: 'block',
       content: 'table_row+',
-      // header_rows：显式设定的重复表头行数（null = 按导入 / 自动规则）；col_widths：各列相对宽度，逗号分隔（null = 沿用原文件或平均分）
-      attrs: { ...blockAttrs, header_rows: { default: null }, col_widths: { default: null } },
+      // header_explicit：表头由用户 / AI 显式设定过（table_set_header、工具栏「表头」），导出时开头连续的表头行都跨页重复，
+      // 不再套用导入 / 自动规则；行数始终由单元格的 header 属性推出，增删行时不会过时。
+      // col_widths：各列相对宽度，逗号分隔（null = 沿用原文件或平均分）
+      attrs: { ...blockAttrs, header_explicit: { default: false }, col_widths: { default: null } },
       isolating: true,
       tableRole: 'table',
       parseDOM: [{ tag: 'table' }],
