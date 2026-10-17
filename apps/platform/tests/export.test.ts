@@ -439,3 +439,45 @@ describe('代码审查回归（2026-10-17）', () => {
   })
 })
 
+describe('docx 导出：原文 XML 的非标准写法与扩展属性', () => {
+  it('单元格字体属性里的 w14 扩展元素全部保留（不同命名空间不互相覆盖），w: 元素在前', () => {
+    const NS = 'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"'
+    const rpr = `<w14:textOutline ${NS} w14:w="9525"/><w14:ligatures ${NS} w14:val="standard"/><w:sz w:val="21"/>`
+    const tbl = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:rPr>${rpr}</w:rPr><w:t>甲乙</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`
+    const t = importInto(docx(tbl))
+    const pid = t.docs.get(t.docId).child(0).child(0).child(0).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: pid, find: '乙', replace: '丙' }] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    const run = /<w:rPr>((?:(?!<\/w:rPr>)[\s\S])*)<\/w:rPr><w:t xml:space="preserve">甲丙/.exec(body)?.[1] ?? ''
+    expect(run).toBe(`<w:sz w:val="21"/><w14:textOutline ${NS} w14:w="9525"/><w14:ligatures ${NS} w14:val="standard"/>`)
+  })
+
+  const SHD = (c: string) => `<w:shd w:val="clear" w:color="auto" w:fill="${c}"/>`
+  const tc = (txt: string, extra: string, fill: string) => `<w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/>${extra}${SHD(fill)}</w:tcPr><w:p><w:r><w:t>${txt}</w:t></w:r></w:p></w:tc>`
+  for (const [label, cont] of [['双引号', '<w:vMerge w:val="continue"/>'], ['单引号', "<w:vMerge w:val='continue'/>"], ['省略 val', '<w:vMerge/>'], ['非自闭合', '<w:vMerge></w:vMerge>']] as const) {
+    it(`合并续行格写法（${label}）：导出端与导入端对齐，相邻格的格式不错位`, () => {
+      const tbl = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>`
+        + `<w:tr>${tc('合并', '<w:vMerge w:val="restart"/>', 'AAAAAA')}${tc('右上', '', 'BBBBBB')}</w:tr>`
+        + `<w:tr>${tc('', cont, 'AAAAAA')}${tc('右下', '', 'CCCCCC')}</w:tr></w:tbl>`
+      const t = importInto(docx(tbl))
+      const pid = t.docs.get(t.docId).child(0).child(1).child(0).child(0).attrs.id as string
+      t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: pid, find: '右下', replace: '右下改' }] }, { actor: 'user', turnId: null })
+      const cells = bodyOf(t.exportNow().bytes).match(/<w:tc>[\s\S]*?<\/w:tc>/g)!
+      const cell = cells.find(c => c.includes('右下改'))!
+      expect(/w:fill="(\w+)"/.exec(cell)?.[1]).toBe('CCCCCC')
+    })
+  }
+
+  it('表头标记与列宽用单引号写：仍识别为显式表头、沿用原列宽', () => {
+    const row = (a: string, b: string, pr = '') => `<w:tr>${pr}<w:tc><w:p><w:r><w:t>${a}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>${b}</w:t></w:r></w:p></w:tc></w:tr>`
+    const tbl = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='1500'/><w:gridCol w:w='6500'/></w:tblGrid>`
+      + row('很长很长的表头文字'.repeat(10), '列二', "<w:trPr><w:tblHeader w:val='1'/></w:trPr>") + row('数据1', '数据2') + '</w:tbl>'
+    const t = importInto(docx(tbl))
+    const pid = t.docs.get(t.docId).child(0).child(1).child(0).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: pid, find: '数据1', replace: '数据一' }] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body.match(/<w:tblHeader\/>/g)?.length).toBe(1)
+    expect(body).toContain('<w:gridCol w:w="1500"/><w:gridCol w:w="6500"/>')
+  })
+})
+

@@ -150,12 +150,26 @@ const TCPR_ORDER = ['tcBorders', 'shd', 'noWrap', 'tcMar', 'textDirection', 'tcF
 
 /** 合并两段子元素原文：同名元素以 over 为准，结果按给定的 schema 顺序排列。 */
 function mergeEls(base: string, over: string, order: string[]): string {
-  const name = (el: string) => /^<w:([A-Za-z]+)/.exec(el)?.[1] ?? ''
+  // 以带前缀的完整名字为键（w:sz、w14:textOutline……），不同命名空间的同名元素互不覆盖
+  const name = (el: string) => /^<([A-Za-z_][\w.-]*(?::[A-Za-z_][\w.-]*)?)/.exec(el)?.[1] ?? el
   const els = new Map<string, string>()
   for (const el of elementChildrenRaw(`<x>${base}</x>`)) els.set(name(el), el)
   for (const el of elementChildrenRaw(`<x>${over}</x>`)) els.set(name(el), el)
-  const rank = (n: string) => { const i = order.indexOf(n); return i === -1 ? order.length : i }
+  // w: 元素按 schema 顺序；扩展命名空间（w14: 等）排在后面，彼此保持原顺序（sort 是稳定的）
+  const rank = (n: string) => { const i = n.startsWith('w:') ? order.indexOf(n.slice(2)) : -1; return i === -1 ? order.length : i }
   return [...els.entries()].sort((a, b) => rank(a[0]) - rank(b[0])).map(e => e[1]).join('')
+}
+
+/** 原文元素开始标签里的属性值（兼容单双引号）；没有该属性返回 null。 */
+function attrOf(el: string, name: string): string | null {
+  const open = /^<[^>]*>/.exec(el)?.[0] ?? ''
+  const m = new RegExp(`\\s${name}\\s*=\\s*(["'])(.*?)\\1`).exec(open)
+  return m ? m[2]! : null
+}
+
+/** 原文元素里第一个名为 w:local 的直接子元素。 */
+function childEl(el: string | undefined, local: string): string | undefined {
+  return el ? elementChildrenRaw(el).find(k => new RegExp(`^<w:${local}\\b`).test(k)) : undefined
 }
 
 export function exportDocx(input: ExportInput): ExportResult {
@@ -400,7 +414,11 @@ export function exportDocx(input: ExportInput): ExportResult {
     trPr: Map<string, string>
     para: Map<string, string>
   }
-  const isVMergeContinue = (tc: string) => /<w:vMerge(?:\s+w:val="continue")?\s*\/>/.test(elementChildrenRaw(tc).find(k => /^<w:tcPr\b/.test(k)) ?? '')
+  // 与导入端的判定一致（docx-import：有 vMerge 且 val 缺省或为 continue），兼容单引号、非自闭合等写法
+  const isVMergeContinue = (tc: string) => {
+    const v = childEl(childEl(tc, 'tcPr'), 'vMerge')
+    return !!v && (attrOf(v, 'w:val') ?? 'continue') === 'continue'
+  }
   const tableSrc = (node: PMNode): TableSrc | null => {
     const id = node.attrs.id as string
     const xml = input.src(id)
@@ -409,7 +427,7 @@ export function exportDocx(input: ExportInput): ExportResult {
     const kids = elementChildrenRaw(xml)
     const out: TableSrc = {
       tblPr: kids.find(k => /^<w:tblPr\b/.test(k)) ?? '',
-      grid: [...(kids.find(k => /^<w:tblGrid\b/.test(k)) ?? '').matchAll(/<w:gridCol\b[^>]*?w:w="(\d+)"/g)].map(m => Number(m[1])),
+      grid: elementChildrenRaw(kids.find(k => /^<w:tblGrid\b/.test(k)) ?? '<x/>').filter(k => /^<w:gridCol\b/.test(k)).map(k => Number(attrOf(k, 'w:w') ?? 0)),
       tcPr: new Map(), trPr: new Map(), para: new Map(),
     }
     let bi = 0
@@ -443,10 +461,10 @@ export function exportDocx(input: ExportInput): ExportResult {
     const src = unchanged(node)
     if (src) return src
     const orig = tableSrc(node)
-    const firstTrMatch = orig ? /<w:tr\b[\s\S]*?<\/w:tr>/.exec(input.src(node.attrs.id as string)!) : null
-    const origHasTblHeader = firstTrMatch
-      ? /<w:tblHeader(?:\s+w:val="(?!0|false|off)[^"]*")?\s*\/>/.test(firstTrMatch[0])
-      : null
+    // 原表首行是否显式标了重复表头：与导入端一致（有 tblHeader 且 val 不是 0 / false / off；没标为 false；无原表为 null）
+    const firstTr = orig ? elementChildrenRaw(input.src(node.attrs.id as string)!).find(k => /^<w:tr\b/.test(k)) : undefined
+    const headerEl = childEl(childEl(firstTr, 'trPr'), 'tblHeader')
+    const origHasTblHeader = !orig ? null : !!headerEl && !/^(0|false|off)$/i.test(attrOf(headerEl, 'w:val') ?? '1')
     const grid = readGrid(node)
     const width = Math.max(1, grid.width)
     // 列宽：列数没变沿用原表各列宽度；列数变了按原表总宽平均分；新表 9000 twip 平均分
