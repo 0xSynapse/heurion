@@ -501,16 +501,22 @@ export function exportDocx(input: ExportInput): ExportResult {
     }
 
     const keyOf = (cell: GridCell) => cell.node.firstChild?.attrs.id as string | undefined
-    // 新加的单元格没有原文：借同一列最近的有原文的单元格（先往上找，再往下找）
+    // 新加的单元格没有原文：借同一列最近的有原文的单元格（先往上找，再往下找）；
+    // 整列都是新的（新加的列）时借同一行最近的（先往左，再往右）。边框写在单元格上的文件（WPS、LibreOffice 生成）靠这个才有边框
     const fmtSource = (cell: GridCell): GridCell | null => {
       if (!orig) return null
-      const k = keyOf(cell)
-      if (k && orig.tcPr.has(k)) return cell
+      const has = (other: GridCell | undefined) => { const k = other && keyOf(other); return !!k && orig.tcPr.has(k) }
+      if (has(cell)) return cell
       for (const dir of [-1, 1]) {
         for (let r = cell.top + dir; r >= 0 && r < grid.height; r += dir) {
           const other = grid.at(r, cell.left)
-          const ok = other && keyOf(other)
-          if (ok && orig.tcPr.has(ok)) return other
+          if (has(other)) return other!
+        }
+      }
+      for (const dir of [-1, 1]) {
+        for (let c = dir < 0 ? cell.left - 1 : cell.left + cell.colspan; c >= 0 && c < grid.width; c += dir) {
+          const other = grid.at(cell.top, c)
+          if (has(other)) return other!
         }
       }
       return null

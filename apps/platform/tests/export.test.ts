@@ -481,3 +481,20 @@ describe('docx 导出：原文 XML 的非标准写法与扩展属性', () => {
   })
 })
 
+describe('docx 导出：边框写在单元格上的表格（WPS / LibreOffice 生成）', () => {
+  it('新加的列借同一行相邻单元格的边框与底纹，表头格借表头格', () => {
+    const BORDERS = '<w:tcBorders><w:top w:val="single" w:sz="4"/><w:left w:val="single" w:sz="4"/><w:bottom w:val="single" w:sz="4"/><w:right w:val="single" w:sz="4"/></w:tcBorders>'
+    const tc = (t: string, fill: string) => `<w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/>${BORDERS}<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/></w:tcPr><w:p><w:r><w:t>${t}</w:t></w:r></w:p></w:tc>`
+    const tbl = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid><w:tr>${tc('指标', 'D9E2F3')}${tc('数值', 'D9E2F3')}</w:tr><w:tr>${tc('年龄', 'FFFFFF')}${tc('61', 'FFFFFF')}</w:tr></w:tbl>`
+    const t = importInto(docx(tbl))
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'table_insert_cols', id: t.docs.get(t.docId).child(0).attrs.id as string, at: 2, cells: ['P 值', '0.81'] }] }, { actor: 'ai', turnId: null })
+    const cells = bodyOf(t.exportNow().bytes).match(/<w:tc>[\s\S]*?<\/w:tc>/g)!
+    const head = cells.find(c => c.includes('P 值'))!
+    const body = cells.find(c => c.includes('0.81'))!
+    expect(head).toContain('<w:tcBorders>')
+    expect(head).toContain('w:fill="D9E2F3"')
+    expect(body).toContain('<w:tcBorders>')
+    expect(body).toContain('w:fill="FFFFFF"')
+  })
+})
+
