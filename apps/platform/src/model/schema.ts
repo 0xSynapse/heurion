@@ -98,7 +98,8 @@ export const schema = new Schema({
       // header_explicit：表头由用户 / AI 显式设定过（table_set_header、工具栏「表头」），导出时开头连续的表头行都跨页重复，
       // 不再套用导入 / 自动规则；行数始终由单元格的 header 属性推出，增删行时不会过时。
       // col_widths：各列相对宽度，逗号分隔（null = 沿用原文件或平均分）
-      attrs: { ...blockAttrs, header_explicit: { default: false }, col_widths: { default: null } },
+      // header_rows：旧版（2026-10-17 短暂上线）的显式表头行数，只为兼容读取，非 null 等同于 header_explicit
+      attrs: { ...blockAttrs, header_explicit: { default: false }, header_rows: { default: null }, col_widths: { default: null } },
       isolating: true,
       tableRole: 'table',
       parseDOM: [{ tag: 'table' }],

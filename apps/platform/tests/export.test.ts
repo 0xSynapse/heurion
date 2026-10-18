@@ -401,7 +401,7 @@ describe('docx 导出：表格样式设定', () => {
 })
 
 describe('代码审查回归（2026-10-17）', () => {
-  it('引用文本更新过：末尾的旧平台文献表按 DOI 认出，不会出现两份参考文献表', () => {
+  it('末尾已有条目与平台引用是同一篇（DOI 相同、文本已不同）：条目原样保留，引用沿用其编号，不出现两份参考文献表', () => {
     const t = importInto(docx([
       p('心衰是常见病。'),
       p('参考文献', '<w:pStyle w:val="Heading1"/>'),
@@ -411,9 +411,10 @@ describe('代码审查回归（2026-10-17）', () => {
     const para = t.docs.get(t.docId).child(0).attrs.id as string
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: para, find: '常见病', replace: `常见病[@c:${c.id}]` }] }, { actor: 'user', turnId: null })
     const body = bodyOf(t.exportNow().bytes)
-    expect(body).not.toContain('Old title')
+    expect(body).toContain('[1] Doe J. Old title')
+    expect(body).not.toContain('New title')
     expect(body.match(/参考文献/g)!.length).toBe(1)
-    expect(body).toContain('[1] Doe J. New title')
+    expect(body).toContain('<w:vertAlign w:val="superscript"/></w:rPr><w:t>[1]</w:t>')
   })
 
   it('显式表头后在上方插入普通行：不再重复表头；删掉开头的表头行：剩下的表头行照常重复', () => {
@@ -498,6 +499,16 @@ describe('docx 导出：边框写在单元格上的表格（WPS / LibreOffice �
     expect(head).toContain('w:fill="D9E2F3"')
     expect(body).toContain('<w:tcBorders>')
     expect(body).toContain('w:fill="FFFFFF"')
+  })
+})
+
+describe('兼容旧数据', () => {
+  it('旧版的 header_rows（10-17 短暂上线）仍按显式表头处理：单列表格也重复表头', () => {
+    const [base] = parseBlocks('| 章节 |\n| --- |\n| 内容 |')
+    const table = base!.type.create({ ...base!.attrs, header_rows: 1 }, base!.content)
+    expect(table.attrs.header_rows).toBe(1)
+    const out = exportDocx({ doc: schema.node('doc', null, [table]), baseline: null, pkg: null, src: () => null, citations: [], comments: [], asset: () => null })
+    expect(bodyOf(out.bytes).match(/<w:tblHeader\/>/g)?.length).toBe(1)
   })
 })
 

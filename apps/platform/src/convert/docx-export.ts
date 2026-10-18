@@ -489,7 +489,7 @@ export function exportDocx(input: ExportInput): ExportResult {
       leading++
     }
     let headerRows = 0
-    if (node.attrs.header_explicit) {
+    if (node.attrs.header_explicit || (node.attrs.header_rows !== null && node.attrs.header_rows !== undefined)) {
       headerRows = leading
     } else if (width < 2) {
       // 不加
@@ -684,9 +684,12 @@ export function exportDocx(input: ExportInput): ExportResult {
       const last = input.doc.child(refPlan.bodyEnd - 1)
       const src = last.attrs.id ? input.src(last.attrs.id as string) : null
       if (src) {
+        // 沿用段落与字体格式，但不带分节符、段前分页与修订标记（否则每条新条目都会另起一节 / 一页、修订 id 重复）
         const kids = elementChildrenRaw(src)
-        pprXml = kids.find(k => /^<w:pPr\b/.test(k)) ?? ''
-        rprXml = childEl(kids.find(k => /^<w:r\b/.test(k)), 'rPr') ?? ''
+        const ppr = kids.find(k => /^<w:pPr\b/.test(k))
+        const rpr = childEl(kids.find(k => /^<w:r\b/.test(k)), 'rPr')
+        pprXml = ppr ? `<w:pPr>${stripEls(innerOf(ppr), ['sectPr', 'pPrChange', 'pageBreakBefore'])}</w:pPr>` : ''
+        rprXml = rpr ? `<w:rPr>${stripEls(innerOf(rpr), ['rPrChange', 'ins', 'del'])}</w:rPr>` : ''
       }
       warnings.push(refPlan.duplicates > 0
         ? `正文末尾已有参考文献表（${refPlan.userCount} 条）：平台引用已合并进去，从 [${refPlan.userCount + 1}] 起编号；其中 ${refPlan.duplicates} 条与表中已有文献相同，沿用原编号`

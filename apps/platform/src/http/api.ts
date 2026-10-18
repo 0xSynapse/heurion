@@ -979,7 +979,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       // 编辑器按同一规则实时编号（model/references.ts numberCitations）；user_refs > 0 表示平台引用合并进了正文末尾用户自己的文献表
       citation_numbering: {
         offset: refPlan.userCount,
-        fixed: Object.fromEntries([...refPlan.numbers].filter(([id]) => !refPlan.append.some(a => a.id === id))),
+        fixed: Object.fromEntries(refPlan.fixed),
         user_refs: refPlan.userCount,
         duplicates: refPlan.duplicates,
       },

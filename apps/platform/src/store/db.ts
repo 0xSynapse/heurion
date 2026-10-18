@@ -2008,18 +2008,20 @@ export class Store {
 
   /**
    * 一次性迁移：清理逻辑放到抓取器之前入库的引用可能带 HTML 标签 / 转义实体，在这里清理一遍。
-   * cleanBibText 不是幂等的，用 app_settings 里的标记保证只执行一次。
+   * cleanBibText 不是幂等的，用 app_settings 里的标记保证只执行一次；清理与写标记在同一事务里，中途崩溃不会留下清理了一半又没标记的状态。
    */
   cleanLegacyCitations(): void {
     const KEY = 'migration.citations_clean_text'
     if (this.db.prepare('SELECT 1 FROM app_settings WHERE key = ?').get(KEY)) return
-    const rows = this.db.prepare('SELECT id, formatted FROM citations').all() as Array<{ id: string; formatted: string }>
-    const update = this.db.prepare('UPDATE citations SET formatted = ? WHERE id = ?')
-    for (const r of rows) {
-      const clean = cleanBibText(r.formatted)
-      if (clean !== r.formatted) update.run(clean, r.id)
-    }
-    this.db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?)').run(KEY, new Date().toISOString())
+    this.transaction(() => {
+      const rows = this.db.prepare('SELECT id, formatted FROM citations').all() as Array<{ id: string; formatted: string }>
+      const update = this.db.prepare('UPDATE citations SET formatted = ? WHERE id = ?')
+      for (const r of rows) {
+        const clean = cleanBibText(r.formatted)
+        if (clean !== r.formatted) update.run(clean, r.id)
+      }
+      this.db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?)').run(KEY, new Date().toISOString())
+    })
   }
 
   listCitations(docId: string): CitationRow[] {

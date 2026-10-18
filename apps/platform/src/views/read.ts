@@ -1,6 +1,7 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import { locate, threadMarks } from '../model/anchors.ts'
 import { plainText, serializeBlock } from '../model/markdown.ts'
+import { citationOrderOf } from '../model/references.ts'
 import { diffNodes } from '../model/runtime.ts'
 import type { CitationRow, CommentRow } from '../store/db.ts'
 
@@ -18,13 +19,8 @@ function topBlocks(doc: PMNode): PMNode[] {
 }
 
 /** 引用编号：按正文中首次出现顺序。 */
-export function citationOrder(doc: PMNode): string[] {
-  const order: string[] = []
-  doc.descendants(n => {
-    if (n.type.name === 'citation' && !order.includes(n.attrs.cite_id as string)) order.push(n.attrs.cite_id as string)
-  })
-  return order
-}
+/** 正文里平台引用的首次出现顺序（与编号规则同一实现，见 model/references.ts）。 */
+export const citationOrder = citationOrderOf
 
 export function outline(input: { doc: PMNode; docId: string; title: string; rev: number; citations: CitationRow[]; openComments: number }): string {
   const blocks = topBlocks(input.doc)

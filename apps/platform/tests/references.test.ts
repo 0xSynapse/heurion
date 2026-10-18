@@ -44,16 +44,65 @@ describe('参考文献合并进用户自己的文献表', () => {
     expect(out.warnings[0]).toContain('其中 1 条与表中已有文献相同，沿用原编号')
   })
 
-  it('合并后的文件重新导入再导出：上次追加的平台条目去掉重排，始终只有一份文献表', () => {
+  it('合并后的文件下载后再上传、再次引用同一篇：沿用表里的编号，不重复追加，始终只有一份文献表', () => {
     const cites = [{ doi: '10.1056/new', formatted: 'Doe J. New. NEJM. 2020. doi:10.1056/new' }]
     const first = setup(USER, cites).exportNow().bytes
-    // 引用文本后来更新过；在重新导入的文稿里再次插入同一条引用
+    // 引用文本后来更新过；在重新上传的文稿里再次插入同一条引用
     const again = setup([], [{ doi: '10.1056/new', formatted: 'Doe J, Roe K. New (updated). NEJM. 2020. doi:10.1056/new' }], first)
-    const body = bodyOf(again.exportNow().bytes)
+    const out = again.exportNow()
+    const body = bodyOf(out.bytes)
     expect(body.match(/参考文献/g)!.length).toBe(1)
     expect(body.match(/Doe J/g)!.length).toBe(1)
-    expect(body).toContain('[3] Doe J, Roe K. New (updated).')
+    expect(body).toContain('[3] Doe J. New. NEJM.')
     expect(body).toContain('Smith A. Foo study')
+    expect(out.warnings[0]).toContain('都已在末尾的参考文献表中')
+  })
+
+  it('表中各条都带 DOI、且都登记过但只引用了其中一篇：用户条目一条不删，引用沿用其编号', () => {
+    const entries = ['[1] A. One. doi:10.1001/aaa', '[2] B. Two. doi:10.1001/bbb', '[3] C. Three. doi:10.1001/ccc']
+    const t = setup(entries, [{ doi: '10.1001/bbb', formatted: 'B fmt' }])
+    // 另外两篇只登记、没在正文里用
+    t.store.upsertCitation({ doc_id: t.docId, doi: '10.1001/aaa', pmid: null, formatted: 'A fmt', url: null })
+    t.store.upsertCitation({ doc_id: t.docId, doi: '10.1001/ccc', pmid: null, formatted: 'C fmt', url: null })
+    const plan = referencePlan(t.docs.get(t.docId), t.store.listCitations(t.docId))
+    expect(plan.numbers.get(t.ids[0]!)).toBe(2)
+    expect(plan.append).toEqual([])
+    const body = bodyOf(t.exportNow().bytes)
+    for (const e of entries) expect(body).toContain(e)
+    expect(body).not.toContain('B fmt')
+  })
+
+  it('表中最后一条正是被引的那篇：保留用户写的文本，沿用其编号', () => {
+    const t = setup(['[1] A. One.', '[2] B. Two.', '[3] C. Three (user wording). doi:10.1001/ccc'], [{ doi: '10.1001/ccc', formatted: 'C platform wording' }])
+    const plan = referencePlan(t.docs.get(t.docId), t.store.listCitations(t.docId))
+    expect(plan.numbers.get(t.ids[0]!)).toBe(3)
+    expect(plan.duplicates).toBe(1)
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain('C. Three (user wording)')
+    expect(body).not.toContain('C platform wording')
+  })
+
+  it('GB/T 7714 写法「[1]张三」（括号后不空格）与全角括号「［2］」也认作已有文献表', () => {
+    const t = setup(['[1]张三. 心衰研究[J]. 中华心血管病杂志, 2020.', '［2］李四. 预后模型[J]. 中华内科杂志, 2021.'], [{ doi: '10.1056/new', formatted: 'Doe J. New. NEJM. 2020.' }])
+    const plan = referencePlan(t.docs.get(t.docId), t.store.listCitations(t.docId))
+    expect(plan.userCount).toBe(2)
+    expect(plan.numbers.get(t.ids[0]!)).toBe(3)
+  })
+
+  it('正文里还没有平台引用时也给出已有文献表的条目数（编辑器插入第一条引用就编对号）', () => {
+    const t = setup(['[1] A.', '[2] B.'], [])
+    expect(referencePlan(t.docs.get(t.docId), t.store.listCitations(t.docId)).userCount).toBe(2)
+  })
+
+  it('追加条目沿用最后一条的格式，但不带分节符、段前分页与修订标记', () => {
+    const last = '<w:p><w:pPr><w:pageBreakBefore/><w:ind w:left="420"/><w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:pPr><w:r><w:rPr><w:sz w:val="21"/></w:rPr><w:t xml:space="preserve">[2] Lee B. Bar trial. JAMA. 2002.</w:t></w:r></w:p>'
+    const file = docx([p('心衰是常见病。'), p('参考文献', '<w:pStyle w:val="Heading1"/>'), p('[1] Smith A. Foo study. Lancet. 2001.'), last].join(''))
+    const t = setup([], [{ doi: '10.1056/new', formatted: 'Doe J. New. NEJM. 2020.' }], file)
+    const appended = /<w:p>(?:(?!<\/w:p>)[\s\S])*\[3\] Doe J[\s\S]*?<\/w:p>/.exec(bodyOf(t.exportNow().bytes))![0]
+    expect(appended).toContain('<w:ind w:left="420"/>')
+    expect(appended).toContain('<w:sz w:val="21"/>')
+    expect(appended).not.toContain('sectPr')
+    expect(appended).not.toContain('pageBreakBefore')
   })
 
   it('网页预览与 markdown 导出同样合并：不另起标题，编号接着用户的表', () => {

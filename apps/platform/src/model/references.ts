@@ -1,34 +1,37 @@
 import type { Node as PMNode } from 'prosemirror-model'
+import { DOI as DOI_PATTERN } from '../ops/citation-check.ts'
 
 /**
- * 参考文献编号与正文末尾文献表的合并（docx 导出、网页预览、markdown 导出、编辑器与 MCP 共用）。
+ * 参考文献编号与正文末尾文献表的合并（docx 导出、网页预览、markdown 导出、编辑器、MCP 与论断核对共用）。
  *
- * 导入的文稿常在末尾自带一份手写的参考文献表（[1]…[k]，正文里写的是纯文字「[1]」）。
- * 平台引用（insert_citation）不另起一份文献表，而是接在用户的表后面编号：[k+1]、[k+2]……
- * 用户表里某条若带着某个平台引用的 DOI，该引用直接沿用那条的编号，不重复列出。
- * 上一次导出追加进去的平台条目（文本或 DOI 对得上）在下次导出时去掉重排，不会越积越多。
+ * 导入的文稿常在末尾自带一份参考文献表（[1]…[k]，正文里写的是纯文字「[1]」）。这份表是用户文档的内容，一律原样保留：
+ * - 平台引用（insert_citation）若与表中某条是同一篇（DOI 相同或文本相同），沿用那条的编号，不重复列出；
+ * - 其余平台引用接在表后编号：[k+1]、[k+2]……，不另起一份文献表。
+ * 平台导出的文件下载后再上传时，平台引用已变成纯文字「[n]」、文献表也成了文档内容，同样走上面的规则，不会越积越多。
  */
 
 /** 文献表标题：「参考文献」「References」「五、参考文献：」等。 */
 export const REF_TITLE = /^(?:[一二三四五六七八九十\d]+[.、\s]*)?(?:参考文献|references|bibliography)[:：]?$/i
-/** 文献表条目：「[12] 作者. 标题…」。 */
-const REF_ENTRY = /^\[(\d+)\]\s+(\S[\s\S]*)$/
-const DOI = /\b10\.\d{4,9}\/[^\s,;]+/g
+/** 文献表条目：「[12] 作者. 标题…」，也认 GB/T 7714 常见的「[12]作者」（括号后不空格）与全角括号「［12］」。 */
+const REF_ENTRY = /^[[［](\d+)[\]］]\s*(\S[\s\S]*)$/
+const DOI = new RegExp(DOI_PATTERN.source, 'gi')
 
 export interface CitationLike { id: string; doi: string; formatted: string }
 
 export interface ReferencePlan {
   /** 正文里每个平台引用的编号。 */
   numbers: Map<string, number>
-  /** 需要追加到文献表的平台引用（按编号排序；与用户条目重复的不在其中）。 */
+  /** 与表中已有条目是同一篇、沿用其编号的平台引用（正文里用到的）。 */
+  fixed: Map<string, number>
+  /** 需要追加到文献表的平台引用（按编号排序）。 */
   append: Array<{ id: string; n: number }>
-  /** 正文保留到哪个顶层块（不含）；之后是要去掉的旧平台条目、空行或（无用户条目时的）段落式标题。 */
+  /** 正文保留到哪个顶层块（不含）；之后只是空行或（没有条目时的）段落式标题。 */
   bodyEnd: number
   /** 末尾已有可复用的「参考文献」标题块（heading），追加时不再另起标题。 */
   hasHeading: boolean
-  /** 用户自己写的条目数（取最大编号）；> 0 表示平台引用合并进了用户的文献表。 */
+  /** 末尾已有文献表的条目数（取最大编号）；平台引用从它之后编号。正文里还没有平台引用时也照常给出（编辑器据此编号）。 */
   userCount: number
-  /** 与用户条目重复、沿用其编号的平台引用数。 */
+  /** 正文里用到的平台引用中，沿用已有条目编号的个数。 */
   duplicates: number
 }
 
@@ -54,51 +57,47 @@ export function citationOrderOf(doc: PMNode): string[] {
 }
 
 const norm = (t: string) => t.replace(/\s+/g, ' ').trim()
-const doisIn = (text: string) => [...text.matchAll(DOI)].map(m => m[0].replace(/[.)\]]+$/, '').toLowerCase())
+const doisIn = (text: string) => [...text.matchAll(DOI)].map(m => m[0].replace(/[.,;]+$/, '').toLowerCase())
 
 export function referencePlan(doc: PMNode, citations: readonly CitationLike[]): ReferencePlan {
   const byId = new Map(citations.map(c => [c.id, c]))
   const order = citationOrderOf(doc).filter(id => byId.has(id))
-  const knownText = new Set(citations.map(c => norm(c.formatted)))
-  const doiToId = new Map(citations.filter(c => c.doi.startsWith('10.')).map(c => [c.doi.toLowerCase(), c.id]))
-  const isPlatform = (text: string) => knownText.has(norm(text)) || doisIn(text).some(d => doiToId.has(d))
 
-  type Entry = { idx: number; n: number; text: string }
-  const entryAt = (i: number): Entry | null => {
+  // 从末尾往前：空行 → 文献表条目（全部当作文档内容保留）→「参考文献」标题
+  const entryAt = (i: number) => {
     const node = doc.child(i)
     if (node.type.name !== 'paragraph') return null
     const m = REF_ENTRY.exec(node.textContent.trim())
     return m ? { idx: i, n: Number(m[1]), text: m[2]! } : null
   }
   const isBlank = (i: number) => { const n = doc.child(i); return n.type.name === 'paragraph' && n.textContent.trim() === '' && n.childCount === 0 }
-
-  // 从末尾往前：① 空行；② 上次追加的平台条目；③ 用户条目（其余 [n] 行）；④ 「参考文献」标题
   let i = doc.childCount - 1
   while (i >= 0 && isBlank(i)) i--
-  const platform: Entry[] = []
-  for (let e = i >= 0 ? entryAt(i) : null; e && isPlatform(e.text); e = i >= 0 ? entryAt(i) : null) { platform.unshift(e); i--; while (i >= 0 && isBlank(i)) i-- }
-  const user: Entry[] = []
-  // 平台条目从 [1] 编起说明前面没有用户表（或用户表全是平台引用），不再往前认用户条目
-  if (!(platform.length > 0 && platform[0]!.n === 1)) {
-    for (let e = i >= 0 ? entryAt(i) : null; e; e = i >= 0 ? entryAt(i) : null) { user.unshift(e); i--; while (i >= 0 && isBlank(i)) i-- }
-  }
+  const entries: Array<{ idx: number; n: number; text: string }> = []
+  for (let e = i >= 0 ? entryAt(i) : null; e; e = i >= 0 ? entryAt(i) : null) { entries.unshift(e); i--; while (i >= 0 && isBlank(i)) i-- }
   const titleIdx = i >= 0 && (doc.child(i).type.name === 'heading' || doc.child(i).type.name === 'paragraph') && REF_TITLE.test(doc.child(i).textContent.trim()) ? i : -1
 
-  // 用户条目里带着平台引用 DOI 的：该引用沿用用户的编号
+  // 正文里用到的平台引用若与表中某条是同一篇（DOI 或文本相同），沿用那条的编号
   const fixed = new Map<string, number>()
-  for (const e of user) for (const d of doisIn(e.text)) { const id = doiToId.get(d); if (id && !fixed.has(id)) fixed.set(id, e.n) }
-  const userCount = user.reduce((m, e) => Math.max(m, e.n), 0)
+  for (const id of order) {
+    const c = byId.get(id)!
+    const doi = c.doi.toLowerCase()
+    const hit = entries.find(e => (doi.startsWith('10.') && doisIn(e.text).includes(doi)) || norm(e.text) === norm(c.formatted))
+    if (hit) fixed.set(id, hit.n)
+  }
+  const userCount = entries.reduce((m, e) => Math.max(m, e.n), 0)
   const numbers = numberCitations(order, userCount, fixed)
   const append = order.filter(id => !fixed.has(id)).map(id => ({ id, n: numbers.get(id)! }))
 
+  // 只有要追加时才裁掉末尾的空行 / 段落式标题（追加的条目接在最后一条或标题后面）
   let bodyEnd = doc.childCount
   let hasHeading = false
-  if (order.length > 0) {
-    if (user.length > 0) bodyEnd = user[user.length - 1]!.idx + 1
+  if (append.length > 0) {
+    if (entries.length > 0) bodyEnd = entries[entries.length - 1]!.idx + 1
     else if (titleIdx !== -1) {
       hasHeading = doc.child(titleIdx).type.name === 'heading'
       bodyEnd = hasHeading ? titleIdx + 1 : titleIdx
-    } else if (platform.length > 0) bodyEnd = platform[0]!.idx
+    }
   }
-  return { numbers, append, bodyEnd, hasHeading, userCount: order.length > 0 ? userCount : 0, duplicates: order.filter(id => fixed.has(id)).length }
+  return { numbers, fixed, append, bodyEnd, hasHeading, userCount, duplicates: fixed.size }
 }
