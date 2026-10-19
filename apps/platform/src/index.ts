@@ -228,11 +228,24 @@ app.get('/phr', c => existsSync(join(DIST, 'phr.html'))
   ? c.html(readFileSync(join(DIST, 'phr.html'), 'utf8'))
   : c.text('页面未构建：运行 pnpm --filter @heurion2/platform build，或用 dev:web 开发服务器（http://127.0.0.1:5173/phr.html）', 503))
 app.get('/phr.html', c => c.redirect('/phr'))
-// 官网：apps/site 的静态页（不用构建）；工作台在 /app
+// 官网：apps/site 的静态页（不用构建）与免登录临床科研工具矩阵（/tools/*）；工作台在 /app
+import { isToolSlug, renderEnglishIndexHtml, renderToolPageHtml, renderToolsHubHtml } from './http/routes/site-pages.ts'
 const SITE = fileURLToPath(new URL('../../site/', import.meta.url))
 app.get('/', c => c.html(readFileSync(join(SITE, 'index.html'), 'utf8')))
-app.get('/en', c => c.html(readFileSync(join(SITE, 'index.html'), 'utf8')))
+app.get('/en', c => c.html(renderEnglishIndexHtml(readFileSync(join(SITE, 'index.html'), 'utf8'))))
 app.get('/en/', c => c.redirect('/en'))
+app.get('/tools', c => c.html(renderToolsHubHtml('zh')))
+app.get('/tools/', c => c.redirect('/tools'))
+app.get('/en/tools', c => c.html(renderToolsHubHtml('en')))
+app.get('/en/tools/', c => c.redirect('/en/tools'))
+app.get('/tools/:slug', c => {
+  const slug = c.req.param('slug')
+  return isToolSlug(slug) ? c.html(renderToolPageHtml(slug, 'zh')) : c.notFound()
+})
+app.get('/en/tools/:slug', c => {
+  const slug = c.req.param('slug')
+  return isToolSlug(slug) ? c.html(renderToolPageHtml(slug, 'en')) : c.notFound()
+})
 app.get('/robots.txt', c => {
   const file = join(SITE, 'robots.txt')
   return existsSync(file) ? c.body(readFileSync(file), 200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }) : c.notFound()
