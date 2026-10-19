@@ -286,6 +286,8 @@ export interface LocalSlmPhiOptions {
   model?: string
   /** 超时毫秒数，默认 15000 */
   timeoutMs?: number
+  /** 是否对小模型输出做符号后置校验，默认 true；仅评测消融时关闭 */
+  postValidate?: boolean
 }
 
 // 常见医学名词/非人名停用词过滤，防止小模型将医学术语误判为人名
@@ -311,7 +313,7 @@ const ADDRESS_MARKER_RE =
 const CLINICAL_INST_EXCLUSION_RE =
   /(?:伦理委员会|知情同意|住院患者|多因素|回归分析|生存率|随访|化疗方案|本院|我院|主治医师|主任医师|临床路径|队列亚组)/
 
-function normalizeAndValidateStage2Entity(
+export function normalizeAndValidateStage2Entity(
   rawVal: string,
   rawType: string | undefined,
   sourceText: string,
@@ -362,6 +364,7 @@ export function createLocalSlmPhiDetector(options: LocalSlmPhiOptions = {}): Phi
   const endpoint = (options.endpoint ?? 'http://127.0.0.1:11434').replace(/\/+$/, '')
   const model = options.model ?? 'qwen2.5:1.5b'
   const timeoutMs = options.timeoutMs ?? 15000
+  const postValidate = options.postValidate ?? true
   assertLocalPhiEndpoint(endpoint)
 
   return async (stage1RedactedText: string) => {
@@ -424,7 +427,12 @@ export function createLocalSlmPhiDetector(options: LocalSlmPhiOptions = {}): Phi
       const seen = new Set<string>()
       for (const item of parsed.entities) {
         const rawVal = typeof item.value === 'string' ? item.value : ''
-        const validated = normalizeAndValidateStage2Entity(rawVal, item.type, stage1RedactedText)
+        // 消融：不做后置校验，原样保留小模型输出的非空实体
+        const validated = postValidate
+          ? normalizeAndValidateStage2Entity(rawVal, item.type, stage1RedactedText)
+          : rawVal.trim()
+            ? { value: rawVal.trim(), type: item.type === 'address_or_org' ? ('address_or_org' as const) : ('unlabeled_person_name' as const) }
+            : null
         if (!validated || seen.has(validated.value)) continue
         seen.add(validated.value)
         const redacted =
