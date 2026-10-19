@@ -762,11 +762,17 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   }
   app.get('/api/memory', c => {
     const m = deps.memory
-    if (!m) return c.json({ enabled: false, instance: false, paused: false, items: [] })
     const user = c.get('user')
+    const procedural_rules = store.listHarnessRules(user, ['active'])
+    if (!m) return c.json({ enabled: false, instance: false, paused: false, items: [], procedural_rules })
     const items = store.listMemories(user, ['proposed', 'active']).map(x => ({ ...x, source_doc_title: x.source_doc_id ? store.getDoc(x.source_doc_id)?.title ?? null : null }))
     const changes = (deps.evolution?.pending(user) ?? []).map(ch => ({ ...ch, targets: ch.target_ids.map(id => store.getMemory(id)).filter(Boolean).map(t => ({ id: t!.id, kind: t!.kind, content: t!.content })) }))
-    return c.json({ enabled: m.active(user), instance: m.instanceEnabled(), paused: m.paused(user), items, changes, review: { available: deps.evolution?.available() ?? false, last: store.getUserSetting(user, 'memory_review_at') } })
+    return c.json({ enabled: m.active(user), instance: m.instanceEnabled(), paused: m.paused(user), items, changes, procedural_rules, review: { available: deps.evolution?.available() ?? false, last: store.getUserSetting(user, 'memory_review_at') } })
+  })
+  app.delete('/api/memory/rules/:rid', c => {
+    return store.deleteHarnessRule(c.get('user'), c.req.param('rid'))
+      ? c.json({ ok: true })
+      : c.json({ error: '规则不存在或属于系统内置基线策略' }, 404)
   })
   app.put('/api/memory/settings', async c => {
     if (!deps.memory) return c.json({ error: '记忆未启用' }, 503)
