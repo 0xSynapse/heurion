@@ -4,6 +4,7 @@ import type { Documents, CommitEvent } from '../model/runtime.ts'
 import { mapNotification, type UiEvent } from '../harness/events.ts'
 import { filterPhrReply, type PhrMember } from '../ops/phr-guard.ts'
 import type { MemoryService } from '../memory/service.ts'
+import type { ProceduralHarnessService } from '../memory/procedural.ts'
 import type { Alerts } from '../ops-alert/alerts.ts'
 import type { HarnessPool } from '../harness/pool.ts'
 import type { TurnRegistry } from '../mcp/turns.ts'
@@ -136,6 +137,7 @@ export class TurnService {
   private readonly idleTimeoutMs: number
   private readonly maxDocConcurrency: number
   private readonly memory: MemoryService | null
+  private readonly procedural: ProceduralHarnessService | null
   private readonly alerts: Alerts | null
   /** 知家红线（PATIENT.md §3）：返回 undefined = 不是知家文档（不检查）；null = 是知家文档但没有特殊标记；对象 = 有孕产 / 哺乳 / 儿童标记。 */
   private readonly phrGuard: ((docId: string) => PhrMember | null | undefined) | null
@@ -152,6 +154,7 @@ export class TurnService {
     opts: {
       idleTimeoutMs?: number
       memory?: MemoryService
+      procedural?: ProceduralHarnessService
       alerts?: Alerts
       phrGuard?: (docId: string) => PhrMember | null | undefined
       maxDocConcurrency?: number
@@ -160,6 +163,7 @@ export class TurnService {
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 5 * 60_000
     this.maxDocConcurrency = opts.maxDocConcurrency ?? 2
     this.memory = opts.memory ?? null
+    this.procedural = opts.procedural ?? null
     this.alerts = opts.alerts ?? null
     this.phrGuard = opts.phrGuard ?? null
     this.events.setMaxListeners(0)
@@ -472,12 +476,13 @@ export class TurnService {
       store.addMessage(docId, 'user', message, turnId)
       const suggestNote = opts.suggest ? '本轮的修改会作为待用户采纳的修订提交。' : ''
       const memoryBlock = memoryOn ? await this.memory!.forPrompt(userId, docId, message) : ''
+      const proceduralBlock = this.procedural ? await this.procedural.forPrompt(userId, docId, message) : ''
       const memoryNote = memoryOn ? '' : opts.memory === false ? '（用户本轮关闭了记忆：不要使用 memory_* 工具，也不要沿用之前回合提到的记忆。）' : ''
       // 记忆紧挨着本轮消息（放在最前面时模型容易照抄消息里的写法而忽略偏好）
       // 知家红线只看文档归属，整个回合算一次；知家的对话另加家人向的回答口吻
       const phr = this.phrGuard?.(docId)
       const styleNote = phr !== undefined ? PHR_STYLE : ''
-      const prompt = `${history}（当前文档：doc_id=${docId}，《${doc.title}》，rev=${this.docs.rev(docId)}）${suggestNote}${memoryNote}\n\n${memoryBlock}${styleNote}${message}`
+      const prompt = `${history}（当前文档：doc_id=${docId}，《${doc.title}》，rev=${this.docs.rev(docId)}）${suggestNote}${memoryNote}\n\n${memoryBlock}${proceduralBlock}${styleNote}${message}`
 
       if (this.cancelling.has(job.id) || this.timedOut.has(job.id)) throw new Error('cancelled')
 
@@ -535,6 +540,9 @@ export class TurnService {
           } catch {}
         }
         try { store.endTurn(turn.id, status, failure) } catch {}
+        if (this.procedural) {
+          try { this.procedural.evolveFromSignals(userId) } catch {}
+        }
         // 取消不算故障；出错、超时交给运维告警（模型认证 / 余额问题立即发，其余短时间内多次才发）
         if ((status === 'error' || status === 'timeout') && failure) {
           try { this.alerts?.turnFailed(failure) } catch {}

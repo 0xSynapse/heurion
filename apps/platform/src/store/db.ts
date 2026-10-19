@@ -270,6 +270,34 @@ export interface MemorySignalRow {
   ai_rev: number; at: string; consumed_at: string | null
 }
 
+/** 执行与自演进信号：写前守卫拦截、回合被用户回滚、工具执行失败等 */
+export interface ExecutionSignalRow {
+  id: string
+  owner: string
+  doc_id: string
+  turn_id: string | null
+  kind: 'guard_reject' | 'turn_revert' | 'tool_error'
+  code: string
+  detail: string | null
+  consumed_at: string | null
+  at: string
+}
+
+/** 程序性策略经验（Harness 避坑与调度规则）：系统从执行信号与元进化中沉淀的执行策略 */
+export interface HarnessRuleRow {
+  id: string
+  scope: 'global' | 'user' | 'project'
+  owner: string
+  project_id: string | null
+  category: 'guard' | 'tool' | 'subagent' | 'format'
+  trigger_pattern: string
+  rule: string
+  evidence_count: number
+  status: 'active' | 'archived'
+  created_at: string
+  updated_at: string
+}
+
 /** 记忆整理建议（合并 / 改写 / 归档），用户采纳后才生效。新总结出的规律直接作为「待确认」记忆，不走这里。 */
 export interface MemoryChangeRow {
   id: string; owner: string; action: 'merge' | 'update' | 'archive'
@@ -617,6 +645,18 @@ export class Store {
         status TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT
       );
       CREATE INDEX IF NOT EXISTS memory_changes_owner ON memory_changes (owner, status);
+      CREATE TABLE IF NOT EXISTS execution_signals (
+        id TEXT PRIMARY KEY, owner TEXT NOT NULL, doc_id TEXT NOT NULL, turn_id TEXT,
+        kind TEXT NOT NULL, code TEXT NOT NULL, detail TEXT, consumed_at TEXT, at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS execution_signals_owner ON execution_signals (owner, consumed_at);
+      CREATE TABLE IF NOT EXISTS harness_rules (
+        id TEXT PRIMARY KEY, scope TEXT NOT NULL, owner TEXT NOT NULL, project_id TEXT,
+        category TEXT NOT NULL, trigger_pattern TEXT NOT NULL, rule TEXT NOT NULL,
+        evidence_count INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS harness_rules_lookup ON harness_rules (owner, category, status);
       CREATE TABLE IF NOT EXISTS user_settings (user_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (user_id, key));
       CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS tenants (
@@ -1673,6 +1713,59 @@ export class Store {
 
   resolveMemoryChange(id: string, status: 'applied' | 'dismissed'): void {
     this.db.prepare('UPDATE memory_changes SET status = ?, resolved_at = ? WHERE id = ?').run(status, now(), id)
+  }
+
+  // —— 执行与自演进信号 / Harness 策略规则 ——
+
+  addExecutionSignal(s: Omit<ExecutionSignalRow, 'id' | 'at' | 'consumed_at'>): ExecutionSignalRow {
+    const id = `es_${randomUUID().replace(/-/g, '').slice(0, 12)}`
+    const t = now()
+    this.db.prepare('INSERT INTO execution_signals (id, owner, doc_id, turn_id, kind, code, detail, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, s.owner, s.doc_id, s.turn_id ?? null, s.kind, s.code, s.detail ?? null, t)
+    return { id, owner: s.owner, doc_id: s.doc_id, turn_id: s.turn_id ?? null, kind: s.kind, code: s.code, detail: s.detail ?? null, consumed_at: null, at: t }
+  }
+
+  openExecutionSignals(owner: string, limit = 50): ExecutionSignalRow[] {
+    if (owner === 'system') {
+      return this.db.prepare('SELECT * FROM execution_signals WHERE consumed_at IS NULL ORDER BY at DESC LIMIT ?').all(limit) as unknown as ExecutionSignalRow[]
+    }
+    return this.db.prepare('SELECT * FROM execution_signals WHERE (owner = ? OR owner = \'system\') AND consumed_at IS NULL ORDER BY at DESC LIMIT ?').all(owner, limit) as unknown as ExecutionSignalRow[]
+  }
+
+  consumeExecutionSignals(ids: string[]): void {
+    if (ids.length === 0) return
+    const t = now()
+    const q = ids.map(() => '?').join(',')
+    this.db.prepare(`UPDATE execution_signals SET consumed_at = ? WHERE id IN (${q})`).run(t, ...ids)
+  }
+
+  addHarnessRule(r: Omit<HarnessRuleRow, 'id' | 'created_at' | 'updated_at'>): HarnessRuleRow {
+    const id = `hr_${randomUUID().replace(/-/g, '').slice(0, 12)}`
+    const t = now()
+    this.db.prepare('INSERT INTO harness_rules (id, scope, owner, project_id, category, trigger_pattern, rule, evidence_count, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, r.scope, r.owner, r.project_id ?? null, r.category, r.trigger_pattern, r.rule, r.evidence_count ?? 1, r.status ?? 'active', t, t)
+    return { id, ...r, created_at: t, updated_at: t }
+  }
+
+  listHarnessRules(owner: string, statuses: HarnessRuleRow['status'][] = ['active']): HarnessRuleRow[] {
+    const q = statuses.map(() => '?').join(',')
+    return this.db.prepare(`SELECT * FROM harness_rules WHERE (owner = ? OR owner = 'system') AND status IN (${q}) ORDER BY evidence_count DESC, updated_at DESC`)
+      .all(owner, ...statuses) as unknown as HarnessRuleRow[]
+  }
+
+  bumpHarnessRule(id: string): void {
+    this.db.prepare('UPDATE harness_rules SET evidence_count = evidence_count + 1, updated_at = ? WHERE id = ?').run(now(), id)
+  }
+
+  deleteHarnessRule(owner: string, id: string): boolean {
+    return Number(this.db.prepare("DELETE FROM harness_rules WHERE id = ? AND owner = ? AND owner != 'system'").run(id, owner).changes) > 0
+  }
+
+  executionSignalStats(): { total: number; unconsumed: number; active_rules: number } {
+    const total = (this.db.prepare('SELECT COUNT(*) AS n FROM execution_signals').get() as { n: number }).n
+    const unconsumed = (this.db.prepare('SELECT COUNT(*) AS n FROM execution_signals WHERE consumed_at IS NULL').get() as { n: number }).n
+    const active_rules = (this.db.prepare("SELECT COUNT(*) AS n FROM harness_rules WHERE status = 'active'").get() as { n: number }).n
+    return { total, unconsumed, active_rules }
   }
 
   /** 用户在某时间之后发的对话消息（整理时看有没有反复强调的要求）。 */
