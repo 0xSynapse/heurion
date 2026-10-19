@@ -77,7 +77,8 @@ export const TASKS: Task<PaperTopic>[] = [
     archetype: 'concurrent_edit',
     code: 'conflict_user_edited',
     seeded: true,
-    message: () => '把讨论部分第一段改写得更精炼，并在开头明确写出本研究的主要结论。',
+    // 只改第一句：医生的插入在段尾，与要改的地方不重叠；丢了医生的内容就是明确的失败（「精简全段」时删掉它算不算破坏说不清）
+    message: () => '只把讨论部分第一段的第一句改写得更简洁明确，这一段的其余句子保持不变。',
     async onEvent(ctx, e, events) {
       // AI 每读一次文档，人类就在讨论第一段末尾补一处（最多 3 次），保证 AI 最后读到的版本也会过期
       if (e.type !== 'tool_result' || e.isError) return

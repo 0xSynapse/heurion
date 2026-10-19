@@ -163,7 +163,7 @@ mkdirSync(outDir, { recursive: true })
 writeFileSync(join(outDir, 'meta.json'), JSON.stringify({
   started_at: new Date().toISOString(),
   commit: execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(),
-  dirty: execSync('git status --porcelain', { cwd: repoRoot }).toString().trim() !== '',
+  dirty: execSync('git status --porcelain --untracked-files=no', { cwd: repoRoot }).toString().trim() !== '',
   model: process.env.DSH_MODEL || 'deepseek-flash', reps: Number(values.reps),
 }, null, 2))
 

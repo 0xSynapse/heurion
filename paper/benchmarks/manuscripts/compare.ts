@@ -279,7 +279,7 @@ const seed0 = Number(values.seed)
 writeFileSync(join(outDir, 'meta.json'), JSON.stringify({
   started_at: new Date().toISOString(),
   commit: execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(),
-  dirty: execSync('git status --porcelain', { cwd: repoRoot }).toString().trim() !== '',
+  dirty: execSync('git status --porcelain --untracked-files=no', { cwd: repoRoot }).toString().trim() !== '',
   model: process.env.DSH_MODEL || 'deepseek-flash', arms, users, sessions: Number(values.sessions), seed: seed0,
 }, null, 2))
 

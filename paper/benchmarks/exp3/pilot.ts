@@ -43,7 +43,7 @@ const stop = stopServer
 const meta = {
   started_at: new Date().toISOString(),
   commit: execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(),
-  dirty: execSync('git status --porcelain', { cwd: repoRoot }).toString().trim() !== '',
+  dirty: execSync('git status --porcelain --untracked-files=no', { cwd: repoRoot }).toString().trim() !== '',
   model: process.env.DSH_MODEL ?? 'deepseek-flash（平台默认）',
   arms,
   sessions: Number(values.sessions),
