@@ -252,6 +252,7 @@ const NOT_FOR_AI: Record<string, string> = {
   'GET /api/copilot/status': '全局 Co-Pilot 随航助手状态与历史查询（界面随航抽屉展示用）',
   'POST /api/copilot/chat': '全局 Co-Pilot 随航助手用户发起对话入口（由用户输入触发回合）',
   'POST /api/copilot/clear': '全局 Co-Pilot 随航助手清空会话（用户界面操作）',
+  'DELETE /api/memory/rules/:rid': '移除个人自适应执行经验由用户本人在记忆界面操作（AI 不能自行删除约束自己的避坑规则）',
 }
 
 describe('人机对等：每个接口（AI 的权限 = 用户的权限）', () => {

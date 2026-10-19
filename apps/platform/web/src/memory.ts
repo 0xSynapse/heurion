@@ -18,10 +18,16 @@ interface Change {
   targets: Array<{ id: string; kind: Memory['kind']; content: string }>
 }
 
+interface ProceduralRule {
+  id: string; scope: 'global' | 'user' | 'project'; owner: string; category: 'guard' | 'tool' | 'subagent' | 'format'
+  trigger_pattern: string; rule: string; evidence_count: number; updated_at: string
+}
+
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
 const KINDS: Record<Memory['kind'], string> = { preference: '偏好', fact: '事实', style: '写法', term: '术语' }
 const SOURCE: Record<Memory['source'], string> = { turn: '对话', comment: '评论', manual: '手动添加', import: '导入', review: '整理记忆' }
 const ACTION: Record<Change['action'], string> = { merge: '合并', update: '改写', archive: '归档' }
+const RULE_CAT: Record<ProceduralRule['category'], string> = { guard: '守卫避坑', tool: '工具规范', subagent: '专家分工', format: '格式策略' }
 
 /** 「用过 3 次 · 2 天前」 */
 function usage(m: Memory): string {
@@ -35,10 +41,12 @@ export function initMemory(api: Api, notice: (msg: string, error?: boolean) => v
 
   async function openMemory(): Promise<void> {
     const [data, projects] = await Promise.all([
-      api<{ enabled: boolean; instance: boolean; paused: boolean; items: Memory[]; changes?: Change[]; review?: { available: boolean; last: string | null } }>('/api/memory'),
+      api<{ enabled: boolean; instance: boolean; paused: boolean; items: Memory[]; changes?: Change[]; procedural_rules?: ProceduralRule[]; review?: { available: boolean; last: string | null } }>('/api/memory'),
       api<Array<{ id: string; name: string }>>('/api/projects'),
     ])
     const changes = data.changes ?? []
+    const rules = data.procedural_rules ?? []
+    const userRulesCount = rules.filter(r => r.owner !== 'system').length
     const projectName = (id: string | null) => projects.find(p => p.id === id)?.name ?? '项目'
     const proposed = data.items.filter(m => m.status === 'proposed')
     const active = data.items.filter(m => m.status === 'active')
@@ -62,6 +70,15 @@ export function initMemory(api: Api, notice: (msg: string, error?: boolean) => v
         <div class="actions-row"><button class="primary" data-cact="apply">采纳</button><button data-cact="dismiss">忽略</button></div></li>`
     }
 
+    function ruleRow(r: ProceduralRule): string {
+      const isSystem = r.owner === 'system'
+      return `<li class="mem" data-rule="${esc(r.id)}">
+        <div class="mem-text"><span class="mem-kind">${esc(RULE_CAT[r.category] ?? r.category)}</span>${esc(r.rule)}</div>
+        <div class="muted small"><span class="pill">${isSystem ? '系统基线' : '自动习得'}</span> 触发特征：<code>${esc(r.trigger_pattern)}</code> · 累计验证 ${r.evidence_count} 次</div>
+        ${isSystem ? '' : '<div class="actions-row"><button data-ract="delete" class="danger">移除此经验</button></div>'}
+      </li>`
+    }
+
     const d = dlg()
     d.innerHTML = `<div class="dialog-card" role="dialog" aria-modal="true" aria-label="记忆">
       <div class="dialog-head"><h2>记忆</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
@@ -76,6 +93,9 @@ export function initMemory(api: Api, notice: (msg: string, error?: boolean) => v
         ${proposed.length ? `<h3 class="mem-h">待确认（${proposed.length}）</h3><ul class="mem-list">${proposed.map(row).join('')}</ul>` : ''}
         <h3 class="mem-h">已生效（${active.length}）</h3>
         ${active.length ? `<ul class="mem-list">${active.map(row).join('')}</ul>` : '<div class="muted">还没有记忆。对话里说「记住……」，或点「＋ 添加」。</div>'}
+        ${rules.length ? `<details style="margin-top: 16px"><summary class="muted small" style="cursor: pointer">AI 自适应执行经验（共 ${rules.length} 条${userRulesCount ? ` · 含个人自动习得 ${userRulesCount} 条` : ''}）</summary>
+          <div class="muted small" style="margin: 6px 0">根据文档编辑冲突、引用拦截与撤销历史自动沉淀的执行与避坑策略，无需手动审批。</div>
+          <ul class="mem-list">${rules.map(ruleRow).join('')}</ul></details>` : ''}
         <div class="row mem-foot"><button id="memExport">导出</button><button id="memImport">导入</button><input id="memImportFile" type="file" accept=".json,application/json" hidden>
           <span class="grow"></span><button id="memClear" class="danger">清空全部记忆</button></div>
       </div></div>`
@@ -137,6 +157,16 @@ export function initMemory(api: Api, notice: (msg: string, error?: boolean) => v
         try {
           await api(`/api/memory/changes/${change}/${cact}`, { method: 'POST' })
           notice(cact === 'apply' ? '已采纳' : '已忽略，不会再提这条')
+        } catch (err) { notice((err as Error).message, true) }
+        reopen()
+        return
+      }
+      const ract = t.closest<HTMLElement>('[data-ract]')?.dataset.ract
+      const ruleId = t.closest<HTMLElement>('li[data-rule]')?.dataset.rule
+      if (ract === 'delete' && ruleId) {
+        try {
+          await api(`/api/memory/rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' })
+          notice('已移除该条自适应经验')
         } catch (err) { notice((err as Error).message, true) }
         reopen()
         return
