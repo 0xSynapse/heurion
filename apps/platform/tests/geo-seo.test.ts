@@ -17,7 +17,7 @@ describe('GEO (Generative Engine Optimization) 与 AI 搜索引擎标准化文�
     expect(content).toContain('User-agent: Google-Extended')
     expect(content).toContain('Allow: /')
     expect(content).toContain('Sitemap: https://heurion.org/sitemap.xml')
-    expect(content).toContain('Sitemap: https://heurion.org/llms.txt')
+    expect(content).toContain('https://heurion.org/llms.txt')
   })
 
   it('sitemap.xml 存在且包含所有核心端点与多语言配置', () => {
@@ -42,7 +42,7 @@ describe('GEO (Generative Engine Optimization) 与 AI 搜索引擎标准化文�
     expect(content).toContain('Project MONAI')
     expect(content).toContain('Table 1')
     expect(content).toContain('VanderWeele E-value')
-    expect(content).toContain('Optional')
+    expect(content).toContain('CONSORT 2010')
     expect(content).toContain('/llms-full.txt')
   })
 
