@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,9 +39,29 @@ export class HarnessPool {
   private readonly reaper: NodeJS.Timeout
 
   /** sandboxUid：隔离模式下平台用户 → 专属 uid（Store.sandboxUid）。 */
-  constructor(private readonly config: Config, private readonly sandboxUid?: (userId: string) => number) {
+  constructor(
+    private readonly config: Config,
+    private readonly sandboxUid?: (userId: string) => number,
+    private readonly patchOverlay?: () => string | null,
+  ) {
     this.reaper = setInterval(() => void this.reapIdle(), 60_000)
     this.reaper.unref()
+  }
+
+  /** 获取要挂载的 profile patches 列表（基础补丁 + 动态自演进补丁）。 */
+  getPatches(dshHome: string): string[] {
+    const overlayYaml = this.patchOverlay?.()
+    if (!overlayYaml || !overlayYaml.trim()) {
+      return [PROFILE_PATCH]
+    }
+    const overlayPath = join(dshHome, 'evolved.cordis.yml')
+    try {
+      mkdirSync(dshHome, { recursive: true })
+      writeFileSync(overlayPath, overlayYaml, 'utf8')
+      return [PROFILE_PATCH, overlayPath]
+    } catch {
+      return [PROFILE_PATCH]
+    }
   }
 
   workspaceDir(userId: string): string {
@@ -114,7 +134,7 @@ export class HarnessPool {
     const e: Entry = {
       harness: new DeepSeekHarness({
         profile: 'sdk',
-        patches: [PROFILE_PATCH],
+        patches: this.getPatches(dshHome),
         // 隔离模式或多并发 slot：dsh home 按用户与 slot 隔离，防并发进程争抢锁
         dshHome,
         ...(this.config.sandbox ? { dshBin: SANDBOX_LAUNCH } : {}),
