@@ -21,6 +21,7 @@ import type { CohortService } from '../research/cohort.ts'
 import { registerImagingRoutes } from './routes/imaging.ts'
 import { registerMailCalendarRoutes } from './routes/mail-calendar.ts'
 import { registerResearchRoutes } from './routes/research.ts'
+import { registerPublicToolsApi } from './routes/public-tools-api.ts'
 import type { MemoryEvolution } from '../memory/evolve.ts'
 import { MemoryError, type MemoryService } from '../memory/service.ts'
 import type { Notice, PostCheck } from '../collab/postcheck.ts'
@@ -316,10 +317,13 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     }
   })
 
+  // —— 免登录临床科研公开小工具接口（无状态、限流） ——
+  registerPublicToolsApi(app, { pubmed: deps.pubmed, crossref: deps.crossref })
+
   // 鉴权：账户令牌（开发模式下也接受开发令牌，见 auth/accounts.ts）。EventSource / <img> 用 ?token=。
   app.use('/api/*', async (c, next) => {
-    // 外部来信 Webhook 无需用户 Session（由 /api/mail/inbound 独立验证 X-Inbound-Secret 通信密钥）
-    if (c.req.path === '/api/mail/inbound') {
+    // 外部来信 Webhook 无需用户 Session；公开微型工具接口无需登录
+    if (c.req.path === '/api/mail/inbound' || c.req.path.startsWith('/api/public/tools/')) {
       return next()
     }
 

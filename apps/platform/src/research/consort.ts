@@ -23,6 +23,7 @@ export interface ConsortArm {
 
 export interface ConsortDiagramData {
   title?: string
+  lang?: 'zh' | 'en'
   total_assessed: number
   exclusions: ConsortExclusionItem[]
   eligible_total: number
@@ -35,14 +36,16 @@ export interface ConsortDiagramData {
 export function renderConsortSvg(data: ConsortDiagramData): string {
   const {
     title = 'CONSORT 2010 Flow Diagram',
+    lang = 'zh',
     total_assessed,
     exclusions,
     eligible_total,
     arms,
   } = data
+  const isEn = lang === 'en'
 
   const totalExcluded = exclusions.reduce((acc, curr) => acc + curr.count, 0)
-  const width = 860
+  const width = 880
   const headerHeight = 70
   
   // Calculate dynamic heights
@@ -59,10 +62,10 @@ export function renderConsortSvg(data: ConsortDiagramData): string {
   const b1_x = cx - boxWidth / 2
   const b1_y = headerHeight + 20
 
-  // Box 2: Excluded (Side branch on the right)
-  const b2_w = 340
+  // Box 2: Excluded (Side branch on the right, widened to prevent text overflow)
+  const b2_w = 390
   const b2_h = exclusionBoxHeight
-  const b2_x = cx + 80
+  const b2_x = cx + 35
   const b2_y = b1_y + boxHeight + 35
 
   // Box 3: Randomized / Allocated
@@ -72,8 +75,12 @@ export function renderConsortSvg(data: ConsortDiagramData): string {
   const exclusionLines = exclusions.map((item, idx) => {
     const pct = item.percentage ?? (total_assessed > 0 ? (item.count / total_assessed) * 100 : 0)
     const pctStr = pct > 0 ? ` (${pct.toFixed(1)}%)` : ''
-    return `<text x="${b2_x + 16}" y="${b2_y + 45 + idx * exclusionLineHeight}" font-family="Times New Roman, STSong, serif" font-size="13" fill="#334155">• ${escapeXml(item.reason)}: n = ${item.count}${pctStr}</text>`
+    return `<text x="${b2_x + 14}" y="${b2_y + 45 + idx * exclusionLineHeight}" font-family="Times New Roman, STSong, serif" font-size="12.5" fill="#334155">• ${escapeXml(item.reason)}: n = ${item.count}${pctStr}</text>`
   }).join('\n      ')
+
+  const lostLabel = isEn ? 'Lost to follow-up' : '失访 / 脱落'
+  const discLabel = isEn ? 'Discontinued intervention' : '依从性不足终止'
+  const analLabel = isEn ? 'Included in primary analysis' : '纳入最终疗效分析'
 
   // Arms rendering (2 branches: Treatment vs Control)
   let armsSvg = ''
@@ -103,19 +110,38 @@ export function renderConsortSvg(data: ConsortDiagramData): string {
       <rect x="${arm1_x}" y="${arms_y}" width="${armW}" height="${armH}" rx="4" fill="#f8fafc" stroke="#3b82f6" stroke-width="1.6" filter="url(#shadow)" />
       <text x="${arm1_cx}" y="${arms_y + 24}" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="14" fill="#1e3a8a">${escapeXml(arm1.name)} (n = ${arm1.allocated})</text>
       <line x1="${arm1_x + 10}" y1="${arms_y + 34}" x2="${arm1_x + armW - 10}" y2="${arms_y + 34}" stroke="#e2e8f0" stroke-width="1" />
-      <text x="${arm1_x + 16}" y="${arms_y + 56}" font-family="Times New Roman, STSong, serif" font-size="13" fill="#334155">• 失访 / 脱落: n = ${arm1.lost_to_followup ?? 0}</text>
-      <text x="${arm1_x + 16}" y="${arms_y + 78}" font-family="Times New Roman, STSong, serif" font-size="13" fill="#334155">• 依从性不足终止: n = ${arm1.discontinued ?? 0}</text>
-      <text x="${arm1_x + 16}" y="${arms_y + 98}" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="13" fill="#0f172a">• 纳入最终疗效分析: n = ${arm1.analyzed}</text>
+      <text x="${arm1_x + 16}" y="${arms_y + 56}" font-family="Times New Roman, STSong, serif" font-size="13" fill="#334155">• ${lostLabel}: n = ${arm1.lost_to_followup ?? 0}</text>
+      <text x="${arm1_x + 16}" y="${arms_y + 78}" font-family="Times New Roman, STSong, serif" font-size="13" fill="#334155">• ${discLabel}: n = ${arm1.discontinued ?? 0}</text>
+      <text x="${arm1_x + 16}" y="${arms_y + 98}" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="13" fill="#0f172a">• ${analLabel}: n = ${arm1.analyzed}</text>
 
       <!-- Arm 2 Box -->
       <rect x="${arm2_x}" y="${arms_y}" width="${armW}" height="${armH}" rx="4" fill="#f8fafc" stroke="#10b981" stroke-width="1.6" filter="url(#shadow)" />
       <text x="${arm2_cx}" y="${arms_y + 24}" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="14" fill="#065f46">${escapeXml(arm2.name)} (n = ${arm2.allocated})</text>
       <line x1="${arm2_x + 10}" y1="${arms_y + 34}" x2="${arm2_x + armW - 10}" y2="${arms_y + 34}" stroke="#e2e8f0" stroke-width="1" />
-      <text x="${arm2_x + 16}" y="${arms_y + 56}" font-family="Times New Roman, STSong, serif" font-size="13" fill="#334155">• 失访 / 脱落: n = ${arm2.lost_to_followup ?? 0}</text>
-      <text x="${arm2_x + 16}" y="${arms_y + 78}" font-family="Times New Roman, STSong, serif" font-size="13" fill="#334155">• 依从性不足终止: n = ${arm2.discontinued ?? 0}</text>
-      <text x="${arm2_x + 16}" y="${arms_y + 98}" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="13" fill="#0f172a">• 纳入最终疗效分析: n = ${arm2.analyzed}</text>
+      <text x="${arm2_x + 16}" y="${arms_y + 56}" font-family="Times New Roman, STSong, serif" font-size="13" fill="#334155">• ${lostLabel}: n = ${arm2.lost_to_followup ?? 0}</text>
+      <text x="${arm2_x + 16}" y="${arms_y + 78}" font-family="Times New Roman, STSong, serif" font-size="13" fill="#334155">• ${discLabel}: n = ${arm2.discontinued ?? 0}</text>
+      <text x="${arm2_x + 16}" y="${arms_y + 98}" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="13" fill="#0f172a">• ${analLabel}: n = ${arm2.analyzed}</text>
     `
   }
+
+  const subtitleText = isEn
+    ? 'CONSORT 2010 / STROBE Standardized Participant Selection Flowchart'
+    : 'CONSORT 2010 / STROBE 国际规范标准队列筛选流向图 (Automated Research Flowchart)'
+  const box1Title = isEn
+    ? 'Assessed for Eligibility'
+    : '评估初筛候选受试者 (Assessed for eligibility)'
+  const box1Sub = isEn
+    ? `( N = ${total_assessed.toLocaleString()} )`
+    : `( N = ${total_assessed.toLocaleString()} 例 )`
+  const box2Title = isEn
+    ? `Excluded (n = ${totalExcluded.toLocaleString()})`
+    : `排除受试者 (Excluded: n = ${totalExcluded.toLocaleString()})`
+  const box3Title = isEn
+    ? 'Eligible / Allocated Cohort'
+    : '最终合格入组队列 (Eligible / Allocated)'
+  const box3Sub = isEn
+    ? `( N = ${eligible_total.toLocaleString()} )`
+    : `( N = ${eligible_total.toLocaleString()} 例 )`
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${totalHeight}" width="${width}" height="${totalHeight}">
   <defs>
@@ -132,7 +158,7 @@ export function renderConsortSvg(data: ConsortDiagramData): string {
 
   <!-- Diagram Title Banner -->
   <text x="${cx}" y="36" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-size="20" font-weight="bold" fill="#0f172a">${escapeXml(title)}</text>
-  <text x="${cx}" y="56" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-size="13" fill="#64748b">CONSORT 2010 / STROBE 国际规范标准队列筛选流向图 (Automated Research Flowchart)</text>
+  <text x="${cx}" y="56" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-size="13" fill="#64748b">${subtitleText}</text>
   <line x1="60" y1="66" x2="${width - 60}" y2="66" stroke="#cbd5e1" stroke-width="1.2" />
 
   <!-- Stage Tags on Left Margin -->
@@ -142,8 +168,8 @@ export function renderConsortSvg(data: ConsortDiagramData): string {
 
   <!-- 1. Assessed for Eligibility Box -->
   <rect x="${b1_x}" y="${b1_y}" width="${boxWidth}" height="${boxHeight}" rx="4" fill="#f8fafc" stroke="#475569" stroke-width="1.6" filter="url(#shadow)" />
-  <text x="${cx}" y="${b1_y + 26}" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="15" fill="#0f172a">评估初筛候选受试者 (Assessed for eligibility)</text>
-  <text x="${cx}" y="${b1_y + 48}" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-size="14" fill="#334155">( N = ${total_assessed.toLocaleString()} 例 )</text>
+  <text x="${cx}" y="${b1_y + 26}" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="15" fill="#0f172a">${box1Title}</text>
+  <text x="${cx}" y="${b1_y + 48}" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-size="14" fill="#334155">${box1Sub}</text>
 
   <!-- Vertical Trunk Line -->
   <line x1="${cx}" y1="${b1_y + boxHeight}" x2="${cx}" y2="${b3_y}" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow)" />
@@ -153,14 +179,14 @@ export function renderConsortSvg(data: ConsortDiagramData): string {
 
   <!-- 2. Exclusion Box -->
   <rect x="${b2_x}" y="${b2_y}" width="${b2_w}" height="${b2_h}" rx="4" fill="#fff1f2" stroke="#e11d48" stroke-width="1.5" filter="url(#shadow)" />
-  <text x="${b2_x + 16}" y="${b2_y + 24}" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="14" fill="#be123c">排除受试者 (Excluded: n = ${totalExcluded.toLocaleString()})</text>
+  <text x="${b2_x + 14}" y="${b2_y + 24}" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="14" fill="#be123c">${box2Title}</text>
   <line x1="${b2_x + 10}" y1="${b2_y + 32}" x2="${b2_x + b2_w - 10}" y2="${b2_y + 32}" stroke="#fecdd3" stroke-width="1" />
   ${exclusionLines}
 
   <!-- 3. Eligible / Randomized Box -->
   <rect x="${b1_x}" y="${b3_y}" width="${boxWidth}" height="${boxHeight}" rx="4" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6" filter="url(#shadow)" />
-  <text x="${cx}" y="${b3_y + 26}" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="15" fill="#1e3a8a">最终合格入组队列 (Eligible / Allocated)</text>
-  <text x="${cx}" y="${b3_y + 48}" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-size="14" fill="#1d4ed8">( N = ${eligible_total.toLocaleString()} 例 )</text>
+  <text x="${cx}" y="${b3_y + 26}" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-weight="bold" font-size="15" fill="#1e3a8a">${box3Title}</text>
+  <text x="${cx}" y="${b3_y + 48}" text-anchor="middle" font-family="Times New Roman, STSong, serif" font-size="14" fill="#1d4ed8">${box3Sub}</text>
 
   ${armsSvg}
 </svg>`
@@ -170,7 +196,8 @@ export function renderConsortSvg(data: ConsortDiagramData): string {
  * 导出为 Mermaid 流程图代码（可直接嵌入 Markdown 预览）
  */
 export function renderConsortMermaid(data: ConsortDiagramData): string {
-  const { total_assessed, exclusions, eligible_total, arms } = data
+  const { total_assessed, exclusions, eligible_total, arms, lang = 'zh' } = data
+  const isEn = lang === 'en'
   const totalExcluded = exclusions.reduce((acc, curr) => acc + curr.count, 0)
   
   const exclusionText = exclusions
@@ -178,15 +205,26 @@ export function renderConsortMermaid(data: ConsortDiagramData): string {
     .join('<br>')
 
   let mermaid = `graph TD\n`
-  mermaid += `  A["评估初筛人群 (Assessed for eligibility)<br><b>N = ${total_assessed}</b>"] --> B{"合格入组判断"}\n`
-  mermaid += `  B -->|排除 n = ${totalExcluded}| Ex["<b>排除人群 (Excluded)</b><br>${exclusionText}"]\n`
-  mermaid += `  B -->|合格入组| C["<b>最终纳入研究队列 (Allocated)</b><br>N = ${eligible_total}"]\n`
-
-  if (arms.length >= 2) {
-    const arm1 = arms[0]!
-    const arm2 = arms[1]!
-    mermaid += `  C --> D1["<b>${arm1.name}</b><br>分配: n=${arm1.allocated}<br>最终分析: n=${arm1.analyzed}"]\n`
-    mermaid += `  C --> D2["<b>${arm2.name}</b><br>分配: n=${arm2.allocated}<br>最终分析: n=${arm2.analyzed}"]\n`
+  if (isEn) {
+    mermaid += `  A["Assessed for eligibility<br><b>N = ${total_assessed}</b>"] --> B{"Eligibility Screening"}\n`
+    mermaid += `  B -->|Excluded n = ${totalExcluded}| Ex["<b>Excluded</b><br>${exclusionText}"]\n`
+    mermaid += `  B -->|Eligible| C["<b>Eligible / Allocated Cohort</b><br>N = ${eligible_total}"]\n`
+    if (arms.length >= 2) {
+      const arm1 = arms[0]!
+      const arm2 = arms[1]!
+      mermaid += `  C --> D1["<b>${arm1.name}</b><br>Allocated: n=${arm1.allocated}<br>Analyzed: n=${arm1.analyzed}"]\n`
+      mermaid += `  C --> D2["<b>${arm2.name}</b><br>Allocated: n=${arm2.allocated}<br>Analyzed: n=${arm2.analyzed}"]\n`
+    }
+  } else {
+    mermaid += `  A["评估初筛人群 (Assessed for eligibility)<br><b>N = ${total_assessed}</b>"] --> B{"合格入组判断"}\n`
+    mermaid += `  B -->|排除 n = ${totalExcluded}| Ex["<b>排除人群 (Excluded)</b><br>${exclusionText}"]\n`
+    mermaid += `  B -->|合格入组| C["<b>最终纳入研究队列 (Allocated)</b><br>N = ${eligible_total}"]\n`
+    if (arms.length >= 2) {
+      const arm1 = arms[0]!
+      const arm2 = arms[1]!
+      mermaid += `  C --> D1["<b>${arm1.name}</b><br>分配: n=${arm1.allocated}<br>最终分析: n=${arm1.analyzed}"]\n`
+      mermaid += `  C --> D2["<b>${arm2.name}</b><br>分配: n=${arm2.allocated}<br>最终分析: n=${arm2.analyzed}"]\n`
+    }
   }
 
   mermaid += `  style A fill:#f8fafc,stroke:#475569,stroke-width:2px\n`
