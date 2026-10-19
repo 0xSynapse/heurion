@@ -78,6 +78,22 @@ export const config = {
   turnIdleTimeoutMs: Number(env('TURN_IDLE_TIMEOUT_MS', String(5 * 60_000))),
   /** 每个用户允许并发执行的文档任务数（默认 2 个，超出排队；Co-Pilot 随航走独立快车道，不占此配额）。 */
   maxDocConcurrency: Math.max(1, Number(env('MAX_DOC_CONCURRENCY', '2'))),
+  /**
+   * 程序性记忆模式（论文实验 3 的对照组开关，生产保持默认 utility）：
+   * off=不注入也不沉淀；frozen=只注入已有规则、不从执行信号沉淀新规则；fifo=按创建顺序注入；utility=按效用排序注入。
+   */
+  proceduralMode: proceduralMode(env('PROCEDURAL_MODE', 'utility')),
+  /** 每轮注入程序性策略的字符预算。 */
+  proceduralBudget: Number(env('PROCEDURAL_BUDGET', '1000')),
+  /** Layer 3 后台元策略演进与 overlay 挂载（HARNESS_EVOLVE=0 关闭）。 */
+  harnessEvolve: env('HARNESS_EVOLVE', '1') === '1',
+  /** 每个回合开新的 dsh 会话（实验用：排除会话内上下文带来的跨任务学习）。 */
+  freshSessionPerTurn: env('HARNESS_FRESH_SESSION', '0') === '1',
+}
+
+function proceduralMode(v: string): 'off' | 'frozen' | 'fifo' | 'utility' {
+  if (v === 'off' || v === 'frozen' || v === 'fifo' || v === 'utility') return v
+  throw new Error(`PROCEDURAL_MODE 只能是 off / frozen / fifo / utility：${v}`)
 }
 
 if (process.env.NODE_ENV === 'production' && config.secret === 'dev-secret-not-for-production-use!') {

@@ -130,6 +130,21 @@ describe('AI 的权限 = 用户的权限', () => {
     expect((await asAdmin('action_status', { action_id: r.data.action_id })).data.status).toBe('done')
   })
 
+  it('HTTP 层兜底：需确认的接口，AI 未经确认直接调用一律拒绝；经确认卡（ai-confirmed）才执行', async () => {
+    const t = await setup()
+    const user = t.admin.user.id
+    // 清空记忆是需确认的操作：AI 直接调接口被拒
+    const direct = await t.invoke(user, 'DELETE', '/api/memory')
+    expect(direct.status).toBe(403)
+    expect((direct.json as any).code).toBe('confirmation_required')
+    // 同一接口，用户确认后执行
+    const confirmed = await t.invoke(user, 'DELETE', '/api/memory', undefined, { via: 'ai-confirmed', confirmedBy: user })
+    expect(confirmed.status).toBeLessThan(300)
+    // 带路径参数的需确认接口也挡得住；不需确认的同前缀接口不受影响
+    expect((await t.invoke(user, 'DELETE', '/api/docs/abc/purge')).status).toBe(403)
+    expect((await t.invoke(user, 'GET', '/api/memory')).status).toBe(200)
+  })
+
   it('拒绝、过期；确认卡上可改的字段（紧急访问理由）', async () => {
     const t = await setup()
     const asAdmin = await t.connect(t.admin.user.id)

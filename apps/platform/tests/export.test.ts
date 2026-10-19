@@ -108,6 +108,41 @@ describe('docx 导出（修补式）', () => {
   })
 })
 
+describe('docx 导出：改过的正文段落沿用原模板格式', () => {
+  const TEMPLATE = [
+    '<w:p w:rsidR="00A1B2C3" w:rsidP="00D4E5F6"><w:pPr><w:spacing w:line="480" w:lineRule="auto"/><w:ind w:firstLine="480"/><w:jc w:val="both"/></w:pPr>',
+    '<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="宋体"/><w:b/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">达格列净</w:t></w:r>',
+    '<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="宋体"/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">组中位随访 18 个个月。</w:t></w:r></w:p>',
+    p('讨论', '<w:pStyle w:val="Heading1"/>'),
+  ].join('')
+
+  it('保留段落属性、段落开始标签的属性、字体字号与加粗，其余段落原样', () => {
+    const original = docx(TEMPLATE)
+    const t = importInto(original)
+    const para = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: para, find: '18 个个月', replace: '18 个月' }] }, { actor: 'ai', turnId: 't1' })
+    const body = bodyOf(t.exportNow().bytes)
+    const first = body.slice(0, body.indexOf('</w:p>') + 6)
+    expect(first).toContain('<w:p w:rsidR="00A1B2C3" w:rsidP="00D4E5F6">')
+    expect(first).toContain('<w:spacing w:line="480" w:lineRule="auto"/><w:ind w:firstLine="480"/><w:jc w:val="both"/>')
+    expect(first).toContain('18 个月')
+    // 每个文字 run 都带模板字体字号；药名仍加粗
+    for (const run of first.match(/<w:r>[\s\S]*?<\/w:r>/g)!) expect(run).toMatch(/w:ascii="Times New Roman"[\s\S]*<w:sz w:val="24"\/>/)
+    expect(first).toMatch(/<w:b\/>[\s\S]*?达格列净/)
+    expect(body).toContain(p('讨论', '<w:pStyle w:val="Heading1"/>'))
+  })
+
+  it('原来是标题、改成普通段落后不再沿用标题样式', () => {
+    const original = docx(p('讨论', '<w:pStyle w:val="Heading1"/><w:spacing w:before="240"/>'))
+    const t = importInto(original)
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id, markdown: '讨论部分正文。' }] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).not.toContain('Heading1')
+    expect(body).toContain('<w:spacing w:before="240"/>')
+  })
+})
+
 describe('docx 导出：图、不可编辑段落、列表样式', () => {
   const withImage = (body: string) => docx(body, { rels: IMAGE_REL, files: { 'word/media/image1.png': PNG } })
   const drawings = (bytes: Uint8Array) => (bodyOf(bytes).match(/<w:drawing>/g) ?? []).length

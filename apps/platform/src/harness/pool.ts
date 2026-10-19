@@ -174,6 +174,7 @@ export class HarnessPool {
 
   /** null 表示下一次 run 会开新会话（调用方应补上历史上下文）。 */
   liveSession(userId: string, slot = 'default'): string | null {
+    if (this.config.freshSessionPerTurn) return null
     return this.entries.get(this.entryKey(userId, slot))?.sessionId ?? null
   }
 
@@ -182,7 +183,8 @@ export class HarnessPool {
     if (e.busy) throw new Error('busy')
     e.busy = true
     e.lastUsed = Date.now()
-    e.sessionId ??= randomUUID()
+    if (this.config.freshSessionPerTurn) e.sessionId = randomUUID()
+    else e.sessionId ??= randomUUID()
     const sessionId = e.sessionId
     try {
       return await e.harness.run(prompt, { sessionId, onNotification: n => onNotification(n, sessionId) })

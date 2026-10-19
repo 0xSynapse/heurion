@@ -2,6 +2,7 @@ import { OrgTemplateService } from '../auth/org-templates.ts'
 import { ORG_BASES, orgLogo, PRESET_AHSLYY, setOrgTenantResolver, themeAllowed, themeKeysFor } from '../model/org-templates.ts'
 import { Hono, type Context } from 'hono'
 import { H_AS, internalVia, makeInvoker, type Invoke, type ViaInfo } from './invoke.ts'
+import { CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { Transform } from 'prosemirror-transform'
 import { streamSSE } from 'hono/streaming'
 import { getConnInfo } from '@hono/node-server/conninfo'
@@ -57,7 +58,7 @@ import { EditBatch, OpError } from '../ops/types.ts'
 import { DeckEditBatch } from '../ops/deck.ts'
 import { commentPrompt, wantsAi, phrBriefPrompt, type TurnBusEvent, type TurnOptions, type TurnService } from '../turns/service.ts'
 import { referencePlan } from '../model/references.ts'
-import { diff, read } from '../views/read.ts'
+import { diff, read, ReadError } from '../views/read.ts'
 import { deckRead } from '../views/deck.ts'
 import { exportMarkdown, renderHtml } from '../views/render.ts'
 import { themePhoto } from '../model/theme-photos.ts'
@@ -329,11 +330,16 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     let user: string | null
     if (internal) {
       const as = c.req.header(H_AS) ?? ''
-      user = store.getUser(as) || (deps.devMode && as === deps.devUser) ? as : null
+      // 开发模式：与 REST 的开发令牌一致，也认开发子用户（<开发用户>:<名字>，e2e 与实验脚本用）
+      user = store.getUser(as) || (deps.devMode && (as === deps.devUser || as.startsWith(`${deps.devUser}:`))) ? as : null
       if (user) viaByReq.set(c.req.raw, internal)
     } else user = accounts.userFor(requestToken(c))
     if (!user) return c.json({ error: '请先登录', code: 'unauthorized' }, 401)
     c.set('user', user)
+    // 第二道防线：标了「需用户确认」的接口，AI 只能经确认卡执行（via=ai-confirmed），直接调用一律拒绝
+    if (internal?.via === 'ai' && CONFIRM_ROUTES.some(r => r.method === c.req.method && r.re.test(c.req.path))) {
+      return c.json({ error: '这是高风险操作，需要用户在确认卡上确认后才能执行', code: 'confirmation_required' }, 403)
+    }
     // 审计：按「方法 + 路径」记敏感操作（导出、删除、管理员操作……），目标的标题在操作前取（彻底删除后就查不到了）
     const rule = AUDITED.find(r => r.method === c.req.method && r.re.test(c.req.path))
     const target = rule ? auditTarget(c.req.path, c.get('user') ?? null) : null
@@ -1140,7 +1146,14 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (!row) return c.json({ error: 'not found' }, 404)
     docs.flush(row.id)
     if (row.kind === 'deck') return c.text(deckRead(docs.get(row.id), docs.rev(row.id)))
-    return c.text(read({ doc: docs.get(row.id), docId: row.id, rev: docs.rev(row.id), comments: store.listComments(row.id, 'open') }))
+    // 与 MCP doc_read 一致：长文档分页，?cursor=<顶层块下标> 读下一页
+    const cursor = Number(c.req.query('cursor'))
+    try {
+      return c.text(read({ doc: docs.get(row.id), docId: row.id, rev: docs.rev(row.id), comments: store.listComments(row.id, 'open'), ...(Number.isInteger(cursor) && cursor > 0 ? { cursor } : {}) }))
+    } catch (err) {
+      if (err instanceof ReadError) return c.json({ error: err.message }, 400)
+      throw err
+    }
   })
 
   app.get('/api/docs/:id/export.md', c => {
