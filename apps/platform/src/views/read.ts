@@ -86,6 +86,8 @@ export function read(input: ReadInput): string {
       const level = head.attrs.level as number
       for (let i = start + 1; i < blocks.length; i++) {
         const b = blocks[i]!
+        // 标题本身在待采纳修订里：紧跟着的同级修订版标题属于同一节，不算下一节（否则读到的是空章节）
+        if (b.type.name === 'heading' && b.attrs.suggest === 'insert' && b.attrs.suggest_of === head.attrs.id) continue
         if (b.type.name === 'heading' && (b.attrs.level as number) <= level) { end = i; break }
       }
     } else end = start + 1

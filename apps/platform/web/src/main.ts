@@ -678,6 +678,34 @@ let docPatient: string | null = null
 /** 当前文档事件流收到 hello 的次数（大于 1 说明是断线重连）。 */
 let streamHellos = 0
 
+/** 事件流最后一次收到消息（含服务端每 25 秒的 ping）的时间；太久没收到说明连接已半开，需要重建。 */
+let streamSeenAt = 0
+const STREAM_STALE_MS = 70_000
+
+function openStream(docId: string): EventSource {
+  streamSeenAt = Date.now()
+  const stream = new EventSource(`/api/docs/${docId}/stream?token=${encodeURIComponent(TOKEN)}`)
+  stream.onmessage = e => { streamSeenAt = Date.now(); onStreamEvent(JSON.parse(e.data)) }
+  stream.addEventListener('ping', () => { streamSeenAt = Date.now() })
+  return stream
+}
+
+/** 事件流太久没动静（休眠唤醒、代理静默断开）：重建连接；hello 到达后会重新拉取文档状态。 */
+function reviveStream(): void {
+  if (!session || Date.now() - streamSeenAt < STREAM_STALE_MS) return
+  session.stream.close()
+  session.stream = openStream(session.docId)
+}
+setInterval(reviveStream, 15_000)
+
+// 回到页面（切回标签页、唤醒）：补齐离开期间的修订与对话，不需要用户手动刷新
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !session) return
+  reviveStream()
+  session.provider?.resync()
+  scheduleRefresh()
+})
+
 /** 单调递增打开序号（防止并发 open(docId) 导致旧连接泄漏）。 */
 let openSeq = 0
 
@@ -698,8 +726,7 @@ async function open(docId: string): Promise<void> {
   const meta = await api(`/api/docs/${docId}`)
   if (seq !== openSeq) return
   close()
-  const stream = new EventSource(`/api/docs/${docId}/stream?token=${encodeURIComponent(TOKEN)}`)
-  stream.onmessage = e => onStreamEvent(JSON.parse(e.data))
+  const stream = openStream(docId)
   const onCommentClick = (thread: string) => {
     switchTab('commentPane')
     const card = document.querySelector(`#comments [data-cid="${CSS.escape(thread)}"]`)
@@ -818,7 +845,11 @@ function onStreamEvent(e: any): void {
   if (e.type === 'hello') {
     setBusy(Boolean(e.busy))
     // 断线重连（服务重启、网络抖动）：断线期间这一轮已经结束了，界面却还停在「进行中」——重新拉取对话，显示真实结果与重试按钮
-    if (streamHellos++ > 0 && !e.busy && turnUi) { turnUi = null; void refresh(true) }
+    if (streamHellos++ > 0) {
+      // 断线期间可能错过了 AI 的提交：补拉正文与修订列表
+      session.provider?.resync()
+      if (!e.busy && turnUi) { turnUi = null; void refresh(true) } else scheduleRefresh()
+    }
     return
   }
   if (e.type === 'commit') {
@@ -831,6 +862,8 @@ function onStreamEvent(e: any): void {
     }
     if (session.deck) void session.deck.load().then(() => { if (e.actor === 'ai') session?.deck?.flash(ids) })
     else if (e.actor === 'ai') session.editor?.flash(ids)
+    // 服务端的提交（AI 写入、采纳/拒绝修订）：主动向协同服务补拉一次，正文不依赖那条可能已半开的连接
+    session.provider?.resync()
     scheduleRefresh()
     return
   }
@@ -1887,7 +1920,9 @@ function renderTurnEvent(ev: any): void {
       void loadQueue()
       finishTurnUi(ev.status)
       if (ev.status !== 'done') addRetry(ev.turn_id)
-      if (ev.docs.includes(session?.docId) && ev.status !== 'error') {
+      // 出错或中断的回合也可能已经写入了一部分修订：同样刷新，不然这些修订要手动刷新页面才看得到
+      if (ev.docs.includes(session?.docId)) {
+        session?.provider?.resync()
         void refresh(false).then(() => {
           if (detail?.suggestions?.length > 0) {
             const targetMsg = lastAssistant ?? addMsg('assistant', '（已生成待采纳修订，请确认采纳或拒绝）', null, ev.turn_id ?? null)

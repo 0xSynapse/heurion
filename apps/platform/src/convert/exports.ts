@@ -1,6 +1,6 @@
 import { orgLogo } from '../model/org-templates.ts'
 import type { Documents } from '../model/runtime.ts'
-import { withoutPending } from '../ops/suggest.ts'
+import { pendingGroups, withoutPending } from '../ops/suggest.ts'
 import { exportDocx } from './docx-export.ts'
 import { exportPptx } from './pptx-export.ts'
 import { isPlatformPackage, pptxTemplate } from './pptx-template.ts'
@@ -17,8 +17,10 @@ export function docxFor(docs: Documents, docId: string) {
   docs.flush(docId)
   const store = docs.store
   const pkg = store.getPackage(docId)
-  return exportDocx({
-    doc: withoutPending(docs.get(docId)),
+  const current = docs.get(docId)
+  const pending = pendingGroups(current).length
+  const result = exportDocx({
+    doc: withoutPending(current),
     baseline: pkg ? baselineOf(docs, docId) : null,
     pkg,
     src: id => store.getNodeSrc(docId, id),
@@ -31,6 +33,9 @@ export function docxFor(docs: Documents, docId: string) {
       return a && bytes ? { mime: a.mime, bytes } : null
     },
   })
+  // 待采纳的修订按「未采纳」导出：明确告诉用户，免得以为 AI 的修改已经在文件里
+  if (pending > 0) result.warnings.unshift(`文档里还有 ${pending} 条待采纳修订，导出文件里是采纳前的内容；需要的话先在编辑器里采纳再导出`)
+  return result
 }
 
 /** 导出 pptx：以原始文件包（平台新建的 deck 为模板）为底座、未改动的页与形状原样写回。 */

@@ -358,10 +358,8 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
       const pairedDeletes = new Set<SuggestionBlock>()
 
       for (const ins of inserts) {
-        let del = deletes.find(d => !pairedDeletes.has(d) && ins.suggestOf && d.id === ins.suggestOf)
-        if (!del && deletes.length === 1 && !pairedDeletes.has(deletes[0]!)) {
-          del = deletes[0]
-        }
+        // 只按 suggest_of 配对：同一批里「新增一段 + 删除另一段」不能互相配对，否则被删的段会被隐藏、显示成一处莫名的改写
+        const del = deletes.find(d => !pairedDeletes.has(d) && ins.suggestOf && d.id === ins.suggestOf)
 
         if (del && ins.node.isTextblock && del.node.isTextblock) {
           pairedDeletes.add(del)
@@ -430,10 +428,12 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
             }
             rowPos += insRow.nodeSize
           }
-          // 在修改的单元格内部直接放置采纳条（方便长表格局部修改时就地采纳）
+          // 在修改的单元格内部直接放置采纳条（方便长表格局部修改时就地采纳）；改动很多时只放前几处，其余单元格靠底色与行内标注识别
           for (const cPos of changedCellBarPositions.slice(0, 6)) {
             decos.push(makeSuggestBar(group, `cell-${cPos}`, cPos, '表格内容已修订 · 待采纳'))
           }
+          // 单元格文字都没变（只改了表格属性、合并等）：整表加修订边框，免得原表被隐藏后看不出任何改动
+          if (changedCellBarPositions.length === 0) decos.push(Decoration.node(ins.pos, ins.pos + ins.node.nodeSize, { class: 'diff-ins-block' }))
         } else if (del && del.node.type.name !== 'table' && canOverlay(del.node, ins.node)) {
           pairedDeletes.add(del)
           decos.push(Decoration.node(del.pos, del.pos + del.node.nodeSize, { class: 'suggest-paired-delete' }))

@@ -416,7 +416,10 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .ProseMirror .suggest-paired-delete { display: none !important; }
 .ProseMirror [data-suggest="delete"] { background: var(--danger-soft); text-decoration: line-through; text-decoration-color: var(--danger); opacity: .8; }
 .ProseMirror :not(table)[data-suggest="insert"] { background: rgba(0, 229, 153, 0.06); border-left: 3px solid #00E599; padding-left: 8px; }
-.ProseMirror td.diff-modified-cell, .ProseMirror th.diff-modified-cell { background: rgba(0, 229, 153, 0.05); box-shadow: inset 3px 0 0 #00E599; }
+.ProseMirror td.diff-modified-cell, .ProseMirror th.diff-modified-cell { background: rgba(0, 229, 153, 0.12); box-shadow: inset 3px 0 0 #00E599; }
+/* 表格级修订：新增 / 待删除的整表要有明显边框（表格本身不吃上面块级的左边线） */
+.ProseMirror table[data-suggest="insert"], .ProseMirror table.diff-ins-block { outline: 2px solid #00E599; outline-offset: 2px; background: rgba(0, 229, 153, 0.04); }
+.ProseMirror table[data-suggest="delete"], .ProseMirror table.diff-del-block { outline: 2px dashed var(--danger); outline-offset: 2px; }
 .ProseMirror .diff-del-block { background: var(--danger-soft); border-left: 3px solid var(--danger); color: var(--danger); text-decoration: line-through; padding: 4px 8px; }
 .ProseMirror .diff-ins-block { background: rgba(0, 229, 153, 0.06); border-left: 3px solid #00E599; padding: 4px 8px; }
 

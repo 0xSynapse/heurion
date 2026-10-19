@@ -11,6 +11,14 @@ import { diffNodes } from '../model/runtime.ts'
 
 const clear = { suggest: null, suggest_group: null, suggest_of: null }
 
+/** pos 处的块自身或某个祖先是待采纳的新增块（修改它们只是在改同一条修订，不另起修订）。 */
+function insidePendingInsert(doc: PMNode, pos: number, self?: PMNode): boolean {
+  if (self?.attrs.suggest === 'insert') return true
+  const $pos = doc.resolve(pos)
+  for (let d = $pos.depth; d > 0; d--) if ($pos.node(d).attrs.suggest === 'insert') return true
+  return false
+}
+
 /** 把 before → after 的变化表达为待采纳修订，返回新文档。 */
 export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNode {
   const changes = diffNodes(before, after)
@@ -19,24 +27,34 @@ export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNo
   const old = indexById(before)
   const tr = new Transform(after)
 
-  // ① 改动的块：原块（delete）+ 新块（insert，内部 id 重新分配避免与原块重复）
+  // ① 改动的块：原块（delete）+ 新块（insert，内部 id 重新分配避免与原块重复）。
+  // 改的是一条还没采纳的新增（或它里面的内容，例如修订版表格的单元格）：并入那条修订，保持原组与 suggest_of，
+  // 不再复制出第二份——否则同一张表会出现多份待新增副本，失去配对，采纳或导出时内容重复
   for (const c of changes.filter(x => x.kind === 'modified')) {
     const hit = indexById(tr.doc).get(c.node_id)
-    const prev = old.get(c.node_id)?.node
+    const prevHit = old.get(c.node_id)
+    const prev = prevHit?.node
     if (!hit || !prev) continue
+    if (insidePendingInsert(before, prevHit.pos, prev)) {
+      if (prev.attrs.suggest === 'insert') {
+        tr.setNodeMarkup(hit.pos, undefined, { ...hit.node.attrs, suggest: 'insert', suggest_group: prev.attrs.suggest_group, suggest_of: prev.attrs.suggest_of })
+      }
+      continue
+    }
     const fresh = assignIds(stripIds(hit.node), taken)
     const inserted = fresh.type.create({ ...fresh.attrs, id: newId(taken), suggest: 'insert', suggest_group: group, suggest_of: c.node_id }, fresh.content, fresh.marks)
     const deleted = prev.type.create({ ...prev.attrs, suggest: 'delete', suggest_group: group, suggest_of: null }, prev.content, prev.marks)
     tr.replaceWith(hit.pos, hit.pos + hit.node.nodeSize, [deleted, inserted])
   }
 
-  // ② 新增的块（只标最外层）
+  // ② 新增的块（只标最外层；加在一条待采纳新增里面的，属于那条修订，不另标）
   const added = new Set(changes.filter(x => x.kind === 'added').map(x => x.node_id))
   const marks: number[] = []
   tr.doc.descendants((node, pos) => {
     if (!node.attrs.id || !added.has(node.attrs.id as string)) return true
     const $pos = tr.doc.resolve(pos)
     for (let d = $pos.depth; d > 0; d--) if (added.has($pos.node(d).attrs.id as string)) return false
+    if (insidePendingInsert(tr.doc, pos)) return false
     marks.push(pos)
     return false
   })
@@ -53,6 +71,8 @@ export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNo
     if (!node.attrs.id || !removed.has(node.attrs.id as string)) return true
     const $pos = before.resolve(pos)
     for (let d = $pos.depth; d > 0; d--) if (removed.has($pos.node(d).attrs.id as string)) return false
+    // 撤回的是一条还没采纳的新增：直接拿掉，不变成「待删除」
+    if (insidePendingInsert(before, pos, node)) return false
     const parent = $pos.parent
     // 由近到远的前面兄弟：最近的那个若没能放回（或没有 id），退到更前面的
     const prevSiblings: string[] = []

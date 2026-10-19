@@ -227,7 +227,13 @@ function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyCon
           break
         }
       }
-      let bad = sib.type.name === 'opaque' || Boolean(sib.attrs.suggest)
+      // 这一节里有待采纳的修订：整节替换会只换标题、留下旧正文，新旧两份并存——拒绝，先让用户处理修订
+      if (sib.attrs.suggest) {
+        throw new OpError('pending_suggestion', `章节 ${target.node.attrs.id} 里有待采纳的修订，不能整节替换`, {
+          hint: '这一节有还没采纳的修订。请先在回复里请用户采纳或拒绝，或只改具体段落（修订版的块可以直接改）。',
+        })
+      }
+      let bad = sib.type.name === 'opaque'
       sib.descendants(d => {
         const did = d.attrs.id as string | null
         if (did && (targetedIds.has(did) || ctx.userEditedIds?.has(did))) bad = true

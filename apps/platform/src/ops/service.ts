@@ -124,17 +124,36 @@ export class OpService {
     return { doc_id: batch.doc_id, rev: event?.rev ?? rev, results, changes: event?.changes ?? [] }
   }
 
-  /** 待采纳修订中的块不能再改（先由用户采纳或拒绝）。 */
+  /**
+   * 待采纳修订：「待删除」的原文版本（块自身或它所在的表格、列表）不能再改——改了会让修订失去配对，
+   * 采纳或导出时出现两份内容。待新增的修订版可以继续改，改动并入同一条修订（见 toSuggestion）。
+   */
   private guardPending(batch: EditBatch | DeckEditBatch, before: PMNode, targetsOf: (op: unknown) => string[]): void {
     const index = indexById(before)
+    // 原文块 id → 它的修订版（待新增）块 id
+    const copyOf = new Map<string, string>()
+    before.descendants(n => {
+      if (n.attrs.suggest === 'insert' && n.attrs.suggest_of) copyOf.set(n.attrs.suggest_of as string, n.attrs.id as string)
+      return true
+    })
     batch.ops.forEach((op, i) => {
       for (const id of [...targetsOf(op), ...('anchor_id' in op ? [op.anchor_id] : [])]) {
-        const node = index.get(id)?.node
-        if (node?.attrs.suggest) {
-          throw new OpError('pending_suggestion', `块 ${id} 在待采纳的修订里`, {
-            op_index: i, hint: '等用户采纳或拒绝这条修订后再改；需要时在回复里说明。',
-          })
+        const hit = index.get(id)
+        if (!hit) continue
+        let pending: PMNode | null = hit.node.attrs.suggest === 'delete' ? hit.node : null
+        if (!pending) {
+          const $pos = before.resolve(hit.pos)
+          for (let d = $pos.depth; d > 0 && !pending; d--) if ($pos.node(d).attrs.suggest === 'delete') pending = $pos.node(d)
         }
+        if (!pending) continue
+        const copy = copyOf.get(pending.attrs.id as string)
+        throw new OpError('pending_suggestion', `块 ${id} 在待采纳修订的原文版本里`, {
+          op_index: i,
+          hint: copy
+            ? `这里是待删除的原文版本。要继续修改，请改它的修订版 {#${copy}}（改动并入同一条修订）；或等用户采纳 / 拒绝后再改。`
+            : '这里是待删除的原文版本，等用户采纳或拒绝这条修订后再改；需要时在回复里说明。',
+          ...(copy ? { current: { pending_copy: copy } } : {}),
+        })
       }
     })
   }
