@@ -112,6 +112,16 @@ describe('MCP 工具', () => {
     expect(bad.body.code).toBe('citation_not_registered')
     expect(bad.body.hint).toContain('insert_citation')
 
+    // doc_validate 试探预检：返回结构化拦截原因，但不抛出 MCP tool error
+    const valBad = await t.call('doc_validate', { doc_id: t.docId, base_rev: 1, ops: [{ op: 'insert_after', anchor_id: para, markdown: '见 10.1056/NEJMoa2020' }] })
+    expect(valBad.isError).toBe(false)
+    expect(valBad.body.valid).toBe(false)
+    expect(valBad.body.code).toBe('citation_not_registered')
+
+    const valOk = await t.call('doc_validate', { doc_id: t.docId, base_rev: 1, ops: [{ op: 'replace_text', id: para, find: '纳入', replace: '共纳入' }] })
+    expect(valOk.isError).toBe(false)
+    expect(valOk.body.valid).toBe(true)
+
     const missing = await t.call('insert_citation', { doc_id: t.docId, doi: '10.9999/404' })
     expect(missing.body.code).toBe('doi_not_found')
   })

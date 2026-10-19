@@ -11,7 +11,7 @@ import { canAccess, verifyToken, type Permission, type TokenClaims } from '../au
 import type { ClaimService } from '../claims/service.ts'
 import { pptxFor } from '../convert/exports.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
-import { DeckOp, newTemplateDeck } from '../ops/deck.ts'
+import { DeckEditBatch, DeckOp, newTemplateDeck } from '../ops/deck.ts'
 import { LAYOUTS, layoutSpec, templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
 import type { SlideRenderer } from '../render/slides.ts'
@@ -27,7 +27,7 @@ import type { PubMedClient } from '../literature/pubmed.ts'
 import { AnchorError, attachComment, locate, threadMarks } from '../model/anchors.ts'
 import type { Documents } from '../model/runtime.ts'
 import type { OpService } from '../ops/service.ts'
-import { DocOp, OpError } from '../ops/types.ts'
+import { DocOp, EditBatch, OpError } from '../ops/types.ts'
 import { referencePlan } from '../model/references.ts'
 import { diff, outline, read, ReadError, search } from '../views/read.ts'
 import { DatasetError, type DatasetService } from '../datasets/service.ts'
@@ -300,6 +300,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       base_rev: z.number().int().min(0),
       mode: z.enum(['apply', 'suggest']).optional(),
       ack_comments: z.array(z.string()).optional(),
+      dry_run: z.boolean().optional().describe('试探预检模式：仅执行写前守卫与语法校验，不提交改动'),
       ops: z.array(DocOp).min(1).max(50),
     },
   }, async args => {
@@ -309,6 +310,10 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     try {
       const forced = ctx.activeTurn(args.doc_id)?.mode
       const mode = forced ?? args.mode ?? 'apply'
+      if (args.dry_run) {
+        const v = deps.ops.validate({ ...args, mode, dry_run: true }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null })
+        return json({ dry_run: true, ...v })
+      }
       const result = deps.ops.edit({ ...args, mode }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null })
       ctx.touch(args.doc_id)
       return json({
@@ -322,6 +327,44 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       if (err instanceof OpError) return fail(err.code, err.message, err.extra)
       throw err
     }
+  })
+
+  server.registerTool('doc_validate', {
+    description:
+      '试探预检文档或幻灯片的操作批次（Probe，Harness² 任务级自演进）：' +
+      '在内存中预先执行写前守卫、冲突检测（conflict_user_edited）、引用规范与语法演算，不提交任何实际修改。' +
+      '建议在进行大规模结构改动、复杂表格重写或多图插入前调用此工具试探；若有错误会返回明确的 code、hint 及当前块内容供修偏。',
+    inputSchema: {
+      doc_id: z.string(),
+      base_rev: z.number().int().min(0),
+      mode: z.enum(['apply', 'suggest']).optional(),
+      ack_comments: z.array(z.string()).optional(),
+      ops: z.array(z.record(z.unknown())).min(1).max(50),
+    },
+  }, async args => {
+    const denied = ctx.check(args.doc_id, 'write')
+    if (denied) return denied
+    const docRow = store.getDoc(args.doc_id)
+    if (!docRow) return fail('doc_not_found', `文档 ${args.doc_id} 不存在`)
+    const forced = ctx.activeTurn(args.doc_id)?.mode
+    const mode = forced ?? args.mode ?? 'apply'
+    const parsedBatch = docRow.kind === 'deck'
+      ? DeckEditBatch.safeParse({ ...args, mode, dry_run: true })
+      : EditBatch.safeParse({ ...args, mode, dry_run: true })
+    if (!parsedBatch.success) {
+      return json({
+        valid: false,
+        code: 'schema_error',
+        message: '操作结构不符合规范',
+        errors: parsedBatch.error.issues.map(i => `${i.path.join('.')}: ${i.message}`),
+      })
+    }
+    const res = deps.ops.validate(parsedBatch.data, {
+      actor: 'ai',
+      turnId: ctx.turnId,
+      answering: ctx.activeTurn(args.doc_id)?.answering ?? null,
+    })
+    return json(res)
   })
 
   server.registerTool('doc_history', {
@@ -409,6 +452,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       base_rev: z.number().int().min(0),
       mode: z.enum(['apply', 'suggest']).optional(),
       ack_comments: z.array(z.string()).optional(),
+      dry_run: z.boolean().optional().describe('试探预检模式：仅执行写前守卫与语法校验，不提交改动'),
       ops: z.array(DeckOp).min(1).max(50),
     },
   }, async args => {
@@ -417,6 +461,10 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     try {
       const forced = ctx.activeTurn(args.doc_id)?.mode
       const mode = forced === 'suggest' ? 'suggest' : args.mode ?? 'apply'
+      if (args.dry_run) {
+        const v = deps.ops.validate({ ...args, mode, dry_run: true }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null })
+        return json({ dry_run: true, ...v })
+      }
       const result = deps.ops.edit({ ...args, mode }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null })
       ctx.touch(args.doc_id)
       return json({ rev: result.rev, results: result.results, changed: result.changes.length, mode })

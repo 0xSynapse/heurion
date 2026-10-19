@@ -158,6 +158,7 @@ export const DeckEditBatch = z.object({
   base_rev: z.number().int().min(0),
   mode: z.enum(['apply', 'suggest']).default('apply'),
   ack_comments: z.array(z.string()).optional(),
+  dry_run: z.boolean().optional().describe('试探预检模式：仅执行写前守卫与语法校验，不提交改动'),
   ops: z.array(DeckOp).min(1).max(50),
 })
 export type DeckEditBatch = z.infer<typeof DeckEditBatch>
