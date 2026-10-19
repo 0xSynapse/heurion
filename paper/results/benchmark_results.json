@@ -1,20 +1,79 @@
 {
-  "timestamp": "2026-10-19T07:52:52.758Z",
+  "timestamp": "2026-10-19T19:20:13.515Z",
   "exp1_dual_surface": {
     "trials": 50,
     "unmodified_byte_identity_rate": 100,
     "concurrent_conflict_guard_accuracy": 100,
     "selective_turn_undo_preservation_rate": 100,
-    "avg_validate_latency_ms": 0.168,
-    "avg_edit_latency_ms": 0.351,
-    "avg_revert_latency_ms": 0.128
+    "avg_validate_latency_ms": 0.188,
+    "avg_edit_latency_ms": 0.343,
+    "avg_revert_latency_ms": 0.132
   },
   "exp2_prewrite_guards": {
-    "unregistered_citation_trials": 50,
+    "unregistered_citation_trials": 100,
     "unregistered_citation_block_rate": 100,
-    "phi_injection_trials": 40,
-    "phi_detection_recall": 100,
-    "clean_medical_false_positive_rate": 0
+    "phi_injection_trials": 200,
+    "phi_total_entities": 720,
+    "phi_stage1_detected_entities": 600,
+    "phi_stage2_detected_entities": 110,
+    "phi_combined_detected_entities": 710,
+    "phi_stage1_entity_recall": 83.33,
+    "phi_combined_entity_recall": 98.61,
+    "phi_stage1_premask_leak_count": 0,
+    "phi_by_category": {
+      "id_card": {
+        "expected": 120,
+        "stage1_detected": 120,
+        "stage2_detected": 0,
+        "combined_detected": 120
+      },
+      "phone": {
+        "expected": 120,
+        "stage1_detected": 120,
+        "stage2_detected": 0,
+        "combined_detected": 120
+      },
+      "medical_record_no": {
+        "expected": 120,
+        "stage1_detected": 120,
+        "stage2_detected": 0,
+        "combined_detected": 120
+      },
+      "bank_card": {
+        "expected": 120,
+        "stage1_detected": 120,
+        "stage2_detected": 0,
+        "combined_detected": 120
+      },
+      "name_with_diagnosis": {
+        "expected": 120,
+        "stage1_detected": 120,
+        "stage2_detected": 0,
+        "combined_detected": 120
+      },
+      "unlabeled_person_name": {
+        "expected": 60,
+        "stage1_detected": 0,
+        "stage2_detected": 55,
+        "combined_detected": 55
+      },
+      "address_or_org": {
+        "expected": 60,
+        "stage1_detected": 0,
+        "stage2_detected": 55,
+        "combined_detected": 55
+      }
+    },
+    "clean_medical_trials": 200,
+    "clean_medical_false_positive_rate": 0,
+    "checksum_hard_negative_trials": 100,
+    "checksum_hard_negative_false_positive_rate": 0,
+    "naive_regex_hard_negative_false_positive_rate": 100,
+    "clean_chinese_clinical_trials": 30,
+    "clean_chinese_clinical_false_positives": 1,
+    "clean_chinese_clinical_false_positive_rate": 3.33,
+    "phi_stage1_avg_latency_ms": 0.0111,
+    "phi_stage2_local_slm_avg_latency_ms": 3212.2
   },
   "exp3_self_evolution": {
     "sessions": 10,
@@ -22,72 +81,72 @@
       {
         "session": 1,
         "no_memory_rejections": 6,
-        "unranked_memory_rejections": 4,
+        "unranked_memory_rejections": 6,
         "heurion2_dual_track_rejections": 4,
-        "heurion2_prompt_chars": 347
+        "heurion2_prompt_chars": 336
       },
       {
         "session": 2,
         "no_memory_rejections": 6,
-        "unranked_memory_rejections": 4,
+        "unranked_memory_rejections": 6,
         "heurion2_dual_track_rejections": 4,
-        "heurion2_prompt_chars": 347
+        "heurion2_prompt_chars": 336
       },
       {
         "session": 3,
         "no_memory_rejections": 6,
-        "unranked_memory_rejections": 4,
+        "unranked_memory_rejections": 6,
         "heurion2_dual_track_rejections": 0,
-        "heurion2_prompt_chars": 355
+        "heurion2_prompt_chars": 330
       },
       {
         "session": 4,
         "no_memory_rejections": 6,
-        "unranked_memory_rejections": 4,
+        "unranked_memory_rejections": 6,
         "heurion2_dual_track_rejections": 0,
-        "heurion2_prompt_chars": 355
+        "heurion2_prompt_chars": 330
       },
       {
         "session": 5,
         "no_memory_rejections": 6,
-        "unranked_memory_rejections": 4,
+        "unranked_memory_rejections": 6,
         "heurion2_dual_track_rejections": 0,
-        "heurion2_prompt_chars": 355
+        "heurion2_prompt_chars": 330
       },
       {
         "session": 6,
         "no_memory_rejections": 6,
-        "unranked_memory_rejections": 4,
+        "unranked_memory_rejections": 6,
         "heurion2_dual_track_rejections": 0,
-        "heurion2_prompt_chars": 355
+        "heurion2_prompt_chars": 330
       },
       {
         "session": 7,
         "no_memory_rejections": 6,
-        "unranked_memory_rejections": 4,
+        "unranked_memory_rejections": 6,
         "heurion2_dual_track_rejections": 0,
-        "heurion2_prompt_chars": 355
+        "heurion2_prompt_chars": 330
       },
       {
         "session": 8,
         "no_memory_rejections": 6,
-        "unranked_memory_rejections": 4,
+        "unranked_memory_rejections": 6,
         "heurion2_dual_track_rejections": 0,
-        "heurion2_prompt_chars": 355
+        "heurion2_prompt_chars": 330
       },
       {
         "session": 9,
         "no_memory_rejections": 6,
-        "unranked_memory_rejections": 4,
+        "unranked_memory_rejections": 6,
         "heurion2_dual_track_rejections": 0,
-        "heurion2_prompt_chars": 355
+        "heurion2_prompt_chars": 330
       },
       {
         "session": 10,
         "no_memory_rejections": 6,
-        "unranked_memory_rejections": 4,
+        "unranked_memory_rejections": 6,
         "heurion2_dual_track_rejections": 0,
-        "heurion2_prompt_chars": 355
+        "heurion2_prompt_chars": 330
       }
     ],
     "distilled_rules_count": 9,

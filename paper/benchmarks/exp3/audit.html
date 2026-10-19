@@ -1,0 +1,198 @@
+<title>判定复核</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* 版式：左侧题号列表；主区依次是任务与布置、程序判定、改前改后的段落（逐词高亮）、AI 回复，判定按钮固定在任务卡片里 */
+:root {
+  --bg: #f3f4f1; --surface: #ffffff; --ink: #1c2320; --muted: #5e6964; --line: #d8dcd5;
+  --accent: #34507a; --accent-soft: #e3e9f2;
+  --ok: #2f6b45; --ok-soft: #e1eee5; --bad: #a3342b; --bad-soft: #f5e2df; --unsure: #8a5a12; --unsure-soft: #f5ebd8;
+  --del: #f6d9d5; --ins: #d7ecdc;
+  --font-display: "Noto Serif SC", "Songti SC", serif;
+  --font-ui: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #131816; --surface: #1b211f; --ink: #e4e9e5; --muted: #98a49e; --line: #2e3733; --accent: #93b0de; --accent-soft: #233046;
+    --ok: #80c79b; --ok-soft: #1f3428; --bad: #ee8f84; --bad-soft: #3d2421; --unsure: #e2b46a; --unsure-soft: #3a2e1b;
+    --del: #4a2723; --ins: #1f3d29; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #131816; --surface: #1b211f; --ink: #e4e9e5; --muted: #98a49e; --line: #2e3733; --accent: #93b0de; --accent-soft: #233046;
+  --ok: #80c79b; --ok-soft: #1f3428; --bad: #ee8f84; --bad-soft: #3d2421; --unsure: #e2b46a; --unsure-soft: #3a2e1b;
+  --del: #4a2723; --ins: #1f3d29; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.7 var(--font-ui); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 48px; }
+.wrap { max-width: 1180px; margin: 0 auto; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; padding-block: 20px 12px; border-bottom: 1px solid var(--line); }
+header h1 { font: 600 22px/1.3 var(--font-display); margin: 0; }
+header p { margin: 0; color: var(--muted); font-size: 13.5px; max-width: 70ch; }
+.notice { margin-top: 40px; color: var(--muted); }
+.work { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 24px; margin-top: 20px; }
+.list { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); align-self: start; display: grid; gap: 10px; }
+.progress { font-size: 13px; color: var(--muted); }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+.bar > i { display: block; height: 100%; background: var(--accent); width: 0; }
+.items { display: grid; grid-template-columns: repeat(auto-fill, minmax(40px, 1fr)); gap: 6px; }
+.items button { font: 500 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; height: 32px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.items button.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.items button[data-v="agree"] { background: var(--ok-soft); border-color: var(--ok-soft); }
+.items button[data-v="disagree"] { background: var(--bad-soft); border-color: var(--bad-soft); }
+.items button[data-v="unsure"] { background: var(--unsure-soft); border-color: var(--unsure-soft); }
+.main { display: grid; gap: 16px; min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; display: grid; gap: 10px; min-width: 0; }
+.card h2 { font: 600 13px/1.4 var(--font-ui); color: var(--muted); margin: 0; letter-spacing: .02em; }
+.instr { font: 600 17px/1.7 var(--font-display); margin: 0; }
+.meta { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.pill { font-size: 13px; padding: 2px 10px; border-radius: 999px; font-weight: 600; }
+.pill.pass { background: var(--ok-soft); color: var(--ok); }
+.pill.fail { background: var(--bad-soft); color: var(--bad); }
+.choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.choice { font: inherit; text-align: left; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 9px 12px; cursor: pointer; display: grid; gap: 2px; }
+.choice span { font-size: 12.5px; color: var(--muted); }
+.choice kbd { font: 11px var(--font-mono); color: var(--muted); }
+.choice[data-v="agree"][aria-pressed="true"] { border-color: var(--ok); background: var(--ok-soft); }
+.choice[data-v="disagree"][aria-pressed="true"] { border-color: var(--bad); background: var(--bad-soft); }
+.choice[data-v="unsure"][aria-pressed="true"] { border-color: var(--unsure); background: var(--unsure-soft); }
+textarea { width: 100%; min-height: 56px; font: inherit; font-size: 14px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; resize: vertical; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.nav button { font: inherit; font-size: 14px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 6px; padding: 5px 14px; cursor: pointer; }
+.nav button.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.saved { font-size: 12.5px; color: var(--muted); }
+.chg { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.chg:first-of-type { border-top: 0; padding-top: 0; }
+.chg div { font-size: 14px; line-height: 1.75; overflow-wrap: anywhere; min-width: 0; }
+.chg .lab { font-size: 12px; color: var(--muted); display: block; margin-bottom: 2px; }
+del { background: var(--del); text-decoration: line-through; text-decoration-color: var(--bad); }
+ins { background: var(--ins); text-decoration: none; }
+.reply { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.errs { font: 12.5px var(--font-mono); color: var(--muted); }
+button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 760px) { .work { grid-template-columns: minmax(0, 1fr); } .list { position: static; } .choices, .chg { grid-template-columns: minmax(0, 1fr); } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>判定复核</h1>
+    <p>逐条看 AI 实际改了什么，判断程序给出的「通过 / 不通过」是否正确。看不到这一回合属于哪一组。快捷键：1 正确 · 2 错误 · 3 拿不准 · ← → 翻页。</p>
+  </header>
+  <p class="notice" id="empty">正在载入……如果一直停在这里，请确认已登录 claude.ai。</p>
+  <div class="work" id="work" hidden>
+    <aside class="list">
+      <div class="progress"><span id="done">0</span> / <span id="total">0</span> 已复核<div class="bar"><i id="bar"></i></div></div>
+      <div class="items" id="items"></div>
+    </aside>
+    <div class="main">
+      <section class="card">
+        <h2>任务</h2>
+        <p class="instr" id="instr"></p>
+        <div class="meta"><span id="no"></span><span id="arch"></span><span id="topic"></span></div>
+        <div class="meta" id="setup"></div>
+      </section>
+      <section class="card">
+        <h2>程序判定（请判断它对不对）</h2>
+        <div class="verdict"><span class="pill" id="verdict"></span><span id="reason"></span></div>
+        <div class="errs" id="errs"></div>
+        <div class="choices" role="group" aria-label="复核结论">
+          <button class="choice" data-v="agree" aria-pressed="false"><b>判定正确</b><span>程序的结论与我看到的一致</span><kbd>按 1</kbd></button>
+          <button class="choice" data-v="disagree" aria-pressed="false"><b>判定错误</b><span>该通过却判不通过，或反过来</span><kbd>按 2</kbd></button>
+          <button class="choice" data-v="unsure" aria-pressed="false"><b>拿不准</b><span>材料不足以判断</span><kbd>按 3</kbd></button>
+        </div>
+        <label for="note" class="saved">备注（判定错误或拿不准时，写下原因）</label>
+        <textarea id="note"></textarea>
+        <div class="row"><span class="saved" id="saved">还没有复核</span><div class="nav"><button id="prev">上一条</button> <button id="next" class="primary">下一条</button></div></div>
+      </section>
+      <section class="card">
+        <h2>本回合改动的段落（左：改前 · 右：改后）</h2>
+        <div id="changes"></div>
+      </section>
+      <section class="card">
+        <h2>AI 的最后回复</h2>
+        <div class="reply" id="reply"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+const ARCH = { concurrent_edit: '并发修改', citation: '引用', pending_suggestion: '待采纳修订', open_comment_anchor: '多条批注', term_unify: '统一用词', table_row: '改表格', out_of_scope_revert: '限定范围润色', p_value_format: '统一 P 值格式', move_subsection: '移动小节 / 段落' }
+const LABEL = { agree: '判定正确', disagree: '判定错误', unsure: '拿不准' }
+const $ = id => document.getElementById(id)
+let db = null, items = [], mine = {}, cur = 0
+
+// 逐词差异（最长公共子序列），段落较短，直接算
+function wordDiff(a, b) {
+  const A = (a || '').split(/(\s+)/), B = (b || '').split(/(\s+)/)
+  if (A.length * B.length > 400000) return [esc(a || ''), esc(b || '')]
+  const n = A.length, m = B.length, L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1))
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1])
+  let i = 0, j = 0, left = '', right = ''
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { left += esc(A[i]); right += esc(B[j]); i++; j++ }
+    else if (L[i + 1][j] >= L[i][j + 1]) { left += `<del>${esc(A[i])}</del>`; i++ }
+    else { right += `<ins>${esc(B[j])}</ins>`; j++ }
+  }
+  while (i < n) left += `<del>${esc(A[i++])}</del>`
+  while (j < m) right += `<ins>${esc(B[j++])}</ins>`
+  return [left, right]
+}
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
+
+function render() {
+  if (!items.length) return
+  $('empty').hidden = true; $('work').hidden = false
+  const it = items[cur], done = items.filter(i => mine[i.id]?.verdict).length
+  $('done').textContent = done; $('total').textContent = items.length; $('bar').style.width = (100 * done / items.length) + '%'
+  const list = $('items'); list.textContent = ''
+  items.forEach((i, k) => { const b = document.createElement('button'); b.textContent = i.order; if (k === cur) b.className = 'current'; if (mine[i.id]?.verdict) b.dataset.v = mine[i.id].verdict; b.addEventListener('click', () => go(k)); list.append(b) })
+  $('instr').textContent = it.instruction || '（没有取到任务指令）'
+  $('no').textContent = `第 ${it.order} / ${items.length} 条`; $('arch').textContent = ARCH[it.archetype] || it.archetype; $('topic').textContent = it.topic
+  $('setup').textContent = it.setup
+  const v = $('verdict'); v.textContent = it.verdict === 'pass' ? '程序判定：通过' : '程序判定：不通过'; v.className = 'pill ' + it.verdict
+  $('reason').textContent = (it.reverted ? '（回合后被模拟撤销）' : '') + (it.reason || '')
+  $('errs').textContent = (it.errors || []).length ? '工具报错：' + it.errors.map(e => `${e.tool}${e.code ? '(' + e.code + ')' : ''}`).join('，') : ''
+  for (const c of document.querySelectorAll('.choice')) c.setAttribute('aria-pressed', String(c.dataset.v === mine[it.id]?.verdict))
+  if (document.activeElement !== $('note')) $('note').value = mine[it.id]?.note || ''
+  $('saved').textContent = mine[it.id]?.verdict ? `已保存：${LABEL[mine[it.id].verdict]}` : '还没有复核'
+  const box = $('changes'); box.textContent = ''
+  if (!(it.changes || []).length) box.textContent = '本回合结束时文档没有变化（可能 AI 没改，或改动被撤销）。'
+  for (const c of it.changes || []) {
+    const [l, r] = wordDiff(c.before, c.after)
+    const row = document.createElement('div'); row.className = 'chg'
+    row.innerHTML = `<div><span class="lab">${c.before == null ? '（新增）' : '改前'}</span>${c.before == null ? '' : l}</div><div><span class="lab">${c.after == null ? '（删除）' : '改后'}</span>${c.after == null ? '' : r}</div>`
+    box.append(row)
+  }
+  $('reply').textContent = it.reply || '（没有回复）'
+}
+function go(k) { if (k < 0 || k >= items.length || k === cur) return; cur = k; render(); window.scrollTo({ top: 0 }) }
+async function save(patch) {
+  const it = items[cur]; if (!it || !db) return
+  const next = { ...(mine[it.id] || {}), ...patch, item: it.id, updated_at: new Date().toISOString() }
+  mine[it.id] = next; render()
+  try { await db.doc(`reviews/${it.id}`).set(next); $('saved').textContent = '已保存：' + (next.verdict ? LABEL[next.verdict] : '备注') }
+  catch (e) { $('saved').textContent = '没保存上：' + (e?.message || '网络或权限问题') }
+}
+for (const c of document.querySelectorAll('.choice')) c.addEventListener('click', () => save({ verdict: c.dataset.v }))
+let t = null; $('note').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => save({ note: $('note').value }), 700) })
+$('prev').addEventListener('click', () => go(cur - 1)); $('next').addEventListener('click', () => go(cur + 1))
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'TEXTAREA') return
+  if (['1', '2', '3'].includes(e.key)) save({ verdict: ['agree', 'disagree', 'unsure'][Number(e.key) - 1] })
+  else if (e.key === 'ArrowRight') go(cur + 1); else if (e.key === 'ArrowLeft') go(cur - 1)
+})
+;(async () => {
+  db = await claude.use('db')
+  if (!db) { $('empty').textContent = '需要登录 claude.ai 才能复核。'; return }
+  db.collection('items').orderBy('order').onSnapshot(s => {
+    items = s.docs.map(d => ({ id: d.id, ...d.data() }))
+    if (!items.length) { $('empty').textContent = '复核条目还没有导入。正式实验跑完后会自动出现在这里。'; return }
+    cur = Math.min(cur, items.length - 1); render()
+  }, e => { $('empty').textContent = '读取失败：' + (e?.message || e) })
+  db.collection('reviews').onSnapshot(s => { for (const d of s.docs) mine[d.id] = d.data(); if (items.length) { if (!render.jumped) { render.jumped = true; const k = items.findIndex(i => !mine[i.id]?.verdict); if (k > 0) cur = k } render() } }, () => {})
+})()
+</script>
