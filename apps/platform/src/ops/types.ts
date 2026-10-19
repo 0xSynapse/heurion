@@ -120,6 +120,7 @@ export const EditBatch = z.object({
   base_rev: z.number().int().min(0).describe('读视图返回的 rev'),
   mode: z.enum(['apply', 'suggest']).default('apply'),
   ack_comments: z.array(z.string()).optional().describe('确认会移除锚点的 open 评论线程 id'),
+  dry_run: z.boolean().optional().describe('试探预检模式：仅执行写前守卫与语法校验，不提交改动'),
   ops: z.array(DocOp).min(1).max(50),
 })
 

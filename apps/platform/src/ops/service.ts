@@ -27,6 +27,27 @@ export interface EditResult {
   changes: NodeChange[]
 }
 
+export interface ValidateResult {
+  valid: boolean
+  doc_id?: string
+  rev?: number
+  code?: string
+  message?: string
+  op_index?: number
+  hint?: string
+  current?: unknown
+  results?: Array<Omit<OpResult, 'op'> & { op: string }>
+}
+
+
+export type GuardRejectCallback = (e: {
+  owner: string
+  docId: string
+  turnId?: string | null
+  code: string
+  message: string
+  extra?: Record<string, unknown>
+}) => void
 
 /**
  * 操作层（PLATFORM.md §5）：唯一的 MCP 写入口。
@@ -38,6 +59,7 @@ export class OpService {
     private readonly docs: Documents,
     /** 知家红线守卫（PATIENT.md §3）：按归属查成员标记（孕产 / 哺乳 / 儿童年龄）；没有接入时特殊人群规则不启用。 */
     private readonly phrMember?: (owner: string, patientId: string, space?: 'work' | 'personal') => PhrMember | null,
+    private readonly onGuardReject?: GuardRejectCallback,
   ) {}
 
   /** deck 的版式与页面尺寸（来自原始文件包；按文档缓存）。 */
@@ -58,10 +80,56 @@ export class OpService {
   }
 
   /**
-   * meta.answering：本回合正在回答的评论线程。它的锚点被改没时（用户要求改的正是被评论的文字），
-   * 重新锚定到原来所在的块 / 形状上，而不是拦下（其他线程仍按锚点守卫）。
+   * 预检与试探（Probe，Harness² 任务级自演进）：
+   * 在内存中执行写前守卫、冲突检查与操作演算，不触发 Yjs 事务，不修改文档。
+   * 失败时返回结构化原因（code/hint/current），不抛出异常。
    */
-  edit(batch: EditBatch | DeckEditBatch, meta: { actor: Actor; turnId: string | null; answering?: string | null; user?: string | null }): EditResult {
+  validate(batch: EditBatch | DeckEditBatch, meta: { actor: Actor; turnId?: string | null; answering?: string | null; user?: string | null }): ValidateResult {
+    try {
+      const sim = this.simulate(batch, { actor: meta.actor, turnId: meta.turnId ?? null, answering: meta.answering, user: meta.user })
+      return {
+        valid: true,
+        doc_id: batch.doc_id,
+        rev: sim.rev,
+        results: sim.results,
+      }
+    } catch (err) {
+      if (err instanceof OpError) {
+        if (meta.actor === 'ai') {
+          const row = this.docs.store.getDoc(batch.doc_id)
+          this.onGuardReject?.({
+            owner: row?.owner ?? 'system',
+            docId: batch.doc_id,
+            turnId: meta.turnId,
+            code: err.code,
+            message: err.message,
+            extra: err.extra as Record<string, unknown>,
+          })
+        }
+        return {
+          valid: false,
+          code: err.code,
+          message: err.message,
+          ...err.extra,
+        }
+      }
+      return {
+        valid: false,
+        code: 'validation_error',
+        message: (err as Error).message ?? String(err),
+      }
+    }
+  }
+
+  /** 模拟应用与守卫验证（供 edit 与 validate 共用）。 */
+  private simulate(batch: EditBatch | DeckEditBatch, meta: { actor: Actor; turnId: string | null; answering?: string | null; user?: string | null }): {
+    deck: boolean
+    before: PMNode
+    after: PMNode
+    reanchored: string | null
+    results: Array<Omit<OpResult, 'op'> & { op: string }>
+    rev: number
+  } {
     const store = this.docs.store
     const row = store.getDoc(batch.doc_id)
     if (!row) throw new OpError('doc_not_found', `文档 ${batch.doc_id} 不存在`)
@@ -118,10 +186,37 @@ export class OpService {
     after = this.keepWholeNode(batch.doc_id, after)
     if (ai) this.guardAnchors(batch, before, after)
 
-    const event = this.docs.commit(batch.doc_id, after, { actor: meta.actor, turnId: meta.turnId, ops: batch.ops, user: meta.user ?? null })
-    // 重新锚到整块的线程：记录随之改成整块评论（引用文字清空，之后按整块维护）
-    if (reanchored && meta.answering) this.docs.store.setCommentAnchor(meta.answering, reanchored, '')
-    return { doc_id: batch.doc_id, rev: event?.rev ?? rev, results, changes: event?.changes ?? [] }
+    return { deck, before, after, reanchored, results, rev }
+  }
+
+  /**
+   * meta.answering：本回合正在回答的评论线程。它的锚点被改没时（用户要求改的正是被评论的文字），
+   * 重新锚定到原来所在的块 / 形状上，而不是拦下（其他线程仍按锚点守卫）。
+   */
+  edit(batch: EditBatch | DeckEditBatch, meta: { actor: Actor; turnId: string | null; answering?: string | null; user?: string | null }): EditResult {
+    try {
+      const sim = this.simulate(batch, meta)
+      if (batch.dry_run) {
+        return { doc_id: batch.doc_id, rev: sim.rev, results: sim.results, changes: [] }
+      }
+      const event = this.docs.commit(batch.doc_id, sim.after, { actor: meta.actor, turnId: meta.turnId, ops: batch.ops, user: meta.user ?? null })
+      // 重新锚到整块的线程：记录随之改成整块评论（引用文字清空，之后按整块维护）
+      if (sim.reanchored && meta.answering) this.docs.store.setCommentAnchor(meta.answering, sim.reanchored, '')
+      return { doc_id: batch.doc_id, rev: event?.rev ?? sim.rev, results: sim.results, changes: event?.changes ?? [] }
+    } catch (err) {
+      if (err instanceof OpError && meta.actor === 'ai') {
+        const row = this.docs.store.getDoc(batch.doc_id)
+        this.onGuardReject?.({
+          owner: row?.owner ?? 'system',
+          docId: batch.doc_id,
+          turnId: meta.turnId,
+          code: err.code,
+          message: err.message,
+          extra: err.extra as Record<string, unknown>,
+        })
+      }
+      throw err
+    }
   }
 
   /** 待采纳修订中的块不能再改（先由用户采纳或拒绝）。 */
