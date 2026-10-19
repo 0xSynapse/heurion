@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { redactPhi, scanPhi, validateIdCard, validateLuhn } from '../src/ops/phi-scan.ts'
+import {
+  assertLocalPhiEndpoint,
+  redactPhi,
+  redactPhiCascaded,
+  scanPhi,
+  validateIdCard,
+  validateLuhn,
+} from '../src/ops/phi-scan.ts'
 
 describe('PHI 扫描与脱敏测试 (Track D)', () => {
   describe('validateIdCard', () => {
@@ -66,17 +73,19 @@ describe('PHI 扫描与脱敏测试 (Track D)', () => {
       expect(types).toContain('medical_record_no')
     })
 
-    it('扫描患者姓名与敏感诊断关联', () => {
-      const text = '患者姓名：李晓华，经病理检查确诊为浸润性乳腺癌。'
+    it('扫描患者姓名与敏感诊断关联（含字母/数字/罗马数字分型及病程叙事）', () => {
+      const text = '患者姓名：李晓华，经病理检查确诊为浸润性乳腺癌；患者王建国（男，58岁），入院诊断为2型糖尿病肾病；受试者：张伟，确诊为弥漫大B细胞淋巴瘤。'
       const findings = scanPhi(text)
-      const nameDiag = findings.find(f => f.type === 'name_with_diagnosis')
-      expect(nameDiag).toBeDefined()
-      expect(nameDiag?.value).toContain('李晓华')
-      expect(nameDiag?.value).toContain('乳腺癌')
+      const nameDiags = findings.filter(f => f.type === 'name_with_diagnosis')
+      expect(nameDiags).toHaveLength(3)
 
       const redacted = redactPhi(text)
       expect(redacted).not.toContain('李晓华')
-      expect(redacted).toContain('李*')
+      expect(redacted).not.toContain('王建国')
+      expect(redacted).not.toContain('张伟')
+      expect(redacted).toContain('李**')
+      expect(redacted).toContain('王**')
+      expect(redacted).toContain('张*')
     })
 
     it('综合场景：同时存在多种 PHI 实体', () => {
@@ -97,15 +106,39 @@ describe('PHI 扫描与脱敏测试 (Track D)', () => {
       expect(redacted).toContain('110105********002X')
     })
 
-    it('普通学术论文或化验指标不发生误报', () => {
+    it('普通学术论文、零填充 DOI 后缀或化验指标不发生误报', () => {
       const cleanText = `
 Study showed that 5-year overall survival was 78.4% (95% CI 72.1-84.7%).
 WBC 6.5 x10^9/L, Platelets 220 x10^9/L, ALT 24 U/L.
-Reference date was 2026-05-18. DOI: 10.1016/j.cell.2026.01.002.
+Reference date was 2026-05-18. DOI: 10.1097/0000000000000406.
 `
       const findings = scanPhi(cleanText)
       expect(findings).toHaveLength(0)
       expect(redactPhi(cleanText)).toBe(cleanText)
     })
+
+    it('两阶段漏斗式脱敏 (redactPhiCascaded)：Stage-2 仅接收 Stage-1 预脱敏文本并兜底自由叙事姓名', async () => {
+      const note = '身份证: 11010519491231002X，主治医师查房记录：老刘今日精神可，诉夜间偶有胸闷。'
+      let stage2Input = ''
+      const res = await redactPhiCascaded(note, async masked => {
+        stage2Input = masked
+        return [{ value: '老刘', redacted: '老*' }]
+      })
+      expect(stage2Input).not.toContain('11010519491231002X')
+      expect(stage2Input).toContain('110105********002X')
+      expect(res.stage2Count).toBe(1)
+      expect(res.stage2Findings[0]!.source).toBe('stage2_local_slm')
+      expect(res.redacted).not.toContain('老刘')
+      expect(res.redacted).toContain('老*')
+    })
+
+    it('本地端点边界守卫 (assertLocalPhiEndpoint)：禁止公网云端 API 作为 PHI 扫描端点', () => {
+      expect(() => assertLocalPhiEndpoint('http://127.0.0.1:11434')).not.toThrow()
+      expect(() => assertLocalPhiEndpoint('http://localhost:11434')).not.toThrow()
+      expect(() => assertLocalPhiEndpoint('http://192.168.1.20:11434')).not.toThrow()
+      expect(() => assertLocalPhiEndpoint('https://api.deepseek.com/v1')).toThrow(/phi_external_endpoint_forbidden/)
+      expect(() => assertLocalPhiEndpoint('https://api.openai.com/v1')).toThrow(/phi_external_endpoint_forbidden/)
+    })
   })
 })
+
