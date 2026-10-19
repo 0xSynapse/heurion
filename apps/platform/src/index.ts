@@ -24,9 +24,12 @@ import { ShareService } from './tenancy/shares.ts'
 import { MemoryEvolution } from './memory/evolve.ts'
 import { MemoryService } from './memory/service.ts'
 import { MemorySignals } from './memory/signals.ts'
+import { ExecutionSignals } from './memory/execution-signals.ts'
+import { ProceduralHarnessService } from './memory/procedural.ts'
 import { MailService } from './mail/service.ts'
 import { CalendarService } from './calendar/service.ts'
 import { makeComplete } from './harness/complete.ts'
+import { HarnessEvolutionService } from './harness/evolve-harness.ts'
 import { ClaimService } from './claims/service.ts'
 import { SlideRenderer } from './render/slides.ts'
 import { attachCollab } from './collab/gateway.ts'
@@ -55,9 +58,12 @@ const store = new Store(config.dbPath)
 const docs = new Documents(store)
 // 知家红线守卫的成员标记：patients 在下面才创建，晚绑定（OpService 里可选调用）
 let phrMemberLookup: ((owner: string, patientId: string, space?: 'work' | 'personal') => { tags: string[]; birth_year: number | null } | null) | null = null
-const ops = new OpService(docs, (owner, pid, space) => phrMemberLookup?.(owner, pid, space) ?? null)
+const executionSignals = new ExecutionSignals(store, docs)
+const procedural = new ProceduralHarnessService(store, docs)
+const ops = new OpService(docs, (owner, pid, space) => phrMemberLookup?.(owner, pid, space) ?? null, e => executionSignals.recordGuardReject(e))
 const registry = new TurnRegistry()
-const pool = new HarnessPool(config, userId => store.sandboxUid(userId))
+const harnessEvolution = new HarnessEvolutionService(store, makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }))
+const pool = new HarnessPool(config, userId => store.sandboxUid(userId), () => harnessEvolution.currentOverlay())
 const postcheck = new PostCheck(docs)
 
 const pubmed = new PubMedClient(fetch, config.ncbiApiKey, config.contactEmail)
@@ -122,7 +128,7 @@ const images = new ImageService(docs, ops, new Unsplash(config.unsplashAccessKey
 images.access = access
 // 知家红线（PATIENT.md §3）：绑定健康档案 / 简报的回合，AI 的对话回复在展示与落库前也过守卫
 const turns = new TurnService(docs, pool, registry, {
-  idleTimeoutMs: config.turnIdleTimeoutMs, memory, alerts,
+  idleTimeoutMs: config.turnIdleTimeoutMs, memory, procedural, alerts,
   phrGuard: docId => {
     const row = store.getDoc(docId)
     let ctx: { kind?: string; doc_kind?: string; patient_id?: string; space?: 'work' | 'personal' } | null = null
@@ -166,13 +172,19 @@ purge()
 setInterval(purge, 12 * 3600_000).unref()
 // 内存优化：空闲文档自动驱逐（每 5 分钟检查一次，驱逐无活跃连接且超过 10 分钟未被访问的文档，防长期运行内存泄漏）
 setInterval(() => docs.evictIdle(), 5 * 60_000).unref()
-// 定时整理记忆：每 6 小时看一次，有 3 条以上新信号、且距上次整理超过一天的用户整理一次（MEMORY_AUTO_REVIEW=0 关闭）
+// 定时整理记忆与后台静默演进执行策略：每 6 小时看一次（MEMORY_AUTO_REVIEW=0 关闭）
 if (evolution.available() && process.env.MEMORY_AUTO_REVIEW !== '0') {
   setInterval(() => void (async () => {
     for (const owner of store.usersWithMemorySignals(3)) {
       const last = store.getUserSetting(owner, 'memory_review_at')
       if (!memory.active(owner) || (last && Date.now() - Date.parse(last) < 86_400_000)) continue
       await evolution.review(owner, { force: false }).catch(err => console.error('[memory-review]', owner, (err as Error).message))
+    }
+    if (harnessEvolution.available()) {
+      const meta = harnessEvolution.currentMeta()
+      if (!meta || Date.now() - Date.parse(meta.at) >= 86_400_000) {
+        await harnessEvolution.evolve({ force: false }).catch(err => console.error('[harness-evolve]', (err as Error).message))
+      }
     }
   })(), 6 * 3600_000).unref()
 }
