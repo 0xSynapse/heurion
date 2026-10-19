@@ -253,6 +253,12 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/copilot/chat': '全局 Co-Pilot 随航助手用户发起对话入口（由用户输入触发回合）',
   'POST /api/copilot/clear': '全局 Co-Pilot 随航助手清空会话（用户界面操作）',
   'DELETE /api/memory/rules/:rid': '移除个人自适应执行经验由用户本人在记忆界面操作（AI 不能自行删除约束自己的避坑规则）',
+  // 官网公开无状态小工具（供未登录访客在官网着陆页体验；工作区内 AI 直接调用对应的已鉴权 MCP 工具）
+  'POST /api/public/tools/e-value': '官网着陆页公开无状态 E-value 计算小工具（AI 调 study_cohort / biostatistician）',
+  'POST /api/public/tools/consort': '官网着陆页公开无状态 CONSORT 流程图小工具（AI 调 study_cohort）',
+  'POST /api/public/tools/table1': '官网着陆页公开无状态 Table 1 基线表计算小工具（AI 调 dataset_manage）',
+  'POST /api/public/tools/table1-docx': '官网着陆页公开无状态 Table 1 Word 导出小工具（浏览器端文件下载）',
+  'POST /api/public/tools/citation-check': '官网着陆页公开无状态文献真伪核验小工具（AI 调 pubmed_search / verify_claims）',
 }
 
 describe('人机对等：每个接口（AI 的权限 = 用户的权限）', () => {
