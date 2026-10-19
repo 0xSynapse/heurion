@@ -11,6 +11,8 @@ import { schema } from '../../apps/platform/src/model/schema.ts'
 import { OpService } from '../../apps/platform/src/ops/service.ts'
 import {
   createLocalSlmPhiDetector,
+  normalizeAndValidateStage2Entity,
+  type PhiSemanticFallbackDetector,
   redactPhi,
   redactPhiCascaded,
   scanPhi,
@@ -440,6 +442,7 @@ async function runBenchmarks(): Promise<BenchmarkResults> {
   let stage1PremaskLeaks = 0
   let stage2NarrativeTrials = 0
   let totalStage2Ms = 0
+  const stage2StrictDetected = { unlabeled_person_name: 0, address_or_org: 0 }
 
   // Warmup local model once
   await rawLocalDetector('查房记录：王某今日复查。')
@@ -480,6 +483,8 @@ async function runBenchmarks(): Promise<BenchmarkResults> {
             if (caughtByS2) {
               phiByCategory[exp.type]!.stage2_detected++
             }
+            // 严格口径：目标原文在脱敏输出中已不存在
+            if (!cascaded.redacted.includes(exp.targetSubstring)) stage2StrictDetected[exp.type]++
           }
         }
       }),
@@ -574,6 +579,99 @@ async function runBenchmarks(): Promise<BenchmarkResults> {
       batch.map(async sent => {
         const res = await redactPhiCascaded(sent, rawLocalDetector)
         if (res.findings.length > 0) cleanChineseFalsePositives++
+      }),
+    )
+  }
+
+  // 消融：关闭后置校验，统计小模型原始输出中含任一实体的句子数
+  const unvalidatedDetector = createLocalSlmPhiDetector({ model: 'qwen2.5:1.5b', postValidate: false })
+  const countUnvalidatedPositives = async (sentences: string[]): Promise<number> => {
+    let hits = 0
+    for (let b = 0; b < sentences.length; b += CONCURRENCY) {
+      const batch = sentences.slice(b, b + CONCURRENCY)
+      await Promise.all(
+        batch.map(async sent => {
+          if ((await unvalidatedDetector(redactPhi(sent))).length > 0) hits++
+        }),
+      )
+    }
+    return hits
+  }
+  const cleanChineseUnvalidatedPositives = await countUnvalidatedPositives(cleanChineseClinicalSentences)
+
+  // 独立中文阴性对照：措辞、药名与机构词不取自后置校验的停用词表，检验校验规则对未见文本的泛化
+  const heldOutRegimens = ['R-CHOP 方案', 'FOLFOX 方案', '信迪利单抗联合化疗', '卡培他滨维持治疗', '吉西他滨联合顺铂', '调强放疗同步替莫唑胺', '立体定向放疗', '阿替利珠单抗', '贝伐珠单抗联合紫杉醇', '恩扎卢胺']
+  const heldOutDiseases = ['局部晚期鼻咽癌', '弥漫大B细胞淋巴瘤', '转移性结直肠癌', '胰腺导管腺癌', '胶质母细胞瘤', '早期非小细胞肺癌', '三阴性乳腺癌', '去势抵抗性前列腺癌', '晚期卵巢癌', '食管鳞状细胞癌']
+  const heldOutModalities = ['增强 CT', '多参数 MRI', 'PET-CT', '超声造影', '数字乳腺断层摄影']
+  const heldOutCleanSentences: string[] = []
+  for (let i = 0; i < 10; i++) {
+    const disease = heldOutDiseases[i]!
+    const regimen = heldOutRegimens[i]!
+    heldOutCleanSentences.push(
+      `本研究回顾性纳入 ${2016 + (i % 4)} 年至 ${2021 + (i % 3)} 年间接受${regimen}的 ${86 + i * 23} 例${disease}病例，主要终点为 ${i % 2 === 0 ? '总生存期' : '无病生存期'}。`,
+      `两名具有 ${5 + (i % 6)} 年以上经验的放射科医师在不知晓临床结局的情况下独立评估${heldOutModalities[i % heldOutModalities.length]}图像，分歧由第三名高年资医师仲裁（κ = 0.${71 + i}）。`,
+      `多变量 Cox 回归显示${disease}亚组的风险比为 ${(0.58 + i * 0.03).toFixed(2)}（95% CI ${(0.41 + i * 0.02).toFixed(2)}–${(0.83 + i * 0.03).toFixed(2)}，P = 0.0${12 + i}），研究方案经机构审查委员会批准（批号 2023-KY-${118 + i * 7}）。`,
+    )
+  }
+  let heldOutCleanFalsePositives = 0
+  for (let b = 0; b < heldOutCleanSentences.length; b += CONCURRENCY) {
+    const batch = heldOutCleanSentences.slice(b, b + CONCURRENCY)
+    await Promise.all(
+      batch.map(async sent => {
+        if ((await redactPhiCascaded(sent, rawLocalDetector)).findings.length > 0) heldOutCleanFalsePositives++
+      }),
+    )
+  }
+  const heldOutCleanUnvalidatedPositives = await countUnvalidatedPositives(heldOutCleanSentences)
+
+  // 对照：不用小模型，只用规则穷举候选（常见姓氏开头的 2–4 字串、以地址标记结尾的片段），再走同一套后置校验
+  const ADDRESS_CANDIDATE_RE = /[一-龥A-Za-z0-9]{4,40}(?:室|号|栋|单元|楼|座|大厦|广场|小学|中学|大学|学院|公司|厂|局|所)/g
+  const ruleOnlyDetector: PhiSemanticFallbackDetector = async text => {
+    const found: Array<{ value: string; type: 'unlabeled_person_name' | 'address_or_org' }> = []
+    const seen = new Set<string>()
+    const keep = (raw: string, type: 'unlabeled_person_name' | 'address_or_org') => {
+      const v = normalizeAndValidateStage2Entity(raw, type, text)
+      if (v && !seen.has(v.value)) {
+        seen.add(v.value)
+        found.push({ value: v.value, type: v.type === 'address_or_org' ? 'address_or_org' : 'unlabeled_person_name' })
+      }
+    }
+    for (const m of text.matchAll(ADDRESS_CANDIDATE_RE)) keep(m[0], 'address_or_org')
+    for (let i = 0; i < text.length; i++) {
+      for (let len = 3; len >= 2; len--) {
+        const sub = text.slice(i, i + len)
+        if (sub.length === len && /^[一-龥]+$/.test(sub)) keep(sub, 'unlabeled_person_name')
+      }
+    }
+    return found
+  }
+  const ruleOnlyLenient = { unlabeled_person_name: 0, address_or_org: 0 }
+  const ruleOnlyStrict = { unlabeled_person_name: 0, address_or_org: 0 }
+  for (const { item } of narrativeIndices) {
+    const res = await redactPhiCascaded(item.text, ruleOnlyDetector)
+    for (const exp of item.expectedSpans) {
+      if (exp.type !== 'unlabeled_person_name' && exp.type !== 'address_or_org') continue
+      const masked = !res.redacted.includes(exp.targetSubstring)
+      if (res.stage2Findings.some(f => f.type === exp.type) || masked) ruleOnlyLenient[exp.type]++
+      if (masked) ruleOnlyStrict[exp.type]++
+    }
+  }
+  const countRuleOnlyPositives = async (sentences: string[]) => {
+    let hits = 0
+    for (const sent of sentences) if ((await redactPhiCascaded(sent, ruleOnlyDetector)).findings.length > 0) hits++
+    return hits
+  }
+  const ruleOnlyTemplateFalsePositives = await countRuleOnlyPositives(cleanChineseClinicalSentences)
+  const ruleOnlyHeldOutFalsePositives = await countRuleOnlyPositives(heldOutCleanSentences)
+
+  // PMC 阴性对照也走完整两阶段；英文段落无中文字符时检测器按设计不调用小模型，单独记录调用次数
+  let pmcCascadedFalsePositives = 0
+  const pmcStage2ModelCalls = cleanScientificSamples.filter(s => /[一-龥]/.test(redactPhi(s))).length
+  for (let b = 0; b < cleanScientificSamples.length; b += CONCURRENCY) {
+    const batch = cleanScientificSamples.slice(b, b + CONCURRENCY)
+    await Promise.all(
+      batch.map(async sent => {
+        if ((await redactPhiCascaded(sent, rawLocalDetector)).findings.length > 0) pmcCascadedFalsePositives++
       }),
     )
   }
@@ -713,6 +811,17 @@ async function runBenchmarks(): Promise<BenchmarkResults> {
       clean_chinese_clinical_trials: cleanChineseClinicalSentences.length,
       clean_chinese_clinical_false_positives: cleanChineseFalsePositives,
       clean_chinese_clinical_false_positive_rate: Number(((cleanChineseFalsePositives / cleanChineseClinicalSentences.length) * 100).toFixed(2)),
+      clean_chinese_clinical_unvalidated_positives: cleanChineseUnvalidatedPositives,
+      heldout_chinese_clinical_trials: heldOutCleanSentences.length,
+      heldout_chinese_clinical_false_positives: heldOutCleanFalsePositives,
+      heldout_chinese_clinical_unvalidated_positives: heldOutCleanUnvalidatedPositives,
+      stage2_slm_strict_detected: stage2StrictDetected,
+      stage2_rule_only_lenient_detected: ruleOnlyLenient,
+      stage2_rule_only_strict_detected: ruleOnlyStrict,
+      stage2_rule_only_template_false_positives: ruleOnlyTemplateFalsePositives,
+      stage2_rule_only_heldout_false_positives: ruleOnlyHeldOutFalsePositives,
+      clean_medical_cascaded_false_positives: pmcCascadedFalsePositives,
+      clean_medical_stage2_model_calls: pmcStage2ModelCalls,
       phi_stage1_avg_latency_ms: phiScanAvgMs,
       phi_stage2_local_slm_avg_latency_ms: stage2AvgLatencyMs,
     },
