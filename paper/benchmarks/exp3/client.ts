@@ -2,6 +2,8 @@
  * 实验 3 的平台客户端：REST 调用与回合 SSE 流（逐事件回调，用于回合中途以「人类」身份插入编辑）。
  */
 
+import { request as httpRequest, type IncomingMessage } from 'node:http'
+
 export type UiEvent = Record<string, any> & { type: string }
 
 export interface Client {
@@ -27,16 +29,25 @@ export function client(base: string, user: string, devToken = process.env.HEURIO
 
   async function chat(docId: string, message: string, onEvent?: (e: UiEvent) => Promise<void> | void, opts: { memory?: boolean } = {}): Promise<UiEvent[]> {
     // suggest=false：直接生效，避免 AI 自己的修订变成待采纳块干扰其他任务；memory 默认关（隔离声明式记忆）
-    const res = await fetch(`${base}/api/docs/${docId}/chat`, {
-      method: 'POST',
-      headers: { ...H, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, suggest: false, memory: opts.memory ?? false }),
+    // 用 node:http 而不是 fetch：fetch（undici）在 300 秒没有收到数据时会切断连接，并发高时长回合会被误杀
+    const body = JSON.stringify({ message, suggest: false, memory: opts.memory ?? false })
+    const res = await new Promise<IncomingMessage>((resolve, reject) => {
+      const req = httpRequest(`${base}/api/docs/${docId}/chat`, {
+        method: 'POST',
+        headers: { ...H, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      }, resolve)
+      req.on('error', reject)
+      req.end(body)
     })
-    if (!res.ok || !res.body) throw new Error(`chat → ${res.status} ${await res.text()}`)
+    if ((res.statusCode ?? 0) >= 400) {
+      let text = ''
+      for await (const chunk of res) text += chunk
+      throw new Error(`chat → ${res.statusCode} ${text}`)
+    }
     const events: UiEvent[] = []
     const decoder = new TextDecoder()
     let buf = ''
-    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+    for await (const chunk of res as AsyncIterable<Uint8Array>) {
       buf += decoder.decode(chunk, { stream: true })
       let cut: number
       while ((cut = buf.indexOf('\n\n')) >= 0) {
