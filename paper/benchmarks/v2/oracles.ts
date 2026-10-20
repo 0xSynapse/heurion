@@ -147,8 +147,11 @@ async function generic(source: D.Pkg, after: D.Pkg, exclude: (text: string, inde
 }
 
 /** 压力任务。 */
-/** keep：医生此前的修改（多轮会话），其标志文字在改完的稿件里出现次数不能比改前少。 */
-export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.Pkg, keep: Array<{ label: string; expect: string }> = []): Promise<Rework> {
+/**
+ * keep：医生此前的修改（多轮会话），其标志文字在改完的稿件里出现次数不能比改前少。
+ * injected：本轮进行中医生的修改是否真的写进去了（AI 一次都没读稿时注入不会触发，此时不查）。
+ */
+export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.Pkg, keep: Array<{ label: string; expect: string }> = [], injected: boolean | null = null): Promise<Rework> {
   const r = await refs(ctx.source, after)
   const d = task.check(ctx, after)
   // S3 的完成标准：新增了参考文献，正文也标注了引用；S3-recent 另要求至少 2 条核实为 RECENT_YEAR 年及以后发表
@@ -159,7 +162,7 @@ export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.
   const human: string[] = []
   const features: string[] = []
   // S2：医生的改动（补的一句或改的数字）仍在——出现次数比原稿多
-  const cc = task.concurrent?.(ctx)
+  const cc = injected === false ? null : task.concurrent?.(ctx)
   if (cc) {
     const count = (pkg: D.Pkg) => D.paras(D.docXml(pkg)).map(p => p.text).join('\n').split(cc.expect).length - 1
     if (count(after) <= count(ctx.source)) human.push('concurrent_edit_lost')

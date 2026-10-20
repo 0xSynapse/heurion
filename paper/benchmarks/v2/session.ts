@@ -1,7 +1,7 @@
 /**
  * v2 多轮会话（sessions.ts）的运行器：每篇论文一场会话、8 轮，P（平台，同一文档、平台默认的会话延续）
  * 与 B1 / B2（同一个 dsh 会话、同一个文件）。每轮前后各存一份 .docx，按「改前 → 改后」判定；
- * 医生的修改：平台组经编辑接口以用户身份写入，脚本组直接改文件（在 AI 两次写文件之间）。
+ * 医生的修改：平台组经编辑接口以用户身份写入，脚本组直接改文件；进行中的修改在 AI 本轮第一次调用工具之后写入。
  *   cd apps/platform && npx tsx --env-file-if-exists=../../.env ../../paper/benchmarks/v2/session.ts \
  *     [--arms P,B1,B2] [--papers N] [--parallel 3] [--port 8880] [--tag session]
  */
@@ -52,6 +52,17 @@ const toolName = (n: unknown) => String(n ?? '?').replace(/^mcp__heurion__/, '')
 /** 医生此前的修改：标志文字在之后各轮里不能减少。 */
 type Keep = Array<{ label: string; expect: string }>
 
+/** 判定（含联网查文献）失败时隔几秒再试一次；仍失败则记下原因，会话继续（不因判定出错中断 AI 的会话）。 */
+async function judge(fn: () => Promise<Rework>, row: Row): Promise<Rework | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { return await fn() } catch (err) {
+      if (attempt === 1) { row.error = `判定失败：${String((err as Error).message).slice(0, 200)}`; return null }
+      await new Promise(r => setTimeout(r, 8000))
+    }
+  }
+  return null
+}
+
 // —— 平台组 ——
 
 async function upload(c: Client, pkg: D.Pkg, title: string): Promise<string> {
@@ -100,13 +111,12 @@ async function sessionP(base: string, paper: PaperTopic, ctx: StressCtx, steps: 
     try {
       const cc = step.concurrent?.(before) ?? null
       if (cc) row.concurrent_injected = false
+      let tried = false
       const seen: UiEvent[] = []
       const events = await c.chat(docId, step.message(before), async e => {
         seen.push(e)
-        if (cc && !row.concurrent_injected && e.type === 'tool_result' && !e.isError) {
-          const call = seen.find(x => x.type === 'tool_call' && x.callId === e.callId)
-          if (/doc_read|doc_outline|doc_search/.test(String(call?.name ?? ''))) row.concurrent_injected = await doctorMcp(c, docId, cc).catch(() => false)
-        }
+        // 医生在 AI 本轮第一次调用工具之后改稿（不管是什么工具：AI 不读稿、凭记忆直接写时同样会遇到）
+        if (cc && !tried && e.type === 'tool_result') { tried = true; row.concurrent_injected = await doctorMcp(c, docId, cc).catch(() => false) }
       })
       const done = events.find(e => e.type === 'turn_done')
       row.status = (done?.status as string | undefined) ?? 'unknown'
@@ -115,7 +125,7 @@ async function sessionP(base: string, paper: PaperTopic, ctx: StressCtx, steps: 
       row.guard_rejections = events.filter(e => e.type === 'tool_result' && e.isError && /pending_suggestion|conflict_user_edited|anchor_has_open_comments|citation_not_registered/.test(String(e.code))).length
       row.ms = Date.now() - t0
       const after = await exportOf(c, docId)
-      row.eval = await evaluateStress(stepTask(step, before), { ...ctx, source: before }, after, keep)
+      row.eval = await judge(() => evaluateStress(stepTask(step, before), { ...ctx, source: before }, after, keep, row.concurrent_injected), row)
       if (cc && row.concurrent_injected) keep.push({ label: cc.label, expect: cc.expect })
       const doc = step.doctorAfter?.(after) ?? null
       if (doc) { pendingDoctor = await doctorMcp(c, docId, doc); if (pendingDoctor) keep.push({ label: doc.label, expect: doc.expect }) } else pendingDoctor = null
@@ -164,6 +174,7 @@ async function sessionFile(arm: 'B1' | 'B2', paper: PaperTopic, ctx: StressCtx, 
       try {
         const cc = step.concurrent?.(before) ?? null
         if (cc) row.concurrent_injected = false
+        let tried = false
         const events: UiEvent[] = []
         const usage = emptyUsage()
         await harness.run(step.message(before), {
@@ -172,10 +183,8 @@ async function sessionFile(arm: 'B1' | 'B2', paper: PaperTopic, ctx: StressCtx, 
             addUsage(usage, n)
             for (const e of mapNotification(n, sessionId) as UiEvent[]) {
               events.push(e)
-              if (cc && !row.concurrent_injected && e.type === 'tool_result' && !e.isError) {
-                const call = events.find(x => x.type === 'tool_call' && x.callId === e.callId)
-                if (/manuscript/.test(String(call?.arguments ?? ''))) row.concurrent_injected = doctorFile(cc)
-              }
+              // 医生在 AI 本轮第一次调用工具之后改稿（与平台组同一时机）
+              if (cc && !tried && e.type === 'tool_result') { tried = true; row.concurrent_injected = doctorFile(cc) }
             }
           },
         })
@@ -184,7 +193,7 @@ async function sessionFile(arm: 'B1' | 'B2', paper: PaperTopic, ctx: StressCtx, 
         row.calls = events.filter(e => e.type === 'tool_call').map(e => toolName(e.name))
         row.ms = Date.now() - t0
         const after = D.openDocx(new Uint8Array(readFileSync(file)))
-        row.eval = await evaluateStress(stepTask(step, before), { ...ctx, source: before }, after, keep)
+        row.eval = await judge(() => evaluateStress(stepTask(step, before), { ...ctx, source: before }, after, keep, row.concurrent_injected), row)
         if (cc && row.concurrent_injected) keep.push({ label: cc.label, expect: cc.expect })
         const doc = step.doctorAfter?.(after) ?? null
         row.doctor_applied = doc ? doctorFile(doc) : null

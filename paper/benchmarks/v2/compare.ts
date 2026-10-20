@@ -167,7 +167,7 @@ async function runP(base: string, j: Job, outDir: string): Promise<Row> {
   if (j.natural) {
     const checks = check(j.natural, j.paper, src, after, ctx.state, humanRevisionKept(after))
     row.eval = await evaluateNatural(j.natural, j.paper, src, after, checks, measure(j.natural, j.paper, src, after))
-  } else row.eval = await evaluateStress(j.stress!, sctx!, after)
+  } else row.eval = await evaluateStress(j.stress!, sctx!, after, [], row.concurrent_injected)
   row.ms = Date.now() - t0
   return row
 }
@@ -228,7 +228,7 @@ async function runFile(arm: 'B1' | 'B2', j: Job, outDir: string): Promise<Row> {
     if (j.natural) {
       const checks = check(j.natural, j.paper, src, after, state, humanRevisionKept(after))
       row.eval = await evaluateNatural(j.natural, j.paper, src, after, checks, measure(j.natural, j.paper, src, after))
-    } else row.eval = await evaluateStress(j.stress!, sctx!, after)
+    } else row.eval = await evaluateStress(j.stress!, sctx!, after, [], row.concurrent_injected)
   } finally {
     await harness.close().catch(() => {})
   }
