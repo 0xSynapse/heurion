@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import type { Documents, CommitEvent } from '../model/runtime.ts'
 import { addUsage, emptyUsage, mapNotification, type UiEvent } from '../harness/events.ts'
+import { scopeOf } from '../mcp/scope.ts'
 import { filterPhrReply, type PhrMember } from '../ops/phr-guard.ts'
 import type { MemoryService } from '../memory/service.ts'
 import type { ProceduralHarnessService } from '../memory/procedural.ts'
@@ -359,11 +360,13 @@ export class TurnService {
       this.running.set(userId, runningMap)
     }
 
-    // 分配可用的 slot（doc_0, doc_1 ...）
+    // 分配可用的 slot：按文档的工具范围分前缀（普通稿件 doc_0、doc_1…，幻灯片 deck_…，患者文档等 full_…），
+    // 同一前缀的 dsh 进程带同一套 MCP 工具（mcp/scope.ts）
     const usedSlots = new Set([...runningMap.values()].map(r => r.slot))
-    let slot = 'doc_0'
+    const prefix = scopeOf(this.docs.store.getDoc(job.docId)) ?? 'full'
+    let slot = `${prefix}_0`
     for (let i = 0; i < this.maxDocConcurrency; i++) {
-      const candidate = `doc_${i}`
+      const candidate = `${prefix}_${i}`
       if (!usedSlots.has(candidate)) { slot = candidate; break }
     }
 

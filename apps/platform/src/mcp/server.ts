@@ -11,6 +11,7 @@ import { canAccess, verifyToken, type Permission, type TokenClaims } from '../au
 import type { ClaimService } from '../claims/service.ts'
 import { pptxFor } from '../convert/exports.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
+import { toolInScope } from './scope.ts'
 import { DeckEditBatch, DeckOp, newTemplateDeck } from '../ops/deck.ts'
 import { LAYOUTS, layoutSpec, templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
@@ -216,6 +217,8 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       const row = docs.create({ owner: claims.u, title, kind: 'deck', content: newTemplateDeck(title, key) })
       store.putPackage(row.id, 'pptx', pptxTemplate(key))
       ctx.touch(row.id)
+      // 稿件回合不带幻灯片编辑工具：提示在幻灯片里继续
+      if (claims.t === 'doc') return json({ doc_id: row.id, kind: 'deck', title, rev: 0, template: key, note: '幻灯片已建好（封面页）。本回合是稿件编辑，不能编辑幻灯片内容：请告诉用户打开这份幻灯片，在幻灯片里让 AI 继续制作。' })
       return json({ doc_id: row.id, kind: 'deck', title, rev: 0, template: key, layouts: LAYOUTS.map(l => `${l.name}：${l.hint}`) })
     }
     const row = docs.create({ owner: claims.u, title })
@@ -1823,6 +1826,12 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims): McpServer {
   if (deps.subagents && !deps.subagents.access) deps.subagents.access = deps.access
   const ctx = new Ctx(deps, claims)
   const server = new McpServer({ name: 'heurion', version: '0.1.0' }, { instructions: INSTRUCTIONS })
+  // 工具范围（令牌里的 t）：范围外的工具不注册，模型看不到它的说明
+  if (claims.t) {
+    const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown
+    ;(server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, ...rest: unknown[]) =>
+      toolInScope(String(name), claims.t) ? register(name, ...rest) : undefined
+  }
 
   registerCanvasTools(server, ctx)
   registerHealthcareTools(server, ctx)
