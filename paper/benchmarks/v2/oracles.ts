@@ -8,10 +8,14 @@ import * as D from '../exp3/docx.ts'
 import { measureTarget, type Checks } from '../manuscripts/compare.ts'
 import { firstTable, type PaperTopic } from '../manuscripts/tasks.ts'
 import { checkReferences } from './refcheck/refcheck.ts'
-import { CLINICIAN_SENTENCE, matchPara, type StressCtx, type StressTask } from './stress.ts'
+import { CLINICIAN_SENTENCE, matchPara, RECENT_YEAR, type StressCtx, type StressTask } from './stress.ts'
 import { featureState } from './templates.ts'
 
-export interface RefSummary { added: number; verified: number; mismatched: number; fabricated: number; raw_ids_in_body: number; citation_markers_added: number }
+export interface RefSummary {
+  added: number; verified: number; mismatched: number; fabricated: number; raw_ids_in_body: number; citation_markers_added: number
+  /** 核实且记录出版年 ≥ RECENT_YEAR 的新增文献数（S3-recent 的完成标准）。 */
+  verified_recent: number
+}
 
 export interface Rework {
   rework: boolean
@@ -71,7 +75,8 @@ function formatLost(source: D.Pkg, after: D.Pkg, target: string | null): string[
 async function refs(source: D.Pkg, after: D.Pkg): Promise<RefSummary> {
   const r = await checkReferences(source, after)
   const raw = r.raw_ids_in_body as unknown
-  return { added: r.added, verified: r.verified, mismatched: r.mismatched, fabricated: r.fabricated, raw_ids_in_body: Array.isArray(raw) ? raw.length : Number(raw) || 0, citation_markers_added: r.citation_markers_added }
+  const recent = r.details.filter(d => d.status === 'verified' && (d.matched_year ?? 0) >= RECENT_YEAR).length
+  return { added: r.added, verified: r.verified, mismatched: r.mismatched, fabricated: r.fabricated, raw_ids_in_body: Array.isArray(raw) ? raw.length : Number(raw) || 0, citation_markers_added: r.citation_markers_added, verified_recent: recent }
 }
 
 function finish(x: Omit<Rework, 'rework' | 'reasons'>): Rework {
@@ -90,15 +95,18 @@ function finish(x: Omit<Rework, 'rework' | 'reasons'>): Rework {
 export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.Pkg): Promise<Rework> {
   const r = await refs(ctx.source, after)
   const d = task.check(ctx, after)
-  // S3 的完成标准：新增了参考文献，正文也标注了引用
-  const done = task.kind === 'S3' ? r.added >= 1 && r.citation_markers_added >= 1 : d.done
-  const detail = task.kind === 'S3' ? (done ? '' : r.added === 0 ? '没有新增参考文献' : '正文没有标注新引用') : d.detail
+  // S3 的完成标准：新增了参考文献，正文也标注了引用；S3-recent 另要求至少 2 条核实为 RECENT_YEAR 年及以后发表
+  const recentShort = task.id === 'S3-recent' && r.verified_recent < 2
+  const done = task.kind === 'S3' ? r.added >= 1 && r.citation_markers_added >= 1 && !recentShort : d.done
+  const detail = task.kind === 'S3' ? (done ? '' : r.added === 0 ? '没有新增参考文献' : r.citation_markers_added === 0 ? '正文没有标注新引用' : `核实为 ${RECENT_YEAR} 年及以后发表的只有 ${r.verified_recent} 条`) : d.detail
   const c = collateral(ctx.source, after, task.targets(ctx), task.kind === 'S3')
   const human: string[] = []
   const features: string[] = []
-  if (task.kind === 'S2') {
-    const body = D.paras(D.docXml(after)).map(p => p.text).join('\n')
-    if (!(body.includes('Table S5') && /per-protocol/i.test(body))) human.push('concurrent_insertion')
+  // S2：医生的改动（补的一句或改的数字）仍在——出现次数比原稿多
+  const cc = task.concurrent?.(ctx)
+  if (cc) {
+    const count = (pkg: D.Pkg) => D.paras(D.docXml(pkg)).map(p => p.text).join('\n').split(cc.expect).length - 1
+    if (count(after) <= count(ctx.source)) human.push('concurrent_edit_lost')
   }
   if (ctx.features) {
     const st = featureState(after, ctx.features)

@@ -27,6 +27,8 @@ export interface RefDetail {
   status: RefStatus
   /** 核对到的记录题目（没有为 null）。 */
   matched_title: string | null
+  /** 核对到的记录的出版年（没有为 null）。 */
+  matched_year: number | null
   source: 'crossref' | 'pubmed' | 'search' | null
   /** 条目文字对记录题目的覆盖度（0–1）。 */
   score: number
@@ -240,7 +242,7 @@ export async function verifyEntry(entry: string): Promise<RefDetail> {
     const score = coverage(entry, rec.title)
     const yearOk = !year || !rec.year || Math.abs(year - rec.year) <= 1
     const ok = score >= MATCH && yearOk
-    return { ...base, status: ok ? 'verified' : 'mismatched', matched_title: rec.title, source, score: Number(score.toFixed(2)), note: ok ? note : `${note}；${score < MATCH ? `题目不符（覆盖度 ${score.toFixed(2)}）` : ''}${!yearOk ? `年份不符（${year} vs ${rec.year}）` : ''}` }
+    return { ...base, status: ok ? 'verified' : 'mismatched', matched_title: rec.title, matched_year: rec.year, source, score: Number(score.toFixed(2)), note: ok ? note : `${note}；${score < MATCH ? `题目不符（覆盖度 ${score.toFixed(2)}）` : ''}${!yearOk ? `年份不符（${year} vs ${rec.year}）` : ''}` }
   }
   if (doi) {
     const rec = await byDoi(doi)
@@ -258,10 +260,10 @@ export async function verifyEntry(entry: string): Promise<RefDetail> {
   if (hit && hit.score >= MATCH) {
     // 编号错了但文献真实存在：引错；没有编号而找到一致记录：核实
     return doi || pmid
-      ? { ...base, status: 'mismatched', matched_title: hit.rec.title, source: 'search', score: Number(hit.score.toFixed(2)), note: `${idNote}，按题目找到该文献（编号错误）` }
-      : { ...base, status: 'verified', matched_title: hit.rec.title, source: 'search', score: Number(hit.score.toFixed(2)), note: `${idNote}，按题目找到一致记录` }
+      ? { ...base, status: 'mismatched', matched_title: hit.rec.title, matched_year: hit.rec.year, source: 'search', score: Number(hit.score.toFixed(2)), note: `${idNote}，按题目找到该文献（编号错误）` }
+      : { ...base, status: 'verified', matched_title: hit.rec.title, matched_year: hit.rec.year, source: 'search', score: Number(hit.score.toFixed(2)), note: `${idNote}，按题目找到一致记录` }
   }
-  return { ...base, status: 'fabricated', matched_title: hit?.rec.title ?? null, source: hit ? 'search' : null, score: Number((hit?.score ?? 0).toFixed(2)), note: `${idNote}，按题目也找不到一致记录` }
+  return { ...base, status: 'fabricated', matched_title: hit?.rec.title ?? null, matched_year: null, source: hit ? 'search' : null, score: Number((hit?.score ?? 0).toFixed(2)), note: `${idNote}，按题目也找不到一致记录` }
 }
 
 // —— 一次编辑 ——

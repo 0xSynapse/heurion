@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 // @ts-expect-error 直接引用平台依赖的入口文件（实验脚本不在平台包里，无法按包名解析类型）
 import { DeepSeekHarness } from '../../../apps/platform/node_modules/@deepseek-ai/dsh-sdk-client/lib/index.js'
-import { mapNotification } from '../../../apps/platform/src/harness/events.ts'
+import { addUsage, emptyUsage, mapNotification, type TurnUsage } from '../../../apps/platform/src/harness/events.ts'
 import { client, readAll, type Client, type UiEvent } from '../exp3/client.ts'
 import * as D from '../exp3/docx.ts'
 import { repoRoot, startServer, stopServer } from '../exp3/server.ts'
@@ -82,6 +82,8 @@ function jobsFor(seeds: number[]): Job[] {
 interface Row {
   arm: string; model: string; set: string; seed: number; paper: string; task: string
   status: string; ms: number; calls: string[]; guard_rejections: number; concurrent_injected: boolean | null
+  /** 本回合模型用量（输入 / 输出 / 缓存命中 token，步数，会话数；含子代理）。 */
+  usage: TurnUsage | null
   eval: Rework | null; error?: string
 }
 const toolName = (n: unknown) => String(n ?? '?').replace(/^mcp__heurion__/, '')
@@ -117,7 +119,7 @@ async function upload(c: Client, pkg: D.Pkg, title: string): Promise<string> {
   return ((await res.json()) as { id: string }).id
 }
 
-/** S2：AI 第一次读稿后，以医生身份在目标段落末尾补一句（平台：经编辑接口写入 Yjs）。 */
+/** S2：AI 第一次读稿后，以医生身份改目标段落（补一句或改一个数字；平台：经编辑接口写入 Yjs）。 */
 async function injectMcp(c: Client, docId: string, cc: Concurrent): Promise<boolean> {
   const view = await readAll(c, docId)
   const key = cc.para.slice(0, 50)
@@ -128,14 +130,14 @@ async function injectMcp(c: Client, docId: string, cc: Concurrent): Promise<bool
   }
   if (!id) return false
   const rev = Number(/rev=(\d+)/.exec(view)![1])
-  await c.api(`/api/docs/${docId}/edit`, { method: 'POST', body: JSON.stringify({ base_rev: rev, mode: 'apply', ops: [{ op: 'replace_text', id, find: cc.tail, replace: `${cc.tail} ${cc.sentence}` }] }) })
+  await c.api(`/api/docs/${docId}/edit`, { method: 'POST', body: JSON.stringify({ base_rev: rev, mode: 'apply', ops: [{ op: 'replace_text', id, find: cc.find, replace: cc.replace }] }) })
   return true
 }
 
 async function runP(base: string, j: Job, outDir: string): Promise<Row> {
   const c = client(base, `v2-p-s${j.seed}`)
   const t0 = Date.now()
-  const row: Row = { arm: 'P', model: MODEL, set: j.set, seed: j.seed, paper: j.paper.pmcid, task: taskId(j), status: 'unknown', ms: 0, calls: [], guard_rejections: 0, concurrent_injected: null, eval: null }
+  const row: Row = { arm: 'P', model: MODEL, set: j.set, seed: j.seed, paper: j.paper.pmcid, task: taskId(j), status: 'unknown', ms: 0, calls: [], guard_rejections: 0, concurrent_injected: null, usage: null, eval: null }
   let sctx: StressCtx | null = null
   const src = j.stress ? (sctx = j.stress.build(j.paper)).source : naturalSource(j.paper)
   const docId = j.natural ? await PAPERS.create(c, j.paper, `v2 ${taskId(j)}`) : await upload(c, src, `v2 ${taskId(j)}`)
@@ -157,7 +159,9 @@ async function runP(base: string, j: Job, outDir: string): Promise<Row> {
   const after = D.openDocx(new Uint8Array(await res.arrayBuffer()))
   keep(outDir, 'P', j, after)
   const errors = events.filter(e => e.type === 'tool_result' && e.isError).map(e => e.code as string | undefined)
-  row.status = (events.find(e => e.type === 'turn_done')?.status as string | undefined) ?? 'unknown'
+  const doneEvent = events.find(e => e.type === 'turn_done')
+  row.status = (doneEvent?.status as string | undefined) ?? 'unknown'
+  row.usage = (doneEvent?.usage as TurnUsage | undefined) ?? null
   row.calls = events.filter(e => e.type === 'tool_call').map(e => toolName(e.name))
   row.guard_rejections = errors.filter(code => code && GUARD_CODES.has(code)).length
   if (j.natural) {
@@ -174,7 +178,7 @@ async function runFile(arm: 'B1' | 'B2', j: Job, outDir: string): Promise<Row> {
   const apiKey = process.env.DEEPSEEK_API_KEY
   if (!apiKey) throw new Error('脚本组需要 DEEPSEEK_API_KEY（用 --env-file 加载根目录 .env）')
   const t0 = Date.now()
-  const row: Row = { arm, model: MODEL, set: j.set, seed: j.seed, paper: j.paper.pmcid, task: taskId(j), status: 'done', ms: 0, calls: [], guard_rejections: 0, concurrent_injected: null, eval: null }
+  const row: Row = { arm, model: MODEL, set: j.set, seed: j.seed, paper: j.paper.pmcid, task: taskId(j), status: 'done', ms: 0, calls: [], guard_rejections: 0, concurrent_injected: null, usage: null, eval: null }
   let sctx: StressCtx | null = null
   const src = j.stress ? (sctx = j.stress.build(j.paper)).source : naturalSource(j.paper)
   const cwd = mkdtempSync(join(tmpdir(), `v2-${arm}-`))
@@ -197,9 +201,11 @@ async function runFile(arm: 'B1' | 'B2', j: Job, outDir: string): Promise<Row> {
   try {
     const sessionId = randomUUID()
     const message = j.natural ? j.natural.message(j.paper) : j.stress!.message(sctx!)
+    const usage = emptyUsage()
     await harness.run(message, {
       sessionId,
       onNotification: (n: Parameters<typeof mapNotification>[0]) => {
+        addUsage(usage, n)
         for (const e of mapNotification(n, sessionId) as UiEvent[]) {
           events.push(e)
           if (j.natural?.archetype === 'concurrent_edit') { const tg = targets(j.paper); humanEditsFile(e, events, file, tg.disc1, tg.discAnchor, state) }
@@ -207,13 +213,15 @@ async function runFile(arm: 'B1' | 'B2', j: Job, outDir: string): Promise<Row> {
           if (cc && !row.concurrent_injected && e.type === 'tool_result' && !e.isError) {
             const call = events.find(x => x.type === 'tool_call' && x.callId === e.callId)
             if (/manuscript/.test(String(call?.arguments ?? ''))) {
-              const next = D.humanReplace(D.openDocx(new Uint8Array(readFileSync(file))), cc.para.slice(0, 60), cc.tail, `${cc.tail} ${cc.sentence}`)
+              const next = D.humanReplace(D.openDocx(new Uint8Array(readFileSync(file))), cc.para.slice(0, 60), cc.find, cc.replace)
               if (next) { writeFileSync(file, D.saveDocx(next)); row.concurrent_injected = true }
             }
           }
         }
       },
     })
+    const { ids: _ids, ...turnUsage } = usage
+    row.usage = turnUsage
     const after = D.openDocx(new Uint8Array(readFileSync(file)))
     keep(outDir, arm, j, after)
     row.calls = events.filter(e => e.type === 'tool_call').map(e => toolName(e.name))
@@ -233,7 +241,7 @@ async function runFile(arm: 'B1' | 'B2', j: Job, outDir: string): Promise<Row> {
 function log(path: string, row: Row): void {
   appendFileSync(path, JSON.stringify(row) + '\n')
   const e = row.eval
-  console.log(`[${row.arm}] s${row.seed} ${row.paper} ${row.task.padEnd(20)} ${row.status.padEnd(8)} ${e ? (e.rework ? `返工：${e.reasons.join(',')}` : '无需返工') : `出错：${row.error}`} ${(row.ms / 1000).toFixed(0)}s`)
+  console.log(`[${row.arm}] s${row.seed} ${row.paper} ${row.task.padEnd(20)} ${row.status.padEnd(8)} ${e ? (e.rework ? `返工：${e.reasons.join(',')}` : '无需返工') : `出错：${row.error}`} ${(row.ms / 1000).toFixed(0)}s${row.usage ? ` ${Math.round((row.usage.input + row.usage.output) / 1000)}k tok` : ''}`)
 }
 
 async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>): Promise<void> {
@@ -265,7 +273,7 @@ try {
     try {
       row = arm === 'P' ? await runP(server!.base, j, outDir) : await runFile(arm as 'B1' | 'B2', j, outDir)
     } catch (err) {
-      row = { arm, model: MODEL, set: j.set, seed: j.seed, paper: j.paper.pmcid, task: taskId(j), status: 'harness_error', ms: 0, calls: [], guard_rejections: 0, concurrent_injected: null, eval: null, error: String((err as Error).message ?? err).slice(0, 300) }
+      row = { arm, model: MODEL, set: j.set, seed: j.seed, paper: j.paper.pmcid, task: taskId(j), status: 'harness_error', ms: 0, calls: [], guard_rejections: 0, concurrent_injected: null, usage: null, eval: null, error: String((err as Error).message ?? err).slice(0, 300) }
     }
     log(path, row)
   })))
