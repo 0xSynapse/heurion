@@ -189,7 +189,6 @@ export function complexTemplate(base: D.Pkg): { pkg: D.Pkg; features: TemplateFe
 
 // —— 特征是否仍在（两组共用的判定） ——
 
-const paraOf = (pkg: D.Pkg, leadText: string) => D.paras(doc(pkg)).find(p => p.text.startsWith(leadText.slice(0, 40)))
 
 export interface FeatureState {
   list_numbered: boolean
@@ -205,7 +204,8 @@ export function featureState(pkg: D.Pkg, f: TemplateFeatures): FeatureState {
   const xml = doc(pkg)
   const ps = D.paras(xml)
   const listItems = ps.filter(p => new RegExp(`<w:numId w:val="${f.list.numId}"/>`).test(p.xml))
-  const fnPara = paraOf(pkg, f.footnote.para)
+  // 编辑会改掉段落开头，按脚注引用本身找所在段落
+  const fnPara = ps.find(p => p.xml.includes('<w:footnoteReference'))
   const notes = text(pkg, 'word/footnotes.xml') ?? ''
   const trPara = ps.find(p => p.xml.includes(`w:author="${COAUTHOR}"`) && /<w:(ins|del)\b/.test(p.xml))
   const caps = ps.filter(p => /^Table \d+/.test(p.text))

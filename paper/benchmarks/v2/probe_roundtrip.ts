@@ -30,14 +30,18 @@ async function exportOf(c: Client, docId: string): Promise<D.Pkg> {
   return D.openDocx(new Uint8Array(await res.arrayBuffer()))
 }
 
-/** 按文字找块：块 id 可能不在行首（列表项为 “1. {#id} …”），不可编辑块带 “[不可编辑·…：” 前缀。 */
+/**
+ * 按文字找块：块 id 可能不在行首（列表项为 “1. {#id} …”）；去掉不可编辑块前缀 “[不可编辑·…：”、
+ * 待采纳修订标签 “⟨待采纳·…⟩”、Word 行内标记 “[@w:key]” 与数字（域代码显示为标记，原文里是编号）后比较。
+ */
 function blockOf(view: string, leadText: string): { id: string; text: string; raw: string } | undefined {
-  const key = leadText.slice(0, 40).replace(/\s+/g, ' ')
+  const norm = (s: string) => s.replace(/\[@w:[a-z0-9]+\]/g, '').replace(/\d+/g, '').replace(/\s+/g, ' ').trim()
+  const key = norm(leadText).slice(0, 36)
   for (const line of view.split('\n')) {
     const m = /\{#([a-z0-9]+)\}\s?(.*)$/.exec(line)
     if (!m) continue
-    const text = plain(m[2]!).replace(/^\[不可编辑·[^：]*：/, '').replace(/\s+/g, ' ')
-    if (text.startsWith(key)) return { id: m[1]!, text, raw: line }
+    const text = plain(m[2]!).replace(/^\[不可编辑·[^：]*：/, '').replace(/^⟨待采纳·[^⟩]*⟩\s*/, '').replace(/\s+/g, ' ')
+    if (norm(text).startsWith(key)) return { id: m[1]!, text, raw: line }
   }
   return undefined
 }
