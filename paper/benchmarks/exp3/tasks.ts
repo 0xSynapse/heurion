@@ -269,7 +269,7 @@ export const TASKS: Task[] = [
 
 /** 回合里计为「守卫拦截」的错误码。 */
 export const GUARD_CODES = new Set([
-  'conflict_user_edited', 'citation_not_registered', 'pending_suggestion', 'anchor_has_open_comments',
+  'conflict_user_edited', 'citation_not_registered', 'existing_citation', 'pending_suggestion', 'anchor_has_open_comments',
   'ambiguous_match', 'text_not_found', 'node_not_editable', 'invalid_table', 'cell_not_found',
   'invalid_structure', 'invalid_base_rev', 'node_not_found',
 ])
