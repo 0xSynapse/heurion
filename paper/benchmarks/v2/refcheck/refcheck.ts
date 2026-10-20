@@ -119,8 +119,11 @@ export function titleGuess(entry: string): string {
   return (cands.sort((a, b) => b.length - a.length)[0] ?? segs.sort((a, b) => b.length - a.length)[0] ?? '').trim()
 }
 
-const yearOf = (s: string): number | null => {
-  const m = /\b(19|20)\d{2}\b/.exec(stripNumber(s).replace(DOI_RE, ''))
+/** 出版年：去掉题目再找（题目里常有年份，如 “Global cancer statistics 2022”）。 */
+const yearOf = (s: string, title = ''): number | null => {
+  let rest = stripNumber(s).replace(DOI_RE, '')
+  if (title && rest.includes(title)) rest = rest.replace(title, '')
+  const m = /\b(19|20)\d{2}\b/.exec(rest)
   return m ? Number(m[0]) : null
 }
 
@@ -186,10 +189,20 @@ async function byPmid(pmid: string): Promise<Rec | null> {
   return { title: String(r.title).replace(/\.$/, ''), year: Number(/\d{4}/.exec(r.pubdate ?? '')?.[0]) || null }
 }
 
+const STOPWORDS = new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'are', 'was', 'were', 'its', 'via', 'than', 'not', 'but', 'has', 'have', 'been', 'between', 'among', 'after', 'before', 'during', 'without', 'within', 'versus'])
+
+/** Crossref 没有登记的 DOI（部分期刊的旧 DOI）：按文章 ID 在 PubMed 查。 */
+async function byDoiPubmed(doi: string): Promise<Rec | null> {
+  const s = await getJson(`esearch-doi:${doi}`, `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(`${doi}[AID]`)}&retmax=1&retmode=json`, true)
+  const id = (s?.esearchresult?.idlist ?? [])[0] as string | undefined
+  return id ? byPmid(id) : null
+}
+
 /** 按题目检索：PubMed esearch（题目词）→ esummary 前 3 条；再用 Crossref 书目检索前 3 条。返回覆盖度最高的。 */
 async function byTitle(title: string, entry: string): Promise<{ rec: Rec; score: number; source: 'search' } | null> {
   const recs: Rec[] = []
-  const words = normalize(title).split(' ').filter(w => w.length >= 3).slice(0, 12)
+  // PubMed 的停用词带 [Title] 时整条检索查不到（例如 the、and），先去掉
+  const words = normalize(title).split(' ').filter(w => w.length >= 3 && !STOPWORDS.has(w)).slice(0, 12)
   if (words.length >= 3) {
     const term = encodeURIComponent(words.map(w => `${w}[Title]`).join(' AND '))
     const s = await getJson(`esearch:${words.join(' ')}`, `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${term}&retmax=3&retmode=json`, true)
@@ -221,7 +234,7 @@ export async function verifyEntry(entry: string): Promise<RefDetail> {
   const pmidM = /PMID[:：]?\s*(\d{5,9})/i.exec(entry)
   const pmid = pmidM ? pmidM[1]! : null
   const title = titleGuess(entry)
-  const year = yearOf(entry)
+  const year = yearOf(entry, title)
   const base = { entry, doi, pmid, title_guess: title }
   const judge = (rec: Rec, source: RefDetail['source'], note: string): RefDetail => {
     const score = coverage(entry, rec.title)
@@ -232,6 +245,8 @@ export async function verifyEntry(entry: string): Promise<RefDetail> {
   if (doi) {
     const rec = await byDoi(doi)
     if (rec) return judge(rec, 'crossref', 'DOI 可解析')
+    const viaPubmed = await byDoiPubmed(doi)
+    if (viaPubmed) return judge(viaPubmed, 'pubmed', 'DOI 在 Crossref 未登记，PubMed 可查到')
   }
   if (pmid) {
     const rec = await byPmid(pmid)

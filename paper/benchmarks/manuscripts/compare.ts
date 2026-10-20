@@ -108,9 +108,14 @@ export function check(task: Task<PaperTopic>, t: PaperTopic, src: D.Pkg, after: 
   }
 }
 
-export function measure(task: Task<PaperTopic>, t: PaperTopic, src: D.Pkg, after: D.Pkg) {
+/** 单段任务的目标段（原文纯文字）；整节任务没有。 */
+export function measureTarget(task: Task<PaperTopic>, t: PaperTopic): string | undefined {
   const tg = targets(t)
-  const target = ({ concurrent_edit: tg.disc1, citation: tg.intro1, pending_suggestion: tg.res1, open_comment_anchor: tg.methods.first, out_of_scope_revert: tg.disc3 } as Record<string, string>)[task.archetype]
+  return ({ concurrent_edit: tg.disc1, citation: tg.intro1, pending_suggestion: tg.res1, open_comment_anchor: tg.methods.first, out_of_scope_revert: tg.disc3 } as Record<string, string>)[task.archetype]
+}
+
+export function measure(task: Task<PaperTopic>, t: PaperTopic, src: D.Pkg, after: D.Pkg) {
+  const target = measureTarget(task, t)
   // 整节改动的任务（统一用词、P 值、移动）：不计入「不该动的段落」的是整节，这里只度量目标段以外的格式与内容
   const sectionWide = ['term_unify', 'p_value_format', 'move_subsection', 'table_row'].includes(task.archetype)
   const inSection = (x: string) => {

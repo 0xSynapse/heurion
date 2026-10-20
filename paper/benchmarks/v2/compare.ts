@@ -22,7 +22,7 @@ import { repoRoot, startServer, stopServer } from '../exp3/server.ts'
 import { GUARD_CODES, type Task, type TaskCtx } from '../exp3/tasks.ts'
 import { check, COMMENTS, humanEditsFile, measure } from '../manuscripts/compare.ts'
 import { PAPERS, plain, targets, type PaperTopic } from '../manuscripts/tasks.ts'
-import { evaluateNatural, evaluateStress, type Rework } from './oracles.ts'
+import { evaluateNatural, evaluateStress, humanRevisionKept, type Rework } from './oracles.ts'
 import { stressSchedule, type Concurrent, type StressCtx, type StressTask } from './stress.ts'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
@@ -161,9 +161,8 @@ async function runP(base: string, j: Job, outDir: string): Promise<Row> {
   row.calls = events.filter(e => e.type === 'tool_call').map(e => toolName(e.name))
   row.guard_rejections = errors.filter(code => code && GUARD_CODES.has(code)).length
   if (j.natural) {
-    const d = await c.api(`/api/docs/${docId}`)
-    const checks = check(j.natural, j.paper, src, after, ctx.state, (d.suggestions as unknown[]).length > 0)
-    row.eval = await evaluateNatural(j.natural, src, after, checks, measure(j.natural, j.paper, src, after))
+    const checks = check(j.natural, j.paper, src, after, ctx.state, humanRevisionKept(after))
+    row.eval = await evaluateNatural(j.natural, j.paper, src, after, checks, measure(j.natural, j.paper, src, after))
   } else row.eval = await evaluateStress(j.stress!, sctx!, after)
   row.ms = Date.now() - t0
   return row
@@ -219,8 +218,8 @@ async function runFile(arm: 'B1' | 'B2', j: Job, outDir: string): Promise<Row> {
     keep(outDir, arm, j, after)
     row.calls = events.filter(e => e.type === 'tool_call').map(e => toolName(e.name))
     if (j.natural) {
-      const checks = check(j.natural, j.paper, src, after, state, D.hasTrackedChange(after))
-      row.eval = await evaluateNatural(j.natural, src, after, checks, measure(j.natural, j.paper, src, after))
+      const checks = check(j.natural, j.paper, src, after, state, humanRevisionKept(after))
+      row.eval = await evaluateNatural(j.natural, j.paper, src, after, checks, measure(j.natural, j.paper, src, after))
     } else row.eval = await evaluateStress(j.stress!, sctx!, after)
   } finally {
     await harness.close().catch(() => {})
