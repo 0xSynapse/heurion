@@ -270,7 +270,11 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     if (denied) return denied
     if (store.getDoc(args.doc_id)!.kind === 'deck') return text(deckRead(docs.get(args.doc_id), docs.rev(args.doc_id), args.cursor ?? 0))
     try {
-      return text(read({ ...args, doc: docs.get(args.doc_id), docId: args.doc_id, rev: docs.rev(args.doc_id), comments: store.listComments(args.doc_id, 'open') }))
+      const rev = docs.rev(args.doc_id)
+      const view = read({ ...args, doc: docs.get(args.doc_id), docId: args.doc_id, rev, comments: store.listComments(args.doc_id, 'open') })
+      // 读到的块记为 AI 已看过（冲突守卫据此判断用户的改动 AI 看过没有）
+      deps.ops.noteSeen?.(args.doc_id, [...view.matchAll(/\{#([a-z0-9]+)\}/g)].map(m => m[1]!), rev)
+      return text(view)
     } catch (err) {
       if (err instanceof ReadError) return fail('node_not_found', err.message)
       throw err
