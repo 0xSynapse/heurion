@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import type { Documents, CommitEvent } from '../model/runtime.ts'
-import { mapNotification, type UiEvent } from '../harness/events.ts'
+import { addUsage, emptyUsage, mapNotification, type UiEvent } from '../harness/events.ts'
 import { filterPhrReply, type PhrMember } from '../ops/phr-guard.ts'
 import type { MemoryService } from '../memory/service.ts'
 import type { ProceduralHarnessService } from '../memory/procedural.ts'
@@ -420,6 +420,7 @@ export class TurnService {
     let watchdog: ReturnType<typeof setInterval> | null = null
     let onCommit: ((e: CommitEvent) => void) | null = null
     const touched = new Set<string>()
+    const usage = emptyUsage()
     let status: 'done' | 'error' | 'cancelled' | 'timeout' = 'done'
     let failure: string | null = null
     let modelError: string | null = null
@@ -495,6 +496,7 @@ export class TurnService {
       const result = await Promise.race([
         this.pool.run(userId, prompt, (n, sessionId) => {
           lastActivity = Date.now()
+          addUsage(usage, n)
           for (const e of mapNotification(n, sessionId)) {
             // 模型调用失败（认证失败、限流、服务出错等）：dsh 正常结束回合但带错误，按失败记，不算「已完成」
             if (e.type === 'error') modelError = e.message
@@ -547,7 +549,8 @@ export class TurnService {
         if ((status === 'error' || status === 'timeout') && failure) {
           try { this.alerts?.turnFailed(failure) } catch {}
         }
-        try { emit({ type: 'turn_done', turn_id: turn.id, status, docs: [...touched] }) } catch {}
+        const { ids: _ids, ...turnUsage } = usage
+        try { emit({ type: 'turn_done', turn_id: turn.id, status, docs: [...touched], ...(turnUsage.steps > 0 ? { usage: turnUsage } : {}) }) } catch {}
       }
       this.cancelling.delete(job.id)
       this.timedOut.delete(job.id)

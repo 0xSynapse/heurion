@@ -5,7 +5,7 @@ export type UiEvent =
   | { type: 'turn'; turn_id: string; message: string }
   /** 排队中（同一用户的上一回合还没结束）。 */
   | { type: 'queued'; position: number; message: string }
-  | { type: 'turn_done'; turn_id: string; status: 'done' | 'error' | 'cancelled' | 'timeout'; docs: string[] }
+  | { type: 'turn_done'; turn_id: string; status: 'done' | 'error' | 'cancelled' | 'timeout'; docs: string[]; usage?: TurnUsage }
   | { type: 'status'; status: 'running' | 'idle' }
   | { type: 'reasoning'; text: string }
   | { type: 'assistant'; text: string }
@@ -26,6 +26,25 @@ export type UiEvent =
   | { type: 'subagent_start'; id: string; role: string; role_label: string; task: string }
   | { type: 'subagent_step'; id: string; role: string; step: string; status?: 'ok' | 'warn' | 'info' }
   | { type: 'subagent_done'; id: string; role: string; summary: string; output?: unknown }
+
+/** 一个回合的模型用量（根会话与子代理会话合计）。 */
+export interface TurnUsage { input: number; output: number; cache_read: number; steps: number; sessions: number }
+
+export const emptyUsage = (): TurnUsage & { ids: Set<string> } => ({ input: 0, output: 0, cache_read: 0, steps: 0, sessions: 0, ids: new Set() })
+
+/** 把一条通知里的模型用量计入 acc（不区分会话：子代理的调用同样计入）。 */
+export function addUsage(acc: TurnUsage & { ids: Set<string> }, n: HarnessNotification): void {
+  if (n.method !== 'session.event') return
+  const event = n.params.event as { type?: string; data?: { usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number } } } | undefined
+  const u = event?.type === 'assistant/message' ? event.data?.usage : undefined
+  if (!u) return
+  acc.input += u.inputTokens ?? 0
+  acc.output += u.outputTokens ?? 0
+  acc.cache_read += u.cacheReadTokens ?? 0
+  acc.steps++
+  acc.ids.add(String(n.params.sessionId))
+  acc.sessions = acc.ids.size
+}
 
 interface Block { type: string; text?: string; id?: string; name?: string; arguments?: string }
 
