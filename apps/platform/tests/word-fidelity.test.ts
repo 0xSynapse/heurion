@@ -208,6 +208,20 @@ describe('Word 批注：导入为平台评论线程，导出为 Word 线程回�
     expect(part(out, 'word/comments.xml')).toContain('核对例数')
   })
 
+  it('合并段落：被批注的文字原样并入前一段，评论跟着文字走（不用确认丢弃），导出时批注仍在这几个字上（v2 预实验：合并后合作者批注丢失）', () => {
+    const t = importWithComments(docx(p('前一段的内容。') + COMMENTED.replace('<w:p>', '<w:p>') + p('其他段落。'), { rels: COMMENT_RELS, files: { 'word/comments.xml': enc(COMMENTS_XML), 'word/commentsExtended.xml': enc(COMMENTS_EX) } }))
+    const doc = t.docs.get(t.docId)
+    const [a, b] = [0, 1].map(i => doc.child(i).attrs.id as string)
+    const merged = `前一段的内容。${doc.child(1).textContent}`
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id: a!, markdown: merged }, { op: 'delete', ids: [b!] }] }, { actor: 'ai', turnId: 't1' })
+    expect(t.thread().node_id).toBe(a)
+    expect(t.view()).toContain('「110 例」')
+    const first = firstPara(t.exportNow())
+    expect(first).toContain('前一段的内容。本研究纳入 ')
+    expect(first).toMatch(/<w:commentRangeStart w:id="7"\/>[\s\S]*110 例[\s\S]*<w:commentRangeEnd w:id="7"\/>/)
+    expect(first).toContain('<w:commentReference w:id="7"/>')
+  })
+
   it('在平台里解决：Word 里标为已解决', () => {
     const t = importWithComments(withComments())
     t.store.setCommentStatus(t.docId, t.thread().id, 'resolved', 'user')
