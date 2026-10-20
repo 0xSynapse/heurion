@@ -159,7 +159,7 @@ export class OpService {
     }
 
     const taken = this.docs.takenIds(batch.doc_id)
-    const applied = deck
+    const appliedRaw = deck
       ? applyDeckOps(before, batch.ops as DeckOp[], {
         taken,
         ...this.deckContextInfo(batch.doc_id),
@@ -176,6 +176,8 @@ export class OpService {
         taken,
         userEditedIds: ai ? store.userTouchedSince(batch.doc_id, batch.base_rev + 1) : undefined,
       })
+    // 改了合作者修订的修订版：核对没碰到合作者的修订，并把改动同步到原文版本（用户拒绝修订后改动仍在）
+    const applied = deck ? appliedRaw : { ...appliedRaw, doc: this.coauthorEdits(before, appliedRaw.doc) }
     const results = applied.results
     let after = batch.mode === 'suggest'
       ? toSuggestion(before, applied.doc, `g${randomBytes(4).toString('hex')}`)
@@ -248,9 +250,15 @@ export class OpService {
           for (let d = $pos.depth; d > 0 && !coauthor; d--) if (byCoauthor($pos.node(d))) coauthor = $pos.node(d)
         }
         if (coauthor) {
+          // 合作者修订的修订版（待新增）本身：可以改合作者修订以外的文字（应用后由 coauthorEdits 核对并同步到原文版本）
+          const editable = coauthor === hit.node && coauthor.attrs.suggest === 'insert' && (op.op === 'replace_text' || op.op === 'replace_block')
+          if (editable) continue
+          const copy = coauthor.attrs.suggest === 'delete' ? copyOf.get(coauthor.attrs.id as string) : undefined
           throw new OpError('pending_suggestion', `块 ${id} 是 ${coauthor.attrs.suggest_author} 留下的待采纳修订`, {
             op_index: i,
-            hint: `这是合作者 ${coauthor.attrs.suggest_author} 在 Word 里留下的修订，不能替他改；请等用户采纳或拒绝后再改，需要时在回复里说明。`,
+            hint: copy
+              ? `这是合作者 ${coauthor.attrs.suggest_author} 修订前的原文版本。要改这段里别的文字，请对它的修订版 {#${copy}} 用 replace_text 或 replace_block，只改 ${coauthor.attrs.suggest_author} 修订以外的部分（修订本身不能替他改）。`
+              : `这是合作者 ${coauthor.attrs.suggest_author} 在 Word 里留下的修订，不能替他改；只能用 replace_text / replace_block 改修订版里修订以外的文字，或等用户采纳或拒绝后再改。`,
           })
         }
         if (!pending) continue
@@ -264,6 +272,50 @@ export class OpService {
         })
       }
     })
+  }
+
+  /**
+   * 合作者（Word 导入的）修订：原文版本 D 与修订版 I 相邻成对。修订版被改过时，改动须整体落在合作者修订之前或之后
+   * （不能碰合作者改的文字），并以同样方式改原文版本——这样用户采纳或拒绝合作者的修订，AI 的改动都在；
+   * 导出时按原文 XML 打补丁，合作者的 w:ins / w:del 原样保留、仍归在他名下。
+   */
+  private coauthorEdits(before: PMNode, after: PMNode): PMNode {
+    const now = new Map<string, { node: PMNode; index: number }>()
+    after.forEach((n, _o, i) => { if (n.attrs.id) now.set(n.attrs.id as string, { node: n, index: i }) })
+    let out = after
+    before.forEach((d, _o, i) => {
+      const ins = i + 1 < before.childCount ? before.child(i + 1) : null
+      if (!d.attrs.suggest_author || d.attrs.suggest !== 'delete' || !ins || ins.attrs.suggest !== 'insert' || ins.attrs.suggest_of !== d.attrs.id) return
+      const cur = now.get(ins.attrs.id as string)?.node
+      if (!cur || cur.eq(ins)) return
+      const who = String(d.attrs.suggest_author)
+      // 合作者修订的范围：原文版本与修订版不同的部分（D 里 [ms, meD)，I 里 [ms, me)）
+      const ms = d.content.findDiffStart(ins.content)
+      const msEnd = d.content.findDiffEnd(ins.content)
+      // 这次改动的范围（旧修订版里 [es, ee)）
+      const es = ins.content.findDiffStart(cur.content) ?? 0
+      const eEnd = ins.content.findDiffEnd(cur.content) ?? { a: ins.content.size, b: cur.content.size }
+      const ee = Math.max(es, eEnd.a)
+      const extra = [...now.values()].filter(x => x.node !== cur && x.node.attrs.suggest_group === ins.attrs.suggest_group && x.node.attrs.id !== d.attrs.id)
+      let mirrored: PMNode | null = null
+      if (ms === null || !msEnd) mirrored = d.type.create(d.attrs, cur.content, d.marks)
+      else {
+        const me = Math.max(ms, msEnd.b)
+        const meD = Math.max(ms, msEnd.a)
+        if (ee <= ms) mirrored = d.type.create(d.attrs, cur.content.cut(0, ms + cur.content.size - ins.content.size).append(d.content.cut(ms)), d.marks)
+        else if (es >= me) mirrored = d.type.create(d.attrs, d.content.cut(0, meD).append(cur.content.cut(me)), d.marks)
+        if (!mirrored || extra.length > 0) {
+          const changed = ins.textBetween(ms, me, '', '¤') || `（删去了「${d.textBetween(ms, meD, '', '¤')}」）`
+          throw new OpError('pending_suggestion', `块 ${ins.attrs.id} 的改动碰到了 ${who} 的修订`, {
+            hint: `${who} 的修订改动的是「${changed}」，这部分不能替他改；只改修订之前或之后的文字（一次一处、改成一段），两处都要改请分两次提交。`,
+          })
+        }
+      }
+      const at = now.get(d.attrs.id as string)
+      if (!at) return
+      out = out.copy(out.content.replaceChild(at.index, mirrored))
+    })
+    return out
   }
 
   /** 冲突守卫：目标块在 base_rev 之后被用户改过 → 拒绝，附当前内容。 */

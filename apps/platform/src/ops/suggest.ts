@@ -35,6 +35,8 @@ export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNo
     const prevHit = old.get(c.node_id)
     const prev = prevHit?.node
     if (!hit || !prev) continue
+    // 已是待删除的原文版本（合作者修订：修订版改了修订以外的文字时同步过来的）：保持原样，不另起一对修订
+    if (prev.attrs.suggest === 'delete') continue
     if (insidePendingInsert(before, prevHit.pos, prev)) {
       if (prev.attrs.suggest === 'insert') {
         tr.setNodeMarkup(hit.pos, undefined, { ...hit.node.attrs, suggest: 'insert', suggest_group: prev.attrs.suggest_group, suggest_of: prev.attrs.suggest_of, suggest_author: prev.attrs.suggest_author })

@@ -176,15 +176,24 @@ describe('docx 导出：图、不可编辑段落、列表样式', () => {
     expect(bodyOf(t.exportNow().bytes)).toBe(bodyOf(original))
   })
 
-  it('含文本框的段落导入为不可编辑块，导出原样保留', () => {
-    const textbox = `<w:p><w:r><w:t>正文</w:t></w:r><w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wps"><w:t>框内文字</w:t></mc:Choice></mc:AlternateContent></w:r></w:p>`
+  it('含文本框的段落：文本框是一个对象原子，段落其余文字可改；改了段落文字（打补丁或整段重写）文本框都原样保留', () => {
+    const box = `<w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wps"><w:t>框内文字</w:t></mc:Choice></mc:AlternateContent></w:r>`
+    const textbox = `<w:p><w:r><w:t>正文</w:t></w:r>${box}</w:p>`
     const r = importDocx(docx(textbox))
-    expect(r.doc.child(0).type.name).toBe('opaque')
-    expect(r.warnings.join()).toContain('不可编辑块')
-    const t = importInto(docx(textbox + p('可编辑')))
-    const last = t.docs.get(t.docId).child(1).attrs.id as string
-    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: last, find: '可编辑', replace: '已编辑' }] }, { actor: 'user', turnId: null })
-    expect(bodyOf(t.exportNow().bytes)).toContain('框内文字')
+    expect(r.doc.child(0).type.name).toBe('paragraph')
+    expect(r.doc.child(0).lastChild?.type.name).toBe('word_inline')
+    expect(r.doc.child(0).lastChild?.attrs.kind).toBe('object')
+    for (const op of ['replace_text', 'replace_block'] as const) {
+      const t = importInto(docx(textbox + p('可编辑')))
+      const id = t.docs.get(t.docId).child(0).attrs.id as string
+      const key = t.docs.get(t.docId).child(0).lastChild!.attrs.key as string
+      t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [op === 'replace_text'
+        ? { op, id, find: '正文', replace: '改过的正文' }
+        : { op, id, markdown: `重写的正文[@w:${key}]` }] }, { actor: 'user', turnId: null })
+      const body = bodyOf(t.exportNow().bytes)
+      expect(body).toContain(op === 'replace_text' ? '改过的正文' : '重写的正文')
+      expect(body).toContain('<mc:Choice Requires="wps"><w:t>框内文字</w:t></mc:Choice>')
+    }
   })
 
   it('新建的无序列表沿用原文件无序列表的编号定义与段落样式', () => {
@@ -486,7 +495,7 @@ describe('代码审查回归（2026-10-17）', () => {
 })
 
 describe('docx 导出：原文 XML 的非标准写法与扩展属性', () => {
-  it('单元格字体属性里的 w14 扩展元素全部保留（不同命名空间不互相覆盖），w: 元素在前', () => {
+  it('单元格字体属性里的 w14 扩展元素全部保留：改单元格文字时按原文打补丁，run 属性原样沿用', () => {
     const NS = 'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"'
     const rpr = `<w14:textOutline ${NS} w14:w="9525"/><w14:ligatures ${NS} w14:val="standard"/><w:sz w:val="21"/>`
     const tbl = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:rPr>${rpr}</w:rPr><w:t>甲乙</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`
@@ -495,7 +504,7 @@ describe('docx 导出：原文 XML 的非标准写法与扩展属性', () => {
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: pid, find: '乙', replace: '丙' }] }, { actor: 'user', turnId: null })
     const body = bodyOf(t.exportNow().bytes)
     const run = /<w:rPr>((?:(?!<\/w:rPr>)[\s\S])*)<\/w:rPr><w:t xml:space="preserve">甲丙/.exec(body)?.[1] ?? ''
-    expect(run).toBe(`<w:sz w:val="21"/><w14:textOutline ${NS} w14:w="9525"/><w14:ligatures ${NS} w14:val="standard"/>`)
+    expect(run).toBe(rpr)
   })
 
   const SHD = (c: string) => `<w:shd w:val="clear" w:color="auto" w:fill="${c}"/>`
@@ -514,7 +523,7 @@ describe('docx 导出：原文 XML 的非标准写法与扩展属性', () => {
     })
   }
 
-  it('表头标记与列宽用单引号写：仍识别为显式表头、沿用原列宽', () => {
+  it('表头标记与列宽用单引号写：改单元格文字时按原文打补丁，表头与列宽原样保留', () => {
     const row = (a: string, b: string, pr = '') => `<w:tr>${pr}<w:tc><w:p><w:r><w:t>${a}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>${b}</w:t></w:r></w:p></w:tc></w:tr>`
     const tbl = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w='1500'/><w:gridCol w:w='6500'/></w:tblGrid>`
       + row('很长很长的表头文字'.repeat(10), '列二', "<w:trPr><w:tblHeader w:val='1'/></w:trPr>") + row('数据1', '数据2') + '</w:tbl>'
@@ -522,8 +531,9 @@ describe('docx 导出：原文 XML 的非标准写法与扩展属性', () => {
     const pid = t.docs.get(t.docId).child(0).child(1).child(0).child(0).attrs.id as string
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: pid, find: '数据1', replace: '数据一' }] }, { actor: 'user', turnId: null })
     const body = bodyOf(t.exportNow().bytes)
-    expect(body.match(/<w:tblHeader\/>/g)?.length).toBe(1)
-    expect(body).toContain('<w:gridCol w:w="1500"/><w:gridCol w:w="6500"/>')
+    expect(body.match(/<w:tblHeader w:val='1'\/>/g)?.length).toBe(1)
+    expect(body).toContain("<w:gridCol w:w='1500'/><w:gridCol w:w='6500'/>")
+    expect(body).toContain('数据一')
   })
 })
 

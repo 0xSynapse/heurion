@@ -8,6 +8,7 @@ import { readGrid, type GridCell } from '../model/table-grid.ts'
 import { looksLikeHeaderRow } from '../model/table-header.ts'
 import type { CitationRow, CommentRow, ReplyRow } from '../store/db.ts'
 import { bodyChildrenRaw, elementChildrenRaw, safeUnzipDocx } from './docx-import.ts'
+import { patchParagraph } from './docx-patch.ts'
 
 /**
  * 平台模型 → docx（PLATFORM.md §6 导出）：修补式。
@@ -234,6 +235,14 @@ export function exportDocx(input: ExportInput): ExportResult {
     if (blockThreads.has(n.attrs.id as string)) return null
     const src = unchanged(n)
     if (!src || !/<w:(drawing|pict)\b/.test(src)) return src
+    const figures = followingFigures(n)
+    if (!figures) return null
+    for (const f of figures) skip.add(f.attrs.id as string)
+    return src
+  }
+
+  /** 段落原文里嵌着的图（导入时拆成紧随其后的图块）：仍原样、按原顺序紧跟在后面时返回这些图块，否则 null。 */
+  const followingFigures = (n: PMNode): PMNode[] | null => {
     const id = n.attrs.id as string
     const b = basePos.get(id)
     const c = curPos.get(id)
@@ -248,8 +257,7 @@ export function exportDocx(input: ExportInput): ExportResult {
       const cur = c.parent.maybeChild(c.index + 1 + k)
       if (!cur || !cur.eq(figures[k]!)) return null
     }
-    for (const f of figures) skip.add(f.attrs.id as string)
-    return src
+    return figures
   }
 
   // 编号：新列表优先沿用原文件里同类列表的 abstractNum 与段落样式；没有时用平台自己的（ids 9000+）
@@ -429,12 +437,17 @@ export function exportDocx(input: ExportInput): ExportResult {
   /** 导入后原样未动的 Word 修订：原文版本整段写回原始 XML（修订仍在），修订版不再单独生成。 */
   const verbatimRevision = new Map<string, string>()
   const skipRevision = new Set<string>()
+  /** 合作者修订里改过修订以外文字的（原文版本 id → 修订版）：写出时按原文 XML 打补丁，合作者的修订原样保留。 */
+  const coauthorEdited = new Map<string, PMNode>()
   input.doc.forEach((n, _off, i) => {
     if (!n.isTextblock || !n.attrs.suggest_author) return
-    const src = unchanged(n)
-    if (!src) return
     const next = i + 1 < input.doc.childCount ? input.doc.child(i + 1) : null
     const partner = n.attrs.suggest === 'delete' && next?.attrs.suggest === 'insert' && next.attrs.suggest_of === n.attrs.id ? next : null
+    const src = unchanged(n)
+    if (!src) {
+      if (partner && input.src(n.attrs.id as string) && baseline.get(partner.attrs.id as string)) coauthorEdited.set(n.attrs.id as string, partner)
+      return
+    }
     if (partner) {
       if (!unchanged(partner) && !baseline.get(partner.attrs.id as string)?.eq(partner)) return
       skipRevision.add(partner.attrs.id as string)
@@ -472,14 +485,127 @@ export function exportDocx(input: ExportInput): ExportResult {
     if (skipRevision.has(id)) return ''
     const kept = verbatimRevision.get(id)
     if (kept) return kept
+    const edited = coauthorEdited.get(id)
+    if (edited) {
+      // 修订版相对导入时的改动打到原文 XML 上（原文 XML 里有合作者的 w:ins / w:del，接受修订后的文字即修订版）
+      const xml = patchXml(input.src(id)!, baseline.get(edited.attrs.id as string)!, cleared(edited))
+      if (xml) { skipRevision.add(edited.attrs.id as string); return xml }
+    }
     const plain = cleared(node)
     const copyOf = node.attrs.suggest === 'insert' && node.attrs.suggest_of ? node.attrs.suggest_of as string : undefined
     const xml = (copyOf ? null : verbatim(plain)) ?? regenerated(plain, '', copyOf) ?? `<w:p>${pPr(plain)}${inline(plain)}</w:p>`
     return revise(xml, node.attrs.suggest === 'delete' ? 'del' : 'ins', String(node.attrs.suggest_author ?? 'Heurion AI'))
   }
 
+  /**
+   * 改过的段落先试按原始 XML 打补丁（docx-patch.ts）：只改变化的文字，模型表达不了的内容原样留在原处。
+   * 块类型与样式、对齐、标题级别须与导入时相同；numPr：列表项要求原文的编号与层级不变。
+   */
+  const patched = (node: PMNode, numPr?: { numId: string; ilvl: number }): string | null => {
+    const id = node.attrs.id as string | null
+    const raw = id ? input.src(id) : null
+    const before = id ? baseline.get(id) : undefined
+    if (!raw || !before || before.type !== node.type || node.attrs.suggest) return null
+    if (['level', 'style', 'align'].some(k => before.attrs[k] !== node.attrs[k])) return null
+    const rawNum = /<w:numPr>[\s\S]*?<\/w:numPr>/.exec(raw)?.[0]
+    // 列表项：层级不变即可沿用原文的编号（重新编号的子列表有自己的 numId，原样保留）
+    if (numPr ? !rawNum || !(new RegExp(`<w:ilvl w:val="${numPr.ilvl}"/>`).test(rawNum) || (numPr.ilvl === 0 && !/<w:ilvl\b/.test(rawNum))) : rawNum) return null
+    // 只挂在块上的批注线程：原文里须已有它的 Word 批注范围
+    for (const t of blockThreads.get(id!) ?? []) {
+      const ref = wordRef(openComments.get(t)!)
+      if (!ref || !raw.includes(`<w:commentRangeStart w:id="${ref.id}"/>`)) return null
+    }
+    // 原文里嵌着图：图块须仍原样紧跟在后面，图的 XML 留在段落原处
+    const figures = /<w:(drawing|pict)\b/.test(raw) ? followingFigures(node) : []
+    if (!figures) return null
+    const xml = patchXml(raw, before, node, figures.length > 0)
+    if (xml) for (const f of figures) skip.add(f.attrs.id as string)
+    return xml
+  }
+
+  /** 按原始 XML 给一个段落打补丁（段落、表格单元格里的段落共用）；不能打补丁返回 null。 */
+  const patchXml = (raw: string, before: PMNode, node: PMNode, drawings = false): string | null => {
+    const xml = patchParagraph(raw, before, node, {
+      drawings,
+      runs: (text, marks, base) => textRuns(text, marks, base),
+      atom: (n, base) => n.type.name === 'hard_break' ? '<w:r><w:br/></w:r>'
+        : n.type.name === 'citation' ? `<w:r>${runProps([], '<w:vertAlign w:val="superscript"/>', base)}<w:t>[${citeNumber.get(n.attrs.cite_id as string) ?? '?'}]</w:t></w:r>`
+        : n.type.name === 'word_inline' ? ((n.attrs.xml as string) || null) : null,
+      // 平台里新建的批注线程要重新生成范围标记；导入的 Word 批注的范围标记在原文里
+      markOk: m => m.type.name !== 'comment' || !openComments.has(m.attrs.thread as string) || !!wordRef(openComments.get(m.attrs.thread as string)!),
+    })
+    if (xml === null) return null
+    // 原文里的批注范围已写出：登记为已开始，跨段落的线程在后面重新生成的段落里不再另起
+    node.descendants(c => {
+      for (const m of c.marks) {
+        const t = m.attrs.thread as string
+        if (m.type.name !== 'comment' || !openComments.has(t) || started.has(t)) continue
+        started.add(t)
+        commentIds.set(t, wordRef(openComments.get(t)!)!.id)
+      }
+      return true
+    })
+    return xml
+  }
+
+  /**
+   * 表格结构没变（行、单元格、合并、每格段落数都相同）、只改了单元格里的文字：以原表 XML 为底，
+   * 改过的单元格段落按原文打补丁。嵌套表、行的修订、单元格属性等模型表达不了的内容都原样保留。
+   */
+  const patchedTable = (node: PMNode): string | null => {
+    const id = node.attrs.id as string | null
+    const raw = id ? input.src(id) : null
+    const before = id ? baseline.get(id) : undefined
+    if (!raw || !before || !/^<w:tbl\b/.test(raw) || before.childCount !== node.childCount || JSON.stringify(before.attrs) !== JSON.stringify(node.attrs)) return null
+    // 单列（表单型）表格改过后不带重复表头（见 table()），交给重新生成
+    if (readGrid(node).width < 2 && /<w:tblHeader\b/.test(raw)) return null
+    const isContinue = (tc: string) => { const v = /<w:vMerge\b([^>]*)\/?>/.exec(childEl(tc, 'tcPr') ?? ''); return !!v && !/w:val="restart"/.test(v[1]!) }
+    const rows = elementChildrenRaw(raw).map(k => ({ xml: k, isRow: /^<w:tr\b/.test(k) }))
+    let ri = 0
+    let failed = false
+    const out = rows.map(r => {
+      if (!r.isRow || failed) return r.xml
+      const kids = elementChildrenRaw(r.xml)
+      const cells = kids.filter(k => /^<w:tc\b/.test(k) && !isContinue(k))
+      if (cells.length === 0) return r.xml
+      const bRow = before.maybeChild(ri)
+      const nRow = node.maybeChild(ri)
+      ri++
+      if (!bRow || !nRow || bRow.childCount !== cells.length || nRow.childCount !== cells.length) { failed = true; return r.xml }
+      let ci = 0
+      const rowKids = kids.map(k => {
+        if (!/^<w:tc\b/.test(k) || isContinue(k) || failed) return k
+        const bCell = bRow.child(ci)
+        const nCell = nRow.child(ci)
+        ci++
+        if (bCell.eq(nCell)) return k
+        if (JSON.stringify(bCell.attrs) !== JSON.stringify(nCell.attrs) || bCell.childCount !== nCell.childCount) { failed = true; return k }
+        const cellKids = elementChildrenRaw(k)
+        const paras = cellKids.filter(x => /^<w:p\b/.test(x))
+        if (paras.length !== bCell.childCount) { failed = true; return k }
+        let pi = 0
+        const next = cellKids.map(x => {
+          if (!/^<w:p\b/.test(x) || failed) return x
+          const b = bCell.child(pi)
+          const n = nCell.child(pi)
+          pi++
+          if (b.eq(n)) return x
+          // 段落属性（样式、对齐）改了：交给重新生成
+          const sameAttrs = ['style', 'align'].every(a => b.attrs[a] === n.attrs[a])
+          const patchedP = n.type.name === 'paragraph' && b.type === n.type && sameAttrs ? patchXml(x, b, n) : null
+          if (patchedP === null) failed = true
+          return patchedP ?? x
+        })
+        return `${/^<w:tc\b[^>]*>/.exec(k)![0]}${next.join('')}</w:tc>`
+      })
+      return `${/^<w:tr\b[^>]*>/.exec(r.xml)![0]}${rowKids.join('')}</w:tr>`
+    })
+    if (failed || ri !== node.childCount) return null
+    return `${/^<w:tbl\b[^>]*>/.exec(raw)![0]}${out.join('')}</w:tbl>`
+  }
+
   const paragraph = (node: PMNode, extraPPr = ''): string =>
-    verbatim(node) ?? regenerated(node, extraPPr) ?? `<w:p>${pPr(node, extraPPr)}${inline(node)}</w:p>`
+    verbatim(node) ?? patched(node) ?? regenerated(node, extraPPr) ?? `<w:p>${pPr(node, extraPPr)}${inline(node)}</w:p>`
 
   const figure = (node: PMNode): string => {
     const rawId = String(node.attrs.asset_id || '')
@@ -598,6 +724,8 @@ export function exportDocx(input: ExportInput): ExportResult {
   const table = (node: PMNode): string => {
     const src = unchanged(node)
     if (src) return src
+    const kept = patchedTable(node)
+    if (kept) return kept
     const orig = tableSrc(node)
     // 原表首行是否显式标了重复表头：与导入端一致（有 tblHeader 且 val 不是 0 / false / off；没标为 false；无原表为 null）
     const firstTr = orig ? elementChildrenRaw(input.src(node.attrs.id as string)!).find(k => /^<w:tr\b/.test(k)) : undefined
@@ -772,9 +900,12 @@ export function exportDocx(input: ExportInput): ExportResult {
     node.forEach(item => {
       item.forEach((child, _o, idx) => {
         if (idx === 0 && child.type.name === 'paragraph') {
+          // 导入时为直接从深层级开始的子列表补的空占位项（原文没有这一段）：没改过就不写出
+          const placeholder = child.childCount === 0 && !input.src(child.attrs.id as string) && !!baseline.get(child.attrs.id as string)?.eq(child)
+          if (placeholder) return
           // 没有自带样式的列表段落：沿用原文件列表的段落样式，否则 List Paragraph（包里有该样式时）
           const styleId = numStyle.get(id!) ?? styles.get('list paragraph')
-          out += verbatim(child) ?? `<w:p>${pPr(child, `<w:numPr><w:ilvl w:val="${ilvl}"/><w:numId w:val="${id}"/></w:numPr>`, styleId)}${inline(child)}</w:p>`
+          out += verbatim(child) ?? patched(child, { numId: id!, ilvl }) ?? `<w:p>${pPr(child, `<w:numPr><w:ilvl w:val="${ilvl}"/><w:numId w:val="${id}"/></w:numPr>`, styleId)}${inline(child)}</w:p>`
         } else if (/_list$/.test(child.type.name)) {
           out += list(child, Math.min(8, ilvl + 1), child.type === node.type ? id : null)
         } else out += block(child)
@@ -810,10 +941,44 @@ export function exportDocx(input: ExportInput): ExportResult {
   // 参考文献表：去掉上次导出追加的平台条目后，① 末尾有用户自己的文献表 → 平台条目接在其后，沿用其最后一条的段落与字体格式；
   // ② 末尾只有「参考文献」标题 → 复用标题；③ 都没有 → 另起「参考文献」标题
   const byId = new Map(input.citations.map(c => [c.id, c]))
+  // 正文层级的内容控件（w:sdt）：导入时只取了里面的块，这里按原文件把控件包回去——
+  // 原控件里第一块与最后一块都还在顶层、且顺序未变时，从第一块到最后一块整体包进原控件
+  const sdtOpen = new Map<string, string>()
+  const sdtClose = new Map<string, string>()
+  const sdtCloseFor = new Map<string, string>()
+  if (originalXml && input.baseline) {
+    const idOfRaw = new Map<string, string>()
+    input.baseline.forEach(n => { const id = n.attrs.id as string | null; const raw = id ? input.src(id) : null; if (raw && !idOfRaw.has(raw)) idOfRaw.set(raw, id!) })
+    for (const el of bodyChildrenRaw(originalXml).filter(k => /^<w:sdt\b/.test(k))) {
+      const kids = elementChildrenRaw(el)
+      const content = kids.find(k => /^<w:sdtContent\b/.test(k))
+      const inner = content ? elementChildrenRaw(content) : []
+      const first = inner.length ? idOfRaw.get(inner[0]!) : undefined
+      const last = inner.length ? idOfRaw.get(inner.at(-1)!) : undefined
+      if (!content || !first || !last) continue
+      const at = kids.indexOf(content)
+      sdtOpen.set(first, `${/^<w:sdt\b[^>]*>/.exec(el)![0]}${kids.slice(0, at).join('')}${/^<w:sdtContent\b[^>]*>/.exec(content)![0]}`)
+      sdtClose.set(last, `</w:sdtContent>${kids.slice(at + 1).join('')}</w:sdt>`)
+      sdtCloseFor.set(last, sdtOpen.get(first)!)
+    }
+  }
+  const topIds = new Map<string, number>()
+  input.doc.forEach((n, _off, idx) => { if (n.attrs.id) topIds.set(n.attrs.id as string, idx) })
   let body = ''
+  let openSdt: string | null = null
   input.doc.forEach((n, _off, idx) => {
-    if (idx < refPlan.bodyEnd) body += block(n)
+    if (idx >= refPlan.bodyEnd) return
+    const id = n.attrs.id as string | null
+    const open = id ? sdtOpen.get(id) : undefined
+    if (open && !openSdt) {
+      // 找到同一控件的最后一块（须在其后、正文范围内）才包
+      const closeId = [...sdtClose.keys()].find(k => sdtOpen.get(id!) === open && (topIds.get(k) ?? -1) >= idx && topIds.get(k)! < refPlan.bodyEnd && sdtCloseFor.get(k) === open)
+      if (closeId) { body += open; openSdt = closeId }
+    }
+    body += block(n)
+    if (openSdt && id === openSdt) { body += sdtClose.get(id)!; openSdt = null }
   })
+  if (openSdt) body += sdtClose.get(openSdt)!
   if (refPlan.append.length > 0) {
     let pprXml = '<w:pPr><w:ind w:left="440" w:hanging="440"/></w:pPr>'
     let rprXml = ''

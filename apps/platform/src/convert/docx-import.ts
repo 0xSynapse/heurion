@@ -225,7 +225,18 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   const rawByEl = new Map<XElement, string>()
   const documentText = strFromU8(files['word/document.xml']!)
   const rawList = bodyChildrenRaw(documentText)
-  children(body).forEach((el, i) => { if (rawList[i] !== undefined) rawByEl.set(el, rawList[i]!) })
+  // 正文层级的内容控件里的块同样记原文（按原文切片，不重新序列化，否则未改动时写回的 XML 与原文不同）
+  const mapRaw = (el: XElement, raw: string) => {
+    rawByEl.set(el, raw)
+    if (local(el) !== 'sdt') return
+    const content = child(el, 'sdtContent')
+    const rawContent = elementChildrenRaw(raw).find(k => /^<w:sdtContent\b/.test(k))
+    if (!content || !rawContent) return
+    const rawKids = elementChildrenRaw(rawContent)
+    const kids = children(content)
+    if (rawKids.length === kids.length) kids.forEach((k, i) => mapRaw(k, rawKids[i]!))
+  }
+  children(body).forEach((el, i) => { if (rawList[i] !== undefined) mapRaw(el, rawList[i]!) })
   const xmlOf = (el: XElement) => rawByEl.get(el) ?? serializer.serializeToString(el)
   // 行内元素的原文：序列化时去掉根元素已声明的命名空间（避免写回时每个 run 都带一串 xmlns）
   const rootNs = [.../<w:document\b[^>]*>/.exec(documentText)?.[0].matchAll(/\sxmlns:([\w.-]+)="([^"]*)"/g) ?? []]
@@ -268,7 +279,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   }
 
   let wordKeys = 0
-  const wordInline = (kind: 'footnote' | 'endnote' | 'field', text: string, xmlText: string, marks: readonly Mark[]) =>
+  const wordInline = (kind: 'footnote' | 'endnote' | 'field' | 'object', text: string, xmlText: string, marks: readonly Mark[]) =>
     schema.node('word_inline', { key: `w${++wordKeys}`, kind, text, xml: xmlText }, undefined, withComments(marks))
 
   /** 复杂域（fldChar begin … end）：从 begin 所在的兄弟元素起，找到与之配对的 end 所在元素的下标；找不到返回 -1。 */
@@ -344,6 +355,31 @@ export function importDocx(bytes: Uint8Array): DocxImport {
    */
   interface InlineFlags { unmodelled: string | null; fields: boolean }
 
+  /** 这个 run 是否含模型表达不了的对象：兼容内容、嵌入对象，或不是图片的图形（图表、文本框、形状）。 */
+  const isObjectRun = (r: XElement): boolean => children(r).some(c => {
+    const name = local(c)
+    if (c.namespaceURI !== W) return name === 'AlternateContent'
+    if (name === 'object') return true
+    if (name === 'drawing' || name === 'pict') return !isPicture(c)
+    return false
+  })
+  /** 图形里有能解析到文件的图片（导入为图块）。 */
+  const isPicture = (drawing: XElement): boolean => {
+    const blip = drawing.getElementsByTagNameNS(A, 'blip')[0]
+    const embed = blip?.getAttributeNS(R, 'embed') ?? blip?.getAttribute('r:embed')
+    const target = embed ? rels.get(embed) : undefined
+    return !!target && !!files[target.startsWith('/') ? target.slice(1) : `word/${target}`]
+  }
+  /** 对象在读视图里的说明：文本框带其中的文字，嵌入对象带程序名。 */
+  const objectLabel = (el: XElement): string => {
+    const box = el.getElementsByTagNameNS(W, 'txbxContent')[0]
+    if (box) return `文本框：${(box.textContent ?? '').trim().slice(0, 80)}`
+    if (el.getElementsByTagNameNS('http://schemas.openxmlformats.org/drawingml/2006/chart', 'chart').length) return '图表'
+    const ole = [...Array.from(el.getElementsByTagName('o:OLEObject'))][0]
+    if (ole) return `嵌入对象（${ole.getAttribute('ProgID') ?? 'OLE'}）`
+    return '图形'
+  }
+
   /** 段落里的行内内容；图片单独收集为块。 */
   /**
    * mode：accepted = 接受所有修订后的文字（默认）；original = 修订前的原文（删除的文字算在内、插入的不算），
@@ -357,7 +393,8 @@ export function importDocx(bytes: Uint8Array): DocxImport {
         const c = kids[i]!
         const name = local(c)
         if (c.namespaceURI !== W) {
-          if (name === 'AlternateContent') flags.unmodelled ??= '文本框'
+          // 段落层级的兼容内容（文本框等）：整体作为一个对象原子，原样写回
+          if (name === 'AlternateContent') out.push(wordInline('object', objectLabel(c), inlineXml(c), marks))
           continue
         }
         if (commentRange(c)) continue
@@ -402,6 +439,9 @@ export function importDocx(bytes: Uint8Array): DocxImport {
       out.push(wordInline(kind, (kind === 'footnote' ? footnotes : endnotes).get(id) ?? '', inlineXml(r), outer))
       return
     }
+    // 文本框、图表、形状、嵌入对象（公式编辑器、Excel 等）：整个 run 作为一个对象原子（原始 XML 原样写回），
+    // 段落其余文字照常可改
+    if (isObjectRun(r)) { out.push(wordInline('object', objectLabel(r), inlineXml(r), outer)); return }
     const rPr = child(r, 'rPr')
     let marks = outer
     const on = (name: string) => {
