@@ -7,7 +7,8 @@ import type { Task } from '../exp3/tasks.ts'
 import * as D from '../exp3/docx.ts'
 import { measureTarget, type Checks } from '../manuscripts/compare.ts'
 import { firstTable, type PaperTopic } from '../manuscripts/tasks.ts'
-import { checkReferences } from './refcheck/refcheck.ts'
+import { checkReferences, splitParts } from './refcheck/refcheck.ts'
+import { checkSupport, type SupportDetail } from './refcheck/support.ts'
 import { CLINICIAN_SENTENCE, matchPara, RECENT_YEAR, type StressCtx, type StressTask } from './stress.ts'
 import { featureState } from './templates.ts'
 
@@ -15,6 +16,9 @@ export interface RefSummary {
   added: number; verified: number; mismatched: number; fabricated: number; raw_ids_in_body: number; citation_markers_added: number
   /** 核实且记录出版年 ≥ RECENT_YEAR 的新增文献数（S3-recent 的完成标准）。 */
   verified_recent: number
+  /** 新增且核实存在的文献的支持度（refcheck/support.ts，评判模型 deepseek-flash）。 */
+  supported: number; partial: number; not_supported: number; uncited: number; no_abstract: number; unjudged: number
+  support: SupportDetail[]
 }
 
 export interface Rework {
@@ -76,7 +80,14 @@ async function refs(source: D.Pkg, after: D.Pkg): Promise<RefSummary> {
   const r = await checkReferences(source, after)
   const raw = r.raw_ids_in_body as unknown
   const recent = r.details.filter(d => d.status === 'verified' && (d.matched_year ?? 0) >= RECENT_YEAR).length
-  return { added: r.added, verified: r.verified, mismatched: r.mismatched, fabricated: r.fabricated, raw_ids_in_body: Array.isArray(raw) ? raw.length : Number(raw) || 0, citation_markers_added: r.citation_markers_added, verified_recent: recent }
+  const a = splitParts(source)
+  const b = splitParts(after)
+  const support = await checkSupport(r.details, b.refs, b.body, a.body)
+  const n = (k: SupportDetail['support']) => support.filter(x => x.support === k).length
+  return {
+    added: r.added, verified: r.verified, mismatched: r.mismatched, fabricated: r.fabricated, raw_ids_in_body: Array.isArray(raw) ? raw.length : Number(raw) || 0, citation_markers_added: r.citation_markers_added, verified_recent: recent,
+    supported: n('supported'), partial: n('partial'), not_supported: n('not_supported'), uncited: n('uncited'), no_abstract: n('no_abstract'), unjudged: n('unjudged'), support,
+  }
 }
 
 function finish(x: Omit<Rework, 'rework' | 'reasons'>): Rework {
@@ -87,6 +98,8 @@ function finish(x: Omit<Rework, 'rework' | 'reasons'>): Rework {
   if (x.human_lost.length > 0) reasons.push('human_content_lost')
   if (x.features_lost.length > 0) reasons.push('template_feature_lost')
   if (x.refs.fabricated + x.refs.mismatched > 0) reasons.push('bad_reference')
+  // 新增文献不支持所引的句子，或正文里没有引用它（部分支持不算返工，单独报告）
+  if (x.refs.not_supported + x.refs.uncited > 0) reasons.push('unsupported_reference')
   if (x.refs.raw_ids_in_body > 0) reasons.push('raw_id_in_body')
   return { ...x, rework: reasons.length > 0, reasons }
 }

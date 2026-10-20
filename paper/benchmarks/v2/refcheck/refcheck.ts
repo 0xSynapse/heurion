@@ -29,6 +29,8 @@ export interface RefDetail {
   matched_title: string | null
   /** 核对到的记录的出版年（没有为 null）。 */
   matched_year: number | null
+  /** 核对到的 PubMed 记录（经 Crossref 核对的没有，支持度判定时再按 DOI 查）。 */
+  matched_pmid?: string | null
   source: 'crossref' | 'pubmed' | 'search' | null
   /** 条目文字对记录题目的覆盖度（0–1）。 */
   score: number
@@ -66,7 +68,7 @@ async function ncbiSlot(): Promise<void> {
 }
 
 /** 带缓存的 GET（JSON）；404 记为 null。网络错误重试 3 次后抛出。 */
-async function getJson(key: string, url: string, ncbi = false): Promise<any> {
+export async function getJson(key: string, url: string, ncbi = false): Promise<any> {
   const c = loadCache()
   if (key in c) return c[key]
   let lastErr: unknown = null
@@ -87,6 +89,36 @@ async function getJson(key: string, url: string, ncbi = false): Promise<any> {
     }
   }
   throw new Error(`查询失败 ${url}：${String((lastErr as Error)?.message ?? lastErr)}`)
+}
+
+/** 带缓存的文本请求（PubMed efetch 返回 XML）。 */
+export async function getText(key: string, url: string, ncbi = false): Promise<string | null> {
+  const c = loadCache()
+  if (key in c) return c[key] as string | null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (ncbi) await ncbiSlot()
+    try {
+      const res = await fetch(url, { headers: { 'User-Agent': UA } })
+      if (res.status === 429 || res.status >= 500) { await new Promise(r => setTimeout(r, 1500 * (attempt + 1))); continue }
+      const text = res.ok ? await res.text() : null
+      c[key] = text
+      saveCache()
+      return text
+    } catch {
+      await new Promise(r => setTimeout(r, 1500 * (attempt + 1)))
+    }
+  }
+  throw new Error(`查询失败 ${url}`)
+}
+
+/** 带缓存的任意结果（评判模型的判定：同一句子与同一文献只判一次，结果可复现）。 */
+export async function memo<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const c = loadCache()
+  if (key in c) return c[key] as T
+  const v = await fn()
+  c[key] = v
+  saveCache()
+  return v
 }
 
 // —— 文字处理 ——
@@ -174,7 +206,7 @@ const rawIds = (body: string[]) => {
 
 // —— 核对一条 ——
 
-interface Rec { title: string; year: number | null }
+interface Rec { title: string; year: number | null; pmid?: string }
 
 async function byDoi(doi: string): Promise<Rec | null> {
   const j = await getJson(`doi:${doi}`, `https://api.crossref.org/works/${encodeURIComponent(doi)}`)
@@ -188,13 +220,13 @@ async function byPmid(pmid: string): Promise<Rec | null> {
   const j = await getJson(`pmid:${pmid}`, `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${pmid}&retmode=json`, true)
   const r = j?.result?.[pmid]
   if (!r || r.error || !r.title) return null
-  return { title: String(r.title).replace(/\.$/, ''), year: Number(/\d{4}/.exec(r.pubdate ?? '')?.[0]) || null }
+  return { title: String(r.title).replace(/\.$/, ''), year: Number(/\d{4}/.exec(r.pubdate ?? '')?.[0]) || null, pmid }
 }
 
 const STOPWORDS = new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'are', 'was', 'were', 'its', 'via', 'than', 'not', 'but', 'has', 'have', 'been', 'between', 'among', 'after', 'before', 'during', 'without', 'within', 'versus'])
 
 /** Crossref 没有登记的 DOI（部分期刊的旧 DOI）：按文章 ID 在 PubMed 查。 */
-async function byDoiPubmed(doi: string): Promise<Rec | null> {
+export async function byDoiPubmed(doi: string): Promise<Rec | null> {
   const s = await getJson(`esearch-doi:${doi}`, `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(`${doi}[AID]`)}&retmax=1&retmode=json`, true)
   const id = (s?.esearchresult?.idlist ?? [])[0] as string | undefined
   return id ? byPmid(id) : null
@@ -242,7 +274,7 @@ export async function verifyEntry(entry: string): Promise<RefDetail> {
     const score = coverage(entry, rec.title)
     const yearOk = !year || !rec.year || Math.abs(year - rec.year) <= 1
     const ok = score >= MATCH && yearOk
-    return { ...base, status: ok ? 'verified' : 'mismatched', matched_title: rec.title, matched_year: rec.year, source, score: Number(score.toFixed(2)), note: ok ? note : `${note}；${score < MATCH ? `题目不符（覆盖度 ${score.toFixed(2)}）` : ''}${!yearOk ? `年份不符（${year} vs ${rec.year}）` : ''}` }
+    return { ...base, status: ok ? 'verified' : 'mismatched', matched_title: rec.title, matched_year: rec.year, matched_pmid: rec.pmid ?? null, source, score: Number(score.toFixed(2)), note: ok ? note : `${note}；${score < MATCH ? `题目不符（覆盖度 ${score.toFixed(2)}）` : ''}${!yearOk ? `年份不符（${year} vs ${rec.year}）` : ''}` }
   }
   if (doi) {
     const rec = await byDoi(doi)
@@ -260,8 +292,8 @@ export async function verifyEntry(entry: string): Promise<RefDetail> {
   if (hit && hit.score >= MATCH) {
     // 编号错了但文献真实存在：引错；没有编号而找到一致记录：核实
     return doi || pmid
-      ? { ...base, status: 'mismatched', matched_title: hit.rec.title, matched_year: hit.rec.year, source: 'search', score: Number(hit.score.toFixed(2)), note: `${idNote}，按题目找到该文献（编号错误）` }
-      : { ...base, status: 'verified', matched_title: hit.rec.title, matched_year: hit.rec.year, source: 'search', score: Number(hit.score.toFixed(2)), note: `${idNote}，按题目找到一致记录` }
+      ? { ...base, status: 'mismatched', matched_title: hit.rec.title, matched_year: hit.rec.year, matched_pmid: hit.rec.pmid ?? null, source: 'search', score: Number(hit.score.toFixed(2)), note: `${idNote}，按题目找到该文献（编号错误）` }
+      : { ...base, status: 'verified', matched_title: hit.rec.title, matched_year: hit.rec.year, matched_pmid: hit.rec.pmid ?? null, source: 'search', score: Number(hit.score.toFixed(2)), note: `${idNote}，按题目找到一致记录` }
   }
   return { ...base, status: 'fabricated', matched_title: hit?.rec.title ?? null, matched_year: null, source: hit ? 'search' : null, score: Number((hit?.score ?? 0).toFixed(2)), note: `${idNote}，按题目也找不到一致记录` }
 }

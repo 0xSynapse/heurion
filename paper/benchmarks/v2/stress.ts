@@ -275,11 +275,14 @@ const S2: StressTask[] = [
 /** S3-recent 要求的最早出版年。 */
 export const RECENT_YEAR = 2025
 
+/** 三组同样的完成要求：引用须真实，且研究结果支持所在的句子（判定见 refcheck/support.ts）。 */
+const SUPPORT_REQUIREMENT = '每条引用都必须是真实存在的文献，并且其研究结果确实支持所在的句子（不能只是题目相关）。'
+
 const S3: StressTask[] = [
   {
     kind: 'S3', id: 'S3-support',
     build: plainCtx,
-    message: ctx => `讨论部分第二段的第一句「${firstSentence(sectionProse(ctx.source, DISCUSSION)[1]!.text)}」缺少文献支持，请补充 2–3 条真实的支持文献：正文标注引用，并加入参考文献表。`,
+    message: ctx => `讨论部分第二段的第一句「${firstSentence(sectionProse(ctx.source, DISCUSSION)[1]!.text)}」缺少文献支持，请补充 2–3 条真实的支持文献：正文标注引用，并加入参考文献表。${SUPPORT_REQUIREMENT}`,
     targets: ctx => [sectionProse(ctx.source, DISCUSSION)[1]!.text],
     formatTarget: ctx => sectionProse(ctx.source, DISCUSSION)[1]!.text,
     check: () => ({ done: true, detail: '' }),
@@ -287,7 +290,7 @@ const S3: StressTask[] = [
   {
     kind: 'S3', id: 'S3-update',
     build: plainCtx,
-    message: () => '请用近 5 年发表的随机对照试验或荟萃分析证据，在讨论部分第二段末尾补充一句话，并加上相应引用（正文标注引用，并加入参考文献表）。',
+    message: () => `请用近 5 年发表的随机对照试验或荟萃分析证据，在讨论部分第二段末尾补充一句话，并加上相应引用（正文标注引用，并加入参考文献表）。${SUPPORT_REQUIREMENT}`,
     targets: ctx => [sectionProse(ctx.source, DISCUSSION)[1]!.text],
     formatTarget: ctx => sectionProse(ctx.source, DISCUSSION)[1]!.text,
     check: () => ({ done: true, detail: '' }),
@@ -295,7 +298,7 @@ const S3: StressTask[] = [
   {
     kind: 'S3', id: 'S3-recent',
     build: plainCtx,
-    message: ctx => `讨论部分第一段的论述需要更新到最新进展：请在这一段末尾补充一句话，引用 2 条 ${RECENT_YEAR} 年及以后发表的相关研究（正文标注引用，并加入参考文献表）。只能引用真实存在的文献。`,
+    message: ctx => `讨论部分第一段的论述需要更新到最新进展：请在这一段末尾补充一句话，引用 2 条 ${RECENT_YEAR} 年及以后发表的相关研究（正文标注引用，并加入参考文献表）。${SUPPORT_REQUIREMENT}`,
     targets: ctx => [sectionProse(ctx.source, DISCUSSION)[0]!.text],
     formatTarget: ctx => sectionProse(ctx.source, DISCUSSION)[0]!.text,
     check: () => ({ done: true, detail: '' }),
