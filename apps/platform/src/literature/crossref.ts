@@ -4,6 +4,7 @@ import type { Article, FetchLike } from './types.ts'
 interface CrossrefWork {
   DOI: string
   title?: string[]
+  subtitle?: string[]
   'container-title'?: string[]
   'short-container-title'?: string[]
   author?: { family?: string; given?: string; name?: string }[]
@@ -28,12 +29,21 @@ export class CrossrefClient {
   }
 }
 
+/** 主题目 + 副标题（主题目里已经含副标题时不重复）。 */
+export function fullTitle(title: string, subtitle: string): string {
+  const t = title.trim()
+  const sub = subtitle.trim()
+  if (!sub || t.toLowerCase().includes(sub.toLowerCase())) return t
+  return `${t.replace(/[:：]\s*$/, '')}: ${sub}`
+}
+
 function toArticle(w: CrossrefWork): Article {
   const authors = (w.author ?? []).map(a => cleanBibText(a.name ?? [a.family, initials(a.given)].filter(Boolean).join(' '))).filter(Boolean)
   return {
     pmid: null,
     doi: normalizeDoi(w.DOI),
-    title: cleanBibText(w.title?.[0] ?? ''),
+    // Crossref 把冒号后的副标题单独放在 subtitle 里：拼回完整题目（只取主题目时条目与原文献题目对不上）
+    title: cleanBibText(fullTitle(w.title?.[0] ?? '', w.subtitle?.[0] ?? '')),
     authors,
     journal: cleanBibText(w['short-container-title']?.[0] ?? w['container-title']?.[0] ?? ''),
     year: String(w.issued?.['date-parts']?.[0]?.[0] ?? ''),

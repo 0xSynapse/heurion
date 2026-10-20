@@ -222,6 +222,18 @@ describe('Word 批注：导入为平台评论线程，导出为 Word 线程回�
     expect(first).toContain('<w:commentReference w:id="7"/>')
   })
 
+  it('merge 合并带脚注的段落与带合作者批注的段落：导出后脚注引用与批注都在合并后的段落里（v2 1a：手工合并丢批注、改文字）', () => {
+    const footPara = `<w:p><w:r><w:t xml:space="preserve">本研究为单中心研究。</w:t></w:r>${FOOTNOTE_RUN}</w:p>`
+    const t = importWithComments(docx(footPara + COMMENTED + p('其他段落。'), { rels: COMMENT_RELS, files: { 'word/comments.xml': enc(COMMENTS_XML), 'word/commentsExtended.xml': enc(COMMENTS_EX), 'word/footnotes.xml': enc(NOTES) } }))
+    const [a, b] = [0, 1].map(i => t.docs.get(t.docId).child(i).attrs.id as string)
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'merge', ids: [a!, b!] }] }, { actor: 'ai', turnId: 't1' })
+    const first = firstPara(t.exportNow())
+    expect(first).toContain('<w:footnoteReference w:id="1"/>')
+    expect(first).toMatch(/<w:commentRangeStart w:id="7"\/>[\s\S]*110 例[\s\S]*<w:commentRangeEnd w:id="7"\/>/)
+    expect(first.replace(/<[^>]+>/g, '')).toContain('本研究为单中心研究。本研究纳入 110 例')
+    expect(t.thread().node_id).toBe(a)
+  })
+
   it('在平台里解决：Word 里标为已解决', () => {
     const t = importWithComments(withComments())
     t.store.setCommentStatus(t.docId, t.thread().id, 'resolved', 'user')
@@ -290,6 +302,16 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
     const kinds: Array<[unknown, string]> = []
     t.docs.get(t.docId).forEach(n => kinds.push([n.attrs.suggest, n.textContent]))
     expect(kinds).toEqual([['delete', '首要终点是总生存期。'], ['insert', '首要终点是总生存期（意向性治疗人群）。']])
+  })
+
+  it('用户直接改合作者修订版里修订以外的文字：导出时合作者的修订原样保留（只按原文 XML 打补丁）', () => {
+    const t = importInto(docx(TRACKED))
+    const ins = t.docs.get(t.docId).child(1).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: ins, find: '主要终点为', replace: '首要终点是' }] }, { actor: 'user', turnId: null })
+    const first = firstPara(t.exportNow().bytes)
+    expect(first).toContain('首要终点是总生存期')
+    expect(first).toContain('<w:del w:id="1" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"><w:r><w:delText>。</w:delText></w:r></w:del>')
+    expect(first).toContain('<w:ins w:id="2" w:author="Li Ming"')
   })
 
   it('改动碰到合作者修订的文字：拒绝并指出修订改的是哪部分', () => {

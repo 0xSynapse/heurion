@@ -20,7 +20,11 @@ function insidePendingInsert(doc: PMNode, pos: number, self?: PMNode): boolean {
 }
 
 /** 把 before → after 的变化表达为待采纳修订，返回新文档。 */
-export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNode {
+/**
+ * author：用户自己提的修订记原作者（与 Word 导入的合作者修订同样处理：AI 不能改原文版本、只能改修订以外的文字，
+ * 导出时修订归在作者名下）；AI 的修订不记作者（AI 可以继续改自己的修订）。
+ */
+export function toSuggestion(before: PMNode, after: PMNode, group: string, author: string | null = null): PMNode {
   const changes = diffNodes(before, after)
   if (changes.length === 0) return after
   const taken = new Set([...collectIds(before), ...collectIds(after)])
@@ -44,8 +48,8 @@ export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNo
       continue
     }
     const fresh = assignIds(stripIds(hit.node), taken)
-    const inserted = fresh.type.create({ ...fresh.attrs, id: newId(taken), suggest: 'insert', suggest_group: group, suggest_of: c.node_id }, fresh.content, fresh.marks)
-    const deleted = prev.type.create({ ...prev.attrs, suggest: 'delete', suggest_group: group, suggest_of: null }, prev.content, prev.marks)
+    const inserted = fresh.type.create({ ...fresh.attrs, id: newId(taken), suggest: 'insert', suggest_group: group, suggest_of: c.node_id, suggest_author: author }, fresh.content, fresh.marks)
+    const deleted = prev.type.create({ ...prev.attrs, suggest: 'delete', suggest_group: group, suggest_of: null, suggest_author: author }, prev.content, prev.marks)
     tr.replaceWith(hit.pos, hit.pos + hit.node.nodeSize, [deleted, inserted])
   }
 
@@ -64,7 +68,7 @@ export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNo
   })
   for (const pos of marks) {
     const node = tr.doc.nodeAt(pos)!
-    tr.setNodeMarkup(pos, undefined, { ...node.attrs, suggest: 'insert', suggest_group: group, suggest_of: null })
+    tr.setNodeMarkup(pos, undefined, { ...node.attrs, suggest: 'insert', suggest_group: group, suggest_of: null, suggest_author: author })
   }
 
   // ③ 删除的块（只放回最外层）：插回原位置——原文里紧挨着的前一个兄弟之后，否则父块开头。
@@ -88,7 +92,7 @@ export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNo
     return false
   })
   for (const r of restore) {
-    const node = r.node.type.create({ ...r.node.attrs, suggest: 'delete', suggest_group: group, suggest_of: null }, r.node.content, r.node.marks)
+    const node = r.node.type.create({ ...r.node.attrs, suggest: 'delete', suggest_group: group, suggest_of: null, suggest_author: author }, r.node.content, r.node.marks)
     const index = indexById(tr.doc)
     const anchor = r.prevSiblings.map(id => index.get(id)).find(Boolean)
     try {

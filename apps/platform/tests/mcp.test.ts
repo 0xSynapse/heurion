@@ -50,7 +50,7 @@ async function connect(markdown: string, scope: { d?: '*' | string[]; p?: Array<
   } as unknown as CrossrefClient
   const claims = verifyToken(SECRET, issueToken(SECRET, { u: 'u1', d: scope.d ?? '*', p: scope.p ?? ['read', 'write'], aud: 'mcp', ttlSeconds: 60 }), 'mcp')!
   const pubmed = {
-    search: async () => [],
+    search: async (q: string) => q.includes('SELECT') ? [{ pmid: '37952131', doi: '10.1056/nejmoa2307563', title: 'Semaglutide and Cardiovascular Outcomes in Obesity without Diabetes', authors: ['Lincoff AM'], journal: 'N Engl J Med', year: '2023' }] : [],
     pmidForDoi: async () => '12345',
     abstract: async () => 'RESULTS: The primary outcome occurred in 6.5% vs 8.0% (HR 0.80; 95% CI 0.72-0.90). The trial was completed as planned.',
   } as unknown as PubMedClient
@@ -122,6 +122,15 @@ describe('MCP 工具', () => {
     expect(valOk.isError).toBe(false)
     expect(valOk.body.valid).toBe(true)
 
+    // 按 DOI 登记：一并返回摘要摘录，供核对是否支持所在句子
+    expect(cite.body.abstract).toContain('HR 0.80')
+    // 只给检索词：返回候选（含摘要），不替 AI 挑第一条登记
+    const before = (await t.call('list_citations', { doc_id: t.docId })).body.length
+    const cands = await t.call('insert_citation', { doc_id: t.docId, query: 'SELECT semaglutide cardiovascular' })
+    expect(cands.body.registered).toBe(false)
+    expect(cands.body.candidates[0].pmid).toBe('37952131')
+    expect(cands.body.candidates[0].abstract).toContain('HR 0.80')
+    expect((await t.call('list_citations', { doc_id: t.docId })).body.length).toBe(before)
     const missing = await t.call('insert_citation', { doc_id: t.docId, doi: '10.9999/404' })
     expect(missing.body.code).toBe('doi_not_found')
   })
