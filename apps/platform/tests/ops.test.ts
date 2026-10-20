@@ -313,6 +313,23 @@ describe('守卫', () => {
     expect(docs.get(docId).textContent).toContain('高发')
   })
 
+  it('冲突按 AI 最后一次看到这一块判断：用户在那之后改过，AI 拿新 rev 凭旧内容整块重写也拦下；重新读过后可以改（v2 预实验：多轮会话里冲掉医生改正的数字）', () => {
+    const { docs, ops, docId } = setup(SAMPLE)
+    const [, p1, , p2] = ids(docs, docId)
+    // 第一轮：AI 读过全文
+    ops.noteSeen(docId, ids(docs, docId), 0)
+    // 轮次之间：医生改了 p1；之后 AI 改别的块，拿到更新的 rev
+    ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: p1!, find: '常见', replace: '少见' }] }, { actor: 'user', turnId: null })
+    ops.edit({ doc_id: docId, base_rev: 1, mode: 'apply', ops: [{ op: 'replace_block', id: p2!, markdown: '- 改写项' }] }, { actor: 'ai', turnId: null })
+    // 下一轮：AI 用最新的 rev、凭记忆整段重写 p1 —— 用户的改动它没看过
+    const e = expectOpError(() => ops.edit({ doc_id: docId, base_rev: docs.rev(docId), mode: 'apply', ops: [{ op: 'replace_block', id: p1!, markdown: '心力衰竭是常见疾病，需长期管理。' }] }, { actor: 'ai', turnId: null }), 'conflict_user_edited')
+    expect(JSON.stringify(e.extra.current)).toContain('少见')
+    expect(e.extra.hint).toContain('上次读到这一块之后')
+    // 拒绝时已把当前内容给了 AI：按当前内容改即可通过
+    ops.edit({ doc_id: docId, base_rev: docs.rev(docId), mode: 'apply', ops: [{ op: 'replace_block', id: p1!, markdown: '心力衰竭是少见疾病，需长期管理。' }] }, { actor: 'ai', turnId: null })
+    expect(docs.get(docId).textContent).toContain('少见疾病，需长期管理')
+  })
+
   it('replace_text 以原文为守卫：旧 rev 也能改（原文还在），原文被用户改掉则匹配不上', () => {
     const { docs, ops, docId } = setup(SAMPLE)
     const [, p1] = ids(docs, docId)

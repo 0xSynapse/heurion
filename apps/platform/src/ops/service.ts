@@ -155,7 +155,7 @@ export class OpService {
 
     this.guardPending(batch, before, targetsOf)
     if (ai) {
-      this.guardConflicts(batch, before, targetsOf)
+      this.guardConflicts(batch, before, targetsOf, deck)
       this.guardCitations(batch, textsOf)
       this.guardPatientRedlines(batch, textsOf, row)
     }
@@ -206,6 +206,8 @@ export class OpService {
         return { doc_id: batch.doc_id, rev: sim.rev, results: sim.results, changes: [] }
       }
       const event = this.docs.commit(batch.doc_id, sim.after, { actor: meta.actor, turnId: meta.turnId, ops: batch.ops, user: meta.user ?? null })
+      // AI 自己写入的块：写入后的内容它是知道的
+      if (meta.actor === 'ai' && event && !sim.deck) this.noteSeen(batch.doc_id, event.changes.map(c => c.node_id), event.rev)
       // 重新锚到整块的线程：记录随之改成整块评论（引用文字清空，之后按整块维护）
       if (sim.reanchored && meta.answering) this.docs.store.setCommentAnchor(meta.answering, sim.reanchored, '')
       for (const f of sim.followed) {
@@ -326,19 +328,40 @@ export class OpService {
     return out
   }
 
-  /** 冲突守卫：目标块在 base_rev 之后被用户改过 → 拒绝，附当前内容。 */
-  private guardConflicts(batch: EditBatch | DeckEditBatch, before: PMNode, targetsOf: (op: unknown) => string[]): void {
+  /**
+   * AI 最后一次看到各块内容时的版本（doc_read 读到的、自己写入的、冲突时随拒绝返回的）。
+   * 冲突守卫按这个判断「用户的改动 AI 看过没有」：base_rev 只说明 AI 拿到过某个版本号，
+   * 不说明读过这一块的新内容（多轮会话里 AI 凭前几轮的记忆整段重写，会冲掉医生在轮次之间的修改）。
+   */
+  private seen = new Map<string, Map<string, number>>()
+
+  /** 记下 AI 在 rev 时看到了这些块的内容。 */
+  noteSeen(docId: string, ids: Iterable<string>, rev: number): void {
+    let m = this.seen.get(docId)
+    if (!m) this.seen.set(docId, (m = new Map()))
+    for (const id of ids) m.set(id, Math.max(m.get(id) ?? -1, rev))
+  }
+
+  /** 冲突守卫：目标块在 AI 最后一次看到它（没看过则为 base_rev）之后被用户改过 → 拒绝，附当前内容。 */
+  private guardConflicts(batch: EditBatch | DeckEditBatch, before: PMNode, targetsOf: (op: unknown) => string[], deck = false): void {
     const index = indexById(before)
+    // 幻灯片经 slide_read 读，尚未记录「看过」：仍按 base_rev 判断
+    const seen = deck ? undefined : this.seen.get(batch.doc_id)
     batch.ops.forEach((op, i) => {
       // 按原文修改（replace_text）不看 rev：原文本身就是守卫——用户改了这几个字，原文就匹配不上
       if ((op as { op: string }).op === 'replace_text') return
       for (const id of targetsOf(op)) {
         const userRev = this.docs.store.lastChangeBy(batch.doc_id, id, 'user')
-        if (userRev > batch.base_rev) {
+        const since = seen?.get(id) ?? batch.base_rev
+        if (userRev > since) {
+          // 当前内容随拒绝返回给 AI：算它看过了
+          if (!deck) this.noteSeen(batch.doc_id, [id], this.docs.rev(batch.doc_id))
           const node = index.get(id)?.node
           throw new OpError('conflict_user_edited', `块 ${id} 在 rev ${userRev} 被用户修改过（你的 base_rev 是 ${batch.base_rev}）`, {
             op_index: i,
-            hint: '以 current 为准重新决定改法，并用新的 rev 作为 base_rev 再提交；用户的修改优先。',
+            hint: since === batch.base_rev && !seen?.has(id)
+              ? '以 current 为准重新决定改法，并用新的 rev 作为 base_rev 再提交；用户的修改优先。'
+              : '用户在你上次读到这一块之后改过它（current 是现在的内容）：以 current 为准重新改，保留用户的改动；只换 base_rev 原样重发会再次被拦下。',
             current: { rev: this.docs.rev(batch.doc_id), markdown: node ? (node.type.name === 'shape' || node.type.name === 'slide' ? node.textContent : serializeBlock(node, { ids: true }, '')) : null },
           })
         }
