@@ -59,11 +59,11 @@ const docs = new Documents(store)
 // 知家红线守卫的成员标记：patients 在下面才创建，晚绑定（OpService 里可选调用）
 let phrMemberLookup: ((owner: string, patientId: string, space?: 'work' | 'personal') => { tags: string[]; birth_year: number | null } | null) | null = null
 const executionSignals = new ExecutionSignals(store, docs)
-const procedural = new ProceduralHarnessService(store, docs)
+const procedural = new ProceduralHarnessService(store, docs, { mode: config.proceduralMode === 'off' ? undefined : config.proceduralMode, budget: config.proceduralBudget })
 const ops = new OpService(docs, (owner, pid, space) => phrMemberLookup?.(owner, pid, space) ?? null, e => executionSignals.recordGuardReject(e))
 const registry = new TurnRegistry()
 const harnessEvolution = new HarnessEvolutionService(store, makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }))
-const pool = new HarnessPool(config, userId => store.sandboxUid(userId), () => harnessEvolution.currentOverlay())
+const pool = new HarnessPool(config, userId => store.sandboxUid(userId), () => (config.harnessEvolve ? harnessEvolution.currentOverlay() : null))
 const postcheck = new PostCheck(docs)
 
 const pubmed = new PubMedClient(fetch, config.ncbiApiKey, config.contactEmail)
@@ -128,7 +128,7 @@ const images = new ImageService(docs, ops, new Unsplash(config.unsplashAccessKey
 images.access = access
 // 知家红线（PATIENT.md §3）：绑定健康档案 / 简报的回合，AI 的对话回复在展示与落库前也过守卫
 const turns = new TurnService(docs, pool, registry, {
-  idleTimeoutMs: config.turnIdleTimeoutMs, memory, procedural, alerts,
+  idleTimeoutMs: config.turnIdleTimeoutMs, memory, procedural: config.proceduralMode === 'off' ? undefined : procedural, alerts,
   phrGuard: docId => {
     const row = store.getDoc(docId)
     let ctx: { kind?: string; doc_kind?: string; patient_id?: string; space?: 'work' | 'personal' } | null = null
@@ -180,7 +180,7 @@ if (evolution.available() && process.env.MEMORY_AUTO_REVIEW !== '0') {
       if (!memory.active(owner) || (last && Date.now() - Date.parse(last) < 86_400_000)) continue
       await evolution.review(owner, { force: false }).catch(err => console.error('[memory-review]', owner, (err as Error).message))
     }
-    if (harnessEvolution.available()) {
+    if (config.harnessEvolve && harnessEvolution.available()) {
       const meta = harnessEvolution.currentMeta()
       if (!meta || Date.now() - Date.parse(meta.at) >= 86_400_000) {
         await harnessEvolution.evolve({ force: false }).catch(err => console.error('[harness-evolve]', (err as Error).message))

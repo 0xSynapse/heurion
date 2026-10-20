@@ -127,4 +127,107 @@ describe('Layer 2: Dual-Track Procedural Memory & Execution Signals', () => {
     const promptRef = await procedural.forPrompt('u1', docId, '补充相关的医学背景和最新的临床试验文献')
     expect(promptRef).toContain('literature_researcher')
   })
+
+  it('forPrompt：守卫码不当消息触发词，按文档状态线索（未关闭批注）在紧预算下优先注入', async () => {
+    const { store, docs, docId } = setup('# 方法\n\n受试者按 1:1 随机分组。')
+    const [, p] = ids(docs, docId)
+    const procedural = new ProceduralHarnessService(store, docs)
+    const anchorRule = store.addHarnessRule({
+      scope: 'user', owner: 'u1', project_id: null, category: 'guard', trigger_pattern: 'anchor_has_open_comments',
+      rule: '目标段有未关闭批注时，用 replace_text 只改局部，保留被批注的原文。', evidence_count: 2, status: 'active',
+    })
+    const budget = anchorRule.rule.length + 20
+    const message = '把方法第一段整体重写，使其符合 CONSORT 描述规范。'
+
+    // 没有批注：只按证据数排序，基线规则（证据 10）排在前面
+    expect(await procedural.forPrompt('u1', docId, message, budget)).not.toContain(anchorRule.rule)
+
+    // 段上有未关闭批注：状态线索命中，学到的规则排到第一
+    store.addComment({ doc_id: docId, node_id: p!, snippet: '1:1 随机' })
+    expect(await procedural.forPrompt('u1', docId, message, budget)).toContain(anchorRule.rule)
+  })
+
+  it('forPrompt：近期有用户编辑时优先注入冲突规则', async () => {
+    const { store, docs, ops, docId } = setup('# 讨论\n\n主要终点达到统计学显著。')
+    const [, p] = ids(docs, docId)
+    const procedural = new ProceduralHarnessService(store, docs)
+    const conflictRule = store.listHarnessRules('u1').find(r => r.trigger_pattern === 'conflict_user_edited')!
+    // 让另一条基线规则证据更多：没有状态线索时它会排在冲突规则前面
+    const citeRule = store.listHarnessRules('u1').find(r => r.trigger_pattern === 'citation_not_registered')!
+    for (let i = 0; i < 5; i++) store.bumpHarnessRule(citeRule.id)
+
+    ops.edit({
+      doc_id: docId, base_rev: docs.rev(docId), mode: 'apply',
+      ops: [{ op: 'replace_text', id: p!, find: '显著', replace: '显著差异' }],
+    }, { actor: 'user', turnId: null })
+
+    const out = await procedural.forPrompt('u1', docId, '润色讨论段')
+    expect(out.indexOf(conflictRule.rule)).toBeGreaterThanOrEqual(0)
+    expect(out.indexOf(conflictRule.rule)).toBeLessThan(out.indexOf(citeRule.rule))
+  })
+
+  it('fifo 模式按创建顺序注入，不看情境线索', async () => {
+    const { store, docs, docId } = setup('# 方法\n\n受试者按 1:1 随机分组。')
+    const [, p] = ids(docs, docId)
+    const procedural = new ProceduralHarnessService(store, docs, { mode: 'fifo' })
+    const anchorRule = store.addHarnessRule({
+      scope: 'user', owner: 'u1', project_id: null, category: 'guard', trigger_pattern: 'anchor_has_open_comments',
+      rule: '目标段有未关闭批注时，用 replace_text 只改局部。', evidence_count: 2, status: 'active',
+    })
+    store.addComment({ doc_id: docId, node_id: p!, snippet: '1:1 随机' })
+
+    const out = await procedural.forPrompt('u1', docId, '重写方法段', 400)
+    expect(out).not.toContain(anchorRule.rule)
+    expect(out).toContain('［执行策略与避坑指南］')
+  })
+
+  it('frozen 模式不从执行信号沉淀新规则', () => {
+    const { store, docs } = setup()
+    const execSignals = new ExecutionSignals(store, docs)
+    const procedural = new ProceduralHarnessService(store, docs, { mode: 'frozen' })
+    for (const t of ['t1', 't2']) {
+      execSignals.recordGuardReject({ owner: 'u1', docId: 'd1', turnId: t, code: 'ambiguous_match', message: '原文出现 2 次' })
+    }
+    expect(procedural.evolveFromSignals('u1')).toHaveLength(0)
+    expect(store.listHarnessRules('u1').some(r => r.trigger_pattern === 'ambiguous_match')).toBe(false)
+  })
+
+  it('不足 2 次的信号不被消费，跨回合累积后再沉淀', () => {
+    const { store, docs } = setup()
+    const execSignals = new ExecutionSignals(store, docs)
+    const procedural = new ProceduralHarnessService(store, docs)
+
+    // 第一个回合只出现 1 次：不沉淀，也不消费
+    execSignals.recordGuardReject({ owner: 'u1', docId: 'd1', turnId: 't1', code: 'ambiguous_match', message: '原文出现 3 次' })
+    expect(procedural.evolveFromSignals('u1')).toHaveLength(0)
+    expect(store.openExecutionSignals('u1')).toHaveLength(1)
+
+    // 之后的回合再出现 1 次：累计 2 次，沉淀为规则并消费
+    execSignals.recordGuardReject({ owner: 'u1', docId: 'd2', turnId: 't2', code: 'ambiguous_match', message: '原文出现 3 次' })
+    const created = procedural.evolveFromSignals('u1')
+    expect(created.map(r => r.trigger_pattern)).toEqual(['ambiguous_match'])
+    expect(store.openExecutionSignals('u1')).toHaveLength(0)
+  })
+
+  it('匹配到系统基线规则时只给该用户建副本，不改其他用户看到的权重', async () => {
+    const { store, docs, docId } = setup('# 结论\n\n安全性总体可接受。')
+    const execSignals = new ExecutionSignals(store, docs)
+    const procedural = new ProceduralHarnessService(store, docs)
+    const baseline = store.listHarnessRules('system').find(r => r.trigger_pattern === 'pending_suggestion')!
+
+    for (const t of ['t1', 't2']) {
+      execSignals.recordGuardReject({ owner: 'u1', docId: 'd1', turnId: t, code: 'pending_suggestion', message: '待采纳修订' })
+    }
+    procedural.evolveFromSignals('u1')
+
+    // 系统规则本身不变；u1 有一份证据更多的副本；u2 只看到原样的系统规则
+    expect(store.listHarnessRules('system').find(r => r.id === baseline.id)!.evidence_count).toBe(baseline.evidence_count)
+    const own = store.listHarnessRules('u1').filter(r => r.trigger_pattern === 'pending_suggestion')
+    expect(own.find(r => r.owner === 'u1')!.evidence_count).toBe(baseline.evidence_count + 2)
+    expect(store.listHarnessRules('u2').filter(r => r.trigger_pattern === 'pending_suggestion').map(r => r.owner)).toEqual(['system'])
+
+    // 注入时同一条规则只出现一次
+    const out = await procedural.forPrompt('u1', docId, '修改结论')
+    expect(out.split(baseline.rule).length - 1).toBe(1)
+  })
 })

@@ -287,6 +287,18 @@ export const ADMIN_TOOLS: ToolSpec[] = [
   },
 ]
 
+/**
+ * 需要用户确认的接口（方法 + 路径模式），由上面标了 confirm 的操作推导，与确认卡共用同一份清单。
+ * HTTP 层据此拒绝未经确认的 AI 调用（第二道防线：即使某个工具漏标 confirm，也执行不了）。
+ */
+export const CONFIRM_ROUTES: Array<{ method: Method; re: RegExp }> = ADMIN_TOOLS.flatMap(spec =>
+  Object.values(spec.actions).filter(op => op.confirm).map(op => {
+    const slot = 'XPARAMX'
+    const path = op.path(new Proxy({}, { get: () => slot }) as Args)
+    const re = new RegExp(`^${path.split(slot).map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]+')}$`)
+    return { method: op.method, re }
+  }))
+
 export interface AdminToolDeps {
   store: Store
   turns: TurnRegistry

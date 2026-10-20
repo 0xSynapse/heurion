@@ -303,7 +303,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       else if (child.type.name === 'hard_break') run = '<w:r><w:br/></w:r>'
       else if (child.type.name === 'citation') {
         const n = citeNumber.get(child.attrs.cite_id as string)
-        run = `<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>[${n ?? '?'}]</w:t></w:r>`
+        // 上标编号沿用所在段落的字体字号（导入稿件的模板格式）
+        run = `<w:r>${runProps([], '<w:vertAlign w:val="superscript"/>', baseRPr)}<w:t>[${n ?? '?'}]</w:t></w:r>`
       }
       const link = child.marks.find(m => m.type.name === 'link')
       if (link && run) {
@@ -342,7 +343,31 @@ export function exportDocx(input: ExportInput): ExportResult {
     return p ? `<w:pPr>${p}</w:pPr>` : ''
   }
 
-  const paragraph = (node: PMNode, extraPPr = ''): string => verbatim(node) ?? `<w:p>${pPr(node, extraPPr)}${inline(node)}</w:p>`
+  /**
+   * 导入后改过的正文段落：沿用原段落的段落属性（间距、缩进、对齐……）、首个文字 run 的字体字号，
+   * 以及段落开始标签上的属性（w14:paraId、修订标识），与表格单元格的规则一致；
+   * 段落自带样式或对齐（如 set_block_style 改过）时只覆盖 pStyle / jc。原文含图的段落不走这里。
+   */
+  const regenerated = (node: PMNode, extraPPr: string): string | null => {
+    const id = node.attrs.id as string | null
+    const raw = id ? input.src(id) : null
+    if (!raw || !/^<w:p\b/.test(raw) || /<w:(drawing|pict)\b/.test(raw)) return null
+    const kids = elementChildrenRaw(raw)
+    const pPrRaw = kids.find(k => /^<w:pPr\b/.test(k))
+    const firstRun = kids.find(k => /^<w:r\b/.test(k) && /<w:t\b/.test(k))
+    const rPrRaw = firstRun ? elementChildrenRaw(firstRun).find(k => /^<w:rPr\b/.test(k)) : undefined
+    // 顶层段落不是列表项；原来是标题样式而现在成了普通段落时，不再沿用标题样式
+    let base = pPrRaw ? stripEls(innerOf(pPrRaw), ['pPrChange', 'sectPr', 'rPr', 'numPr']) : ''
+    if (node.type.name === 'paragraph' && !node.attrs.style) base = stripEls(base, ['pStyle'])
+    const own = innerOf(pPr(node, extraPPr) || '<w:pPr/>')
+    const merged = own ? mergeEls(base, own, PPR_ORDER) : base
+    const rPr = rPrRaw ? stripEls(innerOf(rPrRaw), ['b', 'bCs', 'i', 'iCs', 'u', 'vertAlign', 'rStyle', 'rPrChange', 'ins', 'del']) : ''
+    const open = /^<w:p\b[^>]*>/.exec(raw)![0]
+    return `${open}${merged ? `<w:pPr>${merged}</w:pPr>` : ''}${inline(node, rPr)}</w:p>`
+  }
+
+  const paragraph = (node: PMNode, extraPPr = ''): string =>
+    verbatim(node) ?? regenerated(node, extraPPr) ?? `<w:p>${pPr(node, extraPPr)}${inline(node)}</w:p>`
 
   const figure = (node: PMNode): string => {
     const rawId = String(node.attrs.asset_id || '')
