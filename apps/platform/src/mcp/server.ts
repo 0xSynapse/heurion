@@ -110,6 +110,7 @@ const INSTRUCTIONS = `heurion 文档平台。文档只能通过这些工具读�
 - 小改动优先 replace_text：find 写块内原文（不能跨块），只改变化的字，格式、引用、评论锚点保留；失配时按返回的 near / matches 修正后重试。整段重写用 replace_block；新增用 insert_after / insert_before。
 - 内容格式是 markdown：标题 #、列表 -、表格 GFM、粗体 **、上标 <sup>、图片 ![说明](asset:<asset_id>)。
 - 引用：pubmed_search 找文献 → insert_citation 登记 → 正文写返回的 [@c:<cite_id>]。正文中不能出现 DOI、PMID 或手写参考文献，参考文献表由平台自动生成。
+- 导入的 Word 稿件里，脚注引用与域代码（EndNote / Zotero 引用、题注编号、交叉引用）显示为 [@w:<key>]，doc_read 末尾列出各自是什么；改写含它们的句子时原样保留这些标记（位置可随句子调整），不能新建或改写标记。
 - 评论是用户锚定在具体文字上的修改要求：comments_list 读取 → 修改 → comment_reply 说明改了什么。
 - 回复用户时用平常的话说明改了什么、改在哪（如「第 2 节第一段」），不要提块 id、rev、cite_id、工具名等内部信息。
 - 报错时按返回的 code 与 hint 处理（例如 conflict_user_edited 要基于 current 重新决定改法），不要原样重试。

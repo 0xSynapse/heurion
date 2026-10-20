@@ -5,6 +5,7 @@ import { readGrid } from './table-grid.ts'
 
 /**
  * 平台的 markdown 方言（PLATFORM.md §6.1）：CommonMark + GFM 表格 + 引用 `[@c:<cite_id>]`
+ * + 导入的 Word 行内结构（脚注引用、域代码）`[@w:<key>]`
  * + 读视图里的块 id 前缀 `{#id}`（写入时忽略）+ 资产图 `![alt](asset:<id> "图注")`
  * + 行内 `<sup> <sub> <u> <br>`。样式（标题级别以外）不进 markdown，由专用 op 修改。
  * 表格按逻辑网格书写：每行列数相同；单元格内容恰为 `^` 表示与上方单元格合并、`<` 表示与左侧合并
@@ -14,16 +15,20 @@ import { readGrid } from './table-grid.ts'
 const ID_PREFIX_LINE = /^(\s*)\{#[a-z][a-z0-9]{2,15}\}[ \t]?/gm
 const ID_PREFIX_INLINE = /^\{#[a-z][a-z0-9]{2,15}\}[ \t]?/
 const CITATION = /^\[@c:([a-z0-9]{3,32})\]/
+/** 导入的 Word 行内结构（脚注引用、域代码）：只带 key，原始内容由操作层按 key 补回。 */
+const WORD_INLINE = /^\[@w:([a-z0-9]{1,16})\]/
 
 function citationRule(state: StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x5b /* [ */) return false
-  const m = CITATION.exec(state.src.slice(state.pos))
-  if (!m) return false
+  const rest = state.src.slice(state.pos)
+  const m = CITATION.exec(rest)
+  const w = m ? null : WORD_INLINE.exec(rest)
+  if (!m && !w) return false
   if (!silent) {
-    const token = state.push('citation', '', 0)
-    token.meta = { cite_id: m[1] }
+    const token = state.push(m ? 'citation' : 'word_inline', '', 0)
+    token.meta = m ? { cite_id: m[1] } : { key: w![1] }
   }
-  state.pos += m[0].length
+  state.pos += (m ?? w)![0].length
   return true
 }
 
@@ -283,6 +288,9 @@ function buildInline(children: Token[]): PMNode[] {
       case 'citation':
         out.push(schema.node('citation', { cite_id: (t.meta as { cite_id: string }).cite_id }))
         break
+      case 'word_inline':
+        out.push(schema.node('word_inline', { key: (t.meta as { key: string }).key }))
+        break
       case 'html_inline': {
         const spanOpen = /^<span\s+style="([^"]+)"\s*>/i.exec(t.content.trim())
         if (spanOpen && spanOpen[1]) {
@@ -449,7 +457,7 @@ function closeMark(m: Mark): string {
   }
 }
 
-const escapeText = (s: string) => s.replace(/([\\*_`])/g, '\\$1').replace(/<(?=[a-zA-Z/])/g, '&lt;').replace(/\[(?=@c:)/g, '\\[')
+const escapeText = (s: string) => s.replace(/([\\*_`])/g, '\\$1').replace(/<(?=[a-zA-Z/])/g, '&lt;').replace(/\[(?=@[cw]:)/g, '\\[')
 
 /** 行内内容 → markdown（评论 mark 不进 markdown，由读视图单独列出）。 */
 export function serializeInline(node: PMNode): string {
@@ -475,13 +483,16 @@ export function serializeInline(node: PMNode): string {
     } else if (child.type.name === 'citation') {
       sync(child.marks)
       out += `[@c:${child.attrs.cite_id}]`
+    } else if (child.type.name === 'word_inline') {
+      sync(child.marks)
+      out += `[@w:${child.attrs.key}]`
     }
   })
   sync([])
   return out
 }
 
-/** 纯文本（检索、冲突摘要、diff 用）。citation 记作 `[@c:id]`。 */
+/** 纯文本（检索、冲突摘要、diff 用）。citation 记作 `[@c:id]`，Word 行内结构记作 `[@w:key]`。 */
 export function plainText(node: PMNode): string {
   if (node.isTextblock) {
     let s = ''
@@ -489,6 +500,7 @@ export function plainText(node: PMNode): string {
       if (c.isText) s += c.text
       else if (c.type.name === 'hard_break') s += '\n'
       else if (c.type.name === 'citation') s += `[@c:${c.attrs.cite_id}]`
+      else if (c.type.name === 'word_inline') s += `[@w:${c.attrs.key}]`
     })
     return s
   }

@@ -305,6 +305,9 @@ export function exportDocx(input: ExportInput): ExportResult {
         const n = citeNumber.get(child.attrs.cite_id as string)
         // 上标编号沿用所在段落的字体字号（导入稿件的模板格式）
         run = `<w:r>${runProps([], '<w:vertAlign w:val="superscript"/>', baseRPr)}<w:t>[${n ?? '?'}]</w:t></w:r>`
+      } else if (child.type.name === 'word_inline') {
+        // 导入的脚注引用 / 域代码：原始 run 序列原样写回（脚注正文在原文件包的 footnotes.xml 里）
+        run = (child.attrs.xml as string) || textRuns(String(child.attrs.text ?? ''), [], baseRPr)
       }
       const link = child.marks.find(m => m.type.name === 'link')
       if (link && run) {

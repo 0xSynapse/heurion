@@ -127,9 +127,68 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   const body = document.getElementsByTagNameNS(W, 'body')[0]
   if (!body) throw new DocxImportError('docx 缺少 w:body')
   const rawByEl = new Map<XElement, string>()
-  const rawList = bodyChildrenRaw(strFromU8(files['word/document.xml']!))
+  const documentText = strFromU8(files['word/document.xml']!)
+  const rawList = bodyChildrenRaw(documentText)
   children(body).forEach((el, i) => { if (rawList[i] !== undefined) rawByEl.set(el, rawList[i]!) })
   const xmlOf = (el: XElement) => rawByEl.get(el) ?? serializer.serializeToString(el)
+  // 行内元素的原文：序列化时去掉根元素已声明的命名空间（避免写回时每个 run 都带一串 xmlns）
+  const rootNs = [.../<w:document\b[^>]*>/.exec(documentText)?.[0].matchAll(/\sxmlns:([\w.-]+)="([^"]*)"/g) ?? []]
+  const inlineXml = (el: XElement) => rootNs.reduce((s, m) => s.split(` xmlns:${m[1]}="${m[2]}"`).join(''), serializer.serializeToString(el))
+
+  // 脚注 / 尾注正文（读视图里给模型看；导出时正文仍在原文件包里）
+  const noteText = (part: string, tag: string) => {
+    const out = new Map<string, string>()
+    const d = xml(part)
+    const list = d?.getElementsByTagNameNS(W, tag)
+    for (let i = 0; i < (list?.length ?? 0); i++) {
+      const n = list!.item(i)!
+      const ts = n.getElementsByTagNameNS(W, 't')
+      let text = ''
+      for (let k = 0; k < ts.length; k++) text += ts.item(k)!.textContent ?? ''
+      out.set(wAttr(n, 'id') ?? '', text.trim())
+    }
+    return out
+  }
+  const footnotes = noteText('word/footnotes.xml', 'footnote')
+  const endnotes = noteText('word/endnotes.xml', 'endnote')
+  let wordKeys = 0
+  const wordInline = (kind: 'footnote' | 'endnote' | 'field', text: string, xmlText: string, marks: readonly Mark[]) =>
+    schema.node('word_inline', { key: `w${++wordKeys}`, kind, text, xml: xmlText }, undefined, marks)
+
+  /** 复杂域（fldChar begin … end）：从 begin 所在的兄弟元素起，找到与之配对的 end 所在元素的下标；找不到返回 -1。 */
+  const fieldEnd = (kids: XElement[], from: number): number => {
+    let depth = 0
+    for (let j = from; j < kids.length; j++) {
+      const chars = kids[j]!.getElementsByTagNameNS(W, 'fldChar')
+      for (let k = 0; k < chars.length; k++) {
+        const type = wAttr(chars.item(k)!, 'fldCharType')
+        if (type === 'begin') depth++
+        else if (type === 'end' && --depth === 0) return j
+      }
+    }
+    return -1
+  }
+  /** 复杂域的显示文字：最外层 separate 之后、end 之前的文字（含嵌套域的结果）。 */
+  const fieldResult = (els: XElement[]): string => {
+    let depth = 0
+    let shown = false
+    let text = ''
+    const visit = (el: XElement) => {
+      for (const c of children(el)) {
+        const name = local(c)
+        if (name === 'fldChar') {
+          const type = wAttr(c, 'fldCharType')
+          if (type === 'begin') depth++
+          else if (type === 'separate' && depth === 1) shown = true
+          else if (type === 'end') depth--
+        } else if (name === 't' && shown && depth >= 1) text += c.textContent ?? ''
+        else visit(c)
+      }
+    }
+    for (const el of els) visit(el)
+    return text
+  }
+  const startsField = (el: XElement) => local(el) === 'r' && children(el).some(c => local(c) === 'fldChar' && wAttr(c, 'fldCharType') === 'begin')
 
   const headingLevel = (styleId: string | null, pPr: XElement | undefined): number | null => {
     const outline = pPr ? wAttr(child(pPr, 'outlineLvl'), 'val') : null
@@ -163,8 +222,9 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   }
 
   /**
-   * 段落里模型表达不了的内容：flags.unmodelled（文本框、嵌入对象、脚注 / 尾注引用）→ 整段落为
-   * 不可编辑块原样写回，避免修改后重新生成时丢失；flags.fields（域代码）→ 仍可编辑，修改后域变为文字。
+   * 段落里模型表达不了的内容：flags.unmodelled（文本框、嵌入对象）→ 整段落为不可编辑块原样写回，
+   * 避免修改后重新生成时丢失；脚注 / 尾注引用与域代码 → word_inline 原子（原始 XML 原样写回，段落仍可编辑）；
+   * flags.fields：找不到配对结束标记的残缺域代码，修改后会变为文字。
    */
   interface InlineFlags { unmodelled: string | null; fields: boolean }
 
@@ -172,11 +232,23 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   const inlineOf = (p: XElement, figures: PMNode[], flags: InlineFlags = { unmodelled: null, fields: false }): PMNode[] => {
     const out: PMNode[] = []
     const walk = (el: XElement, marks: readonly Mark[]) => {
-      for (const c of children(el)) {
+      const kids = children(el)
+      for (let i = 0; i < kids.length; i++) {
+        const c = kids[i]!
         const name = local(c)
         if (c.namespaceURI !== W) {
           if (name === 'AlternateContent') flags.unmodelled ??= '文本框'
           continue
+        }
+        if (startsField(c)) {
+          const end = fieldEnd(kids, i)
+          if (end >= 0) {
+            const els = kids.slice(i, end + 1)
+            out.push(wordInline('field', fieldResult(els), els.map(inlineXml).join(''), marks))
+            i = end
+            continue
+          }
+          flags.fields = true
         }
         switch (name) {
           case 'r': runOf(c, marks, out, figures, flags); break
@@ -186,7 +258,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
             walk(c, href ? schema.marks.link!.create({ href }).addToSet(marks) : marks)
             break
           }
-          case 'fldSimple': flags.fields = true; walk(c, marks); break
+          case 'fldSimple': out.push(wordInline('field', c.textContent ?? '', inlineXml(c), marks)); break
           case 'ins': case 'smartTag': case 'customXml': walk(c, marks); break
           case 'sdt': { const content = child(c, 'sdtContent'); if (content) walk(content, marks); break }
           case 'del': case 'pPr': case 'bookmarkStart': case 'bookmarkEnd': case 'proofErr': break
@@ -199,6 +271,14 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   }
 
   const runOf = (r: XElement, outer: readonly Mark[], out: PMNode[], figures: PMNode[], flags: InlineFlags) => {
+    // 脚注 / 尾注引用：整个 run 作为一个原子（编号样式、上标都在原 run 里）
+    const note = children(r).find(c => c.namespaceURI === W && (local(c) === 'footnoteReference' || local(c) === 'endnoteReference'))
+    if (note) {
+      const kind = local(note) === 'footnoteReference' ? 'footnote' : 'endnote'
+      const id = wAttr(note, 'id') ?? ''
+      out.push(wordInline(kind, (kind === 'footnote' ? footnotes : endnotes).get(id) ?? '', inlineXml(r), outer))
+      return
+    }
     const rPr = child(r, 'rPr')
     let marks = outer
     const on = (name: string) => {
@@ -226,8 +306,6 @@ export function importDocx(bytes: Uint8Array): DocxImport {
         else flags.unmodelled ??= name === 'pict' ? '文本框或图形' : '图形'
       }
       else if (name === 'object') flags.unmodelled ??= '嵌入对象'
-      else if (name === 'footnoteReference') flags.unmodelled ??= '脚注'
-      else if (name === 'endnoteReference') flags.unmodelled ??= '尾注'
       else if (name === 'fldChar') flags.fields = true
     }
   }
@@ -389,8 +467,8 @@ export function importDocx(bytes: Uint8Array): DocxImport {
 
   for (const el of children(body)) blockLevel(el)
   flushLists()
-  if (unmodelledCount > 0) warnings.push(`${unmodelledCount} 个段落含文本框、嵌入对象或脚注，已作为不可编辑块原样保留`)
-  if (fieldParagraphs > 0) warnings.push(`${fieldParagraphs} 个段落含域代码（如 EndNote / Zotero 引用、交叉引用），这些段落被修改后域会变为普通文字`)
+  if (unmodelledCount > 0) warnings.push(`${unmodelledCount} 个段落含文本框或嵌入对象，已作为不可编辑块原样保留`)
+  if (fieldParagraphs > 0) warnings.push(`${fieldParagraphs} 个段落含不完整的域代码（缺少结束标记），这些段落被修改后域会变为普通文字`)
   if (blocks.length === 0) blocks.push(schema.node('paragraph'))
 
   // Word 常给相邻的列表项分配不同 numId：相邻的同类列表合并成一个

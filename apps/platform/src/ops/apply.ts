@@ -67,6 +67,7 @@ export function applyOps(doc: PMNode, ops: DocOp[], ctx: ApplyContext): { doc: P
       throw new OpError('invalid_structure', `操作无法应用：${(err as Error).message}`, { op_index: index })
     }
   })
+  restoreWordInlines(doc, tr)
   try {
     tr.doc.check()
   } catch (err) {
@@ -265,7 +266,7 @@ function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyCon
   return topIds(nodes)
 }
 
-/** 块内字符 → 文档位置的映射。citation 以 `[@c:id]` 参与匹配，hard_break 记作换行。 */
+/** 块内字符 → 文档位置的映射。citation 以 `[@c:id]`、Word 行内结构以 `[@w:key]` 参与匹配（同按引用标记处理），hard_break 记作换行。 */
 function textMap(node: PMNode, nodePos: number): { text: string; from: number[]; to: number[]; marks: Array<readonly Mark[]>; cite: boolean[] } {
   let text = ''
   const from: number[] = []
@@ -283,13 +284,16 @@ function textMap(node: PMNode, nodePos: number): { text: string; from: number[];
         cite.push(false)
       }
     } else {
-      const s = child.type.name === 'citation' ? `[@c:${child.attrs.cite_id}]` : child.type.name === 'hard_break' ? '\n' : '￼'
+      const marker = child.type.name === 'citation' || child.type.name === 'word_inline'
+      const s = child.type.name === 'citation' ? `[@c:${child.attrs.cite_id}]`
+        : child.type.name === 'word_inline' ? `[@w:${child.attrs.key}]`
+          : child.type.name === 'hard_break' ? '\n' : '￼'
       for (const ch of s) {
         text += ch
         from.push(start)
         to.push(start + child.nodeSize)
         marks.push(child.marks)
-        cite.push(child.type.name === 'citation')
+        cite.push(marker)
       }
     }
   })
@@ -315,7 +319,7 @@ function stripCitations(map: ReturnType<typeof textMap>): { text: string; index:
 function appendAcrossCitation(tr: Transform, map: ReturnType<typeof textMap>, op: ReplaceArgs, parse: InlineParser): boolean {
   const stripped = stripCitations(map)
   for (const v of findVariants(op.find)) {
-    const find = v.replace(/\[@c:[a-z0-9]+\]/g, '')
+    const find = v.replace(/\[@[cw]:[a-z0-9]+\]/g, '')
     if (!find) continue
     const hits = allIndexes(stripped.text, find)
     if (hits.length === 0) continue
@@ -402,7 +406,7 @@ function oldUnits(tr: Transform, map: ReturnType<typeof textMap>, start: number,
     const atom = map.from[i]! + 1 !== map.to[i]! || map.cite[i] || map.text[i] === '\n'
     const node = atom ? tr.doc.nodeAt(map.from[i]!) : null
     const key = node && !node.isText
-      ? `atom:${node.type.name}${JSON.stringify(node.attrs)}`
+      ? atomKey(node)
       : `t:${map.text[i]}|${marksKey(map.marks[i]!)}`
     out.push({ key, from: map.from[i]!, to: map.to[i]!, marks: map.marks[i]! })
   }
@@ -417,9 +421,36 @@ function newUnits(nodes: readonly PMNode[]): string[] {
   const out: string[] = []
   for (const n of nodes) {
     if (n.isText) for (let i = 0; i < n.text!.length; i++) out.push(`t:${n.text![i]}|${marksKey(n.marks)}`)
-    else out.push(`atom:${n.type.name}${JSON.stringify(n.attrs)}`)
+    else out.push(atomKey(n))
   }
   return out
+}
+
+/** 行内原子的比较键。Word 行内结构只认 key：解析出的新节点只带 key，原始内容在整批操作后补回。 */
+function atomKey(n: PMNode): string {
+  return n.type.name === 'word_inline' ? `atom:word_inline:${n.attrs.key}` : `atom:${n.type.name}${JSON.stringify(n.attrs)}`
+}
+
+/**
+ * 写入内容里的 `[@w:key]` 只带 key：按 key 从原文档补回脚注引用 / 域代码的原始内容；
+ * 原文档里没有这个 key（模型编造或拼错）时整批拒绝。
+ */
+function restoreWordInlines(before: PMNode, tr: Transform): void {
+  const known = new Map<string, Record<string, unknown>>()
+  before.descendants(n => { if (n.type.name === 'word_inline' && n.attrs.xml) known.set(n.attrs.key as string, n.attrs); return true })
+  const fill: Array<{ pos: number; attrs: Record<string, unknown> }> = []
+  tr.doc.descendants((n, pos) => {
+    if (n.type.name !== 'word_inline' || n.attrs.xml) return true
+    const attrs = known.get(n.attrs.key as string)
+    if (!attrs) {
+      throw new OpError('invalid_structure', `[@w:${n.attrs.key}] 不是文档里已有的脚注或域代码标记`, {
+        hint: '[@w:…] 只能原样保留或删除读视图里已有的标记，不能新建或修改；新增引用请用 insert_citation。',
+      })
+    }
+    fill.push({ pos, attrs })
+    return true
+  })
+  for (const f of fill) tr.setNodeMarkup(f.pos, undefined, f.attrs)
 }
 
 /**

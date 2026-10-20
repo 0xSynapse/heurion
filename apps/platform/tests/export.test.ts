@@ -176,19 +176,15 @@ describe('docx 导出：图、不可编辑段落、列表样式', () => {
     expect(bodyOf(t.exportNow().bytes)).toBe(bodyOf(original))
   })
 
-  it('含文本框 / 脚注的段落导入为不可编辑块，导出原样保留', () => {
+  it('含文本框的段落导入为不可编辑块，导出原样保留', () => {
     const textbox = `<w:p><w:r><w:t>正文</w:t></w:r><w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wps"><w:t>框内文字</w:t></mc:Choice></mc:AlternateContent></w:r></w:p>`
-    const footnote = `<w:p><w:r><w:t>有脚注</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p>`
-    const r = importDocx(docx(textbox + footnote))
+    const r = importDocx(docx(textbox))
     expect(r.doc.child(0).type.name).toBe('opaque')
-    expect(r.doc.child(1).attrs.kind).toBe('脚注')
     expect(r.warnings.join()).toContain('不可编辑块')
-    const t = importInto(docx(textbox + footnote + p('可编辑')))
-    const last = t.docs.get(t.docId).child(2).attrs.id as string
+    const t = importInto(docx(textbox + p('可编辑')))
+    const last = t.docs.get(t.docId).child(1).attrs.id as string
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: last, find: '可编辑', replace: '已编辑' }] }, { actor: 'user', turnId: null })
-    const body = bodyOf(t.exportNow().bytes)
-    expect(body).toContain('框内文字')
-    expect(body).toContain('<w:footnoteReference w:id="1"/>')
+    expect(bodyOf(t.exportNow().bytes)).toContain('框内文字')
   })
 
   it('新建的无序列表沿用原文件无序列表的编号定义与段落样式', () => {

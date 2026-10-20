@@ -118,7 +118,26 @@ export function read(input: ReadInput): string {
     .filter(x => x.loc.node_ids.some(id => range.has(id)))
     .map(x => `- 评论 ${x.c.id} @ {#${x.loc.node_ids.join('}, {#')}}「${x.loc.text.slice(0, 80)}」：${x.c.replies.filter(r => r.role === 'user').at(-1)?.text ?? ''}`)
   const tail = notes.length > 0 ? `\n\n---\n本范围内的 open 评论：\n${notes.join('\n')}` : ''
-  return `${header}\n\n${parts.join('\n\n')}${tail}`
+  return `${header}\n\n${parts.join('\n\n')}${tail}${wordInlineLegend(blocks.slice(start, i))}`
+}
+
+/** 本范围内的 Word 行内结构（脚注 / 尾注引用、域代码）：标记 → 是什么，提示原样保留。 */
+function wordInlineLegend(blocks: PMNode[]): string {
+  const lines: string[] = []
+  const seen = new Set<string>()
+  for (const b of blocks) {
+    b.descendants(n => {
+      if (n.type.name !== 'word_inline' || seen.has(n.attrs.key as string)) return true
+      seen.add(n.attrs.key as string)
+      const text = String(n.attrs.text ?? '').slice(0, 120)
+      const what = n.attrs.kind === 'footnote' ? '脚注' : n.attrs.kind === 'endnote' ? '尾注' : `域代码（显示为「${text}」）`
+      lines.push(`- [@w:${n.attrs.key}] ${what}${n.attrs.kind === 'field' ? '' : `：${text}`}`)
+      return true
+    })
+  }
+  return lines.length > 0
+    ? `\n\n---\n本范围内的 Word 标记（脚注、域代码；改写时原样保留，不能新建）：\n${lines.join('\n')}`
+    : ''
 }
 
 function containsId(node: PMNode, id: string): boolean {

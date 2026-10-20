@@ -171,6 +171,18 @@ export const schema = new Schema({
       attrs: { cite_id: {} },
       toDOM: (node): DOMOutputSpec => ['sup', { class: 'cite', 'data-cite': node.attrs.cite_id as string }, '[?]'],
     },
+    /**
+     * 导入的 Word 行内结构：脚注 / 尾注引用（kind = footnote / endnote）与域代码（field，含 EndNote / Zotero
+     * 引用、SEQ 题注编号、交叉引用）。模型不展开其内容：xml 为原始 run 序列，导出时原样写回；text 为显示文字。
+     * markdown 与读视图记作 `[@w:<key>]`，写入时按 key 从原文档补回 xml（见 ops/apply.ts）。
+     */
+    word_inline: {
+      group: 'inline',
+      inline: true,
+      atom: true,
+      attrs: { key: { default: '' }, kind: { default: 'field' }, text: { default: '' }, xml: { default: '' } },
+      toDOM: (node): DOMOutputSpec => [node.attrs.kind === 'field' ? 'span' : 'sup', { class: `word-inline word-${node.attrs.kind as string}`, 'data-key': node.attrs.key as string }, (node.attrs.text as string) || '¤'],
+    },
   },
   marks: {
     bold: { parseDOM: [{ tag: 'strong' }, { tag: 'b' }], toDOM: () => ['strong', 0] },
