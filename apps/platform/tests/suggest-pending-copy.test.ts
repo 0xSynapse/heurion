@@ -53,6 +53,24 @@ describe('修订版与原文版：后续修改并入同一条修订（生产事�
     }
   })
 
+  for (const mode of ['apply', 'suggest'] as const) {
+    it(`整段替换（replace_block，${mode}）用户修订的修订版：仍是同一条修订，拒绝后回到原文（v2 预实验：修订版变成普通正文）`, () => {
+      const t = setup('结果第一段。\n\n结果第二段。')
+      const [p1] = ids(t.docs, t.docId)
+      t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id: p1!, find: '第一段', replace: '第一段（意向性分析人群）' }] }, { actor: 'user' as const, turnId: null })
+      const copy = ids(t.docs, t.docId)[1]!
+      t.ops.edit({ doc_id: t.docId, base_rev: 1, mode, ops: [{ op: 'replace_block', id: copy, markdown: '改写后的结果段（意向性分析人群）。\n\n补充的一段。' }] }, AI)
+      const doc = t.docs.get(t.docId)
+      const kinds: Array<string | null> = []
+      doc.forEach(n => kinds.push(n.attrs.suggest as string | null))
+      expect(kinds).toEqual(['delete', 'insert', 'insert', null])
+      expect(pendingGroups(doc)).toHaveLength(1)
+      const texts = (d: Doc) => { const o: string[] = []; d.forEach(n => o.push(n.textContent)); return o }
+      expect(texts(resolveSuggestions(doc, null, false))).toEqual(['结果第一段。', '结果第二段。'])
+      expect(texts(resolveSuggestions(doc, null, true))).toEqual(['改写后的结果段（意向性分析人群）。', '补充的一段。', '结果第二段。'])
+    })
+  }
+
   it('删掉还没采纳的新增段落：直接消失，不留待删除的残块', () => {
     const t = setup('甲段。\n\n乙段。')
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'insert_after', anchor_id: ids(t.docs, t.docId)[0]!, markdown: '新增段。' }] }, AI)

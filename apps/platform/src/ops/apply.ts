@@ -191,6 +191,13 @@ function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyCon
       nodes[0] = first.type.create(attrs, first.content, first.marks)
     }
   }
+  // 改的是待采纳修订的修订版：改动并入同一条修订，新块都保留修订标记（否则修订版变成普通正文，原文版本仍待删除）
+  if (target.node.attrs.suggest === 'insert') {
+    const { suggest, suggest_group, suggest_of, suggest_author } = target.node.attrs
+    nodes = nodes.map((n, i) => n.type.spec.attrs?.suggest === undefined
+      ? n
+      : n.type.create({ ...n.attrs, suggest, suggest_group, suggest_of: i === 0 ? suggest_of : null, suggest_author }, n.content, n.marks))
+  }
   const $pos = tr.doc.resolve(target.pos)
   const index = $pos.index()
 

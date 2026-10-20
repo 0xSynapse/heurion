@@ -230,6 +230,8 @@ export function exportDocx(input: ExportInput): ExportResult {
    * 原样、按原顺序紧跟在后面——否则重新生成段落（不含图），图按模型单独生成。
    */
   const verbatim = (n: PMNode): string | null => {
+    // 整段批注的范围要写进段落里，不能原样写回
+    if (blockThreads.has(n.attrs.id as string)) return null
     const src = unchanged(n)
     if (!src || !/<w:(drawing|pict)\b/.test(src)) return src
     const id = n.attrs.id as string
@@ -290,6 +292,15 @@ export function exportDocx(input: ExportInput): ExportResult {
   input.doc.descendants(n => {
     if (n.isTextblock) n.forEach(c => c.marks.forEach(m => { if (m.type.name === 'comment' && openComments.has(m.attrs.thread as string)) lastPara.set(m.attrs.thread as string, n) }))
   })
+  // 文字里已没有锚点标记、只挂在块上的线程（例如被评论的整段已改写）：批注范围覆盖整段
+  const blockThreads = new Map<string, string[]>()
+  const textblockIds = new Set<string>()
+  input.doc.descendants(n => { if (n.isTextblock && n.attrs.id) textblockIds.add(n.attrs.id as string); return true })
+  for (const c of openComments.values()) {
+    if (lastPara.has(c.id) || !c.node_id || !textblockIds.has(c.node_id)) continue
+    blockThreads.set(c.node_id, [...(blockThreads.get(c.node_id) ?? []), c.id])
+  }
+  input.doc.descendants(n => { if (n.isTextblock && blockThreads.has(n.attrs.id as string)) for (const t of blockThreads.get(n.attrs.id as string)!) lastPara.set(t, n); return true })
   const commentEndParas = new Set(lastPara.values())
   const started = new Set<string>()
 
@@ -319,6 +330,13 @@ export function exportDocx(input: ExportInput): ExportResult {
   const inline = (para: PMNode, baseRPr = ''): string => {
     let out = ''
     const activeHere = new Set<string>()
+    for (const t of blockThreads.get(para.attrs.id as string) ?? []) {
+      if (started.has(t)) continue
+      started.add(t)
+      commentIds.set(t, wordRef(openComments.get(t)!)?.id ?? nextCommentId++)
+      out += `<w:commentRangeStart w:id="${commentIds.get(t)}"/>`
+      activeHere.add(t)
+    }
     para.forEach(child => {
       const threads = child.marks.filter(m => m.type.name === 'comment' && openComments.has(m.attrs.thread as string)).map(m => m.attrs.thread as string)
       for (const t of threads) {
