@@ -1,6 +1,6 @@
 # Heurion 2.0 平台架构
 
-**Status:** v0.4（2026-10-01）· P0、P1、M1 论断核对已实现；P2 后端与查看器已实现（`apps/platform`）· **跟踪:** epic [#16](https://github.com/0xaicrypto/heurion2/issues/16) · **决策人:** JZ
+**Status:** v0.4（2026-10-01）· P0、P1、M1 论断核对已实现；P2 后端与查看器已实现（`apps/platform`）· **跟踪:** epic [#16](https://github.com/0xSynapse/heurion2/issues/16) · **决策人:** JZ
 **关系:** 本文是 v0.4 起的唯一架构。[DESIGN_S_SERIES.md](archive/DESIGN_S_SERIES.md) 描述的 S 系列路线（dsh 用 python 改文件 + Collabora 编辑面）已于 2026-10-01 停用，保留为决策记录。
 
 ## 目录
