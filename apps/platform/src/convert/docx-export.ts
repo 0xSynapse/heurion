@@ -525,6 +525,17 @@ export function exportDocx(input: ExportInput): ExportResult {
 
   /** 按原始 XML 给一个段落打补丁（段落、表格单元格里的段落共用）；不能打补丁返回 null。 */
   const patchXml = (raw: string, before: PMNode, node: PMNode, drawings = false): string | null => {
+    // 导入的 Word 批注的范围标记须在这段原文里（评论跟着文字移到了别的段落时，原文里没有它的范围 → 重新生成）
+    let rangesHere = true
+    node.descendants(c => {
+      for (const m of c.marks) {
+        const t = m.attrs.thread as string
+        const ref = m.type.name === 'comment' && openComments.has(t) ? wordRef(openComments.get(t)!) : null
+        if (ref && !raw.includes(`<w:commentRangeStart w:id="${ref.id}"/>`)) rangesHere = false
+      }
+      return rangesHere
+    })
+    if (!rangesHere) return null
     const xml = patchParagraph(raw, before, node, {
       drawings,
       runs: (text, marks, base) => textRuns(text, marks, base),

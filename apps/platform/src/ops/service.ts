@@ -127,6 +127,8 @@ export class OpService {
     before: PMNode
     after: PMNode
     reanchored: string | null
+    /** 被评论的文字随合并、移动、整段改写到了别的位置：线程跟到新位置（commit 后更新记录）。 */
+    followed: Array<{ thread: string; nodeId: string }>
     results: Array<Omit<OpResult, 'op'> & { op: string }>
     rev: number
   } {
@@ -186,9 +188,11 @@ export class OpService {
     let reanchored: string | null = null
     if (meta.answering) ({ doc: after, nodeId: reanchored } = this.keepAnswering(batch.doc_id, meta.answering, before, after))
     after = this.keepWholeNode(batch.doc_id, after)
+    let followed: Array<{ thread: string; nodeId: string }> = []
+    if (!deck) ({ doc: after, moved: followed } = this.followSnippets(batch.doc_id, before, after))
     if (ai) this.guardAnchors(batch, before, after)
 
-    return { deck, before, after, reanchored, results, rev }
+    return { deck, before, after, reanchored, followed, results, rev }
   }
 
   /**
@@ -204,6 +208,10 @@ export class OpService {
       const event = this.docs.commit(batch.doc_id, sim.after, { actor: meta.actor, turnId: meta.turnId, ops: batch.ops, user: meta.user ?? null })
       // 重新锚到整块的线程：记录随之改成整块评论（引用文字清空，之后按整块维护）
       if (sim.reanchored && meta.answering) this.docs.store.setCommentAnchor(meta.answering, sim.reanchored, '')
+      for (const f of sim.followed) {
+        const c = this.docs.store.getComment(batch.doc_id, f.thread)
+        if (c) this.docs.store.setCommentAnchor(f.thread, f.nodeId, c.snippet)
+      }
       return { doc_id: batch.doc_id, rev: event?.rev ?? sim.rev, results: sim.results, changes: event?.changes ?? [] }
     } catch (err) {
       if (err instanceof OpError && meta.actor === 'ai') {
@@ -389,6 +397,36 @@ export class OpService {
       } catch { /* 块也被删了：交给锚点守卫 */ }
     }
     return unchanged
+  }
+
+  /**
+   * 被评论的文字还在、只是位置变了（两段合并、段落移动或整段改写时原样保留了这句）：
+   * 锚点丢了的 open 线程，若它锚定的文字在改后的文档里恰好出现一次，就把评论跟过去，而不是丢掉或拦下。
+   */
+  private followSnippets(docId: string, before: PMNode, after: PMNode): { doc: PMNode; moved: Array<{ thread: string; nodeId: string }> } {
+    const moved: Array<{ thread: string; nodeId: string }> = []
+    const open = this.docs.store.listComments(docId, 'open').filter(c => c.snippet && c.snippet.length >= 4)
+    if (open.length === 0) return { doc: after, moved }
+    const marksBefore = threadMarks(before)
+    let marksAfter = threadMarks(after)
+    for (const c of open) {
+      if (!locate(before, c, marksBefore).located || locate(after, c, marksAfter).located) continue
+      const hits: string[] = []
+      let count = 0
+      after.descendants(n => {
+        if (!n.isTextblock || !n.attrs.id) return true
+        const k = n.textContent.split(c.snippet).length - 1
+        if (k > 0) { hits.push(n.attrs.id as string); count += k }
+        return false
+      })
+      if (count !== 1) continue
+      try {
+        after = attachComment(after, hits[0]!, c.snippet, c.id).doc
+        marksAfter = threadMarks(after)
+        moved.push({ thread: c.id, nodeId: hits[0]! })
+      } catch { /* 交给锚点守卫 */ }
+    }
+    return { doc: after, moved }
   }
 
   /** 整块 / 整个形状的评论锚的是块本身：块还在而文字被整体改写时，把标记补回整块。 */
