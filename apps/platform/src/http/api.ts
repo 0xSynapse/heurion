@@ -44,8 +44,8 @@ import type { PubMedClient } from '../literature/pubmed.ts'
 import { formatAma, formatCitation, normalizeDoi } from '../literature/format.ts'
 import type { Article } from '../literature/types.ts'
 import type { OpenAlexClient } from '../literature/openalex.ts'
-import type { DocRow } from '../store/db.ts'
-import { bindAssets, DocxImportError, importDocx } from '../convert/docx-import.ts'
+import { newCommentId, type DocRow } from '../store/db.ts'
+import { bindAssets, bindComments, DocxImportError, importDocx } from '../convert/docx-import.ts'
 import type { DocParser } from '../convert/doc-parser.ts'
 import { importPdf, PdfImportError } from '../convert/pdf-import.ts'
 import type { Ocr } from '../kb/ocr.ts'
@@ -958,9 +958,17 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     try {
       const imported = importDocx(new Uint8Array(await file.arrayBuffer()))
       const ids = new Map(imported.assets.map(a => [a.key, store.putAsset({ owner: user, mime: a.mime, name: a.name, bytes: a.bytes }).id]))
-      const row = docs.create({ owner: user, title: file.name.replace(/\.docx$/i, ''), content: bindAssets(imported.doc, ids), source: 'import' })
+      // Word 批注在建文档之前换成平台线程 id：导入版本（未改动判断的基准）里就是最终的锚点
+      const bound = bindComments(bindAssets(imported.doc, ids), imported.comments, newCommentId)
+      const row = docs.create({ owner: user, title: file.name.replace(/\.docx$/i, ''), content: bound.doc, source: 'import' })
       store.putNodeSrc(row.id, imported.src)
       store.putPackage(row.id, 'docx', new Uint8Array(await file.arrayBuffer()))
+      for (const t of bound.threads) {
+        store.addComment({ id: t.id, doc_id: row.id, node_id: t.node_id, snippet: t.snippet, source_ref: `word:${t.word_id}:${t.replies.length}` })
+        store.addReply(t.id, 'user', t.text, null, t.author)
+        for (const r of t.replies) store.addReply(t.id, 'user', r.text, null, r.author)
+        if (t.done) store.setCommentStatus(row.id, t.id, 'resolved', 'user')
+      }
       return c.json({ ...row, warnings: imported.warnings }, 201)
     } catch (err) {
       if (err instanceof DocxImportError) return c.json({ error: err.message }, 400)

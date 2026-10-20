@@ -363,6 +363,8 @@ export interface CommentRow {
   status: 'open' | 'resolved'
   resolved_by: Actor | null
   created_at: string
+  /** 导入的 Word 批注：`word:<批注 id>:<导入的回复条数>`；平台里新建的为 null。 */
+  source_ref: string | null
   replies: ReplyRow[]
 }
 
@@ -373,6 +375,8 @@ export interface ReplyRow {
   text: string
   turn_id: string | null
   created_at: string
+  /** 原作者（导入的 Word 批注与回复）；平台里写的为 null。 */
+  author: string | null
 }
 
 export interface PhrClaimRow {
@@ -474,6 +478,8 @@ export interface MessageRow {
 }
 
 const now = () => new Date().toISOString()
+/** 评论线程 id（导入 Word 批注时需要在建文档之前先分配，因此单独导出）。 */
+export const newCommentId = (): string => 't' + randomUUID().replace(/-/g, '').slice(0, 7)
 const userKey = (username: string) => username.normalize('NFKC').toLowerCase()
 
 export class Store {
@@ -690,6 +696,11 @@ export class Store {
     if (!userCols.includes('tenant_id')) this.db.exec('ALTER TABLE users ADD COLUMN tenant_id TEXT')
     const tenantCols = (this.db.prepare('PRAGMA table_info(tenants)').all() as Array<{ name: string }>).map(c => c.name)
     if (!tenantCols.includes('dek')) this.db.exec('ALTER TABLE tenants ADD COLUMN dek TEXT')
+    // 导入的 Word 批注：来源（word:<批注 id>:<导入的回复条数>）与每条回复的原作者
+    const commentCols = (this.db.prepare('PRAGMA table_info(comments)').all() as Array<{ name: string }>).map(c => c.name)
+    if (!commentCols.includes('source_ref')) this.db.exec('ALTER TABLE comments ADD COLUMN source_ref TEXT')
+    const replyCols = (this.db.prepare('PRAGMA table_info(comment_replies)').all() as Array<{ name: string }>).map(c => c.name)
+    if (!replyCols.includes('author')) this.db.exec('ALTER TABLE comment_replies ADD COLUMN author TEXT')
     if (!userCols.includes('tenant_role')) this.db.exec("ALTER TABLE users ADD COLUMN tenant_role TEXT NOT NULL DEFAULT 'member'")
     // 双重身份：个人空间单独记一列；老账户在个人租户里的，个人空间就是它
     if (!userCols.includes('personal_tenant_id')) {
@@ -2123,10 +2134,10 @@ export class Store {
 
   // —— 评论 ——
 
-  addComment(input: { doc_id: string; node_id: string; snippet: string; id?: string }): CommentRow {
-    const id = input.id ?? 't' + randomUUID().replace(/-/g, '').slice(0, 7)
-    this.db.prepare('INSERT INTO comments (id, doc_id, node_id, snippet, status, created_at) VALUES (?, ?, ?, ?, \'open\', ?)')
-      .run(id, input.doc_id, input.node_id, input.snippet, now())
+  addComment(input: { doc_id: string; node_id: string; snippet: string; id?: string; source_ref?: string | null; created_at?: string }): CommentRow {
+    const id = input.id ?? newCommentId()
+    this.db.prepare('INSERT INTO comments (id, doc_id, node_id, snippet, status, created_at, source_ref) VALUES (?, ?, ?, ?, \'open\', ?, ?)')
+      .run(id, input.doc_id, input.node_id, input.snippet, input.created_at ?? now(), input.source_ref ?? null)
     return this.getComment(input.doc_id, id)!
   }
 
@@ -2157,10 +2168,10 @@ export class Store {
     return this.db.prepare('SELECT * FROM comment_replies WHERE comment_id = ? ORDER BY created_at, rowid').all(commentId) as unknown as ReplyRow[]
   }
 
-  addReply(commentId: string, role: 'user' | 'ai', text: string, turnId: string | null = null): ReplyRow {
+  addReply(commentId: string, role: 'user' | 'ai', text: string, turnId: string | null = null, author: string | null = null): ReplyRow {
     const id = randomUUID()
-    this.db.prepare('INSERT INTO comment_replies (id, comment_id, role, text, turn_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, commentId, role, text, turnId, now())
+    this.db.prepare('INSERT INTO comment_replies (id, comment_id, role, text, turn_id, created_at, author) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, commentId, role, text, turnId, now(), author)
     return this.db.prepare('SELECT * FROM comment_replies WHERE id = ?').get(id) as unknown as ReplyRow
   }
 

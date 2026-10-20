@@ -562,7 +562,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
         return {
           comment_id: c.id, status: c.status,
           anchor: { located: loc.located, node_ids: loc.node_ids, text: loc.text || c.snippet },
-          thread: c.replies.map(r => ({ role: r.role, text: r.text })),
+          thread: c.replies.map(r => ({ role: r.role, text: r.text, ...(r.author ? { author: r.author } : {}) })),
         }
       }),
     })

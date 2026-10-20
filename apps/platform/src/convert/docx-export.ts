@@ -5,7 +5,7 @@ import { referencePlan } from '../model/references.ts'
 import { colWidths } from '../model/schema.ts'
 import { readGrid, type GridCell } from '../model/table-grid.ts'
 import { looksLikeHeaderRow } from '../model/table-header.ts'
-import type { CitationRow, CommentRow } from '../store/db.ts'
+import type { CitationRow, CommentRow, ReplyRow } from '../store/db.ts'
 import { bodyChildrenRaw, elementChildrenRaw, safeUnzipDocx } from './docx-import.ts'
 
 /**
@@ -51,13 +51,15 @@ class Package {
   }
   text(name: string): string | null { return this.files[name] ? strFromU8(this.files[name]!) : null }
   put(name: string, content: string | Uint8Array): void { this.files[name] = typeof content === 'string' ? strToU8(content) : content }
-  /** 已存在同类型同目标的关系就复用。 */
+  /** 已存在同类型同目标的关系就复用。type 为短名（officeDocument 关系）或完整 URI（如 commentsExtended）。 */
   rel(type: string, target: string, external = false): string {
-    const existing = new RegExp(`<Relationship[^>]*Id="([^"]+)"[^>]*Type="${REL}/${type}"[^>]*Target="${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).exec(this.relsXml)
-      ?? new RegExp(`<Relationship[^>]*Target="${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*Type="${REL}/${type}"[^>]*Id="([^"]+)"`).exec(this.relsXml)
+    const full = type.startsWith('http') ? type : `${REL}/${type}`
+    const t = full.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const existing = new RegExp(`<Relationship[^>]*Id="([^"]+)"[^>]*Type="${t}"[^>]*Target="${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).exec(this.relsXml)
+      ?? new RegExp(`<Relationship[^>]*Target="${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*Type="${t}"[^>]*Id="([^"]+)"`).exec(this.relsXml)
     if (existing) return existing[1]!
     const id = `rId${this.nextRel++}`
-    this.relsXml = this.relsXml.replace('</Relationships>', `<Relationship Id="${id}" Type="${REL}/${type}" Target="${esc(target)}"${external ? ' TargetMode="External"' : ''}/></Relationships>`)
+    this.relsXml = this.relsXml.replace('</Relationships>', `<Relationship Id="${id}" Type="${full}" Target="${esc(target)}"${external ? ' TargetMode="External"' : ''}/></Relationships>`)
     return id
   }
   contentDefault(ext: string, type: string): void {
@@ -161,6 +163,17 @@ function mergeEls(base: string, over: string, order: string[]): string {
 }
 
 /** 原文元素开始标签里的属性值（兼容单双引号）；没有该属性返回 null。 */
+/** 导入的 Word 批注：原批注 id 与导入时已有的回复条数（来自 CommentRow.source_ref）。 */
+function wordRef(c: CommentRow): { id: number; replies: number } | null {
+  const m = /^word:(\d+):(\d+)$/.exec(c.source_ref ?? '')
+  return m ? { id: Number(m[1]), replies: Number(m[2]) } : null
+}
+
+const W14_NS = 'http://schemas.microsoft.com/office/word/2010/wordml'
+const W15_NS = 'http://schemas.microsoft.com/office/word/2012/wordml'
+/** 批注段落的 w14:paraId（回复靠它指向父批注）：8 位十六进制，小于 0x80000000。 */
+const newParaId = () => Math.floor(Math.random() * 0x7fffffff).toString(16).toUpperCase().padStart(8, '0')
+
 function attrOf(el: string, name: string): string | null {
   const open = /^<[^>]*>/.exec(el)?.[0] ?? ''
   const m = new RegExp(`\\s${name}\\s*=\\s*(["'])(.*?)\\1`).exec(open)
@@ -251,7 +264,8 @@ export function exportDocx(input: ExportInput): ExportResult {
   // 引用编号与参考文献表：正文末尾已有用户自己的文献表时，平台引用接在其后编号（见 model/references.ts）
   const refPlan = referencePlan(input.doc, input.citations)
   const citeNumber = refPlan.numbers
-  const openComments = new Map(input.comments.filter(c => c.status === 'open').map(c => [c.id, c]))
+  // 导出的评论线程：open 的，以及导入的 Word 批注（已解决的也写回，在 Word 里标为已解决）
+  const openComments = new Map(input.comments.filter(c => c.status === 'open' || c.source_ref).map(c => [c.id, c]))
   const commentIds = new Map<string, number>()
   let nextCommentId = Math.max(-1, ...[...(pkg.text('word/comments.xml') ?? '').matchAll(/<w:comment\b[^>]*w:id="(\d+)"/g)].map(m => Number(m[1]))) + 1
   // 每条线程最后出现在哪个段落（跨段落的评论范围在最后一段结束）
@@ -293,7 +307,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       for (const t of threads) {
         if (!started.has(t)) {
           started.add(t)
-          commentIds.set(t, nextCommentId++)
+          // 导入的 Word 批注沿用原批注 id（comments.xml 里原条目仍在），平台线程另起新 id
+          commentIds.set(t, wordRef(openComments.get(t)!)?.id ?? nextCommentId++)
           out += `<w:commentRangeStart w:id="${commentIds.get(t)}"/>`
         }
         activeHere.add(t)
@@ -748,7 +763,7 @@ export function exportDocx(input: ExportInput): ExportResult {
       if (!new RegExp(`xmlns:${prefix}=`).test(head)) head = head.replace(/<w:document\b/, `<w:document xmlns:${prefix}="${uri}"`)
     }
   }
-  pkg.put('word/document.xml', `${head}${body}${sect}</w:body></w:document>`)
+  let documentXml = `${head}${body}${sect}</w:body></w:document>`
 
   // 补齐缺失的标题样式
   if (missingHeading.size > 0) {
@@ -779,19 +794,83 @@ export function exportDocx(input: ExportInput): ExportResult {
     pkg.put('word/numbering.xml', numberingXml)
   }
 
-  // 评论
-  if (commentIds.size > 0) {
-    const entries = [...commentIds].map(([thread, id]) => {
-      const c = openComments.get(thread)!
-      const paras = c.replies.map(r => `<w:p><w:r><w:t xml:space="preserve">${r.role === 'ai' ? 'Heurion' : '用户'}：${esc(r.text)}</w:t></w:r></w:p>`).join('') || '<w:p/>'
-      return `<w:comment w:id="${id}" w:author="Heurion" w:initials="H" w:date="${c.created_at.slice(0, 19)}Z">${paras}</w:comment>`
-    }).join('')
-    const existing = pkg.text('word/comments.xml')
-    pkg.put('word/comments.xml', existing
-      ? existing.replace('</w:comments>', `${entries}</w:comments>`)
-      : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${NS}>${entries}</w:comments>`)
+  // 评论：每条线程写成 Word 的「根批注 + 回复」，回复关系记在 commentsExtended.xml。
+  // 导入的 Word 批注：根批注与导入时已有的回复仍在原 comments.xml 里，只追加平台里新写的回复；
+  // 平台线程：第一条为根批注，其余为回复。回复的范围标记紧贴在根批注的标记旁。
+  let commentsXml = pkg.text('word/comments.xml')
+  const originalComments = commentsXml
+  const newEntries: string[] = []
+  const exEntries: Array<{ paraId: string; parent: string | null; done: boolean }> = []
+  const authorOf = (r: ReplyRow) => r.author ?? (r.role === 'ai' ? 'Heurion AI' : '用户')
+  const entry = (id: number, r: ReplyRow, paraId: string) => {
+    const who = authorOf(r)
+    return `<w:comment w:id="${id}" w:author="${esc(who)}" w:initials="${esc(who.replace(/\s+/g, '').slice(0, 2))}" w:date="${r.created_at.slice(0, 19)}Z"><w:p w14:paraId="${paraId}"><w:r><w:t xml:space="preserve">${esc(r.text)}</w:t></w:r></w:p></w:comment>`
+  }
+  /** 原 comments.xml 里某条批注最后一段的 paraId（没有就补上）。 */
+  const rootParaId = (id: number): string | null => {
+    if (!commentsXml) return null
+    const m = new RegExp(`<w:comment\\b[^>]*w:id="${id}"[^>]*>([\\s\\S]*?)</w:comment>`).exec(commentsXml)
+    const last = m ? [...m[1]!.matchAll(/<w:p\b[^>]*>/g)].at(-1) : undefined
+    if (!m || !last) return null
+    const has = /w14:paraId="([0-9A-Fa-f]{8})"/.exec(last[0])
+    if (has) return has[1]!
+    const pid = newParaId()
+    const at = m.index + m[0].indexOf(m[1]!) + last.index!
+    commentsXml = commentsXml.slice(0, at) + last[0].replace(/^<w:p\b/, `<w:p w14:paraId="${pid}"`) + commentsXml.slice(at + last[0].length)
+    return pid
+  }
+  for (const c of openComments.values()) {
+    const ref = wordRef(c)
+    const rootId = commentIds.get(c.id) ?? ref?.id
+    if (rootId === undefined || !new RegExp(`<w:commentRangeStart\\b[^>]*w:id="${rootId}"`).test(documentXml)) continue
+    let parentPara: string | null
+    let replies: ReplyRow[]
+    if (ref) {
+      replies = c.replies.slice(1 + ref.replies)
+      // 没有新回复、也没在平台里解决：原批注原样保留，不碰 comments.xml / commentsExtended.xml
+      if (replies.length === 0 && c.status !== 'resolved') continue
+      parentPara = rootParaId(rootId)
+    } else {
+      const [first, ...rest] = c.replies
+      parentPara = newParaId()
+      newEntries.push(first
+        ? entry(rootId, first, parentPara)
+        : `<w:comment w:id="${rootId}" w:author="Heurion" w:initials="H" w:date="${c.created_at.slice(0, 19)}Z"><w:p w14:paraId="${parentPara}"/></w:comment>`)
+      replies = rest
+    }
+    if (!parentPara) continue
+    exEntries.push({ paraId: parentPara, parent: null, done: c.status === 'resolved' })
+    for (const r of replies) {
+      const id = nextCommentId++
+      const pid = newParaId()
+      newEntries.push(entry(id, r, pid))
+      exEntries.push({ paraId: pid, parent: parentPara, done: false })
+      documentXml = documentXml
+        .replace(new RegExp(`<w:commentRangeStart\\b[^>]*w:id="${rootId}"[^>]*/>`), m => `${m}<w:commentRangeStart w:id="${id}"/>`)
+        .replace(new RegExp(`<w:commentRangeEnd\\b[^>]*w:id="${rootId}"[^>]*/>`), m => `${m}<w:commentRangeEnd w:id="${id}"/>`)
+        .replace(new RegExp(`<w:r\\b[^>]*>(?:(?!</w:r>)[\\s\\S])*?<w:commentReference\\b[^>]*w:id="${rootId}"[^>]*/></w:r>`), m => `${m}<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${id}"/></w:r>`)
+    }
+  }
+  pkg.put('word/document.xml', documentXml)
+  if (newEntries.length > 0 || commentsXml !== originalComments) {
+    let xml = commentsXml ?? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments ${NS}></w:comments>`
+    const root = /<w:comments\b[^>]*>/.exec(xml)![0]
+    if (!root.includes('xmlns:w14=')) xml = xml.replace(root, root.replace(/^<w:comments\b/, `<w:comments xmlns:w14="${W14_NS}"`))
+    pkg.put('word/comments.xml', xml.replace('</w:comments>', `${newEntries.join('')}</w:comments>`))
     pkg.rel('comments', 'comments.xml')
     pkg.contentOverride('/word/comments.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml')
+  }
+  if (exEntries.length > 0) {
+    let ext = pkg.text('word/commentsExtended.xml') ?? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:commentsEx xmlns:w15="${W15_NS}"></w15:commentsEx>`
+    for (const e of exEntries) {
+      const el = `<w15:commentEx w15:paraId="${e.paraId}"${e.parent ? ` w15:paraIdParent="${e.parent}"` : ''} w15:done="${e.done ? 1 : 0}"/>`
+      const existing = new RegExp(`<w15:commentEx\\b[^>]*w15:paraId="${e.paraId}"[^>]*/>`).exec(ext)
+      // 原文件已有该批注的记录：保留它的父子关系，只更新「已解决」
+      ext = existing ? ext.replace(existing[0], existing[0].replace(/\sw15:done="[01]"/, '') .replace(/\/>$/, ` w15:done="${e.done ? 1 : 0}"/>`)) : ext.replace('</w15:commentsEx>', `${el}</w15:commentsEx>`)
+    }
+    pkg.put('word/commentsExtended.xml', ext)
+    pkg.rel('http://schemas.microsoft.com/office/2011/relationships/commentsExtended', 'commentsExtended.xml')
+    pkg.contentOverride('/word/commentsExtended.xml', 'application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml')
   }
 
   return { bytes: pkg.finish(), warnings: [...new Set(warnings)] }

@@ -116,7 +116,10 @@ export function read(input: ReadInput): string {
     .filter(c => c.status === 'open')
     .map(c => ({ c, loc: locate(input.doc, c, marks) }))
     .filter(x => x.loc.node_ids.some(id => range.has(id)))
-    .map(x => `- 评论 ${x.c.id} @ {#${x.loc.node_ids.join('}, {#')}}「${x.loc.text.slice(0, 80)}」：${x.c.replies.filter(r => r.role === 'user').at(-1)?.text ?? ''}`)
+    .map(x => {
+      const last = x.c.replies.filter(r => r.role === 'user').at(-1)
+      return `- 评论 ${x.c.id} @ {#${x.loc.node_ids.join('}, {#')}}「${x.loc.text.slice(0, 80)}」：${last?.text ?? ''}${last?.author ? `（${last.author}）` : ''}`
+    })
   const tail = notes.length > 0 ? `\n\n---\n本范围内的 open 评论：\n${notes.join('\n')}` : ''
   return `${header}\n\n${parts.join('\n\n')}${tail}${wordInlineLegend(blocks.slice(start, i))}`
 }

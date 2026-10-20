@@ -1,6 +1,7 @@
 import { DOMParser, XMLSerializer, type Element as XElement, type Node as XNode } from '@xmldom/xmldom'
 import { strFromU8, unzipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
+import { threadMarks } from '../model/anchors.ts'
 import { assignIds } from '../model/ids.ts'
 import { schema } from '../model/schema.ts'
 import { looksLikeHeaderRow } from '../model/table-header.ts'
@@ -20,13 +21,102 @@ const A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 
 export interface ImportedAsset { key: string; name: string; mime: string; bytes: Uint8Array }
 
+/** 导入的 Word 批注线程（只含锚在文字上的；回复按 commentsExtended 的父子关系归到根批注下）。 */
+export interface ImportedComment {
+  /** 文档里 comment mark 的临时线程名（`word:<批注 id>`），入库时由 bindComments 换成平台线程 id。 */
+  key: string
+  word_id: string
+  author: string | null
+  date: string | null
+  text: string
+  /** Word 里已标记为「已解决」。 */
+  done: boolean
+  replies: Array<{ author: string | null; date: string | null; text: string }>
+}
+
 export interface DocxImport {
   doc: PMNode
   /** 节点 id → 原始 XML。 */
   src: Array<{ node_id: string; xml: string }>
   /** 待写入的资产：figure.asset_id 暂为 key，入库后由调用方替换为真实 asset id。 */
   assets: ImportedAsset[]
+  /** Word 批注：文档里以 `word:<id>` 线程名锚定，入库时用 bindComments 换成平台线程。 */
+  comments: ImportedComment[]
   warnings: string[]
+}
+
+type XDocument = ReturnType<DOMParser['parseFromString']>
+
+const W14 = 'http://schemas.microsoft.com/office/word/2010/wordml'
+const W15 = 'http://schemas.microsoft.com/office/word/2012/wordml'
+
+/** comments.xml + commentsExtended.xml → 根批注（含回复）与回复批注 id 集合。 */
+function parseComments(comments: XDocument | null, extended: XDocument | null): { roots: Map<string, ImportedComment>; replies: Set<string> } {
+  const roots = new Map<string, ImportedComment>()
+  const replies = new Set<string>()
+  if (!comments) return { roots, replies }
+  const all: Array<{ id: string; author: string | null; date: string | null; text: string; paraIds: string[] }> = []
+  const list = comments.getElementsByTagNameNS(W, 'comment')
+  for (let i = 0; i < list.length; i++) {
+    const c = list.item(i)!
+    const paras = children(c).filter(x => local(x) === 'p')
+    const text = paras.map(p => { const ts = p.getElementsByTagNameNS(W, 't'); let s = ''; for (let k = 0; k < ts.length; k++) s += ts.item(k)!.textContent ?? ''; return s }).join('\n').trim()
+    const paraIds = paras.map(p => p.getAttributeNS(W14, 'paraId') || p.getAttribute('w14:paraId') || '').filter(Boolean)
+    all.push({ id: wAttr(c, 'id') ?? '', author: wAttr(c, 'author'), date: wAttr(c, 'date'), text, paraIds })
+  }
+  // 回复关系：回复批注最后一段的 paraId 指向父批注某一段的 paraId
+  const parentOf = new Map<string, string>()
+  const done = new Map<string, boolean>()
+  const ex = extended?.getElementsByTagNameNS(W15, 'commentEx')
+  for (let i = 0; i < (ex?.length ?? 0); i++) {
+    const e = ex!.item(i)!
+    const pid = e.getAttributeNS(W15, 'paraId') || e.getAttribute('w15:paraId') || ''
+    const parent = e.getAttributeNS(W15, 'paraIdParent') || e.getAttribute('w15:paraIdParent') || ''
+    if (parent) parentOf.set(pid, parent)
+    done.set(pid, (e.getAttributeNS(W15, 'done') || e.getAttribute('w15:done')) === '1')
+  }
+  const ownerOfPara = new Map<string, string>()
+  for (const c of all) for (const pid of c.paraIds) ownerOfPara.set(pid, c.id)
+  const rootOf = (c: (typeof all)[number]): string | null => {
+    const parent = parentOf.get(c.paraIds.at(-1) ?? '')
+    return parent ? ownerOfPara.get(parent) ?? null : null
+  }
+  for (const c of all) {
+    if (rootOf(c)) continue
+    roots.set(c.id, { key: `word:${c.id}`, word_id: c.id, author: c.author, date: c.date, text: c.text, done: done.get(c.paraIds.at(-1) ?? '') ?? false, replies: [] })
+  }
+  for (const c of all) {
+    let r = rootOf(c)
+    // 回复的回复：一路找到根批注
+    for (let guard = 0; r && !roots.has(r) && guard < 20; guard++) r = rootOf(all.find(x => x.id === r)!)
+    if (!r || !roots.has(r)) continue
+    replies.add(c.id)
+    roots.get(r)!.replies.push({ author: c.author, date: c.date, text: c.text })
+  }
+  return { roots, replies }
+}
+
+/**
+ * 导入的 Word 批注入库前：给每个线程分配平台 id，把文档里 `word:<id>` 线程名换掉，
+ * 并按锚定的文字算出锚点块与片段（与 API 新建评论的字段一致）。
+ */
+export function bindComments(doc: PMNode, comments: ImportedComment[], makeId: () => string): { doc: PMNode; threads: Array<ImportedComment & { id: string; node_id: string; snippet: string }> } {
+  const rename = new Map(comments.map(c => [c.key, makeId()]))
+  const remark = (marks: readonly Mark[]) => marks.map(m => (m.type.name === 'comment' && rename.has(m.attrs.thread as string) ? m.type.create({ thread: rename.get(m.attrs.thread as string) }) : m))
+  const walk = (n: PMNode): PMNode => {
+    if (n.isLeaf) return n.mark(remark(n.marks))
+    const kids: PMNode[] = []
+    n.forEach(c => kids.push(walk(c)))
+    return n.type.create(n.attrs, kids, n.marks)
+  }
+  const out = walk(doc)
+  const anchors = threadMarks(out)
+  const threads = comments.flatMap(c => {
+    const id = rename.get(c.key)!
+    const a = anchors.get(id)
+    return a ? [{ ...c, id, node_id: a.node_ids[0]!, snippet: a.text.slice(0, 200) }] : []
+  })
+  return { doc: out, threads }
 }
 
 export class DocxImportError extends Error {}
@@ -151,9 +241,29 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   }
   const footnotes = noteText('word/footnotes.xml', 'footnote')
   const endnotes = noteText('word/endnotes.xml', 'endnote')
+  // Word 批注：正在进行的批注范围（只记根批注；回复的范围与根批注重合）给文字加 comment mark
+  const { roots: wordComments } = parseComments(xml('word/comments.xml'), xml('word/commentsExtended.xml'))
+  const activeComments = new Set<string>()
+  const withComments = (marks: readonly Mark[]) => {
+    let out = marks
+    for (const id of activeComments) out = schema.marks.comment!.create({ thread: `word:${id}` }).addToSet(out)
+    return out
+  }
+  /** 批注范围的起止标记：更新进行中的范围；不是这类元素返回 false。 */
+  const commentRange = (el: XElement): boolean => {
+    const name = local(el)
+    if (el.namespaceURI !== W || (name !== 'commentRangeStart' && name !== 'commentRangeEnd')) return false
+    const id = wAttr(el, 'id') ?? ''
+    if (wordComments.has(id)) {
+      if (name === 'commentRangeStart') activeComments.add(id)
+      else activeComments.delete(id)
+    }
+    return true
+  }
+
   let wordKeys = 0
   const wordInline = (kind: 'footnote' | 'endnote' | 'field', text: string, xmlText: string, marks: readonly Mark[]) =>
-    schema.node('word_inline', { key: `w${++wordKeys}`, kind, text, xml: xmlText }, undefined, marks)
+    schema.node('word_inline', { key: `w${++wordKeys}`, kind, text, xml: xmlText }, undefined, withComments(marks))
 
   /** 复杂域（fldChar begin … end）：从 begin 所在的兄弟元素起，找到与之配对的 end 所在元素的下标；找不到返回 -1。 */
   const fieldEnd = (kids: XElement[], from: number): number => {
@@ -240,6 +350,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
           if (name === 'AlternateContent') flags.unmodelled ??= '文本框'
           continue
         }
+        if (commentRange(c)) continue
         if (startsField(c)) {
           const end = fieldEnd(kids, i)
           if (end >= 0) {
@@ -291,6 +402,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     const va = rPr && wAttr(child(rPr, 'vertAlign'), 'val')
     if (va === 'superscript') marks = schema.marks.sup!.create().addToSet(marks)
     if (va === 'subscript') marks = schema.marks.sub!.create().addToSet(marks)
+    marks = withComments(marks)
     for (const c of children(r)) {
       const name = local(c)
       if (c.namespaceURI !== W) {
@@ -444,6 +556,8 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   }
 
   const blockLevel = (el: XElement) => {
+    // 正文层级的批注起止标记（跨段落的批注）：只更新范围，不打断列表分组
+    if (commentRange(el)) return
     const name = local(el)
     if (el.namespaceURI === W && name === 'p') return paragraph(el)
     flushLists()
@@ -491,7 +605,10 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     for (let i = 0; i < a.childCount && i < b.childCount; i++) walkPair(a.child(i), b.child(i))
   }
   walkPair(raw, doc)
-  return { doc, src, assets, warnings: [...new Set(warnings)] }
+  const anchored = threadMarks(doc)
+  const comments = [...wordComments.values()].filter(c => anchored.has(c.key))
+  if (comments.length < wordComments.size) warnings.push(`${wordComments.size - comments.length} 条 Word 批注锚在图片或不可编辑内容上，没有转为平台评论（导出时原样保留）`)
+  return { doc, src, assets, comments, warnings: [...new Set(warnings)] }
 }
 
 function parseStyles(doc: ReturnType<DOMParser['parseFromString']> | null): Map<string, StyleInfo> {
