@@ -83,8 +83,14 @@ async function doctorMcp(c: Client, docId: string, e: DoctorEdit): Promise<boole
 }
 
 async function sessionP(base: string, paper: PaperTopic, ctx: StressCtx, steps: SessionStep[], out: (r: Row, after: D.Pkg) => void): Promise<void> {
-  const c = client(base, `v2-session-${paper.pmcid}`)
-  const docId = await upload(c, ctx.source, `会话 ${paper.pmcid}`)
+  const c = client(base, `v2-sess-${paper.pmcid.toLowerCase()}`)
+  let docId: string
+  try {
+    docId = await upload(c, ctx.source, `会话 ${paper.pmcid}`)
+  } catch (err) {
+    out({ arm: 'P', model: MODEL, paper: paper.pmcid, step: 'setup', turn: 0, status: 'harness_error', ms: 0, calls: [], guard_rejections: 0, usage: null, concurrent_injected: null, doctor_applied: null, eval: null, error: String((err as Error).message).slice(0, 300) }, ctx.source)
+    return
+  }
   const keep: Keep = []
   let pendingDoctor: boolean | null = null
   for (const [i, step] of steps.entries()) {
