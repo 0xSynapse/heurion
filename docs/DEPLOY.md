@@ -1,16 +1,16 @@
 # Heurion 2.0 部署
 
 单机 Docker Compose，跑在一台 Ubuntu 服务器上。
-push `0xaicrypto/heurion` 的 main 分支，GitHub Actions 就会构建镜像（GHCR）并通过 SSH 部署。服务器地址只放在 secret 里，文档和代码都不写：站点经 Cloudflare 代理，源站 IP 不公开。
+push `0xSynapse/heurion` 的 main 分支，GitHub Actions 就会构建镜像（GHCR）并通过 SSH 部署。服务器地址只放在 secret 里，文档和代码都不写：站点经 Cloudflare 代理，源站 IP 不公开。
 
 ## 组成
 
 | 容器 | 镜像 | 说明 |
 |---|---|---|
-| `heurion2` | `ghcr.io/0xaicrypto/heurion2:<sha>`（根目录 `Dockerfile`） | 平台：页面、REST / SSE、协同 WebSocket、MCP、每用户 dsh 子进程、LibreOffice 渲染、OCR。数据卷 `heurion2_data` → `/app/data` |
-| `heurion2-embedder` | `ghcr.io/0xaicrypto/heurion2-embedder:<sha>`（`apps/embedder/Dockerfile`） | 本地 bge-m3 嵌入服务，模型在构建时打进镜像，只在内部网络可达 |
-| `heurion2-imaging-worker` | `ghcr.io/0xaicrypto/heurion2-imaging-worker:<sha>`（`apps/imaging-worker/Dockerfile`） | 影像分析（MONAI + PyTorch CPU）。模型权重在卷 `heurion2_imaging-models` 里，部署时预热、校验 |
-| `heurion2-doc-parser` | `ghcr.io/0xaicrypto/heurion2-doc-parser:<sha>`（`apps/doc-parser/Dockerfile`） | PDF 结构化解析（Docling）。模型在构建时打进镜像，运行时离线。只接入没有外网的 `parser` 网络 |
+| `heurion2` | `ghcr.io/0xsynapse/heurion2:<sha>`（根目录 `Dockerfile`） | 平台：页面、REST / SSE、协同 WebSocket、MCP、每用户 dsh 子进程、LibreOffice 渲染、OCR。数据卷 `heurion2_data` → `/app/data` |
+| `heurion2-embedder` | `ghcr.io/0xsynapse/heurion2-embedder:<sha>`（`apps/embedder/Dockerfile`） | 本地 bge-m3 嵌入服务，模型在构建时打进镜像，只在内部网络可达 |
+| `heurion2-imaging-worker` | `ghcr.io/0xsynapse/heurion2-imaging-worker:<sha>`（`apps/imaging-worker/Dockerfile`） | 影像分析（MONAI + PyTorch CPU）。模型权重在卷 `heurion2_imaging-models` 里，部署时预热、校验 |
+| `heurion2-doc-parser` | `ghcr.io/0xsynapse/heurion2-doc-parser:<sha>`（`apps/doc-parser/Dockerfile`） | PDF 结构化解析（Docling）。模型在构建时打进镜像，运行时离线。只接入没有外网的 `parser` 网络 |
 | `heurion2-caddy` | `caddy:2.8-alpine` | 反向代理加自动 HTTPS，只有它暴露 80/443。`/mcp`、`/llm` 对外返回 404；`www` 跳转到根域名 |
 
 各服务的内存上限和线程数见 `deploy/docker-compose.yml` 开头的预算表。换机器时要按新机器的内存和核数重新分配。
@@ -55,7 +55,7 @@ push `0xaicrypto/heurion` 的 main 分支，GitHub Actions 就会构建镜像（
    - 它部署到 `STAGING_HOST`，域名是 `staging.heurion.org`；用独立的 secret，不配 S3，默认不发邮件。
    - `STAGING_HOST` 必须是一台不跑生产的机器，否则会用预发配置覆盖生产。
 
-## Secrets（`0xaicrypto/heurion` 仓库）
+## Secrets（`0xSynapse/heurion` 仓库）
 
 | Secret | 用途 |
 |---|---|

@@ -1,8 +1,9 @@
 name: Deploy Heurion 2.0
 
-# 2.0 代码在 0xaicrypto/heurion 的 main 分支（2026-10-04 起；1.0 归档为 v1-archive 分支与 v1-final 标签）；部署到 /opt/heurion2。
+# 2.0 代码在 0xSynapse/heurion 的 main 分支（2026-10-04 起；1.0 归档为 v1-archive 分支与 v1-final 标签）；部署到 /opt/heurion2。
 # 第一次部署会自动切换（停 1.0、全量备份、导入账户），失败自动恢复 1.0；清理 1.0 用 cleanup-v1.yml（手动）。
-# 生产部署流水线：仅在私有仓库 0xaicrypto/heurion 上执行（持有全部生产密钥与 VPS 部署权限）
+# 生产部署流水线：仅在 0xSynapse/heurion（原 0xaicrypto/heurion，2026-10 账户改名）上执行（持有全部生产密钥与 VPS 部署权限）。
+# 按仓库 ID 判断而不按名字：账户或仓库改名后条件不会悄悄变假、所有任务被跳过（改名后曾因此停止部署）
 # 公开开源仓库 heurion-org/heurion 仅同步开源代码，由 ci.yml 运行测试，不进行镜像发布与现网部署
 on:
   push:
@@ -16,15 +17,15 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_IMAGE: ghcr.io/0xaicrypto/heurion2
-  EMBEDDER_IMAGE: ghcr.io/0xaicrypto/heurion2-embedder
-  IMAGING_WORKER_IMAGE: ghcr.io/0xaicrypto/heurion2-imaging-worker
-  DOC_PARSER_IMAGE: ghcr.io/0xaicrypto/heurion2-doc-parser
+  APP_IMAGE: ghcr.io/0xsynapse/heurion2
+  EMBEDDER_IMAGE: ghcr.io/0xsynapse/heurion2-embedder
+  IMAGING_WORKER_IMAGE: ghcr.io/0xsynapse/heurion2-imaging-worker
+  DOC_PARSER_IMAGE: ghcr.io/0xsynapse/heurion2-doc-parser
 
 jobs:
   test:
     name: 类型检查与测试
-    if: github.repository == '0xaicrypto/heurion'
+    if: github.repository_id == '1301746811'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -42,7 +43,7 @@ jobs:
 
   images:
     name: 构建镜像
-    if: github.repository == '0xaicrypto/heurion'
+    if: github.repository_id == '1301746811'
     needs: [test]
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: write }
@@ -110,7 +111,7 @@ jobs:
 
   deploy:
     name: 部署到生产
-    if: github.repository == '0xaicrypto/heurion'
+    if: github.repository_id == '1301746811'
     needs: [images]
     runs-on: ubuntu-latest
     environment: { name: production, url: 'https://heurion.org' }

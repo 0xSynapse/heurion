@@ -19,16 +19,16 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_IMAGE: ghcr.io/0xaicrypto/heurion2
-  EMBEDDER_IMAGE: ghcr.io/0xaicrypto/heurion2-embedder
-  IMAGING_WORKER_IMAGE: ghcr.io/0xaicrypto/heurion2-imaging-worker
-  DOC_PARSER_IMAGE: ghcr.io/0xaicrypto/heurion2-doc-parser
+  APP_IMAGE: ghcr.io/0xsynapse/heurion2
+  EMBEDDER_IMAGE: ghcr.io/0xsynapse/heurion2-embedder
+  IMAGING_WORKER_IMAGE: ghcr.io/0xsynapse/heurion2-imaging-worker
+  DOC_PARSER_IMAGE: ghcr.io/0xsynapse/heurion2-doc-parser
   STAGING_HOSTNAME: staging.heurion.org
 
 jobs:
   test:
     name: 类型检查与测试
-    if: github.repository == '0xaicrypto/heurion'
+    if: github.repository_id == '1301746811'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -46,7 +46,7 @@ jobs:
 
   images:
     name: 构建镜像
-    if: github.repository == '0xaicrypto/heurion'
+    if: github.repository_id == '1301746811'
     needs: [test]
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: write }
@@ -114,7 +114,7 @@ jobs:
 
   deploy:
     name: 部署到预发
-    if: github.repository == '0xaicrypto/heurion'
+    if: github.repository_id == '1301746811'
     needs: [images]
     runs-on: ubuntu-latest
     environment: { name: staging, url: 'https://staging.heurion.org' }
