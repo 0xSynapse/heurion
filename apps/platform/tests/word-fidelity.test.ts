@@ -5,6 +5,7 @@ import { bindAssets, bindComments, importDocx } from '../src/convert/docx-import
 import { attachComment } from '../src/model/anchors.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { OpService } from '../src/ops/service.ts'
+import type { DocOp } from '../src/ops/types.ts'
 import { resolveSuggestions } from '../src/ops/suggest.ts'
 import { newCommentId, Store } from '../src/store/db.ts'
 import { read } from '../src/views/read.ts'
@@ -314,7 +315,7 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
 
 describe('改过的段落按原文 XML 打补丁：只改变化的文字，其余原样', () => {
   const R = (t: string, rpr = '') => `<w:r>${rpr ? `<w:rPr>${rpr}</w:rPr>` : ''}<w:t xml:space="preserve">${t}</w:t></w:r>`
-  const edit = (xml: string, op: (id: string) => object) => {
+  const edit = (xml: string, op: (id: string) => DocOp) => {
     const t = importInto(docx(xml + p('其他段落。')))
     const id = t.docs.get(t.docId).child(0).attrs.id as string
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [op(id)] }, { actor: 'user', turnId: null })
