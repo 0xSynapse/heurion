@@ -125,7 +125,7 @@ export function read(input: ReadInput): string {
   return `${header}\n\n${parts.join('\n\n')}${tail}${wordInlineLegend(blocks.slice(start, i))}`
 }
 
-/** 本范围内的 Word 行内结构（脚注 / 尾注引用、域代码）：标记 → 是什么，提示原样保留。 */
+/** 本范围内的 Word 行内结构（脚注 / 尾注引用、域代码、文本框与嵌入对象）：标记 → 是什么，提示原样保留。 */
 function wordInlineLegend(blocks: PMNode[]): string {
   const lines: string[] = []
   const seen = new Set<string>()
@@ -134,13 +134,13 @@ function wordInlineLegend(blocks: PMNode[]): string {
       if (n.type.name !== 'word_inline' || seen.has(n.attrs.key as string)) return true
       seen.add(n.attrs.key as string)
       const text = String(n.attrs.text ?? '').slice(0, 120)
-      const what = n.attrs.kind === 'footnote' ? '脚注' : n.attrs.kind === 'endnote' ? '尾注' : `域代码（显示为「${text}」）`
+      const what = n.attrs.kind === 'footnote' ? '脚注' : n.attrs.kind === 'endnote' ? '尾注' : n.attrs.kind === 'object' ? '对象' : `域代码（显示为「${text}」）`
       lines.push(`- [@w:${n.attrs.key}] ${what}${n.attrs.kind === 'field' ? '' : `：${text}`}`)
       return true
     })
   }
   return lines.length > 0
-    ? `\n\n---\n本范围内的 Word 标记（脚注、域代码；改写时原样保留，不能新建）：\n${lines.join('\n')}`
+    ? `\n\n---\n本范围内的 Word 标记（脚注、域代码、文本框与嵌入对象；改写时原样保留，不能新建）：\n${lines.join('\n')}`
     : ''
 }
 

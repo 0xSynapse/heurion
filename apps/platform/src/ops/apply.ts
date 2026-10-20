@@ -188,7 +188,15 @@ function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyCon
         attrs.style = target.node.attrs.style
         attrs.align = target.node.attrs.align
       }
-      nodes[0] = first.type.create(attrs, first.content, first.marks)
+      let content = first.content
+      // 列表项换成列表项：项里的文字段落也沿用原 id（导出时据此按原文打补丁，保留原段落的格式与编号）
+      const oldPara = target.node.type.name === 'list_item' ? target.node.firstChild : null
+      const newPara = first.type.name === 'list_item' ? first.firstChild : null
+      if (oldPara && newPara && oldPara.type === newPara.type && oldPara.attrs.id) {
+        ctx.taken.delete(newPara.attrs.id as string)
+        content = content.replaceChild(0, newPara.type.create({ ...newPara.attrs, id: oldPara.attrs.id, style: oldPara.attrs.style, align: oldPara.attrs.align }, newPara.content, newPara.marks))
+      }
+      nodes[0] = first.type.create(attrs, content, first.marks)
     }
   }
   // 改的是待采纳修订的修订版：改动并入同一条修订，新块都保留修订标记（否则修订版变成普通正文，原文版本仍待删除）
@@ -593,10 +601,12 @@ export function replaceError(outcome: Exclude<ReplaceOutcome, { ok: true }>, whe
 }
 
 function replaceText(tr: Transform, op: Extract<DocOp, { op: 'replace_text' }>): string[] {
-  const target = find(tr, op.id)
+  let target = find(tr, op.id)
+  // 列表项：读视图里显示的是列表项 id，替换作用于它的文字段落
+  if (target.node.type.name === 'list_item' && target.node.firstChild?.isTextblock) target = { node: target.node.firstChild, pos: target.pos + 1 }
   if (!target.node.isTextblock) {
     throw new OpError('invalid_structure', `replace_text 只能用于段落或标题，${op.id} 是 ${target.node.type.name}`, {
-      hint: target.node.type.name === 'list_item' ? '列表项的文字请用列表项 id 配合 replace_block。' : '表格请用 table_set_cells；其他块用 replace_block。',
+      hint: '表格请用 table_set_cells；其他块用 replace_block。',
     })
   }
   const outcome = replaceInTextblock(tr, target.node, target.pos, op, parseInline)

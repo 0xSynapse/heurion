@@ -2,6 +2,7 @@ import { strFromU8, unzipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { exportDocx } from '../src/convert/docx-export.ts'
 import { bindAssets, bindComments, importDocx } from '../src/convert/docx-import.ts'
+import { attachComment } from '../src/model/anchors.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { OpService } from '../src/ops/service.ts'
 import { resolveSuggestions } from '../src/ops/suggest.ts'
@@ -178,18 +179,32 @@ describe('Word 批注：导入为平台评论线程，导出为 Word 线程回�
     expect(part(out, 'word/comments.xml').match(/<w:comment w:id="7"/g)).toHaveLength(1)
   })
 
-  it('被批注的文字随整段改写消失：批注改为覆盖整段，线程与回复仍写回（v2 预实验：导出后批注全部丢失）', () => {
+  it('被批注的文字随整段改写变了：导入的 Word 批注范围留在原处（按原文打补丁），线程与回复仍写回', () => {
     const t = importWithComments(withComments())
     const id = t.docs.get(t.docId).child(0).attrs.id as string
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id, markdown: '本研究共纳入 112 例患者，中位随访 36 个月。' }] }, { actor: 'user', turnId: null })
     t.store.addReply(t.thread().id, 'ai', '已整段改写。')
     const first = firstPara(t.exportNow())
-    expect(first).toContain('中位随访 36 个月')
-    expect(first).toMatch(/^<w:p\b[^>]*>(<w:pPr>[\s\S]*?<\/w:pPr>)?<w:commentRangeStart w:id="7"\/>/)
+    expect(first).toContain('中位随访 36 个月。')
+    expect(first).toMatch(/<w:commentRangeStart w:id="7"\/>[\s\S]*112 例[\s\S]*<w:commentRangeEnd w:id="7"\/>/)
     expect(first).toContain('<w:commentReference w:id="7"/>')
     const back = importDocx(t.exportNow())
     expect(back.comments).toHaveLength(1)
     expect(back.comments[0]!.replies.map(r => r.author)).toEqual(['Dong Qian', 'Heurion AI'])
+  })
+
+  it('平台里新建的批注、被批注的文字随整段改写消失：批注改为覆盖整段（v2 预实验：导出后批注全部丢失）', () => {
+    const t = importInto(docx(p('本研究纳入 110 例患者，随访 3 年。') + p('其他段落。')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    const c = t.store.addComment({ doc_id: t.docId, node_id: id, snippet: '110 例' })
+    t.store.addReply(c.id, 'user', '核对例数')
+    t.docs.commit(t.docId, attachComment(t.docs.get(t.docId), id, '110 例', c.id).doc, { actor: 'user', turnId: null, ops: [] })
+    t.ops.edit({ doc_id: t.docId, base_rev: t.docs.rev(t.docId), mode: 'apply', ops: [{ op: 'replace_block', id, markdown: '本研究共纳入 112 例患者，中位随访 36 个月。' }] }, { actor: 'user', turnId: null })
+    const out = t.exportNow().bytes
+    const first = firstPara(out)
+    expect(first).toContain('中位随访 36 个月')
+    expect(first).toMatch(/^<w:p\b[^>]*>(<w:pPr>[\s\S]*?<\/w:pPr>)?<w:commentRangeStart w:id="0"\/>/)
+    expect(part(out, 'word/comments.xml')).toContain('核对例数')
   })
 
   it('在平台里解决：Word 里标为已解决', () => {
@@ -224,18 +239,51 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
     expect(bodyOf(t.exportNow().bytes)).toBe(bodyOf(original))
   })
 
-  it('AI 不能改合作者修订的任一版本；改别的段落时合作者的修订原样保留', () => {
+  it('合作者修订的原文版本不能改；改别的段落时合作者的修订原样保留', () => {
     const t = importInto(docx(TRACKED + p('结果段落。')))
     const ids: string[] = []
     t.docs.get(t.docId).forEach(n => ids.push(n.attrs.id as string))
-    for (const id of ids.slice(0, 2)) {
-      expect(() => t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '主要终点', replace: '首要终点' }] }, { actor: 'ai', turnId: 't1' }))
-        .toThrow(/Li Ming 留下的待采纳修订/)
-    }
+    expect(() => t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: ids[0]!, find: '主要终点', replace: '首要终点' }] }, { actor: 'ai', turnId: 't1' }))
+      .toThrow(/Li Ming 留下的待采纳修订/)
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: ids[2]!, find: '结果段落', replace: '结果部分' }] }, { actor: 'ai', turnId: 't2' })
     const body = bodyOf(t.exportNow().bytes)
     expect(body).toContain(TRACKED)
     expect(body).toContain('结果部分')
+  })
+
+  it('修订版里合作者修订以外的文字可以改：同步到原文版本，采纳或拒绝都保留改动；导出时合作者的修订原样、仍归在他名下', () => {
+    const t = importInto(docx(TRACKED + p('结果段落。')))
+    const [del, ins] = [0, 1].map(i => t.docs.get(t.docId).child(i).attrs.id as string)
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: ins!, find: '主要终点为', replace: '首要终点是' }] }, { actor: 'ai', turnId: 't1' })
+    const doc = t.docs.get(t.docId)
+    expect([doc.child(0).textContent, doc.child(1).textContent]).toEqual(['首要终点是总生存期。', '首要终点是总生存期（意向性治疗人群）。'])
+    expect([doc.child(0).attrs.id, doc.child(0).attrs.suggest, doc.child(1).attrs.suggest_author]).toEqual([del, 'delete', 'Li Ming'])
+    const texts = (d: typeof doc) => { const o: string[] = []; d.forEach(n => o.push(n.textContent)); return o }
+    expect(texts(resolveSuggestions(doc, null, true))[0]).toBe('首要终点是总生存期（意向性治疗人群）。')
+    expect(texts(resolveSuggestions(doc, null, false))[0]).toBe('首要终点是总生存期。')
+    const first = firstPara(t.exportNow().bytes)
+    expect(first).toContain('首要终点是总生存期')
+    expect(first).toContain('<w:del w:id="1" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"><w:r><w:delText>。</w:delText></w:r></w:del>')
+    expect(first).toContain('<w:ins w:id="2" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"><w:r><w:t>（意向性治疗人群）。</w:t></w:r></w:ins>')
+    expect(first).not.toContain('Heurion AI')
+  })
+
+  it('待采纳模式（suggest）下改合作者修订以外的文字：仍是同一对修订，不另起一对', () => {
+    const t = importInto(docx(TRACKED))
+    const ins = t.docs.get(t.docId).child(1).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id: ins, find: '主要终点为', replace: '首要终点是' }] }, { actor: 'ai', turnId: 't1' })
+    const kinds: Array<[unknown, string]> = []
+    t.docs.get(t.docId).forEach(n => kinds.push([n.attrs.suggest, n.textContent]))
+    expect(kinds).toEqual([['delete', '首要终点是总生存期。'], ['insert', '首要终点是总生存期（意向性治疗人群）。']])
+  })
+
+  it('改动碰到合作者修订的文字：拒绝并指出修订改的是哪部分', () => {
+    const t = importInto(docx(TRACKED))
+    const ins = t.docs.get(t.docId).child(1).attrs.id as string
+    expect(() => t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: ins, find: '意向性治疗人群', replace: 'ITT 人群' }] }, { actor: 'ai', turnId: 't1' }))
+      .toThrow(/碰到了 Li Ming 的修订/)
+    expect(() => t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id: ins, markdown: '主要终点是总生存期（ITT）。' }] }, { actor: 'ai', turnId: 't2' }))
+      .toThrow(/碰到了 Li Ming 的修订/)
   })
 
   it('用户采纳后：导出的是采纳后的文字，没有修订标记', () => {
@@ -259,5 +307,56 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
     const kinds: Array<[unknown, unknown, string]> = []
     back.doc.forEach(n => kinds.push([n.attrs.suggest, n.attrs.suggest_author, n.textContent]))
     expect(kinds.slice(0, 2)).toEqual([['delete', 'Heurion AI', '随访 3 年。'], ['insert', 'Heurion AI', '随访 36 个月。']])
+  })
+})
+
+// —— 改过的段落按原文 XML 打补丁 ——
+
+describe('改过的段落按原文 XML 打补丁：只改变化的文字，其余原样', () => {
+  const R = (t: string, rpr = '') => `<w:r>${rpr ? `<w:rPr>${rpr}</w:rPr>` : ''}<w:t xml:space="preserve">${t}</w:t></w:r>`
+  const edit = (xml: string, op: (id: string) => object) => {
+    const t = importInto(docx(xml + p('其他段落。')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [op(id)] }, { actor: 'user', turnId: null })
+    return firstPara(t.exportNow().bytes)
+  }
+
+  it('书签、符号、高亮、编辑权限、行内公式在原处保留；改的文字写进原 run', () => {
+    const MATH = '<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>x</m:t></m:r></m:oMath>'
+    const xml = `<w:p><w:bookmarkStart w:id="1" w:name="_Ref1"/>${R('随访 3 年，')}<w:bookmarkEnd w:id="1"/><w:r><w:sym w:font="Symbol" w:char="F062"/></w:r>${R('高亮文字', '<w:highlight w:val="yellow"/>')}<w:permStart w:id="5" w:edGrp="everyone"/>${R('权限区')}<w:permEnd w:id="5"/>${MATH}${R('结尾。')}</w:p>`
+    const out = edit(xml, id => ({ op: 'replace_text', id, find: '3 年', replace: '36 个月' }))
+    expect(out).toContain('<w:bookmarkStart w:id="1" w:name="_Ref1"/><w:r><w:t xml:space="preserve">随访 36 个月，</w:t></w:r><w:bookmarkEnd w:id="1"/>')
+    for (const kept of ['<w:sym w:font="Symbol" w:char="F062"/>', '<w:highlight w:val="yellow"/>', '<w:permStart w:id="5" w:edGrp="everyone"/>', MATH]) expect(out).toContain(kept)
+  })
+
+  it('整段改写：相同的部分保留原 run，新文字沿用相邻 run 的格式；加粗等格式变化另起 run', () => {
+    const xml = `<w:p>${R('甲组 ', '<w:color w:val="FF0000"/>')}${R('62.9%', '<w:b/>')}${R('，乙组 52.7%。')}</w:p>`
+    const out = edit(xml, id => ({ op: 'replace_block', id, markdown: '甲组 **63.0%**，乙组 52.7%（P = 0.13）。' }))
+    expect(out).toContain('<w:color w:val="FF0000"/></w:rPr><w:t xml:space="preserve">甲组 </w:t>')
+    expect(out).toMatch(/<w:b\/><\/w:rPr><w:t xml:space="preserve">63\.0%<\/w:t>/)
+    expect(out).toContain('，乙组 52.7%（P = 0.13）。')
+  })
+
+  it('表格结构没变、改了单元格文字：以原表为底，嵌套表与行的修订原样保留', () => {
+    const tc = (inner: string) => `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr>${inner}</w:tc>`
+    const nested = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr>${tc(p('内表'))}</w:tr></w:tbl>`
+    const tbl = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr>${tc(p('左上'))}${tc(nested + p(''))}</w:tr><w:tr><w:trPr><w:ins w:id="9" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"/></w:trPr>${tc(p('新行'))}${tc(p('值'))}</w:tr></w:tbl>`
+    const t = importInto(docx(tbl))
+    const cell = t.docs.get(t.docId).child(0).child(0).child(0).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: cell, find: '左上', replace: '左上角' }] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain('左上角')
+    expect(body).toContain(nested)
+    expect(body).toContain('<w:trPr><w:ins w:id="9" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"/></w:trPr>')
+  })
+
+  it('正文层级的内容控件：不改时原样写回；改了里面的段落仍包在原控件里', () => {
+    const sdt = `<w:sdt><w:sdtPr><w:tag w:val="abstract"/></w:sdtPr><w:sdtContent>${p('摘要第一段。')}${p('摘要第二段。')}</w:sdtContent></w:sdt>`
+    const original = docx(sdt + p('正文。'))
+    const t = importInto(original)
+    expect(bodyOf(t.exportNow().bytes)).toBe(bodyOf(original))
+    const id = t.docs.get(t.docId).child(1).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '第二段', replace: '第二部分' }] }, { actor: 'user', turnId: null })
+    expect(bodyOf(t.exportNow().bytes)).toMatch(/^<w:sdt><w:sdtPr><w:tag w:val="abstract"\/><\/w:sdtPr><w:sdtContent>.*摘要第一段.*摘要第二部分.*<\/w:sdtContent><\/w:sdt>/)
   })
 })
