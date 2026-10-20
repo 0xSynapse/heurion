@@ -1,3 +1,4 @@
+import { strFromU8, unzipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { docxFor } from '../src/convert/exports.ts'
 import { pendingGroups, resolveSuggestions, withoutPending } from '../src/ops/suggest.ts'
@@ -54,10 +55,10 @@ describe('修订版与原文版：后续修改并入同一条修订（生产事�
   })
 
   for (const mode of ['apply', 'suggest'] as const) {
-    it(`整段替换（replace_block，${mode}）用户修订的修订版：仍是同一条修订，拒绝后回到原文（v2 预实验：修订版变成普通正文）`, () => {
+    it(`整段替换（replace_block，${mode}）AI 自己修订的修订版：仍是同一条修订，拒绝后回到原文（v2 预实验：修订版变成普通正文）`, () => {
       const t = setup('结果第一段。\n\n结果第二段。')
       const [p1] = ids(t.docs, t.docId)
-      t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id: p1!, find: '第一段', replace: '第一段（意向性分析人群）' }] }, { actor: 'user' as const, turnId: null })
+      t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id: p1!, find: '第一段', replace: '第一段（意向性分析人群）' }] }, AI)
       const copy = ids(t.docs, t.docId)[1]!
       t.ops.edit({ doc_id: t.docId, base_rev: 1, mode, ops: [{ op: 'replace_block', id: copy, markdown: '改写后的结果段（意向性分析人群）。\n\n补充的一段。' }] }, AI)
       const doc = t.docs.get(t.docId)
@@ -70,6 +71,33 @@ describe('修订版与原文版：后续修改并入同一条修订（生产事�
       expect(texts(resolveSuggestions(doc, null, true))).toEqual(['改写后的结果段（意向性分析人群）。', '补充的一段。', '结果第二段。'])
     })
   }
+
+  it('用户自己的修订记作者并受保护：AI 改到修订文字被拦下；改修订以外的文字同步到原文版本；导出时修订归在用户名下（v2 1a：医生的修订被 AI 改写后丢失）', () => {
+    const t = setup('结果第一段，主要终点为总生存期。\n\n结果第二段。')
+    t.store.createUser({ id: 'dq', username: 'dongqian', display_name: 'Dong Qian', password_hash: 'x' })
+    const [p1] = ids(t.docs, t.docId)
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id: p1!, find: '总生存期', replace: '总生存期（意向性分析人群）' }] }, { actor: 'user', turnId: null, user: 'dq' })
+    const [del, copy] = ids(t.docs, t.docId)
+    expect([t.docs.get(t.docId).child(0).attrs.suggest_author, t.docs.get(t.docId).child(1).attrs.suggest_author]).toEqual(['Dong Qian', 'Dong Qian'])
+    // AI 整段改写、去掉了医生加的文字：拦下
+    const err = errOf(() => t.ops.edit({ doc_id: t.docId, base_rev: 1, mode: 'apply', ops: [{ op: 'replace_block', id: copy!, markdown: '结果显示主要终点为总生存期。' }] }, AI))
+    expect(err?.code).toBe('pending_suggestion')
+    expect(err?.message).toContain('Dong Qian')
+    // AI 改原文版本：拦下并指向修订版
+    expect(errOf(() => t.ops.edit({ doc_id: t.docId, base_rev: 1, mode: 'apply', ops: [{ op: 'replace_text', id: del!, find: '结果第一段', replace: '结果首段' }] }, AI))?.code).toBe('pending_suggestion')
+    // 改修订以外的文字：通过，并同步到原文版本
+    t.ops.edit({ doc_id: t.docId, base_rev: 1, mode: 'apply', ops: [{ op: 'replace_text', id: copy!, find: '结果第一段', replace: '结果首段' }] }, AI)
+    const texts = (d: Doc) => { const o: string[] = []; d.forEach(n => o.push(n.textContent)); return o }
+    expect(texts(resolveSuggestions(t.docs.get(t.docId), null, true))[0]).toBe('结果首段，主要终点为总生存期（意向性分析人群）。')
+    expect(texts(resolveSuggestions(t.docs.get(t.docId), null, false))[0]).toBe('结果首段，主要终点为总生存期。')
+    // 用户自己可以直接改自己的修订
+    t.ops.edit({ doc_id: t.docId, base_rev: t.docs.rev(t.docId), mode: 'apply', ops: [{ op: 'replace_text', id: copy!, find: '意向性分析人群', replace: 'ITT 人群' }] }, { actor: 'user', turnId: null, user: 'dq' })
+    expect(t.docs.get(t.docId).child(1).textContent).toContain('ITT 人群')
+    // 导出：修订归在 Dong Qian 名下
+    const body = strFromU8(unzipSync(docxFor(t.docs, t.docId).bytes)['word/document.xml']!)
+    expect(body).toContain('w:author="Dong Qian"')
+    expect(body).not.toContain('w:author="Heurion AI"')
+  })
 
   it('删掉还没采纳的新增段落：直接消失，不留待删除的残块', () => {
     const t = setup('甲段。\n\n乙段。')

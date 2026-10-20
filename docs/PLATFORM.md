@@ -132,7 +132,8 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 | 参数 | op 形状、markdown、`base_rev` | `invalid_markdown` / `invalid_base_rev` / zod 校验错误 |
 
 - **为什么用 `base_rev` + 节点变更索引，而不是 `expectText`：** `expectText` 要求模型复述原文，「复述原文失配」正是 S 系列要消灭的失败来源；按 id + rev 判定冲突不依赖模型抄写，且冲突时直接返回当前内容，模型一次就能改对。
-- **`replace_text` 以原文为守卫**（对齐 Claude Docs 的 find 编辑）：`find` 必须在块内原样出现，用户改掉了这几个字就自然匹配不上（`text_not_found`，附当前内容），所以不再按 `base_rev` 判冲突——用户改了同一段的别处不影响 AI 的小改。整块替换（`replace_block` 等）仍按 `base_rev`。
+- **`replace_text` / `replace_all` 以原文为守卫**（对齐 Claude Docs 的 find 编辑）：`find` 必须在块内原样出现，用户改掉了这几个字就自然匹配不上（`text_not_found`，附当前内容），所以不再按 `base_rev` 判冲突——用户改了同一段的别处不影响 AI 的小改；`merge` 原样搬运现有内容，同样不看 rev。整块替换（`replace_block` 等）按「AI 最后一次看到这一块」判冲突：平台记下 AI 经 `doc_read` 读到、自己写入、或随冲突拒绝拿到各块内容时的版本，用户在那之后改过就拦下（AI 凭前几轮的记忆、拿新 rev 整段重写会冲掉用户在轮次之间的修改）；没读过的块按 `base_rev`。幻灯片仍按 `base_rev`。
+- **原有引用守卫**：稿件原有的文中编号（`[5]`、`[3,4]`）对应用户自己的参考文献表；AI 把它们换成平台引用 `[@c:…]` 会接管并改写用户的条目与编号，拦下（`existing_citation`），新补的引用照常用 `[@c:…]`。
 - **匹配规则**：块内字面匹配，不跨块；引用标记、硬换行算一个单位，`find` 不能跳过它们（「只在引用后追加」的情形例外，见代码）；空白不做容错。失配时不猜，返回 `near`（空白 / 大小写不同、中间隔着引用的写法，带可直接重试的原文）；多处匹配返回每处上下文，带 `occurrence` 重试。大小写不同且唯一时直接按不区分大小写匹配。
 - **Yjs 写入核对**：`updateYFragment` 后读回核对。y-prosemirror 1.3.7 在引用等行内原子节点之后的文字只改格式时不更新格式属性（实测）；修补在原有 Yjs 元素上补格式与元素属性（以临时 Y.Doc 里生成的同内容作参照），不删不换元素，协作者的并发输入与回合撤销都不受影响。
 - **最小差异写入**：替换只改真正变化的字（去掉相同的开头与结尾），引用、格式、评论锚点落在保留下来的字上不动。纯文字替换按文字比较，保留的字保持原格式；新插入的字沿用被替换的第一个字的格式，纯插入取左右邻字共有的格式。
@@ -155,7 +156,7 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 
 ### 5.5 引用规范
 
-- `pubmed_search` → `insert_citation`（DOI 必须能在 Crossref 查到）→ 正文写返回的 `[@c:<cite_id>]`。
+- `pubmed_search` → `insert_citation`（DOI 必须能在 Crossref 查到）→ 正文写返回的 `[@c:<cite_id>]`。`insert_citation` 只给检索词时不替 AI 挑第一条，而是返回候选文献（含摘要摘录），由 AI 读过后按 DOI / PMID 登记；登记时一并返回摘要摘录，供核对研究结果是否支持所在句子（登记了但正文没用到的不进文献表）。Crossref 的题目拼上副标题。`import_references` 只在用户给了文献列表并要求导入时用。
 - 引用在模型里是行内原子节点 `citation(cite_id)`：编号按文中首次出现顺序计算，参考文献表由平台在预览 / 导出时生成；模型不能手写编号或参考文献表。
 - 守卫在写入前拦截正文里的 DOI / PMID / 手写参考文献；不再需要回合后审计与自修。
 
@@ -228,7 +229,7 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | `doc_history` / `doc_diff` | `doc_id` / `from_version, to_version?` | 版本列表 / 块级变化 |
 | `comments_list` / `comment_reply` / `comment_resolve` | `doc_id, …` | 线程与锚点 / 回复（role=ai）/ 关闭（规则见 §5.4） |
 | `pubmed_search` / `doi_lookup` | 检索式 / DOI | 文献元数据 |
-| `insert_citation` / `list_citations` | `doc_id, doi` / `doc_id` | `cite_id` 与 `[@c:id]` 标记 / 登记表与文中编号 |
+| `insert_citation` / `list_citations` | `doc_id, doi \| pmid \| query` / `doc_id` | `cite_id`、`[@c:id]` 标记与摘要摘录（只给 query 时返回候选，不登记）/ 登记表与文中编号 |
 | `asset_upload` | 工作区内相对路径 | `asset_id`（png/jpg/svg/gif/webp ≤ 10MB；路径限制在工作区内） |
 | `kb_search` | `query, file_ids?, project?, top_k?` | 参考资料库片段与出处（文件、页码、DOI / PMID）；关键词 + 向量（本地 bge-m3）RRF 合并 |
 | `kb_read` | `file_id, from_page?, to_page?` | 资料原文（按页） |
@@ -243,6 +244,8 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | `insert_after` / `insert_before` | `anchor_id, markdown` | 插入一个或多个块；锚点是列表项时插入列表项 |
 | `replace_block` | `id, markdown` | 整块替换，第一个块沿用原 id 与段落样式 |
 | `replace_text` | `id, find, replace, occurrence?` | 块内替换，**小改动首选**：原文即守卫（不看 `base_rev`）、最小差异写入、保留格式 / 引用 / 锚点；find 容忍 markdown 转义与强调符号；失配返回近似候选 |
+| `replace_all` | `scope, find, replace, whole_word?` | 范围内全部替换：`scope` 为章节标题 id 时为该节全部正文（含列表、表格，不含标题），为块 id 时为该块；待采纳修订与不可编辑块跳过；`find` 为英文单词时默认只换完整单词；原文即守卫 |
+| `merge` | `ids` | 把按顺序相邻的段落 / 标题并入第一个：行内内容（格式、批注标记、脚注与域、引用）原样搬运，中间按需补空格（中文之间不补）；待采纳修订与不相邻的块拒绝；评论线程记录跟到合并后的块 |
 | `delete` | `ids` | 删除最后一个块时留空段落 |
 | `move` | `ids, after`（null = 文档开头） | |
 | `set_block_style` | `id, type?, level?, align?, style?` | 段落 ↔ 标题、级别、对齐、Word 样式名 |
@@ -251,7 +254,7 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | `table_set_header` | `id, rows` | 开头 rows 行设为表头并把表格标为 `header_explicit`；docx 导出时开头连续的表头行跨页重复（优先于导入 / 自动规则，单列表格也照办；行数由单元格推出，增删行不会过时）；合并单元格不能跨过表头边界 |
 | `table_set_style` | `id, col_widths?, cells?[{row, col, background?, valign?}]` | 列宽为相对比例（导出按原表总宽或 9000 twip 分配，增删列时同步）；底纹 / 垂直对齐覆盖原文件的单元格属性，`null` 恢复原样；文字左中右对齐用 `set_block_style` 改单元格段落 |
 
-`mode: 'suggest'`：修改作为待采纳修订提交（块级：改动的块 = 原块待删除 + 新块待新增；新增块待新增；删除的块留在原位待删除；同一批共享修订组）。页面勾选「修订模式」时回合在服务端强制 suggest，不依赖模型传参。修订中的块不能再被 AI 修改（`pending_suggestion`）；读视图标出 `⟨待采纳·新增 / 删除⟩`；导出按「未采纳」处理。
+`mode: 'suggest'`：修改作为待采纳修订提交（块级：改动的块 = 原块待删除 + 新块待新增；新增块待新增；删除的块留在原位待删除；同一批共享修订组）。页面勾选「修订模式」时回合在服务端强制 suggest，不依赖模型传参。原文版本（待删除）不能再被 AI 修改（`pending_suggestion`，提示改修订版）；AI 自己的修订，修订版可以继续改、改动并入同一条修订；**用户自己提的修订记作者（显示名）**，与 Word 导入的合作者修订同样处理——AI 只能改修订以外的文字（同步到原文版本），碰到修订的文字拦下，用户自己可以直接改；读视图标出 `⟨待采纳·新增 / 删除·作者⟩`；段落的修订导出为 Word 修订，归在作者名下（AI 的修订为 Heurion AI）。
 
 ### 8.3 安全边界
 

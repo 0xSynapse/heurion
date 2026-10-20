@@ -49,6 +49,12 @@ export function applyOps(doc: PMNode, ops: DocOp[], ctx: ApplyContext): { doc: P
       case 'table_set_style':
         targetedIds.add(op.id)
         break
+      case 'replace_all':
+        targetedIds.add(op.scope)
+        break
+      case 'merge':
+        for (const id of op.ids) targetedIds.add(id)
+        break
       case 'delete':
         for (const id of op.ids) targetedIds.add(id)
         break
@@ -105,6 +111,10 @@ function applyOne(tr: Transform, op: DocOp, ctx: ApplyContext, targetedIds: Set<
       return replaceBlock(tr, op.id, op.markdown, ctx, targetedIds)
     case 'replace_text':
       return replaceText(tr, op)
+    case 'replace_all':
+      return replaceAll(tr, op)
+    case 'merge':
+      return mergeBlocks(tr, op.ids)
     case 'delete':
       for (const id of op.ids) deleteBlock(tr, id, ctx)
       return op.ids
@@ -612,6 +622,85 @@ function replaceText(tr: Transform, op: Extract<DocOp, { op: 'replace_text' }>):
   const outcome = replaceInTextblock(tr, target.node, target.pos, op, parseInline)
   if (!outcome.ok) throw replaceError(outcome, `块 ${op.id} `, serializeBlock(target.node, { ids: true }, ''))
   return [op.id]
+}
+
+/**
+ * 范围内全部替换：章节标题 → 该节正文（到下一个同级或更高级标题为止，不含标题），其他块 → 该块；
+ * 范围内的段落、列表项、表格单元格逐个替换（从后往前，前面的位置不变）；待采纳修订与不可编辑块跳过。
+ * 原文本身就是守卫：用户改掉了的字匹配不上，不会被替换。
+ */
+function replaceAll(tr: Transform, op: Extract<DocOp, { op: 'replace_all' }>): string[] {
+  const target = find(tr, op.scope)
+  const ranges: Array<{ from: number; to: number }> = []
+  const $pos = tr.doc.resolve(target.pos)
+  if (target.node.type.name === 'heading' && $pos.depth === 0) {
+    const level = target.node.attrs.level as number
+    let pos = target.pos + target.node.nodeSize
+    for (let i = $pos.index() + 1; i < tr.doc.childCount; i++) {
+      const sib = tr.doc.child(i)
+      if (sib.type.name === 'heading' && (sib.attrs.level as number) <= level) break
+      if (sib.type.name !== 'heading') ranges.push({ from: pos, to: pos + sib.nodeSize })
+      pos += sib.nodeSize
+    }
+  } else ranges.push({ from: target.pos, to: target.pos + target.node.nodeSize })
+  const blocks: number[] = []
+  for (const r of ranges) {
+    tr.doc.nodesBetween(r.from, r.to, (n, pos) => {
+      if (n.attrs.suggest || n.type.name === 'opaque') return false
+      if (n.isTextblock) { blocks.push(pos); return false }
+      return true
+    })
+  }
+  const word = op.whole_word ?? /^[A-Za-z][A-Za-z-]*$/.test(op.find)
+  const changed: string[] = []
+  let count = 0
+  // 从后往前改：前面块的位置不受影响
+  for (const pos of blocks.reverse()) {
+    const node = tr.doc.nodeAt(pos)!
+    const text = textMap(node, pos).text
+    const all = allIndexes(text, op.find)
+    const keep = all.map((h, i) => ({ h, i })).filter(({ h }) => !word || (!/[A-Za-z0-9]/.test(text[h - 1] ?? '') && !/[A-Za-z0-9]/.test(text[h + op.find.length] ?? '')))
+    if (keep.length === 0) continue
+    for (const { i } of keep.reverse()) {
+      const outcome = replaceInTextblock(tr, tr.doc.nodeAt(pos)!, pos, { find: op.find, replace: op.replace, occurrence: i + 1 }, parseInline)
+      if (!outcome.ok) throw replaceError(outcome, `块 ${node.attrs.id ?? ''} `, serializeBlock(node, { ids: true }, ''))
+      count++
+    }
+    if (node.attrs.id) changed.push(node.attrs.id as string)
+  }
+  if (count === 0) {
+    throw new OpError('text_not_found', `范围 ${op.scope} 里没有找到「${op.find}」`, { hint: '检查原文写法（逐字复制），或换一个范围（章节标题 id 指整节正文，不含标题）。' })
+  }
+  return changed
+}
+
+/**
+ * 合并段落：按顺序相邻的段落（同一父节点下紧挨着）并入第一个，中间按需补一个空格；
+ * 行内内容（文字、格式、批注标记、脚注与域、引用）原样搬过去，不经 markdown 重写。待采纳修订不能合并。
+ */
+function mergeBlocks(tr: Transform, ids: string[]): string[] {
+  const hits = ids.map(id => ({ id, ...find(tr, id) }))
+  for (const h of hits) {
+    if (!h.node.isTextblock) throw new OpError('invalid_structure', `merge 只能合并段落或标题，${h.id} 是 ${h.node.type.name}`, { hint: '列表项、表格请用 replace_block 或表格操作。' })
+    if (h.node.attrs.suggest) throw new OpError('pending_suggestion', `块 ${h.id} 是待采纳修订，不能合并`, { hint: '等用户采纳或拒绝后再合并。' })
+  }
+  for (let i = 1; i < hits.length; i++) {
+    const prev = hits[i - 1]!
+    if (hits[i]!.pos !== prev.pos + prev.node.nodeSize) throw new OpError('invalid_structure', `${prev.id} 与 ${hits[i]!.id} 不相邻，不能合并`, { hint: 'ids 按文档顺序列出紧挨着的段落；不相邻的先用 move 挪到一起。' })
+  }
+  const first = hits[0]!
+  let content = first.node.content
+  for (const h of hits.slice(1)) {
+    const left = content.lastChild?.isText ? content.lastChild.text! : ''
+    const right = h.node.firstChild?.isText ? h.node.firstChild.text! : ''
+    // 中文之间不加空格；两边都没有空白时补一个
+    const cjk = /[\u3000-\u9fff\uff00-\uffef]$/.test(left) && /^[\u3000-\u9fff\uff00-\uffef]/.test(right)
+    if (left && right && !/\s$/.test(left) && !/^\s/.test(right) && !cjk) content = content.addToEnd(tr.doc.type.schema.text(' ', content.lastChild!.marks.filter(m => m.type.name !== 'link')))
+    content = content.append(h.node.content)
+  }
+  const last = hits[hits.length - 1]!
+  tr.replaceWith(first.pos, last.pos + last.node.nodeSize, first.node.type.create(first.node.attrs, content, first.node.marks))
+  return [first.id]
 }
 
 function deleteBlock(tr: Transform, id: string, ctx: ApplyContext): void {

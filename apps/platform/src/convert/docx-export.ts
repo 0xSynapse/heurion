@@ -444,14 +444,13 @@ export function exportDocx(input: ExportInput): ExportResult {
     const next = i + 1 < input.doc.childCount ? input.doc.child(i + 1) : null
     const partner = n.attrs.suggest === 'delete' && next?.attrs.suggest === 'insert' && next.attrs.suggest_of === n.attrs.id ? next : null
     const src = unchanged(n)
-    if (!src) {
+    // 修订版改过（不论原文版本是否同步改过——AI 的改动会同步过去，用户直接改修订版则不会）：按原文 XML 打补丁
+    const partnerChanged = !!partner && !unchanged(partner) && !baseline.get(partner.attrs.id as string)?.eq(partner)
+    if (!src || partnerChanged) {
       if (partner && input.src(n.attrs.id as string) && baseline.get(partner.attrs.id as string)) coauthorEdited.set(n.attrs.id as string, partner)
       return
     }
-    if (partner) {
-      if (!unchanged(partner) && !baseline.get(partner.attrs.id as string)?.eq(partner)) return
-      skipRevision.add(partner.attrs.id as string)
-    }
+    if (partner) skipRevision.add(partner.attrs.id as string)
     verbatimRevision.set(n.attrs.id as string, src)
   })
   /** 段落内容整体标为插入 / 删除（每个 run 包进 w:ins / w:del，段落标记也一并标记，接受或拒绝后不留空段）。 */

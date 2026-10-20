@@ -19,6 +19,7 @@ import type { SlideRenderer } from '../render/slides.ts'
 import { exportMarkdown } from '../views/render.ts'
 import { deckOutline, deckRead, slideRead } from '../views/deck.ts'
 import { checkLayout } from '../views/layout.ts'
+import type { Article } from '../literature/types.ts'
 import type { CrossrefClient } from '../literature/crossref.ts'
 import { formatAma, formatCitation, normalizeDoi, type CitationStyle } from '../literature/format.ts'
 import { relevantPassages, type FullTextClient } from '../literature/fulltext.ts'
@@ -294,7 +295,9 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     description:
       '按块 id 编辑文档：一批操作原子提交（任一失败则全部不生效）。base_rev 用最近一次读到的 rev。' +
       '操作：insert_after / insert_before {anchor_id, markdown}；replace_block {id, markdown}；' +
-      'replace_text {id, find, replace, occurrence?}（块内替换，小改动首选：find 即守卫，不受 base_rev 限制；只改变化的字）；delete {ids}；' +
+      'replace_text {id, find, replace, occurrence?}（块内替换，小改动首选：find 即守卫，不受 base_rev 限制；只改变化的字）；' +
+      'replace_all {scope, find, replace, whole_word?}（范围内全部替换：scope 为章节标题 id 时替换该节全部正文〔含列表、表格，不含标题〕，为块 id 时替换该块；统一用词等批量修改用它，不必逐段读写）；' +
+      'merge {ids}（把按顺序相邻的段落并入第一个：原文、格式、批注、脚注与引用原样保留，不要手工复制后一段再删除）；delete {ids}；' +
       'move {ids, after}；set_block_style {id, type?, level?, align?, style?}；' +
       'set_text_style {id, font_family?, size?, bold?, italic?, color?, range?}（修改文字字体、字号、粗体、斜体、颜色）；' +
       'table_set_cells {id, cells:[{row, col, markdown}]}；table_insert_rows {id, at, rows}；table_delete_rows {id, at, count}；table_insert_cols {id, at, cells?}；table_delete_cols {id, at, count}；' +
@@ -689,8 +692,23 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     inputSchema: { doi: z.string().min(1) },
   }, async ({ doi }) => json(await deps.crossref.lookup(doi) ?? { found: false, doi: normalizeDoi(doi) }))
 
+  /** 文献摘要摘录（前 600 字，供 AI 核对是否支持所在句子）；查不到为 null。 */
+  const abstractExcerpt = async (a: { pmid: string | null; doi: string | null }): Promise<string | null> => {
+    try {
+      let pmid = a.pmid
+      if (!pmid && a.doi && typeof deps.pubmed?.pmidForDoi === 'function') pmid = await deps.pubmed.pmidForDoi(a.doi).catch(() => null)
+      if (!pmid || typeof deps.pubmed?.abstract !== 'function') return null
+      const text = await deps.pubmed.abstract(pmid)
+      return text ? text.replace(/\s+/g, ' ').trim().slice(0, 600) : null
+    } catch {
+      return null
+    }
+  }
+
   server.registerTool('insert_citation', {
-    description: '为文档登记一条引用（支持 DOI、PMID 或标题模糊搜索），返回 cite_id。正文里写 [@c:<cite_id>] 引用它；编号与参考文献表由平台生成。',
+    description: '为文档登记一条引用，返回 cite_id 与该文献的摘要摘录。正文里写 [@c:<cite_id>] 引用它；编号与参考文献表由平台生成，登记了但正文没用到的不进文献表。' +
+      '按 DOI 或 PMID 登记；只给 query（题目或关键词）时不直接登记，而是返回候选文献（含摘要摘录），选定后再用 doi / pmid 登记。' +
+      '用之前读摘要，确认这篇文献的研究结果支持你要写的那句话（不能只是题目相关）；不支持就换一篇。补充的条数按用户要求，不要多加。',
     inputSchema: {
       doc_id: z.string(),
       doi: z.string().optional().describe('文献 DOI'),
@@ -733,15 +751,14 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
         }
       }
     }
-    if (!article && q) {
-      if (typeof deps.pubmed?.search === 'function') {
-        const hits = await deps.pubmed.search(q, 3).catch(() => [])
-        if (hits.length) article = hits[0] ?? null
-      }
-      if (!article && typeof deps.openalex?.search === 'function') {
-        const hits = await deps.openalex.search(q, 3).catch(() => [])
-        if (hits.length) article = hits[0] ?? null
-      }
+    // 只有检索词：返回候选文献，由 AI 读过摘要后选定再登记（不替它挑第一条——挑中的可能只是题目相关）
+    if (!article && q && !d && !p) {
+      let hits: Article[] = []
+      if (typeof deps.pubmed?.search === 'function') hits = await deps.pubmed.search(q, 5).catch(() => [])
+      if (hits.length === 0 && typeof deps.openalex?.search === 'function') hits = await deps.openalex.search(q, 5).catch(() => [])
+      if (hits.length === 0) return fail('citation_not_found', `检索词「${q}」在 PubMed/OpenAlex 查不到文献`, { hint: '换检索词，或用 pubmed_search / openalex_search 查找后按 DOI 或 PMID 登记。' })
+      const candidates = await Promise.all(hits.map(async h => ({ pmid: h.pmid, doi: h.doi, title: h.title, journal: h.journal, year: h.year, abstract: await abstractExcerpt(h) })))
+      return json({ registered: false, candidates, note: '还没有登记。读摘要后选一篇研究结果支持你那句话的，用它的 doi 或 pmid 再调用 insert_citation。' })
     }
     if (!article) {
       const code = d ? 'doi_not_found' : p ? 'pmid_not_found' : 'citation_not_found'
@@ -752,11 +769,16 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     const finalDoi = article.doi ? normalizeDoi(article.doi) : (article.pmid ? `pmid:${article.pmid}` : `ref:${randomUUID().slice(0, 8)}`)
     const finalUrl = article.doi ? `https://doi.org/${article.doi}` : (article.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${article.pmid}/` : null)
     const row = store.upsertCitation({ doc_id, doi: finalDoi, pmid: article.pmid ?? p ?? null, formatted, url: finalUrl })
-    return json({ cite_id: row.id, marker: `[@c:${row.id}]`, formatted: row.formatted, doi: row.doi, pmid: row.pmid })
+    const abstract = await abstractExcerpt({ ...article, pmid: article.pmid ?? p ?? null })
+    return json({
+      cite_id: row.id, marker: `[@c:${row.id}]`, formatted: row.formatted, doi: row.doi, pmid: row.pmid, abstract,
+      note: abstract ? '核对摘要：研究结果支持你要写的那句话再在正文用这个 cite_id；不支持就换一篇（没用到的引用不进文献表）。' : '查不到摘要：确认这篇文献确实支持那句话后再用。',
+    })
   })
 
   server.registerTool('import_references', {
     description:
+      '只在用户给了文献列表（粘贴或文件）并要求导入时用；不要用它把稿件里原有的参考文献表登记成平台引用（会改写用户原有的条目与编号）。' +
       '把一份文献列表批量登记到文档的引用登记表（RIS / BibTeX / PubMed MEDLINE / EndNote XML，或每行一个 DOI / PMID）。' +
       '每条按 DOI 经 Crossref 核实（只有 PMID 的经 PubMed 补 DOI），查不到的跳过并报告。登记后用 list_citations 拿 cite_id 引用。' +
       '用户给了参考文献列表（粘贴或在工作区里的文件内容）时用；与网页「导入参考文献」同一个操作。',

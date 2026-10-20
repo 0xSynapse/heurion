@@ -24,6 +24,17 @@ export const DocOp = z.discriminatedUnion('op', [
     replace: z.string().describe('替换为的行内 markdown；空串表示删除'),
     occurrence: z.number().int().min(1).optional().describe('原文在块内出现多次时指定第几处（从 1 开始）'),
   }),
+  z.object({
+    op: z.literal('replace_all'),
+    scope: z.string().min(1).describe('范围：章节标题 id（该节全部正文，含列表与表格，不含标题本身）或某个块 id'),
+    find: z.string().min(1).describe('要替换的原文（逐字）'),
+    replace: z.string().describe('替换为的行内 markdown'),
+    whole_word: z.boolean().optional().describe('只替换完整单词（find 是英文单词时默认 true，outpatients 里的 patients 不会被换）'),
+  }),
+  z.object({
+    op: z.literal('merge'),
+    ids: z.array(z.string().min(1)).min(2).describe('按顺序相邻的段落（或标题）：后面的并入第一个，原文、格式、批注、脚注与引用原样保留'),
+  }),
   z.object({ op: z.literal('delete'), ids: z.array(z.string().min(1)).min(1) }),
   z.object({
     op: z.literal('move'),
@@ -149,7 +160,10 @@ export function targetIds(op: DocOp): string[] {
       return []
     case 'delete':
     case 'move':
+    case 'merge':
       return op.ids
+    case 'replace_all':
+      return [op.scope]
     default:
       return [op.id]
   }
@@ -163,6 +177,7 @@ export function opTexts(op: DocOp): string[] {
     case 'replace_block':
       return [op.markdown]
     case 'replace_text':
+    case 'replace_all':
       return [op.replace]
     case 'table_set_cells':
       return op.cells.map(c => c.markdown)

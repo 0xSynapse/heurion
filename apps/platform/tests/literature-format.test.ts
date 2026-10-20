@@ -1,3 +1,4 @@
+import { fullTitle } from '../src/literature/crossref.ts'
 import { describe, expect, it } from 'vitest'
 import { formatAma, formatApa, formatCitation, formatGbt7714, formatVancouver } from '../src/literature/format.ts'
 import type { Article } from '../src/literature/types.ts'
@@ -92,5 +93,15 @@ describe('文献引用格式化引擎（M3）', () => {
     expect(formatCitation(sampleArticle, 'apa')).toBe(formatApa(sampleArticle))
     expect(formatCitation(sampleArticle, 'gbt7714')).toBe(formatGbt7714(sampleArticle))
     expect(formatCitation(sampleArticle, 'ama')).toBe(formatAma(sampleArticle))
+  })
+})
+
+describe('Crossref 题目带副标题', () => {
+  it('主题目 + 副标题拼成完整题目；主题目已含副标题时不重复（v2 1a：条目缺副标题被判为与文献不符）', () => {
+    expect(fullTitle('Chemoradiotherapy of Locally Advanced Esophageal Cancer', 'Long-term Follow-up of a Prospective Randomized Trial (RTOG 85-01)'))
+      .toBe('Chemoradiotherapy of Locally Advanced Esophageal Cancer: Long-term Follow-up of a Prospective Randomized Trial (RTOG 85-01)')
+    expect(fullTitle('Global cancer statistics 2020: GLOBOCAN estimates', 'GLOBOCAN estimates')).toBe('Global cancer statistics 2020: GLOBOCAN estimates')
+    expect(fullTitle('Trial A:', 'the results')).toBe('Trial A: the results')
+    expect(fullTitle('Trial B', '')).toBe('Trial B')
   })
 })

@@ -300,6 +300,50 @@ describe('doc_edit 操作', () => {
   })
 })
 
+describe('replace_all 与 merge（v2 1a 后增加）', () => {
+  const mdOf = (doc: ReturnType<ReturnType<typeof setup>['docs']['get']>) => { const xs: Parameters<typeof serializeBlocks>[0] = []; doc.forEach(n => (xs as unknown[]).push(n)); return serializeBlocks(xs, {}) }
+  const MD = '# 方法\n\n入组 patients 共 106 例，outpatients 除外。\n\n- 所有 patients 签署知情同意\n\n| 组别 | patients |\n| --- | --- |\n| A | 50 |\n\n# 结果\n\n结果中的 patients 不动。'
+  it('replace_all 按章节替换全部正文（含列表、表格），不含标题、不跨节；只换完整单词', () => {
+    const { docs, ops, docId } = setup(MD)
+    const h = ids(docs, docId)[0]!
+    ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_all', scope: h, find: 'patients', replace: 'participants' }] }, { actor: 'ai', turnId: null })
+    const md = mdOf(docs.get(docId))
+    expect(md).toContain('入组 participants 共 106 例，outpatients 除外。')
+    expect(md).toContain('所有 participants 签署')
+    expect(md).toContain('| 组别 | participants |')
+    expect(md).toContain('结果中的 patients 不动。')
+  })
+
+  it('replace_all 找不到时报错；待采纳修订里的不改', () => {
+    const { docs, ops, docId } = setup(MD)
+    const [h, p1] = ids(docs, docId)
+    expectOpError(() => ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_all', scope: h!, find: 'nonexistent', replace: 'x' }] }, { actor: 'ai', turnId: null }), 'text_not_found')
+    ops.edit({ doc_id: docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id: p1!, find: '106', replace: '107' }] }, { actor: 'ai', turnId: null })
+    ops.edit({ doc_id: docId, base_rev: 1, mode: 'apply', ops: [{ op: 'replace_all', scope: h!, find: 'patients', replace: 'participants' }] }, { actor: 'ai', turnId: null })
+    const texts: string[] = []
+    docs.get(docId).forEach(n => { if (n.attrs.suggest) texts.push(n.textContent) })
+    expect(texts.every(t => t.includes('patients'))).toBe(true)
+  })
+
+  it('merge 把相邻段落并入第一个：文字、格式、评论原样；中文之间不加空格；不相邻、修订拒绝', () => {
+    const { docs, ops, store, docId } = setup('First **bold** part.\n\nSecond part.\n\n第三段。\n\n第四段。\n\n第五段。')
+    const [a, b, c, d, e] = ids(docs, docId)
+    const thread = store.addComment({ doc_id: docId, node_id: b!, snippet: 'Second' })
+    docs.commit(docId, attachComment(docs.get(docId), b!, 'Second', thread.id).doc, { actor: 'user', turnId: null, ops: [] })
+    ops.edit({ doc_id: docId, base_rev: docs.rev(docId), mode: 'apply', ops: [{ op: 'merge', ids: [a!, b!] }, { op: 'merge', ids: [c!, d!] }] }, { actor: 'ai', turnId: null })
+    const doc = docs.get(docId)
+    expect(doc.childCount).toBe(3)
+    expect(doc.child(0).textContent).toBe('First bold part. Second part.')
+    expect(doc.child(0).attrs.id).toBe(a)
+    expect(mdOf(doc)).toContain('**bold**')
+    let anchored = false
+    doc.child(0).forEach(n => { if (n.marks.some(m => m.type.name === 'comment' && m.attrs.thread === thread.id)) anchored = true })
+    expect(anchored).toBe(true)
+    expect(doc.child(1).textContent).toBe('第三段。第四段。')
+    expectOpError(() => ops.edit({ doc_id: docId, base_rev: docs.rev(docId), mode: 'apply', ops: [{ op: 'merge', ids: [a!, e!] }] }, { actor: 'ai', turnId: null }), 'invalid_structure')
+  })
+})
+
 describe('守卫', () => {
   it('冲突：用户在 base_rev 之后改过的块，AI 不能整块改；用户改不受限', () => {
     const { docs, ops, docId } = setup(SAMPLE)
@@ -328,6 +372,18 @@ describe('守卫', () => {
     // 拒绝时已把当前内容给了 AI：按当前内容改即可通过
     ops.edit({ doc_id: docId, base_rev: docs.rev(docId), mode: 'apply', ops: [{ op: 'replace_block', id: p1!, markdown: '心力衰竭是少见疾病，需长期管理。' }] }, { actor: 'ai', turnId: null })
     expect(docs.get(docId).textContent).toContain('少见疾病，需长期管理')
+  })
+
+  it('原有的文中编号不能被 AI 换成平台引用（会接管并改写用户原有的文献表）；新补的引用照常；用户可以（v2 1a）', () => {
+    const { docs, ops, store, docId } = setup('心衰是常见病[3]，预后差[4,5]。')
+    const [p1] = ids(docs, docId)
+    const cite = store.upsertCitation({ doc_id: docId, doi: '10.1056/x', pmid: null, formatted: 'Doe J. Trial. N Engl J Med. 2020.', url: null })
+    const e = expectOpError(() => ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: p1!, find: '常见病[3]', replace: `常见病[@c:${cite.id}]` }] }, { actor: 'ai', turnId: null }), 'existing_citation')
+    expect(e.message).toContain('[3]')
+    expectOpError(() => ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id: p1!, markdown: `心衰是常见病[@c:${cite.id}]，预后差[4,5]。` }] }, { actor: 'ai', turnId: null }), 'existing_citation')
+    // 原有编号保留、另加新引用：可以
+    ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: p1!, find: '预后差[4,5]。', replace: `预后差[4,5]，且再住院率高[@c:${cite.id}]。` }] }, { actor: 'ai', turnId: null })
+    expect(docs.get(docId).textContent).toContain('[4,5]')
   })
 
   it('replace_text 以原文为守卫：旧 rev 也能改（原文还在），原文被用户改掉则匹配不上', () => {

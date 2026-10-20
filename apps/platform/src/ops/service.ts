@@ -153,10 +153,11 @@ export class OpService {
       })
     }
 
-    this.guardPending(batch, before, targetsOf)
+    this.guardPending(batch, before, targetsOf, ai)
     if (ai) {
       this.guardConflicts(batch, before, targetsOf, deck)
       this.guardCitations(batch, textsOf)
+      if (!deck) this.guardExistingCitations(batch as EditBatch, before)
       this.guardPatientRedlines(batch, textsOf, row)
     }
 
@@ -179,10 +180,10 @@ export class OpService {
         userEditedIds: ai ? store.userTouchedSince(batch.doc_id, batch.base_rev + 1) : undefined,
       })
     // 改了合作者修订的修订版：核对没碰到合作者的修订，并把改动同步到原文版本（用户拒绝修订后改动仍在）
-    const applied = deck ? appliedRaw : { ...appliedRaw, doc: this.coauthorEdits(before, appliedRaw.doc) }
+    const applied = deck || !ai ? appliedRaw : { ...appliedRaw, doc: this.coauthorEdits(before, appliedRaw.doc) }
     const results = applied.results
     let after = batch.mode === 'suggest'
-      ? toSuggestion(before, applied.doc, `g${randomBytes(4).toString('hex')}`)
+      ? toSuggestion(before, applied.doc, `g${randomBytes(4).toString('hex')}`, ai ? null : this.authorName(meta.user))
       : applied.doc
 
     let reanchored: string | null = null
@@ -214,6 +215,14 @@ export class OpService {
         const c = this.docs.store.getComment(batch.doc_id, f.thread)
         if (c) this.docs.store.setCommentAnchor(f.thread, f.nodeId, c.snippet)
       }
+      // 评论标记随内容搬到了别的块（合并、移动）：线程记录的所在块跟着更新
+      if (!sim.deck && event) {
+        const marks = threadMarks(sim.after)
+        for (const c of this.docs.store.listComments(batch.doc_id, 'open')) {
+          const at = marks.get(c.id)
+          if (at && at.node_ids.length > 0 && !at.node_ids.includes(c.node_id)) this.docs.store.setCommentAnchor(c.id, at.node_ids[0]!, c.snippet)
+        }
+      }
       return { doc_id: batch.doc_id, rev: event?.rev ?? sim.rev, results: sim.results, changes: event?.changes ?? [] }
     } catch (err) {
       if (err instanceof OpError && meta.actor === 'ai') {
@@ -235,7 +244,7 @@ export class OpService {
    * 待采纳修订：「待删除」的原文版本（块自身或它所在的表格、列表）不能再改——改了会让修订失去配对，
    * 采纳或导出时出现两份内容。待新增的修订版可以继续改，改动并入同一条修订（见 toSuggestion）。
    */
-  private guardPending(batch: EditBatch | DeckEditBatch, before: PMNode, targetsOf: (op: unknown) => string[]): void {
+  private guardPending(batch: EditBatch | DeckEditBatch, before: PMNode, targetsOf: (op: unknown) => string[], ai = true): void {
     const index = indexById(before)
     // 原文块 id → 它的修订版（待新增）块 id
     const copyOf = new Map<string, string>()
@@ -259,7 +268,8 @@ export class OpService {
           const $pos = before.resolve(hit.pos)
           for (let d = $pos.depth; d > 0 && !coauthor; d--) if (byCoauthor($pos.node(d))) coauthor = $pos.node(d)
         }
-        if (coauthor) {
+        // 有作者的修订（用户自己提的、Word 导入的合作者修订）只约束 AI；用户可以直接改
+        if (coauthor && ai) {
           // 合作者修订的修订版（待新增）本身：可以改合作者修订以外的文字（应用后由 coauthorEdits 核对并同步到原文版本）
           const editable = coauthor === hit.node && coauthor.attrs.suggest === 'insert' && (op.op === 'replace_text' || op.op === 'replace_block')
           if (editable) continue
@@ -342,6 +352,12 @@ export class OpService {
     for (const id of ids) m.set(id, Math.max(m.get(id) ?? -1, rev))
   }
 
+  /** 用户提修订时记在修订上的作者名（显示名，没有则用户名，再没有则「用户」）。 */
+  private authorName(userId: string | null | undefined): string {
+    const u = userId ? this.docs.store.getUser(userId) : undefined
+    return u?.display_name || u?.username || '用户'
+  }
+
   /** 冲突守卫：目标块在 AI 最后一次看到它（没看过则为 base_rev）之后被用户改过 → 拒绝，附当前内容。 */
   private guardConflicts(batch: EditBatch | DeckEditBatch, before: PMNode, targetsOf: (op: unknown) => string[], deck = false): void {
     const index = indexById(before)
@@ -349,7 +365,8 @@ export class OpService {
     const seen = deck ? undefined : this.seen.get(batch.doc_id)
     batch.ops.forEach((op, i) => {
       // 按原文修改（replace_text）不看 rev：原文本身就是守卫——用户改了这几个字，原文就匹配不上
-      if ((op as { op: string }).op === 'replace_text') return
+      // merge 原样搬运现有内容（用户改过的字也一并保留），同样不看 rev
+      if (['replace_text', 'replace_all', 'merge'].includes((op as { op: string }).op)) return
       for (const id of targetsOf(op)) {
         const userRev = this.docs.store.lastChangeBy(batch.doc_id, id, 'user')
         const since = seen?.get(id) ?? batch.base_rev
@@ -366,6 +383,31 @@ export class OpService {
           })
         }
       }
+    })
+  }
+
+  /**
+   * 原有引用守卫：稿件里原有的文中编号（[5]、[3,4]、[2–6]）对应用户自己的参考文献表。AI 把它们换成平台引用 [@c:…]
+   * 会接管并改写用户原有的条目与编号（之后移动段落还会全文重新编号）——除非用户要求，不允许；新补的引用照常用 [@c:…]。
+   */
+  private guardExistingCitations(batch: EditBatch, before: PMNode): void {
+    const MARK = /\[\d+(?:\s*[,，–\-]\s*\d+)*\]/g
+    const index = indexById(before)
+    batch.ops.forEach((op, i) => {
+      let oldText = ''
+      let newText = ''
+      if (op.op === 'replace_text' || op.op === 'replace_all') { oldText = op.find; newText = op.replace }
+      else if (op.op === 'replace_block') { const hit = index.get(op.id); oldText = hit ? hit.node.textContent : ''; newText = op.markdown }
+      else return
+      if (!/\[@c:/.test(newText)) return
+      const was: string[] = oldText.match(MARK) ?? []
+      const now: string[] = newText.replace(/\[@[cw]:[^\]]*\]/g, '').match(MARK) ?? []
+      const gone = was.filter(m => !now.includes(m))
+      if (gone.length === 0) return
+      throw new OpError('existing_citation', `这处修改把原有的文中编号 ${gone.slice(0, 3).join('、')} 换成了平台引用`, {
+        op_index: i,
+        hint: '稿件原有的文中编号对应用户自己的参考文献表，保持原样（不要登记成平台引用，也不要导入原有文献表）；只有新补充的文献用 [@c:…]。用户明确要求接管原有引用时再做。',
+      })
     })
   }
 
