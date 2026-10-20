@@ -1,8 +1,9 @@
 /**
  * 判定复核（ANALYSIS_PLAN §6）：按组分层随机抽取回合，生成复核条目（不含组别），供复核页面导入。
  *   cd apps/platform && npx tsx ../../paper/benchmarks/exp3/audit.ts <结果目录> --rate 0.1 --seed 7 --out <目录>
- * 每个条目：任务指令、人类布置说明、程序判定与理由、本回合前后有变化的块（完整文字）、AI 的最后回复、工具报错。
- * 读的是平台数据库的副本（不改动原始数据）。组别与用户另存在 key.json，复核结束后再对回。
+ * 每个条目：任务指令、人类布置说明（含判定标准）、本回合前后有变化的块（完整文字）、AI 的最后回复、工具报错。
+ * 复核对组别与程序判定都是盲的：组别、用户与程序判定（及理由）另存在 key.json，复核结束后再对回。
+ * 读的是平台数据库的副本（不改动原始数据）。
  */
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -35,7 +36,7 @@ let a = Number(values.seed) >>> 0
 const rand = () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296 }
 
 const items: unknown[] = []
-const key: Record<string, { arm: string; user: string; session: number; turn_id: string | null }> = {}
+const key: Record<string, { arm: string; user: string; session: number; turn_id: string | null; verdict: 'pass' | 'fail'; reason: string }> = {}
 for (const arm of ['off', 'frozen', 'utility']) {
   let rows: TurnRow[]
   try { rows = readFileSync(join(dir, `turns-${arm}.jsonl`), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)) } catch { continue }
@@ -63,12 +64,11 @@ for (const arm of ['off', 'frozen', 'utility']) {
     const messages = store.listMessages(r.doc_id) as Array<{ role: string; text?: string; content?: string }>
     const reply = [...messages].reverse().find(m => m.role === 'assistant')
     const id = `a${String(items.length + 1).padStart(3, '0')}`
-    key[id] = { arm, user: r.user, session: r.session, turn_id: r.turn_id }
+    key[id] = { arm, user: r.user, session: r.session, turn_id: r.turn_id, verdict: r.success ? 'pass' : 'fail', reason: r.detail || '' }
     items.push({
       id, order: items.length + 1, archetype: r.archetype, topic: r.topic,
       instruction: (messages.find(m => m.role === 'user')?.text ?? messages.find(m => m.role === 'user')?.content ?? '').replace(/^（[^）]*）/, ''),
       setup: SETUP[r.archetype] ?? '',
-      verdict: r.success ? 'pass' : 'fail', reason: r.detail || (r.success ? '程序判定通过' : ''),
       reverted: r.reverted, errors: r.errors, changes, reply: (reply?.text ?? reply?.content ?? '').slice(0, 3000),
     })
   }

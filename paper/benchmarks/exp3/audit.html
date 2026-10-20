@@ -40,8 +40,8 @@ header p { margin: 0; color: var(--muted); font-size: 13.5px; max-width: 70ch; }
 .items { display: grid; grid-template-columns: repeat(auto-fill, minmax(40px, 1fr)); gap: 6px; }
 .items button { font: 500 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; height: 32px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
 .items button.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.items button[data-v="agree"] { background: var(--ok-soft); border-color: var(--ok-soft); }
-.items button[data-v="disagree"] { background: var(--bad-soft); border-color: var(--bad-soft); }
+.items button[data-v="pass"] { background: var(--ok-soft); border-color: var(--ok-soft); }
+.items button[data-v="fail"] { background: var(--bad-soft); border-color: var(--bad-soft); }
 .items button[data-v="unsure"] { background: var(--unsure-soft); border-color: var(--unsure-soft); }
 .main { display: grid; gap: 16px; min-width: 0; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; display: grid; gap: 10px; min-width: 0; }
@@ -56,8 +56,8 @@ header p { margin: 0; color: var(--muted); font-size: 13.5px; max-width: 70ch; }
 .choice { font: inherit; text-align: left; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 9px 12px; cursor: pointer; display: grid; gap: 2px; }
 .choice span { font-size: 12.5px; color: var(--muted); }
 .choice kbd { font: 11px var(--font-mono); color: var(--muted); }
-.choice[data-v="agree"][aria-pressed="true"] { border-color: var(--ok); background: var(--ok-soft); }
-.choice[data-v="disagree"][aria-pressed="true"] { border-color: var(--bad); background: var(--bad-soft); }
+.choice[data-v="pass"][aria-pressed="true"] { border-color: var(--ok); background: var(--ok-soft); }
+.choice[data-v="fail"][aria-pressed="true"] { border-color: var(--bad); background: var(--bad-soft); }
 .choice[data-v="unsure"][aria-pressed="true"] { border-color: var(--unsure); background: var(--unsure-soft); }
 textarea { width: 100%; min-height: 56px; font: inherit; font-size: 14px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; resize: vertical; }
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
@@ -96,14 +96,14 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
       </section>
       <section class="card">
         <h2>程序判定（请判断它对不对）</h2>
-        <div class="verdict"><span class="pill" id="verdict"></span><span id="reason"></span></div>
+        <div class="verdict"><span id="reason"></span></div>
         <div class="errs" id="errs"></div>
         <div class="choices" role="group" aria-label="复核结论">
-          <button class="choice" data-v="agree" aria-pressed="false"><b>判定正确</b><span>程序的结论与我看到的一致</span><kbd>按 1</kbd></button>
-          <button class="choice" data-v="disagree" aria-pressed="false"><b>判定错误</b><span>该通过却判不通过，或反过来</span><kbd>按 2</kbd></button>
+          <button class="choice" data-v="pass" aria-pressed="false"><b>通过</b><span>任务按要求完成，没有破坏医生的内容</span><kbd>按 1</kbd></button>
+          <button class="choice" data-v="fail" aria-pressed="false"><b>不通过</b><span>没完成，或改坏 / 丢失了内容</span><kbd>按 2</kbd></button>
           <button class="choice" data-v="unsure" aria-pressed="false"><b>拿不准</b><span>材料不足以判断</span><kbd>按 3</kbd></button>
         </div>
-        <label for="note" class="saved">备注（判定错误或拿不准时，写下原因）</label>
+        <label for="note" class="saved">备注（不通过或拿不准时，写下原因）</label>
         <textarea id="note"></textarea>
         <div class="row"><span class="saved" id="saved">还没有复核</span><div class="nav"><button id="prev">上一条</button> <button id="next" class="primary">下一条</button></div></div>
       </section>
@@ -121,7 +121,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
 
 <script>
 const ARCH = { concurrent_edit: '并发修改', citation: '引用', pending_suggestion: '待采纳修订', open_comment_anchor: '多条批注', term_unify: '统一用词', table_row: '改表格', out_of_scope_revert: '限定范围润色', p_value_format: '统一 P 值格式', move_subsection: '移动小节 / 段落' }
-const LABEL = { agree: '判定正确', disagree: '判定错误', unsure: '拿不准' }
+const LABEL = { pass: '通过', fail: '不通过', unsure: '拿不准' }
 const $ = id => document.getElementById(id)
 let db = null, items = [], mine = {}, cur = 0
 
@@ -153,8 +153,8 @@ function render() {
   $('instr').textContent = it.instruction || '（没有取到任务指令）'
   $('no').textContent = `第 ${it.order} / ${items.length} 条`; $('arch').textContent = ARCH[it.archetype] || it.archetype; $('topic').textContent = it.topic
   $('setup').textContent = it.setup
-  const v = $('verdict'); v.textContent = it.verdict === 'pass' ? '程序判定：通过' : '程序判定：不通过'; v.className = 'pill ' + it.verdict
-  $('reason').textContent = (it.reverted ? '（回合后被模拟撤销）' : '') + (it.reason || '')
+  // 盲法：不显示程序判定与理由（在 key.json 里），只说明回合后是否被模拟撤销
+  $('reason').textContent = it.reverted ? '（回合后被模拟撤销）' : ''
   $('errs').textContent = (it.errors || []).length ? '工具报错：' + it.errors.map(e => `${e.tool}${e.code ? '(' + e.code + ')' : ''}`).join('，') : ''
   for (const c of document.querySelectorAll('.choice')) c.setAttribute('aria-pressed', String(c.dataset.v === mine[it.id]?.verdict))
   if (document.activeElement !== $('note')) $('note').value = mine[it.id]?.note || ''
@@ -182,7 +182,7 @@ let t = null; $('note').addEventListener('input', () => { clearTimeout(t); t = s
 $('prev').addEventListener('click', () => go(cur - 1)); $('next').addEventListener('click', () => go(cur + 1))
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'TEXTAREA') return
-  if (['1', '2', '3'].includes(e.key)) save({ verdict: ['agree', 'disagree', 'unsure'][Number(e.key) - 1] })
+  if (['1', '2', '3'].includes(e.key)) save({ verdict: ['pass', 'fail', 'unsure'][Number(e.key) - 1] })
   else if (e.key === 'ArrowRight') go(cur + 1); else if (e.key === 'ArrowLeft') go(cur - 1)
 })
 ;(async () => {

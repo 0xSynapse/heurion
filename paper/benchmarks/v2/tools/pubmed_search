@@ -1,0 +1,19 @@
+#!/bin/sh
+# B2 强化脚本组的文献检索命令（与平台组的 pubmed_search 同源：NCBI E-utilities）。
+#   pubmed_search "<检索词>" [条数，默认 8]
+# 输出每篇一行：PMID | DOI | 年份 | 第一作者 | 期刊 | 题目。只检索、不登记引用。
+q="$1"; n="${2:-8}"
+[ -z "$q" ] && { echo '用法：pubmed_search "<检索词>" [条数]' >&2; exit 2; }
+base=https://eutils.ncbi.nlm.nih.gov/entrez/eutils
+ids=$(curl -s -G "$base/esearch.fcgi" --data-urlencode "db=pubmed" --data-urlencode "retmode=json" --data-urlencode "retmax=$n" --data-urlencode "term=$q" \
+  | python3 -I -c 'import sys,json; print(",".join(json.load(sys.stdin)["esearchresult"]["idlist"]))')
+[ -z "$ids" ] && { echo "没有检索到结果"; exit 0; }
+curl -s -G "$base/esummary.fcgi" --data-urlencode "db=pubmed" --data-urlencode "retmode=json" --data-urlencode "id=$ids" | python3 -I -c '
+import sys, json
+d = json.load(sys.stdin)["result"]
+for uid in d.get("uids", []):
+    r = d[uid]
+    doi = next((a["value"] for a in r.get("articleids", []) if a.get("idtype") == "doi"), "")
+    first = (r.get("authors") or [{}])[0].get("name", "")
+    print(" | ".join([uid, doi, r.get("pubdate", "")[:4], first, r.get("source", ""), r.get("title", "")]))
+'

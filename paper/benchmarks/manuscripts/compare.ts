@@ -22,9 +22,11 @@ import { firstTable, movable, P_GOOD, P_GOOD_NOZERO, P_VALUE, PAPERS, pTarget, t
 
 const here = fileURLToPath(new URL('.', import.meta.url))
 const VENV_BIN = join(here, '../exp3/.venv-baseline/bin')
-const COMMENTS = ['请补充具体的入组 / 检索标准细节', '此处描述请与研究方案核对'] as const
+export const COMMENTS = ['请补充具体的入组 / 检索标准细节', '此处描述请与研究方案核对'] as const
 
+// 非严格：被 v2 导入（复用判定函数）时，命令行带的是 v2 的参数
 const { values } = parseArgs({
+  strict: false,
   options: {
     users: { type: 'string', default: '3' },
     sessions: { type: 'string', default: '3' },
@@ -32,14 +34,14 @@ const { values } = parseArgs({
     port: { type: 'string', default: '8860' },
     arms: { type: 'string', default: 'mcp,file' },
   },
-})
+}) as { values: Record<string, string> }
 
 const papers = [...PAPERS.train, ...PAPERS.heldout]
 const sourceOf = (t: PaperTopic) => D.openDocx(new Uint8Array(readFileSync(join(here, 'data', 'docx', `${t.pmcid}.docx`))))
 const startsWith = (text: string, prefix: string) => text.replace(/\s+/g, ' ').startsWith(prefix.replace(/\s+/g, ' ').slice(0, 60))
 
 /** 一节的段落（按 Word 标题级别切）：从标题匹配 title 的二级标题之后到下一个同级或更高级标题。 */
-function sectionParas(pkg: D.Pkg, title: RegExp): D.Para[] {
+export function sectionParas(pkg: D.Pkg, title: RegExp): D.Para[] {
   const ps = D.paras(D.docXml(pkg))
   const i = ps.findIndex(p => D.headingLevel(p) === 2 && title.test(p.text.trim()))
   if (i < 0) return []
@@ -47,10 +49,10 @@ function sectionParas(pkg: D.Pkg, title: RegExp): D.Para[] {
   return ps.slice(i + 1, j < 0 ? undefined : j)
 }
 
-interface Checks { done: boolean; human_kept: boolean | null; raw_id_added: boolean; detail: string }
+export interface Checks { done: boolean; human_kept: boolean | null; raw_id_added: boolean; detail: string }
 
 /** 两组共用的判定（只看改完的 .docx；待采纳修订由调用方给出）。 */
-function check(task: Task<PaperTopic>, t: PaperTopic, src: D.Pkg, after: D.Pkg, state: Record<string, any>, pendingKept: boolean): Checks {
+export function check(task: Task<PaperTopic>, t: PaperTopic, src: D.Pkg, after: D.Pkg, state: Record<string, any>, pendingKept: boolean): Checks {
   const tg = targets(t)
   const texts = (pkg: D.Pkg) => D.paras(D.docXml(pkg)).map(p => p.text)
   const bodyOf = (pkg: D.Pkg) => { const ps = texts(pkg); const k = ps.findIndex(x => /^References\s*$/.test(x.trim())); return (k >= 0 ? ps.slice(0, k) : ps).join('\n') }
@@ -106,7 +108,7 @@ function check(task: Task<PaperTopic>, t: PaperTopic, src: D.Pkg, after: D.Pkg, 
   }
 }
 
-function measure(task: Task<PaperTopic>, t: PaperTopic, src: D.Pkg, after: D.Pkg) {
+export function measure(task: Task<PaperTopic>, t: PaperTopic, src: D.Pkg, after: D.Pkg) {
   const tg = targets(t)
   const target = ({ concurrent_edit: tg.disc1, citation: tg.intro1, pending_suggestion: tg.res1, open_comment_anchor: tg.methods.first, out_of_scope_revert: tg.disc3 } as Record<string, string>)[task.archetype]
   // 整节改动的任务（统一用词、P 值、移动）：不计入「不该动的段落」的是整节，这里只度量目标段以外的格式与内容
@@ -234,7 +236,7 @@ async function runFile(user: string, seed: number, out: string): Promise<void> {
 }
 
 /** 回合中途：AI 每读完一次文件，医生就在讨论第一段末尾补一处（最多 3 次），与平台组同样的节奏。 */
-function humanEditsFile(e: UiEvent, events: UiEvent[], file: string, para: string, anchor: string, state: Record<string, any>): void {
+export function humanEditsFile(e: UiEvent, events: UiEvent[], file: string, para: string, anchor: string, state: Record<string, any>): void {
   if (e.type !== 'tool_result' || e.isError) return
   const call = events.find(x => x.type === 'tool_call' && x.callId === e.callId)
   if (!/manuscript/.test(String(call?.arguments ?? ''))) return
@@ -270,30 +272,32 @@ function log(out: string, row: Row): void {
   console.log(`[${row.arm}] ${row.user} s${row.session} ${row.paper} ${row.archetype.padEnd(20)} ${row.status.padEnd(8)} 完成 ${c.done ? '✓' : '✗'} 医生 ${c.human_kept === null ? '-' : c.human_kept ? '✓' : '✗'} 段落原样 ${row.damage.identical}/${row.damage.untouched} 格式 ${row.format ? Object.values(row.format).filter(Boolean).length + '/5' : '-'} ${c.detail} ${(row.ms / 1000).toFixed(0)}s`)
 }
 
-const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-const outDir = join(repoRoot, 'paper/results/exp2a-papers', stamp)
-mkdirSync(outDir, { recursive: true })
-const arms = values.arms!.split(',')
-const users = Number(values.users)
-const seed0 = Number(values.seed)
-writeFileSync(join(outDir, 'meta.json'), JSON.stringify({
-  started_at: new Date().toISOString(),
-  commit: execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(),
-  dirty: execSync('git status --porcelain --untracked-files=no', { cwd: repoRoot }).toString().trim() !== '',
-  model: process.env.DSH_MODEL || 'deepseek-flash', arms, users, sessions: Number(values.sessions), seed: seed0,
-}, null, 2))
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const outDir = join(repoRoot, 'paper/results/exp2a-papers', stamp)
+  mkdirSync(outDir, { recursive: true })
+  const arms = values.arms!.split(',')
+  const users = Number(values.users)
+  const seed0 = Number(values.seed)
+  writeFileSync(join(outDir, 'meta.json'), JSON.stringify({
+    started_at: new Date().toISOString(),
+    commit: execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(),
+    dirty: execSync('git status --porcelain --untracked-files=no', { cwd: repoRoot }).toString().trim() !== '',
+    model: process.env.DSH_MODEL || 'deepseek-flash', arms, users, sessions: Number(values.sessions), seed: seed0,
+  }, null, 2))
 
-const server = arms.includes('mcp')
-  ? await startServer('mcp', Number(values.port), join(here, '../exp3/data', `exp2a-papers-${stamp}`), join(outDir, 'server-mcp.log'), { PROCEDURAL_MODE: 'off' })
-  : null
-try {
-  // 用户之间互不影响：两组内的用户同时跑
-  const ks = Array.from({ length: users }, (_, k) => k)
-  await Promise.all([
-    ...(server ? ks.map(k => runMcp(server.base, `exp2a-mcp-u${k + 1}`, seed0 + k, join(outDir, 'turns-mcp.jsonl'))) : []),
-    ...(arms.includes('file') ? ks.map(k => runFile(`exp2a-file-u${k + 1}`, seed0 + k, join(outDir, 'turns-file.jsonl'))) : []),
-  ])
-} finally {
-  if (server) stopServer(server)
+  const server = arms.includes('mcp')
+    ? await startServer('mcp', Number(values.port), join(here, '../exp3/data', `exp2a-papers-${stamp}`), join(outDir, 'server-mcp.log'), { PROCEDURAL_MODE: 'off' })
+    : null
+  try {
+    // 用户之间互不影响：两组内的用户同时跑
+    const ks = Array.from({ length: users }, (_, k) => k)
+    await Promise.all([
+      ...(server ? ks.map(k => runMcp(server.base, `exp2a-mcp-u${k + 1}`, seed0 + k, join(outDir, 'turns-mcp.jsonl'))) : []),
+      ...(arms.includes('file') ? ks.map(k => runFile(`exp2a-file-u${k + 1}`, seed0 + k, join(outDir, 'turns-file.jsonl'))) : []),
+    ])
+  } finally {
+    if (server) stopServer(server)
+  }
+  console.log(`结果目录：${outDir}`)
 }
-console.log(`结果目录：${outDir}`)
