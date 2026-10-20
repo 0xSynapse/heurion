@@ -178,6 +178,20 @@ describe('Word 批注：导入为平台评论线程，导出为 Word 线程回�
     expect(part(out, 'word/comments.xml').match(/<w:comment w:id="7"/g)).toHaveLength(1)
   })
 
+  it('被批注的文字随整段改写消失：批注改为覆盖整段，线程与回复仍写回（v2 预实验：导出后批注全部丢失）', () => {
+    const t = importWithComments(withComments())
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id, markdown: '本研究共纳入 112 例患者，中位随访 36 个月。' }] }, { actor: 'user', turnId: null })
+    t.store.addReply(t.thread().id, 'ai', '已整段改写。')
+    const first = firstPara(t.exportNow())
+    expect(first).toContain('中位随访 36 个月')
+    expect(first).toMatch(/^<w:p\b[^>]*>(<w:pPr>[\s\S]*?<\/w:pPr>)?<w:commentRangeStart w:id="7"\/>/)
+    expect(first).toContain('<w:commentReference w:id="7"/>')
+    const back = importDocx(t.exportNow())
+    expect(back.comments).toHaveLength(1)
+    expect(back.comments[0]!.replies.map(r => r.author)).toEqual(['Dong Qian', 'Heurion AI'])
+  })
+
   it('在平台里解决：Word 里标为已解决', () => {
     const t = importWithComments(withComments())
     t.store.setCommentStatus(t.docId, t.thread().id, 'resolved', 'user')

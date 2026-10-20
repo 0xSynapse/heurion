@@ -37,7 +37,7 @@ export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNo
     if (!hit || !prev) continue
     if (insidePendingInsert(before, prevHit.pos, prev)) {
       if (prev.attrs.suggest === 'insert') {
-        tr.setNodeMarkup(hit.pos, undefined, { ...hit.node.attrs, suggest: 'insert', suggest_group: prev.attrs.suggest_group, suggest_of: prev.attrs.suggest_of })
+        tr.setNodeMarkup(hit.pos, undefined, { ...hit.node.attrs, suggest: 'insert', suggest_group: prev.attrs.suggest_group, suggest_of: prev.attrs.suggest_of, suggest_author: prev.attrs.suggest_author })
       }
       continue
     }
@@ -55,6 +55,8 @@ export function toSuggestion(before: PMNode, after: PMNode, group: string): PMNo
     const $pos = tr.doc.resolve(pos)
     for (let d = $pos.depth; d > 0; d--) if (added.has($pos.node(d).attrs.id as string)) return false
     if (insidePendingInsert(tr.doc, pos)) return false
+    // 整段替换修订版时多出来的块：操作层已并入那条修订，不另标新组
+    if (node.attrs.suggest === 'insert' && node.attrs.suggest_group) return false
     marks.push(pos)
     return false
   })
