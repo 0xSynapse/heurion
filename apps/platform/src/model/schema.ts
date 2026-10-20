@@ -9,7 +9,7 @@ import { Schema, type DOMOutputSpec, type Node as PMNode } from 'prosemirror-mod
  * 引用是行内原子节点 citation(cite_id)：编号在渲染时按文中首次出现顺序计算。
  *
  * 修订（suggest 模式，块级）：可寻址节点带 suggest = 'insert' | 'delete'、suggest_group（同一批修订）、
- * suggest_of（替换型插入所替换的原块 id；采纳后新块接过原 id）。
+ * suggest_of（替换型插入所替换的原块 id；采纳后新块接过原 id）、suggest_author（导入的 Word 修订的原作者）。
  */
 
 const blockAttrs = {
@@ -17,6 +17,8 @@ const blockAttrs = {
   suggest: { default: null },
   suggest_group: { default: null },
   suggest_of: { default: null },
+  // 修订的作者：导入的 Word 修订记原作者（合作者），平台里 AI / 用户产生的修订为 null
+  suggest_author: { default: null },
 }
 
 /** 表格的列相对宽度（col_widths 属性，逗号分隔的正数）；未设定或格式不对返回 null。 */

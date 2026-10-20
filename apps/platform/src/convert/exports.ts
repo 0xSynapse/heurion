@@ -19,8 +19,9 @@ export function docxFor(docs: Documents, docId: string) {
   const pkg = store.getPackage(docId)
   const current = docs.get(docId)
   const pending = pendingGroups(current).length
+  // 待采纳修订交给导出器：段落的修订写成 Word 修订，表格、列表、图的修订按未采纳导出
   const result = exportDocx({
-    doc: withoutPending(current),
+    doc: current,
     baseline: pkg ? baselineOf(docs, docId) : null,
     pkg,
     src: id => store.getNodeSrc(docId, id),
@@ -33,8 +34,8 @@ export function docxFor(docs: Documents, docId: string) {
       return a && bytes ? { mime: a.mime, bytes } : null
     },
   })
-  // 待采纳的修订按「未采纳」导出：明确告诉用户，免得以为 AI 的修改已经在文件里
-  if (pending > 0) result.warnings.unshift(`文档里还有 ${pending} 条待采纳修订，导出文件里是采纳前的内容；需要的话先在编辑器里采纳再导出`)
+  // 明确告诉用户待采纳修订在文件里的样子，免得以为已经生效
+  if (pending > 0) result.warnings.unshift(`文档里还有 ${pending} 条待采纳修订：段落的修订在导出文件里是 Word 修订，可在 Word 里逐条接受或拒绝；表格、列表、图的修订导出的是采纳前的内容`)
   return result
 }
 

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { DOMParser, XMLSerializer, type Element as XElement, type Node as XNode } from '@xmldom/xmldom'
 import { strFromU8, unzipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
@@ -46,6 +47,11 @@ export interface DocxImport {
 }
 
 type XDocument = ReturnType<DOMParser['parseFromString']>
+
+/** 带文字的修订元素（插入、删除、移动）。 */
+const REVISION = new Set(['ins', 'del', 'moveFrom', 'moveTo'])
+/** 修订版块的 suggest_of 占位：分配 id 后换成紧挨在前面的原文版本块的 id。 */
+const PREVIOUS = '@previous'
 
 const W14 = 'http://schemas.microsoft.com/office/word/2010/wordml'
 const W15 = 'http://schemas.microsoft.com/office/word/2012/wordml'
@@ -339,7 +345,11 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   interface InlineFlags { unmodelled: string | null; fields: boolean }
 
   /** 段落里的行内内容；图片单独收集为块。 */
-  const inlineOf = (p: XElement, figures: PMNode[], flags: InlineFlags = { unmodelled: null, fields: false }): PMNode[] => {
+  /**
+   * mode：accepted = 接受所有修订后的文字（默认）；original = 修订前的原文（删除的文字算在内、插入的不算），
+   * 用于把 Word 修订导入为平台的待采纳修订。
+   */
+  const inlineOf = (p: XElement, figures: PMNode[], flags: InlineFlags = { unmodelled: null, fields: false }, mode: 'accepted' | 'original' = 'accepted'): PMNode[] => {
     const out: PMNode[] = []
     const walk = (el: XElement, marks: readonly Mark[]) => {
       const kids = children(el)
@@ -362,7 +372,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
           flags.fields = true
         }
         switch (name) {
-          case 'r': runOf(c, marks, out, figures, flags); break
+          case 'r': runOf(c, marks, out, figures, flags, mode); break
           case 'hyperlink': {
             const id = c.getAttributeNS(R, 'id') ?? c.getAttribute('r:id')
             const href = id ? rels.get(id) : c.getAttribute('w:anchor') ? `#${c.getAttribute('w:anchor')}` : undefined
@@ -370,9 +380,11 @@ export function importDocx(bytes: Uint8Array): DocxImport {
             break
           }
           case 'fldSimple': out.push(wordInline('field', c.textContent ?? '', inlineXml(c), marks)); break
-          case 'ins': case 'smartTag': case 'customXml': walk(c, marks); break
+          case 'ins': case 'moveTo': if (mode === 'accepted') walk(c, marks); break
+          case 'del': case 'moveFrom': if (mode === 'original') walk(c, marks); break
+          case 'smartTag': case 'customXml': walk(c, marks); break
           case 'sdt': { const content = child(c, 'sdtContent'); if (content) walk(content, marks); break }
-          case 'del': case 'pPr': case 'bookmarkStart': case 'bookmarkEnd': case 'proofErr': break
+          case 'pPr': case 'bookmarkStart': case 'bookmarkEnd': case 'proofErr': break
           default: break
         }
       }
@@ -381,7 +393,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     return out
   }
 
-  const runOf = (r: XElement, outer: readonly Mark[], out: PMNode[], figures: PMNode[], flags: InlineFlags) => {
+  const runOf = (r: XElement, outer: readonly Mark[], out: PMNode[], figures: PMNode[], flags: InlineFlags, mode: 'accepted' | 'original') => {
     // 脚注 / 尾注引用：整个 run 作为一个原子（编号样式、上标都在原 run 里）
     const note = children(r).find(c => c.namespaceURI === W && (local(c) === 'footnoteReference' || local(c) === 'endnoteReference'))
     if (note) {
@@ -409,10 +421,10 @@ export function importDocx(bytes: Uint8Array): DocxImport {
         if (name === 'AlternateContent') flags.unmodelled ??= '文本框'
         continue
       }
-      if (name === 't' && c.textContent) out.push(schema.text(c.textContent, marks))
+      if ((name === 't' || (name === 'delText' && mode === 'original')) && c.textContent) out.push(schema.text(c.textContent, marks))
       else if (name === 'tab') out.push(schema.text('\t', marks))
       else if (name === 'br' || name === 'cr') out.push(schema.node('hard_break'))
-      else if (name === 'drawing' || name === 'pict') {
+      else if ((name === 'drawing' || name === 'pict') && mode === 'accepted') {
         const fig = figureFor(c)
         if (fig) figures.push(fig)
         else flags.unmodelled ??= name === 'pict' ? '文本框或图形' : '图形'
@@ -425,6 +437,25 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   const blocks: PMNode[] = []
   let unmodelledCount = 0
   let fieldParagraphs = 0
+  let acceptedRevisions = 0
+
+  /** 段落里带文字的修订（插入、删除、移动；不含段落标记与格式的修订）及第一处修订的作者。 */
+  const revisionOf = (p: XElement): { has: boolean; author: string | null } => {
+    let has = false
+    let author: string | null = null
+    const visit = (el: XElement) => {
+      for (const c of children(el)) {
+        if (c.namespaceURI !== W || local(c) === 'pPr' || local(c) === 'rPr') continue
+        if (REVISION.has(local(c)) && c.getElementsByTagNameNS(W, 'r').length > 0) {
+          if (!has) author = wAttr(c, 'author')
+          has = true
+        } else visit(c)
+      }
+    }
+    visit(p)
+    return { has, author }
+  }
+  const textOf = (nodes: PMNode[]) => nodes.map(n => (n.isText ? n.text : n.type.name)).join('')
   // 列表栈：按 numId 连续分组，ilvl 决定嵌套
   let listStack: Array<{ info: ListInfo; items: PMNode[][] }> = []
 
@@ -448,6 +479,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     const align = wAttr(pPr && child(pPr, 'jc'), 'val')
     const figures: PMNode[] = []
     const flags: InlineFlags = { unmodelled: null, fields: false }
+    const commentsBefore = new Set(activeComments)
     const inline = inlineOf(p, figures, flags)
     const level = headingLevel(styleId, pPr)
     const numPr = pPr && child(pPr, 'numPr')
@@ -469,7 +501,21 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     }
     if (flags.fields) fieldParagraphs++
 
+    // Word 修订：再按原文解析一遍（批注范围从同一起点重放），两者不同就导入为待采纳修订
+    const revision = revisionOf(p)
+    let original: PMNode[] | null = null
+    if (revision.has) {
+      const after = new Set(activeComments)
+      activeComments.clear()
+      for (const id of commentsBefore) activeComments.add(id)
+      original = inlineOf(p, [], { unmodelled: null, fields: false }, 'original')
+      activeComments.clear()
+      for (const id of after) activeComments.add(id)
+      if (textOf(original) === textOf(inline)) original = null
+    }
+
     if (numId && numId !== '0' && level === null) {
+      if (original) acceptedRevisions++
       // 换了一个列表 → 收起；更浅的层级 → 收起更深的层
       if (listStack.length > 0 && listStack[0]!.info.numId !== numId) flushLists(0)
       if (listStack.length > ilvl + 1) flushLists(ilvl + 1)
@@ -484,6 +530,28 @@ export function importDocx(bytes: Uint8Array): DocxImport {
       return
     }
     flushLists()
+    if (original) {
+      // 原文版本（待删除）挂原始 XML，未改动时整段原样写回（修订仍在）；修订版（待新增）紧跟其后
+      const type = level !== null ? 'heading' : 'paragraph'
+      const base = level !== null ? { level, style: styleName, align: alignAttr } : { style: styleName, align: alignAttr }
+      const rev = { suggest_group: `g${randomBytes(4).toString('hex')}`, suggest_author: revision.author }
+      if (textOf(original).trim() === '') {
+        // 整段都是新插入的
+        const node = schema.node(type, { ...base, ...rev, suggest: 'insert' }, inline)
+        blocks.push(node, ...figures)
+        pendingSrc.push({ node, xml: xmlText })
+      } else if (textOf(inline).trim() === '') {
+        // 整段都被删除
+        const node = schema.node(type, { ...base, ...rev, suggest: 'delete' }, original)
+        blocks.push(node)
+        pendingSrc.push({ node, xml: xmlText })
+      } else {
+        const del = schema.node(type, { ...base, ...rev, suggest: 'delete' }, original)
+        blocks.push(del, schema.node(type, { ...base, ...rev, suggest: 'insert', suggest_of: PREVIOUS }, inline), ...figures)
+        pendingSrc.push({ node: del, xml: xmlText })
+      }
+      return
+    }
     // 紧跟在图后面的题注段落 → 并回图的 caption
     const prev = blocks[blocks.length - 1]
     if (figures.length === 0 && prev?.type.name === 'figure' && !prev.attrs.caption && styleName && /^(caption|题注)$/i.test(styleName)) {
@@ -536,6 +604,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
         const paras: PMNode[] = []
         for (const p of children(tc).filter(c => local(c) === 'p')) {
           const figures: PMNode[] = []
+          if (revisionOf(p).has) acceptedRevisions++
           paras.push(schema.node('paragraph', null, inlineOf(p, figures)))
         }
         const attrs = { colspan: span, rowspan: 1, header: false }
@@ -582,6 +651,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   for (const el of children(body)) blockLevel(el)
   flushLists()
   if (unmodelledCount > 0) warnings.push(`${unmodelledCount} 个段落含文本框或嵌入对象，已作为不可编辑块原样保留`)
+  if (acceptedRevisions > 0) warnings.push(`${acceptedRevisions} 处 Word 修订位于列表或表格里，已按「接受」导入；未改动时导出仍原样保留修订`)
   if (fieldParagraphs > 0) warnings.push(`${fieldParagraphs} 个段落含不完整的域代码（缺少结束标记），这些段落被修改后域会变为普通文字`)
   if (blocks.length === 0) blocks.push(schema.node('paragraph'))
 
@@ -596,7 +666,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
 
   // 分配 id：先给整棵树补号，再按节点身份把原始 XML 对上新 id
   const raw = schema.node('doc', null, merged)
-  const doc = assignIds(raw, new Set())
+  const ids = assignIds(raw, new Set())
   const src: Array<{ node_id: string; xml: string }> = []
   const pending = new Map(pendingSrc.map(p => [p.node, p.xml]))
   const walkPair = (a: PMNode, b: PMNode) => {
@@ -604,7 +674,11 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     if (x && b.attrs.id) src.push({ node_id: b.attrs.id as string, xml: x })
     for (let i = 0; i < a.childCount && i < b.childCount; i++) walkPair(a.child(i), b.child(i))
   }
-  walkPair(raw, doc)
+  walkPair(raw, ids)
+  // 修订版块指向紧挨在前面的原文版本块
+  const fixed: PMNode[] = []
+  ids.forEach((n, _o, i) => fixed.push(n.attrs.suggest_of === PREVIOUS ? n.type.create({ ...n.attrs, suggest_of: ids.child(i - 1).attrs.id }, n.content, n.marks) : n))
+  const doc = ids.type.create(ids.attrs, fixed)
   const anchored = threadMarks(doc)
   const comments = [...wordComments.values()].filter(c => anchored.has(c.key))
   if (comments.length < wordComments.size) warnings.push(`${wordComments.size - comments.length} 条 Word 批注锚在图片或不可编辑内容上，没有转为平台评论（导出时原样保留）`)

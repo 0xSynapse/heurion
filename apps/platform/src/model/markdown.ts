@@ -343,7 +343,9 @@ export function serializeBlocks(nodes: readonly PMNode[], opts: SerializeOptions
 }
 
 export function serializeBlock(node: PMNode, opts: SerializeOptions, indent: string): string {
-  const pending = node.attrs.suggest === 'insert' ? '⟨待采纳·新增⟩ ' : node.attrs.suggest === 'delete' ? '⟨待采纳·删除⟩ ' : ''
+  // 导入的 Word 修订带上原作者（合作者的修订不能由 AI 改，见操作层的修订守卫）
+  const by = node.attrs.suggest_author ? `·${node.attrs.suggest_author}` : ''
+  const pending = node.attrs.suggest === 'insert' ? `⟨待采纳·新增${by}⟩ ` : node.attrs.suggest === 'delete' ? `⟨待采纳·删除${by}⟩ ` : ''
   const pre = opts.ids && node.attrs.id ? `{#${node.attrs.id}} ${pending}` : ''
   switch (node.type.name) {
     case 'paragraph':

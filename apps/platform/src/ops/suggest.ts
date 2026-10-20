@@ -9,7 +9,7 @@ import { diffNodes } from '../model/runtime.ts'
  * 删除的块放回原位标 delete。同一批修改共享 suggest_group，用户逐组采纳或拒绝。
  */
 
-const clear = { suggest: null, suggest_group: null, suggest_of: null }
+const clear = { suggest: null, suggest_group: null, suggest_of: null, suggest_author: null }
 
 /** pos 处的块自身或某个祖先是待采纳的新增块（修改它们只是在改同一条修订，不另起修订）。 */
 function insidePendingInsert(doc: PMNode, pos: number, self?: PMNode): boolean {

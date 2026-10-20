@@ -4,6 +4,7 @@ import { exportDocx } from '../src/convert/docx-export.ts'
 import { bindAssets, bindComments, importDocx } from '../src/convert/docx-import.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { OpService } from '../src/ops/service.ts'
+import { resolveSuggestions } from '../src/ops/suggest.ts'
 import { newCommentId, Store } from '../src/store/db.ts'
 import { read } from '../src/views/read.ts'
 import { docx, p } from './fixtures.ts'
@@ -181,5 +182,68 @@ describe('Word 批注：导入为平台评论线程，导出为 Word 线程回�
     const t = importWithComments(withComments())
     t.store.setCommentStatus(t.docId, t.thread().id, 'resolved', 'user')
     expect(part(t.exportNow(), 'word/commentsExtended.xml')).toMatch(/w15:paraId="0A1B2C3D"[^>]*w15:done="1"/)
+  })
+})
+
+// —— Word 修订 ——
+
+const TRACKED = '<w:p><w:r><w:t xml:space="preserve">主要终点为总生存期</w:t></w:r>'
+  + '<w:del w:id="1" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"><w:r><w:delText>。</w:delText></w:r></w:del>'
+  + '<w:ins w:id="2" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"><w:r><w:t>（意向性治疗人群）。</w:t></w:r></w:ins></w:p>'
+const INSERTED = '<w:p><w:pPr><w:rPr><w:ins w:id="3" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"/></w:rPr></w:pPr><w:ins w:id="4" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"><w:r><w:t>新增的一段说明。</w:t></w:r></w:ins></w:p>'
+
+describe('Word 修订：导入为待采纳修订（带原作者），导出为 Word 修订', () => {
+  it('导入：合作者的修订成为一对待采纳修订，读视图标出作者；不改动时整段原样写回', () => {
+    const original = docx(TRACKED + INSERTED + p('结果段落。'))
+    const t = importInto(original)
+    const blocks: Array<Record<string, unknown>> = []
+    t.docs.get(t.docId).forEach(n => blocks.push({ ...n.attrs, text: n.textContent }))
+    expect(blocks.slice(0, 3).map(b => [b.suggest, b.suggest_author, b.text])).toEqual([
+      ['delete', 'Li Ming', '主要终点为总生存期。'],
+      ['insert', 'Li Ming', '主要终点为总生存期（意向性治疗人群）。'],
+      ['insert', 'Li Ming', '新增的一段说明。'],
+    ])
+    expect(blocks[1]!.suggest_of).toBe(blocks[0]!.id)
+    const view = t.view()
+    expect(view).toContain('⟨待采纳·删除·Li Ming⟩')
+    expect(view).toContain('⟨待采纳·新增·Li Ming⟩')
+    expect(bodyOf(t.exportNow().bytes)).toBe(bodyOf(original))
+  })
+
+  it('AI 不能改合作者修订的任一版本；改别的段落时合作者的修订原样保留', () => {
+    const t = importInto(docx(TRACKED + p('结果段落。')))
+    const ids: string[] = []
+    t.docs.get(t.docId).forEach(n => ids.push(n.attrs.id as string))
+    for (const id of ids.slice(0, 2)) {
+      expect(() => t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '主要终点', replace: '首要终点' }] }, { actor: 'ai', turnId: 't1' }))
+        .toThrow(/Li Ming 留下的待采纳修订/)
+    }
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: ids[2]!, find: '结果段落', replace: '结果部分' }] }, { actor: 'ai', turnId: 't2' })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain(TRACKED)
+    expect(body).toContain('结果部分')
+  })
+
+  it('用户采纳后：导出的是采纳后的文字，没有修订标记', () => {
+    const t = importInto(docx(TRACKED))
+    t.docs.commit(t.docId, resolveSuggestions(t.docs.get(t.docId), null, true), { actor: 'user', turnId: null, ops: [] })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain('（意向性治疗人群）')
+    expect(body).not.toMatch(/<w:(ins|del)\b/)
+  })
+
+  it('平台的待采纳修订导出为 Word 修订（原文删除、修订版插入，段落标记一并标记）；再导入还原为同样的修订', () => {
+    const t = importInto(docx(p('随访 3 年。') + p('其他。')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id, find: '3 年', replace: '36 个月' }] }, { actor: 'ai', turnId: 't1' })
+    const out = t.exportNow().bytes
+    const body = bodyOf(out)
+    expect(body).toMatch(/<w:del w:id="\d+" w:author="Heurion AI"[^>]*><w:r>(?:<w:rPr>.*?<\/w:rPr>)?<w:delText xml:space="preserve">随访 3 年。<\/w:delText><\/w:r><\/w:del>/)
+    expect(body).toMatch(/<w:ins w:id="\d+" w:author="Heurion AI"[^>]*><w:r>(?:<w:rPr>.*?<\/w:rPr>)?<w:t xml:space="preserve">随访 36 个月。<\/w:t><\/w:r><\/w:ins>/)
+    expect(body).toMatch(/<w:rPr><w:del w:id="\d+" w:author="Heurion AI"/)
+    const back = importDocx(out)
+    const kinds: Array<[unknown, unknown, string]> = []
+    back.doc.forEach(n => kinds.push([n.attrs.suggest, n.attrs.suggest_author, n.textContent]))
+    expect(kinds.slice(0, 2)).toEqual([['delete', 'Heurion AI', '随访 3 年。'], ['insert', 'Heurion AI', '随访 36 个月。']])
   })
 })

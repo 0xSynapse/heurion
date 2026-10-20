@@ -49,7 +49,8 @@ export function outline(input: { doc: PMNode; docId: string; title: string; rev:
     const rawBody = blocks.slice(i + 1, end)
     const body = isDelete ? rawBody : rawBody.filter(x => x.attrs.suggest !== 'delete')
     const chars = body.reduce((s, x) => s + plainText(x).length, 0)
-    const tag = b.attrs.suggest === 'insert' ? '⟨待采纳·新增⟩ ' : b.attrs.suggest === 'delete' ? '⟨待采纳·删除⟩ ' : ''
+    const by = b.attrs.suggest_author ? `·${b.attrs.suggest_author}` : ''
+    const tag = b.attrs.suggest === 'insert' ? `⟨待采纳·新增${by}⟩ ` : b.attrs.suggest === 'delete' ? `⟨待采纳·删除${by}⟩ ` : ''
     lines.push(`${'  '.repeat(level - 1)}${'#'.repeat(level)} {#${b.attrs.id}} ${tag}${plainText(b)}（${body.length} 块，${chars} 字）`)
   })
   return lines.join('\n')

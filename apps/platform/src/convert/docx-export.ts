@@ -3,6 +3,7 @@ import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { referencePlan } from '../model/references.ts'
 import { colWidths } from '../model/schema.ts'
+import { resolveSuggestions } from '../ops/suggest.ts'
 import { readGrid, type GridCell } from '../model/table-grid.ts'
 import { looksLikeHeaderRow } from '../model/table-header.ts'
 import type { CitationRow, CommentRow, ReplyRow } from '../store/db.ts'
@@ -185,7 +186,23 @@ function childEl(el: string | undefined, local: string): string | undefined {
   return el ? elementChildrenRaw(el).find(k => new RegExp(`^<w:${local}\\b`).test(k)) : undefined
 }
 
+/**
+ * 导出前：涉及表格、列表、图等非段落块的修订组按「拒绝」处理（文件里是采纳前的内容）；
+ * 只含顶层段落 / 标题的修订组保留，导出为 Word 修订。
+ */
+function exportable(doc: PMNode): PMNode {
+  const groups = new Set<string>()
+  doc.descendants((n, _pos, parent) => {
+    if (n.attrs.suggest && !(parent === doc && n.isTextblock)) groups.add(n.attrs.suggest_group as string)
+    return true
+  })
+  let out = doc
+  for (const g of groups) out = resolveSuggestions(out, g, false)
+  return out
+}
+
 export function exportDocx(input: ExportInput): ExportResult {
+  input = { ...input, doc: exportable(input.doc) }
   const warnings: string[] = []
   const pkg = new Package(input.pkg ? safeUnzipDocx(input.pkg) : template())
   const originalXml = pkg.text('word/document.xml')
@@ -366,8 +383,9 @@ export function exportDocx(input: ExportInput): ExportResult {
    * 以及段落开始标签上的属性（w14:paraId、修订标识），与表格单元格的规则一致；
    * 段落自带样式或对齐（如 set_block_style 改过）时只覆盖 pStyle / jc。原文含图的段落不走这里。
    */
-  const regenerated = (node: PMNode, extraPPr: string): string | null => {
-    const id = node.attrs.id as string | null
+  const regenerated = (node: PMNode, extraPPr: string, copyOf?: string): string | null => {
+    // copyOf：借另一块（修订的原文版本）的原文格式；不带它的段落 id 与分节符，免得两段重复
+    const id = copyOf ?? (node.attrs.id as string | null)
     const raw = id ? input.src(id) : null
     if (!raw || !/^<w:p\b/.test(raw) || /<w:(drawing|pict)\b/.test(raw)) return null
     const kids = elementChildrenRaw(raw)
@@ -376,13 +394,70 @@ export function exportDocx(input: ExportInput): ExportResult {
     const rPrRaw = firstRun ? elementChildrenRaw(firstRun).find(k => /^<w:rPr\b/.test(k)) : undefined
     // 顶层段落不是列表项；原来是标题样式而现在成了普通段落时，不再沿用标题样式。
     // 分节符（pPr 里的 sectPr）属于该段落所在节的结尾，改了文字仍要保留，否则其后的分页 / 页面设置会丢
-    let base = pPrRaw ? stripEls(innerOf(pPrRaw), ['pPrChange', 'rPr', 'numPr']) : ''
+    let base = pPrRaw ? stripEls(innerOf(pPrRaw), ['pPrChange', 'rPr', 'numPr', ...(copyOf ? ['sectPr'] : [])]) : ''
     if (node.type.name === 'paragraph' && !node.attrs.style) base = stripEls(base, ['pStyle'])
     const own = innerOf(pPr(node, extraPPr) || '<w:pPr/>')
     const merged = own ? mergeEls(base, own, PPR_ORDER) : base
     const rPr = rPrRaw ? stripEls(innerOf(rPrRaw), ['b', 'bCs', 'i', 'iCs', 'u', 'vertAlign', 'rStyle', 'rPrChange', 'ins', 'del']) : ''
     const open = /^<w:p\b[^>]*>/.exec(raw)![0]
-    return `${open}${merged ? `<w:pPr>${merged}</w:pPr>` : ''}${inline(node, rPr)}</w:p>`
+    const tag = copyOf ? open.replace(/\s(?:w14:paraId|w14:textId)="[^"]*"/g, '') : open
+    return `${tag}${merged ? `<w:pPr>${merged}</w:pPr>` : ''}${inline(node, rPr)}</w:p>`
+  }
+
+  // —— 待采纳修订 → Word 修订 ——
+  const revisionDate = `${new Date().toISOString().slice(0, 19)}Z`
+  let nextRevision = 70_001
+  const cleared = (n: PMNode) => n.type.create({ ...n.attrs, suggest: null, suggest_group: null, suggest_of: null, suggest_author: null }, n.content, n.marks)
+  /** 导入后原样未动的 Word 修订：原文版本整段写回原始 XML（修订仍在），修订版不再单独生成。 */
+  const verbatimRevision = new Map<string, string>()
+  const skipRevision = new Set<string>()
+  input.doc.forEach((n, _off, i) => {
+    if (!n.isTextblock || !n.attrs.suggest_author) return
+    const src = unchanged(n)
+    if (!src) return
+    const next = i + 1 < input.doc.childCount ? input.doc.child(i + 1) : null
+    const partner = n.attrs.suggest === 'delete' && next?.attrs.suggest === 'insert' && next.attrs.suggest_of === n.attrs.id ? next : null
+    if (partner) {
+      if (!unchanged(partner) && !baseline.get(partner.attrs.id as string)?.eq(partner)) return
+      skipRevision.add(partner.attrs.id as string)
+    }
+    verbatimRevision.set(n.attrs.id as string, src)
+  })
+  /** 段落内容整体标为插入 / 删除（每个 run 包进 w:ins / w:del，段落标记也一并标记，接受或拒绝后不留空段）。 */
+  const revise = (xml: string, kind: 'ins' | 'del', author: string): string => {
+    const attrs = () => `w:id="${nextRevision++}" w:author="${esc(author)}" w:date="${revisionDate}"`
+    const wrap = (el: string): string => {
+      if (/^<w:r\b/.test(el)) {
+        const run = kind === 'del' ? el.replace(/<w:t(\s|>)/g, '<w:delText$1').replace(/<\/w:t>/g, '</w:delText>').replace(/<w:instrText(\s|>)/g, '<w:delInstrText$1').replace(/<\/w:instrText>/g, '</w:delInstrText>') : el
+        return `<w:${kind} ${attrs()}>${run}</w:${kind}>`
+      }
+      // 超链接、简单域等容器：包里面的 run
+      const m = /^<(w:(?:hyperlink|fldSimple|smartTag|customXml))\b[^>]*>/.exec(el)
+      return m ? `${m[0]}${elementChildrenRaw(el).map(wrap).join('')}</${m[1]}>` : el
+    }
+    const open = /^<w:p\b[^>]*>/.exec(xml)![0]
+    const kids = elementChildrenRaw(xml)
+    const mark = `<w:${kind} ${attrs()}/>`
+    let ppr = kids.find(k => /^<w:pPr\b/.test(k)) ?? '<w:pPr></w:pPr>'
+    if (/^<w:pPr\s*\/>$/.test(ppr)) ppr = '<w:pPr></w:pPr>'
+    const rpr = childEl(ppr, 'rPr')
+    if (rpr) ppr = ppr.replace(rpr, /\/>$/.test(rpr) ? `<w:rPr>${mark}</w:rPr>` : rpr.replace(/^<w:rPr\b[^>]*>/, m => m + mark))
+    else {
+      // CT_PPr 里 rPr 在 sectPr、pPrChange 之前
+      const after = childEl(ppr, 'sectPr') ?? childEl(ppr, 'pPrChange')
+      ppr = after ? ppr.replace(after, `<w:rPr>${mark}</w:rPr>${after}`) : ppr.replace(/<\/w:pPr>$/, `<w:rPr>${mark}</w:rPr></w:pPr>`)
+    }
+    return `${open}${ppr}${kids.filter(k => !/^<w:pPr\b/.test(k)).map(wrap).join('')}</w:p>`
+  }
+  const tracked = (node: PMNode): string => {
+    const id = node.attrs.id as string
+    if (skipRevision.has(id)) return ''
+    const kept = verbatimRevision.get(id)
+    if (kept) return kept
+    const plain = cleared(node)
+    const copyOf = node.attrs.suggest === 'insert' && node.attrs.suggest_of ? node.attrs.suggest_of as string : undefined
+    const xml = (copyOf ? null : verbatim(plain)) ?? regenerated(plain, '', copyOf) ?? `<w:p>${pPr(plain)}${inline(plain)}</w:p>`
+    return revise(xml, node.attrs.suggest === 'delete' ? 'del' : 'ins', String(node.attrs.suggest_author ?? 'Heurion AI'))
   }
 
   const paragraph = (node: PMNode, extraPPr = ''): string =>
@@ -694,7 +769,7 @@ export function exportDocx(input: ExportInput): ExportResult {
     switch (node.type.name) {
       case 'paragraph':
       case 'heading':
-        return paragraph(node)
+        return node.attrs.suggest ? tracked(node) : paragraph(node)
       case 'bullet_list':
       case 'ordered_list':
         return list(node, 0, null)

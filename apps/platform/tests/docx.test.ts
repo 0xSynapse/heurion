@@ -18,18 +18,21 @@ describe('docx 导入', () => {
     const r = importDocx(docx(body))
     const blocks: ReturnType<typeof r.doc.child>[] = []
     r.doc.forEach(n => blocks.push(n))
-    expect(blocks.map(b => b.type.name)).toEqual(['heading', 'paragraph', 'heading', 'ordered_list', 'table', 'opaque'])
-    expect(blocks[2]!.attrs.level).toBe(2)
+    // 含修订的段落 → 待采纳修订：原文版本（待删除）+ 修订版（待新增）
+    expect(blocks.map(b => b.type.name)).toEqual(['heading', 'paragraph', 'paragraph', 'heading', 'ordered_list', 'table', 'opaque'])
+    expect(blocks[3]!.attrs.level).toBe(2)
+    expect([blocks[1]!.attrs.suggest, blocks[2]!.attrs.suggest]).toEqual(['delete', 'insert'])
+    expect(blocks[2]!.attrs.suggest_of).toBe(blocks[1]!.attrs.id)
     const md = serializeBlocks(blocks)
+    expect(md).toContain('心衰**高发**删掉[链接](https://example.org)')
     expect(md).toContain('心衰**高发**（新增）[链接](https://example.org)')
-    expect(md).not.toContain('删掉')
     // 嵌套列表：第一步下挂一个子列表
-    const list = blocks[3]!
+    const list = blocks[4]!
     expect(list.childCount).toBe(2)
     expect(list.child(0).child(1).type.name).toBe('bullet_list')
     // vMerge → rowspan 2，续行的单元格被吸收
-    expect(blocks[4]!.child(0).child(1).attrs.rowspan).toBe(2)
-    expect(blocks[4]!.child(1).childCount).toBe(1)
+    expect(blocks[5]!.child(0).child(1).attrs.rowspan).toBe(2)
+    expect(blocks[5]!.child(1).childCount).toBe(1)
     // 每个块都有 id；原始 XML 对得上
     r.doc.descendants(n => { if (['heading', 'paragraph', 'table', 'opaque', 'list_item'].includes(n.type.name)) expect(n.attrs.id).toBeTruthy() })
     expect(r.src.length).toBeGreaterThanOrEqual(6)

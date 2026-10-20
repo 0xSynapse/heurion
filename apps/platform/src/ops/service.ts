@@ -240,6 +240,19 @@ export class OpService {
           const $pos = before.resolve(hit.pos)
           for (let d = $pos.depth; d > 0 && !pending; d--) if ($pos.node(d).attrs.suggest === 'delete') pending = $pos.node(d)
         }
+        // 合作者在 Word 里留下的修订：修订版同样不能改（不能替合作者改他的修改），等用户采纳或拒绝
+        const byCoauthor = (n: PMNode) => !!n.attrs.suggest && !!n.attrs.suggest_author
+        let coauthor: PMNode | null = byCoauthor(hit.node) ? hit.node : null
+        if (!coauthor) {
+          const $pos = before.resolve(hit.pos)
+          for (let d = $pos.depth; d > 0 && !coauthor; d--) if (byCoauthor($pos.node(d))) coauthor = $pos.node(d)
+        }
+        if (coauthor) {
+          throw new OpError('pending_suggestion', `块 ${id} 是 ${coauthor.attrs.suggest_author} 留下的待采纳修订`, {
+            op_index: i,
+            hint: `这是合作者 ${coauthor.attrs.suggest_author} 在 Word 里留下的修订，不能替他改；请等用户采纳或拒绝后再改，需要时在回复里说明。`,
+          })
+        }
         if (!pending) continue
         const copy = copyOf.get(pending.attrs.id as string)
         throw new OpError('pending_suggestion', `块 ${id} 在待采纳修订的原文版本里`, {
