@@ -5,6 +5,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DeepSeekHarness, type HarnessNotification, type RunResult } from '@deepseek-ai/dsh-sdk-client'
 import { issueToken } from '../auth/token.ts'
+
+/** 槽名前缀 → MCP 工具范围（doc_0 → doc，deck_1 → deck，其余不限）。 */
+const scopeOfSlot = (slot: string): { t?: 'doc' | 'deck' } => /^doc_\d+$/.test(slot) ? { t: 'doc' } : /^deck_\d+$/.test(slot) ? { t: 'deck' } : {}
 import type { Config } from '../config.ts'
 
 export const PROFILE_PATCH = fileURLToPath(new URL('./profile/heurion.cordis.yml', import.meta.url))
@@ -99,7 +102,8 @@ export class HarnessPool {
       DEEPSEEK_BASE_URL: this.config.llmProxyUrl,
       HEURION_MCP_URL: this.config.mcpUrl,
       // MCP 令牌比进程的最长空闲时间长；进程回收后重新签发
-      HEURION_MCP_TOKEN: issueToken(this.config.secret, { u: userId, d: '*', p: ['read', 'write'], aud: 'mcp', ttlSeconds: 24 * 3600, s: generation }),
+      // 工具范围随槽：doc_* 普通稿件、deck_* 幻灯片，其余槽为全部工具（mcp/scope.ts）
+      HEURION_MCP_TOKEN: issueToken(this.config.secret, { u: userId, d: '*', p: ['read', 'write'], aud: 'mcp', ttlSeconds: 24 * 3600, s: generation, ...scopeOfSlot(slot) }),
       // 不加载 dsh office 技能：文档编辑只走 MCP
       DSH_PRIMARY_RUNTIME: '',
       PIP_NO_INDEX: '1',

@@ -23,6 +23,8 @@ export interface TokenClaims {
   s?: string
   /** 登录令牌（aud=web）的账户令牌版本：与账户当前版本不一致即失效（停用、改密码、强制下线）。 */
   v?: number
+  /** MCP 工具范围（aud=mcp）：doc = 普通稿件，deck = 幻灯片；缺省为全部工具（见 mcp/scope.ts）。 */
+  t?: 'doc' | 'deck'
 }
 
 const b64 = (s: string) => Buffer.from(s).toString('base64url')
