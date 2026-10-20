@@ -167,10 +167,12 @@ export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.
   const occurrences = (pkg: D.Pkg, x: string) => D.paras(D.docXml(pkg)).map(p => p.text).join('\n').split(x).length - 1
   for (const k of keep) if (occurrences(after, k.expect) < occurrences(ctx.source, k.expect)) human.push(`doctor_edit_lost:${k.label}`)
   if (ctx.features) {
+    // 只计本轮造成的损失：改前还在、改后没了（多轮会话里前几轮丢的不重复计）
+    const was = featureState(ctx.source, ctx.features)
     const st = featureState(after, ctx.features)
-    if (!st.tracked_kept) human.push('coauthor_tracked_change')
-    if (!st.comment_kept) human.push('coauthor_comment')
-    for (const k of ['list_numbered', 'table_merged', 'caption_fields', 'footnote_kept', 'section_break_kept'] as const) if (!st[k]) features.push(k)
+    if (was.tracked_kept && !st.tracked_kept) human.push('coauthor_tracked_change')
+    if (was.comment_kept && !st.comment_kept) human.push('coauthor_comment')
+    for (const k of ['list_numbered', 'table_merged', 'caption_fields', 'footnote_kept', 'section_break_kept'] as const) if (was[k] && !st[k]) features.push(k)
   }
   const leads = task.targets(ctx).map(lead)
   const blocks = bodyChildrenRaw(D.docXml(ctx.source))

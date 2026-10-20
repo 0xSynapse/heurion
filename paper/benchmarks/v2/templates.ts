@@ -202,6 +202,14 @@ export interface FeatureState {
   section_break_kept: boolean
 }
 
+/** 第一张表各行按 gridSpan 计的列数都等于网格列数。 */
+function tableConsistent(xml: string): boolean {
+  const tbl = /<w:tbl>[\s\S]*?<\/w:tbl>/.exec(xml)?.[0]
+  if (!tbl) return false
+  const grid = (tbl.match(/<w:gridCol\b/g) ?? []).length
+  return [...tbl.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)].every(r => [...r[0].matchAll(/<w:tc>[\s\S]*?<\/w:tc>/g)].reduce((n, c) => n + Number(/<w:gridSpan w:val="(\d+)"\/>/.exec(c[0])?.[1] ?? 1), 0) === grid)
+}
+
 export function featureState(pkg: D.Pkg, f: TemplateFeatures): FeatureState {
   const xml = doc(pkg)
   const ps = D.paras(xml)
@@ -214,7 +222,8 @@ export function featureState(pkg: D.Pkg, f: TemplateFeatures): FeatureState {
   return {
     // 条目仍在同一个编号列表里（条目文字可能被正当改写，例如统一用词，只看条数）
     list_numbered: listItems.length >= f.list.items.length,
-    table_merged: /<w:gridSpan w:val="\d+"\/>/.test(xml) && /<w:vMerge w:val="restart"\/>/.test(xml),
+    // 表头的纵向合并仍在，且各行按 gridSpan 计的列数都等于表格网格列数（删列后横向跨度变成 1 属正常调整）
+    table_merged: /<w:vMerge w:val="restart"\/>/.test(xml) && tableConsistent(xml),
     caption_fields: caps.length >= f.captions.length && caps.every(p => p.xml.includes('SEQ Table')),
     footnote_kept: !!fnPara && fnPara.xml.includes('<w:footnoteReference') && notes.includes(FOOTNOTE_TEXT),
     tracked_kept: !!trPara,

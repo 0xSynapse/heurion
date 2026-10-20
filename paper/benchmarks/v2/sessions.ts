@@ -143,13 +143,18 @@ export function sessionSteps(paper: PaperTopic, features: TemplateFeatures): Ses
   ]
 }
 
-/** T7：带脚注的段落 a、带合作者批注的段落 c（c 须在 a 之后）。 */
-function movePair(pkg: D.Pkg): { a: D.Para; c: D.Para } {
+/**
+ * T7：带脚注的段落 a、带合作者批注的段落 c（c 须在 a 之后）。前几轮已经弄丢了脚注或批注时，
+ * 改按位置取讨论部分的第二、三段，本轮照常出题（之前的损失已在那一轮计过）。
+ */
+function movePair(pkg: D.Pkg, strict = false): { a: D.Para; c: D.Para } {
   const ps = D.paras(D.docXml(pkg))
   const ia = ps.findIndex(p => p.xml.includes('<w:footnoteReference'))
   const ic = ps.findIndex(p => /<w:commentRangeStart w:id="7"\/>/.test(p.xml))
-  if (ia < 0 || ic < 0 || ic <= ia) throw new Error('找不到带脚注与带批注的两段，或顺序不对')
-  return { a: ps[ia]!, c: ps[ic]! }
+  if (ia >= 0 && ic > ia) return { a: ps[ia]!, c: ps[ic]! }
+  const d = disc(pkg)
+  if (strict || d.length < 3) throw new Error('找不到带脚注与带批注的两段，或顺序不对')
+  return { a: d[1]!, c: d[2]! }
 }
 
 /** 本轮的判定任务（套用压力任务的判定：改前稿件为原稿，模板特征照常检查）。 */
@@ -172,7 +177,7 @@ export function sessionReady(t: PaperTopic): { ctx: StressCtx; steps: SessionSte
     const ctx = templateCtx(t)
     trackedPara(ctx)
     firstThree(ctx)
-    movePair(ctx.source)
+    movePair(ctx.source, true)
     if (!intro1(ctx.source) || !tableShape(ctx.source)?.lastHeader || occurrences(ctx.source, /\bpatients\b/g) === 0) return null
     return { ctx, steps: sessionSteps(t, ctx.features!) }
   } catch {
