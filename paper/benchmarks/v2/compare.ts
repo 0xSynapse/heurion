@@ -4,11 +4,12 @@
  * 改完都落成 .docx，用同一套综合判定（oracles.ts）。所有组用同一模型（DSH_MODEL，默认 deepseek-flash）。
  *   cd apps/platform && npx tsx --env-file-if-exists=../../.env ../../paper/benchmarks/v2/compare.ts \
  *     [--arms P,B1,B2] [--set natural,stress] [--seeds 301,302,303] [--only S2-rewrite,...] [--per-task N] [--limit N] [--parallel 3] [--port 8870] [--tag pilot]
+ *     [--resume <已有结果目录>]   中断后续跑：跳过已完成的回合，出错的重跑
  * 需要 .env 的 DEEPSEEK_API_KEY。稿件为 CC BY 开放获取论文改编，不含患者信息。
  */
 import { execSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -42,6 +43,8 @@ const { values } = parseArgs({
     parallel: { type: 'string', default: '3' },
     port: { type: 'string', default: '8870' },
     tag: { type: 'string', default: 'formal' },
+    // 断点续跑：沿用已有结果目录，跳过已完成的回合（出错的回合重跑）
+    resume: { type: 'string' },
   },
 })
 
@@ -84,7 +87,20 @@ interface Row {
   status: string; ms: number; calls: string[]; guard_rejections: number; concurrent_injected: boolean | null
   /** 本回合模型用量（输入 / 输出 / 缓存命中 token，步数，会话数；含子代理）。 */
   usage: TurnUsage | null
+  /** 日常任务的布置状态（并发编辑的标记等），离线重新判定用。 */
+  state?: Record<string, unknown>
   eval: Rework | null; error?: string
+}
+
+/** 判定（含联网查文献）失败时隔几秒再试一次；仍失败则记下原因、保留回合（之后可用 reeval.ts 离线重新判定）。 */
+async function judge(fn: () => Promise<Rework>, row: Row): Promise<Rework | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { return await fn() } catch (err) {
+      if (attempt === 1) { row.error = `判定失败：${String((err as Error).message).slice(0, 200)}`; return null }
+      await new Promise(r => setTimeout(r, 8000))
+    }
+  }
+  return null
 }
 const toolName = (n: unknown) => String(n ?? '?').replace(/^mcp__heurion__/, '')
 const taskId = (j: Job) => j.stress?.id ?? j.natural!.archetype
@@ -165,9 +181,9 @@ async function runP(base: string, j: Job, outDir: string): Promise<Row> {
   row.calls = events.filter(e => e.type === 'tool_call').map(e => toolName(e.name))
   row.guard_rejections = errors.filter(code => code && GUARD_CODES.has(code)).length
   if (j.natural) {
-    const checks = check(j.natural, j.paper, src, after, ctx.state, humanRevisionKept(after))
-    row.eval = await evaluateNatural(j.natural, j.paper, src, after, checks, measure(j.natural, j.paper, src, after))
-  } else row.eval = await evaluateStress(j.stress!, sctx!, after, [], row.concurrent_injected)
+    row.state = ctx.state
+    row.eval = await judge(() => evaluateNatural(j.natural!, j.paper, src, after, check(j.natural!, j.paper, src, after, ctx.state, humanRevisionKept(after)), measure(j.natural!, j.paper, src, after)), row)
+  } else row.eval = await judge(() => evaluateStress(j.stress!, sctx!, after, [], row.concurrent_injected), row)
   row.ms = Date.now() - t0
   return row
 }
@@ -226,9 +242,9 @@ async function runFile(arm: 'B1' | 'B2', j: Job, outDir: string): Promise<Row> {
     keep(outDir, arm, j, after)
     row.calls = events.filter(e => e.type === 'tool_call').map(e => toolName(e.name))
     if (j.natural) {
-      const checks = check(j.natural, j.paper, src, after, state, humanRevisionKept(after))
-      row.eval = await evaluateNatural(j.natural, j.paper, src, after, checks, measure(j.natural, j.paper, src, after))
-    } else row.eval = await evaluateStress(j.stress!, sctx!, after, [], row.concurrent_injected)
+      row.state = state
+      row.eval = await judge(() => evaluateNatural(j.natural!, j.paper, src, after, check(j.natural!, j.paper, src, after, state, humanRevisionKept(after)), measure(j.natural!, j.paper, src, after)), row)
+    } else row.eval = await judge(() => evaluateStress(j.stress!, sctx!, after, [], row.concurrent_injected), row)
   } finally {
     await harness.close().catch(() => {})
   }
@@ -250,24 +266,39 @@ async function pool<T>(items: T[], n: number, fn: (x: T) => Promise<void>): Prom
 }
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-const outDir = join(repoRoot, 'paper/results/v2-q1', `${values.tag}-${stamp}`)
+const outDir = values.resume ?? join(repoRoot, 'paper/results/v2-q1', `${values.tag}-${stamp}`)
 mkdirSync(outDir, { recursive: true })
 const arms = values.arms!.split(',')
 const seeds = values.seeds!.split(',').map(Number)
 const jobs = jobsFor(seeds)
-writeFileSync(join(outDir, 'meta.json'), JSON.stringify({
+const runInfo = {
   started_at: new Date().toISOString(),
   commit: execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(),
   dirty: execSync('git status --porcelain --untracked-files=no', { cwd: repoRoot }).toString().trim() !== '',
-  plan: 'paper/benchmarks/v2/ANALYSIS_PLAN_v2.md', tag: values.tag, model: MODEL, arms, seeds, sets: values.set, jobs: jobs.length,
-}, null, 2))
-console.log(`${jobs.length} 个任务 × ${arms.length} 组 → ${outDir}`)
+}
+if (values.resume) {
+  // 续跑：原 meta 保留，追加一次续跑记录（提交号须与原运行一致，否则不是同一份冻结的代码）
+  const meta = JSON.parse(readFileSync(join(outDir, 'meta.json'), 'utf8'))
+  if (meta.commit !== runInfo.commit) throw new Error(`续跑的代码版本 ${runInfo.commit} 与原运行 ${meta.commit} 不同`)
+  meta.resumes = [...(meta.resumes ?? []), runInfo]
+  writeFileSync(join(outDir, 'meta.json'), JSON.stringify(meta, null, 2))
+} else {
+  writeFileSync(join(outDir, 'meta.json'), JSON.stringify({ ...runInfo, plan: 'paper/benchmarks/v2/ANALYSIS_PLAN_v2.md', tag: values.tag, model: MODEL, arms, seeds, sets: values.set, jobs: jobs.length }, null, 2))
+}
+/** 已完成的回合（各组分别）：出错的不算，续跑时重跑。 */
+const jobKey = (j: Job) => `${j.seed}|${j.paper.pmcid}|${taskId(j)}`
+const finished = new Map(arms.map(arm => {
+  const path = join(outDir, `turns-${arm}.jsonl`)
+  const rows = existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l) as Row) : []
+  return [arm, new Set(rows.filter(r => r.status !== 'harness_error').map(r => `${r.seed}|${r.paper}|${r.task}`))]
+}))
+console.log(`${jobs.length} 个任务 × ${arms.length} 组 → ${outDir}${values.resume ? `（续跑：已完成 ${arms.map(a => `${a} ${finished.get(a)!.size}`).join('、')}）` : ''}`)
 
 const server = arms.includes('P')
   ? await startServer('v2-p', Number(values.port), join(here, '../exp3/data', `v2-q1-${stamp}`), join(outDir, 'server-P.log'), { PROCEDURAL_MODE: 'off' })
   : null
 try {
-  await Promise.all(arms.map(arm => pool(jobs, Number(values.parallel), async j => {
+  await Promise.all(arms.map(arm => pool(jobs.filter(j => !finished.get(arm)!.has(jobKey(j))), Number(values.parallel), async j => {
     const path = join(outDir, `turns-${arm}.jsonl`)
     let row: Row
     try {
