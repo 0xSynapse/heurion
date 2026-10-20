@@ -356,8 +356,9 @@ export function exportDocx(input: ExportInput): ExportResult {
     const pPrRaw = kids.find(k => /^<w:pPr\b/.test(k))
     const firstRun = kids.find(k => /^<w:r\b/.test(k) && /<w:t\b/.test(k))
     const rPrRaw = firstRun ? elementChildrenRaw(firstRun).find(k => /^<w:rPr\b/.test(k)) : undefined
-    // 顶层段落不是列表项；原来是标题样式而现在成了普通段落时，不再沿用标题样式
-    let base = pPrRaw ? stripEls(innerOf(pPrRaw), ['pPrChange', 'sectPr', 'rPr', 'numPr']) : ''
+    // 顶层段落不是列表项；原来是标题样式而现在成了普通段落时，不再沿用标题样式。
+    // 分节符（pPr 里的 sectPr）属于该段落所在节的结尾，改了文字仍要保留，否则其后的分页 / 页面设置会丢
+    let base = pPrRaw ? stripEls(innerOf(pPrRaw), ['pPrChange', 'rPr', 'numPr']) : ''
     if (node.type.name === 'paragraph' && !node.attrs.style) base = stripEls(base, ['pStyle'])
     const own = innerOf(pPr(node, extraPPr) || '<w:pPr/>')
     const merged = own ? mergeEls(base, own, PPR_ORDER) : base

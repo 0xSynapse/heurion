@@ -132,6 +132,17 @@ describe('docx 导出：改过的正文段落沿用原模板格式', () => {
     expect(body).toContain(p('讨论', '<w:pStyle w:val="Heading1"/>'))
   })
 
+  it('带分节符的段落改了文字后仍保留分节符', () => {
+    const sect = '<w:sectPr><w:type w:val="nextPage"/><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>'
+    const original = docx(p('第一节最后一段。', `<w:jc w:val="both"/>${sect}`) + p('第二节。'))
+    const t = importInto(original)
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '最后一段', replace: '末段' }] }, { actor: 'ai', turnId: 't1' })
+    const first = bodyOf(t.exportNow().bytes).split('</w:p>')[0]!
+    expect(first).toContain('末段')
+    expect(first).toContain(sect)
+  })
+
   it('原来是标题、改成普通段落后不再沿用标题样式', () => {
     const original = docx(p('讨论', '<w:pStyle w:val="Heading1"/><w:spacing w:before="240"/>'))
     const t = importInto(original)
