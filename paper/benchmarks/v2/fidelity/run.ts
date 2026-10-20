@@ -12,13 +12,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { DOMParser } from '../../../../apps/platform/node_modules/@xmldom/xmldom/lib/index.js'
 import { strFromU8, strToU8 } from '../../../../apps/platform/node_modules/fflate/esm/browser.js'
 import { client, readAll, type Client } from '../../exp3/client.ts'
 import * as D from '../../exp3/docx.ts'
 import { repoRoot, startServer, stopServer } from '../../exp3/server.ts'
 import { plain } from '../../manuscripts/tasks.ts'
 import { bodyChildrenRaw } from '../../../../apps/platform/src/convert/docx-import.ts'
+import { integrity, opens, wellFormed } from './check.ts'
 import { FIXTURES, NUMBERING_ABSTRACT, NUMBERING_NUM, t, type Fixture } from './fixtures.ts'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
@@ -66,76 +66,15 @@ function build(f: Fixture): D.Pkg {
 
 // —— 检查 ——
 
-function wellFormed(pkg: D.Pkg): string[] {
-  const bad: string[] = []
-  for (const name of Object.keys(pkg).filter(n => /\.(xml|rels)$/.test(n))) {
-    const errors: string[] = []
-    new DOMParser({ onError: (level: string, msg: string) => { if (level !== 'warning') errors.push(msg) } }).parseFromString(strFromU8(pkg[name]!), 'text/xml')
-    if (errors.length) bad.push(`${name}: ${errors[0]!.slice(0, 120)}`)
-  }
-  return bad
-}
-
-function integrity(pkg: D.Pkg): string[] {
-  const out: string[] = []
-  const doc = D.docXml(pkg)
-  const relsFor = (part: string) => { const dir = part.slice(0, part.lastIndexOf('/')); const name = part.slice(part.lastIndexOf('/') + 1); return text(pkg, `${dir}/_rels/${name}.rels`) ?? '' }
-  // 每个 XML 部件里用到的关系 id 都要在它的 .rels 里，内部目标部件要存在
-  for (const part of Object.keys(pkg).filter(n => /^word\/[^_].*\.xml$/.test(n))) {
-    const body = text(pkg, part)!
-    const rels = relsFor(part)
-    for (const m of body.matchAll(/\br:(?:id|embed|link|pict)="([^"]+)"/g)) if (!rels.includes(`Id="${m[1]}"`)) out.push(`${part} 引用了不存在的关系 ${m[1]}`)
-    for (const m of rels.matchAll(/<Relationship\b[^>]*Target="([^"]+)"[^>]*>/g)) {
-      if (/TargetMode="External"/.test(m[0])) continue
-      const dir = part.slice(0, part.lastIndexOf('/'))
-      const target = m[1]!.startsWith('/') ? m[1]!.slice(1) : `${dir}/${m[1]}`.replace(/[^/]+\/\.\.\//g, '')
-      if (!pkg[target]) out.push(`${part} 的关系指向不存在的部件 ${target}`)
-    }
-  }
-  const ids = (re: RegExp, s: string) => [...s.matchAll(re)].map(m => m[1]!)
-  const notes = (kind: 'footnote' | 'endnote') => {
-    const part = text(pkg, `word/${kind}s.xml`) ?? ''
-    for (const id of ids(new RegExp(`<w:${kind}Reference w:id="(-?\\d+)"`, 'g'), doc)) if (!new RegExp(`<w:${kind}\\b[^>]*w:id="${id}"`).test(part)) out.push(`${kind} ${id} 没有正文`)
-  }
-  notes('footnote'); notes('endnote')
-  const comments = text(pkg, 'word/comments.xml') ?? ''
-  for (const id of ids(/<w:commentReference w:id="(\d+)"/g, doc)) if (!new RegExp(`<w:comment\\b[^>]*w:id="${id}"`).test(comments)) out.push(`批注 ${id} 在 comments.xml 里没有条目`)
-  for (const id of ids(/<w:commentRangeStart w:id="(\d+)"/g, doc)) if (!doc.includes(`<w:commentRangeEnd w:id="${id}"/>`)) out.push(`批注 ${id} 只有起点没有终点`)
-  for (const id of ids(/<w:bookmarkStart\b[^>]*w:id="(\d+)"/g, doc)) if (!new RegExp(`<w:bookmarkEnd\\b[^>]*w:id="${id}"`).test(doc)) out.push(`书签 ${id} 没有结束`)
-  const begin = (doc.match(/w:fldCharType="begin"/g) ?? []).length
-  const end = (doc.match(/w:fldCharType="end"/g) ?? []).length
-  if (begin !== end) out.push(`域开始 ${begin} 个、结束 ${end} 个`)
-  const dup = (list: string[]) => [...new Set(list.filter((x, i) => list.indexOf(x) !== i))]
-  const paraIds = dup(ids(/w14:paraId="([0-9A-Fa-f]+)"/g, doc))
-  if (paraIds.length) out.push(`段落 ID 重复：${paraIds.slice(0, 3).join(',')}`)
-  const revIds = dup(ids(/<w:(?:ins|del|moveFrom|moveTo|rPrChange|pPrChange)\b[^>]*w:id="(\d+)"/g, doc))
-  if (revIds.length) out.push(`修订 id 重复：${revIds.slice(0, 3).join(',')}`)
-  const types = text(pkg, '[Content_Types].xml')!
-  for (const name of Object.keys(pkg)) {
-    if (name === '[Content_Types].xml') continue
-    const ext = name.split('.').pop()!
-    if (!types.includes(`PartName="/${name}"`) && !new RegExp(`Extension="${ext}"`, 'i').test(types)) out.push(`部件 ${name} 没有内容类型`)
-  }
-  return out
-}
-
 function markers(f: Fixture, pkg: D.Pkg): string[] {
   if (values.lo) return []
   return f.must.filter(m => !m.re.test(text(pkg, m.part ?? 'word/document.xml') ?? '')).map(m => m.label)
 }
 
 /** LibreOffice 打开并转成纯文本，看特征段落的文字是否在。 */
-function opens(pkg: D.Pkg): string | null {
+function opensFixture(pkg: D.Pkg): string | null {
   if (values['no-office']) return null
-  const dir = mkdtempSync(join(tmpdir(), 'fidelity-'))
-  writeFileSync(join(dir, 'x.docx'), D.saveDocx(pkg))
-  try {
-    execFileSync('soffice', [`-env:UserInstallation=file://${dir}/profile`, '--headless', '--convert-to', 'txt:Text', '--outdir', dir, join(dir, 'x.docx')], { stdio: 'ignore', timeout: 60_000 })
-    const txt = readFileSync(join(dir, 'x.txt'), 'utf8')
-    return /Editable sentence|Edited sentence|Rewritten sentence/.test(txt) ? null : 'LibreOffice 打开后找不到特征段落文字'
-  } catch (err) {
-    return `LibreOffice 打不开：${String((err as Error).message).slice(0, 80)}`
-  }
+  return opens(pkg, /Editable sentence|Edited sentence|Rewritten sentence/)
 }
 
 /** 用 LibreOffice 另存为 docx（另一种软件写出的 docx：XML 写法、编号、样式都与 Word 不同）。 */
@@ -226,7 +165,7 @@ async function layer(c: Client, f: Fixture, src: D.Pkg, which: Layer): Promise<R
     layer: which, op_error: opError, view: which === 'L0' ? viewLine : undefined,
     edit_applied: opError ? false : textOk,
     untouched_lost: Math.max(0, untouchedLost),
-    markers_lost: markers(f, out), xml_errors: wellFormed(out), integrity: integrity(out), office: which === 'L0' || which === 'L3' ? opens(out) : null,
+    markers_lost: markers(f, out), xml_errors: wellFormed(out), integrity: integrity(out), office: which === 'L0' || which === 'L3' ? opensFixture(out) : null,
     // 只比正文（根元素上补声明的命名空间不算差异）
     body_identical: which === 'L0' ? bodyOf(src) === bodyOf(out) : undefined,
   }

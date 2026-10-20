@@ -1,12 +1,17 @@
 /**
  * v2 主要终点「本回合是否需要人工返工」（ANALYSIS_PLAN_v2 §2.3）的综合判定，平台组与脚本组共用，只看改完的 .docx：
  * 1 任务未完成；2 非目标段落内容被改动；3 被修改段落丢失原有格式；4 医生内容丢失（并发插入的文字、合作者的
- * 修订与批注、待采纳修订）；5 新增引用不存在或与编号不符，或正文出现未登记的裸 DOI / PMID。S1 稿件另查模板特征。
+ * 修订与批注、待采纳修订）；5 新增引用不存在或与编号不符，或正文出现未登记的裸 DOI / PMID；
+ * 6 新增引用不支持所引的句子（评判模型读 PubMed 摘要判定），或正文没有引用它；
+ * 7 没让改的块文字没变、规范化 XML 却变了（悄悄改了格式或结构）；8 文件新出现结构问题或 LibreOffice 打不开。
+ * 4、5、6、裸编号与文件损坏（打不开、XML 坏、引用指向不存在）为严重，其余（含 ID 重复、标记不成对）为一般。S1 稿件另查模板特征。
  */
 import type { Task } from '../exp3/tasks.ts'
 import * as D from '../exp3/docx.ts'
 import { measureTarget, type Checks } from '../manuscripts/compare.ts'
 import { firstTable, type PaperTopic } from '../manuscripts/tasks.ts'
+import { bodyChildrenRaw } from '../../../apps/platform/src/convert/docx-import.ts'
+import { canonical, integrity, opensAsync, wellFormed } from './fidelity/check.ts'
 import { checkReferences, splitParts } from './refcheck/refcheck.ts'
 import { checkSupport, type SupportDetail } from './refcheck/support.ts'
 import { CLINICIAN_SENTENCE, matchPara, RECENT_YEAR, type StressCtx, type StressTask } from './stress.ts'
@@ -33,6 +38,12 @@ export interface Rework {
   human_lost: string[]
   features_lost: string[]
   refs: RefSummary
+  /** 没让改的块：文字没变、规范化 XML 却变了（格式或结构被悄悄改动）的个数。 */
+  silent_changes: number
+  /** 文件本身的问题（原稿没有、改完才有）：XML 不完整、引用 id 对不上、LibreOffice 打不开。 */
+  file_problems: string[]
+  /** none / moderate / severe：丢医生或合作者内容、引用有问题、文件损坏为严重，其余为一般。 */
+  severity: 'none' | 'moderate' | 'severe'
 }
 
 const lead = (s: string) => s.slice(0, 60)
@@ -90,7 +101,7 @@ async function refs(source: D.Pkg, after: D.Pkg): Promise<RefSummary> {
   }
 }
 
-function finish(x: Omit<Rework, 'rework' | 'reasons'>): Rework {
+function finish(x: Omit<Rework, 'rework' | 'reasons' | 'severity'>): Rework {
   const reasons: string[] = []
   if (!x.done) reasons.push('task_not_done')
   if (x.collateral > 0) reasons.push('collateral_change')
@@ -101,11 +112,43 @@ function finish(x: Omit<Rework, 'rework' | 'reasons'>): Rework {
   // 新增文献不支持所引的句子，或正文里没有引用它（部分支持不算返工，单独报告）
   if (x.refs.not_supported + x.refs.uncited > 0) reasons.push('unsupported_reference')
   if (x.refs.raw_ids_in_body > 0) reasons.push('raw_id_in_body')
-  return { ...x, rework: reasons.length > 0, reasons }
+  if (x.silent_changes > 0) reasons.push('silent_change')
+  // 文件问题分两级：打不开、XML 坏了、引用指向不存在的部件为严重；ID 重复、标记不成对为一般（Word 通常能自动修复）
+  const fatal = (p: string) => /LibreOffice|\.(xml|rels): |不存在的关系|不存在的部件|没有正文|没有条目|没有内容类型/.test(p)
+  if (x.file_problems.some(fatal)) reasons.push('file_invalid')
+  else if (x.file_problems.length > 0) reasons.push('file_inconsistent')
+  const SEVERE = ['human_content_lost', 'bad_reference', 'unsupported_reference', 'raw_id_in_body', 'file_invalid']
+  const severity = reasons.some(r => SEVERE.includes(r)) ? 'severe' : reasons.length > 0 ? 'moderate' : 'none'
+  return { ...x, rework: reasons.length > 0, reasons, severity }
+}
+
+/**
+ * 通用完整性（三组同一标准）：没让改的顶层块按规范化 XML 比较（文字没变而 XML 变了 = 悄悄改了格式或结构；
+ * 文字变了的由附带损伤负责）；文件新出现的结构问题与 LibreOffice 能否打开。exclude：本任务允许改的块（按块的文字判断）。
+ */
+async function generic(source: D.Pkg, after: D.Pkg, exclude: (text: string, index: number) => boolean): Promise<{ silent: number; problems: string[] }> {
+  const blockText = (xml: string) => D.paras(xml).map(p => p.text).join('\n')
+  const src = bodyChildrenRaw(D.docXml(source)).filter(b => !/^<w:sectPr\b/.test(b))
+  const out = bodyChildrenRaw(D.docXml(after))
+  const outCanon = new Set(out.map(canonical))
+  const outTexts = new Set(out.map(blockText))
+  let silent = 0
+  src.forEach((b, i) => {
+    const t = blockText(b)
+    if (!t.trim() || exclude(t, i)) return
+    if (!outCanon.has(canonical(b)) && outTexts.has(t)) silent++
+  })
+  const before = new Set([...wellFormed(source), ...integrity(source)])
+  const problems = [...wellFormed(after), ...integrity(after)].filter(x => !before.has(x))
+  // LibreOffice 转出的纯文本里至少有 200 个字母（正文读得出来）
+  const office = await opensAsync(after, /(?:\p{L}[^\p{L}]{0,3}){200}/u)
+  if (office) problems.push(office)
+  return { silent, problems }
 }
 
 /** 压力任务。 */
-export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.Pkg): Promise<Rework> {
+/** keep：医生此前的修改（多轮会话），其标志文字在改完的稿件里出现次数不能比改前少。 */
+export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.Pkg, keep: Array<{ label: string; expect: string }> = []): Promise<Rework> {
   const r = await refs(ctx.source, after)
   const d = task.check(ctx, after)
   // S3 的完成标准：新增了参考文献，正文也标注了引用；S3-recent 另要求至少 2 条核实为 RECENT_YEAR 年及以后发表
@@ -121,13 +164,19 @@ export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.
     const count = (pkg: D.Pkg) => D.paras(D.docXml(pkg)).map(p => p.text).join('\n').split(cc.expect).length - 1
     if (count(after) <= count(ctx.source)) human.push('concurrent_edit_lost')
   }
+  const occurrences = (pkg: D.Pkg, x: string) => D.paras(D.docXml(pkg)).map(p => p.text).join('\n').split(x).length - 1
+  for (const k of keep) if (occurrences(after, k.expect) < occurrences(ctx.source, k.expect)) human.push(`doctor_edit_lost:${k.label}`)
   if (ctx.features) {
     const st = featureState(after, ctx.features)
     if (!st.tracked_kept) human.push('coauthor_tracked_change')
     if (!st.comment_kept) human.push('coauthor_comment')
     for (const k of ['list_numbered', 'table_merged', 'caption_fields', 'footnote_kept', 'section_break_kept'] as const) if (!st[k]) features.push(k)
   }
-  return finish({ done, detail, untouched: c.untouched, collateral: c.changed, format_lost: formatLost(ctx.source, after, task.formatTarget(ctx)), human_lost: human, features_lost: features, refs: r })
+  const leads = task.targets(ctx).map(lead)
+  const blocks = bodyChildrenRaw(D.docXml(ctx.source))
+  const refAt = blocks.findIndex(b => D.paras(b).some(p => D.headingLevel(p) > 0 && /^(References|参考文献)\s*$/.test(p.text.trim())))
+  const g = await generic(ctx.source, after, (t, i) => leads.some(l => t.includes(l)) || (task.kind === 'S3' && refAt >= 0 && i >= refAt))
+  return finish({ done, detail, untouched: c.untouched, collateral: c.changed, format_lost: formatLost(ctx.source, after, task.formatTarget(ctx)), human_lost: human, features_lost: features, refs: r, silent_changes: g.silent, file_problems: g.problems })
 }
 
 /** 日常任务（v1 的 9 类任务）：沿用 v1 的完成判定与内容改动度量（manuscripts/compare.ts），格式按上面的 formatLost，再加引用核对。 */
@@ -135,6 +184,9 @@ export async function evaluateNatural(task: Task<PaperTopic>, paper: PaperTopic,
   const r = await refs(source, after)
   // 格式：与压力任务同一套找段方法（先按段落 ID），不用 v1 只按重合度找段的 formatKept
   const formatLostKeys = formatLost(source, after, measureTarget(task, paper) ?? null)
+  const target = measureTarget(task, paper)
+  const sectionWide = ['term_unify', 'p_value_format', 'move_subsection', 'table_row', 'citation'].includes(task.archetype)
+  const g = await generic(source, after, t => sectionWide || (!!target && t.includes(lead(target))) || /^(References|参考文献)/.test(t.trim()))
   const table = task.archetype === 'table_row' ? firstTable(paper) : null
   const done = table ? tableRowDone(after, table.row, table.newRow) : checks.done
   return finish({
@@ -142,6 +194,7 @@ export async function evaluateNatural(task: Task<PaperTopic>, paper: PaperTopic,
     untouched: measured.damage.untouched, collateral: measured.damage.content_changed,
     format_lost: formatLostKeys, human_lost: checks.human_kept === false ? ['clinician_content'] : [], features_lost: [],
     refs: { ...r, raw_ids_in_body: Math.max(r.raw_ids_in_body, checks.raw_id_added ? 1 : 0) },
+    silent_changes: g.silent, file_problems: g.problems,
   })
 }
 

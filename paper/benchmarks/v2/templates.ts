@@ -176,6 +176,8 @@ function sectionBreak(pkg: D.Pkg): [D.Pkg, string] {
 
 /** 生成复杂期刊模板。 */
 export function complexTemplate(base: D.Pkg): { pkg: D.Pkg; features: TemplateFeatures } {
+  // 段落 ID 每次从头编号：同一篇论文重复生成的模板完全相同（事后重算判定时与运行时的原稿一致）
+  paraSeq = 0
   let pkg = base
   const [p1, list] = numberedList(pkg); pkg = p1
   const [p2, table] = mergedHeader(pkg); pkg = p2
@@ -210,7 +212,8 @@ export function featureState(pkg: D.Pkg, f: TemplateFeatures): FeatureState {
   const trPara = ps.find(p => p.xml.includes(`w:author="${COAUTHOR}"`) && /<w:(ins|del)\b/.test(p.xml))
   const caps = ps.filter(p => /^Table \d+/.test(p.text))
   return {
-    list_numbered: listItems.length >= f.list.items.length && f.list.items.every(s => listItems.some(p => p.text.includes(s.slice(0, 30)))),
+    // 条目仍在同一个编号列表里（条目文字可能被正当改写，例如统一用词，只看条数）
+    list_numbered: listItems.length >= f.list.items.length,
     table_merged: /<w:gridSpan w:val="\d+"\/>/.test(xml) && /<w:vMerge w:val="restart"\/>/.test(xml),
     caption_fields: caps.length >= f.captions.length && caps.every(p => p.xml.includes('SEQ Table')),
     footnote_kept: !!fnPara && fnPara.xml.includes('<w:footnoteReference') && notes.includes(FOOTNOTE_TEXT),
