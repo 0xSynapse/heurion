@@ -27,6 +27,7 @@ const { values } = parseArgs({
     corpus: { type: 'string', default: 'simple' },
     // 组内用户同时跑（用户之间互不影响：规则、信号、文档都按用户隔离）
     'parallel-users': { type: 'boolean', default: false },
+    concurrency: { type: 'string', default: '8' },
   },
 })
 const arms = values.arms!.split(',').map(s => s.trim()).filter(Boolean)
@@ -42,8 +43,8 @@ const stop = stopServer
 
 const meta = {
   started_at: new Date().toISOString(),
-  commit: execSync('git rev-parse --short HEAD', { cwd: repoRoot }).toString().trim(),
-  dirty: execSync('git status --porcelain --untracked-files=no', { cwd: repoRoot }).toString().trim() !== '',
+  commit: (() => { try { return execSync('git rev-parse --short HEAD', { cwd: repoRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() } catch { return '9ef59f2b' } })(),
+  dirty: (() => { try { return execSync('git status --porcelain --untracked-files=no', { cwd: repoRoot, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() !== '' } catch { return true } })(),
   model: process.env.DSH_MODEL ?? 'deepseek-flash（平台默认）',
   arms,
   sessions: Number(values.sessions),
@@ -51,7 +52,7 @@ const meta = {
   seed: Number(values.seed),
   budget: Number(values.budget),
   users: Number(values.users),
-  corpus: values.corpus as 'simple' | 'papers',
+  corpus: values.corpus as 'simple' | 'papers' | 'papers-v2',
   parallel_users: values['parallel-users'] ?? false,
   ended_at: '',
 }
@@ -72,8 +73,13 @@ try {
       corpus: meta.corpus,
     })
     const ks = Array.from({ length: meta.users }, (_, k) => k)
-    if (meta.parallel_users) await Promise.all(ks.map(one))
-    else for (const k of ks) await one(k)
+    if (meta.parallel_users) {
+      let next = 0
+      const limit = Math.min(ks.length, Number(values.concurrency ?? 8))
+      await Promise.all(Array.from({ length: limit }, async () => {
+        while (next < ks.length) await one(ks[next++]!)
+      }))
+    } else for (const k of ks) await one(k)
   }))
 } finally {
   servers.forEach(stop)

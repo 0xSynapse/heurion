@@ -18,7 +18,7 @@ export interface RunOpts {
   seed: number
   out: string
   /** 稿件集：simple = 短稿模板；papers = 开放获取论文改编的长稿。 */
-  corpus?: 'simple' | 'papers'
+  corpus?: 'simple' | 'papers' | 'papers-v2'
 }
 
 export interface TurnRow {
@@ -78,9 +78,10 @@ export async function runArm(o: RunOpts): Promise<TurnRow[]> {
   const userId = me.id ?? me.user ?? o.user
   const rows: TurnRow[] = []
 
-  const corpus: Corpus<any> = o.corpus === 'papers' ? (await import('../manuscripts/tasks.ts')).PAPERS : SIMPLE
+  const msMod = o.corpus === 'papers' || o.corpus === 'papers-v2' ? await import('../manuscripts/tasks.ts') : null
+  const corpus: Corpus<any> = o.corpus === 'papers-v2' ? msMod!.PAPERS_V2 : o.corpus === 'papers' ? msMod!.PAPERS : SIMPLE
   // 长稿集：不同用户从不同论文开始轮换，覆盖全部论文；短稿集保持原来的顺序（可与旧结果对照）
-  const offset = corpus.name === 'papers' ? o.seed : 0
+  const offset = corpus.name.startsWith('papers') ? o.seed : 0
   for (let session = 1; session <= o.sessions; session++) {
     const split = session > o.sessions - o.heldout ? 'heldout' : 'train'
     const pool = split === 'heldout' ? corpus.heldout : corpus.train
@@ -105,7 +106,7 @@ export async function runArm(o: RunOpts): Promise<TurnRow[]> {
         }
 
         const seen: UiEvent[] = []
-        const events = await c.chat(docId, task.message(topic), async e => {
+        const events = await c.chat(docId, task.message(topic, ctx), async e => {
           seen.push(e)
           await task.onEvent?.(ctx, e, seen)
         })

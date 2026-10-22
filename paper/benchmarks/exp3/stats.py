@@ -1,5 +1,5 @@
 """
-实验 3 的确证性分析（按 paper/benchmarks/ANALYSIS_PLAN.md）。
+实验 3 的确证性分析（按 paper/benchmarks/ANALYSIS_PLAN.md 与 v2/ANALYSIS_PLAN_v2.md）。
   .venv-compute/bin/python3 -I paper/benchmarks/exp3/stats.py <结果目录> [<结果目录> ...] [--data <平台数据根目录>] [--out <输出目录>]
 
 输入：各结果目录下的 turns-<组>.jsonl，以及该次运行的平台数据库（执行信号）。
@@ -22,31 +22,42 @@ import statsmodels.formula.api as smf
 from scipy import stats
 
 warnings.filterwarnings("ignore")
-ARMS = ["off", "frozen", "utility"]
-NAMES = {"off": "无记忆", "frozen": "只有预置规则", "utility": "完整系统"}
+ALL_ARMS = ["off", "frozen", "placebo", "utility"]
+NAMES = {"off": "无记忆", "frozen": "只有预置规则", "placebo": "安慰剂", "utility": "完整系统"}
 
 
 def load(dirs: list[Path], data_root: Path) -> pd.DataFrame:
     rows = []
     for d in dirs:
         signals: dict[str, int] = {}
-        for arm in ARMS:
+        summary_file = d / "summary.json"
+        for arm in ALL_ARMS:
             db = data_root / d.name / arm / "platform" / "platform.db"
             if db.exists():
                 con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
                 for (turn,) in con.execute("select turn_id from execution_signals where turn_id is not null"):
                     signals[turn] = signals.get(turn, 0) + 1
                 con.close()
+        # Fallback if data_root was already cleaned up but turns.csv exists
+        csv_fallback: dict[tuple[str, str, int, str, str], int] = {}
+        csv_file = d / "turns.csv"
+        if not signals and csv_file.exists():
+            old_df = pd.read_csv(csv_file)
+            for _, orow in old_df.iterrows():
+                key = (str(orow["arm"]), str(orow["user_key"]), int(orow["session"]), str(orow["topic"]), str(orow["archetype"]))
+                csv_fallback[key] = int(orow["signals"])
+        for arm in ALL_ARMS:
             f = d / f"turns-{arm}.jsonl"
             if not f.exists():
                 continue
             for line in f.read_text().splitlines():
                 r = json.loads(line)
-                r["signals"] = signals.get(r.get("turn_id") or "", 0)
+                ukey = f"{r['arm']}/{r['user']}/{d.name}"
+                fb_key = (str(r["arm"]), ukey, int(r["session"]), str(r["topic"]), str(r["archetype"]))
+                r["signals"] = signals.get(r.get("turn_id") or "", csv_fallback.get(fb_key, r.get("guard_rejections", 0)))
                 r["run"] = d.name
                 rows.append(r)
     df = pd.DataFrame(rows)
-    # 用户在各组之间按种子配对：同一种子 = 同一组任务序列
     df["pair"] = df["seed"]
     df["user_key"] = df["arm"] + "/" + df["user"] + "/" + df["run"]
     return df
@@ -59,8 +70,18 @@ def exclusions(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     return kept, {"total": int(len(df)), "infra_or_error": int(infra.sum()), "invalid_setup": int(invalid.sum()), "analysed": int(len(kept))}
 
 
-def fit_count(df: pd.DataFrame, outcome: str) -> dict:
-    """组别的率比（以无记忆为参照）+ 完整系统 vs 只有预置规则。"""
+def contrast_rr(res, a_name: str, b_name: str) -> dict:
+    idx = list(res.params.index)
+    L = np.zeros(len(idx))
+    L[idx.index(a_name)] = 1
+    L[idx.index(b_name)] = -1
+    t = res.t_test(L)
+    diff, se = float(t.effect[0]), float(t.sd[0][0])
+    return {"rate_ratio": float(np.exp(diff)), "ci95": [float(np.exp(diff - 1.96 * se)), float(np.exp(diff + 1.96 * se))], "p": float(t.pvalue)}
+
+
+def fit_count(df: pd.DataFrame, outcome: str, arms: list[str]) -> dict:
+    """组别的率比（以无记忆为参照）+ 完整系统 vs 只有预置规则（及安慰剂对比）。"""
     formula = f"{outcome} ~ C(arm, Treatment('off')) + session + C(topic) + C(archetype)"
     groups = pd.factorize(df["user_key"])[0]
     model = "negative binomial (NB2)"
@@ -71,19 +92,15 @@ def fit_count(df: pd.DataFrame, outcome: str) -> dict:
     except Exception:
         model = "poisson (fallback)"
         res = smf.poisson(formula, df).fit(cov_type="cluster", cov_kwds={"groups": groups}, disp=0, maxiter=200)
-    out = {"model": model}
-    for arm in ["frozen", "utility"]:
+    out: dict = {"model": model}
+    for arm in [a for a in arms if a != "off"]:
         name = f"C(arm, Treatment('off'))[T.{arm}]"
         b, se = res.params[name], res.bse[name]
         out[f"{arm}_vs_off"] = {"rate_ratio": float(np.exp(b)), "ci95": [float(np.exp(b - 1.96 * se)), float(np.exp(b + 1.96 * se))], "p": float(res.pvalues[name])}
-    # 完整系统 vs 只有预置规则：两个系数之差
-    a, b = "C(arm, Treatment('off'))[T.utility]", "C(arm, Treatment('off'))[T.frozen]"
-    L = np.zeros(len(res.params))
-    L[list(res.params.index).index(a)] = 1
-    L[list(res.params.index).index(b)] = -1
-    t = res.t_test(L)
-    diff, se = float(t.effect[0]), float(t.sd[0][0])
-    out["utility_vs_frozen"] = {"rate_ratio": float(np.exp(diff)), "ci95": [float(np.exp(diff - 1.96 * se)), float(np.exp(diff + 1.96 * se))], "p": float(t.pvalue)}
+    out["utility_vs_frozen"] = contrast_rr(res, "C(arm, Treatment('off'))[T.utility]", "C(arm, Treatment('off'))[T.frozen]")
+    if "placebo" in arms:
+        out["utility_vs_placebo"] = contrast_rr(res, "C(arm, Treatment('off'))[T.utility]", "C(arm, Treatment('off'))[T.placebo]")
+        out["frozen_vs_placebo"] = contrast_rr(res, "C(arm, Treatment('off'))[T.frozen]", "C(arm, Treatment('off'))[T.placebo]")
     return out
 
 
@@ -96,9 +113,9 @@ def holm(ps: dict[str, float]) -> dict[str, float]:
     return adj
 
 
-def per_user(df: pd.DataFrame, col: str) -> pd.DataFrame:
+def per_user(df: pd.DataFrame, col: str, arms: list[str]) -> pd.DataFrame:
     """每个用户的每回合均值；行 = 配对（种子），列 = 组别。"""
-    return df.groupby(["pair", "arm"])[col].mean().unstack("arm")[ARMS]
+    return df.groupby(["pair", "arm"])[col].mean().unstack("arm")[arms]
 
 
 def wilcoxon(u: pd.DataFrame, a: str, b: str) -> dict:
@@ -137,9 +154,10 @@ def main() -> None:
     df = load(args.dirs, args.data)
     df, ex = exclusions(df)
     df["success"] = df["success"].astype(int)
+    arms = [a for a in ALL_ARMS if a in set(df["arm"].unique())]
 
     res: dict = {"exclusions": ex, "descriptive": {}}
-    for arm in ARMS:
+    for arm in arms:
         g = df[df["arm"] == arm]
         res["descriptive"][arm] = {
             "users": int(g["user_key"].nunique()), "turns": int(len(g)),
@@ -150,37 +168,42 @@ def main() -> None:
             "mean_seconds": float(g["ms"].mean() / 1000),
         }
 
-    primary = fit_count(df, "guard_rejections")
+    primary = fit_count(df, "guard_rejections", arms)
     adj = holm({"H1": primary["utility_vs_off"]["p"], "H2": primary["utility_vs_frozen"]["p"]})
     primary["holm"] = adj
     res["primary"] = primary
-    res["secondary_signals"] = fit_count(df, "signals")
+    res["secondary_signals"] = fit_count(df, "signals", arms)
     held = df[df["split"] == "heldout"]
-    res["heldout_descriptive"] = {arm: float(held[held["arm"] == arm]["guard_rejections"].mean()) for arm in ARMS} if len(held) else None
+    res["heldout_descriptive"] = {arm: float(held[held["arm"] == arm]["guard_rejections"].mean()) for arm in arms} if len(held) else None
 
-    u = per_user(df, "guard_rejections")
-    res["robustness"] = {
+    u = per_user(df, "guard_rejections", arms)
+    rob: dict = {
         "wilcoxon_utility_vs_off": wilcoxon(u, "utility", "off"),
         "wilcoxon_utility_vs_frozen": wilcoxon(u, "utility", "frozen"),
         "bootstrap_diff_utility_minus_off": cluster_bootstrap(df, "guard_rejections", "utility", "off"),
         "bootstrap_diff_utility_minus_frozen": cluster_bootstrap(df, "guard_rejections", "utility", "frozen"),
         "per_user_guard_per_turn": u.round(3).to_dict(orient="index"),
     }
-    # H3 非劣效：完成率差（完整系统 − 无记忆）的按配对 bootstrap 区间，下限 > −0.05 即非劣效
+    if "placebo" in arms:
+        rob["wilcoxon_utility_vs_placebo"] = wilcoxon(u, "utility", "placebo")
+        rob["bootstrap_diff_utility_minus_placebo"] = cluster_bootstrap(df, "guard_rejections", "utility", "placebo")
+    res["robustness"] = rob
     lo, hi = cluster_bootstrap(df, "success", "utility", "off")
     diff = float(df[df["arm"] == "utility"]["success"].mean() - df[df["arm"] == "off"]["success"].mean())
     res["H3_noninferiority"] = {"diff": diff, "ci95": [lo, hi], "margin": -0.05, "noninferior": lo > -0.05}
 
     out = args.out or args.dirs[0]
-    # 回合级数据表：R 的主分析（stats.R，glmmTMB 负二项混合模型）读这个
     df[["arm", "user_key", "pair", "session", "split", "topic", "archetype", "guard_rejections", "signals", "success"]].to_csv(out / "turns.csv", index=False)
     (out / "stats.json").write_text(json.dumps(res, ensure_ascii=False, indent=2, default=float))
     lines = ["# 实验 3 统计结果", "", f"排除：{ex}", "", "| 组 | 用户 | 回合 | 每回合被拦下 | 每回合全部信号 | 完成率 | 留出论文每回合被拦下 |", "|---|---|---|---|---|---|---|"]
-    for arm in ARMS:
+    for arm in arms:
         d = res["descriptive"][arm]
         lines.append(f"| {NAMES[arm]} | {d['users']} | {d['turns']} | {d['guard_per_turn']:.3f} | {d['signals_per_turn']:.3f} | {d['success_rate']:.1%} | {d['heldout_guard_per_turn'] if d['heldout_guard_per_turn'] is None else round(d['heldout_guard_per_turn'], 3)} |")
     lines += ["", f"主要模型：{primary['model']}（按用户聚类稳健标准误）", "", "| 比较 | 率比 | 95% CI | p | Holm p |", "|---|---|---|---|---|"]
-    for key, label, h in [("utility_vs_off", "H1 完整系统 vs 无记忆", "H1"), ("utility_vs_frozen", "H2 完整系统 vs 只有预置规则", "H2"), ("frozen_vs_off", "只有预置规则 vs 无记忆（描述）", None)]:
+    cmp_rows = [("utility_vs_off", "H1 完整系统 vs 无记忆", "H1"), ("utility_vs_frozen", "H2 完整系统 vs 只有预置规则", "H2"), ("frozen_vs_off", "只有预置规则 vs 无记忆（描述）", None)]
+    if "placebo" in arms:
+        cmp_rows.extend([("utility_vs_placebo", "完整系统 vs 安慰剂（探索）", None), ("frozen_vs_placebo", "只有预置规则 vs 安慰剂（探索）", None), ("placebo_vs_off", "安慰剂 vs 无记忆（描述）", None)])
+    for key, label, h in cmp_rows:
         c = primary[key]
         lines.append(f"| {label} | {c['rate_ratio']:.2f} | {c['ci95'][0]:.2f}–{c['ci95'][1]:.2f} | {c['p']:.4f} | {'' if h is None else f'{adj[h]:.4f}'} |")
     r = res["robustness"]

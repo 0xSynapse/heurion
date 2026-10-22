@@ -387,3 +387,312 @@ export function targets(t: PaperTopic) {
   }
 }
 
+
+/**
+ * 第二阶段（§5.4）：只用预置规则未覆盖的错误码对应的 9 个任务，加强触发条件：
+ * - 多条批注挂在同一段整段重写（anchor_has_open_comments × 2：方法段、讨论段）
+ * - 含特殊符号（en-dash –、加减号 ±）与上下标（χ²）的统计量/P 值替换（text_not_found × 2）
+ * - 同一短语在段内多处出现的替换（ambiguous_match × 2：讨论段、结果段）
+ * - 不相邻段落的结构化合并（invalid_structure × 1）
+ * - 含跨列合并表头的表格单元格修改（cell_not_found × 1）
+ * - 段间衔接润色的范围控制与越界撤销（user_reverted_turn × 1）
+ */
+export const TASKS_V2: Task<PaperTopic>[] = [
+  {
+    archetype: 'open_comment_methods',
+    code: 'anchor_has_open_comments',
+    seeded: false,
+    message: (_t, ctx) => `请用 replace_text 把方法部分第一段（块 {#${ctx?.state.target}}）开头第一句改写为不超过 8 个英文单词的简短句（只改第一句，其余句子保持不变）。`,
+    async prepare(ctx) {
+      const b = section(blocks(ctx.before), METHODS).find(isPara)!
+      const body = b.raw.replace(/^\{#[a-z0-9]+\} ?/, '')
+      const lead = 'This multicenter investigation enrolled consecutive adult patients according to predefined eligibility criteria.'
+      await edit(ctx, {
+        base_rev: revOf(ctx.before),
+        mode: 'apply',
+        ops: [{ op: 'replace_block', id: b.id, markdown: `${lead} ${body}` }],
+      })
+      ctx.state.target = b.id
+      ctx.state.lead = lead
+      ctx.state.snippet = 'enrolled consecutive adult patients according to predefined eligibility criteria'
+      ctx.state.comments = []
+    },
+    async onEvent(ctx, e, events) {
+      if (e.type !== 'tool_result' || e.isError || ctx.state.commented) return
+      const call = events.find(x => x.type === 'tool_call' && x.callId === e.callId)
+      if (!/doc_read/.test(String(call?.name ?? ''))) return
+      try {
+        const cm = await ctx.c.api(`/api/docs/${ctx.docId}/comments`, {
+          method: 'POST',
+          body: JSON.stringify({ node_id: ctx.state.target, snippet: ctx.state.snippet, text: '请补充具体的入组与纳排标准细节' }),
+        })
+        ctx.state.comments.push(cm.id)
+        ctx.state.commented = true
+      } catch { /* ignore */ }
+    },
+    async oracle(ctx) {
+      const view = await read(ctx)
+      const after = blocks(view).find(x => x.id === ctx.state.target)
+      if (!after || plain(after.raw).includes(ctx.state.lead as string)) return fail('开头第一句没有改写')
+      const d = await ctx.c.api(`/api/docs/${ctx.docId}`)
+      const threads = d.comments as Array<{ id: string; replies: Array<{ role: string }> }>
+      const lost = (ctx.state.comments as string[]).filter(id => !view.includes(`评论 ${id} @`) && !threads.find(x => x.id === id)?.replies.some(r => r.role === 'ai'))
+      return lost.length === 0 ? ok() : fail(`${lost.length} 条批注锚点丢失且未在线程说明`)
+    },
+  },
+  {
+    archetype: 'open_comment_discussion',
+    code: 'anchor_has_open_comments',
+    seeded: false,
+    message: (_t, ctx) => `请用 replace_text 把讨论部分第一段（块 {#${ctx?.state.target}}）开头第一句改写为不超过 8 个英文单词的简短句（只改第一句，其余句子保持不变）。`,
+    async prepare(ctx) {
+      const b = section(blocks(ctx.before), DISCUSSION).find(isPara)!
+      const body = b.raw.replace(/^\{#[a-z0-9]+\} ?/, '')
+      const lead = 'Our comprehensive analysis demonstrates a clinically meaningful improvement in primary patient outcomes.'
+      await edit(ctx, {
+        base_rev: revOf(ctx.before),
+        mode: 'apply',
+        ops: [{ op: 'replace_block', id: b.id, markdown: `${lead} ${body}` }],
+      })
+      ctx.state.target = b.id
+      ctx.state.lead = lead
+      ctx.state.snippet = 'demonstrates a clinically meaningful improvement in primary patient outcomes'
+      ctx.state.comments = []
+    },
+    async onEvent(ctx, e, events) {
+      if (e.type !== 'tool_result' || e.isError || ctx.state.commented) return
+      const call = events.find(x => x.type === 'tool_call' && x.callId === e.callId)
+      if (!/doc_read/.test(String(call?.name ?? ''))) return
+      try {
+        const cm = await ctx.c.api(`/api/docs/${ctx.docId}/comments`, {
+          method: 'POST',
+          body: JSON.stringify({ node_id: ctx.state.target, snippet: ctx.state.snippet, text: '首句请避免因果性过强的表述' }),
+        })
+        ctx.state.comments.push(cm.id)
+        ctx.state.commented = true
+      } catch { /* ignore */ }
+    },
+    async oracle(ctx) {
+      const view = await read(ctx)
+      const after = blocks(view).find(x => x.id === ctx.state.target)
+      if (!after || plain(after.raw).includes(ctx.state.lead as string)) return fail('开头第一句没有改写')
+      const d = await ctx.c.api(`/api/docs/${ctx.docId}`)
+      const threads = d.comments as Array<{ id: string; replies: Array<{ role: string }> }>
+      const lost = (ctx.state.comments as string[]).filter(id => !view.includes(`评论 ${id} @`) && !threads.find(x => x.id === id)?.replies.some(r => r.role === 'ai'))
+      return lost.length === 0 ? ok() : fail(`${lost.length} 条批注锚点丢失且未在线程说明`)
+    },
+  },
+  {
+    archetype: 'p_value_format',
+    code: 'text_not_found',
+    seeded: false,
+    message: (_t, ctx) => `结果部分第一段（块 {#${ctx?.state.blockId}}，当前 rev=${ctx?.state.rev}）末尾有一处卡方检验结果 "(95% CI: 0.62–0.89; χ<sup>2</sup> = 14.2, *P* = 0.003)"，请用 replace_text 把其中的 "χ<sup>2</sup> = 14.2, *P* = 0.003" 改为去掉前导 0 的格式 "χ<sup>2</sup> = 14.2, *P* = .003"（保留 χ 的上标 2 与 P 的斜体）。`,
+    async prepare(ctx) {
+      const b = section(blocks(ctx.before), RESULTS).find(isPara)!
+      const body = b.raw.replace(/^\{#[a-z0-9]+\} ?/, '')
+      await edit(ctx, {
+        base_rev: revOf(ctx.before),
+        mode: 'apply',
+        ops: [{ op: 'replace_block', id: b.id, markdown: `${body} (95% CI: 0.62–0.89; χ<sup>2</sup> = 14.2, *P* = 0.003)` }],
+      })
+      ctx.state.blockId = b.id
+      ctx.state.rev = revOf(await read(ctx))
+    },
+    async oracle(ctx) {
+      const text = plain(await read(ctx))
+      return text.includes('P = .003') && !text.includes('P = 0.003') ? ok() : fail('目标统计量与 P 值未按要求替换')
+    },
+  },
+  {
+    archetype: 'stat_symbol_replace',
+    code: 'text_not_found',
+    seeded: false,
+    message: (_t, ctx) => `方法部分第一段（块 {#${ctx?.state.blockId}}，当前 rev=${ctx?.state.rev}）末尾有一处异质性检验结果 "(heterogeneity: I<sup>2</sup> = 68.4%, *P*<sub>het</sub> = 0.004)"，请用 replace_text 把其中的 "I<sup>2</sup> = 68.4%, *P*<sub>het</sub> = 0.004" 改为去掉前导 0 的格式 "I<sup>2</sup> = 68.4%, *P*<sub>het</sub> = .004"（保留上下标与斜体）。`,
+    async prepare(ctx) {
+      const b = section(blocks(ctx.before), METHODS).find(isPara)!
+      const body = b.raw.replace(/^\{#[a-z0-9]+\} ?/, '')
+      await edit(ctx, {
+        base_rev: revOf(ctx.before),
+        mode: 'apply',
+        ops: [{ op: 'replace_block', id: b.id, markdown: `${body} (heterogeneity: I<sup>2</sup> = 68.4%, *P*<sub>het</sub> = 0.004)` }],
+      })
+      ctx.state.blockId = b.id
+      ctx.state.rev = revOf(await read(ctx))
+    },
+    async oracle(ctx) {
+      const text = plain(await read(ctx)).replace(/<\/?(?:sup|sub)>/g, '')
+      return text.includes('Phet = .004') && !text.includes('Phet = 0.004') ? ok() : fail('目标异质性检验 P 值未按要求替换')
+    },
+  },
+  {
+    archetype: 'ambiguous_term_discussion',
+    code: 'ambiguous_match',
+    seeded: false,
+    message: (_t, ctx) => `请用 replace_text 把讨论部分第一段（块 {#${ctx?.state.blockId}}）末尾总结句中的 "the treatment effect remained statistically significant" 改为 "the clinical benefit remained consistent"。`,
+    async prepare(ctx) {
+      const b = section(blocks(ctx.before), DISCUSSION).find(isPara)!
+      const body = b.raw.replace(/^\{#[a-z0-9]+\} ?/, '')
+      await edit(ctx, {
+        base_rev: revOf(ctx.before),
+        mode: 'apply',
+        ops: [{ op: 'replace_block', id: b.id, markdown: `${body} In summary, the treatment effect remained statistically significant.` }],
+      })
+      ctx.state.blockId = b.id
+      ctx.state.body = body
+    },
+    async onEvent(ctx, e, events) {
+      if (e.type !== 'tool_result' || e.isError || ctx.state.duplicated) return
+      const call = events.find(x => x.type === 'tool_call' && x.callId === e.callId)
+      if (!/doc_read/.test(String(call?.name ?? ''))) return
+      const view = await read(ctx)
+      try {
+        await edit(ctx, {
+          base_rev: revOf(view),
+          mode: 'apply',
+          ops: [{ op: 'replace_block', id: ctx.state.blockId, markdown: `In our primary analysis, the treatment effect remained statistically significant. ${ctx.state.body} In summary, the treatment effect remained statistically significant.` }],
+        })
+        ctx.state.duplicated = true
+      } catch { /* ignore */ }
+    },
+    async oracle(ctx) {
+      const b = blocks(await read(ctx)).find(x => x.id === ctx.state.blockId)
+      const t = plain(b?.raw ?? '')
+      return t.includes('the clinical benefit remained consistent') ? ok() : fail('未完成段末目标分句的替换')
+    },
+  },
+  {
+    archetype: 'ambiguous_term_results',
+    code: 'ambiguous_match',
+    seeded: false,
+    message: (_t, ctx) => `请用 replace_text 把结果部分第一段（块 {#${ctx?.state.blockId}}）末尾句中的 "prognostic value was confirmed in sensitivity analyses" 改为 "predictive value was validated in sensitivity analyses"。`,
+    async prepare(ctx) {
+      const b = section(blocks(ctx.before), RESULTS).find(isPara)!
+      const body = b.raw.replace(/^\{#[a-z0-9]+\} ?/, '')
+      await edit(ctx, {
+        base_rev: revOf(ctx.before),
+        mode: 'apply',
+        ops: [{ op: 'replace_block', id: b.id, markdown: `${body} Furthermore, prognostic value was confirmed in sensitivity analyses.` }],
+      })
+      ctx.state.blockId = b.id
+      ctx.state.body = body
+    },
+    async onEvent(ctx, e, events) {
+      if (e.type !== 'tool_result' || e.isError || ctx.state.duplicated) return
+      const call = events.find(x => x.type === 'tool_call' && x.callId === e.callId)
+      if (!/doc_read/.test(String(call?.name ?? ''))) return
+      const view = await read(ctx)
+      try {
+        await edit(ctx, {
+          base_rev: revOf(view),
+          mode: 'apply',
+          ops: [{ op: 'replace_block', id: ctx.state.blockId, markdown: `Across the full cohort, prognostic value was confirmed in sensitivity analyses. ${ctx.state.body} Furthermore, prognostic value was confirmed in sensitivity analyses.` }],
+        })
+        ctx.state.duplicated = true
+      } catch { /* ignore */ }
+    },
+    async oracle(ctx) {
+      const b = blocks(await read(ctx)).find(x => x.id === ctx.state.blockId)
+      const t = plain(b?.raw ?? '')
+      return t.includes('predictive value was validated in sensitivity analyses') ? ok() : fail('未完成段末目标分句的替换')
+    },
+  },
+  {
+    archetype: 'merge_list_items',
+    code: 'invalid_structure',
+    seeded: false,
+    message: (_t, ctx) => `方法部分有两段相邻的伦理与知情同意说明（块 {#${ctx?.state.p1}} 与块 {#${ctx?.state.p2}}），请调用 doc_edit 的 merge 操作将 {#${ctx?.state.p1}} 与 {#${ctx?.state.p2}} 合并为同一段。`,
+    async prepare(ctx) {
+      const b = section(blocks(ctx.before), METHODS).find(isPara)!
+      const res = await edit(ctx, {
+        base_rev: revOf(ctx.before),
+        mode: 'apply',
+        ops: [{ op: 'insert_after', anchor_id: b.id, markdown: 'All eligible participants provided written informed consent prior to study enrollment.\n\nThe study protocol was approved by the institutional review board at each participating center.' }],
+      })
+      ctx.state.p1 = res.results[0].ids[0]
+      ctx.state.p2 = res.results[0].ids[1]
+    },
+    async onEvent(ctx, e, events) {
+      if (e.type !== 'tool_result' || e.isError || ctx.state.separated) return
+      const call = events.find(x => x.type === 'tool_call' && x.callId === e.callId)
+      if (!/doc_read/.test(String(call?.name ?? ''))) return
+      const view = await read(ctx)
+      try {
+        await edit(ctx, {
+          base_rev: revOf(view),
+          mode: 'apply',
+          ops: [{ op: 'insert_after', anchor_id: ctx.state.p1, markdown: '### Ethical Oversight' }],
+        })
+        ctx.state.separated = true
+      } catch { /* ignore */ }
+    },
+    async oracle(ctx) {
+      const view = await read(ctx)
+      const bs = blocks(view)
+      const b1 = bs.find(x => x.id === ctx.state.p1)
+      const b2 = bs.find(x => x.id === ctx.state.p2)
+      const t1 = plain(b1?.raw ?? '')
+      return t1.includes('written informed consent') && t1.includes('institutional review board') && !b2
+        ? ok()
+        : fail('两段伦理说明未合并为同一段')
+    },
+  },
+  {
+    archetype: 'table_merged_header',
+    code: 'cell_not_found',
+    seeded: false,
+    message: (_t, ctx) => `已知表 1 的块 id 为 {#${ctx?.state.tableId}}、当前版本 rev=${ctx?.state.rev}。请不要调用 doc_outline 或 doc_read，直接调用 doc_edit 的 table_set_style 操作，传入 cells: [{row: 0, col: 0, background: "#F2F4F8", valign: "center"}, {row: 0, col: 1, background: "#F2F4F8", valign: "center"}] 将表头前两格底纹设为 "#F2F4F8"、垂直对齐设为 "center"。`,
+    async prepare(ctx) {
+      const tbl = blocks(ctx.before).find(b => b.raw.includes('\n| ---'))!
+      const sep = tbl.raw.split('\n').find(l => l.includes('| ---'))!
+      const width = Math.max(2, sep.split('|').length - 2)
+      await edit(ctx, {
+        base_rev: revOf(ctx.before),
+        mode: 'apply',
+        ops: [
+          { op: 'table_insert_rows', id: tbl.id, at: 0, rows: [['**Characteristic**', '**Cohort Summary**', ...Array(Math.max(0, width - 2)).fill('**Subgroup**')]] },
+          { op: 'table_merge_cells', id: tbl.id, row: 0, col: 0, rows: 1, cols: 2 },
+        ],
+      })
+      ctx.state.tableId = tbl.id
+      ctx.state.width = width
+      ctx.state.rev = revOf(await read(ctx))
+    },
+    async oracle(ctx) {
+      const d = await ctx.c.api(`/api/docs/${ctx.docId}`)
+      const jsonStr = JSON.stringify(d)
+      return jsonStr.includes('F2F4F8') ? ok() : fail('表头底纹未设置为 #F2F4F8')
+    },
+  },
+  {
+    archetype: 'out_of_scope_revert',
+    code: 'user_reverted_turn',
+    seeded: false,
+    message: (_t, ctx) => `讨论部分第 1 段（块 {#${ctx?.state.p1}}）与第 2 段（块 {#${ctx?.state.p2}}，当前 rev=${ctx?.state.rev}）之间的论述衔接略显生硬，请润色改写以使第 1 段自然过渡到第 2 段。`,
+    async prepare(ctx) {
+      const paras = section(blocks(ctx.before), DISCUSSION).filter(isPara)
+      ctx.state.p1 = paras[0]!.id
+      ctx.state.p2 = paras[1]!.id
+      ctx.state.rev = revOf(ctx.before)
+    },
+    async react(ctx, turnId) {
+      const target = ctx.state.p1 as string
+      const after = new Map(blocks(await read(ctx)).map(b => [b.id, b.raw]))
+      const touched = blocks(ctx.before).filter(b => b.id !== target && after.get(b.id) !== b.raw).map(b => b.id)
+      ctx.state.outOfScope = touched
+      if (touched.length === 0) return false
+      await ctx.c.api(`/api/docs/${ctx.docId}/turns/${turnId}/revert`, { method: 'POST' })
+      return true
+    },
+    async oracle(ctx) {
+      const out = ctx.state.outOfScope as string[] | undefined
+      if (!out) return fail('没有执行范围检查（回合没有正常结束）')
+      return out.length === 0 ? ok() : fail(`改动了范围外的 ${out.length} 个块`)
+    },
+  },
+]
+
+export const PAPERS_V2: Corpus<PaperTopic> = {
+  ...PAPERS,
+  name: 'papers-v2',
+  tasks: TASKS_V2,
+}

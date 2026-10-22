@@ -1,0 +1,174 @@
+{
+  "exclusions": {
+    "total": 432,
+    "infra_or_error": 0,
+    "invalid_setup": 0,
+    "analysed": 432
+  },
+  "descriptive": {
+    "off": {
+      "users": 4,
+      "turns": 144,
+      "guard_per_turn": 0.7847222222222222,
+      "guard_total": 113,
+      "signals_per_turn": 0.8819444444444444,
+      "success_rate": 0.7222222222222222,
+      "heldout_guard_per_turn": 0.75,
+      "guard_by_session": [
+        0.8055555555555556,
+        0.75,
+        0.8333333333333334,
+        0.75
+      ],
+      "mean_seconds": 14.798034722222223
+    },
+    "frozen": {
+      "users": 4,
+      "turns": 144,
+      "guard_per_turn": 0.75,
+      "guard_total": 108,
+      "signals_per_turn": 0.8680555555555556,
+      "success_rate": 0.7222222222222222,
+      "heldout_guard_per_turn": 0.7777777777777778,
+      "guard_by_session": [
+        0.75,
+        0.7222222222222222,
+        0.75,
+        0.7777777777777778
+      ],
+      "mean_seconds": 15.554652777777777
+    },
+    "utility": {
+      "users": 4,
+      "turns": 144,
+      "guard_per_turn": 0.3194444444444444,
+      "guard_total": 46,
+      "signals_per_turn": 0.3958333333333333,
+      "success_rate": 0.7916666666666666,
+      "heldout_guard_per_turn": 0.05555555555555555,
+      "guard_by_session": [
+        0.7777777777777778,
+        0.3333333333333333,
+        0.1111111111111111,
+        0.05555555555555555
+      ],
+      "mean_seconds": 12.781576388888888
+    }
+  },
+  "primary": {
+    "model": "poisson (fallback)",
+    "frozen_vs_off": {
+      "rate_ratio": 0.9557522123893806,
+      "ci95": [
+        0.8831653970577809,
+        1.0343048929796699
+      ],
+      "p": 0.26142982567086326
+    },
+    "utility_vs_off": {
+      "rate_ratio": 0.40707964601769914,
+      "ci95": [
+        0.3766686548429995,
+        0.4399459208278612
+      ],
+      "p": 5.920587736005641e-114
+    },
+    "utility_vs_frozen": {
+      "rate_ratio": 0.42592592592592593,
+      "ci95": [
+        0.3995308954185554,
+        0.4540647455706926
+      ],
+      "p": 1.0221754516266723e-150
+    },
+    "holm": {
+      "H2": 2.0443509032533446e-150,
+      "H1": 5.920587736005641e-114
+    }
+  },
+  "secondary_signals": {
+    "model": "poisson (fallback)",
+    "frozen_vs_off": {
+      "rate_ratio": 0.984251968503937,
+      "ci95": [
+        0.9148175483983134,
+        1.0589564435006646
+      ],
+      "p": 0.6706382093233425
+    },
+    "utility_vs_off": {
+      "rate_ratio": 0.44881889763779526,
+      "ci95": [
+        0.4083650646181914,
+        0.49328020521330435
+      ],
+      "p": 4.7059409068479135e-62
+    },
+    "utility_vs_frozen": {
+      "rate_ratio": 0.45599999999999996,
+      "ci95": [
+        0.41487300552692513,
+        0.5012039762285884
+      ],
+      "p": 1.2943042534628416e-59
+    }
+  },
+  "heldout_descriptive": {
+    "off": 0.75,
+    "frozen": 0.7777777777777778,
+    "utility": 0.05555555555555555
+  },
+  "robustness": {
+    "wilcoxon_utility_vs_off": {
+      "n_pairs": 4,
+      "p": 0.125,
+      "lower_in_a": 4,
+      "median_diff": -0.4722222222222222
+    },
+    "wilcoxon_utility_vs_frozen": {
+      "n_pairs": 4,
+      "p": 0.125,
+      "lower_in_a": 4,
+      "median_diff": -0.4444444444444444
+    },
+    "bootstrap_diff_utility_minus_off": [
+      -0.5,
+      -0.4305555555555556
+    ],
+    "bootstrap_diff_utility_minus_frozen": [
+      -0.46527777777777773,
+      -0.3819444444444445
+    ],
+    "per_user_guard_per_turn": {
+      "501": {
+        "off": 0.833,
+        "frozen": 0.694,
+        "utility": 0.333
+      },
+      "502": {
+        "off": 0.75,
+        "frozen": 0.806,
+        "utility": 0.333
+      },
+      "503": {
+        "off": 0.75,
+        "frozen": 0.75,
+        "utility": 0.306
+      },
+      "504": {
+        "off": 0.806,
+        "frozen": 0.75,
+        "utility": 0.306
+      }
+    }
+  },
+  "H3_noninferiority": {
+    "diff": 0.06944444444444442,
+    "ci95": [
+      0.02777777777777779,
+      0.11111111111111116
+    ],
+    "margin": -0.05,
+    "noninferior": true
+  }
+}

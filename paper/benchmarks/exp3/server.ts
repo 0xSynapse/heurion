@@ -13,13 +13,15 @@ export interface Server { arm: string; base: string; dataDir: string; proc: Chil
 
 /** 起一个平台实例；env 覆盖实验开关（PROCEDURAL_MODE 等）。 */
 export async function startServer(arm: string, port: number, dataDir: string, logPath: string, env: Record<string, string>): Promise<Server> {
-  mkdirSync(dataDir, { recursive: true })
+  const homeDir = join(dataDir, 'home')
+  mkdirSync(homeDir, { recursive: true })
   const log = createWriteStream(logPath)
-  const proc = spawn('npx', ['tsx', '--env-file-if-exists=../../.env', 'src/index.ts'], {
+  const proc = spawn('./node_modules/.bin/tsx', ['--env-file-if-exists=../../.env', 'src/index.ts'], {
     cwd: platformDir,
     detached: true,
     env: {
       ...process.env,
+      HOME: homeDir,
       PORT: String(port),
       HEURION_DATA_DIR: dataDir,
       HARNESS_EVOLVE: '0',
