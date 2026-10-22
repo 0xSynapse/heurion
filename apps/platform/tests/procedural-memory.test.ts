@@ -230,4 +230,66 @@ describe('Layer 2: Dual-Track Procedural Memory & Execution Signals', () => {
     const out = await procedural.forPrompt('u1', docId, '修改结论')
     expect(out.split(baseline.rule).length - 1).toBe(1)
   })
+  it('evolveFromSignals：未预置守卫码生成具体修法（含 hint），而非通用 doc_validate 模板', async () => {
+    const { store, docs, docId } = setup('# 结果\n\n| 指标 | 组 1 | 组 2 |\n|---|---|---|\n| 年龄 | 60 | 61 |\n\n共纳入 100 例患者（P = 0.03）。')
+    const execSignals = new ExecutionSignals(store, docs)
+    const procedural = new ProceduralHarnessService(store, docs)
+
+    for (const t of ['t1', 't2']) {
+      execSignals.recordGuardReject({
+        owner: 'u_hint', docId, turnId: t, code: 'text_not_found', message: '找不到原文',
+        extra: { hint: '按 current 中的原文逐字复制 find。' },
+      })
+      execSignals.recordGuardReject({
+        owner: 'u_hint', docId, turnId: t, code: 'invalid_structure', message: '不相邻不能合并',
+        extra: { hint: '不相邻的先用 move 挪到一起。' },
+      })
+      execSignals.recordGuardReject({
+        owner: 'u_hint', docId, turnId: t, code: 'cell_not_found', message: '单元格已并入合并单元格',
+        extra: { hint: '请写合并单元格的左上角 (0, 1)。' },
+      })
+      execSignals.recordGuardReject({
+        owner: 'u_hint', docId, turnId: t, code: 'custom_guard_xyz', message: '自定义守卫拦截',
+        extra: { hint: '请先调用 custom_fix 修复参数后再提交。' },
+      })
+    }
+
+    const created = procedural.evolveFromSignals('u_hint')
+    const byCode = new Map(created.map(r => [r.trigger_pattern, r.rule]))
+    expect(byCode.get('text_not_found')).toContain('doc_read')
+    expect(byCode.get('text_not_found')).toContain('逐字一致')
+    expect(byCode.get('text_not_found')).not.toContain('优先调用 doc_validate 预检')
+    expect(byCode.get('invalid_structure')).toContain('move')
+    expect(byCode.get('invalid_structure')).toContain('merge')
+    expect(byCode.get('cell_not_found')).toContain('左上角')
+    expect(byCode.get('custom_guard_xyz')).toContain('请先调用 custom_fix 修复参数后再提交。')
+
+    // 消息线索命中：统一写成（text_not_found）、合并（invalid_structure）、表 1（cell_not_found）
+    const pText = await procedural.forPrompt('u_hint', docId, '把结果部分正文中的所有 P 值统一写成 P = .03 格式', 320)
+    expect(pText).toContain(byCode.get('text_not_found')!)
+
+    const pMove = await procedural.forPrompt('u_hint', docId, '把讨论部分的第 1 段和第 3 段合并成一段', 320)
+    expect(pMove).toContain(byCode.get('invalid_structure')!)
+
+    const pTable = await procedural.forPrompt('u_hint', docId, '修改表 1 表头第 2 列的名称', 320)
+    expect(pTable).toContain(byCode.get('cell_not_found')!)
+  })
+
+  it('placebo 模式不从信号沉淀新规则，且在基准规则后附加与任务无关的平台说明文字', async () => {
+    const { store, docs, docId } = setup('# 讨论\n\n本研究存在一定局限性。')
+    const execSignals = new ExecutionSignals(store, docs)
+    const placebo = new ProceduralHarnessService(store, docs, { mode: 'placebo' })
+    const frozen = new ProceduralHarnessService(store, docs, { mode: 'frozen' })
+
+    for (const t of ['t1', 't2']) {
+      execSignals.recordGuardReject({ owner: 'u_pl', docId, turnId: t, code: 'ambiguous_match', message: '出现 2 次' })
+    }
+    expect(placebo.evolveFromSignals('u_pl')).toHaveLength(0)
+
+    const outFrozen = await frozen.forPrompt('u_pl', docId, '润色讨论段')
+    const outPlacebo = await placebo.forPrompt('u_pl', docId, '润色讨论段')
+    expect(outPlacebo).toContain('［执行策略与避坑指南］')
+    expect(outPlacebo).toContain('[平台说明] Heurion 临床研究工作站')
+    expect(outPlacebo.length).toBeGreaterThan(outFrozen.length)
+  })
 })

@@ -80,7 +80,7 @@ export const config = {
   maxDocConcurrency: Math.max(1, Number(env('MAX_DOC_CONCURRENCY', '2'))),
   /**
    * 程序性记忆模式（论文实验 3 的对照组开关，生产保持默认 utility）：
-   * off=不注入也不沉淀；frozen=只注入已有规则、不从执行信号沉淀新规则；fifo=按创建顺序注入；utility=按效用排序注入。
+   * off=不注入也不沉淀；frozen=只注入已有规则、不从执行信号沉淀新规则；placebo=同 frozen 另附平台背景说明；fifo=按创建顺序注入；utility=按效用排序注入。
    */
   proceduralMode: proceduralMode(env('PROCEDURAL_MODE', 'utility')),
   /** 每轮注入程序性策略的字符预算。 */
@@ -91,9 +91,9 @@ export const config = {
   freshSessionPerTurn: env('HARNESS_FRESH_SESSION', '0') === '1',
 }
 
-function proceduralMode(v: string): 'off' | 'frozen' | 'fifo' | 'utility' {
-  if (v === 'off' || v === 'frozen' || v === 'fifo' || v === 'utility') return v
-  throw new Error(`PROCEDURAL_MODE 只能是 off / frozen / fifo / utility：${v}`)
+function proceduralMode(v: string): 'off' | 'frozen' | 'fifo' | 'utility' | 'placebo' {
+  if (v === 'off' || v === 'frozen' || v === 'fifo' || v === 'utility' || v === 'placebo') return v
+  throw new Error(`PROCEDURAL_MODE 只能是 off / frozen / fifo / utility / placebo：${v}`)
 }
 
 if (process.env.NODE_ENV === 'production' && config.secret === 'dev-secret-not-for-production-use!') {
