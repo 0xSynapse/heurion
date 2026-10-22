@@ -133,6 +133,11 @@ describe('MCP 工具', () => {
     expect((await t.call('list_citations', { doc_id: t.docId })).body.length).toBe(before)
     const missing = await t.call('insert_citation', { doc_id: t.docId, doi: '10.9999/404' })
     expect(missing.body.code).toBe('doi_not_found')
+
+    // 传入 claim 时，若摘要与句子核心术语完全无重合，则以 citation_unsupported 拦截
+    const unsupported = await t.call('insert_citation', { doc_id: t.docId, doi: '10.1056/NEJMoa2020', claim: 'Esophageal displacement with transesophageal echocardiography during ablation.' })
+    expect(unsupported.isError).toBe(true)
+    expect(unsupported.body.code).toBe('citation_unsupported')
   })
 
   it('回合内的写入带 turn_id，并通知回合', async () => {

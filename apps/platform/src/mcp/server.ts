@@ -116,6 +116,11 @@ const INSTRUCTIONS = `heurion 文档平台。文档只能通过这些工具读�
 - 评论是用户锚定在具体文字上的修改要求：comments_list 读取 → 修改 → comment_reply 说明改了什么。
 - 回复用户时用平常的话说明改了什么、改在哪（如「第 2 节第一段」），不要提块 id、rev、cite_id、工具名等内部信息。
 - 报错时按返回的 code 与 hint 处理（例如 conflict_user_edited 要基于 current 重新决定改法），不要原样重试。
+- 严格遵守修改范围：只修改用户明确要求改的块或表格，**严禁顺带修改未要求的相邻正文段落**（例如用户要求删除、新增或修改某张表格的列/行时，只对该表格块执行 table_* 操作，绝对不要去搜寻或修改正文中介绍该表格的段落，除非用户明确要求同步修改正文）。
+- 为句子补引文（如“找 2-3 篇文献支撑这句话”）时：
+  1) pubmed_search 已直接返回每篇候选文献的摘要（abstract），必须先根据摘要中的具体研究结果挑选文献，严禁仅凭标题盲选；补充条数严格控制在用户要求的范围内（如要求 2–3 条，优先精选最匹配的 2 条真实文献）。
+  2) 若原句包含多个分句或不同层面的概念，应将每条 [@c:id] 分别标在它所支撑的具体分句/短语之后，不要笼统堆在句末。
+  3) 若原句陈述的是**本研究自身**的方法、特定数据库整合或本队列具体数值（如含 this study、in this cohort、reported here 或本队列精确百分比），外部文献不可能直接证明“本研究”自身的数据；此时必须在**完整保留原句原文一字不删改**的前提下，用 replace_text 将原句末尾的句号 . 替换为逗号加简短的文献对照/支撑分句（注意中间不要用句号断开，保持在同一句内，例如「<原句去掉末尾句号>, consistent with prior studies demonstrating <文献1摘要的具体结论> [@c:id1] and <文献2摘要的具体结论> [@c:id2].」），使每条引用紧邻的分句主张都与该文献摘要的研究结果直接对应！
 - 插图：幻灯片里的柱状 / 条形 / 折线 / 饼图优先用 deck_edit 的 add_chart（原生图表，用户能在 PowerPoint 里改数据）；其他数据图（生存曲线、森林图）用 shell 里的 matplotlib 画成图片后 asset_upload；示意图（机制、流程、研究设计）用 diagram_render 写 SVG。拿到 asset_id 后，文档用 ![简短说明](asset:<asset_id> "图 1 图题。图注说明") 插入（引号里是显示在图下方的图注，学术图必须有），幻灯片用 deck_edit 的 add_image。
 - 参考资料库：写作需要依据时用 kb_search 检索用户上传的资料（论文、指南、内部材料），kb_read 读原文；资料是文献时仍用 insert_citation 规范引用。
 - 记忆：回合开头的［记忆］是用户确认过的偏好与事实，照做。用户明确说「记住…」「以后都…」时用 memory_propose（explicit=true）记下；用户说「忘掉…」「别再…」时用 memory_forget；用户要你「整理一下记忆」时用 memory_review（结果是待用户采纳的建议）；发现用户反复强调同一偏好时可以 memory_propose 提议，由用户确认。一条只记一件事，写成以后可直接照做的规则。不要记患者信息、病例细节、账号，也不要记只对本份文档有用的内容。
@@ -658,7 +663,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
   // —— 文献与引用 ——
 
   server.registerTool('pubmed_search', {
-    description: '检索 PubMed，返回 PMID、DOI、标题、作者、期刊、年份。',
+    description: '检索 PubMed，返回 PMID、DOI、标题、作者、期刊、年份与摘要（abstract）。补引文时先阅读返回的 abstract 筛选研究结果真正支持目标主张的文献。',
     inputSchema: { query: z.string().min(1).describe('PubMed 检索式，可用 MeSH 与布尔运算'), limit: z.number().int().min(1).max(20).default(10) },
   }, async ({ query, limit }) => json(await deps.pubmed.search(query, limit)))
 
@@ -692,14 +697,14 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     inputSchema: { doi: z.string().min(1) },
   }, async ({ doi }) => json(await deps.crossref.lookup(doi) ?? { found: false, doi: normalizeDoi(doi) }))
 
-  /** 文献摘要摘录（前 600 字，供 AI 核对是否支持所在句子）；查不到为 null。 */
+  /** 文献摘要摘录（前 2400 字，供 AI 核对是否支持所在句子）；查不到为 null。 */
   const abstractExcerpt = async (a: { pmid: string | null; doi: string | null }): Promise<string | null> => {
     try {
       let pmid = a.pmid
       if (!pmid && a.doi && typeof deps.pubmed?.pmidForDoi === 'function') pmid = await deps.pubmed.pmidForDoi(a.doi).catch(() => null)
       if (!pmid || typeof deps.pubmed?.abstract !== 'function') return null
       const text = await deps.pubmed.abstract(pmid)
-      return text ? text.replace(/\s+/g, ' ').trim().slice(0, 600) : null
+      return text ? text.replace(/\s+/g, ' ').trim().slice(0, 2400) : null
     } catch {
       return null
     }
@@ -714,9 +719,10 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       doi: z.string().optional().describe('文献 DOI'),
       pmid: z.string().optional().describe('PubMed ID (PMID)'),
       query: z.string().optional().describe('文献标题或关键词模糊检索'),
+      claim: z.string().optional().describe('你要用这篇文献支撑的正文句子或分句主张（提供后会按摘要核对支撑度）'),
       style: z.enum(['ama', 'apa', 'vancouver', 'gbt7714']).optional(),
     },
-  }, async ({ doc_id, doi, pmid, query, style }) => {
+  }, async ({ doc_id, doi, pmid, query, claim, style }) => {
     const denied = ctx.check(doc_id, 'write')
     if (denied) return denied
     let d = doi?.trim()
@@ -757,7 +763,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       if (typeof deps.pubmed?.search === 'function') hits = await deps.pubmed.search(q, 5).catch(() => [])
       if (hits.length === 0 && typeof deps.openalex?.search === 'function') hits = await deps.openalex.search(q, 5).catch(() => [])
       if (hits.length === 0) return fail('citation_not_found', `检索词「${q}」在 PubMed/OpenAlex 查不到文献`, { hint: '换检索词，或用 pubmed_search / openalex_search 查找后按 DOI 或 PMID 登记。' })
-      const candidates = await Promise.all(hits.map(async h => ({ pmid: h.pmid, doi: h.doi, title: h.title, journal: h.journal, year: h.year, abstract: await abstractExcerpt(h) })))
+      const candidates = await Promise.all(hits.map(async h => ({ pmid: h.pmid, doi: h.doi, title: h.title, journal: h.journal, year: h.year, abstract: h.abstract ?? await abstractExcerpt(h) })))
       return json({ registered: false, candidates, note: '还没有登记。读摘要后选一篇研究结果支持你那句话的，用它的 doi 或 pmid 再调用 insert_citation。' })
     }
     if (!article) {
@@ -765,11 +771,25 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       return fail(code, `文献在 Crossref/PubMed/OpenAlex 查不到 (${d ? `DOI ${normalizeDoi(d)}` : p ? `PMID ${p}` : `检索词 ${q}`})，不能作为引用`, { hint: '用 pubmed_search 或 openalex_search 找到真实文献后登记。' })
     }
 
+    const abstract = await abstractExcerpt({ ...article, pmid: article.pmid ?? p ?? null })
+    if (claim?.trim() && abstract) {
+      const CLAIM_STOP = new Set([
+        'this', 'that', 'with', 'from', 'were', 'have', 'been', 'which', 'their', 'these', 'those', 'into', 'more', 'than', 'also', 'such', 'both', 'between', 'among', 'after', 'before', 'during', 'under', 'over', 'through', 'where', 'when', 'while', 'study', 'studies', 'methodological', 'contribution', 'lies', 'having', 'organized', 'explicit', 'process', 'links', 'context', 'understanding', 'analysis', 'design', 'prospective', 'reported', 'here', 'cohort', 'patients', 'group', 'groups', 'results', 'data', 'used', 'using', 'based', 'showed', 'shown', 'found', 'associated', 'compared', 'similar', 'consistent',
+      ])
+      const sigWords = [...new Set((claim.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter(w => !CLAIM_STOP.has(w)))]
+      if (sigWords.length >= 2) {
+        const hay = `${article.title ?? ''} ${abstract}`.toLowerCase()
+        const hitCount = sigWords.filter(w => hay.includes(w.slice(0, 5))).length
+        if (hitCount === 0) {
+          return fail('citation_unsupported', '该文献摘要与你要支撑的句子主张无关（核心术语无重合），请换一篇摘要研究结果直接支持该主张的文献。', { title: article.title, abstract })
+        }
+      }
+    }
+
     const formatted = formatCitation(article, style ?? 'ama')
     const finalDoi = article.doi ? normalizeDoi(article.doi) : (article.pmid ? `pmid:${article.pmid}` : `ref:${randomUUID().slice(0, 8)}`)
     const finalUrl = article.doi ? `https://doi.org/${article.doi}` : (article.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${article.pmid}/` : null)
     const row = store.upsertCitation({ doc_id, doi: finalDoi, pmid: article.pmid ?? p ?? null, formatted, url: finalUrl })
-    const abstract = await abstractExcerpt({ ...article, pmid: article.pmid ?? p ?? null })
     return json({
       cite_id: row.id, marker: `[@c:${row.id}]`, formatted: row.formatted, doi: row.doi, pmid: row.pmid, abstract,
       note: abstract ? '核对摘要：研究结果支持你要写的那句话再在正文用这个 cite_id；不支持就换一篇（没用到的引用不进文献表）。' : '查不到摘要：确认这篇文献确实支持那句话后再用。',

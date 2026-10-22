@@ -1914,6 +1914,13 @@ export class Store {
       .map(r => ({ ...r, affected: JSON.parse(r.affected) }))
   }
 
+  userEditOps(docId: string): Array<{ rev: number; ops: unknown }> {
+    const rows = this.db
+      .prepare(`SELECT rev, ops FROM op_log WHERE doc_id = ? AND actor = 'user' ORDER BY rev`)
+      .all(docId) as Array<{ rev: number; ops: string }>
+    return rows.map((r) => ({ rev: r.rev, ops: JSON.parse(r.ops) }))
+  }
+
   // —— 版本 ——
 
   addVersion(input: { docId: string; rev: number; source: VersionSource; turnId?: string | null; note: string; state: Uint8Array }): VersionRow {
