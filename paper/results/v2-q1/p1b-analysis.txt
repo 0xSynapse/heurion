@@ -1,0 +1,51 @@
+== 描述：返工率（压力 / 会话 / 日常）
+          P   B1   B2
+natural 4.9  8.6  8.6
+session 5.4 13.4 10.6
+stress  2.4 20.3  9.8
+严重返工率
+          P  B1  B2
+natural 0.0 0.0 1.2
+session 1.6 5.2 5.9
+stress  0.0 3.3 5.7
+敏感性口径返工率
+          P   B1   B2
+natural 4.9  8.6  8.6
+session 5.4 13.4 10.6
+stress  2.4 20.3  9.8
+boundary (singular) fit: see help('isSingular')
+boundary (singular) fit: see help('isSingular')
+boundary (singular) fit: see help('isSingular')
+
+== 确证检验（Holm 校正，总 α = 0.05）
+准确性 B1 vs P：返工比值比 32.47（95% CI 14.39–73.26），p = 5.169e-17，Holm p = 1.034e-16
+准确性 B2 vs P：返工比值比 9.66（95% CI 4.43–21.08），p = 1.225e-08，Holm p = 1.225e-08
+费用 P/B1：几何均值之比 0.70（95% CI 0.67–0.73），p = 1.242e-73，Holm p = 3.726e-73
+费用 P/B2：几何均值之比 0.67（95% CI 0.64–0.69），p = 7.472e-96，Holm p = 2.989e-95
+
+== 敏感性（排除「改正的数字」）
+B1 vs P：OR 32.47（14.39–73.26），p = 5.169e-17；B2 vs P：OR 9.66（4.43–21.08），p = 1.225e-08
+
+== 次要：严重返工
+B1 vs P：OR 27.98（6.77–115.62），p = 4.197e-06；B2 vs P：OR 51.95（12.29–219.66），p = 7.866e-08
+
+== 收敛检查
+boundary (singular) fit: see help('isSingular') 
+boundary (singular) fit: see help('isSingular') 
+boundary (singular) fit: see help('isSingular') 
+
+== 费用与耗时（描述）
+  arm    kind   cost      ms
+1   P natural 0.0082 38.8930
+2  B1 natural 0.0140 48.8120
+3  B2 natural 0.0157 49.3440
+4   P session 0.0069 15.4985
+5  B1 session 0.0090 26.4610
+6  B2 session 0.0097 27.9105
+7   P  stress 0.0072 33.5360
+8  B1  stress 0.0172 57.2550
+9  B2  stress 0.0191 61.5860
+合计费用（美元）
+    P    B1    B2 
+ 9.26 13.21 13.05 
+平台组守卫拦截： 138 次，涉及 111 个回合
