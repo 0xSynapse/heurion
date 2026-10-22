@@ -116,7 +116,7 @@ const INSTRUCTIONS = `heurion 文档平台。文档只能通过这些工具读�
 - 评论是用户锚定在具体文字上的修改要求：comments_list 读取 → 修改 → comment_reply 说明改了什么。
 - 回复用户时用平常的话说明改了什么、改在哪（如「第 2 节第一段」），不要提块 id、rev、cite_id、工具名等内部信息。
 - 报错时按返回的 code 与 hint 处理（例如 conflict_user_edited 要基于 current 重新决定改法），不要原样重试。
-- 严格遵守修改范围：只修改用户明确要求改的块或表格，**严禁顺带修改未要求的相邻正文段落**（例如用户要求删除、新增或修改某张表格的列/行时，只对该表格块执行 table_* 操作，绝对不要去搜寻或修改正文中介绍该表格的段落，除非用户明确要求同步修改正文）。
+- 严格遵守修改范围：只修改用户明确要求改的块或表格，**严禁顺带修改未要求的相邻正文段落**（例如用户要求删除、新增或修改某张表格的列/行时，只对该表格块执行 table_* 操作，绝对不要去搜寻或修改正文中介绍该表格的段落，除非用户明确要求同步修改正文）；当用户要求删除表格「最后一列」时，只删除逻辑网格最右侧那一列（at = 逻辑总列数 - 1, count = 1），即使前面分组（如 Before PSM 与 After PSM）中存在同名列头（如两个 SMD 列），也绝不能连同前面的同名列一起删掉。
 - 为句子补引文（如“找 2-3 篇文献支撑这句话”）时：
   1) pubmed_search 已直接返回每篇候选文献的摘要（abstract），必须先根据摘要中的具体研究结果挑选文献，严禁仅凭标题盲选；补充条数严格控制在用户要求的范围内（如要求 2–3 条，优先精选最匹配的 2 条真实文献）。
   2) 若原句包含多个分句或不同层面的概念，应将每条 [@c:id] 分别标在它所支撑的具体分句/短语之后，不要笼统堆在句末。
@@ -305,7 +305,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       'merge {ids}（把按顺序相邻的段落并入第一个：原文、格式、批注、脚注与引用原样保留，不要手工复制后一段再删除）；delete {ids}；' +
       'move {ids, after}；set_block_style {id, type?, level?, align?, style?}；' +
       'set_text_style {id, font_family?, size?, bold?, italic?, color?, range?}（修改文字字体、字号、粗体、斜体、颜色）；' +
-      'table_set_cells {id, cells:[{row, col, markdown}]}；table_insert_rows {id, at, rows}；table_delete_rows {id, at, count}；table_insert_cols {id, at, cells?}；table_delete_cols {id, at, count}；' +
+      'table_set_cells {id, cells:[{row, col, markdown}]}；table_insert_rows {id, at, rows}；table_delete_rows {id, at, count}；table_insert_cols {id, at, cells?}；table_delete_cols {id, at, count}（删最后一列时 at = 逻辑总列数 - 1, count = 1，切勿误删前面分组里的同名列）；' +
       'table_merge_cells {id, row, col, rows, cols}（内容并入左上角）；table_split_cell {id, row, col}；table_set_header {id, rows}（开头几行作表头、导出跨页重复，0 = 无）；' +
       'table_set_style {id, col_widths?: 相对宽度数组, cells?: [{row, col, background?: #RRGGBB / 空串去底纹, valign?: top|center|bottom}]}；单元格文字左中右对齐用 set_block_style 作用在单元格段落 id 上。' +
       '表格行列号按 doc_read 视图的逻辑网格计（`^` = 与上方合并、`<` = 与左侧合并，写入合并单元格用其左上角坐标；增删行列时合并区自动伸缩）。' +
@@ -780,19 +780,23 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       if (sigWords.length >= 2) {
         const hay = `${article.title ?? ''} ${abstract}`.toLowerCase()
         const hitCount = sigWords.filter(w => hay.includes(w.slice(0, 5))).length
-        if (hitCount === 0) {
-          return fail('citation_unsupported', '该文献摘要与你要支撑的句子主张无关（核心术语无重合），请换一篇摘要研究结果直接支持该主张的文献。', { title: article.title, abstract })
+        const minHits = sigWords.length >= 5 ? 2 : 1
+        if (hitCount < minHits) {
+          return fail('citation_unsupported', '该文献摘要与你要支撑的句子主张无关（核心术语重合不足），请换一篇摘要研究结果直接支持该主张的文献。', { title: article.title, abstract })
         }
       }
     }
 
     const formatted = formatCitation(article, style ?? 'ama')
     const finalDoi = article.doi ? normalizeDoi(article.doi) : (article.pmid ? `pmid:${article.pmid}` : `ref:${randomUUID().slice(0, 8)}`)
+    if (abstract && finalDoi) store.putAbstract(finalDoi, article.pmid ?? p ?? null, abstract)
     const finalUrl = article.doi ? `https://doi.org/${article.doi}` : (article.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${article.pmid}/` : null)
     const row = store.upsertCitation({ doc_id, doi: finalDoi, pmid: article.pmid ?? p ?? null, formatted, url: finalUrl })
     return json({
       cite_id: row.id, marker: `[@c:${row.id}]`, formatted: row.formatted, doi: row.doi, pmid: row.pmid, abstract,
-      note: abstract ? '核对摘要：研究结果支持你要写的那句话再在正文用这个 cite_id；不支持就换一篇（没用到的引用不进文献表）。' : '查不到摘要：确认这篇文献确实支持那句话后再用。',
+      note: abstract
+        ? '核对摘要：研究结果支持你要写的那句话再在正文用这个 cite_id；不支持就换一篇（没用到的引用不进文献表）。'
+        : '该文献在公开库中仅有题录元数据（查不到摘要全文）：若这是用户明确点名要求引用的特定 DOI/PMID，请直接根据其题目与元数据在正文中用 [@c:' + row.id + '] 完成引用；若只是检索到的候选文献，请换一篇有摘要的文献。',
     })
   })
 

@@ -724,3 +724,110 @@ describe('章节防重复守卫（导出与编辑一致性）', () => {
   })
 })
 
+describe('Phase 1b 赛后归因回归：已登记引用保护与引文语境/摘要关联守卫', () => {
+  it('段内已有的平台引用节点（[@c:id]）在 AI 改写或局部替换时不能被静默丢弃或退化为纯文本编号', () => {
+    const { store, docs, ops, docId } = setup('占位。')
+    const c1 = store.upsertCitation({ doc_id: docId, doi: '10.1056/a', pmid: '11111111', formatted: 'Author A. Trial A. N Engl J Med. 2022.', url: null })
+    const c2 = store.upsertCitation({ doc_id: docId, doi: '10.1056/b', pmid: '22222222', formatted: 'Author B. Trial B. Lancet. 2023.', url: null })
+    const [p] = ids(docs, docId)
+    ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{ op: 'replace_block', id: p!, markdown: `既往大型队列证实心血管获益显著[@c:${c1.id}]，且安全性良好[@c:${c2.id}]。` }],
+    }, { actor: 'user', turnId: null })
+
+    // AI 整段改写时把 [@c:...] 退化为纯文本 [1] 或漏掉 [@c:c2] -> 拒绝
+    const e1 = expectOpError(() => ops.edit({
+      doc_id: docId,
+      base_rev: 1,
+      mode: 'apply',
+      ops: [{ op: 'replace_block', id: p!, markdown: `既往大型队列证实心血管获益显著[1]，且安全性良好[@c:${c2.id}]。` }],
+    }, { actor: 'ai', turnId: null }), 'existing_citation')
+    expect(e1.message).toContain(`[@c:${c1.id}]`)
+
+    // AI 局部替换把 [@c:c1] 删掉 -> 拒绝
+    expectOpError(() => ops.edit({
+      doc_id: docId,
+      base_rev: 1,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: p!, find: `获益显著[@c:${c1.id}]`, replace: '获益显著' }],
+    }, { actor: 'ai', turnId: null }), 'existing_citation')
+
+    // 完整保留 [@c:c1] 与 [@c:c2] -> 通过
+    ops.edit({
+      doc_id: docId,
+      base_rev: 1,
+      mode: 'apply',
+      ops: [{ op: 'replace_block', id: p!, markdown: `多项大型队列证实远期心血管获益显著[@c:${c1.id}]，且整体安全性良好[@c:${c2.id}]。` }],
+    }, { actor: 'ai', turnId: null })
+  })
+
+  it('引文语境与摘要关联守卫：拦截缩写句点断句产生的孤立引用、拦截直接挂在「本研究观察结果」句尾的无过渡引用、拦截与缓存摘要零词干重叠的挂名引用', () => {
+    const { store, docs, ops, docId } = setup('In this retrospective cohort study, we evaluated 120 patients with acute myocarditis using cardiac magnetic resonance.')
+    const [p] = ids(docs, docId)
+    const c = store.upsertCitation({
+      doc_id: docId,
+      doi: '10.1016/j.jacc.2023.01.001',
+      pmid: '37000001',
+      formatted: 'Smith J, et al. Cardiac magnetic resonance in acute myocarditis. J Am Coll Cardiol. 2023;81:100-110.',
+      url: null,
+    })
+    store.putAbstract(
+      '10.1016/j.jacc.2023.01.001',
+      '37000001',
+      'Cardiac magnetic resonance imaging provides high diagnostic accuracy for myocardial edema and late gadolinium enhancement in patients with acute myocarditis.',
+    )
+
+    // 1) 缩写句点（vs.）把引文切成独立残句 "CT) [@c:id]." -> citation_detached
+    expectOpError(() => ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p!,
+        markdown: `Consistent with prior studies comparing cardiac magnetic resonance (CMR vs. CT) [@c:${c.id}].`,
+      }],
+    }, { actor: 'ai', turnId: null }), 'citation_detached')
+
+    // 2) 直接把外部文献裸挂在 "In this retrospective cohort study..." 本研究原句末尾且未补对比从句 -> citation_unsupported
+    expectOpError(() => ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p!,
+        markdown: `In this retrospective cohort study, we evaluated 120 patients with acute myocarditis using cardiac magnetic resonance [@c:${c.id}].`,
+      }],
+    }, { actor: 'ai', turnId: null }), 'citation_unsupported')
+
+    // 3) 引文所在句子与该文献缓存摘要完全无实词词干重叠 -> citation_unsupported
+    expectOpError(() => ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p!,
+        markdown: `Previous randomized trials demonstrated that oral anticoagulation reduces ischemic stroke in atrial fibrillation [@c:${c.id}].`,
+      }],
+    }, { actor: 'ai', turnId: null }), 'citation_unsupported')
+
+    // 4) 带有清晰对比过渡（consistent with prior studies）且与摘要实词重叠 -> 正常通过
+    ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p!,
+        markdown: `In this retrospective cohort study, we evaluated 120 patients with acute myocarditis using cardiac magnetic resonance, consistent with prior studies showing high diagnostic accuracy for myocardial edema and late gadolinium enhancement [@c:${c.id}].`,
+      }],
+    }, { actor: 'ai', turnId: null })
+    expect(exportMarkdown(docs.get(docId), store.listCitations(docId))).toContain('[1]')
+  })
+})
+
+

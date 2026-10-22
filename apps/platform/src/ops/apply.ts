@@ -206,6 +206,29 @@ function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyCon
         ctx.taken.delete(newPara.attrs.id as string)
         content = content.replaceChild(0, newPara.type.create({ ...newPara.attrs, id: oldPara.attrs.id, style: oldPara.attrs.style, align: oldPara.attrs.align }, newPara.content, newPara.marks))
       }
+      // 整个列表换成同类列表：各项及其首段按位置沿用原 id、段落样式与对齐（导出时按原项打补丁或沿用原 w:numId）
+      if (/_list$/.test(target.node.type.name) && first.type === target.node.type) {
+        const items: PMNode[] = []
+        first.forEach((newItem, _o, k) => {
+          const oldItem = k < target.node.childCount ? target.node.child(k) : null
+          if (oldItem && oldItem.type === newItem.type) {
+            if (oldItem.attrs.id) {
+              ctx.taken.delete(newItem.attrs.id as string)
+            }
+            let itemContent = newItem.content
+            const oldP = oldItem.firstChild
+            const newP = newItem.firstChild
+            if (oldP && newP && oldP.type === newP.type && oldP.attrs.id) {
+              ctx.taken.delete(newP.attrs.id as string)
+              itemContent = itemContent.replaceChild(0, newP.type.create({ ...newP.attrs, id: oldP.attrs.id, style: oldP.attrs.style, align: oldP.attrs.align }, newP.content, newP.marks))
+            }
+            items.push(newItem.type.create({ ...newItem.attrs, ...(oldItem.attrs.id ? { id: oldItem.attrs.id } : {}) }, itemContent, newItem.marks))
+          } else {
+            items.push(newItem)
+          }
+        })
+        content = Fragment.from(items)
+      }
       nodes[0] = first.type.create(attrs, content, first.marks)
     }
   }

@@ -310,6 +310,7 @@ export function exportDocx(input: ExportInput): ExportResult {
   }
   input.doc.descendants(n => { if (n.isTextblock && blockThreads.has(n.attrs.id as string)) for (const t of blockThreads.get(n.attrs.id as string)!) lastPara.set(t, n); return true })
   const commentEndParas = new Set(lastPara.values())
+  const commentEndParaIds = new Set([...lastPara.values()].map(p => p.attrs.id as string).filter(Boolean))
   const started = new Set<string>()
 
   const headingStyle = (level: number) => styles.get(`heading ${level}`) ?? styles.get(`标题 ${level}`) ?? `Heading${level}`
@@ -377,7 +378,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       out += run
     })
     for (const t of activeHere) {
-      if (lastPara.get(t) !== para) continue
+      const endPara = lastPara.get(t)
+      if (endPara !== para && (!para.attrs.id || endPara?.attrs.id !== para.attrs.id)) continue
       const id = commentIds.get(t)!
       out += `<w:commentRangeEnd w:id="${id}"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${id}"/></w:r>`
     }
@@ -871,7 +873,8 @@ export function exportDocx(input: ExportInput): ExportResult {
         let hasBr = false
         p.forEach(ch => { if (ch.type.name === 'hard_break') hasBr = true })
         // 单元格里改过的段落按换行拆成独立段落（批注收尾段落不拆，以免批注范围错位）
-        if (hasBr && !commentEndParas.has(p) && p.type.name === 'paragraph') {
+        const isCommentEnd = commentEndParas.has(p) || (!!p.attrs.id && commentEndParaIds.has(p.attrs.id as string))
+        if (hasBr && !isCommentEnd && p.type.name === 'paragraph') {
           let seg: PMNode[] = []
           p.forEach(ch => {
             if (ch.type.name === 'hard_break') {
@@ -908,6 +911,13 @@ export function exportDocx(input: ExportInput): ExportResult {
     let id = numId
     if (!id) {
       node.forEach(item => {
+        const src = item.firstChild ? input.src(item.firstChild.attrs.id as string) : null
+        const m = src ? /<w:numId w:val="(\d+)"/.exec(src) : null
+        if (!id && m) id = m[1]!
+      })
+    }
+    if (!id && node.attrs.id) {
+      baseline.get(node.attrs.id as string)?.forEach(item => {
         const src = item.firstChild ? input.src(item.firstChild.attrs.id as string) : null
         const m = src ? /<w:numId w:val="(\d+)"/.exec(src) : null
         if (!id && m) id = m[1]!
@@ -1002,13 +1012,14 @@ export function exportDocx(input: ExportInput): ExportResult {
     let rprXml = ''
     if (refPlan.userCount > 0) {
       const last = input.doc.child(refPlan.bodyEnd - 1)
-      const src = last.attrs.id ? input.src(last.attrs.id as string) : null
+      const lastPara = /_list$/.test(last.type.name) ? last.lastChild?.firstChild : last
+      const src = lastPara?.attrs.id ? input.src(lastPara.attrs.id as string) : null
       if (src) {
         // 沿用段落与字体格式，但不带分节符、段前分页与修订标记（否则每条新条目都会另起一节 / 一页、修订 id 重复）
         const kids = elementChildrenRaw(src)
         const ppr = kids.find(k => /^<w:pPr\b/.test(k))
         const rpr = childEl(kids.find(k => /^<w:r\b/.test(k)), 'rPr')
-        pprXml = ppr ? `<w:pPr>${stripEls(innerOf(ppr), ['sectPr', 'pPrChange', 'pageBreakBefore'])}</w:pPr>` : ''
+        pprXml = ppr ? `<w:pPr>${stripEls(innerOf(ppr), ['numPr', 'sectPr', 'pPrChange', 'pageBreakBefore'])}</w:pPr>` : ''
         rprXml = rpr ? `<w:rPr>${stripEls(innerOf(rpr), ['rPrChange', 'ins', 'del'])}</w:rPr>` : ''
       }
       warnings.push(refPlan.duplicates > 0
@@ -1037,6 +1048,16 @@ export function exportDocx(input: ExportInput): ExportResult {
     // 确保生成内容用到的命名空间都已声明
     for (const [prefix, uri] of [['r', REL], ['wp', 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'], ['a', 'http://schemas.openxmlformats.org/drawingml/2006/main'], ['pic', 'http://schemas.openxmlformats.org/drawingml/2006/picture']] as const) {
       if (!new RegExp(`xmlns:${prefix}=`).test(head)) head = head.replace(/<w:document\b/, `<w:document xmlns:${prefix}="${uri}"`)
+    }
+  }
+  for (const m of [...body.matchAll(/<w:commentRangeStart\b[^>]*w:id="(\d+)"[^>]*\/>/g)]) {
+    const cid = m[1]!
+    if (!new RegExp(`<w:commentRangeEnd\\b[^>]*w:id="${cid}"`).test(body)) {
+      const startIdx = body.indexOf(m[0])
+      const closeP = startIdx >= 0 ? body.indexOf('</w:p>', startIdx) : -1
+      if (closeP !== -1) {
+        body = body.slice(0, closeP) + `<w:commentRangeEnd w:id="${cid}"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${cid}"/></w:r>` + body.slice(closeP)
+      }
     }
   }
   let documentXml = `${head}${body}${sect}</w:body></w:document>`

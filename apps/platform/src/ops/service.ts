@@ -2,7 +2,7 @@ import { isOrgThemeKey, orgLogo, themeAllowed } from '../model/org-templates.ts'
 import type { Node as PMNode } from 'prosemirror-model'
 import { attachComment, locate, threadMarks } from '../model/anchors.ts'
 import { indexById } from '../model/ids.ts'
-import { serializeBlock } from '../model/markdown.ts'
+import { plainText, serializeBlock } from '../model/markdown.ts'
 import type { Documents, NodeChange } from '../model/runtime.ts'
 import type { Actor } from '../store/db.ts'
 import { randomBytes } from 'node:crypto'
@@ -192,7 +192,11 @@ export class OpService {
     let followed: Array<{ thread: string; nodeId: string }> = []
     if (!deck) ({ doc: after, moved: followed } = this.followSnippets(batch.doc_id, before, after))
     if (ai) this.guardAnchors(batch, before, after)
-    if (ai && !deck) this.guardUserContent(batch as EditBatch, before, after)
+    if (ai && !deck) {
+      this.guardUserContent(batch as EditBatch, before, after)
+      this.guardCitationRetention(batch as EditBatch, before, after)
+      this.guardCitationSupport(batch as EditBatch, before, after)
+    }
 
     return { deck, before, after, reanchored, followed, results, rev }
   }
@@ -469,6 +473,140 @@ export class OpService {
         op_index: i,
         hint: '稿件原有的文中编号对应用户自己的参考文献表，保持原样（不要登记成平台引用，也不要导入原有文献表）；只有新补充的文献用 [@c:…]。用户明确要求接管原有引用时再做。',
       })
+    })
+  }
+
+  /**
+   * 平台引用保留守卫：块内已有的 [@c:id] 平台引用标记在改写或精简段落时不能被无故丢弃或改写成纯文本 [1]，
+   * 否则会导致文末对应的参考文献条目被自动移除（collateral_change）。
+   */
+  private guardCitationRetention(batch: EditBatch, before: PMNode, after: PMNode): void {
+    const beforeIdx = indexById(before)
+    const afterIdx = indexById(after)
+    const insertCopyByOrig = new Map<string, PMNode>()
+    after.descendants(n => {
+      if (n.attrs.suggest === 'insert' && n.attrs.suggest_of) {
+        insertCopyByOrig.set(String(n.attrs.suggest_of), n)
+      }
+      return true
+    })
+    const citesOf = (node: PMNode): Set<string> => {
+      const out = new Set<string>()
+      node.descendants(n => {
+        if (n.type.name === 'citation' && n.attrs.cite_id) out.add(String(n.attrs.cite_id))
+        return true
+      })
+      return out
+    }
+    batch.ops.forEach((op, i) => {
+      if (op.op !== 'replace_block' && op.op !== 'replace_text') return
+      const bNode = beforeIdx.get(op.id)?.node
+      const aNode = insertCopyByOrig.get(op.id) ?? afterIdx.get(op.id)?.node
+      if (!bNode || !aNode) return
+      const oldCites = citesOf(bNode)
+      if (oldCites.size === 0) return
+      const newCites = citesOf(aNode)
+      const lost = [...oldCites].filter(id => !newCites.has(id))
+      const added = [...newCites].filter(id => !oldCites.has(id))
+      if (lost.length > 0 && added.length === 0) {
+        throw new OpError('existing_citation', `块 ${op.id} 中已有的平台引用标记 ${lost.map(c => `[@c:${c}]`).join('、')} 在修改后丢失`, {
+          op_index: i,
+          hint: '改写或精简段落时必须原样保留块内已有的 [@c:...] 引用标记（切勿写成纯文本 [1] 或直接删掉），否则会导致文末对应的参考文献条目被自动移除。',
+        })
+      }
+    })
+  }
+
+  /**
+   * 句级引文支撑与断句守卫：
+   * 1) 拦截因引用前英文缩写句号（如 "vs. CT) [@c:1]."）导致的句子断裂（citation_detached）；
+   * 2) 当文献在库中有摘要缓存时，拦截将外部文献直接裸挂在陈述“本研究自身方法/队列”的原句末尾，
+   *    以及句中核心主张词干与文献摘要不匹配的情况（citation_unsupported）。
+   */
+  private guardCitationSupport(batch: EditBatch, before: PMNode, after: PMNode): void {
+    const splitSentences = (t: string) => t.split(/(?<=[.。!?！？])\s+(?=[A-Z(\[［\u4e00-\u9fff])/).map(s => s.trim()).filter(Boolean)
+    const CLAIM_STOP = new Set([
+      'this', 'that', 'with', 'from', 'were', 'have', 'been', 'which', 'their', 'these', 'those', 'into', 'more', 'than', 'also', 'such', 'both', 'between', 'among', 'after', 'before', 'during', 'under', 'over', 'through', 'where', 'when', 'while', 'study', 'studies', 'methodological', 'contribution', 'lies', 'having', 'organized', 'explicit', 'process', 'links', 'context', 'understanding', 'analysis', 'design', 'prospective', 'retrospective', 'reported', 'here', 'cohort', 'patients', 'group', 'groups', 'results', 'data', 'used', 'using', 'based', 'showed', 'shown', 'found', 'associated', 'compared', 'similar', 'consistent', 'prior', 'demonstrating', 'demonstrated',
+    ])
+    const SELF_REF = /\b(this study|the study's|the present study|our study|our cohort|in this (?:retrospective |prospective |multicenter |single-center )?(?:cohort|study|analysis|trial)|reported here)\b/i
+    const beforeIdx = indexById(before)
+    const citesById = new Map(this.docs.store.listCitations(batch.doc_id).map(c => [c.id, c]))
+    const citesIn = (node: PMNode): Set<string> => {
+      const out = new Set<string>()
+      node.descendants(n => {
+        if (n.type.name === 'citation' && n.attrs.cite_id) out.add(String(n.attrs.cite_id))
+        return true
+      })
+      return out
+    }
+    after.descendants(aNode => {
+      if (!aNode.isTextblock || aNode.attrs.suggest === 'delete') return false
+      const aCites = citesIn(aNode)
+      if (aCites.size === 0) return false
+      const origId = (aNode.attrs.suggest_of ?? aNode.attrs.id) as string | undefined
+      const bNode = origId ? beforeIdx.get(origId)?.node : undefined
+      const bCites = bNode ? citesIn(bNode) : new Set<string>()
+      const addedCites = new Set([...aCites].filter(id => !bCites.has(id)))
+      if (addedCites.size === 0) return false
+
+      const sents = splitSentences(plainText(aNode))
+      const bSents = bNode ? splitSentences(plainText(bNode)).map(s => s.replace(/\[@[cw]:[^\]]+\]/g, '').trim()) : []
+
+      for (let si = 0; si < sents.length; si++) {
+        const s = sents[si]!
+        const sCites = [...s.matchAll(/\[@c:([a-z0-9]+)\]/g)].map(m => m[1]!).filter(id => addedCites.has(id))
+        if (sCites.length === 0) continue
+        const cleanS = s.replace(/\[@[cw]:[^\]]+\]/g, '').trim()
+        const words = cleanS.match(/[A-Za-z]{2,}|[\u4e00-\u9fff]/g) ?? []
+        if (
+          sents.length > 1 &&
+          words.length < 4 &&
+          si > 0 &&
+          /\b(?:vs|cf|e\.g|i\.e|al|fig|tab|dr|prof)\.$/i.test(sents[si - 1]!.replace(/\[@[cw]:[^\]]+\]/g, '').trim())
+        ) {
+          throw new OpError('citation_detached', '引文前的英文缩写句号（如 "vs. CT" 或 "et al."）导致句子在引用标记前被切碎', {
+            hint: '请去掉引用前缩写词后的英文句号（例如将 "vs. CT" 改为 "vs CT"），确保整句完整不断裂。',
+          })
+        }
+
+        for (const citeId of sCites) {
+          const cite = citesById.get(citeId)
+          const abs = cite ? this.docs.store.getAbstract(cite.doi)?.abstract : null
+          if (!abs) continue
+
+          if (SELF_REF.test(cleanS) && bNode) {
+            const bMatch = bSents.find(bs => SELF_REF.test(bs) && cleanS.slice(0, 24).toLowerCase() === bs.slice(0, 24).toLowerCase())
+              ?? bSents.find(bs => SELF_REF.test(bs))
+            if (bMatch) {
+              const bWords = bMatch.match(/[A-Za-z]{2,}|[\u4e00-\u9fff]/g) ?? []
+              if (words.length - bWords.length < 5) {
+                throw new OpError('citation_unsupported', `句子陈述的是本研究自身的方法或本队列结果，不能直接将 [@c:${citeId}] 裸挂在原句末尾`, {
+                  hint: '外部文献不能直接证明本研究自身的方法或队列数值。请完整保留原句文字，将原句末尾句号改为「, consistent with prior studies demonstrating <文献摘要的具体结论> [@c:id].」，使每条引用支撑其对应的对比分句。',
+                })
+              }
+            }
+          }
+
+          const allSigWords = [...new Set((cleanS.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter(w => !CLAIM_STOP.has(w)))]
+          let sigWords = allSigWords
+          if (bNode) {
+            const bWordSet = new Set(plainText(bNode).toLowerCase().match(/[a-z]{4,}/g) ?? [])
+            const addedSigWords = allSigWords.filter(w => !bWordSet.has(w))
+            if (addedSigWords.length >= 4) sigWords = addedSigWords
+          }
+          if (sigWords.length >= 2) {
+            const hay = `${cite!.formatted} ${abs}`.toLowerCase()
+            const hitCount = sigWords.filter(w => hay.includes(w.slice(0, 5))).length
+            const minHits = sigWords.length >= 5 ? 2 : 1
+            if (hitCount < minHits) {
+              throw new OpError('citation_unsupported', `引用 [@c:${citeId}] 的摘要与所在句子的核心主张不匹配（仅重合 ${hitCount}/${sigWords.length} 个核心词干）`, {
+                hint: '请根据该文献摘要的实际研究结果改写支撑分句，或换一篇摘要直接包含该句核心概念（如具体毒性、结局或方法学）的文献。',
+              })
+            }
+          }
+        }
+      }
+      return false
     })
   }
 
