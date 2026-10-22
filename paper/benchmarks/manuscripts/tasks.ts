@@ -346,8 +346,12 @@ function loadTopic(p: Paper): PaperTopic {
   return { pmcid: p.pmcid, type: p.type, refs: JSON.parse(readFileSync(join(here, 'data', 'refs', `${p.pmcid}.json`), 'utf8')) }
 }
 
-const papers = JSON.parse(readFileSync(join(here, 'corpus.json'), 'utf8')) as Paper[]
-const topics = papers.map(p => ({ ...loadTopic(p), split: p.split }))
+export function loadCorpus(filename = process.env.MANUSCRIPT_CORPUS || 'corpus-1b.json'): Array<PaperTopic & { split: Paper['split'] }> {
+  const list = JSON.parse(readFileSync(join(here, filename), 'utf8')) as Paper[]
+  return list.map(p => ({ ...loadTopic(p), split: p.split }))
+}
+
+const topics = loadCorpus()
 
 /** 开放获取论文改编的长稿：上传期刊格式 Word（与 2a 同源），读全文。 */
 export const PAPERS: Corpus<PaperTopic> = {

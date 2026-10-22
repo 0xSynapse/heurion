@@ -74,6 +74,8 @@ export const INTRO = /^(introduction|background)\b/i
 
 export const lead = (s: string) => s.slice(0, 60)
 export const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
+/** 忽略方括号引用编号变化（如 [3]、[2–4]、[[2], [5]–[7]]）：移动段落或插入引用后整体重新编号属正确行为。 */
+export const citeless = (s: string) => s.replace(/\[\d+(?:\s*[,–-]\s*\d+)*\]/g, '[#]').replace(/\s+/g, ' ').trim()
 export const firstSentence = (s: string) => /^.+?[.;](?=\s+[A-Z(]|$)/.exec(s)?.[0] ?? s
 /** 改完的稿件里与源段落对应的段落：首句相同，或与源段落字符重合度最高（≥0.5）。 */
 export function matchPara(after: D.Pkg, src: string): D.Para | undefined {
@@ -173,10 +175,10 @@ const S1: StressTask[] = [
     formatTarget: () => null,
     check(ctx, after) {
       const { a, b } = pairOf(ctx)
-      const ps = D.paras(D.docXml(after)).map(p => norm(p.text))
-      const merged = ps.find(x => x.startsWith(norm(lead(a))))
-      const tailOk = !!merged && merged.indexOf(norm(lead(b))) > 0 && merged.endsWith(norm(b).slice(-60))
-      const separate = ps.some(x => x.startsWith(norm(lead(b))))
+      const ps = D.paras(D.docXml(after)).map(p => citeless(p.text))
+      const merged = ps.find(x => x.startsWith(citeless(lead(a))))
+      const tailOk = !!merged && merged.indexOf(citeless(lead(b))) > 0 && merged.endsWith(citeless(b).slice(-60))
+      const separate = ps.some(x => x.startsWith(citeless(lead(b))))
       return { done: tailOk && !separate, detail: tailOk ? (separate ? '后一段仍单独存在' : '') : '两段没有合并成一段' }
     },
   },
@@ -188,9 +190,9 @@ const S1: StressTask[] = [
     formatTarget: () => null,
     check(ctx, after) {
       const { a, b } = pairOf(ctx)
-      const ps = D.paras(D.docXml(after)).map(p => norm(p.text))
-      const ia = ps.indexOf(norm(a))
-      const ib = ps.indexOf(norm(b))
+      const ps = D.paras(D.docXml(after)).map(p => citeless(p.text))
+      const ia = ps.indexOf(citeless(a))
+      const ib = ps.indexOf(citeless(b))
       const ok = ia >= 0 && ib >= 0 && ib < ia
       return { done: ok, detail: ok ? '' : ia < 0 || ib < 0 ? '段落文字被改动或丢失' : '顺序没有调换' }
     },
@@ -235,15 +237,17 @@ function rewritten(ctx: StressCtx, after: D.Pkg, cc: Concurrent): Done {
   const changed = firstThree(ctx).filter(p => !now.has(norm(p.text))).length
   return { done: changed >= 2, detail: changed >= 2 ? '' : `只改写了 ${changed} 段` }
 }
-/** 医生改的数字：段落里第一个带小数的数，末位加 1（替换时连带前面几个字符，避免与别处重复）。 */
-export function numberEditIn(p: D.Para, pkg: D.Pkg): Concurrent | null {
+/** 医生改的数字：段落里第一个全文只出现一次的带小数的数（uniqueOnly=false 时不限次数，供 1a 离线重算兼容），末位加 1。 */
+export function numberEditIn(p: D.Para, pkg: D.Pkg, uniqueOnly = true): Concurrent | null {
   const body = D.paras(D.docXml(pkg)).map(x => x.text).join('\n')
+  const countNum = (num: string) => [...body.matchAll(new RegExp(`(?<![\\d.])${num.replace('.', '\\.')}(?![\\d.])`, 'g'))].length
   for (const t of [...p.xml.matchAll(/<w:t\b[^>]*>([^<]*)<\/w:t>/g)].map(m => m[1]!)) {
     for (const m of t.matchAll(/(?<![\d.])\d+\.\d+%?/g)) {
       const token = m[0]
       const digits = token.replace('%', '')
+      if (uniqueOnly && countNum(digits) !== 1) continue
       const bumped = digits.slice(0, -1) + String((Number(digits.at(-1)) + 1) % 10) + (token.endsWith('%') ? '%' : '')
-      if (body.includes(bumped)) continue
+      if (body.includes(bumped) || (uniqueOnly && countNum(bumped.replace('%', '')) > 0)) continue
       const at = m.index!
       const find = t.slice(Math.max(0, at - 6), at + token.length)
       return { para: p.text, find, replace: find.slice(0, find.length - token.length) + bumped, expect: bumped }

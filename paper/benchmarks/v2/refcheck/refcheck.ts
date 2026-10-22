@@ -57,7 +57,11 @@ function loadCache(): Record<string, unknown> {
   return cache
 }
 function saveCache(): void {
-  if (cache) writeFileSync(CACHE_PATH, JSON.stringify(cache))
+  if (!cache) return
+  if (existsSync(CACHE_PATH)) {
+    try { Object.assign(cache, JSON.parse(readFileSync(CACHE_PATH, 'utf8')), cache) } catch { /* 忽略并发读写竞争 */ }
+  }
+  writeFileSync(CACHE_PATH, JSON.stringify(cache))
 }
 
 let lastNcbi = 0

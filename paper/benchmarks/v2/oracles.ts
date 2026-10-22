@@ -14,7 +14,7 @@ import { bodyChildrenRaw } from '../../../apps/platform/src/convert/docx-import.
 import { canonical, integrity, opensAsync, wellFormed } from './fidelity/check.ts'
 import { checkReferences, splitParts } from './refcheck/refcheck.ts'
 import { checkSupport, type SupportDetail } from './refcheck/support.ts'
-import { CLINICIAN_SENTENCE, matchPara, RECENT_YEAR, type StressCtx, type StressTask } from './stress.ts'
+import { citeless, CLINICIAN_SENTENCE, matchPara, RECENT_YEAR, type StressCtx, type StressTask } from './stress.ts'
 import { featureState } from './templates.ts'
 
 export interface RefSummary {
@@ -47,17 +47,14 @@ export interface Rework {
 }
 
 const lead = (s: string) => s.slice(0, 60)
-/** S3：插入引用后其后的文中编号可能整体后移，比较前把方括号编号统一掉。 */
-const citeless = (s: string) => s.replace(/\[\d+(?:\s*[,–-]\s*\d+)*\]/g, '[#]').replace(/\s+/g, ' ').trim()
 
-/** 不该动的段落里内容被改动的个数（排除目标段；S3 另排除参考文献表并忽略文中编号变化）。 */
+/** 不该动的段落里内容被改动的个数（排除目标段；S3 另排除参考文献表；统一忽略方括号引用编号变化）。 */
 function collateral(source: D.Pkg, after: D.Pkg, targets: string[], references: boolean): { untouched: number; changed: number } {
   const ps = D.paras(D.docXml(source))
   const refAt = ps.findIndex(p => D.headingLevel(p) > 0 && /^(References|参考文献)\s*$/.test(p.text.trim()))
-  const keep = ps.filter((p, i) => p.text.trim() !== '' && !targets.some(t => p.text.startsWith(lead(t))) && !(references && refAt >= 0 && i > refAt))
-  const norm = references ? citeless : (s: string) => s
-  const now = new Set(D.paras(D.docXml(after)).map(p => norm(p.text)))
-  return { untouched: keep.length, changed: keep.filter(p => !now.has(norm(p.text))).length }
+  const keep = ps.filter((p, i) => p.text.trim() !== '' && !targets.some(t => citeless(p.text).startsWith(citeless(lead(t)))) && !(references && refAt >= 0 && i > refAt))
+  const now = new Set(D.paras(D.docXml(after)).map(p => citeless(p.text)))
+  return { untouched: keep.length, changed: keep.filter(p => !now.has(citeless(p.text))).length }
 }
 
 /**
@@ -151,8 +148,8 @@ async function generic(source: D.Pkg, after: D.Pkg, exclude: (text: string, inde
  * keep：医生此前的修改（多轮会话），其标志文字在改完的稿件里出现次数不能比改前少。
  * injected：本轮进行中医生的修改是否真的写进去了（AI 一次都没读稿时注入不会触发，此时不查）。
  */
-export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.Pkg, keep: Array<{ label: string; expect: string }> = [], injected: boolean | null = null): Promise<Rework> {
-  const r = await refs(ctx.source, after)
+export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.Pkg, keep: Array<{ label: string; expect: string }> = [], injected: boolean | null = null, savedRefs?: RefSummary): Promise<Rework> {
+  const r = savedRefs ?? await refs(ctx.source, after)
   const d = task.check(ctx, after)
   // S3 的完成标准：新增了参考文献，正文也标注了引用；S3-recent 另要求至少 2 条核实为 RECENT_YEAR 年及以后发表
   const recentShort = task.id === 'S3-recent' && r.verified_recent < 2
@@ -185,8 +182,8 @@ export async function evaluateStress(task: StressTask, ctx: StressCtx, after: D.
 }
 
 /** 日常任务（v1 的 9 类任务）：沿用 v1 的完成判定与内容改动度量（manuscripts/compare.ts），格式按上面的 formatLost，再加引用核对。 */
-export async function evaluateNatural(task: Task<PaperTopic>, paper: PaperTopic, source: D.Pkg, after: D.Pkg, checks: Checks, measured: { damage: D.Damage }): Promise<Rework> {
-  const r = await refs(source, after)
+export async function evaluateNatural(task: Task<PaperTopic>, paper: PaperTopic, source: D.Pkg, after: D.Pkg, checks: Checks, measured: { damage: D.Damage }, savedRefs?: RefSummary): Promise<Rework> {
+  const r = savedRefs ?? await refs(source, after)
   // 格式：与压力任务同一套找段方法（先按段落 ID），不用 v1 只按重合度找段的 formatKept
   const formatLostKeys = formatLost(source, after, measureTarget(task, paper) ?? null)
   const target = measureTarget(task, paper)

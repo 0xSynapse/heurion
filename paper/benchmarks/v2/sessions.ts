@@ -8,7 +8,7 @@ import * as D from '../exp3/docx.ts'
 import { METHODS, type PaperTopic } from '../manuscripts/tasks.ts'
 import { sectionParas } from '../manuscripts/compare.ts'
 import {
-  CLINICIAN_SENTENCE, DISCUSSION, firstSentence, firstThree, INTRO, lead, norm, numberEditIn, sectionProse, SUPPORT_REQUIREMENT,
+  citeless, CLINICIAN_SENTENCE, DISCUSSION, firstSentence, firstThree, INTRO, lead, norm, numberEditIn, sectionProse, SUPPORT_REQUIREMENT,
   tableCells, tableShape, tailOf, templateCtx, trackedPara, coauthorRevisionKept, words, type Concurrent, type Done, type StressCtx, type StressTask,
 } from './stress.ts'
 import { COAUTHOR, type TemplateFeatures } from './templates.ts'
@@ -125,9 +125,9 @@ export function sessionSteps(paper: PaperTopic, features: TemplateFeatures): Ses
       targets: b => { const { a, c } = movePair(b); return [a.text, c.text] },
       check: (b, after) => {
         const { a, c } = movePair(b)
-        const ps = D.paras(D.docXml(after)).map(p => norm(p.text))
-        const ia = ps.indexOf(norm(a.text))
-        const ic = ps.indexOf(norm(c.text))
+        const ps = D.paras(D.docXml(after)).map(p => citeless(p.text))
+        const ia = ps.indexOf(citeless(a.text))
+        const ic = ps.indexOf(citeless(c.text))
         return { done: ia >= 0 && ic >= 0 && ic < ia, detail: ia < 0 || ic < 0 ? '段落文字被改动或丢失' : '顺序没有调换' }
       },
     },

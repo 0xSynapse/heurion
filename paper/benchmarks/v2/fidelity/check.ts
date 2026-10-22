@@ -3,7 +3,7 @@
  * 域与书签成对、段落 ID 与修订 id 不重复、每个部件都有内容类型；LibreOffice 能打开。
  */
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMParser } from '../../../../apps/platform/node_modules/@xmldom/xmldom/lib/index.js'
@@ -66,30 +66,41 @@ export function integrity(pkg: D.Pkg): string[] {
 }
 
 
+let syncProfile: string | null = null
+
 /** LibreOffice 打开并转成纯文本；expect 为应能读到的文字（正则）。打不开或读不到时返回原因，否则 null。 */
 export function opens(pkg: D.Pkg, expect: RegExp): string | null {
+  if (process.env.REEVAL_SKIP_SOFFICE === '1') return null
+  if (!syncProfile) syncProfile = mkdtempSync(join(tmpdir(), 'docx-prof-'))
   const dir = mkdtempSync(join(tmpdir(), 'docx-check-'))
   writeFileSync(join(dir, 'x.docx'), D.saveDocx(pkg))
   try {
-    execFileSync('soffice', [`-env:UserInstallation=file://${dir}/profile`, '--headless', '--convert-to', 'txt:Text', '--outdir', dir, join(dir, 'x.docx')], { stdio: 'ignore', timeout: 90_000 })
+    execFileSync('soffice', [`-env:UserInstallation=file://${syncProfile}`, '--headless', '--convert-to', 'txt:Text', '--outdir', dir, join(dir, 'x.docx')], { cwd: dir, env: { ...process.env, OSL_SOCKET_PATH: '.' }, stdio: 'ignore', timeout: 90_000 })
     const txt = readFileSync(join(dir, 'x.txt'), 'utf8')
     return expect.test(txt) ? null : 'LibreOffice 打开后读不到正文'
   } catch (err) {
     return `LibreOffice 打不开：${String((err as Error).message).slice(0, 80)}`
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 }
 
 /** 同上，异步（评测时三组并行，转换期间不阻塞事件循环）。 */
 export async function opensAsync(pkg: D.Pkg, expect: RegExp): Promise<string | null> {
+  if (process.env.REEVAL_SKIP_SOFFICE === '1') return null
   const { execFile } = await import('node:child_process')
   const dir = mkdtempSync(join(tmpdir(), 'docx-check-'))
   writeFileSync(join(dir, 'x.docx'), D.saveDocx(pkg))
-  const ok = await new Promise<boolean>(resolve => execFile('soffice', [`-env:UserInstallation=file://${dir}/profile`, '--headless', '--convert-to', 'txt:Text', '--outdir', dir, join(dir, 'x.docx')], { timeout: 120_000 }, err => resolve(!err)))
-  if (!ok) return 'LibreOffice 打不开'
   try {
-    return expect.test(readFileSync(join(dir, 'x.txt'), 'utf8')) ? null : 'LibreOffice 打开后读不到正文'
-  } catch {
-    return 'LibreOffice 没有转出文本'
+    const ok = await new Promise<boolean>(resolve => execFile('soffice', [`-env:UserInstallation=file://${dir}/profile`, '--headless', '--convert-to', 'txt:Text', '--outdir', dir, join(dir, 'x.docx')], { cwd: dir, env: { ...process.env, OSL_SOCKET_PATH: '.' }, timeout: 120_000 }, err => resolve(!err)))
+    if (!ok) return 'LibreOffice 打不开'
+    try {
+      return expect.test(readFileSync(join(dir, 'x.txt'), 'utf8')) ? null : 'LibreOffice 打开后读不到正文'
+    } catch {
+      return 'LibreOffice 没有转出文本'
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 }
 
