@@ -75,6 +75,20 @@ export function referencePlan(doc: PMNode, citations: readonly CitationLike[]): 
   while (i >= 0 && isBlank(i)) i--
   const entries: Array<{ idx: number; n: number; text: string }> = []
   for (let e = i >= 0 ? entryAt(i) : null; e; e = i >= 0 ? entryAt(i) : null) { entries.unshift(e); i--; while (i >= 0 && isBlank(i)) i-- }
+  if (i >= 0 && doc.child(i).type.name === 'ordered_list') {
+    let prev = i - 1
+    while (prev >= 0 && isBlank(prev)) prev--
+    if (prev >= 0 && (doc.child(prev).type.name === 'heading' || doc.child(prev).type.name === 'paragraph') && REF_TITLE.test(doc.child(prev).textContent.trim())) {
+      const listNode = doc.child(i)
+      const start = Math.max(1, Number(listNode.attrs.start ?? 1))
+      const listEntries: Array<{ idx: number; n: number; text: string }> = []
+      listNode.forEach((item, _off, k) => {
+        listEntries.push({ idx: i, n: start + k, text: item.textContent.trim() })
+      })
+      entries.unshift(...listEntries)
+      i = prev
+    }
+  }
   const titleIdx = i >= 0 && (doc.child(i).type.name === 'heading' || doc.child(i).type.name === 'paragraph') && REF_TITLE.test(doc.child(i).textContent.trim()) ? i : -1
 
   // 正文里用到的平台引用若与表中某条是同一篇（DOI 或文本相同），沿用那条的编号

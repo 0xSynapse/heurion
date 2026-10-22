@@ -412,3 +412,78 @@ describe('改过的段落按原文 XML 打补丁：只改变化的文字，其�
     expect(bodyOf(t.exportNow().bytes)).toMatch(/^<w:sdt><w:sdtPr><w:tag w:val="abstract"\/><\/w:sdtPr><w:sdtContent>.*摘要第一段.*摘要第二部分.*<\/w:sdtContent><\/w:sdt>/)
   })
 })
+
+describe('Phase 1b 赛后归因回归：批注+修订共存、有序列表替换保号与列表型参考文献识别', () => {
+  it('整块批注与待采纳修订（suggest）共存于同一段落：导出时 commentRangeStart 与 commentRangeEnd 成对闭合', () => {
+    const t = importInto(docx(p('本研究纳入 110 例患者，随访 3 年。') + p('其他段落。')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    const c = t.store.addComment({ doc_id: t.docId, node_id: id, snippet: '110 例' })
+    t.store.addReply(c.id, 'user', '请核对例数并补充中位随访时间')
+    t.docs.commit(t.docId, attachComment(t.docs.get(t.docId), id, '110 例', c.id).doc, { actor: 'user', turnId: null, ops: [] })
+    // 整段改写使批注退化为整块批注（snippet=''），再在同一段上发起 suggest 修订
+    t.ops.edit({ doc_id: t.docId, base_rev: t.docs.rev(t.docId), mode: 'apply', ops: [{ op: 'replace_block', id, markdown: '本研究共纳入 112 例患者，随访 3 年。' }] }, { actor: 'ai', turnId: 't1', answering: c.id })
+    t.ops.edit({ doc_id: t.docId, base_rev: t.docs.rev(t.docId), mode: 'suggest', ops: [{ op: 'replace_text', id, find: '随访 3 年', replace: '中位随访 36 个月' }] }, { actor: 'ai', turnId: 't2' })
+    const body = bodyOf(t.exportNow().bytes)
+    const starts = [...body.matchAll(/<w:commentRangeStart w:id="(\d+)"\/>/g)].map(m => m[1])
+    const ends = [...body.matchAll(/<w:commentRangeEnd w:id="(\d+)"\/>/g)].map(m => m[1])
+    const refs = [...body.matchAll(/<w:commentReference w:id="(\d+)"\/>/g)].map(m => m[1])
+    expect(starts.length).toBeGreaterThan(0)
+    expect(ends).toEqual(starts)
+    expect(refs).toEqual(starts)
+  })
+
+  it('replace_block 替换导入的有序列表：保留列表项段落 id 与原 Word 编号定义（w:numId）', () => {
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    const numbering = new TextEncoder().encode(
+      `<?xml version="1.0"?><w:numbering ${W}><w:abstractNum w:abstractNumId="4"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:lvlText w:val="%1)"/></w:lvl></w:abstractNum><w:num w:numId="5"><w:abstractNumId w:val="4"/></w:num></w:numbering>`,
+    )
+    const item = (txt: string) => p(txt, '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="5"/></w:numPr>')
+    const t = importInto(docx(item('第一条入排标准。') + item('第二条入排标准。'), { files: { 'word/numbering.xml': numbering } }))
+    const listNode = t.docs.get(t.docId).child(0)
+    expect(listNode.type.name).toBe('ordered_list')
+    const listId = listNode.attrs.id as string
+    const origParaIds = [listNode.child(0).child(0).attrs.id, listNode.child(1).child(0).attrs.id]
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{ op: 'replace_block', id: listId, markdown: '1. 第一条纳入标准（年龄 ≥ 18 岁）。\n2. 第二条纳入标准（确诊心力衰竭）。' }],
+    }, { actor: 'ai', turnId: 't1' })
+    const afterList = t.docs.get(t.docId).child(0)
+    expect([afterList.child(0).child(0).attrs.id, afterList.child(1).child(0).attrs.id]).toEqual(origParaIds)
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain('年龄 ≥ 18 岁')
+    expect([...body.matchAll(/<w:numId w:val="(\d+)"\/>/g)].map(m => m[1])).toEqual(['5', '5'])
+  })
+
+  it('References 标题下为有序列表（ordered_list）时识别已有文献条数：新引用从 K+1 顺延编号并追加在列表末尾', () => {
+    const item = (txt: string) => p(txt, '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>')
+    const t = importInto(docx(
+      p('心衰患者预后较差[1,2]。')
+      + p('References', '<w:pStyle w:val="Heading1"/>')
+      + item('Author A. First study. J Med. 2020;1:1-5.')
+      + item('Author B. Second study. J Med. 2021;2:6-10.'),
+    ))
+    const p0 = t.docs.get(t.docId).child(0).attrs.id as string
+    const cite = t.store.upsertCitation({
+      doc_id: t.docId,
+      doi: '10.1056/nejmoa2026',
+      pmid: '39999999',
+      formatted: 'Author C. Third study. N Engl J Med. 2024;390:11-20.',
+      url: null,
+    })
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: p0, find: '预后较差[1,2]。', replace: `预后较差[1,2]，近年新型药物显著改善生存[@c:${cite.id}]。` }],
+    }, { actor: 'ai', turnId: 't1' })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain('<w:t>[3]</w:t>')
+    expect(body).toContain('[3] Author C. Third study. N Engl J Med. 2024;390:11-20.')
+    const paras = [...body.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)].map(m => m[0])
+    const ref3Para = paras.find(x => x.includes('[3] Author C.'))!
+    expect(ref3Para).not.toContain('<w:numPr>')
+  })
+})
+
