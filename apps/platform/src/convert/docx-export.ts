@@ -426,8 +426,7 @@ export function exportDocx(input: ExportInput): ExportResult {
     const merged = own ? mergeEls(base, own, PPR_ORDER) : base
     const rPr = rPrRaw ? stripEls(innerOf(rPrRaw), ['b', 'bCs', 'i', 'iCs', 'u', 'vertAlign', 'rStyle', 'rPrChange', 'ins', 'del']) : ''
     const open = /^<w:p\b[^>]*>/.exec(raw)![0]
-    const tag = copyOf ? open.replace(/\s(?:w14:paraId|w14:textId)="[^"]*"/g, '') : open
-    return `${tag}${merged ? `<w:pPr>${merged}</w:pPr>` : ''}${inline(node, rPr)}</w:p>`
+    return `${open}${merged ? `<w:pPr>${merged}</w:pPr>` : ''}${inline(node, rPr)}</w:p>`
   }
 
   // —— 待采纳修订 → Word 修订 ——
@@ -452,6 +451,12 @@ export function exportDocx(input: ExportInput): ExportResult {
     }
     if (partner) skipRevision.add(partner.attrs.id as string)
     verbatimRevision.set(n.attrs.id as string, src)
+  })
+  const hasInsertCopy = new Set<string>()
+  input.doc.forEach(n => {
+    if (n.attrs.suggest === 'insert' && n.attrs.suggest_of && !skipRevision.has(n.attrs.id as string)) {
+      hasInsertCopy.add(String(n.attrs.suggest_of))
+    }
   })
   /** 段落内容整体标为插入 / 删除（每个 run 包进 w:ins / w:del，段落标记也一并标记，接受或拒绝后不留空段）。 */
   const revise = (xml: string, kind: 'ins' | 'del', author: string): string => {
@@ -492,7 +497,10 @@ export function exportDocx(input: ExportInput): ExportResult {
     }
     const plain = cleared(node)
     const copyOf = node.attrs.suggest === 'insert' && node.attrs.suggest_of ? node.attrs.suggest_of as string : undefined
-    const xml = (copyOf ? null : verbatim(plain)) ?? regenerated(plain, '', copyOf) ?? `<w:p>${pPr(plain)}${inline(plain)}</w:p>`
+    let xml = (copyOf ? null : verbatim(plain)) ?? regenerated(plain, '', copyOf) ?? `<w:p>${pPr(plain)}${inline(plain)}</w:p>`
+    if (node.attrs.suggest === 'delete' && hasInsertCopy.has(id)) {
+      xml = xml.replace(/^<w:p\b[^>]*>/, m => m.replace(/\s(?:w14:paraId|w14:textId)="[^"]*"/g, ''))
+    }
     return revise(xml, node.attrs.suggest === 'delete' ? 'del' : 'ins', String(node.attrs.suggest_author ?? 'Heurion AI'))
   }
 

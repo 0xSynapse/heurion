@@ -192,6 +192,7 @@ export class OpService {
     let followed: Array<{ thread: string; nodeId: string }> = []
     if (!deck) ({ doc: after, moved: followed } = this.followSnippets(batch.doc_id, before, after))
     if (ai) this.guardAnchors(batch, before, after)
+    if (ai && !deck) this.guardUserContent(batch as EditBatch, before, after)
 
     return { deck, before, after, reanchored, followed, results, rev }
   }
@@ -380,6 +381,66 @@ export class OpService {
               ? '以 current 为准重新决定改法，并用新的 rev 作为 base_rev 再提交；用户的修改优先。'
               : '用户在你上次读到这一块之后改过它（current 是现在的内容）：以 current 为准重新改，保留用户的改动；只换 base_rev 原样重发会再次被拦下。',
             current: { rev: this.docs.rev(batch.doc_id), markdown: node ? (node.type.name === 'shape' || node.type.name === 'slide' ? node.textContent : serializeBlock(node, { ids: true }, '')) : null },
+          })
+        }
+      }
+    })
+  }
+
+  /**
+   * 保护用户此前亲自修改或补充的内容：即使用户的修改已被 AI 读过（noteSeen），
+   * AI 在精简或改写该段落时也不能把用户亲自改过的数字或补充的句子删掉。
+   */
+  private guardUserContent(batch: EditBatch, before: PMNode, after: PMNode): void {
+    const logs = this.docs.store.userEditOps(batch.doc_id)
+    if (logs.length === 0) return
+    const spansByBlock = new Map<string, string[]>()
+    const tokenChar = /[A-Za-z0-9._%\u00C0-\u024F()-]/
+    for (const { ops } of logs) {
+      if (!Array.isArray(ops)) continue
+      for (const uop of ops as Array<Record<string, unknown>>) {
+        if (!uop || typeof uop !== 'object' || uop.op !== 'replace_text' || typeof uop.id !== 'string' || typeof uop.find !== 'string' || typeof uop.replace !== 'string') continue
+        const list = spansByBlock.get(uop.id) ?? []
+        for (let k = 0; k < list.length; k++) {
+          if (list[k]!.includes(uop.find)) list[k] = list[k]!.replace(uop.find, uop.replace)
+        }
+        const f = uop.find
+        const r = uop.replace
+        let p = 0
+        while (p < f.length && p < r.length && f[p] === r[p]) p++
+        let q = 0
+        while (q < f.length - p && q < r.length - p && f[f.length - 1 - q] === r[r.length - 1 - q]) q++
+        let s = p
+        let e = r.length - q
+        while (s > 0 && tokenChar.test(r[s - 1]!)) s--
+        while (e < r.length && tokenChar.test(r[e]!)) e++
+        const rawAdded = r.slice(s, e)
+        const added = rawAdded.replace(/^[\s,;:.]+|[\s,;:.]+$/g, '').trim()
+        if (added.length >= 2 && !list.some(x => x.includes(added))) {
+          list.push(added)
+        }
+        spansByBlock.set(uop.id, list)
+      }
+    }
+    if (spansByBlock.size === 0) return
+    const beforeIdx = indexById(before)
+    const afterIdx = indexById(after)
+    batch.ops.forEach((op, i) => {
+      if (op.op !== 'replace_block' && op.op !== 'replace_text') return
+      const id = op.id
+      const spans = spansByBlock.get(id)
+      if (!spans?.length) return
+      const bNode = beforeIdx.get(id)?.node
+      const aNode = afterIdx.get(id)?.node
+      if (!bNode || !aNode) return
+      const bText = bNode.textContent
+      const aText = aNode.textContent
+      for (const span of spans) {
+        if (bText.includes(span) && !aText.includes(span)) {
+          throw new OpError('conflict_user_edited', `块 ${id} 中用户此前亲自修改或补充的内容「${span}」被删改`, {
+            op_index: i,
+            hint: `「${span}」是用户此前亲自修改或补充的内容，改写或精简该段落时必须原样保留这处内容（只改写段落其余部分）。`,
+            current: { rev: this.docs.rev(batch.doc_id), user_kept: span, markdown: serializeBlock(bNode, { ids: true }, '') },
           })
         }
       }

@@ -13,4 +13,19 @@ describe('PubMed 摘要文本解码', () => {
     const client = new PubMedClient(async () => new Response(xml, { status: 200 }))
     expect(await client.abstract('1')).toBe('RESULTS: Weight fell by 14·9% (p < 0·001).')
   })
+
+  it('search() 批量附带候选文献摘要（abstract）', async () => {
+    const client = new PubMedClient(async url => {
+      if (url.includes('esearch.fcgi')) {
+        return new Response(JSON.stringify({ esearchresult: { idlist: ['101'] } }), { status: 200 })
+      }
+      if (url.includes('esummary.fcgi')) {
+        return new Response(JSON.stringify({ result: { '101': { uid: '101', title: 'Registry Linkage Study', pubdate: '2024', source: 'BMJ', authors: [{ name: 'Smith J' }], articleids: [{ idtype: 'doi', value: '10.1136/bmj.101' }] } } }), { status: 200 })
+      }
+      return new Response('<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID Version="1">101</PMID><Article><Abstract><AbstractText Label="CONCLUSIONS">Cancer registry linkage with hospital discharge data improved care quality.</AbstractText></Abstract></Article></MedlineCitation></PubmedArticle></PubmedArticleSet>', { status: 200 })
+    })
+    const items = await client.search('registry linkage', 5)
+    expect(items).toHaveLength(1)
+    expect(items[0]!.abstract).toBe('CONCLUSIONS: Cancer registry linkage with hospital discharge data improved care quality.')
+  })
 })

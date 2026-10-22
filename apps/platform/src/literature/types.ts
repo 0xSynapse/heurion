@@ -8,6 +8,7 @@ export interface Article {
   volume?: string
   issue?: string
   pages?: string
+  abstract?: string
 }
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>

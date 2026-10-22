@@ -374,6 +374,31 @@ describe('守卫', () => {
     expect(docs.get(docId).textContent).toContain('少见疾病，需长期管理')
   })
 
+  it('用户亲自修改的数字或补充的句子：即使 AI 已读过最新块（noteSeen），改写或精简时删掉该内容仍被 conflict_user_edited 拦截', () => {
+    const { docs, ops, docId } = setup('多因素分析显示死亡风险升高（HR 1.82; 95% CI 1.05-1.18）。\n\n本研究存在一定局限性，未来需多中心验证。')
+    const [p1, p2] = ids(docs, docId)
+    // 1. 医生把 HR 1.82 修正为 HR 1.12
+    ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: p1!, find: 'HR 1.82', replace: 'HR 1.12' }] }, { actor: 'user', turnId: null })
+    // 2. 医生在第二段末尾补充一句
+    const addedSentence = 'Similar results were observed in the subgroup aged 65 years or older (Supplementary Figure S2).'
+    ops.edit({ doc_id: docId, base_rev: 1, mode: 'apply', ops: [{ op: 'replace_text', id: p2!, find: '未来需多中心验证。', replace: `未来需多中心验证。 ${addedSentence}` }] }, { actor: 'user', turnId: null })
+    // AI 已读过最新版本的两段（模拟 doc_read 记下 noteSeen）
+    const rev = docs.rev(docId)
+    ops.noteSeen(docId, [p1!, p2!], rev)
+    // AI 精简第一段时把 1.12 改回或删掉 -> 被拦下
+    const e1 = expectOpError(() => ops.edit({ doc_id: docId, base_rev: rev, mode: 'apply', ops: [{ op: 'replace_block', id: p1!, markdown: '多因素分析显示死亡风险显著升高。' }] }, { actor: 'ai', turnId: null }), 'conflict_user_edited')
+    expect(e1.message).toContain('1.12')
+    // AI 保留 1.12 精简第一段 -> 通过
+    ops.edit({ doc_id: docId, base_rev: rev, mode: 'apply', ops: [{ op: 'replace_block', id: p1!, markdown: '多因素分析显示死亡风险升高（HR 1.12）。' }] }, { actor: 'ai', turnId: null })
+    // AI 用 replace_text 精简第二段时删掉医生补充的句子 -> 被拦下
+    const rev2 = docs.rev(docId)
+    const e2 = expectOpError(() => ops.edit({ doc_id: docId, base_rev: rev2, mode: 'apply', ops: [{ op: 'replace_text', id: p2!, find: `本研究存在一定局限性，未来需多中心验证。 ${addedSentence}`, replace: '本研究存在局限性，需多中心验证。' }] }, { actor: 'ai', turnId: null }), 'conflict_user_edited')
+    expect(e2.message).toContain('Supplementary Figure S2')
+    // AI 保留医生补充的句子精简第二段前半部分 -> 通过
+    ops.edit({ doc_id: docId, base_rev: rev2, mode: 'apply', ops: [{ op: 'replace_text', id: p2!, find: '本研究存在一定局限性，未来需多中心验证。', replace: '本研究存在局限性，需多中心验证。' }] }, { actor: 'ai', turnId: null })
+    expect(docs.get(docId).child(1).textContent).toContain(addedSentence)
+  })
+
   it('原有的文中编号不能被 AI 换成平台引用（会接管并改写用户原有的文献表）；新补的引用照常；用户可以（v2 1a）', () => {
     const { docs, ops, store, docId } = setup('心衰是常见病[3]，预后差[4,5]。')
     const [p1] = ids(docs, docId)

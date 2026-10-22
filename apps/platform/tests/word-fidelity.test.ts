@@ -345,6 +345,21 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
     back.doc.forEach(n => kinds.push([n.attrs.suggest, n.attrs.suggest_author, n.textContent]))
     expect(kinds.slice(0, 2)).toEqual([['delete', 'Heurion AI', '随访 3 年。'], ['insert', 'Heurion AI', '随访 36 个月。']])
   })
+
+  it('待采纳修订导出时 w14:paraId 保留在修订版（w:ins）段落上，待删除（w:del）段落剥离 paraId 避免重复', () => {
+    const NS = 'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"'
+    const srcPara = `<w:p ${NS} w14:paraId="1A2B3C23" w14:textId="77777777"><w:r><w:t xml:space="preserve">两组差异显著（</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>P</w:t></w:r><w:r><w:t xml:space="preserve"> &lt; 0.001）。</w:t></w:r></w:p>`
+    const t = importInto(docx(srcPara + p('其他。')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id, find: '两组差异显著', replace: '意向性人群两组差异显著' }] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    const paras = [...body.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)].map(m => m[0])
+    const delPara = paras.find(x => /<w:del\b/.test(x))!
+    const insPara = paras.find(x => /<w:ins\b/.test(x))!
+    expect(delPara).not.toContain('w14:paraId="1A2B3C23"')
+    expect(insPara).toContain('w14:paraId="1A2B3C23"')
+    expect(insPara).toMatch(/<w:rPr>[\s\S]*?<w:i\/>[\s\S]*?<\/w:rPr><w:t[^>]*>P<\/w:t>/)
+  })
 })
 
 // —— 改过的段落按原文 XML 打补丁 ——

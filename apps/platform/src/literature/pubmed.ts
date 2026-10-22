@@ -58,7 +58,46 @@ export class PubMedClient {
     if (!res.ok) throw new Error(`PubMed esearch HTTP ${res.status}`)
     const body = await res.json() as { esearchresult?: { idlist?: string[] } }
     const ids = body.esearchresult?.idlist ?? []
-    return ids.length === 0 ? [] : this.summaries(ids)
+    if (ids.length === 0) return []
+    const items = await this.summaries(ids)
+    if (items.length > 0 && limit <= 15) {
+      const absMap = await this.abstracts(items.map(i => i.pmid).filter((p): p is string => Boolean(p)))
+      return items.map(item => {
+        const abs = item.pmid ? absMap.get(item.pmid) : undefined
+        return abs ? { ...item, abstract: abs } : item
+      })
+    }
+    return items
+  }
+
+  /** 批量获取多篇 PubMed 文献的摘要（单次 efetch 请求）；失败时静默返回空 Map。 */
+  async abstracts(pmids: string[]): Promise<Map<string, string>> {
+    const map = new Map<string, string>()
+    if (pmids.length === 0) return map
+    try {
+      const q = new URLSearchParams({ db: 'pubmed', id: pmids.join(','), rettype: 'abstract', retmode: 'xml', tool: 'heurion' })
+      if (this.apiKey) q.set('api_key', this.apiKey)
+      if (this.email) q.set('email', this.email)
+      const res = await this.get(`${EUTILS}/efetch.fcgi?${q}`)
+      if (!res || !res.ok) return map
+      const xml = await res.text()
+      for (const block of xml.matchAll(/<PubmedArticle>[\s\S]*?<\/PubmedArticle>/g)) {
+        const raw = block[0]
+        const pmid = /<PMID[^>]*>(\d+)<\/PMID>/.exec(raw)?.[1]
+        if (!pmid) continue
+        const parts = [...raw.matchAll(/<AbstractText\b([^>]*)>([\s\S]*?)<\/AbstractText>/g)].map(m => {
+          const label = /Label="([^"]+)"/.exec(m[1]!)?.[1]
+          const text = decodeXmlText(m[2]!.replace(/<[^>]+>/g, '')).trim()
+          return label ? `${label}: ${text}` : text
+        }).filter(Boolean)
+        if (parts.length > 0) {
+          map.set(pmid, parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 1500))
+        }
+      }
+    } catch {
+      return map
+    }
+    return map
   }
 
   /** DOI → PMID（PubMed 收录时）。 */

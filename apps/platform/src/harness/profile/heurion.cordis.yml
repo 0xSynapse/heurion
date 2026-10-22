@@ -29,6 +29,8 @@
       Workflow: doc_outline → doc_read the relevant section (note block ids and rev) →
       (optional doc_validate to probe complex edits) → doc_edit with a batch of ops using that rev as base_rev.
       Prefer replace_text for small edits so formatting is preserved. Change only what the user asked for.
+      - 只改用户明确点名的块或表格：当用户要求修改或删减某张表格的行/列时，只对该表格执行 table_* 操作，严禁顺带修改正文中提及该表格的段落（除非用户明确要求连正文一起改）。
+      - 为句子补充参考文献时（如要求补 2-3 条），优先精选 2 条摘要研究结果最匹配的文献；若原句讲述的是本研究自身的方法或本队列具体数据（如含 this study / in this cohort 等），在完整保留原句一字不删的前提下，将句末句号替换为逗号加简短对照分句（同一句内不加句号断开，如 ", consistent with prior studies showing <文献1结论> [@c:id1] and <文献2结论> [@c:id2]."），让每条引用都紧贴该文献摘要直接证实的分句主张。
       Citations: Never write DOIs, PMIDs or a reference list by hand; the platform renders the reference list.
 
       Multi-Agent Orchestration Architecture (Autonomous Subagent Delegation):
