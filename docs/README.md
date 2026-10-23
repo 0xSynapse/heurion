@@ -26,6 +26,7 @@
 | [`design/SHARING.md`](design/SHARING.md) | 档案共享凭证 | 家属端向医生/医院安全共享档案的授权 Claims、只读访问控制、审计流水。 |
 | [`design/COHORT.md`](design/COHORT.md) | 临床科研队列 | 复合条件检索、入组与排除标准自动筛选、队列样本集管理。 |
 | [`design/AI_PERMISSIONS.md`](design/AI_PERMISSIONS.md) | AI 权限与红线 | 医疗大模型外发红线、操作前权限校验、安全话术兜底机制。 |
+| [`design/AEGIS_APP_PROTOCOL.md`](design/AEGIS_APP_PROTOCOL.md) | Aegis OS 应用协议 (`AAP-1.0`) | 第一方/第三方统一鉴权、App Store 自发现清单 (`/.well-known/aegis-app.json`)、Ed25519 加密租约验签与 Heurion 2.0 接入方案。 |
 
 ---
 
