@@ -64,6 +64,9 @@ export interface McpDeps {
   crossref: CrossrefClient
   openalex?: OpenAlexClient
   secret: string
+  /** 开发模式（false 时强制要求 claims.u 在 users 表中存在且为 active）。 */
+  devMode?: boolean
+  devUser?: string
   /** 用户工作区目录（asset_upload 只能读这里面的文件）。 */
   workspaceDir: (userId: string) => string
   /** 令牌所属的 dsh 进程是否仍在用（被停止的进程不能再读写）。 */
@@ -1897,6 +1900,15 @@ export async function handleMcp(deps: McpDeps, req: IncomingMessage, res: Server
   if (!claims) {
     res.writeHead(401).end('unauthorized')
     return
+  }
+  // 生产环境（devMode === false）：MCP 令牌对应的用户必须在 users 表中真实存在且处于 active 状态（机构也未停用）
+  if (deps.devMode === false) {
+    const user = deps.docs.store.getUser(claims.u)
+    const tenantActive = !user?.tenant_id || deps.docs.store.getTenant(user.tenant_id)?.status !== 'suspended'
+    if (!user || user.status !== 'active' || !tenantActive) {
+      res.writeHead(401).end('unauthorized')
+      return
+    }
   }
   // 回合被停止 / 超时后，旧 dsh 进程可能还会活几秒：它的调用一律拒绝，免得写入记到下一个回合名下
   if (claims.s && !deps.isLiveSession(claims.u, claims.s)) {

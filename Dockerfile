@@ -44,7 +44,9 @@ RUN chown root:root /usr/local/bin/heurion-sandbox-exec /usr/local/bin/heurion-e
     && chmod 0440 /etc/sudoers.d/heurion && visudo -cf /etc/sudoers.d/heurion
 
 # 以 root 启动：入口整理数据目录权限后降到 node 运行平台
-ENV HEURION_DATA_DIR=/app/data \
+ENV NODE_ENV=production \
+    HEURION_DEV_MODE=0 \
+    HEURION_DATA_DIR=/app/data \
     HEURION_SANDBOX=1 \
     HEURION_OCR_CACHE=/opt/ocr-cache \
     PORT=8787
