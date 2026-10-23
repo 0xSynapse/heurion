@@ -142,6 +142,8 @@ const shares = new ShareService(store, patients.tenantService, patients, docs)
 const subagents = new SubagentService({ docs, store, claims, pubmed, openalex, fulltext, datasets, cohort, access })
 const mcpDeps = {
   docs, ops, claims, renderer, turns: registry, secret: config.secret,
+  devMode: config.devMode,
+  devUser: config.devUser,
   pubmed,
   crossref,
   openalex,
@@ -269,9 +271,16 @@ app.get('/site/:file', c => {
 })
 const api = getRequestListener(app.fetch)
 
+const isLoopback = (addr: string | undefined): boolean =>
+  addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
+
 // /mcp 用 Node 原生 req/res（MCP SDK transport 需要），其余交给 Hono
 const server = createServer((req, res) => {
   if (req.url?.startsWith(LLM_PREFIX + '/')) {
+    if (!isLoopback(req.socket.remoteAddress)) {
+      res.writeHead(403).end('forbidden')
+      return
+    }
     handleLlmProxy({ secret: config.secret, upstream: config.llmUpstream, apiKey: config.deepseekApiKey, isLive: (u, s) => pool.isLive(u, s) }, req, res).catch(err => {
       console.error('[llm-proxy]', err)
       if (!res.headersSent) res.writeHead(502).end()
@@ -279,6 +288,10 @@ const server = createServer((req, res) => {
     return
   }
   if (req.url?.startsWith('/mcp')) {
+    if (!isLoopback(req.socket.remoteAddress)) {
+      res.writeHead(403).end('forbidden')
+      return
+    }
     handleMcp(mcpDeps, req, res).catch(err => {
       console.error('[mcp]', err)
       if (!res.headersSent) res.writeHead(500).end(String(err))

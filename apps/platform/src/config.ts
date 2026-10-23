@@ -96,8 +96,13 @@ function proceduralMode(v: string): 'off' | 'frozen' | 'fifo' | 'utility' | 'pla
   throw new Error(`PROCEDURAL_MODE 只能是 off / frozen / fifo / utility / placebo：${v}`)
 }
 
-if (process.env.NODE_ENV === 'production' && config.secret === 'dev-secret-not-for-production-use!') {
-  throw new Error('生产环境必须设置 HEURION_SECRET')
+if (process.env.NODE_ENV === 'production') {
+  if (config.secret === 'dev-secret-not-for-production-use!' || config.secret.length < 32) {
+    throw new Error('生产环境必须设置长度至少 32 位的 HEURION_SECRET')
+  }
+  if (config.devMode) {
+    throw new Error('生产环境禁止开启 HEURION_DEV_MODE（免注册开发令牌仅限本地开发与评测）')
+  }
 }
 
 export type Config = typeof config
