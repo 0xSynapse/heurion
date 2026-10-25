@@ -259,6 +259,12 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/public/tools/table1': '官网着陆页公开无状态 Table 1 基线表计算小工具（AI 调 dataset_manage）',
   'POST /api/public/tools/table1-docx': '官网着陆页公开无状态 Table 1 Word 导出小工具（浏览器端文件下载）',
   'POST /api/public/tools/citation-check': '官网着陆页公开无状态文献真伪核验小工具（AI 调 pubmed_search / verify_claims）',
+  // Aegis Application Protocol (AAP-1.0) 协议握手、授权令牌管理与人工租约审批接口
+  'POST /api/aegis/auth/token': '由医生/研究员本人通过 aegis app login 或设置页签发 Aegis 授权令牌（AI 不能自行签发令牌）',
+  'DELETE /api/aegis/auth/token': '由医生/研究员本人或 aegis app logout 吊销 Aegis 授权令牌',
+  'GET /api/aegis/auth/grants': '用户在设置页查看已绑定的 Aegis-OS 工作站授权列表',
+  'POST /api/aegis/leases/approve': '医生/研究员本人审批 [Lease-Gated] 提权申请（AI 不能自我批准租约）',
+  'POST /api/aegis/mcp': 'AAP-1.0 统一 MCP 协议网关入口本身（承载全部 MCP 工具调用）',
 }
 
 describe('人机对等：每个接口（AI 的权限 = 用户的权限）', () => {

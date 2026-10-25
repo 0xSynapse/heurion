@@ -6,8 +6,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, relative, isAbsolute } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { z } from 'zod'
 import { canAccess, verifyToken, type Permission, type TokenClaims } from '../auth/token.ts'
+import { AegisAuthService } from '../aegis/auth.ts'
+import type { AgentGrantRow, UserRow } from '../store/db.ts'
 import type { ClaimService } from '../claims/service.ts'
 import { pptxFor } from '../convert/exports.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
@@ -52,7 +55,7 @@ import type { ImageService } from '../images/service.ts'
 import { UnsplashError } from '../images/unsplash.ts'
 import { registerImagingTools } from './imaging-tools.ts'
 import type { Invoke } from '../http/invoke.ts'
-import { registerAdminTools } from './admin-tools.ts'
+import { registerAdminTools, type LeaseAuthorizeInput, type LeaseAuthorizeResult } from './admin-tools.ts'
 
 export interface McpDeps {
   claims: ClaimService
@@ -148,7 +151,12 @@ const INSTRUCTIONS = `heurion 文档平台。文档只能通过这些工具读�
 
 /** 一次 MCP 请求的上下文。 */
 class Ctx {
-  constructor(readonly deps: McpDeps, readonly claims: TokenClaims) {}
+  constructor(
+    readonly deps: McpDeps,
+    readonly claims: TokenClaims,
+    readonly agentId?: string,
+    readonly leaseAuthorizer?: (input: LeaseAuthorizeInput) => LeaseAuthorizeResult,
+  ) {}
 
   get turnId(): string | null {
     return this.deps.turns.active(this.claims.u, this.claims.s)?.turnId ?? null
@@ -417,6 +425,45 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       })
     }
     return json({ from_version: seq, changes: diff(before, after) })
+  })
+
+  server.registerTool('doc_revert_turn', {
+    description:
+      '按回合（turn_id）或 Agent ID（agent_id）精准回滚单次 AI 写入（Copy-on-Write 选择性撤销），完整保留其他 Agent 与人工的并发编辑。' +
+      '不传 turn_id 时默认回滚指定 agent_id（或当前调用方 Agent）在该文档上的最近一次未回滚回合。',
+    inputSchema: {
+      doc_id: z.string(),
+      turn_id: z.string().optional().describe('要回滚的回合 ID（可选）'),
+      agent_id: z.string().optional().describe('按 Agent ID（如 agent-writer）回滚其最近一次回合（可选）'),
+    },
+  }, async ({ doc_id, turn_id, agent_id }) => {
+    const denied = ctx.check(doc_id, 'write')
+    if (denied) return denied
+    let targetTurnId = turn_id?.trim() || null
+    if (!targetTurnId) {
+      const targetAgent = agent_id?.trim() || ctx.agentId
+      if (targetAgent) {
+        targetTurnId =
+          store.latestUnrevertedTurnForDoc(doc_id, `aegis:${targetAgent}:`) ??
+          store.latestUnrevertedTurnForDoc(doc_id, targetAgent)
+      } else {
+        targetTurnId = store.latestUnrevertedTurnForDoc(doc_id)
+      }
+    }
+    if (!targetTurnId) {
+      return fail('no_turn_to_revert', '没有找到可回滚的 AI 回合')
+    }
+    const r = docs.revertTurn(doc_id, targetTurnId)
+    if (!r) {
+      return fail('turn_not_revertible', `回合 ${targetTurnId} 不存在或已回滚`)
+    }
+    return json({
+      doc_id,
+      reverted_turn_id: targetTurnId,
+      rev: docs.rev(doc_id),
+      changes: r.event?.changes.length ?? 0,
+      skipped: r.skipped,
+    })
   })
 
   // —— 幻灯片（deck） ——
@@ -871,30 +918,51 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
   // —— 资产 ——
 
   server.registerTool('asset_upload', {
-    description: '把工作区里的图片（png/jpg/svg/gif/webp，≤10MB）上传为平台资产，返回 asset_id；之后用 ![说明](asset:<asset_id>) 插入文档。' +
-      '图是数据分析画出来的：给 code_path（生成它的 .py 脚本）和 dataset_ids，用户点开图能看到代码与数据来源。',
+    description: '把工作区里的图片（png/jpg/svg/gif/webp，≤10MB）或 Aegis-OS CoW 沙箱内生成的 base64 图片上传为平台资产，返回 asset_id；之后用 ![说明](asset:<asset_id>) 插入文档。' +
+      '图是数据分析画出来的：给 code_path（或内联 code）和 dataset_ids，用户点开图能看到代码与数据来源。',
     inputSchema: {
-      path: z.string().min(1).describe('工作区内的相对路径'),
+      path: z.string().min(1).optional().describe('工作区内的相对路径（与 data_base64 二选一）'),
+      data_base64: z.string().min(1).optional().describe('Aegis-OS CoW 沙箱内图片的 base64 编码内容（与 path 二选一）'),
+      filename: z.string().min(1).optional().describe('使用 data_base64 上传时的文件名（如 km_curve.png）'),
       code_path: z.string().optional().describe('生成这张图的脚本（工作区内的相对路径）'),
+      code: z.string().max(50_000).optional().describe('生成这张图的脚本源码（Aegis-OS CoW 沙箱内直接内联传入）'),
       dataset_ids: z.array(z.string()).optional().describe('用到的数据集'),
     },
-  }, async ({ path, code_path, dataset_ids }) => {
+  }, async ({ path, data_base64, filename, code_path, code: inlineCode, dataset_ids }) => {
     if (!claims.p.includes('write')) return fail('forbidden', '当前令牌不能上传资产')
+    let bytes: Uint8Array
+    let assetName: string
+    let mime: string | undefined
     const root = realpathSync(deps.workspaceDir(claims.u))
-    let file: string
-    try {
-      file = realpathSync(isAbsolute(path) ? path : join(root, path))
-    } catch {
-      return fail('file_not_found', `找不到文件 ${path}`, { hint: '路径相对于工作目录。' })
+
+    if (data_base64) {
+      assetName = (filename ?? path ?? 'figure.png').trim()
+      mime = IMAGE_MIME[extname(assetName).toLowerCase()]
+      if (!mime) return fail('unsupported_type', `不支持的文件类型 ${extname(assetName)}`, { hint: '支持 png/jpg/svg/gif/webp。' })
+      const buf = Buffer.from(data_base64, 'base64')
+      if (buf.byteLength > MAX_ASSET) return fail('too_large', '文件超过 10MB')
+      bytes = new Uint8Array(buf)
+    } else if (path) {
+      let file: string
+      try {
+        file = realpathSync(isAbsolute(path) ? path : join(root, path))
+      } catch {
+        return fail('file_not_found', `找不到文件 ${path}`, { hint: '路径相对于工作目录。' })
+      }
+      const rel = relative(root, file)
+      if (rel.startsWith('..') || isAbsolute(rel)) return fail('forbidden', '只能上传工作目录内的文件')
+      mime = IMAGE_MIME[extname(file).toLowerCase()]
+      if (!mime) return fail('unsupported_type', `不支持的文件类型 ${extname(file)}`, { hint: '支持 png/jpg/svg/gif/webp。' })
+      if (statSync(file).size > MAX_ASSET) return fail('too_large', '文件超过 10MB')
+      bytes = readFileSync(file)
+      assetName = rel
+    } else {
+      return fail('missing_file', '需要提供 path 或 data_base64')
     }
-    const rel = relative(root, file)
-    if (rel.startsWith('..') || isAbsolute(rel)) return fail('forbidden', '只能上传工作目录内的文件')
-    const mime = IMAGE_MIME[extname(file).toLowerCase()]
-    if (!mime) return fail('unsupported_type', `不支持的文件类型 ${extname(file)}`, { hint: '支持 png/jpg/svg/gif/webp。' })
-    if (statSync(file).size > MAX_ASSET) return fail('too_large', '文件超过 10MB')
+
     // 分析来源：脚本内容（≤50KB）与数据集版本
-    let code: string | null = null
-    if (code_path) {
+    let code: string | null = inlineCode ?? null
+    if (!code && code_path) {
       try {
         const cf = realpathSync(isAbsolute(code_path) ? code_path : join(root, code_path))
         const crel = relative(root, cf)
@@ -902,8 +970,8 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       } catch { /* 找不到脚本就只记数据集 */ }
     }
     const sets = (dataset_ids ?? []).map(id => store.getDataset(id)).filter(d => d && (!access || access.canDataset(claims.u, d, 'read'))).map(d => ({ id: d!.id, name: d!.name, version: d!.version, rows: d!.rows }))
-    const provenance = code || sets.length ? { code, code_path: code_path ?? null, datasets: sets, turn_id: ctx.turnId, at: new Date().toISOString() } : null
-    const asset = store.putAsset({ owner: claims.u, mime, name: rel, bytes: readFileSync(file), provenance })
+    const provenance = code || sets.length ? { code, code_path: code_path ?? (inlineCode ? 'inline.py' : null), datasets: sets, turn_id: ctx.turnId, at: new Date().toISOString() } : null
+    const asset = store.putAsset({ owner: claims.u, mime, name: assetName, bytes, provenance })
     return json({ asset_id: asset.id, mime, size: asset.size, markdown: `![说明](asset:${asset.id} "图 N 图题")`, ...(provenance ? { provenance: code ? '已记录代码与数据来源' : '已记录数据来源（没找到脚本）' } : {}) })
   })
 
@@ -1449,18 +1517,33 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
   }))
 
   server.registerTool('report_upload', {
-    description: '把工作区里的报告文件（PDF / 图片 / docx / txt，≤30MB）上传为患者的原始报告，自动提取化验项进待确认。report_date 是报告上的日期（知道就填）。',
+    description: '把工作区里的报告文件或 Aegis-OS CoW 沙箱内的 base64 文件（PDF / 图片 / docx / txt，≤30MB）上传为患者的原始报告，自动提取化验项进待确认。report_date 是报告上的日期（知道就填）。',
     inputSchema: {
-      patient_id: z.string(), path: z.string().describe('工作区内的相对路径'),
+      patient_id: z.string(),
+      path: z.string().optional().describe('工作区内的相对路径（与 data_base64 二选一）'),
+      data_base64: z.string().optional().describe('Aegis-OS CoW 沙箱内报告文件的 base64 编码内容（与 path 二选一）'),
+      filename: z.string().optional().describe('使用 data_base64 上传时的文件名（如 lab_report.pdf）'),
       kind: z.enum(['lab_report', 'discharge', 'pathology', 'imaging', 'note', 'other']).optional(), title: z.string().max(120).optional(), report_date: z.string().optional(),
     },
-  }, async ({ patient_id, path, kind, title, report_date }) => {
+  }, async ({ patient_id, path, data_base64, filename, kind, title, report_date }) => {
+    const MIME: Record<string, string> = { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.txt': 'text/plain', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }
+    if (data_base64) {
+      const name = (filename ?? path ?? 'report.pdf').trim().split('/').pop()!
+      const mime = MIME[extname(name).toLowerCase()]
+      if (!mime) return fail('unsupported_type', `不支持 ${extname(name)}`, { hint: '支持 PDF、图片、docx、txt。' })
+      const bytes = new Uint8Array(Buffer.from(data_base64, 'base64'))
+      if (bytes.byteLength > 30 * 1024 * 1024) return fail('too_large', '报告文件超过 30MB')
+      return pt(svc => {
+        const r = svc.addFile(aiActor(), patient_id, { name, mime, bytes, kind, title, report_date: report_date ?? null })
+        return { record_id: r.record.id, extraction: r.record.extraction, message: r.record.extraction === 'queued' ? '已上传，正在自动提取；稍后用 patient_read 看提取结果' : r.record.extraction_note }
+      })
+    }
+    if (!path) return fail('missing_file', '需要提供 path 或 data_base64')
     const root = realpathSync(deps.workspaceDir(claims.u))
     let file: string
     try { file = realpathSync(isAbsolute(path) ? path : join(root, path)) } catch { return fail('file_not_found', `找不到文件 ${path}`) }
     const rel = relative(root, file)
     if (rel.startsWith('..') || isAbsolute(rel)) return fail('forbidden', '只能上传工作目录内的文件')
-    const MIME: Record<string, string> = { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.txt': 'text/plain', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }
     const mime = MIME[extname(file).toLowerCase()]
     if (!mime) return fail('unsupported_type', `不支持 ${extname(file)}`, { hint: '支持 PDF、图片、docx、txt。' })
     return pt(svc => {
@@ -1491,14 +1574,72 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
   }, async ({ patient_id, lab_id, ...patch }) => pt(svc => { const l = svc.editLab(aiActor(), patient_id, lab_id, patch); return { lab_id: l.id, value: l.value_num ?? l.value_text, flag: l.flag } }))
 
   server.registerTool('lab_resolve', {
-    description: '确认或删除一条待确认的化验。本机构设为「AI 的修改需医生确认」时只能由医生做（会返回 needs_human_review）。',
+    description: '确认或删除一条待确认的化验。本机构设为「AI 的修改需医生确认」时只能由医生做（会返回 needs_human_review，或经 Aegis Lease 授权后执行）。',
     inputSchema: { patient_id: z.string(), lab_id: z.string(), action: z.enum(['confirm', 'reject']) },
-  }, async ({ patient_id, lab_id, action }) => pt(svc => { svc.setLabStatus(aiActor(), patient_id, lab_id, action === 'confirm' ? 'confirmed' : 'rejected'); return { result: action } }))
+  }, async ({ patient_id, lab_id, action }) => {
+    if (!deps.patients) return fail('patients_unavailable', '患者模块未启用')
+    try {
+      deps.patients.setLabStatus(aiActor(), patient_id, lab_id, action === 'confirm' ? 'confirmed' : 'rejected')
+      return json({ result: action })
+    } catch (err) {
+      if (err instanceof PatientError && err.code === 'needs_human_review' && ctx.leaseAuthorizer) {
+        const leaseCheck = ctx.leaseAuthorizer({
+          tool: 'lab_resolve',
+          action,
+          scope: 'heurion:clinical_confirm',
+          resource: patient_id,
+          summary: `临床确认患者 ${patient_id} 的化验项 ${lab_id} (${action})`,
+          reason: null,
+        })
+        if (leaseCheck.authorized) {
+          deps.patients.setLabStatus({ ...aiActor(), via: 'user' as const }, patient_id, lab_id, action === 'confirm' ? 'confirmed' : 'rejected')
+          return json({ result: action, lease_authorized: true, lease_id: leaseCheck.leaseId, lease_via: leaseCheck.via })
+        }
+        return json({
+          status: 'approval_required',
+          escalation_id: leaseCheck.escalationId,
+          reason: leaseCheck.reason,
+          suggested_lease_scope: leaseCheck.suggestedLeaseScope,
+          message: err.message,
+        })
+      }
+      return patientFail(err)
+    }
+  })
 
   server.registerTool('report_resolve', {
-    description: '确认或驳回整份报告（确认时一并确认它的待确认化验；报告没有日期时要给 report_date）。本机构设为「AI 的修改需医生确认」时只能由医生做。',
+    description: '确认或驳回整份报告（确认时一并确认它的待确认化验；报告没有日期时要给 report_date）。本机构设为「AI 的修改需医生确认」时只能由医生做（或经 Aegis Lease 授权后执行）。',
     inputSchema: { patient_id: z.string(), record_id: z.string(), action: z.enum(['confirm', 'reject']), report_date: z.string().optional() },
-  }, async ({ patient_id, record_id, action, report_date }) => pt(svc => { svc.resolveRecord(aiActor(), patient_id, record_id, { accept: action === 'confirm', report_date }); return { result: action } }))
+  }, async ({ patient_id, record_id, action, report_date }) => {
+    if (!deps.patients) return fail('patients_unavailable', '患者模块未启用')
+    try {
+      deps.patients.resolveRecord(aiActor(), patient_id, record_id, { accept: action === 'confirm', report_date })
+      return json({ result: action })
+    } catch (err) {
+      if (err instanceof PatientError && err.code === 'needs_human_review' && ctx.leaseAuthorizer) {
+        const leaseCheck = ctx.leaseAuthorizer({
+          tool: 'report_resolve',
+          action,
+          scope: 'heurion:clinical_confirm',
+          resource: patient_id,
+          summary: `临床确认患者 ${patient_id} 的检查报告 ${record_id} (${action})`,
+          reason: null,
+        })
+        if (leaseCheck.authorized) {
+          deps.patients.resolveRecord({ ...aiActor(), via: 'user' as const }, patient_id, record_id, { accept: action === 'confirm', report_date })
+          return json({ result: action, lease_authorized: true, lease_id: leaseCheck.leaseId, lease_via: leaseCheck.via })
+        }
+        return json({
+          status: 'approval_required',
+          escalation_id: leaseCheck.escalationId,
+          reason: leaseCheck.reason,
+          suggested_lease_scope: leaseCheck.suggestedLeaseScope,
+          message: err.message,
+        })
+      }
+      return patientFail(err)
+    }
+  })
 
   server.registerTool('patient_doc_link', {
     description: '把一份文档关联到患者（如你写的病例报告），它会出现在患者页「病例报告」里、不出现在文档列表里；action=unlink 取消关联。',
@@ -1869,28 +2010,264 @@ export function buildCanvasMcpServer(deps: CanvasMcpDeps, claims: TokenClaims): 
   return server
 }
 
+export interface AegisMcpServerOptions {
+  agentId?: string
+  leaseAuthorizer?: (input: LeaseAuthorizeInput) => LeaseAuthorizeResult
+  aegisToolScope?: AgentGrantRow['tool_scope']
+}
+
+const AEGIS_CANVAS_ONLY = /^(doc_|docs_|deck_|slide_|layout_|comment|pubmed_|openalex_|oa_|doi_|insert_citation|import_references|list_citations|verify_claims|claim_report|asset_upload|diagram_render|image_search)/
+const AEGIS_READONLY_TOOLS = /^(doc_list|docs_search|doc_outline|doc_read|doc_search|doc_validate|doc_history|doc_diff|deck_templates|slide_read|layout_check|slide_render|comments_list|pubmed_search|openalex_search|oa_fulltext|doi_lookup|list_citations|verify_claims|dataset_list|dataset_describe|patient_list|patient_read|labs_query|report_read|patient_access_log|share_list|share_read|share_labs|share_file|study_list|study_read|study_cohort_preview|study_cohort_list|study_vars_list|kb_search|kb_read|memory_search|phr_member_links|patient_claims_list|phi_scan|imaging_status|imaging_models|account|action_status|asset_provenance)$/
+
+function aegisScopeAllows(toolName: string, scope?: AgentGrantRow['tool_scope']): boolean {
+  if (!scope || scope === 'all') return true
+  if (scope === 'canvas') return AEGIS_CANVAS_ONLY.test(toolName)
+  if (scope === 'readonly') return AEGIS_READONLY_TOOLS.test(toolName)
+  return true
+}
+
 /** Heurion 综合医疗业务 MCP 服务：聚合画布与文档、医疗临床与科研、管理审批全部工具 */
-export function buildMcpServer(deps: McpDeps, claims: TokenClaims): McpServer {
+export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: AegisMcpServerOptions): McpServer {
   const { docs } = deps
   const store = docs.store
   if (!deps.access) { deps.access = new Access(store); deps.access.docText = id => JSON.stringify(docs.get(id).toJSON()) }
   if (deps.datasets && !deps.datasets.access) deps.datasets.access = deps.access
   if (deps.images && !deps.images.access) deps.images.access = deps.access
   if (deps.subagents && !deps.subagents.access) deps.subagents.access = deps.access
-  const ctx = new Ctx(deps, claims)
-  const server = new McpServer({ name: 'heurion', version: '0.1.0' }, { instructions: INSTRUCTIONS })
-  // 工具范围（令牌里的 t）：范围外的工具不注册，模型看不到它的说明
-  if (claims.t) {
+  const ctx = new Ctx(deps, claims, aegisOpts?.agentId, aegisOpts?.leaseAuthorizer)
+  const server = new McpServer({ name: 'heurion', version: '2.0.0' }, { instructions: INSTRUCTIONS })
+  // 工具范围（令牌里的 t 或 AAP-1.0 tool_scope）：范围外的工具不注册，模型看不到它的说明
+  if (claims.t || (aegisOpts?.aegisToolScope && aegisOpts.aegisToolScope !== 'all')) {
     const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown
-    ;(server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, ...rest: unknown[]) =>
-      toolInScope(String(name), claims.t) ? register(name, ...rest) : undefined
+    ;(server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, ...rest: unknown[]) => {
+      const n = String(name)
+      if (claims.t && !toolInScope(n, claims.t)) return undefined
+      if (!aegisScopeAllows(n, aegisOpts?.aegisToolScope)) return undefined
+      return register(name, ...rest)
+    }
   }
 
   registerCanvasTools(server, ctx)
   registerHealthcareTools(server, ctx)
   registerImagingTools(server, { store, claims, patients: deps.patients, studies: deps.studies, datasets: deps.datasets, cohort: deps.cohort })
-  registerAdminTools(server, { store, turns: deps.turns, invoke: deps.invoke, workspaceDir: deps.workspaceDir, generation: claims.s }, claims.u)
+  registerAdminTools(
+    server,
+    {
+      store,
+      turns: deps.turns,
+      invoke: deps.invoke,
+      workspaceDir: deps.workspaceDir,
+      generation: claims.s,
+      leaseAuthorizer: aegisOpts?.leaseAuthorizer,
+    },
+    claims.u,
+  )
   return server
+}
+
+export interface AegisRequestContext {
+  authHeader: string
+  agentId?: string | null
+  orgId?: string | null
+  turnIdHeader?: string | null
+  leaseTokenHeader?: string | null
+}
+
+/**
+ * 构建经过 AAP-1.0 统一身份鉴权、多智能体回合隔离与 Ed25519 租约验签注入的 Heurion MCP Server。
+ */
+export function buildAegisMcpServer(
+  deps: McpDeps,
+  reqCtx: AegisRequestContext,
+):
+  | { ok: true; server: McpServer; user: UserRow; grant: AgentGrantRow; agentId: string; turnId: string; generation: string }
+  | { ok: false; status: number; code: string; error: string } {
+  const store = deps.docs.store
+  const auth = reqCtx.authHeader?.trim() ?? ''
+  if (!auth.startsWith('Bearer ')) {
+    return { ok: false, status: 401, code: 'missing_bearer_token', error: '缺少 Authorization: Bearer aegis_at_heurion.* 令牌' }
+  }
+  const rawToken = auth.slice('Bearer '.length).trim()
+  const agentId = (reqCtx.agentId?.trim() || 'aegis-agent').replace(/[^a-zA-Z0-9._-]/g, '_')
+  const authSvc = new AegisAuthService(store, 'heurion')
+  const verifiedRes = authSvc.verifyGrantToken(rawToken, agentId)
+  if (!verifiedRes.ok) {
+    return { ok: false, status: 401, code: verifiedRes.code, error: verifiedRes.error }
+  }
+  const { grant, user } = verifiedRes.verified
+
+  // 校验可选的 X-Aegis-Org-Id 请求头，防止跨机构越权
+  const reqOrg = reqCtx.orgId?.trim()
+  if (reqOrg && reqOrg !== user.tenant_id && reqOrg !== user.personal_tenant_id) {
+    return { ok: false, status: 403, code: 'org_mismatch', error: `X-Aegis-Org-Id (${reqOrg}) 与用户所属机构不一致` }
+  }
+
+  // 为每个 (grant_id, agent_id) 维护独立的会话槽（generation）与可 CoW 回滚的 turnId
+  const generation = `aegis:${grant.id}:${agentId}`
+  const existingTurn = deps.turns.active(user.id, generation)
+  const rawTurnHeader = reqCtx.turnIdHeader?.trim()
+  const turnPrefix = `aegis:${agentId}:`
+  const turnId = rawTurnHeader
+    ? (rawTurnHeader.startsWith(turnPrefix) ? rawTurnHeader : `${turnPrefix}${rawTurnHeader}`)
+    : (existingTurn?.turnId ?? `${turnPrefix}${randomUUID().replace(/-/g, '').slice(0, 10)}`)
+
+  if (!existingTurn || existingTurn.turnId !== turnId) {
+    deps.turns.begin(
+      user.id,
+      {
+        turnId,
+        touched: existingTurn?.touched ?? new Set(),
+        notify: () => {},
+        mode: 'apply',
+      },
+      generation,
+    )
+  }
+
+  let parsedDocs: '*' | string[] = '*'
+  if (grant.doc_ids) {
+    try {
+      const arr = JSON.parse(grant.doc_ids)
+      if (Array.isArray(arr)) parsedDocs = arr
+    } catch {}
+  }
+
+  const perms: Permission[] = grant.tool_scope === 'readonly' ? ['read'] : ['read', 'write']
+  const claims: TokenClaims = {
+    u: user.id,
+    d: parsedDocs,
+    p: perms,
+    aud: 'mcp',
+    s: generation,
+    exp: grant.expires_at ? Math.floor(new Date(grant.expires_at).getTime() / 1000) : Math.floor(Date.now() / 1000) + 86400,
+  }
+
+  const leaseAuthorizer = (input: LeaseAuthorizeInput): LeaseAuthorizeResult => {
+    const check = authSvc.verifyLease({
+      grant,
+      agentId,
+      leaseTokenHeader: reqCtx.leaseTokenHeader,
+      requiredScope: input.scope,
+      requiredResource: input.resource,
+    })
+    if (check.authorized) {
+      return { authorized: true, leaseId: check.leaseId, via: check.via }
+    }
+    const esc = store.createAgentEscalation({
+      grant_id: grant.id,
+      user_id: user.id,
+      agent_id: agentId,
+      tool: input.tool,
+      action: input.action,
+      scope: input.scope,
+      resource: input.resource,
+      summary: input.summary,
+      reason: input.reason,
+      action_id: input.actionId ?? null,
+    })
+    return {
+      authorized: false,
+      escalationId: esc.id,
+      suggestedLeaseScope: `action=${input.scope}, resource=${input.resource}`,
+      reason: check.reason,
+    }
+  }
+
+  const server = buildMcpServer(deps, claims, {
+    agentId,
+    leaseAuthorizer,
+    aegisToolScope: grant.tool_scope,
+  })
+
+  return { ok: true, server, user, grant, agentId, turnId, generation }
+}
+
+/**
+ * AAP-1.0 统一 MCP 网关（Node HTTP StreamableHTTPServerTransport 处理器，挂载于 `/api/aegis/mcp` 与 `/api/mcp`）。
+ */
+export async function handleAegisMcp(deps: McpDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const built = buildAegisMcpServer(deps, {
+    authHeader: req.headers.authorization ?? '',
+    agentId: (req.headers['x-aegis-agent-id'] as string | undefined) ?? null,
+    orgId: (req.headers['x-aegis-org-id'] as string | undefined) ?? null,
+    turnIdHeader: (req.headers['x-aegis-turn-id'] as string | undefined) ?? null,
+    leaseTokenHeader: (req.headers['x-aegis-lease-token'] as string | undefined) ?? null,
+  })
+  if (!built.ok) {
+    res.writeHead(built.status, { 'content-type': 'application/json; charset=utf-8' })
+      .end(JSON.stringify({ error: built.error, code: built.code }))
+    return
+  }
+  const { server } = built
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+  res.on('close', () => { void transport.close(); void server.close() })
+  await server.connect(transport)
+  await transport.handleRequest(req, res)
+}
+
+/**
+ * AAP-1.0 统一 MCP 网关（Web Fetch / JSON-RPC 处理器，供 Hono `app.request('/api/aegis/mcp')` 直接调用）。
+ */
+export async function handleAegisMcpJsonRpc(deps: McpDeps, req: Request): Promise<Response> {
+  const built = buildAegisMcpServer(deps, {
+    authHeader: req.headers.get('authorization') ?? '',
+    agentId: req.headers.get('x-aegis-agent-id'),
+    orgId: req.headers.get('x-aegis-org-id'),
+    turnIdHeader: req.headers.get('x-aegis-turn-id'),
+    leaseTokenHeader: req.headers.get('x-aegis-lease-token'),
+  })
+  if (!built.ok) {
+    return new Response(JSON.stringify({ error: built.error, code: built.code }), {
+      status: built.status,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    })
+  }
+  const { server } = built
+  const body = await req.json().catch(() => null) as { jsonrpc?: string; id?: unknown; method?: string; params?: unknown } | null
+  if (!body || typeof body.method !== 'string') {
+    await server.close()
+    return new Response(JSON.stringify({ error: '无效的 MCP JSON-RPC 请求体', code: 'invalid_jsonrpc' }), {
+      status: 400,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    })
+  }
+
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  await server.connect(serverTransport)
+  await clientTransport.start()
+
+  try {
+    const reqId = body.id ?? 1
+    const responseMsg = await new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('MCP request timeout')), 15_000)
+      clientTransport.onmessage = msg => {
+        if ('id' in msg && msg.id === reqId) {
+          clearTimeout(timer)
+          resolve(msg)
+        }
+      }
+      clientTransport.onerror = err => {
+        clearTimeout(timer)
+        reject(err)
+      }
+      void clientTransport.send({
+        jsonrpc: '2.0',
+        id: reqId as string | number,
+        method: body.method!,
+        params: (body.params as Record<string, unknown>) ?? {},
+      })
+    })
+    return new Response(JSON.stringify(responseMsg), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'x-aegis-turn-id': built.turnId,
+      },
+    })
+  } finally {
+    await clientTransport.close()
+    await server.close()
+  }
 }
 
 /** 无状态 Streamable HTTP：每个请求新建 server + transport。 */

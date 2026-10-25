@@ -29,6 +29,66 @@ export interface PendingActionRow {
   result: string | null; created_at: string; decided_at: string | null; decided_by: string | null
 }
 
+/** Aegis Application Protocol (AAP-1.0) Agent Grant：绑定医生/研究员账户、租户与本地 Aegis-OS 节点 Ed25519 公钥。 */
+export interface AgentGrantRow {
+  id: string
+  app_id: string
+  user_id: string
+  name: string
+  token_hash: string
+  token_prefix: string
+  /** 绑定的本地 Aegis-OS 节点 Ed25519 公钥（用于验签 X-Aegis-Lease-Token） */
+  aegis_node_pubkey: string | null
+  /** 'all' | 'canvas' | 'clinical' | 'research' | 'readonly' */
+  tool_scope: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+  /** JSON 字符串数组，默认 ["*"] */
+  permissions: string
+  /** JSON 字符串数组或 null（限制允许访问的文档 ID） */
+  doc_ids: string | null
+  /** 'direct' | 'tracked' */
+  write_mode: 'direct' | 'tracked'
+  /** 签发时的 users.token_version；用户改密/强制下线时 token_version 递增，旧 Grant 自动失效 */
+  user_token_version: number
+  created_at: string
+  expires_at: string | null
+  last_used_at: string | null
+  last_agent_id: string | null
+  revoked_at: string | null
+}
+
+/** AAP-1.0 Lease-Gated 提权申请（Tier 2 高危/对外动作在无有效 Lease 时挂起）。 */
+export interface AgentEscalationRow {
+  id: string
+  grant_id: string
+  user_id: string
+  agent_id: string
+  tool: string
+  action: string
+  scope: string
+  resource: string
+  summary: string
+  reason: string | null
+  action_id: string | null
+  status: 'pending' | 'approved' | 'rejected' | 'expired'
+  created_at: string
+  decided_at: string | null
+  decided_by: string | null
+}
+
+/** AAP-1.0 服务端已批准的短期租约（或由 X-Aegis-Lease-Token 离线验签通过）。 */
+export interface AgentLeaseRow {
+  id: string
+  grant_id: string
+  user_id: string
+  agent_id: string
+  scope: string
+  resource: string
+  escalation_id: string | null
+  created_at: string
+  expires_at: string
+  revoked_at: string | null
+}
+
 export interface UserRow {
   id: string
   username: string
@@ -846,6 +906,63 @@ export class Store {
            '【科研】DSMB 独立数据监查委员会中期审查闭门会议',
            '【随访】PT-SARCO-003 营养支持与化疗耐受评估（低 SMI）'
          );
+    `)
+
+    // Aegis Application Protocol (AAP-1.0)：外部/第一方 Agent 授权令牌、提权申请与短期租约
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_grants (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL DEFAULT 'heurion',
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        token_prefix TEXT NOT NULL,
+        aegis_node_pubkey TEXT,
+        tool_scope TEXT NOT NULL DEFAULT 'all',
+        permissions TEXT NOT NULL DEFAULT '["*"]',
+        doc_ids TEXT,
+        write_mode TEXT NOT NULL DEFAULT 'tracked',
+        user_token_version INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        expires_at TEXT,
+        last_used_at TEXT,
+        last_agent_id TEXT,
+        revoked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_grants_user ON agent_grants(user_id, revoked_at);
+
+      CREATE TABLE IF NOT EXISTS agent_escalations (
+        id TEXT PRIMARY KEY,
+        grant_id TEXT NOT NULL REFERENCES agent_grants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL,
+        tool TEXT NOT NULL,
+        action TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        resource TEXT NOT NULL DEFAULT '*',
+        summary TEXT NOT NULL,
+        reason TEXT,
+        action_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        decided_at TEXT,
+        decided_by TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_escalations_user ON agent_escalations(user_id, status);
+
+      CREATE TABLE IF NOT EXISTS agent_leases (
+        id TEXT PRIMARY KEY,
+        grant_id TEXT NOT NULL REFERENCES agent_grants(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        agent_id TEXT NOT NULL DEFAULT '*',
+        scope TEXT NOT NULL,
+        resource TEXT NOT NULL DEFAULT '*',
+        escalation_id TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_leases_grant ON agent_leases(grant_id, expires_at);
     `)
   }
 
@@ -2507,6 +2624,197 @@ export class Store {
     if (!ids.length) return
     const placeholders = ids.map(() => '?').join(', ')
     this.db.prepare(`DELETE FROM calendar_events WHERE user_id = ? AND id IN (${placeholders})`).run(userId, ...ids)
+  }
+
+  // —— Aegis Application Protocol (AAP-1.0)：Agent Grants / Escalations / Leases ——
+
+  createAgentGrant(input: {
+    id: string
+    app_id?: string
+    user_id: string
+    name: string
+    token_hash: string
+    token_prefix: string
+    aegis_node_pubkey?: string | null
+    tool_scope?: AgentGrantRow['tool_scope']
+    permissions?: string[]
+    doc_ids?: string[] | null
+    write_mode?: AgentGrantRow['write_mode']
+    user_token_version: number
+    expires_at?: string | null
+  }): AgentGrantRow {
+    const t = now()
+    this.db.prepare(`
+      INSERT INTO agent_grants (
+        id, app_id, user_id, name, token_hash, token_prefix, aegis_node_pubkey,
+        tool_scope, permissions, doc_ids, write_mode, user_token_version, created_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.id,
+      input.app_id ?? 'heurion',
+      input.user_id,
+      input.name,
+      input.token_hash,
+      input.token_prefix,
+      input.aegis_node_pubkey ?? null,
+      input.tool_scope ?? 'all',
+      JSON.stringify(input.permissions ?? ['*']),
+      input.doc_ids ? JSON.stringify(input.doc_ids) : null,
+      input.write_mode ?? 'tracked',
+      input.user_token_version,
+      t,
+      input.expires_at ?? null,
+    )
+    return this.getAgentGrant(input.id)!
+  }
+
+  getAgentGrant(id: string): AgentGrantRow | undefined {
+    return this.db.prepare('SELECT * FROM agent_grants WHERE id = ?').get(id) as AgentGrantRow | undefined
+  }
+
+  listAgentGrants(userId: string): AgentGrantRow[] {
+    return this.db.prepare('SELECT * FROM agent_grants WHERE user_id = ? ORDER BY created_at DESC').all(userId) as unknown as AgentGrantRow[]
+  }
+
+  touchAgentGrant(id: string, agentId?: string | null): void {
+    this.db.prepare('UPDATE agent_grants SET last_used_at = ?, last_agent_id = COALESCE(?, last_agent_id) WHERE id = ?')
+      .run(now(), agentId ?? null, id)
+  }
+
+  revokeAgentGrant(id: string, userId?: string): boolean {
+    const t = now()
+    const res = userId
+      ? this.db.prepare('UPDATE agent_grants SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(t, id, userId)
+      : this.db.prepare('UPDATE agent_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(t, id)
+    if (Number(res.changes ?? 0) > 0) {
+      this.db.prepare('UPDATE agent_leases SET revoked_at = ? WHERE grant_id = ? AND revoked_at IS NULL').run(t, id)
+      return true
+    }
+    return false
+  }
+
+  createAgentEscalation(input: {
+    id?: string
+    grant_id: string
+    user_id: string
+    agent_id: string
+    tool: string
+    action: string
+    scope: string
+    resource?: string
+    summary: string
+    reason?: string | null
+    action_id?: string | null
+  }): AgentEscalationRow {
+    const id = input.id ?? ('esc-heurion-' + randomUUID().replace(/-/g, '').slice(0, 8))
+    const t = now()
+    this.db.prepare(`
+      INSERT INTO agent_escalations (
+        id, grant_id, user_id, agent_id, tool, action, scope, resource, summary, reason, action_id, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+    `).run(
+      id,
+      input.grant_id,
+      input.user_id,
+      input.agent_id,
+      input.tool,
+      input.action,
+      input.scope,
+      input.resource ?? '*',
+      input.summary,
+      input.reason ?? null,
+      input.action_id ?? null,
+      t,
+    )
+    return this.getAgentEscalation(id)!
+  }
+
+  getAgentEscalation(id: string): AgentEscalationRow | undefined {
+    return this.db.prepare('SELECT * FROM agent_escalations WHERE id = ?').get(id) as AgentEscalationRow | undefined
+  }
+
+  approveAgentEscalation(id: string, decidedBy: string, ttlSecs = 900): { escalation: AgentEscalationRow; lease: AgentLeaseRow } | undefined {
+    const esc = this.getAgentEscalation(id)
+    if (!esc || esc.status !== 'pending') return undefined
+    const t = now()
+    this.db.prepare("UPDATE agent_escalations SET status = 'approved', decided_at = ?, decided_by = ? WHERE id = ?")
+      .run(t, decidedBy, id)
+    const lease = this.createAgentLease({
+      grant_id: esc.grant_id,
+      user_id: esc.user_id,
+      agent_id: esc.agent_id,
+      scope: esc.scope,
+      resource: esc.resource,
+      escalation_id: esc.id,
+      ttl_secs: ttlSecs,
+    })
+    return { escalation: this.getAgentEscalation(id)!, lease }
+  }
+
+  createAgentLease(input: {
+    id?: string
+    grant_id: string
+    user_id: string
+    agent_id?: string
+    scope: string
+    resource?: string
+    escalation_id?: string | null
+    ttl_secs?: number
+  }): AgentLeaseRow {
+    const id = input.id ?? ('lease-heurion-' + randomUUID().replace(/-/g, '').slice(0, 8))
+    const createdAt = now()
+    const expiresAt = new Date(Date.now() + Math.max(1, input.ttl_secs ?? 900) * 1000).toISOString()
+    this.db.prepare(`
+      INSERT INTO agent_leases (id, grant_id, user_id, agent_id, scope, resource, escalation_id, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.grant_id,
+      input.user_id,
+      input.agent_id ?? '*',
+      input.scope,
+      input.resource ?? '*',
+      input.escalation_id ?? null,
+      createdAt,
+      expiresAt,
+    )
+    return this.db.prepare('SELECT * FROM agent_leases WHERE id = ?').get(id) as unknown as AgentLeaseRow
+  }
+
+  listActiveAgentLeases(grantId: string): AgentLeaseRow[] {
+    const t = now()
+    return this.db.prepare('SELECT * FROM agent_leases WHERE grant_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC')
+      .all(grantId, t) as unknown as AgentLeaseRow[]
+  }
+
+  /** 查找某文档最近一次尚未回滚的 AI 回合 turn_id（支持按前缀筛选特定 Agent 的回合，如 aegis:<agentId>:）。 */
+  latestUnrevertedTurnForDoc(docId: string, turnPrefix?: string): string | null {
+    if (turnPrefix) {
+      const row = this.db.prepare(`
+        SELECT o.turn_id
+          FROM op_log o
+          JOIN turn_bases b ON b.turn_id = o.turn_id AND b.doc_id = o.doc_id
+         WHERE o.doc_id = ?
+           AND o.actor = 'ai'
+           AND o.turn_id LIKE ?
+           AND b.reverted = 0
+         ORDER BY o.rev DESC
+         LIMIT 1
+      `).get(docId, `${turnPrefix}%`) as { turn_id: string } | undefined
+      return row?.turn_id ?? null
+    }
+    const row = this.db.prepare(`
+      SELECT o.turn_id
+        FROM op_log o
+        JOIN turn_bases b ON b.turn_id = o.turn_id AND b.doc_id = o.doc_id
+       WHERE o.doc_id = ?
+         AND o.actor = 'ai'
+         AND o.turn_id IS NOT NULL
+         AND b.reverted = 0
+       ORDER BY o.rev DESC
+       LIMIT 1
+    `).get(docId) as { turn_id: string } | undefined
+    return row?.turn_id ?? null
   }
 }
 
