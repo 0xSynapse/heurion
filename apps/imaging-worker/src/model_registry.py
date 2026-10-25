@@ -486,6 +486,64 @@ def list_registered_models() -> List[Dict[str, Any]]:
     """Returns the list of all registered models with their local download status."""
     return [get_model_status(name) for name in OFFICIAL_MODEL_REGISTRY.keys()]
 
+
+# 由多个已登记权重串联而成的模型链：本身没有独立权重文件，不进入 OFFICIAL_MODEL_REGISTRY
+# （那里只登记可拉取、可校验的单个权重），就绪与否完全取决于各组成模型。
+COMPOSITE_PIPELINES: Dict[str, Dict[str, Any]] = {
+    "lung_nodule_pipeline": {
+        "display_name": "肺结节模型链（MONAI lung_nodule_ct_detection RetinaNet 检出 + VISTA-3D 点提示分割与肺叶定位）",
+        "modality": "Chest CT",
+        "body_part": "chest",
+        "category": "胸部与呼吸科",
+        "components": [
+            {"registry_name": "lung_nodule_ct", "role": "多结节三维检出（RetinaNet）"},
+            {"registry_name": "vista3d", "role": "以检出框中心为正点提示的结节分割；肺叶类别 28~32 的全肺分割"},
+        ],
+        "outputs": "每个结节的检出分数、体素框、肺叶、长径/短径/平均径、体积、CT 值均值与标准差、密度分型、实性成分直径、CTR",
+    },
+}
+
+
+def get_pipeline_status(name: str) -> Dict[str, Any]:
+    """模型链状态：所有组成模型 is_ready 时才就绪；版本串为「组成模型@版本」以 + 连接。"""
+    spec = COMPOSITE_PIPELINES.get(name)
+    if not spec:
+        return {"name": name, "exists_in_registry": False, "is_ready": False}
+    components = []
+    reasons = []
+    versions = []
+    for comp in spec["components"]:
+        st = get_model_status(comp["registry_name"])
+        version = str(st.get("version") or "unknown")
+        versions.append(f"{comp['registry_name']}@{version[1:] if version.startswith('v') else version}")
+        components.append({
+            "registry_name": comp["registry_name"],
+            "role": comp["role"],
+            "version": st.get("version"),
+            "is_ready": bool(st.get("is_ready")),
+            "unavailable_reason": st.get("unavailable_reason"),
+        })
+        if not st.get("is_ready"):
+            reasons.append(f"{comp['registry_name']}：{st.get('unavailable_reason') or '未登记'}")
+    return {
+        "name": name,
+        "display_name": spec["display_name"],
+        "modality": spec["modality"],
+        "body_part": spec["body_part"],
+        "category": spec["category"],
+        "engine_type": "deep_learning_pipeline",
+        "version": "+".join(versions),
+        "components": components,
+        "outputs": spec["outputs"],
+        "is_ready": not reasons,
+        "unavailable_reason": "；".join(reasons) if reasons else None,
+        "exists_in_registry": True,
+    }
+
+
+def list_registered_pipelines() -> List[Dict[str, Any]]:
+    return [get_pipeline_status(name) for name in COMPOSITE_PIPELINES.keys()]
+
 def pull_model(
     name: str,
     force: bool = False,

@@ -27,6 +27,9 @@ import { PatientClaimService } from '../tenancy/claims.ts'
 import { scanPhi, redactPhi } from '../ops/phi-scan.ts'
 import type { CohortService } from '../research/cohort.ts'
 import { registerImagingRoutes } from './routes/imaging.ts'
+import { registerDicomRoutes } from './routes/dicom.ts'
+import { orthancFromEnv, type Orthanc } from '../imaging/orthanc.ts'
+import { sharedPipeline, type ImagingPipeline } from '../imaging/pipeline.ts'
 import { registerMailCalendarRoutes } from './routes/mail-calendar.ts'
 import { registerResearchRoutes } from './routes/research.ts'
 import { registerPublicToolsApi } from './routes/public-tools-api.ts'
@@ -102,6 +105,10 @@ export interface ApiDeps {
   patients?: PatientService
   /** 临床研究项目。 */
   studies?: StudyService
+  /** 影像存储（Orthanc）；不给时按 ORTHANC_URL 组装，没配置为 null（上传与 DICOMweb 返回 503）。 */
+  orthanc?: Orthanc | null
+  /** 影像分析流水线；不给时有 Orthanc 就用进程内共用的一条，null 表示上传后不自动分析。 */
+  imagingPipeline?: ImagingPipeline | null
   /** 研究入组与研究数据集（不给时由 studies + patients 组装）。 */
   cohort?: CohortService
   /** 用户的 AI 工作区（对话里贴的图片放这里，AI 用 read_image 看）。 */
@@ -871,6 +878,12 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
 
   // —— MONAI 医学影像微服务与患者影像量化分析 ——
   registerImagingRoutes(app, { store, docs, access, audit, me, pt, patientFailure })
+  // —— 影像检查：手工上传 DICOM、检查列表、DICOMweb 鉴权代理（docs/design/IMAGING_STUDIES.md）——
+  const orthanc = deps.orthanc !== undefined ? deps.orthanc : orthancFromEnv()
+  registerDicomRoutes(app, {
+    audit, me, pt, patientFailure, orthanc,
+    pipeline: deps.imagingPipeline !== undefined ? deps.imagingPipeline : deps.patients && orthanc ? sharedPipeline(deps.patients, orthanc) : null,
+  })
 
   // —— 知家分享给医生（docs/design/SHARING.md）——
   const shares = deps.shares ?? (deps.patients ? new ShareService(store, tenants, deps.patients, docs) : null)

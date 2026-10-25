@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -173,6 +173,38 @@ class TenantPatientDb {
         verified_by TEXT, verified_at TEXT,
         PRIMARY KEY (study_id, patient_id, var_id)
       );
+      -- 影像检查（docs/design/IMAGING_STUDIES.md）：DICOM UID 属于可识别信息，只存加密值和机构密钥下的 HMAC（去重、按 UID 查找）
+      CREATE TABLE IF NOT EXISTS imaging_studies (
+        id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+        uid_hmac TEXT NOT NULL UNIQUE, uid_enc TEXT NOT NULL, orthanc_id TEXT, source TEXT NOT NULL,
+        study_date TEXT, modalities TEXT NOT NULL DEFAULT '[]', description_enc TEXT, accession_enc TEXT,
+        status TEXT NOT NULL DEFAULT 'received', created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS imaging_studies_patient ON imaging_studies (patient_id, study_date);
+      CREATE TABLE IF NOT EXISTS imaging_series (
+        id TEXT PRIMARY KEY, study_id TEXT NOT NULL REFERENCES imaging_studies(id) ON DELETE CASCADE,
+        uid_hmac TEXT NOT NULL UNIQUE, uid_enc TEXT NOT NULL, orthanc_id TEXT, modality TEXT, body_part TEXT, description_enc TEXT,
+        slice_thickness REAL, kernel TEXT, instances INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+      );
+      -- AI 分析运行：一个模型对一个序列跑一次；记模型版本，供追溯与回滚。visibility = shadow 时结果对界面和 AI 都不可见
+      CREATE TABLE IF NOT EXISTS imaging_runs (
+        id TEXT PRIMARY KEY, study_id TEXT NOT NULL REFERENCES imaging_studies(id) ON DELETE CASCADE,
+        series_id TEXT REFERENCES imaging_series(id) ON DELETE SET NULL, task TEXT NOT NULL, model_id TEXT NOT NULL, model_version TEXT,
+        status TEXT NOT NULL, error TEXT, visibility TEXT NOT NULL DEFAULT 'visible', summary TEXT,
+        created_by TEXT NOT NULL, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+      );
+      -- 病灶：AI 检出（proposed）或医生补充；医生确认 / 否决；每次改动记一条 imaging_lesion_events
+      CREATE TABLE IF NOT EXISTS imaging_lesions (
+        id TEXT PRIMARY KEY, study_id TEXT NOT NULL REFERENCES imaging_studies(id) ON DELETE CASCADE,
+        run_id TEXT REFERENCES imaging_runs(id) ON DELETE SET NULL, kind TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL,
+        reject_reason TEXT, label TEXT, location TEXT, metrics TEXT NOT NULL DEFAULT '{}', seg_ref TEXT, version INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS imaging_lesions_study ON imaging_lesions (study_id);
+      CREATE TABLE IF NOT EXISTS imaging_lesion_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, lesion_id TEXT NOT NULL REFERENCES imaging_lesions(id) ON DELETE CASCADE,
+        at TEXT NOT NULL, user_id TEXT NOT NULL, via TEXT NOT NULL, action TEXT NOT NULL, before TEXT, after TEXT
+      );
     `)
     // 旧库补列
     const cols = (t: string) => (this.db.prepare(`PRAGMA table_info(${t})`).all() as Array<{ name: string }>).map(c => c.name)
@@ -184,6 +216,8 @@ class TenantPatientDb {
     // 来源追溯（知家分享纳入本院时记 share:<分享 id>）
     if (!cols('records').includes('origin')) this.db.exec('ALTER TABLE records ADD COLUMN origin TEXT')
     if (!labCols.includes('origin')) this.db.exec('ALTER TABLE labs ADD COLUMN origin TEXT')
+    // 影像分析运行的结果摘要（质控、警告、耗时；早期开发库没有这一列）
+    if (!cols('imaging_runs').includes('summary')) this.db.exec('ALTER TABLE imaging_runs ADD COLUMN summary TEXT')
     // 迁移：AI 生成并直接存为「已确认」的影像报告（kind = report，存入时访问日志记 via = ai）改回待医生确认
     this.db.exec(`UPDATE records SET status = 'pending', origin = 'ai_report', confirmed_by = NULL, confirmed_at = NULL
       WHERE kind = 'report' AND status = 'confirmed' AND origin IS NULL
@@ -249,6 +283,18 @@ export interface Actor {
   space?: Space
 }
 
+/** 影像模块在一位患者上的操作范围（PatientService.imagingScope）。 */
+export interface ImagingScope {
+  db: DatabaseSync
+  tenantId: string
+  patientId: string
+  /** DICOM UID 在机构密钥下的 HMAC（kind 区分 study / series） */
+  uidKey: (kind: string, uid: string) => string
+  encrypt: (text: string | null) => string | null
+  decrypt: (sealed: string | null) => string | null
+  log: (action: string, detail?: string | null) => void
+}
+
 export class PatientService {
   private dbs = new Map<string, TenantPatientDb>()
   private queue: Promise<void> = Promise.resolve()
@@ -291,6 +337,27 @@ export class PatientService {
 
   /** 写前断言：操作者能改这位成员（知家建文档 / 简报前调用，避免建了文档关联不上留下孤儿）。 */
   assertEditable(a: Actor, patientId: string): void { this.requireTeam(a, patientId) }
+
+  /**
+   * 影像模块（src/imaging/）访问患者库的入口：读要求能看到患者，写要求是诊疗组成员。
+   * 返回库、加解密、UID 的 HMAC 与访问留痕；影像表的读写都经这里，不另开库。
+   */
+  imagingScope(a: Actor, patientId: string, need: 'read' | 'write'): ImagingScope {
+    const { c } = need === 'write' ? this.requireTeam(a, patientId) : this.visible(a, patientId)
+    return {
+      db: c.db.db, tenantId: c.tenantId, patientId,
+      uidKey: (kind, uid) => createHmac('sha256', this.keys.dek(c.tenantId)).update(`${kind}:${uid}`).digest('hex'),
+      encrypt: text => this.keys.encryptText(c.tenantId, text),
+      decrypt: sealed => this.keys.decryptText(c.tenantId, sealed),
+      log: (action, detail = null) => this.log(c, a, patientId, action, detail),
+    }
+  }
+
+  /** 按 UID 或病灶 id 找患者用（不限定患者）；找到后仍须经 imagingScope 校验权限。 */
+  imagingLookup(a: Actor): { db: DatabaseSync; uidKey: (kind: string, uid: string) => string } {
+    const c = this.ctx(a)
+    return { db: c.db.db, uidKey: (kind, uid) => createHmac('sha256', this.keys.dek(c.tenantId)).update(`${kind}:${uid}`).digest('hex') }
+  }
 
   /** AI 写入要不要先经医生确认（机构设置）。 */
   private aiReview(a: Actor, c: { settings: TenantSettings }): boolean {

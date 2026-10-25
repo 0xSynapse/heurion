@@ -125,6 +125,25 @@ services:
       start_period: 120s
       retries: 3
 
+  # 影像存储（DICOM + DICOMweb，docs/design/IMAGING_STUDIES.md）。默认不启动：`docker compose --profile pacs up -d`。
+  # 只给平台访问（平台按患者权限代理 DICOMweb）；不映射端口，不开 DICOM C-STORE（PACS 自动转发在 T3.8 再开）。
+  # 启用时在 .env.production 里设置 ORTHANC_URL=http://orthanc:8042、ORTHANC_USER=heurion、ORTHANC_PASSWORD=<随机长口令>。
+  # DICOM 原件含患者身份信息：只在患者数据允许存放的服务器上启用（医院内网部署）。
+  orthanc:
+    image: ${ORTHANC_IMAGE:-jodogne/orthanc-plugins:1.12.4}
+    container_name: heurion2-orthanc
+    profiles: [pacs]
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 2g
+    memswap_limit: 2g
+    env_file: [.env.production]
+    command: ["/etc/orthanc/orthanc.json"]
+    volumes:
+      - ./orthanc/orthanc.json:/etc/orthanc/orthanc.json:ro
+      - orthanc-db:/var/lib/orthanc/db
+    networks: [web]
+
   caddy:
     image: caddy:2.8-alpine
     container_name: heurion2-caddy
@@ -149,6 +168,7 @@ volumes:
   caddy-data:
   caddy-config:
   imaging-models:
+  orthanc-db:
 
 networks:
   web:

@@ -19,14 +19,14 @@ try:
     from .device import get_device_info
     from .engine import MONAIEngine, generate_synthetic_ct_volume, ModelUnavailableError
     from .recist import calculate_volume_doubling_time, calculate_subsolid_metrics, calculate_emphysema_metrics
-    from .model_registry import list_registered_models, pull_model, verify_model, get_model_status
+    from .model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
     from .dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from .task_queue import task_manager, TaskStage, batch_process_cohort
 except (ImportError, ValueError):
     from device import get_device_info
     from engine import MONAIEngine, generate_synthetic_ct_volume, ModelUnavailableError
     from recist import calculate_volume_doubling_time, calculate_subsolid_metrics, calculate_emphysema_metrics
-    from model_registry import list_registered_models, pull_model, verify_model, get_model_status
+    from model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
     from dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from task_queue import task_manager, TaskStage, batch_process_cohort
 
@@ -315,6 +315,14 @@ async def list_clinical_models(include_all: bool = False):
     def off(reason: str) -> Dict[str, Any]:
         return {"is_ready": False, "unavailable_reason": reason}
 
+    def pipeline(name: str) -> Dict[str, Any]:
+        st = get_pipeline_status(name)
+        return {
+            "model_version": st.get("version"),
+            "is_ready": bool(st.get("is_ready", False)),
+            "unavailable_reason": st.get("unavailable_reason"),
+        }
+
     ready = {"is_ready": True, "unavailable_reason": None}
 
     raw_models = [
@@ -328,6 +336,10 @@ async def list_clinical_models(include_all: bool = False):
         {"id": "lung_nodule_ct", "name": "肺结节三维目标检测（MONAI lung_nodule_ct_detection，3D RetinaNet）",
          "category": "胸部与呼吸科", "engine_type": "deep_learning", "body_part": "chest", "modality": "Chest CT",
          "target": "肺结节三维候选框检出、置信度评分与长径", "recommended_window": "lung", **dl("lung_nodule_ct")},
+        {"id": "lung_nodule_pipeline", "name": "肺结节模型链（MONAI lung_nodule_ct_detection RetinaNet 检出 + VISTA-3D 点提示分割与肺叶定位）",
+         "category": "胸部与呼吸科", "engine_type": "deep_learning_pipeline", "body_part": "chest", "modality": "Chest CT",
+         "target": "多结节检出、分割测量（长径/短径/平均径/体积/CT 值/密度分型/CTR）与肺叶定位", "recommended_window": "lung",
+         "endpoint": "/api/v1/pipeline/lung-nodule", "components": ["lung_nodule_ct", "vista3d"], **pipeline("lung_nodule_pipeline")},
         {"id": "copd_emphysema_analyzer", "name": "肺气肿 CT 密度定量（阈值法肺分割 + LAA-950%、Perc15）",
          "category": "胸部与呼吸科", "engine_type": "quantitative_ct", "body_part": "chest", "modality": "Chest CT",
          "target": "双肺容积、≤-950 HU 低衰减区容积与占比（不做 GOLD 分级）", "recommended_window": "lung", **ready},
@@ -528,12 +540,45 @@ def get_volume_status(volume_id: str):
     }
 
 
+@app.delete("/api/v1/volume/{volume_id}")
+def delete_volume(volume_id: str):
+    """从 worker 内存缓存移除体积（连同该体积的掩膜缓存），供平台在分析完成后释放内存；不存在时 404。"""
+    if not engine.remove_volume(volume_id):
+        raise HTTPException(status_code=404, detail=f"体积 '{volume_id}' 不在 worker 缓存中")
+    return {"volume_id": volume_id, "removed": True}
+
+
 def _require_target(*candidates: Optional[str]) -> str:
     """取第一个给出的影像来源；都没有则 400。"""
     for c in candidates:
         if c:
             return c
     raise HTTPException(status_code=400, detail="缺少影像来源：请提供 file_path、volume_id 或 sample_id")
+
+
+class LungNodulePipelineRequest(BaseModel):
+    volume_id: Optional[str] = None
+    sample_id: Optional[str] = None
+    file_path: Optional[str] = None
+    max_nodules: int = 20
+    min_score: Optional[float] = None
+
+
+@app.post("/api/v1/pipeline/lung-nodule")
+def run_lung_nodule_pipeline_endpoint(req: LungNodulePipelineRequest = Body(...)):
+    """
+    肺结节模型链：RetinaNet 多结节检出 → VISTA-3D 点提示分割 → 测量 → VISTA-3D 肺叶定位。
+    任一组成模型权重不可用时返回 501，不退回规则法。
+    """
+    file_path = validate_safe_medical_path(req.file_path) if (req.file_path and not (req.volume_id or req.sample_id)) else None
+    target = _require_target(req.volume_id, req.sample_id, file_path)
+    try:
+        with INFERENCE_SEMAPHORE:
+            return engine.run_lung_nodule_pipeline(
+                target, max_nodules=req.max_nodules, min_score=req.min_score,
+            )
+    except Exception as e:
+        raise_http(e, "肺结节模型链运行失败")
 
 
 @app.post("/api/v1/mpr/info")
@@ -1163,6 +1208,7 @@ async def get_registered_models_endpoint():
     return {
         "models": models,
         "total": len(models),
+        "pipelines": list_registered_pipelines(),
         "status": "success"
     }
 

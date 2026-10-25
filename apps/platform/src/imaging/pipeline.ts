@@ -1,0 +1,190 @@
+import type { Actor, PatientService } from '../tenancy/patients.ts'
+import { orthancFromEnv, type Orthanc } from './orthanc.ts'
+import { ImagingStudyService, type RunRow, type SeriesView } from './studies.ts'
+
+/**
+ * 影像分析流水线（PRD T1.4，docs/design/IMAGING_STUDIES.md）：检查入库 → 按病种选序列 → 排队 → 影像 worker 推理 → 结果入病灶表。
+ * 队列以 imaging_runs 的状态为准；进程内只记「本进程正在处理的运行」，服务重启后未完成的运行在列表里显示为中断，可重新分析。
+ * 原件由平台从 Orthanc 取出交给 worker，worker 不直接访问 Orthanc。
+ */
+
+export type ImagingTask = 'lung_nodule'
+
+export interface SeriesChoice { series: SeriesView | null; notes: string[]; reason?: string }
+
+/** 肺算法重建核（各厂商常见命名）；只用来在多个候选序列间排序，不作为必要条件 */
+const LUNG_KERNEL = /lung|b[67]\d|i[67]\d|br6\d|fc5\d|fc8\d|^y[ac]$|^l$/i
+const CHEST = /chest|lung|thorax|thx|胸/i
+
+/** W1.2 肺结节 / 肺炎：胸部 CT，层厚 ≤ 1.25 mm 的肺算法薄层优先；> 2.5 mm 不分析 */
+export function selectLungSeries(series: SeriesView[]): SeriesChoice {
+  const ct = series.filter(s => (s.modality ?? '').toUpperCase() === 'CT')
+  if (!ct.length) return { series: null, notes: [], reason: '检查中没有 CT 序列' }
+  const chest = ct.filter(s => !s.body_part || CHEST.test(s.body_part))
+  if (!chest.length) return { series: null, notes: [], reason: `CT 序列的检查部位不是胸部（${[...new Set(ct.map(s => s.body_part))].join('、')}）` }
+  // 定位像、剂量报告等层数很少的序列不分析
+  const volumes = chest.filter(s => s.instances >= 30)
+  if (!volumes.length) return { series: null, notes: [], reason: '没有足够层数的胸部 CT 序列（至少 30 层）' }
+  const usable = volumes.filter(s => s.slice_thickness === null || s.slice_thickness <= 2.5)
+  if (!usable.length) return { series: null, notes: [], reason: `胸部 CT 层厚均大于 2.5 mm（最薄 ${Math.min(...volumes.map(s => s.slice_thickness!))} mm），不适合结节分析` }
+  const rank = (s: SeriesView) => [
+    s.slice_thickness !== null && s.slice_thickness <= 1.25 ? 0 : 1,
+    s.kernel && LUNG_KERNEL.test(s.kernel) ? 0 : 1,
+    s.slice_thickness ?? 99,
+    -s.instances,
+  ]
+  const best = [...usable].sort((a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i]! - y[i]!; return 0 })[0]!
+  const notes: string[] = []
+  if (best.slice_thickness === null) notes.push('序列没有层厚信息，测量可靠性无法确认')
+  else if (best.slice_thickness > 1.25) notes.push(`所选序列层厚 ${best.slice_thickness} mm，大于推荐的 1.25 mm`)
+  if (!best.kernel || !LUNG_KERNEL.test(best.kernel)) notes.push(`所选序列不是肺算法重建（${best.kernel ?? '重建核未知'}）`)
+  return { series: best, notes }
+}
+
+interface TaskDef { label: string; endpoint: string; model_id: string; select: (series: SeriesView[]) => SeriesChoice; kind: string }
+export const TASKS: Record<ImagingTask, TaskDef> = {
+  lung_nodule: { label: '肺结节检出与测量', endpoint: '/api/v1/pipeline/lung-nodule', model_id: 'lung_nodule_pipeline', select: selectLungSeries, kind: 'lung_nodule' },
+}
+
+/** worker /api/v1/pipeline/lung-nodule 的响应（apps/imaging-worker，T1.5） */
+interface NoduleResult {
+  model_id: string
+  model_version: string
+  device?: string
+  elapsed_ms?: number
+  series_qc?: Record<string, unknown>
+  nodules: Array<{
+    index: number; detection_score?: number; center_vox_zyx?: number[]; box_vox_zyx?: number[]; lobe?: string | null
+    segmentation?: string; key_slice_z?: number; metrics?: Record<string, unknown>; warnings?: string[]
+  }>
+  warnings?: string[]
+}
+
+export interface EnqueueResult { task: ImagingTask; run?: RunRow; skipped?: string; notes?: string[] }
+
+const shared = new WeakMap<PatientService, ImagingPipeline>()
+
+/** 进程内共用一条流水线（界面接口和 MCP 工具排进同一个队列） */
+export function sharedPipeline(patients: PatientService, orthanc: Orthanc | null = orthancFromEnv()): ImagingPipeline {
+  let p = shared.get(patients)
+  if (!p) {
+    p = new ImagingPipeline(new ImagingStudyService(patients, orthanc), orthanc, process.env.IMAGING_WORKER_URL || 'http://127.0.0.1:8004',
+      { concurrency: Number(process.env.IMAGING_PIPELINE_CONCURRENCY) || 1 })
+    shared.set(patients, p)
+  }
+  return p
+}
+
+export class ImagingPipeline {
+  private queue: Array<{ actor: Actor; runId: string; notes: string[] }> = []
+  private active = new Set<string>()
+  private running = 0
+  private drained: Array<() => void> = []
+
+  constructor(
+    private readonly studies: ImagingStudyService,
+    private readonly orthanc: Orthanc | null,
+    private readonly workerUrl: string,
+    private readonly opts: { concurrency?: number; fetch?: typeof fetch } = {},
+  ) {
+    this.workerUrl = workerUrl.replace(/\/+$/, '')
+  }
+
+  private get fetch(): typeof fetch { return this.opts.fetch ?? fetch }
+
+  /** 本进程是否在排队 / 处理这次运行（用于识别服务重启后中断的运行） */
+  isActive(runId: string): boolean { return this.active.has(runId) }
+
+  /** 等队列清空（测试用） */
+  idle(): Promise<void> {
+    if (!this.running && !this.queue.length) return Promise.resolve()
+    return new Promise(res => this.drained.push(res))
+  }
+
+  /** 为检查排一次分析；不适用（没有合适序列等）时返回原因，不建运行 */
+  enqueue(a: Actor, studyId: string, task: ImagingTask = 'lung_nodule', opts: { visibility?: 'visible' | 'shadow' } = {}): EnqueueResult {
+    const def = TASKS[task]
+    const choice = def.select(this.studies.seriesOf(a, studyId))
+    if (!choice.series) return { task, skipped: choice.reason ?? '没有合适的序列' }
+    const run = this.studies.startRun(a, studyId, { task, model_id: def.model_id, series_id: choice.series.id, visibility: opts.visibility })
+    this.active.add(run.id)
+    this.queue.push({ actor: a, runId: run.id, notes: choice.notes })
+    queueMicrotask(() => this.pump())
+    return { task, run, notes: choice.notes }
+  }
+
+  private pump(): void {
+    const limit = Math.max(1, this.opts.concurrency ?? 1)
+    while (this.running < limit && this.queue.length) {
+      const item = this.queue.shift()!
+      this.running++
+      void this.process(item.actor, item.runId, item.notes).finally(() => {
+        this.running--
+        this.active.delete(item.runId)
+        this.pump()
+        if (!this.running && !this.queue.length) for (const r of this.drained.splice(0)) r()
+      })
+    }
+  }
+
+  private async process(a: Actor, runId: string, notes: string[]): Promise<void> {
+    const volumeId = `run_${runId}`
+    let uploaded = false
+    try {
+      this.studies.setRunStatus(a, runId, 'running')
+      const { run, seriesOrthancId } = this.studies.runSource(a, runId)
+      if (!this.orthanc) throw new Error('本机构没有配置影像存储（Orthanc）')
+      if (!seriesOrthancId) throw new Error('所分析的序列已不在影像存储中')
+      const def = TASKS[run.task as ImagingTask]
+      if (!def) throw new Error(`未知的分析任务：${run.task}`)
+
+      const zip = await this.orthanc.seriesArchive(seriesOrthancId)
+      const form = new FormData()
+      form.append('volume_id', volumeId)
+      form.append('file', new Blob([new Uint8Array(zip)], { type: 'application/zip' }), 'series.zip')
+      await this.worker('/api/v1/volume/upload', { method: 'POST', body: form }, 300_000)
+      uploaded = true
+
+      const result = await this.worker(def.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume_id: volumeId, max_nodules: 20 }) }, 900_000) as NoduleResult
+      if (!result || !Array.isArray(result.nodules)) throw new Error('影像服务返回的结果格式不对（缺少 nodules）')
+
+      for (const n of result.nodules) {
+        this.studies.addLesion(a, run.study_id, {
+          run_id: runId, kind: def.kind, source: 'ai', label: `结节 ${n.index}`, location: n.lobe ?? null,
+          metrics: {
+            ...(n.metrics ?? {}), detection_score: n.detection_score ?? null, center_vox_zyx: n.center_vox_zyx ?? null, box_vox_zyx: n.box_vox_zyx ?? null,
+            key_slice_z: n.key_slice_z ?? null, segmentation: n.segmentation ?? null, warnings: n.warnings ?? [],
+          },
+        })
+      }
+      const superseded = this.studies.supersedeProposed(a, runId)
+      this.studies.setRunStatus(a, runId, 'done', null, {
+        model_version: result.model_version ?? null,
+        summary: { device: result.device ?? null, elapsed_ms: result.elapsed_ms ?? null, series_qc: result.series_qc ?? null, warnings: [...notes, ...(result.warnings ?? [])], found: result.nodules.length, superseded },
+      })
+    } catch (err) {
+      try { this.studies.setRunStatus(a, runId, 'failed', err instanceof Error ? err.message : String(err)) } catch {}
+    } finally {
+      if (uploaded) await this.worker(`/api/v1/volume/${encodeURIComponent(volumeId)}`, { method: 'DELETE' }, 10_000).catch(() => {})
+    }
+  }
+
+  /** 调影像 worker；错误如实转成中文说明（501 模型不可用、4xx 输入问题、其它为服务故障） */
+  private async worker(path: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
+    let resp: Response
+    try {
+      resp = await this.fetch(`${this.workerUrl}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+    } catch (err) {
+      const name = (err as Error)?.name
+      throw new Error(name === 'TimeoutError' || name === 'AbortError' ? '影像服务处理超时' : `影像服务连接失败：${(err as Error).message}`)
+    }
+    if (!resp.ok) {
+      let detail = ''
+      try { const t = await resp.text(); try { const j = JSON.parse(t); detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail ?? j) } catch { detail = t } } catch {}
+      const kind = resp.status === 501 ? '模型不可用' : resp.status === 404 ? '影像不存在' : resp.status >= 400 && resp.status < 500 ? '影像输入有误' : '影像服务出错'
+      throw new Error(`${kind}（HTTP ${resp.status}）：${detail.slice(0, 300)}`)
+    }
+    const text = await resp.text()
+    return text ? JSON.parse(text) : null
+  }
+}

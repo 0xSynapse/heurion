@@ -1,0 +1,22 @@
+{
+  "Name": "heurion-orthanc",
+  "StorageDirectory": "/var/lib/orthanc/db",
+  "IndexDirectory": "/var/lib/orthanc/db",
+  "Plugins": ["/usr/share/orthanc/plugins"],
+
+  "HttpPort": 8042,
+  "RemoteAccessAllowed": true,
+  "AuthenticationEnabled": true,
+  "RegisteredUsers": { "heurion": "${ORTHANC_PASSWORD}" },
+
+  "DicomServerEnabled": false,
+  "OverwriteInstances": false,
+  "StableAge": 60,
+
+  "DicomWeb": {
+    "Enable": true,
+    "Root": "/dicom-web/",
+    "EnableWado": false,
+    "PublicRoot": "/api/dicomweb/"
+  }
+}

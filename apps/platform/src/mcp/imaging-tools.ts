@@ -2,7 +2,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { TokenClaims } from '../auth/token.ts'
 import type { Store } from '../store/db.ts'
-import type { PatientService } from '../tenancy/patients.ts'
+import { PatientError, type PatientService } from '../tenancy/patients.ts'
+import { ImagingStudyService } from '../imaging/studies.ts'
+import { orthancFromEnv } from '../imaging/orthanc.ts'
+import { sharedPipeline } from '../imaging/pipeline.ts'
 import type { StudyService } from '../research/service.ts'
 import type { DatasetService } from '../datasets/service.ts'
 import type { CohortService } from '../research/cohort.ts'
@@ -1365,6 +1368,43 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     }
   })
 
+  // 影像检查列表（与界面 GET /api/patients/:ptid/imaging/studies 对应；不含 DICOM UID 与检查号）
+  server.registerTool('imaging_studies', {
+    description: '列出患者已入库的影像检查（DICOM 上传或 PACS 转发）：检查日期、模态、序列（层厚、重建核、层数）与病灶确认情况。不返回 DICOM UID、检查号等标识，也不返回影像本身。',
+    inputSchema: { patient_id: z.string().describe('患者 ID') },
+  }, async ({ patient_id }) => {
+    if (!deps.patients) return fail('patients_unavailable', '患者模块未启用')
+    try {
+      return json(new ImagingStudyService(deps.patients, null).listStudies({ userId: claims.u, via: 'ai', space: 'work' }, patient_id))
+    } catch (err) {
+      if (err instanceof PatientError) return fail(err.code, err.message)
+      throw err
+    }
+  })
+
+  // 对影像检查发起（重新）分析（与界面 POST /api/patients/:ptid/imaging/studies/:stid/analyze 对应）；结果是待医生确认的检出
+  server.registerTool('imaging_study_analyze', {
+    description: '对患者的一个影像检查发起 AI 分析（目前支持 lung_nodule：肺结节检出、分割与测量）。自动选择合适的薄层序列，在后台排队运行；用 imaging_studies 查看进度与结果。检出结果是「待医生确认」，AI 不能确认或否决。',
+    inputSchema: {
+      patient_id: z.string().describe('患者 ID'),
+      imaging_study_id: z.string().describe('影像检查 ID（imaging_studies 返回的 id）'),
+      task: z.enum(['lung_nodule']).optional().describe('分析任务，缺省 lung_nodule'),
+    },
+  }, async ({ patient_id, imaging_study_id, task }) => {
+    if (!deps.patients) return fail('patients_unavailable', '患者模块未启用')
+    try {
+      const a = { userId: claims.u, via: 'ai' as const, space: 'work' as const }
+      if (!new ImagingStudyService(deps.patients, null).listStudies(a, patient_id).some(s => s.id === imaging_study_id)) return fail('not_found', '影像检查不存在')
+      const orthanc = orthancFromEnv()
+      if (!orthanc) return fail('orthanc_not_configured', '本机构没有配置影像存储（Orthanc），不能分析')
+      const r = sharedPipeline(deps.patients, orthanc).enqueue(a, imaging_study_id, task ?? 'lung_nodule')
+      if (r.skipped) return fail('not_applicable', r.skipped)
+      return json({ task: r.task, run_id: r.run!.id, status: r.run!.status, notes: r.notes ?? [] })
+    } catch (err) {
+      if (err instanceof PatientError) return fail(err.code, err.message)
+      throw err
+    }
+  })
 }
 
 function round(n: number, d = 1): number {
