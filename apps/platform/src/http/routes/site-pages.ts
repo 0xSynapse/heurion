@@ -542,7 +542,6 @@ function renderCommonLayout(opts: {
       </nav>
       <div class="nav-right">
         <a class="lang-btn" href="${switchHref}" aria-label="Switch Language">${switchLabel}</a>
-        <a class="nav-cta" href="/app">${isEn ? 'Workstation' : '进入工作台'}</a>
       </div>
     </div>
   </header>
