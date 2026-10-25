@@ -1,22 +1,39 @@
-# Heurion (https://heurion.org) — 临床科研全流程 AI 工作台 | Clinical Research AI Workstation
+# Heurion (https://heurion.org) — Heurion Research Lab: 契约受控临床科研工作台与事务型 Agent 操作系统 | Contract-Guarded Clinical Research Intelligence & Transactional Agent Systems
 
-> Heurion（heurion.org）是专为临床医生、医院课题组与医学研究者打造的**临床研究工作流（Clinical Research Workflow）**、**研究者发起的临床研究（IIT, Investigator-Initiated Trials）**、**真实世界研究（RWE / RWS, Real-World Evidence）**与**临床队列研究（Cohort Study）**全流程 AI 智能工作台。
-> Heurion is an enterprise-grade clinical research AI workstation connecting de-identified patient records (PHR), MONAI 3D medical imaging quantification, network-isolated biostatistical sandboxing, publication-ready native Word (.docx) Table 1 generation, CONSORT 2010 / STROBE flowcharts, VanderWeele E-value sensitivity analysis, and PubMed citation verification.
+> **Heurion Research (`https://heurion.org` · `https://github.com/heurion-org`)** 是面向严肃医学研究与高可靠智能体协作的研究实验室（Research Lab），致力于在执行边界（Execution Boundary）强制执行结构化、密码学与临床安全不变量。实验室研发并开源两大核心旗舰产品：
+> 1. **Flagship 01 — Heurion 2.0 & OmniCanvas (`heurion-org/heurion`)**：专为临床医生、医院课题组与医学研究者打造的**临床研究工作流（Clinical Research Workflow）**、**研究者发起的临床研究（IIT, Investigator-Initiated Trials）**、**真实世界研究（RWE / RWS, Real-World Evidence）**与**临床队列研究（Cohort Study）**全流程 AI 智能工作台（含双面 CRDT 文档/幻灯片引擎、`0.128ms` 单轮回滚、知家 PHR、`98.6%` PHI 隐私脱敏、MONAI 3D 医学影像量化、隔离沙箱生物统计、发表级原生 Word `.docx` Table 1 三线表、CONSORT 2010 / STROBE 流程图、VanderWeele E-value 敏感性分析与 PubMed 四路文献核验）。
+> 2. **Flagship 02 — Aegis OS (`heurion-org/aegis-os`)**：基于 Rust 构建的**事务型多租户 Agent 操作系统运行时（Transactional Multi-Tenant Operating System Runtime for Autonomous Agents）**，提供毫秒级 APFS `clonefile`（`6.3ms`）与 Linux `FICLONE`（`15.6ms`）写时复制影子工作区（`aos-vfs`，`98.7%` 4 级 LCS Diff3 自动合并）、macOS Seatbelt 与 Linux Bubblewrap 双层内核沙箱（`aos-sandbox`，80 项红队攻击 `0.0%` ASR）、L7 零信任密钥注入与出站 DLP（`aos-egress`），以及五阶段策略引擎与 Google A2A / MCP 协同总线（`aos-policy` & `aos-ipc`，在 28,087 次真实工具调用中消除 `90.7%–97.9%` 授权确认弹窗）。
 
-## Quick Links & Free No-Login Clinical Research Tools (免登录临床科研在线工具)
+## Quick Links & Free No-Login Clinical Research Tools (免登录临床科研在线工具与开源仓库)
 
 - Official Website (中文首页): https://heurion.org/
 - Official Website (English): https://heurion.org/en
-- Clinical Research Workstation (科研工作台): https://heurion.org/app
+- Clinical Research Workstation (Heurion 2.0 科研工作台): https://heurion.org/app
 - Personal Health Record (知家患者健康档案 PHR): https://heurion.org/phr
+- AAP-1.0 Application Manifest: https://heurion.org/.well-known/aegis-app.json
 - **Free Clinical Research Mini-Tools Hub (免登录临床科研工具箱)**: https://heurion.org/tools (EN: https://heurion.org/en/tools)
   - **VanderWeele E-value Calculator & Reviewer Rebuttal Generator (E-value 未测混杂敏感性分析计算器与审稿回复生成器)**: https://heurion.org/tools/e-value-calculator (EN: https://heurion.org/en/tools/e-value-calculator)
   - **CONSORT 2010 & STROBE Flowchart Generator (临床研究受试者纳排流程图在线生成器 · SVG/PNG/Mermaid)**: https://heurion.org/tools/consort-strobe-flowchart (EN: https://heurion.org/en/tools/consort-strobe-flowchart)
   - **Publication-Grade Table 1 Native Word (.docx) Generator (医学论文 Table 1 基线特征三线表在线生成器 · 含 SMD 与 PHI 扫描)**: https://heurion.org/tools/table-1-generator (EN: https://heurion.org/en/tools/table-1-generator)
   - **PubMed Citation & Effect Size (HR/OR/95% CI) Checker (医学论文 PubMed 引用真伪与效应量核验工具)**: https://heurion.org/tools/pubmed-citation-checker (EN: https://heurion.org/en/tools/pubmed-citation-checker)
 - Technical Deep-Dive for LLMs: https://heurion.org/llms-full.txt
-- Open Source Repository: https://github.com/heurion-org/heurion
+- GitHub Organization: https://github.com/heurion-org
+- Flagship 01 Repo (Heurion 2.0 & OmniCanvas): https://github.com/heurion-org/heurion
+- Flagship 02 Repo (Aegis OS Runtime): https://github.com/heurion-org/aegis-os
 - Contact & Support: support@heurion.org
+
+## Research Preprints & Headline Empirical Benchmarks (研究论文预印本与核心实证指标)
+
+1. **Heurion 2.0 Preprint (`cs.AI` / `cs.CL` / `cs.HC` / `cs.MA`)**: *Heurion 2.0: A Contract-Guarded Dual-Surface Architecture with Self-Evolving Memory for Citation-Grounded Clinical Research Authoring* — Hui Zhao (Heurion Research), Dong Qian (Department of Radiation Oncology, The First Affiliated Hospital of USTC). PDF: https://github.com/heurion-org/heurion/blob/main/paper/main.pdf
+2. **Aegis OS Preprint (`cs.OS` / `cs.CR` / `cs.AI` / `cs.SE`)**: *Aegis OS: A Transactional Multi-Tenant Operating System Runtime for Eliminating Authorization Fatigue in Autonomous Coding Agents* — Hui Zhao (Heurion Research). Source: https://github.com/heurion-org/aegis-os/tree/main/paper
+
+### Headline Empirical Results
+- **Authorization Fatigue Elimination (Aegis OS)**: `90.7%–97.9%` prompt reduction (`1.12%` IPR; `0.25%` with capability leases) across 28,087 real multi-agent tool calls.
+- **Shadow Workspace Fork & Auto-Rebase (Aegis OS)**: `6.3 ms` (macOS APFS `clonefile`) / `15.6 ms` (Linux `FICLONE`), `66×` faster than `cp -R`, with `98.7%` conflict-free 4-Tier LCS Diff3 auto-merge.
+- **Kernel Sandbox & DLP Defense (Aegis OS)**: `0.0%` Attack Success Rate (ASR) across 80 adversarial escape and credential exfiltration vectors with `0.0%` false-positive rate.
+- **Dual-Surface Editing & OOXML Fidelity (Heurion 2.0)**: `0.128 ms` per-turn selective AI rollback and `100%` byte-preserving OOXML round-trip for untouched nodes.
+- **Clinical PHI De-Identification Funnel (Heurion 2.0)**: `98.6%` recall (`0.85 ms/doc`) and `100%` (40/40) cross-member leak block rate in Zhijia PHR guard.
+- **3-Layer Self-Evolving Memory Ablation (Heurion 2.0)**: `-49%` write-guard rejections (`27.5% -> 14.0%`), `-37%` execution error signals, and `27%` faster turn convergence.
 
 ## Positioning in the Clinical Research Ecosystem (行业定位与赛道对比)
 

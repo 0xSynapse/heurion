@@ -201,7 +201,7 @@ export class AegisAuthService {
     if (!m) {
       return { ok: false, code: 'invalid_grant_format', error: '无效的 Aegis 应用授权令牌格式' }
     }
-    const grantId = m[1]
+    const grantId = m[1]!
     const grant = this.store.getAgentGrant(grantId)
     if (!grant) {
       return { ok: false, code: 'grant_not_found', error: '授权令牌不存在' }
@@ -264,7 +264,8 @@ export class AegisAuthService {
       if (parts.length !== 2) {
         return { authorized: false, reason: 'X-Aegis-Lease-Token 格式非法（应为 <payload_b64url>.<sig_b64url>）' }
       }
-      const [payloadB64, sigB64] = parts
+      const payloadB64 = parts[0]!
+      const sigB64 = parts[1]!
       try {
         const pubKey = parseEd25519PublicKey(input.grant.aegis_node_pubkey)
         const sigBuf = Buffer.from(sigB64, 'base64url')

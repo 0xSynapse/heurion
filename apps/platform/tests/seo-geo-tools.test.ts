@@ -21,9 +21,12 @@ describe('SEO & AI Search (GEO) Static Assets & /en SSR', () => {
 
     expect(enHtml).toContain('<html lang="en">')
     expect(enHtml).toContain('<link rel="canonical" href="https://heurion.org/en">')
-    expect(enHtml).toContain('<title data-i18n="doc_title">Heurion · Clinical Research AI Workstation (End-to-End)</title>')
-    expect(enHtml).toContain('Clinical Research,<br>from Patient Data to Published Evidence,')
+    expect(enHtml).toContain('<title data-i18n="doc_title">Heurion Research · Contract-Guarded Clinical AI Workstation & Aegis OS Agent Runtime</title>')
+    expect(enHtml).toContain('Contract-Guarded Clinical Research Intelligence')
+    expect(enHtml).toContain('Heurion 2.0 &amp; OmniCanvas · Clinical Research AI Workstation')
+    expect(enHtml).toContain('Aegis OS (aegis-os) · Transactional Multi-Tenant Agent OS Runtime')
     expect(enHtml).toContain('What is Heurion, and how does it differ fundamentally from generic LLMs like ChatGPT or Claude?')
+    expect(enHtml).toContain('What is Aegis OS, and how does it work together with the Heurion 2.0 Clinical Workstation?')
     expect(enHtml).toContain('href="/en/tools"')
   })
 

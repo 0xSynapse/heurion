@@ -74,10 +74,16 @@ describe('GEO (Generative Engine Optimization) 与 AI 搜索引擎标准化文�
     expect(html).toContain('property="og:title"')
     expect(html).toContain('name="twitter:card"')
 
-    // 核心对标模块与常见问题
+    // 核心对标模块、双主打旗舰产品、研究论文与常见问题
+    expect(html).toContain('id="flagships"')
+    expect(html).toContain('id="architecture"')
+    expect(html).toContain('id="research"')
+    expect(html).toContain('id="aegis-os"')
     expect(html).toContain('id="comparison"')
     expect(html).toContain('id="faq"')
     expect(html).toContain('data-i18n="comp_h"')
     expect(html).toContain('data-i18n="faq_h"')
+    expect(html).toContain('"ScholarlyArticle"')
+    expect(existsSync(join(SITE_DIR, 'architecture.svg'))).toBe(true)
   })
 })

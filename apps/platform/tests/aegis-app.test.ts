@@ -285,8 +285,8 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     const docId = created.body.doc_id as string
 
     const read0 = await callAegisTool(token, 'doc_read', { doc_id: docId }, { agentId: 'agent-lead' })
-    const introParaId = /\{#([a-z0-9]+)\} 心衰背景待补充。/.exec(read0.text)![1]!
-    const statsParaId = /\{#([a-z0-9]+)\} 生存分析结果待补充。/.exec(read0.text)![1]!
+    const introParaId = /\{#([a-z0-9]+)\} 心衰背景待补充。/.exec(read0.text ?? "")![1]!
+    const statsParaId = /\{#([a-z0-9]+)\} 生存分析结果待补充。/.exec(read0.text ?? "")![1]!
 
     // Agent 1 (agent-writer) 修改「引言」段落
     const editWriter = await callAegisTool(
@@ -341,7 +341,7 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     const rogueKeys = generateAegisNodeKeyPair()
 
     // 开启机构「AI 写入患者数据需医生审核」策略
-    tenants.update(reg.user.id, { ai_patient_writes: 'review' })
+    tenants.update(reg.user.id, { settings: { ai_patient_writes: 'review' } })
 
     const issueRes = await app.request('/api/aegis/auth/token', {
       method: 'POST',
