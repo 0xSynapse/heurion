@@ -506,6 +506,16 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json({ grants })
   })
 
+  app.get('/api/aegis/leases/escalations', c => {
+    const statusParam = c.req.query('status')?.trim()
+    const status = statusParam === 'pending' || statusParam === 'approved' || statusParam === 'rejected' || statusParam === 'expired'
+      ? statusParam
+      : undefined
+    const escalations = store.listAgentEscalations(c.get('user'), status)
+    const active_leases = store.listActiveUserAgentLeases(c.get('user'))
+    return c.json({ escalations, active_leases })
+  })
+
   app.post('/api/aegis/leases/approve', async c => {
     if (viaByReq.get(c.req.raw)) {
       return c.json({ error: 'AI 不能自行批准租约，只能由用户本人决定', code: 'human_only' }, 403)
@@ -529,6 +539,31 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       status: 200,
     })
     return c.json({ ok: true, escalation: approved.escalation, lease: approved.lease })
+  })
+
+  app.post('/api/aegis/leases/reject', async c => {
+    if (viaByReq.get(c.req.raw)) {
+      return c.json({ error: 'AI 不能拒绝或决定自己的租约申请，只能由用户本人决定', code: 'human_only' }, 403)
+    }
+    const body = await c.req.json().catch(() => ({})) as { escalation_id?: string }
+    if (!body.escalation_id) {
+      return c.json({ error: '缺少 escalation_id', code: 'missing_escalation_id' }, 400)
+    }
+    const esc = store.getAgentEscalation(body.escalation_id)
+    if (!esc || esc.user_id !== c.get('user')) {
+      return c.json({ error: '未找到该提权申请', code: 'not_found' }, 404)
+    }
+    const rejected = store.rejectAgentEscalation(esc.id, c.get('user'))
+    if (!rejected) {
+      return c.json({ error: '该提权申请已处理或已过期', code: 'already_decided' }, 409)
+    }
+    audit(c, 'aegis.lease_reject', {
+      actor: c.get('user'),
+      target: rejected.id,
+      detail: `${esc.scope} (${esc.summary})`,
+      status: 200,
+    })
+    return c.json({ ok: true, escalation: rejected })
   })
 
   // —— 机构（租户）：机构管理员管成员、邀请、设置、本机构审计 ——

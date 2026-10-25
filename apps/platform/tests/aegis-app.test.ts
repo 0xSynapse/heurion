@@ -5,6 +5,16 @@ import { describe, expect, it } from 'vitest'
 import { Accounts } from '../src/auth/accounts.ts'
 import { TenantService } from '../src/auth/tenants.ts'
 import { generateAegisNodeKeyPair, signAegisLeaseToken } from '../src/aegis/auth.ts'
+import {
+  defineAegisManifest,
+  extractAegisHeaders,
+  formatLeaseRequiredError,
+  generateAegisNodeKeyPair as sdkGenerateKeyPair,
+  issueAegisGrantTokenString,
+  parseAegisGrantTokenString,
+  signAegisLeaseToken as sdkSignLease,
+  verifyEd25519LeaseToken as sdkVerifyLease,
+} from '../../../packages/aegis-app-sdk/src/index.ts'
 import { PostCheck } from '../src/collab/postcheck.ts'
 import { DatasetService } from '../src/datasets/service.ts'
 import type { HarnessPool } from '../src/harness/pool.ts'
@@ -285,8 +295,8 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     const docId = created.body.doc_id as string
 
     const read0 = await callAegisTool(token, 'doc_read', { doc_id: docId }, { agentId: 'agent-lead' })
-    const introParaId = /\{#([a-z0-9]+)\} 心衰背景待补充。/.exec(read0.text ?? "")![1]!
-    const statsParaId = /\{#([a-z0-9]+)\} 生存分析结果待补充。/.exec(read0.text ?? "")![1]!
+    const introParaId = /\{#([a-z0-9]+)\} 心衰背景待补充。/.exec(read0.text ?? '')![1]!
+    const statsParaId = /\{#([a-z0-9]+)\} 生存分析结果待补充。/.exec(read0.text ?? '')![1]!
 
     // Agent 1 (agent-writer) 修改「引言」段落
     const editWriter = await callAegisTool(
@@ -509,5 +519,191 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     expect(prov.code).toContain('Kaplan-Meier survival curve')
     expect(prov.datasets[0]).toMatchObject({ id: ds.id, name: 'dapa_cohort', rows: 2 })
     expect(prov.turn_id).toBe('aegis:agent-biostat:km-turn-01')
+  })
+
+  it('6. CoW 沙箱下行数据桥接：dataset_open 与 labs_open 在 Aegis-OS 调用下自动内联返回 csv_content', async () => {
+    const { app, datasets, patients, reg, callAegisTool } = createTestEnv()
+    const issueRes = await app.request('/api/aegis/auth/token', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${reg.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'CoW-Downlink-Node' }),
+    })
+    const { access_token: token } = (await issueRes.json()) as any
+
+    const ds = datasets.upload(reg.user.id, 'cohort_downlink.csv', new TextEncoder().encode('arm,age\nA,62\nB,58\n')).dataset
+    await datasets.idle()
+
+    // 1) dataset_open 通过 /api/aegis/mcp 带 X-Aegis-Agent-Id 调用时自动返回 csv_content
+    const dsOpened = await callAegisTool(
+      token,
+      'dataset_open',
+      { dataset_id: ds.id },
+      { agentId: 'agent-biostat' },
+    )
+    expect(dsOpened.isError).toBe(false)
+    expect(dsOpened.body.path).toBe(`data/${ds.id}.csv`)
+    expect(dsOpened.body.csv_content).toContain('arm,age\nA,62\nB,58')
+
+    // 2) 患者化验长表 labs_open 同样返回去标识化 csv_content
+    const pt = await callAegisTool(token, 'patient_create', { sex: 'F', birth_year: 1970 }, { agentId: 'agent-clinical' })
+    const patientId = pt.body.patient_id as string
+    const reportB64 = Buffer.from('肌酐 128 umol/L', 'utf8').toString('base64')
+    const up = await callAegisTool(
+      token,
+      'report_upload',
+      { patient_id: patientId, data_base64: reportB64, filename: 'lab.txt', kind: 'lab_report', report_date: '2026-03-01' },
+      { agentId: 'agent-clinical' },
+    )
+    await callAegisTool(
+      token,
+      'report_lab_add',
+      { patient_id: patientId, record_id: up.body.record_id, test_name: '肌酐', value: 128, unit: 'umol/L', ref_low: 44, ref_high: 97 },
+      { agentId: 'agent-clinical' },
+    )
+    const confirmRec = await app.request(`/api/patients/${patientId}/records/${up.body.record_id}/confirm`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${reg.token}` },
+    })
+    expect(confirmRec.status).toBe(200)
+
+    const labsOpened = await callAegisTool(
+      token,
+      'labs_open',
+      { patient_id: patientId },
+      { agentId: 'agent-biostat' },
+    )
+    expect(labsOpened.isError).toBe(false)
+    expect(labsOpened.body.rows).toBe(1)
+    expect(labsOpened.body.csv_content).toContain('128')
+  })
+
+  it('7. Web 端提权申请查询与拒绝接口：GET /api/aegis/leases/escalations 与 POST /api/aegis/leases/reject', async () => {
+    const { app, reg, callAegisTool } = createTestEnv()
+    const issueRes = await app.request('/api/aegis/auth/token', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${reg.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Escalation-UI-Test' }),
+    })
+    const { access_token: token } = (await issueRes.json()) as any
+
+    const doc = await callAegisTool(token, 'doc_create', { title: '拟清理草稿' }, { agentId: 'agent-1' })
+    await callAegisTool(token, 'doc_manage', { action: 'trash', doc_id: doc.body.doc_id }, { agentId: 'agent-1' })
+
+    const purgeAttempt = await callAegisTool(
+      token,
+      'doc_manage',
+      { action: 'purge', doc_id: doc.body.doc_id, reason: '尝试彻底删除' },
+      { agentId: 'agent-1' },
+    )
+    expect(purgeAttempt.body.status).toBe('approval_required')
+    const escId = purgeAttempt.body.escalation_id as string
+
+    // 查询待处理的提权申请列表
+    const listRes = await app.request('/api/aegis/leases/escalations?status=pending', {
+      headers: { authorization: `Bearer ${reg.token}` },
+    })
+    expect(listRes.status).toBe(200)
+    const listBody = (await listRes.json()) as any
+    expect(listBody.escalations.some((e: any) => e.id === escId && e.status === 'pending')).toBe(true)
+
+    // 医生在界面拒绝该提权申请
+    const rejectRes = await app.request('/api/aegis/leases/reject', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${reg.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ escalation_id: escId }),
+    })
+    expect(rejectRes.status).toBe(200)
+    const rejectBody = (await rejectRes.json()) as any
+    expect(rejectBody.escalation.status).toBe('rejected')
+
+    // 拒绝后再次批准应返回 409 already_decided
+    const approveAfterReject = await app.request('/api/aegis/leases/approve', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${reg.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ escalation_id: escId }),
+    })
+    expect(approveAfterReject.status).toBe(409)
+  })
+
+  it('8. 独立第三方应用 SDK (@heurion/aegis-app-sdk) 原语校验与离线 Ed25519 Lease 验签', () => {
+    const manifest = defineAegisManifest({
+      protocol: 'aegis-app/1.0',
+      app: {
+        id: 'acme-bio-eln',
+        name: 'Acme Bio ELN',
+        version: '1.0.0',
+        vendor: 'Acme Bio',
+        description: 'Third-party ELN integrated with Aegis-OS',
+      },
+      mcp: {
+        transport: 'streamable-http',
+        endpoint: '/api/aegis/mcp',
+        eager_tools: ['eln_read'],
+        lazy_tools: 'all_remaining',
+      },
+      auth: {
+        modes: ['user_grant_token'],
+        token_exchange_endpoint: '/api/aegis/auth/token',
+        token_revoke_endpoint: '/api/aegis/auth/token',
+        token_prefix: 'aegis_at_acme-bio-eln.',
+        identity_binding: {
+          requires_user_account: true,
+          supports_org_tenancy: true,
+          binds_aegis_node_pubkey: true,
+        },
+        required_headers: ['Authorization', 'X-Aegis-Agent-Id'],
+      },
+      capabilities: [],
+      security: {
+        network_egress: ['localhost'],
+        supports_cow_turn_revert: true,
+        lease_verification: {
+          supports_ed25519_offline_verify: true,
+          supports_server_escalation: true,
+        },
+      },
+    })
+    expect(manifest.app.id).toBe('acme-bio-eln')
+
+    const tokenObj = issueAegisGrantTokenString('acme-bio-eln')
+    expect(tokenObj.rawToken).toMatch(/^aegis_at_acme-bio-eln\.ag_[0-9a-f]+\./)
+    const parsed = parseAegisGrantTokenString(tokenObj.rawToken, 'acme-bio-eln')
+    expect(parsed?.grantId).toBe(tokenObj.grantId)
+    expect(parsed?.tokenHash).toBe(tokenObj.tokenHash)
+
+    const headers = extractAegisHeaders({
+      Authorization: `Bearer ${tokenObj.rawToken}`,
+      'X-Aegis-Agent-Id': 'hermes-01',
+      'X-Aegis-Session-Id': 'sess-99',
+    })
+    expect(headers.agentId).toBe('hermes-01')
+    expect(headers.sessionId).toBe('sess-99')
+
+    const kp = sdkGenerateKeyPair()
+    const nowSec = Math.floor(Date.now() / 1000)
+    const leaseTok = sdkSignLease(
+      {
+        iss: 'aegis-local-node',
+        sub: tokenObj.grantId,
+        aud: 'acme-bio-eln',
+        agt: 'hermes-01',
+        scp: 'acme-bio-eln:sign_experiment',
+        res: 'exp-42',
+        iat: nowSec,
+        exp: nowSec + 300,
+      },
+      kp.privateKeyBase64,
+    )
+    const verified = sdkVerifyLease(leaseTok, kp.publicKeyBase64, 'acme-bio-eln:sign_experiment', 'exp-42', 'acme-bio-eln')
+    expect(verified.ok).toBe(true)
+
+    const errPayload = formatLeaseRequiredError({
+      escalation_id: 'esc-acme-001',
+      scope: 'acme-bio-eln:sign_experiment',
+      resource: 'exp-42',
+      reason: '电子实验记录签章归档不可撤销',
+    })
+    expect(errPayload.code).toBe('lease_required')
+    expect(errPayload.escalation_id).toBe('esc-acme-001')
   })
 })
