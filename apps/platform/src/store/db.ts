@@ -2733,6 +2733,15 @@ export class Store {
     return this.db.prepare('SELECT * FROM agent_escalations WHERE id = ?').get(id) as AgentEscalationRow | undefined
   }
 
+  listAgentEscalations(userId: string, status?: AgentEscalationRow['status']): AgentEscalationRow[] {
+    if (status) {
+      return this.db.prepare('SELECT * FROM agent_escalations WHERE user_id = ? AND status = ? ORDER BY created_at DESC')
+        .all(userId, status) as unknown as AgentEscalationRow[]
+    }
+    return this.db.prepare('SELECT * FROM agent_escalations WHERE user_id = ? ORDER BY created_at DESC')
+      .all(userId) as unknown as AgentEscalationRow[]
+  }
+
   approveAgentEscalation(id: string, decidedBy: string, ttlSecs = 900): { escalation: AgentEscalationRow; lease: AgentLeaseRow } | undefined {
     const esc = this.getAgentEscalation(id)
     if (!esc || esc.status !== 'pending') return undefined
@@ -2749,6 +2758,14 @@ export class Store {
       ttl_secs: ttlSecs,
     })
     return { escalation: this.getAgentEscalation(id)!, lease }
+  }
+
+  rejectAgentEscalation(id: string, decidedBy: string): AgentEscalationRow | undefined {
+    const esc = this.getAgentEscalation(id)
+    if (!esc || esc.status !== 'pending') return undefined
+    this.db.prepare("UPDATE agent_escalations SET status = 'rejected', decided_at = ?, decided_by = ? WHERE id = ?")
+      .run(now(), decidedBy, id)
+    return this.getAgentEscalation(id)
   }
 
   createAgentLease(input: {
@@ -2785,6 +2802,12 @@ export class Store {
     const t = now()
     return this.db.prepare('SELECT * FROM agent_leases WHERE grant_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC')
       .all(grantId, t) as unknown as AgentLeaseRow[]
+  }
+
+  listActiveUserAgentLeases(userId: string): AgentLeaseRow[] {
+    const t = now()
+    return this.db.prepare('SELECT * FROM agent_leases WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC')
+      .all(userId, t) as unknown as AgentLeaseRow[]
   }
 
   /** 查找某文档最近一次尚未回滚的 AI 回合 turn_id（支持按前缀筛选特定 Agent 的回合，如 aegis:<agentId>:）。 */

@@ -1179,9 +1179,12 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
   })
 
   server.registerTool('dataset_open', {
-    description: '把数据集（规范化的 UTF-8 CSV）放进工作区的 data/ 目录，返回路径，之后在 shell 里用 pandas 读。数据是只读副本，改动不影响原数据集。',
-    inputSchema: { dataset_id: z.string() },
-  }, async ({ dataset_id }) => {
+    description: '把数据集（规范化的 UTF-8 CSV）放进工作区的 data/ 目录（或在 Aegis-OS CoW 沙箱内直接返回 csv_content），之后在 shell 里用 pandas 读。数据是只读副本，改动不影响原数据集。',
+    inputSchema: {
+      dataset_id: z.string(),
+      return_content: z.boolean().optional().describe('是否直接在响应中返回 UTF-8 CSV 文本内容（Aegis-OS CoW 沙箱内使用，≤5MB）'),
+    },
+  }, async ({ dataset_id, return_content }) => {
     if (!deps.datasets) return fail('datasets_unavailable', '数据集未启用')
     try {
       const { dataset, path } = deps.datasets.readyCsv(claims.u, dataset_id)
@@ -1194,7 +1197,17 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
       copyFileSync(path, dest)
       chmodSync(dest, 0o644)
       const labels = Object.entries(dataset.labels)
-      return json({ path: rel, rows: dataset.rows, columns: dataset.columns.map(c => c.name), ...(labels.length ? { labels: Object.fromEntries(labels) } : {}), hint: `pd.read_csv('${rel}')；画图、做表时用 labels 里的中文名` })
+      const shouldInline = return_content ?? Boolean(ctx.agentId)
+      const csvBytes = statSync(path).size
+      const csvContent = shouldInline && csvBytes <= 5 * 1024 * 1024 ? readFileSync(path, 'utf8') : undefined
+      return json({
+        path: rel,
+        rows: dataset.rows,
+        columns: dataset.columns.map(c => c.name),
+        ...(labels.length ? { labels: Object.fromEntries(labels) } : {}),
+        ...(csvContent !== undefined ? { csv_content: csvContent } : {}),
+        hint: `pd.read_csv('${rel}')；画图、做表时用 labels 里的中文名`,
+      })
     } catch (err) { return datasetFail(err) }
   })
 
@@ -1461,9 +1474,12 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
   })
 
   server.registerTool('labs_open', {
-    description: '把一位患者的已确认化验长表（CSV，只有代号）放进工作区 data/，用 Python 画趋势图或做统计。',
-    inputSchema: { patient_id: z.string() },
-  }, async ({ patient_id }) => {
+    description: '把一位患者的已确认化验长表（CSV，只有代号）放进工作区 data/（或在 Aegis-OS CoW 沙箱内直接返回 csv_content），用 Python 画趋势图或做统计。',
+    inputSchema: {
+      patient_id: z.string(),
+      return_content: z.boolean().optional().describe('是否直接在响应中返回 UTF-8 CSV 文本内容（Aegis-OS CoW 沙箱内使用，≤5MB）'),
+    },
+  }, async ({ patient_id, return_content }) => {
     if (!deps.patients) return fail('patients_unavailable', '患者模块未启用')
     try {
       const r = deps.patients.labsCsv(aiActor(), patient_id)
@@ -1471,7 +1487,15 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
       if (!existsSync(dir)) { mkdirSync(dir, { recursive: true }); chmodSync(dir, 0o2777) }
       const rel = `data/patient-${r.code}-labs.csv`
       writeFileSync(join(deps.workspaceDir(claims.u), rel), r.csv, { mode: 0o644 })
-      return json({ path: rel, rows: r.rows, columns: ['patient', 'test_key', 'test_name', 'value', 'unit', 'ref_low', 'ref_high', 'flag', 'collected_on', 'collected_at', 'orig_value', 'orig_unit', 'value_text'], note: 'value / unit 已换算到标准单位，orig_* 是报告原样' })
+      const shouldInline = return_content ?? Boolean(ctx.agentId)
+      const csvContent = shouldInline && Buffer.byteLength(r.csv, 'utf8') <= 5 * 1024 * 1024 ? r.csv : undefined
+      return json({
+        path: rel,
+        rows: r.rows,
+        columns: ['patient', 'test_key', 'test_name', 'value', 'unit', 'ref_low', 'ref_high', 'flag', 'collected_on', 'collected_at', 'orig_value', 'orig_unit', 'value_text'],
+        ...(csvContent !== undefined ? { csv_content: csvContent } : {}),
+        note: 'value / unit 已换算到标准单位，orig_* 是报告原样',
+      })
     } catch (err) { return patientFail(err) }
   })
 

@@ -263,7 +263,9 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/aegis/auth/token': '由医生/研究员本人通过 aegis app login 或设置页签发 Aegis 授权令牌（AI 不能自行签发令牌）',
   'DELETE /api/aegis/auth/token': '由医生/研究员本人或 aegis app logout 吊销 Aegis 授权令牌',
   'GET /api/aegis/auth/grants': '用户在设置页查看已绑定的 Aegis-OS 工作站授权列表',
+  'GET /api/aegis/leases/escalations': '医生/研究员在待确认列表查看 Aegis-OS 智能体发起的 [Lease-Gated] 提权申请与生效租约',
   'POST /api/aegis/leases/approve': '医生/研究员本人审批 [Lease-Gated] 提权申请（AI 不能自我批准租约）',
+  'POST /api/aegis/leases/reject': '医生/研究员本人拒绝 [Lease-Gated] 提权申请（AI 不能自我决定租约）',
   'POST /api/aegis/mcp': 'AAP-1.0 统一 MCP 协议网关入口本身（承载全部 MCP 工具调用）',
 }
 

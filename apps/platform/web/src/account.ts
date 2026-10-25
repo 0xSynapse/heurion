@@ -395,7 +395,12 @@ function openSettings(me: Me, api: <T = any>(path: string, opts?: RequestInit) =
       <div class="muted">至少 8 位，同时包含字母和数字。修改后其他设备上的登录会失效。</div>
       <div class="form-error" id="passwordError"></div>
       <div class="row end"><button class="primary">修改密码</button></div>
-    </form>`)
+    </form>
+    <div id="aegisGrantsSection" class="form">
+      <h3>Aegis-OS 智能体终端授权 (AAP-1.0)</h3>
+      <div class="muted small">将您的医生/研究员账户与本地 Aegis-OS 运行时（Antigravity / Hermes 多智能体协同沙箱）绑定。智能体将以您的身份和租户权限执行操作，高危对外动作需您批准短期租约 (Session Lease)。</div>
+      <div id="aegisGrantsBox" class="muted small" style="margin-top:8px">加载中…</div>
+    </div>`, true)
   dlg.querySelector<HTMLFormElement>('#profileForm')!.onsubmit = async e => {
     e.preventDefault()
     const name = new FormData(e.target as HTMLFormElement).get('display_name') as string
@@ -463,6 +468,138 @@ function openSettings(me: Me, api: <T = any>(path: string, opts?: RequestInit) =
       setTimeout(() => location.reload(), 700)
     } catch (err) { dlg.querySelector('#passwordError')!.textContent = (err as Error).message }
   }
+  void mountAegisGrants(dlg.querySelector<HTMLElement>('#aegisGrantsBox')!, api, notify)
+}
+
+interface AegisGrantItem {
+  id: string
+  name: string
+  token_prefix: string
+  aegis_node_pubkey: string | null
+  tool_scope: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+  write_mode: 'direct' | 'tracked'
+  created_at: string
+  expires_at: string | null
+  last_used_at: string | null
+  last_agent_id: string | null
+  revoked_at: string | null
+}
+
+const SCOPE_LABELS: Record<string, string> = {
+  all: '全量工作站 (all)',
+  canvas: '仅论文与幻灯片 (canvas)',
+  clinical: '仅临床患者与影像 (clinical)',
+  research: '仅临床研究与统计 (research)',
+  readonly: '只读检阅 (readonly)',
+}
+
+async function mountAegisGrants(
+  box: HTMLElement,
+  api: <T = any>(path: string, opts?: RequestInit) => Promise<T>,
+  notify: (msg: string, error?: boolean) => void,
+): Promise<void> {
+  let newlyIssuedToken: string | null = null
+  const render = async () => {
+    const res = await api<{ grants: AegisGrantItem[] }>('/api/aegis/auth/grants').catch(() => ({ grants: [] }))
+    const grants = res.grants ?? []
+    box.className = ''
+    box.innerHTML = `
+      <form id="aegisGrantIssueForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+        <input type="text" name="name" placeholder="终端名称（如：Mac Studio / agy-research）" maxlength="60" required style="flex:1 1 200px">
+        <select name="tool_scope" aria-label="权限范围">
+          <option value="all">全量工作站 (all)</option>
+          <option value="canvas">仅文稿与幻灯片 (canvas)</option>
+          <option value="clinical">仅临床患者 (clinical)</option>
+          <option value="research">仅临床研究与统计 (research)</option>
+          <option value="readonly">只读模式 (readonly)</option>
+        </select>
+        <select name="write_mode" aria-label="写入模式">
+          <option value="tracked">留痕修订 (tracked)</option>
+          <option value="direct">直接生效 (direct)</option>
+        </select>
+        <input type="text" name="node_pubkey" placeholder="可选：Aegis-OS 节点 Ed25519 公钥" style="flex:1 1 180px">
+        <button class="primary" type="submit">签发授权令牌</button>
+      </form>
+      ${newlyIssuedToken ? `
+        <div class="invite-link" style="margin-bottom:10px">
+          <div class="muted small">新签发的 Aegis-OS 授权令牌（请立即复制，关闭后不再显示明文）：</div>
+          <div class="field-row" style="margin-top:4px">
+            <input type="text" id="aegisIssuedTokenInput" readonly value="${esc(newlyIssuedToken)}">
+            <button type="button" id="aegisCopyTokenBtn">复制令牌</button>
+            <button type="button" class="primary" id="aegisCopyCmdBtn">复制 CLI 登录命令</button>
+          </div>
+        </div>
+      ` : ''}
+      ${grants.length === 0
+        ? '<div class="muted small">尚未绑定任何 Aegis-OS 智能体终端。</div>'
+        : `<table class="users">
+            <thead><tr><th>终端名称</th><th>范围 / 写模式</th><th>最近调用 Agent</th><th>状态</th><th></th></tr></thead>
+            <tbody>${grants.map(g => `
+              <tr data-gid="${esc(g.id)}" class="${g.revoked_at ? 'disabled' : ''}">
+                <td>
+                  <b>${esc(g.name)}</b>
+                  <div class="muted small" style="font-family:var(--mono)">${esc(g.token_prefix)}…${g.aegis_node_pubkey ? ' · 已绑节点公钥' : ''}</div>
+                </td>
+                <td class="small">${esc(SCOPE_LABELS[g.tool_scope] ?? g.tool_scope)}<div class="muted small">${g.write_mode === 'tracked' ? '留痕修订' : '直接写入'}</div></td>
+                <td class="muted small">${g.last_agent_id ? `<code>${esc(g.last_agent_id)}</code><br>${when(g.last_used_at)}` : '尚未使用'}</td>
+                <td>${g.revoked_at ? '<span class="pill off">已吊销</span>' : '<span class="pill ok">生效中</span>'}</td>
+                <td class="actions">${g.revoked_at ? '' : `<button type="button" class="danger" data-revoke-grant="${esc(g.id)}">吊销</button>`}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>`}
+    `
+    const form = box.querySelector<HTMLFormElement>('#aegisGrantIssueForm')
+    if (form) {
+      form.onsubmit = async e => {
+        e.preventDefault()
+        const f = new FormData(form)
+        try {
+          const issued = await api<{ access_token: string }>('/api/aegis/auth/token', {
+            method: 'POST',
+            body: JSON.stringify({
+              name: String(f.get('name') ?? '').trim(),
+              tool_scope: String(f.get('tool_scope') ?? 'all'),
+              write_mode: String(f.get('write_mode') ?? 'tracked'),
+              node_pubkey: String(f.get('node_pubkey') ?? '').trim() || undefined,
+            }),
+          })
+          newlyIssuedToken = issued.access_token
+          notify('已签发 Aegis-OS 授权令牌')
+          await render()
+        } catch (err) {
+          notify((err as Error).message, true)
+        }
+      }
+    }
+    box.querySelector<HTMLButtonElement>('#aegisCopyTokenBtn')?.addEventListener('click', async () => {
+      if (!newlyIssuedToken) return
+      await navigator.clipboard.writeText(newlyIssuedToken).catch(() => {})
+      notify('已复制 Aegis 授权令牌')
+    })
+    box.querySelector<HTMLButtonElement>('#aegisCopyCmdBtn')?.addEventListener('click', async () => {
+      if (!newlyIssuedToken) return
+      const cmd = `aegis app login heurion --url ${location.origin} --token ${newlyIssuedToken}`
+      await navigator.clipboard.writeText(cmd).catch(() => {})
+      notify('已复制 CLI 登录命令')
+    })
+    box.querySelectorAll<HTMLButtonElement>('[data-revoke-grant]').forEach(btn => {
+      btn.onclick = async () => {
+        const gid = btn.dataset.revokeGrant
+        if (!gid) return
+        try {
+          await api('/api/aegis/auth/token', {
+            method: 'DELETE',
+            body: JSON.stringify({ grant_id: gid }),
+          })
+          notify('已吊销该 Aegis-OS 终端授权，其关联租约已立即失效')
+          await render()
+        } catch (err) {
+          notify((err as Error).message, true)
+        }
+      }
+    })
+  }
+  await render()
 }
 
 async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit) => Promise<T>, notify: (msg: string, error?: boolean) => void): Promise<void> {
@@ -592,7 +729,7 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
   })
 }
 
-const AUDIT_HTML = '<div class="audit"><div class="row"><span class="eyebrow">审计日志</span><span class="grow"></span><input id="auditActor" type="search" placeholder="按用户名筛选" autocomplete="off"><select id="auditAction"><option value="">全部操作</option><option value="auth.">登录与账户</option><option value="doc.">文档（导出、删除）</option><option value="kb.">参考资料</option><option value="dataset.">数据</option><option value="memory.">记忆</option><option value="tenant.">机构管理</option><option value="admin.">平台运营</option><option value="platform.">机构开停</option></select></div><div id="auditList" class="muted">加载中…</div><button id="auditMore" hidden>更早的记录</button></div>'
+const AUDIT_HTML = '<div class="audit"><div class="row"><span class="eyebrow">审计日志</span><span class="grow"></span><input id="auditActor" type="search" placeholder="按用户名筛选" autocomplete="off"><select id="auditAction"><option value="">全部操作</option><option value="auth.">登录与账户</option><option value="aegis.">Aegis-OS 智能体授权与租约</option><option value="doc.">文档（导出、删除）</option><option value="kb.">参考资料</option><option value="dataset.">数据</option><option value="memory.">记忆</option><option value="tenant.">机构管理</option><option value="admin.">平台运营</option><option value="platform.">机构开停</option></select></div><div id="auditList" class="muted">加载中…</div><button id="auditMore" hidden>更早的记录</button></div>'
 
 /** 审计日志列表（平台运营看全部，机构管理员看本机构）。 */
 function mountAudit(dlg: HTMLElement, endpoint: string, api: <T = any>(path: string, opts?: RequestInit) => Promise<T>, notify: (msg: string, error?: boolean) => void): void {
@@ -601,6 +738,8 @@ function mountAudit(dlg: HTMLElement, endpoint: string, api: <T = any>(path: str
     'auth.login': '登录', 'auth.login_failed': '登录失败', 'auth.register': '注册', 'auth.register_failed': '注册失败',
     'auth.reset_password': '找回密码', 'auth.reset_password_failed': '找回密码失败', 'auth.logout_everywhere': '退出所有设备',
     'account.update': '修改个人资料', 'account.bind_email': '绑定邮箱',
+    'aegis.grant_issue': '签发 Aegis 终端授权', 'aegis.grant_revoke': '吊销 Aegis 终端授权',
+    'aegis.lease_approve': '批准 Aegis 提权租约', 'aegis.lease_reject': '拒绝 Aegis 提权租约',
     'doc.export': '导出文档', 'doc.trash': '移到回收站', 'doc.purge': '彻底删除文档', 'doc.restore': '恢复文档', 'project.delete': '删除项目',
     'kb.download': '下载资料原文', 'kb.delete': '删除资料', 'memory.clear': '清空记忆', 'memory.export': '导出记忆', 'memory.import': '导入记忆',
     'dataset.upload': '上传数据', 'dataset.delete': '删除数据', 'dataset.phi_resolve': '处理身份信息列',
