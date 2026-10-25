@@ -64,6 +64,9 @@ async function post(path: string, body: unknown, token?: string): Promise<any> {
 // —— 登录 / 注册 ——
 
 export async function showAuthScreen(): Promise<void> {
+  const cpBtn = document.getElementById('btnCopilotToggle')
+  if (cpBtn) cpBtn.hidden = true
+  document.getElementById('copilotDrawer')?.classList.add('hidden')
   const cfg = await fetch('/api/auth/config').then(r => r.json()).catch(() => ({ has_users: true, dev_mode: false })) as { has_users: boolean; dev_mode: boolean }
   const screen = $('authScreen')
   screen.hidden = false

@@ -404,11 +404,6 @@ const mailUi = initMail(api, (m, e) => showNotice(m, e), {
   },
 })
 
-initCopilot({
-  token: () => TOKEN,
-  activeDoc: () => session ? { id: session.docId, title: detail?.title || '未命名文档' } : null,
-})
-
 // 资料库页打开时，图标栏高亮「资料库」按钮而不是当前空间
 new MutationObserver(() => {
   const lib = $('page').classList.contains('library-page')
@@ -2818,10 +2813,23 @@ document.addEventListener('heurion:readview', async () => {
 
 // 启动：没有令牌 → 登录页；有令牌 → 取当前用户，失效时 api() 会回到登录页
 async function boot(): Promise<void> {
-  if (!TOKEN) { $('app').hidden = true; await showAuthScreen(); return }
+  if (!TOKEN) {
+    $('app').hidden = true
+    const cpBtn = document.getElementById('btnCopilotToggle')
+    if (cpBtn) cpBtn.hidden = true
+    document.getElementById('copilotDrawer')?.classList.add('hidden')
+    await showAuthScreen()
+    return
+  }
   const me = await api<Me>('/api/me')
   ME = me
   initUserMenu(me, api, showNotice)
+  initCopilot({
+    token: () => TOKEN,
+    user: () => ME,
+    onUnauthorized: () => signOut(),
+    activeDoc: () => session ? { id: session.docId, title: detail?.title || '未命名文档' } : null,
+  })
   // 回到上次停留的工作空间（显示该空间的开始页）
   spaces.setEnabled('patients', me.tenant?.settings.patient_module !== false)
   void actions.refreshBadge()

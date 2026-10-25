@@ -1,5 +1,13 @@
+export interface CopilotBoundUser {
+  id: string
+  username: string
+  display_name: string
+}
+
 export interface CopilotHooks {
   token: () => string
+  user: () => CopilotBoundUser | null
+  onUnauthorized?: () => void
   activeDoc: () => { id: string; title: string } | null
 }
 
@@ -33,6 +41,31 @@ export function initCopilot(hooks: CopilotHooks) {
   const closeBtn = document.getElementById('copilotCloseBtn')
 
   if (!toggleBtn || !drawer || !msgs || !input) return
+
+  function isAuthenticated(): boolean {
+    const token = hooks.token()?.trim()
+    const user = hooks.user()
+    const authScreen = document.getElementById('authScreen')
+    const appEl = document.getElementById('app')
+    if (!token || !user?.id) return false
+    if (authScreen && !authScreen.hidden) return false
+    if (appEl && appEl.hidden) return false
+    return true
+  }
+
+  function handleUnauthorized() {
+    isOpen = false
+    drawer?.classList.add('hidden')
+    if (toggleBtn) toggleBtn.hidden = true
+    hooks.onUnauthorized?.()
+  }
+
+  if (!isAuthenticated()) {
+    toggleBtn.hidden = true
+    drawer.classList.add('hidden')
+    return
+  }
+  toggleBtn.hidden = false
 
   let isOpen = false
   let isStreaming = false
@@ -115,16 +148,22 @@ export function initCopilot(hooks: CopilotHooks) {
   function updateContextBadge() {
     if (!badge) return
     const ctx = detectContext()
-    badge.textContent = `${ctx.space}${ctx.title ? ` · 《${ctx.title.slice(0, 10)}》` : ''}`
+    const user = hooks.user()
+    const userLabel = user ? (user.display_name || user.username) : '未绑定'
+    badge.textContent = `${userLabel} · ${ctx.space}${ctx.title ? ` · 《${ctx.title.slice(0, 10)}》` : ''}`
   }
 
   async function loadHistory() {
-    // 未登录（登录页）时不预取：没有令牌必然 401；登录后页面会重新加载
-    if (historyLoaded || !hooks.token()) return
+    // 未登录（登录页）或未绑定用户时不预取
+    if (historyLoaded || !isAuthenticated()) return
     try {
       const res = await fetch('/api/copilot/status', {
         headers: { Authorization: `Bearer ${hooks.token()}` },
       })
+      if (res.status === 401) {
+        handleUnauthorized()
+        return
+      }
       if (!res.ok) return
       const data = await res.json() as {
         messages?: Array<{ id: string; role: 'user' | 'assistant'; text: string }>
@@ -153,6 +192,10 @@ export function initCopilot(hooks: CopilotHooks) {
   }
 
   function openCopilot() {
+    if (!isAuthenticated()) {
+      handleUnauthorized()
+      return
+    }
     isOpen = true
     drawer?.classList.remove('hidden')
     updateContextBadge()
@@ -167,6 +210,10 @@ export function initCopilot(hooks: CopilotHooks) {
   }
 
   function toggleCopilot() {
+    if (!isAuthenticated()) {
+      handleUnauthorized()
+      return
+    }
     if (isOpen) closeCopilot()
     else openCopilot()
   }
@@ -200,6 +247,10 @@ export function initCopilot(hooks: CopilotHooks) {
   }
 
   async function sendMessage(overrideText?: string) {
+    if (!isAuthenticated()) {
+      handleUnauthorized()
+      return
+    }
     const text = (overrideText ?? input?.value ?? '').trim()
     if (!text || isStreaming) return
     if (!overrideText && input) input.value = ''
@@ -230,6 +281,11 @@ export function initCopilot(hooks: CopilotHooks) {
         signal: abortController.signal,
       })
 
+      if (res.status === 401) {
+        isStreaming = false
+        handleUnauthorized()
+        return
+      }
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
         assistant.textEl.innerHTML = `<span style="color:var(--danger);">请求失败: ${esc(err.error || '服务器繁忙')}</span>`
@@ -294,12 +350,20 @@ export function initCopilot(hooks: CopilotHooks) {
   closeBtn?.addEventListener('click', closeCopilot)
 
   clearBtn?.addEventListener('click', async () => {
+    if (!isAuthenticated()) {
+      handleUnauthorized()
+      return
+    }
     if (confirm('确定清空 Co-Pilot 对话记录吗？')) {
       try {
-        await fetch('/api/copilot/clear', {
+        const res = await fetch('/api/copilot/clear', {
           method: 'POST',
           headers: { Authorization: `Bearer ${hooks.token()}` },
         })
+        if (res.status === 401) {
+          handleUnauthorized()
+          return
+        }
         msgs.innerHTML = `
           <div class="copilot-welcome">
             <div class="copilot-welcome-badge">全局临床科研 AI 助手</div>
@@ -327,8 +391,9 @@ export function initCopilot(hooks: CopilotHooks) {
     }
   })
 
-  // 快捷键: Cmd+J / Ctrl+J
+  // 快捷键: Cmd+J / Ctrl+J（仅登录并绑定用户后生效）
   window.addEventListener('keydown', e => {
+    if (!isAuthenticated()) return
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
       e.preventDefault()
       toggleCopilot()

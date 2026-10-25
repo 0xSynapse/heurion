@@ -1,5 +1,6 @@
 import type { Context, Hono } from 'hono'
 import type { Store } from '../../store/db.ts'
+import { Access } from '../../research/access.ts'
 import { TenantError } from '../../auth/tenants.ts'
 import { StudyError, type StudyService } from '../../research/service.ts'
 import { PatientError, type PatientService, type Actor } from '../../tenancy/patients.ts'
@@ -811,5 +812,69 @@ export function registerResearchRoutes(
         },
       })
     } catch (err) { return datasetFailure(c, err) }
+  })
+
+  // —— 全局 Co-Pilot 用户身份强绑定与关联上下文越权防线 ——
+  const access = ctx.studies
+    ? ((ctx.studies as unknown as { access?: Access }).access ?? new Access(store))
+    : new Access(store)
+
+  ;(store as unknown as { getCopilotDoc?: (uid: string) => unknown }).getCopilotDoc = (uid: string) => {
+    if (!uid || typeof uid !== 'string') return undefined
+    const row = store.db
+      .prepare(
+        "SELECT * FROM docs WHERE owner = ? AND deleted_at IS NULL AND json_extract(context, '$.kind') = 'copilot' ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(uid) as { owner?: string } | undefined
+    return row && row.owner === uid ? row : undefined
+  }
+
+  app.use('/api/copilot/*', async (c, next) => {
+    const user = c.get('user')?.trim()
+    if (!user) {
+      return c.json({ error: '请先登录并绑定用户账号后使用 Co-Pilot', code: 'unauthorized' }, 401)
+    }
+
+    if (c.req.path === '/api/copilot/chat' && c.req.method === 'POST') {
+      const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
+      if (typeof body.study_id === 'string' && body.study_id) {
+        const s = store.getStudy(body.study_id)
+        if (!s || !store.studyRole(s.id, user)) {
+          delete body.study_id
+        }
+      }
+      if (typeof body.doc_id === 'string' && body.doc_id) {
+        const d = store.getDoc(body.doc_id)
+        if (!d || d.deleted_at || !access.docRole(user, d)) {
+          delete body.doc_id
+        }
+      }
+      const reqWithCache = c.req as unknown as { bodyCache?: { text?: Promise<string> } }
+      reqWithCache.bodyCache ??= {}
+      reqWithCache.bodyCache.text = Promise.resolve(JSON.stringify(body))
+    }
+
+    await next()
+
+    if (c.req.path === '/api/copilot/status' && c.req.method === 'GET' && c.res.status === 200) {
+      const data = await c.res.clone().json().catch(() => null) as Record<string, unknown> | null
+      if (data && typeof data === 'object') {
+        const docId = typeof data.doc_id === 'string' ? data.doc_id : ''
+        const doc = docId ? store.getDoc(docId) : undefined
+        if (doc && doc.owner !== user) {
+          c.res = c.json({ error: 'Co-Pilot 会话与当前登录用户不匹配', code: 'forbidden' }, 403)
+          return
+        }
+        const u = store.getUser(user)
+        c.res = c.json({
+          ...data,
+          bound_user: {
+            id: user,
+            username: u?.username ?? user,
+            display_name: u?.display_name || u?.username || user,
+          },
+        })
+      }
+    }
   })
 }
