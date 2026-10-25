@@ -25,6 +25,7 @@ export interface AegisAppManifest {
   endpoints: {
     mcp_http: string
     auth_device_code: string
+    auth_device_approve?: string
     auth_token_exchange: string
     auth_token_revoke: string
     auth_grants: string
@@ -37,6 +38,11 @@ export interface AegisAppManifest {
     supports_lease_verification: 'ed25519'
   }
   capabilities_preview: AegisCapabilityPreview[]
+  skills?: Array<{
+    name: string
+    description: string
+    url: string
+  }>
 }
 
 export const AEGIS_APP_MANIFEST: AegisAppManifest = {
@@ -52,6 +58,7 @@ export const AEGIS_APP_MANIFEST: AegisAppManifest = {
   endpoints: {
     mcp_http: '/api/aegis/mcp',
     auth_device_code: '/api/aegis/auth/device',
+    auth_device_approve: '/api/aegis/auth/device/approve',
     auth_token_exchange: '/api/aegis/auth/token',
     auth_token_revoke: '/api/aegis/auth/token',
     auth_grants: '/api/aegis/auth/grants',
@@ -112,6 +119,13 @@ export const AEGIS_APP_MANIFEST: AegisAppManifest = {
       tier: 'lease_gated',
       lease_scope: 'heurion:tenant_admin.*',
       description: '修改机构安全设置、移除成员或停用患者档案',
+    },
+  ],
+  skills: [
+    {
+      name: 'heurion-clinical-research',
+      description: '知衡 (Heurion 2.0) 临床病历核对、真实世界队列纳排、CoW 沙箱统计建模与多智能体论文/幻灯片协同写作标准作业规程 (SOP)',
+      url: '/.well-known/aegis-skills/heurion-clinical-research/SKILL.md',
     },
   ],
 }

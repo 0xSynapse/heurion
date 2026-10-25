@@ -499,11 +499,16 @@ async function mountAegisGrants(
   notify: (msg: string, error?: boolean) => void,
 ): Promise<void> {
   let newlyIssuedToken: string | null = null
+  const urlDeviceCode = new URLSearchParams(location.search).get('aegis_device')?.trim() ?? ''
   const render = async () => {
     const res = await api<{ grants: AegisGrantItem[] }>('/api/aegis/auth/grants').catch(() => ({ grants: [] }))
     const grants = res.grants ?? []
     box.className = ''
     box.innerHTML = `
+      <form id="aegisDeviceApproveForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border)">
+        <input type="text" name="user_code" placeholder="输入终端 8 位设备码免密绑定（如 HEUR-8492）" value="${esc(urlDeviceCode)}" maxlength="16" required style="flex:1 1 220px;font-family:var(--mono);text-transform:uppercase">
+        <button class="primary" type="submit">确认设备码绑定</button>
+      </form>
       <form id="aegisGrantIssueForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
         <input type="text" name="name" placeholder="终端名称（如：Mac Studio / agy-research）" maxlength="60" required style="flex:1 1 200px">
         <select name="tool_scope" aria-label="权限范围">
@@ -548,6 +553,26 @@ async function mountAegisGrants(
             </tbody>
           </table>`}
     `
+    const deviceForm = box.querySelector<HTMLFormElement>('#aegisDeviceApproveForm')
+    if (deviceForm) {
+      deviceForm.onsubmit = async e => {
+        e.preventDefault()
+        const f = new FormData(deviceForm)
+        const userCode = String(f.get('user_code') ?? '').trim().toUpperCase()
+        if (!userCode) return
+        try {
+          await api('/api/aegis/auth/device/approve', {
+            method: 'POST',
+            body: JSON.stringify({ user_code: userCode }),
+          })
+          notify(`已确认绑定终端设备码 ${userCode}，终端将自动完成登录`)
+          deviceForm.reset()
+          await render()
+        } catch (err) {
+          notify((err as Error).message, true)
+        }
+      }
+    }
     const form = box.querySelector<HTMLFormElement>('#aegisGrantIssueForm')
     if (form) {
       form.onsubmit = async e => {
@@ -739,6 +764,7 @@ function mountAudit(dlg: HTMLElement, endpoint: string, api: <T = any>(path: str
     'auth.reset_password': '找回密码', 'auth.reset_password_failed': '找回密码失败', 'auth.logout_everywhere': '退出所有设备',
     'account.update': '修改个人资料', 'account.bind_email': '绑定邮箱',
     'aegis.grant_issue': '签发 Aegis 终端授权', 'aegis.grant_revoke': '吊销 Aegis 终端授权',
+    'aegis.device_approve': '确认 Aegis 终端设备码绑定',
     'aegis.lease_approve': '批准 Aegis 提权租约', 'aegis.lease_reject': '拒绝 Aegis 提权租约',
     'doc.export': '导出文档', 'doc.trash': '移到回收站', 'doc.purge': '彻底删除文档', 'doc.restore': '恢复文档', 'project.delete': '删除项目',
     'kb.download': '下载资料原文', 'kb.delete': '删除资料', 'memory.clear': '清空记忆', 'memory.export': '导出记忆', 'memory.import': '导入记忆',

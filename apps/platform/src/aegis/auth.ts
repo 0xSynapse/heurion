@@ -189,6 +189,131 @@ export class AegisAuthService {
   }
 
   /**
+   * RFC 8628 设备码模式第 1 步：由 `aegis-os app login heurion` 发起免密终端绑定请求，
+   * 生成 `device_code` 与供医生在浏览器输入的 8 位短码 `user_code`（如 `HEUR-A8F2`）。
+   */
+  createDeviceCode(input: {
+    name?: string
+    nodePubkey?: string | null
+    toolScope?: AgentGrantRow['tool_scope']
+    writeMode?: AgentGrantRow['write_mode']
+    ttlSecs?: number
+  }): {
+    device_code: string
+    user_code: string
+    verification_uri: string
+    expires_in: number
+    interval: number
+    expires_at: string
+  } {
+    if (input.nodePubkey) {
+      parseEd25519PublicKey(input.nodePubkey)
+    }
+    const deviceCode = 'dc_' + randomBytes(16).toString('hex')
+    // 排除易混淆字符 0/O/1/I，生成 4 位大写字母数字短码 HEUR-XXXX
+    const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
+    let suffix = ''
+    const rand = randomBytes(4)
+    for (let i = 0; i < 4; i++) {
+      suffix += alphabet[rand[i]! % alphabet.length]
+    }
+    const userCode = `HEUR-${suffix}`
+    const ttlSecs = Math.max(30, Math.min(1800, input.ttlSecs ?? 600))
+    const row = this.store.createAgentDeviceCode({
+      device_code: deviceCode,
+      user_code: userCode,
+      app_id: this.appId,
+      name: input.name?.trim() || 'Aegis-OS Workstation',
+      aegis_node_pubkey: input.nodePubkey ?? null,
+      tool_scope: input.toolScope ?? 'all',
+      write_mode: input.writeMode ?? 'tracked',
+      ttl_secs: ttlSecs,
+    })
+    return {
+      device_code: row.device_code,
+      user_code: row.user_code,
+      verification_uri: `/?aegis_device=${encodeURIComponent(row.user_code)}`,
+      expires_in: ttlSecs,
+      interval: 2,
+      expires_at: row.expires_at,
+    }
+  }
+
+  /**
+   * RFC 8628 设备码模式第 2 步：已登录的医生/研究员在 Web 设置页输入 `user_code` 确认绑定。
+   */
+  approveDeviceCode(input: {
+    userCode: string
+    userId: string
+    toolScope?: AgentGrantRow['tool_scope']
+    writeMode?: AgentGrantRow['write_mode']
+    ttlDays?: number | null
+  }): { grant: AgentGrantRow; user: UserRow; tenant: TenantRow | null; user_code: string } {
+    const normalized = input.userCode.trim().toUpperCase()
+    const formatted = normalized.startsWith('HEUR-') ? normalized : `HEUR-${normalized}`
+    const row = this.store.getAgentDeviceCodeByUserCode(formatted) ?? this.store.getAgentDeviceCodeByUserCode(normalized)
+    if (!row) {
+      throw new Error('未找到该设备授权码，请核对终端显示的 8 位短码（如 HEUR-XXXX）')
+    }
+    if (row.status !== 'pending') {
+      throw new Error('该设备授权码已被使用或已失效')
+    }
+    if (row.expires_at <= new Date().toISOString()) {
+      throw new Error('该设备授权码已过期，请在终端重新执行 aegis-os app login')
+    }
+    const issued = this.issueGrant({
+      userId: input.userId,
+      name: row.name,
+      nodePubkey: row.aegis_node_pubkey,
+      toolScope: input.toolScope ?? row.tool_scope,
+      writeMode: input.writeMode ?? row.write_mode,
+      ttlDays: input.ttlDays === undefined ? 90 : input.ttlDays,
+    })
+    const updated = this.store.approveAgentDeviceCode(row.user_code, input.userId, issued.grant.id, issued.token)
+    if (!updated) {
+      throw new Error('设备授权码状态已变更，请勿重复确认')
+    }
+    return {
+      grant: issued.grant,
+      user: issued.user,
+      tenant: issued.tenant,
+      user_code: row.user_code,
+    }
+  }
+
+  /**
+   * RFC 8628 设备码模式第 3 步：`aegis-os app login` 轮询 `POST /api/aegis/auth/token` 兑换一次性 `aegis_at_heurion.*` 令牌。
+   */
+  pollDeviceCode(deviceCode: string):
+    | { status: 'approved'; token: string; grant: AgentGrantRow; user: UserRow; tenant: TenantRow | null }
+    | { status: 'pending' | 'expired' | 'consumed' | 'invalid'; error: string } {
+    const row = this.store.getAgentDeviceCode(deviceCode.trim())
+    if (!row) {
+      return { status: 'invalid', error: '无效的 device_code' }
+    }
+    if (row.status === 'consumed') {
+      return { status: 'consumed', error: '该设备码已成功兑换令牌，请勿重复使用' }
+    }
+    if (row.expires_at <= new Date().toISOString()) {
+      return { status: 'expired', error: '设备授权码已过期，请重新发起 aegis-os app login' }
+    }
+    if (row.status === 'pending') {
+      return { status: 'pending', error: `等待用户在浏览器输入设备码 ${row.user_code} 确认绑定` }
+    }
+    const consumedToken = this.store.consumeAgentDeviceCode(row.device_code)
+    if (!consumedToken || !row.grant_id || !row.user_id) {
+      return { status: 'consumed', error: '该设备码已被兑换使用' }
+    }
+    const grant = this.store.getAgentGrant(row.grant_id)
+    const user = this.store.getUser(row.user_id)
+    if (!grant || !user) {
+      return { status: 'invalid', error: '关联的授权记录或用户不存在' }
+    }
+    const tenant = user.tenant_id ? (this.store.getTenant(user.tenant_id) ?? null) : null
+    return { status: 'approved', token: consumedToken, grant, user, tenant }
+  }
+
+  /**
    * 校验 `Authorization: Bearer aegis_at_<app_id>.<grant_id>.<secret>`（或 `h1_agt.<grant_id>.<secret>`）：
    * 1. 解析 Grant ID 并常量时间比对 SHA-256 哈希
    * 2. 检查 Grant 未吊销、未过期

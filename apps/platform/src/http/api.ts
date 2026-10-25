@@ -174,6 +174,25 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json(AEGIS_APP_MANIFEST)
   })
 
+  // AAP-1.0 第一方智能体技能包（供 `aegis-os app install heurion` 自动拉取至本地 Agent Skills 目录）
+  app.get('/.well-known/aegis-skills/heurion-clinical-research/SKILL.md', c => {
+    c.header('Cache-Control', 'public, max-age=300')
+    const candidates = [
+      join(process.cwd(), 'skills/heurion-clinical-research/SKILL.md'),
+      join(process.cwd(), '../../skills/heurion-clinical-research/SKILL.md'),
+    ]
+    for (const p of candidates) {
+      if (existsSync(p)) {
+        return c.body(readFileSync(p, 'utf8'), 200, { 'Content-Type': 'text/markdown; charset=utf-8' })
+      }
+    }
+    return c.body(
+      `---\nname: heurion-clinical-research\ndescription: 知衡 (Heurion 2.0) 临床与科研智能工作台 SOP\n---\n# 知衡 (Heurion 2.0) AAP-1.0 Skill\n`,
+      200,
+      { 'Content-Type': 'text/markdown; charset=utf-8' },
+    )
+  })
+
   const aegisAuth = new AegisAuthService(store, 'heurion')
   const aegisTurnRegistry = deps.turnRegistry ?? ((turns as unknown as { registry?: TurnRegistry })?.registry ?? new TurnRegistry())
   const aegisPubmed = deps.pubmed ?? new PubMedClient(fetch)
@@ -365,12 +384,39 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   // —— 免登录临床科研公开小工具接口（无状态、限流） ——
   registerPublicToolsApi(app, { pubmed: deps.pubmed, crossref: deps.crossref })
 
-  // —— AAP-1.0 统一身份鉴权与 MCP 网关（支持 Session 令牌、账号密码兑换、或 aegis_at_heurion.* 令牌） ——
+  // —— AAP-1.0 统一身份鉴权与 MCP 网关（支持 RFC 8628 设备码免密绑定、Session 令牌、账号密码兑换、或 aegis_at_heurion.* 令牌） ——
+  app.post('/api/aegis/auth/device', async c => {
+    if (viaByReq.get(c.req.raw)) {
+      return c.json({ error: 'AI 不能自行发起设备授权码', code: 'human_only' }, 403)
+    }
+    const body = await c.req.json().catch(() => ({})) as {
+      name?: string
+      node_pubkey?: string
+      tool_scope?: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+      write_mode?: 'direct' | 'tracked'
+      ttl_secs?: number
+    }
+    try {
+      const created = aegisAuth.createDeviceCode({
+        name: body.name,
+        nodePubkey: body.node_pubkey ?? null,
+        toolScope: body.tool_scope ?? 'all',
+        writeMode: body.write_mode ?? 'tracked',
+        ttlSecs: body.ttl_secs,
+      })
+      return c.json(created, 201)
+    } catch (err) {
+      return c.json({ error: (err as Error).message, code: 'bad_device_request' }, 400)
+    }
+  })
+
   app.post('/api/aegis/auth/token', async c => {
     if (viaByReq.get(c.req.raw)) {
       return c.json({ error: 'AI 不能自行签发 Aegis 授权令牌', code: 'human_only' }, 403)
     }
     const body = await c.req.json().catch(() => ({})) as {
+      grant_type?: string
+      device_code?: string
       username?: string
       password?: string
       name?: string
@@ -380,6 +426,42 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       doc_ids?: string[] | null
       write_mode?: 'direct' | 'tracked'
       ttl_days?: number | null
+    }
+    if (body.device_code) {
+      const polled = aegisAuth.pollDeviceCode(body.device_code)
+      if (polled.status === 'pending') {
+        return c.json({ error: polled.error, code: 'authorization_pending' }, 428 as any)
+      }
+      if (polled.status === 'expired') {
+        return c.json({ error: polled.error, code: 'expired_token' }, 400)
+      }
+      if (polled.status !== 'approved') {
+        return c.json({
+          error: polled.error,
+          code: polled.status === 'consumed' ? 'token_already_consumed' : 'invalid_device_code',
+        }, 400)
+      }
+      return c.json({
+        access_token: polled.token,
+        token_type: 'Bearer',
+        app_id: 'heurion',
+        grant_id: polled.grant.id,
+        token_prefix: polled.grant.token_prefix,
+        bound_user: {
+          id: polled.user.id,
+          username: polled.user.username,
+          display_name: polled.user.display_name,
+          role: polled.user.role,
+          tenant_role: polled.user.tenant_role,
+        },
+        bound_org: polled.tenant
+          ? { id: polled.tenant.id, name: polled.tenant.name, kind: polled.tenant.kind }
+          : null,
+        bound_node_pubkey: polled.grant.aegis_node_pubkey,
+        tool_scope: polled.grant.tool_scope,
+        write_mode: polled.grant.write_mode,
+        expires_at: polled.grant.expires_at,
+      }, 201)
     }
     let userId = accounts.userFor(requestToken(c))
     if (!userId && body.username && body.password) {
@@ -464,6 +546,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (
       c.req.path === '/api/mail/inbound' ||
       c.req.path.startsWith('/api/public/tools/') ||
+      c.req.path === '/api/aegis/auth/device' ||
       c.req.path === '/api/aegis/auth/token' ||
       c.req.path === '/api/aegis/mcp'
     ) {
@@ -504,6 +587,52 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/aegis/auth/grants', c => {
     const grants = store.listAgentGrants(c.get('user')).map(({ token_hash: _h, ...rest }) => rest)
     return c.json({ grants })
+  })
+
+  app.post('/api/aegis/auth/device/approve', async c => {
+    if (viaByReq.get(c.req.raw)) {
+      return c.json({ error: 'AI 不能自行确认设备绑定，只能由用户本人决定', code: 'human_only' }, 403)
+    }
+    const body = await c.req.json().catch(() => ({})) as {
+      user_code?: string
+      tool_scope?: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+      write_mode?: 'direct' | 'tracked'
+      ttl_days?: number | null
+    }
+    if (!body.user_code?.trim()) {
+      return c.json({ error: '请输入终端显示的设备授权码（如 HEUR-XXXX）', code: 'missing_user_code' }, 400)
+    }
+    try {
+      const approved = aegisAuth.approveDeviceCode({
+        userCode: body.user_code,
+        userId: c.get('user'),
+        toolScope: body.tool_scope,
+        writeMode: body.write_mode,
+        ttlDays: body.ttl_days,
+      })
+      audit(c, 'aegis.device_approve', {
+        actor: c.get('user'),
+        target: approved.grant.id,
+        detail: `Aegis Device Code ${approved.user_code} -> Grant ${approved.grant.name} (scope=${approved.grant.tool_scope})`,
+        status: 200,
+      })
+      return c.json({
+        ok: true,
+        user_code: approved.user_code,
+        grant_id: approved.grant.id,
+        grant: {
+          id: approved.grant.id,
+          name: approved.grant.name,
+          token_prefix: approved.grant.token_prefix,
+          tool_scope: approved.grant.tool_scope,
+          write_mode: approved.grant.write_mode,
+          aegis_node_pubkey: approved.grant.aegis_node_pubkey,
+          expires_at: approved.grant.expires_at,
+        },
+      })
+    } catch (err) {
+      return c.json({ error: (err as Error).message, code: 'bad_device_approve' }, 400)
+    }
   })
 
   app.get('/api/aegis/leases/escalations', c => {
