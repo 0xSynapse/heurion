@@ -564,3 +564,397 @@ html[lang="en"] .pipe-step {
 .faq-body p + p {
   margin-top: 12px;
 }
+
+/* —— Research Lab: 双主打旗舰产品矩阵 (Flagship Bento Grid) —— */
+.lab-thesis-bar {
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-deep);
+  padding: 20px 0;
+}
+.lab-thesis-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+.lab-thesis-tag {
+  font: 600 11.5px/1 var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--mint);
+  padding: 5px 10px;
+  border: 1px solid var(--green-line);
+  background: var(--green-soft);
+  white-space: nowrap;
+}
+.lab-thesis-protocols {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font: 500 11.5px/1 var(--mono);
+  color: var(--muted);
+}
+.lab-thesis-protocols span {
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+}
+
+.flagships-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 48px;
+}
+.flagship-card {
+  border: 1px solid var(--green-line);
+  background: linear-gradient(180deg, rgba(6, 182, 128, 0.07) 0%, var(--panel) 42%);
+  padding: 36px 32px 32px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  transition: border-color 0.2s, transform 0.2s;
+}
+.flagship-card::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  height: 3px;
+  background: var(--mint);
+}
+.flagship-card.kernel {
+  border-color: rgba(2, 152, 254, 0.45);
+  background: linear-gradient(180deg, rgba(2, 152, 254, 0.08) 0%, var(--panel) 42%);
+}
+.flagship-card.kernel::before {
+  background: #38bdf8;
+}
+.flagship-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.flagship-layer {
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--mint);
+  padding: 5px 9px;
+  border: 1px solid var(--green-line);
+  background: rgba(0, 255, 147, 0.08);
+}
+.flagship-card.kernel .flagship-layer {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(2, 152, 254, 0.1);
+}
+.flagship-repo {
+  font: 500 12px/1 var(--mono);
+  color: var(--muted);
+  border-bottom: 1px dotted var(--line-strong);
+  padding-bottom: 2px;
+}
+.flagship-repo:hover {
+  color: var(--mint);
+  border-bottom-color: var(--mint);
+}
+.flagship-card h3 {
+  font-size: clamp(22px, 2.4vw, 28px);
+  font-weight: 700;
+  line-height: 1.25;
+  margin-bottom: 12px;
+}
+.flagship-sub {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-2);
+  margin-bottom: 22px;
+}
+.flagship-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 22px;
+}
+.f-metric {
+  border: 1px solid var(--line-strong);
+  background: var(--bg-deep);
+  padding: 12px 12px 10px;
+}
+.f-metric b {
+  display: block;
+  font: 700 17px/1.2 var(--mono);
+  color: var(--mint);
+  margin-bottom: 4px;
+}
+.flagship-card.kernel .f-metric b {
+  color: #38bdf8;
+}
+.f-metric span {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.flagship-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+.flagship-list li {
+  position: relative;
+  padding-left: 18px;
+}
+.flagship-list li::before {
+  content: "▸";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--mint);
+  font-family: var(--mono);
+}
+.flagship-card.kernel .flagship-list li::before {
+  color: #38bdf8;
+}
+.flagship-actions {
+  margin-top: auto;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.btn.sky {
+  background: #38bdf8;
+  color: #04131d;
+}
+.btn.sky:hover {
+  background: #7dd3fc;
+}
+
+/* —— 双层生态系统架构图 (Ecosystem Architecture) —— */
+.arch-frame {
+  margin-top: 44px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  padding: 24px;
+}
+.arch-svg-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  background: var(--bg-deep);
+}
+.arch-svg-wrap img {
+  display: block;
+  width: 100%;
+  min-width: 680px;
+  height: auto;
+}
+.arch-caption-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.arch-cap-item h4 {
+  margin: 0 0 6px;
+  font: 600 13px/1.3 var(--mono);
+  color: var(--mint);
+}
+.arch-cap-item.kernel h4 {
+  color: #38bdf8;
+}
+.arch-cap-item p {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+/* —— 研究论文与实证评测 (Preprints & Empirical Benchmarks) —— */
+.papers-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 48px;
+}
+.paper-card {
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  padding: 32px 28px;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.2s;
+}
+.paper-card:hover {
+  border-color: var(--green-line);
+}
+.paper-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.paper-venue {
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.08em;
+  padding: 5px 9px;
+  background: var(--green-soft);
+  border: 1px solid var(--green-line);
+  color: var(--mint);
+}
+.paper-card.kernel .paper-venue {
+  background: rgba(2, 152, 254, 0.12);
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #38bdf8;
+}
+.paper-cats {
+  font: 500 11.5px/1 var(--mono);
+  color: var(--muted);
+}
+.paper-card h3 {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-bottom: 12px;
+  color: var(--text);
+}
+.paper-authors {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.paper-abstract {
+  font-size: 14px;
+  line-height: 1.72;
+  color: var(--text-2);
+  margin-bottom: 22px;
+}
+.paper-links {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.bench-header {
+  margin-top: 64px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.bench-header h3 {
+  font-size: 22px;
+  font-weight: 600;
+}
+.bench-header span {
+  font: 500 12px/1 var(--mono);
+  color: var(--muted);
+}
+
+/* —— Aegis OS 深度章节 (Kernel Pillars & Terminal Quickstart) —— */
+.aegis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 48px;
+}
+.aegis-card {
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  padding: 28px 26px;
+  position: relative;
+}
+.aegis-card:hover {
+  border-color: rgba(56, 189, 248, 0.5);
+}
+.aegis-crate {
+  display: inline-block;
+  font: 600 11.5px/1 var(--mono);
+  color: #38bdf8;
+  background: rgba(2, 152, 254, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  padding: 5px 9px;
+  margin-bottom: 14px;
+}
+.aegis-card h3 {
+  font-size: 19px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.aegis-card p {
+  font-size: 14px;
+  line-height: 1.72;
+  color: var(--text-2);
+}
+.aegis-term {
+  margin-top: 32px;
+  border: 1px solid var(--line-strong);
+  background: #030b08;
+}
+.aegis-term-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font: 500 12px/1 var(--mono);
+  color: var(--muted);
+}
+.aegis-term-body {
+  padding: 20px 22px;
+  margin: 0;
+  overflow-x: auto;
+  font: 13px/1.7 var(--mono);
+  color: #d1fae5;
+}
+.aegis-term-body .cm { color: rgba(255, 255, 255, 0.42); }
+.aegis-term-body .kw { color: #38bdf8; }
+.aegis-term-body .hl { color: var(--mint); }
+
+@media (max-width: 960px) {
+  .flagships-grid,
+  .papers-grid,
+  .aegis-grid,
+  .arch-caption-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .flagship-card,
+  .paper-card,
+  .aegis-card {
+    padding: 24px 18px;
+  }
+  .flagship-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .arch-frame {
+    padding: 12px;
+  }
+}
