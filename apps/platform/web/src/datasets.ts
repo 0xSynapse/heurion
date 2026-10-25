@@ -42,6 +42,8 @@ export interface DatasetHooks {
   showPage(cls: string, title: string): HTMLElement
   /** 打开研究页（数据集详情里「返回研究」） */
   openStudy(id: string): void
+  /** 打开全局医学制图工作台（直接载入该数据集绘图，无需先归入研究） */
+  openStudio?(datasetId?: string): void
 }
 
 const PAGE = 'datasets-page'
@@ -123,7 +125,7 @@ export function initDatasets(api: Api, notice: (msg: string, error?: boolean) =>
       <div class="rs-head">
         <input class="rs-title" id="dsName" value="${esc(x.name)}" aria-label="数据集名称">
         <div class="row"><span class="muted small">${esc(x.filename)} · ${esc(x.format)} · ${x.rows.toLocaleString()} 行 × ${x.cols} 列${x.truncated ? ' · <b>超过 200 万行，只导入了前 200 万行</b>' : ''}</span>
-          ${statusPill(x)}<span class="grow"></span>${x.status === 'ready' ? `<button class="small-btn quiet" id="dsExportTable1Docx" title="直接导出该数据集的医学标准三线表 (.docx)">导出 Table 1 (.docx)</button>` : ''}${x.study ? `<button class="primary small-btn" data-study="${x.study.id}" title="进入所属研究的统计与医学制图工作台">打开研究分析工作台 →</button>` : ''}<label class="muted small ds-study">所属研究 <select id="dsStudy"><option value="">（未归入）</option>${studies.map(st => `<option value="${st.id}"${x.study?.id === st.id ? ' selected' : ''}>${esc(st.title)}</option>`).join('')}</select></label>
+          ${statusPill(x)}<span class="grow"></span>${x.status === 'ready' ? `<button class="small-btn quiet" id="dsExportTable1Docx" title="直接导出该数据集的医学标准三线表 (.docx)">导出 Table 1 (.docx)</button><button class="small-btn" data-open-studio="${x.id}" title="在全局医学制图工作台中直接用该数据集绘图（无需先建研究）">打开医学制图工作台 →</button>` : ''}${x.study ? `<button class="primary small-btn" data-study="${x.study.id}" title="进入所属研究的统计与医学制图工作台">打开研究分析工作台 →</button>` : ''}<label class="muted small ds-study">所属研究 <select id="dsStudy"><option value="">（未归入）</option>${studies.map(st => `<option value="${st.id}"${x.study?.id === st.id ? ' selected' : ''}>${esc(st.title)}</option>`).join('')}</select></label>
           <button class="danger small-btn" data-del>删除数据集</button></div>
       </div>
       ${x.phi.length ? `<section class="ds-phi">
@@ -161,6 +163,8 @@ export function initDatasets(api: Api, notice: (msg: string, error?: boolean) =>
     const t = e.target as HTMLElement
     const study = t.closest<HTMLElement>('[data-study]')?.dataset.study
     if (study) { e.stopPropagation(); stopPoll(); view = null; hooks.openStudy(study); return }
+    const studioDataset = t.closest<HTMLElement>('[data-open-studio]')?.dataset.openStudio
+    if (studioDataset && hooks.openStudio) { e.stopPropagation(); stopPoll(); view = null; hooks.openStudio(studioDataset); return }
     if (t.closest('[data-back]')) { void openList(); return }
     if (view.kind === 'list') {
       if (t.closest('#dsPick')) { page().querySelector<HTMLInputElement>('#dsInput')!.click(); return }

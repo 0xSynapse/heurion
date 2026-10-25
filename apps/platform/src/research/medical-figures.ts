@@ -1143,8 +1143,8 @@ export function exportToOriginPro(opts: {
 }
 
 export interface WetLabPlotSpec {
-  plotType?: 'bar_scatter' | 'box_violin' | 'dose_response'
-  plot_type?: 'bar_scatter' | 'box_violin' | 'dose_response'
+  plotType?: 'bar_scatter' | 'box_violin' | 'violin_box' | 'dose_response'
+  plot_type?: 'bar_scatter' | 'box_violin' | 'violin_box' | 'dose_response'
   title: string
   yLabel?: string
   y_label?: string
@@ -1155,8 +1155,10 @@ export interface WetLabPlotSpec {
   groups?: PrismColumnGroup[]
   comparisons?: Array<{ group1: string; group2: string }>
   doseResponse?: {
-    logConcentrations: number[]
-    series: Array<{ name: string; responses: number[]; color?: string; ic50?: number }>
+    logConcentrations?: number[]
+    series?: Array<{ name: string; responses: number[]; sdValues?: number[]; color?: string; ic50?: number }>
+    compoundName?: string
+    points?: Array<{ logConc?: number; dose?: number; responses: number[] }>
   }
   dose_response_series?: Array<{
     name: string
@@ -1239,24 +1241,64 @@ export function generateWetLabPlot(spec: WetLabPlotSpec): {
   const plotH = height - padT - padB
   const palette = ['#2563EB', '#DC2626', '#0D9488', '#D97706', '#7C3AED', '#059669']
 
-  const plotType = spec.plotType ?? spec.plot_type ?? 'bar_scatter'
+  const rawPlotType = spec.plotType ?? spec.plot_type ?? 'bar_scatter'
+  const plotType = rawPlotType === 'violin_box' ? 'box_violin' : rawPlotType
   const title = spec.title ?? 'Statistical Comparison'
   const yLabel = spec.yLabel ?? spec.y_label ?? 'Value'
   const xLabel = spec.xLabel ?? spec.x_label
   const errorBarType = spec.errorBarType ?? spec.error_bar ?? 'SD'
 
-  const drNormalized =
-    spec.doseResponse ??
-    (spec.dose_response_series?.length
-      ? {
-          logConcentrations: spec.dose_response_series[0]!.points.map(p => Math.log10(Math.max(1e-12, p.dose))),
-          series: spec.dose_response_series.map(s => ({
-            name: s.name,
-            ic50: s.ic50,
-            responses: s.points.map(p => meanAndSd(p.responses).mean),
-          })),
-        }
-      : undefined)
+  const drNormalized = (() => {
+    if (spec.doseResponse?.logConcentrations?.length && Array.isArray(spec.doseResponse.series) && spec.doseResponse.series.length) {
+      return {
+        logConcentrations: spec.doseResponse.logConcentrations,
+        series: spec.doseResponse.series,
+      }
+    }
+    if (spec.doseResponse?.points?.length) {
+      const pts = spec.doseResponse.points
+      return {
+        logConcentrations: pts.map((p, idx) =>
+          typeof p.logConc === 'number' && Number.isFinite(p.logConc)
+            ? p.logConc
+            : typeof p.dose === 'number' && p.dose > 0
+              ? Math.log10(p.dose)
+              : -9 + idx
+        ),
+        series: [
+          {
+            name: spec.doseResponse.compoundName || 'Lead Compound',
+            responses: pts.map(p => meanAndSd(p.responses || []).mean),
+            sdValues: pts.map(p => (errorBarType === 'SEM' ? meanAndSd(p.responses || []).sem : meanAndSd(p.responses || []).sd)),
+          },
+        ],
+      }
+    }
+    if (spec.dose_response_series?.length) {
+      return {
+        logConcentrations: spec.dose_response_series[0]!.points.map(p => Math.log10(Math.max(1e-12, p.dose))),
+        series: spec.dose_response_series.map(s => ({
+          name: s.name,
+          ic50: s.ic50,
+          responses: s.points.map(p => meanAndSd(p.responses).mean),
+          sdValues: s.points.map(p => meanAndSd(p.responses).sd),
+        })),
+      }
+    }
+    if (plotType === 'dose_response') {
+      return {
+        logConcentrations: [-9, -8, -7, -6, -5, -4],
+        series: [
+          {
+            name: 'Lead Compound',
+            responses: [4.4, 12.8, 34.4, 62.4, 85.6, 94.8],
+            sdValues: [0.7, 1.2, 2.2, 2.7, 1.9, 1.3],
+          },
+        ],
+      }
+    }
+    return undefined
+  })()
 
   if (plotType === 'dose_response' && drNormalized) {
     const dr = drNormalized
@@ -1494,8 +1536,8 @@ export function generateWetLabPlot(spec: WetLabPlotSpec): {
 // ============================================================================
 
 export interface BioinformaticsFigureSpec {
-  bioType?: 'volcano' | 'heatmap' | 'enrichment' | 'umap'
-  bio_type?: 'volcano' | 'heatmap' | 'enrichment' | 'umap'
+  bioType?: 'volcano' | 'heatmap' | 'enrichment' | 'enrichment_bubble' | 'umap'
+  bio_type?: 'volcano' | 'heatmap' | 'enrichment' | 'enrichment_bubble' | 'umap'
   title?: string
   fcThreshold?: number
   fc_cutoff?: number
@@ -1531,7 +1573,8 @@ export function generateBioinformaticsFigure(spec: BioinformaticsFigureSpec): {
 } {
   const width = 720
   const height = 500
-  const bioType = spec.bioType ?? spec.bio_type ?? 'volcano'
+  const rawBioType = spec.bioType ?? spec.bio_type ?? 'volcano'
+  const bioType = rawBioType === 'enrichment_bubble' ? 'enrichment' : rawBioType
   const title = spec.title ?? 'Multi-Omics Bioinformatics Analysis'
 
   if (bioType === 'volcano') {
@@ -1546,12 +1589,28 @@ export function generateBioinformaticsFigure(spec: BioinformaticsFigureSpec): {
     const plotH = height - padT - padB
 
     const rawGenes =
-      spec.genes ??
-      spec.volcano_genes ?? [
-        { gene: 'NPPB', log2FC: -2.4, pValue: 0.00001 },
-        { gene: 'PPARGC1A', log2FC: 2.1, pValue: 0.00005 },
-        { gene: 'ACTB', log2FC: 0.1, pValue: 0.65 },
-      ]
+      spec.genes?.length
+        ? spec.genes
+        : spec.volcano_genes?.length
+          ? spec.volcano_genes
+          : [
+              { gene: 'NPPB', log2FC: -2.45, pValue: 0.00001 },
+              { gene: 'COL1A1', log2FC: -1.92, pValue: 0.00008 },
+              { gene: 'TGFB1', log2FC: -1.58, pValue: 0.0004 },
+              { gene: 'IL6', log2FC: -1.34, pValue: 0.0021 },
+              { gene: 'MMP9', log2FC: -1.15, pValue: 0.0085 },
+              { gene: 'PPARGC1A', log2FC: 2.35, pValue: 0.00002 },
+              { gene: 'SIRT1', log2FC: 1.88, pValue: 0.00012 },
+              { gene: 'NFE2L2', log2FC: 1.64, pValue: 0.0006 },
+              { gene: 'CPT1A', log2FC: 1.42, pValue: 0.0018 },
+              { gene: 'SOD2', log2FC: 1.18, pValue: 0.0064 },
+              { gene: 'ACTB', log2FC: 0.12, pValue: 0.65 },
+              { gene: 'GAPDH', log2FC: -0.18, pValue: 0.52 },
+              { gene: 'TUBB', log2FC: 0.45, pValue: 0.19 },
+              { gene: 'RPL13A', log2FC: -0.52, pValue: 0.14 },
+              { gene: 'B2M', log2FC: 0.72, pValue: 0.08 },
+              { gene: 'HPRT1', log2FC: -0.68, pValue: 0.09 },
+            ]
 
     const pts = rawGenes.map(g => {
       const pv = g.pValue ?? g.p_value ?? 0.05
@@ -1644,10 +1703,37 @@ export function generateBioinformaticsFigure(spec: BioinformaticsFigureSpec): {
   }
 
   if (bioType === 'heatmap') {
-    const rowGenes = spec.rowGenes ?? spec.heatmap_matrix?.row_names ?? ['Gene1', 'Gene2']
-    const colSamples = spec.colSamples ?? spec.heatmap_matrix?.col_names ?? ['Sample1', 'Sample2']
-    const sampleGroups = spec.sampleGroups ?? spec.heatmap_matrix?.col_groups
-    const matrix = spec.matrix ?? spec.heatmap_matrix?.values ?? [[1, -1], [-1, 1]]
+    const rowGenes = spec.rowGenes?.length
+      ? spec.rowGenes
+      : spec.heatmap_matrix?.row_names?.length
+        ? spec.heatmap_matrix.row_names
+        : ['NPPB', 'COL1A1', 'TGFB1', 'IL6', 'MMP9', 'PPARGC1A', 'SIRT1', 'NFE2L2', 'CPT1A', 'SOD2']
+    const colSamples = spec.colSamples?.length
+      ? spec.colSamples
+      : spec.heatmap_matrix?.col_names?.length
+        ? spec.heatmap_matrix.col_names
+        : ['Ctrl_1', 'Ctrl_2', 'Ctrl_3', 'Treat_1', 'Treat_2', 'Treat_3']
+    const sampleGroups = spec.sampleGroups?.length
+      ? spec.sampleGroups
+      : spec.heatmap_matrix?.col_groups?.length
+        ? spec.heatmap_matrix.col_groups
+        : ['Control', 'Control', 'Control', 'Treatment', 'Treatment', 'Treatment']
+    const matrix = spec.matrix?.length
+      ? spec.matrix
+      : spec.heatmap_matrix?.values?.length
+        ? spec.heatmap_matrix.values
+        : [
+            [1.45, 1.32, 1.51, -1.28, -1.42, -1.35],
+            [1.22, 1.18, 1.36, -1.15, -1.29, -1.18],
+            [1.38, 1.25, 1.19, -1.08, -1.34, -1.22],
+            [1.12, 1.41, 1.09, -1.31, -1.12, -1.19],
+            [0.98, 1.24, 1.15, -1.05, -1.18, -1.14],
+            [-1.34, -1.28, -1.41, 1.38, 1.45, 1.29],
+            [-1.19, -1.32, -1.15, 1.24, 1.31, 1.18],
+            [-1.25, -1.14, -1.29, 1.19, 1.28, 1.35],
+            [-1.12, -1.21, -1.08, 1.15, 1.09, 1.24],
+            [-1.05, -1.18, -1.12, 1.08, 1.22, 1.11],
+          ]
     const nRows = Math.max(1, rowGenes.length)
     const nCols = Math.max(1, colSamples.length)
     const padL = 95
@@ -1737,7 +1823,18 @@ export function generateBioinformaticsFigure(spec: BioinformaticsFigureSpec): {
     const padB = 60
     const plotW = width - padL - padR
     const plotH = height - padT - padB
-    const rawPathways = spec.pathways ?? spec.enrichment_terms ?? []
+    const rawPathways = spec.pathways?.length
+      ? spec.pathways
+      : spec.enrichment_terms?.length
+        ? spec.enrichment_terms
+        : [
+            { term: 'AMPK signaling pathway', category: 'KEGG', geneRatio: 0.24, count: 28, fdr: 0.000012 },
+            { term: 'Oxidative phosphorylation', category: 'KEGG', geneRatio: 0.21, count: 24, fdr: 0.000045 },
+            { term: 'TGF-beta signaling pathway', category: 'KEGG', geneRatio: 0.18, count: 19, fdr: 0.00028 },
+            { term: 'Extracellular matrix organization', category: 'GO_BP', geneRatio: 0.16, count: 17, fdr: 0.00085 },
+            { term: 'Fatty acid beta-oxidation', category: 'GO_BP', geneRatio: 0.14, count: 14, fdr: 0.0024 },
+            { term: 'Cellular response to oxidative stress', category: 'GO_BP', geneRatio: 0.11, count: 11, fdr: 0.0082 },
+          ]
     const items = rawPathways
       .map(d => ({
         term: d.term,
@@ -1793,10 +1890,34 @@ export function generateBioinformaticsFigure(spec: BioinformaticsFigureSpec): {
   }
 
   // Single-Cell UMAP / t-SNE DimPlot
-  const cells = spec.cells ?? spec.umap_cells ?? [
-    { cellId: 'c1', x: -3.2, y: 2.4, cluster: 'Cluster_0' },
-    { cellId: 'c2', x: 2.1, y: -1.9, cluster: 'Cluster_1' },
-  ]
+  const defaultUmapCells = (() => {
+    const clustersDef = [
+      { name: 'Cardiomyocytes', cx: -4.2, cy: 2.8 },
+      { name: 'Fibroblasts', cx: 3.6, cy: 2.4 },
+      { name: 'Endothelial', cx: -2.8, cy: -3.1 },
+      { name: 'Macrophages', cx: 2.9, cy: -2.6 },
+      { name: 'T_Cells', cx: 0.4, cy: 0.3 },
+    ]
+    const list: Array<{ cellId: string; x: number; y: number; cluster: string }> = []
+    clustersDef.forEach((cl, cIdx) => {
+      for (let i = 0; i < 28; i++) {
+        const angle = (i / 28) * Math.PI * 2 + cIdx * 0.7
+        const radius = 0.35 + ((i * 17 + cIdx * 11) % 13) * 0.11
+        list.push({
+          cellId: `Cell_${cIdx}_${i + 1}`,
+          x: Number((cl.cx + Math.cos(angle) * radius).toFixed(3)),
+          y: Number((cl.cy + Math.sin(angle) * radius).toFixed(3)),
+          cluster: cl.name,
+        })
+      }
+    })
+    return list
+  })()
+  const cells = spec.cells?.length
+    ? spec.cells
+    : spec.umap_cells?.length
+      ? spec.umap_cells
+      : defaultUmapCells
   const padL = 70
   const padR = 140
   const padT = 55
@@ -1846,7 +1967,7 @@ export function generateBioinformaticsFigure(spec: BioinformaticsFigureSpec): {
     `  <g id="Layer_Cluster_Labels" inkscape:groupmode="layer" inkscape:label="Cluster_Annotations" data-name="Cluster_Annotations">\n${legendSvg}  </g>\n` +
     `</svg>`
 
-  const csv = ['CellID,Dim1,Dim2,Cluster', ...cells.map((c, i) => `${c.cellId ?? c.id ?? `Cell_${i + 1}`},${c.x},${c.y},"${c.cluster}"`)].join('\n')
+  const csv = ['CellID,Dim1,Dim2,Cluster', ...cells.map((c, i) => `${c.cellId ?? (c as { id?: string }).id ?? `Cell_${i + 1}`},${c.x},${c.y},"${c.cluster}"`)].join('\n')
   const rScript =
     `# Reproducible R Script (Seurat::DimPlot / scRNA-seq visualization)\n` +
     `library(Seurat)\nlibrary(ggplot2)\n` +

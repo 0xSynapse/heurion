@@ -822,6 +822,18 @@ export class Editor {
     this.view.focus()
   }
 
+  /** 在光标处插入已归档的科研图表资产（自动附带图注与「来自分析」代码/数据溯源标记）。 */
+  insertFigureAsset(assetId: string, caption = ''): void {
+    const cleanCaption = caption.replace(/\.(svg|png|jpg|jpeg)$/i, '').trim()
+    const figure = schema.nodes.figure!.create({
+      asset_id: assetId,
+      alt: cleanCaption || '科研图表',
+      caption: cleanCaption,
+    })
+    this.view.dispatch(this.view.state.tr.replaceSelectionWith(figure).scrollIntoView())
+    this.view.focus()
+  }
+
   run(command: Command): boolean {
     const ok = command(this.view.state, this.view.dispatch, this.view)
     this.view.focus()

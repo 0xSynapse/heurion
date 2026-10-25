@@ -274,6 +274,7 @@ const actions = initActions(api, (m, e) => showNotice(m, e))
 const datasets = initDatasets(api, (m, e) => showNotice(m, e), {
   showPage: (cls, title) => showPage(cls, title),
   openStudy: id => void researchUi.open(id),
+  openStudio: id => void researchUi.openStudio(id),
 })
 let ME: Me | null = null
 const patientsUi = initPatients(api, (m, e) => showNotice(m, e), {
@@ -301,6 +302,52 @@ const researchUi = initResearch(api, (m, e) => showNotice(m, e), {
   token: () => TOKEN,
   datasets: { upload: files => datasets.upload(files), openDetail: id => { researchUi.leave(); return datasets.openDetail(id) }, showProvenance: id => datasets.showProvenance(id) },
   openPatient: id => patientsUi.open(id),
+  insertFigureToDoc: async (assetId, caption) => {
+    if (await insertFigureIntoActiveSession(assetId, caption)) return
+    await loadDocs()
+    if (docRows.length === 0) {
+      spaces.set('write')
+      const d = await api('/api/docs', { method: 'POST', body: JSON.stringify({ title: `${caption} · 论文初稿` }) })
+      await loadDocs()
+      await open(d.id)
+      await insertFigureIntoActiveSession(assetId, caption)
+      return
+    }
+    const dlg = $('dialog')
+    dlg.innerHTML = `<div class="dialog-card small" role="dialog" aria-modal="true" aria-label="插入图表到文稿">
+      <div class="dialog-head"><h2>插入图表到写作空间</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
+      <form class="dialog-body form" id="insertFigDocForm">
+        <div class="muted small">已将图表「${esc(caption)}」及底层可复现源码归档。请选择要插入的目标文稿或新建论文：</div>
+        <label>目标文稿
+          <select name="doc_id">
+            <option value="__new_doc__">＋ 新建空白论文并插入此图</option>
+            ${docRows.map(d => `<option value="${esc(d.id)}">${esc(d.title)}${d.kind === 'deck' ? '（幻灯片）' : ''}</option>`).join('')}
+          </select>
+        </label>
+        <div class="row end">
+          <button type="button" data-close>取消</button>
+          <button type="submit" class="primary">打开文稿并插入图表</button>
+        </div>
+      </form>
+    </div>`
+    dlg.hidden = false
+    dlg.onclick = e => { if (e.target === dlg || (e.target as HTMLElement).closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = '' } }
+    const form = dlg.querySelector<HTMLFormElement>('#insertFigDocForm')!
+    form.onsubmit = async e => {
+      e.preventDefault()
+      const targetId = String(new FormData(form).get('doc_id') || '__new_doc__')
+      dlg.hidden = true; dlg.innerHTML = ''
+      spaces.set('write')
+      if (targetId === '__new_doc__') {
+        const d = await api('/api/docs', { method: 'POST', body: JSON.stringify({ title: `${caption} · 论文初稿` }) })
+        await loadDocs()
+        await open(d.id)
+      } else {
+        await open(targetId)
+      }
+      await insertFigureIntoActiveSession(assetId, caption)
+    }
+  },
 })
 
 const calendarUi = initCalendar(api, (m, e) => showNotice(m, e), {
@@ -362,11 +409,20 @@ initCopilot({
   activeDoc: () => session ? { id: session.docId, title: detail?.title || '未命名文档' } : null,
 })
 
-// 资料库页打开时，图标栏高亮「资料库」而不是当前空间
+if ($('studioBtn')) {
+  $('studioBtn').onclick = () => void researchUi.openStudio()
+}
+if ($('rsStudioGlobalBtn')) {
+  $('rsStudioGlobalBtn').onclick = () => void researchUi.openStudio()
+}
+
+// 资料库页或全局制图工作台打开时，图标栏高亮对应按钮而不是当前空间
 new MutationObserver(() => {
   const lib = $('page').classList.contains('library-page')
+  const studio = $('page').classList.contains('studio-page')
   $('libraryBtn').classList.toggle('on', lib)
-  document.querySelector('.rail')!.classList.toggle('on-page', lib)
+  if ($('studioBtn')) $('studioBtn').classList.toggle('on', studio)
+  document.querySelector('.rail')!.classList.toggle('on-page', lib || studio)
   if (!lib) library.leave()
   if (!$('page').classList.contains('datasets-page')) datasets.leave()
 }).observe($('page'), { attributes: true, attributeFilter: ['class'] })
@@ -622,6 +678,8 @@ $('page').addEventListener('click', async e => {
   }
   if (session) return
   if (t.dataset.start === 'upload') { $('uploadInput').click(); return }
+  if (t.dataset.start === 'studio') { void researchUi.openStudio(); return }
+  if (t.dataset.start === 'study') { spaces.set('research'); return }
   if (t.dataset.start) { await createDoc(t.dataset.start as 'doc' | 'deck'); return }
   // 示例：新建对应的文档，把指令填进对话框（由用户确认后发送）
   await createDoc(t.dataset.example as 'doc' | 'deck', false)
@@ -1215,6 +1273,15 @@ $('deckToolbar').onclick = async e => {
       if (!menu.hidden) placeFixedPopup(menu, r, false)
       break
     }
+    case 'figure-studio': {
+      void researchUi.openDocFigureModal({
+        docTitle: detail?.title || '当前幻灯片',
+        onInsert: async (assetId, caption) => {
+          await insertFigureIntoActiveSession(assetId, caption)
+        },
+      })
+      break
+    }
     case 'chart-data': if (id && sel!.shape.attrs?.chart) await editChart(deck, id, sel!.shape.attrs.chart as ChartData); break
     case 'table': await deck.edit([{ op: 'add_table', slide_id: slide.attrs!.id, x: Math.round(W / 2 - 300), y: Math.round(H / 2 - 64), w: 600, rows: [['项目', '组 A', '组 B'], ['', '', ''], ['', '', '']] }]); break
     case 'fill': { const c = await pickColor(btn, theme, true); if (c && id) await deck.edit(each({ op: 'set_fill', color: c })); break }
@@ -1266,12 +1333,47 @@ $('deckToolbar').onchange = async e => {
 
 // —— 工具栏 ——
 
+async function insertFigureIntoActiveSession(assetId: string, caption: string): Promise<boolean> {
+  if (!session) return false
+  if (session.kind === 'doc' && session.editor) {
+    session.editor.insertFigureAsset(assetId, caption)
+    showNotice(`已插入科研图表「${caption}」（自动绑定可复现分析溯源）`)
+    return true
+  }
+  if (session.kind === 'deck' && session.deck) {
+    const slide = session.deck.selection()?.slide ?? session.deck.currentSlide()
+    if (!slide) return false
+    const W = session.deck.slideSize.cx / 12700
+    await session.deck.edit([{
+      op: 'add_image',
+      slide_id: slide.attrs!.id,
+      asset_id: assetId,
+      x: Math.round(W / 2 - 220),
+      y: 90,
+      w: 440,
+      description: caption,
+    }])
+    showNotice(`已将科研图表「${caption}」插入当前幻灯片`)
+    return true
+  }
+  return false
+}
+
 $('toolbar').onclick = async e => {
   const btn = (e.target as HTMLElement).closest('button')
   const cmd = btn?.dataset.cmd
   if (!cmd || !session?.editor) return
   const c = session.editor.commands as Record<string, (...a: any[]) => void>
   if (cmd === 'image') { $('imageInput').click(); return }
+  if (cmd === 'figureStudio') {
+    void researchUi.openDocFigureModal({
+      docTitle: detail?.title || '当前文稿',
+      onInsert: async (assetId, caption) => {
+        await insertFigureIntoActiveSession(assetId, caption)
+      },
+    })
+    return
+  }
   if (cmd === 'cite') { void addCitation(); return }
   if (cmd === 'tableMerge') {
     if (!session.editor.commands.tableMerge()) showNotice('先拖选两个以上相邻的单元格再合并')
@@ -2124,6 +2226,14 @@ $('chatImages').onclick = e => {
 
 $('imgUploadBtn')?.addEventListener('click', () => {
   $<HTMLInputElement>('chatImageInput')?.click()
+})
+$('chatStudioBtn')?.addEventListener('click', () => {
+  void researchUi.openDocFigureModal({
+    docTitle: detail?.title || '当前文稿',
+    onInsert: async (assetId, caption) => {
+      await insertFigureIntoActiveSession(assetId, caption)
+    },
+  })
 })
 $<HTMLInputElement>('chatImageInput')?.addEventListener('change', e => {
   const input = e.target as HTMLInputElement

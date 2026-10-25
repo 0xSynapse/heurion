@@ -1713,7 +1713,7 @@ button.block { width: 100%; padding: 10px 12px; }
 .rs-step-metric { font-size: 12px; color: var(--mint-text); font-weight: 500; }
 .rs-action-cluster { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 3px 6px; background: var(--raised); border: 1px solid var(--line); }
 .rs-action-cluster-label { font-size: 11px; color: var(--muted); padding: 0 4px; letter-spacing: .04em; }
-.rs-studio-modes { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.rs-studio-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-bottom: 14px; }
 .rs-studio-mode-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 10px 12px; border: 1px solid var(--line-strong); background: var(--panel); color: var(--text-2); text-align: left; cursor: pointer; transition: all .15s; }
 .rs-studio-mode-btn:hover { border-color: var(--mint); color: var(--text); background: var(--hover); }
 .rs-studio-mode-btn.active { border-color: var(--mint); background: var(--teal); color: var(--text); box-shadow: inset 0 -2px 0 var(--mint); }
@@ -1730,11 +1730,25 @@ button.block { width: 100%; padding: 10px 12px; }
 .rs-data-table input[type="text"], .rs-data-table input[type="number"], .rs-data-table select { width: 100%; padding: 4px 6px; font-size: 12px; background: var(--bg-deep); border: 1px solid var(--line-strong); color: var(--text); }
 .rs-sub-box { border: 1px solid var(--line); background: var(--raised); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .rs-sub-box-title { font-size: 12px; font-weight: 600; color: var(--text); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rs-scenario-banner { border: 1px solid var(--line-strong); background: var(--panel); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.rs-scenario-banner.compact { padding: 10px 14px; border-left: 3px solid var(--mint); background: var(--raised); }
+.rs-scenario-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.rs-scenario-head b { font-size: 13.5px; font-weight: 600; color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
+.rs-scenario-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.rs-scenario-card { border: 1px solid var(--line); background: var(--raised); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.rs-scenario-card.active { border-color: var(--mint); background: var(--teal); box-shadow: inset 0 2px 0 var(--mint); }
+.rs-scenario-card b { font-size: 13px; font-weight: 600; color: var(--text); }
+.rs-scenario-card p { margin: 0; line-height: 1.5; }
+.rs-scenario-tag { display: inline-flex; align-self: flex-start; font-size: 11px; font-weight: 600; color: var(--mint-text); background: var(--green-soft); border: 1px solid var(--green-line); padding: 1px 7px; }
+.rs-preset-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-top: 8px; border-top: 1px dashed var(--line); }
+.rs-preset-chip { font-size: 11.5px; padding: 3px 9px; border: 1px solid var(--line-strong); background: var(--bg-deep); color: var(--text-2); cursor: pointer; transition: all .15s; }
+.rs-preset-chip:hover { border-color: var(--mint); color: var(--mint-text); background: var(--green-soft); }
 @media (max-width: 960px) {
   .rs-grid { grid-template-columns: 1fr; }
   .rs-pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rs-studio-modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rs-studio-shell { grid-template-columns: 1fr; }
+  .rs-scenario-grid { grid-template-columns: 1fr; }
 }
 
 /* —— 资料库页、数据集页（工作区页面，和研究页同一套版式） —— */

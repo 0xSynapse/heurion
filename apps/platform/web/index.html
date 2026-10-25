@@ -25,6 +25,7 @@
         <button class="rail-btn" id="navMail" data-space="mail" role="tab" aria-selected="false" title="邮箱：随访提醒通知、科研项目进展与协作沟通"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 6l7.5 5.5 7.5-5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span>邮箱</span></button>
       </div>
       <div class="rail-sep"></div>
+      <button class="rail-btn" id="studioBtn" title="医学制图工作台：全局独立绘制 6 大类医学论文图表并导出原工程文件"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 3.5v13h15 M6.5 13V8.5 M10.5 13V5 M14.5 13V9.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg><span>制图</span></button>
       <button class="rail-btn" id="libraryBtn" title="参考资料库：上传论文、指南，AI 写作时检索"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.75 3.25h3.5v13.5h-3.5z M8.25 3.25h3.5v13.5h-3.5z M12.9 4.1l3.3-.9 3.3 12.6-3.3.9z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg><span>资料库</span></button>
       <button class="rail-btn" id="helpBtn" title="产品帮助：使用指南、全流程手册与常见问题"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7.75 7.75a2.25 2.25 0 0 1 3.82-1.59c.7.7.6 1.44.18 2.09-.45.69-1.25 1.25-1.25 2.25v.5 M10 14.5v.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>帮助</span></button>
       <button class="rail-btn" id="trashBtn" title="回收站：删除的文档保留 30 天"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.75 5.25h12.5 M8 5.25V3.5h4v1.75 M5.25 5.25l.75 11.5h8l.75-11.5 M8.25 8.5v5.5 M11.75 8.5v5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg><span>回收站</span></button>
@@ -65,7 +66,10 @@
       </div>
       <div class="actions" id="rsActions" hidden>
         <button id="newStudy" class="sky block" title="新建一个研究项目：方案、数据集、分析、稿件放在一起">＋ 新建研究</button>
-        <div class="split one"><button id="datasetsBtn" class="ghost-dark" title="全部数据集：上传研究数据表（CSV、Excel、SAS、SPSS、Stata）">数据集</button></div>
+        <div class="split">
+          <button id="datasetsBtn" class="ghost-dark" title="全部数据集：上传研究数据表（CSV、Excel、SAS、SPSS、Stata）">数据集</button>
+          <button id="rsStudioGlobalBtn" class="ghost-dark" title="打开全局医学制图工作台（无需先建课题）">医学制图</button>
+        </div>
       </div>
       <div class="actions" id="calActions" hidden>
         <button id="newCalEvent" class="sky block" title="安排新的随访复查或科研会议日程">＋ 新建排期</button>
@@ -175,6 +179,7 @@
         <button data-cmd="tableBackground" title="单元格底纹">底纹</button>
       </span>
       <button data-cmd="image" title="插入图片（也可粘贴或拖入）">图片</button>
+      <button data-cmd="figureStudio" title="从医学制图成果库插入矢量图，或就地绘制实验统计图、机制通路图、生信图并插入当前段落（自动附带代码与数据溯源）">科研制图</button>
       <button data-cmd="cite" title="按 DOI 插入引用">引用</button>
       <input id="imageInput" type="file" accept="image/png,image/jpeg,image/gif" multiple hidden>
       <span class="sep"></span>
@@ -212,6 +217,7 @@
           <button data-chart-type="area">面积图</button><button data-chart-type="pie">饼图</button><button data-chart-type="doughnut">圆环图</button>
         </div>
       </span>
+      <button data-dk="figure-studio" title="从医学制图成果库插入矢量图，或就地绘制医学科研图表插入当前幻灯片">＋科研制图</button>
       <input id="deckImageInput" type="file" accept="image/png,image/jpeg,image/gif" hidden>
       <span class="sep"></span>
       <button data-dk="fill" data-needs-shape title="填充色">填充</button>
@@ -328,6 +334,7 @@
             <button class="quiet small-btn" id="kbPickBtn" title="选资料库里的资料，让 AI 依据它们写">＋ 引用资料</button>
             <button class="quiet small-btn" id="ptPickBtn" title="选患者，让 AI 读这位患者的资料与化验（按诊疗组权限，记入访问记录）" hidden>＋ 引用患者</button>
             <button class="quiet small-btn" id="dsPickBtn" title="选上传的数据，让 AI 做统计分析（Table 1、生存曲线、组间比较……）">＋ 引用数据</button>
+            <button class="quiet small-btn" id="chatStudioBtn" title="在写作中直接插入已归档科研图表或就地绘制新图（附带代码溯源）">＋ 科研制图</button>
             <button class="quiet small-btn" id="imgUploadBtn" title="上传或粘贴图片，支持医学影像、超声/CT截图、图表等">＋ 上传图片</button>
             <input type="file" id="chatImageInput" accept="image/*" multiple hidden>
           </div>
@@ -386,9 +393,32 @@
     <h1>开始一份医学写作</h1>
     <p class="welcome-sub">文档和幻灯片都能直接编辑；也可以让 Heurion 起草、改写、检索文献、核对论断，引用自动规范。</p>
     <div class="welcome-cards">
-      <button class="welcome-card" data-start="doc"><b>新建文档</b><span>论文、综述、病例报告，导出 Word</span></button>
-      <button class="welcome-card" data-start="deck"><b>新建幻灯片</b><span>学术汇报、文献解读，导出 PowerPoint</span></button>
-      <button class="welcome-card" data-start="upload"><b>上传文件</b><span>导入 docx / pptx，保留原格式继续改</span></button>
+      <button class="welcome-card" data-start="doc"><b>新建文档</b><span>论文、综述、病例报告、基金标书，导出 Word</span></button>
+      <button class="welcome-card" data-start="deck"><b>新建幻灯片</b><span>学术汇报、文献解读、组会答辩，导出 PowerPoint</span></button>
+      <button class="welcome-card" data-start="upload"><b>上传文件</b><span>导入 docx / pptx / pdf，保留原格式继续改</span></button>
+      <button class="welcome-card" data-start="studio"><b>独立医学制图工作台</b><span>不建文档或课题，单独画标书机制图与实验统计图</span></button>
+    </div>
+    <div class="rs-scenario-banner" style="text-align:left;margin-top:18px;">
+      <div class="rs-scenario-head">
+        <b>科研制图场景引导：什么时候在写作里画图？什么时候单独画或去临床研究画？</b>
+      </div>
+      <div class="rs-scenario-grid">
+        <div class="rs-scenario-card">
+          <div class="rs-scenario-tag">场景 1 · 写作中内嵌配图</div>
+          <b>正在写论文 / 综述 / 标书正文</b>
+          <p class="muted small">打开文档或幻灯片后，点顶部工具栏 <b>「科研制图」</b> 或右下方 <b>「＋ 科研制图」</b>：可把成果库里的矢量图直接插进当前段落，或就地画新图插入，自动带「来自分析」代码溯源。</p>
+        </div>
+        <div class="rs-scenario-card">
+          <div class="rs-scenario-tag">场景 2 · 全局独立制图</div>
+          <b>单次快速成图 / 基金标书机制图 / 审稿补图</b>
+          <p class="muted small">手头已有 WB/qPCR/CCK-8 汇总数值，或只需画一张信号通路图、技术路线图并导出 Prism (<code>.pzfx</code>) / Draw.io 原工程文件 → 点左侧栏 <b>「制图」</b> 即开即画。</p>
+        </div>
+        <div class="rs-scenario-card">
+          <div class="rs-scenario-tag">场景 3 · 临床课题闭环制图</div>
+          <b>正式临床队列 / RCT 强溯源研究</b>
+          <p class="muted small">需要从患者库筛选入组、提取 eCRF 宽表，并自动生成绑定入组人数的 CONSORT 流向图、Table 1、KM 生存曲线与 SCI 投稿压缩包 → 点左侧栏 <b>「研究」</b>。</p>
+        </div>
+      </div>
     </div>
     <h2>试试这样让 Heurion 帮你</h2>
     <div class="welcome-examples">

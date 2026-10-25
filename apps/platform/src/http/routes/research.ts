@@ -250,7 +250,8 @@ export function registerResearchRoutes(
 
   /**
    * 医学论文全品类制图与原文件导出工作台 (Medical Paper Figure Studio):
-   * 支持生成 6 大类医学论文图表，并导出对应桌面软件的原生工程原文件：
+   * 支持全局独立运行（`/api/figures`）或在特定研究内运行（`/api/studies/:sid/figures`），
+   * 生成 6 大类医学论文图表，并导出对应桌面软件的原生工程原文件：
    * - mechanism (机制图/图形摘要): BioRender/Figdraw 风格分层 SVG + Draw.io (.drawio) + 可编辑 PowerPoint (.pptx)
    * - wet_lab (实验与临床统计图): GraphPad Prism (.pzfx) + R (ggplot2/ggpubr .R) + OriginPro (.csv + .ogs)
    * - flowchart (研究设计/CONSORT 流程图): Draw.io (.drawio) + Microsoft Visio (.vdx) + PowerPoint (.pptx)
@@ -258,25 +259,35 @@ export function registerResearchRoutes(
    * - image_processing (影像/流式/病理切片): ImageJ 比例尺与多通道合并宏 (.ijm) / FlowJo 圈门工作区 (.wsp) / 3D Slicer (.mrml + .mrk.json) & ITK-SNAP (.txt)
    * - journal_assembly (终极多面板期刊排版拼图): Adobe Illustrator / Inkscape 分层 SVG + 600 DPI 印刷级 PNG + 多面板 PPTX + 全套原文件 ZIP
    */
-  app.post('/api/studies/:sid/figures', async c => {
+  const handleFigureStudio = async (c: Context<{ Variables: { user: string } }>, routeSid?: string) => {
     try {
-      const sid = c.req.param('sid')
       const userId = c.get('user')
-      const study = st().get(userId, sid)
-      const body = await c.req.json<Record<string, any>>()
+      const body = await c.req.json<Record<string, any>>().catch(() => ({} as Record<string, any>))
+      const sid = routeSid || (typeof body.study_id === 'string' && body.study_id.trim() ? body.study_id.trim() : undefined)
+      const study = sid && ctx.studies ? st().get(userId, sid) : undefined
+      const fileTag = sid || 'GlobalStudio'
       const category = String(body.category || '')
       const exportFormat = String(body.export_format || c.req.query('format') || 'json')
 
-      const archiveToStudy = (svgStr: string, figName: string, codeStr?: string, codePathStr?: string) => {
+      const archiveFigureAsset = (svgStr: string, figName: string, codeStr?: string, codePathStr?: string) => {
         const cleanName = (String(figName || 'Figure').trim().replace(/[^a-zA-Z0-9_\u4e00-\u9fa5.\s-]/g, '_').replace(/\.svg$/i, '') || 'Figure') + '.svg'
-        const dsItems = store.studyItems(sid).filter(i => i.kind === 'dataset')
-        const provDatasets = [
-          { id: sid, name: study.title, version: 1, rows: 0 },
-          ...dsItems.flatMap(i => {
+        const provDatasets: Array<{ id: string; name: string; version: number; rows: number }> = []
+        if (sid && study) {
+          provDatasets.push({ id: sid, name: study.title, version: 1, rows: 0 })
+          const dsItems = store.studyItems(sid).filter(i => i.kind === 'dataset')
+          for (const i of dsItems) {
             const d = store.getDataset(i.ref_id)
-            return d ? [{ id: d.id, name: d.name, version: d.version ?? 1, rows: d.rows }] : []
-          }),
-        ]
+            if (d && !provDatasets.some(x => x.id === d.id)) {
+              provDatasets.push({ id: d.id, name: d.name, version: d.version ?? 1, rows: d.rows })
+            }
+          }
+        }
+        if (typeof body.dataset_id === 'string' && body.dataset_id.trim()) {
+          const d = store.getDataset(body.dataset_id.trim())
+          if (d && d.owner === userId && !provDatasets.some(x => x.id === d.id)) {
+            provDatasets.push({ id: d.id, name: d.name, version: d.version ?? 1, rows: d.rows })
+          }
+        }
         return store.putAsset({
           owner: userId,
           mime: 'image/svg+xml',
@@ -297,8 +308,8 @@ export function registerResearchRoutes(
         if (!svgStr.includes('<svg')) {
           return c.json({ error: 'invalid_svg', message: '归档内容必须是有效的 SVG 矢量图表' }, 400)
         }
-        const asset = archiveToStudy(svgStr, body.name || body.title || 'Medical_Figure', body.code, body.code_path)
-        return c.json({ ok: true, asset_id: asset.id, name: asset.name, created_at: asset.created_at }, 201)
+        const asset = archiveFigureAsset(svgStr, body.name || body.title || 'Medical_Figure', body.code, body.code_path)
+        return c.json({ ok: true, asset_id: asset.id, name: asset.name, created_at: asset.created_at, study_id: sid ?? null }, 201)
       }
 
       if (category === 'mechanism') {
@@ -312,13 +323,13 @@ export function registerResearchRoutes(
         if (exportFormat === 'drawio') {
           return c.body(res.drawio_xml, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Mechanism_${sid}.drawio"`,
+            'Content-Disposition': `attachment; filename="Mechanism_${fileTag}.drawio"`,
           })
         }
         if (exportFormat === 'pptx') {
           return c.body(new Uint8Array(res.pptx_bytes), 200, {
             'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'Content-Disposition': `attachment; filename="Mechanism_${sid}.pptx"`,
+            'Content-Disposition': `attachment; filename="Mechanism_${fileTag}.pptx"`,
           })
         }
         if (exportFormat === 'svg' || exportFormat === 'ai-svg') {
@@ -340,7 +351,7 @@ export function registerResearchRoutes(
 
       if (category === 'flowchart') {
         const diagramData: ConsortDiagramData = {
-          title: body.title || `${sid} · CONSORT 2010 Participant Flow`,
+          title: body.title || `${study ? study.title : 'Clinical Study'} · CONSORT 2010 Participant Flow`,
           total_assessed: Number(body.total_assessed ?? 240),
           exclusions: Array.isArray(body.exclusions)
             ? body.exclusions
@@ -362,20 +373,20 @@ export function registerResearchRoutes(
         if (exportFormat === 'drawio') {
           return c.body(drawio_xml, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Flowchart_${sid}.drawio"`,
+            'Content-Disposition': `attachment; filename="Flowchart_${fileTag}.drawio"`,
           })
         }
         if (exportFormat === 'vdx') {
           return c.body(visio_vdx, 200, {
             'Content-Type': 'application/vnd.visio; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Flowchart_${sid}.vdx"`,
+            'Content-Disposition': `attachment; filename="Flowchart_${fileTag}.vdx"`,
           })
         }
         if (exportFormat === 'pptx') {
           const pptx = exportFlowchartToPptx(diagramData)
           return c.body(new Uint8Array(pptx), 200, {
             'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'Content-Disposition': `attachment; filename="Flowchart_${sid}.pptx"`,
+            'Content-Disposition': `attachment; filename="Flowchart_${fileTag}.pptx"`,
           })
         }
         return c.json({
@@ -406,25 +417,25 @@ export function registerResearchRoutes(
         if (exportFormat === 'pzfx') {
           return c.body(res.prism_pzfx, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
-            'Content-Disposition': `attachment; filename="GraphPad_Prism_${sid}.pzfx"`,
+            'Content-Disposition': `attachment; filename="GraphPad_Prism_${fileTag}.pzfx"`,
           })
         }
         if (exportFormat === 'r') {
           return c.body(res.r_script, 200, {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Statistical_Plot_${sid}.R"`,
+            'Content-Disposition': `attachment; filename="Statistical_Plot_${fileTag}.R"`,
           })
         }
         if (exportFormat === 'origin_csv') {
           return c.body(res.origin_csv, 200, {
             'Content-Type': 'text/csv; charset=utf-8',
-            'Content-Disposition': `attachment; filename="OriginPro_Worksheet_${sid}.csv"`,
+            'Content-Disposition': `attachment; filename="OriginPro_Worksheet_${fileTag}.csv"`,
           })
         }
         if (exportFormat === 'origin_ogs') {
           return c.body(res.origin_ogs, 200, {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Content-Disposition': `attachment; filename="OriginPro_Script_${sid}.ogs"`,
+            'Content-Disposition': `attachment; filename="OriginPro_Script_${fileTag}.ogs"`,
           })
         }
         return c.json({ category: 'wet_lab', ...res })
@@ -435,19 +446,19 @@ export function registerResearchRoutes(
         if (exportFormat === 'r') {
           return c.body(res.r_script, 200, {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Bioinformatics_${body.bioType || 'plot'}_${sid}.R"`,
+            'Content-Disposition': `attachment; filename="Bioinformatics_${body.bioType || 'plot'}_${fileTag}.R"`,
           })
         }
         if (exportFormat === 'csv') {
           return c.body(res.cloud_csv, 200, {
             'Content-Type': 'text/csv; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Hiplot_Matrix_${body.bioType || 'plot'}_${sid}.csv"`,
+            'Content-Disposition': `attachment; filename="Hiplot_Matrix_${body.bioType || 'plot'}_${fileTag}.csv"`,
           })
         }
         if (exportFormat === 'pzfx' && res.prism_pzfx) {
           return c.body(res.prism_pzfx, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Volcano_${sid}.pzfx"`,
+            'Content-Disposition': `attachment; filename="Volcano_${fileTag}.pzfx"`,
           })
         }
         return c.json({ category: 'bioinformatics', ...res })
@@ -467,14 +478,14 @@ export function registerResearchRoutes(
           if (exportFormat === 'wsp') {
             return c.body(res.flowjo_wsp_xml, 200, {
               'Content-Type': 'application/xml; charset=utf-8',
-              'Content-Disposition': `attachment; filename="FlowJo_Workspace_${sid}.wsp"`,
+              'Content-Disposition': `attachment; filename="FlowJo_Workspace_${fileTag}.wsp"`,
             })
           }
           return c.json({ category: 'image_processing', tool: 'flowjo', ...res })
         }
         if (subType === 'slicer' || subType === 'itksnap') {
           const res = generateSlicerAndItkSnapPackage({
-            patientId: body.patientId || sid,
+            patientId: body.patientId || fileTag,
             studyModality: body.studyModality || 'CT',
             volumeFileName: body.volumeFileName,
             segmentationFileName: body.segmentationFileName,
@@ -487,13 +498,13 @@ export function registerResearchRoutes(
           if (exportFormat === 'mrml') {
             return c.body(res.slicer_mrml_xml, 200, {
               'Content-Type': 'application/xml; charset=utf-8',
-              'Content-Disposition': `attachment; filename="Slicer_Scene_${sid}.mrml"`,
+              'Content-Disposition': `attachment; filename="Slicer_Scene_${fileTag}.mrml"`,
             })
           }
           if (exportFormat === 'itksnap-txt') {
             return c.body(res.itksnap_labels_txt, 200, {
               'Content-Type': 'text/plain; charset=utf-8',
-              'Content-Disposition': `attachment; filename="ITK_SNAP_Labels_${sid}.txt"`,
+              'Content-Disposition': `attachment; filename="ITK_SNAP_Labels_${fileTag}.txt"`,
             })
           }
           return c.json({ category: 'image_processing', tool: subType, ...res })
@@ -510,7 +521,7 @@ export function registerResearchRoutes(
         if (exportFormat === 'ijm') {
           return c.body(res.imagej_macro_ijm, 200, {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Content-Disposition': `attachment; filename="ImageJ_Analysis_${sid}.ijm"`,
+            'Content-Disposition': `attachment; filename="ImageJ_Analysis_${fileTag}.ijm"`,
           })
         }
         return c.json({ category: 'image_processing', tool: 'imagej', ...res })
@@ -528,19 +539,19 @@ export function registerResearchRoutes(
         if (exportFormat === 'zip') {
           return c.body(new Uint8Array(res.bundle_zip), 200, {
             'Content-Type': 'application/zip',
-            'Content-Disposition': `attachment; filename="Journal_Figure_Assembly_${sid}.zip"`,
+            'Content-Disposition': `attachment; filename="Journal_Figure_Assembly_${fileTag}.zip"`,
           })
         }
         if (exportFormat === 'png') {
           return c.body(new Uint8Array(res.high_res_png), 200, {
             'Content-Type': 'image/png',
-            'Content-Disposition': `attachment; filename="Journal_Figure_600DPI_${sid}.png"`,
+            'Content-Disposition': `attachment; filename="Journal_Figure_600DPI_${fileTag}.png"`,
           })
         }
         if (exportFormat === 'pptx') {
           return c.body(new Uint8Array(res.pptx_bytes), 200, {
             'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'Content-Disposition': `attachment; filename="Journal_Figure_Panels_${sid}.pptx"`,
+            'Content-Disposition': `attachment; filename="Journal_Figure_Panels_${fileTag}.pptx"`,
           })
         }
         return c.json({
@@ -557,14 +568,21 @@ export function registerResearchRoutes(
         {
           error: 'unsupported_figure_category',
           message:
-            '请指定有效的图表类别 category: mechanism | wet_lab | bioinformatics | image_processing | journal_assembly',
+            '请指定有效的图表类别 category: mechanism | wet_lab | bioinformatics | image_processing | flowchart | journal_assembly | archive',
         },
         400,
       )
     } catch (err) {
       return cohortFailure(c, err)
     }
+  }
+
+  app.get('/api/figures', c => {
+    const userId = c.get('user')
+    return c.json({ figures: store.provenanceAssets(userId) })
   })
+  app.post('/api/figures', c => handleFigureStudio(c))
+  app.post('/api/studies/:sid/figures', c => handleFigureStudio(c, c.req.param('sid')))
 
   // —— Auto-eCRF 多模态数据批量提取与溯源 ——
   const ecrf = ctx.studies && ctx.patients ? new EcrfService(ctx.studies, ctx.patients, datasets ?? null) : null
