@@ -58,6 +58,8 @@ const STUDY_PARITY: Record<string, string> = {
   'POST /api/studies/:sid/cohort/dataset': 'study_cohort_dataset',
   'POST /api/studies/:sid/cohort/imaging-batch': 'imaging_cohort_batch_analyze',
   'POST /api/studies/:sid/figures': 'imaging_medical_figure_studio',
+  'GET /api/figures': 'imaging_medical_figure_studio',
+  'POST /api/figures': 'imaging_medical_figure_studio',
   // 研究变量：AI 能读、能录入 / 导入（一律未核实），核实只能研究者本人（见 NOT_FOR_AI）
   'GET /api/studies/:sid/vars': 'study_vars_list',
   'POST /api/studies/:sid/vars/manual': 'study_vars_set',
