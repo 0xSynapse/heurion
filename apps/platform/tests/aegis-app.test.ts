@@ -706,4 +706,89 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     expect(errPayload.code).toBe('lease_required')
     expect(errPayload.escalation_id).toBe('esc-acme-001')
   })
+
+  it('9. RFC 8628 设备码免密终端绑定与第一方智能体技能包自动发现', async () => {
+    const { app, reg, callAegisTool } = createTestEnv()
+    const kp = generateAegisNodeKeyPair()
+
+    // 1. 校验 Manifest 暴露了 skills 列表以及第一方 SKILL.md 端点可读
+    const mfRes = await app.request('/.well-known/aegis-app.json')
+    const mf = (await mfRes.json()) as any
+    expect(Array.isArray(mf.skills)).toBe(true)
+    expect(mf.skills.some((s: any) => s.name === 'heurion-clinical-research')).toBe(true)
+    const skillRes = await app.request('/.well-known/aegis-skills/heurion-clinical-research/SKILL.md')
+    expect(skillRes.status).toBe(200)
+    const skillText = await skillRes.text()
+    expect(skillText).toContain('name: heurion-clinical-research')
+
+    // 2. 终端执行 `aegis-os app login heurion` 请求设备授权码
+    const devRes = await app.request('/api/aegis/auth/device', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Hermes-MacBook-Pro',
+        node_pubkey: kp.publicKey,
+        tool_scope: 'all',
+        write_mode: 'tracked',
+      }),
+    })
+    expect(devRes.status).toBe(201)
+    const devBody = (await devRes.json()) as any
+    expect(devBody.device_code).toMatch(/^dc_[0-9a-f]{32}$/)
+    expect(devBody.user_code).toMatch(/^HEUR-[A-Z0-9]{4}$/)
+
+    // 3. 医生尚未确认前，终端轮询 /api/aegis/auth/token 返回 428 authorization_pending
+    const pollPending = await app.request('/api/aegis/auth/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ device_code: devBody.device_code }),
+    })
+    expect(pollPending.status).toBe(428)
+    const pendingBody = (await pollPending.json()) as any
+    expect(pendingBody.code).toBe('authorization_pending')
+
+    // 4. 医生在已登录的浏览器设置页输入 8 位设备码确认绑定
+    const approveRes = await app.request('/api/aegis/auth/device/approve', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${reg.token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ user_code: devBody.user_code }),
+    })
+    expect(approveRes.status).toBe(200)
+    const approveBody = (await approveRes.json()) as any
+    expect(approveBody.ok).toBe(true)
+    expect(approveBody.user_code).toBe(devBody.user_code)
+
+    // 5. 终端再次轮询 /api/aegis/auth/token 成功换取一次性 aegis_at_heurion.* 令牌
+    const pollOk = await app.request('/api/aegis/auth/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ device_code: devBody.device_code }),
+    })
+    expect(pollOk.status).toBe(201)
+    const tokenBody = (await pollOk.json()) as any
+    expect(tokenBody.access_token).toMatch(/^aegis_at_heurion\.g_[0-9a-f]+\./)
+    expect(tokenBody.bound_node_pubkey).toBe(kp.publicKey)
+
+    // 6. 同一 device_code 不可二次重放兑换（防止窃取）
+    const pollReplay = await app.request('/api/aegis/auth/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ device_code: devBody.device_code }),
+    })
+    expect(pollReplay.status).toBe(400)
+    expect(((await pollReplay.json()) as any).code).toBe('token_already_consumed')
+
+    // 7. 使用兑换出的令牌调用 MCP 工具验证可用
+    const created = await callAegisTool(
+      tokenBody.access_token,
+      'doc_create',
+      { title: '设备码免密登录测试文稿' },
+      { agentId: 'hermes-device-1' },
+    )
+    expect(created.isError).toBe(false)
+    expect(created.body.doc_id).toBeTruthy()
+  })
 })

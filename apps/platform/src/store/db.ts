@@ -963,6 +963,24 @@ export class Store {
         revoked_at TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_agent_leases_grant ON agent_leases(grant_id, expires_at);
+
+      CREATE TABLE IF NOT EXISTS agent_device_codes (
+        device_code TEXT PRIMARY KEY,
+        user_code TEXT NOT NULL UNIQUE,
+        app_id TEXT NOT NULL DEFAULT 'heurion',
+        name TEXT NOT NULL,
+        aegis_node_pubkey TEXT,
+        tool_scope TEXT NOT NULL DEFAULT 'all',
+        write_mode TEXT NOT NULL DEFAULT 'tracked',
+        status TEXT NOT NULL DEFAULT 'pending',
+        user_id TEXT,
+        grant_id TEXT,
+        issued_token TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        approved_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_device_codes_user_code ON agent_device_codes(user_code, status);
     `)
   }
 
@@ -2808,6 +2826,95 @@ export class Store {
     const t = now()
     return this.db.prepare('SELECT * FROM agent_leases WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC')
       .all(userId, t) as unknown as AgentLeaseRow[]
+  }
+
+  createAgentDeviceCode(input: {
+    device_code: string
+    user_code: string
+    app_id?: string
+    name: string
+    aegis_node_pubkey?: string | null
+    tool_scope?: AgentGrantRow['tool_scope']
+    write_mode?: AgentGrantRow['write_mode']
+    ttl_secs?: number
+  }): {
+    device_code: string
+    user_code: string
+    app_id: string
+    name: string
+    aegis_node_pubkey: string | null
+    tool_scope: AgentGrantRow['tool_scope']
+    write_mode: AgentGrantRow['write_mode']
+    status: 'pending' | 'approved' | 'consumed' | 'expired'
+    user_id: string | null
+    grant_id: string | null
+    issued_token: string | null
+    created_at: string
+    expires_at: string
+    approved_at: string | null
+  } {
+    const createdAt = now()
+    const expiresAt = new Date(Date.now() + Math.max(10, input.ttl_secs ?? 600) * 1000).toISOString()
+    this.db.prepare(`
+      INSERT INTO agent_device_codes (
+        device_code, user_code, app_id, name, aegis_node_pubkey, tool_scope, write_mode, status, created_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `).run(
+      input.device_code,
+      input.user_code,
+      input.app_id ?? 'heurion',
+      input.name,
+      input.aegis_node_pubkey ?? null,
+      input.tool_scope ?? 'all',
+      input.write_mode ?? 'tracked',
+      createdAt,
+      expiresAt,
+    )
+    return this.getAgentDeviceCode(input.device_code)!
+  }
+
+  getAgentDeviceCode(deviceCode: string) {
+    return this.db.prepare('SELECT * FROM agent_device_codes WHERE device_code = ?').get(deviceCode) as {
+      device_code: string
+      user_code: string
+      app_id: string
+      name: string
+      aegis_node_pubkey: string | null
+      tool_scope: AgentGrantRow['tool_scope']
+      write_mode: AgentGrantRow['write_mode']
+      status: 'pending' | 'approved' | 'consumed' | 'expired'
+      user_id: string | null
+      grant_id: string | null
+      issued_token: string | null
+      created_at: string
+      expires_at: string
+      approved_at: string | null
+    } | undefined
+  }
+
+  getAgentDeviceCodeByUserCode(userCode: string) {
+    return this.db.prepare('SELECT * FROM agent_device_codes WHERE user_code = ?').get(userCode) as ReturnType<Store['getAgentDeviceCode']>
+  }
+
+  approveAgentDeviceCode(userCode: string, userId: string, grantId: string, issuedToken: string) {
+    const res = this.db.prepare(`
+      UPDATE agent_device_codes
+         SET status = 'approved', user_id = ?, grant_id = ?, issued_token = ?, approved_at = ?
+       WHERE user_code = ? AND status = 'pending'
+    `).run(userId, grantId, issuedToken, now(), userCode)
+    if (Number(res.changes ?? 0) === 0) return undefined
+    return this.getAgentDeviceCodeByUserCode(userCode)
+  }
+
+  consumeAgentDeviceCode(deviceCode: string): string | null {
+    const row = this.getAgentDeviceCode(deviceCode)
+    if (!row || row.status !== 'approved' || !row.issued_token) return null
+    const res = this.db.prepare(`
+      UPDATE agent_device_codes
+         SET status = 'consumed', issued_token = NULL
+       WHERE device_code = ? AND status = 'approved'
+    `).run(deviceCode)
+    return Number(res.changes ?? 0) > 0 ? row.issued_token : null
   }
 
   /** 查找某文档最近一次尚未回滚的 AI 回合 turn_id（支持按前缀筛选特定 Agent 的回合，如 aegis:<agentId>:）。 */

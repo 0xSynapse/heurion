@@ -260,6 +260,8 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/public/tools/table1-docx': '官网着陆页公开无状态 Table 1 Word 导出小工具（浏览器端文件下载）',
   'POST /api/public/tools/citation-check': '官网着陆页公开无状态文献真伪核验小工具（AI 调 pubmed_search / verify_claims）',
   // Aegis Application Protocol (AAP-1.0) 协议握手、授权令牌管理与人工租约审批接口
+  'POST /api/aegis/auth/device': '由本地 aegis-os app login 发起 RFC 8628 设备码免密绑定请求（AI 不能自行发起）',
+  'POST /api/aegis/auth/device/approve': '医生/研究员本人在设置页输入 8 位终端设备码确认绑定（AI 不能自行确认）',
   'POST /api/aegis/auth/token': '由医生/研究员本人通过 aegis app login 或设置页签发 Aegis 授权令牌（AI 不能自行签发令牌）',
   'DELETE /api/aegis/auth/token': '由医生/研究员本人或 aegis app logout 吊销 Aegis 授权令牌',
   'GET /api/aegis/auth/grants': '用户在设置页查看已绑定的 Aegis-OS 工作站授权列表',
