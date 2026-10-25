@@ -52,7 +52,7 @@ export interface ResearchHooks {
   /** 离开当前文档（研究页占用中间区域时） */
   leaveDoc(): void
   prefillChat(text: string): void
-  goSpace(space: 'research' | 'write'): void
+  goSpace(space: 'research' | 'write' | 'studio'): void
   token(): string
   datasets: { upload(files: File[]): Promise<Array<{ id: string }>>; openDetail(id: string): Promise<void>; showProvenance(assetId: string): Promise<void> }
   /** 打开患者页（入组名单里点代号） */
@@ -79,6 +79,7 @@ const SEX: Record<string, string> = { M: '男', F: '女' }
 export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
   const $ = (id: string) => document.getElementById(id)!
   let list: StudyLite[] = []
+  let studioFigures: Array<{ id: string; name: string; created_at: string }> = []
   let current: string | null = null
   let poll: ReturnType<typeof setTimeout> | null = null
 
@@ -95,6 +96,26 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     $('studyList').innerHTML = shown.map(s => `<li data-study="${s.id}" class="hit${s.id === current ? ' active' : ''}" title="${esc(s.title)}">
         <span class="hit-text"><span class="label">${esc(s.title)}${s.shared ? ' <span class="pill shared-pill" title="同事共享给你的研究">共享</span>' : ''}</span><span class="snippet">${[s.shared ? `${s.shared_by} 负责 · ${ROLE_LABEL[s.my_role]}` : s.members > 1 ? `${s.members} 位成员` : '', s.design ? DESIGNS[s.design] : '', STATUS[s.status], `${s.datasets} 个数据集`].filter(Boolean).join(' · ')}</span></span></li>`).join('')
       + (list.length === 0 ? '<li class="nav-empty">还没有研究项目。点「＋ 新建研究」。</li>' : shown.length === 0 ? `<li class="nav-empty">没有找到「${esc(q)}」</li>` : '')
+  }
+
+  async function loadStudioList(): Promise<void> {
+    try {
+      const res = await api<{ figures?: Array<{ id: string; name: string; created_at: string }> }>('/api/figures')
+      studioFigures = res.figures ?? []
+    } catch {
+      studioFigures = []
+    }
+    renderStudioList()
+  }
+
+  function renderStudioList(): void {
+    const el = document.getElementById('studioList')
+    if (!el) return
+    const q = ($('docSearch') as HTMLInputElement).value.trim().toLowerCase()
+    const shown = studioFigures.filter(f => !q || f.name.toLowerCase().includes(q))
+    el.innerHTML = shown.map(f => `<li data-studio-fig="${esc(f.id)}" data-studio-figname="${esc(f.name)}" class="hit" title="${esc(f.name)} · 点击查看矢量图与可复现脚本">
+        <span class="hit-text"><span class="label">${esc(f.name)}</span><span class="snippet">矢量 SVG + 源码 · ${date(f.created_at)}</span></span></li>`).join('')
+      + (studioFigures.length === 0 ? '<li class="nav-empty">暂无已保存图表。在右侧画布点「保存到图表库」即可归档。</li>' : shown.length === 0 ? `<li class="nav-empty">没有找到「${esc(q)}」</li>` : '')
   }
 
   /** 新建研究：名称、设计、简介（一个小表单）。 */
@@ -193,8 +214,9 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           code_path: codePath || 'figure_studio.R',
         }),
       })
-      notice(studyId ? `已归档至项目 figures/ 成果库：${res.name}` : `已归档至全局图表成果库：${res.name}`)
+      notice(studyId ? `已归档至项目 figures/ 成果库：${res.name}` : `已归档至全局图表库：${res.name}`)
       if (studyId && current === studyId && !$('page').classList.contains('studio-page')) void openStudy(studyId)
+      if (!studyId) void loadStudioList()
       return res
     } catch (err) {
       notice((err as Error).message, true)
@@ -1997,22 +2019,28 @@ ${modelsDesc}
   function mountStudioTab(
     s?: Study | null,
     cohort?: Cohort | null,
-    opts?: { container?: HTMLElement; globalDatasets?: Array<{ dataset_id: string; name: string }>; initialDatasetId?: string; globalFigures?: Array<{ id: string; name: string; created_at: string }> }
+    opts?: {
+      container?: HTMLElement
+      globalDatasets?: Array<{ dataset_id: string; name: string }>
+      initialDatasetId?: string
+      initialMode?: 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
+      globalFigures?: Array<{ id: string; name: string; created_at: string }>
+    }
   ): void {
     const pane = opts?.container ?? document.getElementById('rsPaneStudio')
     if (!pane) return
     const isGlobal = !s
-    const contextTitle = s ? s.title : 'Heurion 医学科研制图'
+    const contextTitle = s ? s.title : 'Heurion 科研制图'
     let readyDs: Array<{ dataset_id: string; name: string }> = s
       ? s.datasets.filter(d => d.status === 'ready').map(d => ({ dataset_id: d.dataset_id, name: d.name }))
       : (opts?.globalDatasets ?? [])
-    let selectedArchiveStudyId = s?.id ?? ''
+    const selectedArchiveStudyId = s?.id ?? ''
     let activeDatasetId = opts?.initialDatasetId ?? readyDs[0]?.dataset_id ?? ''
     const activeCount = cohort ? cohort.subjects.filter(x => x.status === 'active').length : 60
     const withdrawnCount = cohort ? cohort.subjects.filter(x => x.status === 'withdrawn').length : 4
 
     type StudioMode = 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
-    let currentMode: StudioMode = 'wet_lab'
+    let currentMode: StudioMode = opts?.initialMode ?? 'wet_lab'
     let wetPlotType: 'bar_scatter' | 'violin_box' | 'dose_response' = 'bar_scatter'
     let wetErrorType: 'SD' | 'SEM' = 'SD'
     let wetYLabel = 'Relative Expression / Biomarker Level'
@@ -2128,140 +2156,109 @@ ${modelsDesc}
     let lastCodePath = 'figure_studio.R'
     let lastTitle = `${contextTitle}_Figure`
 
-    const globalHeaderHtml = isGlobal ? `
-      <div class="rs-head" style="margin-bottom:12px;">
-        <div class="row" style="align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-          <div>
-            <h2 style="margin:0;font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px;">
-              ${icon('chart', { size: 18 })} 医学论文全品类制图与原工程文件工作台 (Global Medical Figure Studio)
-            </h2>
-            <div class="muted small" style="margin-top:4px;">
-              无需绑定特定临床课题即可全局独立绘图 · 支持载入任意数据集 · 实时生成高清矢量图并导出 GraphPad Prism (<code>.pzfx</code>)、R (<code>.R</code>)、OriginPro (<code>.ogs</code>)、Draw.io、Visio、可编辑 PPTX、ImageJ 宏 (<code>.ijm</code>)、FlowJo (<code>.wsp</code>)、3D Slicer (<code>.mrml</code>) 与 Illustrator 分层矢量 (<code>.svg</code>)
-            </div>
-          </div>
-          <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;">
-            <label class="small muted" style="display:inline-flex;align-items:center;gap:6px;margin:0;">
-              <span>归档目标：</span>
-              <select id="stGlobalStudyTarget" style="min-width:190px;">
-                <option value="">全局图表成果库（不绑定特定课题）</option>
-                ${list.map(stItem => `<option value="${esc(stItem.id)}"${stItem.id === selectedArchiveStudyId ? ' selected' : ''}>归档至课题：${esc(stItem.title)}</option>`).join('')}
-              </select>
-            </label>
+    const studyContextBarHtml = !isGlobal ? `
+      <div class="rs-scenario-banner compact" style="margin-bottom:10px;padding:8px 12px;">
+        <div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span class="small">
+            ${icon('microscope', { size: 13 })} <b>当前课题：${esc(s.title)}</b>
+            <span class="muted">（在组 ${activeCount} 人 · 数据集 ${readyDs.length} 个 · 图表保存至本研究 <code>figures/</code>）</span>
+          </span>
+          <div class="row" style="gap:6px;">
+            <button type="button" class="small-btn quiet" data-st-nav="global-studio">${icon('chart', { size: 12 })} 切换至独立制图空间</button>
+            <button type="button" class="small-btn quiet" data-st-nav="write">${icon('write', { size: 12 })} 去写作插图</button>
           </div>
         </div>
       </div>
-
-      <div class="rs-scenario-banner" style="margin-bottom:14px;">
-        <div class="rs-scenario-head">
-          <b>${icon('target', { size: 15 })} 三大科研制图使用场景指南：当前处于「场景一 · 全局独立制图模式」</b>
-          <span class="muted small">根据您的科研阶段，随时在独立制图、论文边写边画、临床课题闭环之间无缝流转</span>
-        </div>
-        <div class="rs-scenario-grid">
-          <div class="rs-scenario-card active">
-            <div class="rs-scenario-tag">当前模式 · 场景一：全局独立制图</div>
-            <b>国自然标书机制图 / 基础预实验 / 审稿快速补图</b>
-            <p class="muted small">适合：绘制基金申请书科学假说信号通路、单次 WB/qPCR 柱状图、CCK-8 药敏 IC50 曲线、流式四象限或生信火山图。无需建课题入组，即开即画并导出 <code>.pzfx</code> / <code>.R</code> / <code>.drawio</code> 原工程文件。</p>
-          </div>
-          <div class="rs-scenario-card">
-            <div class="rs-scenario-tag">场景二：写作中边写边配图</div>
-            <b>论文正文 Results / 综述配图 / 组会汇报 PPT</b>
-            <p class="muted small">适合：正在撰写论文段落或制作幻灯片，需将统计图或机制图直接嵌入当前光标位置，并自动生成「来自分析」可复现代码与数据溯源标记。</p>
-            <div style="margin-top:auto;padding-top:6px;">
-              <button type="button" class="small-btn" data-st-nav="write">${icon('write', { size: 12 })} 前往写作空间边写边画 →</button>
-            </div>
-          </div>
-          <div class="rs-scenario-card">
-            <div class="rs-scenario-tag">场景三：临床研究课题闭环制图</div>
-            <b>RCT / 队列研究 / 真实世界研究全链路</b>
-            <p class="muted small">适合：正式立项的临床研究，需从患者库筛选入组、提取 eCRF 宽表，要求 CONSORT 流程图、Table 1、KM 生存曲线与课题数据版本严格绑定并打包 SCI 投稿出版包 (<code>.zip</code>)。</p>
-            <div style="margin-top:auto;padding-top:6px;">
-              <button type="button" class="small-btn" data-st-nav="study">${icon('microscope', { size: 12 })} 进入临床研究课题闭环 →</button>
-            </div>
-          </div>
-        </div>
-        <div class="rs-preset-bar">
-          <span class="muted small" style="font-weight:600;">${icon('sparkles', { size: 13 })} 典型科研场景一键载入：</span>
-          <button type="button" class="rs-preset-chip" data-st-preset="grant_gpcr">[国自然标书] GPCR 信号通路机制图</button>
-          <button type="button" class="rs-preset-chip" data-st-preset="grant_pd1">[肿瘤免疫] PD-1/PD-L1 阻断机制图</button>
-          <button type="button" class="rs-preset-chip" data-st-preset="wet_bar">[基础实验] WB/qPCR 显著性柱状散点图</button>
-          <button type="button" class="rs-preset-chip" data-st-preset="wet_ic50">[药理/CCK-8] 4PL 剂量反应 IC50 曲线</button>
-          <button type="button" class="rs-preset-chip" data-st-preset="bio_volcano">[转录组/多组学] 差异表达火山图</button>
-          <button type="button" class="rs-preset-chip" data-st-preset="img_flow">[细胞流式] Annexin V/PI 凋亡四象限</button>
-        </div>
-      </div>
-    ` : `
-      <div class="rs-scenario-banner compact" style="margin-bottom:12px;">
-        <div class="row" style="justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-          <div>
-            <b style="font-size:13px;display:inline-flex;align-items:center;gap:6px;">
-              ${icon('microscope', { size: 14 })} 当前场景：临床研究课题闭环制图模式 · 已绑定课题「${esc(s.title)}」（在组 ${activeCount} 人 · 数据集 ${readyDs.length} 个）
-            </b>
-            <div class="muted small" style="margin-top:2px;">
-              在此绘制的图表默认读取本课题去标识化数据集并归档至项目 <code>figures/</code> 目录，自动纳入「导出 SCI 投稿出版包 (.zip)」。若需绘制与本课题无关的独立标书机制图或预实验单图，可切换至全局独立制图。
-            </div>
-          </div>
-          <div class="row" style="gap:8px;flex-wrap:wrap;">
-            <button type="button" class="small-btn" data-st-nav="global-studio">${icon('chart', { size: 12 })} 切换至全局独立制图</button>
-            <button type="button" class="small-btn" data-st-nav="write">${icon('write', { size: 12 })} 前往写作空间插图</button>
-          </div>
-        </div>
-      </div>
-    `
+    ` : ''
 
     pane.innerHTML = `
-      ${globalHeaderHtml}
-      <div class="rs-studio-modes" role="tablist" aria-label="6大类医学制图引擎">
-        <button type="button" class="rs-studio-mode-btn active" data-st-mode="wet_lab">
-          <b>${icon('chart', { size: 14 })} 1. 实验与临床统计图</b>
-          <span>柱状散点 / 小提琴箱线 / IC50 曲线 · Prism (.pzfx) + R + Origin</span>
-        </button>
-        <button type="button" class="rs-studio-mode-btn" data-st-mode="bioinformatics">
-          <b>${icon('dna', { size: 14 })} 2. 生信与多组学图</b>
-          <span>火山图 / 聚类热图 / KEGG 气泡 / 单细胞 UMAP · R + Hiplot (.csv)</span>
-        </button>
-        <button type="button" class="rs-studio-mode-btn" data-st-mode="mechanism">
-          <b>${icon('microscope', { size: 14 })} 3. 生物机制与信号通路</b>
-          <span>受体/激酶/细胞核通路可视化编辑 · 分层 SVG + Draw.io + PPTX</span>
-        </button>
-        <button type="button" class="rs-studio-mode-btn" data-st-mode="image_processing">
-          <b>${icon('layers', { size: 14 })} 4. 显微/流式/3D 影像定量</b>
-          <span>WB/IF 标尺宏 (.ijm) · FlowJo 四象限 (.wsp) · 3D Slicer (.mrml)</span>
-        </button>
-        <button type="button" class="rs-studio-mode-btn" data-st-mode="flowchart">
-          <b>${icon('ruler', { size: 14 })} 5. 研究设计与 CONSORT 图</b>
-          <span>纳排人数与随机分组流向编辑 · Draw.io + Visio (.vdx) + PPTX</span>
-        </button>
-        <button type="button" class="rs-studio-mode-btn" data-st-mode="journal_assembly">
-          <b>${icon('grid', { size: 14 })} 6. 顶刊多面板拼图排版</b>
-          <span>Nature / NEJM / Lancet A/B/C/D 复合大图 · 分层 SVG + 600 DPI 出版包</span>
-        </button>
+      ${studyContextBarHtml}
+      <div class="rs-studio-topbar">
+        <div class="rs-studio-modes" role="tablist" aria-label="6大类医学制图引擎">
+          <button type="button" class="rs-studio-mode-btn${currentMode === 'wet_lab' ? ' active' : ''}" data-st-mode="wet_lab">
+            ${icon('chart', { size: 14 })} <span>统计图</span>
+          </button>
+          <button type="button" class="rs-studio-mode-btn${currentMode === 'bioinformatics' ? ' active' : ''}" data-st-mode="bioinformatics">
+            ${icon('dna', { size: 14 })} <span>生信组学</span>
+          </button>
+          <button type="button" class="rs-studio-mode-btn${currentMode === 'mechanism' ? ' active' : ''}" data-st-mode="mechanism">
+            ${icon('microscope', { size: 14 })} <span>机制通路</span>
+          </button>
+          <button type="button" class="rs-studio-mode-btn${currentMode === 'image_processing' ? ' active' : ''}" data-st-mode="image_processing">
+            ${icon('layers', { size: 14 })} <span>显微·流式·影像</span>
+          </button>
+          <button type="button" class="rs-studio-mode-btn${currentMode === 'flowchart' ? ' active' : ''}" data-st-mode="flowchart">
+            ${icon('ruler', { size: 14 })} <span>流程图</span>
+          </button>
+          <button type="button" class="rs-studio-mode-btn${currentMode === 'journal_assembly' ? ' active' : ''}" data-st-mode="journal_assembly">
+            ${icon('grid', { size: 14 })} <span>多面板拼图</span>
+          </button>
+        </div>
+
+        <div class="rs-studio-topbar-right">
+          <select id="stQuickPreset" class="rs-studio-preset-select" aria-label="快速载入示例模板">
+            <option value="">快速载入示例模板…</option>
+            <option value="wet_bar">统计图：WB/qPCR 柱状散点图</option>
+            <option value="wet_ic50">统计图：4PL 剂量反应 IC50 曲线</option>
+            <option value="grant_gpcr">机制图：GPCR 信号转导通路</option>
+            <option value="grant_pd1">机制图：PD-1/PD-L1 免疫检查点</option>
+            <option value="bio_volcano">生信图：转录组差异表达火山图</option>
+            <option value="img_flow">流式图：Annexin V/PI 凋亡四象限</option>
+          </select>
+
+          <details class="rs-scenario-pop">
+            <summary class="small-btn quiet">${icon('info', { size: 13 })} 场景说明</summary>
+            <div class="rs-scenario-pop-card">
+              <div class="rs-scenario-grid">
+                <div class="rs-scenario-card${isGlobal ? ' active' : ''}">
+                  <div class="rs-scenario-tag">场景一 · 独立科研制图</div>
+                  <b>标书机制图 / 预实验单图 / 审稿补图</b>
+                  <p class="muted small">无需创建临床研究课题，即开即画并导出 <code>.pzfx</code> / <code>.R</code> / <code>.drawio</code> / <code>.pptx</code> 原工程文件。</p>
+                </div>
+                <div class="rs-scenario-card">
+                  <div class="rs-scenario-tag">场景二 · 写作中内嵌配图</div>
+                  <b>论文正文 Results / 组会汇报 PPT</b>
+                  <p class="muted small">在写作编辑器中边写边画，一键插入当前段落并自动附带「来自分析」可复现代码溯源。</p>
+                  <div style="margin-top:auto;padding-top:6px;">
+                    <button type="button" class="small-btn" data-st-nav="write">${icon('write', { size: 12 })} 前往写作空间 →</button>
+                  </div>
+                </div>
+                <div class="rs-scenario-card${!isGlobal ? ' active' : ''}">
+                  <div class="rs-scenario-tag">场景三 · 临床研究课题内制图</div>
+                  <b>RCT / 队列研究全链路数据闭环</b>
+                  <p class="muted small">与入组患者队列和课题数据集版本绑定，自动归档至项目 <code>figures/</code> 并打包 SCI 投稿包。</p>
+                  <div style="margin-top:auto;padding-top:6px;">
+                    <button type="button" class="small-btn" data-st-nav="study">${icon('microscope', { size: 12 })} 前往临床研究 →</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
       </div>
 
       <div class="rs-studio-shell">
         <div class="rs-studio-left" id="rsStudioLeft"></div>
         <div class="rs-studio-right">
           <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-            <div>
-              <b id="rsStudioCanvasTitle" style="font-size:14px;">实时出版级矢量画布 (Publication Vector Canvas)</b>
-              <div class="muted small">左侧修改真实数据或节点参数后点「渲染更新」，右侧即时生成矢量图与全套桌面软件工程原文件</div>
-            </div>
+            <b id="rsStudioCanvasTitle" style="font-size:13.5px;">矢量画布预览</b>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              <button type="button" class="small-btn" id="rsStudioInsertDocBtn" title="将当前图表归档并直接插入到正在撰写的论文文档或汇报幻灯片中（自动附带代码与数据溯源）">${icon('write', { size: 13 })} 插入到文稿写作…</button>
-              <button type="button" class="small-btn primary" id="rsStudioArchiveBtn" title="将当前图表与可复现源码存入图表成果库，供论文写作与多面板拼图直接调用">${icon('pin', { size: 13 })} ${isGlobal ? '归档至图表成果库' : '归档至本研究 figures/'}</button>
+              <button type="button" class="small-btn" id="rsStudioInsertDocBtn" title="将当前图表直接插入到论文文档或汇报幻灯片中">${icon('write', { size: 13 })} 插入到文稿…</button>
+              <button type="button" class="small-btn primary" id="rsStudioArchiveBtn" title="保存当前矢量图与可复现脚本">${icon('pin', { size: 13 })} ${isGlobal ? '保存到图表库' : '归档至本研究'}</button>
             </div>
           </div>
           <div class="rs-studio-exports" id="rsStudioExportBar">
-            <span class="muted small">正在准备原工程文件导出器…</span>
+            <span class="muted small">正在准备导出器…</span>
           </div>
           <div class="rs-studio-canvas" id="rsStudioCanvas">
             <div class="muted small">正在渲染高清矢量图…</div>
           </div>
           <details class="subagent-output-details" id="rsStudioCodeDetails">
-            <summary class="subagent-output-summary-btn">${icon('file', { size: 13 })} 展开查看 / 复制底层可复现脚本与工程源码 (R / ImageJ Macro / XML)</summary>
+            <summary class="subagent-output-summary-btn">${icon('file', { size: 13 })} 查看可复现脚本源码 (R / ImageJ Macro / XML)</summary>
             <div style="display:flex;justify-content:flex-end;margin:6px 0;">
-              <button type="button" class="small-btn" id="rsStudioCopyCodeBtn">${icon('copy', { size: 13 })} 复制完整脚本源码</button>
+              <button type="button" class="small-btn" id="rsStudioCopyCodeBtn">${icon('copy', { size: 13 })} 复制源码</button>
             </div>
-            <pre class="ds-code" id="rsStudioCodePre" style="max-height:260px;"></pre>
+            <pre class="ds-code" id="rsStudioCodePre" style="max-height:240px;"></pre>
           </details>
         </div>
       </div>
@@ -2271,12 +2268,6 @@ ${modelsDesc}
     const canvasEl = document.getElementById('rsStudioCanvas')!
     const exportBar = document.getElementById('rsStudioExportBar')!
     const codePre = document.getElementById('rsStudioCodePre')!
-    const targetStudySel = document.getElementById('stGlobalStudyTarget') as HTMLSelectElement | null
-    if (targetStudySel) {
-      targetStudySel.onchange = () => {
-        selectedArchiveStudyId = targetStudySel.value
-      }
-    }
 
     document.getElementById('rsStudioArchiveBtn')!.onclick = () => {
       const targetSid = s?.id || selectedArchiveStudyId || undefined
@@ -3034,31 +3025,40 @@ ${modelsDesc}
       }
     })
 
-    pane.querySelectorAll<HTMLButtonElement>('[data-st-preset]').forEach(btn => {
-      btn.onclick = () => {
-        const p = btn.dataset.stPreset
-        if (p === 'grant_gpcr') {
-          activateModeBtn('mechanism')
-          mechState = structuredClone(MECH_PRESETS.gpcr!)
-        } else if (p === 'grant_pd1') {
-          activateModeBtn('mechanism')
-          mechState = structuredClone(MECH_PRESETS.pd1!)
-        } else if (p === 'wet_bar') {
-          activateModeBtn('wet_lab')
-          wetPlotType = 'bar_scatter'
-        } else if (p === 'wet_ic50') {
-          activateModeBtn('wet_lab')
-          wetPlotType = 'dose_response'
-        } else if (p === 'bio_volcano') {
-          activateModeBtn('bioinformatics')
-          bioType = 'volcano'
-        } else if (p === 'img_flow') {
-          activateModeBtn('image_processing')
-          imgTool = 'flowjo'
-        }
-        renderLeftEditor()
-        void runStudioRender()
+    const applyPreset = (p: string) => {
+      if (!p) return
+      if (p === 'grant_gpcr') {
+        activateModeBtn('mechanism')
+        mechState = structuredClone(MECH_PRESETS.gpcr!)
+      } else if (p === 'grant_pd1') {
+        activateModeBtn('mechanism')
+        mechState = structuredClone(MECH_PRESETS.pd1!)
+      } else if (p === 'wet_bar') {
+        activateModeBtn('wet_lab')
+        wetPlotType = 'bar_scatter'
+      } else if (p === 'wet_ic50') {
+        activateModeBtn('wet_lab')
+        wetPlotType = 'dose_response'
+      } else if (p === 'bio_volcano') {
+        activateModeBtn('bioinformatics')
+        bioType = 'volcano'
+      } else if (p === 'img_flow') {
+        activateModeBtn('image_processing')
+        imgTool = 'flowjo'
       }
+      renderLeftEditor()
+      void runStudioRender()
+    }
+
+    const quickPresetSel = pane.querySelector<HTMLSelectElement>('#stQuickPreset')
+    if (quickPresetSel) {
+      quickPresetSel.onchange = () => {
+        applyPreset(quickPresetSel.value)
+      }
+    }
+
+    pane.querySelectorAll<HTMLButtonElement>('[data-st-preset]').forEach(btn => {
+      btn.onclick = () => applyPreset(btn.dataset.stPreset || '')
     })
 
     pane.querySelectorAll<HTMLButtonElement>('[data-st-nav]').forEach(btn => {
@@ -3067,13 +3067,9 @@ ${modelsDesc}
         if (dest === 'write') {
           hooks.goSpace('write')
         } else if (dest === 'study') {
-          if (list[0]) void openStudy(list[0].id)
-          else {
-            showWelcome()
-            createDialog()
-          }
+          hooks.goSpace('research')
         } else if (dest === 'global-studio') {
-          void openGlobalStudio(activeDatasetId || undefined)
+          hooks.goSpace('studio')
         }
       }
     })
@@ -3082,33 +3078,33 @@ ${modelsDesc}
     void runStudioRender()
   }
 
-  /** 打开全局独立的医学制图工作台（无需先创建或进入某个实验/研究课题） */
-  async function openGlobalStudio(initialDatasetId?: string): Promise<void> {
+  /** 打开全局独立的科研制图工作台（与临床研究课题完全解耦） */
+  async function openGlobalStudio(
+    initialDatasetId?: string,
+    initialMode?: 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
+  ): Promise<void> {
     hooks.leaveDoc()
     current = null
     if (poll) { clearTimeout(poll); poll = null }
     const page = $('page')
-    page.className = 'page study-page studio-page'
-    $('docTitle').textContent = '医学制图工作台'
-    renderList()
+    page.className = 'page studio-page'
+    $('docTitle').textContent = '科研制图'
 
     let globalDatasets: Array<{ dataset_id: string; name: string }> = []
-    let globalFigures: Array<{ id: string; name: string; created_at: string }> = []
     try {
-      const [dsRes, figRes] = await Promise.all([
+      const [dsRes] = await Promise.all([
         api<Array<{ id: string; name: string; status: string }>>('/api/datasets').catch(() => []),
-        api<{ figures?: Array<{ id: string; name: string; created_at: string }> }>('/api/figures').catch(() => ({ figures: [] })),
-        loadList(),
+        loadStudioList(),
       ])
       globalDatasets = dsRes.filter(d => d.status === 'ready').map(d => ({ dataset_id: d.id, name: d.name }))
-      globalFigures = figRes.figures ?? []
     } catch {}
 
     mountStudioTab(null, null, {
       container: page,
       globalDatasets,
       initialDatasetId,
-      globalFigures,
+      initialMode,
+      globalFigures: studioFigures,
     })
   }
 
@@ -3200,7 +3196,7 @@ ${modelsDesc}
 
     document.getElementById('rsDocToFullStudioBtn')!.onclick = () => {
       close()
-      void openGlobalStudio()
+      hooks.goSpace('studio')
     }
 
     const tabDrawBtn = document.getElementById('rsDocTabDrawBtn')!
@@ -4289,7 +4285,6 @@ ${modelsDesc}
       <p class="welcome-sub">一个研究项目集中管理方案、队列、统计与稿件；在隔离受限沙箱中秒级运行 Table 1 与生存曲线，数据与代码可追溯，自主演进科研记忆。</p>
       <div class="welcome-cards">
         <button class="welcome-card primary" data-rw="new"><b>＋ 新建研究项目</b><span>研究设计、纳入排除标准、主要终点与方案起草</span></button>
-        <button class="welcome-card" data-rw="studio"><b>医学制图工作台</b><span>全局独立绘制 6 大类医学论文图表并导出 Prism/R/Draw.io/PPT 原工程文件</span></button>
         <button class="welcome-card" data-rw="dataset"><b>导入数据集</b><span>支持 CSV、Excel、SAS、SPSS、Stata 质控导入</span></button>
         ${list[0]
           ? `<button class="welcome-card" data-rw="open"><b>打开最近研究</b><span>打开「${esc(list[0].title)}」</span></button>`
@@ -4382,7 +4377,7 @@ ${modelsDesc}
       if (!b) return
       if (b.dataset.guideAction === 'open') { openHelpGuide('overview'); return }
       if (b.dataset.rw === 'new') { createDialog(); return }
-      if (b.dataset.rw === 'studio') { void openGlobalStudio(); return }
+      if (b.dataset.rw === 'studio') { hooks.goSpace('studio'); return }
       if (b.dataset.rw === 'write') { hooks.goSpace('write'); return }
       if (b.dataset.rw === 'handover') { void handoverDialog(); return }
       if (b.dataset.rw === 'open') { if (list[0]) void openStudy(list[0].id); return }
@@ -4567,18 +4562,37 @@ ${modelsDesc}
     const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-study]')
     if (li) void openStudy(li.dataset.study!)
   }
+  const studioListEl = document.getElementById('studioList')
+  if (studioListEl) {
+    studioListEl.onclick = e => {
+      const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-studio-fig]')
+      if (li?.dataset.studioFig) void hooks.datasets.showProvenance(li.dataset.studioFig)
+    }
+  }
+  const newStudioFigBtn = document.getElementById('newStudioFigBtn')
+  if (newStudioFigBtn) newStudioFigBtn.onclick = () => void openGlobalStudio(undefined, 'wet_lab')
+  const studioQuickStatsBtn = document.getElementById('studioQuickStatsBtn')
+  if (studioQuickStatsBtn) studioQuickStatsBtn.onclick = () => void openGlobalStudio(undefined, 'wet_lab')
+  const studioQuickMechBtn = document.getElementById('studioQuickMechBtn')
+  if (studioQuickMechBtn) studioQuickMechBtn.onclick = () => void openGlobalStudio(undefined, 'mechanism')
+
   $('newStudy').onclick = () => createDialog()
-  $('docSearch').addEventListener('input', () => { if (!$('studyList').hidden) renderList() })
+  $('docSearch').addEventListener('input', () => {
+    if (!$('studyList').hidden) renderList()
+    if (studioListEl && !studioListEl.hidden) renderStudioList()
+  })
 
   return {
     async enter(): Promise<void> {
       const wasOpening = Boolean(opening)
       await loadList()
-      // 正在从别处打开某个研究或全局制图工作台（open / openStudio 先切空间再加载）：列表先回来时不能显示欢迎页，
-      // 否则 showWelcome 清掉 current 或覆盖已挂载的全局制图工作台
       if (opening || wasOpening) return
       if (current && $('page').classList.contains('study-page') && !$('page').classList.contains('rs-welcome')) return
       showWelcome()
+    },
+    /** 进入独立科研制图空间（与临床研究完全分离） */
+    async enterStudio(): Promise<void> {
+      await openGlobalStudio()
     },
     leave(): void { current = null; if (poll) { clearTimeout(poll); poll = null } },
     /** 从研究里的文档、数据集详情或患者页打开某个研究 */
@@ -4591,15 +4605,10 @@ ${modelsDesc}
         if (opening === token) opening = null
       }
     },
-    /** 打开全局独立的医学制图工作台（无需先创建或进入某个实验/研究课题） */
+    /** 打开全局独立的科研制图工作台（直接切换到制图空间） */
     async openStudio(datasetId?: string): Promise<void> {
-      const token = opening = {}
-      try {
-        hooks.goSpace('research')
-        await openGlobalStudio(datasetId)
-      } finally {
-        if (opening === token) opening = null
-      }
+      hooks.goSpace('studio')
+      await openGlobalStudio(datasetId)
     },
     /** 打开写作内嵌科研制图与图表库插入弹窗 */
     openDocFigureModal,

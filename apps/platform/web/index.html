@@ -21,11 +21,11 @@
         <button class="rail-btn on" id="navPatients" data-space="patients" role="tab" aria-selected="true" title="患者：上传化验单、看趋势、写病例报告（只用代号）"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="6.5" r="3.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3.75 17.25c.7-3.4 3.2-5.25 6.25-5.25s5.55 1.85 6.25 5.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>患者</span></button>
         <button class="rail-btn" id="navResearch" data-space="research" role="tab" aria-selected="false" title="临床研究：方案、数据集、分析、稿件"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.75 2.75h4.5 M8.5 2.75v5L4 15.5c-.6 1.05.15 1.75 1.1 1.75h9.8c.95 0 1.7-.7 1.1-1.75L11.5 7.75v-5 M6 12.5h8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg><span>研究</span></button>
         <button class="rail-btn" id="navDocs" data-space="write" role="tab" aria-selected="false" title="写作：文档与幻灯片"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2.75h6.75L15.25 6.25v11H5z M11.75 2.75v3.5h3.5 M7.5 10h5 M7.5 13h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg><span>写作</span></button>
+        <button class="rail-btn" id="navStudio" data-space="studio" role="tab" aria-selected="false" title="科研制图：独立绘制统计图、生信图、机制图并导出原工程文件"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 3.5v13h15 M6.5 13V8.5 M10.5 13V5 M14.5 13V9.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg><span>制图</span></button>
         <button class="rail-btn" id="navCalendar" data-space="calendar" role="tab" aria-selected="false" title="日历：随访门诊排期、科研项目进度与学术会议"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M15 2v4M5 2v4M3 8h14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="11.5" r="0.75" fill="currentColor"/><circle cx="10" cy="11.5" r="0.75" fill="currentColor"/><circle cx="13" cy="11.5" r="0.75" fill="currentColor"/><circle cx="7" cy="14" r="0.75" fill="currentColor"/><circle cx="10" cy="14" r="0.75" fill="currentColor"/></svg><span>日历</span></button>
         <button class="rail-btn" id="navMail" data-space="mail" role="tab" aria-selected="false" title="邮箱：随访提醒通知、科研项目进展与协作沟通"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 6l7.5 5.5 7.5-5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span>邮箱</span></button>
       </div>
       <div class="rail-sep"></div>
-      <button class="rail-btn" id="studioBtn" title="医学制图工作台：全局独立绘制 6 大类医学论文图表并导出原工程文件"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 3.5v13h15 M6.5 13V8.5 M10.5 13V5 M14.5 13V9.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg><span>制图</span></button>
       <button class="rail-btn" id="libraryBtn" title="参考资料库：上传论文、指南，AI 写作时检索"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.75 3.25h3.5v13.5h-3.5z M8.25 3.25h3.5v13.5h-3.5z M12.9 4.1l3.3-.9 3.3 12.6-3.3.9z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg><span>资料库</span></button>
       <button class="rail-btn" id="helpBtn" title="产品帮助：使用指南、全流程手册与常见问题"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7.75 7.75a2.25 2.25 0 0 1 3.82-1.59c.7.7.6 1.44.18 2.09-.45.69-1.25 1.25-1.25 2.25v.5 M10 14.5v.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>帮助</span></button>
       <button class="rail-btn" id="trashBtn" title="回收站：删除的文档保留 30 天"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.75 5.25h12.5 M8 5.25V3.5h4v1.75 M5.25 5.25l.75 11.5h8l.75-11.5 M8.25 8.5v5.5 M11.75 8.5v5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg><span>回收站</span></button>
@@ -66,9 +66,13 @@
       </div>
       <div class="actions" id="rsActions" hidden>
         <button id="newStudy" class="sky block" title="新建一个研究项目：方案、数据集、分析、稿件放在一起">＋ 新建研究</button>
+        <button id="datasetsBtn" class="ghost-dark block" title="全部数据集：上传研究数据表（CSV、Excel、SAS、SPSS、Stata）">数据集</button>
+      </div>
+      <div class="actions" id="studioActions" hidden>
+        <button id="newStudioFigBtn" class="sky block" title="新建空白图表">＋ 新建图表</button>
         <div class="split">
-          <button id="datasetsBtn" class="ghost-dark" title="全部数据集：上传研究数据表（CSV、Excel、SAS、SPSS、Stata）">数据集</button>
-          <button id="rsStudioGlobalBtn" class="ghost-dark" title="打开全局医学制图工作台（无需先建课题）">医学制图</button>
+          <button id="studioQuickStatsBtn" class="ghost-dark" title="切换至统计图">统计图</button>
+          <button id="studioQuickMechBtn" class="ghost-dark" title="切换至机制通路图">机制图</button>
         </div>
       </div>
       <div class="actions" id="calActions" hidden>
@@ -101,6 +105,7 @@
       <ul class="doclist" id="patientList"></ul>
       <ul class="doclist" id="studyList" hidden></ul>
       <ul class="doclist" id="docList" hidden></ul>
+      <ul class="doclist" id="studioList" hidden></ul>
       <ul class="doclist" id="calList" hidden></ul>
       <ul class="doclist" id="mailList" hidden></ul>
     </div>

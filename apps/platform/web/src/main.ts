@@ -409,24 +409,15 @@ initCopilot({
   activeDoc: () => session ? { id: session.docId, title: detail?.title || '未命名文档' } : null,
 })
 
-if ($('studioBtn')) {
-  $('studioBtn').onclick = () => void researchUi.openStudio()
-}
-if ($('rsStudioGlobalBtn')) {
-  $('rsStudioGlobalBtn').onclick = () => void researchUi.openStudio()
-}
-
-// 资料库页或全局制图工作台打开时，图标栏高亮对应按钮而不是当前空间
+// 资料库页打开时，图标栏高亮「资料库」按钮而不是当前空间
 new MutationObserver(() => {
   const lib = $('page').classList.contains('library-page')
-  const studio = $('page').classList.contains('studio-page')
   $('libraryBtn').classList.toggle('on', lib)
-  if ($('studioBtn')) $('studioBtn').classList.toggle('on', studio)
-  document.querySelector('.rail')!.classList.toggle('on-page', lib || studio)
+  document.querySelector('.rail')!.classList.toggle('on-page', lib)
   if (!lib) library.leave()
   if (!$('page').classList.contains('datasets-page')) datasets.leave()
 }).observe($('page'), { attributes: true, attributeFilter: ['class'] })
-// 左侧图标栏：患者 / 临床研究 / 写作 / 日历 / 邮箱
+// 左侧图标栏：患者 / 临床研究 / 写作 / 科研制图 / 日历 / 邮箱
 const spaces = initSpaces({
   patients: {
     title: '患者', label: '患者', actions: 'ptActions', list: 'patientList', placeholder: '按代号、本机备注、标签筛选',
@@ -456,12 +447,23 @@ const spaces = initSpaces({
       calendarUi.leave()
       mailUi.leave()
       const page = $('page')
-      // 如果当前正开着文档（非患者页、非研究页、非日历页、非邮箱页），保留当前文档
-      if (session && !page.classList.contains('patient-page') && !page.classList.contains('study-page') && !page.classList.contains('calendar-page') && !page.classList.contains('mail-page') && !page.classList.contains('welcome-page')) {
+      // 如果当前正开着文档（非患者页、非研究页、非制图页、非日历页、非邮箱页），保留当前文档
+      if (session && !page.classList.contains('patient-page') && !page.classList.contains('study-page') && !page.classList.contains('studio-page') && !page.classList.contains('calendar-page') && !page.classList.contains('mail-page') && !page.classList.contains('welcome-page')) {
         return
       }
       leaveDoc()
       showWelcome()
+    }
+  },
+  studio: {
+    title: '科研制图', label: '图表库', actions: 'studioActions', list: 'studioList', placeholder: '按图表名称筛选',
+    enter: () => {
+      patientsUi.leave()
+      researchUi.leave()
+      calendarUi.leave()
+      mailUi.leave()
+      leaveDoc()
+      return researchUi.enterStudio()
     }
   },
   calendar: {
