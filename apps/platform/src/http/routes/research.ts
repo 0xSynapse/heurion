@@ -295,12 +295,72 @@ export function registerResearchRoutes(
           illustrator_svg: res.illustrator_svg,
           drawio_xml: res.drawio_xml,
           pptx_base64: Buffer.from(res.pptx_bytes).toString('base64'),
+          native_exports: {
+            illustrator_svg: res.illustrator_svg,
+            drawio_xml: res.drawio_xml,
+            pptx_editable_available: true,
+          },
         })
       }
 
-      if (category === 'wet_lab') {
+      if (category === 'flowchart') {
+        const diagramData: ConsortDiagramData = {
+          title: body.title || `${sid} · CONSORT 2010 Participant Flow`,
+          total_assessed: Number(body.total_assessed ?? 240),
+          exclusions: Array.isArray(body.exclusions)
+            ? body.exclusions
+            : [
+                { reason: '不符合纳入标准 (Did not meet inclusion criteria)', count: 38 },
+                { reason: '拒绝签署知情同意 (Declined to participate)', count: 14 },
+              ],
+          eligible_total: Number(body.eligible_total ?? 188),
+          arms: Array.isArray(body.arms)
+            ? body.arms
+            : [
+                { name: '干预组 (Intervention Arm)', allocated: 94, received: 92, lost_to_followup: 3, discontinued: 2, analyzed: 89 },
+                { name: '标准对照组 (Control Arm)', allocated: 94, received: 93, lost_to_followup: 4, discontinued: 1, analyzed: 89 },
+              ],
+        }
+        const svg = renderConsortSvg(diagramData)
+        const drawio_xml = exportFlowchartToDrawio(diagramData)
+        const visio_vdx = exportFlowchartToVisioVdx(diagramData)
+        if (exportFormat === 'drawio') {
+          return c.body(drawio_xml, 200, {
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Flowchart_${sid}.drawio"`,
+          })
+        }
+        if (exportFormat === 'vdx') {
+          return c.body(visio_vdx, 200, {
+            'Content-Type': 'application/vnd.visio; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Flowchart_${sid}.vdx"`,
+          })
+        }
+        if (exportFormat === 'pptx') {
+          const pptx = exportFlowchartToPptx(diagramData)
+          return c.body(new Uint8Array(pptx), 200, {
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'Content-Disposition': `attachment; filename="Flowchart_${sid}.pptx"`,
+          })
+        }
+        return c.json({
+          category: 'flowchart',
+          svg,
+          illustrator_svg: svg,
+          drawio_xml,
+          visio_vdx,
+          native_exports: {
+            illustrator_svg: svg,
+            drawio_xml,
+            visio_vdx,
+            pptx_editable_available: true,
+          },
+        })
+      }
+
+      if (category === 'wet_lab' || category === 'statistical_wetlab') {
         const res = generateWetLabPlot({
-          plotType: body.plotType || 'bar_scatter',
+          plotType: body.plotType || body.plot_type || body.subtype || 'bar_scatter',
           title: body.title || 'Experimental Statistical Comparison',
           yLabel: body.yLabel || 'Relative Expression',
           xLabel: body.xLabel,
@@ -324,6 +384,12 @@ export function registerResearchRoutes(
           return c.body(res.origin_csv, 200, {
             'Content-Type': 'text/csv; charset=utf-8',
             'Content-Disposition': `attachment; filename="OriginPro_Worksheet_${sid}.csv"`,
+          })
+        }
+        if (exportFormat === 'origin_ogs') {
+          return c.body(res.origin_ogs, 200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Disposition': `attachment; filename="OriginPro_Script_${sid}.ogs"`,
           })
         }
         return c.json({ category: 'wet_lab', ...res })

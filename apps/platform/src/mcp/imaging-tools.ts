@@ -2,8 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { TokenClaims } from '../auth/token.ts'
 import type { Store } from '../store/db.ts'
-import { PatientError, type PatientService } from '../tenancy/patients.ts'
-import { ImagingStudyService } from '../imaging/studies.ts'
+import type { PatientService } from '../tenancy/patients.ts'
 import type { StudyService } from '../research/service.ts'
 import type { DatasetService } from '../datasets/service.ts'
 import type { CohortService } from '../research/cohort.ts'
@@ -1226,7 +1225,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     },
   }, async ({ category, title, spec, save_asset }) => {
     try {
-      const payload = { ...spec, title: title || spec.title || 'Medical Publication Figure' }
+      const payload: Record<string, any> = { ...(spec as Record<string, any>), title: title || (spec as any).title || 'Medical Publication Figure' }
       let svgOut: string | undefined
       let nativeSummary: Record<string, unknown> = {}
 
@@ -1366,19 +1365,6 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     }
   })
 
-  // 影像检查列表（与界面 GET /api/patients/:ptid/imaging/studies 对应；不含 DICOM UID 与检查号）
-  server.registerTool('imaging_studies', {
-    description: '列出患者已入库的影像检查（DICOM 上传或 PACS 转发）：检查日期、模态、序列（层厚、重建核、层数）与病灶确认情况。不返回 DICOM UID、检查号等标识，也不返回影像本身。',
-    inputSchema: { patient_id: z.string().describe('患者 ID') },
-  }, async ({ patient_id }) => {
-    if (!deps.patients) return fail('patients_unavailable', '患者模块未启用')
-    try {
-      return json(new ImagingStudyService(deps.patients, null).listStudies({ userId: claims.u, via: 'ai', space: 'work' }, patient_id))
-    } catch (err) {
-      if (err instanceof PatientError) return fail(err.code, err.message)
-      throw err
-    }
-  })
 }
 
 function round(n: number, d = 1): number {

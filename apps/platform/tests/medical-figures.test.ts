@@ -171,24 +171,23 @@ describe('医学论文全栈图表工作室与原文件导出引擎 (Medical Fig
       ],
       { time_col: 't', event_col: 'e', group_col: 'arm', covariates: ['arm'] },
     )
-    expect(surv.native_exports.prism_pzfx).toContain('TableType="Survival"')
-    expect(surv.native_exports.r_script).toContain('library(survminer)')
-    expect(surv.native_exports.illustrator_svg).toContain('inkscape:groupmode="layer"')
+    expect(surv.native_exports?.prism_pzfx).toContain('TableType="Survival"')
+    expect(surv.native_exports?.r_script).toContain('library(survminer)')
+    expect(surv.native_exports?.illustrator_svg).toContain('inkscape:groupmode="layer"')
 
     const nomo = buildNomogram({
       title: '1-Year Heart Failure Readmission Nomogram',
-      intercept: -1.8,
       predictors: [
-        { name: 'age', label_zh: 'Age (years)', min: 40, max: 85, beta: 0.04 },
-        { name: 'nt_pro_bnp', label_zh: 'NT-proBNP (pg/mL)', min: 100, max: 5000, beta: 0.0005 },
+        { variable: 'age', label: 'Age (years)', min_val: 40, max_val: 85, beta: 0.04 },
+        { variable: 'nt_pro_bnp', label: 'NT-proBNP (pg/mL)', min_val: 100, max_val: 5000, beta: 0.0005 },
       ],
     })
     expect(nomo.native_exports?.r_script).toContain('library(rms)')
     expect(nomo.native_exports?.illustrator_svg).toContain('inkscape:groupmode="layer"')
 
     const rocNative = exportRocDcaNativeSources(
-      [{ name: 'Multimodal', auc: 0.86, ci_lower: 0.80, ci_upper: 0.92, color: '#be123c', points: [{ fpr: 0, tpr: 0, threshold: 1 }, { fpr: 0.2, tpr: 0.85, threshold: 0.5 }, { fpr: 1, tpr: 1, threshold: 0 }] }],
-      [{ name: 'Multimodal', color: '#be123c', points: [{ threshold: 0.1, net_benefit: 0.25 }, { threshold: 0.3, net_benefit: 0.15 }] }],
+      [{ model_name: 'Multimodal', auc: 0.86, auc_ci: [0.80, 0.92], optimal_cutoff: 0.5, sensitivity: 0.85, specificity: 0.80, youden_index: 0.65, color: '#be123c', points: [{ fpr: 0, tpr: 0, threshold: 1 }, { fpr: 0.2, tpr: 0.85, threshold: 0.5 }, { fpr: 1, tpr: 1, threshold: 0 }] }],
+      [{ model_name: 'Multimodal', color: '#be123c', points: [{ threshold: 0.1, net_benefit: 0.25 }, { threshold: 0.3, net_benefit: 0.15 }] } as any],
       'ROC & DCA',
     )
     expect(rocNative.prism_pzfx).toContain('<GraphPadPrismFile')

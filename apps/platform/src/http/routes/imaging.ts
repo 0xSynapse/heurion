@@ -928,12 +928,13 @@ export function registerImagingRoutes(
         const rec = recordId
           ? detail.records.find((r: any) => r.id === recordId)
           : detail.records.find((r: any) => r.kind === 'imaging')
-        const metrics = (rec?.imaging_data?.metrics ?? {}) as Record<string, any>
+        const imgData = (rec?.imaging_data ?? {}) as Record<string, any>
+        const metrics = (imgData.metrics ?? {}) as Record<string, any>
         const volCm3 = Number(metrics.total_volume_cm3 ?? metrics.total_mucus_volume_cm3 ?? 0)
         const slicerPkg = generateSlicerAndItkSnapPackage({
           patientId,
-          studyModality: (rec?.imaging_data?.modality as any) || 'CT',
-          volumeFileName: rec?.imaging_data?.raw_file_name || `${patientId}_scan.nii.gz`,
+          studyModality: (imgData.modality as any) || 'CT',
+          volumeFileName: String(imgData.raw_file_name || `${patientId}_scan.nii.gz`),
           labels: [
             {
               id: 1,

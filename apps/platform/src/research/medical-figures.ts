@@ -294,6 +294,8 @@ export type BiomedicalIconType =
   | 'kidney'
   | 'brain'
   | 'syringe'
+  | 'drug_molecule'
+  | 'protein'
 
 export interface MechanismNode {
   id: string

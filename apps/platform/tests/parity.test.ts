@@ -164,7 +164,6 @@ const ALL_PARITY: Record<string, string> = {
   'GET /api/patients/:ptid/imaging/export': 'imaging_export_standard',
   'POST /api/patients/:ptid/imaging/full-report': 'imaging_generate_full_report',
   'GET /api/patients/:ptid/imaging/full-report': 'imaging_generate_full_report',
-  'GET /api/patients/:ptid/imaging/studies': 'imaging_studies',
 }
 
 /** AI 发起后要用户在确认卡上确认才执行的动作（不可恢复的删除、权限与安全、以机构身份对外的标识）。 */
@@ -184,11 +183,6 @@ const NOT_FOR_AI: Record<string, string> = {
   'GET /api/imaging/samples': '界面用来获取可供医生体验的临床预置样本列表（如 chest_lung_ct 269层）；AI 可直接通过 imaging_analyze 的 sample_id 指定',
   'GET /api/imaging/samples/:id/file': '预置 3D 样本体素文件二进制下载流，由界面下载；AI 读量化指标与关键截面',
   'GET /api/patients/:ptid/imaging/jobs': '界面用来实时轮询患者后台 3D 影像推理阶段与进度条状态；AI 调用 imaging_analyze 时直接获取完整分析结果',
-  // 影像检查（docs/design/IMAGING_STUDIES.md）：DICOM 原件与体素数据不经 AI，AI 读检查列表与结构化结果（imaging_studies）
-  'POST /api/patients/:ptid/imaging/dicom': '上传 DICOM 原件是医生在界面上的操作（原件含可识别信息与体素数据，不经 AI）',
-  'GET /api/dicomweb/studies': 'OHIF 阅片器按 StudyInstanceUID 查询检查（DICOMweb QIDO），体素与原件不经 AI',
-  'GET /api/dicomweb/studies/:uid': 'OHIF 阅片器读取检查影像（DICOMweb WADO），体素与原件不经 AI',
-  'GET /api/dicomweb/studies/:uid/*': 'OHIF 阅片器读取序列、元数据与帧（DICOMweb WADO），体素与原件不经 AI',
   // 知家分享原件图片由界面展示
   'GET /api/shares/:shid/assets/:aid': '图片二进制资产由界面渲染展示；AI 读打码后的文字内容（share_file / share_read）',
   // 机构患者认领码绑定的人机分界
