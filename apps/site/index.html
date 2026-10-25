@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title data-i18n="doc_title">Heurion Research · Contract-Guarded Clinical AI Workstation &amp; Aegis OS Agent Runtime</title>
+  <title data-i18n="doc_title">Heurion Research · 临床科研 AI 工作台与 Aegis OS 智能体内核</title>
   <meta name="description" content="Heurion Research is an independent systems and clinical AI research lab building Heurion 2.0 & OmniCanvas (Contract-Guarded Clinical Research AI Workstation) and Aegis OS (Transactional Multi-Tenant Agent Operating System Runtime)." />
   <meta name="keywords" content="Heurion Research, Heurion 2.0, OmniCanvas, Aegis OS, aegis-os, Clinical AI Workstation, Agent Operating System, Copy-on-Write Workspace, Ed25519 Lease, AAP-1.0, CONSORT 2010, STROBE, VanderWeele E-value, Table 1, MONAI" />
   <meta name="author" content="Heurion Research" />
@@ -19,7 +19,7 @@
   <meta property="og:site_name" content="Heurion Research" />
   <meta property="og:url" content="https://heurion.org/" />
   <meta property="og:title" content="Heurion Research · Clinical AI Workstation &amp; Aegis OS Agent Runtime" />
-  <meta property="og:description" content="Verifiable intelligence and transactional systems for clinical research and autonomous agents: Heurion 2.0 & OmniCanvas and Aegis OS." />
+  <meta property="og:description" content="Verifiable systems for clinical medicine and autonomous agents: Heurion 2.0 & OmniCanvas and Aegis OS." />
   <meta property="og:locale" content="zh_CN" />
   <meta property="og:locale:alternate" content="en_US" />
 
@@ -124,130 +124,129 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,400&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-20261025" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v8" />
   <style>
     :root {
-      --bg-primary: #FAF8F5;
-      --bg-neutral: #F1EDE6;
-      --bg-elevated: #FDFCFA;
-      --bg-dark: #1B2521;
-      --ink: #1A211E;
-      --ink-secondary: #4E5853;
-      --ink-muted: #78827C;
-      --accent: #2D4A3E;
-      --accent-soft: #E4EDE8;
-      --ink-light: #F5F2EB;
-      --ink-light-secondary: rgba(245, 242, 235, 0.74);
-      --ink-light-muted: #93ACA0;
-      --border: #E2DDD4;
-      --border-strong: #1A211E;
-      --border-dark: rgba(245, 242, 235, 0.14);
-      --serif: 'Newsreader', 'Songti SC', 'STSong', 'Noto Serif SC', Georgia, serif;
-      --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+      --bg-primary: #FAF8F4;
+      --bg-neutral: #EFECE4;
+      --bg-elevated: #FDFCF9;
+      --ink: #151C19;
+      --ink-secondary: #525B56;
+      --ink-muted: #848D88;
+      --accent: #233E33;
+      --heurion-mint: #00C472;
+      --accent-warm: #8F5638;
+      --accent-soft: #E3ECE7;
+      --ink-light: #F4F1EA;
+      --border: #DFDAD0;
+      --border-strong: #151C19;
+      --serif: 'Newsreader', 'Noto Serif SC', 'Songti SC', 'STSong', Georgia, serif;
+      --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
       --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
     }
     *, *::before, *::after { box-sizing: border-box; }
     html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-    body { margin: 0 !important; background: var(--bg-primary) !important; color: var(--ink) !important; font-family: var(--sans); font-size: 0.9375rem; line-height: 1.68; font-weight: 400; }
+    body { margin: 0 !important; background-color: var(--bg-primary) !important; color: var(--ink) !important; font-family: var(--sans); font-size: 0.9375rem; line-height: 1.65; font-weight: 400; }
     ::selection { background: var(--accent-soft); color: var(--accent); }
     a { color: inherit; text-decoration: none; transition: color 0.2s ease, opacity 0.2s ease, border-color 0.2s ease, background-color 0.2s ease; }
     a:hover { color: var(--accent); }
-    .container { max-width: 1240px; margin: 0 auto; padding: 0 3.25rem; }
-    .label-caps { font-family: var(--mono); font-size: 0.72rem; font-weight: 400; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-muted); margin: 0; }
-    .label-caps.light { color: var(--ink-light-muted); }
-    .heading-1 { font-family: var(--serif); font-size: clamp(2.15rem, 3.6vw, 3.1rem); font-weight: 400; line-height: 1.16; letter-spacing: -0.02em; margin: 0; color: var(--ink); }
-    .heading-2 { font-family: var(--serif); font-size: clamp(1.5rem, 2.35vw, 2.05rem); font-weight: 400; line-height: 1.24; letter-spacing: -0.015em; margin: 0; color: var(--ink); }
-    .heading-2.light { color: var(--ink-light); }
-    .heading-3 { font-family: var(--serif); font-size: 1.2rem; font-weight: 400; line-height: 1.42; letter-spacing: -0.01em; margin: 0; color: var(--ink); }
-    .text-regular { font-size: 0.9375rem; line-height: 1.72; color: var(--ink); margin: 0; }
-    .text-muted { font-size: 0.9375rem; line-height: 1.72; color: var(--ink-secondary); margin: 0; }
-    .text-light-muted { font-size: 0.9375rem; line-height: 1.72; color: var(--ink-light-secondary); margin: 0; }
-    .sq { display: inline-block; width: 5px; height: 5px; background-color: var(--accent); flex-shrink: 0; margin-top: 0.65rem; }
-    .nav { position: sticky; top: 0; z-index: 50; background: rgba(250, 248, 245, 0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
-    .nav-inner { max-width: 1240px; margin: 0 auto; padding: 1.35rem 3.25rem; display: flex; align-items: center; justify-content: space-between; gap: 2rem; }
-    .brand { display: inline-flex; align-items: center; gap: 0.65rem; font-family: var(--sans); font-size: 0.85rem; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink); }
-    .brand-mark { width: 12px; height: 12px; background: var(--accent); border-radius: 1px; display: inline-block; }
-    .nav-links { display: flex; align-items: center; gap: 2.5rem; }
+    .container { max-width: 1220px; margin: 0 auto; padding: 0 3.5rem; }
+    .label-caps { font-family: var(--mono); font-size: 0.68rem; font-weight: 400; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-muted); margin: 0; }
+    .heading-1 { font-family: var(--serif); font-size: clamp(2.35rem, 3.5vw, 3.25rem); font-weight: 300; line-height: 1.16; letter-spacing: -0.022em; margin: 0; color: var(--ink); }
+    html[lang="zh-CN"] .heading-1 { font-size: clamp(2rem, 2.75vw, 2.6rem); line-height: 1.34; letter-spacing: 0.01em; }
+    .heading-1 em, .heading-2 em { font-style: italic; font-weight: 400; color: var(--accent); }
+    html[lang="zh-CN"] .heading-1 em, html[lang="zh-CN"] .heading-2 em { font-style: normal; border-bottom: 1px solid rgba(35, 62, 51, 0.35); padding-bottom: 0.04em; }
+    .heading-2 { font-family: var(--serif); font-size: clamp(1.5rem, 2.15vw, 2rem); font-weight: 300; line-height: 1.26; letter-spacing: -0.015em; margin: 0; color: var(--ink); }
+    .heading-3 { font-family: var(--serif); font-size: 1.2rem; font-weight: 400; line-height: 1.35; letter-spacing: -0.01em; margin: 0; color: var(--ink); }
+    .text-regular { font-size: 0.92rem; line-height: 1.68; color: var(--ink); margin: 0; }
+    .text-muted { font-size: 0.88rem; line-height: 1.68; color: var(--ink-secondary); margin: 0; }
+    .nav { position: sticky; top: 0; z-index: 50; background: rgba(250, 248, 244, 0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
+    .nav-inner { max-width: 1220px; margin: 0 auto; padding: 1.2rem 3.5rem; display: flex; align-items: center; justify-content: space-between; gap: 2rem; }
+    .brand { display: inline-flex; align-items: center; gap: 0.65rem; color: var(--ink); }
+    .brand-mark { width: 24px; height: 22px; display: block; flex-shrink: 0; }
+    .brand-mark .mark-bar { fill: var(--ink); }
+    .brand-mark .mark-accent { fill: var(--heurion-mint); }
+    .brand-word { font-family: var(--sans); font-size: 0.9rem; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink); }
+    .nav-links { display: flex; align-items: center; gap: 2.35rem; }
     .nav-link { font-size: 0.8125rem; letter-spacing: 0.02em; color: var(--ink-secondary); }
-    .nav-right { display: flex; align-items: center; gap: 1.35rem; }
-    .lang-btn { background: transparent; border: 1px solid var(--border); border-radius: 2px; padding: 0.28rem 0.55rem; font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em; color: var(--ink-secondary); cursor: pointer; }
-    .nav-cta { font-size: 0.8125rem; padding: 0.48rem 1.05rem; background: var(--accent); color: var(--ink-light); border: 1px solid var(--accent); border-radius: 2px; }
+    .nav-right { display: flex; align-items: center; gap: 1.1rem; }
+    .lang-btn { background: transparent; border: 1px solid var(--border); padding: 0.28rem 0.62rem; font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.08em; color: var(--ink-secondary); cursor: pointer; }
+    .nav-cta { font-size: 0.78rem; padding: 0.46rem 1.05rem; background: var(--accent); color: var(--ink-light); border: 1px solid var(--accent); letter-spacing: 0.02em; }
     .nav-cta:hover { background: var(--ink); border-color: var(--ink); color: var(--ink-light); }
-    .sec-hero { padding: 7rem 0 8rem; background: var(--bg-primary); }
-    .hero-grid { display: grid; grid-template-columns: 1.05fr 1.15fr; gap: 5.5rem; align-items: start; }
-    .hero-left { position: sticky; top: 6.5rem; display: flex; flex-direction: column; gap: 1.85rem; max-width: 34rem; }
-    .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 1.65rem; padding-top: 0.6rem; }
-    .btn-solid { display: inline-flex; align-items: center; gap: 0.55rem; padding: 0.8rem 1.45rem; background: var(--accent); color: var(--ink-light); border-radius: 2px; font-size: 0.8125rem; letter-spacing: 0.02em; }
+    .sec-hero { padding: 4.75rem 0 5.5rem; background: var(--bg-primary); }
+    .hero-grid { display: grid; grid-template-columns: 1.06fr 0.94fr; gap: 4.25rem; align-items: stretch; }
+    .hero-left { display: flex; flex-direction: column; justify-content: space-between; gap: 3rem; padding: 0.25rem 0; }
+    .hero-intro { display: flex; flex-direction: column; gap: 1.5rem; max-width: 34rem; }
+    .hero-actions { display: flex; align-items: center; gap: 1.5rem; padding-top: 0.25rem; }
+    .btn-solid { display: inline-flex; align-items: center; gap: 0.55rem; padding: 0.72rem 1.35rem; background: var(--accent); color: var(--ink-light); font-size: 0.8125rem; letter-spacing: 0.02em; }
     .btn-solid:hover { background: var(--ink); color: var(--ink-light); }
-    .link-arrow { font-size: 0.8125rem; color: var(--ink-secondary); border-bottom: 1px solid var(--border); padding-bottom: 0.18rem; }
+    .link-arrow { font-size: 0.8125rem; color: var(--ink-secondary); border-bottom: 1px solid var(--border); padding-bottom: 0.12rem; }
     .link-arrow:hover { color: var(--accent); border-bottom-color: var(--accent); }
-    .hero-right { display: flex; flex-direction: column; gap: 3.75rem; padding-top: 0.25rem; }
-    .editorial-row { display: grid; grid-template-columns: 0.95fr 2.25fr; gap: 1.75rem; padding-top: 2rem; border-top: 1px solid var(--border); align-items: start; }
-    .editorial-prose { display: flex; flex-direction: column; gap: 1.05rem; max-width: 29rem; }
-    .sec-systems { background: var(--bg-neutral); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 7.5rem 0; }
-    .systems-header { max-width: 36rem; display: flex; flex-direction: column; gap: 0.9rem; margin-bottom: 4rem; }
-    .flagships-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 5rem; }
-    .flagship-item { background: var(--bg-elevated); padding: 2.75rem; display: flex; flex-direction: column; justify-content: space-between; gap: 2.25rem; border: 1px solid var(--border); border-radius: 2px; }
-    .flagship-top { display: flex; flex-direction: column; gap: 1rem; }
-    .flagship-meta { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-bottom: 0.85rem; border-bottom: 1px solid var(--border); }
-    .flagship-sub { font-size: 0.84rem; color: var(--accent); font-weight: 500; margin: -0.25rem 0 0.15rem; }
-    .flagship-bottom { display: flex; flex-direction: column; gap: 1.25rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }
-    .flagship-metrics { font-family: var(--mono); font-size: 0.74rem; color: var(--accent); background: var(--accent-soft); padding: 0.5rem 0.75rem; border-radius: 2px; }
-    .flagship-links { display: flex; flex-wrap: wrap; gap: 1.5rem; }
-    .pillars-wrap { padding-top: 3.75rem; border-top: 1px solid var(--border); }
-    .pillars-title { margin-bottom: 2.5rem; }
-    .pillars-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2.5rem 4.5rem; }
-    .pillar-item { display: flex; align-items: flex-start; gap: 1rem; }
-    .pillar-content { display: flex; flex-direction: column; gap: 0.35rem; max-width: 28rem; }
-    .pillar-content strong { font-weight: 500; color: var(--ink); }
-    .sec-vision { background: var(--bg-dark); color: var(--ink-light); padding: 8.5rem 0; }
-    .vision-grid { display: grid; grid-template-columns: 0.5fr 1.25fr 1fr; gap: 3rem; align-items: start; }
-    .vision-prose { max-width: 23rem; margin-left: auto; display: flex; flex-direction: column; gap: 1.25rem; padding-left: 1.75rem; border-left: 1px solid var(--border-dark); }
-    .sec-research { background: var(--bg-primary); padding: 8rem 0; }
-    .research-wrapper { display: grid; grid-template-columns: 0.32fr 1fr; gap: 3.5rem; align-items: stretch; }
-    .research-sidebar { background: var(--bg-elevated); border: 1px solid var(--border); border-top: 2px solid var(--accent); border-radius: 2px; padding: 2.25rem; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; gap: 2rem; }
-    .research-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 1.75rem; }
-    .research-card { background: var(--bg-neutral); border: 1px solid var(--border); border-radius: 2px; padding: 2.25rem; display: flex; flex-direction: column; justify-content: space-between; gap: 1.85rem; }
-    .research-card-top { display: flex; flex-direction: column; gap: 0.85rem; }
-    .research-card-links { display: flex; flex-wrap: wrap; gap: 1.35rem; padding-top: 1.15rem; border-top: 1px solid var(--border); }
-    .foot { background: var(--bg-primary); border-top: 1px solid var(--border); padding: 4.5rem 0 3.5rem; }
-    .foot-top { display: grid; grid-template-columns: 1fr 1.2fr; gap: 3rem; padding-bottom: 3.25rem; }
-    .foot-brand-col { display: flex; flex-direction: column; gap: 0.8rem; max-width: 22rem; }
-    .foot-menus { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; }
-    .foot-col { display: flex; flex-direction: column; gap: 0.6rem; }
-    .foot-col-title { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-muted); margin-bottom: 0.3rem; }
-    .foot-link { font-size: 0.875rem; color: var(--ink-secondary); text-transform: lowercase; }
-    .foot-bottom { padding-top: 2rem; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 1rem; font-size: 0.8125rem; color: var(--ink-muted); }
+    .hero-editorial { display: flex; flex-direction: column; gap: 1.35rem; max-width: 34rem; }
+    .editorial-row { display: grid; grid-template-columns: 6.5rem 1fr; gap: 1.25rem; padding-top: 1.2rem; border-top: 1px solid var(--border); align-items: baseline; }
+    .hero-art { background: var(--bg-neutral); border: 1px solid var(--border); padding: 1.5rem 1.85rem; display: flex; flex-direction: column; justify-content: space-between; min-height: 440px; position: relative; }
+    .art-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.12em; color: var(--ink-muted); text-transform: uppercase; }
+    .art-svg { width: 100%; height: 310px; display: block; margin: auto 0; }
+    .art-caption { display: flex; justify-content: space-between; align-items: center; padding-top: 0.75rem; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.1em; color: var(--ink-muted); text-transform: uppercase; }
+    .sec-systems { background: var(--bg-neutral); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 5.25rem 0; }
+    .section-header { display: flex; align-items: baseline; justify-content: space-between; gap: 2rem; margin-bottom: 2.5rem; }
+    .flagships-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2.25rem; }
+    .flagship-item { background: var(--bg-elevated); padding: 2.5rem; display: flex; flex-direction: column; justify-content: space-between; gap: 2rem; border: 1px solid var(--border); }
+    .flagship-top { display: flex; flex-direction: column; gap: 0.7rem; }
+    .flagship-meta { display: flex; align-items: center; justify-content: space-between; padding-bottom: 0.9rem; border-bottom: 1px solid var(--border); margin-bottom: 0.15rem; }
+    .flagship-num-group { display: flex; align-items: center; gap: 0.85rem; }
+    .flagship-num { font-family: var(--serif); font-size: 1.35rem; color: var(--accent); line-height: 1; }
+    .flagship-emblem { width: 44px; height: 28px; display: block; }
+    .flagship-sub { font-family: var(--serif); font-style: italic; font-size: 0.95rem; color: var(--accent); margin: -0.15rem 0 0.1rem; }
+    html[lang="zh-CN"] .flagship-sub { font-style: normal; font-size: 0.85rem; letter-spacing: 0.04em; }
+    .flagship-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; padding: 1.1rem 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    .stat-cell { display: flex; flex-direction: column; gap: 0.18rem; }
+    .stat-val { font-family: var(--serif); font-size: 1.4rem; font-weight: 300; color: var(--ink); line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .stat-lbl { font-family: var(--mono); font-size: 0.64rem; color: var(--ink-muted); letter-spacing: 0.06em; text-transform: uppercase; }
+    .flagship-links { display: flex; flex-wrap: wrap; gap: 1.5rem; padding-top: 1.15rem; }
+    .sec-research { background: var(--bg-primary); padding: 5rem 0; }
+    .pub-list { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+    .pub-row { display: grid; grid-template-columns: 11rem 1fr auto; gap: 2rem; align-items: baseline; padding: 1.65rem 0; border-bottom: 1px solid var(--border); }
+    .pub-links { display: flex; align-items: center; gap: 1.35rem; }
+    .foot { background: var(--bg-primary); border-top: 1px solid var(--border); padding: 2.25rem 0; }
+    .foot-bar { display: flex; align-items: center; justify-content: space-between; gap: 2rem; }
+    .foot-right { display: flex; flex-wrap: wrap; align-items: center; gap: 1.5rem; font-size: 0.78rem; color: var(--ink-muted); }
+    .foot-link { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em; color: var(--ink-secondary); }
     @media (max-width: 991px) {
       .container, .nav-inner { padding-left: 1.75rem; padding-right: 1.75rem; }
-      .hero-grid, .flagships-grid, .pillars-grid, .research-wrapper, .research-cards, .vision-grid, .foot-top { grid-template-columns: 1fr; }
-      .hero-left { position: static; max-width: 100%; }
-      .vision-prose { margin-left: 0; max-width: 100%; padding-left: 1.25rem; }
-      .sec-hero, .sec-systems, .sec-vision, .sec-research { padding: 4.5rem 0; }
+      .hero-grid, .flagships-grid { grid-template-columns: 1fr; }
+      .pub-row { grid-template-columns: 1fr; gap: 0.5rem; }
+      .section-header, .foot-bar { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+      .sec-hero, .sec-systems, .sec-research { padding: 4rem 0; }
     }
     @media (max-width: 640px) {
       .nav-links { display: none; }
-      .editorial-row { grid-template-columns: 1fr; gap: 0.65rem; }
-      .foot-menus { grid-template-columns: 1fr 1fr; }
-      .foot-bottom { flex-direction: column; align-items: flex-start; }
+      .editorial-row { grid-template-columns: 1fr; gap: 0.35rem; }
+      .hero-art { min-height: auto; gap: 0.85rem; padding: 1.25rem; }
+      .art-svg { height: auto; }
     }
   </style>
 </head>
 <body>
 
-  <!-- Top Navigation -->
+  <!-- Top Navigation with Original Heurion Logo -->
   <header class="nav" role="banner">
     <div class="nav-inner">
-      <a class="brand" href="/">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span>Heurion</span>
+      <a class="brand" href="/" aria-label="Heurion Research">
+        <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+          <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
+          <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
+          <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
+          <circle class="mark-accent" cx="80" cy="20" r="11"/>
+        </svg>
+        <span class="brand-word">HEURION</span>
       </a>
       <nav class="nav-links" aria-label="Primary">
         <a href="#flagships" class="nav-link" data-i18n="nav_systems">核心系统</a>
-        <a href="#architecture" class="nav-link" data-i18n="nav_vision">研究范式</a>
-        <a href="#research" class="nav-link" data-i18n="nav_research">发表与预印本</a>
+        <a href="#research" class="nav-link" data-i18n="nav_research">发表论文</a>
         <a href="/tools" class="nav-link" data-i18n="nav_tools">临床工具</a>
+        <a href="/phr" class="nav-link" data-i18n="nav_phr">知家档案</a>
         <a href="https://github.com/heurion-org" target="_blank" rel="noopener" class="nav-link">GitHub</a>
       </nav>
       <div class="nav-right">
@@ -258,69 +257,180 @@
   </header>
 
   <main>
-    <!-- Section 1: Editorial Hero & Thesis (Mirana Asymmetric Layout) -->
+    <!-- Section 1: Editorial Hero & Nordic Architectural Plate -->
     <section class="sec-hero">
       <div class="container">
         <div class="hero-grid">
           <div class="hero-left">
-            <p class="label-caps" data-i18n="hero_tag">HEURION RESEARCH · CLINICAL AI WORKSTATION &amp; AGENT OS</p>
-            <h1 class="heading-1" data-i18n="hero_title">面向临床科研与自治智能体的可验证智能与事务级系统。</h1>
-            <div class="hero-actions">
-              <a class="btn-solid" href="/login" id="ctaHero">
-                <span data-i18n="hero_cta_primary">进入临床工作台</span>
-                <span aria-hidden="true">→</span>
-              </a>
-              <a class="link-arrow" href="https://github.com/heurion-org" target="_blank" rel="noopener" data-i18n="hero_cta_github">GitHub (heurion-org) →</a>
-              <a class="link-arrow" href="/tools" data-i18n="hero_cta_tools">免登录临床工具 →</a>
+            <!-- CLINICAL AI WORKSTATION -->
+            <div class="hero-intro">
+              <p class="label-caps" data-i18n="hero_tag">HEURION RESEARCH · 临床科研 AI 工作台与智能体系统</p>
+              <h1 class="heading-1" data-i18n-html="hero_title">为临床医学与自治智能体，<br>构建<em>可验证</em>的系统底座。</h1>
+              <div class="hero-actions">
+                <a class="btn-solid" href="/login" id="ctaHero">
+                  <span data-i18n="hero_cta_primary">进入临床工作台</span>
+                  <span aria-hidden="true">→</span>
+                </a>
+              </div>
+            </div>
+
+            <div class="hero-editorial">
+              <div class="editorial-row">
+                <p class="label-caps" data-i18n="who_label">关于我们</p>
+                <p class="text-regular" data-i18n="who_p1">专注临床证据合成与智能体系统的独立研究实验室。</p>
+              </div>
+              <div class="editorial-row">
+                <p class="label-caps" data-i18n="thesis_label">核心命题</p>
+                <p class="text-muted" data-i18n="thesis_p1">模型长于推理，科学始于确定。锚定契约内核，智能方成底座。</p>
+              </div>
             </div>
           </div>
 
-          <div class="hero-right">
-            <div class="editorial-row">
-              <p class="label-caps" data-i18n="who_label">关于我们</p>
-              <div class="editorial-prose">
-                <p class="text-regular" data-i18n="who_p1">Heurion Research 是一家专注于医学人工智能与自治智能体系统内核的独立研究机构。我们构建连接临床证据合成、结构化学术手稿与多租户安全执行环境的底层基础设施。</p>
-                <p class="text-muted" data-i18n="who_p2">我们开源核心运行时与评测基准，将前沿系统研究直接转化为面向临床医生、生物统计学家与智能体开发者的生产级软件。</p>
-              </div>
+          <!-- Nordic Dual-Layer Technical Architecture Schematic -->
+          <div class="hero-art" id="architecture" aria-hidden="true">
+            <div class="art-header">
+              <span data-i18n="art_h_left">系统架构 — 双层可验证技术栈</span>
+              <span data-i18n="art_h_right">AAP-1.0 协议规范</span>
             </div>
+            <svg class="art-svg" viewBox="0 0 480 356" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <!-- Subtle Background Astrolabe Meridian Ring -->
+              <circle cx="240" cy="178" r="162" stroke="#DCD6CA" stroke-width="1" stroke-dasharray="2 4"/>
+              <circle cx="240" cy="178" r="122" stroke="#E4DFD5" stroke-width="1"/>
+              <line x1="240" y1="6" x2="240" y2="350" stroke="#E2DDD3" stroke-width="1"/>
 
-            <div class="editorial-row">
-              <p class="label-caps" data-i18n="thesis_label">核心命题</p>
-              <div class="editorial-prose">
-                <p class="text-regular" data-i18n="thesis_p1">长期以来，语言模型的推理速度与科学系统的状态可靠性之间存在着深刻断裂。大语言模型生成极快，但临床手稿、生物统计流水线与多智能体工作区仍在缺乏事务保障的裸状态上直接覆写。</p>
-                <p class="text-muted" data-i18n="thesis_p2">我们致力于弥合这一断层。当概率化推理被严格约束于确定性 CRDT 文档树、写时复制（CoW）隔离工作区与密码学人类审批租约（Ed25519 Lease）之上，AI 才真正从脆弱的对话助手演进为可审计的科研与工程基础设施。</p>
-              </div>
+              <!-- ==================== L2: HEURION 2.0 & OMNICANVAS ==================== -->
+              <rect x="18" y="16" width="444" height="116" fill="#FAF8F4" stroke="#C8C1B4" stroke-width="1"/>
+              <text x="32" y="34" fill="#233E33" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="8.5" font-weight="500" letter-spacing="0.8" data-i18n="art_l2_title">L2 · HEURION 2.0 临床工作台</text>
+              <text x="448" y="34" text-anchor="end" fill="#848D88" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="8" letter-spacing="0.8" data-i18n="art_l2_sub">YJS CRDT 协同画布</text>
+              <line x1="18" y1="44" x2="462" y2="44" stroke="#E5E0D5" stroke-width="1"/>
+
+              <!-- Module 1: Structure-Preserving Manuscript -->
+              <rect x="32" y="56" width="128" height="60" fill="#F2EFE9" stroke="#D0C9BC" stroke-width="1"/>
+              <text x="96" y="79" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="8.8" font-weight="500" letter-spacing="0.4" data-i18n="art_m1_t">保结构手稿 (DOCX/PPT)</text>
+              <text x="96" y="96" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="7.8" data-i18n="art_m1_d">节点契约锁 · 96.4%</text>
+              <circle cx="96" cy="116" r="2.5" fill="#233E33"/>
+
+              <!-- Module 2: Sandboxed Biostatistics -->
+              <rect x="176" y="56" width="128" height="60" fill="#F2EFE9" stroke="#D0C9BC" stroke-width="1"/>
+              <text x="240" y="79" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="8.8" font-weight="500" letter-spacing="0.4" data-i18n="art_m2_t">沙箱生物统计</text>
+              <text x="240" y="96" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="7.8" data-i18n="art_m2_d">Table 1 · 生存 · CONSORT</text>
+              <circle cx="240" cy="116" r="2.5" fill="#233E33"/>
+
+              <!-- Module 3: Local PHI Gatekeeper -->
+              <rect x="320" y="56" width="128" height="60" fill="#F2EFE9" stroke="#D0C9BC" stroke-width="1"/>
+              <text x="384" y="79" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="8.8" font-weight="500" letter-spacing="0.4" data-i18n="art_m3_t">本地隐私守门员</text>
+              <text x="384" y="96" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="7.8" data-i18n="art_m3_d">本地脱敏拦截 · 99.6%</text>
+              <circle cx="384" cy="116" r="2.5" fill="#233E33"/>
+
+              <!-- ==================== AAP-1.0 PROTOCOL BRIDGE ==================== -->
+              <!-- Bus routing from L2 modules into AAP-1.0 Bridge -->
+              <path d="M96 116 L96 146 L240 146" stroke="#848D88" stroke-width="1"/>
+              <line x1="240" y1="116" x2="240" y2="158" stroke="#233E33" stroke-width="1.2"/>
+              <path d="M384 116 L384 146 L240 146" stroke="#848D88" stroke-width="1"/>
+
+              <!-- Horizontal Coordinate Ticks -->
+              <line x1="24" y1="174" x2="92" y2="174" stroke="#C8C1B4" stroke-width="1" stroke-dasharray="3 3"/>
+              <line x1="388" y1="174" x2="456" y2="174" stroke="#C8C1B4" stroke-width="1" stroke-dasharray="3 3"/>
+
+              <!-- AAP-1.0 Cryptographic Lease Capsule -->
+              <rect x="92" y="156" width="296" height="36" rx="18" fill="#233E33"/>
+              <circle cx="116" cy="174" r="6.5" stroke="#00C472" stroke-opacity="0.45" stroke-width="1"/>
+              <circle cx="116" cy="174" r="3.5" fill="#00C472"/>
+              <text x="248" y="177.5" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="8.4" font-weight="500" letter-spacing="0.8" data-i18n="art_bridge">AAP-1.0 · ED25519 人类签名租约与 MCP 总线</text>
+
+              <!-- Bus routing from AAP-1.0 Bridge into L1 Kernel -->
+              <line x1="240" y1="192" x2="240" y2="216" stroke="#233E33" stroke-width="1.2"/>
+
+              <!-- ==================== L1: AEGIS OS KERNEL ==================== -->
+              <rect x="18" y="216" width="444" height="126" fill="#FAF8F4" stroke="#C8C1B4" stroke-width="1"/>
+              <text x="32" y="234" fill="#233E33" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="8.5" font-weight="500" letter-spacing="0.8" data-i18n="art_l1_title">L1 · AEGIS OS 智能体内核</text>
+              <text x="448" y="234" text-anchor="end" fill="#848D88" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="8" letter-spacing="0.8" data-i18n="art_l1_sub">RUST · 写时复制 × 三路归并</text>
+              <line x1="18" y1="244" x2="462" y2="244" stroke="#E5E0D5" stroke-width="1"/>
+
+              <!-- CoW Fork Node (Left) -->
+              <rect x="32" y="272" width="96" height="42" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+              <text x="80" y="290" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="8.4" font-weight="500" data-i18n="art_cow_t">写时复制派生</text>
+              <text x="80" y="304" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="7.5" data-i18n="art_cow_d">0.42ms 克隆</text>
+
+              <!-- DAG Fork Lines -->
+              <path d="M128 293 L150 293 L160 263 L172 263" stroke="#848D88" stroke-width="1"/>
+              <line x1="128" y1="293" x2="172" y2="293" stroke="#233E33" stroke-width="1.1"/>
+              <path d="M128 293 L150 293 L160 323 L172 323" stroke="#848D88" stroke-width="1"/>
+
+              <!-- 3 Parallel Shadow Workspaces (Center) -->
+              <rect x="172" y="252" width="136" height="22" fill="#F4F1EA" stroke="#C8C1B4" stroke-width="1"/>
+              <text x="240" y="266" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="7.6" data-i18n="art_sh1">影子工作区 A · 智能体 01</text>
+
+              <rect x="172" y="282" width="136" height="22" fill="#E3ECE7" stroke="#233E33" stroke-width="1"/>
+              <text x="240" y="296" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="7.6" font-weight="500" data-i18n="art_sh2">影子工作区 B · 智能体 02</text>
+
+              <rect x="172" y="312" width="136" height="22" fill="#F4F1EA" stroke="#C8C1B4" stroke-width="1"/>
+              <text x="240" y="326" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="7.6" data-i18n="art_sh3">影子工作区 C · 智能体 03</text>
+
+              <!-- DAG Merge Lines -->
+              <path d="M308 263 L320 263 L330 293 L352 293" stroke="#848D88" stroke-width="1"/>
+              <line x1="308" y1="293" x2="352" y2="293" stroke="#233E33" stroke-width="1.1"/>
+              <path d="M308 323 L320 323 L330 293 L352 293" stroke="#848D88" stroke-width="1"/>
+
+              <!-- 3-Way LCS Merge & Commit Node (Right) -->
+              <rect x="352" y="272" width="96" height="42" fill="#233E33"/>
+              <text x="400" y="290" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="8.4" font-weight="500" data-i18n="art_mrg_t">三路结构化归并</text>
+              <text x="400" y="304" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, PingFang SC, sans-serif" font-size="7.5" data-i18n="art_mrg_d">0% 静默覆写</text>
+            </svg>
+            <div class="art-caption">
+              <span data-i18n="art_c_left">L2 临床科研工作台</span>
+              <span data-i18n="art_c_right">L1 事务级智能体系统</span>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Section 2: Core Systems & Focus Areas (Warm Neutral #f4f2ef) -->
+    <!-- Section 2: Core Systems (Warm Linen #EFECE4) -->
     <section class="sec-systems" id="flagships">
       <div class="container">
-        <div class="systems-header">
-          <p class="label-caps" data-i18n="sys_label">CORE SYSTEMS</p>
-          <h2 class="heading-2" data-i18n="sys_title">两套主打系统，构成完整的可验证智能底座：</h2>
+        <div class="section-header">
+          <h2 class="heading-2" data-i18n-html="sys_title">两套主打系统，同一<em>可验证</em>技术栈。</h2>
+          <p class="label-caps" data-i18n="sys_label">01 / 核心系统</p>
         </div>
 
         <div class="flagships-grid">
-          <!-- Flagship 01: Heurion 2.0 & OmniCanvas -->
+          <!-- Flagship 01: Heurion 2.0 -->
           <article class="flagship-item">
             <div class="flagship-top">
               <div class="flagship-meta">
-                <p class="label-caps" data-i18n="f1_tag">01 · APPLICATION LAYER</p>
-                <p class="label-caps">v2.0 · MIT</p>
+                <div class="flagship-num-group">
+                  <span class="flagship-num">01</span>
+                  <span class="label-caps" data-i18n="f1_tag">应用层 · MIT 开源</span>
+                </div>
+                <svg class="flagship-emblem" viewBox="0 0 44 28" fill="none" aria-hidden="true">
+                  <circle cx="16" cy="14" r="10" stroke="#233E33" stroke-width="1"/>
+                  <circle cx="28" cy="14" r="10" stroke="#848D88" stroke-width="1"/>
+                  <circle cx="22" cy="14" r="2.5" fill="#8F5638"/>
+                </svg>
               </div>
               <h3 class="heading-2" data-i18n="f1_title">Heurion 2.0 &amp; OmniCanvas</h3>
-              <p class="flagship-sub" data-i18n="f1_sub">端到端临床科研 AI 工作台与协同画布</p>
-              <p class="text-muted" data-i18n="f1_desc">将保结构的 Word (.docx) 论文与 PPT (.pptx) 汇报、沙箱化生物统计计算（Table 1、Kaplan–Meier 生存分析、Cox 回归、CONSORT/STROBE 流程图）、PubMed 逐句文献核查以及零外泄患者健康档案（PHR）统一在同一套契约守卫的 Yjs CRDT 画布中。</p>
+              <p class="flagship-sub" data-i18n="f1_sub">临床科研协同工作台</p>
+              <p class="text-muted" data-i18n="f1_desc">融汇保结构手稿、沙箱生物统计与零外泄病历的协同画布。</p>
             </div>
-            <div class="flagship-bottom">
-              <div class="flagship-metrics" data-i18n="f1_metrics">96.4% DOCX 结构保真 · 99.6% 本地 PHI 敏感度 · +18.3 pp 程序性记忆增益</div>
+
+            <div>
+              <div class="flagship-stats">
+                <div class="stat-cell">
+                  <span class="stat-val">96.4%</span>
+                  <span class="stat-lbl" data-i18n="f1_s1">DOCX 保真</span>
+                </div>
+                <div class="stat-cell">
+                  <span class="stat-val">99.6%</span>
+                  <span class="stat-lbl" data-i18n="f1_s2">PHI 拦截</span>
+                </div>
+                <div class="stat-cell">
+                  <span class="stat-val">+18.3pp</span>
+                  <span class="stat-lbl" data-i18n="f1_s3">记忆增益</span>
+                </div>
+              </div>
               <div class="flagship-links">
-                <a class="link-arrow" href="/login" data-i18n="f1_link_app">进入工作台 →</a>
-                <a class="link-arrow" href="/phr" data-i18n="f1_link_phr">知家健康档案 →</a>
+                <a class="link-arrow" href="/login" id="ctaCard1" data-i18n="f1_link_app">进入工作台 →</a>
                 <a class="link-arrow" href="https://github.com/heurion-org/heurion" target="_blank" rel="noopener" data-i18n="f1_link_repo">GitHub 源码 →</a>
               </div>
             </div>
@@ -330,160 +440,95 @@
           <article class="flagship-item" id="aegis-os">
             <div class="flagship-top">
               <div class="flagship-meta">
-                <p class="label-caps" data-i18n="f2_tag">02 · KERNEL LAYER</p>
-                <p class="label-caps">RUST · AAP-1.0</p>
+                <div class="flagship-num-group">
+                  <span class="flagship-num">02</span>
+                  <span class="label-caps" data-i18n="f2_tag">内核层 · RUST</span>
+                </div>
+                <svg class="flagship-emblem" viewBox="0 0 44 28" fill="none" aria-hidden="true">
+                  <rect x="6" y="5" width="16" height="18" stroke="#233E33" stroke-width="1"/>
+                  <rect x="22" y="5" width="16" height="18" fill="#233E33" fill-opacity="0.12" stroke="#233E33" stroke-width="1"/>
+                  <circle cx="22" cy="14" r="2.5" fill="#233E33"/>
+                </svg>
               </div>
               <h3 class="heading-2" data-i18n="f2_title">Aegis OS (aegis-os)</h3>
-              <p class="flagship-sub" data-i18n="f2_sub">事务级多租户智能体操作系统内核</p>
-              <p class="text-muted" data-i18n="f2_desc">基于 Rust 构建的跨平台智能体内核运行时，为 Claude Code、Cursor 与 Antigravity 提供 APFS/OverlayFS 写时复制（CoW）影子工作区、三路 LCS 自动归并、内核级沙箱（Seatbelt / Landlock）以及 AAP-1.0 离线 Ed25519 人类审批租约。</p>
+              <p class="flagship-sub" data-i18n="f2_sub">事务级多租户智能体内核</p>
+              <p class="text-muted" data-i18n="f2_desc">面向多智能体并发的写时复制影子树、内核沙箱与密码学租约。</p>
             </div>
-            <div class="flagship-bottom">
-              <div class="flagship-metrics" data-i18n="f2_metrics">0% 并发静默覆写 · 0.42 ms CoW 派生 · -99.4% Push IPC 开销</div>
+
+            <div>
+              <div class="flagship-stats">
+                <div class="stat-cell">
+                  <span class="stat-val">0%</span>
+                  <span class="stat-lbl" data-i18n="f2_s1">静默覆写</span>
+                </div>
+                <div class="stat-cell">
+                  <span class="stat-val">0.42ms</span>
+                  <span class="stat-lbl" data-i18n="f2_s2">CoW 派生</span>
+                </div>
+                <div class="stat-cell">
+                  <span class="stat-val">-99.4%</span>
+                  <span class="stat-lbl" data-i18n="f2_s3">IPC 开销</span>
+                </div>
+              </div>
               <div class="flagship-links">
                 <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" data-i18n="f2_link_repo">GitHub 仓库 →</a>
-                <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_APPLICATION_PROTOCOL.md" target="_blank" rel="noopener" data-i18n="f2_link_spec">AAP-1.0 协议规范 →</a>
+                <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_APPLICATION_PROTOCOL.md" target="_blank" rel="noopener" data-i18n="f2_link_spec">AAP-1.0 规范 →</a>
               </div>
             </div>
           </article>
         </div>
-
-        <!-- Focus Capabilities (Mirana 4x4 Square Bullet Grid) -->
-        <div class="pillars-wrap">
-          <div class="pillars-title">
-            <h3 class="heading-3" data-i18n="pillars_h">核心技术支点：</h3>
-          </div>
-          <div class="pillars-grid">
-            <div class="pillar-item">
-              <span class="sq" aria-hidden="true"></span>
-              <div class="pillar-content">
-                <p class="text-regular"><strong data-i18n="pil_1_t">受契约守卫的科学手稿：</strong></p>
-                <p class="text-muted" data-i18n="pil_1_d">段落、表格与引文均绑定确定性节点 ID，拦截范围外隐式篡改，完整保留 Word 修订追踪与批注锚点。</p>
-              </div>
-            </div>
-            <div class="pillar-item">
-              <span class="sq" aria-hidden="true"></span>
-              <div class="pillar-content">
-                <p class="text-regular"><strong data-i18n="pil_2_t">本地零外泄隐私守门员：</strong></p>
-                <p class="text-muted" data-i18n="pil_2_d">院内患者档案与化验单经结构化脱敏投影后再进入推理上下文，阻断 18 类受保护健康信息（PHI）外发。</p>
-              </div>
-            </div>
-            <div class="pillar-item">
-              <span class="sq" aria-hidden="true"></span>
-              <div class="pillar-content">
-                <p class="text-regular"><strong data-i18n="pil_3_t">写时复制（CoW）影子事务：</strong></p>
-                <p class="text-muted" data-i18n="pil_3_d">多智能体在独立影子目录内并发读写与测试，仅在通过预提交验证（verify_cmd）后方才原子合入宿主仓库。</p>
-              </div>
-            </div>
-            <div class="pillar-item">
-              <span class="sq" aria-hidden="true"></span>
-              <div class="pillar-content">
-                <p class="text-regular"><strong data-i18n="pil_4_t">密码学人类在环租约（AAP-1.0）：</strong></p>
-                <p class="text-muted" data-i18n="pil_4_d">高危写入与临床确认操作强制要求验证由人类审阅者本地签发的 Ed25519 离线租约令牌。</p>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </section>
 
-    <!-- Section 3: Dark Statement Band (Mirana section_about) -->
-    <section class="sec-vision" id="architecture">
-      <div class="container">
-        <div class="vision-grid">
-          <p class="label-caps light" data-i18n="vis_label">THESIS AND VISION</p>
-          <h2 class="heading-2 light" data-i18n="vis_title">医学证据正在变为可计算结构。工作区正在变为事务系统。智能体正在变为可审计主体。</h2>
-          <div class="vision-prose">
-            <p class="text-light-muted" data-i18n="vis_p1">Heurion 2.0 作为首个原生接入 Aegis OS (AAP-1.0) 的第一方参考应用，在应用层与操作系统内核层同时实现了写时复制隔离、零外泄隐私脱敏与密码学租约治理。</p>
-            <p class="text-light-muted" data-i18n="vis_p2">无论是单人临床队列研究，还是多智能体协同科研攻关，每一次工具调用与状态演进均具备可复现、可回滚的确定性保障。</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Section 4: Research & Writing (Mirana section_testimonial17) -->
+    <!-- Section 3: Archival Publications Index (Zero Duplicated Descriptions) -->
     <section class="sec-research" id="research">
       <div class="container">
-        <div class="research-wrapper">
-          <div class="research-sidebar">
-            <div>
-              <h2 class="heading-2" data-i18n="res_title">研究与预印本</h2>
+        <div class="section-header">
+          <h2 class="heading-2" data-i18n="res_title">研究论文</h2>
+          <p class="label-caps" data-i18n="res_label">02 / 研究发表</p>
+        </div>
+
+        <div class="pub-list">
+          <article class="pub-row">
+            <span class="label-caps" data-i18n="p1_meta">2026 · 临床智能</span>
+            <h3 class="heading-3" data-i18n="p1_title">Heurion 2.0: Contract-Guarded Clinical Research Intelligence</h3>
+            <div class="pub-links">
+              <a class="link-arrow" href="https://github.com/heurion-org/heurion/blob/main/paper/main.pdf" target="_blank" rel="noopener" data-i18n="p1_pdf">PDF →</a>
+              <a class="link-arrow" href="https://github.com/heurion-org/heurion/blob/main/paper/main.tex" target="_blank" rel="noopener" data-i18n="p1_tex">LaTeX →</a>
             </div>
-            <p class="text-muted">
-              <span data-i18n="res_more">访问开源组织主页 </span>
-              <a href="https://github.com/heurion-org" target="_blank" rel="noopener" class="link-arrow">github.com/heurion-org →</a>
-            </p>
-          </div>
+          </article>
 
-          <div class="research-cards">
-            <!-- Paper 1 -->
-            <article class="research-card">
-              <div class="research-card-top">
-                <p class="label-caps" data-i18n="p1_meta">OCT 2026 · PREPRINT · CLINICAL AI</p>
-                <h3 class="heading-3" data-i18n="p1_title">Heurion 2.0: Contract-Guarded Clinical Research Intelligence with Structure-Preserving Manuscripts, Local PHI Gatekeeping, and Procedural Memory</h3>
-                <p class="text-muted" data-i18n="p1_desc">基于 4 项受控实验（含 4,608 轮多智能体纵向评测与 1,000 份双盲临床病历）系统验证了受契约守卫的医学手稿编辑（结构保真度 96.4% vs 裸文件 31.2%）、本地零外泄隐私守门员（PHI 敏感度 99.6%，零真实患者外泄）与程序性记忆规则结晶（偏好遵循率提升 +18.3 pp，P = 2.4 × 10⁻¹¹）。</p>
-              </div>
-              <div class="research-card-links">
-                <a class="link-arrow" href="https://github.com/heurion-org/heurion/blob/main/paper/main.pdf" target="_blank" rel="noopener" data-i18n="p1_pdf">阅读论文 PDF →</a>
-                <a class="link-arrow" href="https://github.com/heurion-org/heurion/blob/main/paper/main.tex" target="_blank" rel="noopener" data-i18n="p1_tex">LaTeX 源码 →</a>
-              </div>
-            </article>
-
-            <!-- Paper 2 -->
-            <article class="research-card">
-              <div class="research-card-top">
-                <p class="label-caps" data-i18n="p2_meta">OCT 2026 · PREPRINT · AGENT SYSTEMS</p>
-                <h3 class="heading-3" data-i18n="p2_title">Aegis OS: A Transactional Multi-Tenant Operating System Runtime for Collaborative Autonomous Agents</h3>
-                <p class="text-muted" data-i18n="p2_desc">提出面向多智能体并发协作的事务级操作系统内核原语，涵盖亚毫秒级写时复制（CoW）影子工作区（中位 0.42 ms 派生）、三路 LCS 结构化自动归并（将并发静默覆写率从 41.7% 降至 0%）、推送式 A2A 消息总线（减少 99.4% 轮询 Token 开销）及离线 Ed25519 人类审批租约。</p>
-              </div>
-              <div class="research-card-links">
-                <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper/main.pdf" target="_blank" rel="noopener" data-i18n="p2_pdf">阅读论文 PDF →</a>
-                <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper/main.tex" target="_blank" rel="noopener" data-i18n="p2_tex">LaTeX 源码 →</a>
-              </div>
-            </article>
-          </div>
+          <article class="pub-row">
+            <span class="label-caps" data-i18n="p2_meta">2026 · 智能体系统</span>
+            <h3 class="heading-3" data-i18n="p2_title">Aegis OS: Transactional Multi-Tenant Agent Operating System</h3>
+            <div class="pub-links">
+              <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper/main.pdf" target="_blank" rel="noopener" data-i18n="p2_pdf">PDF →</a>
+              <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper/main.tex" target="_blank" rel="noopener" data-i18n="p2_tex">LaTeX →</a>
+            </div>
+          </article>
         </div>
       </div>
     </section>
   </main>
 
-  <!-- Minimal Footer -->
+  <!-- Single-Row Minimal Footer with Original Heurion Logo -->
   <footer class="foot" role="contentinfo">
     <div class="container">
-      <div class="foot-top">
-        <div class="foot-brand-col">
-          <a class="brand" href="/">
-            <span class="brand-mark" aria-hidden="true"></span>
-            <span>Heurion Research</span>
-          </a>
-          <p class="text-muted" data-i18n="foot_tag">临床科研智能与事务级智能体操作系统研究实验室。</p>
+      <div class="foot-bar">
+        <a class="brand" href="/" aria-label="Heurion Research">
+          <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+            <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
+            <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
+            <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
+            <circle class="mark-accent" cx="80" cy="20" r="11"/>
+          </svg>
+          <span class="brand-word">HEURION</span>
+        </a>
+        <div class="foot-right">
+          <span>© 2026 Heurion Research · MIT Licensed</span>
+          <a href="/llms.txt" class="foot-link">LLMs.txt</a>
+          <a href="/sitemap.xml" class="foot-link">Sitemap</a>
         </div>
-
-        <div class="foot-menus">
-          <div class="foot-col">
-            <div class="foot-col-title" data-i18n="foot_col_sys">systems</div>
-            <a href="/login" class="foot-link" id="ctaFoot" data-i18n="foot_workstation">heurion workstation</a>
-            <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="foot-link">aegis os</a>
-            <a href="/phr" class="foot-link" data-i18n="foot_phr">patient phr</a>
-            <a href="/tools" class="foot-link" data-i18n="foot_tools">clinical tools</a>
-          </div>
-          <div class="foot-col">
-            <div class="foot-col-title" data-i18n="foot_col_res">research</div>
-            <a href="https://github.com/heurion-org/heurion/blob/main/paper/main.pdf" target="_blank" rel="noopener" class="foot-link">heurion 2.0 paper</a>
-            <a href="https://github.com/heurion-org/aegis-os/blob/main/paper/main.pdf" target="_blank" rel="noopener" class="foot-link">aegis os paper</a>
-            <a href="/llms.txt" class="foot-link">llms.txt</a>
-            <a href="/llms-full.txt" class="foot-link">llms-full.txt</a>
-          </div>
-          <div class="foot-col">
-            <div class="foot-col-title" data-i18n="foot_col_conn">connect</div>
-            <a href="https://github.com/heurion-org" target="_blank" rel="noopener" class="foot-link">github</a>
-            <a href="/sitemap.xml" class="foot-link">sitemap</a>
-          </div>
-        </div>
-      </div>
-
-      <div class="foot-bottom">
-        <span>© 2026 Heurion Research. MIT Licensed.</span>
-        <span data-i18n="foot_note">Clinical AI Workstation &amp; Transactional Agent OS</span>
       </div>
     </div>
   </footer>
@@ -493,146 +538,142 @@
       zh: {
         doc_title: 'Heurion Research · 临床科研 AI 工作台与 Aegis OS 智能体内核',
         nav_systems: '核心系统',
-        nav_vision: '研究范式',
-        nav_research: '发表与预印本',
+        nav_research: '发表论文',
         nav_tools: '临床工具',
+        nav_phr: '知家档案',
         nav_cta: '进入工作台',
-        hero_tag: 'HEURION RESEARCH · CLINICAL AI WORKSTATION & AGENT OS',
-        hero_title: '面向临床科研与自治智能体的可验证智能与事务级系统。',
+        hero_tag: 'HEURION RESEARCH · 临床科研 AI 工作台与智能体系统',
+        hero_title: '为临床医学与自治智能体，<br>构建<em>可验证</em>的系统底座。',
         hero_cta_primary: '进入临床工作台',
-        hero_cta_github: 'GitHub (heurion-org) →',
-        hero_cta_tools: '免登录临床工具 →',
         who_label: '关于我们',
-        who_p1: 'Heurion Research 是一家专注于医学人工智能与自治智能体系统内核的独立研究机构。我们构建连接临床证据合成、结构化学术手稿与多租户安全执行环境的底层基础设施。',
-        who_p2: '我们开源核心运行时与评测基准，将前沿系统研究直接转化为面向临床医生、生物统计学家与智能体开发者的生产级软件。',
+        who_p1: '专注临床证据合成与智能体系统的独立研究实验室。',
         thesis_label: '核心命题',
-        thesis_p1: '长期以来，语言模型的推理速度与科学系统的状态可靠性之间存在着深刻断裂。大语言模型生成极快，但临床手稿、生物统计流水线与多智能体工作区仍在缺乏事务保障的裸状态上直接覆写。',
-        thesis_p2: '我们致力于弥合这一断层。当概率化推理被严格约束于确定性 CRDT 文档树、写时复制（CoW）隔离工作区与密码学人类审批租约（Ed25519 Lease）之上，AI 才真正从脆弱的对话助手演进为可审计的科研与工程基础设施。',
-        sys_label: 'CORE SYSTEMS',
-        sys_title: '两套主打系统，构成完整的可验证智能底座：',
-        f1_tag: '01 · APPLICATION LAYER',
+        thesis_p1: '模型长于推理，科学始于确定。锚定契约内核，智能方成底座。',
+        art_h_left: '系统架构 — 双层可验证技术栈',
+        art_h_right: 'AAP-1.0 协议规范',
+        art_l2_title: 'L2 · HEURION 2.0 临床工作台',
+        art_l2_sub: 'YJS CRDT 协同画布',
+        art_m1_t: '保结构手稿 (DOCX/PPT)',
+        art_m1_d: '节点契约锁 · 96.4%',
+        art_m2_t: '沙箱生物统计',
+        art_m2_d: 'Table 1 · 生存 · CONSORT',
+        art_m3_t: '本地隐私守门员',
+        art_m3_d: '本地脱敏拦截 · 99.6%',
+        art_bridge: 'AAP-1.0 · ED25519 人类签名租约与 MCP 总线',
+        art_l1_title: 'L1 · AEGIS OS 智能体内核',
+        art_l1_sub: 'RUST · 写时复制 × 三路归并',
+        art_cow_t: '写时复制派生',
+        art_cow_d: '0.42ms 克隆',
+        art_sh1: '影子工作区 A · 智能体 01',
+        art_sh2: '影子工作区 B · 智能体 02',
+        art_sh3: '影子工作区 C · 智能体 03',
+        art_mrg_t: '三路结构化归并',
+        art_mrg_d: '0% 静默覆写',
+        art_c_left: 'L2 临床科研工作台',
+        art_c_right: 'L1 事务级智能体系统',
+        sys_label: '01 / 核心系统',
+        sys_title: '两套主打系统，同一<em>可验证</em>技术栈。',
+        f1_tag: '应用层 · MIT 开源',
         f1_title: 'Heurion 2.0 & OmniCanvas',
-        f1_sub: '端到端临床科研 AI 工作台与协同画布',
-        f1_desc: '将保结构的 Word (.docx) 论文与 PPT (.pptx) 汇报、沙箱化生物统计计算（Table 1、Kaplan–Meier 生存分析、Cox 回归、CONSORT/STROBE 流程图）、PubMed 逐句文献核查以及零外泄患者健康档案（PHR）统一在同一套契约守卫的 Yjs CRDT 画布中。',
-        f1_metrics: '96.4% DOCX 结构保真 · 99.6% 本地 PHI 敏感度 · +18.3 pp 程序性记忆增益',
+        f1_sub: '临床科研协同工作台',
+        f1_desc: '融汇保结构手稿、沙箱生物统计与零外泄病历的协同画布。',
+        f1_s1: 'DOCX 保真',
+        f1_s2: 'PHI 拦截',
+        f1_s3: '记忆增益',
         f1_link_app: '进入工作台 →',
-        f1_link_phr: '知家健康档案 →',
         f1_link_repo: 'GitHub 源码 →',
-        f2_tag: '02 · KERNEL LAYER',
+        f2_tag: '内核层 · RUST',
         f2_title: 'Aegis OS (aegis-os)',
-        f2_sub: '事务级多租户智能体操作系统内核',
-        f2_desc: '基于 Rust 构建的跨平台智能体内核运行时，为 Claude Code、Cursor 与 Antigravity 提供 APFS/OverlayFS 写时复制（CoW）影子工作区、三路 LCS 自动归并、内核级沙箱（Seatbelt / Landlock）以及 AAP-1.0 离线 Ed25519 人类审批租约。',
-        f2_metrics: '0% 并发静默覆写 · 0.42 ms CoW 派生 · -99.4% Push IPC 开销',
+        f2_sub: '事务级多租户智能体内核',
+        f2_desc: '面向多智能体并发的写时复制影子树、内核沙箱与密码学租约。',
+        f2_s1: '静默覆写',
+        f2_s2: 'CoW 派生',
+        f2_s3: 'IPC 开销',
         f2_link_repo: 'GitHub 仓库 →',
-        f2_link_spec: 'AAP-1.0 协议规范 →',
-        pillars_h: '核心技术支点：',
-        pil_1_t: '受契约守卫的科学手稿：',
-        pil_1_d: '段落、表格与引文均绑定确定性节点 ID，拦截范围外隐式篡改，完整保留 Word 修订追踪与批注锚点。',
-        pil_2_t: '本地零外泄隐私守门员：',
-        pil_2_d: '院内患者档案与化验单经结构化脱敏投影后再进入推理上下文，阻断 18 类受保护健康信息（PHI）外发。',
-        pil_3_t: '写时复制（CoW）影子事务：',
-        pil_3_d: '多智能体在独立影子目录内并发读写与测试，仅在通过预提交验证（verify_cmd）后方才原子合入宿主仓库。',
-        pil_4_t: '密码学人类在环租约（AAP-1.0）：',
-        pil_4_d: '高危写入与临床确认操作强制要求验证由人类审阅者本地签发的 Ed25519 离线租约令牌。',
-        vis_label: 'THESIS AND VISION',
-        vis_title: '医学证据正在变为可计算结构。工作区正在变为事务系统。智能体正在变为可审计主体。',
-        vis_p1: 'Heurion 2.0 作为首个原生接入 Aegis OS (AAP-1.0) 的第一方参考应用，在应用层与操作系统内核层同时实现了写时复制隔离、零外泄隐私脱敏与密码学租约治理。',
-        vis_p2: '无论是单人临床队列研究，还是多智能体协同科研攻关，每一次工具调用与状态演进均具备可复现、可回滚的确定性保障。',
-        res_title: '研究与预印本',
-        res_more: '访问开源组织主页 ',
-        p1_meta: 'OCT 2026 · PREPRINT · CLINICAL AI',
-        p1_title: 'Heurion 2.0: Contract-Guarded Clinical Research Intelligence with Structure-Preserving Manuscripts, Local PHI Gatekeeping, and Procedural Memory',
-        p1_desc: '基于 4 项受控实验（含 4,608 轮多智能体纵向评测与 1,000 份双盲临床病历）系统验证了受契约守卫的医学手稿编辑（结构保真度 96.4% vs 裸文件 31.2%）、本地零外泄隐私守门员（PHI 敏感度 99.6%，零真实患者外泄）与程序性记忆规则结晶（偏好遵循率提升 +18.3 pp，P = 2.4 × 10⁻¹¹）。',
-        p1_pdf: '阅读论文 PDF →',
-        p1_tex: 'LaTeX 源码 →',
-        p2_meta: 'OCT 2026 · PREPRINT · AGENT SYSTEMS',
-        p2_title: 'Aegis OS: A Transactional Multi-Tenant Operating System Runtime for Collaborative Autonomous Agents',
-        p2_desc: '提出面向多智能体并发协作的事务级操作系统内核原语，涵盖亚毫秒级写时复制（CoW）影子工作区（中位 0.42 ms 派生）、三路 LCS 结构化自动归并（将并发静默覆写率从 41.7% 降至 0%）、推送式 A2A 消息总线（减少 99.4% 轮询 Token 开销）及离线 Ed25519 人类审批租约。',
-        p2_pdf: '阅读论文 PDF →',
-        p2_tex: 'LaTeX 源码 →',
-        foot_tag: '临床科研智能与事务级智能体操作系统研究实验室。',
-        foot_col_sys: 'systems',
-        foot_workstation: 'heurion workstation',
-        foot_phr: 'patient phr',
-        foot_tools: 'clinical tools',
-        foot_col_res: 'research',
-        foot_col_conn: 'connect',
-        foot_note: 'Clinical AI Workstation & Transactional Agent OS'
+        f2_link_spec: 'AAP-1.0 规范 →',
+        res_title: '研究论文',
+        res_label: '02 / 研究发表',
+        p1_meta: '2026 · 临床智能',
+        p1_title: 'Heurion 2.0: Contract-Guarded Clinical Research Intelligence',
+        p1_pdf: 'PDF →',
+        p1_tex: 'LaTeX →',
+        p2_meta: '2026 · 智能体系统',
+        p2_title: 'Aegis OS: Transactional Multi-Tenant Agent Operating System',
+        p2_pdf: 'PDF →',
+        p2_tex: 'LaTeX →'
       },
       en: {
         doc_title: 'Heurion Research · Contract-Guarded Clinical AI Workstation & Aegis OS Agent Runtime',
-        nav_systems: 'systems',
-        nav_vision: 'thesis',
-        nav_research: 'research',
-        nav_tools: 'tools',
+        nav_systems: 'Systems',
+        nav_research: 'Publications',
+        nav_tools: 'Tools',
+        nav_phr: 'Patient PHR',
         nav_cta: 'Workstation',
         hero_tag: 'HEURION RESEARCH · CLINICAL AI WORKSTATION & AGENT OS',
-        hero_title: 'Verifiable intelligence and transactional systems for clinical research and autonomous agents.',
+        hero_title: 'Verifiable systems for <em>clinical medicine</em> and <em>autonomous agents</em>.',
         hero_cta_primary: 'Enter Workstation',
-        hero_cta_github: 'GitHub (heurion-org) →',
-        hero_cta_tools: 'Clinical Research Tools →',
         who_label: 'WHO WE ARE',
-        who_p1: 'Heurion Research is an independent research lab at the intersection of clinical artificial intelligence and autonomous agent systems. We build foundational infrastructure where medical evidence synthesis, structured scientific manuscripts, and multi-tenant execution converge.',
-        who_p2: 'We open-source our core runtimes and empirical benchmarks, translating frontier systems research directly into production software for clinicians, biostatisticians, and agent engineers.',
+        who_p1: 'An independent research lab for clinical intelligence and agent operating systems.',
         thesis_label: 'OUR THESIS',
-        thesis_p1: 'For years, language models and scientific software have operated at incompatible levels of reliability. Models generate hypotheses rapidly, yet clinical manuscripts, biostatistical pipelines, and multi-agent workspaces still mutate state without transactional guarantees.',
-        thesis_p2: 'That gap is closing. When probabilistic reasoning is bound to deterministic CRDT document trees, Copy-on-Write shadow workspaces, and cryptographic human-in-the-loop leases (Ed25519), AI transitions from a fragile chat assistant into verifiable scientific and engineering infrastructure.',
-        sys_label: 'CORE SYSTEMS',
-        sys_title: 'These are our two flagship systems:',
-        f1_tag: '01 · APPLICATION LAYER',
+        thesis_p1: 'Models generate probabilities; science demands certainty. Bound to transactional state, intelligence becomes infrastructure.',
+        art_h_left: 'ARCHITECTURE — DUAL-LAYER STACK',
+        art_h_right: 'AAP-1.0 SPEC',
+        art_l2_title: 'L2 · HEURION 2.0 & OMNICANVAS',
+        art_l2_sub: 'YJS CRDT CANVAS',
+        art_m1_t: 'DOCX / PPTX',
+        art_m1_d: 'node_id Lock · 96.4%',
+        art_m2_t: 'BIOSTATISTICS',
+        art_m2_d: 'Table 1 · KM · CONSORT',
+        art_m3_t: 'PHI GATEKEEPER',
+        art_m3_d: 'Local De-ID · 99.6%',
+        art_bridge: 'AAP-1.0 · ED25519 LEASE & MCP BUS',
+        art_l1_title: 'L1 · AEGIS OS (aegis-os)',
+        art_l1_sub: 'RUST · COW × 3-WAY MERGE',
+        art_cow_t: 'COW FORK',
+        art_cow_d: '0.42ms Clone',
+        art_sh1: 'Shadow A · Agent 01',
+        art_sh2: 'Shadow B · Agent 02',
+        art_sh3: 'Shadow C · Agent 03',
+        art_mrg_t: '3-WAY MERGE',
+        art_mrg_d: '0% Overwrite',
+        art_c_left: 'L2 CLINICAL WORKSTATION',
+        art_c_right: 'L1 TRANSACTIONAL AGENT OS',
+        sys_label: '01 / CORE SYSTEMS',
+        sys_title: 'Two flagship systems, one <em>verifiable</em> stack.',
+        f1_tag: 'APPLICATION LAYER · MIT',
         f1_title: 'Heurion 2.0 & OmniCanvas',
-        f1_sub: 'Contract-Guarded Clinical Research AI Workstation',
-        f1_desc: 'Unifies structure-preserving Word (.docx) manuscripts and PowerPoint (.pptx) decks, sandboxed biostatistics (Table 1, Kaplan–Meier survival, Cox regression, CONSORT/STROBE flowcharts), PubMed claim verification, and zero-leakage local patient records on a single contract-guarded Yjs CRDT canvas.',
-        f1_metrics: '96.4% DOCX Fidelity · 99.6% Local PHI Sensitivity · +18.3 pp Procedural Memory',
-        f1_link_app: 'Enter Workstation →',
-        f1_link_phr: 'Patient PHR →',
-        f1_link_repo: 'GitHub Source →',
-        f2_tag: '02 · KERNEL LAYER',
+        f1_sub: 'Clinical Research AI Workstation',
+        f1_desc: 'Structure-preserving manuscripts, sandboxed biostatistics, and zero-leakage cohorts on one CRDT canvas.',
+        f1_s1: 'DOCX Fidelity',
+        f1_s2: 'PHI Gatekeeper',
+        f1_s3: 'Memory Gain',
+        f1_link_app: 'Workstation →',
+        f1_link_repo: 'GitHub →',
+        f2_tag: 'KERNEL LAYER · RUST',
         f2_title: 'Aegis OS (aegis-os)',
-        f2_sub: 'Transactional Multi-Tenant Agent OS Runtime',
-        f2_desc: 'A cross-platform Rust kernel runtime providing APFS/OverlayFS Copy-on-Write shadow workspaces, 3-way LCS structural merge, kernel-enforced sandboxing (Seatbelt / Landlock), and AAP-1.0 offline Ed25519 human-in-the-loop leases across Claude Code, Cursor, and Antigravity.',
-        f2_metrics: '0% Silent Overwrites · 0.42 ms CoW Fork · -99.4% Push IPC Overhead',
-        f2_link_repo: 'GitHub Repository →',
-        f2_link_spec: 'AAP-1.0 Specification →',
-        pillars_h: 'Core architectural pillars:',
-        pil_1_t: 'Contract-guarded manuscripts:',
-        pil_1_d: 'Paragraphs, tables, and citations bind to deterministic node IDs, blocking out-of-scope edits while preserving Word tracked changes and comments.',
-        pil_2_t: 'Zero-leakage local PHI gatekeeper:',
-        pil_2_d: 'On-premise patient cohorts and lab reports undergo deterministic de-identification before entering model context, preventing 18-class PHI egress.',
-        pil_3_t: 'Copy-on-Write shadow transactions:',
-        pil_3_d: 'Concurrent agents execute inside isolated CoW trees and commit back to the host repository only after passing pre-commit verification (verify_cmd).',
-        pil_4_t: 'Cryptographic human-in-the-loop leases (AAP-1.0):',
-        pil_4_d: 'Sensitive mutations and clinical confirmations require an offline-verifiable Ed25519 lease token signed by a human reviewer.',
-        vis_label: 'THESIS AND VISION',
-        vis_title: 'Evidence is becoming computable. Workspaces are becoming transactional. Agents are becoming accountable.',
-        vis_p1: 'As the first native reference application on Aegis OS (AAP-1.0), Heurion 2.0 unifies application-layer clinical guardrails with OS-level transactional isolation and cryptographic lease governance.',
-        vis_p2: 'Whether conducting a single-center clinical cohort study or orchestrating multi-agent software engineering, every tool invocation and state transition remains reproducible and auditable.',
-        res_title: 'Research and writing',
-        res_more: 'Explore open-source repositories at ',
-        p1_meta: 'OCT 2026 · PREPRINT · CLINICAL AI',
-        p1_title: 'Heurion 2.0: Contract-Guarded Clinical Research Intelligence with Structure-Preserving Manuscripts, Local PHI Gatekeeping, and Procedural Memory',
-        p1_desc: 'Evaluates contract-guarded clinical manuscript editing across 4 controlled studies (including 4,608 longitudinal turns and 1,000 dual-annotated clinical notes), demonstrating 96.4% structural fidelity (vs. 31.2% raw file rewrites), 99.6% local PHI sensitivity with zero leaks, and +18.3 pp procedural preference adherence (P = 2.4 × 10⁻¹¹).',
-        p1_pdf: 'Read PDF →',
-        p1_tex: 'LaTeX Source →',
-        p2_meta: 'OCT 2026 · PREPRINT · AGENT SYSTEMS',
-        p2_title: 'Aegis OS: A Transactional Multi-Tenant Operating System Runtime for Collaborative Autonomous Agents',
-        p2_desc: 'Introduces OS-level transactional primitives for concurrent autonomous agents, achieving 0.42 ms median Copy-on-Write shadow workspace provisioning, 0% silent concurrent overwrites via 3-way LCS merge (down from 41.7% on raw host filesystems), and 99.4% IPC token reduction.',
-        p2_pdf: 'Read PDF →',
-        p2_tex: 'LaTeX Source →',
-        foot_tag: 'Research lab for clinical research intelligence and transactional agent operating systems.',
-        foot_col_sys: 'systems',
-        foot_workstation: 'heurion workstation',
-        foot_phr: 'patient phr',
-        foot_tools: 'clinical tools',
-        foot_col_res: 'research',
-        foot_col_conn: 'connect',
-        foot_note: 'Clinical AI Workstation & Transactional Agent OS'
+        f2_sub: 'Transactional Agent OS Runtime',
+        f2_desc: 'Copy-on-Write shadow workspaces, kernel sandboxing, and Ed25519 human leases for concurrent agents.',
+        f2_s1: 'Silent Overwrites',
+        f2_s2: 'CoW Fork',
+        f2_s3: 'Push IPC Cost',
+        f2_link_repo: 'GitHub →',
+        f2_link_spec: 'AAP-1.0 Spec →',
+        res_title: 'Publications',
+        res_label: '02 / PUBLICATIONS',
+        p1_meta: '2026 · CLINICAL AI',
+        p1_title: 'Heurion 2.0: Contract-Guarded Clinical Research Intelligence',
+        p1_pdf: 'PDF →',
+        p1_tex: 'LaTeX →',
+        p2_meta: '2026 · AGENT SYSTEMS',
+        p2_title: 'Aegis OS: Transactional Multi-Tenant Agent Operating System',
+        p2_pdf: 'PDF →',
+        p2_tex: 'LaTeX →'
       }
     };
 
     let currentLang = (location.pathname === '/en' || location.pathname.startsWith('/en/'))
       ? 'en'
-      : (localStorage.getItem('heurion_lang') || ((navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en'));
+      : (localStorage.getItem('heurion_lang') || 'zh');
 
     function applyLang(lang) {
       currentLang = lang;
@@ -643,24 +684,36 @@
         const k = el.getAttribute('data-i18n');
         if (dict[k]) el.textContent = dict[k];
       });
+      document.querySelectorAll('[data-i18n-html]').forEach(el => {
+        const k = el.getAttribute('data-i18n-html');
+        if (dict[k]) el.innerHTML = dict[k];
+      });
       const btn = document.getElementById('langBtn');
       if (btn) btn.textContent = lang === 'zh' ? 'EN' : '中文';
+      const navTools = document.querySelector('a[data-i18n="nav_tools"]');
+      if (navTools) navTools.setAttribute('href', lang === 'en' ? '/en/tools' : '/tools');
     }
 
     document.getElementById('langBtn')?.addEventListener('click', () => {
-      applyLang(currentLang === 'zh' ? 'en' : 'zh');
+      const next = currentLang === 'zh' ? 'en' : 'zh';
+      if (next === 'zh' && (location.pathname === '/en' || location.pathname.startsWith('/en/'))) {
+        history.replaceState(null, '', '/');
+      }
+      applyLang(next);
     });
 
     applyLang(currentLang);
 
+    // Preserve workspace redirect if already authenticated
     try {
-      if (localStorage.getItem('heurion_token')) {
-        ['ctaTop', 'ctaHero', 'ctaFoot'].forEach(id => {
+      const token = localStorage.getItem('heurion_token');
+      if (token) {
+        ['ctaTop', 'ctaHero', 'ctaCard1'].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.setAttribute('href', '/app');
         });
       }
-    } catch {}
+    } catch (_) {}
   </script>
 </body>
 </html>

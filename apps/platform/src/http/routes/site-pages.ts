@@ -71,9 +71,9 @@ export function renderEnglishIndexHtml(zhHtml: string): string {
       '"text": "Aegis OS (aegis-os) is an open-source transactional multi-tenant agent operating system runtime providing Copy-on-Write shadow workspaces, kernel sandboxing, and AAP-1.0 offline Ed25519 human-in-the-loop leases. Heurion 2.0 is the first native reference application on AAP-1.0."',
     )
 
-  // 将所有带 data-i18n="key" 的单层标签内容在服务端替换为英文
+  // 将所有带 data-i18n="key" 或 data-i18n-html="key" 的标签内容在服务端替换为英文
   html = html.replace(
-    /<([a-zA-Z0-9]+)(\s[^>]*?\bdata-i18n="([a-zA-Z0-9_]+)"[^>]*)>([\s\S]*?)<\/\1>/g,
+    /<([a-zA-Z0-9]+)(\s[^>]*?\bdata-i18n(?:-html)?="([a-zA-Z0-9_]+)"[^>]*)>([\s\S]*?)<\/\1>/g,
     (whole, tag: string, attrs: string, key: string) => {
       const val = enDict[key]
       if (!val) return whole

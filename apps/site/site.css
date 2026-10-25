@@ -1,25 +1,21 @@
-/* Heurion Research — Nordic / Scandinavian Editorial Design System */
+/* Heurion Research — Nordic / Scandinavian Editorial Design System (v5) */
 :root {
-  /* Nordic Natural Palette: Birch Alabaster, Warm Linen, Boreal Pine & Fjord Sage */
-  --bg-primary: #FAF8F5;
-  --bg-neutral: #F1EDE6;
-  --bg-elevated: #FDFCFA;
-  --bg-dark: #1B2521;
-  --ink: #1A211E;
-  --ink-secondary: #4E5853;
-  --ink-muted: #78827C;
-  --accent: #2D4A3E;
-  --accent-soft: #E4EDE8;
-  --ink-light: #F5F2EB;
-  --ink-light-secondary: rgba(245, 242, 235, 0.74);
-  --ink-light-muted: #93ACA0;
-  --border: #E2DDD4;
-  --border-strong: #1A211E;
-  --border-dark: rgba(245, 242, 235, 0.14);
+  --bg-primary: #FAF8F4;
+  --bg-neutral: #EFECE4;
+  --bg-elevated: #FDFCF9;
+  --ink: #151C19;
+  --ink-secondary: #525B56;
+  --ink-muted: #848D88;
+  --accent: #233E33;
+  --heurion-mint: #00C472;
+  --accent-warm: #8F5638;
+  --accent-soft: #E3ECE7;
+  --ink-light: #F4F1EA;
+  --border: #DFDAD0;
+  --border-strong: #151C19;
 
-  /* Typography: Nordic Humanist Serif + Clean Geometric Sans + Technical Mono */
-  --serif: 'Newsreader', 'Songti SC', 'STSong', 'Noto Serif SC', Georgia, serif;
-  --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --serif: 'Newsreader', 'Noto Serif SC', 'Songti SC', 'STSong', Georgia, serif;
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
   --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
 }
 
@@ -34,14 +30,13 @@ html {
 }
 
 body {
-  margin: 0;
-  background-color: var(--bg-primary);
-  color: var(--ink);
+  margin: 0 !important;
+  background-color: var(--bg-primary) !important;
+  color: var(--ink) !important;
   font-family: var(--sans);
   font-size: 0.9375rem;
-  line-height: 1.68;
+  line-height: 1.65;
   font-weight: 400;
-  selection-background-color: var(--accent-soft);
 }
 
 ::selection {
@@ -60,106 +55,101 @@ a:hover {
 }
 
 .container {
-  max-width: 1240px;
+  max-width: 1220px;
   margin: 0 auto;
-  padding: 0 3.25rem;
+  padding: 0 3.5rem;
 }
 
 /* Typography */
 .label-caps {
   font-family: var(--mono);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 400;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-muted);
   margin: 0;
 }
 
-.label-caps.light {
-  color: var(--ink-light-muted);
-}
-
 .heading-1 {
   font-family: var(--serif);
-  font-size: clamp(2.15rem, 3.6vw, 3.1rem);
-  font-weight: 400;
+  font-size: clamp(2.35rem, 3.5vw, 3.25rem);
+  font-weight: 300;
   line-height: 1.16;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.022em;
   margin: 0;
   color: var(--ink);
+}
+
+html[lang="zh-CN"] .heading-1 {
+  font-size: clamp(2rem, 2.75vw, 2.6rem);
+  line-height: 1.34;
+  letter-spacing: 0.01em;
+}
+
+.heading-1 em,
+.heading-2 em {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--accent);
+}
+
+html[lang="zh-CN"] .heading-1 em,
+html[lang="zh-CN"] .heading-2 em {
+  font-style: normal;
+  border-bottom: 1px solid rgba(35, 62, 51, 0.35);
+  padding-bottom: 0.04em;
 }
 
 .heading-2 {
   font-family: var(--serif);
-  font-size: clamp(1.5rem, 2.35vw, 2.05rem);
-  font-weight: 400;
-  line-height: 1.24;
+  font-size: clamp(1.5rem, 2.15vw, 2rem);
+  font-weight: 300;
+  line-height: 1.26;
   letter-spacing: -0.015em;
   margin: 0;
   color: var(--ink);
-}
-
-.heading-2.light {
-  color: var(--ink-light);
 }
 
 .heading-3 {
   font-family: var(--serif);
   font-size: 1.2rem;
   font-weight: 400;
-  line-height: 1.42;
+  line-height: 1.35;
   letter-spacing: -0.01em;
   margin: 0;
   color: var(--ink);
 }
 
 .text-regular {
-  font-size: 0.9375rem;
-  line-height: 1.72;
+  font-size: 0.92rem;
+  line-height: 1.68;
   color: var(--ink);
   margin: 0;
 }
 
 .text-muted {
-  font-size: 0.9375rem;
-  line-height: 1.72;
+  font-size: 0.88rem;
+  line-height: 1.68;
   color: var(--ink-secondary);
   margin: 0;
 }
 
-.text-light-muted {
-  font-size: 0.9375rem;
-  line-height: 1.72;
-  color: var(--ink-light-secondary);
-  margin: 0;
-}
-
-/* 4x4 Nordic Pine Square Marker */
-.sq {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  background-color: var(--accent);
-  flex-shrink: 0;
-  margin-top: 0.65rem;
-}
-
-/* Minimal Nordic Navigation */
+/* Top Navigation with Original Heurion Logo */
 .nav {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(250, 248, 245, 0.9);
+  background: rgba(250, 248, 244, 0.92);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
 }
 
 .nav-inner {
-  max-width: 1240px;
+  max-width: 1220px;
   margin: 0 auto;
-  padding: 1.35rem 3.25rem;
+  padding: 1.2rem 3.5rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -170,31 +160,37 @@ a:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.65rem;
-  font-family: var(--sans);
-  font-size: 0.85rem;
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
   color: var(--ink);
-}
-
-.brand:hover {
-  color: var(--ink);
-  opacity: 0.8;
 }
 
 .brand-mark {
-  width: 12px;
-  height: 12px;
-  background: var(--accent);
-  border-radius: 1px;
-  display: inline-block;
+  width: 24px;
+  height: 22px;
+  display: block;
+  flex-shrink: 0;
+}
+
+.brand-mark .mark-bar {
+  fill: var(--ink);
+}
+
+.brand-mark .mark-accent {
+  fill: var(--heurion-mint);
+}
+
+.brand-word {
+  font-family: var(--sans);
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink);
 }
 
 .nav-links {
   display: flex;
   align-items: center;
-  gap: 2.5rem;
+  gap: 2.35rem;
 }
 
 .nav-link {
@@ -203,27 +199,21 @@ a:hover {
   color: var(--ink-secondary);
 }
 
-.nav-link:hover {
-  color: var(--ink);
-}
-
 .nav-right {
   display: flex;
   align-items: center;
-  gap: 1.35rem;
+  gap: 1.1rem;
 }
 
 .lang-btn {
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 0.28rem 0.55rem;
+  padding: 0.28rem 0.62rem;
   font-family: var(--mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
   color: var(--ink-secondary);
   cursor: pointer;
-  transition: border-color 0.2s ease, color 0.2s ease;
 }
 
 .lang-btn:hover {
@@ -232,12 +222,12 @@ a:hover {
 }
 
 .nav-cta {
-  font-size: 0.8125rem;
-  padding: 0.48rem 1.05rem;
+  font-size: 0.78rem;
+  padding: 0.46rem 1.05rem;
   background: var(--accent);
   color: var(--ink-light);
   border: 1px solid var(--accent);
-  border-radius: 2px;
+  letter-spacing: 0.02em;
 }
 
 .nav-cta:hover {
@@ -246,44 +236,48 @@ a:hover {
   color: var(--ink-light);
 }
 
-/* Section 1: Nordic Alabaster Hero & Thesis */
+/* Section 1: Editorial Split Hero */
 .sec-hero {
-  padding: 7rem 0 8rem;
+  padding: 4.75rem 0 5.5rem;
   background: var(--bg-primary);
 }
 
 .hero-grid {
   display: grid;
-  grid-template-columns: 1.05fr 1.15fr;
-  gap: 5.5rem;
-  align-items: start;
+  grid-template-columns: 1.06fr 0.94fr;
+  gap: 4.25rem;
+  align-items: stretch;
 }
 
 .hero-left {
-  position: sticky;
-  top: 6.5rem;
   display: flex;
   flex-direction: column;
-  gap: 1.85rem;
+  justify-content: space-between;
+  gap: 3rem;
+  padding: 0.25rem 0;
+}
+
+.hero-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
   max-width: 34rem;
 }
 
 .hero-actions {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 1.65rem;
-  padding-top: 0.6rem;
+  gap: 1.5rem;
+  padding-top: 0.25rem;
 }
 
 .btn-solid {
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
-  padding: 0.8rem 1.45rem;
+  padding: 0.72rem 1.35rem;
   background: var(--accent);
   color: var(--ink-light);
-  border-radius: 2px;
   font-size: 0.8125rem;
   letter-spacing: 0.02em;
 }
@@ -297,7 +291,7 @@ a:hover {
   font-size: 0.8125rem;
   color: var(--ink-secondary);
   border-bottom: 1px solid var(--border);
-  padding-bottom: 0.18rem;
+  padding-bottom: 0.12rem;
 }
 
 .link-arrow:hover {
@@ -305,342 +299,259 @@ a:hover {
   border-bottom-color: var(--accent);
 }
 
-.hero-right {
+.hero-editorial {
   display: flex;
   flex-direction: column;
-  gap: 3.75rem;
-  padding-top: 0.25rem;
+  gap: 1.35rem;
+  max-width: 34rem;
 }
 
 .editorial-row {
   display: grid;
-  grid-template-columns: 0.95fr 2.25fr;
-  gap: 1.75rem;
-  padding-top: 2rem;
+  grid-template-columns: 6.5rem 1fr;
+  gap: 1.25rem;
+  padding-top: 1.2rem;
   border-top: 1px solid var(--border);
-  align-items: start;
+  align-items: baseline;
 }
 
-.editorial-prose {
+/* Nordic Architectural Astrolabe Plate */
+.hero-art {
+  background: var(--bg-neutral);
+  border: 1px solid var(--border);
+  padding: 1.5rem 1.85rem;
   display: flex;
   flex-direction: column;
-  gap: 1.05rem;
-  max-width: 29rem;
+  justify-content: space-between;
+  min-height: 440px;
+  position: relative;
 }
 
-/* Section 2: Core Systems (Nordic Warm Linen #F1EDE6) */
+.art-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.12em;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+}
+
+.art-svg {
+  width: 100%;
+  height: 310px;
+  display: block;
+  margin: auto 0;
+}
+
+.art-caption {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.1em;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+}
+
+/* Section 2: Flagship Systems (Warm Linen #EFECE4) */
 .sec-systems {
   background: var(--bg-neutral);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  padding: 7.5rem 0;
+  padding: 5.25rem 0;
 }
 
-.systems-header {
-  max-width: 36rem;
+.section-header {
   display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-  margin-bottom: 4rem;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-bottom: 2.5rem;
 }
 
 .flagships-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 2rem;
-  margin-bottom: 5rem;
+  gap: 2.25rem;
 }
 
 .flagship-item {
   background: var(--bg-elevated);
-  padding: 2.75rem;
+  padding: 2.5rem;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 2.25rem;
+  gap: 2rem;
   border: 1px solid var(--border);
-  border-radius: 2px;
-  transition: border-color 0.25s ease, transform 0.25s ease;
+  transition: border-color 0.25s ease;
 }
 
 .flagship-item:hover {
-  border-color: rgba(45, 74, 62, 0.38);
+  border-color: rgba(35, 62, 51, 0.45);
 }
 
 .flagship-top {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.7rem;
 }
 
 .flagship-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  padding-bottom: 0.85rem;
+  padding-bottom: 0.9rem;
   border-bottom: 1px solid var(--border);
+  margin-bottom: 0.15rem;
+}
+
+.flagship-num-group {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.flagship-num {
+  font-family: var(--serif);
+  font-size: 1.35rem;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.flagship-emblem {
+  width: 44px;
+  height: 28px;
+  display: block;
 }
 
 .flagship-sub {
-  font-size: 0.84rem;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 0.95rem;
   color: var(--accent);
-  font-weight: 500;
-  margin: -0.25rem 0 0.15rem;
+  margin: -0.15rem 0 0.1rem;
 }
 
-.flagship-bottom {
+html[lang="zh-CN"] .flagship-sub {
+  font-style: normal;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+
+.flagship-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  padding: 1.1rem 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.stat-cell {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--border);
+  gap: 0.18rem;
 }
 
-.flagship-metrics {
+.stat-val {
+  font-family: var(--serif);
+  font-size: 1.4rem;
+  font-weight: 300;
+  color: var(--ink);
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-lbl {
   font-family: var(--mono);
-  font-size: 0.74rem;
-  color: var(--accent);
-  background: var(--accent-soft);
-  padding: 0.5rem 0.75rem;
-  border-radius: 2px;
-  letter-spacing: -0.01em;
+  font-size: 0.64rem;
+  color: var(--ink-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .flagship-links {
   display: flex;
   flex-wrap: wrap;
   gap: 1.5rem;
+  padding-top: 1.15rem;
 }
 
-/* Focus Pillars (Nordic 2x2 Architectural Grid) */
-.pillars-wrap {
-  padding-top: 3.75rem;
-  border-top: 1px solid var(--border);
-}
-
-.pillars-title {
-  margin-bottom: 2.5rem;
-}
-
-.pillars-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2.5rem 4.5rem;
-}
-
-.pillar-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 1rem;
-}
-
-.pillar-content {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  max-width: 28rem;
-}
-
-.pillar-content strong {
-  font-weight: 500;
-  color: var(--ink);
-}
-
-/* Section 3: Deep Boreal Pine Statement Band (#1B2521) */
-.sec-vision {
-  background: var(--bg-dark);
-  color: var(--ink-light);
-  padding: 8.5rem 0;
-}
-
-.vision-grid {
-  display: grid;
-  grid-template-columns: 0.5fr 1.25fr 1fr;
-  gap: 3rem;
-  align-items: start;
-}
-
-.vision-prose {
-  max-width: 23rem;
-  margin-left: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-  padding-left: 1.75rem;
-  border-left: 1px solid var(--border-dark);
-}
-
-/* Section 4: Research & Writing (Nordic Paper & Linen Cards) */
+/* Section 3: Archival Publications Index (Zero Duplicated Descriptions) */
 .sec-research {
   background: var(--bg-primary);
-  padding: 8rem 0;
+  padding: 5rem 0;
 }
 
-.research-wrapper {
-  display: grid;
-  grid-template-columns: 0.32fr 1fr;
-  gap: 3.5rem;
-  align-items: stretch;
-}
-
-.research-sidebar {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-top: 2px solid var(--accent);
-  border-radius: 2px;
-  padding: 2.25rem;
+.pub-list {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 2rem;
-}
-
-.research-cards {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.75rem;
-}
-
-.research-card {
-  background: var(--bg-neutral);
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 2.25rem;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 1.85rem;
-  transition: border-color 0.25s ease;
-}
-
-.research-card:hover {
-  border-color: rgba(45, 74, 62, 0.38);
-}
-
-.research-card-top {
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-}
-
-.research-card-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.35rem;
-  padding-top: 1.15rem;
   border-top: 1px solid var(--border);
 }
 
-/* Minimal Nordic Footer */
+.pub-row {
+  display: grid;
+  grid-template-columns: 11rem 1fr auto;
+  gap: 2rem;
+  align-items: baseline;
+  padding: 1.65rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.pub-links {
+  display: flex;
+  align-items: center;
+  gap: 1.35rem;
+}
+
+/* Single-Row Minimal Nordic Footer */
 .foot {
   background: var(--bg-primary);
   border-top: 1px solid var(--border);
-  padding: 4.5rem 0 3.5rem;
+  padding: 2.25rem 0;
 }
 
-.foot-top {
-  display: grid;
-  grid-template-columns: 1fr 1.2fr;
-  gap: 3rem;
-  padding-bottom: 3.25rem;
-}
-
-.foot-brand-col {
-  display: flex;
-  flex-direction: column;
-  gap: 0.8rem;
-  max-width: 22rem;
-}
-
-.foot-menus {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 2rem;
-}
-
-.foot-col {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-
-.foot-col-title {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-muted);
-  margin-bottom: 0.3rem;
-}
-
-.foot-link {
-  font-size: 0.875rem;
-  color: var(--ink-secondary);
-  text-transform: lowercase;
-}
-
-.foot-link:hover {
-  color: var(--accent);
-}
-
-.foot-bottom {
-  padding-top: 2rem;
-  border-top: 1px solid var(--border);
+.foot-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  font-size: 0.8125rem;
+  gap: 2rem;
+}
+
+.foot-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.5rem;
+  font-size: 0.78rem;
   color: var(--ink-muted);
 }
 
-/* Responsive */
+.foot-link {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-secondary);
+}
+
 @media (max-width: 991px) {
-  .container, .nav-inner {
-    padding-left: 1.75rem;
-    padding-right: 1.75rem;
-  }
-  .hero-grid {
-    grid-template-columns: 1fr;
-    gap: 3.5rem;
-  }
-  .hero-left {
-    position: static;
-    max-width: 100%;
-  }
-  .flagships-grid,
-  .pillars-grid,
-  .research-wrapper,
-  .research-cards,
-  .vision-grid,
-  .foot-top {
-    grid-template-columns: 1fr;
-  }
-  .vision-prose {
-    margin-left: 0;
-    max-width: 100%;
-    padding-left: 1.25rem;
-  }
-  .sec-hero, .sec-systems, .sec-vision, .sec-research {
-    padding: 4.5rem 0;
-  }
+  .container, .nav-inner { padding-left: 1.75rem; padding-right: 1.75rem; }
+  .hero-grid, .flagships-grid { grid-template-columns: 1fr; }
+  .pub-row { grid-template-columns: 1fr; gap: 0.5rem; }
+  .section-header, .foot-bar { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+  .sec-hero, .sec-systems, .sec-research { padding: 4rem 0; }
 }
 
 @media (max-width: 640px) {
-  .nav-links {
-    display: none;
-  }
-  .editorial-row {
-    grid-template-columns: 1fr;
-    gap: 0.65rem;
-  }
-  .foot-menus {
-    grid-template-columns: 1fr 1fr;
-  }
-  .foot-bottom {
-    flex-direction: column;
-    align-items: flex-start;
-  }
+  .nav-links { display: none; }
+  .editorial-row { grid-template-columns: 1fr; gap: 0.35rem; }
+  .hero-art { min-height: auto; gap: 0.85rem; padding: 1.25rem; }
+  .art-svg { height: auto; }
 }
