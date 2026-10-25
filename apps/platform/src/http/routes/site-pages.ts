@@ -28,105 +28,47 @@ export function isToolSlug(s: string): s is ToolSlug {
  * 将 apps/site/index.html 在服务端转换为纯正的英文版 HTML（供 GET /en 直接返回给无 JS 爬虫与浏览器）
  */
 export function renderEnglishIndexHtml(zhHtml: string): string {
-  // 提取脚本中的 en 字典键值对
+  // 提取脚本中的 en 字典键值对（兼容单引号与双引号）
   const enBlockMatch = /\ben:\s*\{([\s\S]*?)\n\s*\}\s*\n\s*\};/.exec(zhHtml)
   const enDict: Record<string, string> = {}
   if (enBlockMatch?.[1]) {
-    const kvRegex = /([a-zA-Z0-9_]+):\s*"((?:[^"\\]|\\.)*)"/g
+    const kvRegex = /([a-zA-Z0-9_]+):\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g
     let m: RegExpExecArray | null
     while ((m = kvRegex.exec(enBlockMatch[1])) !== null) {
       const k = m[1]!
-      const v = m[2]!.replace(/\\"/g, '"').replace(/\\n/g, '\n')
+      const raw = m[2] ?? m[3] ?? ''
+      const v = raw.replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\n/g, '\n')
       enDict[k] = v
     }
   }
 
   let html = zhHtml
     .replace('<html lang="zh-CN">', '<html lang="en">')
-    .replace(
-      '<meta name="description" content="Heurion Research 是面向严肃医学研究与高可靠智能体协作的研究实验室（Research Lab），主打两大旗舰产品：Heurion 2.0 临床科研全流程智能工作台（OmniCanvas 双面协同、MONAI 3D 影像、Table 1 三线表、PubMed 溯源）与 Aegis OS 事务型多租户 Agent 操作系统运行时。">',
-      '<meta name="description" content="Heurion Research is a research lab building contract-guarded clinical research intelligence and transactional agent systems, featuring two flagship products: Heurion 2.0 & OmniCanvas (Clinical Research AI Workstation) and Aegis OS (Transactional Multi-Tenant Agent Operating System Runtime).">',
-    )
-    .replace('<link rel="canonical" href="https://heurion.org/">', '<link rel="canonical" href="https://heurion.org/en">')
-    .replace(
-      '<meta property="og:title" content="Heurion Research · 契约受控临床科研工作台与事务型 Agent 操作系统 (Clinical AI Workstation &amp; Aegis OS)">',
-      '<meta property="og:title" content="Heurion Research · Contract-Guarded Clinical AI Workstation &amp; Aegis OS Agent Runtime">',
-    )
-    .replace(
-      '<meta property="og:description" content="面向严肃医学研究与高可靠智能体协作的研究实验室：主打 Heurion 2.0 临床科研全流程工作台（MONAI 3D 影像、Table 1 三线表、PubMed 溯源）与 Aegis OS 事务型 Agent 操作系统运行时。">',
-      '<meta property="og:description" content="Research lab building contract-guarded clinical research intelligence (Heurion 2.0 & OmniCanvas Workstation) and transactional multi-tenant agent operating systems (Aegis OS).">',
-    )
-    .replace('<meta property="og:url" content="https://heurion.org/">', '<meta property="og:url" content="https://heurion.org/en">')
-    .replace('<meta property="og:locale" content="zh_CN">', '<meta property="og:locale" content="en_US">')
-    .replace('<meta property="og:locale:alternate" content="en_US">', '<meta property="og:locale:alternate" content="zh_CN">')
-    .replace(
-      '<meta name="twitter:title" content="Heurion Research · 临床科研智能工作台 &amp; Aegis OS 运行时">',
-      '<meta name="twitter:title" content="Heurion Research · Clinical AI Workstation &amp; Aegis OS Runtime">',
-    )
-    .replace(
-      '<meta name="twitter:description" content="面向严肃医学研究与高可靠智能体协作的研究实验室：主打 Heurion 2.0 临床科研工作台与 Aegis OS 事务型 Agent 操作系统运行时。">',
-      '<meta name="twitter:description" content="Heurion Research Lab: Heurion 2.0 Clinical Research AI Workstation (MONAI 3D, Table 1 .docx, E-value, PubMed verification) and Aegis OS Transactional Agent Runtime.">',
-    )
+    .replace(/<link rel="canonical" href="https:\/\/heurion\.org\/"\s*\/?>/, '<link rel="canonical" href="https://heurion.org/en">')
+    .replace(/<meta property="og:url" content="https:\/\/heurion\.org\/"\s*\/?>/, '<meta property="og:url" content="https://heurion.org/en">')
+    .replace(/<meta property="og:locale" content="zh_CN"\s*\/?>/, '<meta property="og:locale" content="en_US">')
+    .replace(/<meta property="og:locale:alternate" content="en_US"\s*\/?>/, '<meta property="og:locale:alternate" content="zh_CN">')
+    .replace('>EN</button>', '>中文</button>')
     .replace('<span id="langText">EN</span>', '<span id="langText">中文</span>')
     .replace(/href="\/tools"/g, 'href="/en/tools"')
 
-  // 替换 JSON-LD 中的中文 FAQ 与 MedicalWebPage 描述为英文
+  // 替换 JSON-LD 中的中文 FAQ 为英文
   html = html
     .replace(
-      '"name": "Heurion Research · 契约受控临床科研工作台与事务型 Agent 操作系统 (Clinical AI Workstation & Aegis OS)"',
-      '"name": "Heurion Research · Contract-Guarded Clinical AI Workstation & Aegis OS Agent Runtime"',
+      '"name": "什么是 Heurion（临床科研 AI 工作台），它与通用大模型（ChatGPT / Claude）有何本质区别？"',
+      '"name": "What is Heurion, and how does it differ fundamentally from generic LLMs like ChatGPT or Claude?"',
     )
     .replace(
-      '"description": "面向严肃医学研究与高可靠智能体协作的研究实验室：覆盖 Heurion 2.0 临床科研全流程工作台（患者纳排、MONAI 3D 影像量化、Table 1 三线表、PubMed 文献溯源）与 Aegis OS 事务型 Agent 操作系统运行时。"',
-      '"description": "Heurion Research Lab unifying the Heurion 2.0 contract-guarded clinical research AI workstation (PHR, cohort enrollment, MONAI 3D imaging, native Word Table 1, PubMed verification) and Aegis OS transactional agent operating system runtime."',
+      '"text": "Heurion 2.0 是专为临床医生与医学研究者打造的端到端临床科研智能工作台。它在确定性 Yjs CRDT 画布上提供受契约守卫的 Word/PPTX 协同、沙箱化生物统计计算与零外泄患者档案管理。"',
+      '"text": "Heurion 2.0 is an end-to-end Contract-Guarded Clinical Research Intelligence workstation providing structure-preserving Word/PPTX authoring, sandboxed biostatistics, and zero-leakage local PHI gatekeeping on a deterministic Yjs CRDT canvas."',
     )
     .replace(
-      '"name": "Heurion 是什么？与普通通用大模型（如 ChatGPT / Claude）有什么本质区别？"',
-      `"name": ${JSON.stringify(enDict.faq_q1 || 'What is Heurion, and how does it differ fundamentally from generic LLMs like ChatGPT or Claude?')}`,
+      '"name": "什么是 Aegis OS，它与 Heurion 2.0 临床科研工作台是什么关系？"',
+      '"name": "What is Aegis OS, and how does it work together with the Heurion 2.0 Clinical Workstation?"',
     )
     .replace(
-      '"text": "Heurion 是专为医学与临床科研打造的全流程 AI 智能工作台，覆盖患者数据录入、课题组纳排、MONAI 3D 影像量化、发表级 Table 1 三线表生成与论文写作全生命周期。与通用大模型相比，Heurion 针对临床科研的几个痛点：1) 引用核验：引用经 NCBI PubMed 与 Crossref 核对，无法核实的 DOI/PMID 会被标出；2) 3D 医学影像：集成 Project MONAI 与 PyTorch，支持 CT/MRI 体数据分割、RECIST 1.1 径线与体积测量和三正交 MPR；3) 患者隐私：入组即分配 S001... 去标识编号，AI 统计代码在无外网访问的受限沙箱中运行；4) 统计与发表级输出：在沙箱中运行 Python 统计脚本，一键生成发表级 Table 1 原生 Word 三线表（1.5pt/0.5pt 边线）与 CONSORT 2010 流程图。"',
-      `"text": ${JSON.stringify(`${enDict.faq_a1_p1 ?? ''} ${enDict.faq_a1_p2 ?? ''}`.trim())}`,
-    )
-    .replace(
-      '"name": "Heurion 如何保障患者健康隐私（PHI）与医疗数据合规？"',
-      `"name": ${JSON.stringify(enDict.faq_q2 || 'How does Heurion ensure Protected Health Information (PHI) and healthcare data security?')}`,
-    )
-    .replace(
-      '"text": "Heurion 的数据保护措施：1) 去标识：入组患者自动分配学术编号（S001、S002...）；2) PHI 扫描：内置基于规则的扫描器，可在数据与文稿中检出并脱敏姓名、身份证号、手机号与病案号；3) 沙箱隔离：AI 执行统计分析的 Python 环境运行在独立的受限系统用户中，出站网络只放行平台内部端口，不能直接访问平台数据库或他人工作区；4) 大模型调用：AI 对话经平台代理调用外部大模型服务，建议只提交已去标识的数据。"',
-      `"text": ${JSON.stringify(enDict.faq_a2_p1 ?? '')}`,
-    )
-    .replace(
-      '"name": "Heurion 支持哪些医学影像（CT/MRI）智能分析与模型？"',
-      `"name": ${JSON.stringify(enDict.faq_q3 || 'Which medical imaging (CT/MRI) deep learning models does Heurion support?')}`,
-    )
-    .replace(
-      '"text": "Heurion 影像分析服务集成 Project MONAI 与 PyTorch，支持 NIfTI 与 DICOM 格式。已在公开数据集样本上实际运行的能力包括：1) 脾脏自动分割与体积测量（MONAI 官方 spleen_ct 3D-UNet 权重）；2) 基于分割掩膜的 RECIST 1.1 最长径与体积测量；3) 三维影像组学特征提取（形状、一阶统计、GLCM、GLRLM 共 46 项）；4) 三正交多平面重建（MPR）。所有输出仅供科研参考，不构成诊断意见。"',
-      `"text": ${JSON.stringify(enDict.faq_a3_p1 ?? '')}`,
-    )
-    .replace(
-      '"name": "Heurion 如何帮助临床医生撰写医学论文与准备投稿材料？"',
-      `"name": ${JSON.stringify(enDict.faq_q4 || 'How does Heurion assist clinicians in manuscript writing and journal submissions?')}`,
-    )
-    .replace(
-      '"text": "Heurion 覆盖论文发表常用的材料：1) 导出发表级 Table 1 原生 Word (.docx) 三线表，可给出两组间 SMD；2) 绘制 CONSORT 2010 / STROBE 受试者流向矢量图；3) 计算 VanderWeele E-value 未测混杂敏感性指标；4) 运行 Kaplan-Meier 生存曲线与 Cox 比例风险回归；5) 核对论文中的文献引用、效应量（HR/OR/RR）与 95% 置信区间。"',
-      `"text": ${JSON.stringify(enDict.faq_a4_p1 ?? '')}`,
-    )
-    .replace(
-      '"name": "如何通过 MCP (Model Context Protocol) 将 Heurion 连接到自主 AI Agent？"',
-      `"name": ${JSON.stringify(enDict.faq_q5 || 'How can other autonomous AI agents connect to Heurion via Model Context Protocol (MCP)?')}`,
-    )
-    .replace(
-      '"text": "Heurion 提供了符合 Anthropic Model Context Protocol (MCP) 标准的专用服务端点，支持 Claude Desktop、Cursor、Cline 等自主 AI 智能体接入。Agent 可通过标准化工具调用 Heurion 的文献核验、医学影像切片提取、受试者纳排、沙箱统计分析与文档协同创作能力。"',
-      `"text": ${JSON.stringify(enDict.faq_a5_p1 ?? '')}`,
-    )
-    .replace(
-      '"name": "Aegis OS 是什么？它与 Heurion 2.0 临床工作台如何协同工作？"',
-      `"name": ${JSON.stringify(enDict.faq_q6 || 'What is Aegis OS, and how does it work together with the Heurion 2.0 Clinical Workstation?')}`,
-    )
-    .replace(
-      '"text": "Aegis OS (aegis-os) 是 Heurion Research 研发的事务型多租户 Agent 操作系统运行时（基于 Rust 构建）。它为自主智能体提供毫秒级 APFS/FICLONE 写时复制（CoW）影子工作区、macOS Seatbelt 与 Linux Bubblewrap 双层内核沙箱（80 项红队攻击 0.0% 越权率）、L7 零信任密钥注入与出站 DLP，以及 Google A2A / MCP 协同总线（消除 90.7%–97.9% 授权确认弹窗）。Heurion 2.0 原生实现 AAP-1.0 协议，可通过 aegis app install heurion.org 直接挂载到 Aegis OS 中安全运行。"',
-      `"text": ${JSON.stringify(enDict.faq_a6_p1 ?? '')}`,
+      '"text": "Aegis OS (aegis-os) 是 Heurion Research 研发的开源多租户智能体操作系统内核，提供写时复制影子工作区、内核沙箱与 AAP-1.0 离线 Ed25519 人类审批租约。Heurion 2.0 是首个原生接入 AAP-1.0 的第一方临床应用。"',
+      '"text": "Aegis OS (aegis-os) is an open-source transactional multi-tenant agent operating system runtime providing Copy-on-Write shadow workspaces, kernel sandboxing, and AAP-1.0 offline Ed25519 human-in-the-loop leases. Heurion 2.0 is the first native reference application on AAP-1.0."',
     )
 
   // 将所有带 data-i18n="key" 的单层标签内容在服务端替换为英文
