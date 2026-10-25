@@ -279,6 +279,22 @@ def locate_lobe(
 # 主流程
 # ---------------------------------------------------------------------------
 
+LOBE_MODES = ("full", "roi", "off")
+# lobe_mode="roi" 时每个结节周围裁取的半边长（mm）。VISTA-3D 一个 128³ 滑窗在 1.5 mm 下覆盖 192 mm；
+# 取 90 mm 使裁块重采样后 ≤ 122 体素、只需一个滑窗（96 mm 会得到 129 体素，需 8 个滑窗，实测反而更慢）
+LOBE_ROI_HALF_MM = 90.0
+
+
+def _ms(t: float) -> int:
+    return int(round((time.time() - t) * 1000))
+
+
+def _call_lobes(neural: Any, volume: np.ndarray, spacing: Tuple[float, float, float], resample_mm: Optional[float]):
+    if resample_mm is None:
+        return neural.infer_vista3d_lung_lobes(volume, spacing)
+    return neural.infer_vista3d_lung_lobes(volume, spacing, resample_mm=resample_mm)
+
+
 def run_lung_nodule_pipeline(
     neural: Any,
     volume: np.ndarray,
@@ -286,40 +302,59 @@ def run_lung_nodule_pipeline(
     modality: Optional[str] = "CT",
     max_nodules: int = 20,
     min_score: Optional[float] = None,
+    lobe_mode: str = "full",
+    lobe_resample_mm: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     neural：engine.MonaiNeuralInferencePipeline 实例，需提供 _verified_weights、detect_lung_nodules、
     infer_vista3d_nodule、infer_vista3d_lung_lobes 与 device。
-    返回契约见 apps/imaging-worker 的 POST /api/v1/pipeline/lung-nodule。
+    lobe_mode：full = 全肺做一次 VISTA-3D 肺叶分割（默认）；roi = 只在每个结节周围 ±96 mm 的区域做；
+    off = 不做肺叶定位（lobe 为 null 并写明）。lobe_resample_mm 为空时用 bundle 的 1.5 mm。
+    返回契约见 apps/imaging-worker 的 POST /api/v1/pipeline/lung-nodule；timings_ms 为各阶段耗时。
     """
     t0 = time.time()
     if max_nodules is None or int(max_nodules) < 1 or int(max_nodules) > 100:
         raise ValueError("max_nodules 须在 1~100 之间")
     if min_score is not None and not (0.0 <= float(min_score) <= 1.0):
         raise ValueError("min_score 须在 0~1 之间")
+    if lobe_mode not in LOBE_MODES:
+        raise ValueError(f"lobe_mode 须为 {'/'.join(LOBE_MODES)}")
+    if lobe_resample_mm is not None and not (1.0 <= float(lobe_resample_mm) <= 5.0):
+        raise ValueError("lobe_resample_mm 须在 1~5 mm 之间")
     volume = np.asarray(volume)
     if volume.ndim != 3:
         raise ValueError(f"需要三维体积，收到 {volume.ndim} 维")
     spacing = tuple(float(s) for s in spacing)
+    timings: Dict[str, Any] = {}
 
     # 两个组成模型的权重都必须就绪，否则直接抛 ModelUnavailableError（不退回规则法）
     _, det_status = neural._verified_weights(DETECTOR_REGISTRY_NAME)
     _, seg_status = neural._verified_weights(SEGMENTER_REGISTRY_NAME)
     model_version = f"{DETECTOR_REGISTRY_NAME}@{_version_tag(det_status)}+{SEGMENTER_REGISTRY_NAME}@{_version_tag(seg_status)}"
+    # 权重加载单独计时（已加载过则接近 0）
+    t = time.time()
+    for loader in ("get_lung_nodule_model", "get_vista3d_model"):
+        if hasattr(neural, loader):
+            getattr(neural, loader)()
+    timings["model_load"] = _ms(t)
 
     series_qc = series_quality_control(volume.shape, spacing, modality)
     warnings: List[str] = []
 
     # 1) 检出 + 去重 + 数量上限
+    t = time.time()
     detections, det_info = neural.detect_lung_nodules(volume, spacing, min_score=min_score)
     kept, merged = deduplicate_detections(detections, spacing)
     truncated = max(0, len(kept) - int(max_nodules))
     if truncated:
         warnings.append(f"去重后检出 {len(kept)} 个，按检出分数只分析前 {int(max_nodules)} 个（max_nodules），其余 {truncated} 个未分析")
     kept = kept[: int(max_nodules)]
+    timings["detection"] = _ms(t)
 
     # 2) 逐结节 VISTA-3D 点提示分割与测量
     nodules: List[Dict[str, Any]] = []
+    seg_times: List[int] = []
+    measure_ms = 0
     for det in kept:
         box = [int(v) for v in det["box_zyx"]]
         prompt = box_center_zyx(box)
@@ -328,8 +363,11 @@ def run_lung_nodule_pipeline(
         key_z = None
         center = prompt
         segmentation = "failed"
+        t = time.time()
         try:
             raw_mask, seg_meta = neural.infer_vista3d_nodule(volume, spacing, prompt_point=prompt)
+            seg_times.append(_ms(t))
+            t = time.time()
             mask = select_components_overlapping_box(raw_mask, box)
             if not mask.any():
                 n_warnings.append("VISTA-3D 分割结果与检出框无重叠")
@@ -341,9 +379,11 @@ def run_lung_nodule_pipeline(
                     center = [int(round(float(c))) for c in ndi.center_of_mass(mask)]
                     if (seg_meta or {}).get("mask_touches_window_edge"):
                         n_warnings.append("分割触及 VISTA-3D 推理区域边界，可能被截断，测值可能偏小")
+            measure_ms += _ms(t)
         except Exception as exc:
             if type(exc).__name__ == "ModelUnavailableError":
                 raise
+            seg_times.append(_ms(t))
             n_warnings.append(f"VISTA-3D 分割出错：{exc}")
 
         if segmentation == "failed":
@@ -362,23 +402,50 @@ def run_lung_nodule_pipeline(
             "warnings": n_warnings,
             "_radius_mm": (metrics["mean_diameter_mm"] or 0.0) / 2.0,
         })
+    timings["segmentation_per_nodule"] = seg_times
+    timings["segmentation_total"] = int(sum(seg_times))
+    timings["measurement"] = measure_ms
 
-    # 3) 肺叶定位：有结节时才对全肺做一次 VISTA-3D 肺叶分割
-    lobe_meta: Dict[str, Any] = {"status": "skipped"}
-    if nodules:
+    # 3) 肺叶定位
+    t = time.time()
+    lobe_meta: Dict[str, Any] = {"status": "skipped", "mode": lobe_mode}
+    if nodules and lobe_mode == "off":
+        lobe_meta = {"status": "off", "mode": lobe_mode}
+        warnings.append("按请求未做肺叶定位（lobe_mode=off），所有结节 lobe 为 null")
+    elif nodules:
         try:
-            lobe_map, meta = neural.infer_vista3d_lung_lobes(volume, spacing)
-            lobe_meta = {"status": "ok", "lobe_voxels": meta.get("lobe_voxels")}
-            for n in nodules:
-                lobe, note = locate_lobe(lobe_map, n["center_vox_zyx"], spacing, n["_radius_mm"])
-                n["lobe"] = lobe
-                if note:
-                    n["warnings"].append(note)
+            if lobe_mode == "full":
+                lobe_map, meta = _call_lobes(neural, volume, spacing, lobe_resample_mm)
+                lobe_meta = {"status": "ok", "mode": lobe_mode, "lobe_voxels": meta.get("lobe_voxels")}
+                for n in nodules:
+                    lobe, note = locate_lobe(lobe_map, n["center_vox_zyx"], spacing, n["_radius_mm"])
+                    n["lobe"] = lobe
+                    if note:
+                        n["warnings"].append(note)
+            else:
+                # roi：每个结节周围 ±LOBE_ROI_HALF_MM 的局部区域各做一次；肺叶判别只用到局部上下文
+                for n in nodules:
+                    c = n["center_vox_zyx"]
+                    lo = [max(0, int(c[i] - np.ceil(LOBE_ROI_HALF_MM / spacing[i]))) for i in range(3)]
+                    hi = [min(volume.shape[i], int(c[i] + np.ceil(LOBE_ROI_HALF_MM / spacing[i])) + 1) for i in range(3)]
+                    crop = volume[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]
+                    lobe_map, _ = _call_lobes(neural, crop, spacing, lobe_resample_mm)
+                    local = [c[i] - lo[i] for i in range(3)]
+                    lobe, note = locate_lobe(lobe_map, local, spacing, n["_radius_mm"])
+                    n["lobe"] = lobe
+                    if note:
+                        n["warnings"].append(note)
+                lobe_meta = {"status": "ok", "mode": lobe_mode, "roi_half_mm": LOBE_ROI_HALF_MM}
+            if lobe_resample_mm is not None:
+                lobe_meta["resample_mm"] = float(lobe_resample_mm)
         except Exception as exc:
             if type(exc).__name__ == "ModelUnavailableError":
                 raise
-            lobe_meta = {"status": "failed"}
+            lobe_meta = {"status": "failed", "mode": lobe_mode}
+            for n in nodules:
+                n["lobe"] = None
             warnings.append(f"VISTA-3D 肺叶分割失败，所有结节 lobe 为 null：{exc}")
+    timings["lobe_segmentation"] = _ms(t)
 
     # 4) 按平均径从大到小排序并编号
     nodules.sort(key=lambda n: -(n["metrics"]["mean_diameter_mm"] or 0.0))
@@ -405,4 +472,5 @@ def run_lung_nodule_pipeline(
             "box_convention": "[z0, y0, x0, z1, y1, x1] 体素下标，左闭右开",
         },
         "lobe_segmentation": lobe_meta,
+        "timings_ms": timings,
     }

@@ -103,6 +103,9 @@ class FakeNeural:
         self.stray_component = stray_component
         self.vista_calls = []
         self.lobe_calls = 0
+        self.lobe_shapes = []
+        self.lobe_resample = []
+        self.roi_origins = []
 
     def _verified_weights(self, name):
         return Path("/dev/null"), {"version": {"lung_nodule_ct": "v0.5.9", "vista3d": "v0.5.7"}[name]}
@@ -127,11 +130,17 @@ class FakeNeural:
             mask[2:4, 2:4, 2:4] = 1
         return mask, {"real_neural_inference": True, "mask_touches_window_edge": False}
 
-    def infer_vista3d_lung_lobes(self, vol, spacing):
+    def infer_vista3d_lung_lobes(self, vol, spacing, resample_mm=None):
         self.lobe_calls += 1
+        self.lobe_shapes.append(tuple(vol.shape))
+        self.lobe_resample.append(resample_mm)
         if self.lobe_error:
             raise RuntimeError(self.lobe_error)
-        return self.lobe_map, {"lobe_voxels": {}}
+        if vol.shape == self.lobe_map.shape:
+            return self.lobe_map, {"lobe_voxels": {}}
+        # roi 模式：按裁块在全图中的位置取对应肺叶图（裁块原点由测试登记）
+        z0, y0, x0 = self.roi_origins.pop(0)
+        return self.lobe_map[z0:z0 + vol.shape[0], y0:y0 + vol.shape[1], x0:x0 + vol.shape[2]], {"lobe_voxels": {}}
 
 
 def _detections(nodules, scores):
@@ -369,6 +378,41 @@ def test_max_nodules_and_min_score(phantom):
         run_lung_nodule_pipeline(fake, vol, SPACING, min_score=1.5)
 
 
+def test_lobe_modes_and_timings(phantom):
+    vol, nodules, lobe_map = phantom
+    dets = _detections(nodules, {"A": 0.6, "B": 0.95})
+    # off：不调用肺叶分割，lobe 为 null 并写明
+    fake = FakeNeural(nodules, lobe_map, dets)
+    res = run_lung_nodule_pipeline(fake, vol, SPACING, lobe_mode="off")
+    _assert_contract(res)
+    assert fake.lobe_calls == 0
+    assert all(n["lobe"] is None for n in res["nodules"])
+    assert any("lobe_mode=off" in w for w in res["warnings"])
+    assert res["lobe_segmentation"]["status"] == "off"
+
+    # roi：每个结节各做一次局部肺叶分割，裁块 ±96 mm，结果与全肺一致
+    fake = FakeNeural(nodules, lobe_map, dets)
+    for k in ("B", "A"):  # 结节按检出分数降序处理：B、A
+        c = nodules[k]["center"]
+        fake.roi_origins.append(tuple(max(0, int(c[i] - math.ceil(90.0 / SPACING[i]))) for i in range(3)))
+    res = run_lung_nodule_pipeline(fake, vol, SPACING, lobe_mode="roi", lobe_resample_mm=2.0)
+    assert fake.lobe_calls == 2
+    assert all(s != vol.shape for s in fake.lobe_shapes) or vol.shape[1] * 0.7 <= 192
+    assert fake.lobe_resample == [2.0, 2.0]
+    assert [n["lobe"] for n in res["nodules"]] == ["RUL", "LUL"]
+    assert res["lobe_segmentation"]["mode"] == "roi" and res["lobe_segmentation"]["resample_mm"] == 2.0
+
+    # 各阶段计时
+    t = res["timings_ms"]
+    assert {"model_load", "detection", "segmentation_per_nodule", "segmentation_total", "measurement", "lobe_segmentation"} <= set(t)
+    assert len(t["segmentation_per_nodule"]) == 2
+
+    with pytest.raises(ValueError):
+        run_lung_nodule_pipeline(fake, vol, SPACING, lobe_mode="bogus")
+    with pytest.raises(ValueError):
+        run_lung_nodule_pipeline(fake, vol, SPACING, lobe_resample_mm=0.2)
+
+
 def test_no_detections_skips_lobe_segmentation(phantom):
     vol, nodules, lobe_map = phantom
     fake = FakeNeural(nodules, lobe_map, [])
@@ -390,6 +434,8 @@ def _install_fake(monkeypatch, fake):
     neural = server.engine.neural_pipeline
     for name in ("_verified_weights", "detect_lung_nodules", "infer_vista3d_nodule", "infer_vista3d_lung_lobes"):
         monkeypatch.setattr(neural, name, getattr(fake, name))
+    for name in ("get_lung_nodule_model", "get_vista3d_model"):
+        monkeypatch.setattr(neural, name, lambda: None)
 
 
 def test_pipeline_endpoint_contract(client, monkeypatch, phantom):
@@ -404,6 +450,10 @@ def test_pipeline_endpoint_contract(client, monkeypatch, phantom):
         _assert_contract(res)
         assert res["device"] == server.engine.neural_pipeline.device.type
         assert [n["lobe"] for n in res["nodules"]] == ["RUL", "RUL", "LUL"]
+        assert "load" in res["timings_ms"]
+        r = client.post("/api/v1/pipeline/lung-nodule", json={"volume_id": "t15-endpoint", "lobe_mode": "off"})
+        assert r.status_code == 200 and all(n["lobe"] is None for n in r.json()["nodules"])
+        assert client.post("/api/v1/pipeline/lung-nodule", json={"volume_id": "t15-endpoint", "lobe_mode": "x"}).status_code == 400
         # 默认参数
         r = client.post("/api/v1/pipeline/lung-nodule", json={"volume_id": "t15-endpoint"})
         assert r.status_code == 200

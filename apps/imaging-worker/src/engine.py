@@ -926,16 +926,35 @@ class MonaiNeuralInferencePipeline:
         })
         return labels.astype(np.uint8), meta
 
-    def _run_lung_nodule_detector(self, vol_zyx: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    # lung_nodule_ct_detection v0.5.9 configs/inference.json：Orientationd(RAS) → Spacingd(0.703125, 0.703125, 1.25)（x, y, z）
+    # → ScaleIntensityRanged(-1024, 300 → 0, 1)
+    LUNG_NODULE_SPACING_XYZ_MM: Tuple[float, float, float] = (0.703125, 0.703125, 1.25)
+    LUNG_NODULE_HU_MIN = -1024.0
+    LUNG_NODULE_HU_MAX = 300.0
+
+    def _run_lung_nodule_detector(
+        self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        lung_nodule_ct_detection 的 RetinaNet 前向：输入 HU [-1024, 300] 线性归一化到 [0, 1]，
-        返回 (boxes, scores)。boxes 为体素坐标 (x1, y1, z1, x2, y2, z2)，即模型在 (X, Y, Z) 数组上的原始输出。
+        lung_nodule_ct_detection 的 RetinaNet 前向，按 bundle 约定预处理：
+        规范 LPS (Z, Y, X) → RAS (X, Y, Z)（X、Y 取反）→ 三线性重采样到 0.703125 × 0.703125 × 1.25 mm → HU [-1024, 300] → [0, 1]。
+        检出框（重采样 RAS 网格上的体素边界坐标）按比例映射回原网格并撤销翻转。
+        返回 (boxes, scores)；boxes 为原网格体素边界坐标 (x1, y1, z1, x2, y2, z2)，x/y/z 对应规范体积的 X/Y/Z 轴。
         """
+        import torch.nn.functional as F
         detector = self.get_lung_nodule_model()
         vol_xyz = np.transpose(np.asarray(vol_zyx, dtype=np.float32), (2, 1, 0))
-        scaled = np.clip((vol_xyz - (-1024.0)) / (300.0 - (-1024.0)), 0.0, 1.0).astype(np.float32)
-        in_tensor = torch.from_numpy(scaled).unsqueeze(0).to(self.device)
-        use_sw = bool(np.prod(scaled.shape) > (128 * 128 * 64))
+        native_xyz = vol_xyz.shape
+        ras = np.ascontiguousarray(vol_xyz[::-1, ::-1, :])
+        t = torch.from_numpy(ras)[None, None]
+        dz, dy, dx = [float(s) for s in spacing]
+        out_shape = [max(1, int(round(n * d / tgt))) for n, d, tgt in zip(native_xyz, (dx, dy, dz), self.LUNG_NODULE_SPACING_XYZ_MM)]
+        if list(out_shape) != list(native_xyz):
+            t = F.interpolate(t, size=out_shape, mode="trilinear", align_corners=False)
+        res_xyz = tuple(int(s) for s in t.shape[2:])
+        scaled = torch.clamp((t[0] - self.LUNG_NODULE_HU_MIN) / (self.LUNG_NODULE_HU_MAX - self.LUNG_NODULE_HU_MIN), 0.0, 1.0)
+        in_tensor = scaled.float().to(self.device)
+        use_sw = bool(np.prod(res_xyz) > (128 * 128 * 64))
         with torch.no_grad():
             preds = detector([in_tensor], use_inferer=use_sw)
         det = preds[0] if preds else {}
@@ -943,7 +962,17 @@ class MonaiNeuralInferencePipeline:
         scores_t = det.get("labels_scores", det.get("scores", torch.empty((0,))))
         boxes_np = boxes_t.detach().cpu().numpy() if hasattr(boxes_t, "detach") else np.asarray(boxes_t)
         scores_np = scores_t.detach().cpu().numpy() if hasattr(scores_t, "detach") else np.asarray(scores_t)
-        return np.asarray(boxes_np, dtype=np.float64).reshape(-1, 6), np.asarray(scores_np, dtype=np.float64).reshape(-1)
+        boxes = np.asarray(boxes_np, dtype=np.float64).reshape(-1, 6)
+        if len(boxes):
+            # 重采样网格的体素边界坐标 → 原网格（align_corners=False 时边界按 原尺寸/新尺寸 线性缩放）
+            scale = np.array([n / r for n, r in zip(native_xyz, res_xyz)] * 2, dtype=np.float64)
+            boxes = boxes * scale
+            # 撤销 X、Y 翻转：[a, b) → [N - b, N - a)
+            nx, ny = float(native_xyz[0]), float(native_xyz[1])
+            x1, x2 = nx - boxes[:, 3], nx - boxes[:, 0]
+            y1, y2 = ny - boxes[:, 4], ny - boxes[:, 1]
+            boxes = np.stack([x1, y1, boxes[:, 2], x2, y2, boxes[:, 5]], axis=1)
+        return boxes, np.asarray(scores_np, dtype=np.float64).reshape(-1)
 
     @staticmethod
     def default_lung_nodule_score_threshold(scores: np.ndarray) -> Optional[float]:
@@ -965,7 +994,7 @@ class MonaiNeuralInferencePipeline:
         - score: 模型置信度。
         min_score 为空时用 default_lung_nodule_score_threshold。
         """
-        boxes_np, scores_np = self._run_lung_nodule_detector(vol_zyx)
+        boxes_np, scores_np = self._run_lung_nodule_detector(vol_zyx, spacing)
         thr = float(min_score) if min_score is not None else self.default_lung_nodule_score_threshold(scores_np)
         z_dim, y_dim, x_dim = vol_zyx.shape
         detections: List[Dict[str, Any]] = []
@@ -993,7 +1022,7 @@ class MonaiNeuralInferencePipeline:
         掩膜是框内椭球示意，不是分割；真实分割见 lung_nodule_pipeline。
         """
         t0 = time.time()
-        boxes_np, scores_np = self._run_lung_nodule_detector(vol_zyx)
+        boxes_np, scores_np = self._run_lung_nodule_detector(vol_zyx, spacing)
 
         mask_zyx = np.zeros(vol_zyx.shape, dtype=np.uint8)
         detections: List[Dict[str, Any]] = []
@@ -1032,128 +1061,89 @@ class MonaiNeuralInferencePipeline:
         })
         return mask_zyx, meta
 
-    def infer_vista3d(
-        self,
-        vol_zyx: np.ndarray,
-        spacing: Tuple[float, float, float],
-        prompt_point: Optional[Any] = None,
-        label_prompt: Optional[int] = None,
-    ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        """
-        vista3d bundle（vista3d132）：支持 3D 提示点交互式分割或类别索引分割。
-        以提示点（未提供时取体积中心）为中心截取 64³~96³ 局部立方体送入 vista3d132。
-        """
-        t0 = time.time()
-        model = self.get_vista3d_model()
-        z_dim, y_dim, x_dim = vol_zyx.shape
+    # VISTA-3D bundle（v0.5.7 configs/inference.json）约定：1.5 mm 各向同性、HU 窗 [a_min, a_max] → [0, 1]、RAS 轴序
+    VISTA3D_SPACING_MM = 1.5
+    VISTA3D_HU_MIN = -963.8247715525971
+    VISTA3D_HU_MAX = 1053.678477684517
+
+    @staticmethod
+    def _parse_point_zyx(prompt_point: Optional[Any], shape: Tuple[int, ...]) -> Optional[List[int]]:
+        """{"z","y","x"} 或 [z, y, x] → 截断到体积内的整数体素坐标；无法解析时返回 None。"""
         if isinstance(prompt_point, dict) and all(k in prompt_point for k in ("z", "y", "x")):
-            pz, py, px = int(prompt_point["z"]), int(prompt_point["y"]), int(prompt_point["x"])
+            raw = [prompt_point["z"], prompt_point["y"], prompt_point["x"]]
         elif isinstance(prompt_point, (list, tuple)) and len(prompt_point) == 3:
-            pz, py, px = int(prompt_point[0]), int(prompt_point[1]), int(prompt_point[2])
+            raw = list(prompt_point)
         else:
-            pz, py, px = z_dim // 2, y_dim // 2, x_dim // 2
-        pz = int(np.clip(pz, 0, z_dim - 1))
-        py = int(np.clip(py, 0, y_dim - 1))
-        px = int(np.clip(px, 0, x_dim - 1))
+            return None
+        return [int(np.clip(int(v), 0, n - 1)) for v, n in zip(raw, shape)]
 
-        vmin, vmax = float(np.min(vol_zyx)), float(np.max(vol_zyx))
-        if vmin < -200.0:
-            norm_vol = np.clip((vol_zyx - (-1000.0)) / 2000.0, 0.0, 1.0).astype(np.float32)
-        else:
-            norm_vol = ((vol_zyx - vmin) / max(vmax - vmin, 1e-5)).astype(np.float32)
-
-        win = 64
-        half = win // 2
-        z0, y0, x0 = max(0, min(z_dim - win, pz - half)), max(0, min(y_dim - win, py - half)), max(0, min(x_dim - win, px - half))
-        z1, y1, x1 = min(z_dim, z0 + win), min(y_dim, y0 + win), min(x_dim, x0 + win)
-        sub = norm_vol[z0:z1, y0:y1, x0:x1]
-        pad_z, pad_y, pad_x = max(0, win - sub.shape[0]), max(0, win - sub.shape[1]), max(0, win - sub.shape[2])
-        if pad_z or pad_y or pad_x:
-            sub = np.pad(sub, ((0, pad_z), (0, pad_y), (0, pad_x)), mode="constant")
-
-        inp = torch.from_numpy(sub).unsqueeze(0).unsqueeze(0).to(self.device)
-        pts = torch.tensor([[[float(pz - z0), float(py - y0), float(px - x0)]]], device=self.device)
-        lbls = torch.tensor([[1]], device=self.device)
-        with torch.no_grad():
-            if label_prompt is not None:
-                cls_vec = torch.tensor([int(label_prompt)], device=self.device)
-                logits = model(input_images=inp, class_vector=cls_vec)
-            else:
-                logits = model(input_images=inp, point_coords=pts, point_labels=lbls)
-        prob = torch.sigmoid(logits[0, 0]).detach().cpu().numpy()
-        pred_sub = (prob[: z1 - z0, : y1 - y0, : x1 - x0] > 0.5).astype(np.uint8)
-        mask_zyx = np.zeros(vol_zyx.shape, dtype=np.uint8)
-        mask_zyx[z0:z1, y0:y1, x0:x1] = pred_sub
-
-        meta = self._base_meta("vista3d", "MONAI VISTA-3D (vista3d132 3D foundation model)", t0)
-        meta.update({
-            "positive_voxels": int(np.sum(mask_zyx > 0)),
-            "prompt_point_zyx": [pz, py, px],
-            "label_prompt": label_prompt,
-        })
-        return mask_zyx, meta
-
-    def infer_vista3d_nodule(
+    def _vista3d_window_inference(
         self,
         vol_zyx: np.ndarray,
         spacing: Tuple[float, float, float],
-        prompt_point: List[int],
-        target_spacing_mm: float = 1.5,
+        center_zyx: List[int],
+        use_point: bool = True,
+        class_id: Optional[int] = None,
         window: int = 96,
+        intensity: Optional[Tuple[float, float]] = None,
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        VISTA-3D 单个正点提示分割（肺结节模型链用）。与 infer_vista3d 不同，这里按 vista3d bundle 的约定准备输入：
-        - 以提示点为中心在原网格上取约 window × 1.5 mm 见方的区域，三线性重采样到 1.5 mm 各向同性；
-        - HU [-963.8247715525971, 1053.678477684517] → [0, 1]（bundle configs/inference.json）；
-        - 轴序转为 RAS（H, W, D = 右→左取反后的 x、前后取反后的 y、z），与训练时的 Orientationd(RAS) 一致；
+        VISTA-3D 局部窗口推理（infer_vista3d 与 infer_vista3d_nodule 共用），按 bundle 约定准备输入：
+        - 以 center_zyx 为中心在原网格上取约 window × 1.5 mm 见方的区域，三线性重采样到 1.5 mm 各向同性；
+        - 强度：默认 bundle 的 HU 窗 [-963.82, 1053.68] → [0, 1]；intensity=(lo, hi) 时按给定范围线性归一化；
+        - 轴序由规范 LPS (Z, Y, X) 转为 RAS (X 取反, Y 取反, Z)，与训练时的 Orientationd(RAS) 一致；
+        - use_point=True 时 center_zyx 作为正点提示；class_id 不为空时作为类别提示（二者可同时给出）；
         - 输出 logits 三线性插值回原网格区域后取 > 0（即 sigmoid > 0.5）。
-        返回与 vol_zyx 同形状的 0/1 掩膜；meta.mask_touches_window_edge 表示分割触及推理区域边界（可能被截断）。
+        坐标输入输出都按原网格的 (z, y, x) 体素约定。返回 (与 vol_zyx 同形状的 0/1 掩膜, 窗口信息)。
         """
         import torch.nn.functional as F
-        t0 = time.time()
         model = self.get_vista3d_model()
-        z_dim, y_dim, x_dim = vol_zyx.shape
-        dims = (z_dim, y_dim, x_dim)
+        dims = tuple(int(n) for n in vol_zyx.shape)
         sp = [float(s) for s in spacing]
-        p = [int(np.clip(int(v), 0, n - 1)) for v, n in zip(prompt_point, dims)]
+        tgt = self.VISTA3D_SPACING_MM
+        p = [int(np.clip(int(v), 0, n - 1)) for v, n in zip(center_zyx, dims)]
 
-        half_mm = window * target_spacing_mm / 2.0
+        half_mm = window * tgt / 2.0
         lo, hi = [], []
         for c, d, n in zip(p, sp, dims):
             r = int(np.ceil(half_mm / d))
             lo.append(max(0, c - r))
             hi.append(min(n, c + r + 1))
         sub = np.asarray(vol_zyx[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]], dtype=np.float32)
-        a_min, a_max = -963.8247715525971, 1053.678477684517
-        sub = np.clip((sub - a_min) / (a_max - a_min), 0.0, 1.0)
+        a_min, a_max = intensity if intensity is not None else (self.VISTA3D_HU_MIN, self.VISTA3D_HU_MAX)
+        sub = np.clip((sub - a_min) / max(a_max - a_min, 1e-5), 0.0, 1.0)
         native_shape = sub.shape
-        iso_shape = [max(1, int(round(n * d / target_spacing_mm))) for n, d in zip(native_shape, sp)]
+        iso_shape = [max(1, int(round(n * d / tgt))) for n, d in zip(native_shape, sp)]
         iso = F.interpolate(torch.from_numpy(sub)[None, None], size=iso_shape, mode="trilinear", align_corners=False)[0, 0]
         # 各方向补齐到 ≥ window 且为 16 的倍数（编码器下采样要求），补边用边缘值（体积边缘处）
         pads = [max(window, int(np.ceil(s / 16.0)) * 16) - s for s in iso_shape]
-        if any(pads):
-            iso_np = np.pad(iso.numpy(), [(0, pz) for pz in pads], mode="edge")
-        else:
-            iso_np = iso.numpy()
+        iso_np = np.pad(iso.numpy(), [(0, pz) for pz in pads], mode="edge") if any(pads) else iso.numpy()
         # (Z, Y, X) LPS -> (X, Y, Z) 后翻转 X、Y 得到 RAS
         ras = np.ascontiguousarray(np.transpose(iso_np, (2, 1, 0))[::-1, ::-1, :])
-        # 原网格下标 -> 重采样网格下标（align_corners=False 的中心对齐）
-        q = [(c - o + 0.5) * d / target_spacing_mm - 0.5 for c, o, d in zip(p, lo, sp)]
-        qz, qy, qx = q
-        point_ras = [ras.shape[0] - 1 - qx, ras.shape[1] - 1 - qy, qz]
 
         inp = torch.from_numpy(ras).float()[None, None].to(self.device)
-        pts = torch.tensor([[point_ras]], dtype=torch.float32, device=self.device)
-        lbls = torch.tensor([[1]], device=self.device)
+        kwargs: Dict[str, Any] = {}
+        if use_point:
+            # 原网格下标 -> 重采样网格下标（align_corners=False 的中心对齐），再换到 RAS 轴
+            qz, qy, qx = [(c - o + 0.5) * d / tgt - 0.5 for c, o, d in zip(p, lo, sp)]
+            kwargs["point_coords"] = torch.tensor([[[ras.shape[0] - 1 - qx, ras.shape[1] - 1 - qy, qz]]],
+                                                  dtype=torch.float32, device=self.device)
+            kwargs["point_labels"] = torch.tensor([[1]], device=self.device)
+        if class_id is not None:
+            cls_vec = torch.tensor([[int(class_id)]], device=self.device)
+            kwargs["class_vector"] = cls_vec
+            kwargs["prompt_class"] = cls_vec
+        if not kwargs:
+            raise ValueError("VISTA-3D 需要点提示或类别提示")
         with torch.no_grad():
-            logits = model(input_images=inp, point_coords=pts, point_labels=lbls)
+            logits = model(input_images=inp, **kwargs)
         lg = logits[0, 0].detach().float().cpu().numpy()
         lg = np.transpose(lg[::-1, ::-1, :], (2, 1, 0))[: iso_shape[0], : iso_shape[1], : iso_shape[2]]
         lg_native = F.interpolate(
             torch.from_numpy(np.ascontiguousarray(lg))[None, None], size=list(native_shape), mode="trilinear", align_corners=False
         )[0, 0].numpy()
         sub_mask = (lg_native > 0).astype(np.uint8)
-        mask_zyx = np.zeros(vol_zyx.shape, dtype=np.uint8)
+        mask_zyx = np.zeros(dims, dtype=np.uint8)
         mask_zyx[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]] = sub_mask
 
         touches = False
@@ -1162,29 +1152,84 @@ class MonaiNeuralInferencePipeline:
                 idx = np.where(sub_mask.any(axis=tuple(a for a in range(3) if a != axis)))[0]
                 if (lo[axis] > 0 and idx.min() == 0) or (hi[axis] < n and idx.max() == native_shape[axis] - 1):
                     touches = True
-        meta = self._base_meta("vista3d", "MONAI VISTA-3D (vista3d132) 单点提示分割，1.5 mm 各向同性 RAS 输入", t0)
-        meta.update({
-            "positive_voxels": int(mask_zyx.sum()),
+        info = {
             "prompt_point_zyx": p,
             "window_zyx": [lo, hi],
-            "resample_spacing_mm": target_spacing_mm,
+            "resample_spacing_mm": tgt,
+            "intensity_range": [float(a_min), float(a_max)],
             "mask_touches_window_edge": touches,
+        }
+        return mask_zyx, info
+
+    def infer_vista3d(
+        self,
+        vol_zyx: np.ndarray,
+        spacing: Tuple[float, float, float],
+        prompt_point: Optional[Any] = None,
+        label_prompt: Optional[int] = None,
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        vista3d bundle（vista3d132）：3D 提示点交互式分割，或类别索引分割。
+        以提示点（未提供时取体积中心）为中心取约 144 mm 见方的局部区域，按 bundle 约定预处理后推理
+        （见 _vista3d_window_inference）。给出 label_prompt 时只用类别提示（与原行为一致，提示点只决定窗口位置）。
+        提示点与输出掩膜都按原网格 (z, y, x) 体素约定。
+        非 CT 体积（最小值 ≥ -200）按体积自身最小/最大值归一化，与原实现一致。
+        """
+        t0 = time.time()
+        z_dim, y_dim, x_dim = vol_zyx.shape
+        p = self._parse_point_zyx(prompt_point, vol_zyx.shape) or [z_dim // 2, y_dim // 2, x_dim // 2]
+        vmin, vmax = float(np.min(vol_zyx)), float(np.max(vol_zyx))
+        intensity = None if vmin < -200.0 else (vmin, vmax)
+        mask_zyx, info = self._vista3d_window_inference(
+            vol_zyx, spacing, p,
+            use_point=label_prompt is None,
+            class_id=None if label_prompt is None else int(label_prompt),
+            intensity=intensity,
+        )
+        meta = self._base_meta("vista3d", "MONAI VISTA-3D (vista3d132 3D foundation model)", t0)
+        meta.update({
+            "positive_voxels": int(np.sum(mask_zyx > 0)),
+            "prompt_point_zyx": p,
+            "label_prompt": label_prompt,
+            **{k: v for k, v in info.items() if k != "prompt_point_zyx"},
         })
         return mask_zyx, meta
 
+    def infer_vista3d_nodule(
+        self,
+        vol_zyx: np.ndarray,
+        spacing: Tuple[float, float, float],
+        prompt_point: List[int],
+        window: int = 96,
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        VISTA-3D 单个正点提示分割（肺结节模型链用），预处理见 _vista3d_window_inference（始终用 bundle 的 HU 窗）。
+        返回与 vol_zyx 同形状的 0/1 掩膜；meta.mask_touches_window_edge 表示分割触及推理区域边界（可能被截断）。
+        """
+        t0 = time.time()
+        p = self._parse_point_zyx(prompt_point, vol_zyx.shape)
+        if p is None:
+            raise ValueError(f"无法解析提示点: {prompt_point}")
+        mask_zyx, info = self._vista3d_window_inference(vol_zyx, spacing, p, use_point=True, window=window)
+        meta = self._base_meta("vista3d", "MONAI VISTA-3D (vista3d132) 单点提示分割，1.5 mm 各向同性 RAS 输入", t0)
+        meta.update({"positive_voxels": int(mask_zyx.sum()), **info})
+        return mask_zyx, meta
+
     def infer_vista3d_lung_lobes(
-        self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]
+        self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float], resample_mm: Optional[float] = None
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         VISTA-3D 类别提示做全肺五叶分割，返回规范网格上的标签图（值为 VISTA-3D 全局类别号 28~32，背景 0）。
         预处理按 vista3d v0.5.7 bundle configs/inference.json：1.5 mm 各向同性重采样、CropForeground（margin 10）、
         HU [-963.8247715525971, 1053.678477684517] → [0, 1]、RAS；128³ 滑窗。
         各类别 logit 均 ≤0 的体素为背景，其余取 logit 最大的肺叶（与 bundle 的 VistaPostTransformd 相同）。
+        resample_mm 不为空时改用该各向同性分辨率（偏离 bundle 约定，用于在 CPU 上降耗时）。
         """
         from monai.transforms import Orientationd, Spacingd, ScaleIntensityRanged, CropForegroundd
         t0 = time.time()
         model = self.get_vista3d_model()
         lobe_ids = sorted(VISTA3D_LUNG_LOBE_LABELS.keys())
+        res = float(resample_mm) if resample_mm is not None else self.VISTA3D_SPACING_MM
         cls_vec = torch.tensor([[c] for c in lobe_ids], device=self.device)
 
         def predictor(x: torch.Tensor) -> torch.Tensor:
@@ -1195,9 +1240,9 @@ class MonaiNeuralInferencePipeline:
 
         labels = self._run_3d_bundle(
             vol_zyx, spacing,
-            [Spacingd(keys="image", pixdim=[1.5, 1.5, 1.5], mode="bilinear"),
+            [Spacingd(keys="image", pixdim=[res] * 3, mode="bilinear"),
              CropForegroundd(keys="image", source_key="image", margin=10, allow_smaller=True),
-             ScaleIntensityRanged(keys="image", a_min=-963.8247715525971, a_max=1053.678477684517, b_min=0, b_max=1, clip=True),
+             ScaleIntensityRanged(keys="image", a_min=self.VISTA3D_HU_MIN, a_max=self.VISTA3D_HU_MAX, b_min=0, b_max=1, clip=True),
              Orientationd(keys="image", axcodes="RAS")],
             predictor, roi_size=[128, 128, 128], sw_batch_size=1, overlap=0.25, invert_probabilities=False,
         )
@@ -1209,7 +1254,7 @@ class MonaiNeuralInferencePipeline:
         meta.update({
             "class_prompts": lobe_ids,
             "lobe_voxels": {VISTA3D_LUNG_LOBE_LABELS[c]: int(np.sum(lobe_map == c)) for c in lobe_ids},
-            "resample_spacing_mm": [1.5, 1.5, 1.5],
+            "resample_spacing_mm": [res] * 3,
         })
         return lobe_map, meta
 
@@ -1666,13 +1711,21 @@ class MONAIEngine:
         sample_id_or_path: str,
         max_nodules: int = 20,
         min_score: Optional[float] = None,
+        lobe_mode: str = "full",
+        lobe_resample_mm: Optional[float] = None,
     ) -> Dict[str, Any]:
         """肺结节模型链（RetinaNet 检出 → VISTA-3D 分割与肺叶定位 → 测量），实现见 lung_nodule_pipeline。"""
+        t0 = time.time()
         vol, spacing, modality = self.load_volume_data(sample_id_or_path)
-        return run_lung_nodule_pipeline(
+        load_ms = int(round((time.time() - t0) * 1000))
+        res = run_lung_nodule_pipeline(
             self.neural_pipeline, vol, spacing, modality=modality,
             max_nodules=max_nodules, min_score=min_score,
+            lobe_mode=lobe_mode, lobe_resample_mm=lobe_resample_mm,
         )
+        res["timings_ms"] = {"load": load_ms, **res.get("timings_ms", {})}
+        res["elapsed_ms"] = int(res["elapsed_ms"]) + load_ms
+        return res
 
     def analyze_file(
         self,

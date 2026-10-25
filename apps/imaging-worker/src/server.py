@@ -562,6 +562,9 @@ class LungNodulePipelineRequest(BaseModel):
     file_path: Optional[str] = None
     max_nodules: int = 20
     min_score: Optional[float] = None
+    # 肺叶定位方式：full（默认，全肺）/ roi（结节周围局部）/ off（不做）；lobe_resample_mm 为空时按 bundle 的 1.5 mm
+    lobe_mode: str = "full"
+    lobe_resample_mm: Optional[float] = None
 
 
 @app.post("/api/v1/pipeline/lung-nodule")
@@ -576,6 +579,7 @@ def run_lung_nodule_pipeline_endpoint(req: LungNodulePipelineRequest = Body(...)
         with INFERENCE_SEMAPHORE:
             return engine.run_lung_nodule_pipeline(
                 target, max_nodules=req.max_nodules, min_score=req.min_score,
+                lobe_mode=req.lobe_mode, lobe_resample_mm=req.lobe_resample_mm,
             )
     except Exception as e:
         raise_http(e, "肺结节模型链运行失败")
