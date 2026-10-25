@@ -260,6 +260,7 @@ describe('越权：MCP 工具，别的机构的 AI 带着 A 的 id 都碰不到'
     moving_sample_id: () => 'spleen_test',
     baseline_record_id: s => s.record,
     followup_record_id: s => s.record,
+    agent_id: () => 'agent-1',
   }
 
   it('机构 B 的令牌调用每个带 id 的工具', async () => {
