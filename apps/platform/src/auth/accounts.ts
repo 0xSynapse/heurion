@@ -158,6 +158,12 @@ export class Accounts {
   login(input: { username?: string; password?: string } & BotFields, ip: string): { user: PublicUser; token: string } {
     if (this.loginLimit.hit(ip)) throw new AuthError('rate_limited', '登录太频繁，请稍后再试', 429)
     this.checkBot(ip, input)
+    return this.verifyCredentials(input, ip, false)
+  }
+
+  /** CLI 令牌兑换（如 `aegis app login heurion`）校验用户名密码与限流，不走浏览器表单 PoW。 */
+  verifyCredentials(input: { username?: string; password?: string }, ip: string, checkRateLimit = true): { user: PublicUser; token: string } {
+    if (checkRateLimit && this.loginLimit.hit(ip)) throw new AuthError('rate_limited', '登录太频繁，请稍后再试', 429)
     const username = (input.username ?? '').trim()
     const failKey = `u:${username.toLowerCase()}`
     const user = this.store.getUserByName(username)

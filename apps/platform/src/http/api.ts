@@ -3,6 +3,13 @@ import { ORG_BASES, orgLogo, PRESET_AHSLYY, setOrgTenantResolver, themeAllowed, 
 import { Hono, type Context } from 'hono'
 import { H_AS, internalVia, makeInvoker, type Invoke, type ViaInfo } from './invoke.ts'
 import { CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
+import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
+import { AegisAuthService } from '../aegis/auth.ts'
+import { handleAegisMcpJsonRpc, type McpDeps } from '../mcp/server.ts'
+import { TurnRegistry } from '../mcp/turns.ts'
+import { ClaimService } from '../claims/service.ts'
+import { PubMedClient } from '../literature/pubmed.ts'
+import { tmpdir } from 'node:os'
 import { Transform } from 'prosemirror-transform'
 import { streamSSE } from 'hono/streaming'
 import { getConnInfo } from '@hono/node-server/conninfo'
@@ -40,7 +47,6 @@ import { join } from 'node:path'
 import type { SlideRenderer } from '../render/slides.ts'
 import type { CrossrefClient } from '../literature/crossref.ts'
 import { importReferences, parseReferences } from '../literature/import-refs.ts'
-import type { PubMedClient } from '../literature/pubmed.ts'
 import { formatAma, formatCitation, normalizeDoi } from '../literature/format.ts'
 import type { Article } from '../literature/types.ts'
 import type { OpenAlexClient } from '../literature/openalex.ts'
@@ -116,6 +122,8 @@ export interface ApiDeps {
   docParser?: DocParser | null
   /** 日历与排期服务。 */
   calendar?: CalendarService
+  /** Aegis-OS / MCP 共享回合注册表（可选；不传时在 buildApi 内自动创建）。 */
+  turnRegistry?: TurnRegistry
   devUser: string
 }
 
@@ -159,6 +167,42 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     store.db.prepare('SELECT 1').get()
     return c.json({ ok: true, vector: deps.kb ? (await deps.kb.status()).vector : false })
   })
+
+  // AAP-1.0 应用自描述清单（供本地 Aegis-OS Daemon `aegis app search/info/install/login` 发现）
+  app.get('/.well-known/aegis-app.json', c => {
+    c.header('Cache-Control', 'public, max-age=300')
+    return c.json(AEGIS_APP_MANIFEST)
+  })
+
+  const aegisAuth = new AegisAuthService(store, 'heurion')
+  const aegisTurnRegistry = deps.turnRegistry ?? ((turns as unknown as { registry?: TurnRegistry })?.registry ?? new TurnRegistry())
+  const aegisPubmed = deps.pubmed ?? new PubMedClient(fetch)
+  const aegisMcpDeps: McpDeps = {
+    docs,
+    ops,
+    claims: new ClaimService(docs, aegisPubmed),
+    renderer: deps.renderer,
+    turns: aegisTurnRegistry,
+    pubmed: aegisPubmed,
+    crossref: deps.crossref,
+    openalex: deps.openalex,
+    secret: 'aegis-internal-secret',
+    devMode: deps.devMode,
+    devUser: deps.devUser,
+    workspaceDir: deps.workspaceDir ?? (() => tmpdir()),
+    isLiveSession: () => true,
+    kb: deps.kb,
+    memory: deps.memory,
+    evolution: deps.evolution,
+    datasets: deps.datasets,
+    patients: deps.patients,
+    shares: deps.shares,
+    studies: deps.studies,
+    cohort: deps.cohort,
+    images: deps.images,
+    access,
+    invoke,
+  }
 
   const { accounts } = deps
   const requestToken = (c: Context) => {
@@ -321,10 +365,108 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   // —— 免登录临床科研公开小工具接口（无状态、限流） ——
   registerPublicToolsApi(app, { pubmed: deps.pubmed, crossref: deps.crossref })
 
+  // —— AAP-1.0 统一身份鉴权与 MCP 网关（支持 Session 令牌、账号密码兑换、或 aegis_at_heurion.* 令牌） ——
+  app.post('/api/aegis/auth/token', async c => {
+    if (viaByReq.get(c.req.raw)) {
+      return c.json({ error: 'AI 不能自行签发 Aegis 授权令牌', code: 'human_only' }, 403)
+    }
+    const body = await c.req.json().catch(() => ({})) as {
+      username?: string
+      password?: string
+      name?: string
+      node_pubkey?: string
+      tool_scope?: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+      permissions?: string[]
+      doc_ids?: string[] | null
+      write_mode?: 'direct' | 'tracked'
+      ttl_days?: number | null
+    }
+    let userId = accounts.userFor(requestToken(c))
+    if (!userId && body.username && body.password) {
+      try {
+        const loginRes = accounts.verifyCredentials({ username: body.username, password: body.password }, clientIp(c))
+        userId = loginRes.user.id
+      } catch (err) {
+        return authFailure(c, err)
+      }
+    }
+    if (!userId) {
+      return c.json({ error: '请先登录或提供有效的医生/研究员账号凭证', code: 'unauthorized' }, 401)
+    }
+    try {
+      const issued = aegisAuth.issueGrant({
+        userId,
+        name: body.name,
+        nodePubkey: body.node_pubkey ?? null,
+        toolScope: body.tool_scope ?? 'all',
+        permissions: body.permissions ?? ['*'],
+        docIds: body.doc_ids ?? null,
+        writeMode: body.write_mode ?? 'tracked',
+        ttlDays: body.ttl_days === undefined ? 90 : body.ttl_days,
+      })
+      audit(c, 'aegis.grant_issue', {
+        actor: userId,
+        target: issued.grant.id,
+        detail: `Aegis Grant ${issued.grant.name} (scope=${issued.grant.tool_scope})`,
+        status: 201,
+      })
+      return c.json({
+        access_token: issued.token,
+        token_type: 'Bearer',
+        app_id: 'heurion',
+        grant_id: issued.grant.id,
+        token_prefix: issued.grant.token_prefix,
+        bound_user: {
+          id: issued.user.id,
+          username: issued.user.username,
+          display_name: issued.user.display_name,
+          role: issued.user.role,
+          tenant_role: issued.user.tenant_role,
+        },
+        bound_org: issued.tenant
+          ? { id: issued.tenant.id, name: issued.tenant.name, kind: issued.tenant.kind }
+          : null,
+        bound_node_pubkey: issued.grant.aegis_node_pubkey,
+        tool_scope: issued.grant.tool_scope,
+        write_mode: issued.grant.write_mode,
+        expires_at: issued.grant.expires_at,
+      }, 201)
+    } catch (err) {
+      return c.json({ error: (err as Error).message, code: 'bad_grant_request' }, 400)
+    }
+  })
+
+  app.delete('/api/aegis/auth/token', async c => {
+    const rawBearer = requestToken(c)?.trim() ?? ''
+    if (/^(?:aegis_at_[a-z0-9_-]+|h1_agt)\./.test(rawBearer)) {
+      const v = aegisAuth.verifyGrantToken(rawBearer)
+      if (!v.ok) return c.json({ error: v.error, code: v.code }, 401)
+      store.revokeAgentGrant(v.verified.grant.id, v.verified.user.id)
+      audit(c, 'aegis.grant_revoke', { actor: v.verified.user.id, target: v.verified.grant.id, status: 200 })
+      return c.json({ ok: true, revoked_grant_id: v.verified.grant.id })
+    }
+    const userId = accounts.userFor(rawBearer)
+    if (!userId) return c.json({ error: '请先登录', code: 'unauthorized' }, 401)
+    const body = await c.req.json().catch(() => ({})) as { grant_id?: string }
+    const grantId = body.grant_id ?? c.req.query('grant_id')
+    if (!grantId) return c.json({ error: '缺少 grant_id', code: 'missing_grant_id' }, 400)
+    const ok = store.revokeAgentGrant(grantId, userId)
+    if (!ok) return c.json({ error: '未找到该授权令牌或已吊销', code: 'not_found' }, 404)
+    audit(c, 'aegis.grant_revoke', { actor: userId, target: grantId, status: 200 })
+    return c.json({ ok: true, revoked_grant_id: grantId })
+  })
+
+  app.post('/api/aegis/mcp', c => handleAegisMcpJsonRpc(aegisMcpDeps, c.req.raw))
+
   // 鉴权：账户令牌（开发模式下也接受开发令牌，见 auth/accounts.ts）。EventSource / <img> 用 ?token=。
   app.use('/api/*', async (c, next) => {
-    // 外部来信 Webhook 无需用户 Session；公开微型工具接口无需登录
-    if (c.req.path === '/api/mail/inbound' || c.req.path.startsWith('/api/public/tools/')) {
+    // 外部来信 Webhook 无需用户 Session；公开微型工具接口无需登录；Aegis 独立鉴权接口已在上方处理
+    if (
+      c.req.path === '/api/mail/inbound' ||
+      c.req.path.startsWith('/api/public/tools/') ||
+      c.req.path === '/api/aegis/auth/token' ||
+      c.req.path === '/api/aegis/mcp'
+    ) {
       return next()
     }
 
@@ -357,6 +499,36 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     let tenant = null
     try { tenant = tenants.view(c.get('user')) } catch { /* 没有机构的账户（不应出现） */ }
     return c.json({ ...accounts.me(c.get('user')), dev_mode: deps.devMode, tenant })
+  })
+
+  app.get('/api/aegis/auth/grants', c => {
+    const grants = store.listAgentGrants(c.get('user')).map(({ token_hash: _h, ...rest }) => rest)
+    return c.json({ grants })
+  })
+
+  app.post('/api/aegis/leases/approve', async c => {
+    if (viaByReq.get(c.req.raw)) {
+      return c.json({ error: 'AI 不能自行批准租约，只能由用户本人决定', code: 'human_only' }, 403)
+    }
+    const body = await c.req.json().catch(() => ({})) as { escalation_id?: string; ttl_secs?: number }
+    if (!body.escalation_id) {
+      return c.json({ error: '缺少 escalation_id', code: 'missing_escalation_id' }, 400)
+    }
+    const esc = store.getAgentEscalation(body.escalation_id)
+    if (!esc || esc.user_id !== c.get('user')) {
+      return c.json({ error: '未找到该提权申请', code: 'not_found' }, 404)
+    }
+    const approved = store.approveAgentEscalation(esc.id, c.get('user'), body.ttl_secs ?? 900)
+    if (!approved) {
+      return c.json({ error: '该提权申请已处理或已过期', code: 'already_decided' }, 409)
+    }
+    audit(c, 'aegis.lease_approve', {
+      actor: c.get('user'),
+      target: approved.lease.id,
+      detail: `${esc.scope} (${esc.summary})`,
+      status: 200,
+    })
+    return c.json({ ok: true, escalation: approved.escalation, lease: approved.lease })
   })
 
   // —— 机构（租户）：机构管理员管成员、邀请、设置、本机构审计 ——

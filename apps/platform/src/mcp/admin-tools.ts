@@ -299,12 +299,28 @@ export const CONFIRM_ROUTES: Array<{ method: Method; re: RegExp }> = ADMIN_TOOLS
     return { method: op.method, re }
   }))
 
+export interface LeaseAuthorizeInput {
+  tool: string
+  action: string
+  scope: string
+  resource: string
+  summary: string
+  reason: string | null
+  actionId?: string | null
+}
+
+export type LeaseAuthorizeResult =
+  | { authorized: true; leaseId: string; via: 'ed25519_header' | 'server_lease' }
+  | { authorized: false; escalationId: string; suggestedLeaseScope: string; reason: string }
+
 export interface AdminToolDeps {
   store: Store
   turns: TurnRegistry
   invoke?: Invoke
   workspaceDir: (userId: string) => string
   generation?: string
+  /** AAP-1.0 [Lease-Gated] 授权钩子：当经由 /api/aegis/mcp 调用时注入 */
+  leaseAuthorizer?: (input: LeaseAuthorizeInput) => LeaseAuthorizeResult
 }
 
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
@@ -353,12 +369,52 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
             if (!r.ok) return errorOf(r)
           }
           const body = op.body?.(args, file)
+          const summaryText = op.summary?.(args) ?? `${spec.name}.${args.action}`
+          const reasonText = typeof args.reason === 'string' ? args.reason : null
+          const scope = `heurion:${spec.name}.${String(args.action)}`
+          const resource = String(args.patient_id ?? args.doc_id ?? args.study_id ?? args.dataset_id ?? args.tenant_id ?? '*')
+
+          if (deps.leaseAuthorizer) {
+            const leaseCheck = deps.leaseAuthorizer({
+              tool: spec.name,
+              action: String(args.action),
+              scope,
+              resource,
+              summary: summaryText,
+              reason: reasonText,
+            })
+            if (leaseCheck.authorized) {
+              const r = await deps.invoke(userId, op.method, op.path(args), body, { via: 'ai-confirmed', confirmedBy: userId })
+              if (!r.ok) return errorOf(r)
+              const basePayload = typeof r.json === 'object' && r.json !== null ? (r.json as Record<string, unknown>) : { ok: true, data: r.json ?? r.text }
+              return json({ ...basePayload, lease_authorized: true, lease_id: leaseCheck.leaseId, lease_via: leaseCheck.via })
+            }
+            const stored = !body ? null : 'json' in body ? { json: body.json } : 'bytes' in body ? { bytes_b64: Buffer.from(body.bytes).toString('base64'), mime: body.mime }
+              : { form: body.form, ...(body.file ? { file: { b64: Buffer.from(body.file.bytes).toString('base64'), name: body.file.name, mime: body.file.mime } } : {}) }
+            const turn = deps.turns.active(userId, gen)
+            const row = store.addPendingAction({
+              user_id: userId, tool: spec.name, action: args.action, method: op.method, path: op.path(args), body: stored ? JSON.stringify(stored) : null,
+              summary: summaryText, reason: reasonText,
+              editable: op.editable ? JSON.stringify(op.editable(args)) : null, doc_id: turn?.docId ?? null, turn_id: turn?.turnId ?? null,
+            })
+            deps.turns.notify(userId, { type: 'action', action: { id: row.id, tool: row.tool, action: row.action, summary: row.summary, reason: row.reason, editable: op.editable ? op.editable(args) : null, status: 'pending', created_at: row.created_at } }, gen)
+            return json({
+              status: 'approval_required',
+              escalation_id: leaseCheck.escalationId,
+              action_id: row.id,
+              summary: row.summary,
+              reason: leaseCheck.reason,
+              suggested_lease_scope: leaseCheck.suggestedLeaseScope,
+              message: '这是 [Lease-Gated] 高风险操作，已在平台生成待确认动作与提权申请；请在 Aegis-OS 终端或 Web 端批准租约后重试。',
+            })
+          }
+
           const stored = !body ? null : 'json' in body ? { json: body.json } : 'bytes' in body ? { bytes_b64: Buffer.from(body.bytes).toString('base64'), mime: body.mime }
             : { form: body.form, ...(body.file ? { file: { b64: Buffer.from(body.file.bytes).toString('base64'), name: body.file.name, mime: body.file.mime } } : {}) }
           const turn = deps.turns.active(userId, gen)
           const row = store.addPendingAction({
             user_id: userId, tool: spec.name, action: args.action, method: op.method, path: op.path(args), body: stored ? JSON.stringify(stored) : null,
-            summary: op.summary?.(args) ?? `${spec.name}.${args.action}`, reason: typeof args.reason === 'string' ? args.reason : null,
+            summary: summaryText, reason: reasonText,
             editable: op.editable ? JSON.stringify(op.editable(args)) : null, doc_id: turn?.docId ?? null, turn_id: turn?.turnId ?? null,
           })
           deps.turns.notify(userId, { type: 'action', action: { id: row.id, tool: row.tool, action: row.action, summary: row.summary, reason: row.reason, editable: op.editable ? op.editable(args) : null, status: 'pending', created_at: row.created_at } }, gen)

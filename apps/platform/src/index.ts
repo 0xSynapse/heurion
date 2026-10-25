@@ -44,7 +44,7 @@ import { CrossrefClient } from './literature/crossref.ts'
 import { OpenAlexClient } from './literature/openalex.ts'
 import { FullTextClient } from './literature/fulltext.ts'
 import { PubMedClient } from './literature/pubmed.ts'
-import { handleMcp } from './mcp/server.ts'
+import { handleAegisMcp, handleMcp } from './mcp/server.ts'
 import { TurnRegistry } from './mcp/turns.ts'
 import { Documents } from './model/runtime.ts'
 import { OpService } from './ops/service.ts'
@@ -195,7 +195,7 @@ const mail = new MailService(store, mailer, {
   complete: makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }),
 })
 const calendar = new CalendarService(store, mail)
-const app = buildApi({ docs, ops, turns, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, devUser: config.devUser, search, kb, memory, evolution, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, workspaceDir: userId => pool.workspaceDir(userId) })
+const app = buildApi({ docs, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, devUser: config.devUser, search, kb, memory, evolution, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, workspaceDir: userId => pool.workspaceDir(userId) })
 // MCP 的管理类工具以用户身份进程内调用同一个 HTTP 应用（AI 的权限 = 用户的权限，见 http/invoke.ts）
 ;(mcpDeps as { invoke?: Invoke }).invoke = makeInvoker(app)
 
@@ -284,6 +284,13 @@ const server = createServer((req, res) => {
     handleLlmProxy({ secret: config.secret, upstream: config.llmUpstream, apiKey: config.deepseekApiKey, isLive: (u, s) => pool.isLive(u, s) }, req, res).catch(err => {
       console.error('[llm-proxy]', err)
       if (!res.headersSent) res.writeHead(502).end()
+    })
+    return
+  }
+  if ((req.url?.startsWith('/api/aegis/mcp') || req.url?.startsWith('/api/mcp')) && (req.headers.accept ?? '').includes('text/event-stream')) {
+    handleAegisMcp(mcpDeps, req, res).catch(err => {
+      console.error('[aegis-mcp]', err)
+      if (!res.headersSent) res.writeHead(500).end(String(err))
     })
     return
   }
