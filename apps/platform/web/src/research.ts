@@ -192,7 +192,10 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         <section class="rs-card wide rs-folder-card">
           <div class="rs-card-head">
             <h3><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>项目图表与成果文件夹</h3>
-            <span class="muted small" style="margin-left:auto; display:inline-flex; align-items:center; gap:4px;"><svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> figures/ · 共 ${s.analyses.length} 份产出</span>
+            <span class="muted small" style="margin-left:auto; display:inline-flex; align-items:center; gap:8px;">
+              <button class="small-btn primary" data-act="figures" title="打开 6 大类医学论文图表工作台（机制图 / Prism·R 统计图 / 流程图 / 生信多组学 / ImageJ·FlowJo·3D Slicer 影像分析 / Illustrator 顶刊多面板拼图）并导出原工程文件">${icon('chart', { size: 13 })} 医学图表工作台 &amp; 原文件导出</button>
+              <span style="display:inline-flex; align-items:center; gap:4px;"><svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> figures/ · 共 ${s.analyses.length} 份产出</span>
+            </span>
           </div>
           <div class="rs-folder-browser">
             <div class="rs-folder-header">
@@ -270,8 +273,9 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     return `<section class="rs-card wide" id="rsCohort">
       <div class="rs-card-head"><h3>入组患者${active.length ? `<span class="muted small"> · ${active.length} 人</span>` : ''}</h3>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-          <button class="small-btn primary" data-act="bundle" title="一键导出包含 Table 1 (Word)、Figure 1~6 矢量图、方法与结果初稿及 STROBE 清单的完整投稿压缩包 (.zip)">${icon('download', { size: 13 })} 导出投稿出版包 (.zip)</button>
-          <button class="small-btn" data-act="consort" title="查看出版级 CONSORT 2010 试验入组纳排流向图 (Figure 1)">${icon('chart', { size: 13 })} CONSORT 流程图</button>
+          <button class="small-btn primary" data-act="bundle" title="一键导出包含 Table 1 (Word)、Figure 1~6 矢量图、Prism/R/Draw.io/Visio/PPT 原工程文件、方法与结果初稿及 STROBE 清单的完整投稿压缩包 (.zip)">${icon('download', { size: 13 })} 导出投稿出版包 (.zip)</button>
+          <button class="small-btn" data-act="figures" title="打开 6 大类医学论文图表工作台并导出各软件原工程文件 (.pzfx / .R / .drawio / .vdx / .pptx / .ijm / .wsp / .mrml / 分层 .svg)">${icon('chart', { size: 13 })} 医学图表工作台</button>
+          <button class="small-btn" data-act="consort" title="查看出版级 CONSORT 2010 试验入组纳排流向图 (Figure 1) 及导出 Draw.io / Visio / PPT">${icon('chart', { size: 13 })} CONSORT 流程图</button>
           <button class="small-btn" data-act="evalue" title="因果推断敏感度分析与顶刊审稿回复论述">${icon('evidence', { size: 13 })} 因果推断 E-value</button>
           <button class="small-btn" data-act="ecrf" title="Auto-eCRF 多模态影像与临床指标批量提取与溯源">${icon('write', { size: 13 })} Auto-eCRF 批量回填</button>
           <button class="small-btn" data-act="vars" title="分组、随访、结局与影像变量：来源与核实状态；投稿材料只用已核实的值">${icon('check', { size: 13 })} 研究变量</button>
@@ -469,13 +473,16 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           <span class="muted small">只含平台入组记录（入组 / 移出 / 在组）；筛选与排除环节需按原始纳排记录补充</span>
           <span class="grow"></span>
           <button class="small-btn" id="rsConsortCopyMermaid">${icon('copy', { size: 13 })} 复制 Mermaid 代码</button>
+          <button class="small-btn" id="rsConsortDownloadDrawio" title="导出 Draw.io (Diagrams.net) 可编辑原文件 (.drawio)">${icon('download', { size: 13 })} Draw.io (.drawio)</button>
+          <button class="small-btn" id="rsConsortDownloadVdx" title="导出 Microsoft Visio 可编辑流程图原文件 (.vdx)">${icon('download', { size: 13 })} Visio (.vdx)</button>
+          <button class="small-btn" id="rsConsortDownloadPptx" title="导出 PowerPoint 原生可编辑形状与连接线 (.pptx)">${icon('download', { size: 13 })} 可编辑 PPT (.pptx)</button>
           <button class="small-btn primary" id="rsConsortDownloadSvg">${icon('download', { size: 13 })} 下载矢量 SVG</button>
         </div>
         <div id="rsConsortSvgContainer" style="background:#ffffff;border:1px solid var(--line);border-radius:8px;padding:20px;overflow:auto;max-height:560px;display:flex;justify-content:center;align-items:flex-start;">
           <div class="muted small" style="padding:40px;">正在生成出版级流向图…</div>
         </div>
         <div class="muted small" style="border-top:1px solid var(--line);padding-top:8px;display:flex;align-items:center;gap:6px;">
-          ${icon('info', { size: 13 })} 提示：该矢量图可直接拖入或插入论文排版系统；点击「复制 Mermaid 代码」可直接粘贴嵌入 Markdown 方案与报告。
+          ${icon('info', { size: 13 })} 提示：支持直接导出 Draw.io (.drawio)、Microsoft Visio (.vdx)、PowerPoint 原生可编辑形状 (.pptx) 与 Adobe Illustrator 分层矢量 (.svg)。
         </div>
       </div>
     </div>`
@@ -483,7 +490,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     dlg.onclick = e => { if (e.target === dlg || (e.target as HTMLElement).closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = '' } }
 
     try {
-      const res = await api<{ svg: string; mermaid: string; data: any }>(`/api/studies/${studyId}/cohort/consort`)
+      const res = await api<{ svg: string; mermaid: string; data: any; native_exports?: { drawio_xml?: string; visio_vdx?: string } }>(`/api/studies/${studyId}/cohort/consort`)
       const container = document.getElementById('rsConsortSvgContainer')
       if (container) container.innerHTML = res.svg
 
@@ -495,6 +502,60 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           }).catch(() => {
             notice('复制失败，请手动选取', true)
           })
+        }
+      }
+
+      const dlDrawioBtn = document.getElementById('rsConsortDownloadDrawio')
+      if (dlDrawioBtn) {
+        dlDrawioBtn.onclick = async () => {
+          try {
+            const token = hooks.token()
+            const r = await fetch(`/api/studies/${studyId}/cohort/consort?format=drawio`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+            const blob = await r.blob()
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `CONSORT_2010_Flowchart_${studyId}.drawio`
+            document.body.appendChild(a); a.click(); document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+            notice('已下载 Draw.io (.drawio) 流程图原文件')
+          } catch (err) { notice((err as Error).message, true) }
+        }
+      }
+
+      const dlVdxBtn = document.getElementById('rsConsortDownloadVdx')
+      if (dlVdxBtn) {
+        dlVdxBtn.onclick = async () => {
+          try {
+            const token = hooks.token()
+            const r = await fetch(`/api/studies/${studyId}/cohort/consort?format=vdx`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+            const blob = await r.blob()
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `CONSORT_2010_Flowchart_${studyId}.vdx`
+            document.body.appendChild(a); a.click(); document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+            notice('已下载 Microsoft Visio (.vdx) 流程图原文件')
+          } catch (err) { notice((err as Error).message, true) }
+        }
+      }
+
+      const dlPptxBtn = document.getElementById('rsConsortDownloadPptx')
+      if (dlPptxBtn) {
+        dlPptxBtn.onclick = async () => {
+          try {
+            const token = hooks.token()
+            const r = await fetch(`/api/studies/${studyId}/cohort/consort?format=pptx`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+            const blob = await r.blob()
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `CONSORT_2010_Flowchart_${studyId}.pptx`
+            document.body.appendChild(a); a.click(); document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+            notice('已下载 PowerPoint (.pptx) 可编辑流程图原文件')
+          } catch (err) { notice((err as Error).message, true) }
         }
       }
 
@@ -680,9 +741,13 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         <div id="rsSurvResult" style="display:none;flex-direction:column;gap:16px;">
           <!-- KM Curve & Risk Table -->
           <div style="border:1px solid var(--line);border-radius:8px;padding:16px;background:#ffffff;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
               <b>Figure 3: Kaplan-Meier 累积生存率曲线与风险集对照 (Number at Risk)</b>
-              <button class="small-btn" id="rsDlKmSvg">${icon('download', { size: 13 })} 下载 KM 矢量图 (SVG)</button>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button class="small-btn" id="rsDlKmPzfx" title="导出 GraphPad Prism 生存分析工程文件 (.pzfx)">${icon('download', { size: 13 })} Prism (.pzfx)</button>
+                <button class="small-btn" id="rsDlKmR" title="导出 R 语言 survminer/ggplot2 脚本 (.R)">${icon('download', { size: 13 })} R 脚本 (.R)</button>
+                <button class="small-btn primary" id="rsDlKmSvg">${icon('download', { size: 13 })} 下载 KM 矢量图 (SVG)</button>
+              </div>
             </div>
             <div id="rsKmSvgWrap" style="overflow:auto;max-height:480px;display:flex;justify-content:center;"></div>
           </div>
@@ -692,9 +757,13 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
 
           <!-- Cox Forest Plot -->
           <div id="rsForestWrap" style="border:1px solid var(--line);border-radius:8px;padding:16px;background:#ffffff;display:none;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
               <b>Figure 4: 多因素 Cox 比例风险回归亚组森林图 (Hazard Ratio & 95% CI)</b>
-              <button class="small-btn" id="rsDlForestSvg">${icon('download', { size: 13 })} 下载森林图 (SVG)</button>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button class="small-btn" id="rsDlForestPzfx" title="导出 GraphPad Prism 森林图工程文件 (.pzfx)">${icon('download', { size: 13 })} Prism (.pzfx)</button>
+                <button class="small-btn" id="rsDlForestR" title="导出 R 语言 forestplot/ggplot2 脚本 (.R)">${icon('download', { size: 13 })} R 脚本 (.R)</button>
+                <button class="small-btn primary" id="rsDlForestSvg">${icon('download', { size: 13 })} 下载森林图 (SVG)</button>
+              </div>
             </div>
             <div id="rsForestSvgWrap" style="overflow:auto;max-height:420px;display:flex;justify-content:center;"></div>
           </div>
@@ -829,6 +898,70 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
               document.body.removeChild(a)
               URL.revokeObjectURL(url)
               notice('已下载 Figure 3 KM 矢量图')
+            }
+          }
+
+          const dlKmPzfxBtn = document.getElementById('rsDlKmPzfx')
+          if (dlKmPzfxBtn) {
+            dlKmPzfxBtn.onclick = () => {
+              const pzfx = res.native_exports?.prism_pzfx || res.survival_analysis?.native_exports?.prism_pzfx
+              if (!pzfx) { notice('暂无 Prism (.pzfx) 数据', true); return }
+              const blob = new Blob([pzfx], { type: 'application/xml;charset=utf-8' })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `Figure3_Kaplan_Meier_${datasetId}.pzfx`
+              document.body.appendChild(a); a.click(); document.body.removeChild(a)
+              URL.revokeObjectURL(url)
+              notice('已下载 GraphPad Prism (.pzfx) 生存分析原文件')
+            }
+          }
+
+          const dlKmRBtn = document.getElementById('rsDlKmR')
+          if (dlKmRBtn) {
+            dlKmRBtn.onclick = () => {
+              const rCode = res.native_exports?.r_script || res.survival_analysis?.native_exports?.r_script
+              if (!rCode) { notice('暂无 R 脚本数据', true); return }
+              const blob = new Blob([rCode], { type: 'text/plain;charset=utf-8' })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `Figure3_Kaplan_Meier_${datasetId}.R`
+              document.body.appendChild(a); a.click(); document.body.removeChild(a)
+              URL.revokeObjectURL(url)
+              notice('已下载 R 语言 survminer/ggplot2 脚本 (.R)')
+            }
+          }
+
+          const dlForestPzfxBtn = document.getElementById('rsDlForestPzfx')
+          if (dlForestPzfxBtn) {
+            dlForestPzfxBtn.onclick = () => {
+              const pzfx = res.native_exports?.forest_prism_pzfx || res.survival_analysis?.native_exports?.forest_prism_pzfx
+              if (!pzfx) { notice('暂无森林图 Prism (.pzfx) 数据', true); return }
+              const blob = new Blob([pzfx], { type: 'application/xml;charset=utf-8' })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `Figure4_Cox_Forest_Plot_${datasetId}.pzfx`
+              document.body.appendChild(a); a.click(); document.body.removeChild(a)
+              URL.revokeObjectURL(url)
+              notice('已下载 GraphPad Prism (.pzfx) 森林图原文件')
+            }
+          }
+
+          const dlForestRBtn = document.getElementById('rsDlForestR')
+          if (dlForestRBtn) {
+            dlForestRBtn.onclick = () => {
+              const rCode = res.native_exports?.forest_r_script || res.survival_analysis?.native_exports?.forest_r_script
+              if (!rCode) { notice('暂无森林图 R 脚本数据', true); return }
+              const blob = new Blob([rCode], { type: 'text/plain;charset=utf-8' })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `Figure4_Cox_Forest_Plot_${datasetId}.R`
+              document.body.appendChild(a); a.click(); document.body.removeChild(a)
+              URL.revokeObjectURL(url)
+              notice('已下载 R 语言森林图脚本 (.R)')
             }
           }
 
@@ -1294,6 +1427,204 @@ ${modelsDesc}
       }
     }
     await render()
+  }
+
+  /** 6 大类医学论文图表工作台与原文件导出弹窗 (Medical Figure Studio & Native File Exporters) */
+  async function figureStudioDialog(studyId: string, studyTitle: string): Promise<void> {
+    const dlg = $('dialog')
+    const SUBTYPES: Record<string, Array<{ value: string; label: string }>> = {
+      mechanism: [
+        { value: 'pathway', label: '细胞信号通路与药物作用机制图 (BioRender / NIH BioArt 矢量图标库)' },
+        { value: 'graphical_abstract', label: '顶刊图形摘要 (Graphical Abstract · 左右三栏结构)' },
+        { value: 'experiment_workflow', label: '体内/体外实验技术路线图 (小鼠/类器官/流式/测序)' },
+      ],
+      statistical_wetlab: [
+        { value: 'bar_dot', label: '带个体散点与 SD 误差棒的柱状图 + P 值星号支架 (Prism 风格)' },
+        { value: 'violin_box', label: '小提琴 + 内嵌箱线图 + 散点分布 (Violin + Boxplot)' },
+        { value: 'dose_response_4pl', label: '4 参数 Logistic (4PL) 药代/剂量反应拟合曲线 + IC50/EC50 (OriginPro 风格)' },
+      ],
+      flowchart: [
+        { value: 'consort', label: 'CONSORT 2010 临床试验受试者筛选与分配流程图' },
+      ],
+      bioinformatics: [
+        { value: 'volcano', label: '差异表达火山图 (Volcano Plot · log2FC vs -log10 FDR)' },
+        { value: 'heatmap', label: '多组学聚类热图 + Z-score 与临床分组注释条 (ComplexHeatmap 风格)' },
+        { value: 'enrichment_bubble', label: 'KEGG / GO 通路富集分析气泡图 (clusterProfiler 风格)' },
+        { value: 'umap', label: '单细胞转录组 UMAP 细胞亚群降维分群图 (Seurat 风格)' },
+      ],
+      image_processing: [
+        { value: 'imagej_wb_ihc', label: 'ImageJ (Fiji) Western Blot 灰度定量 / IHC 阳性率 / 免疫荧光 Scale Bar' },
+        { value: 'flowjo_gating', label: 'FlowJo 流式细胞术双参数伪彩散点图 + 四象限圈门 (Q1-Q4)' },
+        { value: 'slicer_3d_roi', label: '3D Slicer / ITK-SNAP 多模态 CT/MRI 病灶 ROI 分割与三维重建' },
+      ],
+      journal_assembly: [
+        { value: 'double_column', label: 'Nature / Cell / NEJM / Lancet 双栏多面板拼图 (180 mm · A/B/C/D 自动排版)' },
+        { value: 'single_column', label: '顶刊单栏紧凑拼图 (88 mm · 600 DPI 出版级输出)' },
+      ],
+    }
+
+    dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="医学论文图表工作台">
+      <div class="dialog-head">
+        <h2>医学论文图表工作台 &amp; 原工程文件导出 (Figure Studio)</h2>
+        <button class="quiet" data-close aria-label="关闭">✕</button>
+      </div>
+      <div class="dialog-body" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="muted small">
+          覆盖医学顶刊 6 大类核心图表，不仅直接渲染可发表的高清矢量图，还同步生成 <b>GraphPad Prism (.pzfx)</b>、<b>R 语言脚本 (.R)</b>、<b>OriginPro (.csv/.ogs)</b>、<b>Draw.io (.drawio)</b>、<b>Visio (.vdx)</b>、<b>可编辑 PPT (.pptx)</b>、<b>ImageJ 宏 (.ijm)</b>、<b>FlowJo (.wsp)</b>、<b>3D Slicer (.mrml)</b>、<b>ITK-SNAP (.txt)</b> 及 <b>Adobe Illustrator 分层矢量 (.svg)</b> 原工程文件。
+        </div>
+        <form id="rsFigStudioForm" class="form" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(210px, 1fr));gap:12px;background:var(--panel-active, rgba(0,0,0,0.03));padding:14px;border-radius:8px;border:1px solid var(--line);">
+          <label>1. 图表大类 (Category)
+            <select name="category" id="rsFigCat">
+              <option value="mechanism">① 机制图与图形摘要 (BioRender / NIH BioArt)</option>
+              <option value="statistical_wetlab">② 临床与实验统计图 (GraphPad Prism / R / Origin)</option>
+              <option value="flowchart">③ 研究设计与纳排流程图 (Visio / Draw.io / PPT)</option>
+              <option value="bioinformatics">④ 多组学与生信图 (Volcano / Heatmap / KEGG / UMAP)</option>
+              <option value="image_processing">⑤ 影像、流式与病理定量 (ImageJ / FlowJo / 3D Slicer)</option>
+              <option value="journal_assembly">⑥ 顶刊多面板拼图排版 (Adobe Illustrator / 600 DPI)</option>
+            </select>
+          </label>
+          <label>2. 具体图型 (Subtype)
+            <select name="subtype" id="rsFigSubtype"></select>
+          </label>
+          <label>3. 顶刊配色方案 (Palette)
+            <select name="palette" id="rsFigPalette">
+              <option value="npg" selected>Nature Publishing Group (NPG)</option>
+              <option value="nejm">New England Journal of Medicine (NEJM)</option>
+              <option value="lancet">The Lancet</option>
+              <option value="jama">JAMA</option>
+            </select>
+          </label>
+          <div style="grid-column:1 / -1;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <input name="title" id="rsFigTitle" placeholder="图表标题（可选）" value="${esc(studyTitle)} · 机制与实验分析图" style="flex:1;min-width:220px;">
+            <button type="submit" class="primary small-btn" id="rsFigRunBtn">${icon('chart', { size: 13 })} 生成图表与全套原工程文件</button>
+          </div>
+        </form>
+
+        <div id="rsFigStudioResult" style="display:none;flex-direction:column;gap:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;background:var(--panel);padding:10px 12px;border-radius:8px;border:1px solid var(--line);">
+            <div>
+              <b id="rsFigOutTitle">图表预览与原文件下载</b>
+              <div class="muted small">点击右侧按钮即可下载对应专业软件的原工程文件并在本地二次编辑</div>
+            </div>
+            <div id="rsFigNativeBtns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+          </div>
+          <div id="rsFigSvgPreview" style="background:#ffffff;border:1px solid var(--line);border-radius:8px;padding:18px;overflow:auto;max-height:520px;display:flex;justify-content:center;align-items:flex-start;"></div>
+        </div>
+      </div>
+    </div>`
+    dlg.hidden = false
+    dlg.onclick = e => { if (e.target === dlg || (e.target as HTMLElement).closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = '' } }
+
+    const catSel = document.getElementById('rsFigCat') as HTMLSelectElement
+    const subSel = document.getElementById('rsFigSubtype') as HTMLSelectElement
+    const updateSubtypes = () => {
+      const opts = SUBTYPES[catSel.value] || []
+      subSel.innerHTML = opts.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')
+    }
+    catSel.onchange = updateSubtypes
+    updateSubtypes()
+
+    const downloadTextBlob = (content: string, filename: string, mime = 'text/plain;charset=utf-8') => {
+      const blob = new Blob([content], { type: mime })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = filename
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      notice(`已下载原文件：${filename}`)
+    }
+
+    const downloadFormat = async (bodyPayload: Record<string, unknown>, format: string, ext: string) => {
+      try {
+        notice(`正在导出 ${ext} 原文件…`)
+        const token = hooks.token()
+        const r = await fetch(`/api/studies/${studyId}/figures?format=${encodeURIComponent(format)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify(bodyPayload),
+        })
+        if (!r.ok) throw new Error('导出失败')
+        const blob = await r.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url; a.download = `Heurion_Figure_${bodyPayload.category}_${bodyPayload.subtype}.${ext}`
+        document.body.appendChild(a); a.click(); document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        notice(`已成功导出 .${ext} 原文件！`)
+      } catch (err) { notice((err as Error).message, true) }
+    }
+
+    const form = document.getElementById('rsFigStudioForm') as HTMLFormElement
+    const generate = async () => {
+      const category = catSel.value
+      const subtype = subSel.value
+      const palette = (document.getElementById('rsFigPalette') as HTMLSelectElement).value
+      const title = (document.getElementById('rsFigTitle') as HTMLInputElement).value.trim() || `${studyTitle} · 科研图表`
+      const payload: Record<string, unknown> = {
+        category,
+        subtype,
+        plot_type: subtype,
+        bio_type: subtype,
+        mode: subtype === 'flowjo_gating' ? 'flowjo' : subtype === 'slicer_3d_roi' ? 'slicer' : 'imagej',
+        layout: subtype === 'single_column' ? 'single_column' : 'double_column',
+        palette,
+        title,
+      }
+      const btn = document.getElementById('rsFigRunBtn') as HTMLButtonElement
+      btn.disabled = true; btn.textContent = '生成中…'
+      try {
+        const res = await api<any>(`/api/studies/${studyId}/figures`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        })
+        const resBox = document.getElementById('rsFigStudioResult')
+        const svgBox = document.getElementById('rsFigSvgPreview')
+        const btnsBox = document.getElementById('rsFigNativeBtns')
+        if (resBox) resBox.style.display = 'flex'
+        if (svgBox) svgBox.innerHTML = res.svg || '<div class="muted small">已生成工程文件</div>'
+
+        if (btnsBox) {
+          btnsBox.innerHTML = ''
+          const ne = res.native_exports || {}
+          const addBtn = (label: string, onClick: () => void, primary = false) => {
+            const b = document.createElement('button')
+            b.type = 'button'
+            b.className = primary ? 'small-btn primary' : 'small-btn'
+            b.innerHTML = `${icon('download', { size: 13 })} ${esc(label)}`
+            b.onclick = onClick
+            btnsBox.appendChild(b)
+          }
+          if (ne.prism_pzfx) addBtn('GraphPad Prism (.pzfx)', () => downloadTextBlob(ne.prism_pzfx, `Figure_${subtype}.pzfx`, 'application/xml;charset=utf-8'))
+          if (ne.r_script) addBtn('R 脚本 (.R)', () => downloadTextBlob(ne.r_script, `Figure_${subtype}.R`))
+          if (ne.origin_csv) addBtn('OriginPro 数据 (.csv)', () => downloadTextBlob(ne.origin_csv, `Figure_${subtype}_Origin.csv`, 'text/csv;charset=utf-8'))
+          if (ne.origin_ogs) addBtn('OriginLab 脚本 (.ogs)', () => downloadTextBlob(ne.origin_ogs, `Figure_${subtype}.ogs`))
+          if (ne.drawio_xml) addBtn('Draw.io (.drawio)', () => downloadTextBlob(ne.drawio_xml, `Figure_${subtype}.drawio`, 'application/xml;charset=utf-8'))
+          if (ne.visio_vdx) addBtn('Visio (.vdx)', () => downloadTextBlob(ne.visio_vdx, `Figure_${subtype}.vdx`, 'application/xml;charset=utf-8'))
+          if (ne.pptx_editable_available || category === 'mechanism' || category === 'flowchart') {
+            addBtn('可编辑 PPT (.pptx)', () => void downloadFormat(payload, 'pptx', 'pptx'))
+          }
+          if (ne.imagej_macro_ijm) addBtn('ImageJ 宏 (.ijm)', () => downloadTextBlob(ne.imagej_macro_ijm, `ImageJ_${subtype}.ijm`))
+          if (ne.flowjo_wsp) addBtn('FlowJo 工作区 (.wsp)', () => downloadTextBlob(ne.flowjo_wsp, `FlowJo_${subtype}.wsp`, 'application/xml;charset=utf-8'))
+          if (ne.slicer_mrml) addBtn('3D Slicer (.mrml)', () => downloadTextBlob(ne.slicer_mrml, `Slicer_Scene.mrml`, 'application/xml;charset=utf-8'))
+          if (ne.itksnap_labels_txt) addBtn('ITK-SNAP 标签 (.txt)', () => downloadTextBlob(ne.itksnap_labels_txt, `ITKSNAP_Labels.txt`))
+          if (category === 'journal_assembly') {
+            addBtn('600 DPI 高清图 (.png)', () => void downloadFormat(payload, 'png', 'png'))
+            addBtn('完整拼图包 (.zip)', () => void downloadFormat(payload, 'zip', 'zip'))
+          }
+          const svgStr = ne.illustrator_svg || res.svg
+          if (svgStr) addBtn('Illustrator 分层矢量 (.svg)', () => downloadTextBlob(svgStr, `Figure_${category}_${subtype}.svg`, 'image/svg+xml;charset=utf-8'), true)
+        }
+        notice('已生成出版级矢量图与全套软件原文件')
+      } catch (err) {
+        notice((err as Error).message, true)
+      } finally {
+        btn.disabled = false
+        btn.innerHTML = `${icon('chart', { size: 13 })} 生成图表与全套原工程文件`
+      }
+    }
+
+    form.onsubmit = e => { e.preventDefault(); void generate() }
+    void generate()
   }
 
   async function ecrfDialog(studyId: string): Promise<void> {
@@ -1763,6 +2094,7 @@ ${modelsDesc}
     if (act === 'upload') { ($('rsUpload') as HTMLInputElement).click(); return }
     if (act === 'screen') { screenDialog(id); return }
     if (act === 'gen') { datasetDialog(id); return }
+    if (act === 'figures') { void figureStudioDialog(id, s.title); return }
     if (act === 'consort') { void consortDialog(id); return }
     if (act === 'evalue') { evalueDialog(id); return }
     if (act === 'ecrf') { void ecrfDialog(id); return }

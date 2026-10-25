@@ -207,6 +207,54 @@ export function generateLovePlotSvg(config: LovePlotConfig): string {
 </svg>`
 }
 
+/**
+ * 导出 Love Plot 对应的 GraphPad Prism (.pzfx) 与 R (cobalt / ggplot2) 原生源文件
+ */
+export function exportLovePlotNativeSources(config: LovePlotConfig): {
+  prism_pzfx: string
+  r_script: string
+} {
+  const title = config.title ?? 'Covariate Balance (Love Plot)'
+  const covRows = config.covariates
+    .map(c => `  data.frame(Covariate = "${c.label_zh} (${c.name})", Pre_SMD = ${c.pre_smd}, Post_SMD = ${c.post_smd})`)
+    .join(',\n')
+
+  const r_script =
+    `# Reproducible R Script (cobalt::love.plot / ggplot2 Love Plot)\n` +
+    `library(ggplot2)\n` +
+    `df <- rbind(\n${covRows}\n)\n` +
+    `p <- ggplot(df) +\n` +
+    `  geom_vline(xintercept = c(${config.smd_strict_threshold ?? 0.05}, ${config.smd_loose_threshold ?? 0.1}), linetype = "dashed", color = c("#10B981", "#F59E0B")) +\n` +
+    `  geom_segment(aes(x = Pre_SMD, xend = Post_SMD, y = Covariate, yend = Covariate), linetype = "dotted", color = "#94A3B8") +\n` +
+    `  geom_point(aes(x = Pre_SMD, y = Covariate), color = "#F43F5E", size = 3) +\n` +
+    `  geom_point(aes(x = Post_SMD, y = Covariate), color = "#10B981", shape = 18, size = 3.5) +\n` +
+    `  theme_bw(base_family = "Arial") + labs(title = "${title.replace(/"/g, '\\"')}", x = "Absolute Standardized Mean Difference (SMD)", y = "")\n` +
+    `ggsave("Figure_Love_Plot.pdf", plot = p, width = 8, height = 5, dpi = 600)\n`
+
+  const prism_pzfx =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<GraphPadPrismFile xmlns="http://graphpad.com/prism/Prism.htm" PrismXMLVersion="5.00">\n` +
+    `  <TableSequence><Ref ID="Table0" Selected="1"/></TableSequence>\n` +
+    `  <Table ID="Table0" XFormat="numbers" YFormat="replicates" Replicates="1" TableType="XY">\n` +
+    `    <Title>${escapeXml(title)}</Title>\n` +
+    `    <RowTitlesColumn Width="140"><Subcolumn>\n` +
+    config.covariates.map(c => `      <d>${escapeXml(`${c.label_zh} (${c.name})`)}</d>`).join('\n') +
+    `\n    </Subcolumn></RowTitlesColumn>\n` +
+    `    <XColumn Width="89" Decimals="3" Subcolumns="1"><Title>Covariate Index</Title><Subcolumn>\n` +
+    config.covariates.map((_, i) => `      <d>${i + 1}</d>`).join('\n') +
+    `\n    </Subcolumn></XColumn>\n` +
+    `    <YColumn Width="100" Decimals="4" Subcolumns="1"><Title>Unmatched Pre-SMD</Title><Subcolumn>\n` +
+    config.covariates.map(c => `      <d>${c.pre_smd}</d>`).join('\n') +
+    `\n    </Subcolumn></YColumn>\n` +
+    `    <YColumn Width="100" Decimals="4" Subcolumns="1"><Title>Matched Post-SMD</Title><Subcolumn>\n` +
+    config.covariates.map(c => `      <d>${c.post_smd}</d>`).join('\n') +
+    `\n    </Subcolumn></YColumn>\n` +
+    `  </Table>\n` +
+    `</GraphPadPrismFile>`
+
+  return { prism_pzfx, r_script }
+}
+
 function escapeXml(unsafe: string): string {
   return unsafe.replace(/[<>&'"]/g, c => {
     switch (c) {

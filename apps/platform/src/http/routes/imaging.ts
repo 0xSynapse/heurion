@@ -3,6 +3,7 @@ import type { Documents } from '../../model/runtime.ts'
 import type { Store } from '../../store/db.ts'
 import type { PatientService, Actor } from '../../tenancy/patients.ts'
 import type { Access } from '../../research/access.ts'
+import { generateSlicerAndItkSnapPackage, generateImageJAnalysis } from '../../research/medical-figures.ts'
 
 export interface ImagingRouteContext {
   store: Store
@@ -918,9 +919,71 @@ export function registerImagingRoutes(
   app.get('/api/patients/:ptid/imaging/export', c => {
     try {
       const patientId = c.req.param('ptid')
-      const format = (c.req.query('format') || 'fhir') as 'fhir' | 'dicom-sr'
+      const rawFmt = c.req.query('format') || 'fhir'
       const recordId = c.req.query('record_id') || undefined
       const isDownload = c.req.query('download') === '1'
+
+      if (rawFmt === 'slicer-mrml' || rawFmt === 'slicer-mrk' || rawFmt === 'itksnap-labels' || rawFmt === 'imagej-macro') {
+        const detail = pt(c).read(me(c), patientId)
+        const rec = recordId
+          ? detail.records.find((r: any) => r.id === recordId)
+          : detail.records.find((r: any) => r.kind === 'imaging')
+        const metrics = (rec?.imaging_data?.metrics ?? {}) as Record<string, any>
+        const volCm3 = Number(metrics.total_volume_cm3 ?? metrics.total_mucus_volume_cm3 ?? 0)
+        const slicerPkg = generateSlicerAndItkSnapPackage({
+          patientId,
+          studyModality: (rec?.imaging_data?.modality as any) || 'CT',
+          volumeFileName: rec?.imaging_data?.raw_file_name || `${patientId}_scan.nii.gz`,
+          labels: [
+            {
+              id: 1,
+              name: 'Primary_Target_ROI',
+              rgb: [220, 38, 38],
+              opacity: 0.85,
+              volumeMm3: volCm3 > 0 ? volCm3 * 1000 : undefined,
+            },
+            ...(metrics.high_attenuation_mucus_cm3 > 0
+              ? [{ id: 2, name: 'High_Attenuation_Mucus_HAM', rgb: [245, 158, 11] as [number, number, number], opacity: 0.9, volumeMm3: Number(metrics.high_attenuation_mucus_cm3) * 1000 }]
+              : []),
+          ],
+        })
+        if (rawFmt === 'slicer-mrml') {
+          if (isDownload) {
+            return c.body(slicerPkg.slicer_mrml_xml, 200, {
+              'Content-Type': 'application/xml; charset=utf-8',
+              'Content-Disposition': `attachment; filename="${patientId}_Slicer_Scene.mrml"`,
+            })
+          }
+          return c.json({ format: 'slicer-mrml', filename: `${patientId}_Slicer_Scene.mrml`, content: slicerPkg.slicer_mrml_xml })
+        }
+        if (rawFmt === 'slicer-mrk') {
+          if (isDownload) {
+            return c.body(slicerPkg.slicer_markups_mrk_json, 200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Content-Disposition': `attachment; filename="${patientId}_ROI.mrk.json"`,
+            })
+          }
+          return c.json({ format: 'slicer-mrk', filename: `${patientId}_ROI.mrk.json`, content: JSON.parse(slicerPkg.slicer_markups_mrk_json) })
+        }
+        if (rawFmt === 'itksnap-labels') {
+          if (isDownload) {
+            return c.body(slicerPkg.itksnap_labels_txt, 200, {
+              'Content-Type': 'text/plain; charset=utf-8',
+              'Content-Disposition': `attachment; filename="${patientId}_ITK_SNAP_Labels.txt"`,
+            })
+          }
+          return c.json({ format: 'itksnap-labels', filename: `${patientId}_ITK_SNAP_Labels.txt`, content: slicerPkg.itksnap_labels_txt })
+        }
+        const ij = generateImageJAnalysis({
+          title: `${patientId} Calibration`,
+          modality: 'ihc_pathology',
+          micronsPerPixel: Number(c.req.query('um_per_px') ?? 1.0),
+          scaleBarMicrons: Number(c.req.query('scale_um') ?? 100),
+        })
+        return c.json({ format: 'imagej-macro', filename: `${patientId}_ScaleBar.ijm`, content: ij.imagej_macro_ijm })
+      }
+
+      const format = rawFmt as 'fhir' | 'dicom-sr'
       const res = pt(c).exportImagingStandard(me(c), patientId, { format, record_id: recordId })
       if (isDownload) {
         c.header('Content-Type', res.mime)

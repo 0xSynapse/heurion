@@ -5,13 +5,46 @@ import { StudyError, type StudyService } from '../../research/service.ts'
 import { PatientError, type PatientService, type Actor } from '../../tenancy/patients.ts'
 import { CohortService } from '../../research/cohort.ts'
 import { EcrfService } from '../../research/ecrf.ts'
-import { renderConsortSvg, renderConsortMermaid, renderEnrollmentFlowSvg, renderEnrollmentFlowMermaid, type ConsortDiagramData, type EnrollmentFlowData } from '../../research/consort.ts'
-import { calculateEValue, generateLovePlotSvg, type EValueInput, type LovePlotConfig } from '../../research/causal-inference.ts'
+import {
+  renderConsortSvg,
+  renderConsortMermaid,
+  renderEnrollmentFlowSvg,
+  renderEnrollmentFlowMermaid,
+  exportFlowchartToDrawio,
+  exportFlowchartToVisioVdx,
+  exportFlowchartToPptx,
+  type ConsortDiagramData,
+  type EnrollmentFlowData,
+} from '../../research/consort.ts'
+import {
+  calculateEValue,
+  generateLovePlotSvg,
+  exportLovePlotNativeSources,
+  type EValueInput,
+  type LovePlotConfig,
+} from '../../research/causal-inference.ts'
 import { DatasetError, type DatasetService, type Table1Options, type SurvivalOptions } from '../../datasets/service.ts'
 import { exportTable1ToDocx } from '../../datasets/table1-docx.ts'
-import { buildNomogram, calculateRocCurve, renderRocCurveSvg, calculateDcaCurve, renderDcaCurveSvg } from '../../research/prediction-models.ts'
+import {
+  buildNomogram,
+  calculateRocCurve,
+  renderRocCurveSvg,
+  calculateDcaCurve,
+  renderDcaCurveSvg,
+  exportRocDcaNativeSources,
+} from '../../research/prediction-models.ts'
 import { PublicationBundleService, type PublicationBundleOptions } from '../../research/publication-bundle.ts'
 import { SubjectVarService } from '../../research/subject-vars.ts'
+import {
+  renderMechanismDiagram,
+  generateWetLabPlot,
+  generateBioinformaticsFigure,
+  generateImageJAnalysis,
+  generateFlowJoAnalysis,
+  generateSlicerAndItkSnapPackage,
+  assembleJournalFigure,
+  upgradeSvgForIllustrator,
+} from '../../research/medical-figures.ts'
 
 export interface ResearchRouteContext {
   store: Store
@@ -105,22 +138,66 @@ export function registerResearchRoutes(
       }
       const svg = renderEnrollmentFlowSvg(diagramData)
       const mermaid = renderEnrollmentFlowMermaid(diagramData)
-      if (c.req.query('format') === 'svg') {
+      const drawio_xml = exportFlowchartToDrawio(diagramData)
+      const visio_vdx = exportFlowchartToVisioVdx(diagramData)
+      const fmt = c.req.query('format')
+      if (fmt === 'svg') {
         return c.body(svg, 200, { 'Content-Type': 'image/svg+xml' })
       }
-      return c.json({ svg, mermaid, data: diagramData })
+      if (fmt === 'drawio') {
+        return c.body(drawio_xml, 200, {
+          'Content-Type': 'application/xml; charset=utf-8',
+          'Content-Disposition': `attachment; filename="Participant_Flow_${sid}.drawio"`,
+        })
+      }
+      if (fmt === 'vdx') {
+        return c.body(visio_vdx, 200, {
+          'Content-Type': 'application/vnd.visio; charset=utf-8',
+          'Content-Disposition': `attachment; filename="Participant_Flow_${sid}.vdx"`,
+        })
+      }
+      if (fmt === 'pptx') {
+        const pptx = exportFlowchartToPptx(diagramData)
+        return c.body(new Uint8Array(pptx), 200, {
+          'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          'Content-Disposition': `attachment; filename="Participant_Flow_${sid}.pptx"`,
+        })
+      }
+      return c.json({ svg, mermaid, drawio_xml, visio_vdx, data: diagramData })
     } catch (err) { return cohortFailure(c, err) }
   })
 
-  /** CONSORT 2010 自定义参数生成流向图 */
+  /** CONSORT 2010 自定义参数生成流向图（同时支持导出 Draw.io .drawio、Visio .vdx 与 PowerPoint .pptx 原文件） */
   app.post('/api/studies/:sid/cohort/consort', async c => {
     try {
       const sid = c.req.param('sid')
       st().get(c.get('user'), sid)
-      const body = await c.req.json<ConsortDiagramData>()
+      const body = await c.req.json<ConsortDiagramData & { export_format?: string }>()
       const svg = renderConsortSvg(body)
       const mermaid = renderConsortMermaid(body)
-      return c.json({ svg, mermaid, data: body })
+      const drawio_xml = exportFlowchartToDrawio(body)
+      const visio_vdx = exportFlowchartToVisioVdx(body)
+      const fmt = body.export_format || c.req.query('format')
+      if (fmt === 'drawio') {
+        return c.body(drawio_xml, 200, {
+          'Content-Type': 'application/xml; charset=utf-8',
+          'Content-Disposition': `attachment; filename="CONSORT_Flowchart_${sid}.drawio"`,
+        })
+      }
+      if (fmt === 'vdx') {
+        return c.body(visio_vdx, 200, {
+          'Content-Type': 'application/vnd.visio; charset=utf-8',
+          'Content-Disposition': `attachment; filename="CONSORT_Flowchart_${sid}.vdx"`,
+        })
+      }
+      if (fmt === 'pptx') {
+        const pptx = exportFlowchartToPptx(body)
+        return c.body(new Uint8Array(pptx), 200, {
+          'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          'Content-Disposition': `attachment; filename="CONSORT_Flowchart_${sid}.pptx"`,
+        })
+      }
+      return c.json({ svg, mermaid, drawio_xml, visio_vdx, data: body })
     } catch (err) { return cohortFailure(c, err) }
   })
 
@@ -138,18 +215,254 @@ export function registerResearchRoutes(
     } catch (err) { return studyFailure(c, err) }
   })
 
-  /** 因果推断：Love Plot 协变量平衡散点图生成 */
+  /** 因果推断：Love Plot 协变量平衡散点图生成（含 GraphPad Prism .pzfx 与 R cobalt 脚本导出） */
   app.post('/api/studies/:sid/causal/love-plot', async c => {
     try {
       const sid = c.req.param('sid')
       st().get(c.get('user'), sid)
-      const body = await c.req.json<LovePlotConfig>()
+      const body = await c.req.json<LovePlotConfig & { export_format?: string }>()
       if (!Array.isArray(body.covariates) || !body.covariates.length) {
         return c.json({ error: '必须提供至少一组协变量平衡数据 (covariates)' }, 400)
       }
       const svg = generateLovePlotSvg(body)
-      return c.json({ svg })
+      const native = exportLovePlotNativeSources(body)
+      const fmt = body.export_format || c.req.query('format')
+      if (fmt === 'pzfx') {
+        return c.body(native.prism_pzfx, 200, {
+          'Content-Type': 'application/xml; charset=utf-8',
+          'Content-Disposition': `attachment; filename="Love_Plot_${sid}.pzfx"`,
+        })
+      }
+      if (fmt === 'r') {
+        return c.body(native.r_script, 200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Disposition': `attachment; filename="Love_Plot_${sid}.R"`,
+        })
+      }
+      return c.json({
+        svg,
+        illustrator_svg: upgradeSvgForIllustrator(svg, { title: body.title ?? 'Love Plot' }),
+        prism_pzfx: native.prism_pzfx,
+        r_script: native.r_script,
+      })
     } catch (err) { return studyFailure(c, err) }
+  })
+
+  /**
+   * 医学论文全品类制图与原文件导出工作台 (Medical Paper Figure Studio):
+   * 支持生成 6 大类医学论文图表，并导出对应桌面软件的原生工程原文件：
+   * - mechanism (机制图/图形摘要): BioRender/Figdraw 风格分层 SVG + Draw.io (.drawio) + 可编辑 PowerPoint (.pptx)
+   * - wet_lab (实验与临床统计图): GraphPad Prism (.pzfx) + R (ggplot2/ggpubr .R) + OriginPro (.csv + .ogs)
+   * - flowchart (研究设计/CONSORT 流程图): Draw.io (.drawio) + Microsoft Visio (.vdx) + PowerPoint (.pptx)
+   * - bioinformatics (多组学/生信图: 火山图/热图/KEGG-GO富集/单细胞UMAP): R (Seurat/ComplexHeatmap/clusterProfiler .R) + 微生信/Hiplot 矩阵 (.csv) + Prism (.pzfx)
+   * - image_processing (影像/流式/病理切片): ImageJ 比例尺与多通道合并宏 (.ijm) / FlowJo 圈门工作区 (.wsp) / 3D Slicer (.mrml + .mrk.json) & ITK-SNAP (.txt)
+   * - journal_assembly (终极多面板期刊排版拼图): Adobe Illustrator / Inkscape 分层 SVG + 600 DPI 印刷级 PNG + 多面板 PPTX + 全套原文件 ZIP
+   */
+  app.post('/api/studies/:sid/figures', async c => {
+    try {
+      const sid = c.req.param('sid')
+      st().get(c.get('user'), sid)
+      const body = await c.req.json<Record<string, any>>()
+      const category = String(body.category || '')
+      const exportFormat = String(body.export_format || c.req.query('format') || 'json')
+
+      if (category === 'mechanism') {
+        const res = renderMechanismDiagram({
+          title: body.title || 'Biological Mechanism & Signal Transduction',
+          subtitle: body.subtitle,
+          showCompartments: body.showCompartments,
+          nodes: Array.isArray(body.nodes) ? body.nodes : [],
+          edges: Array.isArray(body.edges) ? body.edges : [],
+        })
+        if (exportFormat === 'drawio') {
+          return c.body(res.drawio_xml, 200, {
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Mechanism_${sid}.drawio"`,
+          })
+        }
+        if (exportFormat === 'pptx') {
+          return c.body(new Uint8Array(res.pptx_bytes), 200, {
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'Content-Disposition': `attachment; filename="Mechanism_${sid}.pptx"`,
+          })
+        }
+        if (exportFormat === 'svg' || exportFormat === 'ai-svg') {
+          return c.body(res.illustrator_svg, 200, { 'Content-Type': 'image/svg+xml; charset=utf-8' })
+        }
+        return c.json({
+          category: 'mechanism',
+          svg: res.svg,
+          illustrator_svg: res.illustrator_svg,
+          drawio_xml: res.drawio_xml,
+          pptx_base64: Buffer.from(res.pptx_bytes).toString('base64'),
+        })
+      }
+
+      if (category === 'wet_lab') {
+        const res = generateWetLabPlot({
+          plotType: body.plotType || 'bar_scatter',
+          title: body.title || 'Experimental Statistical Comparison',
+          yLabel: body.yLabel || 'Relative Expression',
+          xLabel: body.xLabel,
+          errorBarType: body.errorBarType || 'SD',
+          groups: body.groups,
+          doseResponse: body.doseResponse,
+        })
+        if (exportFormat === 'pzfx') {
+          return c.body(res.prism_pzfx, 200, {
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Content-Disposition': `attachment; filename="GraphPad_Prism_${sid}.pzfx"`,
+          })
+        }
+        if (exportFormat === 'r') {
+          return c.body(res.r_script, 200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Statistical_Plot_${sid}.R"`,
+          })
+        }
+        if (exportFormat === 'origin_csv') {
+          return c.body(res.origin_csv, 200, {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': `attachment; filename="OriginPro_Worksheet_${sid}.csv"`,
+          })
+        }
+        return c.json({ category: 'wet_lab', ...res })
+      }
+
+      if (category === 'bioinformatics') {
+        const res = generateBioinformaticsFigure(body as any)
+        if (exportFormat === 'r') {
+          return c.body(res.r_script, 200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Bioinformatics_${body.bioType || 'plot'}_${sid}.R"`,
+          })
+        }
+        if (exportFormat === 'csv') {
+          return c.body(res.cloud_csv, 200, {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Hiplot_Matrix_${body.bioType || 'plot'}_${sid}.csv"`,
+          })
+        }
+        if (exportFormat === 'pzfx' && res.prism_pzfx) {
+          return c.body(res.prism_pzfx, 200, {
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Volcano_${sid}.pzfx"`,
+          })
+        }
+        return c.json({ category: 'bioinformatics', ...res })
+      }
+
+      if (category === 'image_processing') {
+        const subType = String(body.tool || 'imagej')
+        if (subType === 'flowjo') {
+          const res = generateFlowJoAnalysis({
+            title: body.title || 'Flow Cytometry Quadrant Gating',
+            xChannel: body.xChannel || 'FITC-A (Annexin V)',
+            yChannel: body.yChannel || 'PE-A (PI)',
+            xGateThreshold: Number(body.xGateThreshold ?? 2.5),
+            yGateThreshold: Number(body.yGateThreshold ?? 2.5),
+            events: Array.isArray(body.events) ? body.events : [],
+          })
+          if (exportFormat === 'wsp') {
+            return c.body(res.flowjo_wsp_xml, 200, {
+              'Content-Type': 'application/xml; charset=utf-8',
+              'Content-Disposition': `attachment; filename="FlowJo_Workspace_${sid}.wsp"`,
+            })
+          }
+          return c.json({ category: 'image_processing', tool: 'flowjo', ...res })
+        }
+        if (subType === 'slicer' || subType === 'itksnap') {
+          const res = generateSlicerAndItkSnapPackage({
+            patientId: body.patientId || sid,
+            studyModality: body.studyModality || 'CT',
+            volumeFileName: body.volumeFileName,
+            segmentationFileName: body.segmentationFileName,
+            roiCenterRAS: body.roiCenterRAS,
+            roiSizeMm: body.roiSizeMm,
+            labels: Array.isArray(body.labels)
+              ? body.labels
+              : [{ id: 1, name: 'Primary_Target_Lesion', rgb: [220, 38, 38], opacity: 0.85 }],
+          })
+          if (exportFormat === 'mrml') {
+            return c.body(res.slicer_mrml_xml, 200, {
+              'Content-Type': 'application/xml; charset=utf-8',
+              'Content-Disposition': `attachment; filename="Slicer_Scene_${sid}.mrml"`,
+            })
+          }
+          if (exportFormat === 'itksnap-txt') {
+            return c.body(res.itksnap_labels_txt, 200, {
+              'Content-Type': 'text/plain; charset=utf-8',
+              'Content-Disposition': `attachment; filename="ITK_SNAP_Labels_${sid}.txt"`,
+            })
+          }
+          return c.json({ category: 'image_processing', tool: subType, ...res })
+        }
+        // Default: ImageJ / Fiji
+        const res = generateImageJAnalysis({
+          title: body.title || 'Microscopy & Densitometry Calibration',
+          modality: body.modality || 'immunofluorescence',
+          micronsPerPixel: Number(body.micronsPerPixel ?? 0.5),
+          scaleBarMicrons: Number(body.scaleBarMicrons ?? 50),
+          channels: body.channels,
+          quantificationGroups: body.quantificationGroups,
+        })
+        if (exportFormat === 'ijm') {
+          return c.body(res.imagej_macro_ijm, 200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Disposition': `attachment; filename="ImageJ_Analysis_${sid}.ijm"`,
+          })
+        }
+        return c.json({ category: 'image_processing', tool: 'imagej', ...res })
+      }
+
+      if (category === 'journal_assembly' || category === 'assembly') {
+        const res = assembleJournalFigure({
+          manuscriptTitle: body.manuscriptTitle || body.title || 'Multi-Panel Journal Figure',
+          journalPreset: body.journalPreset || body.journal_spec || 'nature_double',
+          columns: body.columns,
+          fontFamily: body.fontFamily || body.font_family || 'Arial',
+          dpi: body.dpi,
+          panels: Array.isArray(body.panels) ? body.panels : [],
+        })
+        if (exportFormat === 'zip') {
+          return c.body(new Uint8Array(res.bundle_zip), 200, {
+            'Content-Type': 'application/zip',
+            'Content-Disposition': `attachment; filename="Journal_Figure_Assembly_${sid}.zip"`,
+          })
+        }
+        if (exportFormat === 'png') {
+          return c.body(new Uint8Array(res.high_res_png), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Journal_Figure_600DPI_${sid}.png"`,
+          })
+        }
+        if (exportFormat === 'pptx') {
+          return c.body(new Uint8Array(res.pptx_bytes), 200, {
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'Content-Disposition': `attachment; filename="Journal_Figure_Panels_${sid}.pptx"`,
+          })
+        }
+        return c.json({
+          category: 'journal_assembly',
+          illustrator_svg: res.illustrator_svg,
+          png_base64: Buffer.from(res.high_res_png).toString('base64'),
+          pptx_base64: Buffer.from(res.pptx_bytes).toString('base64'),
+          zip_base64: Buffer.from(res.bundle_zip).toString('base64'),
+          manifest: res.manifest,
+        })
+      }
+
+      return c.json(
+        {
+          error: 'unsupported_figure_category',
+          message:
+            '请指定有效的图表类别 category: mechanism | wet_lab | bioinformatics | image_processing | journal_assembly',
+        },
+        400,
+      )
+    } catch (err) {
+      return cohortFailure(c, err)
+    }
   })
 
   // —— Auto-eCRF 多模态数据批量提取与溯源 ——
@@ -367,10 +680,16 @@ export function registerResearchRoutes(
       const dca2 = calculateDcaCurve(labels, probs2, body.model2_name || '临床 + 3D 影像组学模型', '#0284c7')
       const prev = labels.filter((y: number) => y === 1).length / labels.length
       const dcaSvg = renderDcaCurveSvg([dca1, dca2], prev, `${ds.name} · 临床决策曲线 (DCA)`)
+      const nativeExports = exportRocDcaNativeSources([roc1, roc2], [dca1, dca2], ds.name)
 
       return c.json({
         roc: { models: [roc1, roc2], svg: rocSvg },
-        dca: { models: [dca1, dca2], svg: dcaSvg, prevalence: prev }
+        dca: { models: [dca1, dca2], svg: dcaSvg, prevalence: prev },
+        native_exports: {
+          ...nativeExports,
+          roc_illustrator_svg: upgradeSvgForIllustrator(rocSvg, { title: `${ds.name} ROC Curve` }),
+          dca_illustrator_svg: upgradeSvgForIllustrator(dcaSvg, { title: `${ds.name} DCA Curve` }),
+        },
       })
     } catch (err) { return datasetFailure(c, err) }
   })

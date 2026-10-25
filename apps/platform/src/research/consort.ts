@@ -362,3 +362,10 @@ export function renderEnrollmentFlowMermaid(data: EnrollmentFlowData): string {
   if (data.arms.length > 0 && (data.unassigned ?? 0) > 0) m += `  C --> GU["分组缺失 (Arm missing)<br>n = ${data.unassigned}"]\n`
   return m
 }
+
+export {
+  exportFlowchartToDrawio,
+  exportFlowchartToVisioVdx,
+  exportFlowchartToPptx,
+} from './medical-figures.ts'
+

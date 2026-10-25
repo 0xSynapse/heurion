@@ -61,6 +61,11 @@ export interface NomogramResult {
   academic_narrative: string
   /** 是否输出了绝对生存概率（提供了有效的基线生存率时才为 true） */
   absolute_survival: boolean
+  /** 原生工具源文件导出 (R rms 包列线图脚本 .R 与 Adobe Illustrator 分层 .svg) */
+  native_exports?: {
+    r_script: string
+    illustrator_svg: string
+  }
 }
 
 export interface RocCurvePoint {
@@ -243,6 +248,16 @@ export function buildNomogram(options: NomogramOptions): NomogramResult {
       ? `Absolute survival probabilities are shown only for the time points whose baseline survival was supplied.`
       : `Baseline survival was not supplied, so only total points (a linear predictor / relative risk scale) are shown, without absolute survival probabilities.`)
 
+  const rRmsScript =
+    `# Reproducible R Script (rms package TRIPOD Nomogram)\n` +
+    `library(rms)\n` +
+    `df <- read.csv("clinical_cohort.csv")\n` +
+    `dd <- datadist(df); options(datadist = "dd")\n` +
+    `f <- cph(Surv(time, status) ~ ${evaluatedPreds.map(p => p.variable).join(' + ')}, x = TRUE, y = TRUE, surv = TRUE, data = df)\n` +
+    `surv_fn <- Survival(f)\n` +
+    `nom <- nomogram(f, fun = list(function(x) surv_fn(12, x), function(x) surv_fn(36, x), function(x) surv_fn(60, x)), funlabel = c("1-Year Survival", "3-Year Survival", "5-Year Survival"))\n` +
+    `pdf("Figure_Prognostic_Nomogram.pdf", width = 9, height = 6)\nplot(nom)\ndev.off()\n`
+
   return {
     title,
     predictors: evaluatedPreds,
@@ -252,6 +267,15 @@ export function buildNomogram(options: NomogramOptions): NomogramResult {
     c_index_estimate: options.c_index,
     academic_narrative: narrative,
     absolute_survival: absolute,
+    native_exports: {
+      r_script: rRmsScript,
+      illustrator_svg: svg
+        .replace(
+          /<svg\b([^>]*)>/,
+          '<svg xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" data-generator="Heurion-Publication-Studio" data-name="Nomogram_Layer"$1><g id="Layer_Nomogram" inkscape:groupmode="layer" inkscape:label="Nomogram_Layer" data-name="Nomogram_Layer">',
+        )
+        .replace(/<\/svg>\s*$/, '</g></svg>'),
+    },
   }
 }
 
@@ -662,4 +686,73 @@ function escXml(unsafe: string): string {
       default: return c
     }
   })
+}
+
+/**
+ * 导出 ROC 与 DCA 曲线的 GraphPad Prism (.pzfx) 项目文件及 R (pROC + rmda) 脚本
+ */
+export function exportRocDcaNativeSources(
+  rocModels: RocModelResult[],
+  dcaModels: DcaModelResult[],
+  title = 'ROC and Decision Curve Analysis',
+): {
+  prism_pzfx: string
+  r_script: string
+} {
+  const m0 = rocModels[0]
+  const rocX = m0 ? m0.points.map(p => Number((100 * p.fpr).toFixed(2))) : [0, 100]
+  const rocYCols = rocModels
+    .map(
+      m =>
+        `    <YColumn Width="110" Decimals="2" Subcolumns="1"><Title>${escXml(m.model_name)} (% Sensitivity)</Title><Subcolumn>\n` +
+        m.points.map(p => `      <d>${(100 * p.tpr).toFixed(2)}</d>`).join('\n') +
+        `\n    </Subcolumn></YColumn>`,
+    )
+    .join('\n')
+
+  const d0 = dcaModels[0]
+  const dcaX = d0 ? d0.points.map(p => p.threshold) : [0.1, 0.5]
+  const dcaYCols = dcaModels
+    .map(
+      m =>
+        `    <YColumn Width="110" Decimals="4" Subcolumns="1"><Title>${escXml(m.model_name)} (Net Benefit)</Title><Subcolumn>\n` +
+        m.points.map(p => `      <d>${p.net_benefit_model}</d>`).join('\n') +
+        `\n    </Subcolumn></YColumn>`,
+    )
+    .join('\n')
+
+  const prism_pzfx =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<GraphPadPrismFile xmlns="http://graphpad.com/prism/Prism.htm" PrismXMLVersion="5.00">\n` +
+    `  <TableSequence><Ref ID="Table0" Selected="1"/><Ref ID="Table1" Selected="0"/></TableSequence>\n` +
+    `  <Table ID="Table0" XFormat="numbers" YFormat="replicates" Replicates="1" TableType="XY">\n` +
+    `    <Title>${escXml(title)} - ROC Curve</Title>\n` +
+    `    <XColumn Width="89" Decimals="2" Subcolumns="1"><Title>100% - Specificity%</Title><Subcolumn>\n` +
+    rocX.map(v => `      <d>${v}</d>`).join('\n') +
+    `\n    </Subcolumn></XColumn>\n` +
+    rocYCols +
+    `\n  </Table>\n` +
+    `  <Table ID="Table1" XFormat="numbers" YFormat="replicates" Replicates="1" TableType="XY">\n` +
+    `    <Title>${escXml(title)} - Decision Curve Analysis (DCA)</Title>\n` +
+    `    <XColumn Width="89" Decimals="2" Subcolumns="1"><Title>Threshold Probability</Title><Subcolumn>\n` +
+    dcaX.map(v => `      <d>${v}</d>`).join('\n') +
+    `\n    </Subcolumn></XColumn>\n` +
+    dcaYCols +
+    `\n  </Table>\n` +
+    `</GraphPadPrismFile>`
+
+  const r_script =
+    `# Reproducible R Script (pROC + rmda Decision Curve Analysis)\n` +
+    `library(pROC)\nlibrary(rmda)\n` +
+    `df <- read.csv("prediction_cohort.csv")\n` +
+    `roc_obj <- roc(df$outcome, df$pred_score, ci = TRUE)\n` +
+    `pdf("Figure_ROC_Curve.pdf", width = 6, height = 6)\n` +
+    `plot(roc_obj, print.auc = TRUE, col = "#0284C7", lwd = 2.5, main = "${title.replace(/"/g, '\\"')}")\n` +
+    `dev.off()\n` +
+    `dca_obj <- decision_curve(outcome ~ pred_score, data = df, family = binomial(link = "logit"), thresholds = seq(0.05, 0.80, by = 0.05))\n` +
+    `pdf("Figure_DCA_Curve.pdf", width = 6.5, height = 5.5)\n` +
+    `plot_decision_curve(dca_obj, curve.names = c("Prediction Model"), col = c("#0284C7"), confidence.intervals = FALSE)\n` +
+    `dev.off()\n`
+
+  return { prism_pzfx, r_script }
 }

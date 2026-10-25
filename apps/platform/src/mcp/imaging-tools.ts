@@ -2,10 +2,26 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { TokenClaims } from '../auth/token.ts'
 import type { Store } from '../store/db.ts'
-import type { PatientService } from '../tenancy/patients.ts'
+import { PatientError, type PatientService } from '../tenancy/patients.ts'
+import { ImagingStudyService } from '../imaging/studies.ts'
 import type { StudyService } from '../research/service.ts'
 import type { DatasetService } from '../datasets/service.ts'
 import type { CohortService } from '../research/cohort.ts'
+import {
+  renderMechanismDiagram,
+  generateWetLabPlot,
+  generateBioinformaticsFigure,
+  generateImageJAnalysis,
+  generateFlowJoAnalysis,
+  generateSlicerAndItkSnapPackage,
+  assembleJournalFigure,
+} from '../research/medical-figures.ts'
+import {
+  renderConsortSvg,
+  exportFlowchartToDrawio,
+  exportFlowchartToVisioVdx,
+  exportFlowchartToPptx,
+} from '../research/consort.ts'
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] })
 const json = (value: unknown) => text(JSON.stringify(value, null, 2))
@@ -1187,6 +1203,180 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       return json(res)
     } catch (err) {
       return fail('batch_analyze_error', `批量分析执行异常：${err instanceof Error ? err.message : String(err)}`)
+    }
+  })
+
+  // 21. 医学论文全品类制图与原文件导出工作台 (imaging_medical_figure_studio)
+  server.registerTool('imaging_medical_figure_studio', {
+    description:
+      '医学论文 6 大类核心图表生成与原生桌面软件源文件导出工具：' +
+      '支持 (1) mechanism 机制图/图形摘要（BioRender/Figdraw/NIH BioArt 风格矢量图标 + Draw.io .drawio + 可编辑 PPTX + Illustrator 分层 SVG）；' +
+      '(2) wet_lab 临床与实验统计图（柱状散点图/箱线小提琴图/4PL药代剂量拟合 + GraphPad Prism .pzfx + R 脚本 .R + OriginPro .csv/.ogs）；' +
+      '(3) flowchart 患者筛选流程图（CONSORT 2010 + Draw.io .drawio + Visio .vdx + 可编辑 PPTX）；' +
+      '(4) bioinformatics 多组学生信图（火山图/ComplexHeatmap热图/GO-KEGG富集气泡图/单细胞UMAP + R 脚本 .R + 微生信/Hiplot 矩阵 .csv + Prism .pzfx）；' +
+      '(5) image_processing 医学影像/流式/病理切片（ImageJ 比例尺与多通道合并宏 .ijm / FlowJo 流式四象限圈门工作区 .wsp / 3D Slicer .mrml + .mrk.json + ITK-SNAP .txt）；' +
+      '(6) journal_assembly 顶刊多面板拼图排版（Nature/NEJM/Lancet/JAMA 栏宽规范、统一字体字号、Adobe Illustrator 分层 SVG + 600 DPI PNG + PPTX）。',
+    inputSchema: {
+      category: z
+        .enum(['mechanism', 'wet_lab', 'flowchart', 'bioinformatics', 'image_processing', 'journal_assembly'])
+        .describe('图表大类：mechanism | wet_lab | flowchart | bioinformatics | image_processing | journal_assembly'),
+      title: z.string().optional().describe('图表主标题'),
+      spec: z.record(z.string(), z.any()).describe('对应图表类别的详细配置参数与真实实验/临床数据'),
+      save_asset: z.boolean().optional().describe('是否将生成的 SVG/PNG 保存为平台文档资产供文稿直接引用，默认 true'),
+    },
+  }, async ({ category, title, spec, save_asset }) => {
+    try {
+      const payload = { ...spec, title: title || spec.title || 'Medical Publication Figure' }
+      let svgOut: string | undefined
+      let nativeSummary: Record<string, unknown> = {}
+
+      if (category === 'mechanism') {
+        const res = renderMechanismDiagram({
+          title: payload.title,
+          subtitle: payload.subtitle,
+          showCompartments: payload.showCompartments,
+          nodes: Array.isArray(payload.nodes) ? payload.nodes : [],
+          edges: Array.isArray(payload.edges) ? payload.edges : [],
+        })
+        svgOut = res.illustrator_svg
+        nativeSummary = {
+          illustrator_svg: res.illustrator_svg,
+          drawio_xml: res.drawio_xml,
+          pptx_base64: Buffer.from(res.pptx_bytes).toString('base64'),
+        }
+      } else if (category === 'wet_lab') {
+        const res = generateWetLabPlot({
+          plotType: payload.plotType || 'bar_scatter',
+          title: payload.title,
+          yLabel: payload.yLabel || 'Measurement',
+          xLabel: payload.xLabel,
+          errorBarType: payload.errorBarType || 'SD',
+          groups: payload.groups,
+          doseResponse: payload.doseResponse,
+        })
+        svgOut = res.illustrator_svg
+        nativeSummary = {
+          illustrator_svg: res.illustrator_svg,
+          prism_pzfx: res.prism_pzfx,
+          r_script: res.r_script,
+          origin_csv: res.origin_csv,
+          origin_ogs: res.origin_ogs,
+          stats_summary: res.stats_summary,
+        }
+      } else if (category === 'flowchart') {
+        const cData = {
+          title: payload.title,
+          total_assessed: Number(payload.total_assessed ?? 100),
+          exclusions: Array.isArray(payload.exclusions) ? payload.exclusions : [],
+          eligible_total: Number(payload.eligible_total ?? 80),
+          arms: Array.isArray(payload.arms) ? payload.arms : [],
+        }
+        svgOut = renderConsortSvg(cData)
+        nativeSummary = {
+          svg: svgOut,
+          drawio_xml: exportFlowchartToDrawio(cData),
+          visio_vdx: exportFlowchartToVisioVdx(cData),
+          pptx_base64: Buffer.from(exportFlowchartToPptx(cData)).toString('base64'),
+        }
+      } else if (category === 'bioinformatics') {
+        const res = generateBioinformaticsFigure(payload as any)
+        svgOut = res.illustrator_svg
+        nativeSummary = {
+          illustrator_svg: res.illustrator_svg,
+          r_script: res.r_script,
+          cloud_csv: res.cloud_csv,
+          prism_pzfx: res.prism_pzfx,
+        }
+      } else if (category === 'image_processing') {
+        const tool = String(payload.tool || 'imagej')
+        if (tool === 'flowjo') {
+          const res = generateFlowJoAnalysis({
+            title: payload.title,
+            xChannel: payload.xChannel || 'FITC-A',
+            yChannel: payload.yChannel || 'PE-A',
+            xGateThreshold: Number(payload.xGateThreshold ?? 2.5),
+            yGateThreshold: Number(payload.yGateThreshold ?? 2.5),
+            events: Array.isArray(payload.events) ? payload.events : [],
+          })
+          svgOut = res.illustrator_svg
+          nativeSummary = res
+        } else if (tool === 'slicer' || tool === 'itksnap') {
+          const res = generateSlicerAndItkSnapPackage({
+            patientId: payload.patientId || 'pt_01',
+            studyModality: payload.studyModality || 'CT',
+            volumeFileName: payload.volumeFileName,
+            segmentationFileName: payload.segmentationFileName,
+            roiCenterRAS: payload.roiCenterRAS,
+            roiSizeMm: payload.roiSizeMm,
+            labels: Array.isArray(payload.labels)
+              ? payload.labels
+              : [{ id: 1, name: 'Primary_Target_ROI', rgb: [220, 38, 38], opacity: 0.85 }],
+          })
+          nativeSummary = res
+        } else {
+          const res = generateImageJAnalysis({
+            title: payload.title,
+            modality: payload.modality || 'immunofluorescence',
+            micronsPerPixel: Number(payload.micronsPerPixel ?? 0.5),
+            scaleBarMicrons: Number(payload.scaleBarMicrons ?? 50),
+            channels: payload.channels,
+            quantificationGroups: payload.quantificationGroups,
+          })
+          svgOut = res.illustrator_svg
+          nativeSummary = res
+        }
+      } else if (category === 'journal_assembly') {
+        const res = assembleJournalFigure({
+          manuscriptTitle: payload.manuscriptTitle || payload.title,
+          journalPreset: payload.journalPreset || 'nature_double',
+          columns: payload.columns,
+          fontFamily: payload.fontFamily || 'Arial',
+          panels: Array.isArray(payload.panels) ? payload.panels : [],
+        })
+        svgOut = res.illustrator_svg
+        nativeSummary = {
+          illustrator_svg: res.illustrator_svg,
+          png_base64: Buffer.from(res.high_res_png).toString('base64'),
+          pptx_base64: Buffer.from(res.pptx_bytes).toString('base64'),
+          zip_base64: Buffer.from(res.bundle_zip).toString('base64'),
+          manifest: res.manifest,
+        }
+      }
+
+      let assetId: string | undefined
+      if (save_asset !== false && svgOut && claims.p.includes('write')) {
+        const asset = store.putAsset({
+          owner: claims.u,
+          mime: 'image/svg+xml',
+          name: `${category}-figure.svg`,
+          bytes: Buffer.from(svgOut, 'utf-8'),
+        })
+        assetId = asset.id
+      }
+
+      return json({
+        status: 'success',
+        category,
+        asset_id: assetId,
+        markdown_insert: assetId ? `![${payload.title}](asset:${assetId})` : undefined,
+        ...nativeSummary,
+      })
+    } catch (err) {
+      return fail('medical_figure_error', err instanceof Error ? err.message : String(err))
+    }
+  })
+
+  // 影像检查列表（与界面 GET /api/patients/:ptid/imaging/studies 对应；不含 DICOM UID 与检查号）
+  server.registerTool('imaging_studies', {
+    description: '列出患者已入库的影像检查（DICOM 上传或 PACS 转发）：检查日期、模态、序列（层厚、重建核、层数）与病灶确认情况。不返回 DICOM UID、检查号等标识，也不返回影像本身。',
+    inputSchema: { patient_id: z.string().describe('患者 ID') },
+  }, async ({ patient_id }) => {
+    if (!deps.patients) return fail('patients_unavailable', '患者模块未启用')
+    try {
+      return json(new ImagingStudyService(deps.patients, null).listStudies({ userId: claims.u, via: 'ai', space: 'work' }, patient_id))
+    } catch (err) {
+      if (err instanceof PatientError) return fail(err.code, err.message)
+      throw err
     }
   })
 }

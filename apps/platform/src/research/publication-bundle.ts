@@ -20,7 +20,14 @@
  */
 
 import { strToU8, zipSync } from 'fflate'
-import { renderEnrollmentFlowSvg } from './consort.ts'
+import {
+  renderEnrollmentFlowSvg,
+  exportFlowchartToDrawio,
+  exportFlowchartToVisioVdx,
+  exportFlowchartToPptx,
+  type EnrollmentFlowData,
+} from './consort.ts'
+import { upgradeSvgForIllustrator } from './medical-figures.ts'
 import { calculateEValue, type EValueResult } from './causal-inference.ts'
 import { generateSurvivalAnalysis, normalizeEventStatus, type SurvivalAnalysisResult } from '../datasets/survival.ts'
 import { exportTable1ToDocx } from '../datasets/table1-docx.ts'
@@ -222,7 +229,7 @@ export class PublicationBundleService {
     const withdrawn = roster.filter(s => s.status === 'withdrawn').length
     const inaccessible = snap.skipped.length
     const enrolledEver = n + inaccessible + withdrawn
-    const flowSvg = renderEnrollmentFlowSvg({
+    const flowData: EnrollmentFlowData = {
       title: `${study.title} · Participant Flow`,
       enrolled_ever: enrolledEver,
       withdrawn,
@@ -231,7 +238,14 @@ export class PublicationBundleService {
       arms: grouped || arms.length === 1 ? arms : [],
       unassigned: arms.length > 0 ? armMissing : 0,
       note: '平台未记录筛选人数与排除原因，因此未绘制 Assessed / Excluded 环节；请作者按原始纳排记录补充。',
+    }
+    const flowSvg = upgradeSvgForIllustrator(renderEnrollmentFlowSvg(flowData), {
+      title: `${study.title} Participant Flow`,
+      layerName: 'Participant_Flowchart',
     })
+    const flowDrawio = exportFlowchartToDrawio(flowData)
+    const flowVisioVdx = exportFlowchartToVisioVdx(flowData)
+    const flowPptx = exportFlowchartToPptx(flowData)
     omitted.push('CONSORT 筛选 / 排除环节（平台没有纳排筛选记录）')
 
     // 5. Love Plot：平台没有倾向性评分匹配 / 加权实现，不生成
@@ -298,9 +312,28 @@ export class PublicationBundleService {
     const zipMap: Record<string, Uint8Array> = {
       'Table1_Baseline_Characteristics.docx': table1Docx,
       'Figure1_Participant_Flow.svg': strToU8(flowSvg),
+      'Figure1_Participant_Flow.drawio': strToU8(flowDrawio),
+      'Figure1_Participant_Flow.vdx': strToU8(flowVisioVdx),
+      'Figure1_Participant_Flow.pptx': flowPptx,
     }
-    if (survRes) zipMap['Figure2_Kaplan_Meier_Survival_Curve.svg'] = strToU8(survRes.svg)
-    if (survRes && coxOk && survRes.forest_svg) zipMap['Figure3_Cox_Forest_Plot.svg'] = strToU8(survRes.forest_svg)
+    if (survRes) {
+      zipMap['Figure2_Kaplan_Meier_Survival_Curve.svg'] = strToU8(survRes.native_exports?.illustrator_svg ?? survRes.svg)
+      if (survRes.native_exports?.prism_pzfx) {
+        zipMap['Figure2_Kaplan_Meier_Survival_Curve.pzfx'] = strToU8(survRes.native_exports.prism_pzfx)
+      }
+      if (survRes.native_exports?.r_script) {
+        zipMap['Figure2_Kaplan_Meier_Survival_Curve.R'] = strToU8(survRes.native_exports.r_script)
+      }
+    }
+    if (survRes && coxOk && survRes.forest_svg) {
+      zipMap['Figure3_Cox_Forest_Plot.svg'] = strToU8(survRes.native_exports?.forest_illustrator_svg ?? survRes.forest_svg)
+      if (survRes.native_exports?.forest_prism_pzfx) {
+        zipMap['Figure3_Cox_Forest_Plot.pzfx'] = strToU8(survRes.native_exports.forest_prism_pzfx)
+      }
+      if (survRes.native_exports?.forest_r_script) {
+        zipMap['Figure3_Cox_Forest_Plot.R'] = strToU8(survRes.native_exports.forest_r_script)
+      }
+    }
     zipMap['Manuscript_Statistical_Methods_and_Results.md'] = strToU8(manuscriptMd)
     zipMap['STROBE_Statement_Checklist.md'] = strToU8(strobeMd)
     zipMap['Statistical_Reproducibility_Script.py'] = strToU8(reproPy)

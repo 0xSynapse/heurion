@@ -11,6 +11,7 @@
  */
 
 import { chiSquareUpperPValue, normalCdf } from './table1.ts'
+import { exportToPrismPzfx, upgradeSvgForIllustrator, type PrismTableSpec } from '../research/medical-figures.ts'
 
 export interface SurvivalOptions {
   /** 随访生存时间列名（天、月或年，数值型，如 'os_months', 'pfs_days'） */
@@ -174,6 +175,15 @@ export interface SurvivalAnalysisResult {
   forest_plot_svg?: string
   /** 完整 Markdown 总结与述评 (别名) */
   summary_markdown?: string
+  /** 原生工具源文件导出 (GraphPad Prism .pzfx, R survminer/forestploter .R, Adobe Illustrator 分层 .svg) */
+  native_exports?: {
+    prism_pzfx: string
+    r_script: string
+    illustrator_svg: string
+    forest_prism_pzfx?: string
+    forest_r_script?: string
+    forest_illustrator_svg?: string
+  }
 }
 
 /** 规范化事件状态为 0 或 1 */
@@ -1256,6 +1266,55 @@ export function generateSurvivalAnalysis(
   const narrative = generateSurvivalNarrative(groupsKm, log_rank, cox, time_unit)
   const markdown_table = generateSurvivalMarkdownTable(groupsKm, time_unit)
 
+  // 生成 GraphPad Prism (.pzfx)、R (survminer / forestploter) 与 Adobe Illustrator 分层 SVG 源文件
+  const prismTables: PrismTableSpec[] = [
+    {
+      tableType: 'Survival',
+      title: `${title} (Kaplan-Meier)`,
+      timeTitle: `Time (${time_unit})`,
+      records: cleaned.map(c => ({ time: c.time, event: (c.event > 0 ? 1 : 0) as 0 | 1, group: labels[c.group] || c.group })),
+    },
+  ]
+  if (cox && cox.covariates.length > 0) {
+    prismTables.push({
+      tableType: 'Forest',
+      title: `${title} (Cox Proportional Hazards)`,
+      rows: cox.covariates.map(c => ({
+        label: c.label,
+        hr: c.hr,
+        ciLower: c.hr_ci_lower,
+        ciUpper: c.hr_ci_upper,
+        pValue: c.p_value,
+      })),
+    })
+  }
+  const prism_pzfx = exportToPrismPzfx(prismTables, title)
+  const r_script =
+    `# Reproducible R Script (survival + survminer + forestploter)\n` +
+    `library(survival)\nlibrary(survminer)\n` +
+    `df <- read.csv("survival_dataset.csv")\n` +
+    `fit <- survfit(Surv(${time_col}, ${event_col}) ~ ${group_col || '1'}, data = df)\n` +
+    `p_km <- ggsurvplot(fit, data = df, risk.table = TRUE, pval = TRUE, conf.int = TRUE, palette = "jco", xlab = "Time (${time_unit})", ggtheme = theme_classic(base_family = "Arial"))\n` +
+    `pdf("Figure_Kaplan_Meier_Survival.pdf", width = 7.5, height = 6)\nprint(p_km)\ndev.off()\n` +
+    (cox && cox.covariates.length > 0
+      ? `cox_fit <- coxph(Surv(${time_col}, ${event_col}) ~ ${coxCovs.length > 0 ? coxCovs.join(' + ') : group_col || '1'}, data = df)\n` +
+        `p_forest <- ggforest(cox_fit, data = df)\n` +
+        `ggsave("Figure_Cox_Forest_Plot.pdf", plot = p_forest, width = 8, height = 5, dpi = 600)\n`
+      : '')
+
+  const native_exports = {
+    prism_pzfx,
+    r_script,
+    illustrator_svg: upgradeSvgForIllustrator(svg, { title, layerName: 'Kaplan_Meier_Curve' }),
+    ...(cox && cox.covariates.length > 0 && forest_svg
+      ? {
+          forest_prism_pzfx: exportToPrismPzfx(prismTables[1]!, `${title} Forest Plot`),
+          forest_r_script: r_script,
+          forest_illustrator_svg: upgradeSvgForIllustrator(forest_svg, { title: `${title} Forest Plot`, layerName: 'Cox_Forest_Plot' }),
+        }
+      : {}),
+  }
+
   return {
     title,
     time_col,
@@ -1272,7 +1331,8 @@ export function generateSurvivalAnalysis(
     forest_plot_svg: forest_svg,
     narrative,
     markdown_table,
-    summary_markdown: `${narrative}\n\n${markdown_table}`
+    summary_markdown: `${narrative}\n\n${markdown_table}`,
+    native_exports,
   }
 }
 
