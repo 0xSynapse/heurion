@@ -3824,16 +3824,44 @@ ${impression}
     const exportStandard = t.closest<HTMLElement>('[data-export-standard]')
     if (exportStandard) {
       const recId = exportStandard.dataset.exportStandard
-      const choice = await askText({
-        title: '导出国际医学行业标准交换格式',
-        label: '请选择格式：\n1. HL7 FHIR R4 DiagnosticReport (JSON)\n2. DICOM SR (TID 1500 Structured Reporting JSON)',
-        value: '1',
-        confirm: '下载',
-        hint: '输入 1 下载 FHIR 资源，输入 2 下载 DICOM SR 报告',
-      })
-      if (!choice) return
-      const fmt = choice.trim() === '2' ? 'dicom-sr' : 'fhir'
-      window.open(`/api/patients/${id}/imaging/export?format=${fmt}&record_id=${encodeURIComponent(recId || '')}&download=1`, '_blank')
+      const dlg = document.getElementById('dialog')!
+      const exportUrl = (fmt: string) =>
+        `/api/patients/${id}/imaging/export?format=${fmt}&record_id=${encodeURIComponent(recId || '')}&download=1&token=${encodeURIComponent(hooks.token())}`
+      dlg.innerHTML = `<div class="dialog-card" role="dialog" aria-modal="true" style="max-width: 640px">
+        <div class="dialog-head"><h2>${icon('download')} 导出医学影像工程原文件与国际标准格式</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
+        <div class="dialog-body" style="gap: 12px">
+          <div class="muted small">选择需要将本次 3D 影像分割与定量测量结果导出的目标软件或医疗信息标准格式：</div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px">
+            <a class="rs-card" style="text-decoration: none; color: inherit; padding: 12px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--line)" href="${exportUrl('slicer-mrml')}" target="_blank" download>
+              <b>3D Slicer 工程场景 (.mrml)</b>
+              <span class="muted small">包含三维体数据节点、病灶 ROI 边界框与配色查找表的完整 3D Slicer 场景工程</span>
+            </a>
+            <a class="rs-card" style="text-decoration: none; color: inherit; padding: 12px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--line)" href="${exportUrl('slicer-mrk')}" target="_blank" download>
+              <b>3D Slicer 靶点坐标 (.mrk.json)</b>
+              <span class="muted small">三维解剖空间 RAS 靶病灶中心点与测量标尺 Markups JSON</span>
+            </a>
+            <a class="rs-card" style="text-decoration: none; color: inherit; padding: 12px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--line)" href="${exportUrl('itksnap-labels')}" target="_blank" download>
+              <b>ITK-SNAP 分割标签表 (.txt)</b>
+              <span class="muted small">可直接导入 ITK-SNAP 的病灶/器官分割 Label Description 文件</span>
+            </a>
+            <a class="rs-card" style="text-decoration: none; color: inherit; padding: 12px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--line)" href="${exportUrl('imagej-macro')}" target="_blank" download>
+              <b>ImageJ / Fiji 标尺与定量宏 (.ijm)</b>
+              <span class="muted small">自动设置像素物理间距 (mm/pixel)、绘制比例尺与 ROI 测量的 ImageJ 宏脚本</span>
+            </a>
+            <a class="rs-card" style="text-decoration: none; color: inherit; padding: 12px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--line)" href="${exportUrl('fhir')}" target="_blank" download>
+              <b>HL7 FHIR R4 诊断报告 (.json)</b>
+              <span class="muted small">符合 HL7 FHIR R4 DiagnosticReport + Observation 规范的结构化医疗交换资源</span>
+            </a>
+            <a class="rs-card" style="text-decoration: none; color: inherit; padding: 12px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--line)" href="${exportUrl('dicom-sr')}" target="_blank" download>
+              <b>DICOM SR 结构化报告 (.json)</b>
+              <span class="muted small">符合 DICOM TID 1500 Measurement Report 规范的放射科结构化测量报告</span>
+            </a>
+          </div>
+          <div class="row end" style="margin-top: 4px"><button data-close>关闭</button></div>
+        </div>
+      </div>`
+      dlg.hidden = false
+      dlg.onclick = ev => { if (ev.target === dlg || (ev.target as HTMLElement).closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = '' } }
       return
     }
 

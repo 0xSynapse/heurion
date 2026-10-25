@@ -1702,7 +1702,40 @@ button.block { width: 100%; padding: 10px 12px; }
 .rs-file-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
 .rs-folder-empty { padding: 32px 16px; text-align: center; }
 .rs-soon { opacity: .7; border-style: dashed; }
-@media (max-width: 900px) { .rs-grid { grid-template-columns: 1fr; } }
+.rs-tabs { margin-bottom: 18px; overflow-x: auto; }
+.rs-tabs button[data-tab] { flex: none; padding: 10px 16px 8px; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+.rs-pipeline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.rs-step-card { border: 1px solid var(--line); background: var(--panel); padding: 11px 13px; display: flex; flex-direction: column; gap: 4px; cursor: pointer; text-align: left; transition: border-color .15s, background .15s, transform .15s; }
+.rs-step-card:hover { border-color: var(--mint); background: var(--hover); transform: translateY(-1px); }
+.rs-step-card.done { border-left: 3px solid var(--mint); }
+.rs-step-top { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.rs-step-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.rs-step-metric { font-size: 12px; color: var(--mint-text); font-weight: 500; }
+.rs-action-cluster { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 3px 6px; background: var(--raised); border: 1px solid var(--line); }
+.rs-action-cluster-label { font-size: 11px; color: var(--muted); padding: 0 4px; letter-spacing: .04em; }
+.rs-studio-modes { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.rs-studio-mode-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 10px 12px; border: 1px solid var(--line-strong); background: var(--panel); color: var(--text-2); text-align: left; cursor: pointer; transition: all .15s; }
+.rs-studio-mode-btn:hover { border-color: var(--mint); color: var(--text); background: var(--hover); }
+.rs-studio-mode-btn.active { border-color: var(--mint); background: var(--teal); color: var(--text); box-shadow: inset 0 -2px 0 var(--mint); }
+.rs-studio-mode-btn b { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; }
+.rs-studio-mode-btn span { font-size: 11px; color: var(--muted); line-height: 1.35; }
+.rs-studio-shell { display: grid; grid-template-columns: minmax(340px, 440px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.rs-studio-left, .rs-studio-right { border: 1px solid var(--line); background: var(--panel); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.rs-studio-canvas { background: #ffffff; color: #0f172a; border: 1px solid var(--line-strong); border-radius: 6px; padding: 18px; min-height: 400px; max-height: 640px; overflow: auto; display: flex; justify-content: center; align-items: center; }
+.rs-studio-canvas svg { max-width: 100%; height: auto; display: block; }
+.rs-studio-exports { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; background: var(--raised); border: 1px solid var(--line); }
+.rs-data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rs-data-table th, .rs-data-table td { border: 1px solid var(--line); padding: 5px 6px; text-align: left; vertical-align: middle; }
+.rs-data-table th { background: var(--raised); color: var(--text-2); font-weight: 600; font-size: 11.5px; }
+.rs-data-table input[type="text"], .rs-data-table input[type="number"], .rs-data-table select { width: 100%; padding: 4px 6px; font-size: 12px; background: var(--bg-deep); border: 1px solid var(--line-strong); color: var(--text); }
+.rs-sub-box { border: 1px solid var(--line); background: var(--raised); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.rs-sub-box-title { font-size: 12px; font-weight: 600; color: var(--text); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+@media (max-width: 960px) {
+  .rs-grid { grid-template-columns: 1fr; }
+  .rs-pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rs-studio-modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rs-studio-shell { grid-template-columns: 1fr; }
+}
 
 /* —— 资料库页、数据集页（工作区页面，和研究页同一套版式） —— */
 .page.library-page, .page.datasets-page { max-width: 1160px; padding: 28px 24px 120px; }

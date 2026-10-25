@@ -261,10 +261,45 @@ export function registerResearchRoutes(
   app.post('/api/studies/:sid/figures', async c => {
     try {
       const sid = c.req.param('sid')
-      st().get(c.get('user'), sid)
+      const userId = c.get('user')
+      const study = st().get(userId, sid)
       const body = await c.req.json<Record<string, any>>()
       const category = String(body.category || '')
       const exportFormat = String(body.export_format || c.req.query('format') || 'json')
+
+      const archiveToStudy = (svgStr: string, figName: string, codeStr?: string, codePathStr?: string) => {
+        const cleanName = (String(figName || 'Figure').trim().replace(/[^a-zA-Z0-9_\u4e00-\u9fa5.\s-]/g, '_').replace(/\.svg$/i, '') || 'Figure') + '.svg'
+        const dsItems = store.studyItems(sid).filter(i => i.kind === 'dataset')
+        const provDatasets = [
+          { id: sid, name: study.title, version: 1, rows: 0 },
+          ...dsItems.flatMap(i => {
+            const d = store.getDataset(i.ref_id)
+            return d ? [{ id: d.id, name: d.name, version: d.version ?? 1, rows: d.rows }] : []
+          }),
+        ]
+        return store.putAsset({
+          owner: userId,
+          mime: 'image/svg+xml',
+          name: cleanName,
+          bytes: new TextEncoder().encode(svgStr),
+          provenance: {
+            turn_id: 'studio',
+            at: new Date().toISOString(),
+            code: codeStr || '# Archived via Heurion Medical Figure Studio',
+            code_path: codePathStr || 'figure_studio.R',
+            datasets: provDatasets,
+          },
+        })
+      }
+
+      if (category === 'archive') {
+        const svgStr = String(body.svg || '')
+        if (!svgStr.includes('<svg')) {
+          return c.json({ error: 'invalid_svg', message: '归档内容必须是有效的 SVG 矢量图表' }, 400)
+        }
+        const asset = archiveToStudy(svgStr, body.name || body.title || 'Medical_Figure', body.code, body.code_path)
+        return c.json({ ok: true, asset_id: asset.id, name: asset.name, created_at: asset.created_at }, 201)
+      }
 
       if (category === 'mechanism') {
         const res = renderMechanismDiagram({

@@ -123,7 +123,7 @@ export function initDatasets(api: Api, notice: (msg: string, error?: boolean) =>
       <div class="rs-head">
         <input class="rs-title" id="dsName" value="${esc(x.name)}" aria-label="数据集名称">
         <div class="row"><span class="muted small">${esc(x.filename)} · ${esc(x.format)} · ${x.rows.toLocaleString()} 行 × ${x.cols} 列${x.truncated ? ' · <b>超过 200 万行，只导入了前 200 万行</b>' : ''}</span>
-          ${statusPill(x)}<span class="grow"></span><label class="muted small ds-study">所属研究 <select id="dsStudy"><option value="">（未归入）</option>${studies.map(st => `<option value="${st.id}"${x.study?.id === st.id ? ' selected' : ''}>${esc(st.title)}</option>`).join('')}</select></label>
+          ${statusPill(x)}<span class="grow"></span>${x.status === 'ready' ? `<button class="small-btn quiet" id="dsExportTable1Docx" title="直接导出该数据集的医学标准三线表 (.docx)">导出 Table 1 (.docx)</button>` : ''}${x.study ? `<button class="primary small-btn" data-study="${x.study.id}" title="进入所属研究的统计与医学制图工作台">打开研究分析工作台 →</button>` : ''}<label class="muted small ds-study">所属研究 <select id="dsStudy"><option value="">（未归入）</option>${studies.map(st => `<option value="${st.id}"${x.study?.id === st.id ? ' selected' : ''}>${esc(st.title)}</option>`).join('')}</select></label>
           <button class="danger small-btn" data-del>删除数据集</button></div>
       </div>
       ${x.phi.length ? `<section class="ds-phi">
@@ -171,6 +171,26 @@ export function initDatasets(api: Api, notice: (msg: string, error?: boolean) =>
       return
     }
     const x = view.x
+    if (t.closest('#dsExportTable1Docx')) {
+      try {
+        const token = localStorage.getItem('heurion.token') || ''
+        const r = await fetch(`/api/datasets/${x.id}/table1-docx`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        })
+        if (!r.ok) throw new Error(`导出失败 (${r.status})`)
+        const blob = await r.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${x.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]/g, '_')}_Table1.docx`
+        a.click()
+        URL.revokeObjectURL(url)
+        notice('已导出医学标准三线表 (.docx)')
+      } catch (err) {
+        notice((err as Error).message, true)
+      }
+      return
+    }
     if (t.closest('[data-del]')) { if (await remove(x)) void openList(); return }
     if (t.closest('#dsPhiOk')) {
       const drop: string[] = []

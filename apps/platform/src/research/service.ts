@@ -245,8 +245,8 @@ export class StudyService {
       return d ? [{ dataset_id: d.id, name: d.name, format: d.format, rows: d.rows, cols: d.cols, status: d.status, updated_at: d.updated_at, version: d.version, cohort: o?.kind === 'cohort' ? { shape: o.shape ?? 'wide' } : null }] : []
     })
     const ids = new Set(datasetIds)
-    // 分析：用研究数据集画的图，不论是哪位成员画的
-    const analyses = this.store.provenanceAssetsUsing([...ids])
+    // 分析：用研究数据集画的图或直接归档到本研究的科研图表，不论是哪位成员画的
+    const analyses = this.store.provenanceAssetsUsing([...ids, id])
       .map(a => ({ asset_id: a.id, name: a.name, created_at: a.created_at, by: this.name(a.owner), datasets: a.provenance.datasets.filter(d => ids.has(d.id)).map(d => d.name), has_code: Boolean(a.provenance.code), code_path: a.provenance.code_path }))
     const members = this.store.studyMembers(id).map(m => ({ user_id: m.user_id, name: this.name(m.user_id), role: m.role }))
     return { ...s, my_role: myRole, owner_name: this.name(s.owner), design_label: s.design ? DESIGNS[s.design] : null, status_label: STATUSES[s.status], members, docs, datasets, analyses }
