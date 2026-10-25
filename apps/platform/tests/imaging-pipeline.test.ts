@@ -130,6 +130,25 @@ describe('分析流水线（T1.4）', () => {
     expect(t.svc.listStudies(t.a, t.p.id)[0]!.runs[0]!.summary).toMatchObject({ superseded: 1 })
   })
 
+  it('多用户排队按用户轮转：一人批量提交不会堵住别人；可查前面还有几个任务', async () => {
+    const t = await seeded()
+    const drB = t.store.createUser({ username: 'dr_li', display_name: '李医生', password_hash: 'x', tenant: { id: t.store.getUser(t.dr)!.tenant_id!, role: 'member' } }).id
+    const b: Actor = { userId: drB, via: 'user' }
+    const pB = t.patients.create(b, { sex: 'F', birth_year: 1966 })
+    const stB = (await t.svc.importDicom(b, pB.id, seriesFiles('1.2.840.113619.2.55.3.3001', '1.2.840.113619.2.55.3.3001.2', 40))).studies[0]!
+    const a1 = t.pipeline.enqueue(t.a, t.study.id).run!.id
+    const a2 = t.pipeline.enqueue(t.a, t.study.id).run!.id
+    const a3 = t.pipeline.enqueue(t.a, t.study.id).run!.id
+    const b1 = t.pipeline.enqueue(b, stB.id).run!.id
+    await Promise.resolve() // 让第一次派发发生
+    expect(t.pipeline.waitingAhead(a1)).toBeNull() // 已在分析
+    expect(t.pipeline.waitingAhead(b1)).toBe(1)    // 只等正在分析的 a1
+    expect(t.pipeline.waitingAhead(a3)).toBe(3)
+    await t.pipeline.idle()
+    const order = t.worker.calls.filter(c => c.path === '/api/v1/volume/upload').map(c => String((c.body as { volume_id: string }).volume_id).slice(4))
+    expect(order).toEqual([a1, b1, a2, a3])
+  })
+
   it('没有合适序列时不建运行，说明原因', async () => {
     const t = env(happy)
     const p = t.patients.create(t.a, { sex: 'M', birth_year: 1958 })

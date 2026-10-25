@@ -20,6 +20,7 @@ try:
     from .clinical_ai_agent import generate_clinical_ai_report
     from .spatial_canonicalizer import to_canonical_lps
     from .lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, run_lung_nodule_pipeline
+    from .resource_gate import VolumeCache, default_cache_bytes
 except (ImportError, ValueError):
     from device import get_optimal_device, get_device_info
     from dicom_io import apply_ct_window, CT_WINDOWS
@@ -32,6 +33,7 @@ except (ImportError, ValueError):
     from clinical_ai_agent import generate_clinical_ai_report
     from spatial_canonicalizer import to_canonical_lps
     from lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, run_lung_nodule_pipeline
+    from resource_gate import VolumeCache, default_cache_bytes
 
 
 class ModelUnavailableError(RuntimeError):
@@ -1511,7 +1513,8 @@ class MONAIEngine:
     def __init__(self):
         self.device = get_optimal_device()
         self.device_info = get_device_info()
-        self.volume_cache: Dict[str, Tuple[np.ndarray, Tuple[float, float, float], str]] = {}
+        # 体积缓存有字节上限（IMAGING_VOLUME_CACHE_GB），淘汰体积时一并清掉它的掩膜缓存
+        self.volume_cache: VolumeCache = VolumeCache(default_cache_bytes(), on_evict=self._drop_masks)
         self.mask_cache: Dict[str, np.ndarray] = {}
         self.mask_method_cache: Dict[str, str] = {}
         self.neural_pipeline = MonaiNeuralInferencePipeline(self.device)
@@ -1692,6 +1695,13 @@ class MONAIEngine:
         """Checks if a volume is loaded in cache."""
         return hasattr(self, "volume_cache") and volume_id in self.volume_cache
 
+    def _drop_masks(self, volume_id: str) -> None:
+        """清掉以该体积为键前缀（"{volume_id}:{model}"）的掩膜缓存"""
+        prefix = f"{volume_id}:"
+        for key in [k for k in self.mask_cache if k.startswith(prefix)]:
+            self.mask_cache.pop(key, None)
+            self.mask_method_cache.pop(key, None)
+
     def remove_volume(self, volume_id: str) -> bool:
         """
         从内存缓存移除体积，并一并清掉以该体积为键前缀（"{volume_id}:{model}"）的掩膜缓存。
@@ -1700,10 +1710,7 @@ class MONAIEngine:
         if not self.has_volume(volume_id):
             return False
         del self.volume_cache[volume_id]
-        prefix = f"{volume_id}:"
-        for key in [k for k in self.mask_cache if k.startswith(prefix)]:
-            self.mask_cache.pop(key, None)
-            self.mask_method_cache.pop(key, None)
+        self._drop_masks(volume_id)
         return True
 
     def run_lung_nodule_pipeline(

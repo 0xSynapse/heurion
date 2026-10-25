@@ -60,7 +60,8 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
   const withLiveStatus = (list: StudyView[]) => list.map(st => ({
     ...st,
     runs: st.runs.map(r => (r.status === 'queued' || r.status === 'running') && !ctx.pipeline?.isActive(r.id)
-      ? { ...r, status: 'interrupted' as const, error: r.error ?? '服务重启，分析中断，请重新分析' } : r),
+      ? { ...r, status: 'interrupted' as const, error: r.error ?? '服务重启，分析中断，请重新分析' }
+      : r.status === 'queued' ? { ...r, waiting_ahead: ctx.pipeline?.waitingAhead(r.id) ?? null } : r),
   }))
 
   app.get('/api/patients/:ptid/imaging/studies', c => {

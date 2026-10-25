@@ -6,15 +6,17 @@
 # 由 deploy.sh 用 `docker compose -p heurion2 --env-file .env.production` 调用。
 #
 # 内存预算（2026-10-13 起的生产服务器；换机器时按新机器的内存与核数重新分配）：
-# 各服务 mem_limit 合计约 34 GB，给系统、Docker、页缓存留约 30 GB。memswap_limit 等于 mem_limit，即不用 swap：
+# 生产机 64 GB。各服务 mem_limit 合计约 50 GB（启用 pacs profile 再加 Orthanc 2 GB），给系统、Docker、页缓存留约 12 GB。memswap_limit 等于 mem_limit，即不用 swap：
 # 超过上限就是真的异常（泄漏、超大输入），宁可让容器重启也不拖慢整机。
 #   服务            mem_limit  实测峰值（2026-10-13，macOS 进程 RSS，Linux 容器里会有出入）
 #   heurion2        8g         空闲 0.2 GB；每个活跃用户的 dsh 进程约 0.2 GB、LibreOffice 渲染约 0.4 GB、统计 Python 按需
 #   embedder        4g         稳定 0.8 GB；加载模型和批量嵌入时瞬时 2.4 GB
-#   imaging-worker  16g        胸部 CT 分析峰值 3.06 GB；全身分割与更大的体积留足余量
+#   imaging-worker  32g        肺结节模型链单例峰值：CPU 17.3 GB、GPU 4 GB（2026-10-25 实测，M4 Pro）；
+#                              按内存预算 26 GB 排队（IMAGING_MEMORY_BUDGET_GB），CPU 上同时只跑一例，另留体积缓存 4 GB
 #   doc-parser      6g         开公式识别后空闲约 1.1 GB；含扫描页 PDF 峰值约 3 GB 以上
 #   caddy           256m       约 30–50 MB
 # CPU：影像 6 线程、PDF 解析 4 线程，其余给平台和嵌入服务。
+# 排队：平台侧影像分析同时派发 1 个（IMAGING_PIPELINE_CONCURRENCY），按用户轮转；worker 侧再按内存预算排队，多用户同时用时只排队、不爆内存。
 
 x-logging: &default-logging
   driver: json-file
@@ -42,6 +44,8 @@ services:
       - PORT=8787
       - EMBEDDING_URL=http://embedder:8003
       - IMAGING_WORKER_URL=http://imaging-worker:8004
+      # 影像分析同时派发数（按用户轮转排队）；worker 侧另有内存预算排队
+      - IMAGING_PIPELINE_CONCURRENCY=1
       - DOC_PARSER_URL=http://doc-parser:8005
     volumes:
       # 平台数据：SQLite（文档、版本、评论、资料库、记忆、账户）、用户工作区、渲染缓存、OCR 语言模型
@@ -77,10 +81,14 @@ services:
     container_name: heurion2-imaging-worker
     restart: unless-stopped
     logging: *default-logging
-    mem_limit: 16g
-    memswap_limit: 16g
+    mem_limit: 32g
+    memswap_limit: 32g
     environment:
       - PORT=8004
+      # 推理按内存预算排队（apps/imaging-worker/src/resource_gate.py）：预算低于容器上限，留出体积缓存与框架开销
+      - IMAGING_MEMORY_BUDGET_GB=26
+      - IMAGING_CONCURRENCY=2
+      - IMAGING_VOLUME_CACHE_GB=4
       - OMP_NUM_THREADS=6
       - MKL_NUM_THREADS=6
       - OPENBLAS_NUM_THREADS=6

@@ -63,6 +63,26 @@ REST 与 MCP 的对应关系登记在 `tests/parity.test.ts`。
 5. 入库：每个检出写成一条 `source = ai`、`status = proposed` 的病灶。同一任务旧运行里从未经医生处理的检出标为 `superseded`，医生确认或否决过的保留。
 6. 失败：如实记下原因，例如「模型不可用（HTTP 501）：…」「影像服务连接失败：…」。服务重启后，库里仍是 queued / running 的运行在列表中显示为「已中断」，可重新分析。
 
+## 资源与排队
+
+多人同时上传时只排队，不撑爆内存。分两层：
+
+| 层 | 规则 | 配置 |
+| --- | --- | --- |
+| 平台派发 | 同时派发给 worker 的分析数有上限；按用户轮转，一人批量上传不会堵住别人；界面显示「前面还有 N 个任务」 | `IMAGING_PIPELINE_CONCURRENCY`（默认 1） |
+| worker 推理闸门 | 每个任务按预计峰值占用内存预算，总和不超过预算才放行；严格先来先到；单个超预算的任务等前面跑完后独占。所有重型推理（含后台任务 `/tasks/analyze`）都经这道闸门 | `IMAGING_MEMORY_BUDGET_GB`（默认容器上限的 80%）、`IMAGING_CONCURRENCY`（默认 2）、`IMAGING_COST_<任务>_GB` |
+| worker 体积缓存 | 按字节设上限，超出时淘汰最久未用的体积及其掩膜 | `IMAGING_VOLUME_CACHE_GB`（默认 6） |
+
+肺结节模型链在本机（Apple M4 Pro，14 核，24 GB）上用 LIDC 样本实测，结果见下表。按 CPU 峰值把这条模型链登记为 18 GB、GPU 登记为 12 GB；其它推理默认登记 6 GB。
+
+| 设备 | 总耗时 | 内存峰值 |
+| --- | --- | --- |
+| GPU（MPS） | 87 s | RSS 4.0 GB，占用 11.7 GB |
+| CPU，全肺肺叶 | 382 s | RSS 17.3 GB |
+| CPU，不做肺叶 | 198 s | RSS 12.6 GB |
+
+生产机 64 GB：worker 容器上限 32 GB、预算 26 GB，所以 CPU 上同时只跑一例肺结节分析。worker 的 `/health` 返回闸门与缓存的实时状态。
+
 ## 待办
 
 - PACS 自动转发（C-STORE，T3.8）开启前 `DicomServerEnabled` 保持关闭。

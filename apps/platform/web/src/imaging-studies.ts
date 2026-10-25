@@ -12,6 +12,8 @@ interface StudyView {
 interface RunView {
   id: string; task: string; model_version: string | null; status: 'queued' | 'running' | 'done' | 'failed' | 'interrupted'; error: string | null
   summary: { found?: number; warnings?: string[]; elapsed_ms?: number } | null; created_at: string; finished_at: string | null
+  /** 排队中时前面还有几个任务（含正在分析的） */
+  waiting_ahead?: number | null
 }
 
 const TASK: Record<string, string> = { lung_nodule: '肺结节' }
@@ -20,7 +22,7 @@ const TASK: Record<string, string> = { lung_nodule: '肺结节' }
 function runLine(r: RunView | undefined): string {
   if (!r) return '<span class="muted">未分析</span>'
   const task = esc(TASK[r.task] ?? r.task)
-  if (r.status === 'queued') return `${task}：排队中…`
+  if (r.status === 'queued') return `${task}：排队中${r.waiting_ahead ? `，前面还有 ${r.waiting_ahead} 个任务` : '…'}`
   if (r.status === 'running') return `${task}：分析中…`
   if (r.status === 'done') {
     const warn = r.summary?.warnings?.length ? `<div class="muted">${r.summary.warnings.map(w => esc(w)).join('；')}</div>` : ''

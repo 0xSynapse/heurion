@@ -5,6 +5,8 @@ import { ImagingStudyService, type RunRow, type SeriesView } from './studies.ts'
 /**
  * 影像分析流水线（PRD T1.4，docs/design/IMAGING_STUDIES.md）：检查入库 → 按病种选序列 → 排队 → 影像 worker 推理 → 结果入病灶表。
  * 队列以 imaging_runs 的状态为准；进程内只记「本进程正在处理的运行」，服务重启后未完成的运行在列表里显示为中断，可重新分析。
+ * 并发由 IMAGING_PIPELINE_CONCURRENCY 控制（默认 1），派发按用户轮转；worker 侧另按内存预算排队（apps/imaging-worker/src/resource_gate.py），
+ * 所以等待 worker 的超时放宽到 45 分钟。
  * 原件由平台从 Orthanc 取出交给 worker，worker 不直接访问 Orthanc。
  */
 
@@ -78,6 +80,8 @@ export function sharedPipeline(patients: PatientService, orthanc: Orthanc | null
 export class ImagingPipeline {
   private queue: Array<{ actor: Actor; runId: string; notes: string[] }> = []
   private active = new Set<string>()
+  /** 每位用户已派发的任务数：派发时优先选派得最少的用户，一人批量上传不会堵住别人 */
+  private served = new Map<string, number>()
   private running = 0
   private drained: Array<() => void> = []
 
@@ -113,15 +117,39 @@ export class ImagingPipeline {
     return { task, run, notes: choice.notes }
   }
 
+  /** 按用户轮转的派发顺序：每次取「已派发最少」的用户里最早排队的任务 */
+  private dispatchOrder(): Array<{ actor: Actor; runId: string; notes: string[] }> {
+    const served = new Map(this.served)
+    const rest = [...this.queue]
+    const out: typeof rest = []
+    while (rest.length) {
+      let best = 0
+      for (let i = 1; i < rest.length; i++) if ((served.get(rest[i]!.actor.userId) ?? 0) < (served.get(rest[best]!.actor.userId) ?? 0)) best = i
+      const [item] = rest.splice(best, 1)
+      served.set(item!.actor.userId, (served.get(item!.actor.userId) ?? 0) + 1)
+      out.push(item!)
+    }
+    return out
+  }
+
+  /** 排队中的运行前面还有几个任务（含正在分析的）；不在本进程队列里时为 null */
+  waitingAhead(runId: string): number | null {
+    const i = this.dispatchOrder().findIndex(x => x.runId === runId)
+    return i < 0 ? null : i + this.running
+  }
+
   private pump(): void {
     const limit = Math.max(1, this.opts.concurrency ?? 1)
     while (this.running < limit && this.queue.length) {
-      const item = this.queue.shift()!
+      const item = this.dispatchOrder()[0]!
+      this.queue.splice(this.queue.indexOf(item), 1)
+      this.served.set(item.actor.userId, (this.served.get(item.actor.userId) ?? 0) + 1)
       this.running++
       void this.process(item.actor, item.runId, item.notes).finally(() => {
         this.running--
         this.active.delete(item.runId)
         this.pump()
+        if (!this.queue.length) this.served.clear()  // 轮转只在同一波排队内比较，历史派发数不累计
         if (!this.running && !this.queue.length) for (const r of this.drained.splice(0)) r()
       })
     }
@@ -145,7 +173,7 @@ export class ImagingPipeline {
       await this.worker('/api/v1/volume/upload', { method: 'POST', body: form }, 300_000)
       uploaded = true
 
-      const result = await this.worker(def.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume_id: volumeId, max_nodules: 20 }) }, 900_000) as NoduleResult
+      const result = await this.worker(def.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume_id: volumeId, max_nodules: 20 }) }, 2_700_000) as NoduleResult
       if (!result || !Array.isArray(result.nodules)) throw new Error('影像服务返回的结果格式不对（缺少 nodules）')
 
       for (const n of result.nodules) {

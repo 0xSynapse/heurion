@@ -22,6 +22,7 @@ try:
     from .model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
     from .dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from .task_queue import task_manager, TaskStage, batch_process_cohort
+    from .resource_gate import MemoryGate, default_budget_gb, task_cost_gb
 except (ImportError, ValueError):
     from device import get_device_info
     from engine import MONAIEngine, generate_synthetic_ct_volume, ModelUnavailableError
@@ -29,6 +30,7 @@ except (ImportError, ValueError):
     from model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
     from dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from task_queue import task_manager, TaskStage, batch_process_cohort
+    from resource_gate import MemoryGate, default_budget_gb, task_cost_gb
 
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -56,9 +58,11 @@ app.add_middleware(
 engine = MONAIEngine()
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-# 并发保护：重型 3D 卷积与图像配准属于 GPU/CPU 密集型计算，
-# 限制最大并发执行数为 2（可由 IMAGING_CONCURRENCY 调节），防止突发并发直接打爆 GPU VRAM 或物理内存导致 OOM Kill。
-INFERENCE_SEMAPHORE = threading.Semaphore(int(os.environ.get("IMAGING_CONCURRENCY", "2")))
+# 并发保护：重型推理按内存预算排队（resource_gate.MemoryGate），防止多用户同时分析时撑爆内存被 OOM Kill。
+# 预算 IMAGING_MEMORY_BUDGET_GB（默认取容器内存上限的 80%），同时运行的任务数上限 IMAGING_CONCURRENCY（默认 2）。
+# 普通推理按默认峰值占位；肺结节模型链按实测峰值占位（CPU 18 GB、GPU 12 GB，可用 IMAGING_COST_*_GB 调）。
+INFERENCE_GATE = MemoryGate(default_budget_gb(), int(os.environ.get("IMAGING_CONCURRENCY", "2")))
+INFERENCE_SEMAPHORE = INFERENCE_GATE.slot(task_cost_gb("default"), "inference")
 
 
 def raise_http(exc: Exception, prefix: str) -> None:
@@ -291,6 +295,8 @@ async def health_check():
         "service": "heurion-monai-worker",
         "device": dev_info,
         "supported_modalities": ["CT", "MR", "PET", "NIfTI", "DICOM"],
+        "inference_gate": INFERENCE_GATE.status(),
+        "volume_cache": engine.volume_cache.status(),
     }
 
 @app.get("/api/v1/models")
@@ -576,7 +582,7 @@ def run_lung_nodule_pipeline_endpoint(req: LungNodulePipelineRequest = Body(...)
     file_path = validate_safe_medical_path(req.file_path) if (req.file_path and not (req.volume_id or req.sample_id)) else None
     target = _require_target(req.volume_id, req.sample_id, file_path)
     try:
-        with INFERENCE_SEMAPHORE:
+        with INFERENCE_GATE.acquire(task_cost_gb("lung_nodule_pipeline", engine.device.type), "lung_nodule_pipeline"):
             return engine.run_lung_nodule_pipeline(
                 target, max_nodules=req.max_nodules, min_score=req.min_score,
                 lobe_mode=req.lobe_mode, lobe_resample_mm=req.lobe_resample_mm,
@@ -1296,6 +1302,11 @@ def submit_async_analysis(req: AsyncTaskSubmitRequest = Body(...)):
         raise HTTPException(status_code=400, detail="缺少 model_name：请指定要运行的分析模型")
 
     def _execute(progress_cb=None):
+        # 后台任务同样经推理闸门排队（之前绕过了并发限制）
+        with INFERENCE_SEMAPHORE:
+            return _analyze(progress_cb)
+
+    def _analyze(progress_cb=None):
         if progress_cb:
             progress_cb(TaskStage.EXTRACTING, 20)
         vol, spacing, modality = engine.load_volume_data(target_id)
