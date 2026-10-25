@@ -125,7 +125,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-v8" />
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v9" />
   <style>
     :root {
       --bg-primary: #FAF8F4;
@@ -174,18 +174,29 @@
     .lang-btn { background: transparent; border: 1px solid var(--border); padding: 0.28rem 0.62rem; font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.08em; color: var(--ink-secondary); cursor: pointer; }
     .nav-cta { font-size: 0.78rem; padding: 0.46rem 1.05rem; background: var(--accent); color: var(--ink-light); border: 1px solid var(--accent); letter-spacing: 0.02em; }
     .nav-cta:hover { background: var(--ink); border-color: var(--ink); color: var(--ink-light); }
-    .sec-hero { padding: 4.75rem 0 5.5rem; background: var(--bg-primary); }
+    .sec-hero {
+      padding: 5rem 0 5.75rem;
+      background-color: var(--bg-primary);
+      background-image:
+        linear-gradient(102deg, rgba(250, 248, 244, 0.92) 0%, rgba(250, 248, 244, 0.80) 45%, rgba(242, 239, 231, 0.46) 100%),
+        linear-gradient(180deg, rgba(250, 248, 244, 0.28) 0%, rgba(250, 248, 244, 0.04) 68%, rgba(239, 236, 228, 0.94) 100%),
+        url('https://images.unsplash.com/photo-1542273917363-3b1817f69a2d?auto=format&fit=crop&w=2000&q=85'),
+        url('/site/nordic-bg.jpg');
+      background-size: cover;
+      background-position: center 62%;
+      background-repeat: no-repeat;
+    }
     .hero-grid { display: grid; grid-template-columns: 1.06fr 0.94fr; gap: 4.25rem; align-items: stretch; }
     .hero-left { display: flex; flex-direction: column; justify-content: space-between; gap: 3rem; padding: 0.25rem 0; }
     .hero-intro { display: flex; flex-direction: column; gap: 1.5rem; max-width: 34rem; }
     .hero-actions { display: flex; align-items: center; gap: 1.5rem; padding-top: 0.25rem; }
-    .btn-solid { display: inline-flex; align-items: center; gap: 0.55rem; padding: 0.72rem 1.35rem; background: var(--accent); color: var(--ink-light); font-size: 0.8125rem; letter-spacing: 0.02em; }
+    .btn-solid { display: inline-flex; align-items: center; gap: 0.55rem; padding: 0.72rem 1.35rem; background: var(--accent); color: var(--ink-light); font-size: 0.8125rem; letter-spacing: 0.02em; box-shadow: 0 8px 24px rgba(21, 28, 25, 0.12); }
     .btn-solid:hover { background: var(--ink); color: var(--ink-light); }
     .link-arrow { font-size: 0.8125rem; color: var(--ink-secondary); border-bottom: 1px solid var(--border); padding-bottom: 0.12rem; }
     .link-arrow:hover { color: var(--accent); border-bottom-color: var(--accent); }
     .hero-editorial { display: flex; flex-direction: column; gap: 1.35rem; max-width: 34rem; }
-    .editorial-row { display: grid; grid-template-columns: 6.5rem 1fr; gap: 1.25rem; padding-top: 1.2rem; border-top: 1px solid var(--border); align-items: baseline; }
-    .hero-art { background: var(--bg-neutral); border: 1px solid var(--border); padding: 1.5rem 1.85rem; display: flex; flex-direction: column; justify-content: space-between; min-height: 440px; position: relative; }
+    .editorial-row { display: grid; grid-template-columns: 6.5rem 1fr; gap: 1.25rem; padding-top: 1.2rem; border-top: 1px solid rgba(21, 28, 25, 0.14); align-items: baseline; }
+    .hero-art { background: rgba(250, 248, 244, 0.86); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(21, 28, 25, 0.15); box-shadow: 0 22px 54px rgba(21, 28, 25, 0.08); padding: 1.5rem 1.85rem; display: flex; flex-direction: column; justify-content: space-between; min-height: 440px; position: relative; }
     .art-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.12em; color: var(--ink-muted); text-transform: uppercase; }
     .art-svg { width: 100%; height: 310px; display: block; margin: auto 0; }
     .art-caption { display: flex; justify-content: space-between; align-items: center; padding-top: 0.75rem; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.1em; color: var(--ink-muted); text-transform: uppercase; }

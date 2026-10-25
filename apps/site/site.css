@@ -236,10 +236,18 @@ html[lang="zh-CN"] .heading-2 em {
   color: var(--ink-light);
 }
 
-/* Section 1: Editorial Split Hero */
+/* Section 1: Editorial Split Hero with Curated Unsplash Nordic Pine Mist Backdrop */
 .sec-hero {
-  padding: 4.75rem 0 5.5rem;
-  background: var(--bg-primary);
+  padding: 5rem 0 5.75rem;
+  background-color: var(--bg-primary);
+  background-image:
+    linear-gradient(102deg, rgba(250, 248, 244, 0.92) 0%, rgba(250, 248, 244, 0.80) 45%, rgba(242, 239, 231, 0.46) 100%),
+    linear-gradient(180deg, rgba(250, 248, 244, 0.28) 0%, rgba(250, 248, 244, 0.04) 68%, rgba(239, 236, 228, 0.94) 100%),
+    url('https://images.unsplash.com/photo-1542273917363-3b1817f69a2d?auto=format&fit=crop&w=2000&q=85'),
+    url('/site/nordic-bg.jpg');
+  background-size: cover;
+  background-position: center 62%;
+  background-repeat: no-repeat;
 }
 
 .hero-grid {
@@ -311,14 +319,17 @@ html[lang="zh-CN"] .heading-2 em {
   grid-template-columns: 6.5rem 1fr;
   gap: 1.25rem;
   padding-top: 1.2rem;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid rgba(21, 28, 25, 0.14);
   align-items: baseline;
 }
 
 /* Nordic Architectural Astrolabe Plate */
 .hero-art {
-  background: var(--bg-neutral);
-  border: 1px solid var(--border);
+  background: rgba(250, 248, 244, 0.86);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(21, 28, 25, 0.15);
+  box-shadow: 0 22px 54px rgba(21, 28, 25, 0.08);
   padding: 1.5rem 1.85rem;
   display: flex;
   flex-direction: column;
