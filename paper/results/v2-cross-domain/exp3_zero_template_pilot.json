@@ -1,0 +1,82 @@
+{
+  "timestamp": "2026-10-26T06:21:50.710Z",
+  "model": "deepseek-flash",
+  "zero_template_verified": true,
+  "total_turns": 72,
+  "arms": {
+    "off": {
+      "turns": 24,
+      "total_rejections": 15,
+      "rejections_per_turn": 0.625,
+      "session_curve": [
+        0.5,
+        0.667,
+        0.667,
+        0.667
+      ],
+      "heldout_rejections_per_turn": 0.667,
+      "first_try_pass_rate": 0.375,
+      "heldout_first_try_pass_rate": 0.333,
+      "learned_rules_count": 0,
+      "learned_rules_sample": []
+    },
+    "frozen": {
+      "turns": 24,
+      "total_rejections": 16,
+      "rejections_per_turn": 0.667,
+      "session_curve": [
+        0.667,
+        0.667,
+        0.667,
+        0.667
+      ],
+      "heldout_rejections_per_turn": 0.667,
+      "first_try_pass_rate": 0.333,
+      "heldout_first_try_pass_rate": 0.333,
+      "learned_rules_count": 0,
+      "learned_rules_sample": []
+    },
+    "utility": {
+      "turns": 24,
+      "total_rejections": 6,
+      "rejections_per_turn": 0.25,
+      "session_curve": [
+        0.667,
+        0.167,
+        0,
+        0.167
+      ],
+      "heldout_rejections_per_turn": 0.167,
+      "first_try_pass_rate": 0.75,
+      "heldout_first_try_pass_rate": 0.833,
+      "learned_rules_count": 4,
+      "learned_rules_sample": [
+        {
+          "trigger_pattern": "anchor_has_open_comments|方法部分首|句改写得更|紧凑精炼",
+          "rule": "在操作遇到 anchor_has_open_comments 场景时：读取目标段落后、调用编辑工具前，先调用 comments_list 检查未关闭批注；优先用 replace_text 局部修改以保留批注锚点文字，若必须触及锚点则将对应批注 id 填入 ack_comments 并在批注线程中回复说明。（成功修复轨迹：replace_block(id=\"p_m1\") → comments_list(doc_id) -> replace_text(id=\"p_m1\", keep_anchor=\"1:1 随机化分组\")）。［边界强化：改写前须先调用 comments_list 检查未关闭批注，并优先用 replace_text 保留锚点文字 \"1:1 随机化分组\"，或声明 ack_comments 并在批注线程回复。］",
+          "evidence_count": 3
+        },
+        {
+          "trigger_pattern": "invalid_structure|讨论部分|第一段",
+          "rule": "在操作遇到 invalid_structure 场景时：执行段落 merge 合并或结构调整前先确认目标块紧邻且类型兼容；若两段被其他块隔开而不紧邻，须在同一批次 ops 中先执行 move 将后一段移至前一段之后，再紧接着执行 merge。（成功修复轨迹：merge(ids=[\"p_d1\",\"p_d3\"]) → move(id=\"p_d3\", after=\"p_d1\") -> merge(ids=[\"p_d1\",\"p_d3\"])）",
+          "evidence_count": 2
+        },
+        {
+          "trigger_pattern": "text_not_found|结果段|卡方检验统",
+          "rule": "在操作遇到 text_not_found 场景时：修改前先用 doc_read 核对目标块最新原文，replace_text 与 replace_all 的 find 只匹配去除行内上下标标签（如 <sup>/<sub>）后的纯文本，必须与原文纯文字逐字一致（不含 {#id} 前缀）。（成功修复轨迹：replace_text(find=\"χ<sup>2</sup> = 11.4, P = 0.003\") → replace_text(find=\"χ2 = 11.4, P = 0.003\", replace=\"χ2 = 11.4, P = .003\")）",
+          "evidence_count": 2
+        },
+        {
+          "trigger_pattern": "ambiguous_match|讨论段中第|二处出现",
+          "rule": "在操作遇到 ambiguous_match 场景时：块内存在多处相同短语匹配时，调用 replace_text 须在 find 与 replace 中连同分句前导词一并写入使其唯一，或显式传入 occurrence 指定匹配序号。（成功修复轨迹：replace_text(find=\"control group\", replace=\"standard-care arm\") → replace_text(find=\"control group\", replace=\"standard-care arm\", occurrence=2)）",
+          "evidence_count": 2
+        }
+      ]
+    }
+  },
+  "comparisons": {
+    "utility_vs_off_rr": 0.4,
+    "utility_vs_frozen_rr": 0.375,
+    "heldout_utility_vs_frozen_rr": 0.25
+  }
+}

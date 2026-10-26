@@ -1903,6 +1903,21 @@ export class Store {
     this.db.prepare('UPDATE harness_rules SET evidence_count = evidence_count + 1, updated_at = ? WHERE id = ?').run(now(), id)
   }
 
+  getHarnessRule(id: string): HarnessRuleRow | undefined {
+    return this.db.prepare('SELECT * FROM harness_rules WHERE id = ?').get(id) as unknown as HarnessRuleRow | undefined
+  }
+
+  updateHarnessRule(
+    id: string,
+    patch: Partial<Pick<HarnessRuleRow, 'trigger_pattern' | 'rule' | 'category' | 'evidence_count' | 'status'>>,
+  ): void {
+    const ALLOWED = ['trigger_pattern', 'rule', 'category', 'evidence_count', 'status'] as const
+    const keys = (Object.keys(patch) as Array<keyof typeof patch>).filter(k => (ALLOWED as readonly string[]).includes(k) && patch[k] !== undefined)
+    if (keys.length === 0) return
+    this.db.prepare(`UPDATE harness_rules SET ${keys.map(k => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = ?`)
+      .run(...keys.map(k => patch[k] as never), now(), id)
+  }
+
   deleteHarnessRule(owner: string, id: string): boolean {
     return Number(this.db.prepare("DELETE FROM harness_rules WHERE id = ? AND owner = ? AND owner != 'system'").run(id, owner).changes) > 0
   }

@@ -26,6 +26,7 @@ import { MemoryService } from './memory/service.ts'
 import { MemorySignals } from './memory/signals.ts'
 import { ExecutionSignals } from './memory/execution-signals.ts'
 import { ProceduralHarnessService } from './memory/procedural.ts'
+import { SkillTrainingService } from './memory/skill-trainer.ts'
 import { MailService } from './mail/service.ts'
 import { CalendarService } from './calendar/service.ts'
 import { makeComplete } from './harness/complete.ts'
@@ -60,6 +61,7 @@ const docs = new Documents(store)
 let phrMemberLookup: ((owner: string, patientId: string, space?: 'work' | 'personal') => { tags: string[]; birth_year: number | null } | null) | null = null
 const executionSignals = new ExecutionSignals(store, docs)
 const procedural = new ProceduralHarnessService(store, docs, { mode: config.proceduralMode === 'off' ? undefined : config.proceduralMode, budget: config.proceduralBudget })
+executionSignals.setActivationLookup((owner, docId) => procedural.lastActivation(owner, docId))
 const ops = new OpService(docs, (owner, pid, space) => phrMemberLookup?.(owner, pid, space) ?? null, e => executionSignals.recordGuardReject(e))
 const registry = new TurnRegistry()
 const harnessEvolution = new HarnessEvolutionService(store, makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }))
@@ -84,6 +86,7 @@ const memory = new MemoryService(store, embedder)
 // 记忆演进：收集用户改写 AI 段落 / 拒绝修订的信号；整理（合并、改写、归档、总结新规律）都是待用户采纳的建议
 new MemorySignals(store, memory, docs)
 const evolution = new MemoryEvolution(store, memory, docs, makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }))
+const skillTrainer = new SkillTrainingService(store, memory, docs, makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }))
 const mailer = createMailer({
   resendApiKey: config.resendApiKey,
   smtp: config.smtpHost ? {
@@ -195,7 +198,7 @@ const mail = new MailService(store, mailer, {
   complete: makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }),
 })
 const calendar = new CalendarService(store, mail)
-const app = buildApi({ docs, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, devUser: config.devUser, search, kb, memory, evolution, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, workspaceDir: userId => pool.workspaceDir(userId) })
+const app = buildApi({ docs, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, workspaceDir: userId => pool.workspaceDir(userId) })
 // MCP 的管理类工具以用户身份进程内调用同一个 HTTP 应用（AI 的权限 = 用户的权限，见 http/invoke.ts）
 ;(mcpDeps as { invoke?: Invoke }).invoke = makeInvoker(app)
 

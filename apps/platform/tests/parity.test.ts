@@ -109,7 +109,7 @@ const ALL_PARITY: Record<string, string> = {
   'POST /api/datasets': 'dataset_manage.upload', 'PATCH /api/datasets/:did': 'dataset_manage.rename', 'POST /api/datasets/:did/phi': 'dataset_manage.resolve_phi', 'DELETE /api/datasets/:did': 'dataset_manage.delete',
   // 记忆
   'GET /api/memory': 'memory_manage.list', 'GET /api/memory/:mid/events': 'memory_manage.events', 'PATCH /api/memory/:mid': 'memory_manage.edit',
-  'POST /api/memory': 'memory_propose', 'DELETE /api/memory/:mid': 'memory_forget', 'POST /api/memory/review': 'memory_review',
+  'POST /api/memory': 'memory_propose', 'DELETE /api/memory/:mid': 'memory_forget', 'POST /api/memory/review': 'memory_review', 'POST /api/memory/skill-train': 'memory_manage.train_from_doc',
   'PUT /api/memory/settings': 'memory_manage.pause', 'GET /api/memory-export': 'memory_manage.export', 'POST /api/memory-import': 'memory_manage.import', 'DELETE /api/memory': 'memory_manage.clear_all',
   // 任务队列、账户
   'GET /api/queue': 'task_queue.list', 'POST /api/queue/:jid/cancel': 'task_queue.cancel',

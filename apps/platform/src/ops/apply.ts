@@ -629,7 +629,7 @@ export function replaceError(outcome: Exclude<ReplaceOutcome, { ok: true }>, whe
     ? '原文在这段文字中间有引用标记 [@c:…]：find 与 replace 里要原样写出引用标记（否则会删掉引用），或者只匹配引用标记之前 / 之后的文字。'
     : near.length > 0
       ? '原文的空白或大小写与 find 不同：按 near 里的 text 原样写 find 重发。'
-      : '按 current 中的原文逐字复制 find（不含 {#id} 前缀和 markdown 符号）。'
+      : '按 current 中的原文逐字复制 find（find 只匹配去除 <sup>/<sub> 等行内标签后的纯文本，不含 {#id} 前缀和 markdown 符号）。'
   return new OpError('text_not_found', `${where}中找不到要替换的原文`, { hint, current: near.length > 0 ? { near, text: current } : current })
 }
 

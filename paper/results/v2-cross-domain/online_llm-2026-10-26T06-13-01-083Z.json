@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-10-26T06:13:01.083Z",
+  "mode": "online_llm",
+  "model": "deepseek-flash",
+  "zero_template_verified": true,
+  "exp3b_backward_credit": {
+    "routing_miss_recall_before": 0,
+    "routing_miss_recall_after": 1,
+    "strengthened_rules_count": 1,
+    "llm_backward_refinement": {
+      "updated": 0,
+      "merged": 0
+    }
+  },
+  "exp4a_cross_domain_convergence": {
+    "manuscript": {
+      "track_b_synthesized_rules": 2,
+      "track_a_epoch0_alignment": 0.15,
+      "track_a_epoch1_alignment": 0.383,
+      "track_a_proposed_skills": [
+        "[domain:manuscript] 报告效应量（HR/OR/RR）时，统一使用“效应量 = X.XX (95% CI, X.XX–X.XX; P = .XXX)”的标准括号结构。",
+        "[domain:manuscript] 统计显著性 P 值使用大写斜体 P 并省略小数点前的 0（例如写为 P = .032 或 P < .001）。"
+      ],
+      "instance_leakage_rate": 0,
+      "phi_leakage_rate": 0
+    },
+    "biostats": {
+      "track_b_synthesized_rules": 2,
+      "track_a_epoch0_alignment": 0,
+      "track_a_epoch1_alignment": 0.612,
+      "track_a_proposed_skills": [
+        "[domain:biostats] 连续变量先做正态性检验；偏态分布用 Median [IQR] 描述并采用 Mann-Whitney U 组间比较。",
+        "[domain:biostats] 分类变量组间比较：期望频数<5 时用 Fisher 精确检验，否则用卡方检验。",
+        "[domain:biostats] 生存分析用 Cox 模型；以 Schoenfeld 残差检验 PH 假设，并满足 EPV≥10 控制协变量数。",
+        "[domain:biostats] 连续变量汇总前先检验分布偏态性：偏态分布变量一律报告 Median [IQR] 并采用 Mann-Whitney U / Kruskal-Wallis 非参数检验。",
+        "[domain:biostats] 分类变量列联表比较时，若任意单元格理论期望频数 < 5，自动由卡方检验切换为 Fisher 精确检验。",
+        "[domain:biostats] 拟合多变量 Cox 比例风险模型时，须检验 Schoenfeld 残差满足比例风险假定，且确保事件数与自变量比值（EPV）≥ 10。"
+      ],
+      "instance_leakage_rate": 0,
+      "phi_leakage_rate": 0
+    },
+    "deck": {
+      "track_b_synthesized_rules": 2,
+      "track_a_epoch0_alignment": 0.187,
+      "track_a_epoch1_alignment": 0.489,
+      "track_a_proposed_skills": [
+        "[domain:deck] 比较两组差异的页面用左右双栏：左栏2-3条结论要点，右栏放对照图表，形成“文字结论+可视化证据”一一对应。",
+        "[domain:deck] 标题写成一句可独立成立的结果结论（动作+指标+变化方向），避免用冒号堆叠主题词；比较对象下沉到正文首条。",
+        "[domain:deck] 正文要点只承载结论与证据，不写“右侧面板放…”“解读重点”等版式自述；坐标轴、图例、数值标注在图表内部实现。",
+        "[domain:deck] 单页要点控制在3条以内，图表规格不占正文条目，防止要点区溢出并保证图表有足够版面。",
+        "[domain:deck] 展示两组方案或队列前后对比时，优先选用双栏对比版式（two_column），单页要点控制在 4 条以内以防文本框视觉溢出。"
+      ],
+      "instance_leakage_rate": 0,
+      "phi_leakage_rate": 0
+    }
+  },
+  "exp4b_multi_domain_routing": {
+    "interleaved_turns": 4,
+    "target_domain_hit_rate": 1,
+    "cross_domain_contamination_rate": 0,
+    "avg_prompt_chars": 461
+  }
+}

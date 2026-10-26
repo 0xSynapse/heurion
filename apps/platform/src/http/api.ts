@@ -32,6 +32,8 @@ import { registerResearchRoutes } from './routes/research.ts'
 import { registerPublicToolsApi } from './routes/public-tools-api.ts'
 import type { MemoryEvolution } from '../memory/evolve.ts'
 import { MemoryError, type MemoryService } from '../memory/service.ts'
+import { SkillTrainingService } from '../memory/skill-trainer.ts'
+import type { SkillDomain } from '../memory/domain-adapters.ts'
 import type { Notice, PostCheck } from '../collab/postcheck.ts'
 import { verifyPrompt } from '../claims/service.ts'
 import { docxFor, pptxFor } from '../convert/exports.ts'
@@ -96,6 +98,8 @@ export interface ApiDeps {
   memory?: MemoryService
   /** 记忆演进（整理建议）；没有模型 key 时不可用。 */
   evolution?: MemoryEvolution
+  /** 跨领域自监督退化-重构技能训练器（Track A）。 */
+  skillTrainer?: SkillTrainingService
   /** 数据集（实验室数据分析）。 */
   datasets?: DatasetService
   /** 患者（按机构分库，见 docs/design/TENANCY.md）。 */
@@ -1159,6 +1163,26 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     try {
       const r = await deps.evolution.review(c.get('user'))
       return c.json({ proposed: r.proposed.length, changes: r.changes.length, signals: r.signals, messages: r.messages })
+    } catch (err) { return memoryFailure(c, err) }
+  })
+  // 跨领域范例退化-重构自监督技能训练（Track A: Corruption-and-Reconstruction Loop）
+  app.post('/api/memory/skill-train', async c => {
+    if (!deps.memory) return c.json({ error: '记忆未启用' }, 503)
+    const trainer = deps.skillTrainer ?? new SkillTrainingService(store, deps.memory, docs)
+    const body = await c.req.json<{ doc_id?: string; exemplar_text?: string | string[]; domain?: SkillDomain; max_segments?: number }>()
+    try {
+      const user = c.get('user')
+      if (body.doc_id) {
+        const row = store.getDoc(body.doc_id)
+        if (!row || row.deleted_at || !access.docRole(user, row)) return c.json({ error: '文档不存在或无权限', code: 'not_found' }, 404)
+        const r = await trainer.trainFromDoc(user, { docId: body.doc_id, domain: body.domain, maxSegments: body.max_segments })
+        return c.json(r)
+      }
+      if (body.exemplar_text) {
+        const r = await trainer.trainFromExemplar(user, { exemplarText: body.exemplar_text, domain: body.domain, maxSegments: body.max_segments })
+        return c.json(r)
+      }
+      return c.json({ error: '请提供 doc_id 或 exemplar_text', code: 'invalid_input' }, 400)
     } catch (err) { return memoryFailure(c, err) }
   })
   app.post('/api/memory/changes/:cid/:action{apply|dismiss}', async c => {

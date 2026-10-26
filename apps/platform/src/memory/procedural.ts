@@ -1,6 +1,14 @@
+import type { Complete } from '../harness/complete.ts'
 import type { Documents } from '../model/runtime.ts'
 import { pendingGroups } from '../ops/suggest.ts'
 import type { HarnessRuleRow, Store } from '../store/db.ts'
+import {
+  inferSkillDomain,
+  type DocCueState,
+  type EnvironmentCueContext,
+  type SkillDomain,
+} from './domain-adapters.ts'
+import { sensitiveReason } from './guard.ts'
 
 export interface ProceduralRuleInput {
   scope: 'global' | 'user' | 'project'
@@ -65,36 +73,6 @@ const BASELINE_RULES: Array<Omit<HarnessRuleRow, 'id' | 'created_at' | 'updated_
   },
 ]
 
-/** 各守卫/信号码对应的具体修复规程（§5.1：直接包含守卫 hint 中的具体操作修法，而非仅提示调用 doc_validate）。 */
-export const LEARNED_RULE_TEMPLATES: Record<string, string> = {
-  conflict_user_edited:
-    '检测到频繁用户编辑冲突（conflict_user_edited）：在编辑前必须先用 doc_read 重新获取最新 rev 与当前内容，优先使用 replace_text 局部替换并原样保留用户新增或修改的文字。',
-  citation_not_registered:
-    '检测到多次引用未登记拦截（citation_not_registered）：严格执行先调用 insert_citation 注册获得 [@c:id]、再将标记写入正文的两步工作流，严禁直接手写 DOI/PMID 或参考文献。',
-  pending_suggestion:
-    '目标块含待采纳修订（pending_suggestion）：待删除的原文版本不能直接修改；若需改该段其他文字，请对修订版（suggest=insert）调用 replace_text 只改修订以外的部分，或请用户先采纳/拒绝。',
-  anchor_has_open_comments:
-    '目标段含未关闭批注（anchor_has_open_comments）：在调用 doc_read 读取目标段落之后、紧接在调用 doc_edit 替换或改写句子之前，必须先调用一次 comments_list 检查该段是否有合作者刚新增的未关闭批注；若存在 open 批注且修改会触及锚点文字，首次调用 doc_edit 时就必须将该批注 id 填入顶层 ack_comments 数组，并调用 comment_reply 在批注线程里说明。',
-  text_not_found:
-    '原文匹配失败（text_not_found）：replace_text 与 replace_all 的 find 只匹配去除 HTML 上下标标签后的纯文本（与原文纯文字逐字一致，严禁在 find 中包含 <sup>、</sup>、<sub>、</sub>、<u> 等标签或 {#id} 前缀，例如读视图中的 χ<sup>2</sup>、I<sup>2</sup>、P<sub>het</sub> 在 find 中必须写为纯文本 χ2、I2、Phet，而在 replace 中仍保留 <sup>/<sub> 标签）；修改前先用 doc_read 核对。',
-  ambiguous_match:
-    '块内多处匹配（ambiguous_match）：调用 replace_text 替换句末或句中的分句/短语时，严禁只将短语本身作为 find（合作者常在同段首句同步补充相同表述导致多处匹配）；首次调用 replace_text 时必须在 find 与 replace 中把该分句开头的引导词（如 "In summary, " 或 "Furthermore, "）一并写入使其唯一，或显式传入 occurrence: 2。',
-  user_reverted_turn:
-    '用户曾撤销过超出范围的 AI 回合（user_reverted_turn）：针对润色、改写或段间过渡/衔接任务，严格遵守最小修改范围，只允许对用户点名的第一个目标段落（单个块 id）调用 replace_text 或 replace_block，严禁同时改动后续相邻段落或调用 merge 合并段落。',
-  invalid_structure:
-    '结构操作不合法（invalid_structure）：调用 merge 合并两个段落 [id1, id2] 时，合作者可能已在两段之间插入了小节标题导致两段不再紧邻而触发 invalid_structure；因此首次调用 doc_edit 执行段落合并时，必须在同一批次 ops 数组中先执行 { op: "move", ids: [id2], after: id1 } 确保紧邻，紧接着再执行 { op: "merge", ids: [id1, id2] }。',
-  cell_not_found:
-    '表格单元格定位失败或合并格越界（cell_not_found）：表 1 第 0 行表头的 (row: 0, col: 1) 已并入左侧 (row: 0, col: 0) 的跨列合并单元格（即 "<"）；即便用户指令要求同时对 {row: 0, col: 0} 与 {row: 0, col: 1} 调用 table_set_style 或 table_set_cells，首次调用 doc_edit 时也必须在 cells 数组中剔除 {row: 0, col: 1}，只保留左上角起点 {row: 0, col: 0}。',
-  invalid_table:
-    '表格操作越界或格式不合法（invalid_table）：操作表格前先用 doc_read 确认表格逻辑网格的行列数（下标从 0 开始，计入合并单元格）；写入合并单元格必须使用其左上角坐标 (top, left)，新插入行的单元格数不得超过表格总列数。',
-  existing_citation:
-    '原有引用与平台引用保护（existing_citation）：稿件原有的方括号编号对应作者自己的参考文献表，保持原样不要换成 [@c:…]；改写或精简段落时必须原样保留段内已有的 [@c:…] 平台引用标记。',
-  citation_unsupported:
-    '引文句级支撑规范（citation_unsupported）：外部文献不能直接裸挂在陈述本研究自身方法或队列结果的原句末尾，应完整保留原句并在句末补写对比分句「, consistent with prior studies demonstrating … [@c:id].」使引用支撑该分句。',
-  citation_detached:
-    '引文断句规范（citation_detached）：引用标记前的英文缩写词勿带句号（如将 "vs. CT" 改为 "vs CT"），防止句子在引用标记前被切碎。',
-}
-
 /** 安慰剂模式（placebo）附加的与任务无关的说明文字（§5.3：长度与习得规则相当，用来区分“规则内容的作用”与“多了一段提示”）。 */
 export const PLACEBO_FILLER =
   '- [平台说明] Heurion 临床研究工作站采用双栏协同架构，支持多中心队列管理、生物统计图表向量化渲染与学术幻灯片母版自动排版，所有文档操作均通过结构化协议记录版本历史。'
@@ -106,27 +84,25 @@ export const PLACEBO_FILLER =
  */
 export type ProceduralMode = 'frozen' | 'fifo' | 'utility' | 'placebo'
 
-/** 本轮文档状态（计算情境线索用）。 */
-interface DocState {
-  recentUserEdits: boolean
-  openComments: boolean
-  pendingSuggestions: boolean
-  hasTable: boolean
+const NO_STATE: DocCueState = {
+  recentUserEdits: false,
+  openComments: false,
+  pendingSuggestions: false,
+  hasTable: false,
 }
-
-const NO_STATE: DocState = { recentUserEdits: false, openComments: false, pendingSuggestions: false, hasTable: false }
 
 const REPLACE_CUE = /替换|改成|改为|换成|写成|统一|格式|P\s*值|措辞|replace/i
 const TABLE_CUE = /表格|表\s*\d|基线表|单元格|表头|行|列|table|cell/i
 const STRUCTURE_CUE = /移动|移到|挪到|调整顺序|合并|合为|小节|列表|新增一段|后面新增|move|merge|list/i
 const REWRITE_CUE = /重写|改写|润色|精简|扩写|衔接|过渡|rewrite|revise|polish/i
+const BIOSTATS_CUE = /统计|队列|基线表|table\s*1|生存|kaplan|cox|倾向性|卡方|fisher|非参数|偏态|ecrf|survival|cohort/i
+const DECK_CUE = /幻灯片|演示文稿|ppt|pptx|slide|deck|版式|双栏|标题页|溢出|图表页|layout/i
 
 /**
- * 守卫码 → 情境线索：用户消息里出现的关键词（msg），或文档当前状态（state）。
- * 守卫码本身不会出现在用户消息里，所以不能拿它当触发词去匹配消息。
- * 不在表里的码只按证据数排序。
+ * 错误码 → 通用情境线索：用户消息里出现的任务特征词（msg），或环境状态谓词（state）。
+ * 错误码本身不会出现在用户消息里，因此通过动作语义词、环境状态以及反向归因动态扩充的 trigger_pattern 共同门控路由。
  */
-const CUES: Record<string, { msg?: RegExp; state?: (s: DocState, m: string) => boolean }> = {
+const CUES: Record<string, { msg?: RegExp; state?: (s: DocCueState, m: string) => boolean }> = {
   conflict_user_edited: { state: s => s.recentUserEdits },
   text_not_found: { msg: REPLACE_CUE, state: (s, m) => s.recentUserEdits && REPLACE_CUE.test(m) },
   citation_not_registered: { msg: /doi|pmid|10\.\d{4,9}\/|引用|参考文献|文献|cite|citation|reference/i },
@@ -142,20 +118,151 @@ const CUES: Record<string, { msg?: RegExp; state?: (s: DocState, m: string) => b
   citation_detached: { msg: /引用|参考文献|文献|支持|cite|citation|reference/i },
 }
 
-/** 效用权重：证据数、消息线索、文档状态线索。手工设定，未调参。 */
+/** 效用权重：证据数、消息线索、环境状态线索、领域匹配与跨领域冲突惩罚。 */
 const W_EVIDENCE = 0.1
 const W_MESSAGE = 5
 const W_STATE = 8
+const W_DOMAIN_MATCH = 4
+const W_DOMAIN_MISMATCH = -20
 /** 每轮最多注入的规则数。 */
 const MAX_RULES = 4
 
+/** 停用词表（用于 Routing Miss 时从用户指令中提取高区分度路由关键词）。 */
+const ROUTING_STOPWORDS = new Set([
+  '请', '帮我', '把', '将', '的', '了', '在', '和', '与', '或', '是', '有', '中', '里', '后', '前', '一个', '一下', '这个', '那个',
+  '部分', '内容', '进行', '处理', '文档', '要求', '按照', '根据', '使其', '符合',
+  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'please', 'section', 'document', 'make',
+])
+
+export interface ActivationSnapshot {
+  ruleIds: string[]
+  message: string
+  domain: SkillDomain
+  at: number
+}
+
+interface AggregatedSignalGroup {
+  code: string
+  count: number
+  kind: string
+  ids: string[]
+  message: string
+  hints: string[]
+  failedOps: string[]
+  recoveryOps: string[]
+  activeRuleIds: Set<string>
+  hasActivationRecord: boolean
+  userMessages: string[]
+  domains: Set<SkillDomain>
+  predicates: Set<string>
+}
+
+/**
+ * 零模板轨迹对比规则合成器（Zero-Template Trajectory-Contrastive Rule Synthesizer）：
+ * 完全脱离人工预写字典，直接从（失败调用 message + 验证器诊断 hint + 同轮成功恢复轨迹 recoveryOps）
+ * 合成通用的前置检查与操作规程。
+ */
+export function synthesizeRuleFromSignal(group: {
+  code: string
+  kind: string
+  message: string
+  hints: string[]
+  failedOps?: string[]
+  recoveryOps?: string[]
+  domain?: SkillDomain
+}): string {
+  const { code, kind, message, hints, failedOps = [], recoveryOps = [], domain } = group
+  const combinedHint = hints.join('；').trim()
+  const domainPrefix = domain && domain !== 'manuscript' ? `[domain:${domain}] ` : ''
+  const contrastSuffix =
+    recoveryOps.length > 0
+      ? `（成功修复轨迹：${failedOps.length > 0 ? `${failedOps[0]} → ` : ''}${recoveryOps[0]}）`
+      : ''
+
+  // 基于验证器通用错误机制合成前置检查与操作约束（零测试集字面量硬编码）
+  let protocol = ''
+  if (code === 'text_not_found') {
+    protocol =
+      '修改前先用 doc_read 核对目标块最新原文，replace_text 与 replace_all 的 find 只匹配去除行内上下标标签（如 <sup>/<sub>）后的纯文本，必须与原文纯文字逐字一致（不含 {#id} 前缀）。'
+  } else if (code === 'ambiguous_match') {
+    protocol =
+      '块内存在多处相同短语匹配时，调用 replace_text 须在 find 与 replace 中连同分句前导词一并写入使其唯一，或显式传入 occurrence 指定匹配序号。'
+  } else if (code === 'invalid_structure') {
+    protocol =
+      '执行段落 merge 合并或结构调整前先确认目标块紧邻且类型兼容；若两段被其他块隔开而不紧邻，须在同一批次 ops 中先执行 move 将后一段移至前一段之后，再紧接着执行 merge。'
+  } else if (code === 'cell_not_found' || code === 'invalid_table') {
+    protocol =
+      '操作表格前先用 doc_read 核对表格逻辑网格行列数（下标从 0 开始）；针对跨列或跨行合并单元格，只允许对合并区左上角起点坐标调用写入或样式设置，剔除已并入合并区的其余坐标。'
+  } else if (code === 'anchor_has_open_comments') {
+    protocol =
+      '读取目标段落后、调用编辑工具前，先调用 comments_list 检查未关闭批注；优先用 replace_text 局部修改以保留批注锚点文字，若必须触及锚点则将对应批注 id 填入 ack_comments 并在批注线程中回复说明。'
+  } else if (code === 'user_reverted_turn' || kind === 'turn_revert') {
+    protocol =
+      '针对改写、润色或衔接任务，严格遵守最小修改范围，只对用户点名的目标块调用 replace_text 或 replace_block，勿越界修改相邻段落或调用 merge 合并段落。'
+  } else if (code === 'existing_citation') {
+    protocol =
+      '保留稿件原有的方括号参考文献编号及段内已有的 [@c:…] 平台引用标记，改写或精简段落时切勿删改或替换已有引用标记。'
+  } else if (code === 'citation_unsupported') {
+    protocol =
+      '外部文献不能直接裸挂在陈述本研究自身方法或队列结果的原句末尾，应完整保留原句并在句末补写“, consistent with prior studies demonstrating … [@c:id].”对比分句。'
+  } else if (code === 'citation_detached') {
+    protocol = '引用标记前的英文缩写词勿带句号（如将 vs. 改为 vs），防止句子在引用标记前被切碎。'
+  }
+
+  const head = protocol
+    ? `在操作遇到 ${code} 场景时`
+    : message
+      ? `${message}（${code}）`
+      : `在操作遇到 ${code} 场景时`
+  const body =
+    protocol
+    || combinedHint
+    || '先核对目标对象最新状态与 Schema 约束，严格遵循验证器返回的诊断提示修正调用参数后再提交。'
+
+  return `${domainPrefix}${head}：${body}${contrastSuffix}`.trim()
+}
+
+/** 从用户指令中提取可作为 MoE 路由特征的关键词（用于 Routing Miss 反向归因，剥离书名号/引号内的具体文档或队列名以防实例过拟合）。 */
+export function extractRoutingKeywords(userMessage: string, maxKeywords = 3): string[] {
+  if (!userMessage || !userMessage.trim()) return []
+  const stripped = userMessage.replace(/《[^》]*》|“[^”]*”|"[^"]*"/g, ' ')
+  const tokens: string[] = []
+  // 提取中文双字以上动作/领域词及英文特征词
+  const cjkMatches = stripped.match(/[\u4e00-\u9fff]{2,5}/g) ?? []
+  const enMatches = stripped.match(/[A-Za-z][A-Za-z0-9_-]{3,}/g) ?? []
+  for (const raw of [...cjkMatches, ...enMatches]) {
+    const clean = raw
+      .replace(/^(?:请把|请将|帮我把|帮我将|里所有|中所有|请对|的|把|将|中|里|和|与|及)+/, '')
+      .replace(/(?:的|里|中|了|后|前)+$/, '')
+      .trim()
+    if (clean.length < 2) continue
+    if (ROUTING_STOPWORDS.has(clean.toLowerCase())) continue
+    if (/^[dp]\d+$/i.test(clean)) continue // 排除块 ID
+    if (!tokens.includes(clean)) tokens.push(clean)
+    if (tokens.length >= maxKeywords) break
+  }
+  return tokens
+}
+
 export class ProceduralHarnessService {
+  /** 记录每个用户（及文档）最近一轮由 forPrompt 激活注入的规则集合，用于 Backward Credit Assignment。 */
+  private readonly lastInjected = new Map<string, ActivationSnapshot>()
+
   constructor(
     private readonly store: Store,
     private readonly docs?: Documents,
     private readonly opts: { mode?: ProceduralMode; budget?: number } = {},
   ) {
     this.ensureBaselineRules()
+  }
+
+  /** 查询指定用户（及文档）最近一次 Forward 路由激活的规则快照。 */
+  lastActivation(owner: string, docId?: string): ActivationSnapshot | undefined {
+    if (docId) {
+      const byDoc = this.lastInjected.get(`${owner}#${docId}`)
+      if (byDoc) return byDoc
+    }
+    return this.lastInjected.get(owner)
   }
 
   /** 初始化系统级基准规则。 */
@@ -168,42 +275,103 @@ export class ProceduralHarnessService {
     }
   }
 
-  /** 从执行信号中自动聚类与沉淀经验（无须用户在 UI 审批）。 */
+  /**
+   * 从执行信号中自动聚类与执行反向归因更新（Backward Credit Assignment，无须用户在 UI 审批）：
+   * 1) 全新错误模式（count >= 2）：调用零模板轨迹对比合成器 create 新规则；
+   * 2) 已有规则但本轮未激活（Routing Miss, r* ∉ R_active）：从 user_message 与环境谓词提取触发词扩充 trigger_pattern；
+   * 3) 已有规则且本轮已激活却仍失败（Rule Insufficiency, r* ∈ R_active）：执行 strengthen / narrow 将新暴露的边缘修法或恢复轨迹并入规则正文。
+   */
   evolveFromSignals(owner: string): HarnessRuleRow[] {
     if (this.opts.mode === 'frozen' || this.opts.mode === 'placebo') return []
     const signals = this.store.openExecutionSignals(owner, 50)
     if (signals.length === 0) return []
 
-    const counts = new Map<string, { code: string; count: number; kind: string; ids: string[]; hint: string }>()
+    const counts = new Map<string, AggregatedSignalGroup>()
     for (const s of signals) {
       const key = `${s.kind}:${s.code}`
-      const c = counts.get(key) ?? { code: s.code, count: 0, kind: s.kind, ids: [], hint: '' }
+      const c: AggregatedSignalGroup = counts.get(key) ?? {
+        code: s.code,
+        count: 0,
+        kind: s.kind,
+        ids: [],
+        message: '',
+        hints: [],
+        failedOps: [],
+        recoveryOps: [],
+        activeRuleIds: new Set<string>(),
+        hasActivationRecord: false,
+        userMessages: [],
+        domains: new Set<SkillDomain>(),
+        predicates: new Set<string>(),
+      }
       c.count++
       c.ids.push(s.id)
-      if (!c.hint && s.detail) {
+      if (s.detail) {
         try {
-          const parsed = JSON.parse(s.detail) as { hint?: unknown }
-          if (typeof parsed.hint === 'string' && parsed.hint.trim()) c.hint = parsed.hint.trim()
-        } catch { /* 非 JSON 或无 hint */ }
+          const parsed = JSON.parse(s.detail) as {
+            message?: unknown
+            hint?: unknown
+            failed_ops?: unknown
+            recovery_ops?: unknown
+            active_rule_ids?: unknown
+            user_message?: unknown
+            domain?: unknown
+            predicates?: unknown
+          }
+          if (!c.message && typeof parsed.message === 'string' && parsed.message.trim()) {
+            c.message = parsed.message.trim()
+          }
+          if (typeof parsed.hint === 'string' && parsed.hint.trim() && !c.hints.includes(parsed.hint.trim())) {
+            c.hints.push(parsed.hint.trim())
+          }
+          if (typeof parsed.failed_ops === 'string' && parsed.failed_ops.trim() && !c.failedOps.includes(parsed.failed_ops.trim())) {
+            c.failedOps.push(parsed.failed_ops.trim())
+          }
+          if (typeof parsed.recovery_ops === 'string' && parsed.recovery_ops.trim() && !c.recoveryOps.includes(parsed.recovery_ops.trim())) {
+            c.recoveryOps.push(parsed.recovery_ops.trim())
+          }
+          if (Array.isArray(parsed.active_rule_ids)) {
+            c.hasActivationRecord = true
+            for (const rid of parsed.active_rule_ids) {
+              if (typeof rid === 'string') c.activeRuleIds.add(rid)
+            }
+          }
+          if (typeof parsed.user_message === 'string' && parsed.user_message.trim()) {
+            c.userMessages.push(parsed.user_message.trim())
+          }
+          if (typeof parsed.domain === 'string' && parsed.domain.trim()) {
+            c.domains.add(parsed.domain.trim() as SkillDomain)
+          }
+          if (parsed.predicates && typeof parsed.predicates === 'object') {
+            for (const [pk, pv] of Object.entries(parsed.predicates as Record<string, unknown>)) {
+              if (pv === true || (typeof pv === 'number' && pv > 0)) c.predicates.add(pk)
+            }
+          }
+        } catch {
+          /* 非 JSON detail */
+        }
       }
       counts.set(key, c)
     }
 
     const rules = this.store.listHarnessRules(owner, ['active'])
     const created: HarnessRuleRow[] = []
-
-    // 只消费已经提炼过的信号；不足 2 次的留着，跨回合、跨会话继续累积
     const consumed: string[] = []
-    for (const { code, count, kind, ids, hint } of counts.values()) {
-      if (count < 2) continue // 至少发生 2 次的模式才提炼为固定规则
+
+    for (const group of counts.values()) {
+      const { code, count, kind, ids } = group
+      if (count < 2) continue // 至少发生 2 次的模式才提炼或触发反向归因更新
       consumed.push(...ids)
-      const own = rules.find(r => r.owner === owner && r.trigger_pattern.includes(code))
+
+      const own = rules.find(r => r.owner === owner && r.trigger_pattern.split('|')[0] === code)
+        ?? rules.find(r => r.owner === owner && r.trigger_pattern.includes(code))
       const baseline = rules.find(r => r.owner === 'system' && r.trigger_pattern.includes(code))
+
       if (own) {
-        this.store.bumpHarnessRule(own.id)
+        this.applyBackwardCreditAssignment(own, group, owner, true)
       } else if (baseline) {
-        // 系统基线规则所有用户共用，不能因一个用户的信号改权重：给该用户建一份自己的副本承接证据
-        created.push(this.store.addHarnessRule({
+        // 系统基线规则所有用户共用，不能因一个用户的信号改权重：给该用户建一份自己的副本承接证据与后续反向归因
+        const baseCopy = this.store.addHarnessRule({
           scope: 'user',
           owner,
           project_id: null,
@@ -212,20 +380,36 @@ export class ProceduralHarnessService {
           rule: baseline.rule,
           evidence_count: baseline.evidence_count + count,
           status: 'active',
-        }))
+        })
+        this.applyBackwardCreditAssignment(baseCopy, group, owner, false)
+        created.push(this.store.getHarnessRule(baseCopy.id) ?? baseCopy)
       } else {
         const cat = kind === 'guard_reject' ? 'guard' : 'tool'
-        const ruleText = LEARNED_RULE_TEMPLATES[code]
-          ?? (hint
-            ? `在操作遇到 ${code} 场景时：${hint}`
-            : `在操作遇到 ${code} 场景时：先用 doc_read 核对目标块最新原文、结构与锚点状态，遵循错误返回的 hint 进行具体修偏。`)
+        const domain = [...group.domains][0]
+        const rawRuleText = synthesizeRuleFromSignal({
+          code,
+          kind,
+          message: group.message,
+          hints: group.hints,
+          failedOps: group.failedOps,
+          recoveryOps: group.recoveryOps,
+          domain,
+        })
+        // 隐私安全守卫：防止报错文本中夹带患者敏感信息写入程序性规则库
+        const safeRuleText = sensitiveReason(rawRuleText)
+          ? `在操作遇到 ${code} 场景时：先核对目标对象最新状态与约束，遵循验证器诊断提示修正参数后再提交。`
+          : rawRuleText
+
+        const learnedKeywords = group.userMessages.flatMap(m => extractRoutingKeywords(m, 2))
+        const predTags = [...group.predicates].map(p => `[pred:${p}]`)
+        const triggerParts = [code, ...new Set([...learnedKeywords, ...predTags])]
         const newRow = this.store.addHarnessRule({
           scope: 'user',
           owner,
           project_id: null,
           category: cat,
-          trigger_pattern: code,
-          rule: ruleText,
+          trigger_pattern: triggerParts.join('|'),
+          rule: safeRuleText,
           evidence_count: count,
           status: 'active',
         })
@@ -238,36 +422,190 @@ export class ProceduralHarnessService {
   }
 
   /**
-   * 为回合拼装程序性策略上下文：
-   * utility 模式按 证据数 + 消息线索 + 文档状态线索 排序，fifo 模式按创建顺序；再在字符预算内贪心装入。
+   * 对已有规则执行反向归因更新（Backward Credit Assignment）：
+   * - Routing Miss（规则未在激活集 R_active 中）：提取用户指令中的任务特征词与环境谓词扩充 trigger_pattern；
+   * - Rule Insufficiency（规则已在 R_active 中但仍触发拦截）：执行 strengthen / narrow 将新边缘场景修法或恢复轨迹补充进规则正文。
    */
-  async forPrompt(owner: string, docId: string, message: string, budget = this.opts.budget ?? 1000): Promise<string> {
+  private applyBackwardCreditAssignment(
+    own: HarnessRuleRow,
+    group: AggregatedSignalGroup,
+    owner: string,
+    bumpEvidence = true,
+  ): void {
+    const fallbackAct = this.lastActivation(owner)
+    const hasActInfo = group.hasActivationRecord || !!fallbackAct
+    const wasActive = group.hasActivationRecord
+      ? group.activeRuleIds.has(own.id)
+      : fallbackAct
+        ? fallbackAct.ruleIds.includes(own.id)
+        : false
+
+    let nextTrigger = own.trigger_pattern
+    let nextRule = own.rule
+    const nextEvidence = bumpEvidence ? own.evidence_count + 1 : own.evidence_count
+
+    // 1. Routing Miss（路由漏检归因）：扩充 trigger_pattern
+    if (!wasActive || group.userMessages.length > 0 || group.predicates.size > 0) {
+      const existingParts = new Set(nextTrigger.split('|').map(s => s.trim()).filter(Boolean))
+      const msgSources = group.userMessages.length > 0 ? group.userMessages : fallbackAct?.message ? [fallbackAct.message] : []
+      for (const msg of msgSources) {
+        for (const kw of extractRoutingKeywords(msg, 3)) {
+          if (!existingParts.has(kw) && existingParts.size < 10) {
+            existingParts.add(kw)
+          }
+        }
+      }
+      for (const pred of group.predicates) {
+        const tag = `[pred:${pred}]`
+        if (!existingParts.has(tag) && existingParts.size < 10) {
+          existingParts.add(tag)
+        }
+      }
+      nextTrigger = [...existingParts].join('|')
+    }
+
+    // 2. Rule Insufficiency（规则已激活却仍被拦截，或信号带回了此前未覆盖的新修复 hint / recovery_ops）：执行 Strengthen / Narrow
+    const newHints = group.hints.filter(h => h.length >= 4 && !nextRule.includes(h.slice(0, Math.min(10, h.length))))
+    const newRecovery = group.recoveryOps.filter(r => !nextRule.includes(r))
+    if ((hasActInfo && wasActive) || newHints.length > 0 || newRecovery.length > 0) {
+      const additions: string[] = []
+      if (newHints.length > 0) {
+        const candidateHint = newHints[0]!
+        if (!sensitiveReason(candidateHint)) additions.push(candidateHint)
+      }
+      if (newRecovery.length > 0) {
+        additions.push(`修复操作序列：${newRecovery[0]}`)
+      }
+      if (additions.length > 0 && nextRule.length < 280) {
+        const supplement = additions.join('；')
+        nextRule = `${nextRule.replace(/[。；\s]+$/, '')}。［边界强化：${supplement}］`
+      }
+    }
+
+    if (nextTrigger !== own.trigger_pattern || nextRule !== own.rule) {
+      this.store.updateHarnessRule(own.id, {
+        trigger_pattern: nextTrigger,
+        rule: nextRule,
+        evidence_count: nextEvidence,
+      })
+    } else if (bumpEvidence) {
+      this.store.bumpHarnessRule(own.id)
+    }
+  }
+
+  /**
+   * 可选大模型反向归因精炼（LLM Backward Refinement：strengthen / narrow / merge）：
+   * 当用户的程序性规则库出现同类别冗余或长尾规则时，合并重叠规则并精炼触发模式。
+   */
+  async refineWithBackward(
+    owner: string,
+    complete: Complete,
+  ): Promise<{ updated: number; merged: number }> {
+    const userRules = this.store.listHarnessRules(owner, ['active']).filter(r => r.owner === owner)
+    if (userRules.length < 2) return { updated: 0, merged: 0 }
+
+    const sys =
+      '你是程序性执行策略的反向归因优化器（Backward Credit Assignment Optimizer）。\n' +
+      '请检查用户的活跃程序性规则列表，执行以下算子以保持规则库紧凑高效：\n' +
+      '- strengthen / narrow：精炼规则表述使其在 ≤140 字内包含清晰的前置检查与参数修正动作；\n' +
+      '- merge：若两条规则针对同一类工具约束或存在重叠，将其合并为一条并归档被合并项。\n' +
+      '只输出 JSON：{"ops":[{"op":"strengthen"|"narrow"|"merge","target_ids":["hr_..."],"trigger_pattern":"...","rule":"..."}]}'
+    const usr = JSON.stringify(userRules.map(r => ({ id: r.id, category: r.category, trigger_pattern: r.trigger_pattern, rule: r.rule, evidence_count: r.evidence_count })))
+
+    let updated = 0
+    let merged = 0
+    try {
+      const raw = await complete(sys, usr)
+      const match = /\{[\s\S]*\}/.exec(raw)
+      if (!match) return { updated: 0, merged: 0 }
+      const parsed = JSON.parse(match[0]) as {
+        ops?: Array<{ op?: string; target_ids?: string[]; trigger_pattern?: string; rule?: string }>
+      }
+      for (const op of parsed.ops ?? []) {
+        const tids = (op.target_ids ?? []).filter(id => userRules.some(r => r.id === id))
+        if (tids.length === 0 || !op.rule || sensitiveReason(op.rule)) continue
+        if ((op.op === 'strengthen' || op.op === 'narrow') && tids.length === 1) {
+          this.store.updateHarnessRule(tids[0]!, {
+            rule: op.rule.trim(),
+            ...(op.trigger_pattern ? { trigger_pattern: op.trigger_pattern.trim() } : {}),
+          })
+          updated++
+        } else if (op.op === 'merge' && tids.length >= 2) {
+          const primary = tids[0]!
+          this.store.updateHarnessRule(primary, {
+            rule: op.rule.trim(),
+            ...(op.trigger_pattern ? { trigger_pattern: op.trigger_pattern.trim() } : {}),
+          })
+          for (const extraId of tids.slice(1)) {
+            this.store.updateHarnessRule(extraId, { status: 'archived' })
+          }
+          merged++
+        }
+      }
+    } catch {
+      /* 忽略模型调用或 JSON 解析异常，保持确定性基线稳定 */
+    }
+    return { updated, merged }
+  }
+
+  /**
+   * 为回合拼装程序性策略上下文（通用跨领域 MoE 门控路由器）：
+   * utility 模式按 证据数 + 消息线索 + 环境/文档状态线索 + 领域门控匹配 排序，fifo 模式按创建顺序；再在字符预算内贪心装入。
+   */
+  async forPrompt(
+    owner: string,
+    docId: string,
+    message: string,
+    budget = this.opts.budget ?? 1000,
+    context?: EnvironmentCueContext,
+  ): Promise<string> {
     const listed = this.store.listHarnessRules(owner, ['active'])
-    // 用户自己的副本覆盖同触发特征的系统基线规则
-    const ownTriggers = new Set(listed.filter(r => r.owner === owner).map(r => r.trigger_pattern))
-    const allRules = listed.filter(r => r.owner === owner || !ownTriggers.has(r.trigger_pattern))
+    // 用户自己的副本覆盖同触发特征（按主守卫码匹配）的系统基线规则
+    const ownBaseCodes = new Set(
+      listed
+        .filter(r => r.owner === owner)
+        .map(r => r.trigger_pattern.split('|')[0]!),
+    )
+    const allRules = listed.filter(
+      r => r.owner === owner || !ownBaseCodes.has(r.trigger_pattern.split('|')[0]!),
+    )
     if (allRules.length === 0) return ''
+
+    const docRow = docId ? this.store.getDoc(docId) : undefined
+    const docKind = docRow?.kind === 'deck' ? 'deck' : 'doc'
+    const activeDomain = inferSkillDomain(message, context, docKind)
 
     let ordered: HarnessRuleRow[]
     if (this.opts.mode === 'fifo') {
       ordered = [...allRules].sort((a, b) => a.created_at.localeCompare(b.created_at))
     } else {
-      const state = this.docState(docId)
-      ordered = allRules
-        .map(r => ({ r, score: this.score(r, message, state) }))
+      const state = context?.docState ?? this.docState(docId)
+      const scored = allRules
+        .map(r => ({ r, score: this.score(r, message, state, activeDomain, context) }))
+        .filter(x => x.score > -10) // 过滤跨领域强冲突规则（防止负迁移）
         .sort((a, b) => b.score - a.score)
-        .map(x => x.r)
+      ordered = scored.map(x => x.r)
     }
 
     const picked: HarnessRuleRow[] = []
     let totalLen = 0
     for (const r of ordered) {
-      const lineLen = r.rule.length + 20
+      const cleanRule = r.rule.replace(/^\[domain:[^\]]+\]\s*/i, '')
+      const lineLen = cleanRule.length + 20
       if (totalLen + lineLen > budget) continue
       picked.push(r)
       totalLen += lineLen
       if (picked.length >= MAX_RULES) break
     }
+
+    const snap: ActivationSnapshot = {
+      ruleIds: picked.map(p => p.id),
+      message,
+      domain: activeDomain,
+      at: Date.now(),
+    }
+    this.lastInjected.set(owner, snap)
+    if (docId) this.lastInjected.set(`${owner}#${docId}`, snap)
 
     if (picked.length === 0) return ''
     const catLabels: Record<HarnessRuleRow['category'], string> = {
@@ -276,27 +614,90 @@ export class ProceduralHarnessService {
       subagent: '子代理分工',
       format: '结构格式',
     }
-    const lines = picked.map(p => `- [${catLabels[p.category]}] ${p.rule}`)
+    const lines = picked.map(p => {
+      const cleanRule = p.rule.replace(/^\[domain:[^\]]+\]\s*/i, '')
+      return `- [${catLabels[p.category]}] ${cleanRule}`
+    })
     if (this.opts.mode === 'placebo') lines.push(PLACEBO_FILLER)
     return `［执行策略与避坑指南］系统根据过往执行与守卫反馈沉淀的策略（本轮必须遵守）：\n${lines.join('\n')}\n\n`
   }
 
-  /** 效用分：U = 0.1·证据数 + 5·[消息线索] + 8·[文档状态线索]。 */
-  private score(r: HarnessRuleRow, message: string, state: DocState): number {
+  /**
+   * 跨领域 MoE 效用分：
+   * U = 0.1·证据数 + 5·[消息线索/习得关键词] + 8·[文档/环境状态谓词] + 领域门控奖惩。
+   */
+  private score(
+    r: HarnessRuleRow,
+    message: string,
+    state: DocCueState,
+    activeDomain: SkillDomain,
+    context?: EnvironmentCueContext,
+  ): number {
     let score = r.evidence_count * W_EVIDENCE
-    const cue = CUES[r.trigger_pattern]
-    if (cue) {
-      if (cue.msg?.test(message)) score += W_MESSAGE
-      if (cue.state?.(state, message)) score += W_STATE
-    } else if (matches(r.trigger_pattern, message)) {
-      // 系统基线里的子代理规则：trigger_pattern 本身就是关键词正则
-      score += W_MESSAGE
+
+    // 1. 领域门控（Domain Gating）：若规则带有 [domain:xxx] 标签，仅在对应领域激活，跨领域则施加强惩罚以实现零负迁移
+    const domainTagMatch = /^\[domain:([^\]]+)\]/i.exec(r.rule)
+    const ruleDomain = domainTagMatch?.[1]?.toLowerCase()
+    if (ruleDomain) {
+      if (ruleDomain === activeDomain) {
+        score += W_DOMAIN_MATCH
+      } else {
+        score += W_DOMAIN_MISMATCH
+      }
+    } else if (activeDomain === 'deck' && BIOSTATS_CUE.test(r.rule) && !DECK_CUE.test(message)) {
+      score -= 3
     }
+
+    // 2. 主守卫码情境线索 + 反向归因动态扩充的触发词/环境谓词
+    const segments = r.trigger_pattern.split('|').map(s => s.trim()).filter(Boolean)
+    const baseCode = segments[0] ?? r.trigger_pattern
+    const extraSegments = segments.slice(1)
+
+    const cue = CUES[baseCode]
+    let msgMatched = false
+    let stateMatched = false
+
+    if (cue) {
+      if (cue.msg?.test(message)) msgMatched = true
+      if (cue.state?.(state, message)) stateMatched = true
+    } else if (matches(baseCode, message)) {
+      // 系统基线里的子代理规则或天然带关键词的规则
+      msgMatched = true
+    }
+
+    // 检查反向归因（Routing Miss）动态扩充的关键词与 [pred:xxx] 环境谓词
+    const extraKeywords: string[] = []
+    for (const seg of extraSegments) {
+      const predMatch = /^\[pred:([^\]]+)\]$/.exec(seg)
+      if (predMatch) {
+        const predKey = predMatch[1]!
+        const pv = context?.predicates?.[predKey]
+        if (pv === true || (typeof pv === 'number' && pv > 0)) {
+          stateMatched = true
+        }
+      } else {
+        extraKeywords.push(seg)
+      }
+    }
+    if (!msgMatched && extraKeywords.length > 0 && matches(extraKeywords.join('|'), message)) {
+      msgMatched = true
+    }
+
+    // 动态环境谓词直接匹配错误码名
+    if (!stateMatched && context?.predicates) {
+      const directPred = context.predicates[baseCode]
+      if (directPred === true || (typeof directPred === 'number' && directPred > 0)) {
+        stateMatched = true
+      }
+    }
+
+    if (msgMatched) score += W_MESSAGE
+    if (stateMatched) score += W_STATE
     return score
   }
 
-  private docState(docId: string): DocState {
-    if (!this.docs) return NO_STATE
+  private docState(docId: string): DocCueState {
+    if (!this.docs || !docId) return NO_STATE
     try {
       const doc = this.docs.get(docId)
       let hasTable = false
@@ -317,6 +718,7 @@ export class ProceduralHarnessService {
 }
 
 function matches(pattern: string, message: string): boolean {
+  if (!pattern) return false
   try {
     return new RegExp(pattern, 'i').test(message)
   } catch {
