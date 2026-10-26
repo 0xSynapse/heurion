@@ -19,6 +19,7 @@
 \usepackage{enumitem}
 \usepackage{listings}
 \usepackage{microtype}
+\emergencystretch=1.5em
 \usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
 
 % Theorem / Invariant Environments
@@ -272,7 +273,7 @@ At the cross-turn session timescale, Heurion 2.0 resolves both the memory pollut
 \paragraph{Backward Credit Assignment for Procedural Memory.} When \texttt{evolveFromSignals()} clusters unconsumed signals with recurrence $\ge \tau = 2$, it inspects the forward activation snapshot $R_{\text{active}}$ recorded at the time of failure to diagnose \emph{why} the error recurred:
 \begin{enumerate}[leftmargin=1.5em,itemsep=1pt]
   \item \textbf{Novel Failure Pattern ($r^* \notin \mathcal{M}_P$):} \texttt{synthesizeRuleFromSignal()} combines the verifier's structural precondition with the observed $(a_{\text{fail}} \to a_{\text{recover}})$ contrast to create a new active rule in $\mathcal{M}_P$.
-  \item \textbf{Routing Miss ($r^* \in \mathcal{M}_P \setminus R_{\text{active}}$):} The rule existed in the store but failed to activate under prompt $q$. \texttt{applyBackwardCreditAssignment()} invokes \texttt{extractRoutingKeywords(q)}---which strips quoted document/cohort titles (\texttt{《\dots》}) to prevent instance overfitting---and appends transferable task/action cues and environment predicates (\texttt{[pred:\dots]}) to $r^*.\text{trigger\_pattern}$.
+  \item \textbf{Routing Miss ($r^* \in \mathcal{M}_P \setminus R_{\text{active}}$):} The rule existed in the store but failed to activate under prompt $q$. \texttt{applyBackwardCreditAssignment()} invokes \texttt{extractRoutingKeywords(q)}---which strips quoted document and cohort titles to prevent instance overfitting---and appends transferable task/action cues and environment predicates (\texttt{[pred:\dots]}) to $r^*.\text{trigger\_pattern}$.
   \item \textbf{Rule Insufficiency ($r^* \in R_{\text{active}}$):} The rule was injected into the prompt yet the agent still triggered a boundary violation. The engine executes a \texttt{strengthen}/\texttt{narrow} update that appends the newly uncovered boundary condition and recovery sequence to $r^*.\text{rule}$ (complemented by optional LLM-driven \texttt{refineWithBackward()} rule merging).
 \end{enumerate}
 
