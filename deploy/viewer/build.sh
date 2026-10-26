@@ -14,5 +14,15 @@ fi
 test "$(git -C "$SRC" describe --tags --exact-match)" = "$OHIF_TAG"
 cp "$HERE/app-config.js" "$SRC/platform/app/public/config/heurion.js"
 
+# Heurion 结节面板扩展：复制进 OHIF 的 extensions/（pnpm 工作区自动收录），并登记到 pluginConfig.json
+rm -rf "$SRC/extensions/heurion-nodules"
+cp -R "$HERE/heurion-nodules" "$SRC/extensions/heurion-nodules"
+cp "$SRC/extensions/test-extension/babel.config.js" "$SRC/extensions/heurion-nodules/babel.config.js"
+node -e '
+  const fs = require("fs"), f = process.argv[1], cfg = JSON.parse(fs.readFileSync(f, "utf8"));
+  if (!cfg.extensions.some(e => e.packageName === "@heurion/extension-nodules")) cfg.extensions.push({ packageName: "@heurion/extension-nodules" });
+  fs.writeFileSync(f, JSON.stringify(cfg, null, 2) + "\n");
+' "$SRC/platform/app/pluginConfig.json"
+
 "$ENGINE" build -t "$IMAGE" --build-arg PUBLIC_URL=/ --build-arg APP_CONFIG=config/heurion.js -f "$SRC/Dockerfile" "$SRC"
 echo "已构建 $IMAGE"

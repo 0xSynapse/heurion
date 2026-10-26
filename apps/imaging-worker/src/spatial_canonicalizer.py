@@ -93,8 +93,9 @@ def to_canonical_lps(
         data = data[..., 0]
     data_lps = nib.orientations.apply_orientation(data, transform_ornt)
 
-    # 3. Compute new LPS affine
-    affine_lps = nib.orientations.inv_ornt_aff(transform_ornt, data.shape) @ affine
+    # 3. Compute new LPS affine（重排后数组下标 → 世界坐标；nibabel 约定为 affine @ inv_ornt_aff，
+    #    左乘会弄错平移与轴序：轴被翻转时原点错误、轴被置换时体素间距顺序错误）
+    affine_lps = affine @ nib.orientations.inv_ornt_aff(transform_ornt, data.shape)
 
     # 4. Extract physical spacing (dx, dy, dz) from affine
     zooms = nib.affines.voxel_sizes(affine_lps)

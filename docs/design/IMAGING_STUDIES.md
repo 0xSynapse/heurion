@@ -72,19 +72,33 @@ REST 与 MCP 的对应关系登记在 `tests/parity.test.ts`。
   │ POST /api/imaging/viewer-ticket {study_uid}     主站，Bearer 令牌；校验能看到该检查
   ▼ 一次性票据（aud=viewer，60 s，绑定该检查，只能用一次）
 viewer.<域名>/session?ticket=…                      平台按 Host 分流到阅片器入口
-  │ 换发只读 Cookie hv_dicomweb（aud=dicomweb，4 h，Path=/api/dicomweb，HttpOnly，SameSite=Strict，https 时 Secure）
+  │ 换发只读 Cookie hv_dicomweb（aud=dicomweb，4 h，Path=/api，HttpOnly，SameSite=Strict，https 时 Secure）
   ▼ 302 → /viewer?StudyInstanceUIDs=…
-OHIF（deploy/viewer 构建的镜像，根路径）            同源读 viewer.<域名>/api/dicomweb/…
+OHIF（deploy/viewer 构建的镜像，根路径）            同源读 viewer.<域名>/api/dicomweb/… 与 /api/viewer/lesions
 ```
 
 - Cookie 只对打开过的检查有效（每打开一个检查加一个，最多 20 个），即使医生有权限，没打开过的检查也读不到。
 - 账户停用、改密码、强制下线后，Cookie 和票据都立即失效。
 - 阅片器子域名上只有：`/session`、只读 DICOMweb、OHIF 静态页面。主站的其它接口在那里一律 404，也不认主站令牌；反过来，主站也不认阅片器 Cookie。
 - 分流只看 `Host` 头（Caddy 原样转发）；`X-Forwarded-Host` 可被客户端伪造，不用于分流。
-- OHIF 会按患者 ID 查「同一患者的其它检查」。平台不提供全库检索，阅片器上这类查询返回空列表。
+- OHIF 会按患者 ID 查「同一患者的检查」，并用结果列出左侧检查栏。平台不做全库检索，只在这张 Cookie 允许的检查里查（把允许的 UID 列表用逗号分隔转给 Orthanc，再按原条件过滤）。
 - 部署：Caddy 的 `viewer.{$HOSTNAME}` 站点转发到平台；平台设置 `VIEWER_HOST`、`VIEWER_URL=http://viewer:8080`；DNS 要有 viewer 子域名的记录。
 - 构建：`deploy/viewer/build.sh`，用 OHIF v3.13.12 官方源码和官方 Dockerfile，加上 `deploy/viewer/app-config.js`。以后在这里加 Heurion 结节面板扩展（T2.2）。
 - 2026-10-26 本机验证：Podman 里跑 Orthanc 与阅片器，worktree 里跑平台与 worker，用无头 Chromium 打开胸部 CT（269 层）。274 个 DICOMweb 请求全部成功，无失败请求、无页面错误，影像正常显示。
+
+## 结节面板（T2.2）
+
+OHIF 扩展 `@heurion/extension-nodules`（`deploy/viewer/heurion-nodules/`）。构建时复制进 OHIF 源码，并在 `app-config.js` 里用 `customizationService` 的 `mode` 阶段把面板加到 viewer 模式右侧第一位，不改 OHIF 自带模式的源码。
+
+- 列表：阅片器子域名上的 `GET /api/viewer/lesions?StudyInstanceUID=`，只限 Cookie 允许的检查。显示位置（肺叶）、平均径（长 × 短）、体积、密度类型、CT 值、检出分数、分割失败等提示、状态与否决原因。
+- 跳转：worker 给每个结节输出关键层的 `key_slice_sop_instance_uid` 与病人坐标 `center_lps_mm` / `box_lps_mm`（DICOM LPS，mm），平台入库到病灶 `metrics`。面板按 SOPInstanceUID 在视口的影像列表里定位，必要时先把所在序列放进视口，再切到肺窗 W1500 / L−600。结节中心不一定落在关键层上（相差可达一个层厚）。
+- 确认 / 否决：`POST /api/viewer/lesions/:id/review`，只限 Cookie 允许的检查，并且必须带 `X-Heurion-Viewer: 1` 请求头（跨站表单带不上，防 CSRF）。否决须选原因：血管断面、纤维灶 / 瘢痕、钙化灶、淋巴结、伪影、其他。写入以医生本人身份经同一服务层，留痕与主站一致。主站对应接口为 `GET …/studies/:stid/lesions`（AI 用 `imaging_lesions` 只读）和 `POST …/lesions/:lid/review`（AI 不可用）。
+- 重新分析：与医生已确认 / 否决的结节是同一处的检出不再新增（两边都有病人坐标时按坐标距离判断，否则在同一序列内按体素坐标），运行摘要记 `matched_reviewed`。
+- 轮廓显示随 T1.6（DICOM SEG）提供，由 OHIF 原生的 SEG 显示完成，面板暂不另画标记。
+- 2026-10-26 本机验证（无头 Chromium，胸部 CT 269 层）：
+  - 面板列出结节，确认与否决都能保存，平台留痕正确。
+  - 点结节 4 后视口显示 `I:129`，正是关键层 CT_0129。
+  - 重新分析时 2 个已审核结节没有重复新增。
 
 ## 资源与排队
 

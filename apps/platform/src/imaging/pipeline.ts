@@ -58,6 +58,8 @@ interface NoduleResult {
   nodules: Array<{
     index: number; detection_score?: number; center_vox_zyx?: number[]; box_vox_zyx?: number[]; lobe?: string | null
     segmentation?: string; key_slice_z?: number; metrics?: Record<string, unknown>; warnings?: string[]
+    /** DICOM 病人坐标（LPS，mm）与关键层的 SOPInstanceUID：阅片器据此跳到对应图像（体积没有 DICOM 几何时为 null） */
+    center_lps_mm?: number[] | null; box_lps_mm?: number[] | null; key_slice_sop_instance_uid?: string | null
   }>
   warnings?: string[]
 }
@@ -176,19 +178,41 @@ export class ImagingPipeline {
       const result = await this.worker(def.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume_id: volumeId, max_nodules: 20 }) }, 2_700_000) as NoduleResult
       if (!result || !Array.isArray(result.nodules)) throw new Error('影像服务返回的结果格式不对（缺少 nodules）')
 
+      // 与医生已确认 / 否决的结节是同一处的检出不再新增（重新分析时避免重复，医生的判断保留）
+      const spacing = Array.isArray(result.series_qc?.spacing_mm) ? (result.series_qc!.spacing_mm as number[]) : null
+      const reviewed = this.studies.listLesions(a, run.study_id).filter(l => l.kind === def.kind && (l.status === 'confirmed' || l.status === 'rejected'))
+      const seriesOfRun = new Map<string, string | null>()
+      const sameSpot = (n: NoduleResult['nodules'][number]) => reviewed.some(l => {
+        const m = l.metrics as Record<string, unknown>
+        const radius = Math.max(3, Number(m.mean_diameter_mm ?? 0) / 2, Number(n.metrics?.mean_diameter_mm ?? 0) / 2)
+        const lps = m.center_lps_mm as number[] | null | undefined
+        if (Array.isArray(lps) && Array.isArray(n.center_lps_mm)) return Math.hypot(...lps.map((v, i) => v - n.center_lps_mm![i]!)) <= radius
+        const vox = m.center_vox_zyx as number[] | null | undefined
+        if (!spacing || !Array.isArray(vox) || !Array.isArray(n.center_vox_zyx) || !l.run_id) return false
+        if (!seriesOfRun.has(l.run_id)) seriesOfRun.set(l.run_id, this.studies.runSource(a, l.run_id).run.series_id)
+        if (seriesOfRun.get(l.run_id) !== run.series_id) return false
+        return Math.hypot(...vox.map((v, i) => (v - n.center_vox_zyx![i]!) * spacing[i]!)) <= radius
+      })
+      let matchedReviewed = 0
       for (const n of result.nodules) {
+        if (sameSpot(n)) { matchedReviewed++; continue }
         this.studies.addLesion(a, run.study_id, {
           run_id: runId, kind: def.kind, source: 'ai', label: `结节 ${n.index}`, location: n.lobe ?? null,
           metrics: {
             ...(n.metrics ?? {}), detection_score: n.detection_score ?? null, center_vox_zyx: n.center_vox_zyx ?? null, box_vox_zyx: n.box_vox_zyx ?? null,
             key_slice_z: n.key_slice_z ?? null, segmentation: n.segmentation ?? null, warnings: n.warnings ?? [],
+            center_lps_mm: n.center_lps_mm ?? null, box_lps_mm: n.box_lps_mm ?? null, key_slice_sop_instance_uid: n.key_slice_sop_instance_uid ?? null,
           },
         })
       }
       const superseded = this.studies.supersedeProposed(a, runId)
       this.studies.setRunStatus(a, runId, 'done', null, {
         model_version: result.model_version ?? null,
-        summary: { device: result.device ?? null, elapsed_ms: result.elapsed_ms ?? null, series_qc: result.series_qc ?? null, warnings: [...notes, ...(result.warnings ?? [])], found: result.nodules.length, superseded },
+        summary: {
+          device: result.device ?? null, elapsed_ms: result.elapsed_ms ?? null, series_qc: result.series_qc ?? null,
+          warnings: [...notes, ...(result.warnings ?? []), ...(matchedReviewed ? [`${matchedReviewed} 个检出与医生已审核的结节是同一处，未重复添加`] : [])],
+          found: result.nodules.length - matchedReviewed, matched_reviewed: matchedReviewed, superseded,
+        },
       })
     } catch (err) {
       try { this.studies.setRunStatus(a, runId, 'failed', err instanceof Error ? err.message : String(err)) } catch {}

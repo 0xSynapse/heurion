@@ -26,8 +26,9 @@ from model_registry import get_model_status, get_pipeline_status
 
 
 TOP_KEYS = {"model_id", "model_version", "device", "elapsed_ms", "series_qc", "nodules", "warnings"}
-QC_KEYS = {"slice_thickness_mm", "spacing_mm", "shape", "warnings"}
-NODULE_KEYS = {"index", "detection_score", "center_vox_zyx", "box_vox_zyx", "lobe", "segmentation", "key_slice_z", "metrics", "warnings"}
+QC_KEYS = {"slice_thickness_mm", "spacing_mm", "shape", "warnings", "geometry"}
+NODULE_KEYS = {"index", "detection_score", "center_vox_zyx", "box_vox_zyx", "lobe", "segmentation", "key_slice_z", "metrics", "warnings",
+               "center_lps_mm", "box_lps_mm", "key_slice_sop_instance_uid"}
 METRIC_KEYS = {"long_axis_mm", "short_axis_mm", "mean_diameter_mm", "volume_mm3", "mean_hu", "std_hu",
                "nodule_type", "solid_core_diameter_mm", "ctr"}
 
@@ -189,6 +190,10 @@ def test_measurements_sorting_and_contract(phantom):
     assert res["series_qc"]["spacing_mm"] == [1.25, 0.7, 0.7]
     assert res["series_qc"]["shape"] == list(SHAPE)
     assert res["series_qc"]["warnings"] == []
+    # 没有几何（直接传数组）：病人坐标与 SOP 字段为 null
+    assert res["series_qc"]["geometry"] == {"frame": None, "has_sop_uids": False}
+    assert all(n["center_lps_mm"] is None and n["box_lps_mm"] is None and n["key_slice_sop_instance_uid"] is None
+               for n in res["nodules"])
     assert fake.lobe_calls == 1
 
     ns = res["nodules"]

@@ -25,7 +25,7 @@ export interface DicomRouteContext {
 export const viewerHostOf = () => (process.env.VIEWER_HOST || '').trim().toLowerCase() || null
 /** OHIF 静态站点（deploy/viewer 构建的镜像）；阅片器子域名上的页面请求都转发到这里 */
 const viewerUrl = () => (process.env.VIEWER_URL || '').replace(/\/+$/, '')
-/** 阅片器子域名上的只读 Cookie：只发往那里的 /api/dicomweb，HttpOnly、SameSite=Strict */
+/** 阅片器子域名上的 Cookie：只发往那里的 /api（子域名上 /api 下只有只读 DICOMweb 与结节面板接口），HttpOnly、SameSite=Strict */
 export const VIEWER_COOKIE = 'hv_dicomweb'
 const VIEWER_COOKIE_TTL = 4 * 3600
 const TICKET_TTL = 60
@@ -101,6 +101,35 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
     } catch (err) { return fail(c, err) }
   })
 
+  // —— 病灶（W2.3）：列表给界面与 AI；确认 / 否决只给医生（服务层拒绝 via=ai） ——
+
+  const REVIEW_REASONS = ['血管断面', '纤维灶 / 瘢痕', '钙化灶', '淋巴结', '伪影', '其他']
+  /** 确认 / 否决的请求体：否决必须选原因（W2.3） */
+  const reviewBody = async (c: Context): Promise<{ status: 'confirmed' | 'rejected'; reason: string | null }> => {
+    const b = await c.req.json().catch(() => ({})) as { status?: string; reason?: string }
+    if (b.status !== 'confirmed' && b.status !== 'rejected') throw new ImagingError('bad_status', 'status 只能是 confirmed 或 rejected')
+    const reason = b.status === 'rejected' ? String(b.reason ?? '').trim().slice(0, 200) : ''
+    if (b.status === 'rejected' && !reason) throw new ImagingError('reason_required', `否决须选原因：${REVIEW_REASONS.join('、')}`)
+    return { status: b.status, reason: reason || null }
+  }
+
+  app.get('/api/patients/:ptid/imaging/studies/:stid/lesions', c => {
+    try {
+      const ptid = c.req.param('ptid'), stid = c.req.param('stid')
+      if (!svc(c).listStudies(me(c), ptid).some(s => s.id === stid)) throw new ImagingError('not_found', '影像检查不存在', 404)
+      return c.json(svc(c).listLesions(me(c), stid))
+    } catch (err) { return fail(c, err) }
+  })
+
+  app.post('/api/patients/:ptid/imaging/lesions/:lid/review', async c => {
+    try {
+      const lid = c.req.param('lid')
+      if (svc(c).lesionOwner(me(c), lid).patientId !== c.req.param('ptid')) throw new ImagingError('not_found', '病灶不存在', 404)
+      const body = await reviewBody(c)
+      return c.json(svc(c).reviewLesion(me(c), lid, body))
+    } catch (err) { return fail(c, err) }
+  })
+
   const forward = async (c: Context, path: string, query: string) => {
     if (!ctx.orthanc) throw new ImagingError('orthanc_not_configured', '本机构没有配置影像存储（Orthanc）', 503)
     const resp = await ctx.orthanc.dicomweb(path, query, c.req.header('accept') ?? null, publicOrigin(c))
@@ -123,8 +152,13 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
   const qido = async (c: Context, a: Actor, allowed: '*' | string[]) => {
     try {
       const uids = (c.req.query('StudyInstanceUID') ?? '').split(/[,\\]/).map(s => s.trim()).filter(Boolean)
-      // 阅片器（allowed 为具体检查）会按患者 ID 查「同一患者的其它检查」：不支持全库检索，返回空列表而不是报错
-      if (!uids.length && allowed !== '*') return c.json([], 200, { 'Cache-Control': 'private, no-store' })
+      // 阅片器（allowed 为具体检查）会按患者 ID 查「同一患者的检查」，并用结果列出左侧检查栏：
+      // 不做全库检索，只在这张 Cookie 允许的检查里查（Orthanc 再按原查询条件过滤；UID 列表用逗号分隔）
+      if (!uids.length && allowed !== '*') {
+        const q = new URLSearchParams(queryOf(c))
+        q.set('StudyInstanceUID', allowed.join(','))
+        return await forward(c, '/studies', q.toString())
+      }
       if (!uids.length) throw new ImagingError('study_uid_required', '请按 StudyInstanceUID 查询检查')
       for (const uid of uids) {
         if (!UID.test(uid)) throw new ImagingError('bad_uid', 'StudyInstanceUID 格式不对')
@@ -191,7 +225,7 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
     const studies = [...new Set([uid, ...(prev && prev.userId === t.userId && Array.isArray(prev.docs) ? prev.docs : [])])].slice(0, VIEWER_MAX_STUDIES)
     const cookie = ctx.viewerTokens.issue(t.userId, 'dicomweb', VIEWER_COOKIE_TTL, studies)
     if (!cookie) return c.text('账户状态不允许打开阅片器', 403)
-    setCookie(c, VIEWER_COOKIE, cookie, { path: '/api/dicomweb', httpOnly: true, sameSite: 'Strict', secure: protoOf(c) === 'https', maxAge: VIEWER_COOKIE_TTL })
+    setCookie(c, VIEWER_COOKIE, cookie, { path: '/api', httpOnly: true, sameSite: 'Strict', secure: protoOf(c) === 'https', maxAge: VIEWER_COOKIE_TTL })
     c.header('Cache-Control', 'no-store')
     c.header('Referrer-Policy', 'no-referrer')
     return c.redirect(`/viewer?StudyInstanceUIDs=${encodeURIComponent(uid)}`)
@@ -200,6 +234,30 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
   surface.get('/api/dicomweb/studies', c => { const v = viewerActor(c); return v ? qido(c, v.a, v.allowed) : unauthorized(c) })
   surface.get('/api/dicomweb/studies/:uid', c => { const v = viewerActor(c); return v ? wado(c, v.a, v.allowed) : unauthorized(c) })
   surface.get('/api/dicomweb/studies/:uid/*', c => { const v = viewerActor(c); return v ? wado(c, v.a, v.allowed) : unauthorized(c) })
+  /** 结节面板：Cookie 允许的检查里的病灶（附序列 UID、关键层与病人坐标，供 OHIF 跳转） */
+  surface.get('/api/viewer/lesions', c => {
+    const v = viewerActor(c)
+    if (!v) return unauthorized(c)
+    try {
+      const uid = c.req.query('StudyInstanceUID') ?? ''
+      if (!UID.test(uid) || !v.allowed.includes(uid)) throw new ImagingError('not_found', '影像检查不存在', 404)
+      return c.json({ lesions: svc(c as never).lesionsByStudyUid(v.a, uid), reject_reasons: REVIEW_REASONS }, 200, { 'Cache-Control': 'private, no-store' })
+    } catch (err) { return fail(c, err) }
+  })
+  /**
+   * 结节面板里确认 / 否决：只限 Cookie 允许的检查；要求自定义请求头（跨站表单与简单请求带不上，防 CSRF）。
+   * 写入以医生本人身份（via=user）、经同一服务层校验诊疗组权限并留痕。
+   */
+  surface.post('/api/viewer/lesions/:lid/review', async c => {
+    const v = viewerActor(c)
+    if (!v) return unauthorized(c)
+    if (c.req.header('x-heurion-viewer') !== '1') return c.json({ error: '缺少阅片器请求头', code: 'forbidden' }, 403)
+    try {
+      const lid = c.req.param('lid')
+      if (!v.allowed.includes(svc(c as never).studyUidOfLesion(v.a, lid))) throw new ImagingError('not_found', '病灶不存在', 404)
+      return c.json(svc(c as never).reviewLesion(v.a, lid, await reviewBody(c)))
+    } catch (err) { return fail(c, err) }
+  })
   // 主站的其它接口在阅片器子域名上一律不存在
   surface.all('/api/*', c => c.json({ error: '不存在', code: 'not_found' }, 404))
   /** 其余请求都是 OHIF 的页面与静态文件（不含患者数据），转发到阅片器服务 */

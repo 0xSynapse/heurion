@@ -73,6 +73,7 @@ export const NODULE_RESULT = {
   series_qc: { slice_thickness_mm: 1.25, spacing_mm: [1.25, 0.7, 0.7], shape: [240, 512, 512], warnings: [] },
   nodules: [
     { index: 1, detection_score: 0.93, center_vox_zyx: [120, 200, 310], box_vox_zyx: [114, 192, 302, 126, 208, 318], lobe: 'RUL', segmentation: 'vista3d', key_slice_z: 120,
+      center_lps_mm: [-43.13, 37.73, 108.12], box_lps_mm: [-54.36, 27.4, 101.25, -37.29, 44.47, 117.5], key_slice_sop_instance_uid: '1.2.826.0.1.3680043.8.498.6995',
       metrics: { long_axis_mm: 9.1, short_axis_mm: 7.3, mean_diameter_mm: 8.2, volume_mm3: 288.4, mean_hu: -12, std_hu: 64, nodule_type: 'solid', solid_core_diameter_mm: null, ctr: null }, warnings: [] },
     { index: 2, detection_score: 0.71, center_vox_zyx: [80, 300, 150], box_vox_zyx: [76, 295, 145, 84, 305, 155], lobe: 'LLL', segmentation: 'failed', key_slice_z: 80,
       metrics: { long_axis_mm: 5.5, short_axis_mm: 5.5, mean_diameter_mm: 5.5, volume_mm3: null, mean_hu: null, std_hu: null, nodule_type: null, solid_core_diameter_mm: null, ctr: null }, warnings: ['分割失败，测量取检出框径'] },

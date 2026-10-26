@@ -18,8 +18,10 @@ import scipy.ndimage as ndi
 
 try:
     from .recist import calculate_subsolid_metrics
+    from .volume_geometry import box_to_lps_bounds, geometry_summary, sop_uid_at, voxel_to_lps
 except (ImportError, ValueError):
     from recist import calculate_subsolid_metrics
+    from volume_geometry import box_to_lps_bounds, geometry_summary, sop_uid_at, voxel_to_lps
 
 
 PIPELINE_ID = "lung_nodule_pipeline"
@@ -304,12 +306,14 @@ def run_lung_nodule_pipeline(
     min_score: Optional[float] = None,
     lobe_mode: str = "full",
     lobe_resample_mm: Optional[float] = None,
+    geometry: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     neural：engine.MonaiNeuralInferencePipeline 实例，需提供 _verified_weights、detect_lung_nodules、
     infer_vista3d_nodule、infer_vista3d_lung_lobes 与 device。
     lobe_mode：full = 全肺做一次 VISTA-3D 肺叶分割（默认）；roi = 只在每个结节周围 ±96 mm 的区域做；
     off = 不做肺叶定位（lobe 为 null 并写明）。lobe_resample_mm 为空时用 bundle 的 1.5 mm。
+    geometry：体积几何（volume_geometry），用于把结节换算到 DICOM 病人坐标与 SOPInstanceUID；为空时这些字段为 null。
     返回契约见 apps/imaging-worker 的 POST /api/v1/pipeline/lung-nodule；timings_ms 为各阶段耗时。
     """
     t0 = time.time()
@@ -339,6 +343,10 @@ def run_lung_nodule_pipeline(
     timings["model_load"] = _ms(t)
 
     series_qc = series_quality_control(volume.shape, spacing, modality)
+    series_qc["geometry"] = geometry_summary(geometry)
+    if geometry and geometry.get("affine_zyx_to_lps") is not None and len(geometry.get("sop_instance_uids") or []) not in (0, volume.shape[0]):
+        geometry = {**geometry, "sop_instance_uids": None}
+        series_qc["geometry"]["has_sop_uids"] = False
     warnings: List[str] = []
 
     # 1) 检出 + 去重 + 数量上限
@@ -452,8 +460,13 @@ def run_lung_nodule_pipeline(
     for i, n in enumerate(nodules, start=1):
         n.pop("_radius_mm", None)
         n["index"] = i
+        # 病人坐标与 DICOM 图像：center_vox_zyx / box_vox_zyx / key_slice_z 经体积几何换算
+        n["center_lps_mm"] = voxel_to_lps(geometry, n["center_vox_zyx"])
+        n["box_lps_mm"] = box_to_lps_bounds(geometry, n["box_vox_zyx"])
+        n["key_slice_sop_instance_uid"] = sop_uid_at(geometry, n["key_slice_z"])
     ordered_keys = ("index", "detection_score", "center_vox_zyx", "box_vox_zyx", "lobe",
-                    "segmentation", "key_slice_z", "metrics", "warnings")
+                    "segmentation", "key_slice_z", "metrics", "warnings",
+                    "center_lps_mm", "box_lps_mm", "key_slice_sop_instance_uid")
     nodules = [{k: n[k] for k in ordered_keys} for n in nodules]
 
     return {

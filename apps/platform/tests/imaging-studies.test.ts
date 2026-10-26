@@ -215,7 +215,8 @@ describe('影像检查接口与 DICOMweb 代理', () => {
   })
 
   it('阅片器子域名：主站签一次性票据 → 子域名换只读 Cookie → 只能读打开过的检查；与主站令牌互不通用', async () => {
-    const t = api(new FakeOrthanc())
+    const fake = new FakeOrthanc()
+    const t = api(fake)
     const a = t.as(t.dr)
     const p = t.patients.create(a, { sex: 'F', birth_year: 1961 })
     await t.svc.importDicom(a, p.id, [{ name: 'IM1', bytes: dicom(STUDY, SERIES, '1') }])
@@ -240,7 +241,8 @@ describe('影像检查接口与 DICOMweb 代理', () => {
       expect(sess.headers.get('location')).toBe(`/viewer?StudyInstanceUIDs=${STUDY}`)
       const set = sess.headers.get('set-cookie')!
       expect(set).toMatch(/^hv_dicomweb=h1\./)
-      for (const attr of ['Path=/api/dicomweb', 'HttpOnly', 'SameSite=Strict']) expect(set).toContain(attr)
+      // Path=/api：浏览器要把它带给 /api/dicomweb 与结节面板的 /api/viewer（真实浏览器测出来的）
+      for (const attr of ['Path=/api;', 'HttpOnly', 'SameSite=Strict']) expect(set).toContain(attr)
       const cookie = set.split(';')[0]!
       // 票据只能用一次
       expect((await t.app.request(r.url)).status).toBe(401)
@@ -248,10 +250,12 @@ describe('影像检查接口与 DICOMweb 代理', () => {
       const V = 'http://viewer.test'
       expect((await t.app.request(`${V}/api/dicomweb/studies/${STUDY}/series`, { headers: { Cookie: cookie } })).status).toBe(200)
       expect((await t.app.request(`${V}/api/dicomweb/studies?StudyInstanceUID=${STUDY}`, { headers: { Cookie: cookie } })).status).toBe(200)
-      // OHIF 按患者 ID 查其它检查：不检索，返回空列表
+      // OHIF 按患者 ID 查检查：只在 Cookie 允许的检查里查（把允许的 UID 列表一起转给 Orthanc）
       const byPatient = await t.app.request(`${V}/api/dicomweb/studies?00100020=P-1001&limit=101`, { headers: { Cookie: cookie } })
       expect(byPatient.status).toBe(200)
-      expect(await byPatient.json()).toEqual([])
+      const sent = new URLSearchParams(fake.calls.at(-1)!.query)
+      expect(sent.get('00100020')).toBe('P-1001')
+      expect(sent.get('StudyInstanceUID')).toBe(STUDY)
       // 没打开过的检查，即使医生有权限，这张 Cookie 也读不到
       expect((await t.app.request(`${V}/api/dicomweb/studies/${STUDY2}/series`, { headers: { Cookie: cookie } })).status).toBe(404)
       // 再打开第二个检查：Cookie 记住两个
@@ -285,6 +289,54 @@ describe('影像检查接口与 DICOMweb 代理', () => {
       expect((await t.app.request(`${V}/api/dicomweb/studies/${STUDY}/series`, { headers: { Cookie: cookie2 } })).status).toBe(401)
       const r3 = await (await ticketReq(STUDY, { Authorization: t.tok(t.dr), 'Content-Type': 'application/json' })).json() as { url: string }  // 下线后重新登录的新令牌
       expect((await t.app.request(r3.url, { headers: { 'X-Forwarded-Proto': 'https' } })).headers.get('set-cookie')).toContain('Secure')
+    } finally {
+      delete process.env.VIEWER_HOST
+      delete process.env.VIEWER_URL
+    }
+  })
+  it('病灶接口：主站列表与确认 / 否决（否决须选原因）；阅片器面板只限 Cookie 允许的检查、须带阅片器请求头', async () => {
+    const t = api(new FakeOrthanc())
+    const a = t.as(t.dr)
+    const p = t.patients.create(a, { sex: 'F', birth_year: 1961 })
+    const st = (await t.svc.importDicom(a, p.id, [{ name: 'IM1', bytes: dicom(STUDY, SERIES, '1') }])).studies[0]!
+    const STUDY2 = `${STUDY}.9`
+    const st2 = (await t.svc.importDicom(a, p.id, [{ name: 'IM2', bytes: dicom(STUDY2, `${STUDY2}.1`, '2') }])).studies[0]!
+    const run = t.svc.startRun(a, st.id, { task: 'lung_nodule', model_id: 'lung_nodule_pipeline', series_id: st.series[0]!.id })
+    const l1 = t.svc.addLesion(a, st.id, { run_id: run.id, kind: 'lung_nodule', source: 'ai', label: '结节 1', location: 'RUL', metrics: { mean_diameter_mm: 8.2, key_slice_sop_instance_uid: '1.2.3.4', center_lps_mm: [10, 20, 30] } })
+    const l2 = t.svc.addLesion(a, st.id, { run_id: run.id, kind: 'lung_nodule', source: 'ai', label: '结节 2' })
+    const other = t.svc.addLesion(a, st2.id, { kind: 'lung_nodule', source: 'ai', label: '别的检查' })
+    const H = { Authorization: t.tok(t.dr), 'Content-Type': 'application/json' }
+
+    const list = await (await t.app.request(`/api/patients/${p.id}/imaging/studies/${st.id}/lesions`, { headers: H })).json() as Array<{ id: string }>
+    expect(list.map(l => l.id)).toEqual([l1.id, l2.id])
+    const review = (lid: string, body: unknown, ptid = p.id) => t.app.request(`/api/patients/${ptid}/imaging/lesions/${lid}/review`, { method: 'POST', headers: H, body: JSON.stringify(body) })
+    expect((await review(l2.id, { status: 'rejected' })).status).toBe(400)  // 否决须选原因
+    expect(await (await review(l2.id, { status: 'rejected', reason: '血管断面' })).json()).toMatchObject({ status: 'rejected', reject_reason: '血管断面' })
+    const p2 = t.patients.create(a, { sex: 'M', birth_year: 1970 })
+    expect((await review(l1.id, { status: 'confirmed' }, p2.id)).status).toBe(404)  // 路径里的患者对不上
+
+    process.env.VIEWER_HOST = 'viewer.test'
+    process.env.VIEWER_URL = 'http://ohif:8080'
+    try {
+      const url = (await (await t.app.request('/api/imaging/viewer-ticket', { method: 'POST', headers: H, body: JSON.stringify({ study_uid: STUDY }) })).json() as { url: string }).url
+      const cookie = (await t.app.request(url)).headers.get('set-cookie')!.split(';')[0]!
+      const V = 'http://viewer.test'
+      const panel = await (await t.app.request(`${V}/api/viewer/lesions?StudyInstanceUID=${STUDY}`, { headers: { Cookie: cookie } })).json() as { lesions: Array<{ id: string; series_uid: string; metrics: Record<string, unknown> }>; reject_reasons: string[] }
+      expect(panel.lesions.map(l => l.id)).toEqual([l1.id, l2.id])
+      expect(panel.lesions[0]).toMatchObject({ series_uid: SERIES, metrics: { key_slice_sop_instance_uid: '1.2.3.4', center_lps_mm: [10, 20, 30] } })
+      expect(panel.reject_reasons).toContain('血管断面')
+      // 没打开过的检查读不到，也改不了
+      expect((await t.app.request(`${V}/api/viewer/lesions?StudyInstanceUID=${STUDY2}`, { headers: { Cookie: cookie } })).status).toBe(404)
+      const vReview = (lid: string, body: unknown, extra: Record<string, string> = { 'X-Heurion-Viewer': '1' }) =>
+        t.app.request(`${V}/api/viewer/lesions/${lid}/review`, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json', ...extra }, body: JSON.stringify(body) })
+      expect((await vReview(other.id, { status: 'confirmed' })).status).toBe(404)
+      // 没有阅片器请求头（跨站表单）一律拒绝
+      expect((await vReview(l1.id, { status: 'confirmed' }, {})).status).toBe(403)
+      const ok = await (await vReview(l1.id, { status: 'confirmed' })).json() as { status: string }
+      expect(ok.status).toBe('confirmed')
+      expect(t.svc.lesionEvents(a, l1.id).at(-1)).toMatchObject({ action: 'confirm', via: 'user', user_id: t.dr })
+      // 没有 Cookie 不行
+      expect((await t.app.request(`${V}/api/viewer/lesions?StudyInstanceUID=${STUDY}`)).status).toBe(401)
     } finally {
       delete process.env.VIEWER_HOST
       delete process.env.VIEWER_URL

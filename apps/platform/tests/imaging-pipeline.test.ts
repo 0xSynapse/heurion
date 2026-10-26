@@ -92,6 +92,8 @@ describe('分析流水线（T1.4）', () => {
     const lesions = t.svc.listLesions(t.a, t.study.id)
     expect(lesions.map(l => [l.label, l.location, l.status, l.source])).toEqual([['结节 1', 'RUL', 'proposed', 'ai'], ['结节 2', 'LLL', 'proposed', 'ai']])
     expect(lesions[0]!.metrics).toMatchObject({ mean_diameter_mm: 8.2, volume_mm3: 288.4, detection_score: 0.93, key_slice_z: 120, segmentation: 'vista3d' })
+    expect(lesions[0]!.metrics).toMatchObject({ center_lps_mm: [-43.13, 37.73, 108.12], key_slice_sop_instance_uid: '1.2.826.0.1.3680043.8.498.6995' })
+    expect(lesions[1]!.metrics).toMatchObject({ center_lps_mm: null, key_slice_sop_instance_uid: null })
     expect(lesions[1]!.metrics).toMatchObject({ segmentation: 'failed', warnings: ['分割失败，测量取检出框径'] })
   })
 
@@ -125,9 +127,11 @@ describe('分析流水线（T1.4）', () => {
     const now = t.svc.listLesions(t.a, t.study.id)
     expect(now.map(l => l.id)).toContain(first!.id)
     expect(now.map(l => l.id)).not.toContain(second!.id)
-    expect(now.filter(l => l.status === 'proposed')).toHaveLength(2)
+    // 1 号结节医生已确认：第二次分析里同一处的检出不再新增；只新增 2 号
+    expect(now.filter(l => l.status === 'proposed')).toHaveLength(1)
+    expect(now.filter(l => l.label === '结节 1')).toHaveLength(1)
     expect(t.svc.lesionEvents(t.a, second!.id).map(e => e.action)).toEqual(['create', 'supersede'])
-    expect(t.svc.listStudies(t.a, t.p.id)[0]!.runs[0]!.summary).toMatchObject({ superseded: 1 })
+    expect(t.svc.listStudies(t.a, t.p.id)[0]!.runs[0]!.summary).toMatchObject({ superseded: 1, matched_reviewed: 1, found: 1 })
   })
 
   it('多用户排队按用户轮转：一人批量提交不会堵住别人；可查前面还有几个任务', async () => {

@@ -4,7 +4,12 @@ import glob
 import zipfile
 import tempfile
 import numpy as np
-from typing import Dict, Any, Tuple, Optional, Union
+from typing import Dict, Any, List, Tuple, Optional, Union
+
+try:
+    from .volume_geometry import CachedVolume, canonical_affine_from_ras, make_geometry, match_sop_uids
+except (ImportError, ValueError):
+    from volume_geometry import CachedVolume, canonical_affine_from_ras, make_geometry, match_sop_uids
 
 # Clinical CT Windows (Center / Width)
 CT_WINDOWS = {
@@ -200,6 +205,12 @@ def load_nifti(path_or_bytes: Union[str, bytes, io.BytesIO]) -> Tuple[np.ndarray
     """
     Loads a NIfTI volume (.nii or .nii.gz) returning canonical (Z, Y, X) array and (dz, dy, dx) voxel spacing.
     """
+    vol_zyx, spacing_zyx, _ = load_nifti_with_geometry(path_or_bytes)
+    return vol_zyx, spacing_zyx
+
+
+def load_nifti_with_geometry(path_or_bytes: Union[str, bytes, io.BytesIO]) -> Tuple[np.ndarray, Tuple[float, float, float], Dict[str, Any]]:
+    """同 load_nifti，另返回几何（见 volume_geometry：只有仿射，没有 SOP 列表）。"""
     import nibabel as nib
     if isinstance(path_or_bytes, (bytes, io.BytesIO)):
         data_bytes = path_or_bytes if isinstance(path_or_bytes, bytes) else path_or_bytes.getvalue()
@@ -250,7 +261,8 @@ def load_nifti(path_or_bytes: Union[str, bytes, io.BytesIO]) -> Tuple[np.ndarray
         from spatial_canonicalizer import to_canonical_lps
 
     vol_zyx, affine_lps, spacing_zyx = to_canonical_lps(data, nimg.affine)
-    return vol_zyx, spacing_zyx
+    geometry = make_geometry(canonical_affine_from_ras(affine_lps), source="nifti")
+    return vol_zyx, spacing_zyx, geometry
 
 def load_dicom_series(folder_path: str) -> Tuple[np.ndarray, Tuple[float, float, float], Dict[str, Any]]:
     """
@@ -267,9 +279,9 @@ def load_dicom_series(folder_path: str) -> Tuple[np.ndarray, Tuple[float, float,
             if f.lower().endswith((".nii", ".nii.gz", ".gz")):
                 nii_candidates.append(os.path.join(root, f))
     if nii_candidates:
-        vol, spacing = load_nifti(nii_candidates[0])
+        vol, spacing, geometry = load_nifti_with_geometry(nii_candidates[0])
         modality = "MRI" if "mri" in nii_candidates[0].lower() else "CT"
-        return vol, spacing, {"modality": modality, "slices_count": vol.shape[0], "rows": vol.shape[1], "cols": vol.shape[2]}
+        return vol, spacing, {"modality": modality, "slices_count": vol.shape[0], "rows": vol.shape[1], "cols": vol.shape[2], "geometry": geometry}
 
     files = []
     for root, _, filenames in os.walk(folder_path):
@@ -314,9 +326,9 @@ def load_dicom_from_zip(zip_source: Union[str, bytes, io.BytesIO]) -> Tuple[np.n
             continue
         if name.lower().endswith((".nii", ".nii.gz")):
             raw_nii = zf.read(name)
-            vol, spacing = load_nifti(raw_nii)
+            vol, spacing, geometry = load_nifti_with_geometry(raw_nii)
             modality = "MRI" if "mri" in name.lower() else "CT"
-            return vol, spacing, {"modality": modality, "slices_count": vol.shape[0], "rows": vol.shape[1], "cols": vol.shape[2]}
+            return vol, spacing, {"modality": modality, "slices_count": vol.shape[0], "rows": vol.shape[1], "cols": vol.shape[2], "geometry": geometry}
 
     slices = []
     last_err: Optional[str] = None
@@ -422,8 +434,45 @@ def load_dicom_file(file_source: Union[str, bytes, io.BytesIO]) -> Tuple[np.ndar
         "slices_count": vol.shape[0],
         "rows": vol.shape[1],
         "cols": vol.shape[2],
+        "geometry": _single_file_geometry(ds, int(vol.shape[0]), dy, dx, dz),
     }
     return vol, spacing, scrub_dicom_metadata(meta, "ANON-STUDY")
+
+
+def _parse_floats(raw: Any, n: int) -> Optional[List[float]]:
+    try:
+        if raw is not None and len(raw) >= n:
+            return [float(str(v).replace(",", ".")) for v in raw[:n]]
+    except Exception:
+        pass
+    return None
+
+
+def _single_file_geometry(ds: Any, n_frames: int, dy: float, dx: float, dz: float) -> Dict[str, Any]:
+    """
+    单个 DICOM 文件：load_dicom_file 不重排像素，数组为 (帧, 行, 列)。
+    有 IOP/IPP 时仿射为 P = IPP + 列·dx·行方向 + 行·dy·列方向 + 帧·dz·法向量；各帧共用该文件的 SOPInstanceUID。
+    """
+    iop = _parse_floats(getattr(ds, "ImageOrientationPatient", None), 6)
+    ipp = _parse_floats(getattr(ds, "ImagePositionPatient", None), 3)
+    uid = str(getattr(ds, "SOPInstanceUID", "") or "") or None
+    series_uid = str(getattr(ds, "SeriesInstanceUID", "") or "") or None
+    frames = [i + 1 for i in range(n_frames)] if n_frames > 1 else None
+    uids = [uid] * n_frames if uid else None
+    if iop is None or ipp is None:
+        return make_geometry(None, source="dicom_file", sop_instance_uids=uids, frame_numbers=frames,
+                             series_instance_uid=series_uid, note="缺少 ImageOrientationPatient / ImagePositionPatient，无病人坐标")
+    r, c = np.array(iop[:3]), np.array(iop[3:])
+    nrm = np.cross(r, c)
+    nrm = nrm / max(np.linalg.norm(nrm), 1e-12)
+    a = np.eye(4)
+    a[:3, 0] = nrm * dz   # 帧（z 下标）
+    a[:3, 1] = c * dy     # 行（y 下标）
+    a[:3, 2] = r * dx     # 列（x 下标）
+    a[:3, 3] = ipp
+    note = "多帧单文件：帧间距按 SliceThickness 推算" if n_frames > 1 else None
+    return make_geometry(a, source="dicom_file", sop_instance_uids=uids, frame_numbers=frames,
+                         series_instance_uid=series_uid, note=note)
 
 def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, float, float], Dict[str, Any]]:
     """
@@ -567,6 +616,9 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
 
     slice_arrays = []
     ipp_list: List[List[float]] = []
+    frame_uids: List[Optional[str]] = []
+    frame_nums: List[Optional[int]] = []
+    all_have_ipp = True
     frame_idx = 0
     for s in valid_slices:
         arr3d = _safe_read_pixel_array(s)
@@ -591,7 +643,13 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
         except Exception:
             base_ipp = None
 
+        if base_ipp is None:
+            all_have_ipp = False
+        s_uid = str(getattr(s, "SOPInstanceUID", "") or "") or None
+        multi = scaled.shape[0] > 1
         for f_i in range(scaled.shape[0]):
+            frame_uids.append(s_uid)
+            frame_nums.append(f_i + 1 if multi else None)
             if base_ipp is not None:
                 step_vec = slice_normal * (f_i * dz)
                 ipp_list.append([
@@ -627,6 +685,18 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
     vol_xyz = np.transpose(vol, (2, 1, 0))
     vol_lps, aff_lps, spacing_lps = to_canonical_lps(vol_xyz, aff_ras)
 
+    # 几何：规范化体积 (z, y, x) 下标 → DICOM LPS；规范化 z 层 ↔ SOPInstanceUID 按法向投影匹配
+    affine_zyx = canonical_affine_from_ras(aff_lps)
+    series_uid = str(getattr(first, "SeriesInstanceUID", "") or "") or None
+    if all_have_ipp and iop_raw is not None:
+        sop_uids, sop_frames, geo_note = match_sop_uids(
+            affine_zyx, int(vol_lps.shape[0]), ipp_list, frame_uids, frame_nums, slice_normal)
+    else:
+        sop_uids, sop_frames = None, None
+        geo_note = "部分切片缺少 ImagePositionPatient / ImageOrientationPatient：仿射为推算值，不提供 SOPInstanceUID 对应"
+    geometry = make_geometry(affine_zyx, source="dicom_series", sop_instance_uids=sop_uids,
+                             frame_numbers=sop_frames, series_instance_uid=series_uid, note=geo_note)
+
     patient_pos = str(getattr(first, "PatientPosition", "HFS") or "HFS")
     modality_str = str(getattr(first, "Modality", "CT") or "CT")
     orientation_qa = check_anatomical_orientation_sanity(vol_lps, modality=modality_str, patient_position=patient_pos)
@@ -644,7 +714,8 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
         "tube_current": getattr(first, "XRayTubeCurrent", None),
         "window_center": getattr(first, "WindowCenter", None),
         "window_width": getattr(first, "WindowWidth", None),
-        "orientation_qa": orientation_qa
+        "orientation_qa": orientation_qa,
+        "geometry": geometry,
     }
     return vol_lps, spacing_lps, scrub_dicom_metadata(meta, "ANON-STUDY")
 
@@ -655,7 +726,8 @@ def load_volume(source: Union[str, bytes, io.BytesIO], filename: Optional[str] =
     - DICOM directory paths
     - Single DICOM files (.dcm)
     - NIfTI volumes (.nii, .nii.gz)
-    Returns (vol, spacing, modality).
+    Returns (vol, spacing, modality)：实际类型为 volume_geometry.CachedVolume，可按三元组解包，
+    几何（仿射、SOPInstanceUID 列表）在 .geometry 上。
     """
     fn = (filename or (source if isinstance(source, str) else "")).lower()
 
@@ -666,44 +738,44 @@ def load_volume(source: Union[str, bytes, io.BytesIO], filename: Optional[str] =
         if zipfile.is_zipfile(bio):
             bio.seek(0)
             vol, spacing, meta = load_dicom_from_zip(bio)
-            return vol, spacing, meta.get("modality", "CT")
+            return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
 
         bio.seek(0)
         # Check NIfTI (gzip magic \x1f\x8b or .nii in filename)
         header_bytes = bio.read(4)
         bio.seek(0)
         if header_bytes.startswith(b"\x1f\x8b") or fn.endswith((".nii", ".nii.gz", ".gz")):
-            vol, spacing = load_nifti(bio)
+            vol, spacing, geometry = load_nifti_with_geometry(bio)
             modality = "MRI" if "mri" in fn else "CT"
-            return vol, spacing, modality
+            return CachedVolume(vol, spacing, modality, geometry)
 
         # Check DICOM
         bio.seek(0)
         vol, spacing, meta = load_dicom_file(bio)
-        return vol, spacing, meta.get("modality", "CT")
+        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
 
     # 2. File path (string)
     if os.path.isdir(source):
         vol, spacing, meta = load_dicom_series(source)
-        return vol, spacing, meta.get("modality", "CT")
+        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
 
     if zipfile.is_zipfile(source) or fn.endswith(".zip"):
         vol, spacing, meta = load_dicom_from_zip(source)
-        return vol, spacing, meta.get("modality", "CT")
+        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
 
     if fn.endswith((".nii", ".nii.gz", ".gz")):
-        vol, spacing = load_nifti(source)
+        vol, spacing, geometry = load_nifti_with_geometry(source)
         modality = "MRI" if "mri" in fn else "CT"
-        return vol, spacing, modality
+        return CachedVolume(vol, spacing, modality, geometry)
 
     if fn.endswith((".dcm", ".dicom", ".ima")):
         vol, spacing, meta = load_dicom_file(source)
-        return vol, spacing, meta.get("modality", "CT")
+        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
 
     # Fallback attempt as NIfTI then DICOM
     try:
-        vol, spacing = load_nifti(source)
-        return vol, spacing, "MRI" if "mri" in fn else "CT"
+        vol, spacing, geometry = load_nifti_with_geometry(source)
+        return CachedVolume(vol, spacing, "MRI" if "mri" in fn else "CT", geometry)
     except Exception:
         vol, spacing, meta = load_dicom_file(source)
-        return vol, spacing, meta.get("modality", "CT")
+        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))

@@ -195,7 +195,7 @@ export class Accounts {
 
   /**
    * 阅片器（OHIF，独立子域名）用的只读令牌：viewer = 打开阅片器的一次性票据（docs 为可打开的 StudyInstanceUID），
-   * dicomweb = 阅片器子域名上的 Cookie（只在那里的 /api/dicomweb 被接受）。两种都换不到别的接口；
+   * dicomweb = 阅片器子域名上的 Cookie（只在那里的 /api 下被接受）。两种都换不到别的接口；
    * 与登录令牌同样受账户状态与令牌版本约束（停用、改密码、强制下线后失效）。开发用户没有账户记录，只在开发模式下签发。
    */
   viewerToken(userId: string, aud: 'viewer' | 'dicomweb', ttlSeconds: number, docs: '*' | string[] = '*'): string | null {

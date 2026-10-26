@@ -22,6 +22,7 @@ try:
     from .model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
     from .dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from .task_queue import task_manager, TaskStage, batch_process_cohort
+    from .volume_geometry import geometry_of, geometry_summary
     from .resource_gate import MemoryGate, default_budget_gb, task_cost_gb
 except (ImportError, ValueError):
     from device import get_device_info
@@ -30,6 +31,7 @@ except (ImportError, ValueError):
     from model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
     from dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from task_queue import task_manager, TaskStage, batch_process_cohort
+    from volume_geometry import geometry_of, geometry_summary
     from resource_gate import MemoryGate, default_budget_gb, task_cost_gb
 
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
@@ -506,13 +508,15 @@ async def upload_volume(
     or NIfTI / DICOM file and caches the 3D voxel array in memory for MPR slicing.
     """
     if engine.has_volume(volume_id):
-        vol, spacing, modality = engine.volume_cache[volume_id]
+        entry = engine.volume_cache[volume_id]
+        vol, spacing, modality = entry
         return {
             "volume_id": volume_id,
             "cached": True,
             "dimensions": {"z": int(vol.shape[0]), "y": int(vol.shape[1]), "x": int(vol.shape[2])},
             "voxel_spacing_mm": {"dz": round(float(spacing[0]), 3), "dy": round(float(spacing[1]), 3), "dx": round(float(spacing[2]), 3)},
-            "modality": modality
+            "modality": modality,
+            "geometry": geometry_summary(geometry_of(entry)),
         }
 
     try:
@@ -522,12 +526,14 @@ async def upload_volume(
 
     content = await file.read()
     try:
-        vol, spacing, modality = await run_in_threadpool(load_volume, content, file.filename)
+        loaded = await run_in_threadpool(load_volume, content, file.filename)
+        vol, spacing, modality = loaded
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to decode imaging file '{file.filename}': {str(e)}")
 
-    info = engine.register_volume(volume_id, vol, spacing, modality)
+    info = engine.register_volume(volume_id, vol, spacing, modality, geometry=geometry_of(loaded))
     info["cached"] = False
+    info["geometry"] = geometry_summary(geometry_of(loaded))
     return info
 
 @app.get("/api/v1/volume/{volume_id}/status")

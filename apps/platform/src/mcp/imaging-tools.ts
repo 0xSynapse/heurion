@@ -1382,6 +1382,26 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     }
   })
 
+  // 检查的病灶（与界面 GET /api/patients/:ptid/imaging/studies/:stid/lesions 对应）；AI 只读，确认 / 否决是医生的事
+  server.registerTool('imaging_lesions', {
+    description: '列出一个影像检查的病灶（AI 检出与医生补充）：位置（肺叶）、测量（平均径、体积、CT 值、密度类型等）、状态（待确认 / 已确认 / 已否决及原因）与版本。写报告时只能引用已确认的病灶；AI 不能确认或否决。',
+    inputSchema: {
+      patient_id: z.string().describe('患者 ID'),
+      imaging_study_id: z.string().describe('影像检查 ID（imaging_studies 返回的 id）'),
+    },
+  }, async ({ patient_id, imaging_study_id }) => {
+    if (!deps.patients) return fail('patients_unavailable', '患者模块未启用')
+    try {
+      const a = { userId: claims.u, via: 'ai' as const, space: 'work' as const }
+      const svc = new ImagingStudyService(deps.patients, null)
+      if (!svc.listStudies(a, patient_id).some(s => s.id === imaging_study_id)) return fail('not_found', '影像检查不存在')
+      return json(svc.listLesions(a, imaging_study_id).map(l => ({ id: l.id, label: l.label, location: l.location, source: l.source, status: l.status, reject_reason: l.reject_reason, metrics: l.metrics, version: l.version, updated_at: l.updated_at })))
+    } catch (err) {
+      if (err instanceof PatientError) return fail(err.code, err.message)
+      throw err
+    }
+  })
+
   // 对影像检查发起（重新）分析（与界面 POST /api/patients/:ptid/imaging/studies/:stid/analyze 对应）；结果是待医生确认的检出
   server.registerTool('imaging_study_analyze', {
     description: '对患者的一个影像检查发起 AI 分析（目前支持 lung_nodule：肺结节检出、分割与测量）。自动选择合适的薄层序列，在后台排队运行；用 imaging_studies 查看进度与结果。检出结果是「待医生确认」，AI 不能确认或否决。',

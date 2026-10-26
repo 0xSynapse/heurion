@@ -372,6 +372,37 @@ export class ImagingStudyService {
     return rows.map(lesionOf)
   }
 
+  /**
+   * 阅片器（OHIF 结节面板）用：按 StudyInstanceUID 取病灶，附上所在序列的 SeriesInstanceUID，
+   * 以便在阅片器里找到对应的影像（关键层 SOPInstanceUID 与病人坐标由 worker 写在 metrics 里）。
+   */
+  lesionsByStudyUid(a: Actor, studyUid: string): Array<LesionRow & { series_uid: string | null }> {
+    const { studyId, scope: s } = this.resolveStudyUid(a, studyUid)
+    const seriesUid = new Map<string, string | null>()
+    return this.listLesions(a, studyId).map(l => {
+      const run = l.run_id ? s.db.prepare('SELECT series_id FROM imaging_runs WHERE id = ?').get(l.run_id) as { series_id: string | null } | undefined : undefined
+      const sid = run?.series_id ?? null
+      if (sid && !seriesUid.has(sid)) {
+        const row = s.db.prepare('SELECT uid_enc FROM imaging_series WHERE id = ?').get(sid) as { uid_enc: string } | undefined
+        seriesUid.set(sid, row ? s.decrypt(row.uid_enc) : null)
+      }
+      return { ...l, series_uid: sid ? seriesUid.get(sid) ?? null : null }
+    })
+  }
+
+  /** 病灶所属的检查与患者（接口校验路径里的患者 id 用） */
+  lesionOwner(a: Actor, lesionId: string): { studyId: string; patientId: string } {
+    const { s, before } = this.lesionScope(a, lesionId, 'read')
+    return { studyId: before.study_id, patientId: s.patientId }
+  }
+
+  /** 病灶所属检查的 StudyInstanceUID（阅片器校验 Cookie 允许的检查用） */
+  studyUidOfLesion(a: Actor, lesionId: string): string {
+    const { s, before } = this.lesionScope(a, lesionId, 'read')
+    const row = s.db.prepare('SELECT uid_enc FROM imaging_studies WHERE id = ?').get(before.study_id) as { uid_enc: string }
+    return s.decrypt(row.uid_enc)!
+  }
+
   lesionEvents(a: Actor, lesionId: string): Array<{ at: string; user_id: string; via: string; action: string; before: unknown; after: unknown }> {
     const { s } = this.lesionScope(a, lesionId, 'read')
     return (s.db.prepare('SELECT at, user_id, via, action, before, after FROM imaging_lesion_events WHERE lesion_id = ? ORDER BY id').all(lesionId) as Array<Record<string, unknown>>)

@@ -20,6 +20,7 @@ try:
     from .clinical_ai_agent import generate_clinical_ai_report
     from .spatial_canonicalizer import to_canonical_lps
     from .lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, run_lung_nodule_pipeline
+    from .volume_geometry import CachedVolume, geometry_of
     from .resource_gate import VolumeCache, default_cache_bytes
 except (ImportError, ValueError):
     from device import get_optimal_device, get_device_info
@@ -33,6 +34,7 @@ except (ImportError, ValueError):
     from clinical_ai_agent import generate_clinical_ai_report
     from spatial_canonicalizer import to_canonical_lps
     from lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, run_lung_nodule_pipeline
+    from volume_geometry import CachedVolume, geometry_of
     from resource_gate import VolumeCache, default_cache_bytes
 
 
@@ -1678,10 +1680,14 @@ class MONAIEngine:
         volume_id: str,
         volume: np.ndarray,
         spacing: Tuple[float, float, float],
-        modality: str = "CT"
+        modality: str = "CT",
+        geometry: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Registers a loaded 3D medical volume into the engine's memory cache."""
-        self.volume_cache[volume_id] = (volume, spacing, modality)
+        """
+        Registers a loaded 3D medical volume into the engine's memory cache.
+        geometry 见 volume_geometry（仿射与 SOPInstanceUID 列表）；缓存值是可按三元组解包的 CachedVolume。
+        """
+        self.volume_cache[volume_id] = CachedVolume(volume, spacing, modality, geometry)
         z, y, x = volume.shape
         dz, dy, dx = spacing
         return {
@@ -1690,6 +1696,10 @@ class MONAIEngine:
             "voxel_spacing_mm": {"dz": round(float(dz), 3), "dy": round(float(dy), 3), "dx": round(float(dx), 3)},
             "modality": modality
         }
+
+    def get_volume_geometry(self, sample_id_or_path: str) -> Optional[Dict[str, Any]]:
+        """体积的几何（仿射、SOPInstanceUID 列表）；按 load_volume_data 的顺序取，没有几何时返回 None。"""
+        return geometry_of(self.load_volume_data(sample_id_or_path))
 
     def has_volume(self, volume_id: str) -> bool:
         """Checks if a volume is loaded in cache."""
@@ -1723,12 +1733,14 @@ class MONAIEngine:
     ) -> Dict[str, Any]:
         """肺结节模型链（RetinaNet 检出 → VISTA-3D 分割与肺叶定位 → 测量），实现见 lung_nodule_pipeline。"""
         t0 = time.time()
-        vol, spacing, modality = self.load_volume_data(sample_id_or_path)
+        entry = self.load_volume_data(sample_id_or_path)
+        vol, spacing, modality = entry
         load_ms = int(round((time.time() - t0) * 1000))
         res = run_lung_nodule_pipeline(
             self.neural_pipeline, vol, spacing, modality=modality,
             max_nodules=max_nodules, min_score=min_score,
             lobe_mode=lobe_mode, lobe_resample_mm=lobe_resample_mm,
+            geometry=geometry_of(entry),
         )
         res["timings_ms"] = {"load": load_ms, **res.get("timings_ms", {})}
         res["elapsed_ms"] = int(res["elapsed_ms"]) + load_ms
@@ -2275,14 +2287,14 @@ class MONAIEngine:
         for ext in (".nii.gz", ".nii", ".zip", ".gz"):
             p = data_dir / f"{sample_id_or_path}{ext}"
             if p.exists():
-                vol, spacing, modality = load_volume(str(p), filename=f"{sample_id_or_path}{ext}")
-                self.volume_cache[sample_id_or_path] = (vol, spacing, modality)
-                return vol, spacing, modality
+                entry = load_volume(str(p), filename=f"{sample_id_or_path}{ext}")
+                self.volume_cache[sample_id_or_path] = entry
+                return entry
 
         if os.path.exists(sample_id_or_path):
-            vol, spacing, modality = load_volume(sample_id_or_path)
-            self.volume_cache[sample_id_or_path] = (vol, spacing, modality)
-            return vol, spacing, modality
+            entry = load_volume(sample_id_or_path)
+            self.volume_cache[sample_id_or_path] = entry
+            return entry
 
         raise FileNotFoundError(f"找不到影像: '{sample_id_or_path}'（不在内存缓存、样本目录或文件系统中）")
 

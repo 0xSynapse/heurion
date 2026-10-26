@@ -166,6 +166,7 @@ const ALL_PARITY: Record<string, string> = {
   'GET /api/patients/:ptid/imaging/full-report': 'imaging_generate_full_report',
   'GET /api/patients/:ptid/imaging/studies': 'imaging_studies',
   'POST /api/patients/:ptid/imaging/studies/:stid/analyze': 'imaging_study_analyze',
+  'GET /api/patients/:ptid/imaging/studies/:stid/lesions': 'imaging_lesions',
 }
 
 /** AI 发起后要用户在确认卡上确认才执行的动作（不可恢复的删除、权限与安全、以机构身份对外的标识）。 */
@@ -191,6 +192,7 @@ const NOT_FOR_AI: Record<string, string> = {
   'GET /api/dicomweb/studies/:uid': 'OHIF 阅片器读取检查影像（DICOMweb WADO），体素与原件不经 AI',
   'GET /api/dicomweb/studies/:uid/*': 'OHIF 阅片器读取序列、元数据与帧（DICOMweb WADO），体素与原件不经 AI',
   'POST /api/imaging/viewer-ticket': '医生在界面上打开 OHIF 阅片器（子域名）用的一次性票据；AI 不看影像本身',
+  'POST /api/patients/:ptid/imaging/lesions/:lid/review': '确认 / 否决病灶是医生本人的判断（服务层同样拒绝 via=ai）；AI 用 imaging_lesions 读结果',
   // 知家分享原件图片由界面展示
   'GET /api/shares/:shid/assets/:aid': '图片二进制资产由界面渲染展示；AI 读打码后的文字内容（share_file / share_read）',
   // 机构患者认领码绑定的人机分界
