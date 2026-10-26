@@ -4,6 +4,8 @@
 - MemoryGate：每个任务声明预计内存峰值（GB），在跑任务的占用之和不超过预算、并发数不超过上限时才放行；
   严格先来先到（队首放不下时后面的小任务也等），大任务不会被源源不断的小任务饿死；
   单个任务的声明超过整个预算时，等前面的都跑完后独占运行。
+  交互任务（priority=True，医生点选分割，T2.3）排在所有普通任务之前、不占并发名额；
+  普通任务只能用到「预算 − 交互预留（reserve_gb）」，留出的内存保证点选不必等整例分析跑完。
 - VolumeCache：体积缓存按字节数设上限，超出时淘汰最久未用的（及其掩膜缓存）。
 
 预算与各任务的峰值由环境变量配置；默认值来自本机实测（docs/design/IMAGING_STUDIES.md「资源与排队」）。
@@ -25,6 +27,9 @@ GB = 1024 ** 3
 DEFAULT_COSTS_GB = {
     "lung_nodule_pipeline:cpu": 18.0,
     "lung_nodule_pipeline:gpu": 12.0,
+    # 点选分割只在结节周围的局部窗口推理（VISTA-3D 一个窗口 + 局部肺叶）；体积已在缓存中，不重复计入
+    "lung_nodule_point:cpu": 4.0,
+    "lung_nodule_point:gpu": 3.0,
     "default": 6.0,
 }
 
@@ -70,31 +75,46 @@ def default_budget_gb() -> float:
     return round(limit / GB * 0.8, 1) if limit else 16.0
 
 
+def default_interactive_reserve_gb() -> float:
+    """IMAGING_INTERACTIVE_RESERVE_GB；默认 4 GB（点选分割在 CPU 上的预计峰值）"""
+    env = _env_float("IMAGING_INTERACTIVE_RESERVE_GB")
+    return env if env is not None else 4.0
+
+
 class MemoryGate:
-    def __init__(self, budget_gb: float, max_concurrent: int = 2):
+    def __init__(self, budget_gb: float, max_concurrent: int = 2, reserve_gb: float = 0.0):
         self.budget_gb = float(budget_gb)
         self.max_concurrent = max(1, int(max_concurrent))
+        self.reserve_gb = max(0.0, float(reserve_gb))
         self._cond = threading.Condition()
-        self._queue: List[int] = []
-        self._running: Dict[int, Tuple[str, float, float]] = {}
+        self._queue: List[Tuple[int, bool]] = []
+        self._running: Dict[int, Tuple[str, float, float, bool]] = {}
         self._seq = 0
 
-    def _fits(self, cost: float) -> bool:
+    def _fits(self, cost: float, priority: bool) -> bool:
         if not self._running:
             return True  # 空闲时任何任务都能跑（包括超过预算的，独占）
-        used = sum(c for _, c, _ in self._running.values())
-        return len(self._running) < self.max_concurrent and used + cost <= self.budget_gb
+        used = sum(r[1] for r in self._running.values())
+        if priority:
+            return used + cost <= self.budget_gb
+        normal = sum(1 for r in self._running.values() if not r[3])
+        return normal < self.max_concurrent and used + cost <= self.budget_gb - self.reserve_gb
 
     @contextmanager
-    def acquire(self, cost_gb: float, label: str = "task") -> Iterator[None]:
+    def acquire(self, cost_gb: float, label: str = "task", priority: bool = False) -> Iterator[None]:
         with self._cond:
             self._seq += 1
             ticket = self._seq
-            self._queue.append(ticket)
-            while not (self._queue[0] == ticket and self._fits(cost_gb)):
+            if priority:
+                # 插到已排队的交互任务之后、所有普通任务之前
+                at = sum(1 for _, p in self._queue if p)
+                self._queue.insert(at, (ticket, True))
+            else:
+                self._queue.append((ticket, False))
+            while not (self._queue[0][0] == ticket and self._fits(cost_gb, priority)):
                 self._cond.wait()
             self._queue.pop(0)
-            self._running[ticket] = (label, float(cost_gb), time.time())
+            self._running[ticket] = (label, float(cost_gb), time.time(), priority)
             self._cond.notify_all()  # 下一个队首也许也放得下
         try:
             yield
@@ -111,9 +131,9 @@ class MemoryGate:
         with self._cond:
             now = time.time()
             return {
-                "budget_gb": self.budget_gb, "max_concurrent": self.max_concurrent,
-                "in_use_gb": round(sum(c for _, c, _ in self._running.values()), 1),
-                "running": [{"label": l, "cost_gb": c, "seconds": round(now - t, 1)} for l, c, t in self._running.values()],
+                "budget_gb": self.budget_gb, "max_concurrent": self.max_concurrent, "interactive_reserve_gb": self.reserve_gb,
+                "in_use_gb": round(sum(r[1] for r in self._running.values()), 1),
+                "running": [{"label": l, "cost_gb": c, "seconds": round(now - t, 1), "interactive": p} for l, c, t, p in self._running.values()],
                 "queued": len(self._queue),
             }
 

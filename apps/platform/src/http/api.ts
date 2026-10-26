@@ -30,6 +30,7 @@ import { registerImagingRoutes } from './routes/imaging.ts'
 import { registerDicomRoutes, viewerHostOf } from './routes/dicom.ts'
 import { orthancFromEnv, type Orthanc } from '../imaging/orthanc.ts'
 import { sharedPipeline, type ImagingPipeline } from '../imaging/pipeline.ts'
+import { sharedInteractive, type ImagingInteractive } from '../imaging/interactive.ts'
 import { registerMailCalendarRoutes } from './routes/mail-calendar.ts'
 import { registerResearchRoutes } from './routes/research.ts'
 import { registerPublicToolsApi } from './routes/public-tools-api.ts'
@@ -109,6 +110,8 @@ export interface ApiDeps {
   orthanc?: Orthanc | null
   /** 影像分析流水线；不给时有 Orthanc 就用进程内共用的一条，null 表示上传后不自动分析。 */
   imagingPipeline?: ImagingPipeline | null
+  /** 阅片器点选分割（T2.3）；不给时有 Orthanc 就用进程内共用的，null 表示阅片器里不能点选。 */
+  imagingInteractive?: ImagingInteractive | null
   /** 研究入组与研究数据集（不给时由 studies + patients 组装）。 */
   cohort?: CohortService
   /** 用户的 AI 工作区（对话里贴的图片放这里，AI 用 read_image 看）。 */
@@ -893,6 +896,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     audit, me, pt, patientFailure, orthanc,
     viewerTokens: { issue: (u, aud, ttl, docs) => accounts.viewerToken(u, aud, ttl, docs), verify: (t, aud) => accounts.verifyViewerToken(t, aud) },
     pipeline: deps.imagingPipeline !== undefined ? deps.imagingPipeline : deps.patients && orthanc ? sharedPipeline(deps.patients, orthanc) : null,
+    interactive: deps.imagingInteractive !== undefined ? deps.imagingInteractive : deps.patients && orthanc ? sharedInteractive(deps.patients, orthanc) : null,
   })
 
   // —— 知家分享给医生（docs/design/SHARING.md）——

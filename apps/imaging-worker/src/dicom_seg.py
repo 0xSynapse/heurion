@@ -21,6 +21,9 @@ SEG_SERIES_DESCRIPTION = "Heurion AI lung nodules"
 SEG_MANUFACTURER = "Heurion"
 SEG_ALGORITHM_NAME = "lung_nodule_pipeline"
 SEG_SERIES_NUMBER = 9701
+# 医生点选提示下的分割（T2.3）
+SEG_POINT_SERIES_DESCRIPTION = "Heurion lung nodule (point prompt)"
+SEG_POINT_ALGORITHM_NAME = "lung_nodule_point"
 
 
 # highdicom 从源图直接读取的患者 / 检查属性中，DICOM 规定为 Type 2（可为空）的那些：源图缺失时在副本上补空值
@@ -125,9 +128,11 @@ def build_nodule_seg(
     geometry: Optional[Dict[str, Any]],
     source_headers: Optional[Dict[str, Any]],
     model_version: str,
+    semiautomatic: bool = False,
 ) -> Dict[str, Any]:
     """
     segments：[(结节编号, 规范化体素下标 (zz, yy, xx))]，按结节编号顺序；segment_number 从 1 开始依次编号。
+    semiautomatic=True：医生点选提示下的分割（T2.3），SegmentAlgorithmType 记 SEMIAUTOMATIC，序列描述与算法名单独标注。
     返回 {"dicom_base64", "series_instance_uid", "sop_instance_uid", "segments": [{"segment_number", "nodule_index"}],
           "size_bytes", "referenced_instances"}。不能生成时抛 SegUnavailable。
     """
@@ -165,8 +170,9 @@ def build_nodule_seg(
         for uid, (rr, cc) in mapped.items():
             pixel[pos[uid], rr, cc, s_i] = True
 
+    algo_name = SEG_POINT_ALGORITHM_NAME if semiautomatic else SEG_ALGORITHM_NAME
     algo = hd.AlgorithmIdentificationSequence(
-        name=SEG_ALGORITHM_NAME, family=codes.cid7162.ArtificialIntelligence, version=str(model_version),
+        name=algo_name, family=codes.cid7162.ArtificialIntelligence, version=str(model_version),
     )
     descriptions = []
     seg_list = []
@@ -176,7 +182,8 @@ def build_nodule_seg(
             segment_label=f"Nodule {int(nodule_index)}",
             segmented_property_category=codes.SCT.MorphologicallyAbnormalStructure,
             segmented_property_type=codes.SCT.Nodule,
-            algorithm_type=hd.seg.SegmentAlgorithmTypeValues.AUTOMATIC,
+            algorithm_type=(hd.seg.SegmentAlgorithmTypeValues.SEMIAUTOMATIC if semiautomatic
+                            else hd.seg.SegmentAlgorithmTypeValues.AUTOMATIC),
             algorithm_identification=algo,
             anatomic_regions=[codes.SCT.Lung],
             # 推荐显示色（黄色，肺窗上醒目）：OHIF 等阅片器缺这一项会提示并改用默认色
@@ -196,10 +203,10 @@ def build_nodule_seg(
         sop_instance_uid=sop_uid,
         instance_number=1,
         manufacturer=SEG_MANUFACTURER,
-        manufacturer_model_name=SEG_ALGORITHM_NAME,
+        manufacturer_model_name=algo_name,
         software_versions=str(model_version),
         device_serial_number="N/A",
-        series_description=SEG_SERIES_DESCRIPTION,
+        series_description=SEG_POINT_SERIES_DESCRIPTION if semiautomatic else SEG_SERIES_DESCRIPTION,
         content_label="NODULES",
         content_description="Heurion lung nodule segmentation",
     )

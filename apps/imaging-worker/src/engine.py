@@ -19,8 +19,8 @@ try:
     from .clinical_bridge import extract_clinical_features
     from .clinical_ai_agent import generate_clinical_ai_report
     from .spatial_canonicalizer import to_canonical_lps
-    from .lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, run_lung_nodule_pipeline
-    from .volume_geometry import CachedVolume, geometry_of, source_headers_of
+    from .lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, locate_lobe_roi, run_lung_nodule_pipeline, segment_nodule_at_points
+    from .volume_geometry import CachedVolume, geometry_of, lps_to_voxel, source_headers_of
     from .dicom_seg import SegUnavailable, build_nodule_seg
     from .resource_gate import VolumeCache, default_cache_bytes
 except (ImportError, ValueError):
@@ -34,8 +34,8 @@ except (ImportError, ValueError):
     from clinical_bridge import extract_clinical_features
     from clinical_ai_agent import generate_clinical_ai_report
     from spatial_canonicalizer import to_canonical_lps
-    from lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, run_lung_nodule_pipeline
-    from volume_geometry import CachedVolume, geometry_of, source_headers_of
+    from lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, locate_lobe_roi, run_lung_nodule_pipeline, segment_nodule_at_points
+    from volume_geometry import CachedVolume, geometry_of, lps_to_voxel, source_headers_of
     from dicom_seg import SegUnavailable, build_nodule_seg
     from resource_gate import VolumeCache, default_cache_bytes
 
@@ -1071,6 +1071,8 @@ class MonaiNeuralInferencePipeline:
     VISTA3D_SPACING_MM = 1.5
     VISTA3D_HU_MIN = -963.8247715525971
     VISTA3D_HU_MAX = 1053.678477684517
+    # 点提示需换用特殊点标签的类别（monai 1.5 networks/nets/vista3d.py VISTA3D.convert_point_label 的 special_index 默认值）
+    VISTA3D_SPECIAL_CLASSES = (23, 24, 25, 26, 27, 57, 128)
 
     @staticmethod
     def _parse_point_zyx(prompt_point: Optional[Any], shape: Tuple[int, ...]) -> Optional[List[int]]:
@@ -1092,6 +1094,8 @@ class MonaiNeuralInferencePipeline:
         class_id: Optional[int] = None,
         window: int = 96,
         intensity: Optional[Tuple[float, float]] = None,
+        extra_points: Optional[List[Tuple[List[int], int]]] = None,
+        prompt_class: Optional[int] = None,
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         VISTA-3D 局部窗口推理（infer_vista3d 与 infer_vista3d_nodule 共用），按 bundle 约定准备输入：
@@ -1099,6 +1103,10 @@ class MonaiNeuralInferencePipeline:
         - 强度：默认 bundle 的 HU 窗 [-963.82, 1053.68] → [0, 1]；intensity=(lo, hi) 时按给定范围线性归一化；
         - 轴序由规范 LPS (Z, Y, X) 转为 RAS (X 取反, Y 取反, Z)，与训练时的 Orientationd(RAS) 一致；
         - use_point=True 时 center_zyx 作为正点提示；class_id 不为空时作为类别提示（二者可同时给出）；
+        - extra_points = [((z, y, x), 标签)]：追加的点提示（1 = 正点「属于目标」，0 = 负点「不属于」），医生补点修边界用；
+          须落在推理窗口内，否则报 ValueError；
+        - prompt_class：点提示所属的类别（只作用于点提示，不做类别分割）。属于 VISTA-3D 的特殊类别（肿瘤等，
+          MONAI VISTA3D.convert_point_label 的 special_index）时点标签按 MONAI 约定加 2（负 0→2、正 1→3）；
         - 输出 logits 三线性插值回原网格区域后取 > 0（即 sigmoid > 0.5）。
         坐标输入输出都按原网格的 (z, y, x) 体素约定。返回 (与 vol_zyx 同形状的 0/1 掩膜, 窗口信息)。
         """
@@ -1129,12 +1137,25 @@ class MonaiNeuralInferencePipeline:
 
         inp = torch.from_numpy(ras).float()[None, None].to(self.device)
         kwargs: Dict[str, Any] = {}
-        if use_point:
+        prompts: List[Tuple[List[int], int]] = [(p, 1)] if use_point else []
+        for q, label in extra_points or []:
+            q = [int(v) for v in q]
+            if any(not (l <= v < h) for v, l, h in zip(q, lo, hi)):
+                raise ValueError(f"提示点 {q} 不在以 {p} 为中心的推理窗口内（约 {round(half_mm)} mm 见方的一半），离结节太远")
+            prompts.append((q, int(label)))
+        if prompts:
             # 原网格下标 -> 重采样网格下标（align_corners=False 的中心对齐），再换到 RAS 轴
-            qz, qy, qx = [(c - o + 0.5) * d / tgt - 0.5 for c, o, d in zip(p, lo, sp)]
-            kwargs["point_coords"] = torch.tensor([[[ras.shape[0] - 1 - qx, ras.shape[1] - 1 - qy, qz]]],
-                                                  dtype=torch.float32, device=self.device)
-            kwargs["point_labels"] = torch.tensor([[1]], device=self.device)
+            coords = []
+            for q, _ in prompts:
+                qz, qy, qx = [(c - o + 0.5) * d / tgt - 0.5 for c, o, d in zip(q, lo, sp)]
+                coords.append([ras.shape[0] - 1 - qx, ras.shape[1] - 1 - qy, qz])
+            kwargs["point_coords"] = torch.tensor([coords], dtype=torch.float32, device=self.device)
+            labels = [lab for _, lab in prompts]
+            if prompt_class is not None:
+                if int(prompt_class) in self.VISTA3D_SPECIAL_CLASSES:
+                    labels = [lab + 2 for lab in labels]
+                kwargs["prompt_class"] = torch.tensor([[int(prompt_class)]], device=self.device)
+            kwargs["point_labels"] = torch.tensor([labels], device=self.device)
         if class_id is not None:
             cls_vec = torch.tensor([[int(class_id)]], device=self.device)
             kwargs["class_vector"] = cls_vec
@@ -1207,9 +1228,13 @@ class MonaiNeuralInferencePipeline:
         spacing: Tuple[float, float, float],
         prompt_point: List[int],
         window: int = 96,
+        extra_points: Optional[List[Tuple[List[int], int]]] = None,
+        prompt_class: Optional[int] = None,
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        VISTA-3D 单个正点提示分割（肺结节模型链用），预处理见 _vista3d_window_inference（始终用 bundle 的 HU 窗）。
+        VISTA-3D 点提示分割（肺结节模型链用），预处理见 _vista3d_window_inference（始终用 bundle 的 HU 窗）。
+        prompt_point 为正点并决定推理窗口位置；extra_points 为医生追加的正 / 负点（点选补漏、修边界）；
+        prompt_class 为点提示的类别（点选分割用 VISTA3D_LUNG_TUMOR_CLASS）。
         返回与 vol_zyx 同形状的 0/1 掩膜；meta.window_zyx 为推理窗口。meta.mask_touches_window_edge 是对原始输出（含无关连通域）的判断，
         肺结节模型链改用 lung_nodule_pipeline.mask_touches_window 只对挑出的结节判断。
         """
@@ -1217,7 +1242,10 @@ class MonaiNeuralInferencePipeline:
         p = self._parse_point_zyx(prompt_point, vol_zyx.shape)
         if p is None:
             raise ValueError(f"无法解析提示点: {prompt_point}")
-        mask_zyx, info = self._vista3d_window_inference(vol_zyx, spacing, p, use_point=True, window=window)
+        mask_zyx, info = self._vista3d_window_inference(vol_zyx, spacing, p, use_point=True, window=window,
+                                                        extra_points=extra_points, prompt_class=prompt_class)
+        if prompt_class is not None:
+            info["prompt_class"] = int(prompt_class)
         meta = self._base_meta("vista3d", "MONAI VISTA-3D (vista3d132) 单点提示分割，1.5 mm 各向同性 RAS 输入", t0)
         meta.update({"positive_voxels": int(mask_zyx.sum()), **info})
         return mask_zyx, meta
@@ -1779,6 +1807,77 @@ class MONAIEngine:
         res["timings_ms"] = {"load": load_ms, **res.get("timings_ms", {}), "seg": seg_ms}
         res["elapsed_ms"] = int(res["elapsed_ms"]) + load_ms + seg_ms
         return res
+
+    def segment_nodule_at_points(
+        self,
+        volume_id: str,
+        points_lps: List[Dict[str, Any]],
+        seg: bool = True,
+        lobe: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        医生点选分割结节（T2.3），实现见 lung_nodule_pipeline.segment_nodule_at_points。
+        points_lps = [{"lps_mm": [X, Y, Z], "positive": bool}]：阅片器给的 DICOM 病人坐标，经体积几何换算到体素；
+        体积必须带 DICOM 几何（平台上传的 DICOM 序列都有）。seg=True 时把结节写成只有一个 segment 的 DICOM SEG。
+        """
+        t0 = time.time()
+        entry = self.load_volume_data(volume_id)
+        vol, spacing, _ = entry
+        geometry = geometry_of(entry)
+        if not geometry or geometry.get("affine_zyx_to_lps") is None:
+            raise ValueError("体积没有 DICOM 病人坐标几何，不能按阅片器坐标点选")
+        points = []
+        for q in points_lps or []:
+            lps = q.get("lps_mm")
+            if not isinstance(lps, (list, tuple)) or len(lps) != 3:
+                raise ValueError(f"提示点坐标须为 [X, Y, Z]（mm）：{lps}")
+            zyx = lps_to_voxel(geometry, lps)
+            if any(not (0 <= v < n) for v, n in zip(zyx, vol.shape)):
+                raise ValueError(f"提示点 {list(lps)} 不在所分析的序列范围内（换算到体素 {zyx}）")
+            points.append({"zyx": zyx, "positive": bool(q.get("positive", True))})
+        load_ms = int(round((time.time() - t0) * 1000))
+        res = segment_nodule_at_points(self.neural_pipeline, vol, spacing, points, geometry=geometry, lobe=lobe)
+        nodule = res.get("nodule")
+        vox = nodule.pop("_mask_vox", None) if nodule else None
+        res["seg"] = None
+        seg_ms = 0
+        if seg and vox is not None:
+            t1 = time.time()
+            try:
+                seg_out = build_nodule_seg([(1, vox)], geometry, source_headers_of(entry), res["model_version"], semiautomatic=True)
+                res["seg"] = seg_out
+                nodule["seg_segment_number"] = seg_out["segments"][0]["segment_number"]
+            except Exception as exc:
+                # SegUnavailable 或源图头缺少 highdicom 要求的属性：结节结果照常返回，只是没有轮廓
+                nodule["warnings"].append(f"未生成 DICOM SEG：{exc}")
+            seg_ms = int(round((time.time() - t1) * 1000))
+        res["timings_ms"] = {"load": load_ms, **res.get("timings_ms", {}), "seg": seg_ms}
+        res["elapsed_ms"] = int(res["elapsed_ms"]) + load_ms + seg_ms
+        return res
+
+    def locate_lobe_at(self, volume_id: str, lps_mm: List[float], radius_mm: float = 0.0) -> Dict[str, Any]:
+        """
+        病人坐标处属于哪个肺叶：在该点周围局部做 VISTA-3D 肺叶分割（lung_nodule_pipeline.locate_lobe_roi）。
+        点选分割先返回轮廓与测量，平台随后用这一步补上肺叶（局部肺叶分割约占点选总耗时的一半）。
+        """
+        t0 = time.time()
+        entry = self.load_volume_data(volume_id)
+        vol, spacing, _ = entry
+        geometry = geometry_of(entry)
+        if not geometry or geometry.get("affine_zyx_to_lps") is None:
+            raise ValueError("体积没有 DICOM 病人坐标几何，不能按病人坐标定位")
+        if not isinstance(lps_mm, (list, tuple)) or len(lps_mm) != 3:
+            raise ValueError(f"坐标须为 [X, Y, Z]（mm）：{lps_mm}")
+        zyx = lps_to_voxel(geometry, lps_mm)
+        if any(not (0 <= v < n) for v, n in zip(zyx, vol.shape)):
+            raise ValueError(f"坐标 {list(lps_mm)} 不在所分析的序列范围内")
+        _, status = self.neural_pipeline._verified_weights("vista3d")
+        lobe, note = locate_lobe_roi(self.neural_pipeline, vol, spacing, zyx, max(0.0, float(radius_mm)))
+        return {
+            "lobe": lobe, "note": note, "center_vox_zyx": zyx,
+            "model_version": f"vista3d@{str(status.get('version') or 'unknown').lstrip('v')}",
+            "elapsed_ms": int(round((time.time() - t0) * 1000)),
+        }
 
     def analyze_file(
         self,

@@ -26,8 +26,8 @@ Orthanc（DICOM 原件，DICOMweb 插件；不对外暴露）
 | --- | --- |
 | `imaging_studies` | 检查：患者、StudyInstanceUID（加密 + 机构密钥 HMAC）、检查日期、模态、描述与检查号（加密）、来源（upload / pacs） |
 | `imaging_series` | 序列：SeriesInstanceUID（加密 + HMAC）、模态、部位、层厚、重建核、层数 |
-| `imaging_runs` | AI 运行：任务、模型与版本、状态、`visibility`（visible / shadow） |
-| `imaging_lesions` | 病灶：来源（ai / manual）、状态（proposed / confirmed / rejected）、否决原因、位置、测量（JSON）、分割引用、版本号 |
+| `imaging_runs` | AI 运行：任务、模型与版本、状态、`visibility`（visible / shadow）。阅片器点选分割每次也记一条（任务 `lung_nodule_point`），不列进检查的分析状态 |
+| `imaging_lesions` | 病灶：来源（ai / manual）、状态（proposed / confirmed / rejected / superseded）、否决原因、位置、测量（JSON）、分割引用、版本号 |
 | `imaging_lesion_events` | 病灶的每次改动：谁、经人还是 AI、动作、改前、改后 |
 
 - DICOM UID 和检查号属于可识别信息，只存密文。按 UID 查找和去重用机构密钥下的 HMAC。
@@ -41,8 +41,9 @@ Orthanc（DICOM 原件，DICOMweb 插件；不对外暴露）
 | 上传 DICOM | 可以 | 不可以（原件不经 AI） |
 | 读检查列表 | 可以，含 UID（OHIF 打开检查用） | `imaging_studies`，不含 UID、检查号 |
 | DICOMweb 读影像 | OHIF 经代理读取 | 不可以（体素数据不进模型上下文） |
-| 新增病灶 | 补充的病灶直接为已确认 | 只能新增待确认的病灶 |
+| 新增病灶 | 补充的病灶直接为已确认（阅片器里点选） | 只能新增待确认的病灶 |
 | 确认 / 否决病灶 | 可以 | 不可以 |
+| 修边界、撤销补充的病灶 | 可以（阅片器里） | 不可以 |
 | 影子模式的结果 | 只给内部评估 | 不可见 |
 
 REST 与 MCP 的对应关系登记在 `tests/parity.test.ts`。
@@ -105,6 +106,60 @@ OHIF 扩展 `@heurion/extension-nodules`（`deploy/viewer/heurion-nodules/`）�
   - 重新分析时 2 个已审核结节没有重复新增。
   - 随访 CT：点 1 号结节后跳到 `I:222`，结节外画出黄色描边，没有缺显示色的提示。
 
+## 点选补漏与修边界（T2.3）
+
+医生在阅片器里点结节，VISTA-3D 按点分割、测量，生成轮廓。平台 `src/imaging/interactive.ts`，worker `lung_nodule_pipeline.segment_nodule_at_points`。
+
+- 面板操作：
+  - 「点选添加结节」后在影像上点漏掉的结节，新建医生补充的病灶（直接为已确认，编号「医生补充 N」）。
+  - 结节上的「修正边界」：「补入」点属于结节的部分，「排除」点不属于的部分；每点一次重新分割；可「撤销上一点」。
+  - 医生补充的结节可「撤销」（标为 superseded，不再列出）；AI 检出的结节仍用否决。
+  - Esc 退出点选。单击取 cornerstone3D 的 `CORNERSTONE_TOOLS_MOUSE_CLICK` 事件（按下后未拖动即松开），拖动调窗不受影响。
+- 接口（阅片器子域名，Cookie 允许的检查，必须带 `X-Heurion-Viewer: 1`）：
+  - `POST /api/viewer/series/prepare {study_uid, series_uid}`：面板打开后预加载当前 CT 序列。
+  - `POST /api/viewer/lesions/point {study_uid, series_uid, points}`：补漏，201。
+  - `POST /api/viewer/lesions/:id/refine {points, replace?}`：修边界。
+  - `POST /api/viewer/lesions/:id/withdraw`：撤销医生补充的病灶。
+  - `points` 为病人坐标 `[{lps_mm: [X, Y, Z], positive}]`，最多 20 个。主站没有这些接口，AI 也不能调用（服务层拒绝 `via = ai`）。
+- 分割：
+  - 第一个正点决定 VISTA-3D 推理窗口（与模型链相同，约 144 mm 见方），其余正 / 负点一并作为提示。
+  - 点提示的类别为「肺肿瘤」（VISTA-3D 全局类别 23），按 MONAI 约定点标签加 2。
+  - 只保留包含正点的连通域；正点落在边缘外 3 mm 内时吸附到最近的连通域。
+  - 修边界时用该结节此前的全部点加新点；AI 结节没修过时以其中心为第一个正点。
+- 选「肺肿瘤」类别的依据（2026-10-26 本机实测）：
+  - LIDC 样本标注结节的 Dice：中心点 0.82、偏心点 0.85；纯点提示为 0.80 / 0.80。
+  - 点在肺实质、血管上时，纯点提示沿肺实质扩散成 40~80 万体素的大块；加类别后多数只有几千体素，个别血管点仍有 19 万体素。
+  - 只有一个标注结节，证据有限，以后用 T1.7 的评估集复核。
+- 结果检查：
+  - 点击处没有分割到结构：422 并写明原因，不建病灶。
+  - 点到列表里已有（待确认 / 已确认）的结节：409「这里已有「结节 N」」，不重复添加、不存轮廓；否决过的不算，医生可以补回。
+  - 长径超过 30 mm 时提示可能沿血管或胸膜扩散，请加排除点核对。
+- 轮廓：每次点选生成只有一个 segment 的 DICOM SEG（SegmentAlgorithmType = SEMIAUTOMATIC，序列描述 `Heurion lung nodule (point prompt)`），存回 Orthanc。
+  - 面板不刷新页面即加载：清掉 OHIF 按检查缓存的元数据请求，再按序列取。
+  - 换下的旧 segment 在视口里隐藏。
+  - 修边界后，点选产生的中间轮廓没有病灶再引用时从 Orthanc 删除，阅片器里一并移除。AI 分析的原始 SEG 保留，作为 AI 原值的追溯依据和「AI 轮廓 / 医生修正」的配对数据（W7）。
+- 留痕：
+  - 每次点选记一条运行：模型版本、所在序列、点数、负点数、耗时、是否分割到；未分割到或重复点选也记。
+  - 病灶测量里存 `prompt_points`、`point_run_id`；修边界版本号加一，事件 `edit`；撤销记 `withdraw`。
+- 肺叶：局部肺叶分割约占点选总耗时的一半，所以点选先返回轮廓与测量（`lobe_status = pending`，面板显示「肺叶定位中…」），平台在后台调 `POST /api/v1/pipeline/lung-nodule/lobe` 补上。
+  - 只在病灶版本未变时写入（期间又修了边界就以新的为准），不加版本号，事件 `locate`。
+  - 结节周围没有肺叶体素或失败时写明原因，在面板「详情」里显示。
+- 序列缓存：worker 里以 `series_<序列行 id>` 缓存；同一序列的并发预加载共用一次上传。worker 重启或按内存淘汰后，点选收到 404 时重新上传再试一次。
+- 资源：点选与补肺叶走 worker 推理闸门的交互通道（见「资源与排队」），不排在整例分析后面。
+- 耗时（2026-10-26 本机，随访 CT 512 × 512 × 269）：
+
+  | 设备 | 点选（worker） | 浏览器里点击到新结节出现 | 修边界一次（接口往返） | 后台补肺叶 |
+  | --- | --- | --- | --- | --- |
+  | GPU（MPS，M4 Pro） | 1.15~1.2 s（VISTA-3D 1.1 s、测量 0.02 s、SEG 0.01 s） | 1.6~1.7 s | 1.2~2.4 s | 2.4 s |
+  | CPU（6 线程，M4 Pro） | 4.9~5.5 s（首次加载模型另加 1.4 s） | — | — | 20 s |
+
+  PRD 目标 ≤ 1 秒要靠 CUDA GPU（T0.5）。测量原先对整卷做连通域（约 0.7 s），改为只在推理窗口和结节周围算。把推理窗口缩到 96 mm 以下能快一些，但同一结节体积随之变化（2188 → 1931 → 1530 mm³），没有采用。
+- 2026-10-26 浏览器验证（无头 Chromium，随访 CT）：
+  - 结节 1 加排除点后平均径 15.9 → 15.4 mm，撤销上一点后回到 15.9 mm，黄色轮廓随之更新。
+  - 点已有的结节 1，提示重复，不建病灶。
+  - 否决低分候选 C5 后在该处点选补回，新结节 1.7 s 出现在列表；稍后肺叶显示「未定」，详情写明周围 10.6 mm 内没有肺叶体素。该候选其实在胸骨上窝软组织里，并非结节，这里只验证流程。
+  - 撤销后列表恢复，阅片器里的 SEG 序列与 Orthanc 一致。
+
 ## 资源与排队
 
 多人同时上传时只排队，不撑爆内存。分两层：
@@ -113,6 +168,7 @@ OHIF 扩展 `@heurion/extension-nodules`（`deploy/viewer/heurion-nodules/`）�
 | --- | --- | --- |
 | 平台派发 | 同时派发给 worker 的分析数有上限；按用户轮转，一人批量上传不会堵住别人；界面显示「前面还有 N 个任务」 | `IMAGING_PIPELINE_CONCURRENCY`（默认 1） |
 | worker 推理闸门 | 每个任务按预计峰值占用内存预算，总和不超过预算才放行；严格先来先到；单个超预算的任务等前面跑完后独占。所有重型推理（含后台任务 `/tasks/analyze`）都经这道闸门 | `IMAGING_MEMORY_BUDGET_GB`（默认容器上限的 80%）、`IMAGING_CONCURRENCY`（默认 2）、`IMAGING_COST_<任务>_GB` |
+| 交互通道 | 阅片器点选分割与补肺叶排在所有普通任务之前、不占并发名额；普通任务只能用到「预算 − 交互预留」，留出的内存保证点选不必等整例分析跑完 | `IMAGING_INTERACTIVE_RESERVE_GB`（默认 4）；点选登记 CPU 4 GB / GPU 3 GB |
 | worker 体积缓存 | 按字节设上限，超出时淘汰最久未用的体积及其掩膜 | `IMAGING_VOLUME_CACHE_GB`（默认 6） |
 
 肺结节模型链在本机（Apple M4 Pro，14 核，24 GB）上用 LIDC 样本实测，结果见下表。按 CPU 峰值把这条模型链登记为 18 GB、GPU 登记为 12 GB；其它推理默认登记 6 GB。
@@ -123,7 +179,7 @@ OHIF 扩展 `@heurion/extension-nodules`（`deploy/viewer/heurion-nodules/`）�
 | CPU，全肺肺叶 | 382 s | RSS 17.3 GB |
 | CPU，不做肺叶 | 198 s | RSS 12.6 GB |
 
-生产机 64 GB：worker 容器上限 32 GB、预算 26 GB，所以 CPU 上同时只跑一例肺结节分析。worker 的 `/health` 返回闸门与缓存的实时状态。
+生产机 64 GB：worker 容器上限 32 GB、预算 26 GB、交互预留 4 GB，所以 CPU 上同时只跑一例肺结节分析（18 GB ≤ 22 GB），同时还能做点选。worker 的 `/health` 返回闸门与缓存的实时状态。
 
 ## 待办
 

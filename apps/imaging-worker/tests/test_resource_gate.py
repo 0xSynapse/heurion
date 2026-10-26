@@ -16,13 +16,13 @@ from resource_gate import MemoryGate, VolumeCache, task_cost_gb  # noqa: E402
 
 
 def run_jobs(gate, jobs, hold=0.15):
-    """jobs: [(name, cost, start_delay)]；返回每个任务开始与结束的时刻"""
+    """jobs: [(name, cost, start_delay[, priority])]；返回每个任务开始与结束的时刻"""
     log = {}
     lock = threading.Lock()
 
-    def work(name, cost, delay):
+    def work(name, cost, delay, priority=False):
         time.sleep(delay)
-        with gate.acquire(cost, name):
+        with gate.acquire(cost, name, priority=priority):
             with lock:
                 log[name] = [time.monotonic(), None]
             time.sleep(hold)
@@ -71,6 +71,25 @@ def test_max_concurrent():
     gate = MemoryGate(budget_gb=100, max_concurrent=1)
     log = run_jobs(gate, [("a", 1, 0), ("b", 1, 0.02)])
     assert not overlap(log["a"], log["b"])
+
+
+def test_interactive_task_does_not_wait_for_pipeline():
+    # CPU 生产配置：预算 26 GB、预留 4 GB。整例分析（18 GB）在跑、另一例在排队时，点选分割（4 GB）立即放行
+    gate = MemoryGate(budget_gb=26, max_concurrent=2, reserve_gb=4)
+    log = run_jobs(gate, [("p1", 18, 0), ("p2", 18, 0.02), ("click", 4, 0.04, True)])
+    assert overlap(log["p1"], log["click"])
+    assert log["click"][0] < log["p2"][0]
+
+
+def test_reserve_keeps_room_for_interactive():
+    # 两个普通任务合计会吃进预留：第二个要等（预留只给交互任务用）
+    gate = MemoryGate(budget_gb=26, max_concurrent=3, reserve_gb=4)
+    log = run_jobs(gate, [("a", 12, 0), ("b", 12, 0.02)])
+    assert not overlap(log["a"], log["b"])
+    # 交互任务不占并发名额
+    gate = MemoryGate(budget_gb=100, max_concurrent=1, reserve_gb=4)
+    log = run_jobs(gate, [("a", 1, 0), ("click", 1, 0.02, True)])
+    assert overlap(log["a"], log["click"])
 
 
 def test_shared_slot_is_thread_safe_and_status():

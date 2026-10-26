@@ -23,7 +23,7 @@ try:
     from .dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from .task_queue import task_manager, TaskStage, batch_process_cohort
     from .volume_geometry import geometry_of, geometry_summary, source_headers_of
-    from .resource_gate import MemoryGate, default_budget_gb, task_cost_gb
+    from .resource_gate import MemoryGate, default_budget_gb, default_interactive_reserve_gb, task_cost_gb
 except (ImportError, ValueError):
     from device import get_device_info
     from engine import MONAIEngine, generate_synthetic_ct_volume, ModelUnavailableError
@@ -32,7 +32,7 @@ except (ImportError, ValueError):
     from dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from task_queue import task_manager, TaskStage, batch_process_cohort
     from volume_geometry import geometry_of, geometry_summary, source_headers_of
-    from resource_gate import MemoryGate, default_budget_gb, task_cost_gb
+    from resource_gate import MemoryGate, default_budget_gb, default_interactive_reserve_gb, task_cost_gb
 
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -63,7 +63,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 # 并发保护：重型推理按内存预算排队（resource_gate.MemoryGate），防止多用户同时分析时撑爆内存被 OOM Kill。
 # 预算 IMAGING_MEMORY_BUDGET_GB（默认取容器内存上限的 80%），同时运行的任务数上限 IMAGING_CONCURRENCY（默认 2）。
 # 普通推理按默认峰值占位；肺结节模型链按实测峰值占位（CPU 18 GB、GPU 12 GB，可用 IMAGING_COST_*_GB 调）。
-INFERENCE_GATE = MemoryGate(default_budget_gb(), int(os.environ.get("IMAGING_CONCURRENCY", "2")))
+INFERENCE_GATE = MemoryGate(default_budget_gb(), int(os.environ.get("IMAGING_CONCURRENCY", "2")), default_interactive_reserve_gb())
 INFERENCE_SEMAPHORE = INFERENCE_GATE.slot(task_cost_gb("default"), "inference")
 
 
@@ -598,6 +598,52 @@ def run_lung_nodule_pipeline_endpoint(req: LungNodulePipelineRequest = Body(...)
             )
     except Exception as e:
         raise_http(e, "肺结节模型链运行失败")
+
+
+class PromptPointLps(BaseModel):
+    # DICOM 病人坐标 [X, Y, Z]（LPS，mm），阅片器点击处
+    lps_mm: List[float]
+    positive: bool = True
+
+
+class LungNodulePointRequest(BaseModel):
+    # 必须是平台经 /api/v1/volume/upload 上传的 DICOM 序列（需要病人坐标几何）
+    volume_id: str
+    points: List[PromptPointLps]
+    seg: bool = True
+    lobe: bool = True
+
+
+@app.post("/api/v1/pipeline/lung-nodule/point")
+def run_lung_nodule_point_endpoint(req: LungNodulePointRequest = Body(...)):
+    """
+    医生点选分割一个结节（T2.3：补上漏检、修正边界）：VISTA-3D 正 / 负点提示 → 只保留包含正点的连通域 → 测量 → 局部肺叶定位，
+    seg=True 时附单 segment 的 DICOM SEG。点击处没有分割到结构时 found = false 并写明原因（HTTP 200）。
+    """
+    try:
+        with INFERENCE_GATE.acquire(task_cost_gb("lung_nodule_point", engine.device.type), "lung_nodule_point", priority=True):
+            return engine.segment_nodule_at_points(
+                req.volume_id, [p.model_dump() for p in req.points], seg=req.seg, lobe=req.lobe,
+            )
+    except Exception as e:
+        raise_http(e, "点选分割失败")
+
+
+class LobeAtRequest(BaseModel):
+    volume_id: str
+    lps_mm: List[float]
+    # 结节半径（mm）：中心体素不在肺叶内时，在半径 + 5 mm 内找肺叶
+    radius_mm: float = 0.0
+
+
+@app.post("/api/v1/pipeline/lung-nodule/lobe")
+def locate_lobe_endpoint(req: LobeAtRequest = Body(...)):
+    """病人坐标处的肺叶（结节周围局部 VISTA-3D 肺叶分割）；点选分割之后由平台调用，补上结节的肺叶。"""
+    try:
+        with INFERENCE_GATE.acquire(task_cost_gb("lung_nodule_point", engine.device.type), "lung_nodule_lobe", priority=True):
+            return engine.locate_lobe_at(req.volume_id, req.lps_mm, req.radius_mm)
+    except Exception as e:
+        raise_http(e, "肺叶定位失败")
 
 
 @app.post("/api/v1/mpr/info")

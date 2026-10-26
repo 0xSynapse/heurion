@@ -4,6 +4,7 @@ import type { Actor, PatientService } from '../../tenancy/patients.ts'
 import type { Orthanc } from '../../imaging/orthanc.ts'
 import { ImagingError, ImagingStudyService, type StudyView } from '../../imaging/studies.ts'
 import { TASKS, type EnqueueResult, type ImagingPipeline, type ImagingTask } from '../../imaging/pipeline.ts'
+import { parsePoints, type ImagingInteractive } from '../../imaging/interactive.ts'
 
 export interface DicomRouteContext {
   audit: (c: Context, action: string, e?: { actor?: string | null; target?: string | null; detail?: string | null; status?: number }) => void
@@ -14,6 +15,8 @@ export interface DicomRouteContext {
   orthanc: Orthanc | null
   /** 分析流水线；null 时上传后不自动分析 */
   pipeline: ImagingPipeline | null
+  /** 阅片器点选分割（T2.3）；null 时阅片器里不能点选 */
+  interactive: ImagingInteractive | null
   /** 阅片器令牌（auth/accounts.ts）：viewer = 一次性票据，dicomweb = 阅片器子域名上的 Cookie */
   viewerTokens: {
     issue: (userId: string, aud: 'viewer' | 'dicomweb', ttlSeconds: number, docs: '*' | string[]) => string | null
@@ -258,6 +261,76 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
       return c.json(svc(c as never).reviewLesion(v.a, lid, await reviewBody(c)))
     } catch (err) { return fail(c, err) }
   })
+
+  // —— 点选补漏与修边界（T2.3）：与确认 / 否决相同的 Cookie、检查范围与自定义请求头要求 ——
+
+  /** 阅片器写操作的公共校验：Cookie、请求头、点选服务已启用 */
+  const viewerWrite = (c: Context): { a: Actor; allowed: string[]; it: ImagingInteractive } | Response => {
+    const v = viewerActor(c)
+    if (!v) return unauthorized(c)
+    if (c.req.header('x-heurion-viewer') !== '1') return c.json({ error: '缺少阅片器请求头', code: 'forbidden' }, 403)
+    if (!ctx.interactive) return c.json({ error: '影像分析服务未启用，不能点选分割', code: 'interactive_off' }, 503)
+    return { ...v, it: ctx.interactive }
+  }
+  /** 以阅片器面板的形状返回病灶（附序列 UID 与 SEG 位置） */
+  const viewerLesion = (c: Context, a: Actor, studyUid: string, lesionId: string) =>
+    svc(c as never).lesionsByStudyUid(a, studyUid).find(l => l.id === lesionId) ?? null
+  const studyUidIn = (allowed: string[], raw: unknown) => {
+    const uid = typeof raw === 'string' ? raw : ''
+    if (!UID.test(uid) || !allowed.includes(uid)) throw new ImagingError('not_found', '影像检查不存在', 404)
+    return uid
+  }
+  const seriesUidOf = (raw: unknown) => {
+    const uid = typeof raw === 'string' ? raw : ''
+    if (!UID.test(uid)) throw new ImagingError('bad_uid', 'SeriesInstanceUID 格式不对')
+    return uid
+  }
+
+  /** 预加载当前序列到影像服务（面板打开时调用），第一次点选不必等上传 */
+  surface.post('/api/viewer/series/prepare', async c => {
+    const w = viewerWrite(c)
+    if (w instanceof Response) return w
+    try {
+      const b = await c.req.json().catch(() => ({})) as { study_uid?: unknown; series_uid?: unknown }
+      return c.json(await w.it.prepare(w.a, studyUidIn(w.allowed, b.study_uid), seriesUidOf(b.series_uid)))
+    } catch (err) { return fail(c, err) }
+  })
+  /** 补漏：在点击处分割一个结节，作为医生补充的病灶入库（点击处没有结构时 422 + 原因） */
+  surface.post('/api/viewer/lesions/point', async c => {
+    const w = viewerWrite(c)
+    if (w instanceof Response) return w
+    try {
+      const b = await c.req.json().catch(() => ({})) as { study_uid?: unknown; series_uid?: unknown; points?: unknown }
+      const studyUid = studyUidIn(w.allowed, b.study_uid)
+      const l = await w.it.addAtPoints(w.a, studyUid, seriesUidOf(b.series_uid), parsePoints(b.points))
+      return c.json(viewerLesion(c, w.a, studyUid, l.id), 201)
+    } catch (err) { return fail(c, err) }
+  })
+  /** 修边界：追加正 / 负点（replace = true 时以给出的点为全部提示点）重新分割 */
+  surface.post('/api/viewer/lesions/:lid/refine', async c => {
+    const w = viewerWrite(c)
+    if (w instanceof Response) return w
+    try {
+      const lid = c.req.param('lid')
+      const studyUid = svc(c as never).studyUidOfLesion(w.a, lid)
+      if (!w.allowed.includes(studyUid)) throw new ImagingError('not_found', '病灶不存在', 404)
+      const b = await c.req.json().catch(() => ({})) as { points?: unknown; replace?: unknown }
+      const l = await w.it.refine(w.a, lid, parsePoints(b.points), b.replace === true)
+      return c.json(viewerLesion(c, w.a, studyUid, l.id))
+    } catch (err) { return fail(c, err) }
+  })
+  /** 撤销医生补充的病灶（AI 检出的请否决） */
+  surface.post('/api/viewer/lesions/:lid/withdraw', async c => {
+    const w = viewerWrite(c)
+    if (w instanceof Response) return w
+    try {
+      const lid = c.req.param('lid')
+      if (!w.allowed.includes(svc(c as never).studyUidOfLesion(w.a, lid))) throw new ImagingError('not_found', '病灶不存在', 404)
+      const l = await w.it.withdraw(w.a, lid)
+      return c.json({ id: l.id, status: l.status })
+    } catch (err) { return fail(c, err) }
+  })
+
   // 主站的其它接口在阅片器子域名上一律不存在
   surface.all('/api/*', c => c.json({ error: '不存在', code: 'not_found' }, 404))
   /** 其余请求都是 OHIF 的页面与静态文件（不含患者数据），转发到阅片器服务 */

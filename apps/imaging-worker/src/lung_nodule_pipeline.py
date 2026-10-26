@@ -50,6 +50,19 @@ OVERSEGMENTATION_RATIO = 2.0
 
 ALLOWED_NODULE_TYPES = ("solid", "part_solid", "pure_ggo")
 
+# 点选分割：正点落在分割外时，向外找最近连通域的距离上限（mm）
+POINT_SNAP_MM = 3.0
+# 结节的定义上限：长径超过 30 mm 按惯例称肿块，提示医生核对分割
+NODULE_MAX_DIAMETER_MM = 30.0
+POINT_PIPELINE_ID = "lung_nodule_point"
+# 点选分割的 VISTA-3D 点提示类别："lung tumor"（全局类别号 23，属特殊类别，点标签按 MONAI 约定 +2）。
+# 2026-10-26 实测：LIDC 样本标注结节 Dice 0.82（中心点）/ 0.85（偏心点），纯点提示为 0.80 / 0.80；
+# 点在肺实质、血管上时纯点提示会沿肺实质扩散成 40~80 万体素的大块，加类别后多数只有几千体素。
+VISTA3D_LUNG_TUMOR_CLASS = 23
+# 测量只在分割外接框外扩 10 mm 的局部算（整卷算一次约 0.9 s）；外扩要够大：recist 的血管截面判定按所给体积的
+# 平均 CT 值判断是否在肺内，局部太小时大的实性结节会占满，平均值偏高
+MEASURE_PAD_MM = 10.0
+
 
 # ---------------------------------------------------------------------------
 # 基础几何
@@ -154,7 +167,11 @@ def mask_touches_window(mask: np.ndarray, window_zyx: Any, dims: Tuple[int, ...]
     if not mask.any():
         return False
     lo, hi = window_zyx
-    idx = np.nonzero(mask)
+    return indices_touch_window(np.nonzero(mask), lo, hi, dims)
+
+
+def indices_touch_window(idx: Tuple[np.ndarray, ...], lo: List[int], hi: List[int], dims: Tuple[int, ...]) -> bool:
+    """mask_touches_window 的下标版：idx 为掩码体素的 (zz, yy, xx) 下标（非空）。"""
     for a in range(3):
         if (lo[a] > 0 and int(idx[a].min()) <= lo[a]) or (hi[a] < dims[a] and int(idx[a].max()) >= hi[a] - 1):
             return True
@@ -175,6 +192,44 @@ def select_components_overlapping_box(mask: np.ndarray, box: List[int]) -> np.nd
     if inside.size == 0:
         return np.zeros(binary.shape, dtype=np.uint8)
     return np.isin(labeled, inside).astype(np.uint8)
+
+
+def select_components_at_points(
+    mask: np.ndarray, points_zyx: List[List[int]], spacing: Tuple[float, float, float], tolerance_mm: float = POINT_SNAP_MM
+) -> np.ndarray:
+    """
+    点选分割：只保留包含正点的三维连通域（26 邻接）。正点恰好落在边缘外（医生点在结节边上）时，
+    取该点 tolerance_mm 以内最近的连通域。都没有时返回空掩码。
+    """
+    binary = np.asarray(mask) > 0
+    out = np.zeros(binary.shape, dtype=np.uint8)
+    if not binary.any():
+        return out
+    labeled, n = ndi.label(binary, structure=np.ones((3, 3, 3), dtype=bool))
+    if n == 0:
+        return out
+    keep = set()
+    sp = np.asarray([float(v) for v in spacing])
+    for q in points_zyx:
+        q = [int(v) for v in q]
+        lab = int(labeled[tuple(q)])
+        if lab:
+            keep.add(lab)
+            continue
+        r = [max(1, int(np.ceil(tolerance_mm / d))) for d in sp]
+        lo = [max(0, q[i] - r[i]) for i in range(3)]
+        hi = [min(binary.shape[i], q[i] + r[i] + 1) for i in range(3)]
+        sub = labeled[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]
+        idx = np.argwhere(sub > 0)
+        if idx.size == 0:
+            continue
+        dist = np.sqrt(((((idx + np.asarray(lo)) - np.asarray(q)) * sp) ** 2).sum(axis=1))
+        i = int(np.argmin(dist))
+        if dist[i] <= tolerance_mm:
+            keep.add(int(sub[tuple(idx[i])]))
+    if keep:
+        out[np.isin(labeled, list(keep))] = 1
+    return out
 
 
 def _mean_diameter(long_mm: Optional[float], short_mm: Optional[float]) -> Optional[float]:
@@ -311,6 +366,19 @@ def _call_lobes(neural: Any, volume: np.ndarray, spacing: Tuple[float, float, fl
     if resample_mm is None:
         return neural.infer_vista3d_lung_lobes(volume, spacing)
     return neural.infer_vista3d_lung_lobes(volume, spacing, resample_mm=resample_mm)
+
+
+def locate_lobe_roi(
+    neural: Any, volume: np.ndarray, spacing: Tuple[float, float, float], center_zyx: List[int], radius_mm: float,
+    resample_mm: Optional[float] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """只在结节周围 ±LOBE_ROI_HALF_MM 的局部区域做 VISTA-3D 肺叶分割并定位（lobe_mode=roi 与点选分割共用）。"""
+    c = [int(v) for v in center_zyx]
+    lo = [max(0, int(c[i] - np.ceil(LOBE_ROI_HALF_MM / spacing[i]))) for i in range(3)]
+    hi = [min(volume.shape[i], int(c[i] + np.ceil(LOBE_ROI_HALF_MM / spacing[i])) + 1) for i in range(3)]
+    crop = volume[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]
+    lobe_map, _ = _call_lobes(neural, crop, spacing, resample_mm)
+    return locate_lobe(lobe_map, [c[i] - lo[i] for i in range(3)], spacing, radius_mm)
 
 
 def run_lung_nodule_pipeline(
@@ -458,13 +526,7 @@ def run_lung_nodule_pipeline(
             else:
                 # roi：每个结节周围 ±LOBE_ROI_HALF_MM 的局部区域各做一次；肺叶判别只用到局部上下文
                 for n in nodules:
-                    c = n["center_vox_zyx"]
-                    lo = [max(0, int(c[i] - np.ceil(LOBE_ROI_HALF_MM / spacing[i]))) for i in range(3)]
-                    hi = [min(volume.shape[i], int(c[i] + np.ceil(LOBE_ROI_HALF_MM / spacing[i])) + 1) for i in range(3)]
-                    crop = volume[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]
-                    lobe_map, _ = _call_lobes(neural, crop, spacing, lobe_resample_mm)
-                    local = [c[i] - lo[i] for i in range(3)]
-                    lobe, note = locate_lobe(lobe_map, local, spacing, n["_radius_mm"])
+                    lobe, note = locate_lobe_roi(neural, volume, spacing, n["center_vox_zyx"], n["_radius_mm"], lobe_resample_mm)
                     n["lobe"] = lobe
                     if note:
                         n["warnings"].append(note)
@@ -521,3 +583,142 @@ def run_lung_nodule_pipeline(
     if return_masks:
         result["_masks"] = masks
     return result
+
+
+# ---------------------------------------------------------------------------
+# 医生点选：补上 AI 漏掉的结节、修正边界（T2.3）
+# ---------------------------------------------------------------------------
+
+def segment_nodule_at_points(
+    neural: Any,
+    volume: np.ndarray,
+    spacing: Tuple[float, float, float],
+    points: List[Dict[str, Any]],
+    geometry: Optional[Dict[str, Any]] = None,
+    lobe: bool = True,
+    lobe_resample_mm: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    以医生给出的点为提示，用 VISTA-3D 分割一个结节并测量。
+    points = [{"zyx": [z, y, x], "positive": bool}]（规范化体素下标）：第一个正点决定推理窗口位置，
+    其余正点（补进来）和负点（排除出去）一并作为提示；修边界时调用方把之前的点和新点一起传入，结果只取决于这组点。
+    只保留包含正点的连通域；没有分割到任何东西时 found = False 并写明原因（不退回检出框或规则法）。
+    lobe=True 时在结节周围局部做肺叶定位（与 lobe_mode=roi 相同）。
+    返回 {"model_id", "model_version", "device", "found", "reason", "nodule", "warnings", "timings_ms", "elapsed_ms"}；
+    nodule 的字段与 run_lung_nodule_pipeline 的结节一致（detection_score 为 null，box_vox_zyx 为分割的外接框），
+    另带内部键 "_mask_vox"（规范化体素下标，供生成 DICOM SEG；调用方须在返回响应前移除）。
+    """
+    t0 = time.time()
+    volume = np.asarray(volume)
+    if volume.ndim != 3:
+        raise ValueError(f"需要三维体积，收到 {volume.ndim} 维")
+    spacing = tuple(float(s) for s in spacing)
+    if not points or len(points) > 20:
+        raise ValueError("提示点须为 1~20 个")
+    pts = []
+    for q in points:
+        zyx = [int(v) for v in q["zyx"]]
+        if any(not (0 <= v < n) for v, n in zip(zyx, volume.shape)):
+            raise ValueError(f"提示点 {zyx} 不在影像范围内")
+        pts.append((zyx, bool(q.get("positive", True))))
+    positives = [z for z, pos in pts if pos]
+    if not positives:
+        raise ValueError("至少需要一个正点（点在结节上）")
+    if lobe_resample_mm is not None and not (1.0 <= float(lobe_resample_mm) <= 5.0):
+        raise ValueError("lobe_resample_mm 须在 1~5 mm 之间")
+
+    _, seg_status = neural._verified_weights(SEGMENTER_REGISTRY_NAME)
+    model_version = f"{SEGMENTER_REGISTRY_NAME}@{_version_tag(seg_status)}"
+    timings: Dict[str, Any] = {}
+    t = time.time()
+    if hasattr(neural, "get_vista3d_model"):
+        neural.get_vista3d_model()
+    timings["model_load"] = _ms(t)
+
+    base = {
+        "model_id": POINT_PIPELINE_ID,
+        "model_version": model_version,
+        "device": str(getattr(neural.device, "type", neural.device)),
+        "prompt_points": [{"zyx": z, "positive": pos, "lps_mm": voxel_to_lps(geometry, z)} for z, pos in pts],
+    }
+    first = next(i for i, (_, pos) in enumerate(pts) if pos)
+    anchor = pts[first][0]
+    extra = [(z, 1 if pos else 0) for i, (z, pos) in enumerate(pts) if i != first]
+    t = time.time()
+    raw_mask, seg_meta = neural.infer_vista3d_nodule(volume, spacing, prompt_point=anchor, extra_points=extra,
+                                                     prompt_class=VISTA3D_LUNG_TUMOR_CLASS)
+    timings["segmentation"] = _ms(t)
+
+    t = time.time()
+    # VISTA-3D 只在推理窗口内有输出：连通域只在窗口内算（整卷标记一次约 0.6 s）
+    win = (seg_meta or {}).get("window_zyx")
+    if win:
+        wlo, whi = [int(v) for v in win[0]], [int(v) for v in win[1]]
+    else:
+        wlo, whi = [0, 0, 0], list(volume.shape)
+    wsl = tuple(slice(l, h) for l, h in zip(wlo, whi))
+    inside = [q for q in positives if all(l <= v < h for v, l, h in zip(q, wlo, whi))]
+    local = select_components_at_points(raw_mask[wsl], [[v - l for v, l in zip(q, wlo)] for q in inside], spacing)
+    mask = np.zeros(volume.shape, dtype=np.uint8)
+    mask[wsl] = local
+    warnings: List[str] = []
+
+    def not_found(reason: str) -> Dict[str, Any]:
+        timings["measurement"] = _ms(t)
+        return {**base, "found": False, "reason": reason, "nodule": None, "warnings": warnings,
+                "timings_ms": timings, "elapsed_ms": _ms(t0)}
+
+    if not local.any():
+        return not_found(f"点击处 {POINT_SNAP_MM:g} mm 内没有分割到结构：请点在结节内部，或改用更大的窗宽确认结节位置")
+    idx = tuple(i + l for i, l in zip(np.nonzero(local), wlo))
+    box = [int(i.min()) for i in idx] + [int(i.max()) + 1 for i in idx]
+    pad = [int(np.ceil(MEASURE_PAD_MM / spacing[a])) for a in range(3)]
+    lo = [max(0, box[a] - pad[a]) for a in range(3)]
+    hi = [min(volume.shape[a], box[a + 3] + pad[a]) for a in range(3)]
+    crop = tuple(slice(l, h) for l, h in zip(lo, hi))
+    local_box = [box[a] - lo[a] for a in range(3)] + [box[a + 3] - lo[a] for a in range(3)]
+    metrics, key_z, seg_warnings = measure_segmented_nodule(volume[crop], mask[crop], spacing, local_box)
+    if key_z is not None:
+        key_z = int(key_z) + lo[0]
+    if metrics is None:
+        warnings.extend(seg_warnings)
+        return not_found("分割结果太小，无法测量：" + "；".join(seg_warnings))
+    warnings.extend(seg_warnings)
+    if metrics["long_axis_mm"] > NODULE_MAX_DIAMETER_MM:
+        warnings.append(f"分割长径 {metrics['long_axis_mm']} mm 超过 {NODULE_MAX_DIAMETER_MM:g} mm（肿块或沿血管 / 胸膜过分割），请核对轮廓，必要时加负点排除")
+    if win and indices_touch_window(idx, wlo, whi, volume.shape):
+        warnings.append("分割触及 VISTA-3D 推理区域边界，可能被截断，测值可能偏小")
+    center = [int(round(float(c))) + l for c, l in zip(ndi.center_of_mass(mask[crop]), lo)]
+    timings["measurement"] = _ms(t)
+
+    t = time.time()
+    lobe_name = None
+    if lobe:
+        try:
+            lobe_name, note = locate_lobe_roi(neural, volume, spacing, center, (metrics["mean_diameter_mm"] or 0.0) / 2.0, lobe_resample_mm)
+            if note:
+                warnings.append(note)
+        except Exception as exc:
+            if type(exc).__name__ == "ModelUnavailableError":
+                raise
+            warnings.append(f"VISTA-3D 肺叶分割失败，肺叶未定：{exc}")
+    timings["lobe_segmentation"] = _ms(t)
+
+    nodule = {
+        "index": 1,
+        "detection_score": None,
+        "center_vox_zyx": center,
+        "box_vox_zyx": box,
+        "lobe": lobe_name,
+        "segmentation": "vista3d",
+        "key_slice_z": int(key_z),
+        "metrics": metrics,
+        "warnings": warnings,
+        "center_lps_mm": voxel_to_lps(geometry, center),
+        "box_lps_mm": box_to_lps_bounds(geometry, box),
+        "key_slice_sop_instance_uid": sop_uid_at(geometry, int(key_z)),
+        "seg_segment_number": None,
+        "_mask_vox": tuple(v.astype(np.int32) for v in idx),
+    }
+    return {**base, "found": True, "reason": None, "nodule": nodule, "warnings": [],
+            "timings_ms": timings, "elapsed_ms": _ms(t0)}

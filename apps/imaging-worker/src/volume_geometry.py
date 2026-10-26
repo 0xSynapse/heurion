@@ -141,6 +141,15 @@ def voxel_to_lps(geometry: Optional[Dict[str, Any]], zyx: Sequence[float]) -> Op
     return [round(float(v), 2) for v in p[:3]]
 
 
+def lps_to_voxel(geometry: Optional[Dict[str, Any]], lps: Sequence[float]) -> Optional[List[int]]:
+    """DICOM LPS 病人坐标 [X, Y, Z]（mm）→ 最近的规范化体素下标 (z, y, x)（不截断到体积范围，由调用方判断）；没有几何时返回 None。"""
+    if not geometry or geometry.get("affine_zyx_to_lps") is None:
+        return None
+    a = np.asarray(geometry["affine_zyx_to_lps"], dtype=np.float64)
+    v = np.linalg.solve(a, np.array([float(lps[0]), float(lps[1]), float(lps[2]), 1.0]))
+    return [int(round(float(c))) for c in v[:3]]
+
+
 def box_to_lps_bounds(geometry: Optional[Dict[str, Any]], box_zyx: Sequence[int]) -> Optional[List[float]]:
     """
     左闭右开体素框 [z0, y0, x0, z1, y1, x1] 的 8 个角点（取体素边界：起点 -0.5、终点 -0.5）换算到 LPS 后的

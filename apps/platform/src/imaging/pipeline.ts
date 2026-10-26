@@ -1,6 +1,7 @@
 import type { Actor, PatientService } from '../tenancy/patients.ts'
 import { orthancFromEnv, type Orthanc } from './orthanc.ts'
 import { ImagingStudyService, segRef, type RunRow, type SeriesView } from './studies.ts'
+import { callWorker, uploadSeries } from './worker.ts'
 
 /**
  * 影像分析流水线（PRD T1.4，docs/design/IMAGING_STUDIES.md）：检查入库 → 按病种选序列 → 排队 → 影像 worker 推理 → 结果入病灶表。
@@ -172,11 +173,7 @@ export class ImagingPipeline {
       const def = TASKS[run.task as ImagingTask]
       if (!def) throw new Error(`未知的分析任务：${run.task}`)
 
-      const zip = await this.orthanc.seriesArchive(seriesOrthancId)
-      const form = new FormData()
-      form.append('volume_id', volumeId)
-      form.append('file', new Blob([new Uint8Array(zip)], { type: 'application/zip' }), 'series.zip')
-      await this.worker('/api/v1/volume/upload', { method: 'POST', body: form }, 300_000)
+      await uploadSeries(this.fetch, this.workerUrl, volumeId, await this.orthanc.seriesArchive(seriesOrthancId))
       uploaded = true
 
       const result = await this.worker(def.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume_id: volumeId, max_nodules: 20 }) }, 2_700_000) as NoduleResult
@@ -244,22 +241,7 @@ export class ImagingPipeline {
     }
   }
 
-  /** 调影像 worker；错误如实转成中文说明（501 模型不可用、4xx 输入问题、其它为服务故障） */
-  private async worker(path: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
-    let resp: Response
-    try {
-      resp = await this.fetch(`${this.workerUrl}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) })
-    } catch (err) {
-      const name = (err as Error)?.name
-      throw new Error(name === 'TimeoutError' || name === 'AbortError' ? '影像服务处理超时' : `影像服务连接失败：${(err as Error).message}`)
-    }
-    if (!resp.ok) {
-      let detail = ''
-      try { const t = await resp.text(); try { const j = JSON.parse(t); detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail ?? j) } catch { detail = t } } catch {}
-      const kind = resp.status === 501 ? '模型不可用' : resp.status === 404 ? '影像不存在' : resp.status >= 400 && resp.status < 500 ? '影像输入有误' : '影像服务出错'
-      throw new Error(`${kind}（HTTP ${resp.status}）：${detail.slice(0, 300)}`)
-    }
-    const text = await resp.text()
-    return text ? JSON.parse(text) : null
+  private worker(path: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
+    return callWorker(this.fetch, this.workerUrl, path, init, timeoutMs)
   }
 }

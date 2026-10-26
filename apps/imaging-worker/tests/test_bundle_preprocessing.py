@@ -34,6 +34,9 @@ class FakeVista:
     def __call__(self, input_images, point_coords=None, point_labels=None, class_vector=None, prompt_class=None):
         shape = input_images.shape[2:]
         self.calls.append({"shape": tuple(shape), "point": None if point_coords is None else point_coords[0, 0].tolist(),
+                           "points": None if point_coords is None else point_coords[0].tolist(),
+                           "labels": None if point_labels is None else point_labels[0].tolist(),
+                           "prompt_class": None if prompt_class is None else int(prompt_class.flatten()[0]),
                            "class": None if class_vector is None else int(class_vector.flatten()[0]),
                            "max": float(input_images.max()), "min": float(input_images.min())})
         c = point_coords[0, 0].tolist() if point_coords is not None else [s / 2.0 for s in shape]
@@ -88,6 +91,31 @@ def test_vista3d_ras_axis_order(neural, monkeypatch):
     b = fake.calls[-1]["point"]
     assert b[0] < a[0] and b[1] < a[1]   # x、y 翻转
     assert b[2] > a[2]                   # z 不翻转
+
+
+def test_vista3d_extra_points_and_lesion_class(neural, monkeypatch):
+    """点选分割：追加的正 / 负点按同一换算进入窗口坐标；肺肿瘤（23，特殊类别）的点标签 +2；只给 prompt_class、不做类别分割。"""
+    fake = FakeVista()
+    monkeypatch.setattr(neural, "get_vista3d_model", lambda: fake)
+    vol = np.full((40, 160, 160), -800.0, dtype=np.float32)
+    sp = (1.25, 0.7, 0.7)
+    neural.infer_vista3d_nodule(vol, sp, prompt_point=[20, 80, 80])
+    single = fake.calls[-1]["points"][0]
+    _, meta = neural.infer_vista3d_nodule(vol, sp, prompt_point=[20, 80, 80], extra_points=[([20, 80, 90], 0), ([22, 80, 80], 1)],
+                                          prompt_class=23)
+    call = fake.calls[-1]
+    assert call["points"][0] == single and len(call["points"]) == 3
+    assert call["labels"] == [3, 2, 3] and call["prompt_class"] == 23 and call["class"] is None
+    # x + 10 体素 = 7 mm → RAS 第 0 轴减少 7 / 1.5；z + 2 体素 = 2.5 mm → 第 2 轴增加 2.5 / 1.5
+    assert abs((single[0] - call["points"][1][0]) - 7.0 / 1.5) < 1e-4
+    assert abs((call["points"][2][2] - single[2]) - 2.5 / 1.5) < 1e-4
+    assert meta["prompt_class"] == 23
+    # 非特殊类别：标签不变
+    neural.infer_vista3d_nodule(vol, sp, prompt_point=[20, 80, 80], extra_points=[([20, 80, 90], 0)], prompt_class=5)
+    assert fake.calls[-1]["labels"] == [1, 0]
+    # 窗口外的点：拒绝
+    with pytest.raises(ValueError, match="推理窗口"):
+        neural.infer_vista3d_nodule(vol, sp, prompt_point=[20, 10, 10], extra_points=[([20, 150, 150], 1)])
 
 
 def test_vista3d_label_prompt_compat(neural, monkeypatch):

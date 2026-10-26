@@ -11,8 +11,11 @@ import { OrthancError, type Orthanc } from './orthanc.ts'
 
 /** 影像接口的错误（状态码可能是 413 / 503 等，PatientError 不覆盖这些）。 */
 export class ImagingError extends Error {
-  constructor(readonly code: string, message: string, readonly status: 400 | 403 | 404 | 409 | 413 | 502 | 503 = 400) { super(message) }
+  constructor(readonly code: string, message: string, readonly status: 400 | 403 | 404 | 409 | 413 | 422 | 502 | 503 = 400) { super(message) }
 }
+
+/** 阅片器里医生点选分割（T2.3）的 AI 运行任务名：每次点选 / 修边界记一条，不列进检查的分析状态 */
+export const POINT_TASK = 'lung_nodule_point'
 
 export interface SeriesView {
   id: string
@@ -50,7 +53,7 @@ export interface ImportResult {
   conflicts: number
 }
 
-/** superseded = 重新分析后被新结果取代的、从未经医生处理的 AI 检出 */
+/** superseded = 重新分析后被新结果取代的、从未经医生处理的 AI 检出，或医生撤销的自己补充的病灶 */
 export type LesionStatus = 'proposed' | 'confirmed' | 'rejected' | 'superseded'
 export interface LesionRow {
   id: string
@@ -250,9 +253,10 @@ export class ImagingStudyService {
   /**
    * 清理已无用的 AI 分割序列：曾被病灶引用（即本系统生成的 SEG），且引用它的病灶全部已被取代（superseded）。
    * 医生确认 / 否决过的病灶所引用的 SEG 一律保留。从 Orthanc 删除并删索引，记访问留痕。返回删除数。
-   * justCreated = 本次分析刚登记的 SEG 序列：若没有任何病灶引用它（其中的结节都与已审核的结节重合、未入库），也一并清掉。
+   * candidates = 可能已没有病灶引用的 SEG 序列（本次分析刚登记、其中的结节都与已审核的结节重合未入库；
+   * 或医生修边界后被换下的旧轮廓）：没有任何病灶引用时也一并清掉。
    */
-  async removeSupersededSeg(a: Actor, studyId: string, justCreated: string | null = null): Promise<number> {
+  async removeSupersededSeg(a: Actor, studyId: string, candidates: string | Array<string | null> | null = null): Promise<number> {
     const orthanc = this.requireOrthanc()
     const s = this.studyScope(a, studyId, 'write')
     const refs = new Map<string, { live: boolean }>()
@@ -263,7 +267,7 @@ export class ImagingStudyService {
       if (l.status !== 'superseded') e.live = true
       refs.set(r.seriesId, e)
     }
-    if (justCreated && !refs.has(justCreated)) refs.set(justCreated, { live: false })
+    for (const id of Array.isArray(candidates) ? candidates : [candidates]) if (id && !refs.has(id)) refs.set(id, { live: false })
     let removed = 0
     for (const [seriesId, e] of refs) {
       if (e.live) continue
@@ -296,7 +300,7 @@ export class ImagingStudyService {
       const counts = { proposed: 0, confirmed: 0, rejected: 0 }
       for (const c of s.db.prepare(`SELECT l.status, COUNT(*) AS n FROM imaging_lesions l LEFT JOIN imaging_runs r ON r.id = l.run_id
         WHERE l.study_id = ? AND l.status != 'superseded' AND (r.id IS NULL OR r.visibility = 'visible') GROUP BY l.status`).all(r.id as string) as Array<{ status: Exclude<LesionStatus, 'superseded'>; n: number }>) counts[c.status] = c.n
-      const runs = (s.db.prepare(`SELECT * FROM imaging_runs WHERE study_id = ? AND visibility = 'visible' ORDER BY created_at DESC, rowid DESC LIMIT 5`).all(r.id as string) as Array<Record<string, unknown>>)
+      const runs = (s.db.prepare(`SELECT * FROM imaging_runs WHERE study_id = ? AND visibility = 'visible' AND task != ? ORDER BY created_at DESC, rowid DESC LIMIT 5`).all(r.id as string, POINT_TASK) as Array<Record<string, unknown>>)
         .map(runOf).map(x => ({ id: x.id, task: x.task, model_id: x.model_id, model_version: x.model_version, status: x.status, error: x.error, summary: x.summary, created_at: x.created_at, finished_at: x.finished_at }))
       return {
         id: r.id as string, patient_id: r.patient_id as string, ...(forUi ? { study_uid: s.decrypt(r.uid_enc as string)!, accession: s.decrypt((r.accession_enc as string | null) ?? null) } : {}),
@@ -449,6 +453,60 @@ export class ImagingStudyService {
       const segUid = seg ? seriesUid(seg.seriesId) : null
       return { ...l, series_uid: run?.series_id ? seriesUid(run.series_id) : null, seg: seg && segUid ? { series_uid: segUid, segment_number: seg.segment } : null }
     })
+  }
+
+  /**
+   * 阅片器点选分割用：检查（StudyInstanceUID）下的一个序列（SeriesInstanceUID）。只接受 CT 序列；
+   * 返回检查与序列行 id、序列在 Orthanc 中的 id。写操作，要求诊疗组成员。
+   */
+  viewerSeries(a: Actor, studyUid: string, seriesUid: string): { studyId: string; seriesId: string; orthancId: string } {
+    const { studyId } = this.resolveStudyUid(a, studyUid)
+    const s = this.studyScope(a, studyId, 'write')
+    const row = s.db.prepare('SELECT id, orthanc_id, modality FROM imaging_series WHERE study_id = ? AND uid_hmac = ?').get(studyId, s.uidKey('series', seriesUid)) as { id: string; orthanc_id: string | null; modality: string | null } | undefined
+    if (!row) throw new PatientError('not_found', '序列不存在', 404)
+    if ((row.modality ?? '').toUpperCase() !== 'CT') throw new ImagingError('not_ct', `只能在 CT 序列上点选结节（当前序列是 ${row.modality ?? '未知类型'}）`, 409)
+    if (!row.orthanc_id) throw new ImagingError('series_missing', '该序列已不在影像存储中', 409)
+    return { studyId, seriesId: row.id, orthancId: row.orthanc_id }
+  }
+
+  /** 修边界用：病灶、所在检查与序列（取自产生它的运行）。没有记录所在序列的病灶不能修。 */
+  lesionSource(a: Actor, lesionId: string): { lesion: LesionRow; studyId: string; seriesId: string; orthancId: string } {
+    const { s, before } = this.lesionScope(a, lesionId)
+    const run = before.run_id ? s.db.prepare('SELECT series_id FROM imaging_runs WHERE id = ?').get(before.run_id) as { series_id: string | null } | undefined : undefined
+    const se = run?.series_id ? s.db.prepare('SELECT id, orthanc_id FROM imaging_series WHERE id = ?').get(run.series_id) as { id: string; orthanc_id: string | null } | undefined : undefined
+    if (!se?.orthanc_id) throw new ImagingError('series_missing', '找不到该结节所在的序列，不能修正边界', 409)
+    return { lesion: before, studyId: before.study_id, seriesId: se.id, orthancId: se.orthanc_id }
+  }
+
+  /** 检查里医生补充的病灶数（给新补充的结节编号） */
+  manualLesionCount(a: Actor, studyId: string): number {
+    const s = this.studyScope(a, studyId, 'read')
+    return (s.db.prepare("SELECT COUNT(*) AS n FROM imaging_lesions WHERE study_id = ? AND source = 'manual'").get(studyId) as { n: number }).n
+  }
+
+  /**
+   * 点选分割后在后台补上的肺叶定位：只在病灶版本仍是 expectedVersion 时写入（期间医生又修了边界，就以那次的定位为准），
+   * 不增加版本号，记一条 locate 留痕。返回是否写入。
+   */
+  setLesionLocation(a: Actor, lesionId: string, expectedVersion: number, loc: { location: string | null; status: 'done' | 'failed'; note?: string | null }): boolean {
+    const { s, before } = this.lesionScope(a, lesionId)
+    if (before.version !== expectedVersion || before.status === 'superseded') return false
+    const metrics = { ...before.metrics, lobe_status: loc.status, lobe_note: loc.note ?? null }
+    s.db.prepare('UPDATE imaging_lesions SET location = ?, metrics = ?, updated_at = ? WHERE id = ?').run(loc.location, JSON.stringify(metrics), now(), lesionId)
+    this.event(s, a, lesionId, 'locate', before, this.lesion(s, lesionId))
+    return true
+  }
+
+  /** 撤销医生自己补充的病灶（点错了）：标为 superseded，不再列出；AI 检出的结节请用否决。 */
+  withdrawLesion(a: Actor, lesionId: string): LesionRow {
+    if (a.via === 'ai') throw new PatientError('needs_human_review', '撤销病灶须由医生在界面上操作', 403)
+    const { s, before } = this.lesionScope(a, lesionId)
+    if (before.source !== 'manual') throw new ImagingError('not_manual', 'AI 检出的结节不能撤销，请选择否决并注明原因', 409)
+    if (before.status === 'superseded') throw new PatientError('not_found', '病灶不存在', 404)
+    s.db.prepare("UPDATE imaging_lesions SET status = 'superseded', updated_at = ? WHERE id = ?").run(now(), lesionId)
+    const after = this.lesion(s, lesionId)
+    this.event(s, a, lesionId, 'withdraw', before, after)
+    return after
   }
 
   /** 病灶所属的检查与患者（接口校验路径里的患者 id 用） */
