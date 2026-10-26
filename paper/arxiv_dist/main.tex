@@ -116,41 +116,41 @@ Figure~\ref{fig:architecture} shows the overall architecture of Heurion 2.0. The
 \resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
   font=\sffamily\scriptsize,
-  box/.style={draw=black!70, rounded corners=3pt, fill=white, align=center, minimum height=1.05cm, inner sep=5pt},
-  guard/.style={draw=red!60!black, fill=red!5, rounded corners=3pt, align=center, minimum height=0.85cm, inner sep=4pt},
-  evol/.style={draw=teal!60!black, fill=teal!6, rounded corners=3pt, align=center, minimum height=0.95cm, inner sep=5pt},
+  box/.style={draw=black!70, rounded corners=3pt, fill=white, align=center, minimum height=1.08cm, inner sep=5pt},
+  guard/.style={draw=red!60!black, fill=red!5, rounded corners=3pt, align=center, minimum height=0.88cm, inner sep=4pt},
+  evol/.style={draw=teal!60!black, fill=teal!6, rounded corners=3pt, align=center, minimum height=1.00cm, inner sep=5pt},
   arr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!75},
   darr/.style={{Stealth[length=2.2mm]}-{Stealth[length=2.2mm]}, thick, draw=blue!60!black}
 ]
 
-% Top Layer: Dual Surface (total width ~16.6cm, ample spacing between nodes)
-\node[box, fill=orange!12, text width=4.0cm] (human) at (0, 3.8) {\textbf{Human Researcher Surface}\\ProseMirror Editor \& Deck Canvas};
-\node[box, fill=blue!12, text width=4.8cm] (crdt) at (6.6, 3.8) {\textbf{Shared Yjs CRDT Core}\\Stable Block IDs \texttt{\{\#id\}} + \texttt{node\_src} Bytes\\Per-Turn \texttt{Y.UndoManager} \& \texttt{node\_changes}};
-\node[box, fill=violet!10, text width=4.2cm] (agentview) at (13.3, 3.8) {\textbf{AI Agent Surface}\\Annotated Markdown Projection\\Guarded MCP Tool Primitives};
+% Top Layer: Dual Surface (left edge at -2.2, right edge at +15.8, total span = 18.0cm)
+\node[box, fill=orange!12, minimum width=4.4cm] (human) at (0, 3.8) {\textbf{Human Researcher Surface}\\ProseMirror Editor \& Deck Canvas};
+\node[box, fill=blue!12, minimum width=5.2cm] (crdt) at (6.8, 3.8) {\textbf{Shared Yjs CRDT Core}\\Stable Block IDs \texttt{\{\#id\}} + \texttt{node\_src} Bytes\\Per-Turn \texttt{Y.UndoManager} \& \texttt{node\_changes}};
+\node[box, fill=violet!10, minimum width=4.4cm] (agentview) at (13.6, 3.8) {\textbf{AI Agent Surface}\\Annotated Markdown Projection\\Guarded MCP Tool Primitives};
 
 \draw[darr] (human.east) -- node[above, font=\sffamily\tiny]{WebSocket Sync} (crdt.west);
 \draw[darr] (crdt.east) -- node[above, font=\sffamily\tiny]{\texttt{base\_rev} / Diff} (agentview.west);
 
-% Middle Layer: Pre-Write Structural Guards (4 evenly spaced boxes across x = 0.4 .. 13.0)
-\node[guard, text width=3.3cm] (g1) at (0.3, 1.95) {\textbf{Conflict Guard}\\\texttt{base\_rev} \& Literal Match};
-\node[guard, text width=3.5cm] (g2) at (4.5, 1.95) {\textbf{Citation \& Claim Guard}\\Atomic \texttt{[@c:id]} \& PMC Verify};
-\node[guard, text width=3.3cm] (g3) at (8.7, 1.95) {\textbf{PHI \& PHR Guard}\\Luhn/ID Redact \& \texttt{P001} Map};
-\node[guard, text width=3.5cm] (g4) at (12.9, 1.95) {\textbf{Parity \& Action Guard}\\1:1 RBAC \& Confirm Cards};
+% Middle Layer: Pre-Write Structural Guards (4 boxes evenly spanning -2.2 to +15.8)
+\node[guard, minimum width=3.9cm] (g1) at (-0.25, 1.95) {\textbf{Conflict Guard}\\\texttt{base\_rev} \& Literal Match};
+\node[guard, minimum width=3.9cm] (g2) at (4.45, 1.95) {\textbf{Citation \& Claim Guard}\\Atomic \texttt{[@c:id]} \& PMC Verify};
+\node[guard, minimum width=3.9cm] (g3) at (9.15, 1.95) {\textbf{PHI \& PHR Guard}\\Luhn/ID Redact \& \texttt{P001} Map};
+\node[guard, minimum width=3.9cm] (g4) at (13.85, 1.95) {\textbf{Parity \& Action Guard}\\1:1 RBAC \& Confirm Cards};
 
-\draw[arr] (agentview.south) -- (13.3, 2.75) -| (g1.north);
-\draw[arr] (13.3, 2.75) -| (g2.north);
-\draw[arr] (13.3, 2.75) -| (g3.north);
-\draw[arr] (13.3, 2.75) -| (g4.north);
+\draw[arr] (agentview.south) -- (13.6, 2.75) -| (g1.north);
+\draw[arr] (13.6, 2.75) -| (g2.north);
+\draw[arr] (13.6, 2.75) -| (g3.north);
+\draw[arr] (13.6, 2.75) -| (g4.north);
 
-% Bottom Layer: Three-Layer Self-Evolution (3 evenly spaced boxes)
-\node[evol, text width=4.1cm] (l1) at (0.3, 0.1) {\textbf{Layer 1: Task Probe}\\Side-Effect-Free \texttt{doc\_validate} \& \texttt{dry\_run}};
-\node[evol, text width=4.8cm] (l2) at (6.6, 0.1) {\textbf{Layer 2: Dual-Track Memory}\\Declarative Skills \& Procedural Rules\\Domain-Gated Utility Routing};
-\node[evol, text width=4.2cm] (l3) at (13.1, 0.1) {\textbf{Layer 3: Meta-Distillation}\\Cross-Session Signal Aggregation\\Dynamic Profile Overlay (\texttt{.yml})};
+% Bottom Layer: Three-Layer Self-Evolution (aligned with top layer at x = 0, 6.8, 13.6)
+\node[evol, minimum width=4.4cm] (l1) at (0, 0.1) {\textbf{Layer 1: Task Probe}\\Side-Effect-Free \texttt{doc\_validate}\\and \texttt{dry\_run} Simulation};
+\node[evol, minimum width=5.2cm] (l2) at (6.8, 0.1) {\textbf{Layer 2: Dual-Track Memory}\\Declarative Skills \& Procedural Rules\\Domain-Gated Utility Routing};
+\node[evol, minimum width=4.4cm] (l3) at (13.6, 0.1) {\textbf{Layer 3: Meta-Distillation}\\Cross-Session Signal Aggregation\\Dynamic Profile Overlay (\texttt{.yml})};
 
 \draw[arr] (l1.east) -- (l2.west);
 \draw[arr] (l2.east) -- (l3.west);
-\draw[arr, dashed, draw=red!70!black] (g1.south) -- (0.3, 0.95) -| node[pos=0.25, above, font=\sffamily\tiny, text=red!70!black]{Guard Reject / Revert Signals} (l2.north);
-\draw[arr, draw=teal!70!black] (l2.north east) -- ++(0, 0.35) -| (15.7, 3.8) -- (agentview.east);
+\draw[arr, dashed, draw=red!70!black] (g1.south) -- (-0.25, 0.98) -| node[pos=0.25, above, font=\sffamily\tiny, text=red!70!black]{Guard Reject / Revert Signals} (l2.north);
+\draw[arr, draw=teal!70!black] (l2.north east) -- ++(0, 0.35) -| (16.2, 3.8) -- (agentview.east);
 
 \end{tikzpicture}%
 }
@@ -352,22 +352,22 @@ Table~\ref{tab:v1_vs_v2} compares our first-generation script-and-audit system (
 \label{tab:v1_vs_v2}
 \vspace{2pt}
 \small
-\setlength{\tabcolsep}{4.5pt}
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}Xccc@{}}
+\setlength{\tabcolsep}{0pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lccc@{}}
 \toprule
 \textbf{Evaluation Dimension / Metric} & \thead{\textbf{Vanilla Script}\\\textbf{Agent}} & \thead{\textbf{Heurion v1}\\\textbf{(S-Series)}} & \thead{\textbf{Heurion 2.0}\\\textbf{(Ours)}} \\
 \midrule
 Source of Truth & Raw \texttt{.docx} & Raw \texttt{.docx} + Audit & \textbf{Yjs CRDT + SQLite} \\
 Block Addressing Stability (\texttt{\{\#id\}}) & None (Regex) & Fragile (\texttt{w14:paraId}) & \textbf{100.0\% Stable} \\
 Unmodified Block Byte-Identity Rate & 0.0\% (Re-serialize) & 82.0\% (XML Drift) & \textbf{100.0\% (50/50)} \\
-Concurrent Human Edit Conflict Guard & 0.0\% (Overwrite) & 64.0\% (3-Way Merge) & \textbf{100.0\% Pre-Write} \\
-Selective Turn Undo (Preserving Edits) & Unsupported & File Rollback Only & \textbf{100.0\% Intra-Block} \\
-Unregistered Citation Block Rate & 0.0\% & Post-Write Flag Only & \textbf{100.0\% Pre-Write} \\
-Mean Pre-Flight Validation Latency & N/A & $420.0\,\text{ms}$ (Subproc) & $\mathbf{0.168\,\text{ms}}$ (In-Mem) \\
-Mean Guarded Edit Commit Latency & $185.0\,\text{ms}$ (Disk) & $610.0\,\text{ms}$ (Script) & $\mathbf{0.351\,\text{ms}}$ (CRDT) \\
-Mean Per-Turn Selective Revert Latency & N/A & $340.0\,\text{ms}$ (Snapshot) & $\mathbf{0.128\,\text{ms}}$ (\texttt{UndoMgr}) \\
+Concurrent Edit Conflict Guard & 0.0\% (Overwrite) & 64.0\% (3-Way Merge) & \textbf{100.0\% Pre-Write} \\
+Selective Turn Undo (User Safe) & Unsupported & File Rollback Only & \textbf{100.0\% Intra-Block} \\
+Unregistered Citation Block Rate & 0.0\% & Post-Write Flag & \textbf{100.0\% Pre-Write} \\
+Mean Validation Latency & N/A & $420.0\,\text{ms}$ (Subproc) & $\mathbf{0.168\,\text{ms}}$ (In-Mem) \\
+Mean Edit Commit Latency & $185.0\,\text{ms}$ (Disk) & $610.0\,\text{ms}$ (Script) & $\mathbf{0.351\,\text{ms}}$ (CRDT) \\
+Mean Selective Undo Latency & N/A & $340.0\,\text{ms}$ (Snapshot) & $\mathbf{0.128\,\text{ms}}$ (\texttt{UndoMgr}) \\
 \bottomrule
-\end{tabularx}
+\end{tabular*}
 \end{table}
 
 As Table~\ref{tab:v1_vs_v2} shows, Heurion 2.0 resolves the three main failure modes of script-based document agents:
@@ -386,16 +386,16 @@ In Experiment~2, we tested the pre-write guards against 50 adversarial citation 
 \label{tab:guards}
 \vspace{2pt}
 \small
-\setlength{\tabcolsep}{6pt}
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}Xccc@{}}
+\setlength{\tabcolsep}{0pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lccc@{}}
 \toprule
-\textbf{Guard Subsystem} & \textbf{Test Cases} & \textbf{Interception / Recall} & \textbf{False Positive Rate} \\
+\textbf{Guard Subsystem} & \thead{\textbf{Test}\\\textbf{Cases}} & \thead{\textbf{Interception}\\\textbf{/ Recall}} & \thead{\textbf{False Positive}\\\textbf{Rate}} \\
 \midrule
-Bare DOI / PMID Blocker (\texttt{citation\_not\_registered}) & $50$ & $\mathbf{100.0\%}$ ($50/50$) & $0.0\%$ \\
-Composite PHI Detector \& Redactor (\texttt{scanPhi} / \texttt{redactPhi}) & $40$ PHI + $40$ Clean & $\mathbf{100.0\%}$ ($40/40$) & $\mathbf{0.0\%}$ ($0/40$) \\
-Stale Revision Overwrite Blocker (\texttt{conflict\_user\_edited}) & $50$ & $\mathbf{100.0\%}$ ($50/50$) & $0.0\%$ \\
+DOI/PMID Guard (\texttt{citation\_not\_registered}) & $50$ & $\mathbf{100.0\%}$ ($50/50$) & $0.0\%$ \\
+Composite PHI Scanner \& Redactor (\texttt{scanPhi}) & $40$ PHI / $40$ Clean & $\mathbf{100.0\%}$ ($40/40$) & $\mathbf{0.0\%}$ ($0/40$) \\
+Stale Revision Guard (\texttt{conflict\_user\_edited}) & $50$ & $\mathbf{100.0\%}$ ($50/50$) & $0.0\%$ \\
 \bottomrule
-\end{tabularx}
+\end{tabular*}
 \end{table}
 
 Table~\ref{tab:guards} confirms that pre-write guards block 100.0\% of unregistered citations and stale block overwrites, while the checksum-backed PHI scanner achieves 100.0\% recall on composite patient identifiers with a 0.0\% false-positive rate on statistical text (never corrupting $p$-values, lab counts, or survival intervals).
@@ -474,16 +474,16 @@ We deleted the static rule template dictionary from the codebase (\texttt{zero\_
 \label{tab:zero_template_pilot}
 \vspace{2pt}
 \small
-\setlength{\tabcolsep}{3.2pt}
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}Xcccccc@{}}
+\setlength{\tabcolsep}{0pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lcccccc@{}}
 \toprule
-\textbf{Arm} & \thead{\textbf{Hand}\\\textbf{Rules}} & \thead{\textbf{Total}\\\textbf{Rejects}} & \thead{\textbf{Rejects /}\\\textbf{Turn ($\downarrow$)}} & \thead{\textbf{Session Trajectory}\\\textbf{(S1 $\to$ S2 $\to$ S3 $\to$ S4)}} & \thead{\textbf{Heldout}\\\textbf{Rej/Turn ($\downarrow$)}} & \thead{\textbf{Heldout}\\\textbf{1st-Pass ($\uparrow$)}} \\
+\textbf{Arm / Strategy} & \thead{\textbf{Hand}\\\textbf{Rules}} & \thead{\textbf{Total}\\\textbf{Rejects}} & \thead{\textbf{Rejects /}\\\textbf{Turn ($\downarrow$)}} & \thead{\textbf{Session Trajectory}\\\textbf{(S1 $\to$ S2 $\to$ S3 $\to$ S4)}} & \thead{\textbf{Heldout}\\\textbf{Rej/Turn ($\downarrow$)}} & \thead{\textbf{Heldout}\\\textbf{1st-Pass ($\uparrow$)}} \\
 \midrule
-\texttt{off} (No Mem) & $0$ & $15 / 24$ & $0.625$ & $0.50 \to 0.67 \to 0.67 \to 0.67$ & $0.667$ & $33.3\%$ \\
-\texttt{frozen} (Static) & $0$ & $16 / 24$ & $0.667$ & $0.67 \to 0.67 \to 0.67 \to 0.67$ & $0.667$ & $33.3\%$ \\
+\texttt{off} (No Memory) & $0$ & $15 / 24$ & $0.625$ & $0.50 \to 0.67 \to 0.67 \to 0.67$ & $0.667$ & $33.3\%$ \\
+\texttt{frozen} (Baseline) & $0$ & $16 / 24$ & $0.667$ & $0.67 \to 0.67 \to 0.67 \to 0.67$ & $0.667$ & $33.3\%$ \\
 \textbf{\texttt{utility} (Ours)} & $\mathbf{0}$ & $\mathbf{6 / 24}$ & $\mathbf{0.250}$ & $0.67 \to \mathbf{0.17} \to \mathbf{0.00} \to \mathbf{0.17}$ & $\mathbf{0.167}$ ($\mathbf{-75\%}$) & $\mathbf{83.3\%}$ \\
 \bottomrule
-\end{tabularx}
+\end{tabular*}
 \end{table}
 
 As shown in Table~\ref{tab:zero_template_pilot}, in Session~1 \texttt{deepseek-flash} fails on 4 of the 6 novel verifier tasks (open-comment anchor preservation, non-adjacent paragraph merging, superscript plain-text matching, and ambiguous repeated-phrase replacement; rejection rate $0.667$). Without any human-written templates, the engine synthesizes 4 compact rules directly from the verifier hints and intra-turn recovery calls, cutting the Session~2 rejection rate to $0.167$. When an implicit prompt in Session~2 (``make the opening sentence of Methods more concise'') triggers a routing miss on the open-comment rule, backward credit assignment expands the rule's trigger keywords and appends a boundary-strengthening clause, reaching \textbf{0.000 rejections (100\% first-try pass)} in Session~3. Because keyword extraction strips quoted cohort titles, the learned rules transfer zero-shot to the unseen cohort in Session~4, reducing held-out guard rejections by \textbf{75.0\%} and raising the held-out first-try pass rate from $33.3\%$ to $83.3\%$.
@@ -497,8 +497,8 @@ Table~\ref{tab:cross_domain} reports the live \texttt{deepseek-flash} evaluation
 \label{tab:cross_domain}
 \vspace{2pt}
 \small
-\setlength{\tabcolsep}{4.5pt}
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}Xccccc@{}}
+\setlength{\tabcolsep}{0pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lccccc@{}}
 \toprule
 \textbf{Skill Domain Adapter} & \thead{\textbf{Track B}\\\textbf{Rules}} & \thead{\textbf{Track A}\\\textbf{Epoch 0}} & \thead{\textbf{Track A}\\\textbf{Epoch 1 ($\uparrow$)}} & \thead{\textbf{Instance}\\\textbf{Leakage}} & \thead{\textbf{PHI}\\\textbf{Leakage}} \\
 \midrule
@@ -511,7 +511,7 @@ Table~\ref{tab:cross_domain} reports the live \texttt{deepseek-flash} evaluation
 \multicolumn{4}{@{}l}{Multi-Domain Interleaved Target-Domain Hit Rate ($4$ Turns)} & \multicolumn{2}{r@{}}{$\mathbf{100.0\%}$ ($4/4$, $461$ chars)} \\
 \multicolumn{4}{@{}l}{Cross-Domain Rule Contamination / Negative Transfer Rate} & \multicolumn{2}{r@{}}{$\mathbf{0.0\%}$ ($0/4$ Turns)} \\
 \bottomrule
-\end{tabularx}
+\end{tabular*}
 \end{table}
 
 Across all three domains, a single corruption-and-reconstruction epoch substantially improves alignment when reconstructing from the exact same degraded skeleton: $+155.3\%$ in \texttt{manuscript} ($0.150 \to 0.383$), $0.000 \to 0.612$ in \texttt{biostats} (learning to check normality, report Median [IQR] with Mann--Whitney U for skewed variables, use Fisher's exact test when expected cell counts are $<5$, and verify Schoenfeld residuals with $\text{EPV} \ge 10$ in Cox models), and $+161.5\%$ in \texttt{deck} ($0.187 \to 0.489$, learning Action Title conventions and two-column chart pairing). The Instance--Skill Decoupling and PHI guards block 100\% of candidate rules containing study-specific numbers or patient data ($0.0\%$ leakage). Finally, when a user alternates across tasks (\texttt{biostats} $\to$ \texttt{deck} $\to$ \texttt{manuscript} $\to$ \texttt{biostats}), domain-gated routing hits the correct domain rules on \textbf{100.0\% of turns} with \textbf{0.0\% cross-domain contamination}.
@@ -525,19 +525,19 @@ Table~\ref{tab:system_verification} summarizes the verification coverage across 
 \label{tab:system_verification}
 \vspace{2pt}
 \small
-\setlength{\tabcolsep}{6pt}
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}Xc@{}}
+\setlength{\tabcolsep}{0pt}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lc@{}}
 \toprule
 \textbf{System Verification Metric} & \textbf{Measured Value} \\
 \midrule
-Automated Test Suites / Total Assertions Passing & $74$ Suites / $613$ Tests ($100\%$) \\
-Unaccounted REST API Endpoints in Parity Audit (\texttt{parity.test.ts}) & $0$ ($100\%$ Accounted) \\
-Pluggable Self-Evolution Domain Adapters (\texttt{manuscript}, \texttt{biostats}, \texttt{deck}, \texttt{general\_mcp}) & $4$ Domains \\
-Specialist Clinical Subagents (\texttt{literature}, \texttt{biostatistician}, \texttt{fact\_checker}) & $3$ Integrated \\
-Supported Citation Formatting Standards (Vancouver, AMA, APA, MLA, IEEE, GB/T 7714) & $6$ Standards \\
-Supported Biostatistical \& Clinical Engines (Table 1, KM, CONSORT, E-value, Nomogram, MONAI) & $6$ Pipelines \\
+Automated Test Suites / Assertions ($100\%$ Passing) & $74$ Suites / $613$ Tests \\
+Unaccounted REST Endpoints in Parity Audit (\texttt{parity.test.ts}) & $0$ ($100\%$ Accounted) \\
+Self-Evolution Adapters (\texttt{manuscript}, \texttt{biostats}, \texttt{deck}, \texttt{mcp}) & $4$ Domains \\
+Specialist Subagents (\texttt{literature}, \texttt{biostatistician}, \texttt{fact\_checker}) & $3$ Integrated \\
+Citation Formatting Standards (Vancouver, AMA, APA, MLA, IEEE, GB/T) & $6$ Standards \\
+Clinical \& Biostatistical Engines (Table 1, KM, CONSORT, E-value, MONAI) & $6$ Pipelines \\
 \bottomrule
-\end{tabularx}
+\end{tabular*}
 \end{table}
 
 % ============================================================================
