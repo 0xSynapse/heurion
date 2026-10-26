@@ -1,4 +1,5 @@
-import type { Context, Hono } from 'hono'
+import { Hono, type Context } from 'hono'
+import { getCookie, setCookie } from 'hono/cookie'
 import type { Actor, PatientService } from '../../tenancy/patients.ts'
 import type { Orthanc } from '../../imaging/orthanc.ts'
 import { ImagingError, ImagingStudyService, type StudyView } from '../../imaging/studies.ts'
@@ -13,19 +14,37 @@ export interface DicomRouteContext {
   orthanc: Orthanc | null
   /** 分析流水线；null 时上传后不自动分析 */
   pipeline: ImagingPipeline | null
+  /** 阅片器令牌（auth/accounts.ts）：viewer = 一次性票据，dicomweb = 阅片器子域名上的 Cookie */
+  viewerTokens: {
+    issue: (userId: string, aud: 'viewer' | 'dicomweb', ttlSeconds: number, docs: '*' | string[]) => string | null
+    verify: (token: string | null | undefined, aud: 'viewer' | 'dicomweb') => { userId: string; docs: '*' | string[]; exp: number } | null
+  }
 }
+
+/** 阅片器子域名（如 viewer.heurion.org，本机联调可用 127.0.0.1:端口）；没配置时不开放阅片器 */
+export const viewerHostOf = () => (process.env.VIEWER_HOST || '').trim().toLowerCase() || null
+/** OHIF 静态站点（deploy/viewer 构建的镜像）；阅片器子域名上的页面请求都转发到这里 */
+const viewerUrl = () => (process.env.VIEWER_URL || '').replace(/\/+$/, '')
+/** 阅片器子域名上的只读 Cookie：只发往那里的 /api/dicomweb，HttpOnly、SameSite=Strict */
+export const VIEWER_COOKIE = 'hv_dicomweb'
+const VIEWER_COOKIE_TTL = 4 * 3600
+const TICKET_TTL = 60
+/** 一张 Cookie 最多记住的检查数（每打开一个检查加一个） */
+const VIEWER_MAX_STUDIES = 20
 
 /** 单次上传上限（MB），默认 2048；整次请求在内存里解析，过大的检查请分批上传 */
 const uploadMaxBytes = () => Math.max(1, Number(process.env.IMAGING_UPLOAD_MAX_MB) || 2048) * 1024 * 1024
 
 /** DICOMweb 路径：只允许 /studies/<UID>[/...]，字符白名单，不允许 .. */
 const DICOMWEB_PATH = /^\/studies\/([0-9.]{1,64})((?:\/[A-Za-z0-9._-]+)*)$/
+const UID = /^[0-9.]{1,64}$/
 
 /**
- * 影像检查（docs/design/IMAGING_STUDIES.md）：手工上传 DICOM、检查列表、DICOMweb 鉴权代理。
+ * 影像检查（docs/design/IMAGING_STUDIES.md）：手工上传 DICOM、检查列表、DICOMweb 鉴权代理、阅片器入口。
  * DICOMweb 只读、只转发能看到的患者的检查，供 OHIF 阅片；体素数据不经 AI。
+ * 返回阅片器子域名的请求处理函数（buildApi 按 Host 分流到这里）。
  */
-export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, ctx: DicomRouteContext): void {
+export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, ctx: DicomRouteContext): (c: Context) => Promise<Response> {
   const { me, pt, patientFailure, audit } = ctx
   const svc = (c: Context<{ Variables: { user: string } }>) => new ImagingStudyService(pt(c), ctx.orthanc)
   const fail = (c: Context, err: unknown) => err instanceof ImagingError ? c.json({ error: err.message, code: err.code }, err.status) : patientFailure(c, err)
@@ -82,7 +101,7 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
     } catch (err) { return fail(c, err) }
   })
 
-  const forward = async (c: Context<{ Variables: { user: string } }>, path: string, query: string) => {
+  const forward = async (c: Context, path: string, query: string) => {
     if (!ctx.orthanc) throw new ImagingError('orthanc_not_configured', '本机构没有配置影像存储（Orthanc）', 503)
     const resp = await ctx.orthanc.dicomweb(path, query, c.req.header('accept') ?? null, publicOrigin(c))
     const headers = new Headers({ 'Cache-Control': 'private, no-store' })
@@ -90,36 +109,118 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
     return new Response(resp.body, { status: resp.status, headers })
   }
   const queryOf = (c: Context) => { const u = new URL(c.req.url); return u.search.slice(1) }
-  /** 浏览器访问平台用的主机与协议（经 Caddy 时取其转发头）；字符不合法时不传，Orthanc 退回自己的地址 */
+  const protoOf = (c: Context) => (c.req.header('x-forwarded-proto') ?? new URL(c.req.url).protocol.replace(':', '')).split(',')[0]!.trim()
+  /** 浏览器访问用的主机与协议（经 Caddy 时取其转发头）；字符不合法时不传，Orthanc 退回自己的地址 */
   const publicOrigin = (c: Context): { host: string; proto: string } | null => {
     const host = (c.req.header('x-forwarded-host') ?? c.req.header('host') ?? new URL(c.req.url).host).split(',')[0]!.trim()
-    const proto = (c.req.header('x-forwarded-proto') ?? new URL(c.req.url).protocol.replace(':', '')).split(',')[0]!.trim()
+    const proto = protoOf(c)
     return /^[A-Za-z0-9.\-]+(:\d{1,5})?$/.test(host) && /^https?$/.test(proto) ? { host, proto } : null
   }
 
+  // —— DICOMweb：主站（Bearer 令牌）与阅片器子域名（Cookie）共用；allowed = Cookie 允许的检查（主站为全部可见的） ——
+
   /** QIDO-RS 检查查询：必须带 StudyInstanceUID，且每个都要能看到（不提供全库检索） */
-  app.get('/api/dicomweb/studies', async c => {
+  const qido = async (c: Context, a: Actor, allowed: '*' | string[]) => {
     try {
       const uids = (c.req.query('StudyInstanceUID') ?? '').split(/[,\\]/).map(s => s.trim()).filter(Boolean)
+      // 阅片器（allowed 为具体检查）会按患者 ID 查「同一患者的其它检查」：不支持全库检索，返回空列表而不是报错
+      if (!uids.length && allowed !== '*') return c.json([], 200, { 'Cache-Control': 'private, no-store' })
       if (!uids.length) throw new ImagingError('study_uid_required', '请按 StudyInstanceUID 查询检查')
       for (const uid of uids) {
-        if (!/^[0-9.]{1,64}$/.test(uid)) throw new ImagingError('bad_uid', 'StudyInstanceUID 格式不对')
-        const { studyId, scope } = svc(c).resolveStudyUid(me(c), uid)
+        if (!UID.test(uid)) throw new ImagingError('bad_uid', 'StudyInstanceUID 格式不对')
+        if (allowed !== '*' && !allowed.includes(uid)) throw new ImagingError('not_found', '影像检查不存在', 404)
+        const { studyId, scope } = svc(c as never).resolveStudyUid(a, uid)
         scope.log('dicomweb_view', studyId)
       }
       return await forward(c, '/studies', queryOf(c))
     } catch (err) { return fail(c, err) }
-  })
-
-  const study = async (c: Context<{ Variables: { user: string } }>) => {
+  }
+  const wado = async (c: Context, a: Actor, allowed: '*' | string[]) => {
     try {
       const path = c.req.path.slice('/api/dicomweb'.length)
       const m = DICOMWEB_PATH.exec(path)
       if (!m || path.includes('..')) throw new ImagingError('bad_path', '不支持的 DICOMweb 路径')
-      svc(c).resolveStudyUid(me(c), m[1]!)
+      if (allowed !== '*' && !allowed.includes(m[1]!)) throw new ImagingError('not_found', '影像检查不存在', 404)
+      svc(c as never).resolveStudyUid(a, m[1]!)
       return await forward(c, path, queryOf(c))
     } catch (err) { return fail(c, err) }
   }
-  app.get('/api/dicomweb/studies/:uid', study)
-  app.get('/api/dicomweb/studies/:uid/*', study)
+  app.get('/api/dicomweb/studies', c => qido(c, me(c), '*'))
+  app.get('/api/dicomweb/studies/:uid', c => wado(c, me(c), '*'))
+  app.get('/api/dicomweb/studies/:uid/*', c => wado(c, me(c), '*'))
+
+  // —— 阅片器（OHIF）：独立子域名，与主站不同源，读不到主站的登录令牌 ——
+
+  /**
+   * 主站上「在阅片器中打开」：校验能看到该检查后，签一张 60 秒、只能用一次、绑定该检查的票据，
+   * 返回阅片器子域名上的入口地址（浏览器跳过去换取那里的只读 Cookie）。
+   */
+  app.post('/api/imaging/viewer-ticket', async c => {
+    try {
+      const a = me(c)
+      if (a.via === 'ai') throw new ImagingError('forbidden', '阅片器只给医生本人在界面上打开', 403)
+      const vh = viewerHostOf()
+      if (!vh || !viewerUrl()) throw new ImagingError('viewer_not_configured', '阅片器还没有部署（VIEWER_HOST / VIEWER_URL 未配置）', 503)
+      const { study_uid: uid } = await c.req.json().catch(() => ({})) as { study_uid?: string }
+      if (!uid || !UID.test(uid)) throw new ImagingError('bad_uid', 'StudyInstanceUID 格式不对')
+      svc(c).resolveStudyUid(a, uid)
+      const ticket = ctx.viewerTokens.issue(a.userId, 'viewer', TICKET_TTL, [uid])
+      if (!ticket) throw new ImagingError('forbidden', '账户状态不允许打开阅片器', 403)
+      return c.json({ url: `${protoOf(c)}://${vh}/session?ticket=${encodeURIComponent(ticket)}`, expires_in: TICKET_TTL })
+    } catch (err) { return fail(c, err) }
+  })
+
+  /** 已用过的票据（进程内，按过期时间清理）：票据只能换一次 Cookie */
+  const usedTickets = new Map<string, number>()
+  const surface = new Hono()
+  const viewerActor = (c: Context): { a: Actor; allowed: string[] } | null => {
+    const v = ctx.viewerTokens.verify(getCookie(c, VIEWER_COOKIE), 'dicomweb')
+    return v && Array.isArray(v.docs) ? { a: { userId: v.userId, via: 'user', space: 'work' }, allowed: v.docs } : null
+  }
+
+  /** 票据换 Cookie：Cookie 记住这次及之前打开过的检查（同一用户），然后进入 OHIF 打开该检查 */
+  surface.get('/session', c => {
+    const now = Date.now() / 1000
+    for (const [k, exp] of usedTickets) if (exp < now) usedTickets.delete(k)
+    const raw = c.req.query('ticket') ?? ''
+    const t = ctx.viewerTokens.verify(raw, 'viewer')
+    if (!t || !Array.isArray(t.docs) || t.docs.length !== 1 || usedTickets.has(raw)) return c.text('阅片链接已失效，请回到患者页重新打开', 401)
+    usedTickets.set(raw, t.exp)
+    const uid = t.docs[0]!
+    const prev = ctx.viewerTokens.verify(getCookie(c, VIEWER_COOKIE), 'dicomweb')
+    const studies = [...new Set([uid, ...(prev && prev.userId === t.userId && Array.isArray(prev.docs) ? prev.docs : [])])].slice(0, VIEWER_MAX_STUDIES)
+    const cookie = ctx.viewerTokens.issue(t.userId, 'dicomweb', VIEWER_COOKIE_TTL, studies)
+    if (!cookie) return c.text('账户状态不允许打开阅片器', 403)
+    setCookie(c, VIEWER_COOKIE, cookie, { path: '/api/dicomweb', httpOnly: true, sameSite: 'Strict', secure: protoOf(c) === 'https', maxAge: VIEWER_COOKIE_TTL })
+    c.header('Cache-Control', 'no-store')
+    c.header('Referrer-Policy', 'no-referrer')
+    return c.redirect(`/viewer?StudyInstanceUIDs=${encodeURIComponent(uid)}`)
+  })
+  const unauthorized = (c: Context) => c.json({ error: '阅片会话已过期，请回到患者页重新打开', code: 'unauthorized' }, 401)
+  surface.get('/api/dicomweb/studies', c => { const v = viewerActor(c); return v ? qido(c, v.a, v.allowed) : unauthorized(c) })
+  surface.get('/api/dicomweb/studies/:uid', c => { const v = viewerActor(c); return v ? wado(c, v.a, v.allowed) : unauthorized(c) })
+  surface.get('/api/dicomweb/studies/:uid/*', c => { const v = viewerActor(c); return v ? wado(c, v.a, v.allowed) : unauthorized(c) })
+  // 主站的其它接口在阅片器子域名上一律不存在
+  surface.all('/api/*', c => c.json({ error: '不存在', code: 'not_found' }, 404))
+  /** 其余请求都是 OHIF 的页面与静态文件（不含患者数据），转发到阅片器服务 */
+  surface.on(['GET', 'HEAD'], '*', async c => {
+    const base = viewerUrl()
+    if (!base) return c.text('阅片器未部署（VIEWER_URL 未配置）', 503)
+    const u = new URL(c.req.url)
+    let resp: Response
+    try {
+      resp = await fetch(`${base}${u.pathname}${u.search}`, { method: c.req.method, signal: AbortSignal.timeout(30_000) })
+    } catch {
+      return c.text('阅片器服务连接失败', 502)
+    }
+    // fetch 已解压：不转发 content-encoding / content-length
+    const headers = new Headers()
+    for (const h of ['content-type', 'cache-control', 'etag', 'last-modified', 'cross-origin-embedder-policy', 'cross-origin-opener-policy', 'cross-origin-resource-policy']) {
+      const v = resp.headers.get(h); if (v) headers.set(h, v)
+    }
+    return new Response(c.req.method === 'HEAD' ? null : resp.body, { status: resp.status, headers })
+  })
+  surface.all('*', c => c.text('不支持的请求', 405))
+
+  return c => Promise.resolve(surface.fetch(c.req.raw))
 }

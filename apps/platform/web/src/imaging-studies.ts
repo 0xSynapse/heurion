@@ -5,7 +5,7 @@ type Notice = (msg: string, error?: boolean) => void
 
 interface SeriesView { id: string; modality: string | null; body_part: string | null; description: string | null; slice_thickness: number | null; kernel: string | null; instances: number }
 interface StudyView {
-  id: string; study_date: string | null; modalities: string[]; description: string | null; accession?: string | null
+  id: string; study_uid?: string; study_date: string | null; modalities: string[]; description: string | null; accession?: string | null
   source: 'upload' | 'pacs'; created_at: string; series: SeriesView[]; lesions: { proposed: number; confirmed: number; rejected: number }
   runs: RunView[]
 }
@@ -62,7 +62,7 @@ function render(list: StudyView[], canEdit: boolean): string {
       const last = st.runs[0]
       const busy = last && (last.status === 'queued' || last.status === 'running')
       return `<tr>
-      <td>${esc(st.study_date ?? '未知')}</td><td>${esc(st.modalities.join(' / ') || '—')}</td><td>${esc(st.description ?? '')}</td>
+      <td>${esc(st.study_date ?? '未知')}${st.study_uid ? `<div><button class="small-btn" data-view="${esc(st.study_uid)}">在阅片器中打开</button></div>` : ''}</td><td>${esc(st.modalities.join(' / ') || '—')}</td><td>${esc(st.description ?? '')}</td>
       <td class="small">${st.series.map(s => `<div>${seriesLine(s)}</div>`).join('')}</td>
       <td class="small">${runLine(last)}${canEdit && !busy ? `<div><button class="small-btn" data-analyze="${esc(st.id)}">${last ? '重新分析' : '开始分析'}</button></div>` : ''}</td>
       <td class="small">${st.lesions.proposed + st.lesions.confirmed + st.lesions.rejected ? `待确认 ${st.lesions.proposed} · 已确认 ${st.lesions.confirmed} · 已否决 ${st.lesions.rejected}` : '<span class="muted">—</span>'}</td>
@@ -118,6 +118,19 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
     }
   }
   listEl.onclick = async e => {
+    const view = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-view]')
+    if (view) {
+      // 先同步开窗（异步之后再开会被浏览器拦截）；阅片器在独立子域名，凭一次性票据换取那里的只读 Cookie
+      const win = window.open('', '_blank')
+      try {
+        const t = await api<{ url: string }>('/api/imaging/viewer-ticket', { method: 'POST', body: JSON.stringify({ study_uid: view.dataset.view }), headers: { 'Content-Type': 'application/json' } })
+        if (win) { win.opener = null; win.location.href = t.url }
+      } catch (err) {
+        win?.close()
+        notice(`不能打开阅片器：${(err as Error).message}`, true)
+      }
+      return
+    }
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-analyze]')
     if (!btn) return
     btn.disabled = true

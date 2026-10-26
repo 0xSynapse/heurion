@@ -27,7 +27,7 @@ import { PatientClaimService } from '../tenancy/claims.ts'
 import { scanPhi, redactPhi } from '../ops/phi-scan.ts'
 import type { CohortService } from '../research/cohort.ts'
 import { registerImagingRoutes } from './routes/imaging.ts'
-import { registerDicomRoutes } from './routes/dicom.ts'
+import { registerDicomRoutes, viewerHostOf } from './routes/dicom.ts'
 import { orthancFromEnv, type Orthanc } from '../imaging/orthanc.ts'
 import { sharedPipeline, type ImagingPipeline } from '../imaging/pipeline.ts'
 import { registerMailCalendarRoutes } from './routes/mail-calendar.ts'
@@ -158,6 +158,15 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   const mail = deps.mail ?? new MailService(store)
   const calendar = deps.calendar ?? new CalendarService(store, mail)
   const app = new Hono<{ Variables: { user: string } }>()
+  // 阅片器子域名（VIEWER_HOST，docs/design/IMAGING_STUDIES.md「阅片器」）：该主机的请求全部交给阅片器入口，
+  // 不进主站的任何路由（主站登录令牌、页面、其它接口在那里都不可用）。处理函数在影像路由注册时绑定。
+  let viewerSurface: ((c: Context) => Promise<Response>) | null = null
+  app.use('*', async (c, next) => {
+    const vh = viewerHostOf()
+    // 只看 Host（Caddy 原样转发；X-Forwarded-Host 可被客户端伪造，不用于分流）
+    if (vh && viewerSurface && (c.req.header('host') ?? new URL(c.req.url).host) === vh) return viewerSurface(c)
+    await next()
+  })
   app.onError((err, c) => {
     const anyErr = err as any
     if (anyErr && typeof anyErr.status === 'number' && typeof anyErr.code === 'string') {
@@ -880,8 +889,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   registerImagingRoutes(app, { store, docs, access, audit, me, pt, patientFailure })
   // —— 影像检查：手工上传 DICOM、检查列表、DICOMweb 鉴权代理（docs/design/IMAGING_STUDIES.md）——
   const orthanc = deps.orthanc !== undefined ? deps.orthanc : orthancFromEnv()
-  registerDicomRoutes(app, {
+  viewerSurface = registerDicomRoutes(app, {
     audit, me, pt, patientFailure, orthanc,
+    viewerTokens: { issue: (u, aud, ttl, docs) => accounts.viewerToken(u, aud, ttl, docs), verify: (t, aud) => accounts.verifyViewerToken(t, aud) },
     pipeline: deps.imagingPipeline !== undefined ? deps.imagingPipeline : deps.patients && orthanc ? sharedPipeline(deps.patients, orthanc) : null,
   })
 

@@ -63,6 +63,29 @@ REST 与 MCP 的对应关系登记在 `tests/parity.test.ts`。
 5. 入库：每个检出写成一条 `source = ai`、`status = proposed` 的病灶。同一任务旧运行里从未经医生处理的检出标为 `superseded`，医生确认或否决过的保留。
 6. 失败：如实记下原因，例如「模型不可用（HTTP 501）：…」「影像服务连接失败：…」。服务重启后，库里仍是 queued / running 的运行在列表中显示为「已中断」，可重新分析。
 
+## 阅片器（OHIF，T2.1）
+
+阅片器部署在独立子域名（`VIEWER_HOST`，如 `viewer.heurion.org`），与主站不同源：OHIF 这样的大型第三方前端即使有 XSS，也读不到主站浏览器里的登录令牌。
+
+```
+患者页「在阅片器中打开」
+  │ POST /api/imaging/viewer-ticket {study_uid}     主站，Bearer 令牌；校验能看到该检查
+  ▼ 一次性票据（aud=viewer，60 s，绑定该检查，只能用一次）
+viewer.<域名>/session?ticket=…                      平台按 Host 分流到阅片器入口
+  │ 换发只读 Cookie hv_dicomweb（aud=dicomweb，4 h，Path=/api/dicomweb，HttpOnly，SameSite=Strict，https 时 Secure）
+  ▼ 302 → /viewer?StudyInstanceUIDs=…
+OHIF（deploy/viewer 构建的镜像，根路径）            同源读 viewer.<域名>/api/dicomweb/…
+```
+
+- Cookie 只对打开过的检查有效（每打开一个检查加一个，最多 20 个），即使医生有权限，没打开过的检查也读不到。
+- 账户停用、改密码、强制下线后，Cookie 和票据都立即失效。
+- 阅片器子域名上只有：`/session`、只读 DICOMweb、OHIF 静态页面。主站的其它接口在那里一律 404，也不认主站令牌；反过来，主站也不认阅片器 Cookie。
+- 分流只看 `Host` 头（Caddy 原样转发）；`X-Forwarded-Host` 可被客户端伪造，不用于分流。
+- OHIF 会按患者 ID 查「同一患者的其它检查」。平台不提供全库检索，阅片器上这类查询返回空列表。
+- 部署：Caddy 的 `viewer.{$HOSTNAME}` 站点转发到平台；平台设置 `VIEWER_HOST`、`VIEWER_URL=http://viewer:8080`；DNS 要有 viewer 子域名的记录。
+- 构建：`deploy/viewer/build.sh`，用 OHIF v3.13.12 官方源码和官方 Dockerfile，加上 `deploy/viewer/app-config.js`。以后在这里加 Heurion 结节面板扩展（T2.2）。
+- 2026-10-26 本机验证：Podman 里跑 Orthanc 与阅片器，worktree 里跑平台与 worker，用无头 Chromium 打开胸部 CT（269 层）。274 个 DICOMweb 请求全部成功，无失败请求、无页面错误，影像正常显示。
+
 ## 资源与排队
 
 多人同时上传时只排队，不撑爆内存。分两层：

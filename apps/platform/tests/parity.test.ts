@@ -190,6 +190,7 @@ const NOT_FOR_AI: Record<string, string> = {
   'GET /api/dicomweb/studies': 'OHIF 阅片器按 StudyInstanceUID 查询检查（DICOMweb QIDO），体素与原件不经 AI',
   'GET /api/dicomweb/studies/:uid': 'OHIF 阅片器读取检查影像（DICOMweb WADO），体素与原件不经 AI',
   'GET /api/dicomweb/studies/:uid/*': 'OHIF 阅片器读取序列、元数据与帧（DICOMweb WADO），体素与原件不经 AI',
+  'POST /api/imaging/viewer-ticket': '医生在界面上打开 OHIF 阅片器（子域名）用的一次性票据；AI 不看影像本身',
   // 知家分享原件图片由界面展示
   'GET /api/shares/:shid/assets/:aid': '图片二进制资产由界面渲染展示；AI 读打码后的文字内容（share_file / share_read）',
   // 机构患者认领码绑定的人机分界

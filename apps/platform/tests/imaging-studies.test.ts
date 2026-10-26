@@ -213,4 +213,81 @@ describe('影像检查接口与 DICOMweb 代理', () => {
     expect(up.status).toBe(503)
     expect(((await up.json()) as { code: string }).code).toBe('orthanc_not_configured')
   })
+
+  it('阅片器子域名：主站签一次性票据 → 子域名换只读 Cookie → 只能读打开过的检查；与主站令牌互不通用', async () => {
+    const t = api(new FakeOrthanc())
+    const a = t.as(t.dr)
+    const p = t.patients.create(a, { sex: 'F', birth_year: 1961 })
+    await t.svc.importDicom(a, p.id, [{ name: 'IM1', bytes: dicom(STUDY, SERIES, '1') }])
+    const STUDY2 = `${STUDY}.9`
+    await t.svc.importDicom(a, p.id, [{ name: 'IM2', bytes: dicom(STUDY2, `${STUDY2}.1`, '2') }])
+    const auth = { Authorization: t.tok(t.dr), 'Content-Type': 'application/json' }
+    const ticketReq = (uid: string, who = auth) => t.app.request('/api/imaging/viewer-ticket', { method: 'POST', headers: who, body: JSON.stringify({ study_uid: uid }) })
+
+    // 没配置阅片器时 503
+    expect((await ticketReq(STUDY)).status).toBe(503)
+    process.env.VIEWER_HOST = 'viewer.test'
+    process.env.VIEWER_URL = 'http://ohif:8080'
+    try {
+      const r = await (await ticketReq(STUDY)).json() as { url: string }
+      expect(r.url).toMatch(/^http:\/\/viewer\.test\/session\?ticket=h1\./)
+      // 看不到患者的医生拿不到票据
+      expect((await ticketReq(STUDY, { Authorization: t.tok(t.other), 'Content-Type': 'application/json' })).status).toBe(404)
+
+      // 子域名上用票据换 Cookie，跳进 OHIF
+      const sess = await t.app.request(r.url)
+      expect(sess.status).toBe(302)
+      expect(sess.headers.get('location')).toBe(`/viewer?StudyInstanceUIDs=${STUDY}`)
+      const set = sess.headers.get('set-cookie')!
+      expect(set).toMatch(/^hv_dicomweb=h1\./)
+      for (const attr of ['Path=/api/dicomweb', 'HttpOnly', 'SameSite=Strict']) expect(set).toContain(attr)
+      const cookie = set.split(';')[0]!
+      // 票据只能用一次
+      expect((await t.app.request(r.url)).status).toBe(401)
+
+      const V = 'http://viewer.test'
+      expect((await t.app.request(`${V}/api/dicomweb/studies/${STUDY}/series`, { headers: { Cookie: cookie } })).status).toBe(200)
+      expect((await t.app.request(`${V}/api/dicomweb/studies?StudyInstanceUID=${STUDY}`, { headers: { Cookie: cookie } })).status).toBe(200)
+      // OHIF 按患者 ID 查其它检查：不检索，返回空列表
+      const byPatient = await t.app.request(`${V}/api/dicomweb/studies?00100020=P-1001&limit=101`, { headers: { Cookie: cookie } })
+      expect(byPatient.status).toBe(200)
+      expect(await byPatient.json()).toEqual([])
+      // 没打开过的检查，即使医生有权限，这张 Cookie 也读不到
+      expect((await t.app.request(`${V}/api/dicomweb/studies/${STUDY2}/series`, { headers: { Cookie: cookie } })).status).toBe(404)
+      // 再打开第二个检查：Cookie 记住两个
+      const r2 = await (await ticketReq(STUDY2)).json() as { url: string }
+      const cookie2 = (await t.app.request(r2.url, { headers: { Cookie: cookie } })).headers.get('set-cookie')!.split(';')[0]!
+      expect((await t.app.request(`${V}/api/dicomweb/studies/${STUDY}/series`, { headers: { Cookie: cookie2 } })).status).toBe(200)
+      expect((await t.app.request(`${V}/api/dicomweb/studies/${STUDY2}/series`, { headers: { Cookie: cookie2 } })).status).toBe(200)
+
+      // 互不通用：子域名不认主站令牌，也没有主站的其它接口；主站不认子域名 Cookie
+      expect((await t.app.request(`${V}/api/dicomweb/studies/${STUDY}/series`, { headers: { Authorization: t.tok(t.dr) } })).status).toBe(401)
+      expect((await t.app.request(`${V}/api/patients/${p.id}`, { headers: { Cookie: cookie, Authorization: t.tok(t.dr) } })).status).toBe(404)
+      expect((await t.app.request(`/api/dicomweb/studies/${STUDY}/series`, { headers: { Cookie: cookie } })).status).toBe(401)
+      expect((await t.app.request(`/api/patients/${p.id}`, { headers: { Authorization: `Bearer ${cookie.split('=')[1]}` } })).status).toBe(401)
+
+      // 子域名上的页面请求转发到 OHIF（去掉 fetch 已解压的编码头）
+      const orig = globalThis.fetch
+      const seen: string[] = []
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        seen.push(String(input))
+        return new Response('<html>ohif</html>', { headers: { 'content-type': 'text/html', 'content-encoding': 'gzip' } })
+      }) as typeof fetch
+      try {
+        const page = await t.app.request(`${V}/viewer?StudyInstanceUIDs=${STUDY}`)
+        expect(await page.text()).toBe('<html>ohif</html>')
+        expect(page.headers.get('content-encoding')).toBeNull()
+        expect(seen).toEqual([`http://ohif:8080/viewer?StudyInstanceUIDs=${STUDY}`])
+      } finally { globalThis.fetch = orig }
+
+      // 强制下线后 Cookie 失效；经 https 时 Cookie 带 Secure
+      t.store.updateUser(t.dr, { bumpTokenVersion: true })
+      expect((await t.app.request(`${V}/api/dicomweb/studies/${STUDY}/series`, { headers: { Cookie: cookie2 } })).status).toBe(401)
+      const r3 = await (await ticketReq(STUDY, { Authorization: t.tok(t.dr), 'Content-Type': 'application/json' })).json() as { url: string }  // 下线后重新登录的新令牌
+      expect((await t.app.request(r3.url, { headers: { 'X-Forwarded-Proto': 'https' } })).headers.get('set-cookie')).toContain('Secure')
+    } finally {
+      delete process.env.VIEWER_HOST
+      delete process.env.VIEWER_URL
+    }
+  })
 })

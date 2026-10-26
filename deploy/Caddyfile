@@ -5,8 +5,14 @@
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	}
 
-	# 上传（资料库 PDF 最大 50MB、docx / pptx 导入、数据集最大 100MB）
-	request_body {
+	# 上传（资料库 PDF 最大 50MB、docx / pptx 导入、数据集最大 100MB）；DICOM 上传单独放宽：
+	# 患者页按 300MB 一批上传（apps/platform/web/src/imaging-studies.ts），加 multipart 开销
+	@dicomUpload path_regexp dicomUpload ^/api/patients/[^/]+/imaging/dicom$
+	@otherBody not path_regexp ^/api/patients/[^/]+/imaging/dicom$
+	request_body @dicomUpload {
+		max_size 320MB
+	}
+	request_body @otherBody {
 		max_size 110MB
 	}
 
@@ -27,6 +33,30 @@
 		}
 	}
 
+	log {
+		output stderr
+		format json
+	}
+}
+
+# 阅片器（OHIF）独立子域名：与主站不同源，读不到主站的登录令牌；平台按 Host 把这里的请求只交给阅片器入口
+# （票据换 Cookie、只读 DICOMweb、OHIF 静态页面），主站的其它接口在这里都不存在。
+# 平台需设置 VIEWER_HOST=viewer.<主域名>、VIEWER_URL=http://viewer:8080；DNS 要有 viewer 子域名的记录。
+viewer.{$HOSTNAME} {
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+	}
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy heurion2:8787 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
 	log {
 		output stderr
 		format json

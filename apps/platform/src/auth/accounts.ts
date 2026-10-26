@@ -193,6 +193,31 @@ export class Accounts {
     return this.opts.devMode ? devUserFor(token, this.opts.devToken, this.opts.devUser) : null
   }
 
+  /**
+   * 阅片器（OHIF，独立子域名）用的只读令牌：viewer = 打开阅片器的一次性票据（docs 为可打开的 StudyInstanceUID），
+   * dicomweb = 阅片器子域名上的 Cookie（只在那里的 /api/dicomweb 被接受）。两种都换不到别的接口；
+   * 与登录令牌同样受账户状态与令牌版本约束（停用、改密码、强制下线后失效）。开发用户没有账户记录，只在开发模式下签发。
+   */
+  viewerToken(userId: string, aud: 'viewer' | 'dicomweb', ttlSeconds: number, docs: '*' | string[] = '*'): string | null {
+    const user = this.store.getUser(userId)
+    if (user) return user.status === 'active' && this.tenantActive(user) ? issueToken(this.opts.secret, { u: user.id, d: docs, p: ['read'], aud, ttlSeconds, v: user.token_version }) : null
+    return this.isDevUser(userId) ? issueToken(this.opts.secret, { u: userId, d: docs, p: ['read'], aud, ttlSeconds }) : null
+  }
+
+  /** 校验阅片器令牌 → 用户与可访问范围；无效返回 null */
+  verifyViewerToken(token: string | null | undefined, aud: 'viewer' | 'dicomweb'): { userId: string; docs: '*' | string[]; exp: number } | null {
+    if (!token?.startsWith('h1.')) return null
+    const claims = verifyToken(this.opts.secret, token, aud)
+    if (!claims) return null
+    const user = this.store.getUser(claims.u)
+    const ok = user ? user.status === 'active' && user.token_version === (claims.v ?? -1) && this.tenantActive(user) : this.isDevUser(claims.u)
+    return ok ? { userId: claims.u, docs: claims.d, exp: claims.exp } : null
+  }
+
+  private isDevUser(userId: string): boolean {
+    return this.opts.devMode && (userId === this.opts.devUser || userId.startsWith(`${this.opts.devUser}:`))
+  }
+
   /** 当前用户信息；开发用户没有账户记录。 */
   me(userId: string): PublicUser | { id: string; username: string; display_name: string; email: null; role: 'user'; dev: true } {
     const user = this.store.getUser(userId)

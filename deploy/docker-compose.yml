@@ -154,6 +154,20 @@ services:
       - orthanc-db:/var/lib/orthanc/db
     networks: [web]
 
+  # 阅片器（OHIF v3.13.12，按 /viewer/ 子路径从源码构建：deploy/viewer/build.sh）。平台把 /viewer/ 反向代理到这里，
+  # 影像只经平台的 DICOMweb 代理按患者权限读取。启用时在 .env.production 里设置 VIEWER_URL=http://viewer:8080。
+  viewer:
+    image: ${VIEWER_IMAGE:-heurion2-viewer:v3.13.12}
+    container_name: heurion2-viewer
+    profiles: [pacs]
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 256m
+    memswap_limit: 256m
+    environment:
+      - PORT=8080
+    networks: [web]
+
   caddy:
     image: caddy:2.8-alpine
     container_name: heurion2-caddy

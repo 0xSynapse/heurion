@@ -6,8 +6,9 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
  * 格式：`h1.<base64url(json)>.<hmac>`。
  */
 
-/** mcp：dsh 回连平台 MCP；web：浏览器；llm：dsh 经平台代理调用模型（真实 API key 不进 dsh）。 */
-export type Audience = 'mcp' | 'web' | 'llm'
+/** mcp：dsh 回连平台 MCP；web：浏览器；llm：dsh 经平台代理调用模型（真实 API key 不进 dsh）；
+ * viewer：打开阅片器的一次性票据（绑定一个检查，60 秒）；dicomweb：阅片器子域名上的只读 Cookie（只认那里的 /api/dicomweb）。 */
+export type Audience = 'mcp' | 'web' | 'llm' | 'viewer' | 'dicomweb'
 export type Permission = 'read' | 'write'
 
 export interface TokenClaims {
