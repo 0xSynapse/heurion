@@ -52,7 +52,7 @@ REST 与 MCP 的对应关系登记在 `tests/parity.test.ts`。
 - `GET /api/dicomweb/studies?StudyInstanceUID=…`：必须带 UID，每个 UID 都要能看到，不提供全库检索。
 - `GET /api/dicomweb/studies/:uid[/...]`：路径只允许 `/studies/<UID>/…` 加字符白名单，转发到 Orthanc 的 `/dicom-web/`。
 - 响应带 `Cache-Control: private, no-store`。
-- Orthanc 配置了 `DicomWeb.PublicRoot = /api/dicomweb/`，使元数据里的 BulkDataURI 指回平台代理。接入 OHIF（T2.1）时需在真实 Orthanc 上验证。
+- BulkDataURI 指回平台：Orthanc 配置 `DicomWeb.PublicRoot = /api/dicomweb/` 决定路径；主机与协议由平台代理用 `Forwarded: host=…;proto=…` 头传给 Orthanc（取浏览器访问用的 Host / X-Forwarded-Host 与协议，字符不合法时不传）。Orthanc 不认 `X-Forwarded-Host`。2026-10-26 在 orthancteam/orthanc:26.9.1 上实测：元数据、bulk、frames 都经代理取到。
 
 ## 分析流水线（T1.4，`src/imaging/pipeline.ts`）
 
@@ -87,4 +87,4 @@ REST 与 MCP 的对应关系登记在 `tests/parity.test.ts`。
 
 - PACS 自动转发（C-STORE，T3.8）开启前 `DicomServerEnabled` 保持关闭。
 - 上传目前整批读入内存（默认单次上限 2 GB，`IMAGING_UPLOAD_MAX_MB`）。前端按 300 MB 分批；以后改成流式。
-- Orthanc 镜像 `jodogne/orthanc-plugins:1.12.4` 和配置文件中 `${ORTHANC_PASSWORD}` 的环境变量替换，首次部署时需核对。
+- Orthanc 用官方维护的 `orthancteam/orthanc:26.9.1`（amd64 / arm64）；原先的 `jodogne/orthanc-plugins:1.12.4` 只有 amd64。配置文件挂到 `/etc/orthanc/heurion.json`，`${ORTHANC_PASSWORD}` 的环境变量替换已在本机验证（无口令 / 错口令均 401）。

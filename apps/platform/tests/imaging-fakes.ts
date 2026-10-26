@@ -17,7 +17,7 @@ export const seriesFiles = (study: string, series: string, n: number) =>
 /** 内存版 Orthanc：按实例里的 UID 归档（Orthanc 的 ID 和真实一样是哈希，不含 UID），记下收到的请求 */
 export class FakeOrthanc implements Orthanc {
   instances = new Map<string, { study: string; series: string }>()
-  calls: Array<{ path: string; query: string }> = []
+  calls: Array<{ path: string; query: string; forwarded?: { host: string; proto: string } | null }> = []
   archives: string[] = []
   /** 按 SeriesInstanceUID 覆盖序列标签（层厚、重建核、部位等） */
   seriesTags = new Map<string, Partial<OrthancSeries>>()
@@ -50,8 +50,8 @@ export class FakeOrthanc implements Orthanc {
     this.archives.push(this.uids.get(id)!)
     return new Uint8Array([0x50, 0x4b, 0x03, 0x04])
   }
-  async dicomweb(path: string, query: string) {
-    this.calls.push({ path, query })
+  async dicomweb(path: string, query: string, _accept: string | null = null, forwarded: { host: string; proto: string } | null = null) {
+    this.calls.push({ path, query, forwarded })
     return new Response(JSON.stringify([{ ok: path }]), { headers: { 'content-type': 'application/dicom+json' } })
   }
 }

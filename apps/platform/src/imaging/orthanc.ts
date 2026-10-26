@@ -39,8 +39,11 @@ export interface Orthanc {
   series(orthancId: string): Promise<OrthancSeries>
   /** 整个序列打包成 zip（DICOM 原件），交给影像 worker 分析 */
   seriesArchive(orthancId: string): Promise<Uint8Array>
-  /** 转发一个 DICOMweb GET（path 以 / 开头、相对 DICOMweb 根，如 /studies/1.2.3/series） */
-  dicomweb(path: string, query: string, accept: string | null): Promise<Response>
+  /**
+   * 转发一个 DICOMweb GET（path 以 / 开头、相对 DICOMweb 根，如 /studies/1.2.3/series）。
+   * forwarded = 浏览器访问平台用的主机与协议：Orthanc 据此（Forwarded 头）生成 BulkDataURI，使其指回平台代理而不是 Orthanc 自己。
+   */
+  dicomweb(path: string, query: string, accept: string | null, forwarded?: { host: string; proto: string } | null): Promise<Response>
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null)
@@ -116,8 +119,11 @@ export class HttpOrthanc implements Orthanc {
     return new Uint8Array(await resp.arrayBuffer())
   }
 
-  async dicomweb(path: string, query: string, accept: string | null): Promise<Response> {
-    return this.call(`${this.dicomwebRoot}${path}${query ? `?${query}` : ''}`, { headers: accept ? { Accept: accept } : {} }, 120_000)
+  async dicomweb(path: string, query: string, accept: string | null, forwarded?: { host: string; proto: string } | null): Promise<Response> {
+    const headers: Record<string, string> = {}
+    if (accept) headers.Accept = accept
+    if (forwarded) headers.Forwarded = `host=${forwarded.host};proto=${forwarded.proto}`
+    return this.call(`${this.dicomwebRoot}${path}${query ? `?${query}` : ''}`, { headers }, 120_000)
   }
 }
 

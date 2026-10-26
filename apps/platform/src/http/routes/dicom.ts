@@ -84,12 +84,18 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
 
   const forward = async (c: Context<{ Variables: { user: string } }>, path: string, query: string) => {
     if (!ctx.orthanc) throw new ImagingError('orthanc_not_configured', '本机构没有配置影像存储（Orthanc）', 503)
-    const resp = await ctx.orthanc.dicomweb(path, query, c.req.header('accept') ?? null)
+    const resp = await ctx.orthanc.dicomweb(path, query, c.req.header('accept') ?? null, publicOrigin(c))
     const headers = new Headers({ 'Cache-Control': 'private, no-store' })
     for (const h of ['content-type', 'content-length']) { const v = resp.headers.get(h); if (v) headers.set(h, v) }
     return new Response(resp.body, { status: resp.status, headers })
   }
   const queryOf = (c: Context) => { const u = new URL(c.req.url); return u.search.slice(1) }
+  /** 浏览器访问平台用的主机与协议（经 Caddy 时取其转发头）；字符不合法时不传，Orthanc 退回自己的地址 */
+  const publicOrigin = (c: Context): { host: string; proto: string } | null => {
+    const host = (c.req.header('x-forwarded-host') ?? c.req.header('host') ?? new URL(c.req.url).host).split(',')[0]!.trim()
+    const proto = (c.req.header('x-forwarded-proto') ?? new URL(c.req.url).protocol.replace(':', '')).split(',')[0]!.trim()
+    return /^[A-Za-z0-9.\-]+(:\d{1,5})?$/.test(host) && /^https?$/.test(proto) ? { host, proto } : null
+  }
 
   /** QIDO-RS 检查查询：必须带 StudyInstanceUID，且每个都要能看到（不提供全库检索） */
   app.get('/api/dicomweb/studies', async c => {

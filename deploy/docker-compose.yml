@@ -138,7 +138,8 @@ services:
   # 启用时在 .env.production 里设置 ORTHANC_URL=http://orthanc:8042、ORTHANC_USER=heurion、ORTHANC_PASSWORD=<随机长口令>。
   # DICOM 原件含患者身份信息：只在患者数据允许存放的服务器上启用（医院内网部署）。
   orthanc:
-    image: ${ORTHANC_IMAGE:-jodogne/orthanc-plugins:1.12.4}
+    # 官方维护镜像，含 amd64 与 arm64；/etc/orthanc/*.json 与镜像默认配置合并（2026-10-26 本机 Podman 验证）
+    image: ${ORTHANC_IMAGE:-orthancteam/orthanc:26.9.1}
     container_name: heurion2-orthanc
     profiles: [pacs]
     restart: unless-stopped
@@ -146,9 +147,10 @@ services:
     mem_limit: 2g
     memswap_limit: 2g
     env_file: [.env.production]
-    command: ["/etc/orthanc/orthanc.json"]
+    environment:
+      - DICOM_WEB_PLUGIN_ENABLED=true
     volumes:
-      - ./orthanc/orthanc.json:/etc/orthanc/orthanc.json:ro
+      - ./orthanc/orthanc.json:/etc/orthanc/heurion.json:ro
       - orthanc-db:/var/lib/orthanc/db
     networks: [web]
 

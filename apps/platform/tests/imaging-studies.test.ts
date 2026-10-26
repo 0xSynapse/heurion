@@ -170,7 +170,8 @@ describe('影像检查接口与 DICOMweb 代理', () => {
   }
 
   it('上传后列表带 UID；DICOMweb 只转发能看到的检查', async () => {
-    const t = api(new FakeOrthanc())
+    const fake = new FakeOrthanc()
+    const t = api(fake)
     const p = t.patients.create(t.as(t.dr), { sex: 'F', birth_year: 1961 })
     const form = new FormData()
     form.append('files', new File([dicom(STUDY, SERIES, '1')], 'IM1'))
@@ -188,6 +189,12 @@ describe('影像检查接口与 DICOMweb 代理', () => {
     const meta = await t.app.request(`/api/dicomweb/studies/${STUDY}/series/${SERIES}/metadata`, { headers: { Authorization: t.tok(t.dr) } })
     expect(meta.status).toBe(200)
     expect(await meta.json()).toEqual([{ ok: `/studies/${STUDY}/series/${SERIES}/metadata` }])
+    // BulkDataURI 要指回平台：转发浏览器访问用的主机与协议；带注入字符的主机不转发
+    expect(fake.calls.at(-1)!.forwarded).toEqual({ host: 'localhost', proto: 'http' })
+    await t.app.request(`http://localhost/api/dicomweb/studies/${STUDY}/series`, { headers: { Authorization: t.tok(t.dr), 'X-Forwarded-Host': 'pacs.example.org', 'X-Forwarded-Proto': 'https' } })
+    expect(fake.calls.at(-1)!.forwarded).toEqual({ host: 'pacs.example.org', proto: 'https' })
+    await t.app.request(`http://localhost/api/dicomweb/studies/${STUDY}/series`, { headers: { Authorization: t.tok(t.dr), 'X-Forwarded-Host': 'evil;proto=x' } })
+    expect(fake.calls.at(-1)!.forwarded).toBeNull()
 
     // 看不到患者的医生、不带 UID 的检索、越界路径
     expect((await t.app.request(`/api/dicomweb/studies/${STUDY}/series`, { headers: { Authorization: t.tok(t.other) } })).status).toBe(404)
