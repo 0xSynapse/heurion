@@ -115,7 +115,7 @@ function runProps(marks: readonly Mark[], forceSup = false): string {
       }
     }
     if (font_family) {
-      const fam = font_family.trim()
+      const fam = font_family.split(',')[0]!.trim().replace(/^['"]+|['"]+$/g, '')
       if (fam) {
         xml = xml.replace(/<a:(latin|ea|cs)\b[^>]*\/?>/g, '')
         const fontTags = `<a:latin typeface="${esc(fam)}"/><a:ea typeface="${esc(fam)}"/>`

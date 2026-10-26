@@ -3,7 +3,7 @@ import { dropCursor } from 'prosemirror-dropcursor'
 import { gapCursor } from 'prosemirror-gapcursor'
 import { InputRule, inputRules, wrappingInputRule } from 'prosemirror-inputrules'
 import { keymap } from 'prosemirror-keymap'
-import type { Node as PMNode, NodeType } from 'prosemirror-model'
+import { Mark, type Node as PMNode, type NodeType } from 'prosemirror-model'
 import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirror-schema-list'
 import { EditorState, Plugin, PluginKey, TextSelection, type Command } from 'prosemirror-state'
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, CellSelection, deleteColumn, deleteRow, findTable, goToNextCell, isInTable, mergeCells, setCellAttr, splitCell, tableEditing } from 'prosemirror-tables'
@@ -333,6 +333,24 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
       id: string | null
       suggestOf: string | null
     }
+    const sameBlockContent = (a: PMNode, b: PMNode): boolean => {
+      if (a.type !== b.type || !a.content.eq(b.content) || !Mark.sameSet(a.marks, b.marks)) return false
+      for (const k of Object.keys(a.attrs)) {
+        if (k === 'id' || k.startsWith('suggest')) continue
+        if (a.attrs[k] !== b.attrs[k]) return false
+      }
+      return true
+    }
+    const sameCellContent = (a: PMNode, b: PMNode): boolean => {
+      if (a.type !== b.type || a.childCount !== b.childCount) return false
+      for (const k of Object.keys(a.attrs)) {
+        if (a.attrs[k] !== b.attrs[k]) return false
+      }
+      for (let i = 0; i < a.childCount; i++) {
+        if (!sameBlockContent(a.child(i), b.child(i))) return false
+      }
+      return true
+    }
     const groups = new Map<string, SuggestionBlock[]>()
     doc.descendants((node, pos) => {
       const suggest = node.attrs.suggest as 'insert' | 'delete' | null
@@ -348,6 +366,7 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
           suggestOf: (node.attrs.suggest_of as string | null) ?? null,
         })
         groups.set(group, list)
+        return false
       }
       return true
     })
@@ -388,7 +407,7 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
                 if (!delCell) {
                   decos.push(Decoration.node(cellPos, cellPos + insCell.nodeSize, { class: 'diff-ins-block' }))
                   changedCellBarPositions.push(cellPos + 1)
-                } else if (!delCell.eq(insCell)) {
+                } else if (!sameCellContent(delCell, insCell)) {
                   decos.push(Decoration.node(cellPos, cellPos + insCell.nodeSize, { class: 'diff-modified-cell' }))
                   changedCellBarPositions.push(cellPos + 1)
                   let pPos = cellPos + 1
@@ -396,7 +415,7 @@ function suggestionDiffPlugin(onSuggestion: EditorOptions['onSuggestion']) {
                     const insP = insCell.child(p)
                     const delP = p < delCell.childCount ? delCell.child(p) : null
                     if (delP && insP.isTextblock && delP.isTextblock) {
-                      if (!delP.eq(insP)) {
+                      if (!sameBlockContent(delP, insP)) {
                         renderTextblockInlineDiff(delP, insP, pPos, decos)
                       }
                     } else {
@@ -840,59 +859,49 @@ export class Editor {
     return ok
   }
 
+  private updateTextStyle(patch: { font_family?: string | null; font_size?: string | null; color?: string | null }): void {
+    const state = this.view.state
+    const { from, to, empty } = state.selection
+    const textStyleType = schema.marks.text_style!
+    const mergeAttrs = (existing?: Mark | null) => {
+      const next = {
+        font_family: patch.font_family !== undefined ? (patch.font_family || null) : ((existing?.attrs.font_family as string | null) ?? null),
+        font_size: patch.font_size !== undefined ? (patch.font_size || null) : ((existing?.attrs.font_size as string | null) ?? null),
+        color: patch.color !== undefined ? (patch.color || null) : ((existing?.attrs.color as string | null) ?? null),
+      }
+      return next.font_family || next.font_size || next.color ? next : null
+    }
+    let tr = state.tr
+    if (empty) {
+      const baseMarks = state.storedMarks || state.selection.$from.marks()
+      const existing = textStyleType.isInSet(baseMarks)
+      const next = mergeAttrs(existing)
+      if (next) tr = tr.addStoredMark(textStyleType.create(next))
+      else tr = tr.removeStoredMark(textStyleType)
+    } else {
+      const spans: Array<{ from: number; to: number; attrs: Record<string, unknown> | null }> = []
+      state.doc.nodesBetween(from, to, (node, pos) => {
+        if (!node.isText) return
+        const nFrom = Math.max(from, pos)
+        const nTo = Math.min(to, pos + node.nodeSize)
+        if (nFrom >= nTo) return
+        const existing = textStyleType.isInSet(node.marks)
+        spans.push({ from: nFrom, to: nTo, attrs: mergeAttrs(existing) })
+      })
+      for (const s of spans) {
+        tr = tr.removeMark(s.from, s.to, textStyleType)
+        if (s.attrs) tr = tr.addMark(s.from, s.to, textStyleType.create(s.attrs))
+      }
+    }
+    this.view.dispatch(tr)
+    this.view.focus()
+  }
+
   readonly commands = {
     mark: (name: 'bold' | 'italic' | 'underline' | 'sup' | 'sub') => this.run(toggleMark(schema.marks[name]!)),
-    setFontFamily: (fontFamily: string) => {
-      const { from, to, empty } = this.view.state.selection
-      let tr = this.view.state.tr
-      if (empty) {
-        const mark = fontFamily ? schema.marks.text_style!.create({ font_family: fontFamily }) : null
-        if (mark) tr = tr.addStoredMark(mark)
-        else tr = tr.removeStoredMark(schema.marks.text_style!)
-      } else {
-        if (fontFamily) {
-          tr = tr.addMark(from, to, schema.marks.text_style!.create({ font_family: fontFamily }))
-        } else {
-          tr = tr.removeMark(from, to, schema.marks.text_style!)
-        }
-      }
-      this.view.dispatch(tr)
-      this.view.focus()
-    },
-    setFontSize: (fontSize: string) => {
-      const { from, to, empty } = this.view.state.selection
-      let tr = this.view.state.tr
-      if (empty) {
-        const mark = fontSize ? schema.marks.text_style!.create({ font_size: fontSize }) : null
-        if (mark) tr = tr.addStoredMark(mark)
-        else tr = tr.removeStoredMark(schema.marks.text_style!)
-      } else {
-        if (fontSize) {
-          tr = tr.addMark(from, to, schema.marks.text_style!.create({ font_size: fontSize }))
-        } else {
-          tr = tr.removeMark(from, to, schema.marks.text_style!)
-        }
-      }
-      this.view.dispatch(tr)
-      this.view.focus()
-    },
-    setTextColor: (color: string) => {
-      const { from, to, empty } = this.view.state.selection
-      let tr = this.view.state.tr
-      if (empty) {
-        const mark = color ? schema.marks.text_style!.create({ color }) : null
-        if (mark) tr = tr.addStoredMark(mark)
-        else tr = tr.removeStoredMark(schema.marks.text_style!)
-      } else {
-        if (color) {
-          tr = tr.addMark(from, to, schema.marks.text_style!.create({ color }))
-        } else {
-          tr = tr.removeMark(from, to, schema.marks.text_style!)
-        }
-      }
-      this.view.dispatch(tr)
-      this.view.focus()
-    },
+    setFontFamily: (fontFamily: string) => this.updateTextStyle({ font_family: fontFamily }),
+    setFontSize: (fontSize: string) => this.updateTextStyle({ font_size: fontSize }),
+    setTextColor: (color: string) => this.updateTextStyle({ color }),
     activeTextStyle: (): { fontFamily: string; fontSize: string; color: string } => {
       const state = this.view.state
       const marks = state.storedMarks || state.selection.$from.marks()

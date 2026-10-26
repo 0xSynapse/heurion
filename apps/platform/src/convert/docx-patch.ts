@@ -27,8 +27,14 @@ export interface PatchRender {
 /** 一个记号：字符（含 \t）或原子（br、Word 行内原子、引用）。sig 用于对比（含格式标记）。 */
 interface Tok { sig: string; text: string | null; node: PMNode | null; marks: readonly Mark[]; link: boolean }
 
-const MARKED = new Set(['bold', 'italic', 'underline', 'sup', 'sub', 'code', 'link'])
-const markSig = (marks: readonly Mark[]) => marks.filter(m => MARKED.has(m.type.name)).map(m => m.type.name === 'link' ? `link:${m.attrs.href}` : m.type.name).sort().join('+')
+const MARKED = new Set(['bold', 'italic', 'underline', 'sup', 'sub', 'code', 'link', 'text_style'])
+const markSig = (marks: readonly Mark[]) => marks.filter(m => MARKED.has(m.type.name)).map(m =>
+  m.type.name === 'link'
+    ? `link:${m.attrs.href}`
+    : m.type.name === 'text_style'
+      ? `ts:${m.attrs.font_family ?? ''}:${m.attrs.font_size ?? ''}:${m.attrs.color ?? ''}`
+      : m.type.name,
+).sort().join('+')
 
 function modelTokens(node: PMNode): Tok[] | null {
   const out: Tok[] = []

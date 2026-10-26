@@ -65,7 +65,10 @@ describe('suggest 模式', () => {
   it('列表项与表格的修订', () => {
     const t = setup('- 一\n- 二\n\n| a | b |\n| --- | --- |\n| 1 | 2 |')
     const list = t.docs.get(t.docId).child(0)
-    const table = t.docs.get(t.docId).child(1).attrs.id as string
+    const tableNode = t.docs.get(t.docId).child(1)
+    const table = tableNode.attrs.id as string
+    const origCellParaIds: string[] = []
+    tableNode.descendants(n => { if (n.type.name === 'paragraph' && n.attrs.id) origCellParaIds.push(n.attrs.id as string) })
     const item = list.child(1).attrs.id as string
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [
       { op: 'delete', ids: [item] },
@@ -84,6 +87,14 @@ describe('suggest 模式', () => {
     expect(accepted.childCount).toBe(2)
     expect(accepted.child(1).attrs.id).toBe(table)
     expect(accepted.child(1).textContent).toContain('3')
+    const acceptedCellParaIds: string[] = []
+    accepted.child(1).descendants(n => {
+      if (n.type.name === 'paragraph' && n.attrs.id) {
+        acceptedCellParaIds.push(n.attrs.id as string)
+        expect(n.attrs.suggest_of).toBeNull()
+      }
+    })
+    expect(acceptedCellParaIds).toEqual(origCellParaIds)
   })
 })
 

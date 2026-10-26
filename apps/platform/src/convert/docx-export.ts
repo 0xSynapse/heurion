@@ -328,6 +328,24 @@ export function exportDocx(input: ExportInput): ExportResult {
       else if (m.type.name === 'sub') p += '<w:vertAlign w:val="subscript"/>'
       else if (m.type.name === 'code') p += '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>'
       else if (m.type.name === 'link') p += '<w:rStyle w:val="Hyperlink"/>'
+      else if (m.type.name === 'text_style') {
+        const rawFam = m.attrs.font_family as string | null
+        const fam = rawFam ? rawFam.split(',')[0]!.trim().replace(/^['"]+|['"]+$/g, '') : ''
+        if (fam) p += `<w:rFonts w:ascii="${esc(fam)}" w:hAnsi="${esc(fam)}" w:eastAsia="${esc(fam)}" w:cs="${esc(fam)}"/>`
+        const sz = m.attrs.font_size as string | null
+        if (sz) {
+          const pt = parseFloat(String(sz))
+          if (Number.isFinite(pt) && pt > 0) {
+            const hp = Math.round(pt * 2)
+            p += `<w:sz w:val="${hp}"/><w:szCs w:val="${hp}"/>`
+          }
+        }
+        const col = m.attrs.color as string | null
+        if (col) {
+          const hex = String(col).trim().replace(/^#/, '').toUpperCase()
+          if (/^[0-9A-F]{6}$/.test(hex)) p += `<w:color w:val="${hex}"/>`
+        }
+      }
     }
     if (base) p = mergeEls(base, p, RPR_ORDER)
     return p ? `<w:rPr>${p}</w:rPr>` : ''
@@ -418,7 +436,8 @@ export function exportDocx(input: ExportInput): ExportResult {
     if (!raw || !/^<w:p\b/.test(raw) || /<w:(drawing|pict)\b/.test(raw)) return null
     const kids = elementChildrenRaw(raw)
     const pPrRaw = kids.find(k => /^<w:pPr\b/.test(k))
-    const firstRun = kids.find(k => /^<w:r\b/.test(k) && /<w:t\b/.test(k))
+    const runs = kids.flatMap(k => /^<w:ins\b/.test(k) ? elementChildrenRaw(k) : [k])
+    const firstRun = runs.find(k => /^<w:r\b/.test(k) && /<w:t\b/.test(k))
     const rPrRaw = firstRun ? elementChildrenRaw(firstRun).find(k => /^<w:rPr\b/.test(k)) : undefined
     // 顶层段落不是列表项；原来是标题样式而现在成了普通段落时，不再沿用标题样式。
     // 分节符（pPr 里的 sectPr）属于该段落所在节的结尾，改了文字仍要保留，否则其后的分页 / 页面设置会丢
@@ -514,7 +533,7 @@ export function exportDocx(input: ExportInput): ExportResult {
     const id = node.attrs.id as string | null
     const raw = id ? input.src(id) : null
     const before = id ? baseline.get(id) : undefined
-    if (!raw || !before || before.type !== node.type || node.attrs.suggest) return null
+    if (!raw || !before || before.type !== node.type || node.attrs.suggest || before.attrs.suggest) return null
     if (['level', 'style', 'align'].some(k => before.attrs[k] !== node.attrs[k])) return null
     const rawNum = /<w:numPr>[\s\S]*?<\/w:numPr>/.exec(raw)?.[0]
     // 列表项：层级不变即可沿用原文的编号（重新编号的子列表有自己的 numId，原样保留）
@@ -732,6 +751,7 @@ export function exportDocx(input: ExportInput): ExportResult {
         out.trPr.set(key, trPr)
         const ps = tcKids.filter(k => /^<w:p\b/.test(k))
         if (ps.length === bcell.childCount) bcell.forEach((p, _o, i) => { if (p.attrs.id) out.para.set(p.attrs.id as string, ps[i]!) })
+        else if (ps.length > 0) out.para.set(key, ps[0]!)
       })
     }
     return out
@@ -846,7 +866,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       if (!raw) return null
       const pKids = elementChildrenRaw(raw)
       const pPrRaw = pKids.find(k => /^<w:pPr\b/.test(k)) ?? ''
-      const firstRun = pKids.find(k => /^<w:r\b/.test(k)) ?? ''
+      const runs = pKids.flatMap(k => /^<w:ins\b/.test(k) ? elementChildrenRaw(k) : [k])
+      const firstRun = runs.find(k => /^<w:r\b/.test(k) && /<w:t\b/.test(k)) ?? runs.find(k => /^<w:r\b/.test(k)) ?? ''
       const rPrRaw = elementChildrenRaw(firstRun).find(k => /^<w:rPr\b/.test(k)) ?? ''
       return {
         pPr: pPrRaw ? stripEls(innerOf(pPrRaw), ['pPrChange', 'sectPr']) : '',

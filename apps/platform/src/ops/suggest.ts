@@ -1,6 +1,6 @@
-import type { Node as PMNode } from 'prosemirror-model'
+import { Fragment, type Node as PMNode } from 'prosemirror-model'
 import { Transform } from 'prosemirror-transform'
-import { assignIds, collectIds, indexById, newId, stripIds } from '../model/ids.ts'
+import { collectIds, indexById, newId } from '../model/ids.ts'
 import { diffNodes } from '../model/runtime.ts'
 
 /**
@@ -10,6 +10,20 @@ import { diffNodes } from '../model/runtime.ts'
  */
 
 const clear = { suggest: null, suggest_group: null, suggest_of: null, suggest_author: null }
+
+/** 为改动块内部的可寻址子节点重新分配临时 id（避免与待删除原块冲突），同时把原 id 记在 suggest_of 上以便采纳后还原。 */
+function reidPreservingOrigin(node: PMNode, taken: Set<string>, isRoot = true): PMNode {
+  const children: PMNode[] = []
+  node.forEach(c => children.push(reidPreservingOrigin(c, taken, false)))
+  const content = Fragment.from(children)
+  if (isRoot || !('id' in node.attrs)) return node.copy(content)
+  const origId = (node.attrs.suggest_of as string | null) ?? (node.attrs.id as string | null)
+  return node.type.create({
+    ...node.attrs,
+    id: newId(taken),
+    ...('suggest_of' in node.attrs ? { ...clear, suggest_of: origId } : {}),
+  }, content, node.marks)
+}
 
 /** pos 处的块自身或某个祖先是待采纳的新增块（修改它们只是在改同一条修订，不另起修订）。 */
 function insidePendingInsert(doc: PMNode, pos: number, self?: PMNode): boolean {
@@ -47,7 +61,7 @@ export function toSuggestion(before: PMNode, after: PMNode, group: string, autho
       }
       continue
     }
-    const fresh = assignIds(stripIds(hit.node), taken)
+    const fresh = reidPreservingOrigin(hit.node, taken)
     const inserted = fresh.type.create({ ...fresh.attrs, id: newId(taken), suggest: 'insert', suggest_group: group, suggest_of: c.node_id, suggest_author: author }, fresh.content, fresh.marks)
     const deleted = prev.type.create({ ...prev.attrs, suggest: 'delete', suggest_group: group, suggest_of: null, suggest_author: author }, prev.content, prev.marks)
     tr.replaceWith(hit.pos, hit.pos + hit.node.nodeSize, [deleted, inserted])
@@ -145,6 +159,14 @@ export function resolveSuggestions(doc: PMNode, group: string | null, accept: bo
     } else {
       const id = accept && current.attrs.suggest_of ? current.attrs.suggest_of : current.attrs.id
       tr.setNodeMarkup(mapped, undefined, { ...current.attrs, ...clear, id })
+      current.descendants((child, relPos) => {
+        if (child.attrs.suggest) return false
+        if (child.attrs.suggest_of) {
+          const cid = accept ? child.attrs.suggest_of : child.attrs.id
+          tr.setNodeMarkup(mapped + 1 + relPos, undefined, { ...child.attrs, ...clear, id: cid })
+        }
+        return true
+      })
     }
   }
   return tr.doc

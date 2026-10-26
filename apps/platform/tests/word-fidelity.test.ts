@@ -323,11 +323,12 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
       .toThrow(/碰到了 Li Ming 的修订/)
   })
 
-  it('用户采纳后：导出的是采纳后的文字，没有修订标记', () => {
-    const t = importInto(docx(TRACKED))
+  it('用户采纳后：导出的是采纳后的文字，没有修订标记（含整段新增修订与行内修订）', () => {
+    const t = importInto(docx(TRACKED + INSERTED))
     t.docs.commit(t.docId, resolveSuggestions(t.docs.get(t.docId), null, true), { actor: 'user', turnId: null, ops: [] })
     const body = bodyOf(t.exportNow().bytes)
     expect(body).toContain('（意向性治疗人群）')
+    expect(body).toContain('新增的一段说明。')
     expect(body).not.toMatch(/<w:(ins|del)\b/)
   })
 
@@ -484,6 +485,41 @@ describe('Phase 1b 赛后归因回归：批注+修订共存、有序列表替换
     const paras = [...body.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)].map(m => m[0])
     const ref3Para = paras.find(x => x.includes('[3] Author C.'))!
     expect(ref3Para).not.toContain('<w:numPr>')
+  })
+
+  it('set_text_style 修改字体、字号、文字颜色并采纳后：导出的 docx 包含对应的 w:rFonts / w:sz / w:color', () => {
+    const t = importInto(docx(p('随访 3 年，主要终点显著改善。')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'suggest',
+      ops: [{ op: 'set_text_style', id, range: { from: 6, to: 10 }, font_family: "'SimHei', sans-serif", size: '14pt', color: '#D93025' }],
+    }, { actor: 'ai', turnId: 't1' })
+    t.docs.commit(t.docId, resolveSuggestions(t.docs.get(t.docId), null, true), { actor: 'user', turnId: null, ops: [] })
+    const first = firstPara(t.exportNow().bytes)
+    expect(first).toContain('w:ascii="SimHei"')
+    expect(first).toContain('<w:sz w:val="28"/>')
+    expect(first).toContain('<w:color w:val="D93025"/>')
+  })
+
+  it('suggest 模式下修改导入表格的单元格并采纳后：单元格段落 id 还原，未改单元格原样保留且修改内容成功导出', () => {
+    const tc = (inner: string) => `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr>${inner}</w:tc>`
+    const nested = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr>${tc(p('内表'))}</w:tr></w:tbl>`
+    const tbl = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr>${tc(p('左上'))}${tc(nested + p(''))}</w:tr><w:tr><w:trPr><w:ins w:id="9" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"/></w:trPr>${tc(p('新行'))}${tc(p('值'))}</w:tr></w:tbl>`
+    const t = importInto(docx(tbl))
+    const tblId = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'suggest',
+      ops: [{ op: 'table_set_cells', id: tblId, cells: [{ row: 0, col: 0, markdown: '左上（已采纳）' }] }],
+    }, { actor: 'ai', turnId: 't1' })
+    t.docs.commit(t.docId, resolveSuggestions(t.docs.get(t.docId), null, true), { actor: 'user', turnId: null, ops: [] })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain('左上（已采纳）')
+    expect(body).toContain(nested)
+    expect(body).toContain('<w:trPr><w:ins w:id="9" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"/></w:trPr>')
   })
 })
 

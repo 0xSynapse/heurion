@@ -1038,13 +1038,23 @@ $('docTitle').onclick = () => editTitle()
 type DeckTheme = { label: string; bg: string; surface: string; title: string; body: string; muted: string; accent: string; accent2: string }
 let deckThemes: Record<string, DeckTheme> = {}
 
+let pendingDeckEdit: Promise<boolean> | null = null
+
 async function deckEdit(docId: string, ops: Array<Record<string, unknown>>, baseRev: number): Promise<boolean> {
+  const task = (async () => {
+    try {
+      await api(`/api/docs/${docId}/edit`, { method: 'POST', body: JSON.stringify({ base_rev: baseRev, ops }) })
+      return true
+    } catch (err) {
+      showNotice((err as Error).message, true)
+      return false
+    }
+  })()
+  pendingDeckEdit = task
   try {
-    await api(`/api/docs/${docId}/edit`, { method: 'POST', body: JSON.stringify({ base_rev: baseRev, ops }) })
-    return true
-  } catch (err) {
-    showNotice((err as Error).message, true)
-    return false
+    return await task
+  } finally {
+    if (pendingDeckEdit === task) pendingDeckEdit = null
   }
 }
 
@@ -2514,13 +2524,24 @@ $('comments').onclick = async e => {
 
 // —— 修订 ——
 
+let resolvingSuggestion: Promise<void> | null = null
+
 async function resolveSuggestion(group: string, accept: boolean): Promise<void> {
   if (!session) return
+  const docId = session.docId
+  const task = (async () => {
+    try {
+      await api(`/api/docs/${docId}/suggestions/${group}/${accept ? 'accept' : 'reject'}`, { method: 'POST' })
+      await refresh(false)
+    } catch (err) {
+      showNotice((err as Error).message, true)
+    }
+  })()
+  resolvingSuggestion = task
   try {
-    await api(`/api/docs/${session.docId}/suggestions/${group}/${accept ? 'accept' : 'reject'}`, { method: 'POST' })
-    await refresh(false)
-  } catch (err) {
-    showNotice((err as Error).message, true)
+    await task
+  } finally {
+    if (resolvingSuggestion === task) resolvingSuggestion = null
   }
 }
 
@@ -2775,8 +2796,16 @@ $('exportFonts').onclick = e => {
   if (v) { try { localStorage.setItem(FONTS_KEY, v) } catch { /* 无痕模式 */ } renderExportFonts() }
 }
 async function ensureSuggestionsResolvedBeforeExport(): Promise<void> {
-  if (!session || !detail?.suggestions?.length) return
-  const count = detail.suggestions.length
+  if (!session) return
+  if (pendingDeckEdit) await pendingDeckEdit
+  if (resolvingSuggestion) await resolvingSuggestion
+  const domGroups = new Set(
+    Array.from(document.querySelectorAll<HTMLElement>('[data-suggest-group]:not(.suggest-paired-delete)'))
+      .map(el => el.dataset.suggestGroup)
+      .filter(Boolean),
+  )
+  const count = detail?.suggestions?.length || domGroups.size
+  if (!count) return
   const accept = await askConfirm({
     title: '导出前处理待采纳修订',
     message: `当前文档有 ${count} 处待采纳修订（编辑区目前显示的是修订后的内容）。是否先全部采纳后再导出，使导出的文件与编辑区显示一致？（点「取消」将按未采纳前的原稿导出）`,
