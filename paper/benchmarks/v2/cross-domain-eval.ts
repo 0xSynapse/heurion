@@ -306,7 +306,7 @@ export async function runCrossDomainEval(opts: { useLlm?: boolean } = {}): Promi
       ] as const
     }),
   )
-  const exp4aResults: CrossDomainEvalReport['exp4a_cross_domain_convergence'] = Object.fromEntries(exp4aEntries)
+  const exp4aResults = Object.fromEntries(exp4aEntries) as CrossDomainEvalReport['exp4a_cross_domain_convergence']
 
   let llmRefinement: { updated: number; merged: number } | undefined
   if (useLlm && complete) {

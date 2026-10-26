@@ -142,7 +142,7 @@ export class ExecutionSignals {
       const act = e.docId ? this.activationLookup?.(e.owner, e.docId) : undefined
       this.store.addExecutionSignal({
         owner: e.owner,
-        doc_id: e.docId ?? null,
+        doc_id: e.docId ?? '',
         turn_id: e.turnId ?? null,
         kind: 'tool_error',
         code: e.code,

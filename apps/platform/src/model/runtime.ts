@@ -4,6 +4,7 @@ import * as Y from 'yjs'
 import { updateYFragment, yXmlFragmentToProseMirrorRootNode } from 'y-prosemirror'
 import type { Actor, DocKind, DocRow, Store, VersionRow, VersionSource } from '../store/db.ts'
 import { assignIds, collectIds } from './ids.ts'
+import { parseBlocks } from './markdown.ts'
 import { schema } from './schema.ts'
 import { deckSchema } from './deck-schema.ts'
 import { revertByNodes } from '../ops/revert.ts'
@@ -380,12 +381,15 @@ export class Documents extends EventEmitter<{ commit: [CommitEvent]; 'commit-det
   }
 
   /** 新建文档：content 缺省为一个空段落；同时落 v1。 */
-  create(input: { owner: string; title: string; kind?: DocKind; content?: PMNode; source?: VersionSource; id?: string }): DocRow {
+  create(input: { owner: string; title: string; kind?: DocKind; content?: PMNode; markdown?: string; source?: VersionSource; id?: string }): DocRow {
     const kind = input.kind ?? 'doc'
     const empty = kind === 'deck'
       ? deckSchema.node('doc', null, [deckSchema.node('slide')])
       : schema.node('doc', null, [schema.node('paragraph')])
-    const content = assignIds(input.content ?? empty, new Set())
+    const parsed = !input.content && input.markdown && kind === 'doc'
+      ? schema.node('doc', null, parseBlocks(input.markdown))
+      : undefined
+    const content = assignIds(input.content ?? parsed ?? empty, new Set())
     const row = this.store.createDoc({ id: input.id, owner: input.owner, title: input.title, kind, state: docToState(content) })
     this.store.addVersion({ docId: row.id, rev: 0, source: input.source ?? 'create', note: input.source === 'import' ? '导入' : '新建', state: this.store.getState(row.id)! })
     try { this.emit('created', row) } catch (err) { console.error('[runtime] created listener error:', err) }
