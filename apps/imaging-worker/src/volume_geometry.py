@@ -25,20 +25,40 @@ class CachedVolume(tuple):
     """
     体积缓存的值：仍是三元组 (volume, spacing, modality)，原有的 `vol, spacing, modality = ...` 解包与
     VolumeCache 的字节计数（取 entry[0]）都不变；几何信息挂在 .geometry 属性上（没有时为 None）。
+    source_headers：{SOPInstanceUID: 去掉 PixelData 的 pydicom 头}，生成 DICOM SEG 时用作源图；
+    NIfTI 或非 DICOM 来源为 None。这些头含患者信息，只留在 worker 内存里，不进任何响应。
     """
 
     def __new__(cls, volume: np.ndarray, spacing: Tuple[float, float, float], modality: str,
-                geometry: Optional[Dict[str, Any]] = None):
+                geometry: Optional[Dict[str, Any]] = None, source_headers: Optional[Dict[str, Any]] = None):
         obj = super().__new__(cls, (volume, spacing, modality))
         obj.geometry = geometry
+        obj.source_headers = source_headers
         return obj
 
     def __getnewargs__(self):
-        return (self[0], self[1], self[2], self.geometry)
+        return (self[0], self[1], self[2], self.geometry, self.source_headers)
 
 
 def geometry_of(entry: Any) -> Optional[Dict[str, Any]]:
     return getattr(entry, "geometry", None)
+
+
+def source_headers_of(entry: Any) -> Optional[Dict[str, Any]]:
+    return getattr(entry, "source_headers", None)
+
+
+def strip_pixel_data(ds: Any) -> Any:
+    """复制 pydicom 数据集的全部元素（及 file_meta），但不带 PixelData 等像素元素，用作 SEG 的源图头。"""
+    import pydicom
+    pixel_tags = {0x7FE00010, 0x7FE00008, 0x7FE00009}
+    hdr = pydicom.Dataset()
+    for elem in ds:
+        if int(elem.tag) not in pixel_tags:
+            hdr.add(elem)
+    if getattr(ds, "file_meta", None) is not None:
+        hdr.file_meta = ds.file_meta
+    return hdr
 
 
 def canonical_affine_from_ras(affine_ras_xyz: np.ndarray) -> np.ndarray:

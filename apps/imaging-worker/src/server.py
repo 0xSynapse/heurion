@@ -22,7 +22,7 @@ try:
     from .model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
     from .dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from .task_queue import task_manager, TaskStage, batch_process_cohort
-    from .volume_geometry import geometry_of, geometry_summary
+    from .volume_geometry import geometry_of, geometry_summary, source_headers_of
     from .resource_gate import MemoryGate, default_budget_gb, task_cost_gb
 except (ImportError, ValueError):
     from device import get_device_info
@@ -31,7 +31,7 @@ except (ImportError, ValueError):
     from model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
     from dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from task_queue import task_manager, TaskStage, batch_process_cohort
-    from volume_geometry import geometry_of, geometry_summary
+    from volume_geometry import geometry_of, geometry_summary, source_headers_of
     from resource_gate import MemoryGate, default_budget_gb, task_cost_gb
 
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
@@ -531,7 +531,8 @@ async def upload_volume(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to decode imaging file '{file.filename}': {str(e)}")
 
-    info = engine.register_volume(volume_id, vol, spacing, modality, geometry=geometry_of(loaded))
+    info = engine.register_volume(volume_id, vol, spacing, modality, geometry=geometry_of(loaded),
+                                  source_headers=source_headers_of(loaded))
     info["cached"] = False
     info["geometry"] = geometry_summary(geometry_of(loaded))
     return info
@@ -577,6 +578,8 @@ class LungNodulePipelineRequest(BaseModel):
     # 肺叶定位方式：full（默认，全肺）/ roi（结节周围局部）/ off（不做）；lobe_resample_mm 为空时按 bundle 的 1.5 mm
     lobe_mode: str = "full"
     lobe_resample_mm: Optional[float] = None
+    # 是否把分割成功的结节写成 DICOM SEG（能生成时生成，结果在响应顶层 seg）
+    seg: bool = True
 
 
 @app.post("/api/v1/pipeline/lung-nodule")
@@ -591,7 +594,7 @@ def run_lung_nodule_pipeline_endpoint(req: LungNodulePipelineRequest = Body(...)
         with INFERENCE_GATE.acquire(task_cost_gb("lung_nodule_pipeline", engine.device.type), "lung_nodule_pipeline"):
             return engine.run_lung_nodule_pipeline(
                 target, max_nodules=req.max_nodules, min_score=req.min_score,
-                lobe_mode=req.lobe_mode, lobe_resample_mm=req.lobe_resample_mm,
+                lobe_mode=req.lobe_mode, lobe_resample_mm=req.lobe_resample_mm, seg=req.seg,
             )
     except Exception as e:
         raise_http(e, "肺结节模型链运行失败")

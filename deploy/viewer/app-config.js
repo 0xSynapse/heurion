@@ -10,6 +10,8 @@ window.config = {
   modes: [],
   // 把 Heurion 结节面板放到 viewer 模式右侧面板的第一个（不改 OHIF 自带模式的源码）
   customizationService: {
+    // 分割（AI 结节轮廓）在阅片器里只读：修正走结节面板与平台留痕，不在 OHIF 里直接改 SEG
+    global: [{ 'panelSegmentation.disableEditing': { $set: true } }],
     mode: {
       viewer: {
         rightPanels: { $unshift: ['@heurion/extension-nodules.panelModule.nodules'] },

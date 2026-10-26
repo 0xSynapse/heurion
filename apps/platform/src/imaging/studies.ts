@@ -119,6 +119,12 @@ export function expandUpload(files: Array<{ name: string; bytes: Uint8Array }>):
 }
 
 const lesionOf = (r: Record<string, unknown>): LesionRow => ({ ...(r as unknown as LesionRow), metrics: JSON.parse((r.metrics as string) || '{}') })
+/** 病灶的分割引用：`<派生序列行 id>#<segment 编号>`（DICOM SEG 存在 Orthanc，UID 只在序列表里以密文保存） */
+export const segRef = (seriesId: string, segment: number) => `${seriesId}#${segment}`
+export function parseSegRef(ref: string | null): { seriesId: string; segment: number } | null {
+  const m = ref ? /^(se[0-9a-f]{12})#(\d{1,4})$/.exec(ref) : null
+  return m ? { seriesId: m[1]!, segment: Number(m[2]) } : null
+}
 const runOf = (r: Record<string, unknown>): RunRow => ({ ...(r as unknown as RunRow), summary: r.summary ? JSON.parse(r.summary as string) : null })
 
 export class ImagingStudyService {
@@ -220,6 +226,25 @@ export class ImagingStudyService {
     }
     s.log(existing ? 'imaging_upload_update' : 'imaging_upload', studyId!)
     return studyId!
+  }
+
+  /**
+   * 登记分析产生的派生序列（DICOM SEG 等，已存入 Orthanc）为检查下的一个序列；返回序列行 id。
+   * 分析流水线以发起分析的用户身份调用。
+   */
+  async addDerivedSeries(a: Actor, studyId: string, orthancSeriesId: string): Promise<string> {
+    const orthanc = this.requireOrthanc()
+    const s = this.studyScope(a, studyId, 'write')
+    let tags
+    try { tags = await orthanc.series(orthancSeriesId) } catch (err) { throw this.storageError(err) }
+    const hmac = s.uidKey('series', tags.seriesUid)
+    const row = s.db.prepare('SELECT id, study_id FROM imaging_series WHERE uid_hmac = ?').get(hmac) as { id: string; study_id: string } | undefined
+    if (row) return row.id
+    const id = rid('se')
+    s.db.prepare(`INSERT INTO imaging_series (id, study_id, uid_hmac, uid_enc, orthanc_id, modality, body_part, description_enc, slice_thickness, kernel, instances, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, studyId, hmac, s.encrypt(tags.seriesUid)!, orthancSeriesId, tags.modality, tags.bodyPart, s.encrypt(tags.description), tags.sliceThickness, tags.kernel, tags.instances, now())
+    return id
   }
 
   /** 患者的影像检查（新的在前）。forUi = true 时带 UID 与检查号（界面用）；AI 视图不带。 */
@@ -376,17 +401,21 @@ export class ImagingStudyService {
    * 阅片器（OHIF 结节面板）用：按 StudyInstanceUID 取病灶，附上所在序列的 SeriesInstanceUID，
    * 以便在阅片器里找到对应的影像（关键层 SOPInstanceUID 与病人坐标由 worker 写在 metrics 里）。
    */
-  lesionsByStudyUid(a: Actor, studyUid: string): Array<LesionRow & { series_uid: string | null }> {
+  lesionsByStudyUid(a: Actor, studyUid: string): Array<LesionRow & { series_uid: string | null; seg: { series_uid: string; segment_number: number } | null }> {
     const { studyId, scope: s } = this.resolveStudyUid(a, studyUid)
-    const seriesUid = new Map<string, string | null>()
+    const uidCache = new Map<string, string | null>()
+    const seriesUid = (sid: string) => {
+      if (!uidCache.has(sid)) {
+        const row = s.db.prepare('SELECT uid_enc FROM imaging_series WHERE id = ? AND study_id = ?').get(sid, studyId) as { uid_enc: string } | undefined
+        uidCache.set(sid, row ? s.decrypt(row.uid_enc) : null)
+      }
+      return uidCache.get(sid) ?? null
+    }
     return this.listLesions(a, studyId).map(l => {
       const run = l.run_id ? s.db.prepare('SELECT series_id FROM imaging_runs WHERE id = ?').get(l.run_id) as { series_id: string | null } | undefined : undefined
-      const sid = run?.series_id ?? null
-      if (sid && !seriesUid.has(sid)) {
-        const row = s.db.prepare('SELECT uid_enc FROM imaging_series WHERE id = ?').get(sid) as { uid_enc: string } | undefined
-        seriesUid.set(sid, row ? s.decrypt(row.uid_enc) : null)
-      }
-      return { ...l, series_uid: sid ? seriesUid.get(sid) ?? null : null }
+      const seg = parseSegRef(l.seg_ref)
+      const segUid = seg ? seriesUid(seg.seriesId) : null
+      return { ...l, series_uid: run?.series_id ? seriesUid(run.series_id) : null, seg: seg && segUid ? { series_uid: segUid, segment_number: seg.segment } : null }
     })
   }
 

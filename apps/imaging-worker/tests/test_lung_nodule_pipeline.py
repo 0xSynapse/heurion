@@ -28,7 +28,7 @@ from model_registry import get_model_status, get_pipeline_status
 TOP_KEYS = {"model_id", "model_version", "device", "elapsed_ms", "series_qc", "nodules", "warnings"}
 QC_KEYS = {"slice_thickness_mm", "spacing_mm", "shape", "warnings", "geometry"}
 NODULE_KEYS = {"index", "detection_score", "center_vox_zyx", "box_vox_zyx", "lobe", "segmentation", "key_slice_z", "metrics", "warnings",
-               "center_lps_mm", "box_lps_mm", "key_slice_sop_instance_uid"}
+               "center_lps_mm", "box_lps_mm", "key_slice_sop_instance_uid", "seg_segment_number"}
 METRIC_KEYS = {"long_axis_mm", "short_axis_mm", "mean_diameter_mm", "volume_mm3", "mean_hu", "std_hu",
                "nodule_type", "solid_core_diameter_mm", "ctr"}
 

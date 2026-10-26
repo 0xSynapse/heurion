@@ -20,7 +20,8 @@ try:
     from .clinical_ai_agent import generate_clinical_ai_report
     from .spatial_canonicalizer import to_canonical_lps
     from .lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, run_lung_nodule_pipeline
-    from .volume_geometry import CachedVolume, geometry_of
+    from .volume_geometry import CachedVolume, geometry_of, source_headers_of
+    from .dicom_seg import SegUnavailable, build_nodule_seg
     from .resource_gate import VolumeCache, default_cache_bytes
 except (ImportError, ValueError):
     from device import get_optimal_device, get_device_info
@@ -34,7 +35,8 @@ except (ImportError, ValueError):
     from clinical_ai_agent import generate_clinical_ai_report
     from spatial_canonicalizer import to_canonical_lps
     from lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, run_lung_nodule_pipeline
-    from volume_geometry import CachedVolume, geometry_of
+    from volume_geometry import CachedVolume, geometry_of, source_headers_of
+    from dicom_seg import SegUnavailable, build_nodule_seg
     from resource_gate import VolumeCache, default_cache_bytes
 
 
@@ -1682,12 +1684,14 @@ class MONAIEngine:
         spacing: Tuple[float, float, float],
         modality: str = "CT",
         geometry: Optional[Dict[str, Any]] = None,
+        source_headers: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Registers a loaded 3D medical volume into the engine's memory cache.
-        geometry 见 volume_geometry（仿射与 SOPInstanceUID 列表）；缓存值是可按三元组解包的 CachedVolume。
+        geometry 见 volume_geometry（仿射与 SOPInstanceUID 列表）；source_headers 为生成 DICOM SEG 用的源图头；
+        缓存值是可按三元组解包的 CachedVolume。
         """
-        self.volume_cache[volume_id] = CachedVolume(volume, spacing, modality, geometry)
+        self.volume_cache[volume_id] = CachedVolume(volume, spacing, modality, geometry, source_headers)
         z, y, x = volume.shape
         dz, dy, dx = spacing
         return {
@@ -1730,8 +1734,12 @@ class MONAIEngine:
         min_score: Optional[float] = None,
         lobe_mode: str = "full",
         lobe_resample_mm: Optional[float] = None,
+        seg: bool = True,
     ) -> Dict[str, Any]:
-        """肺结节模型链（RetinaNet 检出 → VISTA-3D 分割与肺叶定位 → 测量），实现见 lung_nodule_pipeline。"""
+        """
+        肺结节模型链（RetinaNet 检出 → VISTA-3D 分割与肺叶定位 → 测量），实现见 lung_nodule_pipeline。
+        seg=True 时把分割成功的结节写成 DICOM SEG（dicom_seg.build_nodule_seg），不能生成时 seg 为 null 并写明原因。
+        """
         t0 = time.time()
         entry = self.load_volume_data(sample_id_or_path)
         vol, spacing, modality = entry
@@ -1740,10 +1748,35 @@ class MONAIEngine:
             self.neural_pipeline, vol, spacing, modality=modality,
             max_nodules=max_nodules, min_score=min_score,
             lobe_mode=lobe_mode, lobe_resample_mm=lobe_resample_mm,
-            geometry=geometry_of(entry),
+            geometry=geometry_of(entry), return_masks=bool(seg),
         )
-        res["timings_ms"] = {"load": load_ms, **res.get("timings_ms", {})}
-        res["elapsed_ms"] = int(res["elapsed_ms"]) + load_ms
+        masks = res.pop("_masks", None) or {}
+        seg_ms = 0
+        if seg:
+            t1 = time.time()
+            try:
+                segments = [(idx, masks[idx]) for idx in sorted(masks)]
+                seg_out = build_nodule_seg(segments, geometry_of(entry), source_headers_of(entry), res["model_version"])
+                res["seg"] = seg_out
+                if seg_out.get("frame_of_reference_derived"):
+                    res["warnings"].append(
+                        "源序列缺少 FrameOfReferenceUID（CT 图像必备属性）：DICOM SEG 使用按源 SeriesInstanceUID 派生的参照系 UID，"
+                        "阅片器按位置配准时可能不认，需人工确认显示是否正确")
+                by_index = {s["nodule_index"]: s["segment_number"] for s in seg_out["segments"]}
+                for n in res["nodules"]:
+                    n["seg_segment_number"] = by_index.get(n["index"])
+            except SegUnavailable as exc:
+                res["seg"] = None
+                res["warnings"].append(f"未生成 DICOM SEG：{exc}")
+            except Exception as exc:
+                # 源图头缺少 highdicom 要求的属性等：不影响结节结果，只是不出 SEG
+                res["seg"] = None
+                for n in res["nodules"]:
+                    n["seg_segment_number"] = None
+                res["warnings"].append(f"未生成 DICOM SEG：构造失败（{type(exc).__name__}: {exc}）")
+            seg_ms = int(round((time.time() - t1) * 1000))
+        res["timings_ms"] = {"load": load_ms, **res.get("timings_ms", {}), "seg": seg_ms}
+        res["elapsed_ms"] = int(res["elapsed_ms"]) + load_ms + seg_ms
         return res
 
     def analyze_file(

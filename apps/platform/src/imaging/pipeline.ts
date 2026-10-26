@@ -1,6 +1,6 @@
 import type { Actor, PatientService } from '../tenancy/patients.ts'
 import { orthancFromEnv, type Orthanc } from './orthanc.ts'
-import { ImagingStudyService, type RunRow, type SeriesView } from './studies.ts'
+import { ImagingStudyService, segRef, type RunRow, type SeriesView } from './studies.ts'
 
 /**
  * 影像分析流水线（PRD T1.4，docs/design/IMAGING_STUDIES.md）：检查入库 → 按病种选序列 → 排队 → 影像 worker 推理 → 结果入病灶表。
@@ -60,8 +60,12 @@ interface NoduleResult {
     segmentation?: string; key_slice_z?: number; metrics?: Record<string, unknown>; warnings?: string[]
     /** DICOM 病人坐标（LPS，mm）与关键层的 SOPInstanceUID：阅片器据此跳到对应图像（体积没有 DICOM 几何时为 null） */
     center_lps_mm?: number[] | null; box_lps_mm?: number[] | null; key_slice_sop_instance_uid?: string | null
+    /** 该结节在本次 DICOM SEG 里的 segment 编号（分割失败的结节没有） */
+    seg_segment_number?: number | null
   }>
   warnings?: string[]
+  /** 结节分割的 DICOM SEG（apps/imaging-worker，T1.6）；不能生成时为 null */
+  seg?: { dicom_base64: string; series_instance_uid: string; sop_instance_uid: string } | null
 }
 
 export interface EnqueueResult { task: ImagingTask; run?: RunRow; skipped?: string; notes?: string[] }
@@ -178,6 +182,18 @@ export class ImagingPipeline {
       const result = await this.worker(def.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume_id: volumeId, max_nodules: 20 }) }, 2_700_000) as NoduleResult
       if (!result || !Array.isArray(result.nodules)) throw new Error('影像服务返回的结果格式不对（缺少 nodules）')
 
+      // 分割结果（DICOM SEG）存回 Orthanc，作为本检查的派生序列，OHIF 原生显示轮廓；失败不影响检出入库
+      let segSeriesId: string | null = null
+      const extraWarnings: string[] = []
+      if (result.seg?.dicom_base64) {
+        try {
+          const up = await this.orthanc.upload(new Uint8Array(Buffer.from(result.seg.dicom_base64, 'base64')))
+          segSeriesId = await this.studies.addDerivedSeries(a, run.study_id, up.seriesId)
+        } catch (err) {
+          extraWarnings.push(`分割结果（DICOM SEG）未能存入影像存储：${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+
       // 与医生已确认 / 否决的结节是同一处的检出不再新增（重新分析时避免重复，医生的判断保留）
       const spacing = Array.isArray(result.series_qc?.spacing_mm) ? (result.series_qc!.spacing_mm as number[]) : null
       const reviewed = this.studies.listLesions(a, run.study_id).filter(l => l.kind === def.kind && (l.status === 'confirmed' || l.status === 'rejected'))
@@ -198,6 +214,7 @@ export class ImagingPipeline {
         if (sameSpot(n)) { matchedReviewed++; continue }
         this.studies.addLesion(a, run.study_id, {
           run_id: runId, kind: def.kind, source: 'ai', label: `结节 ${n.index}`, location: n.lobe ?? null,
+          seg_ref: segSeriesId && n.seg_segment_number ? segRef(segSeriesId, n.seg_segment_number) : null,
           metrics: {
             ...(n.metrics ?? {}), detection_score: n.detection_score ?? null, center_vox_zyx: n.center_vox_zyx ?? null, box_vox_zyx: n.box_vox_zyx ?? null,
             key_slice_z: n.key_slice_z ?? null, segmentation: n.segmentation ?? null, warnings: n.warnings ?? [],
@@ -210,8 +227,8 @@ export class ImagingPipeline {
         model_version: result.model_version ?? null,
         summary: {
           device: result.device ?? null, elapsed_ms: result.elapsed_ms ?? null, series_qc: result.series_qc ?? null,
-          warnings: [...notes, ...(result.warnings ?? []), ...(matchedReviewed ? [`${matchedReviewed} 个检出与医生已审核的结节是同一处，未重复添加`] : [])],
-          found: result.nodules.length - matchedReviewed, matched_reviewed: matchedReviewed, superseded,
+          warnings: [...notes, ...(result.warnings ?? []), ...extraWarnings, ...(matchedReviewed ? [`${matchedReviewed} 个检出与医生已审核的结节是同一处，未重复添加`] : [])],
+          found: result.nodules.length - matchedReviewed, matched_reviewed: matchedReviewed, superseded, seg_stored: Boolean(segSeriesId),
         },
       })
     } catch (err) {

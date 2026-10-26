@@ -94,11 +94,13 @@ OHIF 扩展 `@heurion/extension-nodules`（`deploy/viewer/heurion-nodules/`）�
 - 跳转：worker 给每个结节输出关键层的 `key_slice_sop_instance_uid` 与病人坐标 `center_lps_mm` / `box_lps_mm`（DICOM LPS，mm），平台入库到病灶 `metrics`。面板按 SOPInstanceUID 在视口的影像列表里定位，必要时先把所在序列放进视口，再切到肺窗 W1500 / L−600。结节中心不一定落在关键层上（相差可达一个层厚）。
 - 确认 / 否决：`POST /api/viewer/lesions/:id/review`，只限 Cookie 允许的检查，并且必须带 `X-Heurion-Viewer: 1` 请求头（跨站表单带不上，防 CSRF）。否决须选原因：血管断面、纤维灶 / 瘢痕、钙化灶、淋巴结、伪影、其他。写入以医生本人身份经同一服务层，留痕与主站一致。主站对应接口为 `GET …/studies/:stid/lesions`（AI 用 `imaging_lesions` 只读）和 `POST …/lesions/:lid/review`（AI 不可用）。
 - 重新分析：与医生已确认 / 否决的结节是同一处的检出不再新增（两边都有病人坐标时按坐标距离判断，否则在同一序列内按体素坐标），运行摘要记 `matched_reviewed`。
-- 轮廓显示随 T1.6（DICOM SEG）提供，由 OHIF 原生的 SEG 显示完成，面板暂不另画标记。
+- 轮廓（T1.6）：worker 为每个分割成功的结节生成 DICOM SEG 的一个 segment（BINARY，引用源序列；category SCT 49755003、type SCT 27925004、部位 SCT 39607008；推荐显示色为黄色）。平台存回 Orthanc，登记为检查的派生序列，病灶记 `seg_ref = <序列行 id>#<segment 编号>`。面板点结节时先显式加载 SEG（`displaySet.load`）并叠加到当前视口，只画描边、不填充，再跳到 segment 中心并高亮；SEG 在阅片器里只读（`panelSegmentation.disableEditing`）。没有 SEG 的结节仍按关键层跳转。
+- 源图缺 FrameOfReferenceUID 时（本机测试数据由 pydicom 生成，就缺这一项），SEG 用按源序列派生的参照系 UID，运行摘要写明。OHIF 按 SOP 引用对位，实测叠加位置正确；扫描仪产生的 CT 都带这个 UID，不会走这条路。
 - 2026-10-26 本机验证（无头 Chromium，胸部 CT 269 层）：
   - 面板列出结节，确认与否决都能保存，平台留痕正确。
   - 点结节 4 后视口显示 `I:129`，正是关键层 CT_0129。
   - 重新分析时 2 个已审核结节没有重复新增。
+  - 随访 CT：点 1 号结节后跳到 `I:222`，结节外画出黄色描边，没有缺显示色的提示。
 
 ## 资源与排队
 

@@ -307,6 +307,7 @@ def run_lung_nodule_pipeline(
     lobe_mode: str = "full",
     lobe_resample_mm: Optional[float] = None,
     geometry: Optional[Dict[str, Any]] = None,
+    return_masks: bool = False,
 ) -> Dict[str, Any]:
     """
     neural：engine.MonaiNeuralInferencePipeline 实例，需提供 _verified_weights、detect_lung_nodules、
@@ -314,6 +315,8 @@ def run_lung_nodule_pipeline(
     lobe_mode：full = 全肺做一次 VISTA-3D 肺叶分割（默认）；roi = 只在每个结节周围 ±96 mm 的区域做；
     off = 不做肺叶定位（lobe 为 null 并写明）。lobe_resample_mm 为空时用 bundle 的 1.5 mm。
     geometry：体积几何（volume_geometry），用于把结节换算到 DICOM 病人坐标与 SOPInstanceUID；为空时这些字段为 null。
+    return_masks：为真时结果带内部键 "_masks" = {结节编号: 规范化体素下标 (zz, yy, xx)}，只含分割成功的结节，
+    供调用方生成 DICOM SEG（调用方须在返回响应前移除该键）。
     返回契约见 apps/imaging-worker 的 POST /api/v1/pipeline/lung-nodule；timings_ms 为各阶段耗时。
     """
     t0 = time.time()
@@ -371,6 +374,7 @@ def run_lung_nodule_pipeline(
         key_z = None
         center = prompt
         segmentation = "failed"
+        mask_vox = None
         t = time.time()
         try:
             raw_mask, seg_meta = neural.infer_vista3d_nodule(volume, spacing, prompt_point=prompt)
@@ -385,6 +389,8 @@ def run_lung_nodule_pipeline(
                 if metrics is not None:
                     segmentation = "vista3d"
                     center = [int(round(float(c))) for c in ndi.center_of_mass(mask)]
+                    if return_masks:
+                        mask_vox = tuple(v.astype(np.int32) for v in np.nonzero(mask))
                     if (seg_meta or {}).get("mask_touches_window_edge"):
                         n_warnings.append("分割触及 VISTA-3D 推理区域边界，可能被截断，测值可能偏小")
             measure_ms += _ms(t)
@@ -409,6 +415,7 @@ def run_lung_nodule_pipeline(
             "metrics": metrics,
             "warnings": n_warnings,
             "_radius_mm": (metrics["mean_diameter_mm"] or 0.0) / 2.0,
+            "_mask_vox": mask_vox,
         })
     timings["segmentation_per_nodule"] = seg_times
     timings["segmentation_total"] = int(sum(seg_times))
@@ -457,19 +464,24 @@ def run_lung_nodule_pipeline(
 
     # 4) 按平均径从大到小排序并编号
     nodules.sort(key=lambda n: -(n["metrics"]["mean_diameter_mm"] or 0.0))
+    masks: Dict[int, Any] = {}
     for i, n in enumerate(nodules, start=1):
         n.pop("_radius_mm", None)
         n["index"] = i
+        vox = n.pop("_mask_vox", None)
+        if vox is not None:
+            masks[i] = vox
+        n["seg_segment_number"] = None
         # 病人坐标与 DICOM 图像：center_vox_zyx / box_vox_zyx / key_slice_z 经体积几何换算
         n["center_lps_mm"] = voxel_to_lps(geometry, n["center_vox_zyx"])
         n["box_lps_mm"] = box_to_lps_bounds(geometry, n["box_vox_zyx"])
         n["key_slice_sop_instance_uid"] = sop_uid_at(geometry, n["key_slice_z"])
     ordered_keys = ("index", "detection_score", "center_vox_zyx", "box_vox_zyx", "lobe",
                     "segmentation", "key_slice_z", "metrics", "warnings",
-                    "center_lps_mm", "box_lps_mm", "key_slice_sop_instance_uid")
+                    "center_lps_mm", "box_lps_mm", "key_slice_sop_instance_uid", "seg_segment_number")
     nodules = [{k: n[k] for k in ordered_keys} for n in nodules]
 
-    return {
+    result = {
         "model_id": PIPELINE_ID,
         "model_version": model_version,
         "device": str(getattr(neural.device, "type", neural.device)),
@@ -486,4 +498,8 @@ def run_lung_nodule_pipeline(
         },
         "lobe_segmentation": lobe_meta,
         "timings_ms": timings,
+        "seg": None,
     }
+    if return_masks:
+        result["_masks"] = masks
+    return result

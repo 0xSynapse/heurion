@@ -44,7 +44,8 @@ RUN uv pip install --no-cache --python /opt/venv/bin/python \
       "pillow>=10.2.0" \
       "scipy>=1.12.0" \
       "einops>=0.7.0" \
-      "python-multipart>=0.0.32"
+      "python-multipart>=0.0.32" \
+      "highdicom==0.28.2"
 
 # 3. 先仅拷贝模型注册表与预热脚本，并默认仅烘焙轻量核心基座权重 (spleen_ct 23MB)；
 #    其余大体积模型权重（合计 ~2.3GB）在生产环境持久化卷 imaging-models 中并发预热并长期保留，

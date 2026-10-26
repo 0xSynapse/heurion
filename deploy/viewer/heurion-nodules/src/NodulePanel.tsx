@@ -9,6 +9,8 @@ interface Lesion {
   status: 'proposed' | 'confirmed' | 'rejected';
   reject_reason: string | null;
   series_uid: string | null;
+  /** 分割轮廓：所在 DICOM SEG 的 SeriesInstanceUID 与 segment 编号（分割失败的结节为 null） */
+  seg: { series_uid: string; segment_number: number } | null;
   version: number;
   metrics: {
     mean_diameter_mm?: number | null;
@@ -64,12 +66,37 @@ export default function NodulePanel({ servicesManager, commandsManager }) {
 
   useEffect(() => { void load(); }, [load]);
 
-  /** 跳到结节：必要时把所在序列放进当前视口，再按关键层的 SOPInstanceUID 定位，切到肺窗 */
+  /**
+   * 有分割轮廓时：把 SEG 叠加到当前视口（只画描边、不填充，不遮挡结节内部纹理），跳到该 segment 中心并高亮。
+   * 返回是否已按 SEG 跳转；SEG 还没加载好等情况返回 false，由调用方按关键层跳转。
+   */
+  const jumpBySeg = useCallback(async (l: Lesion, viewportId: string): Promise<boolean> => {
+    if (!l.seg) return false;
+    const { displaySetService, segmentationService } = servicesManager.services;
+    const segDs = displaySetService.getActiveDisplaySets().find(d => d.Modality === 'SEG' && d.SeriesInstanceUID === l.seg!.series_uid);
+    if (!segDs) return false;
+    const segmentationId = segDs.displaySetInstanceUID;
+    // 显式加载 SEG 并叠加到当前视口（hydrateSecondaryDisplaySet 只记下展示方式，CT 已在视口里时不会触发加载；2026-10-26 实测）
+    if (!segmentationService.getSegmentation(segmentationId)) await segDs.load({ headers: {} });
+    if (!segmentationService.getSegmentation(segmentationId)) return false;
+    if (segmentationService.getSegmentationRepresentations(viewportId, { segmentationId }).length === 0) {
+      await segmentationService.addSegmentationRepresentation(viewportId, { segmentationId });
+    }
+    segmentationService.setStyle({ type: 'Labelmap', segmentationId }, { renderFill: false, renderOutline: true, outlineWidth: 2 });
+    segmentationService.jumpToSegmentCenter(segmentationId, l.seg.segment_number, viewportId);
+    return true;
+  }, [servicesManager]);
+
+  /** 跳到结节：有分割轮廓时按 SEG 跳并显示描边；否则把所在序列放进当前视口，按关键层的 SOPInstanceUID 定位。最后切到肺窗 */
   const jump = useCallback(async (l: Lesion) => {
     setSelected(l.id);
     const { viewportGridService, displaySetService, cornerstoneViewportService } = servicesManager.services;
     const viewportId = viewportGridService.getActiveViewportId();
     if (!viewportId) return;
+    if (await jumpBySeg(l, viewportId).catch(() => false)) {
+      commandsManager.runCommand('setViewportWindowLevel', { viewportId, ...LUNG_WINDOW });
+      return;
+    }
     const ds = displaySetService.getActiveDisplaySets().find(d => d.SeriesInstanceUID === l.series_uid);
     const current = viewportGridService.getState().viewports.get(viewportId)?.displaySetInstanceUIDs ?? [];
     if (ds && !current.includes(ds.displaySetInstanceUID)) {
@@ -93,7 +120,7 @@ export default function NodulePanel({ servicesManager, commandsManager }) {
       await sleep(100);
     }
     commandsManager.runCommand('setViewportWindowLevel', { viewportId, ...LUNG_WINDOW });
-  }, [servicesManager, commandsManager]);
+  }, [servicesManager, commandsManager, jumpBySeg]);
 
   const review = useCallback(async (l: Lesion, status: 'confirmed' | 'rejected', reason?: string) => {
     setBusy(l.id);

@@ -7,9 +7,9 @@ import numpy as np
 from typing import Dict, Any, List, Tuple, Optional, Union
 
 try:
-    from .volume_geometry import CachedVolume, canonical_affine_from_ras, make_geometry, match_sop_uids
+    from .volume_geometry import CachedVolume, canonical_affine_from_ras, make_geometry, match_sop_uids, strip_pixel_data
 except (ImportError, ValueError):
-    from volume_geometry import CachedVolume, canonical_affine_from_ras, make_geometry, match_sop_uids
+    from volume_geometry import CachedVolume, canonical_affine_from_ras, make_geometry, match_sop_uids, strip_pixel_data
 
 # Clinical CT Windows (Center / Width)
 CT_WINDOWS = {
@@ -435,8 +435,25 @@ def load_dicom_file(file_source: Union[str, bytes, io.BytesIO]) -> Tuple[np.ndar
         "rows": vol.shape[1],
         "cols": vol.shape[2],
         "geometry": _single_file_geometry(ds, int(vol.shape[0]), dy, dx, dz),
+        "source_headers": _source_headers([ds]),
     }
     return vol, spacing, scrub_dicom_metadata(meta, "ANON-STUDY")
+
+
+def _source_headers(datasets: list) -> Optional[Dict[str, Any]]:
+    """
+    {SOPInstanceUID: 去掉像素数据的头}；生成 DICOM SEG 时作为源图。
+    只收录真正的 pydicom 数据集且有 SOPInstanceUID 的切片；其他对象（例如测试用的替身）不收录。
+    """
+    import pydicom
+    out: Dict[str, Any] = {}
+    for d in datasets:
+        if not isinstance(d, pydicom.Dataset):
+            continue
+        uid = str(getattr(d, "SOPInstanceUID", "") or "")
+        if uid:
+            out[uid] = strip_pixel_data(d)
+    return out or None
 
 
 def _parse_floats(raw: Any, n: int) -> Optional[List[float]]:
@@ -716,6 +733,7 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
         "window_width": getattr(first, "WindowWidth", None),
         "orientation_qa": orientation_qa,
         "geometry": geometry,
+        "source_headers": _source_headers(valid_slices),
     }
     return vol_lps, spacing_lps, scrub_dicom_metadata(meta, "ANON-STUDY")
 
@@ -738,7 +756,7 @@ def load_volume(source: Union[str, bytes, io.BytesIO], filename: Optional[str] =
         if zipfile.is_zipfile(bio):
             bio.seek(0)
             vol, spacing, meta = load_dicom_from_zip(bio)
-            return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
+            return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))
 
         bio.seek(0)
         # Check NIfTI (gzip magic \x1f\x8b or .nii in filename)
@@ -752,16 +770,16 @@ def load_volume(source: Union[str, bytes, io.BytesIO], filename: Optional[str] =
         # Check DICOM
         bio.seek(0)
         vol, spacing, meta = load_dicom_file(bio)
-        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
+        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))
 
     # 2. File path (string)
     if os.path.isdir(source):
         vol, spacing, meta = load_dicom_series(source)
-        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
+        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))
 
     if zipfile.is_zipfile(source) or fn.endswith(".zip"):
         vol, spacing, meta = load_dicom_from_zip(source)
-        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
+        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))
 
     if fn.endswith((".nii", ".nii.gz", ".gz")):
         vol, spacing, geometry = load_nifti_with_geometry(source)
@@ -770,7 +788,7 @@ def load_volume(source: Union[str, bytes, io.BytesIO], filename: Optional[str] =
 
     if fn.endswith((".dcm", ".dicom", ".ima")):
         vol, spacing, meta = load_dicom_file(source)
-        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
+        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))
 
     # Fallback attempt as NIfTI then DICOM
     try:
@@ -778,4 +796,4 @@ def load_volume(source: Union[str, bytes, io.BytesIO], filename: Optional[str] =
         return CachedVolume(vol, spacing, "MRI" if "mri" in fn else "CT", geometry)
     except Exception:
         vol, spacing, meta = load_dicom_file(source)
-        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"))
+        return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))

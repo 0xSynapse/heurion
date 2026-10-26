@@ -15,7 +15,7 @@ import { SlideRenderer } from '../src/render/slides.ts'
 import { Store } from '../src/store/db.ts'
 import { kekFrom, TenantKeys } from '../src/tenancy/keys.ts'
 import { PatientService, type Actor } from '../src/tenancy/patients.ts'
-import { FakeOrthanc, fakeWorker, NODULE_RESULT, seriesFiles } from './imaging-fakes.ts'
+import { dicom, FakeOrthanc, fakeWorker, NODULE_RESULT, seriesFiles } from './imaging-fakes.ts'
 
 const STUDY = '1.2.840.113619.2.55.3.2001'
 const THIN = `${STUDY}.2`
@@ -132,6 +132,41 @@ describe('分析流水线（T1.4）', () => {
     expect(now.filter(l => l.label === '结节 1')).toHaveLength(1)
     expect(t.svc.lesionEvents(t.a, second!.id).map(e => e.action)).toEqual(['create', 'supersede'])
     expect(t.svc.listStudies(t.a, t.p.id)[0]!.runs[0]!.summary).toMatchObject({ superseded: 1, matched_reviewed: 1, found: 1 })
+  })
+
+  it('分割结果（DICOM SEG）存回 Orthanc、登记为派生序列；结节记下所在 segment；阅片器列表带 SEG 的 UID', async () => {
+    const SEG = `${STUDY}.77`
+    const segFile = dicom(STUDY, SEG, `${SEG}.1`)
+    const withSeg = {
+      ...NODULE_RESULT,
+      nodules: NODULE_RESULT.nodules.map(n => ({ ...n, seg_segment_number: n.segmentation === 'vista3d' ? 1 : null })),
+      seg: { dicom_base64: Buffer.from(segFile).toString('base64'), series_instance_uid: SEG, sop_instance_uid: `${SEG}.1` },
+    }
+    const t = await seeded(path => path.endsWith('/lung-nodule') ? ok(withSeg) : ok({ ok: true }))
+    t.orthanc.seriesTags.set(SEG, { modality: 'SEG', description: 'Heurion AI lung nodules', sliceThickness: null, kernel: null })
+    t.pipeline.enqueue(t.a, t.study.id)
+    await t.pipeline.idle()
+    expect([...t.orthanc.instances.values()].some(i => i.series === SEG)).toBe(true)
+    const st = t.svc.listStudies(t.a, t.p.id, true)[0]!
+    expect(st.series.find(x => x.series_uid === SEG)).toMatchObject({ modality: 'SEG' })
+    expect(st.runs[0]!.summary).toMatchObject({ seg_stored: true })
+    const lesions = t.svc.lesionsByStudyUid(t.a, STUDY)
+    expect(lesions[0]!.seg).toEqual({ series_uid: SEG, segment_number: 1 })
+    expect(lesions[1]!.seg).toBeNull() // 分割失败的结节没有 segment
+    // 自动选序列时不会选到 SEG
+    expect(t.svc.listStudies(t.a, t.p.id)[0]!.runs[0]!.status).toBe('done')
+  })
+
+  it('SEG 存不进影像存储时：检出照常入库，运行摘要写明原因', async () => {
+    const withSeg = { ...NODULE_RESULT, seg: { dicom_base64: Buffer.from('not dicom').toString('base64'), series_instance_uid: '1.2', sop_instance_uid: '1.2.1' } }
+    const t = await seeded(path => path.endsWith('/lung-nodule') ? ok(withSeg) : ok({ ok: true }))
+    t.pipeline.enqueue(t.a, t.study.id)
+    await t.pipeline.idle()
+    const run = t.svc.listStudies(t.a, t.p.id)[0]!.runs[0]!
+    expect(run.status).toBe('done')
+    expect(run.summary).toMatchObject({ seg_stored: false })
+    expect((run.summary as { warnings: string[] }).warnings.some(w => w.startsWith('分割结果（DICOM SEG）未能存入影像存储'))).toBe(true)
+    expect(t.svc.listLesions(t.a, t.study.id)).toHaveLength(2)
   })
 
   it('多用户排队按用户轮转：一人批量提交不会堵住别人；可查前面还有几个任务', async () => {

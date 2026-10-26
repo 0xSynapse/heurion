@@ -35,12 +35,16 @@ def _rot(axis, deg):
 
 
 def make_series(tmpdir, n_slices=9, rows=20, cols=24, pixel_spacing=(0.7, 0.9), slice_gap=1.6,
-                tilt_deg=12.0, inplane_deg=20.0, feet_first_normal=True, seed=0):
+                tilt_deg=12.0, inplane_deg=20.0, feet_first_normal=True, seed=0, flip_row_dir=False,
+                frame_of_reference="all"):
     """
     生成一个 DICOM 序列并返回 {sop_uid: (ipp, iop, pixel_spacing, pixels)}：
     - IOP：先绕 z 转 inplane_deg、再绕 x 倾斜 tilt_deg（斜位）；feet_first_normal 时列方向取反，使法向量朝足侧；
     - 层间距 slice_gap（IPP 沿法向递增），SliceThickness 故意写成 2.0（与真实间距不同）；
-    - 文件名与 InstanceNumber 都打乱，不能靠文件顺序。
+    - 文件名与 InstanceNumber 都打乱，不能靠文件顺序；
+    - flip_row_dir 时行方向也取反（列号增大朝患者右侧），与列方向一起构成行列翻转的源图；
+    - frame_of_reference：all = 每张都有 FrameOfReferenceUID；none = 都没有；partial = 只有一部分有。
+      none 时同时去掉 StudyID / ReferringPhysicianName（Type 2，模拟真实数据缺失）。
     """
     import pydicom
     from pydicom.dataset import Dataset, FileMetaDataset
@@ -52,9 +56,13 @@ def make_series(tmpdir, n_slices=9, rows=20, cols=24, pixel_spacing=(0.7, 0.9), 
     c_vec = rot @ np.array([0.0, 1.0, 0.0])
     if feet_first_normal:
         c_vec = -c_vec
+    if flip_row_dir:
+        r_vec = -r_vec
     normal = np.cross(r_vec, c_vec)
     origin = np.array([-30.0, 12.5, 200.0])
     series_uid = generate_uid()
+    study_uid = generate_uid()
+    for_uid = generate_uid()
     truth = {}
     order = list(range(n_slices))
     random.Random(seed).shuffle(order)
@@ -71,7 +79,23 @@ def make_series(tmpdir, n_slices=9, rows=20, cols=24, pixel_spacing=(0.7, 0.9), 
         ds.SOPClassUID = CTImageStorage
         ds.SOPInstanceUID = sop_uid
         ds.SeriesInstanceUID = series_uid
-        ds.StudyInstanceUID = "1.2.3"
+        ds.StudyInstanceUID = study_uid
+        if frame_of_reference == "all" or (frame_of_reference == "partial" and file_idx % 2 == 0):
+            ds.FrameOfReferenceUID = for_uid
+        ds.PatientID = "SYN-0001"
+        ds.PatientName = "Synthetic^Phantom"
+        ds.PatientBirthDate = ""
+        ds.PatientSex = "O"
+        ds.StudyDate = "20260101"
+        ds.StudyTime = "120000"
+        ds.StudyID = "1"
+        ds.AccessionNumber = ""
+        ds.ReferringPhysicianName = ""
+        ds.SeriesNumber = 2
+        ds.Manufacturer = "Synthetic"
+        if frame_of_reference == "none":
+            del ds.StudyID
+            del ds.ReferringPhysicianName
         ds.Modality = "CT"
         ds.InstanceNumber = n_slices - file_idx
         ds.ImagePositionPatient = [f"{v:.6f}" for v in ipp]
