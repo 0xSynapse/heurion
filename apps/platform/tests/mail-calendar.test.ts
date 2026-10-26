@@ -776,6 +776,68 @@ dj4=
     const trashAfterEmpty = await (await api.get('/api/mail/messages?folder=trash')).json() as any[]
     expect(trashAfterEmpty.length).toBe(0)
   })
+
+  it('14. 英文验证邮件与 Confirmation Link 防误解码及历史乱码自愈 (NEAR AI Cloud 真实案例)', async () => {
+    const api = makeTestApp()
+
+    const nearVerifyBody = `Confirm your email address
+
+Someone asked to add this email address to the NEAR AI Cloud account malemouse455.near.
+
+If that was you, confirm the address. We will then use it to contact you about that account, including billing, model changes and product updates.
+
+Confirm email address: https://cloud.near.ai/verify-contact-email#token=e2PapBFmO99f_ZjRIzzp_QMsRNj4RZ2F2RndeUGCV0c
+
+The link can be used once and expires on October 27, 2026 at 15:50 UTC.
+
+If you did not ask for this, ignore this email. Nothing changes unless the link is opened.`
+
+    const inboundRes = await api.rawApp.request('/api/mail/inbound', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: '010001a178e825b1-bd87ed82-f0c9-4da1-9700-67b34949b4dd-000000@send.notify.near.ai',
+        to: 'dev@heurion.org',
+        subject: 'Confirm your email address for NEAR AI Cloud',
+        body: nearVerifyBody,
+      }),
+    })
+    expect(inboundRes.status).toBe(201)
+    const inboundJson = await inboundRes.json() as any
+
+    const msgRes = await api.get(`/api/mail/messages/${inboundJson.id}`)
+    expect(msgRes.status).toBe(200)
+    const msg = await msgRes.json() as any
+    expect(msg.body).toContain('Confirm your email address')
+    expect(msg.body).toContain('https://cloud.near.ai/verify-contact-email#token=e2PapBFmO99f_ZjRIzzp_QMsRNj4RZ2F2RndeUGCV0c')
+    expect(msg.body).not.toContain('澶佸Ы')
+    expect(msg.body).not.toContain('釶')
+    expect(msg.sender_name).toBe('NEAR AI Cloud')
+
+    // 验证已入库的历史受损乱码邮件可自动自愈还原
+    const corruptedBody = `澶佸Ы骞惰唇娅掝櫙璀硓锟\uFFFD
+
+Someone asked to add this email address to the NEAR AI Cloud account malemouse455.near.
+
+Confirm email address: https://cloud.near.ai/verify-contact-email#token釶apBFmO99f_ZjRIzzp_QMsRNj4RZ2F2RndeUGCV0c`
+
+    const corruptedRes = await api.rawApp.request('/api/mail/inbound', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: '010001a178e825b1-bd87ed82-f0c9-4da1-9700-67b34949b4dd-000000@send.notify.near.ai',
+        to: 'dev@heurion.org',
+        subject: 'Confirm your email address for NEAR AI Cloud',
+        body: corruptedBody,
+      }),
+    })
+    const corruptedJson = await corruptedRes.json() as any
+    const healedMsg = await (await api.get(`/api/mail/messages/${corruptedJson.id}`)).json() as any
+    expect(healedMsg.body).toContain('Confirm your email address')
+    expect(healedMsg.body).toContain('https://cloud.near.ai/verify-contact-email#token=e2PapBFmO99f_ZjRIzzp_QMsRNj4RZ2F2RndeUGCV0c')
+    expect(healedMsg.body).not.toContain('澶佸Ы')
+    expect(healedMsg.body).not.toContain('釶')
+  })
 })
 
 
