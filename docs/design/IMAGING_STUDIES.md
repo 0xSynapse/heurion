@@ -95,6 +95,9 @@ OHIF 扩展 `@heurion/extension-nodules`（`deploy/viewer/heurion-nodules/`）�
 - 确认 / 否决：`POST /api/viewer/lesions/:id/review`，只限 Cookie 允许的检查，并且必须带 `X-Heurion-Viewer: 1` 请求头（跨站表单带不上，防 CSRF）。否决须选原因：血管断面、纤维灶 / 瘢痕、钙化灶、淋巴结、伪影、其他。写入以医生本人身份经同一服务层，留痕与主站一致。主站对应接口为 `GET …/studies/:stid/lesions`（AI 用 `imaging_lesions` 只读）和 `POST …/lesions/:lid/review`（AI 不可用）。
 - 重新分析：与医生已确认 / 否决的结节是同一处的检出不再新增（两边都有病人坐标时按坐标距离判断，否则在同一序列内按体素坐标），运行摘要记 `matched_reviewed`。
 - 轮廓（T1.6）：worker 为每个分割成功的结节生成 DICOM SEG 的一个 segment（BINARY，引用源序列；category SCT 49755003、type SCT 27925004、部位 SCT 39607008；推荐显示色为黄色）。平台存回 Orthanc，登记为检查的派生序列，病灶记 `seg_ref = <序列行 id>#<segment 编号>`。面板点结节时先显式加载 SEG（`displaySet.load`）并叠加到当前视口，只画描边、不填充，再跳到 segment 中心并高亮；SEG 在阅片器里只读（`panelSegmentation.disableEditing`）。没有 SEG 的结节仍按关键层跳转。
+- 旧 SEG 清理：重新分析后，曾被病灶引用、且引用它的病灶全部已被取代的 SEG，从 Orthanc 删除并删索引（访问留痕 `imaging_seg_removed`）；本次新生成但没有任何病灶引用的 SEG（其中结节都与已审核结节重合）当场删除。医生确认 / 否决过的结节所引用的 SEG 一律保留。运行摘要记 `seg_removed`。
+- 截断提示：只对挑出的结节掩码判断是否碰到 VISTA-3D 推理窗口边界（窗口边界就是体积边缘时不算）。原先按原始输出判断，血管等无关连通域碰边也会误报。
+- 面板提示：每个结节只突出一条需核对的要点（分割失败 / 可能被截断），worker 的完整提示收在「详情」里。
 - 源图缺 FrameOfReferenceUID 时（本机测试数据由 pydicom 生成，就缺这一项），SEG 用按源序列派生的参照系 UID，运行摘要写明。OHIF 按 SOP 引用对位，实测叠加位置正确；扫描仪产生的 CT 都带这个 UID，不会走这条路。
 - 2026-10-26 本机验证（无头 Chromium，胸部 CT 269 层）：
   - 面板列出结节，确认与否决都能保存，平台留痕正确。

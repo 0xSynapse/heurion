@@ -145,6 +145,22 @@ def deduplicate_detections(
 # 分割后处理与测量
 # ---------------------------------------------------------------------------
 
+def mask_touches_window(mask: np.ndarray, window_zyx: Any, dims: Tuple[int, ...]) -> bool:
+    """
+    结节掩码是否碰到 VISTA-3D 推理窗口的边界（可能被截断）。window_zyx = [lo, hi]（规范化体素下标，hi 不含）；
+    窗口边界就是体积边缘的那一侧不算（体积外本来就没有内容）。
+    只看已挑出的结节掩码：VISTA-3D 原始输出里常有血管等无关连通域碰到窗口边界，不能据此判断结节被截断。
+    """
+    if not mask.any():
+        return False
+    lo, hi = window_zyx
+    idx = np.nonzero(mask)
+    for a in range(3):
+        if (lo[a] > 0 and int(idx[a].min()) <= lo[a]) or (hi[a] < dims[a] and int(idx[a].max()) >= hi[a] - 1):
+            return True
+    return False
+
+
 def select_components_overlapping_box(mask: np.ndarray, box: List[int]) -> np.ndarray:
     """只保留与检出框有重叠的三维连通域（26 邻接）。"""
     binary = np.asarray(mask) > 0
@@ -391,7 +407,9 @@ def run_lung_nodule_pipeline(
                     center = [int(round(float(c))) for c in ndi.center_of_mass(mask)]
                     if return_masks:
                         mask_vox = tuple(v.astype(np.int32) for v in np.nonzero(mask))
-                    if (seg_meta or {}).get("mask_touches_window_edge"):
+                    win = (seg_meta or {}).get("window_zyx")
+                    touches = mask_touches_window(mask, win, volume.shape) if win else bool((seg_meta or {}).get("mask_touches_window_edge"))
+                    if touches:
                         n_warnings.append("分割触及 VISTA-3D 推理区域边界，可能被截断，测值可能偏小")
             measure_ms += _ms(t)
         except Exception as exc:

@@ -570,3 +570,65 @@ def test_real_vista3d_nodule_dice_lidc():
     dice = 2.0 * float((mask.astype(bool) & gt).sum()) / float(mask.sum() + gt.sum())
     assert dice >= 0.6, dice
     assert meta["real_neural_inference"] is True
+
+
+# ---------------------------------------------------------------------------
+# 推理窗口截断判断：只看挑出的结节掩码（2026-10-26 随访 CT 上 20 mm 结节被误报）
+# ---------------------------------------------------------------------------
+
+def test_mask_touches_window_ignores_volume_edge():
+    from lung_nodule_pipeline import mask_touches_window
+    dims = (40, 60, 60)
+    m = np.zeros(dims, dtype=np.uint8)
+    m[10:15, 20:30, 20:30] = 1
+    assert not mask_touches_window(m, [[5, 10, 10], [25, 40, 40]], dims)      # 在窗口内部
+    assert mask_touches_window(m, [[10, 10, 10], [25, 40, 40]], dims)         # 贴住窗口下界
+    assert mask_touches_window(m, [[5, 10, 10], [25, 40, 30]], dims)          # 贴住窗口上界（hi 不含）
+    edge = np.zeros(dims, dtype=np.uint8)
+    edge[0:3, 20:30, 20:30] = 1
+    assert not mask_touches_window(edge, [[0, 10, 10], [25, 40, 40]], dims)   # 窗口下界就是体积边缘：不算截断
+    assert not mask_touches_window(np.zeros(dims, dtype=np.uint8), [[5, 5, 5], [6, 6, 6]], dims)
+
+
+class EdgeStrayNeural(FakeNeural):
+    """VISTA-3D 原始输出里有一个碰到推理窗口边界的无关连通域（像血管），结节本身在窗口内部。"""
+
+    def infer_vista3d_nodule(self, vol, spacing, prompt_point=None):
+        mask, meta = super().infer_vista3d_nodule(vol, spacing, prompt_point)
+        # 窗口 = 结节范围外扩 3 个体素：结节本身不碰窗口边界
+        idx = np.nonzero(mask)
+        lo = [max(0, int(i.min()) - 3) for i in idx]
+        hi = [min(n, int(i.max()) + 4) for i, n in zip(idx, vol.shape)]
+        stray = np.zeros_like(mask)
+        stray[lo[0], lo[1]:hi[1], lo[2]] = 1   # 贴着窗口下界的一条线，与结节不相连
+        mask = np.maximum(mask, stray)
+        return mask, {**meta, "window_zyx": [lo, hi], "mask_touches_window_edge": True}
+
+
+def test_stray_component_at_window_edge_does_not_flag_nodule(phantom):
+    vol, nodules, lobe_map = phantom
+    fake = EdgeStrayNeural(nodules, lobe_map, _detections(nodules, {"A": 0.9}), stray_component=False)
+    res = run_lung_nodule_pipeline(fake, vol, SPACING)
+    n = res["nodules"][0]
+    assert n["segmentation"] == "vista3d"
+    assert not any("推理区域边界" in w for w in n["warnings"]), n["warnings"]
+
+
+class TruncatedNeural(FakeNeural):
+    """推理窗口切过结节本身：应提示可能被截断"""
+
+    def infer_vista3d_nodule(self, vol, spacing, prompt_point=None):
+        mask, meta = super().infer_vista3d_nodule(vol, spacing, prompt_point)
+        idx = np.nonzero(mask)
+        lo = [max(0, int(i.min()) - 3) for i in idx]
+        hi = [min(n, int(i.max()) + 4) for i, n in zip(idx, vol.shape)]
+        lo[2] = int(prompt_point[2])           # 窗口左边界切在结节中心
+        mask[:, :, : lo[2]] = 0
+        return mask, {**meta, "window_zyx": [lo, hi], "mask_touches_window_edge": False}
+
+
+def test_nodule_cut_by_window_is_flagged(phantom):
+    vol, nodules, lobe_map = phantom
+    fake = TruncatedNeural(nodules, lobe_map, _detections(nodules, {"A": 0.9}), stray_component=False)
+    res = run_lung_nodule_pipeline(fake, vol, SPACING)
+    assert any("推理区域边界" in w for w in res["nodules"][0]["warnings"])

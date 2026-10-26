@@ -157,6 +157,44 @@ describe('分析流水线（T1.4）', () => {
     expect(t.svc.listStudies(t.a, t.p.id)[0]!.runs[0]!.status).toBe('done')
   })
 
+  it('重新分析：旧 SEG 只被已取代的检出引用时从影像存储清掉；医生确认过的结节的 SEG 保留', async () => {
+    let n = 0
+    const SEGS: string[] = []
+    const withSeg = () => {
+      const SEG = `${STUDY}.8${++n}`
+      SEGS.push(SEG)
+      return {
+        ...NODULE_RESULT,
+        nodules: NODULE_RESULT.nodules.map(x => ({ ...x, seg_segment_number: x.segmentation === 'vista3d' ? 1 : null })),
+        seg: { dicom_base64: Buffer.from(dicom(STUDY, SEG, `${SEG}.1`)).toString('base64'), series_instance_uid: SEG, sop_instance_uid: `${SEG}.1` },
+      }
+    }
+    const t = await seeded(path => path.endsWith('/lung-nodule') ? ok(withSeg()) : ok({ ok: true }))
+    const segSeries = () => t.svc.listStudies(t.a, t.p.id, true)[0]!.series.filter(x => x.modality === 'SEG').map(x => x.series_uid)
+    const markSeg = () => { for (const u of SEGS) t.orthanc.seriesTags.set(u, { modality: 'SEG', sliceThickness: null, kernel: null }) }
+
+    // 第一次分析 → 第二次分析：第一次的检出都没处理过，全部被取代，第一次的 SEG 被清掉
+    const prime = (fn: () => void) => { const orig = t.orthanc.upload.bind(t.orthanc); t.orthanc.upload = async b => { const r = await orig(b); fn(); return r } }
+    prime(markSeg)
+    t.pipeline.enqueue(t.a, t.study.id); await t.pipeline.idle()
+    t.pipeline.enqueue(t.a, t.study.id); await t.pipeline.idle()
+    expect(t.orthanc.deleted).toEqual([SEGS[0]])
+    expect(segSeries()).toEqual([SEGS[1]])
+    expect(t.svc.listStudies(t.a, t.p.id)[0]!.runs[0]!.summary).toMatchObject({ seg_removed: 1 })
+    expect(t.patients.accessLog(t.a, t.p.id).some((l: { action: string }) => l.action === 'imaging_seg_removed')).toBe(true)
+
+    // 医生确认第二次的 1 号结节 → 第三次分析：同一结节不重复新增，第二次的 SEG 因被已确认结节引用而保留
+    const confirmed = t.svc.listLesions(t.a, t.study.id).find(l => l.label === '结节 1')!
+    t.svc.reviewLesion(t.a, confirmed.id, { status: 'confirmed' })
+    t.pipeline.enqueue(t.a, t.study.id); await t.pipeline.idle()
+    expect(segSeries()).toContain(SEGS[1])
+    expect(t.svc.lesionsByStudyUid(t.a, STUDY).find(l => l.id === confirmed.id)!.seg).toEqual({ series_uid: SEGS[1], segment_number: 1 })
+    // 第三次的 SEG 里只有 1 号结节，它与已确认结节同一处没有入库：这份 SEG 无人引用，当场清掉
+    expect(t.orthanc.deleted).toEqual([SEGS[0], SEGS[2]])
+    expect(segSeries()).toEqual([SEGS[1]])
+    expect(t.svc.listStudies(t.a, t.p.id)[0]!.runs[0]!.summary).toMatchObject({ seg_stored: false, matched_reviewed: 1 })
+  })
+
   it('SEG 存不进影像存储时：检出照常入库，运行摘要写明原因', async () => {
     const withSeg = { ...NODULE_RESULT, seg: { dicom_base64: Buffer.from('not dicom').toString('base64'), series_instance_uid: '1.2', sop_instance_uid: '1.2.1' } }
     const t = await seeded(path => path.endsWith('/lung-nodule') ? ok(withSeg) : ok({ ok: true }))

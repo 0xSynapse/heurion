@@ -247,6 +247,38 @@ export class ImagingStudyService {
     return id
   }
 
+  /**
+   * 清理已无用的 AI 分割序列：曾被病灶引用（即本系统生成的 SEG），且引用它的病灶全部已被取代（superseded）。
+   * 医生确认 / 否决过的病灶所引用的 SEG 一律保留。从 Orthanc 删除并删索引，记访问留痕。返回删除数。
+   * justCreated = 本次分析刚登记的 SEG 序列：若没有任何病灶引用它（其中的结节都与已审核的结节重合、未入库），也一并清掉。
+   */
+  async removeSupersededSeg(a: Actor, studyId: string, justCreated: string | null = null): Promise<number> {
+    const orthanc = this.requireOrthanc()
+    const s = this.studyScope(a, studyId, 'write')
+    const refs = new Map<string, { live: boolean }>()
+    for (const l of s.db.prepare('SELECT status, seg_ref FROM imaging_lesions WHERE study_id = ? AND seg_ref IS NOT NULL').all(studyId) as Array<{ status: string; seg_ref: string }>) {
+      const r = parseSegRef(l.seg_ref)
+      if (!r) continue
+      const e = refs.get(r.seriesId) ?? { live: false }
+      if (l.status !== 'superseded') e.live = true
+      refs.set(r.seriesId, e)
+    }
+    if (justCreated && !refs.has(justCreated)) refs.set(justCreated, { live: false })
+    let removed = 0
+    for (const [seriesId, e] of refs) {
+      if (e.live) continue
+      const row = s.db.prepare("SELECT orthanc_id FROM imaging_series WHERE id = ? AND study_id = ? AND modality = 'SEG'").get(seriesId, studyId) as { orthanc_id: string | null } | undefined
+      if (!row) continue
+      if (row.orthanc_id) {
+        try { await orthanc.deleteSeries(row.orthanc_id) } catch (err) { throw this.storageError(err) }
+      }
+      s.db.prepare('DELETE FROM imaging_series WHERE id = ?').run(seriesId)
+      s.log('imaging_seg_removed', seriesId)
+      removed++
+    }
+    return removed
+  }
+
   /** 患者的影像检查（新的在前）。forUi = true 时带 UID 与检查号（界面用）；AI 视图不带。 */
   listStudies(a: Actor, patientId: string, forUi = false): StudyView[] {
     const s = this.patients.imagingScope(a, patientId, 'read')

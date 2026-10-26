@@ -37,6 +37,13 @@ const STATUS: Record<string, { text: string; color: string }> = {
 /** 肺窗（W1500 / L-600），与报告的测量习惯一致 */
 const LUNG_WINDOW = { windowWidth: 1500, windowCenter: -600 };
 
+/** 每个结节只突出一条需要医生核对的要点；worker 的完整提示收进「详情」 */
+function keyNote(m: Lesion['metrics']): string | null {
+  if (m.segmentation === 'failed') return '分割失败，测量取检出框径，请核对';
+  if ((m.warnings ?? []).some(w => w.includes('推理区域边界'))) return '分割可能被截断，测值可能偏小，请核对';
+  return null;
+}
+
 const fmt = (v: number | null | undefined, digits = 1) => (v === null || v === undefined || Number.isNaN(v) ? '—' : v.toFixed(digits));
 const studyUidFromUrl = () => new URLSearchParams(window.location.search).get('StudyInstanceUIDs')?.split(',')[0] ?? null;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -178,8 +185,13 @@ export default function NodulePanel({ servicesManager, commandsManager }) {
               {TYPE[m.nodule_type ?? ''] ?? '密度未定'} · 平均 CT 值 {fmt(m.mean_hu, 0)} HU
               {l.source === 'ai' ? ` · 检出分数 ${fmt(m.detection_score, 2)}` : ' · 医生补充'}
             </div>
-            {m.segmentation === 'failed' && <div style={{ color: '#f5a623' }}>分割失败，测量取检出框径，请核对</div>}
-            {(m.warnings ?? []).map(w => <div key={w} style={{ color: '#f5a623' }}>{w}</div>)}
+            {keyNote(m) && <div style={{ color: '#f5a623' }}>{keyNote(m)}</div>}
+            {(m.warnings ?? []).length > 0 && (
+              <details onClick={e => e.stopPropagation()} style={{ color: '#8b949e', fontSize: 12 }}>
+                <summary style={{ cursor: 'pointer' }}>详情（{m.warnings!.length} 条）</summary>
+                {m.warnings!.map(w => <div key={w}>· {w}</div>)}
+              </details>
+            )}
             {l.status === 'rejected' && l.reject_reason && <div style={{ color: '#8b949e' }}>否决原因：{l.reject_reason}</div>}
             <div style={{ marginTop: 6, display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
               {l.status !== 'confirmed' && (

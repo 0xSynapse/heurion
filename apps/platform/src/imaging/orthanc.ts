@@ -37,6 +37,8 @@ export interface Orthanc {
   upload(bytes: Uint8Array): Promise<OrthancUpload>
   study(orthancId: string): Promise<OrthancStudy>
   series(orthancId: string): Promise<OrthancSeries>
+  /** 删除一个序列（只用于清理本系统生成、已被取代的派生序列，如旧的 DICOM SEG） */
+  deleteSeries(orthancId: string): Promise<void>
   /** 整个序列打包成 zip（DICOM 原件），交给影像 worker 分析 */
   seriesArchive(orthancId: string): Promise<Uint8Array>
   /**
@@ -111,6 +113,11 @@ export class HttpOrthanc implements Orthanc {
       sliceThickness: Number.isFinite(thickness) && thickness > 0 ? thickness : null,
       kernel: str(shared.ConvolutionKernel), instances: r.Instances?.length ?? 0,
     }
+  }
+
+  async deleteSeries(orthancId: string): Promise<void> {
+    const resp = await this.call(`/series/${encodeURIComponent(orthancId)}`, { method: 'DELETE' })
+    if (!resp.ok && resp.status !== 404) throw new OrthancError(502, `影像存储删除序列失败（HTTP ${resp.status}）`)
   }
 
   async seriesArchive(orthancId: string): Promise<Uint8Array> {

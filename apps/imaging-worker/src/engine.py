@@ -1210,7 +1210,8 @@ class MonaiNeuralInferencePipeline:
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         VISTA-3D 单个正点提示分割（肺结节模型链用），预处理见 _vista3d_window_inference（始终用 bundle 的 HU 窗）。
-        返回与 vol_zyx 同形状的 0/1 掩膜；meta.mask_touches_window_edge 表示分割触及推理区域边界（可能被截断）。
+        返回与 vol_zyx 同形状的 0/1 掩膜；meta.window_zyx 为推理窗口。meta.mask_touches_window_edge 是对原始输出（含无关连通域）的判断，
+        肺结节模型链改用 lung_nodule_pipeline.mask_touches_window 只对挑出的结节判断。
         """
         t0 = time.time()
         p = self._parse_point_zyx(prompt_point, vol_zyx.shape)

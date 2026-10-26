@@ -46,6 +46,12 @@ export class FakeOrthanc implements Orthanc {
       instances: [...this.instances.values()].filter(i => i.series === uid).length, ...this.seriesTags.get(uid),
     }
   }
+  deleted: string[] = []
+  async deleteSeries(id: string): Promise<void> {
+    const uid = this.uids.get(id)!
+    this.deleted.push(uid)
+    for (const [sop, i] of this.instances) if (i.series === uid) this.instances.delete(sop)
+  }
   async seriesArchive(id: string): Promise<Uint8Array> {
     this.archives.push(this.uids.get(id)!)
     return new Uint8Array([0x50, 0x4b, 0x03, 0x04])

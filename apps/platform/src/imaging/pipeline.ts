@@ -209,9 +209,10 @@ export class ImagingPipeline {
         if (seriesOfRun.get(l.run_id) !== run.series_id) return false
         return Math.hypot(...vox.map((v, i) => (v - n.center_vox_zyx![i]!) * spacing[i]!)) <= radius
       })
-      let matchedReviewed = 0
+      let matchedReviewed = 0, segLinked = 0
       for (const n of result.nodules) {
         if (sameSpot(n)) { matchedReviewed++; continue }
+        if (segSeriesId && n.seg_segment_number) segLinked++
         this.studies.addLesion(a, run.study_id, {
           run_id: runId, kind: def.kind, source: 'ai', label: `结节 ${n.index}`, location: n.lobe ?? null,
           seg_ref: segSeriesId && n.seg_segment_number ? segRef(segSeriesId, n.seg_segment_number) : null,
@@ -223,12 +224,17 @@ export class ImagingPipeline {
         })
       }
       const superseded = this.studies.supersedeProposed(a, runId)
+      // 被取代的旧检出若是某个 SEG 的唯一引用者，那个 SEG 不再有用：从影像存储清掉（医生审核过的保留）
+      let segRemoved = 0
+      try { segRemoved = await this.studies.removeSupersededSeg(a, run.study_id, segSeriesId) } catch (err) {
+        extraWarnings.push(`清理旧的分割结果失败：${err instanceof Error ? err.message : String(err)}`)
+      }
       this.studies.setRunStatus(a, runId, 'done', null, {
         model_version: result.model_version ?? null,
         summary: {
           device: result.device ?? null, elapsed_ms: result.elapsed_ms ?? null, series_qc: result.series_qc ?? null,
           warnings: [...notes, ...(result.warnings ?? []), ...extraWarnings, ...(matchedReviewed ? [`${matchedReviewed} 个检出与医生已审核的结节是同一处，未重复添加`] : [])],
-          found: result.nodules.length - matchedReviewed, matched_reviewed: matchedReviewed, superseded, seg_stored: Boolean(segSeriesId),
+          found: result.nodules.length - matchedReviewed, matched_reviewed: matchedReviewed, superseded, seg_stored: segLinked > 0, seg_removed: segRemoved,
         },
       })
     } catch (err) {
