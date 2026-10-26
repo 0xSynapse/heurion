@@ -6,7 +6,8 @@
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage[margin=1in]{geometry}
-\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{array}
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{tabularx}
@@ -19,13 +20,8 @@
 \usepackage{enumitem}
 \usepackage{listings}
 \usepackage{microtype}
-\emergencystretch=1.5em
+\emergencystretch=2em
 \usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
-
-% Theorem / Invariant Environments
-\newtheorem{invariant}{Architectural Invariant}
-\newtheorem{proposition}{Proposition}
-\newtheorem{definition}{Definition}
 
 % Code Listing Style
 \definecolor{codebg}{RGB}{248,249,250}
@@ -67,13 +63,13 @@
 % ABSTRACT
 % ============================================================================
 \begin{abstract}
-Autonomous large language model (LLM) agents have achieved remarkable success in software engineering via free-form shell execution and direct file manipulation. However, transplanting this ``script-and-audit'' paradigm to high-stakes scientific and clinical research introduces severe failure modes: destructive formatting drift in Office Open XML (\texttt{.docx}/\texttt{.pptx}) manuscripts, silent overwriting of concurrent human edits, fabricated bibliographic identifiers (DOIs/PMIDs) or ungrounded statistical assertions, exposure of Protected Health Information (PHI), and repetitive guard failures across authoring sessions.
+Autonomous large language model (LLM) agents have achieved strong results in software engineering through free-form shell execution and direct file editing. However, applying this ``script-and-audit'' workflow to clinical and scientific research causes serious failures: broken formatting in Office Open XML (\texttt{.docx} and \texttt{.pptx}) manuscripts, silent overwriting of concurrent human edits, fabricated literature identifiers (DOIs and PMIDs) or unverified statistical claims, accidental exposure of Protected Health Information (PHI), and repeated guard failures across sessions.
 
-We present \textbf{Heurion 2.0}, a collaborative clinical research and scientific authoring platform built upon a \emph{Contract-Guarded Dual-Surface Architecture} and a \emph{Three-Layer Self-Evolving Memory System}. First, rather than allowing agents to mutate raw document files via ad-hoc scripts, Heurion 2.0 maintains a single Conflict-free Replicated Data Type (CRDT) source of truth (ProseMirror + Yjs) with lifecycle-stable block addressing (\texttt{\{\#id\}}). It exposes a synchronized dual surface: a rich-text/slide editor for human researchers and a compact Annotated Markdown projection with guarded structural primitives for AI agents, supporting per-turn selective undo in CRDT space and 100\% byte-preserving OOXML patch export for unmodified regions. Second, to achieve zero-hallucination evidence grounding, pre-write syntactic guards block unregistered inline citations while a multi-agent verification pipeline (\texttt{literature\_researcher}, \texttt{biostatistician}, \texttt{fact\_checker}) aligns manuscript sentences against PubMed abstracts and PubMed Central (PMC) full texts. Third, a privacy-preserving clinical research pipeline enforces dual-stage PHI redaction, pseudonymous subject mapping (\texttt{P001}), read-only Personal Health Record (PHR) red-lines, and formally verified Human-AI Permission Symmetry ($\mathcal{E}_{\text{REST}} = \mathcal{E}_{\text{MCP}} \sqcup \mathcal{E}_{\text{NOT\_FOR\_AI}}$). Finally, a domain-agnostic three-layer self-evolution mechanism combines side-effect-free pre-flight probes (\texttt{doc\_validate}), a dual-track memory engine featuring self-supervised corruption-and-reconstruction skill training (Track~A) alongside zero-template trajectory-contrastive procedural rule synthesis and backward credit assignment (Track~B), and background meta-strategy distillation. Empirical evaluation across deterministic micro-benchmarks and live \texttt{deepseek-flash} multi-session trials demonstrates 100\% byte identity on unmodified OOXML blocks, 100\% interception of concurrent edit conflicts and unregistered citations at sub-millisecond latency ($0.168\,\text{ms}$ validation, $0.351\,\text{ms}$ edit), a 62.5\% overall and 75.0\% held-out reduction in guard rejections without hand-crafted rule templates, and zero-negative-transfer cross-domain skill generalization across clinical manuscripts ($+155\%$ alignment), biostatistical modeling ($0.000 \to 0.612$), and presentation deck engineering ($+161\%$ alignment).
+We present \textbf{Heurion 2.0}, a collaborative clinical research and scientific authoring platform built around two core ideas: a \emph{Contract-Guarded Dual-Surface Document Engine} and a \emph{Three-Layer Self-Evolving Memory System}. First, instead of letting agents edit raw files on disk with ad-hoc scripts, Heurion 2.0 keeps a single Conflict-free Replicated Data Type (CRDT) document state (ProseMirror + Yjs) with stable block IDs (\texttt{\{\#id\}}). From this shared state, it projects a rich-text or slide editor for human researchers and a compact Annotated Markdown view with guarded editing tools for AI agents. This design enables per-turn selective undo of AI edits without disturbing human changes in the same paragraph, as well as 100\% byte-identical OOXML export for untouched blocks. Second, to prevent hallucinated references, pre-write guards block raw inline DOIs and PMIDs while a multi-agent verification pipeline checks manuscript claims against PubMed abstracts and PubMed Central (PMC) full texts. Third, a clinical data pipeline enforces deterministic PHI redaction, pseudonymous subject IDs (\texttt{P001}), read-only patient health records, and strict permission parity between the web UI and AI tools. Finally, a three-layer self-evolving memory system combines side-effect-free pre-flight validation, a dual-track learning engine that acquires domain conventions through exemplar corruption-and-reconstruction (Track~A) and operational rules from verifier feedback without hand-written templates (Track~B), and background profile distillation. In empirical benchmarks and live \texttt{deepseek-flash} multi-session evaluations, Heurion 2.0 achieves 100\% byte identity on unmodified OOXML blocks, sub-millisecond guard validation ($0.168\,\text{ms}$) and edit commits ($0.351\,\text{ms}$), a 62.5\% overall and 75.0\% held-out reduction in guard rejections with zero hand-crafted rule templates, and cross-domain skill transfer across clinical manuscripts, biostatistical plans, and presentation decks with zero negative transfer.
 \end{abstract}
 
 \vspace{4pt}
-\noindent\textbf{Keywords:} Collaborative AI Agents, CRDT Co-Editing, Clinical Research Informatics, Citation Verification, Self-Evolving Memory, Human-AI Permission Symmetry
+\noindent\textbf{Keywords:} Collaborative AI Agents, CRDT Co-Editing, Clinical Research Informatics, Citation Verification, Self-Evolving Memory, Skill Training
 
 % ============================================================================
 % 1. INTRODUCTION
@@ -81,35 +77,35 @@ We present \textbf{Heurion 2.0}, a collaborative clinical research and scientifi
 \section{Introduction}
 \label{sec:intro}
 
-Clinical and biomedical research workflows demand an extraordinary degree of rigor, traceability, and regulatory compliance. A single clinical study typically spans patient longitudinal record curation, cohort screening, biostatistical modeling (e.g., baseline Table~1 generation, Kaplan--Meier survival curves, Cox proportional hazards regression, CONSORT flow diagrams), and the iterative authoring of peer-reviewed manuscripts (\texttt{.docx}) and academic presentation decks (\texttt{.pptx}) \cite{schulz2010consort,vandenbroucke2007strobe}. While recent agentic systems have demonstrated strong capabilities in code generation \cite{yang2024sweagent,wang2024openhands} and open-domain literature synthesis \cite{shao2024storm,skarlinski2024paperqa2}, deploying autonomous agents into real-world clinical research environments exposes four fundamental architectural barriers:
+Clinical and biomedical research workflows require strict accuracy, traceability, and privacy compliance. A typical clinical study spans longitudinal patient record curation, cohort screening, biostatistical analysis (such as Baseline Table~1 summaries, Kaplan--Meier survival curves, Cox regression, and CONSORT flowcharts), and collaborative authoring of peer-reviewed manuscripts (\texttt{.docx}) and presentation decks (\texttt{.pptx}) \cite{schulz2010consort,vandenbroucke2007strobe}. While recent agentic systems excel at code generation \cite{yang2024sweagent,wang2024openhands} and open-domain literature review \cite{shao2024storm,skarlinski2024paperqa2}, deploying autonomous agents into day-to-day clinical research exposes four practical bottlenecks:
 
 \begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{The Free-Form File Mutation Trap:} First-generation document agents treat \texttt{.docx} and \texttt{.pptx} files as opaque disk artifacts manipulated via generated Python scripts (e.g., \texttt{python-docx}) followed by post-hoc quality audits. In practice, script-based rewrites strip publisher XML attributes, lose paragraph addressing identifiers (\texttt{w14:paraId}) during LibreOffice layout passes, suffer from punctuation/whitespace reproduction drift in full-block replacements, and cannot selectively undo an AI turn once a human co-author makes concurrent edits.
-  \item \textbf{Citation Fabrication and Ungrounded Clinical Claims:} LLMs frequently hallucinate plausible-looking Digital Object Identifiers (DOIs), PubMed IDs (PMIDs), or numerical hazard ratios ($HR$) and $p$-values \cite{ji2023survey,walters2023fabrication}. Post-hoc prompting alone cannot guarantee that every inline reference corresponds to a verified bibliographic record or that statistical assertions match the cited source text.
-  \item \textbf{Patient Privacy (PHI) Exposure and Permission Asymmetry:} Clinical investigators work with raw electronic medical records containing Protected Health Information (patient names, national ID numbers, admission codes, phone numbers). Passing unredacted records to external LLMs violates healthcare privacy mandates \cite{hipaa1996}. Conversely, granting agents unrestricted database or shell access creates severe privilege-escalation risks.
-  \item \textbf{Cross-Session Amnesia and Memory Pollution:} When an agent encounters a structural guard rejection (e.g., attempting to overwrite a human-edited block or inserting an unregistered citation) or when a clinician reverts an AI turn, stateless agents repeat the exact same operational failure in subsequent turns. Naively appending all historical observations into a single flat memory pool mixes subjective user writing preferences with hard operational constraints, exhausting context budgets with low-utility noise \cite{shinn2023reflexion,packer2023memgpt}.
+  \item \textbf{The Free-Form File Scripting Trap:} First-generation document agents treat \texttt{.docx} and \texttt{.pptx} files as opaque disk archives, generating Python scripts (e.g., \texttt{python-docx}) to rewrite them and running post-hoc quality checks afterward. In practice, script-based rewrites strip publisher XML attributes, lose paragraph IDs (\texttt{w14:paraId}) during LibreOffice layout passes, introduce subtle punctuation drift during full-paragraph replacements, and make it impossible to undo an AI turn once a human co-author edits the same section.
+  \item \textbf{Fabricated Citations and Unverified Clinical Claims:} LLMs frequently invent plausible-looking DOIs, PMIDs, hazard ratios ($HR$), and $p$-values \cite{ji2023survey,walters2023fabrication}. Prompting alone cannot guarantee that every inline citation resolves to a real publication or that reported numbers match the cited paper.
+  \item \textbf{Patient Privacy (PHI) Risks and Permission Gaps:} Clinical investigators work with raw medical records containing Protected Health Information (patient names, national ID numbers, admission codes, and phone numbers). Sending unredacted text to external LLMs violates healthcare privacy regulations \cite{hipaa1996}. At the same time, giving agents direct database or shell access bypasses application-level access controls.
+  \item \textbf{Cross-Session Amnesia and Memory Interference:} When an agent triggers a guard error (such as editing a paragraph that carries an open review comment or merging non-adjacent blocks) or when a clinician reverts an AI turn, stateless agents repeat the same mistake in future sessions. Dumping all past observations into a single flat memory list mixes subjective writing style preferences with hard tool constraints, filling the prompt budget with irrelevant rules \cite{shinn2023reflexion,packer2023memgpt}.
 \end{enumerate}
 
 \subsection{Lessons from First-Generation Post-Hoc Auditing (Heurion v1)}
-Prior to developing Heurion 2.0, we deployed a first-generation architecture (\emph{Heurion v1 / S-Series}) in which an agent operated inside a workspace shell, invoking Python utilities to unpack, mutate, and repackage \texttt{.docx} archives while a post-turn supervisor audited text survival rates, paragraph drift, and DOI validity. Empirical deployment revealed that \emph{post-hoc auditing is fundamentally too late}: by the time an audit script detects a broken XML run or an unverified citation, the corrupted state has already been written, requiring expensive rollbacks or brittle three-way merges against concurrent browser edits.
+Before building Heurion 2.0, we deployed a first-generation system (\emph{Heurion v1 / S-Series}) where an agent ran Python scripts in a workspace shell to unpack, modify, and repackage \texttt{.docx} files while a post-turn supervisor checked text survival rates, paragraph drift, and DOI validity. Real-world use showed that \emph{post-hoc auditing happens too late}: by the time an audit script catches a broken XML run or a hallucinated citation, the file on disk is already corrupted, forcing full-file rollbacks that wipe out concurrent browser edits.
 
-\subsection{The Heurion 2.0 Paradigm Shift and Contributions}
-Heurion 2.0 resolves these limitations by shifting from \emph{post-hoc file auditing} to \emph{pre-write structural contracts over a shared CRDT core}, coupled with a \emph{signal-driven self-evolving execution harness}. Our primary contributions are fourfold:
+\subsection{The Heurion 2.0 Architecture and Contributions}
+Heurion 2.0 replaces post-hoc file scripting with \emph{pre-write structural guards over a shared CRDT document core}, paired with a \emph{cross-domain self-evolving memory system}. Our main contributions are:
 
 \begin{itemize}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Contract-Guarded Dual-Surface CRDT Engine (Section~\ref{sec:dualsurface}):} We design a unified ProseMirror + Yjs document core with persistent block addressing (\texttt{\{\#id\}}), node-level optimistic concurrency control (\texttt{base\_rev}), minimal-diff XML fragment updates that preserve inline marks and comment anchors, per-turn selective CRDT undo (\texttt{revertTurn}), and 100\% byte-preserving OOXML patch export for untouched document regions.
-  \item \textbf{Zero-Hallucination Evidence \& Privacy-Preserving Clinical Pipeline (Section~\ref{sec:evidence}):} We enforce a syntactic pre-write ban on raw inline DOIs/PMIDs, requiring registration via Crossref, PubMed, and OpenAlex into atomic citation nodes (\texttt{[@c:id]}). A multi-agent pipeline performs sentence-level claim verification against PubMed abstracts and PMC full texts, paired with a multi-tenant clinical research sandbox featuring dual-stage PHI redaction, pseudonymous subject tokens (\texttt{P001}), and reproducible biostatistical execution.
-  \item \textbf{Three-Layer Self-Evolving Agent Architecture (Section~\ref{sec:evolution}):} We introduce a hierarchical adaptation loop comprising (Layer~1) side-effect-free pre-flight validation probes (\texttt{doc\_validate} / \texttt{dry\_run}), (Layer~2) a dual-track memory architecture that physically separates human-approved declarative preferences from runtime-crystallized procedural strategies ranked by token-normalized utility, and (Layer~3) background meta-strategy distillation into dynamic agent profile overlays.
-  \item \textbf{Formally Verified Human-AI Permission Symmetry (Section~\ref{sec:parity}):} We establish and mechanically verify via automated parity testing an architectural invariant across all platform endpoints: every REST capability either maps 1-to-1 to an in-process Model Context Protocol (MCP) tool executing under the user's exact RBAC identity, or is explicitly justified in a restricted exclusion set, with high-risk mutations gated by human-only confirmation cards.
+  \item \textbf{Contract-Guarded Dual-Surface CRDT Engine (Section~\ref{sec:dualsurface}):} We build a unified ProseMirror + Yjs document core with persistent block IDs (\texttt{\{\#id\}}), block-level optimistic concurrency checks (\texttt{base\_rev}), minimal-diff XML updates that preserve inline formatting and comment anchors, per-turn selective CRDT undo, and 100\% byte-preserving OOXML export for unmodified blocks.
+  \item \textbf{Zero-Hallucination Evidence \& Privacy-Preserving Clinical Pipeline (Section~\ref{sec:evidence}):} We block raw inline DOIs and PMIDs before any write occurs, requiring registration through Crossref, PubMed, and OpenAlex into atomic citation nodes (\texttt{[@c:id]}). A multi-agent verifier checks sentence-level claims against PubMed abstracts and PMC full texts, while a multi-tenant clinical sandbox enforces checksum-verified PHI redaction, pseudonymous subject IDs (\texttt{P001}), and reproducible biostatistical execution.
+  \item \textbf{Cross-Domain Three-Layer Self-Evolving Memory (Section~\ref{sec:evolution}):} We design a three-timescale adaptation loop: (Layer~1) side-effect-free pre-flight validation probes, (Layer~2) a domain-agnostic dual-track memory engine that combines self-supervised corruption-and-reconstruction skill training (Track~A) with zero-template procedural rule synthesis and backward credit assignment (Track~B), and (Layer~3) background distillation into dynamic agent profile overlays.
+  \item \textbf{Verified Human-AI Permission Symmetry (Section~\ref{sec:parity}):} We enforce and automatically test in CI that every REST API endpoint either maps 1-to-1 to an in-process Model Context Protocol (MCP) tool running under the user's exact identity and role permissions, or is explicitly listed in an audited human-only exclusion registry, with destructive actions gated by interactive confirmation cards.
 \end{itemize}
 
 % ============================================================================
-% 2. SYSTEM OVERVIEW & ARCHITECTURAL INVARIANTS
+% 2. SYSTEM OVERVIEW & DESIGN PRINCIPLES
 % ============================================================================
 \section{System Overview and Design Principles}
 \label{sec:overview}
 
-Figure~\ref{fig:architecture} illustrates the end-to-end architecture of Heurion 2.0. The platform strictly decouples \emph{structured document/slide state mutation} from \emph{sandboxed statistical computation}.
+Figure~\ref{fig:architecture} shows the overall architecture of Heurion 2.0. The platform separates \emph{structured document and slide editing} from \emph{sandboxed statistical computation}, connecting human researchers and AI agents through a shared Yjs CRDT state.
 
 \begin{figure}[t]
 \centering
@@ -144,45 +140,33 @@ Figure~\ref{fig:architecture} illustrates the end-to-end architecture of Heurion
 
 % Bottom Layer: Three-Layer Self-Evolution
 \node[evol, minimum width=3.7cm] (l1) at (1.5, 0.1) {\textbf{Layer 1: Task Probe}\\Side-Effect-Free \texttt{doc\_validate}\&\texttt{dry\_run}};
-\node[evol, minimum width=4.2cm] (l2) at (6.0, 0.1) {\textbf{Layer 2: Dual-Track Memory}\\Declarative Prefs $\perp$ Procedural Rules\\Utility-Ranked \texttt{forPrompt()} Injection};
+\node[evol, minimum width=4.2cm] (l2) at (6.0, 0.1) {\textbf{Layer 2: Dual-Track Memory}\\Declarative Skills \& Procedural Rules\\Domain-Gated Utility Routing};
 \node[evol, minimum width=3.7cm] (l3) at (10.5, 0.1) {\textbf{Layer 3: Meta-Distillation}\\Cross-Session Signal Aggregation\\Dynamic Profile Overlay (\texttt{.yml})};
 
 \draw[arr] (l1) -- (l2);
 \draw[arr] (l2) -- (l3);
-\draw[arr, dashed, draw=red!70!black] (g1.south) -- (1.2, 0.85) -| node[pos=0.25, above, font=\sffamily\tiny, text=red!70!black]{Guard Reject / \texttt{revertTurn} Signals} (l2.north);
+\draw[arr, dashed, draw=red!70!black] (g1.south) -- (1.2, 0.85) -| node[pos=0.25, above, font=\sffamily\tiny, text=red!70!black]{Guard Reject / Revert Signals} (l2.north);
 \draw[arr, draw=teal!70!black] (l2.east) -- ++(0.3,0) |- (agentview.east);
 
 \end{tikzpicture}
-\caption{Architecture of \textbf{Heurion 2.0}. Top: Human researchers and AI agents interact with a shared Yjs CRDT document/slide core through tailored surface projections. Middle: All AI mutations pass through four deterministic pre-write structural guards before committing to the CRDT state. Bottom: Runtime guard rejections and human turn reverts feed a three-layer self-evolving memory system that dynamically injects high-utility procedural directives into future turns.}
+\caption{Architecture of \textbf{Heurion 2.0}. Top: Human researchers and AI agents work on a shared Yjs CRDT document and slide core through synchronized views. Middle: All AI edits pass through four deterministic pre-write guards before touching the CRDT state. Bottom: Guard rejections, tool recovery trajectories, and gold exemplars drive a three-layer self-evolving memory system that routes task-relevant rules into future turns.}
 \label{fig:architecture}
 \end{figure}
 
-Heurion 2.0 is governed by three formal architectural invariants:
+Three practical design principles guide the system:
 
-\begin{invariant}[Pre-Write Structural Safety]
-\label{inv:prewrite}
-Let $S_r$ denote the CRDT document state at revision $r$, and let $\mathcal{O} = \{o_1, \dots, o_k\}$ be a batch of structured edit operations submitted by an AI turn $t$ against base revision $r_{\text{base}} \le r$. Let $\Delta_{\text{user}}(r_{\text{base}}, r)$ be the set of block IDs modified by human actors in $(r_{\text{base}}, r]$, and let $\mathcal{R}_{\text{cite}}(S_r)$ be the set of verified citation identifiers registered in the document store. The state transition $\mathcal{T}(S_r, \mathcal{O}, r_{\text{base}})$ commits if and only if every $o_i \in \mathcal{O}$ satisfies:
-\begin{equation}
-  \text{BlockReplace}(o_i) \implies \text{target}(o_i) \notin \Delta_{\text{user}}(r_{\text{base}}, r), \quad
-  \text{Cites}(o_i) \subseteq \mathcal{R}_{\text{cite}}(S_r), \quad
-  \text{RawCitePattern}(o_i) = \emptyset.
-\end{equation}
-Otherwise, the entire batch $\mathcal{O}$ is atomically rejected prior to mutating $S_r$, returning a structured diagnostic code and the current block snapshot.
-\end{invariant}
+\paragraph{Principle 1: Pre-Write Structural Safety.}
+Every batch of AI edit operations is validated against the live CRDT tree \emph{before} any state change occurs. A whole-block replacement is allowed only if no human user has edited that block since the revision (\texttt{base\_rev}) the agent read. Likewise, any edit that introduces an unregistered citation identifier, breaks a table grid, or deletes an active review comment anchor without acknowledgment is rejected atomically. When a batch is rejected, the document remains untouched and the guard returns a structured error code, a diagnostic hint, and the latest block text so the agent can recover immediately.
 
-\begin{invariant}[Human-AI Permission Symmetry]
-\label{inv:parity}
-Let $\mathcal{E}_{\text{REST}}$ be the set of all HTTP API routes exposed to the web user interface, and let $\mathcal{E}_{\text{MCP}}$ be the set of Model Context Protocol tools exposed to the AI agent. Every route $e \in \mathcal{E}_{\text{REST}}$ satisfies the disjoint partition:
-\begin{equation}
-  \mathcal{E}_{\text{REST}} = \phi(\mathcal{E}_{\text{MCP}}) \sqcup \mathcal{E}_{\text{NOT\_FOR\_AI}},
-\end{equation}
-where $\phi: \mathcal{E}_{\text{MCP}} \to \mathcal{E}_{\text{REST}}$ is an in-process Loopback dispatcher that executes under the authenticated user's exact session token and tenant isolation context, and $\mathcal{E}_{\text{NOT\_FOR\_AI}}$ is an explicitly audited set of human-only lifecycle endpoints (e.g., credentials, high-risk confirmation approval).
-\end{invariant}
+\paragraph{Principle 2: Human-AI Permission Symmetry.}
+An AI agent should neither hold superuser privileges over the database nor be restricted to a toy subset of actions. In Heurion 2.0, every REST API route exposed to the browser UI is either paired 1-to-1 with an MCP tool that executes in-process under the logged-in user's exact session token and tenant permissions, or is explicitly listed in an audited human-only exclusion list (such as password changes or final confirmation endpoints). High-risk operations triggered by an agent pause and render a confirmation card in the user's chat stream before executing.
 
-\begin{invariant}[Declarative-Procedural Memory Orthogonality]
-\label{inv:memory}
-Let $\mathcal{M}_D$ denote the declarative memory store (subjective authoring preferences, stylistic conventions, domain terminology) and $\mathcal{M}_P$ denote the procedural harness store (operational guard avoidance rules and subagent delegation policies). Updates to $\mathcal{M}_D$ require explicit human confirmation ($\text{status} \in \{\texttt{candidate} \xrightarrow{\text{human}} \texttt{confirmed}\}$), whereas $\mathcal{M}_P$ evolves autonomously from deterministic runtime execution signals $\Sigma_{\text{exec}}$ without polluting $\mathcal{M}_D$ or requiring manual administrative curation.
-\end{invariant}
+\paragraph{Principle 3: Separating Domain Style Preferences from Operational Rules.}
+Mixing subjective writing preferences (e.g., ``use passive voice in Methods'') with objective tool-use rules (e.g., ``move non-adjacent blocks together before merging'') causes severe prompt interference. Heurion 2.0 keeps these two tracks separate:
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt]
+  \item \textbf{Declarative Memory (Track~A):} Stores domain conventions, writing styles, and analytical preferences. New declarative skills are proposed as candidates---either from user edits or from self-supervised exemplar training---and require human approval (or explicit activation) before taking effect.
+  \item \textbf{Procedural Harness Memory (Track~B):} Stores objective operational rules for passing pre-write guards and tool verifiers. Procedural rules evolve automatically from deterministic runtime failures and intra-turn recovery trajectories without requiring manual curation in the UI.
+\end{itemize}
 
 % ============================================================================
 % 3. DUAL-SURFACE CO-EDITING & BYTE-PRESERVING DOCUMENT ENGINE
@@ -190,36 +174,36 @@ Let $\mathcal{M}_D$ denote the declarative memory store (subjective authoring pr
 \section{Dual-Surface Co-Editing and Byte-Preserving Document Engine}
 \label{sec:dualsurface}
 
-A central lesson from first-generation document agents is that Office Open XML (\texttt{.docx} and \texttt{.pptx}) files are delivery formats, not collaborative editing data structures. When an agent edits a \texttt{.docx} file on disk via a Python script while a human views the document in a browser, the two actors operate on divergent state representations.
+A key lesson from first-generation document agents is that Office Open XML (\texttt{.docx} and \texttt{.pptx}) files are delivery archives rather than collaborative editing data structures. When an agent rewrites a \texttt{.docx} file on disk while a human views the manuscript in a browser, the two sides immediately diverge.
 
 \subsection{Shared CRDT Core with Lifecycle-Stable Block Addressing}
-In Heurion 2.0, every manuscript and presentation deck resides in a server-authoritative Yjs CRDT document (\texttt{Y.Doc}) backed by SQLite state snapshots and an append-only revision log (\texttt{doc\_commits}). Every block-level ProseMirror node (heading, paragraph, list item, table, figure, or slide element) is assigned a short, lifecycle-stable identifier (\texttt{attrs.id}, rendered as \texttt{\{\#id\}}). When a human splits a paragraph or pastes content in the browser, the server-side \texttt{flush()} handler automatically detects duplicate or missing block IDs and assigns fresh unique IDs inside a system CRDT transaction, ensuring the addressing space remains strictly bijective.
+In Heurion 2.0, every manuscript and slide deck lives in a server-authoritative Yjs CRDT document (\texttt{Y.Doc}) backed by SQLite snapshots and an append-only revision log (\texttt{doc\_commits}). Every block node (heading, paragraph, list item, table, figure, or slide box) carries a short, persistent ID (\texttt{\{\#id\}}). When a human splits a paragraph or pastes content in the browser, the server automatically detects duplicate or missing IDs and assigns fresh unique IDs inside a system CRDT transaction, keeping block addressing consistent across the document's lifetime.
 
-From this single CRDT core, Heurion 2.0 projects two synchronized surfaces:
+From this single CRDT core, Heurion 2.0 projects two synchronized views:
 \begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Human Surface:} A real-time collaborative ProseMirror rich-text editor (for manuscripts) and an interactive 16:9 SVG/HTML slide canvas (for decks) synchronized via WebSocket (\texttt{y-protocols/sync}).
-  \item \textbf{Agent Surface:} A compact \emph{Annotated Markdown} view generated on demand via \texttt{doc\_read} and \texttt{slide\_read}. Each block is suffixed with its stable address \texttt{\{\#id\}}, inline citations are rendered as atomic tokens \texttt{[@c:cite\_id]}, figures as \texttt{![alt](asset:id)}, and active inline review comments as \texttt{\{\#c:comment\_id\}}.
+  \item \textbf{Human Surface:} A collaborative ProseMirror rich-text editor for manuscripts and an interactive 16:9 slide canvas for presentation decks, synchronized in real time over WebSockets.
+  \item \textbf{Agent Surface:} A compact \emph{Annotated Markdown} view generated on demand via \texttt{doc\_read} and \texttt{slide\_read}. Each block ends with its stable address \texttt{\{\#id\}}, inline citations appear as atomic tokens \texttt{[@c:cite\_id]}, figures as \texttt{![alt](asset:id)}, and open inline review comments as \texttt{\{\#c:comment\_id\}}.
 \end{enumerate}
 
-\subsection{Node-Level Conflict Guards and Minimal-Diff Fragment Updates}
-To prevent an AI turn from overwriting concurrent human edits, every \texttt{doc\_edit} call specifies the \texttt{base\_rev} read by the agent. As formalized in Invariant~\ref{inv:prewrite}, the platform queries the \texttt{node\_changes} index for all blocks modified by human actors since \texttt{base\_rev}:
+\subsection{Block-Level Conflict Guards and Minimal-Diff Updates}
+To prevent an AI turn from overwriting concurrent human edits, every \texttt{doc\_edit} call includes the \texttt{base\_rev} revision number read by the agent. The server checks the \texttt{node\_changes} log for any blocks edited by a human since \texttt{base\_rev}:
 \begin{itemize}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Block-Level Structural Operations (\texttt{replace\_block}, \texttt{delete}):} If a target block $b \in \Delta_{\text{user}}(r_{\text{base}}, r)$, the operation is immediately rejected with error code \texttt{conflict\_user\_edited}, returning the human's latest block markdown so the agent can adapt. Similarly, blocks carrying unresolved track-changes suggestions are protected by the \texttt{pending\_suggestion} guard.
-  \item \textbf{Substring Replacement (\texttt{replace\_text}):} For surgical phrase edits within a paragraph, the literal \texttt{find} substring acts as its own optimistic concurrency guard: if the human edited a different sentence in the same paragraph, \texttt{find} still matches uniquely and succeeds; if the human altered the target phrase itself, \texttt{find} fails cleanly with \texttt{find\_not\_found}.
-  \item \textbf{Mark-Preserving Minimal Diffs:} Crucially, \texttt{replace\_text} does not re-parse the paragraph from plain text (which would destroy inline bold/italic spans, \texttt{[@c:id]} citation nodes, and comment highlights outside the matched range). Instead, it locates the character offsets $[s, e)$ in the ProseMirror node's flattened text stream and replaces only that slice, after which \texttt{writeFragment} updates only the modified XML children between the common prefix and suffix in the underlying \texttt{Y.XmlFragment}.
+  \item \textbf{Whole-Block Edits (\texttt{replace\_block}, \texttt{delete}):} If a human has modified the target block since \texttt{base\_rev}, the edit is rejected with \texttt{conflict\_user\_edited} and returns the human's latest text. Blocks with unresolved track-changes suggestions are similarly protected by \texttt{pending\_suggestion}.
+  \item \textbf{Surgical Phrase Replacement (\texttt{replace\_text}):} For targeted phrase edits inside a paragraph, the literal \texttt{find} string serves as a natural concurrency check: if the human edited a different sentence in the same paragraph, \texttt{find} still matches uniquely and succeeds; if the human changed the target phrase itself, \texttt{find} fails cleanly with \texttt{text\_not\_found}.
+  \item \textbf{Mark-Preserving Minimal Diffs:} Importantly, \texttt{replace\_text} does not re-parse the whole paragraph from plain text, which would strip inline bold/italic formatting, \texttt{[@c:id]} citation nodes, and comment highlights outside the edited span. Instead, it locates the character offsets in the ProseMirror node's text stream and replaces only that slice, updating only the changed XML children between the common prefix and suffix in the underlying Yjs fragment.
 \end{itemize}
 
-\subsection{Per-Turn Selective Undo in CRDT Space (\texttt{revertTurn})}
-In collaborative writing, a researcher may ask the AI to revise three sections, continue manually editing Section~2, and subsequently decide to undo the AI's changes. Global linear undo (\texttt{Ctrl+Z} or version rollback) would destroy the researcher's manual edits in Section~2.
+\subsection{Per-Turn Selective Undo in CRDT Space}
+In collaborative writing, a researcher may ask the AI to revise three paragraphs, manually edit the second paragraph, and then decide to undo the AI's turn. A standard linear undo (\texttt{Ctrl+Z} or snapshot restore) would wipe out the researcher's manual edits.
 
-Heurion 2.0 solves this via a two-tier \emph{Per-Turn Selective Undo} mechanism:
+Heurion 2.0 solves this with a two-tier \emph{Per-Turn Selective Undo} (\texttt{revertTurn}):
 \begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{In-Memory CRDT Origin Tracking:} When an AI turn $t$ commits changes to document $d$, the runtime binds a dedicated \texttt{ServerOrigin} object $o_t = \{\texttt{server}: \text{true}, \texttt{actor}: \texttt{'ai'}, \texttt{turnId}: t\}$ and attaches a scoped \texttt{Y.UndoManager} configured with $\texttt{trackedOrigins} = \{o_t\}$. Invoking \texttt{revertTurn(d, t)} executes \texttt{um.undo()} solely on the CRDT items inserted or deleted under origin $o_t$, leaving concurrent human character insertions---even within the exact same paragraph---completely intact.
-  \item \textbf{Persistent Node-Level Fallback across Server Restarts:} Before turn $t$'s first write, the runtime persists the pre-turn Yjs state vector in \texttt{turn\_doc\_bases}. If the server restarts before \texttt{revertTurn} is invoked, the engine reconstructs the pre-turn document tree, computes the per-block diff against turn $t$'s recorded \texttt{node\_changes}, reverts all AI-modified blocks untouched by the user since $r_{\text{min}}(t)$, and safely skips blocks subsequently edited by the user (returning their IDs in \texttt{skipped}).
+  \item \textbf{In-Memory CRDT Origin Tracking:} When an AI turn commits edits, the server tags the Yjs transaction with a turn-specific origin object and attaches a dedicated \texttt{Y.UndoManager} scoped to that origin. Calling \texttt{revertTurn} undoes only the CRDT insertions and deletions made by that specific AI turn, leaving concurrent human edits---even inside the same paragraph---untouched.
+  \item \textbf{Persistent Block-Level Fallback across Restarts:} Before an AI turn's first write, the server saves the pre-turn Yjs state vector in SQLite. If the server restarts before \texttt{revertTurn} is called, the engine reconstructs the pre-turn tree, reverts all AI-edited blocks that have not been touched by a human since that turn, and safely skips any block subsequently edited by the user.
 \end{enumerate}
 
 \subsection{Byte-Preserving OOXML Patch Export}
-Clinical manuscripts are frequently imported from journal-specific Word templates containing intricate custom styles, headers/footers, macros, and embedded vector objects. During \texttt{.docx} or \texttt{.pptx} import, Heurion 2.0 stores the original archive in \texttt{doc\_packages} and records the exact raw XML slice (\texttt{<w:p>} or \texttt{<w:tbl>}) of every imported block in \texttt{node\_src} keyed by block ID. Upon export (\texttt{docx-export.ts}, \texttt{pptx-export.ts}), any block whose ProseMirror node is structurally equal (\texttt{node.eq(baselineNode)}) to its imported baseline is written back using its exact original \texttt{node\_src} XML bytes; only blocks actually mutated by the user or AI are re-serialized, preserving paragraph properties (\texttt{<w:pPr>}) from the original template.
+Clinical manuscripts are often imported from journal Word templates containing custom styles, headers, macros, and embedded objects. During \texttt{.docx} or \texttt{.pptx} import, Heurion 2.0 stores the original archive and caches the raw XML slice (\texttt{<w:p>} or \texttt{<w:tbl>}) of every imported block in \texttt{node\_src}. On export, any block whose ProseMirror structure is unchanged from import is written back using its exact original XML bytes; only blocks actually modified by the user or AI are re-serialized, preserving the original paragraph properties (\texttt{<w:pPr>}).
 
 % ============================================================================
 % 4. ZERO-HALLUCINATION EVIDENCE LOOP & CLINICAL SANDBOX
@@ -227,27 +211,27 @@ Clinical manuscripts are frequently imported from journal-specific Word template
 \section{Zero-Hallucination Evidence Loop and Privacy-Preserving Clinical Pipeline}
 \label{sec:evidence}
 
-\subsection{Syntactic Citation Guard and Atomic Citation Nodes}
-To eliminate fabricated references at the root, Heurion 2.0 makes it syntactically impossible for an agent to write raw bibliographic identifiers or hand-numbered brackets in manuscript prose. During pre-write validation in \texttt{OpService}, every candidate text string is scanned against structural regular expressions detecting bare DOIs (\texttt{10.\textbackslash d\{4,9\}/\dots}), bare PMIDs (\texttt{PMID:\textbackslash s*\textbackslash d+}), or unlinked reference markers. Any violation triggers \texttt{citation\_not\_registered} before modifying the document.
+\subsection{Pre-Write Citation Guard and Atomic Citation Nodes}
+To stop fabricated references at the source, Heurion 2.0 blocks agents from writing raw bibliographic IDs or hand-numbered brackets in manuscript text. Before any edit is applied, the pre-write validator scans the new text for bare DOIs (\texttt{10.\textbackslash d\{4,9\}/\dots}), bare PMIDs, or unlinked bracketed reference numbers. Any match triggers \texttt{citation\_not\_registered} and aborts the write.
 
-Instead, the agent must invoke \texttt{insert\_citation}, which queries live metadata APIs (Crossref, NCBI PubMed E-utilities, and OpenAlex), verifies the record's existence, stores the canonical metadata (authors, title, journal, year, volume, pages, DOI/PMID) in the document's \texttt{citations} table, and returns a registered token \texttt{[@c:cite\_id]}. In ProseMirror, \texttt{[@c:cite\_id]} is parsed into an atomic inline node (\texttt{atom: true}) that dynamically numbers itself according to citation order and automatically compiles the terminal References section in Vancouver, AMA, APA, MLA, IEEE, or GB/T~7714 format.
+Instead, the agent must call \texttt{insert\_citation}, which queries Crossref, NCBI PubMed E-utilities, and OpenAlex, verifies that the publication exists, stores its canonical metadata in the document's \texttt{citations} table, and returns a registered token \texttt{[@c:cite\_id]}. In ProseMirror, \texttt{[@c:cite\_id]} is an atomic inline node that numbers itself automatically and formats the bibliography in Vancouver, AMA, APA, MLA, IEEE, or GB/T~7714 style.
 
-\subsection{Multi-Agent Sentence-Level Claim Verification (\texttt{verify\_claims})}
-Registering a real paper does not prevent an LLM from misattributing findings (e.g., citing a real trial but inverting the hazard ratio or claiming statistical significance where none existed). Heurion 2.0 pairs specialist subagent delegation (\texttt{literature\_researcher}, \texttt{biostatistician}, \texttt{fact\_checker}) with an automated claim verification engine (\texttt{ClaimService.verify}):
+\subsection{Multi-Agent Sentence-Level Claim Verification}
+Registering a real paper does not prevent an LLM from misstating its findings (for example, citing a real trial but flipping the hazard ratio). Heurion 2.0 pairs specialist subagents (\texttt{literature\_researcher}, \texttt{biostatistician}, and \texttt{fact\_checker}) with an automated claim verification pipeline (\texttt{verify\_claims}):
 
 \begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Claim Extraction:} The engine traverses all document blocks, segments text into sentences, and extracts two classes of verifiable statements: (a) sentences containing one or more \texttt{[@c:cite\_id]} nodes, and (b) sentences containing quantitative clinical assertions (percentages, $p$-values, confidence intervals, $HR/OR/RR$, sample sizes $n=\dots$) without any citation.
-  \item \textbf{Full-Text Evidence Retrieval:} For each cited record, the verifier retrieves the PubMed abstract and, when available via PubMed Central (PMC) or local PDF repository, the full-text body sections.
-  \item \textbf{Four-Way Semantic Alignment \& Inline Anchoring:} Each assertion is classified into one of four verdicts: \texttt{supported}, \texttt{contradicted}, \texttt{unsupported} (the cited paper does not mention the claimed metric), or \texttt{uncited\_stat}. Problematic claims are automatically anchored directly onto the offending text span as inline ProseMirror review comments containing a structured diagnosis, supporting/conflicting excerpts from the source paper, and one-click resolution actions (apply suggested rewrite, replace citation, or mark as \emph{Clinical Experience Exemption} so future runs respect the clinician's intentional assertion).
+  \item \textbf{Claim Extraction:} The verifier scans all document blocks, splits text into sentences, and selects (a) sentences containing \texttt{[@c:cite\_id]} citations and (b) uncited sentences containing quantitative clinical assertions (percentages, $p$-values, confidence intervals, $HR/OR/RR$, or sample sizes).
+  \item \textbf{Evidence Retrieval:} For each cited paper, the verifier fetches the PubMed abstract and, when available via PubMed Central (PMC) or uploaded PDFs, the full-text sections.
+  \item \textbf{Four-Way Verdict \& Inline Review Comments:} Each claim is labeled as \texttt{supported}, \texttt{contradicted}, \texttt{unsupported} (the cited paper does not mention the metric), or \texttt{uncited\_stat}. Flagged claims are attached directly to the offending sentence as inline ProseMirror review comments with excerpts from the source paper and one-click actions (apply suggested rewrite, swap citation, or mark as a \emph{Clinical Experience Exemption}).
 \end{enumerate}
 
 \subsection{Multi-Tenant PHI Redaction and Reproducible Clinical Sandbox}
-To bridge clinical data management and manuscript authoring without exposing patient identities:
+To connect clinical data analysis with manuscript writing without leaking patient identities:
 \begin{itemize}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Per-Tenant Database Isolation \& Envelope Encryption:} Each organization tenant operates on a physically isolated SQLite database file (\texttt{tenants/<org\_id>/platform.db}) with per-tenant Data Encryption Keys (DEKs) wrapped by a master Key Encryption Key (KEK).
-  \item \textbf{Dual-Stage Deterministic PHI Scanner (\texttt{phi-scan.ts}):} Before any clinical note or OCR-extracted laboratory report enters LLM context, deterministic validators scan and redact 18-digit national ID numbers (verified via ISO~7064 MOD~11-2 checksum), payment/insurance numbers (Luhn algorithm), mobile phone numbers, inpatient/outpatient medical record numbers, and co-occurring patient name + sensitive diagnosis patterns.
-  \item \textbf{Pseudonymous Subject Mapping \& PHR Red-Lines:} Within research cohorts, real patient identifiers are replaced by pseudonymous subject codes (\texttt{P001}, \texttt{P002}, \dots) via an in-memory translation table. Furthermore, a dedicated Personal Health Record guard (\texttt{phr\_guard}) enforces strict read-only access on patient-uploaded primary medical records, preventing AI tools from altering ground-truth clinical evidence.
-  \item \textbf{Sandboxed Biostatistical Execution:} Rather than allowing the LLM to mentally arithmeticize survival rates, statistical tasks are delegated to isolated compute tools and the \texttt{biostatistician} subagent, producing reproducible Baseline Table~1 summaries, Kaplan--Meier survival curves with log-rank tests, CONSORT flowcharts, E-value sensitivity analyses for unmeasured confounding, clinical prediction nomograms, and MONAI 3D volumetric medical image segmentation.
+  \item \textbf{Per-Tenant Database Isolation \& Envelope Encryption:} Each organization runs on a physically separate SQLite database file with per-tenant Data Encryption Keys wrapped by a master Key Encryption Key.
+  \item \textbf{Deterministic PHI Scanner:} Before any clinical note or OCR lab report enters LLM context, deterministic scanners redact 18-digit national ID numbers (validated via ISO~7064 MOD~11-2 checksum), card numbers (Luhn check), phone numbers, medical record numbers, and co-occurring patient name + sensitive diagnosis phrases.
+  \item \textbf{Pseudonymous Subject IDs \& Read-Only Health Records:} Inside research cohorts, real patient identifiers are replaced with pseudonymous codes (\texttt{P001}, \texttt{P002}, \dots). In addition, a dedicated guard enforces strict read-only access on patient-uploaded Personal Health Records (PHR) so AI tools can never alter primary clinical evidence.
+  \item \textbf{Sandboxed Biostatistical Execution:} Statistical computations are delegated to isolated tools and the \texttt{biostatistician} subagent, producing reproducible Baseline Table~1 summaries, Kaplan--Meier survival curves, CONSORT flowcharts, E-value sensitivity analyses, clinical prediction nomograms, and MONAI 3D medical image segmentations.
 \end{itemize}
 
 % ============================================================================
@@ -256,39 +240,64 @@ To bridge clinical data management and manuscript authoring without exposing pat
 \section{Three-Layer Self-Evolving Agent Architecture}
 \label{sec:evolution}
 
-A critical challenge in contract-guarded environments is helping the agent rapidly internalize operational boundaries without human prompt engineering. When an agent's tool call is blocked by a pre-write guard or reverted by a user, how does the system ensure the agent adapts both within the current task and across future sessions?
-
-As shown in the bottom tier of Figure~\ref{fig:architecture}, Heurion 2.0 implements a \textbf{Three-Layer Self-Evolving Architecture} operating across three distinct timescales:
+A central practical question in guarded agent environments is how an agent learns from mistakes and domain exemplars without relying on human prompt engineering or hard-coded error dictionaries. As shown in the bottom tier of Figure~\ref{fig:architecture}, Heurion 2.0 organizes self-evolution across three timescales.
 
 \subsection{Layer 1: Task-Level Pre-Flight Probe (\texttt{doc\_validate} \& \texttt{dry\_run})}
-At the intra-turn millisecond timescale, agents can invoke \texttt{doc\_validate} (or pass \texttt{dry\_run: true} to \texttt{doc\_edit}) prior to committing complex multi-block edits. The probe executes the full suite of conflict guards, citation registration checks, anchor integrity checks, and post-edit structural diffs against an ephemeral in-memory clone of the ProseMirror document tree without incrementing \texttt{rev}, mutating the Yjs CRDT state, or polluting the undo stack. If a violation is detected, the probe returns \texttt{\{valid: false, code, hint, current\}}, enabling immediate zero-cost self-correction within the same reasoning turn.
+Within a single turn, agents can call \texttt{doc\_validate} (or pass \texttt{dry\_run: true} to \texttt{doc\_edit}) before committing complex multi-block edits. The probe runs all conflict guards, citation checks, comment-anchor checks, and table validators against an in-memory clone of the ProseMirror tree without advancing the revision counter or touching the undo stack. If a check fails, the probe returns the error code, a recovery hint, and the current block text, letting the agent fix its tool call before committing.
 
-\subsection{Layer 2: Cross-Domain Dual-Track Self-Evolution and MoE Routing}
-At the cross-turn session timescale, Heurion 2.0 resolves both the memory pollution problem and the domain overfitting problem by combining \textbf{Declarative-Procedural Orthogonality} (Invariant~\ref{inv:memory}) with a \textbf{Domain-Agnostic Self-Evolution Kernel} backed by pluggable \texttt{DomainSkillAdapter} modules (\texttt{manuscript}, \texttt{biostats}, \texttt{deck}, and \texttt{general\_mcp}):
-\begin{itemize}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Track A --- Self-Supervised Corruption-and-Reconstruction Skill Training (\texttt{SkillTrainingService}):} Inspired by self-supervised semantic diffusion over discrete text skills \cite{li2026skilltraining}, Track~A enables cold-start and cross-domain declarative skill acquisition without waiting for manual user corrections. Given a gold exemplar $x_0$ in domain $d$ (e.g., a published clinical Discussion section, a verified Statistical Analysis Plan, or an executive presentation deck), the domain adapter's forward corruption operator $\mathcal{C}_d(x_0) \to \tilde{x}$ strips expert rhetoric, methodological checks, or slide layout directives while preserving raw factual skeletons. The agent then reconstructs $\hat{x} = \mathcal{R}_d(\tilde{x}, \mathcal{S}_{\text{active}})$ using only currently active skills $\mathcal{S}_{\text{active}} \subseteq \mathcal{M}_D$. A backward credit assignment pass contrasts $(\tilde{x}, \hat{x}, x_0)$ to emit four-operator updates (\texttt{create}, \texttt{update}/\texttt{strengthen}, \texttt{narrow}, \texttt{merge}). Crucially, an \emph{Instance--Skill Decoupling Guard} (\texttt{hasInstanceLeakage}) and PHI filter (\texttt{sensitiveReason}) reject any candidate skill that memorizes cohort-specific sample sizes ($N=312$), exact trial point estimates ($HR=0.68$), database primary keys, or patient identifiers.
-  \item \textbf{Track B --- Zero-Template Trajectory-Contrastive Procedural Synthesis (\texttt{ProceduralHarnessService}):} Rather than relying on a static dictionary of hand-written error-recovery templates, Track~B synthesizes procedural rules directly from runtime verifier diagnostics and intra-turn recovery trajectories. Whenever \texttt{OpService} or a domain tool verifier rejects an action ($a_{\text{fail}}$) and the agent subsequently recovers within the same turn ($a_{\text{recover}}$), \texttt{ExecutionSignals} records a trajectory-contrastive signal $s = (\text{owner}, \text{doc\_id}, \text{turn\_id}, \text{kind}, \text{code}, \text{hint}, a_{\text{fail}} \to a_{\text{recover}}, R_{\text{active}}, q)$.
-\end{itemize}
+\subsection{Layer 2: Cross-Domain Dual-Track Self-Evolution}
+Across turns and sessions, Layer~2 uses a domain-agnostic evolution kernel backed by pluggable domain adapters (\texttt{manuscript}, \texttt{biostats}, \texttt{deck}, and \texttt{general\_mcp}). It combines two complementary learning tracks (illustrated with concrete examples in Table~\ref{tab:evolution_examples}):
 
-\paragraph{Backward Credit Assignment for Procedural Memory.} When \texttt{evolveFromSignals()} clusters unconsumed signals with recurrence $\ge \tau = 2$, it inspects the forward activation snapshot $R_{\text{active}}$ recorded at the time of failure to diagnose \emph{why} the error recurred:
+\begin{table}[t]
+\centering
+\caption{Concrete examples of how Layer~2 learns domain conventions (Track~A) and operational guard rules (Track~B) without hand-crafted rule templates.}
+\label{tab:evolution_examples}
+\vspace{2pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{5.0cm}>{\raggedright\arraybackslash}p{5.0cm}>{\raggedright\arraybackslash}p{5.4cm}@{}}
+\toprule
+\textbf{Learning Track \& Domain} & \textbf{Input Signal / Degraded Skeleton} & \textbf{Contrast vs.\ Gold Exemplar or Recovery} & \textbf{Synthesized Reusable Skill / Rule} \\
+\midrule
+\textbf{Track A: Exemplar Training} (\texttt{biostats}) & \emph{Degraded skeleton:} ``Compare baseline continuous and categorical variables; run multivariable survival regression.'' & Initial reconstruction uses mean $\pm$ SD and chi-square everywhere; gold SAP specifies Shapiro--Wilk check, Median [IQR], Fisher's exact test ($E<5$), and Schoenfeld residuals. & \texttt{[domain:biostats]} Test normality first; report skewed variables as Median [IQR] with Mann--Whitney U, and switch to Fisher's exact test when expected cell count $<5$. \\
+\addlinespace[4pt]
+\textbf{Track A: Exemplar Training} (\texttt{deck}) & \emph{Degraded skeleton:} Flat single-paragraph dump of ICU length-of-stay numbers and subgroup comparisons. & Initial slide uses a generic noun title (``Results'') and 6 crowded bullets; gold slide uses an action title and a two-column chart layout. & \texttt{[domain:deck]} Use a single-sentence Action Title stating the primary finding, and pair group comparisons in a two-column layout ($\le 4$ bullets + chart). \\
+\addlinespace[4pt]
+\textbf{Track B: Zero-Template Synthesis} (non-adjacent merge) & \emph{Failed call:} \texttt{merge(p\_d1, p\_d3)} rejected because paragraph \texttt{p\_d2} sits between them. & \emph{Intra-turn recovery:} Agent calls \texttt{move(p\_d3, after=p\_d1)} followed by \texttt{merge(p\_d1, p\_d3)} in the same batch. & On \texttt{invalid\_structure}: verify target blocks are adjacent before merging; if separated, execute \texttt{move} first and then \texttt{merge} in the same batch. \\
+\addlinespace[4pt]
+\textbf{Track B: Backward Credit Assignment} (open comments) & \emph{Implicit prompt:} ``Make the opening sentence of Methods more concise in \emph{<<Cohort B>>}'' (rule existed but was not routed; agent used \texttt{replace\_block}). & \emph{Diagnosis:} Rule was absent from active set (\emph{Routing Miss}) and lacked an \texttt{ack\_comments} fallback (\emph{Rule Insufficiency}). & Strips cohort name \emph{<<Cohort B>>}, adds \texttt{Methods | opening sentence} to trigger pattern, and appends \texttt{ack\_comments} + thread reply fallback to the rule body. \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\paragraph{Track A: Learning Domain Conventions via Corruption and Reconstruction.}
+Waiting for users to manually rewrite AI drafts leaves a new workspace with a cold-start gap. Drawing inspiration from self-supervised skill training via semantic diffusion \cite{li2026skilltraining}, Track~A lets the platform learn reusable domain skills directly from existing high-quality documents (such as published clinical manuscripts, verified Statistical Analysis Plans, or executive slide decks) in three steps:
 \begin{enumerate}[leftmargin=1.5em,itemsep=1pt]
-  \item \textbf{Novel Failure Pattern ($r^* \notin \mathcal{M}_P$):} \texttt{synthesizeRuleFromSignal()} combines the verifier's structural precondition with the observed $(a_{\text{fail}} \to a_{\text{recover}})$ contrast to create a new active rule in $\mathcal{M}_P$.
-  \item \textbf{Routing Miss ($r^* \in \mathcal{M}_P \setminus R_{\text{active}}$):} The rule existed in the store but failed to activate under prompt $q$. \texttt{applyBackwardCreditAssignment()} invokes \texttt{extractRoutingKeywords(q)}---which strips quoted document and cohort titles to prevent instance overfitting---and appends transferable task/action cues and environment predicates (\texttt{[pred:\dots]}) to $r^*.\text{trigger\_pattern}$.
-  \item \textbf{Rule Insufficiency ($r^* \in R_{\text{active}}$):} The rule was injected into the prompt yet the agent still triggered a boundary violation. The engine executes a \texttt{strengthen}/\texttt{narrow} update that appends the newly uncovered boundary condition and recovery sequence to $r^*.\text{rule}$ (complemented by optional LLM-driven \texttt{refineWithBackward()} rule merging).
+  \item \textbf{Forward Corruption:} A domain adapter strips expert formatting, rhetorical transitions, methodological checks, or slide layout tags from a gold exemplar, leaving only a plain list of raw facts or analysis goals.
+  \item \textbf{Skill-Conditioned Reconstruction:} The agent attempts to reconstruct the full professional text or analysis plan from the degraded skeleton using only its currently active skills.
+  \item \textbf{Contrastive Skill Update \& Safety Filtering:} By comparing its reconstruction against the original exemplar, the engine identifies what domain knowledge was missing or too vague and proposes structured skill updates (\texttt{create}, \texttt{update}, \texttt{narrow}, or \texttt{merge}). Before any candidate skill is saved, an \emph{Instance--Skill Decoupling Guard} and PHI scanner automatically block rules that memorize study-specific numbers (such as sample size $N=312$ or hazard ratio $HR=0.68$), database primary keys, or patient identifiers.
 \end{enumerate}
 
-\paragraph{Domain-Gated MoE Utility Routing.} Before each turn on document $d$ with user prompt $q$ and active domain $D(d, q)$, \texttt{forPrompt()} computes a domain-gated Mixture-of-Experts (MoE) utility score $U(r \mid d, q)$ for each active rule $r \in \mathcal{M}_P$:
-\begin{equation}
-  \label{eq:utility}
-  \begin{aligned}
-    U(r \mid d, q) &= \alpha \cdot e_r + \beta \cdot \mathbb{I}\!\left(\text{match}(r.\text{trigger\_pattern}, q)\right) \\
-    &\quad + \gamma \cdot \mathbb{I}\!\left(\text{stateMatch}(r, d, q)\right) + \delta_{\text{dom}}\!\left(r.\text{domain}, D(d, q)\right),
-  \end{aligned}
-\end{equation}
-where $(\alpha, \beta, \gamma) = (0.1, 5.0, 8.0)$ weight empirical evidence $e_r$, lexical/learned trigger match, and real-time document/environment predicates, while the domain gating term $\delta_{\text{dom}}(d_r, D) = +4.0$ if $d_r = D$ and $-20.0$ if $d_r \neq D$ (filtering out rules with $U \le -10$). This hard domain gate guarantees \textbf{zero negative transfer} when a researcher interleaves manuscript editing, biostatistical modeling, and slide deck generation within a single project. Rules are greedily packed within budget $B$ (maximum $K=4$ rules).
+\paragraph{Track B: Zero-Template Procedural Synthesis and Backward Credit Assignment.}
+Earlier versions of procedural memory relied on a static lookup dictionary that mapped known guard error codes to hand-written rule strings. To achieve true domain generalization, Heurion 2.0 removes all hand-written rule templates. Whenever a pre-write guard or domain tool verifier rejects an action and the agent recovers later in the same turn, the runtime records the failed call, the verifier's diagnostic hint, the successful recovery call, the user prompt, and the list of rules that were active in that turn.
 
-\subsection{Layer 3: System-Level Meta-Strategy Distillation (\texttt{HarnessEvolutionService})}
-At the multi-session platform timescale, \texttt{HarnessEvolutionService} periodically aggregates system-wide execution signals and active procedural rules. When cumulative unanalyzed signals exceed a threshold, a background meta-evolver distills recurring failure root causes into concise system-level behavioral directives (2--5 rules, $\le 100$ characters each) and serializes them into a dynamic YAML profile overlay (\texttt{evolved.cordis.yml}):
+Once an error pattern occurs at least twice, the engine updates procedural memory based on whether a matching rule was already active when the failure happened:
+\begin{itemize}[leftmargin=1.5em,itemsep=2pt]
+  \item \textbf{New Failure Mode (Create):} If no rule exists for the error code, the synthesizer combines the verifier's precondition check with the observed failure-to-recovery diff to create a concise new procedural rule.
+  \item \textbf{Rule Existed but Was Not Selected (Routing Miss):} If a rule for that error code already existed in the database but was not injected into the prompt (for example, the user asked to ``tighten the first sentence of Methods'' without mentioning the word ``comment'', and the paragraph happened to carry an open review comment), simply increasing the rule's evidence counter does nothing. Instead, the backward pass extracts task and section keywords from the user prompt---automatically stripping quoted document or cohort titles so triggers do not overfit to a single study name---and appends them to the rule's trigger pattern.
+  \item \textbf{Rule Was Injected but Still Failed (Rule Insufficiency):} If the rule was already present in the prompt yet the agent still hit a guard error on an edge case, the engine strengthens the rule by appending the newly discovered boundary condition and recovery sequence (and optionally merges overlapping rules via an LLM refinement pass).
+\end{itemize}
+
+\paragraph{Domain-Gated MoE Routing.}
+Injecting every learned rule into every prompt would quickly exhaust context budget and cause cross-domain confusion (for instance, injecting slide bullet-density rules while the agent is running a Cox survival model). Before each turn, the router scores every active procedural rule using a simple additive utility score:
+\begin{center}
+\small
+$\text{Utility Score} = 0.1 \times (\text{evidence count}) \;+\; 5 \times (\text{keyword match}) \;+\; 8 \times (\text{live state match}) \;+\; (\text{domain gate})$,
+\end{center}
+where \emph{keyword match} checks whether the user prompt matches the rule's base cue or learned trigger keywords, \emph{live state match} checks real-time document or dataset state (such as recent human edits, open comments, tables, or sparse contingency cells), and the \emph{domain gate} adds $+4$ when a domain-tagged rule matches the active task domain (\texttt{manuscript}, \texttt{biostats}, \texttt{deck}, or \texttt{general\_mcp}) and subtracts $-20$ when it belongs to a different domain. Rules scoring below $-10$ are filtered out, and the top-scoring rules (up to 4 rules within the character budget) are injected into the turn prompt.
+
+\subsection{Layer 3: System-Level Meta-Strategy Distillation}
+Across many sessions, a background meta-evolution service periodically reviews recurring execution signals and active procedural rules across the workspace, distilling the most common root causes into 2--5 short behavioral directives ($\le 100$ characters each) stored in a dynamic profile overlay (\texttt{evolved.cordis.yml}):
 
 \begin{lstlisting}[style=heurionspec]
 # Auto-generated by Heurion Self-Evolution Engine
@@ -300,21 +309,21 @@ At the multi-session platform timescale, \texttt{HarnessEvolutionService} period
       - Register all DOI/PMID entries via insert_citation before inline referencing
 \end{lstlisting}
 
-When \texttt{HarnessPool} spawns or refreshes an agent runtime, \texttt{getPatches()} transparently mounts \texttt{evolved.cordis.yml} alongside the base platform profile, upgrading the agent's foundational system persona with zero user disruption.
+When the agent runtime starts or refreshes a session, it mounts \texttt{evolved.cordis.yml} alongside the base platform profile, upgrading the default agent behavior without interrupting active users.
 
 % ============================================================================
 % 6. HUMAN-AI PERMISSION SYMMETRY
 % ============================================================================
-\section{Formally Verified Human-AI Permission Symmetry}
+\section{Verified Human-AI Permission Symmetry}
 \label{sec:parity}
 
-A pervasive flaw in enterprise AI applications is the disconnect between what a human user can perform via the graphical user interface and what the AI agent can perform via tool calls. Often, developers either grant the agent direct database access (bypassing business-layer authorization) or expose only a toy subset of tools.
+A common flaw in enterprise AI systems is a mismatch between what a human user can do in the web UI and what the AI agent can do through tool calls. Developers often either give the agent direct database access (bypassing role checks) or expose only a small subset of endpoints.
 
-Heurion 2.0 enforces \textbf{Human-AI Permission Symmetry} (Invariant~\ref{inv:parity}):
+Heurion 2.0 enforces strict permission symmetry through three mechanisms:
 \begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{In-Process Loopback Execution under User Identity:} Every administrative and clinical MCP tool (\texttt{patient\_*}, \texttt{study\_*}, \texttt{doc\_manage}, \texttt{kb\_manage}, \texttt{dataset\_manage}, \texttt{org\_manage}) executes by invoking \texttt{invokeHttp(api, userId, method, path, body)} directly against the Hono HTTP router in-process. The call carries a short-lived internal JWT minted for \texttt{userId} and tagged with header \texttt{X-Heurion-Via: ai}. Consequently, the agent inherits the exact same multi-tenant isolation, study role checks (PI, co-investigator, statistician, reviewer), and audit logging as the human user.
-  \item \textbf{Human-Only Confirmation Cards for High-Risk Actions:} When an AI tool invokes a destructive or irreversible endpoint (e.g., purging a document, freezing a clinical study cohort, or removing a team member), the HTTP middleware intercepts the \texttt{X-Heurion-Via: ai} header and---rather than executing the mutation---creates a \texttt{pending\_actions} record and renders an interactive confirmation card in the user's chat stream. Only when the human clicks \emph{Confirm} in the browser does the UI re-issue the request with \texttt{X-Heurion-Via: ai-confirmed}, completing execution.
-  \item \textbf{Automated CI Parity Verification (\texttt{parity.test.ts}):} Our test suite introspects the Hono application router table at build time and asserts that every registered \texttt{/api/*} endpoint appears either in the MCP parity mapping table ($\phi(\mathcal{E}_{\text{MCP}})$) or in the documented $\mathcal{E}_{\text{NOT\_FOR\_AI}}$ exclusion registry. Any newly added API route missing an MCP counterpart or explicit exemption immediately fails continuous integration.
+  \item \textbf{In-Process Loopback under User Identity:} Every administrative and clinical MCP tool (\texttt{patient\_*}, \texttt{study\_*}, \texttt{doc\_manage}, \texttt{kb\_manage}, \texttt{dataset\_manage}, \texttt{memory\_manage}, \texttt{org\_manage}) executes by calling the internal Hono HTTP router in-process with a short-lived JWT minted for the current user and tagged with \texttt{X-Heurion-Via: ai}. As a result, the agent is subject to the exact same multi-tenant isolation, study role checks (PI, co-investigator, statistician, reviewer), and audit logs as the human user.
+  \item \textbf{Interactive Confirmation Cards for Destructive Actions:} When an AI tool calls a high-risk or irreversible endpoint (such as deleting a document, freezing a clinical study cohort, or clearing memory), the HTTP middleware intercepts the \texttt{X-Heurion-Via: ai} header, creates a \texttt{pending\_actions} record, and displays an interactive confirmation card in the chat UI. The operation runs only after the human user clicks \emph{Confirm} in the browser.
+  \item \textbf{Automated CI Parity Audit (\texttt{parity.test.ts}):} On every build, an automated test inspects the Hono router table and verifies that every registered \texttt{/api/*} route is either mapped to an MCP tool or documented in the human-only exclusion list. Any new API route missing an MCP mapping or explicit exemption fails CI immediately.
 \end{enumerate}
 
 % ============================================================================
@@ -323,10 +332,15 @@ Heurion 2.0 enforces \textbf{Human-AI Permission Symmetry} (Invariant~\ref{inv:p
 \section{Empirical Evaluation}
 \label{sec:evaluation}
 
-We evaluate Heurion 2.0 across four dimensions: (1) architectural comparison against first-generation script-based post-hoc auditing (Heurion v1 / S-Series), (2) micro-benchmarks of the dual-surface CRDT engine and pre-write guards, (3) ablation of the three-layer self-evolving memory system across multi-session trajectories, and (4) platform-wide verification and capability parity coverage. All benchmarks are reproducible via \texttt{paper/benchmarks/run\_eval.ts} executed on the production TypeScript/SQLite/Yjs engine.
+We evaluate Heurion 2.0 across five questions:
+(1) How does the guarded CRDT architecture compare against first-generation script-and-audit editing?
+(2) Do pre-write citation and PHI guards achieve high recall without false positives on statistical prose?
+(3) Does utility-ranked procedural memory outperform stateless and FIFO baselines under tight prompt budgets?
+(4) After removing all hand-written rule templates, can zero-template synthesis and backward credit assignment learn effective rules with a live LLM and generalize to unseen cohorts?
+(5) Does self-supervised skill training generalize across manuscript writing, biostatistics, and slide decks without cross-domain interference?
 
 \subsection{Architectural Comparison: Post-Hoc Scripting (v1) vs.\ Guarded CRDT (v2)}
-Table~\ref{tab:v1_vs_v2} summarizes the quantitative and structural comparison between our first-generation script-and-audit architecture (Heurion v1) and Heurion 2.0 across $N=50$ multi-block clinical protocol revision trials involving concurrent human edits, formatted OOXML templates, and inline citations.
+Table~\ref{tab:v1_vs_v2} compares our first-generation script-and-audit system (Heurion v1) against Heurion 2.0 across $N=50$ multi-block clinical protocol revision trials involving concurrent human edits, formatted Word templates, and inline citations.
 
 \begin{table}[t]
 \centering
@@ -352,15 +366,15 @@ Mean Per-Turn Selective Revert Latency & N/A & $340.0\,\text{ms}$ (Snapshot Rest
 }
 \end{table}
 
-As shown in Table~\ref{tab:v1_vs_v2}, Heurion 2.0 eliminates the three primary failure modes of script-based agents:
+As Table~\ref{tab:v1_vs_v2} shows, Heurion 2.0 resolves the three main failure modes of script-based document agents:
 \begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{100\% Unmodified Byte Identity:} By indexing original OOXML node slices in \texttt{node\_src} during import and re-serializing only mutated ProseMirror nodes on export, 50 out of 50 clinical trial protocol documents preserved 100\% byte-for-byte XML identity across all untouched headings, lists, and paragraphs.
-  \item \textbf{Sub-Millisecond Pre-Write Verification and Mutation:} Because \texttt{OpService.validate} and \texttt{OpService.edit} operate directly on in-memory ProseMirror + Yjs structures rather than spawning Python/LibreOffice subprocesses, pre-flight validation averages $0.168\,\text{ms}$, guarded minimal-diff mutation averages $0.351\,\text{ms}$, and selective turn undo averages $0.128\,\text{ms}$---representing a $>1000\times$ speedup over subprocess-based file manipulation.
-  \item \textbf{Intra-Paragraph Selective Turn Undo:} Across all 50 trials in which an AI turn modified two paragraphs ($p_1, p_2$), followed by a concurrent human edit inside $p_2$, invoking \texttt{revertTurn} restored $p_1$ and reverted the AI's phrase change in $p_2$ while preserving the human's concurrent edit in $p_2$ with 100\% accuracy.
+  \item \textbf{100\% Unmodified Byte Identity:} By caching original OOXML node slices on import and re-serializing only modified ProseMirror nodes on export, all 50 clinical trial protocols preserved 100\% byte-for-byte XML identity across untouched headings, lists, and paragraphs.
+  \item \textbf{Sub-Millisecond Validation and Commits:} Because pre-flight checks and minimal-diff edits run directly on in-memory ProseMirror and Yjs structures rather than spawning Python or LibreOffice subprocesses, validation averages $0.168\,\text{ms}$, guarded edits average $0.351\,\text{ms}$, and selective turn undo averages $0.128\,\text{ms}$---over $1000\times$ faster than disk scripting.
+  \item \textbf{Intra-Paragraph Selective Turn Undo:} Across all 50 trials where an AI turn modified two paragraphs ($p_1, p_2$) and a human subsequently edited a different phrase inside $p_2$, calling \texttt{revertTurn} restored $p_1$ and undid the AI's phrase change in $p_2$ while keeping the human's edit in $p_2$ intact in 100\% of trials.
 \end{enumerate}
 
 \subsection{Pre-Write Citation and PHI Redaction Guard Evaluation}
-In Experiment~2, we evaluated the deterministic pre-write guards against 50 adversarial citation injection attempts (spanning bare DOIs, \texttt{https://doi.org/} URLs, and bare PMIDs in various parenthetical and inline styles) and 80 clinical text segments (40 containing composite multi-entity PHI---patient names paired with oncology/cardiology/nephrology diagnoses, 18-digit MOD~11-2 national ID cards, Luhn-valid card numbers, phone numbers, and inpatient admission IDs---and 40 containing dense biostatistical prose with hazard ratios, confidence intervals, laboratory reference ranges, and dates).
+In Experiment~2, we tested the pre-write guards against 50 adversarial citation injection attempts (bare DOIs, DOI URLs, and bare PMIDs) and 80 clinical text segments (40 containing composite PHI---patient names paired with diagnoses, 18-digit MOD~11-2 national IDs, Luhn card numbers, phone numbers, and admission IDs---and 40 containing dense biostatistical text with hazard ratios, confidence intervals, lab reference ranges, and dates).
 
 \begin{table}[t]
 \centering
@@ -380,22 +394,17 @@ Stale Revision Block Overwrite Blocker (\texttt{conflict\_user\_edited}) & $50$ 
 }
 \end{table}
 
-Table~\ref{tab:guards} confirms that structural pre-write contracts achieve 100.0\% interception of unregistered bibliographic identifiers and stale block overwrites, while the checksum-backed PHI scanner achieves 100.0\% recall on composite patient identifiers with a 0.0\% false-positive rate on dense statistical manuscripts (avoiding accidental corruption of $p$-values, lab counts, or survival intervals).
+Table~\ref{tab:guards} confirms that pre-write guards block 100.0\% of unregistered citations and stale block overwrites, while the checksum-backed PHI scanner achieves 100.0\% recall on composite patient identifiers with a 0.0\% false-positive rate on statistical text (never corrupting $p$-values, lab counts, or survival intervals).
 
-\subsection{Ablation Study: Three-Layer Self-Evolving Memory}
-To evaluate whether Heurion 2.0's dual-track procedural memory prevents repetitive guard failures across authoring sessions under a tight context budget ($B = 420$ characters per turn), we simulated 10 consecutive multi-task sessions spanning 6 distinct operational failure archetypes: \texttt{citation\_not\_registered}, \texttt{conflict\_user\_edited}, \texttt{user\_reverted\_turn}, \texttt{anchor\_broken}, \texttt{table\_schema\_mismatch}, and \texttt{phr\_readonly\_violation}. We compared three configurations:
-\begin{enumerate}[leftmargin=1.5em,itemsep=1pt]
-  \item \textbf{Stateless Baseline (No Procedural Memory):} Relies solely on static tool descriptions without runtime signal crystallization.
-  \item \textbf{Unranked Unified Memory (FIFO Budget):} Stores rules in a flat list without context-aware utility scoring (Eq.~\ref{eq:utility}), injecting rules in insertion order up to budget $B$.
-  \item \textbf{Heurion 2.0 (Dual-Track + Signal Crystallization + Utility Ranking):} Crystallizes open execution signals once recurrence reaches $\tau = 2$ and dynamically ranks rules per turn via Eq.~\ref{eq:utility}.
-\end{enumerate}
+\subsection{Ablation Study: Utility-Ranked vs.\ FIFO Procedural Memory}
+To test whether utility-ranked routing prevents repeated guard errors under a tight context budget ($420$ characters per turn), we first ran a controlled 10-session ablation across 6 operational failure types (\texttt{citation\_not\_registered}, \texttt{conflict\_user\_edited}, \texttt{user\_reverted\_turn}, \texttt{anchor\_broken}, \texttt{table\_schema\_mismatch}, and \texttt{phr\_readonly\_violation}), comparing a stateless agent, an unranked FIFO memory list, and Heurion 2.0's utility-ranked procedural memory.
 
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}
 \begin{axis}[
   width=0.82\textwidth,
-  height=5.6cm,
+  height=5.4cm,
   xlabel={Authoring Session Index},
   ylabel={Uncovered Guard / Revert Failures (out of 6)},
   xmin=1, xmax=10,
@@ -443,20 +452,21 @@ To evaluate whether Heurion 2.0's dual-track procedural memory prevents repetiti
 
 \end{axis}
 \end{tikzpicture}
-\caption{Ablation of self-evolving procedural memory across 10 consecutive authoring sessions under a strict $420$-character prompt injection budget. In Sessions 1--2, pre-seeded baseline rules prevent 2 of the 6 failure archetypes, while the remaining 4 novel failure modes emit runtime \texttt{ExecutionSignals}. Following signal crystallization after Session~2 ($\tau=2$), Heurion 2.0's utility-ranked \texttt{forPrompt()} selector dynamically injects the exact matching procedural directives (averaging $355$ characters/turn), driving uncovered guard failures to $0$ from Session~3 onward.}
+\caption{Controlled 10-session ablation under a strict $420$-character prompt budget. In Sessions 1--2, baseline rules prevent 2 of the 6 failure types while the remaining 4 emit execution signals. Once those signals crystallize into rules after Session~2, FIFO memory remains stuck at 4 failures because early rules fill the 420-character window, whereas utility-ranked routing selects the task-relevant rules (averaging $355$ characters/turn) and drives failures to $0$ from Session~3 onward.}
 \label{fig:evolution_curve}
 \end{figure}
 
-Figure~\ref{fig:evolution_curve} illustrates the resulting learning trajectories. In Sessions~1 and~2, Heurion 2.0's pre-seeded baseline rules immediately prevent \texttt{citation\_not\_registered} and \texttt{conflict\_user\_edited} (reducing failures from 6 to 4), while the 4 novel failure archetypes trigger runtime \texttt{ExecutionSignals}. Once the recurrence threshold $\tau = 2$ is reached at the end of Session~2, \texttt{evolveFromSignals()} automatically crystallizes 4 new procedural rules (expanding the active rule set from 5 to 9), and Layer~3 synthesizes the global \texttt{evolved.cordis.yml} overlay. From Session~3 onward, whereas the unranked FIFO baseline remains stuck at 4 failures because early rules saturate the 420-character window, Heurion 2.0's utility function $U(r \mid d, q)$ dynamically selects the exact task-relevant rules using an average of only $355$ characters ($\approx 90$ tokens) per turn, eliminating all 6 failure modes.
+Figure~\ref{fig:evolution_curve} shows that unranked FIFO memory stalls at 4 failures per session because older baseline rules fill the 420-character window, preventing newly learned rules from being injected. By contrast, utility routing selects the matching rules for each turn using an average of $355$ characters ($\approx 90$ tokens), eliminating all 6 failure modes from Session~3 onward.
 
-\subsection{Online Zero-Template Procedural Evolution and Cross-Domain Skill Training}
-A natural question is whether procedural self-evolution requires a pre-written template dictionary for known error codes, and whether the dual-track learning engine generalizes beyond manuscript prose to biostatistical modeling and presentation layout engineering. We conducted two live LLM evaluation suites using \texttt{deepseek-flash} (\texttt{temperature = 0}, reproducible via \texttt{paper/benchmarks/v2/exp3-zero-template-pilot.ts} and \texttt{paper/benchmarks/v2/cross-domain-eval.ts}):
+\subsection{Online Zero-Template Evolution and Cross-Domain Skill Training}
+Next, we tested whether procedural self-evolution still works when all hand-written rule templates are deleted, and whether the dual-track engine generalizes across clinical manuscript writing, biostatistics, and slide deck layout using live \texttt{deepseek-flash} calls (\texttt{temperature = 0}).
 
-\paragraph{1. Online Zero-Template Multi-Session Pilot (72 Turns).} We completely removed the static rule template lookup table from \texttt{ProceduralHarnessService} (\texttt{zero\_template\_verified = true}) and evaluated three arms---\texttt{off} (no procedural memory), \texttt{frozen} (the 5 static baseline rules only), and \texttt{utility} (Zero-Template Trajectory-Contrastive Synthesis + Backward Credit Assignment)---across 4 consecutive sessions $\times$ 6 uncovered verifier task archetypes (24 turns per arm, 72 turns total). Sessions~1--3 operate on training cohorts (\texttt{Cohort A--C}), whereas Session~4 evaluates zero-shot transfer on an unseen held-out multi-center cohort (\texttt{Cohort D}).
+\paragraph{1. Online Zero-Template Multi-Session Pilot (72 Turns).}
+We deleted the static rule template dictionary from the codebase (\texttt{zero\_template\_verified = true}) and evaluated three arms---\texttt{off} (no procedural memory), \texttt{frozen} (the 5 static baseline rules only), and \texttt{utility} (Zero-Template Rule Synthesis + Backward Credit Assignment)---across 4 consecutive sessions $\times$ 6 uncovered verifier task types (24 turns per arm, 72 turns total). Sessions~1--3 run on training cohorts (\texttt{Cohorts A--C}), while Session~4 tests zero-shot transfer on an unseen held-out multi-center cohort (\texttt{Cohort D}).
 
 \begin{table}[t]
 \centering
-\caption{Online Zero-Template Multi-Session Procedural Evolution with \texttt{deepseek-flash} ($72$ turns across $4$ sessions $\times$ $6$ uncovered verifier archetypes; $0$ hand-authored rule templates).}
+\caption{Online Zero-Template Multi-Session Procedural Evolution with \texttt{deepseek-flash} ($72$ turns across $4$ sessions $\times$ $6$ uncovered verifier tasks; $0$ hand-authored rule templates).}
 \label{tab:zero_template_pilot}
 \vspace{2pt}
 \resizebox{\textwidth}{!}{%
@@ -472,26 +482,27 @@ A natural question is whether procedural self-evolution requires a pre-written t
 }
 \end{table}
 
-As shown in Table~\ref{tab:zero_template_pilot}, in Session~1 \texttt{deepseek-flash} fails on 4 of the 6 novel verifier constraints (\texttt{anchor\_has\_open\_comments}, \texttt{invalid\_structure}, \texttt{text\_not\_found}, and \texttt{ambiguous\_match}, rejection rate $0.667$). Without any human-written rule templates, \texttt{synthesizeRuleFromSignal()} synthesizes 4 compact rules directly from verifier hints and intra-turn recovery diffs ($a_{\text{fail}} \to a_{\text{recover}}$), dropping the Session~2 rejection rate to $0.167$. When an implicit prompt in Session~2 triggers a routing miss and boundary violation on \texttt{anchor\_has\_open\_comments}, \texttt{applyBackwardCreditAssignment()} automatically expands the rule's \texttt{trigger\_pattern} and appends a \texttt{[Boundary Strengthening]} clause, achieving a \textbf{0.000 rejection rate (100\% first-try pass)} in Session~3. Crucially, because \texttt{extractRoutingKeywords()} strips quoted cohort titles during trigger expansion, the learned rules generalize zero-shot to the unseen held-out cohort in Session~4, reducing held-out guard rejections by \textbf{75.0\%} ($\text{RR}_{\text{heldout}} = 0.250$, elevating first-try pass rate from $33.3\%$ to $83.3\%$).
+As shown in Table~\ref{tab:zero_template_pilot}, in Session~1 \texttt{deepseek-flash} fails on 4 of the 6 novel verifier tasks (open-comment anchor preservation, non-adjacent paragraph merging, superscript plain-text matching, and ambiguous repeated-phrase replacement; rejection rate $0.667$). Without any human-written templates, the engine synthesizes 4 compact rules directly from the verifier hints and intra-turn recovery calls, cutting the Session~2 rejection rate to $0.167$. When an implicit prompt in Session~2 (``make the opening sentence of Methods more concise'') triggers a routing miss on the open-comment rule, backward credit assignment expands the rule's trigger keywords and appends a boundary-strengthening clause, reaching \textbf{0.000 rejections (100\% first-try pass)} in Session~3. Because keyword extraction strips quoted cohort titles, the learned rules transfer zero-shot to the unseen cohort in Session~4, reducing held-out guard rejections by \textbf{75.0\%} and raising the held-out first-try pass rate from $33.3\%$ to $83.3\%$.
 
-\paragraph{2. Cross-Domain Skill Training and Multi-Domain MoE Routing.} Table~\ref{tab:cross_domain} reports the evaluation of Track~A self-supervised corruption-and-reconstruction skill training and Track~B multi-domain MoE routing across three distinct scientific domains (\texttt{manuscript}, \texttt{biostats}, and \texttt{deck}) with live \texttt{deepseek-flash} calls.
+\paragraph{2. Cross-Domain Skill Training and Multi-Domain Routing.}
+Table~\ref{tab:cross_domain} reports the live \texttt{deepseek-flash} evaluation of Track~A exemplar corruption-and-reconstruction training and Track~B multi-domain routing across three distinct domains: \texttt{manuscript} (clinical prose), \texttt{biostats} (Statistical Analysis Plans), and \texttt{deck} (presentation layouts).
 
 \begin{table}[t]
 \centering
-\caption{Cross-Domain Self-Supervised Skill Training (Track~A) and Multi-Domain MoE Routing (Track~B) with \texttt{deepseek-flash}.}
+\caption{Cross-Domain Self-Supervised Skill Training (Track~A) and Multi-Domain Routing (Track~B) with \texttt{deepseek-flash}.}
 \label{tab:cross_domain}
 \vspace{2pt}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{@{}lccccc@{}}
 \toprule
-\textbf{Skill Domain Adapter} & \textbf{Track B Rules Synthesized} & \textbf{Track A Epoch 0 Alignment} & \textbf{Track A Epoch 1 Alignment ($\uparrow$)} & \textbf{Instance Value Leakage} & \textbf{PHI Privacy Leakage} \\
+\textbf{Skill Domain Adapter} & \textbf{Track B Rules Learned} & \textbf{Track A Epoch 0 Alignment} & \textbf{Track A Epoch 1 Alignment ($\uparrow$)} & \textbf{Instance Value Leakage} & \textbf{PHI Privacy Leakage} \\
 \midrule
 \texttt{manuscript} (Clinical Manuscript Prose) & $2$ & $0.150$ & $\mathbf{0.383}$ ($\mathbf{+155.3\%}$) & $\mathbf{0.0\%}$ & $\mathbf{0.0\%}$ \\
-\texttt{biostats} (Statistical Analysis Plan \& Modeling) & $2$ & $0.000$ & $\mathbf{0.612}$ ($\mathbf{+\infty / +61.2\,\text{pp}}$) & $\mathbf{0.0\%}$ & $\mathbf{0.0\%}$ \\
+\texttt{biostats} (Statistical Analysis Plan \& Modeling) & $2$ & $0.000$ & $\mathbf{0.612}$ ($\mathbf{+0.612}$) & $\mathbf{0.0\%}$ & $\mathbf{0.0\%}$ \\
 \texttt{deck} (Presentation Deck Layout Engineering) & $2$ & $0.187$ & $\mathbf{0.489}$ ($\mathbf{+161.5\%}$) & $\mathbf{0.0\%}$ & $\mathbf{0.0\%}$ \\
 \midrule
-\multicolumn{6}{@{}l}{\textbf{Backward Credit \& Multi-Domain Interleaved Session MoE Routing Metrics (Exp 3b \& Exp 4b):}} \\
-\multicolumn{3}{@{}l}{Routing Miss Recall Recovery ($r^* \notin R_{\text{active}}$, Before $\to$ After Backward Update)} & \multicolumn{3}{c}{$0.000 \to \mathbf{1.000}$ ($100.0\%$ Recovery)} \\
+\multicolumn{6}{@{}l}{\textbf{Backward Credit \& Multi-Domain Interleaved Session Routing Metrics:}} \\
+\multicolumn{3}{@{}l}{Implicit-Prompt Routing Recall (Before $\to$ After Backward Trigger Expansion)} & \multicolumn{3}{c}{$0.000 \to \mathbf{1.000}$ ($100.0\%$ Recovery)} \\
 \multicolumn{3}{@{}l}{Multi-Domain Interleaved Target-Domain Hit Rate ($4$ Alternating Turns)} & \multicolumn{3}{c}{$\mathbf{100.0\%}$ ($4/4$ Turns, Mean $461$ chars/turn)} \\
 \multicolumn{3}{@{}l}{Cross-Domain Rule Contamination / Negative Transfer Rate} & \multicolumn{3}{c}{$\mathbf{0.0\%}$ ($0/4$ Turns)} \\
 \bottomrule
@@ -499,10 +510,10 @@ As shown in Table~\ref{tab:zero_template_pilot}, in Session~1 \texttt{deepseek-f
 }
 \end{table}
 
-Across all three domains, a single self-supervised corruption-and-reconstruction epoch substantially improves structural and methodological alignment on the exact same corrupted skeleton $\tilde{x}$: $+155.3\%$ in \texttt{manuscript} ($0.150 \to 0.383$), $0.000 \to 0.612$ in \texttt{biostats} (autonomously extracting non-parametric median/IQR pairing for skewed variables, Fisher's exact test fallback for expected cells $<5$, and Schoenfeld residual + $\text{EPV} \ge 10$ checks for Cox models), and $+161.5\%$ in \texttt{deck} ($0.187 \to 0.489$, extracting Action Title conventions and two-column visual-evidence pairing), while the Instance--Skill Decoupling and PHI guards maintain \textbf{0.0\% leakage}. In interleaved multi-domain sessions (\texttt{biostats} $\to$ \texttt{deck} $\to$ \texttt{manuscript} $\to$ \texttt{biostats}), domain-gated MoE routing achieves a \textbf{100.0\% target-domain hit rate} with \textbf{0.0\% cross-domain contamination}.
+Across all three domains, a single corruption-and-reconstruction epoch substantially improves alignment when reconstructing from the exact same degraded skeleton: $+155.3\%$ in \texttt{manuscript} ($0.150 \to 0.383$), $0.000 \to 0.612$ in \texttt{biostats} (learning to check normality, report Median [IQR] with Mann--Whitney U for skewed variables, use Fisher's exact test when expected cell counts are $<5$, and verify Schoenfeld residuals with $\text{EPV} \ge 10$ in Cox models), and $+161.5\%$ in \texttt{deck} ($0.187 \to 0.489$, learning Action Title conventions and two-column chart pairing). The Instance--Skill Decoupling and PHI guards block 100\% of candidate rules containing study-specific numbers or patient data ($0.0\%$ leakage). Finally, when a user alternates across tasks (\texttt{biostats} $\to$ \texttt{deck} $\to$ \texttt{manuscript} $\to$ \texttt{biostats}), domain-gated routing hits the correct domain rules on \textbf{100.0\% of turns} with \textbf{0.0\% cross-domain contamination}.
 
 \subsection{System Verification and Capability Parity Coverage}
-Finally, Table~\ref{tab:system_verification} summarizes the verification metrics across the full Heurion 2.0 codebase. All 74 automated test suites (613 test cases covering CRDT concurrency, OOXML patch round-trips, PHI redaction, PHR read-only guards, biostatistical survival/Table~1 pipelines, 3D MONAI medical imaging integration, and cross-domain self-evolving memory) pass with 100\% REST-to-MCP parity enforcement.
+Table~\ref{tab:system_verification} summarizes the verification coverage across the Heurion 2.0 codebase. All 74 automated test suites (613 test cases covering CRDT concurrency, OOXML patch round-trips, PHI redaction, PHR read-only guards, biostatistical pipelines, 3D MONAI medical imaging, and cross-domain self-evolving memory) pass with 100\% REST-to-MCP parity enforcement.
 
 \begin{table}[t]
 \centering
@@ -532,13 +543,13 @@ Supported Biostatistical \& Clinical Engines (Table 1, KM, CONSORT, E-value, Nom
 \label{sec:related}
 
 \paragraph{Agent-Computer Interfaces (ACI) and Coding Agents.}
-SWE-agent \cite{yang2024sweagent} and OpenHands \cite{wang2024openhands} demonstrated that designing specialized Agent-Computer Interfaces (such as windowed file viewers and lint-guarded edit commands) substantially outperforms raw bash shell interaction for software engineering. Heurion 2.0 extends the ACI philosophy from plain-text source code to \textbf{collaborative rich-text and presentation CRDTs}, introducing node-level optimistic concurrency guards, per-turn selective CRDT undo, and byte-preserving OOXML patch export.
+SWE-agent \cite{yang2024sweagent} and OpenHands \cite{wang2024openhands} showed that purpose-built Agent-Computer Interfaces (such as windowed file viewers and lint-guarded edit commands) work much better than raw bash shell scripting for software engineering. Heurion 2.0 brings this ACI philosophy to \textbf{collaborative rich-text and presentation CRDTs}, adding block-level concurrency guards, per-turn selective CRDT undo, and byte-preserving OOXML patch export.
 
 \paragraph{Scientific Literature Synthesis and Fact Verification.}
-Systems such as STORM \cite{shao2024storm} and PaperQA2 \cite{skarlinski2024paperqa2} automate multi-step literature retrieval and synthesis, while FactScore \cite{min2023factscore} and ALCE \cite{gao2023alce} evaluate citation attribution in generated text. Unlike post-hoc evaluation pipelines, Heurion 2.0 enforces citation registration as a \emph{pre-write syntactic invariant} (\texttt{[@c:id]}) and closes the loop by anchoring sentence-level PubMed/PMC verification verdicts directly into the collaborative document as actionable review comments with clinician exemption support.
+Systems such as STORM \cite{shao2024storm} and PaperQA2 \cite{skarlinski2024paperqa2} automate multi-step literature search and synthesis, while FactScore \cite{min2023factscore} and ALCE \cite{gao2023alce} evaluate citation support in generated text. Rather than treating verification as an offline benchmark, Heurion 2.0 blocks unregistered citations before any write occurs (\texttt{[@c:id]}) and attaches sentence-level PubMed/PMC verification verdicts directly onto manuscript text as actionable review comments.
 
 \paragraph{Self-Evolving Agents and Skill Training.}
-Reflexion \cite{shinn2023reflexion} and MemGPT \cite{packer2023memgpt} pioneered verbal reinforcement and hierarchical memory management for LLM agents, while Voyager \cite{wang2023voyager} introduced an ever-growing skill library in Minecraft. More recently, Li et al.\ \cite{li2026skilltraining} formulated discrete text skills as learnable parameters trained via a self-supervised corruption-and-reconstruction semantic diffusion loop. Heurion 2.0 bridges self-supervised exemplar skill training with execution-driven procedural adaptation: it unifies corruption-and-reconstruction declarative skill extraction (Track~A, protected by instance--skill decoupling and PHI safety guards) with zero-template trajectory-contrastive procedural synthesis and backward credit assignment (Track~B), orchestrated across heterogeneous scientific domains via domain-gated MoE utility routing.
+Reflexion \cite{shinn2023reflexion} and MemGPT \cite{packer2023memgpt} introduced verbal reinforcement and tiered memory management for LLM agents, while Voyager \cite{wang2023voyager} built a growing skill library in Minecraft. Recently, Li et al.\ \cite{li2026skilltraining} showed that discrete text skills can be trained like model parameters through a self-supervised corruption-and-reconstruction loop. Heurion 2.0 combines self-supervised exemplar skill training (Track~A, protected by instance--skill decoupling and PHI guards) with execution-driven, zero-template procedural rule synthesis and backward credit assignment (Track~B), routing both across scientific domains without negative transfer.
 
 % ============================================================================
 % 9. CONCLUSION
@@ -546,12 +557,12 @@ Reflexion \cite{shinn2023reflexion} and MemGPT \cite{packer2023memgpt} pioneered
 \section{Conclusion}
 \label{sec:conclusion}
 
-We have presented \textbf{Heurion 2.0}, a contract-guarded, dual-surface collaborative architecture with self-evolving memory designed for high-stakes clinical research and scientific authoring. By replacing ad-hoc file scripting and post-hoc auditing with a unified Yjs CRDT core, deterministic pre-write guards, multi-agent sentence-level literature verification, formally verified Human-AI Permission Symmetry, and a three-layer procedural self-evolution loop, Heurion 2.0 provides a rigorous blueprint for deploying trustworthy autonomous agents in domains where data integrity, citation veracity, and patient privacy are non-negotiable.
+We have presented \textbf{Heurion 2.0}, a collaborative clinical research and scientific authoring platform built on a contract-guarded dual-surface CRDT engine and a cross-domain self-evolving memory system. By replacing ad-hoc file scripting and post-hoc auditing with a shared Yjs CRDT core, deterministic pre-write guards, multi-agent PubMed/PMC claim verification, verified Human-AI Permission Symmetry, and a dual-track self-evolution loop that learns from both domain exemplars and runtime verifier feedback without hand-crafted rule templates, Heurion 2.0 provides a practical foundation for trustworthy autonomous agents in clinical and scientific workflows.
 
 % ============================================================================
 % REFERENCES (Embedded .bbl for 100% Standalone arXiv AutoTeX Compilation)
 % ============================================================================
-\begin{thebibliography}{12}
+\begin{thebibliography}{13}
 
 \bibitem{schulz2010consort}
 Kenneth~F. Schulz, Douglas~G. Altman, and David Moher.
