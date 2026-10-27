@@ -29,9 +29,18 @@ export function revertByNodes(
       else if ($pos.depth > 0) tr.delete($pos.before(), $pos.after())
       else skipped.push(id)
     } else if (now && before && !now.node.eq(before.node)) {
-      // 回合改过的块：换回原样（只换叶子级块；容器类的变化由其子块的增删体现）
-      if (now.node.isTextblock || ['table', 'figure', 'opaque'].includes(now.node.type.name)) {
+      // 回合改过的块：换回原样（只换叶子级块；容器类的变化由其子块的增删体现，幻灯片还原自身属性与备注）
+      if (now.node.isTextblock || ['table', 'figure', 'opaque', 'shape'].includes(now.node.type.name)) {
         tr.replaceWith(now.pos, now.pos + now.node.nodeSize, before.node)
+      } else if (now.node.type.name === 'slide') {
+        const beforeNotes = before.node.lastChild?.type.name === 'notes' ? before.node.lastChild : null
+        const nowNotes = now.node.lastChild?.type.name === 'notes' ? now.node.lastChild : null
+        const shapes: PMNode[] = []
+        now.node.forEach(c => { if (c.type.name === 'shape') shapes.push(c) })
+        if (JSON.stringify(now.node.attrs) !== JSON.stringify(before.node.attrs) || !(beforeNotes ? nowNotes?.eq(beforeNotes) : !nowNotes)) {
+          const updatedSlide = now.node.type.create(before.node.attrs, beforeNotes ? [...shapes, beforeNotes] : shapes, before.node.marks)
+          tr.replaceWith(now.pos, now.pos + now.node.nodeSize, updatedSlide)
+        }
       }
     }
   }

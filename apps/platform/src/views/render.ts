@@ -29,6 +29,14 @@ function wrap(html: string, marks: readonly Mark[]): string {
       case 'code': out = `<code>${out}</code>`; break
       case 'link': out = `<a href="${esc(sanitizeHref(m.attrs.href))}" target="_blank" rel="noopener">${out}</a>`; break
       case 'comment': out = `<mark class="comment" data-thread="${esc(String(m.attrs.thread))}">${out}</mark>`; break
+      case 'text_style': {
+        const styles: string[] = []
+        if (m.attrs.font_family) styles.push(`font-family:${esc(String(m.attrs.font_family))}`)
+        if (m.attrs.font_size) styles.push(`font-size:${esc(String(m.attrs.font_size))}`)
+        if (m.attrs.color) styles.push(`color:${esc(String(m.attrs.color))}`)
+        if (styles.length) out = `<span style="${styles.join(';')}">${out}</span>`
+        break
+      }
     }
   }
   return out
@@ -42,6 +50,14 @@ function inline(node: PMNode, ctx: RenderContext): string {
     else if (child.type.name === 'citation') {
       const n = ctx.numbers.get(child.attrs.cite_id as string)
       out += wrap(`<sup class="cite">[${n ?? '?'}]</sup>`, child.marks)
+    } else if (child.type.name === 'word_inline') {
+      const k = child.attrs.kind as string | undefined
+      const txt = String(child.attrs.text ?? '')
+      if (k === 'footnote' || k === 'endnote') {
+        out += wrap(`<sup class="word-note" title="${esc(txt)}">[注]</sup>`, child.marks)
+      } else if (txt) {
+        out += wrap(esc(k === 'object' ? `[${txt}]` : txt), child.marks)
+      }
     }
   })
   return out
@@ -82,6 +98,17 @@ function block(node: PMNode, ctx: RenderContext): string {
     }
     case 'opaque':
       return `<div${id} class="opaque">不可编辑内容 · ${esc(String(node.attrs.kind))}：${esc(String(node.attrs.description))}</div>`
+    case 'slide':
+      return `<section${id} class="slide">${children()}</section>`
+    case 'shape': {
+      if (node.attrs.kind === 'image') return `<figure${id}><img src="${esc(ctx.assetUrl(String(node.attrs.asset_id)))}" alt="${esc(String(node.attrs.description ?? ''))}"></figure>`
+      if (node.attrs.kind === 'chart' || node.attrs.kind === 'opaque' || node.attrs.kind === 'group') {
+        return node.attrs.description ? `<div${id} class="shape">${esc(String(node.attrs.description))}</div>` : ''
+      }
+      return `<div${id} class="shape">${children()}</div>`
+    }
+    case 'notes':
+      return `<aside class="notes">${children()}</aside>`
     default:
       return ''
   }
@@ -107,12 +134,27 @@ export function renderHtml(doc: PMNode, citations: CitationRow[], assetUrl: (id:
   return body
 }
 
-/** markdown 导出：引用替换成 [n]，末尾追加参考文献表（与 docx 同一套合并规则）。 */
+/** markdown 导出：引用替换成 [n]，Word 行内结构替换为可读文本，末尾追加参考文献表（与 docx 同一套合并规则）。 */
 export function exportMarkdown(doc: PMNode, citations: CitationRow[]): string {
   const { plan, numbers, list } = numbering(doc, citations)
+  const wordInlines = new Map<string, { kind: string; text: string }>()
+  doc.descendants(n => {
+    if (n.type.name === 'word_inline' && n.attrs.key) {
+      wordInlines.set(String(n.attrs.key), { kind: String(n.attrs.kind ?? ''), text: String(n.attrs.text ?? '') })
+    }
+    return true
+  })
   const blocks: PMNode[] = []
   doc.forEach((n, _o, i) => { if (i < plan.bodyEnd) blocks.push(n) })
-  let md = serializeBlocks(blocks).replace(/\[@c:([a-z0-9]+)\]/g, (_m, id: string) => `[${numbers.get(id) ?? '?'}]`)
+  let md = serializeBlocks(blocks)
+    .replace(/\[@c:([a-z0-9]+)\]/g, (_m, id: string) => `[${numbers.get(id) ?? '?'}]`)
+    .replace(/\[@w:([a-z0-9]+)\]/g, (_m, key: string) => {
+      const w = wordInlines.get(key)
+      if (!w) return ''
+      if (w.kind === 'field') return w.text
+      if (w.kind === 'object') return w.text ? `[${w.text}]` : ''
+      return w.text ? `[注：${w.text}]` : ''
+    })
   if (list.length > 0) {
     const heading = plan.userCount > 0 || plan.hasHeading ? '' : '## 参考文献\n\n'
     md += `\n\n${heading}${list.map(({ n, c }) => `[${n}] ${c.formatted}`).join('\n\n')}`

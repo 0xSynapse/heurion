@@ -8,6 +8,7 @@ import type { Documents } from './runtime.ts'
  * （修补式导出依赖它们）。评论、版本历史、对话不复制。
  */
 export function duplicateDoc(docs: Documents, row: DocRow, owner: string): DocRow {
+  docs.flush(row.id)
   const store = docs.store
   const citations = store.listCitations(row.id)
   const ids = new Map(citations.map(c => [c.id, 'c' + randomUUID().replace(/-/g, '').slice(0, 7)]))
@@ -18,11 +19,26 @@ export function duplicateDoc(docs: Documents, row: DocRow, owner: string): DocRo
     n.forEach(c => children.push(remap(c)))
     return n.type.create(n.attrs, children, n.marks)
   }
-  const copy = docs.create({ owner, title: `${row.title}（副本）`, kind: row.kind, content: remap(docs.get(row.id)), source: 'create' })
+  const current = docs.get(row.id)
+  const first = store.listVersions(row.id).at(-1)
+  const base = first?.source === 'import' ? docs.versionDoc(row.id, first.seq) : null
+  const copy = docs.create({
+    owner,
+    title: `${row.title}（副本）`,
+    kind: row.kind,
+    content: remap(base ?? current),
+    source: base ? 'import' : 'create',
+  })
+  if (base && !base.eq(current)) {
+    docs.commit(copy.id, remap(current), { actor: 'user', turnId: null, ops: [] })
+  }
   for (const c of citations) store.insertCitation({ ...c, id: ids.get(c.id)!, doc_id: copy.id })
   if (row.project_id) store.setDocProject(copy.id, row.project_id)
   const pkg = store.getPackage(row.id)
-  if (pkg) store.putPackage(copy.id, row.kind === 'deck' ? 'pptx' : 'docx', pkg)
+  if (pkg) {
+    const isZip = pkg.length >= 4 && pkg[0] === 0x50 && pkg[1] === 0x4B
+    store.putPackage(copy.id, !isZip ? 'pdf' : row.kind === 'deck' ? 'pptx' : 'docx', pkg)
+  }
   store.copyNodeSrc(row.id, copy.id)
   return store.getDoc(copy.id)!
 }

@@ -564,3 +564,212 @@ describe('兼容旧数据', () => {
   })
 })
 
+describe('全格式导入 / 编辑 / 导出一致性回归', () => {
+  it('PDF 导入为 doc 后修改并调用 docxFor 导出：不因 PDF 包字节非 ZIP 而崩溃，且改动完整导出', async () => {
+    const { docxFor } = await import('../src/convert/exports.ts')
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const ops = new OpService(docs)
+    const row = docs.create({
+      owner: 'u',
+      title: 'PDF 论文',
+      content: schema.node('doc', null, parseBlocks('# 临床研究\n\n原始结论文本。')),
+      source: 'import',
+    })
+    // 模拟 PDF 导入：doc_packages 里存的是 %PDF-1.4 原始字节
+    store.putPackage(row.id, 'pdf', strToU8('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF'))
+    const paraId = docs.get(row.id).child(1).attrs.id as string
+    ops.edit({
+      doc_id: row.id,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: paraId, find: '原始结论文本', replace: '修改后的临床结论' }],
+    }, { actor: 'user', turnId: null })
+
+    const out = docxFor(docs, row.id)
+    const body = bodyOf(out.bytes)
+    expect(body).toContain('修改后的临床结论')
+    expect(body).not.toContain('原始结论文本')
+  })
+
+  it('duplicateDoc 复制导入且已修改的 docx：副本保留导入基线与原表样式，导出不丢格式', async () => {
+    const { duplicateDoc } = await import('../src/model/duplicate.ts')
+    const { docxFor } = await import('../src/convert/exports.ts')
+    const tbl = `<w:tbl><w:tblPr><w:tblStyle w:val="CustomGrid"/></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:shd w:val="clear" w:fill="E8F0FE"/></w:tcPr><w:p><w:r><w:t>原表内容</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`
+    const t = importInto(docx(tbl))
+    const cellParaId = t.docs.get(t.docId).child(0).child(0).child(0).child(0).attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: cellParaId, find: '原表内容', replace: '已修改内容' }],
+    }, { actor: 'user', turnId: null })
+
+    const origRow = t.store.getDoc(t.docId)!
+    const copyRow = duplicateDoc(t.docs, origRow, 'u')
+    const out = docxFor(t.docs, copyRow.id)
+    const body = bodyOf(out.bytes)
+    expect(body).toContain('已修改内容')
+    expect(body).toContain('CustomGrid')
+    expect(body).toContain('w:fill="E8F0FE"')
+  })
+
+  it('Word 原生公式 <m:oMath> 导入、打补丁修改前后文字、导出：公式不丢失且自动声明 xmlns:m', () => {
+    const mathXml = '<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>E=mc2</m:t></m:r></m:oMath>'
+    const paraXml = `<w:p><w:r><w:t>能量公式为</w:t></w:r>${mathXml}<w:r><w:t>，其中 c 为光速。</w:t></w:r></w:p>`
+    const t = importInto(docx(paraXml))
+    const para = t.docs.get(t.docId).child(0)
+    expect(para.textContent).toContain('能量公式为')
+    const id = para.attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id, find: '能量公式为', replace: '爱因斯坦质能方程为' }],
+    }, { actor: 'user', turnId: null })
+
+    const outBytes = t.exportNow().bytes
+    const docXml = strFromU8(unzipSync(outBytes)['word/document.xml']!)
+    expect(docXml).toContain('xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"')
+    expect(docXml).toContain('爱因斯坦质能方程为')
+    expect(docXml).toContain('<m:t>E=mc2</m:t>')
+  })
+
+  it('导入的 docx 缺少 Quote / Code 样式时，设置块样式或插入代码块后自动补齐到 styles.xml', () => {
+    const t = importInto(docx(p('引用内容')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [
+        { op: 'set_block_style', id, style: 'Quote' },
+        { op: 'insert_after', anchor_id: id, markdown: '```\nconst x = 1\n```' },
+      ],
+    }, { actor: 'user', turnId: null })
+
+    const files = unzipSync(t.exportNow().bytes)
+    const docXml = strFromU8(files['word/document.xml']!)
+    const stylesXml = strFromU8(files['word/styles.xml']!)
+    expect(docXml).toContain('<w:pStyle w:val="Quote"/>')
+    expect(docXml).toContain('<w:pStyle w:val="Code"/>')
+    expect(stylesXml).toContain('w:styleId="Quote"')
+    expect(stylesXml).toContain('w:styleId="Code"')
+  })
+
+  it('deckSchema 支持 suggest 修订模式与 revertByNodes 形状/页面回退，且 pptx 导出同步修改后的表格 tcPr 与 text_style', async () => {
+    const { deckSchema } = await import('../src/model/deck-schema.ts')
+    const { pptxTemplate } = await import('../src/convert/pptx-template.ts')
+    const { newTemplateDeck } = await import('../src/ops/deck.ts')
+    const { pptxFor } = await import('../src/convert/exports.ts')
+    const { revertByNodes } = await import('../src/ops/revert.ts')
+
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const ops = new OpService(docs)
+    const baseBytes = pptxTemplate('clinical')
+    const row = docs.create({ owner: 'u', title: '汇报', kind: 'deck', content: newTemplateDeck('汇报', 'clinical') })
+    store.putPackage(row.id, 'pptx', baseBytes)
+
+    const slideId = docs.get(row.id).firstChild!.attrs.id as string
+    // 1. suggest 模式下向幻灯片新增形状不再抛 Unsupported attribute name: suggest_author
+    ops.edit({
+      doc_id: row.id,
+      base_rev: 0,
+      mode: 'suggest',
+      ops: [{ op: 'add_shape', slide_id: slideId, markdown: '建议新增卡片', x: 100, y: 100, w: 200, h: 60 }],
+    }, { actor: 'user', turnId: null })
+    const withSug = docs.get(row.id)
+    let sugShape: any = null
+    withSug.descendants(n => { if (n.type.name === 'shape' && n.attrs.suggest === 'insert') sugShape = n })
+    expect(sugShape).not.toBeNull()
+    expect(sugShape.attrs.suggest_author).toBe('用户')
+
+    // 2. apply 模式添加表格并修改样式，验证 revertByNodes 能回退形状改动
+    const beforeTable = docs.get(row.id)
+    const addRes = ops.edit({
+      doc_id: row.id,
+      base_rev: docs.rev(row.id),
+      mode: 'apply',
+      ops: [{ op: 'add_table', slide_id: slideId, rows: [['指标', '数值'], ['ORR', '68%']], x: 80, y: 180, w: 400 }],
+    }, { actor: 'ai', turnId: 't_tbl' })
+    const tableShapeId = addRes.results[0]!.ids[0]!
+    const reverted = revertByNodes(docs.get(row.id), beforeTable, [{ node_id: tableShapeId, kind: 'added' }], new Set())
+    let foundAfterRevert = false
+    reverted.doc.descendants(n => { if (n.attrs.id === tableShapeId) foundAfterRevert = true })
+    expect(foundAfterRevert).toBe(false)
+
+    // 3. 带 text_style 标记的形状再调 set_text_style：导出时使用最新颜色与字号，且 <a:solidFill> 在 <a:latin> 之前
+    const shapeNode = docs.get(row.id).firstChild!.firstChild!
+    const tsMark = deckSchema.marks.text_style!.create({ font_family: 'SimHei', font_size: '14pt', color: '#112233' })
+    const rprMark = deckSchema.marks.rpr!.create({ xml: '<a:rPr lang="zh-CN" sz="1400"><a:latin typeface="Arial"/></a:rPr>' })
+    const customShape = deckSchema.node('shape', { id: 'sh_ts_test', kind: 'text', x: 100000, y: 100000, w: 2000000, h: 500000 }, [
+      deckSchema.node('paragraph', null, [deckSchema.text('测试样式优先级', [rprMark, tsMark])]),
+    ])
+    const slide0 = docs.get(row.id).firstChild!
+    const nextSlide0 = slide0.type.create(slide0.attrs, [...Array.from({ length: slide0.childCount }, (_, i) => slide0.child(i)), customShape])
+    docs.commit(row.id, docs.get(row.id).type.create(null, [nextSlide0]), { actor: 'user', turnId: null, ops: [] })
+    ops.edit({
+      doc_id: row.id,
+      base_rev: docs.rev(row.id),
+      mode: 'apply',
+      ops: [{ op: 'set_text_style', shape_id: 'sh_ts_test', color: 'FF0000', size: 28 }],
+    }, { actor: 'user', turnId: null })
+
+    const exported = pptxFor(docs, row.id)
+    const slideXml = strFromU8(unzipSync(exported.bytes)['ppt/slides/slide1.xml']!)
+    expect(slideXml).toContain('测试样式优先级')
+    expect(slideXml).toContain('sz="2800"')
+    expect(slideXml).toContain('<a:srgbClr val="FF0000"/>')
+    expect(slideXml).not.toContain('112233')
+    const rprMatch = /<a:rPr[^>]*>([\s\S]*?)<\/a:rPr><a:t>测试样式优先级/.exec(slideXml)
+    expect(rprMatch).not.toBeNull()
+    expect(rprMatch![1]!.indexOf('<a:solidFill>')).toBeLessThan(rprMatch![1]!.indexOf('<a:latin'))
+    void shapeNode
+  })
+
+  it('exportMarkdown 与 renderHtml 正确处理 word_inline 与 text_style，不泄露 [@w:key] 内部标记', async () => {
+    const { exportMarkdown, renderHtml } = await import('../src/views/render.ts')
+    const mathInline = schema.node('word_inline', { key: 'w1', kind: 'object', text: '公式：a+b=c', xml: '<m:oMath/>' })
+    const noteInline = schema.node('word_inline', { key: 'w2', kind: 'footnote', text: '第一作者脚注', xml: '<w:r/>' })
+    const styledText = schema.text('重点结论', [schema.marks.text_style!.create({ color: '#DC2626', font_size: '16pt' })])
+    const doc = schema.node('doc', null, [
+      schema.node('paragraph', { id: 'p1' }, [schema.text('根据'), mathInline, schema.text('可得'), styledText, noteInline]),
+    ])
+
+    const md = exportMarkdown(doc, [])
+    expect(md).not.toContain('[@w:')
+    expect(md).toContain('[公式：a+b=c]')
+    expect(md).toContain('[注：第一作者脚注]')
+
+    const html = renderHtml(doc, [], id => `/assets/${id}`)
+    expect(html).toContain('[公式：a+b=c]')
+    expect(html).toContain('title="第一作者脚注"')
+    expect(html).toContain('color:#DC2626')
+  })
+
+  it('buildPdfDeck 将 108 DPI（1440×810）页面坐标与字号缩放到 960×540pt 幻灯片画布内，不溢出边界', async () => {
+    const { buildPdfDeck } = await import('../src/convert/pdf-import.ts')
+    const { emu } = await import('../src/model/deck-schema.ts')
+    const { doc } = buildPdfDeck([
+      {
+        number: 1,
+        width: 1440,
+        height: 810,
+        images: [],
+        lines: [
+          { text: 'SLIDE TITLE ON 108DPI', top: 75, left: 120, width: 600, height: 36, size: 36, bold: true },
+          { text: 'Bottom right card text', top: 720, left: 900, width: 450, height: 24, size: 18, bold: false },
+        ],
+      },
+    ], { baseName: 'deck' })
+
+    const slide = doc.firstChild!
+    slide.forEach(sh => {
+      if (sh.type.name !== 'shape') return
+      expect((sh.attrs.x as number) + (sh.attrs.w as number)).toBeLessThanOrEqual(emu(960))
+      expect((sh.attrs.y as number) + (sh.attrs.h as number)).toBeLessThanOrEqual(emu(540))
+    })
+  })
+})
+

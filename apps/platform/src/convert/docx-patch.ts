@@ -99,8 +99,8 @@ function parse(raw: string, drawings: boolean): { tree: RNode[]; kinds: string[]
       switch (tag) {
         case 'w:r': {
           if (/<w:(footnoteReference|endnoteReference)\b/.test(el)) { out.push({ k: 'atom', xml: el, tok: kinds.push('note') - 1 }); break }
-          // 文本框、图表、形状、嵌入对象：导入时整个 run 是一个对象原子（与 docx-import 的 isObjectRun 一致）
-          if (/<w:object\b|<mc:AlternateContent\b/.test(el) || (/<w:(drawing|pict)\b/.test(el) && !/<a:blip\b/.test(el))) { out.push({ k: 'atom', xml: el, tok: kinds.push('object') - 1 }); break }
+          // 文本框、图表、形状、嵌入对象、公式：导入时整个 run 是一个对象原子（与 docx-import 的 isObjectRun 一致）
+          if (/<w:object\b|<mc:AlternateContent\b|<m:oMath(?:Para)?\b/.test(el) || (/<w:(drawing|pict)\b/.test(el) && !/<a:blip\b/.test(el))) { out.push({ k: 'atom', xml: el, tok: kinds.push('object') - 1 }); break }
           if (!drawings && /<w:(drawing|pict)\b/.test(el)) { bad = true; break }
           const kids = elementChildrenRaw(el)
           const rPr = kids.find(k => tagOf(k) === 'w:rPr') ?? ''
@@ -135,8 +135,8 @@ function parse(raw: string, drawings: boolean): { tree: RNode[]; kinds: string[]
           break
         }
         default:
-          // 段落层级的兼容内容（文本框等）：导入时是对象原子
-          if (tag === 'mc:AlternateContent') { out.push({ k: 'atom', xml: el, tok: kinds.push('object') - 1 }); break }
+          // 段落层级的兼容内容（文本框等）与原生公式（m:oMath / m:oMathPara）：导入时是对象原子
+          if (tag === 'mc:AlternateContent' || tag === 'm:oMath' || tag === 'm:oMathPara') { out.push({ k: 'atom', xml: el, tok: kinds.push('object') - 1 }); break }
           // 段落属性、书签、批注范围、校对标记、编辑权限、公式、删除的修订……：不是文字，原样保留
           out.push({ k: 'keep', xml: el })
       }

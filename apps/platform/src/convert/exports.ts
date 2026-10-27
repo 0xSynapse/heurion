@@ -16,7 +16,10 @@ function baselineOf(docs: Documents, docId: string) {
 export function docxFor(docs: Documents, docId: string) {
   docs.flush(docId)
   const store = docs.store
-  const pkg = store.getPackage(docId)
+  const stored = store.getPackage(docId)
+  // PDF 导入的文档在 doc_packages 中存的是原始 PDF 字节（%PDF-...），不能作为 docx ZIP 底座解压
+  const isZip = !!(stored && stored.length >= 4 && stored[0] === 0x50 && stored[1] === 0x4B)
+  const pkg = isZip ? stored : null
   const current = docs.get(docId)
   const pending = pendingGroups(current).length
   // 待采纳修订交给导出器：段落的修订写成 Word 修订，表格、列表、图的修订按未采纳导出

@@ -371,6 +371,34 @@ export function serializeBlock(node: PMNode, opts: SerializeOptions, indent: str
     }
     case 'opaque':
       return `${indent}${pre}[不可编辑·${node.attrs.kind}：${node.attrs.description}]`
+    case 'slide': {
+      const parts: string[] = []
+      node.forEach(c => {
+        const s = serializeBlock(c, opts, indent)
+        if (s.trim()) parts.push(s)
+      })
+      return parts.join('\n\n')
+    }
+    case 'shape': {
+      if (node.attrs.kind === 'image') return `${indent}${pre}![${node.attrs.description ?? ''}](asset:${node.attrs.asset_id})`
+      if (node.attrs.kind === 'chart' || node.attrs.kind === 'opaque' || node.attrs.kind === 'group') {
+        return node.attrs.description ? `${indent}${pre}[${node.attrs.description}]` : ''
+      }
+      const parts: string[] = []
+      node.forEach(c => {
+        const s = serializeBlock(c, opts, indent)
+        if (s.trim()) parts.push(s)
+      })
+      return parts.join('\n\n')
+    }
+    case 'notes': {
+      const parts: string[] = []
+      node.forEach(c => {
+        const s = serializeBlock(c, opts, `${indent}> `)
+        if (s.trim()) parts.push(s)
+      })
+      return parts.join('\n')
+    }
     default:
       return indent + pre + node.textContent
   }

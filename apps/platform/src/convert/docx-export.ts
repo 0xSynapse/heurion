@@ -33,7 +33,7 @@ export interface ExportInput {
 
 export interface ExportResult { bytes: Uint8Array; warnings: string[] }
 
-const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"'
+const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const SECT = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>'
 
@@ -89,6 +89,7 @@ ${[1, 2, 3, 4, 5, 6].map(heading).join('')}
 <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720"/></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720"/></w:pPr><w:rPr><w:i/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="480"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Caption"><w:name w:val="caption"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:sz w:val="20"/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="CommentReference"><w:name w:val="annotation reference"/><w:rPr><w:sz w:val="16"/></w:rPr></w:style>
@@ -203,9 +204,18 @@ function exportable(doc: PMNode): PMNode {
 }
 
 export function exportDocx(input: ExportInput): ExportResult {
-  input = { ...input, doc: exportable(input.doc) }
+  let baseFiles: Record<string, Uint8Array> | null = null
+  if (input.pkg) {
+    try {
+      const unzipped = safeUnzipDocx(input.pkg)
+      if (unzipped['word/document.xml']) baseFiles = unzipped
+    } catch {
+      baseFiles = null
+    }
+  }
+  input = { ...input, doc: exportable(input.doc), baseline: baseFiles ? input.baseline : null }
   const warnings: string[] = []
-  const pkg = new Package(input.pkg ? safeUnzipDocx(input.pkg) : template())
+  const pkg = new Package(baseFiles ?? template())
   const originalXml = pkg.text('word/document.xml')
   const styles = styleIndex(pkg.text('word/styles.xml'))
   const baseline = new Map<string, PMNode>()
@@ -315,6 +325,7 @@ export function exportDocx(input: ExportInput): ExportResult {
 
   const headingStyle = (level: number) => styles.get(`heading ${level}`) ?? styles.get(`标题 ${level}`) ?? `Heading${level}`
   const missingHeading = new Set<number>()
+  const missingBuiltins = new Set<'Quote' | 'Code'>()
   let nextDocPr = 90_001
 
   /** base：沿用的原文 run 属性（rPr 的子元素原文，不含粗斜体等由 mark 表达的属性），与 mark 合并后按 schema 顺序输出。 */
@@ -415,8 +426,12 @@ export function exportDocx(input: ExportInput): ExportResult {
       if (!styles.has(id.toLowerCase())) missingHeading.add(level)
       p += `<w:pStyle w:val="${esc(id)}"/>`
     } else if (node.attrs.style) {
-      const id = styles.get(String(node.attrs.style).toLowerCase())
-      if (id) p += `<w:pStyle w:val="${esc(id)}"/>`
+      const s = String(node.attrs.style)
+      const id = styles.get(s.toLowerCase()) ?? (s === 'Quote' || s === 'Code' ? s : undefined)
+      if (id) {
+        if (!styles.has(id.toLowerCase()) && (id === 'Quote' || id === 'Code')) missingBuiltins.add(id)
+        p += `<w:pStyle w:val="${esc(id)}"/>`
+      }
     }
     p += extra
     const align = node.attrs.align as string | null
@@ -1067,7 +1082,7 @@ export function exportDocx(input: ExportInput): ExportResult {
     const last = bodyChildrenRaw(originalXml).at(-1)
     sect = last && /^<w:sectPr\b/.test(last) ? last : ''
     // 确保生成内容用到的命名空间都已声明
-    for (const [prefix, uri] of [['r', REL], ['wp', 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'], ['a', 'http://schemas.openxmlformats.org/drawingml/2006/main'], ['pic', 'http://schemas.openxmlformats.org/drawingml/2006/picture']] as const) {
+    for (const [prefix, uri] of [['r', REL], ['wp', 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'], ['a', 'http://schemas.openxmlformats.org/drawingml/2006/main'], ['pic', 'http://schemas.openxmlformats.org/drawingml/2006/picture'], ['m', 'http://schemas.openxmlformats.org/officeDocument/2006/math']] as const) {
       if (!new RegExp(`xmlns:${prefix}=`).test(head)) head = head.replace(/<w:document\b/, `<w:document xmlns:${prefix}="${uri}"`)
     }
   }
@@ -1083,12 +1098,15 @@ export function exportDocx(input: ExportInput): ExportResult {
   }
   let documentXml = `${head}${body}${sect}</w:body></w:document>`
 
-  // 补齐缺失的标题样式
-  if (missingHeading.size > 0) {
+  // 补齐缺失的标题样式与内置段落样式（Quote / Code）
+  if (missingHeading.size > 0 || missingBuiltins.size > 0) {
     const stylesXml = pkg.text('word/styles.xml')
     if (stylesXml) {
-      const add = [...missingHeading].map(n => `<w:style w:type="paragraph" w:styleId="Heading${n}"><w:name w:val="heading ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:outlineLvl w:val="${n - 1}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${[36, 32, 28, 26, 24, 24][n - 1]}"/></w:rPr></w:style>`).join('')
-      pkg.put('word/styles.xml', stylesXml.replace('</w:styles>', `${add}</w:styles>`))
+      const addHeadings = [...missingHeading].map(n => `<w:style w:type="paragraph" w:styleId="Heading${n}"><w:name w:val="heading ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:outlineLvl w:val="${n - 1}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${[36, 32, 28, 26, 24, 24][n - 1]}"/></w:rPr></w:style>`).join('')
+      const addBuiltins = [...missingBuiltins].map(s => s === 'Quote'
+        ? '<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720"/></w:pPr><w:rPr><w:i/></w:rPr></w:style>'
+        : '<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="480"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr></w:style>').join('')
+      pkg.put('word/styles.xml', stylesXml.replace('</w:styles>', `${addHeadings}${addBuiltins}</w:styles>`))
     }
   }
 

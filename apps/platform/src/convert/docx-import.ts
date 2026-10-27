@@ -355,10 +355,10 @@ export function importDocx(bytes: Uint8Array): DocxImport {
    */
   interface InlineFlags { unmodelled: string | null; fields: boolean }
 
-  /** 这个 run 是否含模型表达不了的对象：兼容内容、嵌入对象，或不是图片的图形（图表、文本框、形状）。 */
+  /** 这个 run 是否含模型表达不了的对象：兼容内容、公式、嵌入对象，或不是图片的图形（图表、文本框、形状）。 */
   const isObjectRun = (r: XElement): boolean => children(r).some(c => {
     const name = local(c)
-    if (c.namespaceURI !== W) return name === 'AlternateContent'
+    if (c.namespaceURI !== W) return name === 'AlternateContent' || name === 'oMath' || name === 'oMathPara'
     if (name === 'object') return true
     if (name === 'drawing' || name === 'pict') return !isPicture(c)
     return false
@@ -370,8 +370,13 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     const target = embed ? rels.get(embed) : undefined
     return !!target && !!files[target.startsWith('/') ? target.slice(1) : `word/${target}`]
   }
-  /** 对象在读视图里的说明：文本框带其中的文字，嵌入对象带程序名。 */
+  /** 对象在读视图里的说明：文本框带其中的文字，公式带可读文本，嵌入对象带程序名。 */
   const objectLabel = (el: XElement): string => {
+    const name = local(el)
+    if (name === 'oMath' || name === 'oMathPara' || el.getElementsByTagNameNS('http://schemas.openxmlformats.org/officeDocument/2006/math', 'oMath').length > 0) {
+      const mText = (el.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)
+      return mText ? `公式：${mText}` : '公式'
+    }
     const box = el.getElementsByTagNameNS(W, 'txbxContent')[0]
     if (box) return `文本框：${(box.textContent ?? '').trim().slice(0, 80)}`
     if (el.getElementsByTagNameNS('http://schemas.openxmlformats.org/drawingml/2006/chart', 'chart').length) return '图表'
@@ -393,8 +398,8 @@ export function importDocx(bytes: Uint8Array): DocxImport {
         const c = kids[i]!
         const name = local(c)
         if (c.namespaceURI !== W) {
-          // 段落层级的兼容内容（文本框等）：整体作为一个对象原子，原样写回
-          if (name === 'AlternateContent') out.push(wordInline('object', objectLabel(c), inlineXml(c), marks))
+          // 段落层级的兼容内容（文本框等）与原生公式（m:oMath / m:oMathPara）：整体作为一个对象原子，原样写回
+          if (name === 'AlternateContent' || name === 'oMath' || name === 'oMathPara') out.push(wordInline('object', objectLabel(c), inlineXml(c), marks))
           continue
         }
         if (commentRange(c)) continue

@@ -902,6 +902,18 @@ function styledParagraph(p: PMNode, style: TextStyle): PMNode {
       if (style.size) xml = rprWithSize(xml, style.size)
       if (style.font_family) xml = rprWithFont(xml, style.font_family)
       marks = deckSchema.marks.rpr!.create({ xml }).addToSet(marks.filter(m => m.type.name !== 'rpr'))
+      const ts = marks.find(m => m.type.name === 'text_style')
+      if (ts) {
+        const nextTs = {
+          font_family: style.font_family !== undefined ? null : ts.attrs.font_family,
+          font_size: style.size !== undefined ? null : ts.attrs.font_size,
+          color: style.color !== undefined ? null : ts.attrs.color,
+        }
+        marks = marks.filter(m => m.type.name !== 'text_style')
+        if (nextTs.font_family || nextTs.font_size || nextTs.color) {
+          marks = deckSchema.marks.text_style!.create(nextTs).addToSet(marks)
+        }
+      }
     }
     for (const [key, type] of [['bold', deckSchema.marks.bold!], ['italic', deckSchema.marks.italic!]] as const) {
       if (style[key] === true) marks = type.create().addToSet(marks)

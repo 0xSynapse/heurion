@@ -10,7 +10,7 @@ import { sanitizeHref } from './schema.ts'
  * 几何单位是 EMU（1pt = 12700 EMU）；xfrm_inherited 表示位置来自版式占位符（文件里没写）。
  */
 
-const suggestAttrs = { suggest: { default: null }, suggest_group: { default: null }, suggest_of: { default: null } }
+const suggestAttrs = { suggest: { default: null }, suggest_group: { default: null }, suggest_of: { default: null }, suggest_author: { default: null } }
 
 export const SHAPE_KINDS = ['text', 'shape', 'image', 'table', 'chart', 'group', 'line', 'opaque'] as const
 export type ShapeKind = typeof SHAPE_KINDS[number]
