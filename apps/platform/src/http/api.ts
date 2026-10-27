@@ -1753,7 +1753,6 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json({ rev: docs.rev(row.id), reverted_turn_id: turnId, changes: result?.event?.changes.length ?? 0, skipped: result?.skipped ?? [], version })
   }
   app.post('/api/docs/:id/turns/:turnId/revert', revertTurnRoute)
-  app.post('/api/docs/:id/turns/revert', revertTurnRoute)
 
   /** 用户显式保存一个版本。 */
   app.post('/api/docs/:id/save', c => {
