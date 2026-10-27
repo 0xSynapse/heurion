@@ -280,7 +280,7 @@ export function registerResearchRoutes(
       const exportFormat = String(body.export_format || c.req.query('format') || 'json')
 
       const archiveFigureAsset = (svgStr: string, figName: string, codeStr?: string, codePathStr?: string) => {
-        const cleanName = (String(figName || 'Figure').trim().replace(/[^a-zA-Z0-9_\u4e00-\u9fa5.\s-]/g, '_').replace(/\.svg$/i, '') || 'Figure') + '.svg'
+        const cleanName = (String(figName || 'Figure').trim().replace(/[\\/:*?"<>|]/g, '_').replace(/\.svg$/i, '').trim() || 'Figure') + '.svg'
         const provDatasets: Array<{ id: string; name: string; version: number; rows: number }> = []
         if (sid && study) {
           provDatasets.push({ id: sid, name: study.title, version: 1, rows: 0 })
@@ -762,12 +762,96 @@ export function registerResearchRoutes(
     }
   }
 
+  const canWriteAsset = (userId: string, assetId: string): boolean => {
+    const asset = store.getAsset(assetId)
+    if (!asset) return false
+    if (asset.owner === userId) return true
+    const prov = store.getAssetProvenance(assetId)
+    if (prov && Array.isArray(prov.datasets)) {
+      for (const d of prov.datasets) {
+        if (!d?.id) continue
+        if (d.id.startsWith('st') && ctx.studies) {
+          try {
+            const role = st().role(userId, d.id)
+            if (role && role !== 'viewer' && role !== 'cra' && role !== 'auditor') return true
+          } catch {}
+        }
+        const dsStudy = store.studyOf('dataset', d.id)
+        if (dsStudy && ctx.studies) {
+          try {
+            const role = st().role(userId, dsStudy.study_id)
+            if (role && role !== 'viewer' && role !== 'cra' && role !== 'auditor') return true
+          } catch {}
+        }
+      }
+    }
+    return false
+  }
+
+  const normalizeFigureName = (raw: unknown): string => {
+    const base = String(raw || '')
+      .trim()
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.svg$/i, '')
+      .trim()
+    return (base || 'Figure') + '.svg'
+  }
+
   app.get('/api/figures', c => {
     const userId = c.get('user')
     return c.json({ figures: store.provenanceAssets(userId) })
   })
   app.post('/api/figures', c => handleFigureStudio(c))
   app.post('/api/studies/:sid/figures', c => handleFigureStudio(c, c.req.param('sid')))
+  app.patch('/api/figures/:aid', async c => {
+    const userId = c.get('user')
+    const aid = c.req.param('aid')
+    const asset = store.getAsset(aid)
+    if (!asset) return c.json({ error: 'not_found', message: '图表不存在' }, 404)
+    if (!canWriteAsset(userId, aid)) return c.json({ error: 'forbidden', message: '无权修改该图表' }, 403)
+    const body = await c.req.json<{ name?: unknown }>().catch(() => ({} as { name?: unknown }))
+    const cleanName = normalizeFigureName(body.name)
+    store.renameAsset(aid, cleanName)
+    return c.json({ ok: true, id: aid, name: cleanName })
+  })
+  app.delete('/api/figures/:aid', c => {
+    const userId = c.get('user')
+    const aid = c.req.param('aid')
+    const asset = store.getAsset(aid)
+    if (!asset) return c.json({ error: 'not_found', message: '图表不存在' }, 404)
+    if (!canWriteAsset(userId, aid)) return c.json({ error: 'forbidden', message: '无权删除该图表' }, 403)
+    store.deleteAsset(aid)
+    return c.json({ ok: true, id: aid })
+  })
+  app.post('/api/figures/batch', async c => {
+    const userId = c.get('user')
+    const body = await c.req.json<{ action?: string; ids?: unknown; prefix?: unknown }>().catch(() => ({} as { action?: string; ids?: unknown; prefix?: unknown }))
+    const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === 'string' && x.trim().length > 0) : []
+    if (!ids.length) return c.json({ error: 'bad_request', message: '请至少选择一张图表' }, 400)
+    const action = String(body.action || '')
+    if (action === 'delete') {
+      let deleted = 0
+      store.transaction(() => {
+        for (const id of ids) {
+          if (canWriteAsset(userId, id) && store.deleteAsset(id)) deleted++
+        }
+      })
+      return c.json({ ok: true, action: 'delete', affected: deleted })
+    }
+    if (action === 'rename_prefix') {
+      const prefix = String(body.prefix || 'Figure').trim().replace(/[\\/:*?"<>|]/g, '_') || 'Figure'
+      let renamed = 0
+      store.transaction(() => {
+        ids.forEach((id, idx) => {
+          if (!canWriteAsset(userId, id)) return
+          const newName = `${prefix}_${String(idx + 1).padStart(2, '0')}.svg`
+          if (store.renameAsset(id, newName)) renamed++
+        })
+      })
+      return c.json({ ok: true, action: 'rename_prefix', affected: renamed })
+    }
+    return c.json({ error: 'bad_action', message: '不支持的批量操作类型' }, 400)
+  })
 
   // —— Auto-eCRF 多模态数据批量提取与溯源 ——
   const ecrf = ctx.studies && ctx.patients ? new EcrfService(ctx.studies, ctx.patients, datasets ?? null) : null

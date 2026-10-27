@@ -2238,6 +2238,16 @@ export class Store {
     return row?.bytes ?? null
   }
 
+  renameAsset(id: string, name: string): boolean {
+    const r = this.db.prepare('UPDATE assets SET name = ? WHERE id = ?').run(name, id)
+    return Number(r.changes) > 0
+  }
+
+  deleteAsset(id: string): boolean {
+    const r = this.db.prepare('DELETE FROM assets WHERE id = ?').run(id)
+    return Number(r.changes) > 0
+  }
+
   // —— 引用 ——
 
   /** formatted 由已清理的文献元数据生成（清理在抓取器里做一次），这里原样存。 */

@@ -645,4 +645,93 @@ describe('医学论文图表 HTTP 路由与一键发刊物打包集成验证', a
     expect(resItk.status).toBe(200)
     expect(await resItk.text()).toContain('ITK-SnAP Label Description File')
   })
+
+  it('4. 图表成果库支持自定义命名归档、单条重命名、批量前缀重命名及单条/批量删除', async () => {
+    const sampleSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect width="200" height="120" fill="#fff"/></svg>'
+    // 1) 自定义命名归档两张图表
+    const arch1 = await app.request('/api/figures', {
+      method: 'POST',
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        category: 'archive',
+        name: 'Figure 1A 脑血管畸形 mRS (Grotta)',
+        svg: sampleSvg,
+        code: '# R code 1',
+      }),
+    })
+    expect(arch1.status).toBe(201)
+    const f1 = await arch1.json() as { asset_id: string; name: string }
+    expect(f1.name).toBe('Figure 1A 脑血管畸形 mRS (Grotta).svg')
+
+    const arch2 = await app.request('/api/figures', {
+      method: 'POST',
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        category: 'archive',
+        name: 'Figure 1B 多阶段治疗轨迹 Sankey',
+        svg: sampleSvg,
+        code: '# R code 2',
+      }),
+    })
+    expect(arch2.status).toBe(201)
+    const f2 = await arch2.json() as { asset_id: string; name: string }
+
+    // 2) 单条重命名 PATCH /api/figures/:aid
+    const patchRes = await app.request(`/api/figures/${f1.asset_id}`, {
+      method: 'PATCH',
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Figure 1A 修订版 Grotta 偏移图' }),
+    })
+    expect(patchRes.status).toBe(200)
+    const patched = await patchRes.json() as { ok: boolean; name: string }
+    expect(patched.name).toBe('Figure 1A 修订版 Grotta 偏移图.svg')
+
+    // 3) 批量前缀重命名 POST /api/figures/batch (rename_prefix)
+    const batchRenameRes = await app.request('/api/figures/batch', {
+      method: 'POST',
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'rename_prefix',
+        ids: [f1.asset_id, f2.asset_id],
+        prefix: 'AVM_Study_Fig1',
+      }),
+    })
+    expect(batchRenameRes.status).toBe(200)
+    const brBody = await batchRenameRes.json() as { ok: boolean; affected: number }
+    expect(brBody.affected).toBe(2)
+
+    const listRes1 = await app.request('/api/figures', {
+      method: 'GET',
+      headers: { Authorization: authToken },
+    })
+    const list1 = (await listRes1.json() as { figures: Array<{ id: string; name: string }> }).figures
+    expect(list1.find(x => x.id === f1.asset_id)?.name).toBe('AVM_Study_Fig1_01.svg')
+    expect(list1.find(x => x.id === f2.asset_id)?.name).toBe('AVM_Study_Fig1_02.svg')
+
+    // 4) 单条删除 DELETE /api/figures/:aid + 批量删除 POST /api/figures/batch (delete)
+    const delOne = await app.request(`/api/figures/${f1.asset_id}`, {
+      method: 'DELETE',
+      headers: { Authorization: authToken },
+    })
+    expect(delOne.status).toBe(200)
+
+    const batchDel = await app.request('/api/figures/batch', {
+      method: 'POST',
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'delete',
+        ids: [f2.asset_id],
+      }),
+    })
+    expect(batchDel.status).toBe(200)
+    const bdBody = await batchDel.json() as { ok: boolean; affected: number }
+    expect(bdBody.affected).toBe(1)
+
+    const listRes2 = await app.request('/api/figures', {
+      method: 'GET',
+      headers: { Authorization: authToken },
+    })
+    const list2 = (await listRes2.json() as { figures: Array<{ id: string; name: string }> }).figures
+    expect(list2.some(x => x.id === f1.asset_id || x.id === f2.asset_id)).toBe(false)
+  })
 })
