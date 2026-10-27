@@ -1409,6 +1409,157 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
     } catch (err) { return datasetFail(err) }
   })
 
+  server.registerTool('dataset_logistic', {
+    description: '为数据集执行二元结局的单因素与多因素 Logistic 回归分析 (Binary Logistic Regression)，计算每个协变量的粗优势比 (Univariate OR)、多因素校正优势比 (Adjusted aOR, 95% CI)、Wald P 值与模型判别度 AUC (C-statistic)，并生成出版级 OR 森林图矢量 SVG (含 Adobe Illustrator 分层 SVG、GraphPad Prism .pzfx 与 R 脚本)。支持一键将表格与叙述插入文档。',
+    inputSchema: {
+      dataset_id: z.string().describe('数据集 ID'),
+      outcome_col: z.string().describe('二元结局列名（如 治疗后出血、闭塞程度、围术期不良事件）'),
+      covariates: z.array(z.string()).min(1).describe('预测因子/协变量列名列表'),
+      positive_value: z.union([z.string(), z.number()]).optional().describe('可选：将特定取值视为阳性事件 1（如在闭塞程度中传 "1" 代表完全闭塞）'),
+      title: z.string().optional().describe('图表与分析标题'),
+      labels: z.record(z.string()).optional().describe('变量显示名称映射'),
+      doc_id: z.string().optional().describe('可选：需要将分析结果插入的文档 ID'),
+      anchor_id: z.string().optional().describe('可选：插入到该块 ID 之后（配合 doc_id）'),
+    },
+  }, async ({ dataset_id, outcome_col, covariates, positive_value, title, labels, doc_id, anchor_id }) => {
+    if (!deps.datasets) return fail('datasets_unavailable', '数据集未启用')
+    try {
+      const d = deps.datasets.get(claims.u, dataset_id)
+      const blocked = cohortGuard(d.origin)
+      if (blocked) return blocked
+      const res = deps.datasets.logistic(claims.u, dataset_id, { outcome_col, covariates, positive_value, title, labels })
+      let insertResult: { doc_id: string; rev: number; inserted: boolean } | undefined
+      if (doc_id && anchor_id && !ctx.check(doc_id, 'write')) {
+        try {
+          const mode = ctx.activeTurn(doc_id)?.mode === 'suggest' ? 'suggest' : 'apply'
+          const edit = deps.ops.edit({
+            doc_id,
+            base_rev: deps.docs.rev(doc_id),
+            mode,
+            ops: [{ op: 'insert_after', anchor_id, markdown: `${res.markdown_table}\n\n${res.narrative}` }],
+          }, { actor: 'ai', turnId: ctx.turnId })
+          ctx.touch(doc_id)
+          insertResult = { doc_id, rev: edit.rev, inserted: true }
+        } catch {}
+      }
+      return json({ logistic: res, narrative: res.narrative, markdown: res.markdown_table, svg: res.svg, ...(insertResult ? { doc_edit: insertResult } : {}) })
+    } catch (err) { return datasetFail(err) }
+  })
+
+  server.registerTool('dataset_grotta', {
+    description: '生成卒中/神经外科/临床结局有序评分 100% 堆叠水平条形图与分布迁移分析 (Grotta Bar / mRS Shift Analysis)。支持组间横向对比（group_col + score_col，如不同治疗方式的闭塞程度或 mRS 分布）与多时间点纵向演变（timepoint_cols，如确诊时→入院→治疗前 mRS），自动计算卡方与 Mann-Whitney/Kruskal-Wallis 秩和迁移检验 P 值并绘制组间迁移连带。',
+    inputSchema: {
+      dataset_id: z.string().describe('数据集 ID'),
+      group_col: z.string().optional().describe('分组列名（如 第一次治疗方式）'),
+      score_col: z.string().optional().describe('有序评分/等级列名（如 闭塞程度、第一次治疗前mRS）'),
+      timepoint_cols: z.array(z.string()).optional().describe('纵向多时间点评分列名列表（如 [确诊时mRS, 入院mrs评分, 第一次治疗前mRS]）'),
+      score_order: z.array(z.string()).optional().describe('自定义等级排列顺序'),
+      title: z.string().optional().describe('图表标题'),
+      labels: z.record(z.string()).optional().describe('变量与等级显示标签映射'),
+      doc_id: z.string().optional().describe('可选：需要将分析结果插入的文档 ID'),
+      anchor_id: z.string().optional().describe('可选：插入到该块 ID 之后（配合 doc_id）'),
+    },
+  }, async ({ dataset_id, group_col, score_col, timepoint_cols, score_order, title, labels, doc_id, anchor_id }) => {
+    if (!deps.datasets) return fail('datasets_unavailable', '数据集未启用')
+    try {
+      const d = deps.datasets.get(claims.u, dataset_id)
+      const blocked = cohortGuard(d.origin)
+      if (blocked) return blocked
+      const res = deps.datasets.grotta(claims.u, dataset_id, { group_col, score_col, timepoint_cols, score_order, title, labels })
+      let insertResult: { doc_id: string; rev: number; inserted: boolean } | undefined
+      if (doc_id && anchor_id && !ctx.check(doc_id, 'write')) {
+        try {
+          const mode = ctx.activeTurn(doc_id)?.mode === 'suggest' ? 'suggest' : 'apply'
+          const edit = deps.ops.edit({
+            doc_id,
+            base_rev: deps.docs.rev(doc_id),
+            mode,
+            ops: [{ op: 'insert_after', anchor_id, markdown: `${res.markdown_table}\n\n${res.narrative}` }],
+          }, { actor: 'ai', turnId: ctx.turnId })
+          ctx.touch(doc_id)
+          insertResult = { doc_id, rev: edit.rev, inserted: true }
+        } catch {}
+      }
+      return json({ grotta: res, narrative: res.narrative, markdown: res.markdown_table, svg: res.svg, ...(insertResult ? { doc_edit: insertResult } : {}) })
+    } catch (err) { return datasetFail(err) }
+  })
+
+  server.registerTool('dataset_sankey', {
+    description: '生成多阶段临床治疗路径与结局流向桑基图 / 冲击图 (Sankey / Alluvial Diagram)。支持传入多列阶段 (stage_cols，如 [第一次治疗方式, 栓塞策略, 闭塞程度]) 或单列多位数序贯治疗编码 (sequence_col，如 "32" 自动拆解为首期与二期序贯干预)。',
+    inputSchema: {
+      dataset_id: z.string().describe('数据集 ID'),
+      stage_cols: z.array(z.string()).optional().describe('按阶段顺序排列的列名列表（至少 2 列）'),
+      sequence_col: z.string().optional().describe('多位数序贯治疗编码列（如 治疗方式）'),
+      code_map: z.record(z.string()).optional().describe('配合 sequence_col 的代码映射（如 {"0":"保守观察","1":"手术切除","2":"伽玛刀","3":"介入栓塞"}）'),
+      outcome_col: z.string().optional().describe('配合 sequence_col 的终点结局列（如 闭塞程度）'),
+      title: z.string().optional().describe('图表标题'),
+      labels: z.record(z.string()).optional().describe('显示名称映射'),
+      doc_id: z.string().optional().describe('可选：需要将分析结果插入的文档 ID'),
+      anchor_id: z.string().optional().describe('可选：插入到该块 ID 之后（配合 doc_id）'),
+    },
+  }, async ({ dataset_id, stage_cols, sequence_col, code_map, outcome_col, title, labels, doc_id, anchor_id }) => {
+    if (!deps.datasets) return fail('datasets_unavailable', '数据集未启用')
+    try {
+      const d = deps.datasets.get(claims.u, dataset_id)
+      const blocked = cohortGuard(d.origin)
+      if (blocked) return blocked
+      const res = deps.datasets.sankey(claims.u, dataset_id, { stage_cols, sequence_col, code_map, outcome_col, title, labels })
+      let insertResult: { doc_id: string; rev: number; inserted: boolean } | undefined
+      if (doc_id && anchor_id && !ctx.check(doc_id, 'write')) {
+        try {
+          const mode = ctx.activeTurn(doc_id)?.mode === 'suggest' ? 'suggest' : 'apply'
+          const edit = deps.ops.edit({
+            doc_id,
+            base_rev: deps.docs.rev(doc_id),
+            mode,
+            ops: [{ op: 'insert_after', anchor_id, markdown: `${res.markdown_table}\n\n${res.narrative}` }],
+          }, { actor: 'ai', turnId: ctx.turnId })
+          ctx.touch(doc_id)
+          insertResult = { doc_id, rev: edit.rev, inserted: true }
+        } catch {}
+      }
+      return json({ sankey: res, narrative: res.narrative, markdown: res.markdown_table, svg: res.svg, ...(insertResult ? { doc_edit: insertResult } : {}) })
+    } catch (err) { return datasetFail(err) }
+  })
+
+  server.registerTool('dataset_upset', {
+    description: '生成多部位解剖受累或多合并症共现交集图 (UpSet Co-occurrence & Outcome Rate Plot)。统计多个 0/1 二分类列 (binary_cols，如 11 个脑区受累列) 的单发与跨区共现组合频数，并支持叠加临床结局发生率 (outcome_col，如 治疗后出血)。',
+    inputSchema: {
+      dataset_id: z.string().describe('数据集 ID'),
+      binary_cols: z.array(z.string()).min(2).describe('0/1 二分类解剖部位或合并症列名列表（至少 2 列）'),
+      outcome_col: z.string().optional().describe('可选：叠加计算发生率的二元结局列名（如 治疗后出血）'),
+      positive_value: z.union([z.string(), z.number()]).optional().describe('可选：结局阳性值'),
+      max_intersections: z.number().optional().describe('最多展示的高频共现组合数（默认 12）'),
+      title: z.string().optional().describe('图表标题'),
+      labels: z.record(z.string()).optional().describe('显示名称映射'),
+      doc_id: z.string().optional().describe('可选：需要将分析结果插入的文档 ID'),
+      anchor_id: z.string().optional().describe('可选：插入到该块 ID 之后（配合 doc_id）'),
+    },
+  }, async ({ dataset_id, binary_cols, outcome_col, positive_value, max_intersections, title, labels, doc_id, anchor_id }) => {
+    if (!deps.datasets) return fail('datasets_unavailable', '数据集未启用')
+    try {
+      const d = deps.datasets.get(claims.u, dataset_id)
+      const blocked = cohortGuard(d.origin)
+      if (blocked) return blocked
+      const res = deps.datasets.upset(claims.u, dataset_id, { binary_cols, outcome_col, positive_value, max_intersections, title, labels })
+      let insertResult: { doc_id: string; rev: number; inserted: boolean } | undefined
+      if (doc_id && anchor_id && !ctx.check(doc_id, 'write')) {
+        try {
+          const mode = ctx.activeTurn(doc_id)?.mode === 'suggest' ? 'suggest' : 'apply'
+          const edit = deps.ops.edit({
+            doc_id,
+            base_rev: deps.docs.rev(doc_id),
+            mode,
+            ops: [{ op: 'insert_after', anchor_id, markdown: `${res.markdown_table}\n\n${res.narrative}` }],
+          }, { actor: 'ai', turnId: ctx.turnId })
+          ctx.touch(doc_id)
+          insertResult = { doc_id, rev: edit.rev, inserted: true }
+        } catch {}
+      }
+      return json({ upset: res, narrative: res.narrative, markdown: res.markdown_table, svg: res.svg, ...(insertResult ? { doc_edit: insertResult } : {}) })
+    } catch (err) { return datasetFail(err) }
+  })
+
 
   const patientFail = (err: unknown) => {
     if (err instanceof PatientError || err instanceof TenantError) return fail(err.code, err.message, err.code === 'external_model_off' ? { hint: '告诉用户本机构设置为患者数据不交给外部模型分析，需要机构管理员调整。' } : {})

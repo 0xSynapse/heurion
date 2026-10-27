@@ -7,8 +7,37 @@ import type { ColumnProfile, Ingest, Profile } from './ingest.ts'
 import { generateTable1FromData, type Table1Options, type Table1Result } from './table1.ts'
 import { generateSurvivalAnalysis, type SurvivalOptions, type SurvivalAnalysisResult } from './survival.ts'
 import { runImagingBiomarkerSurvival, type ImagingSurvivalRequest, type ImagingSurvivalResponse } from './imaging-survival.ts'
+import {
+  generateLogisticRegression,
+  generateGrottaPlot,
+  generateSankeyDiagram,
+  generateUpSetPlot,
+  type LogisticOptions,
+  type LogisticRegressionResult,
+  type GrottaOptions,
+  type GrottaPlotResult,
+  type SankeyOptions,
+  type SankeyDiagramResult,
+  type UpSetOptions,
+  type UpSetPlotResult,
+} from './clinical-plots.ts'
 
-export type { Table1Options, Table1Result, SurvivalOptions, SurvivalAnalysisResult, ImagingSurvivalRequest, ImagingSurvivalResponse }
+export type {
+  Table1Options,
+  Table1Result,
+  SurvivalOptions,
+  SurvivalAnalysisResult,
+  ImagingSurvivalRequest,
+  ImagingSurvivalResponse,
+  LogisticOptions,
+  LogisticRegressionResult,
+  GrottaOptions,
+  GrottaPlotResult,
+  SankeyOptions,
+  SankeyDiagramResult,
+  UpSetOptions,
+  UpSetPlotResult,
+}
 
 
 /**
@@ -309,6 +338,61 @@ export class DatasetService {
     }
 
     return runImagingBiomarkerSurvival(records, req)
+  }
+
+  /** 二元结局单因素 / 多因素 Logistic 回归与 OR 森林图 */
+  logistic(user: string, id: string, opts: LogisticOptions): LogisticRegressionResult {
+    const { dataset, records } = this.readRecords(user, id)
+    return generateLogisticRegression(records, {
+      ...opts,
+      labels: { ...dataset.labels, ...opts.labels },
+    })
+  }
+
+  /** Grotta 100% 堆叠水平百分比条形图与有序评分分布迁移分析 (mRS Shift / 闭塞程度对比) */
+  grotta(user: string, id: string, opts: GrottaOptions): GrottaPlotResult {
+    const { dataset, records } = this.readRecords(user, id)
+    return generateGrottaPlot(records, {
+      ...opts,
+      labels: { ...dataset.labels, ...opts.labels },
+    })
+  }
+
+  /** 多阶段序贯治疗路径与结局流向桑基图 (Sankey / Alluvial Diagram) */
+  sankey(user: string, id: string, opts: SankeyOptions): SankeyDiagramResult {
+    const { dataset, records } = this.readRecords(user, id)
+    return generateSankeyDiagram(records, {
+      ...opts,
+      labels: { ...dataset.labels, ...opts.labels },
+    })
+  }
+
+  /** 多部位解剖受累共现交集与结局发生率联动图 (UpSet Co-occurrence Plot) */
+  upset(user: string, id: string, opts: UpSetOptions): UpSetPlotResult {
+    const { dataset, records } = this.readRecords(user, id)
+    return generateUpSetPlot(records, {
+      ...opts,
+      labels: { ...dataset.labels, ...opts.labels },
+    })
+  }
+
+  private readRecords(user: string, id: string): { dataset: DatasetView; records: Array<Record<string, unknown>> } {
+    const { dataset, path: csvFile } = this.readyCsv(user, id)
+    const csvText = readFileSync(csvFile, 'utf8')
+    const parsed = parseCsv(csvText)
+    if (parsed.length < 2) throw new DatasetError('empty', '数据集为空')
+    const header = parsed[0]!
+    const records: Array<Record<string, unknown>> = []
+    for (let i = 1; i < parsed.length; i++) {
+      const r = parsed[i]!
+      if (!r || r.length === 0 || (r.length === 1 && !r[0])) continue
+      const rec: Record<string, unknown> = {}
+      for (let j = 0; j < header.length; j++) {
+        rec[header[j]!] = r[j] ?? ''
+      }
+      records.push(rec)
+    }
+    return { dataset, records }
   }
 
 

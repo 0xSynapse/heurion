@@ -106,6 +106,7 @@ const ALL_PARITY: Record<string, string> = {
   // 数据集
   'GET /api/datasets': 'dataset_list', 'GET /api/datasets/:did': 'dataset_describe', 'GET /api/datasets/:did/preview': 'dataset_open',
   'POST /api/datasets/:did/table1': 'dataset_table1', 'POST /api/datasets/:did/survival': 'dataset_survival', 'POST /api/datasets/:did/imaging-survival': 'dataset_imaging_survival',
+  'POST /api/datasets/:did/logistic': 'dataset_logistic', 'POST /api/datasets/:did/grotta': 'dataset_grotta', 'POST /api/datasets/:did/sankey': 'dataset_sankey', 'POST /api/datasets/:did/upset': 'dataset_upset',
   'POST /api/datasets': 'dataset_manage.upload', 'PATCH /api/datasets/:did': 'dataset_manage.rename', 'POST /api/datasets/:did/phi': 'dataset_manage.resolve_phi', 'DELETE /api/datasets/:did': 'dataset_manage.delete',
   // 记忆
   'GET /api/memory': 'memory_manage.list', 'GET /api/memory/:mid/events': 'memory_manage.events', 'PATCH /api/memory/:mid': 'memory_manage.edit',

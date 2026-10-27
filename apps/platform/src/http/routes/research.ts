@@ -757,6 +757,42 @@ export function registerResearchRoutes(
     try { return c.json(datasets.imagingSurvival(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
   })
 
+  app.post('/api/datasets/:did/logistic', async c => {
+    if (!datasets) return c.json({ error: '数据集未启用' }, 503)
+    const body = await c.req.json<any>().catch(() => ({}))
+    if (!body.outcome_col || !Array.isArray(body.covariates) || body.covariates.length === 0) {
+      return c.json({ error: '必须指定二元结局列 (outcome_col) 与至少 1 个协变量 (covariates)' }, 400)
+    }
+    try { return c.json(datasets.logistic(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
+  })
+
+  app.post('/api/datasets/:did/grotta', async c => {
+    if (!datasets) return c.json({ error: '数据集未启用' }, 503)
+    const body = await c.req.json<any>().catch(() => ({}))
+    if (!body.score_col && (!Array.isArray(body.timepoint_cols) || body.timepoint_cols.length < 2)) {
+      return c.json({ error: '必须提供评分列 (score_col) 或至少 2 个时间点列 (timepoint_cols)' }, 400)
+    }
+    try { return c.json(datasets.grotta(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
+  })
+
+  app.post('/api/datasets/:did/sankey', async c => {
+    if (!datasets) return c.json({ error: '数据集未启用' }, 503)
+    const body = await c.req.json<any>().catch(() => ({}))
+    if ((!Array.isArray(body.stage_cols) || body.stage_cols.length < 2) && !body.sequence_col) {
+      return c.json({ error: '必须提供至少 2 列的阶段列 (stage_cols) 或序贯编码列 (sequence_col)' }, 400)
+    }
+    try { return c.json(datasets.sankey(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
+  })
+
+  app.post('/api/datasets/:did/upset', async c => {
+    if (!datasets) return c.json({ error: '数据集未启用' }, 503)
+    const body = await c.req.json<any>().catch(() => ({}))
+    if (!Array.isArray(body.binary_cols) || body.binary_cols.length < 2) {
+      return c.json({ error: '必须提供至少 2 个二分类部位/特征列 (binary_cols)' }, 400)
+    }
+    try { return c.json(datasets.upset(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
+  })
+
   // —— 预后列线图与预测模型 (Nomogram & ROC / DCA) ——
   app.post('/api/datasets/:did/nomogram', async c => {
     if (!datasets) return c.json({ error: '数据集未启用' }, 503)
