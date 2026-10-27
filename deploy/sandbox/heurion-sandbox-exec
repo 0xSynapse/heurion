@@ -25,13 +25,18 @@ check_dir "$HM" "$ROOT/dsh-homes"
 for d in "$WS" "$HM"; do
   [ -L "$d" ] && die "不允许符号链接：$d"
   mkdir -p "$d"
-  # 第一次交给这个 uid（或从不隔离的旧版本迁移过来）：整棵树改属主
-  if [ "$(stat -c %u "$d")" != "$SBX_UID" ]; then chown -R "$SBX_UID:$NODE_GID" "$d"; fi
+  # 第一次交给这个 uid（或从不隔离的旧版本迁移过来）：整棵树改属主，且已有子目录保持组 node 可读写与 setgid
+  if [ "$(stat -c %u "$d")" != "$SBX_UID" ]; then
+    chown -h -R -P "$SBX_UID:$NODE_GID" "$d"
+    chmod -R u+rwX,g+rwX "$d" 2>/dev/null || true
+    find "$d" -type d -exec chmod g+s {} + 2>/dev/null || true
+  fi
 done
 chmod 2770 "$WS"   # 组 node 可读写（平台读用户生成的图做资产），其他 uid 进不来
-chmod 0700 "$HM"   # dsh 自己的会话与缓存，平台不需要
-# A1 安全加固：严禁 .tmp 为符号链接，使用 chown -h 防御符号链接提权
+chmod 2770 "$HM"   # 组 node 可读写（平台写 evolved.cordis.yml 补丁、自检清理），其他隔离 uid 进不来（setpriv 已清空附加组）
+# A1 安全加固：严禁 .tmp / .datasets 为符号链接，使用 chown -h 防御符号链接提权
 [ -L "$WS/.tmp" ] && die "不允许符号链接：$WS/.tmp"
+[ -L "$WS/.datasets" ] && die "不允许符号链接：$WS/.datasets"
 mkdir -p "$WS/.tmp" && chown -h "$SBX_UID:$NODE_GID" "$WS/.tmp" && chmod 0770 "$WS/.tmp"
 # A2 安全加固：严禁 attachments 为符号链接；递归 chown/chmod 强制 -P（不跟随链接）且移除 o+rX
 if [ -L "$WS/attachments" ]; then

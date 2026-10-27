@@ -1,7 +1,7 @@
 import { themeAllowed } from '../model/org-templates.ts'
 import { Access, allows } from '../research/access.ts'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, relative, isAbsolute } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -55,7 +55,7 @@ import type { ImageService } from '../images/service.ts'
 import { UnsplashError } from '../images/unsplash.ts'
 import { registerImagingTools } from './imaging-tools.ts'
 import type { Invoke } from '../http/invoke.ts'
-import { registerAdminTools, type LeaseAuthorizeInput, type LeaseAuthorizeResult } from './admin-tools.ts'
+import { chmodIfOwned, registerAdminTools, type LeaseAuthorizeInput, type LeaseAuthorizeResult } from './admin-tools.ts'
 
 export interface McpDeps {
   claims: ClaimService
@@ -1191,11 +1191,13 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
       const blocked = cohortGuard(dataset.origin)
       if (blocked) return blocked
       const dir = join(deps.workspaceDir(claims.u), 'data')
-      if (!existsSync(dir)) { mkdirSync(dir, { recursive: true }); chmodSync(dir, 0o2777) }
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      chmodIfOwned(dir, 0o2777)
       const rel = `data/${dataset.id}.csv`
       const dest = join(deps.workspaceDir(claims.u), rel)
+      rmSync(dest, { force: true })
       copyFileSync(path, dest)
-      chmodSync(dest, 0o644)
+      chmodIfOwned(dest, 0o644)
       const labels = Object.entries(dataset.labels)
       const shouldInline = return_content ?? Boolean(ctx.agentId)
       const csvBytes = statSync(path).size
@@ -1484,9 +1486,13 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
     try {
       const r = deps.patients.labsCsv(aiActor(), patient_id)
       const dir = join(deps.workspaceDir(claims.u), 'data')
-      if (!existsSync(dir)) { mkdirSync(dir, { recursive: true }); chmodSync(dir, 0o2777) }
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      chmodIfOwned(dir, 0o2777)
       const rel = `data/patient-${r.code}-labs.csv`
-      writeFileSync(join(deps.workspaceDir(claims.u), rel), r.csv, { mode: 0o644 })
+      const dest = join(deps.workspaceDir(claims.u), rel)
+      rmSync(dest, { force: true })
+      writeFileSync(dest, r.csv, { mode: 0o644 })
+      chmodIfOwned(dest, 0o644)
       const shouldInline = return_content ?? Boolean(ctx.agentId)
       const csvContent = shouldInline && Buffer.byteLength(r.csv, 'utf8') <= 5 * 1024 * 1024 ? r.csv : undefined
       return json({

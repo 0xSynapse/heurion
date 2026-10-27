@@ -10,7 +10,7 @@
  * - 纯 TypeScript 零外部依赖，毫秒级计算，支持结构化 JSON、Markdown 报告及 DocOp 写入。
  */
 
-import { chiSquareUpperPValue, normalCdf } from './table1.ts'
+import { chiSquareUpperPValue, isCellMissing, normalCdf } from './table1.ts'
 import { exportToPrismPzfx, upgradeSvgForIllustrator, type PrismTableSpec } from '../research/medical-figures.ts'
 
 export interface SurvivalOptions {
@@ -188,16 +188,16 @@ export interface SurvivalAnalysisResult {
 
 /** 规范化事件状态为 0 或 1 */
 export function normalizeEventStatus(val: unknown): number | null {
-  if (val === null || val === undefined || val === '') return null
+  if (isCellMissing(val)) return null
   if (typeof val === 'number') {
     if (isNaN(val)) return null
     return val > 0 ? 1 : 0
   }
   const s = String(val).trim().toLowerCase()
-  if (s === '1' || s === 'true' || s === 'dead' || s === 'death' || s === 'relapse' || s === 'event' || s === 'yes' || s === 'positive' || s === 'deceased') {
+  if (s === '1' || s === 'true' || s === 'dead' || s === 'death' || s === 'relapse' || s === 'event' || s === 'yes' || s === 'positive' || s === 'deceased' || s === '是' || s === '死亡' || s === '复发' || s === '发生' || s === '阳性') {
     return 1
   }
-  if (s === '0' || s === 'false' || s === 'censored' || s === 'alive' || s === 'censor' || s === 'no' || s === 'negative' || s === 'living') {
+  if (s === '0' || s === 'false' || s === 'censored' || s === 'alive' || s === 'censor' || s === 'no' || s === 'negative' || s === 'living' || s === '否' || s === '存活' || s === '未发生' || s === '删失' || s === '阴性') {
     return 0
   }
   const num = parseFloat(s)
@@ -519,7 +519,7 @@ export function calculateCoxRegression(
     const distinct = new Set<string>()
     for (const r of records) {
       const rawC = r[c]
-      if (rawC === null || rawC === undefined || String(rawC).trim() === '') continue
+      if (isCellMissing(rawC)) continue
       const s = String(rawC).trim()
       distinct.add(s)
       if (!Number.isFinite(Number(s))) hasNonNumeric = true
@@ -533,9 +533,8 @@ export function calculateCoxRegression(
   }
 
   const encodeCovariate = (c: string, rawC: unknown): number => {
-    if (rawC === null || rawC === undefined) return NaN
+    if (isCellMissing(rawC)) return NaN
     const s = String(rawC).trim()
-    if (s === '') return NaN
     const map = categoryEncoding.get(c)
     if (map) {
       const mapped = map.get(s)
@@ -546,7 +545,7 @@ export function calculateCoxRegression(
 
   const valid = records.filter(r => {
     const rawTime = r.time
-    if (rawTime === null || rawTime === undefined || String(rawTime).trim() === '') return false
+    if (isCellMissing(rawTime)) return false
     const timeNum = Number(rawTime)
     if (!Number.isFinite(timeNum) || timeNum < 0 || (r.event !== 0 && r.event !== 1)) return false
     for (const c of covariates) {
@@ -1197,14 +1196,15 @@ export function generateSurvivalAnalysis(
   const cleaned: Array<{ time: number; event: number; group: string; [k: string]: unknown }> = []
 
   for (const r of records) {
-    // C2 修复：严格剔除空字符串、null 或 undefined 的时间列，杜绝被隐式转为 0
+    // C2 修复：严格剔除空字符串、临床缺失值占位符、null 或 undefined 的时间列与分组列，杜绝被隐式转为 0 或生成空组名 ""
     const rawT = r[time_col]
-    if (rawT === null || rawT === undefined || String(rawT).trim() === '') continue
+    if (isCellMissing(rawT)) continue
+    if (group_col && isCellMissing(r[group_col])) continue
     const t = Number(rawT)
     const e = normalizeEventStatus(r[event_col])
     if (!Number.isFinite(t) || t < 0 || e === null) continue
 
-    const grp = group_col && r[group_col] !== undefined && r[group_col] !== null ? String(r[group_col]).trim() : 'Overall'
+    const grp = group_col ? String(r[group_col]).trim() : 'Overall'
     cleaned.push({
       ...r,
       time: t,

@@ -205,7 +205,8 @@ export function initDatasets(api: Api, notice: (msg: string, error?: boolean) =>
       btn.textContent = '处理中…'
       try {
         const r = await api<Dataset>(`/api/datasets/${x.id}/phi`, { method: 'POST', body: JSON.stringify({ drop, keep }) })
-        notice(r.status === 'ready' ? `已处理${drop.length ? `，删除了 ${drop.length} 列` : ''}，可以分析了` : '还有需要处理的列')
+        if (r.status === 'failed') notice(r.error || '处理身份信息列失败', true)
+        else notice(r.status === 'ready' ? `已处理${drop.length ? `，删除了 ${drop.length} 列` : ''}，可以分析了` : '还有需要处理的列')
       } catch (err) { notice((err as Error).message, true) }
       void openDetail(x.id)
     }

@@ -2,7 +2,7 @@ import { OrgTemplateService } from '../auth/org-templates.ts'
 import { ORG_BASES, orgLogo, PRESET_AHSLYY, setOrgTenantResolver, themeAllowed, themeKeysFor } from '../model/org-templates.ts'
 import { Hono, type Context } from 'hono'
 import { H_AS, internalVia, makeInvoker, type Invoke, type ViaInfo } from './invoke.ts'
-import { CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
+import { chmodIfOwned, CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
 import { handleAegisMcpJsonRpc, type McpDeps } from '../mcp/server.ts'
@@ -44,7 +44,7 @@ import { templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
 import { newTemplateDeck } from '../ops/deck.ts'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SlideRenderer } from '../render/slides.ts'
 import type { CrossrefClient } from '../literature/crossref.ts'
@@ -1973,21 +1973,24 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (pics.length && deps.workspaceDir) {
       const ws = deps.workspaceDir(c.get('user'))
       const dir = join(ws, 'attachments')
+      let dirOk = false
       try {
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-        chmodSync(dir, 0o2777)
-      } catch { /* 权限容错 */ }
+        chmodIfOwned(dir, 0o2777)
+        dirOk = true
+      } catch { /* 权限或符号链接拦截：跳过写入工作区附件 */ }
       const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg' }
       const files: string[] = []
-      for (const a of pics) {
+      for (const a of dirOk ? pics : []) {
         if (!a) continue
         const bytes = store.getAssetBytes(a.id)
         if (!bytes || bytes.length === 0) continue
         const rel = `attachments/${a.id}.${EXT[a.mime] ?? 'png'}`
         const filePath = join(ws, rel)
         try {
+          rmSync(filePath, { force: true })
           writeFileSync(filePath, bytes)
-          chmodSync(filePath, 0o666)
+          chmodIfOwned(filePath, 0o666)
         } catch { /* 容错 */ }
         files.push(`${rel}(asset_id=${a.id})`)
       }

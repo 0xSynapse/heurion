@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DeepSeekHarness, type HarnessNotification, type RunResult } from '@deepseek-ai/dsh-sdk-client'
 import { issueToken } from '../auth/token.ts'
+import { chmodIfOwned } from '../mcp/admin-tools.ts'
 
 /** 槽名前缀 → MCP 工具范围（doc_0 → doc，deck_1 → deck，其余不限）。 */
 const scopeOfSlot = (slot: string): { t?: 'doc' | 'deck' } => /^doc_\d+$/.test(slot) ? { t: 'doc' } : /^deck_\d+$/.test(slot) ? { t: 'deck' } : {}
@@ -60,7 +61,10 @@ export class HarnessPool {
     const overlayPath = join(dshHome, 'evolved.cordis.yml')
     try {
       mkdirSync(dshHome, { recursive: true })
+      chmodIfOwned(dshHome, 0o2770)
+      rmSync(overlayPath, { force: true })
       writeFileSync(overlayPath, overlayYaml, 'utf8')
+      chmodIfOwned(overlayPath, 0o644)
       return [PROFILE_PATCH, overlayPath]
     } catch {
       return [PROFILE_PATCH]

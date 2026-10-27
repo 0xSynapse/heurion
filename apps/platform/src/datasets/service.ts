@@ -67,9 +67,25 @@ export class DatasetService {
     if (bytes.byteLength === 0) throw new DatasetError('empty', '文件是空的')
     if (bytes.byteLength > DATASET_MAX_BYTES) throw new DatasetError('too_large', '文件超过 100 MB')
     const sha256 = createHash('sha256').update(bytes).digest('hex')
-    const same = this.store.findDatasetBySha(owner, sha256)
-    if (same) return { dataset: this.view(same), duplicate: true }
     const name = (opts.name ?? filename.replace(/\.[^.]+$/, '')).slice(0, 120) || '数据集'
+    const same = this.store.findDatasetBySha(owner, sha256)
+    if (same) {
+      // 上次解析失败的同一份文件允许直接重新上传重试，不再卡死在 failed 状态
+      if (same.status === 'failed') {
+        mkdirSync(this.folder(same), { recursive: true })
+        writeFileSync(this.original(same), bytes)
+        this.store.updateDataset(same.id, {
+          name,
+          status: 'processing',
+          error: null,
+          ...(opts.origin ? { origin: JSON.stringify(opts.origin) } : {}),
+          ...(opts.version !== undefined ? { version: opts.version } : {}),
+        })
+        this.schedule(same.id)
+        return { dataset: this.view(this.store.getDataset(same.id)!), duplicate: false }
+      }
+      return { dataset: this.view(same), duplicate: true }
+    }
     const row = this.store.addDataset({ owner, name, filename: filename.slice(0, 200), format, size: bytes.byteLength, sha256, origin: opts.origin ? JSON.stringify(opts.origin) : null, version: opts.version })
     mkdirSync(this.folder(row), { recursive: true })
     writeFileSync(this.original(row), bytes)
@@ -128,7 +144,11 @@ export class DatasetService {
     const prev = JSON.parse(d.profile!) as Extract<Profile, { ok: true }>
     if (drop.length) {
       this.store.updateDataset(id, { status: 'processing' })
-      await this.schedule(id, drop.filter(n => flagged.includes(n) || prev.columns.some(c => c.name === n)))
+      const toDrop = [...new Set([
+        ...(prev.phi_resolved?.dropped ?? []),
+        ...drop.filter(n => flagged.includes(n) || prev.columns.some(c => c.name === n)),
+      ])]
+      await this.schedule(id, toDrop)
     }
     // 用户确认保留的列：去掉标记，记下确认（审计里也有记录）
     const cur = this.store.getDataset(id)!
@@ -221,10 +241,16 @@ export class DatasetService {
 
     const numCols = dataset.columns.filter(c => c.type === 'numeric').map(c => c.name)
     const catCols = dataset.columns.filter(c => c.type === 'categorical').map(c => c.name)
+    const defaultCols = dataset.columns
+      .filter(c => (c.type === 'numeric' || c.type === 'categorical')
+        && c.name !== opts.group_col
+        && !/^(id|pid|uuid|.*_id)$/i.test(c.name))
+      .map(c => c.name)
 
     const mergedOpts: Table1Options = {
       ...opts,
       labels: { ...dataset.labels, ...opts.labels },
+      columns: opts.columns ?? (defaultCols.length ? defaultCols : undefined),
       continuous_vars: opts.continuous_vars ?? (numCols.length ? numCols : undefined),
       categorical_vars: opts.categorical_vars ?? (catCols.length ? catCols : undefined),
     }

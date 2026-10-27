@@ -11,6 +11,7 @@ import {
   type SurvivalOptions,
   type SurvivalAnalysisResult
 } from './survival.ts'
+import { isCellMissing } from './table1.ts'
 
 export interface ImagingSurvivalRequest {
   /** 随访生存时间列名（如 'os_months', 'pfs_months'） */
@@ -84,9 +85,9 @@ export function runImagingBiomarkerSurvival(
   // C3 修复：严格过滤缺失或无效的生物标志物，杜绝将空值作为 0 归入低值组
   const validDataset = dataset.filter(r => {
     const raw = r[biomarker]
-    if (raw === null || raw === undefined || String(raw).trim() === '') return false
+    if (isCellMissing(raw)) return false
     const num = Number(raw)
-    return !isNaN(num)
+    return Number.isFinite(num)
   })
 
   const values = validDataset.map(r => Number(r[biomarker]))

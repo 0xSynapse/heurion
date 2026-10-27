@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, isAbsolute, join, relative } from 'node:path'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -37,10 +37,12 @@ interface Op {
 
 interface ToolSpec { name: string; description: string; input: Record<string, z.ZodTypeAny>; actions: Record<string, Op> }
 
-/** 只对本进程拥有的路径改权限（别的 uid 的文件 chmod 会 EPERM）；拿不到 uid 的平台（Windows）不改。 */
+/** 只对本进程拥有的非符号链接路径改权限（别的 uid 的文件 chmod 会 EPERM；拒绝符号链接防提权）；拿不到 uid 的平台（Windows）不改。 */
 export function chmodIfOwned(path: string, mode: number): void {
   if (typeof process.getuid !== 'function') return
-  if (statSync(path).uid === process.getuid()) chmodSync(path, mode)
+  const st = lstatSync(path)
+  if (st.isSymbolicLink()) throw new Error(`不允许符号链接：${path}`)
+  if (st.uid === process.getuid()) chmodSync(path, mode)
 }
 
 export interface WorkspaceFile { bytes: Uint8Array; name: string; mime: string }
@@ -431,6 +433,7 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
           const dir = join(out, '..')
           mkdirSync(dir, { recursive: true })
           chmodIfOwned(dir, 0o2777)
+          rmSync(out, { force: true })
           writeFileSync(out, r.bytes)
           chmodIfOwned(out, 0o644)
           return json({ saved: rel, bytes: r.bytes.byteLength, message: `已导出到工作区 ${rel}` })
