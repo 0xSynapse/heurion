@@ -1226,8 +1226,8 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       '(7) journal_assembly 顶刊多面板拼图排版（Nature/NEJM/Lancet/JAMA 栏宽规范、统一字体字号、Adobe Illustrator 分层 SVG + 600 DPI PNG + PPTX）。',
     inputSchema: {
       category: z
-        .enum(['clinical_cohort', 'mechanism', 'wet_lab', 'flowchart', 'bioinformatics', 'image_processing', 'journal_assembly'])
-        .describe('图表大类：clinical_cohort | mechanism | wet_lab | flowchart | bioinformatics | image_processing | journal_assembly'),
+        .enum(['clinical_cohort', 'mechanism', 'wet_lab', 'flowchart', 'bioinformatics', 'image_processing', 'journal_assembly', 'gallery_manage'])
+        .describe('图表大类：clinical_cohort | mechanism | wet_lab | flowchart | bioinformatics | image_processing | journal_assembly | gallery_manage（成果库列表/重命名/删除/批量操作）'),
       title: z.string().optional().describe('图表主标题'),
       spec: z.record(z.string(), z.any()).describe('对应图表类别的详细配置参数与真实实验/临床数据'),
       save_asset: z.boolean().optional().describe('是否将生成的 SVG/PNG 保存为平台文档资产供文稿直接引用，默认 true'),
@@ -1235,6 +1235,57 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
   }, async ({ category, title, spec, save_asset }) => {
     try {
       const payload: Record<string, any> = { ...(spec as Record<string, any>), title: title || (spec as any).title || 'Medical Publication Figure' }
+      if (category === 'gallery_manage') {
+        const action = String(payload.action || 'list')
+        if (action === 'list') {
+          return json({ status: 'success', figures: store.provenanceAssets(claims.u) })
+        }
+        if (!claims.p.includes('write')) return fail('forbidden', '当前令牌没有写入或修改资产权限')
+        const normalizeFigName = (raw: unknown): string => {
+          const base = String(raw || '').trim().replace(/[\\/:*?"<>|]/g, '_').replace(/\.svg$/i, '').trim()
+          return (base || 'Figure') + '.svg'
+        }
+        if (action === 'rename') {
+          const aid = String(payload.asset_id || payload.id || '').trim()
+          const name = String(payload.name || payload.title || '').trim()
+          if (!aid || !name) return fail('invalid_input', '重命名需提供 asset_id 与 name')
+          const asset = store.getAsset(aid)
+          if (!asset || asset.owner !== claims.u) return fail('not_found', '图表不存在或无权操作')
+          const cleanName = normalizeFigName(name)
+          store.renameAsset(aid, cleanName)
+          return json({ status: 'success', ok: true, id: aid, name: cleanName })
+        }
+        if (action === 'delete') {
+          const aid = String(payload.asset_id || payload.id || '').trim()
+          if (!aid) return fail('invalid_input', '删除需提供 asset_id')
+          const asset = store.getAsset(aid)
+          if (!asset || asset.owner !== claims.u) return fail('not_found', '图表不存在或无权删除')
+          store.deleteAsset(aid)
+          return json({ status: 'success', ok: true, id: aid })
+        }
+        if (action === 'batch_delete' || action === 'delete_batch') {
+          const ids = Array.isArray(payload.ids) ? payload.ids.map((x: unknown) => String(x || '').trim()).filter(Boolean) : []
+          let deletedCount = 0
+          for (const id of ids) {
+            const asset = store.getAsset(id)
+            if (asset && asset.owner === claims.u && store.deleteAsset(id)) deletedCount++
+          }
+          return json({ status: 'success', ok: true, affected: deletedCount })
+        }
+        if (action === 'batch_rename' || action === 'rename_prefix') {
+          const ids = Array.isArray(payload.ids) ? payload.ids.map((x: unknown) => String(x || '').trim()).filter(Boolean) : []
+          const prefix = String(payload.prefix || 'Figure').trim().replace(/[\\/:*?"<>|]/g, '_') || 'Figure'
+          let renamed = 0
+          ids.forEach((id: string, idx: number) => {
+            const row = store.getAsset(id)
+            if (!row || row.owner !== claims.u) return
+            const newName = `${prefix}_${String(idx + 1).padStart(2, '0')}.svg`
+            if (store.renameAsset(id, newName)) renamed++
+          })
+          return json({ status: 'success', ok: true, affected: renamed, prefix })
+        }
+        return fail('invalid_action', `不支持的 gallery_manage 动作: ${action}`)
+      }
       let svgOut: string | undefined
       let nativeSummary: Record<string, unknown> = {}
 
