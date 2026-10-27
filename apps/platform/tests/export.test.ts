@@ -773,3 +773,246 @@ describe('全格式导入 / 编辑 / 导出一致性回归', () => {
   })
 })
 
+describe('全链路业务流 Edge Cases（导入 → 编辑/审阅/协同/回滚/复制 → 导出）', () => {
+  it('Edge 1: Word 表格含 <w:sdt> 内容控件 + 单元格内含行内图片(签名章)与公式，同时改文字并新增行后导出', () => {
+    const mathXml = `<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>E=mc2</m:t></m:r></m:oMath>`
+    const tblBody = `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/></w:tblPr>` +
+      `<w:tr><w:tc><w:p><w:r><w:t>项目</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>填写内容</w:t></w:r></w:p></w:tc></w:tr>` +
+      `<w:sdt><w:sdtContent><w:tr>` +
+        `<w:tc><w:p><w:r><w:t>科主任签字</w:t></w:r></w:p></w:tc>` +
+        `<w:sdt><w:sdtContent><w:tc><w:p><w:r><w:t>同意申报（</w:t></w:r>${mathXml}<w:r><w:t>）</w:t></w:r>${drawing('rId20')}</w:p></w:tc></w:sdtContent></w:sdt>` +
+      `</w:tr></w:sdtContent></w:sdt>` +
+      `</w:tbl>`
+    const original = docx(tblBody, { rels: IMAGE_REL, files: { 'word/media/image1.png': PNG } })
+    const t = importInto(original)
+
+    // 1. 验证 <w:sdt> 包装的行和单元格在导入时完整解包
+    const tblNode = t.docs.get(t.docId).firstChild!
+    expect(tblNode.type.name).toBe('table')
+    expect(tblNode.childCount).toBe(2)
+    expect(tblNode.child(1).child(0).textContent).toBe('科主任签字')
+    const signCellPara = tblNode.child(1).child(1).firstChild!
+    expect(signCellPara.textContent).toContain('同意申报')
+
+    // 2. 修改含签名章与公式的单元格文字（验证 patchedTable 对含 <w:drawing> 单元格保留原图和公式）
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: signCellPara.attrs.id as string, find: '同意申报', replace: '优先推荐申报' }],
+    }, { actor: 'user', turnId: null })
+
+    const outPatched = bodyOf(t.exportNow().bytes)
+    expect(outPatched).toContain('优先推荐申报')
+    expect(outPatched).toContain('r:embed="rId20"')
+    expect(outPatched).toContain('E=mc2')
+
+    // 3. 在同一张表中再新增一行（触发 table() 整表重生成路径，验证已编辑单元格中的行内公式和签名图片仍不丢失）
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'table_insert_rows', id: tblNode.attrs.id as string, at: 2, rows: [['伦理委员会', '已备案']] }],
+    }, { actor: 'user', turnId: null })
+
+    const outRegen = bodyOf(t.exportNow().bytes)
+    expect(outRegen).toContain('优先推荐申报')
+    expect(outRegen).toContain('伦理委员会')
+    expect(outRegen).toContain('已备案')
+    expect(outRegen).toContain('r:embed="rId20"')
+    expect(outRegen).toContain('E=mc2')
+  })
+
+  it('Edge 2: Word 独立图片紧跟 Caption 题注 vs 图文混排段落紧跟 Caption 题注的导入、修改与导出', () => {
+    const body = [
+      `<w:p>${drawing('rId20')}</w:p>`,
+      p('图 1：独立图片题注', '<w:pStyle w:val="Caption"/>'),
+      `<w:p><w:r><w:t>如右图所示</w:t></w:r>${drawing('rId20')}</w:p>`,
+      p('图 2：图文混排下方的题注段落', '<w:pStyle w:val="Caption"/>'),
+    ].join('')
+    const original = docx(body, { rels: IMAGE_REL, files: { 'word/media/image1.png': PNG } })
+    const t = importInto(original)
+
+    const doc0 = t.docs.get(t.docId)
+    // 第 1 个块是合并了 Caption 的独立 figure
+    expect(doc0.child(0).type.name).toBe('figure')
+    expect(doc0.child(0).attrs.caption).toBe('图 1：独立图片题注')
+
+    // 1. 未修改直接导出：两个题注与两处图片均完整保留
+    const untouchedXml = bodyOf(t.exportNow().bytes)
+    expect(untouchedXml).toContain('图 1：独立图片题注')
+    expect(untouchedXml).toContain('图 2：图文混排下方的题注段落')
+    expect(untouchedXml.match(/r:embed="rId20"/g)?.length).toBe(2)
+
+    // 2. 修改图文混排文字后导出：附带的 figure 与下方的图 2 题注均不丢失
+    const inlineParaId = doc0.child(1).attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: inlineParaId, find: '如右图所示', replace: '详见附图说明' }],
+    }, { actor: 'user', turnId: null })
+
+    const editedXml = bodyOf(t.exportNow().bytes)
+    expect(editedXml).toContain('详见附图说明')
+    expect(editedXml).toContain('图 1：独立图片题注')
+    expect(editedXml).toContain('图 2：图文混排下方的题注段落')
+    expect(editedXml.match(/r:embed="rId20"/g)?.length).toBe(2)
+  })
+
+  it('Edge 3: 列表项 (list_item) 在 suggest 审阅模式下连续 replace_text + set_text_style 后采纳并导出', async () => {
+    const { resolveSuggestions } = await import('../src/ops/suggest.ts')
+    const original = docx([li('初筛入组标准：年龄≥18岁', 0), li('排除标准：严重肝肾功能不全', 0)].join(''))
+    const t = importInto(original)
+    const listBlock = t.docs.get(t.docId).firstChild!
+    const li1Id = listBlock.firstChild!.attrs.id as string
+
+    // 第一步：AI 在 suggest 模式下修改列表项文字
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'suggest',
+      ops: [{ op: 'replace_text', id: li1Id, find: '年龄≥18岁', replace: '年龄 18–75 岁' }],
+    }, { actor: 'ai', turnId: 't1' })
+
+    // 第二步：AI 紧接着对同一个 list_item ID 继续追加文字修改并设置加粗与高亮色（此时 list_item 内已有 [delete_p, insert_p]）
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'suggest',
+      ops: [
+        { op: 'replace_text', id: li1Id, find: '年龄 18–75 岁', replace: '年龄 18–75 周岁（含边界）' },
+        { op: 'set_text_style', id: li1Id, bold: true, color: '#DC2626', range: { from: 9, to: 16 } },
+      ],
+    }, { actor: 'ai', turnId: 't1' })
+
+    // 第三步：用户在审阅面板全部采纳
+    const accepted = resolveSuggestions(t.docs.get(t.docId), null, true)
+    t.docs.commit(t.docId, accepted, { actor: 'user', turnId: null, ops: [{ op: 'suggestion', accept: true }] })
+
+    const outXml = bodyOf(t.exportNow().bytes)
+    expect(outXml).toContain('初筛入组标准：年龄')
+    expect(outXml).toContain(' 18–75 ')
+    expect(outXml).toContain('周岁（含边界）')
+    expect(outXml).not.toContain('年龄≥18岁')
+    expect(outXml).toContain('<w:numPr>')
+    expect(outXml).toContain('w:val="DC2626"')
+    expect(outXml).toContain('<w:b/>')
+  })
+
+  it('Edge 4: 复杂协同流（AI 审阅建议 + 用户二次修改待采纳块 + revertByNodes 智能跳过用户已改对偶块 + 导出一致性）', async () => {
+    const { revertByNodes } = await import('../src/ops/revert.ts')
+    const { resolveSuggestions } = await import('../src/ops/suggest.ts')
+    const { exportMarkdown } = await import('../src/views/render.ts')
+    const original = docx([
+      p('第一段：研究背景原始表述。'),
+      p('第二段：研究方法原始表述。'),
+      p('第三段：統計分析原始表述。'),
+    ].join(''))
+    const t = importInto(original)
+    const doc0 = t.docs.get(t.docId)
+    const p1 = doc0.child(0).attrs.id as string
+    const p2 = doc0.child(1).attrs.id as string
+    const p3 = doc0.child(2).attrs.id as string
+
+    // 1. AI Turn 10 在 suggest 模式下同时修改第一段和第二段
+    const turn10 = t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'suggest',
+      ops: [
+        { op: 'replace_text', id: p1, find: '原始表述', replace: 'AI 修订版 A' },
+        { op: 'replace_text', id: p2, find: '原始表述', replace: 'AI 修订版 B' },
+      ],
+    }, { actor: 'ai', turnId: 'turn-10' })
+
+    // 2. 用户在采纳前直接手动微调了第一段的 AI 建议块（insert 块），但未触碰第二段
+    const docAfterAi = t.docs.get(t.docId)
+    let p1InsertId = ''
+    docAfterAi.forEach(n => {
+      if (n.attrs.suggest === 'insert' && n.attrs.suggest_of === p1) p1InsertId = n.attrs.id as string
+    })
+    expect(p1InsertId).toBeTruthy()
+
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: p1InsertId, find: 'AI 修订版 A', replace: 'AI+医生联合定稿版 A' }],
+    }, { actor: 'user', turnId: null })
+
+    // 3. 触发 revertByNodes 撤销 AI Turn 10：
+    //    - 第二段未被用户触碰，应完整回滚回「第二段：研究方法原始表述。」
+    //    - 第一段因用户已基于 AI 建议块做了二次编辑，其配对的 delete(p1) 与 insert(p1InsertId) 必须成对保留，不能拆散导致段落重复
+    const userTouched = t.store.userTouchedSince(t.docId, turn10.rev)
+    const revRes = revertByNodes(t.docs.get(t.docId), doc0, turn10.changes, userTouched)
+    expect(revRes.skipped).toContain(p1)
+    expect(revRes.skipped).toContain(p1InsertId)
+    t.docs.commit(t.docId, revRes.doc, { actor: 'user', turnId: null, ops: [{ op: 'revert' }] })
+
+    // 4. 用户采纳剩余的建议（即第一段的联合定稿），并修改第三段
+    const accepted = resolveSuggestions(t.docs.get(t.docId), null, true)
+    t.docs.commit(t.docId, accepted, { actor: 'user', turnId: null, ops: [{ op: 'suggestion', accept: true }] })
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: p3, find: '原始表述', replace: '最终统计方案' }],
+    }, { actor: 'user', turnId: null })
+
+    const finalDoc = t.docs.get(t.docId)
+    expect(finalDoc.childCount).toBe(3)
+    expect(finalDoc.child(0).textContent).toBe('第一段：研究背景AI+医生联合定稿版 A。')
+    expect(finalDoc.child(1).textContent).toBe('第二段：研究方法原始表述。')
+    expect(finalDoc.child(2).textContent).toBe('第三段：統計分析最终统计方案。')
+
+    const outDocx = bodyOf(t.exportNow().bytes)
+    expect(outDocx).toContain('第一段：研究背景AI+医生联合定稿版 A。')
+    expect(outDocx).not.toContain('第一段：研究背景原始表述。')
+    expect(outDocx).toContain('第二段：研究方法原始表述。')
+    expect(outDocx).not.toContain('AI 修订版 B')
+    expect(outDocx).toContain('第三段：統計分析最终统计方案。')
+
+    const outMd = exportMarkdown(finalDoc, [])
+    expect(outMd).toContain('第一段：研究背景AI+医生联合定稿版 A。')
+    expect(outMd).toContain('第二段：研究方法原始表述。')
+    expect(outMd).toContain('第三段：統計分析最终统计方案。')
+  })
+
+  it('Edge 5: AI 对章节标题执行多段 replace_block 时，不得静默吞并用户在 base_rev 之后刚改过的正文段落', () => {
+    const original = docx([
+      p('1 研究背景', '<w:pStyle w:val="Heading1"/>'),
+      p('本节第一段：患者基线特征。'),
+    ].join(''))
+    const t = importInto(original)
+    const doc0 = t.docs.get(t.docId)
+    const h1 = doc0.child(0).attrs.id as string
+    const p1 = doc0.child(1).attrs.id as string
+    const aiReadRev = t.docs.rev(t.docId) // rev = 0
+
+    // 用户在 rev = 0 之后做了一次编辑（产生 rev = 1）
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: aiReadRev,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: p1, find: '患者基线特征', replace: '医生亲手补充的78例患者特征' }],
+    }, { actor: 'user', turnId: null })
+
+    // AI 仍拿着 base_rev = 0 对标题 h1 执行多块 replace_block（试图重写标题并附带新正文）
+    // 因为 p1 在 rev = 1 被用户修改过，标题的章节吸收逻辑必须识破并保留 p1，绝不能把 p1 静默吞掉
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: aiReadRev,
+      mode: 'apply',
+      ops: [{ op: 'replace_block', id: h1, markdown: '# 1 研究背景与立项依据\n\nAI 新增的导语段落。' }],
+    }, { actor: 'ai', turnId: 'turn-11' })
+
+    const finalDoc = t.docs.get(t.docId)
+    const allText = finalDoc.textContent
+    expect(allText).toContain('1 研究背景与立项依据')
+    expect(allText).toContain('AI 新增的导语段落。')
+    expect(allText).toContain('医生亲手补充的78例患者特征')
+  })
+})
+
+

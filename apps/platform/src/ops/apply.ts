@@ -666,10 +666,24 @@ export function replaceError(outcome: Exclude<ReplaceOutcome, { ok: true }>, whe
   return new OpError('text_not_found', `${where}中找不到要替换的原文`, { hint, current: near.length > 0 ? { near, text: current } : current })
 }
 
+function listItemTextTarget(target: { node: PMNode; pos: number }): { node: PMNode; pos: number } {
+  if (target.node.type.name === 'list_item' && target.node.firstChild?.isTextblock) {
+    if (
+      target.node.childCount > 1 &&
+      target.node.firstChild.attrs.suggest === 'delete' &&
+      target.node.child(1).isTextblock &&
+      target.node.child(1).attrs.suggest === 'insert'
+    ) {
+      return { node: target.node.child(1), pos: target.pos + 1 + target.node.firstChild.nodeSize }
+    }
+    return { node: target.node.firstChild, pos: target.pos + 1 }
+  }
+  return target
+}
+
 function replaceText(tr: Transform, op: Extract<DocOp, { op: 'replace_text' }>): string[] {
-  let target = find(tr, op.id)
-  // 列表项：读视图里显示的是列表项 id，替换作用于它的文字段落
-  if (target.node.type.name === 'list_item' && target.node.firstChild?.isTextblock) target = { node: target.node.firstChild, pos: target.pos + 1 }
+  // 列表项：读视图里显示的是列表项 id，替换作用于它的文字段落（若有待采纳修订则作用于其新增段）
+  const target = listItemTextTarget(find(tr, op.id))
   if (!target.node.isTextblock) {
     throw new OpError('invalid_structure', `replace_text 只能用于段落或标题，${op.id} 是 ${target.node.type.name}`, {
       hint: '表格请用 table_set_cells；其他块用 replace_block。',
@@ -834,7 +848,7 @@ function setStyle(tr: Transform, op: Extract<DocOp, { op: 'set_block_style' }>):
 }
 
 function setTextStyle(tr: Transform, op: Extract<DocOp, { op: 'set_text_style' }>): string[] {
-  const target = find(tr, op.id)
+  const target = listItemTextTarget(find(tr, op.id))
   if (!target.node.isTextblock) throw new OpError('invalid_structure', `set_text_style 只能用于段落或标题，${op.id} 是 ${target.node.type.name}`)
 
   let from: number

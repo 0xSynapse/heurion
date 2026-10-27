@@ -17,6 +17,12 @@ export function revertByNodes(
   const ids = new Set(changes.map(c => c.node_id))
   const skipped: string[] = []
   const tr = new Transform(current)
+  current.descendants(n => {
+    if (n.attrs.id && userTouched.has(n.attrs.id as string) && n.attrs.suggest_of) {
+      userTouched.add(String(n.attrs.suggest_of))
+    }
+    return true
+  })
 
   for (const id of ids) {
     if (userTouched.has(id)) { skipped.push(id); continue }

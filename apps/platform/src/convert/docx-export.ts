@@ -646,7 +646,7 @@ export function exportDocx(input: ExportInput): ExportResult {
           if (b.eq(n)) return x
           // 段落属性（样式、对齐）改了：交给重新生成
           const sameAttrs = ['style', 'align'].every(a => b.attrs[a] === n.attrs[a])
-          const patchedP = n.type.name === 'paragraph' && b.type === n.type && sameAttrs ? patchXml(x, b, n) : null
+          const patchedP = n.type.name === 'paragraph' && b.type === n.type && sameAttrs ? patchXml(x, b, n, /<w:(drawing|pict)\b/.test(x)) : null
           if (patchedP === null) failed = true
           return patchedP ?? x
         })
@@ -737,6 +737,12 @@ export function exportDocx(input: ExportInput): ExportResult {
     const v = childEl(childEl(tc, 'tcPr'), 'vMerge')
     return !!v && (attrOf(v, 'w:val') ?? 'continue') === 'continue'
   }
+  const unwrapSdtRaw = (els: string[]): string[] =>
+    els.flatMap(k => {
+      if (!/^<w:sdt\b/.test(k)) return [k]
+      const content = elementChildrenRaw(k).find(c => /^<w:sdtContent\b/.test(c))
+      return content ? unwrapSdtRaw(elementChildrenRaw(content)) : []
+    })
   const tableSrc = (node: PMNode): TableSrc | null => {
     const id = node.attrs.id as string
     const xml = input.src(id)
@@ -749,8 +755,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       tcPr: new Map(), trPr: new Map(), para: new Map(),
     }
     let bi = 0
-    for (const tr of kids.filter(k => /^<w:tr\b/.test(k))) {
-      const trKids = elementChildrenRaw(tr)
+    for (const tr of unwrapSdtRaw(kids).filter(k => /^<w:tr\b/.test(k))) {
+      const trKids = unwrapSdtRaw(elementChildrenRaw(tr))
       // 与导入一致：vMerge 续行格不对应模型里的单元格；整行都是续行格的行在模型里不存在
       const tcs = trKids.filter(k => /^<w:tc\b/.test(k) && !isVMergeContinue(k))
       if (tcs.length === 0) continue
@@ -761,7 +767,7 @@ export function exportDocx(input: ExportInput): ExportResult {
         const bcell = brow.maybeChild(ci)
         const key = bcell?.firstChild?.attrs.id as string | undefined
         if (!bcell || !key) return
-        const tcKids = elementChildrenRaw(tc)
+        const tcKids = unwrapSdtRaw(elementChildrenRaw(tc))
         out.tcPr.set(key, tcKids.find(k => /^<w:tcPr\b/.test(k)) ?? '')
         out.trPr.set(key, trPr)
         const ps = tcKids.filter(k => /^<w:p\b/.test(k))
@@ -919,7 +925,14 @@ export function exportDocx(input: ExportInput): ExportResult {
             } else seg.push(ch)
           })
           paras += genPara(p.type.create({ ...p.attrs, id: null }, seg, p.marks), fmt)
-        } else paras += genPara(p, fmt)
+        } else {
+          const rawP = id ? orig?.para.get(id) : undefined
+          const sameAttrs = before ? ['style', 'align'].every(a => before.attrs[a] === p.attrs[a]) : false
+          const patchedCellP = rawP && before && p.type.name === 'paragraph' && before.type === p.type && sameAttrs
+            ? patchXml(rawP, before, p, /<w:(drawing|pict)\b/.test(rawP))
+            : null
+          paras += patchedCellP ?? genPara(p, fmt)
+        }
       })
       return paras || '<w:p/>'
     }

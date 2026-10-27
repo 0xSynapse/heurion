@@ -597,10 +597,13 @@ export function importDocx(bytes: Uint8Array): DocxImport {
       }
       return
     }
-    // 紧跟在图后面的题注段落 → 并回图的 caption
+    // 紧跟在图后面的题注段落 → 并回图的 caption（仅限独立成段的图，同时把题注段落 XML 并入该图的原始 XML）
     const prev = blocks[blocks.length - 1]
-    if (figures.length === 0 && prev?.type.name === 'figure' && !prev.attrs.caption && styleName && /^(caption|题注)$/i.test(styleName)) {
-      blocks[blocks.length - 1] = prev.type.create({ ...prev.attrs, caption: inline.map(n => n.textContent).join('') })
+    const prevSrcIdx = prev ? pendingSrc.findIndex(p => p.node === prev) : -1
+    if (figures.length === 0 && prev?.type.name === 'figure' && prevSrcIdx !== -1 && !prev.attrs.caption && styleName && /^(caption|题注)$/i.test(styleName)) {
+      const withCaption = prev.type.create({ ...prev.attrs, caption: inline.map(n => n.textContent).join('') }, null, prev.marks)
+      blocks[blocks.length - 1] = withCaption
+      pendingSrc[prevSrcIdx] = { node: withCaption, xml: pendingSrc[prevSrcIdx]!.xml + xmlText }
       return
     }
     // 只有一张图的段落：图本身承接段落原文（未改动时原样写回）
@@ -619,12 +622,17 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     blocks.push(...figures)
   }
 
+  const unwrapSdt = (el: XElement): XElement[] =>
+    children(el).flatMap(c => c.namespaceURI === W && local(c) === 'sdt'
+      ? (child(c, 'sdtContent') ? unwrapSdt(child(c, 'sdtContent')!) : [])
+      : [c])
+
   const table = (tbl: XElement): PMNode => {
     const rows: PMNode[] = []
     // vMerge：记录每个网格列上正在延续的单元格（行下标、单元格下标）
     const merging = new Map<number, { row: number; cell: number }>()
     const rowCells: Array<Array<{ attrs: Record<string, unknown>; content: PMNode[] }>> = []
-    children(tbl).filter(c => local(c) === 'tr').forEach((tr, ri) => {
+    unwrapSdt(tbl).filter(c => local(c) === 'tr').forEach((tr, ri) => {
       const trPr = child(tr, 'trPr')
       const tblHeaderEl = trPr && child(trPr, 'tblHeader')
       const explicitHeader = tblHeaderEl
@@ -632,7 +640,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
         : null
       const cells: Array<{ attrs: Record<string, unknown>; content: PMNode[] }> = []
       let col = 0
-      for (const tc of children(tr).filter(c => local(c) === 'tc')) {
+      for (const tc of unwrapSdt(tr).filter(c => local(c) === 'tc')) {
         const tcPr = child(tc, 'tcPr')
         const span = Number(wAttr(tcPr && child(tcPr, 'gridSpan'), 'val') ?? 1)
         const vMergeEl = tcPr && child(tcPr, 'vMerge')
@@ -647,7 +655,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
           continue
         }
         const paras: PMNode[] = []
-        for (const p of children(tc).filter(c => local(c) === 'p')) {
+        for (const p of unwrapSdt(tc).filter(c => local(c) === 'p')) {
           const figures: PMNode[] = []
           if (revisionOf(p).has) acceptedRevisions++
           paras.push(schema.node('paragraph', null, inlineOf(p, figures)))
@@ -787,7 +795,7 @@ export function bindAssets(doc: PMNode, ids: Map<string, string>): PMNode {
   const walk = (n: PMNode): PMNode => {
     if (n.type.name === 'figure') {
       const real = ids.get(n.attrs.asset_id as string)
-      return real ? n.type.create({ ...n.attrs, asset_id: real }) : n
+      return real ? n.type.create({ ...n.attrs, asset_id: real }, null, n.marks) : n
     }
     if (n.isLeaf) return n
     const kids: PMNode[] = []
