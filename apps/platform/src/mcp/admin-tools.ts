@@ -187,7 +187,7 @@ export const ADMIN_TOOLS: ToolSpec[] = [
       purge: { method: 'DELETE', path: a => `/api/docs/${enc(a.doc_id)}/purge`, confirm: true, probe: () => '/api/trash', summary: a => `彻底删除回收站里的文档 ${a.doc_id}（不可恢复）` },
       save_version: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/save` },
       restore_version: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/versions/${enc(a.seq)}/restore` },
-      revert_turn: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/turns/${enc(a.turn_id)}/revert` },
+      revert_turn: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/turns/${enc(a.turn_id || 'latest')}/revert` },
       export: { method: 'GET', path: a => `/api/docs/${enc(a.doc_id)}/export.${a.format ?? 'docx'}${q({ fonts: a.fonts })}`, save: a => `exports/${a.doc_id}.${a.format ?? 'docx'}` },
     },
   },

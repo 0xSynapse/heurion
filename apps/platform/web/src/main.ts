@@ -2296,8 +2296,21 @@ if (suggestCheckbox) {
 
 // —— 任务队列（同一用户的所有文档共用一个队列） ——
 
-interface QueueItem { id: string; doc_id: string; doc_title: string; label: string; suggest: boolean; since: string }
+interface QueueItem { id: string; doc_id: string; doc_title: string; label: string; suggest: boolean; since: string; comment_id?: string | null }
 let queue: { running: QueueItem | null; active?: QueueItem[]; queued: QueueItem[] } = { running: null, active: [], queued: [] }
+
+function syncCommentAskButtons(): void {
+  const activeList = queue.active ?? (queue.running ? [queue.running] : [])
+  document.querySelectorAll<HTMLElement>('#comments .card[data-cid]').forEach(card => {
+    const cid = card.dataset.cid
+    const btn = card.querySelector<HTMLButtonElement>('button[data-act="ask"]')
+    if (!cid || !btn) return
+    const running = activeList.some(item => item.doc_id === session?.docId && item.comment_id === cid)
+    const queued = !running && queue.queued.some(item => item.doc_id === session?.docId && item.comment_id === cid)
+    btn.disabled = running || queued
+    btn.textContent = running ? 'AI 处理中…' : queued ? '排队中…' : '让 AI 处理'
+  })
+}
 
 async function loadQueue(): Promise<void> {
   if (!TOKEN) return
@@ -2305,6 +2318,7 @@ async function loadQueue(): Promise<void> {
     queue = await api('/api/queue')
   } catch { return }
   renderQueue()
+  syncCommentAskButtons()
   // 忙碌状态只按刚取到的队列设置：判断当前打开的文档是否正在执行
   const activeList = queue.active ?? (queue.running ? [queue.running] : [])
   const isCurrentDocBusy = !!session?.docId && activeList.some(item => item.doc_id === session?.docId)
@@ -2470,6 +2484,7 @@ function renderComments(): void {
       </div>
     </div>`
     }).join('')
+  syncCommentAskButtons()
 }
 
 $('comments').onclick = async e => {
@@ -2508,7 +2523,11 @@ $('comments').onclick = async e => {
       if (!text) return
       await api(`/api/docs/${session.docId}/comments/${cid}/replies`, { method: 'POST', body: JSON.stringify({ text }) })
     } else if (btn.dataset.act === 'ask') {
+      if (btn.disabled) return
+      btn.disabled = true
+      btn.textContent = '排队中…'
       await api(`/api/docs/${session.docId}/comments/${cid}/ask?async=1`, { method: 'POST', body: JSON.stringify({ text, suggest: $<HTMLInputElement>('suggestMode').checked }) })
+      await loadQueue()
       switchTab('chatPane')
     } else if (btn.dataset.act === 'delete') {
       if (!await askConfirm({ title: '删除评论', message: '删除这条评论及其全部回复？正文里的评论标记也会去掉。', confirm: '删除', danger: true })) return

@@ -19,9 +19,12 @@ async function toolsFor(t?: 'doc' | 'deck') {
 }
 
 describe('MCP 工具范围：普通稿件与幻灯片只暴露用得到的工具', () => {
-  it('回合所在文档 → 范围：幻灯片 deck，普通稿件 doc，患者文档、随航等不限', () => {
+  it('回合所在文档 → 范围：幻灯片 deck，普通稿件 doc，提及 PPT/幻灯片时自动升级为 deck，患者文档、随航等不限', () => {
     expect(scopeOf({ kind: 'deck', context: null })).toBe('deck')
     expect(scopeOf({ kind: 'doc', context: null })).toBe('doc')
+    expect(scopeOf({ kind: 'doc', context: null }, '请帮我优化这段文字')).toBe('doc')
+    expect(scopeOf({ kind: 'doc', context: null }, '目前这个版本我相对满意了，请帮我同步更新中英文PPT')).toBe('deck')
+    expect(scopeOf({ kind: 'doc', context: null }, '请将研究方案制作成幻灯片')).toBe('deck')
     expect(scopeOf({ kind: 'doc', context: '{"kind":"patient","patient_id":"p1"}' })).toBeNull()
     expect(scopeOf({ kind: 'doc', context: '{"kind":"copilot"}' })).toBeNull()
     expect(scopeOf(undefined)).toBeNull()

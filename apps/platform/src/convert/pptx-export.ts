@@ -2,6 +2,7 @@ import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { DECK_THEMES } from '../model/deck-themes.ts'
+import { normalizeHexColor } from '../model/schema.ts'
 import { chartWorkbook, newChartXml, patchChart, readChart, type ChartData } from './pptx-chart.ts'
 import type { CitationRow } from '../store/db.ts'
 import { citationOrder } from '../views/read.ts'
@@ -106,8 +107,8 @@ function runProps(marks: readonly Mark[], forceSup = false): string {
       }
     }
     if (color) {
-      const hex = color.replace(/^#/, '').toUpperCase()
-      if (/^[0-9A-F]{6}$/i.test(hex)) {
+      const hex = normalizeHexColor(color)
+      if (hex) {
         xml = xml.replace(/<a:(solidFill|gradFill|pattFill|noFill)\b[^>]*?\/>|<a:(solidFill|gradFill|pattFill)\b[^>]*>[\s\S]*?<\/a:\2>/g, '')
         const fillTag = `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>`
         if (xml.endsWith('/>')) xml = `${xml.slice(0, -2)}>${fillTag}</a:rPr>`

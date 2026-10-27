@@ -2,7 +2,7 @@ import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { referencePlan } from '../model/references.ts'
-import { colWidths } from '../model/schema.ts'
+import { colWidths, normalizeHexColor } from '../model/schema.ts'
 import { resolveSuggestions } from '../ops/suggest.ts'
 import { readGrid, type GridCell } from '../model/table-grid.ts'
 import { looksLikeHeaderRow } from '../model/table-header.ts'
@@ -351,11 +351,8 @@ export function exportDocx(input: ExportInput): ExportResult {
             p += `<w:sz w:val="${hp}"/><w:szCs w:val="${hp}"/>`
           }
         }
-        const col = m.attrs.color as string | null
-        if (col) {
-          const hex = String(col).trim().replace(/^#/, '').toUpperCase()
-          if (/^[0-9A-F]{6}$/.test(hex)) p += `<w:color w:val="${hex}"/>`
-        }
+        const hex = normalizeHexColor(m.attrs.color as string | null)
+        if (hex) p += `<w:color w:val="${hex}"/>`
       }
     }
     if (base) p = mergeEls(base, p, RPR_ORDER)
@@ -437,6 +434,26 @@ export function exportDocx(input: ExportInput): ExportResult {
     const align = node.attrs.align as string | null
     if (align) p += `<w:jc w:val="${align === 'justify' ? 'both' : align === 'left' ? 'left' : align}"/>`
     return p ? `<w:pPr>${p}</w:pPr>` : ''
+  }
+
+  // 导入文档的正文默认段落属性（行距 spacing、缩进 ind）：当新增段落或整篇全选粘贴后块 ID 重新生成时，沿用原文档正文的首行缩进与行距
+  let defaultBodyPPr = ''
+  if (input.baseline) {
+    input.baseline.forEach(n => {
+      if (defaultBodyPPr || n.type.name !== 'paragraph' || n.attrs.style || n.attrs.align) return
+      const raw = n.attrs.id ? input.src(n.attrs.id as string) : null
+      if (!raw || !/^<w:p\b/.test(raw) || /<w:(drawing|pict|numPr)\b/.test(raw)) return
+      const ppr = elementChildrenRaw(raw).find(k => /^<w:pPr\b/.test(k))
+      if (!ppr) return
+      const kept = elementChildrenRaw(ppr).filter(k => /^<w:(spacing|ind)\b/.test(k)).join('')
+      if (kept) defaultBodyPPr = kept
+    })
+  }
+  const fallbackPara = (node: PMNode, extraPPr = ''): string => {
+    const own = innerOf(pPr(node, extraPPr) || '<w:pPr/>')
+    const base = node.type.name === 'paragraph' && !node.attrs.style && !extraPPr ? defaultBodyPPr : ''
+    const merged = base && own ? mergeEls(base, own, PPR_ORDER) : (own || base)
+    return `<w:p>${merged ? `<w:pPr>${merged}</w:pPr>` : ''}${inline(node)}</w:p>`
   }
 
   /**
@@ -533,7 +550,7 @@ export function exportDocx(input: ExportInput): ExportResult {
     }
     const plain = cleared(node)
     const copyOf = node.attrs.suggest === 'insert' && node.attrs.suggest_of ? node.attrs.suggest_of as string : undefined
-    let xml = (copyOf ? null : verbatim(plain)) ?? regenerated(plain, '', copyOf) ?? `<w:p>${pPr(plain)}${inline(plain)}</w:p>`
+    let xml = (copyOf ? null : verbatim(plain)) ?? regenerated(plain, '', copyOf) ?? fallbackPara(plain)
     if (node.attrs.suggest === 'delete' && hasInsertCopy.has(id)) {
       xml = xml.replace(/^<w:p\b[^>]*>/, m => m.replace(/\s(?:w14:paraId|w14:textId)="[^"]*"/g, ''))
     }
@@ -659,7 +676,7 @@ export function exportDocx(input: ExportInput): ExportResult {
   }
 
   const paragraph = (node: PMNode, extraPPr = ''): string =>
-    verbatim(node) ?? patched(node) ?? regenerated(node, extraPPr) ?? `<w:p>${pPr(node, extraPPr)}${inline(node)}</w:p>`
+    verbatim(node) ?? patched(node) ?? regenerated(node, extraPPr) ?? fallbackPara(node, extraPPr)
 
   const figure = (node: PMNode): string => {
     const rawId = String(node.attrs.asset_id || '')

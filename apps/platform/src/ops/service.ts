@@ -456,7 +456,7 @@ export class OpService {
    * 会接管并改写用户原有的条目与编号（之后移动段落还会全文重新编号）——除非用户要求，不允许；新补的引用照常用 [@c:…]。
    */
   private guardExistingCitations(batch: EditBatch, before: PMNode): void {
-    const MARK = /\[\d+(?:\s*[,，–\-]\s*\d+)*\]/g
+    const MARK = /[[［【]\d+(?:\s*[,，、–\-]\s*\d+)*[\]］】]/g
     const index = indexById(before)
     batch.ops.forEach((op, i) => {
       let oldText = ''

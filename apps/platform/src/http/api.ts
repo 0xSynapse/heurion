@@ -1291,6 +1291,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         const isGenericName = /^(未命名|文档|document|untitled|draft|\d+|[a-f0-9-]{12,}|s\d{5}-\d{3}-\d{5}-[a-z0-9]|pmc\d+|nihms\d+|arxiv[\d.-]+)$/i.test(baseTitle)
         const docTitle = (isGenericName && imported.title && imported.title.length >= 4) ? imported.title : (baseTitle || '未命名文档')
 
+        if (deps.kb) void deps.kb.upload(user, { name: file.name, bytes, project_id: project }).catch(() => {})
         if (imported.kind === 'deck') {
           const boundDoc = bindDeckAssets(imported.doc, ids)
           const row = docs.create({ owner: user, title: docTitle, kind: 'deck', content: boundDoc, source: 'import' })
@@ -1741,15 +1742,18 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json({ queued: true }, 202)
   })
 
-  app.post('/api/docs/:id/turns/:turnId/revert', c => {
+  const revertTurnRoute = (c: Context<{ Variables: { user: string } }>) => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
-    const turnId = c.req.param('turnId')
-    if (!docs.canRevertTurn(row.id, turnId)) return c.json({ error: '这一轮已经撤销过，或没有改动可撤销' }, 409)
+    const rawTurnId = c.req.param('turnId')?.trim()
+    const turnId = rawTurnId && rawTurnId !== 'latest' ? rawTurnId : store.latestUnrevertedTurnForDoc(row.id)
+    if (!turnId || !docs.canRevertTurn(row.id, turnId)) return c.json({ error: '这一轮已经撤销过，或没有改动可撤销' }, 409)
     const result = docs.revertTurn(row.id, turnId)
     const version = docs.snapshot(row.id, 'user', '撤销一轮 AI 修改')
-    return c.json({ rev: docs.rev(row.id), changes: result?.event?.changes.length ?? 0, skipped: result?.skipped ?? [], version })
-  })
+    return c.json({ rev: docs.rev(row.id), reverted_turn_id: turnId, changes: result?.event?.changes.length ?? 0, skipped: result?.skipped ?? [], version })
+  }
+  app.post('/api/docs/:id/turns/:turnId/revert', revertTurnRoute)
+  app.post('/api/docs/:id/turns/revert', revertTurnRoute)
 
   /** 用户显式保存一个版本。 */
   app.post('/api/docs/:id/save', c => {
@@ -1761,7 +1765,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.post('/api/docs/:id/versions/:seq/restore', c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
-    if (turns.isBusy(c.get('user'), row.id)) return c.json({ error: 'AI 正在编辑，先取消或等待完成' }, 409)
+    if (!viaByReq.get(c.req.raw) && turns.isBusy(c.get('user'), row.id)) return c.json({ error: 'AI 正在编辑，先取消或等待完成' }, 409)
     return c.json({ version: docs.restore(row.id, Number(c.req.param('seq'))), rev: docs.rev(row.id) })
   })
 

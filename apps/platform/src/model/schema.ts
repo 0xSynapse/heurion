@@ -223,16 +223,19 @@ export const schema = new Schema({
         tag: 'span[style]',
         getAttrs: (dom: HTMLElement | string) => {
           if (typeof dom === 'string') return false
-          const fontFamily = dom.style.fontFamily || null
+          const fontFamily = cleanFontFamily(dom.style.fontFamily)
           const fontSize = dom.style.fontSize || null
-          const color = dom.style.color || null
+          const rawColor = dom.style.color || null
+          const hex = normalizeHexColor(rawColor)
+          const color = hex ? `#${hex}` : rawColor
           if (!fontFamily && !fontSize && !color) return false
           return { font_family: fontFamily, font_size: fontSize, color }
         },
       }],
       toDOM: mark => {
         const styles: string[] = []
-        if (mark.attrs.font_family) styles.push(`font-family:${mark.attrs.font_family}`)
+        const ff = cleanFontFamily(mark.attrs.font_family as string | null)
+        if (ff) styles.push(`font-family:${ff}`)
         if (mark.attrs.font_size) styles.push(`font-size:${mark.attrs.font_size}`)
         if (mark.attrs.color) styles.push(`color:${mark.attrs.color}`)
         return ['span', { style: styles.join(';') }, 0]
@@ -240,6 +243,29 @@ export const schema = new Schema({
     },
   },
 })
+
+/** 将 #RGB / #RRGGBB / rgb(r,g,b) / rgba(r,g,b,a) 转为 6 位大写十六进制（不含 #）；无法识别时返回 null。 */
+export function normalizeHexColor(col: string | null | undefined): string | null {
+  if (!col) return null
+  const s = String(col).trim()
+  const hex = s.replace(/^#/, '').toUpperCase()
+  if (/^[0-9A-F]{6}$/.test(hex)) return hex
+  if (/^[0-9A-F]{3}$/.test(hex)) return `${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`
+  const rgb = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[\d.]+)?\s*\)$/i.exec(s)
+  if (rgb) {
+    const clamp = (n: number) => Math.max(0, Math.min(255, n)).toString(16).toUpperCase().padStart(2, '0')
+    return `${clamp(Number(rgb[1]))}${clamp(Number(rgb[2]))}${clamp(Number(rgb[3]))}`
+  }
+  return null
+}
+
+/** 清洗字体族名称：将浏览器粘贴产生的内嵌双引号换成单引号，单字体族去掉外层引号，避免破坏 <span style="..."> 属性。 */
+export function cleanFontFamily(ff: string | null | undefined): string | null {
+  if (!ff) return null
+  const s = String(ff).replace(/"/g, "'").trim()
+  if (!s) return null
+  return (s.includes(',') ? s : s.replace(/^'+|'+$/g, '').trim()) || null
+}
 
 /** 带平台 id 的节点类型（doc 与 deck 两套 schema 共用一个集合；deck 的段落不单独寻址）。 */
 export const ADDRESSABLE = new Set(['heading', 'paragraph', 'bullet_list', 'ordered_list', 'list_item', 'table', 'figure', 'opaque', 'slide', 'shape'])

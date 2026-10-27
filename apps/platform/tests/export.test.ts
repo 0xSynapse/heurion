@@ -1013,6 +1013,90 @@ describe('全链路业务流 Edge Cases（导入 → 编辑/审阅/协同/回滚
     expect(allText).toContain('AI 新增的导语段落。')
     expect(allText).toContain('医生亲手补充的78例患者特征')
   })
+
+  it('Edge 6: 钱医生真实场景：全选删除 + 富文本粘贴（含带双引号的 font_family、rgb 颜色、上标【1】与「附-参考资料：1、…」）全链路往返与导出', () => {
+    const original = docx([
+      p('原始标题', '<w:pStyle w:val="Heading1"/>'),
+      p('原始正文第一段：带首行缩进与 1.5 倍行距。', '<w:spacing w:line="360" w:lineRule="auto"/><w:ind w:firstLine="480"/>'),
+    ].join(''))
+    const t = importInto(original)
+
+    // 模拟浏览器全选删除后从本地 Word 粘贴：
+    // 1) font_family 含内嵌双引号 "\"Times New Roman\""
+    // 2) color 为浏览器归一化后的 "rgb(0, 0, 255)"
+    // 3) 正文引用采用上标实心方头括号 <sup>【1】</sup>、<sup>【2, 3】</sup>
+    // 4) 文末为「附-参考资料：」及「1、…」「2、…」「3、…」
+    const quotedFontMark = schema.marks.text_style!.create({ font_family: '"Times New Roman"', font_size: '12pt', color: null })
+    const rgbColorMark = schema.marks.text_style!.create({ font_family: '宋体', font_size: '12pt', color: 'rgb(0, 0, 255)' })
+    const supMark = schema.marks.sup!.create()
+
+    const pastedBlocks = [
+      schema.node('paragraph', { id: 'q0het8' }, [
+        schema.text('低剂量放疗一般不单独用于治癌，而是作为肿瘤综合治疗的佐剂', [quotedFontMark]),
+        schema.text('【1】', [quotedFontMark, supMark]),
+        schema.text('。', [quotedFontMark]),
+      ]),
+      schema.node('paragraph', { id: 'xxaf0m' }, [
+        schema.text('免疫检查点抑制剂联合方案显著延长生存期', [rgbColorMark]),
+        schema.text('【2, 3】', [rgbColorMark, supMark]),
+        schema.text('。', [rgbColorMark]),
+      ]),
+      schema.node('paragraph', { id: 'refhdr' }, [schema.text('附-参考资料：')]),
+      schema.node('paragraph', { id: 'ref001' }, [schema.text('1、 低剂量放疗联合免疫治疗专家共识. 中华放射肿瘤学杂志, 2025. doi: 10.1038/s41392-026-0001-x')]),
+      schema.node('paragraph', { id: 'ref002' }, [schema.text('2、 Zhou L, Qian D, et al. Low-dose radiation remodels TME. Cancer Discov, 2024.')]),
+      schema.node('paragraph', { id: 'ref003' }, [schema.text('3、 Herbst RS, et al. SKYSCRAPER-07 phase II trial. J Clin Oncol, 2025.')]),
+    ]
+    const pastedDoc = schema.node('doc', null, pastedBlocks)
+    t.docs.commit(t.docId, pastedDoc, { actor: 'user', turnId: null, ops: [{ op: 'collab' }] })
+
+    // 校验 1：带内嵌双引号的 font_family 序列化再通过 replace_text / replace_block 解析时，不会截断或泄露 <span 标签
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: 'q0het8', find: '肿瘤综合治疗的佐剂', replace: '肿瘤多模态综合治疗的免疫佐剂' }],
+    }, { actor: 'ai', turnId: 'turn-qian-1' })
+    expect(t.docs.get(t.docId).child(0).textContent).toBe('低剂量放疗一般不单独用于治癌，而是作为肿瘤多模态综合治疗的免疫佐剂【1】。')
+    expect(t.docs.get(t.docId).child(0).textContent).not.toContain('<span')
+
+    // 校验 2：原有引用守卫保护实心方头括号【1】与【2, 3】，不允许 AI 私自替换为平台引用 [@c:...]
+    const cDup = t.store.upsertCitation({ doc_id: t.docId, doi: '10.1038/s41392-026-0001-x', pmid: null, formatted: 'Dup entry.', url: null })
+    const cNew = t.store.upsertCitation({ doc_id: t.docId, doi: '10.1056/nejmoa2026999', pmid: '38059788', formatted: 'Qian D, et al. Novel HNSCC trial. NEJM 2026.', url: null })
+    expect(() => t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: 'xxaf0m', find: '【2, 3】', replace: `[@c:${cNew.id}]` }],
+    }, { actor: 'ai', turnId: 'turn-qian-guard' })).toThrow(/原有的文中编号/)
+
+    // 校验 3：AI 保留原有【2, 3】并新增平台引用（含 1 条与「1、…」同 DOI 的文献 + 1 条全新文献）
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{
+        op: 'replace_text',
+        id: 'xxaf0m',
+        find: '显著延长生存期【2, 3】。',
+        replace: `显著延长生存期【2, 3】，并在转化研究中得到验证[@c:${cDup.id}][@c:${cNew.id}]。`,
+      }],
+    }, { actor: 'ai', turnId: 'turn-qian-2' })
+
+    // 校验 4：导出 docx 时：
+    // - 识别「附-参考资料：」下的 1、2、3 共 3 条存量文献；cDup 复用 [1]，cNew 顺延为 [4]
+    // - rgb(0, 0, 255) 正确导出为 <w:color w:val="0000FF"/>
+    // - 粘贴后重新生成 ID 的正文段落继承了原导入文档正文段落的 <w:spacing> 与 <w:ind w:firstLine="480"/>
+    const exported = t.exportNow()
+    const xml = bodyOf(exported.bytes)
+    expect(xml).toContain('<w:color w:val="0000FF"/>')
+    expect(xml).toContain('w:ascii="Times New Roman"')
+    expect(xml).toContain('<w:ind w:firstLine="480"/>')
+    expect(xml).toContain('<w:spacing w:line="360" w:lineRule="auto"/>')
+    expect(xml).toContain('<w:t>[1]</w:t>')
+    expect(xml).toContain('<w:t>[4]</w:t>')
+    expect(xml).toContain('[4] Qian D, et al. Novel HNSCC trial. NEJM 2026.')
+  })
 })
+
 
 
