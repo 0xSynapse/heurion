@@ -14,6 +14,16 @@
 	@internal path /mcp /mcp/* /llm /llm/*
 	respond @internal 404
 
+	# Aegis Cloud（aegis-os PaaS 守护进程，systemd 跑在宿主机 17080；ufw 只放行 Docker 网段）。
+	# 去掉前缀后转发，安装脚本、发布镜像、/v1 API 都在这下面。
+	handle_path /aegis-cloud/* {
+		reverse_proxy host.docker.internal:17080 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
 	# 平台：页面、REST、SSE（回合事件、文档变更推送）、协同 WebSocket（/collab）、MCP
 	reverse_proxy heurion2:8787 {
 		header_up X-Real-IP {remote_host}

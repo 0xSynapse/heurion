@@ -141,6 +141,9 @@ services:
       - caddy-config:/config
     environment:
       - HOSTNAME=${HOSTNAME}
+    # /aegis-cloud/* 转发到宿主机上的 aegis-os 守护进程
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on: [heurion2]
     networks: [web]
 
