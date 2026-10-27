@@ -26,6 +26,15 @@ import {
 } from '../../research/causal-inference.ts'
 import { DatasetError, type DatasetService, type Table1Options, type SurvivalOptions } from '../../datasets/service.ts'
 import { exportTable1ToDocx } from '../../datasets/table1-docx.ts'
+import { generateSurvivalAnalysis } from '../../datasets/survival.ts'
+import {
+  generateLogisticRegression,
+  generateGrottaPlot,
+  generateSankeyDiagram,
+  generateUpSetPlot,
+  buildDefaultClinicalCohortRecords,
+} from '../../datasets/clinical-plots.ts'
+import { renderSvg } from '../../render/diagram.ts'
 import {
   buildNomogram,
   calculateRocCurve,
@@ -313,6 +322,128 @@ export function registerResearchRoutes(
         return c.json({ ok: true, asset_id: asset.id, name: asset.name, created_at: asset.created_at, study_id: sid ?? null }, 201)
       }
 
+      if (category === 'render_png') {
+        const svgStr = String(body.svg || '')
+        if (!svgStr.includes('<svg')) {
+          return c.json({ error: 'invalid_svg', message: '请提供有效的 SVG 矢量内容以渲染 600 DPI PNG' }, 400)
+        }
+        const widthPx = Math.min(3600, Math.max(800, Number(body.width) || 2400))
+        const pngBytes = renderSvg(svgStr, widthPx).png
+        const fname = String(body.name || body.title || `Figure_600DPI_${fileTag}`).replace(/[^a-zA-Z0-9_\u4e00-\u9fa5.-]/g, '_').replace(/\.png$/i, '')
+        return c.body(new Uint8Array(pngBytes), 200, {
+          'Content-Type': 'image/png',
+          'Content-Disposition': `attachment; filename="${fname}.png"`,
+        })
+      }
+
+      if (category === 'clinical_cohort' || ['grotta', 'sankey', 'upset', 'logistic', 'survival'].includes(category)) {
+        const subtype = (['grotta', 'sankey', 'upset', 'logistic', 'survival'].includes(category)
+          ? category
+          : String(body.subtype || body.plotType || body.plot_type || 'grotta')) as 'grotta' | 'sankey' | 'upset' | 'logistic' | 'survival'
+        const did = typeof body.dataset_id === 'string' && body.dataset_id.trim() ? body.dataset_id.trim() : undefined
+        const fallbackRecords = () => (Array.isArray(body.records) && body.records.length > 0 ? body.records : buildDefaultClinicalCohortRecords())
+
+        let result: any
+        if (subtype === 'grotta') {
+          const opts = {
+            group_col: body.group_col || '第一次治疗方式',
+            score_col: body.score_col || '确诊时mRS',
+            score_order: Array.isArray(body.score_order) && body.score_order.length ? body.score_order : undefined,
+            labels: body.labels,
+            title: body.title || 'Functional Outcome (mRS) Shift Analysis (Grotta Plot)',
+          }
+          result = did && datasets ? datasets.grotta(userId, did, opts) : generateGrottaPlot(fallbackRecords(), opts)
+        } else if (subtype === 'sankey') {
+          const hasStageCols = Array.isArray(body.stage_cols) && body.stage_cols.filter(Boolean).length >= 2
+          const opts = {
+            stage_cols: hasStageCols ? body.stage_cols.filter(Boolean) : (!body.sequence_col ? ['第一次治疗方式', '闭塞程度', '治疗后出血'] : undefined),
+            sequence_col: body.sequence_col || undefined,
+            code_map: body.code_map,
+            outcome_col: body.outcome_col || undefined,
+            max_nodes_per_stage: body.max_nodes_per_stage,
+            labels: body.labels,
+            title: body.title || 'Multimodal Treatment Trajectory & Clinical Outcome Sankey Diagram',
+          }
+          result = did && datasets ? datasets.sankey(userId, did, opts) : generateSankeyDiagram(fallbackRecords(), opts)
+        } else if (subtype === 'upset') {
+          const cols = Array.isArray(body.binary_cols) && body.binary_cols.filter(Boolean).length >= 2
+            ? body.binary_cols.filter(Boolean)
+            : ['额叶', '颞叶', '顶叶', '枕叶', '基底节', '脑室']
+          const opts = {
+            binary_cols: cols,
+            outcome_col: body.outcome_col || '治疗后出血',
+            positive_value: body.positive_value,
+            max_intersections: body.max_intersections,
+            labels: body.labels,
+            title: body.title || 'Anatomical Location Co-occurrence & Outcome UpSet Plot',
+          }
+          result = did && datasets ? datasets.upset(userId, did, opts) : generateUpSetPlot(fallbackRecords(), opts)
+        } else if (subtype === 'logistic') {
+          const covs = Array.isArray(body.covariates) && body.covariates.filter(Boolean).length >= 1
+            ? body.covariates.filter(Boolean)
+            : ['供血动脉扩张', '单一动脉供血', '基底节', '年龄']
+          const opts = {
+            outcome_col: body.outcome_col || '治疗后出血',
+            covariates: covs,
+            positive_value: body.positive_value,
+            labels: body.labels,
+            title: body.title || 'Multivariable Logistic Regression Forest Plot (Odds Ratio & 95% CI)',
+          }
+          result = did && datasets ? datasets.logistic(userId, did, opts) : generateLogisticRegression(fallbackRecords(), opts)
+        } else {
+          const opts = {
+            time_col: body.time_col || 'followup_months',
+            start_date_col: body.start_date_col || undefined,
+            event_date_col: body.event_date_col || undefined,
+            censor_date_col: body.censor_date_col || undefined,
+            default_censor_date: body.default_censor_date || undefined,
+            event_col: body.event_col || '治疗后出血',
+            group_col: body.group_col || '第一次治疗方式',
+            covariates: Array.isArray(body.covariates) ? body.covariates : undefined,
+            time_unit: body.time_unit || 'Months',
+            title: body.title || 'Kaplan-Meier Event-Free Survival Analysis',
+            show_censored: body.show_censored !== false,
+            show_risk_table: body.show_risk_table !== false,
+          }
+          result = did && datasets ? datasets.survival(userId, did, opts) : generateSurvivalAnalysis(fallbackRecords() as any, opts)
+        }
+
+        const svgOut = result.native_exports?.illustrator_svg || result.km_svg || result.svg || result.forest_svg || ''
+        const pzfxOut = result.native_exports?.prism_pzfx || result.prism_pzfx
+        const rOut = result.native_exports?.r_script || result.r_script
+        if (exportFormat === 'png' && svgOut) {
+          const pngBytes = renderSvg(svgOut, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Clinical_${subtype}_600DPI_${fileTag}.png"`,
+          })
+        }
+        if (exportFormat === 'pzfx' && pzfxOut) {
+          return c.body(pzfxOut, 200, {
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Clinical_${subtype}_${fileTag}.pzfx"`,
+          })
+        }
+        if (exportFormat === 'r' && rOut) {
+          return c.body(rOut, 200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Clinical_${subtype}_${fileTag}.R"`,
+          })
+        }
+        if ((exportFormat === 'svg' || exportFormat === 'ai-svg') && svgOut) {
+          return c.body(svgOut, 200, { 'Content-Type': 'image/svg+xml; charset=utf-8' })
+        }
+        return c.json({
+          category: 'clinical_cohort',
+          subtype,
+          svg: svgOut,
+          illustrator_svg: svgOut,
+          prism_pzfx: pzfxOut,
+          r_script: rOut,
+          ...result,
+        })
+      }
+
       if (category === 'mechanism') {
         const res = renderMechanismDiagram({
           title: body.title || 'Biological Mechanism & Signal Transduction',
@@ -321,6 +452,13 @@ export function registerResearchRoutes(
           nodes: Array.isArray(body.nodes) ? body.nodes : [],
           edges: Array.isArray(body.edges) ? body.edges : [],
         })
+        if (exportFormat === 'png') {
+          const pngBytes = renderSvg(res.illustrator_svg || res.svg, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Mechanism_600DPI_${fileTag}.png"`,
+          })
+        }
         if (exportFormat === 'drawio') {
           return c.body(res.drawio_xml, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
@@ -371,6 +509,13 @@ export function registerResearchRoutes(
         const svg = renderConsortSvg(diagramData)
         const drawio_xml = exportFlowchartToDrawio(diagramData)
         const visio_vdx = exportFlowchartToVisioVdx(diagramData)
+        if (exportFormat === 'png') {
+          const pngBytes = renderSvg(svg, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Flowchart_600DPI_${fileTag}.png"`,
+          })
+        }
         if (exportFormat === 'drawio') {
           return c.body(drawio_xml, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
@@ -415,6 +560,13 @@ export function registerResearchRoutes(
           groups: body.groups,
           doseResponse: body.doseResponse,
         })
+        if (exportFormat === 'png') {
+          const pngBytes = renderSvg(res.illustrator_svg || res.svg, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Statistical_Plot_600DPI_${fileTag}.png"`,
+          })
+        }
         if (exportFormat === 'pzfx') {
           return c.body(res.prism_pzfx, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
@@ -444,6 +596,13 @@ export function registerResearchRoutes(
 
       if (category === 'bioinformatics') {
         const res = generateBioinformaticsFigure(body as any)
+        if (exportFormat === 'png') {
+          const pngBytes = renderSvg(res.illustrator_svg || res.svg, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Bioinformatics_${body.bioType || 'plot'}_600DPI_${fileTag}.png"`,
+          })
+        }
         if (exportFormat === 'r') {
           return c.body(res.r_script, 200, {
             'Content-Type': 'text/plain; charset=utf-8',
@@ -476,6 +635,13 @@ export function registerResearchRoutes(
             yGateThreshold: Number(body.yGateThreshold ?? 2.5),
             events: Array.isArray(body.events) ? body.events : [],
           })
+          if (exportFormat === 'png') {
+            const pngBytes = renderSvg(res.illustrator_svg || res.svg, 2400).png
+            return c.body(new Uint8Array(pngBytes), 200, {
+              'Content-Type': 'image/png',
+              'Content-Disposition': `attachment; filename="FlowJo_600DPI_${fileTag}.png"`,
+            })
+          }
           if (exportFormat === 'wsp') {
             return c.body(res.flowjo_wsp_xml, 200, {
               'Content-Type': 'application/xml; charset=utf-8',
@@ -496,6 +662,13 @@ export function registerResearchRoutes(
               ? body.labels
               : [{ id: 1, name: 'Primary_Target_Lesion', rgb: [220, 38, 38], opacity: 0.85 }],
           })
+          if (exportFormat === 'png') {
+            const pngBytes = renderSvg(res.svg_preview, 2400).png
+            return c.body(new Uint8Array(pngBytes), 200, {
+              'Content-Type': 'image/png',
+              'Content-Disposition': `attachment; filename="Slicer_3D_600DPI_${fileTag}.png"`,
+            })
+          }
           if (exportFormat === 'mrml') {
             return c.body(res.slicer_mrml_xml, 200, {
               'Content-Type': 'application/xml; charset=utf-8',
@@ -519,6 +692,13 @@ export function registerResearchRoutes(
           channels: body.channels,
           quantificationGroups: body.quantificationGroups,
         })
+        if (exportFormat === 'png') {
+          const pngBytes = renderSvg(res.illustrator_svg || res.svg, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="ImageJ_600DPI_${fileTag}.png"`,
+          })
+        }
         if (exportFormat === 'ijm') {
           return c.body(res.imagej_macro_ijm, 200, {
             'Content-Type': 'text/plain; charset=utf-8',
@@ -569,11 +749,15 @@ export function registerResearchRoutes(
         {
           error: 'unsupported_figure_category',
           message:
-            '请指定有效的图表类别 category: mechanism | wet_lab | bioinformatics | image_processing | flowchart | journal_assembly | archive',
+            '请指定有效的图表类别 category: clinical_cohort | mechanism | wet_lab | bioinformatics | image_processing | flowchart | journal_assembly | render_png | archive',
         },
         400,
       )
     } catch (err) {
+      if (err instanceof DatasetError) return datasetFailure(c, err)
+      if (err instanceof Error && !(err instanceof StudyError) && !(err instanceof PatientError) && !(err instanceof TenantError)) {
+        return c.json({ error: 'figure_studio_error', message: err.message }, 400)
+      }
       return cohortFailure(c, err)
     }
   }
@@ -690,7 +874,7 @@ export function registerResearchRoutes(
     try { const d = datasets!.get(c.get('user'), c.req.param('did')); return c.json({ ...d, study: studyRef(d.id) }) } catch (err) { return datasetFailure(c, err) }
   })
   app.get('/api/datasets/:did/preview', c => {
-    try { return c.json(datasets!.preview(c.get('user'), c.req.param('did'), Math.min(200, Number(c.req.query('limit')) || 50))) } catch (err) { return datasetFailure(c, err) }
+    try { return c.json(datasets!.preview(c.get('user'), c.req.param('did'), Math.min(5000, Number(c.req.query('limit')) || 50))) } catch (err) { return datasetFailure(c, err) }
   })
   app.patch('/api/datasets/:did', async c => {
     const body = await c.req.json<{ name?: string; labels?: Record<string, string> }>()
@@ -743,8 +927,8 @@ export function registerResearchRoutes(
   app.post('/api/datasets/:did/survival', async c => {
     if (!datasets) return c.json({ error: '数据集未启用' }, 503)
     const body = await c.req.json<SurvivalOptions>().catch(() => ({} as SurvivalOptions))
-    if (!body.time_col || !body.event_col) {
-      return c.json({ error: '必须指定随访时间列 (time_col) 与事件结局列 (event_col)' }, 400)
+    if ((!body.time_col && !(body.start_date_col && body.event_date_col)) || !body.event_col) {
+      return c.json({ error: '必须指定随访时间列 (time_col) 或起始+事件日期列 (start_date_col + event_date_col)，以及事件结局列 (event_col)' }, 400)
     }
     try { return c.json(datasets.survival(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
   })

@@ -124,4 +124,69 @@ describe('临床科研专科分析与出版级可视化套件 (clinical-plots)',
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it('6. 科研制图工作台 (POST /api/figures) 临床队列模式 (clinical_cohort) 与 600 DPI 高清 PNG 直出、日期差生存分析', async () => {
+    const { generateSurvivalAnalysis } = await import('../src/datasets/survival.ts')
+    const { buildDefaultClinicalCohortRecords } = await import('../src/datasets/clinical-plots.ts')
+    const { Hono } = await import('hono')
+    const { registerResearchRoutes } = await import('../src/http/routes/research.ts')
+
+    // 6a. 基于起始日期 + 出血日期自动计算随访时长（兼容 '缺失' / 'N' / '0'）
+    const dateRecords = [
+      { 第一次治疗的时间: '2019-03-10', 出血时间: '2021-09-15', 治疗后出血: '1', 第一次治疗方式: '介入栓塞' },
+      { 第一次治疗的时间: '2018.06.01', 出血时间: '缺失', 治疗后出血: '0', 第一次治疗方式: '手术切除' },
+      { 第一次治疗的时间: '2020/01/15', 出血时间: 'N', 治疗后出血: '0', 第一次治疗方式: '手术切除' },
+      { 第一次治疗的时间: '2019年5月20日', 出血时间: '2022年11月20日', 治疗后出血: '1', 第一次治疗方式: '介入栓塞' },
+      { 第一次治疗的时间: '0', 出血时间: '0', 治疗后出血: '0', 第一次治疗方式: '保守治疗' }, // 无效日期 '0' 自动剔除
+    ]
+    const survDateRes = generateSurvivalAnalysis(dateRecords, {
+      start_date_col: '第一次治疗的时间',
+      event_date_col: '出血时间',
+      default_censor_date: '2024-12-31',
+      event_col: '治疗后出血',
+      group_col: '第一次治疗方式',
+    })
+    expect(survDateRes.groups.reduce((s, g) => s + g.total_n, 0)).toBe(4)
+    expect(survDateRes.svg).toContain('<svg')
+
+    // 6b. 科研制图 HTTP 路由支持 clinical_cohort 五种子图与 600 DPI PNG 导出
+    const store = new Store(':memory:')
+    const app = new Hono<{ Variables: { user: string } }>()
+    app.use('*', async (c, next) => {
+      c.set('user', 'u1')
+      await next()
+    })
+    registerResearchRoutes(app, {
+      store,
+      me: () => ({ userId: 'u1', via: 'user' as const }),
+      patientFailure: c => c.json({ error: 'patient_err' }, 400),
+    })
+
+    expect(buildDefaultClinicalCohortRecords().length).toBeGreaterThanOrEqual(60)
+
+    for (const subtype of ['grotta', 'sankey', 'upset', 'logistic', 'survival'] as const) {
+      const resp = await app.request('/api/figures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: 'clinical_cohort', subtype }),
+      })
+      expect(resp.status).toBe(200)
+      const data = (await resp.json()) as any
+      expect(data.category).toBe('clinical_cohort')
+      expect(data.subtype).toBe(subtype)
+      expect(data.svg).toContain('<svg')
+    }
+
+    // 6c. 600 DPI 高清 PNG 渲染接口 (category: 'render_png' 及 ?format=png)
+    const pngResp = await app.request('/api/figures?format=png', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: 'clinical_cohort', subtype: 'grotta' }),
+    })
+    expect(pngResp.status).toBe(200)
+    expect(pngResp.headers.get('content-type')).toBe('image/png')
+    const pngBytes = new Uint8Array(await pngResp.arrayBuffer())
+    expect(pngBytes[0]).toBe(0x89)
+    expect(pngBytes[1]).toBe(0x50)
+  })
 })

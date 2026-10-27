@@ -153,6 +153,9 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
   /** open() 进行中的标记（每次调用一个新对象，后一次覆盖前一次）。 */
   let opening: object | null = null
 
+  /** 全局制图工作台激活时，用于在中央画布直接加载并预览左侧图表库点击的已保存图表 */
+  let previewArchivedAssetInStudio: ((assetId: string, assetName: string) => Promise<void>) | null = null
+
   function downloadBlobContent(content: string | Blob, filename: string, mime = 'text/plain;charset=utf-8'): void {
     const blob = content instanceof Blob ? content : new Blob([content], { type: mime })
     const url = URL.createObjectURL(blob)
@@ -187,6 +190,75 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     }
   }
 
+  /** 将 SVG 矢量图转换为 600 DPI 印刷级 PNG Blob（优先走服务端 @resvg/resvg-js 高清栅格化，异常时回退浏览器高分 Canvas） */
+  async function svgToPngBlob(studyId: string | null | undefined, svgStr: string, name = 'Medical_Figure_600DPI', widthPx = 2400): Promise<Blob> {
+    const token = hooks.token()
+    const endpoint = studyId ? `/api/studies/${studyId}/figures` : '/api/figures'
+    try {
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ category: 'render_png', svg: svgStr, name, width: widthPx }),
+      })
+      if (r.ok) return await r.blob()
+    } catch {}
+    // 浏览器端高分辨率 Canvas 兜底渲染
+    return await new Promise<Blob>((resolve, reject) => {
+      const img = new Image()
+      const svgBlob = new Blob([svgStr], { type: 'image/svg+xml;charset=utf-8' })
+      const url = URL.createObjectURL(svgBlob)
+      img.onload = () => {
+        const ratio = (img.naturalHeight || 600) / Math.max(1, img.naturalWidth || 900)
+        const canvas = document.createElement('canvas')
+        canvas.width = widthPx
+        canvas.height = Math.round(widthPx * ratio)
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { URL.revokeObjectURL(url); reject(new Error('Canvas 初始化失败')); return }
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        URL.revokeObjectURL(url)
+        canvas.toBlob(b => (b ? resolve(b) : reject(new Error('PNG 编码失败'))), 'image/png')
+      }
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('SVG 图像解析失败')) }
+      img.src = url
+    })
+  }
+
+  async function downloadSvgAsPng600Dpi(studyId: string | null | undefined, svgStr: string, filename: string): Promise<void> {
+    if (!svgStr || !svgStr.includes('<svg')) {
+      notice('当前没有可导出的矢量图', true)
+      return
+    }
+    try {
+      notice(`正在渲染 600 DPI 印刷级高清图 ${filename}…`)
+      const blob = await svgToPngBlob(studyId, svgStr, filename, 2400)
+      const cleanName = filename.endsWith('.png') ? filename : `${filename}.png`
+      downloadBlobContent(blob, cleanName, 'image/png')
+    } catch (err) {
+      notice((err as Error).message, true)
+    }
+  }
+
+  async function copySvgAsPngToClipboard(studyId: string | null | undefined, svgStr: string, title = '科研图表'): Promise<void> {
+    if (!svgStr || !svgStr.includes('<svg')) {
+      notice('当前没有可复制的图表', true)
+      return
+    }
+    try {
+      notice('正在生成 600 DPI 高清图并写入剪贴板…')
+      const blob = await svgToPngBlob(studyId, svgStr, title, 2400)
+      if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+        notice('已复制 600 DPI 高清 PNG 到剪贴板！可直接 Ctrl+V / Cmd+V 粘贴到 PPT、Word 或微信')
+      } else {
+        downloadBlobContent(blob, `${title}_600DPI.png`, 'image/png')
+      }
+    } catch (err) {
+      notice(`复制高清图失败：${(err as Error).message}`, true)
+    }
+  }
+
   async function archiveStudyFigure(
     studyId: string | null | undefined,
     name: string,
@@ -216,7 +288,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
       })
       notice(studyId ? `已归档至项目 figures/ 成果库：${res.name}` : `已归档至全局图表库：${res.name}`)
       if (studyId && current === studyId && !$('page').classList.contains('studio-page')) void openStudy(studyId)
-      if (!studyId) void loadStudioList()
+      if (!studyId) await loadStudioList()
       return res
     } catch (err) {
       notice((err as Error).message, true)
@@ -2023,7 +2095,7 @@ ${modelsDesc}
       container?: HTMLElement
       globalDatasets?: Array<{ dataset_id: string; name: string }>
       initialDatasetId?: string
-      initialMode?: 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
+      initialMode?: 'clinical_cohort' | 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
       globalFigures?: Array<{ id: string; name: string; created_at: string }>
     }
   ): void {
@@ -2039,8 +2111,34 @@ ${modelsDesc}
     const activeCount = cohort ? cohort.subjects.filter(x => x.status === 'active').length : 60
     const withdrawnCount = cohort ? cohort.subjects.filter(x => x.status === 'withdrawn').length : 4
 
-    type StudioMode = 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
-    let currentMode: StudioMode = opts?.initialMode ?? 'wet_lab'
+    type StudioMode = 'clinical_cohort' | 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
+    let currentMode: StudioMode = opts?.initialMode ?? (opts?.initialDatasetId || readyDs.length > 0 ? 'clinical_cohort' : 'wet_lab')
+
+    // 临床队列与预后制图状态 (Clinical Cohort & Prognosis)
+    let clinSubtype: 'grotta' | 'sankey' | 'upset' | 'logistic' | 'survival' = 'grotta'
+    let clinCols: string[] = []
+    let clinLabels: Record<string, string> = {}
+    let clinLoadedDsId = '__uninitialized__'
+    let clinGrottaGroup = '第一次治疗方式'
+    let clinGrottaScore = '确诊时mRS'
+    let clinSankeyStage1 = '第一次治疗方式'
+    let clinSankeyStage2 = '闭塞程度'
+    let clinSankeyStage3 = '治疗后出血'
+    let clinSankeySeqCol = ''
+    let clinSankeyOutcome = '治疗后出血'
+    let clinUpsetCols: string[] = ['额叶', '颞叶', '顶叶', '枕叶', '基底节', '脑室']
+    let clinUpsetOutcome = '治疗后出血'
+    let clinLogOutcome = '治疗后出血'
+    let clinLogCovs: string[] = ['供血动脉扩张', '单一动脉供血', '基底节', '年龄']
+    let clinSurvMode: 'duration' | 'dates' = 'duration'
+    let clinSurvTime = 'followup_months'
+    let clinSurvStart = '第一次治疗的时间'
+    let clinSurvEnd = '出血时间'
+    let clinSurvCensor = '2025-12-31'
+    let clinSurvEvent = '治疗后出血'
+    let clinSurvGroup = '第一次治疗方式'
+    let clinSurvUnit: 'Months' | 'Years' | 'Days' = 'Months'
+
     let wetPlotType: 'bar_scatter' | 'violin_box' | 'dose_response' = 'bar_scatter'
     let wetErrorType: 'SD' | 'SEM' = 'SD'
     let wetYLabel = 'Relative Expression / Biomarker Level'
@@ -2174,9 +2272,12 @@ ${modelsDesc}
     pane.innerHTML = `
       ${studyContextBarHtml}
       <div class="rs-studio-topbar">
-        <div class="rs-studio-modes" role="tablist" aria-label="6大类医学制图引擎">
+        <div class="rs-studio-modes" role="tablist" aria-label="7大类医学制图引擎">
+          <button type="button" class="rs-studio-mode-btn${currentMode === 'clinical_cohort' ? ' active' : ''}" data-st-mode="clinical_cohort" title="mRS Grotta 预后分布图、Sankey 治疗轨迹桑基图、UpSet 解剖部位共现图、Logistic OR 森林图、KM 生存分析">
+            ${icon('compare', { size: 14 })} <span>临床队列</span>
+          </button>
           <button type="button" class="rs-studio-mode-btn${currentMode === 'wet_lab' ? ' active' : ''}" data-st-mode="wet_lab">
-            ${icon('chart', { size: 14 })} <span>统计图</span>
+            ${icon('chart', { size: 14 })} <span>实验统计</span>
           </button>
           <button type="button" class="rs-studio-mode-btn${currentMode === 'bioinformatics' ? ' active' : ''}" data-st-mode="bioinformatics">
             ${icon('dna', { size: 14 })} <span>生信组学</span>
@@ -2198,8 +2299,13 @@ ${modelsDesc}
         <div class="rs-studio-topbar-right">
           <select id="stQuickPreset" class="rs-studio-preset-select" aria-label="快速载入示例模板">
             <option value="">快速载入示例模板…</option>
-            <option value="wet_bar">统计图：WB/qPCR 柱状散点图</option>
-            <option value="wet_ic50">统计图：4PL 剂量反应 IC50 曲线</option>
+            <option value="clin_grotta">临床队列：mRS 功能结局 Grotta 偏移图</option>
+            <option value="clin_sankey">临床队列：多阶段治疗轨迹 Sankey 桑基图</option>
+            <option value="clin_upset">临床队列：多解剖部位共现 UpSet 图</option>
+            <option value="clin_logistic">临床队列：多因素 Logistic 回归 OR 森林图</option>
+            <option value="clin_survival">临床队列：Kaplan-Meier 无出血生存曲线</option>
+            <option value="wet_bar">实验统计：WB/qPCR 柱状散点图</option>
+            <option value="wet_ic50">实验统计：4PL 剂量反应 IC50 曲线</option>
             <option value="grant_gpcr">机制图：GPCR 信号转导通路</option>
             <option value="grant_pd1">机制图：PD-1/PD-L1 免疫检查点</option>
             <option value="bio_volcano">生信图：转录组差异表达火山图</option>
@@ -2212,8 +2318,8 @@ ${modelsDesc}
               <div class="rs-scenario-grid">
                 <div class="rs-scenario-card${isGlobal ? ' active' : ''}">
                   <div class="rs-scenario-tag">场景一 · 独立科研制图</div>
-                  <b>标书机制图 / 预实验单图 / 审稿补图</b>
-                  <p class="muted small">无需创建临床研究课题，即开即画并导出 <code>.pzfx</code> / <code>.R</code> / <code>.drawio</code> / <code>.pptx</code> 原工程文件。</p>
+                  <b>临床队列单表成图 / 标书机制图 / 审稿补图</b>
+                  <p class="muted small">无需创建临床研究课题，直接上传 Excel/CSV 或即开即画，一键导出 600 DPI <code>.png</code> / <code>.svg</code> / <code>.pzfx</code> / <code>.R</code> / <code>.drawio</code> / <code>.pptx</code>。</p>
                 </div>
                 <div class="rs-scenario-card">
                   <div class="rs-scenario-tag">场景二 · 写作中内嵌配图</div>
@@ -2242,7 +2348,9 @@ ${modelsDesc}
         <div class="rs-studio-right">
           <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
             <b id="rsStudioCanvasTitle" style="font-size:13.5px;">矢量画布预览</b>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button type="button" class="small-btn" id="rsStudioCopyPngBtn" title="复制 600 DPI 高清 PNG 到剪贴板，可直接粘贴 (Ctrl+V / Cmd+V) 到 PPT、Word 或微信">${icon('copy', { size: 13 })} 复制高清图</button>
+              <button type="button" class="small-btn" id="rsStudioDownloadPngBtn" title="下载 600 DPI 印刷级高清 PNG 图像">${icon('download', { size: 13 })} 600 DPI PNG</button>
               <button type="button" class="small-btn" id="rsStudioInsertDocBtn" title="将当前图表直接插入到论文文档或汇报幻灯片中">${icon('write', { size: 13 })} 插入到文稿…</button>
               <button type="button" class="small-btn primary" id="rsStudioArchiveBtn" title="保存当前矢量图与可复现脚本">${icon('pin', { size: 13 })} ${isGlobal ? '保存到图表库' : '归档至本研究'}</button>
             </div>
@@ -2268,7 +2376,16 @@ ${modelsDesc}
     const canvasEl = document.getElementById('rsStudioCanvas')!
     const exportBar = document.getElementById('rsStudioExportBar')!
     const codePre = document.getElementById('rsStudioCodePre')!
+    const canvasTitleEl = document.getElementById('rsStudioCanvasTitle')!
 
+    document.getElementById('rsStudioCopyPngBtn')!.onclick = () => {
+      const targetSid = s?.id || selectedArchiveStudyId || undefined
+      void copySvgAsPngToClipboard(targetSid, lastSvg, lastTitle)
+    }
+    document.getElementById('rsStudioDownloadPngBtn')!.onclick = () => {
+      const targetSid = s?.id || selectedArchiveStudyId || undefined
+      void downloadSvgAsPng600Dpi(targetSid, lastSvg, `${lastTitle}_600DPI.png`)
+    }
     document.getElementById('rsStudioArchiveBtn')!.onclick = () => {
       const targetSid = s?.id || selectedArchiveStudyId || undefined
       void archiveStudyFigure(targetSid, lastTitle, lastSvg, lastCode, lastCodePath, activeDatasetId || undefined)
@@ -2285,10 +2402,390 @@ ${modelsDesc}
       navigator.clipboard.writeText(lastCode).then(() => notice('已复制完整可复现脚本源码')).catch(() => notice('复制失败', true))
     }
 
+    // 支持在左侧图表库点击已保存图表时直接在中央画布加载与导出
+    if (isGlobal) {
+      previewArchivedAssetInStudio = async (assetId: string, assetName: string) => {
+        try {
+          const token = hooks.token()
+          const [svgRes, provRes] = await Promise.all([
+            fetch(`/api/assets/${assetId}?token=${encodeURIComponent(token)}`).then(r => r.text()),
+            api<{ code?: string; code_path?: string }>(`/api/assets/${assetId}/provenance`).catch(() => ({ code: '', code_path: '' })),
+          ])
+          if (!svgRes.includes('<svg')) {
+            void hooks.datasets.showProvenance(assetId)
+            return
+          }
+          lastSvg = svgRes
+          lastTitle = assetName.replace(/\.[^.]+$/, '') || 'Archived_Figure'
+          lastCode = provRes.code || '# Archived SVG Figure'
+          lastCodePath = provRes.code_path || `${lastTitle}.R`
+          canvasTitleEl.textContent = `已归档图表预览：${lastTitle}`
+          canvasEl.innerHTML = svgRes
+          codePre.textContent = lastCode
+          exportBar.innerHTML = `<span class="muted small" style="margin-right:4px;">已归档图表导出与溯源：</span>`
+          const addBtn = (label: string, fn: () => void, primary = false) => {
+            const b = document.createElement('button')
+            b.type = 'button'
+            b.className = primary ? 'small-btn primary' : 'small-btn'
+            b.innerHTML = `${icon('download', { size: 13 })} ${esc(label)}`
+            b.onclick = fn
+            exportBar.appendChild(b)
+          }
+          addBtn('600 DPI 印刷级高清图 (.png)', () => void downloadSvgAsPng600Dpi(undefined, lastSvg, `${lastTitle}_600DPI.png`), true)
+          addBtn('复制高清图 (粘贴至 PPT/Word/微信)', () => void copySvgAsPngToClipboard(undefined, lastSvg, lastTitle))
+          addBtn('Illustrator 分层矢量 (.svg)', () => downloadBlobContent(lastSvg, `${lastTitle}.svg`, 'image/svg+xml;charset=utf-8'))
+          if (lastCode) addBtn(`可复现脚本 (${lastCodePath.split('.').pop() || 'R'})`, () => downloadBlobContent(lastCode, lastCodePath))
+          const provBtn = document.createElement('button')
+          provBtn.type = 'button'
+          provBtn.className = 'small-btn'
+          provBtn.innerHTML = `${icon('info', { size: 13 })} 完整数据血缘核验`
+          provBtn.onclick = () => void hooks.datasets.showProvenance(assetId)
+          exportBar.appendChild(provBtn)
+        } catch (err) {
+          notice((err as Error).message, true)
+        }
+      }
+    }
+
+    /** 在制图工作台内直接上传 Excel/CSV 数据表并自动切换为当前活动数据集 */
+    const handleInlineDatasetUpload = async (files: File[]) => {
+      if (!files.length) return
+      const uploaded = await hooks.datasets.upload(files)
+      if (!uploaded.length) return
+      if (s?.id) {
+        for (const d of uploaded) {
+          await api(`/api/studies/${s.id}/items`, { method: 'POST', body: JSON.stringify({ kind: 'dataset', ref_id: d.id }) }).catch(() => {})
+        }
+      }
+      const dsRes = await api<Array<{ id: string; name: string; status: string }>>('/api/datasets').catch(() => [])
+      for (const u of uploaded) {
+        const found = dsRes.find(x => x.id === u.id)
+        const item = { dataset_id: u.id, name: found?.name || files[0]?.name || u.id }
+        if (!readyDs.some(d => d.dataset_id === item.dataset_id)) readyDs.unshift(item)
+      }
+      activeDatasetId = uploaded[0]!.id
+      clinLoadedDsId = '__force_reload__'
+      notice(`已上传数据表并自动载入制图：${readyDs.find(d => d.dataset_id === activeDatasetId)?.name || activeDatasetId}`)
+      renderLeftEditor()
+      void runStudioRender()
+    }
+
     const renderLeftEditor = () => {
+      if (currentMode === 'clinical_cohort') {
+        const defaultDemoCols = [
+          '第一次治疗方式', '第二次治疗方式', '第三次治疗方式', '治疗方式',
+          '确诊时mRS', '闭塞程度', '治疗后出血', '围术期不良事件',
+          '额叶', '颞叶', '顶叶', '枕叶', '基底节', '脑室',
+          '供血动脉扩张', '单一动脉供血', '年龄', '中心剂量', '周围剂量', 'followup_months',
+          '第一次治疗的时间', '出血时间',
+        ]
+        const availableCols = activeDatasetId && clinCols.length ? clinCols : defaultDemoCols
+        const colOptHtml = (selectedVal: string, allowEmpty = false, emptyText = '（不选）') => {
+          const base = allowEmpty ? `<option value=""${!selectedVal ? ' selected' : ''}>${esc(emptyText)}</option>` : ''
+          return base + availableCols.map(c => {
+            const lbl = clinLabels[c] && clinLabels[c] !== c ? `${clinLabels[c]} (${c})` : c
+            return `<option value="${esc(c)}"${c === selectedVal ? ' selected' : ''}>${esc(lbl)}</option>`
+          }).join('')
+        }
+
+        leftEl.innerHTML = `
+          <div class="rs-sub-box-title">
+            <span>${icon('compare', { size: 13 })} 临床队列与预后制图引擎</span>
+            <button type="button" class="quiet small-btn" id="stClinUploadBtn" title="直接上传 Excel (.xlsx) / CSV / SPSS / Stata 数据表">＋ 上传数据表</button>
+            <input type="file" id="stClinUploadInput" accept=".csv,.tsv,.xlsx,.xls,.sav,.dta,.sas7bdat,.xpt,.rds,.rda,.rdata" multiple hidden>
+          </div>
+          <label>数据源 (Clinical Cohort Dataset)
+            <select id="stClinDsId">
+              <option value="" ${!activeDatasetId ? 'selected' : ''}>内置脑血管畸形随访演示队列 (80例 · 即开即画)</option>
+              ${readyDs.map(d => `<option value="${esc(d.dataset_id)}" ${d.dataset_id === activeDatasetId ? 'selected' : ''}>${esc(d.name)} (真实数据表)</option>`).join('')}
+            </select>
+          </label>
+          <label>临床图表子类型 (Clinical Plot Subtype)
+            <select id="stClinSubtype">
+              <option value="grotta" ${clinSubtype === 'grotta' ? 'selected' : ''}>1. mRS / 闭塞分级有序偏移图 (Grotta Proportional Bar · Stroke 规范)</option>
+              <option value="sankey" ${clinSubtype === 'sankey' ? 'selected' : ''}>2. 多阶段治疗路径与临床结局桑基图 (Alluvial / Sankey Diagram)</option>
+              <option value="upset" ${clinSubtype === 'upset' ? 'selected' : ''}>3. 多解剖部位共现矩阵与结局风险率图 (UpSet Plot)</option>
+              <option value="logistic" ${clinSubtype === 'logistic' ? 'selected' : ''}>4. 多因素 Logistic 回归 OR 森林图 (Odds Ratio &amp; 95% CI Forest Plot)</option>
+              <option value="survival" ${clinSubtype === 'survival' ? 'selected' : ''}>5. Kaplan-Meier 无事件生存曲线 &amp; 多因素 Cox HR 森林图</option>
+            </select>
+          </label>
+
+          ${clinSubtype === 'grotta' ? `
+            <div class="rs-sub-box">
+              <div class="rs-sub-box-title"><span>Grotta 有序结局偏移图列映射</span></div>
+              <div class="row" style="gap:8px;">
+                <label style="flex:1;">治疗/暴露分组列
+                  <select id="stClinGrGroup">${colOptHtml(clinGrottaGroup)}</select>
+                </label>
+                <label style="flex:1;">有序结局评分列 (如 mRS / 闭塞分级)
+                  <select id="stClinGrScore">${colOptHtml(clinGrottaScore)}</select>
+                </label>
+              </div>
+              <div class="muted small">自动计算各治疗组在不同等级（如 mRS 0~5 或完全闭塞/部分闭塞/未闭塞）的构成比，并执行 Mann-Whitney U / Kruskal-Wallis 秩和检验。</div>
+            </div>
+          ` : clinSubtype === 'sankey' ? `
+            <div class="rs-sub-box">
+              <div class="rs-sub-box-title"><span>多阶段序贯治疗轨迹与结局列映射</span></div>
+              <div class="row" style="gap:6px;">
+                <label style="flex:1;">阶段 1 (首治)
+                  <select id="stClinSkS1">${colOptHtml(clinSankeyStage1)}</select>
+                </label>
+                <label style="flex:1;">阶段 2 (二线/闭塞)
+                  <select id="stClinSkS2">${colOptHtml(clinSankeyStage2)}</select>
+                </label>
+                <label style="flex:1;">阶段 3 (结局/三线)
+                  <select id="stClinSkS3">${colOptHtml(clinSankeyStage3, true, '（无阶段3）')}</select>
+                </label>
+              </div>
+              <div class="row" style="gap:8px;">
+                <label style="flex:1;">或直接指定「复合序贯编码列」（如 <code>1+3</code>）
+                  <select id="stClinSkSeq">${colOptHtml(clinSankeySeqCol, true, '（使用上方多阶段列）')}</select>
+                </label>
+                <label style="flex:1;">叠加结局列（选复合列时追加末节点）
+                  <select id="stClinSkOut">${colOptHtml(clinSankeyOutcome, true, '（不追加结局列）')}</select>
+                </label>
+              </div>
+            </div>
+          ` : clinSubtype === 'upset' ? `
+            <div class="rs-sub-box">
+              <div class="rs-sub-box-title"><span>多解剖部位/合并症二元列（勾选 ≥ 2 项）与叠加风险列</span></div>
+              <label>右侧叠加阳性事件率列（如 治疗后出血 / 不良事件）
+                <select id="stClinUpOut">${colOptHtml(clinUpsetOutcome, true, '（不叠加事件率）')}</select>
+              </label>
+              <div class="ds-scroll" style="max-height:155px;display:grid;grid-template-columns:repeat(auto-fill, minmax(115px, 1fr));gap:4px;padding:6px;border:1px solid var(--line);background:var(--bg);">
+                ${availableCols.map(c => `
+                  <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+                    <input type="checkbox" class="st-clin-up-cb" value="${esc(c)}" ${clinUpsetCols.includes(c) ? 'checked' : ''}>
+                    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(c)}">${esc(clinLabels[c] || c)}</span>
+                  </label>
+                `).join('')}
+              </div>
+            </div>
+          ` : clinSubtype === 'logistic' ? `
+            <div class="rs-sub-box">
+              <div class="rs-sub-box-title"><span>多因素 Logistic 回归终点与自变量勾选</span></div>
+              <label>二分类结局终点列 (Outcome, 1/0 或 是/否)
+                <select id="stClinLgOut">${colOptHtml(clinLogOutcome)}</select>
+              </label>
+              <div class="muted small" style="margin-bottom:4px;">勾选纳入多因素 IRLS 拟合的协变量（自动计算 OR、Wald 95% CI、P 值与 C-index）：</div>
+              <div class="ds-scroll" style="max-height:155px;display:grid;grid-template-columns:repeat(auto-fill, minmax(125px, 1fr));gap:4px;padding:6px;border:1px solid var(--line);background:var(--bg);">
+                ${availableCols.filter(c => c !== clinLogOutcome).map(c => `
+                  <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+                    <input type="checkbox" class="st-clin-lg-cb" value="${esc(c)}" ${clinLogCovs.includes(c) ? 'checked' : ''}>
+                    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(c)}">${esc(clinLabels[c] || c)}</span>
+                  </label>
+                `).join('')}
+              </div>
+            </div>
+          ` : `
+            <div class="rs-sub-box">
+              <div class="rs-sub-box-title"><span>Kaplan-Meier 无事件生存分析与随访时间映射</span></div>
+              <label>随访时长来源方式
+                <select id="stClinSvMode">
+                  <option value="duration" ${clinSurvMode === 'duration' ? 'selected' : ''}>直接指定随访时长数值列 (如 followup_months)</option>
+                  <option value="dates" ${clinSurvMode === 'dates' ? 'selected' : ''}>由「起始日期列 → 事件/末次随访日期列」自动计算随访时长</option>
+                </select>
+              </label>
+              ${clinSurvMode === 'duration' ? `
+                <div class="row" style="gap:8px;">
+                  <label style="flex:2;">随访时长列 (Time)
+                    <select id="stClinSvTime">${colOptHtml(clinSurvTime)}</select>
+                  </label>
+                  <label style="flex:1;">时间单位
+                    <select id="stClinSvUnit">
+                      <option value="Months" ${clinSurvUnit === 'Months' ? 'selected' : ''}>月 (Months)</option>
+                      <option value="Years" ${clinSurvUnit === 'Years' ? 'selected' : ''}>年 (Years)</option>
+                      <option value="Days" ${clinSurvUnit === 'Days' ? 'selected' : ''}>天 (Days)</option>
+                    </select>
+                  </label>
+                </div>
+              ` : `
+                <div class="row" style="gap:6px;">
+                  <label style="flex:1;">起点日期列 (如 首治/出生日期)
+                    <select id="stClinSvStart">${colOptHtml(clinSurvStart)}</select>
+                  </label>
+                  <label style="flex:1;">事件日期列 (如 出血时间)
+                    <select id="stClinSvEnd">${colOptHtml(clinSurvEnd)}</select>
+                  </label>
+                </div>
+                <div class="row" style="gap:6px;">
+                  <label style="flex:1;">无事件删失截止日
+                    <input type="text" id="stClinSvCensor" value="${esc(clinSurvCensor)}" placeholder="2025-12-31">
+                  </label>
+                  <label style="flex:1;">折算单位
+                    <select id="stClinSvUnit">
+                      <option value="Months" ${clinSurvUnit === 'Months' ? 'selected' : ''}>月 (Months)</option>
+                      <option value="Years" ${clinSurvUnit === 'Years' ? 'selected' : ''}>年 (Years)</option>
+                      <option value="Days" ${clinSurvUnit === 'Days' ? 'selected' : ''}>天 (Days)</option>
+                    </select>
+                  </label>
+                </div>
+              `}
+              <div class="row" style="gap:8px;">
+                <label style="flex:1;">结局事件列 (Event, 1/0)
+                  <select id="stClinSvEvent">${colOptHtml(clinSurvEvent)}</select>
+                </label>
+                <label style="flex:1;">分组比较列 (Group)
+                  <select id="stClinSvGroup">${colOptHtml(clinSurvGroup, true, '（不分组）')}</select>
+                </label>
+              </div>
+            </div>
+          `}
+          <button type="button" class="primary small-btn" id="stClinRenderBtn">${icon('chart', { size: 13 })} 渲染临床队列图并生成 Prism / R / 600DPI PNG</button>
+        `
+
+        const upBtn = document.getElementById('stClinUploadBtn')
+        const upInp = document.getElementById('stClinUploadInput') as HTMLInputElement | null
+        if (upBtn && upInp) {
+          upBtn.onclick = () => upInp.click()
+          upInp.onchange = () => {
+            const files = Array.from(upInp.files ?? [])
+            upInp.value = ''
+            void handleInlineDatasetUpload(files)
+          }
+        }
+
+        const autoMatchClinicalCols = (cols: string[]) => {
+          if (!cols.length) return
+          const pick = (re: RegExp, fallback: string) => cols.find(c => re.test(c)) || (cols.includes(fallback) ? fallback : cols[0]!)
+          clinGrottaGroup = pick(/第一次治疗|首治|分组|arm|treat|group/i, clinGrottaGroup)
+          clinGrottaScore = pick(/mRS|闭塞|评分|分级|score|grade/i, clinGrottaScore)
+          clinSankeyStage1 = pick(/第一次治疗|首治|stage1|arm/i, clinSankeyStage1)
+          clinSankeyStage2 = cols.find(c => c !== clinSankeyStage1 && /闭塞|第二次治疗|stage2|response/i.test(c)) || cols[1] || clinSankeyStage1
+          clinSankeyStage3 = cols.find(c => c !== clinSankeyStage1 && c !== clinSankeyStage2 && /治疗后出血|不良事件|结局|第三次治疗|outcome/i.test(c)) || ''
+          const seqMatch = cols.find(c => c === '治疗方式' || /序贯|轨迹|sequence/i.test(c))
+          if (seqMatch && !cols.includes('第一次治疗方式')) clinSankeySeqCol = seqMatch
+          clinSankeyOutcome = pick(/治疗后出血|围术期不良事件|出血|结局|event|outcome/i, clinSankeyOutcome)
+          const anatMatches = cols.filter(c => /额叶|颞叶|顶叶|枕叶|小脑|脑干|基底节|脑室|胼胝体|脑叶|失语|肌力|视野/i.test(c))
+          if (anatMatches.length >= 2) clinUpsetCols = anatMatches.slice(0, 8)
+          clinUpsetOutcome = clinSankeyOutcome
+          clinLogOutcome = pick(/治疗后出血|围术期不良事件|完全闭塞|出血|结局|event|outcome|status/i, clinLogOutcome)
+          const covMatches = cols.filter(c => c !== clinLogOutcome && /供血动脉扩张|单一动脉供血|动静脉瘘|引流静脉狭窄|深部静脉引流|基底节|脑室|中心剂量|周围剂量|年龄|性别|smi|age|sex|bmi|stage/i.test(c))
+          if (covMatches.length >= 1) clinLogCovs = covMatches.slice(0, 6)
+          else clinLogCovs = cols.filter(c => c !== clinLogOutcome).slice(0, 4)
+          const hasDurationCol = cols.find(c => /follow|month|day|year|随访时长|生存时间|os_time/i.test(c))
+          const startCol = cols.find(c => /第一次治疗的时间|首治时间|出生日期|入院日期|确诊日期|start_date/i.test(c))
+          const endCol = cols.find(c => /出血时间|末次随访|事件时间|死亡时间|event_date/i.test(c))
+          if (hasDurationCol) {
+            clinSurvMode = 'duration'
+            clinSurvTime = hasDurationCol
+          } else if (startCol && endCol) {
+            clinSurvMode = 'dates'
+            clinSurvStart = startCol
+            clinSurvEnd = endCol
+          }
+          clinSurvEvent = clinLogOutcome
+          clinSurvGroup = clinGrottaGroup
+        }
+
+        const ensureDatasetColsLoaded = async (did: string) => {
+          if (!did) {
+            clinCols = []
+            clinLabels = {}
+            clinLoadedDsId = ''
+            return
+          }
+          if (clinLoadedDsId === did && clinCols.length > 0) return
+          try {
+            const ds = await api<{ columns?: Array<{ name: string }>; labels?: Record<string, string> }>(`/api/datasets/${did}`)
+            clinCols = (ds.columns ?? []).map(c => c.name)
+            clinLabels = ds.labels ?? {}
+            clinLoadedDsId = did
+            autoMatchClinicalCols(clinCols)
+            renderLeftEditor()
+            void runStudioRender()
+          } catch {}
+        }
+        if (activeDatasetId && clinLoadedDsId !== activeDatasetId) {
+          void ensureDatasetColsLoaded(activeDatasetId)
+        }
+
+        const syncClinInputs = () => {
+          if (clinSubtype === 'grotta') {
+            clinGrottaGroup = (document.getElementById('stClinGrGroup') as HTMLSelectElement)?.value || clinGrottaGroup
+            clinGrottaScore = (document.getElementById('stClinGrScore') as HTMLSelectElement)?.value || clinGrottaScore
+          } else if (clinSubtype === 'sankey') {
+            clinSankeyStage1 = (document.getElementById('stClinSkS1') as HTMLSelectElement)?.value || clinSankeyStage1
+            clinSankeyStage2 = (document.getElementById('stClinSkS2') as HTMLSelectElement)?.value || clinSankeyStage2
+            clinSankeyStage3 = (document.getElementById('stClinSkS3') as HTMLSelectElement)?.value ?? ''
+            clinSankeySeqCol = (document.getElementById('stClinSkSeq') as HTMLSelectElement)?.value ?? ''
+            clinSankeyOutcome = (document.getElementById('stClinSkOut') as HTMLSelectElement)?.value ?? ''
+          } else if (clinSubtype === 'upset') {
+            clinUpsetOutcome = (document.getElementById('stClinUpOut') as HTMLSelectElement)?.value ?? ''
+            const checked = Array.from(leftEl.querySelectorAll<HTMLInputElement>('.st-clin-up-cb:checked')).map(cb => cb.value)
+            if (checked.length >= 2) clinUpsetCols = checked
+          } else if (clinSubtype === 'logistic') {
+            clinLogOutcome = (document.getElementById('stClinLgOut') as HTMLSelectElement)?.value || clinLogOutcome
+            const checked = Array.from(leftEl.querySelectorAll<HTMLInputElement>('.st-clin-lg-cb:checked')).map(cb => cb.value)
+            if (checked.length >= 1) clinLogCovs = checked
+          } else {
+            clinSurvMode = ((document.getElementById('stClinSvMode') as HTMLSelectElement)?.value as 'duration' | 'dates') || clinSurvMode
+            clinSurvTime = (document.getElementById('stClinSvTime') as HTMLSelectElement)?.value || clinSurvTime
+            clinSurvStart = (document.getElementById('stClinSvStart') as HTMLSelectElement)?.value || clinSurvStart
+            clinSurvEnd = (document.getElementById('stClinSvEnd') as HTMLSelectElement)?.value || clinSurvEnd
+            clinSurvCensor = (document.getElementById('stClinSvCensor') as HTMLInputElement)?.value.trim() || clinSurvCensor
+            clinSurvUnit = ((document.getElementById('stClinSvUnit') as HTMLSelectElement)?.value as 'Months' | 'Years' | 'Days') || clinSurvUnit
+            clinSurvEvent = (document.getElementById('stClinSvEvent') as HTMLSelectElement)?.value || clinSurvEvent
+            clinSurvGroup = (document.getElementById('stClinSvGroup') as HTMLSelectElement)?.value ?? ''
+          }
+        }
+
+        document.getElementById('stClinDsId')!.onchange = async e => {
+          activeDatasetId = (e.target as HTMLSelectElement).value
+          clinLoadedDsId = '__force_reload__'
+          if (activeDatasetId) {
+            await ensureDatasetColsLoaded(activeDatasetId)
+          } else {
+            clinCols = []
+            clinLabels = {}
+            clinLoadedDsId = ''
+            clinGrottaGroup = '第一次治疗方式'
+            clinGrottaScore = '确诊时mRS'
+            clinSankeyStage1 = '第一次治疗方式'
+            clinSankeyStage2 = '闭塞程度'
+            clinSankeyStage3 = '治疗后出血'
+            clinSankeySeqCol = ''
+            clinUpsetCols = ['额叶', '颞叶', '顶叶', '枕叶', '基底节', '脑室']
+            clinUpsetOutcome = '治疗后出血'
+            clinLogOutcome = '治疗后出血'
+            clinLogCovs = ['供血动脉扩张', '单一动脉供血', '基底节', '年龄']
+            clinSurvMode = 'duration'
+            clinSurvTime = 'followup_months'
+            clinSurvEvent = '治疗后出血'
+            clinSurvGroup = '第一次治疗方式'
+            renderLeftEditor()
+            void runStudioRender()
+          }
+        }
+        document.getElementById('stClinSubtype')!.onchange = e => {
+          syncClinInputs()
+          clinSubtype = (e.target as HTMLSelectElement).value as typeof clinSubtype
+          renderLeftEditor()
+          void runStudioRender()
+        }
+        document.getElementById('stClinSvMode')?.addEventListener('change', e => {
+          clinSurvMode = (e.target as HTMLSelectElement).value as 'duration' | 'dates'
+          renderLeftEditor()
+          void runStudioRender()
+        })
+        document.getElementById('stClinLgOut')?.addEventListener('change', e => {
+          clinLogOutcome = (e.target as HTMLSelectElement).value
+          renderLeftEditor()
+        })
+        document.getElementById('stClinRenderBtn')!.onclick = () => {
+          syncClinInputs()
+          void runStudioRender()
+        }
+        return
+      }
+
       if (currentMode === 'wet_lab') {
         leftEl.innerHTML = `
-          <div class="rs-sub-box-title"><span>${icon('chart', { size: 13 })} 实验与临床统计图参数与真数据编辑</span></div>
+          <div class="rs-sub-box-title">
+            <span>${icon('chart', { size: 13 })} 实验与临床统计图参数与真数据编辑</span>
+            <button type="button" class="quiet small-btn" id="stWetUploadBtn" title="直接上传 Excel/CSV 数据表提取分组数值">＋ 上传数据表</button>
+            <input type="file" id="stWetUploadInput" accept=".csv,.tsv,.xlsx,.xls,.sav,.dta,.sas7bdat,.xpt,.rds,.rda,.rdata" multiple hidden>
+          </div>
           <label>图表子类型 (Plot Subtype)
             <select id="stWetSubtype">
               <option value="bar_scatter" ${wetPlotType === 'bar_scatter' ? 'selected' : ''}>柱状图 + 个体散点抖动 + P 值星号支架 (Prism 风格)</option>
@@ -2310,7 +2807,7 @@ ${modelsDesc}
 
           ${wetPlotType !== 'dose_response' && readyDs.length ? `
             <div class="rs-sub-box">
-              <div class="rs-sub-box-title"><span>${icon('link', { size: 13 })} 从真实数据集导入分组数值</span></div>
+              <div class="rs-sub-box-title"><span>${icon('link', { size: 13 })} 从真实数据集导入分组连续变量（自动过滤「缺失」值）</span></div>
               <div class="row" style="gap:6px;flex-wrap:wrap;">
                 <select id="stWetDsId" style="flex:1;min-width:120px;">
                   ${readyDs.map(d => `<option value="${esc(d.dataset_id)}"${d.dataset_id === activeDatasetId ? ' selected' : ''}>${esc(d.name)}</option>`).join('')}
@@ -2361,6 +2858,17 @@ ${modelsDesc}
           <button type="button" class="primary small-btn" id="stRunRenderBtn">${icon('chart', { size: 13 })} 渲染统计图并更新原工程文件</button>
         `
 
+        const wetUpBtn = document.getElementById('stWetUploadBtn')
+        const wetUpInp = document.getElementById('stWetUploadInput') as HTMLInputElement | null
+        if (wetUpBtn && wetUpInp) {
+          wetUpBtn.onclick = () => wetUpInp.click()
+          wetUpInp.onchange = () => {
+            const files = Array.from(wetUpInp.files ?? [])
+            wetUpInp.value = ''
+            void handleInlineDatasetUpload(files)
+          }
+        }
+
         const syncWetInputs = () => {
           wetYLabel = (document.getElementById('stWetYLabel') as HTMLInputElement)?.value || wetYLabel
           wetErrorType = ((document.getElementById('stWetErrType') as HTMLSelectElement)?.value as 'SD' | 'SEM') || 'SD'
@@ -2408,7 +2916,7 @@ ${modelsDesc}
           void runStudioRender()
         }
 
-        // Dataset column loader for wet_lab
+        // Dataset column loader for wet_lab (supports up to 5000 rows & Chinese column auto-matching)
         const dsSel = document.getElementById('stWetDsId') as HTMLSelectElement | null
         const grpSel = document.getElementById('stWetDsGrp') as HTMLSelectElement | null
         const valSel = document.getElementById('stWetDsVal') as HTMLSelectElement | null
@@ -2417,11 +2925,11 @@ ${modelsDesc}
           const populateDsCols = async () => {
             try {
               activeDatasetId = dsSel.value
-              const prev = await api<{ header: string[]; rows: string[][] }>(`/api/datasets/${dsSel.value}/preview?limit=200`)
+              const prev = await api<{ header: string[]; rows: string[][] }>(`/api/datasets/${dsSel.value}/preview?limit=100`)
               grpSel.innerHTML = prev.header.map(h => `<option value="${esc(h)}">${esc(h)}</option>`).join('')
               valSel.innerHTML = prev.header.map(h => `<option value="${esc(h)}">${esc(h)}</option>`).join('')
-              const gDefault = prev.header.find(h => /arm|treat|group|sex/i.test(h))
-              const vDefault = prev.header.find(h => /smi|age|vat|value|score|bmi|egfr/i.test(h))
+              const gDefault = prev.header.find(h => /arm|treat|group|sex|第一次治疗|治疗方式|分组|性别|闭塞/i.test(h))
+              const vDefault = prev.header.find(h => /smi|age|vat|value|score|bmi|egfr|中心剂量|周围剂量|剂量|年龄|mRS|体积|直径/i.test(h))
               if (gDefault) grpSel.value = gDefault
               if (vDefault) valSel.value = vDefault
             } catch {}
@@ -2431,21 +2939,24 @@ ${modelsDesc}
           loadBtn.onclick = async () => {
             try {
               activeDatasetId = dsSel.value
-              const prev = await api<{ header: string[]; rows: string[][] }>(`/api/datasets/${dsSel.value}/preview?limit=200`)
+              const prev = await api<{ header: string[]; rows: string[][] }>(`/api/datasets/${dsSel.value}/preview?limit=5000`)
               const gIdx = prev.header.indexOf(grpSel.value)
               const vIdx = prev.header.indexOf(valSel.value)
               if (gIdx < 0 || vIdx < 0) return
               const byGroup = new Map<string, number[]>()
+              const sentinels = new Set(['缺失', '未知', '不详', '无', 'na', 'n/a', 'null', 'none', 'nan', '-', '--', '.'])
               for (const r of prev.rows) {
                 const gName = (r[gIdx] || '').trim()
-                const vNum = Number(r[vIdx])
-                if (!gName || !Number.isFinite(vNum)) continue
+                const vRaw = (r[vIdx] || '').trim()
+                if (!gName || sentinels.has(gName.toLowerCase()) || !vRaw || sentinels.has(vRaw.toLowerCase())) continue
+                const vNum = Number(vRaw)
+                if (!Number.isFinite(vNum)) continue
                 const arr = byGroup.get(gName) || []
                 arr.push(vNum)
                 byGroup.set(gName, arr)
               }
-              if (byGroup.size < 1) { notice('所选列没有足够的有效分组数值', true); return }
-              const palette = ['#3C5488', '#00A087', '#E64B35', '#4DBBD5', '#F39B7F']
+              if (byGroup.size < 1) { notice('所选列没有足够的有效分组数值（提示：分类结局请切换至「临床队列」引擎绘制 Grotta / 森林图）', true); return }
+              const palette = ['#3C5488', '#00A087', '#E64B35', '#4DBBD5', '#F39B7F', '#8491B4']
               wetGroups = [...byGroup.entries()].slice(0, 6).map(([name, vals], i) => ({
                 name,
                 values: vals.map(v => Number(v.toFixed(2))).join(', '),
@@ -2454,7 +2965,7 @@ ${modelsDesc}
               wetYLabel = valSel.value
               renderLeftEditor()
               void runStudioRender()
-              notice(`已从数据集提取 ${wetGroups.length} 组真实临床数据并重绘！`)
+              notice(`已从数据集（共扫描 ${prev.rows.length} 行）提取 ${wetGroups.length} 组真实数据并重绘！`)
             } catch (err) {
               notice((err as Error).message, true)
             }
@@ -2739,7 +3250,7 @@ ${modelsDesc}
       if (currentMode === 'journal_assembly') {
         const figCandidates = s
           ? s.analyses.map(a => ({ id: a.asset_id, name: a.name }))
-          : (opts?.globalFigures ?? []).map(f => ({ id: f.id, name: f.name }))
+          : (studioFigures.length ? studioFigures : (opts?.globalFigures ?? [])).map(f => ({ id: f.id, name: f.name }))
         leftEl.innerHTML = `
           <div class="rs-sub-box-title"><span>${icon('grid', { size: 13 })} 顶刊多面板复合大图排版配置 (A/B/C/D)</span></div>
           <label>复合大图总标题 (Figure Legend Title)
@@ -2774,7 +3285,7 @@ ${modelsDesc}
                 `).join('')}
               </div>
             ` : `
-              <div class="muted small">暂未勾选已归档子面板，将自动生成标准多面板示例布局；你也可先在左侧 1~5 类图表中点击「归档」后再来合成。</div>
+              <div class="muted small">暂未勾选已归档子面板，将自动生成标准多面板示例布局；你也可先在左侧图表模式中点击「${isGlobal ? '保存到图表库' : '归档至本研究'}」后再来合成。</div>
             `}
           </div>
           <button type="button" class="primary small-btn" id="stAsmRenderBtn">${icon('grid', { size: 13 })} 合成顶刊多面板大图并导出出版包</button>
@@ -2856,7 +3367,73 @@ ${modelsDesc}
       const targetSid = s?.id || selectedArchiveStudyId || undefined
       const endpoint = targetSid ? `/api/studies/${targetSid}/figures` : '/api/figures'
       let payload: Record<string, unknown> = { category: currentMode }
-      if (currentMode === 'wet_lab') {
+      if (currentMode === 'clinical_cohort') {
+        const dsLabel = activeDatasetId
+          ? (readyDs.find(d => d.dataset_id === activeDatasetId)?.name || contextTitle)
+          : `${contextTitle} · 临床队列`
+        if (clinSubtype === 'grotta') {
+          payload = {
+            category: 'clinical_cohort',
+            subtype: 'grotta',
+            dataset_id: activeDatasetId || undefined,
+            group_col: clinGrottaGroup,
+            score_col: clinGrottaScore,
+            labels: clinLabels,
+            title: `${dsLabel} · ${clinGrottaScore} Shift Analysis (Grotta Plot)`,
+          }
+          lastTitle = `Clinical_Grotta_${clinGrottaScore}`
+        } else if (clinSubtype === 'sankey') {
+          const stages = [clinSankeyStage1, clinSankeyStage2, clinSankeyStage3].filter(Boolean)
+          payload = {
+            category: 'clinical_cohort',
+            subtype: 'sankey',
+            dataset_id: activeDatasetId || undefined,
+            stage_cols: clinSankeySeqCol ? undefined : stages,
+            sequence_col: clinSankeySeqCol || undefined,
+            outcome_col: clinSankeyOutcome || undefined,
+            labels: clinLabels,
+            title: `${dsLabel} · Treatment Trajectory & Outcome Sankey Diagram`,
+          }
+          lastTitle = `Clinical_Sankey_Trajectory`
+        } else if (clinSubtype === 'upset') {
+          payload = {
+            category: 'clinical_cohort',
+            subtype: 'upset',
+            dataset_id: activeDatasetId || undefined,
+            binary_cols: clinUpsetCols,
+            outcome_col: clinUpsetOutcome || undefined,
+            labels: clinLabels,
+            title: `${dsLabel} · Anatomical Co-occurrence & Risk UpSet Plot`,
+          }
+          lastTitle = `Clinical_UpSet_Cooccurrence`
+        } else if (clinSubtype === 'logistic') {
+          payload = {
+            category: 'clinical_cohort',
+            subtype: 'logistic',
+            dataset_id: activeDatasetId || undefined,
+            outcome_col: clinLogOutcome,
+            covariates: clinLogCovs,
+            labels: clinLabels,
+            title: `${dsLabel} · Multivariable Logistic Regression Forest Plot (OR & 95% CI)`,
+          }
+          lastTitle = `Clinical_Logistic_OR_${clinLogOutcome}`
+        } else {
+          payload = {
+            category: 'clinical_cohort',
+            subtype: 'survival',
+            dataset_id: activeDatasetId || undefined,
+            time_col: clinSurvMode === 'duration' ? clinSurvTime : undefined,
+            start_date_col: clinSurvMode === 'dates' ? clinSurvStart : undefined,
+            event_date_col: clinSurvMode === 'dates' ? clinSurvEnd : undefined,
+            default_censor_date: clinSurvMode === 'dates' ? clinSurvCensor : undefined,
+            event_col: clinSurvEvent,
+            group_col: clinSurvGroup || undefined,
+            time_unit: clinSurvUnit,
+            title: `${dsLabel} · Kaplan-Meier Event-Free Survival Analysis`,
+          }
+          lastTitle = `Clinical_KM_Survival_${clinSurvEvent}`
+        }
+      } else if (currentMode === 'wet_lab') {
         const parsedGroups = wetGroups.map(g => ({
           name: g.name,
           color: g.color,
@@ -2959,9 +3536,22 @@ ${modelsDesc}
           method: 'POST',
           body: JSON.stringify(payload),
         })
-        const svgStr = res.illustrator_svg || res.svg || res.native_exports?.illustrator_svg || ''
+        const svgStr = res.illustrator_svg || res.svg || res.km_svg || res.forest_svg || res.native_exports?.illustrator_svg || ''
         lastSvg = svgStr
         canvasEl.innerHTML = svgStr || '<div class="muted small">已生成工程原文件</div>'
+
+        // 更新画布顶部标题与统计检验摘要
+        if (currentMode === 'clinical_cohort') {
+          const statBits: string[] = []
+          if (typeof res.total_n === 'number') statBits.push(`N = ${res.total_n}`)
+          if (typeof res.events === 'number') statBits.push(`阳性事件 = ${res.events}`)
+          if (typeof res.c_statistic === 'number') statBits.push(`C-index = ${res.c_statistic.toFixed(3)}`)
+          if (typeof res.p_value === 'number') statBits.push(`${res.test_name || 'Test'} P = ${res.p_value < 0.001 ? '<0.001' : res.p_value.toFixed(4)}`)
+          if (typeof res.log_rank_p === 'number') statBits.push(`Log-rank P = ${res.log_rank_p < 0.001 ? '<0.001' : res.log_rank_p.toFixed(4)}`)
+          canvasTitleEl.textContent = `矢量画布预览${statBits.length ? ` · ${statBits.join(' · ')}` : ''}`
+        } else {
+          canvasTitleEl.textContent = '矢量画布预览'
+        }
 
         const pzfx = res.prism_pzfx || res.native_exports?.prism_pzfx
         const rScript = res.r_script || res.native_exports?.r_script
@@ -2979,7 +3569,7 @@ ${modelsDesc}
         lastCodePath = rScript ? `${lastTitle}.R` : ijm ? `${lastTitle}.ijm` : drawioXml ? `${lastTitle}.drawio` : `${lastTitle}.txt`
         codePre.textContent = lastCode
 
-        exportBar.innerHTML = `<span class="muted small" style="margin-right:4px;">原生工程原文件导出：</span>`
+        exportBar.innerHTML = `<span class="muted small" style="margin-right:4px;">一键导出：</span>`
         const addExp = (label: string, fn: () => void, primary = false) => {
           const b = document.createElement('button')
           b.type = 'button'
@@ -3001,12 +3591,16 @@ ${modelsDesc}
         if (currentMode === 'journal_assembly') {
           addExp('600 DPI 印刷级高清图 (.png)', () => void downloadFigureFormat(targetSid, payload, 'png', `${lastTitle}_600DPI.png`))
           addExp('完整出版原文件包 (.zip)', () => void downloadFigureFormat(targetSid, payload, 'zip', `${lastTitle}_Bundle.zip`), true)
+        } else if (svgStr) {
+          addExp('600 DPI 高清图 (.png)', () => void downloadSvgAsPng600Dpi(targetSid, svgStr, `${lastTitle}_600DPI.png`), !pzfx && !drawioXml)
         }
         if (ijm) addExp('ImageJ / Fiji 宏 (.ijm)', () => downloadBlobContent(ijm, `${lastTitle}.ijm`), true)
         if (wsp) addExp('FlowJo 圈门工作区 (.wsp)', () => downloadBlobContent(wsp, `${lastTitle}.wsp`, 'application/xml;charset=utf-8'), true)
         if (mrml) addExp('3D Slicer 场景 (.mrml)', () => downloadBlobContent(mrml, `${lastTitle}.mrml`, 'application/xml;charset=utf-8'), true)
         if (itkTxt) addExp('ITK-SNAP 标签表 (.txt)', () => downloadBlobContent(itkTxt, `${lastTitle}_ITKSNAP.txt`))
-        if (svgStr) addExp('Illustrator 分层矢量 (.svg)', () => downloadBlobContent(svgStr, `${lastTitle}.svg`, 'image/svg+xml;charset=utf-8'))
+        if (svgStr) {
+          addExp('Illustrator 分层矢量 (.svg)', () => downloadBlobContent(svgStr, `${lastTitle}.svg`, 'image/svg+xml;charset=utf-8'))
+        }
       } catch (err) {
         canvasEl.innerHTML = `<div class="muted small">${esc((err as Error).message)}</div>`
       }
@@ -3027,7 +3621,10 @@ ${modelsDesc}
 
     const applyPreset = (p: string) => {
       if (!p) return
-      if (p === 'grant_gpcr') {
+      if (p === 'clin_grotta' || p === 'clin_sankey' || p === 'clin_upset' || p === 'clin_logistic' || p === 'clin_survival') {
+        activateModeBtn('clinical_cohort')
+        clinSubtype = p.replace('clin_', '') as typeof clinSubtype
+      } else if (p === 'grant_gpcr') {
         activateModeBtn('mechanism')
         mechState = structuredClone(MECH_PRESETS.gpcr!)
       } else if (p === 'grant_pd1') {
@@ -3081,7 +3678,7 @@ ${modelsDesc}
   /** 打开全局独立的科研制图工作台（与临床研究课题完全解耦） */
   async function openGlobalStudio(
     initialDatasetId?: string,
-    initialMode?: 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
+    initialMode?: 'clinical_cohort' | 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
   ): Promise<void> {
     hooks.leaveDoc()
     current = null
@@ -3103,7 +3700,7 @@ ${modelsDesc}
       container: page,
       globalDatasets,
       initialDatasetId,
-      initialMode,
+      initialMode: initialMode ?? (initialDatasetId ? 'clinical_cohort' : undefined),
       globalFigures: studioFigures,
     })
   }
@@ -3146,16 +3743,22 @@ ${modelsDesc}
         <div id="rsDocDrawPane" style="display:flex;flex-direction:column;gap:12px;">
           <div class="rs-preset-bar" style="margin-top:0;padding-top:0;border-top:0;">
             <span class="muted small" style="font-weight:600;">快速选型：</span>
+            <button type="button" class="rs-preset-chip" data-doc-preset="clin_grotta">[临床预后] mRS Grotta 分布图</button>
+            <button type="button" class="rs-preset-chip" data-doc-preset="clin_sankey">[治疗轨迹] 多阶段 Sankey 桑基图</button>
+            <button type="button" class="rs-preset-chip" data-doc-preset="clin_upset">[部位共现] 解剖部位 UpSet 图</button>
+            <button type="button" class="rs-preset-chip" data-doc-preset="clin_logistic">[危险因素] Logistic OR 森林图</button>
             <button type="button" class="rs-preset-chip" data-doc-preset="wet_bar">[Results 统计] 柱状散点 + P 值支架</button>
-            <button type="button" class="rs-preset-chip" data-doc-preset="wet_violin">[分布对比] 小提琴 + 箱线图</button>
-            <button type="button" class="rs-preset-chip" data-doc-preset="wet_ic50">[药理/CCK-8] 4PL IC50 拟合曲线</button>
             <button type="button" class="rs-preset-chip" data-doc-preset="mech_gpcr">[标书/综述] 细胞信号通路机制图</button>
-            <button type="button" class="rs-preset-chip" data-doc-preset="bio_volcano">[多组学] 差异表达火山图</button>
             <button type="button" class="rs-preset-chip" data-doc-preset="consort">[方法学] CONSORT 纳排流程图</button>
           </div>
           <div class="form" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:10px;background:var(--raised);padding:12px;border:1px solid var(--line);">
             <label>图表类型 (Figure Type)
               <select id="rsDocFigKind">
+                <option value="clin_grotta">临床队列：mRS / 闭塞分级 Grotta 有序分布偏移图</option>
+                <option value="clin_sankey">临床队列：多阶段序贯治疗轨迹与结局 Sankey 桑基图</option>
+                <option value="clin_upset">临床队列：多解剖部位共现与结局风险率 UpSet 图</option>
+                <option value="clin_logistic">临床队列：多因素 Logistic 回归 OR 森林图 (Forest Plot)</option>
+                <option value="clin_survival">临床队列：Kaplan-Meier 无事件生存曲线 (KM Plot)</option>
                 <option value="wet_bar">实验/临床：柱状散点图 + P 值星号支架 (Prism)</option>
                 <option value="wet_violin">实验/临床：小提琴密度 + 内嵌箱线图 (Violin)</option>
                 <option value="wet_ic50">药理/CCK-8：4PL 剂量反应 IC50 曲线 (Origin)</option>
@@ -3214,6 +3817,13 @@ ${modelsDesc}
     let renderedCodePath = 'figure_studio.R'
 
     const buildPayload = (kind: string, title: string): Record<string, unknown> => {
+      if (kind.startsWith('clin_')) {
+        return {
+          category: 'clinical_cohort',
+          subtype: kind.replace('clin_', ''),
+          title,
+        }
+      }
       if (kind === 'wet_bar' || kind === 'wet_violin') {
         return {
           category: 'wet_lab',
@@ -3508,18 +4118,24 @@ ${modelsDesc}
             const m = list.find(c => re.test(c))
             if (m) sel.value = m
           }
-          fill(tSel, cols, /time|month|day|follow|surv|os/i)
-          fill(eSel, cols, /status|event|dead|death|outcome/i)
-          fill(gSel, ['(不分组)', ...cols], /group|arm|treat|smi/i)
+          fill(tSel, cols, /time|month|day|follow|surv|os|随访时长|生存时间|第一次治疗的时间|出生日期/i)
+          fill(eSel, cols, /status|event|dead|death|outcome|治疗后出血|围术期不良事件|出血|结局/i)
+          fill(gSel, ['(不分组)', ...cols], /group|arm|treat|smi|第一次治疗方式|治疗方式|分组/i)
           await runSurv()
         }
 
         const runSurv = async () => {
           try {
+            const ds = await api<{ columns?: Array<{ name: string }> }>(`/api/datasets/${dsSel.value}`).catch(() => ({ columns: [] }))
+            const colNames = (ds.columns || []).map(c => c.name)
+            const isDateStart = /时间|日期|date/i.test(tSel.value)
+            const evDateCol = colNames.find(c => c !== tSel.value && /出血时间|事件时间|末次随访|event_date/i.test(c))
             const res = await api<any>(`/api/datasets/${dsSel.value}/survival`, {
               method: 'POST',
               body: JSON.stringify({
-                time_col: tSel.value,
+                time_col: isDateStart && evDateCol ? undefined : tSel.value,
+                start_date_col: isDateStart && evDateCol ? tSel.value : undefined,
+                event_date_col: isDateStart && evDateCol ? evDateCol : undefined,
                 event_col: eSel.value,
                 group_col: gSel.value === '(不分组)' ? undefined : gSel.value,
                 time_unit: (document.getElementById('bsSurvUnit') as HTMLSelectElement).value,
@@ -3535,6 +4151,8 @@ ${modelsDesc}
                 <b>Figure 3 · Kaplan-Meier 累积生存曲线与风险集表</b>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;">
                   <button type="button" class="small-btn primary" id="bsArchKm">${icon('pin', { size: 13 })} 归档 KM 图至 figures/</button>
+                  <button type="button" class="small-btn" id="bsDlKmPng">${icon('download', { size: 13 })} 600 DPI PNG</button>
+                  <button type="button" class="small-btn" id="bsCpKmPng">${icon('copy', { size: 13 })} 复制高清图</button>
                   <button type="button" class="small-btn" id="bsDlKmPzfx">${icon('download', { size: 13 })} Prism (.pzfx)</button>
                   <button type="button" class="small-btn" id="bsDlKmR">${icon('download', { size: 13 })} R 脚本 (.R)</button>
                   <button type="button" class="small-btn" id="bsDlKmSvg">${icon('download', { size: 13 })} KM (.svg)</button>
@@ -3546,6 +4164,7 @@ ${modelsDesc}
                   <b>Figure 4 · 多因素 Cox 比例风险回归森林图 (Forest Plot)</b>
                   <div style="display:flex;gap:6px;flex-wrap:wrap;">
                     <button type="button" class="small-btn primary" id="bsArchForest">${icon('pin', { size: 13 })} 归档森林图至 figures/</button>
+                    <button type="button" class="small-btn" id="bsDlForPng">${icon('download', { size: 13 })} 600 DPI PNG</button>
                     <button type="button" class="small-btn" id="bsDlForPzfx">${icon('download', { size: 13 })} Prism (.pzfx)</button>
                     <button type="button" class="small-btn" id="bsDlForR">${icon('download', { size: 13 })} R 脚本 (.R)</button>
                     <button type="button" class="small-btn" id="bsDlForSvg">${icon('download', { size: 13 })} 森林图 (.svg)</button>
@@ -3555,10 +4174,13 @@ ${modelsDesc}
               ` : ''}
             `
             document.getElementById('bsArchKm')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure3_Kaplan_Meier', kmSvg, ne.r_script))
+            document.getElementById('bsDlKmPng')?.addEventListener('click', () => kmSvg && void downloadSvgAsPng600Dpi(s.id, kmSvg, 'Figure3_Kaplan_Meier_600DPI.png'))
+            document.getElementById('bsCpKmPng')?.addEventListener('click', () => kmSvg && void copySvgAsPngToClipboard(s.id, kmSvg, 'Figure3_Kaplan_Meier'))
             document.getElementById('bsDlKmPzfx')?.addEventListener('click', () => ne.prism_pzfx && downloadBlobContent(ne.prism_pzfx, 'Kaplan_Meier.pzfx', 'application/xml;charset=utf-8'))
             document.getElementById('bsDlKmR')?.addEventListener('click', () => ne.r_script && downloadBlobContent(ne.r_script, 'Kaplan_Meier.R'))
             document.getElementById('bsDlKmSvg')?.addEventListener('click', () => kmSvg && downloadBlobContent(kmSvg, 'Kaplan_Meier.svg', 'image/svg+xml;charset=utf-8'))
             document.getElementById('bsArchForest')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure4_Cox_Forest_Plot', forestSvg, ne.forest_r_script))
+            document.getElementById('bsDlForPng')?.addEventListener('click', () => forestSvg && void downloadSvgAsPng600Dpi(s.id, forestSvg, 'Figure4_Cox_Forest_Plot_600DPI.png'))
             document.getElementById('bsDlForPzfx')?.addEventListener('click', () => ne.forest_prism_pzfx && downloadBlobContent(ne.forest_prism_pzfx, 'Cox_Forest_Plot.pzfx', 'application/xml;charset=utf-8'))
             document.getElementById('bsDlForR')?.addEventListener('click', () => ne.forest_r_script && downloadBlobContent(ne.forest_r_script, 'Cox_Forest_Plot.R'))
             document.getElementById('bsDlForSvg')?.addEventListener('click', () => forestSvg && downloadBlobContent(forestSvg, 'Cox_Forest_Plot.svg', 'image/svg+xml;charset=utf-8'))
@@ -4566,15 +5188,37 @@ ${modelsDesc}
   if (studioListEl) {
     studioListEl.onclick = e => {
       const li = (e.target as HTMLElement).closest<HTMLElement>('li[data-studio-fig]')
-      if (li?.dataset.studioFig) void hooks.datasets.showProvenance(li.dataset.studioFig)
+      if (!li?.dataset.studioFig) return
+      const assetId = li.dataset.studioFig
+      const assetName = li.dataset.studioFigname || 'Archived_Figure'
+      studioListEl.querySelectorAll('li').forEach(el => el.classList.toggle('active', el === li))
+      if ($('page').classList.contains('studio-page') && previewArchivedAssetInStudio) {
+        void previewArchivedAssetInStudio(assetId, assetName)
+      } else {
+        void hooks.datasets.showProvenance(assetId)
+      }
     }
   }
   const newStudioFigBtn = document.getElementById('newStudioFigBtn')
-  if (newStudioFigBtn) newStudioFigBtn.onclick = () => void openGlobalStudio(undefined, 'wet_lab')
+  if (newStudioFigBtn) newStudioFigBtn.onclick = () => void openGlobalStudio(undefined, 'clinical_cohort')
   const studioQuickStatsBtn = document.getElementById('studioQuickStatsBtn')
   if (studioQuickStatsBtn) studioQuickStatsBtn.onclick = () => void openGlobalStudio(undefined, 'wet_lab')
   const studioQuickMechBtn = document.getElementById('studioQuickMechBtn')
   if (studioQuickMechBtn) studioQuickMechBtn.onclick = () => void openGlobalStudio(undefined, 'mechanism')
+  const studioUploadDatasetBtn = document.getElementById('studioUploadDatasetBtn')
+  const studioDatasetFileInput = document.getElementById('studioDatasetFileInput') as HTMLInputElement | null
+  if (studioUploadDatasetBtn && studioDatasetFileInput) {
+    studioUploadDatasetBtn.onclick = () => studioDatasetFileInput.click()
+    studioDatasetFileInput.onchange = async () => {
+      const files = Array.from(studioDatasetFileInput.files ?? [])
+      studioDatasetFileInput.value = ''
+      if (!files.length) return
+      const uploaded = await hooks.datasets.upload(files)
+      if (uploaded.length) {
+        await openGlobalStudio(uploaded[0]!.id, 'clinical_cohort')
+      }
+    }
+  }
 
   $('newStudy').onclick = () => createDialog()
   $('docSearch').addEventListener('input', () => {

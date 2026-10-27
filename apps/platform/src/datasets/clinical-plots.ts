@@ -1450,3 +1450,52 @@ library(UpSetR)
     },
   }
 }
+
+/**
+ * 提供开箱即用的临床专病队列示例数据（80 例脑血管畸形/临床随访队列），
+ * 供「独立科研制图」与「写作内嵌配图」在未挂载外部数据集时直接预览与调参。
+ */
+export function buildDefaultClinicalCohortRecords(): Array<Record<string, unknown>> {
+  const rows: Array<Record<string, unknown>> = []
+  const modalities = ['保守观察', '手术切除', '伽玛刀', '介入栓塞']
+  const seqPool = ['0', '1', '2', '3', '31', '32', '21', '12']
+  for (let i = 0; i < 80; i++) {
+    const modIdx = i % 4
+    const firstMod = modalities[modIdx]!
+    const seq = seqPool[i % seqPool.length]!
+    const mrs = modIdx === 1 ? (i % 5 === 0 ? 2 : i % 3 === 0 ? 1 : 0) : modIdx === 3 ? (i % 4 === 0 ? 2 : 1) : (i % 6 === 0 ? 3 : i % 2)
+    const oblit = modIdx === 1 ? (i % 6 === 0 ? '部分闭塞' : '完全闭塞') : modIdx === 2 ? (i % 3 === 0 ? '部分闭塞' : '完全闭塞') : modIdx === 3 ? (i % 2 === 0 ? '部分闭塞' : '完全闭塞') : '未闭塞'
+    const feederDilated = i % 3 === 0 ? 1 : 0
+    const singleFeeder = i % 2 === 0 ? 1 : 0
+    const deepLoc = i % 5 === 0 ? 1 : 0
+    const bleedProb = (feederDilated ? 0.25 : 0.06) + (deepLoc ? 0.2 : 0) + (modIdx === 1 ? -0.08 : 0.05)
+    const bleed = ((i * 17 + 5) % 100) / 100 < bleedProb ? 'Y' : 'N'
+    const followupMonths = Math.max(3, Math.round(48 - (bleed === 'Y' ? (i % 24) + 4 : (i % 18))))
+    rows.push({
+      性别: i % 2 === 0 ? '男' : '女',
+      年龄: 22 + (i * 7) % 46,
+      第一次治疗方式: firstMod,
+      治疗方式: seq,
+      确诊时mRS: String(mrs),
+      闭塞程度: oblit,
+      治疗后出血: bleed,
+      围术期不良事件: i % 9 === 0 ? 'Y' : 'N',
+      供血动脉扩张: String(feederDilated),
+      单一动脉供血: String(singleFeeder),
+      中心剂量: 32 + (i % 10),
+      周围剂量: 16 + (i % 6),
+      额叶: i % 3 === 0 ? '1' : '0',
+      颞叶: i % 4 === 0 ? '1' : '0',
+      顶叶: i % 5 === 0 ? '1' : '0',
+      枕叶: i % 6 === 0 ? '1' : '0',
+      小脑: i % 8 === 0 ? '1' : '0',
+      基底节: deepLoc ? '1' : '0',
+      脑室: i % 7 === 0 ? '1' : '0',
+      followup_months: String(followupMonths),
+      第一次治疗的时间: `2021-0${(i % 9) + 1}-15`,
+      出血时间: bleed === 'Y' ? `2023-0${((i + 3) % 9) + 1}-20` : 'N',
+    })
+  }
+  return rows
+}
+

@@ -14,8 +14,16 @@ import { chiSquareUpperPValue, isCellMissing, normalCdf } from './table1.ts'
 import { exportToPrismPzfx, upgradeSvgForIllustrator, type PrismTableSpec } from '../research/medical-figures.ts'
 
 export interface SurvivalOptions {
-  /** 随访生存时间列名（天、月或年，数值型，如 'os_months', 'pfs_days'） */
-  time_col: string
+  /** 随访生存时间列名（天、月或年，数值型，如 'os_months', 'pfs_days'）；若提供 start_date_col + event_date_col 可省略 */
+  time_col?: string
+  /** 可选：起始日期列名（如 '第一次治疗的时间'、'出生日期'），与 event_date_col 配合自动计算随访时长 */
+  start_date_col?: string
+  /** 可选：结局事件日期列名（如 '出血时间'） */
+  event_date_col?: string
+  /** 可选：末次随访/删失日期列名 */
+  censor_date_col?: string
+  /** 可选：默认删失截止日期（如 '2025-01-01'；不传时取队列最晚事件/随访日期） */
+  default_censor_date?: string
   /** 结局事件状态列名（数值 1=发生事件, 0=删失；或字符 '1'/'0', 'dead'/'censored', 'yes'/'no'） */
   event_col: string
   /** 分组分层变量列名（如 'treatment', 'ham_status', 'gene_mutation'）；不传时评估 Overall 总体 */
@@ -1177,12 +1185,38 @@ export function generateSurvivalMarkdownTable(
 /**
  * 端到端主函数：基于数据集记录生成完整生存分析结果
  */
+/** 解析临床表格中的日期字符串（支持 YYYY-MM-DD, YYYY/MM/DD, YYYY.M.D, YYYY年M月D日, YYYY-MM 等），剔除 '缺失'/'N'/'0' */
+function parseClinicalDateMs(val: unknown): number | null {
+  if (isCellMissing(val)) return null
+  const s = String(val).trim()
+  if (!s || s === '0' || /^(n|no|none|null|na|nan|缺失|不详|未知|无|-|--)$/i.test(s)) return null
+  const normalized = s
+    .replace(/年/g, '-')
+    .replace(/月/g, '-')
+    .replace(/日/g, '')
+    .replace(/[./]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  const ymMatch = /^(\d{4})-(\d{1,2})$/.exec(normalized)
+  const isoCandidate = ymMatch ? `${ymMatch[1]}-${ymMatch[2]!.padStart(2, '0')}-15` : normalized
+  const yearMatch = /^(\d{4})/.exec(isoCandidate)
+  if (!yearMatch) return null
+  const yr = Number(yearMatch[1])
+  if (yr < 1900 || yr > 2100) return null
+  const ms = Date.parse(isoCandidate)
+  return Number.isFinite(ms) ? ms : null
+}
+
 export function generateSurvivalAnalysis(
   records: Array<Record<string, unknown>>,
   options: SurvivalOptions
 ): SurvivalAnalysisResult {
   const {
-    time_col,
+    time_col = 'followup_months',
+    start_date_col,
+    event_date_col,
+    censor_date_col,
+    default_censor_date,
     event_col,
     group_col,
     covariates = [],
@@ -1192,17 +1226,63 @@ export function generateSurvivalAnalysis(
     title = 'Kaplan-Meier Survival Analysis'
   } = options
 
+  // 若配置了日期列，预先扫描队列最晚日期作为默认右删失截止点
+  let fallbackCensorMs = default_censor_date ? parseClinicalDateMs(default_censor_date) : null
+  if (!fallbackCensorMs && start_date_col) {
+    let maxMs = 0
+    for (const r of records) {
+      for (const col of [event_date_col, censor_date_col, start_date_col]) {
+        if (!col) continue
+        const ms = parseClinicalDateMs(r[col])
+        if (ms !== null && ms > maxMs) maxMs = ms
+      }
+    }
+    fallbackCensorMs = maxMs > 0 ? maxMs : Date.parse('2025-01-01')
+  }
+
+  const normUnit = time_unit.toLowerCase()
+  const msPerUnit = normUnit.startsWith('day')
+    ? 1000 * 86400
+    : normUnit.startsWith('week')
+      ? 1000 * 86400 * 7
+      : normUnit.startsWith('year')
+        ? 1000 * 86400 * 365.25
+        : 1000 * 86400 * 30.4375
+
   // 提取有效数据
   const cleaned: Array<{ time: number; event: number; group: string; [k: string]: unknown }> = []
 
   for (const r of records) {
-    // C2 修复：严格剔除空字符串、临床缺失值占位符、null 或 undefined 的时间列与分组列，杜绝被隐式转为 0 或生成空组名 ""
-    const rawT = r[time_col]
-    if (isCellMissing(rawT)) continue
     if (group_col && isCellMissing(r[group_col])) continue
-    const t = Number(rawT)
     const e = normalizeEventStatus(r[event_col])
-    if (!Number.isFinite(t) || t < 0 || e === null) continue
+    if (e === null) continue
+
+    let t = NaN
+    const rawT = time_col ? r[time_col] : undefined
+    if (!isCellMissing(rawT)) {
+      const numT = Number(rawT)
+      if (Number.isFinite(numT) && numT >= 0) t = numT
+    }
+
+    if (!Number.isFinite(t) && start_date_col) {
+      const startMs = parseClinicalDateMs(r[start_date_col])
+      if (startMs !== null) {
+        const evMs = event_date_col ? parseClinicalDateMs(r[event_date_col]) : null
+        const cenMs = censor_date_col ? parseClinicalDateMs(r[censor_date_col]) : null
+        const endMs = e === 1 && evMs !== null
+          ? evMs
+          : cenMs !== null
+            ? cenMs
+            : evMs !== null
+              ? evMs
+              : fallbackCensorMs
+        if (endMs !== null && endMs >= startMs) {
+          t = Number(((endMs - startMs) / msPerUnit).toFixed(1))
+        }
+      }
+    }
+
+    if (!Number.isFinite(t) || t < 0) continue
 
     const grp = group_col ? String(r[group_col]).trim() : 'Overall'
     cleaned.push({
