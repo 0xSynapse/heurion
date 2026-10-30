@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title data-i18n="doc_title">Heurion Research · 临床科研 AI 工作台与 Aegis OS 智能体内核</title>
-  <meta name="description" content="Heurion Research is an independent systems and clinical AI research lab building Heurion 2.0 & OmniCanvas (Contract-Guarded Clinical Research AI Workstation) and Aegis OS (Transactional Multi-Tenant Agent Operating System Runtime)." />
-  <meta name="keywords" content="Heurion Research, Heurion 2.0, OmniCanvas, Aegis OS, aegis-os, Clinical AI Workstation, Agent Operating System, Copy-on-Write Workspace, Ed25519 Lease, AAP-1.0, CONSORT 2010, STROBE, VanderWeele E-value, Table 1, MONAI" />
+  <meta name="description" content="Heurion Research is an independent systems and clinical AI research lab building Heurion 2.0 & OmniCanvas (Contract-Guarded Clinical Research AI Workstation), Aegis OS (Transactional Multi-Tenant Agent Operating System Runtime), and UOMP (the open memory consent protocol for AI agents)." />
+  <meta name="keywords" content="Heurion Research, Heurion 2.0, OmniCanvas, Aegis OS, aegis-os, UOMP, memory consent protocol, agent memory, Clinical AI Workstation, Agent Operating System, Copy-on-Write Workspace, Ed25519 Lease, AAP-1.0, CONSORT 2010, STROBE, VanderWeele E-value, Table 1, MONAI" />
   <meta name="author" content="Heurion Research" />
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
   <link rel="canonical" href="https://heurion.org/" />
@@ -113,7 +113,15 @@
             "name": "什么是 Aegis OS，它与 Heurion 2.0 临床科研工作台是什么关系？",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Aegis OS (aegis-os) 是 Heurion Research 研发的开源多租户智能体操作系统内核，提供写时复制影子工作区、内核沙箱与 AAP-1.0 离线 Ed25519 人类审批租约。Heurion 2.0 是首个原生接入 AAP-1.0 的第一方临床应用。"
+              "text": "Aegis OS (aegis-os) 是 Heurion Research 研发的开源多租户智能体操作系统内核，提供写时复制影子工作区、内核沙箱与 AAP-1.0 离线 Ed25519 人类审批租约。Heurion 2.0 是首个原生接入 AAP-1.0 的第一方临床应用；UOMP 是 Aegis OS 执行的记忆同意协议。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "什么是 UOMP？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "UOMP 是 Heurion Research 维护的 Agent 记忆同意开放协议，定义范围、时效、撤销与审计。Aegis OS 是它的参考实现。"
             }
           }
         ]
@@ -125,7 +133,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-v12" />
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v13" />
 </head>
 <body>
 
@@ -353,7 +361,14 @@
               </div>
               <h3 class="heading-2" data-i18n="f2_title">Aegis OS (aegis-os)</h3>
               <p class="flagship-sub" data-i18n="f2_sub">事务级多租户智能体内核</p>
-              <p class="text-muted" data-i18n="f2_desc">面向多智能体并发的写时复制影子树、内核沙箱与密码学租约。</p>
+              <p class="text-muted" data-i18n="f2_desc">面向多智能体并发的写时复制影子树、内核沙箱与密码学租约；通过 UOMP 协议约束 Agent 的记忆访问。</p>
+              <div class="flagship-protocol">
+                <div>
+                  <span class="label-caps" data-i18n="f2_protocol_label">记忆层 · 开放协议</span>
+                  <p class="flagship-protocol-name" data-i18n="f2_protocol_name">UOMP · 记忆同意协议</p>
+                </div>
+                <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener" data-i18n="f2_link_uomp">UOMP 规范 →</a>
+              </div>
             </div>
 
             <div>
@@ -489,7 +504,10 @@
         f2_tag: '内核层 · RUST',
         f2_title: 'Aegis OS (aegis-os)',
         f2_sub: '事务级多租户智能体内核',
-        f2_desc: '面向多智能体并发的写时复制影子树、内核沙箱与密码学租约。',
+        f2_desc: '面向多智能体并发的写时复制影子树、内核沙箱与密码学租约；通过 UOMP 协议约束 Agent 的记忆访问。',
+        f2_protocol_label: '记忆层 · 开放协议',
+        f2_protocol_name: 'UOMP · 记忆同意协议',
+        f2_link_uomp: 'UOMP 规范 →',
         f2_s1: '静默覆写',
         f2_s2: 'CoW 派生',
         f2_s3: 'IPC 开销',
@@ -559,7 +577,10 @@
         f2_tag: 'KERNEL LAYER · RUST',
         f2_title: 'Aegis OS (aegis-os)',
         f2_sub: 'Transactional Agent OS Runtime',
-        f2_desc: 'Copy-on-Write shadow workspaces, kernel sandboxing, and Ed25519 human leases for concurrent agents.',
+        f2_desc: 'Copy-on-Write shadow workspaces, kernel sandboxing, and Ed25519 human leases for concurrent agents — with UOMP governing agent access to personal memory.',
+        f2_protocol_label: 'MEMORY LAYER · OPEN PROTOCOL',
+        f2_protocol_name: 'UOMP · Memory consent protocol',
+        f2_link_uomp: 'UOMP Spec →',
         f2_s1: 'Silent Overwrites',
         f2_s2: 'CoW Fork',
         f2_s3: 'Push IPC Cost',
