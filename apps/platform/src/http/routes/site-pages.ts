@@ -518,7 +518,7 @@ function renderCommonLayout(opts: {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-v10">
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v12">
   <style>${TOOL_EXTRA_CSS}</style>
 </head>
 <body>

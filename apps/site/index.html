@@ -125,128 +125,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-v11" />
-  <style>
-    :root {
-      --bg-primary: #FAF8F4;
-      --bg-neutral: #EFECE4;
-      --bg-elevated: #FDFCF9;
-      --ink: #151C19;
-      --ink-secondary: #525B56;
-      --ink-muted: #848D88;
-      --accent: #233E33;
-      --heurion-mint: #00C472;
-      --accent-warm: #8F5638;
-      --accent-soft: #E3ECE7;
-      --ink-light: #F4F1EA;
-      --border: #DFDAD0;
-      --border-strong: #151C19;
-      --serif: 'Newsreader', 'Noto Serif SC', 'Songti SC', 'STSong', Georgia, serif;
-      --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
-      --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
-    }
-    *, *::before, *::after { box-sizing: border-box; }
-    html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-    body { margin: 0 !important; background-color: var(--bg-primary) !important; color: var(--ink) !important; font-family: var(--sans); font-size: 0.9375rem; line-height: 1.65; font-weight: 400; }
-    ::selection { background: var(--accent-soft); color: var(--accent); }
-    a { color: inherit; text-decoration: none; transition: color 0.2s ease, opacity 0.2s ease, border-color 0.2s ease, background-color 0.2s ease; }
-    a:hover { color: var(--accent); }
-    .container { max-width: 1220px; margin: 0 auto; padding: 0 3.5rem; }
-    .label-caps { font-family: var(--mono); font-size: 0.68rem; font-weight: 400; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-muted); margin: 0; }
-    .heading-1 { font-family: var(--serif); font-size: clamp(2.35rem, 3.5vw, 3.25rem); font-weight: 300; line-height: 1.16; letter-spacing: -0.022em; margin: 0; color: var(--ink); }
-    html[lang="zh-CN"] .heading-1 { font-size: clamp(2rem, 2.75vw, 2.6rem); line-height: 1.34; letter-spacing: 0.01em; }
-    .heading-1 em, .heading-2 em { font-style: italic; font-weight: 400; color: var(--accent); }
-    html[lang="zh-CN"] .heading-1 em, html[lang="zh-CN"] .heading-2 em { font-style: normal; border-bottom: 1px solid rgba(35, 62, 51, 0.35); padding-bottom: 0.04em; }
-    .heading-2 { font-family: var(--serif); font-size: clamp(1.5rem, 2.15vw, 2rem); font-weight: 300; line-height: 1.26; letter-spacing: -0.015em; margin: 0; color: var(--ink); }
-    .heading-3 { font-family: var(--serif); font-size: 1.2rem; font-weight: 400; line-height: 1.35; letter-spacing: -0.01em; margin: 0; color: var(--ink); }
-    .text-regular { font-size: 0.92rem; line-height: 1.68; color: var(--ink); margin: 0; }
-    .text-muted { font-size: 0.88rem; line-height: 1.68; color: var(--ink-secondary); margin: 0; }
-    .nav { position: sticky; top: 0; z-index: 50; background: rgba(250, 248, 244, 0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
-    .nav-inner { max-width: 1220px; margin: 0 auto; padding: 1.2rem 3.5rem; display: flex; align-items: center; justify-content: space-between; gap: 2rem; }
-    .brand { display: inline-flex; align-items: center; gap: 0.65rem; color: var(--ink); }
-    .brand-mark { width: 24px; height: 22px; display: block; flex-shrink: 0; }
-    .brand-mark .mark-bar { fill: var(--ink); }
-    .brand-mark .mark-accent { fill: var(--heurion-mint); }
-    .brand-word { font-family: var(--sans); font-size: 0.9rem; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink); }
-    .nav-links { display: flex; align-items: center; gap: 2.35rem; }
-    .nav-link { font-size: 0.8125rem; letter-spacing: 0.02em; color: var(--ink-secondary); }
-    .nav-right { display: flex; align-items: center; gap: 1.1rem; }
-    .lang-btn { background: transparent; border: 1px solid var(--border); padding: 0.28rem 0.62rem; font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.08em; color: var(--ink-secondary); cursor: pointer; }
-    .nav-cta { font-size: 0.78rem; padding: 0.46rem 1.05rem; background: var(--accent); color: var(--ink-light); border: 1px solid var(--accent); letter-spacing: 0.02em; }
-    .nav-cta:hover { background: var(--ink); border-color: var(--ink); color: var(--ink-light); }
-    .sec-hero {
-      padding: 5rem 0 5.75rem;
-      background-color: var(--bg-primary);
-      background-image:
-        linear-gradient(100deg, rgba(250, 248, 244, 0.94) 0%, rgba(250, 248, 244, 0.85) 46%, rgba(244, 241, 234, 0.54) 100%),
-        linear-gradient(180deg, rgba(250, 248, 244, 0.35) 0%, rgba(250, 248, 244, 0.08) 68%, rgba(239, 236, 228, 0.95) 100%),
-        url('https://images.unsplash.com/photo-1581093450021-4a7360e9a6b5?auto=format&fit=crop&w=2000&q=85'),
-        url('/site/nordic-bg.jpg');
-      background-size: cover;
-      background-position: center 35%;
-      background-repeat: no-repeat;
-    }
-    .hero-grid { display: grid; grid-template-columns: 1.06fr 0.94fr; gap: 4.25rem; align-items: stretch; }
-    .hero-left { display: flex; flex-direction: column; justify-content: space-between; gap: 3rem; padding: 0.25rem 0; }
-    .hero-intro { display: flex; flex-direction: column; gap: 1.5rem; max-width: 34rem; }
-    .hero-actions { display: flex; align-items: center; gap: 1.5rem; padding-top: 0.25rem; }
-    .btn-solid { display: inline-flex; align-items: center; gap: 0.55rem; padding: 0.72rem 1.35rem; background: var(--accent); color: var(--ink-light); font-size: 0.8125rem; letter-spacing: 0.02em; box-shadow: 0 8px 24px rgba(21, 28, 25, 0.12); }
-    .btn-solid:hover { background: var(--ink); color: var(--ink-light); }
-    .link-arrow { font-size: 0.8125rem; color: var(--ink-secondary); border-bottom: 1px solid var(--border); padding-bottom: 0.12rem; }
-    .link-arrow:hover { color: var(--accent); border-bottom-color: var(--accent); }
-    .hero-editorial { display: flex; flex-direction: column; gap: 1.35rem; max-width: 34rem; }
-    .editorial-row { display: grid; grid-template-columns: 6.5rem 1fr; gap: 1.25rem; padding-top: 1.2rem; border-top: 1px solid rgba(21, 28, 25, 0.14); align-items: baseline; }
-    .hero-art { background: rgba(250, 248, 244, 0.86); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(21, 28, 25, 0.15); box-shadow: 0 22px 54px rgba(21, 28, 25, 0.08); padding: 1.5rem 1.85rem; display: flex; flex-direction: column; justify-content: space-between; min-height: 440px; position: relative; }
-    .art-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.12em; color: var(--ink-muted); text-transform: uppercase; }
-    .art-svg { width: 100%; height: 310px; display: block; margin: auto 0; }
-    .art-caption { display: flex; justify-content: space-between; align-items: center; padding-top: 0.75rem; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.1em; color: var(--ink-muted); text-transform: uppercase; }
-    .sec-systems { background: var(--bg-neutral); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 5.25rem 0; }
-    .section-header { display: flex; align-items: baseline; justify-content: space-between; gap: 2rem; margin-bottom: 2.5rem; }
-    .flagships-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2.25rem; }
-    .flagship-item { background: var(--bg-elevated); padding: 2.5rem; display: flex; flex-direction: column; justify-content: space-between; gap: 2rem; border: 1px solid var(--border); }
-    .flagship-top { display: flex; flex-direction: column; gap: 0.7rem; }
-    .flagship-meta { display: flex; align-items: center; justify-content: space-between; padding-bottom: 0.9rem; border-bottom: 1px solid var(--border); margin-bottom: 0.15rem; }
-    .flagship-num-group { display: flex; align-items: center; gap: 0.85rem; }
-    .flagship-num { font-family: var(--serif); font-size: 1.35rem; color: var(--accent); line-height: 1; }
-    .flagship-emblem { width: 44px; height: 28px; display: block; }
-    .flagship-sub { font-family: var(--serif); font-style: italic; font-size: 0.95rem; color: var(--accent); margin: -0.15rem 0 0.1rem; }
-    html[lang="zh-CN"] .flagship-sub { font-style: normal; font-size: 0.85rem; letter-spacing: 0.04em; }
-    .flagship-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; padding: 1.1rem 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-    .stat-cell { display: flex; flex-direction: column; gap: 0.18rem; }
-    .stat-val { font-family: var(--serif); font-size: 1.4rem; font-weight: 300; color: var(--ink); line-height: 1.1; font-variant-numeric: tabular-nums; }
-    .stat-lbl { font-family: var(--mono); font-size: 0.64rem; color: var(--ink-muted); letter-spacing: 0.06em; text-transform: uppercase; }
-    .flagship-links { display: flex; flex-wrap: wrap; align-items: center; gap: 1.35rem; padding-top: 1.25rem; }
-    .flagship-cta { padding: 0.62rem 1.25rem; font-weight: 500; }
-    .sec-research {
-      background-color: var(--bg-primary);
-      background-image:
-        linear-gradient(180deg, rgba(239, 236, 228, 0.96) 0%, rgba(250, 248, 244, 0.91) 45%, rgba(250, 248, 244, 0.96) 100%),
-        url('https://images.unsplash.com/photo-1532094349884-543bc11b234d?auto=format&fit=crop&w=1800&q=80');
-      background-size: cover;
-      background-position: center;
-      padding: 5rem 0;
-    }
-    .pub-list { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
-    .pub-row { display: grid; grid-template-columns: 11rem 1fr auto; gap: 2rem; align-items: baseline; padding: 1.65rem 0; border-bottom: 1px solid var(--border); }
-    .pub-links { display: flex; align-items: center; gap: 1.35rem; }
-    .foot { background: var(--bg-primary); border-top: 1px solid var(--border); padding: 2.25rem 0; }
-    .foot-bar { display: flex; align-items: center; justify-content: space-between; gap: 2rem; }
-    .foot-right { display: flex; flex-wrap: wrap; align-items: center; gap: 1.5rem; font-size: 0.78rem; color: var(--ink-muted); }
-    .foot-link { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em; color: var(--ink-secondary); }
-    @media (max-width: 991px) {
-      .container, .nav-inner { padding-left: 1.75rem; padding-right: 1.75rem; }
-      .hero-grid, .flagships-grid { grid-template-columns: 1fr; }
-      .pub-row { grid-template-columns: 1fr; gap: 0.5rem; }
-      .section-header, .foot-bar { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
-      .sec-hero, .sec-systems, .sec-research { padding: 4rem 0; }
-    }
-    @media (max-width: 640px) {
-      .nav-links { display: none; }
-      .editorial-row { grid-template-columns: 1fr; gap: 0.35rem; }
-      .hero-art { min-height: auto; gap: 0.85rem; padding: 1.25rem; }
-      .art-svg { height: auto; }
-    }
-  </style>
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v12" />
 </head>
 <body>
 
@@ -271,6 +150,7 @@
       </nav>
       <div class="nav-right">
         <button class="lang-btn" id="langBtn" type="button" aria-label="Switch language">EN</button>
+        <a class="nav-cta" href="/app" id="ctaTop" data-i18n="nav_cta">进入工作台</a>
       </div>
     </div>
   </header>
@@ -285,6 +165,14 @@
             <div class="hero-intro">
               <p class="label-caps" data-i18n="hero_tag">HEURION RESEARCH · 临床科研 AI 工作台与智能体系统</p>
               <h1 class="heading-1" data-i18n-html="hero_title">为临床医学与自治智能体，<br>构建<em>可验证</em>的系统底座。</h1>
+              <p class="hero-lede" data-i18n="hero_lede">面向临床医生与医学研究者：在一个工作台内完成病历队列、生物统计与论文撰写，患者隐私信息本地拦截、零外泄。</p>
+              <div class="hero-actions">
+                <a class="btn-solid" href="/app" id="ctaHero">
+                  <span data-i18n="hero_cta_primary">进入临床工作台</span>
+                  <span aria-hidden="true">→</span>
+                </a>
+                <a class="link-arrow" href="#flagships" data-i18n="hero_cta_secondary">了解核心系统 →</a>
+              </div>
             </div>
 
             <div class="hero-editorial">
@@ -558,7 +446,9 @@
         nav_cta: '进入工作台',
         hero_tag: 'HEURION RESEARCH · 临床科研 AI 工作台与智能体系统',
         hero_title: '为临床医学与自治智能体，<br>构建<em>可验证</em>的系统底座。',
+        hero_lede: '面向临床医生与医学研究者：在一个工作台内完成病历队列、生物统计与论文撰写，患者隐私信息本地拦截、零外泄。',
         hero_cta_primary: '进入临床工作台',
+        hero_cta_secondary: '了解核心系统 →',
         who_label: '关于我们',
         who_p1: '专注临床证据合成与智能体系统的独立研究实验室。',
         thesis_label: '核心命题',
@@ -626,7 +516,9 @@
         nav_cta: 'Workstation',
         hero_tag: 'HEURION RESEARCH · CLINICAL AI WORKSTATION & AGENT OS',
         hero_title: 'Verifiable systems for <em>clinical medicine</em> and <em>autonomous agents</em>.',
+        hero_lede: 'For clinicians and medical researchers: patient cohorts, biostatistics and manuscripts in one workstation, with patient identifiers intercepted locally and never leaked.',
         hero_cta_primary: 'Enter Workstation',
+        hero_cta_secondary: 'Explore the systems →',
         who_label: 'WHO WE ARE',
         who_p1: 'An independent research lab for clinical intelligence and agent operating systems.',
         thesis_label: 'OUR THESIS',

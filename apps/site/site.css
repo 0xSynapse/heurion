@@ -1,11 +1,11 @@
-/* Heurion Research — Nordic / Scandinavian Editorial Design System (v5) */
+/* Heurion Research — Nordic / Scandinavian Editorial Design System (v6) */
 :root {
   --bg-primary: #FAF8F4;
   --bg-neutral: #EFECE4;
   --bg-elevated: #FDFCF9;
   --ink: #151C19;
-  --ink-secondary: #525B56;
-  --ink-muted: #848D88;
+  --ink-secondary: #4A534E;
+  --ink-muted: #646D68;
   --accent: #233E33;
   --heurion-mint: #00C472;
   --accent-warm: #8F5638;
@@ -15,7 +15,7 @@
   --border-strong: #151C19;
 
   --serif: 'Newsreader', 'Noto Serif SC', 'Songti SC', 'STSong', Georgia, serif;
-  --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
   --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
 }
 
@@ -34,8 +34,8 @@ body {
   background-color: var(--bg-primary) !important;
   color: var(--ink) !important;
   font-family: var(--sans);
-  font-size: 0.9375rem;
-  line-height: 1.65;
+  font-size: 1rem;
+  line-height: 1.7;
   font-weight: 400;
 }
 
@@ -63,18 +63,28 @@ a:hover {
 /* Typography */
 .label-caps {
   font-family: var(--mono);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 400;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-muted);
   margin: 0;
 }
 
+/* CJK has no monospace glyphs: render Chinese labels in sans with normal tracking */
+html[lang="zh-CN"] .label-caps,
+html[lang="zh-CN"] .stat-lbl,
+html[lang="zh-CN"] .art-header,
+html[lang="zh-CN"] .art-caption {
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  letter-spacing: 0.04em;
+}
+
 .heading-1 {
   font-family: var(--serif);
   font-size: clamp(2.35rem, 3.5vw, 3.25rem);
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.16;
   letter-spacing: -0.022em;
   margin: 0;
@@ -83,8 +93,14 @@ a:hover {
 
 html[lang="zh-CN"] .heading-1 {
   font-size: clamp(2rem, 2.75vw, 2.6rem);
+  font-weight: 500;
   line-height: 1.34;
   letter-spacing: 0.01em;
+}
+
+html[lang="zh-CN"] .heading-2,
+html[lang="zh-CN"] .heading-3 {
+  font-weight: 500;
 }
 
 .heading-1 em,
@@ -104,7 +120,7 @@ html[lang="zh-CN"] .heading-2 em {
 .heading-2 {
   font-family: var(--serif);
   font-size: clamp(1.5rem, 2.15vw, 2rem);
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.26;
   letter-spacing: -0.015em;
   margin: 0;
@@ -122,15 +138,15 @@ html[lang="zh-CN"] .heading-2 em {
 }
 
 .text-regular {
-  font-size: 0.92rem;
-  line-height: 1.68;
+  font-size: 1rem;
+  line-height: 1.7;
   color: var(--ink);
   margin: 0;
 }
 
 .text-muted {
-  font-size: 0.88rem;
-  line-height: 1.68;
+  font-size: 0.9375rem;
+  line-height: 1.7;
   color: var(--ink-secondary);
   margin: 0;
 }
@@ -194,7 +210,7 @@ html[lang="zh-CN"] .heading-2 em {
 }
 
 .nav-link {
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   letter-spacing: 0.02em;
   color: var(--ink-secondary);
 }
@@ -210,7 +226,7 @@ html[lang="zh-CN"] .heading-2 em {
   border: 1px solid var(--border);
   padding: 0.28rem 0.62rem;
   font-family: var(--mono);
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   letter-spacing: 0.08em;
   color: var(--ink-secondary);
   cursor: pointer;
@@ -222,8 +238,12 @@ html[lang="zh-CN"] .heading-2 em {
 }
 
 .nav-cta {
-  font-size: 0.78rem;
-  padding: 0.46rem 1.05rem;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0.5rem 1.1rem;
+  white-space: nowrap;
   background: var(--accent);
   color: var(--ink-light);
   border: 1px solid var(--accent);
@@ -238,10 +258,10 @@ html[lang="zh-CN"] .heading-2 em {
 
 /* Section 1: Editorial Split Hero with Clinical Research & AI Lab Backdrop */
 .sec-hero {
-  padding: 5rem 0 5.75rem;
+  padding: 4rem 0 4.5rem;
   background-color: var(--bg-primary);
   background-image:
-    linear-gradient(100deg, rgba(250, 248, 244, 0.94) 0%, rgba(250, 248, 244, 0.85) 46%, rgba(244, 241, 234, 0.54) 100%),
+    linear-gradient(100deg, rgba(250, 248, 244, 0.97) 0%, rgba(250, 248, 244, 0.93) 46%, rgba(244, 241, 234, 0.8) 100%),
     linear-gradient(180deg, rgba(250, 248, 244, 0.35) 0%, rgba(250, 248, 244, 0.08) 68%, rgba(239, 236, 228, 0.95) 100%),
     url('https://images.unsplash.com/photo-1581093450021-4a7360e9a6b5?auto=format&fit=crop&w=2000&q=85'),
     url('/site/nordic-bg.jpg');
@@ -272,22 +292,33 @@ html[lang="zh-CN"] .heading-2 em {
   max-width: 34rem;
 }
 
+.hero-lede {
+  font-size: 1.0625rem;
+  line-height: 1.75;
+  color: var(--ink-secondary);
+  max-width: 32rem;
+  margin: 0;
+}
+
 .hero-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 1.5rem;
-  padding-top: 0.25rem;
+  padding-top: 0.5rem;
 }
 
 .btn-solid {
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
-  padding: 0.72rem 1.35rem;
+  padding: 0.8rem 1.5rem;
   background: var(--accent);
   color: var(--ink-light);
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
   letter-spacing: 0.02em;
+  box-shadow: 0 8px 24px rgba(21, 28, 25, 0.12);
 }
 
 .btn-solid:hover {
@@ -296,7 +327,7 @@ html[lang="zh-CN"] .heading-2 em {
 }
 
 .link-arrow {
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--ink-secondary);
   border-bottom: 1px solid var(--border);
   padding-bottom: 0.12rem;
@@ -325,16 +356,14 @@ html[lang="zh-CN"] .heading-2 em {
 
 /* Nordic Architectural Astrolabe Plate */
 .hero-art {
-  background: rgba(250, 248, 244, 0.86);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: var(--bg-elevated);
   border: 1px solid rgba(21, 28, 25, 0.15);
   box-shadow: 0 22px 54px rgba(21, 28, 25, 0.08);
   padding: 1.5rem 1.85rem;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  min-height: 440px;
+  min-height: 400px;
   position: relative;
 }
 
@@ -345,7 +374,7 @@ html[lang="zh-CN"] .heading-2 em {
   padding-bottom: 0.75rem;
   border-bottom: 1px solid var(--border);
   font-family: var(--mono);
-  font-size: 0.64rem;
+  font-size: 0.7rem;
   letter-spacing: 0.12em;
   color: var(--ink-muted);
   text-transform: uppercase;
@@ -365,7 +394,7 @@ html[lang="zh-CN"] .heading-2 em {
   padding-top: 0.75rem;
   border-top: 1px solid var(--border);
   font-family: var(--mono);
-  font-size: 0.64rem;
+  font-size: 0.7rem;
   letter-spacing: 0.1em;
   color: var(--ink-muted);
   text-transform: uppercase;
@@ -452,7 +481,7 @@ html[lang="zh-CN"] .heading-2 em {
 
 html[lang="zh-CN"] .flagship-sub {
   font-style: normal;
-  font-size: 0.85rem;
+  font-size: 0.9375rem;
   letter-spacing: 0.04em;
 }
 
@@ -473,8 +502,8 @@ html[lang="zh-CN"] .flagship-sub {
 
 .stat-val {
   font-family: var(--serif);
-  font-size: 1.4rem;
-  font-weight: 300;
+  font-size: 1.5rem;
+  font-weight: 400;
   color: var(--ink);
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
@@ -482,7 +511,7 @@ html[lang="zh-CN"] .flagship-sub {
 
 .stat-lbl {
   font-family: var(--mono);
-  font-size: 0.64rem;
+  font-size: 0.72rem;
   color: var(--ink-muted);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -552,13 +581,13 @@ html[lang="zh-CN"] .flagship-sub {
   flex-wrap: wrap;
   align-items: center;
   gap: 1.5rem;
-  font-size: 0.78rem;
+  font-size: 0.8125rem;
   color: var(--ink-muted);
 }
 
 .foot-link {
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   letter-spacing: 0.06em;
   color: var(--ink-secondary);
 }
@@ -573,6 +602,9 @@ html[lang="zh-CN"] .flagship-sub {
 
 @media (max-width: 640px) {
   .nav-links { display: none; }
+  .nav-inner { gap: 1rem; }
+  html[lang="zh-CN"] .heading-1 { font-size: 1.625rem; }
+  .hero-actions { gap: 1rem; }
   .editorial-row { grid-template-columns: 1fr; gap: 0.35rem; }
   .hero-art { min-height: auto; gap: 0.85rem; padding: 1.25rem; }
   .art-svg { height: auto; }
