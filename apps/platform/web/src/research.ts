@@ -9,6 +9,7 @@ import { photoFigure } from './photos.ts'
 import { askConfirm, askText } from './dialogs.ts'
 import { openHelpGuide } from './help.ts'
 import { icon } from './icons.ts'
+import { safeSvg } from './svg.ts'
 
 type Api = <T = any>(path: string, opts?: RequestInit) => Promise<T>
 type Notice = (msg: string, error?: boolean) => void
@@ -1074,7 +1075,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         })
         currentSvg = res.illustrator_svg || res.svg || res.native_exports?.illustrator_svg || ''
         currentDrawio = res.drawio_xml || res.native_exports?.drawio_xml || ''
-        svgBox.innerHTML = currentSvg || '<div class="muted small">未生成流程图</div>'
+        svgBox.innerHTML = safeSvg(currentSvg) || '<div class="muted small">未生成流程图</div>'
       } catch (err) {
         svgBox.innerHTML = `<div class="muted small">${esc((err as Error).message)}</div>`
       }
@@ -1524,7 +1525,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           const groupList: any[] = Array.isArray(rawGroups) ? rawGroups : (rawGroups ? Object.values(rawGroups) : [])
 
           if (resWrap) resWrap.style.display = 'flex'
-          if (kmWrap) kmWrap.innerHTML = kmSvg || '<div class="muted small">未生成 KM 图像</div>'
+          if (kmWrap) kmWrap.innerHTML = safeSvg(kmSvg) || '<div class="muted small">未生成 KM 图像</div>'
 
           // Stats cards
           let statsHtml = ''
@@ -1552,7 +1553,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           // Forest plot
           if (forestSvg && forestWrap && forestSvgWrap) {
             forestWrap.style.display = 'block'
-            forestSvgWrap.innerHTML = forestSvg
+            forestSvgWrap.innerHTML = safeSvg(forestSvg)
           } else if (forestWrap) {
             forestWrap.style.display = 'none'
           }
@@ -1873,7 +1874,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
 
       // 1. Populate Nomogram
       const nomoSvgWrap = document.getElementById('rsNomogramSvgWrap')
-      if (nomoSvgWrap) nomoSvgWrap.innerHTML = nomoRes.svg || '<div class="muted small">未生成列线图</div>'
+      if (nomoSvgWrap) nomoSvgWrap.innerHTML = safeSvg(nomoRes.svg) || '<div class="muted small">未生成列线图</div>'
 
       // Interactive Risk Calculator
       const updateCalc = () => {
@@ -1926,7 +1927,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
 
       // 2. Populate ROC
       const rocSvgWrap = document.getElementById('rsRocSvgWrap')
-      if (rocSvgWrap) rocSvgWrap.innerHTML = rocDcaRes.roc?.svg || '<div class="muted small">未生成 ROC 图像</div>'
+      if (rocSvgWrap) rocSvgWrap.innerHTML = safeSvg(rocDcaRes.roc?.svg) || '<div class="muted small">未生成 ROC 图像</div>'
 
       const rocTableWrap = document.getElementById('rsRocMetricsTableWrap')
       if (rocTableWrap && rocDcaRes.roc?.models) {
@@ -1946,7 +1947,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
 
       // 3. Populate DCA
       const dcaSvgWrap = document.getElementById('rsDcaSvgWrap')
-      if (dcaSvgWrap) dcaSvgWrap.innerHTML = rocDcaRes.dca?.svg || '<div class="muted small">未生成 DCA 图像</div>'
+      if (dcaSvgWrap) dcaSvgWrap.innerHTML = safeSvg(rocDcaRes.dca?.svg) || '<div class="muted small">未生成 DCA 图像</div>'
 
       // 4. Populate Manuscript Text
       const modelsDesc = (rocDcaRes.roc?.models || []).map((m: any) => `- **${m.model_name}**：AUC = ${m.auc.toFixed(3)} (95% CI: ${m.auc_ci[0].toFixed(3)} - ${m.auc_ci[1].toFixed(3)})；最佳截断值 ${m.optimal_cutoff.toFixed(2)} 下灵敏度为 ${(m.sensitivity * 100).toFixed(1)}%，特异度为 ${(m.specificity * 100).toFixed(1)}% (Youden J = ${m.youden_index.toFixed(3)})。`).join('\n')
@@ -2282,7 +2283,7 @@ ${modelsDesc}
         const btnsBox = document.getElementById('rsFigNativeBtns')
         const outSvg = res.illustrator_svg || res.svg || res.native_exports?.illustrator_svg || ''
         if (resBox) resBox.style.display = 'flex'
-        if (svgBox) svgBox.innerHTML = outSvg || '<div class="muted small">已生成工程文件</div>'
+        if (svgBox) svgBox.innerHTML = safeSvg(outSvg) || '<div class="muted small">已生成工程文件</div>'
 
         if (btnsBox) {
           btnsBox.innerHTML = ''
@@ -2842,7 +2843,7 @@ ${modelsDesc}
           lastCode = provRes.code || '# Archived SVG Figure'
           lastCodePath = provRes.code_path || `${lastTitle}.R`
           canvasTitleEl.textContent = `已归档图表预览：${lastTitle}`
-          canvasEl.innerHTML = svgRes
+          canvasEl.innerHTML = safeSvg(svgRes)
           codePre.textContent = lastCode
           exportBar.innerHTML = `<span class="muted small" style="margin-right:4px;">已归档图表导出与溯源：</span>`
           const addBtn = (label: string, fn: () => void, primary = false) => {
@@ -4221,7 +4222,7 @@ ${modelsDesc}
         })
         const svgStr = res.illustrator_svg || res.svg || res.km_svg || res.forest_svg || res.native_exports?.illustrator_svg || ''
         lastSvg = svgStr
-        canvasEl.innerHTML = svgStr || '<div class="muted small">已生成工程原文件</div>'
+        canvasEl.innerHTML = safeSvg(svgStr) || '<div class="muted small">已生成工程原文件</div>'
 
         // 更新画布顶部标题与统计检验摘要
         if (currentMode === 'clinical_cohort') {
@@ -4601,7 +4602,7 @@ ${modelsDesc}
         const wsp = res.flowjo_wsp_xml || res.native_exports?.flowjo_wsp
         renderedCode = rScript || drawioXml || wsp || '# Generated by Heurion In-Writing Figure Studio'
         renderedCodePath = rScript ? 'figure_studio.R' : drawioXml ? 'figure_studio.drawio' : 'figure_studio.txt'
-        previewBox.innerHTML = renderedSvg || '<div class="muted small">预览生成完毕</div>'
+        previewBox.innerHTML = safeSvg(renderedSvg) || '<div class="muted small">预览生成完毕</div>'
         statusEl.textContent = '已就绪 · 点击右侧「生成并插入到当前文稿位置」即可嵌入正文并附带代码溯源'
       } catch (err) {
         previewBox.innerHTML = `<div class="muted small">${esc((err as Error).message)}</div>`
@@ -4841,7 +4842,7 @@ ${modelsDesc}
                   <button type="button" class="small-btn" id="bsDlKmSvg">${icon('download', { size: 13 })} KM (.svg)</button>
                 </div>
               </div>
-              <div class="rs-studio-canvas" style="min-height:320px;">${kmSvg || '<div class="muted small">暂无 KM 矢量图</div>'}</div>
+              <div class="rs-studio-canvas" style="min-height:320px;">${safeSvg(kmSvg) || '<div class="muted small">暂无 KM 矢量图</div>'}</div>
               ${forestSvg ? `
                 <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px;">
                   <b>Figure 4 · 多因素 Cox 比例风险回归森林图 (Forest Plot)</b>
@@ -4853,7 +4854,7 @@ ${modelsDesc}
                     <button type="button" class="small-btn" id="bsDlForSvg">${icon('download', { size: 13 })} 森林图 (.svg)</button>
                   </div>
                 </div>
-                <div class="rs-studio-canvas" style="min-height:260px;">${forestSvg}</div>
+                <div class="rs-studio-canvas" style="min-height:260px;">${safeSvg(forestSvg)}</div>
               ` : ''}
             `
             document.getElementById('bsArchKm')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure3_Kaplan_Meier', kmSvg, ne.r_script))
@@ -4933,7 +4934,7 @@ ${modelsDesc}
                   <button type="button" class="small-btn" id="bsDlNomoSvg">${icon('download', { size: 13 })} Illustrator (.svg)</button>
                 </div>
               </div>
-              <div class="rs-studio-canvas">${svg}</div>
+              <div class="rs-studio-canvas">${safeSvg(svg)}</div>
             `
             document.getElementById('bsArchNomo')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure5_Prognostic_Nomogram', svg, rScript))
             document.getElementById('bsDlNomoR')?.addEventListener('click', () => rScript && downloadBlobContent(rScript, 'Nomogram_rms.R'))
@@ -4998,7 +4999,7 @@ ${modelsDesc}
                   <button type="button" class="small-btn" id="bsDlRocSvg">${icon('download', { size: 13 })} ROC (.svg)</button>
                 </div>
               </div>
-              <div class="rs-studio-canvas" style="min-height:300px;">${rocSvg}</div>
+              <div class="rs-studio-canvas" style="min-height:300px;">${safeSvg(rocSvg)}</div>
               <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px;">
                 <b>Figure 6B · 临床决策净获益曲线 (DCA)</b>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -5006,7 +5007,7 @@ ${modelsDesc}
                   <button type="button" class="small-btn" id="bsDlDcaSvg">${icon('download', { size: 13 })} DCA (.svg)</button>
                 </div>
               </div>
-              <div class="rs-studio-canvas" style="min-height:300px;">${dcaSvg}</div>
+              <div class="rs-studio-canvas" style="min-height:300px;">${safeSvg(dcaSvg)}</div>
             `
             document.getElementById('bsArchRoc')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure6A_ROC_Curve', rocSvg, rScript))
             document.getElementById('bsArchDca')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure6B_DCA_Curve', dcaSvg, rScript))
@@ -5102,7 +5103,7 @@ ${modelsDesc}
                 <button type="button" class="small-btn" id="bsDlLoveSvg">${icon('download', { size: 13 })} Love Plot (.svg)</button>
               </div>
             </div>
-            <div class="rs-studio-canvas">${svg}</div>
+            <div class="rs-studio-canvas">${safeSvg(svg)}</div>
           `
           document.getElementById('bsCopyRebuttal')?.addEventListener('click', () => {
             navigator.clipboard.writeText(`${evRes.academic_defense_zh}\n\n${evRes.academic_defense_en}`)
@@ -5267,7 +5268,7 @@ ${modelsDesc}
           body: JSON.stringify(payload),
         })
         const svgStr = res.illustrator_svg || res.svg || ''
-        canvas.innerHTML = svgStr || '<div class="muted small">未生成拼图</div>'
+        canvas.innerHTML = safeSvg(svgStr) || '<div class="muted small">未生成拼图</div>'
 
         expBar.innerHTML = `<span class="muted small">出版级多面板大图导出：</span>`
         const addBtn = (label: string, fn: () => void, primary = false) => {

@@ -2,7 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { TokenClaims } from '../auth/token.ts'
 import type { Store } from '../store/db.ts'
-import type { PatientService } from '../tenancy/patients.ts'
+import { PatientError, type PatientService } from '../tenancy/patients.ts'
+import { guardImagingPayload } from '../tenancy/imaging-guard.ts'
 import type { StudyService } from '../research/service.ts'
 import type { DatasetService } from '../datasets/service.ts'
 import type { CohortService } from '../research/cohort.ts'
@@ -65,6 +66,23 @@ export interface ImagingToolsDeps {
 export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps): void {
   const { store, claims } = deps
   const workerUrl = (deps.workerUrl || process.env.IMAGING_WORKER_URL || 'http://127.0.0.1:8004').replace(/\/+$/, '')
+  // 平台从患者档案推导出的影像路径可以转发；AI 直接给的路径与未核权的患者体积键一律拦下（见 tenancy/imaging-guard.ts）
+  const trustedPaths = new Set<string>()
+  const workerFetch = async (url: string, init?: RequestInit): Promise<Response> => {
+    if (typeof init?.body === 'string') {
+      try {
+        guardImagingPayload(JSON.parse(init.body), ptId => {
+          if (!deps.patients) throw new PatientError('patients_unavailable', '患者模块未启用', 404)
+          deps.patients.read({ userId: claims.u, via: 'ai', space: 'work' }, ptId)
+        }, trustedPaths)
+      } catch (err) {
+        if (!(err instanceof PatientError)) throw err
+        // 按 worker 的错误形状返回，各工具沿用 workerToolFail 如实告诉 AI 被拒原因
+        return new Response(JSON.stringify({ detail: err.message }), { status: err.status, headers: { 'Content-Type': 'application/json' } })
+      }
+    }
+    return fetch(url, init)
+  }
 
   // 1. 影像微服务状态与计算硬件探测
   server.registerTool('imaging_status', {
@@ -72,7 +90,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     inputSchema: {},
   }, async () => {
     try {
-      const resp = await fetch(`${workerUrl}/health`, { signal: AbortSignal.timeout(3000) })
+      const resp = await workerFetch(`${workerUrl}/health`, { signal: AbortSignal.timeout(3000) })
       if (!resp.ok) return await workerToolFail('imaging_worker_error', resp)
       const data = await resp.json()
       return json(data)
@@ -89,7 +107,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     inputSchema: {},
   }, async () => {
     try {
-      const resp = await fetch(`${workerUrl}/api/v1/models`, { signal: AbortSignal.timeout(3000) })
+      const resp = await workerFetch(`${workerUrl}/api/v1/models`, { signal: AbortSignal.timeout(3000) })
       if (!resp.ok) return await workerToolFail('imaging_worker_error', resp)
       const data = await resp.json()
       return json(data)
@@ -141,6 +159,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       const imgRec = patientRow.records?.find((r: any) => r.kind === 'imaging' && (r.file_id || r.imaging_data?.file_path))
       if (imgRec) {
         file_path = imgRec.imaging_data?.file_path || (imgRec.file_id ? `/app/data/platform/files/${imgRec.file_id}` : undefined)
+        if (file_path) trustedPaths.add(file_path)
       }
       if (!file_path && !sample_id) {
         return fail('patient_imaging_not_found', '该患者档案中未检出真实的影像数据文件 (DICOM/NIfTI)。严禁使用合成演示体模写入真实患者病历。')
@@ -198,7 +217,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
         }
       }
 
-      const resp = await fetch(endpoint, {
+      const resp = await workerFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(reqBody),
@@ -349,7 +368,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
   }, async ({ sample_id, file_path }) => {
     if (!sample_id && !file_path) return noImage()
     try {
-      const resp = await fetch(`${workerUrl}/api/v1/mpr/info`, {
+      const resp = await workerFetch(`${workerUrl}/api/v1/mpr/info`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sample_id, file_path }),
@@ -387,7 +406,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     if (!sample_id && !file_path) return noImage()
     let resultData: any
     try {
-      const resp = await fetch(`${workerUrl}/api/v1/mpr/slice`, {
+      const resp = await workerFetch(`${workerUrl}/api/v1/mpr/slice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -574,7 +593,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     // 差分图只在两期记录都有可用影像来源（sample_id）时生成；没有就不画，不用演示样本代替
     if (include_diff_slice !== false && claims.p.includes('write') && b.imaging_data?.sample_id && f.imaging_data?.sample_id) {
       try {
-        const resp = await fetch(`${workerUrl}/api/v1/mpr/diff-slice`, {
+        const resp = await workerFetch(`${workerUrl}/api/v1/mpr/diff-slice`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -708,7 +727,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     if (!followup_sample_id && !followup_file_path) return noImage('随访影像')
     let resultData: any
     try {
-      const resp = await fetch(`${workerUrl}/api/v1/mpr/diff-slice`, {
+      const resp = await workerFetch(`${workerUrl}/api/v1/mpr/diff-slice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -858,7 +877,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     if (!sample_id && !file_path) return noImage()
     if (!mask_file_path && !mask_sample_id && !model_name) return fail('mask_required', '影像组学必须提供 ROI 掩膜（mask_file_path / mask_sample_id），或已运行过的分割模型名 model_name')
     try {
-      const resp = await fetch(`${workerUrl}/api/v1/analyze/radiomics`, {
+      const resp = await workerFetch(`${workerUrl}/api/v1/analyze/radiomics`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sample_id, file_path, mask_file_path, mask_sample_id, model_name, num_bins: num_bins || 16 }),
@@ -906,7 +925,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     if (!sample_id && !file_path) return noImage()
     let resultData: any
     try {
-      const resp = await fetch(`${workerUrl}/api/v1/analyze/interactive-segment`, {
+      const resp = await workerFetch(`${workerUrl}/api/v1/analyze/interactive-segment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -964,7 +983,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     if (!sample_id && !file_path) return noImage()
     let resultData: any
     try {
-      const resp = await fetch(`${workerUrl}/api/v1/analyze/whole-body`, {
+      const resp = await workerFetch(`${workerUrl}/api/v1/analyze/whole-body`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1041,7 +1060,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     if (!moving_sample_id && !moving_file_path) return noImage('浮动图像')
     let resultData: any
     try {
-      const resp = await fetch(`${workerUrl}/api/v1/registration/deformable`, {
+      const resp = await workerFetch(`${workerUrl}/api/v1/registration/deformable`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fixed_sample_id, moving_sample_id, fixed_file_path, moving_file_path, iterations: iterations ?? 10, smoothing_sigma: smoothing_sigma ?? 1.0 }),
@@ -1100,7 +1119,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     if (!roi_mask_file_path && !roi_mask_sample_id && !physiological_exclusion_note?.trim()) return fail('roi_required', '需提供 ROI 掩膜，或用 physiological_exclusion_note 说明已如何排除生理性摄取')
     let resultData: any
     try {
-      const resp = await fetch(`${workerUrl}/api/v1/registration/pet-ct-fusion`, {
+      const resp = await workerFetch(`${workerUrl}/api/v1/registration/pet-ct-fusion`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ct_sample_id, ct_file_path, pet_sample_id, pet_file_path, pet_values_are_suv, roi_mask_file_path, roi_mask_sample_id, physiological_exclusion_note, tracer, suv_threshold, key_slice_index, alpha }),
@@ -1151,7 +1170,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     if (!gtv_mask_file_path && !gtv_mask_sample_id) return fail('gtv_required', '必须提供 GTV 掩膜（gtv_mask_file_path 或 gtv_mask_sample_id）；平台不自动勾画 GTV')
     let resultData: any
     try {
-      const resp = await fetch(`${workerUrl}/api/v1/rtstruct/delineate`, {
+      const resp = await workerFetch(`${workerUrl}/api/v1/rtstruct/delineate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sample_id, file_path, gtv_mask_file_path, gtv_mask_sample_id, ctv_margin_mm: ctv_margin_mm ?? 6.0, ptv_margin_mm: ptv_margin_mm ?? 4.0, key_slice_index }),

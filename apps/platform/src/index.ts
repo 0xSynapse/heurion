@@ -198,7 +198,7 @@ const mail = new MailService(store, mailer, {
   complete: makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }),
 })
 const calendar = new CalendarService(store, mail)
-const app = buildApi({ docs, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, workspaceDir: userId => pool.workspaceDir(userId) })
+const app = buildApi({ docs, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, aegisEnabled: config.aegisEnabled, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, workspaceDir: userId => pool.workspaceDir(userId) })
 // MCP 的管理类工具以用户身份进程内调用同一个 HTTP 应用（AI 的权限 = 用户的权限，见 http/invoke.ts）
 ;(mcpDeps as { invoke?: Invoke }).invoke = makeInvoker(app)
 
@@ -292,7 +292,7 @@ const server = createServer((req, res) => {
     })
     return
   }
-  if ((req.url?.startsWith('/api/aegis/mcp') || req.url?.startsWith('/api/mcp')) && (req.headers.accept ?? '').includes('text/event-stream')) {
+  if (config.aegisEnabled && (req.url?.startsWith('/api/aegis/mcp') || req.url?.startsWith('/api/mcp')) && (req.headers.accept ?? '').includes('text/event-stream')) {
     handleAegisMcp(mcpDeps, req, res).catch(err => {
       console.error('[aegis-mcp]', err)
       if (!res.headersSent) res.writeHead(500).end(String(err))

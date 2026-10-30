@@ -43,6 +43,9 @@ const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex')
 /** Raw 32-byte Ed25519 private key ASN.1 PKCS#8 DER prefix */
 const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex')
 
+/** 离线（本地节点自签）租约的最长有效期：避免一张租约长期替代人工审批。 */
+export const MAX_OFFLINE_LEASE_SEC = 15 * 60
+
 function sha256Hex(input: string): string {
   return createHash('sha256').update(input, 'utf8').digest('hex')
 }
@@ -210,14 +213,14 @@ export class AegisAuthService {
       parseEd25519PublicKey(input.nodePubkey)
     }
     const deviceCode = 'dc_' + randomBytes(16).toString('hex')
-    // 排除易混淆字符 0/O/1/I，生成 4 位大写字母数字短码 HEUR-XXXX
+    // 排除易混淆字符 0/O/1/I，生成 8 位大写字母数字短码 HEUR-XXXX-XXXX（32^8 ≈ 40 bit，4 位只有 20 bit 可被穷举）
     const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
     let suffix = ''
-    const rand = randomBytes(4)
-    for (let i = 0; i < 4; i++) {
+    const rand = randomBytes(8)
+    for (let i = 0; i < 8; i++) {
       suffix += alphabet[rand[i]! % alphabet.length]
     }
-    const userCode = `HEUR-${suffix}`
+    const userCode = `HEUR-${suffix.slice(0, 4)}-${suffix.slice(4)}`
     const ttlSecs = Math.max(30, Math.min(1800, input.ttlSecs ?? 600))
     const row = this.store.createAgentDeviceCode({
       device_code: deviceCode,
@@ -249,11 +252,12 @@ export class AegisAuthService {
     writeMode?: AgentGrantRow['write_mode']
     ttlDays?: number | null
   }): { grant: AgentGrantRow; user: UserRow; tenant: TenantRow | null; user_code: string } {
-    const normalized = input.userCode.trim().toUpperCase()
-    const formatted = normalized.startsWith('HEUR-') ? normalized : `HEUR-${normalized}`
+    const normalized = input.userCode.trim().toUpperCase().replace(/\s+/g, '')
+    const bare = normalized.replace(/^HEUR-?/, '').replace(/-/g, '')
+    const formatted = bare.length === 8 ? `HEUR-${bare.slice(0, 4)}-${bare.slice(4)}` : `HEUR-${bare}`
     const row = this.store.getAgentDeviceCodeByUserCode(formatted) ?? this.store.getAgentDeviceCodeByUserCode(normalized)
     if (!row) {
-      throw new Error('未找到该设备授权码，请核对终端显示的 8 位短码（如 HEUR-XXXX）')
+      throw new Error('未找到该设备授权码，请核对终端显示的 8 位短码（如 HEUR-XXXX-XXXX）')
     }
     if (row.status !== 'pending') {
       throw new Error('该设备授权码已被使用或已失效')
@@ -408,6 +412,9 @@ export class AegisAuthService {
         }
         if (typeof payload.exp !== 'number' || payload.exp <= nowSec) {
           return { authorized: false, reason: 'X-Aegis-Lease-Token 租约已过期' }
+        }
+        if (payload.exp - nowSec > MAX_OFFLINE_LEASE_SEC) {
+          return { authorized: false, reason: `X-Aegis-Lease-Token 有效期过长（离线租约最长 ${MAX_OFFLINE_LEASE_SEC / 60} 分钟）` }
         }
         if (payload.agent && payload.agent !== '*' && payload.agent !== input.agentId) {
           return { authorized: false, reason: `Lease 绑定的 Agent (${payload.agent}) 与当前调用方 (${input.agentId}) 不一致` }

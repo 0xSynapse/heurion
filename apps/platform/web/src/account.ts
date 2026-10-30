@@ -22,6 +22,8 @@ export interface Me {
   role: 'user' | 'admin'
   dev?: boolean
   dev_mode: boolean
+  /** Aegis-OS 接入是否开放（未开放时不显示终端授权） */
+  aegis?: boolean
   tenant: { id: string; name: string; kind: 'personal' | 'org'; role: 'admin' | 'member'; settings: TenantSettings; members: number; personal_id?: string | null; in_org?: boolean } | null
 }
 
@@ -399,11 +401,11 @@ function openSettings(me: Me, api: <T = any>(path: string, opts?: RequestInit) =
       <div class="form-error" id="passwordError"></div>
       <div class="row end"><button class="primary">修改密码</button></div>
     </form>
-    <div id="aegisGrantsSection" class="form">
+    ${me.aegis ? `<div id="aegisGrantsSection" class="form">
       <h3>Aegis-OS 智能体终端授权 (AAP-1.0)</h3>
       <div class="muted small">将您的医生/研究员账户与本地 Aegis-OS 运行时（Antigravity / Hermes 多智能体协同沙箱）绑定。智能体将以您的身份和租户权限执行操作，高危对外动作需您批准短期租约 (Session Lease)。</div>
       <div id="aegisGrantsBox" class="muted small" style="margin-top:8px">加载中…</div>
-    </div>`, true)
+    </div>` : ''}`, true)
   dlg.querySelector<HTMLFormElement>('#profileForm')!.onsubmit = async e => {
     e.preventDefault()
     const name = new FormData(e.target as HTMLFormElement).get('display_name') as string
@@ -471,7 +473,7 @@ function openSettings(me: Me, api: <T = any>(path: string, opts?: RequestInit) =
       setTimeout(() => location.reload(), 700)
     } catch (err) { dlg.querySelector('#passwordError')!.textContent = (err as Error).message }
   }
-  void mountAegisGrants(dlg.querySelector<HTMLElement>('#aegisGrantsBox')!, api, notify)
+  if (me.aegis) void mountAegisGrants(dlg.querySelector<HTMLElement>('#aegisGrantsBox')!, api, notify)
 }
 
 interface AegisGrantItem {
@@ -509,7 +511,7 @@ async function mountAegisGrants(
     box.className = ''
     box.innerHTML = `
       <form id="aegisDeviceApproveForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border)">
-        <input type="text" name="user_code" placeholder="输入终端 8 位设备码免密绑定（如 HEUR-8492）" value="${esc(urlDeviceCode)}" maxlength="16" required style="flex:1 1 220px;font-family:var(--mono);text-transform:uppercase">
+        <input type="text" name="user_code" placeholder="输入终端 8 位设备码免密绑定（如 HEUR-8492-K7QW）" value="${esc(urlDeviceCode)}" maxlength="16" required style="flex:1 1 220px;font-family:var(--mono);text-transform:uppercase">
         <button class="primary" type="submit">确认设备码绑定</button>
       </form>
       <form id="aegisGrantIssueForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">

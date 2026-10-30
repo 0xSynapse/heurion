@@ -87,6 +87,11 @@ export const config = {
   proceduralBudget: Number(env('PROCEDURAL_BUDGET', '1000')),
   /** Layer 3 后台元策略演进与 overlay 挂载（HARNESS_EVOLVE=0 关闭）。 */
   harnessEvolve: env('HARNESS_EVOLVE', '1') === '1',
+  /**
+   * Aegis-OS 接入（AAP-1.0：/api/aegis/*、/api/mcp 网关、/.well-known/aegis-*、设置页终端授权）。
+   * 尚未正式并入工作台，默认关闭；HEURION_AEGIS=1 才开放。
+   */
+  aegisEnabled: env('HEURION_AEGIS', '0') === '1',
   /** 每个回合开新的 dsh 会话（实验用：排除会话内上下文带来的跨任务学习）。 */
   freshSessionPerTurn: env('HARNESS_FRESH_SESSION', '0') === '1',
 }

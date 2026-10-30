@@ -1,6 +1,6 @@
 import { OrgTemplateService } from '../auth/org-templates.ts'
 import { ORG_BASES, orgLogo, PRESET_AHSLYY, setOrgTenantResolver, themeAllowed, themeKeysFor } from '../model/org-templates.ts'
-import { Hono, type Context } from 'hono'
+import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { H_AS, internalVia, makeInvoker, type Invoke, type ViaInfo } from './invoke.ts'
 import { chmodIfOwned, CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { Transform } from 'prosemirror-transform'
 import { streamSSE } from 'hono/streaming'
 import { getConnInfo } from '@hono/node-server/conninfo'
-import { AuthError, type Accounts } from '../auth/accounts.ts'
+import { AuthError, RateLimiter, type Accounts } from '../auth/accounts.ts'
 import { duplicateDoc } from '../model/duplicate.ts'
 import type { SearchIndex } from '../model/search-index.ts'
 import { ExtractError, extractText } from '../kb/extract.ts'
@@ -26,6 +26,7 @@ import { ShareService } from '../tenancy/shares.ts'
 import { PatientClaimService } from '../tenancy/claims.ts'
 import { scanPhi, redactPhi } from '../ops/phi-scan.ts'
 import type { CohortService } from '../research/cohort.ts'
+import { apiSecurityHeaders, userFileHeaders } from './file-headers.ts'
 import { registerImagingRoutes } from './routes/imaging.ts'
 import { registerMailCalendarRoutes } from './routes/mail-calendar.ts'
 import { registerResearchRoutes } from './routes/research.ts'
@@ -91,6 +92,8 @@ export interface ApiDeps {
   accounts: Accounts
   /** 开发模式：允许把开发用户的数据转给正式账户。 */
   devMode: boolean
+  /** Aegis-OS 接入是否开放（config.aegisEnabled）；关闭时相关接口一律 404。 */
+  aegisEnabled?: boolean
   /** 全文索引（改名、复制后立即更新）。 */
   search?: SearchIndex
   /** 参考资料库。 */
@@ -155,6 +158,13 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   const mail = deps.mail ?? new MailService(store)
   const calendar = deps.calendar ?? new CalendarService(store, mail)
   const app = new Hono<{ Variables: { user: string } }>()
+  app.use('/api/*', apiSecurityHeaders)
+  // Aegis-OS 尚未正式并入工作台：关闭时它的接口与发现清单都当作不存在（路由照常注册，打开开关即恢复）
+  if (!deps.aegisEnabled) {
+    const aegisOff: MiddlewareHandler = async c => c.json({ error: 'not found' }, 404)
+    app.use('/api/aegis/*', aegisOff)
+    app.use('/.well-known/aegis-*', aegisOff)
+  }
   app.onError((err, c) => {
     const anyErr = err as any
     if (anyErr && typeof anyErr.status === 'number' && typeof anyErr.code === 'string') {
@@ -585,7 +595,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/me', c => {
     let tenant = null
     try { tenant = tenants.view(c.get('user')) } catch { /* 没有机构的账户（不应出现） */ }
-    return c.json({ ...accounts.me(c.get('user')), dev_mode: deps.devMode, tenant })
+    return c.json({ ...accounts.me(c.get('user')), dev_mode: deps.devMode, aegis: Boolean(deps.aegisEnabled), tenant })
   })
 
   app.get('/api/aegis/auth/grants', c => {
@@ -593,9 +603,14 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json({ grants })
   })
 
+  // 每个账号 15 分钟内最多试 10 次设备码，防止穷举把别人的终端绑进自己账号
+  const deviceApproveLimit = new RateLimiter(10, 15 * 60_000)
   app.post('/api/aegis/auth/device/approve', async c => {
     if (viaByReq.get(c.req.raw)) {
       return c.json({ error: 'AI 不能自行确认设备绑定，只能由用户本人决定', code: 'human_only' }, 403)
+    }
+    if (deviceApproveLimit.hit(c.get('user'))) {
+      return c.json({ error: '尝试次数过多，请 15 分钟后再试', code: 'rate_limited' }, 429)
     }
     const body = await c.req.json().catch(() => ({})) as {
       user_code?: string
@@ -604,7 +619,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       ttl_days?: number | null
     }
     if (!body.user_code?.trim()) {
-      return c.json({ error: '请输入终端显示的设备授权码（如 HEUR-XXXX）', code: 'missing_user_code' }, 400)
+      return c.json({ error: '请输入终端显示的设备授权码（如 HEUR-XXXX-XXXX）', code: 'missing_user_code' }, 400)
     }
     try {
       const approved = aegisAuth.approveDeviceCode({
@@ -860,7 +875,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/patients/:ptid/files/:pfid', c => {
     try {
       const f = pt(c).file(me(c), c.req.param('ptid'), c.req.param('pfid'))
-      return c.body(new Uint8Array(f.bytes), 200, { 'Content-Type': f.mime, 'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`, 'Cache-Control': 'no-store' })
+      return c.body(new Uint8Array(f.bytes), 200, userFileHeaders(f.name, f.bytes))
     } catch (err) { return patientFailure(c, err) }
   })
   /** 关联文档（「写病例报告」新建的文档关联到患者，患者页列出历次报告）。 */
@@ -901,7 +916,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/shares/:shid/files/:pfid', c => {
     try {
       const f = sh().file(me(c), c.req.param('shid'), c.req.param('pfid'))
-      return c.body(new Uint8Array(f.bytes), 200, { 'Content-Type': f.mime, 'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`, 'Cache-Control': 'no-store' })
+      return c.body(new Uint8Array(f.bytes), 200, userFileHeaders(f.name, f.bytes))
     } catch (err) { return patientFailure(c, err) }
   })
   app.get('/api/shares/:shid/assets/:aid', c => {

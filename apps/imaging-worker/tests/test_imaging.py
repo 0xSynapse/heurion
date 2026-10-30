@@ -455,6 +455,27 @@ def test_gz_and_tar_gz_volume_loading():
             os.remove(tar_path)
 
 
+def test_upload_with_job_id_reports_progress():
+    """平台上传总会带 job_id：进度登记不能抛错，完成后可查到 completed 状态。"""
+    import tempfile
+    from pathlib import Path
+
+    src_sample = Path(__file__).parent.parent / "data" / "lidc_lung_nodule_mask.nii.gz"
+    client = TestClient(app)
+    with open(src_sample, "rb") as f:
+        res = client.post(
+            "/api/v1/analyze/upload",
+            files={"file": ("scan.nii.gz", f, "application/gzip")},
+            data={"model_name": "lung_nodule_segmenter", "job_id": "job_test_progress"},
+        )
+    assert res.status_code == 200, res.text
+    progress = client.get("/api/v1/analyze/jobs/job_test_progress")
+    assert progress.status_code == 200
+    body = progress.json()
+    assert body["status"] == "completed"
+    assert body["percent"] == 100
+    assert body["started_at"] <= body["updated_at"]
+
 def test_synthetic_dicom_canonical_lps_orientation():
     """
     Validates DICOM patient coordinate system (LPS) orientation integrity:

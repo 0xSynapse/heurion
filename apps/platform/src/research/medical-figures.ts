@@ -28,6 +28,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import { pptxTemplate } from '../convert/pptx-template.ts'
 import { renderSvg } from '../render/diagram.ts'
 import type { ConsortDiagramData, EnrollmentFlowData } from './consort.ts'
+import { welchTTest } from '../datasets/table1.ts'
 
 export function escXml(s: string | number | undefined | null): string {
   return String(s ?? '')
@@ -1187,21 +1188,14 @@ function meanAndSd(vals: number[]): { mean: number; sd: number; sem: number; med
   return { mean, sd, sem, median: q(0.5), q1: q(0.25), q3: q(0.75) }
 }
 
-function normalTwoSidedP(zAbs: number): number {
-  const t = 1 / (1 + 0.2316419 * zAbs)
-  const d = 0.3989423 * Math.exp((-zAbs * zAbs) / 2)
-  const prob = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
-  return Math.min(1, Math.max(0, 2 * prob))
-}
-
+/** 湿实验每组常只有 3~6 个样本，必须用 Welch–Satterthwaite 自由度的 t 分布，正态近似会把 p 值系统性算小。 */
 function welchTTestPValue(a: number[], b: number[]): number {
   if (a.length < 2 || b.length < 2) return 1
   const sa = meanAndSd(a)
   const sb = meanAndSd(b)
-  const se = Math.sqrt(sa.sd ** 2 / a.length + sb.sd ** 2 / b.length)
-  if (se <= 1e-12) return 1
-  const tStat = Math.abs(sa.mean - sb.mean) / se
-  return normalTwoSidedP(tStat)
+  // 两组都无方差时不下显著性结论（welchTTest 在此情形会给 p=0）
+  if (Math.sqrt(sa.sd ** 2 / a.length + sb.sd ** 2 / b.length) <= 1e-12) return 1
+  return welchTTest(a, b).p
 }
 
 function pStars(p: number): string {
