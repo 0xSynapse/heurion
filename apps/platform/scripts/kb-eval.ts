@@ -6,7 +6,6 @@
  *
  * 基线语料：scripts/kb-eval-queries.json 里出现的 10 篇 PMC 论文（CC BY），PDF 从 PMC 开放数据取：
  *   https://pmc-oa-opendata.s3.amazonaws.com/metadata/<PMCID>.1.json 的 pdf_url（s3://pmc-oa-opendata/… 换成 https 地址），存成 <PMCID>.pdf。
- * 基线结果见 docs/MIGRATION_PLAN.md R2。
  * queries.json：[{ "q": "问题", "file": "文件名前缀（如 PMC11161924）", "lang": "en" | "zh", "expect": ["正则", …] }]
  * expect（可选）：答案片段必须同时匹配的正则（不分大小写）；有它就再算「片段级」——第一个含答案的片段排第几。
  */

@@ -5,7 +5,7 @@ import { chunkPages, extractText, ExtractError, KB_TYPES } from './extract.ts'
 import type { Ocr } from './ocr.ts'
 
 /**
- * 参考资料库（MIGRATION_PLAN.md R2b）：上传 → 抽取文字（保留页码）→ 切块 → 向量化（本地 bge-m3，可选）。
+ * 参考资料库：上传 → 抽取文字（保留页码）→ 切块 → 向量化（本地 bge-m3，可选）。
  * 检索 = 关键词（FTS5 trigram）与向量（余弦）两路用 RRF 合并；嵌入服务不可用时只用关键词。
  * 处理是串行队列（每份资料一个任务），启动时继续未完成的；嵌入服务之后才就绪的资料定时补向量。
  */

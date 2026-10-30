@@ -3,7 +3,7 @@ import { powDelay, solvePow } from './pow.ts'
 import { icon } from './icons.ts'
 
 /**
- * 账户界面（MIGRATION_PLAN.md §2.5 R1）：登录 / 注册页（含邀请链接）、左栏底部的用户菜单、个人设置、
+ * 账户界面：登录 / 注册页（含邀请链接）、左栏底部的用户菜单、个人设置、
  * 机构管理（机构管理员：成员、邀请、设置、本机构审计）、平台运营（机构、用户、实例设置、审计）。
  * 令牌存 localStorage（heurion.token）；任何接口返回 401 都回到登录页。
  */

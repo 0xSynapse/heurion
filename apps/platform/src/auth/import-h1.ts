@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import type { Store, UserRow } from '../store/db.ts'
 
 /**
- * 1.0 账户导入（MIGRATION_PLAN.md §2.5 R1）：从 1.0 的 SQLite（Prisma `users` 表）导入用户名、显示名、
+ * 1.0 账户导入：从 1.0 的 SQLite（Prisma `users` 表）导入用户名、显示名、
  * bcrypt 密码哈希（与平台同算法，原密码可直接登录）、角色、停用状态。只读打开 1.0 的库；按 1.0 用户 id 幂等。
  * 跳过：已软删除、没有密码（无法登录）、用户名不合法；平台里已有同名用户（不是本脚本导入的）报告冲突，不覆盖。
  */

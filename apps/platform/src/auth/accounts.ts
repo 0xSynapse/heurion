@@ -7,7 +7,7 @@ import { MailerError, type Mailer } from './mailer.ts'
 import { issueToken, verifyToken } from './token.ts'
 
 /**
- * 账户（MIGRATION_PLAN.md §2.5 R1）：开放注册（第一个用户是管理员）、用户名 + 密码登录、可吊销的登录令牌。
+ * 账户：开放注册（第一个用户是管理员）、用户名 + 密码登录、可吊销的登录令牌。
  * 登录令牌是平台签名令牌（aud=web）带账户令牌版本 v：停用、改密码、强制下线时版本加一，旧令牌立即失效。
  * 开发模式下仍接受开发令牌（`<令牌>` / `<令牌>:<名字>`），e2e 与浏览器测试用；生产环境只认账户令牌。
  */
