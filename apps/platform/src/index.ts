@@ -154,6 +154,7 @@ const mcpDeps = {
   kb,
   memory,
   evolution,
+  executionSignals,
   datasets,
   patients,
   shares,
@@ -241,6 +242,10 @@ const SITE = fileURLToPath(new URL('../../site/', import.meta.url))
 app.get('/', c => c.html(readFileSync(join(SITE, 'index.html'), 'utf8')))
 app.get('/en', c => c.html(renderEnglishIndexHtml(readFileSync(join(SITE, 'index.html'), 'utf8'))))
 app.get('/en/', c => c.redirect('/en'))
+app.get('/aegis-os', c => c.redirect('/aegis-os/'))
+app.get('/aegis-os/', c => c.html(readFileSync(join(SITE, 'aegis-os/index.html'), 'utf8')))
+app.get('/aegis-os/tutorial', c => c.redirect('/aegis-os/tutorial/'))
+app.get('/aegis-os/tutorial/', c => c.html(readFileSync(join(SITE, 'aegis-os/tutorial/index.html'), 'utf8')))
 app.get('/tools', c => c.html(renderToolsHubHtml('zh')))
 app.get('/tools/', c => c.redirect('/tools'))
 app.get('/en/tools', c => c.html(renderToolsHubHtml('en')))
