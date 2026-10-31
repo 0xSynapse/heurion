@@ -1,6 +1,6 @@
 # Heurion 2.0 平台架构
 
-**Status:** v0.4（2026-10-01）· P0、P1、M1 论断核对已实现；P2 后端与查看器已实现（`apps/platform`）· **跟踪:** epic [#16](https://github.com/0xSynapse/heurion2/issues/16) · **决策人:** JZ
+**Status:** 现行生产架构（`apps/platform`）· 覆盖 doc / deck 双模内核、写前守卫、论断核对（Google PAT 四阶段流水线）、多租户与课题协作、三层自演进记忆治理 · **决策人:** JZ
 
 ## 目录
 
@@ -24,7 +24,7 @@
 **平台 = 自建 doc/slides 编辑平台 + 面向 agent 的结构化文档通道。**
 
 - 平台持有带稳定 id 的结构化文档模型，对外暴露两类面：给**人**的编辑器（P1 起实时协同），给 **AI** 的 MCP 工具（结构化读写，写前守卫）。
-- docx 先行（P0–P1）；deck 内核 P2；多用户 / 容器隔离沿用 DESIGN.md 的 M2 里程碑。
+- docx 先行（P0–P1）；deck 内核（P2）；多租户、课题协作、患者档案与记忆治理见 [`docs/design/`](design/)。
 - doc 与 deck **能力对齐不再是设计约束**：两种媒体用两个内核，共享同一套平台底座（操作层、守卫、评论、引用、版本、MCP 约定）。
 
 ## 2. 原则
@@ -34,7 +34,7 @@
 3. **用户优先。** AI 的写入不能覆盖 `base_rev` 之后用户改过的块（`conflict_user_edited`）；用户的写入不受 AI 守卫阻挡。用户在编辑器里的编辑经协同层实时写入同一个 Y.Doc（CRDT 更新流），AI 写入前先把尚未落库的用户编辑落掉，冲突守卫因此看得到用户正在改的块。
 4. **dsh 仍是执行层。** 对话循环、工具执行、LLM 调用、子代理、上下文压缩不变；「office 文件读写」从 dsh 职责中移出（文档模型与守卫是平台核心，dsh 的 office 技能给不了结构化 id、写前守卫与原子 ops）。
 5. **产品规则保留：** 评论 = 带锚点的编辑指令、用户优先、引用规范（insert_citation 单通道）、可回滚。语义不变，实现位置迁移到操作层。
-6. **自研 = 组合成熟件，不从零造。** doc 内核 ProseMirror + Yjs（编辑器直接用 ProseMirror，schema 前后端共用一份）；deck 内核 Univer slides（Apache-2.0）+ fork Casual Slides 的 pptx 导入层。
+6. **自研 = 组合成熟件，不从零造。** doc 内核采用 ProseMirror + Yjs（编辑器直接用 ProseMirror，schema 前后端共用一份）；deck 内核采用 ProseMirror + Yjs 结构化形状树 + 自建画布（`web/src/deck.ts`）与 `@resvg/resvg-js` 矢量光栅化。
 
 ## 3. 总体架构
 
@@ -43,17 +43,20 @@ dsh 子进程（每用户一个；shell 仅计算；工具 = heurion MCP）
    │ MCP（Streamable HTTP，/mcp，用户级范围令牌）
    ▼
 apps/platform（Node + Hono）
- ├─ mcp/        MCP 工具面（读视图 / doc_edit / 评论 / 文献 / 引用 / 资产）+ 回合登记
+ ├─ mcp/        MCP 工具面（读视图 / doc_edit / deck_edit / 评论 / 文献 / 引用 / 论断核对 / 临床科研 / 资产）+ 回合登记
  ├─ ops/        操作层：zod 校验 → 写前守卫 → 内存应用（prosemirror-transform）→ 单个 Yjs 事务
  ├─ model/      schema、id、markdown 方言、锚点、Documents（每文档 Y.Doc，updateYFragment 最小差异写入）
  ├─ views/      读视图（outline / read / search / diff）与渲染（HTML、markdown 导出）
- ├─ convert/    docx 导入（保留原始 XML）/ docx 修补式导出 / PDF 导入（doc-parser 主路径，poppler 兜底）
- ├─ turns/      回合：登记 → dsh 执行 → 每份改过的文档打版本
- ├─ harness/    dsh 进程池、profile patch、事件映射
+ ├─ convert/    docx/pptx 导入（保留原始 XML）/ 修补式导出 / PDF 导入（doc-parser 主路径，poppler 兜底）
+ ├─ claims/     四阶段学术引文与论断核查流水线（章节感知切分、自适应预算、三路并行核查、严重度分级）
+ ├─ turns/      回合：登记 → dsh 执行 → 每份改过的文档打版本 → 触发执行信号采集与记忆自演化
+ ├─ harness/    dsh 进程池、profile patch、事件映射、离线 Meta-Harness 技能评测与晋升
  ├─ http/       REST + SSE（前端、文档变更推送）
- ├─ memory/     记忆：提议 / 确认、敏感内容守卫、三层开关、回合开头按预算注入
+ ├─ memory/     三层自演进记忆：陈述性记忆（提议/确认 + PHI 守卫）、程序性护栏规则（ExecutionSignals + 门控演化）、跨会话整合（Consolidation）
  ├─ kb/         参考资料库：抽取（pdftotext / docx / pptx）→ 切块（保留页码）→ 向量化 → 混合检索（FTS5 + 余弦，RRF）
- ├─ web/        P0 单页（预览、选区评论、对话、版本、引用、资料库）
+ ├─ tenancy/    机构与个人双空间隔离、每租户独立加密患者库（DEK/KEK）、知家（PHR）与家庭分享授权
+ ├─ research/   临床研究立项、团队角色协作（owner/editor/viewer）、复合纳排队列筛选与去标识化数据集快照
+ ├─ web/        前端工作台（ProseMirror 协同编辑器、幻灯片自建画布、审稿伴随面板、队列与统计工作室、知家移动端）
  └─ store/      node:sqlite
 
 apps/embedder（127.0.0.1:8003，本地 bge-m3 q8，Transformers.js + ONNX；/health、/embed）
@@ -63,17 +66,6 @@ apps/doc-parser（127.0.0.1:8005，Docling：版面、表格结构、公式 → 
    PDF 导入主路径；模型部署时预下载，运行时离线，容器只接入无外网的 internal 网络。
    没配置 / 预热未完成（/health 503）/ 解析失败时平台退回 poppler 启发式方案，导入结果的 importEngine 记录路径（DOC_PARSER_URL 配地址）
 ```
-
-| 组件 | S 系列（已停用） | 平台 | 变化 |
-| --- | --- | --- | --- |
-| 真相 | docx/pptx 文件（版本库） | 结构化模型（Yjs） | ⛳ 核心 |
-| 寻址 | 文件内 id 载体（paraId / shape id） | 平台块 id（模型节点属性） | ⛳ 核心 |
-| AI 编辑 | dsh python 直接改文件 | MCP `doc_edit(ops)` + 写前守卫 | ⛳ 核心 |
-| 守卫 | 写后审计（漂移 / 存活率 / DOI） | 写前强制 | ⛳ 核心 |
-| 合并 | 三方合并（写后） | 节点级冲突守卫 + CRDT 合并 | ⛳ 核心 |
-| 评论 | 文件内 comments.xml 同步 | 平台评论（锚 = 文本上的 comment mark），导出时写入 comments.xml | 迁移 |
-| 编辑面 | Collabora iframe（WOPI） | ProseMirror 编辑器（doc）；P2 Univer（deck） | 迁移 |
-| dsh 进程 | 每文档一个 | 每用户一个（一个会话可编辑多份文档） | 变化 |
 
 ## 4. 数据模型
 
@@ -271,7 +263,7 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 
 - **P0**（`apps/platform/src/web/index.html`，无构建）：文档列表、新建 / 上传 docx；只读预览（文档变更 SSE 推送，AI 改动的块高亮闪烁）；选中文字 → 评论 / 评论并让 AI 处理；对话（工具步骤可见、可停止）；版本（保存、对比、回滚）；引用；导出 md / docx；读视图（看模型看到的内容）。
 - **P1**（`apps/platform/web`，Vite 构建，server 托管 `dist-web/`）：ProseMirror 编辑器（schema 与服务端共用）+ y-prosemirror + 自制 provider（断线重连、重连后补齐双方缺失更新）；工具栏（段落 / 标题、粗斜下划线、上下标、列表、表格、撤销重做）与快捷键、Markdown 式输入规则、表格编辑（prosemirror-tables）；AI 改动的块高亮；选区评论与 @heurion；修订在正文里标红 / 绿并可就地采纳或拒绝；有待采纳修订时正文上方出现修订提示条（处数、上一处 / 下一处、全部采纳 / 拒绝），不单设页签；对话里每轮可「撤销本轮修改」；事后检查提示。视觉语言取自 Heurion logo：墨蓝石板主色 + 天蓝 AI / 强调色、圆角胶囊，左栏墨色底带品牌标识，支持深色模式。交互：没有浏览器原生弹窗（新建直接建「未命名」并就地改标题、点标题重命名，其余用页内对话框）；导出合并为一个菜单；没打开文档时是欢迎页（新建 / 上传 + 示例指令，点示例新建并把指令填进对话框）；AI 的工作过程以人话显示（「检索 PubMed：…」「修改文档（2 处操作）」），每轮结束折叠成「已完成 · N 步」；每轮改动后正文上方出现「本轮 AI 改了 N 处 · 上一处 / 下一处 · 撤销本轮」；失败 / 超时 / 被停止的回合可一键重试（原要求、原选项）；三栏各自滚动，对话输入框始终可见。多人光标（awareness）留到 P3。
-- **P2**：deck 编辑面（Univer 画布 + 评论面板 / 形状锚点）。
+- **P2**（`apps/platform/web/src/deck.ts`）：自建幻灯片交互画布（形状单选/多选、拖拽移动与吸附参考线、8 控制点缩放、双击原地改字、原生表格与图表数据编辑器、主题切换、评论面板 / 形状段落级锚点）。
 
 ## 10. 决策记录
 
@@ -315,8 +307,8 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | --- | --- | --- | --- |
 | **P0 doc 模型与操作层** | 模型 + Yjs 持久化；操作层与写前守卫；MCP 工具面；dsh 接入；评论锚点与 @heurion；版本；docx 导入 / 修补式导出 | e2e 任务集全绿；未改动块导出逐字节保真；导出可被 LibreOffice 打开 | ✅ 2026-10-01 |
 | **P1 doc 编辑面** | ProseMirror 编辑器 + y-prosemirror + 自制 ws 协议；用户编辑合批落库与 id 修复；事后检查；用户撤销 + AI 回合撤销；修订（suggest）模式；回合队列 | 用户逐字编辑与 AI 修改并行无丢失；断线重连恢复 | ✅ 2026-10-01 |
-| **P2 deck 内核** | deck 模型（PM + Yjs）；pptx 导入 / 修补式导出 / 新建模板；`slide_read` / `deck_edit` / `layout_check` / `slide_render`（LibreOffice）；deck 查看器；**Univer 画布编辑**（下一步） | deck e2e 全绿；未改动 deck 导出逐字节一致；画布编辑可用 | 🟡 2026-10-01 后端 + 查看器完成（e2e 25 项含幻灯片从零制作 / 插页改页；3 份真实 deck 往返逐字节一致）；画布编辑待做 |
-| **P3 硬化** | deck 多人协同 / 离线恢复 / 权限细化 / 大文档性能 | M1 同口径评测达标 | — |
+| **P2 deck 内核** | deck 模型（PM + Yjs）；pptx 导入 / 修补式导出 / 新建模板；`slide_read` / `deck_edit` / `layout_check` / `slide_render`；自建交互画布（形状拖拽、缩放、对齐分布、原地改字、表格与图表数据编辑、主题系统） | deck e2e 全绿；未改动 deck 导出逐字节一致；人机共享同一套 `DeckOp` | ✅ 2026-10 |
+| **P3 硬化与领域扩展** | 多租户机构隔离与加密患者库（[`TENANCY.md`](design/TENANCY.md)）、研究团队协作（[`TEAM.md`](design/TEAM.md)）、队列纳排（[`COHORT.md`](design/COHORT.md)）、知家家庭健康顾问（[`PATIENT.md`](design/PATIENT.md)）、三层自演进记忆治理（[`MEMORY_GOVERNANCE_PRD.md`](design/MEMORY_GOVERNANCE_PRD.md)） | 跨租户越权测试与 API/MCP 对等测试 100% 通过 | ✅ 2026-10 |
 
 **验证（2026-10-01）**：单测 41 项（模型 / 操作层 / 守卫 / MCP / docx 往返 / 协同网关 / 修订）；浏览器测试 11 项（`pnpm ui`，真实 Chromium：打字同步、拆段 id、工具栏、选区评论、修订就地采纳、撤销、断线重连）；e2e 19 项（`pnpm e2e`，真实 dsh + deepseek-flash，含 @heurion 自动触发、修订模式、撤销本轮、LibreOffice 打开导出文件）；3 份真实 docx「导入 → 不改 → 导出」正文逐字节一致。
 

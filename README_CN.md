@@ -233,9 +233,10 @@ pnpm --filter @heurion2/platform ui
 
 ## <img src="docs/icons/book.svg" width="18" height="18" valign="middle" /> 架构与深度文档 (Documentation)
 
+- <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**文档总览索引 (docs/README.md)**](docs/README.md)：全量架构规范与临床科研领域设计导航
 - <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**平台整体技术架构 (PLATFORM.md)**](docs/PLATFORM.md)：系统模型层、操作层写前守卫、DSH 调度设计
 - <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**多环境部署指南 (DEPLOY.md)**](docs/DEPLOY.md)：生产环境、容器化编排、反向代理与 TLS 配置
-- <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**独立画布微服务设计规范 (canvas_mcp_standalone_architecture.md)**](file:///Users/huizhao/.gemini/antigravity-cli/brain/0c4a3943-b91a-40bb-a58c-c0bf6b82cba1/canvas_mcp_standalone_architecture.md)：纯净版 Canvas MCP、Yjs CRDT 协议设计
+- <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**自演进记忆治理与证据分级 PRD (MEMORY_GOVERNANCE_PRD.md)**](docs/design/MEMORY_GOVERNANCE_PRD.md)：三层记忆架构、CoEM/SafeVantage 门控与引文证据覆盖度核验
 - <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**临床队列设计 (COHORT.md)**](docs/design/COHORT.md)：医学队列检索与多条件交并过滤
 - <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**患者数据与共享凭证 (PATIENT.md & SHARING.md)**](docs/design/PATIENT.md)：患者档案授权 Claims 机制
 
