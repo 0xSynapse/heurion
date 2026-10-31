@@ -3,7 +3,7 @@ import { attachComment, AnchorError } from '../model/anchors.ts'
 import type { Documents } from '../model/runtime.ts'
 import { relevantPassages, type FullTextClient } from '../literature/fulltext.ts'
 import type { PubMedClient } from '../literature/pubmed.ts'
-import type { ClaimVerdict } from '../store/db.ts'
+import type { CitationRow, ClaimVerdict, EvidenceTier } from '../store/db.ts'
 import { referencePlan } from '../model/references.ts'
 import {
   extractClaims,
@@ -37,7 +37,7 @@ export function fitAbstract(abstract: string, max = ABSTRACT_MAX): string {
 
 /**
  * 论断核对的判定标准（verifyPrompt 与 C2 评测共用，改这里两边一起变）。
- * v4（Google PAT 四阶段学术审稿工作流）：
+ * v4（四阶段学术审稿工作流）：
  * - 关注数值等价性（如 74% 与 0.74）与效应方向性矛盾；
  * - 结合章节角色（section_role）与核查预算分级（verification_tier: high/medium/light）分配审查力度；
  * - 理由用中文，明确给出【建议修改为】纠正文本。
@@ -45,9 +45,10 @@ export function fitAbstract(abstract: string, max = ABSTRACT_MAX): string {
 export const CLAIM_CRITERIA =
   '逐条只依据所引文献的摘要（以及给出的开放获取全文与表格片段）判断，不凭记忆补充：' +
   'supported = 摘要或全文/表格支持该句的说法与数字（注意百分比与小数等价性，如 74% 与 0.74 视为一致）；' +
-  'unsupported = 摘要或全文/表格与该句矛盾，或数字、结论、人群、药物 / 干预、效应方向任何一处对不上——只要你的理由里指出了某处不符，结论就必须是 unsupported，不能是 unclear；若为特定亚组/分层，请对照对应表格列核对；' +
+  'unsupported = 摘要或全文/表格与该句矛盾，或数字、结论、人群、药物 / 干预、效应方向任何一处对不上——只要你的理由里指出了某处不符，结论就必须是 unsupported，不能是 unclear；若为特定亚组/分层，请对照对应表格列核对；若摘要支持总体趋势，但开放全文/表格中给出了相反或修正后的数字（例如多因素校正后无显著差异），必须判为 unsupported，在 reason 中写明「全文/表格修正了摘要结论」，并在 evidence_quote 中附上对应的全文/表格原文；' +
   'unclear = 证据涉及该句的内容，但信息不足以确认或否定。' +
   '没有摘要和全文片段，或它们根本没涉及该句说的内容时，判 unclear 并标 no_evidence=true（这类不会逐句挂评论，只在总结里汇总）。' +
+  '每条结果在 claim_report 中还需输出 evidence_tier（table = 经开放全文表格/图注核实，fulltext = 经开放全文正文段落核实，abstract = 仅凭 PubMed 摘要核实，none = 无可用摘要或全文证据）与 evidence_quote（原文摘要或开放全文/表格中与该句论断直接对应的具体原文原句或表格行摘录，必须原样摘录原文中的关键句或 Markdown 表格行，供医生直接对照）。' +
   'reason 用中文，一两句话写明依据（引用摘要或表格里的关键数字或结论）；若判 unsupported 且文献有明确相反或正确数字，请在末尾加上【建议修改为】：<简明纠正文本>。'
 
 export interface ClaimEvidence {
@@ -163,7 +164,17 @@ export class ClaimService {
    * 没有可核对证据的「无法判断」（no_evidence，或所引文献都没有摘要）只记录、不挂评论（C2：否则八成正确的句子被挂评论），
    * 状态为 no_evidence，由回合总结汇总。返回每条的处理结果。
    */
-  report(docId: string, results: Array<{ claim_id: string; verdict: ClaimVerdict; reason: string; no_evidence?: boolean }>): Array<{ claim_id: string; status: 'recorded' | 'commented' | 'unchanged' | 'stale' | 'no_evidence'; comment_id?: string }> {
+  report(
+    docId: string,
+    results: Array<{
+      claim_id: string
+      verdict: ClaimVerdict
+      reason: string
+      no_evidence?: boolean
+      evidence_tier?: EvidenceTier
+      evidence_quote?: string
+    }>,
+  ): Array<{ claim_id: string; status: 'recorded' | 'commented' | 'unchanged' | 'stale' | 'no_evidence'; comment_id?: string }> {
     const store = this.docs.store
     const { claims, unsourced } = this.extract(docId)
     const byId = new Map([...claims, ...unsourced].map(c => [c.claim_id, c]))
@@ -185,21 +196,44 @@ export class ClaimService {
         r.verdict === 'missing_citation' &&
         /(?:本研究|自报|自身队列|本队列|基线数据|表格单元格|无需引用|不需引用|不应挂.*引用|无需改动)/.test(r.reason)
       const effectiveVerdict: ClaimVerdict = selfReported ? 'supported' : r.verdict
-      if (prev && prev.verdict === effectiveVerdict && (effectiveVerdict === 'supported' || prev.comment_id)) {
+      const { tier: effectiveTier, quote: effectiveQuote } = this.resolveEvidence(claim, cites, r.evidence_tier, r.evidence_quote)
+      const needsHighRiskAbstractNotice =
+        effectiveVerdict === 'supported' &&
+        !selfReported &&
+        effectiveTier === 'abstract' &&
+        claim.verification_tier === 'high' &&
+        claim.cite_ids.length > 0
+      if (
+        prev &&
+        prev.verdict === effectiveVerdict &&
+        prev.evidence_tier === effectiveTier &&
+        (effectiveVerdict === 'supported' ? (!needsHighRiskAbstractNotice || Boolean(prev.comment_id)) : Boolean(prev.comment_id))
+      ) {
         out.push({ claim_id: r.claim_id, status: 'unchanged', ...(prev.comment_id ? { comment_id: prev.comment_id } : {}) })
         continue
       }
       const noEvidence = effectiveVerdict === 'unclear' && (r.no_evidence === true || !hasAbstract(claim))
       let commentId: string | null = null
-      if (effectiveVerdict !== 'supported' && effectiveVerdict !== 'exempted' && !noEvidence) {
-        const res = this.prepareComment(docId, doc, claim, effectiveVerdict, r.reason)
+      if ((effectiveVerdict !== 'supported' && effectiveVerdict !== 'exempted' && !noEvidence) || needsHighRiskAbstractNotice) {
+        const res = this.prepareComment(docId, doc, claim, effectiveVerdict, r.reason, effectiveTier, effectiveQuote)
         doc = res.doc
         commentId = res.commentId
         if (res.anchored) commentOps.push({ op: 'claim_comment', thread: res.commentId })
       }
       const cId = commentId
       pendingChecks.push(() => {
-        store.putClaimCheck({ doc_id: docId, claim_id: r.claim_id, node_id: claim.node_id, sentence: claim.sentence, verdict: effectiveVerdict, reason: noEvidence ? `（没有可核对的证据）${r.reason}` : r.reason, comment_id: cId, rev: this.docs.rev(docId) })
+        store.putClaimCheck({
+          doc_id: docId,
+          claim_id: r.claim_id,
+          node_id: claim.node_id,
+          sentence: claim.sentence,
+          verdict: effectiveVerdict,
+          evidence_tier: effectiveTier,
+          evidence_quote: effectiveQuote,
+          reason: noEvidence ? `（没有可核对的证据）${r.reason}` : r.reason,
+          comment_id: cId,
+          rev: this.docs.rev(docId),
+        })
       })
       out.push({ claim_id: r.claim_id, status: noEvidence ? 'no_evidence' : commentId ? 'commented' : 'recorded', ...(commentId ? { comment_id: commentId } : {}) })
     }
@@ -210,9 +244,178 @@ export class ClaimService {
     return out
   }
 
-  private prepareComment(docId: string, doc: PMNode, claim: Claim, verdict: ClaimVerdict, reason: string): { commentId: string; doc: PMNode; anchored: boolean } {
+  private resolveEvidence(
+    claim: Claim,
+    cites: Map<string, CitationRow>,
+    explicitTier?: EvidenceTier,
+    explicitQuote?: string,
+  ): { tier: EvidenceTier; quote: string } {
     const store = this.docs.store
-    const label = { unsupported: '所引文献不支持该论断', unclear: '无法从所引文献判断', missing_citation: '数值型论断缺少出处', supported: '', exempted: '' }[verdict]
+    const fullPassages: string[] = []
+    const abstracts: string[] = []
+    for (const id of claim.cite_ids) {
+      const row = cites.get(id)
+      if (!row) continue
+      const ft = store.getFullText(row.doi)?.text
+      if (ft && ft.trim().length > 0) {
+        const rel = relevantPassages(ft, claim.sentence)
+        if (rel.length > 0) {
+          fullPassages.push(...rel)
+        } else {
+          const blocks = ft.split(/\n\s*\n/).map(b => b.trim()).filter(Boolean)
+          if (blocks.length > 0) {
+            const best = this.pickBestText(blocks, claim.sentence)
+            if (best) fullPassages.push(best)
+          }
+        }
+      }
+      const abs = store.getAbstract(row.doi)?.abstract
+      if (abs && abs.trim().length > 0) {
+        abstracts.push(abs.trim())
+      }
+    }
+
+    const isTablePassage = (p: string) => /\|.*\|/.test(p) || /\[(?:表格|Table)\b/i.test(p) || /\bTable\s+\d+/i.test(p)
+    let tier: EvidenceTier
+    if (explicitTier) {
+      tier = explicitTier
+    } else if (fullPassages.length > 0) {
+      tier = fullPassages.some(isTablePassage) ? 'table' : 'fulltext'
+    } else if (abstracts.length > 0) {
+      tier = 'abstract'
+    } else {
+      tier = 'none'
+    }
+
+    if (explicitQuote && explicitQuote.trim().length > 0) {
+      return { tier, quote: explicitQuote.trim().slice(0, 600) }
+    }
+
+    if (fullPassages.length > 0 && (tier === 'table' || tier === 'fulltext')) {
+      const targetPassages = tier === 'table' && fullPassages.some(isTablePassage)
+        ? fullPassages.filter(isTablePassage)
+        : fullPassages
+      const bestPassage = this.pickBestText(targetPassages, claim.sentence) ?? targetPassages[0]!
+      const lines = bestPassage.split('\n').map(l => l.trim()).filter(Boolean)
+      const tableLines = lines.filter(l => l.includes('|') && !/^\|\s*[-:]+(?:\s*\|\s*[-:]+)*\s*\|?$/.test(l))
+      if (tableLines.length >= 2) {
+        const captionLine = lines.find(l => /^\[(?:表格|Table)/i.test(l))
+        const header = tableLines[0]!
+        const dataRows = tableLines.slice(1)
+        const bestRow = this.pickBestText(dataRows, claim.sentence) ?? dataRows[0]!
+        const assembled = [captionLine, header, bestRow].filter(Boolean).join('\n')
+        return { tier, quote: assembled.slice(0, 350) }
+      }
+      return { tier, quote: this.extractBestSentences(bestPassage, claim.sentence, 350) }
+    }
+
+    if (abstracts.length > 0) {
+      const combined = abstracts.join('\n')
+      return { tier, quote: this.extractBestSentences(combined, claim.sentence, 350, true) }
+    }
+
+    return { tier, quote: '' }
+  }
+
+  private scoreOverlap(candidate: string, claimSentence: string, inResultsSection = false): number {
+    const rawNums = claimSentence.replace(/(\d)·(\d)/g, '$1.$2').match(/\d+(?:\.\d+)?%?/g) ?? []
+    const claimNums = new Set<string>()
+    for (const raw of rawNums) {
+      const clean = raw.replace(/%$/, '')
+      if (/^(19|20)\d\d$/.test(clean)) continue
+      claimNums.add(clean)
+      const val = Number(clean)
+      if (!Number.isNaN(val)) {
+        if (raw.endsWith('%')) {
+          claimNums.add((val / 100).toFixed(2).replace(/0+$/, '').replace(/\.$/, ''))
+        } else if (val > 0 && val < 1 && clean.startsWith('0.')) {
+          claimNums.add(String(Math.round(val * 1000) / 10))
+        }
+      }
+    }
+    const claimWords = new Set((claimSentence.toLowerCase().match(/[a-z][a-z0-9-]{2,}/g) ?? []).map(w => w.slice(0, 6)))
+    const claimCjk = new Set<string>()
+    for (const m of claimSentence.match(/[\u4e00-\u9fff]{2,}/g) ?? []) {
+      for (let i = 0; i + 2 <= m.length; i++) claimCjk.add(m.slice(i, i + 2))
+    }
+
+    let score = 0
+    const candNorm = candidate.replace(/(\d)·(\d)/g, '$1.$2')
+    const candNums = new Set(candNorm.match(/\d+(?:\.\d+)?/g) ?? [])
+    for (const n of claimNums) {
+      if (candNums.has(n) || candNorm.includes(n)) score += 5
+    }
+    const candLower = candidate.toLowerCase()
+    for (const w of claimWords) {
+      if (candLower.includes(w)) score += 2
+    }
+    for (const bg of claimCjk) {
+      if (candidate.includes(bg)) score += 1
+    }
+    if (inResultsSection || /\b(RESULTS?|FINDINGS|CONCLUSIONS?|结果|结论)\b/i.test(candidate)) {
+      score += 2
+    }
+    return score
+  }
+
+  private pickBestText(candidates: string[], claimSentence: string): string | undefined {
+    if (candidates.length === 0) return undefined
+    let best = candidates[0]!
+    let bestScore = -1
+    for (const c of candidates) {
+      const s = this.scoreOverlap(c, claimSentence)
+      if (s > bestScore) {
+        bestScore = s
+        best = c
+      }
+    }
+    return best
+  }
+
+  private extractBestSentences(source: string, claimSentence: string, maxChars = 350, isAbstract = false): string {
+    const sentences = source
+      .split(/(?<=[.!?])\s+(?=[A-Z\u4e00-\u9fff\[])|(?<=[。！？；])\s*|\n+/)
+      .map(s => s.trim())
+      .filter(Boolean)
+    if (sentences.length === 0) return source.trim().slice(0, maxChars)
+
+    let inKeySection = false
+    const scored = sentences.map((s, idx) => {
+      if (isAbstract) {
+        if (/\b(RESULTS?|FINDINGS|CONCLUSIONS?|结果|结论)\b\s*[:：]/i.test(s)) inKeySection = true
+        else if (/\b(BACKGROUND|METHODS?|OBJECTIVES?|INTRODUCTION|背景|方法)\b\s*[:：]/i.test(s)) inKeySection = false
+      }
+      return { s, idx, score: this.scoreOverlap(s, claimSentence, isAbstract && inKeySection) }
+    })
+
+    scored.sort((a, b) => b.score - a.score || a.idx - b.idx)
+    const first = scored[0]!
+    const picked = [first]
+    const second = scored[1]
+    if (second && second.score >= 4 && first.s.length + 1 + second.s.length <= maxChars) {
+      picked.push(second)
+      picked.sort((a, b) => a.idx - b.idx)
+    }
+    return picked.map(p => p.s).join(' ').slice(0, maxChars)
+  }
+
+  private prepareComment(
+    docId: string,
+    doc: PMNode,
+    claim: Claim,
+    verdict: ClaimVerdict,
+    reason: string,
+    evidenceTier: EvidenceTier = 'none',
+    evidenceQuote = '',
+  ): { commentId: string; doc: PMNode; anchored: boolean } {
+    const store = this.docs.store
+    const label = {
+      unsupported: '所引文献不支持该论断',
+      unclear: '无法从所引文献判断',
+      missing_citation: '数值型论断缺少出处',
+      supported: '高风险定量/亚组论断仅由摘要支持（缺少全文或数据表佐证，建议核对原文全文）',
+      exempted: '',
+    }[verdict]
     const row = store.addComment({ doc_id: docId, node_id: claim.node_id, snippet: claim.snippet })
     let nextDoc = doc
     let anchored = false
@@ -224,12 +427,15 @@ export class ClaimService {
       // 找不到锚定文字：退化为整块锚点
       store.db.prepare('UPDATE comments SET snippet = \'\' WHERE id = ?').run(row.id)
     }
-    store.addReply(row.id, 'ai', `论断核对：${label}。${reason}\n句子：${claim.sentence}`)
+    const quoteBlock = evidenceQuote
+      ? `\n${evidenceTier === 'table' || evidenceTier === 'fulltext' ? '【匹配全文/表格原文】' : '【匹配摘要原文】'}：${evidenceQuote}`
+      : ''
+    store.addReply(row.id, 'ai', `论断核对：${label}。${reason}${quoteBlock}\n句子：${claim.sentence}`)
     return { commentId: row.id, doc: nextDoc, anchored }
   }
 }
 
-/** 「核对全部论断」回合的提示（基于 Google PAT 四阶段多智能体学术审查工作流）。 */
+/** 「核对全部论断」回合的提示（基于四阶段多智能体学术审查工作流）。 */
 export function verifyPrompt(docId: string): string {
   return (
     `请按四阶段学术审稿工作流核对并审查文档 ${docId}，只把真正有问题、需要作者注意的地方挂为评论，不直接修改正文：\n` +
