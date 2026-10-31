@@ -2703,6 +2703,7 @@ $('versions').onclick = async e => {
 }
 
 const VERDICT: Record<string, string> = { supported: '支持', unsupported: '不支持', unclear: '无法判断', missing_citation: '缺出处' }
+const TIER_LABEL: Record<string, string> = { table: '全文表格核验', fulltext: '全文正文核验', abstract: '仅摘要核验', none: '无原文证据' }
 
 /** 平台引用合并进正文末尾用户自己的文献表时的说明（引用页常驻、导出时提示）；没有合并返回 null。 */
 function refMergeText(): string | null {
@@ -2719,13 +2720,27 @@ function renderCites(): void {
   const list: any[] = detail?.citations ?? []
   const checks: any[] = detail?.claim_checks ?? []
   const counts = checks.reduce((m: Record<string, number>, c: any) => { m[c.verdict] = (m[c.verdict] ?? 0) + 1; return m }, {})
+  const supportedChecks = checks.filter(c => c.verdict === 'supported')
+  const fulltextCount = supportedChecks.filter(chk => chk.evidence_tier === 'fulltext' || chk.evidence_tier === 'table').length
+  const abstractOnlyCount = supportedChecks.filter(chk => !chk.evidence_tier || chk.evidence_tier === 'abstract').length
   const summary = checks.length === 0 ? '<span class="muted">还没有核对过</span>'
-    : Object.entries(counts).map(([v, n]) => `<span class="verdict ${esc(v)}">${esc(VERDICT[v] ?? v)} ${n}</span>`).join(' ')
+    : Object.entries(counts).map(([v, n]) => {
+      const label = v === 'supported' && n > 0
+        ? `已支持 ${supportedChecks.length} 条（全文/表格核验 ${fulltextCount} · 仅摘要 ${abstractOnlyCount}）`
+        : `${VERDICT[v] ?? v} ${n}`
+      return `<span class="verdict ${esc(v)}">${esc(label)}</span>`
+    }).join(' ')
+  const renderQuote = (c: any) => c.evidence_quote
+    ? `<div class="claim-quote muted small" style="margin-top:4px;padding:6px 8px;background:var(--bg-soft,#f8fafc);border-left:3px solid var(--accent,#0ea5e9);border-radius:4px"><b>${c.evidence_tier === 'table' || c.evidence_tier === 'fulltext' ? '匹配全文/表格原文' : '匹配摘要原文'}：</b>${esc(c.evidence_quote)}</div>`
+    : ''
   const flagged = checks.filter(c => c.verdict !== 'supported').map(c =>
-    `<div class="claim"><span class="verdict ${esc(c.verdict)}">${esc(VERDICT[c.verdict] ?? c.verdict)}</span> ${esc(c.sentence)}<div class="muted">${esc(c.reason)}</div></div>`).join('')
+    `<div class="claim"><span class="verdict ${esc(c.verdict)}">${esc(VERDICT[c.verdict] ?? c.verdict)}</span> <span class="badge">${esc(TIER_LABEL[c.evidence_tier] ?? '仅摘要核验')}</span> ${esc(c.sentence)}<div class="muted">${esc(c.reason)}</div>${renderQuote(c)}</div>`).join('')
+  const supportedDetails = supportedChecks.length === 0 ? ''
+    : `<details style="margin-top:8px"><summary class="muted small" style="cursor:pointer">已支持 ${supportedChecks.length} 条（全文/表格核验 ${fulltextCount} · 仅摘要 ${abstractOnlyCount}）</summary>${supportedChecks.map(c =>
+      `<div class="claim" style="margin-top:6px"><span class="verdict supported">支持</span> <span class="badge">${esc(TIER_LABEL[c.evidence_tier] ?? '仅摘要核验')}</span> ${esc(c.sentence)}${c.reason ? `<div class="muted small">${esc(c.reason)}</div>` : ''}${renderQuote(c)}</div>`).join('')}</details>`
   $('cites').innerHTML = `<div class="card"><div class="row"><b>论断核对</b><span class="grow"></span><button id="verifyBtn" class="ai">核对全部论断</button></div>
       <div class="muted" style="margin:4px 0">对照所引文献的 PubMed 摘要逐句核对；有问题的句子会挂一条 AI 评论，不会自动改写。</div>
-      <div>${summary}</div>${flagged}</div>` +
+      <div>${summary}</div>${flagged}${supportedDetails}</div>` +
     `<div class="card"><div class="row"><b>参考文献</b><span class="grow"></span><button id="refImportBtn" title="从 Zotero / EndNote / Mendeley / PubMed 导出的文件，或每行一个 DOI / PMID">导入参考文献</button>
       <input type="file" id="refImportInput" accept=".ris,.bib,.nbib,.txt,.xml,.enw" hidden></div>
       <div class="muted" style="margin:4px 0">导入后登记在这里（未使用），你和 AI 都能直接引用；每条按 DOI 核实，查不到的会列出来。</div>${refMergeText() ? `<div class="ref-merge-note">${esc(refMergeText())}；导出 Word / Markdown 时合并成一份文献表。</div>` : ''}<div id="refImportResult">${refImportHtml}</div></div>` +

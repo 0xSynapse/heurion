@@ -18,10 +18,22 @@ interface Change {
   targets: Array<{ id: string; kind: Memory['kind']; content: string }>
 }
 
-interface ProceduralRule {
-  id: string; scope: 'global' | 'user' | 'project'; owner: string; category: 'guard' | 'tool' | 'subagent' | 'format'
-  trigger_pattern: string; rule: string; evidence_count: number; updated_at: string
+interface HarnessRuleVersion {
+  id: string
+  rule_id: string
+  trigger_pattern: string
+  rule: string
+  reason?: string | null
+  created_at: string
 }
+
+interface HarnessRule {
+  id: string; scope: 'global' | 'user' | 'project'; owner: string; category: 'guard' | 'tool' | 'subagent' | 'format'
+  trigger_pattern: string; rule: string; evidence_count: number; evidence_refs?: string
+  hit_count?: number; success_count?: number; status: 'pending' | 'active' | 'archived'; updated_at: string
+  versions?: HarnessRuleVersion[]
+}
+type ProceduralRule = HarnessRule
 
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
 const KINDS: Record<Memory['kind'], string> = { preference: '偏好', fact: '事实', style: '写法', term: '术语' }
@@ -70,12 +82,27 @@ export function initMemory(api: Api, notice: (msg: string, error?: boolean) => v
         <div class="actions-row"><button class="primary" data-cact="apply">采纳</button><button data-cact="dismiss">忽略</button></div></li>`
     }
 
-    function ruleRow(r: ProceduralRule): string {
+    function ruleRow(r: HarnessRule): string {
       const isSystem = r.owner === 'system'
+      const statusBadge = r.status === 'pending'
+        ? '<span class="badge">⏳ 观察验证中 (Pending)</span>'
+        : '<span class="badge ok">✅ 已生效</span>'
+      const pendingHint = r.status === 'pending'
+        ? ' · 待跨回合验证后生效'
+        : ''
+      const reliability = (r.hit_count ?? 0) > 0
+        ? ` · 实战调用 ${r.hit_count} 次 · 有效率 ${Math.round(((r.success_count ?? 0) / r.hit_count!) * 100)}% (${r.success_count ?? 0}/${r.hit_count})`
+        : ''
+      const hasVersions = Boolean(r.versions && r.versions.length > 0)
+      const versionDetails = hasVersions
+        ? `<details class="muted small" style="margin-top: 4px"><summary style="cursor: pointer">历史演化版本（${r.versions!.length}）</summary><ol class="mem-history muted small">${r.versions!.map(v => `<li><div>${esc(new Date(v.created_at).toLocaleString('zh-CN', { hour12: false }))}${v.reason ? ` · ${esc(v.reason)}` : ''} · 触发特征：<code>${esc(v.trigger_pattern)}</code></div><div>${esc(v.rule)} <button data-ract="rollback" data-ver="${esc(v.id)}">回退到此版</button></div></li>`).join('')}</ol></details>`
+        : ''
+      const rollbackQuickBtn = hasVersions ? '<button data-ract="rollback">回退上一版</button>' : ''
       return `<li class="mem" data-rule="${esc(r.id)}">
-        <div class="mem-text"><span class="mem-kind">${esc(RULE_CAT[r.category] ?? r.category)}</span>${esc(r.rule)}</div>
-        <div class="muted small"><span class="pill">${isSystem ? '系统基线' : '自动习得'}</span> 触发特征：<code>${esc(r.trigger_pattern)}</code> · 累计验证 ${r.evidence_count} 次</div>
-        ${isSystem ? '' : '<div class="actions-row"><button data-ract="delete" class="danger">移除此经验</button></div>'}
+        <div class="mem-text"><span class="mem-kind">${esc(RULE_CAT[r.category] ?? r.category)}</span>${statusBadge} ${esc(r.rule)}</div>
+        <div class="muted small"><span class="pill">${isSystem ? '系统基线' : '自动习得'}</span> 触发特征：<code>${esc(r.trigger_pattern)}</code> · 累计验证 ${r.evidence_count} 次${reliability}${pendingHint}</div>
+        ${versionDetails}
+        ${isSystem ? '' : `<div class="actions-row">${rollbackQuickBtn}<button data-ract="delete" class="danger">移除此经验</button></div>`}
       </li>`
     }
 
@@ -167,6 +194,18 @@ export function initMemory(api: Api, notice: (msg: string, error?: boolean) => v
         try {
           await api(`/api/memory/rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' })
           notice('已移除该条自适应经验')
+        } catch (err) { notice((err as Error).message, true) }
+        reopen()
+        return
+      }
+      if (ract === 'rollback' && ruleId) {
+        const verId = t.closest<HTMLElement>('[data-ver]')?.dataset.ver
+        try {
+          await api(`/api/memory/rules/${encodeURIComponent(ruleId)}/rollback`, {
+            method: 'POST',
+            body: JSON.stringify(verId ? { version_id: verId } : {}),
+          })
+          notice('已回退至历史版本')
         } catch (err) { notice((err as Error).message, true) }
         reopen()
         return

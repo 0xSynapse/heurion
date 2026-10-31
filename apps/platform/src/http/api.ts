@@ -1128,7 +1128,13 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/memory', c => {
     const m = deps.memory
     const user = c.get('user')
-    const procedural_rules = store.listHarnessRules(user, ['active'])
+    const procedural_rules = store
+      .listHarnessRules(user, ['active', 'pending'])
+      .filter(r => r.owner !== 'system' || r.status === 'active')
+      .map(r => ({
+        ...r,
+        versions: store.listHarnessRuleVersions(r.id),
+      }))
     if (!m) return c.json({ enabled: false, instance: false, paused: false, items: [], procedural_rules })
     const items = store.listMemories(user, ['proposed', 'active']).map(x => ({ ...x, source_doc_title: x.source_doc_id ? store.getDoc(x.source_doc_id)?.title ?? null : null }))
     const changes = (deps.evolution?.pending(user) ?? []).map(ch => ({ ...ch, targets: ch.target_ids.map(id => store.getMemory(id)).filter(Boolean).map(t => ({ id: t!.id, kind: t!.kind, content: t!.content })) }))
@@ -1138,6 +1144,33 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return store.deleteHarnessRule(c.get('user'), c.req.param('rid'))
       ? c.json({ ok: true })
       : c.json({ error: '规则不存在或属于系统内置基线策略' }, 404)
+  })
+  app.post('/api/memory/rules/:rid/rollback', async c => {
+    const rule = store.getHarnessRule(c.req.param('rid'))
+    if (!rule || rule.owner !== c.get('user') || rule.owner === 'system') {
+      return c.json({ error: '规则不存在或属于系统内置基线策略' }, 404)
+    }
+    const body = await c.req.json<{ version_id?: string }>().catch(() => ({} as { version_id?: string }))
+    const versions = store.listHarnessRuleVersions(rule.id)
+    if (versions.length === 0) {
+      return c.json({ error: '该规则暂无历史版本可回退' }, 404)
+    }
+    const target = body.version_id ? versions.find(v => v.id === body.version_id) : versions[0]
+    if (!target) {
+      return c.json({ error: '目标历史版本不存在' }, 404)
+    }
+    store.updateHarnessRule(rule.id, {
+      trigger_pattern: target.trigger_pattern,
+      rule: target.rule,
+      status: 'active',
+    })
+    return c.json({
+      ok: true,
+      rule: {
+        ...store.getHarnessRule(rule.id),
+        versions: store.listHarnessRuleVersions(rule.id),
+      },
+    })
   })
   app.put('/api/memory/settings', async c => {
     if (!deps.memory) return c.json({ error: '记忆未启用' }, 503)
