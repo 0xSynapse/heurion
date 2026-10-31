@@ -170,11 +170,15 @@ aegis-os workspace diff</pre>
           <p>Restart the client, then ask the agent to read notes:</p>
           <pre class="cmd"><span class="c"># In Claude / Cursor / OpenCode</span>
 List the notes under notes/projects</pre>
-          <p>The first tool call creates a consent request. In a terminal:</p>
-          <pre class="cmd">aegis-os memory pending
+          <p>The first tool call creates a consent request. Aegis OS opens a local consent page automatically (<code>127.0.0.1:9375</code>); select the tags / keys to grant, then click <strong>Allow selected</strong>. No second terminal is required.</p>
+          <pre class="cmd"><span class="c"># If the browser did not open automatically, start the consent UI manually</span>
+aegis-os memory ui
+
+<span class="c"># CLI fallback</span>
+aegis-os memory pending
 aegis-os memory approve &lt;request-id&gt;</pre>
-          <p><code>pending</code> shows the request id, agent, task id (if any), session id, and expiry. After approval the current call continues; a denial returns an error.</p>
-          <p class="note">High-sensitivity data is not opened by a tag scope. The agent must request a specific key, and you approve that key individually in <code>pending</code>.</p>
+          <p>The page shows the request id, agent, task id (if any), session id, and expiry. After approval the current call continues; a denial returns an error.</p>
+          <p class="note">High-sensitivity data is not opened by a tag scope. The consent page lists specific keys separately, and you must select each key; an agent cannot approve its own request.</p>
           <h3>Verify</h3>
           <pre class="cmd">aegis-os memory sessions
 aegis-os memory audit --limit 20</pre>
@@ -227,7 +231,7 @@ aegis-os a2a board</pre>
             <thead><tr><th>Problem</th><th>Fix</th></tr></thead>
             <tbody>
               <tr><td>Client does not show Aegis OS tools</td><td>Run <code>aegis-os doctor</code>; restart the client; check the MCP config.</td></tr>
-              <tr><td>Agent waits for approval forever</td><td>In another terminal run <code>aegis-os memory pending</code>, then <code>approve</code> / <code>deny</code>.</td></tr>
+              <tr><td>Agent waits for approval forever</td><td>Check whether the consent page opened automatically; if not, run <code>aegis-os memory ui</code>. CLI fallback: <code>aegis-os memory pending</code>, then <code>approve</code> / <code>deny</code>.</td></tr>
               <tr><td>Port 9374 is in use</td><td><code>aegis-os memory stop</code>; or <code>aegis-os memory setup claude --listen 127.0.0.1:9380</code>.</td></tr>
               <tr><td><code>SESSION_NOT_ACTIVE</code></td><td>The session expired or was revoked; make a new request, or run <code>aegis-os memory connect claude --scope notes/projects</code>.</td></tr>
               <tr><td><code>ACCESS_DENIED</code></td><td>The key/tag is outside the approved scope; inspect the consent request and <code>aegis-os memory audit</code>.</td></tr>

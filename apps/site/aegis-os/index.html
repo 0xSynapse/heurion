@@ -96,7 +96,7 @@
           <div class="aegis-cell">
             <p class="label-caps">03 / CONSENT</p>
             <h3 class="heading-3">同意</h3>
-            <p>UOMP 记忆同意协议：按 tag / key、时限、可撤销；高敏数据逐 key 批准；每次 allow / deny 都有审计。</p>
+            <p>UOMP 记忆同意协议：按 tag / key、时限、可撤销；高敏数据逐 key 批准；本地 trusted consent UI 自动弹出，无需另开终端；每次 allow / deny 都有审计。</p>
           </div>
         </div>
       </div>
@@ -142,7 +142,7 @@ aegis-os doctor</pre>
             <span class="step-num">03</span>
             <div>
               <h3>需要记忆时，明确批准</h3>
-              <p>Agent 通过 UOMP 请求你的笔记。你在终端运行 <code>aegis-os memory pending</code> 查看范围，再 <code>approve</code> 或 <code>deny</code>。Agent 不能批准自己的请求。</p>
+              <p>Agent 通过 UOMP 请求你的笔记。Aegis OS 会自动打开本地同意页；你勾选 tag / key 后 Allow 或 Deny。不需要另开终端，Agent 也不能批准自己的请求。</p>
             </div>
           </div>
           <div class="step">
@@ -170,6 +170,11 @@ aegis-os doctor
 
 <span class="c"># 记忆：导入、配置客户端、启动本地服务</span>
 aegis-os memory setup claude --vault ~/Notes
+
+<span class="c"># 同意页（通常自动打开；手动打开用这个）</span>
+aegis-os memory ui
+
+<span class="c"># 终端 fallback</span>
 aegis-os memory pending
 aegis-os memory approve &lt;request-id&gt;
 aegis-os memory audit

@@ -102,7 +102,7 @@
           <div class="aegis-cell">
             <p class="label-caps">03 / CONSENT</p>
             <h3 class="heading-3">Consent</h3>
-            <p>UOMP memory consent: tag/key scope, time limits, revocation; high-sensitivity items require per-key approval; every allow/deny is audited.</p>
+            <p>UOMP memory consent: tag/key scope, time limits, revocation; high-sensitivity items require per-key approval; a local trusted consent UI opens automatically, so you never need a second terminal; every allow/deny is audited.</p>
           </div>
         </div>
       </div>
@@ -148,7 +148,7 @@ aegis-os doctor</pre>
             <span class="step-num">03</span>
             <div>
               <h3>Approve memory access explicitly</h3>
-              <p>Agents request notes through UOMP. Run <code>aegis-os memory pending</code> to inspect the scope, then <code>approve</code> or <code>deny</code>. An agent cannot approve its own request.</p>
+              <p>Agents request notes through UOMP. Aegis OS opens a local consent page automatically; select the tags / keys to grant, then Allow or Deny. No second terminal is required, and an agent cannot approve its own request.</p>
             </div>
           </div>
           <div class="step">
@@ -176,6 +176,11 @@ aegis-os doctor
 
 <span class="c"># Memory: import, client config, local server</span>
 aegis-os memory setup claude --vault ~/Notes
+
+<span class="c"># Consent UI (usually opens automatically; use this to open it manually)</span>
+aegis-os memory ui
+
+<span class="c"># CLI fallback</span>
 aegis-os memory pending
 aegis-os memory approve &lt;request-id&gt;
 aegis-os memory audit

@@ -166,11 +166,15 @@ aegis-os workspace diff</pre>
           <p>重启客户端，然后让 Agent 读取笔记：</p>
           <pre class="cmd"><span class="c"># 在 Claude / Cursor / OpenCode 里</span>
 列出 notes/projects 下的笔记</pre>
-          <p>第一次 tool call 会创建 consent request。回到终端：</p>
-          <pre class="cmd">aegis-os memory pending
+          <p>第一次 tool call 会创建 consent request。Aegis OS 会自动打开本地同意页（<code>127.0.0.1:9375</code>）；在页面上勾选要授予的 tag / key，然后点 <strong>Allow selected</strong>。不需要另开终端。</p>
+          <pre class="cmd"><span class="c"># 如果浏览器没有自动打开，手动启动同意页</span>
+aegis-os memory ui
+
+<span class="c"># 终端 fallback</span>
+aegis-os memory pending
 aegis-os memory approve &lt;request-id&gt;</pre>
-          <p><code>pending</code> 会显示 request id、Agent、task id（如果有）、session id 和过期时间。批准后当前调用继续；拒绝则返回错误。</p>
-          <p class="note">高敏数据不会因为 tag scope 被批量放开。Agent 必须按具体 key 请求，你在 <code>pending</code> 里看到后单独批准。</p>
+          <p>同意页会显示 request id、Agent、task id（如果有）、session id 和过期时间。批准后当前调用继续；拒绝则返回错误。</p>
+          <p class="note">高敏数据不会因为 tag scope 被批量放开。同意页会把具体 key 单独列出，你必须逐 key 勾选；Agent 不能批准自己的请求。</p>
           <h3>验证</h3>
           <pre class="cmd">aegis-os memory sessions
 aegis-os memory audit --limit 20</pre>
@@ -223,7 +227,7 @@ aegis-os a2a board</pre>
             <thead><tr><th>问题</th><th>处理</th></tr></thead>
             <tbody>
               <tr><td>客户端看不到 Aegis OS 工具</td><td>运行 <code>aegis-os doctor</code>；重启客户端；检查 MCP 配置。</td></tr>
-              <tr><td>Agent 一直等待审批</td><td>另开终端运行 <code>aegis-os memory pending</code>，再 <code>approve</code> / <code>deny</code>。</td></tr>
+              <tr><td>Agent 一直等待审批</td><td>先看是否已自动打开同意页；没有就运行 <code>aegis-os memory ui</code>。CLI fallback：<code>aegis-os memory pending</code>，再 <code>approve</code> / <code>deny</code>。</td></tr>
               <tr><td>端口 9374 被占用</td><td><code>aegis-os memory stop</code>；或 <code>aegis-os memory setup claude --listen 127.0.0.1:9380</code>。</td></tr>
               <tr><td><code>SESSION_NOT_ACTIVE</code></td><td>session 过期或被撤销；重新发起请求，或 <code>aegis-os memory connect claude --scope notes/projects</code>。</td></tr>
               <tr><td><code>ACCESS_DENIED</code></td><td>key/tag 不在批准范围；查看 <code>aegis-os memory audit</code> 和 consent request scope。</td></tr>
