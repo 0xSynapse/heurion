@@ -353,9 +353,23 @@ export interface HarnessRuleRow {
   trigger_pattern: string
   rule: string
   evidence_count: number
-  status: 'active' | 'archived'
+  evidence_refs?: string
+  hit_count?: number
+  success_count?: number
+  status: 'pending' | 'active' | 'archived'
   created_at: string
   updated_at: string
+}
+
+export interface HarnessRuleVersionRow {
+  id: string
+  rule_id: string
+  owner: string
+  trigger_pattern: string
+  rule: string
+  reason: string | null
+  signal_ids: string
+  created_at: string
 }
 
 /** 记忆整理建议（合并 / 改写 / 归档），用户采纳后才生效。新总结出的规律直接作为「待确认」记忆，不走这里。 */
@@ -473,6 +487,7 @@ export interface PersonLinkRow {
 }
 
 export type ClaimVerdict = 'supported' | 'unsupported' | 'unclear' | 'missing_citation' | 'exempted'
+export type EvidenceTier = 'abstract' | 'fulltext' | 'table' | 'none'
 
 export interface ClaimCheckRow {
   doc_id: string
@@ -480,6 +495,8 @@ export interface ClaimCheckRow {
   node_id: string
   sentence: string
   verdict: ClaimVerdict
+  evidence_tier?: EvidenceTier
+  evidence_quote?: string
   reason: string
   comment_id: string | null
   rev: number
@@ -630,7 +647,8 @@ export class Store {
       );
       CREATE TABLE IF NOT EXISTS claim_checks (
         doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE, claim_id TEXT NOT NULL, node_id TEXT NOT NULL,
-        sentence TEXT NOT NULL, verdict TEXT NOT NULL, reason TEXT NOT NULL, comment_id TEXT, rev INTEGER NOT NULL,
+        sentence TEXT NOT NULL, verdict TEXT NOT NULL, evidence_tier TEXT NOT NULL DEFAULT 'abstract',
+        evidence_quote TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL, comment_id TEXT, rev INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY (doc_id, claim_id)
       );
       CREATE TABLE IF NOT EXISTS turn_bases (
@@ -719,10 +737,18 @@ export class Store {
       CREATE TABLE IF NOT EXISTS harness_rules (
         id TEXT PRIMARY KEY, scope TEXT NOT NULL, owner TEXT NOT NULL, project_id TEXT,
         category TEXT NOT NULL, trigger_pattern TEXT NOT NULL, rule TEXT NOT NULL,
-        evidence_count INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active',
+        evidence_count INTEGER NOT NULL DEFAULT 1, evidence_refs TEXT NOT NULL DEFAULT '[]',
+        hit_count INTEGER NOT NULL DEFAULT 0, success_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS harness_rules_lookup ON harness_rules (owner, category, status);
+      CREATE TABLE IF NOT EXISTS harness_rule_versions (
+        id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, owner TEXT NOT NULL,
+        trigger_pattern TEXT NOT NULL, rule TEXT NOT NULL, reason TEXT,
+        signal_ids TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS harness_rule_versions_rule ON harness_rule_versions (rule_id, created_at DESC);
       CREATE TABLE IF NOT EXISTS user_settings (user_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (user_id, key));
       CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS tenants (
@@ -778,6 +804,14 @@ export class Store {
     // AI 代表用户操作：via = ai（AI 直接做的）/ ai-confirmed（AI 发起、用户确认后执行的），confirmed_by = 确认人
     if (!auditCols.includes('via')) this.db.exec('ALTER TABLE audit_events ADD COLUMN via TEXT')
     if (!auditCols.includes('confirmed_by')) this.db.exec('ALTER TABLE audit_events ADD COLUMN confirmed_by TEXT')
+    // 自演进记忆治理（CoEM / SafeVantage / MSCE / Skill-V）平滑补列
+    const ruleCols = (this.db.prepare('PRAGMA table_info(harness_rules)').all() as Array<{ name: string }>).map(c => c.name)
+    if (!ruleCols.includes('evidence_refs')) this.db.exec("ALTER TABLE harness_rules ADD COLUMN evidence_refs TEXT NOT NULL DEFAULT '[]'")
+    if (!ruleCols.includes('hit_count')) this.db.exec('ALTER TABLE harness_rules ADD COLUMN hit_count INTEGER NOT NULL DEFAULT 0')
+    if (!ruleCols.includes('success_count')) this.db.exec('ALTER TABLE harness_rules ADD COLUMN success_count INTEGER NOT NULL DEFAULT 0')
+    const claimCols = (this.db.prepare('PRAGMA table_info(claim_checks)').all() as Array<{ name: string }>).map(c => c.name)
+    if (!claimCols.includes('evidence_tier')) this.db.exec("ALTER TABLE claim_checks ADD COLUMN evidence_tier TEXT NOT NULL DEFAULT 'abstract'")
+    if (!claimCols.includes('evidence_quote')) this.db.exec("ALTER TABLE claim_checks ADD COLUMN evidence_quote TEXT NOT NULL DEFAULT ''")
     // AI 发起、等用户确认的高风险操作（docs/design/AI_PERMISSIONS.md）
     this.db.exec(`CREATE TABLE IF NOT EXISTS pending_actions (
       id TEXT PRIMARY KEY, user_id TEXT NOT NULL, tool TEXT NOT NULL, action TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL,
@@ -1888,9 +1922,13 @@ export class Store {
   addHarnessRule(r: Omit<HarnessRuleRow, 'id' | 'created_at' | 'updated_at'>): HarnessRuleRow {
     const id = `hr_${randomUUID().replace(/-/g, '').slice(0, 12)}`
     const t = now()
-    this.db.prepare('INSERT INTO harness_rules (id, scope, owner, project_id, category, trigger_pattern, rule, evidence_count, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, r.scope, r.owner, r.project_id ?? null, r.category, r.trigger_pattern, r.rule, r.evidence_count ?? 1, r.status ?? 'active', t, t)
-    return { id, ...r, created_at: t, updated_at: t }
+    const evidenceRefs = r.evidence_refs ?? '[]'
+    const hitCount = r.hit_count ?? 0
+    const successCount = r.success_count ?? 0
+    const status = r.status ?? 'active'
+    this.db.prepare('INSERT INTO harness_rules (id, scope, owner, project_id, category, trigger_pattern, rule, evidence_count, evidence_refs, hit_count, success_count, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, r.scope, r.owner, r.project_id ?? null, r.category, r.trigger_pattern, r.rule, r.evidence_count ?? 1, evidenceRefs, hitCount, successCount, status, t, t)
+    return { id, ...r, evidence_refs: evidenceRefs, hit_count: hitCount, success_count: successCount, status, created_at: t, updated_at: t }
   }
 
   listHarnessRules(owner: string, statuses: HarnessRuleRow['status'][] = ['active']): HarnessRuleRow[] {
@@ -1909,13 +1947,46 @@ export class Store {
 
   updateHarnessRule(
     id: string,
-    patch: Partial<Pick<HarnessRuleRow, 'trigger_pattern' | 'rule' | 'category' | 'evidence_count' | 'status'>>,
+    patch: Partial<Pick<HarnessRuleRow, 'trigger_pattern' | 'rule' | 'category' | 'evidence_count' | 'evidence_refs' | 'hit_count' | 'success_count' | 'status'>>,
   ): void {
-    const ALLOWED = ['trigger_pattern', 'rule', 'category', 'evidence_count', 'status'] as const
+    const ALLOWED = ['trigger_pattern', 'rule', 'category', 'evidence_count', 'evidence_refs', 'hit_count', 'success_count', 'status'] as const
     const keys = (Object.keys(patch) as Array<keyof typeof patch>).filter(k => (ALLOWED as readonly string[]).includes(k) && patch[k] !== undefined)
     if (keys.length === 0) return
     this.db.prepare(`UPDATE harness_rules SET ${keys.map(k => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = ?`)
       .run(...keys.map(k => patch[k] as never), now(), id)
+  }
+
+  addHarnessRuleVersion(v: Omit<HarnessRuleVersionRow, 'id' | 'created_at'>): HarnessRuleVersionRow {
+    const id = `hrv_${randomUUID().replace(/-/g, '').slice(0, 12)}`
+    const t = now()
+    this.db.prepare('INSERT INTO harness_rule_versions (id, rule_id, owner, trigger_pattern, rule, reason, signal_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, v.rule_id, v.owner, v.trigger_pattern, v.rule, v.reason ?? null, v.signal_ids ?? '[]', t)
+    return { id, ...v, created_at: t }
+  }
+
+  listHarnessRuleVersions(ruleId: string): HarnessRuleVersionRow[] {
+    return this.db.prepare('SELECT * FROM harness_rule_versions WHERE rule_id = ? ORDER BY created_at DESC')
+      .all(ruleId) as unknown as HarnessRuleVersionRow[]
+  }
+
+  archiveStalePendingRules(owner: string, days = 30): number {
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString()
+    return Number(
+      this.db.prepare("UPDATE harness_rules SET status = 'archived', updated_at = ? WHERE owner = ? AND status = 'pending' AND updated_at < ?")
+        .run(now(), owner, cutoff).changes,
+    )
+  }
+
+  /** MSCE 回滚惩罚：当人类撤销某个 AI 回合（revert_turn）时，扣减该回合所激活规则的 success_count。 */
+  deductHarnessRuleSuccess(ruleIds: string[]): void {
+    if (ruleIds.length === 0) return
+    const t = now()
+    const st = this.db.prepare(
+      "UPDATE harness_rules SET success_count = MAX(0, COALESCE(success_count, 0) - 1), updated_at = ? WHERE id = ? AND owner != 'system'",
+    )
+    for (const id of ruleIds) {
+      st.run(t, id)
+    }
   }
 
   deleteHarnessRule(owner: string, id: string): boolean {
@@ -2138,8 +2209,20 @@ export class Store {
   }
 
   putClaimCheck(row: Omit<ClaimCheckRow, 'created_at'>): void {
-    this.db.prepare('INSERT OR REPLACE INTO claim_checks (doc_id, claim_id, node_id, sentence, verdict, reason, comment_id, rev, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(row.doc_id, row.claim_id, row.node_id, row.sentence, row.verdict, row.reason, row.comment_id, row.rev, now())
+    this.db.prepare('INSERT OR REPLACE INTO claim_checks (doc_id, claim_id, node_id, sentence, verdict, evidence_tier, evidence_quote, reason, comment_id, rev, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(
+        row.doc_id,
+        row.claim_id,
+        row.node_id,
+        row.sentence,
+        row.verdict,
+        row.evidence_tier ?? 'abstract',
+        row.evidence_quote ?? '',
+        row.reason,
+        row.comment_id,
+        row.rev,
+        now(),
+      )
   }
 
   listClaimChecks(docId: string): ClaimCheckRow[] {

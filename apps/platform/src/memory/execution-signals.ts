@@ -1,6 +1,7 @@
 import type { CommitDetail, Documents } from '../model/runtime.ts'
 import type { Store } from '../store/db.ts'
 import type { SkillDomain } from './domain-adapters.ts'
+import { BASELINE_TRIGGER_CODES } from './procedural.ts'
 
 export interface GuardRejectEvent {
   owner: string
@@ -73,6 +74,20 @@ export class ExecutionSignals {
             ...(act ? { active_rule_ids: act.ruleIds, user_message: act.message, domain: act.domain } : {}),
           }),
         })
+        if (act?.ruleIds?.length) {
+          const uniqueRuleIds = [...new Set(act.ruleIds)]
+          this.store.deductHarnessRuleSuccess(uniqueRuleIds)
+          for (const rid of uniqueRuleIds) {
+            const rule = this.store.getHarnessRule(rid)
+            if (!rule || rule.owner === 'system' || rule.status !== 'active') continue
+            const hit = rule.hit_count ?? 0
+            const succ = rule.success_count ?? 0
+            const baseCode = rule.trigger_pattern.split('|')[0]?.trim() ?? ''
+            if (hit >= 5 && succ / hit < 0.2 && !BASELINE_TRIGGER_CODES.has(baseCode)) {
+              this.store.updateHarnessRule(rule.id, { status: 'archived' })
+            }
+          }
+        }
       }
       return
     }

@@ -496,6 +496,7 @@ export class TurnService {
       const suggestNote = opts.suggest ? '本轮的修改会作为待用户采纳的修订提交。' : ''
       const memoryBlock = memoryOn ? await this.memory!.forPrompt(userId, docId, message) : ''
       const proceduralBlock = this.procedural ? await this.procedural.forPrompt(userId, docId, message) : ''
+      this.procedural?.bindTurnActivation?.(userId, docId, turnId)
       const memoryNote = memoryOn ? '' : opts.memory === false ? '（用户本轮关闭了记忆：不要使用 memory_* 工具，也不要沿用之前回合提到的记忆。）' : ''
       // 记忆紧挨着本轮消息（放在最前面时模型容易照抄消息里的写法而忽略偏好）
       // 知家红线只看文档归属，整个回合算一次；知家的对话另加家人向的回答口吻
@@ -561,6 +562,9 @@ export class TurnService {
         }
         try { store.endTurn(turn.id, status, failure) } catch {}
         if (this.procedural) {
+          if (touched.size > 0 || status === 'done') {
+            try { this.procedural.recordTurnOutcome?.(userId, turn.id) } catch {}
+          }
           try { this.procedural.evolveFromSignals(userId) } catch {}
         }
         // 取消不算故障；出错、超时交给运维告警（模型认证 / 余额问题立即发，其余短时间内多次才发）

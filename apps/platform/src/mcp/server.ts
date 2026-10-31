@@ -46,6 +46,7 @@ import { PatientClaimService } from '../tenancy/claims.ts'
 import { scanPhi, redactPhi } from '../ops/phi-scan.ts'
 import { TenantError, TenantService } from '../auth/tenants.ts'
 import type { MemoryEvolution } from '../memory/evolve.ts'
+import type { ExecutionSignals } from '../memory/execution-signals.ts'
 import { MemoryError, type MemoryService } from '../memory/service.ts'
 import { DiagramError, renderSvg } from '../render/diagram.ts'
 import type { TurnRegistry, TurnNotice } from './turns.ts'
@@ -80,6 +81,8 @@ export interface McpDeps {
   memory?: MemoryService
   /** 记忆演进（memory_review）。 */
   evolution?: MemoryEvolution
+  /** 执行信号采集器（记录跨领域 MCP 工具失败与异常，供程序性自演进消费）。 */
+  executionSignals?: ExecutionSignals
   /** 数据集（实验室数据分析）。 */
   datasets?: DatasetService
   /** 患者（按机构分库）。 */
@@ -905,6 +908,8 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
         verdict: z.enum(['supported', 'unsupported', 'unclear', 'missing_citation']),
         reason: z.string().min(1).max(1000),
         no_evidence: z.boolean().optional().describe('unclear 时：所引文献没有摘要，或摘要根本没涉及该句的内容'),
+        evidence_tier: z.enum(['abstract', 'fulltext', 'table', 'none']).optional().describe('证据覆盖层级：table=全文表格核实，fulltext=全文正文核实，abstract=仅摘要核实，none=无可用原文'),
+        evidence_quote: z.string().max(1000).optional().describe('所引文献摘要或开放全文/表格中与该句直接对应的具体原文句子或表格行摘录'),
       })).min(1).max(50),
     },
   }, async ({ doc_id, results }) => {
@@ -2175,7 +2180,73 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
   })
 }
 
-export type CanvasMcpDeps = Pick<McpDeps, 'docs' | 'ops' | 'turns' | 'renderer' | 'secret' | 'workspaceDir'> & Partial<Pick<McpDeps, 'pubmed' | 'crossref' | 'claims' | 'openalex' | 'fulltext' | 'images' | 'access' | 'invoke' | 'isLiveSession'>>
+export type CanvasMcpDeps = Pick<McpDeps, 'docs' | 'ops' | 'turns' | 'renderer' | 'secret' | 'workspaceDir'> & Partial<Pick<McpDeps, 'pubmed' | 'crossref' | 'claims' | 'openalex' | 'fulltext' | 'images' | 'access' | 'invoke' | 'isLiveSession' | 'executionSignals'>>
+
+function wrapToolRegistration(
+  server: McpServer,
+  ctx: Ctx,
+  claims: TokenClaims,
+  aegisToolScope?: AgentGrantRow['tool_scope'],
+): void {
+  const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown
+  ;(server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) => {
+    const n = String(name)
+    if (claims.t && !toolInScope(n, claims.t)) return undefined
+    if (!aegisScopeAllows(n, aegisToolScope)) return undefined
+    if (typeof cb !== 'function') return register(name, config, cb)
+    const wrapped = async (args: unknown, extra: unknown) => {
+      const docId = (args && typeof args === 'object' && 'doc_id' in args && typeof (args as { doc_id?: unknown }).doc_id === 'string')
+        ? (args as { doc_id: string }).doc_id
+        : (ctx.activeTurn()?.docId ?? null)
+      try {
+        const res = await (cb as (a: unknown, e: unknown) => Promise<unknown>)(args, extra)
+        if (
+          ctx.deps.executionSignals &&
+          res &&
+          typeof res === 'object' &&
+          (res as { isError?: boolean }).isError === true &&
+          n !== 'doc_edit' &&
+          n !== 'deck_edit' &&
+          n !== 'doc_validate'
+        ) {
+          let code = `${n}_error`
+          let message = 'tool returned error'
+          let hint: string | undefined
+          try {
+            const textItem = (res as { content?: Array<{ text?: string }> }).content?.[0]?.text
+            if (textItem) {
+              const parsed = JSON.parse(textItem) as { code?: string; message?: string; hint?: string }
+              if (parsed.code) code = parsed.code
+              if (parsed.message) message = parsed.message
+              if (parsed.hint) hint = parsed.hint
+            }
+          } catch {}
+          ctx.deps.executionSignals.recordToolFailure({
+            owner: claims.u,
+            docId,
+            turnId: ctx.turnId,
+            code,
+            message,
+            hint,
+            failedArgs: { tool: n, args },
+          })
+        }
+        return res
+      } catch (err) {
+        ctx.deps.executionSignals?.recordToolFailure({
+          owner: claims.u,
+          docId,
+          turnId: ctx.turnId,
+          code: (err as { code?: string })?.code ?? `${n}_exception`,
+          message: (err as Error)?.message ?? String(err),
+          failedArgs: { tool: n, args },
+        })
+        throw err
+      }
+    }
+    return register(name, config, wrapped)
+  }
+}
 
 /** 独立 AI 原生文档与画布 MCP 服务（OmniCanvas / AgentDoc 核心引擎） */
 export function buildCanvasMcpServer(deps: CanvasMcpDeps, claims: TokenClaims): McpServer {
@@ -2187,6 +2258,7 @@ export function buildCanvasMcpServer(deps: CanvasMcpDeps, claims: TokenClaims): 
   if (deps.images && !deps.images.access) deps.images.access = deps.access
   const ctx = new Ctx(deps as McpDeps, claims)
   const server = new McpServer({ name: 'omnicanvas', version: '0.1.0' }, { instructions: INSTRUCTIONS })
+  wrapToolRegistration(server, ctx, claims)
   registerCanvasTools(server, ctx)
   return server
 }
@@ -2217,16 +2289,8 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
   if (deps.subagents && !deps.subagents.access) deps.subagents.access = deps.access
   const ctx = new Ctx(deps, claims, aegisOpts?.agentId, aegisOpts?.leaseAuthorizer)
   const server = new McpServer({ name: 'heurion', version: '2.0.0' }, { instructions: INSTRUCTIONS })
-  // 工具范围（令牌里的 t 或 AAP-1.0 tool_scope）：范围外的工具不注册，模型看不到它的说明
-  if (claims.t || (aegisOpts?.aegisToolScope && aegisOpts.aegisToolScope !== 'all')) {
-    const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown
-    ;(server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, ...rest: unknown[]) => {
-      const n = String(name)
-      if (claims.t && !toolInScope(n, claims.t)) return undefined
-      if (!aegisScopeAllows(n, aegisOpts?.aegisToolScope)) return undefined
-      return register(name, ...rest)
-    }
-  }
+  // 工具范围（令牌里的 t 或 AAP-1.0 tool_scope）与工具错误信号钩子
+  wrapToolRegistration(server, ctx, claims, aegisOpts?.aegisToolScope)
 
   registerCanvasTools(server, ctx)
   registerHealthcareTools(server, ctx)

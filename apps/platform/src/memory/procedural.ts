@@ -1,7 +1,7 @@
 import type { Complete } from '../harness/complete.ts'
 import type { Documents } from '../model/runtime.ts'
 import { pendingGroups } from '../ops/suggest.ts'
-import type { HarnessRuleRow, Store } from '../store/db.ts'
+import type { HarnessRuleRow, HarnessRuleVersionRow, Store } from '../store/db.ts'
 import {
   inferSkillDomain,
   type DocCueState,
@@ -71,11 +71,50 @@ const BASELINE_RULES: Array<Omit<HarnessRuleRow, 'id' | 'created_at' | 'updated_
     evidence_count: 10,
     status: 'active',
   },
+  {
+    scope: 'global',
+    owner: 'system',
+    project_id: null,
+    category: 'guard',
+    trigger_pattern: 'safevantage_low_coverage',
+    rule: '引用仅含摘要（缺少开放全文或数据表）的文献时：涉及亚组效应或精确统计量（HR/CI/P 值）落笔前优先调用 oa_fulltext 拉取全文；若无开放全文且摘要未载明该细粒度数值，正文仅引述摘要明确披露的总体结论，严禁外推编造数值并在回复中说明。',
+    evidence_count: 8,
+    status: 'active',
+  },
 ]
 
 /** 安慰剂模式（placebo）附加的与任务无关的说明文字（§5.3：长度与习得规则相当，用来区分“规则内容的作用”与“多了一段提示”）。 */
 export const PLACEBO_FILLER =
   '- [平台说明] Heurion 临床研究工作站采用双栏协同架构，支持多中心队列管理、生物统计图表向量化渲染与学术幻灯片母版自动排版，所有文档操作均通过结构化协议记录版本历史。'
+
+/** SafeVantage (P1) 高风险文档状态下的盲区主动侦察指令。 */
+export const BLINDSPOT_VANTAGING_HINT =
+  '- [盲区侦察提示] 当前文档存在未决修订/批注且缺少专项历史经验，请在直接修改正文前先调用 doc_read 或 comments_list 探查上下文。'
+
+export const BASELINE_TRIGGER_CODES = new Set(BASELINE_RULES.map(r => r.trigger_pattern.split('|')[0]!))
+
+const CRITICAL_TOOL_TOKENS_RE =
+  /\b(doc_read|doc_edit|replace_text|replace_block|insert_citation|comments_list|oa_fulltext|deck_edit|fisher_exact|ack_comments|move|merge)\b/g
+
+/**
+ * Skill-V 规则重写非退化校验（Non-Regression Guard）：
+ * 防止 LLM 反向归因精炼时丢失原规则中的关键工具锚点、产出于过短空泛表述或混入敏感信息。
+ */
+export function isNonRegressiveRewrite(oldRule: string, newRule: string): boolean {
+  const trimmed = newRule.trim()
+  if (trimmed.length < 15) return false
+  if (sensitiveReason(trimmed)) return false
+  const oldTokens = [...new Set(oldRule.match(CRITICAL_TOOL_TOKENS_RE) ?? [])]
+  if (oldTokens.length > 0) {
+    const newTokens = new Set(trimmed.match(CRITICAL_TOOL_TOKENS_RE) ?? [])
+    const retainedAny = oldTokens.some(t => newTokens.has(t))
+    const hasRecoveryArrow = /→|成功修复轨迹|修复操作序列/.test(trimmed)
+    if (!retainedAny && !hasRecoveryArrow) {
+      return false
+    }
+  }
+  return true
+}
 
 /**
  * 注入模式：frozen=只注入已有规则、不沉淀新规则；placebo=同 frozen 另附与任务无关的说明文字；
@@ -89,6 +128,7 @@ const NO_STATE: DocCueState = {
   openComments: false,
   pendingSuggestions: false,
   hasTable: false,
+  lowCoverageCitations: false,
 }
 
 const REPLACE_CUE = /替换|改成|改为|换成|写成|统一|格式|P\s*值|措辞|replace/i
@@ -97,6 +137,8 @@ const STRUCTURE_CUE = /移动|移到|挪到|调整顺序|合并|合为|小节|�
 const REWRITE_CUE = /重写|改写|润色|精简|扩写|衔接|过渡|rewrite|revise|polish/i
 const BIOSTATS_CUE = /统计|队列|基线表|table\s*1|生存|kaplan|cox|倾向性|卡方|fisher|非参数|偏态|ecrf|survival|cohort/i
 const DECK_CUE = /幻灯片|演示文稿|ppt|pptx|slide|deck|版式|双栏|标题页|溢出|图表页|layout/i
+const SAFEVANTAGE_MSG_CUE =
+  /引用|文献|摘要|全文|亚组|讨论|结果|对比|数值|统计|hr|or|rr|ci|p\s*值|subgroup|citation|reference|abstract|fulltext|oa_fulltext|discuss/i
 
 /**
  * 错误码 → 通用情境线索：用户消息里出现的任务特征词（msg），或环境状态谓词（state）。
@@ -116,6 +158,10 @@ const CUES: Record<string, { msg?: RegExp; state?: (s: DocCueState, m: string) =
   existing_citation: { msg: /重写|改写|精简|润色|引用|文献/i },
   citation_unsupported: { msg: /引用|参考文献|文献|支持|cite|citation|reference/i },
   citation_detached: { msg: /引用|参考文献|文献|支持|cite|citation|reference/i },
+  safevantage_low_coverage: {
+    msg: /仅摘要|缺少全文|无全文|oa_fulltext|低覆盖|证据覆盖/i,
+    state: s => Boolean(s.lowCoverageCitations),
+  },
 }
 
 /** 效用权重：证据数、消息线索、环境状态线索、领域匹配与跨领域冲突惩罚。 */
@@ -146,6 +192,8 @@ interface AggregatedSignalGroup {
   count: number
   kind: string
   ids: string[]
+  signalIds: string[]
+  turnIds: Set<string>
   message: string
   hints: string[]
   failedOps: string[]
@@ -155,6 +203,61 @@ interface AggregatedSignalGroup {
   userMessages: string[]
   domains: Set<SkillDomain>
   predicates: Set<string>
+}
+
+export function parseEvidenceRefs(raw?: string): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      return parsed.filter((x): x is string => typeof x === 'string' && x.length > 0)
+    }
+  } catch {
+    /* ignore malformed JSON */
+  }
+  return []
+}
+
+export function mergeEvidenceRefs(existingRaw: string | undefined, addIds: string[]): string[] {
+  const existing = parseEvidenceRefs(existingRaw)
+  return [...new Set([...existing, ...addIds.filter(Boolean)])]
+}
+
+/**
+ * CoEM 证据门控晋升判定（pending -> active）：
+ * - 必须通过隐私安全守卫（!sensitiveReason(ruleText)）；
+ * - 累计证据数 >= 2；
+ * - 单回合死循环保护（Single-Turn Retry Loop Protection）：若所有信号仅来自同一非空 turn_id（turnIds.size < 2 且无历史跨回合证据）
+ *   且没有任何已验证的同轮恢复轨迹（recoveryOps 为空且现有规则不含恢复路径），则保持 pending 观察态。
+ */
+export function shouldPromoteToActive(
+  group: Pick<AggregatedSignalGroup, 'count' | 'signalIds' | 'turnIds' | 'recoveryOps'>,
+  ruleText: string,
+  existingRule?: Pick<HarnessRuleRow, 'evidence_count' | 'evidence_refs' | 'rule'>,
+  priorTurnIds?: Iterable<string>,
+): boolean {
+  if (sensitiveReason(ruleText)) return false
+  const priorRefs = parseEvidenceRefs(existingRule?.evidence_refs)
+  const mergedRefs = mergeEvidenceRefs(existingRule?.evidence_refs, group.signalIds)
+  const totalEvidence = Math.max((existingRule?.evidence_count ?? 0) + group.count, mergedRefs.length)
+  if (totalEvidence < 2) return false
+
+  let hasMultipleTurns: boolean
+  if (priorTurnIds !== undefined) {
+    const allTurnIds = new Set<string>([...priorTurnIds, ...group.turnIds])
+    hasMultipleTurns = allTurnIds.size >= 2
+  } else {
+    const hasPriorTurnEvidence = priorRefs.some(id => !group.signalIds.includes(id))
+    hasMultipleTurns = group.turnIds.size >= 2 || hasPriorTurnEvidence
+  }
+  const hasVerifiedRecovery =
+    group.recoveryOps.length > 0 ||
+    (existingRule ? /成功修复轨迹：|修复操作序列：|→\s*正确恢复路径:/.test(existingRule.rule) : false)
+
+  if (!hasMultipleTurns && !hasVerifiedRecovery) {
+    return false
+  }
+  return true
 }
 
 /**
@@ -247,6 +350,8 @@ export function extractRoutingKeywords(userMessage: string, maxKeywords = 3): st
 export class ProceduralHarnessService {
   /** 记录每个用户（及文档）最近一轮由 forPrompt 激活注入的规则集合，用于 Backward Credit Assignment。 */
   private readonly lastInjected = new Map<string, ActivationSnapshot>()
+  /** 记录每个 turnId 激活注入的规则 ID 列表（有界缓存，供 MSCE 回合归因与回滚扣减）。 */
+  private readonly turnActivations = new Map<string, string[]>()
 
   constructor(
     private readonly store: Store,
@@ -265,11 +370,131 @@ export class ProceduralHarnessService {
     return this.lastInjected.get(owner)
   }
 
-  /** 初始化系统级基准规则。 */
+  /** 将最近一次 Forward 路由激活的规则快照绑定到指定 turnId。 */
+  bindTurnActivation(owner: string, docId: string | undefined, turnId: string): string[] {
+    const snap = this.lastActivation(owner, docId)
+    if (!snap) return []
+    if (this.turnActivations.size > 500) {
+      const oldest = this.turnActivations.keys().next().value
+      if (oldest !== undefined) this.turnActivations.delete(oldest)
+    }
+    this.turnActivations.set(turnId, snap.ruleIds)
+    return snap.ruleIds
+  }
+
+  /** 查询指定 turnId 激活的规则 ID 列表。 */
+  rulesForTurn(turnId: string): string[] {
+    return this.turnActivations.get(turnId) ?? []
+  }
+
+  /**
+   * MSCE 在线回合归因（Hit / Success 计数与低效规则自动归档）：
+   * - 对本轮激活的用户级规则累加 hit_count；
+   * - 若本轮未触发该规则主守卫码（baseCode）对应的拦截或失败信号，则累加 success_count；
+   * - 当 hit_count >= 5 且 success_count / hit_count < 0.2（非系统基线影子副本）时，自动归档（status = 'archived'）。
+   */
+  recordTurnOutcome(
+    owner: string,
+    turnId: string | null,
+    activeRuleIds?: string[],
+    failedCodes?: Iterable<string>,
+  ): { updated: number; archived: string[] } {
+    const fromTurn = turnId ? this.turnActivations.get(turnId) : undefined
+    const ruleIds =
+      activeRuleIds ??
+      (fromTurn && fromTurn.length > 0 ? fromTurn : undefined) ??
+      this.lastActivation(owner)?.ruleIds ??
+      []
+    let failedSet: Set<string>
+    if (failedCodes !== undefined) {
+      failedSet = new Set(failedCodes)
+    } else if (turnId) {
+      const rows = this.store.db
+        .prepare('SELECT code FROM execution_signals WHERE owner = ? AND turn_id = ?')
+        .all(owner, turnId) as Array<{ code: string }>
+      failedSet = new Set(rows.map(r => r.code))
+    } else {
+      failedSet = new Set()
+    }
+
+    let updated = 0
+    const archived: string[] = []
+    for (const rid of [...new Set(ruleIds)]) {
+      const rule = this.store.getHarnessRule(rid)
+      if (!rule || rule.owner === 'system' || rule.status !== 'active') continue
+      const baseCode = rule.trigger_pattern.split('|')[0]?.trim() ?? ''
+      const nextHit = (rule.hit_count ?? 0) + 1
+      const failed = failedSet.has(baseCode)
+      const nextSuccess = (rule.success_count ?? 0) + (failed ? 0 : 1)
+      const shouldArchive =
+        nextHit >= 5 &&
+        nextSuccess / nextHit < 0.2 &&
+        !BASELINE_TRIGGER_CODES.has(baseCode)
+      this.store.updateHarnessRule(rule.id, {
+        hit_count: nextHit,
+        success_count: nextSuccess,
+        ...(shouldArchive ? { status: 'archived' } : {}),
+      })
+      updated++
+      if (shouldArchive) archived.push(rule.id)
+    }
+    return { updated, archived }
+  }
+
+  /**
+   * MSCE 回滚惩罚（Revert Deduction）：
+   * 当用户回滚某个 AI 回合（revert_turn）时，扣减该回合所激活规则的 success_count，并检查是否触发低效自动归档。
+   */
+  handleTurnReverted(owner: string, turnId: string | null, fallbackRuleIds?: string[]): string[] {
+    const turnRules = turnId ? this.rulesForTurn(turnId) : []
+    const ruleIds = [
+      ...new Set(
+        turnRules.length > 0
+          ? turnRules
+          : (fallbackRuleIds ?? this.lastActivation(owner)?.ruleIds ?? []),
+      ),
+    ]
+    if (ruleIds.length === 0) return []
+    this.store.deductHarnessRuleSuccess(ruleIds)
+    const archived: string[] = []
+    for (const rid of ruleIds) {
+      const rule = this.store.getHarnessRule(rid)
+      if (!rule || rule.owner === 'system' || rule.status !== 'active') continue
+      const hit = rule.hit_count ?? 0
+      const succ = rule.success_count ?? 0
+      const baseCode = rule.trigger_pattern.split('|')[0]?.trim() ?? ''
+      if (hit >= 5 && succ / hit < 0.2 && !BASELINE_TRIGGER_CODES.has(baseCode)) {
+        this.store.updateHarnessRule(rule.id, { status: 'archived' })
+        archived.push(rule.id)
+      }
+    }
+    return archived
+  }
+
+  /**
+   * Skill-V 版本回滚：将指定用户规则恢复到某个历史版本快照（默认恢复到最近一次重写前快照）。
+   */
+  rollbackRuleVersion(owner: string, ruleId: string, versionId?: string): HarnessRuleRow | undefined {
+    const rule = this.store.getHarnessRule(ruleId)
+    if (!rule || rule.owner !== owner || rule.owner === 'system') return undefined
+    const versions: HarnessRuleVersionRow[] = this.store.listHarnessRuleVersions(ruleId)
+    if (versions.length === 0) return undefined
+    const target = versionId ? versions.find(v => v.id === versionId) : versions[0]
+    if (!target) return undefined
+    this.store.updateHarnessRule(ruleId, {
+      trigger_pattern: target.trigger_pattern,
+      rule: target.rule,
+      status: 'active',
+    })
+    return this.store.getHarnessRule(ruleId)
+  }
+
+  /** 初始化系统级基准规则（幂等补齐新增的系统规则）。 */
   private ensureBaselineRules(): void {
     const existing = this.store.listHarnessRules('system', ['active'])
-    if (existing.length === 0) {
-      for (const r of BASELINE_RULES) {
+    const existingTriggers = new Set(existing.map(r => r.trigger_pattern))
+    for (const r of BASELINE_RULES) {
+      if (!existingTriggers.has(r.trigger_pattern)) {
         this.store.addHarnessRule(r)
       }
     }
@@ -283,6 +508,16 @@ export class ProceduralHarnessService {
    */
   evolveFromSignals(owner: string): HarnessRuleRow[] {
     if (this.opts.mode === 'frozen' || this.opts.mode === 'placebo') return []
+    this.store.archiveStalePendingRules(owner, 30)
+    // MSCE 低效规则巡检自动归档：hit_count >= 5 且成功率 < 20% 的非基线用户规则自动归档
+    for (const r of this.store.listHarnessRules(owner, ['active']).filter(x => x.owner === owner)) {
+      const hit = r.hit_count ?? 0
+      const succ = r.success_count ?? 0
+      const baseCode = r.trigger_pattern.split('|')[0]?.trim() ?? ''
+      if (hit >= 5 && succ / hit < 0.2 && !BASELINE_TRIGGER_CODES.has(baseCode)) {
+        this.store.updateHarnessRule(r.id, { status: 'archived' })
+      }
+    }
     const signals = this.store.openExecutionSignals(owner, 50)
     if (signals.length === 0) return []
 
@@ -294,6 +529,8 @@ export class ProceduralHarnessService {
         count: 0,
         kind: s.kind,
         ids: [],
+        signalIds: [],
+        turnIds: new Set<string>(),
         message: '',
         hints: [],
         failedOps: [],
@@ -306,6 +543,12 @@ export class ProceduralHarnessService {
       }
       c.count++
       c.ids.push(s.id)
+      c.signalIds.push(s.id)
+      const turnKey =
+        typeof s.turn_id === 'string' && s.turn_id.trim().length > 0
+          ? `turn:${s.turn_id.trim()}`
+          : `anon:${s.id}`
+      c.turnIds.add(turnKey)
       if (s.detail) {
         try {
           const parsed = JSON.parse(s.detail) as {
@@ -354,21 +597,46 @@ export class ProceduralHarnessService {
       counts.set(key, c)
     }
 
-    const rules = this.store.listHarnessRules(owner, ['active'])
+    const existing = this.store.listHarnessRules(owner, ['active', 'pending'])
     const created: HarnessRuleRow[] = []
     const consumed: string[] = []
 
     for (const group of counts.values()) {
       const { code, count, kind, ids } = group
-      if (count < 2) continue // 至少发生 2 次的模式才提炼或触发反向归因更新
+      const own = existing.find(r => r.owner === owner && r.trigger_pattern.split('|')[0] === code)
+        ?? existing.find(r => r.owner === owner && r.trigger_pattern.includes(code))
+      const baseline = existing.find(r => r.owner === 'system' && r.trigger_pattern.includes(code))
+
+      const totalEvidence = (own?.evidence_count ?? 0) + count
+      if (totalEvidence < 2) continue // 累计至少 2 次的模式才提炼或触发反向归因更新
       consumed.push(...ids)
 
-      const own = rules.find(r => r.owner === owner && r.trigger_pattern.split('|')[0] === code)
-        ?? rules.find(r => r.owner === owner && r.trigger_pattern.includes(code))
-      const baseline = rules.find(r => r.owner === 'system' && r.trigger_pattern.includes(code))
-
       if (own) {
-        this.applyBackwardCreditAssignment(own, group, owner, true)
+        const priorRefs = parseEvidenceRefs(own.evidence_refs)
+        const priorTurnIds = this.resolveSignalTurnIds(priorRefs)
+        const mergedRefs = mergeEvidenceRefs(own.evidence_refs, group.signalIds)
+        const newCount = Math.max(own.evidence_count + count, mergedRefs.length)
+        const wasPending = own.status === 'pending'
+        const shouldPromote = wasPending && shouldPromoteToActive(group, own.rule, own, priorTurnIds)
+        const nextStatus: HarnessRuleRow['status'] = shouldPromote ? 'active' : own.status
+
+        this.store.updateHarnessRule(own.id, {
+          evidence_count: newCount,
+          evidence_refs: JSON.stringify(mergedRefs),
+          ...(shouldPromote ? { status: 'active' } : {}),
+        })
+        const refreshedOwn = this.store.getHarnessRule(own.id) ?? {
+          ...own,
+          evidence_count: newCount,
+          evidence_refs: JSON.stringify(mergedRefs),
+          status: nextStatus,
+        }
+        if (nextStatus === 'active') {
+          this.applyBackwardCreditAssignment(refreshedOwn, group, owner, false)
+        }
+        if (wasPending && shouldPromote) {
+          created.push(this.store.getHarnessRule(own.id) ?? refreshedOwn)
+        }
       } else if (baseline) {
         // 系统基线规则所有用户共用，不能因一个用户的信号改权重：给该用户建一份自己的副本承接证据与后续反向归因
         const baseCopy = this.store.addHarnessRule({
@@ -379,6 +647,7 @@ export class ProceduralHarnessService {
           trigger_pattern: baseline.trigger_pattern,
           rule: baseline.rule,
           evidence_count: baseline.evidence_count + count,
+          evidence_refs: JSON.stringify(group.signalIds),
           status: 'active',
         })
         this.applyBackwardCreditAssignment(baseCopy, group, owner, false)
@@ -403,6 +672,9 @@ export class ProceduralHarnessService {
         const learnedKeywords = group.userMessages.flatMap(m => extractRoutingKeywords(m, 2))
         const predTags = [...group.predicates].map(p => `[pred:${p}]`)
         const triggerParts = [code, ...new Set([...learnedKeywords, ...predTags])]
+        const targetStatus: HarnessRuleRow['status'] = shouldPromoteToActive(group, safeRuleText)
+          ? 'active'
+          : 'pending'
         const newRow = this.store.addHarnessRule({
           scope: 'user',
           owner,
@@ -411,14 +683,41 @@ export class ProceduralHarnessService {
           trigger_pattern: triggerParts.join('|'),
           rule: safeRuleText,
           evidence_count: count,
-          status: 'active',
+          evidence_refs: JSON.stringify(group.signalIds),
+          status: targetStatus,
         })
-        created.push(newRow)
+        if (targetStatus === 'active') {
+          created.push(newRow)
+        }
       }
     }
 
     if (consumed.length > 0) this.store.consumeExecutionSignals(consumed)
     return created
+  }
+
+  private resolveSignalTurnIds(signalIds: string[]): Set<string> {
+    const turns = new Set<string>()
+    if (signalIds.length === 0) return turns
+    const placeholders = signalIds.map(() => '?').join(',')
+    const rows = this.store.db
+      .prepare(`SELECT id, turn_id FROM execution_signals WHERE id IN (${placeholders})`)
+      .all(...signalIds) as Array<{ id: string; turn_id: string | null }>
+    const foundIds = new Set<string>()
+    for (const r of rows) {
+      foundIds.add(r.id)
+      const turnKey =
+        typeof r.turn_id === 'string' && r.turn_id.trim().length > 0
+          ? `turn:${r.turn_id.trim()}`
+          : `anon:${r.id}`
+      turns.add(turnKey)
+    }
+    for (const id of signalIds) {
+      if (!foundIds.has(id)) {
+        turns.add(`legacy_ref:${id}`)
+      }
+    }
+    return turns
   }
 
   /**
@@ -464,12 +763,15 @@ export class ProceduralHarnessService {
       nextTrigger = [...existingParts].join('|')
     }
 
-    // 2. Rule Insufficiency（规则已激活却仍被拦截，或信号带回了此前未覆盖的新修复 hint / recovery_ops）：执行 Strengthen / Narrow
+    // 2. Rule Insufficiency（MemSkill Attribution Filter：严格区分 Routing Miss 与 Rule Insufficiency）：
+    // 当规则在失败回合中根本未被注入（hasActInfo && !wasActive）且无同轮已验证 recovery_ops 时，严禁把通用报错 hint 追加到规则正文；
+    // 仅在规则已激活却仍被拦截（wasActive）、无激活上下文（!hasActInfo）或存在已验证恢复轨迹（newRecovery.length > 0）时强化正文。
+    const isRoutingMissOnly = hasActInfo && !wasActive
     const newHints = group.hints.filter(h => h.length >= 4 && !nextRule.includes(h.slice(0, Math.min(10, h.length))))
     const newRecovery = group.recoveryOps.filter(r => !nextRule.includes(r))
-    if ((hasActInfo && wasActive) || newHints.length > 0 || newRecovery.length > 0) {
+    if (!isRoutingMissOnly || newRecovery.length > 0) {
       const additions: string[] = []
-      if (newHints.length > 0) {
+      if (!isRoutingMissOnly && newHints.length > 0) {
         const candidateHint = newHints[0]!
         if (!sensitiveReason(candidateHint)) additions.push(candidateHint)
       }
@@ -483,6 +785,14 @@ export class ProceduralHarnessService {
     }
 
     if (nextTrigger !== own.trigger_pattern || nextRule !== own.rule) {
+      this.store.addHarnessRuleVersion({
+        rule_id: own.id,
+        owner: own.owner,
+        trigger_pattern: own.trigger_pattern,
+        rule: own.rule,
+        reason: wasActive ? 'rule_insufficiency_strengthen' : 'routing_miss_expand',
+        signal_ids: JSON.stringify(group.signalIds),
+      })
       this.store.updateHarnessRule(own.id, {
         trigger_pattern: nextTrigger,
         rule: nextRule,
@@ -524,19 +834,41 @@ export class ProceduralHarnessService {
       for (const op of parsed.ops ?? []) {
         const tids = (op.target_ids ?? []).filter(id => userRules.some(r => r.id === id))
         if (tids.length === 0 || !op.rule || sensitiveReason(op.rule)) continue
+        const primary = userRules.find(r => r.id === tids[0]!)
+        if (!primary) continue
+        if (!isNonRegressiveRewrite(primary.rule, op.rule)) continue
         if ((op.op === 'strengthen' || op.op === 'narrow') && tids.length === 1) {
-          this.store.updateHarnessRule(tids[0]!, {
+          this.store.addHarnessRuleVersion({
+            rule_id: primary.id,
+            owner: primary.owner,
+            trigger_pattern: primary.trigger_pattern,
+            rule: primary.rule,
+            reason: `llm_backward_${op.op ?? 'refine'}`,
+            signal_ids: '[]',
+          })
+          this.store.updateHarnessRule(primary.id, {
             rule: op.rule.trim(),
             ...(op.trigger_pattern ? { trigger_pattern: op.trigger_pattern.trim() } : {}),
           })
           updated++
         } else if (op.op === 'merge' && tids.length >= 2) {
-          const primary = tids[0]!
-          this.store.updateHarnessRule(primary, {
+          this.store.addHarnessRuleVersion({
+            rule_id: primary.id,
+            owner: primary.owner,
+            trigger_pattern: primary.trigger_pattern,
+            rule: primary.rule,
+            reason: `llm_backward_${op.op ?? 'refine'}`,
+            signal_ids: '[]',
+          })
+          this.store.updateHarnessRule(primary.id, {
             rule: op.rule.trim(),
             ...(op.trigger_pattern ? { trigger_pattern: op.trigger_pattern.trim() } : {}),
           })
           for (const extraId of tids.slice(1)) {
+            const sec = userRules.find(r => r.id === extraId)
+            if (!sec) continue
+            const secBaseCode = sec.trigger_pattern.split('|')[0]?.trim() ?? ''
+            if (BASELINE_TRIGGER_CODES.has(secBaseCode)) continue
             this.store.updateHarnessRule(extraId, { status: 'archived' })
           }
           merged++
@@ -575,14 +907,15 @@ export class ProceduralHarnessService {
     const docKind = docRow?.kind === 'deck' ? 'deck' : 'doc'
     const activeDomain = inferSkillDomain(message, context, docKind)
 
+    const state = context?.docState ?? this.docState(docId)
     let ordered: HarnessRuleRow[]
     if (this.opts.mode === 'fifo') {
       ordered = [...allRules].sort((a, b) => a.created_at.localeCompare(b.created_at))
     } else {
-      const state = context?.docState ?? this.docState(docId)
       const scored = allRules
-        .map(r => ({ r, score: this.score(r, message, state, activeDomain, context) }))
-        .filter(x => x.score > -10) // 过滤跨领域强冲突规则（防止负迁移）
+        .map(r => ({ r, ...this.scoreDetail(r, message, state, activeDomain, context) }))
+        // SafeVantage 选择性静默（Selective Abstention）：过滤跨领域强冲突规则，且非基线用户规则必须命中 msgMatched 或 stateMatched 才注入
+        .filter(x => x.score > -10 && (x.isBaseline || x.msgMatched || x.stateMatched))
         .sort((a, b) => b.score - a.score)
       ordered = scored.map(x => x.r)
     }
@@ -618,21 +951,34 @@ export class ProceduralHarnessService {
       const cleanRule = p.rule.replace(/^\[domain:[^\]]+\]\s*/i, '')
       return `- [${catLabels[p.category]}] ${cleanRule}`
     })
+    const hasHighRiskDocState = state.openComments || state.recentUserEdits || state.pendingSuggestions
+    const hasVerifiedRecoveryRule = picked.some(p =>
+      /成功修复轨迹：|修复操作序列：|→\s*正确恢复路径:/.test(p.rule),
+    )
+    if (
+      this.opts.mode !== 'fifo' &&
+      hasHighRiskDocState &&
+      !hasVerifiedRecoveryRule &&
+      budget >= 400 &&
+      totalLen + BLINDSPOT_VANTAGING_HINT.length <= budget
+    ) {
+      lines.push(BLINDSPOT_VANTAGING_HINT)
+    }
     if (this.opts.mode === 'placebo') lines.push(PLACEBO_FILLER)
     return `［执行策略与避坑指南］系统根据过往执行与守卫反馈沉淀的策略（本轮必须遵守）：\n${lines.join('\n')}\n\n`
   }
 
   /**
-   * 跨领域 MoE 效用分：
+   * 跨领域 MoE 效用分与匹配归因明细：
    * U = 0.1·证据数 + 5·[消息线索/习得关键词] + 8·[文档/环境状态谓词] + 领域门控奖惩。
    */
-  private score(
+  scoreDetail(
     r: HarnessRuleRow,
     message: string,
     state: DocCueState,
     activeDomain: SkillDomain,
     context?: EnvironmentCueContext,
-  ): number {
+  ): { score: number; msgMatched: boolean; stateMatched: boolean; isBaseline: boolean } {
     let score = r.evidence_count * W_EVIDENCE
 
     // 1. 领域门控（Domain Gating）：若规则带有 [domain:xxx] 标签，仅在对应领域激活，跨领域则施加强惩罚以实现零负迁移
@@ -652,6 +998,7 @@ export class ProceduralHarnessService {
     const segments = r.trigger_pattern.split('|').map(s => s.trim()).filter(Boolean)
     const baseCode = segments[0] ?? r.trigger_pattern
     const extraSegments = segments.slice(1)
+    const isBaseline = r.owner === 'system' || BASELINE_TRIGGER_CODES.has(baseCode)
 
     const cue = CUES[baseCode]
     let msgMatched = false
@@ -660,6 +1007,9 @@ export class ProceduralHarnessService {
     if (cue) {
       if (cue.msg?.test(message)) msgMatched = true
       if (cue.state?.(state, message)) stateMatched = true
+      if (baseCode === 'safevantage_low_coverage' && state.lowCoverageCitations && SAFEVANTAGE_MSG_CUE.test(message)) {
+        msgMatched = true
+      }
     } else if (matches(baseCode, message)) {
       // 系统基线里的子代理规则或天然带关键词的规则
       msgMatched = true
@@ -693,7 +1043,7 @@ export class ProceduralHarnessService {
 
     if (msgMatched) score += W_MESSAGE
     if (stateMatched) score += W_STATE
-    return score
+    return { score, msgMatched, stateMatched, isBaseline }
   }
 
   private docState(docId: string): DocCueState {
@@ -710,10 +1060,35 @@ export class ProceduralHarnessService {
         openComments: this.store.listComments(docId, 'open').length > 0,
         pendingSuggestions: pendingGroups(doc).length > 0,
         hasTable,
+        lowCoverageCitations: this.hasLowCoverageCitations(docId),
       }
     } catch {
       return NO_STATE
     }
+  }
+
+  /**
+   * SafeVantage (P1) 低覆盖率引用与论断线索检测：
+   * - 若当前文档包含文献引用（citations），且其中存在未拉取开放全文（citation_fulltexts.text 为空）的引用；
+   * - 或 claim_checks 中存在存疑论断（verdict === 'unclear'）或仅摘要支持（evidence_tier === 'abstract' | 'none' 且尚未补齐全文）。
+   */
+  private hasLowCoverageCitations(docId: string): boolean {
+    const citations = this.store.listCitations(docId)
+    for (const cite of citations) {
+      const doi = cite.doi?.trim()
+      if (!doi) return true
+      const ft = this.store.getFullText(doi)
+      if (!ft?.text?.trim()) return true
+    }
+    const checks = this.store.listClaimChecks(docId)
+    for (const c of checks) {
+      if (c.verdict === 'exempted') continue
+      if (c.verdict === 'unclear') return true
+      if ((c.evidence_tier === 'abstract' || c.evidence_tier === 'none') && citations.length === 0) {
+        return true
+      }
+    }
+    return false
   }
 }
 
