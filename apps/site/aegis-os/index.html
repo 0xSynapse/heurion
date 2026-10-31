@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Aegis OS · 本地多 Agent 控制平面</title>
+  <meta name="description" content="Aegis OS 是面向多 Agent 并行的本地控制平面：CoW 影子工作区、内核沙箱、Google A2A 协作、UOMP 记忆同意、任务级租约与审计。" />
+  <meta name="keywords" content="Aegis OS, aegis-os, multi-agent, Google A2A, UOMP, memory consent, CoW workspace, sandbox, agent runtime" />
+  <meta name="author" content="Heurion Research" />
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
+  <link rel="canonical" href="https://heurion.org/aegis-os/" />
+  <link rel="help" type="text/plain" title="LLMs.txt" href="https://heurion.org/llms.txt" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Heurion Research" />
+  <meta property="og:url" content="https://heurion.org/aegis-os/" />
+  <meta property="og:title" content="Aegis OS · 本地多 Agent 控制平面" />
+  <meta property="og:description" content="隔离、协作、同意、撤销、审计：让多个 Agent 安全地在你的机器上工作。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v13" />
+  <style>
+    .aegis-hero { padding: 5.5rem 0 3.5rem; border-bottom: 1px solid var(--border); }
+    .aegis-hero h1 { max-width: 14ch; }
+    .aegis-hero .lede { max-width: 46rem; margin-top: 1.4rem; font-size: 1.05rem; color: var(--ink-secondary); }
+    .aegis-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); margin-top: 3rem; }
+    .aegis-cell { background: var(--bg-elevated); padding: 1.6rem; min-height: 12rem; }
+    .aegis-cell h3 { margin: 0 0 .6rem; }
+    .aegis-cell p { margin: 0; font-size: .92rem; color: var(--ink-secondary); }
+    .aegis-section { padding: 4.5rem 0; border-bottom: 1px solid var(--border); }
+    .aegis-section h2 { margin-bottom: 1.4rem; }
+    .aegis-section h3 { margin: 2rem 0 .7rem; }
+    .aegis-section p { max-width: 52rem; color: var(--ink-secondary); }
+    .cmd { background: #151C19; color: #F4F1EA; padding: 1.1rem 1.25rem; overflow-x: auto; font-family: var(--mono); font-size: .82rem; line-height: 1.8; margin: 1rem 0; }
+    .cmd .c { color: #9CB3A7; }
+    .steps { display: grid; gap: 1rem; max-width: 58rem; }
+    .step { display: grid; grid-template-columns: 2.5rem 1fr; gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+    .step-num { font-family: var(--mono); font-size: .8rem; color: var(--accent); }
+    .step h3 { margin: 0 0 .35rem; font-size: 1.05rem; }
+    .step p { margin: 0; font-size: .92rem; }
+    .link-row { display: flex; flex-wrap: wrap; gap: 1.4rem; margin-top: 2rem; }
+    .note { border-left: 2px solid var(--accent); padding: .2rem 0 .2rem 1rem; color: var(--ink-secondary); font-size: .92rem; }
+    @media (max-width: 860px) { .aegis-grid { grid-template-columns: 1fr; } .aegis-hero { padding-top: 3.5rem; } }
+  </style>
+</head>
+<body>
+
+  <header class="nav" role="banner">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Heurion Research">
+        <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+          <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
+          <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
+          <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
+          <circle class="mark-accent" cx="80" cy="20" r="11"/>
+        </svg>
+        <span class="brand-word">HEURION</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/#flagships" class="nav-link">核心系统</a>
+        <a href="/aegis-os/tutorial/" class="nav-link">教程</a>
+        <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub</a>
+      </nav>
+      <div class="nav-right">
+        <a class="nav-cta" href="/aegis-os/tutorial/">开始使用</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="aegis-hero">
+      <div class="container">
+        <p class="label-caps">FLAGSHIP 02 · RUST · LOCAL-FIRST</p>
+        <h1 class="heading-1">Aegis OS<br><em>本地多 Agent 控制平面</em></h1>
+        <p class="lede">
+          Aegis OS 让多个 coding agent 在同一台机器上安全并行：每个 Agent 有自己的 CoW 工作区，
+          通过 Google A2A 协作，通过 UOMP 请求用户记忆，所有越界操作都要经过任务级租约、审批、撤销与审计。
+        </p>
+        <div class="hero-actions">
+          <a class="btn-solid" href="/aegis-os/tutorial/">从安装到第一个任务 →</a>
+          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 仓库 →</a>
+        </div>
+
+        <div class="aegis-grid">
+          <div class="aegis-cell">
+            <p class="label-caps">01 / ISOLATION</p>
+            <h3 class="heading-3">隔离</h3>
+            <p>每个 Agent 一个 CoW 影子工作区；macOS Seatbelt / Linux Bubblewrap 沙箱；默认拒绝宿主凭证与越界写入。</p>
+          </div>
+          <div class="aegis-cell">
+            <p class="label-caps">02 / COLLABORATION</p>
+            <h3 class="heading-3">协作</h3>
+            <p>Google A2A AgentCard、Task 生命周期、peer registry、文件 claim 与 Live Collaboration Radar。</p>
+          </div>
+          <div class="aegis-cell">
+            <p class="label-caps">03 / CONSENT</p>
+            <h3 class="heading-3">同意</h3>
+            <p>UOMP 记忆同意协议：按 tag / key、时限、可撤销；高敏数据逐 key 批准；每次 allow / deny 都有审计。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="aegis-section">
+      <div class="container">
+        <p class="label-caps">INSTALL</p>
+        <h2 class="heading-2">安装 Aegis OS</h2>
+        <p>支持 macOS 与 Linux。Windows 不在支持范围内。安装脚本会自动把 Aegis OS 接入 <code>agy</code>、<code>claude</code> 与 <code>codex</code>。</p>
+        <pre class="cmd"><span class="c"># Homebrew</span>
+brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
+brew trust heurion-org/aegis-os
+brew install aegis-os
+
+<span class="c"># 验证</span>
+aegis-os --version
+aegis-os doctor</pre>
+        <p class="note">如果你不用 Homebrew，可以从 GitHub Releases 下载对应平台的二进制，或从源码构建。安装后如未自动接入客户端，运行一次 <code>aegis-os install</code>。</p>
+      </div>
+    </section>
+
+    <section class="aegis-section">
+      <div class="container">
+        <p class="label-caps">FIRST RUN</p>
+        <h2 class="heading-2">第一次运行</h2>
+        <div class="steps">
+          <div class="step">
+            <span class="step-num">01</span>
+            <div>
+              <h3>在项目目录启动 Agent</h3>
+              <p>直接运行 <code>claude</code>、<code>codex</code> 或 <code>agy</code>。Aegis OS 的 hook 会自动附加运行时；首次运行会让你选择 Local（免费本地）或 Cloud（Aegis Cloud）模式。</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">02</span>
+            <div>
+              <h3>让 Agent 在隔离工作区里工作</h3>
+              <p>Agent 的写入先落在 CoW 影子工作区；<code>workspace_commit</code> 才把变更合并回宿主目录。多个 Agent 并行时，文件 claim 会阻止静默覆盖。</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">03</span>
+            <div>
+              <h3>需要记忆时，明确批准</h3>
+              <p>Agent 通过 UOMP 请求你的笔记。你在终端运行 <code>aegis-os memory pending</code> 查看范围，再 <code>approve</code> 或 <code>deny</code>。Agent 不能批准自己的请求。</p>
+            </div>
+          </div>
+          <div class="step">
+            <span class="step-num">04</span>
+            <div>
+              <h3>随时撤销并查看审计</h3>
+              <p><code>aegis-os memory revoke &lt;session-id&gt;</code> 立即收回访问；绑定的 A2A task 会转为 <code>input-required</code>。每次 allow / deny 都记录在 <code>aegis-os memory audit</code>。</p>
+            </div>
+          </div>
+        </div>
+        <div class="link-row">
+          <a class="btn-solid" href="/aegis-os/tutorial/">打开完整教程 →</a>
+          <a class="link-arrow" href="/aegis-os/tutorial/#memory">记忆同意流程 →</a>
+          <a class="link-arrow" href="/aegis-os/tutorial/#a2a">多 Agent / A2A →</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="aegis-section">
+      <div class="container">
+        <p class="label-caps">CORE COMMANDS</p>
+        <h2 class="heading-2">常用命令</h2>
+        <pre class="cmd"><span class="c"># 安装检查</span>
+aegis-os doctor
+
+<span class="c"># 记忆：导入、配置客户端、启动本地服务</span>
+aegis-os memory setup claude --vault ~/Notes
+aegis-os memory pending
+aegis-os memory approve &lt;request-id&gt;
+aegis-os memory audit
+aegis-os memory revoke &lt;session-id&gt;
+
+<span class="c"># 多 Agent：A2A task 与任务看板</span>
+aegis-os ipc request --to worker --subject "Review auth" --message "Read the auth module"
+aegis-os a2a board
+aegis-os a2a show &lt;task-id&gt;
+
+<span class="c"># 任务级租约（高级）</span>
+aegis-os policy lease --action-pattern workspace_commit --ttl-secs 3600 --task-id &lt;task-id&gt;</pre>
+        <p class="note">如果使用自定义 <code>--runtime-dir</code>，<code>a2a board</code>、<code>a2a show</code>、<code>memory revoke</code> 等命令要传同一个 runtime 目录。</p>
+      </div>
+    </section>
+
+    <section class="aegis-section">
+      <div class="container">
+        <p class="label-caps">LINKS</p>
+        <h2 class="heading-2">继续阅读</h2>
+        <div class="link-row">
+          <a class="link-arrow" href="/aegis-os/tutorial/">完整教程 →</a>
+          <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP 规范 →</a>
+          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_APPLICATION_PROTOCOL.md" target="_blank" rel="noopener">AAP-1.0 规范 →</a>
+          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 仓库 →</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot" role="contentinfo">
+    <div class="container">
+      <div class="foot-bar">
+        <a class="brand" href="/" aria-label="Heurion Research">
+          <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+            <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
+            <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
+            <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
+            <circle class="mark-accent" cx="80" cy="20" r="11"/>
+          </svg>
+          <span class="brand-word">HEURION</span>
+        </a>
+        <div class="foot-right">
+          <span>© 2026 Heurion Research · MIT Licensed</span>
+          <a href="/llms.txt" class="foot-link">LLMs.txt</a>
+          <a href="/sitemap.xml" class="foot-link">Sitemap</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

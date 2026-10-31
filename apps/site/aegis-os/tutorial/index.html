@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Aegis OS 教程 · 从安装到第一个多 Agent 任务</title>
+  <meta name="description" content="Aegis OS 完整教程：安装、接入 Claude/Codex/AGY、UOMP 记忆同意、A2A 多 Agent 任务、任务级租约、撤销与审计。" />
+  <meta name="keywords" content="Aegis OS tutorial, aegis-os install, UOMP, A2A, multi-agent, memory consent, Claude Code, Codex" />
+  <meta name="author" content="Heurion Research" />
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
+  <link rel="canonical" href="https://heurion.org/aegis-os/tutorial/" />
+  <link rel="help" type="text/plain" title="LLMs.txt" href="https://heurion.org/llms.txt" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Heurion Research" />
+  <meta property="og:url" content="https://heurion.org/aegis-os/tutorial/" />
+  <meta property="og:title" content="Aegis OS 教程 · 从安装到第一个多 Agent 任务" />
+  <meta property="og:description" content="安装 Aegis OS，接入 coding agent，批准一次记忆访问，创建 A2A task，撤销并审计。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v13" />
+  <style>
+    .tut-hero { padding: 5rem 0 3rem; border-bottom: 1px solid var(--border); }
+    .tut-hero h1 { max-width: 18ch; }
+    .tut-hero .lede { max-width: 50rem; margin-top: 1.2rem; color: var(--ink-secondary); font-size: 1.02rem; }
+    .tut-layout { display: grid; grid-template-columns: 15rem 1fr; gap: 4rem; padding: 4rem 0 6rem; }
+    .tut-nav { position: sticky; top: 6rem; align-self: start; display: grid; gap: .55rem; }
+    .tut-nav a { font-size: .88rem; color: var(--ink-secondary); border-left: 1px solid var(--border); padding-left: .8rem; }
+    .tut-nav a:hover { color: var(--accent); border-left-color: var(--accent); }
+    .tut-body { min-width: 0; }
+    .tut-body section { padding: 0 0 3.5rem; }
+    .tut-body h2 { margin: 0 0 1rem; }
+    .tut-body h3 { margin: 1.8rem 0 .6rem; }
+    .tut-body p, .tut-body li { color: var(--ink-secondary); font-size: .96rem; }
+    .tut-body ul, .tut-body ol { padding-left: 1.25rem; }
+    .tut-body li { margin: .35rem 0; }
+    .cmd { background: #151C19; color: #F4F1EA; padding: 1rem 1.2rem; overflow-x: auto; font-family: var(--mono); font-size: .82rem; line-height: 1.8; margin: 1rem 0; }
+    .cmd .c { color: #9CB3A7; }
+    .note { border-left: 2px solid var(--accent); padding: .2rem 0 .2rem 1rem; margin: 1.2rem 0; color: var(--ink-secondary); font-size: .92rem; }
+    .warn { border-left: 2px solid #8F5638; padding: .2rem 0 .2rem 1rem; margin: 1.2rem 0; color: var(--ink-secondary); font-size: .92rem; }
+    .checklist { list-style: none; padding-left: 0; }
+    .checklist li::before { content: "✓"; color: var(--accent); margin-right: .55rem; font-family: var(--mono); }
+    .kbd { font-family: var(--mono); font-size: .82rem; background: var(--bg-neutral); padding: .1rem .35rem; }
+    .tut-table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+    .tut-table th, .tut-table td { text-align: left; padding: .65rem .5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .tut-table th { font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); font-weight: 500; }
+    .next { display: flex; flex-wrap: wrap; gap: 1.4rem; margin-top: 2rem; }
+    @media (max-width: 900px) { .tut-layout { grid-template-columns: 1fr; gap: 2rem; } .tut-nav { position: static; grid-template-columns: repeat(2, 1fr); } }
+  </style>
+</head>
+<body>
+
+  <header class="nav" role="banner">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Heurion Research">
+        <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+          <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
+          <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
+          <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
+          <circle class="mark-accent" cx="80" cy="20" r="11"/>
+        </svg>
+        <span class="brand-word">HEURION</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/aegis-os/" class="nav-link">Aegis OS</a>
+        <a href="/aegis-os/tutorial/" class="nav-link">教程</a>
+        <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub</a>
+      </nav>
+      <div class="nav-right">
+        <a class="nav-cta" href="/aegis-os/">概览</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="tut-hero">
+      <div class="container">
+        <p class="label-caps">AEGIS OS · TUTORIAL · 2026</p>
+        <h1 class="heading-1">从安装到第一个<br><em>多 Agent 任务</em></h1>
+        <p class="lede">
+          这份教程面向第一次使用 Aegis OS 的开发者。完成后，你会有一个可隔离的 Agent 工作区、
+          一次经过批准的记忆访问、一个可撤销的 A2A 任务，以及一份可查看的审计记录。
+        </p>
+        <p class="lede">预计时间：<strong>10–15 分钟</strong>。支持 macOS / Linux；<strong>不支持 Windows</strong>。</p>
+      </div>
+    </section>
+
+    <div class="container tut-layout">
+      <aside class="tut-nav" aria-label="Tutorial contents">
+        <a href="#prepare">0. 准备</a>
+        <a href="#install">1. 安装</a>
+        <a href="#agent">2. 接入 Agent</a>
+        <a href="#memory">3. 记忆同意</a>
+        <a href="#a2a">4. 多 Agent / A2A</a>
+        <a href="#revoke">5. 撤销与审计</a>
+        <a href="#troubleshoot">6. 故障排查</a>
+      </aside>
+
+      <div class="tut-body">
+        <section id="prepare">
+          <p class="label-caps">00 / PREPARE</p>
+          <h2 class="heading-2">准备</h2>
+          <p>你需要：</p>
+          <ul class="checklist">
+            <li>macOS 或 Linux 终端</li>
+            <li>Homebrew（macOS / Linux 均可）</li>
+            <li>一个 coding agent：Claude Code、Codex CLI 或 AGY</li>
+            <li>一个 Markdown / Obsidian 笔记库（可选，用于记忆同意）</li>
+          </ul>
+          <p class="warn">Aegis OS 目前不支持 Windows。不要把真实生产密钥放进示例目录；教程使用本地临时项目。</p>
+        </section>
+
+        <section id="install">
+          <p class="label-caps">01 / INSTALL</p>
+          <h2 class="heading-2">安装 Aegis OS</h2>
+          <pre class="cmd"><span class="c"># 添加 Heurion tap 并安装</span>
+brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
+brew trust heurion-org/aegis-os
+brew install aegis-os
+
+<span class="c"># 验证</span>
+aegis-os --version
+aegis-os doctor</pre>
+          <p>安装过程会自动运行 <code>aegis-os install</code>，把 Aegis OS 接入 <code>agy</code>、<code>claude</code> 与 <code>codex</code>。如果 <code>doctor</code> 提示未接入，手动运行：</p>
+          <pre class="cmd">aegis-os install</pre>
+          <p class="note">如果不用 Homebrew：从 <a href="https://github.com/heurion-org/aegis-os/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载对应平台二进制，或从源码 <code>cargo install --path crates/aos-cli</code>。安装后同样运行 <code>aegis-os install</code>。</p>
+        </section>
+
+        <section id="agent">
+          <p class="label-caps">02 / FIRST RUN</p>
+          <h2 class="heading-2">接入 Agent</h2>
+          <p>进入一个项目目录，直接启动你常用的 Agent：</p>
+          <pre class="cmd"><span class="c"># 任选其一</span>
+claude
+codex
+agy</pre>
+          <p>Aegis OS 的 hook 会自动附加运行时。首次运行会让你选择：</p>
+          <table class="tut-table">
+            <thead><tr><th>模式</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Local</strong></td><td>免费本地模式：CoW 影子工作区 + 本机沙箱。推荐从这里开始。</td></tr>
+              <tr><td><strong>Cloud</strong></td><td>需要 Aegis Cloud 订阅；远程 Linux btrfs 工作区，本地零 CPU/RAM 负载。</td></tr>
+            </tbody>
+          </table>
+          <p>也可以在对话里直接说“切换到 Local 模式”或“切换到 Cloud 模式”。</p>
+          <h3>验证隔离</h3>
+          <p>让 Agent 修改一个文件，然后运行：</p>
+          <pre class="cmd">aegis-os workspace status
+aegis-os workspace diff</pre>
+          <p>你会看到修改先落在 CoW 影子工作区，尚未写回宿主目录。只有 <code>workspace_commit</code> 才会合并。</p>
+        </section>
+
+        <section id="memory">
+          <p class="label-caps">03 / MEMORY CONSENT</p>
+          <h2 class="heading-2">记忆同意：只读批准的范围</h2>
+          <p>UOMP 是 Aegis OS 执行的记忆同意协议。先给客户端写入 bridge profile，并导入笔记：</p>
+          <pre class="cmd">aegis-os memory setup claude --vault ~/Notes</pre>
+          <p>这条命令会：</p>
+          <ul>
+            <li>导入 Markdown 笔记（默认 tag <code>notes</code>，可用 <code>--tag</code> 修改）</li>
+            <li>在后台启动本地 memory server（默认 <code>127.0.0.1:9374</code>）</li>
+            <li>写入 Claude Desktop / Cursor / OpenCode 的 MCP 配置</li>
+            <li><strong>不签发 Token，不授权任何访问</strong></li>
+          </ul>
+          <p>重启客户端，然后让 Agent 读取笔记：</p>
+          <pre class="cmd"><span class="c"># 在 Claude / Cursor / OpenCode 里</span>
+列出 notes/projects 下的笔记</pre>
+          <p>第一次 tool call 会创建 consent request。回到终端：</p>
+          <pre class="cmd">aegis-os memory pending
+aegis-os memory approve &lt;request-id&gt;</pre>
+          <p><code>pending</code> 会显示 request id、Agent、task id（如果有）、session id 和过期时间。批准后当前调用继续；拒绝则返回错误。</p>
+          <p class="note">高敏数据不会因为 tag scope 被批量放开。Agent 必须按具体 key 请求，你在 <code>pending</code> 里看到后单独批准。</p>
+          <h3>验证</h3>
+          <pre class="cmd">aegis-os memory sessions
+aegis-os memory audit --limit 20</pre>
+          <p>你应该看到 session 的 scope、过期时间，以及 allow / deny 审计事件。</p>
+        </section>
+
+        <section id="a2a">
+          <p class="label-caps">04 / MULTI-AGENT</p>
+          <h2 class="heading-2">多 Agent / A2A</h2>
+          <p>Aegis OS 用 Google A2A 作为 Agent 之间的协作总线。创建一个 stateful task：</p>
+          <pre class="cmd">aegis-os ipc request \
+  --to worker \
+  --subject "Review auth module" \
+  --message "Read the auth module and report risks"</pre>
+          <p>查看任务：</p>
+          <pre class="cmd">aegis-os a2a board
+aegis-os a2a show &lt;task-id&gt;</pre>
+          <p><code>board</code> 会显示 task、state、from → to、age、flags、subject。<code>input-required</code> 会置顶并标记 <code>BLOCKED</code>；失去 assignee 的任务会标记 <code>STALE</code>。</p>
+          <h3>任务级租约</h3>
+          <p>如果某个任务需要一段时间的自动提交权限，可以把 lease 绑定到 task：</p>
+          <pre class="cmd">aegis-os policy lease \
+  --action-pattern workspace_commit \
+  --ttl-secs 3600 \
+  --task-id &lt;task-id&gt;</pre>
+          <p>输出会包含 <code>"kind": "task_scoped"</code> 和 <code>task_id</code>。任务进入终态后，绑定 lease 会被撤销；同一个 Agent 不能把 task A 的 lease 用到 task B。</p>
+          <p class="note">如果使用自定义 <code>--runtime-dir</code>，所有 <code>a2a</code> / <code>policy</code> / <code>memory revoke</code> 命令都要传同一个 runtime 目录。</p>
+        </section>
+
+        <section id="revoke">
+          <p class="label-caps">05 / REVOKE &amp; AUDIT</p>
+          <h2 class="heading-2">撤销与审计</h2>
+          <p>查看并撤销一个 memory session：</p>
+          <pre class="cmd">aegis-os memory sessions
+aegis-os memory revoke &lt;session-id&gt;</pre>
+          <p>撤销后：</p>
+          <ul>
+            <li>下一个 memory 请求返回 <code>401 SESSION_NOT_ACTIVE</code></li>
+            <li>如果 session 绑定了 A2A task，task 会转为 <code>input-required</code>（标记 <code>BLOCKED</code>）</li>
+            <li>审计会记录 revoke 事件和 task id</li>
+          </ul>
+          <pre class="cmd">aegis-os memory audit --limit 20
+aegis-os a2a board</pre>
+          <p>如果任务通过 gateway 进入终态（例如 <code>tasks/cancel</code>），Aegis OS 会调用 memory server 的 <code>revoke-by-task</code>，自动撤销该任务的 memory sessions。</p>
+        </section>
+
+        <section id="troubleshoot">
+          <p class="label-caps">06 / TROUBLESHOOT</p>
+          <h2 class="heading-2">故障排查</h2>
+          <table class="tut-table">
+            <thead><tr><th>问题</th><th>处理</th></tr></thead>
+            <tbody>
+              <tr><td>客户端看不到 Aegis OS 工具</td><td>运行 <code>aegis-os doctor</code>；重启客户端；检查 MCP 配置。</td></tr>
+              <tr><td>Agent 一直等待审批</td><td>另开终端运行 <code>aegis-os memory pending</code>，再 <code>approve</code> / <code>deny</code>。</td></tr>
+              <tr><td>端口 9374 被占用</td><td><code>aegis-os memory stop</code>；或 <code>aegis-os memory setup claude --listen 127.0.0.1:9380</code>。</td></tr>
+              <tr><td><code>SESSION_NOT_ACTIVE</code></td><td>session 过期或被撤销；重新发起请求，或 <code>aegis-os memory connect claude --scope notes/projects</code>。</td></tr>
+              <tr><td><code>ACCESS_DENIED</code></td><td>key/tag 不在批准范围；查看 <code>aegis-os memory audit</code> 和 consent request scope。</td></tr>
+              <tr><td>自定义 runtime 下 task 没变化</td><td><code>a2a</code> / <code>memory revoke</code> 命令补上同一个 <code>--runtime-dir</code>。</td></tr>
+              <tr><td>Windows</td><td>不支持；请使用 macOS 或 Linux。</td></tr>
+            </tbody>
+          </table>
+          <div class="next">
+            <a class="btn-solid" href="/aegis-os/">返回 Aegis OS 概览 →</a>
+            <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 仓库 →</a>
+            <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP 规范 →</a>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <footer class="foot" role="contentinfo">
+    <div class="container">
+      <div class="foot-bar">
+        <a class="brand" href="/" aria-label="Heurion Research">
+          <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+            <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
+            <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
+            <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
+            <circle class="mark-accent" cx="80" cy="20" r="11"/>
+          </svg>
+          <span class="brand-word">HEURION</span>
+        </a>
+        <div class="foot-right">
+          <span>© 2026 Heurion Research · MIT Licensed</span>
+          <a href="/llms.txt" class="foot-link">LLMs.txt</a>
+          <a href="/sitemap.xml" class="foot-link">Sitemap</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>
