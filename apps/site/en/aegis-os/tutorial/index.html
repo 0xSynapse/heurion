@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Aegis OS Tutorial · Install to First Multi-Agent Task</title>
+  <meta name="description" content="Aegis OS tutorial: install, connect Claude/Codex/AGY, UOMP memory consent, A2A multi-agent tasks, task-scoped leases, revocation, and audit." />
+  <meta name="keywords" content="Aegis OS tutorial, aegis-os install, UOMP, A2A, multi-agent, memory consent, Claude Code, Codex" />
+  <meta name="author" content="Heurion Research" />
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
+  <link rel="canonical" href="https://heurion.org/en/aegis-os/tutorial/" />
+  <link rel="alternate" hreflang="zh-CN" href="https://heurion.org/aegis-os/tutorial/" />
+  <link rel="alternate" hreflang="en" href="https://heurion.org/en/aegis-os/tutorial/" />
+  <link rel="alternate" hreflang="x-default" href="https://heurion.org/aegis-os/tutorial/" />
+  <link rel="help" type="text/plain" title="LLMs.txt" href="https://heurion.org/llms.txt" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Heurion Research" />
+  <meta property="og:url" content="https://heurion.org/en/aegis-os/tutorial/" />
+  <meta property="og:title" content="Aegis OS Tutorial · Install to First Multi-Agent Task" />
+  <meta property="og:description" content="Install Aegis OS, connect a coding agent, approve a memory request, create an A2A task, revoke, and audit." />
+  <meta property="og:locale" content="en_US" />
+  <meta property="og:locale:alternate" content="zh_CN" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v13" />
+  <style>
+    .tut-hero { padding: 5rem 0 3rem; border-bottom: 1px solid var(--border); }
+    .tut-hero h1 { max-width: 18ch; }
+    .tut-hero .lede { max-width: 50rem; margin-top: 1.2rem; color: var(--ink-secondary); font-size: 1.02rem; }
+    .tut-layout { display: grid; grid-template-columns: 15rem 1fr; gap: 4rem; padding: 4rem 0 6rem; }
+    .tut-nav { position: sticky; top: 6rem; align-self: start; display: grid; gap: .55rem; }
+    .tut-nav a { font-size: .88rem; color: var(--ink-secondary); border-left: 1px solid var(--border); padding-left: .8rem; }
+    .tut-nav a:hover { color: var(--accent); border-left-color: var(--accent); }
+    .tut-body { min-width: 0; }
+    .tut-body section { padding: 0 0 3.5rem; }
+    .tut-body h2 { margin: 0 0 1rem; }
+    .tut-body h3 { margin: 1.8rem 0 .6rem; }
+    .tut-body p, .tut-body li { color: var(--ink-secondary); font-size: .96rem; }
+    .tut-body ul, .tut-body ol { padding-left: 1.25rem; }
+    .tut-body li { margin: .35rem 0; }
+    .cmd { background: #151C19; color: #F4F1EA; padding: 1rem 1.2rem; overflow-x: auto; font-family: var(--mono); font-size: .82rem; line-height: 1.8; margin: 1rem 0; }
+    .cmd .c { color: #9CB3A7; }
+    .note { border-left: 2px solid var(--accent); padding: .2rem 0 .2rem 1rem; margin: 1.2rem 0; color: var(--ink-secondary); font-size: .92rem; }
+    .warn { border-left: 2px solid #8F5638; padding: .2rem 0 .2rem 1rem; margin: 1.2rem 0; color: var(--ink-secondary); font-size: .92rem; }
+    .checklist { list-style: none; padding-left: 0; }
+    .checklist li::before { content: "✓"; color: var(--accent); margin-right: .55rem; font-family: var(--mono); }
+    .tut-table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+    .tut-table th, .tut-table td { text-align: left; padding: .65rem .5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .tut-table th { font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); font-weight: 500; }
+    .next { display: flex; flex-wrap: wrap; gap: 1.4rem; margin-top: 2rem; }
+    @media (max-width: 900px) { .tut-layout { grid-template-columns: 1fr; gap: 2rem; } .tut-nav { position: static; grid-template-columns: repeat(2, 1fr); } }
+  </style>
+</head>
+<body>
+
+  <header class="nav" role="banner">
+    <div class="nav-inner">
+      <a class="brand" href="/en" aria-label="Heurion Research">
+        <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+          <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
+          <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
+          <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
+          <circle class="mark-accent" cx="80" cy="20" r="11"/>
+        </svg>
+        <span class="brand-word">HEURION</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/en/aegis-os/" class="nav-link">Aegis OS</a>
+        <a href="/en/aegis-os/tutorial/" class="nav-link">Tutorial</a>
+        <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub</a>
+      </nav>
+      <div class="nav-right">
+        <a class="lang-btn" href="/aegis-os/tutorial/">中文</a>
+        <a class="nav-cta" href="/en/aegis-os/">Overview</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="tut-hero">
+      <div class="container">
+        <p class="label-caps">AEGIS OS · TUTORIAL · 2026</p>
+        <h1 class="heading-1">Install to your first<br><em>multi-agent task</em></h1>
+        <p class="lede">
+          This tutorial is for a first-time Aegis OS user. By the end you will have an isolated agent workspace,
+          an approved memory access, a revocable A2A task, and an audit trail you can inspect.
+        </p>
+        <p class="lede">Estimated time: <strong>10–15 minutes</strong>. macOS / Linux only; <strong>Windows is not supported</strong>.</p>
+      </div>
+    </section>
+
+    <div class="container tut-layout">
+      <aside class="tut-nav" aria-label="Tutorial contents">
+        <a href="#prepare">0. Prepare</a>
+        <a href="#install">1. Install</a>
+        <a href="#agent">2. Connect an agent</a>
+        <a href="#memory">3. Memory consent</a>
+        <a href="#a2a">4. Multi-agent / A2A</a>
+        <a href="#revoke">5. Revoke and audit</a>
+        <a href="#troubleshoot">6. Troubleshooting</a>
+      </aside>
+
+      <div class="tut-body">
+        <section id="prepare">
+          <p class="label-caps">00 / PREPARE</p>
+          <h2 class="heading-2">Prepare</h2>
+          <p>You need:</p>
+          <ul class="checklist">
+            <li>macOS or Linux terminal</li>
+            <li>Homebrew</li>
+            <li>A coding agent: Claude Code, Codex CLI, or AGY</li>
+            <li>A Markdown / Obsidian vault (optional, for memory consent)</li>
+          </ul>
+          <p class="warn">Windows is not supported. Do not put real production credentials in the sample workspace; use a local temporary project for this tutorial.</p>
+        </section>
+
+        <section id="install">
+          <p class="label-caps">01 / INSTALL</p>
+          <h2 class="heading-2">Install Aegis OS</h2>
+          <pre class="cmd"><span class="c"># Add the Heurion tap and install</span>
+brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
+brew trust heurion-org/aegis-os
+brew install aegis-os
+
+<span class="c"># Verify</span>
+aegis-os --version
+aegis-os doctor</pre>
+          <p>The installer runs <code>aegis-os install</code> automatically and wires Aegis OS into <code>agy</code>, <code>claude</code>, and <code>codex</code>. If <code>doctor</code> reports missing wiring, run:</p>
+          <pre class="cmd">aegis-os install</pre>
+          <p class="note">Without Homebrew: download the platform binary from <a href="https://github.com/heurion-org/aegis-os/releases" target="_blank" rel="noopener">GitHub Releases</a> or build with <code>cargo install --path crates/aos-cli</code>. Then run <code>aegis-os install</code>.</p>
+        </section>
+
+        <section id="agent">
+          <p class="label-caps">02 / FIRST RUN</p>
+          <h2 class="heading-2">Connect an agent</h2>
+          <p>Enter a project directory and launch your agent directly:</p>
+          <pre class="cmd"><span class="c"># Pick one</span>
+claude
+codex
+agy</pre>
+          <p>Aegis OS hooks attach the runtime automatically. On first run you choose:</p>
+          <table class="tut-table">
+            <thead><tr><th>Mode</th><th>What it means</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Local</strong></td><td>Free local mode: CoW shadow workspace + native OS sandbox. Recommended starting point.</td></tr>
+              <tr><td><strong>Cloud</strong></td><td>Requires an Aegis Cloud subscription; remote Linux btrfs workspace with zero local CPU/RAM load.</td></tr>
+            </tbody>
+          </table>
+          <p>You can switch later by telling the agent “switch to Local mode” or “switch to Cloud mode”.</p>
+          <h3>Verify isolation</h3>
+          <p>Ask the agent to modify a file, then run:</p>
+          <pre class="cmd">aegis-os workspace status
+aegis-os workspace diff</pre>
+          <p>The change lands in the CoW shadow workspace first and is not written to the host until <code>workspace_commit</code>.</p>
+        </section>
+
+        <section id="memory">
+          <p class="label-caps">03 / MEMORY CONSENT</p>
+          <h2 class="heading-2">Memory consent: only the approved scope</h2>
+          <p>UOMP is the memory consent protocol enforced by Aegis OS. First write the client bridge profile and import notes:</p>
+          <pre class="cmd">aegis-os memory setup claude --vault ~/Notes</pre>
+          <p>This command:</p>
+          <ul>
+            <li>imports Markdown notes (base tag <code>notes</code> by default; use <code>--tag</code>)</li>
+            <li>starts the local memory server in the background (default <code>127.0.0.1:9374</code>)</li>
+            <li>writes the Claude Desktop / Cursor / OpenCode MCP config</li>
+            <li><strong>issues no token and grants no access</strong></li>
+          </ul>
+          <p>Restart the client, then ask the agent to read notes:</p>
+          <pre class="cmd"><span class="c"># In Claude / Cursor / OpenCode</span>
+List the notes under notes/projects</pre>
+          <p>The first tool call creates a consent request. In a terminal:</p>
+          <pre class="cmd">aegis-os memory pending
+aegis-os memory approve &lt;request-id&gt;</pre>
+          <p><code>pending</code> shows the request id, agent, task id (if any), session id, and expiry. After approval the current call continues; a denial returns an error.</p>
+          <p class="note">High-sensitivity data is not opened by a tag scope. The agent must request a specific key, and you approve that key individually in <code>pending</code>.</p>
+          <h3>Verify</h3>
+          <pre class="cmd">aegis-os memory sessions
+aegis-os memory audit --limit 20</pre>
+          <p>You should see the session scope, expiry, and allow / deny audit events.</p>
+        </section>
+
+        <section id="a2a">
+          <p class="label-caps">04 / MULTI-AGENT</p>
+          <h2 class="heading-2">Multi-agent / A2A</h2>
+          <p>Aegis OS uses Google A2A as the agent-to-agent collaboration bus. Create a stateful task:</p>
+          <pre class="cmd">aegis-os ipc request \
+  --to worker \
+  --subject "Review auth module" \
+  --message "Read the auth module and report risks"</pre>
+          <p>Inspect tasks:</p>
+          <pre class="cmd">aegis-os a2a board
+aegis-os a2a show &lt;task-id&gt;</pre>
+          <p><code>board</code> shows task, state, from → to, age, flags, and subject. <code>input-required</code> is pinned with <code>BLOCKED</code>; a task whose assignee disappeared is marked <code>STALE</code>.</p>
+          <h3>Task-scoped lease</h3>
+          <p>If a task needs temporary auto-commit permission, bind a lease to it:</p>
+          <pre class="cmd">aegis-os policy lease \
+  --action-pattern workspace_commit \
+  --ttl-secs 3600 \
+  --task-id &lt;task-id&gt;</pre>
+          <p>The output contains <code>"kind": "task_scoped"</code> and <code>task_id</code>. When the task reaches a terminal state the lease is revoked; the same agent cannot reuse task A's lease for task B.</p>
+          <p class="note">If you use a custom <code>--runtime-dir</code>, pass the same runtime directory to all <code>a2a</code> / <code>policy</code> / <code>memory revoke</code> commands.</p>
+        </section>
+
+        <section id="revoke">
+          <p class="label-caps">05 / REVOKE &amp; AUDIT</p>
+          <h2 class="heading-2">Revoke and audit</h2>
+          <p>Inspect and revoke a memory session:</p>
+          <pre class="cmd">aegis-os memory sessions
+aegis-os memory revoke &lt;session-id&gt;</pre>
+          <p>After revocation:</p>
+          <ul>
+            <li>the next memory request returns <code>401 SESSION_NOT_ACTIVE</code></li>
+            <li>if the session is bound to an A2A task, the task moves to <code>input-required</code> (marked <code>BLOCKED</code>)</li>
+            <li>the audit records the revoke event and task id</li>
+          </ul>
+          <pre class="cmd">aegis-os memory audit --limit 20
+aegis-os a2a board</pre>
+          <p>If a task reaches a terminal state through the gateway (for example <code>tasks/cancel</code>), Aegis OS calls the memory server's <code>revoke-by-task</code> endpoint and revokes that task's memory sessions automatically.</p>
+        </section>
+
+        <section id="troubleshoot">
+          <p class="label-caps">06 / TROUBLESHOOT</p>
+          <h2 class="heading-2">Troubleshooting</h2>
+          <table class="tut-table">
+            <thead><tr><th>Problem</th><th>Fix</th></tr></thead>
+            <tbody>
+              <tr><td>Client does not show Aegis OS tools</td><td>Run <code>aegis-os doctor</code>; restart the client; check the MCP config.</td></tr>
+              <tr><td>Agent waits for approval forever</td><td>In another terminal run <code>aegis-os memory pending</code>, then <code>approve</code> / <code>deny</code>.</td></tr>
+              <tr><td>Port 9374 is in use</td><td><code>aegis-os memory stop</code>; or <code>aegis-os memory setup claude --listen 127.0.0.1:9380</code>.</td></tr>
+              <tr><td><code>SESSION_NOT_ACTIVE</code></td><td>The session expired or was revoked; make a new request, or run <code>aegis-os memory connect claude --scope notes/projects</code>.</td></tr>
+              <tr><td><code>ACCESS_DENIED</code></td><td>The key/tag is outside the approved scope; inspect the consent request and <code>aegis-os memory audit</code>.</td></tr>
+              <tr><td>Task does not change with a custom runtime</td><td>Pass the same <code>--runtime-dir</code> to <code>a2a</code> / <code>memory revoke</code>.</td></tr>
+              <tr><td>Windows</td><td>Not supported; use macOS or Linux.</td></tr>
+            </tbody>
+          </table>
+          <div class="next">
+            <a class="btn-solid" href="/en/aegis-os/">Back to Aegis OS overview →</a>
+            <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub repository →</a>
+            <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP spec →</a>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <footer class="foot" role="contentinfo">
+    <div class="container">
+      <div class="foot-bar">
+        <a class="brand" href="/en" aria-label="Heurion Research">
+          <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+            <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
+            <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
+            <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
+            <circle class="mark-accent" cx="80" cy="20" r="11"/>
+          </svg>
+          <span class="brand-word">HEURION</span>
+        </a>
+        <div class="foot-right">
+          <span>© 2026 Heurion Research · MIT Licensed</span>
+          <a href="/llms.txt" class="foot-link">LLMs.txt</a>
+          <a href="/sitemap.xml" class="foot-link">Sitemap</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

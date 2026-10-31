@@ -151,7 +151,7 @@
       </a>
       <nav class="nav-links" aria-label="Primary">
         <a href="#flagships" class="nav-link" data-i18n="nav_systems">核心系统</a>
-        <a href="/aegis-os/" class="nav-link">Aegis OS</a>
+        <a href="/aegis-os/" class="nav-link" data-aegis-link="overview">Aegis OS</a>
         <a href="#research" class="nav-link" data-i18n="nav_research">发表论文</a>
         <a href="/tools" class="nav-link" data-i18n="nav_tools">临床工具</a>
         <a href="/phr" class="nav-link" data-i18n="nav_phr">知家档案</a>
@@ -388,8 +388,8 @@
                 </div>
               </div>
               <div class="flagship-links">
-                <a class="btn-solid flagship-cta" href="/aegis-os/" id="ctaCard2" data-i18n="f2_link_app">Aegis OS 概览 →</a>
-                <a class="link-arrow" href="/aegis-os/tutorial/" data-i18n="f2_link_tutorial">Aegis OS 教程 →</a>
+                <a class="btn-solid flagship-cta" href="/aegis-os/" id="ctaCard2" data-aegis-link="overview" data-i18n="f2_link_app">Aegis OS 概览 →</a>
+                <a class="link-arrow" href="/aegis-os/tutorial/" data-aegis-link="tutorial" data-i18n="f2_link_tutorial">Aegis OS 教程 →</a>
                 <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" data-i18n="f2_link_repo">GitHub 仓库 →</a>
                 <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_APPLICATION_PROTOCOL.md" target="_blank" rel="noopener" data-i18n="f2_link_spec">AAP-1.0 规范 →</a>
               </div>
@@ -625,6 +625,12 @@
       if (btn) btn.textContent = lang === 'zh' ? 'EN' : '中文';
       const navTools = document.querySelector('a[data-i18n="nav_tools"]');
       if (navTools) navTools.setAttribute('href', lang === 'en' ? '/en/tools' : '/tools');
+      document.querySelectorAll('[data-aegis-link]').forEach(el => {
+        const tutorial = el.getAttribute('data-aegis-link') === 'tutorial';
+        el.setAttribute('href', lang === 'en'
+          ? (tutorial ? '/en/aegis-os/tutorial/' : '/en/aegis-os/')
+          : (tutorial ? '/aegis-os/tutorial/' : '/aegis-os/'));
+      });
     }
 
     document.getElementById('langBtn')?.addEventListener('click', () => {
