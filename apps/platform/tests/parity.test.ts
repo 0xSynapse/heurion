@@ -260,6 +260,7 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/copilot/chat': '全局 Co-Pilot 随航助手用户发起对话入口（由用户输入触发回合）',
   'POST /api/copilot/clear': '全局 Co-Pilot 随航助手清空会话（用户界面操作）',
   'DELETE /api/memory/rules/:rid': '移除个人自适应执行经验由用户本人在记忆界面操作（AI 不能自行删除约束自己的避坑规则）',
+  'POST /api/memory/rules/:rid/rollback': '回退个人自适应执行经验历史版本由用户本人在记忆界面操作（AI 不能自行回退约束自己的避坑规则）',
   // 官网公开无状态小工具（供未登录访客在官网着陆页体验；工作区内 AI 直接调用对应的已鉴权 MCP 工具）
   'POST /api/public/tools/e-value': '官网着陆页公开无状态 E-value 计算小工具（AI 调 study_cohort / biostatistician）',
   'POST /api/public/tools/consort': '官网着陆页公开无状态 CONSORT 流程图小工具（AI 调 study_cohort）',

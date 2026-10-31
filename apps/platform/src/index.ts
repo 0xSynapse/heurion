@@ -61,7 +61,7 @@ const docs = new Documents(store)
 let phrMemberLookup: ((owner: string, patientId: string, space?: 'work' | 'personal') => { tags: string[]; birth_year: number | null } | null) | null = null
 const executionSignals = new ExecutionSignals(store, docs)
 const procedural = new ProceduralHarnessService(store, docs, { mode: config.proceduralMode === 'off' ? undefined : config.proceduralMode, budget: config.proceduralBudget })
-executionSignals.setActivationLookup((owner, docId) => procedural.lastActivation(owner, docId))
+executionSignals.setActivationLookup((owner, docId, turnId) => procedural.lastActivation(owner, docId, turnId))
 const ops = new OpService(docs, (owner, pid, space) => phrMemberLookup?.(owner, pid, space) ?? null, e => executionSignals.recordGuardReject(e))
 const registry = new TurnRegistry()
 const harnessEvolution = new HarnessEvolutionService(store, makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }))

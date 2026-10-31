@@ -351,7 +351,7 @@ export class ProceduralHarnessService {
   /** 记录每个用户（及文档）最近一轮由 forPrompt 激活注入的规则集合，用于 Backward Credit Assignment。 */
   private readonly lastInjected = new Map<string, ActivationSnapshot>()
   /** 记录每个 turnId 激活注入的规则 ID 列表（有界缓存，供 MSCE 回合归因与回滚扣减）。 */
-  private readonly turnActivations = new Map<string, string[]>()
+  private readonly turnActivations = new Map<string, ActivationSnapshot>()
 
   constructor(
     private readonly store: Store,
@@ -362,7 +362,10 @@ export class ProceduralHarnessService {
   }
 
   /** 查询指定用户（及文档）最近一次 Forward 路由激活的规则快照。 */
-  lastActivation(owner: string, docId?: string): ActivationSnapshot | undefined {
+  lastActivation(owner: string, docId?: string, turnId?: string | null): ActivationSnapshot | undefined {
+    if (turnId && this.turnActivations.has(turnId)) {
+      return this.turnActivations.get(turnId)
+    }
     if (docId) {
       const byDoc = this.lastInjected.get(`${owner}#${docId}`)
       if (byDoc) return byDoc
@@ -378,13 +381,13 @@ export class ProceduralHarnessService {
       const oldest = this.turnActivations.keys().next().value
       if (oldest !== undefined) this.turnActivations.delete(oldest)
     }
-    this.turnActivations.set(turnId, snap.ruleIds)
+    this.turnActivations.set(turnId, snap)
     return snap.ruleIds
   }
 
   /** 查询指定 turnId 激活的规则 ID 列表。 */
   rulesForTurn(turnId: string): string[] {
-    return this.turnActivations.get(turnId) ?? []
+    return this.turnActivations.get(turnId)?.ruleIds ?? []
   }
 
   /**
@@ -399,7 +402,7 @@ export class ProceduralHarnessService {
     activeRuleIds?: string[],
     failedCodes?: Iterable<string>,
   ): { updated: number; archived: string[] } {
-    const fromTurn = turnId ? this.turnActivations.get(turnId) : undefined
+    const fromTurn = turnId ? this.turnActivations.get(turnId)?.ruleIds : undefined
     const ruleIds =
       activeRuleIds ??
       (fromTurn && fromTurn.length > 0 ? fromTurn : undefined) ??
