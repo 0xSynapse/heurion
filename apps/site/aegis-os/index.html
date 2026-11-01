@@ -106,16 +106,19 @@
       <div class="container">
         <p class="label-caps">INSTALL</p>
         <h2 class="heading-2">安装 Aegis OS</h2>
-        <p>支持 macOS 与 Linux。Windows 不在支持范围内。安装脚本会自动把 Aegis OS 接入 <code>agy</code>、<code>claude</code> 与 <code>codex</code>。</p>
+        <p>支持 macOS 与 Linux。Windows 不在支持范围内。Homebrew 安装二进制后，运行一次 <code>aegis-os install</code> 完成 <code>agy</code>、<code>claude</code> 与 <code>codex</code> 的接入。</p>
         <pre class="cmd"><span class="c"># Homebrew</span>
 brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
 brew trust heurion-org/aegis-os
 brew install aegis-os
 
+<span class="c"># 接入 AGY / Claude Code / Codex（运行一次）</span>
+aegis-os install
+
 <span class="c"># 验证</span>
 aegis-os --version
 aegis-os doctor</pre>
-        <p class="note">如果你不用 Homebrew，可以从 GitHub Releases 下载对应平台的二进制，或从源码构建。安装后如未自动接入客户端，运行一次 <code>aegis-os install</code>。</p>
+        <p class="note">如果你不用 Homebrew，可以从 GitHub Releases 下载对应平台的二进制，或从源码构建。安装后运行一次 <code>aegis-os install</code> 接入客户端。</p>
       </div>
     </section>
 
