@@ -9,10 +9,15 @@
   <meta name="author" content="Heurion Research" />
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
   <link rel="canonical" href="https://heurion.org/aegis-os/tutorial/" />
+  <link rel="alternate" hreflang="zh-CN" href="https://heurion.org/aegis-os/tutorial/" />
+  <link rel="alternate" hreflang="en" href="https://heurion.org/en/aegis-os/tutorial/" />
+  <link rel="alternate" hreflang="x-default" href="https://heurion.org/aegis-os/tutorial/" />
   <link rel="help" type="text/plain" title="LLMs.txt" href="https://heurion.org/llms.txt" />
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Heurion Research" />
   <meta property="og:url" content="https://heurion.org/aegis-os/tutorial/" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta property="og:locale:alternate" content="en_US" />
   <meta property="og:title" content="Aegis OS 教程 · 从安装到第一个多 Agent 任务" />
   <meta property="og:description" content="安装 Aegis OS，接入 coding agent，批准一次记忆访问，创建 A2A task，撤销并审计。" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -119,11 +124,13 @@ brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
 brew trust heurion-org/aegis-os
 brew install aegis-os
 
+<span class="c"># 接入 AGY / Claude Code / Codex（运行一次）</span>
+aegis-os install
+
 <span class="c"># 验证</span>
 aegis-os --version
 aegis-os doctor</pre>
-          <p>Homebrew 安装二进制后，运行一次 <code>aegis-os install</code>，把 Aegis OS 接入 <code>agy</code>、<code>claude</code> 与 <code>codex</code>：</p>
-          <pre class="cmd">aegis-os install</pre>
+          <p>Homebrew 安装二进制后，运行一次 <code>aegis-os install</code>，把 Aegis OS 接入 <code>agy</code>、<code>claude</code> 与 <code>codex</code>；随后 <code>doctor</code> 应全部通过。</p>
           <p class="note">如果不用 Homebrew：从 <a href="https://github.com/heurion-org/aegis-os/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载对应平台二进制，或从源码 <code>cargo install --path crates/aos-cli</code>。安装后同样运行 <code>aegis-os install</code>。</p>
         </section>
 
@@ -229,6 +236,7 @@ aegis-os a2a board</pre>
               <tr><td>客户端看不到 Aegis OS 工具</td><td>运行 <code>aegis-os doctor</code>；重启客户端；检查 MCP 配置。</td></tr>
               <tr><td>Agent 一直等待审批</td><td>先看是否已自动打开同意页；没有就运行 <code>aegis-os memory ui</code>。CLI fallback：<code>aegis-os memory pending</code>，再 <code>approve</code> / <code>deny</code>。</td></tr>
               <tr><td>端口 9374 被占用</td><td><code>aegis-os memory stop</code>；或 <code>aegis-os memory setup claude --listen 127.0.0.1:9380</code>。</td></tr>
+              <tr><td>同意页 9375 端口被占用</td><td>运行 <code>aegis-os memory ui --listen 127.0.0.1:9376 --url http://127.0.0.1:9374</code>；或关闭占用 9375 的进程。</td></tr>
               <tr><td><code>SESSION_NOT_ACTIVE</code></td><td>session 过期或被撤销；重新发起请求，或 <code>aegis-os memory connect claude --scope notes/projects</code>。</td></tr>
               <tr><td><code>ACCESS_DENIED</code></td><td>key/tag 不在批准范围；查看 <code>aegis-os memory audit</code> 和 consent request scope。</td></tr>
               <tr><td>自定义 runtime 下 task 没变化</td><td><code>a2a</code> / <code>memory revoke</code> 命令补上同一个 <code>--runtime-dir</code>。</td></tr>

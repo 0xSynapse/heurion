@@ -123,11 +123,13 @@ brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
 brew trust heurion-org/aegis-os
 brew install aegis-os
 
+<span class="c"># Wire AGY / Claude Code / Codex (run once)</span>
+aegis-os install
+
 <span class="c"># Verify</span>
 aegis-os --version
 aegis-os doctor</pre>
-          <p>After Homebrew installs the binary, run <code>aegis-os install</code> once to wire Aegis OS into <code>agy</code>, <code>claude</code>, and <code>codex</code>:</p>
-          <pre class="cmd">aegis-os install</pre>
+          <p>After Homebrew installs the binary, run <code>aegis-os install</code> once to wire Aegis OS into <code>agy</code>, <code>claude</code>, and <code>codex</code>; <code>doctor</code> should then pass.</p>
           <p class="note">Without Homebrew: download the platform binary from <a href="https://github.com/heurion-org/aegis-os/releases" target="_blank" rel="noopener">GitHub Releases</a> or build with <code>cargo install --path crates/aos-cli</code>. Then run <code>aegis-os install</code>.</p>
         </section>
 
@@ -233,6 +235,7 @@ aegis-os a2a board</pre>
               <tr><td>Client does not show Aegis OS tools</td><td>Run <code>aegis-os doctor</code>; restart the client; check the MCP config.</td></tr>
               <tr><td>Agent waits for approval forever</td><td>Check whether the consent page opened automatically; if not, run <code>aegis-os memory ui</code>. CLI fallback: <code>aegis-os memory pending</code>, then <code>approve</code> / <code>deny</code>.</td></tr>
               <tr><td>Port 9374 is in use</td><td><code>aegis-os memory stop</code>; or <code>aegis-os memory setup claude --listen 127.0.0.1:9380</code>.</td></tr>
+              <tr><td>Port 9375 for the consent page is in use</td><td>Run <code>aegis-os memory ui --listen 127.0.0.1:9376 --url http://127.0.0.1:9374</code>; or stop the process using 9375.</td></tr>
               <tr><td><code>SESSION_NOT_ACTIVE</code></td><td>The session expired or was revoked; make a new request, or run <code>aegis-os memory connect claude --scope notes/projects</code>.</td></tr>
               <tr><td><code>ACCESS_DENIED</code></td><td>The key/tag is outside the approved scope; inspect the consent request and <code>aegis-os memory audit</code>.</td></tr>
               <tr><td>Task does not change with a custom runtime</td><td>Pass the same <code>--runtime-dir</code> to <code>a2a</code> / <code>memory revoke</code>.</td></tr>
