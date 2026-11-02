@@ -5,6 +5,7 @@ import { relevantPassages, type FullTextClient } from '../literature/fulltext.ts
 import type { PubMedClient } from '../literature/pubmed.ts'
 import type { ClaimVerdict } from '../store/db.ts'
 import { referencePlan } from '../model/references.ts'
+import { snapshotText } from '../model/measurements.ts'
 import {
   extractClaims,
   extractTableSummaries,
@@ -71,7 +72,9 @@ export class ClaimService {
   private extract(docId: string): { claims: Claim[]; unsourced: Claim[]; tables: TableSummary[] } {
     const doc = this.docs.get(docId)
     // 编号与导出一致（正文末尾有用户自己的文献表时接在其后编号）
-    const { claims, unsourced } = extractClaims(doc, referencePlan(doc, this.docs.store.listCitations(docId)).numbers)
+    // 测量原子按绑定时的快照显示（核对的是引文论断；测量的数值来自绑定的来源，不算手写数字）
+    const measures = new Map(this.docs.store.listMeasurements(docId).map(m => [m.id, snapshotText(m)]))
+    const { claims, unsourced } = extractClaims(doc, referencePlan(doc, this.docs.store.listCitations(docId)).numbers, measures)
     const tables = extractTableSummaries(doc)
     return { claims, unsourced, tables }
   }

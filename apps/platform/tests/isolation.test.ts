@@ -263,6 +263,8 @@ describe('越权：MCP 工具，别的机构的 AI 带着 A 的 id 都碰不到'
     followup_record_id: s => s.record,
     agent_id: () => 'agent-1',
     imaging_study_id: () => 'is-none',
+    // 测量原子绑定的病灶（insert_measurement）：别的机构的令牌连文档都过不了归属检查
+    lesion_id: () => 'le-none',
   }
 
   it('机构 B 的令牌调用每个带 id 的工具', async () => {

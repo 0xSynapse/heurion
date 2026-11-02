@@ -3,10 +3,12 @@ import { serializeBlocks } from '../model/markdown.ts'
 import { sanitizeHref } from '../model/schema.ts'
 import type { CitationRow } from '../store/db.ts'
 import { referencePlan } from '../model/references.ts'
+import { measureExportText, type MeasureLookup } from '../model/measurements.ts'
 
 /**
  * 面向人的渲染：HTML 预览与 markdown 导出。引用按文中首次出现顺序编号，
- * 参考文献表由登记表自动生成（模型不手写）。
+ * 参考文献表由登记表自动生成（模型不手写）。测量原子按读者能看到的来源值显示（model/measurements.ts），
+ * 来源状态异常时数字后注明。
  */
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -14,6 +16,7 @@ const SAFE_ALIGN = new Set(['left', 'center', 'right', 'justify'])
 
 interface RenderContext {
   numbers: Map<string, number>
+  measures: MeasureLookup
   assetUrl: (assetId: string) => string
 }
 
@@ -42,6 +45,10 @@ function inline(node: PMNode, ctx: RenderContext): string {
     else if (child.type.name === 'citation') {
       const n = ctx.numbers.get(child.attrs.cite_id as string)
       out += wrap(`<sup class="cite">[${n ?? '?'}]</sup>`, child.marks)
+    } else if (child.type.name === 'measurement') {
+      const id = child.attrs.m_id as string
+      const v = ctx.measures.get(id)
+      out += wrap(`<span class="measure" data-measure="${esc(id)}" data-status="${esc(v?.status ?? 'unknown')}" title="${esc(v ? `${v.source_label} · ${v.note}` : '未登记的测量')}">${esc(measureExportText(v, id))}</span>`, child.marks)
     }
   })
   return out
@@ -94,10 +101,10 @@ function numbering(doc: PMNode, citations: CitationRow[]) {
   return { plan, numbers: plan.numbers, list: plan.append.map(a => ({ n: a.n, c: byId.get(a.id)! })) }
 }
 
-export function renderHtml(doc: PMNode, citations: CitationRow[], assetUrl: (id: string) => string): string {
+export function renderHtml(doc: PMNode, citations: CitationRow[], assetUrl: (id: string) => string, measures: MeasureLookup = new Map()): string {
   const { plan, numbers, list } = numbering(doc, citations)
   let body = ''
-  doc.forEach((n, _o, i) => { if (i < plan.bodyEnd) body += block(n, { numbers, assetUrl }) })
+  doc.forEach((n, _o, i) => { if (i < plan.bodyEnd) body += block(n, { numbers, measures, assetUrl }) })
   if (list.length > 0) {
     const items = list.map(({ c }) => `<li>${esc(c.formatted)} <a href="${esc(sanitizeHref(c.url ?? `https://doi.org/${c.doi}`))}" target="_blank" rel="noopener">原文</a></li>`).join('')
     // 合并进用户的文献表 / 复用已有标题时不再另起标题；编号接着用户的表
@@ -107,12 +114,14 @@ export function renderHtml(doc: PMNode, citations: CitationRow[], assetUrl: (id:
   return body
 }
 
-/** markdown 导出：引用替换成 [n]，末尾追加参考文献表（与 docx 同一套合并规则）。 */
-export function exportMarkdown(doc: PMNode, citations: CitationRow[]): string {
+/** markdown 导出：引用替换成 [n]、测量替换成数值（状态异常时注明），末尾追加参考文献表（与 docx 同一套合并规则）。 */
+export function exportMarkdown(doc: PMNode, citations: CitationRow[], measures: MeasureLookup = new Map()): string {
   const { plan, numbers, list } = numbering(doc, citations)
   const blocks: PMNode[] = []
   doc.forEach((n, _o, i) => { if (i < plan.bodyEnd) blocks.push(n) })
-  let md = serializeBlocks(blocks).replace(/\[@c:([a-z0-9]+)\]/g, (_m, id: string) => `[${numbers.get(id) ?? '?'}]`)
+  let md = serializeBlocks(blocks)
+    .replace(/\[@c:([a-z0-9]+)\]/g, (_m, id: string) => `[${numbers.get(id) ?? '?'}]`)
+    .replace(/(?<!\\)\[@m:([a-z0-9]+)\]/g, (_m, id: string) => measureExportText(measures.get(id), id))
   if (list.length > 0) {
     const heading = plan.userCount > 0 || plan.hasHeading ? '' : '## 参考文献\n\n'
     md += `\n\n${heading}${list.map(({ n, c }) => `[${n}] ${c.formatted}`).join('\n\n')}`

@@ -562,6 +562,15 @@ export class ImagingStudyService {
     return { studyId: before.study_id, patientId: s.patientId }
   }
 
+  /**
+   * 测量原子（[@m:id]，src/measurements/）读取来源病灶：读权限（能看到患者）；影子模式的病灶当不存在。
+   * 返回任何状态的病灶（否决、撤销的也返回，由调用方决定能否绑定、怎样显示）。
+   */
+  measurementSource(a: Actor, lesionId: string): { lesion: LesionRow; patientId: string; tenantId: string } {
+    const { s, before } = this.lesionScope(a, lesionId, 'read')
+    return { lesion: before, patientId: s.patientId, tenantId: s.tenantId }
+  }
+
   /** 病灶所属检查的 StudyInstanceUID（阅片器校验 Cookie 允许的检查用） */
   studyUidOfLesion(a: Actor, lesionId: string): string {
     const { s, before } = this.lesionScope(a, lesionId, 'read')

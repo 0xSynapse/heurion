@@ -8,6 +8,7 @@
  */
 
 import { icon } from '../../../apps/platform/web/src/icons.ts'
+import { measureExportText, type MeasureView } from '../../../apps/platform/src/model/measurements.ts'
 
 interface PMJson { type: string; attrs?: Record<string, any>; content?: PMJson[]; text?: string; marks?: Array<{ type: string; attrs?: Record<string, any> }> }
 
@@ -57,6 +58,8 @@ export class DeckView {
     rev: number
     size: { cx: number; cy: number }
     doc: PMJson
+    /** 测量原子按当前用户权限取到的显示值（GET /api/docs/:id/deck） */
+    measurements?: MeasureView[]
     ph_styles?: Record<string, Array<{ type: string; idx: string | null; style: PhStyle }>>
     render_info?: {
       available: boolean
@@ -658,6 +661,12 @@ export class DeckView {
       offset += c.type === 'text' ? (c.text ?? '').length : 1
       if (c.type === 'hard_break') return `<br data-o="${o}">`
       if (c.type === 'citation') return `<sup class="cite" data-o="${o}" data-atom data-cite="${esc(c.attrs!.cite_id)}" contenteditable="false">[${this.numbers.get(c.attrs!.cite_id) ?? '?'}]</sup>`
+      if (c.type === 'measurement') {
+        const id = String(c.attrs!.m_id)
+        const v = this.data?.measurements?.find(x => x.id === id)
+        const alert = !v || ['rejected', 'withdrawn', 'unconfirmed', 'field_missing', 'unknown'].includes(v.status)
+        return `<span class="measure${alert ? ' measure-alert' : ''}" data-o="${o}" data-atom data-measure="${esc(id)}" data-status="${esc(v?.status ?? 'unknown')}" title="${esc(v ? `${v.source_label}\n${v.note}` : '未登记的测量')}" contenteditable="false">${esc(measureExportText(v, id))}</span>`
+      }
       const rpr = c.marks?.find(m => m.type === 'rpr')?.attrs?.xml as string | undefined
       const ts = c.marks?.find(m => m.type === 'text_style')?.attrs as { font_family?: string; font_size?: string; color?: string } | undefined
       const sz = rpr ? /\ssz="(\d+)"/.exec(rpr)?.[1] : ts?.font_size ? String(Math.round(parseFloat(ts.font_size) * 100)) : undefined
@@ -806,10 +815,10 @@ const escapeMd = (text: string) => text.replace(/([\\*_`[\]<>])/g, '\\$1')
 
 /** 模型段落 → 编辑提交用的文字（与 domParagraphs 同一写法，用来判断改没改）。 */
 function modelText(p: PMJson): string {
-  return (p.content ?? []).map(c => c.type === 'text' ? escapeMd(c.text ?? '') : c.type === 'citation' ? `[@c:${c.attrs!.cite_id}]` : c.type === 'hard_break' ? '<br>' : '').join('')
+  return (p.content ?? []).map(c => c.type === 'text' ? escapeMd(c.text ?? '') : c.type === 'citation' ? `[@c:${c.attrs!.cite_id}]` : c.type === 'measurement' ? `[@m:${c.attrs!.m_id}]` : c.type === 'hard_break' ? '<br>' : '').join('')
 }
 
-/** 编辑后的 DOM → 段落（文字转义；引用角标还原成 [@c:id]；换行写 <br>）。浏览器可能把输入包成 div 或裸文字，一并算段落。 */
+/** 编辑后的 DOM → 段落（文字转义；引用角标还原成 [@c:id]、测量还原成 [@m:id]；换行写 <br>）。浏览器可能把输入包成 div 或裸文字，一并算段落。 */
 function domParagraphs(container: HTMLElement): Array<{ text: string; lvl: number }> {
   const out: Array<{ text: string; lvl: number }> = []
   const inline = (node: Node): string => {
@@ -819,6 +828,7 @@ function domParagraphs(container: HTMLElement): Array<{ text: string; lvl: numbe
       else if (c instanceof HTMLElement) {
         if (c.tagName === 'BR') { if (i < node.childNodes.length - 1) s += '<br>' }
         else if (c.dataset.cite) s += `[@c:${c.dataset.cite}]`
+        else if (c.dataset.measure) s += `[@m:${c.dataset.measure}]`
         else s += inline(c)
       }
     })

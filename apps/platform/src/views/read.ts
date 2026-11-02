@@ -4,6 +4,7 @@ import { plainText, serializeBlock } from '../model/markdown.ts'
 import { citationOrderOf } from '../model/references.ts'
 import { diffNodes } from '../model/runtime.ts'
 import type { CitationRow, CommentRow } from '../store/db.ts'
+import type { MeasureLookup } from '../model/measurements.ts'
 
 /**
  * 读视图（PLATFORM.md §6.2）：给模型的紧凑文本视图。所有视图都带 rev，
@@ -67,6 +68,8 @@ export interface ReadInput {
   to_id?: string
   /** 分页游标：顶层块下标。 */
   cursor?: number
+  /** 测量原子在当前读者（AI 代表的用户）眼里的值与状态；不给时测量图例只列 id。 */
+  measurements?: MeasureLookup
 }
 
 export class ReadError extends Error {}
@@ -122,7 +125,28 @@ export function read(input: ReadInput): string {
       return `- 评论 ${x.c.id} @ {#${x.loc.node_ids.join('}, {#')}}「${x.loc.text.slice(0, 80)}」：${last?.text ?? ''}${last?.author ? `（${last.author}）` : ''}`
     })
   const tail = notes.length > 0 ? `\n\n---\n本范围内的 open 评论：\n${notes.join('\n')}` : ''
-  return `${header}\n\n${parts.join('\n\n')}${tail}${wordInlineLegend(blocks.slice(start, i))}`
+  return `${header}\n\n${parts.join('\n\n')}${tail}${wordInlineLegend(blocks.slice(start, i))}${measurementLegend(blocks.slice(start, i), input.measurements)}`
+}
+
+/** 本范围内的测量原子：标记 → 显示的值、来源与状态（AI 据此知道 [@m:…] 显示成什么，状态异常时不要再引用）。 */
+export function measurementLegend(blocks: PMNode[], views: MeasureLookup | undefined): string {
+  const lines: string[] = []
+  const seen = new Set<string>()
+  for (const b of blocks) {
+    b.descendants(n => {
+      if (n.type.name !== 'measurement' || seen.has(n.attrs.m_id as string)) return true
+      const id = n.attrs.m_id as string
+      seen.add(id)
+      const v = views?.get(id)
+      lines.push(v
+        ? `- [@m:${id}] = ${v.text}（${v.source_label}；${v.status === 'ok' ? '与来源一致' : v.note}）`
+        : `- [@m:${id}]（未登记）`)
+      return true
+    })
+  }
+  return lines.length > 0
+    ? `\n\n---\n本范围内的测量（[@m:…] 显示为来源的当前值；改写时原样保留，新数字先用 insert_measurement 绑定，不要手写数值）：\n${lines.join('\n')}`
+    : ''
 }
 
 /** 本范围内的 Word 行内结构（脚注 / 尾注引用、域代码、文本框与嵌入对象）：标记 → 是什么，提示原样保留。 */

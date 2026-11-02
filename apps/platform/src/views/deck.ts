@@ -2,6 +2,8 @@ import type { Node as PMNode } from 'prosemirror-model'
 import { pt } from '../model/deck-schema.ts'
 import { isDecoName, layoutByName } from '../model/deck-templates.ts'
 import type { LayoutInfo } from '../ops/deck.ts'
+import type { MeasureLookup } from '../model/measurements.ts'
+import { measurementLegend } from './read.ts'
 
 /**
  * deck 的读视图（PLATFORM.md §7 MCP 面）：outline 列出每页；slide_read 列出一页的形状
@@ -11,7 +13,7 @@ import type { LayoutInfo } from '../ops/deck.ts'
 const KIND: Record<string, string> = { text: '文本', shape: '图形', image: '图片', table: '表格', chart: '图表', group: '组合', line: '线条', opaque: '不可编辑' }
 const PH: Record<string, string> = { title: '标题', ctrTitle: '标题', subTitle: '副标题', body: '正文', obj: '内容', pic: '图片', dt: '日期', ftr: '页脚', sldNum: '页码' }
 
-/** 段落 → 一行 markdown：lvl 缩进成列表，引用写 [@c:id]，强调保留。 */
+/** 段落 → 一行 markdown：lvl 缩进成列表，引用写 [@c:id]，测量写 [@m:id]，强调保留。 */
 function paragraphMd(p: PMNode, bulleted: boolean): string {
   let s = ''
   p.forEach(c => {
@@ -21,6 +23,7 @@ function paragraphMd(p: PMNode, bulleted: boolean): string {
       if (c.marks.some(m => m.type.name === 'italic')) t = `*${t}*`
       s += t
     } else if (c.type.name === 'citation') s += `[@c:${c.attrs.cite_id}]`
+    else if (c.type.name === 'measurement') s += `[@m:${c.attrs.m_id}]`
     else if (c.type.name === 'hard_break') s += '<br>'
   })
   const lvl = p.attrs.lvl as number
@@ -117,10 +120,11 @@ export function slideRead(slide: PMNode, index: number, rev: number): string {
 }
 
 /** 全部幻灯片的文字（doc_read 对 deck 的回应；按页分页）。 */
-export function deckRead(doc: PMNode, rev: number, cursor = 0, pageSlides = 8): string {
+export function deckRead(doc: PMNode, rev: number, cursor = 0, pageSlides = 8, measurements?: MeasureLookup): string {
   const parts: string[] = []
+  const slides: PMNode[] = []
   let i = cursor
-  for (; i < doc.childCount && i < cursor + pageSlides; i++) parts.push(slideRead(doc.child(i), i, rev))
+  for (; i < doc.childCount && i < cursor + pageSlides; i++) { parts.push(slideRead(doc.child(i), i, rev)); slides.push(doc.child(i)) }
   const more = i < doc.childCount ? `\n\n（未读完，下一页 cursor=${i}）` : ''
-  return parts.join('\n\n') + more
+  return parts.join('\n\n') + more + measurementLegend(slides, measurements)
 }

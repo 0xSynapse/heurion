@@ -10,6 +10,7 @@ import { applyOps, type OpResult } from './apply.ts'
 import { toSuggestion } from './suggest.ts'
 import { guardPhrRedlines, type PhrMember } from './phr-guard.ts'
 import { DOI, manualCitation } from './citation-check.ts'
+import { findBareMeasurements, measurementsIn } from '../model/measurements.ts'
 import { OpError, opTexts, targetIds, type DocOp, type EditBatch } from './types.ts'
 import { applyDeckOps, deckOpTexts, deckTargetIds, type DeckEditBatch, type DeckOp } from './deck.ts'
 import { readLayouts } from '../convert/pptx-layouts.ts'
@@ -157,6 +158,7 @@ export class OpService {
     if (ai) {
       this.guardConflicts(batch, before, targetsOf, deck)
       this.guardCitations(batch, textsOf)
+      this.guardMeasurements(batch, textsOf, before, targetsOf)
       if (!deck) this.guardExistingCitations(batch as EditBatch, before)
       this.guardPatientRedlines(batch, textsOf, row)
     }
@@ -195,6 +197,7 @@ export class OpService {
     if (ai && !deck) {
       this.guardUserContent(batch as EditBatch, before, after)
       this.guardCitationRetention(batch as EditBatch, before, after)
+      this.guardMeasurementRetention(batch as EditBatch, before, after)
       this.guardCitationSupport(batch as EditBatch, before, after)
     }
 
@@ -466,7 +469,7 @@ export class OpService {
       else return
       if (!/\[@c:/.test(newText)) return
       const was: string[] = oldText.match(MARK) ?? []
-      const now: string[] = newText.replace(/\[@[cw]:[^\]]*\]/g, '').match(MARK) ?? []
+      const now: string[] = newText.replace(/\[@[cwm]:[^\]]*\]/g, '').match(MARK) ?? []
       const gone = was.filter(m => !now.includes(m))
       if (gone.length === 0) return
       throw new OpError('existing_citation', `这处修改把原有的文中编号 ${gone.slice(0, 3).join('、')} 换成了平台引用`, {
@@ -632,6 +635,76 @@ export class OpService {
             })
           }
         }
+      }
+    })
+  }
+
+  /**
+   * 测量守卫（W4.2，PLATFORM.md「测量原子」）：
+   * 1) 写入内容里的 [@m:id] 必须已在本文档登记（insert_measurement）—— 编造、拼错、从别的文档抄来的 id 一律拒绝（unbound_measurement）；
+   * 2) 严格模式（文档显式开启，或未设置而文档已有测量登记）下，不能新写带 mm / cm / mm³ / HU 等单位的裸数字（bare_measurement）。
+   *    原文里已有的裸数字（用户写的、严格模式开启前的）改写时可以保留：只拦这次新增的；
+   *    层厚、窗位等采集参数，带比较词的阈值（≥ 6 mm），范围（6–8 mm），mmHg / cmH2O 不算（见 model/measurements.ts）。
+   */
+  private guardMeasurements(batch: EditBatch | DeckEditBatch, textsOf: (op: unknown) => string[], before: PMNode, targetsOf: (op: unknown) => string[]): void {
+    const rows = this.docs.store.listMeasurements(batch.doc_id)
+    const registered = new Set(rows.map(m => m.id))
+    const strict = this.docs.store.measurementStrict(batch.doc_id) ?? rows.length > 0
+    const index = strict ? indexById(before) : null
+    batch.ops.forEach((op, i) => {
+      const texts = textsOf(op)
+      for (const text of texts) {
+        for (const m of text.matchAll(/\[@m:([^\]\s]*)\]/g)) {
+          if (!registered.has(m[1]!)) {
+            throw new OpError('unbound_measurement', `测量 [@m:${m[1]}] 未在本文档登记`, {
+              op_index: i,
+              hint: '只能使用本文档 insert_measurement / list_measurements 返回的 m_id，不能自己编写或从别的文档复制；要引用新的测量先用 insert_measurement 绑定。',
+            })
+          }
+        }
+      }
+      if (!index) return
+      const fresh = texts.flatMap(findBareMeasurements)
+      if (fresh.length === 0) return
+      // 这次操作改写的原文（find、目标块）里已有的裸数字可以保留
+      const oldTexts = [...('find' in (op as object) ? [String((op as { find: unknown }).find)] : []), ...targetsOf(op).map(id => { const n = index.get(id)?.node; return n ? plainText(n) : '' })]
+      const left = new Map<string, number>()
+      for (const t of oldTexts.flatMap(findBareMeasurements)) left.set(t, (left.get(t) ?? 0) + 1)
+      const added = fresh.filter(t => { const n = left.get(t) ?? 0; if (n > 0) { left.set(t, n - 1); return false } return true })
+      if (added.length === 0) return
+      throw new OpError('bare_measurement', `这份报告里的测量数字要绑定来源，不能直接写 ${[...new Set(added)].slice(0, 3).join('、')}`, {
+        op_index: i,
+        hint: '用 imaging_lesions 找到已确认的病灶 → insert_measurement 绑定要写的测量（字段、单位）→ 正文写返回的 [@m:<m_id>]（显示为「数值 单位」，标记前后不要再写数字和单位）。' +
+          '确实不是病灶测量的数字（外院报告、指南阈值、采集参数）：阈值写明比较词（如「≥ 6 mm」），采集参数写明「层厚」等；否则请用户决定是否关闭本文档的测量严格模式。',
+        current: { bare: added },
+      })
+    })
+  }
+
+  /** 测量保留守卫：改写或精简段落时，块内已有的 [@m:…] 不能被丢掉或换成手写数字（参照引用保留守卫）。 */
+  private guardMeasurementRetention(batch: EditBatch, before: PMNode, after: PMNode): void {
+    const beforeIdx = indexById(before)
+    const afterIdx = indexById(after)
+    const insertCopyByOrig = new Map<string, PMNode>()
+    after.descendants(n => {
+      if (n.attrs.suggest === 'insert' && n.attrs.suggest_of) insertCopyByOrig.set(String(n.attrs.suggest_of), n)
+      return true
+    })
+    batch.ops.forEach((op, i) => {
+      if (op.op !== 'replace_block' && op.op !== 'replace_text') return
+      const bNode = beforeIdx.get(op.id)?.node
+      const aNode = insertCopyByOrig.get(op.id) ?? afterIdx.get(op.id)?.node
+      if (!bNode || !aNode) return
+      const was = measurementsIn(bNode)
+      if (was.size === 0) return
+      const now = measurementsIn(aNode)
+      const lost = [...was].filter(id => !now.has(id))
+      const added = [...now].filter(id => !was.has(id))
+      if (lost.length > 0 && added.length === 0) {
+        throw new OpError('measurement_lost', `块 ${op.id} 中已有的测量标记 ${lost.map(m => `[@m:${m}]`).join('、')} 在修改后丢失`, {
+          op_index: i,
+          hint: '改写或精简段落时原样保留块内已有的 [@m:…]（不要换成手写的数字，也不要删掉）——它显示的是绑定病灶的当前测量值，医生重测后会自动更新。用户明确要求删掉这处测量时，删除整句所在的块或请用户自己删。',
+        })
       }
     })
   }

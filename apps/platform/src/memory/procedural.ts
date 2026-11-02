@@ -93,6 +93,12 @@ export const LEARNED_RULE_TEMPLATES: Record<string, string> = {
     '引文句级支撑规范（citation_unsupported）：外部文献不能直接裸挂在陈述本研究自身方法或队列结果的原句末尾，应完整保留原句并在句末补写对比分句「, consistent with prior studies demonstrating … [@c:id].」使引用支撑该分句。',
   citation_detached:
     '引文断句规范（citation_detached）：引用标记前的英文缩写词勿带句号（如将 "vs. CT" 改为 "vs CT"），防止句子在引用标记前被切碎。',
+  bare_measurement:
+    '测量数字须绑定（bare_measurement）：报告里病灶的大小、体积、CT 值不要手写数字和单位；先用 imaging_lesions 找到已确认的病灶，insert_measurement 绑定字段，再在正文写返回的 [@m:id]（标记前后不再写数值或单位）。',
+  unbound_measurement:
+    '测量标记须已登记（unbound_measurement）：[@m:…] 只能用本文档 insert_measurement / list_measurements 返回的 m_id，不能自己编写或从别的文档复制。',
+  measurement_lost:
+    '测量标记保留（measurement_lost）：改写或精简段落时原样保留块内已有的 [@m:…]，不要换成手写数字，也不要删掉。',
 }
 
 /** 安慰剂模式（placebo）附加的与任务无关的说明文字（§5.3：长度与习得规则相当，用来区分“规则内容的作用”与“多了一段提示”）。 */
@@ -140,6 +146,9 @@ const CUES: Record<string, { msg?: RegExp; state?: (s: DocState, m: string) => b
   existing_citation: { msg: /重写|改写|精简|润色|引用|文献/i },
   citation_unsupported: { msg: /引用|参考文献|文献|支持|cite|citation|reference/i },
   citation_detached: { msg: /引用|参考文献|文献|支持|cite|citation|reference/i },
+  bare_measurement: { msg: /结节|病灶|测量|大小|直径|体积|CT 值|mm|报告/i },
+  unbound_measurement: { msg: /结节|病灶|测量|报告/i },
+  measurement_lost: { msg: /重写|改写|精简|润色|测量/i },
 }
 
 /** 效用权重：证据数、消息线索、文档状态线索。手工设定，未调参。 */

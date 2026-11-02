@@ -2,6 +2,7 @@ import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { referencePlan } from '../model/references.ts'
+import { measureExportText, type MeasureLookup } from '../model/measurements.ts'
 import { colWidths } from '../model/schema.ts'
 import { resolveSuggestions } from '../ops/suggest.ts'
 import { readGrid, type GridCell } from '../model/table-grid.ts'
@@ -27,6 +28,8 @@ export interface ExportInput {
   pkg: Uint8Array | null
   src: (nodeId: string) => string | null
   citations: CitationRow[]
+  /** 测量原子的显示值（按导出者能看到的来源；不给时一律按未登记处理）。 */
+  measurements?: MeasureLookup
   comments: CommentRow[]
   asset: (id: string) => { mime: string; bytes: Uint8Array } | null
 }
@@ -291,6 +294,7 @@ export function exportDocx(input: ExportInput): ExportResult {
   // 引用编号与参考文献表：正文末尾已有用户自己的文献表时，平台引用接在其后编号（见 model/references.ts）
   const refPlan = referencePlan(input.doc, input.citations)
   const citeNumber = refPlan.numbers
+  const measureText = (n: PMNode) => measureExportText(input.measurements?.get(n.attrs.m_id as string), n.attrs.m_id as string)
   // 导出的评论线程：open 的，以及导入的 Word 批注（已解决的也写回，在 Word 里标为已解决）
   const openComments = new Map(input.comments.filter(c => c.status === 'open' || c.source_ref).map(c => [c.id, c]))
   const commentIds = new Map<string, number>()
@@ -364,6 +368,9 @@ export function exportDocx(input: ExportInput): ExportResult {
         const n = citeNumber.get(child.attrs.cite_id as string)
         // 上标编号沿用所在段落的字体字号（导入稿件的模板格式）
         run = `<w:r>${runProps([], '<w:vertAlign w:val="superscript"/>', baseRPr)}<w:t>[${n ?? '?'}]</w:t></w:r>`
+      } else if (child.type.name === 'measurement') {
+        // 测量原子写成普通文字（数值 + 单位，状态异常时注明），格式随原子上的 mark 与段落字体
+        run = textRuns(measureText(child), child.marks, baseRPr)
       } else if (child.type.name === 'word_inline') {
         // 导入的脚注引用 / 域代码：原始 run 序列原样写回（脚注正文在原文件包的 footnotes.xml 里）
         run = (child.attrs.xml as string) || textRuns(String(child.attrs.text ?? ''), [], baseRPr)
@@ -550,7 +557,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       runs: (text, marks, base) => textRuns(text, marks, base),
       atom: (n, base) => n.type.name === 'hard_break' ? '<w:r><w:br/></w:r>'
         : n.type.name === 'citation' ? `<w:r>${runProps([], '<w:vertAlign w:val="superscript"/>', base)}<w:t>[${citeNumber.get(n.attrs.cite_id as string) ?? '?'}]</w:t></w:r>`
-        : n.type.name === 'word_inline' ? ((n.attrs.xml as string) || null) : null,
+        : n.type.name === 'word_inline' ? ((n.attrs.xml as string) || null)
+        : n.type.name === 'measurement' ? textRuns(measureText(n), n.marks, base) : null,
       // 平台里新建的批注线程要重新生成范围标记；导入的 Word 批注的范围标记在原文里
       markOk: m => m.type.name !== 'comment' || !openComments.has(m.attrs.thread as string) || !!wordRef(openComments.get(m.attrs.thread as string)!),
     })

@@ -5,6 +5,7 @@ import { DECK_THEMES } from '../model/deck-themes.ts'
 import { chartWorkbook, newChartXml, patchChart, readChart, type ChartData } from './pptx-chart.ts'
 import type { CitationRow } from '../store/db.ts'
 import { citationOrder } from '../views/read.ts'
+import { measureExportText, type MeasureLookup } from '../model/measurements.ts'
 import { childrenRaw, safeUnzipPptx } from './pptx-import.ts'
 
 /**
@@ -21,9 +22,14 @@ export interface PptxExportInput {
   pkg: Uint8Array
   src: (nodeId: string) => string | null
   citations: CitationRow[]
+  /** 测量原子的显示值（按导出者能看到的来源；不给时一律按未登记处理）。 */
+  measurements?: MeasureLookup
   /** 图片资产（新插入的图片写进 ppt/media）。 */
   asset?: (id: string) => { mime: string; bytes: Uint8Array } | null
 }
+
+/** 引用编号，附带测量原子的显示值（一路传到段落）。 */
+type Numbering = Map<string, number> & { measures?: MeasureLookup }
 
 /** 一页幻灯片的关系表：新图片要在这里登记，返回 rId。 */
 interface SlideRels {
@@ -128,7 +134,7 @@ function runProps(marks: readonly Mark[], forceSup = false): string {
   return xml
 }
 
-function paragraphXml(p: PMNode, numbers: Map<string, number>): string {
+function paragraphXml(p: PMNode, numbers: Numbering): string {
   let ppr = p.attrs.ppr ? stripNs(p.attrs.ppr as string) : ''
   const lvl = p.attrs.lvl as number
   if (ppr) ppr = setAttr(ppr, 'a:pPr', 'lvl', lvl > 0 ? String(lvl) : null)
@@ -150,12 +156,15 @@ function paragraphXml(p: PMNode, numbers: Map<string, number>): string {
     } else if (c.type.name === 'citation') {
       const n = numbers.get(c.attrs.cite_id as string)
       runs += `<a:r>${runProps(lastMarks, true)}<a:t>[${n ?? '?'}]</a:t></a:r>`
+    } else if (c.type.name === 'measurement') {
+      const id = c.attrs.m_id as string
+      runs += `<a:r>${runProps(c.marks.length ? c.marks : lastMarks)}<a:t>${esc(measureExportText(numbers.measures?.get(id), id))}</a:t></a:r>`
     }
   })
   return `<a:p>${ppr}${runs}</a:p>`
 }
 
-function txBodyInner(shape: PMNode, numbers: Map<string, number>): string {
+function txBodyInner(shape: PMNode, numbers: Numbering): string {
   let out = ''
   shape.forEach(p => { if (p.type.name === 'paragraph') out += paragraphXml(p, numbers) })
   return out || '<a:p><a:endParaRPr lang="zh-CN"/></a:p>'
@@ -175,7 +184,7 @@ export function ensureGeometry(spXml: string): string {
 }
 
 /** 改过的形状：替换文字体 / 位置，其余原样。 */
-function patchShape(src: string, shape: PMNode, before: PMNode | undefined, numbers: Map<string, number>): string {
+function patchShape(src: string, shape: PMNode, before: PMNode | undefined, numbers: Numbering): string {
   let xml = src
   const a = shape.attrs
   const moved = !before || a.x !== before.attrs.x || a.y !== before.attrs.y || a.w !== before.attrs.w || a.h !== before.attrs.h || (before.attrs.xfrm_inherited && !a.xfrm_inherited)
@@ -217,7 +226,7 @@ function patchShape(src: string, shape: PMNode, before: PMNode | undefined, numb
 /**
  * 表格的 a:tbl。tblPr / 列宽 / 行高可沿用原文件（导入的表格增删行列后重建时），否则平分形状的宽高。
  */
-function tableXml(shape: PMNode, numbers: Map<string, number>, from?: { tblPr?: string; grid?: string[]; rowHeights?: number[] }): string {
+function tableXml(shape: PMNode, numbers: Numbering, from?: { tblPr?: string; grid?: string[]; rowHeights?: number[] }): string {
   const a = shape.attrs
   const rows: PMNode[] = []
   shape.firstChild?.forEach(r => rows.push(r))
@@ -238,7 +247,7 @@ function tableXml(shape: PMNode, numbers: Map<string, number>, from?: { tblPr?: 
 }
 
 /** 导入的表格增删了行列：保留原 graphicFrame（位置、名字、样式 tblPr、行高、列宽），重建 a:tbl。 */
-function rebuildTable(src: string, shape: PMNode, numbers: Map<string, number>): string {
+function rebuildTable(src: string, shape: PMNode, numbers: Numbering): string {
   const tbl = /<a:tbl>[\s\S]*<\/a:tbl>/.exec(src)
   if (!tbl) return src
   const tblPr = element(tbl[0], 'a:tblPr') ?? undefined
@@ -249,7 +258,7 @@ function rebuildTable(src: string, shape: PMNode, numbers: Map<string, number>):
 
 const tableShape = (n: PMNode) => { const t = n.firstChild; return t ? [t.childCount, t.firstChild?.childCount ?? 0].join('×') : '' }
 
-function newShapeXml(shape: PMNode, nvId: number, numbers: Map<string, number>, rels: SlideRels): string {
+function newShapeXml(shape: PMNode, nvId: number, numbers: Numbering, rels: SlideRels): string {
   const a = shape.attrs
   const name = esc(String(a.name || (a.ph ? 'Placeholder' : 'TextBox')))
   if (a.kind === 'image') {
@@ -291,7 +300,7 @@ export function exportPptx(input: PptxExportInput): { bytes: Uint8Array; warning
   const text = (name: string) => files[name] ? strFromU8(files[name]!) : ''
   const put = (name: string, content: string) => { files[name] = strToU8(content) }
   const order = citationOrder(input.doc)
-  const numbers = new Map(order.map((id, i) => [id, i + 1]))
+  const numbers: Numbering = Object.assign(new Map(order.map((id, i) => [id, i + 1] as [string, number])), { measures: input.measurements })
   const baseline = new Map<string, PMNode>()
   input.baseline?.descendants(n => { if (n.attrs.id) baseline.set(n.attrs.id as string, n); return n.type.name !== 'shape' })
 
@@ -515,7 +524,7 @@ function sameThemes(a: PMNode, b: PMNode): boolean {
 }
 
 /** 重建一页的形状树：保留组头与其他非形状元素，形状按模型顺序。 */
-function rebuildSlide(xml: string, slide: PMNode, before: PMNode | undefined, input: PptxExportInput, numbers: Map<string, number>, rels: SlideRels): string {
+function rebuildSlide(xml: string, slide: PMNode, before: PMNode | undefined, input: PptxExportInput, numbers: Numbering, rels: SlideRels): string {
   const raw = childrenRaw(xml, /<p:spTree\b[^>]*>/)
   const head = raw.filter(r => /^<p:(nvGrpSpPr|grpSpPr)\b/.test(r))
   const usedIds = [...xml.matchAll(/<p:cNvPr\b[^>]*\bid="(\d+)"/g)].map(m => Number(m[1]))
@@ -525,7 +534,7 @@ function rebuildSlide(xml: string, slide: PMNode, before: PMNode | undefined, in
   return xml.slice(0, open.index + open[0].length) + body + xml.slice(close)
 }
 
-function shapesXml(slide: PMNode, head: string[], nextId: number, input: PptxExportInput, numbers: Map<string, number>, rels: SlideRels, before?: PMNode): string {
+function shapesXml(slide: PMNode, head: string[], nextId: number, input: PptxExportInput, numbers: Numbering, rels: SlideRels, before?: PMNode): string {
   const prev = new Map<string, PMNode>()
   before?.forEach(s => { if (s.attrs.id) prev.set(s.attrs.id as string, s) })
   let out = head.map(ensureGeometry).join('')

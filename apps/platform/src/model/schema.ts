@@ -7,6 +7,7 @@ import { Schema, type DOMOutputSpec, type Node as PMNode } from 'prosemirror-mod
  * 可寻址节点（带平台 id）：heading / paragraph / bullet_list / ordered_list / list_item / table /
  * figure / opaque。表格单元格按 (row, col) 寻址，不单独给 id。
  * 引用是行内原子节点 citation(cite_id)：编号在渲染时按文中首次出现顺序计算。
+ * 测量是行内原子节点 measurement(m_id)：数值与单位在渲染时按登记表取来源的当前值（model/measurements.ts）。
  *
  * 修订（suggest 模式，块级）：可寻址节点带 suggest = 'insert' | 'delete'、suggest_group（同一批修订）、
  * suggest_of（替换型插入所替换的原块 id；采纳后新块接过原 id）、suggest_author（导入的 Word 修订的原作者）。
@@ -172,6 +173,18 @@ export const schema = new Schema({
       atom: true,
       attrs: { cite_id: {} },
       toDOM: (node): DOMOutputSpec => ['sup', { class: 'cite', 'data-cite': node.attrs.cite_id as string }, '[?]'],
+    },
+    /**
+     * 测量原子 `[@m:<id>]`（W4.2）：只存登记表 id，显示的数值、单位与来源状态在渲染时取（见 model/measurements.ts）。
+     * parseDOM 让文档内的复制粘贴保留绑定；粘到别的文档里，id 不在那份文档的登记表里，显示为「未登记的测量」。
+     */
+    measurement: {
+      group: 'inline',
+      inline: true,
+      atom: true,
+      attrs: { m_id: {} },
+      parseDOM: [{ tag: 'span.measure[data-measure]', getAttrs: dom => ({ m_id: (dom as HTMLElement).getAttribute('data-measure') }) }],
+      toDOM: (node): DOMOutputSpec => ['span', { class: 'measure', 'data-measure': node.attrs.m_id as string }, '[测量]'],
     },
     /**
      * 导入的 Word 行内结构：脚注 / 尾注引用（kind = footnote / endnote）与域代码（field，含 EndNote / Zotero
