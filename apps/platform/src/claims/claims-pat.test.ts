@@ -8,7 +8,7 @@ import {
 } from './extract.ts'
 import { SubagentService } from '../subagents/service.ts'
 
-describe('Google PAT 4-Stage Citation & Claim Verification Pipeline', () => {
+describe('4-Stage Citation & Claim Verification Pipeline', () => {
   it('Stage 1 & 2: classifies section roles, verification tiers, and filters self-study vs external unsourced claims', () => {
     expect(classifySectionRole('1. 引言与研究背景')).toBe('intro')
     expect(classifySectionRole('2. 资料与方法 (Materials and Methods)')).toBe('methods')

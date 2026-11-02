@@ -2,7 +2,7 @@ import { env, pipeline, type FeatureExtractionPipeline } from '@huggingface/tran
 import { fileURLToPath } from 'node:url'
 
 /**
- * 嵌入模型（MIGRATION_PLAN.md R2）：默认 Xenova/bge-m3 的 8 位量化版（约 570MB，中英文都好）；
+ * 嵌入模型：默认 Xenova/bge-m3 的 8 位量化版（约 570MB，中英文都好）；
  * EMBED_MODEL / EMBED_DTYPE 可改（如 BAAI/bge-m3 + fp32，约 2.1GB）。模型缓存在仓库 data/embedder-cache（不进 git）。
  * 国内网络可设 HF_ENDPOINT=https://hf-mirror.com。
  */

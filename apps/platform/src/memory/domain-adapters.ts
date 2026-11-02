@@ -16,6 +16,8 @@ export interface DocCueState {
   openComments: boolean
   pendingSuggestions: boolean
   hasTable: boolean
+  /** SafeVantage (P1): 当前文档是否存在仅靠摘要支撑（缺少开放全文）或低覆盖率/存疑的文献引用与论断。 */
+  lowCoverageCitations?: boolean
 }
 
 /** 领域无关的通用环境上下文（供 MoE 门控路由器与反向归因使用）。 */

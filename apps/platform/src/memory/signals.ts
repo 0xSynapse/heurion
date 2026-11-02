@@ -13,7 +13,7 @@ import type { MemoryService } from './service.ts'
  * 一次合批里分不清是谁时不记——别人的改法不能被总结进我的记忆。不在研究里的文档只有主人能改，没有 user 时按主人记。
  */
 
-const TEXT_BLOCKS = new Set(['paragraph', 'heading'])
+const TEXT_BLOCKS = new Set(['paragraph', 'heading', 'shape'])
 const RECENT_MS = 7 * 86_400_000
 
 function byId(doc: PMNode): Map<string, PMNode> {
@@ -32,7 +32,7 @@ export class MemorySignals {
   private collect({ event, before, after, ops }: CommitDetail): void {
     if (event.actor !== 'user') return
     const doc = this.store.getDoc(event.docId)
-    if (!doc || doc.kind !== 'doc') return
+    if (!doc || (doc.kind !== 'doc' && doc.kind !== 'deck')) return
     const shared = !!doc.context && (JSON.parse(doc.context) as { kind?: string }).kind === 'study'
     const owner = event.user ?? (shared ? null : doc.owner)
     if (!owner || !this.memory.active(owner)) return

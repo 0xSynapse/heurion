@@ -308,6 +308,13 @@ describe('Cross-Domain Self-Evolution Kernel & Skill-Training Integration', () =
     }
     expect(report.exp4b_multi_domain_routing.target_domain_hit_rate).toBe(1)
     expect(report.exp4b_multi_domain_routing.cross_domain_contamination_rate).toBe(0)
+    expect(report.memtransfer_single_axis_degradation.axis1_schema_paraphrase.lexical_only_recall).toBe(0)
+    expect(report.memtransfer_single_axis_degradation.axis1_schema_paraphrase.semantic_cue_recovery_recall).toBe(1)
+    expect(report.memtransfer_single_axis_degradation.axis2_guard_threshold_shift.false_trigger_rate).toBe(0)
+    expect(report.memtransfer_single_axis_degradation.axis2_guard_threshold_shift.valid_state_trigger_rate).toBe(1)
+    expect(report.memtransfer_single_axis_degradation.axis3_unseen_domain_abstention.irrelevant_user_rule_leak_rate).toBe(0)
+    expect(report.memtransfer_single_axis_degradation.axis3_unseen_domain_abstention.baseline_guard_retention_rate).toBe(1)
+    expect(report.memtransfer_single_axis_degradation.axis3_unseen_domain_abstention.blindspot_vantaging_triggered).toBe(true)
   })
 
   it.skipIf(process.env.RUN_ONLINE_PILOT !== '1')(

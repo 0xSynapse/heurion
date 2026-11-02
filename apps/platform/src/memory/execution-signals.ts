@@ -1,6 +1,7 @@
 import type { CommitDetail, Documents } from '../model/runtime.ts'
 import type { Store } from '../store/db.ts'
 import type { SkillDomain } from './domain-adapters.ts'
+import { BASELINE_TRIGGER_CODES } from './procedural.ts'
 
 export interface GuardRejectEvent {
   owner: string
@@ -24,12 +25,12 @@ export interface ActivationLookupResult {
  * 供自演进机制执行反向归因（Backward Credit Assignment：create / strengthen / narrow / merge）。
  */
 export class ExecutionSignals {
-  private activationLookup?: (owner: string, docId: string) => ActivationLookupResult | undefined
+  private activationLookup?: (owner: string, docId: string, turnId?: string | null) => ActivationLookupResult | undefined
 
   constructor(
     private readonly store: Store,
     docs: Documents,
-    opts?: { activationLookup?: (owner: string, docId: string) => ActivationLookupResult | undefined },
+    opts?: { activationLookup?: (owner: string, docId: string, turnId?: string | null) => ActivationLookupResult | undefined },
   ) {
     this.activationLookup = opts?.activationLookup
     docs.on('commit-detail', (d: CommitDetail) => {
@@ -42,7 +43,7 @@ export class ExecutionSignals {
   }
 
   /** 绑定路由激活查询器（用于自动关联当前回合已注入的 active_rule_ids 与用户指令）。 */
-  setActivationLookup(fn: (owner: string, docId: string) => ActivationLookupResult | undefined): void {
+  setActivationLookup(fn: (owner: string, docId: string, turnId?: string | null) => ActivationLookupResult | undefined): void {
     this.activationLookup = fn
   }
 
@@ -60,7 +61,7 @@ export class ExecutionSignals {
         const doc = this.store.getDoc(event.docId)
         const owner = event.user ?? doc?.owner
         if (!owner) return
-        const act = this.activationLookup?.(owner, event.docId)
+        const act = this.activationLookup?.(owner, event.docId, revert.turn_id)
         this.store.addExecutionSignal({
           owner,
           doc_id: event.docId,
@@ -73,6 +74,20 @@ export class ExecutionSignals {
             ...(act ? { active_rule_ids: act.ruleIds, user_message: act.message, domain: act.domain } : {}),
           }),
         })
+        if (act?.ruleIds?.length) {
+          const uniqueRuleIds = [...new Set(act.ruleIds)]
+          this.store.deductHarnessRuleSuccess(uniqueRuleIds)
+          for (const rid of uniqueRuleIds) {
+            const rule = this.store.getHarnessRule(rid)
+            if (!rule || rule.owner === 'system' || rule.status !== 'active') continue
+            const hit = rule.hit_count ?? 0
+            const succ = rule.success_count ?? 0
+            const baseCode = rule.trigger_pattern.split('|')[0]?.trim() ?? ''
+            if (hit >= 5 && succ / hit < 0.2 && !BASELINE_TRIGGER_CODES.has(baseCode)) {
+              this.store.updateHarnessRule(rule.id, { status: 'archived' })
+            }
+          }
+        }
       }
       return
     }
@@ -103,7 +118,7 @@ export class ExecutionSignals {
   /** 记录写前守卫或跨领域工具验证器的拦截信号。 */
   recordGuardReject(e: GuardRejectEvent): void {
     try {
-      const act = this.activationLookup?.(e.owner, e.docId)
+      const act = this.activationLookup?.(e.owner, e.docId, e.turnId)
       const detailObj: Record<string, unknown> = {
         message: e.message,
         ...(act?.ruleIds ? { active_rule_ids: act.ruleIds } : {}),

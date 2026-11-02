@@ -251,7 +251,7 @@ export async function runOnlineExp3ZeroTemplatePilot(): Promise<Exp3ZeroTemplate
             budget: 900,
           })
     const execSignals = new ExecutionSignals(store, docs, {
-      activationLookup: (owner, did) => procedural?.lastActivation(owner, did),
+      activationLookup: (owner, did, tid) => procedural?.lastActivation(owner, did, tid),
     })
 
     const records: PilotTurnRecord[] = []

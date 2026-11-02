@@ -3,7 +3,7 @@ import type { MemoryKind, MemoryRow, Store } from '../store/db.ts'
 import { sensitiveReason } from './guard.ts'
 
 /**
- * 记忆（MIGRATION_PLAN.md R3，参考 Claude 的记忆设计）：
+ * 记忆（参考 Claude 的记忆设计）：
  * - AI 提议进「待确认」，用户采纳后生效；用户明确要求「记住」时直接生效。
  * - 敏感内容（患者可识别信息、账号）写前拦截。
  * - 三层开关：管理员停用（删除全部）/ 用户暂停 / 单次对话不用记忆（回合选项，见 TurnOptions.memory）。

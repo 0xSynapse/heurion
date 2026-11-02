@@ -1470,8 +1470,8 @@ export const HELP_SECTIONS: HelpSection[] = [
       <h4>11.7 临床雷达扫描动效与边栏批注交互 (Mantle Radar & Margin Anchors)</h4>
       <p>核验启动时，页面展示现代极客墨绿雷达波脉冲扫描动效 (Radar Wave)，实时反馈文献全文索引与证据链检索进度；核验完毕后，与正文 ProseMirror 物理锚点实现像素级吸附对齐，支持点击卡片平滑滚动定位正文，提供顶级学术科研级审校体验。</p>
 
-      <h4>11.8 基于 Google PAT 架构的四阶段多维学术核查流水线 (4-Stage PAT Verification Pipeline)</h4>
-      <p>参考学术审校架构（<code>arXiv:2606.28277v1</code>），平台将「论断核验 (<code>verify_claims</code>)」与「事实核查员 (<code>fact_checker</code> Subagent)」升级为四阶段协同流水线：</p>
+      <h4>11.8 四阶段多维学术核查流水线 (4-Stage Claim Verification Pipeline)</h4>
+      <p>平台将「论断核验 (<code>verify_claims</code>)」与「事实核查员 (<code>fact_checker</code> Subagent)」升级为四阶段协同流水线：</p>
       <ul class="help-list-steps">
         <li>
           <span class="step-num">1</span>
@@ -1564,10 +1564,10 @@ export const HELP_SECTIONS: HelpSection[] = [
 
       <div class="help-release-card">
         <div class="help-release-badge current">v2.8 Pro (当前最新版本 · 2026年10月)</div>
-        <div class="help-release-title">16 款 MONAI 官方预训练权重全量集成与 Google PAT 四阶段学术核查流水线升级</div>
+        <div class="help-release-title">16 款 MONAI 官方预训练权重全量集成与四阶段学术核查流水线升级</div>
         <ul class="help-release-list">
           <li><b>16 款 MONAI Model Zoo 官方预训练权重全量集成与生产适配</b>：除脾脏分割（<code>spleen_ct</code>）、腹部 13 器官（<code>swinunetr_btcv</code>）、全身 104 类结构（<code>wholebody_ct</code>）、BraTS 脑胶质瘤（<code>brats_mri</code>）、前列腺（<code>prostate_mri</code>）与心室短轴（<code>ventricular_short_axis</code>）外，新增接入肺结节 CT RetinaNet 三维检测（<code>lung_nodule_ct</code>）、胰腺及胰腺肿瘤 DiNTS 分割（<code>pancreas_ct_dints</code>）、增强 CT 肾脏子结构分割（<code>renal_structures_cect</code>）、全脑 133 类精细脑区 UNesT 分割（<code>wholebrainseg_large_unest</code>）、VISTA-3D 全身 127 类通用分割（<code>vista3d</code>）、心脏瓣膜关键点定位（<code>valve_landmarks</code>）、乳腺钼靶 BI-RADS 致密度分级（<code>breast_density</code>）、病理切片肿瘤检测（<code>pathology_tumor_detection</code>）、病理细胞核 HoVerNet 分类计数（<code>pathology_nuclei</code>）及内镜手术器械分割（<code>endoscopic_tool</code>）；所有模型均通过 SHA-256 权重校验并在患者影像分析工作台开放调用。</li>
-          <li><b>基于 Google PAT 架构（arXiv:2606.28277v1）的四阶段引文与论断核查引擎</b>：重构 <code>verify_claims</code> 与 <code>fact_checker</code> Subagent，引入「Stage 1 章节角色感知与全表数值摘要提取 -> Stage 2 自适应核查预算分级（<code>high</code> / <code>medium</code> / <code>light</code>）-> Stage 3 三路并行专项核查 -> Stage 4 跨章节去重与三级严重度排序（<code>critical</code> / <code>major</code> / <code>minor</code>）」。</li>
+          <li><b>四阶段引文与论断核查引擎</b>：重构 <code>verify_claims</code> 与 <code>fact_checker</code> Subagent，引入「Stage 1 章节角色感知与全表数值摘要提取 -> Stage 2 自适应核查预算分级（<code>high</code> / <code>medium</code> / <code>light</code>）-> Stage 3 三路并行专项核查 -> Stage 4 跨章节去重与三级严重度排序（<code>critical</code> / <code>major</code> / <code>minor</code>）」。</li>
           <li><b>跨章节正文-表格内部自洽核查与数值等价性归一</b>：自动比对摘要、方法、结果与 Table 1 数据表之间的总样本量 N 与分组百分比，精准拦截前后样本量或比例不一致；支持百分比与小数等价匹配（如 <code>68%</code> 与 <code>0.68</code>）及方向性矛盾检测。</li>
           <li><b>缺出处外部论断实时检索补全与候选文献推荐</b>：结合 IMRaD 章节角色区分「本研究队列结果」与「外部文献主张」，对引言和讨论中缺失引用的外部统计论断自动检索 PubMed / Crossref 并推荐匹配候选参考文献。</li>
           <li><b>影像模型诚实降级与器官体积语义校准</b>：对未提供公开预训练权重的 5 项任务明确标注不可用并返回 HTTP 501；对复用 BTCV 器官分割的胰腺/双肾/肝脏选项明确标注仅提供器官体积定量，不谎称病灶分割。</li>
@@ -2060,8 +2060,8 @@ Heurion 专为临床与医学科研打造，采用三栏自适应现代架构：
 ### 11.6 临床雷达扫描与批注卡片联动
 核验过程中采用墨绿科技雷达波扫描动画展示检索与匹配进度；核验结果与正文锚点实现像素级高精度吸附对齐，红色虚线下划线直观警示，打造沉浸式专业学术审校环境。
 
-### 11.7 基于 Google PAT 架构的四阶段多维学术核查流水线 (4-Stage PAT Verification Pipeline)
-参考学术审校架构（\`arXiv:2606.28277v1\`），平台将「论断核验 (\`verify_claims\`)」与「事实核查员 (\`fact_checker\` Subagent)」升级为四阶段协同流水线：
+### 11.7 四阶段多维学术核查流水线 (4-Stage Claim Verification Pipeline)
+平台将「论断核验 (\`verify_claims\`)」与「事实核查员 (\`fact_checker\` Subagent)」升级为四阶段协同流水线：
 1. **Stage 1：章节角色感知切分与全表数值摘要提取**：自动识别手稿各段落所属的 IMRaD 学术章节角色（\`abstract\`、\`introduction\`、\`methods\`、\`results\`、\`discussion\`、\`conclusion\`），并同步遍历全文数据表（如 Table 1 基线特征表），提取总样本量 N、分组例数与关键百分比摘要作为全文自洽校验锚点；
 2. **Stage 2：自适应核查预算分级**：按论断复杂度分配 \`high\`（同时含引用与具体统计数值或需跨章节数值比对）、\`medium\`（定性引用或一般结果陈述）与 \`light\`（普通过渡句）三级核查深度；
 3. **Stage 3：三路并行专项核查通道**：
@@ -2087,7 +2087,7 @@ Heurion 专为临床与医学科研打造，采用三栏自适应现代架构：
 
 ### v2.8 Pro (当前最新版本 · 2026年10月)
 - **16 款 MONAI Model Zoo 官方预训练权重全量集成与生产适配**：除脾脏分割（\`spleen_ct\`）、腹部 13 器官（\`swinunetr_btcv\`）、全身 104 类结构（\`wholebody_ct\`）、BraTS 脑胶质瘤（\`brats_mri\`）、前列腺（\`prostate_mri\`）与心室短轴（\`ventricular_short_axis\`）外，新增接入肺结节 CT RetinaNet 三维检测（\`lung_nodule_ct\`）、胰腺及胰腺肿瘤 DiNTS 分割（\`pancreas_ct_dints\`）、增强 CT 肾脏子结构分割（\`renal_structures_cect\`）、全脑 133 类精细脑区 UNesT 分割（\`wholebrainseg_large_unest\`）、VISTA-3D 全身 127 类通用分割（\`vista3d\`）、心脏瓣膜关键点定位（\`valve_landmarks\`）、乳腺钼靶 BI-RADS 致密度分级（\`breast_density\`）、病理切片肿瘤检测（\`pathology_tumor_detection\`）、病理细胞核 HoVerNet 分类计数（\`pathology_nuclei\`）及内镜手术器械分割（\`endoscopic_tool\`）；均经 SHA-256 校验并在患者影像分析工作台开放调用。
-- **基于 Google PAT 架构（arXiv:2606.28277v1）的四阶段引文与论断核查引擎**：重构 \`verify_claims\` 与 \`fact_checker\` Subagent，引入 Stage 1 章节角色感知与全表数值摘要提取、Stage 2 自适应核查预算分级（\`high\` / \`medium\` / \`light\`）、Stage 3 三路并行专项核查与 Stage 4 跨章节去重及三级严重度排序（\`critical\` / \`major\` / \`minor\`）。
+- **四阶段引文与论断核查引擎**：重构 \`verify_claims\` 与 \`fact_checker\` Subagent，引入 Stage 1 章节角色感知与全表数值摘要提取、Stage 2 自适应核查预算分级（\`high\` / \`medium\` / \`light\`）、Stage 3 三路并行专项核查与 Stage 4 跨章节去重及三级严重度排序（\`critical\` / \`major\` / \`minor\`）。
 - **跨章节正文-表格内部自洽核查与数值等价性归一**：自动比对摘要、方法、结果与 Table 1 数据表之间的总样本量 N 与分组百分比，拦截前后样本量或比例不一致；支持百分比与小数等价匹配（如 \`68%\` 与 \`0.68\`）及方向性矛盾检测。
 - **缺出处外部论断实时检索补全与候选文献推荐**：结合 IMRaD 章节角色区分「本研究队列结果」与「外部文献主张」，对引言和讨论中缺失引用的外部统计论断自动检索 PubMed / Crossref 并推荐匹配候选参考文献。
 - **影像模型诚实降级与器官体积语义校准**：对未提供公开预训练权重的 5 项任务明确标注不可用并返回 HTTP 501；对复用 BTCV 器官分割的胰腺/双肾/肝脏选项明确标注仅提供器官体积定量，不谎称病灶分割。

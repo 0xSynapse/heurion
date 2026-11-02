@@ -413,7 +413,7 @@ export class SubagentService {
   }
 
   /**
-   * 质控核查专家（Google PAT 四阶段学术审查流水线）：
+   * 质控核查专家（四阶段学术审查流水线）：
    * - Stage 1：章节感知切分（intro / methods / results / discussion）与表格结构化数值提取
    * - Stage 2：自适应核查预算分级（high / medium / light）
    * - Stage 3：多维并行专项核查（Pass A 外部文献对齐与数值等价性/方向性核验 + 实时检索兜底；Pass B 跨章节与正文-表格自洽性核验；Pass C 章节感知的缺出处外部论断核验）

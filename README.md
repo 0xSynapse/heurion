@@ -233,9 +233,10 @@ pnpm --filter @heurion2/platform ui
 
 ## <img src="docs/icons/book.svg" width="18" height="18" valign="middle" /> Architecture & Documentation
 
+- <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**Documentation Index (docs/README.md)**](docs/README.md): Complete engineering & domain design specifications.
 - <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**Platform Architecture (PLATFORM.md)**](docs/PLATFORM.md): Document model, operational Write Guards, and DSH execution pool.
 - <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**Deployment Guide (DEPLOY.md)**](docs/DEPLOY.md): Production setups, containerization, reverse proxying & TLS.
-- <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**OmniCanvas Microservice Spec (canvas_mcp_standalone_architecture.md)**](file:///Users/huizhao/.gemini/antigravity-cli/brain/0c4a3943-b91a-40bb-a58c-c0bf6b82cba1/canvas_mcp_standalone_architecture.md): Pure Canvas MCP & CRDT protocol.
+- <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**Self-Evolving Memory Governance PRD (MEMORY_GOVERNANCE_PRD.md)**](docs/design/MEMORY_GOVERNANCE_PRD.md): Three-tier memory architecture, CoEM/SafeVantage gating, and evidence coverage verification.
 - <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**Cohort Architecture (COHORT.md)**](docs/design/COHORT.md): Medical cohort compound filtering rules.
 - <img src="docs/icons/bullet.svg" width="8" height="8" valign="middle" /> [**Patient Data & Sharing (PATIENT.md & SHARING.md)**](docs/design/PATIENT.md): Authorization claims & record privacy.
 

@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title data-i18n="doc_title">Heurion Research · 临床科研 AI 工作台与 Aegis OS 智能体内核</title>
-  <meta name="description" content="Heurion Research is an independent systems and clinical AI research lab building Heurion 2.0 & OmniCanvas (Contract-Guarded Clinical Research AI Workstation) and Aegis OS (Transactional Multi-Tenant Agent Operating System Runtime)." />
-  <meta name="keywords" content="Heurion Research, Heurion 2.0, OmniCanvas, Aegis OS, aegis-os, Clinical AI Workstation, Agent Operating System, Copy-on-Write Workspace, Ed25519 Lease, AAP-1.0, CONSORT 2010, STROBE, VanderWeele E-value, Table 1, MONAI" />
+  <meta name="description" content="Heurion Research is an independent systems and clinical AI research lab building Heurion 2.0 & OmniCanvas (Contract-Guarded Clinical Research AI Workstation), Aegis OS (Transactional Multi-Tenant Agent Operating System Runtime), and UOMP (the open memory consent protocol for AI agents)." />
+  <meta name="keywords" content="Heurion Research, Heurion 2.0, OmniCanvas, Aegis OS, aegis-os, UOMP, memory consent protocol, agent memory, Clinical AI Workstation, Agent Operating System, Copy-on-Write Workspace, Ed25519 Lease, AAP-1.0, CONSORT 2010, STROBE, VanderWeele E-value, Table 1, MONAI" />
   <meta name="author" content="Heurion Research" />
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
   <link rel="canonical" href="https://heurion.org/" />
@@ -113,7 +113,15 @@
             "name": "什么是 Aegis OS，它与 Heurion 2.0 临床科研工作台是什么关系？",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Aegis OS (aegis-os) 是 Heurion Research 研发的开源多租户智能体操作系统内核，提供写时复制影子工作区、内核沙箱与 AAP-1.0 离线 Ed25519 人类审批租约。Heurion 2.0 是首个原生接入 AAP-1.0 的第一方临床应用。"
+              "text": "Aegis OS (aegis-os) 是 Heurion Research 研发的开源多租户智能体操作系统内核，提供写时复制影子工作区、内核沙箱与 AAP-1.0 离线 Ed25519 人类审批租约。Heurion 2.0 是首个原生接入 AAP-1.0 的第一方临床应用；UOMP 是 Aegis OS 执行的记忆同意协议。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "什么是 UOMP？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "UOMP 是 Heurion Research 维护的 Agent 记忆同意开放协议，定义范围、时效、撤销与审计。Aegis OS 是它的参考实现。"
             }
           }
         ]
@@ -125,128 +133,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-v11" />
-  <style>
-    :root {
-      --bg-primary: #FAF8F4;
-      --bg-neutral: #EFECE4;
-      --bg-elevated: #FDFCF9;
-      --ink: #151C19;
-      --ink-secondary: #525B56;
-      --ink-muted: #848D88;
-      --accent: #233E33;
-      --heurion-mint: #00C472;
-      --accent-warm: #8F5638;
-      --accent-soft: #E3ECE7;
-      --ink-light: #F4F1EA;
-      --border: #DFDAD0;
-      --border-strong: #151C19;
-      --serif: 'Newsreader', 'Noto Serif SC', 'Songti SC', 'STSong', Georgia, serif;
-      --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
-      --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
-    }
-    *, *::before, *::after { box-sizing: border-box; }
-    html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-    body { margin: 0 !important; background-color: var(--bg-primary) !important; color: var(--ink) !important; font-family: var(--sans); font-size: 0.9375rem; line-height: 1.65; font-weight: 400; }
-    ::selection { background: var(--accent-soft); color: var(--accent); }
-    a { color: inherit; text-decoration: none; transition: color 0.2s ease, opacity 0.2s ease, border-color 0.2s ease, background-color 0.2s ease; }
-    a:hover { color: var(--accent); }
-    .container { max-width: 1220px; margin: 0 auto; padding: 0 3.5rem; }
-    .label-caps { font-family: var(--mono); font-size: 0.68rem; font-weight: 400; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-muted); margin: 0; }
-    .heading-1 { font-family: var(--serif); font-size: clamp(2.35rem, 3.5vw, 3.25rem); font-weight: 300; line-height: 1.16; letter-spacing: -0.022em; margin: 0; color: var(--ink); }
-    html[lang="zh-CN"] .heading-1 { font-size: clamp(2rem, 2.75vw, 2.6rem); line-height: 1.34; letter-spacing: 0.01em; }
-    .heading-1 em, .heading-2 em { font-style: italic; font-weight: 400; color: var(--accent); }
-    html[lang="zh-CN"] .heading-1 em, html[lang="zh-CN"] .heading-2 em { font-style: normal; border-bottom: 1px solid rgba(35, 62, 51, 0.35); padding-bottom: 0.04em; }
-    .heading-2 { font-family: var(--serif); font-size: clamp(1.5rem, 2.15vw, 2rem); font-weight: 300; line-height: 1.26; letter-spacing: -0.015em; margin: 0; color: var(--ink); }
-    .heading-3 { font-family: var(--serif); font-size: 1.2rem; font-weight: 400; line-height: 1.35; letter-spacing: -0.01em; margin: 0; color: var(--ink); }
-    .text-regular { font-size: 0.92rem; line-height: 1.68; color: var(--ink); margin: 0; }
-    .text-muted { font-size: 0.88rem; line-height: 1.68; color: var(--ink-secondary); margin: 0; }
-    .nav { position: sticky; top: 0; z-index: 50; background: rgba(250, 248, 244, 0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
-    .nav-inner { max-width: 1220px; margin: 0 auto; padding: 1.2rem 3.5rem; display: flex; align-items: center; justify-content: space-between; gap: 2rem; }
-    .brand { display: inline-flex; align-items: center; gap: 0.65rem; color: var(--ink); }
-    .brand-mark { width: 24px; height: 22px; display: block; flex-shrink: 0; }
-    .brand-mark .mark-bar { fill: var(--ink); }
-    .brand-mark .mark-accent { fill: var(--heurion-mint); }
-    .brand-word { font-family: var(--sans); font-size: 0.9rem; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink); }
-    .nav-links { display: flex; align-items: center; gap: 2.35rem; }
-    .nav-link { font-size: 0.8125rem; letter-spacing: 0.02em; color: var(--ink-secondary); }
-    .nav-right { display: flex; align-items: center; gap: 1.1rem; }
-    .lang-btn { background: transparent; border: 1px solid var(--border); padding: 0.28rem 0.62rem; font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.08em; color: var(--ink-secondary); cursor: pointer; }
-    .nav-cta { font-size: 0.78rem; padding: 0.46rem 1.05rem; background: var(--accent); color: var(--ink-light); border: 1px solid var(--accent); letter-spacing: 0.02em; }
-    .nav-cta:hover { background: var(--ink); border-color: var(--ink); color: var(--ink-light); }
-    .sec-hero {
-      padding: 5rem 0 5.75rem;
-      background-color: var(--bg-primary);
-      background-image:
-        linear-gradient(100deg, rgba(250, 248, 244, 0.94) 0%, rgba(250, 248, 244, 0.85) 46%, rgba(244, 241, 234, 0.54) 100%),
-        linear-gradient(180deg, rgba(250, 248, 244, 0.35) 0%, rgba(250, 248, 244, 0.08) 68%, rgba(239, 236, 228, 0.95) 100%),
-        url('https://images.unsplash.com/photo-1581093450021-4a7360e9a6b5?auto=format&fit=crop&w=2000&q=85'),
-        url('/site/nordic-bg.jpg');
-      background-size: cover;
-      background-position: center 35%;
-      background-repeat: no-repeat;
-    }
-    .hero-grid { display: grid; grid-template-columns: 1.06fr 0.94fr; gap: 4.25rem; align-items: stretch; }
-    .hero-left { display: flex; flex-direction: column; justify-content: space-between; gap: 3rem; padding: 0.25rem 0; }
-    .hero-intro { display: flex; flex-direction: column; gap: 1.5rem; max-width: 34rem; }
-    .hero-actions { display: flex; align-items: center; gap: 1.5rem; padding-top: 0.25rem; }
-    .btn-solid { display: inline-flex; align-items: center; gap: 0.55rem; padding: 0.72rem 1.35rem; background: var(--accent); color: var(--ink-light); font-size: 0.8125rem; letter-spacing: 0.02em; box-shadow: 0 8px 24px rgba(21, 28, 25, 0.12); }
-    .btn-solid:hover { background: var(--ink); color: var(--ink-light); }
-    .link-arrow { font-size: 0.8125rem; color: var(--ink-secondary); border-bottom: 1px solid var(--border); padding-bottom: 0.12rem; }
-    .link-arrow:hover { color: var(--accent); border-bottom-color: var(--accent); }
-    .hero-editorial { display: flex; flex-direction: column; gap: 1.35rem; max-width: 34rem; }
-    .editorial-row { display: grid; grid-template-columns: 6.5rem 1fr; gap: 1.25rem; padding-top: 1.2rem; border-top: 1px solid rgba(21, 28, 25, 0.14); align-items: baseline; }
-    .hero-art { background: rgba(250, 248, 244, 0.86); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(21, 28, 25, 0.15); box-shadow: 0 22px 54px rgba(21, 28, 25, 0.08); padding: 1.5rem 1.85rem; display: flex; flex-direction: column; justify-content: space-between; min-height: 440px; position: relative; }
-    .art-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.12em; color: var(--ink-muted); text-transform: uppercase; }
-    .art-svg { width: 100%; height: 310px; display: block; margin: auto 0; }
-    .art-caption { display: flex; justify-content: space-between; align-items: center; padding-top: 0.75rem; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.1em; color: var(--ink-muted); text-transform: uppercase; }
-    .sec-systems { background: var(--bg-neutral); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 5.25rem 0; }
-    .section-header { display: flex; align-items: baseline; justify-content: space-between; gap: 2rem; margin-bottom: 2.5rem; }
-    .flagships-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2.25rem; }
-    .flagship-item { background: var(--bg-elevated); padding: 2.5rem; display: flex; flex-direction: column; justify-content: space-between; gap: 2rem; border: 1px solid var(--border); }
-    .flagship-top { display: flex; flex-direction: column; gap: 0.7rem; }
-    .flagship-meta { display: flex; align-items: center; justify-content: space-between; padding-bottom: 0.9rem; border-bottom: 1px solid var(--border); margin-bottom: 0.15rem; }
-    .flagship-num-group { display: flex; align-items: center; gap: 0.85rem; }
-    .flagship-num { font-family: var(--serif); font-size: 1.35rem; color: var(--accent); line-height: 1; }
-    .flagship-emblem { width: 44px; height: 28px; display: block; }
-    .flagship-sub { font-family: var(--serif); font-style: italic; font-size: 0.95rem; color: var(--accent); margin: -0.15rem 0 0.1rem; }
-    html[lang="zh-CN"] .flagship-sub { font-style: normal; font-size: 0.85rem; letter-spacing: 0.04em; }
-    .flagship-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; padding: 1.1rem 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-    .stat-cell { display: flex; flex-direction: column; gap: 0.18rem; }
-    .stat-val { font-family: var(--serif); font-size: 1.4rem; font-weight: 300; color: var(--ink); line-height: 1.1; font-variant-numeric: tabular-nums; }
-    .stat-lbl { font-family: var(--mono); font-size: 0.64rem; color: var(--ink-muted); letter-spacing: 0.06em; text-transform: uppercase; }
-    .flagship-links { display: flex; flex-wrap: wrap; align-items: center; gap: 1.35rem; padding-top: 1.25rem; }
-    .flagship-cta { padding: 0.62rem 1.25rem; font-weight: 500; }
-    .sec-research {
-      background-color: var(--bg-primary);
-      background-image:
-        linear-gradient(180deg, rgba(239, 236, 228, 0.96) 0%, rgba(250, 248, 244, 0.91) 45%, rgba(250, 248, 244, 0.96) 100%),
-        url('https://images.unsplash.com/photo-1532094349884-543bc11b234d?auto=format&fit=crop&w=1800&q=80');
-      background-size: cover;
-      background-position: center;
-      padding: 5rem 0;
-    }
-    .pub-list { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
-    .pub-row { display: grid; grid-template-columns: 11rem 1fr auto; gap: 2rem; align-items: baseline; padding: 1.65rem 0; border-bottom: 1px solid var(--border); }
-    .pub-links { display: flex; align-items: center; gap: 1.35rem; }
-    .foot { background: var(--bg-primary); border-top: 1px solid var(--border); padding: 2.25rem 0; }
-    .foot-bar { display: flex; align-items: center; justify-content: space-between; gap: 2rem; }
-    .foot-right { display: flex; flex-wrap: wrap; align-items: center; gap: 1.5rem; font-size: 0.78rem; color: var(--ink-muted); }
-    .foot-link { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.06em; color: var(--ink-secondary); }
-    @media (max-width: 991px) {
-      .container, .nav-inner { padding-left: 1.75rem; padding-right: 1.75rem; }
-      .hero-grid, .flagships-grid { grid-template-columns: 1fr; }
-      .pub-row { grid-template-columns: 1fr; gap: 0.5rem; }
-      .section-header, .foot-bar { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
-      .sec-hero, .sec-systems, .sec-research { padding: 4rem 0; }
-    }
-    @media (max-width: 640px) {
-      .nav-links { display: none; }
-      .editorial-row { grid-template-columns: 1fr; gap: 0.35rem; }
-      .hero-art { min-height: auto; gap: 0.85rem; padding: 1.25rem; }
-      .art-svg { height: auto; }
-    }
-  </style>
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v13" />
 </head>
 <body>
 
@@ -264,6 +151,7 @@
       </a>
       <nav class="nav-links" aria-label="Primary">
         <a href="#flagships" class="nav-link" data-i18n="nav_systems">核心系统</a>
+        <a href="/aegis-os/" class="nav-link" data-aegis-link="overview">Aegis OS</a>
         <a href="#research" class="nav-link" data-i18n="nav_research">发表论文</a>
         <a href="/tools" class="nav-link" data-i18n="nav_tools">临床工具</a>
         <a href="/phr" class="nav-link" data-i18n="nav_phr">知家档案</a>
@@ -271,6 +159,7 @@
       </nav>
       <div class="nav-right">
         <button class="lang-btn" id="langBtn" type="button" aria-label="Switch language">EN</button>
+        <a class="nav-cta" href="/app" id="ctaTop" data-i18n="nav_cta">进入工作台</a>
       </div>
     </div>
   </header>
@@ -285,6 +174,14 @@
             <div class="hero-intro">
               <p class="label-caps" data-i18n="hero_tag">HEURION RESEARCH · 临床科研 AI 工作台与智能体系统</p>
               <h1 class="heading-1" data-i18n-html="hero_title">为临床医学与自治智能体，<br>构建<em>可验证</em>的系统底座。</h1>
+              <p class="hero-lede" data-i18n="hero_lede">面向临床医生与医学研究者：在一个工作台内完成病历队列、生物统计与论文撰写，患者隐私信息本地拦截、零外泄。</p>
+              <div class="hero-actions">
+                <a class="btn-solid" href="/app" id="ctaHero">
+                  <span data-i18n="hero_cta_primary">进入临床工作台</span>
+                  <span aria-hidden="true">→</span>
+                </a>
+                <a class="link-arrow" href="#flagships" data-i18n="hero_cta_secondary">了解核心系统 →</a>
+              </div>
             </div>
 
             <div class="hero-editorial">
@@ -465,7 +362,14 @@
               </div>
               <h3 class="heading-2" data-i18n="f2_title">Aegis OS (aegis-os)</h3>
               <p class="flagship-sub" data-i18n="f2_sub">事务级多租户智能体内核</p>
-              <p class="text-muted" data-i18n="f2_desc">面向多智能体并发的写时复制影子树、内核沙箱与密码学租约。</p>
+              <p class="text-muted" data-i18n="f2_desc">面向多智能体并发的 CoW 影子工作区、内核沙箱与任务级租约；Google A2A 负责协作，UOMP 负责记忆同意。</p>
+              <div class="flagship-protocol">
+                <div>
+                  <span class="label-caps" data-i18n="f2_protocol_label">记忆层 · 开放协议</span>
+                  <p class="flagship-protocol-name" data-i18n="f2_protocol_name">UOMP · 记忆同意协议</p>
+                </div>
+                <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener" data-i18n="f2_link_uomp">UOMP 规范 →</a>
+              </div>
             </div>
 
             <div>
@@ -484,7 +388,8 @@
                 </div>
               </div>
               <div class="flagship-links">
-                <a class="btn-solid flagship-cta" href="/aegis-cloud/dashboard" id="ctaCard2" data-i18n="f2_link_app">进入 Aegis 控制台 →</a>
+                <a class="btn-solid flagship-cta" href="/aegis-os/" id="ctaCard2" data-aegis-link="overview" data-i18n="f2_link_app">Aegis OS 概览 →</a>
+                <a class="link-arrow" href="/aegis-os/tutorial/" data-aegis-link="tutorial" data-i18n="f2_link_tutorial">Aegis OS 教程 →</a>
                 <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" data-i18n="f2_link_repo">GitHub 仓库 →</a>
                 <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_APPLICATION_PROTOCOL.md" target="_blank" rel="noopener" data-i18n="f2_link_spec">AAP-1.0 规范 →</a>
               </div>
@@ -558,7 +463,9 @@
         nav_cta: '进入工作台',
         hero_tag: 'HEURION RESEARCH · 临床科研 AI 工作台与智能体系统',
         hero_title: '为临床医学与自治智能体，<br>构建<em>可验证</em>的系统底座。',
+        hero_lede: '面向临床医生与医学研究者：在一个工作台内完成病历队列、生物统计与论文撰写，患者隐私信息本地拦截、零外泄。',
         hero_cta_primary: '进入临床工作台',
+        hero_cta_secondary: '了解核心系统 →',
         who_label: '关于我们',
         who_p1: '专注临床证据合成与智能体系统的独立研究实验室。',
         thesis_label: '核心命题',
@@ -599,11 +506,15 @@
         f2_tag: '内核层 · RUST',
         f2_title: 'Aegis OS (aegis-os)',
         f2_sub: '事务级多租户智能体内核',
-        f2_desc: '面向多智能体并发的写时复制影子树、内核沙箱与密码学租约。',
+        f2_desc: '面向多智能体并发的 CoW 影子工作区、内核沙箱与任务级租约；Google A2A 负责协作，UOMP 负责记忆同意。',
+        f2_protocol_label: '记忆层 · 开放协议',
+        f2_protocol_name: 'UOMP · 记忆同意协议',
+        f2_link_uomp: 'UOMP 规范 →',
         f2_s1: '静默覆写',
         f2_s2: 'CoW 派生',
         f2_s3: 'IPC 开销',
-        f2_link_app: '进入 Aegis 控制台 →',
+        f2_link_app: 'Aegis OS 概览 →',
+        f2_link_tutorial: 'Aegis OS 教程 →',
         f2_link_repo: 'GitHub 仓库 →',
         f2_link_spec: 'AAP-1.0 规范 →',
         res_title: '研究论文',
@@ -626,7 +537,9 @@
         nav_cta: 'Workstation',
         hero_tag: 'HEURION RESEARCH · CLINICAL AI WORKSTATION & AGENT OS',
         hero_title: 'Verifiable systems for <em>clinical medicine</em> and <em>autonomous agents</em>.',
+        hero_lede: 'For clinicians and medical researchers: patient cohorts, biostatistics and manuscripts in one workstation, with patient identifiers intercepted locally and never leaked.',
         hero_cta_primary: 'Enter Workstation',
+        hero_cta_secondary: 'Explore the systems →',
         who_label: 'WHO WE ARE',
         who_p1: 'An independent research lab for clinical intelligence and agent operating systems.',
         thesis_label: 'OUR THESIS',
@@ -667,11 +580,15 @@
         f2_tag: 'KERNEL LAYER · RUST',
         f2_title: 'Aegis OS (aegis-os)',
         f2_sub: 'Transactional Agent OS Runtime',
-        f2_desc: 'Copy-on-Write shadow workspaces, kernel sandboxing, and Ed25519 human leases for concurrent agents.',
+        f2_desc: 'Copy-on-Write shadow workspaces, kernel sandboxing, and task-scoped leases for concurrent agents — Google A2A for collaboration, UOMP for memory consent.',
+        f2_protocol_label: 'MEMORY LAYER · OPEN PROTOCOL',
+        f2_protocol_name: 'UOMP · Memory consent protocol',
+        f2_link_uomp: 'UOMP Spec →',
         f2_s1: 'Silent Overwrites',
         f2_s2: 'CoW Fork',
         f2_s3: 'Push IPC Cost',
-        f2_link_app: 'Open Dashboard →',
+        f2_link_app: 'Aegis OS Overview →',
+        f2_link_tutorial: 'Aegis OS Tutorial →',
         f2_link_repo: 'GitHub →',
         f2_link_spec: 'AAP-1.0 Spec →',
         res_title: 'Publications',
@@ -708,6 +625,12 @@
       if (btn) btn.textContent = lang === 'zh' ? 'EN' : '中文';
       const navTools = document.querySelector('a[data-i18n="nav_tools"]');
       if (navTools) navTools.setAttribute('href', lang === 'en' ? '/en/tools' : '/tools');
+      document.querySelectorAll('[data-aegis-link]').forEach(el => {
+        const tutorial = el.getAttribute('data-aegis-link') === 'tutorial';
+        el.setAttribute('href', lang === 'en'
+          ? (tutorial ? '/en/aegis-os/tutorial/' : '/en/aegis-os/')
+          : (tutorial ? '/aegis-os/tutorial/' : '/aegis-os/'));
+      });
     }
 
     document.getElementById('langBtn')?.addEventListener('click', () => {

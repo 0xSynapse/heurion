@@ -61,7 +61,7 @@ const docs = new Documents(store)
 let phrMemberLookup: ((owner: string, patientId: string, space?: 'work' | 'personal') => { tags: string[]; birth_year: number | null } | null) | null = null
 const executionSignals = new ExecutionSignals(store, docs)
 const procedural = new ProceduralHarnessService(store, docs, { mode: config.proceduralMode === 'off' ? undefined : config.proceduralMode, budget: config.proceduralBudget })
-executionSignals.setActivationLookup((owner, docId) => procedural.lastActivation(owner, docId))
+executionSignals.setActivationLookup((owner, docId, turnId) => procedural.lastActivation(owner, docId, turnId))
 const ops = new OpService(docs, (owner, pid, space) => phrMemberLookup?.(owner, pid, space) ?? null, e => executionSignals.recordGuardReject(e))
 const registry = new TurnRegistry()
 const harnessEvolution = new HarnessEvolutionService(store, makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }))
@@ -154,6 +154,7 @@ const mcpDeps = {
   kb,
   memory,
   evolution,
+  executionSignals,
   datasets,
   patients,
   shares,
@@ -198,7 +199,7 @@ const mail = new MailService(store, mailer, {
   complete: makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }),
 })
 const calendar = new CalendarService(store, mail)
-const app = buildApi({ docs, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, workspaceDir: userId => pool.workspaceDir(userId) })
+const app = buildApi({ docs, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, aegisEnabled: config.aegisEnabled, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, workspaceDir: userId => pool.workspaceDir(userId) })
 // MCP 的管理类工具以用户身份进程内调用同一个 HTTP 应用（AI 的权限 = 用户的权限，见 http/invoke.ts）
 ;(mcpDeps as { invoke?: Invoke }).invoke = makeInvoker(app)
 
@@ -241,6 +242,14 @@ const SITE = fileURLToPath(new URL('../../site/', import.meta.url))
 app.get('/', c => c.html(readFileSync(join(SITE, 'index.html'), 'utf8')))
 app.get('/en', c => c.html(renderEnglishIndexHtml(readFileSync(join(SITE, 'index.html'), 'utf8'))))
 app.get('/en/', c => c.redirect('/en'))
+app.get('/aegis-os', c => c.redirect('/aegis-os/'))
+app.get('/aegis-os/', c => c.html(readFileSync(join(SITE, 'aegis-os/index.html'), 'utf8')))
+app.get('/aegis-os/tutorial', c => c.redirect('/aegis-os/tutorial/'))
+app.get('/aegis-os/tutorial/', c => c.html(readFileSync(join(SITE, 'aegis-os/tutorial/index.html'), 'utf8')))
+app.get('/en/aegis-os', c => c.redirect('/en/aegis-os/'))
+app.get('/en/aegis-os/', c => c.html(readFileSync(join(SITE, 'en/aegis-os/index.html'), 'utf8')))
+app.get('/en/aegis-os/tutorial', c => c.redirect('/en/aegis-os/tutorial/'))
+app.get('/en/aegis-os/tutorial/', c => c.html(readFileSync(join(SITE, 'en/aegis-os/tutorial/index.html'), 'utf8')))
 app.get('/tools', c => c.html(renderToolsHubHtml('zh')))
 app.get('/tools/', c => c.redirect('/tools'))
 app.get('/en/tools', c => c.html(renderToolsHubHtml('en')))
@@ -292,7 +301,7 @@ const server = createServer((req, res) => {
     })
     return
   }
-  if ((req.url?.startsWith('/api/aegis/mcp') || req.url?.startsWith('/api/mcp')) && (req.headers.accept ?? '').includes('text/event-stream')) {
+  if (config.aegisEnabled && (req.url?.startsWith('/api/aegis/mcp') || req.url?.startsWith('/api/mcp')) && (req.headers.accept ?? '').includes('text/event-stream')) {
     handleAegisMcp(mcpDeps, req, res).catch(err => {
       console.error('[aegis-mcp]', err)
       if (!res.headersSent) res.writeHead(500).end(String(err))

@@ -100,6 +100,22 @@ describe('医学论文全栈图表工作室与原文件导出引擎 (Medical Fig
     expect(barPlot.stats_summary[1]!.p_value).toBeLessThan(0.001)
     expect(barPlot.stats_summary[1]!.stars).toContain('*')
 
+    // 小样本必须走 t 分布：n=3 每组时正态近似会把 p≈0.002 的星号标给真实 p≈0.03 的比较
+    const smallN = generateWetLabPlot({
+      plot_type: 'bar_scatter',
+      title: 'Small-n Welch check',
+      y_label: 'Signal',
+      error_bar: 'SD',
+      groups: [
+        { name: 'Ctrl', values: [10, 11, 12] },
+        { name: 'Treat', values: [12.5, 13.5, 14.5] },
+      ],
+      comparisons: [{ group1: 'Ctrl', group2: 'Treat' }],
+    })
+    // t = 2.5/√(2/3) ≈ 3.062，df = 4；R: t.test(c(10,11,12), c(12.5,13.5,14.5))$p.value ≈ 0.0375
+    expect(smallN.stats_summary[0]!.p_value).toBeCloseTo(0.0375, 3)
+    expect(smallN.stats_summary[0]!.stars).toBe('*')
+
     // GraphPad Prism .pzfx XML 结构验证
     expect(barPlot.prism_pzfx).toContain('<?xml version="1.0" encoding="UTF-8"?>')
     expect(barPlot.prism_pzfx).toContain('<GraphPadPrismFile PrismXMLVersion="5.00"')

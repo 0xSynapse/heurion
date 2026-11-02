@@ -53,6 +53,21 @@ export interface CrossDomainEvalReport {
     cross_domain_contamination_rate: number
     avg_prompt_chars: number
   }
+  memtransfer_single_axis_degradation: {
+    axis1_schema_paraphrase: {
+      lexical_only_recall: number
+      semantic_cue_recovery_recall: number
+    }
+    axis2_guard_threshold_shift: {
+      false_trigger_rate: number
+      valid_state_trigger_rate: number
+    }
+    axis3_unseen_domain_abstention: {
+      irrelevant_user_rule_leak_rate: number
+      baseline_guard_retention_rate: number
+      blindspot_vantaging_triggered: boolean
+    }
+  }
 }
 
 export async function runCrossDomainEval(opts: { useLlm?: boolean } = {}): Promise<CrossDomainEvalReport> {
@@ -359,6 +374,56 @@ export async function runCrossDomainEval(opts: { useLlm?: boolean } = {}): Promi
     if (turn.forbiddenSubstrings.some(f => injected.includes(f))) crossContaminations++
   }
 
+  // ─── MemTransfer (P1): Single-Axis Controlled Degradation Evaluation ───
+  // Axis 1: Tool Schema Paraphrase (e.g. doc_edit -> manuscript_patch, dataset_table1 -> cohort_summary_grid)
+  const paraphrasePrompts = [
+    { prompt: '调用 manuscript_patch 把讨论段首尾合并成一段', cueRuleSubstr: 'move' },
+    { prompt: '使用 cohort_summary_grid 计算队列基线表并检验期望频数', cueRuleSubstr: 'Fisher' },
+  ]
+  let axis1LexicalHits = 0
+  let axis1SemanticHits = 0
+  for (const item of paraphrasePrompts) {
+    // Pure tool-name lexical match would miss paraphrased tool names (`manuscript_patch` != `doc_edit`)
+    if (/doc_edit|dataset_table1/.test(item.prompt)) axis1LexicalHits++
+    const out = await procedural.forPrompt('u_multi', docId, item.prompt, 480)
+    if (out.includes(item.cueRuleSubstr)) axis1SemanticHits++
+  }
+
+  // Axis 2: Guard Threshold Shift (state predicate false vs true under threshold shift)
+  const calmOut = await procedural.forPrompt('u_multi', docId, '检查文稿整体结构', 480, {
+    docState: { recentUserEdits: false, openComments: false, pendingSuggestions: false, hasTable: false },
+  })
+  const axis2FalseTrigger = calmOut.includes('Fisher') || calmOut.includes('two_column') ? 1 : 0
+  const activeTableOut = await procedural.forPrompt('u_multi', docId, '调整表格第 2 列单元格格式', 480, {
+    docState: { recentUserEdits: false, openComments: false, pendingSuggestions: false, hasTable: true },
+  })
+  const axis2ValidTrigger = activeTableOut.includes('［执行策略与避坑指南］') ? 1 : 0
+
+  // Axis 3: Unseen Domain Selective Abstention & Blindspot Vantaging
+  // Inject a high-evidence user rule (evidence_count = 30) and verify it does NOT leak into an unseen domain turn
+  const noisyUserRule = store.addHarnessRule({
+    scope: 'user',
+    owner: 'u_abstention',
+    project_id: null,
+    category: 'tool',
+    trigger_pattern: 'legacy_custom_tool_err',
+    rule: '在调用 legacy_custom_tool 时必须传入 legacy_flag=true 参数。',
+    evidence_count: 30,
+    status: 'active',
+  })
+  const unseenOut = await procedural.forPrompt(
+    'u_abstention',
+    docId,
+    '根据分子病理检测结果梳理罕见突变靶向用药方案',
+    600,
+    {
+      docState: { recentUserEdits: true, openComments: true, pendingSuggestions: false, hasTable: false },
+    },
+  )
+  const leakedNoisyRule = unseenOut.includes(noisyUserRule.rule) ? 1 : 0
+  const retainedBaseline = unseenOut.includes('replace_text') ? 1 : 0
+  const blindspotTriggered = unseenOut.includes('[盲区侦察提示]')
+
   const report: CrossDomainEvalReport = {
     timestamp: new Date().toISOString(),
     mode: useLlm && !!complete ? 'online_llm' : 'deterministic',
@@ -376,6 +441,21 @@ export async function runCrossDomainEval(opts: { useLlm?: boolean } = {}): Promi
       target_domain_hit_rate: Number((domainHits / interleavedSequence.length).toFixed(3)),
       cross_domain_contamination_rate: Number((crossContaminations / interleavedSequence.length).toFixed(3)),
       avg_prompt_chars: Math.round(totalChars / interleavedSequence.length),
+    },
+    memtransfer_single_axis_degradation: {
+      axis1_schema_paraphrase: {
+        lexical_only_recall: Number((axis1LexicalHits / paraphrasePrompts.length).toFixed(3)),
+        semantic_cue_recovery_recall: Number((axis1SemanticHits / paraphrasePrompts.length).toFixed(3)),
+      },
+      axis2_guard_threshold_shift: {
+        false_trigger_rate: axis2FalseTrigger,
+        valid_state_trigger_rate: axis2ValidTrigger,
+      },
+      axis3_unseen_domain_abstention: {
+        irrelevant_user_rule_leak_rate: leakedNoisyRule,
+        baseline_guard_retention_rate: retainedBaseline,
+        blindspot_vantaging_triggered: blindspotTriggered,
+      },
     },
   }
   if (useLlm) {

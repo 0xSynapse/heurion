@@ -2,6 +2,7 @@ import type { Context, Hono } from 'hono'
 import type { Documents } from '../../model/runtime.ts'
 import type { Store } from '../../store/db.ts'
 import type { PatientService, Actor } from '../../tenancy/patients.ts'
+import { guardImagingPayload } from '../../tenancy/imaging-guard.ts'
 import type { Access } from '../../research/access.ts'
 import { generateSlicerAndItkSnapPackage, generateImageJAnalysis } from '../../research/medical-figures.ts'
 
@@ -83,21 +84,9 @@ export function registerImagingRoutes(
     return c.json({ error: 'imaging_worker_offline', message: `影像计算微服务连接异常：${msg}` }, 503)
   }
 
-  const verifyPtVolumeString = (c: any, id: unknown) => {
-    if (typeof id !== 'string' || !id.startsWith('pt_')) return
-    const parts = id.split('_')
-    const ptId = parts[1]
-    if (!ptId || parts.length < 3 || !parts[2]) {
-      throw Object.assign(new Error('患者影像不存在'), { code: 'not_found', status: 404 })
-    }
-    pt(c).read(me(c), ptId)
-  }
-
+  /** 请求体原样转发给 worker，所以整体收口：不收路径字段、所有患者体积键都核对读权限（见 tenancy/imaging-guard.ts）。 */
   const verifyBodyVolumeAccess = (c: any, body: Record<string, any>) => {
-    if (!body || typeof body !== 'object') return
-    for (const k of ['sample_id', 'volume_id', 'baseline_id', 'followup_id', 'ct_sample_id', 'pet_sample_id']) {
-      verifyPtVolumeString(c, body[k])
-    }
+    guardImagingPayload(body, ptId => { pt(c).read(me(c), ptId) })
   }
 
   async function ensureVolumeOnWorker(c: any, patientId: string, recordIdOrFileId?: string | null): Promise<string | null> {
@@ -209,20 +198,19 @@ export function registerImagingRoutes(
       const recordId = c.req.query('record_id') || c.req.query('file_id')
       // 不使用默认演示样本：患者影像取患者档案里的原始文件；只有明确给出 sample_id 时才用样本
       let sampleId = c.req.query('sample_id') || undefined
-      const filePath = c.req.query('file_path') || undefined
       const modelName = c.req.query('model_name') || undefined
 
-      verifyPtVolumeString(c, sampleId)
+      verifyBodyVolumeAccess(c, { sample_id: sampleId, file_path: c.req.query('file_path') })
       if (patientId) {
         const volId = await ensureVolumeOnWorker(c, patientId, recordId)
         if (volId) sampleId = volId
       }
-      if (!sampleId && !filePath) return c.json({ error: 'no_image', message: '这条记录没有可用的影像文件（未上传原始影像，或文件无法载入）；平台不会用演示样本代替' }, 404)
+      if (!sampleId) return c.json({ error: 'no_image', message: '这条记录没有可用的影像文件（未上传原始影像，或文件无法载入）；平台不会用演示样本代替' }, 404)
 
       const resp = await fetch(`${imagingWorkerUrl}/api/v1/mpr/info`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sample_id: sampleId, file_path: filePath, model_name: modelName }),
+        body: JSON.stringify({ sample_id: sampleId, model_name: modelName }),
         signal: AbortSignal.timeout(15000),
       })
       if (!resp.ok) return workerFail(c, resp, 'mpr_info_failed')
@@ -624,6 +612,7 @@ export function registerImagingRoutes(
 
       const patientId = c.req.param('ptid')
       pt(c).assertEditable(me(c), patientId)
+      verifyBodyVolumeAccess(c, { sample_id: sampleId, model_id: modelId })
 
       const existing = patientImagingJobs.get(patientId)
       if (existing && existing.status === 'running' && Date.now() - existing.started_at < 300_000) {

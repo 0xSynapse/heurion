@@ -30,7 +30,7 @@ import { kekFrom, TenantKeys } from '../src/tenancy/keys.ts'
 import { PatientService } from '../src/tenancy/patients.ts'
 import { TurnService } from '../src/turns/service.ts'
 
-function createTestEnv() {
+function createTestEnv(opts: { aegisEnabled?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'heurion-aegis-'))
   const store = new Store(':memory:')
   const docs = new Documents(store)
@@ -89,6 +89,7 @@ function createTestEnv() {
     renderer: new SlideRenderer(join(dir, 'render')),
     accounts,
     devMode: false,
+    aegisEnabled: opts.aegisEnabled ?? true,
     devUser: 'dev',
     patients,
     datasets,
@@ -164,6 +165,18 @@ function createTestEnv() {
 }
 
 describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', () => {
+  it('0. 未开放 Aegis（HEURION_AEGIS 默认关闭）：接口与发现清单一律 404，/api/me 告诉前端不显示终端授权', async () => {
+    const { app, reg } = createTestEnv({ aegisEnabled: false })
+    const auth = { Authorization: `Bearer ${reg.token}` }
+    expect((await app.request('/.well-known/aegis-app.json')).status).toBe(404)
+    expect((await app.request('/.well-known/aegis-skills/heurion-clinical-research/SKILL.md')).status).toBe(404)
+    expect((await app.request('/api/aegis/auth/grants', { headers: auth })).status).toBe(404)
+    expect((await app.request('/api/aegis/auth/device', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(404)
+    expect((await app.request('/api/aegis/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(404)
+    const me = await (await app.request('/api/me', { headers: auth })).json() as { aegis: boolean }
+    expect(me.aegis).toBe(false)
+  })
+
   it('1. Manifest 自描述与自动发现：GET /.well-known/aegis-app.json 符合 AAP-1.0 规范', async () => {
     const { app } = createTestEnv()
     const res = await app.request('/.well-known/aegis-app.json')
@@ -412,6 +425,20 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     )
     expect(forgedAttempt.body.status).toBe('approval_required')
     expect(forgedAttempt.body.reason).toContain('签名校验失败')
+
+    // 签名合法但有效期超过 15 分钟的离线租约 -> 拒绝，避免一张租约长期替代人工审批
+    const longLease = signAegisLeaseToken(
+      { iss: 'lease-too-long', sub: grantId, app: 'heurion', agent: 'agent-clinical', scope: 'heurion:clinical_confirm', resource: patientId, iat: nowSec, exp: nowSec + 3600 },
+      nodeKeys.privateKeyPem,
+    )
+    const longAttempt = await callAegisTool(
+      token,
+      'report_resolve',
+      { patient_id: patientId, record_id: recordId, action: 'confirm' },
+      { agentId: 'agent-clinical', leaseToken: longLease },
+    )
+    expect(longAttempt.body.status).toBe('approval_required')
+    expect(longAttempt.body.reason).toContain('有效期过长')
 
     // 携带由绑定的本地 Aegis-OS 节点私钥签发的合法 X-Aegis-Lease-Token -> 零往返验签通过并直接完成确认！
     const validLease = signAegisLeaseToken(
@@ -735,7 +762,7 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     expect(devRes.status).toBe(201)
     const devBody = (await devRes.json()) as any
     expect(devBody.device_code).toMatch(/^dc_[0-9a-f]{32}$/)
-    expect(devBody.user_code).toMatch(/^HEUR-[A-Z0-9]{4}$/)
+    expect(devBody.user_code).toMatch(/^HEUR-[A-Z0-9]{4}-[A-Z0-9]{4}$/)
 
     // 3. 医生尚未确认前，终端轮询 /api/aegis/auth/token 返回 428 authorization_pending
     const pollPending = await app.request('/api/aegis/auth/token', {
@@ -754,7 +781,8 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
         authorization: `Bearer ${reg.token}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ user_code: devBody.user_code }),
+      // 用户手输时常省略连字符、用小写：服务端归一化
+      body: JSON.stringify({ user_code: devBody.user_code.replace(/-/g, '').toLowerCase() }),
     })
     expect(approveRes.status).toBe(200)
     const approveBody = (await approveRes.json()) as any
