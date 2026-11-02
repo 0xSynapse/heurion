@@ -52,7 +52,9 @@
 # 阅片器（OHIF）独立子域名：与主站不同源，读不到主站的登录令牌；平台按 Host 把这里的请求只交给阅片器入口
 # （票据换 Cookie、只读 DICOMweb、OHIF 静态页面），主站的其它接口在这里都不存在。
 # 平台需设置 VIEWER_HOST=viewer.<主域名>、VIEWER_URL=http://viewer:8080；DNS 要有 viewer 子域名的记录。
-viewer.{$HOSTNAME} {
+# 站点地址取 VIEWER_SITE（启用阅片器时在 .env.production 里设为 viewer.<主域名>）。没设置时是 viewer.localhost：
+# Caddy 只给它签内部证书、不向 Let's Encrypt 申请——不放 DICOM 的托管生产机没有 viewer 子域名的 DNS，申请只会反复失败。
+{$VIEWER_SITE:viewer.localhost} {
 	header {
 		-Server
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
