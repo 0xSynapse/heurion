@@ -6,6 +6,7 @@ import { ImagingError, ImagingStudyService, type StudyView } from '../../imaging
 import { TASKS, type EnqueueResult, type ImagingPipeline, type ImagingTask } from '../../imaging/pipeline.ts'
 import { parsePoints, type ImagingInteractive } from '../../imaging/interactive.ts'
 import { ImagingReviewService } from '../../imaging/review.ts'
+import type { ImagingMetricsService } from '../../imaging/metrics.ts'
 import type { ImagingFollowup } from '../../imaging/followup.ts'
 import { registerFollowupRoutes, registerFollowupViewerRoutes } from './imaging-followup.ts'
 
@@ -22,6 +23,8 @@ export interface DicomRouteContext {
   interactive: ImagingInteractive | null
   /** 随访对比（T2.4）；不给或 null 时接口返回 503 */
   followup?: ImagingFollowup | null
+  /** 效率埋点（T2.10）：阅片器真正打开检查的时刻（票据兑换成功）；不给时不记 */
+  metrics?: (c: Context<{ Variables: { user: string } }>) => ImagingMetricsService
   /** 阅片器令牌（auth/accounts.ts）：viewer = 一次性票据，dicomweb = 阅片器子域名上的 Cookie */
   viewerTokens: {
     issue: (userId: string, aud: 'viewer' | 'dicomweb', ttlSeconds: number, docs: '*' | string[]) => string | null
@@ -258,6 +261,8 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
     const cookie = ctx.viewerTokens.issue(t.userId, 'dicomweb', VIEWER_COOKIE_TTL, studies)
     if (!cookie) return c.text('账户状态不允许打开阅片器', 403)
     setCookie(c, VIEWER_COOKIE, cookie, { path: '/api', httpOnly: true, sameSite: 'Strict', secure: protoOf(c) === 'https', maxAge: VIEWER_COOKIE_TTL })
+    // 埋点：医生在阅片器里打开了这个检查（按读权限再校验一次；失败不影响打开阅片器）
+    try { ctx.metrics?.(c as never).recordViewerOpen({ userId: t.userId, via: 'user', space: 'work' }, uid) } catch { /* 埋点尽力而为 */ }
     c.header('Cache-Control', 'no-store')
     c.header('Referrer-Policy', 'no-referrer')
     const focus = LESION_ID.test(c.req.query('lesion') ?? '') ? `&HeurionLesion=${c.req.query('lesion')}` : ''

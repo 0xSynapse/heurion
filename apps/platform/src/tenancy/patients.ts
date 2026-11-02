@@ -395,14 +395,14 @@ export class PatientService {
   }
 
   /**
-   * 影子期对照报告（影像模块）用：整个机构的影像表，只给机构管理员本人、只在界面上（AI 不能读影子结果）。
+   * 影子期对照报告、影像效率统计（影像模块）用：整个机构的影像表，只给机构管理员本人、只在界面上（AI 不能读影子结果）。
    * 报告只含统计与内部 id，不含患者标识；读取由路由记机构审计。
    */
-  imagingTenantScope(a: Actor): { db: DatabaseSync; aiVisibility: 'visible' | 'shadow' } {
-    if (a.via === 'ai') throw new PatientError('forbidden', '影子期结果不给 AI', 403)
+  imagingTenantScope(a: Actor, what = '影子期对照报告'): { db: DatabaseSync; tenantId: string; aiVisibility: 'visible' | 'shadow' } {
+    if (a.via === 'ai') throw new PatientError('forbidden', `${what}不给 AI`, 403)
     const c = this.ctx(a)
-    if (!c.tenantAdmin) throw new PatientError('forbidden', '影子期对照报告只给机构管理员', 403)
-    return { db: c.db.db, aiVisibility: c.settings.imaging_ai_visibility === 'shadow' ? 'shadow' : 'visible' }
+    if (!c.tenantAdmin) throw new PatientError('forbidden', `${what}只给机构管理员`, 403)
+    return { db: c.db.db, tenantId: c.tenantId, aiVisibility: c.settings.imaging_ai_visibility === 'shadow' ? 'shadow' : 'visible' }
   }
 
   /** AI 写入要不要先经医生确认（机构设置）。 */

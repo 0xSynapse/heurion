@@ -33,6 +33,8 @@ import { registerImagingReviewRoutes } from './routes/imaging-review.ts'
 import { draftFailure, registerImagingDraftRoutes } from './routes/imaging-draft.ts'
 import { FindingsDraftService } from '../imaging/findings-draft.ts'
 import { risPlainText } from '../imaging/ris-text.ts'
+import { ImagingMetricsService } from '../imaging/metrics.ts'
+import { registerImagingMetricsRoutes } from './routes/imaging-metrics.ts'
 import { orthancFromEnv, type Orthanc } from '../imaging/orthanc.ts'
 import { sharedPipeline, type ImagingPipeline } from '../imaging/pipeline.ts'
 import { sharedInteractive, type ImagingInteractive } from '../imaging/interactive.ts'
@@ -921,9 +923,12 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
 
   // —— MONAI 医学影像微服务与患者影像量化分析 ——
   registerImagingRoutes(app, { store, docs, access, audit, me, pt, patientFailure })
+  // —— 影像效率埋点与统计（T2.10）：埋点只写本机构患者库，不外发 ——
+  const imagingMetrics = (c: Context<{ Variables: { user: string } }>) => new ImagingMetricsService(pt(c), store, docs)
+  registerImagingMetricsRoutes(app, { audit, me, metrics: imagingMetrics, patientFailure })
   // —— 影像检查：手工上传 DICOM、检查列表、DICOMweb 鉴权代理（docs/design/IMAGING_STUDIES.md）——
   viewerSurface = registerDicomRoutes(app, {
-    audit, me, pt, patientFailure, orthanc,
+    audit, me, pt, patientFailure, orthanc, metrics: imagingMetrics,
     viewerTokens: { issue: (u, aud, ttl, docs) => accounts.viewerToken(u, aud, ttl, docs), verify: (t, aud) => accounts.verifyViewerToken(t, aud) },
     pipeline: deps.imagingPipeline !== undefined ? deps.imagingPipeline : deps.patients && orthanc ? sharedPipeline(deps.patients, orthanc) : null,
     interactive: deps.imagingInteractive !== undefined ? deps.imagingInteractive : deps.patients && orthanc ? sharedInteractive(deps.patients, orthanc) : null,
@@ -931,7 +936,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
   // —— 影像审核视图与定稿（T2.7）——
   registerImagingReviewRoutes(app, {
-    audit, me, pt, patientFailure, store,
+    audit, me, pt, patientFailure, store, metrics: imagingMetrics,
     isRunActive: id => (deps.imagingPipeline !== undefined ? deps.imagingPipeline : deps.patients && orthanc ? sharedPipeline(deps.patients, orthanc) : null)?.isActive(id) ?? false,
   })
 
@@ -1328,7 +1333,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
    * 文档路由的访问级别（研究共享文档：只读成员能看、评论、导出、和 AI 对话（AI 同样只读），不能改）。
    * GET 与下列 POST 只要读权限；其余写操作要「可编辑」；删除另由 canDelete 判断。不是成员的一律当不存在（路由里 owned 返回 null → 404）。
    */
-  const READ_POSTS = [/^\/comments$/, /^\/comments\/[^/]+\/replies$/, /^\/comments\/[^/]+\/(resolve|reopen|exempt-claim)$/, /^\/chat$/, /^\/duplicate$/]
+  const READ_POSTS = [/^\/ris-copied$/, /^\/comments$/, /^\/comments\/[^/]+\/replies$/, /^\/comments\/[^/]+\/(resolve|reopen|exempt-claim)$/, /^\/chat$/, /^\/duplicate$/]
   const docLevel = (method: string, rest: string): Level => method === 'GET' || (method === 'POST' && READ_POSTS.some(r => r.test(rest))) ? 'read' : 'write'
   for (const path of ['/api/docs/:id', '/api/docs/:id/*']) {
     app.use(path, async (c, next) => {
@@ -1794,6 +1799,19 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       if (!svc) return c.json({ ...risPlainText(docs.get(row.id), { measurements: measureViews(c, row) }), issues: [], draft: null })
       return c.json(svc.risText(measureActor(c, row), row, measureViews(c, row)), 200, { 'Cache-Control': 'private, no-store' })
     } catch (err) { return draftFailure(c, err, patientFailure) }
+  })
+
+  /**
+   * 「复制为 RIS 纯文本」成功后界面报告一次（效率埋点 T2.10：写所见的结束时刻）。只记所见草稿；AI 不复制到 RIS（403）。
+   * 读权限即可（研究里的只读成员也能复制）。埋点失败不影响复制本身。
+   */
+  app.post('/api/docs/:id/ris-copied', c => {
+    const row = owned(c)
+    if (!row || row.kind === 'deck') return c.json({ error: 'not found' }, 404)
+    try {
+      if (!deps.patients) return c.json({ recorded: false, reason: 'patient_module_off' })
+      return c.json(imagingMetrics(c).recordRisCopy(me(c), row.id))
+    } catch (err) { return patientFailure(c, err) }
   })
 
   /** 测量严格模式（禁止 AI 写入裸测量数字）：strict = true / false / null（null = 自动：有测量登记即开启）。只能由用户本人设置。 */
