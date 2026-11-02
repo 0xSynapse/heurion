@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { FollowupHeader, FollowupLine, useFollowup } from './FollowupInfo';
 
 /** 平台 /api/viewer/lesions 返回的病灶（字段见 apps/platform/src/imaging/studies.ts LesionRow） */
 interface Lesion {
@@ -97,6 +98,8 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
   const prepared = useRef(new Set<string>());
   const [reviewState, setReviewState] = useState<ReviewSummary | null>(null);
   const focused = useRef(false);
+  /** 随访对比（T2.4）：与前片的对应与变化 */
+  const followup = useFollowup(studyUid);
 
   const load = useCallback(async () => {
     if (!studyUid) return setError('地址里没有检查编号');
@@ -205,12 +208,13 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
       if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
       setLesions(ls => ls.map(x => (x.id === l.id ? { ...x, ...body } : x)));
       setRejecting(null);
+      void followup.load();
     } catch (e) {
       setError(`保存失败：${(e as Error).message}`);
     } finally {
       setBusy(null);
     }
-  }, []);
+  }, [followup.load]);
 
   /** 视口里正在显示的 CT 序列（点选分割、预加载用） */
   const ctSeriesOf = useCallback((viewportId: string): string | null => {
@@ -373,7 +377,7 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
         <b>结节</b>
         <span style={{ marginLeft: 8, color: '#8b949e' }}>待确认 {counts.proposed} · 已确认 {counts.confirmed} · 已否决 {counts.rejected}</span>
-        <button style={{ marginLeft: 'auto' }} onClick={() => void load()}>刷新</button>
+        <button style={{ marginLeft: 'auto' }} onClick={() => { void load(); void followup.load(); }}>刷新</button>
       </div>
       {reviewState && (
         <div data-cy="heurion-review-state" style={{ fontSize: 12, marginBottom: 6, color: reviewState.state === 'finalized' ? '#3fb950' : reviewState.state === 'amending' ? '#f5a623' : '#8b949e' }}>
@@ -396,6 +400,7 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
         </div>
       )}
       {error && <div style={{ color: '#f85149', marginBottom: 8 }}>{error}</div>}
+      <FollowupHeader f={followup} />
       {!error && lesions.length === 0 && <div style={{ color: '#8b949e' }}>这个检查还没有结节结果。</div>}
       {lesions.map(l => {
         const m = l.metrics ?? {};
@@ -428,6 +433,7 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
               </details>
             )}
             {l.status === 'rejected' && l.reject_reason && <div style={{ color: '#8b949e' }}>否决原因：{l.reject_reason}</div>}
+            <FollowupLine f={followup} lesionId={l.id} />
             <div style={{ marginTop: 6, display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
               {l.status !== 'confirmed' && (
                 <button disabled={busy === l.id} onClick={() => void review(l, 'confirmed')}>确认</button>

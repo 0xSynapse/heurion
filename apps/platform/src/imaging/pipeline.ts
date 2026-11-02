@@ -2,6 +2,7 @@ import type { Actor, PatientService } from '../tenancy/patients.ts'
 import { orthancFromEnv, type Orthanc } from './orthanc.ts'
 import { ImagingStudyService, segRef, type RunRow, type SeriesView } from './studies.ts'
 import { callWorker, uploadSeries } from './worker.ts'
+import { sharedFollowup } from './followup.ts'
 
 /**
  * 影像分析流水线（PRD T1.4，docs/design/IMAGING_STUDIES.md）：检查入库 → 按病种选序列 → 排队 → 影像 worker 推理 → 结果入病灶表。
@@ -77,8 +78,12 @@ const shared = new WeakMap<PatientService, ImagingPipeline>()
 export function sharedPipeline(patients: PatientService, orthanc: Orthanc | null = orthancFromEnv()): ImagingPipeline {
   let p = shared.get(patients)
   if (!p) {
+    // 随访对比（T2.4）：分析完成后自动匹配前片；前片还没分析时由这条流水线排队（预计算）
+    const followup = sharedFollowup(patients, orthanc)
     p = new ImagingPipeline(new ImagingStudyService(patients, orthanc), orthanc, process.env.IMAGING_WORKER_URL || 'http://127.0.0.1:8004',
-      { concurrency: Number(process.env.IMAGING_PIPELINE_CONCURRENCY) || 1 })
+      { concurrency: Number(process.env.IMAGING_PIPELINE_CONCURRENCY) || 1, onRunDone: (a, run) => followup.onAnalysisDone(a, run) })
+    const pipeline = p
+    followup.attachAnalyzer((a, studyId) => pipeline.enqueue(a, studyId))
     shared.set(patients, p)
   }
   return p
@@ -96,7 +101,8 @@ export class ImagingPipeline {
     private readonly studies: ImagingStudyService,
     private readonly orthanc: Orthanc | null,
     private readonly workerUrl: string,
-    private readonly opts: { concurrency?: number; fetch?: typeof fetch } = {},
+    /** onRunDone：运行成功入库后调用（随访对比据此自动匹配；出错不影响运行结果） */
+    private readonly opts: { concurrency?: number; fetch?: typeof fetch; onRunDone?: (a: Actor, run: RunRow) => void } = {},
   ) {
     this.workerUrl = workerUrl.replace(/\/+$/, '')
   }
@@ -229,7 +235,7 @@ export class ImagingPipeline {
       if (!shadow) try { segRemoved = await this.studies.removeSupersededSeg(a, run.study_id, segSeriesId) } catch (err) {
         extraWarnings.push(`清理旧的分割结果失败：${err instanceof Error ? err.message : String(err)}`)
       }
-      this.studies.setRunStatus(a, runId, 'done', null, {
+      const doneRun = this.studies.setRunStatus(a, runId, 'done', null, {
         model_version: result.model_version ?? null,
         summary: {
           device: result.device ?? null, elapsed_ms: result.elapsed_ms ?? null, series_qc: result.series_qc ?? null,
@@ -238,6 +244,7 @@ export class ImagingPipeline {
           ...(shadow ? { shadow: true } : {}),
         },
       })
+      try { this.opts.onRunDone?.(a, doneRun) } catch { /* 后续处理出错不影响本次分析 */ }
     } catch (err) {
       try { this.studies.setRunStatus(a, runId, 'failed', err instanceof Error ? err.message : String(err)) } catch {}
     } finally {

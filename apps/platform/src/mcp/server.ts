@@ -57,6 +57,7 @@ import { registerImagingTools } from './imaging-tools.ts'
 import { registerImagingReviewTools } from './imaging-review-tools.ts'
 import { MeasurementError, MeasurementService, measureSpace, SOURCE_KINDS } from '../measurements/service.ts'
 import { LESION_FIELDS, MEASURE_UNITS } from '../model/measurements.ts'
+import { registerImagingFollowupTools } from './imaging-followup-tools.ts'
 import type { Invoke } from '../http/invoke.ts'
 import { registerAdminTools, type LeaseAuthorizeInput, type LeaseAuthorizeResult } from './admin-tools.ts'
 
@@ -2137,6 +2138,7 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
   registerHealthcareTools(server, ctx)
   registerImagingTools(server, { store, claims, patients: deps.patients, studies: deps.studies, datasets: deps.datasets, cohort: deps.cohort })
   registerImagingReviewTools(server, { store, claims, patients: deps.patients })
+  registerImagingFollowupTools(server, { claims, patients: deps.patients })
   registerAdminTools(
     server,
     {
