@@ -300,7 +300,14 @@ describe('重复生成与医生的修改', () => {
     expect(topText(t, r.doc_id).some(s => s.includes('见小结节'))).toBe(true)
     const ris = t.drafts.risText(t.A, t.store.getDoc(r.doc_id)!, new MeasurementService(t.store, t.patients).views(t.store.getDoc(r.doc_id)!, t.A))
     expect(ris.text).toContain('5.5 mm〔来源病灶已被否决〕')
-    expect(ris.issues.filter(i => i.severity === 'block').map(i => i.code)).toEqual(expect.arrayContaining(['measurement_invalid']))
+    expect(ris.issues.filter(i => i.severity === 'block').map(i => i.code)).toEqual(expect.arrayContaining(['measurement_invalid', 'nodule_removed']))
+    // 之后再生成两次：保留的句子一直不动，核对一直标出
+    for (let k = 0; k < 2; k++) {
+      const again = t.drafts.generate(t.A, t.p.id, { study_id: t.study.id, doc_id: r.doc_id }, { turnId: null })
+      expect(again.blocks.removed).toEqual([])
+      expect(topText(t, r.doc_id).some(s => s.includes('见小结节'))).toBe(true)
+      expect(t.drafts.check(t.A, t.store.getDoc(r.doc_id)!, new Map()).issues.some(i => i.code === 'nodule_removed' && i.block_id === b2)).toBe(true)
+    }
   })
 
   it('AI 触发的生成记在回合上：doc_revert_turn 撤销生成的内容，医生期间的修改保留', async () => {

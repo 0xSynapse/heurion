@@ -529,6 +529,11 @@ export class FindingsDraftService {
         const old = record?.blocks.find(x => x.key === k.key)
         if (old) blocks.push({ ...old, key: `${old.key}#kept` })
       }
+      // 以前就保留下来的块：还在文档里就继续登记（核对时仍标出），结节重新确认后已另写新句的不再登记
+      const after = this.docs.get(row.id)
+      for (const o of record?.blocks ?? []) {
+        if (o.key.endsWith('#kept') && o.id && findNode(after, o.id) && !blocks.some(b => b.key === o.key || b.id === o.id)) blocks.push(o)
+      }
       const rev = this.docs.rev(row.id)
       const t = now()
       const signoff = plan.review.latest_signoff?.version ?? null
@@ -701,8 +706,12 @@ export class FindingsDraftService {
     if (plan.pending) issues.push({ code: 'pending_lesions', severity: 'warn', message: `本检查现有 ${plan.pending} 个 AI 检出待确认` })
     const was = new Map(record.blocks.filter(b => b.lesion_id).map(b => [b.key, b]))
     const cur = new Map(plan.blocks.filter(b => b.kind === 'nodule').map(b => [b.key, b]))
+    const docNow = this.docs.get(doc.id)
     for (const [key, b] of was) {
-      if (key.endsWith('#kept')) continue
+      if (key.endsWith('#kept')) {
+        if (b.id && findNode(docNow, b.id) && !cur.has(key.slice(0, -5))) issues.push({ code: 'nodule_removed', severity: 'block', block_id: b.id, message: `「${b.label ?? '结节'}」已不是已确认的结节，这句因被修改过而保留：请删改这句` })
+        continue
+      }
       if (!cur.has(key)) issues.push({ code: 'nodule_removed', severity: 'block', block_id: b.id || null, message: `草稿里的「${b.label ?? '结节'}」已不是已确认的结节（被否决、撤销或取代）：请删改这句` })
       else if ((cur.get(key)!.case ?? null) !== (b.case ?? null)) issues.push({ code: 'change_changed', severity: 'warn', block_id: b.id || null, message: `「${b.label ?? '结节'}」的随访情况已变（${caseText(b.case)} → ${caseText(cur.get(key)!.case)}）：请重新生成或手改` })
     }
