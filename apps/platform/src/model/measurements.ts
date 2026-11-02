@@ -160,7 +160,8 @@ const PRESSURE_AFTER = /^\s*(?:Hg|H2O|H₂O)/i
  * 不算：测量原子本身、采集参数（层厚、窗位…）、带比较词的阈值、范围、mmHg / cmH2O；日期、年龄、序号、百分比没有这些单位，本来就不算。
  */
 export function findBareMeasurements(text: string): string[] {
-  const src = text.replace(MEASURE_MARKER, ' ')
+  // NFKC：全角数字与单位（１２ ｍｍ、㎜、㎤）先折成半角，免得换个写法就绕过
+  const src = text.normalize('NFKC').replace(MEASURE_MARKER, ' ')
   const out: string[] = []
   for (const m of src.matchAll(BARE)) {
     const at = m.index!

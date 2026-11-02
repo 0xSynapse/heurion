@@ -82,6 +82,8 @@ describe('裸测量数字识别', () => {
   it('带测量单位的数字算，测量原子、采集参数、阈值、范围、日期年龄序号百分比不算', () => {
     expect(findBareMeasurements('右上叶结节 8.2 mm，体积 288 mm³，CT 值 -12 HU，长径 0.91cm')).toEqual(['8.2mm', '288mm³', '-12HU', '0.91cm'])
     expect(findBareMeasurements('结节 [@m:mabc1234]，体积 [@m:mdef5678]')).toEqual([])
+    // 全角数字与单位符号不能绕过
+    expect(findBareMeasurements('结节约１２ mm，体积 ２８８ ㎣，长径 ８㎜')).toEqual(['12mm', '288mm³', '8mm'])
     expect(findBareMeasurements('层厚 1.25 mm 重建；肺窗窗位 -600 HU')).toEqual([])
     expect(findBareMeasurements('≥ 6 mm 的实性结节建议随访；直径大于 8 mm 者；4 mm 以下')).toEqual([])
     expect(findBareMeasurements('6–8 mm 结节；6 mm 至 8 mm')).toEqual([])
