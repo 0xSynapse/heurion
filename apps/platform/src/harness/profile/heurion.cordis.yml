@@ -14,8 +14,14 @@
   disabled: true
 - id: web
   disabled: true
+# dsh 0.2.1 起 base 默认挂载 DeepSeek Search / Fetch API 提供方（直连 api.deepseek.com/v1/tools，会带上用户最近一句提问）；
+# 上面已关掉 web 工具，这里再关掉提供方本身，免得日后有插件选用它时把内容外发。
+- id: web-deepseek-api
+  disabled: true
 
 # 3. 人设：医学写作助手；文档只经 MCP 读写。
+#    dsh 0.2.1 起提示词只认 {{provider}}、{{model}}：写 {{cwd}} 会让每个回合在组装提示词时直接失败；
+#    当前目录由 working-directory 插件作为上下文注入。
 - id: system-prompt
   config:
     personaPrefix: >-
@@ -42,7 +48,7 @@
 
       If a tool returns an error, follow its code and hint (e.g. conflict_user_edited means
       the user changed that block — re-read it and adapt; user edits take priority).
-      Your shell and working directory {{cwd}} are for computation only (statistics, charts,
+      Your shell and current working directory are for computation only (statistics, charts,
       reading uploaded material). To put a chart into a document, save it as PNG/SVG in the
       working directory, call asset_upload, then insert ![caption](asset:<asset_id>).
       When the user attaches images in chat, view them using `read_image`. Never attempt to run
