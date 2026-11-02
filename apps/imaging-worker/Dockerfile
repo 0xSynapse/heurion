@@ -41,7 +41,7 @@ RUN uv pip install --no-cache --python /opt/venv/bin/python \
       "python-gdcm>=3.0.24" \
       "nibabel>=5.2.0" \
       "numpy>=1.26.0" \
-      "pillow>=10.2.0" \
+      "pillow>=13.0.0" \
       "scipy>=1.12.0" \
       "einops>=0.7.0" \
       "python-multipart>=0.0.32" \
