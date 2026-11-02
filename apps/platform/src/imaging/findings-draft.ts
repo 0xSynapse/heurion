@@ -700,13 +700,13 @@ export class FindingsDraftService {
     }
     if (plan.pending) issues.push({ code: 'pending_lesions', severity: 'warn', message: `本检查现有 ${plan.pending} 个 AI 检出待确认` })
     const was = new Map(record.blocks.filter(b => b.lesion_id).map(b => [b.key, b]))
-    const now = new Map(plan.blocks.filter(b => b.kind === 'nodule').map(b => [b.key, b]))
+    const cur = new Map(plan.blocks.filter(b => b.kind === 'nodule').map(b => [b.key, b]))
     for (const [key, b] of was) {
       if (key.endsWith('#kept')) continue
-      if (!now.has(key)) issues.push({ code: 'nodule_removed', severity: 'block', block_id: b.id || null, message: `草稿里的「${b.label ?? '结节'}」已不是已确认的结节（被否决、撤销或取代）：请删改这句` })
-      else if ((now.get(key)!.case ?? null) !== (b.case ?? null)) issues.push({ code: 'change_changed', severity: 'warn', block_id: b.id || null, message: `「${b.label ?? '结节'}」的随访情况已变（${caseText(b.case)} → ${caseText(now.get(key)!.case)}）：请重新生成或手改` })
+      if (!cur.has(key)) issues.push({ code: 'nodule_removed', severity: 'block', block_id: b.id || null, message: `草稿里的「${b.label ?? '结节'}」已不是已确认的结节（被否决、撤销或取代）：请删改这句` })
+      else if ((cur.get(key)!.case ?? null) !== (b.case ?? null)) issues.push({ code: 'change_changed', severity: 'warn', block_id: b.id || null, message: `「${b.label ?? '结节'}」的随访情况已变（${caseText(b.case)} → ${caseText(cur.get(key)!.case)}）：请重新生成或手改` })
     }
-    const added = [...now.values()].filter(b => !was.has(b.key))
+    const added = [...cur.values()].filter(b => !was.has(b.key))
     if (added.length) issues.push({ code: 'nodule_added', severity: 'warn', message: `有 ${added.length} 个已确认的结节不在草稿里（${added.map(b => b.label ?? '结节').join('、')}）：请重新生成（只补新段落，不动你改过的）` })
     const gone = new Set(plan.blocks.filter(b => b.kind === 'disappeared').map(b => b.key))
     const goneWas = record.blocks.filter(b => b.key.startsWith('gone:'))

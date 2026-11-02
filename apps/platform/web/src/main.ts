@@ -44,10 +44,11 @@ async function api<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
   }
   if (!res.ok) {
     const raw = await res.text().catch(() => '')
-    let e: { error?: string; message?: string; detail?: string } = {}
+    let e: { error?: string; message?: string; detail?: string; code?: string } = {}
     try { e = JSON.parse(raw) } catch {}
     // 影像等接口用 { error: 代码, message: 说明 }：有说明时显示说明；HTTP/2 下 statusText 为空时回退状态码
-    throw new Error(e.message || e.detail || e.error || raw.trim().slice(0, 200) || res.statusText || `请求失败 (HTTP ${res.status})`)
+    // 错误码与附带信息（如所见草稿的 draft_exists 带 doc_id）挂在错误上，调用方按需处理
+    throw Object.assign(new Error(e.message || e.detail || e.error || raw.trim().slice(0, 200) || res.statusText || `请求失败 (HTTP ${res.status})`), { status: res.status, body: e })
   }
   return (res.headers.get('content-type')?.includes('json') ? res.json() : res.text()) as Promise<T>
 }
@@ -787,7 +788,7 @@ async function open(docId: string): Promise<void> {
   $('docContext').hidden = ctx?.kind !== 'patient' && ctx?.kind !== 'study'
   docPatient = ctx?.kind === 'patient' ? ctx.patient_id : null
   if (ctx?.kind === 'patient') {
-    $('docContext').textContent = `← ${ctx.code} · ${({ case_report: '病例报告', followup: '随访小结', discussion: '病例讨论' } as Record<string, string>)[ctx.doc_kind] ?? '患者文档'}`
+    $('docContext').textContent = `← ${ctx.code} · ${({ case_report: '病例报告', followup: '随访小结', discussion: '病例讨论', findings: '所见草稿' } as Record<string, string>)[ctx.doc_kind] ?? '患者文档'}`
     $('docContext').onclick = () => void patientsUi.open(ctx.patient_id)
   } else if (ctx?.kind === 'study') {
     $('docContext').textContent = `← ${ctx.title} · ${({ protocol: '研究方案', manuscript: '论文', slides: '幻灯片' } as Record<string, string>)[ctx.role] ?? '研究文档'}`
@@ -803,6 +804,8 @@ async function open(docId: string): Promise<void> {
   $('exportDocxBtn').hidden = meta.kind === 'deck'
   $('exportMdBtn').hidden = meta.kind === 'deck'
   $('exportPptxBtn').hidden = meta.kind !== 'deck'
+  // 患者文档（所见草稿、病例报告）：可复制为 RIS 纯文本
+  $('risCopyBtn').hidden = meta.kind === 'deck' || ctx?.kind !== 'patient'
   for (const b of ['exportBtn', 'sendBtn']) $<HTMLButtonElement>(b).disabled = false
   await loadDocs()
   if (seq !== openSeq) return
@@ -2700,6 +2703,30 @@ $('exportMdBtn').onclick = async () => {
   if (merge) showNotice(`${merge}。`)
   location.href = `/api/docs/${session.docId}/export.md?token=${encodeURIComponent(TOKEN)}`
 }
+/**
+ * 复制为 RIS 纯文本（T2.6 / W4.5）：服务端按我的权限展开测量、去掉格式记号与草稿标题；
+ * 有要处理的问题（测量来源失效、未定稿、草稿依据的结节已变……）时先列出来，由医生决定是否仍然复制。
+ */
+$('risCopyBtn').onclick = async () => {
+  if (!session) return
+  try {
+    const r = await api<{ text: string; notes: string[]; issues: Array<{ severity: 'block' | 'warn'; message: string }>; draft: { template: { version: number; department_name: string | null }; generated_at: string } | null }>(`/api/docs/${session.docId}/ris-text`)
+    if (!r.text.trim()) { showNotice('正文是空的，没有可复制的内容', true); return }
+    const problems = [...r.issues.filter(i => i.severity === 'block'), ...r.issues.filter(i => i.severity === 'warn')]
+    if (problems.length) {
+      const block = problems.some(i => i.severity === 'block')
+      const ok = await askConfirm({
+        title: block ? '复制前请先处理：有测量或结节的来源已失效' : '复制前请核对',
+        message: problems.map(i => `${i.severity === 'block' ? '【需处理】' : '· '}${i.message}`).join('\n') + (block ? '\n\n仍然复制时，失效的数字后面带〔…〕标注。' : ''),
+        confirm: '仍然复制', danger: block,
+      })
+      if (!ok) return
+    }
+    await navigator.clipboard.writeText(r.text)
+    showNotice(`已复制 RIS 纯文本（${r.text.split('\n').length} 行）${r.notes.length ? `；${r.notes.join('；')}` : ''}`)
+  } catch (err) { showNotice(`不能复制：${(err as Error).message}`, true) }
+}
+
 // 开发者：读视图（用户菜单里，仅开发模式）
 document.addEventListener('heurion:readview', async () => {
   if (!session) { showNotice('先打开一份文档'); return }

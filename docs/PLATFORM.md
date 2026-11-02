@@ -175,7 +175,8 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 - **严格模式**（禁止 AI 写裸测量数字）：按文档设置（`PUT /api/docs/:id/measurements/policy`，只能用户本人设置，AI 不能开关）；未设置时，文档里有测量登记就自动开启。只拦这次新增的裸数字，改写时原文已有的（用户写的、开启前的）可以保留；层厚 / 窗位等采集参数、带比较词的阈值（「≥ 6 mm」「8 mm 以上」）、范围（「6–8 mm」）、mmHg / cmH2O 不算；日期、年龄、序号、百分比没有测量单位，本来就不算。
 - **复制粘贴与复制文档**：编辑器里复制粘贴保留原子（同一测量可多次出现，取同一值）；`duplicate` 复制文档时登记换新 id、正文标记跟着改。
 - **论断核对**：测量原子是有出处的数字，不进「缺出处」；句子里按快照显示数值。
-- **以后**（W6.5）：科研手稿里的队列统计值也以 `[@m:id]` 绑定分析结果——来源类型可扩展（`SOURCES`），本期只实现影像病灶测量。
+- **随访派生值**（T2.6）：来源 `imaging_followup`（`source_id` = 本次检查的病灶 id）绑定随访对比的两期之差与体积倍增时间（`delta_mean_diameter_mm` / `delta_volume_mm3` / `delta_volume_pct` / `vdt_days`；单位 `pct`、`day`；差值带正负号）。取值读该病灶在随访对比里的当前一项，医生重测任一期后随之更新；状态跟随本次病灶，不再成对或缺值时为「来源测量已缺失」。所见草稿（`docs/design/IMAGING_STUDIES.md`「所见草稿（T2.6）」）用它写差值与 VDT。
+- **以后**（W6.5）：科研手稿里的队列统计值也以 `[@m:id]` 绑定分析结果——来源类型可扩展（`SOURCES`），本期实现影像病灶测量与随访派生值。
 
 ### 5.6 撤销
 
@@ -247,7 +248,8 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | `comments_list` / `comment_reply` / `comment_resolve` | `doc_id, …` | 线程与锚点 / 回复（role=ai）/ 关闭（规则见 §5.4） |
 | `pubmed_search` / `doi_lookup` | 检索式 / DOI | 文献元数据 |
 | `insert_citation` / `list_citations` | `doc_id, doi \| pmid \| query` / `doc_id` | `cite_id`、`[@c:id]` 标记与摘要摘录（只给 query 时返回候选，不登记）/ 登记表与文中编号 |
-| `insert_measurement` / `list_measurements` | `doc_id, lesion_id, field, unit?, decimals?` / `doc_id` | `m_id`、`[@m:id]` 标记与显示值（只接受已确认病灶）/ 登记表、当前值与状态、严格模式（§5.5.1） |
+| `insert_measurement` / `list_measurements` | `doc_id, lesion_id, field, unit?, decimals?, source?` / `doc_id` | `m_id`、`[@m:id]` 标记与显示值（只接受已确认病灶；`source = imaging_followup` 绑定随访差值与 VDT）/ 登记表、当前值与状态、严格模式（§5.5.1） |
+| `imaging_findings_draft` / `imaging_findings_draft_check` / `imaging_findings_templates` | `patient_id, imaging_study_id, doc_id?, new?, department_id?` / `doc_id` / `scope?` | 按科室模板生成所见草稿（经操作层与守卫写入，记在当前回合上）/ RIS 纯文本与复制前要处理的问题 / 所见模板（只读）。见 `docs/design/IMAGING_STUDIES.md`「所见草稿（T2.6）」 |
 | `asset_upload` | 工作区内相对路径 | `asset_id`（png/jpg/svg/gif/webp ≤ 10MB；路径限制在工作区内） |
 | `kb_search` | `query, file_ids?, project?, top_k?` | 参考资料库片段与出处（文件、页码、DOI / PMID）；关键词 + 向量（本地 bge-m3）RRF 合并 |
 | `kb_read` | `file_id, from_page?, to_page?` | 资料原文（按页） |
