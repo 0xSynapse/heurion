@@ -23,6 +23,7 @@ try:
     from .volume_geometry import CachedVolume, geometry_of, lps_to_voxel, source_headers_of
     from .dicom_seg import SegUnavailable, build_nodule_seg
     from .resource_gate import VolumeCache, default_cache_bytes
+    from .nodule_matching import lung_anchor
 except (ImportError, ValueError):
     from device import get_optimal_device, get_device_info
     from dicom_io import apply_ct_window, CT_WINDOWS
@@ -35,6 +36,7 @@ except (ImportError, ValueError):
     from clinical_ai_agent import generate_clinical_ai_report
     from spatial_canonicalizer import to_canonical_lps
     from lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, locate_lobe_roi, run_lung_nodule_pipeline, segment_nodule_at_points
+    from nodule_matching import lung_anchor
     from volume_geometry import CachedVolume, geometry_of, lps_to_voxel, source_headers_of
     from dicom_seg import SegUnavailable, build_nodule_seg
     from resource_gate import VolumeCache, default_cache_bytes
@@ -1804,9 +1806,27 @@ class MONAIEngine:
                     n["seg_segment_number"] = None
                 res["warnings"].append(f"未生成 DICOM SEG：构造失败（{type(exc).__name__}: {exc}）")
             seg_ms = int(round((time.time() - t1) * 1000))
-        res["timings_ms"] = {"load": load_ms, **res.get("timings_ms", {}), "seg": seg_ms}
-        res["elapsed_ms"] = int(res["elapsed_ms"]) + load_ms + seg_ms
+        # 随访对比（T2.4）用的肺部锚点：按 CT 值阈值粗分肺，给出质心与肺尖高度；失败不影响结节结果
+        t2 = time.time()
+        res["series_qc"]["lung_anchor"] = self.lung_anchor_of_entry(entry)
+        anchor_ms = int(round((time.time() - t2) * 1000))
+        res["timings_ms"] = {"load": load_ms, **res.get("timings_ms", {}), "seg": seg_ms, "lung_anchor": anchor_ms}
+        res["elapsed_ms"] = int(res["elapsed_ms"]) + load_ms + seg_ms + anchor_ms
         return res
+
+    @staticmethod
+    def lung_anchor_of_entry(entry: Any) -> Dict[str, Any]:
+        vol, spacing, _ = entry
+        try:
+            return lung_anchor(vol, spacing, geometry_of(entry))
+        except Exception as exc:
+            return {"ok": False, "note": f"肺部锚点计算失败：{type(exc).__name__}: {exc}"}
+
+    def lung_anchor_of(self, volume_id: str) -> Dict[str, Any]:
+        """已缓存体积的肺部锚点（随访对比时前片没有锚点才调用：平台把前片序列上传后取锚点）。"""
+        t0 = time.time()
+        entry = self.load_volume_data(volume_id)
+        return {"anchor": self.lung_anchor_of_entry(entry), "elapsed_ms": int(round((time.time() - t0) * 1000))}
 
     def segment_nodule_at_points(
         self,

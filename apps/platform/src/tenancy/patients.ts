@@ -205,6 +205,30 @@ class TenantPatientDb {
         id INTEGER PRIMARY KEY AUTOINCREMENT, lesion_id TEXT NOT NULL REFERENCES imaging_lesions(id) ON DELETE CASCADE,
         at TEXT NOT NULL, user_id TEXT NOT NULL, via TEXT NOT NULL, action TEXT NOT NULL, before TEXT, after TEXT
       );
+      -- 随访对比（T2.4，src/imaging/followup.ts）：每次匹配一行；病灶对应关系（新发 / 消失为只有一侧的链接）；
+      -- 医生拆开 / 重新对应与自动重匹配的留痕；前片肺部锚点的缓存
+      CREATE TABLE IF NOT EXISTS imaging_followups (
+        id TEXT PRIMARY KEY, study_id TEXT NOT NULL REFERENCES imaging_studies(id) ON DELETE CASCADE,
+        prior_study_id TEXT REFERENCES imaging_studies(id) ON DELETE SET NULL, trigger_kind TEXT NOT NULL, status TEXT NOT NULL,
+        reason TEXT, error TEXT, summary TEXT, created_by TEXT NOT NULL, via TEXT NOT NULL,
+        created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS imaging_followups_study ON imaging_followups (study_id);
+      CREATE TABLE IF NOT EXISTS imaging_lesion_links (
+        id TEXT PRIMARY KEY, study_id TEXT NOT NULL REFERENCES imaging_studies(id) ON DELETE CASCADE,
+        prior_study_id TEXT NOT NULL REFERENCES imaging_studies(id) ON DELETE CASCADE,
+        lesion_id TEXT REFERENCES imaging_lesions(id) ON DELETE CASCADE, prior_lesion_id TEXT REFERENCES imaging_lesions(id) ON DELETE CASCADE,
+        followup_id TEXT REFERENCES imaging_followups(id) ON DELETE SET NULL, source TEXT NOT NULL, status TEXT NOT NULL,
+        change TEXT, metrics TEXT NOT NULL DEFAULT '{}', created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS imaging_lesion_links_study ON imaging_lesion_links (study_id, status);
+      CREATE TABLE IF NOT EXISTS imaging_link_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, link_id TEXT NOT NULL REFERENCES imaging_lesion_links(id) ON DELETE CASCADE,
+        study_id TEXT NOT NULL, at TEXT NOT NULL, user_id TEXT NOT NULL, via TEXT NOT NULL, action TEXT NOT NULL, before TEXT, after TEXT
+      );
+      CREATE TABLE IF NOT EXISTS imaging_series_anchors (
+        series_id TEXT PRIMARY KEY REFERENCES imaging_series(id) ON DELETE CASCADE, anchor TEXT NOT NULL, created_at TEXT NOT NULL
+      );
     `)
     // 旧库补列
     const cols = (t: string) => (this.db.prepare(`PRAGMA table_info(${t})`).all() as Array<{ name: string }>).map(c => c.name)

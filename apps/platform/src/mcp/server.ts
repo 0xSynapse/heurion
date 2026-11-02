@@ -54,6 +54,7 @@ import { SUBAGENT_ROLE_LABELS } from '../subagents/types.ts'
 import type { ImageService } from '../images/service.ts'
 import { UnsplashError } from '../images/unsplash.ts'
 import { registerImagingTools } from './imaging-tools.ts'
+import { registerImagingFollowupTools } from './imaging-followup-tools.ts'
 import type { Invoke } from '../http/invoke.ts'
 import { registerAdminTools, type LeaseAuthorizeInput, type LeaseAuthorizeResult } from './admin-tools.ts'
 
@@ -2074,6 +2075,7 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
   registerCanvasTools(server, ctx)
   registerHealthcareTools(server, ctx)
   registerImagingTools(server, { store, claims, patients: deps.patients, studies: deps.studies, datasets: deps.datasets, cohort: deps.cohort })
+  registerImagingFollowupTools(server, { claims, patients: deps.patients })
   registerAdminTools(
     server,
     {

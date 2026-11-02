@@ -5,6 +5,8 @@ import type { Orthanc } from '../../imaging/orthanc.ts'
 import { ImagingError, ImagingStudyService, type StudyView } from '../../imaging/studies.ts'
 import { TASKS, type EnqueueResult, type ImagingPipeline, type ImagingTask } from '../../imaging/pipeline.ts'
 import { parsePoints, type ImagingInteractive } from '../../imaging/interactive.ts'
+import type { ImagingFollowup } from '../../imaging/followup.ts'
+import { registerFollowupRoutes, registerFollowupViewerRoutes } from './imaging-followup.ts'
 
 export interface DicomRouteContext {
   audit: (c: Context, action: string, e?: { actor?: string | null; target?: string | null; detail?: string | null; status?: number }) => void
@@ -17,6 +19,8 @@ export interface DicomRouteContext {
   pipeline: ImagingPipeline | null
   /** 阅片器点选分割（T2.3）；null 时阅片器里不能点选 */
   interactive: ImagingInteractive | null
+  /** 随访对比（T2.4）；不给或 null 时接口返回 503 */
+  followup?: ImagingFollowup | null
   /** 阅片器令牌（auth/accounts.ts）：viewer = 一次性票据，dicomweb = 阅片器子域名上的 Cookie */
   viewerTokens: {
     issue: (userId: string, aud: 'viewer' | 'dicomweb', ttlSeconds: number, docs: '*' | string[]) => string | null
@@ -149,6 +153,9 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
       return c.json(svc(c).reviewLesion(me(c), lid, body))
     } catch (err) { return fail(c, err) }
   })
+
+  // 随访对比（T2.4）：主站接口
+  registerFollowupRoutes(app, { me, fail, followup: ctx.followup ?? null })
 
   const forward = async (c: Context, path: string, query: string) => {
     if (!ctx.orthanc) throw new ImagingError('orthanc_not_configured', '本机构没有配置影像存储（Orthanc）', 503)
@@ -347,6 +354,9 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
       return c.json({ id: l.id, status: l.status })
     } catch (err) { return fail(c, err) }
   })
+
+  // 随访对比（T2.4）：阅片器结节面板里看对比、重新匹配、拆开 / 重新对应
+  registerFollowupViewerRoutes(surface, { viewerActor, unauthorized, fail, followup: ctx.followup ?? null })
 
   // 主站的其它接口在阅片器子域名上一律不存在
   surface.all('/api/*', c => c.json({ error: '不存在', code: 'not_found' }, 404))

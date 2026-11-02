@@ -49,6 +49,8 @@ const PARAMS: Record<string, (s: Seed) => string> = {
   action: () => 'x', ptid: s => s.patient, lid: s => s.lab, slide: () => 's0', pfid: s => s.pfile, prid: s => s.proposal, rcid: s => s.record, sid: s => s.study, kind: () => 'doc', rid: s => s.doc, otid: s => s.orgTemplate, aid: s => s.action, decision: () => 'confirm', dpid: s => s.department, shid: s => s.share,
   attId: () => 'att-1',
   stid: () => 'is-none',
+  // 随访对比的对应关系（T2.4）：不存在的 id 也必须 4xx
+  lkid: () => 'lk000000000000',
 }
 /** 按设计公开的接口（不需要登录或本身就是给持有链接的人用的）。 */
 const PUBLIC: Record<string, string> = {

@@ -21,6 +21,8 @@ export class FakeOrthanc implements Orthanc {
   archives: string[] = []
   /** 按 SeriesInstanceUID 覆盖序列标签（层厚、重建核、部位等） */
   seriesTags = new Map<string, Partial<OrthancSeries>>()
+  /** 按 StudyInstanceUID 覆盖检查日期（随访对比测试用；null = 没有 StudyDate） */
+  studyDates = new Map<string, string | null>()
   private uids = new Map<string, string>()
   private oid(uid: string): string {
     const id = createHash('sha1').update(uid).digest('hex').slice(0, 16)
@@ -37,7 +39,7 @@ export class FakeOrthanc implements Orthanc {
   async study(id: string): Promise<OrthancStudy> {
     const uid = this.uids.get(id)!
     const series = [...new Set([...this.instances.values()].filter(i => i.study === uid).map(i => this.oid(i.series)))]
-    return { studyUid: uid, studyDate: '2026-10-20', description: '胸部 CT 平扫', accession: 'ACC-778899', series }
+    return { studyUid: uid, studyDate: this.studyDates.has(uid) ? this.studyDates.get(uid)! : '2026-10-20', description: '胸部 CT 平扫', accession: 'ACC-778899', series }
   }
   async series(id: string): Promise<OrthancSeries> {
     const uid = this.uids.get(id)!

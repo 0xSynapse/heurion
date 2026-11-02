@@ -167,6 +167,7 @@ const ALL_PARITY: Record<string, string> = {
   'GET /api/patients/:ptid/imaging/studies': 'imaging_studies',
   'POST /api/patients/:ptid/imaging/studies/:stid/analyze': 'imaging_study_analyze',
   'GET /api/patients/:ptid/imaging/studies/:stid/lesions': 'imaging_lesions',
+  'GET /api/patients/:ptid/imaging/studies/:stid/followup': 'imaging_followup',
 }
 
 /** AI 发起后要用户在确认卡上确认才执行的动作（不可恢复的删除、权限与安全、以机构身份对外的标识）。 */
@@ -194,6 +195,10 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/imaging/viewer-ticket': '医生在界面上打开 OHIF 阅片器（子域名）用的一次性票据；AI 不看影像本身',
   'POST /api/patients/:ptid/imaging/lesions/:lid/review': '确认 / 否决病灶是医生本人的判断（服务层同样拒绝 via=ai）；AI 用 imaging_lesions 读结果',
   'GET /api/imaging/shadow-report': '影子期对照报告只给机构管理员本人看：影子模式的 AI 结果按设计对 AI 不可见（服务层拒绝 via=ai）',
+  // 随访对比（T2.4）：AI 用 imaging_followup 只读；对应关系是医生的判断
+  'POST /api/patients/:ptid/imaging/studies/:stid/followup/rematch': '重新匹配随访对比是医生审核流程的一部分（分析完成后已自动匹配一次；服务层拒绝 via=ai）；AI 用 imaging_followup 读结果',
+  'POST /api/patients/:ptid/imaging/studies/:stid/followup/links': '重新对应前后两期的结节是医生本人的判断（服务层拒绝 via=ai）；AI 用 imaging_followup 读结果',
+  'POST /api/patients/:ptid/imaging/followup-links/:lkid/unlink': '拆开前后两期结节的对应是医生本人的判断（服务层拒绝 via=ai）；AI 用 imaging_followup 读结果',
   // 知家分享原件图片由界面展示
   'GET /api/shares/:shid/assets/:aid': '图片二进制资产由界面渲染展示；AI 读打码后的文字内容（share_file / share_read）',
   // 机构患者认领码绑定的人机分界

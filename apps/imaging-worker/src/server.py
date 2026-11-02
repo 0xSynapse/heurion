@@ -24,6 +24,7 @@ try:
     from .task_queue import task_manager, TaskStage, batch_process_cohort
     from .volume_geometry import geometry_of, geometry_summary, source_headers_of
     from .resource_gate import MemoryGate, default_budget_gb, default_interactive_reserve_gb, task_cost_gb
+    from .nodule_matching import match_nodules
 except (ImportError, ValueError):
     from device import get_device_info
     from engine import MONAIEngine, generate_synthetic_ct_volume, ModelUnavailableError
@@ -33,6 +34,7 @@ except (ImportError, ValueError):
     from task_queue import task_manager, TaskStage, batch_process_cohort
     from volume_geometry import geometry_of, geometry_summary, source_headers_of
     from resource_gate import MemoryGate, default_budget_gb, default_interactive_reserve_gb, task_cost_gb
+    from nodule_matching import match_nodules
 
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -644,6 +646,61 @@ def locate_lobe_endpoint(req: LobeAtRequest = Body(...)):
             return engine.locate_lobe_at(req.volume_id, req.lps_mm, req.radius_mm)
     except Exception as e:
         raise_http(e, "肺叶定位失败")
+
+
+class MatchNodule(BaseModel):
+    id: str
+    # DICOM 病人坐标 [X, Y, Z]（LPS，mm）；没有时该结节不参与对应
+    center_lps_mm: Optional[List[float]] = None
+    mean_diameter_mm: Optional[float] = None
+    lobe: Optional[str] = None
+
+
+class MatchSide(BaseModel):
+    nodules: List[MatchNodule] = Field(default_factory=list)
+    # 该期的肺部锚点（肺结节模型链 series_qc.lung_anchor，或 /lung-nodule/anchor 的结果）
+    anchor: Optional[Dict[str, Any]] = None
+
+
+class MatchRequest(BaseModel):
+    prior: MatchSide
+    current: MatchSide
+    # 医生已确认的对应关系 [前片 id, 本次 id]：只参与配准，不再指派
+    fixed_pairs: List[List[str]] = Field(default_factory=list)
+
+
+MATCH_MAX_NODULES = 300
+
+
+@app.post("/api/v1/pipeline/lung-nodule/match")
+def match_lung_nodules_endpoint(req: MatchRequest = Body(...)):
+    """
+    随访对比（T2.4）：两期结节的刚性配准（肺部锚点 + 结节点集）与匈牙利指派。只用坐标与大小，不读体素，不经推理闸门。
+    返回 registration（quality = fine / coarse / none、旋转、平移、内点、残差、说明）、pairs（含歧义候选）、
+    unmatched_prior（消失候选）、unmatched_current（新发候选）、skipped（缺坐标）。实现见 nodule_matching。
+    """
+    if len(req.prior.nodules) > MATCH_MAX_NODULES or len(req.current.nodules) > MATCH_MAX_NODULES:
+        raise HTTPException(status_code=400, detail=f"每期结节数不能超过 {MATCH_MAX_NODULES}")
+    try:
+        return match_nodules(
+            [n.model_dump() for n in req.prior.nodules], [n.model_dump() for n in req.current.nodules],
+            req.prior.anchor, req.current.anchor, req.fixed_pairs,
+        )
+    except Exception as e:
+        raise_http(e, "结节对应失败")
+
+
+class AnchorRequest(BaseModel):
+    volume_id: str
+
+
+@app.post("/api/v1/pipeline/lung-nodule/anchor")
+def lung_anchor_endpoint(req: AnchorRequest = Body(...)):
+    """已上传体积的肺部锚点（前片分析时还没有这一项时由平台补算）；按 CT 值阈值，不用模型，不经推理闸门。"""
+    try:
+        return engine.lung_anchor_of(req.volume_id)
+    except Exception as e:
+        raise_http(e, "肺部锚点计算失败")
 
 
 @app.post("/api/v1/mpr/info")
