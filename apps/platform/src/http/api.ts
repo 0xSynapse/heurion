@@ -605,10 +605,14 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     else if (internal && c.req.method !== 'GET') audit(c, 'ai.call', { detail: `${c.req.method} ${c.req.path}`, target: auditTarget(c.req.path, user), status: c.res.status })
   })
 
+  // 影像存储（Orthanc）：没配置时（如不存放 DICOM 原件的托管生产机）界面不显示影像检查与相关设置，接口返回 503
+  const orthanc = deps.orthanc !== undefined ? deps.orthanc : orthancFromEnv()
+
   app.get('/api/me', c => {
     let tenant = null
     try { tenant = tenants.view(c.get('user')) } catch { /* 没有机构的账户（不应出现） */ }
-    return c.json({ ...accounts.me(c.get('user')), dev_mode: deps.devMode, tenant })
+    // features.dicom：本实例是否接了影像存储（DICOM 上传、阅片、审核定稿、随访、所见草稿的界面据此显示）
+    return c.json({ ...accounts.me(c.get('user')), dev_mode: deps.devMode, tenant, features: { dicom: Boolean(orthanc) } })
   })
 
   app.get('/api/aegis/auth/grants', c => {
@@ -899,7 +903,6 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   // —— MONAI 医学影像微服务与患者影像量化分析 ——
   registerImagingRoutes(app, { store, docs, access, audit, me, pt, patientFailure })
   // —— 影像检查：手工上传 DICOM、检查列表、DICOMweb 鉴权代理（docs/design/IMAGING_STUDIES.md）——
-  const orthanc = deps.orthanc !== undefined ? deps.orthanc : orthancFromEnv()
   viewerSurface = registerDicomRoutes(app, {
     audit, me, pt, patientFailure, orthanc,
     viewerTokens: { issue: (u, aud, ttl, docs) => accounts.viewerToken(u, aud, ttl, docs), verify: (t, aud) => accounts.verifyViewerToken(t, aud) },

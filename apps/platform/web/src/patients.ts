@@ -76,6 +76,8 @@ export interface PatientHooks {
   goSpace(space: 'write' | 'patients' | 'research'): void
   tenantId(): string | null
   token(): string
+  /** 本实例是否接了影像存储（Orthanc）；没有时不显示影像检查区块 */
+  dicom(): boolean
   /** 打开研究页（患者所在研究） */
   openStudy?(id: string): Promise<void>
 }
@@ -275,11 +277,11 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         <div id="ptImagingJobBanner" hidden></div>
       </div>
       <div class="tabs pt-tabs">${(['overview', 'labs', 'records', 'docs', 'review'] as const).map(t => `<button data-tab="${t}" class="${t === tab ? 'active' : ''}">${{ overview: '概览', labs: '化验', records: `原始报告 / 影像${d.records.filter(r => r.kind === 'imaging').length ? ` (${d.records.filter(r => r.kind === 'imaging').length})` : ''}`, docs: `病例报告${d.documents.length ? ` (${d.documents.length})` : ''}`, review: `待确认${pendingCount ? ` (${pendingCount})` : ''}` }[t]}</button>`).join('')}</div>
-      <div class="pt-body">${tab === 'overview' ? overview(d, canEdit) : tab === 'labs' ? labsView(confirmedLabs) : tab === 'records' ? studiesSection(canEdit) + recordsView(d) : tab === 'docs' ? docsView(d) : reviewView(d, pendingLabs, canEdit)}</div>`
+      <div class="pt-body">${tab === 'overview' ? overview(d, canEdit) : tab === 'labs' ? labsView(confirmedLabs) : tab === 'records' ? (hooks.dicom() ? studiesSection(canEdit) : '') + recordsView(d) : tab === 'docs' ? docsView(d) : reviewView(d, pendingLabs, canEdit)}</div>`
     // 还在提取的报告：隔几秒刷新
     if (d.records.some(r => r.extraction === 'queued' || r.extraction === 'running')) poll = setTimeout(() => { if (current === id) void openPatient(id, true) }, 3000)
     void syncPatientImagingJobBanner(id, d)
-    if (tab === 'records') void mountStudies(api, notice, id, () => current === id && tab === 'records', async docId => { current = null; await hooks.openDoc(docId) })
+    if (tab === 'records' && hooks.dicom()) void mountStudies(api, notice, id, () => current === id && tab === 'records', async docId => { current = null; await hooks.openDoc(docId) })
   }
 
   function overview(d: Detail, canEdit: boolean): string {

@@ -168,6 +168,14 @@ describe('影像检查接口与 DICOMweb 代理', () => {
     return { ...t, app, tok }
   }
 
+  it('/api/me 的 features.dicom：接了影像存储为 true；没接（托管生产机）为 false，界面据此隐藏影像检查', async () => {
+    for (const [orthanc, want] of [[new FakeOrthanc(), true], [null, false]] as const) {
+      const t = api(orthanc)
+      const me = await (await t.app.request('/api/me', { headers: { Authorization: t.tok(t.dr) } })).json() as { features: { dicom: boolean } }
+      expect(me.features).toEqual({ dicom: want })
+    }
+  })
+
   it('上传后列表带 UID；DICOMweb 只转发能看到的检查', async () => {
     const fake = new FakeOrthanc()
     const t = api(fake)

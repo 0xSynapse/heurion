@@ -23,7 +23,12 @@ export interface Me {
   dev?: boolean
   dev_mode: boolean
   tenant: { id: string; name: string; kind: 'personal' | 'org'; role: 'admin' | 'member'; settings: TenantSettings; members: number; personal_id?: string | null; in_org?: boolean } | null
+  /** 本实例的功能：dicom = 接了影像存储（Orthanc）；没有时不显示影像检查与影像相关的机构设置 */
+  features?: { dicom: boolean }
 }
+
+/** 当前实例是否接了影像存储（initUserMenu 时记下；机构管理对话框据此显示影像相关设置） */
+let dicomEnabled = false
 
 interface TenantSettings { patient_module: boolean; external_model_for_patients: boolean; patient_visibility: 'care_team' | 'tenant'; ai_patient_writes: 'review' | 'direct'; accept_patient_shares?: boolean; imaging_ai_visibility?: 'visible' | 'shadow'; imaging_self_review?: boolean }
 
@@ -198,6 +203,7 @@ const dismissed = (id: string) => { try { return localStorage.getItem(nudgeKey(i
 const dismiss = (id: string) => { try { localStorage.setItem(nudgeKey(id), '1') } catch { /* 忽略 */ } }
 
 export function initUserMenu(me: Me, api: <T = any>(path: string, opts?: RequestInit) => Promise<T>, notify: (msg: string, error?: boolean) => void): void {
+  dicomEnabled = me.features?.dicom === true
   const initial = (me.display_name || me.username).trim().slice(0, 1).toUpperCase()
   $('userAvatar').textContent = initial
   $('userName').textContent = me.display_name
@@ -962,12 +968,12 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
         <label class="toggle">AI 修改患者记录 <select data-set="ai_patient_writes"><option value="review"${t.settings.ai_patient_writes !== 'direct' ? ' selected' : ''}>需医生确认（进待确认）</option><option value="direct"${t.settings.ai_patient_writes === 'direct' ? ' selected' : ''}>直接生效（和人一样）</option></select></label>
         ${t.kind === 'org' ? `<label class="toggle"><input type="checkbox" data-set="accept_patient_shares" ${t.settings.accept_patient_shares !== false ? 'checked' : ''}> 接受知家家庭分享（家人可在知家里选本院的科室分享档案）</label>` : ''}
         <label class="toggle">患者默认可见范围 <select data-set="patient_visibility"><option value="care_team"${t.settings.patient_visibility === 'care_team' ? ' selected' : ''}>创建者 + 诊疗组</option><option value="tenant"${t.settings.patient_visibility === 'tenant' ? ' selected' : ''}>本机构全员</option></select></label>
-        <label class="toggle">影像 AI 自动分析结果 <select data-set="imaging_ai_visibility"><option value="visible"${t.settings.imaging_ai_visibility !== 'shadow' ? ' selected' : ''}>显示给医生</option><option value="shadow"${t.settings.imaging_ai_visibility === 'shadow' ? ' selected' : ''}>影子模式（后台运行，结果不显示，只进对照报告）</option></select></label>
+        ${dicomEnabled ? `<label class="toggle">影像 AI 自动分析结果 <select data-set="imaging_ai_visibility"><option value="visible"${t.settings.imaging_ai_visibility !== 'shadow' ? ' selected' : ''}>显示给医生</option><option value="shadow"${t.settings.imaging_ai_visibility === 'shadow' ? ' selected' : ''}>影子模式（后台运行，结果不显示，只进对照报告）</option></select></label>
         <div class="muted small">影子模式用于上线前评估：AI 照常分析，结果对医生、阅片器和 AI 助手都不可见；医生在阅片器里标的结节作为参照。切回「显示」后，影子期的结果仍不显示。</div>
         ${t.kind === 'org' ? `<label class="toggle"><input type="checkbox" data-set="imaging_self_review" ${t.settings.imaging_self_review ? 'checked' : ''}> 影像定稿允许自审（审核医师可以定稿自己初写的检查）</label>
         <div class="muted small">影像检查的定稿只允许「审核」阅片角色的成员，在「成员与邀请」里设置。默认初写与审核须为不同的人。</div>` : ''}
         <div><button type="button" class="small-btn" id="shadowReportBtn">查看影子期对照报告</button></div>
-        <div id="shadowReport" class="small"></div>
+        <div id="shadowReport" class="small"></div>` : ''}
       </div>
     </div>
 
@@ -1056,7 +1062,8 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
       notify((err as Error).message, true)
     }
   }
-  dlg.querySelector<HTMLButtonElement>('#shadowReportBtn')!.onclick = async () => {
+  const shadowBtn = dlg.querySelector<HTMLButtonElement>('#shadowReportBtn')
+  if (shadowBtn) shadowBtn.onclick = async () => {
     const box = dlg.querySelector<HTMLElement>('#shadowReport')!
     box.textContent = '正在读取…'
     try { box.innerHTML = shadowReportHtml(await api('/api/imaging/shadow-report')) } catch (err) { box.textContent = `读取失败：${(err as Error).message}` }
@@ -1077,7 +1084,7 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
     }
     // 影像阅片角色（T2.7）：初写 / 审核；患者模块未开或个人空间时不显示
     let readingRoles: Map<string, string> | null = null
-    if (t.kind === 'org') {
+    if (t.kind === 'org' && dicomEnabled) {
       try { readingRoles = new Map((await api('/api/imaging/reading-roles') as Array<{ user_id: string; role: string }>).map(r => [r.user_id, r.role])) } catch { readingRoles = null }
     }
     updateStats()

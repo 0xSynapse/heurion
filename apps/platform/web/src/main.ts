@@ -284,6 +284,7 @@ const patientsUi = initPatients(api, (m, e) => showNotice(m, e), {
   goSpace: space => spaces.set(space),
   tenantId: () => ME?.tenant?.id ?? null,
   token: () => TOKEN,
+  dicom: () => ME?.features?.dicom === true,
   openStudy: id => researchUi.open(id),
 })
 /** 把建议的指令填进对话框（不发送，由人改好再发） */
