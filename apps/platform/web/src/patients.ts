@@ -279,7 +279,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     // 还在提取的报告：隔几秒刷新
     if (d.records.some(r => r.extraction === 'queued' || r.extraction === 'running')) poll = setTimeout(() => { if (current === id) void openPatient(id, true) }, 3000)
     void syncPatientImagingJobBanner(id, d)
-    if (tab === 'records') void mountStudies(api, notice, id, () => current === id && tab === 'records')
+    if (tab === 'records') void mountStudies(api, notice, id, () => current === id && tab === 'records', async docId => { current = null; await hooks.openDoc(docId) })
   }
 
   function overview(d: Detail, canEdit: boolean): string {
@@ -421,7 +421,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
 
   /** 病例报告历史：「写病例报告」新建的文档都关联在这里，新的在前。 */
   function docsView(d: Detail): string {
-    const KINDS: Record<string, string> = { case_report: '病例报告', followup: '随访小结', discussion: '病例讨论', other: '文档' }
+    const KINDS: Record<string, string> = { case_report: '病例报告', followup: '随访小结', discussion: '病例讨论', findings: '所见草稿', other: '文档' }
     return `<div class="row"><span class="muted small">依据这位患者已确认的数据写的报告都保存在这里；每份报告在文档里也有自己的版本历史。</span><span class="grow"></span><button class="primary" data-act="report">写新的病例报告</button></div>
       ${d.documents.length === 0 ? '<div class="muted pt-empty">还没有病例报告。</div>' : `<table class="users"><thead><tr><th>标题</th><th>类型</th><th>作者</th><th>创建</th><th>最近修改</th><th></th></tr></thead><tbody>
       ${d.documents.map(x => `<tr><td><b>${esc(x.title)}</b></td><td>${esc(KINDS[x.kind] ?? x.kind)}</td><td>${esc(x.author)}</td>

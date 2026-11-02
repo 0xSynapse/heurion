@@ -29,6 +29,9 @@ import type { CohortService } from '../research/cohort.ts'
 import { registerImagingRoutes } from './routes/imaging.ts'
 import { registerDicomRoutes, viewerHostOf } from './routes/dicom.ts'
 import { registerImagingReviewRoutes } from './routes/imaging-review.ts'
+import { draftFailure, registerImagingDraftRoutes } from './routes/imaging-draft.ts'
+import { FindingsDraftService } from '../imaging/findings-draft.ts'
+import { risPlainText } from '../imaging/ris-text.ts'
 import { orthancFromEnv, type Orthanc } from '../imaging/orthanc.ts'
 import { sharedPipeline, type ImagingPipeline } from '../imaging/pipeline.ts'
 import { sharedInteractive, type ImagingInteractive } from '../imaging/interactive.ts'
@@ -910,6 +913,14 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     isRunActive: id => (deps.imagingPipeline !== undefined ? deps.imagingPipeline : deps.patients && orthanc ? sharedPipeline(deps.patients, orthanc) : null)?.isActive(id) ?? false,
   })
 
+  // —— 所见草稿与科室所见模板（T2.6）——
+  let draftService: FindingsDraftService | null = null
+  const drafts = (c: Context<{ Variables: { user: string } }>) => {
+    draftService ??= new FindingsDraftService(store, docs, ops, pt(c), { followup: deps.imagingFollowup || null })
+    return draftService
+  }
+  registerImagingDraftRoutes(app, { audit, me, drafts, patientFailure })
+
   // —— 知家分享给医生（docs/design/SHARING.md）——
   const shares = deps.shares ?? (deps.patients ? new ShareService(store, tenants, deps.patients, docs) : null)
   const sh = () => {
@@ -1693,6 +1704,20 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (!row) return c.json({ error: 'not found' }, 404)
     const views = measureViews(c, row)
     return c.json({ strict: measurementSvc().strict(row.id), measurements: store.listMeasurements(row.id).map(m => ({ ...m, view: views.get(m.id) })) })
+  })
+
+  /**
+   * 复制为 RIS 纯文本（T2.6 / W4.5）：测量原子按请求者的权限展开为「数值 单位」，不含 markdown 记号与内部 id；
+   * 所见草稿另附核对结果（定稿状态、结节与随访变化是否已变、测量是否失效），界面在复制前提示。
+   */
+  app.get('/api/docs/:id/ris-text', c => {
+    const row = owned(c)
+    if (!row || row.kind === 'deck') return c.json({ error: 'not found' }, 404)
+    try {
+      const svc = deps.patients ? drafts(c) : null
+      if (!svc) return c.json({ ...risPlainText(docs.get(row.id), { measurements: measureViews(c, row) }), issues: [], draft: null })
+      return c.json(svc.risText(measureActor(c, row), row, measureViews(c, row)), 200, { 'Cache-Control': 'private, no-store' })
+    } catch (err) { return draftFailure(c, err, patientFailure) }
   })
 
   /** 测量严格模式（禁止 AI 写入裸测量数字）：strict = true / false / null（null = 自动：有测量登记即开启）。只能由用户本人设置。 */

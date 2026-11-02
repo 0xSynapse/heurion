@@ -56,8 +56,9 @@ import { UnsplashError } from '../images/unsplash.ts'
 import { registerImagingTools } from './imaging-tools.ts'
 import { registerImagingReviewTools } from './imaging-review-tools.ts'
 import { MeasurementError, MeasurementService, measureSpace, SOURCE_KINDS } from '../measurements/service.ts'
-import { LESION_FIELDS, MEASURE_UNITS } from '../model/measurements.ts'
+import { FOLLOWUP_FIELDS, LESION_FIELDS, MEASURE_UNITS } from '../model/measurements.ts'
 import { registerImagingFollowupTools } from './imaging-followup-tools.ts'
+import { registerImagingDraftTools } from './imaging-draft-tools.ts'
 import type { Invoke } from '../http/invoke.ts'
 import { registerAdminTools, type LeaseAuthorizeInput, type LeaseAuthorizeResult } from './admin-tools.ts'
 
@@ -123,6 +124,7 @@ const INSTRUCTIONS = `heurion 文档平台。文档只能通过这些工具读�
 - 内容格式是 markdown：标题 #、列表 -、表格 GFM、粗体 **、上标 <sup>、图片 ![说明](asset:<asset_id>)。
 - 引用：pubmed_search 找文献 → insert_citation 登记 → 正文写返回的 [@c:<cite_id>]。正文中不能出现 DOI、PMID 或手写参考文献，参考文献表由平台自动生成。
 - 测量：报告里病灶的大小、体积、CT 值等数字一律绑定已确认的测量——imaging_lesions 查病灶（只用 status=confirmed 的）→ insert_measurement 绑定字段 → 正文写返回的 [@m:<m_id>]（显示为「数值 单位」，前后不要再写数字或单位）。不要手写测量数字，也不要用区间（如「6–8 mm」）或「约 N mm」描述某个病灶的大小——区间只用于引用指南阈值；改写段落时原样保留已有的 [@m:…]。doc_read 末尾列出各测量当前显示的值与状态，状态异常（来源已否决 / 撤销）的要提醒用户。
+- 影像所见草稿：imaging_findings_draft 按科室模板从已确认的结节确定性生成（测量都是 [@m:…]）；你只做润色（doc_edit 改措辞，原样保留 [@m:…]，不手写测量数字，随访差值用 insert_measurement 的 source=imaging_followup 绑定）。imaging_findings_draft_check 取 RIS 纯文本与复制前要处理的问题。所见模板只读。
 - 导入的 Word 稿件里，脚注引用与域代码（EndNote / Zotero 引用、题注编号、交叉引用）显示为 [@w:<key>]，doc_read 末尾列出各自是什么；改写含它们的句子时原样保留这些标记（位置可随句子调整），不能新建或改写标记。
 - 评论是用户锚定在具体文字上的修改要求：comments_list 读取 → 修改 → comment_reply 说明改了什么。
 - 回复用户时用平常的话说明改了什么、改在哪（如「第 2 节第一段」），不要提块 id、rev、cite_id、工具名等内部信息。
@@ -907,11 +909,11 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       '同一病灶、字段、单位再次绑定返回同一个 m_id，并把绑定时的快照刷新为当前值。',
     inputSchema: {
       doc_id: z.string(),
-      lesion_id: z.string().describe('病灶 id（imaging_lesions 返回的 id）'),
-      field: z.enum(Object.keys(LESION_FIELDS) as [string, ...string[]]).describe(Object.entries(LESION_FIELDS).map(([k, f]) => `${k}=${f.label}`).join('；')),
-      unit: z.enum(Object.keys(MEASURE_UNITS) as [string, ...string[]]).optional().describe('显示单位：长度 mm / cm，体积 mm3 / cm3，CT 值 HU，CTR 用 ratio；缺省为字段的基准单位'),
-      decimals: z.number().int().min(0).max(4).optional().describe('小数位，缺省 mm 1 位、cm 2 位、mm3 0 位、cm3 2 位、HU 0 位'),
-      source: z.enum(SOURCE_KINDS).optional().describe('来源类型，目前只有 imaging_lesion'),
+      lesion_id: z.string().describe('病灶 id（imaging_lesions 返回的 id）；source = imaging_followup 时是本次检查的病灶 id'),
+      field: z.enum([...Object.keys(LESION_FIELDS), ...Object.keys(FOLLOWUP_FIELDS)] as [string, ...string[]]).describe(`病灶测量：${Object.entries(LESION_FIELDS).map(([k, f]) => `${k}=${f.label}`).join('；')}。随访对比（source = imaging_followup）：${Object.entries(FOLLOWUP_FIELDS).map(([k, f]) => `${k}=${f.label}`).join('；')}`),
+      unit: z.enum(Object.keys(MEASURE_UNITS) as [string, ...string[]]).optional().describe('显示单位：长度 mm / cm，体积 mm3 / cm3，CT 值 HU，CTR 用 ratio，体积变化率 pct，倍增时间 day；缺省为字段的基准单位'),
+      decimals: z.number().int().min(0).max(4).optional().describe('小数位，缺省 mm 1 位、cm 2 位、mm3 0 位、cm3 2 位、HU 0 位、pct 0 位、day 0 位'),
+      source: z.enum(SOURCE_KINDS).optional().describe('来源类型：imaging_lesion（病灶测量，缺省）或 imaging_followup（随访对比的两期之差与体积倍增时间：派生数字同样要绑定，不能手写）'),
     },
   }, async ({ doc_id, lesion_id, field, unit, decimals, source }) => {
     const denied = ctx.check(doc_id, 'write')
@@ -2139,6 +2141,10 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
   registerImagingTools(server, { store, claims, patients: deps.patients, studies: deps.studies, datasets: deps.datasets, cohort: deps.cohort })
   registerImagingReviewTools(server, { store, claims, patients: deps.patients })
   registerImagingFollowupTools(server, { claims, patients: deps.patients })
+  registerImagingDraftTools(server, {
+    claims, docs, ops: deps.ops, patients: deps.patients, turnId: () => ctx.turnId,
+    check: (id, perm) => ctx.check(id, perm), touch: id => ctx.touch(id), measureViews: row => ctx.measureViews(row),
+  })
   registerAdminTools(
     server,
     {

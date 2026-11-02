@@ -18,11 +18,15 @@ export const MEASURE_UNITS = {
   cm3: { label: 'cm³', dim: 'volume', factor: 0.001, decimals: 2 },
   HU: { label: 'HU', dim: 'density', factor: 1, decimals: 0 },
   ratio: { label: '', dim: 'ratio', factor: 1, decimals: 2 },
+  /** 百分比（随访对比的体积变化率）：数值与 % 之间不留空格。 */
+  pct: { label: '%', dim: 'percent', factor: 1, decimals: 0 },
+  /** 天（体积倍增时间）。 */
+  day: { label: '天', dim: 'time', factor: 1, decimals: 0 },
 } as const
 export type MeasureUnit = keyof typeof MEASURE_UNITS
 
 /** 影像病灶（imaging_lesions.metrics）里能绑定的测量字段：字段名 → 名称与基准单位。 */
-export const LESION_FIELDS: Record<string, { label: string; base: MeasureUnit }> = {
+export const LESION_FIELDS: Record<string, MeasureField> = {
   mean_diameter_mm: { label: '平均径', base: 'mm' },
   long_axis_mm: { label: '长径', base: 'mm' },
   short_axis_mm: { label: '短径', base: 'mm' },
@@ -30,6 +34,26 @@ export const LESION_FIELDS: Record<string, { label: string; base: MeasureUnit }>
   volume_mm3: { label: '体积', base: 'mm3' },
   mean_hu: { label: '平均 CT 值', base: 'HU' },
   ctr: { label: '实性成分占比（CTR）', base: 'ratio' },
+}
+
+/** 一个测量字段：名称、基准单位；signed = 差值类字段，正数显示「+」号（「+2.3 mm」「+45%」）。 */
+export interface MeasureField { label: string; base: MeasureUnit; signed?: boolean }
+
+/**
+ * 随访对比（imaging_followup，source_id = 本次检查的病灶 id）里能绑定的派生测量：两期之差与体积倍增时间。
+ * 它们由两期病灶的测量算出（src/imaging/followup.ts 的 classifyChange），医生重测任一期后随之改变，所以也写成测量原子，
+ * 不由 AI 或模板手写数字（T2.6「所见草稿」）。
+ */
+export const FOLLOWUP_FIELDS: Record<string, MeasureField> = {
+  delta_mean_diameter_mm: { label: '平均径变化', base: 'mm', signed: true },
+  delta_volume_mm3: { label: '体积变化', base: 'mm3', signed: true },
+  delta_volume_pct: { label: '体积变化率', base: 'pct', signed: true },
+  vdt_days: { label: '体积倍增时间', base: 'day' },
+}
+
+/** 来源类型的测量字段目录（未知来源为空）。 */
+export function fieldsOf(kind: string): Record<string, MeasureField> {
+  return kind === 'imaging_lesion' ? LESION_FIELDS : kind === 'imaging_followup' ? FOLLOWUP_FIELDS : {}
 }
 
 /** 某个基准单位可选的显示单位。 */
@@ -47,18 +71,20 @@ export function convertMeasure(value: number, base: MeasureUnit, unit: MeasureUn
   return value * MEASURE_UNITS[unit].factor / MEASURE_UNITS[base].factor
 }
 
-/** 「8.2 mm」「-12 HU」「0.45」。value 已是显示单位的数值。 */
-export function formatMeasure(value: number, unit: MeasureUnit, decimals: number): string {
+/** 「8.2 mm」「-12 HU」「0.45」「+35%」「412 天」。value 已是显示单位的数值；signed 时正数带「+」。 */
+export function formatMeasure(value: number, unit: MeasureUnit, decimals: number, signed = false): string {
   const d = Math.max(0, Math.min(4, Math.floor(decimals)))
   let s = value.toFixed(d)
   if (/^-0(?:\.0+)?$/.test(s)) s = s.slice(1) // -0.0 → 0.0
+  if (signed && /^[1-9]|^0\.\d*[1-9]/.test(s)) s = `+${s}`
   const label = MEASURE_UNITS[unit].label
-  return label ? `${s} ${label}` : s
+  return !label ? s : unit === 'pct' ? `${s}${label}` : `${s} ${label}`
 }
 
 /** 绑定时快照的显示文字（登记表一行）。单位不认识时只写数值。 */
-export function snapshotText(m: { bound_value: number; unit: string; decimals: number }): string {
-  return isMeasureUnit(m.unit) ? formatMeasure(m.bound_value, m.unit, m.decimals) : String(m.bound_value)
+export function snapshotText(m: { bound_value: number; unit: string; decimals: number; source_kind?: string; field?: string }): string {
+  const signed = !!(m.source_kind && m.field && fieldsOf(m.source_kind)[m.field]?.signed)
+  return isMeasureUnit(m.unit) ? formatMeasure(m.bound_value, m.unit, m.decimals, signed) : String(m.bound_value)
 }
 
 /**
