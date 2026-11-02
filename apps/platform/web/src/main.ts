@@ -33,6 +33,15 @@ mountThemeSwitch($('themeSwitch'))
 $('authScreen').insertAdjacentHTML('afterbegin', photoFigure('login'))
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
 
+/**
+ * 网关层的错误（生产经 Cloudflare 与 Caddy）：返回的是网关自己的 HTML 错误页，不是平台的 JSON。
+ * 524 = 源站超过 100 秒没响应（Cloudflare 的上限），请求本身在服务端多半还在继续；502 / 521–523 = 暂时连不上源站（如部署重启）。
+ */
+const GATEWAY_STATUS = new Set([502, 503, 504, 520, 521, 522, 523, 524])
+const gatewayMessage = (status: number) => status === 524 || status === 504
+  ? `等待超时（HTTP ${status}）：服务处理时间超过了网关时限，任务可能仍在后台进行`
+  : `服务暂时不可用（HTTP ${status}），请稍后重试`
+
 async function api<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { Authorization: `Bearer ${TOKEN}` }
   if (opts.body && !(opts.body instanceof FormData)) headers['Content-Type'] = 'application/json'
@@ -46,6 +55,11 @@ async function api<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
     const raw = await res.text().catch(() => '')
     let e: { error?: string; message?: string; detail?: string; code?: string } = {}
     try { e = JSON.parse(raw) } catch {}
+    // 网关的 HTML 错误页不原样显示给用户；gateway = true 时调用方可以改为轮询任务状态
+    const html = /^\s*</.test(raw) || (res.headers.get('content-type') ?? '').includes('text/html')
+    if (html || (GATEWAY_STATUS.has(res.status) && !e.message && !e.error)) {
+      throw Object.assign(new Error(gatewayMessage(res.status)), { status: res.status, body: e, gateway: true })
+    }
     // 影像等接口用 { error: 代码, message: 说明 }：有说明时显示说明；HTTP/2 下 statusText 为空时回退状态码
     // 错误码与附带信息（如所见草稿的 draft_exists 带 doc_id）挂在错误上，调用方按需处理
     throw Object.assign(new Error(e.message || e.detail || e.error || raw.trim().slice(0, 200) || res.statusText || `请求失败 (HTTP ${res.status})`), { status: res.status, body: e })

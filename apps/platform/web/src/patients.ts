@@ -1341,7 +1341,15 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
               if (progressSub) {
                 progressSub.textContent = '请重新选择影像文件并确认模型参数后再次点击推理。'
               }
-            } else if (!a || (latest && latest.status === 'completed')) {
+            } else if (!a && !latest) {
+              // 服务端查不到这个任务（请求没送达，或平台重启后内存里的任务表清空）：如实说明，不能当成已完成
+              stopModalPoll()
+              setModalRunningState(false)
+              progressBox.hidden = false
+              progressMsg.style.color = '#ef4444'
+              progressMsg.textContent = '服务端没有这次影像分析任务（请求可能没有送达，或服务重启过），请重新选择文件后再次推理'
+              if (progressSub) progressSub.textContent = ''
+            } else if (latest && latest.status === 'completed') {
               stopModalPoll()
               setModalRunningState(false)
               notice('MONAI 3D 影像量化分析已完成！已生成关键截面并加密存入患者档案。')
@@ -1434,6 +1442,12 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         }
       } catch (err: any) {
         stopModalPoll()
+        // 网关超时（生产经 Cloudflare，超过 100 秒就断开）：推理在服务端继续，改为轮询任务直到完成或失败
+        if (err?.gateway) {
+          renderJobProgress('处理时间较长，已转入后台继续推理，正在等待结果…', 50, '网关在 100 秒时断开了这次请求，但服务端的推理不受影响；完成后结果会自动存入患者档案。')
+          startModalJobPolling(true, startTs)
+          return
+        }
         setModalRunningState(false)
         const errText = err?.message || String(err) || '未知错误'
         if (!dlg.hidden) {
@@ -3983,7 +3997,9 @@ ${impression}
             ok++
             notice(`已成功将 3D 影像资料 ${f.name} 关联至患者，并生成量化分析记录！`)
           } catch (err) {
-            failed.push(`${f.name}：${(err as Error).message}`)
+            // 网关超时：推理仍在服务端进行，完成后出现在「原始报告 / 影像」，不算失败
+            if ((err as { gateway?: boolean }).gateway) { ok++; notice(`${f.name} 处理时间较长，已转入后台继续分析，完成后会出现在「原始报告 / 影像」里`) }
+            else failed.push(`${f.name}：${(err as Error).message}`)
           }
           continue
         }
