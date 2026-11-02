@@ -196,15 +196,24 @@ describe('患者影像量化分析与病历关联 (Patient Imaging Integration)'
       })
     })
 
-    expect(analyzeRes.status).toBe(201)
+    // 接口立即返回 202 与后台任务（docs/design/IMAGING_STUDIES.md「旧版影像分析的后台任务」），轮询到完成
+    expect(analyzeRes.status).toBe(202)
     const resJson = await analyzeRes.json()
     expect(resJson.ok).toBe(true)
-    expect(resJson.record.kind).toBe('imaging')
-    expect(resJson.asset_id).toBeTruthy()
-    expect(resJson.file_id).toBeTruthy()
-    expect(resJson.metrics).toBeTruthy()
-    expect(resJson.metrics.bar_ratio).toBeGreaterThan(0)
-    expect(resJson.findings.length).toBeGreaterThan(0)
+    expect(resJson.job_id).toBeTruthy()
+    let latest: any = null
+    for (let i = 0; i < 120; i++) {
+      const jr = await app.request(`/api/patients/${patient.id}/imaging/jobs`, { headers: { Authorization: `Bearer ${token}` } })
+      latest = ((await jr.json()) as any).latest
+      if (latest && latest.status !== 'running') break
+      await new Promise(r => setTimeout(r, 250))
+    }
+    expect(latest).toMatchObject({ job_id: resJson.job_id, status: 'completed' })
+    const rec = t.svc.read(a, patient.id).records.find((r: any) => r.id === latest.record_id) as any
+    expect(rec.kind).toBe('imaging')
+    expect(rec.imaging_data.asset_id).toBeTruthy()
+    expect(rec.imaging_data.metrics.bar_ratio).toBeGreaterThan(0)
+    expect(rec.imaging_data.findings.length).toBeGreaterThan(0)
 
     // 验证患者信息被更新：标签自动打上「支气管扩张」
     const updatedPatient = t.svc.read(a, patient.id)
