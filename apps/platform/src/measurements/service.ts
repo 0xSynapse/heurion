@@ -1,7 +1,8 @@
 import { ImagingStudyService, type LesionRow } from '../imaging/studies.ts'
+import { sharedFollowup } from '../imaging/followup.ts'
 import {
-  LESION_FIELDS, MEASURE_UNITS, convertMeasure, formatMeasure, isMeasureUnit, snapshotText, statusNote, unitsFor,
-  type MeasureStatus, type MeasureUnit, type MeasureView,
+  FOLLOWUP_FIELDS, LESION_FIELDS, MEASURE_UNITS, convertMeasure, fieldsOf, formatMeasure, isMeasureUnit, snapshotText, statusNote, unitsFor,
+  type MeasureField, type MeasureStatus, type MeasureView,
 } from '../model/measurements.ts'
 import type { DocRow, MeasurementRow, Store } from '../store/db.ts'
 import type { Actor, PatientService } from '../tenancy/patients.ts'
@@ -14,7 +15,8 @@ import type { Actor, PatientService } from '../tenancy/patients.ts'
  * - 取值（渲染、导出、编辑器、AI 读视图）：以读者本人的权限读来源的当前值 —— 医生重测后报告里的数字随之更新，
  *   文档内容本身不变（不产生修订，按轮撤销不受影响）。读者看不到来源时只给快照，不透露来源的当前情况。
  *
- * 来源类型可扩展（SOURCES）：本期只有影像病灶测量；以后科研手稿里的队列统计值（W6.5）加一种来源即可。
+ * 来源类型可扩展（SOURCES）：影像病灶测量（imaging_lesion）；随访对比的派生值（imaging_followup：两期之差、体积倍增时间，
+ * T2.6 所见草稿用）；以后科研手稿里的队列统计值（W6.5）再加一种来源即可。
  */
 
 export class MeasurementError extends Error {
@@ -34,7 +36,7 @@ interface SourceReading {
 }
 
 interface MeasureSource {
-  fields: Record<string, { label: string; base: MeasureUnit }>
+  fields: Record<string, MeasureField>
   /** 以 actor 的权限读来源；没有权限或不存在时抛错（调用方按「无权查看」处理）。 */
   read(actor: Actor, sourceId: string): SourceReading
 }
@@ -67,7 +69,30 @@ function imagingLesionSource(patients: PatientService): MeasureSource {
   }
 }
 
-export const SOURCE_KINDS = ['imaging_lesion'] as const
+/**
+ * 随访对比的派生测量（source_id = 本次检查的病灶 id）：取该病灶在随访对比里的当前一项（sharedFollowup().view，
+ * 变化按两侧病灶的当前测量重新计算），字段见 FOLLOWUP_FIELDS。
+ * - 状态跟随本次病灶：被否决 / 撤销 / 不再确认时与病灶测量一样标出；
+ * - 病灶还在但已不成对（拆开、前片结节不再参与、重新匹配后没对上）或缺少这个值（缺体积、VDT 不适用）时为 field_missing（「来源测量已缺失」）。
+ * 版本取本次病灶的版本：前片定稿版本变了、对应关系变了而病灶未改时，数值变化仍按「已随来源更新」显示（比较的是文字）。
+ */
+function imagingFollowupSource(patients: PatientService): MeasureSource {
+  const svc = new ImagingStudyService(patients, null)
+  return {
+    fields: FOLLOWUP_FIELDS,
+    read(actor, lesionId) {
+      const { lesion, patientId, tenantId } = svc.measurementSource(actor, lesionId)
+      let values: Record<string, unknown> = {}
+      if (lesionBindable(lesion)) {
+        const item = sharedFollowup(patients).view(actor, lesion.study_id).items.find(i => i.lesion_id === lesionId)
+        if (item?.metrics && item.prior_lesion_id && item.change && item.change !== 'new') values = { ...item.metrics }
+      }
+      return { state: stateOf(lesion), version: lesion.version, values, label: `${lesionLabel(lesion)} · 随访对比`, patientId, tenantId }
+    },
+  }
+}
+
+export const SOURCE_KINDS = ['imaging_lesion', 'imaging_followup'] as const
 export type SourceKind = (typeof SOURCE_KINDS)[number]
 
 export interface BindInput {
@@ -95,9 +120,9 @@ export class MeasurementService {
   constructor(private readonly store: Store, private readonly patients: PatientService | null | undefined) {}
 
   private source(kind: string): MeasureSource {
-    if (kind !== 'imaging_lesion') throw new MeasurementError('measurement_source_unknown', `不支持的测量来源 ${kind}`, 400, `目前只能绑定影像病灶测量（source = imaging_lesion）。`)
+    if (kind !== 'imaging_lesion' && kind !== 'imaging_followup') throw new MeasurementError('measurement_source_unknown', `不支持的测量来源 ${kind}`, 400, `可绑定的来源：影像病灶测量（imaging_lesion）、随访对比的派生值（imaging_followup）。`)
     if (!this.patients) throw new MeasurementError('patient_module_off', '患者模块未启用，不能绑定影像测量', 403)
-    return imagingLesionSource(this.patients)
+    return kind === 'imaging_followup' ? imagingFollowupSource(this.patients) : imagingLesionSource(this.patients)
   }
 
   /** 严格模式：显式设置的为准；未设置时文档里有测量登记就开启（报告一旦绑定了测量，其余测量数字也要绑定）。 */
@@ -130,7 +155,8 @@ export class MeasurementService {
     }
     const raw = r.values[input.field]
     if (typeof raw !== 'number' || !Number.isFinite(raw)) {
-      throw new MeasurementError('measurement_field_missing', `病灶没有 ${field.label}（${input.field}）的测量值`, 422, '换一个有数值的字段，或请医生补测后再绑定。')
+      throw new MeasurementError('measurement_field_missing', kind === 'imaging_followup' ? `这个结节的随访对比没有${field.label}（${input.field}）` : `病灶没有 ${field.label}（${input.field}）的测量值`, 422,
+        kind === 'imaging_followup' ? '只有与前片成对、两期都有相应测量的结节才有差值；体积倍增时间只在体积增大时给出。用 imaging_followup 查看。' : '换一个有数值的字段，或请医生补测后再绑定。')
     }
     const ctx = docContext(doc)
     if (ctx?.kind === 'patient' && (ctx.patient_id !== r.patientId || (ctx.tenant_id && r.tenantId && ctx.tenant_id !== r.tenantId))) {
@@ -175,7 +201,7 @@ export class MeasurementService {
 
   private view(row: MeasurementRow, reading: SourceReading | null): MeasureView {
     const bound = snapshotText(row)
-    const field = row.source_kind === 'imaging_lesion' ? LESION_FIELDS[row.field] : undefined
+    const field = fieldsOf(row.source_kind)[row.field]
     const base: MeasureView = {
       id: row.id, text: bound, status: 'no_access', bound_text: bound, source_label: row.bound_label,
       source_version: null, bound_version: row.bound_version, note: statusNote('no_access', bound),
@@ -188,7 +214,7 @@ export class MeasurementService {
       const raw = reading.values[row.field]
       if (typeof raw !== 'number' || !Number.isFinite(raw)) status = 'field_missing'
       else {
-        text = formatMeasure(convertMeasure(raw, field.base, row.unit), row.unit, row.decimals)
+        text = formatMeasure(convertMeasure(raw, field.base, row.unit), row.unit, row.decimals, field.signed)
         status = text === bound ? 'ok' : 'updated'
       }
     }

@@ -2288,7 +2288,7 @@ ${followAssetId ? `- **随访关键切片**: ![随访关键切片](asset:${follo
     const doc = this.store.getDoc(docId)
     if (!doc || doc.owner !== a.userId || doc.deleted_at) throw new PatientError('not_found', '文档不存在', 404)
     if (doc.context && (JSON.parse(doc.context) as { kind?: string }).kind === 'study') throw new PatientError('in_study', '这份文档归在一个研究项目里，不能再关联到患者', 409)
-    const k = kind === 'followup' || kind === 'discussion' || kind === 'archive' || kind === 'brief' || kind === 'other' ? kind : 'case_report'
+    const k = kind === 'followup' || kind === 'discussion' || kind === 'archive' || kind === 'brief' || kind === 'findings' || kind === 'other' ? kind : 'case_report'
     c.db.db.prepare('INSERT OR IGNORE INTO patient_docs (patient_id, doc_id, kind, created_by, created_at) VALUES (?, ?, ?, ?, ?)').run(patientId, docId, k, a.userId, now())
     // 属于患者的文档：不出现在文档列表里，打开时显示归属并能回到患者页
     const p = c.db.db.prepare('SELECT code FROM patients WHERE id = ?').get(patientId) as { code: string }

@@ -174,6 +174,11 @@ const ALL_PARITY: Record<string, string> = {
   'GET /api/patients/:ptid/imaging/studies/:stid/review': 'imaging_review',
   'GET /api/patients/:ptid/imaging/studies/:stid/signoffs/:seq': 'imaging_review',
   'GET /api/patients/:ptid/imaging/studies/:stid/followup': 'imaging_followup',
+  // 所见草稿（T2.6）：读模板、生成草稿、核对 / RIS 纯文本给 AI；改模板不给（见 NOT_FOR_AI）
+  'GET /api/imaging/findings-templates': 'imaging_findings_templates',
+  'GET /api/imaging/findings-templates/versions': 'imaging_findings_templates',
+  'POST /api/patients/:ptid/imaging/studies/:stid/findings-draft': 'imaging_findings_draft',
+  'GET /api/docs/:id/ris-text': 'imaging_findings_draft_check',
 }
 
 /** AI 发起后要用户在确认卡上确认才执行的动作（不可恢复的删除、权限与安全、以机构身份对外的标识）。 */
@@ -297,6 +302,7 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/aegis/leases/approve': '医生/研究员本人审批 [Lease-Gated] 提权申请（AI 不能自我批准租约）',
   'POST /api/aegis/leases/reject': '医生/研究员本人拒绝 [Lease-Gated] 提权申请（AI 不能自我决定租约）',
   'POST /api/aegis/mcp': 'AAP-1.0 统一 MCP 协议网关入口本身（承载全部 MCP 工具调用）',
+  'PUT /api/imaging/findings-templates': '所见模板是科室的书写规范（决定之后所有草稿的措辞），由机构管理员或本科室审核医师本人维护；AI 只读（imaging_findings_templates），服务层同样拒绝 via=ai',
   'PUT /api/docs/:id/measurements/policy': '测量严格模式是用户对 AI 写入的约束（禁止裸测量数字），AI 不能自己开关；接口同样拒绝 via=ai',
 }
 
