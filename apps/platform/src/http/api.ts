@@ -58,7 +58,7 @@ import { newTemplateDeck } from '../ops/deck.ts'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { SlideRenderer } from '../render/slides.ts'
+import { slideRenderKey, type SlideRenderer } from '../render/slides.ts'
 import type { CrossrefClient } from '../literature/crossref.ts'
 import { importReferences, parseReferences } from '../literature/import-refs.ts'
 import { formatAma, formatCitation, normalizeDoi } from '../literature/format.ts'
@@ -74,7 +74,7 @@ import { parseBlocks } from '../model/markdown.ts'
 import type { CommitEvent, Documents } from '../model/runtime.ts'
 import { schema } from '../model/schema.ts'
 import type { OpService } from '../ops/service.ts'
-import { pendingGroups, resolveSuggestions, withoutPending } from '../ops/suggest.ts'
+import { pendingGroups, resolveSuggestions, slidePreviewView, withoutPending } from '../ops/suggest.ts'
 import { EditBatch, OpError } from '../ops/types.ts'
 import { DeckEditBatch } from '../ops/deck.ts'
 import { commentPrompt, wantsAi, phrBriefPrompt, type TurnBusEvent, type TurnOptions, type TurnService } from '../turns/service.ts'
@@ -1693,15 +1693,18 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/docs/:id/slides/:index/render.png', async c => {
     const row = owned(c)
     if (!row || row.kind !== 'deck') return c.json({ error: 'not found' }, 404)
+    // 画布的页序含待采纳修订的页：按 slidePreviewView 换成渲染视图里的页序（导出视图会去掉待新增的页）
+    const preview = slidePreviewView(docs.get(row.id), Number(c.req.param('index')))
+    if (!preview) return c.json({ error: 'slide not found' }, 404)
     try {
       const info = ops.deckContextInfo(row.id)
-      const pngs = await deps.renderer.render(`${row.id}/${docs.rev(row.id)}`, {
-        pptx: () => pptxFor(docs, row.id, measureViews(c, row)).bytes,
-        getDoc: () => docs.get(row.id),
+      const pngs = await deps.renderer.render(slideRenderKey(row.id, docs.rev(row.id), preview.view), {
+        pptx: () => pptxFor(docs, row.id, measureViews(c, row), preview.doc).bytes,
+        getDoc: () => preview.doc,
         size: info.size,
         getAssetBytes: id => store.getAssetBytes(id),
       })
-      const png = pngs[Number(c.req.param('index'))]
+      const png = pngs[preview.index]
       if (!png) return c.json({ error: 'slide not found' }, 404)
       return c.body(readFileSync(png), 200, { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=3600' })
     } catch (err) {
