@@ -27,7 +27,7 @@ interface SignoffMeta { id: string; version: number; signed_by_name: string | nu
 interface View {
   study_id: string; state: ReviewState; revision: number; reading_mode: 'org' | 'personal'; my_role: 'reader' | 'reviewer' | null
   counts: { proposed: number; confirmed: number; rejected: number }
-  submissions: Array<{ user_name: string | null; at: string }>
+  submissions: Array<{ user_name: string | null; at: string; revision: number }>
   lesions: Lesion[]; removed_since_finalized: Array<{ id: string; label: string | null }>
   signoffs: SignoffMeta[]; latest_signoff: SignoffMeta | null
   finalize: { allowed: boolean; blockers: Array<{ code: string; message: string }> }
@@ -111,7 +111,9 @@ function render(v: View): string {
   const table = v.lesions.length
     ? `<table class="users"><thead><tr><th>结节</th><th>AI 原值</th><th>初写修改</th><th>审核修改</th><th>当前值</th><th>状态 / 版本</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
     : '<div class="muted small">没有结节（定稿即「未见结节」）。</div>'
-  const canSubmit = v.state !== 'finalized'
+  // 已提交且之后病灶没有改动时不再显示（再交一次只会重复记一条初写完成）
+  const lastSub = v.submissions[v.submissions.length - 1]
+  const canSubmit = v.state !== 'finalized' && !(v.state === 'submitted' && lastSub && lastSub.revision === v.revision)
   const actions = `<div class="row" style="margin-top:6px;gap:6px">
     ${canSubmit ? `<button class="small-btn" data-rv="submit"${v.counts.proposed ? ` disabled title="还有 ${v.counts.proposed} 个待确认"` : ''}>初写完成，提交审核</button>` : ''}
     ${v.finalize.allowed ? `<input type="text" data-rv-note placeholder="审核意见（可选）" maxlength="500" style="min-width:12em">

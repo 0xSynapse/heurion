@@ -1422,9 +1422,12 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .pill.ok { color: var(--green); border-color: var(--green-line); }
 .pill.off { color: var(--muted); }
 .pill.warn { color: var(--warn); border-color: var(--warn); }
-/* 影像审核视图（T2.7） */
-.pt-review { padding: 8px 0 4px; }
-.pt-review table.users td { vertical-align: top; }
+/* 影像审核视图（T2.7）与所见模板（T2.6）。类名不要用 .pt-review：那是化验报告审核的左右两栏布局 */
+.pt-imgreview { padding: 8px 0 4px; }
+.pt-imgreview table.users td { vertical-align: top; }
+/* 影像检查表：按钮与日期不折行（列多时按钮被挤成一字一行） */
+.pt-dicom .small-btn { white-space: nowrap; }
+.pt-dicom .pt-dicom-date { white-space: nowrap; }
 
 /* —— 幻灯片 —— */
 .page.deck { max-width: none; width: fit-content; padding: 24px; background: transparent; border: 0; box-shadow: none; }

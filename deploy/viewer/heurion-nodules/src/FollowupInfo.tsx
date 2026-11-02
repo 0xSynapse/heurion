@@ -155,7 +155,8 @@ export function FollowupLine({ f, lesionId }: { f: ReturnType<typeof useFollowup
       {it.prior_lesion && <span> · 前片{it.prior_lesion.label ?? '结节'}（{it.prior_lesion.mean_diameter_mm ?? '—'} mm）</span>}
       {m && (
         <span>
-          {' '}· Δ平均径 {signed(m.delta_mean_diameter_mm)} mm · Δ体积 {signed(m.delta_volume_mm3, 0)} mm³（{signed(m.delta_volume_pct)}%）
+          {m.delta_mean_diameter_mm !== null && ` · Δ平均径 ${signed(m.delta_mean_diameter_mm)} mm`}
+          {m.delta_volume_mm3 !== null && ` · Δ体积 ${signed(m.delta_volume_mm3, 0)} mm³${m.delta_volume_pct !== null ? `（${signed(m.delta_volume_pct)}%）` : ''}`}
           {m.within_error && <span style={{ color: '#8b949e' }}> · 在误差范围内</span>}
           {m.vdt_days !== null && <span> · 倍增时间 {m.vdt_days} 天</span>}
         </span>

@@ -52,7 +52,7 @@ export function studiesSection(canEdit: boolean): string {
       <input type="file" id="ptDicomFiles" accept=".dcm,.dicom,.zip,application/dicom,application/zip" multiple hidden>
       <input type="file" id="ptDicomFolder" webkitdirectory multiple hidden>` : ''}
     </div>
-    <div id="ptFindingsTpl" class="pt-review" hidden></div>
+    <div id="ptFindingsTpl" class="pt-imgreview" hidden></div>
     <div id="ptDicomList" class="muted small">正在读取影像检查…</div>
   </section>`
 }
@@ -63,19 +63,18 @@ function seriesLine(s: SeriesView): string {
 
 function render(list: StudyView[], canEdit: boolean, reviews: Map<string, ReviewSummary>, open: Set<string>): string {
   if (!list.length) return '<div class="muted small">还没有影像检查。上传 DICOM 后会在这里按检查列出，并自动进入 AI 分析。</div>'
-  return `<table class="users"><thead><tr><th>检查日期</th><th>模态</th><th>检查描述</th><th>序列</th><th>AI 分析</th><th>病灶</th><th>审核</th><th>来源</th></tr></thead><tbody>
+  return `<table class="users"><thead><tr><th>检查日期</th><th>模态</th><th>检查描述</th><th>序列</th><th>AI 分析</th><th>病灶</th><th>审核</th></tr></thead><tbody>
     ${list.map(st => {
       const last = st.runs[0]
       const busy = last && (last.status === 'queued' || last.status === 'running')
       return `<tr>
-      <td>${esc(st.study_date ?? '未知')}${st.study_uid ? `<div><button class="small-btn" data-view="${esc(st.study_uid)}">在阅片器中打开</button></div>` : ''}</td><td>${esc(st.modalities.join(' / ') || '—')}</td><td>${esc(st.description ?? '')}</td>
+      <td class="pt-dicom-date">${esc(st.study_date ?? '未知')}<div class="muted small">${st.source === 'pacs' ? 'PACS' : '手工上传'}</div>${st.study_uid ? `<div><button class="small-btn" data-view="${esc(st.study_uid)}">在阅片器中打开</button></div>` : ''}</td><td>${esc(st.modalities.join(' / ') || '—')}</td><td>${esc(st.description ?? '')}</td>
       <td class="small">${st.series.map(s => `<div>${seriesLine(s)}</div>`).join('')}</td>
       <td class="small">${st.ai_shadow && !last ? '<span class="muted" title="上线前评估：AI 在后台分析，结果只进机构的对照报告">影子模式，结果不显示</span>' : `${runLine(last)}${canEdit && !busy ? `<div><button class="small-btn" data-analyze="${esc(st.id)}">${last ? '重新分析' : '开始分析'}</button></div>` : ''}`}</td>
       <td class="small">${st.lesions.proposed + st.lesions.confirmed + st.lesions.rejected ? `待确认 ${st.lesions.proposed} · 已确认 ${st.lesions.confirmed} · 已否决 ${st.lesions.rejected}` : '<span class="muted">—</span>'}</td>
       <td class="small">${reviewBadge(reviews.get(st.id))}${reviews.has(st.id) ? `<div><button class="small-btn" data-review="${esc(st.id)}">${open.has(st.id) ? '收起审核' : '审核视图'}</button></div>` : ''}
-        ${canEdit && st.modalities.includes('CT') ? `<div><button class="small-btn" data-draft="${esc(st.id)}" title="按科室模板，由已确认的结节生成所见草稿（测量数字绑定病灶，医生重测后自动更新）">生成所见草稿</button></div>` : ''}</td>
-      <td class="muted small">${st.source === 'pacs' ? 'PACS' : '手工上传'}<br>${new Date(st.created_at).toLocaleString('zh-CN', { hour12: false })}</td></tr>
-      ${open.has(st.id) ? `<tr class="pt-review-row"><td colspan="8"><div class="pt-review" data-review-box="${esc(st.id)}">正在读取审核视图…</div></td></tr>` : ''}`
+        ${canEdit && st.modalities.includes('CT') ? `<div><button class="small-btn" data-draft="${esc(st.id)}" title="按科室模板，由已确认的结节生成所见草稿（测量数字绑定病灶，医生重测后自动更新）">生成所见草稿</button></div>` : ''}</td></tr>
+      ${open.has(st.id) ? `<tr class="pt-imgreview-row"><td colspan="7"><div class="pt-imgreview" data-review-box="${esc(st.id)}">正在读取审核视图…</div></td></tr>` : ''}`
     }).join('')}
   </tbody></table>`
 }
@@ -124,7 +123,8 @@ async function generateDraft(api: Api, notice: Notice, patientId: string, studyI
     const tpl = r.template.source === 'builtin' ? '内置模板' : `${r.template.department_name ?? '机构默认'}模板 v${r.template.version}`
     const kept = r.blocks.kept.filter(k => k.reason !== 'deleted').length
     const head = r.created ? `已生成所见草稿（${r.nodules} 个结节，${tpl}）` : `已更新所见草稿：改写 ${r.blocks.written.length} 段、删去 ${r.blocks.removed.length} 段${kept ? `，你改过的 ${kept} 段原样保留` : ''}`
-    notice(`${head}${r.warnings.length ? `。请核对：${r.warnings.join('；')}` : ''}`, r.warnings.length > 0)
+    // 有「请核对」也是生成成功，不用错误样式（错误样式会以「出错了」开头）
+    notice(`${head}${r.warnings.length ? `。请核对：${r.warnings.join('；')}` : ''}`)
     if (openDoc) await openDoc(r.doc_id)
   } catch (err) {
     const body = (err as ApiError).body

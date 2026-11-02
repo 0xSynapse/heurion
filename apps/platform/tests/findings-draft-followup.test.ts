@@ -119,7 +119,7 @@ describe('所见草稿 × 随访对比', () => {
       '1. 右肺上叶结节，平均径 10.5 mm，体积 600 mm³，较前增大，平均径变化 +2.3 mm，体积变化 +108%，体积倍增时间约 345 天。',
       '2. 左肺上叶结节，平均径 6.3 mm，体积 120 mm³，与前片相仿（变化在测量误差范围内）。',
       '3. 左肺下叶见结节，平均径 4.0 mm，体积 33 mm³，为新发结节。',
-      '前片右肺下叶结节本次未见显示。',
+      '前片所见右肺下叶结节，本次未见。',
     ])
     const rows = t.store.listMeasurements(r.doc_id)
     expect(rows.filter(m => m.source_kind === 'imaging_followup').map(m => [m.source_id, m.field]).sort()).toEqual([

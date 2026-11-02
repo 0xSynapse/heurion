@@ -433,7 +433,8 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     const imagingRecords = d.records.filter(r => r.kind === 'imaging')
     const otherRecords = d.records.filter(r => r.kind !== 'imaging')
 
-    if (d.records.length === 0) return `<div class="muted">还没有影像或报告。点击上方「${icon('scan')} 影像分析」量化 CT/MRI，或「上传化验单 / 报告」。</div>`
+    // 这里只列上传的报告与旧版「影像分析」的量化记录；DICOM 影像检查在上方单独的区块里，不要说成「还没有影像」
+    if (d.records.length === 0) return `<div class="muted">还没有上传的化验单、报告或量化分析记录。可点上方「上传化验单 / 报告」，或「${icon('scan')} 影像分析」做单次量化。</div>`
     const STATUS: Record<string, string> = { pending: '待确认', confirmed: '已确认', rejected: '已驳回' }
     const EXTRACT: Record<string, string> = { queued: '排队提取', running: '提取中…', done: '', failed: '提取失败', skipped: '' }
 

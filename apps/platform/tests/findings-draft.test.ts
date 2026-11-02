@@ -11,7 +11,7 @@ import { ClaimService } from '../src/claims/service.ts'
 import { PostCheck } from '../src/collab/postcheck.ts'
 import { buildApi } from '../src/http/api.ts'
 import { FindingsDraftService, sortNodules } from '../src/imaging/findings-draft.ts'
-import { BUILTIN_TEMPLATE, escapeMarkdown, parseSentence, parseTemplate, PLACEHOLDERS, renderSentence } from '../src/imaging/findings-template.ts'
+import { BUILTIN_TEMPLATE, BUILTIN_VERSION, escapeMarkdown, parseSentence, parseTemplate, PLACEHOLDERS, renderSentence } from '../src/imaging/findings-template.ts'
 import { ImagingReviewService } from '../src/imaging/review.ts'
 import { risPlainText } from '../src/imaging/ris-text.ts'
 import { ImagingStudyService } from '../src/imaging/studies.ts'
@@ -150,7 +150,7 @@ describe('生成所见草稿', () => {
     const r = t.drafts.generate(t.A, t.p.id, { study_id: t.study.id }, { turnId: null })
     expect(r.created).toBe(true)
     expect(r.nodules).toBe(2)
-    expect(r.template).toMatchObject({ source: 'builtin', version: 1 })
+    expect(r.template).toMatchObject({ source: 'builtin', version: BUILTIN_VERSION })
     expect(r.review_state).toBe('reading')
     expect(shown(t, r.doc_id, t.A)).toEqual([
       '影像所见',
@@ -364,7 +364,7 @@ describe('RIS 纯文本', () => {
     for (const m of t.store.listMeasurements(r.doc_id)) expect(ris.text).not.toContain(m.id)
     for (const l of [t.n1, t.n2]) expect(ris.text).not.toContain(l.id)
     expect(ris.issues.map(i => i.code)).toEqual(['not_finalized'])
-    expect(ris.draft).toMatchObject({ study_id: t.study.id, template: { id: 'builtin', version: 1 }, review_state: 'reading', generations: 1 })
+    expect(ris.draft).toMatchObject({ study_id: t.study.id, template: { id: 'builtin', version: BUILTIN_VERSION }, review_state: 'reading', generations: 1 })
   })
 
   it('纯函数：列表、表格、换行、图、引用的处理', () => {
@@ -484,7 +484,7 @@ describe('接口与 MCP', () => {
     const notTeam = await app.request(url, { method: 'POST', headers: { ...H, Authorization: tok(t.outsider) }, body: '{}' })
     expect(notTeam.status).toBe(404)
     const tpl = await (await app.request('/api/imaging/findings-templates', { headers: H })).json() as { builtin: { version: number }; can_edit_org: boolean }
-    expect(tpl).toMatchObject({ builtin: { version: 1 }, can_edit_org: false })
+    expect(tpl).toMatchObject({ builtin: { version: BUILTIN_VERSION }, can_edit_org: false })
     expect((await app.request('/api/imaging/findings-templates', { method: 'PUT', headers: H, body: JSON.stringify({ scope: 'org', body: BUILTIN_TEMPLATE }) })).status).toBe(403)
     const saved = await app.request('/api/imaging/findings-templates', { method: 'PUT', headers: { ...H, Authorization: tok(t.admin) }, body: JSON.stringify({ scope: 'org', body: { ...BUILTIN_TEMPLATE, none: '未见结节 5 mm。' } }) })
     expect(saved.status).toBe(422)
@@ -510,7 +510,7 @@ describe('接口与 MCP', () => {
       const res = await client.callTool({ name, arguments: args }) as { content: Array<{ text: string }>; isError?: boolean }
       return { err: !!res.isError, body: JSON.parse(res.content[0]!.text) }
     }
-    expect((await call('imaging_findings_templates', {})).body.builtin.version).toBe(1)
+    expect((await call('imaging_findings_templates', {})).body.builtin.version).toBe(BUILTIN_VERSION)
     const g = await call('imaging_findings_draft', { patient_id: t.p.id, imaging_study_id: t.study.id })
     expect(g.err).toBe(false)
     expect(g.body).toMatchObject({ created: true, nodules: 2 })

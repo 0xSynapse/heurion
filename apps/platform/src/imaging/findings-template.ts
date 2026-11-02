@@ -80,7 +80,8 @@ const MAX_TITLE = 60
 const MAX_BODY = 16_000
 
 /** 内置模板（种子）：机构与科室没有维护自己的模板时使用；可被机构默认模板、科室模板覆盖。 */
-export const BUILTIN_VERSION = 1
+/** 内置模板内容一改就加一（草稿记下所用版本；v2：「消失」句措辞） */
+export const BUILTIN_VERSION = 2
 export const BUILTIN_TEMPLATE: FindingsTemplateBody = {
   title: '影像所见',
   nodule: {
@@ -92,7 +93,7 @@ export const BUILTIN_TEMPLATE: FindingsTemplateBody = {
     review: '{序号}. {位置|肺内}见{密度}结节，平均径 {平均径}[，体积 {体积}]；与前片的对应关系待核对。',
   },
   none: '双肺未见明确结节。',
-  disappeared: '前片{前片位置|肺内}结节本次未见显示。',
+  disappeared: '前片所见{前片位置|肺内}结节，本次未见。',
   comparison: {
     finalized: '与 {前片日期} 片比较[（间隔 {间隔}）]。',
     unfinalized: '与 {前片日期} 片比较（前片尚未定稿，按其已确认的结节对比）。',
