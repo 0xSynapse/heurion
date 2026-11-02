@@ -13,7 +13,7 @@
   <a href="https://github.com/yjs/yjs"><img src="https://img.shields.io/badge/CRDT-Yjs%20%7C%20ProseMirror-FF6F00?style=flat-square" alt="CRDT Powered" /></a>
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/Agent-DeepSeek%20Harness-4D6BFE?style=flat-square" alt="DeepSeek Harness" /></a>
   <a href="https://github.com/yisibl/resvg-js"><img src="https://img.shields.io/badge/Rasterizer-resvg--js%20(Pure%20Rust)-FF4081?style=flat-square" alt="resvg-js" /></a>
-  <a href="https://vitest.dev/"><img src="https://img.shields.io/badge/Tests-361%20Passed%20(100%25)-brightgreen?style=flat-square&logo=vitest&logoColor=white" alt="Test Coverage" /></a>
+  <a href="https://github.com/heurion-org/heurion/actions/workflows/ci.yml"><img src="https://github.com/heurion-org/heurion/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License" /></a>
 </p>
 
@@ -219,7 +219,7 @@ The codebase enforces strict end-to-end automated testing with a **100% test pas
 # 1. Static type checking across all workspace packages and web apps
 pnpm typecheck
 
-# 2. Run unit and integration test suites (47 test suites, 361 tests passing)
+# 2. Run unit and integration test suites
 pnpm test
 
 # 3. Run real agent end-to-end evaluation (requires DEEPSEEK_API_KEY)
