@@ -320,6 +320,10 @@ export class TenantService {
    * - 本院研究里的成员身份、本院科室归属随之去掉；
    * - 本院患者的诊疗组记录保留（访问日志与历史可追溯），但人不在本院后读不到（患者库按工作空间取）；重新加入后恢复。
    */
+  private readonly memberLeftHooks: Array<(tenantId: string, userId: string) => void> = []
+  /** 成员离开机构（退出或被移出）后调用：各模块清掉此人在本机构的授权（如影像阅片角色），以免再加入时悄悄恢复 */
+  onMemberLeft(fn: (tenantId: string, userId: string) => void): void { this.memberLeftHooks.push(fn) }
+
   private detach(userId: string, tenantId: string): void {
     const owned = this.store.listTenantStudies(tenantId).filter(st => st.owner === userId)
     if (owned.length) throw new TenantError('owns_studies', `还负责着本院的 ${owned.length} 个研究（${owned.slice(0, 3).map(st => `「${st.title}」`).join('、')}${owned.length > 3 ? '…' : ''}）；先转交给本院同事，或请机构管理员做离职交接`, 409)
@@ -329,6 +333,7 @@ export class TenantService {
       const home = this.personalOf(userId)
       this.store.moveUserToTenant(userId, home.id, 'admin')
     })
+    for (const fn of this.memberLeftHooks) fn(tenantId, userId)
   }
 
   /** 本人退出医院。 */

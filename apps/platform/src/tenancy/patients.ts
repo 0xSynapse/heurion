@@ -310,7 +310,15 @@ export class PatientService {
     private readonly extractor: { pages: ReportPages; complete: Complete | null } | null = null,
     /** 成员建档即建「健康档案」文档（知家 V0，PATIENT.md §12）：人 / AI 建档同路径；没有时建档不产文档。 */
     private readonly archiveDoc?: (input: { owner: string; title: string; patientId: string }) => string | null,
-  ) {}
+  ) {
+    // 成员离开机构：删掉此人的影像阅片角色（审核医师 = 定稿权限），再被邀请加入时从初写重新开始
+    tenants.onMemberLeft((tenantId, userId) => {
+      const db = this.dbFor(tenantId).db
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'imaging_reading_roles'").get()) {
+        db.prepare('DELETE FROM imaging_reading_roles WHERE user_id = ?').run(userId)
+      }
+    })
+  }
 
   /** 机构服务（知家分享等需要按机构判断的服务共用这一个实例）。 */
   get tenantService(): TenantService { return this.tenants }

@@ -94,6 +94,13 @@ describe('阅片角色', () => {
     const solo = t.store.createUser({ username: 'solo', display_name: '个体', password_hash: 'x' }).id
     expect(() => t.rv.setReadingRole(t.as(solo), solo, 'reviewer', t.isMember)).toThrow(expect.objectContaining({ code: 'personal' }))
   })
+
+  it('成员离开机构（被移出或自己退出）后阅片角色清掉：再加入时不会悄悄恢复定稿权限', () => {
+    const t = env()
+    t.tenants.removeMember(t.admin, t.reviewer)
+    t.tenants.leave(t.reviewer2)
+    expect(t.rv.readingRoles(t.as(t.admin))).toEqual([])
+  })
 })
 
 describe('审核视图（W5.1）', () => {
