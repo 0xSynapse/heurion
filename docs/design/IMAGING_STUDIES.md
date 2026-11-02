@@ -29,6 +29,9 @@ Orthanc（DICOM 原件，DICOMweb 插件；不对外暴露）
 | `imaging_runs` | AI 运行：任务、模型与版本、状态、`visibility`（visible / shadow）。阅片器点选分割每次也记一条（任务 `lung_nodule_point`），不列进检查的分析状态 |
 | `imaging_lesions` | 病灶：来源（ai / manual）、状态（proposed / confirmed / rejected / superseded）、否决原因、位置、测量（JSON）、分割引用、版本号 |
 | `imaging_lesion_events` | 病灶的每次改动：谁、经人还是 AI、动作、改前、改后 |
+| `imaging_reading_roles` | 阅片角色（T2.7）：成员是初写（reader，默认）还是审核（reviewer），由机构管理员设置 |
+| `imaging_read_submissions` | 初写完成（提交审核）：谁、何时、当时的留痕位置 |
+| `imaging_signoffs` | 定稿：检查、版本号、谁、何时、留痕位置、模式（dual / self / single）、本轮初写医师、病灶快照与其 SHA-256；只追加 |
 
 - DICOM UID 和检查号属于可识别信息，只存密文。按 UID 查找和去重用机构密钥下的 HMAC。
 - 同一检查（同一个 StudyInstanceUID）已关联到本机构另一位患者时，不重复关联。上传结果只返回冲突数，不透露是哪位患者。
@@ -45,6 +48,10 @@ Orthanc（DICOM 原件，DICOMweb 插件；不对外暴露）
 | 确认 / 否决病灶 | 可以 | 不可以 |
 | 修边界、撤销补充的病灶 | 可以（阅片器里） | 不可以 |
 | 影子模式的结果 | 不可见；机构管理员看影子期对照报告 | 不可见（对照报告也不给） |
+| 审核视图、审核状态、定稿快照 | 可以 | `imaging_review`（只读） |
+| 初写完成（提交审核） | 可以（医生本人的声明） | 不可以 |
+| 定稿 | 只有审核医师（个人空间为本人） | 不可以（PRD 第 6 节「禁止」类） |
+| 设置阅片角色、是否允许自审 | 机构管理员 | 不可以 |
 
 REST 与 MCP 的对应关系登记在 `tests/parity.test.ts`。
 
@@ -187,6 +194,71 @@ OHIF 扩展 `@heurion/extension-nodules`（`deploy/viewer/heurion-nodules/`）�
     - 医生没在阅片器里标的检查，无法区分「没有结节」和「没标」，不计入敏感度。
     - 「只有 AI 的检出」可能是假阳性，也可能是医生漏标，需要复核。
     - 报告只有统计和内部 id，按结节类型、尺寸分层的正式评估仍用锁定测试集（T1.7）。
+
+## 审核与定稿（T2.7）
+
+PRD W5.1（审核视图）、W5.2（审核医师修改并定稿）。代码：`src/imaging/review.ts`，接口 `src/http/routes/imaging-review.ts`，AI 工具 `src/mcp/imaging-review-tools.ts`，界面 `web/src/imaging-review.ts`（患者页影像检查表的「审核」列）。
+
+### 阅片角色
+
+- 每个机构成员在影像上是「初写」（reader，默认）或「审核」（reviewer）。机构管理员在「机构管理 → 成员与邀请」的「阅片角色」列里设置（`PUT /api/imaging/reading-roles/:uid`）。
+- 角色存在机构患者库的 `imaging_reading_roles`，按机构隔离，不改平台账户表和科室表。没有挂在科室上：一个人可在多个科室，而签发权限是个人的；科室的 `department_members` 每次整体重写，也不适合挂属性。
+- 成员离开机构后角色行保留但无效（他已读不到本院患者库）；重新加入后恢复。
+- 个人空间（个人租户）没有角色：本人就是唯一的医生，可以直接定稿（`mode = single`），不需要「初写完成」。
+
+### 流程与状态
+
+按检查定稿：一次检查的结节集合一起签，符合放射科「初写—审核—签发」的流程。
+
+```
+初写中 ──初写完成──▶ 待审核 ──定稿──▶ 已定稿 v1 ──任何病灶改动──▶ 定稿后修改中 ──定稿──▶ 已定稿 v2 …
+reading            submitted         finalized               amending
+```
+
+- 状态不另存，由留痕推出：「留痕位置」= 检查可见病灶的最大事件 id（不含定稿标记、不含影子病灶）。最近一次定稿的留痕位置与当前相同即「已定稿」，否则「定稿后修改中」。所以主站确认 / 否决、阅片器点选 / 修边界 / 撤销、后台补肺叶、AI 重新分析产生的新检出，都会让已定稿的检查回到「定稿后修改中」，不需要在每条写路径里加钩子。
+- 定稿后的修改不阻止（诊疗组成员仍可在阅片器里改），但不覆盖：旧快照原样保留，随访库仍读旧快照，直到审核医师再次定稿生成新版本。
+- 重新分析：定稿后仍可以重新分析。和已审核结节重合的检出不入库，检查保持已定稿；有新检出时变成待确认，检查进入「定稿后修改中」，处理后再定稿。影子模式的运行不影响审核状态（影子病灶不在留痕位置里）。
+- 不提供「撤销定稿」：只能改了再定一版。
+
+### 定稿规则
+
+`POST /api/patients/:ptid/imaging/studies/:stid/finalize {expected_revision, note?}`，返回 201 与快照。依次检查：
+
+| 情况 | 结果 |
+| --- | --- |
+| AI（`via = ai`） | 403；接口登记在 NOT_FOR_AI，也没有对应 MCP 工具 |
+| 不在诊疗组（含机构全员可见、紧急访问的只读者） | 403 / 404（与其他写操作一致）。审核医师须先加入诊疗组 |
+| 角色不是审核（机构） | 403 `not_reviewer` |
+| 没带 `expected_revision`，或与当前留痕位置不同（打开审核视图后有人改了病灶，或别人已定稿） | 400 `revision_required` / 409 `stale_revision` |
+| 已定稿且之后没有改动（两位审核医师同时点，后到的） | 409 `already_finalized`。同一库的写是串行的；多进程时 `UNIQUE (study_id, version)` 兜底，同样返回 409 |
+| 首次定稿前没有人「初写完成」（机构） | 409 `not_submitted` |
+| 自审（见下）且机构不允许 | 403 `self_review` |
+| 还有待确认的 AI 检出 | 409 `pending_lesions`：必须逐个确认或否决，不提供「一并确认」 |
+| 有结节的肺叶还在后台定位 | 409 `locating`（否则定稿后定位结果一到就变成「定稿后修改中」） |
+| 本检查的 AI 分析正在排队 / 运行（本进程里真的在跑的；服务重启残留的不算） | 409 `analysis_running` |
+| 没有结节 | 可以定稿：「未见结节」也是结论，快照为空 |
+
+- **自审**：本检查的「初写医师」= 提交过初写完成的人 ∪ 做过初写阶段修改的人。定稿人属于初写医师，或根本没有初写医师，就是自审。默认禁止；机构设置 `imaging_self_review = true`（人手不足的科室）后允许，定稿记 `mode = self`。后续版本（v2…）沿用全部历史上的初写医师，所以审核医师改了再签不算自审。
+- **初写 / 审核修改的划分**（只看留痕）：首次「初写完成」之前的医生改动都算初写，包括审核医师提前动手的（此人因此也成为本检查的初写医师，不能自审）；之后的改动，提交过初写的人或角色不是审核的人做的算初写，其余算审核。AI 检出的 `create` 是 AI 原值；`supersede`、`locate`、`finalize` 是系统留痕，不算任何一方的修改。
+- **快照**：检查当前全部病灶（不含影子与已取代的）的 id、版本、状态、否决原因、名称、位置、测量、分割引用；记 SHA-256。表上有触发器，`UPDATE imaging_signoffs` 一律失败（删患者时级联删除仍可）。
+- **留痕**：每个病灶记一条 `finalize` 事件（after 里是定稿 id、版本与当时的病灶版本），患者访问日志 `imaging_finalize`，平台审计 `imaging.finalize`（详情含版本、模式、病灶数、快照 hash）。初写完成记 `imaging_read_submit` 与 `imaging.read_submit`；设置角色记 `imaging.reading_role`。审核意见与初写说明加密存放。
+
+### 审核视图（W5.1）
+
+`GET /api/patients/:ptid/imaging/studies/:stid/review`（AI：`imaging_review`）。数据全部来自 `imaging_lesion_events`，不另记一份：
+
+- 每个结节：AI 原值（AI 检出 `create` 事件的 after；医生补充的给出谁、在哪个阶段补充）、初写修改、审核修改（每条带事件 id、时间、操作者、字段级前后值、发生在第几版定稿之后）、当前值、状态与版本、在最近一次定稿里的版本以及是否与当前一致。
+- 定稿后被撤销的结节列在 `removed_since_finalized`。影子检出和其他已取代的结节不列。
+- `revision`：定稿请求要带回的留痕位置。`finalize.allowed / blockers`：当前操作者能否定稿及原因（AI 读到的永远是不能）。
+- 定稿历史 `signoffs`；`GET …/signoffs/:seq` 取某一版的完整快照。
+- 跳转：视图里每个结节的「跳转」打开阅片器并定位到该结节（票据接口接受 `lesion_id`，经 `/session` 带到 OHIF 地址的 `HeurionLesion` 参数，结节面板据此定位；只是界面定位，不是权限）。
+- 阅片器结节面板顶部显示审核状态；已定稿时提示「此时修改会生成新的定稿版本」。
+
+### 随访库
+
+- `ImagingReviewService.finalizedLesions(actor, studyId)`：最近一次定稿快照里已确认的结节（版本与测量为签字时的值），`stale = true` 表示之后又有未定稿的改动；没定稿过为 null。
+- `finalizedStudies(actor, patientId)`：患者全部已定稿检查，按检查日期从早到晚。
+- 随访对比（T2.4）与科研取数应改用这两个方法，只读医生签过的值。
 
 ## 资源与排队
 

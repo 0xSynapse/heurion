@@ -20,7 +20,8 @@ import { SlideRenderer } from '../src/render/slides.ts'
 import { Store } from '../src/store/db.ts'
 import { kekFrom, TenantKeys } from '../src/tenancy/keys.ts'
 import { PatientService, type Actor } from '../src/tenancy/patients.ts'
-import { dicom, FakeOrthanc } from './imaging-fakes.ts'
+import { ImagingPipeline } from '../src/imaging/pipeline.ts'
+import { dicom, FakeOrthanc, fakeWorker, NODULE_RESULT, seriesFiles } from './imaging-fakes.ts'
 
 /**
  * 审核视图与定稿（T2.7，W5.1 / W5.2）：初写 / 审核角色、AI 原值—初写修改—审核修改（数据来自病灶留痕）、
@@ -278,6 +279,53 @@ describe('定稿（W5.2）', () => {
     expect(v).toMatchObject({ reading_mode: 'personal', my_role: null, self_review_allowed: true, finalize: { allowed: true } })
     expect(t.rv.finalize(a, st.id, { expected_revision: v.revision }).mode).toBe('single')
     expect(() => t.rv.finalize(t.as(solo, 'ai'), st.id, { expected_revision: v.revision })).toThrow(expect.objectContaining({ status: 403 }))
+  })
+})
+
+describe('定稿后重新分析', () => {
+  it('检出都与已审核结节重合：不新增、检查保持已定稿；影子运行不影响审核状态', async () => {
+    const t = env()
+    const R = t.as(t.reader), V = t.as(t.reviewer)
+    const worker = fakeWorker(path => new Response(JSON.stringify(path.endsWith('/lung-nodule') ? NODULE_RESULT : { ok: true }), { headers: { 'content-type': 'application/json' } }))
+    const pipeline = new ImagingPipeline(t.svc, t.orthanc, 'http://worker:8004', { fetch: worker.fetchImpl })
+    const p = t.patients.create(R, { sex: 'M', birth_year: 1958 })
+    t.patients.addMember(R, p.id, t.reviewer)
+    const st = (await t.svc.importDicom(R, p.id, seriesFiles(STUDY, SERIES, 40))).studies[0]!
+    pipeline.enqueue(R, st.id)
+    await pipeline.idle()
+    const found = t.svc.listLesions(R, st.id)
+    expect(found.length).toBeGreaterThan(0)
+    for (const l of found) t.svc.reviewLesion(R, l.id, { status: 'confirmed' })
+    t.rv.submitRead(R, st.id)
+    t.rv.finalize(V, st.id, { expected_revision: t.rv.view(V, st.id).revision })
+    pipeline.enqueue(R, st.id)
+    await pipeline.idle()
+    expect(t.rv.view(V, st.id).state).toBe('finalized')
+    t.tenants.update(t.admin, { settings: { imaging_ai_visibility: 'shadow' } })
+    pipeline.enqueue(R, st.id)
+    await pipeline.idle()
+    expect(t.rv.view(V, st.id)).toMatchObject({ state: 'finalized', lesions: found.map(l => expect.objectContaining({ id: l.id })) })
+  })
+})
+
+describe('旧库兼容', () => {
+  it('没有审核表的已有患者库：第一次用到时补表；重启后定稿记录仍在', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'hr-img-rv-old-'))
+    const store = new Store(':memory:')
+    const tenants = new TenantService(store, { devMode: false })
+    const keys = new TenantKeys(store, kekFrom({ secret: 'test-secret' }))
+    const solo = store.createUser({ username: 'solo', display_name: '个体医生', password_hash: 'x' }).id
+    const a: Actor = { userId: solo, via: 'user' }
+    const old = new PatientService(root, tenants, keys, store)
+    const p = old.create(a, { sex: 'M', birth_year: 1960 })
+    const st = (await new ImagingStudyService(old, new FakeOrthanc()).importDicom(a, p.id, [{ name: 'IM1', bytes: dicom(STUDY, SERIES, '1') }])).studies[0]!
+    const tables = (svc: PatientService) => (svc.imagingLookup(a).db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'imaging_%'").all() as Array<{ name: string }>).map(r => r.name)
+    expect(tables(old)).not.toContain('imaging_signoffs')
+    const so = new ImagingReviewService(old).finalize(a, st.id, { expected_revision: 0 })
+    expect(tables(old)).toEqual(expect.arrayContaining(['imaging_signoffs', 'imaging_read_submissions', 'imaging_reading_roles']))
+    // 「重启」：新的服务实例打开同一个库
+    const again = new PatientService(root, tenants, keys, store)
+    expect(new ImagingReviewService(again).view(a, st.id)).toMatchObject({ state: 'finalized', latest_signoff: { id: so.id, version: 1 } })
   })
 })
 

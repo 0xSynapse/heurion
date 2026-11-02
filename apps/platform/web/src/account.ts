@@ -25,7 +25,7 @@ export interface Me {
   tenant: { id: string; name: string; kind: 'personal' | 'org'; role: 'admin' | 'member'; settings: TenantSettings; members: number; personal_id?: string | null; in_org?: boolean } | null
 }
 
-interface TenantSettings { patient_module: boolean; external_model_for_patients: boolean; patient_visibility: 'care_team' | 'tenant'; ai_patient_writes: 'review' | 'direct'; accept_patient_shares?: boolean; imaging_ai_visibility?: 'visible' | 'shadow' }
+interface TenantSettings { patient_module: boolean; external_model_for_patients: boolean; patient_visibility: 'care_team' | 'tenant'; ai_patient_writes: 'review' | 'direct'; accept_patient_shares?: boolean; imaging_ai_visibility?: 'visible' | 'shadow'; imaging_self_review?: boolean }
 
 /** 邀请链接里的邀请码（/app?invite=…）。 */
 export const inviteCode = (): string | null => new URLSearchParams(location.search).get('invite')
@@ -964,6 +964,8 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
         <label class="toggle">患者默认可见范围 <select data-set="patient_visibility"><option value="care_team"${t.settings.patient_visibility === 'care_team' ? ' selected' : ''}>创建者 + 诊疗组</option><option value="tenant"${t.settings.patient_visibility === 'tenant' ? ' selected' : ''}>本机构全员</option></select></label>
         <label class="toggle">影像 AI 自动分析结果 <select data-set="imaging_ai_visibility"><option value="visible"${t.settings.imaging_ai_visibility !== 'shadow' ? ' selected' : ''}>显示给医生</option><option value="shadow"${t.settings.imaging_ai_visibility === 'shadow' ? ' selected' : ''}>影子模式（后台运行，结果不显示，只进对照报告）</option></select></label>
         <div class="muted small">影子模式用于上线前评估：AI 照常分析，结果对医生、阅片器和 AI 助手都不可见；医生在阅片器里标的结节作为参照。切回「显示」后，影子期的结果仍不显示。</div>
+        ${t.kind === 'org' ? `<label class="toggle"><input type="checkbox" data-set="imaging_self_review" ${t.settings.imaging_self_review ? 'checked' : ''}> 影像定稿允许自审（审核医师可以定稿自己初写的检查）</label>
+        <div class="muted small">影像检查的定稿只允许「审核」阅片角色的成员，在「成员与邀请」里设置。默认初写与审核须为不同的人。</div>` : ''}
         <div><button type="button" class="small-btn" id="shadowReportBtn">查看影子期对照报告</button></div>
         <div id="shadowReport" class="small"></div>
       </div>
@@ -1073,14 +1075,20 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
     if (t.kind === 'org') {
       try { currentDeptsList = await api('/api/tenant/departments') } catch { currentDeptsList = [] }
     }
+    // 影像阅片角色（T2.7）：初写 / 审核；患者模块未开或个人空间时不显示
+    let readingRoles: Map<string, string> | null = null
+    if (t.kind === 'org') {
+      try { readingRoles = new Map((await api('/api/imaging/reading-roles') as Array<{ user_id: string; role: string }>).map(r => [r.user_id, r.role])) } catch { readingRoles = null }
+    }
     updateStats()
     const box = dlg.querySelector('#tenantMembers')!
     box.className = ''
-    box.innerHTML = `<table class="users"><thead><tr><th>成员</th><th>角色</th><th>状态</th><th>文档</th><th>最近登录</th><th></th></tr></thead><tbody>
+    box.innerHTML = `<table class="users"><thead><tr><th>成员</th><th>角色</th>${readingRoles ? '<th title="影像检查：审核医师才能定稿">阅片角色</th>' : ''}<th>状态</th><th>文档</th><th>最近登录</th><th></th></tr></thead><tbody>
       ${currentMembersList.map(u => `<tr data-mid="${esc(u.id)}" class="${u.status === 'disabled' ? 'disabled' : ''}">
         <td><b>${esc(u.display_name)}</b><div class="muted">${esc(u.username)}${u.id === me.id ? ' · 我' : ''}${u.joined ? ' · 已有账户加入' : ''}</div>
           ${u.departments?.length ? `<div style="margin-top: 4px">${u.departments.map((d: any) => `<span class="member-dept-badge">${esc(d.name)}</span>`).join('')}</div>` : ''}</td>
         <td><select data-mrole><option value="member"${u.tenant_role === 'member' ? ' selected' : ''}>普通成员</option><option value="admin"${u.tenant_role === 'admin' ? ' selected' : ''}>机构管理员</option></select></td>
+        ${readingRoles ? `<td><select data-mreading><option value="reader"${readingRoles.get(u.id) !== 'reviewer' ? ' selected' : ''}>初写</option><option value="reviewer"${readingRoles.get(u.id) === 'reviewer' ? ' selected' : ''}>审核</option></select></td>` : ''}
         <td>${u.status === 'active' ? '<span class="pill ok">正常</span>' : '<span class="pill off">已停用</span>'}</td><td>${u.doc_count}</td><td class="muted">${when(u.last_login_at)}</td>
         <td class="actions">${u.id === me.id ? '' : `<div class="actions-row"><button data-mact="${u.status === 'active' ? 'disable' : 'enable'}">${u.status === 'active' ? '停用' : '启用'}</button>${t.kind === 'org' ? '<button data-mact="remove" class="danger">移出</button>' : ''}</div>`}</td></tr>`).join('')}</tbody></table>`
 
@@ -1125,6 +1133,12 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
     } catch (err) { notify((err as Error).message, true) }
   }
   dlg.addEventListener('change', async e => {
+    const rsel = (e.target as HTMLElement).closest<HTMLSelectElement>('select[data-mreading]')
+    const ruid = rsel?.closest<HTMLElement>('[data-mid]')?.dataset.mid
+    if (rsel && ruid) {
+      try { await api(`/api/imaging/reading-roles/${ruid}`, { method: 'PUT', body: JSON.stringify({ role: rsel.value }) }); notify('阅片角色已更新') } catch (err) { notify((err as Error).message, true) }
+      return
+    }
     const sel = (e.target as HTMLElement).closest<HTMLSelectElement>('select[data-mrole]')
     const uid = sel?.closest<HTMLElement>('[data-mid]')?.dataset.mid
     if (!sel || !uid) return

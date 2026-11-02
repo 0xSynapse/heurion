@@ -8,7 +8,7 @@ import { ImagingReviewService } from '../imaging/review.ts'
 
 /**
  * 影像审核视图（T2.7）给 AI 的只读工具。与界面 GET /api/patients/:ptid/imaging/reviews、
- * …/studies/:stid/review、…/studies/:stid/signoffs/:ver 对应。初写完成、定稿、阅片角色不给 AI（tests/parity.test.ts 的 NOT_FOR_AI）。
+ * …/studies/:stid/review、…/studies/:stid/signoffs/:seq 对应。初写完成、定稿、阅片角色不给 AI（tests/parity.test.ts 的 NOT_FOR_AI）。
  */
 export function registerImagingReviewTools(server: McpServer, deps: { store: Store; claims: TokenClaims; patients?: PatientService }): void {
   const json = (v: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(v, null, 2) }] })

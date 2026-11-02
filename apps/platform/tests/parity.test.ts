@@ -170,7 +170,7 @@ const ALL_PARITY: Record<string, string> = {
   // 审核视图与定稿（T2.7）：AI 能读审核视图与定稿快照；提交初写、定稿、阅片角色见 NOT_FOR_AI
   'GET /api/patients/:ptid/imaging/reviews': 'imaging_review',
   'GET /api/patients/:ptid/imaging/studies/:stid/review': 'imaging_review',
-  'GET /api/patients/:ptid/imaging/studies/:stid/signoffs/:ver': 'imaging_review',
+  'GET /api/patients/:ptid/imaging/studies/:stid/signoffs/:seq': 'imaging_review',
 }
 
 /** AI 发起后要用户在确认卡上确认才执行的动作（不可恢复的删除、权限与安全、以机构身份对外的标识）。 */

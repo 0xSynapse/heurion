@@ -43,10 +43,10 @@ export function registerImagingReviewRoutes(app: Hono<{ Variables: { user: strin
   })
 
   /** 某一次定稿的完整快照 */
-  app.get('/api/patients/:ptid/imaging/studies/:stid/signoffs/:ver', c => {
+  app.get('/api/patients/:ptid/imaging/studies/:stid/signoffs/:seq', c => {
     try {
       const stid = ownStudy(c)
-      const ver = Number(c.req.param('ver'))
+      const ver = Number(c.req.param('seq'))
       if (!Number.isInteger(ver) || ver < 1) throw new ImagingError('bad_version', '定稿版本号不对')
       return c.json(svc(c).signoff(me(c), stid, ver))
     } catch (err) { return fail(c, err) }
