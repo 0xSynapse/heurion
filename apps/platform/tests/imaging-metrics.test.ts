@@ -344,7 +344,9 @@ describe('权限', () => {
     at(5); const d = t.drafts.generate(t.R, st.patient_id, { study_id: st.id }, { turnId: null })
     at(6); expect(await (await app.request(`/api/docs/${d.doc_id}/ris-copied`, { method: 'POST', headers: H(t.reader) })).json()).toEqual({ recorded: true })
     expect((await app.request(`/api/docs/${d.doc_id}/ris-copied`, { method: 'POST', headers: H(t.reviewer) })).status).toBe(404)   // 别人的文档
-    at(7); expect((await app.request(`/api/patients/${st.patient_id}/imaging/studies/${st.id}/review`, { headers: H(t.reviewer) })).status).toBe(200)
+    at(7); expect((await app.request(`/api/patients/${st.patient_id}/imaging/studies/${st.id}/review?opened=1`, { headers: H(t.reviewer) })).status).toBe(200)
+    // 自动刷新与操作后的重新加载（不带 opened）不记，否则开着不动也会被算成审核耗时
+    for (let i = 0; i < 3; i++) expect((await app.request(`/api/patients/${st.patient_id}/imaging/studies/${st.id}/review`, { headers: H(t.reviewer) })).status).toBe(200)
     const kinds = (t.patients.imagingLookup(t.R).db.prepare('SELECT user_id, kind FROM imaging_work_events ORDER BY id').all() as Array<{ user_id: string; kind: string }>).map(e => [e.user_id, e.kind])
     expect(kinds).toEqual([[t.reader, 'viewer_open'], [t.reader, 'ris_copy'], [t.reviewer, 'review_open']])
 

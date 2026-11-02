@@ -42,8 +42,9 @@ export function registerImagingReviewRoutes(app: Hono<{ Variables: { user: strin
     try {
       const stid = ownStudy(c)
       const view = svc(c).view(me(c), stid, { isRunActive: ctx.isRunActive })
-      // 埋点只记医生本人在界面上打开（AI 读 imaging_review 不经这里，经接口时 via = ai 也不记）；失败不影响审核视图
-      try { ctx.metrics?.(c).recordReviewOpen(me(c), stid) } catch { /* 埋点尽力而为 */ }
+      // 埋点只记医生本人点开审核视图的那一次（opened=1）：患者页分析进行中每 5 秒刷新、操作后重新加载都会再请求这里，
+      // 都记的话开着不动也会被算成审核耗时。AI 读 imaging_review 不经这里，经接口时 via = ai 也不记；失败不影响审核视图
+      if (c.req.query('opened') === '1') try { ctx.metrics?.(c).recordReviewOpen(me(c), stid) } catch { /* 埋点尽力而为 */ }
       return c.json(view, 200, { 'Cache-Control': 'private, no-store' })
     } catch (err) { return fail(c, err) }
   })

@@ -128,12 +128,15 @@ function render(v: View): string {
 /**
  * 在 box 里显示一个检查的审核视图。onChanged：提交 / 定稿后刷新检查表；openViewer：在阅片器中打开并定位到结节。
  */
-export async function mountReview(api: Api, notice: Notice, patientId: string, studyId: string, box: HTMLElement, onChanged: () => void, openViewer: (lesionId: string) => void): Promise<void> {
+/** opened = 医生刚点开审核视图（效率埋点只记这一次；自动刷新、操作后重新加载不记） */
+export async function mountReview(api: Api, notice: Notice, patientId: string, studyId: string, box: HTMLElement, onChanged: () => void, openViewer: (lesionId: string) => void, opened = false): Promise<void> {
   const base = `/api/patients/${patientId}/imaging/studies/${encodeURIComponent(studyId)}`
   let view: View
+  let first = opened
   const load = async () => {
     try {
-      view = await api<View>(`${base}/review`)
+      view = await api<View>(`${base}/review${first ? '?opened=1' : ''}`)
+      first = false
       box.innerHTML = render(view)
     } catch (err) { box.textContent = `审核视图读取失败：${(err as Error).message}` }
   }
