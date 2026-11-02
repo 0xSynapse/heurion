@@ -14,6 +14,7 @@ import { classifyChange, daysBetween, ImagingFollowup, type FollowupView } from 
 import { OrthancError } from '../src/imaging/orthanc.ts'
 import { ImagingPipeline } from '../src/imaging/pipeline.ts'
 import { ImagingStudyService } from '../src/imaging/studies.ts'
+import { ImagingReviewService } from '../src/imaging/review.ts'
 import { registerImagingFollowupTools } from '../src/mcp/imaging-followup-tools.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { OpService } from '../src/ops/service.ts'
@@ -120,7 +121,7 @@ function env(opts: { quality?: 'fine' | 'coarse' | 'none'; priorAnchor?: boolean
   followup.attachAnalyzer((x, studyId) => pipeline.enqueue(x, studyId))
   const settle = async () => { for (let i = 0; i < 5; i++) { await pipeline.idle(); await followup.idle() } }
   const setMode = (mode: 'visible' | 'shadow') => tenants.update(admin, { settings: { imaging_ai_visibility: mode } })
-  return { store, tenants, patients, orthanc, svc, a, dr, other, worker, followup, pipeline, results, settle, setMode, setQuality: (q: typeof quality) => { quality = q } }
+  return { store, tenants, patients, orthanc, svc, a, admin, dr, other, worker, followup, pipeline, results, settle, setMode, setQuality: (q: typeof quality) => { quality = q } }
 }
 
 async function seeded(opts: Parameters<typeof env>[0] = {}) {
@@ -187,7 +188,7 @@ describe('随访对比（T2.4）', () => {
   it('本次分析完成后自动匹配已确认的前片：增大（含 VDT）、稳定（误差内）、消失、新发；锚点与结节交给 worker', async () => {
     const t = await reviewed()
     const v = t.followup.view(t.a, t.cur.id)
-    expect(v.prior).toEqual({ study_id: t.prior.id, study_date: '2025-10-20', interval_days: 365 })
+    expect(v.prior).toEqual({ study_id: t.prior.id, study_date: '2025-10-20', interval_days: 365, reference: 'confirmed', signoff_version: null })
     expect(v.run).toMatchObject({ status: 'done', trigger_kind: 'auto', prior_study_id: t.prior.id })
     expect(v.registration).toMatchObject({ quality: 'fine', reliable: true })
     expect(v.counts).toEqual({ new: 1, disappeared: 1, enlarged: 1, shrunk: 0, stable: 1, pending: 0 })
@@ -411,6 +412,51 @@ describe('随访对比（T2.4）', () => {
     const v = u.followup.view(u.a, u.cur.id)
     expect(v.run).toMatchObject({ status: 'done' })
     expect(v.run!.summary!.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/^前片肺部锚点：序列已不在影像存储中/)]))
+  })
+})
+
+describe('随访库：前片定稿后按定稿快照对比（T2.7 × T2.4）', () => {
+  /** 王医生设为审核、机构允许自审，便于在单人测试里定稿 */
+  const finalizer = (t: Awaited<ReturnType<typeof seeded>>) => {
+    const rv = new ImagingReviewService(t.patients)
+    rv.setReadingRole({ userId: t.admin, via: 'user' }, t.dr, 'reviewer', (u, tid) => t.store.getUser(u)?.tenant_id === tid)
+    t.tenants.update(t.admin, { settings: { imaging_self_review: true } })
+    return (studyId: string) => {
+      rv.submitRead(t.a, studyId)
+      return rv.finalize(t.a, studyId, { expected_revision: rv.view(t.a, studyId).revision })
+    }
+  }
+
+  it('前片定稿后：对比用签字时的测量，定稿后再改（未再定稿）不影响随访；没定稿时按已确认并注明', async () => {
+    const t = await reviewed()
+    let v = await t.followup.view(t.a, t.cur.id)
+    expect(v.prior).toMatchObject({ study_id: t.prior.id, reference: 'confirmed', signoff_version: null })
+
+    finalizer(t)(t.prior.id)
+    // 定稿后医生又改了前片 1 号的测量，还没再次定稿
+    t.svc.editLesion(t.a, t.P1.id, { metrics: { ...t.P1.metrics, mean_diameter_mm: 11.0, volume_mm3: 700 } })
+    v = t.followup.view(t.a, t.cur.id)
+    expect(v.prior).toMatchObject({ reference: 'finalized', signoff_version: 1 })
+    const c1 = itemOf(v, t.C1.id)
+    expect(c1.prior_lesion!.mean_diameter_mm).toBe(8.2)
+    expect(c1.metrics).toMatchObject({ prior_volume_mm3: 288.4, current_volume_mm3: 600, change: 'enlarged' })
+
+    // 医生手动对应时，前片一侧同样以定稿快照为准
+    const after = t.followup.relink(t.a, t.cur.id, t.C1.id, t.P1.id)
+    expect(itemOf(after, t.C1.id).metrics).toMatchObject({ prior_mean_diameter_mm: 8.2 })
+  })
+
+  it('前片定稿为「未见结节」也是有效前片：本次的结节都是新发', async () => {
+    const t = await seeded()
+    t.results.set(PRIOR, result([], 0))
+    t.pipeline.enqueue(t.a, t.prior.id)
+    await t.settle()
+    finalizer(t)(t.prior.id)
+    t.pipeline.enqueue(t.a, t.cur.id)
+    await t.settle()
+    const v = t.followup.view(t.a, t.cur.id)
+    expect(v.prior).toMatchObject({ study_id: t.prior.id, reference: 'finalized' })
+    expect(v.counts).toMatchObject({ new: 3, disappeared: 0, pending: 0 })
   })
 })
 

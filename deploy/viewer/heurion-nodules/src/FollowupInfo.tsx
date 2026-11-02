@@ -30,7 +30,7 @@ export interface FollowupItem {
   notes: string[];
 }
 export interface FollowupView {
-  prior: { study_id: string; study_date: string | null; interval_days: number | null } | null;
+  prior: { study_id: string; study_date: string | null; interval_days: number | null; reference: 'finalized' | 'confirmed'; signoff_version: number | null } | null;
   run: { status: string; reason: string | null; error: string | null; summary: { warnings?: string[]; notes?: string[] } | null } | null;
   registration: { quality: 'fine' | 'coarse' | 'none'; reliable: boolean; notes?: string[] } | null;
   tolerance: { volume_pct: number; mean_diameter_mm: number };
@@ -108,7 +108,7 @@ export function FollowupHeader({ f }: { f: ReturnType<typeof useFollowup> }) {
       <div style={{ display: 'flex', alignItems: 'center' }}>
         <b>随访对比</b>
         <span style={{ marginLeft: 8, color: '#8b949e' }}>
-          {v.prior ? `前片 ${v.prior.study_date ?? '日期未知'}（间隔 ${v.prior.interval_days ?? '—'} 天）` : running ? '匹配中…' : v.run?.reason ?? v.run?.error ?? '还没有前片对比'}
+          {v.prior ? `前片 ${v.prior.study_date ?? '日期未知'}（间隔 ${v.prior.interval_days ?? '—'} 天；${v.prior.reference === 'finalized' ? `按第 ${v.prior.signoff_version} 版定稿` : '前片未定稿，按已确认的结节'}）` : running ? '匹配中…' : v.run?.reason ?? v.run?.error ?? '还没有前片对比'}
         </span>
         <button style={{ marginLeft: 'auto' }} disabled={!!running} onClick={() => void f.rematch()}>重新匹配</button>
       </div>

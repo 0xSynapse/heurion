@@ -2,12 +2,14 @@ import { randomUUID } from 'node:crypto'
 import { PatientError, type Actor, type ImagingScope, type PatientService } from '../tenancy/patients.ts'
 import { orthancFromEnv, type Orthanc } from './orthanc.ts'
 import { ImagingError, type LesionRow, type LesionStatus, type RunRow } from './studies.ts'
+import { ensureReviewSchema, type SnapshotLesion } from './review.ts'
 import { callWorker, uploadSeries } from './worker.ts'
 
 /**
  * 随访对比（PRD T2.4 / W3，docs/design/IMAGING_STUDIES.md「随访对比（T2.4）」）。
  *
- * - 找前片：同一患者、检查日期更早的最近一次有参照病灶的胸部 CT（参照病灶目前 = 已确认；T2.7 定稿上线后改 referencePolicy）。
+ * - 找前片：同一患者、检查日期更早的最近一次有参照病灶的胸部 CT。参照病灶 = 随访库（priorLesions）：前片定稿过时取最近一次
+ *   定稿快照里已确认的结节与签字时的测量（PRD W5.2「定稿后的结节与测量进入随访库」）；没定稿过时退回已确认的结节。
  * - 匹配：本次分析完成后自动排一次（影子运行不触发、影子病灶不参与）；医生可重新匹配。配准与指派在 worker
  *   （POST /api/v1/pipeline/lung-nodule/match），平台只给坐标、大小、肺叶与肺部锚点。
  * - 变化：新发 / 消失 / 增大 / 缩小 / 稳定；差值小于测量重复性误差时标「在误差范围内」；VDT 只在体积增大时给出。
@@ -35,7 +37,7 @@ const KIND = 'lung_nodule'
 const TASK = 'lung_nodule'
 
 /**
- * 参与对比的病灶。prior = 前片的参照病灶（目前为已确认；T2.7 定稿上线后改为优先「定稿」），current = 本次参与对比的病灶
+ * 参与对比的病灶。prior = 前片没定稿过时的参照病灶（已确认；定稿过的前片一律取定稿快照，见 priorLesions），current = 本次参与对比的病灶
  * （待确认与已确认：本次分析刚完成、医生还没审核时也要能看到对比）。影子运行的病灶一律不参与。
  */
 export interface ReferencePolicy { prior: LesionStatus[]; current: LesionStatus[] }
@@ -167,7 +169,7 @@ export interface FollowupItem {
 export interface FollowupView {
   study_id: string
   study_date: string | null
-  prior: { study_id: string; study_date: string | null; interval_days: number | null } | null
+  prior: { study_id: string; study_date: string | null; interval_days: number | null; reference: PriorReference['basis']; signoff_version: number | null } | null
   /** 最近一次匹配（interrupted = 服务重启时还没完成） */
   run: (Omit<FollowupRow, 'status'> & { status: FollowupRow['status'] | 'interrupted' }) | null
   registration: Record<string, unknown> | null
@@ -175,6 +177,9 @@ export interface FollowupView {
   items: FollowupItem[]
   counts: Record<ChangeKind | 'pending', number>
 }
+
+/** 前片的参照病灶从哪来：finalized = 最近一次定稿快照；confirmed = 前片没定稿过，用已确认的结节 */
+export interface PriorReference { lesions: LesionRow[]; basis: 'finalized' | 'confirmed'; signoff_version: number | null }
 
 const now = () => new Date().toISOString()
 const rid = (p: string) => p + randomUUID().replace(/-/g, '').slice(0, 12)
@@ -283,6 +288,25 @@ export class ImagingFollowup {
     return lesionOf(rest)
   }
 
+  /**
+   * 前片的参照病灶（随访库）。前片定稿过时取最近一次定稿快照里已确认的肺结节，测量、位置、名称、版本都用签字时的值：
+   * 定稿后又改、尚未再次定稿的不算，被撤销的仍按签过的值参与。定稿为「未见结节」时为空（本次的结节都是新发）。
+   * 没定稿过时退回 reference.prior（已确认）。影子检出不会进入定稿快照，也不会被 lesions() 取到。
+   */
+  priorLesions(s: ImagingScope, studyId: string): PriorReference {
+    ensureReviewSchema(s.db)
+    const so = s.db.prepare('SELECT version, snapshot FROM imaging_signoffs WHERE study_id = ? ORDER BY version DESC LIMIT 1').get(studyId) as { version: number; snapshot: string } | undefined
+    if (!so) return { lesions: this.lesions(s, studyId, this.reference.prior), basis: 'confirmed', signoff_version: null }
+    const out: LesionRow[] = []
+    for (const x of JSON.parse(so.snapshot) as SnapshotLesion[]) {
+      if (x.status !== 'confirmed' || x.kind !== KIND) continue
+      const l = this.lesionById(s, x.id)
+      if (!l || l.study_id !== studyId) continue
+      out.push({ ...l, status: 'confirmed', version: x.version, label: x.label, location: x.location, metrics: x.metrics, seg_ref: x.seg_ref })
+    }
+    return { lesions: out, basis: 'finalized', signoff_version: so.version }
+  }
+
   private study(s: ImagingScope, id: string): { id: string; patient_id: string; study_date: string | null; modalities: string[]; created_at: string } | null {
     const r = s.db.prepare('SELECT id, patient_id, study_date, modalities, created_at FROM imaging_studies WHERE id = ?').get(id) as Record<string, unknown> | undefined
     return r ? { id: r.id as string, patient_id: r.patient_id as string, study_date: (r.study_date as string | null) ?? null, modalities: JSON.parse((r.modalities as string) || '[]'), created_at: r.created_at as string } : null
@@ -309,7 +333,12 @@ export class ImagingFollowup {
     if (!earlier.length) return { prior: null, reason: '没有更早的 CT 检查', notes, precompute: null }
     let precompute: string | null = null
     for (const [i, o] of earlier.entries()) {
-      if (this.lesions(s, o.id, this.reference.prior).length) return { prior: { id: o.id, study_date: o.study_date! }, reason: null, notes, precompute }
+      // 定稿过的前片即使「未见结节」也是有效的前片（本次的结节都是新发）；没定稿过的要有已确认的结节才算
+      const pr = this.priorLesions(s, o.id)
+      if (pr.basis === 'finalized' || pr.lesions.length) {
+        if (pr.basis === 'confirmed') notes.push(`${o.study_date} 的前片还没有定稿，按已确认的结节对比`)
+        return { prior: { id: o.id, study_date: o.study_date! }, reason: null, notes, precompute }
+      }
       // 任何可见的分析（含失败的）都算分析过：失败的不自动重排，避免每次匹配都重跑
       const runs = (s.db.prepare(`SELECT status FROM imaging_runs WHERE study_id = ? AND task = ? AND visibility = 'visible'`).all(o.id, TASK) as Array<{ status: string }>).map(r => r.status)
       const proposed = this.lesions(s, o.id, ['proposed']).length
@@ -398,7 +427,7 @@ export class ImagingFollowup {
       this.supersedeWhere(s, a, studyId, l => l.prior_study_id !== prior.id, 'prior_changed')
 
       const cur = this.lesions(s, studyId, this.reference.current)
-      const ref = this.lesions(s, prior.id, this.reference.prior)
+      const ref = this.priorLesions(s, prior.id).lesions
       const curIds = new Set(cur.map(l => l.id)), refIds = new Set(ref.map(l => l.id))
       // 医生的对应关系：病灶仍可参与时保留（配对作为已知对应参与配准；单侧的不再自动配对），否则失效
       const manual = this.activeLinks(s, studyId).filter(l => l.source === 'manual')
@@ -609,10 +638,12 @@ export class ImagingFollowup {
     const cur = lesionId ? this.lesionById(s, lesionId) : null
     if (lesionId && (!cur || cur.study_id !== studyId || cur.kind !== KIND)) throw new PatientError('not_found', '本次检查里没有这个结节', 404)
     if (cur && !this.reference.current.includes(cur.status)) throw new ImagingError('lesion_ineligible', '这个结节已被否决或撤销，不参与随访对比', 409)
-    const pl = priorLesionId ? this.lesionById(s, priorLesionId) : null
+    // 前片一侧以随访库为准（定稿快照的测量），不在随访库里的前片结节不能作参照
+    const priorRef = this.priorLesions(s, prior.id).lesions
+    const pl = priorLesionId ? priorRef.find(x => x.id === priorLesionId) ?? this.lesionById(s, priorLesionId) : null
     if (priorLesionId && pl?.study_id === studyId) throw new ImagingError('same_study', '不能与同一检查里的结节对应', 409)
     if (priorLesionId && (!pl || pl.study_id !== prior.id || pl.kind !== KIND)) throw new PatientError('not_found', '前片里没有这个结节', 404)
-    if (pl && !this.reference.prior.includes(pl.status)) throw new ImagingError('lesion_ineligible', '前片的这个结节不是确认状态，不能作为参照', 409)
+    if (pl && !priorRef.some(x => x.id === pl.id)) throw new ImagingError('lesion_ineligible', '前片的这个结节不在随访库里（未确认，或不在前片最近一次定稿中），不能作为参照', 409)
 
     const old = this.activeLinks(s, studyId).filter(l => (lesionId && l.lesion_id === lesionId) || (priorLesionId && l.prior_lesion_id === priorLesionId))
     // 已经是同样的医生对应：不重复留痕
@@ -625,7 +656,7 @@ export class ImagingFollowup {
       // 原来的另一方变成单侧
       for (const o of old) {
         if (o.lesion_id && o.lesion_id !== lesionId && eligible(o.lesion_id, studyId, this.reference.current)) this.insertLink(s, a, { ...base, lesion_id: o.lesion_id, prior_lesion_id: null, change: 'new', metrics: { by: 'relink', from: o.id } }, 'relink')
-        if (o.prior_lesion_id && o.prior_lesion_id !== priorLesionId && eligible(o.prior_lesion_id, prior.id, this.reference.prior)) this.insertLink(s, a, { ...base, lesion_id: null, prior_lesion_id: o.prior_lesion_id, change: 'disappeared', metrics: { by: 'relink', from: o.id } }, 'relink')
+        if (o.prior_lesion_id && o.prior_lesion_id !== priorLesionId && priorRef.some(x => x.id === o.prior_lesion_id)) this.insertLink(s, a, { ...base, lesion_id: null, prior_lesion_id: o.prior_lesion_id, change: 'disappeared', metrics: { by: 'relink', from: o.id } }, 'relink')
       }
       if (cur && pl) {
         const m = classifyChange(pl.metrics, cur.metrics, interval)
@@ -664,9 +695,10 @@ export class ImagingFollowup {
     const done = doneRow ? followupOf(doneRow) : null
     const priorId = done?.status === 'done' ? done.prior_study_id : null
     const priorStudy = priorId ? this.study(s, priorId) : null
+    const priorRef = priorStudy ? this.priorLesions(s, priorStudy.id) : null
     const base: FollowupView = {
       study_id: studyId, study_date: st.study_date, run, registration: null,
-      prior: priorStudy ? { study_id: priorStudy.id, study_date: priorStudy.study_date, interval_days: daysBetween(priorStudy.study_date, st.study_date) } : null,
+      prior: priorStudy && priorRef ? { study_id: priorStudy.id, study_date: priorStudy.study_date, interval_days: daysBetween(priorStudy.study_date, st.study_date), reference: priorRef.basis, signoff_version: priorRef.signoff_version } : null,
       tolerance: { ...tol, source: TOLERANCE_SOURCE }, items: [], counts,
     }
     if (!priorStudy) return base
@@ -675,7 +707,7 @@ export class ImagingFollowup {
     const interval = base.prior!.interval_days
 
     const cur = this.lesions(s, studyId, this.reference.current)
-    const ref = this.lesions(s, priorStudy.id, this.reference.prior)
+    const ref = priorRef!.lesions
     const curById = new Map(cur.map(l => [l.id, l])), refById = new Map(ref.map(l => [l.id, l]))
     const links = this.activeLinks(s, studyId).filter(l => l.prior_study_id === priorStudy.id)
     const items: FollowupItem[] = []
