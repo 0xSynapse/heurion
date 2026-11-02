@@ -950,12 +950,15 @@ async function mountDepartments(box: HTMLElement, api: ApiFn, notify: Notify, ad
 async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
   const t = await api('/api/tenant')
   const title = t.kind === 'org' ? (t.name ? `机构管理 · ${t.name}` : '机构管理') : (t.name ? `机构与邀请 · ${t.name}` : '机构与邀请')
+  // 影像效率统计（T2.10）：只在接了影像存储的实例、机构（非个人空间）、机构管理员本人可见；接口同样只给管理员
+  const metricsTab = dicomEnabled && t.kind === 'org' && t.role === 'admin'
   const dlg = openDialog(title, `
     <div class="org-tabs" id="tenantTabs">
       <button class="org-tab active" data-tab="overview">${icon('template')} 概览与设置</button>
       ${t.kind === 'org' ? `<button class="org-tab" data-tab="depts">${icon('hospital')} 科室管理</button>` : ''}
       <button class="org-tab" data-tab="members">${icon('users')} 成员与邀请</button>
       <button class="org-tab" data-tab="templates">${icon('template')} 机构模板</button>
+      ${metricsTab ? `<button class="org-tab" data-tab="metrics">${icon('chart')} 影像效率统计</button>` : ''}
       <button class="org-tab" data-tab="audit">${icon('shield')} 安全审计</button>
     </div>
 
@@ -1007,6 +1010,19 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
       <div id="orgTemplates" class="muted">加载中…</div>
     </div>
 
+    ${metricsTab ? `<!-- 影像效率统计 -->
+    <div class="org-panel" id="tTabMetrics" hidden>
+      <form class="inline-form" id="metricsForm">
+        <label>从 <input type="date" name="from"></label>
+        <label>到 <input type="date" name="to"></label>
+        <select name="department"><option value="">全部科室</option></select>
+        <button class="primary">统计</button>
+        <button type="button" class="small-btn" id="metricsCsv">导出明细 CSV</button>
+      </form>
+      <div class="muted small">口径见设计文档「效率埋点（T2.10）」：按同一医生在同一检查上的操作时间点累加，长时间无操作截断；影子期的阅片算「无 AI」对照。只有统计与内部 id，不含患者标识。</div>
+      <div id="metricsBox" class="small"></div>
+    </div>` : ''}
+
     <!-- Tab 5: Audit -->
     <div class="org-panel" id="tTabAudit" hidden>
       ${AUDIT_HTML}
@@ -1018,6 +1034,7 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
     depts: dlg.querySelector('#tTabDepts') as HTMLElement,
     members: dlg.querySelector('#tTabMembers')!,
     templates: dlg.querySelector('#tTabTemplates')!,
+    metrics: dlg.querySelector('#tTabMetrics') as HTMLElement,
     audit: dlg.querySelector('#tTabAudit')!,
   }
   tabs.forEach(btn => btn.addEventListener('click', () => {
@@ -1067,6 +1084,8 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
       notify((err as Error).message, true)
     }
   }
+  const metricsForm = dlg.querySelector<HTMLFormElement>('#metricsForm')
+  if (metricsForm) mountMetrics(dlg, metricsForm, api)
   const shadowBtn = dlg.querySelector<HTMLButtonElement>('#shadowReportBtn')
   if (shadowBtn) shadowBtn.onclick = async () => {
     const box = dlg.querySelector<HTMLElement>('#shadowReport')!
@@ -1186,6 +1205,83 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
     try { await api(`/api/tenant/invites/${code}`, { method: 'DELETE' }); notify('已撤销') } catch (err) { notify((err as Error).message, true) }
     await renderInvites()
   })
+}
+
+interface Dist { n: number; median_ms: number | null; p90_ms: number | null }
+interface Split { all: Dist; ai: Dist; no_ai: Dist }
+interface EfficiencyReport {
+  period: { from: string; to: string }
+  department: { id: string; name: string } | null
+  mode: 'visible' | 'shadow'
+  config: { idle_min: number; break_min: number }
+  reading: { first_round: Split; amend: Dist; no_activity: number }
+  review: { first_round: Split; amend: Dist; by_mode: Record<string, number>; no_activity: number }
+  writing: { drafts: number; copied: number; stats: Dist }
+  read_write: Split
+  pipeline: { opened_not_submitted: number; submitted_not_finalized: number }
+  lesions: {
+    studies: number
+    ai: { total: number; confirmed: number; rejected: number; pending: number; superseded: number; confirm_rate: number | null; first_decision_confirm_rate: number | null; decision_changed: number }
+    reject_reasons: Array<{ reason: string; n: number }>
+    manual: { added: number; withdrawn: number; studies: number }
+  }
+  drafts: { drafts: number; trashed: number; blocks: number; unchanged: number; edited_by_user: number; edited_by_ai: number; deleted: number; modified_ratio: number | null; drafts_modified: number; user_added_blocks: number }
+  weekly: Array<{ week_start: string; active_users: number; readers: number; reviewers: number; studies_opened: number; submissions: number; signoffs: number }>
+  data_quality: { clock_anomalies: number; future_events: number }
+}
+
+/** 影像效率统计（T2.10）：按时间段与科室读汇总；CSV 明细走同一接口（?format=csv，带令牌下载） */
+function mountMetrics(dlg: HTMLElement, form: HTMLFormElement, api: ApiFn): void {
+  const box = dlg.querySelector<HTMLElement>('#metricsBox')!
+  const day = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+  const today = new Date()
+  ;(form.elements.namedItem('to') as HTMLInputElement).value = day(today)
+  ;(form.elements.namedItem('from') as HTMLInputElement).value = day(new Date(today.getTime() - 27 * 86400000))
+  const sel = form.elements.namedItem('department') as HTMLSelectElement
+  void api<Array<{ id: string; name: string }>>('/api/tenant/departments').then(list => {
+    sel.insertAdjacentHTML('beforeend', list.map(d => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join(''))
+  }).catch(() => {})
+  const query = () => {
+    const f = new FormData(form)
+    const q = new URLSearchParams()
+    for (const k of ['from', 'to', 'department']) { const v = String(f.get(k) ?? ''); if (v) q.set(k, v) }
+    return q
+  }
+  const run = async () => {
+    box.textContent = '正在统计…'
+    try { box.innerHTML = metricsHtml(await api<EfficiencyReport>(`/api/imaging/efficiency-report?${query()}`)) } catch (err) { box.textContent = `读取失败：${(err as Error).message}` }
+  }
+  form.onsubmit = e => { e.preventDefault(); void run() }
+  dlg.querySelector<HTMLButtonElement>('#metricsCsv')!.onclick = () => {
+    const q = query()
+    q.set('format', 'csv')
+    q.set('token', storedToken())
+    location.href = `/api/imaging/efficiency-report?${q}`
+  }
+  const tab = dlg.querySelector<HTMLButtonElement>('#tenantTabs .org-tab[data-tab="metrics"]')
+  let loaded = false
+  tab?.addEventListener('click', () => { if (!loaded) { loaded = true; void run() } })
+}
+
+function metricsHtml(r: EfficiencyReport): string {
+  const min = (v: number | null) => v === null ? '—' : `${(v / 60000).toFixed(1)} 分钟`
+  const pct = (v: number | null) => v === null ? '—' : `${(v * 100).toFixed(1)}%`
+  const d = (x: Dist) => x.n ? `${x.n} 例；中位 ${min(x.median_ms)}，P90 ${min(x.p90_ms)}` : '没有数据'
+  const row = (name: string, s: Split) => `<tr><td>${name}</td><td>${d(s.all)}</td><td>${d(s.ai)}</td><td>${d(s.no_ai)}</td></tr>`
+  const a = r.lesions.ai, dr = r.drafts
+  return `<div>${esc(r.period.from)} 至 ${esc(r.period.to)}${r.department ? ` · ${esc(r.department.name)}` : ' · 全部科室'}；空闲截断：两次操作间隔超过 ${r.config.idle_min} 分钟按 ${r.config.idle_min} 分钟计，超过 ${r.config.break_min} 分钟不计。${r.mode === 'shadow' ? '<b>机构当前处于影子模式</b>：此期间的阅片计入「无 AI」。' : ''}</div>
+  <table class="users"><thead><tr><th>耗时（首轮）</th><th>全部</th><th>有 AI 结果</th><th>无 AI（含影子期）</th></tr></thead><tbody>
+    ${row('初写：阅片 + 写所见', r.read_write)}${row('初写：打开 → 初写完成', r.reading.first_round)}${row('审核：→ 定稿', r.review.first_round)}
+  </tbody></table>
+  <div>定稿后修改轮：初写 ${d(r.reading.amend)}；审核 ${d(r.review.amend)}。写所见（草稿生成 → 复制 RIS）：${d(r.writing.stats)}（草稿 ${r.writing.drafts} 份，复制过 ${r.writing.copied} 份）。</div>
+  <div>定稿模式：${Object.entries(r.review.by_mode).map(([k, n]) => `${({ dual: '双人', self: '自审', single: '单人' } as Record<string, string>)[k] ?? esc(k)} ${n}`).join('，') || '—'}；无法计时（窗口里没有操作）：初写 ${r.reading.no_activity}、审核 ${r.review.no_activity}。流程中：打开未提交 ${r.pipeline.opened_not_submitted} 例，提交未定稿 ${r.pipeline.submitted_not_finalized} 例。</div>
+  <h4>采纳</h4>
+  <div>AI 检出 ${a.total} 个（${r.lesions.studies} 个检查）：确认 ${a.confirmed}、否决 ${a.rejected}、待确认 ${a.pending}、被重新分析取代 ${a.superseded}；确认率 ${pct(a.confirm_rate)}（首次判断 ${pct(a.first_decision_confirm_rate)}，改判 ${a.decision_changed} 个）。</div>
+  <div>否决原因：${r.lesions.reject_reasons.map(x => `${esc(x.reason)} ${x.n}`).join('，') || '—'}。医生补充结节 ${r.lesions.manual.added} 个（${r.lesions.manual.studies} 个检查，其中撤销 ${r.lesions.manual.withdrawn}）。</div>
+  <div>所见草稿 ${dr.drafts} 份（回收站 ${dr.trashed}）：生成的 ${dr.blocks} 段中未改 ${dr.unchanged}、医生改 ${dr.edited_by_user}、仅 AI 润色 ${dr.edited_by_ai}、删除 ${dr.deleted}，修改比例 ${pct(dr.modified_ratio)}；有修改的草稿 ${dr.drafts_modified} 份，医生另加 ${dr.user_added_blocks} 段。</div>
+  <h4>每周使用</h4>
+  <table class="users"><thead><tr><th>周（周一起）</th><th>活跃医生</th><th>提交初写</th><th>定稿</th><th>打开检查</th></tr></thead><tbody>${r.weekly.map(w => `<tr><td>${esc(w.week_start)}</td><td>${w.active_users}</td><td>${w.readers} 人 / ${w.submissions} 次</td><td>${w.reviewers} 人 / ${w.signoffs} 次</td><td>${w.studies_opened}</td></tr>`).join('')}</tbody></table>
+  ${r.data_quality.clock_anomalies || r.data_quality.future_events ? `<div class="muted">数据质量：时间戳乱序 ${r.data_quality.clock_anomalies} 处、晚于当前时间 ${r.data_quality.future_events} 处（服务器时钟可能被调过），相关计时可能偏差。</div>` : ''}`
 }
 
 interface ShadowReport {

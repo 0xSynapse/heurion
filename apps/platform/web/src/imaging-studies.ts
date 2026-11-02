@@ -213,12 +213,15 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
       notice(`不能打开阅片器：${(err as Error).message}`, true)
     }
   }
+  /** 医生刚点开的审核视图（只有这一次的请求记效率埋点；之后的自动刷新不记） */
+  let justOpened: string | null = null
   const mountOpen = () => {
     for (const id of open) {
       const el = listEl.querySelector<HTMLElement>(`[data-review-box="${CSS.escape(id)}"]`)
       const uid = studies.find(s => s.id === id)?.study_uid
-      if (el) void mountReview(api, notice, patientId, id, el, () => void refresh(), lesionId => { if (uid) void openViewer(uid, lesionId) })
+      if (el) void mountReview(api, notice, patientId, id, el, () => void refresh(), lesionId => { if (uid) void openViewer(uid, lesionId) }, id === justOpened)
     }
+    justOpened = null
   }
   const refresh = async () => {
     if (timer) { clearTimeout(timer); timer = null }
@@ -247,7 +250,7 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
     if (rv) {
       const id = rv.dataset.review!
       if (open.has(id)) open.delete(id)
-      else open.add(id)
+      else { open.add(id); justOpened = id }
       await refresh()
       return
     }

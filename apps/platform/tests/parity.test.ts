@@ -212,6 +212,9 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/imaging/viewer-ticket': '医生在界面上打开 OHIF 阅片器（子域名）用的一次性票据；AI 不看影像本身',
   'POST /api/patients/:ptid/imaging/lesions/:lid/review': '确认 / 否决病灶是医生本人的判断（服务层同样拒绝 via=ai）；AI 用 imaging_lesions 读结果',
   'GET /api/imaging/shadow-report': '影子期对照报告只给机构管理员本人看：影子模式的 AI 结果按设计对 AI 不可见（服务层拒绝 via=ai）',
+  // 效率埋点（T2.10）
+  'GET /api/imaging/efficiency-report': '影像效率统计是对医生个人工作时长、采纳情况的考核类数据（按医生 id 列出计时段，含影子期作为无 AI 对照）：只给机构管理员本人在界面上看，不进模型上下文、不经 AI 转述；服务层拒绝 via=ai',
+  'POST /api/docs/:id/ris-copied': '界面在医生把 RIS 纯文本复制到剪贴板之后报告的埋点（写所见的结束时刻）；AI 不往 RIS 里复制，替医生报告会污染计时（服务层拒绝 via=ai）；AI 核对草稿用 imaging_findings_draft_check',
   // 审核与定稿（T2.7）：签发 / 定稿属于 PRD 第 6 节的「禁止」类
   'POST /api/patients/:ptid/imaging/studies/:stid/finalize': '定稿是审核医师本人的签发（PRD 第 6 节「禁止」类）：服务层拒绝 via=ai；AI 用 imaging_review 读审核视图与定稿快照',
   'POST /api/patients/:ptid/imaging/studies/:stid/review/submit': '「初写完成」是初写医师本人已阅片的声明，决定谁算初写、能否进入定稿；服务层拒绝 via=ai',

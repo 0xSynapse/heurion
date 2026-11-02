@@ -3,6 +3,7 @@ import type { Store } from '../../store/db.ts'
 import type { Actor, PatientService } from '../../tenancy/patients.ts'
 import { ImagingError } from '../../imaging/studies.ts'
 import { ImagingReviewService } from '../../imaging/review.ts'
+import type { ImagingMetricsService } from '../../imaging/metrics.ts'
 
 export interface ImagingReviewRouteContext {
   audit: (c: Context, action: string, e?: { actor?: string | null; target?: string | null; detail?: string | null; status?: number }) => void
@@ -12,6 +13,8 @@ export interface ImagingReviewRouteContext {
   store: Store
   /** 分析流水线里这次运行是否真的在跑（服务重启后库里残留的排队 / 处理中不算，不挡定稿） */
   isRunActive: (runId: string) => boolean
+  /** 效率埋点（T2.10）：医生打开审核视图的时刻；不给时不记 */
+  metrics?: (c: Context<{ Variables: { user: string } }>) => ImagingMetricsService
 }
 
 /**
@@ -38,7 +41,11 @@ export function registerImagingReviewRoutes(app: Hono<{ Variables: { user: strin
   app.get('/api/patients/:ptid/imaging/studies/:stid/review', c => {
     try {
       const stid = ownStudy(c)
-      return c.json(svc(c).view(me(c), stid, { isRunActive: ctx.isRunActive }), 200, { 'Cache-Control': 'private, no-store' })
+      const view = svc(c).view(me(c), stid, { isRunActive: ctx.isRunActive })
+      // 埋点只记医生本人点开审核视图的那一次（opened=1）：患者页分析进行中每 5 秒刷新、操作后重新加载都会再请求这里，
+      // 都记的话开着不动也会被算成审核耗时。AI 读 imaging_review 不经这里，经接口时 via = ai 也不记；失败不影响审核视图
+      if (c.req.query('opened') === '1') try { ctx.metrics?.(c).recordReviewOpen(me(c), stid) } catch { /* 埋点尽力而为 */ }
+      return c.json(view, 200, { 'Cache-Control': 'private, no-store' })
     } catch (err) { return fail(c, err) }
   })
 

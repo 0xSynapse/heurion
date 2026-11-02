@@ -2908,6 +2908,8 @@ $('risCopyBtn').onclick = async () => {
       if (!ok) return
     }
     await navigator.clipboard.writeText(r.text)
+    // 效率埋点（T2.10）：写所见的结束时刻；只记本机构库，失败不打扰医生
+    void api(`/api/docs/${session.docId}/ris-copied`, { method: 'POST' }).catch(() => {})
     showNotice(`已复制 RIS 纯文本（${r.text.split('\n').length} 行）${r.notes.length ? `；${r.notes.join('；')}` : ''}`)
   } catch (err) { showNotice(`不能复制：${(err as Error).message}`, true) }
 }
