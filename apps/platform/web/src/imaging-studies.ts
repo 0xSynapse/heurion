@@ -8,6 +8,8 @@ interface StudyView {
   id: string; study_uid?: string; study_date: string | null; modalities: string[]; description: string | null; accession?: string | null
   source: 'upload' | 'pacs'; created_at: string; series: SeriesView[]; lesions: { proposed: number; confirmed: number; rejected: number }
   runs: RunView[]
+  /** 机构处于影像 AI 影子模式：自动分析在后台运行，结果不显示 */
+  ai_shadow?: boolean
 }
 interface RunView {
   id: string; task: string; model_version: string | null; status: 'queued' | 'running' | 'done' | 'failed' | 'interrupted'; error: string | null
@@ -32,7 +34,7 @@ function runLine(r: RunView | undefined): string {
 }
 interface ImportResult {
   studies: StudyView[]; files: { received: number; uploaded: number; duplicates: number; skipped: Array<{ name: string; reason: string }> }; conflicts: number
-  analysis?: Array<{ study_id: string; task: string; run_id: string | null; skipped: string | null }>
+  analysis?: Array<{ study_id: string; task: string; run_id: string | null; shadow?: boolean; skipped: string | null }>
 }
 
 /** 每批上传的大小上限（服务端默认单次 2 GB，这里分小批，失败时只需重传一批） */
@@ -64,7 +66,7 @@ function render(list: StudyView[], canEdit: boolean): string {
       return `<tr>
       <td>${esc(st.study_date ?? '未知')}${st.study_uid ? `<div><button class="small-btn" data-view="${esc(st.study_uid)}">在阅片器中打开</button></div>` : ''}</td><td>${esc(st.modalities.join(' / ') || '—')}</td><td>${esc(st.description ?? '')}</td>
       <td class="small">${st.series.map(s => `<div>${seriesLine(s)}</div>`).join('')}</td>
-      <td class="small">${runLine(last)}${canEdit && !busy ? `<div><button class="small-btn" data-analyze="${esc(st.id)}">${last ? '重新分析' : '开始分析'}</button></div>` : ''}</td>
+      <td class="small">${st.ai_shadow && !last ? '<span class="muted" title="上线前评估：AI 在后台分析，结果只进机构的对照报告">影子模式，结果不显示</span>' : `${runLine(last)}${canEdit && !busy ? `<div><button class="small-btn" data-analyze="${esc(st.id)}">${last ? '重新分析' : '开始分析'}</button></div>` : ''}`}</td>
       <td class="small">${st.lesions.proposed + st.lesions.confirmed + st.lesions.rejected ? `待确认 ${st.lesions.proposed} · 已确认 ${st.lesions.confirmed} · 已否决 ${st.lesions.rejected}` : '<span class="muted">—</span>'}</td>
       <td class="muted small">${st.source === 'pacs' ? 'PACS' : '手工上传'}<br>${new Date(st.created_at).toLocaleString('zh-CN', { hour12: false })}</td></tr>`
     }).join('')}
@@ -82,6 +84,7 @@ async function upload(api: Api, notice: Notice, patientId: string, files: File[]
   let uploaded = 0, duplicates = 0, conflicts = 0
   const skipped: string[] = []
   const notApplicable = new Set<string>()
+  let shadow = false
   for (const [i, batch] of batches.entries()) {
     notice(batches.length > 1 ? `正在上传 DICOM（第 ${i + 1} / ${batches.length} 批）…` : '正在上传 DICOM…')
     const fd = new FormData()
@@ -89,10 +92,10 @@ async function upload(api: Api, notice: Notice, patientId: string, files: File[]
     const r = await api<ImportResult>(`/api/patients/${patientId}/imaging/dicom`, { method: 'POST', body: fd })
     uploaded += r.files.uploaded; duplicates += r.files.duplicates; conflicts += r.conflicts
     skipped.push(...r.files.skipped.map(s => `${s.name}（${s.reason}）`))
-    for (const x of r.analysis ?? []) if (x.skipped) notApplicable.add(x.skipped)
+    for (const x of r.analysis ?? []) { if (x.skipped) notApplicable.add(x.skipped); if (x.shadow) shadow = true }
   }
   const parts = [`新入库 ${uploaded} 个文件`, duplicates ? `${duplicates} 个已存在` : '', skipped.length ? `跳过 ${skipped.length} 个` : ''].filter(Boolean)
-  const analysis = notApplicable.size ? `；未自动分析：${[...notApplicable].join('；')}` : ''
+  const analysis = (notApplicable.size ? `；未自动分析：${[...notApplicable].join('；')}` : '') + (shadow ? '；影像 AI 处于影子模式，分析在后台进行，结果不显示' : '')
   notice(`DICOM 上传完成：${parts.join('，')}${conflicts ? `；有 ${conflicts} 个检查已属于本机构的其他患者，未关联到这位患者` : ''}${analysis}`, conflicts > 0)
   if (skipped.length) console.info('跳过的文件：', skipped)
 }
@@ -135,8 +138,8 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
     if (!btn) return
     btn.disabled = true
     try {
-      await api(`/api/patients/${patientId}/imaging/studies/${encodeURIComponent(btn.dataset.analyze!)}/analyze`, { method: 'POST', body: JSON.stringify({ task: 'lung_nodule' }), headers: { 'Content-Type': 'application/json' } })
-      notice('已开始分析，完成后结果会出现在这里')
+      const r = await api<{ shadow?: boolean }>(`/api/patients/${patientId}/imaging/studies/${encodeURIComponent(btn.dataset.analyze!)}/analyze`, { method: 'POST', body: JSON.stringify({ task: 'lung_nodule' }), headers: { 'Content-Type': 'application/json' } })
+      notice(r.shadow ? '影像 AI 处于影子模式：已在后台分析，结果不显示' : '已开始分析，完成后结果会出现在这里')
     } catch (err) { notice(`不能分析：${(err as Error).message}`, true) }
     await refresh()
   }

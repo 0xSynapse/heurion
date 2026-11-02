@@ -186,7 +186,8 @@ export class ImagingInteractive {
    */
   private async segment(a: Actor, studyId: string, seriesId: string, orthancId: string, points: PromptPoint[], check?: (r: PointResult) => void): Promise<{ result: PointResult; runId: string; segSeriesId: string | null; warnings: string[] }> {
     const orthanc = this.requireOrthanc()
-    const run = this.studies.startRun(a, studyId, { task: POINT_TASK, model_id: POINT_TASK, series_id: seriesId })
+    // 医生自己发起的点选分割不受影子模式影响
+    const run = this.studies.startRun(a, studyId, { task: POINT_TASK, model_id: POINT_TASK, series_id: seriesId, visibility: 'visible' })
     const t0 = Date.now()
     this.studies.setRunStatus(a, run.id, 'running')
     try {

@@ -179,10 +179,13 @@ export class ImagingPipeline {
       const result = await this.worker(def.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ volume_id: volumeId, max_nodules: 20 }) }, 2_700_000) as NoduleResult
       if (!result || !Array.isArray(result.nodules)) throw new Error('影像服务返回的结果格式不对（缺少 nodules）')
 
+      // 影子模式（机构设置 imaging_ai_visibility = shadow）：检出照常入库供影子期对照，但不对医生显示——
+      // SEG 不存入 Orthanc（存进去 OHIF 的序列栏就会列出来），也不与医生已审核的结节去重（对照要看 AI 的全部检出）
+      const shadow = run.visibility === 'shadow'
       // 分割结果（DICOM SEG）存回 Orthanc，作为本检查的派生序列，OHIF 原生显示轮廓；失败不影响检出入库
       let segSeriesId: string | null = null
       const extraWarnings: string[] = []
-      if (result.seg?.dicom_base64) {
+      if (result.seg?.dicom_base64 && !shadow) {
         try {
           const up = await this.orthanc.upload(new Uint8Array(Buffer.from(result.seg.dicom_base64, 'base64')))
           segSeriesId = await this.studies.addDerivedSeries(a, run.study_id, up.seriesId)
@@ -193,7 +196,7 @@ export class ImagingPipeline {
 
       // 与医生已确认 / 否决的结节是同一处的检出不再新增（重新分析时避免重复，医生的判断保留）
       const spacing = Array.isArray(result.series_qc?.spacing_mm) ? (result.series_qc!.spacing_mm as number[]) : null
-      const reviewed = this.studies.listLesions(a, run.study_id).filter(l => l.kind === def.kind && (l.status === 'confirmed' || l.status === 'rejected'))
+      const reviewed = shadow ? [] : this.studies.listLesions(a, run.study_id).filter(l => l.kind === def.kind && (l.status === 'confirmed' || l.status === 'rejected'))
       const seriesOfRun = new Map<string, string | null>()
       const sameSpot = (n: NoduleResult['nodules'][number]) => reviewed.some(l => {
         const m = l.metrics as Record<string, unknown>
@@ -223,7 +226,7 @@ export class ImagingPipeline {
       const superseded = this.studies.supersedeProposed(a, runId)
       // 被取代的旧检出若是某个 SEG 的唯一引用者，那个 SEG 不再有用：从影像存储清掉（医生审核过的保留）
       let segRemoved = 0
-      try { segRemoved = await this.studies.removeSupersededSeg(a, run.study_id, segSeriesId) } catch (err) {
+      if (!shadow) try { segRemoved = await this.studies.removeSupersededSeg(a, run.study_id, segSeriesId) } catch (err) {
         extraWarnings.push(`清理旧的分割结果失败：${err instanceof Error ? err.message : String(err)}`)
       }
       this.studies.setRunStatus(a, runId, 'done', null, {
@@ -232,6 +235,7 @@ export class ImagingPipeline {
           device: result.device ?? null, elapsed_ms: result.elapsed_ms ?? null, series_qc: result.series_qc ?? null,
           warnings: [...notes, ...(result.warnings ?? []), ...extraWarnings, ...(matchedReviewed ? [`${matchedReviewed} 个检出与医生已审核的结节是同一处，未重复添加`] : [])],
           found: result.nodules.length - matchedReviewed, matched_reviewed: matchedReviewed, superseded, seg_stored: segLinked > 0, seg_removed: segRemoved,
+          ...(shadow ? { shadow: true } : {}),
         },
       })
     } catch (err) {

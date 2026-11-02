@@ -293,6 +293,8 @@ export interface ImagingScope {
   encrypt: (text: string | null) => string | null
   decrypt: (sealed: string | null) => string | null
   log: (action: string, detail?: string | null) => void
+  /** 机构设置 imaging_ai_visibility：新的自动分析是否以影子模式运行 */
+  aiVisibility: 'visible' | 'shadow'
 }
 
 export class PatientService {
@@ -350,6 +352,7 @@ export class PatientService {
       encrypt: text => this.keys.encryptText(c.tenantId, text),
       decrypt: sealed => this.keys.decryptText(c.tenantId, sealed),
       log: (action, detail = null) => this.log(c, a, patientId, action, detail),
+      aiVisibility: c.settings.imaging_ai_visibility === 'shadow' ? 'shadow' : 'visible',
     }
   }
 
@@ -357,6 +360,17 @@ export class PatientService {
   imagingLookup(a: Actor): { db: DatabaseSync; uidKey: (kind: string, uid: string) => string } {
     const c = this.ctx(a)
     return { db: c.db.db, uidKey: (kind, uid) => createHmac('sha256', this.keys.dek(c.tenantId)).update(`${kind}:${uid}`).digest('hex') }
+  }
+
+  /**
+   * 影子期对照报告（影像模块）用：整个机构的影像表，只给机构管理员本人、只在界面上（AI 不能读影子结果）。
+   * 报告只含统计与内部 id，不含患者标识；读取由路由记机构审计。
+   */
+  imagingTenantScope(a: Actor): { db: DatabaseSync; aiVisibility: 'visible' | 'shadow' } {
+    if (a.via === 'ai') throw new PatientError('forbidden', '影子期结果不给 AI', 403)
+    const c = this.ctx(a)
+    if (!c.tenantAdmin) throw new PatientError('forbidden', '影子期对照报告只给机构管理员', 403)
+    return { db: c.db.db, aiVisibility: c.settings.imaging_ai_visibility === 'shadow' ? 'shadow' : 'visible' }
   }
 
   /** AI 写入要不要先经医生确认（机构设置）。 */

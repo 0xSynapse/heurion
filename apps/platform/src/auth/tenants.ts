@@ -20,9 +20,14 @@ export interface TenantSettings {
   ai_patient_writes: 'review' | 'direct'
   /** 接受知家家庭分享（家人可在知家里选本院的科室分享档案；docs/design/SHARING.md）。只对机构有意义 */
   accept_patient_shares: boolean
+  /**
+   * 影像 AI 自动分析结果是否显示（docs/design/IMAGING_STUDIES.md「影子模式」）：shadow = 分析照常运行、结果只进影子期对照报告，
+   * 对界面、阅片器与 AI 都不可见（一期上线前的回顾评估，PRD 关口 G1）；visible = 正常显示。医生在阅片器里的点选分割不受影响。
+   */
+  imaging_ai_visibility: 'visible' | 'shadow'
 }
 
-export const DEFAULT_SETTINGS: TenantSettings = { patient_module: true, external_model_for_patients: true, patient_visibility: 'care_team', ai_patient_writes: 'review', accept_patient_shares: true }
+export const DEFAULT_SETTINGS: TenantSettings = { patient_module: true, external_model_for_patients: true, patient_visibility: 'care_team', ai_patient_writes: 'review', accept_patient_shares: true, imaging_ai_visibility: 'visible' }
 
 export class TenantError extends Error {
   constructor(readonly code: string, message: string, readonly status: 400 | 403 | 404 | 409 = 400) { super(message) }
@@ -145,6 +150,7 @@ export class TenantService {
       if (s.patient_visibility === 'care_team' || s.patient_visibility === 'tenant') cur.patient_visibility = s.patient_visibility
       if (s.ai_patient_writes === 'review' || s.ai_patient_writes === 'direct') cur.ai_patient_writes = s.ai_patient_writes
       if (typeof s.accept_patient_shares === 'boolean') cur.accept_patient_shares = s.accept_patient_shares
+      if (s.imaging_ai_visibility === 'visible' || s.imaging_ai_visibility === 'shadow') cur.imaging_ai_visibility = s.imaging_ai_visibility
       next.settings = JSON.stringify(cur)
     }
     this.store.updateTenant(t.id, next)

@@ -68,11 +68,13 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
       const result = await svc(c).importDicom(me(c), ptid, files)
       audit(c, 'imaging.dicom_upload', { target: ptid, detail: JSON.stringify({ studies: result.studies.length, uploaded: result.files.uploaded, duplicates: result.files.duplicates, skipped: result.files.skipped.length, conflicts: result.conflicts }) })
       // 入库即分析（W1）：有新实例的检查自动排队；不适用的检查说明原因
+      // 影子模式的运行不返回 id（结果对界面不可见），只说明在后台分析
       const analysis = result.files.uploaded > 0 ? result.studies.map(st => ({ study_id: st.id, ...enqueue(c, st.id, 'lung_nodule') })) : []
-      return c.json({ ...result, analysis: analysis.map(x => ({ study_id: x.study_id, task: x.task, run_id: x.run?.id ?? null, skipped: x.skipped ?? null, notes: x.notes ?? [] })) }, 201)
+      return c.json({ ...result, analysis: analysis.map(x => ({ study_id: x.study_id, task: x.task, run_id: isShadow(x) ? null : x.run?.id ?? null, shadow: isShadow(x), skipped: x.skipped ?? null, notes: x.notes ?? [] })) }, 201)
     } catch (err) { return fail(c, err) }
   })
 
+  const isShadow = (r: EnqueueResult) => r.run?.visibility === 'shadow'
   const enqueue = (c: Context<{ Variables: { user: string } }>, studyId: string, task: ImagingTask): EnqueueResult => {
     if (!ctx.pipeline) return { task, skipped: '影像分析服务未启用' }
     return ctx.pipeline.enqueue(me(c), studyId, task)
@@ -100,7 +102,22 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
       if (!svc(c).listStudies(me(c), ptid).some(s => s.id === stid)) throw new ImagingError('not_found', '影像检查不存在', 404)
       const r = enqueue(c, stid, task)
       if (r.skipped) return c.json({ error: r.skipped, code: 'not_applicable', task }, 409)
+      if (isShadow(r)) return c.json({ task, run_id: null, status: r.run!.status, shadow: true, notes: r.notes ?? [] }, 202)
       return c.json({ task, run_id: r.run!.id, status: r.run!.status, notes: r.notes ?? [] }, 202)
+    } catch (err) { return fail(c, err) }
+  })
+
+  /**
+   * 影子期对照报告（T1.8）：影子分析的检出与医生标注逐一比对、运行失败与耗时。只给机构管理员本人在界面上看（AI 不能读影子结果）。
+   * since = YYYY-MM-DD 时只统计此后入队的运行。
+   */
+  app.get('/api/imaging/shadow-report', c => {
+    try {
+      const raw = c.req.query('since') ?? ''
+      if (raw && !/^\d{4}-\d{2}-\d{2}$/.test(raw)) throw new ImagingError('bad_since', 'since 格式应为 YYYY-MM-DD')
+      const report = svc(c).shadowReport(me(c), raw || null)
+      audit(c, 'imaging.shadow_report', { detail: JSON.stringify({ since: raw || null, studies: report.studies.length }) })
+      return c.json(report, 200, { 'Cache-Control': 'private, no-store' })
     } catch (err) { return fail(c, err) }
   })
 

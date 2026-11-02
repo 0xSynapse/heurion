@@ -256,7 +256,7 @@ describe('分析接口', () => {
     const up = await t.app.request(`/api/patients/${p.id}/imaging/dicom`, { method: 'POST', headers: t.auth, body: form })
     expect(up.status).toBe(201)
     const body = await up.json() as { studies: Array<{ id: string }>; analysis: Array<{ study_id: string; task: string; run_id: string | null; skipped: string | null }> }
-    expect(body.analysis).toEqual([{ study_id: body.studies[0]!.id, task: 'lung_nodule', run_id: expect.any(String), skipped: null, notes: [] }])
+    expect(body.analysis).toEqual([{ study_id: body.studies[0]!.id, task: 'lung_nodule', run_id: expect.any(String), shadow: false, skipped: null, notes: [] }])
     await t.pipeline.idle()
 
     const list = await (await t.app.request(`/api/patients/${p.id}/imaging/studies`, { headers: t.auth })).json() as Array<{ runs: Array<{ status: string }>; lesions: { proposed: number } }>

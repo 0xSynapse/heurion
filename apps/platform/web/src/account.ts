@@ -25,7 +25,7 @@ export interface Me {
   tenant: { id: string; name: string; kind: 'personal' | 'org'; role: 'admin' | 'member'; settings: TenantSettings; members: number; personal_id?: string | null; in_org?: boolean } | null
 }
 
-interface TenantSettings { patient_module: boolean; external_model_for_patients: boolean; patient_visibility: 'care_team' | 'tenant'; ai_patient_writes: 'review' | 'direct'; accept_patient_shares?: boolean }
+interface TenantSettings { patient_module: boolean; external_model_for_patients: boolean; patient_visibility: 'care_team' | 'tenant'; ai_patient_writes: 'review' | 'direct'; accept_patient_shares?: boolean; imaging_ai_visibility?: 'visible' | 'shadow' }
 
 /** 邀请链接里的邀请码（/app?invite=…）。 */
 export const inviteCode = (): string | null => new URLSearchParams(location.search).get('invite')
@@ -962,6 +962,10 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
         <label class="toggle">AI 修改患者记录 <select data-set="ai_patient_writes"><option value="review"${t.settings.ai_patient_writes !== 'direct' ? ' selected' : ''}>需医生确认（进待确认）</option><option value="direct"${t.settings.ai_patient_writes === 'direct' ? ' selected' : ''}>直接生效（和人一样）</option></select></label>
         ${t.kind === 'org' ? `<label class="toggle"><input type="checkbox" data-set="accept_patient_shares" ${t.settings.accept_patient_shares !== false ? 'checked' : ''}> 接受知家家庭分享（家人可在知家里选本院的科室分享档案）</label>` : ''}
         <label class="toggle">患者默认可见范围 <select data-set="patient_visibility"><option value="care_team"${t.settings.patient_visibility === 'care_team' ? ' selected' : ''}>创建者 + 诊疗组</option><option value="tenant"${t.settings.patient_visibility === 'tenant' ? ' selected' : ''}>本机构全员</option></select></label>
+        <label class="toggle">影像 AI 自动分析结果 <select data-set="imaging_ai_visibility"><option value="visible"${t.settings.imaging_ai_visibility !== 'shadow' ? ' selected' : ''}>显示给医生</option><option value="shadow"${t.settings.imaging_ai_visibility === 'shadow' ? ' selected' : ''}>影子模式（后台运行，结果不显示，只进对照报告）</option></select></label>
+        <div class="muted small">影子模式用于上线前评估：AI 照常分析，结果对医生、阅片器和 AI 助手都不可见；医生在阅片器里标的结节作为参照。切回「显示」后，影子期的结果仍不显示。</div>
+        <div><button type="button" class="small-btn" id="shadowReportBtn">查看影子期对照报告</button></div>
+        <div id="shadowReport" class="small"></div>
       </div>
     </div>
 
@@ -1049,6 +1053,11 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
     } catch (err) {
       notify((err as Error).message, true)
     }
+  }
+  dlg.querySelector<HTMLButtonElement>('#shadowReportBtn')!.onclick = async () => {
+    const box = dlg.querySelector<HTMLElement>('#shadowReport')!
+    box.textContent = '正在读取…'
+    try { box.innerHTML = shadowReportHtml(await api('/api/imaging/shadow-report')) } catch (err) { box.textContent = `读取失败：${(err as Error).message}` }
   }
   dlg.querySelector('.tenant-settings')!.addEventListener('change', async e => {
     e.stopPropagation()
@@ -1151,4 +1160,25 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
     try { await api(`/api/tenant/invites/${code}`, { method: 'DELETE' }); notify('已撤销') } catch (err) { notify((err as Error).message, true) }
     await renderInvites()
   })
+}
+
+interface ShadowReport {
+  runs: { total: number; done: number; failed: number; pending: number; turnaround_ms: { p50: number; p90: number; max: number } | null }
+  studies: Array<{ study_id: string; study_date: string | null; ai: number; reference: number; matched: number; ai_only: number; missed: Array<{ mean_diameter_mm: number | null; location: string | null }> }>
+  totals: { studies: number; studies_with_reference: number; reference: number; matched: number; ai_only: number; sensitivity: number | null; ai_only_per_study: number | null }
+}
+
+/** 影子期对照报告（T1.8）的摘要：运行情况、按检查的配对结果；敏感度只按有医生标注的检查算 */
+function shadowReportHtml(r: ShadowReport): string {
+  const min = (ms: number) => `${(ms / 60000).toFixed(1)} 分钟`
+  const t = r.totals
+  const runs = `影子分析 ${r.runs.total} 次：完成 ${r.runs.done}，失败 ${r.runs.failed}，未完成 ${r.runs.pending}` +
+    (r.runs.turnaround_ms ? `；入队到结果就绪 P50 ${min(r.runs.turnaround_ms.p50)}，P90 ${min(r.runs.turnaround_ms.p90)}` : '')
+  const head = `<div>${runs}</div><div>有医生标注的检查 ${t.studies_with_reference} / ${t.studies} 个：医生标注 ${t.reference} 个结节，AI 检出其中 ${t.matched} 个` +
+    `${t.sensitivity === null ? '' : `（敏感度 ${(t.sensitivity * 100).toFixed(1)}%）`}；只有 AI 检出 ${t.ai_only} 个${t.ai_only_per_study === null ? '' : `（每例 ${t.ai_only_per_study}）`}</div>` +
+    '<div class="muted">参照只有医生在阅片器里补充或确认的结节；没有标注的检查不计入敏感度。「只有 AI 检出」可能是假阳性，也可能是医生没标，需复核。</div>'
+  if (!r.studies.length) return head
+  return head + `<table class="users"><thead><tr><th>检查</th><th>日期</th><th>AI</th><th>医生</th><th>配对</th><th>只有 AI</th><th>漏检</th></tr></thead><tbody>${r.studies.map(s => `<tr>
+    <td>${esc(s.study_id)}</td><td>${esc(s.study_date ?? '未知')}</td><td>${s.ai}</td><td>${s.reference}</td><td>${s.matched}</td><td>${s.reference ? s.ai_only : '—'}</td>
+    <td>${s.missed.map(m => esc(`${m.mean_diameter_mm === null ? '?' : m.mean_diameter_mm.toFixed(1)} mm${m.location ? ` ${m.location}` : ''}`)).join('、') || '—'}</td></tr>`).join('')}</tbody></table>`
 }

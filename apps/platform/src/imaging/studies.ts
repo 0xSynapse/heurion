@@ -44,6 +44,8 @@ export interface StudyView {
   lesions: { proposed: number; confirmed: number; rejected: number }
   /** 最近的 AI 分析（新的在前，最多 5 次；影子模式的不列） */
   runs: Array<Pick<RunRow, 'id' | 'task' | 'model_id' | 'model_version' | 'status' | 'error' | 'summary' | 'created_at' | 'finished_at'>>
+  /** 机构处于影像 AI 影子模式：自动分析照常在后台运行，结果不显示（界面据此说明，不给「重新分析」按钮） */
+  ai_shadow: boolean
 }
 
 export interface ImportResult {
@@ -90,6 +92,46 @@ export interface RunRow {
   started_at: string | null
   finished_at: string | null
 }
+
+/** 影子期对照报告（T1.8）中的一个检查：最近一次完成的影子分析与医生标注的结节逐一比对 */
+export interface ShadowStudyRow {
+  study_id: string
+  patient_id: string
+  study_date: string | null
+  run_id: string
+  model_version: string | null
+  finished_at: string | null
+  /** AI 检出数（影子运行） */
+  ai: number
+  /** 医生标注数：阅片器里补充的结节与确认过的检出（参照） */
+  reference: number
+  matched: number
+  /** 只有 AI 检出：可能是假阳性，也可能是医生漏标（只在 reference > 0 的检查里有意义） */
+  ai_only: number
+  /** 医生标注了、AI 没检出（漏检）；附平均径与位置，供分层复核 */
+  missed: Array<{ lesion_id: string; mean_diameter_mm: number | null; location: string | null }>
+}
+
+export interface ShadowReport {
+  /** 机构当前设置 */
+  mode: 'visible' | 'shadow'
+  since: string | null
+  /** 影子分析的运行情况（「影子期无重大故障」：失败数与入队到结果就绪的耗时） */
+  runs: { total: number; done: number; failed: number; pending: number; failures: Array<{ run_id: string; error: string | null }>; turnaround_ms: { p50: number; p90: number; max: number } | null }
+  studies: ShadowStudyRow[]
+  /** 只统计有医生标注的检查：没有标注的检查不知道医生是没看到结节还是没在阅片器里标 */
+  totals: { studies: number; studies_with_reference: number; reference: number; matched: number; ai_only: number; sensitivity: number | null; ai_only_per_study: number | null }
+}
+
+/** 两个结节是否是同一处：中心距离不超过两者较大的半径（至少 3 mm）；任一方没有病人坐标时为 null */
+export function lesionDistance(a: Record<string, unknown>, b: Record<string, unknown>): { d: number; radius: number } | null {
+  const pa = a.center_lps_mm as number[] | null | undefined, pb = b.center_lps_mm as number[] | null | undefined
+  if (!Array.isArray(pa) || !Array.isArray(pb) || pa.length !== 3 || pb.length !== 3) return null
+  const radius = Math.max(3, Number(a.mean_diameter_mm ?? 0) / 2, Number(b.mean_diameter_mm ?? 0) / 2)
+  return { d: Math.hypot(pa[0]! - pb[0]!, pa[1]! - pb[1]!, pa[2]! - pb[2]!), radius }
+}
+
+const percentile = (sorted: number[], p: number) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))]!
 
 const now = () => new Date().toISOString()
 const rid = (p: string) => p + randomUUID().replace(/-/g, '').slice(0, 12)
@@ -306,6 +348,7 @@ export class ImagingStudyService {
         id: r.id as string, patient_id: r.patient_id as string, ...(forUi ? { study_uid: s.decrypt(r.uid_enc as string)!, accession: s.decrypt((r.accession_enc as string | null) ?? null) } : {}),
         study_date: (r.study_date as string | null) ?? null, modalities: JSON.parse(r.modalities as string) as string[], description: s.decrypt((r.description_enc as string | null) ?? null),
         source: r.source as StudyView['source'], status: r.status as string, created_at: r.created_at as string, series, lesions: counts, runs,
+        ai_shadow: s.aiVisibility === 'shadow',
       }
     })
   }
@@ -326,12 +369,13 @@ export class ImagingStudyService {
 
   // —— AI 运行 ——
 
+  /** visibility 缺省取机构设置 imaging_ai_visibility（影子模式下的自动分析结果对界面和 AI 都不可见） */
   startRun(a: Actor, studyId: string, input: { task: string; model_id: string; model_version?: string | null; series_id?: string | null; visibility?: 'visible' | 'shadow' }): RunRow {
     const s = this.studyScope(a, studyId, 'write')
     if (input.series_id && !s.db.prepare('SELECT 1 FROM imaging_series WHERE id = ? AND study_id = ?').get(input.series_id, studyId)) throw new PatientError('not_found', '序列不存在', 404)
     const id = rid('ir')
     s.db.prepare(`INSERT INTO imaging_runs (id, study_id, series_id, task, model_id, model_version, status, visibility, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`).run(id, studyId, input.series_id ?? null, input.task, input.model_id, input.model_version ?? null, input.visibility ?? 'visible', a.userId, now())
+      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`).run(id, studyId, input.series_id ?? null, input.task, input.model_id, input.model_version ?? null, input.visibility ?? s.aiVisibility, a.userId, now())
     return this.run(s, id)
   }
 
@@ -362,12 +406,15 @@ export class ImagingStudyService {
     }))
   }
 
-  /** 重新分析成功后：同一任务旧运行里从未经医生处理的检出标为 superseded（医生确认 / 否决过的保留） */
+  /**
+   * 重新分析成功后：同一任务旧运行里从未经医生处理的检出标为 superseded（医生确认 / 否决过的保留）。
+   * 只取代同一可见性的旧运行：影子期的检出留作对照，正式显示的分析不动它们；影子运行也不动正式显示的检出。
+   */
   supersedeProposed(a: Actor, runId: string): number {
     const s = this.runScope(a, runId, 'write')
     const run = this.run(s, runId)
     const stale = (s.db.prepare(`SELECT l.* FROM imaging_lesions l JOIN imaging_runs r ON r.id = l.run_id
-      WHERE l.study_id = ? AND l.status = 'proposed' AND r.task = ? AND r.id != ?`).all(run.study_id, run.task, runId) as Array<Record<string, unknown>>).map(lesionOf)
+      WHERE l.study_id = ? AND l.status = 'proposed' AND r.task = ? AND r.id != ? AND r.visibility = ?`).all(run.study_id, run.task, runId, run.visibility) as Array<Record<string, unknown>>).map(lesionOf)
     for (const before of stale) {
       s.db.prepare("UPDATE imaging_lesions SET status = 'superseded', updated_at = ? WHERE id = ?").run(now(), before.id)
       this.event(s, a, before.id, 'supersede', before, this.lesion(s, before.id))
@@ -425,11 +472,11 @@ export class ImagingStudyService {
     return after
   }
 
-  /** 检查的病灶；影子模式运行产生的病灶默认不返回（只给内部评估用） */
-  listLesions(a: Actor, studyId: string, opts: { includeShadow?: boolean } = {}): LesionRow[] {
+  /** 检查的病灶；影子模式运行产生的病灶不返回（只进影子期对照报告 shadowReport） */
+  listLesions(a: Actor, studyId: string): LesionRow[] {
     const s = this.studyScope(a, studyId, 'read')
     const rows = s.db.prepare(`SELECT l.* FROM imaging_lesions l LEFT JOIN imaging_runs r ON r.id = l.run_id
-      WHERE l.study_id = ? AND l.status != 'superseded' AND (? OR r.id IS NULL OR r.visibility = 'visible') ORDER BY l.created_at, l.rowid`).all(studyId, opts.includeShadow && a.via !== 'ai' ? 1 : 0) as Array<Record<string, unknown>>
+      WHERE l.study_id = ? AND l.status != 'superseded' AND (r.id IS NULL OR r.visibility = 'visible') ORDER BY l.created_at, l.rowid`).all(studyId) as Array<Record<string, unknown>>
     return rows.map(lesionOf)
   }
 
@@ -528,9 +575,68 @@ export class ImagingStudyService {
       .map(e => ({ at: e.at as string, user_id: e.user_id as string, via: e.via as string, action: e.action as string, before: e.before ? JSON.parse(e.before as string) : null, after: e.after ? JSON.parse(e.after as string) : null }))
   }
 
+  // —— 影子期对照（T1.8） ——
+
+  /**
+   * 影子期对照报告：每个检查取最近一次完成的影子分析（肺结节），与医生标注的结节（阅片器里补充的、确认过的检出）
+   * 按病人坐标逐一配对（最近者优先，距离不超过较大的半径）。只给机构管理员本人在界面上看（imagingTenantScope 校验），
+   * 不含患者标识以外的信息；since 为 ISO 日期时只统计此后入队的运行。
+   */
+  shadowReport(a: Actor, since: string | null = null): ShadowReport {
+    const t = this.patients.imagingTenantScope(a)
+    const runs = (t.db.prepare(`SELECT * FROM imaging_runs WHERE visibility = 'shadow' AND task = 'lung_nodule' AND (? IS NULL OR created_at >= ?) ORDER BY created_at, rowid`)
+      .all(since, since) as Array<Record<string, unknown>>).map(runOf)
+    const done = runs.filter(r => r.status === 'done')
+    const failed = runs.filter(r => r.status === 'failed')
+    const turnaround = done.filter(r => r.finished_at).map(r => Date.parse(r.finished_at!) - Date.parse(r.created_at)).filter(n => Number.isFinite(n) && n >= 0).sort((x, y) => x - y)
+
+    const latest = new Map<string, RunRow>()
+    for (const r of done) latest.set(r.study_id, r)   // 按时间升序，后者覆盖前者
+    const studies: ShadowStudyRow[] = []
+    for (const [studyId, run] of latest) {
+      const st = t.db.prepare('SELECT patient_id, study_date FROM imaging_studies WHERE id = ?').get(studyId) as { patient_id: string; study_date: string | null } | undefined
+      if (!st) continue
+      const ai = (t.db.prepare(`SELECT * FROM imaging_lesions WHERE run_id = ? AND kind = 'lung_nodule' AND status != 'superseded'`).all(run.id) as Array<Record<string, unknown>>).map(lesionOf)
+      const ref = (t.db.prepare(`SELECT l.* FROM imaging_lesions l LEFT JOIN imaging_runs r ON r.id = l.run_id
+        WHERE l.study_id = ? AND l.kind = 'lung_nodule' AND l.status = 'confirmed' AND (r.id IS NULL OR r.visibility = 'visible')`).all(studyId) as Array<Record<string, unknown>>).map(lesionOf)
+      const pairs: Array<{ i: number; j: number; d: number }> = []
+      ref.forEach((rl, i) => ai.forEach((al, j) => {
+        const m = lesionDistance(rl.metrics, al.metrics)
+        if (m && m.d <= m.radius) pairs.push({ i, j, d: m.d })
+      }))
+      pairs.sort((x, y) => x.d - y.d)
+      const usedRef = new Set<number>(), usedAi = new Set<number>()
+      for (const p of pairs) if (!usedRef.has(p.i) && !usedAi.has(p.j)) { usedRef.add(p.i); usedAi.add(p.j) }
+      studies.push({
+        study_id: studyId, patient_id: st.patient_id, study_date: st.study_date, run_id: run.id, model_version: run.model_version, finished_at: run.finished_at,
+        ai: ai.length, reference: ref.length, matched: usedRef.size, ai_only: ai.length - usedAi.size,
+        missed: ref.filter((_, i) => !usedRef.has(i)).map(l => ({ lesion_id: l.id, mean_diameter_mm: typeof l.metrics.mean_diameter_mm === 'number' ? l.metrics.mean_diameter_mm : null, location: l.location })),
+      })
+    }
+    const withRef = studies.filter(x => x.reference > 0)
+    const sum = (k: 'reference' | 'matched' | 'ai_only') => withRef.reduce((n, x) => n + x[k], 0)
+    const reference = sum('reference'), matched = sum('matched'), aiOnly = sum('ai_only')
+    return {
+      mode: t.aiVisibility, since,
+      runs: {
+        total: runs.length, done: done.length, failed: failed.length, pending: runs.length - done.length - failed.length,
+        failures: failed.slice(-20).map(r => ({ run_id: r.id, error: r.error })),
+        turnaround_ms: turnaround.length ? { p50: percentile(turnaround, 0.5), p90: percentile(turnaround, 0.9), max: turnaround[turnaround.length - 1]! } : null,
+      },
+      studies,
+      totals: {
+        studies: studies.length, studies_with_reference: withRef.length, reference, matched, ai_only: aiOnly,
+        sensitivity: reference ? Math.round(matched / reference * 1000) / 1000 : null,
+        ai_only_per_study: withRef.length ? Math.round(aiOnly / withRef.length * 100) / 100 : null,
+      },
+    }
+  }
+
+  /** 按 id 找病灶；影子模式运行产生的病灶对界面、阅片器与 AI 一律当不存在（只进影子期对照报告） */
   private lesionScope(a: Actor, lesionId: string, need: 'read' | 'write' = 'write'): { s: ImagingScope; before: LesionRow } {
-    const row = this.patients.imagingLookup(a).db.prepare('SELECT study_id FROM imaging_lesions WHERE id = ?').get(lesionId) as { study_id: string } | undefined
-    if (!row) throw new PatientError('not_found', '病灶不存在', 404)
+    const row = this.patients.imagingLookup(a).db.prepare(`SELECT l.study_id, r.visibility FROM imaging_lesions l LEFT JOIN imaging_runs r ON r.id = l.run_id WHERE l.id = ?`)
+      .get(lesionId) as { study_id: string; visibility: string | null } | undefined
+    if (!row || row.visibility === 'shadow') throw new PatientError('not_found', '病灶不存在', 404)
     const s = this.studyScope(a, row.study_id, need)
     return { s, before: this.lesion(s, lesionId) }
   }

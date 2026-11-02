@@ -1370,7 +1370,7 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
 
   // 影像检查列表（与界面 GET /api/patients/:ptid/imaging/studies 对应；不含 DICOM UID 与检查号）
   server.registerTool('imaging_studies', {
-    description: '列出患者已入库的影像检查（DICOM 上传或 PACS 转发）：检查日期、模态、序列（层厚、重建核、层数）与病灶确认情况。不返回 DICOM UID、检查号等标识，也不返回影像本身。',
+    description: '列出患者已入库的影像检查（DICOM 上传或 PACS 转发）：检查日期、模态、序列（层厚、重建核、层数）与病灶确认情况。不返回 DICOM UID、检查号等标识，也不返回影像本身。ai_shadow = true 表示本机构影像 AI 处于影子模式：自动分析的结果不显示（不是没有结节），不要据此下结论。',
     inputSchema: { patient_id: z.string().describe('患者 ID') },
   }, async ({ patient_id }) => {
     if (!deps.patients) return fail('patients_unavailable', '患者模块未启用')
@@ -1419,6 +1419,8 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       if (!orthanc) return fail('orthanc_not_configured', '本机构没有配置影像存储（Orthanc），不能分析')
       const r = sharedPipeline(deps.patients, orthanc).enqueue(a, imaging_study_id, task ?? 'lung_nodule')
       if (r.skipped) return fail('not_applicable', r.skipped)
+      // 影子模式：分析在后台照常运行，结果对 AI 和界面都不可见
+      if (r.run!.visibility === 'shadow') return json({ task: r.task, run_id: null, status: r.run!.status, shadow: true, notes: [...(r.notes ?? []), '本机构的影像 AI 处于影子模式：分析结果不对医生和 AI 显示，只用于上线前的对照评估'] })
       return json({ task: r.task, run_id: r.run!.id, status: r.run!.status, notes: r.notes ?? [] })
     } catch (err) {
       if (err instanceof PatientError) return fail(err.code, err.message)
