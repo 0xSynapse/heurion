@@ -98,6 +98,8 @@ const ALL_PARITY: Record<string, string> = {
   'POST /api/docs/:id/comments': 'comment_manage.create', 'POST /api/docs/:id/comments/:cid/replies': 'comment_reply',
   'POST /api/docs/:id/comments/:cid/:action{resolve|reopen}': 'comment_manage.resolve', 'DELETE /api/docs/:id/comments/:cid': 'comment_manage.delete',
   'POST /api/docs/:id/citations': 'insert_citation', 'POST /api/docs/:id/citations/import': 'import_references', 'POST /api/docs/:id/verify': 'verify_claims',
+  // 测量原子（W4.2）：绑定与查看；严格模式开关只给用户（见 NOT_FOR_AI）
+  'POST /api/docs/:id/measurements': 'insert_measurement', 'GET /api/docs/:id/measurements': 'list_measurements',
   // 资料库
   'GET /api/kb': 'kb_manage.list', 'GET /api/kb-status': 'kb_manage.status', 'POST /api/kb': 'kb_manage.upload', 'PATCH /api/kb/:fid': 'kb_manage.update', 'DELETE /api/kb/:fid': 'kb_manage.delete',
   'GET /api/kb-search': 'kb_search', 'GET /api/kb/:fid/text': 'kb_read', 'GET /api/kb/:fid/file': 'kb_read',
@@ -290,6 +292,7 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/aegis/leases/approve': '医生/研究员本人审批 [Lease-Gated] 提权申请（AI 不能自我批准租约）',
   'POST /api/aegis/leases/reject': '医生/研究员本人拒绝 [Lease-Gated] 提权申请（AI 不能自我决定租约）',
   'POST /api/aegis/mcp': 'AAP-1.0 统一 MCP 协议网关入口本身（承载全部 MCP 工具调用）',
+  'PUT /api/docs/:id/measurements/policy': '测量严格模式是用户对 AI 写入的约束（禁止裸测量数字），AI 不能自己开关；接口同样拒绝 via=ai',
 }
 
 describe('人机对等：每个接口（AI 的权限 = 用户的权限）', () => {

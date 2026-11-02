@@ -76,13 +76,15 @@ export function classifyVerificationTier(plain: string, citeCount: number, secti
   return 'light'
 }
 
-interface Piece { text: string; cite?: string }
+/** measure：测量原子（数值来自绑定的测量，不是待核对的手写数字；句子里显示它的值，plain 不含它）。 */
+interface Piece { text: string; cite?: string; measure?: string }
 
 function pieces(block: PMNode): Piece[] {
   const out: Piece[] = []
   block.forEach(child => {
     if (child.isText) out.push({ text: child.text! })
     else if (child.type.name === 'citation') out.push({ text: '', cite: child.attrs.cite_id as string })
+    else if (child.type.name === 'measurement') out.push({ text: '', measure: child.attrs.m_id as string })
     else if (child.type.name === 'hard_break') out.push({ text: '\n' })
   })
   return out
@@ -94,11 +96,11 @@ function sentences(block: PMNode): Sentence[] {
   const out: Sentence[] = []
   let cur: Piece[] = []
   const flush = () => {
-    if (cur.some(p => p.cite || p.text.trim())) out.push({ parts: cur })
+    if (cur.some(p => p.cite || p.measure || p.text.trim())) out.push({ parts: cur })
     cur = []
   }
   for (const p of pieces(block)) {
-    if (p.cite) { cur.push(p); continue }
+    if (p.cite || p.measure) { cur.push(p); continue }
     let rest = p.text
     while (rest) {
       const m = END.exec(rest)
@@ -187,7 +189,8 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
   return summaries
 }
 
-export function extractClaims(doc: PMNode, numbers: Map<string, number>): { claims: Claim[]; unsourced: Claim[] } {
+/** measures：测量原子的显示文字（不给时句子里写 [@m:id]）。 */
+export function extractClaims(doc: PMNode, numbers: Map<string, number>, measures?: ReadonlyMap<string, string>): { claims: Claim[]; unsourced: Claim[] } {
   const claims: Claim[] = []
   const unsourced: Claim[] = []
   let currentSectionTitle = ''
@@ -214,12 +217,12 @@ export function extractClaims(doc: PMNode, numbers: Map<string, number>): { clai
     if (!nodeId || node.attrs.suggest === 'delete') return
     for (const s of sentences(node)) {
       const cites = [...new Set(s.parts.filter(p => p.cite).map(p => p.cite!))]
-      const sentence = s.parts.map(p => p.cite ? `[${numbers.get(p.cite) ?? '?'}]` : p.text).join('').trim()
+      const sentence = s.parts.map(p => p.cite ? `[${numbers.get(p.cite) ?? '?'}]` : p.measure ? (measures?.get(p.measure) ?? `[@m:${p.measure}]`) : p.text).join('').trim()
       const plain = s.parts.map(p => p.text).join('').trim()
       // 引用把句子切成几段连续文字，取最长的一段做锚点
       const runs: string[] = ['']
       for (const p of s.parts) {
-        if (p.cite) runs.push('')
+        if (p.cite || p.measure) runs.push('')
         else runs[runs.length - 1] += p.text
       }
       const snippet = runs.map(r => r.trim()).sort((a, b) => b.length - a.length)[0] ?? ''

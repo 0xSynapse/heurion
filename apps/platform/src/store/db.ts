@@ -415,6 +415,33 @@ export interface CitationRow {
   created_at: string
 }
 
+/**
+ * 测量原子 [@m:id] 的登记（W4.2；src/measurements/）。文档级，与引用一样随文档删除。
+ * 绑定时记下来源（类型 + id + 字段）、显示单位与小数位、来源所属患者与机构，以及绑定时的版本与数值快照：
+ * 渲染时取来源当前值；读者无权查看来源时只显示快照（bound_value / bound_label）。
+ */
+export interface MeasurementRow {
+  id: string
+  doc_id: string
+  /** 来源类型：本期只有 imaging_lesion（影像病灶测量）；以后有队列统计值等。 */
+  source_kind: string
+  source_id: string
+  field: string
+  /** 显示单位（model/measurements.ts 的 MEASURE_UNITS）。 */
+  unit: string
+  decimals: number
+  /** 来源所属机构 / 患者（跨患者绑定校验、渲染时核对来源没有换主）。 */
+  tenant_id: string | null
+  patient_id: string | null
+  /** 绑定时来源的版本、换算到显示单位后的数值、来源说明（不含患者标识）。 */
+  bound_version: number
+  bound_value: number
+  bound_label: string
+  bound_by: string
+  bound_at: string
+  created_at: string
+}
+
 export interface CommentRow {
   id: string
   doc_id: string
@@ -647,6 +674,15 @@ export class Store {
       CREATE TABLE IF NOT EXISTS citations (
         id TEXT PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE, doi TEXT NOT NULL,
         pmid TEXT, formatted TEXT NOT NULL, url TEXT, created_at TEXT NOT NULL, UNIQUE (doc_id, doi)
+      );
+      CREATE TABLE IF NOT EXISTS measurements (
+        id TEXT PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE, source_kind TEXT NOT NULL, source_id TEXT NOT NULL,
+        field TEXT NOT NULL, unit TEXT NOT NULL, decimals INTEGER NOT NULL, tenant_id TEXT, patient_id TEXT,
+        bound_version INTEGER NOT NULL, bound_value REAL NOT NULL, bound_label TEXT NOT NULL, bound_by TEXT NOT NULL, bound_at TEXT NOT NULL,
+        created_at TEXT NOT NULL, UNIQUE (doc_id, source_kind, source_id, field, unit)
+      );
+      CREATE TABLE IF NOT EXISTS measurement_policy (
+        doc_id TEXT PRIMARY KEY REFERENCES docs(id) ON DELETE CASCADE, strict INTEGER NOT NULL, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS comments (
         id TEXT PRIMARY KEY, doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE, node_id TEXT NOT NULL,
@@ -2272,6 +2308,52 @@ export class Store {
 
   listCitations(docId: string): CitationRow[] {
     return this.db.prepare('SELECT * FROM citations WHERE doc_id = ? ORDER BY created_at').all(docId) as unknown as CitationRow[]
+  }
+
+  // —— 测量原子 ——
+
+  /**
+   * 登记（或刷新）一个测量：同一文档里同一来源、字段、单位只登记一次，再次绑定刷新快照与小数位（id 不变，正文里的标记不用改）。
+   */
+  upsertMeasurement(input: Omit<MeasurementRow, 'id' | 'created_at' | 'bound_at'>): MeasurementRow {
+    const existing = this.db.prepare('SELECT id FROM measurements WHERE doc_id = ? AND source_kind = ? AND source_id = ? AND field = ? AND unit = ?')
+      .get(input.doc_id, input.source_kind, input.source_id, input.field, input.unit) as { id: string } | undefined
+    const t = now()
+    if (existing) {
+      this.db.prepare('UPDATE measurements SET decimals = ?, tenant_id = ?, patient_id = ?, bound_version = ?, bound_value = ?, bound_label = ?, bound_by = ?, bound_at = ? WHERE id = ?')
+        .run(input.decimals, input.tenant_id, input.patient_id, input.bound_version, input.bound_value, input.bound_label, input.bound_by, t, existing.id)
+      return this.getMeasurement(input.doc_id, existing.id)!
+    }
+    const id = 'm' + randomUUID().replace(/-/g, '').slice(0, 7)
+    this.insertMeasurement({ ...input, id, bound_at: t, created_at: t })
+    return this.getMeasurement(input.doc_id, id)!
+  }
+
+  /** 按给定 id 写入一条测量登记（复制文档用）。 */
+  insertMeasurement(m: MeasurementRow): void {
+    this.db.prepare(`INSERT INTO measurements (id, doc_id, source_kind, source_id, field, unit, decimals, tenant_id, patient_id, bound_version, bound_value, bound_label, bound_by, bound_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(m.id, m.doc_id, m.source_kind, m.source_id, m.field, m.unit, m.decimals, m.tenant_id, m.patient_id, m.bound_version, m.bound_value, m.bound_label, m.bound_by, m.bound_at, m.created_at)
+  }
+
+  getMeasurement(docId: string, id: string): MeasurementRow | undefined {
+    return this.db.prepare('SELECT * FROM measurements WHERE doc_id = ? AND id = ?').get(docId, id) as MeasurementRow | undefined
+  }
+
+  listMeasurements(docId: string): MeasurementRow[] {
+    return this.db.prepare('SELECT * FROM measurements WHERE doc_id = ? ORDER BY created_at, rowid').all(docId) as unknown as MeasurementRow[]
+  }
+
+  /** 严格模式（禁止 AI 写入裸测量数字）：null = 未设置（按「文档已有测量登记」自动开启）。 */
+  measurementStrict(docId: string): boolean | null {
+    const r = this.db.prepare('SELECT strict FROM measurement_policy WHERE doc_id = ?').get(docId) as { strict: number } | undefined
+    return r ? r.strict === 1 : null
+  }
+
+  setMeasurementStrict(docId: string, strict: boolean | null, by: string): void {
+    if (strict === null) { this.db.prepare('DELETE FROM measurement_policy WHERE doc_id = ?').run(docId); return }
+    this.db.prepare('INSERT INTO measurement_policy (doc_id, strict, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (doc_id) DO UPDATE SET strict = excluded.strict, updated_by = excluded.updated_by, updated_at = excluded.updated_at')
+      .run(docId, strict ? 1 : 0, by, now())
   }
 
   // —— 评论 ——

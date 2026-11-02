@@ -87,6 +87,11 @@ export const deckSchema = new Schema({
       group: 'inline', inline: true, atom: true, attrs: { cite_id: {} },
       toDOM: (node): DOMOutputSpec => ['sup', { class: 'cite', 'data-cite': node.attrs.cite_id as string }, '[?]'],
     },
+    // 测量原子（与 doc schema 同名同属性，见 model/measurements.ts）
+    measurement: {
+      group: 'inline', inline: true, atom: true, attrs: { m_id: {} },
+      toDOM: (node): DOMOutputSpec => ['span', { class: 'measure', 'data-measure': node.attrs.m_id as string }, '[测量]'],
+    },
   },
   marks: {
     bold: { toDOM: () => ['strong', 0] },

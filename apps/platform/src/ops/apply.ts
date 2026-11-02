@@ -314,7 +314,7 @@ function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyCon
   return topIds(nodes)
 }
 
-/** 块内字符 → 文档位置的映射。citation 以 `[@c:id]`、Word 行内结构以 `[@w:key]` 参与匹配（同按引用标记处理），hard_break 记作换行。 */
+/** 块内字符 → 文档位置的映射。citation 以 `[@c:id]`、Word 行内结构以 `[@w:key]`、测量以 `[@m:id]` 参与匹配（同按引用标记处理），hard_break 记作换行。 */
 function textMap(node: PMNode, nodePos: number): { text: string; from: number[]; to: number[]; marks: Array<readonly Mark[]>; cite: boolean[] } {
   let text = ''
   const from: number[] = []
@@ -332,9 +332,10 @@ function textMap(node: PMNode, nodePos: number): { text: string; from: number[];
         cite.push(false)
       }
     } else {
-      const marker = child.type.name === 'citation' || child.type.name === 'word_inline'
+      const marker = child.type.name === 'citation' || child.type.name === 'word_inline' || child.type.name === 'measurement'
       const s = child.type.name === 'citation' ? `[@c:${child.attrs.cite_id}]`
         : child.type.name === 'word_inline' ? `[@w:${child.attrs.key}]`
+          : child.type.name === 'measurement' ? `[@m:${child.attrs.m_id}]`
           : child.type.name === 'hard_break' ? '\n' : '￼'
       for (const ch of s) {
         text += ch
@@ -367,7 +368,7 @@ function stripCitations(map: ReturnType<typeof textMap>): { text: string; index:
 function appendAcrossCitation(tr: Transform, map: ReturnType<typeof textMap>, op: ReplaceArgs, parse: InlineParser): boolean {
   const stripped = stripCitations(map)
   for (const v of findVariants(op.find)) {
-    const find = v.replace(/\[@[cw]:[a-z0-9]+\]/g, '')
+    const find = v.replace(/\[@[cwm]:[a-z0-9]+\]/g, '')
     if (!find) continue
     const hits = allIndexes(stripped.text, find)
     if (hits.length === 0) continue
@@ -602,7 +603,7 @@ function nearCandidates(map: ReturnType<typeof textMap>, find: string): MatchCan
     }
     if (out.length > 0) return out
     const stripped = stripCitations(map)
-    const bare = v.replace(/\[@c:[a-z0-9]+\]/g, '')
+    const bare = v.replace(/\[@[cm]:[a-z0-9]+\]/g, '')
     const at = bare ? stripped.text.indexOf(bare) : -1
     if (at !== -1) {
       const s0 = stripped.index[at]!
@@ -626,7 +627,7 @@ export function replaceError(outcome: Exclude<ReplaceOutcome, { ok: true }>, whe
   }
   const near = outcome.near
   const hint = near[0]?.how === 'citation'
-    ? '原文在这段文字中间有引用标记 [@c:…]：find 与 replace 里要原样写出引用标记（否则会删掉引用），或者只匹配引用标记之前 / 之后的文字。'
+    ? '原文在这段文字中间有引用标记 [@c:…] 或测量标记 [@m:…]：find 与 replace 里要原样写出这些标记（否则会删掉引用或测量），或者只匹配标记之前 / 之后的文字。'
     : near.length > 0
       ? '原文的空白或大小写与 find 不同：按 near 里的 text 原样写 find 重发。'
       : '按 current 中的原文逐字复制 find（不含 {#id} 前缀和 markdown 符号）。'

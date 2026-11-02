@@ -4,7 +4,7 @@ import { isSafeHref, schema } from './schema.ts'
 import { readGrid } from './table-grid.ts'
 
 /**
- * 平台的 markdown 方言（PLATFORM.md §6.1）：CommonMark + GFM 表格 + 引用 `[@c:<cite_id>]`
+ * 平台的 markdown 方言（PLATFORM.md §6.1）：CommonMark + GFM 表格 + 引用 `[@c:<cite_id>]` + 测量 `[@m:<m_id>]`
  * + 导入的 Word 行内结构（脚注引用、域代码）`[@w:<key>]`
  * + 读视图里的块 id 前缀 `{#id}`（写入时忽略）+ 资产图 `![alt](asset:<id> "图注")`
  * + 行内 `<sup> <sub> <u> <br>`。样式（标题级别以外）不进 markdown，由专用 op 修改。
@@ -15,6 +15,8 @@ import { readGrid } from './table-grid.ts'
 const ID_PREFIX_LINE = /^(\s*)\{#[a-z][a-z0-9]{2,15}\}[ \t]?/gm
 const ID_PREFIX_INLINE = /^\{#[a-z][a-z0-9]{2,15}\}[ \t]?/
 const CITATION = /^\[@c:([a-z0-9]{3,32})\]/
+/** 测量原子：只带登记表 id，数值在渲染时取（model/measurements.ts）。 */
+const MEASUREMENT = /^\[@m:([a-z0-9]{3,32})\]/
 /** 导入的 Word 行内结构（脚注引用、域代码）：只带 key，原始内容由操作层按 key 补回。 */
 const WORD_INLINE = /^\[@w:([a-z0-9]{1,16})\]/
 
@@ -23,12 +25,13 @@ function citationRule(state: StateInline, silent: boolean): boolean {
   const rest = state.src.slice(state.pos)
   const m = CITATION.exec(rest)
   const w = m ? null : WORD_INLINE.exec(rest)
-  if (!m && !w) return false
+  const v = m || w ? null : MEASUREMENT.exec(rest)
+  if (!m && !w && !v) return false
   if (!silent) {
-    const token = state.push(m ? 'citation' : 'word_inline', '', 0)
-    token.meta = m ? { cite_id: m[1] } : { key: w![1] }
+    const token = state.push(m ? 'citation' : w ? 'word_inline' : 'measurement', '', 0)
+    token.meta = m ? { cite_id: m[1] } : w ? { key: w[1] } : { m_id: v![1] }
   }
-  state.pos += (m ?? w)![0].length
+  state.pos += (m ?? w ?? v)![0].length
   return true
 }
 
@@ -291,6 +294,10 @@ function buildInline(children: Token[]): PMNode[] {
       case 'word_inline':
         out.push(schema.node('word_inline', { key: (t.meta as { key: string }).key }))
         break
+      case 'measurement':
+        // 与引用一样不带格式 mark（Yjs 存储不保留原子节点上的 mark）
+        out.push(schema.node('measurement', { m_id: (t.meta as { m_id: string }).m_id }))
+        break
       case 'html_inline': {
         const spanOpen = /^<span\s+style="([^"]+)"\s*>/i.exec(t.content.trim())
         if (spanOpen && spanOpen[1]) {
@@ -459,7 +466,7 @@ function closeMark(m: Mark): string {
   }
 }
 
-const escapeText = (s: string) => s.replace(/([\\*_`])/g, '\\$1').replace(/<(?=[a-zA-Z/])/g, '&lt;').replace(/\[(?=@[cw]:)/g, '\\[')
+const escapeText = (s: string) => s.replace(/([\\*_`])/g, '\\$1').replace(/<(?=[a-zA-Z/])/g, '&lt;').replace(/\[(?=@[cwm]:)/g, '\\[')
 
 /** 行内内容 → markdown（评论 mark 不进 markdown，由读视图单独列出）。 */
 export function serializeInline(node: PMNode): string {
@@ -488,13 +495,16 @@ export function serializeInline(node: PMNode): string {
     } else if (child.type.name === 'word_inline') {
       sync(child.marks)
       out += `[@w:${child.attrs.key}]`
+    } else if (child.type.name === 'measurement') {
+      sync(child.marks)
+      out += `[@m:${child.attrs.m_id}]`
     }
   })
   sync([])
   return out
 }
 
-/** 纯文本（检索、冲突摘要、diff 用）。citation 记作 `[@c:id]`，Word 行内结构记作 `[@w:key]`。 */
+/** 纯文本（检索、冲突摘要、diff 用）。citation 记作 `[@c:id]`，Word 行内结构记作 `[@w:key]`，测量记作 `[@m:id]`。 */
 export function plainText(node: PMNode): string {
   if (node.isTextblock) {
     let s = ''
@@ -503,6 +513,7 @@ export function plainText(node: PMNode): string {
       else if (c.type.name === 'hard_break') s += '\n'
       else if (c.type.name === 'citation') s += `[@c:${c.attrs.cite_id}]`
       else if (c.type.name === 'word_inline') s += `[@w:${c.attrs.key}]`
+      else if (c.type.name === 'measurement') s += `[@m:${c.attrs.m_id}]`
     })
     return s
   }

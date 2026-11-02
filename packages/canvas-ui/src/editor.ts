@@ -13,6 +13,7 @@ import { redo, undo, ySyncPlugin, ySyncPluginKey, yUndoPlugin } from 'y-prosemir
 import type * as Y from 'yjs'
 import { citationOrderOf, numberCitations } from '../../../apps/platform/src/model/references.ts'
 import { ADDRESSABLE, schema } from '../../../apps/platform/src/model/schema.ts'
+import { measureExportText, type MeasureView } from '../../../apps/platform/src/model/measurements.ts'
 
 /**
  * doc 编辑器（PLATFORM.md §9 P1）：ProseMirror + y-prosemirror，schema 与服务端共用。
@@ -110,6 +111,38 @@ const citePlugin = new Plugin<CitationNumbering>({
     }
     renumber()
     return { update: renumber }
+  },
+})
+
+/**
+ * 测量原子 [@m:id]：显示服务端按当前用户权限取到的值（GET /api/docs/:id 的 measurements），悬停显示来源与状态；
+ * 状态异常（来源已否决 / 撤销 / 缺值 / 未登记）加醒目标记。NodeView 忽略自身 DOM 变化，文字由插件视图刷新。
+ */
+const measureKey = new PluginKey<Record<string, MeasureView>>('measurements')
+const MEASURE_ALERT = new Set(['rejected', 'withdrawn', 'unconfirmed', 'field_missing', 'unknown'])
+function paintMeasure(el: HTMLElement, views: Record<string, MeasureView>): void {
+  const id = el.dataset.measure ?? ''
+  const v = views[id]
+  el.textContent = measureExportText(v, id)
+  el.dataset.status = v?.status ?? 'unknown'
+  el.classList.toggle('measure-alert', MEASURE_ALERT.has(v?.status ?? 'unknown'))
+  el.title = v
+    ? `${v.source_label}${v.source_version !== null ? ` · 来源 v${v.source_version}` : ''}（绑定时 v${v.bound_version}）\n${v.note}`
+    : '这个测量没有在本文档登记（可能是从别的文档粘贴来的），导出时会注明'
+}
+const measurePlugin = new Plugin<Record<string, MeasureView>>({
+  key: measureKey,
+  state: {
+    init: () => ({}),
+    apply: (tr, value) => tr.getMeta(measureKey) ?? value,
+  },
+  view: view => {
+    const repaint = () => {
+      const views = measureKey.getState(view.state)!
+      view.dom.querySelectorAll<HTMLElement>('span.measure').forEach(el => paintMeasure(el, views))
+    }
+    repaint()
+    return { update: repaint }
   },
 })
 
@@ -686,6 +719,7 @@ export class Editor {
         tableEditing(),
         idPlugin,
         citePlugin,
+        measurePlugin,
         flashPlugin,
         suggestionDiffPlugin(opts.onSuggestion),
         claimCheckPlugin(),
@@ -701,6 +735,14 @@ export class Editor {
           dom.className = 'cite'
           dom.dataset.cite = node.attrs.cite_id as string
           dom.textContent = '[?]'
+          return { dom, ignoreMutation: () => true } satisfies NodeView
+        },
+        measurement: node => {
+          const dom = document.createElement('span')
+          dom.className = 'measure'
+          dom.contentEditable = 'false'
+          dom.dataset.measure = node.attrs.m_id as string
+          paintMeasure(dom, measureKey.getState(this.view?.state ?? state) ?? {})
           return { dom, ignoreMutation: () => true } satisfies NodeView
         },
         figure: (node, view, getPos) => {
@@ -938,6 +980,11 @@ export class Editor {
   /** 服务端给出的引用编号规则（正文末尾有用户自己的文献表时接着编号）。 */
   setCitationNumbering(numbering: CitationNumbering): void {
     this.view.dispatch(this.view.state.tr.setMeta(citeKey, numbering))
+  }
+
+  /** 服务端按当前用户权限取到的测量原子显示值（来源被医生修改后刷新文档详情即可更新）。 */
+  setMeasurements(views: MeasureView[]): void {
+    this.view.dispatch(this.view.state.tr.setMeta(measureKey, Object.fromEntries(views.map(v => [v.id, v]))))
   }
 
   setClaimChecks(checks: ClaimCheckItem[]): void {

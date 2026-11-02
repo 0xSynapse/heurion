@@ -10,7 +10,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { z } from 'zod'
 import { canAccess, verifyToken, type Permission, type TokenClaims } from '../auth/token.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
-import type { AgentGrantRow, UserRow } from '../store/db.ts'
+import type { AgentGrantRow, DocRow, UserRow } from '../store/db.ts'
 import type { ClaimService } from '../claims/service.ts'
 import { pptxFor } from '../convert/exports.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
@@ -55,6 +55,8 @@ import type { ImageService } from '../images/service.ts'
 import { UnsplashError } from '../images/unsplash.ts'
 import { registerImagingTools } from './imaging-tools.ts'
 import { registerImagingReviewTools } from './imaging-review-tools.ts'
+import { MeasurementError, MeasurementService, measureSpace, SOURCE_KINDS } from '../measurements/service.ts'
+import { LESION_FIELDS, MEASURE_UNITS } from '../model/measurements.ts'
 import type { Invoke } from '../http/invoke.ts'
 import { registerAdminTools, type LeaseAuthorizeInput, type LeaseAuthorizeResult } from './admin-tools.ts'
 
@@ -119,6 +121,7 @@ const INSTRUCTIONS = `heurion 文档平台。文档只能通过这些工具读�
 - 小改动优先 replace_text：find 写块内原文（不能跨块），只改变化的字，格式、引用、评论锚点保留；失配时按返回的 near / matches 修正后重试。整段重写用 replace_block；新增用 insert_after / insert_before。
 - 内容格式是 markdown：标题 #、列表 -、表格 GFM、粗体 **、上标 <sup>、图片 ![说明](asset:<asset_id>)。
 - 引用：pubmed_search 找文献 → insert_citation 登记 → 正文写返回的 [@c:<cite_id>]。正文中不能出现 DOI、PMID 或手写参考文献，参考文献表由平台自动生成。
+- 测量：报告里病灶的大小、体积、CT 值等数字一律绑定已确认的测量——imaging_lesions 查病灶（只用 status=confirmed 的）→ insert_measurement 绑定字段 → 正文写返回的 [@m:<m_id>]（显示为「数值 单位」，前后不要再写数字或单位）。不要手写测量数字；改写段落时原样保留已有的 [@m:…]。doc_read 末尾列出各测量当前显示的值与状态，状态异常（来源已否决 / 撤销）的要提醒用户。
 - 导入的 Word 稿件里，脚注引用与域代码（EndNote / Zotero 引用、题注编号、交叉引用）显示为 [@w:<key>]，doc_read 末尾列出各自是什么；改写含它们的句子时原样保留这些标记（位置可随句子调整），不能新建或改写标记。
 - 评论是用户锚定在具体文字上的修改要求：comments_list 读取 → 修改 → comment_reply 说明改了什么。
 - 回复用户时用平常的话说明改了什么、改在哪（如「第 2 节第一段」），不要提块 id、rev、cite_id、工具名等内部信息。
@@ -158,6 +161,11 @@ class Ctx {
     readonly agentId?: string,
     readonly leaseAuthorizer?: (input: LeaseAuthorizeInput) => LeaseAuthorizeResult,
   ) {}
+
+  /** 测量原子在 AI 所代表用户眼里的值（按该用户对来源的权限；没有患者模块时只有快照）。 */
+  measureViews(row: DocRow) {
+    return new MeasurementService(this.deps.docs.store, this.deps.patients).views(row, { userId: this.claims.u, via: 'ai', space: measureSpace(row) })
+  }
 
   get turnId(): string | null {
     return this.deps.turns.active(this.claims.u, this.claims.s)?.turnId ?? null
@@ -286,10 +294,13 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
   }, async args => {
     const denied = ctx.check(args.doc_id, 'read')
     if (denied) return denied
-    if (store.getDoc(args.doc_id)!.kind === 'deck') return text(deckRead(docs.get(args.doc_id), docs.rev(args.doc_id), args.cursor ?? 0))
+    const row = store.getDoc(args.doc_id)!
+    // 测量原子按 AI 所代表用户的权限取值（没有权限时只给绑定时的快照）
+    const measurements = ctx.measureViews(row)
+    if (row.kind === 'deck') return text(deckRead(docs.get(args.doc_id), docs.rev(args.doc_id), args.cursor ?? 0, 8, measurements))
     try {
       const rev = docs.rev(args.doc_id)
-      const view = read({ ...args, doc: docs.get(args.doc_id), docId: args.doc_id, rev, comments: store.listComments(args.doc_id, 'open') })
+      const view = read({ ...args, doc: docs.get(args.doc_id), docId: args.doc_id, rev, comments: store.listComments(args.doc_id, 'open'), measurements })
       // 读到的块记为 AI 已看过（冲突守卫据此判断用户的改动 AI 看过没有）
       deps.ops.noteSeen?.(args.doc_id, [...view.matchAll(/\{#([a-z0-9]+)\}/g)].map(m => m[1]!), rev)
       return text(view)
@@ -564,7 +575,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     try {
       const info = deps.ops.deckContextInfo(doc_id)
       const pngs = await deps.renderer.render(`${doc_id}/${docs.rev(doc_id)}`, {
-        pptx: () => pptxFor(docs, doc_id).bytes,
+        pptx: () => pptxFor(docs, doc_id, ctx.measureViews(store.getDoc(doc_id)!)).bytes,
         getDoc: () => docs.get(doc_id),
         size: info.size,
         getAssetBytes: id => store.getAssetBytes(id),
@@ -879,6 +890,55 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     return json(rows.map(c => ({
       cite_id: c.id, number: numbers.get(c.id) ?? null, doi: c.doi, formatted: c.formatted,
     })))
+  })
+
+  // —— 测量原子（W4.2，measurements/service.ts） ——
+
+  const measureFail = (err: unknown) => {
+    if (err instanceof MeasurementError) return fail(err.code, err.message, err.hint ? { hint: err.hint } : {})
+    if (err instanceof PatientError) return fail(err.code, err.message, err.code === 'not_found' ? { hint: '用 imaging_studies / imaging_lesions 查到的病灶 id；影子模式的结果不能绑定。' } : {})
+    throw err
+  }
+
+  server.registerTool('insert_measurement', {
+    description: '为文档绑定一个测量（影像病灶的平均径、长短径、体积、CT 值等），返回 m_id。正文里写 [@m:<m_id>]，显示为「数值 单位」，' +
+      '医生修改病灶测量后报告里的数字自动更新。只能绑定已确认的病灶（imaging_lesions 里 status=confirmed）；一份文档只引用一位患者（文档关联了患者时须是该患者）。' +
+      '同一病灶、字段、单位再次绑定返回同一个 m_id，并把绑定时的快照刷新为当前值。',
+    inputSchema: {
+      doc_id: z.string(),
+      lesion_id: z.string().describe('病灶 id（imaging_lesions 返回的 id）'),
+      field: z.enum(Object.keys(LESION_FIELDS) as [string, ...string[]]).describe(Object.entries(LESION_FIELDS).map(([k, f]) => `${k}=${f.label}`).join('；')),
+      unit: z.enum(Object.keys(MEASURE_UNITS) as [string, ...string[]]).optional().describe('显示单位：长度 mm / cm，体积 mm3 / cm3，CT 值 HU，CTR 用 ratio；缺省为字段的基准单位'),
+      decimals: z.number().int().min(0).max(4).optional().describe('小数位，缺省 mm 1 位、cm 2 位、mm3 0 位、cm3 2 位、HU 0 位'),
+      source: z.enum(SOURCE_KINDS).optional().describe('来源类型，目前只有 imaging_lesion'),
+    },
+  }, async ({ doc_id, lesion_id, field, unit, decimals, source }) => {
+    const denied = ctx.check(doc_id, 'write')
+    if (denied) return denied
+    const row = store.getDoc(doc_id)!
+    try {
+      const r = new MeasurementService(store, deps.patients).bind({ userId: claims.u, via: 'ai', space: measureSpace(row) }, row, { source, source_id: lesion_id, field, unit, decimals })
+      return json({ m_id: r.row.id, marker: `[@m:${r.row.id}]`, text: r.view.text, source: r.view.source_label, version: r.row.bound_version, note: '正文写 marker，显示为 text；不要在标记前后再写数值或单位。' })
+    } catch (err) { return measureFail(err) }
+  })
+
+  server.registerTool('list_measurements', {
+    description: '本文档已绑定的测量：m_id、来源（病灶与字段）、当前显示的值与状态（ok / updated 已随病灶更新 / rejected 来源已否决 / withdrawn 已撤销 / no_access 无权查看来源只显示快照……）、文中是否用到。',
+    inputSchema: { doc_id: z.string() },
+  }, async ({ doc_id }) => {
+    const denied = ctx.check(doc_id, 'read')
+    if (denied) return denied
+    const row = store.getDoc(doc_id)!
+    const views = ctx.measureViews(row)
+    const used = new Set<string>()
+    docs.get(doc_id).descendants(n => { if (n.type.name === 'measurement') used.add(n.attrs.m_id as string); return true })
+    return json({
+      strict: new MeasurementService(store, null).strict(doc_id),
+      measurements: store.listMeasurements(doc_id).map(m => {
+        const v = views.get(m.id)!
+        return { m_id: m.id, marker: `[@m:${m.id}]`, source_kind: m.source_kind, source_id: m.source_id, field: m.field, unit: m.unit, text: v.text, status: v.status, note: v.note, source: v.source_label, bound_text: v.bound_text, used: used.has(m.id) }
+      }),
+    })
   })
 
   // —— 论断核对（M1） ——
@@ -1709,7 +1769,8 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
   }, async ({ share_id, doc_id }) => sh(svc => {
     if (!doc_id) return svc.read(aiActor(), share_id)
     const d = svc.doc(aiActor(), share_id, doc_id)
-    return { doc_id: d.doc_id, kind: d.kind, title: d.title, updated_at: d.updated_at, markdown: exportMarkdown(d.node, store.listCitations(d.doc_id)) }
+    const drow = store.getDoc(d.doc_id)
+    return { doc_id: d.doc_id, kind: d.kind, title: d.title, updated_at: d.updated_at, markdown: exportMarkdown(d.node, store.listCitations(d.doc_id), drow ? new MeasurementService(store, null).views(drow, null) : undefined) }
   }))
   server.registerTool('share_labs', {
     description: '家庭分享里的化验长表（家人已确认的；source=manual 是家人手工录入、没有原件）。tests 可按项目名或缩写过滤。',
@@ -2041,8 +2102,8 @@ export interface AegisMcpServerOptions {
   aegisToolScope?: AgentGrantRow['tool_scope']
 }
 
-const AEGIS_CANVAS_ONLY = /^(doc_|docs_|deck_|slide_|layout_|comment|pubmed_|openalex_|oa_|doi_|insert_citation|import_references|list_citations|verify_claims|claim_report|asset_upload|diagram_render|image_search)/
-const AEGIS_READONLY_TOOLS = /^(doc_list|docs_search|doc_outline|doc_read|doc_search|doc_validate|doc_history|doc_diff|deck_templates|slide_read|layout_check|slide_render|comments_list|pubmed_search|openalex_search|oa_fulltext|doi_lookup|list_citations|verify_claims|dataset_list|dataset_describe|patient_list|patient_read|labs_query|report_read|patient_access_log|share_list|share_read|share_labs|share_file|study_list|study_read|study_cohort_preview|study_cohort_list|study_vars_list|kb_search|kb_read|memory_search|phr_member_links|patient_claims_list|phi_scan|imaging_status|imaging_models|account|action_status|asset_provenance)$/
+const AEGIS_CANVAS_ONLY = /^(doc_|docs_|deck_|slide_|layout_|comment|pubmed_|openalex_|oa_|doi_|insert_citation|import_references|list_citations|insert_measurement|list_measurements|verify_claims|claim_report|asset_upload|diagram_render|image_search)/
+const AEGIS_READONLY_TOOLS = /^(doc_list|docs_search|doc_outline|doc_read|doc_search|doc_validate|doc_history|doc_diff|deck_templates|slide_read|layout_check|slide_render|comments_list|pubmed_search|openalex_search|oa_fulltext|doi_lookup|list_citations|list_measurements|verify_claims|dataset_list|dataset_describe|patient_list|patient_read|labs_query|report_read|patient_access_log|share_list|share_read|share_labs|share_file|study_list|study_read|study_cohort_preview|study_cohort_list|study_vars_list|kb_search|kb_read|memory_search|phr_member_links|patient_claims_list|phi_scan|imaging_status|imaging_models|account|action_status|asset_provenance)$/
 
 function aegisScopeAllows(toolName: string, scope?: AgentGrantRow['tool_scope']): boolean {
   if (!scope || scope === 'all') return true

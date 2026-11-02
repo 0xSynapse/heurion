@@ -53,7 +53,7 @@ export const DeckOp = z.discriminatedUnion('op', [
     op: z.literal('set_paragraphs'),
     shape_id: z.string(),
     paragraphs: z.array(z.object({
-      text: z.string().describe('该段文字（行内 markdown：**粗体**、[@c:id] 引用、<br> 换行）'),
+      text: z.string().describe('该段文字（行内 markdown：**粗体**、[@c:id] 引用、[@m:id] 测量、<br> 换行）'),
       lvl: z.number().int().min(0).max(8).optional().describe('列表级别；缺省沿用原段'),
     })).describe('形状的全部段落，按顺序'),
   }).describe('逐段改写形状文字：每段只替换变化的字，原有格式、引用、评论标记保留（画布上直接改字用的就是它）'),
@@ -219,6 +219,7 @@ function toDeckInline(nodes: readonly PMNode[], rpr: Mark | null): PMNode[] {
     if (rpr && n.isText && !marks.some(m => m.type.name === 'rpr')) marks = rpr.addToSet(marks)
     if (n.isText) return deckSchema.text(n.text!, marks)
     if (n.type.name === 'citation') return deckSchema.node('citation', { cite_id: n.attrs.cite_id })
+    if (n.type.name === 'measurement') return deckSchema.node('measurement', { m_id: n.attrs.m_id })
     return deckSchema.node('hard_break')
   })
 }
@@ -989,12 +990,13 @@ function rewriteParagraph(paragraph: PMNode, text: string, parse: (md: string) =
   return tr.doc.child(0).child(0).child(0)
 }
 
-/** 段落的文字（引用写成 [@c:id]、硬换行写成换行；与 replace_text 匹配用的文字一致）。 */
+/** 段落的文字（引用写成 [@c:id]、测量写成 [@m:id]、硬换行写成换行；与 replace_text 匹配用的文字一致）。 */
 function paragraphMarkdownText(p: PMNode): string {
   let out = ''
   p.forEach(c => {
     if (c.isText) out += c.text
     else if (c.type.name === 'citation') out += `[@c:${c.attrs.cite_id}]`
+    else if (c.type.name === 'measurement') out += `[@m:${c.attrs.m_id}]`
     else if (c.type.name === 'hard_break') out += '\n'
   })
   return out

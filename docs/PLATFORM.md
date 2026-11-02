@@ -127,6 +127,9 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 | 冲突（用户优先） | 目标块在 `base_rev` 之后被用户改过（`replace_text` 除外：原文即守卫） | `conflict_user_edited`（附当前内容与新 rev） |
 | 引用 | 写入内容出现 DOI、PMID 或手写参考文献条目 | `citation_not_registered` |
 | 引用 | `[@c:id]` 未在本文档登记 | `citation_unknown` |
+| 测量 | `[@m:id]` 未在本文档登记（编造、拼错、从别的文档抄来） | `unbound_measurement` |
+| 测量 | 严格模式下新写带 mm / cm / mm² / mm³ / cm³ / HU 的裸数字（§5.5.1） | `bare_measurement`（`current.bare` 列出被拦的数字） |
+| 测量 | 改写段落丢掉块内已有的 `[@m:…]`（且没有换成别的测量） | `measurement_lost` |
 | 锚点 | 本批操作会让 open 评论失去锚点，且线程未列入 `ack_comments` | `anchor_has_open_comments`（附线程与用户要求） |
 | 结构 | 找不到块 / 原文 / 单元格，非法嵌套，编辑不可编辑块 | `node_not_found` / `text_not_found`（附 `near` 近似候选）/ `ambiguous_match`（附每处 `matches` 上下文）/ `occurrence_out_of_range` / `cell_not_found` / `invalid_structure` / `node_not_editable` |
 | 参数 | op 形状、markdown、`base_rev` | `invalid_markdown` / `invalid_base_rev` / zod 校验错误 |
@@ -160,6 +163,20 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 - 引用在模型里是行内原子节点 `citation(cite_id)`：编号按文中首次出现顺序计算，参考文献表由平台在预览 / 导出时生成；模型不能手写编号或参考文献表。
 - 守卫在写入前拦截正文里的 DOI / PMID / 手写参考文献；不再需要回合后审计与自修。
 
+### 5.5.1 测量原子（PRD W4.2）
+
+报告里的每个测量数字都是测量原子 `[@m:<m_id>]`，绑定一个已确认的测量值；AI 不手写测量数字。对照引用原子实现（`model/measurements.ts`、`measurements/service.ts`）。
+
+- **绑定**：`imaging_lesions` 查病灶 → `insert_measurement`（`POST /api/docs/:id/measurements`）绑定一个字段（平均径、长 / 短径、实性成分直径、体积、平均 CT 值、CTR）与显示单位（mm / cm、mm³ / cm³、HU）、小数位 → 正文写返回的 `[@m:id]`。登记表 `measurements` 在文档库，与引用同库、随文档删除；记来源（类型 + id + 字段）、显示单位与小数位、来源所属机构与患者、绑定时的版本与数值快照。同一文档里同一来源、字段、单位只登记一次，再次绑定刷新快照（id 不变）。
+- **绑定规则**：以操作者本人的权限读来源（`ImagingStudyService.measurementSource` → `imagingScope` 读权限）；影子模式的病灶当不存在；只接受已确认的病灶（`lesionBindable`，T2.7「定稿」合并后若改为只接受已定稿的，只改这一处）；字段须有数值。**跨患者**：文档关联了患者时只能绑定该患者的病灶；未关联的文档里一旦绑定了某位患者，就不能再混入其他患者（`measurement_patient_mismatch`）——一份报告张冠李戴的代价远大于偶尔要另起一份文档。
+- **取值与同步**：文档里只存原子 `measurement(m_id)`，数值在渲染时按读者的权限取来源的当前值。医生重测（`editLesion`）后，界面、HTML、markdown、docx、pptx、AI 读视图都显示新值，并标为「已随来源更新」（悬停可见绑定时的值与版本）；重新绑定即确认更新（刷新快照）。选这条路而不是「病灶修改时推送修订到文档」：文档内容不变，不产生系统修订，按轮撤销（`doc_revert_turn`）、版本历史、协同编辑都不受影响；导出与界面用同一个取值函数，结果一致。代价：导出的文件是导出时刻的值（与界面一致），幻灯片渲染缓存按 rev 计，测量改了而文档没改时预览图要等下次 rev 变化才刷新。
+- **权限**：文档库与患者库是不同的权限域，文档的读者不一定能看这位患者。读者看不到来源（不在诊疗组、别的机构、患者模块未开、机构不允许把患者数据交给外部模型时的 AI、公开分享页）时只给**绑定时的快照**与绑定时记下的来源说明（「病灶 结节 1 · 右上叶 · 平均径」，不含患者标识），状态为 `no_access`，不透露来源现在的值或是否被否决。快照是绑定者写进文档的内容，与把数字写成文字等价。
+- **来源失效**：来源病灶被否决、撤销 / 被新分析取代、不再是已确认、或测量缺值时，显示快照并醒目标出（编辑器红色标记；HTML / markdown / docx / pptx 导出在数字后注明「〔来源病灶已被否决〕」等）；正文里有登记表里没有的 `[@m:id]`（例如从别的文档粘贴过来）显示并导出为「〔未登记的测量〕」，不会悄悄输出没有出处的数字。
+- **严格模式**（禁止 AI 写裸测量数字）：按文档设置（`PUT /api/docs/:id/measurements/policy`，只能用户本人设置，AI 不能开关）；未设置时，文档里有测量登记就自动开启。只拦这次新增的裸数字，改写时原文已有的（用户写的、开启前的）可以保留；层厚 / 窗位等采集参数、带比较词的阈值（「≥ 6 mm」「8 mm 以上」）、范围（「6–8 mm」）、mmHg / cmH2O 不算；日期、年龄、序号、百分比没有测量单位，本来就不算。
+- **复制粘贴与复制文档**：编辑器里复制粘贴保留原子（同一测量可多次出现，取同一值）；`duplicate` 复制文档时登记换新 id、正文标记跟着改。
+- **论断核对**：测量原子是有出处的数字，不进「缺出处」；句子里按快照显示数值。
+- **以后**（W6.5）：科研手稿里的队列统计值也以 `[@m:id]` 绑定分析结果——来源类型可扩展（`SOURCES`），本期只实现影像病灶测量。
+
 ### 5.6 撤销
 
 | 谁的修改 | 怎么撤 | 说明 |
@@ -172,9 +189,9 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 
 | 件 | 选型 | 说明 |
 | --- | --- | --- |
-| 模型 | ProseMirror schema（`model/schema.ts`）+ Yjs | 标题 / 段落（样式名、对齐）/ 有序与无序列表（可嵌套）/ 表格（colspan、rowspan、表头）/ 图（资产）/ 不可编辑块 / 引用原子节点 / Word 行内结构原子节点（脚注引用、域代码，原始 XML 原样写回）；mark：粗、斜、下划线、上下标、代码、链接、评论 |
+| 模型 | ProseMirror schema（`model/schema.ts`）+ Yjs | 标题 / 段落（样式名、对齐）/ 有序与无序列表（可嵌套）/ 表格（colspan、rowspan、表头）/ 图（资产）/ 不可编辑块 / 引用原子节点 / 测量原子节点（`measurement(m_id)`，§5.5.1）/ Word 行内结构原子节点（脚注引用、域代码，原始 XML 原样写回）；mark：粗、斜、下划线、上下标、代码、链接、评论 |
 | 写入 | prosemirror-transform 在内存应用 → `updateYFragment` 最小差异写入 Y.Doc | 未改动的节点在 Yjs 里保持原样（P1 编辑器同步的前提）；Node 中无 DOM 运行已验证 |
-| 内容格式 | markdown 方言（`model/markdown.ts`） | CommonMark + GFM 表格 + `[@c:id]` + `[@w:key]`（导入的脚注引用 / 域代码，写入时只能原样保留或删除，按 key 补回原始内容）+ `![说明](asset:<id> "图注")` + `<sup>/<sub>/<u>/<br>`；读视图带 `{#id}` 前缀，写入时忽略；表格按逻辑网格书写，单元格恰为 `^` / `<` 表示与上方 / 左侧合并（字面量写 `\^` `\<`），普通导出里合并位置留空 |
+| 内容格式 | markdown 方言（`model/markdown.ts`） | CommonMark + GFM 表格 + `[@c:id]` + `[@m:id]`（测量原子，§5.5.1）+ `[@w:key]`（导入的脚注引用 / 域代码，写入时只能原样保留或删除，按 key 补回原始内容）+ `![说明](asset:<id> "图注")` + `<sup>/<sub>/<u>/<br>`；读视图带 `{#id}` 前缀，写入时忽略；表格按逻辑网格书写，单元格恰为 `^` / `<` 表示与上方 / 左侧合并（字面量写 `\^` `\<`），普通导出里合并位置留空 |
 | 导入 | 自写 OOXML 解析（`convert/docx-import.ts`） | 标题（样式名 / outlineLvl / 中文「标题 N」）、列表（numbering.xml，相邻同类列表合并）、表格（gridSpan / vMerge）、格式、超链接、图片（入资产库）、修订（顶层段落 / 标题里的插入、删除、移动 → 平台待采纳修订：原文版本 + 修订版，记原作者；合作者的修订本身不能改，修订版里修订以外的文字可以改（改动须整体落在修订之前或之后，同步到原文版本，采纳或拒绝都保留；碰到修订的文字按 `pending_suggestion` 拒绝并指出修订改的是哪部分）；列表与表格里的修订按接受导入，未改动时导出仍原样保留）、内容控件、题注并回图、Word 批注（comments.xml 与 commentsExtended.xml 的回复关系 → 平台评论线程，保留原作者与「已解决」，锚在被批注的文字上）；文本框、图表、形状、嵌入对象（公式编辑器、Excel 等）所在的 run 导入为对象原子（Word 行内结构原子节点的一种，读视图里标出），段落其余文字可改；正文层级的内容控件导入时取出其中的块，导出时按原文件包回控件；脚注 / 尾注引用与域代码（EndNote / Zotero 引用、SEQ 题注编号、交叉引用，含 fldSimple 与 fldChar 复杂域）导入为 Word 行内结构原子节点，段落仍可编辑，改写后原样写回（缺少结束标记的残缺域除外）；其余落为 opaque。每个顶层块保存**逐字节原文** |
 | PDF 导入 | `convert/pdf-import.ts` + `convert/doc-parser.ts` | 主路径调本地 doc-parser（Docling）：标题（含层级推断）、段落、列表、表格（规则网格、表头行）、图（入资产库 + 图注）、公式（schema 无公式节点，存为 `style: 'Code'` 段落里的 `$$LaTeX$$`）；扫描页由 OCR 出文字并在开头注明，OCR 也没识别出文字才插整页图。服务不可用时退回 poppler（`pdftohtml -xml` 启发式）。原始 PDF 存为文件包 |
 | 导出 | 修补式（`convert/docx-export.ts`） | 以原始文件包为底座（样式、编号、关系、媒体、页面设置）；导入后**未改动的块原样写回**（与图混排的段落：拆出的图也原样跟随时才整段写回，避免图重复）；**改过的段落按原文 XML 打补丁**（`convert/docx-patch.ts`）：把原段落拆成与导入一致的文字记号，对比导入时与现在的段落（字符 + 格式，做语义清理避免把词拆碎），只在原 run 里删改变化的字符、新文字沿用相邻 run 的格式，书签、符号、文字格式、字符样式、注音、公式、编辑权限、内容控件、智能标记、批注范围、合作者修订（修订容器冻结，新文字不会算进别人的修订）等模型表达不了的内容原样留在原处；块类型 / 样式 / 对齐 / 列表层级变了、平台新建批注的范围要重写等情况退回重新生成：沿用原段落属性（间距、缩进、对齐）、首个文字 run 的字体字号与段落开始标签的属性（w14:paraId、修订标识）；新增的块按模型生成，新列表沿用原文件同类列表的编号定义与段落样式；导入的表格结构没变（行、单元格、合并、每格段落数相同）时以原表 XML 为底、改过的单元格段落同样打补丁（嵌套表、行的修订、单元格属性原样保留），结构变了时按单元格首段 id 对回原表：沿用 tblPr 样式、列宽（列数变化时按原总宽平均分）、行高与单元格属性（底纹、边框、对齐），未改段落原样写回，改过 / 新增的段落沿用原段落属性与首个 run 的字体字号，新增行列借同列相邻单元格的格式；新建文档用内置模板（宋体 / Times New Roman、标题样式）。引用为上标 [n] + 参考文献表（正文末尾已有文献表 [1]…[k]（也认「[1]作者」与全角「［1］」）时合并进去：已有条目一律原样保留，平台引用与某条 DOI 或文本相同的沿用其编号，其余从 [k+1] 起编号；平台导出的文件再上传后同样适用，不会越积越多；编号规则在 `model/references.ts`，编辑器、网页预览、markdown 导出、MCP、论断核对共用，引用页与导出时提示用户）；待采纳修订：只含顶层段落 / 标题的修订组写成 Word 修订（原文版本为 w:del、修订版为 w:ins，段落标记一并标记；导入后未动过的合作者修订整段原样写回），涉及表格、列表、图的修订组按未采纳导出；评论写成 Word 的「根批注 + 回复」线程（commentsExtended.xml 记回复关系）：导入的 Word 批注沿用原批注 id，未改动且没有新回复时 comments.xml 原样保留，平台里的新回复追加为子批注、在平台里解决的标为已解决；平台新建的 open 线程第一条为根批注、其余为回复；图片嵌入 |
@@ -230,6 +247,7 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | `comments_list` / `comment_reply` / `comment_resolve` | `doc_id, …` | 线程与锚点 / 回复（role=ai）/ 关闭（规则见 §5.4） |
 | `pubmed_search` / `doi_lookup` | 检索式 / DOI | 文献元数据 |
 | `insert_citation` / `list_citations` | `doc_id, doi \| pmid \| query` / `doc_id` | `cite_id`、`[@c:id]` 标记与摘要摘录（只给 query 时返回候选，不登记）/ 登记表与文中编号 |
+| `insert_measurement` / `list_measurements` | `doc_id, lesion_id, field, unit?, decimals?` / `doc_id` | `m_id`、`[@m:id]` 标记与显示值（只接受已确认病灶）/ 登记表、当前值与状态、严格模式（§5.5.1） |
 | `asset_upload` | 工作区内相对路径 | `asset_id`（png/jpg/svg/gif/webp ≤ 10MB；路径限制在工作区内） |
 | `kb_search` | `query, file_ids?, project?, top_k?` | 参考资料库片段与出处（文件、页码、DOI / PMID）；关键词 + 向量（本地 bge-m3）RRF 合并 |
 | `kb_read` | `file_id, from_page?, to_page?` | 资料原文（按页） |
@@ -286,6 +304,7 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | 评论锚点颗粒度（2026-10-01 JZ） | doc 同 Claude Docs：段落内或整块；deck 最小颗粒度：段落内或整个形状 | 跨段落锚点让「改什么」含糊，AI 修改也随之跨段；选区阶段拦下比事后猜测可靠 |
 | 内容格式 | markdown 方言 + 块 id 前缀 | 对 LLM 友好、token 少；实测 deepseek-flash 一次写对 |
 | 引用 | `[@c:id]` 原子节点，编号与参考文献表由平台生成 | 编号永不错乱；手写引用在写前被拦截 |
+| 测量（2026-11 T2.5） | `[@m:id]` 原子节点，渲染时按读者权限取来源当前值；无权限只显示快照 | 医生重测后报告同步，且不产生修订（按轮撤销、协同不受影响）；跨权限域不泄露来源当前值 |
 | doc 导入 / 导出 | 自写 OOXML 解析 + 修补式导出 | 未改动的块逐字节保真；mammoth / docx npm 包做不到 |
 | dsh 进程粒度 | 每用户一个 | 文档不在工作区里，一个会话可编辑多份文档 |
 | 编辑器 | 直接用 ProseMirror，不套 Tiptap | 前后端共用同一份 schema，Yjs 结构由一份定义保证一致；Tiptap 的默认节点名 / 属性与平台 schema 不同，硬对齐容易出现细微不一致而损坏协同数据。Tiptap 也是 ProseMirror 的封装，需要其 UI 扩展时可迁移 |

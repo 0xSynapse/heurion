@@ -5,6 +5,7 @@ import { exportDocx } from './docx-export.ts'
 import { exportPptx } from './pptx-export.ts'
 import { isPlatformPackage, pptxTemplate } from './pptx-template.ts'
 import { themePhoto } from '../model/theme-photos.ts'
+import type { MeasureLookup } from '../model/measurements.ts'
 
 /** 导入时的模型（未改动判断的基准）：只有从文件导入的文档才有。 */
 function baselineOf(docs: Documents, docId: string) {
@@ -12,8 +13,11 @@ function baselineOf(docs: Documents, docId: string) {
   return first?.source === 'import' ? docs.versionDoc(docId, first.seq) : null
 }
 
-/** 导出 docx：导入的文档以原始文件包为底座、未改动的块原样写回。 */
-export function docxFor(docs: Documents, docId: string) {
+/**
+ * 导出 docx：导入的文档以原始文件包为底座、未改动的块原样写回。
+ * measurements：测量原子在导出者眼里的值（与界面同一份，见 measurements/service.ts）；不给时按快照之外的「未登记」处理。
+ */
+export function docxFor(docs: Documents, docId: string, measurements?: MeasureLookup) {
   docs.flush(docId)
   const store = docs.store
   const pkg = store.getPackage(docId)
@@ -26,6 +30,7 @@ export function docxFor(docs: Documents, docId: string) {
     pkg,
     src: id => store.getNodeSrc(docId, id),
     citations: store.listCitations(docId),
+    measurements,
     comments: store.listComments(docId),
     asset: id => {
       const cleanId = String(id).replace(/^asset:/, '')
@@ -40,7 +45,7 @@ export function docxFor(docs: Documents, docId: string) {
 }
 
 /** 导出 pptx：以原始文件包（平台新建的 deck 为模板）为底座、未改动的页与形状原样写回。 */
-export function pptxFor(docs: Documents, docId: string) {
+export function pptxFor(docs: Documents, docId: string, measurements?: MeasureLookup) {
   docs.flush(docId)
   const store = docs.store
   const doc = withoutPending(docs.get(docId))
@@ -54,6 +59,7 @@ export function pptxFor(docs: Documents, docId: string) {
     pkg,
     src: id => store.getNodeSrc(docId, id),
     citations: store.listCitations(docId),
+    measurements,
     asset: id => {
       const cleanId = String(id).replace(/^asset:/, '')
       const builtin = themePhoto(cleanId) ?? orgLogo(cleanId) // 带图模板的内置照片、机构模板的院徽

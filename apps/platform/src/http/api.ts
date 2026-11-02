@@ -73,6 +73,7 @@ import { referencePlan } from '../model/references.ts'
 import { diff, read, ReadError } from '../views/read.ts'
 import { deckRead } from '../views/deck.ts'
 import { exportMarkdown, renderHtml } from '../views/render.ts'
+import { MeasurementError, MeasurementService, measureSpace, SOURCE_KINDS, type SourceKind } from '../measurements/service.ts'
 import { themePhoto } from '../model/theme-photos.ts'
 import { Access, allows, type Level } from '../research/access.ts'
 import type { ImageService } from '../images/service.ts'
@@ -945,7 +946,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       const d = sh().doc(me(c), shid, c.req.param('id'))
       const token = requestToken(c) ?? ''
       const shareAssetUrl = (aid: string) => `/api/shares/${encodeURIComponent(shid)}/assets/${encodeURIComponent(aid)}?token=${encodeURIComponent(token)}`
-      return c.json({ doc_id: d.doc_id, kind: d.kind, title: d.title, updated_at: d.updated_at, html: renderHtml(d.node, store.listCitations(d.doc_id), shareAssetUrl) })
+      // 家人分享的文档：测量原子只显示绑定时的快照（医生不一定能看这位患者的影像）
+      const drow = store.getDoc(d.doc_id)
+      return c.json({ doc_id: d.doc_id, kind: d.kind, title: d.title, updated_at: d.updated_at, html: renderHtml(d.node, store.listCitations(d.doc_id), shareAssetUrl, drow ? new MeasurementService(store, null).views(drow, null) : undefined) })
     } catch (err) { return patientFailure(c, err) }
   })
   app.post('/api/shares/:shid/import', c => { try { return c.json(sh().import(me(c), c.req.param('shid')), 201) } catch (err) { return patientFailure(c, err) } })
@@ -1219,6 +1222,13 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     } catch (err) { return memoryFailure(c, err) }
   })
 
+  // 测量原子的取值：按请求者本人（AI 经接口调用时按 AI）对来源的权限；空间取文档归属的空间
+  const measurementSvc = () => new MeasurementService(store, deps.patients)
+  const measureActor = (c: Context<{ Variables: { user: string } }>, row: DocRow) => ({
+    userId: c.get('user'), via: viaByReq.get(c.req.raw)?.via === 'ai' ? 'ai' as const : 'user' as const, space: measureSpace(row),
+  })
+  const measureViews = (c: Context<{ Variables: { user: string } }>, row: DocRow) => measurementSvc().views(row, measureActor(c, row))
+
   /** 我能读的、不在回收站里的文档（自己的，或我参与的研究里的；回收站里的只能主人恢复或彻底删除）。写权限由下面的中间件按路由把关。 */
   const owned = (c: Context<{ Variables: { user: string } }>) => {
     const row = store.getDoc(c.req.param('id')!)
@@ -1377,6 +1387,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         duplicates: refPlan.duplicates,
       },
       comments: store.listComments(row.id).map(x => ({ ...x, anchor: locate(doc, x, marks) })),
+      // 测量原子：按当前用户对来源的权限取值（编辑器显示数值、悬停显示来源与状态）
+      measurements: [...measureViews(c, row).values()],
+      measurement_strict: measurementSvc().strict(row.id),
     })
   })
 
@@ -1518,7 +1531,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const seq = c.req.query('version')
     const doc = seq ? docs.versionDoc(row.id, Number(seq)) : docs.get(row.id)
     if (!doc) return c.json({ error: 'version not found' }, 404)
-    return c.json({ rev: docs.rev(row.id), html: renderHtml(doc, store.listCitations(row.id), assetUrl(requestToken(c) ?? '')) })
+    return c.json({ rev: docs.rev(row.id), html: renderHtml(doc, store.listCitations(row.id), assetUrl(requestToken(c) ?? ''), measureViews(c, row)) })
   })
 
   /** 读视图（与 MCP doc_read 相同），便于调试模型看到的内容。 */
@@ -1526,11 +1539,11 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
     docs.flush(row.id)
-    if (row.kind === 'deck') return c.text(deckRead(docs.get(row.id), docs.rev(row.id)))
+    if (row.kind === 'deck') return c.text(deckRead(docs.get(row.id), docs.rev(row.id), 0, 8, measureViews(c, row)))
     // 与 MCP doc_read 一致：长文档分页，?cursor=<顶层块下标> 读下一页
     const cursor = Number(c.req.query('cursor'))
     try {
-      return c.text(read({ doc: docs.get(row.id), docId: row.id, rev: docs.rev(row.id), comments: store.listComments(row.id, 'open'), ...(Number.isInteger(cursor) && cursor > 0 ? { cursor } : {}) }))
+      return c.text(read({ doc: docs.get(row.id), docId: row.id, rev: docs.rev(row.id), comments: store.listComments(row.id, 'open'), measurements: measureViews(c, row), ...(Number.isInteger(cursor) && cursor > 0 ? { cursor } : {}) }))
     } catch (err) {
       if (err instanceof ReadError) return c.json({ error: err.message }, 400)
       throw err
@@ -1541,7 +1554,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
     docs.flush(row.id)
-    return c.body(exportMarkdown(withoutPending(docs.get(row.id)), store.listCitations(row.id)), 200, {
+    return c.body(exportMarkdown(withoutPending(docs.get(row.id)), store.listCitations(row.id), measureViews(c, row)), 200, {
       'Content-Type': 'text/markdown; charset=utf-8',
       'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(row.title)}.md`,
     })
@@ -1550,7 +1563,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/docs/:id/export.docx', c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
-    const result = docxFor(docs, row.id)
+    const result = docxFor(docs, row.id, measureViews(c, row))
     return c.body(Buffer.from(withFonts(result.bytes, exportFontsParam(c.req.query('fonts')))), 200, {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(row.title)}.docx`,
@@ -1561,7 +1574,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/docs/:id/export.pptx', c => {
     const row = owned(c)
     if (!row || row.kind !== 'deck') return c.json({ error: 'not found' }, 404)
-    const result = pptxFor(docs, row.id)
+    const result = pptxFor(docs, row.id, measureViews(c, row))
     return c.body(Buffer.from(withFonts(result.bytes, exportFontsParam(c.req.query('fonts')))), 200, {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(row.title)}.pptx`,
@@ -1576,7 +1589,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     // ph_styles：各版式占位符继承的文字样式（画布显示导入的占位符用）
     const ph_styles = Object.fromEntries(info.layouts.map(l => [l.part, l.placeholders.map(p => ({ type: p.type, idx: p.idx, style: p.style ?? {} }))]))
     const render_info = await deps.renderer.diagnose()
-    return c.json({ rev: docs.rev(row.id), size: info.size, layouts: info.layouts.map(l => l.name), ph_styles, doc: docs.get(row.id).toJSON(), render_info })
+    return c.json({ rev: docs.rev(row.id), size: info.size, layouts: info.layouts.map(l => l.name), ph_styles, doc: docs.get(row.id).toJSON(), measurements: [...measureViews(c, row).values()], render_info })
   })
 
 
@@ -1587,7 +1600,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     try {
       const info = ops.deckContextInfo(row.id)
       const pngs = await deps.renderer.render(`${row.id}/${docs.rev(row.id)}`, {
-        pptx: () => pptxFor(docs, row.id).bytes,
+        pptx: () => pptxFor(docs, row.id, measureViews(c, row)).bytes,
         getDoc: () => docs.get(row.id),
         size: info.size,
         getAssetBytes: id => store.getAssetBytes(id),
@@ -1650,6 +1663,43 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       } catch { /* 忽略错误 */ }
     }
     return c.json({ results })
+  })
+
+  // —— 测量原子（W4.2，measurements/service.ts；与 MCP insert_measurement / list_measurements 对应） ——
+
+  /** 绑定一个测量（来源须已确认；以本人对来源的权限）。返回 m_id，编辑器在光标处插入 [@m:id]。 */
+  app.post('/api/docs/:id/measurements', async c => {
+    const row = owned(c)
+    if (!row) return c.json({ error: 'not found' }, 404)
+    const body = await c.req.json<{ source?: string; lesion_id?: string; source_id?: string; field?: string; unit?: string; decimals?: number }>().catch(() => ({} as Record<string, never>))
+    const sourceId = String(body.source_id ?? body.lesion_id ?? '').trim()
+    if (!sourceId || !body.field) return c.json({ error: '请提供 lesion_id 与 field', code: 'bad_request' }, 400)
+    if (body.source && !(SOURCE_KINDS as readonly string[]).includes(body.source)) return c.json({ error: `不支持的测量来源 ${body.source}`, code: 'measurement_source_unknown' }, 400)
+    try {
+      const r = measurementSvc().bind(measureActor(c, row), row, { source: body.source as SourceKind | undefined, source_id: sourceId, field: String(body.field), unit: body.unit, decimals: body.decimals })
+      return c.json({ m_id: r.row.id, marker: `[@m:${r.row.id}]`, view: r.view }, 201)
+    } catch (err) {
+      if (err instanceof MeasurementError) return c.json({ error: err.message, code: err.code, hint: err.hint ?? null }, err.status)
+      return patientFailure(c, err)
+    }
+  })
+
+  app.get('/api/docs/:id/measurements', c => {
+    const row = owned(c)
+    if (!row) return c.json({ error: 'not found' }, 404)
+    const views = measureViews(c, row)
+    return c.json({ strict: measurementSvc().strict(row.id), measurements: store.listMeasurements(row.id).map(m => ({ ...m, view: views.get(m.id) })) })
+  })
+
+  /** 测量严格模式（禁止 AI 写入裸测量数字）：strict = true / false / null（null = 自动：有测量登记即开启）。只能由用户本人设置。 */
+  app.put('/api/docs/:id/measurements/policy', async c => {
+    const row = owned(c)
+    if (!row) return c.json({ error: 'not found' }, 404)
+    if (viaByReq.get(c.req.raw)?.via === 'ai') return c.json({ error: '测量严格模式是对 AI 的约束，只能由用户本人设置', code: 'forbidden' }, 403)
+    const body = await c.req.json<{ strict?: boolean | null }>().catch(() => ({} as { strict?: boolean | null }))
+    if (body.strict !== true && body.strict !== false && body.strict !== null) return c.json({ error: 'strict 须为 true、false 或 null', code: 'bad_request' }, 400)
+    store.setMeasurementStrict(row.id, body.strict, c.get('user'))
+    return c.json({ strict: measurementSvc().strict(row.id), explicit: store.measurementStrict(row.id) })
   })
 
   /** 用户按 DOI / PMID / 关键词模糊登记引用（Crossref / PubMed / OpenAlex 核实），返回 cite_id，编辑器在光标处插入引用。 */

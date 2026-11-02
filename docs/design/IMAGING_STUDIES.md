@@ -286,3 +286,11 @@ reading            submitted         finalized               amending
 - PACS 自动转发（C-STORE，T3.8）开启前 `DicomServerEnabled` 保持关闭。
 - 上传目前整批读入内存（默认单次上限 2 GB，`IMAGING_UPLOAD_MAX_MB`）。前端按 300 MB 分批；以后改成流式。
 - Orthanc 用官方维护的 `orthancteam/orthanc:26.9.1`（amd64 / arm64）；原先的 `jodogne/orthanc-plugins:1.12.4` 只有 amd64。配置文件挂到 `/etc/orthanc/heurion.json`，`${ORTHANC_PASSWORD}` 的环境变量替换已在本机验证（无口令 / 错口令均 401）。
+
+## 报告里的测量数字（测量原子，T2.5）
+
+报告里病灶的大小、体积、CT 值写成测量原子 `[@m:id]`，绑定已确认病灶的测量；医生重测后报告里的数字随之更新，AI 不能手写测量数字。设计与规则见 `docs/PLATFORM.md` §5.5.1。
+
+- 读病灶经 `ImagingStudyService.measurementSource`（读权限，影子病灶当不存在）；只能绑定 `status = confirmed` 的病灶。
+- 病灶被否决、撤销或被取代后，报告里对应的数字醒目标出，导出时注明。
+- 文档读者没有该患者权限时只看到绑定时的快照。

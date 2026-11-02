@@ -24,7 +24,7 @@ export interface PatchRender {
 
 // —— 记号 ——
 
-/** 一个记号：字符（含 \t）或原子（br、Word 行内原子、引用）。sig 用于对比（含格式标记）。 */
+/** 一个记号：字符（含 \t）或原子（br、Word 行内原子、引用、测量）。sig 用于对比（含格式标记）。 */
 interface Tok { sig: string; text: string | null; node: PMNode | null; marks: readonly Mark[]; link: boolean }
 
 const MARKED = new Set(['bold', 'italic', 'underline', 'sup', 'sub', 'code', 'link'])
@@ -41,6 +41,7 @@ function modelTokens(node: PMNode): Tok[] | null {
     } else if (child.type.name === 'hard_break') out.push({ sig: '⏎', text: null, node: child, marks: child.marks, link })
     else if (child.type.name === 'word_inline') out.push({ sig: `@w:${child.attrs.key}|${markSig(child.marks)}`, text: null, node: child, marks: child.marks, link })
     else if (child.type.name === 'citation') out.push({ sig: `@c:${child.attrs.cite_id}`, text: null, node: child, marks: child.marks, link })
+    else if (child.type.name === 'measurement') out.push({ sig: `@m:${child.attrs.m_id}|${markSig(child.marks)}`, text: null, node: child, marks: child.marks, link })
     else ok = false
   })
   return ok ? out : null

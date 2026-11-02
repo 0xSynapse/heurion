@@ -936,6 +936,10 @@ async function refresh(full: boolean): Promise<void> {
   if (session?.editor && d.citation_numbering) {
     session.editor.setCitationNumbering(d.citation_numbering)
   }
+  // 测量原子：服务端按当前用户的权限取到的值（来源病灶改了测量后，重新拉取文档详情即更新）
+  if (session?.editor && Array.isArray(d.measurements)) {
+    session.editor.setMeasurements(d.measurements)
+  }
   renderComments()
   renderSuggestions()
   renderVersions()
