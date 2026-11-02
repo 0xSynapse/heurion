@@ -695,6 +695,13 @@ export function formatSmd(smd: number | null | undefined, digits = 3): string {
 // 4. Table 1 主计算引擎
 // ==========================================
 
+const MISSING_VALUE_RE = /^(缺失|缺失值|未知|不详|未记录|未查|无数据|na|n\/a|null|none|nan|-|—|--|\.|\/)$/i
+export function isCellMissing(v: unknown): boolean {
+  if (v === undefined || v === null) return true
+  const s = String(v).trim()
+  return s === '' || MISSING_VALUE_RE.test(s)
+}
+
 export function generateTable1FromData(
   records: Record<string, unknown>[],
   options: Table1Options = {},
@@ -745,7 +752,7 @@ export function generateTable1FromData(
     const rawGroups = new Set<string>()
     for (const r of records) {
       const g = r[group_col]
-      if (g !== undefined && g !== null && String(g).trim() !== '') {
+      if (!isCellMissing(g)) {
         rawGroups.add(String(g).trim())
       }
     }
@@ -808,7 +815,7 @@ export function generateTable1FromData(
       const uniqueVals = new Set<string>()
       for (const r of records) {
         const v = r[col]
-        if (v !== undefined && v !== null && String(v).trim() !== '') {
+        if (!isCellMissing(v)) {
           validCount++
           const str = String(v).trim()
           uniqueVals.add(str)
@@ -830,7 +837,7 @@ export function generateTable1FromData(
 
     for (const r of records) {
       const v = r[col]
-      const isMissing = v === undefined || v === null || String(v).trim() === ''
+      const isMissing = isCellMissing(v)
       if (isMissing) {
         missingTotal++
         if (group_col) {
@@ -851,7 +858,7 @@ export function generateTable1FromData(
         for (const r of records) {
           if (filter && !filter(r)) continue
           const v = r[col]
-          if (v !== undefined && v !== null && String(v).trim() !== '') {
+          if (!isCellMissing(v)) {
             const num = Number(v)
             if (Number.isFinite(num)) out.push(num)
           }
@@ -979,7 +986,7 @@ export function generateTable1FromData(
       const categorySet = new Set<string>()
       for (const r of records) {
         const v = r[col]
-        if (v !== undefined && v !== null && String(v).trim() !== '') {
+        if (!isCellMissing(v)) {
           categorySet.add(String(v).trim())
         }
       }
@@ -998,7 +1005,7 @@ export function generateTable1FromData(
 
       for (const r of records) {
         const v = r[col]
-        if (v !== undefined && v !== null && String(v).trim() !== '') {
+        if (!isCellMissing(v)) {
           const lvl = String(v).trim()
           if (overallCategoryCounts[lvl] !== undefined) overallCategoryCounts[lvl]++
           if (group_col) {

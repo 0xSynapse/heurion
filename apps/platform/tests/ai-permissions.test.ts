@@ -74,7 +74,7 @@ async function setup() {
       return { isError: !!r.isError, data: JSON.parse(r.content.map(c => c.text ?? '').join('')) as any }
     }
   }
-  return { store, app, call, invoke, op, admin, member, org, connect, notices, ws }
+  return { store, docs, app, call, invoke, op, admin, member, org, connect, notices, ws }
 }
 
 describe('AI 的权限 = 用户的权限', () => {
@@ -182,5 +182,38 @@ describe('AI 的权限 = 用户的权限', () => {
     expect(r.data.status).toBe('pending_confirmation')
     expect((await t.call('POST', `/api/actions/${r.data.action_id}/confirm`, t.admin.token, {})).json.status).toBe('done')
     expect((await t.call('GET', '/api/tenant/templates', t.admin.token)).json.templates.find((x: any) => x.id === tpl.data.id).has_logo).toBe(true)
+  })
+
+  it('doc_manage: AI 在当前回合运行中调用 restore_version 不被自身 isBusy 409 拦截，且 revert_turn 缺省 turn_id 自动回退最新一轮', async () => {
+    const t = await setup()
+    const userId = t.member.user.id
+    const created = (await t.call('POST', '/api/docs', t.member.token, { title: '测试回滚文档', markdown: '初始第一段。' })).json
+    const docId = created.id as string
+    const asMember = await t.connect(userId)
+
+    // 保存版本 1，再由 AI 修改产生一轮改动
+    await asMember('doc_manage', { action: 'save_version', doc_id: docId })
+    const blockId = t.docs.get(docId).child(0).attrs.id as string
+    await asMember('doc_edit', {
+      doc_id: docId,
+      base_rev: t.docs.rev(docId),
+      ops: [{ op: 'replace_text', id: blockId, find: '初始第一段。', replace: 'AI 改坏的内容。' }],
+    })
+
+    // 1) revert_turn 不传 turn_id：自动回退最新一轮 AI 改动，不会拼出 /turns//revert 404
+    const revRes = await asMember('doc_manage', { action: 'revert_turn', doc_id: docId })
+    expect(revRes.isError).toBe(false)
+    expect(revRes.data.reverted_turn_id).toBe(`turn-${userId}`)
+    expect(t.docs.get(docId).textContent).toBe('初始第一段。')
+
+    // 2) 再做一次修改后，在 AI 自身回合中调用 restore_version 恢复到 seq=1：不被 isBusy 拦截为 409
+    await asMember('doc_edit', {
+      doc_id: docId,
+      base_rev: t.docs.rev(docId),
+      ops: [{ op: 'replace_text', id: blockId, find: '初始第一段。', replace: '第二次修改。' }],
+    })
+    const restoreRes = await asMember('doc_manage', { action: 'restore_version', doc_id: docId, seq: 1 })
+    expect(restoreRes.isError).toBe(false)
+    expect(t.docs.get(docId).textContent).toBe('初始第一段。')
   })
 })

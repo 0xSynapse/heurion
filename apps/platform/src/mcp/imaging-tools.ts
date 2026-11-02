@@ -24,6 +24,14 @@ import {
   exportFlowchartToVisioVdx,
   exportFlowchartToPptx,
 } from '../research/consort.ts'
+import { generateSurvivalAnalysis } from '../datasets/survival.ts'
+import {
+  generateLogisticRegression,
+  generateGrottaPlot,
+  generateSankeyDiagram,
+  generateUpSetPlot,
+  buildDefaultClinicalCohortRecords,
+} from '../datasets/clinical-plots.ts'
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] })
 const json = (value: unknown) => text(JSON.stringify(value, null, 2))
@@ -1211,17 +1219,18 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
   // 21. 医学论文全品类制图与原文件导出工作台 (imaging_medical_figure_studio)
   server.registerTool('imaging_medical_figure_studio', {
     description:
-      '医学论文 6 大类核心图表生成与原生桌面软件源文件导出工具：' +
-      '支持 (1) mechanism 机制图/图形摘要（BioRender/Figdraw/NIH BioArt 风格矢量图标 + Draw.io .drawio + 可编辑 PPTX + Illustrator 分层 SVG）；' +
-      '(2) wet_lab 临床与实验统计图（柱状散点图/箱线小提琴图/4PL药代剂量拟合 + GraphPad Prism .pzfx + R 脚本 .R + OriginPro .csv/.ogs）；' +
-      '(3) flowchart 患者筛选流程图（CONSORT 2010 + Draw.io .drawio + Visio .vdx + 可编辑 PPTX）；' +
-      '(4) bioinformatics 多组学生信图（火山图/ComplexHeatmap热图/GO-KEGG富集气泡图/单细胞UMAP + R 脚本 .R + 微生信/Hiplot 矩阵 .csv + Prism .pzfx）；' +
-      '(5) image_processing 医学影像/流式/病理切片（ImageJ 比例尺与多通道合并宏 .ijm / FlowJo 流式四象限圈门工作区 .wsp / 3D Slicer .mrml + .mrk.json + ITK-SNAP .txt）；' +
-      '(6) journal_assembly 顶刊多面板拼图排版（Nature/NEJM/Lancet/JAMA 栏宽规范、统一字体字号、Adobe Illustrator 分层 SVG + 600 DPI PNG + PPTX）。',
+      '医学论文 7 大类核心图表生成与原生桌面软件源文件导出工具：' +
+      '支持 (1) clinical_cohort 临床队列与预后图（Grotta mRS分布位移图 / 多阶段治疗轨迹 Sankey 桑基图 / 解剖部位共现 UpSet 图 / 多因素 Logistic OR 森林图 / Kaplan-Meier 生存曲线 + Prism .pzfx + R 脚本 .R + Illustrator SVG）；' +
+      '(2) mechanism 机制图/图形摘要（BioRender/Figdraw/NIH BioArt 风格矢量图标 + Draw.io .drawio + 可编辑 PPTX + Illustrator 分层 SVG）；' +
+      '(3) wet_lab 临床与实验统计图（柱状散点图/箱线小提琴图/4PL药代剂量拟合 + GraphPad Prism .pzfx + R 脚本 .R + OriginPro .csv/.ogs）；' +
+      '(4) flowchart 患者筛选流程图（CONSORT 2010 + Draw.io .drawio + Visio .vdx + 可编辑 PPTX）；' +
+      '(5) bioinformatics 多组学生信图（火山图/ComplexHeatmap热图/GO-KEGG富集气泡图/单细胞UMAP + R 脚本 .R + 微生信/Hiplot 矩阵 .csv + Prism .pzfx）；' +
+      '(6) image_processing 医学影像/流式/病理切片（ImageJ 比例尺与多通道合并宏 .ijm / FlowJo 流式四象限圈门工作区 .wsp / 3D Slicer .mrml + .mrk.json + ITK-SNAP .txt）；' +
+      '(7) journal_assembly 顶刊多面板拼图排版（Nature/NEJM/Lancet/JAMA 栏宽规范、统一字体字号、Adobe Illustrator 分层 SVG + 600 DPI PNG + PPTX）。',
     inputSchema: {
       category: z
-        .enum(['mechanism', 'wet_lab', 'flowchart', 'bioinformatics', 'image_processing', 'journal_assembly'])
-        .describe('图表大类：mechanism | wet_lab | flowchart | bioinformatics | image_processing | journal_assembly'),
+        .enum(['clinical_cohort', 'mechanism', 'wet_lab', 'flowchart', 'bioinformatics', 'image_processing', 'journal_assembly', 'gallery_manage'])
+        .describe('图表大类：clinical_cohort | mechanism | wet_lab | flowchart | bioinformatics | image_processing | journal_assembly | gallery_manage（成果库列表/重命名/删除/批量操作）'),
       title: z.string().optional().describe('图表主标题'),
       spec: z.record(z.string(), z.any()).describe('对应图表类别的详细配置参数与真实实验/临床数据'),
       save_asset: z.boolean().optional().describe('是否将生成的 SVG/PNG 保存为平台文档资产供文稿直接引用，默认 true'),
@@ -1229,10 +1238,122 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
   }, async ({ category, title, spec, save_asset }) => {
     try {
       const payload: Record<string, any> = { ...(spec as Record<string, any>), title: title || (spec as any).title || 'Medical Publication Figure' }
+      if (category === 'gallery_manage') {
+        const action = String(payload.action || 'list')
+        if (action === 'list') {
+          return json({ status: 'success', figures: store.provenanceAssets(claims.u) })
+        }
+        if (!claims.p.includes('write')) return fail('forbidden', '当前令牌没有写入或修改资产权限')
+        const normalizeFigName = (raw: unknown): string => {
+          const base = String(raw || '').trim().replace(/[\\/:*?"<>|]/g, '_').replace(/\.svg$/i, '').trim()
+          return (base || 'Figure') + '.svg'
+        }
+        if (action === 'rename') {
+          const aid = String(payload.asset_id || payload.id || '').trim()
+          const name = String(payload.name || payload.title || '').trim()
+          if (!aid || !name) return fail('invalid_input', '重命名需提供 asset_id 与 name')
+          const asset = store.getAsset(aid)
+          if (!asset || asset.owner !== claims.u) return fail('not_found', '图表不存在或无权操作')
+          const cleanName = normalizeFigName(name)
+          store.renameAsset(aid, cleanName)
+          return json({ status: 'success', ok: true, id: aid, name: cleanName })
+        }
+        if (action === 'delete') {
+          const aid = String(payload.asset_id || payload.id || '').trim()
+          if (!aid) return fail('invalid_input', '删除需提供 asset_id')
+          const asset = store.getAsset(aid)
+          if (!asset || asset.owner !== claims.u) return fail('not_found', '图表不存在或无权删除')
+          store.deleteAsset(aid)
+          return json({ status: 'success', ok: true, id: aid })
+        }
+        if (action === 'batch_delete' || action === 'delete_batch') {
+          const ids = Array.isArray(payload.ids) ? payload.ids.map((x: unknown) => String(x || '').trim()).filter(Boolean) : []
+          let deletedCount = 0
+          for (const id of ids) {
+            const asset = store.getAsset(id)
+            if (asset && asset.owner === claims.u && store.deleteAsset(id)) deletedCount++
+          }
+          return json({ status: 'success', ok: true, affected: deletedCount })
+        }
+        if (action === 'batch_rename' || action === 'rename_prefix') {
+          const ids = Array.isArray(payload.ids) ? payload.ids.map((x: unknown) => String(x || '').trim()).filter(Boolean) : []
+          const prefix = String(payload.prefix || 'Figure').trim().replace(/[\\/:*?"<>|]/g, '_') || 'Figure'
+          let renamed = 0
+          ids.forEach((id: string, idx: number) => {
+            const row = store.getAsset(id)
+            if (!row || row.owner !== claims.u) return
+            const newName = `${prefix}_${String(idx + 1).padStart(2, '0')}.svg`
+            if (store.renameAsset(id, newName)) renamed++
+          })
+          return json({ status: 'success', ok: true, affected: renamed, prefix })
+        }
+        return fail('invalid_action', `不支持的 gallery_manage 动作: ${action}`)
+      }
       let svgOut: string | undefined
       let nativeSummary: Record<string, unknown> = {}
 
-      if (category === 'mechanism') {
+      if (category === 'clinical_cohort') {
+        const subtype = String(payload.subtype || payload.plotType || payload.plot_type || 'grotta') as 'grotta' | 'sankey' | 'upset' | 'logistic' | 'survival'
+        const did = typeof payload.dataset_id === 'string' && payload.dataset_id.trim() ? payload.dataset_id.trim() : undefined
+        const fallbackRecords = () => (Array.isArray(payload.records) && payload.records.length > 0 ? payload.records : buildDefaultClinicalCohortRecords())
+        let res: any
+        if (subtype === 'grotta') {
+          const opts = {
+            group_col: payload.group_col || '第一次治疗方式',
+            score_col: payload.score_col || '确诊时mRS',
+            score_order: Array.isArray(payload.score_order) ? payload.score_order : undefined,
+            labels: payload.labels,
+            title: payload.title,
+          }
+          res = did && deps.datasets ? deps.datasets.grotta(claims.u, did, opts) : generateGrottaPlot(fallbackRecords(), opts)
+        } else if (subtype === 'sankey') {
+          const opts = {
+            stage_cols: Array.isArray(payload.stage_cols) && payload.stage_cols.length >= 2 ? payload.stage_cols : (!payload.sequence_col ? ['第一次治疗方式', '闭塞程度', '治疗后出血'] : undefined),
+            sequence_col: payload.sequence_col,
+            code_map: payload.code_map,
+            outcome_col: payload.outcome_col,
+            max_nodes_per_stage: payload.max_nodes_per_stage,
+            labels: payload.labels,
+            title: payload.title,
+          }
+          res = did && deps.datasets ? deps.datasets.sankey(claims.u, did, opts) : generateSankeyDiagram(fallbackRecords(), opts)
+        } else if (subtype === 'upset') {
+          const opts = {
+            binary_cols: Array.isArray(payload.binary_cols) && payload.binary_cols.length >= 2 ? payload.binary_cols : ['额叶', '颞叶', '顶叶', '枕叶', '基底节', '脑室'],
+            outcome_col: payload.outcome_col || '治疗后出血',
+            positive_value: payload.positive_value,
+            max_intersections: payload.max_intersections,
+            labels: payload.labels,
+            title: payload.title,
+          }
+          res = did && deps.datasets ? deps.datasets.upset(claims.u, did, opts) : generateUpSetPlot(fallbackRecords(), opts)
+        } else if (subtype === 'logistic') {
+          const opts = {
+            outcome_col: payload.outcome_col || '治疗后出血',
+            covariates: Array.isArray(payload.covariates) && payload.covariates.length >= 1 ? payload.covariates : ['供血动脉扩张', '单一动脉供血', '基底节', '年龄'],
+            positive_value: payload.positive_value,
+            labels: payload.labels,
+            title: payload.title,
+          }
+          res = did && deps.datasets ? deps.datasets.logistic(claims.u, did, opts) : generateLogisticRegression(fallbackRecords(), opts)
+        } else {
+          const opts = {
+            time_col: payload.time_col || 'followup_months',
+            start_date_col: payload.start_date_col,
+            event_date_col: payload.event_date_col,
+            censor_date_col: payload.censor_date_col,
+            default_censor_date: payload.default_censor_date,
+            event_col: payload.event_col || '治疗后出血',
+            group_col: payload.group_col || '第一次治疗方式',
+            covariates: Array.isArray(payload.covariates) ? payload.covariates : undefined,
+            time_unit: payload.time_unit || 'Months',
+            title: payload.title,
+          }
+          res = did && deps.datasets ? deps.datasets.survival(claims.u, did, opts) : generateSurvivalAnalysis(fallbackRecords() as any, opts)
+        }
+        svgOut = res.native_exports?.illustrator_svg || res.km_svg || res.svg || res.forest_svg
+        nativeSummary = res
+      } else if (category === 'mechanism') {
         const res = renderMechanismDiagram({
           title: payload.title,
           subtitle: payload.subtitle,

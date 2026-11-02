@@ -10,10 +10,12 @@ import { DOI as DOI_PATTERN } from '../ops/citation-check.ts'
  * 平台导出的文件下载后再上传时，平台引用已变成纯文字「[n]」、文献表也成了文档内容，同样走上面的规则，不会越积越多。
  */
 
-/** 文献表标题：「参考文献」「References」「五、参考文献：」等。 */
-export const REF_TITLE = /^(?:[一二三四五六七八九十\d]+[.、\s]*)?(?:参考文献|references|bibliography)[:：]?$/i
-/** 文献表条目：「[12] 作者. 标题…」，也认 GB/T 7714 常见的「[12]作者」（括号后不空格）与全角括号「［12］」。 */
-const REF_ENTRY = /^[[［](\d+)[\]］]\s*(\S[\s\S]*)$/
+/** 文献表标题：「参考文献」「参考资料」「附-参考资料：」「References」「五、参考文献：」等。 */
+export const REF_TITLE = /^(?:(?:附[-—:：\s]*)|(?:[一二三四五六七八九十\d]+[.、\s]*))?(?:参考文献|参考资料|引用文献|references|bibliography)[:：]?$/i
+/** 文献表条目：「[12] 作者. 标题…」，也认 GB/T 7714 常见的「[12]作者」（括号后不空格）、全角括号「［12］」与实心方头括号「【12】」。 */
+const REF_ENTRY = /^[[［【](\d+)[\]］】]\s*(\S[\s\S]*)$/
+/** 带文献表标题时也认「1、…」「1. …」纯数字序号段落。 */
+const PLAIN_REF_ENTRY = /^(\d+)[.、．]\s*(\S[\s\S]*)$/
 const DOI = new RegExp(DOI_PATTERN.source, 'gi')
 
 export interface CitationLike { id: string; doi: string; formatted: string }
@@ -75,6 +77,23 @@ export function referencePlan(doc: PMNode, citations: readonly CitationLike[]): 
   while (i >= 0 && isBlank(i)) i--
   const entries: Array<{ idx: number; n: number; text: string }> = []
   for (let e = i >= 0 ? entryAt(i) : null; e; e = i >= 0 ? entryAt(i) : null) { entries.unshift(e); i--; while (i >= 0 && isBlank(i)) i-- }
+  if (entries.length === 0 && i >= 0) {
+    // 若末尾是「1、…」「1. …」格式的段落，且上方紧邻「参考文献 / 附-参考资料」标题，也视为已有文献表
+    let scan = i
+    const plainEntries: Array<{ idx: number; n: number; text: string }> = []
+    while (scan >= 0) {
+      const node = doc.child(scan)
+      const m = node.type.name === 'paragraph' ? PLAIN_REF_ENTRY.exec(node.textContent.trim()) : null
+      if (!m) break
+      plainEntries.unshift({ idx: scan, n: Number(m[1]), text: m[2]! })
+      scan--
+      while (scan >= 0 && isBlank(scan)) scan--
+    }
+    if (plainEntries.length > 0 && scan >= 0 && (doc.child(scan).type.name === 'heading' || doc.child(scan).type.name === 'paragraph') && REF_TITLE.test(doc.child(scan).textContent.trim())) {
+      entries.push(...plainEntries)
+      i = scan
+    }
+  }
   if (i >= 0 && doc.child(i).type.name === 'ordered_list') {
     let prev = i - 1
     while (prev >= 0 && isBlank(prev)) prev--

@@ -564,3 +564,539 @@ describe('兼容旧数据', () => {
   })
 })
 
+describe('全格式导入 / 编辑 / 导出一致性回归', () => {
+  it('PDF 导入为 doc 后修改并调用 docxFor 导出：不因 PDF 包字节非 ZIP 而崩溃，且改动完整导出', async () => {
+    const { docxFor } = await import('../src/convert/exports.ts')
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const ops = new OpService(docs)
+    const row = docs.create({
+      owner: 'u',
+      title: 'PDF 论文',
+      content: schema.node('doc', null, parseBlocks('# 临床研究\n\n原始结论文本。')),
+      source: 'import',
+    })
+    // 模拟 PDF 导入：doc_packages 里存的是 %PDF-1.4 原始字节
+    store.putPackage(row.id, 'pdf', strToU8('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF'))
+    const paraId = docs.get(row.id).child(1).attrs.id as string
+    ops.edit({
+      doc_id: row.id,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: paraId, find: '原始结论文本', replace: '修改后的临床结论' }],
+    }, { actor: 'user', turnId: null })
+
+    const out = docxFor(docs, row.id)
+    const body = bodyOf(out.bytes)
+    expect(body).toContain('修改后的临床结论')
+    expect(body).not.toContain('原始结论文本')
+  })
+
+  it('duplicateDoc 复制导入且已修改的 docx：副本保留导入基线与原表样式，导出不丢格式', async () => {
+    const { duplicateDoc } = await import('../src/model/duplicate.ts')
+    const { docxFor } = await import('../src/convert/exports.ts')
+    const tbl = `<w:tbl><w:tblPr><w:tblStyle w:val="CustomGrid"/></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:shd w:val="clear" w:fill="E8F0FE"/></w:tcPr><w:p><w:r><w:t>原表内容</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`
+    const t = importInto(docx(tbl))
+    const cellParaId = t.docs.get(t.docId).child(0).child(0).child(0).child(0).attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: cellParaId, find: '原表内容', replace: '已修改内容' }],
+    }, { actor: 'user', turnId: null })
+
+    const origRow = t.store.getDoc(t.docId)!
+    const copyRow = duplicateDoc(t.docs, origRow, 'u')
+    const out = docxFor(t.docs, copyRow.id)
+    const body = bodyOf(out.bytes)
+    expect(body).toContain('已修改内容')
+    expect(body).toContain('CustomGrid')
+    expect(body).toContain('w:fill="E8F0FE"')
+  })
+
+  it('Word 原生公式 <m:oMath> 导入、打补丁修改前后文字、导出：公式不丢失且自动声明 xmlns:m', () => {
+    const mathXml = '<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>E=mc2</m:t></m:r></m:oMath>'
+    const paraXml = `<w:p><w:r><w:t>能量公式为</w:t></w:r>${mathXml}<w:r><w:t>，其中 c 为光速。</w:t></w:r></w:p>`
+    const t = importInto(docx(paraXml))
+    const para = t.docs.get(t.docId).child(0)
+    expect(para.textContent).toContain('能量公式为')
+    const id = para.attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id, find: '能量公式为', replace: '爱因斯坦质能方程为' }],
+    }, { actor: 'user', turnId: null })
+
+    const outBytes = t.exportNow().bytes
+    const docXml = strFromU8(unzipSync(outBytes)['word/document.xml']!)
+    expect(docXml).toContain('xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"')
+    expect(docXml).toContain('爱因斯坦质能方程为')
+    expect(docXml).toContain('<m:t>E=mc2</m:t>')
+  })
+
+  it('导入的 docx 缺少 Quote / Code 样式时，设置块样式或插入代码块后自动补齐到 styles.xml', () => {
+    const t = importInto(docx(p('引用内容')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [
+        { op: 'set_block_style', id, style: 'Quote' },
+        { op: 'insert_after', anchor_id: id, markdown: '```\nconst x = 1\n```' },
+      ],
+    }, { actor: 'user', turnId: null })
+
+    const files = unzipSync(t.exportNow().bytes)
+    const docXml = strFromU8(files['word/document.xml']!)
+    const stylesXml = strFromU8(files['word/styles.xml']!)
+    expect(docXml).toContain('<w:pStyle w:val="Quote"/>')
+    expect(docXml).toContain('<w:pStyle w:val="Code"/>')
+    expect(stylesXml).toContain('w:styleId="Quote"')
+    expect(stylesXml).toContain('w:styleId="Code"')
+  })
+
+  it('deckSchema 支持 suggest 修订模式与 revertByNodes 形状/页面回退，且 pptx 导出同步修改后的表格 tcPr 与 text_style', async () => {
+    const { deckSchema } = await import('../src/model/deck-schema.ts')
+    const { pptxTemplate } = await import('../src/convert/pptx-template.ts')
+    const { newTemplateDeck } = await import('../src/ops/deck.ts')
+    const { pptxFor } = await import('../src/convert/exports.ts')
+    const { revertByNodes } = await import('../src/ops/revert.ts')
+
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const ops = new OpService(docs)
+    const baseBytes = pptxTemplate('clinical')
+    const row = docs.create({ owner: 'u', title: '汇报', kind: 'deck', content: newTemplateDeck('汇报', 'clinical') })
+    store.putPackage(row.id, 'pptx', baseBytes)
+
+    const slideId = docs.get(row.id).firstChild!.attrs.id as string
+    // 1. suggest 模式下向幻灯片新增形状不再抛 Unsupported attribute name: suggest_author
+    ops.edit({
+      doc_id: row.id,
+      base_rev: 0,
+      mode: 'suggest',
+      ops: [{ op: 'add_shape', slide_id: slideId, markdown: '建议新增卡片', x: 100, y: 100, w: 200, h: 60 }],
+    }, { actor: 'user', turnId: null })
+    const withSug = docs.get(row.id)
+    let sugShape: any = null
+    withSug.descendants(n => { if (n.type.name === 'shape' && n.attrs.suggest === 'insert') sugShape = n })
+    expect(sugShape).not.toBeNull()
+    expect(sugShape.attrs.suggest_author).toBe('用户')
+
+    // 2. apply 模式添加表格并修改样式，验证 revertByNodes 能回退形状改动
+    const beforeTable = docs.get(row.id)
+    const addRes = ops.edit({
+      doc_id: row.id,
+      base_rev: docs.rev(row.id),
+      mode: 'apply',
+      ops: [{ op: 'add_table', slide_id: slideId, rows: [['指标', '数值'], ['ORR', '68%']], x: 80, y: 180, w: 400 }],
+    }, { actor: 'ai', turnId: 't_tbl' })
+    const tableShapeId = addRes.results[0]!.ids[0]!
+    const reverted = revertByNodes(docs.get(row.id), beforeTable, [{ node_id: tableShapeId, kind: 'added' }], new Set())
+    let foundAfterRevert = false
+    reverted.doc.descendants(n => { if (n.attrs.id === tableShapeId) foundAfterRevert = true })
+    expect(foundAfterRevert).toBe(false)
+
+    // 3. 带 text_style 标记的形状再调 set_text_style：导出时使用最新颜色与字号，且 <a:solidFill> 在 <a:latin> 之前
+    const shapeNode = docs.get(row.id).firstChild!.firstChild!
+    const tsMark = deckSchema.marks.text_style!.create({ font_family: 'SimHei', font_size: '14pt', color: '#112233' })
+    const rprMark = deckSchema.marks.rpr!.create({ xml: '<a:rPr lang="zh-CN" sz="1400"><a:latin typeface="Arial"/></a:rPr>' })
+    const customShape = deckSchema.node('shape', { id: 'sh_ts_test', kind: 'text', x: 100000, y: 100000, w: 2000000, h: 500000 }, [
+      deckSchema.node('paragraph', null, [deckSchema.text('测试样式优先级', [rprMark, tsMark])]),
+    ])
+    const slide0 = docs.get(row.id).firstChild!
+    const nextSlide0 = slide0.type.create(slide0.attrs, [...Array.from({ length: slide0.childCount }, (_, i) => slide0.child(i)), customShape])
+    docs.commit(row.id, docs.get(row.id).type.create(null, [nextSlide0]), { actor: 'user', turnId: null, ops: [] })
+    ops.edit({
+      doc_id: row.id,
+      base_rev: docs.rev(row.id),
+      mode: 'apply',
+      ops: [{ op: 'set_text_style', shape_id: 'sh_ts_test', color: 'FF0000', size: 28 }],
+    }, { actor: 'user', turnId: null })
+
+    const exported = pptxFor(docs, row.id)
+    const slideXml = strFromU8(unzipSync(exported.bytes)['ppt/slides/slide1.xml']!)
+    expect(slideXml).toContain('测试样式优先级')
+    expect(slideXml).toContain('sz="2800"')
+    expect(slideXml).toContain('<a:srgbClr val="FF0000"/>')
+    expect(slideXml).not.toContain('112233')
+    const rprMatch = /<a:rPr[^>]*>([\s\S]*?)<\/a:rPr><a:t>测试样式优先级/.exec(slideXml)
+    expect(rprMatch).not.toBeNull()
+    expect(rprMatch![1]!.indexOf('<a:solidFill>')).toBeLessThan(rprMatch![1]!.indexOf('<a:latin'))
+    void shapeNode
+  })
+
+  it('exportMarkdown 与 renderHtml 正确处理 word_inline 与 text_style，不泄露 [@w:key] 内部标记', async () => {
+    const { exportMarkdown, renderHtml } = await import('../src/views/render.ts')
+    const mathInline = schema.node('word_inline', { key: 'w1', kind: 'object', text: '公式：a+b=c', xml: '<m:oMath/>' })
+    const noteInline = schema.node('word_inline', { key: 'w2', kind: 'footnote', text: '第一作者脚注', xml: '<w:r/>' })
+    const styledText = schema.text('重点结论', [schema.marks.text_style!.create({ color: '#DC2626', font_size: '16pt' })])
+    const doc = schema.node('doc', null, [
+      schema.node('paragraph', { id: 'p1' }, [schema.text('根据'), mathInline, schema.text('可得'), styledText, noteInline]),
+    ])
+
+    const md = exportMarkdown(doc, [])
+    expect(md).not.toContain('[@w:')
+    expect(md).toContain('[公式：a+b=c]')
+    expect(md).toContain('[注：第一作者脚注]')
+
+    const html = renderHtml(doc, [], id => `/assets/${id}`)
+    expect(html).toContain('[公式：a+b=c]')
+    expect(html).toContain('title="第一作者脚注"')
+    expect(html).toContain('color:#DC2626')
+  })
+
+  it('buildPdfDeck 将 108 DPI（1440×810）页面坐标与字号缩放到 960×540pt 幻灯片画布内，不溢出边界', async () => {
+    const { buildPdfDeck } = await import('../src/convert/pdf-import.ts')
+    const { emu } = await import('../src/model/deck-schema.ts')
+    const { doc } = buildPdfDeck([
+      {
+        number: 1,
+        width: 1440,
+        height: 810,
+        images: [],
+        lines: [
+          { text: 'SLIDE TITLE ON 108DPI', top: 75, left: 120, width: 600, height: 36, size: 36, bold: true },
+          { text: 'Bottom right card text', top: 720, left: 900, width: 450, height: 24, size: 18, bold: false },
+        ],
+      },
+    ], { baseName: 'deck' })
+
+    const slide = doc.firstChild!
+    slide.forEach(sh => {
+      if (sh.type.name !== 'shape') return
+      expect((sh.attrs.x as number) + (sh.attrs.w as number)).toBeLessThanOrEqual(emu(960))
+      expect((sh.attrs.y as number) + (sh.attrs.h as number)).toBeLessThanOrEqual(emu(540))
+    })
+  })
+})
+
+describe('全链路业务流 Edge Cases（导入 → 编辑/审阅/协同/回滚/复制 → 导出）', () => {
+  it('Edge 1: Word 表格含 <w:sdt> 内容控件 + 单元格内含行内图片(签名章)与公式，同时改文字并新增行后导出', () => {
+    const mathXml = `<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>E=mc2</m:t></m:r></m:oMath>`
+    const tblBody = `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/></w:tblPr>` +
+      `<w:tr><w:tc><w:p><w:r><w:t>项目</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>填写内容</w:t></w:r></w:p></w:tc></w:tr>` +
+      `<w:sdt><w:sdtContent><w:tr>` +
+        `<w:tc><w:p><w:r><w:t>科主任签字</w:t></w:r></w:p></w:tc>` +
+        `<w:sdt><w:sdtContent><w:tc><w:p><w:r><w:t>同意申报（</w:t></w:r>${mathXml}<w:r><w:t>）</w:t></w:r>${drawing('rId20')}</w:p></w:tc></w:sdtContent></w:sdt>` +
+      `</w:tr></w:sdtContent></w:sdt>` +
+      `</w:tbl>`
+    const original = docx(tblBody, { rels: IMAGE_REL, files: { 'word/media/image1.png': PNG } })
+    const t = importInto(original)
+
+    // 1. 验证 <w:sdt> 包装的行和单元格在导入时完整解包
+    const tblNode = t.docs.get(t.docId).firstChild!
+    expect(tblNode.type.name).toBe('table')
+    expect(tblNode.childCount).toBe(2)
+    expect(tblNode.child(1).child(0).textContent).toBe('科主任签字')
+    const signCellPara = tblNode.child(1).child(1).firstChild!
+    expect(signCellPara.textContent).toContain('同意申报')
+
+    // 2. 修改含签名章与公式的单元格文字（验证 patchedTable 对含 <w:drawing> 单元格保留原图和公式）
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: signCellPara.attrs.id as string, find: '同意申报', replace: '优先推荐申报' }],
+    }, { actor: 'user', turnId: null })
+
+    const outPatched = bodyOf(t.exportNow().bytes)
+    expect(outPatched).toContain('优先推荐申报')
+    expect(outPatched).toContain('r:embed="rId20"')
+    expect(outPatched).toContain('E=mc2')
+
+    // 3. 在同一张表中再新增一行（触发 table() 整表重生成路径，验证已编辑单元格中的行内公式和签名图片仍不丢失）
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'table_insert_rows', id: tblNode.attrs.id as string, at: 2, rows: [['伦理委员会', '已备案']] }],
+    }, { actor: 'user', turnId: null })
+
+    const outRegen = bodyOf(t.exportNow().bytes)
+    expect(outRegen).toContain('优先推荐申报')
+    expect(outRegen).toContain('伦理委员会')
+    expect(outRegen).toContain('已备案')
+    expect(outRegen).toContain('r:embed="rId20"')
+    expect(outRegen).toContain('E=mc2')
+  })
+
+  it('Edge 2: Word 独立图片紧跟 Caption 题注 vs 图文混排段落紧跟 Caption 题注的导入、修改与导出', () => {
+    const body = [
+      `<w:p>${drawing('rId20')}</w:p>`,
+      p('图 1：独立图片题注', '<w:pStyle w:val="Caption"/>'),
+      `<w:p><w:r><w:t>如右图所示</w:t></w:r>${drawing('rId20')}</w:p>`,
+      p('图 2：图文混排下方的题注段落', '<w:pStyle w:val="Caption"/>'),
+    ].join('')
+    const original = docx(body, { rels: IMAGE_REL, files: { 'word/media/image1.png': PNG } })
+    const t = importInto(original)
+
+    const doc0 = t.docs.get(t.docId)
+    // 第 1 个块是合并了 Caption 的独立 figure
+    expect(doc0.child(0).type.name).toBe('figure')
+    expect(doc0.child(0).attrs.caption).toBe('图 1：独立图片题注')
+
+    // 1. 未修改直接导出：两个题注与两处图片均完整保留
+    const untouchedXml = bodyOf(t.exportNow().bytes)
+    expect(untouchedXml).toContain('图 1：独立图片题注')
+    expect(untouchedXml).toContain('图 2：图文混排下方的题注段落')
+    expect(untouchedXml.match(/r:embed="rId20"/g)?.length).toBe(2)
+
+    // 2. 修改图文混排文字后导出：附带的 figure 与下方的图 2 题注均不丢失
+    const inlineParaId = doc0.child(1).attrs.id as string
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: inlineParaId, find: '如右图所示', replace: '详见附图说明' }],
+    }, { actor: 'user', turnId: null })
+
+    const editedXml = bodyOf(t.exportNow().bytes)
+    expect(editedXml).toContain('详见附图说明')
+    expect(editedXml).toContain('图 1：独立图片题注')
+    expect(editedXml).toContain('图 2：图文混排下方的题注段落')
+    expect(editedXml.match(/r:embed="rId20"/g)?.length).toBe(2)
+  })
+
+  it('Edge 3: 列表项 (list_item) 在 suggest 审阅模式下连续 replace_text + set_text_style 后采纳并导出', async () => {
+    const { resolveSuggestions } = await import('../src/ops/suggest.ts')
+    const original = docx([li('初筛入组标准：年龄≥18岁', 0), li('排除标准：严重肝肾功能不全', 0)].join(''))
+    const t = importInto(original)
+    const listBlock = t.docs.get(t.docId).firstChild!
+    const li1Id = listBlock.firstChild!.attrs.id as string
+
+    // 第一步：AI 在 suggest 模式下修改列表项文字
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'suggest',
+      ops: [{ op: 'replace_text', id: li1Id, find: '年龄≥18岁', replace: '年龄 18–75 岁' }],
+    }, { actor: 'ai', turnId: 't1' })
+
+    // 第二步：AI 紧接着对同一个 list_item ID 继续追加文字修改并设置加粗与高亮色（此时 list_item 内已有 [delete_p, insert_p]）
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'suggest',
+      ops: [
+        { op: 'replace_text', id: li1Id, find: '年龄 18–75 岁', replace: '年龄 18–75 周岁（含边界）' },
+        { op: 'set_text_style', id: li1Id, bold: true, color: '#DC2626', range: { from: 9, to: 16 } },
+      ],
+    }, { actor: 'ai', turnId: 't1' })
+
+    // 第三步：用户在审阅面板全部采纳
+    const accepted = resolveSuggestions(t.docs.get(t.docId), null, true)
+    t.docs.commit(t.docId, accepted, { actor: 'user', turnId: null, ops: [{ op: 'suggestion', accept: true }] })
+
+    const outXml = bodyOf(t.exportNow().bytes)
+    expect(outXml).toContain('初筛入组标准：年龄')
+    expect(outXml).toContain(' 18–75 ')
+    expect(outXml).toContain('周岁（含边界）')
+    expect(outXml).not.toContain('年龄≥18岁')
+    expect(outXml).toContain('<w:numPr>')
+    expect(outXml).toContain('w:val="DC2626"')
+    expect(outXml).toContain('<w:b/>')
+  })
+
+  it('Edge 4: 复杂协同流（AI 审阅建议 + 用户二次修改待采纳块 + revertByNodes 智能跳过用户已改对偶块 + 导出一致性）', async () => {
+    const { revertByNodes } = await import('../src/ops/revert.ts')
+    const { resolveSuggestions } = await import('../src/ops/suggest.ts')
+    const { exportMarkdown } = await import('../src/views/render.ts')
+    const original = docx([
+      p('第一段：研究背景原始表述。'),
+      p('第二段：研究方法原始表述。'),
+      p('第三段：統計分析原始表述。'),
+    ].join(''))
+    const t = importInto(original)
+    const doc0 = t.docs.get(t.docId)
+    const p1 = doc0.child(0).attrs.id as string
+    const p2 = doc0.child(1).attrs.id as string
+    const p3 = doc0.child(2).attrs.id as string
+
+    // 1. AI Turn 10 在 suggest 模式下同时修改第一段和第二段
+    const turn10 = t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'suggest',
+      ops: [
+        { op: 'replace_text', id: p1, find: '原始表述', replace: 'AI 修订版 A' },
+        { op: 'replace_text', id: p2, find: '原始表述', replace: 'AI 修订版 B' },
+      ],
+    }, { actor: 'ai', turnId: 'turn-10' })
+
+    // 2. 用户在采纳前直接手动微调了第一段的 AI 建议块（insert 块），但未触碰第二段
+    const docAfterAi = t.docs.get(t.docId)
+    let p1InsertId = ''
+    docAfterAi.forEach(n => {
+      if (n.attrs.suggest === 'insert' && n.attrs.suggest_of === p1) p1InsertId = n.attrs.id as string
+    })
+    expect(p1InsertId).toBeTruthy()
+
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: p1InsertId, find: 'AI 修订版 A', replace: 'AI+医生联合定稿版 A' }],
+    }, { actor: 'user', turnId: null })
+
+    // 3. 触发 revertByNodes 撤销 AI Turn 10：
+    //    - 第二段未被用户触碰，应完整回滚回「第二段：研究方法原始表述。」
+    //    - 第一段因用户已基于 AI 建议块做了二次编辑，其配对的 delete(p1) 与 insert(p1InsertId) 必须成对保留，不能拆散导致段落重复
+    const userTouched = t.store.userTouchedSince(t.docId, turn10.rev)
+    const revRes = revertByNodes(t.docs.get(t.docId), doc0, turn10.changes, userTouched)
+    expect(revRes.skipped).toContain(p1)
+    expect(revRes.skipped).toContain(p1InsertId)
+    t.docs.commit(t.docId, revRes.doc, { actor: 'user', turnId: null, ops: [{ op: 'revert' }] })
+
+    // 4. 用户采纳剩余的建议（即第一段的联合定稿），并修改第三段
+    const accepted = resolveSuggestions(t.docs.get(t.docId), null, true)
+    t.docs.commit(t.docId, accepted, { actor: 'user', turnId: null, ops: [{ op: 'suggestion', accept: true }] })
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: p3, find: '原始表述', replace: '最终统计方案' }],
+    }, { actor: 'user', turnId: null })
+
+    const finalDoc = t.docs.get(t.docId)
+    expect(finalDoc.childCount).toBe(3)
+    expect(finalDoc.child(0).textContent).toBe('第一段：研究背景AI+医生联合定稿版 A。')
+    expect(finalDoc.child(1).textContent).toBe('第二段：研究方法原始表述。')
+    expect(finalDoc.child(2).textContent).toBe('第三段：統計分析最终统计方案。')
+
+    const outDocx = bodyOf(t.exportNow().bytes)
+    expect(outDocx).toContain('第一段：研究背景AI+医生联合定稿版 A。')
+    expect(outDocx).not.toContain('第一段：研究背景原始表述。')
+    expect(outDocx).toContain('第二段：研究方法原始表述。')
+    expect(outDocx).not.toContain('AI 修订版 B')
+    expect(outDocx).toContain('第三段：統計分析最终统计方案。')
+
+    const outMd = exportMarkdown(finalDoc, [])
+    expect(outMd).toContain('第一段：研究背景AI+医生联合定稿版 A。')
+    expect(outMd).toContain('第二段：研究方法原始表述。')
+    expect(outMd).toContain('第三段：統計分析最终统计方案。')
+  })
+
+  it('Edge 5: AI 对章节标题执行多段 replace_block 时，不得静默吞并用户在 base_rev 之后刚改过的正文段落', () => {
+    const original = docx([
+      p('1 研究背景', '<w:pStyle w:val="Heading1"/>'),
+      p('本节第一段：患者基线特征。'),
+    ].join(''))
+    const t = importInto(original)
+    const doc0 = t.docs.get(t.docId)
+    const h1 = doc0.child(0).attrs.id as string
+    const p1 = doc0.child(1).attrs.id as string
+    const aiReadRev = t.docs.rev(t.docId) // rev = 0
+
+    // 用户在 rev = 0 之后做了一次编辑（产生 rev = 1）
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: aiReadRev,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: p1, find: '患者基线特征', replace: '医生亲手补充的78例患者特征' }],
+    }, { actor: 'user', turnId: null })
+
+    // AI 仍拿着 base_rev = 0 对标题 h1 执行多块 replace_block（试图重写标题并附带新正文）
+    // 因为 p1 在 rev = 1 被用户修改过，标题的章节吸收逻辑必须识破并保留 p1，绝不能把 p1 静默吞掉
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: aiReadRev,
+      mode: 'apply',
+      ops: [{ op: 'replace_block', id: h1, markdown: '# 1 研究背景与立项依据\n\nAI 新增的导语段落。' }],
+    }, { actor: 'ai', turnId: 'turn-11' })
+
+    const finalDoc = t.docs.get(t.docId)
+    const allText = finalDoc.textContent
+    expect(allText).toContain('1 研究背景与立项依据')
+    expect(allText).toContain('AI 新增的导语段落。')
+    expect(allText).toContain('医生亲手补充的78例患者特征')
+  })
+
+  it('Edge 6: 钱医生真实场景：全选删除 + 富文本粘贴（含带双引号的 font_family、rgb 颜色、上标【1】与「附-参考资料：1、…」）全链路往返与导出', () => {
+    const original = docx([
+      p('原始标题', '<w:pStyle w:val="Heading1"/>'),
+      p('原始正文第一段：带首行缩进与 1.5 倍行距。', '<w:spacing w:line="360" w:lineRule="auto"/><w:ind w:firstLine="480"/>'),
+    ].join(''))
+    const t = importInto(original)
+
+    // 模拟浏览器全选删除后从本地 Word 粘贴：
+    // 1) font_family 含内嵌双引号 "\"Times New Roman\""
+    // 2) color 为浏览器归一化后的 "rgb(0, 0, 255)"
+    // 3) 正文引用采用上标实心方头括号 <sup>【1】</sup>、<sup>【2, 3】</sup>
+    // 4) 文末为「附-参考资料：」及「1、…」「2、…」「3、…」
+    const quotedFontMark = schema.marks.text_style!.create({ font_family: '"Times New Roman"', font_size: '12pt', color: null })
+    const rgbColorMark = schema.marks.text_style!.create({ font_family: '宋体', font_size: '12pt', color: 'rgb(0, 0, 255)' })
+    const supMark = schema.marks.sup!.create()
+
+    const pastedBlocks = [
+      schema.node('paragraph', { id: 'q0het8' }, [
+        schema.text('低剂量放疗一般不单独用于治癌，而是作为肿瘤综合治疗的佐剂', [quotedFontMark]),
+        schema.text('【1】', [quotedFontMark, supMark]),
+        schema.text('。', [quotedFontMark]),
+      ]),
+      schema.node('paragraph', { id: 'xxaf0m' }, [
+        schema.text('免疫检查点抑制剂联合方案显著延长生存期', [rgbColorMark]),
+        schema.text('【2, 3】', [rgbColorMark, supMark]),
+        schema.text('。', [rgbColorMark]),
+      ]),
+      schema.node('paragraph', { id: 'refhdr' }, [schema.text('附-参考资料：')]),
+      schema.node('paragraph', { id: 'ref001' }, [schema.text('1、 低剂量放疗联合免疫治疗专家共识. 中华放射肿瘤学杂志, 2025. doi: 10.1038/s41392-026-0001-x')]),
+      schema.node('paragraph', { id: 'ref002' }, [schema.text('2、 Zhou L, Qian D, et al. Low-dose radiation remodels TME. Cancer Discov, 2024.')]),
+      schema.node('paragraph', { id: 'ref003' }, [schema.text('3、 Herbst RS, et al. SKYSCRAPER-07 phase II trial. J Clin Oncol, 2025.')]),
+    ]
+    const pastedDoc = schema.node('doc', null, pastedBlocks)
+    t.docs.commit(t.docId, pastedDoc, { actor: 'user', turnId: null, ops: [{ op: 'collab' }] })
+
+    // 校验 1：带内嵌双引号的 font_family 序列化再通过 replace_text / replace_block 解析时，不会截断或泄露 <span 标签
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: 'q0het8', find: '肿瘤综合治疗的佐剂', replace: '肿瘤多模态综合治疗的免疫佐剂' }],
+    }, { actor: 'ai', turnId: 'turn-qian-1' })
+    expect(t.docs.get(t.docId).child(0).textContent).toBe('低剂量放疗一般不单独用于治癌，而是作为肿瘤多模态综合治疗的免疫佐剂【1】。')
+    expect(t.docs.get(t.docId).child(0).textContent).not.toContain('<span')
+
+    // 校验 2：原有引用守卫保护实心方头括号【1】与【2, 3】，不允许 AI 私自替换为平台引用 [@c:...]
+    const cDup = t.store.upsertCitation({ doc_id: t.docId, doi: '10.1038/s41392-026-0001-x', pmid: null, formatted: 'Dup entry.', url: null })
+    const cNew = t.store.upsertCitation({ doc_id: t.docId, doi: '10.1056/nejmoa2026999', pmid: '38059788', formatted: 'Qian D, et al. Novel HNSCC trial. NEJM 2026.', url: null })
+    expect(() => t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: 'xxaf0m', find: '【2, 3】', replace: `[@c:${cNew.id}]` }],
+    }, { actor: 'ai', turnId: 'turn-qian-guard' })).toThrow(/原有的文中编号/)
+
+    // 校验 3：AI 保留原有【2, 3】并新增平台引用（含 1 条与「1、…」同 DOI 的文献 + 1 条全新文献）
+    t.ops.edit({
+      doc_id: t.docId,
+      base_rev: t.docs.rev(t.docId),
+      mode: 'apply',
+      ops: [{
+        op: 'replace_text',
+        id: 'xxaf0m',
+        find: '显著延长生存期【2, 3】。',
+        replace: `显著延长生存期【2, 3】，并在转化研究中得到验证[@c:${cDup.id}][@c:${cNew.id}]。`,
+      }],
+    }, { actor: 'ai', turnId: 'turn-qian-2' })
+
+    // 校验 4：导出 docx 时：
+    // - 识别「附-参考资料：」下的 1、2、3 共 3 条存量文献；cDup 复用 [1]，cNew 顺延为 [4]
+    // - rgb(0, 0, 255) 正确导出为 <w:color w:val="0000FF"/>
+    // - 粘贴后重新生成 ID 的正文段落继承了原导入文档正文段落的 <w:spacing> 与 <w:ind w:firstLine="480"/>
+    const exported = t.exportNow()
+    const xml = bodyOf(exported.bytes)
+    expect(xml).toContain('<w:color w:val="0000FF"/>')
+    expect(xml).toContain('w:ascii="Times New Roman"')
+    expect(xml).toContain('<w:ind w:firstLine="480"/>')
+    expect(xml).toContain('<w:spacing w:line="360" w:lineRule="auto"/>')
+    expect(xml).toContain('<w:t>[1]</w:t>')
+    expect(xml).toContain('<w:t>[4]</w:t>')
+    expect(xml).toContain('[4] Qian D, et al. Novel HNSCC trial. NEJM 2026.')
+  })
+})
+
+
+

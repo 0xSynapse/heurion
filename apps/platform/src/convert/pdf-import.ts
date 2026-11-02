@@ -412,6 +412,10 @@ export function buildPdfDeck(
   for (const page of pages) {
     const pageW = page.width || 960
     const pageH = page.height || 540
+    // pdftohtml -xml 输出 108 DPI（PDF 72pt 的 1.5 倍，如 960×540 变为 1440×810），统一缩放到 960×540pt 幻灯片画布
+    const scaleX = pageW > 0 ? 960 / pageW : 1
+    const scaleY = pageH > 0 ? 540 / pageH : 1
+    const fontScale = Math.min(scaleX, scaleY)
 
     if (isScannedPage(page)) {
       const rendered = ctx.pageImages?.get(page.number)
@@ -428,8 +432,8 @@ export function buildPdfDeck(
           asset_id: key,
           x: 0,
           y: 0,
-          w: emu(pageW),
-          h: emu(pageH),
+          w: emu(960),
+          h: emu(540),
         }))
       }
       const notes = ocr ? deckSchema.node('notes', null, [deckSchema.node('paragraph', null, [deckSchema.text(ocr)])]) : null
@@ -475,10 +479,10 @@ export function buildPdfDeck(
         id: `sh_${page.number}_bg_${figN}`,
         kind: 'image',
         asset_id: key,
-        x: emu(im.left),
-        y: emu(im.top),
-        w: emu(im.width),
-        h: emu(im.height),
+        x: emu(im.left * scaleX),
+        y: emu(im.top * scaleY),
+        w: emu(im.width * scaleX),
+        h: emu(im.height * scaleY),
       }))
     }
 
@@ -489,10 +493,10 @@ export function buildPdfDeck(
         id: `sh_${page.number}_img_${figN}`,
         kind: 'image',
         asset_id: key,
-        x: emu(im.left),
-        y: emu(im.top),
-        w: emu(im.width),
-        h: emu(im.height),
+        x: emu(im.left * scaleX),
+        y: emu(im.top * scaleY),
+        w: emu(im.width * scaleX),
+        h: emu(im.height * scaleY),
       }))
     }
 
@@ -589,7 +593,7 @@ export function buildPdfDeck(
           const marks: PMMark[] = []
           if (run.bold) marks.push(deckSchema.marks.bold.create())
           if (run.italic) marks.push(deckSchema.marks.italic.create())
-          const sz = Math.round((run.size || 14) * 100)
+          const sz = Math.round(Math.max(8, (run.size || 14) * fontScale) * 100)
           const col = run.color ? run.color.replace(/^#/, '').toUpperCase() : null
           const rprXml = `<a:rPr sz="${sz}"${col ? `><a:solidFill><a:srgbClr val="${col}"/></a:solidFill></a:rPr>` : '/>'}`
           marks.push(deckSchema.marks.rpr.create({ xml: rprXml }))
@@ -633,10 +637,10 @@ export function buildPdfDeck(
       shapes.push(deckSchema.node('shape', {
         id: `sh_${page.number}_txt_${++shapeN}`,
         kind: 'text',
-        x: emu(minX),
-        y: emu(minY),
-        w: emu(w),
-        h: emu(h),
+        x: emu(minX * scaleX),
+        y: emu(minY * scaleY),
+        w: emu(w * scaleX),
+        h: emu(h * scaleY),
       }, paras))
     }
 

@@ -248,58 +248,107 @@ export function decodeMimeWords(str: string): string {
   })
 }
 
-/** 浏览器端 Quoted-Printable 正文解码 (支持 UTF-8 与 GB18030 / GBK) */
-export function decodeQuotedPrintable(str: string, charset?: string): string {
-  if (!str) return ''
-  const s = str.replace(/=\r?\n/g, '')
-  if (!/=[0-9A-Fa-f]{2}/.test(s)) return s
-
-  const bytes: number[] = []
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === '=' && i + 2 < s.length && /^[0-9A-Fa-f]{2}$/.test(s.slice(i + 1, i + 3))) {
-      bytes.push(parseInt(s.slice(i + 1, i + 3), 16))
-      i += 2
-    } else {
-      const code = s.charCodeAt(i)
-      if (code < 128) {
-        bytes.push(code)
-      } else {
-        const enc = new TextEncoder().encode(s[i])
-        for (const b of enc) bytes.push(b)
-      }
-    }
-  }
-  const u8 = new Uint8Array(bytes)
-  const cs = (charset || '').toLowerCase()
-  if (cs.includes('gb')) {
+/** 修复历史误将纯英文标题当做 Base64 或将 URL 参数当做 Quoted-Printable 解码造成的乱码 */
+export function repairMojibakeEmailBody(text: string): string {
+  if (!text) return ''
+  let out = text
+  out = out.replace(/(?:澶佸Ы骞惰唇娅掝櫙璀硓[锟\uFFFD]*|夁姽并贽櫒譳z[\uFFFD]*)/g, 'Confirm your email address')
+  if (/https?:\/\/[^\s<>"']*[\u4e00-\u9fff]/.test(out)) {
     try {
-      return new TextDecoder('gb18030').decode(u8)
+      const td = new TextDecoder('gb18030')
+      out = out.replace(/(https?:\/\/[^\s<>"']*?[?#&][A-Za-z0-9_.-]+)([\u4e00-\u9fff])([A-Za-z0-9_.-]+)/g, (full, prefix, cjk, suffix) => {
+        for (let b1 = 0x81; b1 <= 0xfe; b1++) {
+          for (let b2 = 0x30; b2 <= 0x7e; b2++) {
+            if (b2 === 0x7f) continue
+            if (td.decode(new Uint8Array([b1, b2])) === cjk) {
+              const hex = b1.toString(16).toLowerCase().padStart(2, '0')
+              const ascii = String.fromCharCode(b2)
+              return `${prefix}=${hex}${ascii}${suffix}`
+            }
+          }
+        }
+        return full
+      })
     } catch {}
   }
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(u8)
-  } catch {
-    try {
-      return new TextDecoder('gb18030').decode(u8)
-    } catch {
-      return s
-    }
-  }
+  return out
 }
 
-/** 智能探测并解码 Base64 编码的邮件正文块（支持换行折行、空格容错、UTF-8 及 GB18030） */
+export function looksLikeQuotedPrintable(str: string): boolean {
+  if (!str) return false
+  if (/=\r?\n/.test(str)) return true
+  if (/(?:=[0-9A-Fa-f]{2}){2,}/.test(str)) return true
+  if (/=3D/i.test(str) || /=(?:20|09)(?:\r?\n|$)/.test(str) || /=0D=0A/i.test(str)) return true
+  return false
+}
+
+/** 浏览器端 Quoted-Printable 正文解码 (支持 UTF-8 与 GB18030 / GBK，保护 URL 参数与已有 UTF-8 字符) */
+export function decodeQuotedPrintable(str: string, charset?: string): string {
+  if (!str) return ''
+  const hasSoftBreak = /=\r?\n/.test(str)
+  const s = hasSoftBreak ? str.replace(/=\r?\n/g, '') : str
+  if (!/=[0-9A-Fa-f]{2}/.test(s)) return s
+  if (!hasSoftBreak && !looksLikeQuotedPrintable(s)) return s
+
+  const cs = (charset || '').toLowerCase()
+  return s.replace(/(?:=[0-9A-Fa-f]{2})+/g, (match, offset, fullStr) => {
+    const before = fullStr.slice(Math.max(0, offset - 200), offset)
+    if (/https?:\/\/[^\s<>"']*?[?#&][A-Za-z0-9_.-]+$/i.test(before) && !/^=3D/i.test(match)) {
+      return match
+    }
+    const bytes: number[] = []
+    for (let i = 0; i < match.length; i += 3) {
+      bytes.push(parseInt(match.slice(i + 1, i + 3), 16))
+    }
+    const u8 = new Uint8Array(bytes)
+    let decoded = ''
+    if (cs.includes('gb')) {
+      try {
+        decoded = new TextDecoder('gb18030', { fatal: true }).decode(u8)
+      } catch {}
+    }
+    if (!decoded) {
+      try {
+        decoded = new TextDecoder('utf-8', { fatal: true }).decode(u8)
+      } catch {
+        if (u8.length >= 2) {
+          try {
+            decoded = new TextDecoder('gb18030', { fatal: true }).decode(u8)
+          } catch {}
+        }
+      }
+    }
+    if (!decoded || decoded.includes('\uFFFD') || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(decoded)) {
+      return match
+    }
+    return decoded
+  })
+}
+
+/** 智能探测并解码 Base64 编码的邮件正文块（支持换行折行、行首缩进容错、UTF-8 及 GB18030） */
 export function decodeBase64Chunk(raw: string, charset?: string): string {
   if (!raw) return raw
-  const compact = raw.replace(/\s+/g, '')
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact) || compact.length < 8) {
+  const trimmed = raw.trim()
+  const lines = trimmed.split(/\r?\n/)
+  for (const line of lines) {
+    const l = line.trim()
+    if (l && /\s/.test(l)) {
+      return raw
+    }
+  }
+
+  const compact = trimmed.replace(/\s+/g, '')
+  if (
+    compact.length < 12 ||
+    compact.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(compact) ||
+    /^[A-Za-z]+$/.test(compact)
+  ) {
     return raw
   }
 
-  const padLen = (4 - (compact.length % 4)) % 4
-  const padded = compact + '='.repeat(padLen)
-
   try {
-    const bin = atob(padded)
+    const bin = atob(compact)
     const bytes = new Uint8Array(bin.length)
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
 
@@ -307,19 +356,18 @@ export function decodeBase64Chunk(raw: string, charset?: string): string {
     const cs = (charset || '').toLowerCase()
     if (cs.includes('gb')) {
       try {
-        decoded = new TextDecoder('gb18030').decode(bytes)
+        decoded = new TextDecoder('gb18030', { fatal: true }).decode(bytes)
       } catch {}
     }
     if (!decoded) {
       try {
         decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-      } catch {
-        try {
-          decoded = new TextDecoder('gb18030').decode(bytes)
-        } catch {}
-      }
+      } catch {}
     }
-    if (!decoded) return raw
+    if (!decoded || decoded.includes('\uFFFD')) return raw
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(decoded)) {
+      return raw
+    }
 
     // 含有中文，或者是正常可读文本
     if (/[\u4e00-\u9fa5]/.test(decoded)) {
@@ -396,9 +444,10 @@ export function decodeEmailBody(body: string, charset?: string): string {
 
   // 若已经是 HTML 格式邮件，仅解码 Quoted-Printable，避免分段 Base64 误判破坏 HTML 结构
   if (isHtmlEmail(text)) {
-    if (/=[0-9A-Fa-f]{2}/.test(text) || /=\r?\n/.test(text)) {
+    if (looksLikeQuotedPrintable(text)) {
       text = decodeQuotedPrintable(text, charset)
     }
+    text = repairMojibakeEmailBody(text)
     text = text.replace(/--[a-zA-Z0-9_\-=]+--?\s*$/g, '').trim()
     return text
   }
@@ -425,12 +474,15 @@ export function decodeEmailBody(body: string, charset?: string): string {
     }
   }
 
-  // 4. Quoted-Printable 探测与解码 (支持 UTF-8 与 GB18030)
-  if (/=[0-9A-Fa-f]{2}/.test(text) || /=\r?\n/.test(text)) {
+  // 4. Quoted-Printable 探测与解码 (支持 UTF-8 与 GB18030，排除普通 URL 参数)
+  if (looksLikeQuotedPrintable(text)) {
     text = decodeQuotedPrintable(text, charset)
   }
 
-  // 5. 清理残留的 MIME boundary 标记
+  // 5. 修复历史误解码造成的乱码
+  text = repairMojibakeEmailBody(text)
+
+  // 6. 清理残留的 MIME boundary 标记
   text = text.replace(/--[a-zA-Z0-9_\-=]+--?\s*$/g, '').trim()
   return text
 }
@@ -448,7 +500,12 @@ function formatSenderDisplay(senderName?: string, sender?: string): string {
   const cleanSender = (sender || '').trim()
   const rawName = (senderName || '').trim()
   const decodedName = decodeMimeWords(rawName)
-  if (!decodedName || decodedName.toLowerCase() === cleanSender.toLowerCase()) {
+  const isBounce = /^[0-9a-f]{12,}(?:-[0-9a-f]{4,})+$/i.test(decodedName)
+  if (!decodedName || decodedName.toLowerCase() === cleanSender.toLowerCase() || isBounce) {
+    if (isBounce && cleanSender.includes('@')) {
+      const domain = cleanSender.split('@')[1]!.replace(/^(?:send|notify|mail|bounce|bounces|email|mg|em)\./gi, '').replace(/^(?:send|notify|mail)\./gi, '')
+      return domain || cleanSender
+    }
     return cleanSender
   }
   return `${decodedName} <${cleanSender}>`
@@ -612,11 +669,23 @@ function formatEmailBody(raw: string): string {
 
 function formatHighlights(text: string): string {
   let res = esc(text)
-  res = res.replace(/(PT-[A-Z0-9-]+)/g, '<span class="mail-hl-code">$1</span>')
-  res = res.replace(/(BAR\s*=\s*[0-9.]+)/g, '<span class="mail-hl-metric">$1</span>')
-  res = res.replace(/(HAM\s*=\s*[0-9.]+\s*cm³)/g, '<span class="mail-hl-metric">$1</span>')
-  res = res.replace(/(SMD\s*&lt;\s*0\.05)/g, '<span class="mail-hl-metric">$1</span>')
-  res = res.replace(/(\*\*(.*?)\*\*)/g, '<strong>$2</strong>')
+  res = res.replace(
+    /(https?:\/\/[^\s<>"']+)|(PT-[A-Z0-9-]+)|(BAR\s*=\s*[0-9.]+)|(HAM\s*=\s*[0-9.]+\s*cm³)|(SMD\s*&lt;\s*0\.05)|(\*\*(.*?)\*\*)/g,
+    (match, url, pt, bar, ham, smd, _boldFull, boldInner) => {
+      if (url) {
+        const trailingMatch = (url as string).match(/([.,;:!?)]+)$/)
+        const cleanUrl = trailingMatch ? (url as string).slice(0, -trailingMatch[1]!.length) : (url as string)
+        const trailing = trailingMatch ? trailingMatch[1]! : ''
+        return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="mail-body-link" style="color:var(--accent, #2563eb);text-decoration:underline;word-break:break-all;">${cleanUrl}</a>${trailing}`
+      }
+      if (pt) return `<span class="mail-hl-code">${pt}</span>`
+      if (bar) return `<span class="mail-hl-metric">${bar}</span>`
+      if (ham) return `<span class="mail-hl-metric">${ham}</span>`
+      if (smd) return `<span class="mail-hl-metric">${smd}</span>`
+      if (boldInner !== undefined) return `<strong>${boldInner}</strong>`
+      return match
+    },
+  )
   return res
 }
 

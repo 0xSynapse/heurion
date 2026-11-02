@@ -2,7 +2,7 @@
  * 工作空间（左侧图标栏）：写作 / 患者 / 临床研究。每个空间在内容栏里有自己的标题、主操作、列表与搜索提示。
  * 切换时：中间区域如果停在开始页或别的空间的页面上（患者页、研究页），换成新空间的开始页；正在编辑的文档保留。
  */
-export type Space = 'patients' | 'research' | 'write' | 'calendar' | 'mail'
+export type Space = 'patients' | 'research' | 'write' | 'studio' | 'calendar' | 'mail'
 
 export interface SpaceDef {
   title: string
@@ -55,7 +55,7 @@ export function initSpaces(defs: Record<Space, SpaceDef>) {
     saved(): Space {
       try {
         const v = localStorage.getItem(KEY) ?? (localStorage.getItem('heurion.navMode') === 'patients' ? 'patients' : null)
-        const valid: Space[] = ['patients', 'research', 'write', 'calendar', 'mail']
+        const valid: Space[] = ['patients', 'research', 'write', 'studio', 'calendar', 'mail']
         return valid.includes(v as Space) ? (v as Space) : 'patients'
       } catch { return 'patients' }
     },

@@ -1678,8 +1678,8 @@ button.block { width: 100%; padding: 10px 12px; }
 .pt-edit tr.pt-unverified td { background: var(--warn-soft); }
 @media (max-width: 900px) { .pt-review { grid-template-columns: 1fr; } .pt-review-file iframe { height: 360px; } }
 
-/* —— 临床研究 —— */
-.page.study-page:not(.rs-welcome) { max-width: 1160px; padding: 28px 8px 120px; }
+/* —— 临床研究 & 科研制图 —— */
+.page.study-page:not(.rs-welcome), .page.studio-page { max-width: 1160px; padding: 22px 12px 100px; }
 .rs-head { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
 .rs-title { font: inherit; font-size: 26px; font-weight: 500; border: 1px solid transparent; background: transparent; color: var(--text); padding: 2px 6px; margin-left: -7px; }
 .rs-title:hover, .rs-title:focus { border-color: var(--line-strong); outline: none; }
@@ -1714,7 +1714,63 @@ button.block { width: 100%; padding: 10px 12px; }
 .rs-file-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
 .rs-folder-empty { padding: 32px 16px; text-align: center; }
 .rs-soon { opacity: .7; border-style: dashed; }
-@media (max-width: 900px) { .rs-grid { grid-template-columns: 1fr; } }
+.rs-tabs { margin-bottom: 18px; overflow-x: auto; }
+.rs-tabs button[data-tab] { flex: none; padding: 10px 16px 8px; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+.rs-pipeline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.rs-step-card { border: 1px solid var(--line); background: var(--panel); padding: 11px 13px; display: flex; flex-direction: column; gap: 4px; cursor: pointer; text-align: left; transition: border-color .15s, background .15s, transform .15s; }
+.rs-step-card:hover { border-color: var(--mint); background: var(--hover); transform: translateY(-1px); }
+.rs-step-card.done { border-left: 3px solid var(--mint); }
+.rs-step-top { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.rs-step-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.rs-step-metric { font-size: 12px; color: var(--mint-text); font-weight: 500; }
+.rs-action-cluster { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 3px 6px; background: var(--raised); border: 1px solid var(--line); }
+.rs-action-cluster-label { font-size: 11px; color: var(--muted); padding: 0 4px; letter-spacing: .04em; }
+.rs-studio-topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 6px 8px; margin-bottom: 12px; border: 1px solid var(--line); background: var(--panel); }
+.rs-studio-topbar-right { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rs-studio-preset-select { font-size: 12px; padding: 5px 8px; background: var(--bg-deep); border: 1px solid var(--line-strong); color: var(--text); min-width: 175px; }
+.rs-studio-modes { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.rs-studio-mode-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border: 1px solid transparent; background: transparent; color: var(--text-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: all .15s; }
+.rs-studio-mode-btn:hover { border-color: var(--line-strong); color: var(--text); background: var(--hover); }
+.rs-studio-mode-btn.active { border-color: var(--mint); background: var(--teal); color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--mint); }
+.rs-scenario-pop { position: relative; }
+.rs-scenario-pop > summary { list-style: none; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+.rs-scenario-pop > summary::-webkit-details-marker { display: none; }
+.rs-scenario-pop-card { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; width: min(760px, 90vw); padding: 12px; border: 1px solid var(--line-strong); background: var(--panel); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25); }
+.rs-studio-shell { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.rs-studio-left, .rs-studio-right { border: 1px solid var(--line); background: var(--panel); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rs-studio-canvas { background: #ffffff; color: #0f172a; border: 1px solid var(--line-strong); border-radius: 6px; padding: 16px; min-height: 420px; max-height: 660px; overflow: auto; display: flex; justify-content: center; align-items: center; }
+.rs-studio-canvas svg { max-width: 100%; height: auto; display: block; }
+.rs-studio-exports { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; background: var(--raised); border: 1px solid var(--line); }
+.rs-data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rs-data-table th, .rs-data-table td { border: 1px solid var(--line); padding: 5px 6px; text-align: left; vertical-align: middle; }
+.rs-data-table th { background: var(--raised); color: var(--text-2); font-weight: 600; font-size: 11.5px; }
+.rs-data-table input[type="text"], .rs-data-table input[type="number"], .rs-data-table select { width: 100%; padding: 4px 6px; font-size: 12px; background: var(--bg-deep); border: 1px solid var(--line-strong); color: var(--text); }
+.rs-sub-box { border: 1px solid var(--line); background: var(--raised); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.rs-sub-box-title { font-size: 12px; font-weight: 600; color: var(--text); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rs-scenario-banner { border: 1px solid var(--line-strong); background: var(--panel); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.rs-scenario-banner.compact { padding: 10px 14px; border-left: 3px solid var(--mint); background: var(--raised); }
+.rs-scenario-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.rs-scenario-head b { font-size: 13.5px; font-weight: 600; color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
+.rs-scenario-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.rs-scenario-card { border: 1px solid var(--line); background: var(--raised); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.rs-scenario-card.active { border-color: var(--mint); background: var(--teal); box-shadow: inset 0 2px 0 var(--mint); }
+.rs-scenario-card b { font-size: 13px; font-weight: 600; color: var(--text); }
+.rs-scenario-card p { margin: 0; line-height: 1.5; }
+.rs-scenario-tag { display: inline-flex; align-self: flex-start; font-size: 11px; font-weight: 600; color: var(--mint-text); background: var(--green-soft); border: 1px solid var(--green-line); padding: 1px 7px; }
+.rs-preset-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-top: 8px; border-top: 1px dashed var(--line); }
+.rs-preset-chip { font-size: 11.5px; padding: 3px 9px; border: 1px solid var(--line-strong); background: var(--bg-deep); color: var(--text-2); cursor: pointer; transition: all .15s; }
+.rs-preset-chip:hover { border-color: var(--mint); color: var(--mint-text); background: var(--green-soft); }
+.studio-fig-item { display: flex !important; align-items: center; gap: 4px; }
+.studio-fig-item.selected { background: var(--green-soft); border-left-color: var(--mint); }
+.studio-fig-item .studio-item-actions { opacity: 0.65; transition: opacity .15s; }
+.studio-fig-item:hover .studio-item-actions, .studio-fig-item:focus-within .studio-item-actions { opacity: 1; }
+@media (max-width: 960px) {
+  .rs-grid { grid-template-columns: 1fr; }
+  .rs-pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rs-studio-modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rs-studio-shell { grid-template-columns: 1fr; }
+  .rs-scenario-grid { grid-template-columns: 1fr; }
+}
 
 /* —— 资料库页、数据集页（工作区页面，和研究页同一套版式） —— */
 .page.library-page, .page.datasets-page { max-width: 1160px; padding: 28px 24px 120px; }

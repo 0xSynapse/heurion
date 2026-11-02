@@ -58,6 +58,11 @@ const STUDY_PARITY: Record<string, string> = {
   'POST /api/studies/:sid/cohort/dataset': 'study_cohort_dataset',
   'POST /api/studies/:sid/cohort/imaging-batch': 'imaging_cohort_batch_analyze',
   'POST /api/studies/:sid/figures': 'imaging_medical_figure_studio',
+  'GET /api/figures': 'imaging_medical_figure_studio',
+  'POST /api/figures': 'imaging_medical_figure_studio',
+  'PATCH /api/figures/:aid': 'imaging_medical_figure_studio',
+  'DELETE /api/figures/:aid': 'imaging_medical_figure_studio',
+  'POST /api/figures/batch': 'imaging_medical_figure_studio',
   // 研究变量：AI 能读、能录入 / 导入（一律未核实），核实只能研究者本人（见 NOT_FOR_AI）
   'GET /api/studies/:sid/vars': 'study_vars_list',
   'POST /api/studies/:sid/vars/manual': 'study_vars_set',
@@ -106,10 +111,11 @@ const ALL_PARITY: Record<string, string> = {
   // 数据集
   'GET /api/datasets': 'dataset_list', 'GET /api/datasets/:did': 'dataset_describe', 'GET /api/datasets/:did/preview': 'dataset_open',
   'POST /api/datasets/:did/table1': 'dataset_table1', 'POST /api/datasets/:did/survival': 'dataset_survival', 'POST /api/datasets/:did/imaging-survival': 'dataset_imaging_survival',
+  'POST /api/datasets/:did/logistic': 'dataset_logistic', 'POST /api/datasets/:did/grotta': 'dataset_grotta', 'POST /api/datasets/:did/sankey': 'dataset_sankey', 'POST /api/datasets/:did/upset': 'dataset_upset',
   'POST /api/datasets': 'dataset_manage.upload', 'PATCH /api/datasets/:did': 'dataset_manage.rename', 'POST /api/datasets/:did/phi': 'dataset_manage.resolve_phi', 'DELETE /api/datasets/:did': 'dataset_manage.delete',
   // 记忆
   'GET /api/memory': 'memory_manage.list', 'GET /api/memory/:mid/events': 'memory_manage.events', 'PATCH /api/memory/:mid': 'memory_manage.edit',
-  'POST /api/memory': 'memory_propose', 'DELETE /api/memory/:mid': 'memory_forget', 'POST /api/memory/review': 'memory_review',
+  'POST /api/memory': 'memory_propose', 'DELETE /api/memory/:mid': 'memory_forget', 'POST /api/memory/review': 'memory_review', 'POST /api/memory/skill-train': 'memory_manage.train_from_doc',
   'PUT /api/memory/settings': 'memory_manage.pause', 'GET /api/memory-export': 'memory_manage.export', 'POST /api/memory-import': 'memory_manage.import', 'DELETE /api/memory': 'memory_manage.clear_all',
   // 任务队列、账户
   'GET /api/queue': 'task_queue.list', 'POST /api/queue/:jid/cancel': 'task_queue.cancel',

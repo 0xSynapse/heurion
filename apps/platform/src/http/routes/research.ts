@@ -1,5 +1,6 @@
 import type { Context, Hono } from 'hono'
 import type { Store } from '../../store/db.ts'
+import { Access } from '../../research/access.ts'
 import { TenantError } from '../../auth/tenants.ts'
 import { StudyError, type StudyService } from '../../research/service.ts'
 import { PatientError, type PatientService, type Actor } from '../../tenancy/patients.ts'
@@ -25,6 +26,15 @@ import {
 } from '../../research/causal-inference.ts'
 import { DatasetError, type DatasetService, type Table1Options, type SurvivalOptions } from '../../datasets/service.ts'
 import { exportTable1ToDocx } from '../../datasets/table1-docx.ts'
+import { generateSurvivalAnalysis } from '../../datasets/survival.ts'
+import {
+  generateLogisticRegression,
+  generateGrottaPlot,
+  generateSankeyDiagram,
+  generateUpSetPlot,
+  buildDefaultClinicalCohortRecords,
+} from '../../datasets/clinical-plots.ts'
+import { renderSvg } from '../../render/diagram.ts'
 import {
   buildNomogram,
   calculateRocCurve,
@@ -250,7 +260,8 @@ export function registerResearchRoutes(
 
   /**
    * 医学论文全品类制图与原文件导出工作台 (Medical Paper Figure Studio):
-   * 支持生成 6 大类医学论文图表，并导出对应桌面软件的原生工程原文件：
+   * 支持全局独立运行（`/api/figures`）或在特定研究内运行（`/api/studies/:sid/figures`），
+   * 生成 6 大类医学论文图表，并导出对应桌面软件的原生工程原文件：
    * - mechanism (机制图/图形摘要): BioRender/Figdraw 风格分层 SVG + Draw.io (.drawio) + 可编辑 PowerPoint (.pptx)
    * - wet_lab (实验与临床统计图): GraphPad Prism (.pzfx) + R (ggplot2/ggpubr .R) + OriginPro (.csv + .ogs)
    * - flowchart (研究设计/CONSORT 流程图): Draw.io (.drawio) + Microsoft Visio (.vdx) + PowerPoint (.pptx)
@@ -258,13 +269,180 @@ export function registerResearchRoutes(
    * - image_processing (影像/流式/病理切片): ImageJ 比例尺与多通道合并宏 (.ijm) / FlowJo 圈门工作区 (.wsp) / 3D Slicer (.mrml + .mrk.json) & ITK-SNAP (.txt)
    * - journal_assembly (终极多面板期刊排版拼图): Adobe Illustrator / Inkscape 分层 SVG + 600 DPI 印刷级 PNG + 多面板 PPTX + 全套原文件 ZIP
    */
-  app.post('/api/studies/:sid/figures', async c => {
+  const handleFigureStudio = async (c: Context<{ Variables: { user: string } }>, routeSid?: string) => {
     try {
-      const sid = c.req.param('sid')
-      st().get(c.get('user'), sid)
-      const body = await c.req.json<Record<string, any>>()
+      const userId = c.get('user')
+      const body = await c.req.json<Record<string, any>>().catch(() => ({} as Record<string, any>))
+      const sid = routeSid || (typeof body.study_id === 'string' && body.study_id.trim() ? body.study_id.trim() : undefined)
+      const study = sid && ctx.studies ? st().get(userId, sid) : undefined
+      const fileTag = sid || 'GlobalStudio'
       const category = String(body.category || '')
       const exportFormat = String(body.export_format || c.req.query('format') || 'json')
+
+      const archiveFigureAsset = (svgStr: string, figName: string, codeStr?: string, codePathStr?: string) => {
+        const cleanName = (String(figName || 'Figure').trim().replace(/[\\/:*?"<>|]/g, '_').replace(/\.svg$/i, '').trim() || 'Figure') + '.svg'
+        const provDatasets: Array<{ id: string; name: string; version: number; rows: number }> = []
+        if (sid && study) {
+          provDatasets.push({ id: sid, name: study.title, version: 1, rows: 0 })
+          const dsItems = store.studyItems(sid).filter(i => i.kind === 'dataset')
+          for (const i of dsItems) {
+            const d = store.getDataset(i.ref_id)
+            if (d && !provDatasets.some(x => x.id === d.id)) {
+              provDatasets.push({ id: d.id, name: d.name, version: d.version ?? 1, rows: d.rows })
+            }
+          }
+        }
+        if (typeof body.dataset_id === 'string' && body.dataset_id.trim()) {
+          const d = store.getDataset(body.dataset_id.trim())
+          if (d && d.owner === userId && !provDatasets.some(x => x.id === d.id)) {
+            provDatasets.push({ id: d.id, name: d.name, version: d.version ?? 1, rows: d.rows })
+          }
+        }
+        return store.putAsset({
+          owner: userId,
+          mime: 'image/svg+xml',
+          name: cleanName,
+          bytes: new TextEncoder().encode(svgStr),
+          provenance: {
+            turn_id: 'studio',
+            at: new Date().toISOString(),
+            code: codeStr || '# Archived via Heurion Medical Figure Studio',
+            code_path: codePathStr || 'figure_studio.R',
+            datasets: provDatasets,
+          },
+        })
+      }
+
+      if (category === 'archive') {
+        const svgStr = String(body.svg || '')
+        if (!svgStr.includes('<svg')) {
+          return c.json({ error: 'invalid_svg', message: '归档内容必须是有效的 SVG 矢量图表' }, 400)
+        }
+        const asset = archiveFigureAsset(svgStr, body.name || body.title || 'Medical_Figure', body.code, body.code_path)
+        return c.json({ ok: true, asset_id: asset.id, name: asset.name, created_at: asset.created_at, study_id: sid ?? null }, 201)
+      }
+
+      if (category === 'render_png') {
+        const svgStr = String(body.svg || '')
+        if (!svgStr.includes('<svg')) {
+          return c.json({ error: 'invalid_svg', message: '请提供有效的 SVG 矢量内容以渲染 600 DPI PNG' }, 400)
+        }
+        const widthPx = Math.min(3600, Math.max(800, Number(body.width) || 2400))
+        const pngBytes = renderSvg(svgStr, widthPx).png
+        const fname = String(body.name || body.title || `Figure_600DPI_${fileTag}`).replace(/[^a-zA-Z0-9_\u4e00-\u9fa5.-]/g, '_').replace(/\.png$/i, '')
+        return c.body(new Uint8Array(pngBytes), 200, {
+          'Content-Type': 'image/png',
+          'Content-Disposition': `attachment; filename="${fname}.png"`,
+        })
+      }
+
+      if (category === 'clinical_cohort' || ['grotta', 'sankey', 'upset', 'logistic', 'survival'].includes(category)) {
+        const subtype = (['grotta', 'sankey', 'upset', 'logistic', 'survival'].includes(category)
+          ? category
+          : String(body.subtype || body.plotType || body.plot_type || 'grotta')) as 'grotta' | 'sankey' | 'upset' | 'logistic' | 'survival'
+        const did = typeof body.dataset_id === 'string' && body.dataset_id.trim() ? body.dataset_id.trim() : undefined
+        const fallbackRecords = () => (Array.isArray(body.records) && body.records.length > 0 ? body.records : buildDefaultClinicalCohortRecords())
+
+        let result: any
+        if (subtype === 'grotta') {
+          const opts = {
+            group_col: body.group_col || '第一次治疗方式',
+            score_col: body.score_col || '确诊时mRS',
+            score_order: Array.isArray(body.score_order) && body.score_order.length ? body.score_order : undefined,
+            labels: body.labels,
+            title: body.title || 'Functional Outcome (mRS) Shift Analysis (Grotta Plot)',
+          }
+          result = did && datasets ? datasets.grotta(userId, did, opts) : generateGrottaPlot(fallbackRecords(), opts)
+        } else if (subtype === 'sankey') {
+          const hasStageCols = Array.isArray(body.stage_cols) && body.stage_cols.filter(Boolean).length >= 2
+          const opts = {
+            stage_cols: hasStageCols ? body.stage_cols.filter(Boolean) : (!body.sequence_col ? ['第一次治疗方式', '闭塞程度', '治疗后出血'] : undefined),
+            sequence_col: body.sequence_col || undefined,
+            code_map: body.code_map,
+            outcome_col: body.outcome_col || undefined,
+            max_nodes_per_stage: body.max_nodes_per_stage,
+            labels: body.labels,
+            title: body.title || 'Multimodal Treatment Trajectory & Clinical Outcome Sankey Diagram',
+          }
+          result = did && datasets ? datasets.sankey(userId, did, opts) : generateSankeyDiagram(fallbackRecords(), opts)
+        } else if (subtype === 'upset') {
+          const cols = Array.isArray(body.binary_cols) && body.binary_cols.filter(Boolean).length >= 2
+            ? body.binary_cols.filter(Boolean)
+            : ['额叶', '颞叶', '顶叶', '枕叶', '基底节', '脑室']
+          const opts = {
+            binary_cols: cols,
+            outcome_col: body.outcome_col || '治疗后出血',
+            positive_value: body.positive_value,
+            max_intersections: body.max_intersections,
+            labels: body.labels,
+            title: body.title || 'Anatomical Location Co-occurrence & Outcome UpSet Plot',
+          }
+          result = did && datasets ? datasets.upset(userId, did, opts) : generateUpSetPlot(fallbackRecords(), opts)
+        } else if (subtype === 'logistic') {
+          const covs = Array.isArray(body.covariates) && body.covariates.filter(Boolean).length >= 1
+            ? body.covariates.filter(Boolean)
+            : ['供血动脉扩张', '单一动脉供血', '基底节', '年龄']
+          const opts = {
+            outcome_col: body.outcome_col || '治疗后出血',
+            covariates: covs,
+            positive_value: body.positive_value,
+            labels: body.labels,
+            title: body.title || 'Multivariable Logistic Regression Forest Plot (Odds Ratio & 95% CI)',
+          }
+          result = did && datasets ? datasets.logistic(userId, did, opts) : generateLogisticRegression(fallbackRecords(), opts)
+        } else {
+          const opts = {
+            time_col: body.time_col || 'followup_months',
+            start_date_col: body.start_date_col || undefined,
+            event_date_col: body.event_date_col || undefined,
+            censor_date_col: body.censor_date_col || undefined,
+            default_censor_date: body.default_censor_date || undefined,
+            event_col: body.event_col || '治疗后出血',
+            group_col: body.group_col || '第一次治疗方式',
+            covariates: Array.isArray(body.covariates) ? body.covariates : undefined,
+            time_unit: body.time_unit || 'Months',
+            title: body.title || 'Kaplan-Meier Event-Free Survival Analysis',
+            show_censored: body.show_censored !== false,
+            show_risk_table: body.show_risk_table !== false,
+          }
+          result = did && datasets ? datasets.survival(userId, did, opts) : generateSurvivalAnalysis(fallbackRecords() as any, opts)
+        }
+
+        const svgOut = result.native_exports?.illustrator_svg || result.km_svg || result.svg || result.forest_svg || ''
+        const pzfxOut = result.native_exports?.prism_pzfx || result.prism_pzfx
+        const rOut = result.native_exports?.r_script || result.r_script
+        if (exportFormat === 'png' && svgOut) {
+          const pngBytes = renderSvg(svgOut, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Clinical_${subtype}_600DPI_${fileTag}.png"`,
+          })
+        }
+        if (exportFormat === 'pzfx' && pzfxOut) {
+          return c.body(pzfxOut, 200, {
+            'Content-Type': 'application/xml; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Clinical_${subtype}_${fileTag}.pzfx"`,
+          })
+        }
+        if (exportFormat === 'r' && rOut) {
+          return c.body(rOut, 200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Disposition': `attachment; filename="Clinical_${subtype}_${fileTag}.R"`,
+          })
+        }
+        if ((exportFormat === 'svg' || exportFormat === 'ai-svg') && svgOut) {
+          return c.body(svgOut, 200, { 'Content-Type': 'image/svg+xml; charset=utf-8' })
+        }
+        return c.json({
+          category: 'clinical_cohort',
+          subtype,
+          svg: svgOut,
+          illustrator_svg: svgOut,
+          prism_pzfx: pzfxOut,
+          r_script: rOut,
+          ...result,
+        })
+      }
 
       if (category === 'mechanism') {
         const res = renderMechanismDiagram({
@@ -274,16 +452,23 @@ export function registerResearchRoutes(
           nodes: Array.isArray(body.nodes) ? body.nodes : [],
           edges: Array.isArray(body.edges) ? body.edges : [],
         })
+        if (exportFormat === 'png') {
+          const pngBytes = renderSvg(res.illustrator_svg || res.svg, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Mechanism_600DPI_${fileTag}.png"`,
+          })
+        }
         if (exportFormat === 'drawio') {
           return c.body(res.drawio_xml, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Mechanism_${sid}.drawio"`,
+            'Content-Disposition': `attachment; filename="Mechanism_${fileTag}.drawio"`,
           })
         }
         if (exportFormat === 'pptx') {
           return c.body(new Uint8Array(res.pptx_bytes), 200, {
             'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'Content-Disposition': `attachment; filename="Mechanism_${sid}.pptx"`,
+            'Content-Disposition': `attachment; filename="Mechanism_${fileTag}.pptx"`,
           })
         }
         if (exportFormat === 'svg' || exportFormat === 'ai-svg') {
@@ -305,7 +490,7 @@ export function registerResearchRoutes(
 
       if (category === 'flowchart') {
         const diagramData: ConsortDiagramData = {
-          title: body.title || `${sid} · CONSORT 2010 Participant Flow`,
+          title: body.title || `${study ? study.title : 'Clinical Study'} · CONSORT 2010 Participant Flow`,
           total_assessed: Number(body.total_assessed ?? 240),
           exclusions: Array.isArray(body.exclusions)
             ? body.exclusions
@@ -324,23 +509,30 @@ export function registerResearchRoutes(
         const svg = renderConsortSvg(diagramData)
         const drawio_xml = exportFlowchartToDrawio(diagramData)
         const visio_vdx = exportFlowchartToVisioVdx(diagramData)
+        if (exportFormat === 'png') {
+          const pngBytes = renderSvg(svg, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Flowchart_600DPI_${fileTag}.png"`,
+          })
+        }
         if (exportFormat === 'drawio') {
           return c.body(drawio_xml, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Flowchart_${sid}.drawio"`,
+            'Content-Disposition': `attachment; filename="Flowchart_${fileTag}.drawio"`,
           })
         }
         if (exportFormat === 'vdx') {
           return c.body(visio_vdx, 200, {
             'Content-Type': 'application/vnd.visio; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Flowchart_${sid}.vdx"`,
+            'Content-Disposition': `attachment; filename="Flowchart_${fileTag}.vdx"`,
           })
         }
         if (exportFormat === 'pptx') {
           const pptx = exportFlowchartToPptx(diagramData)
           return c.body(new Uint8Array(pptx), 200, {
             'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'Content-Disposition': `attachment; filename="Flowchart_${sid}.pptx"`,
+            'Content-Disposition': `attachment; filename="Flowchart_${fileTag}.pptx"`,
           })
         }
         return c.json({
@@ -368,28 +560,35 @@ export function registerResearchRoutes(
           groups: body.groups,
           doseResponse: body.doseResponse,
         })
+        if (exportFormat === 'png') {
+          const pngBytes = renderSvg(res.illustrator_svg || res.svg, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Statistical_Plot_600DPI_${fileTag}.png"`,
+          })
+        }
         if (exportFormat === 'pzfx') {
           return c.body(res.prism_pzfx, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
-            'Content-Disposition': `attachment; filename="GraphPad_Prism_${sid}.pzfx"`,
+            'Content-Disposition': `attachment; filename="GraphPad_Prism_${fileTag}.pzfx"`,
           })
         }
         if (exportFormat === 'r') {
           return c.body(res.r_script, 200, {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Statistical_Plot_${sid}.R"`,
+            'Content-Disposition': `attachment; filename="Statistical_Plot_${fileTag}.R"`,
           })
         }
         if (exportFormat === 'origin_csv') {
           return c.body(res.origin_csv, 200, {
             'Content-Type': 'text/csv; charset=utf-8',
-            'Content-Disposition': `attachment; filename="OriginPro_Worksheet_${sid}.csv"`,
+            'Content-Disposition': `attachment; filename="OriginPro_Worksheet_${fileTag}.csv"`,
           })
         }
         if (exportFormat === 'origin_ogs') {
           return c.body(res.origin_ogs, 200, {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Content-Disposition': `attachment; filename="OriginPro_Script_${sid}.ogs"`,
+            'Content-Disposition': `attachment; filename="OriginPro_Script_${fileTag}.ogs"`,
           })
         }
         return c.json({ category: 'wet_lab', ...res })
@@ -397,22 +596,29 @@ export function registerResearchRoutes(
 
       if (category === 'bioinformatics') {
         const res = generateBioinformaticsFigure(body as any)
+        if (exportFormat === 'png') {
+          const pngBytes = renderSvg(res.illustrator_svg || res.svg, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="Bioinformatics_${body.bioType || 'plot'}_600DPI_${fileTag}.png"`,
+          })
+        }
         if (exportFormat === 'r') {
           return c.body(res.r_script, 200, {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Bioinformatics_${body.bioType || 'plot'}_${sid}.R"`,
+            'Content-Disposition': `attachment; filename="Bioinformatics_${body.bioType || 'plot'}_${fileTag}.R"`,
           })
         }
         if (exportFormat === 'csv') {
           return c.body(res.cloud_csv, 200, {
             'Content-Type': 'text/csv; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Hiplot_Matrix_${body.bioType || 'plot'}_${sid}.csv"`,
+            'Content-Disposition': `attachment; filename="Hiplot_Matrix_${body.bioType || 'plot'}_${fileTag}.csv"`,
           })
         }
         if (exportFormat === 'pzfx' && res.prism_pzfx) {
           return c.body(res.prism_pzfx, 200, {
             'Content-Type': 'application/xml; charset=utf-8',
-            'Content-Disposition': `attachment; filename="Volcano_${sid}.pzfx"`,
+            'Content-Disposition': `attachment; filename="Volcano_${fileTag}.pzfx"`,
           })
         }
         return c.json({ category: 'bioinformatics', ...res })
@@ -429,17 +635,24 @@ export function registerResearchRoutes(
             yGateThreshold: Number(body.yGateThreshold ?? 2.5),
             events: Array.isArray(body.events) ? body.events : [],
           })
+          if (exportFormat === 'png') {
+            const pngBytes = renderSvg(res.illustrator_svg || res.svg, 2400).png
+            return c.body(new Uint8Array(pngBytes), 200, {
+              'Content-Type': 'image/png',
+              'Content-Disposition': `attachment; filename="FlowJo_600DPI_${fileTag}.png"`,
+            })
+          }
           if (exportFormat === 'wsp') {
             return c.body(res.flowjo_wsp_xml, 200, {
               'Content-Type': 'application/xml; charset=utf-8',
-              'Content-Disposition': `attachment; filename="FlowJo_Workspace_${sid}.wsp"`,
+              'Content-Disposition': `attachment; filename="FlowJo_Workspace_${fileTag}.wsp"`,
             })
           }
           return c.json({ category: 'image_processing', tool: 'flowjo', ...res })
         }
         if (subType === 'slicer' || subType === 'itksnap') {
           const res = generateSlicerAndItkSnapPackage({
-            patientId: body.patientId || sid,
+            patientId: body.patientId || fileTag,
             studyModality: body.studyModality || 'CT',
             volumeFileName: body.volumeFileName,
             segmentationFileName: body.segmentationFileName,
@@ -449,16 +662,23 @@ export function registerResearchRoutes(
               ? body.labels
               : [{ id: 1, name: 'Primary_Target_Lesion', rgb: [220, 38, 38], opacity: 0.85 }],
           })
+          if (exportFormat === 'png') {
+            const pngBytes = renderSvg(res.svg_preview, 2400).png
+            return c.body(new Uint8Array(pngBytes), 200, {
+              'Content-Type': 'image/png',
+              'Content-Disposition': `attachment; filename="Slicer_3D_600DPI_${fileTag}.png"`,
+            })
+          }
           if (exportFormat === 'mrml') {
             return c.body(res.slicer_mrml_xml, 200, {
               'Content-Type': 'application/xml; charset=utf-8',
-              'Content-Disposition': `attachment; filename="Slicer_Scene_${sid}.mrml"`,
+              'Content-Disposition': `attachment; filename="Slicer_Scene_${fileTag}.mrml"`,
             })
           }
           if (exportFormat === 'itksnap-txt') {
             return c.body(res.itksnap_labels_txt, 200, {
               'Content-Type': 'text/plain; charset=utf-8',
-              'Content-Disposition': `attachment; filename="ITK_SNAP_Labels_${sid}.txt"`,
+              'Content-Disposition': `attachment; filename="ITK_SNAP_Labels_${fileTag}.txt"`,
             })
           }
           return c.json({ category: 'image_processing', tool: subType, ...res })
@@ -472,10 +692,17 @@ export function registerResearchRoutes(
           channels: body.channels,
           quantificationGroups: body.quantificationGroups,
         })
+        if (exportFormat === 'png') {
+          const pngBytes = renderSvg(res.illustrator_svg || res.svg, 2400).png
+          return c.body(new Uint8Array(pngBytes), 200, {
+            'Content-Type': 'image/png',
+            'Content-Disposition': `attachment; filename="ImageJ_600DPI_${fileTag}.png"`,
+          })
+        }
         if (exportFormat === 'ijm') {
           return c.body(res.imagej_macro_ijm, 200, {
             'Content-Type': 'text/plain; charset=utf-8',
-            'Content-Disposition': `attachment; filename="ImageJ_Analysis_${sid}.ijm"`,
+            'Content-Disposition': `attachment; filename="ImageJ_Analysis_${fileTag}.ijm"`,
           })
         }
         return c.json({ category: 'image_processing', tool: 'imagej', ...res })
@@ -493,19 +720,19 @@ export function registerResearchRoutes(
         if (exportFormat === 'zip') {
           return c.body(new Uint8Array(res.bundle_zip), 200, {
             'Content-Type': 'application/zip',
-            'Content-Disposition': `attachment; filename="Journal_Figure_Assembly_${sid}.zip"`,
+            'Content-Disposition': `attachment; filename="Journal_Figure_Assembly_${fileTag}.zip"`,
           })
         }
         if (exportFormat === 'png') {
           return c.body(new Uint8Array(res.high_res_png), 200, {
             'Content-Type': 'image/png',
-            'Content-Disposition': `attachment; filename="Journal_Figure_600DPI_${sid}.png"`,
+            'Content-Disposition': `attachment; filename="Journal_Figure_600DPI_${fileTag}.png"`,
           })
         }
         if (exportFormat === 'pptx') {
           return c.body(new Uint8Array(res.pptx_bytes), 200, {
             'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'Content-Disposition': `attachment; filename="Journal_Figure_Panels_${sid}.pptx"`,
+            'Content-Disposition': `attachment; filename="Journal_Figure_Panels_${fileTag}.pptx"`,
           })
         }
         return c.json({
@@ -522,13 +749,108 @@ export function registerResearchRoutes(
         {
           error: 'unsupported_figure_category',
           message:
-            '请指定有效的图表类别 category: mechanism | wet_lab | bioinformatics | image_processing | journal_assembly',
+            '请指定有效的图表类别 category: clinical_cohort | mechanism | wet_lab | bioinformatics | image_processing | flowchart | journal_assembly | render_png | archive',
         },
         400,
       )
     } catch (err) {
+      if (err instanceof DatasetError) return datasetFailure(c, err)
+      if (err instanceof Error && !(err instanceof StudyError) && !(err instanceof PatientError) && !(err instanceof TenantError)) {
+        return c.json({ error: 'figure_studio_error', message: err.message }, 400)
+      }
       return cohortFailure(c, err)
     }
+  }
+
+  const canWriteAsset = (userId: string, assetId: string): boolean => {
+    const asset = store.getAsset(assetId)
+    if (!asset) return false
+    if (asset.owner === userId) return true
+    const prov = store.getAssetProvenance(assetId)
+    if (prov && Array.isArray(prov.datasets)) {
+      for (const d of prov.datasets) {
+        if (!d?.id) continue
+        if (d.id.startsWith('st') && ctx.studies) {
+          try {
+            const role = st().role(userId, d.id)
+            if (role && role !== 'viewer' && role !== 'cra' && role !== 'auditor') return true
+          } catch {}
+        }
+        const dsStudy = store.studyOf('dataset', d.id)
+        if (dsStudy && ctx.studies) {
+          try {
+            const role = st().role(userId, dsStudy.study_id)
+            if (role && role !== 'viewer' && role !== 'cra' && role !== 'auditor') return true
+          } catch {}
+        }
+      }
+    }
+    return false
+  }
+
+  const normalizeFigureName = (raw: unknown): string => {
+    const base = String(raw || '')
+      .trim()
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\.svg$/i, '')
+      .trim()
+    return (base || 'Figure') + '.svg'
+  }
+
+  app.get('/api/figures', c => {
+    const userId = c.get('user')
+    return c.json({ figures: store.provenanceAssets(userId) })
+  })
+  app.post('/api/figures', c => handleFigureStudio(c))
+  app.post('/api/studies/:sid/figures', c => handleFigureStudio(c, c.req.param('sid')))
+  app.patch('/api/figures/:aid', async c => {
+    const userId = c.get('user')
+    const aid = c.req.param('aid')
+    const asset = store.getAsset(aid)
+    if (!asset) return c.json({ error: 'not_found', message: '图表不存在' }, 404)
+    if (!canWriteAsset(userId, aid)) return c.json({ error: 'forbidden', message: '无权修改该图表' }, 403)
+    const body = await c.req.json<{ name?: unknown }>().catch(() => ({} as { name?: unknown }))
+    const cleanName = normalizeFigureName(body.name)
+    store.renameAsset(aid, cleanName)
+    return c.json({ ok: true, id: aid, name: cleanName })
+  })
+  app.delete('/api/figures/:aid', c => {
+    const userId = c.get('user')
+    const aid = c.req.param('aid')
+    const asset = store.getAsset(aid)
+    if (!asset) return c.json({ error: 'not_found', message: '图表不存在' }, 404)
+    if (!canWriteAsset(userId, aid)) return c.json({ error: 'forbidden', message: '无权删除该图表' }, 403)
+    store.deleteAsset(aid)
+    return c.json({ ok: true, id: aid })
+  })
+  app.post('/api/figures/batch', async c => {
+    const userId = c.get('user')
+    const body = await c.req.json<{ action?: string; ids?: unknown; prefix?: unknown }>().catch(() => ({} as { action?: string; ids?: unknown; prefix?: unknown }))
+    const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === 'string' && x.trim().length > 0) : []
+    if (!ids.length) return c.json({ error: 'bad_request', message: '请至少选择一张图表' }, 400)
+    const action = String(body.action || '')
+    if (action === 'delete') {
+      let deleted = 0
+      store.transaction(() => {
+        for (const id of ids) {
+          if (canWriteAsset(userId, id) && store.deleteAsset(id)) deleted++
+        }
+      })
+      return c.json({ ok: true, action: 'delete', affected: deleted })
+    }
+    if (action === 'rename_prefix') {
+      const prefix = String(body.prefix || 'Figure').trim().replace(/[\\/:*?"<>|]/g, '_') || 'Figure'
+      let renamed = 0
+      store.transaction(() => {
+        ids.forEach((id, idx) => {
+          if (!canWriteAsset(userId, id)) return
+          const newName = `${prefix}_${String(idx + 1).padStart(2, '0')}.svg`
+          if (store.renameAsset(id, newName)) renamed++
+        })
+      })
+      return c.json({ ok: true, action: 'rename_prefix', affected: renamed })
+    }
+    return c.json({ error: 'bad_action', message: '不支持的批量操作类型' }, 400)
   })
 
   // —— Auto-eCRF 多模态数据批量提取与溯源 ——
@@ -636,7 +958,7 @@ export function registerResearchRoutes(
     try { const d = datasets!.get(c.get('user'), c.req.param('did')); return c.json({ ...d, study: studyRef(d.id) }) } catch (err) { return datasetFailure(c, err) }
   })
   app.get('/api/datasets/:did/preview', c => {
-    try { return c.json(datasets!.preview(c.get('user'), c.req.param('did'), Math.min(200, Number(c.req.query('limit')) || 50))) } catch (err) { return datasetFailure(c, err) }
+    try { return c.json(datasets!.preview(c.get('user'), c.req.param('did'), Math.min(5000, Number(c.req.query('limit')) || 50))) } catch (err) { return datasetFailure(c, err) }
   })
   app.patch('/api/datasets/:did', async c => {
     const body = await c.req.json<{ name?: string; labels?: Record<string, string> }>()
@@ -689,8 +1011,8 @@ export function registerResearchRoutes(
   app.post('/api/datasets/:did/survival', async c => {
     if (!datasets) return c.json({ error: '数据集未启用' }, 503)
     const body = await c.req.json<SurvivalOptions>().catch(() => ({} as SurvivalOptions))
-    if (!body.time_col || !body.event_col) {
-      return c.json({ error: '必须指定随访时间列 (time_col) 与事件结局列 (event_col)' }, 400)
+    if ((!body.time_col && !(body.start_date_col && body.event_date_col)) || !body.event_col) {
+      return c.json({ error: '必须指定随访时间列 (time_col) 或起始+事件日期列 (start_date_col + event_date_col)，以及事件结局列 (event_col)' }, 400)
     }
     try { return c.json(datasets.survival(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
   })
@@ -701,6 +1023,42 @@ export function registerResearchRoutes(
       return c.json({ error: '必须指定时间列 (time_col)、结局列 (event_col) 与影像标志物列 (biomarker)' }, 400)
     }
     try { return c.json(datasets.imagingSurvival(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
+  })
+
+  app.post('/api/datasets/:did/logistic', async c => {
+    if (!datasets) return c.json({ error: '数据集未启用' }, 503)
+    const body = await c.req.json<any>().catch(() => ({}))
+    if (!body.outcome_col || !Array.isArray(body.covariates) || body.covariates.length === 0) {
+      return c.json({ error: '必须指定二元结局列 (outcome_col) 与至少 1 个协变量 (covariates)' }, 400)
+    }
+    try { return c.json(datasets.logistic(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
+  })
+
+  app.post('/api/datasets/:did/grotta', async c => {
+    if (!datasets) return c.json({ error: '数据集未启用' }, 503)
+    const body = await c.req.json<any>().catch(() => ({}))
+    if (!body.score_col && (!Array.isArray(body.timepoint_cols) || body.timepoint_cols.length < 2)) {
+      return c.json({ error: '必须提供评分列 (score_col) 或至少 2 个时间点列 (timepoint_cols)' }, 400)
+    }
+    try { return c.json(datasets.grotta(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
+  })
+
+  app.post('/api/datasets/:did/sankey', async c => {
+    if (!datasets) return c.json({ error: '数据集未启用' }, 503)
+    const body = await c.req.json<any>().catch(() => ({}))
+    if ((!Array.isArray(body.stage_cols) || body.stage_cols.length < 2) && !body.sequence_col) {
+      return c.json({ error: '必须提供至少 2 列的阶段列 (stage_cols) 或序贯编码列 (sequence_col)' }, 400)
+    }
+    try { return c.json(datasets.sankey(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
+  })
+
+  app.post('/api/datasets/:did/upset', async c => {
+    if (!datasets) return c.json({ error: '数据集未启用' }, 503)
+    const body = await c.req.json<any>().catch(() => ({}))
+    if (!Array.isArray(body.binary_cols) || body.binary_cols.length < 2) {
+      return c.json({ error: '必须提供至少 2 个二分类部位/特征列 (binary_cols)' }, 400)
+    }
+    try { return c.json(datasets.upset(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
   })
 
   // —— 预后列线图与预测模型 (Nomogram & ROC / DCA) ——
@@ -758,5 +1116,69 @@ export function registerResearchRoutes(
         },
       })
     } catch (err) { return datasetFailure(c, err) }
+  })
+
+  // —— 全局 Co-Pilot 用户身份强绑定与关联上下文越权防线 ——
+  const access = ctx.studies
+    ? ((ctx.studies as unknown as { access?: Access }).access ?? new Access(store))
+    : new Access(store)
+
+  ;(store as unknown as { getCopilotDoc?: (uid: string) => unknown }).getCopilotDoc = (uid: string) => {
+    if (!uid || typeof uid !== 'string') return undefined
+    const row = store.db
+      .prepare(
+        "SELECT * FROM docs WHERE owner = ? AND deleted_at IS NULL AND json_extract(context, '$.kind') = 'copilot' ORDER BY created_at DESC LIMIT 1",
+      )
+      .get(uid) as { owner?: string } | undefined
+    return row && row.owner === uid ? row : undefined
+  }
+
+  app.use('/api/copilot/*', async (c, next) => {
+    const user = c.get('user')?.trim()
+    if (!user) {
+      return c.json({ error: '请先登录并绑定用户账号后使用 Co-Pilot', code: 'unauthorized' }, 401)
+    }
+
+    if (c.req.path === '/api/copilot/chat' && c.req.method === 'POST') {
+      const body = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
+      if (typeof body.study_id === 'string' && body.study_id) {
+        const s = store.getStudy(body.study_id)
+        if (!s || !store.studyRole(s.id, user)) {
+          delete body.study_id
+        }
+      }
+      if (typeof body.doc_id === 'string' && body.doc_id) {
+        const d = store.getDoc(body.doc_id)
+        if (!d || d.deleted_at || !access.docRole(user, d)) {
+          delete body.doc_id
+        }
+      }
+      const reqWithCache = c.req as unknown as { bodyCache?: { text?: Promise<string> } }
+      reqWithCache.bodyCache ??= {}
+      reqWithCache.bodyCache.text = Promise.resolve(JSON.stringify(body))
+    }
+
+    await next()
+
+    if (c.req.path === '/api/copilot/status' && c.req.method === 'GET' && c.res.status === 200) {
+      const data = await c.res.clone().json().catch(() => null) as Record<string, unknown> | null
+      if (data && typeof data === 'object') {
+        const docId = typeof data.doc_id === 'string' ? data.doc_id : ''
+        const doc = docId ? store.getDoc(docId) : undefined
+        if (doc && doc.owner !== user) {
+          c.res = c.json({ error: 'Co-Pilot 会话与当前登录用户不匹配', code: 'forbidden' }, 403)
+          return
+        }
+        const u = store.getUser(user)
+        c.res = c.json({
+          ...data,
+          bound_user: {
+            id: user,
+            username: u?.username ?? user,
+            display_name: u?.display_name || u?.username || user,
+          },
+        })
+      }
+    }
   })
 }

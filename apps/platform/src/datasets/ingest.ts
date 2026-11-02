@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { chmodIfOwned } from '../mcp/admin-tools.ts'
 
 /**
  * 运行 scripts/dataset_ingest.py：解析上传的表格、生成概况。上传的文件不可信——
@@ -16,7 +17,9 @@ export interface ColumnProfile {
   range?: [string, string]
   phi?: { reason: string }
 }
-export type Profile = { ok: true; rows: number; columns: ColumnProfile[]; truncated: boolean } | { ok: false; error: string }
+export type Profile =
+  | { ok: true; rows: number; columns: ColumnProfile[]; truncated: boolean; phi_resolved?: { dropped: string[]; kept: string[]; at: string } }
+  | { ok: false; error: string }
 export interface IngestResult { profile: Profile; csv: string | null; cleanup: () => void }
 export type Ingest = (owner: string, src: string, drop: string[]) => Promise<IngestResult>
 
@@ -49,12 +52,14 @@ export function makeIngest(opts: IngestOptions): Ingest {
     let stage: string
     if (opts.sandbox) {
       // 中转目录在用户工作区里（工作区 2770：只有该 uid 与平台能进）；目录与输入要让该 uid 能读写
+      // 注意：首次运行 heurion-sandbox-exec 后 .datasets 属主会变为该用户的隔离 uid（组 node 可写），不能无条件 chmodSync 否则 EPERM
       const ws = opts.sandbox.workspaceDir(owner)
-      mkdirSync(join(ws, '.datasets'), { recursive: true })
-      chmodSync(join(ws, '.datasets'), 0o2777)
-      stage = join(ws, '.datasets', randomUUID())
+      const dsDir = join(ws, '.datasets')
+      mkdirSync(dsDir, { recursive: true })
+      chmodIfOwned(dsDir, 0o2777)
+      stage = join(dsDir, randomUUID())
       mkdirSync(stage)
-      chmodSync(stage, 0o2777)
+      chmodIfOwned(stage, 0o2777)
     } else {
       stage = mkdtempSync(join(tmpdir(), 'heurion-ds-'))
     }
@@ -62,7 +67,7 @@ export function makeIngest(opts: IngestOptions): Ingest {
     try {
       const input = join(stage, 'input' + extname(src).toLowerCase())
       copyFileSync(src, input)
-      chmodSync(input, 0o644)
+      chmodIfOwned(input, 0o644)
       const out = join(stage, 'out')
       const args = [opts.script, input, out, ...(drop.length ? ['--drop', ...drop] : [])]
       if (opts.sandbox) {
@@ -70,8 +75,14 @@ export function makeIngest(opts: IngestOptions): Ingest {
       } else {
         await run(opts.python, args, timeout)
       }
-      const profile = JSON.parse(readFileSync(join(out, 'profile.json'), 'utf8')) as Profile
-      return { profile, csv: profile.ok && existsSync(join(out, 'data.csv')) ? join(out, 'data.csv') : null, cleanup }
+      const profilePath = join(out, 'profile.json')
+      if (lstatSync(out).isSymbolicLink() || lstatSync(profilePath).isSymbolicLink()) {
+        throw new Error('不允许符号链接输出')
+      }
+      const profile = JSON.parse(readFileSync(profilePath, 'utf8')) as Profile
+      const csvOut = join(out, 'data.csv')
+      const hasCsv = profile.ok && existsSync(csvOut) && !lstatSync(csvOut).isSymbolicLink()
+      return { profile, csv: hasCsv ? csvOut : null, cleanup }
     } catch (err) {
       cleanup()
       throw err

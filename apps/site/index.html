@@ -125,7 +125,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-v9" />
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v11" />
   <style>
     :root {
       --bg-primary: #FAF8F4;
@@ -178,12 +178,12 @@
       padding: 5rem 0 5.75rem;
       background-color: var(--bg-primary);
       background-image:
-        linear-gradient(102deg, rgba(250, 248, 244, 0.92) 0%, rgba(250, 248, 244, 0.80) 45%, rgba(242, 239, 231, 0.46) 100%),
-        linear-gradient(180deg, rgba(250, 248, 244, 0.28) 0%, rgba(250, 248, 244, 0.04) 68%, rgba(239, 236, 228, 0.94) 100%),
-        url('https://images.unsplash.com/photo-1542273917363-3b1817f69a2d?auto=format&fit=crop&w=2000&q=85'),
+        linear-gradient(100deg, rgba(250, 248, 244, 0.94) 0%, rgba(250, 248, 244, 0.85) 46%, rgba(244, 241, 234, 0.54) 100%),
+        linear-gradient(180deg, rgba(250, 248, 244, 0.35) 0%, rgba(250, 248, 244, 0.08) 68%, rgba(239, 236, 228, 0.95) 100%),
+        url('https://images.unsplash.com/photo-1581093450021-4a7360e9a6b5?auto=format&fit=crop&w=2000&q=85'),
         url('/site/nordic-bg.jpg');
       background-size: cover;
-      background-position: center 62%;
+      background-position: center 35%;
       background-repeat: no-repeat;
     }
     .hero-grid { display: grid; grid-template-columns: 1.06fr 0.94fr; gap: 4.25rem; align-items: stretch; }
@@ -215,8 +215,17 @@
     .stat-cell { display: flex; flex-direction: column; gap: 0.18rem; }
     .stat-val { font-family: var(--serif); font-size: 1.4rem; font-weight: 300; color: var(--ink); line-height: 1.1; font-variant-numeric: tabular-nums; }
     .stat-lbl { font-family: var(--mono); font-size: 0.64rem; color: var(--ink-muted); letter-spacing: 0.06em; text-transform: uppercase; }
-    .flagship-links { display: flex; flex-wrap: wrap; gap: 1.5rem; padding-top: 1.15rem; }
-    .sec-research { background: var(--bg-primary); padding: 5rem 0; }
+    .flagship-links { display: flex; flex-wrap: wrap; align-items: center; gap: 1.35rem; padding-top: 1.25rem; }
+    .flagship-cta { padding: 0.62rem 1.25rem; font-weight: 500; }
+    .sec-research {
+      background-color: var(--bg-primary);
+      background-image:
+        linear-gradient(180deg, rgba(239, 236, 228, 0.96) 0%, rgba(250, 248, 244, 0.91) 45%, rgba(250, 248, 244, 0.96) 100%),
+        url('https://images.unsplash.com/photo-1532094349884-543bc11b234d?auto=format&fit=crop&w=1800&q=80');
+      background-size: cover;
+      background-position: center;
+      padding: 5rem 0;
+    }
     .pub-list { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
     .pub-row { display: grid; grid-template-columns: 11rem 1fr auto; gap: 2rem; align-items: baseline; padding: 1.65rem 0; border-bottom: 1px solid var(--border); }
     .pub-links { display: flex; align-items: center; gap: 1.35rem; }
@@ -262,7 +271,6 @@
       </nav>
       <div class="nav-right">
         <button class="lang-btn" id="langBtn" type="button" aria-label="Switch language">EN</button>
-        <a class="nav-cta" href="/login" id="ctaTop" data-i18n="nav_cta">进入工作台</a>
       </div>
     </div>
   </header>
@@ -277,12 +285,6 @@
             <div class="hero-intro">
               <p class="label-caps" data-i18n="hero_tag">HEURION RESEARCH · 临床科研 AI 工作台与智能体系统</p>
               <h1 class="heading-1" data-i18n-html="hero_title">为临床医学与自治智能体，<br>构建<em>可验证</em>的系统底座。</h1>
-              <div class="hero-actions">
-                <a class="btn-solid" href="/login" id="ctaHero">
-                  <span data-i18n="hero_cta_primary">进入临床工作台</span>
-                  <span aria-hidden="true">→</span>
-                </a>
-              </div>
             </div>
 
             <div class="hero-editorial">
@@ -441,7 +443,7 @@
                 </div>
               </div>
               <div class="flagship-links">
-                <a class="link-arrow" href="/login" id="ctaCard1" data-i18n="f1_link_app">进入工作台 →</a>
+                <a class="btn-solid flagship-cta" href="/app" id="ctaCard1" data-i18n="f1_link_app">进入临床工作台 →</a>
                 <a class="link-arrow" href="https://github.com/heurion-org/heurion" target="_blank" rel="noopener" data-i18n="f1_link_repo">GitHub 源码 →</a>
               </div>
             </div>
@@ -482,6 +484,7 @@
                 </div>
               </div>
               <div class="flagship-links">
+                <a class="btn-solid flagship-cta" href="/aegis-cloud/dashboard" id="ctaCard2" data-i18n="f2_link_app">进入 Aegis 控制台 →</a>
                 <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" data-i18n="f2_link_repo">GitHub 仓库 →</a>
                 <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_APPLICATION_PROTOCOL.md" target="_blank" rel="noopener" data-i18n="f2_link_spec">AAP-1.0 规范 →</a>
               </div>
@@ -591,7 +594,7 @@
         f1_s1: 'DOCX 保真',
         f1_s2: 'PHI 拦截',
         f1_s3: '记忆增益',
-        f1_link_app: '进入工作台 →',
+        f1_link_app: '进入临床工作台 →',
         f1_link_repo: 'GitHub 源码 →',
         f2_tag: '内核层 · RUST',
         f2_title: 'Aegis OS (aegis-os)',
@@ -600,6 +603,7 @@
         f2_s1: '静默覆写',
         f2_s2: 'CoW 派生',
         f2_s3: 'IPC 开销',
+        f2_link_app: '进入 Aegis 控制台 →',
         f2_link_repo: 'GitHub 仓库 →',
         f2_link_spec: 'AAP-1.0 规范 →',
         res_title: '研究论文',
@@ -658,7 +662,7 @@
         f1_s1: 'DOCX Fidelity',
         f1_s2: 'PHI Gatekeeper',
         f1_s3: 'Memory Gain',
-        f1_link_app: 'Workstation →',
+        f1_link_app: 'Enter Workstation →',
         f1_link_repo: 'GitHub →',
         f2_tag: 'KERNEL LAYER · RUST',
         f2_title: 'Aegis OS (aegis-os)',
@@ -667,6 +671,7 @@
         f2_s1: 'Silent Overwrites',
         f2_s2: 'CoW Fork',
         f2_s3: 'Push IPC Cost',
+        f2_link_app: 'Open Dashboard →',
         f2_link_repo: 'GitHub →',
         f2_link_spec: 'AAP-1.0 Spec →',
         res_title: 'Publications',

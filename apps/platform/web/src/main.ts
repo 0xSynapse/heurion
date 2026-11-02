@@ -275,6 +275,7 @@ const actions = initActions(api, (m, e) => showNotice(m, e))
 const datasets = initDatasets(api, (m, e) => showNotice(m, e), {
   showPage: (cls, title) => showPage(cls, title),
   openStudy: id => void researchUi.open(id),
+  openStudio: id => void researchUi.openStudio(id),
 })
 let ME: Me | null = null
 const patientsUi = initPatients(api, (m, e) => showNotice(m, e), {
@@ -303,6 +304,52 @@ const researchUi = initResearch(api, (m, e) => showNotice(m, e), {
   token: () => TOKEN,
   datasets: { upload: files => datasets.upload(files), openDetail: id => { researchUi.leave(); return datasets.openDetail(id) }, showProvenance: id => datasets.showProvenance(id) },
   openPatient: id => patientsUi.open(id),
+  insertFigureToDoc: async (assetId, caption) => {
+    if (await insertFigureIntoActiveSession(assetId, caption)) return
+    await loadDocs()
+    if (docRows.length === 0) {
+      spaces.set('write')
+      const d = await api('/api/docs', { method: 'POST', body: JSON.stringify({ title: `${caption} · 论文初稿` }) })
+      await loadDocs()
+      await open(d.id)
+      await insertFigureIntoActiveSession(assetId, caption)
+      return
+    }
+    const dlg = $('dialog')
+    dlg.innerHTML = `<div class="dialog-card small" role="dialog" aria-modal="true" aria-label="插入图表到文稿">
+      <div class="dialog-head"><h2>插入图表到写作空间</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
+      <form class="dialog-body form" id="insertFigDocForm">
+        <div class="muted small">已将图表「${esc(caption)}」及底层可复现源码归档。请选择要插入的目标文稿或新建论文：</div>
+        <label>目标文稿
+          <select name="doc_id">
+            <option value="__new_doc__">＋ 新建空白论文并插入此图</option>
+            ${docRows.map(d => `<option value="${esc(d.id)}">${esc(d.title)}${d.kind === 'deck' ? '（幻灯片）' : ''}</option>`).join('')}
+          </select>
+        </label>
+        <div class="row end">
+          <button type="button" data-close>取消</button>
+          <button type="submit" class="primary">打开文稿并插入图表</button>
+        </div>
+      </form>
+    </div>`
+    dlg.hidden = false
+    dlg.onclick = e => { if (e.target === dlg || (e.target as HTMLElement).closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = '' } }
+    const form = dlg.querySelector<HTMLFormElement>('#insertFigDocForm')!
+    form.onsubmit = async e => {
+      e.preventDefault()
+      const targetId = String(new FormData(form).get('doc_id') || '__new_doc__')
+      dlg.hidden = true; dlg.innerHTML = ''
+      spaces.set('write')
+      if (targetId === '__new_doc__') {
+        const d = await api('/api/docs', { method: 'POST', body: JSON.stringify({ title: `${caption} · 论文初稿` }) })
+        await loadDocs()
+        await open(d.id)
+      } else {
+        await open(targetId)
+      }
+      await insertFigureIntoActiveSession(assetId, caption)
+    }
+  },
 })
 
 const calendarUi = initCalendar(api, (m, e) => showNotice(m, e), {
@@ -359,12 +406,7 @@ const mailUi = initMail(api, (m, e) => showNotice(m, e), {
   },
 })
 
-initCopilot({
-  token: () => TOKEN,
-  activeDoc: () => session ? { id: session.docId, title: detail?.title || '未命名文档' } : null,
-})
-
-// 资料库页打开时，图标栏高亮「资料库」而不是当前空间
+// 资料库页打开时，图标栏高亮「资料库」按钮而不是当前空间
 new MutationObserver(() => {
   const lib = $('page').classList.contains('library-page')
   $('libraryBtn').classList.toggle('on', lib)
@@ -372,7 +414,7 @@ new MutationObserver(() => {
   if (!lib) library.leave()
   if (!$('page').classList.contains('datasets-page')) datasets.leave()
 }).observe($('page'), { attributes: true, attributeFilter: ['class'] })
-// 左侧图标栏：患者 / 临床研究 / 写作 / 日历 / 邮箱
+// 左侧图标栏：患者 / 临床研究 / 写作 / 科研制图 / 日历 / 邮箱
 const spaces = initSpaces({
   patients: {
     title: '患者', label: '患者', actions: 'ptActions', list: 'patientList', placeholder: '按代号、本机备注、标签筛选',
@@ -402,12 +444,23 @@ const spaces = initSpaces({
       calendarUi.leave()
       mailUi.leave()
       const page = $('page')
-      // 如果当前正开着文档（非患者页、非研究页、非日历页、非邮箱页），保留当前文档
-      if (session && !page.classList.contains('patient-page') && !page.classList.contains('study-page') && !page.classList.contains('calendar-page') && !page.classList.contains('mail-page') && !page.classList.contains('welcome-page')) {
+      // 如果当前正开着文档（非患者页、非研究页、非制图页、非日历页、非邮箱页），保留当前文档
+      if (session && !page.classList.contains('patient-page') && !page.classList.contains('study-page') && !page.classList.contains('studio-page') && !page.classList.contains('calendar-page') && !page.classList.contains('mail-page') && !page.classList.contains('welcome-page')) {
         return
       }
       leaveDoc()
       showWelcome()
+    }
+  },
+  studio: {
+    title: '科研制图', label: '图表库', actions: 'studioActions', list: 'studioList', placeholder: '按图表名称筛选',
+    enter: () => {
+      patientsUi.leave()
+      researchUi.leave()
+      calendarUi.leave()
+      mailUi.leave()
+      leaveDoc()
+      return researchUi.enterStudio()
     }
   },
   calendar: {
@@ -624,6 +677,8 @@ $('page').addEventListener('click', async e => {
   }
   if (session) return
   if (t.dataset.start === 'upload') { $('uploadInput').click(); return }
+  if (t.dataset.start === 'studio') { void researchUi.openStudio(); return }
+  if (t.dataset.start === 'study') { spaces.set('research'); return }
   if (t.dataset.start) { await createDoc(t.dataset.start as 'doc' | 'deck'); return }
   // 示例：新建对应的文档，把指令填进对话框（由用户确认后发送）
   await createDoc(t.dataset.example as 'doc' | 'deck', false)
@@ -991,13 +1046,23 @@ $('docTitle').onclick = () => editTitle()
 type DeckTheme = { label: string; bg: string; surface: string; title: string; body: string; muted: string; accent: string; accent2: string }
 let deckThemes: Record<string, DeckTheme> = {}
 
+let pendingDeckEdit: Promise<boolean> | null = null
+
 async function deckEdit(docId: string, ops: Array<Record<string, unknown>>, baseRev: number): Promise<boolean> {
+  const task = (async () => {
+    try {
+      await api(`/api/docs/${docId}/edit`, { method: 'POST', body: JSON.stringify({ base_rev: baseRev, ops }) })
+      return true
+    } catch (err) {
+      showNotice((err as Error).message, true)
+      return false
+    }
+  })()
+  pendingDeckEdit = task
   try {
-    await api(`/api/docs/${docId}/edit`, { method: 'POST', body: JSON.stringify({ base_rev: baseRev, ops }) })
-    return true
-  } catch (err) {
-    showNotice((err as Error).message, true)
-    return false
+    return await task
+  } finally {
+    if (pendingDeckEdit === task) pendingDeckEdit = null
   }
 }
 
@@ -1223,6 +1288,15 @@ $('deckToolbar').onclick = async e => {
       if (!menu.hidden) placeFixedPopup(menu, r, false)
       break
     }
+    case 'figure-studio': {
+      void researchUi.openDocFigureModal({
+        docTitle: detail?.title || '当前幻灯片',
+        onInsert: async (assetId, caption) => {
+          await insertFigureIntoActiveSession(assetId, caption)
+        },
+      })
+      break
+    }
     case 'chart-data': if (id && sel!.shape.attrs?.chart) await editChart(deck, id, sel!.shape.attrs.chart as ChartData); break
     case 'table': await deck.edit([{ op: 'add_table', slide_id: slide.attrs!.id, x: Math.round(W / 2 - 300), y: Math.round(H / 2 - 64), w: 600, rows: [['项目', '组 A', '组 B'], ['', '', ''], ['', '', '']] }]); break
     case 'fill': { const c = await pickColor(btn, theme, true); if (c && id) await deck.edit(each({ op: 'set_fill', color: c })); break }
@@ -1274,12 +1348,47 @@ $('deckToolbar').onchange = async e => {
 
 // —— 工具栏 ——
 
+async function insertFigureIntoActiveSession(assetId: string, caption: string): Promise<boolean> {
+  if (!session) return false
+  if (session.kind === 'doc' && session.editor) {
+    session.editor.insertFigureAsset(assetId, caption)
+    showNotice(`已插入科研图表「${caption}」（自动绑定可复现分析溯源）`)
+    return true
+  }
+  if (session.kind === 'deck' && session.deck) {
+    const slide = session.deck.selection()?.slide ?? session.deck.currentSlide()
+    if (!slide) return false
+    const W = session.deck.slideSize.cx / 12700
+    await session.deck.edit([{
+      op: 'add_image',
+      slide_id: slide.attrs!.id,
+      asset_id: assetId,
+      x: Math.round(W / 2 - 220),
+      y: 90,
+      w: 440,
+      description: caption,
+    }])
+    showNotice(`已将科研图表「${caption}」插入当前幻灯片`)
+    return true
+  }
+  return false
+}
+
 $('toolbar').onclick = async e => {
   const btn = (e.target as HTMLElement).closest('button')
   const cmd = btn?.dataset.cmd
   if (!cmd || !session?.editor) return
   const c = session.editor.commands as Record<string, (...a: any[]) => void>
   if (cmd === 'image') { $('imageInput').click(); return }
+  if (cmd === 'figureStudio') {
+    void researchUi.openDocFigureModal({
+      docTitle: detail?.title || '当前文稿',
+      onInsert: async (assetId, caption) => {
+        await insertFigureIntoActiveSession(assetId, caption)
+      },
+    })
+    return
+  }
   if (cmd === 'cite') { void addCitation(); return }
   if (cmd === 'tableMerge') {
     if (!session.editor.commands.tableMerge()) showNotice('先拖选两个以上相邻的单元格再合并')
@@ -2133,6 +2242,14 @@ $('chatImages').onclick = e => {
 $('imgUploadBtn')?.addEventListener('click', () => {
   $<HTMLInputElement>('chatImageInput')?.click()
 })
+$('chatStudioBtn')?.addEventListener('click', () => {
+  void researchUi.openDocFigureModal({
+    docTitle: detail?.title || '当前文稿',
+    onInsert: async (assetId, caption) => {
+      await insertFigureIntoActiveSession(assetId, caption)
+    },
+  })
+})
 $<HTMLInputElement>('chatImageInput')?.addEventListener('change', e => {
   const input = e.target as HTMLInputElement
   if (input.files && input.files.length) {
@@ -2187,8 +2304,21 @@ if (suggestCheckbox) {
 
 // —— 任务队列（同一用户的所有文档共用一个队列） ——
 
-interface QueueItem { id: string; doc_id: string; doc_title: string; label: string; suggest: boolean; since: string }
+interface QueueItem { id: string; doc_id: string; doc_title: string; label: string; suggest: boolean; since: string; comment_id?: string | null }
 let queue: { running: QueueItem | null; active?: QueueItem[]; queued: QueueItem[] } = { running: null, active: [], queued: [] }
+
+function syncCommentAskButtons(): void {
+  const activeList = queue.active ?? (queue.running ? [queue.running] : [])
+  document.querySelectorAll<HTMLElement>('#comments .card[data-cid]').forEach(card => {
+    const cid = card.dataset.cid
+    const btn = card.querySelector<HTMLButtonElement>('button[data-act="ask"]')
+    if (!cid || !btn) return
+    const running = activeList.some(item => item.doc_id === session?.docId && item.comment_id === cid)
+    const queued = !running && queue.queued.some(item => item.doc_id === session?.docId && item.comment_id === cid)
+    btn.disabled = running || queued
+    btn.textContent = running ? 'AI 处理中…' : queued ? '排队中…' : '让 AI 处理'
+  })
+}
 
 async function loadQueue(): Promise<void> {
   if (!TOKEN) return
@@ -2196,6 +2326,7 @@ async function loadQueue(): Promise<void> {
     queue = await api('/api/queue')
   } catch { return }
   renderQueue()
+  syncCommentAskButtons()
   // 忙碌状态只按刚取到的队列设置：判断当前打开的文档是否正在执行
   const activeList = queue.active ?? (queue.running ? [queue.running] : [])
   const isCurrentDocBusy = !!session?.docId && activeList.some(item => item.doc_id === session?.docId)
@@ -2361,6 +2492,7 @@ function renderComments(): void {
       </div>
     </div>`
     }).join('')
+  syncCommentAskButtons()
 }
 
 $('comments').onclick = async e => {
@@ -2399,7 +2531,11 @@ $('comments').onclick = async e => {
       if (!text) return
       await api(`/api/docs/${session.docId}/comments/${cid}/replies`, { method: 'POST', body: JSON.stringify({ text }) })
     } else if (btn.dataset.act === 'ask') {
+      if (btn.disabled) return
+      btn.disabled = true
+      btn.textContent = '排队中…'
       await api(`/api/docs/${session.docId}/comments/${cid}/ask?async=1`, { method: 'POST', body: JSON.stringify({ text, suggest: $<HTMLInputElement>('suggestMode').checked }) })
+      await loadQueue()
       switchTab('chatPane')
     } else if (btn.dataset.act === 'delete') {
       if (!await askConfirm({ title: '删除评论', message: '删除这条评论及其全部回复？正文里的评论标记也会去掉。', confirm: '删除', danger: true })) return
@@ -2415,13 +2551,24 @@ $('comments').onclick = async e => {
 
 // —— 修订 ——
 
+let resolvingSuggestion: Promise<void> | null = null
+
 async function resolveSuggestion(group: string, accept: boolean): Promise<void> {
   if (!session) return
+  const docId = session.docId
+  const task = (async () => {
+    try {
+      await api(`/api/docs/${docId}/suggestions/${group}/${accept ? 'accept' : 'reject'}`, { method: 'POST' })
+      await refresh(false)
+    } catch (err) {
+      showNotice((err as Error).message, true)
+    }
+  })()
+  resolvingSuggestion = task
   try {
-    await api(`/api/docs/${session.docId}/suggestions/${group}/${accept ? 'accept' : 'reject'}`, { method: 'POST' })
-    await refresh(false)
-  } catch (err) {
-    showNotice((err as Error).message, true)
+    await task
+  } finally {
+    if (resolvingSuggestion === task) resolvingSuggestion = null
   }
 }
 
@@ -2676,8 +2823,16 @@ $('exportFonts').onclick = e => {
   if (v) { try { localStorage.setItem(FONTS_KEY, v) } catch { /* 无痕模式 */ } renderExportFonts() }
 }
 async function ensureSuggestionsResolvedBeforeExport(): Promise<void> {
-  if (!session || !detail?.suggestions?.length) return
-  const count = detail.suggestions.length
+  if (!session) return
+  if (pendingDeckEdit) await pendingDeckEdit
+  if (resolvingSuggestion) await resolvingSuggestion
+  const domGroups = new Set(
+    Array.from(document.querySelectorAll<HTMLElement>('[data-suggest-group]:not(.suggest-paired-delete)'))
+      .map(el => el.dataset.suggestGroup)
+      .filter(Boolean),
+  )
+  const count = detail?.suggestions?.length || domGroups.size
+  if (!count) return
   const accept = await askConfirm({
     title: '导出前处理待采纳修订',
     message: `当前文档有 ${count} 处待采纳修订（编辑区目前显示的是修订后的内容）。是否先全部采纳后再导出，使导出的文件与编辑区显示一致？（点「取消」将按未采纳前的原稿导出）`,
@@ -2738,10 +2893,23 @@ document.addEventListener('heurion:readview', async () => {
 
 // 启动：没有令牌 → 登录页；有令牌 → 取当前用户，失效时 api() 会回到登录页
 async function boot(): Promise<void> {
-  if (!TOKEN) { $('app').hidden = true; await showAuthScreen(); return }
+  if (!TOKEN) {
+    $('app').hidden = true
+    const cpBtn = document.getElementById('btnCopilotToggle')
+    if (cpBtn) cpBtn.hidden = true
+    document.getElementById('copilotDrawer')?.classList.add('hidden')
+    await showAuthScreen()
+    return
+  }
   const me = await api<Me>('/api/me')
   ME = me
   initUserMenu(me, api, showNotice)
+  initCopilot({
+    token: () => TOKEN,
+    user: () => ME,
+    onUnauthorized: () => signOut(),
+    activeDoc: () => session ? { id: session.docId, title: detail?.title || '未命名文档' } : null,
+  })
   // 回到上次停留的工作空间（显示该空间的开始页）
   spaces.setEnabled('patients', me.tenant?.settings.patient_module !== false)
   void actions.refreshBadge()

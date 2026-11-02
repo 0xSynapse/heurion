@@ -19,9 +19,14 @@ export function toolInScope(name: string, scope: ToolScope | undefined): boolean
   return scope === 'deck' || !DECK.test(name)
 }
 
-/** 回合所在文档的工具范围：幻灯片 → deck；不属于患者、随航等的普通稿件 → doc；其余为全部（null）。 */
-export function scopeOf(row: Pick<DocRow, 'kind' | 'context'> | undefined): ToolScope | null {
+/** 用户在普通稿件里提到制作 / 同步更新 PPT、幻灯片时，升级为 deck 范围（同时具备文稿与幻灯片工具）。 */
+const WANTS_DECK = /\bpptx?\b|\bslides?\b|\bdeck\b|幻灯片|演示文稿|课件/i
+
+/** 回合所在文档的工具范围：幻灯片（或消息要求操作幻灯片）→ deck；不属于患者、随航等的普通稿件 → doc；其余为全部（null）。 */
+export function scopeOf(row: Pick<DocRow, 'kind' | 'context'> | undefined, message?: string): ToolScope | null {
   if (!row) return null
   if (row.kind === 'deck') return 'deck'
-  return row.context ? null : 'doc'
+  if (row.context) return null
+  if (message && WANTS_DECK.test(message)) return 'deck'
+  return 'doc'
 }

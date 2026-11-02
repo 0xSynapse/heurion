@@ -3,7 +3,7 @@ import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { referencePlan } from '../model/references.ts'
 import { measureExportText, type MeasureLookup } from '../model/measurements.ts'
-import { colWidths } from '../model/schema.ts'
+import { colWidths, normalizeHexColor } from '../model/schema.ts'
 import { resolveSuggestions } from '../ops/suggest.ts'
 import { readGrid, type GridCell } from '../model/table-grid.ts'
 import { looksLikeHeaderRow } from '../model/table-header.ts'
@@ -36,7 +36,7 @@ export interface ExportInput {
 
 export interface ExportResult { bytes: Uint8Array; warnings: string[] }
 
-const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"'
+const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const SECT = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>'
 
@@ -92,6 +92,7 @@ ${[1, 2, 3, 4, 5, 6].map(heading).join('')}
 <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720"/></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720"/></w:pPr><w:rPr><w:i/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="480"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Caption"><w:name w:val="caption"/><w:basedOn w:val="Normal"/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:sz w:val="20"/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="CommentReference"><w:name w:val="annotation reference"/><w:rPr><w:sz w:val="16"/></w:rPr></w:style>
@@ -206,9 +207,18 @@ function exportable(doc: PMNode): PMNode {
 }
 
 export function exportDocx(input: ExportInput): ExportResult {
-  input = { ...input, doc: exportable(input.doc) }
+  let baseFiles: Record<string, Uint8Array> | null = null
+  if (input.pkg) {
+    try {
+      const unzipped = safeUnzipDocx(input.pkg)
+      if (unzipped['word/document.xml']) baseFiles = unzipped
+    } catch {
+      baseFiles = null
+    }
+  }
+  input = { ...input, doc: exportable(input.doc), baseline: baseFiles ? input.baseline : null }
   const warnings: string[] = []
-  const pkg = new Package(input.pkg ? safeUnzipDocx(input.pkg) : template())
+  const pkg = new Package(baseFiles ?? template())
   const originalXml = pkg.text('word/document.xml')
   const styles = styleIndex(pkg.text('word/styles.xml'))
   const baseline = new Map<string, PMNode>()
@@ -319,6 +329,7 @@ export function exportDocx(input: ExportInput): ExportResult {
 
   const headingStyle = (level: number) => styles.get(`heading ${level}`) ?? styles.get(`标题 ${level}`) ?? `Heading${level}`
   const missingHeading = new Set<number>()
+  const missingBuiltins = new Set<'Quote' | 'Code'>()
   let nextDocPr = 90_001
 
   /** base：沿用的原文 run 属性（rPr 的子元素原文，不含粗斜体等由 mark 表达的属性），与 mark 合并后按 schema 顺序输出。 */
@@ -332,6 +343,21 @@ export function exportDocx(input: ExportInput): ExportResult {
       else if (m.type.name === 'sub') p += '<w:vertAlign w:val="subscript"/>'
       else if (m.type.name === 'code') p += '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>'
       else if (m.type.name === 'link') p += '<w:rStyle w:val="Hyperlink"/>'
+      else if (m.type.name === 'text_style') {
+        const rawFam = m.attrs.font_family as string | null
+        const fam = rawFam ? rawFam.split(',')[0]!.trim().replace(/^['"]+|['"]+$/g, '') : ''
+        if (fam) p += `<w:rFonts w:ascii="${esc(fam)}" w:hAnsi="${esc(fam)}" w:eastAsia="${esc(fam)}" w:cs="${esc(fam)}"/>`
+        const sz = m.attrs.font_size as string | null
+        if (sz) {
+          const pt = parseFloat(String(sz))
+          if (Number.isFinite(pt) && pt > 0) {
+            const hp = Math.round(pt * 2)
+            p += `<w:sz w:val="${hp}"/><w:szCs w:val="${hp}"/>`
+          }
+        }
+        const hex = normalizeHexColor(m.attrs.color as string | null)
+        if (hex) p += `<w:color w:val="${hex}"/>`
+      }
     }
     if (base) p = mergeEls(base, p, RPR_ORDER)
     return p ? `<w:rPr>${p}</w:rPr>` : ''
@@ -404,13 +430,37 @@ export function exportDocx(input: ExportInput): ExportResult {
       if (!styles.has(id.toLowerCase())) missingHeading.add(level)
       p += `<w:pStyle w:val="${esc(id)}"/>`
     } else if (node.attrs.style) {
-      const id = styles.get(String(node.attrs.style).toLowerCase())
-      if (id) p += `<w:pStyle w:val="${esc(id)}"/>`
+      const s = String(node.attrs.style)
+      const id = styles.get(s.toLowerCase()) ?? (s === 'Quote' || s === 'Code' ? s : undefined)
+      if (id) {
+        if (!styles.has(id.toLowerCase()) && (id === 'Quote' || id === 'Code')) missingBuiltins.add(id)
+        p += `<w:pStyle w:val="${esc(id)}"/>`
+      }
     }
     p += extra
     const align = node.attrs.align as string | null
     if (align) p += `<w:jc w:val="${align === 'justify' ? 'both' : align === 'left' ? 'left' : align}"/>`
     return p ? `<w:pPr>${p}</w:pPr>` : ''
+  }
+
+  // 导入文档的正文默认段落属性（行距 spacing、缩进 ind）：当新增段落或整篇全选粘贴后块 ID 重新生成时，沿用原文档正文的首行缩进与行距
+  let defaultBodyPPr = ''
+  if (input.baseline) {
+    input.baseline.forEach(n => {
+      if (defaultBodyPPr || n.type.name !== 'paragraph' || n.attrs.style || n.attrs.align) return
+      const raw = n.attrs.id ? input.src(n.attrs.id as string) : null
+      if (!raw || !/^<w:p\b/.test(raw) || /<w:(drawing|pict|numPr)\b/.test(raw)) return
+      const ppr = elementChildrenRaw(raw).find(k => /^<w:pPr\b/.test(k))
+      if (!ppr) return
+      const kept = elementChildrenRaw(ppr).filter(k => /^<w:(spacing|ind)\b/.test(k)).join('')
+      if (kept) defaultBodyPPr = kept
+    })
+  }
+  const fallbackPara = (node: PMNode, extraPPr = ''): string => {
+    const own = innerOf(pPr(node, extraPPr) || '<w:pPr/>')
+    const base = node.type.name === 'paragraph' && !node.attrs.style && !extraPPr ? defaultBodyPPr : ''
+    const merged = base && own ? mergeEls(base, own, PPR_ORDER) : (own || base)
+    return `<w:p>${merged ? `<w:pPr>${merged}</w:pPr>` : ''}${inline(node)}</w:p>`
   }
 
   /**
@@ -425,7 +475,8 @@ export function exportDocx(input: ExportInput): ExportResult {
     if (!raw || !/^<w:p\b/.test(raw) || /<w:(drawing|pict)\b/.test(raw)) return null
     const kids = elementChildrenRaw(raw)
     const pPrRaw = kids.find(k => /^<w:pPr\b/.test(k))
-    const firstRun = kids.find(k => /^<w:r\b/.test(k) && /<w:t\b/.test(k))
+    const runs = kids.flatMap(k => /^<w:ins\b/.test(k) ? elementChildrenRaw(k) : [k])
+    const firstRun = runs.find(k => /^<w:r\b/.test(k) && /<w:t\b/.test(k))
     const rPrRaw = firstRun ? elementChildrenRaw(firstRun).find(k => /^<w:rPr\b/.test(k)) : undefined
     // 顶层段落不是列表项；原来是标题样式而现在成了普通段落时，不再沿用标题样式。
     // 分节符（pPr 里的 sectPr）属于该段落所在节的结尾，改了文字仍要保留，否则其后的分页 / 页面设置会丢
@@ -506,7 +557,7 @@ export function exportDocx(input: ExportInput): ExportResult {
     }
     const plain = cleared(node)
     const copyOf = node.attrs.suggest === 'insert' && node.attrs.suggest_of ? node.attrs.suggest_of as string : undefined
-    let xml = (copyOf ? null : verbatim(plain)) ?? regenerated(plain, '', copyOf) ?? `<w:p>${pPr(plain)}${inline(plain)}</w:p>`
+    let xml = (copyOf ? null : verbatim(plain)) ?? regenerated(plain, '', copyOf) ?? fallbackPara(plain)
     if (node.attrs.suggest === 'delete' && hasInsertCopy.has(id)) {
       xml = xml.replace(/^<w:p\b[^>]*>/, m => m.replace(/\s(?:w14:paraId|w14:textId)="[^"]*"/g, ''))
     }
@@ -521,7 +572,7 @@ export function exportDocx(input: ExportInput): ExportResult {
     const id = node.attrs.id as string | null
     const raw = id ? input.src(id) : null
     const before = id ? baseline.get(id) : undefined
-    if (!raw || !before || before.type !== node.type || node.attrs.suggest) return null
+    if (!raw || !before || before.type !== node.type || node.attrs.suggest || before.attrs.suggest) return null
     if (['level', 'style', 'align'].some(k => before.attrs[k] !== node.attrs[k])) return null
     const rawNum = /<w:numPr>[\s\S]*?<\/w:numPr>/.exec(raw)?.[0]
     // 列表项：层级不变即可沿用原文的编号（重新编号的子列表有自己的 numId，原样保留）
@@ -620,7 +671,7 @@ export function exportDocx(input: ExportInput): ExportResult {
           if (b.eq(n)) return x
           // 段落属性（样式、对齐）改了：交给重新生成
           const sameAttrs = ['style', 'align'].every(a => b.attrs[a] === n.attrs[a])
-          const patchedP = n.type.name === 'paragraph' && b.type === n.type && sameAttrs ? patchXml(x, b, n) : null
+          const patchedP = n.type.name === 'paragraph' && b.type === n.type && sameAttrs ? patchXml(x, b, n, /<w:(drawing|pict)\b/.test(x)) : null
           if (patchedP === null) failed = true
           return patchedP ?? x
         })
@@ -633,7 +684,7 @@ export function exportDocx(input: ExportInput): ExportResult {
   }
 
   const paragraph = (node: PMNode, extraPPr = ''): string =>
-    verbatim(node) ?? patched(node) ?? regenerated(node, extraPPr) ?? `<w:p>${pPr(node, extraPPr)}${inline(node)}</w:p>`
+    verbatim(node) ?? patched(node) ?? regenerated(node, extraPPr) ?? fallbackPara(node, extraPPr)
 
   const figure = (node: PMNode): string => {
     const rawId = String(node.attrs.asset_id || '')
@@ -711,6 +762,12 @@ export function exportDocx(input: ExportInput): ExportResult {
     const v = childEl(childEl(tc, 'tcPr'), 'vMerge')
     return !!v && (attrOf(v, 'w:val') ?? 'continue') === 'continue'
   }
+  const unwrapSdtRaw = (els: string[]): string[] =>
+    els.flatMap(k => {
+      if (!/^<w:sdt\b/.test(k)) return [k]
+      const content = elementChildrenRaw(k).find(c => /^<w:sdtContent\b/.test(c))
+      return content ? unwrapSdtRaw(elementChildrenRaw(content)) : []
+    })
   const tableSrc = (node: PMNode): TableSrc | null => {
     const id = node.attrs.id as string
     const xml = input.src(id)
@@ -723,8 +780,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       tcPr: new Map(), trPr: new Map(), para: new Map(),
     }
     let bi = 0
-    for (const tr of kids.filter(k => /^<w:tr\b/.test(k))) {
-      const trKids = elementChildrenRaw(tr)
+    for (const tr of unwrapSdtRaw(kids).filter(k => /^<w:tr\b/.test(k))) {
+      const trKids = unwrapSdtRaw(elementChildrenRaw(tr))
       // 与导入一致：vMerge 续行格不对应模型里的单元格；整行都是续行格的行在模型里不存在
       const tcs = trKids.filter(k => /^<w:tc\b/.test(k) && !isVMergeContinue(k))
       if (tcs.length === 0) continue
@@ -735,11 +792,12 @@ export function exportDocx(input: ExportInput): ExportResult {
         const bcell = brow.maybeChild(ci)
         const key = bcell?.firstChild?.attrs.id as string | undefined
         if (!bcell || !key) return
-        const tcKids = elementChildrenRaw(tc)
+        const tcKids = unwrapSdtRaw(elementChildrenRaw(tc))
         out.tcPr.set(key, tcKids.find(k => /^<w:tcPr\b/.test(k)) ?? '')
         out.trPr.set(key, trPr)
         const ps = tcKids.filter(k => /^<w:p\b/.test(k))
         if (ps.length === bcell.childCount) bcell.forEach((p, _o, i) => { if (p.attrs.id) out.para.set(p.attrs.id as string, ps[i]!) })
+        else if (ps.length > 0) out.para.set(key, ps[0]!)
       })
     }
     return out
@@ -854,7 +912,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       if (!raw) return null
       const pKids = elementChildrenRaw(raw)
       const pPrRaw = pKids.find(k => /^<w:pPr\b/.test(k)) ?? ''
-      const firstRun = pKids.find(k => /^<w:r\b/.test(k)) ?? ''
+      const runs = pKids.flatMap(k => /^<w:ins\b/.test(k) ? elementChildrenRaw(k) : [k])
+      const firstRun = runs.find(k => /^<w:r\b/.test(k) && /<w:t\b/.test(k)) ?? runs.find(k => /^<w:r\b/.test(k)) ?? ''
       const rPrRaw = elementChildrenRaw(firstRun).find(k => /^<w:rPr\b/.test(k)) ?? ''
       return {
         pPr: pPrRaw ? stripEls(innerOf(pPrRaw), ['pPrChange', 'sectPr']) : '',
@@ -891,7 +950,14 @@ export function exportDocx(input: ExportInput): ExportResult {
             } else seg.push(ch)
           })
           paras += genPara(p.type.create({ ...p.attrs, id: null }, seg, p.marks), fmt)
-        } else paras += genPara(p, fmt)
+        } else {
+          const rawP = id ? orig?.para.get(id) : undefined
+          const sameAttrs = before ? ['style', 'align'].every(a => before.attrs[a] === p.attrs[a]) : false
+          const patchedCellP = rawP && before && p.type.name === 'paragraph' && before.type === p.type && sameAttrs
+            ? patchXml(rawP, before, p, /<w:(drawing|pict)\b/.test(rawP))
+            : null
+          paras += patchedCellP ?? genPara(p, fmt)
+        }
       })
       return paras || '<w:p/>'
     }
@@ -1054,7 +1120,7 @@ export function exportDocx(input: ExportInput): ExportResult {
     const last = bodyChildrenRaw(originalXml).at(-1)
     sect = last && /^<w:sectPr\b/.test(last) ? last : ''
     // 确保生成内容用到的命名空间都已声明
-    for (const [prefix, uri] of [['r', REL], ['wp', 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'], ['a', 'http://schemas.openxmlformats.org/drawingml/2006/main'], ['pic', 'http://schemas.openxmlformats.org/drawingml/2006/picture']] as const) {
+    for (const [prefix, uri] of [['r', REL], ['wp', 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'], ['a', 'http://schemas.openxmlformats.org/drawingml/2006/main'], ['pic', 'http://schemas.openxmlformats.org/drawingml/2006/picture'], ['m', 'http://schemas.openxmlformats.org/officeDocument/2006/math']] as const) {
       if (!new RegExp(`xmlns:${prefix}=`).test(head)) head = head.replace(/<w:document\b/, `<w:document xmlns:${prefix}="${uri}"`)
     }
   }
@@ -1070,12 +1136,15 @@ export function exportDocx(input: ExportInput): ExportResult {
   }
   let documentXml = `${head}${body}${sect}</w:body></w:document>`
 
-  // 补齐缺失的标题样式
-  if (missingHeading.size > 0) {
+  // 补齐缺失的标题样式与内置段落样式（Quote / Code）
+  if (missingHeading.size > 0 || missingBuiltins.size > 0) {
     const stylesXml = pkg.text('word/styles.xml')
     if (stylesXml) {
-      const add = [...missingHeading].map(n => `<w:style w:type="paragraph" w:styleId="Heading${n}"><w:name w:val="heading ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:outlineLvl w:val="${n - 1}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${[36, 32, 28, 26, 24, 24][n - 1]}"/></w:rPr></w:style>`).join('')
-      pkg.put('word/styles.xml', stylesXml.replace('</w:styles>', `${add}</w:styles>`))
+      const addHeadings = [...missingHeading].map(n => `<w:style w:type="paragraph" w:styleId="Heading${n}"><w:name w:val="heading ${n}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:outlineLvl w:val="${n - 1}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${[36, 32, 28, 26, 24, 24][n - 1]}"/></w:rPr></w:style>`).join('')
+      const addBuiltins = [...missingBuiltins].map(s => s === 'Quote'
+        ? '<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720"/></w:pPr><w:rPr><w:i/></w:rPr></w:style>'
+        : '<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="480"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr></w:style>').join('')
+      pkg.put('word/styles.xml', stylesXml.replace('</w:styles>', `${addHeadings}${addBuiltins}</w:styles>`))
     }
   }
 

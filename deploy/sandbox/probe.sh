@@ -38,7 +38,7 @@ run_as 59999 "$A" 'curl -sS -m 5 -o /dev/null http://embedder:8003/health' >/dev
 # 数据导入（与平台 datasets/ingest.ts 同一条路）：平台在工作区里建中转目录、放输入 → 以该 uid 运行导入脚本 → 平台读结果、清理
 run_as 59999 "$A" 'python3 -c "import pandas, scipy, statsmodels, lifelines, pyreadstat, openpyxl, matplotlib"' >/dev/null && ok "统计包可用（pandas、statsmodels、lifelines、pyreadstat）" || bad "统计包缺失"
 STAGE="$ROOT/workspaces/$A/.datasets/probe"
-mkdir -p "$STAGE" && chmod 2777 "$ROOT/workspaces/$A/.datasets" "$STAGE" && printf 'grp,val\nA,1\nB,2\n' > "$STAGE/input.csv" && chmod 644 "$STAGE/input.csv"
+mkdir -p "$STAGE" && { chmod 2777 "$ROOT/workspaces/$A/.datasets" 2>/dev/null || true; } && chmod 2777 "$STAGE" && printf 'grp,val\nA,1\nB,2\n' > "$STAGE/input.csv" && chmod 644 "$STAGE/input.csv"
 run_as 59999 "$A" "python3 /app/apps/platform/scripts/dataset_ingest.py $STAGE/input.csv $STAGE/out" >/dev/null
 grep -q '"ok": true' "$STAGE/out/profile.json" 2>/dev/null && head -1 "$STAGE/out/data.csv" | grep -q 'grp,val' && rm -rf "$STAGE" && [ ! -e "$STAGE" ] \
   && ok "数据导入在隔离环境里运行，平台能读结果并清理" || bad "数据导入在隔离环境里失败"

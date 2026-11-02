@@ -115,6 +115,7 @@ export interface QueueItem {
   /** running：开始时间；queued：入队时间。 */
   since: string
   turn_id?: string | null
+  comment_id?: string | null
 }
 
 export interface QueueView {
@@ -242,6 +243,7 @@ export class TurnService {
       label: this.label(job),
       suggest: !!job.opts.suggest,
       since,
+      comment_id: job.opts.commentId ?? null,
       ...(turnId !== undefined ? { turn_id: turnId } : {}),
     })
     const runningList = [...(this.running.get(userId)?.values() ?? [])]
@@ -253,12 +255,25 @@ export class TurnService {
     }
   }
 
+  /** 判断同一文档的同一条评论是否已在执行或排队中（防连点重复入队）。 */
+  hasCommentJob(userId: string, docId: string, commentId: string): boolean {
+    const r = this.running.get(userId)?.get(docId)
+    if (r && r.job.opts.commentId === commentId) return true
+    const q = this.queues.get(userId) ?? []
+    return q.some(j => j.docId === docId && j.opts.commentId === commentId)
+  }
+
   /** 排队执行一轮；返回的 Promise 在该回合结束时完成。emit 收到本回合的全部事件。 */
   submit(userId: string, docId: string, message: string, emit: (e: UiEvent) => void = () => {}, opts: TurnOptions = {}): Promise<void> {
     const target = this.docs.store.getDoc(docId)
     if (!target || target.deleted_at) return Promise.reject(new Error(`doc ${docId} not found`))
     if (opts.lane === 'copilot') {
       return this.submitCopilot(userId, docId, message, emit, opts)
+    }
+    if (opts.commentId && this.hasCommentJob(userId, docId, opts.commentId)) {
+      emit({ type: 'queued', position: 1, message })
+      emit({ type: 'done' })
+      return Promise.resolve()
     }
     return new Promise(resolve => {
       const job = { id: 'q' + randomUUID().replace(/-/g, '').slice(0, 11), docId, message, opts, enqueuedAt: new Date().toISOString() }
@@ -363,7 +378,7 @@ export class TurnService {
     // 分配可用的 slot：按文档的工具范围分前缀（普通稿件 doc_0、doc_1…，幻灯片 deck_…，患者文档等 full_…），
     // 同一前缀的 dsh 进程带同一套 MCP 工具（mcp/scope.ts）
     const usedSlots = new Set([...runningMap.values()].map(r => r.slot))
-    const prefix = scopeOf(this.docs.store.getDoc(job.docId)) ?? 'full'
+    const prefix = scopeOf(this.docs.store.getDoc(job.docId), job.message) ?? 'full'
     let slot = `${prefix}_0`
     for (let i = 0; i < this.maxDocConcurrency; i++) {
       const candidate = `${prefix}_${i}`

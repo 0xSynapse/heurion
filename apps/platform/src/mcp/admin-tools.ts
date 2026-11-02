@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, isAbsolute, join, relative } from 'node:path'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -37,10 +37,12 @@ interface Op {
 
 interface ToolSpec { name: string; description: string; input: Record<string, z.ZodTypeAny>; actions: Record<string, Op> }
 
-/** 只对本进程拥有的路径改权限（别的 uid 的文件 chmod 会 EPERM）；拿不到 uid 的平台（Windows）不改。 */
+/** 只对本进程拥有的非符号链接路径改权限（别的 uid 的文件 chmod 会 EPERM；拒绝符号链接防提权）；拿不到 uid 的平台（Windows）不改。 */
 export function chmodIfOwned(path: string, mode: number): void {
   if (typeof process.getuid !== 'function') return
-  if (statSync(path).uid === process.getuid()) chmodSync(path, mode)
+  const st = lstatSync(path)
+  if (st.isSymbolicLink()) throw new Error(`不允许符号链接：${path}`)
+  if (st.uid === process.getuid()) chmodSync(path, mode)
 }
 
 export interface WorkspaceFile { bytes: Uint8Array; name: string; mime: string }
@@ -187,7 +189,7 @@ export const ADMIN_TOOLS: ToolSpec[] = [
       purge: { method: 'DELETE', path: a => `/api/docs/${enc(a.doc_id)}/purge`, confirm: true, probe: () => '/api/trash', summary: a => `彻底删除回收站里的文档 ${a.doc_id}（不可恢复）` },
       save_version: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/save` },
       restore_version: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/versions/${enc(a.seq)}/restore` },
-      revert_turn: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/turns/${enc(a.turn_id)}/revert` },
+      revert_turn: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/turns/${enc(a.turn_id || 'latest')}/revert` },
       export: { method: 'GET', path: a => `/api/docs/${enc(a.doc_id)}/export.${a.format ?? 'docx'}${q({ fonts: a.fonts })}`, save: a => `exports/${a.doc_id}.${a.format ?? 'docx'}` },
     },
   },
@@ -238,14 +240,15 @@ export const ADMIN_TOOLS: ToolSpec[] = [
   },
   {
     name: 'memory_manage',
-    description: '记忆管理（和记忆页一致）：list 全部记忆与待确认；events 一条记忆的历史；edit 改内容 / 类型；settings 看开关、pause / resume 暂停或恢复；export 导出；import 从工作区 JSON 文件 file_path 导入（同样过敏感内容拦截）；clear_all 清空全部记忆（不可恢复，需确认）。提议 / 忘记 / 检索 / 整理仍用 memory_propose / memory_forget / memory_search / memory_review；整理建议由用户采纳。',
-    input: { action: z.enum(['list', 'events', 'edit', 'pause', 'resume', 'export', 'import', 'clear_all']), memory_id: z.string().optional(), content: z.string().max(500).optional(), kind: z.enum(['preference', 'fact', 'style', 'term']).optional(), file_path: z.string().optional(), reason: reasonField },
+    description: '记忆管理（和记忆页一致）：list 全部记忆与待确认；events 一条记忆的历史；edit 改内容 / 类型；settings 看开关、pause / resume 暂停或恢复；train_from_doc 从指定文档或跨领域范例（doc_id / exemplar_text / domain）执行退化-重构技能训练；export 导出；import 从工作区 JSON 文件 file_path 导入（同样过敏感内容拦截）；clear_all 清空全部记忆（不可恢复，需确认）。提议 / 忘记 / 检索 / 整理仍用 memory_propose / memory_forget / memory_search / memory_review；整理建议由用户采纳。',
+    input: { action: z.enum(['list', 'events', 'edit', 'pause', 'resume', 'train_from_doc', 'export', 'import', 'clear_all']), memory_id: z.string().optional(), content: z.string().max(500).optional(), kind: z.enum(['preference', 'fact', 'style', 'term']).optional(), doc_id: z.string().optional(), exemplar_text: z.string().optional(), domain: z.enum(['manuscript', 'biostats', 'deck', 'general_mcp']).optional(), file_path: z.string().optional(), reason: reasonField },
     actions: {
       list: { method: 'GET', path: () => '/api/memory' },
       events: { method: 'GET', path: a => `/api/memory/${enc(a.memory_id)}/events` },
       edit: { method: 'PATCH', path: a => `/api/memory/${enc(a.memory_id)}`, body: a => ({ json: only(a, ['content', 'kind']) }) },
       pause: { method: 'PUT', path: () => '/api/memory/settings', body: () => ({ json: { paused: true } }) },
       resume: { method: 'PUT', path: () => '/api/memory/settings', body: () => ({ json: { paused: false } }) },
+      train_from_doc: { method: 'POST', path: () => '/api/memory/skill-train', body: a => ({ json: only(a, ['doc_id', 'exemplar_text', 'domain']) }) },
       export: { method: 'GET', path: () => '/api/memory-export' },
       import: { method: 'POST', path: () => '/api/memory-import', body: (a, file) => ({ json: JSON.parse(new TextDecoder().decode(file(a.file_path).bytes)) }) },
       clear_all: { method: 'DELETE', path: () => '/api/memory', confirm: true, summary: () => '清空你的全部记忆（偏好、写法、术语、事实；不可恢复）' },
@@ -430,6 +433,7 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
           const dir = join(out, '..')
           mkdirSync(dir, { recursive: true })
           chmodIfOwned(dir, 0o2777)
+          rmSync(out, { force: true })
           writeFileSync(out, r.bytes)
           chmodIfOwned(out, 0o644)
           return json({ saved: rel, bytes: r.bytes.byteLength, message: `已导出到工作区 ${rel}` })

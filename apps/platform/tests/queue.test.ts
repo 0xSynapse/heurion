@@ -78,14 +78,22 @@ describe('任务队列', () => {
     expect(row.status).toBe('cancelled')
   })
 
-  it('评论任务显示用户的要求而不是内部提示', async () => {
+  it('评论任务显示用户的要求而不是内部提示，且同一条评论连点「让 AI 处理」自动幂等去重', async () => {
     const t = env()
     const c = t.store.addComment({ doc_id: t.a, node_id: 'x', snippet: '' })
     t.store.addReply(c.id, 'user', '@heurion 改成英文')
     void t.turns.submit('u1', t.a, '占位')
-    void t.turns.submit('u1', t.a, `请处理文档 ${t.a} 中的评论 ${c.id}：\n…`, undefined, { commentId: c.id })
+    const prompt = `请处理文档 ${t.a} 中的评论 ${c.id}：\n…`
+    // 连续点击 5 次同一条评论的「让 AI 处理」：只入队 1 个任务，不产生重复风暴
+    for (let i = 0; i < 5; i++) {
+      void t.turns.submit('u1', t.a, prompt, undefined, { commentId: c.id })
+    }
     await tick()
-    expect(t.turns.view('u1').queued[0]!.label).toBe('处理评论：改成英文')
+    const v = t.turns.view('u1')
+    expect(v.queued.length).toBe(1)
+    expect(v.queued[0]!.label).toBe('处理评论：改成英文')
+    expect(v.queued[0]!.comment_id).toBe(c.id)
+    expect(t.turns.hasCommentJob('u1', t.a, c.id)).toBe(true)
   })
 
   it('服务重启：排队中的任务继续执行，没跑完的回合标为 interrupted', async () => {

@@ -2,6 +2,7 @@ import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { DECK_THEMES } from '../model/deck-themes.ts'
+import { normalizeHexColor } from '../model/schema.ts'
 import { chartWorkbook, newChartXml, patchChart, readChart, type ChartData } from './pptx-chart.ts'
 import type { CitationRow } from '../store/db.ts'
 import { citationOrder } from '../views/read.ts'
@@ -112,16 +113,19 @@ function runProps(marks: readonly Mark[], forceSup = false): string {
       }
     }
     if (color) {
-      const hex = color.replace(/^#/, '').toUpperCase()
-      if (/^[0-9A-F]{6}$/i.test(hex)) {
-        xml = xml.replace(/<a:solidFill>[\s\S]*?<\/a:solidFill>/g, '')
+      const hex = normalizeHexColor(color)
+      if (hex) {
+        xml = xml.replace(/<a:(solidFill|gradFill|pattFill|noFill)\b[^>]*?\/>|<a:(solidFill|gradFill|pattFill)\b[^>]*>[\s\S]*?<\/a:\2>/g, '')
         const fillTag = `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>`
-        if (xml.endsWith('/>')) xml = xml.slice(0, -2) + '>' + fillTag + '</a:rPr>'
-        else xml = xml.replace(/<\/a:rPr>$/, fillTag + '</a:rPr>')
+        if (xml.endsWith('/>')) xml = `${xml.slice(0, -2)}>${fillTag}</a:rPr>`
+        else {
+          const font = /<a:(latin|ea|cs)\b/.exec(xml)
+          xml = font ? xml.slice(0, font.index) + fillTag + xml.slice(font.index) : xml.replace(/<\/a:rPr>$/, `${fillTag}</a:rPr>`)
+        }
       }
     }
     if (font_family) {
-      const fam = font_family.trim()
+      const fam = font_family.split(',')[0]!.trim().replace(/^['"]+|['"]+$/g, '')
       if (fam) {
         xml = xml.replace(/<a:(latin|ea|cs)\b[^>]*\/?>/g, '')
         const fontTags = `<a:latin typeface="${esc(fam)}"/><a:ea typeface="${esc(fam)}"/>`
@@ -214,7 +218,15 @@ function patchShape(src: string, shape: PMNode, before: PMNode | undefined, numb
       const cell = cells[i++]
       if (!cell) return whole
       const bodyPr = element(inner, 'a:bodyPr') ?? '<a:bodyPr/>'
-      const rest = inner.replace(/<a:txBody>[\s\S]*?<\/a:txBody>/, '')
+      let rest = inner.replace(/<a:txBody>[\s\S]*?<\/a:txBody>/, '')
+      if (cell.attrs.tcpr) {
+        const tcpr = stripNs(cell.attrs.tcpr as string)
+        if (/<a:tcPr\b[^>]*?\/>|<a:tcPr\b[^>]*>[\s\S]*?<\/a:tcPr>/.test(rest)) {
+          rest = rest.replace(/<a:tcPr\b[^>]*?\/>|<a:tcPr\b[^>]*>[\s\S]*?<\/a:tcPr>/, tcpr)
+        } else {
+          rest = tcpr + rest
+        }
+      }
       let paras = ''
       cell.forEach(p => { paras += paragraphXml(p, numbers) })
       return `<a:tc${attrs}><a:txBody>${bodyPr}<a:lstStyle/>${paras}</a:txBody>${rest}</a:tc>`
@@ -257,6 +269,12 @@ function rebuildTable(src: string, shape: PMNode, numbers: Numbering): string {
 }
 
 const tableShape = (n: PMNode) => { const t = n.firstChild; return t ? [t.childCount, t.firstChild?.childCount ?? 0].join('×') : '' }
+const srcTableShape = (src: string) => {
+  const trs = [...src.matchAll(/<a:tr\b[^>]*>([\s\S]*?)<\/a:tr>/g)]
+  if (!trs.length) return ''
+  const cols = [...trs[0]![1]!.matchAll(/<a:tc\b([^>]*)>/g)].filter(m => !/hMerge="1"|vMerge="1"/.test(m[1]!)).length
+  return `${trs.length}×${cols}`
+}
 
 function newShapeXml(shape: PMNode, nvId: number, numbers: Numbering, rels: SlideRels): string {
   const a = shape.attrs
@@ -545,7 +563,7 @@ function shapesXml(slide: PMNode, head: string[], nextId: number, input: PptxExp
     const old = prev.get(shape.attrs.id as string)
     let xml: string
     if (src && old && old.eq(shape)) xml = src
-    else if (src && old && shape.attrs.kind === 'table' && tableShape(old) !== tableShape(shape)) xml = rebuildTable(patchShape(src, shape, old, numbers), shape, numbers)
+    else if (src && shape.attrs.kind === 'table' && (old ? tableShape(old) : srcTableShape(src)) !== tableShape(shape)) xml = rebuildTable(patchShape(src, shape, old, numbers), shape, numbers)
     else if (src) xml = patchShape(src, shape, old, numbers)
     else xml = newShapeXml(shape, id++, numbers, rels)
     out += ensureGeometry(xml)

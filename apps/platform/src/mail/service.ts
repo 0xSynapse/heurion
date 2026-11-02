@@ -103,79 +103,162 @@ export function decodeMimeWords(str: string): string {
   })
 }
 
-/** 解码 Quoted-Printable 格式的正文 (支持 UTF-8 与 GB18030 / GBK) */
-export function decodeQuotedPrintable(str: string, charset?: string): string {
-  if (!str) return ''
-  // 1. 去除软换行 (soft line breaks: =\r\n 或 =\n)
-  const s = str.replace(/=\r?\n/g, '')
-  if (!/=[0-9A-Fa-f]{2}/.test(s)) return s
+/** 修复因历史版本误将纯英文标题当做 Base64 或将 URL 参数当做 Quoted-Printable 解码造成的乱码 */
+export function repairMojibakeEmailBody(text: string): string {
+  if (!text) return ''
+  let out = text
+  // 1. 修复 "Confirm your email address" 被误作 Base64 + GB18030 解码（一次或二次）产生的特定乱码
+  out = out.replace(/(?:澶佸Ы骞惰唇娅掝櫙璀硓[锟\uFFFD]*|夁姽并贽櫒譳z[\uFFFD]*)/g, 'Confirm your email address')
 
-  // 2. 将 =XX 转换为真实字节
-  const bytes: number[] = []
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === '=' && i + 2 < s.length && /^[0-9A-Fa-f]{2}$/.test(s.slice(i + 1, i + 3))) {
-      bytes.push(parseInt(s.slice(i + 1, i + 3), 16))
-      i += 2
-    } else {
-      const code = s.charCodeAt(i)
-      if (code < 128) {
-        bytes.push(code)
-      } else {
-        const charBuf = Buffer.from(s[i]!, 'utf-8')
-        for (const b of charBuf) bytes.push(b)
-      }
-    }
-  }
-  const u8 = new Uint8Array(bytes)
-  const cs = (charset || '').toLowerCase()
-  if (cs.includes('gb')) {
+  // 2. 修复 URL 查询参数或 Hash 中 `=[8-9A-Fa-f][0-9A-Fa-f]` + ASCII 字符被误按 GB18030 解码为单个汉字的情况 (如 #token=e2P -> #token釶)
+  if (/https?:\/\/[^\s<>"']*[\u4e00-\u9fff]/.test(out)) {
     try {
-      return new TextDecoder('gb18030').decode(u8)
+      const td = new TextDecoder('gb18030')
+      out = out.replace(/(https?:\/\/[^\s<>"']*?[?#&][A-Za-z0-9_.-]+)([\u4e00-\u9fff])([A-Za-z0-9_.-]+)/g, (full, prefix, cjk, suffix) => {
+        for (let b1 = 0x81; b1 <= 0xfe; b1++) {
+          for (let b2 = 0x30; b2 <= 0x7e; b2++) {
+            if (b2 === 0x7f) continue
+            if (td.decode(new Uint8Array([b1, b2])) === cjk) {
+              const hex = b1.toString(16).toLowerCase().padStart(2, '0')
+              const ascii = String.fromCharCode(b2)
+              return `${prefix}=${hex}${ascii}${suffix}`
+            }
+          }
+        }
+        return full
+      })
     } catch {}
   }
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(u8)
-  } catch {
-    try {
-      return new TextDecoder('gb18030').decode(u8)
-    } catch {
-      return s
-    }
-  }
+  return out
 }
 
-/** 智能探测并解码 Base64 编码的邮件正文块（支持换行折行、空格容错、UTF-8 及 GB18030） */
+/** 识别并美化 AWS SES / 邮件网关自动生成的机器退信前缀 (如 010001a178e825b1-bd87ed82-...@send.notify.near.ai) */
+export function normalizeSenderName(senderName?: string | null, sender?: string | null, subject?: string | null): string {
+  const rawName = decodeMimeWords((senderName || '').trim())
+  const cleanSender = extractEmail(sender || '')
+  const localPart = cleanSender.split('@')[0] || ''
+  const domainPart = cleanSender.split('@')[1] || ''
+
+  const isMachineBounce = (s: string) =>
+    /^[0-9a-f]{12,}(?:-[0-9a-f]{4,})+$/i.test(s) ||
+    /^bounces?\+/i.test(s) ||
+    /^srs0=/i.test(s)
+
+  if (!rawName || rawName.toLowerCase() === cleanSender.toLowerCase() || isMachineBounce(rawName)) {
+    if (subject) {
+      const forMatch = decodeMimeWords(subject).match(/\bfor\s+([A-Z][A-Za-z0-9\s._-]{1,32})$/)
+      if (forMatch && forMatch[1]) {
+        return forMatch[1].trim()
+      }
+    }
+    if (isMachineBounce(localPart) && domainPart) {
+      const cleanDomain = domainPart.replace(/^(?:send|notify|mail|bounce|bounces|email|mg|em)\./gi, '').replace(/^(?:send|notify|mail)\./gi, '')
+      return cleanDomain || domainPart
+    }
+    return rawName && !isMachineBounce(rawName) ? rawName : (localPart || '外部来信')
+  }
+  return rawName
+}
+
+/** 判断文本是否包含真实 Quoted-Printable 编码特征（避免将普通 URL 中的 #token=e2P 等误判为 QP） */
+export function looksLikeQuotedPrintable(str: string): boolean {
+  if (!str) return false
+  if (/=\r?\n/.test(str)) return true
+  if (/(?:=[0-9A-Fa-f]{2}){2,}/.test(str)) return true
+  if (/=3D/i.test(str) || /=(?:20|09)(?:\r?\n|$)/.test(str) || /=0D=0A/i.test(str)) return true
+  return false
+}
+
+/** 解码 Quoted-Printable 格式的正文 (支持 UTF-8 与 GB18030 / GBK，保护 URL 参数与已有 UTF-8 字符) */
+export function decodeQuotedPrintable(str: string, charset?: string): string {
+  if (!str) return ''
+  const hasSoftBreak = /=\r?\n/.test(str)
+  // 1. 去除软换行 (soft line breaks: =\r\n 或 =\n)
+  const s = hasSoftBreak ? str.replace(/=\r?\n/g, '') : str
+  if (!/=[0-9A-Fa-f]{2}/.test(s)) return s
+  if (!hasSoftBreak && !looksLikeQuotedPrintable(s)) return s
+
+  // 2. 仅对连续的 =XX 字节序列进行局部解码，绝不把后续未转义的 ASCII 字符或已有中文字符混入同一字节流
+  const cs = (charset || '').toLowerCase()
+  return s.replace(/(?:=[0-9A-Fa-f]{2})+/g, (match, offset, fullStr) => {
+    // 保护已解码 URL 中的查询参数或锚点赋值（如 #token=e2P... 或 ?id=2026，其等号并非 =3D 转义）
+    const before = fullStr.slice(Math.max(0, offset - 200), offset)
+    if (/https?:\/\/[^\s<>"']*?[?#&][A-Za-z0-9_.-]+$/i.test(before) && !/^=3D/i.test(match)) {
+      return match
+    }
+
+    const bytes: number[] = []
+    for (let i = 0; i < match.length; i += 3) {
+      bytes.push(parseInt(match.slice(i + 1, i + 3), 16))
+    }
+    const u8 = new Uint8Array(bytes)
+    let decoded = ''
+    if (cs.includes('gb')) {
+      try {
+        decoded = new TextDecoder('gb18030', { fatal: true }).decode(u8)
+      } catch {}
+    }
+    if (!decoded) {
+      try {
+        decoded = new TextDecoder('utf-8', { fatal: true }).decode(u8)
+      } catch {
+        if (u8.length >= 2) {
+          try {
+            decoded = new TextDecoder('gb18030', { fatal: true }).decode(u8)
+          } catch {}
+        }
+      }
+    }
+    if (!decoded || decoded.includes('\uFFFD') || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(decoded)) {
+      return match
+    }
+    return decoded
+  })
+}
+
+/** 智能探测并解码 Base64 编码的邮件正文块（支持换行折行、行首缩进容错、UTF-8 及 GB18030） */
 export function decodeBase64Chunk(raw: string, charset?: string): string {
   if (!raw) return raw
-  // 移除所有空白符（空格、换行、制表符）
-  const compact = raw.replace(/\s+/g, '')
-  // 合法 Base64 结构判定
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact) || compact.length < 8) {
+  const trimmed = raw.trim()
+  // 若单行内包含词间空白符（如普通英文句子 "Confirm your email address"），绝不是 Base64 块
+  const lines = trimmed.split(/\r?\n/)
+  for (const line of lines) {
+    const l = line.trim()
+    if (l && /\s/.test(l)) {
+      return raw
+    }
+  }
+
+  // 移除换行与行首尾空白符
+  const compact = trimmed.replace(/\s+/g, '')
+  // 标准 Base64 长度必须为 4 的整数倍且至少 12 字符，且排除纯英文字母单词
+  if (
+    compact.length < 12 ||
+    compact.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(compact) ||
+    /^[A-Za-z]+$/.test(compact)
+  ) {
     return raw
   }
 
-  const padLen = (4 - (compact.length % 4)) % 4
-  const padded = compact + '='.repeat(padLen)
-
   try {
-    const buf = Buffer.from(padded, 'base64')
+    const buf = Buffer.from(compact, 'base64')
     let decoded = ''
     const cs = (charset || '').toLowerCase()
     if (cs.includes('gb')) {
       try {
-        decoded = new TextDecoder('gb18030').decode(buf)
+        decoded = new TextDecoder('gb18030', { fatal: true }).decode(buf)
       } catch {}
     }
     if (!decoded) {
       try {
         decoded = new TextDecoder('utf-8', { fatal: true }).decode(buf)
-      } catch {
-        try {
-          decoded = new TextDecoder('gb18030').decode(buf)
-        } catch {}
-      }
+      } catch {}
     }
-    if (!decoded) return raw
+    if (!decoded || decoded.includes('\uFFFD')) return raw
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(decoded)) {
+      return raw
+    }
 
     // 含有中文，或者是正常可读文本
     if (/[\u4e00-\u9fa5]/.test(decoded)) {
@@ -263,12 +346,15 @@ export function decodeEmailBody(body: string, charset?: string): string {
     }
   }
 
-  // 4. Quoted-Printable 探测与解码 (支持 UTF-8 与 GB18030)
-  if (/=[0-9A-Fa-f]{2}/.test(text) || /=\r?\n/.test(text)) {
+  // 4. Quoted-Printable 探测与解码 (支持 UTF-8 与 GB18030，排除普通 URL 参数)
+  if (looksLikeQuotedPrintable(text)) {
     text = decodeQuotedPrintable(text, charset)
   }
 
-  // 5. 清理残留的 MIME boundary 标记（仅在尾部 200 字符窗口内匹配，避免长正文回溯）
+  // 5. 修复历史误解码造成的乱码 (如标题行或验证链接参数被误作 Base64 / GB18030 转换)
+  text = repairMojibakeEmailBody(text)
+
+  // 6. 清理残留的 MIME boundary 标记（仅在尾部 200 字符窗口内匹配，避免长正文回溯）
   if (text.length <= 200) {
     text = text.replace(/--[a-zA-Z0-9_\-=]+--?\s*$/, '').trim()
   } else {
@@ -301,10 +387,11 @@ export class MailService {
   public healExistingMessages(): number {
     let healed = 0
     try {
-      const rows = this.store.db.prepare('SELECT id, body, subject, sender_name, attachments FROM mail_messages ORDER BY rowid DESC LIMIT 500;').all() as Array<{
+      const rows = this.store.db.prepare('SELECT id, body, subject, sender, sender_name, attachments FROM mail_messages ORDER BY rowid DESC LIMIT 500;').all() as Array<{
         id: string
         body: string
         subject: string
+        sender?: string
         sender_name: string
         attachments?: string | null
       }>
@@ -329,12 +416,10 @@ export class MailService {
             needsUpdate = true
           }
         }
-        if (row.sender_name && row.sender_name.includes('=?')) {
-          const decodedName = decodeMimeWords(row.sender_name)
-          if (decodedName !== row.sender_name) {
-            nextSenderName = decodedName
-            needsUpdate = true
-          }
+        const normalizedName = normalizeSenderName(row.sender_name, row.sender, nextSubject)
+        if (normalizedName && normalizedName !== row.sender_name) {
+          nextSenderName = normalizedName
+          needsUpdate = true
         }
 
         // 补全内置医学随访与科研课题附件
@@ -442,7 +527,7 @@ export class MailService {
   private normalizeMail(m: MailMessageRow): MailMessageRow {
     const cleanSub = decodeMimeWords(m.subject)
     const cleanBody = decodeEmailBody(m.body)
-    const cleanName = m.sender_name ? decodeMimeWords(m.sender_name) : m.sender_name
+    const cleanName = normalizeSenderName(m.sender_name, m.sender, cleanSub)
     if (cleanSub !== m.subject || cleanBody !== m.body || cleanName !== m.sender_name) {
       try {
         this.store.updateMailCleanText(m.id, cleanSub, cleanBody, cleanName)
@@ -871,8 +956,7 @@ export class MailService {
     const subject = decodeMimeWords(input.subject || '（无主题）')
     const body = decodeEmailBody(input.body || '')
     const rawFromName = input.fromName || input.from.split('<')[0]?.replace(/"/g, '')?.trim() || ''
-    const decodedFromName = decodeMimeWords(rawFromName)
-    const senderName = (decodedFromName && decodedFromName !== sender) ? decodedFromName : (sender.split('@')[0] || '外部来信')
+    const senderName = normalizeSenderName(rawFromName, sender, subject)
 
     const msg = this.store.createMailMessage({
       user_id: internalUser.id,

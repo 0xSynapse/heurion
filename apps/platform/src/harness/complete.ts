@@ -2,7 +2,9 @@
  * 平台自己调一次模型（不经 dsh 回合）：用于后台任务，例如记忆整理。走与模型代理相同的上游（Anthropic Messages 格式）
  * 和平台的 key；温度 0、非流式，返回第一段文本。
  */
-export function makeComplete(opts: { upstream: string; apiKey: string; model: string; timeoutMs?: number }) {
+export type Complete = (system: string, user: string) => Promise<string>
+
+export function makeComplete(opts: { upstream: string; apiKey: string; model: string; timeoutMs?: number }): Complete | null {
   if (!opts.apiKey) return null
   return async (system: string, user: string): Promise<string> => {
     let last: Error | null = null

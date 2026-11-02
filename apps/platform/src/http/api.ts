@@ -2,7 +2,7 @@ import { OrgTemplateService } from '../auth/org-templates.ts'
 import { ORG_BASES, orgLogo, PRESET_AHSLYY, setOrgTenantResolver, themeAllowed, themeKeysFor } from '../model/org-templates.ts'
 import { Hono, type Context } from 'hono'
 import { H_AS, internalVia, makeInvoker, type Invoke, type ViaInfo } from './invoke.ts'
-import { CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
+import { chmodIfOwned, CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
 import { handleAegisMcpJsonRpc, type McpDeps } from '../mcp/server.ts'
@@ -41,6 +41,8 @@ import { registerResearchRoutes } from './routes/research.ts'
 import { registerPublicToolsApi } from './routes/public-tools-api.ts'
 import type { MemoryEvolution } from '../memory/evolve.ts'
 import { MemoryError, type MemoryService } from '../memory/service.ts'
+import { SkillTrainingService } from '../memory/skill-trainer.ts'
+import type { SkillDomain } from '../memory/domain-adapters.ts'
 import type { Notice, PostCheck } from '../collab/postcheck.ts'
 import { verifyPrompt } from '../claims/service.ts'
 import { docxFor, pptxFor } from '../convert/exports.ts'
@@ -51,7 +53,7 @@ import { templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
 import { newTemplateDeck } from '../ops/deck.ts'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SlideRenderer } from '../render/slides.ts'
 import type { CrossrefClient } from '../literature/crossref.ts'
@@ -106,6 +108,8 @@ export interface ApiDeps {
   memory?: MemoryService
   /** 记忆演进（整理建议）；没有模型 key 时不可用。 */
   evolution?: MemoryEvolution
+  /** 跨领域自监督退化-重构技能训练器（Track A）。 */
+  skillTrainer?: SkillTrainingService
   /** 数据集（实验室数据分析）。 */
   datasets?: DatasetService
   /** 患者（按机构分库，见 docs/design/TENANCY.md）。 */
@@ -1215,6 +1219,26 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       return c.json({ proposed: r.proposed.length, changes: r.changes.length, signals: r.signals, messages: r.messages })
     } catch (err) { return memoryFailure(c, err) }
   })
+  // 跨领域范例退化-重构自监督技能训练（Track A: Corruption-and-Reconstruction Loop）
+  app.post('/api/memory/skill-train', async c => {
+    if (!deps.memory) return c.json({ error: '记忆未启用' }, 503)
+    const trainer = deps.skillTrainer ?? new SkillTrainingService(store, deps.memory, docs)
+    const body = await c.req.json<{ doc_id?: string; exemplar_text?: string | string[]; domain?: SkillDomain; max_segments?: number }>()
+    try {
+      const user = c.get('user')
+      if (body.doc_id) {
+        const row = store.getDoc(body.doc_id)
+        if (!row || row.deleted_at || !access.docRole(user, row)) return c.json({ error: '文档不存在或无权限', code: 'not_found' }, 404)
+        const r = await trainer.trainFromDoc(user, { docId: body.doc_id, domain: body.domain, maxSegments: body.max_segments })
+        return c.json(r)
+      }
+      if (body.exemplar_text) {
+        const r = await trainer.trainFromExemplar(user, { exemplarText: body.exemplar_text, domain: body.domain, maxSegments: body.max_segments })
+        return c.json(r)
+      }
+      return c.json({ error: '请提供 doc_id 或 exemplar_text', code: 'invalid_input' }, 400)
+    } catch (err) { return memoryFailure(c, err) }
+  })
   app.post('/api/memory/changes/:cid/:action{apply|dismiss}', async c => {
     if (!deps.evolution) return c.json({ error: '记忆整理不可用' }, 503)
     try {
@@ -1328,6 +1352,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         const isGenericName = /^(未命名|文档|document|untitled|draft|\d+|[a-f0-9-]{12,}|s\d{5}-\d{3}-\d{5}-[a-z0-9]|pmc\d+|nihms\d+|arxiv[\d.-]+)$/i.test(baseTitle)
         const docTitle = (isGenericName && imported.title && imported.title.length >= 4) ? imported.title : (baseTitle || '未命名文档')
 
+        if (deps.kb) void deps.kb.upload(user, { name: file.name, bytes, project_id: project }).catch(() => {})
         if (imported.kind === 'deck') {
           const boundDoc = bindDeckAssets(imported.doc, ids)
           const row = docs.create({ owner: user, title: docTitle, kind: 'deck', content: boundDoc, source: 'import' })
@@ -1832,15 +1857,17 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json({ queued: true }, 202)
   })
 
-  app.post('/api/docs/:id/turns/:turnId/revert', c => {
+  const revertTurnRoute = (c: Context<{ Variables: { user: string } }>) => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
-    const turnId = c.req.param('turnId')
-    if (!docs.canRevertTurn(row.id, turnId)) return c.json({ error: '这一轮已经撤销过，或没有改动可撤销' }, 409)
+    const rawTurnId = c.req.param('turnId')?.trim()
+    const turnId = rawTurnId && rawTurnId !== 'latest' ? rawTurnId : store.latestUnrevertedTurnForDoc(row.id)
+    if (!turnId || !docs.canRevertTurn(row.id, turnId)) return c.json({ error: '这一轮已经撤销过，或没有改动可撤销' }, 409)
     const result = docs.revertTurn(row.id, turnId)
     const version = docs.snapshot(row.id, 'user', '撤销一轮 AI 修改')
-    return c.json({ rev: docs.rev(row.id), changes: result?.event?.changes.length ?? 0, skipped: result?.skipped ?? [], version })
-  })
+    return c.json({ rev: docs.rev(row.id), reverted_turn_id: turnId, changes: result?.event?.changes.length ?? 0, skipped: result?.skipped ?? [], version })
+  }
+  app.post('/api/docs/:id/turns/:turnId/revert', revertTurnRoute)
 
   /** 用户显式保存一个版本。 */
   app.post('/api/docs/:id/save', c => {
@@ -1852,7 +1879,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.post('/api/docs/:id/versions/:seq/restore', c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
-    if (turns.isBusy(c.get('user'), row.id)) return c.json({ error: 'AI 正在编辑，先取消或等待完成' }, 409)
+    if (!viaByReq.get(c.req.raw) && turns.isBusy(c.get('user'), row.id)) return c.json({ error: 'AI 正在编辑，先取消或等待完成' }, 409)
     return c.json({ version: docs.restore(row.id, Number(c.req.param('seq'))), rev: docs.rev(row.id) })
   })
 
@@ -2061,21 +2088,24 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (pics.length && deps.workspaceDir) {
       const ws = deps.workspaceDir(c.get('user'))
       const dir = join(ws, 'attachments')
+      let dirOk = false
       try {
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-        chmodSync(dir, 0o2777)
-      } catch { /* 权限容错 */ }
+        chmodIfOwned(dir, 0o2777)
+        dirOk = true
+      } catch { /* 权限或符号链接拦截：跳过写入工作区附件 */ }
       const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg' }
       const files: string[] = []
-      for (const a of pics) {
+      for (const a of dirOk ? pics : []) {
         if (!a) continue
         const bytes = store.getAssetBytes(a.id)
         if (!bytes || bytes.length === 0) continue
         const rel = `attachments/${a.id}.${EXT[a.mime] ?? 'png'}`
         const filePath = join(ws, rel)
         try {
+          rmSync(filePath, { force: true })
           writeFileSync(filePath, bytes)
-          chmodSync(filePath, 0o666)
+          chmodIfOwned(filePath, 0o666)
         } catch { /* 容错 */ }
         files.push(`${rel}(asset_id=${a.id})`)
       }

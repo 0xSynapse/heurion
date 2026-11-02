@@ -1,6 +1,6 @@
 import MarkdownIt, { type StateInline, type Token } from 'markdown-it'
 import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model'
-import { isSafeHref, schema } from './schema.ts'
+import { cleanFontFamily, isSafeHref, normalizeHexColor, schema } from './schema.ts'
 import { readGrid } from './table-grid.ts'
 
 /**
@@ -54,9 +54,12 @@ export class MarkdownError extends Error {}
 
 // —— 解析：markdown → 块节点 ——
 
+/** 将 <span style="font-family:"Times New Roman";..."> 中的内嵌双引号换成单引号，保证 markdown-it 能按单个 html_inline 识别。 */
+const sanitizeSpanQuotes = (s: string) => s.replace(/(font-family\s*:\s*)"([^"<>]+)"/gi, "$1'$2'")
+
 /** 解析为块节点列表（无 id；调用方负责分配）。 */
 export function parseBlocks(source: string): PMNode[] {
-  const tokens = md.parse(source.replace(ID_PREFIX_LINE, '$1'), {})
+  const tokens = md.parse(sanitizeSpanQuotes(source).replace(ID_PREFIX_LINE, '$1'), {})
   const [nodes] = buildBlocks(tokens, 0, null)
   return nodes
 }
@@ -66,7 +69,7 @@ export function parseBlocks(source: string): PMNode[] {
  * 每段带上它前面写的 id（没写为 null），供 table_set_cells 对回原段落。
  */
 export function parseCell(source: string): Array<{ para: PMNode; id: string | null }> {
-  const tokens = md.parseInline(source, {})[0]?.children ?? []
+  const tokens = md.parseInline(sanitizeSpanQuotes(source), {})[0]?.children ?? []
   return cellParagraphs(tokens)
 }
 
@@ -299,12 +302,14 @@ function buildInline(children: Token[]): PMNode[] {
         out.push(schema.node('measurement', { m_id: (t.meta as { m_id: string }).m_id }))
         break
       case 'html_inline': {
-        const spanOpen = /^<span\s+style="([^"]+)"\s*>/i.exec(t.content.trim())
-        if (spanOpen && spanOpen[1]) {
-          const styles = spanOpen[1]
-          const ff = /font-family:\s*([^;]+)/i.exec(styles)?.[1]?.trim() ?? null
+        const spanOpen = /^<span\s+style=(?:"([^"]+)"|'([^']+)')\s*>/i.exec(t.content.trim())
+        const styles = spanOpen?.[1] ?? spanOpen?.[2]
+        if (styles) {
+          const ff = cleanFontFamily(/font-family:\s*([^;]+)/i.exec(styles)?.[1]?.trim() ?? null)
           const fs = /font-size:\s*([^;]+)/i.exec(styles)?.[1]?.trim() ?? null
-          const clr = /color:\s*([^;]+)/i.exec(styles)?.[1]?.trim() ?? null
+          const rawClr = /color:\s*([^;]+)/i.exec(styles)?.[1]?.trim() ?? null
+          const hexClr = normalizeHexColor(rawClr)
+          const clr = hexClr ? `#${hexClr}` : rawClr
           add('text_style', { font_family: ff, font_size: fs, color: clr })
           break
         }
@@ -378,6 +383,34 @@ export function serializeBlock(node: PMNode, opts: SerializeOptions, indent: str
     }
     case 'opaque':
       return `${indent}${pre}[不可编辑·${node.attrs.kind}：${node.attrs.description}]`
+    case 'slide': {
+      const parts: string[] = []
+      node.forEach(c => {
+        const s = serializeBlock(c, opts, indent)
+        if (s.trim()) parts.push(s)
+      })
+      return parts.join('\n\n')
+    }
+    case 'shape': {
+      if (node.attrs.kind === 'image') return `${indent}${pre}![${node.attrs.description ?? ''}](asset:${node.attrs.asset_id})`
+      if (node.attrs.kind === 'chart' || node.attrs.kind === 'opaque' || node.attrs.kind === 'group') {
+        return node.attrs.description ? `${indent}${pre}[${node.attrs.description}]` : ''
+      }
+      const parts: string[] = []
+      node.forEach(c => {
+        const s = serializeBlock(c, opts, indent)
+        if (s.trim()) parts.push(s)
+      })
+      return parts.join('\n\n')
+    }
+    case 'notes': {
+      const parts: string[] = []
+      node.forEach(c => {
+        const s = serializeBlock(c, opts, `${indent}> `)
+        if (s.trim()) parts.push(s)
+      })
+      return parts.join('\n')
+    }
     default:
       return indent + pre + node.textContent
   }
@@ -430,7 +463,8 @@ function openMark(m: Mark): string {
   switch (m.type.name) {
     case 'text_style': {
       const styles: string[] = []
-      if (m.attrs.font_family) styles.push(`font-family:${m.attrs.font_family}`)
+      const ff = cleanFontFamily(m.attrs.font_family as string | null)
+      if (ff) styles.push(`font-family:${ff}`)
       if (m.attrs.font_size) styles.push(`font-size:${m.attrs.font_size}`)
       if (m.attrs.color) styles.push(`color:${m.attrs.color}`)
       return styles.length ? `<span style="${styles.join(';')}">` : ''

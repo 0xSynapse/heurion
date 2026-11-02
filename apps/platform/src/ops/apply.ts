@@ -204,7 +204,7 @@ function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyCon
       const newPara = first.type.name === 'list_item' ? first.firstChild : null
       if (oldPara && newPara && oldPara.type === newPara.type && oldPara.attrs.id) {
         ctx.taken.delete(newPara.attrs.id as string)
-        content = content.replaceChild(0, newPara.type.create({ ...newPara.attrs, id: oldPara.attrs.id, style: oldPara.attrs.style, align: oldPara.attrs.align }, newPara.content, newPara.marks))
+        content = content.replaceChild(0, newPara.type.create({ ...newPara.attrs, id: oldPara.attrs.id, style: oldPara.attrs.style, align: oldPara.attrs.align, suggest_of: oldPara.attrs.suggest_of }, newPara.content, newPara.marks))
       }
       // 整个列表换成同类列表：各项及其首段按位置沿用原 id、段落样式与对齐（导出时按原项打补丁或沿用原 w:numId）
       if (/_list$/.test(target.node.type.name) && first.type === target.node.type) {
@@ -220,14 +220,47 @@ function replaceBlock(tr: Transform, id: string, markdown: string, ctx: ApplyCon
             const newP = newItem.firstChild
             if (oldP && newP && oldP.type === newP.type && oldP.attrs.id) {
               ctx.taken.delete(newP.attrs.id as string)
-              itemContent = itemContent.replaceChild(0, newP.type.create({ ...newP.attrs, id: oldP.attrs.id, style: oldP.attrs.style, align: oldP.attrs.align }, newP.content, newP.marks))
+              itemContent = itemContent.replaceChild(0, newP.type.create({ ...newP.attrs, id: oldP.attrs.id, style: oldP.attrs.style, align: oldP.attrs.align, suggest_of: oldP.attrs.suggest_of }, newP.content, newP.marks))
             }
-            items.push(newItem.type.create({ ...newItem.attrs, ...(oldItem.attrs.id ? { id: oldItem.attrs.id } : {}) }, itemContent, newItem.marks))
+            items.push(newItem.type.create({ ...newItem.attrs, ...(oldItem.attrs.id ? { id: oldItem.attrs.id, suggest_of: oldItem.attrs.suggest_of } : {}) }, itemContent, newItem.marks))
           } else {
             items.push(newItem)
           }
         })
         content = Fragment.from(items)
+      }
+      // 整表换成新表：按相同位置 (r, c) 且跨度一致的单元格沿用首段 id、样式、对齐及单元格底纹与垂直对齐（导出时据此保留原表单元格格式与未改单元格 XML）
+      if (target.node.type.name === 'table' && first.type.name === 'table') {
+        if (!attrs.col_widths && target.node.attrs.col_widths && first.childCount > 0 && target.node.childCount > 0 && first.child(0).childCount === target.node.child(0).childCount) {
+          attrs.col_widths = target.node.attrs.col_widths
+        }
+        const rows: PMNode[] = []
+        first.forEach((newRow, _ro, r) => {
+          const oldRow = r < target.node.childCount ? target.node.child(r) : null
+          if (!oldRow) { rows.push(newRow); return }
+          const cells: PMNode[] = []
+          newRow.forEach((newCell, _co, c) => {
+            const oldCell = c < oldRow.childCount ? oldRow.child(c) : null
+            if (oldCell && (oldCell.attrs.colspan ?? 1) === (newCell.attrs.colspan ?? 1) && (oldCell.attrs.rowspan ?? 1) === (newCell.attrs.rowspan ?? 1)) {
+              let cellChildren = newCell.content
+              const oldP = oldCell.firstChild
+              const newP = newCell.firstChild
+              if (oldP && newP && oldP.type === newP.type && oldP.attrs.id) {
+                ctx.taken.delete(newP.attrs.id as string)
+                cellChildren = cellChildren.replaceChild(0, newP.type.create({ ...newP.attrs, id: oldP.attrs.id, style: oldP.attrs.style, align: oldP.attrs.align, suggest_of: oldP.attrs.suggest_of }, newP.content, newP.marks))
+              }
+              cells.push(newCell.type.create({
+                ...newCell.attrs,
+                background: newCell.attrs.background ?? oldCell.attrs.background,
+                valign: newCell.attrs.valign ?? oldCell.attrs.valign,
+              }, cellChildren, newCell.marks))
+            } else {
+              cells.push(newCell)
+            }
+          })
+          rows.push(newRow.type.create(newRow.attrs, Fragment.from(cells), newRow.marks))
+        })
+        content = Fragment.from(rows)
       }
       nodes[0] = first.type.create(attrs, content, first.marks)
     }
@@ -630,14 +663,28 @@ export function replaceError(outcome: Exclude<ReplaceOutcome, { ok: true }>, whe
     ? '原文在这段文字中间有引用标记 [@c:…] 或测量标记 [@m:…]：find 与 replace 里要原样写出这些标记（否则会删掉引用或测量），或者只匹配标记之前 / 之后的文字。'
     : near.length > 0
       ? '原文的空白或大小写与 find 不同：按 near 里的 text 原样写 find 重发。'
-      : '按 current 中的原文逐字复制 find（不含 {#id} 前缀和 markdown 符号）。'
+      : '按 current 中的原文逐字复制 find（find 只匹配去除 <sup>/<sub> 等行内标签后的纯文本，不含 {#id} 前缀和 markdown 符号）。'
   return new OpError('text_not_found', `${where}中找不到要替换的原文`, { hint, current: near.length > 0 ? { near, text: current } : current })
 }
 
+function listItemTextTarget(target: { node: PMNode; pos: number }): { node: PMNode; pos: number } {
+  if (target.node.type.name === 'list_item' && target.node.firstChild?.isTextblock) {
+    if (
+      target.node.childCount > 1 &&
+      target.node.firstChild.attrs.suggest === 'delete' &&
+      target.node.child(1).isTextblock &&
+      target.node.child(1).attrs.suggest === 'insert'
+    ) {
+      return { node: target.node.child(1), pos: target.pos + 1 + target.node.firstChild.nodeSize }
+    }
+    return { node: target.node.firstChild, pos: target.pos + 1 }
+  }
+  return target
+}
+
 function replaceText(tr: Transform, op: Extract<DocOp, { op: 'replace_text' }>): string[] {
-  let target = find(tr, op.id)
-  // 列表项：读视图里显示的是列表项 id，替换作用于它的文字段落
-  if (target.node.type.name === 'list_item' && target.node.firstChild?.isTextblock) target = { node: target.node.firstChild, pos: target.pos + 1 }
+  // 列表项：读视图里显示的是列表项 id，替换作用于它的文字段落（若有待采纳修订则作用于其新增段）
+  const target = listItemTextTarget(find(tr, op.id))
   if (!target.node.isTextblock) {
     throw new OpError('invalid_structure', `replace_text 只能用于段落或标题，${op.id} 是 ${target.node.type.name}`, {
       hint: '表格请用 table_set_cells；其他块用 replace_block。',
@@ -785,7 +832,15 @@ function setStyle(tr: Transform, op: Extract<DocOp, { op: 'set_block_style' }>):
   if (!target.node.isTextblock) throw new OpError('invalid_structure', `set_block_style 只能用于段落或标题，${op.id} 是 ${target.node.type.name}`)
   const typeName = op.type ?? (op.level !== undefined ? 'heading' : target.node.type.name)
   const type = schema.nodes[typeName]!
-  const attrs: Record<string, unknown> = { id: op.id, style: target.node.attrs.style, align: target.node.attrs.align }
+  const attrs: Record<string, unknown> = {
+    id: op.id,
+    style: target.node.attrs.style,
+    align: target.node.attrs.align,
+    suggest: target.node.attrs.suggest,
+    suggest_group: target.node.attrs.suggest_group,
+    suggest_of: target.node.attrs.suggest_of,
+    suggest_author: target.node.attrs.suggest_author,
+  }
   if (typeName === 'heading') attrs.level = op.level ?? (target.node.attrs.level as number | undefined) ?? 1
   if (op.align !== undefined) attrs.align = op.align
   if (op.style !== undefined) attrs.style = op.style
@@ -794,7 +849,7 @@ function setStyle(tr: Transform, op: Extract<DocOp, { op: 'set_block_style' }>):
 }
 
 function setTextStyle(tr: Transform, op: Extract<DocOp, { op: 'set_text_style' }>): string[] {
-  const target = find(tr, op.id)
+  const target = listItemTextTarget(find(tr, op.id))
   if (!target.node.isTextblock) throw new OpError('invalid_structure', `set_text_style 只能用于段落或标题，${op.id} 是 ${target.node.type.name}`)
 
   let from: number

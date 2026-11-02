@@ -48,72 +48,92 @@ function decodeMimeWords(str) {
   });
 }
 
+function looksLikeQuotedPrintable(str) {
+  if (!str) return false;
+  if (/=\r?\n/.test(str)) return true;
+  if (/(?:=[0-9A-Fa-f]{2}){2,}/.test(str)) return true;
+  if (/=3D/i.test(str) || /=(?:20|09)(?:\r?\n|$)/.test(str) || /=0D=0A/i.test(str)) return true;
+  return false;
+}
+
 function decodeQuotedPrintable(str, charset) {
   if (!str) return "";
-  const s = str.replace(/=\r?\n/g, "");
+  const hasSoftBreak = /=\r?\n/.test(str);
+  const s = hasSoftBreak ? str.replace(/=\r?\n/g, "") : str;
   if (!/=[0-9A-Fa-f]{2}/.test(s)) return s;
+  if (!hasSoftBreak && !looksLikeQuotedPrintable(s)) return s;
 
-  const bytes = [];
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === "=" && i + 2 < s.length && /^[0-9A-Fa-f]{2}$/.test(s.slice(i + 1, i + 3))) {
-      bytes.push(parseInt(s.slice(i + 1, i + 3), 16));
-      i += 2;
-    } else {
-      const code = s.charCodeAt(i);
-      if (code < 128) {
-        bytes.push(code);
-      } else {
-        const enc = new TextEncoder().encode(s[i]);
-        for (const b of enc) bytes.push(b);
+  const cs = (charset || "").toLowerCase();
+  return s.replace(/(?:=[0-9A-Fa-f]{2})+/g, (match, offset, fullStr) => {
+    const before = fullStr.slice(Math.max(0, offset - 200), offset);
+    if (/https?:\/\/[^\s<>"']*?[?#&][A-Za-z0-9_.-]+$/i.test(before) && !/^=3D/i.test(match)) {
+      return match;
+    }
+    const bytes = [];
+    for (let i = 0; i < match.length; i += 3) {
+      bytes.push(parseInt(match.slice(i + 1, i + 3), 16));
+    }
+    const u8 = new Uint8Array(bytes);
+    let decoded = "";
+    if (cs.includes("gb")) {
+      try { decoded = new TextDecoder("gb18030", { fatal: true }).decode(u8); } catch {}
+    }
+    if (!decoded) {
+      try {
+        decoded = new TextDecoder("utf-8", { fatal: true }).decode(u8);
+      } catch {
+        if (u8.length >= 2) {
+          try { decoded = new TextDecoder("gb18030", { fatal: true }).decode(u8); } catch {}
+        }
       }
     }
-  }
-  const u8 = new Uint8Array(bytes);
-  const cs = (charset || "").toLowerCase();
-  if (cs.includes("gb")) {
-    try { return new TextDecoder("gb18030").decode(u8); } catch {}
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(u8);
-  } catch {
-    try {
-      return new TextDecoder("gb18030").decode(u8);
-    } catch {
-      return s;
+    if (!decoded || decoded.includes("\uFFFD") || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(decoded)) {
+      return match;
     }
-  }
+    return decoded;
+  });
 }
 
 function decodeBase64Chunk(raw, charset) {
   if (!raw) return raw;
-  const compact = raw.replace(/\s+/g, "");
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact) || compact.length < 8) {
+  const trimmed = raw.trim();
+  const lines = trimmed.split(/\r?\n/);
+  for (const line of lines) {
+    const l = line.trim();
+    if (l && /\s/.test(l)) {
+      return raw;
+    }
+  }
+
+  const compact = trimmed.replace(/\s+/g, "");
+  if (
+    compact.length < 12 ||
+    compact.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(compact) ||
+    /^[A-Za-z]+$/.test(compact)
+  ) {
     return raw;
   }
 
-  const padLen = (4 - (compact.length % 4)) % 4;
-  const padded = compact + "=".repeat(padLen);
-
   try {
-    const bin = atob(padded);
+    const bin = atob(compact);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 
     let decoded = "";
     const cs = (charset || "").toLowerCase();
     if (cs.includes("gb")) {
-      try { decoded = new TextDecoder("gb18030").decode(bytes); } catch {}
+      try { decoded = new TextDecoder("gb18030", { fatal: true }).decode(bytes); } catch {}
     }
     if (!decoded) {
       try {
         decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      } catch {
-        try {
-          decoded = new TextDecoder("gb18030").decode(bytes);
-        } catch {}
-      }
+      } catch {}
     }
-    if (!decoded) return raw;
+    if (!decoded || decoded.includes("\uFFFD")) return raw;
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(decoded)) {
+      return raw;
+    }
 
     // 含有中文，或者是正常可读文本
     if (/[\u4e00-\u9fa5]/.test(decoded)) {
@@ -131,7 +151,7 @@ function decodeEmailBody(body, charset) {
   if (!body) return "";
   let text = body.trim();
 
-  // 1. 全文 Base64 探测与解码（无论是否有换行与空格折行）
+  // 1. 全文 Base64 探测与解码（无论是否有换行与行首缩进）
   const fullDecoded = decodeBase64Chunk(text, charset);
   if (fullDecoded !== text) {
     text = fullDecoded;
@@ -153,8 +173,8 @@ function decodeEmailBody(body, charset) {
     }
   }
 
-  // 3. Quoted-Printable 探测与解码 (支持 UTF-8 与 GB18030)
-  if (/=[0-9A-Fa-f]{2}/.test(text) || /=\r?\n/.test(text)) {
+  // 3. Quoted-Printable 探测与解码 (支持 UTF-8 与 GB18030，保护普通 URL 参数)
+  if (looksLikeQuotedPrintable(text)) {
     text = decodeQuotedPrintable(text, charset);
   }
 
@@ -242,7 +262,8 @@ export default {
   },
 
   async email(message, env, ctx) {
-    const from = message.from;
+    const headerFrom = decodeMimeWords(message.headers.get("from") || "").trim();
+    const from = headerFrom || message.from;
     const to = message.to;
     const rawSubject = message.headers.get("subject") || "(无主题)";
     const subject = decodeMimeWords(rawSubject);

@@ -179,7 +179,7 @@ export class OpService {
       })
       : applyOps(before, batch.ops as DocOp[], {
         taken,
-        userEditedIds: ai ? store.userTouchedSince(batch.doc_id, batch.base_rev + 1) : undefined,
+        userEditedIds: ai ? store.userTouchedSince(batch.doc_id, batch.base_rev) : undefined,
       })
     // 改了合作者修订的修订版：核对没碰到合作者的修订，并把改动同步到原文版本（用户拒绝修订后改动仍在）
     const applied = deck || !ai ? appliedRaw : { ...appliedRaw, doc: this.coauthorEdits(before, appliedRaw.doc) }
@@ -459,7 +459,7 @@ export class OpService {
    * 会接管并改写用户原有的条目与编号（之后移动段落还会全文重新编号）——除非用户要求，不允许；新补的引用照常用 [@c:…]。
    */
   private guardExistingCitations(batch: EditBatch, before: PMNode): void {
-    const MARK = /\[\d+(?:\s*[,，–\-]\s*\d+)*\]/g
+    const MARK = /[[［【]\d+(?:\s*[,，、–\-]\s*\d+)*[\]］】]/g
     const index = indexById(before)
     batch.ops.forEach((op, i) => {
       let oldText = ''
