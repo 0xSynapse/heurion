@@ -25,9 +25,14 @@ export interface TenantSettings {
    * 对界面、阅片器与 AI 都不可见（一期上线前的回顾评估，PRD 关口 G1）；visible = 正常显示。医生在阅片器里的点选分割不受影响。
    */
   imaging_ai_visibility: 'visible' | 'shadow'
+  /**
+   * 影像定稿是否允许自审（docs/design/IMAGING_STUDIES.md「审核与定稿」）：false（默认）= 初写与审核须为不同的人；
+   * true = 审核医师可以定稿自己初写的检查（人手不足的科室）。定稿记录里标明 mode = self。个人空间不受此限（单人模式）。
+   */
+  imaging_self_review: boolean
 }
 
-export const DEFAULT_SETTINGS: TenantSettings = { patient_module: true, external_model_for_patients: true, patient_visibility: 'care_team', ai_patient_writes: 'review', accept_patient_shares: true, imaging_ai_visibility: 'visible' }
+export const DEFAULT_SETTINGS: TenantSettings = { patient_module: true, external_model_for_patients: true, patient_visibility: 'care_team', ai_patient_writes: 'review', accept_patient_shares: true, imaging_ai_visibility: 'visible', imaging_self_review: false }
 
 export class TenantError extends Error {
   constructor(readonly code: string, message: string, readonly status: 400 | 403 | 404 | 409 = 400) { super(message) }
@@ -151,6 +156,7 @@ export class TenantService {
       if (s.ai_patient_writes === 'review' || s.ai_patient_writes === 'direct') cur.ai_patient_writes = s.ai_patient_writes
       if (typeof s.accept_patient_shares === 'boolean') cur.accept_patient_shares = s.accept_patient_shares
       if (s.imaging_ai_visibility === 'visible' || s.imaging_ai_visibility === 'shadow') cur.imaging_ai_visibility = s.imaging_ai_visibility
+      if (typeof s.imaging_self_review === 'boolean') cur.imaging_self_review = s.imaging_self_review
       next.settings = JSON.stringify(cur)
     }
     this.store.updateTenant(t.id, next)

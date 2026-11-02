@@ -167,6 +167,10 @@ const ALL_PARITY: Record<string, string> = {
   'GET /api/patients/:ptid/imaging/studies': 'imaging_studies',
   'POST /api/patients/:ptid/imaging/studies/:stid/analyze': 'imaging_study_analyze',
   'GET /api/patients/:ptid/imaging/studies/:stid/lesions': 'imaging_lesions',
+  // 审核视图与定稿（T2.7）：AI 能读审核视图与定稿快照；提交初写、定稿、阅片角色见 NOT_FOR_AI
+  'GET /api/patients/:ptid/imaging/reviews': 'imaging_review',
+  'GET /api/patients/:ptid/imaging/studies/:stid/review': 'imaging_review',
+  'GET /api/patients/:ptid/imaging/studies/:stid/signoffs/:ver': 'imaging_review',
 }
 
 /** AI 发起后要用户在确认卡上确认才执行的动作（不可恢复的删除、权限与安全、以机构身份对外的标识）。 */
@@ -194,6 +198,11 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/imaging/viewer-ticket': '医生在界面上打开 OHIF 阅片器（子域名）用的一次性票据；AI 不看影像本身',
   'POST /api/patients/:ptid/imaging/lesions/:lid/review': '确认 / 否决病灶是医生本人的判断（服务层同样拒绝 via=ai）；AI 用 imaging_lesions 读结果',
   'GET /api/imaging/shadow-report': '影子期对照报告只给机构管理员本人看：影子模式的 AI 结果按设计对 AI 不可见（服务层拒绝 via=ai）',
+  // 审核与定稿（T2.7）：签发 / 定稿属于 PRD 第 6 节的「禁止」类
+  'POST /api/patients/:ptid/imaging/studies/:stid/finalize': '定稿是审核医师本人的签发（PRD 第 6 节「禁止」类）：服务层拒绝 via=ai；AI 用 imaging_review 读审核视图与定稿快照',
+  'POST /api/patients/:ptid/imaging/studies/:stid/review/submit': '「初写完成」是初写医师本人已阅片的声明，决定谁算初写、能否进入定稿；服务层拒绝 via=ai',
+  'GET /api/imaging/reading-roles': '机构管理员在成员管理里设置阅片角色用的列表；谁能定稿由人决定，AI 不参与（服务层拒绝 via=ai）',
+  'PUT /api/imaging/reading-roles/:uid': '授予 / 收回审核（定稿）权限只能由机构管理员本人在界面上做；服务层拒绝 via=ai',
   // 知家分享原件图片由界面展示
   'GET /api/shares/:shid/assets/:aid': '图片二进制资产由界面渲染展示；AI 读打码后的文字内容（share_file / share_read）',
   // 机构患者认领码绑定的人机分界

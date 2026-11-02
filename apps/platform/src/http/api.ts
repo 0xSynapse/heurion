@@ -28,6 +28,7 @@ import { scanPhi, redactPhi } from '../ops/phi-scan.ts'
 import type { CohortService } from '../research/cohort.ts'
 import { registerImagingRoutes } from './routes/imaging.ts'
 import { registerDicomRoutes, viewerHostOf } from './routes/dicom.ts'
+import { registerImagingReviewRoutes } from './routes/imaging-review.ts'
 import { orthancFromEnv, type Orthanc } from '../imaging/orthanc.ts'
 import { sharedPipeline, type ImagingPipeline } from '../imaging/pipeline.ts'
 import { sharedInteractive, type ImagingInteractive } from '../imaging/interactive.ts'
@@ -897,6 +898,11 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     viewerTokens: { issue: (u, aud, ttl, docs) => accounts.viewerToken(u, aud, ttl, docs), verify: (t, aud) => accounts.verifyViewerToken(t, aud) },
     pipeline: deps.imagingPipeline !== undefined ? deps.imagingPipeline : deps.patients && orthanc ? sharedPipeline(deps.patients, orthanc) : null,
     interactive: deps.imagingInteractive !== undefined ? deps.imagingInteractive : deps.patients && orthanc ? sharedInteractive(deps.patients, orthanc) : null,
+  })
+  // —— 影像审核视图与定稿（T2.7）——
+  registerImagingReviewRoutes(app, {
+    audit, me, pt, patientFailure, store,
+    isRunActive: id => (deps.imagingPipeline !== undefined ? deps.imagingPipeline : deps.patients && orthanc ? sharedPipeline(deps.patients, orthanc) : null)?.isActive(id) ?? false,
   })
 
   // —— 知家分享给医生（docs/design/SHARING.md）——
