@@ -1,4 +1,5 @@
 import { esc } from './dom.ts'
+import { mountReview, reviewBadge, type ReviewSummary } from './imaging-review.ts'
 
 type Api = <T = any>(path: string, opts?: RequestInit) => Promise<T>
 type Notice = (msg: string, error?: boolean) => void
@@ -57,9 +58,9 @@ function seriesLine(s: SeriesView): string {
   return [s.modality, s.body_part, s.description, s.slice_thickness ? `${s.slice_thickness} mm` : null, s.kernel, `${s.instances} 层`].filter(Boolean).map(x => esc(String(x))).join(' · ')
 }
 
-function render(list: StudyView[], canEdit: boolean): string {
+function render(list: StudyView[], canEdit: boolean, reviews: Map<string, ReviewSummary>, open: Set<string>): string {
   if (!list.length) return '<div class="muted small">还没有影像检查。上传 DICOM 后会在这里按检查列出，并自动进入 AI 分析。</div>'
-  return `<table class="users"><thead><tr><th>检查日期</th><th>模态</th><th>检查描述</th><th>序列</th><th>AI 分析</th><th>病灶</th><th>来源</th></tr></thead><tbody>
+  return `<table class="users"><thead><tr><th>检查日期</th><th>模态</th><th>检查描述</th><th>序列</th><th>AI 分析</th><th>病灶</th><th>审核</th><th>来源</th></tr></thead><tbody>
     ${list.map(st => {
       const last = st.runs[0]
       const busy = last && (last.status === 'queued' || last.status === 'running')
@@ -68,7 +69,9 @@ function render(list: StudyView[], canEdit: boolean): string {
       <td class="small">${st.series.map(s => `<div>${seriesLine(s)}</div>`).join('')}</td>
       <td class="small">${st.ai_shadow && !last ? '<span class="muted" title="上线前评估：AI 在后台分析，结果只进机构的对照报告">影子模式，结果不显示</span>' : `${runLine(last)}${canEdit && !busy ? `<div><button class="small-btn" data-analyze="${esc(st.id)}">${last ? '重新分析' : '开始分析'}</button></div>` : ''}`}</td>
       <td class="small">${st.lesions.proposed + st.lesions.confirmed + st.lesions.rejected ? `待确认 ${st.lesions.proposed} · 已确认 ${st.lesions.confirmed} · 已否决 ${st.lesions.rejected}` : '<span class="muted">—</span>'}</td>
-      <td class="muted small">${st.source === 'pacs' ? 'PACS' : '手工上传'}<br>${new Date(st.created_at).toLocaleString('zh-CN', { hour12: false })}</td></tr>`
+      <td class="small">${reviewBadge(reviews.get(st.id))}${reviews.has(st.id) ? `<div><button class="small-btn" data-review="${esc(st.id)}">${open.has(st.id) ? '收起审核' : '审核视图'}</button></div>` : ''}</td>
+      <td class="muted small">${st.source === 'pacs' ? 'PACS' : '手工上传'}<br>${new Date(st.created_at).toLocaleString('zh-CN', { hour12: false })}</td></tr>
+      ${open.has(st.id) ? `<tr class="pt-review-row"><td colspan="8"><div class="pt-review" data-review-box="${esc(st.id)}">正在读取审核视图…</div></td></tr>` : ''}`
     }).join('')}
   </tbody></table>`
 }
@@ -107,13 +110,40 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
   if (!box || !listEl) return
   const canEdit = Boolean(box.querySelector('[data-dicom]'))
   let timer: ReturnType<typeof setTimeout> | null = null
+  /** 展开了审核视图的检查（列表定时刷新后重新挂上） */
+  const open = new Set<string>()
+  let studies: StudyView[] = []
+  /** 在阅片器中打开（lesionId：审核视图里「跳转」，打开后结节面板定位到该结节） */
+  const openViewer = async (studyUid: string, lesionId?: string) => {
+    // 先同步开窗（异步之后再开会被浏览器拦截）；阅片器在独立子域名，凭一次性票据换取那里的只读 Cookie
+    const win = window.open('', '_blank')
+    try {
+      const t = await api<{ url: string }>('/api/imaging/viewer-ticket', { method: 'POST', body: JSON.stringify({ study_uid: studyUid, lesion_id: lesionId }), headers: { 'Content-Type': 'application/json' } })
+      if (win) { win.opener = null; win.location.href = t.url }
+    } catch (err) {
+      win?.close()
+      notice(`不能打开阅片器：${(err as Error).message}`, true)
+    }
+  }
+  const mountOpen = () => {
+    for (const id of open) {
+      const el = listEl.querySelector<HTMLElement>(`[data-review-box="${CSS.escape(id)}"]`)
+      const uid = studies.find(s => s.id === id)?.study_uid
+      if (el) void mountReview(api, notice, patientId, id, el, () => void refresh(), lesionId => { if (uid) void openViewer(uid, lesionId) })
+    }
+  }
   const refresh = async () => {
     if (timer) { clearTimeout(timer); timer = null }
     if (!isCurrent()) return
     try {
-      const list = await api<StudyView[]>(`/api/patients/${patientId}/imaging/studies`)
+      const [list, reviews] = await Promise.all([
+        api<StudyView[]>(`/api/patients/${patientId}/imaging/studies`),
+        api<ReviewSummary[]>(`/api/patients/${patientId}/imaging/reviews`).catch(() => [] as ReviewSummary[]),
+      ])
       if (!isCurrent()) return
-      listEl.innerHTML = render(list, canEdit)
+      studies = list
+      listEl.innerHTML = render(list, canEdit, new Map(reviews.map(r => [r.study_id, r])), open)
+      mountOpen()
       // 有排队 / 分析中的检查时隔几秒刷新
       if (list.some(st => st.runs[0] && (st.runs[0].status === 'queued' || st.runs[0].status === 'running'))) timer = setTimeout(() => void refresh(), 5000)
     } catch (err) {
@@ -121,17 +151,16 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
     }
   }
   listEl.onclick = async e => {
+    // 审核视图里的点击由 mountReview 处理
+    if ((e.target as HTMLElement).closest('[data-review-box]')) return
     const view = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-view]')
-    if (view) {
-      // 先同步开窗（异步之后再开会被浏览器拦截）；阅片器在独立子域名，凭一次性票据换取那里的只读 Cookie
-      const win = window.open('', '_blank')
-      try {
-        const t = await api<{ url: string }>('/api/imaging/viewer-ticket', { method: 'POST', body: JSON.stringify({ study_uid: view.dataset.view }), headers: { 'Content-Type': 'application/json' } })
-        if (win) { win.opener = null; win.location.href = t.url }
-      } catch (err) {
-        win?.close()
-        notice(`不能打开阅片器：${(err as Error).message}`, true)
-      }
+    if (view) { await openViewer(view.dataset.view!); return }
+    const rv = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-review]')
+    if (rv) {
+      const id = rv.dataset.review!
+      if (open.has(id)) open.delete(id)
+      else open.add(id)
+      await refresh()
       return
     }
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-analyze]')

@@ -25,9 +25,14 @@ export interface TenantSettings {
    * 对界面、阅片器与 AI 都不可见（一期上线前的回顾评估，PRD 关口 G1）；visible = 正常显示。医生在阅片器里的点选分割不受影响。
    */
   imaging_ai_visibility: 'visible' | 'shadow'
+  /**
+   * 影像定稿是否允许自审（docs/design/IMAGING_STUDIES.md「审核与定稿」）：false（默认）= 初写与审核须为不同的人；
+   * true = 审核医师可以定稿自己初写的检查（人手不足的科室）。定稿记录里标明 mode = self。个人空间不受此限（单人模式）。
+   */
+  imaging_self_review: boolean
 }
 
-export const DEFAULT_SETTINGS: TenantSettings = { patient_module: true, external_model_for_patients: true, patient_visibility: 'care_team', ai_patient_writes: 'review', accept_patient_shares: true, imaging_ai_visibility: 'visible' }
+export const DEFAULT_SETTINGS: TenantSettings = { patient_module: true, external_model_for_patients: true, patient_visibility: 'care_team', ai_patient_writes: 'review', accept_patient_shares: true, imaging_ai_visibility: 'visible', imaging_self_review: false }
 
 export class TenantError extends Error {
   constructor(readonly code: string, message: string, readonly status: 400 | 403 | 404 | 409 = 400) { super(message) }
@@ -151,6 +156,7 @@ export class TenantService {
       if (s.ai_patient_writes === 'review' || s.ai_patient_writes === 'direct') cur.ai_patient_writes = s.ai_patient_writes
       if (typeof s.accept_patient_shares === 'boolean') cur.accept_patient_shares = s.accept_patient_shares
       if (s.imaging_ai_visibility === 'visible' || s.imaging_ai_visibility === 'shadow') cur.imaging_ai_visibility = s.imaging_ai_visibility
+      if (typeof s.imaging_self_review === 'boolean') cur.imaging_self_review = s.imaging_self_review
       next.settings = JSON.stringify(cur)
     }
     this.store.updateTenant(t.id, next)
@@ -314,6 +320,10 @@ export class TenantService {
    * - 本院研究里的成员身份、本院科室归属随之去掉；
    * - 本院患者的诊疗组记录保留（访问日志与历史可追溯），但人不在本院后读不到（患者库按工作空间取）；重新加入后恢复。
    */
+  private readonly memberLeftHooks: Array<(tenantId: string, userId: string) => void> = []
+  /** 成员离开机构（退出或被移出）后调用：各模块清掉此人在本机构的授权（如影像阅片角色），以免再加入时悄悄恢复 */
+  onMemberLeft(fn: (tenantId: string, userId: string) => void): void { this.memberLeftHooks.push(fn) }
+
   private detach(userId: string, tenantId: string): void {
     const owned = this.store.listTenantStudies(tenantId).filter(st => st.owner === userId)
     if (owned.length) throw new TenantError('owns_studies', `还负责着本院的 ${owned.length} 个研究（${owned.slice(0, 3).map(st => `「${st.title}」`).join('、')}${owned.length > 3 ? '…' : ''}）；先转交给本院同事，或请机构管理员做离职交接`, 409)
@@ -323,6 +333,7 @@ export class TenantService {
       const home = this.personalOf(userId)
       this.store.moveUserToTenant(userId, home.id, 'admin')
     })
+    for (const fn of this.memberLeftHooks) fn(tenantId, userId)
   }
 
   /** 本人退出医院。 */

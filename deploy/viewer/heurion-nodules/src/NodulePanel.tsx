@@ -33,6 +33,14 @@ interface Lesion {
 }
 
 interface PromptPoint { lps_mm: number[]; positive: boolean }
+/** 检查的审核状态（T2.7，平台 src/imaging/review.ts ReviewSummary） */
+interface ReviewSummary {
+  state: 'reading' | 'submitted' | 'finalized' | 'amending';
+  latest_signoff: { version: number; signed_by_name: string | null; signed_at: string } | null;
+}
+const REVIEW_TEXT: Record<ReviewSummary['state'], string> = { reading: '初写中', submitted: '初写已提交，待审核', finalized: '已定稿', amending: '定稿后修改中，待再次定稿' };
+/** 从患者页审核视图「跳转」打开时，要定位的结节 */
+const focusFromUrl = () => new URLSearchParams(window.location.search).get('HeurionLesion');
 /** 点选模式：补一个结节；或修某个结节的边界（positive = 补入，否则排除） */
 type PickMode = { kind: 'add' } | { kind: 'refine'; lesionId: string; positive: boolean } | null;
 
@@ -87,6 +95,8 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
   /** 正在进行的点选分割（显示「分割中…」，期间不接受新的点击） */
   const [working, setWorking] = useState<string | null>(null);
   const prepared = useRef(new Set<string>());
+  const [reviewState, setReviewState] = useState<ReviewSummary | null>(null);
+  const focused = useRef(false);
 
   const load = useCallback(async () => {
     if (!studyUid) return setError('地址里没有检查编号');
@@ -96,6 +106,7 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
       if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
       setLesions(body.lesions ?? []);
       setReasons(body.reject_reasons ?? []);
+      setReviewState(body.review ?? null);
       setError(null);
     } catch (e) {
       setError(`读取结节失败：${(e as Error).message}`);
@@ -159,6 +170,26 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
     }
     commandsManager.runCommand('setViewportWindowLevel', { viewportId, ...LUNG_WINDOW });
   }, [servicesManager, commandsManager, jumpBySeg]);
+
+  /** 从审核视图「跳转」打开：结节列表到了、视口有了之后定位一次（视口还没就绪时稍后再试） */
+  useEffect(() => {
+    const id = focusFromUrl();
+    if (!id || focused.current) return;
+    const l = lesions.find(x => x.id === id);
+    if (!l) return;
+    let tries = 0;
+    const tick = () => {
+      if (focused.current) return;
+      if (servicesManager.services.viewportGridService.getActiveViewportId() || tries >= 10) {
+        focused.current = true;
+        void jump(l);
+        return;
+      }
+      tries += 1;
+      setTimeout(tick, 500);
+    };
+    tick();
+  }, [lesions, jump, servicesManager]);
 
   const review = useCallback(async (l: Lesion, status: 'confirmed' | 'rejected', reason?: string) => {
     setBusy(l.id);
@@ -344,6 +375,13 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
         <span style={{ marginLeft: 8, color: '#8b949e' }}>待确认 {counts.proposed} · 已确认 {counts.confirmed} · 已否决 {counts.rejected}</span>
         <button style={{ marginLeft: 'auto' }} onClick={() => void load()}>刷新</button>
       </div>
+      {reviewState && (
+        <div data-cy="heurion-review-state" style={{ fontSize: 12, marginBottom: 6, color: reviewState.state === 'finalized' ? '#3fb950' : reviewState.state === 'amending' ? '#f5a623' : '#8b949e' }}>
+          {REVIEW_TEXT[reviewState.state]}
+          {reviewState.latest_signoff ? `（第 ${reviewState.latest_signoff.version} 版${reviewState.latest_signoff.signed_by_name ? `，${reviewState.latest_signoff.signed_by_name}` : ''}）` : ''}
+          {reviewState.state === 'finalized' ? '；此时修改会生成新的定稿版本，需审核医师再次定稿' : ''}
+        </div>
+      )}
       <div style={{ color: '#8b949e', fontSize: 12, marginBottom: 8 }}>AI 检出的结节需医生确认后才进入报告；点一行跳到关键层。</div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
         <button data-cy="heurion-add-nodule" disabled={!!working} onClick={() => setMode(mode?.kind === 'add' ? null : { kind: 'add' })}>

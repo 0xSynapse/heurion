@@ -5,6 +5,7 @@ import type { Orthanc } from '../../imaging/orthanc.ts'
 import { ImagingError, ImagingStudyService, type StudyView } from '../../imaging/studies.ts'
 import { TASKS, type EnqueueResult, type ImagingPipeline, type ImagingTask } from '../../imaging/pipeline.ts'
 import { parsePoints, type ImagingInteractive } from '../../imaging/interactive.ts'
+import { ImagingReviewService } from '../../imaging/review.ts'
 
 export interface DicomRouteContext {
   audit: (c: Context, action: string, e?: { actor?: string | null; target?: string | null; detail?: string | null; status?: number }) => void
@@ -41,6 +42,8 @@ const uploadMaxBytes = () => Math.max(1, Number(process.env.IMAGING_UPLOAD_MAX_M
 /** DICOMweb 路径：只允许 /studies/<UID>[/...]，字符白名单，不允许 .. */
 const DICOMWEB_PATH = /^\/studies\/([0-9.]{1,64})((?:\/[A-Za-z0-9._-]+)*)$/
 const UID = /^[0-9.]{1,64}$/
+/** 病灶 id（le + 12 位十六进制）：阅片器打开时定位用 */
+const LESION_ID = /^le[0-9a-f]{12}$/
 
 /**
  * 影像检查（docs/design/IMAGING_STUDIES.md）：手工上传 DICOM、检查列表、DICOMweb 鉴权代理、阅片器入口。
@@ -215,12 +218,14 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
       if (a.via === 'ai') throw new ImagingError('forbidden', '阅片器只给医生本人在界面上打开', 403)
       const vh = viewerHostOf()
       if (!vh || !viewerUrl()) throw new ImagingError('viewer_not_configured', '阅片器还没有部署（VIEWER_HOST / VIEWER_URL 未配置）', 503)
-      const { study_uid: uid } = await c.req.json().catch(() => ({})) as { study_uid?: string }
+      const { study_uid: uid, lesion_id: lesionId } = await c.req.json().catch(() => ({})) as { study_uid?: string; lesion_id?: string }
       if (!uid || !UID.test(uid)) throw new ImagingError('bad_uid', 'StudyInstanceUID 格式不对')
       svc(c).resolveStudyUid(a, uid)
       const ticket = ctx.viewerTokens.issue(a.userId, 'viewer', TICKET_TTL, [uid])
       if (!ticket) throw new ImagingError('forbidden', '账户状态不允许打开阅片器', 403)
-      return c.json({ url: `${protoOf(c)}://${vh}/session?ticket=${encodeURIComponent(ticket)}`, expires_in: TICKET_TTL })
+      // 审核视图里「跳转」：打开后结节面板直接定位到这个结节（只是界面定位，不是权限；面板只在 Cookie 允许的检查里找）
+      const focus = typeof lesionId === 'string' && LESION_ID.test(lesionId) ? `&lesion=${lesionId}` : ''
+      return c.json({ url: `${protoOf(c)}://${vh}/session?ticket=${encodeURIComponent(ticket)}${focus}`, expires_in: TICKET_TTL })
     } catch (err) { return fail(c, err) }
   })
 
@@ -248,7 +253,8 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
     setCookie(c, VIEWER_COOKIE, cookie, { path: '/api', httpOnly: true, sameSite: 'Strict', secure: protoOf(c) === 'https', maxAge: VIEWER_COOKIE_TTL })
     c.header('Cache-Control', 'no-store')
     c.header('Referrer-Policy', 'no-referrer')
-    return c.redirect(`/viewer?StudyInstanceUIDs=${encodeURIComponent(uid)}`)
+    const focus = LESION_ID.test(c.req.query('lesion') ?? '') ? `&HeurionLesion=${c.req.query('lesion')}` : ''
+    return c.redirect(`/viewer?StudyInstanceUIDs=${encodeURIComponent(uid)}${focus}`)
   })
   const unauthorized = (c: Context) => c.json({ error: '阅片会话已过期，请回到患者页重新打开', code: 'unauthorized' }, 401)
   surface.get('/api/dicomweb/studies', c => { const v = viewerActor(c); return v ? qido(c, v.a, v.allowed) : unauthorized(c) })
@@ -261,7 +267,10 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
     try {
       const uid = c.req.query('StudyInstanceUID') ?? ''
       if (!UID.test(uid) || !v.allowed.includes(uid)) throw new ImagingError('not_found', '影像检查不存在', 404)
-      return c.json({ lesions: svc(c as never).lesionsByStudyUid(v.a, uid), reject_reasons: REVIEW_REASONS }, 200, { 'Cache-Control': 'private, no-store' })
+      const lesions = svc(c as never).lesionsByStudyUid(v.a, uid)
+      // 审核状态（T2.7）：面板显示「已定稿 vN / 定稿后修改中」，提醒医生此时的改动会生成新的定稿版本
+      const review = new ImagingReviewService(ctx.pt(c as never)).summary(v.a, svc(c as never).resolveStudyUid(v.a, uid).studyId)
+      return c.json({ lesions, reject_reasons: REVIEW_REASONS, review }, 200, { 'Cache-Control': 'private, no-store' })
     } catch (err) { return fail(c, err) }
   })
   /**
