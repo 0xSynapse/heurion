@@ -298,11 +298,15 @@ const NOT_FOR_AI: Record<string, string> = {
   'DELETE /api/memory/rules/:rid': '移除个人自适应执行经验由用户本人在记忆界面操作（AI 不能自行删除约束自己的避坑规则）',
   'POST /api/memory/rules/:rid/rollback': '回退个人自适应执行经验历史版本由用户本人在记忆界面操作（AI 不能自行回退约束自己的避坑规则）',
   // 官网公开无状态小工具（供未登录访客在官网着陆页体验；工作区内 AI 直接调用对应的已鉴权 MCP 工具）
+  'GET /api/public/tools/telemetry': '官网公开着陆页与小工具的匿名流量分类遥测快照（仅运营观测用，不含个人身份信息）',
   'POST /api/public/tools/e-value': '官网着陆页公开无状态 E-value 计算小工具（AI 调 study_cohort / biostatistician）',
   'POST /api/public/tools/consort': '官网着陆页公开无状态 CONSORT 流程图小工具（AI 调 study_cohort）',
   'POST /api/public/tools/table1': '官网着陆页公开无状态 Table 1 基线表计算小工具（AI 调 dataset_manage）',
   'POST /api/public/tools/table1-docx': '官网着陆页公开无状态 Table 1 Word 导出小工具（浏览器端文件下载）',
   'POST /api/public/tools/citation-check': '官网着陆页公开无状态文献真伪核验小工具（AI 调 pubmed_search / verify_claims）',
+  'POST /api/public/tools/kaplan-meier': '官网着陆页公开无状态 Kaplan-Meier 生存曲线小工具（AI 调 dataset_survival）',
+  'POST /api/public/tools/forest-plot': '官网着陆页公开无状态亚组森林图 SVG 小工具（AI 调 dataset_logistic / imaging_medical_figure_studio）',
+  'POST /api/public/tools/phi-scan': '官网着陆页公开无状态 PHI 隐私扫描与脱敏小工具（AI 调 phi_scan）',
   // Aegis Application Protocol (AAP-1.0) 协议握手、授权令牌管理与人工租约审批接口
   'POST /api/aegis/auth/device': '由本地 aegis-os app login 发起 RFC 8628 设备码免密绑定请求（AI 不能自行发起）',
   'POST /api/aegis/auth/device/approve': '医生/研究员本人在设置页输入 8 位终端设备码确认绑定（AI 不能自行确认）',
