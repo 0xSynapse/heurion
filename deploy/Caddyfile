@@ -24,7 +24,7 @@
 	# 控制台与审批静态页面由 heurion2 站点直接托管（随主站 CI 自动发布），其余 API/安装脚本去掉前缀后转发至 17080。
 	@aegisCloudApi {
 		path /aegis-cloud/*
-		not path /aegis-cloud/dashboard /aegis-cloud/dashboard/ /aegis-cloud/approve /aegis-cloud/approve/
+		not path /aegis-cloud/dashboard /aegis-cloud/dashboard/ /aegis-cloud/approve /aegis-cloud/approve/ /aegis-cloud/install.sh
 	}
 	handle @aegisCloudApi {
 		uri strip_prefix /aegis-cloud

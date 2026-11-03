@@ -271,6 +271,7 @@ app.get('/aegis-cloud/dashboard', c => c.html(readFileSync(join(SITE, 'aegis-clo
 app.get('/aegis-cloud/dashboard/', c => c.redirect('/aegis-cloud/dashboard'))
 app.get('/aegis-cloud/approve', c => c.html(readFileSync(join(SITE, 'aegis-cloud/dashboard.html'), 'utf8')))
 app.get('/aegis-cloud/approve/', c => c.redirect('/aegis-cloud/approve'))
+app.get('/aegis-cloud/install.sh', c => c.text(readFileSync(join(SITE, 'aegis-cloud/install.sh'), 'utf8'), 200, { 'Content-Type': 'text/x-shellscript; charset=utf-8' }))
 app.get('/tools', c => servePublicHtml(c, renderToolsHubHtml('zh')))
 app.get('/tools/', c => c.redirect('/tools'))
 app.get('/en/tools', c => servePublicHtml(c, renderToolsHubHtml('en')))
