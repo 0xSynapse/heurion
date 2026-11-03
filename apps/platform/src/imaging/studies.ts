@@ -59,6 +59,8 @@ export interface ImportResult {
   conflicts: number
   /** 冲突检查的不透明标识（本次上传在影像存储里的检查 id），供分批上传时按检查去重计数 */
   conflict_keys: string[]
+  /** 这次上传有新实例入库的检查（平台检查 id）：分批上传时，前端在最后一批之后对它们统一排队分析 */
+  updated_study_ids: string[]
 }
 
 /** superseded = 重新分析后被新结果取代的、从未经医生处理的 AI 检出，或医生撤销的自己补充的病灶 */
@@ -255,9 +257,10 @@ export class ImagingStudyService {
 
     const linked: string[] = []
     const conflictKeys: string[] = []
+    const updated: string[] = []
     for (const [orthancStudyId, seriesIds] of studies) {
       const id = await this.linkStudy(s, a, orthanc, orthancStudyId, seriesIds, meta)
-      if (id) linked.push(id)
+      if (id) { linked.push(id); if ((perStudy.get(orthancStudyId)?.uploaded ?? 0) > 0 && !updated.includes(id)) updated.push(id) }
       else {
         conflictKeys.push(orthancStudyId)
         uploaded -= perStudy.get(orthancStudyId)?.uploaded ?? 0
@@ -265,7 +268,7 @@ export class ImagingStudyService {
       }
     }
     const all = this.listIn(s, true)
-    return { studies: all.filter(st => linked.includes(st.id)), files: { received, uploaded, duplicates, skipped }, conflicts: conflictKeys.length, conflict_keys: conflictKeys }
+    return { studies: all.filter(st => linked.includes(st.id)), files: { received, uploaded, duplicates, skipped }, conflicts: conflictKeys.length, conflict_keys: conflictKeys, updated_study_ids: updated }
   }
 
   private storageError(err: unknown): ImagingError {

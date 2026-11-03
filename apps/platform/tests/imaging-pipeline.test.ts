@@ -248,6 +248,34 @@ describe('分析接口', () => {
     return { ...t, app, auth }
   }
 
+  it('分批上传（defer_analysis=1）：各批都不排队，返回有新实例的检查；最后统一排一次，用的是完整序列', async () => {
+    const t = api()
+    const p = t.patients.create(t.a, { sex: 'M', birth_year: 1958 })
+    const files = seriesFiles(STUDY, THIN, 40)
+    const send = async (part: typeof files) => {
+      const form = new FormData()
+      for (const f of part) form.append('files', new File([f.bytes], f.name))
+      form.append('defer_analysis', '1')
+      return await (await t.app.request(`/api/patients/${p.id}/imaging/dicom`, { method: 'POST', headers: t.auth, body: form })).json() as { studies: Array<{ id: string }>; analysis: unknown[]; updated_study_ids: string[] }
+    }
+    const first = await send(files.slice(0, 15))
+    expect(first.analysis).toEqual([])
+    expect(first.updated_study_ids).toEqual([first.studies[0]!.id])
+    const second = await send(files.slice(15))
+    expect(second.analysis).toEqual([])
+    expect(second.updated_study_ids).toEqual(first.updated_study_ids)
+    // 重复上传同一批：没有新实例，不再列出
+    expect((await send(files.slice(0, 15))).updated_study_ids).toEqual([])
+    let list = await (await t.app.request(`/api/patients/${p.id}/imaging/studies`, { headers: t.auth })).json() as Array<{ runs: unknown[]; series: Array<{ instances: number }> }>
+    expect(list[0]!.runs).toEqual([])
+    expect(list[0]!.series[0]!.instances).toBe(40)
+    const run = await t.app.request(`/api/patients/${p.id}/imaging/studies/${first.studies[0]!.id}/analyze`, { method: 'POST', headers: { ...t.auth, 'Content-Type': 'application/json' }, body: '{}' })
+    expect(run.status).toBe(202)
+    await t.pipeline.idle()
+    list = await (await t.app.request(`/api/patients/${p.id}/imaging/studies`, { headers: t.auth })).json() as Array<{ runs: Array<{ status: string }>; series: Array<{ instances: number }> }>
+    expect(list[0]!.runs).toHaveLength(1)
+  })
+
   it('上传即排队分析；列表带运行状态；可重新分析；不适用时 409', async () => {
     const t = api()
     const p = t.patients.create(t.a, { sex: 'M', birth_year: 1958 })
