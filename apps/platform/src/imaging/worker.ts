@@ -3,6 +3,21 @@
  * 原件由平台从 Orthanc 取出交给 worker，worker 不直接访问 Orthanc。
  */
 
+import { Agent } from 'undici'
+
+/**
+ * Node 自带的 fetch（undici）默认 5 分钟收不到响应头就断开（headersTimeout），报的是笼统的「fetch failed」。
+ * 肺结节分析在 CPU 上常常超过 5 分钟，所以超时长于 5 分钟的调用改用这个连接池：头与正文的超时都放到调用方给的时长，
+ * 真正的上限仍由 AbortSignal.timeout(timeoutMs) 控制。undici 与 Node 内置版本一致（package.json 锁定）。
+ */
+const UNDICI_DEFAULT_TIMEOUT_MS = 300_000
+const longAgents = new Map<number, Agent>()
+function longAgent(timeoutMs: number): Agent {
+  let a = longAgents.get(timeoutMs)
+  if (!a) { a = new Agent({ headersTimeout: timeoutMs + 60_000, bodyTimeout: timeoutMs + 60_000 }); longAgents.set(timeoutMs, a) }
+  return a
+}
+
 /** worker 返回非 2xx 或连不上；status 为 HTTP 状态码（连接失败、超时为 null） */
 export class WorkerError extends Error {
   constructor(readonly status: number | null, message: string) { super(message) }
@@ -12,10 +27,14 @@ export class WorkerError extends Error {
 export async function callWorker(fetchImpl: typeof fetch, base: string, path: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
   let resp: Response
   try {
-    resp = await fetchImpl(`${base}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+    const dispatcher = timeoutMs > UNDICI_DEFAULT_TIMEOUT_MS ? { dispatcher: longAgent(timeoutMs) } : {}
+    resp = await fetchImpl(`${base}${path}`, { ...init, ...dispatcher, signal: AbortSignal.timeout(timeoutMs) } as RequestInit)
   } catch (err) {
     const name = (err as Error)?.name
-    throw new WorkerError(null, name === 'TimeoutError' || name === 'AbortError' ? '影像服务处理超时' : `影像服务连接失败：${(err as Error).message}`)
+    if (name === 'TimeoutError' || name === 'AbortError') throw new WorkerError(null, '影像服务处理超时')
+    // fetch failed 的具体原因在 cause 里（连接被拒、被重置、头超时等），一并写出来便于排查
+    const cause = (err as { cause?: { code?: string; message?: string } })?.cause
+    throw new WorkerError(null, `影像服务连接失败：${(err as Error).message}${cause ? `（${cause.code ?? cause.message ?? ''}）` : ''}`)
   }
   if (!resp.ok) {
     let detail = ''
