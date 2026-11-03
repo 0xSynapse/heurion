@@ -19,6 +19,14 @@
 - id: web-deepseek-api
   disabled: true
 
+# 2b. dsh 0.2.1 起自带的 subagent / subagent_fork 改为异步：调用后立即返回，结果在之后的回合里送回。
+#     平台按 dsh 回合结束来收尾一轮（按轮撤销、写入归属都以此为界），异步子代理的写入会落在回合之外，
+#     而且子代理拿到的是全部工具（含 shell）。平台的子专家走 heurion MCP 的 delegate_task，这里关掉 dsh 自带的两个。
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+
 # 3. 人设：医学写作助手；文档只经 MCP 读写。
 #    dsh 0.2.1 起提示词只认 {{provider}}、{{model}}：写 {{cwd}} 会让每个回合在组装提示词时直接失败；
 #    当前目录由 working-directory 插件作为上下文注入。
