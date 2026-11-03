@@ -40,6 +40,11 @@ export type RenderInput = (() => Uint8Array) | DeckRenderSource
 
 export type RenderMode = 'local' | 'container' | 'builtin'
 
+/** 渲染缓存键：按（文档, rev, 视图）区分——同一 rev 下修订后与采纳前的页面不同。 */
+export function slideRenderKey(docId: string, rev: number, view: 'plain' | 'accepted' | 'original'): string {
+  return view === 'plain' ? `${docId}/${rev}` : `${docId}/${rev}-${view}`
+}
+
 /**
  * 幻灯片渲染服务：
  * 1. 优先使用本地/容器内 LibreOffice + pdftoppm 渲染；

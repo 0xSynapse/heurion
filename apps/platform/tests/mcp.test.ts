@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { strFromU8, unzipSync } from 'fflate'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { describe, expect, it } from 'vitest'
@@ -20,7 +21,7 @@ import { setup } from './helpers.ts'
 
 const SECRET = 'test-secret'
 
-async function connect(markdown: string, scope: { d?: '*' | string[]; p?: Array<'read' | 'write'> } = {}) {
+async function connect(markdown: string, scope: { d?: '*' | string[]; p?: Array<'read' | 'write'> } = {}, opts: { renderer?: SlideRenderer } = {}) {
   const env = setup(markdown)
   const kb = new KbService(env.store, null)
   const memory = new MemoryService(env.store, null)
@@ -55,7 +56,7 @@ async function connect(markdown: string, scope: { d?: '*' | string[]; p?: Array<
     abstract: async () => 'RESULTS: The primary outcome occurred in 6.5% vs 8.0% (HR 0.80; 95% CI 0.72-0.90). The trial was completed as planned.',
   } as unknown as PubMedClient
   const server = buildMcpServer({
-    docs: env.docs, ops: env.ops, turns: registry, secret: SECRET, claims: new ClaimService(env.docs, pubmed), renderer: new SlideRenderer(workspace),
+    docs: env.docs, ops: env.ops, turns: registry, secret: SECRET, claims: new ClaimService(env.docs, pubmed), renderer: opts.renderer ?? new SlideRenderer(workspace),
     pubmed, crossref,
     workspaceDir: () => workspace,
     isLiveSession: () => true,
@@ -412,6 +413,52 @@ describe('AI 生成图片并插入（与人的插图能力一致）', () => {
     expect(typeof res.content?.[0]?.data).toBe('string')
     expect((res.content?.[0]?.data ?? '').length).toBeGreaterThan(100)
   }, 30000)
+
+  it('slide_render 在修订模式下：待采纳新增的页能渲染，排在它后面的页不会取错（e2e：渲染结果缺少这一页 → AI 改用 bash 翻数据库）', async () => {
+    // 假的 LibreOffice：按导出 pptx 的页序逐页「渲染」，图片内容就是该页的 XML，便于核对取到的是哪一页
+    const dir = mkdtempSync(join(tmpdir(), 'heurion-fake-render-'))
+    const keys: string[] = []
+    const renderer = {
+      render: async (key: string, input: { pptx?: () => Uint8Array }) => {
+        keys.push(key)
+        const files = unzipSync(input.pptx!())
+        const rels = strFromU8(files['ppt/_rels/presentation.xml.rels']!)
+        const target = (rid: string) => new RegExp(`Id="${rid}"[^>]*Target="([^"]+)"|Target="([^"]+)"[^>]*Id="${rid}"`).exec(rels)!.slice(1).find(Boolean)!
+        const order = [...strFromU8(files['ppt/presentation.xml']!).matchAll(/<p:sldId [^>]*r:id="([^"]+)"/g)].map(m => target(m[1]!))
+        return order.map((part, i) => {
+          const out = join(dir, `${key.replace(/\W/g, '_')}-${i}.png`)
+          writeFileSync(out, files[`ppt/${part.replace(/^\/?ppt\//, '')}`]!)
+          return out
+        })
+      },
+    } as unknown as SlideRenderer
+    const t = await connect('占位。', {}, { renderer })
+    const deckId = (await t.call('doc_create', { title: '修订渲染', kind: 'deck' })).body.doc_id as string
+    const slides = () => { const out: Array<{ id: string; suggest: string | null }> = []; t.docs.get(deckId).forEach(n => out.push({ id: n.attrs.id as string, suggest: n.attrs.suggest as string | null })); return out }
+    const first = slides()[0]!.id
+    t.ops.edit({ doc_id: deckId, base_rev: t.docs.rev(deckId), mode: 'apply', ops: [{ op: 'add_slide', after: first, title: '主要结果', body: '- HR 0.80' }] }, { actor: 'ai', turnId: null })
+    t.ops.edit({ doc_id: deckId, base_rev: t.docs.rev(deckId), mode: 'suggest', ops: [{ op: 'add_slide', after: first, title: '安全性', body: '- 停药率' }] }, { actor: 'ai', turnId: null })
+    const [, added, result] = slides()
+    expect(added!.suggest).toBe('insert')
+    const shown = async (slideId: string) => {
+      const res = await t.call('slide_render', { doc_id: deckId, slide_id: slideId })
+      expect(res.isError, res.text).toBe(false)
+      return Buffer.from(res.content[0]!.data!, 'base64').toString('utf8')
+    }
+    // 待采纳新增的页：按修订后的样子渲染
+    expect(await shown(added!.id)).toContain('安全性')
+    // 排在待新增页后面的已有页：不缺页、不取成别的页
+    const r = await shown(result!.id)
+    expect(r).toContain('主要结果')
+    expect(r).not.toContain('安全性')
+
+    // 待删除的原文版页：按采纳前的样子渲染，仍是它自己
+    t.ops.edit({ doc_id: deckId, base_rev: t.docs.rev(deckId), mode: 'suggest', ops: [{ op: 'delete_slide', slide_id: result!.id }] }, { actor: 'ai', turnId: null })
+    expect(slides().find(s => s.id === result!.id)?.suggest).toBe('delete')
+    expect(await shown(result!.id)).toContain('主要结果')
+    // 修订后与采纳前的渲染分开缓存
+    expect(new Set(keys.map(k => k.split('/')[1]!.replace(/^\d+/, '')))).toEqual(new Set(['-accepted', '-original']))
+  })
 })
 
 describe('文档仓库（AI 一侧）', () => {
