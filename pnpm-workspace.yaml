@@ -13,4 +13,10 @@ allowBuilds:
   onnxruntime-node: false
   tesseract.js: false
 patchedDependencies:
-  '@deepseek-ai/dsh-attachment-local@0.2.0-rc.2': patches/@deepseek-ai__dsh-attachment-local@0.2.0-rc.2.patch
+  '@deepseek-ai/dsh-attachment-local@0.2.1-rc.2': patches/@deepseek-ai__dsh-attachment-local@0.2.1-rc.2.patch
+# 安全修复：把传递依赖抬到已修复版本（对应 Dependabot 告警；只选发布满两周的版本）
+overrides:
+  '@modelcontextprotocol/client@>=2.0.0 <2.3.0': 2.3.0
+  'fflate@>=0.8.0 <0.8.3': 0.8.3
+  'ip-address@<10.7.4': 10.7.4
+  'source-map-js@>=1.0.0 <1.2.2': 1.2.2
