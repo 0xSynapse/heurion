@@ -20,17 +20,20 @@
   <meta property="og:locale:alternate" content="en_US" />
   <meta property="og:title" content="Aegis OS · 本地与云端多 Agent 安全控制平面" />
   <meta property="og:description" content="隔离、协作、同意、撤销、审计：让多个 Agent 安全地在你的机器或 64GB 云端沙箱中并行工作。" />
+  <meta property="og:image" content="https://heurion.org/site/demo-chest-mpr-3view.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:image" content="https://heurion.org/site/demo-chest-mpr-3view.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-v14" />
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v15" />
   <style>
     .aegis-hero {
       padding: 5.5rem 0 3.75rem;
       background-color: var(--bg-primary);
       background-image:
         linear-gradient(102deg, rgba(250, 248, 244, 0.94) 0%, rgba(250, 248, 244, 0.86) 52%, rgba(239, 236, 228, 0.72) 100%),
-        url('https://images.unsplash.com/photo-1542273917363-3b1817f69a2d?auto=format&fit=crop&w=2000&q=80');
+        url('/site/nordic-bg.jpg');
       background-size: cover;
       background-position: center 62%;
       border-bottom: 1px solid var(--border);
@@ -43,33 +46,40 @@
     .nav-link { white-space: nowrap; flex-shrink: 0; }
     .nav-link-active { color: var(--ink); font-weight: 500; }
 
-    .aegis-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); margin-top: 3rem; }
-    .aegis-cell { background: var(--bg-elevated); padding: 1.75rem; min-height: 11.5rem; min-width: 0; }
-    .aegis-cell h3 { margin: 0.35rem 0 .6rem; }
-    .aegis-cell p { margin: 0; font-size: .92rem; color: var(--ink-secondary); }
-
     .aegis-section { padding: 4.5rem 0; border-bottom: 1px solid var(--border); }
     .aegis-section-linen { background: var(--bg-neutral); padding: 4.5rem 0; border-bottom: 1px solid var(--border); }
     .aegis-section h2, .aegis-section-linen h2 { margin-bottom: 1rem; }
     .aegis-section p, .aegis-section-linen p { max-width: 52rem; color: var(--ink-secondary); }
 
-    /* 3-Stage Architecture Diagram */
-    .arch-diagram {
-      margin-top: 2rem;
-      background: var(--bg-elevated);
+    /* Simplified 3-Stage Architecture inside Top Hero */
+    .arch-hero-card {
+      margin-top: 2.5rem;
+      background: rgba(253, 252, 249, 0.94);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
       border: 1px solid var(--border);
-      padding: 2rem 2.25rem;
+      padding: 1.35rem 1.5rem;
+    }
+    .arch-hero-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      padding-bottom: 0.85rem;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
     }
     .arch-flow {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.35fr) auto minmax(0, 1.15fr);
-      gap: 1.15rem;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.25fr) auto minmax(0, 1.05fr);
+      gap: 0.85rem;
       align-items: stretch;
     }
     .arch-stage {
       background: var(--bg-primary);
       border: 1px solid var(--border);
-      padding: 1.35rem 1.45rem;
+      padding: 1.05rem 1.15rem;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
@@ -79,36 +89,50 @@
       background: var(--bg-elevated);
       border: 1.5px solid var(--accent);
     }
+    .arch-stage-title {
+      margin: 0 0 0.28rem;
+      font-family: var(--serif);
+      font-size: 1.08rem;
+      font-weight: 400;
+      color: var(--ink);
+    }
+    .arch-stage-desc {
+      font-size: 0.82rem;
+      color: var(--ink-secondary);
+      margin: 0 0 0.7rem;
+      line-height: 1.5;
+    }
     .arch-arrow {
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       font-family: var(--mono);
-      font-size: 0.72rem;
+      font-size: 0.68rem;
       color: var(--accent);
-      gap: 0.25rem;
-      padding: 0 0.2rem;
+      gap: 0.15rem;
+      padding: 0 0.1rem;
       white-space: nowrap;
     }
-    .arch-pill-list {
+    .arch-arrow-sym { font-size: 1.05rem; line-height: 1; }
+    .arch-tags {
       display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-      margin-top: 0.85rem;
+      flex-wrap: wrap;
+      gap: 0.38rem;
     }
-    .arch-pill {
-      padding: 0.52rem 0.75rem;
+    .arch-tag {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      padding: 0.24rem 0.55rem;
       background: var(--bg-elevated);
       border: 1px solid var(--border);
-      font-size: 0.83rem;
       color: var(--ink);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.5rem;
     }
-    .arch-pill code { font-family: var(--mono); font-size: 0.74rem; color: var(--accent); }
+    .arch-tag-core {
+      border-color: rgba(35, 62, 51, 0.28);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
 
     /* Direct Pricing & Purchase Cards */
     .tier-grid { display: grid; grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr); gap: 1.5rem; margin-top: 2rem; align-items: stretch; }
@@ -217,6 +241,7 @@
       <nav class="nav-links" aria-label="Primary">
         <a href="/" class="nav-link">主站</a>
         <a href="/aegis-os/" class="nav-link nav-link-active">概览</a>
+        <a href="#install" class="nav-link">快速安装</a>
         <a href="#pricing" class="nav-link">方案与购买</a>
         <a href="/aegis-os/tutorial/" class="nav-link">使用教程</a>
         <a href="/aegis-cloud/dashboard" class="nav-link">我的控制台</a>
@@ -230,7 +255,7 @@
   </header>
 
   <main>
-    <!-- Hero -->
+    <!-- Hero (with Simplified 3-Stage Architecture on the first screen) -->
     <section class="aegis-hero">
       <div class="container">
         <p class="label-caps">FLAGSHIP 02 · RUST · TRANSACTIONAL MULTI-AGENT OS</p>
@@ -240,108 +265,105 @@
           通过 Google A2A 协作，通过 UOMP 请求用户记忆，并支持一键将重型编译与多分支任务卸载至 64GB 云端工作区。
         </p>
         <div class="hero-actions">
-          <a class="btn-solid" href="#pricing" onclick="setTimeout(()=>document.getElementById('pro-email-input')?.focus(),150)">立即购买 Pro ($29/月) →</a>
-          <a class="link-arrow" href="#install">30 秒免费安装 →</a>
+          <a class="btn-solid" href="#install">30 秒免费安装 →</a>
+          <a class="link-arrow" href="#pricing" onclick="setTimeout(()=>document.getElementById('pro-email-input')?.focus(),150)">直接购买 Pro ($29/月) →</a>
           <a class="link-arrow" href="/aegis-cloud/dashboard">进入我的控制台（审批与配额）→</a>
         </div>
 
-        <div class="aegis-grid">
-          <div class="aegis-cell">
-            <p class="label-caps">01 / ISOLATION</p>
-            <h3 class="heading-3">CoW 工作区与沙箱隔离</h3>
-            <p>每个 Agent 独占 APFS <code>clonefile</code> / Linux <code>FICLONE</code> 毫秒级写时复制影子工作区与内核沙箱，沙箱内读写测试 0 弹窗打扰。</p>
+        <!-- Simplified 3-Stage Architecture Diagram in Hero -->
+        <div class="arch-hero-card" id="architecture">
+          <div class="arch-hero-head">
+            <span class="label-caps" style="margin:0;">SYSTEM ARCHITECTURE · 全链路三阶段控制架构</span>
+            <span style="font-family:var(--mono); font-size:0.72rem; color:var(--accent);">90.7%–97.9% FEWER PROMPTS · 0.0% RED-TEAM ASR</span>
           </div>
-          <div class="aegis-cell">
-            <p class="label-caps">02 / COLLABORATION</p>
-            <h3 class="heading-3">Google A2A 实时协同</h3>
-            <p>内置 AgentCard 服务发现、Task 状态机、文件预声明锁（<code>coord_claim</code>）与 4 级 LCS Diff3 自动合并，消除多 Agent 覆写冲突。</p>
-          </div>
-          <div class="aegis-cell">
-            <p class="label-caps">03 / CONSENT &amp; TOTP</p>
-            <h3 class="heading-3">宿主边界审批与记忆授权</h3>
-            <p>落盘宿主机（<code>workspace_commit</code>）强制经过人工审批或独立手机 TOTP 验证；UOMP 个人记忆按 tag / key 最小粒度授权与随时撤销。</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 01 / ARCHITECTURE DIAGRAM (Product Page Core Architecture) -->
-    <section id="architecture" class="aegis-section">
-      <div class="container">
-        <p class="label-caps">01 / SYSTEM ARCHITECTURE</p>
-        <h2 class="heading-2">全链路三阶段架构</h2>
-        <p>从本地终端/IDE 智能体接入，经由 Aegis OS 微内核完成策略治理与跨 Agent 协同，按需运行于本机内核沙箱或 64GB 云端隔离节点。</p>
-
-        <div class="arch-diagram">
           <div class="arch-flow">
             <!-- Stage 1 -->
             <div class="arch-stage">
               <div>
-                <p class="label-caps" style="margin-bottom:0.35rem;">STAGE 01 · CLIENTS</p>
-                <h3 style="margin:0 0 0.35rem; font-family:var(--serif); font-size:1.18rem; font-weight:400;">编码智能体接入层</h3>
-                <p style="font-size:0.84rem; margin:0;">通过一行 <code>aegis-os install</code> 自动注入 MCP 路由与生命周期 Hook。</p>
-                <div class="arch-pill-list">
-                  <div class="arch-pill"><span>Claude Code</span><code>MCP + Hooks</code></div>
-                  <div class="arch-pill"><span>OpenAI Codex CLI</span><code>MCP + Wrapper</code></div>
-                  <div class="arch-pill"><span>Antigravity (AGY)</span><code>MCP + Rules</code></div>
-                </div>
+                <p class="label-caps" style="margin-bottom:0.25rem;">01 / CLIENTS</p>
+                <h3 class="arch-stage-title">编码智能体接入</h3>
+                <p class="arch-stage-desc">一行 <code>aegis-os install</code> 自动注入 MCP 路由与生命周期 Hook。</p>
               </div>
-              <div style="margin-top:1rem; font-family:var(--mono); font-size:0.72rem; color:var(--ink-muted);">STDIO / STREAMABLE HTTP</div>
+              <div class="arch-tags">
+                <span class="arch-tag">Claude Code</span>
+                <span class="arch-tag">OpenAI Codex</span>
+                <span class="arch-tag">Antigravity (AGY)</span>
+              </div>
             </div>
 
             <div class="arch-arrow" aria-hidden="true">
               <span>MCP / A2A</span>
-              <span style="font-size:1.1rem;">→</span>
-              <span>Zero-Trust</span>
+              <span class="arch-arrow-sym">→</span>
             </div>
 
             <!-- Stage 2 -->
             <div class="arch-stage arch-stage-core">
               <div>
-                <p class="label-caps" style="margin-bottom:0.35rem; color:var(--accent);">STAGE 02 · AEGIS OS MICROKERNEL</p>
-                <h3 style="margin:0 0 0.35rem; font-family:var(--serif); font-size:1.18rem; font-weight:400;">Aegis OS 事务型微内核控制平面</h3>
-                <p style="font-size:0.84rem; margin:0;">统一拦截文件读写、命令执行、跨 Agent 消息与宿主边界提交。</p>
-                <div class="arch-pill-list">
-                  <div class="arch-pill"><span><strong>aos-vfs</strong> · 写时复制影子工作区与 Diff3 合并</span><code>6.3ms CoW</code></div>
-                  <div class="arch-pill"><span><strong>aos-ipc</strong> · Google A2A 协同总线与文件锁</span><code>coord_claim</code></div>
-                  <div class="arch-pill"><span><strong>aos-policy</strong> · 宿主边界租约与 RFC 6238 TOTP</span><code>Human Gate</code></div>
-                  <div class="arch-pill"><span><strong>UOMP &amp; Recorder</strong> · 记忆同意与全链路审计</span><code>Ed25519</code></div>
-                </div>
+                <p class="label-caps" style="margin-bottom:0.25rem; color:var(--accent);">02 / AEGIS OS KERNEL</p>
+                <h3 class="arch-stage-title">事务型微内核控制平面</h3>
+                <p class="arch-stage-desc">沙箱内读写测试 0 弹窗打扰；落盘宿主机（<code>workspace_commit</code>）强制人工或手机 TOTP 审批。</p>
               </div>
-              <div style="margin-top:1rem; font-family:var(--mono); font-size:0.72rem; color:var(--accent);">90.7%–97.9% FEWER PROMPTS · 0.0% RED-TEAM ASR</div>
+              <div class="arch-tags">
+                <span class="arch-tag arch-tag-core"><strong>aos-vfs</strong> · CoW 隔离 &amp; Diff3</span>
+                <span class="arch-tag arch-tag-core"><strong>aos-ipc</strong> · Google A2A 协同</span>
+                <span class="arch-tag arch-tag-core"><strong>aos-policy</strong> · TOTP 审批 &amp; UOMP</span>
+              </div>
             </div>
 
             <div class="arch-arrow" aria-hidden="true">
               <span>Local / Cloud</span>
-              <span style="font-size:1.1rem;">⇄</span>
-              <span>Hot Switch</span>
+              <span class="arch-arrow-sym">⇄</span>
             </div>
 
             <!-- Stage 3 -->
             <div class="arch-stage">
               <div>
-                <p class="label-caps" style="margin-bottom:0.35rem;">STAGE 03 · EXECUTION BACKENDS</p>
-                <h3 style="margin:0 0 0.35rem; font-family:var(--serif); font-size:1.18rem; font-weight:400;">本机沙箱 ⇄ 64GB 云端工作区</h3>
-                <p style="font-size:0.84rem; margin:0;">默认本机免费运行；重型构建可一键切换至 64GB 云端节点。</p>
-                <div class="arch-pill-list">
-                  <div class="arch-pill"><span><strong>Local Mode ($0)</strong> · Seatbelt / Bubblewrap</span><code>Free Forever</code></div>
-                  <div class="arch-pill"><span><strong>Cloud Free ($0)</strong> · 1 工作区 · 200 次/日</span><code>10m / day</code></div>
-                  <div class="arch-pill" style="border-color:var(--accent); background:var(--accent-soft);"><span><strong>Cloud Pro ($29/月)</strong> · 16 工作区 · 8 Agent</span><code>64GB · 10h/d</code></div>
-                </div>
+                <p class="label-caps" style="margin-bottom:0.25rem;">03 / RUNTIME</p>
+                <h3 class="arch-stage-title">本机沙箱 ⇄ 64GB 云端</h3>
+                <p class="arch-stage-desc">默认本机永久免费运行；重型编译测试可一键切换至 64GB 云端节点。</p>
               </div>
-              <div style="margin-top:1rem; font-family:var(--mono); font-size:0.72rem; color:var(--ink-muted);">aegis-os cloud up / down</div>
+              <div class="arch-tags">
+                <span class="arch-tag">Local Sandbox ($0)</span>
+                <span class="arch-tag">Cloud Free (1 工作区)</span>
+                <span class="arch-tag arch-tag-core">Cloud Pro ($29/月 · 16 工作区)</span>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- 02 / PRICING & DIRECT IN-PAGE CHECKOUT (Buy directly on /aegis-os/ without jumping to dashboard!) -->
+    <!-- 01 / QUICK INSTALL (Users install and start using Aegis OS first!) -->
+    <section id="install" class="aegis-section">
+      <div class="container">
+        <p class="label-caps">01 / QUICK INSTALL</p>
+        <h2 class="heading-2">30 秒安装 Aegis OS</h2>
+        <p>支持 macOS 与 Linux。安装后运行一次 <code>aegis-os install</code> 即可自动接入 <code>claude</code>、<code>codex</code> 与 <code>agy</code>，本机沙箱永久免费。完整多 Agent 与云端工作流请查阅 <a href="/aegis-os/tutorial/" style="color:var(--accent);font-weight:500;">使用教程 →</a></p>
+        <pre class="cmd"><span class="c"># 方式 A：Homebrew（macOS &amp; Linux）</span>
+brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
+brew install aegis-os
+aegis-os install
+
+<span class="c"># 方式 B：一行签名校验安装脚本（自动完成 aegis-os install）</span>
+curl -fsSL https://heurion.org/aegis-cloud/install.sh | sh
+
+<span class="c"># 开启 64GB 云端工作区（免费赠送 1 个云端工作区体验）</span>
+aegis-os cloud up</pre>
+        <div class="link-row">
+          <a class="btn-solid" href="/aegis-os/tutorial/">阅读完整使用教程 →</a>
+          <a class="link-arrow" href="#pricing" onclick="setTimeout(()=>document.getElementById('pro-email-input')?.focus(),150)">升级 Pro 解锁 16 工作区与 8 Agent 并行 ($29/月) →</a>
+          <a class="link-arrow" href="/aegis-cloud/dashboard">进入我的控制台（审批与配额查询）→</a>
+          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 源码仓库 →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02 / PRICING & DIRECT IN-PAGE CHECKOUT -->
     <section id="pricing" class="aegis-section-linen">
       <div class="container">
         <p class="label-caps">02 / PLANS &amp; DIRECT PURCHASE</p>
         <h2 class="heading-2">方案对比与直接购买</h2>
-        <p>在下方输入您的工作邮箱即可直接拉起 Stripe 支付开通 <strong>Aegis Cloud Pro ($29/月)</strong>，无需跳转其他页面。已订阅用户可前往 <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">我的控制台</a> 查看实时配额与审批请求。</p>
+        <p>在下方输入您的工作邮箱即可直接开通 <strong>Aegis Cloud Pro ($29/月)</strong>，无需跳转其他页面。已订阅用户可前往 <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">我的控制台</a> 查看实时配额与审批请求。</p>
 
         <div class="tier-grid">
           <!-- Left: Free Plan -->
@@ -360,7 +382,7 @@
               </ul>
             </div>
             <div>
-              <a class="btn-outline" href="#install" style="display:inline-flex; width:100%; justify-content:center;">免费安装 Aegis OS →</a>
+              <a class="btn-outline" href="#install" style="display:inline-flex; width:100%; justify-content:center;">上方 30 秒免费安装 →</a>
             </div>
           </div>
 
@@ -400,31 +422,6 @@
               </div>
             </div>
           </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 03 / INSTALL -->
-    <section id="install" class="aegis-section">
-      <div class="container">
-        <p class="label-caps">03 / QUICK INSTALL</p>
-        <h2 class="heading-2">30 秒安装 Aegis OS</h2>
-        <p>支持 macOS 与 Linux。安装后运行一次 <code>aegis-os install</code> 即可自动接入 <code>claude</code>、<code>codex</code> 与 <code>agy</code>。完整多 Agent 与云端工作流请查阅 <a href="/aegis-os/tutorial/" style="color:var(--accent);font-weight:500;">使用教程 →</a></p>
-        <pre class="cmd"><span class="c"># 方式 A：Homebrew（macOS &amp; Linux）</span>
-brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
-brew install aegis-os
-aegis-os install
-
-<span class="c"># 方式 B：一行签名校验安装脚本（自动完成 aegis-os install）</span>
-curl -fsSL https://heurion.org/aegis-cloud/install.sh | sh
-
-<span class="c"># 开启 64GB 云端工作区（或在终端直接发起 Pro 订阅）</span>
-aegis-os cloud up</pre>
-        <div class="link-row">
-          <a class="btn-solid" href="/aegis-os/tutorial/">阅读完整使用教程 →</a>
-          <a class="link-arrow" href="/aegis-cloud/dashboard">进入我的控制台（审批与配额查询）→</a>
-          <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP 记忆协议规范 →</a>
-          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 源码仓库 →</a>
         </div>
       </div>
     </section>
