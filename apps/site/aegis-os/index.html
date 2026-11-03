@@ -91,13 +91,12 @@
         <a href="/" class="nav-link">主站</a>
         <a href="/aegis-os/" class="nav-link nav-link-active">概览</a>
         <a href="/aegis-os/tutorial/" class="nav-link">使用教程</a>
-        <a href="/aegis-cloud/dashboard" class="nav-link">云端控制台</a>
-        <a href="/aegis-cloud/approve" class="nav-link">边界审批台</a>
+        <a href="/aegis-cloud/dashboard" class="nav-link">控制台与订阅</a>
         <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub ↗</a>
       </nav>
       <div class="nav-right">
         <a class="lang-btn" href="/en/aegis-os/">EN</a>
-        <a class="nav-cta" href="/aegis-cloud/dashboard">订阅 Pro / 控制台 →</a>
+        <a class="nav-cta" href="/aegis-cloud/dashboard">控制台 / 订阅 Pro →</a>
       </div>
     </div>
   </header>
@@ -105,15 +104,15 @@
   <main>
     <section class="aegis-hero">
       <div class="container">
-        <p class="label-caps">FLAGSHIP 02 · RUST · LOCAL &amp; CLOUD AGENT OS RUNTIME</p>
-        <h1 class="heading-1">Aegis OS<br><em>多 Agent 隔离运行时与云端沙箱</em></h1>
+        <p class="label-caps">FLAGSHIP 02 · RUST · TRANSACTIONAL AGENT OS</p>
+        <h1 class="heading-1">Aegis OS<br><em>面向多 Agent 并行的安全控制平面</em></h1>
         <p class="lede">
           Aegis OS 让多个 coding agent（Claude Code、Codex、AGY）安全并行：每个 Agent 拥有独立的 CoW 影子工作区与内核沙箱，
-          支持一键切换至 64GB 零本机负载云端运行时，通过 Google A2A 协作，通过 UOMP 请求用户记忆，所有越界操作均经由零终端切换审批、任务级租约与审计。
+          通过 Google A2A 协作，通过 UOMP 请求用户记忆，所有越界操作均经过任务级租约、审批、撤销与审计。
         </p>
         <div class="hero-actions">
           <a class="btn-solid" href="/aegis-os/tutorial/">从安装到第一个任务 →</a>
-          <a class="link-arrow" href="/aegis-cloud/dashboard">云端控制台 / 订阅 Pro ($29/月) →</a>
+          <a class="link-arrow" href="/aegis-cloud/dashboard">云端控制台与 Pro 订阅 →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 仓库 →</a>
         </div>
 
@@ -131,7 +130,7 @@
           <div class="aegis-cell">
             <p class="label-caps">03 / CONSENT</p>
             <h3 class="heading-3">同意与边界审批</h3>
-            <p>越界提交自动弹出 <code>/approve</code> 网页审批台（批准后自动续跑，或运行 <code>aos approve</code>）；UOMP 记忆同意按 tag / key 最小授权并全程审计。</p>
+            <p>越界提交自动弹出网页审批台（批准后自动续跑，或运行 <code>aos approve</code>）；UOMP 记忆同意按 tag / key 最小授权并全程审计。</p>
           </div>
         </div>
       </div>
@@ -156,59 +155,23 @@ aegis-os doctor</pre>
       </div>
     </section>
 
-    <section class="aegis-section-linen" id="cloud">
-      <div class="container">
-        <p class="label-caps">02 / LOCAL VS. CLOUD RUNTIME</p>
-        <h2 class="heading-2">本地免费模式 vs. Aegis Cloud 线上运行时</h2>
-        <p>两套模式向 Agent 暴露完全一致的 38 个 MCP 工具与 CoW 事务语义。日常默认静默启用本地免费模式；当你需要多 Agent 重型并发编译、本地零风扇噪音时，可随时挂载至 64GB 线上运行时：</p>
-        <div class="tier-grid">
-          <div class="tier-card">
-            <div>
-              <span class="tier-badge">LOCAL COMMUNITY · $0 永久免费</span>
-              <h3>本机 CoW 影子工作区 + 免费云端体验档</h3>
-              <p>安装后直接启动 <code>claude</code>、<code>codex</code> 或 <code>agy</code> 即可静默运行在本机 APFS/btrfs CoW 沙箱；或运行 <code>aegis-os cloud up</code> 挂载免费线上体验工作区（1 个并发 Agent · 200 次调用/日）。</p>
-            </div>
-            <div>
-              <pre class="cmd" style="margin:0;"><span class="c"># 默认直接使用本机 CoW 沙箱，或挂载免费云端工作区：</span>
-aegis-os cloud up</pre>
-            </div>
-          </div>
-          <div class="tier-card tier-card-pro">
-            <div>
-              <span class="tier-badge tier-badge-pro"><span class="dot-mint"></span>AEGIS CLOUD PRO · $29 / 月</span>
-              <h3>64GB 线上安全 OS 运行时 · 8 个 Agent 并行</h3>
-              <p>0% 本机 CPU/RAM 负载，支持最多 16 个线上工作区、8 个并行 Agent、每日 20,000 次系统调用与 10 小时 64GB 沙箱算力，本地修改自动增量同步，越界提交支持 TOTP 手机验证码审批。</p>
-            </div>
-            <div>
-              <pre class="cmd" style="margin:0 0 1rem;"><span class="c"># 终端一行命令完成订阅、认领密钥并挂载当前目录：</span>
-aegis-os cloud subscribe --plan pro --wait</pre>
-              <div class="link-row" style="margin-top:0;">
-                <a class="btn-solid" href="/aegis-cloud/dashboard">打开云端控制台 / 订阅 Pro ($29/月) →</a>
-                <a class="link-arrow" href="/aegis-cloud/approve">打开边界审批台 →</a>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <section class="aegis-section">
       <div class="container">
-        <p class="label-caps">03 / FIRST RUN</p>
+        <p class="label-caps">02 / FIRST RUN</p>
         <h2 class="heading-2">第一次运行</h2>
         <div class="steps">
           <div class="step">
             <span class="step-num">01</span>
             <div>
               <h3>在项目目录直接启动 Agent</h3>
-              <p>直接运行 <code>claude</code>、<code>codex</code> 或 <code>agy</code>。Aegis OS 的 hook 会自动挂载运行时并默认进入免费本地 CoW 模式（零打扰，无需首次配置弹窗）。</p>
+              <p>直接运行 <code>claude</code>、<code>codex</code> 或 <code>agy</code>。Aegis OS 的 hook 会自动挂载运行时并默认进入免费本地 CoW 模式（零打扰）；如需零本机负载的 64GB 云端沙箱，可随时在 <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">云端控制台与订阅中心</a> 开启。</p>
             </div>
           </div>
           <div class="step">
             <span class="step-num">02</span>
             <div>
               <h3>在隔离工作区编码，越界提交一键批准</h3>
-              <p>Agent 的读写与测试全部在 CoW 影子工作区内 0 弹窗执行；当调用 <code>workspace_commit</code> 写回宿主机时，桌面环境会自动弹出 <code>/approve</code> 网页审批台（批准后自动续跑），纯终端/SSH 下也可运行 <code>aos approve</code> 一键放行。</p>
+              <p>Agent 的读写与测试全部在 CoW 影子工作区内 0 弹窗执行；当调用 <code>workspace_commit</code> 写回宿主机时，桌面环境会自动弹出网页审批台（批准后自动续跑），纯终端/SSH 下也可运行 <code>aos approve</code> 一键放行。</p>
             </div>
           </div>
           <div class="step">
@@ -228,16 +191,16 @@ aegis-os cloud subscribe --plan pro --wait</pre>
         </div>
         <div class="link-row">
           <a class="btn-solid" href="/aegis-os/tutorial/">打开完整教程 →</a>
-          <a class="link-arrow" href="/aegis-cloud/dashboard">Aegis Cloud 控制台 →</a>
           <a class="link-arrow" href="/aegis-os/tutorial/#memory">记忆同意流程 →</a>
           <a class="link-arrow" href="/aegis-os/tutorial/#a2a">多 Agent / A2A →</a>
+          <a class="link-arrow" href="/aegis-cloud/dashboard">云端控制台与 Pro 订阅 →</a>
         </div>
       </div>
     </section>
 
     <section class="aegis-section">
       <div class="container">
-        <p class="label-caps">04 / CORE COMMANDS</p>
+        <p class="label-caps">03 / CORE COMMANDS</p>
         <h2 class="heading-2">常用命令</h2>
         <pre class="cmd"><span class="c"># 安装检查与多 Agent 实时看板</span>
 aegis-os doctor
@@ -245,12 +208,6 @@ aegis-os top
 
 <span class="c"># 边界审批（自动识别 Local / Cloud 模式与最新待批请求，支持简写 aos approve）</span>
 aegis-os approve
-aegis-os approve --web
-
-<span class="c"># 云端运行时：一行命令订阅 Pro ($29/月) 或切换云端模式</span>
-aegis-os cloud subscribe --plan pro --wait
-aegis-os cloud up
-aegis-os cloud status
 
 <span class="c"># 记忆：导入、配置客户端、启动本地服务</span>
 aegis-os memory setup claude --vault ~/Notes
@@ -273,12 +230,11 @@ aegis-os policy lease --action-pattern workspace_commit --ttl-secs 3600 --task-i
 
     <section class="aegis-section">
       <div class="container">
-        <p class="label-caps">05 / LINKS</p>
-        <h2 class="heading-2">继续阅读与入口</h2>
+        <p class="label-caps">04 / LINKS</p>
+        <h2 class="heading-2">继续阅读</h2>
         <div class="link-row">
-          <a class="btn-solid" href="/aegis-cloud/dashboard">Aegis Cloud 控制台 / 订阅 Pro →</a>
-          <a class="link-arrow" href="/aegis-cloud/approve">边界审批台 (/approve) →</a>
-          <a class="link-arrow" href="/aegis-os/tutorial/">完整教程 →</a>
+          <a class="btn-solid" href="/aegis-os/tutorial/">完整使用教程 →</a>
+          <a class="link-arrow" href="/aegis-cloud/dashboard">Aegis Cloud 控制台与订阅 →</a>
           <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP 规范 →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_APPLICATION_PROTOCOL.md" target="_blank" rel="noopener">AAP-1.0 规范 →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 仓库 →</a>

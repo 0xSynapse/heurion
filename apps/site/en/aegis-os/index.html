@@ -91,13 +91,12 @@
         <a href="/en" class="nav-link">Heurion.org</a>
         <a href="/en/aegis-os/" class="nav-link nav-link-active">Overview</a>
         <a href="/en/aegis-os/tutorial/" class="nav-link">Tutorial</a>
-        <a href="/aegis-cloud/dashboard" class="nav-link">Cloud Console</a>
-        <a href="/aegis-cloud/approve" class="nav-link">Approvals</a>
+        <a href="/aegis-cloud/dashboard" class="nav-link">Console &amp; Pricing</a>
         <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub ↗</a>
       </nav>
       <div class="nav-right">
         <a class="lang-btn" href="/aegis-os/">中文</a>
-        <a class="nav-cta" href="/aegis-cloud/dashboard">Cloud Console / Pro →</a>
+        <a class="nav-cta" href="/aegis-cloud/dashboard">Console / Pro →</a>
       </div>
     </div>
   </header>
@@ -105,16 +104,15 @@
   <main>
     <section class="aegis-hero">
       <div class="container">
-        <p class="label-caps">FLAGSHIP 02 · RUST · LOCAL &amp; CLOUD AGENT OS RUNTIME</p>
-        <h1 class="heading-1">Aegis OS<br><em>Transactional multi-agent runtime &amp; cloud sandbox</em></h1>
+        <p class="label-caps">FLAGSHIP 02 · RUST · TRANSACTIONAL AGENT OS</p>
+        <h1 class="heading-1">Aegis OS<br><em>Transactional multi-agent control plane</em></h1>
         <p class="lede">
           Aegis OS lets multiple coding agents (Claude Code, Codex, AGY) run safely in parallel: each agent gets its own CoW shadow workspace and kernel sandbox,
-          can offload heavy builds to a 64GB zero-local-load Cloud Runtime in one command, collaborates through Google A2A, requests personal memory through UOMP,
-          and approves boundary commits without switching terminals.
+          collaborates through Google A2A, requests personal memory through UOMP, and every boundary crossing goes through task-scoped leases, approval, revocation, and audit.
         </p>
         <div class="hero-actions">
           <a class="btn-solid" href="/en/aegis-os/tutorial/">Install to first task →</a>
-          <a class="link-arrow" href="/aegis-cloud/dashboard">Cloud Console / Pro ($29/mo) →</a>
+          <a class="link-arrow" href="/aegis-cloud/dashboard">Cloud Console &amp; Pro Subscription →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub repository →</a>
         </div>
 
@@ -132,7 +130,7 @@
           <div class="aegis-cell">
             <p class="label-caps">03 / CONSENT</p>
             <h3 class="heading-3">Consent &amp; Approvals</h3>
-            <p>Boundary commits auto-open <code>/approve</code> in your browser and auto-resume once approved (or run <code>aos approve</code>); UOMP memory consent enforces tag/key scopes with full audit.</p>
+            <p>Boundary commits auto-open the web approval console and auto-resume once approved (or run <code>aos approve</code>); UOMP memory consent enforces tag/key scopes with full audit.</p>
           </div>
         </div>
       </div>
@@ -157,59 +155,23 @@ aegis-os doctor</pre>
       </div>
     </section>
 
-    <section class="aegis-section-linen" id="cloud">
-      <div class="container">
-        <p class="label-caps">02 / LOCAL VS. CLOUD RUNTIME</p>
-        <h2 class="heading-2">Free Local Mode vs. Aegis Cloud Runtime</h2>
-        <p>Both modes expose the exact same 38 MCP tools and transactional CoW semantics. New projects run silently in Free Local Mode by default; when you need parallel multi-agent builds with 0% local CPU/RAM load, mount onto the 64GB Aegis Cloud Runtime anytime:</p>
-        <div class="tier-grid">
-          <div class="tier-card">
-            <div>
-              <span class="tier-badge">LOCAL COMMUNITY · $0 FREE FOREVER</span>
-              <h3>Local CoW Shadow Workspace + Free Cloud Tier</h3>
-              <p>Launch <code>claude</code>, <code>codex</code>, or <code>agy</code> directly to run inside your local APFS/btrfs CoW sandbox with zero prompts; or run <code>aegis-os cloud up</code> to mount a free online Runtime workspace (1 parallel Agent · 200 syscalls/day).</p>
-            </div>
-            <div>
-              <pre class="cmd" style="margin:0;"><span class="c"># Runs locally by default, or mount the Free Cloud Runtime:</span>
-aegis-os cloud up</pre>
-            </div>
-          </div>
-          <div class="tier-card tier-card-pro">
-            <div>
-              <span class="tier-badge tier-badge-pro"><span class="dot-mint"></span>AEGIS CLOUD PRO · $29 / MONTH</span>
-              <h3>64GB Online OS Runtime · 8 Parallel Agents</h3>
-              <p>0% local CPU/RAM load, up to 16 online workspaces, 8 concurrent Agents, 20,000 daily syscalls, 10 hours/day of 64GB sandbox compute, automatic incremental source sync, and RFC 6238 TOTP boundary approvals.</p>
-            </div>
-            <div>
-              <pre class="cmd" style="margin:0 0 1rem;"><span class="c"># 1-command checkout, local key claim &amp; workspace mount:</span>
-aegis-os cloud subscribe --plan pro --wait</pre>
-              <div class="link-row" style="margin-top:0;">
-                <a class="btn-solid" href="/aegis-cloud/dashboard">Open Cloud Console / Subscribe Pro ($29/mo) →</a>
-                <a class="link-arrow" href="/aegis-cloud/approve">Open Approval Console →</a>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <section class="aegis-section">
       <div class="container">
-        <p class="label-caps">03 / FIRST RUN</p>
+        <p class="label-caps">02 / FIRST RUN</p>
         <h2 class="heading-2">First run</h2>
         <div class="steps">
           <div class="step">
             <span class="step-num">01</span>
             <div>
               <h3>Launch your agent in a project</h3>
-              <p>Run <code>claude</code>, <code>codex</code>, or <code>agy</code> directly. Aegis OS hooks attach the runtime and start silently in Free Local CoW mode with zero setup prompts.</p>
+              <p>Run <code>claude</code>, <code>codex</code>, or <code>agy</code> directly. Aegis OS hooks attach the runtime and start silently in Free Local CoW mode; to offload builds to a 64GB zero-local-load Cloud Sandbox, open the <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">Cloud Console &amp; Billing Center</a> anytime.</p>
             </div>
           </div>
           <div class="step">
             <span class="step-num">02</span>
             <div>
               <h3>Work in isolation, approve commits in 1 click</h3>
-              <p>Agent writes and tests execute inside the CoW shadow workspace with 0 prompts; when <code>workspace_commit</code> crosses the host boundary, Aegis OS auto-opens <code>/approve</code> in your browser and auto-resumes once approved (or run <code>aos approve</code> in terminal).</p>
+              <p>Agent writes and tests execute inside the CoW shadow workspace with 0 prompts; when <code>workspace_commit</code> crosses the host boundary, Aegis OS auto-opens the approval console and auto-resumes once approved (or run <code>aos approve</code> in terminal).</p>
             </div>
           </div>
           <div class="step">
@@ -229,16 +191,16 @@ aegis-os cloud subscribe --plan pro --wait</pre>
         </div>
         <div class="link-row">
           <a class="btn-solid" href="/en/aegis-os/tutorial/">Open the full tutorial →</a>
-          <a class="link-arrow" href="/aegis-cloud/dashboard">Aegis Cloud Console →</a>
           <a class="link-arrow" href="/en/aegis-os/tutorial/#memory">Memory consent flow →</a>
           <a class="link-arrow" href="/en/aegis-os/tutorial/#a2a">Multi-agent / A2A →</a>
+          <a class="link-arrow" href="/aegis-cloud/dashboard">Cloud Console &amp; Pro Subscription →</a>
         </div>
       </div>
     </section>
 
     <section class="aegis-section">
       <div class="container">
-        <p class="label-caps">04 / CORE COMMANDS</p>
+        <p class="label-caps">03 / CORE COMMANDS</p>
         <h2 class="heading-2">Common commands</h2>
         <pre class="cmd"><span class="c"># Install check &amp; live multi-agent radar</span>
 aegis-os doctor
@@ -246,12 +208,6 @@ aegis-os top
 
 <span class="c"># Boundary approval (auto-detects Local/Cloud &amp; latest pending escalation; alias: aos approve)</span>
 aegis-os approve
-aegis-os approve --web
-
-<span class="c"># Cloud Runtime: 1-command Pro subscription ($29/mo) or mode switch</span>
-aegis-os cloud subscribe --plan pro --wait
-aegis-os cloud up
-aegis-os cloud status
 
 <span class="c"># Memory: import, client config, local server</span>
 aegis-os memory setup claude --vault ~/Notes
@@ -274,12 +230,11 @@ aegis-os policy lease --action-pattern workspace_commit --ttl-secs 3600 --task-i
 
     <section class="aegis-section">
       <div class="container">
-        <p class="label-caps">05 / LINKS</p>
+        <p class="label-caps">04 / LINKS</p>
         <h2 class="heading-2">Keep reading</h2>
         <div class="link-row">
-          <a class="btn-solid" href="/aegis-cloud/dashboard">Aegis Cloud Console / Subscribe Pro →</a>
-          <a class="link-arrow" href="/aegis-cloud/approve">Boundary Approval Console (/approve) →</a>
-          <a class="link-arrow" href="/en/aegis-os/tutorial/">Full tutorial →</a>
+          <a class="btn-solid" href="/en/aegis-os/tutorial/">Full tutorial →</a>
+          <a class="link-arrow" href="/aegis-cloud/dashboard">Aegis Cloud Console &amp; Subscription →</a>
           <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP spec →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_APPLICATION_PROTOCOL.md" target="_blank" rel="noopener">AAP-1.0 spec →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub repository →</a>
