@@ -27,7 +27,7 @@ function env() {
   const dr = store.createUser({ username: 'dr_wang', display_name: '王医生', password_hash: 'x', tenant: { id: hosp.id, role: 'member' } }).id
   const other = store.createUser({ username: 'dr_zhao', display_name: '赵医生', password_hash: 'x', tenant: { id: hosp.id, role: 'member' } }).id
   const orthanc = new FakeOrthanc()
-  const svc = new ImagingStudyService(patients, orthanc)
+  const svc = new ImagingStudyService(patients, orthanc, { acceptIdentified: true })
   const as = (userId: string, via: Actor['via'] = 'user'): Actor => ({ userId, via })
   return { store, patients, keys, hosp, dr, other, orthanc, svc, as }
 }
@@ -162,7 +162,7 @@ describe('影像检查接口与 DICOMweb 代理', () => {
     const app = buildApi({
       docs, ops: new OpService(docs), turns: {} as any, postcheck: new PostCheck(docs), crossref: {} as any,
       renderer: new SlideRenderer(mkdtempSync(join(tmpdir(), 'img-st-r-'))), accounts: new Accounts(t.store, { secret: 'test-secret', devMode: false, devToken: 'dev', devUser: 'dev' }),
-      devMode: false, devUser: 'dev', patients: t.patients, orthanc, imagingPipeline: null,
+      devMode: false, devUser: 'dev', patients: t.patients, orthanc, imagingPipeline: null, imagingAcceptIdentified: true,
     })
     const tok = (u: string) => `Bearer ${issueToken('test-secret', { u, d: '*', p: ['read', 'write'], aud: 'web', ttlSeconds: 3600, v: t.store.getUser(u)!.token_version })}`
     return { ...t, app, tok }

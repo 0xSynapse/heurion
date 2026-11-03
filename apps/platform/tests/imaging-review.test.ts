@@ -44,7 +44,7 @@ function env() {
   const reviewer2 = user('dr_chen', '陈主任（审核）')
   const outsider = user('dr_zhao', '赵医生')
   const orthanc = new FakeOrthanc()
-  const svc = new ImagingStudyService(patients, orthanc)
+  const svc = new ImagingStudyService(patients, orthanc, { acceptIdentified: true })
   const rv = new ImagingReviewService(patients, u => store.getUser(u)?.display_name ?? null)
   const as = (userId: string, via: Actor['via'] = 'user'): Actor => ({ userId, via })
   const isMember = (u: string, tid: string) => store.getUser(u)?.tenant_id === tid
@@ -325,7 +325,7 @@ describe('旧库兼容', () => {
     const a: Actor = { userId: solo, via: 'user' }
     const old = new PatientService(root, tenants, keys, store)
     const p = old.create(a, { sex: 'M', birth_year: 1960 })
-    const st = (await new ImagingStudyService(old, new FakeOrthanc()).importDicom(a, p.id, [{ name: 'IM1', bytes: dicom(STUDY, SERIES, '1') }])).studies[0]!
+    const st = (await new ImagingStudyService(old, new FakeOrthanc(), { acceptIdentified: true }).importDicom(a, p.id, [{ name: 'IM1', bytes: dicom(STUDY, SERIES, '1') }])).studies[0]!
     const tables = (svc: PatientService) => (svc.imagingLookup(a).db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'imaging_%'").all() as Array<{ name: string }>).map(r => r.name)
     expect(tables(old)).not.toContain('imaging_signoffs')
     const so = new ImagingReviewService(old).finalize(a, st.id, { expected_revision: 0 })

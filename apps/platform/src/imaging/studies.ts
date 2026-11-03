@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { unzipSync } from 'fflate'
 import { PatientError, type Actor, type ImagingScope, type PatientService } from '../tenancy/patients.ts'
 import { OrthancError, type Orthanc } from './orthanc.ts'
+import { DEID_SCHEME, verifyDeidentified } from './deid/index.ts'
 
 /**
  * 影像检查、AI 运行与病灶（docs/design/IMAGING_STUDIES.md）。
@@ -172,8 +173,19 @@ export function parseSegRef(ref: string | null): { seriesId: string; segment: nu
 }
 const runOf = (r: Record<string, unknown>): RunRow => ({ ...(r as unknown as RunRow), summary: r.summary ? JSON.parse(r.summary as string) : null })
 
+/** 上传时浏览器附带的、不进 Orthanc 的检查信息（键为去标识后的 StudyInstanceUID） */
+export type StudyUploadMeta = Record<string, { accession?: string | null }>
+
+export interface ImagingStudyOptions {
+  /**
+   * 接收未经去标识的 DICOM 原件（院内部署，配置 IMAGING_ACCEPT_IDENTIFIED=1）。
+   * 默认 false：手工上传的每个文件都须经浏览器去标识（verifyDeidentified），否则跳过。
+   */
+  acceptIdentified?: boolean
+}
+
 export class ImagingStudyService {
-  constructor(private readonly patients: PatientService, private readonly orthanc: Orthanc | null) {}
+  constructor(private readonly patients: PatientService, private readonly orthanc: Orthanc | null, private readonly opts: ImagingStudyOptions = {}) {}
 
   private requireOrthanc(): Orthanc {
     if (!this.orthanc) throw new ImagingError('orthanc_not_configured', '本机构没有配置影像存储（Orthanc），暂不能上传 DICOM', 503)
@@ -182,12 +194,39 @@ export class ImagingStudyService {
 
   // —— 检查 ——
 
-  /** 手工上传 DICOM（W1.0）：入 Orthanc，再按 StudyInstanceUID 建立 / 更新本患者的检查索引。AI 不能调用。 */
-  async importDicom(a: Actor, patientId: string, files: Array<{ name: string; bytes: Uint8Array }>): Promise<ImportResult> {
+  /**
+   * 浏览器端去标识的参数（docs/design/IMAGING_STUDIES.md「去标识化」）：机构的 UID 假名化密钥、这位患者的假名、方案版本。
+   * 要求该患者的写权限；AI 不能取（密钥只给医生本人的浏览器）。记访问留痕。
+   */
+  deidParams(a: Actor, patientId: string): { key: string; pseudonym: string; scheme: string; accept_identified: boolean } {
+    if (a.via === 'ai') throw new PatientError('forbidden', '去标识参数只给医生本人在界面上上传影像时使用', 403)
+    const s = this.patients.imagingScope(a, patientId, 'write')
+    const d = s.deid()
+    s.log('imaging_deid_params', DEID_SCHEME)
+    return { key: d.key.toString('base64'), pseudonym: d.pseudonym, scheme: DEID_SCHEME, accept_identified: Boolean(this.opts.acceptIdentified) }
+  }
+
+  /**
+   * 手工上传 DICOM（W1.0）：入 Orthanc，再按 StudyInstanceUID 建立 / 更新本患者的检查索引。AI 不能调用。
+   * 默认只收经浏览器去标识、且属于这位患者的文件（verifyDeidentified），其它跳过并写明原因；acceptIdentified 时也收原件。
+   * meta：浏览器附带的原检查号等（按去标识后的 StudyInstanceUID），加密存进检查索引，不进 Orthanc。
+   */
+  async importDicom(a: Actor, patientId: string, files: Array<{ name: string; bytes: Uint8Array }>, meta: StudyUploadMeta = {}): Promise<ImportResult> {
     if (a.via === 'ai') throw new PatientError('forbidden', '上传 DICOM 原件只能由医生在界面上操作', 403)
     const s = this.patients.imagingScope(a, patientId, 'write')
     const orthanc = this.requireOrthanc()
-    const { dicom, skipped } = expandUpload(files)
+    const expanded = expandUpload(files)
+    const skipped = expanded.skipped
+    const received = expanded.dicom.length + expanded.skipped.length
+    let dicom = expanded.dicom
+    if (!this.opts.acceptIdentified) {
+      const { pseudonym } = s.deid()
+      dicom = dicom.filter(f => {
+        const v = verifyDeidentified(f.bytes, { pseudonym })
+        if (!v.ok) skipped.push({ name: f.name, reason: `未经去标识：${v.reason}` })
+        return v.ok
+      })
+    }
     if (!dicom.length) throw new ImagingError('no_dicom', skipped.length ? `没有可入库的 DICOM 文件（${skipped[0]!.reason}）` : '没有收到文件')
 
     const studies = new Map<string, Set<string>>()
@@ -209,12 +248,12 @@ export class ImagingStudyService {
     const linked: string[] = []
     let conflicts = 0
     for (const [orthancStudyId, seriesIds] of studies) {
-      const id = await this.linkStudy(s, a, orthanc, orthancStudyId, seriesIds)
+      const id = await this.linkStudy(s, a, orthanc, orthancStudyId, seriesIds, meta)
       if (id) linked.push(id)
       else conflicts++
     }
     const all = this.listIn(s, true)
-    return { studies: all.filter(st => linked.includes(st.id)), files: { received: dicom.length + skipped.length, uploaded, duplicates, skipped }, conflicts }
+    return { studies: all.filter(st => linked.includes(st.id)), files: { received, uploaded, duplicates, skipped }, conflicts }
   }
 
   private storageError(err: unknown): ImagingError {
@@ -224,9 +263,12 @@ export class ImagingStudyService {
   }
 
   /** 建立或更新一个检查的索引；检查已属于其他患者时不关联，返回 null */
-  private async linkStudy(s: ImagingScope, a: Actor, orthanc: Orthanc, orthancStudyId: string, seriesIds: Set<string>): Promise<string | null> {
+  private async linkStudy(s: ImagingScope, a: Actor, orthanc: Orthanc, orthancStudyId: string, seriesIds: Set<string>, meta: StudyUploadMeta = {}): Promise<string | null> {
     let tags
     try { tags = await orthanc.study(orthancStudyId) } catch (err) { throw this.storageError(err) }
+    // 去标识后 DICOM 里没有检查号：取浏览器单独附带的（只认本次上传的检查）
+    const extra = Object.hasOwn(meta, tags.studyUid) ? meta[tags.studyUid] : undefined
+    const accession = tags.accession ?? (typeof extra?.accession === 'string' && extra.accession.trim() ? extra.accession.trim().slice(0, 64) : null)
     const hmac = s.uidKey('study', tags.studyUid)
     const existing = s.db.prepare('SELECT id, patient_id FROM imaging_studies WHERE uid_hmac = ?').get(hmac) as { id: string; patient_id: string } | undefined
     if (existing && existing.patient_id !== s.patientId) {
@@ -243,13 +285,14 @@ export class ImagingStudyService {
     s.db.exec('SAVEPOINT imaging_link')
     try {
       if (studyId) {
-        s.db.prepare('UPDATE imaging_studies SET orthanc_id = ?, study_date = ?, modalities = ?, description_enc = ?, accession_enc = ?, updated_at = ? WHERE id = ?')
-          .run(orthancStudyId, tags.studyDate, JSON.stringify(modalities), s.encrypt(tags.description), s.encrypt(tags.accession), t, studyId)
+        // 检查号：这一批没带（如分批上传的后续批）时保留已有的
+        s.db.prepare('UPDATE imaging_studies SET orthanc_id = ?, study_date = ?, modalities = ?, description_enc = ?, accession_enc = COALESCE(?, accession_enc), updated_at = ? WHERE id = ?')
+          .run(orthancStudyId, tags.studyDate, JSON.stringify(modalities), s.encrypt(tags.description), s.encrypt(accession), t, studyId)
       } else {
         studyId = rid('is')
         s.db.prepare(`INSERT INTO imaging_studies (id, patient_id, uid_hmac, uid_enc, orthanc_id, source, study_date, modalities, description_enc, accession_enc, status, created_by, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, 'upload', ?, ?, ?, ?, 'received', ?, ?, ?)`)
-          .run(studyId, s.patientId, hmac, s.encrypt(tags.studyUid)!, orthancStudyId, tags.studyDate, JSON.stringify(modalities), s.encrypt(tags.description), s.encrypt(tags.accession), a.userId, t, t)
+          .run(studyId, s.patientId, hmac, s.encrypt(tags.studyUid)!, orthancStudyId, tags.studyDate, JSON.stringify(modalities), s.encrypt(tags.description), s.encrypt(accession), a.userId, t, t)
       }
       for (const x of series) {
         const sh = s.uidKey('series', x.tags.seriesUid)

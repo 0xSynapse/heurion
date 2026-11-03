@@ -53,7 +53,7 @@ function env(handler: (path: string, init: RequestInit) => Response | Promise<Re
   const dr = store.createUser({ username: 'dr_wang', display_name: '王医生', password_hash: 'x', tenant: { id: hosp.id, role: 'member' } }).id
   const orthanc = new FakeOrthanc()
   orthanc.seriesTags.set(THICK, { sliceThickness: 5, kernel: 'B30f' })
-  const svc = new ImagingStudyService(patients, orthanc)
+  const svc = new ImagingStudyService(patients, orthanc, { acceptIdentified: true })
   const worker = fakeWorker(handler)
   const pipeline = new ImagingPipeline(svc, orthanc, 'http://worker:8004', { fetch: worker.fetchImpl })
   const a: Actor = { userId: dr, via: 'user' }
@@ -242,7 +242,7 @@ describe('分析接口', () => {
     const app = buildApi({
       docs, ops: new OpService(docs), turns: {} as any, postcheck: new PostCheck(docs), crossref: {} as any,
       renderer: new SlideRenderer(mkdtempSync(join(tmpdir(), 'img-pl-r-'))), accounts: new Accounts(t.store, { secret: 'test-secret', devMode: false, devToken: 'dev', devUser: 'dev' }),
-      devMode: false, devUser: 'dev', patients: t.patients, orthanc: t.orthanc, imagingPipeline: t.pipeline,
+      devMode: false, devUser: 'dev', patients: t.patients, orthanc: t.orthanc, imagingPipeline: t.pipeline, imagingAcceptIdentified: true,
     })
     const auth = { Authorization: `Bearer ${issueToken('test-secret', { u: t.dr, d: '*', p: ['read', 'write'], aud: 'web', ttlSeconds: 3600, v: t.store.getUser(t.dr)!.token_version })}` }
     return { ...t, app, auth }

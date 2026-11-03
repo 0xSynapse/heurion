@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomUUID } from 'node:crypto'
+import { createHash, createHmac, hkdfSync, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -319,6 +319,11 @@ export interface ImagingScope {
   log: (action: string, detail?: string | null) => void
   /** 机构设置 imaging_ai_visibility：新的自动分析是否以影子模式运行 */
   aiVisibility: 'visible' | 'shadow'
+  /**
+   * 浏览器端 DICOM 去标识化的参数（src/imaging/deid/）：机构的 UID 假名化密钥（由机构数据密钥经 HKDF 派生、专用于此，
+   * 与 uidKey / 加密用的密钥分开）与这位患者的假名（不可逆、不含真实信息，同一患者恒定）。
+   */
+  deid: () => { key: Buffer; pseudonym: string }
 }
 
 export class PatientService {
@@ -385,6 +390,12 @@ export class PatientService {
       decrypt: sealed => this.keys.decryptText(c.tenantId, sealed),
       log: (action, detail = null) => this.log(c, a, patientId, action, detail),
       aiVisibility: c.settings.imaging_ai_visibility === 'shadow' ? 'shadow' : 'visible',
+      deid: () => {
+        const dek = this.keys.dek(c.tenantId)
+        const key = Buffer.from(hkdfSync('sha256', dek, 'heurion-dicom-deid', 'uid-pseudonym-v1', 32))
+        const pk = Buffer.from(hkdfSync('sha256', dek, 'heurion-dicom-deid', 'patient-pseudonym-v1', 32))
+        return { key, pseudonym: `HX${createHmac('sha256', pk).update(patientId).digest('hex').slice(0, 16).toUpperCase()}` }
+      },
     }
   }
 

@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono'
 import { getCookie, setCookie } from 'hono/cookie'
 import type { Actor, PatientService } from '../../tenancy/patients.ts'
 import type { Orthanc } from '../../imaging/orthanc.ts'
-import { ImagingError, ImagingStudyService, type StudyView } from '../../imaging/studies.ts'
+import { ImagingError, ImagingStudyService, type StudyUploadMeta, type StudyView } from '../../imaging/studies.ts'
 import { TASKS, type EnqueueResult, type ImagingPipeline, type ImagingTask } from '../../imaging/pipeline.ts'
 import { parsePoints, type ImagingInteractive } from '../../imaging/interactive.ts'
 import { ImagingReviewService } from '../../imaging/review.ts'
@@ -17,6 +17,8 @@ export interface DicomRouteContext {
   patientFailure: (c: Context, err: unknown) => Response
   /** 没配置时上传与 DICOMweb 返回 503 */
   orthanc: Orthanc | null
+  /** 手工上传接收未经去标识的原件（院内部署，IMAGING_ACCEPT_IDENTIFIED=1）；默认只收浏览器去标识过的文件 */
+  acceptIdentified?: boolean
   /** 分析流水线；null 时上传后不自动分析 */
   pipeline: ImagingPipeline | null
   /** 阅片器点选分割（T2.3）；null 时阅片器里不能点选 */
@@ -59,10 +61,27 @@ const LESION_ID = /^le[0-9a-f]{12}$/
  */
 export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, ctx: DicomRouteContext): (c: Context) => Promise<Response> {
   const { me, pt, patientFailure, audit } = ctx
-  const svc = (c: Context<{ Variables: { user: string } }>) => new ImagingStudyService(pt(c), ctx.orthanc)
+  const svc = (c: Context<{ Variables: { user: string } }>) => new ImagingStudyService(pt(c), ctx.orthanc, { acceptIdentified: Boolean(ctx.acceptIdentified) })
   const fail = (c: Context, err: unknown) => err instanceof ImagingError ? c.json({ error: err.message, code: err.code }, err.status) : patientFailure(c, err)
 
-  /** 手工上传 DICOM（W1.0）：表单字段 files，可多个；单个 DICOM 文件或 zip（文件夹在浏览器端打包或逐个上传） */
+  /**
+   * 浏览器端去标识的参数（docs/design/IMAGING_STUDIES.md「去标识化」）：UID 假名化密钥、患者假名、方案版本。
+   * 只给有该患者写权限的医生本人（AI 不能取，MCP 不暴露）；记访问留痕与审计。
+   */
+  app.get('/api/patients/:ptid/imaging/deid-params', c => {
+    try {
+      const ptid = c.req.param('ptid')
+      const r = svc(c).deidParams(me(c), ptid)
+      audit(c, 'imaging.deid_params', { target: ptid, detail: r.scheme })
+      return c.json(r, 200, { 'Cache-Control': 'private, no-store' })
+    } catch (err) { return fail(c, err) }
+  })
+
+  /**
+   * 手工上传 DICOM（W1.0）：表单字段 files，可多个；单个 DICOM 文件或 zip。
+   * 默认每个文件都须经浏览器去标识（见 deid-params）；study_meta = JSON { <去标识后的 StudyInstanceUID>: { accession } }，
+   * 是不进 Orthanc、按机构密钥加密存进检查索引的原检查号。
+   */
   app.post('/api/patients/:ptid/imaging/dicom', async c => {
     try {
       const declared = Number(c.req.header('content-length') || 0)
@@ -75,7 +94,7 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
       if (total > uploadMaxBytes()) throw new ImagingError('upload_too_large', `单次上传不能超过 ${Math.round(uploadMaxBytes() / 1048576)} MB，请分批上传`, 413)
       const files = await Promise.all(list.map(async f => ({ name: (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name, bytes: new Uint8Array(await f.arrayBuffer()) })))
       const ptid = c.req.param('ptid')
-      const result = await svc(c).importDicom(me(c), ptid, files)
+      const result = await svc(c).importDicom(me(c), ptid, files, studyMetaOf(form.study_meta))
       audit(c, 'imaging.dicom_upload', { target: ptid, detail: JSON.stringify({ studies: result.studies.length, uploaded: result.files.uploaded, duplicates: result.files.duplicates, skipped: result.files.skipped.length, conflicts: result.conflicts }) })
       // 入库即分析（W1）：有新实例的检查自动排队；不适用的检查说明原因
       // 影子模式的运行不返回 id（结果对界面不可见），只说明在后台分析
@@ -83,6 +102,23 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
       return c.json({ ...result, analysis: analysis.map(x => ({ study_id: x.study_id, task: x.task, run_id: isShadow(x) ? null : x.run?.id ?? null, shadow: isShadow(x), skipped: x.skipped ?? null, notes: x.notes ?? [] })) }, 201)
     } catch (err) { return fail(c, err) }
   })
+
+  /** 表单字段 study_meta：只取 UID 格式合法的键与字符串检查号 */
+  const studyMetaOf = (raw: unknown): StudyUploadMeta => {
+    const text = Array.isArray(raw) ? raw[0] : raw
+    if (typeof text !== 'string' || !text || text.length > 200_000) return {}
+    let parsed: unknown
+    try { parsed = JSON.parse(text) } catch { throw new ImagingError('bad_study_meta', 'study_meta 不是有效的 JSON') }
+    const out: StudyUploadMeta = {}
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const [uid, v] of Object.entries(parsed as Record<string, unknown>)) {
+        if (!UID.test(uid) || !v || typeof v !== 'object') continue
+        const acc = (v as { accession?: unknown }).accession
+        out[uid] = { accession: typeof acc === 'string' ? acc.slice(0, 64) : null }
+      }
+    }
+    return out
+  }
 
   const isShadow = (r: EnqueueResult) => r.run?.visibility === 'shadow'
   const enqueue = (c: Context<{ Variables: { user: string } }>, studyId: string, task: ImagingTask): EnqueueResult => {

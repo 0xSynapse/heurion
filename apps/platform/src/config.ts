@@ -92,6 +92,11 @@ export const config = {
    * 尚未正式并入工作台，默认关闭；HEURION_AEGIS=1 才开放。
    */
   aegisEnabled: env('HEURION_AEGIS', '0') === '1',
+  /**
+   * 手工上传 DICOM 时接收未经去标识的原件（docs/design/IMAGING_STUDIES.md「去标识化」）。
+   * 默认关闭：影像须先在医生浏览器里去标识再上传（境外托管的生产环境必须保持关闭）；只有院内部署可设 IMAGING_ACCEPT_IDENTIFIED=1。
+   */
+  imagingAcceptIdentified: env('IMAGING_ACCEPT_IDENTIFIED', '0') === '1',
   /** 每个回合开新的 dsh 会话（实验用：排除会话内上下文带来的跨任务学习）。 */
   freshSessionPerTurn: env('HARNESS_FRESH_SESSION', '0') === '1',
 }

@@ -43,7 +43,7 @@ function env(handler: (path: string) => Response = path => path.endsWith('/lung-
   const dr = store.createUser({ username: 'dr_wang', display_name: '王医生', password_hash: 'x', tenant: { id: hosp.id, role: 'member' } }).id
   const orthanc = new FakeOrthanc()
   orthanc.seriesTags.set(SEG, { modality: 'SEG', description: 'Heurion AI lung nodules', sliceThickness: null, kernel: null })
-  const svc = new ImagingStudyService(patients, orthanc)
+  const svc = new ImagingStudyService(patients, orthanc, { acceptIdentified: true })
   const worker = fakeWorker(handler)
   const pipeline = new ImagingPipeline(svc, orthanc, 'http://worker:8004', { fetch: worker.fetchImpl })
   const a: Actor = { userId: dr, via: 'user' }
@@ -178,7 +178,7 @@ describe('影子模式的接口', () => {
     const app = buildApi({
       docs, ops: new OpService(docs), turns: {} as any, postcheck: new PostCheck(docs), crossref: {} as any,
       renderer: new SlideRenderer(mkdtempSync(join(tmpdir(), 'img-sh-r-'))), accounts: new Accounts(t.store, { secret: 'test-secret', devMode: false, devToken: 'dev', devUser: 'dev' }),
-      devMode: false, devUser: 'dev', patients: t.patients, orthanc: t.orthanc, imagingPipeline: t.pipeline,
+      devMode: false, devUser: 'dev', patients: t.patients, orthanc: t.orthanc, imagingPipeline: t.pipeline, imagingAcceptIdentified: true,
     })
     const bearer = (u: string) => ({ Authorization: `Bearer ${issueToken('test-secret', { u, d: '*', p: ['read', 'write'], aud: 'web', ttlSeconds: 3600, v: t.store.getUser(u)!.token_version })}` })
     return { ...t, app, auth: bearer(t.dr), adminAuth: bearer(t.admin) }
