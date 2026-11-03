@@ -155,8 +155,8 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
       viewportGridService.setDisplaySetsForViewport({ viewportId, displaySetInstanceUIDs: [ds.displaySetInstanceUID] });
     }
     const sop = l.metrics.key_slice_sop_instance_uid;
-    // 换序列后视口要一点时间装载影像：最多等 3 秒
-    for (let i = 0; i < 30; i++) {
+    // 换序列或刚打开阅片器时视口要一点时间装载影像：最多等 15 秒（生产经公网加载比本机慢）
+    for (let i = 0; i < 150; i++) {
       const vp = cornerstoneViewportService.getCornerstoneViewport(viewportId);
       const ids: string[] = vp?.getImageIds?.() ?? [];
       const idx = sop ? ids.findIndex(id => id.includes(`/instances/${sop}/`)) : -1;
