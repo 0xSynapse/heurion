@@ -1,3 +1,4 @@
+import type { Node as PMNode } from 'prosemirror-model'
 import { orgLogo } from '../model/org-templates.ts'
 import type { Documents } from '../model/runtime.ts'
 import { pendingGroups, withoutPending } from '../ops/suggest.ts'
@@ -47,11 +48,14 @@ export function docxFor(docs: Documents, docId: string, measurements?: MeasureLo
   return result
 }
 
-/** 导出 pptx：以原始文件包（平台新建的 deck 为模板）为底座、未改动的页与形状原样写回。 */
-export function pptxFor(docs: Documents, docId: string, measurements?: MeasureLookup) {
+/**
+ * 导出 pptx：以原始文件包（平台新建的 deck 为模板）为底座、未改动的页与形状原样写回。
+ * view：要导出的文档视图，默认是导出视图（待采纳修订按未采纳）；渲染预览传 slidePreviewView 的结果。
+ */
+export function pptxFor(docs: Documents, docId: string, measurements?: MeasureLookup, view?: PMNode) {
   docs.flush(docId)
   const store = docs.store
-  const doc = withoutPending(docs.get(docId))
+  const doc = view ?? withoutPending(docs.get(docId))
   const stored = store.getPackage(docId)
   // 平台模板的 deck：按当前模板重新生成底座（版式几何、母版配色跟着模板走）
   const isZip = !!(stored && stored.length >= 4 && stored[0] === 0x50 && stored[1] === 0x4B)

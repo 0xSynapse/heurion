@@ -10,7 +10,7 @@ const BASE = process.argv[2] ?? 'http://127.0.0.1:8787'
 const TOKEN = `${process.env.HEURION_DEV_TOKEN || 'dev'}:e2e`
 const H = { Authorization: `Bearer ${TOKEN}` }
 
-interface Turn { ms: number; events: Array<Record<string, any>>; calls: string[]; errors: string[] }
+interface Turn { ms: number; events: Array<Record<string, any>>; calls: string[]; outside: string[]; errors: string[] }
 
 async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { ...init, headers: { ...H, ...(init.body && typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
@@ -18,15 +18,18 @@ async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   return (res.headers.get('content-type')?.includes('json') ? res.json() : res.text()) as Promise<T>
 }
 
-async function turn(path: string, body: unknown): Promise<Turn> {
+// 对话与评论接口默认按修订模式（suggest）提交（与页面默认一致）；e2e 除「修订模式」一步外都要直接生效，显式传 suggest: false
+async function turn(path: string, body: Record<string, unknown>): Promise<Turn> {
   const t0 = Date.now()
-  const res = await fetch(`${BASE}${path}`, { method: 'POST', headers: { ...H, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const res = await fetch(`${BASE}${path}`, { method: 'POST', headers: { ...H, 'Content-Type': 'application/json' }, body: JSON.stringify({ suggest: false, ...body }) })
   const text = await res.text()
   const events = text.split('\n\n').map(f => f.split('\n').find(l => l.startsWith('data:'))).filter(Boolean).map(l => JSON.parse(l!.slice(5)))
   return {
     ms: Date.now() - t0,
     events,
     calls: events.filter(e => e.type === 'tool_call').map(e => String(e.name).replace(/^mcp__heurion__/, '')),
+    // 平台以外的工具（bash、文件读写等）：平台工具一律经 heurion MCP（mcp__heurion__*），read_image 只看对话附图
+    outside: events.filter(e => e.type === 'tool_call').map(e => String(e.name)).filter(n => !n.startsWith('mcp__heurion__') && n !== 'read_image'),
     errors: events.filter(e => e.type === 'tool_result' && e.isError).map(e => {
       const call = events.find(x => x.type === 'tool_call' && x.callId === e.callId)
       return `${String(call?.name ?? '?').replace(/^mcp__heurion__/, '')}${e.code ? `(${e.code})` : ''}`
@@ -40,7 +43,7 @@ function check(name: string, ok: boolean, detail = '') {
   console.log(`${ok ? '✓' : '✗'} ${name}${detail ? ` — ${detail}` : ''}`)
 }
 const summary = (t: Turn) => `${(t.ms / 1000).toFixed(1)}s · 工具 ${t.calls.length}（${[...new Set(t.calls)].join(', ')}）· 工具报错 ${t.errors.length}${t.errors.length ? `：${t.errors.join(', ')}` : ''}`
-const shell = (t: Turn) => t.calls.some(c => !['doc_outline', 'doc_read', 'doc_search', 'doc_edit', 'doc_history', 'doc_diff', 'doc_list', 'doc_create', 'comments_list', 'comment_reply', 'comment_resolve', 'pubmed_search', 'doi_lookup', 'insert_citation', 'list_citations', 'asset_upload', 'verify_claims', 'claim_report', 'slide_read', 'deck_edit', 'layout_check', 'slide_render', 'diagram_render', 'docs_search', 'kb_search', 'kb_read', 'memory_propose', 'memory_search', 'memory_forget'].includes(c))
+const shell = (t: Turn) => t.outside.length > 0
 
 // —— 1. 起草：带引用的证据段 ——
 const doc = await api('/api/docs', { method: 'POST', body: JSON.stringify({ title: 'e2e 司美格鲁肽', markdown: '# 引言\n\n司美格鲁肽是 GLP-1 受体激动剂。\n\n# 证据\n\n待补充。' }) })

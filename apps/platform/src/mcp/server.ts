@@ -18,7 +18,8 @@ import { toolInScope } from './scope.ts'
 import { DeckEditBatch, DeckOp, newTemplateDeck } from '../ops/deck.ts'
 import { LAYOUTS, layoutSpec, templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
-import type { SlideRenderer } from '../render/slides.ts'
+import { slideRenderKey, type SlideRenderer } from '../render/slides.ts'
+import { slidePreviewView } from '../ops/suggest.ts'
 import { exportMarkdown } from '../views/render.ts'
 import { deckOutline, deckRead, slideRead } from '../views/deck.ts'
 import { checkLayout } from '../views/layout.ts'
@@ -578,16 +579,18 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     let index = -1
     doc.forEach((s, _o, i) => { if (s.attrs.id === slide_id) index = i })
     if (index < 0) return fail('node_not_found', `找不到幻灯片 ${slide_id}`)
+    // 有待采纳修订时按修订后的样子渲染（导出视图会去掉待新增的页，页序对不上）
+    const preview = slidePreviewView(doc, index)!
     try {
       const info = deps.ops.deckContextInfo(doc_id)
-      const pngs = await deps.renderer.render(`${doc_id}/${docs.rev(doc_id)}`, {
-        pptx: () => pptxFor(docs, doc_id, ctx.measureViews(store.getDoc(doc_id)!)).bytes,
-        getDoc: () => docs.get(doc_id),
+      const pngs = await deps.renderer.render(slideRenderKey(doc_id, docs.rev(doc_id), preview.view), {
+        pptx: () => pptxFor(docs, doc_id, ctx.measureViews(store.getDoc(doc_id)!), preview.doc).bytes,
+        getDoc: () => preview.doc,
         size: info.size,
         getAssetBytes: id => store.getAssetBytes(id),
       })
-      const png = pngs[index]
-      if (!png) return fail('render_failed', '渲染结果缺少这一页')
+      const png = pngs[preview.index]
+      if (!png) return fail('render_failed', '渲染结果缺少这一页', { hint: '改用 layout_check 与 slide_read 检查版面，不要在工作区里另找渲染办法。' })
       return { content: [{ type: 'image' as const, data: readFileSync(png).toString('base64'), mimeType: 'image/png' }] }
     } catch (err) {
       return fail('render_unavailable', (err as Error).message, { hint: '改用 layout_check 检查版面。' })

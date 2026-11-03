@@ -362,6 +362,30 @@ PRD W3：同一患者的前后两期胸部 CT，配准后对应结节，标出�
 
 生产机 64 GB：worker 容器上限 32 GB、预算 26 GB、交互预留 4 GB，所以 CPU 上同时只跑一例肺结节分析（18 GB ≤ 22 GB），同时还能做点选。worker 的 `/health` 返回闸门与缓存的实时状态。
 
+## 旧版影像分析的后台任务
+
+患者页「影像分析」对话框与批量上传用的是旧版接口 `POST /api/patients/:ptid/imaging/analyze`（不经 Orthanc 与分析流水线，直接把 NIfTI / DICOM 文件或预置样本交给 worker 的 `/api/v1/analyze/upload`、`/api/v1/analyze/sample`，结果存成一条 imaging 记录）。代码：`src/http/routes/imaging.ts`、`src/imaging/analyze-jobs.ts`，界面 `web/src/patients.ts`。
+
+**为什么改成异步**：生产经 Cloudflare 代理，源站超过 100 秒没有响应就返回 524 错误页。原接口等 worker 推理完（最长 300 秒）才返回，CPU 上常超过 100 秒：界面显示「影像分析未完成：<!DOCTYPE html>…」，而服务端其实还在跑、多半最后入档成功。
+
+**接口行为**
+
+- POST 在请求里完成参数解析、读完上传文件、权限检查（诊疗组成员，`assertEditable`；`verifyBodyVolumeAccess`）后立即返回 `202 { ok, job_id, status: 'running', job }`。没有文件也没有 `sample_id` 返回 400 `no_image`；看不到患者 404，机构不许外部模型分析而 `via = ai` 时 403，均与原来一致，且不登记任务。
+- 同一患者已有本进程里运行中的任务时返回 409 `imaging_job_running`（检查与登记之间没有 await，并发提交只有一个能登记）。运行超过 6 分钟仍未结束的视为卡住，不再阻止新任务。
+- 推理与入档在后台继续。操作者（含 `via`）在请求里取定，后台入档沿用，所以 AI 调用时访问日志照旧记 `via = ai`；入档时 `addImagingRecord` 重新核对诊疗组权限（推理期间被移出诊疗组则不入档）。
+- 后台任何异常都记进任务（`status = failed` + 可读 `error`），不会成为未处理的 Promise rejection：worker 返回 400 / 404 / 422 / 501 / 其它按 `workerFailInfo` 写原因（如「模型不可用：…」「影像微服务出错（HTTP 500）：…」）；连不上写「影像计算微服务连接异常」；超过 300 秒写超时；推理成功但入档失败写「推理已完成，但写入患者档案失败：…」。
+- 完成时 `status = completed`，带 `record_id`（记录本身、关键截面与原始体积照旧存进患者档案）。
+- `GET /api/patients/:ptid/imaging/jobs` 返回 `{ active, latest }`：本进程里运行中的任务从内存读，并向 worker `/api/v1/analyze/jobs/:id` 拉阶段与百分比（上传路径带 job_id；样本路径 worker 不报进度）；否则读库里最近一次任务。权限与原来相同（能看到患者即可），改用 `imagingScope(read)`，不再每次轮询都解密全部记录、记一条「查看」。
+- MCP 工具 `imaging_analyze` 不经这个接口（直接调 worker，同步返回结果），行为不变；`tests/parity.test.ts` 里两者的对应不变，`GET /imaging/jobs` 仍是界面专用。
+
+**任务状态存哪里**：机构患者库的 `imaging_analyze_jobs` 表（随患者级联删除），只在开始与结束时各写一次；进度只在内存里。选这里而不是平台库或只放内存：任务属于患者数据，和记录放在同一个机构库里，权限、删除与备份都跟着患者走；上传文件名可能含姓名，只存机构密钥加密后的值。只放内存的话平台重启后查不到任务，界面只能猜。
+
+**平台重启**：后台推理随进程中断。库里仍是 `running`、但本进程不认识的任务，在读取时改记为 `interrupted`，`error` 写明「平台服务在推理进行中重启……请重新提交影像」，前端据此提示重新提交，不会把查不到当成已完成；`interrupted` 不阻止新任务。只有单进程部署时这样判定成立；多进程部署需要改为按进程标识或心跳判定。
+
+**界面**：对话框 POST 后直接进入轮询，按 completed / failed / interrupted 收尾；关闭对话框或离开页面不影响后台任务，患者页横幅继续显示进度与失败 / 中断。批量上传提交一份后等它结束再传下一份（同一患者同时只能跑一个任务）。网关错误（`api()` 的 `gateway = true`，提交 1244f5c5）的兜底保留：老服务器同步返回 201 时照旧处理；网关偶发断开时转为跟踪最近一次任务。
+
+**局限**：上传仍整份读入内存后才返回 202，大文件的上传时间本身仍受网关限制（Cloudflare 免费与专业版单次请求体上限 100 MB）；worker 侧没有取消接口，用户无法中途停止任务。
+
 ## 端到端走查（2026-11-02）
 
 本机 Podman 起 Orthanc 与 OHIF，平台与 worker 用当前分支代码，无头 Chromium 按真实操作走了一遍：同一患者 P-1001 的两次胸部 CT（2026-03-15 基线、2026-06-20 随访，均为 269 层 1.25 mm）。三个测试账号：机构管理员、初写、审核。

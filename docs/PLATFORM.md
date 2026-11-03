@@ -203,7 +203,7 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 - **新建 deck**：内置最小模板（`convert/pptx-template.ts`：母版 + 标题页 / 标题和内容 / 空白三种版式 + 主题）。
 - **渲染**（`render/slides.ts`）：LibreOffice 转 PDF → pdftoppm 转 PNG，按（文档, rev）缓存；容器内直接运行，本地开发自动改用 heurion2:dev 镜像。
 - **版面检查**（`views/layout.ts`）：按字号近似估算文字溢出、形状重叠、超出页面、字号过小。
-- **MCP 面**：`doc_outline`（各页 id / 版式 / 标题 + 可用版式）/ `slide_read`（形状 id、种类、占位符、几何 pt、文字）/ `deck_edit(ops)`（add_slide 按版式填占位符 / delete_slide / move_slide / set_text / replace_text / add_shape / set_xfrm / delete_shape / set_notes / table_set_cells）/ `layout_check` / `slide_render`（PNG 交给多模态模型自查）；守卫同 §5.3，按形状判定。
+- **MCP 面**：`doc_outline`（各页 id / 版式 / 标题 + 可用版式）/ `slide_read`（形状 id、种类、占位符、几何 pt、文字）/ `deck_edit(ops)`（add_slide 按版式填占位符 / delete_slide / move_slide / set_text / replace_text / add_shape / set_xfrm / delete_shape / set_notes / table_set_cells）/ `layout_check` / `slide_render`（PNG 交给多模态模型自查；有待采纳修订时按修订后的样子渲染，目标页本身待删除时按采纳前渲染，画布精确预览同此）；守卫同 §5.3，按形状判定。
 - **页面**：deck 查看器按模型近似渲染（位置、文字、填充、图片），每页可切换 LibreOffice 精确预览；AI 改动高亮、修订标红 / 绿。评论按最小颗粒度：形状里一个段落内选中文字，或单击形状评论整个形状（§5.1）。编辑走对话。
 - **形状内 `replace_text`**：逐段匹配（同 doc 的规则，不跨段落），改文字时沿用原文字段的 `a:rPr`。
 - **样式与素材操作（C1）**：`set_fill`（形状填充 / 无填充）、`set_background`（页面背景）、`set_text_style`（颜色、字号、粗斜体、对齐，整个形状或某一段）、`add_shape` 带 `geometry`（rect / roundRect / ellipse）与 `fill` / `color`（色块、标题条、卡片）、`add_image`（资产插图，高度按原图比例）、`set_z`（叠放顺序）、`apply_theme`（`model/deck-themes.ts` 的四套主题：背景、标题 / 正文颜色、强调色；之后新加的页沿用）。颜色可写主题记号（accent / title / body / surface…），按该页主题取色，换主题时跟着变。导出全部写回 pptx：`spPr` 填充与几何、`p:bg`、文字段 `a:rPr` 颜色与字号、`a:pPr` 对齐、`p:pic` + `ppt/media` + 关系、pptx 主题的强调色与字体。`slide_read` 显示主题、背景、填充、文字颜色与字号，AI 看得到样式。

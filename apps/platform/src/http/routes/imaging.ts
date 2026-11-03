@@ -2,6 +2,7 @@ import type { Context, Hono } from 'hono'
 import type { Documents } from '../../model/runtime.ts'
 import type { Store } from '../../store/db.ts'
 import type { PatientService, Actor } from '../../tenancy/patients.ts'
+import { finishJob, insertJob, latestJob, type AnalyzeJob, type JobStore } from '../../imaging/analyze-jobs.ts'
 import { guardImagingPayload } from '../../tenancy/imaging-guard.ts'
 import type { Access } from '../../research/access.ts'
 import { generateSlicerAndItkSnapPackage, generateImageJAnalysis } from '../../research/medical-figures.ts'
@@ -26,6 +27,12 @@ export interface ImagingRouteContext {
  * 其它错误为 502。
  */
 export async function workerFail(c: Context, resp: Response, code: string): Promise<Response> {
+  const { status, message } = await workerFailInfo(resp)
+  return c.json({ error: code, worker_status: resp.status, message }, status as any)
+}
+
+/** workerFail 的状态码与可读原因（后台任务里没有请求可回，只记原因） */
+export async function workerFailInfo(resp: Response): Promise<{ status: number; message: string }> {
   let message = ''
   try {
     const text = await resp.text()
@@ -33,7 +40,7 @@ export async function workerFail(c: Context, resp: Response, code: string): Prom
   } catch {}
   const pass = [400, 404, 422, 501].includes(resp.status)
   const prefix = resp.status === 501 ? '模型不可用：' : resp.status === 404 ? '影像或样本不存在：' : resp.status === 400 || resp.status === 422 ? '请求参数有误：' : `影像微服务出错（HTTP ${resp.status}）：`
-  return c.json({ error: code, worker_status: resp.status, message: `${prefix}${String(message).slice(0, 500)}` }, (pass ? resp.status : 502) as any)
+  return { status: pass ? resp.status : 502, message: `${prefix}${String(message).slice(0, 500)}` }
 }
 
 export function registerImagingRoutes(
@@ -506,59 +513,54 @@ export function registerImagingRoutes(
     }
   })
 
-  interface ImagingJobState {
-    job_id: string
-    patient_id: string
-    model_id: string
-    file_name: string
-    status: 'running' | 'completed' | 'failed'
-    stage: string
-    detail: string
-    percent: number
-    started_at: number
-    ended_at?: number
-    record_id?: string
-    error?: string
-  }
+  // —— 旧版「影像分析」：异步任务（docs/design/IMAGING_STUDIES.md「旧版影像分析的后台任务」） ——
+  // 生产经 Cloudflare 代理，源站 100 秒不响应就返回 524；CPU 上推理常超过 100 秒。所以接口收下影像后立即返回 202，
+  // 推理与入档在后台继续，界面轮询 GET /imaging/jobs。任务终态写机构患者库（src/imaging/analyze-jobs.ts），进度只在内存里。
 
-  const patientImagingJobs = new Map<string, ImagingJobState>()
+  /** 本进程正在跑的任务：键为「机构:患者」（同一患者同时只跑一个） */
+  const liveJobs = new Map<string, AnalyzeJob>()
+  /** 本进程正在跑的任务 id（含被判为卡住、已被新任务顶替但仍在收尾的） */
+  const liveIds = new Set<string>()
+  /** worker 超时 300 秒、取样本原件 10 秒，再加入档；超过 6 分钟仍未结束的视为卡住，不再阻止新任务 */
+  const JOB_STALE_MS = 360_000
+  const jobView = (job: AnalyzeJob) => {
+    const { via: _via, created_by: _by, ...rest } = job
+    return { ...rest, elapsed_sec: Math.max(1, Math.round(((job.ended_at || Date.now()) - job.started_at) / 1000)) }
+  }
 
   app.get('/api/patients/:ptid/imaging/jobs', async c => {
     try {
       const patientId = c.req.param('ptid')
-      pt(c).read(me(c), patientId)
-      const job = patientImagingJobs.get(patientId)
+      // 与原来一样要求能看到该患者；不调 read()，免得每次轮询都解密全部记录、记一条「查看」
+      const scope = pt(c).imagingScope(me(c), patientId, 'read')
+      const job = liveJobs.get(`${scope.tenantId}:${patientId}`)
       if (!job) {
-        return c.json({ active: null, latest: null })
+        const latest = latestJob(scope, patientId, id => liveIds.has(id))
+        return c.json({ active: null, latest: latest ? jobView(latest) : null })
       }
-      if (job.status === 'running') {
-        try {
-          const wResp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/jobs/${encodeURIComponent(job.job_id)}`, {
-            signal: AbortSignal.timeout(1500),
-          })
-          if (wResp.ok) {
-            const wData = await wResp.json()
+      try {
+        const wResp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/jobs/${encodeURIComponent(job.job_id)}`, {
+          signal: AbortSignal.timeout(1500),
+        })
+        if (wResp.ok) {
+          const wData = await wResp.json()
+          if (job.status === 'running') {
             if (typeof wData.stage === 'string' && wData.stage) job.stage = wData.stage
             if (typeof wData.detail === 'string' && wData.detail) job.detail = wData.detail
             if (typeof wData.percent === 'number' && wData.percent > job.percent && wData.percent < 98) {
               job.percent = wData.percent
             }
           }
-        } catch {}
-      }
-      const elapsedSec = Math.max(1, Math.round(((job.ended_at || Date.now()) - job.started_at) / 1000))
-      const payload = { ...job, elapsed_sec: elapsedSec }
-      return c.json({
-        active: job.status === 'running' ? payload : null,
-        latest: payload,
-      })
+        }
+      } catch {}
+      const payload = jobView(job)
+      return c.json({ active: job.status === 'running' ? payload : null, latest: payload })
     } catch (err) {
       return handleImagingError(c, err)
     }
   })
 
   app.post('/api/patients/:ptid/imaging/analyze', async c => {
-    let activeJob: ImagingJobState | null = null
     try {
       const contentType = c.req.header('content-type') || ''
       let sampleId: string | undefined
@@ -611,32 +613,90 @@ export function registerImagingRoutes(
       }
 
       const patientId = c.req.param('ptid')
-      pt(c).assertEditable(me(c), patientId)
+      // 操作者与服务在请求里取定，后台任务沿用（via = ai 时入档同样按 AI 算）
+      const actor = me(c)
+      const svc = pt(c)
+      svc.assertEditable(actor, patientId)
       verifyBodyVolumeAccess(c, { sample_id: sampleId, model_id: modelId })
+      if (!fileBuffer && !sampleId) {
+        return c.json({ error: 'no_image', message: '请上传该患者真实的医学影像文件 (NIfTI / DICOM)' }, 400)
+      }
+      const scope = svc.imagingScope(actor, patientId, 'write')
+      const key = `${scope.tenantId}:${patientId}`
 
-      const existing = patientImagingJobs.get(patientId)
-      if (existing && existing.status === 'running' && Date.now() - existing.started_at < 300_000) {
+      // 检查与登记之间没有 await：同一患者并发提交时只有一个能登记成功，其余得到 409
+      const existing = liveJobs.get(key)
+      if (existing && Date.now() - existing.started_at < JOB_STALE_MS) {
         return c.json({
           error: 'imaging_job_running',
           message: '该患者当前已有正在运行的 3D 影像推理任务，请等待其完成',
-          job: { ...existing, elapsed_sec: Math.max(1, Math.round((Date.now() - existing.started_at) / 1000)) },
+          job: jobView(existing),
         }, 409)
       }
 
       const jobId = `imgjob_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-      activeJob = {
+      const job: AnalyzeJob = {
         job_id: jobId,
         patient_id: patientId,
         model_id: modelId || 'bronchiectasis_mucus_analyzer',
         file_name: fileName || sampleId || 'scan.nii.gz',
         status: 'running',
-        stage: '正在传输体素序列至计算微服务',
+        stage: fileBuffer ? '正在传输体素序列至计算微服务' : '正在加载样本并执行 MONAI 推理',
         detail: `已接收 ${fileName || sampleId || '影像序列'}，正在调度 MONAI 推理管线...`,
-        percent: 12,
+        percent: fileBuffer ? 12 : 45,
         started_at: Date.now(),
+        via: actor.via,
+        created_by: actor.userId,
       }
-      patientImagingJobs.set(patientId, activeJob)
+      insertJob(scope, job)
+      liveJobs.set(key, job)
+      liveIds.add(jobId)
 
+      // 后台执行；runAnalyzeJob 自己把一切异常记进任务，这里的 catch 只是兜底，保证不出现未处理的 rejection
+      void runAnalyzeJob(job, key, scope, actor, svc, {
+        fileBuffer, fileName, sampleId, modelId, windowPreset, barCutoff, mucusMinHu, mucusMaxHu, hamThresholdHu, reportDate, title, autoTag,
+      }).catch(err => console.error('[imaging] 后台影像分析任务异常', err))
+
+      return c.json({ ok: true, job_id: jobId, status: 'running', job: jobView(job) }, 202)
+    } catch (err: any) {
+      return handleImagingError(c, err)
+    }
+  })
+
+  interface AnalyzeParams {
+    fileBuffer: Buffer | null
+    fileName: string
+    sampleId?: string
+    modelId?: string
+    windowPreset?: string
+    barCutoff?: number
+    mucusMinHu?: number
+    mucusMaxHu?: number
+    hamThresholdHu?: number
+    reportDate?: string
+    title?: string
+    autoTag: boolean
+  }
+
+  /** 后台任务里的可读失败原因（直接显示给用户） */
+  class JobFailure extends Error {}
+
+  /**
+   * 推理 + 入档。任何异常都落到 job（failed + 可读 error），不向外抛。
+   * 结束时把终态写库、从 liveJobs 移除。
+   */
+  async function runAnalyzeJob(job: AnalyzeJob, key: string, store: JobStore, actor: Actor, svc: PatientService, p: AnalyzeParams): Promise<void> {
+    const { fileBuffer, fileName, sampleId, modelId, windowPreset, barCutoff, mucusMinHu, mucusMaxHu, hamThresholdHu, reportDate, title, autoTag } = p
+    const jobId = job.job_id
+    const patientId = job.patient_id
+    let phase: 'infer' | 'ingest' = 'infer'
+    const settle = (patch: Partial<AnalyzeJob>) => {
+      Object.assign(job, patch, { ended_at: Date.now() })
+      try { finishJob(store, job) } catch (e) { console.error('[imaging] 影像分析任务终态写库失败', e) }
+      if (liveJobs.get(key) === job) liveJobs.delete(key)
+      liveIds.delete(jobId)
+    }
+    try {
       let resultData: any
       if (fileBuffer) {
         const formData = new FormData()
@@ -655,24 +715,9 @@ export function registerImagingRoutes(
           body: formData,
           signal: AbortSignal.timeout(300000),
         })
-        if (!resp.ok) {
-          const failResp = await workerFail(c, resp, 'imaging_inference_failed')
-          try {
-            const failJson = await failResp.clone().json()
-            activeJob.status = 'failed'
-            activeJob.error = failJson.message || `HTTP ${resp.status}`
-            activeJob.ended_at = Date.now()
-          } catch {
-            activeJob.status = 'failed'
-            activeJob.error = `HTTP ${resp.status}`
-            activeJob.ended_at = Date.now()
-          }
-          return failResp
-        }
+        if (!resp.ok) throw new JobFailure((await workerFailInfo(resp)).message)
         resultData = await resp.json()
-      } else if (sampleId) {
-        activeJob.stage = '正在加载样本并执行 MONAI 推理'
-        activeJob.percent = 45
+      } else {
         const resp = await fetch(`${imagingWorkerUrl}/api/v1/analyze/sample`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -687,36 +732,16 @@ export function registerImagingRoutes(
           }),
           signal: AbortSignal.timeout(300000),
         })
-        if (!resp.ok) {
-          const failResp = await workerFail(c, resp, 'imaging_inference_failed')
-          try {
-            const failJson = await failResp.clone().json()
-            activeJob.status = 'failed'
-            activeJob.error = failJson.message || `HTTP ${resp.status}`
-            activeJob.ended_at = Date.now()
-          } catch {
-            activeJob.status = 'failed'
-            activeJob.error = `HTTP ${resp.status}`
-            activeJob.ended_at = Date.now()
-          }
-          return failResp
-        }
+        if (!resp.ok) throw new JobFailure((await workerFailInfo(resp)).message)
         resultData = await resp.json()
-      } else {
-        patientImagingJobs.delete(patientId)
-        return c.json({ error: 'no_image', message: '请上传该患者真实的医学影像文件 (NIfTI / DICOM)' }, 400)
       }
 
-      activeJob.stage = '正在加密写入患者病历与影像档案'
-      activeJob.percent = 95
+      phase = 'ingest'
+      job.stage = '正在加密写入患者病历与影像档案'
+      job.percent = 95
 
-      const b64Data = String(resultData.key_slice_png_base64 || '').replace(/^data:image\/png;base64,/, '')
-      if (!b64Data) {
-        activeJob.status = 'failed'
-        activeJob.error = '影像计算未返回切片图像'
-        activeJob.ended_at = Date.now()
-        return c.json({ error: 'no_image_output', message: '影像计算未返回切片图像' }, 500)
-      }
+      const b64Data = String(resultData?.key_slice_png_base64 || '').replace(/^data:image\/png;base64,/, '')
+      if (!b64Data) throw new JobFailure('影像计算未返回切片图像')
       const pngBuffer = Buffer.from(b64Data, 'base64')
 
       const rawMetrics = resultData.metrics || {}
@@ -829,7 +854,8 @@ export function registerImagingRoutes(
         }
       }
 
-      const saved = pt(c).addImagingRecord(me(c), patientId, {
+      // 入档时重新核对权限（推理期间操作者可能已被移出诊疗组）
+      const saved = svc.addImagingRecord(actor, patientId, {
         // 演示样本不是该患者的影像：标题明确标注
         title: `${!fileBuffer && sampleId ? '【演示样本】' : ''}${title || defaultTitle}`,
         report_date: reportDate || new Date().toISOString().slice(0, 10),
@@ -843,35 +869,33 @@ export function registerImagingRoutes(
         add_tags: autoTag && tagsToAdd.length > 0 ? tagsToAdd : undefined,
       })
 
-      if (activeJob) {
-        activeJob.status = 'completed'
-        activeJob.percent = 100
-        activeJob.stage = '分析完成并已加密存入患者档案'
-        activeJob.detail = `已生成关键截面与量化指标（记录 #${saved.record.id}）`
-        activeJob.record_id = saved.record.id
-        activeJob.ended_at = Date.now()
-      }
-
-      return c.json({
-        ok: true,
-        job_id: activeJob?.job_id,
-        record: saved.record,
-        asset_id: saved.asset_id,
-        file_id: saved.file_id,
-        raw_file_id: saved.raw_file_id,
-        metrics: saved.record.imaging_data?.metrics,
-        findings,
-        tags_added: autoTag ? tagsToAdd : [],
-      }, 201)
+      settle({
+        status: 'completed',
+        percent: 100,
+        stage: '分析完成并已加密存入患者档案',
+        detail: `已生成关键截面与量化指标（记录 #${saved.record.id}）`,
+        record_id: saved.record.id,
+      })
     } catch (err: any) {
-      if (activeJob && activeJob.status === 'running') {
-        activeJob.status = 'failed'
-        activeJob.error = err?.message || String(err)
-        activeJob.ended_at = Date.now()
-      }
-      return handleImagingError(c, err)
+      settle({ status: 'failed', stage: '分析未完成', error: describeJobError(err, phase) })
     }
-  })
+  }
+
+  /** 后台任务异常 → 给用户看的原因 */
+  function describeJobError(err: any, phase: 'infer' | 'ingest'): string {
+    const msg = String(err?.message ?? err ?? '未知错误')
+    if (err instanceof JobFailure) return msg
+    // 权限、患者不存在等（PatientError）
+    if (err && typeof err === 'object' && typeof err.status === 'number' && typeof err.code === 'string') {
+      return phase === 'ingest' ? `推理已完成，但未能存入患者档案：${msg}` : msg
+    }
+    if (phase === 'ingest') return `推理已完成，但写入患者档案失败：${msg}`
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError' || /timeout|timed out|aborted/i.test(msg)) {
+      return '3D 影像推理超过 300 秒仍未完成，已停止等待；请稍后重试或切换轻量模型'
+    }
+    const cause = err?.cause?.code || err?.cause?.message
+    return `影像计算微服务连接异常：${msg}${cause ? `（${cause}）` : ''}`
+  }
 
   app.post('/api/patients/:ptid/imaging/compare', async c => {
     try {

@@ -178,3 +178,25 @@ export function withoutPending(doc: PMNode): PMNode {
   doc.descendants(n => { if (n.attrs.suggest) has = true; return !has })
   return has ? resolveSuggestions(doc, null, false) : doc
 }
+
+/**
+ * 渲染一页幻灯片时用的视图（MCP slide_render 与画布「精确预览」共用）。
+ * 导出视图（withoutPending）去掉了待采纳新增的页，页序随之变化；按完整文档的页序去取导出渲染的图，
+ * 待采纳新增的页会「缺页」（render_failed），排在它后面的页会取成别的页。
+ * 这里按目标页选视图：目标页本身待删除（原文版）→ 按采纳前看；否则按全部采纳看（要检查的是修订后的样子）。
+ * index 是目标页在完整文档里的页序；返回该视图与目标页在视图里的页序，view 用来区分渲染缓存。
+ */
+export function slidePreviewView(doc: PMNode, index: number): { doc: PMNode; index: number; view: 'plain' | 'accepted' | 'original' } | null {
+  if (!Number.isInteger(index) || index < 0 || index >= doc.childCount) return null
+  let pending = false
+  doc.descendants(n => { if (n.attrs.suggest) pending = true; return !pending })
+  if (!pending) return { doc, index, view: 'plain' }
+  const original = doc.child(index).attrs.suggest === 'delete'
+  // 视图里会去掉的页：采纳前去掉待新增的页，全部采纳后去掉待删除的页
+  const dropped = original ? 'insert' : 'delete'
+  let at = 0
+  for (let i = 0; i < index; i++) if (doc.child(i).attrs.suggest !== dropped) at++
+  return original
+    ? { doc: resolveSuggestions(doc, null, false), index: at, view: 'original' }
+    : { doc: resolveSuggestions(doc, null, true), index: at, view: 'accepted' }
+}

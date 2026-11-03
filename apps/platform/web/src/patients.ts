@@ -174,6 +174,29 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
   let imgJobPoll: ReturnType<typeof setTimeout> | null = null
   const notifiedCompletedJobs = new Set<string>()
 
+  /**
+   * 轮询旧版影像分析任务直到结束。服务端保证任务终会离开 running（推理超时 300 秒；平台重启则记为 interrupted），
+   * 这里另设 15 分钟上限与连续 30 次（约 45 秒）查询失败的上限，超过时如实返回 unknown。
+   */
+  async function waitImagingJob(patientId: string, jobId: string): Promise<{ status: 'completed' | 'failed' | 'interrupted' | 'unknown'; error?: string; record_id?: string }> {
+    const deadline = Date.now() + 15 * 60_000
+    let errors = 0
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 1500))
+      try {
+        const res = await api<{ active: any; latest: any }>(`/api/patients/${patientId}/imaging/jobs`)
+        errors = 0
+        const latest = res?.latest
+        if (!latest) return { status: 'interrupted', error: '服务端查不到这次影像分析任务，请重新提交' }
+        if (latest.job_id !== jobId) return { status: 'unknown', error: '任务状态已被新的任务覆盖，请在「原始报告 / 影像」里查看结果' }
+        if (latest.status === 'completed' || latest.status === 'failed' || latest.status === 'interrupted') return latest
+      } catch {
+        if (++errors >= 30) break
+      }
+    }
+    return { status: 'unknown', error: '暂时查不到分析结果，任务可能仍在后台进行，完成后会出现在「原始报告 / 影像」里' }
+  }
+
   async function syncPatientImagingJobBanner(id: string, d?: Detail | Patient): Promise<void> {
     if (imgJobPoll) { clearTimeout(imgJobPoll); imgJobPoll = null }
     if (current !== id) return
@@ -213,7 +236,10 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           await loadList()
           await openPatient(id, true)
         }
-      } else if (latest && latest.status === 'failed' && latest.ended_at && Date.now() - latest.ended_at < 120_000 && !notifiedCompletedJobs.has(latest.job_id)) {
+      } else if (latest && !notifiedCompletedJobs.has(latest.job_id) && (
+        (latest.status === 'failed' && latest.ended_at && Date.now() - latest.ended_at < 120_000) ||
+        // 平台重启导致中断：中断是在读取时才判定的，按开始时间只提示 24 小时内的任务
+        (latest.status === 'interrupted' && Date.now() - latest.started_at < 86_400_000))) {
         banner.hidden = false
         banner.innerHTML = `
           <div style="margin-top: 8px; padding: 10px 14px; border: 1px solid rgba(239, 68, 68, 0.45); background: rgba(239, 68, 68, 0.08); border-radius: 6px">
@@ -1307,7 +1333,22 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       if (btnRun) btnRun.disabled = running || !isHealthy
     }
 
-    const startModalJobPolling = (attachOnly: boolean, fallbackStartTs = Date.now()) => {
+    const showModalFailure = (errText: string, hint: string) => {
+      progressBox.hidden = false
+      progressBox.style.borderColor = 'rgba(239, 68, 68, 0.45)'
+      progressBox.style.background = 'rgba(239, 68, 68, 0.08)'
+      if (progressDot) progressDot.style.background = '#ef4444'
+      progressMsg.style.color = '#ef4444'
+      progressMsg.textContent = `影像分析未完成：${errText}`
+      if (progressSub) progressSub.textContent = hint
+    }
+
+    /**
+     * attachOnly = false：POST 还没返回（大文件仍在上传），只显示进度，不判定结束；
+     * attachOnly = true：跟踪任务直到 completed / failed / interrupted。expectJobId 为 POST 返回的任务 id
+     * （网关兜底时不知道 id，跟踪该患者最近一次任务）。
+     */
+    const startModalJobPolling = (attachOnly: boolean, fallbackStartTs = Date.now(), expectJobId?: string) => {
       stopModalPoll()
       modalPollTimer = window.setInterval(async () => {
         if (dlg.hidden) {
@@ -1328,19 +1369,21 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           }
           if (attachOnly) {
             const latest = res?.latest
-            if (latest && latest.status === 'failed') {
+            if (expectJobId && latest && latest.job_id !== expectJobId) {
+              // 最近一次已不是这次提交的任务（期间有人又提交了一次）：这次的结果看患者档案
               stopModalPoll()
               setModalRunningState(false)
-              const errText = latest.error || latest.detail || '未知错误'
-              progressBox.hidden = false
-              progressBox.style.borderColor = 'rgba(239, 68, 68, 0.45)'
-              progressBox.style.background = 'rgba(239, 68, 68, 0.08)'
-              if (progressDot) progressDot.style.background = '#ef4444'
-              progressMsg.style.color = '#ef4444'
-              progressMsg.textContent = `影像分析未完成：${errText}`
-              if (progressSub) {
-                progressSub.textContent = '请重新选择影像文件并确认模型参数后再次点击推理。'
-              }
+              notice('这次影像分析的任务状态已被新的任务覆盖，请在「原始报告 / 影像」里查看结果。')
+              close()
+              await loadList()
+              if (current === patientId) await openPatient(patientId, true)
+            } else if (latest && (latest.status === 'failed' || latest.status === 'interrupted')) {
+              stopModalPoll()
+              setModalRunningState(false)
+              notifiedCompletedJobs.add(latest.job_id)
+              showModalFailure(latest.error || latest.detail || '未知错误', latest.status === 'interrupted'
+                ? '服务端重启时这次推理被中断，没有存入患者档案；请重新选择影像文件后再次推理。'
+                : '请检查所选影像文件格式与模型输入要求（或切换适配模型）后重新点击推理。')
             } else if (!a && !latest) {
               // 服务端查不到这个任务（请求没送达，或平台重启后内存里的任务表清空）：如实说明，不能当成已完成
               stopModalPoll()
@@ -1352,6 +1395,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
             } else if (latest && latest.status === 'completed') {
               stopModalPoll()
               setModalRunningState(false)
+              notifiedCompletedJobs.add(latest.job_id)
               notice('MONAI 3D 影像量化分析已完成！已生成关键截面并加密存入患者档案。')
               close()
               tab = 'records'
@@ -1429,9 +1473,21 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         fd.append('ham_threshold_hu', String(hamThresh))
         if (reportDate) fd.append('report_date', reportDate)
         fd.append('auto_tag', String(autoTag))
-        await api(`/api/patients/${patientId}/imaging/analyze`, { method: 'POST', body: fd })
+        const res = await api<{ job_id?: string; job?: any; record?: unknown }>(`/api/patients/${patientId}/imaging/analyze`, { method: 'POST', body: fd })
 
         stopModalPoll()
+        if (res?.job_id) {
+          // 正常路径：服务端收下影像后立即返回任务（202），推理在后台；轮询到 completed / failed / interrupted 收尾
+          const j = res.job || {}
+          renderJobProgress(
+            `${j.stage || '已提交，正在后台执行 MONAI 3D 推理'}…`,
+            j.percent || 15,
+            '影像已上传，推理在服务端后台进行；关闭窗口或离开页面不影响，完成后结果自动存入患者档案。',
+          )
+          startModalJobPolling(true, j.started_at || startTs, res.job_id)
+          return
+        }
+        // 老版本服务器：同步返回 201 与记录
         setModalRunningState(false)
         notice('影像量化分析完成！已生成关键截面并加密存入患者档案。')
         if (!dlg.hidden) close()
@@ -1450,17 +1506,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
         }
         setModalRunningState(false)
         const errText = err?.message || String(err) || '未知错误'
-        if (!dlg.hidden) {
-          progressBox.hidden = false
-          progressBox.style.borderColor = 'rgba(239, 68, 68, 0.45)'
-          progressBox.style.background = 'rgba(239, 68, 68, 0.08)'
-          if (progressDot) progressDot.style.background = '#ef4444'
-          progressMsg.style.color = '#ef4444'
-          progressMsg.textContent = `影像分析未完成：${errText}`
-          if (progressSub) {
-            progressSub.textContent = '请检查所选影像文件格式与模型输入要求（或切换适配模型）后重新点击推理。'
-          }
-        }
+        if (!dlg.hidden) showModalFailure(errText, '请检查所选影像文件格式与模型输入要求（或切换适配模型）后重新点击推理。')
         notice(`影像分析失败: ${errText}`, true)
         if (current === patientId) {
           void syncPatientImagingJobBanner(patientId, d)
@@ -3993,9 +4039,21 @@ ${impression}
           fd.append('model_id', 'bronchiectasis_mucus_analyzer')
           fd.append('auto_tag', 'true')
           try {
-            await api(`/api/patients/${id}/imaging/analyze`, { method: 'POST', body: fd })
-            ok++
-            notice(`已成功将 3D 影像资料 ${f.name} 关联至患者，并生成量化分析记录！`)
+            const res = await api<{ job_id?: string }>(`/api/patients/${id}/imaging/analyze`, { method: 'POST', body: fd })
+            if (res?.job_id) {
+              // 服务端立即返回任务（202）：横幅显示进度，这里等它结束再传下一份（同一患者同时只能跑一个任务）
+              notifiedCompletedJobs.add(res.job_id)
+              notice(`${f.name} 已上传，正在后台执行 3D 影像量化分析…`)
+              if (current === id) void syncPatientImagingJobBanner(id)
+              const end = await waitImagingJob(id, res.job_id)
+              if (end.status === 'completed') { ok++; notice(`已成功将 3D 影像资料 ${f.name} 关联至患者，并生成量化分析记录！`) }
+              else if (end.status === 'unknown') { ok++; notice(`${f.name}：${end.error}`) }
+              else failed.push(`${f.name}：${end.error || '分析未完成'}`)
+            } else {
+              // 老版本服务器：同步完成
+              ok++
+              notice(`已成功将 3D 影像资料 ${f.name} 关联至患者，并生成量化分析记录！`)
+            }
           } catch (err) {
             // 网关超时：推理仍在服务端进行，完成后出现在「原始报告 / 影像」，不算失败
             if ((err as { gateway?: boolean }).gateway) { ok++; notice(`${f.name} 处理时间较长，已转入后台继续分析，完成后会出现在「原始报告 / 影像」里`) }
@@ -4012,8 +4070,10 @@ ${impression}
       if (failed.length) notice((ok ? `已上传 ${ok} 份。` : '') + failed.join('；'), true)
       else if (!hasImaging) notice('已上传，正在自动提取，完成后在「待确认」里审核')
       if (!ok) return
-      tab = hasImaging ? 'records' : 'review'
       await loadList()
+      // 影像分析可能等了几分钟，期间用户若已离开这位患者，不把页面拉回来
+      if (current !== id) return
+      tab = hasImaging ? 'records' : 'review'
       void openPatient(id, true)
       return
     }
