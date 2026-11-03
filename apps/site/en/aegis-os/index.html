@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Aegis OS · Local Multi-Agent Control Plane</title>
-  <meta name="description" content="Aegis OS is a local control plane for multi-agent work: CoW shadow workspaces, kernel sandboxing, Google A2A collaboration, UOMP memory consent, task-scoped leases, and audit." />
+  <title>Aegis OS · Transactional Local &amp; Cloud Multi-Agent Control Plane</title>
+  <meta name="description" content="Aegis OS is a control plane for multi-agent work: CoW shadow workspaces, kernel sandboxing, Google A2A collaboration, UOMP memory consent, task-scoped leases, and 64GB cloud workspaces." />
   <meta name="keywords" content="Aegis OS, aegis-os, multi-agent, Google A2A, UOMP, memory consent, CoW workspace, sandbox, agent runtime" />
   <meta name="author" content="Heurion Research" />
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
@@ -16,8 +16,8 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Heurion Research" />
   <meta property="og:url" content="https://heurion.org/en/aegis-os/" />
-  <meta property="og:title" content="Aegis OS · Local Multi-Agent Control Plane" />
-  <meta property="og:description" content="Isolation, collaboration, consent, revocation, audit: run multiple agents safely on your machine." />
+  <meta property="og:title" content="Aegis OS · Transactional Local &amp; Cloud Multi-Agent Control Plane" />
+  <meta property="og:description" content="Isolation, collaboration, consent, revocation, audit: run multiple agents safely on your machine or in 64GB cloud sandboxes." />
   <meta property="og:locale" content="en_US" />
   <meta property="og:locale:alternate" content="zh_CN" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -39,35 +39,132 @@
     .brand-group { display: flex; align-items: center; gap: 0.75rem; white-space: nowrap; flex-shrink: 0; }
     .brand-sep { color: var(--border); font-weight: 300; flex-shrink: 0; }
     .brand-sub { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); padding: 0.18rem 0.52rem; background: var(--accent-soft); border: 1px solid rgba(35, 62, 51, 0.2); white-space: nowrap; flex-shrink: 0; }
-    .nav-links { gap: 1.65rem; flex-wrap: nowrap; }
+    .nav-links { gap: 1.5rem; flex-wrap: nowrap; }
     .nav-link { white-space: nowrap; flex-shrink: 0; }
     .nav-link-active { color: var(--ink); font-weight: 500; }
+
     .aegis-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); margin-top: 3rem; }
-    .aegis-cell { background: var(--bg-elevated); padding: 1.75rem; min-height: 12rem; }
+    .aegis-cell { background: var(--bg-elevated); padding: 1.75rem; min-height: 11.5rem; }
     .aegis-cell h3 { margin: 0.35rem 0 .6rem; }
     .aegis-cell p { margin: 0; font-size: .92rem; color: var(--ink-secondary); }
+
     .aegis-section { padding: 4.5rem 0; border-bottom: 1px solid var(--border); }
     .aegis-section-linen { background: var(--bg-neutral); padding: 4.5rem 0; border-bottom: 1px solid var(--border); }
-    .aegis-section h2, .aegis-section-linen h2 { margin-bottom: 1.4rem; }
-    .aegis-section h3, .aegis-section-linen h3 { margin: 2rem 0 .7rem; }
+    .aegis-section h2, .aegis-section-linen h2 { margin-bottom: 1rem; }
     .aegis-section p, .aegis-section-linen p { max-width: 52rem; color: var(--ink-secondary); }
-    .tier-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); margin-top: 1.75rem; }
-    .tier-card { background: var(--bg-elevated); padding: 2rem 2.25rem; display: flex; flex-direction: column; justify-content: space-between; gap: 1.25rem; }
-    .tier-card-pro { border-top: 2px solid var(--accent); }
-    .tier-card h3 { margin: 0.45rem 0 0.5rem; font-family: var(--serif); font-size: 1.38rem; font-weight: 400; color: var(--ink); }
-    .tier-badge { display: inline-flex; align-items: center; gap: 0.38rem; font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; padding: 0.18rem 0.55rem; border: 1px solid var(--border); background: var(--bg-primary); color: var(--ink-secondary); }
+
+    /* 3-Stage Architecture Diagram */
+    .arch-diagram {
+      margin-top: 2rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      padding: 2rem 2.25rem;
+    }
+    .arch-flow {
+      display: grid;
+      grid-template-columns: 1fr auto 1.35fr auto 1.15fr;
+      gap: 1.15rem;
+      align-items: stretch;
+    }
+    .arch-stage {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      padding: 1.35rem 1.45rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .arch-stage-core {
+      background: var(--bg-elevated);
+      border: 1.5px solid var(--accent);
+    }
+    .arch-arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--accent);
+      gap: 0.25rem;
+      padding: 0 0.2rem;
+      white-space: nowrap;
+    }
+    .arch-pill-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-top: 0.85rem;
+    }
+    .arch-pill {
+      padding: 0.52rem 0.75rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      font-size: 0.83rem;
+      color: var(--ink);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .arch-pill code { font-family: var(--mono); font-size: 0.74rem; color: var(--accent); }
+
+    /* Direct Pricing & Purchase Cards */
+    .tier-grid { display: grid; grid-template-columns: 0.92fr 1.08fr; gap: 1.5rem; margin-top: 2rem; align-items: stretch; }
+    .tier-card { background: var(--bg-elevated); border: 1px solid var(--border); padding: 2.1rem 2.25rem; display: flex; flex-direction: column; justify-content: space-between; gap: 1.35rem; }
+    .tier-card-pro { border: 1.5px solid var(--accent); }
+    .tier-card h3 { margin: 0.4rem 0 0.45rem; font-family: var(--serif); font-size: 1.45rem; font-weight: 400; color: var(--ink); }
+    .tier-badge { display: inline-flex; align-items: center; gap: 0.38rem; font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; padding: 0.2rem 0.58rem; border: 1px solid var(--border); background: var(--bg-primary); color: var(--ink-secondary); }
     .tier-badge-pro { background: var(--accent-soft); color: var(--accent); border-color: rgba(35, 62, 51, 0.28); }
     .dot-mint { width: 6px; height: 6px; border-radius: 50%; background: var(--heurion-mint); display: inline-block; }
+
+    .spec-table { list-style: none; padding: 0; margin: 0.85rem 0 0; border-top: 1px solid var(--border); }
+    .spec-table li { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-size: 0.88rem; }
+    .spec-table li span:first-child { color: var(--ink-secondary); }
+    .spec-table li span:last-child { font-family: var(--mono); font-size: 0.8rem; color: var(--ink); font-weight: 500; }
+
+    .checkout-box {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      padding: 1.15rem 1.25rem;
+    }
+    .checkout-row { display: flex; gap: 0.55rem; flex-wrap: wrap; margin-bottom: 0.65rem; }
+    .checkout-input {
+      background: #fff;
+      color: var(--ink);
+      border: 1px solid var(--border);
+      padding: 0.58rem 0.85rem;
+      font-family: var(--sans);
+      font-size: 0.875rem;
+      outline: none;
+    }
+    .checkout-input:focus { border-color: var(--accent); }
+    .checkout-btn {
+      width: 100%;
+      padding: 0.72rem 1.25rem;
+      background: var(--accent);
+      color: #F4F1EA;
+      border: 1px solid var(--accent);
+      font-family: var(--sans);
+      font-size: 0.9rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: background 0.18s ease;
+    }
+    .checkout-btn:hover { background: var(--ink); border-color: var(--ink); }
+    .checkout-btn:disabled { opacity: 0.6; cursor: default; }
+
     .cmd { background: #151C19; color: #F4F1EA; padding: 1.1rem 1.25rem; overflow-x: auto; font-family: var(--mono); font-size: .82rem; line-height: 1.8; margin: 1rem 0; }
     .cmd .c { color: #9CB3A7; }
-    .steps { display: grid; gap: 1rem; max-width: 58rem; }
-    .step { display: grid; grid-template-columns: 2.5rem 1fr; gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
-    .step-num { font-family: var(--mono); font-size: .8rem; color: var(--accent); }
-    .step h3 { margin: 0 0 .35rem; font-size: 1.05rem; }
-    .step p { margin: 0; font-size: .92rem; }
-    .link-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1.4rem; margin-top: 2rem; }
+    .link-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1.4rem; margin-top: 1.75rem; }
     .note { border-left: 2px solid var(--accent); padding: .2rem 0 .2rem 1rem; color: var(--ink-secondary); font-size: .92rem; }
-    @media (max-width: 860px) { .aegis-grid, .tier-grid { grid-template-columns: 1fr; } .aegis-hero { padding-top: 3.5rem; } .brand-sep, .brand-sub { display: none; } }
+    @media (max-width: 960px) {
+      .aegis-grid, .tier-grid, .arch-flow { grid-template-columns: 1fr; }
+      .arch-arrow { transform: rotate(90deg); padding: 0.35rem 0; }
+      .aegis-hero { padding-top: 3.5rem; }
+      .brand-sep, .brand-sub { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -90,57 +187,195 @@
       <nav class="nav-links" aria-label="Primary">
         <a href="/en" class="nav-link">Heurion.org</a>
         <a href="/en/aegis-os/" class="nav-link nav-link-active">Overview</a>
+        <a href="#pricing" class="nav-link">Plans &amp; Buy</a>
         <a href="/en/aegis-os/tutorial/" class="nav-link">Tutorial</a>
-        <a href="/aegis-cloud/dashboard" class="nav-link">Console &amp; Pricing</a>
+        <a href="/aegis-cloud/dashboard" class="nav-link">My Console</a>
         <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub ↗</a>
       </nav>
       <div class="nav-right">
         <a class="lang-btn" href="/aegis-os/">中文</a>
-        <a class="nav-cta" href="/aegis-cloud/dashboard">Console / Pro →</a>
+        <a class="nav-cta" href="#pricing" onclick="setTimeout(()=>document.getElementById('pro-email-input')?.focus(),150)">Buy Pro ($29/mo) →</a>
       </div>
     </div>
   </header>
 
   <main>
+    <!-- Hero -->
     <section class="aegis-hero">
       <div class="container">
-        <p class="label-caps">FLAGSHIP 02 · RUST · TRANSACTIONAL AGENT OS</p>
+        <p class="label-caps">FLAGSHIP 02 · RUST · TRANSACTIONAL MULTI-AGENT OS</p>
         <h1 class="heading-1">Aegis OS<br><em>Transactional multi-agent control plane</em></h1>
         <p class="lede">
           Aegis OS lets multiple coding agents (Claude Code, Codex, AGY) run safely in parallel: each agent gets its own CoW shadow workspace and kernel sandbox,
-          collaborates through Google A2A, requests personal memory through UOMP, and every boundary crossing goes through task-scoped leases, approval, revocation, and audit.
+          collaborates through Google A2A, requests personal memory through UOMP, and can offload heavy builds to 64GB cloud workspaces in one command.
         </p>
         <div class="hero-actions">
-          <a class="btn-solid" href="/en/aegis-os/tutorial/">Install to first task →</a>
-          <a class="link-arrow" href="/aegis-cloud/dashboard">Cloud Console &amp; Pro Subscription →</a>
-          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub repository →</a>
+          <a class="btn-solid" href="#pricing" onclick="setTimeout(()=>document.getElementById('pro-email-input')?.focus(),150)">Subscribe Pro ($29/mo) →</a>
+          <a class="link-arrow" href="#install">30-Second Free Install →</a>
+          <a class="link-arrow" href="/aegis-cloud/dashboard">Open My Console (Approvals &amp; Quotas) →</a>
         </div>
 
         <div class="aegis-grid">
           <div class="aegis-cell">
             <p class="label-caps">01 / ISOLATION</p>
-            <h3 class="heading-3">Isolation</h3>
-            <p>One CoW shadow workspace per agent; macOS Seatbelt / Linux Bubblewrap sandboxing; host credentials and out-of-bound writes denied by default.</p>
+            <h3 class="heading-3">CoW Workspaces &amp; Sandbox</h3>
+            <p>Each agent gets a millisecond APFS <code>clonefile</code> / Linux <code>FICLONE</code> Copy-on-Write shadow workspace and OS kernel sandbox with 0 prompts for in-sandbox work.</p>
           </div>
           <div class="aegis-cell">
             <p class="label-caps">02 / COLLABORATION</p>
-            <h3 class="heading-3">Collaboration</h3>
-            <p>Google A2A AgentCard, task lifecycle, peer registry, file claims, and the Live Collaboration Radar.</p>
+            <h3 class="heading-3">Google A2A Coordination</h3>
+            <p>Built-in AgentCard discovery, task state machine, advisory file claims (<code>coord_claim</code>), and 4-tier LCS Diff3 auto-merge across parallel agents.</p>
           </div>
           <div class="aegis-cell">
-            <p class="label-caps">03 / CONSENT</p>
-            <h3 class="heading-3">Consent &amp; Approvals</h3>
-            <p>Boundary commits auto-open the web approval console and auto-resume once approved (or run <code>aos approve</code>); UOMP memory consent enforces tag/key scopes with full audit.</p>
+            <p class="label-caps">03 / CONSENT &amp; TOTP</p>
+            <h3 class="heading-3">Boundary &amp; Memory Consent</h3>
+            <p>Host commits (<code>workspace_commit</code>) require explicit human or phone TOTP approval; UOMP personal memory access is scoped by tag/key and revocable anytime.</p>
           </div>
         </div>
       </div>
     </section>
 
-    <section class="aegis-section">
+    <!-- 01 / ARCHITECTURE DIAGRAM -->
+    <section id="architecture" class="aegis-section">
       <div class="container">
-        <p class="label-caps">01 / INSTALL</p>
-        <h2 class="heading-2">Install Aegis OS</h2>
-        <p>macOS and Linux are supported. Windows is not supported. After Homebrew installs the binary, run <code>aegis-os install</code> once to wire <code>agy</code>, <code>claude</code>, and <code>codex</code>.</p>
+        <p class="label-caps">01 / SYSTEM ARCHITECTURE</p>
+        <h2 class="heading-2">End-to-End 3-Stage Architecture</h2>
+        <p>Coding agents connect over MCP and lifecycle hooks into the Aegis OS microkernel, executing inside local OS kernel sandboxes or 64GB cloud workers on demand.</p>
+
+        <div class="arch-diagram">
+          <div class="arch-flow">
+            <!-- Stage 1 -->
+            <div class="arch-stage">
+              <div>
+                <p class="label-caps" style="margin-bottom:0.35rem;">STAGE 01 · CLIENTS</p>
+                <h3 style="margin:0 0 0.35rem; font-family:var(--serif); font-size:1.18rem; font-weight:400;">Coding Agent Clients</h3>
+                <p style="font-size:0.84rem; margin:0;">Wired automatically via a single <code>aegis-os install</code> command.</p>
+                <div class="arch-pill-list">
+                  <div class="arch-pill"><span>Claude Code</span><code>MCP + Hooks</code></div>
+                  <div class="arch-pill"><span>OpenAI Codex CLI</span><code>MCP + Wrapper</code></div>
+                  <div class="arch-pill"><span>Antigravity (AGY)</span><code>MCP + Rules</code></div>
+                </div>
+              </div>
+              <div style="margin-top:1rem; font-family:var(--mono); font-size:0.72rem; color:var(--ink-muted);">STDIO / STREAMABLE HTTP</div>
+            </div>
+
+            <div class="arch-arrow" aria-hidden="true">
+              <span>MCP / A2A</span>
+              <span style="font-size:1.1rem;">→</span>
+              <span>Zero-Trust</span>
+            </div>
+
+            <!-- Stage 2 -->
+            <div class="arch-stage arch-stage-core">
+              <div>
+                <p class="label-caps" style="margin-bottom:0.35rem; color:var(--accent);">STAGE 02 · AEGIS OS MICROKERNEL</p>
+                <h3 style="margin:0 0 0.35rem; font-family:var(--serif); font-size:1.18rem; font-weight:400;">Aegis OS Transactional Control Plane</h3>
+                <p style="font-size:0.84rem; margin:0;">Governs file I/O, sandbox execution, inter-agent IPC, and host commits.</p>
+                <div class="arch-pill-list">
+                  <div class="arch-pill"><span><strong>aos-vfs</strong> · CoW Shadow Workspace &amp; Diff3 Merge</span><code>6.3ms CoW</code></div>
+                  <div class="arch-pill"><span><strong>aos-ipc</strong> · Google A2A Bus &amp; File Claims</span><code>coord_claim</code></div>
+                  <div class="arch-pill"><span><strong>aos-policy</strong> · Boundary Leases &amp; RFC 6238 TOTP</span><code>Human Gate</code></div>
+                  <div class="arch-pill"><span><strong>UOMP &amp; Recorder</strong> · Memory Consent &amp; Audit</span><code>Ed25519</code></div>
+                </div>
+              </div>
+              <div style="margin-top:1rem; font-family:var(--mono); font-size:0.72rem; color:var(--accent);">90.7%–97.9% FEWER PROMPTS · 0.0% RED-TEAM ASR</div>
+            </div>
+
+            <div class="arch-arrow" aria-hidden="true">
+              <span>Local / Cloud</span>
+              <span style="font-size:1.1rem;">⇄</span>
+              <span>Hot Switch</span>
+            </div>
+
+            <!-- Stage 3 -->
+            <div class="arch-stage">
+              <div>
+                <p class="label-caps" style="margin-bottom:0.35rem;">STAGE 03 · EXECUTION BACKENDS</p>
+                <h3 style="margin:0 0 0.35rem; font-family:var(--serif); font-size:1.18rem; font-weight:400;">Local Sandbox ⇄ 64GB Cloud Workers</h3>
+                <p style="font-size:0.84rem; margin:0;">Run locally for free, or switch to 64GB cloud workers in one command.</p>
+                <div class="arch-pill-list">
+                  <div class="arch-pill"><span><strong>Local Mode ($0)</strong> · Seatbelt / Bubblewrap</span><code>Free Forever</code></div>
+                  <div class="arch-pill"><span><strong>Cloud Free ($0)</strong> · 1 Workspace · 200/day</span><code>10m / day</code></div>
+                  <div class="arch-pill" style="border-color:var(--accent); background:var(--accent-soft);"><span><strong>Cloud Pro ($29/mo)</strong> · 16 Workspaces · 8 Agents</span><code>64GB · 10h/d</code></div>
+                </div>
+              </div>
+              <div style="margin-top:1rem; font-family:var(--mono); font-size:0.72rem; color:var(--ink-muted);">aegis-os cloud up / down</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02 / PRICING & DIRECT IN-PAGE CHECKOUT -->
+    <section id="pricing" class="aegis-section-linen">
+      <div class="container">
+        <p class="label-caps">02 / PLANS &amp; DIRECT PURCHASE</p>
+        <h2 class="heading-2">Plans &amp; Direct Checkout</h2>
+        <p>Enter your work email below to subscribe directly to <strong>Aegis Cloud Pro ($29/mo)</strong> via Stripe without leaving this page. Existing subscribers can open <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">My Console</a> to view live quotas and approve escalations.</p>
+
+        <div class="tier-grid">
+          <!-- Left: Free Plan -->
+          <div class="tier-card">
+            <div>
+              <span class="tier-badge">LOCAL WORKSTATION + CLOUD TRIAL · $0 / MO</span>
+              <h3>Free Plan — $0 / month</h3>
+              <p style="font-size:0.9rem;">Local workstation sandboxing is unlimited and free forever, plus 1 free 64GB cloud trial workspace to test remote offloading.</p>
+              <ul class="spec-table">
+                <li><span>Local CoW Workspaces &amp; Kernel Sandbox</span><span>Unlimited · Free Forever</span></li>
+                <li><span>Google A2A Bus &amp; UOMP Memory Consent</span><span>Included</span></li>
+                <li><span>Cloud 64GB Shadow Workspaces</span><span>1 Workspace</span></li>
+                <li><span>Concurrent Cloud Agents</span><span>1 Agent</span></li>
+                <li><span>Daily Cloud Syscall Quota</span><span>200 / day</span></li>
+                <li><span>Daily 64GB Cloud Compute Time</span><span>10 min / day</span></li>
+              </ul>
+            </div>
+            <div>
+              <a class="btn-outline" href="#install" style="display:inline-flex; width:100%; justify-content:center;">Install Aegis OS for Free →</a>
+            </div>
+          </div>
+
+          <!-- Right: Pro Plan (Direct In-Page Checkout) -->
+          <div class="tier-card tier-card-pro">
+            <div>
+              <span class="tier-badge tier-badge-pro"><span class="dot-mint"></span>AEGIS CLOUD PRO · $29 / MO</span>
+              <h3>Pro Plan — $29 / month</h3>
+              <p style="font-size:0.9rem;">Built for multi-agent engineering. Offload heavy Rust / C++ / full-stack builds and test suites to dedicated 64GB cloud nodes with zero local CPU load.</p>
+              <ul class="spec-table">
+                <li><span>Cloud 64GB CoW Workspaces</span><span>16 Workspaces</span></li>
+                <li><span>Concurrent Parallel Agents</span><span>8 Agents (A2A)</span></li>
+                <li><span>Daily Syscall Quota</span><span>20,000 / day</span></li>
+                <li><span>Daily 64GB Cloud Compute Time</span><span>10 hrs / day (36,000s)</span></li>
+                <li><span>Phone TOTP Boundary Authenticator</span><span>RFC 6238 Hardware-Isolated</span></li>
+              </ul>
+
+              <!-- Direct Checkout Box on Product Page -->
+              <div class="checkout-box" style="margin-top:1.15rem;">
+                <p class="label-caps" style="margin:0 0 0.45rem; color:var(--accent);">BUY PRO DIRECTLY HERE ($29/MO · STRIPE CHECKOUT)</p>
+                <div class="checkout-row">
+                  <input id="pro-email-input" type="email" class="checkout-input" style="flex:1.4; min-width:190px;" placeholder="Enter your work email (you@company.com)" autocomplete="email" />
+                  <input id="pro-org-input" type="text" class="checkout-input" style="flex:0.8; min-width:120px; font-family:var(--mono); font-size:0.8rem;" placeholder="org_id (optional)" />
+                </div>
+                <button id="pro-buy-btn" type="button" class="checkout-btn" onclick="buyProDirectly()">
+                  Subscribe to Pro ($29/mo) →
+                </button>
+                <p id="pro-buy-status" style="font-family:var(--mono); font-size:0.78rem; margin:0.6rem 0 0; display:none;"></p>
+                <div id="pro-claim-box" style="display:none; margin-top:0.65rem;">
+                  <div style="font-size:0.78rem; color:var(--ink-secondary); margin-bottom:0.25rem;">After payment, run this one-liner in your terminal to claim your Pro key and launch your cloud workspace:</div>
+                  <pre class="cmd" style="margin:0; padding:0.65rem 0.85rem; font-size:0.76rem;"><code id="pro-claim-cmd">aegis-os cloud subscribe --plan pro --wait</code></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03 / INSTALL -->
+    <section id="install" class="aegis-section">
+      <div class="container">
+        <p class="label-caps">03 / QUICK INSTALL</p>
+        <h2 class="heading-2">Install Aegis OS in 30 Seconds</h2>
+        <p>Supports macOS and Linux. Run <code>aegis-os install</code> once after installation to wire <code>claude</code>, <code>codex</code>, and <code>agy</code>. For complete multi-agent and cloud workflows, read the <a href="/en/aegis-os/tutorial/" style="color:var(--accent);font-weight:500;">Full Tutorial →</a></p>
         <pre class="cmd"><span class="c"># Option A: Homebrew (macOS &amp; Linux)</span>
 brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
 brew install aegis-os
@@ -149,95 +384,13 @@ aegis-os install
 <span class="c"># Option B: One-line signed installer (automatically runs aegis-os install)</span>
 curl -fsSL https://heurion.org/aegis-cloud/install.sh | sh
 
-<span class="c"># Verify</span>
-aegis-os doctor</pre>
-        <p class="note">Without Homebrew, run the one-line signed installer above or download the platform binary from GitHub Releases and run <code>aegis-os install</code> once.</p>
-      </div>
-    </section>
-
-    <section class="aegis-section">
-      <div class="container">
-        <p class="label-caps">02 / FIRST RUN</p>
-        <h2 class="heading-2">First run</h2>
-        <div class="steps">
-          <div class="step">
-            <span class="step-num">01</span>
-            <div>
-              <h3>Launch your agent in a project</h3>
-              <p>Run <code>claude</code>, <code>codex</code>, or <code>agy</code> directly. Aegis OS hooks attach the runtime and start silently in Free Local CoW mode; to offload builds to a 64GB zero-local-load Cloud Sandbox, open the <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">Cloud Console &amp; Billing Center</a> anytime.</p>
-            </div>
-          </div>
-          <div class="step">
-            <span class="step-num">02</span>
-            <div>
-              <h3>Work in isolation, approve commits in 1 click</h3>
-              <p>Agent writes and tests execute inside the CoW shadow workspace with 0 prompts; when <code>workspace_commit</code> crosses the host boundary, Aegis OS auto-opens the approval console and auto-resumes once approved (or run <code>aos approve</code> in terminal).</p>
-            </div>
-          </div>
-          <div class="step">
-            <span class="step-num">03</span>
-            <div>
-              <h3>Approve memory access explicitly</h3>
-              <p>Agents request notes through UOMP. Aegis OS opens a local consent page automatically; select the tags / keys to grant, then Allow or Deny. No second terminal is required, and an agent cannot approve its own request.</p>
-            </div>
-          </div>
-          <div class="step">
-            <span class="step-num">04</span>
-            <div>
-              <h3>Revoke and audit at any time</h3>
-              <p><code>aegis-os memory revoke &lt;session-id&gt;</code> removes access immediately; a bound A2A task moves to <code>input-required</code>. Every allow/deny is recorded in <code>aegis-os memory audit</code>.</p>
-            </div>
-          </div>
-        </div>
+<span class="c"># Launch 64GB cloud workspace (or subscribe from CLI)</span>
+aegis-os cloud up</pre>
         <div class="link-row">
-          <a class="btn-solid" href="/en/aegis-os/tutorial/">Open the full tutorial →</a>
-          <a class="link-arrow" href="/en/aegis-os/tutorial/#memory">Memory consent flow →</a>
-          <a class="link-arrow" href="/en/aegis-os/tutorial/#a2a">Multi-agent / A2A →</a>
-          <a class="link-arrow" href="/aegis-cloud/dashboard">Cloud Console &amp; Pro Subscription →</a>
-        </div>
-      </div>
-    </section>
-
-    <section class="aegis-section">
-      <div class="container">
-        <p class="label-caps">03 / CORE COMMANDS</p>
-        <h2 class="heading-2">Common commands</h2>
-        <pre class="cmd"><span class="c"># Install check &amp; live multi-agent radar</span>
-aegis-os doctor
-aegis-os top
-
-<span class="c"># Boundary approval (auto-detects Local/Cloud &amp; latest pending escalation; alias: aos approve)</span>
-aegis-os approve
-
-<span class="c"># Memory: import, client config, local server</span>
-aegis-os memory setup claude --vault ~/Notes
-aegis-os memory ui
-aegis-os memory pending
-aegis-os memory approve &lt;request-id&gt;
-aegis-os memory audit
-aegis-os memory revoke &lt;session-id&gt;
-
-<span class="c"># Multi-agent: A2A task and board</span>
-aegis-os ipc request --to worker --subject "Review auth" --message "Read the auth module"
-aegis-os a2a board
-aegis-os a2a show &lt;task-id&gt;
-
-<span class="c"># Task-scoped lease (advanced)</span>
-aegis-os policy lease --action-pattern workspace_commit --ttl-secs 3600 --task-id &lt;task-id&gt;</pre>
-        <p class="note">If you use a custom <code>--runtime-dir</code>, pass the same runtime directory to <code>a2a board</code>, <code>a2a show</code>, and <code>memory revoke</code>.</p>
-      </div>
-    </section>
-
-    <section class="aegis-section">
-      <div class="container">
-        <p class="label-caps">04 / LINKS</p>
-        <h2 class="heading-2">Keep reading</h2>
-        <div class="link-row">
-          <a class="btn-solid" href="/en/aegis-os/tutorial/">Full tutorial →</a>
-          <a class="link-arrow" href="/aegis-cloud/dashboard">Aegis Cloud Console &amp; Subscription →</a>
-          <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP spec →</a>
-          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_APPLICATION_PROTOCOL.md" target="_blank" rel="noopener">AAP-1.0 spec →</a>
-          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub repository →</a>
+          <a class="btn-solid" href="/en/aegis-os/tutorial/">Read the full tutorial →</a>
+          <a class="link-arrow" href="/aegis-cloud/dashboard">Open My Console (Approvals &amp; Quotas) →</a>
+          <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP Spec →</a>
+          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub Repository →</a>
         </div>
       </div>
     </section>
@@ -257,6 +410,8 @@ aegis-os policy lease --action-pattern workspace_commit --ttl-secs 3600 --task-i
         </a>
         <div class="foot-right">
           <span>© 2026 Heurion Research · MIT Licensed</span>
+          <a href="/en/aegis-os/tutorial/" class="foot-link">Tutorial</a>
+          <a href="/aegis-cloud/dashboard" class="foot-link">My Console</a>
           <a href="/llms.txt" class="foot-link">LLMs.txt</a>
           <a href="/sitemap.xml" class="foot-link">Sitemap</a>
         </div>
@@ -264,5 +419,55 @@ aegis-os policy lease --action-pattern workspace_commit --ttl-secs 3600 --task-i
     </div>
   </footer>
 
+  <script>
+    async function buyProDirectly() {
+      const emailEl = document.getElementById('pro-email-input');
+      const orgEl = document.getElementById('pro-org-input');
+      const btn = document.getElementById('pro-buy-btn');
+      const statusEl = document.getElementById('pro-buy-status');
+      const claimBox = document.getElementById('pro-claim-box');
+      const claimCmd = document.getElementById('pro-claim-cmd');
+
+      const email = (emailEl.value || '').trim();
+      const org = (orgEl.value || '').trim() || undefined;
+      if (!email || !email.includes('@')) {
+        statusEl.style.display = 'block';
+        statusEl.style.color = '#9E332E';
+        statusEl.textContent = 'Please enter your work email first (used for Stripe receipt & TOTP setup).';
+        emailEl.focus();
+        return;
+      }
+
+      btn.disabled = true;
+      statusEl.style.display = 'block';
+      statusEl.style.color = '#4A534E';
+      statusEl.textContent = 'Creating Stripe Pro checkout session…';
+
+      try {
+        const res = await fetch('/aegis-cloud/v1/billing/checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plan_tier: 'pro', email, org_id: org })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+
+        if (data.claim_token) {
+          claimBox.style.display = 'block';
+          claimCmd.textContent = 'aegis-os cloud subscribe --claim --claim-token ' + data.claim_token + ' && aegis-os cloud up';
+        }
+        if (data.checkout_url) {
+          window.open(data.checkout_url, '_blank', 'noopener');
+          statusEl.style.color = '#233E33';
+          statusEl.textContent = 'Stripe Checkout opened in a new tab. After payment, run the command below to claim your key!';
+        }
+      } catch (e) {
+        statusEl.style.color = '#9E332E';
+        statusEl.textContent = 'Checkout failed: ' + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+  </script>
 </body>
 </html>

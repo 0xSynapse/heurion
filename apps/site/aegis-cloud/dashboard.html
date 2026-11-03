@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aegis Cloud — Developer Console · Heurion Research</title>
+  <meta name="description" content="Aegis Cloud User Console — Manage your boundary approvals, TOTP authenticator, subscription status, and live quota usage." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    /* Heurion Research — Nordic / Scandinavian Editorial Design System (v6) */
+    :root {
+      --bg-paper: #FAF8F4;
+      --bg-neutral: #EFECE4;
+      --bg-elevated: #FDFCF9;
+      --ink: #151C19;
+      --ink-secondary: #4A534E;
+      --ink-muted: #646D68;
+      --accent: #233E33;
+      --accent-soft: #E3ECE7;
+      --mint: #00C472;
+      --warn: #8B5E1B;
+      --warn-soft: #F7EFE0;
+      --danger: #9E332E;
+      --danger-soft: #F8E9E8;
+      --hairline: #DFDAD0;
+      --font-serif: 'Newsreader', 'Noto Serif SC', Georgia, serif;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --max-w: 1220px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html { font-size: 16px; scroll-behavior: smooth; background: var(--bg-paper); color: var(--ink); }
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      font-weight: 400;
+      line-height: 1.65;
+      color: var(--ink);
+      background-color: var(--bg-paper);
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease; }
+    a:hover { color: var(--accent); }
+    p { margin: 0 0 0.7rem; color: var(--ink-secondary); }
+    p:last-child { margin-bottom: 0; }
+    code { font-family: var(--font-mono); }
+
+    body[data-lang="zh"] [data-en] { display: none !important; }
+    body[data-lang="en"] [data-zh] { display: none !important; }
+
+    .container { max-width: var(--max-w); margin: 0 auto; padding: 0 3.5rem; }
+
+    /* Top Navigation */
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(250, 248, 244, 0.94);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--hairline);
+    }
+    .nav-inner {
+      max-width: var(--max-w);
+      margin: 0 auto;
+      padding: 1.15rem 3.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+    }
+    .brand-group { display: flex; align-items: center; gap: 0.75rem; white-space: nowrap; flex-shrink: 0; }
+    .brand { display: inline-flex; align-items: center; gap: 0.7rem; color: var(--ink); white-space: nowrap; flex-shrink: 0; }
+    .brand-mark { width: 24px; height: 22px; display: block; flex-shrink: 0; }
+    .brand-word {
+      font-family: var(--font-sans);
+      font-size: 0.92rem;
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--ink);
+    }
+    .brand-sep { color: var(--hairline); font-weight: 300; flex-shrink: 0; }
+    .brand-sub {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      padding: 0.18rem 0.52rem;
+      background: var(--accent-soft);
+      border: 1px solid rgba(35, 62, 51, 0.2);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .nav-links { display: flex; align-items: center; gap: 1.5rem; flex-wrap: nowrap; }
+    .nav-link { font-size: 0.875rem; letter-spacing: 0.02em; color: var(--ink-secondary); white-space: nowrap; flex-shrink: 0; }
+    .nav-link:hover, .nav-link-active { color: var(--ink); font-weight: 500; }
+    .nav-right { display: flex; align-items: center; gap: 0.75rem; white-space: nowrap; flex-shrink: 0; }
+    .lang-switch {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      padding: 0.28rem 0.6rem;
+      border: 1px solid var(--hairline);
+      color: var(--ink-secondary);
+      background: transparent;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .lang-switch:hover { border-color: var(--ink); color: var(--ink); }
+    .nav-cta {
+      font-size: 0.8125rem;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      padding: 0.5rem 1.05rem;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #F4F1EA;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .nav-cta:hover { background: var(--ink); border-color: var(--ink); color: #F4F1EA; }
+
+    /* Labels & Badges */
+    .label-caps {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-muted);
+      margin-bottom: 0.4rem;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.38rem;
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      padding: 0.24rem 0.62rem;
+      border: 1px solid var(--hairline);
+      color: var(--ink-secondary);
+      background: var(--bg-paper);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .badge-ok { color: var(--accent); border-color: rgba(35, 62, 51, 0.32); background: var(--accent-soft); }
+    .badge-warn { color: var(--warn); border-color: rgba(139, 94, 27, 0.35); background: var(--warn-soft); }
+    .badge-err { color: var(--danger); border-color: rgba(158, 51, 46, 0.35); background: var(--danger-soft); }
+
+    /* Header & Account Identity Bar */
+    .console-header {
+      padding: 2.1rem 0 1.75rem;
+      border-bottom: 1px solid var(--hairline);
+      background: linear-gradient(180deg, rgba(239, 236, 228, 0.55) 0%, rgba(250, 248, 244, 0.95) 100%);
+    }
+    .console-top-grid {
+      display: grid;
+      grid-template-columns: 0.95fr 1.05fr;
+      gap: 1.75rem;
+      align-items: end;
+      margin-bottom: 1.35rem;
+    }
+    .console-title {
+      font-family: var(--font-serif);
+      font-weight: 300;
+      font-size: clamp(1.65rem, 2.3vw, 2.15rem);
+      line-height: 1.2;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      margin: 0 0 0.35rem;
+    }
+    .console-title em { font-style: italic; font-weight: 400; color: var(--accent); }
+    .auth-bar-box {
+      background: var(--bg-elevated);
+      border: 1px solid var(--hairline);
+      padding: 0.95rem 1.15rem;
+    }
+    .auth-bar-row {
+      display: flex;
+      gap: 0.45rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border: 1px solid var(--hairline);
+      background: var(--bg-elevated);
+    }
+    .kpi-cell {
+      padding: 0.9rem 1.15rem;
+      border-right: 1px solid var(--hairline);
+    }
+    .kpi-cell:last-child { border-right: none; }
+    .kpi-num {
+      font-family: var(--font-serif);
+      font-size: 1.42rem;
+      font-weight: 400;
+      color: var(--ink);
+      line-height: 1.2;
+      margin-bottom: 0.15rem;
+    }
+    .kpi-sub { font-family: var(--font-mono); font-size: 0.72rem; color: var(--ink-muted); }
+
+    /* Sections & Cards */
+    .sec-block { padding: 2.35rem 0; border-bottom: 1px solid var(--hairline); }
+    .sec-block-neutral { padding: 2.35rem 0; background: var(--bg-neutral); border-bottom: 1px solid var(--hairline); }
+    .sec-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1.25rem;
+      padding-bottom: 0.85rem;
+      margin-bottom: 1.35rem;
+      border-bottom: 1px solid var(--hairline);
+      flex-wrap: wrap;
+    }
+    .sec-head-left { display: flex; align-items: baseline; gap: 0.9rem; flex-wrap: wrap; }
+    .sec-num { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.14em; color: var(--ink-muted); text-transform: uppercase; }
+    .sec-title { font-family: var(--font-serif); font-weight: 400; font-size: 1.32rem; color: var(--ink); margin: 0; }
+
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem; }
+    .card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--hairline);
+      padding: 1.5rem 1.65rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .card-featured { border-color: var(--accent); border-width: 1.5px; }
+    .card-title { font-family: var(--font-serif); font-size: 1.2rem; font-weight: 400; color: var(--ink); margin: 0 0 0.45rem; }
+
+    /* Inputs & Buttons */
+    .input {
+      background: var(--bg-paper);
+      color: var(--ink);
+      border: 1px solid var(--hairline);
+      padding: 0.5rem 0.78rem;
+      font-family: var(--font-sans);
+      font-size: 0.83rem;
+      outline: none;
+    }
+    .input:focus { border-color: var(--accent); background: #fff; }
+    .input-mono { font-family: var(--font-mono); font-size: 0.78rem; }
+    .input-totp {
+      width: 145px;
+      font-family: var(--font-mono);
+      font-size: 0.95rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-align: center;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      padding: 0.5rem 0.98rem;
+      font-family: var(--font-sans);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      border: 1px solid var(--ink);
+      background: transparent;
+      color: var(--ink);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.18s ease;
+    }
+    .btn:hover { background: var(--ink); color: var(--bg-paper); }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #F4F1EA; }
+    .btn-primary:hover { background: var(--ink); border-color: var(--ink); color: #F4F1EA; }
+    .btn-ghost { border-color: var(--hairline); color: var(--ink-secondary); background: var(--bg-paper); }
+    .btn-ghost:hover { border-color: var(--ink); color: var(--ink); background: var(--bg-elevated); }
+    .btn-danger { border-color: rgba(158, 51, 46, 0.4); color: var(--danger); background: transparent; }
+    .btn-danger:hover { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
+    .btn:disabled { opacity: 0.55; cursor: default; }
+
+    /* Approvals & Leases */
+    .totp-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.85rem 1.15rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--hairline);
+      margin-bottom: 1.15rem;
+      flex-wrap: wrap;
+    }
+    .esc-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--hairline);
+      border-left: 3px solid var(--warn);
+      padding: 1.2rem 1.4rem;
+      margin-bottom: 0.85rem;
+    }
+    .esc-meta {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 0.3rem 0.85rem;
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      padding: 0.7rem 0.9rem;
+      background: var(--bg-paper);
+      border: 1px solid var(--hairline);
+      margin: 0.7rem 0;
+    }
+    .esc-meta dt { color: var(--ink-muted); text-transform: uppercase; font-size: 0.68rem; }
+    .esc-meta dd { margin: 0; color: var(--ink); word-break: break-all; }
+
+    /* Quota Progress Bars & Spec Lists */
+    .spec-list { list-style: none; padding: 0; margin: 0.65rem 0 0.95rem; border-top: 1px solid var(--hairline); }
+    .spec-list li {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.46rem 0;
+      border-bottom: 1px solid var(--hairline);
+      font-size: 0.85rem;
+    }
+    .spec-list li span:first-child { color: var(--ink-secondary); }
+    .spec-list li span:last-child { font-family: var(--font-mono); font-size: 0.79rem; color: var(--ink); font-weight: 500; }
+
+    .quota-meter { margin-bottom: 1rem; }
+    .quota-meter-head {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.83rem;
+      margin-bottom: 0.3rem;
+    }
+    .quota-meter-head span:last-child { font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink); }
+    .quota-track {
+      height: 7px;
+      background: var(--bg-neutral);
+      border: 1px solid var(--hairline);
+      overflow: hidden;
+    }
+    .quota-fill {
+      height: 100%;
+      background: var(--accent);
+      width: 0%;
+      transition: width 0.25s ease;
+    }
+
+    .item-row {
+      padding: 0.7rem 0.9rem;
+      border: 1px solid var(--hairline);
+      background: var(--bg-paper);
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .foot { background: var(--bg-paper); border-top: 1px solid var(--hairline); padding: 2rem 0; }
+    .foot-bar { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; flex-wrap: wrap; }
+    .foot-right { display: flex; flex-wrap: wrap; align-items: center; gap: 1.35rem; font-size: 0.78rem; color: var(--ink-muted); }
+    .foot-link { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em; color: var(--ink-secondary); }
+
+    @media (max-width: 980px) {
+      .container, .nav-inner { padding-left: 1.25rem; padding-right: 1.25rem; }
+      .nav-links { display: none; }
+      .console-top-grid, .grid-2, .kpi-strip { grid-template-columns: 1fr; }
+      .kpi-cell { border-right: none; border-bottom: 1px solid var(--hairline); }
+    }
+  </style>
+</head>
+<body data-lang="zh">
+
+  <!-- Top Navigation -->
+  <header class="nav" role="banner">
+    <div class="nav-inner">
+      <div class="brand-group">
+        <a class="brand" href="https://heurion.org/" aria-label="Heurion Research">
+          <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+            <rect fill="#151C19" x="0" y="10" width="18" height="80" rx="9"/>
+            <rect fill="#151C19" x="62" y="30" width="18" height="60" rx="9"/>
+            <rect fill="#00C472" x="14" y="42" width="52" height="18" rx="9"/>
+            <circle fill="#00C472" cx="80" cy="20" r="11"/>
+          </svg>
+          <span class="brand-word">HEURION</span>
+        </a>
+        <span class="brand-sep">/</span>
+        <a href="/aegis-os/" class="brand-sub">AEGIS OS</a>
+      </div>
+
+      <nav class="nav-links" aria-label="Primary Navigation">
+        <a href="/" class="nav-link"><span data-zh>主站</span><span data-en>Heurion.org</span></a>
+        <a href="/aegis-os/" class="nav-link"><span data-zh>概览</span><span data-en>Overview</span></a>
+        <a href="/aegis-os/#pricing" class="nav-link"><span data-zh>方案与购买</span><span data-en>Plans &amp; Buy</span></a>
+        <a href="/aegis-os/tutorial/" class="nav-link"><span data-zh>使用教程</span><span data-en>Tutorial</span></a>
+        <a href="/aegis-cloud/dashboard" class="nav-link nav-link-active"><span data-zh>我的控制台</span><span data-en>My Console</span></a>
+        <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub ↗</a>
+      </nav>
+
+      <div class="nav-right">
+        <span id="conn-badge" class="badge"><span data-zh>未连接账户</span><span data-en>Not Connected</span></span>
+        <button type="button" class="lang-switch" id="lang-toggle" onclick="toggleLang()">EN</button>
+        <a class="nav-cta" href="/aegis-os/#pricing"><span data-zh>购买 Pro ($29/月) →</span><span data-en>Buy Pro ($29/mo) →</span></a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Header & Account Bar -->
+    <section class="console-header">
+      <div class="container">
+        <div class="console-top-grid">
+          <div>
+            <p class="label-caps">AEGIS CLOUD · USER CONSOLE</p>
+            <h1 class="console-title">
+              <span data-zh>Aegis Cloud — <em>我的审批与订阅</em></span>
+              <span data-en>Aegis Cloud — <em>My Approvals &amp; Subscription</em></span>
+            </h1>
+            <p style="font-size:0.9rem;">
+              <span data-zh>连接工作区密钥（<code>ak_live_...</code>）或输入购买邮箱，查看待审批的边界请求与您当前的订阅配额。</span>
+              <span data-en>Connect your workspace key (<code>ak_live_...</code>) or enter your billing email to manage boundary approvals and your subscription quotas.</span>
+            </p>
+          </div>
+
+          <div class="auth-bar-box">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+              <span class="label-caps" style="margin:0;">
+                <span data-zh>身份连接：输入密钥（审批与状态）或 购买邮箱（查订阅）</span>
+                <span data-en>ACCOUNT: ENTER API KEY (APPROVALS) OR BILLING EMAIL (SUBSCRIPTION)</span>
+              </span>
+              <span id="key-org-hint" style="font-family:var(--font-mono); font-size:0.72rem; color:var(--accent);"></span>
+            </div>
+            <div class="auth-bar-row">
+              <input id="api-key-input" type="password" class="input input-mono" style="flex:1.1; min-width:155px;" placeholder="ak_live_... / aop_..." autocomplete="off" />
+              <button type="button" class="btn btn-primary" onclick="connectKey()"><span data-zh>连接密钥</span><span data-en>Connect Key</span></button>
+              <input id="lookup-email-input" type="email" class="input" style="flex:1; min-width:150px;" placeholder="you@company.com" autocomplete="email" />
+              <button type="button" class="btn btn-ghost" onclick="lookupBillingStatus()"><span data-zh>查订阅</span><span data-en>Lookup</span></button>
+              <button type="button" class="btn btn-ghost" onclick="disconnectKey()"><span data-zh>清除</span><span data-en>Clear</span></button>
+            </div>
+            <p id="lookup-status-msg" style="font-family:var(--font-mono); font-size:0.74rem; margin-top:0.45rem; display:none;"></p>
+          </div>
+        </div>
+
+        <div class="kpi-strip">
+          <div class="kpi-cell">
+            <div class="label-caps"><span data-zh>我的当前套餐</span><span data-en>MY PLAN TIER</span></div>
+            <div class="kpi-num" id="kpi-plan">Free ($0)</div>
+            <div class="kpi-sub" id="kpi-org"><span data-zh>未绑定租户</span><span data-en>No tenant loaded</span></div>
+          </div>
+          <div class="kpi-cell">
+            <div class="label-caps"><span data-zh>待我审批请求</span><span data-en>PENDING APPROVALS</span></div>
+            <div class="kpi-num" id="kpi-pending">0</div>
+            <div class="kpi-sub" id="kpi-leases-sub"><span data-zh>生效租约：0</span><span data-en>Active leases: 0</span></div>
+          </div>
+          <div class="kpi-cell">
+            <div class="label-caps"><span data-zh>今日系统调用 (已用 / 总额)</span><span data-en>DAILY SYSCALLS (USED / LIMIT)</span></div>
+            <div class="kpi-num" id="kpi-syscalls">0 / 200</div>
+            <div class="kpi-sub" id="kpi-agents-sub"><span data-zh>并发 Agent：0 / 1</span><span data-en>Parallel agents: 0 / 1</span></div>
+          </div>
+          <div class="kpi-cell">
+            <div class="label-caps"><span data-zh>今日 64GB 算力 (已用 / 总额)</span><span data-en>DAILY 64GB COMPUTE</span></div>
+            <div class="kpi-num" id="kpi-compute">0s / 600s</div>
+            <div class="kpi-sub" id="kpi-workspaces"><span data-zh>活跃云端工作区：0</span><span data-en>Active workspaces: 0</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 01 / MY BOUNDARY APPROVALS & TOTP -->
+    <section id="approvals-panel" class="sec-block">
+      <div class="container">
+        <div class="sec-head">
+          <div class="sec-head-left">
+            <span class="sec-num">01 / MY APPROVALS</span>
+            <h2 class="sec-title">
+              <span data-zh>我的边界审批请求与授权租约</span>
+              <span data-en>My Boundary Approvals &amp; Active Leases</span>
+            </h2>
+          </div>
+          <button type="button" class="btn btn-ghost" onclick="refreshAll()">
+            <span data-zh>刷新审批列表</span><span data-en>Refresh Approvals</span>
+          </button>
+        </div>
+
+        <!-- Phone TOTP Authenticator Status -->
+        <div class="totp-bar">
+          <div>
+            <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.15rem;">
+              <strong style="font-size:0.88rem; color:var(--ink);">
+                <span data-zh>我的手机 TOTP 审批验证器 (RFC 6238)</span>
+                <span data-en>My Phone TOTP Authenticator (RFC 6238)</span>
+              </strong>
+              <span id="totp-status-badge" class="badge"><span data-zh>未检测</span><span data-en>Unchecked</span></span>
+            </div>
+            <p style="font-size:0.8rem; margin:0;">
+              <span data-zh>用于批准云端越界请求。若尚未绑定或需更换手机，请在右侧输入邮箱发送扫码绑定链接。</span>
+              <span data-en>Used to approve cloud boundary escalations. Enter your email on the right to receive a QR enrollment link.</span>
+            </p>
+          </div>
+          <div style="display:flex; gap:0.45rem; align-items:center; flex-wrap:wrap;">
+            <input id="totp-enroll-email" type="email" class="input" style="width:210px;" placeholder="you@company.com" />
+            <button type="button" class="btn btn-ghost" onclick="sendTotpEnrollEmail()">
+              <span data-zh>发送绑定二维码邮件</span><span data-en>Send QR Setup Email</span>
+            </button>
+          </div>
+        </div>
+        <p id="totp-enroll-msg" style="font-family:var(--font-mono); font-size:0.76rem; margin-bottom:1rem; display:none;"></p>
+
+        <div class="grid-2">
+          <!-- Left: Pending Escalations -->
+          <div>
+            <div class="label-caps" style="margin-bottom:0.55rem;">
+              <span data-zh>待审批越界请求 (PENDING ESCALATIONS)</span>
+              <span data-en>PENDING BOUNDARY ESCALATIONS</span>
+            </div>
+            <div id="escalations-container">
+              <div class="card" style="padding:1.25rem 1.4rem;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">
+                  <div>
+                    <strong style="color:var(--accent); font-size:0.92rem;">
+                      <span data-zh>当前无待审批的越界请求</span>
+                      <span data-en>No Pending Boundary Requests</span>
+                    </strong>
+                    <p style="font-size:0.82rem; margin:0.2rem 0 0;">
+                      <span data-zh>当您的 Agent 发起 <code>workspace_commit</code> 等越界操作时，审批项将在此处实时显示。</span>
+                      <span data-en>When your agent triggers <code>workspace_commit</code> or a gated action, it will appear here for approval.</span>
+                    </p>
+                  </div>
+                  <span class="badge badge-ok">0 PENDING</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Active Session Leases -->
+          <div>
+            <div class="label-caps" style="margin-bottom:0.55rem;">
+              <span data-zh>我已授权的生效租约 (ACTIVE SESSION LEASES)</span>
+              <span data-en>MY ACTIVE SESSION LEASES</span>
+            </div>
+            <div class="card" style="padding:1.25rem 1.4rem;">
+              <div id="leases-list">
+                <p style="font-size:0.84rem; color:var(--ink-muted); margin:0;">
+                  <span data-zh>当前暂无生效中的会话租约。批准 1 小时租约后将在此处列出。</span>
+                  <span data-en>No active session leases right now. Approved 1-hour leases will be listed here.</span>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02 / MY SUBSCRIPTION & QUOTA USAGE -->
+    <section id="subscription-panel" class="sec-block-neutral">
+      <div class="container">
+        <div class="sec-head">
+          <div class="sec-head-left">
+            <span class="sec-num">02 / MY SUBSCRIPTION &amp; QUOTAS</span>
+            <h2 class="sec-title">
+              <span data-zh>我的购买信息与配额使用详情</span>
+              <span data-en>My Subscription &amp; Quota Usage</span>
+            </h2>
+          </div>
+          <span id="sub-status-badge" class="badge"><span data-zh>套餐状态：Free</span><span data-en>Plan: Free</span></span>
+        </div>
+
+        <div class="grid-2">
+          <!-- Left: My Subscription Details & Upgrade -->
+          <article class="card card-featured">
+            <div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+                <span class="label-caps" style="margin:0; color:var(--accent);">MY SUBSCRIPTION DETAILS</span>
+                <span id="sub-tier-pill" class="badge badge-ok">FREE ($0/MO)</span>
+              </div>
+              <h3 class="card-title" id="sub-card-heading">
+                <span data-zh>当前订阅：Free 免费版 ($0 / 月)</span>
+                <span data-en>Current Plan: Free Tier ($0 / month)</span>
+              </h3>
+
+              <ul class="spec-list">
+                <li>
+                  <span><span data-zh>绑定租户 / 组织 ID</span><span data-en>Tenant / Org ID</span></span>
+                  <span id="sub-org-val">—</span>
+                </li>
+                <li>
+                  <span><span data-zh>订阅计费状态</span><span data-en>Billing Status</span></span>
+                  <span id="sub-active-val">Free Tier</span>
+                </li>
+                <li>
+                  <span><span data-zh>线上 CoW 工作区上限</span><span data-en>Cloud Workspaces Limit</span></span>
+                  <span id="sub-ws-limit">1 Workspace</span>
+                </li>
+                <li>
+                  <span><span data-zh>并发协同 Agent 上限</span><span data-en>Concurrent Agents Limit</span></span>
+                  <span id="sub-agent-limit">1 Agent</span>
+                </li>
+                <li>
+                  <span><span data-zh>每日系统调用上限</span><span data-en>Daily Syscalls Limit</span></span>
+                  <span id="sub-syscall-limit">200 / day</span>
+                </li>
+                <li>
+                  <span><span data-zh>每日 64GB 沙箱算力上限</span><span data-en>Daily 64GB Compute Limit</span></span>
+                  <span id="sub-compute-limit">600s (10 min / day)</span>
+                </li>
+              </ul>
+            </div>
+
+            <div style="background:var(--bg-paper); border:1px solid var(--hairline); padding:0.95rem 1.05rem;">
+              <div class="label-caps" style="margin-bottom:0.4rem;">
+                <span data-zh>升级或续订 Pro 专业版 ($29/月 · 16 工作区 / 8 Agent / 10h 算力)</span>
+                <span data-en>UPGRADE OR RENEW PRO ($29/MO · 16 WORKSPACES / 8 AGENTS / 10H COMPUTE)</span>
+              </div>
+              <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                <input id="pro-email-input" type="email" class="input" style="flex:1; min-width:170px;" placeholder="you@company.com" autocomplete="email" />
+                <button id="pro-checkout-btn" type="button" class="btn btn-primary" onclick="startWebProCheckout()">
+                  <span data-zh>升级 / 续订 Pro ($29/月) →</span>
+                  <span data-en>Upgrade / Renew Pro ($29/mo) →</span>
+                </button>
+              </div>
+              <p id="pro-checkout-status" style="font-family:var(--font-mono); font-size:0.74rem; margin-top:0.45rem; display:none;"></p>
+            </div>
+          </article>
+
+          <!-- Right: Live Quota Meters & My Active Cloud Workspaces -->
+          <article class="card">
+            <div>
+              <span class="label-caps">MY REAL-TIME QUOTA USAGE</span>
+              <h3 class="card-title">
+                <span data-zh>今日配额消耗与我的云端工作区</span>
+                <span data-en>Today's Quota Usage &amp; My Cloud Workspaces</span>
+              </h3>
+
+              <div style="margin-top:0.85rem;">
+                <div class="quota-meter">
+                  <div class="quota-meter-head">
+                    <span><span data-zh>今日系统调用 (Daily Syscalls)</span><span data-en>Daily Syscalls</span></span>
+                    <span id="meter-syscalls-text">0 / 200 (0%)</span>
+                  </div>
+                  <div class="quota-track"><div id="meter-syscalls-bar" class="quota-fill"></div></div>
+                </div>
+
+                <div class="quota-meter">
+                  <div class="quota-meter-head">
+                    <span><span data-zh>今日 64GB 沙箱算力时长 (Daily Compute)</span><span data-en>Daily 64GB Compute Time</span></span>
+                    <span id="meter-compute-text">0s / 600s (0%)</span>
+                  </div>
+                  <div class="quota-track"><div id="meter-compute-bar" class="quota-fill"></div></div>
+                </div>
+
+                <div class="quota-meter">
+                  <div class="quota-meter-head">
+                    <span><span data-zh>并行协同 Agent 数 (Concurrent Agents)</span><span data-en>Concurrent Agents</span></span>
+                    <span id="meter-agents-text">0 / 1 (0%)</span>
+                  </div>
+                  <div class="quota-track"><div id="meter-agents-bar" class="quota-fill"></div></div>
+                </div>
+              </div>
+
+              <div style="margin-top:1.25rem; padding-top:0.9rem; border-top:1px solid var(--hairline);">
+                <div class="label-caps" style="margin-bottom:0.5rem;">
+                  <span data-zh>我的活跃云端工作区 (MY ACTIVE CLOUD WORKSPACES)</span>
+                  <span data-en>MY ACTIVE CLOUD WORKSPACES</span>
+                </div>
+                <div id="workspaces-list">
+                  <p style="font-size:0.82rem; color:var(--ink-muted); margin:0;">
+                    <span data-zh>连接工作区密钥后将显示您名下正在运行的云端影子工作区。</span>
+                    <span data-en>Connect your workspace API key above to list your active cloud shadow workspaces.</span>
+                  </p>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot" role="contentinfo">
+    <div class="container">
+      <div class="foot-bar">
+        <a class="brand" href="https://heurion.org/" aria-label="Heurion Research">
+          <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+            <rect fill="#151C19" x="0" y="10" width="18" height="80" rx="9"/>
+            <rect fill="#151C19" x="62" y="30" width="18" height="60" rx="9"/>
+            <rect fill="#00C472" x="14" y="42" width="52" height="18" rx="9"/>
+            <circle fill="#00C472" cx="80" cy="20" r="11"/>
+          </svg>
+          <span class="brand-word">HEURION</span>
+        </a>
+        <div class="foot-right">
+          <span>© 2026 Heurion Research · Aegis OS</span>
+          <a href="/aegis-os/" class="foot-link"><span data-zh>产品概览与购买</span><span data-en>Overview &amp; Pricing</span></a>
+          <a href="/aegis-os/tutorial/" class="foot-link"><span data-zh>使用教程</span><span data-en>Tutorial</span></a>
+          <a href="/aegis-cloud/dashboard" class="foot-link"><span data-zh>我的控制台</span><span data-en>My Console</span></a>
+          <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="foot-link">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const apiBase = location.pathname.startsWith('/aegis-cloud') ? '/aegis-cloud' : '';
+    const qs = new URLSearchParams(location.search);
+    const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
+
+    let currentLang = localStorage.getItem('aegis_lang') || 'zh';
+    function applyLang(lang) {
+      currentLang = lang === 'en' ? 'en' : 'zh';
+      document.body.setAttribute('data-lang', currentLang);
+      document.documentElement.lang = currentLang === 'en' ? 'en' : 'zh-CN';
+      const btn = document.getElementById('lang-toggle');
+      if (btn) btn.textContent = currentLang === 'en' ? '中文' : 'EN';
+      localStorage.setItem('aegis_lang', currentLang);
+    }
+    function toggleLang() {
+      applyLang(currentLang === 'zh' ? 'en' : 'zh');
+    }
+    applyLang(currentLang);
+
+    let authKey = hashParams.get('key') || sessionStorage.getItem('aegis_approve_key') || '';
+    if (hashParams.get('key')) {
+      sessionStorage.setItem('aegis_approve_key', authKey);
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+    const keyInputEl = document.getElementById('api-key-input');
+    if (keyInputEl && authKey) keyInputEl.value = authKey;
+
+    let currentOrgId = qs.get('org') || '';
+    let requireTotp = false;
+
+    function authHeaders() {
+      const h = { 'Content-Type': 'application/json' };
+      if (authKey) h['Authorization'] = 'Bearer ' + authKey;
+      return h;
+    }
+
+    function connectKey() {
+      const val = document.getElementById('api-key-input').value.trim();
+      if (!val) return;
+      authKey = val;
+      sessionStorage.setItem('aegis_approve_key', authKey);
+      refreshAll();
+    }
+
+    function disconnectKey() {
+      authKey = '';
+      sessionStorage.removeItem('aegis_approve_key');
+      document.getElementById('api-key-input').value = '';
+      document.getElementById('lookup-email-input').value = '';
+      document.getElementById('key-org-hint').textContent = '';
+      const badge = document.getElementById('conn-badge');
+      badge.className = 'badge';
+      badge.innerHTML = '<span data-zh>未连接账户</span><span data-en>Not Connected</span>';
+      applyLang(currentLang);
+      refreshAll();
+    }
+
+    function updateSubscriptionAndQuotaUi(planTier, orgId, subscriptionActive, quotas) {
+      const isPro = String(planTier || '').toLowerCase() === 'pro';
+      const tierLabel = isPro ? 'Pro ($29/mo)' : 'Free ($0)';
+
+      document.getElementById('kpi-plan').textContent = tierLabel;
+      if (orgId) document.getElementById('kpi-org').textContent = 'Org: ' + orgId;
+
+      const subBadge = document.getElementById('sub-status-badge');
+      if (subBadge) {
+        subBadge.className = isPro ? 'badge badge-ok' : 'badge';
+        subBadge.textContent = (currentLang === 'zh' ? '套餐状态：' : 'Plan: ') + tierLabel;
+      }
+
+      const subPill = document.getElementById('sub-tier-pill');
+      if (subPill) subPill.textContent = isPro ? 'PRO ($29/MO)' : 'FREE ($0/MO)';
+
+      const headingEl = document.getElementById('sub-card-heading');
+      if (headingEl) {
+        headingEl.textContent = isPro
+          ? (currentLang === 'zh' ? '当前订阅：Pro 专业版 ($29 / 月)' : 'Current Plan: Pro Plan ($29 / month)')
+          : (currentLang === 'zh' ? '当前订阅：Free 免费版 ($0 / 月)' : 'Current Plan: Free Tier ($0 / month)');
+      }
+
+      document.getElementById('sub-org-val').textContent = orgId || '—';
+      document.getElementById('sub-active-val').textContent = isPro || subscriptionActive ? 'Active (Pro)' : 'Free Tier';
+      document.getElementById('sub-ws-limit').textContent = isPro ? '16 Workspaces' : '1 Workspace';
+      document.getElementById('sub-agent-limit').textContent = isPro ? '8 Agents' : '1 Agent';
+      document.getElementById('sub-syscall-limit').textContent = isPro ? '20,000 / day' : '200 / day';
+      document.getElementById('sub-compute-limit').textContent = isPro ? '36,000s (10 hrs / day)' : '600s (10 min / day)';
+
+      const q = quotas || {};
+      const usedSys = q.daily_syscalls_used ?? 0;
+      const limSys = q.daily_syscalls_limit ?? (isPro ? 20000 : 200);
+      const sysPct = Math.min(100, Math.round((usedSys / Math.max(1, limSys)) * 100));
+
+      const usedSec = Math.round((q.daily_exec_ms_used ?? 0) / 1000);
+      const limSec = Math.round((q.daily_exec_ms_limit ?? (isPro ? 36000000 : 600000)) / 1000);
+      const compPct = Math.min(100, Math.round((usedSec / Math.max(1, limSec)) * 100));
+
+      const actAgents = q.active_agents_count ?? 0;
+      const maxAgents = q.max_concurrent_agents ?? (isPro ? 8 : 1);
+      const agPct = Math.min(100, Math.round((actAgents / Math.max(1, maxAgents)) * 100));
+
+      document.getElementById('kpi-syscalls').textContent = usedSys + ' / ' + limSys;
+      document.getElementById('kpi-agents-sub').textContent = (currentLang === 'zh' ? '并发 Agent：' : 'Parallel agents: ') + actAgents + ' / ' + maxAgents;
+      document.getElementById('kpi-compute').textContent = usedSec + 's / ' + limSec + 's';
+
+      document.getElementById('meter-syscalls-text').textContent = usedSys + ' / ' + limSys + ' (' + sysPct + '%)';
+      document.getElementById('meter-syscalls-bar').style.width = sysPct + '%';
+
+      document.getElementById('meter-compute-text').textContent = usedSec + 's / ' + limSec + 's (' + compPct + '%)';
+      document.getElementById('meter-compute-bar').style.width = compPct + '%';
+
+      document.getElementById('meter-agents-text').textContent = actAgents + ' / ' + maxAgents + ' (' + agPct + '%)';
+      document.getElementById('meter-agents-bar').style.width = agPct + '%';
+    }
+
+    async function lookupBillingStatus() {
+      const email = (document.getElementById('lookup-email-input').value || document.getElementById('pro-email-input').value || '').trim();
+      const msgEl = document.getElementById('lookup-status-msg');
+      if (!email && !currentOrgId) {
+        msgEl.style.display = 'block';
+        msgEl.style.color = 'var(--danger)';
+        msgEl.textContent = currentLang === 'zh' ? '请输入购买邮箱进行查询。' : 'Please enter your billing email to lookup.';
+        return;
+      }
+
+      msgEl.style.display = 'block';
+      msgEl.style.color = 'var(--ink-secondary)';
+      msgEl.textContent = currentLang === 'zh' ? '正在查询您的订阅与配额信息…' : 'Looking up your subscription & quotas…';
+
+      try {
+        const params = new URLSearchParams();
+        if (email) params.set('email', email);
+        if (currentOrgId) params.set('org_id', currentOrgId);
+        const res = await fetch(apiBase + '/v1/billing/status?' + params.toString(), { headers: authHeaders() });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+
+        currentOrgId = data.org_id || currentOrgId;
+        updateSubscriptionAndQuotaUi(data.plan_tier, data.org_id, data.subscription_active, data.quotas);
+
+        const badge = document.getElementById('conn-badge');
+        if (badge && data.org_id) {
+          badge.className = 'badge badge-ok';
+          badge.textContent = (currentLang === 'zh' ? '已加载 · ' : 'Loaded · ') + data.org_id;
+        }
+        msgEl.style.color = 'var(--accent)';
+        msgEl.textContent = currentLang === 'zh'
+          ? '已同步租户 ' + (data.org_id || '') + ' 的订阅与配额状态。'
+          : 'Loaded subscription & quota status for ' + (data.org_id || '') + '.';
+      } catch (e) {
+        msgEl.style.color = 'var(--danger)';
+        msgEl.textContent = (currentLang === 'zh' ? '查询失败：' : 'Lookup failed: ') + e.message;
+      }
+    }
+
+    async function startWebProCheckout() {
+      const email = (document.getElementById('pro-email-input').value || document.getElementById('lookup-email-input').value || '').trim();
+      const statusEl = document.getElementById('pro-checkout-status');
+      const btn = document.getElementById('pro-checkout-btn');
+
+      if (!email || !email.includes('@')) {
+        statusEl.style.display = 'block';
+        statusEl.style.color = 'var(--danger)';
+        statusEl.textContent = currentLang === 'zh' ? '请输入您的工作邮箱。' : 'Please enter your work email.';
+        document.getElementById('pro-email-input').focus();
+        return;
+      }
+
+      btn.disabled = true;
+      statusEl.style.display = 'block';
+      statusEl.style.color = 'var(--ink-secondary)';
+      statusEl.textContent = currentLang === 'zh' ? '正在打开 Stripe 支付页面…' : 'Opening Stripe Checkout…';
+
+      try {
+        const res = await fetch(apiBase + '/v1/billing/checkout', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ plan_tier: 'pro', email, org_id: currentOrgId || undefined })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        if (data.checkout_url) {
+          window.open(data.checkout_url, '_blank', 'noopener');
+          statusEl.style.color = 'var(--accent)';
+          statusEl.textContent = currentLang === 'zh' ? '已在新窗口打开 Stripe 支付页面。' : 'Stripe Checkout opened in a new tab.';
+        }
+      } catch (e) {
+        statusEl.style.color = 'var(--danger)';
+        statusEl.textContent = (currentLang === 'zh' ? '发起支付失败：' : 'Checkout failed: ') + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function sendTotpEnrollEmail() {
+      const email = document.getElementById('totp-enroll-email').value.trim();
+      const msgEl = document.getElementById('totp-enroll-msg');
+      if (!email) return;
+      msgEl.style.display = 'block';
+      msgEl.style.color = 'var(--ink-secondary)';
+      msgEl.textContent = currentLang === 'zh' ? '正在发送绑定邮件…' : 'Sending QR setup email…';
+      try {
+        const res = await fetch(apiBase + '/v1/approver/email', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ org_id: currentOrgId || undefined, email })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        msgEl.style.color = 'var(--accent)';
+        msgEl.textContent = currentLang === 'zh'
+          ? '绑定二维码链接已发送至 ' + email + '。'
+          : 'Enrollment link sent to ' + email + '.';
+      } catch (e) {
+        msgEl.style.color = 'var(--danger)';
+        msgEl.textContent = (currentLang === 'zh' ? '发送失败：' : 'Failed: ') + e.message;
+      }
+    }
+
+    async function decideEscalation(escId, decision, ttlSecs) {
+      const totpEl = document.getElementById('totp-' + escId);
+      const msgEl = document.getElementById('esc-msg-' + escId);
+      const totp = totpEl ? totpEl.value.trim() : '';
+      if (requireTotp && !totp) {
+        if (msgEl) {
+          msgEl.style.color = 'var(--danger)';
+          msgEl.textContent = currentLang === 'zh' ? '请输入手机验证器上的 6 位动态口令。' : 'Enter the 6-digit TOTP code from your authenticator app.';
+        }
+        if (totpEl) totpEl.focus();
+        return;
+      }
+      if (msgEl) {
+        msgEl.style.color = 'var(--ink-secondary)';
+        msgEl.textContent = currentLang === 'zh' ? '正在提交审批…' : 'Submitting decision…';
+      }
+      try {
+        const res = await fetch(apiBase + '/v1/approvals/decide', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({
+            escalation_id: escId,
+            decision,
+            ttl_secs: ttlSecs,
+            totp: totp || undefined,
+            approved_by: 'web-developer-console'
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        await refreshAll();
+      } catch (e) {
+        if (msgEl) {
+          msgEl.style.color = 'var(--danger)';
+          msgEl.textContent = (currentLang === 'zh' ? '审批失败：' : 'Error: ') + e.message;
+        }
+      }
+    }
+
+    function renderEscalations(list) {
+      const root = document.getElementById('escalations-container');
+      document.getElementById('kpi-pending').textContent = String(list.length);
+
+      if (!list.length) {
+        root.innerHTML =
+          '<div class="card" style="padding:1.25rem 1.4rem;">' +
+            '<div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem;">' +
+              '<div>' +
+                '<strong style="color:var(--accent); font-size:0.92rem;">' +
+                  (currentLang === 'zh' ? '当前无待审批的越界请求' : 'No Pending Boundary Requests') +
+                '</strong>' +
+                '<p style="font-size:0.82rem; margin:0.2rem 0 0;">' +
+                  (currentLang === 'zh'
+                    ? '当您的 Agent 发起 <code>workspace_commit</code> 等越界操作时，审批项将在此处实时显示。'
+                    : 'When your agent triggers <code>workspace_commit</code> or a gated action, it will appear here for approval.') +
+                '</p>' +
+              '</div>' +
+              '<span class="badge badge-ok">0 PENDING</span>' +
+            '</div>' +
+          '</div>';
+        return;
+      }
+
+      root.innerHTML = '';
+      for (const esc of list) {
+        const box = document.createElement('div');
+        box.className = 'esc-card';
+
+        const title = document.createElement('div');
+        title.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap;';
+        title.innerHTML =
+          '<strong style="font-size:0.95rem; color:var(--ink);">' +
+            (esc.action === 'workspace_commit'
+              ? (currentLang === 'zh' ? '请求落盘合并至宿主机仓库 (workspace_commit)' : 'Approve Host Workspace Commit (workspace_commit)')
+              : (currentLang === 'zh' ? '请求执行受控动作：' : 'Approve Boundary Action: ') + (esc.action || 'syscall')) +
+          '</strong>' +
+          '<span class="badge badge-warn">' + (esc.escalation_id || '') + '</span>';
+        box.appendChild(title);
+
+        const dl = document.createElement('dl');
+        dl.className = 'esc-meta';
+        const rows = [
+          ['Agent', (esc.org_id ? esc.org_id + '/' : '') + (esc.agent_id || 'agent')],
+          ['Action', esc.action || 'workspace_commit'],
+          ['Resource', esc.resource || '/workspace']
+        ];
+        if (esc.metadata && Array.isArray(esc.metadata.paths) && esc.metadata.paths.length) {
+          rows.push(['Files', esc.metadata.paths.join(', ')]);
+        }
+        for (const [dtText, ddText] of rows) {
+          const dt = document.createElement('dt'); dt.textContent = dtText;
+          const dd = document.createElement('dd'); dd.textContent = ddText;
+          dl.appendChild(dt); dl.appendChild(dd);
+        }
+        box.appendChild(dl);
+
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-top:0.55rem;';
+
+        if (requireTotp) {
+          const inp = document.createElement('input');
+          inp.type = 'text';
+          inp.className = 'input input-totp';
+          inp.id = 'totp-' + esc.escalation_id;
+          inp.placeholder = '6-digit TOTP';
+          inp.maxLength = 6;
+          inp.autocomplete = 'one-time-code';
+          actions.appendChild(inp);
+        }
+
+        const bOnce = document.createElement('button');
+        bOnce.className = 'btn btn-primary';
+        bOnce.textContent = currentLang === 'zh' ? '批准本次' : 'Approve Once';
+        bOnce.onclick = () => decideEscalation(esc.escalation_id, 'approve', 120);
+        actions.appendChild(bOnce);
+
+        const bHour = document.createElement('button');
+        bHour.className = 'btn btn-ghost';
+        bHour.textContent = currentLang === 'zh' ? '批准 1 小时' : 'Approve 1h';
+        bHour.onclick = () => decideEscalation(esc.escalation_id, 'approve', 3600);
+        actions.appendChild(bHour);
+
+        const bDeny = document.createElement('button');
+        bDeny.className = 'btn btn-danger';
+        bDeny.textContent = currentLang === 'zh' ? '拒绝' : 'Deny';
+        bDeny.onclick = () => decideEscalation(esc.escalation_id, 'deny', 0);
+        actions.appendChild(bDeny);
+
+        box.appendChild(actions);
+
+        const msg = document.createElement('p');
+        msg.id = 'esc-msg-' + esc.escalation_id;
+        msg.style.cssText = 'font-family:var(--font-mono); font-size:0.74rem; margin-top:0.4rem;';
+        box.appendChild(msg);
+
+        root.appendChild(box);
+      }
+    }
+
+    function renderLeasesAndWorkspaces(data) {
+      const leasesRoot = document.getElementById('leases-list');
+      const wsRoot = document.getElementById('workspaces-list');
+
+      const leases = Array.isArray(data.active_leases) ? data.active_leases : [];
+      const workspaces = Array.isArray(data.workspaces) ? data.workspaces : (Array.isArray(data.cloud_workspaces) ? data.cloud_workspaces : []);
+
+      document.getElementById('kpi-leases-sub').textContent = (currentLang === 'zh' ? '生效租约：' : 'Active leases: ') + leases.length;
+      document.getElementById('kpi-workspaces').textContent = (currentLang === 'zh' ? '活跃云端工作区：' : 'Active workspaces: ') + workspaces.length;
+
+      if (!leases.length) {
+        leasesRoot.innerHTML = '<p style="font-size:0.84rem; color:var(--ink-muted); margin:0;">' +
+          (currentLang === 'zh' ? '当前暂无生效中的会话租约。' : 'No active session leases right now.') +
+          '</p>';
+      } else {
+        leasesRoot.innerHTML = '';
+        for (const l of leases) {
+          const row = document.createElement('div');
+          row.className = 'item-row';
+          row.innerHTML =
+            '<div><strong style="font-family:var(--font-mono); font-size:0.8rem;">' + (l.action_pattern || l.action || 'workspace_commit') + '</strong>' +
+            '<div style="font-size:0.75rem; color:var(--ink-muted);">Agent: ' + (l.agent_id || '*') + ' · Granted by: ' + (l.granted_by || l.approved_by || 'human') + '</div></div>' +
+            '<span class="badge badge-ok">ACTIVE LEASE</span>';
+          leasesRoot.appendChild(row);
+        }
+      }
+
+      if (!workspaces.length) {
+        wsRoot.innerHTML = '<p style="font-size:0.82rem; color:var(--ink-muted); margin:0;">' +
+          (currentLang === 'zh' ? '当前租户下暂无活跃的云端工作区。' : 'No active cloud workspaces under this tenant right now.') +
+          '</p>';
+      } else {
+        wsRoot.innerHTML = '';
+        for (const ws of workspaces) {
+          const row = document.createElement('div');
+          row.className = 'item-row';
+          row.innerHTML =
+            '<div><strong style="font-family:var(--font-mono); font-size:0.8rem;">' + (ws.workspace_id || ws.agent_id || 'workspace') + '</strong>' +
+            '<div style="font-size:0.75rem; color:var(--ink-muted);">State: ' + (ws.state || 'Active') + '</div></div>' +
+            '<span class="badge badge-ok">CoW Shadow</span>';
+          wsRoot.appendChild(row);
+        }
+      }
+    }
+
+    async function refreshAll() {
+      const connBadge = document.getElementById('conn-badge');
+      const totpBadge = document.getElementById('totp-status-badge');
+
+      try {
+        const statusUrl = apiBase + '/v1/status' + (currentOrgId ? '?org_id=' + encodeURIComponent(currentOrgId) : '');
+        const res = await fetch(statusUrl, { headers: authHeaders() });
+        if (res.status === 401 || res.status === 403) {
+          if (connBadge && !currentOrgId) {
+            connBadge.className = 'badge';
+            connBadge.textContent = currentLang === 'zh' ? '未连接账户' : 'Not Connected';
+          }
+          return;
+        }
+        const data = await res.json();
+        if (data.org_id) currentOrgId = data.org_id;
+
+        if (connBadge) {
+          connBadge.className = 'badge badge-ok';
+          connBadge.textContent = (currentLang === 'zh' ? '已连接 · ' : 'Connected · ') + (currentOrgId || 'cloud');
+        }
+        const hintEl = document.getElementById('key-org-hint');
+        if (hintEl && currentOrgId) hintEl.textContent = 'Org: ' + currentOrgId;
+
+        if (currentOrgId) {
+          const bRes = await fetch(apiBase + '/v1/billing/status?org_id=' + encodeURIComponent(currentOrgId), { headers: authHeaders() });
+          if (bRes.ok) {
+            const bData = await bRes.json();
+            updateSubscriptionAndQuotaUi(bData.plan_tier, bData.org_id || currentOrgId, bData.subscription_active, bData.quotas);
+          }
+        }
+
+        const isOperator = authKey.startsWith('aop_');
+        if (!isOperator) {
+          const appRes = await fetch(apiBase + '/v1/approver' + (currentOrgId ? '?org_id=' + encodeURIComponent(currentOrgId) : ''), { headers: authHeaders() });
+          if (appRes.ok) {
+            const appData = await appRes.json();
+            requireTotp = !!appData.enrolled;
+            if (totpBadge) {
+              totpBadge.className = appData.enrolled ? 'badge badge-ok' : 'badge badge-warn';
+              totpBadge.textContent = appData.enrolled
+                ? (currentLang === 'zh' ? '已绑定 (' + (appData.email_masked || 'TOTP') + ')' : 'Enrolled (' + (appData.email_masked || 'TOTP') + ')')
+                : (currentLang === 'zh' ? '未绑定 TOTP' : 'Not Enrolled');
+            }
+          }
+        } else {
+          requireTotp = false;
+        }
+
+        renderEscalations(Array.isArray(data.pending_escalations) ? data.pending_escalations : []);
+        renderLeasesAndWorkspaces(data);
+      } catch (_) {}
+    }
+
+    refreshAll();
+    setInterval(refreshAll, 5000);
+  </script>
+</body>
+</html>
