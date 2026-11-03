@@ -13,7 +13,7 @@ Next-Gen AI-Native Collaborative Workspace & Medical Intelligence Platform
   <a href="https://github.com/yjs/yjs"><img src="https://img.shields.io/badge/CRDT-Yjs%20%7C%20ProseMirror-FF6F00?style=flat-square" alt="CRDT Powered" /></a>
   <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/Agent-DeepSeek%20Harness-4D6BFE?style=flat-square" alt="DeepSeek Harness" /></a>
   <a href="https://github.com/yisibl/resvg-js"><img src="https://img.shields.io/badge/Rasterizer-resvg--js%20(Pure%20Rust)-FF4081?style=flat-square" alt="resvg-js" /></a>
-  <a href="https://vitest.dev/"><img src="https://img.shields.io/badge/Tests-361%20Passed%20(100%25)-brightgreen?style=flat-square&logo=vitest&logoColor=white" alt="Test Coverage" /></a>
+  <a href="https://github.com/heurion-org/heurion/actions/workflows/ci.yml"><img src="https://github.com/heurion-org/heurion/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License" /></a>
 </p>
 
@@ -219,7 +219,7 @@ Heurion 为大模型提供了标准化、受安全约束的操作工具箱：
 # 1. 静态类型检查（覆盖全部子包与前端工程）
 pnpm typecheck
 
-# 2. 运行自动化单元测试与集成测试（47 套件，361 测试全部 PASS）
+# 2. 运行自动化单元测试与集成测试
 pnpm test
 
 # 3. 运行端到端真实智能体评测（需配置 DEEPSEEK_API_KEY）
