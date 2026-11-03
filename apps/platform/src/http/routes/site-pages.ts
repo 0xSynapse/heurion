@@ -9,12 +9,18 @@ export type ToolSlug =
   | 'consort-strobe-flowchart'
   | 'table-1-generator'
   | 'pubmed-citation-checker'
+  | 'kaplan-meier-survival'
+  | 'forest-plot-generator'
+  | 'phi-deidentifier'
 
 export const TOOL_SLUGS: readonly ToolSlug[] = [
   'e-value-calculator',
   'consort-strobe-flowchart',
   'table-1-generator',
   'pubmed-citation-checker',
+  'kaplan-meier-survival',
+  'forest-plot-generator',
+  'phi-deidentifier',
 ] as const
 
 export function isToolSlug(s: string): s is ToolSlug {
@@ -47,6 +53,7 @@ export function renderEnglishIndexHtml(zhHtml: string): string {
     .replace('>EN</button>', '>中文</button>')
     .replace('<span id="langText">EN</span>', '<span id="langText">中文</span>')
     .replace(/href="\/tools"/g, 'href="/en/tools"')
+    .replace(/href="\/tools\//g, 'href="/en/tools/')
     .replace(/href="\/aegis-os\/"/g, 'href="/en/aegis-os/"')
     .replace(/href="\/aegis-os\/tutorial\/"/g, 'href="/en/aegis-os/tutorial/"')
 
@@ -87,7 +94,7 @@ const TOOL_EXTRA_CSS = `
     background-color: var(--bg-primary);
     background-image:
       linear-gradient(100deg, rgba(250, 248, 244, 0.95) 0%, rgba(250, 248, 244, 0.88) 52%, rgba(244, 241, 234, 0.68) 100%),
-      url('https://images.unsplash.com/photo-1532094349884-543bc11b234d?auto=format&fit=crop&w=1800&q=80');
+      url('/site/nordic-bg.jpg');
     background-size: cover;
     background-position: center 42%;
     border-bottom: 1px solid var(--border);
@@ -513,14 +520,19 @@ function renderCommonLayout(opts: {
   <meta property="og:description" content="${escapeHtml(description)}">
   <meta property="og:url" content="${canonicalUrl}">
   <meta property="og:locale" content="${isEn ? 'en_US' : 'zh_CN'}">
+  <meta property="og:image" content="https://heurion.org/site/demo-chest-mpr-3view.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="${escapeHtml(title)}">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${escapeHtml(title)}">
   <meta name="twitter:description" content="${escapeHtml(description)}">
+  <meta name="twitter:image" content="https://heurion.org/site/demo-chest-mpr-3view.png">
   <script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-v12">
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v15">
   <style>${TOOL_EXTRA_CSS}</style>
 </head>
 <body>
@@ -536,11 +548,14 @@ function renderCommonLayout(opts: {
         <span class="brand-word">HEURION</span>
       </a>
       <nav class="nav-links" aria-label="Primary">
-        <a href="${toolsHref}" class="nav-link">${isEn ? 'All Tools' : '工具总览'}</a>
-        <a href="${isEn ? '/en/tools/e-value-calculator' : '/tools/e-value-calculator'}" class="nav-link">E-value</a>
-        <a href="${isEn ? '/en/tools/consort-strobe-flowchart' : '/tools/consort-strobe-flowchart'}" class="nav-link">CONSORT / STROBE</a>
+        <a href="${toolsHref}" class="nav-link">${isEn ? 'All Tools (7)' : '工具总览 (7)'}</a>
         <a href="${isEn ? '/en/tools/table-1-generator' : '/tools/table-1-generator'}" class="nav-link">Table 1 (.docx)</a>
+        <a href="${isEn ? '/en/tools/kaplan-meier-survival' : '/tools/kaplan-meier-survival'}" class="nav-link">${isEn ? 'KM Survival' : 'KM 生存曲线'}</a>
+        <a href="${isEn ? '/en/tools/forest-plot-generator' : '/tools/forest-plot-generator'}" class="nav-link">${isEn ? 'Forest Plot' : '亚组森林图'}</a>
+        <a href="${isEn ? '/en/tools/consort-strobe-flowchart' : '/tools/consort-strobe-flowchart'}" class="nav-link">CONSORT</a>
+        <a href="${isEn ? '/en/tools/e-value-calculator' : '/tools/e-value-calculator'}" class="nav-link">E-value</a>
         <a href="${isEn ? '/en/tools/pubmed-citation-checker' : '/tools/pubmed-citation-checker'}" class="nav-link">${isEn ? 'PubMed Audit' : 'PubMed 核验'}</a>
+        <a href="${isEn ? '/en/tools/phi-deidentifier' : '/tools/phi-deidentifier'}" class="nav-link">${isEn ? 'PHI Guard' : 'PHI 脱敏'}</a>
       </nav>
       <div class="nav-right">
         <a class="lang-btn" href="${switchHref}" aria-label="Switch Language">${switchLabel}</a>
@@ -640,6 +655,27 @@ export function renderToolsHubHtml(lang: 'zh' | 'en'): string {
         applicationCategory: 'MedicalApplication',
         offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
       },
+      {
+        '@type': 'SoftwareApplication',
+        name: isEn ? 'Kaplan-Meier Survival Curve & Log-rank Test Calculator' : 'Kaplan-Meier 生存曲线与 Log-rank 检验在线生成器',
+        url: `https://heurion.org${prefix}/kaplan-meier-survival`,
+        applicationCategory: 'MedicalApplication',
+        offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+      },
+      {
+        '@type': 'SoftwareApplication',
+        name: isEn ? 'Medical Subgroup & Multivariable Forest Plot SVG Generator' : '医学论文亚组与多因素回归森林图 (Forest Plot) 在线生成器',
+        url: `https://heurion.org${prefix}/forest-plot-generator`,
+        applicationCategory: 'MedicalApplication',
+        offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+      },
+      {
+        '@type': 'SoftwareApplication',
+        name: isEn ? 'Clinical Manuscript PHI De-identification & Privacy Scanner' : '临床病历与投稿文稿 PHI 敏感隐私扫描与脱敏工具',
+        url: `https://heurion.org${prefix}/phi-deidentifier`,
+        applicationCategory: 'MedicalApplication',
+        offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+      },
     ],
   }
 
@@ -664,7 +700,7 @@ export function renderToolsHubHtml(lang: 'zh' | 'en'): string {
 
   const bodyHtml = `
     <div class="section-header">
-      <h2 class="heading-2">${isEn ? 'Four standalone clinical research engines.' : '四套独立临床科研引擎。'}</h2>
+      <h2 class="heading-2">${isEn ? 'Seven standalone clinical research engines.' : '七套独立临床科研引擎。'}</h2>
       <p class="label-caps">${isEn ? '01 / UTILITIES INDEX' : '01 / 工具索引'}</p>
     </div>
 
@@ -841,6 +877,134 @@ export function renderToolsHubHtml(lang: 'zh' | 'en'): string {
           </div>
         </div>
       </article>
+
+      <!-- 05: Kaplan-Meier Survival & Log-rank -->
+      <article class="hub-card">
+        <div class="flagship-top">
+          <div class="flagship-meta">
+            <div class="flagship-num-group">
+              <span class="flagship-num">05</span>
+              <span class="label-caps">${isEn ? 'SURVIVAL ANALYSIS · KM & COX' : '生存分析 · KM 曲线与风险表'}</span>
+            </div>
+            <svg class="flagship-emblem" viewBox="0 0 44 28" fill="none" aria-hidden="true">
+              <path d="M6 6 H16 V13 H27 V20 H38" stroke="#233E33" stroke-width="1.4" fill="none"/>
+              <path d="M6 6 H21 V11 H34 V15 H38" stroke="#8F5638" stroke-width="1.2" stroke-dasharray="2,2" fill="none"/>
+            </svg>
+          </div>
+          <h3 class="heading-2">Kaplan-Meier &amp; Log-rank</h3>
+          <p class="flagship-sub">${isEn ? 'Survival Curve, Number at Risk & Cox HR' : 'Kaplan-Meier 生存曲线与 Log-rank 显著性检验'}</p>
+          <p class="text-muted">${
+            isEn
+              ? 'Fit step-function Kaplan-Meier curves with Greenwood 95% CIs, aligned Number at Risk tables, Mantel-Haenszel Log-rank P-values, and Cox Hazard Ratios.'
+              : '在线拟合 KM 生存阶梯曲线（含删失标记与对齐的 Number at Risk 风险集表），自动计算中位生存期、Log-rank P 值与 Cox 回归 HR。'
+          }</p>
+        </div>
+        <div>
+          <div class="flagship-stats">
+            <div class="stat-cell">
+              <span class="stat-val">KM+CI</span>
+              <span class="stat-lbl">${isEn ? 'Step Curve' : '生存阶梯图'}</span>
+            </div>
+            <div class="stat-cell">
+              <span class="stat-val">At Risk</span>
+              <span class="stat-lbl">${isEn ? 'Aligned Table' : '对齐风险表'}</span>
+            </div>
+            <div class="stat-cell">
+              <span class="stat-val">Cox HR</span>
+              <span class="stat-lbl">${isEn ? 'Log-rank & HR' : '风险比估计'}</span>
+            </div>
+          </div>
+          <div class="flagship-links">
+            <a class="link-arrow" href="${prefix}/kaplan-meier-survival">${isEn ? 'Open Survival Calculator →' : '打开生存分析计算器 →'}</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- 06: Subgroup Forest Plot Generator -->
+      <article class="hub-card">
+        <div class="flagship-top">
+          <div class="flagship-meta">
+            <div class="flagship-num-group">
+              <span class="flagship-num">06</span>
+              <span class="label-caps">${isEn ? 'PUBLICATION FIGURE · SUBGROUP HR/OR' : '发表级配图 · 亚组森林图'}</span>
+            </div>
+            <svg class="flagship-emblem" viewBox="0 0 44 28" fill="none" aria-hidden="true">
+              <line x1="22" y1="3" x2="22" y2="25" stroke="#848D88" stroke-width="1" stroke-dasharray="2,2"/>
+              <line x1="10" y1="9" x2="20" y2="9" stroke="#233E33" stroke-width="1.4"/>
+              <rect x="13.5" y="7.5" width="3" height="3" fill="#233E33"/>
+              <polygon points="12,19 16,16 20,19 16,22" fill="#233E33"/>
+            </svg>
+          </div>
+          <h3 class="heading-2">Subgroup Forest Plot (.svg)</h3>
+          <p class="flagship-sub">${isEn ? 'Log-Scale HR / OR / RR Forest Plot Generator' : '医学论文亚组与多因素回归森林图生成器'}</p>
+          <p class="text-muted">${
+            isEn
+              ? 'Render NEJM/Lancet-style log-scale forest plots with inverse-variance weighted squares, summary diamonds, 95% CI whiskers, and reproducible R scripts.'
+              : '粘贴各亚组或回归协变量的 HR / OR / RR 与 95% CI，秒级渲染对数坐标轴森林图（支持汇总菱形与精度加权方块）并导出矢量 SVG 与 R 代码。'
+          }</p>
+        </div>
+        <div>
+          <div class="flagship-stats">
+            <div class="stat-cell">
+              <span class="stat-val">Log</span>
+              <span class="stat-lbl">${isEn ? 'Symmetric Axis' : '对数坐标轴'}</span>
+            </div>
+            <div class="stat-cell">
+              <span class="stat-val">Diamond</span>
+              <span class="stat-lbl">${isEn ? 'Pooled Effect' : '汇总效应菱形'}</span>
+            </div>
+            <div class="stat-cell">
+              <span class="stat-val">.SVG + R</span>
+              <span class="stat-lbl">${isEn ? 'Vector Export' : '矢量与R脚本'}</span>
+            </div>
+          </div>
+          <div class="flagship-links">
+            <a class="link-arrow" href="${prefix}/forest-plot-generator">${isEn ? 'Open Forest Plot Generator →' : '打开森林图生成器 →'}</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- 07: Clinical PHI De-identifier -->
+      <article class="hub-card">
+        <div class="flagship-top">
+          <div class="flagship-meta">
+            <div class="flagship-num-group">
+              <span class="flagship-num">07</span>
+              <span class="label-caps">${isEn ? 'PRIVACY COMPLIANCE · HIPAA & PIPL' : '数据合规 · 病历隐私脱敏'}</span>
+            </div>
+            <svg class="flagship-emblem" viewBox="0 0 44 28" fill="none" aria-hidden="true">
+              <path d="M22 3 L34 8 V15 C34 21 28 25 22 26 C16 25 10 21 10 15 V8 Z" stroke="#233E33" stroke-width="1.2" fill="none"/>
+              <circle cx="22" cy="14" r="2.5" fill="#00C472"/>
+            </svg>
+          </div>
+          <h3 class="heading-2">Clinical PHI De-identifier</h3>
+          <p class="flagship-sub">${isEn ? 'HIPAA Safe Harbor & PIPL Manuscript Privacy Scanner' : '临床病历与投稿文稿 PHI 隐私扫描与一键脱敏器'}</p>
+          <p class="text-muted">${
+            isEn
+              ? 'Deterministically detect and mask National IDs (MOD 11-2 checksum), MRNs, phone numbers, bank cards (Luhn), emails, and patient names before sharing or LLM prompting.'
+              : '在将病历草稿投喂给大模型或投稿前，毫秒级本地校验并脱敏 18 位身份证（MOD 11-2 校验和）、手机号、住院号、邮箱及患者真实姓名。'
+          }</p>
+        </div>
+        <div>
+          <div class="flagship-stats">
+            <div class="stat-cell">
+              <span class="stat-val">MOD11</span>
+              <span class="stat-lbl">${isEn ? 'ID Checksum' : '校验和防误报'}</span>
+            </div>
+            <div class="stat-cell">
+              <span class="stat-val">HIPAA</span>
+              <span class="stat-lbl">${isEn ? 'Safe Harbor' : '双重合规基线'}</span>
+            </div>
+            <div class="stat-cell">
+              <span class="stat-val">0-Leak</span>
+              <span class="stat-lbl">${isEn ? 'Stateless Mask' : '无状态掩码'}</span>
+            </div>
+          </div>
+          <div class="flagship-links">
+            <a class="link-arrow" href="${prefix}/phi-deidentifier">${isEn ? 'Open PHI Privacy Scanner →' : '打开 PHI 隐私脱敏器 →'}</a>
+          </div>
+        </div>
+      </article>
     </div>
   `
 
@@ -872,7 +1036,7 @@ export function renderToolsHubHtml(lang: 'zh' | 'en'): string {
 }
 
 /**
- * 渲染 4 个具体免登录小工具页
+ * 渲染 7 个具体免登录小工具页
  */
 export function renderToolPageHtml(slug: ToolSlug, lang: 'zh' | 'en'): string {
   switch (slug) {
@@ -884,6 +1048,12 @@ export function renderToolPageHtml(slug: ToolSlug, lang: 'zh' | 'en'): string {
       return renderTable1Page(lang)
     case 'pubmed-citation-checker':
       return renderCitationCheckerPage(lang)
+    case 'kaplan-meier-survival':
+      return renderKaplanMeierPage(lang)
+    case 'forest-plot-generator':
+      return renderForestPlotPage(lang)
+    case 'phi-deidentifier':
+      return renderPhiDeidentifierPage(lang)
   }
 }
 
@@ -1760,6 +1930,606 @@ function renderCitationCheckerPage(lang: 'zh' | 'en'): string {
     title,
     description,
     keywords: 'PubMed citation checker, verify medical references AI, detect hallucinated PMIDs, check Hazard Ratio 95% CI PubMed, 医学论文假文献核查, PubMed参考文献核验, Heurion',
+    canonicalPath,
+    zhPath,
+    enPath,
+    jsonLd,
+    heroHtml,
+    bodyHtml,
+    geoHtml,
+    scriptJs,
+  })
+}
+
+function renderKaplanMeierPage(lang: 'zh' | 'en'): string {
+  const isEn = lang === 'en'
+  const zhPath = '/tools/kaplan-meier-survival'
+  const enPath = '/en/tools/kaplan-meier-survival'
+  const canonicalPath = isEn ? enPath : zhPath
+
+  const title = isEn
+    ? 'Kaplan-Meier Survival Curve, Number at Risk & Log-rank Calculator (Vector SVG) · Heurion Research'
+    : 'Kaplan-Meier 生存曲线、风险集表与 Log-rank 检验在线生成器（导出矢量 SVG） · Heurion Research'
+  const description = isEn
+    ? 'Generate publication-grade Kaplan-Meier survival curves online from CSV/Excel data. Automatic Greenwood 95% CI, aligned Number at Risk table, Mantel-Haenszel Log-rank P-value, Cox Hazard Ratio, and vector SVG / R survminer export.'
+    : '免费免登录在线绘制符合 NEJM / JCO / Lancet 投稿规范的 Kaplan-Meier 生存曲线（含删失标记与底部对齐 Number at Risk 风险集表）。自动计算中位生存期、Log-rank P 值与 Cox 回归 HR，一键导出矢量 SVG 与 R survminer 代码。'
+
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: title,
+    url: `https://heurion.org${canonicalPath}`,
+    applicationCategory: 'MedicalApplication, ScientificApplication',
+    operatingSystem: 'Web',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    description,
+  }
+
+  const demoCsv = `patient_id,group,time_months,event_status,age
+P001,Dapagliflozin,36,0,64
+P002,Dapagliflozin,18,1,71
+P003,Dapagliflozin,34,0,59
+P004,Dapagliflozin,24,0,66
+P005,Dapagliflozin,12,1,74
+P006,Dapagliflozin,36,0,61
+P007,Dapagliflozin,28,0,68
+P008,Dapagliflozin,22,1,72
+P009,Dapagliflozin,35,0,57
+P010,Dapagliflozin,30,0,65
+P011,Dapagliflozin,15,0,63
+P012,Dapagliflozin,36,0,69
+P013,Standard Care,8,1,66
+P014,Standard Care,14,1,73
+P015,Standard Care,20,1,61
+P016,Standard Care,26,0,68
+P017,Standard Care,6,1,75
+P018,Standard Care,11,1,64
+P019,Standard Care,32,0,58
+P020,Standard Care,16,1,70
+P021,Standard Care,22,1,67
+P022,Standard Care,19,0,62
+P023,Standard Care,9,1,72
+P024,Standard Care,29,1,69`
+
+  const heroHtml = `
+    <div class="tool-breadcrumb">
+      <a href="${isEn ? '/en' : '/'}">Heurion Research</a> <span>/</span>
+      <a href="${isEn ? '/en/tools' : '/tools'}">${isEn ? 'Clinical Utilities' : '临床工具矩阵'}</a> <span>/</span>
+      <span>${isEn ? 'Kaplan-Meier & Log-rank' : 'KM 生存分析'}</span>
+    </div>
+    <div class="tool-header">
+      <p class="label-caps">SURVIVAL BIOSTATISTICS · KAPLAN-MEIER, LOG-RANK &amp; COX HR</p>
+      <h1>${isEn ? 'Kaplan-Meier Survival Curve &amp; <em>Log-rank</em> Calculator.' : 'Kaplan-Meier 生存曲线与 <em>Log-rank</em> 在线生成器。'}</h1>
+      <p class="lead">${
+        isEn
+          ? 'Paste time-to-event cohort rows below to fit step-function Kaplan-Meier curves, aligned Number at Risk tables, Mantel-Haenszel Log-rank P-values, and proportional hazards ratios (HR).'
+          : '粘贴随访时间与结局事件 CSV/Excel 数据，实时拟合 KM 阶梯生存曲线、底部对齐风险集表（Number at Risk）、Log-rank 显著性检验与单因素 Cox 风险比（HR）。'
+      }</p>
+    </div>
+  `
+
+  const bodyHtml = `
+    <div class="tool-grid">
+      <div class="tool-card">
+        <h2>${isEn ? '01 / Time-to-Event Cohort Data' : '01 / 随访时间与结局事件数据'}</h2>
+        <div class="form-row">
+          <label for="kmTitle">${isEn ? 'Figure Title' : '图表标题 (Figure Title)'}</label>
+          <input id="kmTitle" type="text" value="Kaplan-Meier Cumulative Survival by Treatment Group">
+        </div>
+        <div class="form-inline">
+          <div class="form-row">
+            <label for="kmTimeCol">${isEn ? 'Time Column' : '随访时间列名'}</label>
+            <input id="kmTimeCol" type="text" value="time_months">
+          </div>
+          <div class="form-row">
+            <label for="kmEventCol">${isEn ? 'Event Column (1=Event, 0=Censored)' : '事件列名 (1=事件, 0=删失)'}</label>
+            <input id="kmEventCol" type="text" value="event_status">
+          </div>
+          <div class="form-row">
+            <label for="kmGroupCol">${isEn ? 'Group Column' : '分组列名'}</label>
+            <input id="kmGroupCol" type="text" value="group">
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="kmCsv">${isEn ? 'Survival Dataset (CSV or Tab-separated)' : '随访数据内容（支持 CSV 逗号或 Excel 制表符分隔）'}</label>
+          <textarea id="kmCsv" rows="11">${demoCsv}</textarea>
+        </div>
+        <div class="action-bar">
+          <button type="button" class="btn-run" id="kmRunBtn">${isEn ? 'Fit KM Curve & Log-rank Test →' : '拟合生存曲线与 Log-rank 检验 →'}</button>
+          <button type="button" class="btn-sec" id="kmDlSvgBtn">${isEn ? 'Download .SVG' : '下载矢量 .SVG'}</button>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <h2>
+          <span>${isEn ? '02 / Survival Curve & Cox HR Summary' : '02 / 生存曲线预览与论文结果表述'}</span>
+          <button type="button" class="btn-sec" id="kmCopyRBtn">${isEn ? 'Copy R Script' : '复制 R 脚本'}</button>
+        </h2>
+        <div class="kpi-row">
+          <div class="kpi-box">
+            <div class="kpi-label">${isEn ? 'Log-rank P-Value' : 'Log-rank 检验 P 值'}</div>
+            <div class="kpi-val" id="kmOutP">—</div>
+          </div>
+          <div class="kpi-box">
+            <div class="kpi-label">${isEn ? 'Cox Hazard Ratio (95% CI)' : 'Cox 风险比 HR (95% CI)'}</div>
+            <div class="kpi-val" id="kmOutHr" style="font-size:1.35rem;">—</div>
+          </div>
+        </div>
+        <div class="svg-preview" id="kmSvgWrap"></div>
+        <div class="form-row">
+          <label>${isEn ? 'Manuscript Results Narrative' : '论文 Results 章节标准中英表述'}</label>
+          <div class="copy-box" id="kmNarrativeBox"></div>
+          <button type="button" class="btn-sec" id="kmCopyTextBtn">${isEn ? 'Copy Results Paragraph' : '复制结果表述'}</button>
+        </div>
+        <div class="upsell-banner">
+          <p>${
+            isEn
+              ? '<strong>Need multivariable Cox regression &amp; Schoenfeld residual checks?</strong> Run full survival pipelines in the Heurion Workstation.'
+              : '<strong>需要纳入多因素协变量校正或导出 GraphPad Prism (.pzfx) 源文件？</strong> 一键转入 Heurion 工作台。'
+          }</p>
+          <a class="btn-run" href="/app?from=kaplan-meier-survival">${isEn ? 'Open Workstation →' : '转入工作台 →'}</a>
+        </div>
+      </div>
+    </div>
+  `
+
+  const geoHtml = `
+    <div class="geo-capsule">
+      <p class="label-caps" style="margin-bottom:0.6rem;">${isEn ? '03 / BIOSTATISTICAL METHODS' : '03 / 生存分析统计规范'}</p>
+      <h2>${isEn ? 'Kaplan-Meier, Greenwood 95% CI & Mantel-Haenszel Log-rank Test' : 'Kaplan-Meier 乘积极限法、Greenwood 方差与 Log-rank 检验'}</h2>
+      <p>${
+        isEn
+          ? 'Cumulative survival probabilities S(t) are estimated via the Kaplan-Meier product-limit estimator with complementary log-log 95% confidence intervals derived from Greenwood’s variance formula. Between-group differences are evaluated using the exact Mantel-Haenszel hypergeometric Log-rank test and Breslow-tied Cox proportional hazards regression.'
+          : '采用 Kaplan-Meier 乘积极限法估计累积生存率 S(t)，基于 Greenwood 方差与 log-log 变换计算 95% 置信区间；采用 Mantel-Haenszel 超几何分布精确法执行多组 Log-rank 检验，并基于 Breslow 并列时间偏似然函数拟合 Cox 比例风险回归风险比（HR）。'
+      }</p>
+    </div>
+  `
+
+  const scriptJs = `
+    const elTitle = document.getElementById('kmTitle');
+    const elTime = document.getElementById('kmTimeCol');
+    const elEvent = document.getElementById('kmEventCol');
+    const elGroup = document.getElementById('kmGroupCol');
+    const elCsv = document.getElementById('kmCsv');
+    const outP = document.getElementById('kmOutP');
+    const outHr = document.getElementById('kmOutHr');
+    const svgWrap = document.getElementById('kmSvgWrap');
+    const narrativeBox = document.getElementById('kmNarrativeBox');
+    let lastSvg = '';
+    let lastR = '';
+
+    async function runKm() {
+      const res = await fetch('/api/public/tools/kaplan-meier', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: elTitle.value,
+          time_col: elTime.value,
+          event_col: elEvent.value,
+          group_col: elGroup.value,
+          csv: elCsv.value,
+          lang: '${isEn ? 'en' : 'zh'}'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        narrativeBox.textContent = data.error || 'Error';
+        return;
+      }
+      lastSvg = data.svg || '';
+      lastR = data.r_script || '';
+      svgWrap.innerHTML = lastSvg;
+      outP.textContent = data.log_rank ? data.log_rank.p_value_formatted : '—';
+      outHr.textContent = (data.cox && data.cox.covariates && data.cox.covariates[0])
+        ? data.cox.covariates[0].hr_formatted
+        : '—';
+      narrativeBox.textContent = (${isEn ? 'true' : 'false'})
+        ? (data.narrative_en || '')
+        : ((data.narrative_zh || '') + '\\n\\n' + (data.narrative_en || ''));
+    }
+
+    document.getElementById('kmRunBtn').addEventListener('click', runKm);
+    document.getElementById('kmDlSvgBtn').addEventListener('click', () => {
+      if (!lastSvg) return;
+      const blob = new Blob([lastSvg], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Heurion_Kaplan_Meier_Curve.svg';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+    document.getElementById('kmCopyRBtn').addEventListener('click', (e) => {
+      navigator.clipboard.writeText(lastR);
+      const btn = e.currentTarget;
+      const old = btn.textContent;
+      btn.textContent = '✓ Copied';
+      setTimeout(() => { btn.textContent = old; }, 1500);
+    });
+    document.getElementById('kmCopyTextBtn').addEventListener('click', (e) => {
+      navigator.clipboard.writeText(narrativeBox.textContent || '');
+      const btn = e.currentTarget;
+      const old = btn.textContent;
+      btn.textContent = '✓ Copied';
+      setTimeout(() => { btn.textContent = old; }, 1500);
+    });
+    runKm();
+  `
+
+  return renderCommonLayout({
+    lang,
+    title,
+    description,
+    keywords: 'Kaplan-Meier curve generator online, Log-rank test calculator, Number at risk table SVG, Cox Hazard Ratio calculator, Kaplan-Meier生存曲线在线生成, Log-rank检验计算器, Heurion',
+    canonicalPath,
+    zhPath,
+    enPath,
+    jsonLd,
+    heroHtml,
+    bodyHtml,
+    geoHtml,
+    scriptJs,
+  })
+}
+
+function renderForestPlotPage(lang: 'zh' | 'en'): string {
+  const isEn = lang === 'en'
+  const zhPath = '/tools/forest-plot-generator'
+  const enPath = '/en/tools/forest-plot-generator'
+  const canonicalPath = isEn ? enPath : zhPath
+
+  const title = isEn
+    ? 'Medical Subgroup & Multivariable Forest Plot SVG Generator (HR / OR / RR) · Heurion Research'
+    : '医学论文亚组与多因素回归森林图（Forest Plot）在线生成器（导出矢量 SVG） · Heurion Research'
+  const description = isEn
+    ? 'Generate publication-grade log-scale Forest Plots (HR, OR, RR with 95% CI) online. Supports inverse-variance weighted squares, pooled summary diamonds, vector SVG export, and reproducible R forestploter code.'
+    : '免费免登录在线生成符合 NEJM / Lancet / JAMA 规范的对数坐标轴医学森林图（Forest Plot）。支持亚组分析与多因素回归 HR / OR / RR 及 95% CI，自动绘制汇总菱形与精度加权方块，一键下载矢量 SVG 与 R 代码。'
+
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: title,
+    url: `https://heurion.org${canonicalPath}`,
+    applicationCategory: 'MedicalApplication, DesignApplication',
+    operatingSystem: 'Web',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    description,
+  }
+
+  const demoLines = `*Overall Cohort (N=4744) | 0.74 | 0.65 | 0.85 | <0.001
+Age <= 65 yr (n=2018) | 0.72 | 0.59 | 0.88 | 0.001
+Age > 65 yr (n=2726) | 0.76 | 0.64 | 0.90 | 0.002
+Male Sex (n=3635) | 0.73 | 0.63 | 0.85 | <0.001
+Female Sex (n=1109) | 0.79 | 0.59 | 1.06 | 0.114
+Type 2 Diabetes: Yes | 0.75 | 0.63 | 0.90 | 0.002
+Type 2 Diabetes: No | 0.73 | 0.60 | 0.88 | 0.001
+LVEF <= Median (31%) | 0.70 | 0.59 | 0.84 | <0.001
+LVEF > Median (31%) | 0.81 | 0.65 | 0.99 | 0.042`
+
+  const heroHtml = `
+    <div class="tool-breadcrumb">
+      <a href="${isEn ? '/en' : '/'}">Heurion Research</a> <span>/</span>
+      <a href="${isEn ? '/en/tools' : '/tools'}">${isEn ? 'Clinical Utilities' : '临床工具矩阵'}</a> <span>/</span>
+      <span>${isEn ? 'Forest Plot Generator' : '亚组森林图'}</span>
+    </div>
+    <div class="tool-header">
+      <p class="label-caps">PUBLICATION FIGURE · LOG-SCALE SUBGROUP &amp; REGRESSION FOREST PLOT</p>
+      <h1>${isEn ? 'Subgroup &amp; Multivariable <em>Forest Plot</em> Generator.' : '医学论文亚组与回归 <em>森林图</em> 生成器。'}</h1>
+      <p class="lead">${
+        isEn
+          ? 'Enter subgroup or regression rows (Label | Point Estimate | 95% CI Lower | 95% CI Upper | P-value). Prefix summary rows with * to render a pooled meta-analysis diamond on a true logarithmic axis.'
+          : '按行粘贴亚组或多因素回归结果（名称 | 点估计值 | CI下限 | CI上限 | P值），在行首加 * 号自动绘制汇总菱形（Diamond），实时渲染对数坐标轴矢量 SVG。'
+      }</p>
+    </div>
+  `
+
+  const bodyHtml = `
+    <div class="tool-grid">
+      <div class="tool-card">
+        <h2>${isEn ? '01 / Subgroup & Effect Size Rows' : '01 / 亚组或协变量效应量数据'}</h2>
+        <div class="form-inline" style="grid-template-columns: 1.4fr 0.8fr;">
+          <div class="form-row">
+            <label for="fpTitle">${isEn ? 'Forest Plot Title' : '森林图标题 (Figure Title)'}</label>
+            <input id="fpTitle" type="text" value="Primary Composite Endpoint Across Prespecified Subgroups">
+          </div>
+          <div class="form-row">
+            <label for="fpType">${isEn ? 'Effect Measure' : '效应量类型'}</label>
+            <select id="fpType">
+              <option value="HR">HR (Hazard Ratio)</option>
+              <option value="OR">OR (Odds Ratio)</option>
+              <option value="RR">RR (Relative Risk)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-inline" style="grid-template-columns: 1fr 1fr;">
+          <div class="form-row">
+            <label for="fpLeft">${isEn ? 'Left Axis Label (< 1.0)' : '左侧倾向标签 (< 1.0)'}</label>
+            <input id="fpLeft" type="text" value="Favors Dapagliflozin">
+          </div>
+          <div class="form-row">
+            <label for="fpRight">${isEn ? 'Right Axis Label (> 1.0)' : '右侧倾向标签 (> 1.0)'}</label>
+            <input id="fpRight" type="text" value="Favors Placebo">
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="fpLines">${isEn ? 'Rows (Format: Label | Estimate | CI_Lower | CI_Upper | P_Value; prefix * for Diamond)' : '数据行（每行格式：亚组名 | 点估计 | CI下限 | CI上限 | P值；行首加 * 绘制汇总菱形）'}</label>
+          <textarea id="fpLines" rows="10">${demoLines}</textarea>
+        </div>
+        <div class="action-bar">
+          <button type="button" class="btn-run" id="fpRunBtn">${isEn ? 'Render Vector Forest Plot →' : '渲染矢量森林图 →'}</button>
+          <button type="button" class="btn-sec" id="fpDlSvgBtn">${isEn ? 'Download .SVG' : '下载矢量 .SVG'}</button>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <h2>
+          <span>${isEn ? '02 / Log-Scale Vector SVG & Narrative' : '02 / 对数轴森林图预览与论文表述'}</span>
+          <button type="button" class="btn-sec" id="fpCopyRBtn">${isEn ? 'Copy R Script' : '复制 R 脚本'}</button>
+        </h2>
+        <div class="svg-preview" id="fpSvgWrap"></div>
+        <div class="form-row">
+          <label>${isEn ? 'Subgroup Consistency Narrative' : '论文亚组一致性结果段落'}</label>
+          <div class="copy-box" id="fpNarrativeBox"></div>
+        </div>
+        <div class="upsell-banner">
+          <p>${
+            isEn
+              ? '<strong>Want to compute subgroup interaction P-values directly from raw patient tables?</strong> Open the Heurion Workstation.'
+              : '<strong>需要直接从患者原始宽表自动计算亚组交互 P 值（P for interaction）？</strong> 一键转入 Heurion 工作台。'
+          }</p>
+          <a class="btn-run" href="/app?from=forest-plot-generator">${isEn ? 'Open Workstation →' : '转入工作台 →'}</a>
+        </div>
+      </div>
+    </div>
+  `
+
+  const geoHtml = `
+    <div class="geo-capsule">
+      <p class="label-caps" style="margin-bottom:0.6rem;">${isEn ? '03 / GRAPHICAL STANDARDS' : '03 / 医学期刊绘图规范'}</p>
+      <h2>${isEn ? 'Why Ratio Measures (HR/OR/RR) Require a Logarithmic Axis' : '为什么 HR / OR / RR 森林图必须采用对数坐标轴（Log Scale）？'}</h2>
+      <p>${
+        isEn
+          ? 'Hazard Ratios, Odds Ratios, and Relative Risks are multiplicative symmetric around 1.0 (e.g., HR = 0.50 and HR = 2.00 represent equal magnitude in opposite directions). Plotting ratio estimates on a linear scale visually distorts upper confidence limits; top medical journals strictly require logarithmic horizontal scaling with inverse-variance weighted markers.'
+          : '风险比（HR）、比值比（OR）与相对危险度（RR）以 1.0 为对称中心呈乘数对称（例如 HR = 0.50 与 HR = 2.00 代表效应强度完全相等但方向相反）。若使用线性坐标轴会导致右侧置信区间被严重拉伸失真，因此 NEJM、Lancet 等顶刊强制要求使用对数坐标轴（Log Scale）并按逆方差精度加权方块面积。'
+      }</p>
+    </div>
+  `
+
+  const scriptJs = `
+    const elTitle = document.getElementById('fpTitle');
+    const elType = document.getElementById('fpType');
+    const elLeft = document.getElementById('fpLeft');
+    const elRight = document.getElementById('fpRight');
+    const elLines = document.getElementById('fpLines');
+    const svgWrap = document.getElementById('fpSvgWrap');
+    const narrativeBox = document.getElementById('fpNarrativeBox');
+    let lastSvg = '';
+    let lastR = '';
+
+    async function renderFp() {
+      const res = await fetch('/api/public/tools/forest-plot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: elTitle.value,
+          effect_type: elType.value,
+          left_label: elLeft.value,
+          right_label: elRight.value,
+          raw_lines: elLines.value,
+          lang: '${isEn ? 'en' : 'zh'}'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        narrativeBox.textContent = data.error || 'Error';
+        return;
+      }
+      lastSvg = data.svg || '';
+      lastR = data.r_script || '';
+      svgWrap.innerHTML = lastSvg;
+      narrativeBox.textContent = (${isEn ? 'true' : 'false'})
+        ? (data.narrative_en || '')
+        : ((data.narrative_zh || '') + '\\n\\n' + (data.narrative_en || ''));
+    }
+
+    document.getElementById('fpRunBtn').addEventListener('click', renderFp);
+    [elTitle, elType, elLeft, elRight, elLines].forEach(el => el.addEventListener('input', renderFp));
+    document.getElementById('fpDlSvgBtn').addEventListener('click', () => {
+      if (!lastSvg) return;
+      const blob = new Blob([lastSvg], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Heurion_Subgroup_Forest_Plot.svg';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+    document.getElementById('fpCopyRBtn').addEventListener('click', (e) => {
+      navigator.clipboard.writeText(lastR);
+      const btn = e.currentTarget;
+      const old = btn.textContent;
+      btn.textContent = '✓ Copied';
+      setTimeout(() => { btn.textContent = old; }, 1500);
+    });
+    renderFp();
+  `
+
+  return renderCommonLayout({
+    lang,
+    title,
+    description,
+    keywords: 'forest plot generator online SVG, subgroup analysis forest plot HR OR, medical forest plot maker, 医学森林图在线生成器, 亚组分析森林图SVG, Cox回归森林图, Heurion',
+    canonicalPath,
+    zhPath,
+    enPath,
+    jsonLd,
+    heroHtml,
+    bodyHtml,
+    geoHtml,
+    scriptJs,
+  })
+}
+
+function renderPhiDeidentifierPage(lang: 'zh' | 'en'): string {
+  const isEn = lang === 'en'
+  const zhPath = '/tools/phi-deidentifier'
+  const enPath = '/en/tools/phi-deidentifier'
+  const canonicalPath = isEn ? enPath : zhPath
+
+  const title = isEn
+    ? 'Clinical Manuscript PHI De-identification & HIPAA Safe Harbor Scanner · Heurion Research'
+    : '临床病历与医学论文 PHI 敏感隐私扫描与一键脱敏工具（HIPAA / 个保法合规） · Heurion Research'
+  const description = isEn
+    ? 'De-identify clinical case reports and medical records before LLM prompting or journal submission. Deterministic detection of National IDs (MOD 11-2 checksum), MRNs, phone numbers, bank cards (Luhn), emails, and patient names.'
+    : '免费免登录在线扫描并脱敏临床病历、出院小结与个案报道（Case Report）草稿。精准识别 18 位身份证号（ISO 7064 MOD 11-2 校验和）、手机号、住院号/病案号、银行/医保卡号（Luhn 校验）、邮箱与患者真实姓名，防止向外部大模型泄露患者隐私。'
+
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: title,
+    url: `https://heurion.org${canonicalPath}`,
+    applicationCategory: 'MedicalApplication, SecurityApplication',
+    operatingSystem: 'Web',
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    description,
+  }
+
+  const demoCase = isEn
+    ? `Case Summary: Patient Name: Robert Miller, a 64-year-old male (MRN: HOSP-20250982, SSN: 123-45-6789), was admitted with acute decompensated heart failure and reduced ejection fraction (LVEF 29%).\nContact mobile on file: 13800138000, email: robert.miller64@example.org.\nBaseline NT-proBNP was 2840 pg/mL and eGFR was 54 mL/min/1.73m2. After 4 weeks of guideline-directed medical therapy, symptoms improved to NYHA Class II.`
+    : `出院小结草稿：患者张建国，男，64岁，确诊为射血分数降低的心力衰竭（HFrEF，LVEF 29%）。住院号：ZY202509821，身份证号：11010519491231002X，随访联系电话：13800138000，联系邮箱：zhangjg64@example.org。\n患者入院时 NT-proBNP 2840 pg/mL，eGFR 54 mL/min/1.73m2。经规范达格列净与沙库巴曲缬沙坦抗心衰治疗 4 周后，心功能改善至 NYHA II 级。`
+
+  const heroHtml = `
+    <div class="tool-breadcrumb">
+      <a href="${isEn ? '/en' : '/'}">Heurion Research</a> <span>/</span>
+      <a href="${isEn ? '/en/tools' : '/tools'}">${isEn ? 'Clinical Utilities' : '临床工具矩阵'}</a> <span>/</span>
+      <span>${isEn ? 'PHI Privacy De-identifier' : 'PHI 隐私脱敏'}</span>
+    </div>
+    <div class="tool-header">
+      <p class="label-caps">CLINICAL PRIVACY GUARD · HIPAA SAFE HARBOR &amp; PIPL DETERMINISTIC REDACTION</p>
+      <h1>${isEn ? 'Clinical Manuscript <em>PHI Privacy</em> De-identifier.' : '临床病历与文稿 <em>PHI 隐私</em> 一键脱敏器。'}</h1>
+      <p class="lead">${
+        isEn
+          ? 'Before pasting clinical notes into external LLMs or sharing case report drafts, deterministically scan and mask National IDs (MOD 11-2 checksum), MRNs, phone numbers, SSNs, emails, and labeled patient names while preserving all clinical biomarkers.'
+          : '在将病历草稿发送给外部大模型或用于论文投稿前，毫秒级扫描并掩码 18 位身份证号（MOD 11-2 校验）、手机号、住院号/病案号、医保卡号与患者真实姓名，同时完整保留所有临床检验指标与统计数值。'
+      }</p>
+    </div>
+  `
+
+  const bodyHtml = `
+    <div class="tool-grid">
+      <div class="tool-card">
+        <h2>${isEn ? '01 / Raw Clinical Note or Case Draft' : '01 / 粘贴原始病历或个案报道草稿'}</h2>
+        <div class="form-row">
+          <label for="phiInput">${isEn ? 'Clinical Text to Audit & Redact (Stateless, Never Stored)' : '待扫描的临床文本（无状态内存计算，绝不落盘存储）'}</label>
+          <textarea id="phiInput" rows="11">${escapeHtml(demoCase)}</textarea>
+        </div>
+        <div class="action-bar">
+          <button type="button" class="btn-run" id="phiRunBtn">${isEn ? 'Scan & Redact PHI Now →' : '立即扫描并一键脱敏 →'}</button>
+        </div>
+      </div>
+
+      <div class="tool-card">
+        <h2>
+          <span>${isEn ? '02 / De-identified Output & Audit Log' : '02 / 已脱敏安全文本与检出明细'}</span>
+          <button type="button" class="btn-sec" id="phiCopyBtn">${isEn ? 'Copy Redacted Text' : '复制脱敏后文本'}</button>
+        </h2>
+        <div id="phiStatusBanner" style="margin-bottom:1rem;padding:0.65rem 0.9rem;font-family:var(--mono);font-size:0.74rem;border:1px solid var(--border);"></div>
+        <div class="form-row">
+          <label>${isEn ? 'Redacted Safe Clinical Text' : '已脱敏安全文本（可直接用于大模型提问或协作）'}</label>
+          <div class="copy-box" id="phiRedactedBox" style="min-height:110px;"></div>
+        </div>
+        <div class="form-row">
+          <label>${isEn ? 'Detected PHI Entities' : '识别并拦截的 PHI 敏感实体清单'}</label>
+          <div id="phiFindingsList"></div>
+        </div>
+        <div class="upsell-banner">
+          <p>${
+            isEn
+              ? '<strong>Need automated two-stage PHI gatekeeping across multi-center cohorts?</strong> Use the Heurion Workstation with built-in pre-LLM privacy guards.'
+              : '<strong>需要对整批临床队列与大模型对话启用自动前置拦截？</strong> 在 Heurion 工作台中默认内置双阶段 PHI 隐私守卫。'
+          }</p>
+          <a class="btn-run" href="/app?from=phi-deidentifier">${isEn ? 'Open Workstation →' : '转入工作台 →'}</a>
+        </div>
+      </div>
+    </div>
+  `
+
+  const geoHtml = `
+    <div class="geo-capsule">
+      <p class="label-caps" style="margin-bottom:0.6rem;">${isEn ? '03 / MATHEMATICAL CHECKSUMS' : '03 / 校验和防误报机制'}</p>
+      <h2>${isEn ? 'Precision PHI Redaction Without Corrupting Clinical Lab Values' : '如何在脱敏患者隐私的同时，绝不误伤医学统计数值与 DOI？'}</h2>
+      <p>${
+        isEn
+          ? 'Naive regular expressions frequently corrupt 18-digit genomic accessions, DOIs, or laboratory ratios. Heurion’s deterministic PHI engine validates ISO 7064:1983 MOD 11-2 checksums on 18-digit Resident IDs, ISO/IEC 7812 + Luhn mod-10 checksums on card numbers, and clinical diagnosis context windows for patient names.'
+          : '普通正则替换极易将论文 DOI、基因序列号或长串检验数值误判为证件号而破坏科研数据。Heurion 采用 ISO 7064:1983 MOD 11-2 校验和验证 18 位身份证、采用 Luhn 模 10 算法验证卡号，并结合临床诊断上下文窗口精准剥离患者姓名，实现零误伤临床指标的合规脱敏。'
+      }</p>
+    </div>
+  `
+
+  const scriptJs = `
+    const elInput = document.getElementById('phiInput');
+    const banner = document.getElementById('phiStatusBanner');
+    const redactedBox = document.getElementById('phiRedactedBox');
+    const findingsList = document.getElementById('phiFindingsList');
+    const isEnMode = ${isEn ? 'true' : 'false'};
+
+    async function runPhiScan() {
+      const res = await fetch('/api/public/tools/phi-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: elInput.value, lang: '${isEn ? 'en' : 'zh'}' })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        redactedBox.textContent = data.error || 'Error';
+        return;
+      }
+      redactedBox.textContent = data.redacted_text || '';
+      if (data.clean) {
+        banner.style.background = '#E3ECE7';
+        banner.style.borderColor = 'rgba(35,62,51,0.35)';
+        banner.style.color = '#233E33';
+      } else {
+        banner.style.background = '#F9F1EC';
+        banner.style.borderColor = 'rgba(143,86,56,0.35)';
+        banner.style.color = '#8F5638';
+      }
+      banner.textContent = isEnMode ? data.compliance_summary_en : data.compliance_summary_zh;
+
+      const items = data.findings || [];
+      if (items.length === 0) {
+        findingsList.innerHTML = '<p style="font-size:12.5px;color:#525B56;margin:0;">' +
+          (isEnMode ? 'No explicit PHI entities found.' : '未检出显式 PHI 敏感实体。') + '</p>';
+      } else {
+        findingsList.innerHTML = items.map(f => (
+          '<div class="cite-item mismatch" style="padding:0.6rem 0.85rem;margin-bottom:0.5rem;">' +
+            '<div style="font-family:var(--mono);font-size:11.5px;color:#8F5638;">● ' +
+              (isEnMode ? f.description_en : f.description_zh) + '</div>' +
+            '<div style="font-family:var(--mono);font-size:12px;color:#151C19;margin-top:2px;">' +
+              '<code>' + f.value + '</code> → <strong style="color:#233E33;">' + f.redacted + '</strong>' +
+            '</div>' +
+          '</div>'
+        )).join('');
+      }
+    }
+
+    document.getElementById('phiRunBtn').addEventListener('click', runPhiScan);
+    elInput.addEventListener('input', runPhiScan);
+    document.getElementById('phiCopyBtn').addEventListener('click', (e) => {
+      navigator.clipboard.writeText(redactedBox.textContent || '');
+      const btn = e.currentTarget;
+      const old = btn.textContent;
+      btn.textContent = '✓ Copied';
+      setTimeout(() => { btn.textContent = old; }, 1500);
+    });
+    runPhiScan();
+  `
+
+  return renderCommonLayout({
+    lang,
+    title,
+    description,
+    keywords: 'clinical PHI de-identification tool, HIPAA Safe Harbor medical text redactor, medical case report privacy scanner, 临床病历脱敏工具, 医疗隐私PHI扫描器, 病例报告脱敏, Heurion',
     canonicalPath,
     zhPath,
     enPath,

@@ -4,7 +4,11 @@ import { join } from 'node:path'
 import { Hono } from 'hono'
 import { unzipSync, strFromU8 } from 'fflate'
 import { describe, expect, it } from 'vitest'
-import { registerPublicToolsApi } from '../src/http/routes/public-tools-api.ts'
+import {
+  classifyTrafficActor,
+  recordPublicTrafficHit,
+  registerPublicToolsApi,
+} from '../src/http/routes/public-tools-api.ts'
 import {
   TOOL_SLUGS,
   renderEnglishIndexHtml,
@@ -28,9 +32,34 @@ describe('SEO & AI Search (GEO) Static Assets & /en SSR', () => {
     expect(enHtml).toContain('What is Heurion, and how does it differ fundamentally from generic LLMs like ChatGPT or Claude?')
     expect(enHtml).toContain('What is Aegis OS, and how does it work together with the Heurion 2.0 Clinical Workstation?')
     expect(enHtml).toContain('href="/en/tools"')
+    expect(enHtml).toContain('href="/en/tools/table-1-generator"')
+    expect(enHtml).toContain('href="/en/tools/kaplan-meier-survival"')
+    expect(enHtml).toContain('href="/en/tools/forest-plot-generator"')
+    expect(enHtml).toContain('property="og:image"')
+    expect(enHtml).toContain('name="twitter:image"')
   })
 
-  it('validates robots.txt, llms.txt, and sitemap.xml for AI crawlers and Programmatic SEO', () => {
+  it('eliminates external Mainland-China-blocking Unsplash background URLs and includes og:image cards', () => {
+    const css = readFileSync(join(SITE_DIR, 'site.css'), 'utf8')
+    expect(css).not.toContain('images.unsplash.com')
+    expect(css).toContain('/site/nordic-bg.jpg')
+
+    for (const rel of [
+      'index.html',
+      'aegis-os/index.html',
+      'en/aegis-os/index.html',
+      'aegis-os/tutorial/index.html',
+      'en/aegis-os/tutorial/index.html',
+    ]) {
+      const html = readFileSync(join(SITE_DIR, rel), 'utf8')
+      expect(html).not.toContain('images.unsplash.com')
+      expect(html).toContain('property="og:image"')
+      expect(html).toContain('name="twitter:image"')
+    }
+  })
+
+  it('validates robots.txt, llms.txt, and sitemap.xml for AI crawlers and all 7 Programmatic SEO tools', () => {
+    expect(TOOL_SLUGS.length).toBe(7)
     const robots = readFileSync(join(SITE_DIR, 'robots.txt'), 'utf8')
     expect(robots).toContain('Sitemap: https://heurion.org/sitemap.xml')
     expect(robots).not.toContain('Sitemap: https://heurion.org/llms.txt')
@@ -39,10 +68,10 @@ describe('SEO & AI Search (GEO) Static Assets & /en SSR', () => {
     const llms = readFileSync(join(SITE_DIR, 'llms.txt'), 'utf8')
     expect(llms).toContain('临床研究工作流')
     expect(llms).toContain('研究者发起的临床研究（IIT')
-    expect(llms).toContain('https://heurion.org/tools/e-value-calculator')
-    expect(llms).toContain('https://heurion.org/tools/table-1-generator')
-    expect(llms).toContain('https://heurion.org/tools/consort-strobe-flowchart')
-    expect(llms).toContain('https://heurion.org/tools/pubmed-citation-checker')
+    for (const slug of TOOL_SLUGS) {
+      expect(llms).toContain(`https://heurion.org/tools/${slug}`)
+      expect(llms).toContain(`https://heurion.org/en/tools/${slug}`)
+    }
 
     const sitemap = readFileSync(join(SITE_DIR, 'sitemap.xml'), 'utf8')
     for (const slug of TOOL_SLUGS) {
@@ -51,11 +80,13 @@ describe('SEO & AI Search (GEO) Static Assets & /en SSR', () => {
     }
   })
 
-  it('renders bilingual Tools Hub (/tools and /en/tools) and all 4 standalone mini-tool pages', () => {
+  it('renders bilingual Tools Hub (/tools and /en/tools) and all 7 standalone mini-tool pages', () => {
     const zhHub = renderToolsHubHtml('zh')
     const enHub = renderToolsHubHtml('en')
     expect(zhHub).toContain('<link rel="canonical" href="https://heurion.org/tools">')
     expect(enHub).toContain('<link rel="canonical" href="https://heurion.org/en/tools">')
+    expect(zhHub).toContain('property="og:image"')
+    expect(enHub).not.toContain('images.unsplash.com')
     const enHubMain = enHub.match(/<main[\s\S]*?<\/main>/)?.[0] ?? ''
     expect(enHubMain).not.toMatch(/[\u4e00-\u9fa5]/)
 
@@ -66,6 +97,7 @@ describe('SEO & AI Search (GEO) Static Assets & /en SSR', () => {
       expect(enPage).toContain(`<link rel="canonical" href="https://heurion.org/en/tools/${slug}">`)
       expect(zhPage).toContain('application/ld+json')
       expect(enPage).toContain('application/ld+json')
+      expect(zhPage).toContain('property="og:image"')
       const enMain = enPage.match(/<main[\s\S]*?<\/main>/)?.[0] ?? ''
       expect(enMain).not.toMatch(/[\u4e00-\u9fa5]/)
     }
@@ -193,5 +225,100 @@ describe('Stateless No-Login Mini-Tools Public API (/api/public/tools/*)', () =>
       mismatch: 1,
       unverifiable: 1,
     })
+  })
+
+  it('computes Kaplan-Meier survival curves, Log-rank test, and Cox HR without login', async () => {
+    const csv = [
+      'id,group,time_months,event',
+      'P1,Dapa,36,0',
+      'P2,Dapa,24,1',
+      'P3,Dapa,30,0',
+      'P4,Dapa,36,0',
+      'P5,Control,8,1',
+      'P6,Control,12,1',
+      'P7,Control,18,1',
+      'P8,Control,26,0',
+    ].join('\n')
+
+    const res = await app.request('/api/public/tools/kaplan-meier', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        csv,
+        time_col: 'time_months',
+        event_col: 'event',
+        group_col: 'group',
+        lang: 'en',
+      }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.svg).toContain('<svg')
+    expect(body.svg).toContain('No. at Risk')
+    expect(body.groups.length).toBe(2)
+    expect(body.log_rank).toBeDefined()
+    expect(body.cox).toBeDefined()
+    expect(body.narrative_en).toContain('Kaplan-Meier')
+    expect(body.narrative_zh).toContain('生存分析')
+  })
+
+  it('renders log-scale Subgroup Forest Plot SVG with summary diamond and R script', async () => {
+    const rawLines = [
+      '*Overall Cohort (N=4744) | 0.74 | 0.65 | 0.85 | <0.001',
+      'Age <= 65 yr | 0.72 | 0.59 | 0.88 | 0.001',
+      'Age > 65 yr | 0.76 | 0.64 | 0.90 | 0.002',
+    ].join('\n')
+
+    const res = await app.request('/api/public/tools/forest-plot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'DAPA-HF Subgroup Forest Plot',
+        effect_type: 'HR',
+        raw_lines: rawLines,
+        lang: 'en',
+      }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.svg).toContain('<svg')
+    expect(body.svg).toContain('<polygon') // Summary diamond
+    expect(body.svg).not.toMatch(/[\u4e00-\u9fa5]/)
+    expect(body.rows_count).toBe(3)
+    expect(body.r_script).toContain('forestploter')
+  })
+
+  it('scans and redacts clinical PHI (MOD 11-2 ID card, phone, MRN, email, SSN, and patient name)', async () => {
+    const text =
+      '患者张建国，男，确诊为心力衰竭。住院号：ZY202509821，身份证：11010519491231002X，手机：13800138000，Email: test@hospital.org, MRN: HOSP-99881, SSN: 123-45-6789'
+    const res = await app.request('/api/public/tools/phi-scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, lang: 'zh' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.clean).toBe(false)
+    expect(body.findings_count).toBeGreaterThanOrEqual(5)
+    expect(body.redacted_text).not.toContain('11010519491231002X')
+    expect(body.redacted_text).not.toContain('13800138000')
+    expect(body.redacted_text).not.toContain('123-45-6789')
+  })
+
+  it('classifies human vs AI crawler vs health probe traffic and exposes privacy-safe telemetry', async () => {
+    expect(classifyTrafficActor('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36', '/tools')).toBe('human')
+    expect(classifyTrafficActor('Mozilla/5.0 (compatible; GPTBot/1.1; +https://openai.com/gptbot)', '/llms.txt')).toBe('ai_crawler')
+    expect(classifyTrafficActor('Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', '/')).toBe('search_bot')
+    expect(classifyTrafficActor('curl/8.7.1', '/healthz')).toBe('probe_or_bot')
+
+    recordPublicTrafficHit('/tools/kaplan-meier-survival', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')
+    recordPublicTrafficHit('/llms.txt', 'PerplexityBot/1.0')
+
+    const res = await app.request('/api/public/tools/telemetry')
+    expect(res.status).toBe(200)
+    const snap = await res.json() as any
+    expect(snap.totals.human).toBeGreaterThanOrEqual(1)
+    expect(snap.totals.ai_crawler).toBeGreaterThanOrEqual(1)
+    expect(snap.total_tool_invocations).toBeGreaterThanOrEqual(6)
   })
 })

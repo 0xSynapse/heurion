@@ -272,7 +272,6 @@ html[lang="zh-CN"] .heading-2 em {
   background-image:
     linear-gradient(100deg, rgba(250, 248, 244, 0.97) 0%, rgba(250, 248, 244, 0.93) 46%, rgba(244, 241, 234, 0.8) 100%),
     linear-gradient(180deg, rgba(250, 248, 244, 0.35) 0%, rgba(250, 248, 244, 0.08) 68%, rgba(239, 236, 228, 0.95) 100%),
-    url('https://images.unsplash.com/photo-1581093450021-4a7360e9a6b5?auto=format&fit=crop&w=2000&q=85'),
     url('/site/nordic-bg.jpg');
   background-size: cover;
   background-position: center 35%;
@@ -562,12 +561,59 @@ html[lang="zh-CN"] .flagship-sub {
   font-weight: 500;
 }
 
+/* Section 2.5: Stateless Clinical Utilities Showcase (Zero Login Funnel) */
+.sec-tools {
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border);
+  padding: 4.75rem 0;
+}
+
+.tools-showcase-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.35rem;
+}
+
+.tool-mini-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  padding: 1.65rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1.15rem;
+  transition: border-color 0.22s ease, transform 0.22s ease;
+}
+
+.tool-mini-card:hover {
+  border-color: var(--accent);
+}
+
+.tool-mini-top {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.tool-mini-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid var(--border);
+}
+
 /* Section 3: Archival Publications Index (Zero Duplicated Descriptions) */
 .sec-research {
   background-color: var(--bg-primary);
   background-image:
     linear-gradient(180deg, rgba(239, 236, 228, 0.96) 0%, rgba(250, 248, 244, 0.91) 45%, rgba(250, 248, 244, 0.96) 100%),
-    url('https://images.unsplash.com/photo-1532094349884-543bc11b234d?auto=format&fit=crop&w=1800&q=80');
+    url('/site/nordic-bg.jpg');
   background-size: cover;
   background-position: center;
   padding: 5rem 0;
@@ -626,10 +672,10 @@ html[lang="zh-CN"] .flagship-sub {
 
 @media (max-width: 991px) {
   .container, .nav-inner { padding-left: 1.75rem; padding-right: 1.75rem; }
-  .hero-grid, .flagships-grid { grid-template-columns: 1fr; }
+  .hero-grid, .flagships-grid, .tools-showcase-grid { grid-template-columns: 1fr; }
   .pub-row { grid-template-columns: 1fr; gap: 0.5rem; }
   .section-header, .foot-bar { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
-  .sec-hero, .sec-systems, .sec-research { padding: 4rem 0; }
+  .sec-hero, .sec-systems, .sec-tools, .sec-research { padding: 4rem 0; }
 }
 
 @media (max-width: 640px) {

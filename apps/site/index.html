@@ -22,11 +22,16 @@
   <meta property="og:description" content="Verifiable systems for clinical medicine and autonomous agents: Heurion 2.0 & OmniCanvas and Aegis OS." />
   <meta property="og:locale" content="zh_CN" />
   <meta property="og:locale:alternate" content="en_US" />
+  <meta property="og:image" content="https://heurion.org/site/demo-chest-mpr-3view.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Heurion Research — Clinical AI Workstation &amp; Aegis OS Agent Runtime" />
 
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Heurion Research · Clinical AI Workstation &amp; Aegis OS Agent Runtime" />
   <meta name="twitter:description" content="Heurion 2.0 & OmniCanvas (Clinical AI Workstation) and Aegis OS (Transactional Multi-Tenant Agent OS Runtime)." />
+  <meta name="twitter:image" content="https://heurion.org/site/demo-chest-mpr-3view.png" />
 
   <!-- Schema.org JSON-LD -->
   <script type="application/ld+json">
@@ -133,7 +138,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-v14" />
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v15" />
 </head>
 <body>
 
@@ -180,6 +185,7 @@
                   <span data-i18n="hero_cta_primary">进入临床工作台</span>
                   <span aria-hidden="true">→</span>
                 </a>
+                <a class="link-arrow" href="/tools" data-i18n="hero_cta_tools">免登录科研工具箱 (7) →</a>
                 <a class="link-arrow" href="#flagships" data-i18n="hero_cta_secondary">了解核心系统 →</a>
               </div>
             </div>
@@ -400,12 +406,102 @@
       </div>
     </section>
 
+    <!-- Section 2.5: Stateless Clinical Utilities (Zero-Login Immediate Value Funnel) -->
+    <section class="sec-tools" id="clinical-tools">
+      <div class="container">
+        <div class="section-header">
+          <div>
+            <h2 class="heading-2" data-i18n-html="tools_sec_title">免登录临床统计与<em>文献核验</em>工具矩阵。</h2>
+            <p class="text-muted" style="margin-top:0.35rem;" data-i18n="tools_sec_sub">零注册、无状态内存计算，直接开放 Heurion 2.0 底层生物统计、生存分析、森林图与 PubMed 防幻觉引擎。</p>
+          </div>
+          <p class="label-caps" data-i18n="tools_sec_label">02 / 免登录科研工具 (7)</p>
+        </div>
+
+        <div class="tools-showcase-grid">
+          <article class="tool-mini-card">
+            <div class="tool-mini-top">
+              <div class="tool-mini-meta">
+                <span>01 · BIOSTATISTICS</span>
+                <span>.DOCX + SMD</span>
+              </div>
+              <h3 class="heading-3" data-i18n="tm1_title">Table 1 基线三线表生成器</h3>
+              <p class="text-muted" data-i18n="tm1_desc">粘贴 CSV/Excel 自动判别正态/偏态分布，计算 P 值与 SMD，一键导出 1.5pt/0.5pt 原生 Word 三线表。</p>
+            </div>
+            <a class="link-arrow" href="/tools/table-1-generator" data-tool-slug="table-1-generator" data-i18n="tm1_cta">立即生成 Table 1 →</a>
+          </article>
+
+          <article class="tool-mini-card">
+            <div class="tool-mini-top">
+              <div class="tool-mini-meta">
+                <span>02 · SURVIVAL</span>
+                <span>KM + LOG-RANK</span>
+              </div>
+              <h3 class="heading-3" data-i18n="tm2_title">Kaplan-Meier 生存曲线与风险表</h3>
+              <p class="text-muted" data-i18n="tm2_desc">在线拟合 KM 生存阶梯曲线（含对齐 Number at Risk 风险集表）、Log-rank P 值与 Cox 回归 HR。</p>
+            </div>
+            <a class="link-arrow" href="/tools/kaplan-meier-survival" data-tool-slug="kaplan-meier-survival" data-i18n="tm2_cta">打开 KM 生存分析 →</a>
+          </article>
+
+          <article class="tool-mini-card">
+            <div class="tool-mini-top">
+              <div class="tool-mini-meta">
+                <span>03 · SUBGROUP FIGURE</span>
+                <span>LOG-SCALE .SVG</span>
+              </div>
+              <h3 class="heading-3" data-i18n="tm3_title">医学亚组与回归森林图生成</h3>
+              <p class="text-muted" data-i18n="tm3_desc">输入 HR / OR / RR 及 95% CI，实时绘制对数坐标轴森林图（含汇总菱形与精度加权方块）并导出 SVG。</p>
+            </div>
+            <a class="link-arrow" href="/tools/forest-plot-generator" data-tool-slug="forest-plot-generator" data-i18n="tm3_cta">绘制亚组森林图 →</a>
+          </article>
+
+          <article class="tool-mini-card">
+            <div class="tool-mini-top">
+              <div class="tool-mini-meta">
+                <span>04 · FIGURE 1</span>
+                <span>SVG + MERMAID</span>
+              </div>
+              <h3 class="heading-3" data-i18n="tm4_title">CONSORT 2010 / STROBE 流程图</h3>
+              <p class="text-muted" data-i18n="tm4_desc">自动校验初筛、排除原因与分组随访人数加减算术闭环，一键下载出版级矢量流程图。</p>
+            </div>
+            <a class="link-arrow" href="/tools/consort-strobe-flowchart" data-tool-slug="consort-strobe-flowchart" data-i18n="tm4_cta">生成纳排流程图 →</a>
+          </article>
+
+          <article class="tool-mini-card">
+            <div class="tool-mini-top">
+              <div class="tool-mini-meta">
+                <span>05 · CAUSAL REBUTTAL</span>
+                <span>E-VALUE + SCI</span>
+              </div>
+              <h3 class="heading-3" data-i18n="tm5_title">VanderWeele E-value 敏感性分析</h3>
+              <p class="text-muted" data-i18n="tm5_desc">定量计算未测量混杂偏倚抗干扰阈值，自动绘制阈值曲线并生成中英文 SCI 审稿回复段落。</p>
+            </div>
+            <a class="link-arrow" href="/tools/e-value-calculator" data-tool-slug="e-value-calculator" data-i18n="tm5_cta">计算 E-value 与回复 →</a>
+          </article>
+
+          <article class="tool-mini-card">
+            <div class="tool-mini-top">
+              <div class="tool-mini-meta">
+                <span>06 · GROUNDING &amp; PHI</span>
+                <span>PUBMED + HIPAA</span>
+              </div>
+              <h3 class="heading-3" data-i18n="tm6_title">PubMed 文献核验 &amp; PHI 隐私脱敏</h3>
+              <p class="text-muted" data-i18n="tm6_desc">实时核查 PMID/DOI 真伪与摘要 HR/CI 数值一致性，并提供临床病历身份证/病案号一键脱敏。</p>
+            </div>
+            <div style="display:flex;gap:1.1rem;flex-wrap:wrap;">
+              <a class="link-arrow" href="/tools/pubmed-citation-checker" data-tool-slug="pubmed-citation-checker" data-i18n="tm6_cta1">PubMed 核验 →</a>
+              <a class="link-arrow" href="/tools/phi-deidentifier" data-tool-slug="phi-deidentifier" data-i18n="tm6_cta2">PHI 病历脱敏 →</a>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <!-- Section 3: Archival Publications Index (Zero Duplicated Descriptions) -->
     <section class="sec-research" id="research">
       <div class="container">
         <div class="section-header">
           <h2 class="heading-2" data-i18n="res_title">研究论文</h2>
-          <p class="label-caps" data-i18n="res_label">02 / 研究发表</p>
+          <p class="label-caps" data-i18n="res_label">03 / 研究发表</p>
         </div>
 
         <div class="pub-list">
@@ -466,6 +562,7 @@
         hero_title: '为临床医学与自治智能体，<br>构建<em>可验证</em>的系统底座。',
         hero_lede: '面向临床医生与医学研究者：在一个工作台内完成病历队列、生物统计与论文撰写，患者隐私信息本地拦截、零外泄。',
         hero_cta_primary: '进入临床工作台',
+        hero_cta_tools: '免登录科研工具箱 (7) →',
         hero_cta_secondary: '了解核心系统 →',
         who_label: '关于我们',
         who_p1: '专注临床证据合成与智能体系统的独立研究实验室。',
@@ -519,8 +616,30 @@
         f2_link_tutorial: '使用教程 →',
         f2_link_repo: 'GitHub 仓库 →',
         f2_link_spec: 'AAP-1.0 规范 →',
+        tools_sec_title: '免登录临床统计与<em>文献核验</em>工具矩阵。',
+        tools_sec_sub: '零注册、无状态内存计算，直接开放 Heurion 2.0 底层生物统计、生存分析、森林图与 PubMed 防幻觉引擎。',
+        tools_sec_label: '02 / 免登录科研工具 (7)',
+        tm1_title: 'Table 1 基线三线表生成器',
+        tm1_desc: '粘贴 CSV/Excel 自动判别正态/偏态分布，计算 P 值与 SMD，一键导出 1.5pt/0.5pt 原生 Word 三线表。',
+        tm1_cta: '立即生成 Table 1 →',
+        tm2_title: 'Kaplan-Meier 生存曲线与风险表',
+        tm2_desc: '在线拟合 KM 生存阶梯曲线（含对齐 Number at Risk 风险集表）、Log-rank P 值与 Cox 回归 HR。',
+        tm2_cta: '打开 KM 生存分析 →',
+        tm3_title: '医学亚组与回归森林图生成',
+        tm3_desc: '输入 HR / OR / RR 及 95% CI，实时绘制对数坐标轴森林图（含汇总菱形与精度加权方块）并导出 SVG。',
+        tm3_cta: '绘制亚组森林图 →',
+        tm4_title: 'CONSORT 2010 / STROBE 流程图',
+        tm4_desc: '自动校验初筛、排除原因与分组随访人数加减算术闭环，一键下载出版级矢量流程图。',
+        tm4_cta: '生成纳排流程图 →',
+        tm5_title: 'VanderWeele E-value 敏感性分析',
+        tm5_desc: '定量计算未测量混杂偏倚抗干扰阈值，自动绘制阈值曲线并生成中英文 SCI 审稿回复段落。',
+        tm5_cta: '计算 E-value 与回复 →',
+        tm6_title: 'PubMed 文献核验 & PHI 隐私脱敏',
+        tm6_desc: '实时核查 PMID/DOI 真伪与摘要 HR/CI 数值一致性，并提供临床病历身份证/病案号一键脱敏。',
+        tm6_cta1: 'PubMed 核验 →',
+        tm6_cta2: 'PHI 病历脱敏 →',
         res_title: '研究论文',
-        res_label: '02 / 研究发表',
+        res_label: '03 / 研究发表',
         p1_meta: '2026 · 临床智能',
         p1_title: 'Heurion 2.0: Contract-Guarded Clinical Research Intelligence',
         p1_pdf: 'PDF →',
@@ -541,6 +660,7 @@
         hero_title: 'Verifiable systems for <em>clinical medicine</em> and <em>autonomous agents</em>.',
         hero_lede: 'For clinicians and medical researchers: patient cohorts, biostatistics and manuscripts in one workstation, with patient identifiers intercepted locally and never leaked.',
         hero_cta_primary: 'Enter Workstation',
+        hero_cta_tools: 'Free Clinical Tools (7) →',
         hero_cta_secondary: 'Explore the systems →',
         who_label: 'WHO WE ARE',
         who_p1: 'An independent research lab for clinical intelligence and agent operating systems.',
@@ -594,8 +714,30 @@
         f2_link_tutorial: 'Tutorial →',
         f2_link_repo: 'GitHub →',
         f2_link_spec: 'AAP-1.0 Spec →',
+        tools_sec_title: 'Stateless clinical <em>biostatistics</em> and <em>verification</em> utilities.',
+        tools_sec_sub: 'Zero registration and stateless in-memory execution — powered directly by Heurion 2.0 biostatistics, survival, forest plot, and PubMed grounding engines.',
+        tools_sec_label: '02 / FREE CLINICAL UTILITIES (7)',
+        tm1_title: 'Table 1 Baseline Generator (.docx)',
+        tm1_desc: 'Paste CSV/Excel rows for automatic normality branching, P-values, SMD, and native 1.5pt/0.5pt Word export.',
+        tm1_cta: 'Generate Table 1 →',
+        tm2_title: 'Kaplan-Meier & Log-rank Curve',
+        tm2_desc: 'Fit step-function KM curves with Greenwood 95% CIs, aligned Number at Risk tables, Log-rank P, and Cox HR.',
+        tm2_cta: 'Open KM Survival →',
+        tm3_title: 'Subgroup Forest Plot (.svg)',
+        tm3_desc: 'Plot HR / OR / RR with 95% CIs on a true logarithmic axis with summary diamonds and precision-weighted squares.',
+        tm3_cta: 'Plot Forest Figure →',
+        tm4_title: 'CONSORT 2010 & STROBE Flowchart',
+        tm4_desc: 'Automatic exclusion arithmetic verification with 1-click publication-grade vector SVG and Mermaid export.',
+        tm4_cta: 'Build Flowchart →',
+        tm5_title: 'VanderWeele E-value & Rebuttal',
+        tm5_desc: 'Quantify unmeasured confounding thresholds from HR/OR/RR, plot bias curves, and copy peer-review rebuttals.',
+        tm5_cta: 'Compute E-value →',
+        tm6_title: 'PubMed Audit & PHI De-identifier',
+        tm6_desc: 'Verify manuscript PMIDs/DOIs and inline HR/CI numbers against PubMed, or redact HIPAA/PIPL PHI identifiers.',
+        tm6_cta1: 'PubMed Audit →',
+        tm6_cta2: 'PHI Redactor →',
         res_title: 'Publications',
-        res_label: '02 / PUBLICATIONS',
+        res_label: '03 / PUBLICATIONS',
         p1_meta: '2026 · CLINICAL AI',
         p1_title: 'Heurion 2.0: Contract-Guarded Clinical Research Intelligence',
         p1_pdf: 'PDF →',
@@ -628,6 +770,12 @@
       if (btn) btn.textContent = lang === 'zh' ? 'EN' : '中文';
       const navTools = document.querySelector('a[data-i18n="nav_tools"]');
       if (navTools) navTools.setAttribute('href', lang === 'en' ? '/en/tools' : '/tools');
+      const heroTools = document.querySelector('a[data-i18n="hero_cta_tools"]');
+      if (heroTools) heroTools.setAttribute('href', lang === 'en' ? '/en/tools' : '/tools');
+      document.querySelectorAll('[data-tool-slug]').forEach(el => {
+        const slug = el.getAttribute('data-tool-slug');
+        if (slug) el.setAttribute('href', (lang === 'en' ? '/en/tools/' : '/tools/') + slug);
+      });
       document.querySelectorAll('[data-aegis-link]').forEach(el => {
         const tutorial = el.getAttribute('data-aegis-link') === 'tutorial';
         el.setAttribute('href', lang === 'en'
