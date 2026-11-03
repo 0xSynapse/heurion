@@ -34,6 +34,9 @@ run_as 59999 "$A" 'ls /app/data' >/dev/null 2>&1 && bad "能列出 /app/data" ||
 run_as 59999 "$A" "curl -fsS -m 5 http://127.0.0.1:${PORT:-8787}/healthz" | grep -q '"ok":true' && ok "能连本机平台（MCP / 模型代理）" || bad "连不上本机平台"
 run_as 59999 "$A" 'curl -sS -m 5 -o /dev/null https://example.com' >/dev/null 2>&1 && bad "能访问外网" || ok "不能访问外网"
 run_as 59999 "$A" 'curl -sS -m 5 -o /dev/null http://embedder:8003/health' >/dev/null 2>&1 && bad "能访问内部网络的其他服务" || ok "不能访问内部网络的其他服务"
+# 影像存储与阅片器（pacs profile）：不带 -f，只要收到任何 HTTP 响应（哪怕 401）就算连通；没启用时主机名解析失败，同样算连不上
+run_as 59999 "$A" 'curl -sS -m 5 -o /dev/null http://orthanc:8042/system' >/dev/null 2>&1 && bad "能访问影像存储（Orthanc）" || ok "不能访问影像存储（Orthanc）"
+run_as 59999 "$A" 'curl -sS -m 5 -o /dev/null http://viewer:8080/' >/dev/null 2>&1 && bad "能访问阅片器容器" || ok "不能访问阅片器容器"
 
 # 数据导入（与平台 datasets/ingest.ts 同一条路）：平台在工作区里建中转目录、放输入 → 以该 uid 运行导入脚本 → 平台读结果、清理
 run_as 59999 "$A" 'python3 -c "import pandas, scipy, statsmodels, lifelines, pyreadstat, openpyxl, matplotlib"' >/dev/null && ok "统计包可用（pandas、statsmodels、lifelines、pyreadstat）" || bad "统计包缺失"
