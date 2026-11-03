@@ -4,6 +4,7 @@ import type { Store } from '../../store/db.ts'
 import type { PatientService, Actor } from '../../tenancy/patients.ts'
 import { finishJob, insertJob, latestJob, type AnalyzeJob, type JobStore } from '../../imaging/analyze-jobs.ts'
 import { guardImagingPayload } from '../../tenancy/imaging-guard.ts'
+import { isNifti } from '../../imaging/nifti-sniff.ts'
 import type { Access } from '../../research/access.ts'
 import { generateSlicerAndItkSnapPackage, generateImageJAnalysis } from '../../research/medical-figures.ts'
 
@@ -15,6 +16,8 @@ export interface ImagingRouteContext {
   me: (c: Context<{ Variables: { user: string } }>) => Actor
   pt: (c: Context<{ Variables: { user: string } }>) => PatientService
   patientFailure: (c: Context, err: unknown) => Response
+  /** 接收未经去标识的原件（院内部署，config.imagingAcceptIdentified）。false 时本文件的上传分析只收 NIfTI */
+  acceptIdentified?: boolean
 }
 
 /**
@@ -620,6 +623,10 @@ export function registerImagingRoutes(
       verifyBodyVolumeAccess(c, { sample_id: sampleId, model_id: modelId })
       if (!fileBuffer && !sampleId) {
         return c.json({ error: 'no_image', message: '请上传该患者真实的医学影像文件 (NIfTI / DICOM)' }, 400)
+      }
+      // 这个接口不做去标识：没开「接收原件」时只收 NIfTI，DICOM 须经「影像检查」上传（浏览器里先去标识）
+      if (fileBuffer && !ctx.acceptIdentified && !isNifti(fileBuffer)) {
+        return c.json({ error: 'identified_upload', message: '这里只收 NIfTI（.nii / .nii.gz）。DICOM 请在患者页用「上传影像」：先在本机去除姓名、ID 等信息再上传' }, 400)
       }
       const scope = svc.imagingScope(actor, patientId, 'write')
       const key = `${scope.tenantId}:${patientId}`

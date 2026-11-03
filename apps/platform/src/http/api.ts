@@ -924,7 +924,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.delete('/api/patients/:ptid/docs/:id', c => { try { pt(c).unlinkDoc(me(c), c.req.param('ptid'), c.req.param('id')); return c.json({ ok: true }) } catch (err) { return patientFailure(c, err) } })
 
   // —— MONAI 医学影像微服务与患者影像量化分析 ——
-  registerImagingRoutes(app, { store, docs, access, audit, me, pt, patientFailure })
+  registerImagingRoutes(app, { store, docs, access, audit, me, pt, patientFailure, acceptIdentified: Boolean(deps.imagingAcceptIdentified) })
   // —— 影像效率埋点与统计（T2.10）：埋点只写本机构患者库，不外发 ——
   const imagingMetrics = (c: Context<{ Variables: { user: string } }>) => new ImagingMetricsService(pt(c), store, docs)
   registerImagingMetricsRoutes(app, { audit, me, metrics: imagingMetrics, patientFailure })
