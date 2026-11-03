@@ -37,7 +37,7 @@ push `0xSynapse/heurion` 的 main 分支，GitHub Actions 就会构建镜像（G
    1. 在分支上开发，推送分支：`git push origin <分支>`。本地 `origin` 有两个推送地址，分支会同时到 `0xSynapse/heurion` 和 `heurion-org/heurion`。
    2. 在 `0xSynapse/heurion` 上开 PR：`gh pr create -R 0xSynapse/heurion --base main --head <分支>`。`ci.yml` 在 PR 上运行「类型检查与测试」。
    3. CI 通过后合并：`gh pr merge -R 0xSynapse/heurion <PR 号> --merge`。合并就是 push main，触发下面的部署（部署前还会再测一次）。
-   4. 同步公开镜像：`git pull` 后 `git push origin main`。0xSynapse 那边已是最新，这一步只更新 `heurion-org/heurion`。
+   4. 同步公开镜像：`git pull --ff-only origin main` 后 `git push origin main`。0xSynapse 那边已是最新，这一步只更新 `heurion-org/heurion`。要写明 `origin main`：本地 main 跟踪的是 `public`（heurion-org），不带参数的 `git pull` 会拉错仓库。
    - `heurion-org/heurion` 的 main 要求 PR 和「类型检查与测试」，但不对管理员强制。镜像同步这一次推送是唯一预期的绕过，推送时提示「Bypassed rule violations」属正常；外部贡献仍走那边的 PR。
    - `0xSynapse/heurion` 的 main 开启分支保护（要求 PR 与「类型检查与测试」通过，不对管理员强制）后，紧急修复仍可由管理员直接 push，但要在提交信息里写明原因，事后补 PR 说明。
 1. push main，触发 `deploy-v2.yml`，依次执行：
