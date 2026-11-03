@@ -25,9 +25,22 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/site/site.css?v=nordic-v13" />
   <style>
-    .tut-hero { padding: 5rem 0 3rem; border-bottom: 1px solid var(--border); }
+    .tut-hero {
+      padding: 5rem 0 3.25rem;
+      background-color: var(--bg-primary);
+      background-image:
+        linear-gradient(102deg, rgba(250, 248, 244, 0.94) 0%, rgba(250, 248, 244, 0.86) 52%, rgba(239, 236, 228, 0.72) 100%),
+        url('https://images.unsplash.com/photo-1542273917363-3b1817f69a2d?auto=format&fit=crop&w=2000&q=80');
+      background-size: cover;
+      background-position: center 62%;
+      border-bottom: 1px solid var(--border);
+    }
     .tut-hero h1 { max-width: 18ch; }
     .tut-hero .lede { max-width: 50rem; margin-top: 1.2rem; color: var(--ink-secondary); font-size: 1.02rem; }
+    .brand-group { display: flex; align-items: center; gap: 0.85rem; }
+    .brand-sep { color: var(--border); font-weight: 300; }
+    .brand-sub { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); padding: 0.18rem 0.52rem; background: var(--accent-soft); border: 1px solid rgba(35, 62, 51, 0.2); }
+    .nav-link-active { color: var(--ink); font-weight: 500; }
     .tut-layout { display: grid; grid-template-columns: 15rem 1fr; gap: 4rem; padding: 4rem 0 6rem; }
     .tut-nav { position: sticky; top: 6rem; align-self: start; display: grid; gap: .55rem; }
     .tut-nav a { font-size: .88rem; color: var(--ink-secondary); border-left: 1px solid var(--border); padding-left: .8rem; }
@@ -48,31 +61,38 @@
     .tut-table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
     .tut-table th, .tut-table td { text-align: left; padding: .65rem .5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
     .tut-table th { font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); font-weight: 500; }
-    .next { display: flex; flex-wrap: wrap; gap: 1.4rem; margin-top: 2rem; }
-    @media (max-width: 900px) { .tut-layout { grid-template-columns: 1fr; gap: 2rem; } .tut-nav { position: static; grid-template-columns: repeat(2, 1fr); } }
+    .next { display: flex; flex-wrap: wrap; align-items: center; gap: 1.4rem; margin-top: 2rem; }
+    @media (max-width: 900px) { .tut-layout { grid-template-columns: 1fr; gap: 2rem; } .tut-nav { position: static; grid-template-columns: repeat(2, 1fr); } .brand-sep, .brand-sub { display: none; } }
   </style>
 </head>
 <body>
 
   <header class="nav" role="banner">
     <div class="nav-inner">
-      <a class="brand" href="/en" aria-label="Heurion Research">
-        <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
-          <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
-          <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
-          <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
-          <circle class="mark-accent" cx="80" cy="20" r="11"/>
-        </svg>
-        <span class="brand-word">HEURION</span>
-      </a>
+      <div class="brand-group">
+        <a class="brand" href="/en" aria-label="Heurion Research">
+          <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+            <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
+            <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
+            <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
+            <circle class="mark-accent" cx="80" cy="20" r="11"/>
+          </svg>
+          <span class="brand-word">HEURION</span>
+        </a>
+        <span class="brand-sep">/</span>
+        <span class="brand-sub">AEGIS OS</span>
+      </div>
       <nav class="nav-links" aria-label="Primary">
-        <a href="/en/aegis-os/" class="nav-link">Aegis OS</a>
-        <a href="/en/aegis-os/tutorial/" class="nav-link">Tutorial</a>
-        <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub</a>
+        <a href="/en" class="nav-link">Heurion.org</a>
+        <a href="/en/aegis-os/" class="nav-link">Aegis OS Overview</a>
+        <a href="/en/aegis-os/tutorial/" class="nav-link nav-link-active">Tutorial</a>
+        <a href="/aegis-cloud/dashboard" class="nav-link">Cloud Console</a>
+        <a href="/aegis-cloud/approve" class="nav-link">Approvals</a>
+        <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub ↗</a>
       </nav>
       <div class="nav-right">
         <a class="lang-btn" href="/aegis-os/tutorial/">中文</a>
-        <a class="nav-cta" href="/en/aegis-os/">Overview</a>
+        <a class="nav-cta" href="/aegis-cloud/dashboard">Cloud Console / Pro →</a>
       </div>
     </div>
   </header>
@@ -141,20 +161,20 @@ aegis-os doctor</pre>
 claude
 codex
 agy</pre>
-          <p>Aegis OS hooks attach the runtime automatically. On first run you choose:</p>
+          <p>Aegis OS hooks attach the runtime automatically. It starts silently in Free Local CoW mode by default, and you can switch to Cloud mode anytime:</p>
           <table class="tut-table">
-            <thead><tr><th>Mode</th><th>What it means</th></tr></thead>
+            <thead><tr><th>Mode</th><th>What it means &amp; entry point</th></tr></thead>
             <tbody>
-              <tr><td><strong>Local</strong></td><td>Free local mode: CoW shadow workspace + native OS sandbox. Recommended starting point.</td></tr>
-              <tr><td><strong>Cloud</strong></td><td>Requires an Aegis Cloud subscription; remote Linux btrfs workspace with zero local CPU/RAM load.</td></tr>
+              <tr><td><strong>Local</strong></td><td>Free local mode (default): CoW shadow workspace + native OS sandbox, ready immediately with zero setup prompts.</td></tr>
+              <tr><td><strong>Cloud</strong></td><td>Remote 64GB Linux btrfs runtime (0% local CPU/RAM load): supports both a free tier (<code>aegis-os cloud up</code>) and Pro ($29/mo, 8 parallel Agents). Open the <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">Aegis Cloud Console (/aegis-cloud/dashboard) →</a> or run <code>aegis-os cloud subscribe --plan pro --wait</code>.</td></tr>
             </tbody>
           </table>
           <p>You can switch later by telling the agent “switch to Local mode” or “switch to Cloud mode”.</p>
-          <h3>Verify isolation</h3>
+          <h3>Verify isolation &amp; boundary approval</h3>
           <p>Ask the agent to modify a file, then run:</p>
           <pre class="cmd">aegis-os workspace status
 aegis-os workspace diff</pre>
-          <p>The change lands in the CoW shadow workspace first and is not written to the host until <code>workspace_commit</code>.</p>
+          <p>The change lands in the CoW shadow workspace first and is not written to the host until <code>workspace_commit</code>. When <code>workspace_commit</code> runs, Aegis OS auto-opens the web approval console (<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a>) and auto-resumes once approved, or you can run <code>aegis-os approve</code> (alias: <code>aos approve</code>) in terminal.</p>
         </section>
 
         <section id="memory">
@@ -243,7 +263,9 @@ aegis-os a2a board</pre>
             </tbody>
           </table>
           <div class="next">
-            <a class="btn-solid" href="/en/aegis-os/">Back to Aegis OS overview →</a>
+            <a class="btn-solid" href="/aegis-cloud/dashboard">Open Aegis Cloud Console / Subscribe Pro →</a>
+            <a class="link-arrow" href="/en/aegis-os/">Back to Aegis OS overview →</a>
+            <a class="link-arrow" href="/aegis-cloud/approve">Boundary Approval Console (/approve) →</a>
             <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub repository →</a>
             <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP spec →</a>
           </div>

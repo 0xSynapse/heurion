@@ -25,9 +25,22 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/site/site.css?v=nordic-v13" />
   <style>
-    .tut-hero { padding: 5rem 0 3rem; border-bottom: 1px solid var(--border); }
+    .tut-hero {
+      padding: 5rem 0 3.25rem;
+      background-color: var(--bg-primary);
+      background-image:
+        linear-gradient(102deg, rgba(250, 248, 244, 0.94) 0%, rgba(250, 248, 244, 0.86) 52%, rgba(239, 236, 228, 0.72) 100%),
+        url('https://images.unsplash.com/photo-1542273917363-3b1817f69a2d?auto=format&fit=crop&w=2000&q=80');
+      background-size: cover;
+      background-position: center 62%;
+      border-bottom: 1px solid var(--border);
+    }
     .tut-hero h1 { max-width: 18ch; }
     .tut-hero .lede { max-width: 50rem; margin-top: 1.2rem; color: var(--ink-secondary); font-size: 1.02rem; }
+    .brand-group { display: flex; align-items: center; gap: 0.85rem; }
+    .brand-sep { color: var(--border); font-weight: 300; }
+    .brand-sub { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); padding: 0.18rem 0.52rem; background: var(--accent-soft); border: 1px solid rgba(35, 62, 51, 0.2); }
+    .nav-link-active { color: var(--ink); font-weight: 500; }
     .tut-layout { display: grid; grid-template-columns: 15rem 1fr; gap: 4rem; padding: 4rem 0 6rem; }
     .tut-nav { position: sticky; top: 6rem; align-self: start; display: grid; gap: .55rem; }
     .tut-nav a { font-size: .88rem; color: var(--ink-secondary); border-left: 1px solid var(--border); padding-left: .8rem; }
@@ -49,31 +62,38 @@
     .tut-table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
     .tut-table th, .tut-table td { text-align: left; padding: .65rem .5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
     .tut-table th { font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); font-weight: 500; }
-    .next { display: flex; flex-wrap: wrap; gap: 1.4rem; margin-top: 2rem; }
-    @media (max-width: 900px) { .tut-layout { grid-template-columns: 1fr; gap: 2rem; } .tut-nav { position: static; grid-template-columns: repeat(2, 1fr); } }
+    .next { display: flex; flex-wrap: wrap; align-items: center; gap: 1.4rem; margin-top: 2rem; }
+    @media (max-width: 900px) { .tut-layout { grid-template-columns: 1fr; gap: 2rem; } .tut-nav { position: static; grid-template-columns: repeat(2, 1fr); } .brand-sep, .brand-sub { display: none; } }
   </style>
 </head>
 <body>
 
   <header class="nav" role="banner">
     <div class="nav-inner">
-      <a class="brand" href="/" aria-label="Heurion Research">
-        <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
-          <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
-          <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
-          <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
-          <circle class="mark-accent" cx="80" cy="20" r="11"/>
-        </svg>
-        <span class="brand-word">HEURION</span>
-      </a>
+      <div class="brand-group">
+        <a class="brand" href="/" aria-label="Heurion Research">
+          <svg class="brand-mark" viewBox="-2 6 96 88" aria-hidden="true">
+            <rect class="mark-bar" x="0" y="10" width="18" height="80" rx="9"/>
+            <rect class="mark-bar" x="62" y="30" width="18" height="60" rx="9"/>
+            <rect class="mark-accent" x="14" y="42" width="52" height="18" rx="9"/>
+            <circle class="mark-accent" cx="80" cy="20" r="11"/>
+          </svg>
+          <span class="brand-word">HEURION</span>
+        </a>
+        <span class="brand-sep">/</span>
+        <span class="brand-sub">AEGIS OS</span>
+      </div>
       <nav class="nav-links" aria-label="Primary">
-        <a href="/aegis-os/" class="nav-link">Aegis OS</a>
-        <a href="/aegis-os/tutorial/" class="nav-link">教程</a>
-        <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub</a>
+        <a href="/" class="nav-link">Heurion 主站</a>
+        <a href="/aegis-os/" class="nav-link">Aegis OS 概览</a>
+        <a href="/aegis-os/tutorial/" class="nav-link nav-link-active">使用教程</a>
+        <a href="/aegis-cloud/dashboard" class="nav-link">云端控制台</a>
+        <a href="/aegis-cloud/approve" class="nav-link">边界审批台</a>
+        <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub ↗</a>
       </nav>
       <div class="nav-right">
         <a class="lang-btn" href="/en/aegis-os/tutorial/">EN</a>
-        <a class="nav-cta" href="/aegis-os/">概览</a>
+        <a class="nav-cta" href="/aegis-cloud/dashboard">云端控制台 / 订阅 Pro →</a>
       </div>
     </div>
   </header>
@@ -142,20 +162,20 @@ aegis-os doctor</pre>
 claude
 codex
 agy</pre>
-          <p>Aegis OS 的 hook 会自动附加运行时。首次运行会让你选择：</p>
+          <p>Aegis OS 的 hook 会自动附加运行时。默认直接进入免费的 Local CoW 沙箱模式，你也可随时切换到 Cloud 模式：</p>
           <table class="tut-table">
-            <thead><tr><th>模式</th><th>说明</th></tr></thead>
+            <thead><tr><th>模式</th><th>说明与入口</th></tr></thead>
             <tbody>
-              <tr><td><strong>Local</strong></td><td>免费本地模式：CoW 影子工作区 + 本机沙箱。推荐从这里开始。</td></tr>
-              <tr><td><strong>Cloud</strong></td><td>需要 Aegis Cloud 订阅；远程 Linux btrfs 工作区，本地零 CPU/RAM 负载。</td></tr>
+              <tr><td><strong>Local</strong></td><td>免费本地模式（默认）：本机 CoW 影子工作区 + 内核沙箱，启动即用。</td></tr>
+              <tr><td><strong>Cloud</strong></td><td>远程 64GB Linux btrfs 运行时（本地零 CPU/RAM 负载）：支持免费体验档（<code>aegis-os cloud up</code>）与 Pro 专业版（$29/月，8 个并行 Agent）。前往 <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">Aegis Cloud 控制台 (/aegis-cloud/dashboard) →</a> 或运行 <code>aegis-os cloud subscribe --plan pro --wait</code>。</td></tr>
             </tbody>
           </table>
           <p>也可以在对话里直接说“切换到 Local 模式”或“切换到 Cloud 模式”。</p>
-          <h3>验证隔离</h3>
+          <h3>验证隔离与边界审批</h3>
           <p>让 Agent 修改一个文件，然后运行：</p>
           <pre class="cmd">aegis-os workspace status
 aegis-os workspace diff</pre>
-          <p>你会看到修改先落在 CoW 影子工作区，尚未写回宿主目录。只有 <code>workspace_commit</code> 才会合并。</p>
+          <p>你会看到修改先落在 CoW 影子工作区，尚未写回宿主目录。当 Agent 调用 <code>workspace_commit</code> 合并回宿主机时，桌面环境会自动打开网页审批台（<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a>，点击批准后自动续跑），纯终端/SSH 下也可运行 <code>aegis-os approve</code>（或简写 <code>aos approve</code>）一键放行。</p>
         </section>
 
         <section id="memory">
@@ -244,7 +264,9 @@ aegis-os a2a board</pre>
             </tbody>
           </table>
           <div class="next">
-            <a class="btn-solid" href="/aegis-os/">返回 Aegis OS 概览 →</a>
+            <a class="btn-solid" href="/aegis-cloud/dashboard">打开 Aegis Cloud 控制台 / 订阅 Pro →</a>
+            <a class="link-arrow" href="/aegis-os/">返回 Aegis OS 概览 →</a>
+            <a class="link-arrow" href="/aegis-cloud/approve">边界审批台 (/approve) →</a>
             <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 仓库 →</a>
             <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP 规范 →</a>
           </div>
