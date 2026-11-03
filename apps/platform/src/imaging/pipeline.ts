@@ -18,14 +18,44 @@ export interface SeriesChoice { series: SeriesView | null; notes: string[]; reas
 
 /** 肺算法重建核（各厂商常见命名）；只用来在多个候选序列间排序，不作为必要条件 */
 const LUNG_KERNEL = /lung|b[67]\d|i[67]\d|br6\d|fc5\d|fc8\d|^y[ac]$|^l$/i
-const CHEST = /chest|lung|thorax|thx|胸/i
+const CHEST = /chest|lung|thora|thx|pulm|hrct|ldct|胸|肺/i
+/** 明确不是胸部的写法（部位字段或描述里出现，且没有胸部字样时不分析） */
+const NOT_CHEST = /head|brain|skull|cran|neuro|sinus|orbit|neck|abdom|pelv|liver|hepat|pancrea|kidney|renal|spine|lumbar|cervical|knee|hip|extrem|ankle|wrist|shoulder|cardiac|heart|coronary|头|颅|脑|鼻|眼眶|颈|腹|盆|肝|胰|肾|脊|腰|膝|髋|四肢|踝|腕|肩|心脏|冠脉/i
+
+/**
+ * 序列的检查部位。DICOM 的 BodyPartExamined 是可选字段，各院常空着或写设备默认值，所以和序列描述、检查描述一起看：
+ * 任一处写明胸部即是胸部；没有胸部字样、但写明其他部位的不是；都没写的判断不了（unknown），不自动分析，由医生确认。
+ */
+export function seriesRegion(s: SeriesView, studyDescription: string | null): 'chest' | 'other' | 'unknown' {
+  const texts = [s.body_part, s.description, studyDescription].filter((t): t is string => Boolean(t && t.trim()))
+  if (texts.some(t => CHEST.test(t))) return 'chest'
+  if (texts.some(t => NOT_CHEST.test(t))) return 'other'
+  return 'unknown'
+}
+
+export interface SelectContext {
+  /** 检查描述（StudyDescription）：部位字段空着时用来判断部位 */
+  studyDescription?: string | null
+  /** 医生已确认这次检查是胸部 CT：部位判断不了的序列也可分析 */
+  chestConfirmed?: boolean
+}
+
+/** 部位判断不了时的原因前缀：路由据此返回 needs_confirmation，前端请医生确认 */
+export const REGION_UNKNOWN = '无法确认检查部位是胸部'
 
 /** W1.2 肺结节 / 肺炎：胸部 CT，层厚 ≤ 1.25 mm 的肺算法薄层优先；> 2.5 mm 不分析 */
-export function selectLungSeries(series: SeriesView[]): SeriesChoice {
+export function selectLungSeries(series: SeriesView[], ctx: SelectContext = {}): SeriesChoice {
   const ct = series.filter(s => (s.modality ?? '').toUpperCase() === 'CT')
   if (!ct.length) return { series: null, notes: [], reason: '检查中没有 CT 序列' }
-  const chest = ct.filter(s => !s.body_part || CHEST.test(s.body_part))
-  if (!chest.length) return { series: null, notes: [], reason: `CT 序列的检查部位不是胸部（${[...new Set(ct.map(s => s.body_part))].join('、')}）` }
+  const region = new Map(ct.map(s => [s.id, seriesRegion(s, ctx.studyDescription ?? null)]))
+  let chest = ct.filter(s => region.get(s.id) === 'chest')
+  const confirmedNote: string[] = []
+  if (!chest.length) {
+    const unknown = ct.filter(s => region.get(s.id) === 'unknown')
+    if (unknown.length && ctx.chestConfirmed) { chest = unknown; confirmedNote.push('检查部位由医生确认为胸部（DICOM 里没有写明）') }
+    else if (unknown.length) return { series: null, notes: [], reason: `${REGION_UNKNOWN}（DICOM 的部位字段和检查 / 序列描述都没有写明）。确认是胸部 CT 后，可点「开始分析」` }
+    else return { series: null, notes: [], reason: `CT 序列的检查部位不是胸部（${[...new Set(ct.map(s => s.body_part || s.description || ctx.studyDescription).filter(Boolean))].join('、')}）` }
+  }
   // 定位像、剂量报告等层数很少的序列不分析
   const volumes = chest.filter(s => s.instances >= 30)
   if (!volumes.length) return { series: null, notes: [], reason: '没有足够层数的胸部 CT 序列（至少 30 层）' }
@@ -38,14 +68,14 @@ export function selectLungSeries(series: SeriesView[]): SeriesChoice {
     -s.instances,
   ]
   const best = [...usable].sort((a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i]! - y[i]!; return 0 })[0]!
-  const notes: string[] = []
+  const notes: string[] = [...confirmedNote]
   if (best.slice_thickness === null) notes.push('序列没有层厚信息，测量可靠性无法确认')
   else if (best.slice_thickness > 1.25) notes.push(`所选序列层厚 ${best.slice_thickness} mm，大于推荐的 1.25 mm`)
   if (!best.kernel || !LUNG_KERNEL.test(best.kernel)) notes.push(`所选序列不是肺算法重建（${best.kernel ?? '重建核未知'}）`)
   return { series: best, notes }
 }
 
-interface TaskDef { label: string; endpoint: string; model_id: string; select: (series: SeriesView[]) => SeriesChoice; kind: string }
+interface TaskDef { label: string; endpoint: string; model_id: string; select: (series: SeriesView[], ctx: SelectContext) => SeriesChoice; kind: string }
 export const TASKS: Record<ImagingTask, TaskDef> = {
   lung_nodule: { label: '肺结节检出与测量', endpoint: '/api/v1/pipeline/lung-nodule', model_id: 'lung_nodule_pipeline', select: selectLungSeries, kind: 'lung_nodule' },
 }
@@ -119,12 +149,14 @@ export class ImagingPipeline {
   }
 
   /** 为检查排一次分析；不适用（没有合适序列等）时返回原因，不建运行 */
-  enqueue(a: Actor, studyId: string, task: ImagingTask = 'lung_nodule', opts: { visibility?: 'visible' | 'shadow' } = {}): EnqueueResult {
+  enqueue(a: Actor, studyId: string, task: ImagingTask = 'lung_nodule', opts: { visibility?: 'visible' | 'shadow'; confirmChest?: boolean } = {}): EnqueueResult {
     const def = TASKS[task]
     // 原件已按保留期从影像存储删除：不排队（随访预计算前片时也走这里，返回原因而不是失败）
     const gone = this.studies.originalsDeleted(a, studyId)
     if (gone) return { task, skipped: gone.message }
-    const choice = def.select(this.studies.seriesOf(a, studyId))
+    // 医生在界面上确认「是胸部 CT」：先记下来，之后的自动分析（含随访补算前片）照此处理
+    if (opts.confirmChest) this.studies.confirmChest(a, studyId)
+    const choice = def.select(this.studies.seriesOf(a, studyId), this.studies.regionContext(a, studyId))
     if (!choice.series) return { task, skipped: choice.reason ?? '没有合适的序列' }
     const run = this.studies.startRun(a, studyId, { task, model_id: def.model_id, series_id: choice.series.id, visibility: opts.visibility })
     this.active.add(run.id)

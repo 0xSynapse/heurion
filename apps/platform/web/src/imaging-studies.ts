@@ -39,7 +39,7 @@ function runLine(r: RunView | undefined): string {
   return `<span class="danger-text">${task}：${r.status === 'interrupted' ? '已中断' : '失败'}</span><div class="muted">${esc(r.error ?? '')}</div>`
 }
 interface ImportResult {
-  studies: StudyView[]; files: { received: number; uploaded: number; duplicates: number; skipped: Array<{ name: string; reason: string }> }; conflicts: number; conflict_keys?: string[]
+  studies: StudyView[]; files: { received: number; uploaded: number; duplicates: number; skipped: Array<{ name: string; reason: string }> }; conflicts: number; conflict_keys?: string[]; updated_study_ids?: string[]
   analysis?: Array<{ study_id: string; task: string; run_id: string | null; shadow?: boolean; skipped: string | null }>
 }
 
@@ -100,9 +100,22 @@ function tally() {
   let conflictsNoKey = 0
   const skipped: string[] = []
   const notApplicable = new Set<string>()
+  /** 有新实例入库、等最后一批之后统一排队分析的检查 */
+  const pending = new Set<string>()
   return {
     skipped,
+    /** 所有批次传完（或中途停止）后：对有新实例的检查各排队一次分析 */
+    async analyze(api: Api, patientId: string) {
+      for (const id of pending) {
+        try {
+          const r = await api<{ shadow?: boolean }>(`/api/patients/${patientId}/imaging/studies/${encodeURIComponent(id)}/analyze`, { method: 'POST', body: JSON.stringify({ task: 'lung_nodule' }), headers: { 'Content-Type': 'application/json' } })
+          if (r.shadow) shadow = true
+        } catch (err) { notApplicable.add((err as Error).message) }
+      }
+      pending.clear()
+    },
     add(r: ImportResult, nameOf: (n: string) => string = n => n) {
+      for (const id of r.updated_study_ids ?? []) pending.add(id)
       uploaded += r.files.uploaded; duplicates += r.files.duplicates
       if (r.conflict_keys) r.conflict_keys.forEach(k => conflictKeys.add(k)); else conflictsNoKey += r.conflicts
       skipped.push(...r.files.skipped.map(s => `${nameOf(s.name)}（${s.reason}）`))
@@ -126,9 +139,9 @@ const b64bytes = (s: string) => Uint8Array.from(atob(s), c => c.charCodeAt(0))
  * 攒满一批就上传（同时只在内存里留一批）。原检查号单独作为表单字段发送，服务端加密存放，不进影像存储。
  * 院内部署接收原件时（accept_identified）按原样分批上传。
  */
-export async function uploadDicomStudies(api: Api, notice: Notice, patientId: string, files: File[]): Promise<void> {
+export async function uploadDicomStudies(api: Api, notice: Notice, patientId: string, files: File[], onBatch?: () => void | Promise<void>): Promise<void> {
   const params = await api<DeidParamsView>(`/api/patients/${patientId}/imaging/deid-params`)
-  if (params.accept_identified) return uploadOriginals(api, notice, patientId, files)
+  if (params.accept_identified) return uploadOriginals(api, notice, patientId, files, onBatch)
   const deid = await createDeidentifier({ key: b64bytes(params.key), pseudonym: params.pseudonym })
   notice('正在读取文件…')
   const est = await estimateSources(files)
@@ -145,11 +158,14 @@ export async function uploadDicomStudies(api: Api, notice: Notice, patientId: st
     const fd = new FormData()
     for (const f of batch.files) fd.append('files', f)
     fd.append('study_meta', JSON.stringify(Object.fromEntries([...batch.studies].map(([uid, accession]) => [uid, { accession }]))))
+    fd.append('defer_analysis', '1')
     batch = { files: [], size: 0, studies: new Map() }
     const r = await api<ImportResult>(`/api/patients/${patientId}/imaging/dicom`, { method: 'POST', body: fd })
     t.add(r, n => names.get(n) ?? n)
+    await onBatch?.()
   }
   let firstPatient: string | null = null, mixedOk = false
+  try {
   for await (const e of iterateSources(files)) {
     done++
     if (done === 1 || done % 10 === 0) notice(`正在去标识 ${done} / ${Math.max(done, est.files)}（影像先在本机去除姓名、ID 等信息再上传）…`)
@@ -160,6 +176,7 @@ export async function uploadDicomStudies(api: Api, notice: Notice, patientId: st
     if (firstPatient === null) firstPatient = r.original.patientKey
     else if (r.original.patientKey !== firstPatient && !mixedOk) {
       if (!await askConfirm({ title: '这批影像不像同一位患者', message: '所选文件里的患者 ID / 姓名不止一种。影像会全部归到当前患者名下。\n确认都是这位患者的再继续；点「取消」停止上传（已上传的批次保留）。', confirm: '继续上传' })) {
+        await t.analyze(api, patientId)
         t.finish(notice, 'DICOM 上传已停止')
         return
       }
@@ -173,12 +190,16 @@ export async function uploadDicomStudies(api: Api, notice: Notice, patientId: st
     if (!batch.studies.get(r.studyUid)) batch.studies.set(r.studyUid, r.original.accession)
   }
   await flush()
+  } finally {
+    // 中途某批失败时，已入库的批次照样排队分析
+    await t.analyze(api, patientId)
+  }
   if (!batchNo && !t.skipped.length) { notice('没有找到 DICOM 文件', true); return }
   t.finish(notice)
 }
 
 /** 院内部署接收原件：按原样分批上传（单个文件超过批大小时独占一批） */
-async function uploadOriginals(api: Api, notice: Notice, patientId: string, files: File[]): Promise<void> {
+async function uploadOriginals(api: Api, notice: Notice, patientId: string, files: File[], onBatch?: () => void | Promise<void>): Promise<void> {
   const batches: File[][] = []
   let cur: File[] = [], size = 0
   for (const f of files) {
@@ -191,8 +212,13 @@ async function uploadOriginals(api: Api, notice: Notice, patientId: string, file
     notice(`正在上传第 ${i + 1} / ${batches.length} 批（本院部署接收原件，不在本机去标识）…`)
     const fd = new FormData()
     for (const f of batch) fd.append('files', f)
-    t.add(await api<ImportResult>(`/api/patients/${patientId}/imaging/dicom`, { method: 'POST', body: fd }))
+    fd.append('defer_analysis', '1')
+    try {
+      t.add(await api<ImportResult>(`/api/patients/${patientId}/imaging/dicom`, { method: 'POST', body: fd }))
+    } catch (err) { await t.analyze(api, patientId); throw err }
+    await onBatch?.()
   }
+  await t.analyze(api, patientId)
   t.finish(notice)
 }
 
@@ -354,9 +380,16 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-analyze]')
     if (!btn) return
     btn.disabled = true
+    const run = (confirmChest: boolean) => api<{ shadow?: boolean }>(`/api/patients/${patientId}/imaging/studies/${encodeURIComponent(btn.dataset.analyze!)}/analyze`, { method: 'POST', body: JSON.stringify({ task: 'lung_nodule', ...(confirmChest ? { confirm_chest: true } : {}) }), headers: { 'Content-Type': 'application/json' } })
     try {
-      const r = await api<{ shadow?: boolean }>(`/api/patients/${patientId}/imaging/studies/${encodeURIComponent(btn.dataset.analyze!)}/analyze`, { method: 'POST', body: JSON.stringify({ task: 'lung_nodule' }), headers: { 'Content-Type': 'application/json' } })
-      notice(r.shadow ? '影像 AI 处于影子模式：已在后台分析，结果不显示' : '已开始分析，完成后结果会出现在这里')
+      let r: { shadow?: boolean } | null = null
+      try { r = await run(false) } catch (err) {
+        // DICOM 里判断不出部位：请医生确认是胸部 CT 再分析（确认记入访问留痕）
+        if ((err as ApiError).body?.code !== 'needs_confirmation') throw err
+        const ok = await askConfirm({ title: '确认是胸部 CT', message: `${(err as Error).message.replace(/。确认是胸部 CT 后，可点「开始分析」$/, '')}。\n确认这次检查是胸部 CT 后再做肺结节分析；确认人会记入访问记录。`, confirm: '是胸部 CT，开始分析' })
+        if (ok) r = await run(true)
+      }
+      if (r) notice(r.shadow ? '影像 AI 处于影子模式：已在后台分析，结果不显示' : '已开始分析，完成后结果会出现在这里')
     } catch (err) { notice(`不能分析：${(err as Error).message}`, true) }
     await refresh()
   }
@@ -366,7 +399,7 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
       const files = Array.from(input.files ?? []).filter(f => !f.name.startsWith('.'))
       input.value = ''
       if (!files.length) return
-      try { await uploadDicomStudies(api, notice, patientId, files) } catch (err) { notice(`DICOM 上传失败：${(err as Error).message}`, true) }
+      try { await uploadDicomStudies(api, notice, patientId, files, refresh) } catch (err) { notice(`DICOM 上传失败：${(err as Error).message}`, true) }
       await refresh()
     }
   }

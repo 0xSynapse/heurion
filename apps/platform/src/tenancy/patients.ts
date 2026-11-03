@@ -246,6 +246,9 @@ class TenantPatientDb {
     const studyCols = cols('imaging_studies')
     if (!studyCols.includes('originals_deleted_at')) this.db.exec('ALTER TABLE imaging_studies ADD COLUMN originals_deleted_at TEXT')
     if (!studyCols.includes('originals_retention_days')) this.db.exec('ALTER TABLE imaging_studies ADD COLUMN originals_retention_days INTEGER')
+    // 检查部位无法从 DICOM 判断时，医生确认是胸部 CT 的人与时间（src/imaging/pipeline.ts selectLungSeries）
+    if (!studyCols.includes('chest_confirmed_by')) this.db.exec('ALTER TABLE imaging_studies ADD COLUMN chest_confirmed_by TEXT')
+    if (!studyCols.includes('chest_confirmed_at')) this.db.exec('ALTER TABLE imaging_studies ADD COLUMN chest_confirmed_at TEXT')
     // 迁移：AI 生成并直接存为「已确认」的影像报告（kind = report，存入时访问日志记 via = ai）改回待医生确认
     this.db.exec(`UPDATE records SET status = 'pending', origin = 'ai_report', confirmed_by = NULL, confirmed_at = NULL
       WHERE kind = 'report' AND status = 'confirmed' AND origin IS NULL

@@ -59,6 +59,8 @@ export interface ImportResult {
   conflicts: number
   /** 冲突检查的不透明标识（本次上传在影像存储里的检查 id），供分批上传时按检查去重计数 */
   conflict_keys: string[]
+  /** 这次上传有新实例入库的检查（平台检查 id）：分批上传时，前端在最后一批之后对它们统一排队分析 */
+  updated_study_ids: string[]
 }
 
 /** superseded = 重新分析后被新结果取代的、从未经医生处理的 AI 检出，或医生撤销的自己补充的病灶 */
@@ -255,9 +257,10 @@ export class ImagingStudyService {
 
     const linked: string[] = []
     const conflictKeys: string[] = []
+    const updated: string[] = []
     for (const [orthancStudyId, seriesIds] of studies) {
       const id = await this.linkStudy(s, a, orthanc, orthancStudyId, seriesIds, meta)
-      if (id) linked.push(id)
+      if (id) { linked.push(id); if ((perStudy.get(orthancStudyId)?.uploaded ?? 0) > 0 && !updated.includes(id)) updated.push(id) }
       else {
         conflictKeys.push(orthancStudyId)
         uploaded -= perStudy.get(orthancStudyId)?.uploaded ?? 0
@@ -265,7 +268,7 @@ export class ImagingStudyService {
       }
     }
     const all = this.listIn(s, true)
-    return { studies: all.filter(st => linked.includes(st.id)), files: { received, uploaded, duplicates, skipped }, conflicts: conflictKeys.length, conflict_keys: conflictKeys }
+    return { studies: all.filter(st => linked.includes(st.id)), files: { received, uploaded, duplicates, skipped }, conflicts: conflictKeys.length, conflict_keys: conflictKeys, updated_study_ids: updated }
   }
 
   private storageError(err: unknown): ImagingError {
@@ -415,6 +418,21 @@ export class ImagingStudyService {
   }
 
   /** 原件是否已按保留期删除（分析排队、阅片器入口据此拒绝）；读权限 */
+  /** 选序列用：检查描述（解密）与医生是否确认过「是胸部 CT」 */
+  regionContext(a: Actor, studyId: string): { studyDescription: string | null; chestConfirmed: boolean } {
+    const s = this.studyScope(a, studyId, 'read')
+    const row = s.db.prepare('SELECT description_enc, chest_confirmed_at FROM imaging_studies WHERE id = ?').get(studyId) as { description_enc: string | null; chest_confirmed_at: string | null } | undefined
+    return { studyDescription: s.decrypt(row?.description_enc ?? null), chestConfirmed: Boolean(row?.chest_confirmed_at) }
+  }
+
+  /** 医生确认这次检查是胸部 CT（DICOM 里判断不出部位时）：记人与时间，留痕；之后自动分析（含随访补算前片）照此处理。AI 不能调用 */
+  confirmChest(a: Actor, studyId: string): void {
+    if (a.via === 'ai') throw new PatientError('forbidden', '检查部位只能由医生在界面上确认', 403)
+    const s = this.studyScope(a, studyId, 'write')
+    s.db.prepare('UPDATE imaging_studies SET chest_confirmed_by = ?, chest_confirmed_at = ? WHERE id = ?').run(a.userId, now(), studyId)
+    s.log('imaging_chest_confirmed', studyId)
+  }
+
   originalsDeleted(a: Actor, studyId: string): OriginalsDeleted | null {
     const s = this.studyScope(a, studyId, 'read')
     return studyOriginals(s.db, studyId)

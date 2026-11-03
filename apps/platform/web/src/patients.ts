@@ -465,7 +465,9 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
     const otherRecords = d.records.filter(r => r.kind !== 'imaging')
 
     // 这里只列上传的报告与旧版「影像分析」的量化记录；DICOM 影像检查在上方单独的区块里，不要说成「还没有影像」
-    if (d.records.length === 0) return `<div class="muted">还没有上传的化验单、报告或量化分析记录。可点上方「上传化验单 / 报告」，或「${icon('scan')} 影像分析」做单次量化。</div>`
+    if (d.records.length === 0) return hooks.dicom()
+      ? `<div class="muted">还没有上传的化验单或报告。可点上方「上传化验单 / 报告」；影像请用「${icon('scan')} 上传影像」。</div>`
+      : `<div class="muted">还没有上传的化验单、报告或量化分析记录。可点上方「上传化验单 / 报告」，或「${icon('scan')} 影像分析」做单次量化。</div>`
     const STATUS: Record<string, string> = { pending: '待确认', confirmed: '已确认', rejected: '已驳回' }
     const EXTRACT: Record<string, string> = { queued: '排队提取', running: '提取中…', done: '', failed: '提取失败', skipped: '' }
 
@@ -4039,7 +4041,9 @@ ${impression}
       input.value = ''
       tab = 'records'
       await openPatient(id, true)
-      try { await uploadDicomStudies(api, notice, id, files) } catch (err) { notice(`DICOM 上传失败：${(err as Error).message}`, true) }
+      // 每传完一批刷新一次：医生能看到检查和层数在增加
+      const onBatch = async () => { if (current === id && tab === 'records') await openPatient(id, true) }
+      try { await uploadDicomStudies(api, notice, id, files, onBatch) } catch (err) { notice(`DICOM 上传失败：${(err as Error).message}`, true) }
       if (current === id) await openPatient(id, true)
       return
     }
