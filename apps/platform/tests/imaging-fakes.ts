@@ -22,6 +22,8 @@ export class FakeOrthanc implements Orthanc {
   archives: string[] = []
   /** 按 SeriesInstanceUID 覆盖序列标签（层厚、重建核、部位等） */
   seriesTags = new Map<string, Partial<OrthancSeries>>()
+  /** 按 StudyInstanceUID 覆盖检查描述（部位判断测试用；null = 没有 StudyDescription） */
+  studyDescriptions = new Map<string, string | null>()
   /** 按 StudyInstanceUID 覆盖检查日期（随访对比测试用；null = 没有 StudyDate） */
   studyDates = new Map<string, string | null>()
   /** 真实 DICOM（去标识测试）上传时按检查记下文件里的检查号（没有为 null）；JSON 假文件的检查返回固定检查号 */
@@ -51,7 +53,7 @@ export class FakeOrthanc implements Orthanc {
   async study(id: string): Promise<OrthancStudy> {
     const uid = this.uids.get(id)!
     const series = [...new Set([...this.instances.values()].filter(i => i.study === uid).map(i => this.oid(i.series)))]
-    return { studyUid: uid, studyDate: this.studyDates.has(uid) ? this.studyDates.get(uid)! : '2026-10-20', description: '胸部 CT 平扫', accession: this.accessions.has(uid) ? this.accessions.get(uid)! : 'ACC-778899', series }
+    return { studyUid: uid, studyDate: this.studyDates.has(uid) ? this.studyDates.get(uid)! : '2026-10-20', description: this.studyDescriptions.has(uid) ? this.studyDescriptions.get(uid)! : '胸部 CT 平扫', accession: this.accessions.has(uid) ? this.accessions.get(uid)! : 'ACC-778899', series }
   }
   async series(id: string): Promise<OrthancSeries> {
     const uid = this.uids.get(id)!

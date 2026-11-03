@@ -82,6 +82,8 @@ REST 与 MCP 的对应关系登记在 `tests/parity.test.ts`。
 
 1. 触发：上传有新实例的检查后自动排队；也可在检查列表里「重新分析」，或由 AI 调 `imaging_study_analyze`。
 2. 选序列（W1.2，`selectLungSeries`）：只看胸部 CT，排除少于 30 层的定位像；层厚大于 2.5 mm 不分析并说明原因。优先选 ≤ 1.25 mm 的肺算法序列；其次退选时，把层厚、重建核的问题写进运行摘要。
+   - 检查部位（`seriesRegion`）：BodyPartExamined 是可选字段，各院常空着或写设备默认值，所以和序列描述、检查描述一起看。任一处写明胸部（chest、lung、thorax、HRCT、胸、肺等）即是胸部；没有胸部字样、但写明其他部位（头颅、腹部、盆腔、脊柱、心脏等）的不分析；都没写的「判断不了」，不自动分析。
+   - 判断不了时，医生点「开始分析」，接口返回 409 `needs_confirmation`；界面请医生确认「是胸部 CT」后带 `confirm_chest` 重试。确认记在检查上（`chest_confirmed_by` / `chest_confirmed_at`，访问留痕 `imaging_chest_confirmed`），之后的自动分析（含随访补算前片）照此处理，运行摘要写明「检查部位由医生确认为胸部」。确认只放行判断不了的，不放行写明是其他部位的。AI 不能确认。
 3. 排队：运行记在 `imaging_runs`，状态依次为 queued → running → done / failed。并发数由 `IMAGING_PIPELINE_CONCURRENCY` 设定，默认 1。
 4. 处理：平台从 Orthanc 取出整个序列的 zip，经 `/api/v1/volume/upload` 交给 worker，再调 `/api/v1/pipeline/lung-nodule`（T1.5）。结束后调 `DELETE /api/v1/volume/:id` 释放 worker 内存。
 5. 入库：每个检出写成一条 `source = ai`、`status = proposed` 的病灶。同一任务旧运行里从未经医生处理的检出标为 `superseded`，医生确认或否决过的保留。

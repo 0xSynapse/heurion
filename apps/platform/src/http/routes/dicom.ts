@@ -3,7 +3,7 @@ import { getCookie, setCookie } from 'hono/cookie'
 import type { Actor, PatientService } from '../../tenancy/patients.ts'
 import type { Orthanc } from '../../imaging/orthanc.ts'
 import { ImagingError, ImagingStudyService, type StudyUploadMeta, type StudyView } from '../../imaging/studies.ts'
-import { TASKS, type EnqueueResult, type ImagingPipeline, type ImagingTask } from '../../imaging/pipeline.ts'
+import { REGION_UNKNOWN, TASKS, type EnqueueResult, type ImagingPipeline, type ImagingTask } from '../../imaging/pipeline.ts'
 import { parsePoints, type ImagingInteractive } from '../../imaging/interactive.ts'
 import { ImagingReviewService } from '../../imaging/review.ts'
 import type { ImagingMetricsService } from '../../imaging/metrics.ts'
@@ -125,9 +125,9 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
   }
 
   const isShadow = (r: EnqueueResult) => r.run?.visibility === 'shadow'
-  const enqueue = (c: Context<{ Variables: { user: string } }>, studyId: string, task: ImagingTask): EnqueueResult => {
+  const enqueue = (c: Context<{ Variables: { user: string } }>, studyId: string, task: ImagingTask, opts: { confirmChest?: boolean } = {}): EnqueueResult => {
     if (!ctx.pipeline) return { task, skipped: '影像分析服务未启用' }
-    return ctx.pipeline.enqueue(me(c), studyId, task)
+    return ctx.pipeline.enqueue(me(c), studyId, task, opts)
   }
 
   /** 服务重启后，库里还是排队 / 处理中、但本进程没有在跑的运行，显示为中断 */
@@ -145,13 +145,14 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
   /** 对一个检查（重新）发起 AI 分析；body.task 缺省为肺结节 */
   app.post('/api/patients/:ptid/imaging/studies/:stid/analyze', async c => {
     try {
-      const body = await c.req.json().catch(() => ({})) as { task?: string }
+      const body = await c.req.json().catch(() => ({})) as { task?: string; confirm_chest?: boolean }
       const task = (body.task ?? 'lung_nodule') as ImagingTask
       if (!TASKS[task]) throw new ImagingError('bad_task', `不支持的分析任务：${body.task}`)
       const ptid = c.req.param('ptid'), stid = c.req.param('stid')
       if (!svc(c).listStudies(me(c), ptid).some(s => s.id === stid)) throw new ImagingError('not_found', '影像检查不存在', 404)
-      const r = enqueue(c, stid, task)
-      if (r.skipped) return c.json({ error: r.skipped, code: 'not_applicable', task }, 409)
+      const r = enqueue(c, stid, task, { confirmChest: body.confirm_chest === true })
+      // 部位判断不了：请医生确认是胸部 CT 后带 confirm_chest 重试
+      if (r.skipped) return c.json({ error: r.skipped, code: r.skipped.startsWith(REGION_UNKNOWN) ? 'needs_confirmation' : 'not_applicable', task }, 409)
       if (isShadow(r)) return c.json({ task, run_id: null, status: r.run!.status, shadow: true, notes: r.notes ?? [] }, 202)
       return c.json({ task, run_id: r.run!.id, status: r.run!.status, notes: r.notes ?? [] }, 202)
     } catch (err) { return fail(c, err) }

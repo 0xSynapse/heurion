@@ -7,7 +7,7 @@ import { TenantService } from '../src/auth/tenants.ts'
 import { issueToken } from '../src/auth/token.ts'
 import { PostCheck } from '../src/collab/postcheck.ts'
 import { buildApi } from '../src/http/api.ts'
-import { ImagingPipeline, selectLungSeries } from '../src/imaging/pipeline.ts'
+import { ImagingPipeline, REGION_UNKNOWN, selectLungSeries } from '../src/imaging/pipeline.ts'
 import { ImagingStudyService, type SeriesView } from '../src/imaging/studies.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { OpService } from '../src/ops/service.ts'
@@ -43,6 +43,31 @@ describe('按病种选序列（W1.2 肺结节）', () => {
     expect(selectLungSeries([series({ body_part: 'HEAD' })]).reason).toContain('不是胸部')
     expect(selectLungSeries([series({ modality: 'MR' })]).reason).toBe('检查中没有 CT 序列')
     expect(selectLungSeries([series({ instances: 10 })]).reason).toContain('至少 30 层')
+  })
+})
+
+describe('检查部位：部位字段、序列描述、检查描述一起看', () => {
+  it('任一处写明胸部即可；只写其他部位的不分析；都没写的判断不了，医生确认后才分析', () => {
+    // 部位字段空着，序列 / 检查描述写了胸部
+    expect(selectLungSeries([series({ body_part: null, description: 'Axial Lung 1.25mm' })]).series).not.toBeNull()
+    expect(selectLungSeries([series({ body_part: null })], { studyDescription: '胸部 CT 平扫' }).series).not.toBeNull()
+    expect(selectLungSeries([series({ body_part: 'CHEST_ABDOMEN' })]).series).not.toBeNull()
+    // 部位字段写了胸部，描述是别的部位：以写明胸部为准
+    expect(selectLungSeries([series({ body_part: 'CHEST', description: 'Abdomen 5mm' })]).series).not.toBeNull()
+    // 明确是其他部位
+    expect(selectLungSeries([series({ body_part: null })], { studyDescription: '头颅 CT 平扫' }).reason).toContain('不是胸部（头颅 CT 平扫）')
+    expect(selectLungSeries([series({ body_part: 'HEAD' })]).reason).toContain('不是胸部')
+    // 都没写：不自动分析
+    const unk = selectLungSeries([series({ body_part: null })])
+    expect(unk.series).toBeNull()
+    expect(unk.reason!.startsWith(REGION_UNKNOWN)).toBe(true)
+    expect(selectLungSeries([series({ body_part: '  ' })], { studyDescription: 'Routine' }).reason!.startsWith(REGION_UNKNOWN)).toBe(true)
+    // 医生确认后：可分析，结果里写明
+    const ok = selectLungSeries([series({ body_part: null })], { chestConfirmed: true })
+    expect(ok.series).not.toBeNull()
+    expect(ok.notes).toContain('检查部位由医生确认为胸部（DICOM 里没有写明）')
+    // 确认只放行「判断不了」的，不放行写明是其他部位的
+    expect(selectLungSeries([series({ body_part: 'HEAD' })], { chestConfirmed: true }).reason).toContain('不是胸部')
   })
 })
 
@@ -274,6 +299,31 @@ describe('分析接口', () => {
     await t.pipeline.idle()
     list = await (await t.app.request(`/api/patients/${p.id}/imaging/studies`, { headers: t.auth })).json() as Array<{ runs: Array<{ status: string }>; series: Array<{ instances: number }> }>
     expect(list[0]!.runs).toHaveLength(1)
+  })
+
+  it('部位判断不了：上传后不自动分析；开始分析返回 needs_confirmation，带 confirm_chest 后排队并留痕；之后自动分析照此处理', async () => {
+    const t = api()
+    const p = t.patients.create(t.a, { sex: 'M', birth_year: 1958 })
+    t.orthanc.seriesTags.set(THIN, { bodyPart: null, description: null })
+    t.orthanc.studyDescriptions.set(STUDY, null)
+    const form = new FormData()
+    for (const f of seriesFiles(STUDY, THIN, 40)) form.append('files', new File([f.bytes], f.name))
+    const up = await (await t.app.request(`/api/patients/${p.id}/imaging/dicom`, { method: 'POST', headers: t.auth, body: form })).json() as { studies: Array<{ id: string }>; analysis: Array<{ skipped: string | null; run_id: string | null }> }
+    expect(up.analysis[0]!.run_id).toBeNull()
+    expect(up.analysis[0]!.skipped!.startsWith(REGION_UNKNOWN)).toBe(true)
+    const id = up.studies[0]!.id
+    const post = (body: unknown) => t.app.request(`/api/patients/${p.id}/imaging/studies/${id}/analyze`, { method: 'POST', headers: { ...t.auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const first = await post({})
+    expect(first.status).toBe(409)
+    expect(await first.json()).toMatchObject({ code: 'needs_confirmation' })
+    expect((await post({ confirm_chest: true })).status).toBe(202)
+    await t.pipeline.idle()
+    expect(t.patients.accessLog(t.a, p.id).map((l: { action: string }) => l.action)).toContain('imaging_chest_confirmed')
+    // 确认过之后，不带 confirm_chest 也能分析（随访补算前片走的就是这条）
+    expect((await post({})).status).toBe(202)
+    await t.pipeline.idle()
+    // AI 不能替医生确认
+    expect(() => t.svc.confirmChest({ ...t.a, via: 'ai' }, id)).toThrow(/医生/)
   })
 
   it('上传即排队分析；列表带运行状态；可重新分析；不适用时 409', async () => {

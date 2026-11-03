@@ -380,9 +380,16 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-analyze]')
     if (!btn) return
     btn.disabled = true
+    const run = (confirmChest: boolean) => api<{ shadow?: boolean }>(`/api/patients/${patientId}/imaging/studies/${encodeURIComponent(btn.dataset.analyze!)}/analyze`, { method: 'POST', body: JSON.stringify({ task: 'lung_nodule', ...(confirmChest ? { confirm_chest: true } : {}) }), headers: { 'Content-Type': 'application/json' } })
     try {
-      const r = await api<{ shadow?: boolean }>(`/api/patients/${patientId}/imaging/studies/${encodeURIComponent(btn.dataset.analyze!)}/analyze`, { method: 'POST', body: JSON.stringify({ task: 'lung_nodule' }), headers: { 'Content-Type': 'application/json' } })
-      notice(r.shadow ? '影像 AI 处于影子模式：已在后台分析，结果不显示' : '已开始分析，完成后结果会出现在这里')
+      let r: { shadow?: boolean } | null = null
+      try { r = await run(false) } catch (err) {
+        // DICOM 里判断不出部位：请医生确认是胸部 CT 再分析（确认记入访问留痕）
+        if ((err as ApiError).body?.code !== 'needs_confirmation') throw err
+        const ok = await askConfirm({ title: '确认是胸部 CT', message: `${(err as Error).message.replace(/。确认是胸部 CT 后，可点「开始分析」$/, '')}。\n确认这次检查是胸部 CT 后再做肺结节分析；确认人会记入访问记录。`, confirm: '是胸部 CT，开始分析' })
+        if (ok) r = await run(true)
+      }
+      if (r) notice(r.shadow ? '影像 AI 处于影子模式：已在后台分析，结果不显示' : '已开始分析，完成后结果会出现在这里')
     } catch (err) { notice(`不能分析：${(err as Error).message}`, true) }
     await refresh()
   }
