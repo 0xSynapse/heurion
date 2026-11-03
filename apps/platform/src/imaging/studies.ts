@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { unzipSync } from 'fflate'
 import { PatientError, type Actor, type ImagingScope, type PatientService } from '../tenancy/patients.ts'
 import { OrthancError, type Orthanc } from './orthanc.ts'
+import { originalsOf, studyOriginals, type OriginalsDeleted } from './retention.ts'
 
 /**
  * 影像检查、AI 运行与病灶（docs/design/IMAGING_STUDIES.md）。
@@ -46,6 +47,8 @@ export interface StudyView {
   runs: Array<Pick<RunRow, 'id' | 'task' | 'model_id' | 'model_version' | 'status' | 'error' | 'summary' | 'created_at' | 'finished_at'>>
   /** 机构处于影像 AI 影子模式：自动分析照常在后台运行，结果不显示（界面据此说明，不给「重新分析」按钮） */
   ai_shadow: boolean
+  /** 原件已按保留期从 Orthanc 删除（imaging/retention.ts）：界面不给阅片、分析入口，并说明可重新上传；原件在时为 null */
+  originals_deleted: OriginalsDeleted | null
 }
 
 export interface ImportResult {
@@ -349,8 +352,15 @@ export class ImagingStudyService {
         study_date: (r.study_date as string | null) ?? null, modalities: JSON.parse(r.modalities as string) as string[], description: s.decrypt((r.description_enc as string | null) ?? null),
         source: r.source as StudyView['source'], status: r.status as string, created_at: r.created_at as string, series, lesions: counts, runs,
         ai_shadow: s.aiVisibility === 'shadow',
+        originals_deleted: originalsOf(r),
       }
     })
+  }
+
+  /** 原件是否已按保留期删除（分析排队、阅片器入口据此拒绝）；读权限 */
+  originalsDeleted(a: Actor, studyId: string): OriginalsDeleted | null {
+    const s = this.studyScope(a, studyId, 'read')
+    return studyOriginals(s.db, studyId)
   }
 
   /** DICOMweb 代理用：按 StudyInstanceUID 找到检查并校验能看到该患者；找不到或看不到都当不存在 */

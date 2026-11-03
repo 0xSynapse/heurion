@@ -242,6 +242,10 @@ class TenantPatientDb {
     if (!labCols.includes('origin')) this.db.exec('ALTER TABLE labs ADD COLUMN origin TEXT')
     // 影像分析运行的结果摘要（质控、警告、耗时；早期开发库没有这一列）
     if (!cols('imaging_runs').includes('summary')) this.db.exec('ALTER TABLE imaging_runs ADD COLUMN summary TEXT')
+    // 影像原件保留期清理（src/imaging/retention.ts）：原件从 Orthanc 删除的时间与当时的保留天数；索引、AI 结果、病灶与留痕都保留
+    const studyCols = cols('imaging_studies')
+    if (!studyCols.includes('originals_deleted_at')) this.db.exec('ALTER TABLE imaging_studies ADD COLUMN originals_deleted_at TEXT')
+    if (!studyCols.includes('originals_retention_days')) this.db.exec('ALTER TABLE imaging_studies ADD COLUMN originals_retention_days INTEGER')
     // 迁移：AI 生成并直接存为「已确认」的影像报告（kind = report，存入时访问日志记 via = ai）改回待医生确认
     this.db.exec(`UPDATE records SET status = 'pending', origin = 'ai_report', confirmed_by = NULL, confirmed_at = NULL
       WHERE kind = 'report' AND status = 'confirmed' AND origin IS NULL
@@ -403,6 +407,24 @@ export class PatientService {
     const c = this.ctx(a)
     if (!c.tenantAdmin) throw new PatientError('forbidden', `${what}只给机构管理员`, 403)
     return { db: c.db.db, tenantId: c.tenantId, aiVisibility: c.settings.imaging_ai_visibility === 'shadow' ? 'shadow' : 'visible' }
+  }
+
+  /**
+   * 平台定时任务（影像原件保留期清理，src/imaging/retention.ts）用：已建过患者库的机构逐个给出库与留痕函数。
+   * 不经用户权限、不给接口和 AI；没有患者库的机构不新建库。留痕记在 access_log，user_id 为任务名、via = system。
+   */
+  imagingSystemTenants(actor: string): Array<{ tenantId: string; db: DatabaseSync; log: (patientId: string, action: string, detail?: string | null) => void }> {
+    return this.store.listTenants()
+      .filter(t => existsSync(join(this.root, t.id.replace(/[^A-Za-z0-9_-]/g, '_'), 'patients.db')))
+      .map(t => {
+        const db = this.dbFor(t.id).db
+        return {
+          tenantId: t.id, db,
+          log: (patientId: string, action: string, detail: string | null = null) => {
+            db.prepare('INSERT INTO access_log (at, user_id, patient_id, action, via, detail) VALUES (?, ?, ?, ?, ?, ?)').run(now(), actor, patientId, action, 'system', detail)
+          },
+        }
+      })
   }
 
   /** AI 写入要不要先经医生确认（机构设置）。 */
@@ -582,7 +604,7 @@ export class PatientService {
   accessLog(a: Actor, patientId: string): Array<{ at: string; user: string; action: string; via: string; detail: string | null }> {
     const { c } = this.requireTeam(a, patientId, 'owner')
     return (c.db.db.prepare('SELECT * FROM access_log WHERE patient_id = ? ORDER BY id DESC LIMIT 500').all(patientId) as Array<{ at: string; user_id: string; action: string; via: string; detail: string | null }>)
-      .map(r => ({ at: r.at, user: this.store.getUser(r.user_id)?.display_name ?? r.user_id, action: r.action, via: r.via, detail: r.detail }))
+      .map(r => ({ at: r.at, user: this.store.getUser(r.user_id)?.display_name ?? (r.via === 'system' ? '系统定时任务' : r.user_id), action: r.action, via: r.via, detail: r.detail }))
   }
 
   // —— 化验 ——
