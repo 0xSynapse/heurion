@@ -57,6 +57,8 @@ export interface ImportResult {
   files: { received: number; uploaded: number; duplicates: number; skipped: Array<{ name: string; reason: string }> }
   /** 检查已属于本机构另一位患者，未关联到当前患者（不透露是哪位） */
   conflicts: number
+  /** 冲突检查的不透明标识（本次上传在影像存储里的检查 id），供分批上传时按检查去重计数 */
+  conflict_keys: string[]
 }
 
 /** superseded = 重新分析后被新结果取代的、从未经医生处理的 AI 检出，或医生撤销的自己补充的病灶 */
@@ -234,11 +236,14 @@ export class ImagingStudyService {
 
     const studies = new Map<string, Set<string>>()
     let uploaded = 0, duplicates = 0
+    // 每个 Orthanc 检查的入库数：冲突的检查被删掉后，不算进「新入库」
+    const perStudy = new Map<string, { uploaded: number; duplicates: number }>()
     for (const f of dicom) {
       try {
         const r = await orthanc.upload(f.bytes)
         if (r.status === 'AlreadyStored') duplicates++
         else uploaded++
+        perStudy.set(r.studyId, { uploaded: (perStudy.get(r.studyId)?.uploaded ?? 0) + (r.status === 'AlreadyStored' ? 0 : 1), duplicates: (perStudy.get(r.studyId)?.duplicates ?? 0) + (r.status === 'AlreadyStored' ? 1 : 0) })
         const set = studies.get(r.studyId) ?? new Set<string>()
         set.add(r.seriesId)
         studies.set(r.studyId, set)
@@ -249,14 +254,18 @@ export class ImagingStudyService {
     }
 
     const linked: string[] = []
-    let conflicts = 0
+    const conflictKeys: string[] = []
     for (const [orthancStudyId, seriesIds] of studies) {
       const id = await this.linkStudy(s, a, orthanc, orthancStudyId, seriesIds, meta)
       if (id) linked.push(id)
-      else conflicts++
+      else {
+        conflictKeys.push(orthancStudyId)
+        uploaded -= perStudy.get(orthancStudyId)?.uploaded ?? 0
+        duplicates -= perStudy.get(orthancStudyId)?.duplicates ?? 0
+      }
     }
     const all = this.listIn(s, true)
-    return { studies: all.filter(st => linked.includes(st.id)), files: { received, uploaded, duplicates, skipped }, conflicts }
+    return { studies: all.filter(st => linked.includes(st.id)), files: { received, uploaded, duplicates, skipped }, conflicts: conflictKeys.length, conflict_keys: conflictKeys }
   }
 
   private storageError(err: unknown): ImagingError {
@@ -273,9 +282,14 @@ export class ImagingStudyService {
     const extra = Object.hasOwn(meta, tags.studyUid) ? meta[tags.studyUid] : undefined
     const accession = tags.accession ?? (typeof extra?.accession === 'string' && extra.accession.trim() ? extra.accession.trim().slice(0, 64) : null)
     const hmac = s.uidKey('study', tags.studyUid)
-    const existing = s.db.prepare('SELECT id, patient_id FROM imaging_studies WHERE uid_hmac = ?').get(hmac) as { id: string; patient_id: string } | undefined
+    const existing = s.db.prepare('SELECT id, patient_id, orthanc_id FROM imaging_studies WHERE uid_hmac = ?').get(hmac) as { id: string; patient_id: string; orthanc_id: string | null } | undefined
     if (existing && existing.patient_id !== s.patientId) {
       s.log('imaging_upload_conflict', null)
+      // 去标识后各患者的 PatientID 是各自的假名，Orthanc 会把这次上传存成一个新检查。它不会关联到任何患者，
+      // 保留期清理也找不到它：当场删掉，免得原件无主地留在云端。和已关联检查是同一个 Orthanc 检查（接收原件时 PatientID 相同）时不删。
+      if (existing.orthanc_id !== orthancStudyId) {
+        try { await orthanc.deleteStudy(orthancStudyId) } catch (err) { console.error(`[imaging] 冲突上传的检查未能从影像存储删除：${err instanceof Error ? err.message : String(err)}`) }
+      }
       return null
     }
     const series: Array<{ orthancId: string; tags: Awaited<ReturnType<Orthanc['series']>> }> = []

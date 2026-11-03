@@ -39,7 +39,7 @@ function runLine(r: RunView | undefined): string {
   return `<span class="danger-text">${task}：${r.status === 'interrupted' ? '已中断' : '失败'}</span><div class="muted">${esc(r.error ?? '')}</div>`
 }
 interface ImportResult {
-  studies: StudyView[]; files: { received: number; uploaded: number; duplicates: number; skipped: Array<{ name: string; reason: string }> }; conflicts: number
+  studies: StudyView[]; files: { received: number; uploaded: number; duplicates: number; skipped: Array<{ name: string; reason: string }> }; conflicts: number; conflict_keys?: string[]
   analysis?: Array<{ study_id: string; task: string; run_id: string | null; shadow?: boolean; skipped: string | null }>
 }
 
@@ -94,21 +94,26 @@ function render(list: StudyView[], canEdit: boolean, reviews: Map<string, Review
 
 /** 各批上传结果的汇总 */
 function tally() {
-  let uploaded = 0, duplicates = 0, conflicts = 0, shadow = false
+  let uploaded = 0, duplicates = 0, shadow = false
+  // 一个检查分几批上传时每批都会报冲突：按检查去重
+  const conflictKeys = new Set<string>()
+  let conflictsNoKey = 0
   const skipped: string[] = []
   const notApplicable = new Set<string>()
   return {
     skipped,
     add(r: ImportResult, nameOf: (n: string) => string = n => n) {
-      uploaded += r.files.uploaded; duplicates += r.files.duplicates; conflicts += r.conflicts
+      uploaded += r.files.uploaded; duplicates += r.files.duplicates
+      if (r.conflict_keys) r.conflict_keys.forEach(k => conflictKeys.add(k)); else conflictsNoKey += r.conflicts
       skipped.push(...r.files.skipped.map(s => `${nameOf(s.name)}（${s.reason}）`))
       for (const x of r.analysis ?? []) { if (x.skipped) notApplicable.add(x.skipped); if (x.shadow) shadow = true }
     },
     finish(notice: Notice, head = 'DICOM 上传完成') {
+      const conflicts = conflictKeys.size + conflictsNoKey
       const parts = [`新入库 ${uploaded} 个文件`, duplicates ? `${duplicates} 个已存在` : '', skipped.length ? `跳过 ${skipped.length} 个` : ''].filter(Boolean)
       const reasons = [...new Set(skipped.map(s => s.replace(/^.*（(.*)）$/, '$1')))]
       const analysis = (notApplicable.size ? `；未自动分析：${[...notApplicable].join('；')}` : '') + (shadow ? '；影像 AI 处于影子模式，分析在后台进行，结果不显示' : '')
-      notice(`${head}：${parts.join('，')}${reasons.length ? `（跳过原因：${reasons.slice(0, 4).join('；')}${reasons.length > 4 ? ' 等' : ''}）` : ''}${conflicts ? `；有 ${conflicts} 个检查已属于本机构的其他患者，未关联到这位患者` : ''}${analysis}`, conflicts > 0 || (uploaded + duplicates === 0 && skipped.length > 0))
+      notice(`${head}：${parts.join('，')}${reasons.length ? `（跳过原因：${reasons.slice(0, 4).join('；')}${reasons.length > 4 ? ' 等' : ''}）` : ''}${conflicts ? `；有 ${conflicts} 个检查已属于本机构的其他患者，未关联到这位患者，这次上传的文件已删除` : ''}${analysis}`, conflicts > 0 || (uploaded + duplicates === 0 && skipped.length > 0))
       if (skipped.length) console.info('跳过的文件：', skipped)
     },
   }

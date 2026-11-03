@@ -411,6 +411,35 @@ describe('去标识上传：服务端', () => {
     expect(second.r.studyUid).toBe(first.r.studyUid)
     expect(second.res.conflicts).toBe(1)
     expect(second.res.studies).toHaveLength(0)
+    // 假 Orthanc 里两次上传是同一个检查（相当于接收原件、PatientID 相同）：不能删，删了就删掉第一位患者的原件
+    expect(t.orthanc.deletedStudies).toEqual([])
+  })
+
+  it('冲突上传在影像存储里另成一个检查（各患者假名不同）时当场删除，不算新入库；分批上传按检查去重', async () => {
+    const t = env()
+    const p = t.patients.create(t.as(t.dr), { sex: 'F', birth_year: 1961 })
+    const q = t.patients.create(t.as(t.dr2), { sex: 'F', birth_year: 1961 })
+    const raw = part10('1.2.840.10008.1.2.1', ctElements())
+    const up = async (who: string, pid: string) => {
+      const prm = t.svc.deidParams(t.as(who), pid)
+      const r = ok(await (await createDeidentifier({ key: fromB64(prm.key), pseudonym: prm.pseudonym })).deidentify(raw))
+      return t.svc.importDicom(t.as(who), pid, [{ name: 'x', bytes: r.bytes }])
+    }
+    await up(t.dr, p.id)
+    // 真实 Orthanc 按 PatientID + StudyInstanceUID 生成检查 id：第二位患者的假名不同，得到另一个检查
+    const o = t.orthanc as unknown as { upload: (b: Uint8Array) => Promise<{ studyId: string; status: string }>; uids: Map<string, string>; deleteStudy: (id: string) => Promise<void> }
+    const orig = o.upload.bind(o)
+    o.upload = async b => { const r = await orig(b); const alt = `${r.studyId}-q`; o.uids.set(alt, o.uids.get(r.studyId)!); return { ...r, studyId: alt, status: 'Success' } }
+    const removed: string[] = []
+    o.deleteStudy = async id => { removed.push(id) }
+    const second = await up(t.dr2, q.id)
+    expect(second.conflicts).toBe(1)
+    expect(second.conflict_keys).toHaveLength(1)
+    expect(second.files.uploaded).toBe(0)
+    expect(removed).toEqual(second.conflict_keys)
+    // 第二批同一检查：冲突标识相同，前端按它去重
+    const third = await up(t.dr2, q.id)
+    expect(third.conflict_keys).toEqual(second.conflict_keys)
   })
 
   it('院内部署（acceptIdentified）接收原件', async () => {
