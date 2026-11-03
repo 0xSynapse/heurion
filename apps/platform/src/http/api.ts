@@ -123,6 +123,8 @@ export interface ApiDeps {
   studies?: StudyService
   /** 影像存储（Orthanc）；不给时按 ORTHANC_URL 组装，没配置为 null（上传与 DICOMweb 返回 503）。 */
   orthanc?: Orthanc | null
+  /** 手工上传 DICOM 时接收未经去标识的原件（院内部署，config.imagingAcceptIdentified）；默认 false。 */
+  imagingAcceptIdentified?: boolean
   /** 影像分析流水线；不给时有 Orthanc 就用进程内共用的一条，null 表示上传后不自动分析。 */
   imagingPipeline?: ImagingPipeline | null
   /** 阅片器点选分割（T2.3）；不给时有 Orthanc 就用进程内共用的，null 表示阅片器里不能点选。 */
@@ -928,7 +930,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   registerImagingMetricsRoutes(app, { audit, me, metrics: imagingMetrics, patientFailure })
   // —— 影像检查：手工上传 DICOM、检查列表、DICOMweb 鉴权代理（docs/design/IMAGING_STUDIES.md）——
   viewerSurface = registerDicomRoutes(app, {
-    audit, me, pt, patientFailure, orthanc, metrics: imagingMetrics,
+    audit, me, pt, patientFailure, orthanc, metrics: imagingMetrics, acceptIdentified: Boolean(deps.imagingAcceptIdentified),
     viewerTokens: { issue: (u, aud, ttl, docs) => accounts.viewerToken(u, aud, ttl, docs), verify: (t, aud) => accounts.verifyViewerToken(t, aud) },
     pipeline: deps.imagingPipeline !== undefined ? deps.imagingPipeline : deps.patients && orthanc ? sharedPipeline(deps.patients, orthanc) : null,
     interactive: deps.imagingInteractive !== undefined ? deps.imagingInteractive : deps.patients && orthanc ? sharedInteractive(deps.patients, orthanc) : null,

@@ -5,6 +5,8 @@
 #   backup-to-s3.sh upload-dir <目录> <前缀>   上传一个目录（切换时的 1.0 全量备份）
 # 环境（.env.production）：S3_ENDPOINT、S3_REGION、S3_ACCESS_KEY、S3_SECRET_KEY、S3_BUCKET；保留 BACKUP_RETAIN_DAYS（7）/ BACKUP_RETAIN_WEEKS（4），
 # 总量上限 BACKUP_MAX_GB（8，留在 Cloudflare R2 免费的 10 GB 以内），超出时从最旧的删，每类至少留 BACKUP_MIN_KEEP（2）份
+# 只备份平台数据卷 heurion2_data 里的库与文件；影像存储的卷（heurion2_orthanc-db）有意不备份：云端影像只是工作副本，
+# 原件在医院，按 IMAGING_RETENTION_DAYS 清理，R2 的 8 GB 上限也放不下 DICOM（docs/DEPLOY.md「启用影像存储」）
 set -euo pipefail
 
 # 只从 .env.production 读备份要用的变量（S3_*、BACKUP_*），不整体 source：

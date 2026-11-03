@@ -97,7 +97,7 @@ function env(opts: { quality?: 'fine' | 'coarse' | 'none'; priorAnchor?: boolean
   const orthanc = new FakeOrthanc()
   orthanc.studyDates.set(PRIOR, '2025-10-20')
   orthanc.studyDates.set(CUR, '2026-10-20')
-  const svc = new ImagingStudyService(patients, orthanc)
+  const svc = new ImagingStudyService(patients, orthanc, { acceptIdentified: true })
   const a: Actor = { userId: dr, via: 'user' }
   /** 每个检查下一次分析返回的结节（按 StudyInstanceUID） */
   const results = new Map<string, unknown>([[PRIOR, result(PRIOR_NODS, opts.priorAnchor === false ? null : 0)], [CUR, result(CUR_NODS, SHIFT)]])

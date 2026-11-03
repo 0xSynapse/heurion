@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { OrthancError, type Orthanc, type OrthancSeries, type OrthancStudy } from '../src/imaging/orthanc.ts'
+import { dicomString, findElement, parseDicom, vrOf } from '../src/imaging/deid/index.ts'
 
 /** 测试用 DICOM：128 字节前导 + DICM + 一段 JSON（假 Orthanc 从这里读 UID） */
 export function dicom(study: string, series: string, sop: string): Uint8Array<ArrayBuffer> {
@@ -23,6 +24,8 @@ export class FakeOrthanc implements Orthanc {
   seriesTags = new Map<string, Partial<OrthancSeries>>()
   /** 按 StudyInstanceUID 覆盖检查日期（随访对比测试用；null = 没有 StudyDate） */
   studyDates = new Map<string, string | null>()
+  /** 真实 DICOM（去标识测试）上传时按检查记下文件里的检查号（没有为 null）；JSON 假文件的检查返回固定检查号 */
+  accessions = new Map<string, string | null>()
   private uids = new Map<string, string>()
   private oid(uid: string): string {
     const id = createHash('sha1').update(uid).digest('hex').slice(0, 16)
@@ -31,7 +34,16 @@ export class FakeOrthanc implements Orthanc {
   }
   async upload(bytes: Uint8Array) {
     let meta: { study: string; series: string; sop: string }
-    try { meta = JSON.parse(new TextDecoder().decode(bytes.slice(132))) } catch { throw new OrthancError(400, '不是有效的 DICOM 文件') }
+    try { meta = JSON.parse(new TextDecoder().decode(bytes.slice(132))) } catch {
+      // 真实的 DICOM（去标识测试用代码合成的）：按标签取 UID
+      try {
+        const ds = parseDicom(bytes, vrOf).dataset
+        const get = (tag: number) => dicomString(findElement(ds, tag))
+        meta = { study: get(0x0020000d)!, series: get(0x0020000e)!, sop: get(0x00080018)! }
+        if (!meta.study || !meta.series || !meta.sop) throw new Error('缺 UID')
+        this.accessions.set(meta.study, get(0x00080050) || null)
+      } catch { throw new OrthancError(400, '不是有效的 DICOM 文件') }
+    }
     const had = this.instances.has(meta.sop)
     this.instances.set(meta.sop, { study: meta.study, series: meta.series })
     return { instanceId: this.oid(meta.sop), studyId: this.oid(meta.study), seriesId: this.oid(meta.series), status: had ? 'AlreadyStored' as const : 'Success' as const }
@@ -39,7 +51,7 @@ export class FakeOrthanc implements Orthanc {
   async study(id: string): Promise<OrthancStudy> {
     const uid = this.uids.get(id)!
     const series = [...new Set([...this.instances.values()].filter(i => i.study === uid).map(i => this.oid(i.series)))]
-    return { studyUid: uid, studyDate: this.studyDates.has(uid) ? this.studyDates.get(uid)! : '2026-10-20', description: '胸部 CT 平扫', accession: 'ACC-778899', series }
+    return { studyUid: uid, studyDate: this.studyDates.has(uid) ? this.studyDates.get(uid)! : '2026-10-20', description: '胸部 CT 平扫', accession: this.accessions.has(uid) ? this.accessions.get(uid)! : 'ACC-778899', series }
   }
   async series(id: string): Promise<OrthancSeries> {
     const uid = this.uids.get(id)!
@@ -53,6 +65,13 @@ export class FakeOrthanc implements Orthanc {
     const uid = this.uids.get(id)!
     this.deleted.push(uid)
     for (const [sop, i] of this.instances) if (i.series === uid) this.instances.delete(sop)
+  }
+  deletedStudies: string[] = []
+  async deleteStudy(id: string): Promise<void> {
+    const uid = this.uids.get(id)
+    if (!uid) return
+    this.deletedStudies.push(uid)
+    for (const [sop, i] of this.instances) if (i.study === uid) this.instances.delete(sop)
   }
   async seriesArchive(id: string): Promise<Uint8Array> {
     this.archives.push(this.uids.get(id)!)

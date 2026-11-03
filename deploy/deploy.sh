@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Heurion 2.0 生产部署（在 VPS 上运行，CI 通过 SSH 调用）。
-#   HEURION2_IMAGE=ghcr.io/…/heurion2:<sha> EMBEDDER_IMAGE=ghcr.io/…/heurion2-embedder:<sha> bash deploy.sh
+#   HEURION2_IMAGE=ghcr.io/…/heurion2:<sha> EMBEDDER_IMAGE=ghcr.io/…/heurion2-embedder:<sha> … VIEWER_IMAGE=ghcr.io/…/heurion2-viewer:<sha> bash deploy.sh
+# 影像存储（Orthanc + 阅片器）按 .env.production 的 COMPOSE_PROFILES=pacs 启用（CI 由仓库变量 ENABLE_PACS 决定写不写）；启用时 VIEWER_IMAGE 必填。
 #
 # 目录：/opt/heurion2（CI 拷来 docker-compose.yml、Caddyfile、脚本、.env.production）。
 # 第一次部署时如果 1.0 还在跑（nexus-server 容器存在），先做切换（cutover-v1.sh）：停 1.0、全量备份、导入账户。
@@ -16,6 +17,18 @@ cd "$DIR"
 export HEURION2_IMAGE EMBEDDER_IMAGE IMAGING_WORKER_IMAGE DOC_PARSER_IMAGE
 [ -f .env.production ] || { echo "缺少 $DIR/.env.production" >&2; exit 1; }
 chmod 600 .env.production
+
+# 影像存储（pacs profile）：从 .env.production 读 COMPOSE_PROFILES 并显式导出，pull / up / 回滚都覆盖 orthanc 与 viewer
+COMPOSE_PROFILES=$(sed -n 's/^COMPOSE_PROFILES=//p' .env.production | tail -1)
+PACS=0
+case ",$COMPOSE_PROFILES," in *,pacs,*) PACS=1 ;; esac
+if [ "$PACS" -eq 1 ]; then
+  : "${VIEWER_IMAGE:?启用 pacs 时需要 VIEWER_IMAGE}"
+  export COMPOSE_PROFILES VIEWER_IMAGE
+  echo "== 影像存储：启用（Orthanc + 阅片器）"
+else
+  unset COMPOSE_PROFILES
+fi
 
 # 自动 Swap 检查（小内存机器至少要有 2GB Swap 防 OOM；已有足够 swap 时跳过）
 SWAP_TOTAL_MB=$(free -m 2>/dev/null | awk '/^Swap:/ {print $2}' || echo 0)
@@ -38,6 +51,7 @@ PREV_APP=$(docker inspect --format '{{.Image}}' heurion2 2>/dev/null || true)
 PREV_EMB=$(docker inspect --format '{{.Image}}' heurion2-embedder 2>/dev/null || true)
 PREV_IMG=$(docker inspect --format '{{.Image}}' heurion2-imaging-worker 2>/dev/null || true)
 PREV_DOCP=$(docker inspect --format '{{.Image}}' heurion2-doc-parser 2>/dev/null || true)
+PREV_VIEWER=$(docker inspect --format '{{.Image}}' heurion2-viewer 2>/dev/null || true)
 
 # 磁盘空间保障函数：拉取新镜像前/后释放未在运行的旧镜像、历史构建缓存与系统临时数据
 reclaim_disk_space() {
@@ -110,6 +124,13 @@ CADDY_HASH=$(sha256sum Caddyfile | cut -d' ' -f1)
 CADDY_RECREATE=()
 if [ "$(cat .caddyfile.sha 2>/dev/null)" != "$CADDY_HASH" ]; then CADDY_RECREATE=(--force-recreate caddy); fi
 
+# 关闭 pacs 后：profile 外的服务不算孤儿，--remove-orphans 不会删，这里显式停掉旧的 Orthanc / 阅片器容器（卷 orthanc-db 保留）
+if [ "$PACS" -eq 0 ]; then
+  for c in heurion2-orthanc heurion2-viewer; do
+    if docker inspect "$c" >/dev/null 2>&1; then echo "== 影像存储未启用：移除容器 $c（数据卷保留）"; docker rm -f "$c" >/dev/null || true; fi
+  done
+fi
+
 if ! "${COMPOSE[@]}" up -d --remove-orphans; then
   echo "❌ 启动 2.0 失败"
   "${COMPOSE[@]}" logs --tail=80 || true
@@ -164,7 +185,7 @@ if [ "$CUTOVER" -eq 1 ]; then
 fi
 if [ -n "$PREV_APP" ]; then
   echo "↩️  回滚到上一个镜像 $PREV_APP"
-  HEURION2_IMAGE="$PREV_APP" EMBEDDER_IMAGE="${PREV_EMB:-$EMBEDDER_IMAGE}" IMAGING_WORKER_IMAGE="${PREV_IMG:-$IMAGING_WORKER_IMAGE}" DOC_PARSER_IMAGE="${PREV_DOCP:-$DOC_PARSER_IMAGE}" "${COMPOSE[@]}" up -d
+  HEURION2_IMAGE="$PREV_APP" EMBEDDER_IMAGE="${PREV_EMB:-$EMBEDDER_IMAGE}" IMAGING_WORKER_IMAGE="${PREV_IMG:-$IMAGING_WORKER_IMAGE}" DOC_PARSER_IMAGE="${PREV_DOCP:-$DOC_PARSER_IMAGE}" VIEWER_IMAGE="${PREV_VIEWER:-${VIEWER_IMAGE:-}}" "${COMPOSE[@]}" up -d
   wait_health && echo "↩️  已回滚并恢复健康，请查日志修复后再发" || echo "❌ 回滚后仍不健康，需要人工介入"
 fi
 exit 1

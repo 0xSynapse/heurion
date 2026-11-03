@@ -74,7 +74,7 @@ async function env(quality: 'fine' | 'coarse' = 'fine') {
   const orthanc = new FakeOrthanc()
   orthanc.studyDates.set(PRIOR, '2025-10-20')
   orthanc.studyDates.set(CUR, '2026-10-20')
-  const svc = new ImagingStudyService(patients, orthanc)
+  const svc = new ImagingStudyService(patients, orthanc, { acceptIdentified: true })
   const A: Actor = { userId: dr, via: 'user' }
   const review = new ImagingReviewService(patients)
   review.setReadingRole({ userId: admin, via: 'user' }, rev, 'reviewer', (u, tid) => store.getUser(u)?.tenant_id === tid)

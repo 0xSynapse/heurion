@@ -136,10 +136,12 @@ services:
       start_period: 120s
       retries: 3
 
-  # 影像存储（DICOM + DICOMweb，docs/design/IMAGING_STUDIES.md）。默认不启动：`docker compose --profile pacs up -d`。
+  # 影像存储（DICOM + DICOMweb，docs/design/IMAGING_STUDIES.md）。默认不启动；.env.production 里 COMPOSE_PROFILES=pacs 时启动
+  # （生产由仓库变量 ENABLE_PACS 控制，见 docs/DEPLOY.md「启用影像存储（pacs）」）。
   # 只给平台访问（平台按患者权限代理 DICOMweb）；不映射端口，不开 DICOM C-STORE（PACS 自动转发在 T3.8 再开）。
-  # 启用时在 .env.production 里设置 ORTHANC_URL=http://orthanc:8042、ORTHANC_USER=heurion、ORTHANC_PASSWORD=<随机长口令>。
-  # DICOM 原件含患者身份信息：只在患者数据允许存放的服务器上启用（医院内网部署）。
+  # 隔离 uid（AI 执行的代码）连不到它：平台容器入口的 iptables 只放行本机平台端口（deploy/sandbox/probe.sh 自检）。
+  # 启用时 .env.production 里有 ORTHANC_URL=http://orthanc:8042、ORTHANC_USER=heurion、ORTHANC_PASSWORD=<随机长口令>。
+  # 托管生产机上的影像只是工作副本（浏览器里先去标识化再上传），原件在医院；按 IMAGING_RETENTION_DAYS 清理，不进 S3 备份。
   orthanc:
     # 官方维护镜像，含 amd64 与 arm64；/etc/orthanc/*.json 与镜像默认配置合并（2026-10-26 本机 Podman 验证）
     image: ${ORTHANC_IMAGE:-orthancteam/orthanc:26.9.1}
@@ -149,16 +151,18 @@ services:
     logging: *default-logging
     mem_limit: 2g
     memswap_limit: 2g
-    env_file: [.env.production]
+    # 只给它口令（orthanc.json 里 ${ORTHANC_PASSWORD} 由 Orthanc 替换），不把整个 .env.production（平台主密钥等）交给它
     environment:
       - DICOM_WEB_PLUGIN_ENABLED=true
+      - ORTHANC_PASSWORD=${ORTHANC_PASSWORD:-}
     volumes:
       - ./orthanc/orthanc.json:/etc/orthanc/heurion.json:ro
       - orthanc-db:/var/lib/orthanc/db
     networks: [web]
 
   # 阅片器（OHIF v3.13.12，按 /viewer/ 子路径从源码构建：deploy/viewer/build.sh）。平台把 /viewer/ 反向代理到这里，
-  # 影像只经平台的 DICOMweb 代理按患者权限读取。启用时在 .env.production 里设置 VIEWER_URL=http://viewer:8080。
+  # 影像只经平台的 DICOMweb 代理按患者权限读取。启用时 .env.production 里有 VIEWER_URL=http://viewer:8080、VIEWER_HOST / VIEWER_SITE=viewer.<主域名>。
+  # 生产镜像由 deploy-v2.yml 构建推到 ghcr.io/0xsynapse/heurion2-viewer:<sha>；本机默认用 build.sh 构建的 heurion2-viewer:v3.13.12。
   viewer:
     image: ${VIEWER_IMAGE:-heurion2-viewer:v3.13.12}
     container_name: heurion2-viewer

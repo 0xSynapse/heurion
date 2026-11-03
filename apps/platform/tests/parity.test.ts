@@ -206,6 +206,7 @@ const NOT_FOR_AI: Record<string, string> = {
   'GET /api/patients/:ptid/imaging/jobs': '界面用来实时轮询患者后台 3D 影像推理阶段与进度条状态；AI 调用 imaging_analyze 时直接获取完整分析结果',
   // 影像检查（docs/design/IMAGING_STUDIES.md）：DICOM 原件与体素数据不经 AI，AI 读检查列表与结构化结果（imaging_studies）
   'POST /api/patients/:ptid/imaging/dicom': '上传 DICOM 原件是医生在界面上的操作（原件含可识别信息与体素数据，不经 AI）',
+  'GET /api/patients/:ptid/imaging/deid-params': '浏览器端 DICOM 去标识的密钥与患者假名，只给医生本人的浏览器在上传前使用（服务层拒绝 via = ai）',
   'GET /api/dicomweb/studies': 'OHIF 阅片器按 StudyInstanceUID 查询检查（DICOMweb QIDO），体素与原件不经 AI',
   'GET /api/dicomweb/studies/:uid': 'OHIF 阅片器读取检查影像（DICOMweb WADO），体素与原件不经 AI',
   'GET /api/dicomweb/studies/:uid/*': 'OHIF 阅片器读取序列、元数据与帧（DICOMweb WADO），体素与原件不经 AI',

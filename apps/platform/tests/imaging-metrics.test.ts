@@ -48,7 +48,7 @@ function env() {
   const reviewer = user('dr_wang', '王主任')
   const reader2 = user('dr_liu', '刘医生')
   const orthanc = new FakeOrthanc()
-  const svc = new ImagingStudyService(patients, orthanc)
+  const svc = new ImagingStudyService(patients, orthanc, { acceptIdentified: true })
   const rv = new ImagingReviewService(patients)
   const drafts = new FindingsDraftService(store, docs, ops, patients)
   const mx = new ImagingMetricsService(patients, store, docs)

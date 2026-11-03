@@ -16,9 +16,10 @@
 Orthanc（DICOM 原件，DICOMweb 插件；不对外暴露）
 ```
 
-- DICOM 原件只存在 Orthanc。平台库只存索引、AI 结果和医生的确认留痕。
+- 手工上传的影像先在医生浏览器里去标识（见「去标识化」）再上传：Orthanc 里存的是去标识后的 DICOM，原始标识信息不离开医院；患者真实身份只在平台按机构密钥加密的患者档案里。院内部署可以配置接收原件（`IMAGING_ACCEPT_IDENTIFIED=1`）。
+- DICOM 文件只存在 Orthanc。平台库只存索引、AI 结果和医生的确认留痕。
 - 浏览器和影像 worker 都不直接访问 Orthanc，一律经平台代理。代理只放行当前用户能看到的患者的检查。
-- 部署：`deploy/docker-compose.yml` 的 `orthanc` 服务属于 `pacs` profile，默认不启动。只在允许存放患者原始数据的服务器（医院内网）上启用。
+- 部署：`deploy/docker-compose.yml` 的 `orthanc` 服务属于 `pacs` profile，默认不启动。境外托管的生产机可以启用，前提是保持默认的「只收去标识影像」；接收原件（`IMAGING_ACCEPT_IDENTIFIED=1`）只用于允许存放患者原始数据的服务器（医院内网）。
 
 ## 数据模型（机构患者库 `patients.db`）
 
@@ -48,7 +49,8 @@ Orthanc（DICOM 原件，DICOMweb 插件；不对外暴露）
 
 | 动作 | 医生 | AI |
 | --- | --- | --- |
-| 上传 DICOM | 可以 | 不可以（原件不经 AI） |
+| 上传 DICOM | 可以（先在浏览器里去标识） | 不可以（原件不经 AI） |
+| 取去标识参数（UID 假名化密钥、患者假名） | 可以（有该患者写权限，上传时浏览器自动取） | 不可以（服务层拒绝 `via = ai`，接口登记在 NOT_FOR_AI） |
 | 读检查列表 | 可以，含 UID（OHIF 打开检查用） | `imaging_studies`，不含 UID、检查号 |
 | DICOMweb 读影像 | OHIF 经代理读取 | 不可以（体素数据不进模型上下文） |
 | 新增病灶 | 补充的病灶直接为已确认（阅片器里点选） | 只能新增待确认的病灶 |
@@ -341,6 +343,18 @@ PRD W3：同一患者的前后两期胸部 CT，配准后对应结节，标出�
 - 只做刚性配准；吸气差异大、体位差异大（如俯卧 / 仰卧）时只能如实降级。
 - 前片确认或定稿后不会自动重匹配：已有的对应会在读取时改用新的参照值，但前片里新出现的结节要医生点「重新匹配」才会参与。可以考虑在定稿时自动触发后续检查的重匹配。
 
+## 云端影像的保留期
+
+托管生产机上的 DICOM 只是工作副本（浏览器里先去标识化再上传），原件在医院；Orthanc 的卷不进 S3 备份。代码：`src/imaging/retention.ts`，部署见 `docs/DEPLOY.md`「启用影像存储（pacs）」。
+
+- 配置 `IMAGING_RETENTION_DAYS`：代码默认 0 = 不清理、不启动定时任务；生产由 CI 写入，默认 180。平台启动 10 分钟后跑一次，之后每天一次。
+- 判定：检查的「最后上传时间」= `imaging_studies.updated_at`（只有上传会更新它，重复上传也算）超过 N 天。
+- 删除：`DELETE /studies/<orthanc id>`，原件与 AI 生成的 SEG 一起删除。平台库保留检查与序列索引、AI 运行与结果、病灶、测量、审核与定稿留痕、随访对应与锚点缓存；`imaging_studies.originals_deleted_at`、`originals_retention_days` 记删除时间与当时的天数，检查与序列的 `orthanc_id` 置空。访问留痕 `imaging_originals_purged`（user_id = `system:imaging-retention`，via = `system`）。
+- 跳过与重试：检查有排队 / 进行中、且本进程确实在跑的分析，或近 2 小时内排队 / 进行中的随访匹配时跳过；删除失败不改库，下次再试。删除期间同一检查又被上传（`updated_at` 变了）时不标记。
+- 原件已删除 = `originals_deleted_at` 非空且 `orthanc_id` 为空。检查视图带 `originals_deleted: { at, retention_days, message }`；界面不显示「在阅片器中打开」「重新分析」，写明「影像原件已按保留期（N 天）从云端删除，可重新上传」。分析排队返回这句原因（接口 409）；阅片器票据 409 `originals_deleted`；阅片器点选分割、修边界照旧返回「序列已不在影像存储中」。
+- 恢复：重新上传同一检查（同一 StudyInstanceUID）时上传流程写回 `orthanc_id`，检查即恢复可阅片、可分析，保留期从这次上传重新计算。AI 生成的旧 SEG 不会回来：结节面板找不到 SEG 时按关键层跳转。
+- 随访：前片原件已删除时，前片分析摘要里有肺部锚点的照常使用；没有锚点的如实说明「序列已不在影像存储中」，只用结节配准；前片没分析过时不排队预计算，说明原因。
+
 ## 资源与排队
 
 多人同时上传时只排队，不撑爆内存。分两层：
@@ -403,10 +417,65 @@ PRD W3：同一患者的前后两期胸部 CT，配准后对应结节，标出�
 
 走查中发现并已修正：审核视图与所见模板面板的类名 `.pt-review` 与化验报告审核的两栏布局冲突（被挤到右半边）；影像检查表按钮折成一字一行；提交初写后仍显示「提交审核」；带「请核对」的草稿生成成功提示显示为「出错了」；随访面板缺值时显示「Δ体积 — mm³（—%）」；已有 DICOM 检查时下方仍提示「还没有影像或报告」；内置模板「消失」句措辞（内置模板升为 v2）。
 
+## 去标识化（浏览器端，`src/imaging/deid/`）
+
+生产服务器在境外，医院在国内。手工上传的影像在医生浏览器里先去标识再上传：姓名、ID、出生日期、机构、医师、检查号等原始标识信息不离开医院；患者真实身份只在平台按机构密钥加密的患者档案里。去标识模块是纯 TS（只用 `globalThis.crypto.subtle`、`TextDecoder`、`Blob`），浏览器（`web/src/imaging-studies.ts` 经相对路径引用）与服务端（核验）共用同一份代码。
+
+### 流程
+
+1. 医生选文件 / 文件夹（可含 zip）。浏览器先取去标识参数 `GET /api/patients/:ptid/imaging/deid-params`：机构的 UID 假名化密钥、该患者的假名、方案版本（`HEURION-DEID-1`）。要求该患者的写权限；`via = ai` 拒绝；记访问留痕 `imaging_deid_params` 与审计 `imaging.deid_params`；`Cache-Control: no-store`；不经 MCP（`tests/parity.test.ts` 的 NOT_FOR_AI）。
+2. 浏览器流式解 zip（fflate `Unzip`，边读边产出条目；遇到流式解不了的包且不超过 1 GB 时退回整包解开），跳过 DICOMDIR、隐藏文件与非 DICOM，逐个去标识；进度显示「正在去标识 x / y」（zip 读中央目录估计条目数）与「正在上传第 i / n 批」。
+3. 攒满 48 MB 上传一批（表单字段 `files`）。上传的文件名一律是序号（原文件名、文件夹名可能含患者姓名）；跳过的文件在界面上按原名汇总原因。
+4. 检查号（AccessionNumber）不进 Orthanc：浏览器把每个检查（按去标识后的 StudyInstanceUID）的原检查号作为表单字段 `study_meta`（JSON `{ <UID>: { accession } }`）单独发送，服务端只认本次上传的检查、按机构密钥加密存进 `imaging_studies.accession_enc`；后续批没带时保留已有值。其它需要的信息（检查日期、描述、模态、部位、层厚、重建核）仍在去标识后的 DICOM 里，`linkStudy` 照旧从 Orthanc 取。
+5. 一次所选的文件里原 PatientID / 姓名不止一种时，浏览器提醒一次（去标识后服务端分不出来），医生确认后才继续。
+
+### 白名单原则
+
+只保留阅片、AI 分析、随访对比与 DICOM SEG 需要的标签（`deid/whitelist.ts`，每项写明为什么需要），其余一律删除：全部私有标签（奇数组）、60xx 叠加层、机构 / 医师 / 操作员、设备序列号、StationName、AccessionNumber、StudyID、出生日期、地址、OtherPatientIDs 等。保留的大类：SOP Class / Instance、Study / Series / FrameOfReference UID、模态、检查 / 序列 / 采集日期与时间、检查与序列描述、BodyPartExamined、ProtocolName、几何（位置、方向、像素间距、层厚、层间距）、像素模块与像素数据、Rescale、窗宽窗位、CT 采集与重建参数（KVP、管电流、ConvolutionKernel、ReconstructionDiameter、CTDIvol 等）、Manufacturer / ManufacturerModelName、ImageType、InstanceNumber / SeriesNumber / AcquisitionNumber、PatientPosition、PatientSex / PatientAge / PatientSize / PatientWeight、SEG 的段定义与引用、编码条目。
+
+语义上对应 DICOM PS3.15 附录 E 的 Basic Application Level Confidentiality Profile，加 Retain Longitudinal Temporal Information with Full Dates（日期原样保留，随访要算间隔）与 Retain Patient Characteristics（性别、年龄、身高、体重）两个选项；但实现是白名单而不是 Basic Profile 的黑名单动作表，新出现、不认识的标签默认删除。白名单平铺使用：顶层与所有序列条目按同一张表递归过滤，Enhanced 多帧的功能组序列（PixelMeasures、PlanePosition、PlaneOrientation、PixelValueTransformation、FrameVOILUT、FrameContent 等）只留几何与像素相关项，条目一个不删（每帧条目数须等于帧数）。
+
+### DICOM 解析与重写
+
+自写的最小 Part 10 解析 / 重写器（`deid/dicom.ts`）：支持 Explicit VR Little Endian、Implicit VR Little Endian，以及基于显式 VR LE 的封装压缩传输语法（JPEG、JPEG-LS、JPEG 2000、HTJ2K、RLE 等，像素片段原样拷贝、不解码）；未定长度的序列与条目、显式 VR 文件里以 UN 编码的未定长度序列（CP-246）都能处理。Deflated（1.2.840.10008.1.2.1.99）与 Big Endian（1.2.840.10008.1.2.2）直接拒绝并说明原因。输出保持原传输语法；序列一律写成未定长度；128 字节前导清零；file meta 只写本方案的元素（版本、SOP 类、SOP 实例、传输语法、ImplementationClassUID、ImplementationVersionName），重算 group length。
+
+### UID 假名化与密钥
+
+- 所有 VR = UI 的值（递归含序列里的 Referenced*UID、DimensionOrganizationUID 等），除「类」UID 外，映射为 `2.25.` + HMAC-SHA256(key, 原 UID) 前 16 字节的十进制（总长 ≤ 44）。类 UID = 标准根 `1.2.840.10008.` 下的值，或登记为保存类 UID 的标签（SOPClassUID、ReferencedSOPClassUID、TransferSyntaxUID 等，含厂商私有 SOP 类）。
+- 同一机构同一原 UID 结果确定：重复上传去重、同一检查已属于另一位患者的冲突检测、随访、SEG 引用（引用方与被引用方各自假名化后仍一致）都照常可用。
+- 密钥：`key = HKDF-SHA256(机构数据密钥, salt = "heurion-dicom-deid", info = "uid-pseudonym-v1")`，专用于 UID 假名化，与 `uidKey`（UID 索引的 HMAC）和加密密钥分开。整个机构一把（结果要跨医生、跨患者一致），因此有任一患者写权限的医生的浏览器都拿得到；它只能算 UID 假名，不能解密任何数据。
+- 患者假名：`HX` + HMAC-SHA256(HKDF(机构数据密钥, info = "patient-pseudonym-v1"), 患者 id) 前 8 字节的十六进制大写；写进 PatientName 与 PatientID。不可逆、不含真实信息、同一患者恒定（Orthanc 的患者 / 检查内部 ID 由 PatientID 派生，恒定才能去重）。
+- 机构数据密钥销毁（删除机构）后两把派生密钥一起失效。
+
+### 标记
+
+写入 PatientIdentityRemoved (0012,0062) = YES、DeidentificationMethod (0012,0063) = `HEURION-DEID-1 PS3.15 BASIC+FULL-DATES+PATIENT-CHARS`、DeidentificationMethodCodeSequence（113100 / 113106 / 113108）、LongitudinalTemporalInformationModified (0028,0303) = UNMODIFIED；file meta 的 ImplementationClassUID 为本方案的固定 UID。
+
+### 烧录文字
+
+像素不做文字识别，只能按标签判断。以下影像不处理、不上传，并给出中文原因：BurnedInAnnotation = YES；Secondary Capture、结构化报告、显示状态、封装文档、可见光照片 / 视频、放疗对象等 SOP 类；模态为 SC、OT、US、IVUS、XC、ES、GM、OP、DOC、SR、KO、PR；ImageType 含 SCREEN SAVE、SCREENSHOT、DOSE INFO / DOSE REPORT。
+
+### 服务端核验
+
+`importDicom` 默认对每个文件（含 zip 内）跑 `verifyDeidentified`，不通过的跳过并写明「未经去标识：<原因>」；全部不通过时整次上传 400。规则：有标记且方案版本正确；file meta 只有本方案写的元素且 ImplementationClassUID 是本方案的；PatientName / PatientID 等于这位患者的假名（传错患者也会被拦下）；递归没有私有标签、没有白名单外的标签，序列里没有 PatientName 等替换 / 标记类标签；所有非类 UID 都在 `2.25` 根下；没有烧录文字风险。PACS 来源（以后的 C-STORE 转发）不走这条路径，不受影响。
+
+### 配置
+
+`IMAGING_ACCEPT_IDENTIFIED=1`（`config.imagingAcceptIdentified`）：手工上传也接收原件，只用于院内部署。此时 `deid-params` 返回 `accept_identified: true`，浏览器不去标识、按 48 MB 分批原样上传；去标识过的文件照样能收。境外托管的生产机必须保持默认（关闭）。
+
+### 已知局限
+
+- 描述类自由文本（StudyDescription、SeriesDescription、ProtocolName、SegmentLabel 等）原样保留，个别医院可能把人名或住院号录进去；目前不做文字筛查。
+- 烧录文字只能按标签判断：标签标错（例如截屏被标成 CT、ImageType 正常）时识别不出，像素里的文字会原样上传。
+- 已上传的原件（本功能之前）UID 是原值，与之后去标识上传的同一检查 UID 不同，不会被认作同一检查。
+- 浏览器里同一患者判断按原 PatientID / 姓名，同一患者在不同系统里 ID 不同也会提醒。
+- 不支持 Deflated、Big Endian；这两种在临床导出里很少见，遇到时请重新导出。
+- 2026-11-03 本机实测：两个胸部 CT 样本（各 269 层、Explicit VR LE）去标识后标签只剩白名单内的 39 个、像素逐字节相同、UID 全部替换，`POST /instances` 进本机 Orthanc 全部成功、DICOMweb 元数据与渲染帧可取；再让 Orthanc 把一个实例转成 Implicit VR LE、JPEG Lossless、JPEG-LS、JPEG 2000 后去标识，像素片段逐字节相同、核验通过、Orthanc 接受；Deflated 与 Big Endian 被拒并说明原因。真实院内数据（私有标签多、Enhanced 多帧、压缩传输语法）还没有验证过。
+
 ## 待办
 
 - PACS 自动转发（C-STORE，T3.8）开启前 `DicomServerEnabled` 保持关闭。
-- 上传目前整批读入内存（默认单次上限 2 GB，`IMAGING_UPLOAD_MAX_MB`）。前端按 300 MB 分批；以后改成流式。
+- 服务端仍把一次请求整批读入内存（默认单次上限 2 GB，`IMAGING_UPLOAD_MAX_MB`）。前端边去标识边按 48 MB 分批上传（生产经 Cloudflare，单次请求上限 100 MB），浏览器里同时只攒一批。
 - Orthanc 用官方维护的 `orthancteam/orthanc:26.9.1`（amd64 / arm64）；原先的 `jodogne/orthanc-plugins:1.12.4` 只有 amd64。配置文件挂到 `/etc/orthanc/heurion.json`，`${ORTHANC_PASSWORD}` 的环境变量替换已在本机验证（无口令 / 错口令均 401）。
 
 ## 所见草稿（T2.6）

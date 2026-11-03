@@ -57,7 +57,7 @@ function env() {
   const rev = user('dr_chen', '陈主任')
   const outsider = user('dr_zhao', '赵医生')
   const orthanc = new FakeOrthanc()
-  const svc = new ImagingStudyService(patients, orthanc)
+  const svc = new ImagingStudyService(patients, orthanc, { acceptIdentified: true })
   const review = new ImagingReviewService(patients, u => store.getUser(u)?.display_name ?? null)
   const as = (userId: string, via: Actor['via'] = 'user'): Actor => ({ userId, via })
   review.setReadingRole(as(admin), rev, 'reviewer', (u, tid) => store.getUser(u)?.tenant_id === tid)

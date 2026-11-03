@@ -1,4 +1,6 @@
 import { askConfirm, askText } from './dialogs.ts'
+// 去标识模块与服务端共用（纯 TS，不依赖 node），经相对路径引用
+import { createDeidentifier, estimateSources, iterateSources } from '../../src/imaging/deid/index.ts'
 import { esc } from './dom.ts'
 import { mountReview, reviewBadge, type ReviewSummary } from './imaging-review.ts'
 
@@ -12,6 +14,8 @@ interface StudyView {
   runs: RunView[]
   /** 机构处于影像 AI 影子模式：自动分析在后台运行，结果不显示 */
   ai_shadow?: boolean
+  /** 原件已按保留期从云端删除（服务端 imaging/retention.ts）：不给阅片器、分析入口；重新上传同一检查即恢复 */
+  originals_deleted?: { at: string; retention_days: number | null; message: string } | null
 }
 interface RunView {
   id: string; task: string; model_version: string | null; status: 'queued' | 'running' | 'done' | 'failed' | 'interrupted'; error: string | null
@@ -35,12 +39,18 @@ function runLine(r: RunView | undefined): string {
   return `<span class="danger-text">${task}：${r.status === 'interrupted' ? '已中断' : '失败'}</span><div class="muted">${esc(r.error ?? '')}</div>`
 }
 interface ImportResult {
-  studies: StudyView[]; files: { received: number; uploaded: number; duplicates: number; skipped: Array<{ name: string; reason: string }> }; conflicts: number
+  studies: StudyView[]; files: { received: number; uploaded: number; duplicates: number; skipped: Array<{ name: string; reason: string }> }; conflicts: number; conflict_keys?: string[]
   analysis?: Array<{ study_id: string; task: string; run_id: string | null; shadow?: boolean; skipped: string | null }>
 }
 
-/** 每批上传的大小上限（服务端默认单次 2 GB，这里分小批，失败时只需重传一批） */
-const BATCH_BYTES = 300 * 1024 * 1024
+/**
+ * 每批上传的大小上限：生产经 Cloudflare，单个请求不能超过 100 MB；按 48 MB 分批（加上表单开销仍在 64 MB 以内），
+ * 失败时只需重传一批，浏览器里同时只攒一批去标识后的文件。
+ */
+const BATCH_BYTES = 48 * 1024 * 1024
+
+/** 服务端给的去标识参数（GET /api/patients/:ptid/imaging/deid-params） */
+interface DeidParamsView { key: string; pseudonym: string; scheme: string; accept_identified: boolean }
 
 /** 影像检查（DICOM）区块的占位，放在患者页「原始报告 / 影像」标签顶部；mountStudies 填充内容 */
 export function studiesSection(canEdit: boolean): string {
@@ -52,6 +62,7 @@ export function studiesSection(canEdit: boolean): string {
       <input type="file" id="ptDicomFiles" accept=".dcm,.dicom,.zip,application/dicom,application/zip" multiple hidden>
       <input type="file" id="ptDicomFolder" webkitdirectory multiple hidden>` : ''}
     </div>
+    ${canEdit ? '<div class="muted small">影像会先在本机（浏览器里）去除姓名、ID 等信息再上传；截屏、超声等可能有烧录文字的影像不上传。</div>' : ''}
     <div id="ptFindingsTpl" class="pt-imgreview" hidden></div>
     <div id="ptDicomList" class="muted small">正在读取影像检查…</div>
   </section>`
@@ -67,10 +78,12 @@ function render(list: StudyView[], canEdit: boolean, reviews: Map<string, Review
     ${list.map(st => {
       const last = st.runs[0]
       const busy = last && (last.status === 'queued' || last.status === 'running')
+      const gone = st.originals_deleted
+      const goneNote = gone ? `<div class="muted small" title="删除于 ${esc(new Date(gone.at).toLocaleString('zh-CN', { hour12: false }))}；AI 结果、病灶、测量与审核留痕仍保留">${esc(gone.message)}</div>` : ''
       return `<tr>
-      <td class="pt-dicom-date">${esc(st.study_date ?? '未知')}<div class="muted small">${st.source === 'pacs' ? 'PACS' : '手工上传'}</div>${st.study_uid ? `<div><button class="small-btn" data-view="${esc(st.study_uid)}">在阅片器中打开</button></div>` : ''}</td><td>${esc(st.modalities.join(' / ') || '—')}</td><td>${esc(st.description ?? '')}</td>
+      <td class="pt-dicom-date">${esc(st.study_date ?? '未知')}<div class="muted small">${st.source === 'pacs' ? 'PACS' : '手工上传'}</div>${gone ? goneNote : st.study_uid ? `<div><button class="small-btn" data-view="${esc(st.study_uid)}">在阅片器中打开</button></div>` : ''}</td><td>${esc(st.modalities.join(' / ') || '—')}</td><td>${esc(st.description ?? '')}</td>
       <td class="small">${st.series.map(s => `<div>${seriesLine(s)}</div>`).join('')}</td>
-      <td class="small">${st.ai_shadow && !last ? '<span class="muted" title="上线前评估：AI 在后台分析，结果只进机构的对照报告">影子模式，结果不显示</span>' : `${runLine(last)}${canEdit && !busy ? `<div><button class="small-btn" data-analyze="${esc(st.id)}">${last ? '重新分析' : '开始分析'}</button></div>` : ''}`}</td>
+      <td class="small">${st.ai_shadow && !last ? '<span class="muted" title="上线前评估：AI 在后台分析，结果只进机构的对照报告">影子模式，结果不显示</span>' : `${runLine(last)}${canEdit && !busy && !gone ? `<div><button class="small-btn" data-analyze="${esc(st.id)}">${last ? '重新分析' : '开始分析'}</button></div>` : ''}`}</td>
       <td class="small">${st.lesions.proposed + st.lesions.confirmed + st.lesions.rejected ? `待确认 ${st.lesions.proposed} · 已确认 ${st.lesions.confirmed} · 已否决 ${st.lesions.rejected}` : '<span class="muted">—</span>'}</td>
       <td class="small">${reviewBadge(reviews.get(st.id))}${reviews.has(st.id) ? `<div><button class="small-btn" data-review="${esc(st.id)}">${open.has(st.id) ? '收起审核' : '审核视图'}</button></div>` : ''}
         ${canEdit && st.modalities.includes('CT') ? `<div><button class="small-btn" data-draft="${esc(st.id)}" title="按科室模板，由已确认的结节生成所见草稿（测量数字绑定病灶，医生重测后自动更新）">生成所见草稿</button></div>` : ''}</td></tr>
@@ -79,7 +92,93 @@ function render(list: StudyView[], canEdit: boolean, reviews: Map<string, Review
   </tbody></table>`
 }
 
+/** 各批上传结果的汇总 */
+function tally() {
+  let uploaded = 0, duplicates = 0, shadow = false
+  // 一个检查分几批上传时每批都会报冲突：按检查去重
+  const conflictKeys = new Set<string>()
+  let conflictsNoKey = 0
+  const skipped: string[] = []
+  const notApplicable = new Set<string>()
+  return {
+    skipped,
+    add(r: ImportResult, nameOf: (n: string) => string = n => n) {
+      uploaded += r.files.uploaded; duplicates += r.files.duplicates
+      if (r.conflict_keys) r.conflict_keys.forEach(k => conflictKeys.add(k)); else conflictsNoKey += r.conflicts
+      skipped.push(...r.files.skipped.map(s => `${nameOf(s.name)}（${s.reason}）`))
+      for (const x of r.analysis ?? []) { if (x.skipped) notApplicable.add(x.skipped); if (x.shadow) shadow = true }
+    },
+    finish(notice: Notice, head = 'DICOM 上传完成') {
+      const conflicts = conflictKeys.size + conflictsNoKey
+      const parts = [`新入库 ${uploaded} 个文件`, duplicates ? `${duplicates} 个已存在` : '', skipped.length ? `跳过 ${skipped.length} 个` : ''].filter(Boolean)
+      const reasons = [...new Set(skipped.map(s => s.replace(/^.*（(.*)）$/, '$1')))]
+      const analysis = (notApplicable.size ? `；未自动分析：${[...notApplicable].join('；')}` : '') + (shadow ? '；影像 AI 处于影子模式，分析在后台进行，结果不显示' : '')
+      notice(`${head}：${parts.join('，')}${reasons.length ? `（跳过原因：${reasons.slice(0, 4).join('；')}${reasons.length > 4 ? ' 等' : ''}）` : ''}${conflicts ? `；有 ${conflicts} 个检查已属于本机构的其他患者，未关联到这位患者，这次上传的文件已删除` : ''}${analysis}`, conflicts > 0 || (uploaded + duplicates === 0 && skipped.length > 0))
+      if (skipped.length) console.info('跳过的文件：', skipped)
+    },
+  }
+}
+
+const b64bytes = (s: string) => Uint8Array.from(atob(s), c => c.charCodeAt(0))
+
+/**
+ * 上传 DICOM（docs/design/IMAGING_STUDIES.md「去标识化」）：在浏览器里解 zip、跳过 DICOMDIR 与非 DICOM、逐个去标识，
+ * 攒满一批就上传（同时只在内存里留一批）。原检查号单独作为表单字段发送，服务端加密存放，不进影像存储。
+ * 院内部署接收原件时（accept_identified）按原样分批上传。
+ */
 async function upload(api: Api, notice: Notice, patientId: string, files: File[]): Promise<void> {
+  const params = await api<DeidParamsView>(`/api/patients/${patientId}/imaging/deid-params`)
+  if (params.accept_identified) return uploadOriginals(api, notice, patientId, files)
+  const deid = await createDeidentifier({ key: b64bytes(params.key), pseudonym: params.pseudonym })
+  notice('正在读取文件…')
+  const est = await estimateSources(files)
+  const totalBatches = Math.max(1, Math.ceil(est.bytes / BATCH_BYTES))
+  const t = tally()
+  /** 上传用的文件名是序号（原文件名、文件夹名可能含患者姓名，不上传）；跳过时换回原名显示 */
+  const names = new Map<string, string>()
+  let seq = 0, done = 0, batchNo = 0
+  let batch: { files: File[]; size: number; studies: Map<string, string | null> } = { files: [], size: 0, studies: new Map() }
+  const flush = async () => {
+    if (!batch.files.length) return
+    batchNo++
+    notice(`正在上传第 ${batchNo} / ${Math.max(batchNo, totalBatches)} 批…`)
+    const fd = new FormData()
+    for (const f of batch.files) fd.append('files', f)
+    fd.append('study_meta', JSON.stringify(Object.fromEntries([...batch.studies].map(([uid, accession]) => [uid, { accession }]))))
+    batch = { files: [], size: 0, studies: new Map() }
+    const r = await api<ImportResult>(`/api/patients/${patientId}/imaging/dicom`, { method: 'POST', body: fd })
+    t.add(r, n => names.get(n) ?? n)
+  }
+  let firstPatient: string | null = null, mixedOk = false
+  for await (const e of iterateSources(files)) {
+    done++
+    if (done === 1 || done % 10 === 0) notice(`正在去标识 ${done} / ${Math.max(done, est.files)}（影像先在本机去除姓名、ID 等信息再上传）…`)
+    if ('skipped' in e) { t.skipped.push(`${e.name}（${e.skipped}）`); continue }
+    const r = await deid.deidentify(e.bytes)
+    if (!r.ok) { t.skipped.push(`${e.name}（${r.reason}）`); continue }
+    // 去标识后服务端分不出是不是同一位患者：这里按原 PatientID / 姓名提醒一次
+    if (firstPatient === null) firstPatient = r.original.patientKey
+    else if (r.original.patientKey !== firstPatient && !mixedOk) {
+      if (!await askConfirm({ title: '这批影像不像同一位患者', message: '所选文件里的患者 ID / 姓名不止一种。影像会全部归到当前患者名下。\n确认都是这位患者的再继续；点「取消」停止上传（已上传的批次保留）。', confirm: '继续上传' })) {
+        t.finish(notice, 'DICOM 上传已停止')
+        return
+      }
+      mixedOk = true
+    }
+    if (batch.size + r.bytes.byteLength > BATCH_BYTES) await flush()
+    const name = `${++seq}.dcm`
+    names.set(name, e.name)
+    batch.files.push(new File([r.bytes as Uint8Array<ArrayBuffer>], name, { type: 'application/dicom' }))
+    batch.size += r.bytes.byteLength
+    if (!batch.studies.get(r.studyUid)) batch.studies.set(r.studyUid, r.original.accession)
+  }
+  await flush()
+  if (!batchNo && !t.skipped.length) { notice('没有找到 DICOM 文件', true); return }
+  t.finish(notice)
+}
+
+/** 院内部署接收原件：按原样分批上传（单个文件超过批大小时独占一批） */
+async function uploadOriginals(api: Api, notice: Notice, patientId: string, files: File[]): Promise<void> {
   const batches: File[][] = []
   let cur: File[] = [], size = 0
   for (const f of files) {
@@ -87,23 +186,14 @@ async function upload(api: Api, notice: Notice, patientId: string, files: File[]
     cur.push(f); size += f.size
   }
   if (cur.length) batches.push(cur)
-  let uploaded = 0, duplicates = 0, conflicts = 0
-  const skipped: string[] = []
-  const notApplicable = new Set<string>()
-  let shadow = false
+  const t = tally()
   for (const [i, batch] of batches.entries()) {
-    notice(batches.length > 1 ? `正在上传 DICOM（第 ${i + 1} / ${batches.length} 批）…` : '正在上传 DICOM…')
+    notice(`正在上传第 ${i + 1} / ${batches.length} 批（本院部署接收原件，不在本机去标识）…`)
     const fd = new FormData()
     for (const f of batch) fd.append('files', f)
-    const r = await api<ImportResult>(`/api/patients/${patientId}/imaging/dicom`, { method: 'POST', body: fd })
-    uploaded += r.files.uploaded; duplicates += r.files.duplicates; conflicts += r.conflicts
-    skipped.push(...r.files.skipped.map(s => `${s.name}（${s.reason}）`))
-    for (const x of r.analysis ?? []) { if (x.skipped) notApplicable.add(x.skipped); if (x.shadow) shadow = true }
+    t.add(await api<ImportResult>(`/api/patients/${patientId}/imaging/dicom`, { method: 'POST', body: fd }))
   }
-  const parts = [`新入库 ${uploaded} 个文件`, duplicates ? `${duplicates} 个已存在` : '', skipped.length ? `跳过 ${skipped.length} 个` : ''].filter(Boolean)
-  const analysis = (notApplicable.size ? `；未自动分析：${[...notApplicable].join('；')}` : '') + (shadow ? '；影像 AI 处于影子模式，分析在后台进行，结果不显示' : '')
-  notice(`DICOM 上传完成：${parts.join('，')}${conflicts ? `；有 ${conflicts} 个检查已属于本机构的其他患者，未关联到这位患者` : ''}${analysis}`, conflicts > 0)
-  if (skipped.length) console.info('跳过的文件：', skipped)
+  t.finish(notice)
 }
 
 interface DraftOutcome {

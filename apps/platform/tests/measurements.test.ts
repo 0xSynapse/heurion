@@ -50,7 +50,7 @@ async function env() {
   const hosp = store.createTenant({ name: '放射科', kind: 'org' })
   const dr = store.createUser({ username: 'dr_wang', display_name: '王医生', password_hash: 'x', tenant: { id: hosp.id, role: 'member' } }).id
   const other = store.createUser({ username: 'dr_zhao', display_name: '赵医生', password_hash: 'x', tenant: { id: hosp.id, role: 'member' } }).id
-  const svc = new ImagingStudyService(patients, new FakeOrthanc())
+  const svc = new ImagingStudyService(patients, new FakeOrthanc(), { acceptIdentified: true })
   const a: Actor = { userId: dr, via: 'user' }
   const ai: Actor = { userId: dr, via: 'ai' }
   const p = patients.create(a, { sex: 'M', birth_year: 1958 })
