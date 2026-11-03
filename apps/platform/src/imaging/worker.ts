@@ -3,13 +3,16 @@
  * 原件由平台从 Orthanc 取出交给 worker，worker 不直接访问 Orthanc。
  */
 
-import { Agent } from 'undici'
+import { Agent, fetch as undiciFetch } from 'undici'
 
 /**
  * Node 自带的 fetch（undici）默认 5 分钟收不到响应头就断开（headersTimeout），报的是笼统的「fetch failed」。
  * 肺结节分析在 CPU 上常常超过 5 分钟，所以超时长于 5 分钟的调用改用这个连接池：头与正文的超时都放到调用方给的时长，
- * 真正的上限仍由 AbortSignal.timeout(timeoutMs) 控制。undici 与 Node 内置版本一致（package.json 锁定）。
+ * 真正的上限仍由 AbortSignal.timeout(timeoutMs) 控制。
+ * 连接池必须和同一份 undici 的 fetch 配套使用：把 npm 的 Agent 交给 Node 自带的 fetch，
+ * 两边版本不一致时（生产 Node 24 自带旧版 undici）会报 UND_ERR_INVALID_ARG。
  */
+const nativeFetch = globalThis.fetch
 const UNDICI_DEFAULT_TIMEOUT_MS = 300_000
 const longAgents = new Map<number, Agent>()
 function longAgent(timeoutMs: number): Agent {
@@ -27,8 +30,12 @@ export class WorkerError extends Error {
 export async function callWorker(fetchImpl: typeof fetch, base: string, path: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
   let resp: Response
   try {
-    const dispatcher = timeoutMs > UNDICI_DEFAULT_TIMEOUT_MS ? { dispatcher: longAgent(timeoutMs) } : {}
-    resp = await fetchImpl(`${base}${path}`, { ...init, ...dispatcher, signal: AbortSignal.timeout(timeoutMs) } as RequestInit)
+    const url = `${base}${path}`
+    const signal = AbortSignal.timeout(timeoutMs)
+    // 只有用默认 fetch 时才换成 undici 自己的 fetch；测试注入的 fetch 照常调用
+    resp = timeoutMs > UNDICI_DEFAULT_TIMEOUT_MS && fetchImpl === nativeFetch
+      ? await undiciFetch(url, { ...init, signal, dispatcher: longAgent(timeoutMs) } as Parameters<typeof undiciFetch>[1]) as unknown as Response
+      : await fetchImpl(url, { ...init, signal })
   } catch (err) {
     const name = (err as Error)?.name
     if (name === 'TimeoutError' || name === 'AbortError') throw new WorkerError(null, '影像服务处理超时')
