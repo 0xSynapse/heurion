@@ -121,6 +121,9 @@ export class ImagingPipeline {
   /** 为检查排一次分析；不适用（没有合适序列等）时返回原因，不建运行 */
   enqueue(a: Actor, studyId: string, task: ImagingTask = 'lung_nodule', opts: { visibility?: 'visible' | 'shadow' } = {}): EnqueueResult {
     const def = TASKS[task]
+    // 原件已按保留期从影像存储删除：不排队（随访预计算前片时也走这里，返回原因而不是失败）
+    const gone = this.studies.originalsDeleted(a, studyId)
+    if (gone) return { task, skipped: gone.message }
     const choice = def.select(this.studies.seriesOf(a, studyId))
     if (!choice.series) return { task, skipped: choice.reason ?? '没有合适的序列' }
     const run = this.studies.startRun(a, studyId, { task, model_id: def.model_id, series_id: choice.series.id, visibility: opts.visibility })

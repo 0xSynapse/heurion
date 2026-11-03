@@ -97,8 +97,19 @@ export const config = {
    * 默认关闭：影像须先在医生浏览器里去标识再上传（境外托管的生产环境必须保持关闭）；只有院内部署可设 IMAGING_ACCEPT_IDENTIFIED=1。
    */
   imagingAcceptIdentified: env('IMAGING_ACCEPT_IDENTIFIED', '0') === '1',
+  /**
+   * 影像原件保留期（天）：检查最后一次上传超过这么多天后，从 Orthanc 删除原件（含 AI 生成的 SEG），
+   * 平台库保留索引、AI 结果、病灶、测量与审核留痕（src/imaging/retention.ts）。0（默认）= 不清理。每天跑一次。
+   */
+  imagingRetentionDays: retentionDays(env('IMAGING_RETENTION_DAYS', '0')),
   /** 每个回合开新的 dsh 会话（实验用：排除会话内上下文带来的跨任务学习）。 */
   freshSessionPerTurn: env('HARNESS_FRESH_SESSION', '0') === '1',
+}
+
+function retentionDays(v: string): number {
+  const n = Number(v)
+  if (!Number.isInteger(n) || n < 0) throw new Error(`IMAGING_RETENTION_DAYS 必须是不小于 0 的整数（0 = 不清理）：${v}`)
+  return n
 }
 
 function proceduralMode(v: string): 'off' | 'frozen' | 'fifo' | 'utility' | 'placebo' {

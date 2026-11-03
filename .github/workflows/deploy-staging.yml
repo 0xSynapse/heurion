@@ -7,7 +7,9 @@ name: Deploy Staging
 #   - 独立的 HEURION_SECRET（STAGING_HEURION_SECRET），数据与生产完全隔离；
 #   - 不配 S3：预发不做备份，也不会写进生产的备份目录；
 #   - 默认不发邮件（只读 STAGING_RESEND_API_KEY，不设时平台发信直接报错）；
-#   - 不清 Cloudflare 缓存（预发域名不走 Cloudflare 代理）。
+#   - 不清 Cloudflare 缓存（预发域名不走 Cloudflare 代理）；
+#   - 影像存储（pacs）用自己的开关与口令：仓库变量 STAGING_ENABLE_PACS、secret STAGING_ORTHANC_PASSWORD、变量 STAGING_IMAGING_RETENTION_DAYS（默认 180）。
+#     阅片器子域名 viewer.staging.heurion.org 要有一条不开代理的 DNS 记录（Cloudflare 免费证书不覆盖二级子域名）。
 # 预发服务器以后要转为生产时，先 `docker compose -p heurion2 down -v` 清掉预发的卷，再恢复生产数据。
 # 2026-10-13 起原预发服务器转为生产，预发只能手动触发（Actions → Deploy Staging → Run workflow），
 # 且 STAGING_HOST 必须指向一台不跑生产的机器，否则会用预发配置覆盖生产。
@@ -23,6 +25,7 @@ env:
   EMBEDDER_IMAGE: ghcr.io/0xsynapse/heurion2-embedder
   IMAGING_WORKER_IMAGE: ghcr.io/0xsynapse/heurion2-imaging-worker
   DOC_PARSER_IMAGE: ghcr.io/0xsynapse/heurion2-doc-parser
+  VIEWER_IMAGE: ghcr.io/0xsynapse/heurion2-viewer
   STAGING_HOSTNAME: staging.heurion.org
 
 jobs:
@@ -112,10 +115,58 @@ jobs:
             type=inline
             type=gha,mode=min,scope=doc-parser
 
+  # 阅片器（OHIF，deploy/viewer/build.sh 从源码构建，单次约 15–25 分钟）：单独一个 job，与上面的 4 个镜像并行，也不和它们抢 runner 磁盘。
+  # 避免每次重建：按 deploy/viewer 下受版本控制文件的内容（git 的 blob 哈希，含 build.sh 里的 OHIF 版本号）算一个指纹，
+  # 推一个 src-<指纹> 标签。GHCR 里已有这个标签就只给它加 <sha> 标签（服务端操作，不拉层、不构建）；
+  # 没有才真正构建。没用 GHA 缓存当主手段：GHA 缓存每仓库 10 GB、按 LRU 淘汰，和另外 4 个大镜像共用，命中不可靠。
+  # 真要重建时再用 registry 上的 buildcache（mode=max，含构建阶段的依赖安装层）加速，不占 GHA 缓存额度。
+  viewer:
+    name: 阅片器镜像
+    if: github.repository_id == '1301746811'
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@v7
+      - id: vars
+        run: |
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "src=src-$(git ls-files -s deploy/viewer | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with: { registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}' }
+      - id: cached
+        name: 查找同一份源码已构建的镜像
+        run: |
+          if docker buildx imagetools inspect "${VIEWER_IMAGE}:${{ steps.vars.outputs.src }}" >/dev/null 2>&1; then
+            echo "hit=1" >> "$GITHUB_OUTPUT"; echo "deploy/viewer 没有变化：复用 ${{ steps.vars.outputs.src }}"
+          else
+            echo "hit=0" >> "$GITHUB_OUTPUT"; echo "deploy/viewer 有变化（或第一次）：从源码构建"
+          fi
+      - name: 复用：加 <sha> 标签
+        if: steps.cached.outputs.hit == '1'
+        run: docker buildx imagetools create -t "${VIEWER_IMAGE}:${{ steps.vars.outputs.sha }}" "${VIEWER_IMAGE}:${{ steps.vars.outputs.src }}"
+      - name: 准备 OHIF 源码与 Heurion 配置、扩展
+        if: steps.cached.outputs.hit != '1'
+        run: VIEWER_PREPARE_ONLY=1 sh deploy/viewer/build.sh
+      - name: 构建阅片器镜像
+        if: steps.cached.outputs.hit != '1'
+        uses: docker/build-push-action@v7
+        with:
+          context: deploy/viewer/.ohif-src
+          file: deploy/viewer/.ohif-src/Dockerfile
+          build-args: |
+            PUBLIC_URL=/
+            APP_CONFIG=config/heurion.js
+          push: true
+          tags: ${{ env.VIEWER_IMAGE }}:${{ steps.vars.outputs.src }},${{ env.VIEWER_IMAGE }}:${{ steps.vars.outputs.sha }}
+          cache-from: type=registry,ref=${{ env.VIEWER_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.VIEWER_IMAGE }}:buildcache,mode=max
+
   deploy:
     name: 部署到预发
     if: github.repository_id == '1301746811'
-    needs: [images]
+    needs: [images, viewer]
     runs-on: ubuntu-latest
     environment: { name: staging, url: 'https://staging.heurion.org' }
     steps:
@@ -141,6 +192,9 @@ jobs:
           # 预发可能载有生产数据的副本：默认不配发信（STAGING_RESEND_API_KEY 不设），避免真实用户收到预发发出的邮件
           RESEND_API_KEY: ${{ secrets.STAGING_RESEND_API_KEY }}
           NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}
+          ENABLE_PACS: ${{ vars.STAGING_ENABLE_PACS }}
+          ORTHANC_PASSWORD: ${{ secrets.STAGING_ORTHANC_PASSWORD }}
+          IMAGING_RETENTION_DAYS: ${{ vars.STAGING_IMAGING_RETENTION_DAYS }}
         run: |
           for v in HEURION_SECRET DEEPSEEK_API_KEY; do
             [ -n "${!v}" ] || { echo "::error::缺少 secret：$v"; exit 1; }
@@ -158,6 +212,33 @@ jobs:
           MAIL_INBOUND_SECRET=${HEURION_SECRET}
           EOF
           sed -i 's/^ *//' /tmp/heurion2.env
+          # 影像存储（pacs profile）：不启用时一行都不写，与之前完全一致
+          case "${ENABLE_PACS:-}" in
+            1|true|TRUE|yes) PACS=1 ;;
+            ''|0|false|FALSE|no) PACS=0 ;;
+            *) echo "::error::仓库变量 STAGING_ENABLE_PACS 只能是 1 / true（启用）或留空 / 0（不启用）：$ENABLE_PACS"; exit 1 ;;
+          esac
+          if [ "$PACS" = 1 ]; then
+            # 不生成、不兜底弱口令：口令必须由人设成 secret（openssl rand -hex 32）。字符集限定，避免破坏 Orthanc 的 JSON 配置与 .env 解析
+            [ -n "$ORTHANC_PASSWORD" ] || { echo "::error::STAGING_ENABLE_PACS 已启用但缺少 secret STAGING_ORTHANC_PASSWORD（用 openssl rand -hex 32 生成后设为仓库 secret）"; exit 1; }
+            printf '%s' "$ORTHANC_PASSWORD" | grep -Eq '^[A-Za-z0-9_-]{32,128}$' \
+              || { echo "::error::secret STAGING_ORTHANC_PASSWORD 须为 32–128 位字母、数字、- 或 _（建议 openssl rand -hex 32）"; exit 1; }
+            # 保留期默认与生产一样 180 天；仓库变量 STAGING_IMAGING_RETENTION_DAYS 可改，0 = 不清理
+            DAYS="${IMAGING_RETENTION_DAYS:-180}"
+            printf '%s' "$DAYS" | grep -Eq '^[0-9]{1,5}$' || { echo "::error::仓库变量 STAGING_IMAGING_RETENTION_DAYS 须为不小于 0 的整数：$DAYS"; exit 1; }
+            HOST_NAME=$(sed -n 's/^HOSTNAME=//p' /tmp/heurion2.env)
+            {
+              echo "COMPOSE_PROFILES=pacs"
+              echo "ORTHANC_URL=http://orthanc:8042"
+              echo "ORTHANC_USER=heurion"
+              echo "ORTHANC_PASSWORD=${ORTHANC_PASSWORD}"
+              echo "VIEWER_URL=http://viewer:8080"
+              echo "VIEWER_HOST=viewer.${HOST_NAME}"
+              echo "VIEWER_SITE=viewer.${HOST_NAME}"
+              echo "IMAGING_RETENTION_DAYS=${DAYS}"
+            } >> /tmp/heurion2.env
+            echo "影像存储：启用（阅片器 viewer.${HOST_NAME}，原件保留 ${DAYS} 天）"
+          fi
       - name: 拷贝部署文件并部署
         env:
           HOST: ${{ secrets.STAGING_USER || 'root' }}@${{ secrets.STAGING_HOST }}
@@ -167,16 +248,19 @@ jobs:
           SSH="ssh -o ServerAliveInterval=15"
           $SSH "$HOST" "mkdir -p /opt/heurion2/scripts"
           scp deploy/docker-compose.yml deploy/Caddyfile "$HOST":/opt/heurion2/
-          scp deploy/deploy.sh deploy/cutover-v1.sh deploy/backup-to-s3.sh deploy/cleanup-v1.sh "$HOST":/opt/heurion2/scripts/
+          scp deploy/deploy.sh deploy/cutover-v1.sh deploy/backup-to-s3.sh deploy/cleanup-v1.sh deploy/pacs-check.sh "$HOST":/opt/heurion2/scripts/
           scp /tmp/heurion2.env "$HOST":/opt/heurion2/.env.production
           echo "$GHCR_TOKEN" | $SSH "$HOST" "docker login ghcr.io -u ${{ github.actor }} --password-stdin"
           $SSH "$HOST" "cd /opt/heurion2 && chmod 600 .env.production && chmod +x scripts/*.sh && \
-            HEURION2_IMAGE=${APP_IMAGE}:${SHA} EMBEDDER_IMAGE=${EMBEDDER_IMAGE}:${SHA} IMAGING_WORKER_IMAGE=${IMAGING_WORKER_IMAGE}:${SHA} DOC_PARSER_IMAGE=${DOC_PARSER_IMAGE}:${SHA} bash scripts/deploy.sh"
+            HEURION2_IMAGE=${APP_IMAGE}:${SHA} EMBEDDER_IMAGE=${EMBEDDER_IMAGE}:${SHA} IMAGING_WORKER_IMAGE=${IMAGING_WORKER_IMAGE}:${SHA} DOC_PARSER_IMAGE=${DOC_PARSER_IMAGE}:${SHA} VIEWER_IMAGE=${VIEWER_IMAGE}:${SHA} bash scripts/deploy.sh"
       - name: AI 代码隔离自检（容器里以两个测试 uid 尝试读密钥、数据库、别人的工作区）
         env:
           HOST: ${{ secrets.STAGING_USER || 'root' }}@${{ secrets.STAGING_HOST }}
         run: ssh "$HOST" "docker exec -u node heurion2 bash /app/deploy/sandbox/probe.sh"
       - name: 冒烟检查
+        env:
+          HOST: ${{ secrets.STAGING_USER || 'root' }}@${{ secrets.STAGING_HOST }}
+          ENABLE_PACS: ${{ vars.STAGING_ENABLE_PACS }}
         run: |
           B=https://${STAGING_HOSTNAME}
           curl -fsS $B/healthz
@@ -186,3 +270,9 @@ jobs:
           # MCP 与模型代理不对外
           [ "$(curl -s -o /dev/null -w '%{http_code}' $B/mcp)" = "404" ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/llm/v1/messages)" = "404" ]
+          # 影像存储（启用 pacs 时）：匿名 /api/me 401；阅片器子域名可达；容器与 Orthanc 口令正常
+          case "${ENABLE_PACS:-}" in 1|true|TRUE|yes) ;; *) exit 0 ;; esac
+          [ "$(curl -s -o /dev/null -w '%{http_code}' $B/api/me)" = "401" ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' https://viewer.${STAGING_HOSTNAME}/api/dicomweb/studies)" = "401" ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' https://viewer.${STAGING_HOSTNAME}/api/me)" = "404" ]
+          ssh "$HOST" "bash /opt/heurion2/scripts/pacs-check.sh"

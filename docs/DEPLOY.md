@@ -11,7 +11,9 @@ push `0xSynapse/heurion` 的 main 分支，GitHub Actions 就会构建镜像（G
 | `heurion2-embedder` | `ghcr.io/0xsynapse/heurion2-embedder:<sha>`（`apps/embedder/Dockerfile`） | 本地 bge-m3 嵌入服务，模型在构建时打进镜像，只在内部网络可达 |
 | `heurion2-imaging-worker` | `ghcr.io/0xsynapse/heurion2-imaging-worker:<sha>`（`apps/imaging-worker/Dockerfile`） | 影像分析（MONAI + PyTorch CPU）。模型权重在卷 `heurion2_imaging-models` 里，部署时预热、校验 |
 | `heurion2-doc-parser` | `ghcr.io/0xsynapse/heurion2-doc-parser:<sha>`（`apps/doc-parser/Dockerfile`） | PDF 结构化解析（Docling）。模型在构建时打进镜像，运行时离线。只接入没有外网的 `parser` 网络 |
-| `heurion2-caddy` | `caddy:2.8-alpine` | 反向代理加自动 HTTPS，只有它暴露 80/443。`/mcp`、`/llm` 对外返回 404；`www` 跳转到根域名 |
+| `heurion2-caddy` | `caddy:2.8-alpine` | 反向代理加自动 HTTPS，只有它暴露 80/443。`/mcp`、`/llm` 对外返回 404；`www` 跳转到根域名；启用 pacs 时还有阅片器子域名 `viewer.<主域名>` |
+| `heurion2-orthanc`（pacs，可选） | `orthancteam/orthanc:26.9.1` | 影像存储（DICOM + DICOMweb）。只在内部网络给平台访问，不映射端口，Basic 认证。数据卷 `heurion2_orthanc-db`，**不备份**（见下文） |
+| `heurion2-viewer`（pacs，可选） | `ghcr.io/0xsynapse/heurion2-viewer:<sha>`（`deploy/viewer/build.sh`，OHIF v3.13.12） | 阅片器静态页。浏览器只经平台访问（`viewer.<主域名>` → Caddy → 平台 → 这里），影像经平台的 DICOMweb 代理按患者权限读取 |
 
 各服务的内存上限和线程数见 `deploy/docker-compose.yml` 开头的预算表。换机器时要按新机器的内存和核数重新分配。
 
@@ -19,7 +21,7 @@ push `0xSynapse/heurion` 的 main 分支，GitHub Actions 就会构建镜像（G
 - 每个平台用户的 dsh 进程，以及它执行的代码，经 `sudo` 加 `deploy/sandbox/heurion-sandbox-exec` 降到该用户专属的 uid（从 20000 起，见 `sandbox_uids` 表）。
 - 这些进程只能进自己的工作区，读不到数据库、其他用户的工作区和平台进程的环境变量；环境里只有白名单变量；进程数和文件大小有上限。
 - 模型调用经平台代理（`/llm/v1`），真实的 DeepSeek key 不进 dsh。
-- 出站白名单：入口脚本用 iptables 只允许隔离 uid 连本机平台端口（MCP 和模型代理），外网和内部网络的其他服务一律拒绝。所以容器需要 `cap_add: [NET_ADMIN]`。
+- 出站白名单：入口脚本用 iptables 只允许隔离 uid 连本机平台端口（MCP 和模型代理），外网和内部网络的其他服务（含 Orthanc、阅片器）一律拒绝。所以容器需要 `cap_add: [NET_ADMIN]`。
 - 部署后用 `deploy/sandbox/probe.sh` 自检。
 
 服务器上的目录 `/opt/heurion2`：`docker-compose.yml`、`Caddyfile`、`.env.production`（权限 0600，由 CI 用 secret 生成）、`scripts/`、`backup-status.json`。
@@ -42,11 +44,11 @@ push `0xSynapse/heurion` 的 main 分支，GitHub Actions 就会构建镜像（G
    - `0xSynapse/heurion` 的 main 开启分支保护（要求 PR 与「类型检查与测试」通过，不对管理员强制）后，紧急修复仍可由管理员直接 push，但要在提交信息里写明原因，事后补 PR 说明。
 1. push main，触发 `deploy-v2.yml`，依次执行：
    1. 类型检查和测试；
-   2. 构建 4 个镜像，推到 GHCR（打 `<sha>` 和 `latest` 两个标签）；
+   2. 构建 4 个镜像，推到 GHCR（打 `<sha>` 和 `latest` 两个标签）；阅片器镜像在单独的 job 里并行处理：`deploy/viewer` 没变时只给已有镜像加标签，变了才从 OHIF 源码重建（见「启用影像存储」）；
    3. 生成 `.env.production`，拷贝部署文件；
    4. 运行 `scripts/deploy.sh`；
    5. 沙箱隔离自检；
-   6. 冒烟检查：`/healthz`、首页、`/app`，以及 `/mcp`、`/llm` 必须返回 404；
+   6. 冒烟检查：`/healthz`、首页、`/app`，以及 `/mcp`、`/llm` 必须返回 404；启用 pacs 时再查匿名 `/api/me` 为 401、阅片器子域名可达、Orthanc 与阅片器容器正常（`deploy/pacs-check.sh`）；
    7. 清 Cloudflare 缓存。
 
    只改 `*.md` 或 `docs/` 的提交不会触发部署。
@@ -73,7 +75,16 @@ push `0xSynapse/heurion` 的 main 分支，GitHub Actions 就会构建镜像（G
 | `NCBI_API_KEY` | PubMed 限流提升 |
 | `S3_ENDPOINT` / `S3_REGION` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 备份。现在用 Cloudflare R2，`S3_REGION=auto`，token 只授权备份用的那个 bucket |
 | `CF_API_TOKEN` / `CF_ZONE_ID` | 部署后清 Cloudflare 缓存 |
-| `STAGING_HOST` / `STAGING_USER` / `STAGING_SSH_KEY` / `STAGING_KNOWN_HOSTS` / `STAGING_HEURION_SECRET` | 预发，只在需要时设置，用完删掉 |
+| `STAGING_HOST` / `STAGING_USER` / `STAGING_SSH_KEY` / `STAGING_KNOWN_HOSTS` / `STAGING_HEURION_SECRET` / `STAGING_ORTHANC_PASSWORD` | 预发，只在需要时设置，用完删掉 |
+| `ORTHANC_PASSWORD` | 影像存储（Orthanc）口令，启用 pacs 时必填：32–128 位字母、数字、`-`、`_`，用 `openssl rand -hex 32` 生成。没设或不合格时部署直接失败，不会生成弱口令 |
+
+**仓库变量**（Settings → Secrets and variables → Actions → Variables）：
+
+| 变量 | 用途 |
+|---|---|
+| `ENABLE_PACS` | 设为 `1` 启用影像存储与阅片器（pacs profile）；不设或 `0` 不启用，部署与之前完全一致 |
+| `IMAGING_RETENTION_DAYS` | 云端影像原件保留天数，只在启用 pacs 时生效。不设时生产用 **180**；`0` = 不清理 |
+| `STAGING_ENABLE_PACS` / `STAGING_IMAGING_RETENTION_DAYS` | 预发的对应开关，含义同上 |
 
 **密钥与数据**：
 - 各机构的患者文件和自由文本，用机构自己的数据密钥加密；机构数据密钥再用平台主密钥加密保存。
@@ -91,6 +102,7 @@ push `0xSynapse/heurion` 的 main 分支，GitHub Actions 就会构建镜像（G
 
 - **轮换**：每天的备份保留 `BACKUP_RETAIN_DAYS`（7）份，每周的保留 `BACKUP_RETAIN_WEEKS`（4）份。每次备份完，如果总量超过 `BACKUP_MAX_GB`（8，留在 R2 免费的 10 GB 以内），就从最旧的开始删，每类至少留 `BACKUP_MIN_KEEP`（2）份。删到最少份数仍然超量时，状态记为 `warn`。
 - **状态**：`/opt/heurion2/backup-status.json`；日志在 `/var/log/heurion2-backup.log`。
+- **云端影像不备份，原件在医院**：Orthanc 的卷 `heurion2_orthanc-db` 不进 S3 备份（R2 的 8 GB 上限也放不下 DICOM）。平台库里的检查索引、AI 结果、病灶、测量与审核留痕随 `patients.db` 正常备份；恢复后原件不在的检查需要医院重新上传。
 - **手动备份**：`bash /opt/heurion2/scripts/backup-to-s3.sh daily`（或 `weekly`）。
 - **恢复**：
   1. `rclone copy s3:<bucket>/heurion2/db/<最新>.db.gz` 和 `tenants/<最新>.tar.gz`，下载到临时目录，解压。
@@ -122,13 +134,42 @@ push `0xSynapse/heurion` 的 main 分支，GitHub Actions 就会构建镜像（G
 6. **验证**：冒烟检查；用当前密钥解开机构数据密钥；收发一封邮件。然后清一次 Cloudflare 缓存。
 7. **回滚**：DNS 改回旧 IP，旧机器上 `docker start heurion2`。切换之后在新机器上写入的数据不会带回旧机器。旧机器保留到确认新机器没有问题、新的异地备份能恢复为止。
 
+## 启用影像存储（pacs）
+
+生产启用 Orthanc 与 OHIF 阅片器后，医生能在患者页上传 DICOM、在阅片器里看片、跑影像 AI。影像在浏览器里先去标识化再上传；托管生产机上的影像只是**工作副本，原件在医院**，按保留期清理，不备份。平台通过 `/api/me` 的 `features.dicom`（是否配置了 `ORTHANC_URL`）决定是否显示影像检查界面。
+
+### 需要手动做的步骤
+
+1. **Cloudflare DNS**：加一条 `viewer` 的 A 记录，指向与根域名相同的服务器 IP，**开代理**（橙色云朵）。Caddy 会为 `viewer.heurion.org` 申请证书，DNS 没有这条记录时证书申请会反复失败（主站不受影响）。
+2. **secret `ORTHANC_PASSWORD`**：`openssl rand -hex 32` 生成，设到 `0xSynapse/heurion` 的 Actions secrets。只用于平台与 Orthanc 之间（内部网络），不需要告诉任何人；换口令就是改 secret 后重新部署。
+3. **（可选）仓库变量 `IMAGING_RETENTION_DAYS`**：不设时为 180 天；`0` 不清理。
+4. **先用预发演练**：设仓库变量 `STAGING_ENABLE_PACS=1`、secret `STAGING_ORTHANC_PASSWORD`（另生成一个，不与生产共用），可选变量 `STAGING_IMAGING_RETENTION_DAYS`；DNS 加 `viewer.staging` 的 A 记录指向预发机器，**不开代理**（灰色云朵：预发域名本来就不走 Cloudflare 代理，免费证书也不覆盖二级子域名，由 Caddy 直接申请证书）。然后 Actions → Deploy Staging → Run workflow，在预发上传一例去标识化的 CT、打开阅片器、跑一次分析。演练完删掉预发的 secret 与变量。
+5. **仓库变量 `ENABLE_PACS=1`**，然后合并任意一个会触发部署的 PR（或 Actions → Deploy Heurion 2.0 → Run workflow）。部署后看冒烟检查里的 pacs 部分是否通过。
+
+### 部署时发生什么
+
+- CI 往 `.env.production` 追加：`COMPOSE_PROFILES=pacs`、`ORTHANC_URL=http://orthanc:8042`、`ORTHANC_USER=heurion`、`ORTHANC_PASSWORD`、`VIEWER_URL=http://viewer:8080`、`VIEWER_HOST` 与 `VIEWER_SITE`（都是 `viewer.<HOSTNAME>`）、`IMAGING_RETENTION_DAYS`。不启用时这些一行都不写。
+- `deploy.sh` 读 `COMPOSE_PROFILES`，拉镜像、`compose up`、回滚都覆盖 `orthanc` 与 `viewer`；`VIEWER_SITE` 变化会让 compose 重建 Caddy。Caddy 的 `VIEWER_SITE` 不会为空：compose 里有默认值 `viewer.localhost`（空值会让 Caddyfile 解析失败）。
+- Orthanc 只拿到自己的口令，不读整个 `.env.production`；不映射端口；隔离 uid 连不到它（`deploy/sandbox/probe.sh` 检查 `orthanc:8042`、`viewer:8080`）。
+- **阅片器镜像的构建**：OHIF 从源码构建要 15–25 分钟。CI 按 `deploy/viewer` 下受版本控制文件的内容算指纹，推 `heurion2-viewer:src-<指纹>`；GHCR 里已有同一指纹时只加 `<sha>` / `latest` 标签，不重建。需要重建时用 registry 上的 `buildcache`（mode=max）复用依赖安装层。没有用 GHA 缓存当主手段：它每仓库 10 GB、按 LRU 淘汰，和另外 4 个大镜像共用，命中不可靠。不管 pacs 开没开，每次部署都会准备好阅片器镜像（不变时几秒钟）。
+
+### 保留期清理
+
+平台每天跑一次（启动 10 分钟后先跑一次，`src/imaging/retention.ts`）：检查「最后上传时间」超过 `IMAGING_RETENTION_DAYS` 天，就从 Orthanc 删除整个检查（原件与 AI 生成的 SEG）。平台库保留检查索引、AI 结果、病灶、测量与审核留痕。界面上这类检查不再有「在阅片器中打开」「重新分析」，并写明「影像原件已按保留期（N 天）从云端删除，可重新上传」；重新上传同一检查即恢复。有分析在进行的检查跳过，删除失败第二天再试；每次删除在患者访问记录里记一条「影像原件按保留期删除」（系统定时任务），平台日志前缀 `[imaging-retention]`。
+
+### 关闭与回滚
+
+- **关闭**：删掉仓库变量 `ENABLE_PACS`（或设为 `0`）后重新部署。`deploy.sh` 会移除 `heurion2-orthanc`、`heurion2-viewer` 容器，Caddy 的阅片器站点回到 `viewer.localhost`，界面不再显示影像检查。卷 `heurion2_orthanc-db` 保留，再次启用时影像还在；确定不要时手动 `docker volume rm heurion2_orthanc-db`。
+- **回滚某次部署**：健康检查失败时 `deploy.sh` 自动回滚，阅片器镜像一并回到上一个；手动回滚见「运维」里的五个镜像。
+- **只是阅片器坏了**：可以先关闭 pacs（上面），或在服务器上用上一版镜像 `VIEWER_IMAGE=ghcr.io/0xsynapse/heurion2-viewer:<上一个 sha>` 手动部署。
+
 ## 运维
 
 - **告警**：
   - 平台内部：模型服务认证失败或余额不足，立即发邮件；15 分钟内有 5 个回合失败，也发邮件。收件人是绑定了邮箱的管理员，同类告警一小时最多一封（`src/ops-alert/alerts.ts`）。
   - 外部：`uptime.yml` 每 10 分钟探测一次 heurion.org，连续失败就开一个 issue，恢复后自动关闭。它必须放在默认分支 main 的 `.github/workflows/` 下才会定时运行。
 - **日志**：`docker logs -f heurion2`（json-file 轮转，单个容器最多约 250 MB）。
-- **手动部署 / 回滚到某个版本**：在 `/opt/heurion2` 下运行 `HEURION2_IMAGE=…:<sha> EMBEDDER_IMAGE=…:<sha> IMAGING_WORKER_IMAGE=…:<sha> DOC_PARSER_IMAGE=…:<sha> bash scripts/deploy.sh`，四个镜像都要指定。
+- **手动部署 / 回滚到某个版本**：在 `/opt/heurion2` 下运行 `HEURION2_IMAGE=…:<sha> EMBEDDER_IMAGE=…:<sha> IMAGING_WORKER_IMAGE=…:<sha> DOC_PARSER_IMAGE=…:<sha> VIEWER_IMAGE=…:<sha> bash scripts/deploy.sh`，五个镜像都要指定（没启用 pacs 时 `VIEWER_IMAGE` 可以省略）。
 - **本地验证容器**：`scripts/container.sh build && scripts/container.sh up`（单容器，开发用）。
 
 ## 历史

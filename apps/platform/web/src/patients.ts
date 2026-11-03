@@ -3983,7 +3983,7 @@ ${impression}
         notice('诊疗组已更新'); void openPatient(id, true)
       } else if (act === 'log') {
         const rows = await api<any[]>(`/api/patients/${id}/access-log`)
-        const ACTION: Record<string, string> = { create: '新建', view: '查看', update: '修改', labs_read: '读化验', lab_add: '补录化验项', doc_link: '关联报告', doc_unlink: '取消关联', lab_confirm: '确认化验', lab_reject: '删除化验', lab_edit: '修改化验', file_upload: '上传报告', file_download: '查看原件', record_confirm: '确认报告', record_reject: '驳回报告', imaging_analyze: '影像量化分析', propose: '提议', proposal_accept: '采纳提议', proposal_reject: '不采纳提议', team_add: '加入诊疗组', team_remove: '移出诊疗组', break_glass: '紧急访问', delete: '删除', cohort_screen: '研究筛选', enroll: '入组研究', unenroll: '移出研究', cohort_export: '生成研究数据集' }
+        const ACTION: Record<string, string> = { create: '新建', view: '查看', update: '修改', labs_read: '读化验', lab_add: '补录化验项', doc_link: '关联报告', doc_unlink: '取消关联', lab_confirm: '确认化验', lab_reject: '删除化验', lab_edit: '修改化验', file_upload: '上传报告', file_download: '查看原件', record_confirm: '确认报告', record_reject: '驳回报告', imaging_analyze: '影像量化分析', propose: '提议', proposal_accept: '采纳提议', proposal_reject: '不采纳提议', team_add: '加入诊疗组', team_remove: '移出诊疗组', break_glass: '紧急访问', delete: '删除', cohort_screen: '研究筛选', enroll: '入组研究', unenroll: '移出研究', cohort_export: '生成研究数据集', imaging_originals_purged: '影像原件按保留期删除' }
         const dlg = document.getElementById('dialog')!
         dlg.innerHTML = `<div class="dialog-card" role="dialog" aria-modal="true" aria-label="访问记录"><div class="dialog-head"><h2>${esc(d.code)} 访问记录</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
           <div class="dialog-body"><table class="users audit-table"><thead><tr><th>时间</th><th>谁</th><th>操作</th><th>说明</th></tr></thead><tbody>

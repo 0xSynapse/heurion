@@ -266,7 +266,9 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
       if (!vh || !viewerUrl()) throw new ImagingError('viewer_not_configured', '阅片器还没有部署（VIEWER_HOST / VIEWER_URL 未配置）', 503)
       const { study_uid: uid, lesion_id: lesionId } = await c.req.json().catch(() => ({})) as { study_uid?: string; lesion_id?: string }
       if (!uid || !UID.test(uid)) throw new ImagingError('bad_uid', 'StudyInstanceUID 格式不对')
-      svc(c).resolveStudyUid(a, uid)
+      const { studyId } = svc(c).resolveStudyUid(a, uid)
+      const gone = svc(c).originalsDeleted(a, studyId)
+      if (gone) throw new ImagingError('originals_deleted', gone.message, 409)
       const ticket = ctx.viewerTokens.issue(a.userId, 'viewer', TICKET_TTL, [uid])
       if (!ticket) throw new ImagingError('forbidden', '账户状态不允许打开阅片器', 403)
       // 审核视图里「跳转」：打开后结节面板直接定位到这个结节（只是界面定位，不是权限；面板只在 Cookie 允许的检查里找）

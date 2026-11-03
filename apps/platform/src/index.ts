@@ -54,6 +54,9 @@ import { TurnService } from './turns/service.ts'
 import { themePhoto } from './model/theme-photos.ts'
 import { ImageService } from './images/service.ts'
 import { Unsplash } from './images/unsplash.ts'
+import { orthancFromEnv } from './imaging/orthanc.ts'
+import { sharedPipeline } from './imaging/pipeline.ts'
+import { startImagingRetention } from './imaging/retention.ts'
 
 const store = new Store(config.dbPath)
 const docs = new Documents(store)
@@ -193,6 +196,14 @@ if (evolution.available() && process.env.MEMORY_AUTO_REVIEW !== '0') {
       }
     }
   })(), 6 * 3600_000).unref()
+}
+// 影像原件保留期清理（IMAGING_RETENTION_DAYS > 0 且接了 Orthanc 时）：启动 10 分钟后跑一次，之后每天一次。
+// 「分析进行中」以本进程的流水线为准（与接口共用 sharedPipeline），服务重启留下的 queued / running 不阻止清理
+{
+  const orthanc = orthancFromEnv()
+  if (startImagingRetention(patients, orthanc, { days: config.imagingRetentionDays, isRunActive: id => sharedPipeline(patients, orthanc).isActive(id) })) {
+    console.log(`影像原件保留期：${config.imagingRetentionDays} 天（每天清理一次）`)
+  }
 }
 const mail = new MailService(store, mailer, {
   domain: config.mailDomain,
