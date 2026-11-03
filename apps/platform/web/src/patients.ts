@@ -9,7 +9,7 @@ import { askConfirm, askText } from './dialogs.ts'
 import { icon } from './icons.ts'
 import { openHelpGuide, importHelpAsDoc } from './help.ts'
 import { esc } from './dom.ts'
-import { mountStudies, studiesSection } from './imaging-studies.ts'
+import { mountStudies, studiesSection, uploadDicomStudies } from './imaging-studies.ts'
 
 type Api = <T = any>(path: string, opts?: RequestInit) => Promise<T>
 type Notice = (msg: string, error?: boolean) => void
@@ -293,7 +293,10 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           ${d.tags.map(t => `<span class="chip">${esc(t)}</span>`).join('')}${canEdit ? '<button class="quiet small-btn" data-act="tags">编辑</button>' : ''}</div>
         ${d.access === 'break_glass' ? '<div class="notice">紧急访问（只读，24 小时内有效，已记入访问日志）</div>' : d.access === 'tenant' ? '<div class="muted small">机构设置为全员可见：你可以查看，修改需要加入诊疗组</div>' : ''}
         <div class="row pt-actions">
-          ${canEdit ? `<button class="primary" data-act="imaging" title="对 CT / MRI 做量化测量（规则算法、定量 CT 或深度学习模型，按模型如实标注）并存入患者档案">${icon('scan')} 影像分析</button>` : ''}
+          ${canEdit ? (hooks.dicom()
+            // 启用影像存储后，主入口是去标识上传（浏览器里先去掉姓名、ID 等再上传），入库后按序列自动选择分析
+            ? `<button class="primary" data-act="dicom-upload" title="选择 DICOM 文件或 zip：先在本机去除姓名、ID 等信息再上传，系统按序列自动选择分析">${icon('scan')} 上传影像</button><input type="file" id="ptHeaderDicom" accept=".dcm,.dicom,.zip,application/dicom,application/zip" multiple hidden>`
+            : `<button class="primary" data-act="imaging" title="对 CT / MRI 做量化测量（规则算法、定量 CT 或深度学习模型，按模型如实标注）并存入患者档案">${icon('scan')} 影像分析</button>`) : ''}
           ${canEdit ? `<button data-act="upload" title="化验单、出院小结、病理报告（PDF、扫描件、手机照片）：自动提取，审核后进入化验表">上传化验单 / 报告</button><input type="file" id="ptUpload" accept="${ACCEPT}" multiple hidden>` : ''}
           <button data-act="report" title="新建一份病例报告并关联到这位患者；对话框里会填好建议的指令，由你确认后发送">写病例报告</button>
           ${d.access === 'owner' ? `<span class="grow"></span><div class="menu-wrap"><button data-act="ptmore" aria-haspopup="menu">更多 ▾</button>
@@ -541,7 +544,9 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
             ${hasMultiImaging ? `<button class="quiet small-btn" data-act="compare-imaging" title="对比多期影像并计算 RECIST 1.1 靶病灶长径变化率与疗效评级">${icon('compare')} 随访疗效 (RECIST 1.1)</button>` : ''}
             <button class="quiet small-btn" data-open-mpr="latest" title="打开 3D 多平面重建 (MPR) 互动切片浏览器：在轴位/冠状位/矢状位平滑滑动连续切片">${icon('mpr')} 3D MPR 互动切片</button>
             <button class="quiet small-btn" data-open-evidence="latest" title="查看多模态因果诊断链 (影像 + 化验 + 病史)">${icon('evidence')} 因果诊断链</button>
-            <button class="primary small-btn" data-act="imaging">＋ 新建影像量化分析</button>
+            ${hooks.dicom()
+              ? '<button class="quiet small-btn" data-act="imaging" title="科研用：对 NIfTI 体数据按指定模型做量化分析。DICOM 请用上方「影像检查」里的上传（先去标识）">按模型分析 NIfTI（科研）</button>'
+              : '<button class="primary small-btn" data-act="imaging">＋ 新建影像量化分析</button>'}
           </div>
         </div>
         ${sectionAlertBanner}
@@ -1002,9 +1007,11 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           <label for="imgFileInput" style="display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed var(--line-strong); padding: 18px 14px; border-radius: 6px; background: var(--hover); cursor: pointer; text-align: center">
             ${icon('upload', { size: 24, style: 'color: var(--blue); margin-bottom: 6px' })}
             <span style="font-size: 13px; font-weight: 500">点击选择或拖拽医学影像文件至此</span>
-            <span class="muted small" style="margin-top: 4px">支持高分辨率序列：NIfTI (.nii, .nii.gz, .gz)、单个 DICOM (.dcm) 或整套 DICOM 序列压缩包 (.zip, .tar.gz)</span>
+            <span class="muted small" style="margin-top: 4px">${hooks.dicom()
+              ? '只收 NIfTI (.nii, .nii.gz)。DICOM 请用患者页「上传影像」：先在本机去除姓名、ID 等信息再上传'
+              : '支持高分辨率序列：NIfTI (.nii, .nii.gz, .gz)、单个 DICOM (.dcm) 或整套 DICOM 序列压缩包 (.zip, .tar.gz)'}</span>
           </label>
-          <input type="file" id="imgFileInput" accept=".nii,.nii.gz,.gz,.dcm,.dicom,.zip,.tar,.tar.gz,.tgz,application/gzip,application/x-gzip,application/zip,application/x-tar,application/octet-stream" style="display: none">
+          <input type="file" id="imgFileInput" accept="${hooks.dicom() ? '.nii,.nii.gz,.gz' : '.nii,.nii.gz,.gz,.dcm,.dicom,.zip,.tar,.tar.gz,.tgz,application/gzip,application/x-gzip,application/zip,application/x-tar,application/octet-stream'}" style="display: none">
           <div id="imgUploadFileName" class="muted small" style="margin-top: 6px; display: none; color: var(--teal)"></div>
           <div class="muted small" style="margin-top: 6px; font-size: 11.5px; color: var(--text-muted); line-height: 1.5; display: flex; align-items: flex-start; gap: 5px">
             ${icon('info', { size: 13, style: 'margin-top: 2px; color: var(--blue); flex-shrink: 0' })}
@@ -3963,6 +3970,8 @@ ${impression}
         if (v !== null) { await api(`/api/patients/${id}`, { method: 'PATCH', body: JSON.stringify({ tags: v.split(/[,，、;；]/).map(x => x.trim()).filter(Boolean) }) }); await loadList(); void openPatient(id, true) }
       } else if (act === 'upload') {
         (document.getElementById('ptUpload') as HTMLInputElement).click()
+      } else if (act === 'dicom-upload') {
+        (document.getElementById('ptHeaderDicom') as HTMLInputElement).click()
       } else if (act === 'imaging') {
         await showImagingDialog(id, d)
       } else if (act === 'report') {
@@ -4025,11 +4034,27 @@ ${impression}
     if (!current) return
     const input = e.target as HTMLInputElement
     const id = current
+    if (input.id === 'ptHeaderDicom' && input.files?.length) {
+      const files = Array.from(input.files)
+      input.value = ''
+      tab = 'records'
+      await openPatient(id, true)
+      try { await uploadDicomStudies(api, notice, id, files) } catch (err) { notice(`DICOM 上传失败：${(err as Error).message}`, true) }
+      if (current === id) await openPatient(id, true)
+      return
+    }
     if (input.id === 'ptUpload' && input.files?.length) {
       const failed: string[] = []
       let ok = 0
       let hasImaging = false
-      for (const f of Array.from(input.files)) {
+      const all = Array.from(input.files)
+      // 启用影像存储时 DICOM 走去标识上传（旧接口不收原件）；NIfTI 等体数据仍按旧方式分析
+      const dicomFiles = hooks.dicom() ? all.filter(f => /\.(dcm|dicom)$/i.test(f.name)) : []
+      if (dicomFiles.length) {
+        hasImaging = true
+        try { await uploadDicomStudies(api, notice, id, dicomFiles); ok += dicomFiles.length } catch (err) { failed.push(`DICOM：${(err as Error).message}`) }
+      }
+      for (const f of all.filter(x => !dicomFiles.includes(x))) {
         const isImaging = /\.(nii|nii\.gz|dcm|dicom|mha|nrrd)$/i.test(f.name)
         if (isImaging) {
           hasImaging = true

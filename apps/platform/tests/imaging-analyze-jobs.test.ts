@@ -1,4 +1,5 @@
 import { mkdtempSync } from 'node:fs'
+import { gzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -15,6 +16,21 @@ import { Store } from '../src/store/db.ts'
 import { kekFrom, TenantKeys } from '../src/tenancy/keys.ts'
 import { PatientService } from '../src/tenancy/patients.ts'
 import { INTERRUPTED_REASON } from '../src/imaging/analyze-jobs.ts'
+import { isNifti } from '../src/imaging/nifti-sniff.ts'
+
+/** 最小的 NIfTI-1 头（sizeof_hdr = 348，magic "n+1\0"），后面带几个体素字节 */
+function niftiBytes(gz = true): Uint8Array<ArrayBuffer> {
+  const b = new Uint8Array(352 + 8)
+  new DataView(b.buffer).setInt32(0, 348, true)
+  b.set([0x6e, 0x2b, 0x31, 0], 344)
+  return gz ? new Uint8Array(gzipSync(b)) : b
+}
+/** 带 DICM 前缀的最小 DICOM Part 10 文件开头 */
+function dicomBytes(): Uint8Array<ArrayBuffer> {
+  const b = new Uint8Array(256)
+  b.set([0x44, 0x49, 0x43, 0x4d], 128)
+  return b
+}
 
 /**
  * 旧版「影像分析」接口改为异步（docs/design/IMAGING_STUDIES.md「旧版影像分析的后台任务」）：
@@ -35,13 +51,13 @@ function env(root = mkdtempSync(join(tmpdir(), 'hr-img-async-')), store = new St
   return { root, store, tenants, keys, svc }
 }
 
-function appFor(store: Store, svc: PatientService) {
+function appFor(store: Store, svc: PatientService, extra: { imagingAcceptIdentified?: boolean } = {}) {
   const docs = new Documents(store)
   return buildApi({
     docs, ops: new OpService(docs), turns: {} as any, postcheck: new PostCheck(docs), crossref: {} as any,
     renderer: new SlideRenderer(mkdtempSync(join(tmpdir(), 'img-async-render-'))),
     accounts: new Accounts(store, { secret: SECRET, devMode: false, devToken: 'dev', devUser: 'dev' }),
-    devMode: false, devUser: 'dev', patients: svc,
+    devMode: false, devUser: 'dev', patients: svc, ...extra,
   })
 }
 
@@ -89,9 +105,9 @@ function deferredWorker() {
   }
 }
 
-async function submitFile(t: Env, opts: { user?: string; name?: string } = {}) {
+async function submitFile(t: Env, opts: { user?: string; name?: string; bytes?: Uint8Array<ArrayBuffer> } = {}) {
   const fd = new FormData()
-  fd.append('file', new File([new Uint8Array([0x1f, 0x8b, 0, 0])], opts.name ?? '张三-胸部CT.nii.gz'))
+  fd.append('file', new File([opts.bytes ?? niftiBytes()], opts.name ?? '张三-胸部CT.nii.gz'))
   fd.append('model_id', 'bronchiectasis_mucus_analyzer')
   return t.app.request(`/api/patients/${t.patient.id}/imaging/analyze`, { method: 'POST', headers: { Authorization: t.tok(opts.user ?? t.user) }, body: fd })
 }
@@ -246,7 +262,7 @@ describe('旧版影像分析接口：异步任务', () => {
     expect((await jobs(t, app2)).latest.status).toBe('interrupted')
     // 不挡住新任务
     const fd = new FormData()
-    fd.append('file', new File([new Uint8Array([1])], 'scan.nii.gz'))
+    fd.append('file', new File([niftiBytes()], 'scan.nii.gz'))
     expect((await app2.request(`/api/patients/${t.patient.id}/imaging/analyze`, { method: 'POST', headers: { Authorization: t.tok(t.user) }, body: fd })).status).toBe(202)
     // 旧进程的推理收尾不影响
     w.release(new Error('进程已退出'))
@@ -303,4 +319,37 @@ describe('旧版影像分析接口：异步任务', () => {
     const denied = await invoke(t.user, 'POST', `/api/patients/${t.patient.id}/imaging/analyze`, { json: { sample_id: 'chest_lung_ct' } })
     expect(denied.status).toBe(403)
   })
+
+  it('没开「接收原件」时只收 NIfTI：DICOM、zip 拒收（400，不登记任务、不调 worker），并说明去「上传影像」', async () => {
+    const t = setup()
+    const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0])
+    for (const [name, bytes] of [['张三.dcm', dicomBytes()], ['张三.zip', zip], ['伪装成.nii.gz', gzipSync(dicomBytes())]] as const) {
+      const res = await submitFile(t, { name, bytes: new Uint8Array(bytes) })
+      expect(res.status).toBe(400)
+      const body = await res.json() as { error: string; message: string }
+      expect(body.error).toBe('identified_upload')
+      expect(body.message).toContain('上传影像')
+    }
+    expect((await jobs(t)).latest).toBeNull()
+  })
+
+  it('院内部署开了「接收原件」：DICOM 照常提交（202）', async () => {
+    const t = setup()
+    workerHandler = async () => Response.json({ error: 'not_now' }, { status: 501 })
+    const app = appFor(t.store, t.svc, { imagingAcceptIdentified: true })
+    const fd = new FormData()
+    fd.append('file', new File([dicomBytes()], 'scan.dcm'))
+    const res = await app.request(`/api/patients/${t.patient.id}/imaging/analyze`, { method: 'POST', headers: { Authorization: t.tok(t.user) }, body: fd })
+    expect(res.status).toBe(202)
+  })
+
+  it('NIfTI 判断按内容：NIfTI-1（压缩与不压缩）是；DICOM、zip、截断的 gzip、太短的文件不是', () => {
+    expect(isNifti(niftiBytes(true))).toBe(true)
+    expect(isNifti(niftiBytes(false))).toBe(true)
+    expect(isNifti(dicomBytes())).toBe(false)
+    expect(isNifti(new Uint8Array([0x50, 0x4b, 0x03, 0x04]))).toBe(false)
+    expect(isNifti(new Uint8Array([0x1f, 0x8b, 0, 0]))).toBe(false)
+    expect(isNifti(new Uint8Array(100))).toBe(false)
+  })
+
 })

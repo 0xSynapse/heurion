@@ -126,7 +126,7 @@ const b64bytes = (s: string) => Uint8Array.from(atob(s), c => c.charCodeAt(0))
  * 攒满一批就上传（同时只在内存里留一批）。原检查号单独作为表单字段发送，服务端加密存放，不进影像存储。
  * 院内部署接收原件时（accept_identified）按原样分批上传。
  */
-async function upload(api: Api, notice: Notice, patientId: string, files: File[]): Promise<void> {
+export async function uploadDicomStudies(api: Api, notice: Notice, patientId: string, files: File[]): Promise<void> {
   const params = await api<DeidParamsView>(`/api/patients/${patientId}/imaging/deid-params`)
   if (params.accept_identified) return uploadOriginals(api, notice, patientId, files)
   const deid = await createDeidentifier({ key: b64bytes(params.key), pseudonym: params.pseudonym })
@@ -366,7 +366,7 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
       const files = Array.from(input.files ?? []).filter(f => !f.name.startsWith('.'))
       input.value = ''
       if (!files.length) return
-      try { await upload(api, notice, patientId, files) } catch (err) { notice(`DICOM 上传失败：${(err as Error).message}`, true) }
+      try { await uploadDicomStudies(api, notice, patientId, files) } catch (err) { notice(`DICOM 上传失败：${(err as Error).message}`, true) }
       await refresh()
     }
   }
