@@ -43,10 +43,36 @@ BIN_NAME="aegis-os-${OS}-${ARCH}"
 
 INSTALL_DIR="${AEGIS_INSTALL_DIR:-}"
 if [ -z "$INSTALL_DIR" ]; then
-  INSTALL_DIR="${HOME}/.local/bin"
-  if [ -w "/usr/local/bin" ]; then
-    INSTALL_DIR="/usr/local/bin"
+  # 1. If `aegis-os` is already on PATH (outside /tmp) and its directory is writable, upgrade it in-place
+  EXISTING_BIN="$(command -v aegis-os 2>/dev/null || true)"
+  if [ -n "$EXISTING_BIN" ]; then
+    EXISTING_DIR="$(dirname "$EXISTING_BIN")"
+    case "$EXISTING_DIR" in
+      /tmp/*|/private/tmp/*) ;;
+      *)
+        if [ -w "$EXISTING_DIR" ] && { [ ! -e "$EXISTING_BIN" ] || [ -w "$EXISTING_BIN" ]; }; then
+          INSTALL_DIR="$EXISTING_DIR"
+        fi
+        ;;
+    esac
   fi
+fi
+if [ -z "$INSTALL_DIR" ]; then
+  # 2. Prefer a writable directory that is ALREADY in the user's current PATH so `aegis-os` works immediately
+  case ":${PATH}:" in
+    *":${HOME}/.local/bin:"*)
+      INSTALL_DIR="${HOME}/.local/bin"
+      ;;
+    *":/opt/homebrew/bin:"*)
+      if [ -w "/opt/homebrew/bin" ]; then INSTALL_DIR="/opt/homebrew/bin"; fi
+      ;;
+    *":/usr/local/bin:"*)
+      if [ -w "/usr/local/bin" ]; then INSTALL_DIR="/usr/local/bin"; fi
+      ;;
+  esac
+fi
+if [ -z "$INSTALL_DIR" ]; then
+  INSTALL_DIR="${HOME}/.local/bin"
 fi
 mkdir -p "$INSTALL_DIR"
 TARGET_BIN="${INSTALL_DIR}/aegis-os"
