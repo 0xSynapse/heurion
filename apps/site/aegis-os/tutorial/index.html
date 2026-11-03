@@ -23,7 +23,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&family=Noto+Serif+SC:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/site/site.css?v=nordic-v13" />
+  <link rel="stylesheet" href="/site/site.css?v=nordic-v14" />
   <style>
     .tut-hero {
       padding: 5rem 0 3.25rem;
@@ -35,11 +35,12 @@
       background-position: center 62%;
       border-bottom: 1px solid var(--border);
     }
-    .tut-hero h1 { max-width: 18ch; }
     .tut-hero .lede { max-width: 50rem; margin-top: 1.2rem; color: var(--ink-secondary); font-size: 1.02rem; }
-    .brand-group { display: flex; align-items: center; gap: 0.85rem; }
-    .brand-sep { color: var(--border); font-weight: 300; }
-    .brand-sub { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); padding: 0.18rem 0.52rem; background: var(--accent-soft); border: 1px solid rgba(35, 62, 51, 0.2); }
+    .brand-group { display: flex; align-items: center; gap: 0.75rem; white-space: nowrap; flex-shrink: 0; }
+    .brand-sep { color: var(--border); font-weight: 300; flex-shrink: 0; }
+    .brand-sub { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); padding: 0.18rem 0.52rem; background: var(--accent-soft); border: 1px solid rgba(35, 62, 51, 0.2); white-space: nowrap; flex-shrink: 0; }
+    .nav-links { gap: 1.65rem; flex-wrap: nowrap; }
+    .nav-link { white-space: nowrap; flex-shrink: 0; }
     .nav-link-active { color: var(--ink); font-weight: 500; }
     .tut-layout { display: grid; grid-template-columns: 15rem 1fr; gap: 4rem; padding: 4rem 0 6rem; }
     .tut-nav { position: sticky; top: 6rem; align-self: start; display: grid; gap: .55rem; }
@@ -84,8 +85,8 @@
         <span class="brand-sub">AEGIS OS</span>
       </div>
       <nav class="nav-links" aria-label="Primary">
-        <a href="/" class="nav-link">Heurion 主站</a>
-        <a href="/aegis-os/" class="nav-link">Aegis OS 概览</a>
+        <a href="/" class="nav-link">主站</a>
+        <a href="/aegis-os/" class="nav-link">概览</a>
         <a href="/aegis-os/tutorial/" class="nav-link nav-link-active">使用教程</a>
         <a href="/aegis-cloud/dashboard" class="nav-link">云端控制台</a>
         <a href="/aegis-cloud/approve" class="nav-link">边界审批台</a>
@@ -93,7 +94,7 @@
       </nav>
       <div class="nav-right">
         <a class="lang-btn" href="/en/aegis-os/tutorial/">EN</a>
-        <a class="nav-cta" href="/aegis-cloud/dashboard">云端控制台 / 订阅 Pro →</a>
+        <a class="nav-cta" href="/aegis-cloud/dashboard">订阅 Pro / 控制台 →</a>
       </div>
     </div>
   </header>
