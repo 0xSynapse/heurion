@@ -268,6 +268,10 @@ jobs:
           scp -o StrictHostKeyChecking=no deploy/docker-compose.yml deploy/Caddyfile "$HOST":/opt/heurion2/
           scp -o StrictHostKeyChecking=no deploy/deploy.sh deploy/cutover-v1.sh deploy/backup-to-s3.sh deploy/cleanup-v1.sh deploy/pacs-check.sh "$HOST":/opt/heurion2/scripts/
           scp -o StrictHostKeyChecking=no /tmp/heurion2.env "$HOST":/opt/heurion2/.env.production
+          # Orthanc 配置挂载的是单个文件：宿主机上没有它时 Docker 会建一个同名空目录，Orthanc 读配置失败、反复重启。
+          # 先删掉那样的空目录（rmdir 只删空目录），再拷文件
+          $SSH "$HOST" "mkdir -p /opt/heurion2/orthanc && if [ -d /opt/heurion2/orthanc/orthanc.json ]; then rmdir /opt/heurion2/orthanc/orthanc.json; fi"
+          scp -o StrictHostKeyChecking=no deploy/orthanc/orthanc.json "$HOST":/opt/heurion2/orthanc/orthanc.json
           # 镜像是私有包：本次部署用 GITHUB_TOKEN 登录 GHCR 拉取
           echo "$GHCR_TOKEN" | $SSH "$HOST" "docker login ghcr.io -u ${{ github.actor }} --password-stdin"
           $SSH "$HOST" "cd /opt/heurion2 && chmod 600 .env.production && chmod +x scripts/*.sh && \

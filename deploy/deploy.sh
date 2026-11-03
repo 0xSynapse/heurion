@@ -124,6 +124,15 @@ CADDY_HASH=$(sha256sum Caddyfile | cut -d' ' -f1)
 CADDY_RECREATE=()
 if [ "$(cat .caddyfile.sha 2>/dev/null)" != "$CADDY_HASH" ]; then CADDY_RECREATE=(--force-recreate caddy); fi
 
+# Orthanc 配置（orthanc/orthanc.json）同样是挂载进容器的单个文件，只在启动时读：内容变了按哈希重建 Orthanc
+ORTHANC_HASH=""
+ORTHANC_RECREATE=()
+if [ "$PACS" -eq 1 ]; then
+  if [ ! -f orthanc/orthanc.json ]; then echo "❌ 缺少 orthanc/orthanc.json（CI 应拷到 /opt/heurion2/orthanc/）"; exit 1; fi
+  ORTHANC_HASH=$(sha256sum orthanc/orthanc.json | cut -d' ' -f1)
+  if [ "$(cat .orthanc.sha 2>/dev/null)" != "$ORTHANC_HASH" ]; then ORTHANC_RECREATE=(--force-recreate orthanc); fi
+fi
+
 # 关闭 pacs 后：profile 外的服务不算孤儿，--remove-orphans 不会删，这里显式停掉旧的 Orthanc / 阅片器容器（卷 orthanc-db 保留）
 if [ "$PACS" -eq 0 ]; then
   for c in heurion2-orthanc heurion2-viewer; do
@@ -136,6 +145,11 @@ if ! "${COMPOSE[@]}" up -d --remove-orphans; then
   "${COMPOSE[@]}" logs --tail=80 || true
   [ "$CUTOVER" -eq 1 ] && restore_v1
   exit 1
+fi
+
+if [ ${#ORTHANC_RECREATE[@]} -gt 0 ]; then
+  echo "== Orthanc 配置有变化：重建 Orthanc（数据在卷里）"
+  "${COMPOSE[@]}" up -d --no-deps "${ORTHANC_RECREATE[@]}" && echo "$ORTHANC_HASH" > .orthanc.sha
 fi
 
 if [ ${#CADDY_RECREATE[@]} -gt 0 ]; then
