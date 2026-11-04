@@ -901,6 +901,49 @@ export class Editor {
     this.view.focus()
   }
 
+  /** 将 AI 对话 / Co-Pilot 中的二维表格数据直接作为原生可编辑表格插入当前光标位置。 */
+  insertTableRows(rows: string[][], hasHeader = true): void {
+    if (!rows.length) return
+    const colCount = Math.max(1, ...rows.map(r => r.length))
+    const makeCell = (text: string, header: boolean) => {
+      const clean = (text ?? '').trim()
+      const p = clean
+        ? schema.nodes.paragraph!.create({ id: clientId() }, schema.text(clean))
+        : schema.nodes.paragraph!.create({ id: clientId() })
+      return schema.nodes.table_cell!.create({ header }, p)
+    }
+    const pmRows = rows.map((r, rIdx) => {
+      const isHead = hasHeader && rIdx === 0
+      const cells = Array.from({ length: colCount }, (_, cIdx) => makeCell(r[cIdx] ?? '', isHead))
+      return schema.nodes.table_row!.create(null, cells)
+    })
+    const table = schema.nodes.table!.create({ id: clientId(), header_explicit: hasHeader }, pmRows)
+    this.view.dispatch(this.view.state.tr.replaceSelectionWith(table).scrollIntoView())
+    this.view.focus()
+  }
+
+  /** 实时统计当前文稿字数（不含空白）、表格数、图表数与引用数。 */
+  getDocStats(): { chars: number; tables: number; figures: number; citations: number } {
+    let chars = 0
+    let tables = 0
+    let figures = 0
+    const citeIds = new Set<string>()
+    this.view.state.doc.descendants(node => {
+      if (node.attrs?.suggest === 'delete') return false
+      if (node.isText && node.text) {
+        chars += node.text.replace(/\s+/g, '').length
+      } else if (node.type.name === 'table') {
+        tables++
+      } else if (node.type.name === 'figure') {
+        figures++
+      } else if (node.type.name === 'citation' && node.attrs.cite_id) {
+        citeIds.add(String(node.attrs.cite_id))
+      }
+      return true
+    })
+    return { chars, tables, figures, citations: citeIds.size }
+  }
+
   run(command: Command): boolean {
     const ok = command(this.view.state, this.view.dispatch, this.view)
     this.view.focus()

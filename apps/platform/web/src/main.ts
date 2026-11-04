@@ -23,7 +23,7 @@ import { applyTheme, mountThemeSwitch } from './theme.ts'
 import { photoFigure } from './photos.ts'
 import { openPhotoSearch, photoSearchEnabled } from './unsplash.ts'
 import { openHelpGuide, importHelpAsDoc } from './help.ts'
-import { initCopilot, formatMarkdown } from './copilot.ts'
+import { initCopilot, formatMarkdown, bindMarkdownActions } from './copilot.ts'
 import { icon } from './icons.ts'
 
 const TOKEN = storedToken()
@@ -1019,6 +1019,7 @@ async function refresh(full: boolean): Promise<void> {
   renderVersions()
   renderCites()
   syncRevertButtons()
+  syncToolbar()
 }
 
 // 重命名：点标题直接改（回车保存，Esc 取消，失焦保存）
@@ -1189,6 +1190,8 @@ document.addEventListener('click', e => {
   $('arrangeMenu').hidden = true
   $('chartMenu').hidden = true
   $('imageMenu').hidden = true
+  const fmtMenu = document.getElementById('formatMoreMenu')
+  if (fmtMenu) fmtMenu.hidden = true
 })
 
 /** 插入图片：上传，或（服务器配了图库时）从 Unsplash 搜索。与 AI 的 add_image / slide_add_photo 同一套。 */
@@ -1388,6 +1391,42 @@ async function insertFigureIntoActiveSession(assetId: string, caption: string): 
   }
   return false
 }
+
+async function insertTableIntoActiveOrNewDoc(rows: string[][]): Promise<void> {
+  if (!rows.length) return
+  if (session?.kind === 'doc' && session.editor) {
+    session.editor.insertTableRows(rows, true)
+    syncToolbar()
+    showNotice(`已插入可编辑三线表（${rows.length} 行 × ${rows[0]?.length ?? 0} 列）`)
+    return
+  }
+  try {
+    const created = await api<{ id: string }>('/api/docs', {
+      method: 'POST',
+      body: JSON.stringify({ title: '临床数据汇总与文稿', kind: 'doc' }),
+    })
+    await loadDocs()
+    await open(created.id)
+    await new Promise(r => setTimeout(r, 180))
+    session?.editor?.insertTableRows(rows, true)
+    syncToolbar()
+    showNotice(`已新建文稿并插入可编辑三线表（${rows.length} 行 × ${rows[0]?.length ?? 0} 列）`)
+  } catch (err) {
+    showNotice(`插入表格失败：${(err as Error).message}`, true)
+  }
+}
+
+bindMarkdownActions($('chatLog'), {
+  onInsertTable: insertTableIntoActiveOrNewDoc,
+  onNotice: showNotice,
+})
+
+document.getElementById('formatMoreBtn')?.addEventListener('click', e => {
+  e.stopPropagation()
+  const menu = document.getElementById('formatMoreMenu')
+  if (!menu) return
+  menu.hidden = !menu.hidden
+})
 
 $('toolbar').onclick = async e => {
   const btn = (e.target as HTMLElement).closest('button')
@@ -1755,6 +1794,16 @@ function syncToolbar(): void {
   if (italicBtn) italicBtn.classList.toggle('active', session.editor.commands.isMarkActive('italic'))
   const underlineBtn = document.querySelector<HTMLButtonElement>('#toolbar [data-cmd="underline"]')
   if (underlineBtn) underlineBtn.classList.toggle('active', session.editor.commands.isMarkActive('underline'))
+
+  const statsEl = document.getElementById('docStatsMeta')
+  if (statsEl) {
+    const st = session.editor.getDocStats()
+    const parts = [`${st.chars} 字`]
+    if (st.tables > 0) parts.push(`${st.tables} 表`)
+    if (st.figures > 0) parts.push(`${st.figures} 图`)
+    if (st.citations > 0) parts.push(`${st.citations} 引用`)
+    statsEl.textContent = parts.join(' · ')
+  }
 }
 
 // —— 通知 ——
@@ -2642,18 +2691,29 @@ setInterval(() => {
 }, 2000)
 void loadQueue()
 
-// —— 选区评论 ——
+// —— 选区悬浮快捷操作条（✦ 润色 · 核查证据 · ＋ 批注） ——
 
 function placeFab(): void {
   const fab = $('commentFab')
   if (!anchor) { fab.style.display = 'none'; return }
   const main = document.querySelector('.center')!.getBoundingClientRect()
-  fab.style.display = 'block'
-  fab.textContent = anchor.blocked ?? (anchor.snippet ? '评论' : '评论此形状')
+  fab.style.display = 'inline-flex'
   fab.classList.toggle('blocked', !!anchor.blocked)
+  if (anchor.blocked) {
+    fab.innerHTML = `<span class="sel-bub-blocked">${esc(anchor.blocked)}</span>`
+  } else if (anchor.snippet) {
+    fab.innerHTML =
+      `<button type="button" class="sel-bub-btn primary" data-sel-act="polish" title="对选中句子进行医学学术润色并生成 Diff 修订">✦ 润色</button>` +
+      `<span class="sel-bub-sep"></span>` +
+      `<button type="button" class="sel-bub-btn" data-sel-act="verify" title="核查选中论断的文献证据与数据支撑">核查证据</button>` +
+      `<span class="sel-bub-sep"></span>` +
+      `<button type="button" class="sel-bub-btn" data-sel-act="comment" title="为选中句子添加审稿批注">＋ 批注</button>`
+  } else {
+    fab.innerHTML = `<button type="button" class="sel-bub-btn" data-sel-act="comment">评论此形状</button>`
+  }
   const fr = fab.getBoundingClientRect()
-  const fw = fr.width || 64
-  const fh = fr.height || 28
+  const fw = fr.width || 190
+  const fh = fr.height || 30
   let top = anchor.rect.top - main.top - fh - 8
   if (top < 8) top = anchor.rect.top - main.top + 28
   let rawLeft = anchor.rect.left - main.left + anchor.rect.width / 2 - fw / 2
@@ -2670,11 +2730,50 @@ function placeFab(): void {
 }
 $('scroller').addEventListener('scroll', () => { $('commentFab').style.display = 'none' })
 
-$('commentFab').onmousedown = e => {
+$('commentFab').onmousedown = async e => {
   e.preventDefault()
   if (!anchor || anchor.blocked) return
-  pendingAnchor = { node_id: anchor.node_id, snippet: anchor.snippet, paragraph: anchor.paragraph, range: anchor.range }
+  const actBtn = (e.target as HTMLElement).closest<HTMLElement>('[data-sel-act]')
+  const act = actBtn?.dataset.selAct || 'comment'
+  const curAnchor = { node_id: anchor.node_id, snippet: anchor.snippet, paragraph: anchor.paragraph, range: anchor.range }
   $('commentFab').style.display = 'none'
+
+  if (act === 'polish' && curAnchor.snippet && session) {
+    if ($('app').classList.contains('side-collapsed')) setSideCollapsed(false)
+    switchTab('chatPane')
+    const input = $<HTMLTextAreaElement>('chatInput')
+    input.value = `请对以下选中句子进行医学学术润色（保持原意、增强严谨性，直接生成待采纳修订）：\n「${curAnchor.snippet}」`
+    void send()
+    return
+  }
+
+  if (act === 'verify' && curAnchor.snippet && session) {
+    if ($('app').classList.contains('side-collapsed')) setSideCollapsed(false)
+    switchTab('commentPane')
+    try {
+      const c = await api(`/api/docs/${session.docId}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...curAnchor,
+          text: '请核查该论断的数据与文献证据支撑，若有需要补充的权威引用请一并给出修订建议。',
+        }),
+      })
+      if (!c.queued) {
+        await api(`/api/docs/${session.docId}/comments/${c.id}/ask?async=1`, {
+          method: 'POST',
+          body: JSON.stringify({ suggest: $<HTMLInputElement>('suggestMode').checked }),
+        })
+      }
+      showNotice('已发起选区证据与引用核查')
+      await refresh(false)
+    } catch (err) {
+      showNotice((err as Error).message, true)
+    }
+    return
+  }
+
+  pendingAnchor = curAnchor
+  if ($('app').classList.contains('side-collapsed')) setSideCollapsed(false)
   switchTab('commentPane')
   $('newComment').hidden = false
   $('newCommentQuote').textContent = pendingAnchor.snippet || '（整个形状）'
@@ -3594,6 +3693,8 @@ async function boot(): Promise<void> {
     user: () => ME,
     onUnauthorized: () => signOut(),
     activeDoc: () => session ? { id: session.docId, title: detail?.title || '未命名文档' } : null,
+    onInsertTable: insertTableIntoActiveOrNewDoc,
+    onNotice: showNotice,
   })
   // 回到上次停留的工作空间（显示该空间的开始页）
   spaces.setEnabled('patients', me.tenant?.settings.patient_module !== false)

@@ -138,17 +138,102 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
   }
 
   async function createPatient(): Promise<void> {
-    const sex = await askText({ title: '新建患者', label: '性别（男 / 女，可留空）', placeholder: '男', confirm: '下一步', hint: '患者在系统里只有代号（P-0001…），不要填姓名。姓名可以在患者页「本机备注」里记，只存在这台电脑上。' })
-    if (sex === null) return
-    const year = await askText({ title: '新建患者', label: '出生年份（可留空）', placeholder: '1962', confirm: '下一步' })
-    if (year === null) return
-    const tags = await askText({ title: '新建患者', label: '诊断标签（用逗号分开，可留空）', placeholder: '2型糖尿病，CKD3', confirm: '创建' })
-    if (tags === null) return
-    try {
-      const p = await api<Patient>('/api/patients', { method: 'POST', body: JSON.stringify({ sex: sex.trim(), birth_year: year.trim() || null, tags: tags.split(/[,，、;；]/).map(x => x.trim()).filter(Boolean) }) })
-      await loadList()
-      await openPatient(p.id)
-    } catch (err) { notice((err as Error).message, true) }
+    const dlg = document.getElementById('dialog')!
+    const QUICK_TAGS = ['肺结节随访', 'NSCLC', '支气管扩张', 'ABPA', 'COPD', '2型糖尿病', 'CKD3']
+    dlg.innerHTML = `
+      <form class="dialog-card pt-create-dialog" id="ptCreateForm" style="width: min(480px, 94vw)">
+        <div class="dialog-head">
+          <h2>新建患者档案</h2>
+          <button type="button" class="quiet" data-close aria-label="关闭">✕</button>
+        </div>
+        <div class="muted small" style="line-height: 1.55; margin-bottom: 4px">
+          患者在系统内自动分配去标识化代号（<code>P-0001</code>…），<b>请勿在服务器端字段填入真实姓名</b>。如需方便记忆，可在下方填写「本机备注名」（仅保存在当前浏览器本地）。
+        </div>
+        <div class="pt-create-grid">
+          <div class="dialog-field">
+            <span>性别</span>
+            <div class="pt-create-sex-seg" id="ptCreateSexSeg">
+              <button type="button" class="seg-btn active" data-sex="男">男</button>
+              <button type="button" class="seg-btn" data-sex="女">女</button>
+              <button type="button" class="seg-btn" data-sex="">未填</button>
+            </div>
+            <input type="hidden" name="sex" id="ptCreateSexInput" value="男">
+          </div>
+          <label class="dialog-field">
+            <span>出生年份（选填）</span>
+            <input type="number" name="birth_year" id="ptCreateYearInput" min="1900" max="${new Date().getFullYear()}" placeholder="例如 1962">
+          </label>
+        </div>
+        <label class="dialog-field">
+          <span>临床诊断 / 队列标签（选填，逗号分隔或点击下方快捷标签）</span>
+          <input type="text" name="tags" id="ptCreateTagsInput" placeholder="例如：肺结节随访，COPD">
+          <div class="pt-tag-suggestions" id="ptCreateTagChips">
+            ${QUICK_TAGS.map(t => `<button type="button" class="pt-tag-chip" data-tag="${esc(t)}">＋ ${esc(t)}</button>`).join('')}
+          </div>
+        </label>
+        <label class="dialog-field">
+          <span>本机备注名（选填 · 仅存本机浏览器，不上传服务器）</span>
+          <input type="text" name="local_alias" id="ptCreateAliasInput" placeholder="例如：张某某（3床）">
+        </label>
+        <div class="dialog-actions">
+          <button type="button" data-close>取消</button>
+          <button type="submit" class="primary" id="ptCreateSubmitBtn">创建患者档案</button>
+        </div>
+      </form>`
+    dlg.hidden = false
+    const close = () => { dlg.hidden = true; dlg.innerHTML = '' }
+
+    const sexInput = dlg.querySelector<HTMLInputElement>('#ptCreateSexInput')!
+    dlg.querySelector('#ptCreateSexSeg')?.addEventListener('click', ev => {
+      const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('[data-sex]')
+      if (!btn) return
+      dlg.querySelectorAll('#ptCreateSexSeg .seg-btn').forEach(b => b.classList.toggle('active', b === btn))
+      sexInput.value = btn.dataset.sex ?? ''
+    })
+
+    const tagsInput = dlg.querySelector<HTMLInputElement>('#ptCreateTagsInput')!
+    dlg.querySelector('#ptCreateTagChips')?.addEventListener('click', ev => {
+      const chip = (ev.target as HTMLElement).closest<HTMLButtonElement>('[data-tag]')
+      if (!chip?.dataset.tag) return
+      const tag = chip.dataset.tag
+      const existing = tagsInput.value.split(/[,，、;；]/).map(x => x.trim()).filter(Boolean)
+      if (existing.includes(tag)) {
+        tagsInput.value = existing.filter(x => x !== tag).join('，')
+        chip.classList.remove('active')
+      } else {
+        existing.push(tag)
+        tagsInput.value = existing.join('，')
+        chip.classList.add('active')
+      }
+    })
+
+    dlg.onclick = ev => {
+      if (ev.target === dlg || (ev.target as HTMLElement).closest('[data-close]')) close()
+    }
+
+    const form = dlg.querySelector<HTMLFormElement>('#ptCreateForm')!
+    form.onsubmit = async ev => {
+      ev.preventDefault()
+      const submitBtn = dlg.querySelector<HTMLButtonElement>('#ptCreateSubmitBtn')
+      if (submitBtn) submitBtn.disabled = true
+      const sex = sexInput.value.trim()
+      const yearRaw = (dlg.querySelector<HTMLInputElement>('#ptCreateYearInput')?.value ?? '').trim()
+      const tags = tagsInput.value.split(/[,，、;；]/).map(x => x.trim()).filter(Boolean)
+      const alias = (dlg.querySelector<HTMLInputElement>('#ptCreateAliasInput')?.value ?? '').trim()
+      try {
+        const p = await api<Patient>('/api/patients', {
+          method: 'POST',
+          body: JSON.stringify({ sex, birth_year: yearRaw || null, tags }),
+        })
+        if (alias) setName(p.id, alias)
+        close()
+        await loadList()
+        await openPatient(p.id)
+      } catch (err) {
+        if (submitBtn) submitBtn.disabled = false
+        notice((err as Error).message, true)
+      }
+    }
   }
 
   async function breakGlass(): Promise<void> {
@@ -347,7 +432,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
                 <span class="pt-proactive-pill medium">影像所见</span>
                 <span class="muted small">高密度粘液栓 · 算法测得 CT 值 &gt; 70 HU</span>
               </div>
-              <div style="font-weight: 600; font-size: 13.5px; color: #FCA5A5; margin-bottom: 4px">
+              <div style="font-weight: 600; font-size: 13.5px; color: var(--danger); margin-bottom: 4px">
                 算法测得支气管管腔高密度粘液栓
               </div>
               <div class="muted small" style="line-height: 1.5; color: var(--text-1)">
@@ -369,7 +454,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
                 <span class="pt-proactive-pill medium">结节测量</span>
                 <span class="muted small">${radsDesc}</span>
               </div>
-              <div style="font-weight: 600; font-size: 13.5px; color: #FDE68A; margin-bottom: 4px">
+              <div style="font-weight: 600; font-size: 13.5px; color: var(--warn); margin-bottom: 4px">
                 算法测得结节，长径 ${m.longest_diameter_mm} mm
               </div>
               <div class="muted small" style="line-height: 1.5; color: var(--text-1)">
@@ -492,7 +577,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
               <span class="pt-proactive-pill medium">影像所见</span>
               <span class="muted small">高密度粘液栓 · 算法测得 CT 值 &gt; 70 HU</span>
             </div>
-            <div style="font-weight: 600; font-size: 13.5px; color: #FCA5A5; margin-bottom: 4px">
+            <div style="font-weight: 600; font-size: 13.5px; color: var(--danger); margin-bottom: 4px">
               算法测得支气管管腔高密度粘液栓
             </div>
             <div class="muted small" style="line-height: 1.5; color: var(--text-1)">
@@ -516,7 +601,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
               <span class="pt-proactive-pill medium">${icon('info')} 结节测量</span>
               <span class="muted small">${radsDesc}</span>
             </div>
-            <div style="font-weight: 600; font-size: 13.5px; color: #FDE68A; margin-bottom: 4px">
+            <div style="font-weight: 600; font-size: 13.5px; color: var(--warn); margin-bottom: 4px">
               算法测得结节，长径 ${nm.longest_diameter_mm} mm
             </div>
             <div class="muted small" style="line-height: 1.5; color: var(--text-1)">
@@ -1584,7 +1669,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       const bodyEl = dlg.querySelector('.dialog-body')
       if (bodyEl) {
         bodyEl.innerHTML = `
-          <div style="padding: 24px; text-align: center; color: #FCA5A5">
+          <div style="padding: 24px; text-align: center; color: var(--danger)">
             <p>无法载入影像：${esc(err.message || '影像服务离线')}</p>
             <button class="primary small-btn" style="margin-top: 14px" data-close>关闭</button>
           </div>`
@@ -2782,7 +2867,7 @@ ${impression}
       const bId = baseSelect.value
       const fId = followSelect.value
       if (bId === fId) {
-        container.innerHTML = `<div style="padding: 24px; text-align: center; color: #FCA5A5">请选择两个不同的检查时间点进行纵向对比。</div>`
+        container.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--danger)">请选择两个不同的检查时间点进行纵向对比。</div>`
         return
       }
 
@@ -2803,7 +2888,7 @@ ${impression}
         if (activeTab === 'dual-mpr') void setupDualMpr()
         else if (activeTab === 'evidence') void loadEvidenceChain()
       } catch (err: any) {
-        container.innerHTML = `<div style="padding: 24px; text-align: center; color: #FCA5A5">对比计算失败: ${esc(err.message || String(err))}</div>`
+        container.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--danger)">对比计算失败: ${esc(err.message || String(err))}</div>`
       }
     }
 
@@ -3126,7 +3211,7 @@ ${impression}
         const evData = await api<any>(`/api/patients/${patientId}/imaging/evidence-chain?baseline_record_id=${encodeURIComponent(bId)}&followup_record_id=${encodeURIComponent(fId)}`)
         renderEvidenceChainContent(evBox, evData, patientId, detail)
       } catch (err: any) {
-        evBox.innerHTML = `<div style="padding: 24px; text-align: center; color: #FCA5A5">获取证据链失败: ${esc(err.message || String(err))}</div>`
+        evBox.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--danger)">获取证据链失败: ${esc(err.message || String(err))}</div>`
       }
     }
 
@@ -3485,7 +3570,7 @@ ${impression}
       renderEvidenceChainContent(dlg.querySelector('.dialog-body')!, evData, patientId, d)
     } catch (err: any) {
       const b = dlg.querySelector('.dialog-body')
-      if (b) b.innerHTML = `<div style="padding: 24px; text-align: center; color: #FCA5A5">获取证据链失败: ${esc(err.message || String(err))}</div>`
+      if (b) b.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--danger)">获取证据链失败: ${esc(err.message || String(err))}</div>`
     }
   }
 
@@ -3639,7 +3724,7 @@ ${impression}
 
         <!-- Markdown 源码微调编辑区 (默认隐藏) -->
         <div id="fullReportMarkdownArea" style="display: none; flex-direction: column; gap: 10px">
-          <textarea id="fullReportMarkdownText" style="width: 100%; min-height: 480px; resize: vertical; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; color: var(--text)">${esc(res.full_report_markdown)}</textarea>
+          <textarea id="fullReportMarkdownText" style="width: 100%; min-height: 480px; resize: vertical; background: var(--bg); border: 1px solid var(--border); border-radius: 2px; padding: 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; color: var(--text)">${esc(res.full_report_markdown)}</textarea>
           <div class="muted small">您可以在上方直接微调 Markdown 文本，并复制用于学术讨论或病历系统录入。</div>
         </div>
       `
@@ -3683,7 +3768,7 @@ ${impression}
     } catch (err: any) {
       const body = dlg.querySelector('.dialog-body')
       if (body) {
-        body.innerHTML = `<div style="padding: 30px; text-align: center; color: #FCA5A5">生成全景报告失败: ${esc(err.message || String(err))}</div>`
+        body.innerHTML = `<div style="padding: 30px; text-align: center; color: var(--danger)">生成全景报告失败: ${esc(err.message || String(err))}</div>`
       }
     }
   }

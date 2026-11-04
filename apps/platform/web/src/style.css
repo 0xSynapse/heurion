@@ -433,24 +433,24 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .ProseMirror .style-Quote { border-left: 3px solid var(--line-strong); padding-left: 12px; color: var(--muted); }
 .ProseMirror .style-Code { font-family: var(--mono); background: var(--raised); padding: 8px 10px; font-size: 13px; }
 .ProseMirror [data-id] { transition: background .8s; }
-.ProseMirror .ai-flash { background: rgba(0, 255, 147, .25); border-radius: 3px; }
+.ProseMirror .ai-flash { background: var(--green-soft); border-radius: 2px; }
 .ProseMirror .suggest-paired-delete { display: none !important; }
 .ProseMirror [data-suggest="delete"] { background: var(--danger-soft); text-decoration: line-through; text-decoration-color: var(--danger); opacity: .8; }
-.ProseMirror :not(table)[data-suggest="insert"] { background: rgba(0, 229, 153, 0.06); border-left: 3px solid #00E599; padding-left: 8px; }
-.ProseMirror td.diff-modified-cell, .ProseMirror th.diff-modified-cell { background: rgba(0, 229, 153, 0.12); box-shadow: inset 3px 0 0 #00E599; }
+.ProseMirror :not(table)[data-suggest="insert"] { background: var(--green-soft); border-left: 3px solid var(--mint); padding-left: 8px; }
+.ProseMirror td.diff-modified-cell, .ProseMirror th.diff-modified-cell { background: var(--green-soft); box-shadow: inset 3px 0 0 var(--mint); }
 /* 表格级修订：新增 / 待删除的整表要有明显边框（表格本身不吃上面块级的左边线） */
-.ProseMirror table[data-suggest="insert"], .ProseMirror table.diff-ins-block { outline: 2px solid #00E599; outline-offset: 2px; background: rgba(0, 229, 153, 0.04); }
+.ProseMirror table[data-suggest="insert"], .ProseMirror table.diff-ins-block { outline: 2px solid var(--mint); outline-offset: 2px; background: var(--green-soft); }
 .ProseMirror table[data-suggest="delete"], .ProseMirror table.diff-del-block { outline: 2px dashed var(--danger); outline-offset: 2px; }
 .ProseMirror .diff-del-block { background: var(--danger-soft); border-left: 3px solid var(--danger); color: var(--danger); text-decoration: line-through; padding: 4px 8px; }
-.ProseMirror .diff-ins-block { background: rgba(0, 229, 153, 0.06); border-left: 3px solid #00E599; padding: 4px 8px; }
+.ProseMirror .diff-ins-block { background: var(--green-soft); border-left: 3px solid var(--mint); padding: 4px 8px; }
 
 /* 行内字符级 Diff 标注（红色原词删除线 + 浅绿新词高亮） */
 .ProseMirror del.diff-del {
-  color: #EF4444;
+  color: var(--danger);
   text-decoration: line-through;
-  text-decoration-color: #EF4444;
+  text-decoration-color: var(--danger);
   text-decoration-thickness: 1.5px;
-  background: rgba(239, 68, 68, 0.09);
+  background: var(--danger-soft);
   padding: 0 3px;
   border-radius: 2px;
   margin-right: 2px;
@@ -460,8 +460,8 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 }
 
 .ProseMirror .diff-ins {
-  background: rgba(0, 229, 153, 0.18);
-  border-bottom: 1.5px solid #00E599;
+  background: var(--green-soft);
+  border-bottom: 1.5px solid var(--mint);
   color: inherit;
   padding: 0 2px;
   border-radius: 2px;
@@ -7253,54 +7253,57 @@ svg.mail-star-icon-filled polygon {
   box-shadow: 0 0 8px rgba(10, 122, 85, 0.15);
 }
 
-/* —— 全局 AI Co-Pilot 随航助手 —— */
+/* —— 全局 AI Co-Pilot 随航助手（Nordic Editorial 几何风格） —— */
 .copilot-toggle-btn,
 .copilot-fab {
   position: fixed;
   bottom: 24px;
   right: 24px;
   z-index: 60;
-  border-radius: 28px;
-  padding: 8px 16px;
+  border-radius: 2px;
+  padding: 8px 14px;
   background: var(--panel);
-  border: 1px solid var(--mint);
-  color: var(--mint-text);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--mint);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-weight: 500;
-  font-size: 13px;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  gap: 8px;
+  font-weight: 600;
+  font-size: 12.5px;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
 }
 .copilot-toggle-btn:hover,
 .copilot-fab:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 24px rgba(45, 212, 191, 0.28);
+  transform: translateY(-1px);
+  border-color: var(--mint);
+  background: var(--hover);
 }
-.copilot-btn-icon { font-size: 15px; }
-.copilot-btn-text { letter-spacing: 0.2px; }
+.copilot-btn-icon { font-size: 14px; color: var(--mint-text); }
+.copilot-btn-text { letter-spacing: 0.02em; }
 
 .copilot-drawer,
 .copilot-panel {
   position: fixed;
-  bottom: 76px;
+  bottom: 72px;
   right: 24px;
-  width: 440px;
+  width: 456px;
   max-width: calc(100vw - 32px);
-  height: 600px;
-  max-height: calc(100vh - 100px);
-  max-height: calc(100dvh - 100px);
+  height: 616px;
+  max-height: calc(100vh - 96px);
+  max-height: calc(100dvh - 96px);
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  border-top: 2px solid var(--mint);
+  border-radius: 2px;
+  box-shadow: var(--shadow-lg, 0 18px 44px rgba(17, 24, 21, 0.16));
   z-index: 60;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: opacity 0.2s ease, transform 0.2s ease, right 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.18s ease, transform 0.18s ease, right 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @media (min-width: 901px) {
   .app:not(.side-collapsed):not(.no-doc) ~ .copilot-toggle-btn {
@@ -7314,83 +7317,100 @@ svg.mail-star-icon-filled polygon {
 .copilot-drawer.hidden {
   opacity: 0;
   pointer-events: none;
-  transform: translateY(14px) scale(0.98);
+  transform: translateY(10px);
 }
 .copilot-header {
-  padding: 12px 14px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--bg-alt, rgba(255, 255, 255, 0.02));
+  background: var(--bg-deep);
 }
 .copilot-title-group {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-.copilot-icon { font-size: 18px; }
-.copilot-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.copilot-icon { font-size: 16px; color: var(--mint-text); }
+.copilot-title { font-family: var(--serif); font-size: 14px; font-weight: 600; color: var(--text); }
 .copilot-context-badge {
+  font-family: var(--mono);
   font-size: 10.5px;
   color: var(--mint-text);
   background: var(--green-soft);
   border: 1px solid var(--green-line);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: 2px;
   display: inline-block;
+  margin-top: 2px;
 }
 .copilot-actions { display: flex; align-items: center; gap: 4px; }
 .copilot-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 14px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   scroll-behavior: smooth;
 }
 .copilot-welcome {
-  background: var(--hover, rgba(255, 255, 255, 0.02));
-  border: 1px dashed var(--line);
-  border-radius: 8px;
-  padding: 14px;
-  text-align: center;
-  margin-bottom: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--mint);
+  border-radius: 0;
+  padding: 14px 16px;
+  text-align: left;
+  margin-bottom: 4px;
 }
 .copilot-welcome-badge {
   display: inline-block;
-  font-size: 11px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--mint-text);
   margin-bottom: 6px;
 }
-.copilot-welcome h4 { margin: 0 0 6px; font-size: 13.5px; font-weight: 500; }
+.copilot-welcome h4 { margin: 0 0 6px; font-family: var(--serif); font-size: 14.5px; font-weight: 600; color: var(--text); }
 .copilot-welcome p { margin: 0; line-height: 1.6; }
 .copilot-msg {
   display: flex;
   flex-direction: column;
-  max-width: 92%;
-  gap: 3px;
-  font-size: 12.5px;
-  line-height: 1.6;
+  max-width: 94%;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.65;
   word-break: break-word;
 }
 .copilot-msg.user {
   align-self: flex-end;
-  background: var(--mint);
-  color: var(--mint-ink);
-  padding: 7px 11px;
-  border-radius: 12px 12px 2px 12px;
+  background: var(--teal);
+  color: var(--text);
+  border: 1px solid var(--green-line);
+  padding: 8px 12px;
+  border-radius: 2px;
 }
 .copilot-msg.assistant {
   align-self: flex-start;
-  width: 96%;
-  max-width: 96%;
-  background: var(--raised, var(--hover));
+  width: 98%;
+  max-width: 98%;
+  background: var(--bg);
   color: var(--text);
   padding: 10px 13px;
-  border-radius: 10px 10px 10px 2px;
+  border-radius: 0;
   border: 1px solid var(--line);
+  border-left: 2px solid var(--mint);
+}
+.copilot-msg.assistant::before {
+  content: 'HEURION CO-PILOT';
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--mint-text);
+  margin-bottom: 2px;
 }
 .copilot-msg-text,
 .chat-md {
@@ -7600,14 +7620,14 @@ svg.mail-star-icon-filled polygon {
 .copilot-quick-chips::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 2px; }
 .copilot-chip {
   appearance: none;
-  background: transparent;
+  background: var(--bg);
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  padding: 2px 9px;
-  font-size: 11px;
-  color: var(--text);
+  border-radius: 2px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  color: var(--text-2);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.14s ease;
   flex: none;
 }
 .copilot-chip:hover {
@@ -7626,7 +7646,7 @@ svg.mail-star-icon-filled polygon {
 .copilot-footer textarea {
   width: 100%;
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: 2px;
   background: var(--bg);
   color: var(--text);
   font-family: inherit;
@@ -8091,6 +8111,281 @@ svg.mail-star-icon-filled polygon {
   border-bottom: 1.5px dotted #38bdf8;
   cursor: pointer;
 }
+
+/* ==========================================================================
+   Package 2 & 3: 对话表格/代码生产力操作条 + 工具栏收拢与字数统计 + 选区悬浮条 + 单卡新建患者
+   ========================================================================== */
+
+.md-code-wrap {
+  margin: 8px 0 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-deep);
+}
+.md-code-wrap .md-pre {
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+}
+.md-block-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+.md-block-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.md-act-btn {
+  appearance: none;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  background: var(--panel);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.md-act-btn:hover {
+  border-color: var(--mint);
+  color: var(--mint-text);
+  background: var(--hover);
+}
+.md-act-btn.primary {
+  background: var(--green-soft);
+  border-color: var(--green-line);
+  color: var(--mint-text);
+  font-weight: 600;
+}
+.md-act-btn.primary:hover {
+  background: var(--mint);
+  color: var(--mint-ink);
+  border-color: var(--mint);
+}
+.md-act-btn.done {
+  background: var(--mint) !important;
+  color: var(--mint-ink) !important;
+  border-color: var(--mint) !important;
+}
+
+/* 顶栏「Aa 格式 ▾」收纳弹窗 & 实时字数/表格/引用统计 */
+.format-more-pop {
+  min-width: 248px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.format-pop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.format-pop-row select {
+  flex: 1;
+  min-width: 150px;
+}
+.format-pop-label {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.format-pop-btns {
+  justify-content: flex-start;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.format-pop-btns button {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.doc-stats-meta {
+  margin-left: auto;
+  margin-right: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  user-select: none;
+}
+#toolbar .tb-review-btn {
+  margin-left: 0;
+}
+
+/* 选区悬浮快捷操作条（✦ 润色 · 核查证据 · ＋ 批注） */
+#commentFab.selection-bubble {
+  padding: 3px 4px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--mint);
+  border-radius: 2px;
+  box-shadow: 0 8px 24px rgba(17, 24, 21, 0.16);
+  align-items: center;
+  gap: 2px;
+  z-index: 45;
+}
+#commentFab.selection-bubble.blocked {
+  border-left-color: var(--warn);
+  padding: 4px 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.sel-bub-btn {
+  appearance: none;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--text) !important;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sel-bub-btn:hover {
+  background: var(--hover) !important;
+  color: var(--mint-text) !important;
+}
+.sel-bub-btn.primary {
+  color: var(--mint-text) !important;
+  font-weight: 600;
+}
+.sel-bub-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--line-strong);
+  display: inline-block;
+}
+
+/* 单卡片新建患者弹窗样式 */
+.pt-create-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.pt-create-sex-seg {
+  display: flex;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.pt-create-sex-seg .seg-btn {
+  flex: 1;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.pt-create-sex-seg .seg-btn:last-child {
+  border-right: 0;
+}
+.pt-create-sex-seg .seg-btn.active {
+  background: var(--mint);
+  color: var(--mint-ink);
+  font-weight: 600;
+}
+.pt-tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.pt-tag-chip {
+  appearance: none;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 2px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.pt-tag-chip:hover,
+.pt-tag-chip.active {
+  border-color: var(--mint);
+  background: var(--green-soft);
+  color: var(--mint-text);
+}
+
+/* 回到官网主页入口（左侧图标栏、内容栏顶标与登录页） */
+a.rail-mark {
+  text-decoration: none;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+a.rail-mark:hover {
+  opacity: 0.82;
+}
+a.rail-btn.rail-home-link {
+  text-decoration: none;
+  margin-bottom: 4px;
+}
+a.rail-btn.rail-home-link:hover {
+  background: var(--hover);
+  color: var(--mint-text);
+}
+a.panel-brand {
+  text-decoration: none;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  transition: all 0.14s ease;
+}
+a.panel-brand:hover {
+  color: var(--mint-text);
+  border-color: var(--mint);
+  background: var(--hover);
+}
+.auth-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.auth-top-row .auth-brand {
+  margin-bottom: 0;
+  text-decoration: none;
+}
+a.auth-home-btn {
+  text-decoration: none;
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  background: var(--bg);
+  white-space: nowrap;
+  transition: all 0.14s ease;
+}
+a.auth-home-btn:hover {
+  color: var(--mint-text);
+  border-color: var(--mint);
+  background: var(--hover);
+}
+
+
 
 
 

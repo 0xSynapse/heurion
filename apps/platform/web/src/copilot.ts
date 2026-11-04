@@ -9,6 +9,8 @@ export interface CopilotHooks {
   user: () => CopilotBoundUser | null
   onUnauthorized?: () => void
   activeDoc: () => { id: string; title: string } | null
+  onInsertTable?: (rows: string[][]) => void | Promise<void>
+  onNotice?: (msg: string, error?: boolean) => void
 }
 
 const ESC_MAP: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
@@ -85,7 +87,16 @@ export function formatMarkdown(text: string): string {
     const idx = codeBlocks.length
     const cleanLang = esc(lang.trim())
     const cleanCode = esc(code.replace(/\n$/, ''))
-    codeBlocks.push(`<pre class="md-pre"><code${cleanLang ? ` class="lang-${cleanLang}"` : ''}>${cleanCode}</code></pre>`)
+    codeBlocks.push(
+      `<div class="md-code-wrap">` +
+        `<div class="md-block-bar">` +
+          `<span class="md-block-label">${cleanLang || '代码'}</span>` +
+          `<span class="grow"></span>` +
+          `<button type="button" class="md-act-btn" data-md-act="copy-code" title="复制代码到剪贴板">复制代码</button>` +
+        `</div>` +
+        `<pre class="md-pre"><code${cleanLang ? ` class="lang-${cleanLang}"` : ''}>${cleanCode}</code></pre>` +
+      `</div>`
+    )
     return `\n\u0000CBLOCK_${idx}\u0000\n`
   })
 
@@ -157,9 +168,17 @@ export function formatMarkdown(text: string): string {
         i++
       }
       blocks.push(
-        `<div class="md-table-wrap"><table class="md-table"><thead><tr>${thHtml}</tr></thead>${
-          bodyRows.length > 0 ? `<tbody>${bodyRows.join('')}</tbody>` : ''
-        }</table></div>`
+        `<div class="md-table-wrap">` +
+          `<div class="md-block-bar">` +
+            `<span class="md-block-label">数据表 · ${headerCells.length} 列 × ${bodyRows.length} 行</span>` +
+            `<span class="grow"></span>` +
+            `<button type="button" class="md-act-btn" data-md-act="copy-table" title="复制表格（支持直接粘贴至 Excel / Word）">复制表格</button>` +
+            `<button type="button" class="md-act-btn primary" data-md-act="insert-table" title="作为可编辑三线表插入当前文稿">＋ 插入文档</button>` +
+          `</div>` +
+          `<table class="md-table"><thead><tr>${thHtml}</tr></thead>${
+            bodyRows.length > 0 ? `<tbody>${bodyRows.join('')}</tbody>` : ''
+          }</table>` +
+        `</div>`
       )
       continue
     }
@@ -259,6 +278,82 @@ export function formatMarkdown(text: string): string {
   return blocks.join('')
 }
 
+function extractTableMatrix(table: HTMLTableElement): string[][] {
+  const rows: string[][] = []
+  for (const tr of Array.from(table.querySelectorAll('tr'))) {
+    const cells = Array.from(tr.querySelectorAll('th, td')).map(c =>
+      (c.textContent ?? '').replace(/\s+/g, ' ').trim()
+    )
+    if (cells.length > 0) rows.push(cells)
+  }
+  return rows
+}
+
+export function bindMarkdownActions(
+  container: HTMLElement,
+  opts: {
+    onInsertTable?: (rows: string[][]) => void | Promise<void>
+    onNotice?: (msg: string, error?: boolean) => void
+  } = {}
+) {
+  if ((container as any).__mdActionsBound) return
+  ;(container as any).__mdActionsBound = true
+
+  container.addEventListener('click', async e => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-md-act]')
+    if (!btn) return
+    const act = btn.dataset.mdAct
+    const origText = btn.textContent || ''
+
+    const flashDone = (label: string) => {
+      btn.textContent = label
+      btn.classList.add('done')
+      setTimeout(() => {
+        btn.textContent = origText
+        btn.classList.remove('done')
+      }, 1500)
+    }
+
+    if (act === 'copy-code') {
+      const code = btn.closest('.md-code-wrap')?.querySelector('code')?.textContent ?? ''
+      try {
+        await navigator.clipboard.writeText(code)
+        flashDone('✓ 已复制')
+        opts.onNotice?.('代码已复制到剪贴板')
+      } catch {
+        opts.onNotice?.('复制失败，请手动选择复制', true)
+      }
+      return
+    }
+
+    if (act === 'copy-table') {
+      const table = btn.closest('.md-table-wrap')?.querySelector('table')
+      if (!table) return
+      const rows = extractTableMatrix(table)
+      const tsv = rows.map(r => r.join('\t')).join('\n')
+      try {
+        await navigator.clipboard.writeText(tsv)
+        flashDone('✓ 已复制')
+        opts.onNotice?.('表格已复制（可直接粘贴至 Excel / Word / 文稿）')
+      } catch {
+        opts.onNotice?.('复制失败，请手动选择复制', true)
+      }
+      return
+    }
+
+    if (act === 'insert-table') {
+      const table = btn.closest('.md-table-wrap')?.querySelector('table')
+      if (!table) return
+      const rows = extractTableMatrix(table)
+      if (rows.length === 0) return
+      if (opts.onInsertTable) {
+        await opts.onInsertTable(rows)
+        flashDone('✓ 已插入')
+      }
+    }
+  })
+}
+
 export function initCopilot(hooks: CopilotHooks) {
   const toggleBtn = document.getElementById('btnCopilotToggle')
   const drawer = document.getElementById('copilotDrawer')
@@ -271,6 +366,11 @@ export function initCopilot(hooks: CopilotHooks) {
   const closeBtn = document.getElementById('copilotCloseBtn')
 
   if (!toggleBtn || !drawer || !msgs || !input) return
+
+  bindMarkdownActions(msgs, {
+    onInsertTable: hooks.onInsertTable,
+    onNotice: hooks.onNotice,
+  })
 
   function isAuthenticated(): boolean {
     const token = hooks.token()?.trim()
