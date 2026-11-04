@@ -1,14 +1,17 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Heurion</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-6 2 104 96'%3E%3Crect x='-6' y='2' width='104' height='96' fill='%2306110D'/%3E%3Crect x='6' y='18' width='16' height='66' rx='8' fill='%23FFFFFF'/%3E%3Crect x='60' y='35' width='16' height='49' rx='8' fill='%23FFFFFF'/%3E%3Crect x='18' y='45' width='46' height='16' rx='8' fill='%2300FF93'/%3E%3Ccircle cx='76' cy='24' r='10' fill='%2300FF93'/%3E%3C/svg%3E">
-  <meta name="theme-color" content="#06110D">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-6 2 104 96'%3E%3Crect x='-6' y='2' width='104' height='96' fill='%23FAF8F4'/%3E%3Crect x='6' y='18' width='16' height='66' rx='8' fill='%23151C19'/%3E%3Crect x='60' y='35' width='16' height='49' rx='8' fill='%23151C19'/%3E%3Crect x='18' y='45' width='46' height='16' rx='8' fill='%2300C472'/%3E%3Ccircle cx='76' cy='24' r='10' fill='%2300C472'/%3E%3C/svg%3E">
+  <meta name="theme-color" content="#FAF8F4">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet">
   <script>
-    // 首帧前设好主题（与 src/theme.ts 同一规则），避免先闪深色再变浅色
-    try { var t = localStorage.getItem('heurion.theme'); if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'; if (t === 'light') { document.documentElement.dataset.theme = 'light'; document.querySelector('meta[name="theme-color"]').content = '#F4F7F5' } } catch (e) {}
+    // 首帧前设好主题（默认与 Heurion 主页一致的 Nordic Editorial 浅色主题）
+    try { var t = localStorage.getItem('heurion.theme'); if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'; var mode = (t === 'dark') ? 'dark' : 'light'; document.documentElement.dataset.theme = mode; document.querySelector('meta[name="theme-color"]').content = mode === 'dark' ? '#111614' : '#FAF8F4' } catch (e) {}
     try { var nw = localStorage.getItem('heurion.nav-width'); if (nw) document.documentElement.style.setProperty('--nav-width', nw); } catch (e) {}
   </script>
 </head>
@@ -44,7 +47,7 @@
         <button data-action="leave" id="userMenuLeave" role="menuitem" hidden title="退出当前医院，回到个人空间">退出医院</button>
         <button data-action="admin" id="userMenuAdmin" role="menuitem" hidden title="平台运营：机构、用户、实例设置、审计">平台运营</button>
         <button data-action="readview" id="userMenuReadView" role="menuitem" hidden title="当前文档在 AI 眼里的样子（块 id、rev、引用标记），排查问题用">开发者：读视图</button>
-        <div class="theme-row" id="themeSwitch" role="group" aria-label="外观"><span>外观</span><span class="seg"><button data-theme-pref="dark">深色</button><button data-theme-pref="light">浅色</button><button data-theme-pref="system" title="跟随系统的深色 / 浅色设置">系统</button></span></div>
+        <div class="theme-row" id="themeSwitch" role="group" aria-label="外观"><span>外观</span><span class="seg"><button data-theme-pref="light">浅色</button><button data-theme-pref="dark">深色</button><button data-theme-pref="system" title="跟随系统的深色 / 浅色设置">系统</button></span></div>
         <hr>
         <button data-action="everywhere" id="userMenuEverywhere" role="menuitem">退出所有设备</button>
         <button data-action="logout" role="menuitem">退出登录</button>

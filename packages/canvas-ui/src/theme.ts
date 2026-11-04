@@ -1,5 +1,6 @@
 /**
- * 外观主题：深色（默认）/ 浅色 / 跟随系统。偏好存 localStorage（heurion.theme），只影响本机界面。
+ * 外观主题：浅色（默认，与 Heurion 主页 Nordic Editorial 视觉体系一致）/ 深色 / 跟随系统。
+ * 偏好存 localStorage（heurion.theme），只影响本机界面。
  * 首帧前由 index.html 的内联脚本先设好 html[data-theme]（避免闪一下），这里负责切换与跟随系统变化。
  */
 export type ThemePref = 'dark' | 'light' | 'system'
@@ -9,14 +10,14 @@ const media = matchMedia('(prefers-color-scheme: light)')
 export function themePref(): ThemePref {
   try {
     const v = localStorage.getItem(KEY)
-    return v === 'light' || v === 'system' ? v : 'dark'
-  } catch { return 'dark' }
+    return v === 'dark' || v === 'system' ? v : 'light'
+  } catch { return 'light' }
 }
 
 export function applyTheme(pref = themePref()): void {
   const theme = pref === 'system' ? (media.matches ? 'light' : 'dark') : pref
   document.documentElement.dataset.theme = theme
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'light' ? '#F4F7F5' : '#06110D')
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#111614' : '#FAF8F4')
 }
 
 /** 用户菜单里的三段开关：[data-theme-pref] 按钮 */

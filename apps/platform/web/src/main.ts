@@ -2732,7 +2732,7 @@ async function loadReviewRules(): Promise<void> {
   try {
     const res = await api<{ items: Array<{ id: string; content: string; status: string; kind: string }> }>('/api/memory')
     const activeRules = (res.items ?? []).filter(
-      m => m.status === 'active' && (m.content.includes('[narrow:review_boundary') || m.kind === 'preference'),
+      m => m.status === 'active' && m.content.includes('[narrow:review_boundary'),
     )
     const countEl = document.getElementById('reviewRulesCount')
     if (countEl) countEl.textContent = String(activeRules.length)

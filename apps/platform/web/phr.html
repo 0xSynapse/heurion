@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>知家 — Heurion 家庭健康顾问</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-6 2 104 96'%3E%3Crect x='-6' y='2' width='104' height='96' fill='%2306110D'/%3E%3Crect x='6' y='18' width='16' height='66' rx='8' fill='%23FFFFFF'/%3E%3Crect x='60' y='35' width='16' height='49' rx='8' fill='%23FFFFFF'/%3E%3Crect x='18' y='45' width='46' height='16' rx='8' fill='%2300FF93'/%3E%3Ccircle cx='76' cy='24' r='10' fill='%2300FF93'/%3E%3C/svg%3E">
-  <meta name="theme-color" content="#0B1120">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-6 2 104 96'%3E%3Crect x='-6' y='2' width='104' height='96' fill='%23FAF8F4'/%3E%3Crect x='6' y='18' width='16' height='66' rx='8' fill='%23151C19'/%3E%3Crect x='60' y='35' width='16' height='49' rx='8' fill='%23151C19'/%3E%3Crect x='18' y='45' width='46' height='16' rx='8' fill='%2300C472'/%3E%3Ccircle cx='76' cy='24' r='10' fill='%2300C472'/%3E%3C/svg%3E">
+  <meta name="theme-color" content="#FAF8F4">
   <script>
     // 首帧前设好主题（与主应用同一 localStorage 键 heurion.theme），避免闪色
-    try { var t = localStorage.getItem('heurion.theme'); if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'; if (t === 'light') { document.documentElement.dataset.theme = 'light'; document.querySelector('meta[name="theme-color"]').content = '#F4F7F5' } } catch (e) {}
+    try { var t = localStorage.getItem('heurion.theme'); if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'; var mode = (t === 'dark') ? 'dark' : 'light'; document.documentElement.dataset.theme = mode; document.querySelector('meta[name="theme-color"]').content = mode === 'dark' ? '#111614' : '#FAF8F4' } catch (e) {}
   </script>
 </head>
 <body>

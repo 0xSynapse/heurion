@@ -100,8 +100,8 @@ const FAMILY_TAGS = ['孕产', '哺乳', '儿童'] as const
 
 /** Heurion 品牌标志（知家是 Heurion 的家庭健康子品牌，品牌资产随界面露出）。 */
 const MARK = (cls: string): string => `<svg class="${cls}" viewBox="-2 6 96 88" aria-hidden="true">
-  <rect x="0" y="10" width="18" height="80" rx="9" fill="#06110D"/><rect x="62" y="30" width="18" height="60" rx="9" fill="#06110D"/>
-  <rect x="14" y="42" width="52" height="18" rx="9" fill="#00FF93"/><circle cx="80" cy="20" r="11" fill="#00FF93"/></svg>`
+  <rect x="0" y="10" width="18" height="80" rx="9" fill="#151C19"/><rect x="62" y="30" width="18" height="60" rx="9" fill="#151C19"/>
+  <rect x="14" y="42" width="52" height="18" rx="9" fill="#00C472"/><circle cx="80" cy="20" r="11" fill="#00C472"/></svg>`
 
 const display = (p: { name: string | null; code: string }): string => p.name || p.code
 const ageText = (birthYear: number | null): string => {
