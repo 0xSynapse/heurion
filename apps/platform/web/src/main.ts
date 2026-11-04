@@ -2696,7 +2696,7 @@ setInterval(() => {
 }, 2000)
 void loadQueue()
 
-// —— 选区悬浮快捷操作条（✦ 润色 · 核查证据 · ＋ 批注） ——
+// —— 选区悬浮快捷操作条（＋ 批注） ——
 
 function placeFab(): void {
   const fab = $('commentFab')
@@ -2707,17 +2707,12 @@ function placeFab(): void {
   if (anchor.blocked) {
     fab.innerHTML = `<span class="sel-bub-blocked">${esc(anchor.blocked)}</span>`
   } else if (anchor.snippet) {
-    fab.innerHTML =
-      `<button type="button" class="sel-bub-btn primary" data-sel-act="polish" title="对选中句子进行医学学术润色并生成 Diff 修订">✦ 润色</button>` +
-      `<span class="sel-bub-sep"></span>` +
-      `<button type="button" class="sel-bub-btn" data-sel-act="verify" title="核查选中论断的文献证据与数据支撑">核查证据</button>` +
-      `<span class="sel-bub-sep"></span>` +
-      `<button type="button" class="sel-bub-btn" data-sel-act="comment" title="为选中句子添加审稿批注">＋ 批注</button>`
+    fab.innerHTML = `<button type="button" class="sel-bub-btn primary" data-sel-act="comment" title="为选中句子添加批注">＋ 批注</button>`
   } else {
-    fab.innerHTML = `<button type="button" class="sel-bub-btn" data-sel-act="comment">评论此形状</button>`
+    fab.innerHTML = `<button type="button" class="sel-bub-btn primary" data-sel-act="comment">＋ 批注</button>`
   }
   const fr = fab.getBoundingClientRect()
-  const fw = fr.width || 190
+  const fw = fr.width || 76
   const fh = fr.height || 30
   let top = anchor.rect.top - main.top - fh - 8
   if (top < 8) top = anchor.rect.top - main.top + 28
