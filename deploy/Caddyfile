@@ -82,8 +82,8 @@
 
 # 个人技术博客（Hui Zhao · Heurion Research Blog）独立子域名：blog.heurion.org
 # 平台（heurion2:8787）按 Host=blog.* 自动渲染个人博客主页（/、/en）、架构长文（/:slug、/en/:slug）与 RSS（/feed.xml）。
-# 同时主站 https://heurion.org/blog 亦提供直达与跳转支持。
-{$BLOG_SITE:blog.{$HOSTNAME}} {
+# 同时主站 https://heurion.org/blog 亦提供直达与跳转支持。未在 .env.production 配置 BLOG_SITE 时默认 blog.localhost（内部自签证书，不向 Let's Encrypt 申请）。
+{$BLOG_SITE:blog.localhost} {
 	header {
 		-Server
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"

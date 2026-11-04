@@ -7,7 +7,7 @@
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 # 复制官方 uv 二进制工具（包含 Python 3.12 自动管理与极速锁文件安装）
-COPY --from=ghcr.io/astral-sh/uv:0.5.26 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.6.5 /uv /uvx /bin/
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \

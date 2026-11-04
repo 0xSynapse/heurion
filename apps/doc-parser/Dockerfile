@@ -5,7 +5,7 @@
 
 FROM python:3.12-slim-bookworm
 
-COPY --from=ghcr.io/astral-sh/uv:0.5.26 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.6.5 /uv /uvx /bin/
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -27,7 +27,7 @@ RUN uv venv /opt/venv && \
     grep -E '^(torch|torchvision)==' /tmp/lock.txt > /tmp/torch-cpu.txt && \
     grep -vE '^(#|\.|torch==|torchvision==|triton==|nvidia-|cuda-)' /tmp/lock.txt > /tmp/requirements.txt && \
     uv pip install --no-cache --python /opt/venv/bin/python \
-      --index-url https://download.pytorch.org/whl/cpu -r /tmp/torch-cpu.txt && \
+      --index-url https://download.pytorch.org/whl/cpu --no-deps -r /tmp/torch-cpu.txt && \
     uv pip install --no-cache --python /opt/venv/bin/python \
       --no-deps -r /tmp/requirements.txt && \
     rm -f /tmp/lock.txt /tmp/torch-cpu.txt /tmp/requirements.txt

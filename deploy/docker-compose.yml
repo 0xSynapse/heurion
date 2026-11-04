@@ -193,6 +193,8 @@ services:
       - HOSTNAME=${HOSTNAME:-localhost}
       # 阅片器子域名（启用 pacs profile 时设为 viewer.<主域名>）。默认 viewer.localhost：不对外申请证书；不能留空，空值会让 Caddyfile 解析失败、Caddy 起不来
       - VIEWER_SITE=${VIEWER_SITE:-viewer.localhost}
+      # 个人技术博客子域名（启用独立子域名时在 .env.production 设为 blog.<主域名>）。默认 blog.localhost：未配置 DNS 时不向 Let's Encrypt 申请证书，主站 /blog* 始终直达
+      - BLOG_SITE=${BLOG_SITE:-blog.localhost}
     # /aegis-cloud/* 转发到宿主机上的 aegis-os 守护进程
     extra_hosts:
       - "host.docker.internal:host-gateway"
