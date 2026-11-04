@@ -1404,6 +1404,7 @@ $('toolbar').onclick = async e => {
     return
   }
   if (cmd === 'cite') { void addCitation(); return }
+  if (cmd === 'measure') { void openMeasureDialog(); return }
   if (cmd === 'tableMerge') {
     if (!session.editor.commands.tableMerge()) showNotice('先拖选两个以上相邻的单元格再合并')
     return
@@ -1458,6 +1459,250 @@ async function addCitation(): Promise<void> {
   } catch (err) {
     showNotice((err as Error).message, true)
   }
+}
+
+/** 编辑器「插入测量」弹窗（T2.5 / W4.2）：复用本文档已登记测量原子，或从患者已确认病灶绑定新测量并在光标处插入 [@m:id] */
+async function openMeasureDialog(): Promise<void> {
+  if (!session?.editor) return
+  const docId = session.docId
+  const dlg = $('dialog')
+  const close = () => { dlg.hidden = true; dlg.innerHTML = '' }
+  type DocMeasureResp = {
+    strict: boolean
+    explicit_strict?: boolean | null
+    patient_id?: string | null
+    measurements: Array<{ id: string; source_kind: string; source_id: string; field: string; unit: string; view?: { id: string; text: string; status: string; source_label: string; note: string } }>
+  }
+  type PatientItem = { id: string; code: string; sex?: string | null; birth_year?: number | null }
+  type StudyItem = { id: string; study_date: string | null; description: string | null; modalities: string[]; lesions: { confirmed: number; proposed: number } }
+  type ReviewLesion = { id: string; label: string | null; location: string | null; status: string; metrics: Record<string, unknown> }
+
+  const FIELD_GROUPS: Array<{ source: 'imaging_lesion' | 'imaging_followup'; key: string; label: string; units: string[] }> = [
+    { source: 'imaging_lesion', key: 'mean_diameter_mm', label: '平均径', units: ['mm', 'cm'] },
+    { source: 'imaging_lesion', key: 'long_axis_mm', label: '长径', units: ['mm', 'cm'] },
+    { source: 'imaging_lesion', key: 'short_axis_mm', label: '短径', units: ['mm', 'cm'] },
+    { source: 'imaging_lesion', key: 'solid_core_diameter_mm', label: '实性成分直径', units: ['mm', 'cm'] },
+    { source: 'imaging_lesion', key: 'volume_mm3', label: '体积', units: ['mm3', 'cm3'] },
+    { source: 'imaging_lesion', key: 'mean_hu', label: '平均 CT 值', units: ['HU'] },
+    { source: 'imaging_lesion', key: 'ctr', label: '实性成分占比 (CTR)', units: ['ratio'] },
+    { source: 'imaging_followup', key: 'delta_mean_diameter_mm', label: '随访：Δ平均径', units: ['mm', 'cm'] },
+    { source: 'imaging_followup', key: 'delta_volume_mm3', label: '随访：Δ体积', units: ['mm3', 'cm3'] },
+    { source: 'imaging_followup', key: 'delta_volume_pct', label: '随访：Δ体积变化率 (%)', units: ['pct'] },
+    { source: 'imaging_followup', key: 'vdt_days', label: '随访：体积倍增时间 (VDT)', units: ['day'] },
+  ]
+  const UNIT_LABEL: Record<string, string> = { mm: 'mm', cm: 'cm', mm3: 'mm³', cm3: 'cm³', HU: 'HU', ratio: '比值（无单位）', pct: '%', day: '天' }
+
+  let data: DocMeasureResp
+  let patients: PatientItem[] = []
+  try {
+    ;[data, patients] = await Promise.all([
+      api<DocMeasureResp>(`/api/docs/${docId}/measurements`),
+      api<{ patients: PatientItem[] }>('/api/patients').then(r => r.patients ?? []).catch(() => [] as PatientItem[]),
+    ])
+  } catch (err) {
+    showNotice((err as Error).message, true)
+    return
+  }
+
+  const lockedPid = data.patient_id ?? null
+  let selectedPid = lockedPid ?? patients[0]?.id ?? ''
+  let studies: StudyItem[] = []
+  let selectedSid = ''
+  let confirmedLesions: ReviewLesion[] = []
+
+  const loadStudiesForPatient = async (pid: string) => {
+    if (!pid) { studies = []; selectedSid = ''; confirmedLesions = []; return }
+    try {
+      studies = await api<StudyItem[]>(`/api/patients/${encodeURIComponent(pid)}/imaging/studies`)
+      const withConfirmed = studies.find(s => (s.lesions?.confirmed ?? 0) > 0)
+      selectedSid = (withConfirmed ?? studies[0])?.id ?? ''
+      await loadLesionsForStudy(pid, selectedSid)
+    } catch {
+      studies = []; selectedSid = ''; confirmedLesions = []
+    }
+  }
+
+  const loadLesionsForStudy = async (pid: string, sid: string) => {
+    if (!pid || !sid) { confirmedLesions = []; return }
+    try {
+      const rv = await api<{ lesions: ReviewLesion[] }>(`/api/patients/${encodeURIComponent(pid)}/imaging/studies/${encodeURIComponent(sid)}/review`)
+      confirmedLesions = (rv.lesions ?? []).filter(l => l.status === 'confirmed')
+    } catch {
+      confirmedLesions = []
+    }
+  }
+
+  await loadStudiesForPatient(selectedPid)
+
+  const render = () => {
+    const fItem = FIELD_GROUPS[0]!
+    dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="插入测量原子">
+      <div class="dialog-head"><h2>插入病灶测量原子 [@m:id]（T2.5 / W4.2）</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
+      <div class="dialog-body" style="display:flex;flex-direction:column;gap:12px;">
+        <div class="muted small">
+          测量数字绑定到医生已确认的病灶测量，文档只存原子节点 <code>[@m:id]</code>，重测后自动同步更新；严格模式下禁止 AI 手写裸测量数字。
+        </div>
+        <div class="row" style="align-items:center;justify-content:space-between;background:var(--raised);padding:8px 10px;border:1px solid var(--line);border-radius:6px;">
+          <span class="small"><b>测量严格模式</b>：${data.strict ? '<span class="pill green small">已开启（拦截 AI 裸测量数字）</span>' : '<span class="muted small">未开启</span>'}</span>
+          <span style="display:inline-flex;gap:6px;">
+            <button type="button" class="small-btn${data.explicit_strict === true ? ' primary' : ''}" data-mpolicy="true">强制开启</button>
+            <button type="button" class="small-btn${data.explicit_strict === null || data.explicit_strict === undefined ? ' primary' : ''}" data-mpolicy="null">自动（有测量即开启）</button>
+            <button type="button" class="small-btn quiet${data.explicit_strict === false ? ' primary' : ''}" data-mpolicy="false">关闭</button>
+          </span>
+        </div>
+
+        <div>
+          <div style="font-weight:600;margin-bottom:6px;">1. 本文档已登记的测量原子（${data.measurements.length} 项）</div>
+          ${data.measurements.length === 0 ? '<div class="muted small">本文档尚未登记测量原子，可在下方选择已确认病灶绑定并插入。</div>' : `
+            <div class="ds-scroll" style="max-height:180px;">
+              <table class="help-table">
+                <thead><tr><th>标记</th><th>当前显示值</th><th>来源说明</th><th>状态</th><th></th></tr></thead>
+                <tbody>
+                  ${data.measurements.map(m => `
+                    <tr>
+                      <td><code>[@m:${esc(m.id)}]</code></td>
+                      <td><b>${esc(m.view?.text ?? '—')}</b></td>
+                      <td class="small">${esc(m.view?.source_label ?? m.field)}</td>
+                      <td class="small">${m.view?.status === 'ok' ? '<span class="muted">正常</span>' : `<span class="flag-L">${esc(m.view?.note ?? m.view?.status ?? '')}</span>`}</td>
+                      <td><button type="button" class="small-btn primary" data-minsert="${esc(m.id)}">插入光标处</button></td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+
+        <form class="form" id="measureBindForm" style="border-top:1px solid var(--line);padding-top:10px;">
+          <div style="font-weight:600;margin-bottom:4px;">2. 绑定并插入已确认病灶的新测量</div>
+          ${patients.length === 0 && !lockedPid ? '<div class="muted small">暂无可见的在管患者，请先在「患者」页建档并确认影像病灶。</div>' : `
+            <div class="row" style="gap:8px;flex-wrap:wrap;">
+              <label style="flex:1;min-width:160px;">患者
+                <select name="patient_id" id="mbPatient" ${lockedPid ? 'disabled title="一份文档只关联同一位患者的病灶测量"' : ''}>
+                  ${patients.map(p => `<option value="${esc(p.id)}"${p.id === selectedPid ? ' selected' : ''}>${esc(p.code)}</option>`).join('')}
+                  ${lockedPid && !patients.some(p => p.id === lockedPid) ? `<option value="${esc(lockedPid)}" selected>当前关联患者</option>` : ''}
+                </select>
+              </label>
+              <label style="flex:1;min-width:200px;">影像检查
+                <select name="study_id" id="mbStudy">
+                  ${studies.length === 0 ? '<option value="">（无影像检查）</option>' : studies.map(s => `<option value="${esc(s.id)}"${s.id === selectedSid ? ' selected' : ''}>${esc(s.study_date ?? '日期未知')} · ${esc(s.description ?? (s.modalities.join('/') || 'CT'))}（已确认 ${s.lesions?.confirmed ?? 0}）</option>`).join('')}
+                </select>
+              </label>
+            </div>
+            <div class="row" style="gap:8px;flex-wrap:wrap;">
+              <label style="flex:2;min-width:220px;">已确认病灶（仅 status=confirmed 可绑定）
+                <select name="lesion_id" id="mbLesion" required>
+                  ${confirmedLesions.length === 0 ? '<option value="">（该检查暂无已确认病灶，请先在阅片器或审核视图确认）</option>' : confirmedLesions.map(l => {
+                    const md = typeof l.metrics?.mean_diameter_mm === 'number' ? ` · 平均径 ${l.metrics.mean_diameter_mm.toFixed(1)} mm` : ''
+                    const vol = typeof l.metrics?.volume_mm3 === 'number' ? ` · 体积 ${Math.round(l.metrics.volume_mm3)} mm³` : ''
+                    return `<option value="${esc(l.id)}">${esc(l.label ?? l.id)} · ${esc(l.location ?? '部位未定')}${md}${vol}</option>`
+                  }).join('')}
+                </select>
+              </label>
+              <label style="flex:1;min-width:180px;">测量字段
+                <select name="field_spec" id="mbField">
+                  ${FIELD_GROUPS.map((g, idx) => `<option value="${idx}">${esc(g.label)}</option>`).join('')}
+                </select>
+              </label>
+              <label style="min-width:110px;">显示单位
+                <select name="unit" id="mbUnit">
+                  ${fItem.units.map(u => `<option value="${esc(u)}">${esc(UNIT_LABEL[u] ?? u)}</option>`).join('')}
+                </select>
+              </label>
+            </div>
+            <div class="row end" style="margin-top:6px;">
+              <button type="button" data-close>取消</button>
+              <button type="submit" class="primary" ${confirmedLesions.length === 0 ? 'disabled' : ''}>绑定并插入光标处</button>
+            </div>
+          `}
+        </form>
+      </div>
+    </div>`
+    dlg.hidden = false
+
+    const ptSel = dlg.querySelector<HTMLSelectElement>('#mbPatient')
+    if (ptSel) {
+      ptSel.onchange = async () => {
+        selectedPid = ptSel.value
+        await loadStudiesForPatient(selectedPid)
+        render()
+      }
+    }
+    const stSel = dlg.querySelector<HTMLSelectElement>('#mbStudy')
+    if (stSel) {
+      stSel.onchange = async () => {
+        selectedSid = stSel.value
+        await loadLesionsForStudy(selectedPid, selectedSid)
+        render()
+      }
+    }
+    const fieldSel = dlg.querySelector<HTMLSelectElement>('#mbField')
+    const unitSel = dlg.querySelector<HTMLSelectElement>('#mbUnit')
+    if (fieldSel && unitSel) {
+      fieldSel.onchange = () => {
+        const g = FIELD_GROUPS[Number(fieldSel.value)] ?? FIELD_GROUPS[0]!
+        unitSel.innerHTML = g.units.map(u => `<option value="${esc(u)}">${esc(UNIT_LABEL[u] ?? u)}</option>`).join('')
+      }
+    }
+    const form = dlg.querySelector<HTMLFormElement>('#measureBindForm')
+    if (form) {
+      form.onsubmit = async ev => {
+        ev.preventDefault()
+        const fd = new FormData(form)
+        const lesionId = String(fd.get('lesion_id') ?? '').trim()
+        const g = FIELD_GROUPS[Number(fd.get('field_spec') ?? 0)] ?? FIELD_GROUPS[0]!
+        const unit = String(fd.get('unit') ?? g.units[0] ?? '').trim()
+        if (!lesionId) { showNotice('请先选择已确认的病灶', true); return }
+        try {
+          const r = await api<{ m_id: string; marker: string; view: { id: string; text: string; status: string; bound_text: string; source_label: string; source_version: number | null; bound_version: number; note: string } }>(
+            `/api/docs/${docId}/measurements`,
+            { method: 'POST', body: JSON.stringify({ source: g.source, source_id: lesionId, field: g.key, unit }) },
+          )
+          const refreshed = await api<DocMeasureResp>(`/api/docs/${docId}/measurements`).catch(() => null)
+          if (refreshed && session?.editor) {
+            session.editor.setMeasurements(refreshed.measurements.map(m => m.view).filter((v): v is NonNullable<typeof v> => !!v) as any)
+          }
+          session?.editor?.insertMeasurement(r.m_id)
+          close()
+          showNotice(`已插入测量：${r.view.text}（${r.view.source_label}）`)
+          scheduleRefresh()
+        } catch (err) {
+          showNotice((err as Error).message, true)
+        }
+      }
+    }
+    dlg.onclick = async ev => {
+      const t = ev.target as HTMLElement
+      if (ev.target === dlg || t.closest('[data-close]')) { close(); return }
+      const ins = t.closest<HTMLElement>('[data-minsert]')
+      if (ins) {
+        const mId = ins.dataset.minsert!
+        session?.editor?.insertMeasurement(mId)
+        close()
+        showNotice(`已插入测量 [@m:${mId}]`)
+        return
+      }
+      const pol = t.closest<HTMLElement>('[data-mpolicy]')
+      if (pol) {
+        const raw = pol.dataset.mpolicy
+        const strictVal = raw === 'true' ? true : raw === 'false' ? false : null
+        try {
+          const res = await api<{ strict: boolean; explicit: boolean | null }>(`/api/docs/${docId}/measurements/policy`, {
+            method: 'PUT',
+            body: JSON.stringify({ strict: strictVal }),
+          })
+          data.strict = res.strict
+          data.explicit_strict = res.explicit
+          render()
+          showNotice(res.strict ? '已开启测量严格模式' : '已关闭测量严格模式')
+        } catch (err) {
+          showNotice((err as Error).message, true)
+        }
+      }
+    }
+  }
+
+  render()
 }
 
 $<HTMLInputElement>('imageInput').onchange = e => {
@@ -1759,36 +2004,29 @@ function renderSubagentWelcome(): void {
   welcome.className = 'chat-subagent-welcome'
   welcome.innerHTML = `
     <div class="welcome-header">
-      <div class="welcome-title"><span class="welcome-pulse"></span>临床专家智能体协同网络 (Subagents) 已就绪</div>
-      <div class="welcome-subtitle">由主写作者 (Master Agent) 自动识别临床意图并自主调度专家协同。直接向 Heurion 提出您的写作与科研需求即可：</div>
+      <div class="welcome-title"><span class="welcome-pulse"></span>写作与科研助手已就绪</div>
+      <div class="welcome-subtitle">直接输入起草、润色、统计分析或检索需求；全文数据与方法学核查可在「审稿与批注」中一键完成：</div>
     </div>
-    <div class="welcome-grid">
-      <div class="welcome-card">
-        <div class="wc-header">
-          <span class="wc-badge lit">文献证据</span>
-          <span class="wc-action">自动调度</span>
-        </div>
-        <div class="wc-name">文献证据专家</div>
-        <div class="wc-desc">检索 PubMed/OpenAlex，提炼核心结论并注册标准 AMA 引用</div>
-      </div>
-      <div class="welcome-card">
-        <div class="wc-header">
-          <span class="wc-badge stat">生信统计</span>
-          <span class="wc-action">自动调度</span>
-        </div>
-        <div class="wc-name">Table 1 基线表</div>
-        <div class="wc-desc">自动分析数据集，生成顶级期刊规范的三线基线特征表</div>
-      </div>
-      <div class="welcome-card">
-        <div class="wc-header">
-          <span class="wc-badge fc">对抗质控</span>
-          <span class="wc-action">自动调度</span>
-        </div>
-        <div class="wc-name">质控核查专家</div>
-        <div class="wc-desc">严格审查医学论断证据吻合度、数字真实性与 PHI 敏感隐私</div>
-      </div>
+    <div class="chat-quick-starts">
+      <button type="button" class="chat-action-pill primary-pill" data-quick-review="1">✦ 一键全文深度审稿</button>
+      <button type="button" class="chat-action-pill" data-quick-prompt="请检索 PubMed 相关权威文献，补充当前章节的临床证据并按 AMA 格式插入引用">检索 PubMed 并补齐引用</button>
+      <button type="button" class="chat-action-pill" data-quick-prompt="请按 SCI 临床医学期刊规范润色当前段落的学术表达，保持客观严谨">润色当前章节学术表达</button>
     </div>
   `
+  welcome.addEventListener('click', e => {
+    const revBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-quick-review]')
+    if (revBtn) {
+      switchTab('commentPane')
+      void runDeepReview()
+      return
+    }
+    const promptBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-quick-prompt]')
+    if (promptBtn?.dataset.quickPrompt) {
+      const input = $<HTMLTextAreaElement>('chatInput')
+      input.value = promptBtn.dataset.quickPrompt
+      input.focus()
+    }
+  })
   chatLog.appendChild(welcome)
 }
 
@@ -2472,6 +2710,278 @@ async function saveComment(ask: boolean): Promise<void> {
 $('newCommentSave').onclick = () => void saveComment(false)
 $('newCommentAsk').onclick = () => void saveComment(true)
 
+// —— 统一深度审稿与批注面板（零认知负担：一键审稿 + 专科习惯抽屉 + 三选一卡片） ——
+
+interface ReviewSnapshotState {
+  docId: string
+  scratchpad?: {
+    enrolled_sample_sizes?: number[]
+    table_sample_sizes?: number[]
+    clone_sample_sizes?: number[]
+    declared_summary_metrics?: string[]
+    declared_tests?: string[]
+  }
+  rawCount: number
+  createdCount: number
+  exemptedCount: number
+}
+
+let lastReviewSnapshot: ReviewSnapshotState | null = null
+let activeReviewFilter: 'all' | 'critical' | 'major' | 'minor' = 'all'
+let isRunningDeepReview = false
+
+function formatCleanRuleText(raw: string): string {
+  return raw
+    .replace(/^\[narrow:review_boundary(?::[^\]]+)?\]\s*/i, '')
+    .trim()
+}
+
+async function loadReviewRules(): Promise<void> {
+  if (!TOKEN) return
+  try {
+    const res = await api<{ items: Array<{ id: string; content: string; status: string; kind: string }> }>('/api/memory')
+    const activeRules = (res.items ?? []).filter(
+      m => m.status === 'active' && (m.content.includes('[narrow:review_boundary') || m.kind === 'preference'),
+    )
+    const countEl = document.getElementById('reviewRulesCount')
+    if (countEl) countEl.textContent = String(activeRules.length)
+    const listEl = document.getElementById('reviewRulesList')
+    if (!listEl) return
+    if (activeRules.length === 0) {
+      listEl.innerHTML = `<div class="muted small">暂无已记住的专科习惯。在下方审稿卡片点击「误报 · 以后免报」时，系统会自动提炼并记住您的专科边界规则。</div>`
+      return
+    }
+    listEl.innerHTML = activeRules
+      .map(
+        r => `
+      <div class="review-rule-item" data-mid="${esc(r.id)}">
+        <span class="review-rule-dot">●</span>
+        <span class="review-rule-text">${esc(formatCleanRuleText(r.content))}</span>
+        <button type="button" class="quiet small-btn review-rule-del" data-del-rule="${esc(r.id)}" title="移除此条专科习惯">✕</button>
+      </div>`,
+      )
+      .join('')
+  } catch {
+    /* 忽略未登录或网络异常 */
+  }
+}
+
+document.getElementById('reviewRulesBtn')?.addEventListener('click', () => {
+  const drawer = document.getElementById('reviewRulesDrawer')
+  if (!drawer) return
+  drawer.hidden = !drawer.hidden
+  if (!drawer.hidden) void loadReviewRules()
+})
+
+document.getElementById('reviewRulesList')?.addEventListener('click', async e => {
+  const delBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-del-rule]')
+  if (!delBtn?.dataset.delRule) return
+  try {
+    await api(`/api/memory/${delBtn.dataset.delRule}`, { method: 'DELETE' })
+    await loadReviewRules()
+    showNotice('已移除该条专科审稿习惯')
+  } catch (err) {
+    showNotice((err as Error).message, true)
+  }
+})
+
+document.getElementById('reviewRuleAddBtn')?.addEventListener('click', async () => {
+  const input = document.getElementById('reviewRuleInput') as HTMLInputElement | null
+  const text = input?.value.trim()
+  if (!text) return
+  try {
+    await api('/api/memory', {
+      method: 'POST',
+      body: JSON.stringify({
+        scope: 'user',
+        kind: 'preference',
+        content: `[narrow:review_boundary:custom] ${text}`,
+      }),
+    })
+    if (input) input.value = ''
+    await loadReviewRules()
+    showNotice('已添加专科审稿习惯，后续审稿将自动遵循')
+  } catch (err) {
+    showNotice((err as Error).message, true)
+  }
+})
+
+async function runDeepReview(): Promise<void> {
+  if (!session || isRunningDeepReview) return
+  isRunningDeepReview = true
+  const btn = document.getElementById('deepReviewBtn') as HTMLButtonElement | null
+  const snapEl = document.getElementById('reviewSnapshotBar')
+  if (btn) {
+    btn.disabled = true
+    btn.textContent = '正在深度审稿…'
+  }
+  if (snapEl) {
+    snapEl.hidden = false
+    snapEl.innerHTML = `<div class="rv-progress-line"><span class="subagent-pulse"></span> 正在通读全文与表格，核查样本量分母、算术自洽、统计方法与结论表述…</div>`
+  }
+  try {
+    const r = await api<{
+      ok: boolean
+      scratchpad?: ReviewSnapshotState['scratchpad']
+      raw_candidates_count?: number
+      comments_created?: Array<any>
+      exempted_count?: number
+    }>(`/api/docs/${session.docId}/deep-review`, { method: 'POST' })
+    lastReviewSnapshot = {
+      docId: session.docId,
+      scratchpad: r.scratchpad,
+      rawCount: r.raw_candidates_count ?? 0,
+      createdCount: r.comments_created?.length ?? 0,
+      exemptedCount: r.exempted_count ?? 0,
+    }
+    activeReviewFilter = 'all'
+    await refresh(false)
+    await loadReviewRules()
+    renderReviewSnapshot()
+    const created = lastReviewSnapshot.createdCount
+    const exempted = lastReviewSnapshot.exemptedCount
+    showNotice(
+      created > 0
+        ? `深度审稿完成：检出 ${created} 处建议关注项${exempted > 0 ? `（已按专科习惯自动免报 ${exempted} 处）` : ''}`
+        : `深度审稿完成：全文核心数据与方法学自洽${exempted > 0 ? `（已按专科习惯自动免报 ${exempted} 处）` : ''}`,
+    )
+  } catch (err) {
+    if (snapEl) snapEl.hidden = true
+    showNotice(`审稿失败：${(err as Error).message}`, true)
+  } finally {
+    isRunningDeepReview = false
+    if (btn) {
+      btn.disabled = false
+      btn.textContent = '✦ 全文深度审稿'
+    }
+  }
+}
+
+document.getElementById('deepReviewBtn')?.addEventListener('click', () => {
+  void runDeepReview()
+})
+
+interface ParsedReviewMeta {
+  isReview: boolean
+  severity: 'critical' | 'major' | 'minor'
+  severityLabel: string
+  categoryKey: string
+  categoryLabel: string
+  cleanReason: string
+  suggestion: string | null
+}
+
+function parseReviewComment(c: any): ParsedReviewMeta {
+  const aiReplies = (c.replies ?? []).filter((r: any) => r.role === 'ai')
+  const firstAi = aiReplies[0]?.text ?? ''
+  let suggestion: string | null = null
+  for (const r of c.replies ?? []) {
+    const m = /【建议修改(?:为)?】：([^\n]+)/.exec(r.text) || /建议修改(?:为)?：([^\n]+)/.exec(r.text)
+    if (m) {
+      suggestion = m[1]?.trim() ?? null
+      break
+    }
+  }
+  const tagMatch = /^\[(CRITICAL|MAJOR|MINOR)\s*\|\s*([^\]]+)\]\s*/i.exec(firstAi)
+  const isClaim = firstAi.includes('论断核对：')
+  if (!tagMatch && !isClaim) {
+    return {
+      isReview: false,
+      severity: 'minor',
+      severityLabel: '批注',
+      categoryKey: 'general',
+      categoryLabel: '批注',
+      cleanReason: firstAi,
+      suggestion,
+    }
+  }
+  const rawSev = (tagMatch?.[1] ?? (firstAi.includes('不支持') ? 'critical' : 'major')).toLowerCase()
+  const severity: 'critical' | 'major' | 'minor' =
+    rawSev === 'critical' ? 'critical' : rawSev === 'major' ? 'major' : 'minor'
+  const severityLabel =
+    severity === 'critical' ? '数据/算术矛盾' : severity === 'major' ? '方法与统计建议' : '表述与规范'
+  const rawCat = (tagMatch?.[2] ?? (isClaim ? 'citation_check' : 'general')).trim().toLowerCase()
+  const catMap: Record<string, string> = {
+    internal_inconsistency: '正文-表格自洽',
+    method_result_mismatch: '统计与方法对齐',
+    spin_or_guideline: '结论与报告规范',
+    citation_check: '文献证据核对',
+  }
+  const categoryLabel = catMap[rawCat] ?? '学术规范核查'
+  const cleanReason = firstAi
+    .replace(/^\[(CRITICAL|MAJOR|MINOR)\s*\|\s*[^\]]+\]\s*/i, '')
+    .replace(/^论断核对：\s*/i, '')
+    .replace(/\n*【建议修改(?:为)?】：[^\n]+/g, '')
+    .trim()
+
+  return {
+    isReview: true,
+    severity,
+    severityLabel,
+    categoryKey: rawCat,
+    categoryLabel,
+    cleanReason,
+    suggestion,
+  }
+}
+
+function renderReviewSnapshot(): void {
+  const snapEl = document.getElementById('reviewSnapshotBar')
+  if (!snapEl) return
+  const list: any[] = detail?.comments ?? []
+  const openReviewItems = list.filter(c => c.status === 'open').map(c => ({ c, meta: parseReviewComment(c) })).filter(x => x.meta.isReview)
+  const hasSnapshot = lastReviewSnapshot && lastReviewSnapshot.docId === session?.docId
+  if (!hasSnapshot && openReviewItems.length === 0) {
+    snapEl.hidden = true
+    snapEl.innerHTML = ''
+    return
+  }
+  snapEl.hidden = false
+  const critCount = openReviewItems.filter(x => x.meta.severity === 'critical').length
+  const majCount = openReviewItems.filter(x => x.meta.severity === 'major').length
+  const minCount = openReviewItems.filter(x => x.meta.severity === 'minor').length
+  const sp = hasSnapshot ? lastReviewSnapshot?.scratchpad : undefined
+  const exempted = hasSnapshot ? (lastReviewSnapshot?.exemptedCount ?? 0) : 0
+
+  const filterHtml = openReviewItems.length > 0 ? `
+    <div class="rv-filter-pills">
+      <button type="button" class="rv-filter-pill ${activeReviewFilter === 'all' ? 'active' : ''}" data-rv-filter="all">全部 (${openReviewItems.length})</button>
+      ${critCount > 0 ? `<button type="button" class="rv-filter-pill crit ${activeReviewFilter === 'critical' ? 'active' : ''}" data-rv-filter="critical">数据矛盾 (${critCount})</button>` : ''}
+      ${majCount > 0 ? `<button type="button" class="rv-filter-pill maj ${activeReviewFilter === 'major' ? 'active' : ''}" data-rv-filter="major">方法建议 (${majCount})</button>` : ''}
+      ${minCount > 0 ? `<button type="button" class="rv-filter-pill min ${activeReviewFilter === 'minor' ? 'active' : ''}" data-rv-filter="minor">规范 (${minCount})</button>` : ''}
+    </div>
+  ` : `<div class="rv-summary-ok">✓ 全文核心数据与方法学核对通过</div>`
+
+  const enrolledStr = sp?.enrolled_sample_sizes?.length ? `N = ${sp.enrolled_sample_sizes.join(' / ')}` : '自动识别中'
+  const tableNStr = sp?.table_sample_sizes?.length ? `n = ${sp.table_sample_sizes.join(' / ')}` : '无或与总样本一致'
+  const statStr = [...(sp?.declared_summary_metrics ?? []), ...(sp?.declared_tests ?? [])].slice(0, 6).join(' · ') || '常规描述统计'
+
+  snapEl.innerHTML = `
+    <div class="rv-snap-top">
+      ${filterHtml}
+      ${exempted > 0 ? `<span class="rv-exempt-badge" title="已根据您的专科审稿习惯自动过滤同类误报">已按专科习惯免报 ${exempted} 处</span>` : ''}
+    </div>
+    ${sp ? `
+      <details class="rv-scratchpad-details">
+        <summary>全文关键数字核对快照（入组 ${esc(enrolledStr)} · 表分母 ${esc(tableNStr)}）</summary>
+        <div class="rv-scratchpad-grid">
+          <div><span class="muted">入组总样本：</span><b>${esc(enrolledStr)}</b></div>
+          <div><span class="muted">表格/亚组分母：</span><b>${esc(tableNStr)}</b></div>
+          <div class="full"><span class="muted">统计指标与方法：</span><b>${esc(statStr)}</b></div>
+        </div>
+      </details>
+    ` : ''}
+  `
+}
+
+document.getElementById('reviewSnapshotBar')?.addEventListener('click', e => {
+  const pill = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-filter]')
+  if (!pill?.dataset.rvFilter) return
+  activeReviewFilter = pill.dataset.rvFilter as 'all' | 'critical' | 'major' | 'minor'
+  renderReviewSnapshot()
+  renderComments()
+})
+
 function renderComments(): void {
   const list: any[] = detail?.comments ?? []
   const openCount = list.filter(c => c.status === 'open').length
@@ -2480,29 +2990,80 @@ function renderComments(): void {
     badge.textContent = String(openCount)
     badge.hidden = openCount === 0
   }
-  $('comments').innerHTML = list.length === 0
-    ? '<div class="muted">在正文中选中文字即可评论；写上 @heurion 由 AI 自动处理。审查发现的论断问题也会自动在此生成评论。</div>'
-    : list.map(c => {
-      const isClaim = c.replies.some((r: any) => r.role === 'ai' && r.text.includes('论断核对：'))
-      let suggestion: string | null = null
-      for (const r of c.replies) {
-        const m = /【建议修改为】：([^\n]+)/.exec(r.text) || /建议修改为：([^\n]+)/.exec(r.text)
-        if (m) { suggestion = m[1]?.trim() ?? null; break }
+  renderReviewSnapshot()
+  void loadReviewRules()
+
+  const filteredList = list.filter(c => {
+    if (activeReviewFilter === 'all' || c.status !== 'open') return true
+    const meta = parseReviewComment(c)
+    return !meta.isReview || meta.severity === activeReviewFilter
+  })
+
+  $('comments').innerHTML = filteredList.length === 0
+    ? `<div class="rv-empty-hint muted">点击上方 <b>「✦ 全文深度审稿」</b> 一键核查全文数据自洽与统计规范；也可以在正文中选中句子手动添加批注。</div>`
+    : filteredList.map(c => {
+      const meta = parseReviewComment(c)
+      const quoteText = c.anchor.text || c.snippet || '（定位段落）'
+      if (meta.isReview) {
+        const extraReplies = (c.replies ?? []).slice(1)
+        const defaultFix = meta.suggestion || c.anchor.text || c.snippet || ''
+        return `
+    <div class="card rv-card ${esc(c.status)} sev-${esc(meta.severity)}" data-cid="${esc(c.id)}" data-cat="${esc(meta.categoryKey)}" data-reason="${esc(meta.cleanReason)}">
+      <div class="rv-card-header">
+        <span class="rv-sev-badge sev-${esc(meta.severity)}">${esc(meta.severityLabel)}</span>
+        <span class="rv-cat-tag">${esc(meta.categoryLabel)}</span>
+        <span class="grow"></span>
+        ${c.status === 'open' ? `<button type="button" class="quiet small-btn rv-more-btn" data-act="toggle-more" title="更多操作（追问 AI / 删除）">⋯</button>` : ''}
+      </div>
+      <div class="quote ${c.anchor.located ? '' : 'lost'}" ${c.anchor.located ? 'data-locate="1" title="点击在正文中定位并高亮原句"' : ''}>${esc(quoteText)}${c.anchor.located ? '' : ' · 原句位置已变更'}</div>
+      <div class="rv-reason-body">${lightMarkdown(meta.cleanReason)}</div>
+      ${extraReplies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}
+      ${c.status === 'open' ? `
+        ${meta.suggestion ? `
+        <div class="rv-suggest-box">
+          <div class="rv-suggest-label">建议修改（可直接微调后一键替换原句）：</div>
+          <textarea class="rv-fix-input" data-fix-input rows="2">${esc(defaultFix)}</textarea>
+        </div>` : ''}
+        <div class="rv-action-bar">
+          <button type="button" class="primary small-btn" data-act="apply-claim-fix" data-fix="${esc(defaultFix)}">采纳修改</button>
+          <button type="button" class="quiet small-btn" data-act="resolve" title="知晓该提醒，保留正文原写法并归档">知晓保留</button>
+          <button type="button" class="quiet small-btn rv-fp-btn" data-act="toggle-fp" title="标记为误报或专科常规写法，系统会自动提炼规则，后续不再误报">误报 · 以后免报</button>
+        </div>
+        <div class="rv-fp-drawer" data-fp-drawer hidden>
+          <div class="rv-fp-title">选择原因（系统将自动记住此专科习惯，后续免报同类情况）：</div>
+          <div class="rv-fp-chips">
+            <button type="button" class="rv-fp-chip" data-act="exempt-claim" data-rebuttal="本研究自报队列数据，无需外部文献或跨表强行对齐">本研究自报数据</button>
+            <button type="button" class="rv-fp-chip" data-act="exempt-claim" data-rebuttal="亚组分析、删失或克隆队列的合理分母差异，并非算术错误">亚组/删失合理分母</button>
+            <button type="button" class="rv-fp-chip" data-act="exempt-claim" data-rebuttal="本专科常规学术表述或探索性分析，无需额外校正">专科常规写法</button>
+          </div>
+          <div class="rv-fp-custom-row">
+            <input type="text" data-fp-input placeholder="或输入一句话原因…">
+            <button type="button" class="small-btn primary" data-act="exempt-claim">确认免报</button>
+          </div>
+        </div>
+        <div class="rv-more-drawer" data-more-drawer hidden>
+          <input type="text" placeholder="补充要求并让 AI 修改正文…" data-reply>
+          <button type="button" class="small-btn ai" data-act="ask">让 AI 改稿</button>
+          <button type="button" class="small-btn quiet" data-act="delete">删除</button>
+        </div>
+      ` : `
+        <div class="row rv-resolved-row">
+          <span class="muted small">已处理归档</span>
+          <span class="grow"></span>
+          <button type="button" class="small-btn quiet" data-act="reopen">重新打开</button>
+          <button type="button" class="small-btn quiet" data-act="delete">删除</button>
+        </div>
+      `}
+    </div>`
       }
       return `
-    <div class="card ${esc(c.status)}${isClaim ? ' claim-comment-card' : ''}" data-cid="${esc(c.id)}">
-      <div class="quote ${c.anchor.located ? '' : 'lost'}" ${c.anchor.located ? 'data-locate="1" title="点击定位到正文位置"' : ''}>${esc(c.anchor.text || c.snippet || '（整块）')}${c.anchor.located ? '' : ' · 锚点已移除'}</div>
-      ${c.replies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? (isClaim ? 'Heurion 论断核验' : 'Heurion') : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}
-      ${isClaim && suggestion && c.status === 'open' ? `
-        <div class="claim-suggestion-box">
-          <div class="claim-suggestion-title">AI 纠正建议</div>
-          <div class="claim-suggestion-text">${esc(suggestion)}</div>
-          <button type="button" class="small-btn quiet claim-fix-btn" data-act="apply-claim-fix" data-fix="${esc(suggestion)}" title="一键采纳文献真实数值并纠正正文">一键替换正文</button>
-        </div>` : ''}
+    <div class="card ${esc(c.status)}" data-cid="${esc(c.id)}">
+      <div class="quote ${c.anchor.located ? '' : 'lost'}" ${c.anchor.located ? 'data-locate="1" title="点击定位到正文位置"' : ''}>${esc(quoteText)}${c.anchor.located ? '' : ' · 锚点已移除'}</div>
+      ${c.replies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}
       <div class="row">
         ${c.status === 'open'
-          ? `<input type="text" placeholder="追问或补充（含 @heurion 自动处理）" data-reply><button data-act="reply">回复</button><button data-act="ask" class="ai">让 AI 处理</button>${isClaim ? `<button data-act="exempt-claim" class="quiet" title="将该论断标记为临床经验/未发表观察，豁免文献核对并关闭评论">标为临床经验</button>` : ''}<button data-act="resolve">关闭</button><button data-act="delete" title="删除评论">删除</button>`
-          : `<span class="muted">已关闭（${c.resolved_by === 'ai' ? 'AI' : '我'}）</span><button data-act="reopen">重新打开</button><button data-act="delete" title="删除评论">删除</button>`}
+          ? `<input type="text" placeholder="追问或补充（含 @heurion 自动处理）" data-reply><button data-act="reply">回复</button><button data-act="ask" class="ai">让 AI 处理</button><button data-act="resolve">完成</button><button data-act="delete" title="删除评论">删除</button>`
+          : `<span class="muted">已完成</span><span class="grow"></span><button data-act="reopen">重新打开</button><button data-act="delete" title="删除评论">删除</button>`}
       </div>
     </div>`
     }).join('')
@@ -2528,34 +3089,66 @@ $('comments').onclick = async e => {
   if (!btn || !session) return
   const card = btn.closest('[data-cid]') as HTMLElement
   const cid = card.dataset.cid!
+  const act = btn.dataset.act
+
+  if (act === 'toggle-fp') {
+    const fpDrawer = card.querySelector<HTMLElement>('[data-fp-drawer]')
+    if (fpDrawer) {
+      fpDrawer.hidden = !fpDrawer.hidden
+      if (!fpDrawer.hidden) fpDrawer.querySelector<HTMLInputElement>('[data-fp-input]')?.focus()
+    }
+    return
+  }
+  if (act === 'toggle-more') {
+    const moreDrawer = card.querySelector<HTMLElement>('[data-more-drawer]')
+    if (moreDrawer) moreDrawer.hidden = !moreDrawer.hidden
+    return
+  }
+
   const input = card.querySelector<HTMLInputElement>('[data-reply]')
   const text = input?.value.trim() ?? ''
   try {
-    if (btn.dataset.act === 'apply-claim-fix') {
-      const fix = btn.dataset.fix ?? ''
+    if (act === 'apply-claim-fix') {
+      const fixInput = card.querySelector<HTMLTextAreaElement>('[data-fix-input]')
+      const fix = fixInput?.value.trim() || btn.dataset.fix || ''
       await api(`/api/docs/${session.docId}/comments/${cid}/apply-claim-fix`, {
         method: 'POST',
         body: JSON.stringify({ replace: fix }),
       })
-      showNotice('已采纳建议并更新正文')
-    } else if (btn.dataset.act === 'exempt-claim') {
-      await api(`/api/docs/${session.docId}/comments/${cid}/exempt-claim`, { method: 'POST' })
-      showNotice('已标记为临床经验并关闭评论')
-    } else if (btn.dataset.act === 'reply') {
+      showNotice('✓ 已采纳修改并更新正文')
+    } else if (act === 'exempt-claim') {
+      const fpInput = card.querySelector<HTMLInputElement>('[data-fp-input]')
+      const rebuttal = btn.dataset.rebuttal || fpInput?.value.trim() || '本专科常规学术写法/本研究自报数据，以后免报同类情况'
+      const quoteText = card.querySelector('.quote')?.textContent ?? ''
+      await api(`/api/docs/${session.docId}/comments/${cid}/exempt-claim`, {
+        method: 'POST',
+        body: JSON.stringify({
+          rebuttal,
+          category: card.dataset.cat || undefined,
+          sentence: quoteText,
+          reason: card.dataset.reason || undefined,
+        }),
+      })
+      await loadReviewRules()
+      const rulesBtn = document.getElementById('reviewRulesBtn')
+      rulesBtn?.classList.add('card-highlight')
+      setTimeout(() => rulesBtn?.classList.remove('card-highlight'), 1500)
+      showNotice('✓ 已记住该专科审稿习惯，后续审稿将自动豁免同类表述')
+    } else if (act === 'reply') {
       if (!text) return
       await api(`/api/docs/${session.docId}/comments/${cid}/replies`, { method: 'POST', body: JSON.stringify({ text }) })
-    } else if (btn.dataset.act === 'ask') {
+    } else if (act === 'ask') {
       if (btn.disabled) return
       btn.disabled = true
       btn.textContent = '排队中…'
       await api(`/api/docs/${session.docId}/comments/${cid}/ask?async=1`, { method: 'POST', body: JSON.stringify({ text, suggest: $<HTMLInputElement>('suggestMode').checked }) })
       await loadQueue()
       switchTab('chatPane')
-    } else if (btn.dataset.act === 'delete') {
-      if (!await askConfirm({ title: '删除评论', message: '删除这条评论及其全部回复？正文里的评论标记也会去掉。', confirm: '删除', danger: true })) return
+    } else if (act === 'delete') {
+      if (!await askConfirm({ title: '删除批注', message: '删除这条批注及其全部回复？正文里的标记也会去掉。', confirm: '删除', danger: true })) return
       await api(`/api/docs/${session.docId}/comments/${cid}`, { method: 'DELETE' })
     } else {
-      await api(`/api/docs/${session.docId}/comments/${cid}/${btn.dataset.act}`, { method: 'POST' })
+      await api(`/api/docs/${session.docId}/comments/${cid}/${act}`, { method: 'POST' })
     }
     await refresh(false)
   } catch (err) {
@@ -2760,18 +3353,19 @@ function renderCites(): void {
   const supportedDetails = supportedChecks.length === 0 ? ''
     : `<details style="margin-top:8px"><summary class="muted small" style="cursor:pointer">已支持 ${supportedChecks.length} 条（全文/表格核验 ${fulltextCount} · 仅摘要 ${abstractOnlyCount}）</summary>${supportedChecks.map(c =>
       `<div class="claim" style="margin-top:6px"><span class="verdict supported">支持</span> <span class="badge">${esc(TIER_LABEL[c.evidence_tier] ?? '仅摘要核验')}</span> ${esc(c.sentence)}${c.reason ? `<div class="muted small">${esc(c.reason)}</div>` : ''}${renderQuote(c)}</div>`).join('')}</details>`
-  $('cites').innerHTML = `<div class="card"><div class="row"><b>论断核对</b><span class="grow"></span><button id="verifyBtn" class="ai">核对全部论断</button></div>
-      <div class="muted" style="margin:4px 0">对照所引文献的 PubMed 摘要逐句核对；有问题的句子会挂一条 AI 评论，不会自动改写。</div>
-      <div>${summary}</div>${flagged}${supportedDetails}</div>` +
+  $('cites').innerHTML =
     `<div class="card"><div class="row"><b>参考文献</b><span class="grow"></span><button id="refImportBtn" title="从 Zotero / EndNote / Mendeley / PubMed 导出的文件，或每行一个 DOI / PMID">导入参考文献</button>
       <input type="file" id="refImportInput" accept=".ris,.bib,.nbib,.txt,.xml,.enw" hidden></div>
-      <div class="muted" style="margin:4px 0">导入后登记在这里（未使用），你和 AI 都能直接引用；每条按 DOI 核实，查不到的会列出来。</div>${refMergeText() ? `<div class="ref-merge-note">${esc(refMergeText())}；导出 Word / Markdown 时合并成一份文献表。</div>` : ''}<div id="refImportResult">${refImportHtml}</div></div>` +
-    (list.length === 0 ? '<div class="muted">AI 通过文献检索登记的引用会显示在这里</div>' : list.map(c => {
+      <div class="muted" style="margin:4px 0">导入后登记在这里，你和 AI 都能直接引用；每条按 DOI / PMID 核实。</div>${refMergeText() ? `<div class="ref-merge-note">${esc(refMergeText())}；导出 Word / Markdown 时合并成一份文献表。</div>` : ''}<div id="refImportResult">${refImportHtml}</div></div>` +
+    (list.length === 0 ? '<div class="muted" style="margin:8px 0">AI 通过文献检索登记的引用会显示在这里</div>' : list.map(c => {
       const candidateUrl = typeof c.url === 'string' && /^https?:\/\//i.test(c.url)
         ? c.url
         : (c.doi ? `https://doi.org/${encodeURIComponent(String(c.doi))}` : '')
       return `<div class="card"><b>${c.number ? `[${esc(c.number)}]` : '未使用'}</b> ${esc(c.formatted)}${candidateUrl ? ` <a href="${esc(candidateUrl)}" target="_blank" rel="noopener">原文</a>` : ''}</div>`
-    }).join(''))
+    }).join('')) +
+    `<div class="card" style="margin-top:10px"><div class="row"><b>文献引文核对</b><span class="grow"></span><button id="verifyBtn" class="quiet small-btn">核对文献摘要</button></div>
+      <div class="muted small" style="margin:4px 0">对照所引文献的 PubMed 摘要逐句核对；全文数据与方法学深审请使用「审稿与批注」。</div>
+      <div>${summary}</div>${flagged}${supportedDetails}</div>`
   $('refImportBtn').onclick = () => $('refImportInput').click()
   $<HTMLInputElement>('refImportInput').onchange = async e => {
     const input = e.target as HTMLInputElement
@@ -2794,7 +3388,8 @@ function renderCites(): void {
     if (!session) return
     try {
       await api(`/api/docs/${session.docId}/verify?async=1`, { method: 'POST' })
-      switchTab('chatPane')
+      showNotice('已发起文献摘要后台核对，发现问题将自动生成在「审稿与批注」中')
+      switchTab('commentPane')
     } catch (err) {
       showNotice((err as Error).message, true)
     }

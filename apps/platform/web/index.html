@@ -189,6 +189,7 @@
       <button data-cmd="image" title="插入图片（也可粘贴或拖入）">图片</button>
       <button data-cmd="figureStudio" title="从医学制图成果库插入矢量图，或就地绘制实验统计图、机制通路图、生信图并插入当前段落（自动附带代码与数据溯源）">科研制图</button>
       <button data-cmd="cite" title="按 DOI 插入引用">引用</button>
+      <button data-cmd="measure" title="插入已确认的影像病灶测量原子 [@m:id]（W4.2 / T2.5）">测量</button>
       <input id="imageInput" type="file" accept="image/png,image/jpeg,image/gif" multiple hidden>
       <span class="sep"></span>
       <button data-cmd="undo" title="撤销 ⌘Z">↶</button>
@@ -302,10 +303,10 @@
     <div class="side-resizer" id="sideResizer" role="separator" aria-orientation="vertical" title="按住拖拽调整右侧栏宽度，双击恢复默认宽度"></div>
     <div class="side-head narrow-only"><span class="eyebrow">Heurion AI</span><button class="icon-btn" id="sideClose" aria-label="关闭"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
     <div class="tabs">
-      <button data-tab="chatPane" class="active">对话</button>
-      <button data-tab="commentPane" id="commentTab">评论 <span class="tab-badge" id="commentBadge" hidden>0</span></button>
-      <button data-tab="versionPane">版本</button>
+      <button data-tab="commentPane" id="commentTab">审稿与批注 <span class="tab-badge" id="commentBadge" hidden>0</span></button>
+      <button data-tab="chatPane" class="active">AI 助手</button>
       <button data-tab="citePane">引用</button>
+      <button data-tab="versionPane">版本</button>
       <button class="side-collapse-btn" id="sideCollapseBtn" title="收起右侧栏 (快捷键 Cmd+] / Ctrl+])" aria-label="收起右侧栏"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 6v8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
     </div>
     <div class="tabpane active" id="chatPane">
@@ -315,35 +316,20 @@
       </div>
       <div class="log" id="chatLog"></div>
       <div class="composer">
-        <div class="chat-suggest-banner" id="chatSuggestBanner" hidden>
-          <span class="dot"></span>
-          <span class="chat-suggest-text" id="chatSuggestSummary">有待采纳修订</span>
-          <span class="grow"></span>
-          <button type="button" class="small-btn quiet" data-chat-sug="jump" title="在正文中定位查看修订">定位</button>
-          <button type="button" class="small-btn quiet" data-chat-sug="reject">全部拒绝</button>
-          <button type="button" class="small-btn primary" data-chat-sug="accept">全部采纳</button>
-        </div>
-        <div class="composer-mode-bar">
-          <label class="mode-pill active" id="suggestModePill" title="点击切换：开启时 AI 的修改作为待采纳修订（红绿 Diff），由你逐条采纳；关闭时直接修改正文">
-            <input type="checkbox" id="suggestMode" checked>
-            <span class="mode-dot"></span>
-            <span class="mode-text" id="suggestModeText">修订模式 · 生成 Diff 待采纳</span>
-          </label>
-          <span class="grow"></span>
-          <label class="toggle-sm" title="这一轮不使用、也不新增记忆"><input type="checkbox" id="noMemory"> 不用记忆</label>
-        </div>
+        <input type="checkbox" id="suggestMode" checked hidden>
+        <input type="checkbox" id="noMemory" hidden>
         <div class="kb-picked" id="kbPicked" hidden></div>
         <div class="kb-picked" id="dsPicked" hidden></div>
         <div class="kb-picked" id="ptPicked" hidden></div>
         <div class="chat-images" id="chatImages" hidden></div>
-        <textarea id="chatInput" rows="3" placeholder="让 Heurion 修改文档，例如：在方法部分补充纳入标准，并引用相关 RCT（⌘↩ 发送；可以粘贴或拖入图片）"></textarea>
+        <textarea id="chatInput" rows="3" placeholder="输入写作、润色或制图需求（⌘↩ 发送；全文数据与逻辑审查请点上方「审稿与批注」）"></textarea>
         <div class="row">
           <div class="composer-opts">
-            <button class="quiet small-btn" id="kbPickBtn" title="选资料库里的资料，让 AI 依据它们写">＋ 引用资料</button>
-            <button class="quiet small-btn" id="ptPickBtn" title="选患者，让 AI 读这位患者的资料与化验（按诊疗组权限，记入访问记录）" hidden>＋ 引用患者</button>
-            <button class="quiet small-btn" id="dsPickBtn" title="选上传的数据，让 AI 做统计分析（Table 1、生存曲线、组间比较……）">＋ 引用数据</button>
-            <button class="quiet small-btn" id="chatStudioBtn" title="在写作中直接插入已归档科研图表或就地绘制新图（附带代码溯源）">＋ 科研制图</button>
-            <button class="quiet small-btn" id="imgUploadBtn" title="上传或粘贴图片，支持医学影像、超声/CT截图、图表等">＋ 上传图片</button>
+            <button class="quiet small-btn" id="kbPickBtn" title="选资料库里的资料，让 AI 依据它们写">＋ 资料</button>
+            <button class="quiet small-btn" id="ptPickBtn" title="选患者，让 AI 读这位患者的资料与化验" hidden>＋ 患者</button>
+            <button class="quiet small-btn" id="dsPickBtn" title="选上传的数据，让 AI 做统计分析">＋ 数据</button>
+            <button class="quiet small-btn" id="chatStudioBtn" title="插入已归档科研图表或就地绘制新图">＋ 制图</button>
+            <button class="quiet small-btn" id="imgUploadBtn" title="上传或粘贴图片">＋ 图片</button>
             <input type="file" id="chatImageInput" accept="image/*" multiple hidden>
           </div>
           <button id="cancelBtn" disabled>停止</button>
@@ -352,13 +338,29 @@
       </div>
     </div>
     <div class="tabpane" id="commentPane">
+      <div class="review-hub-bar" id="reviewHubBar">
+        <button type="button" class="ai review-run-btn" id="deepReviewBtn" title="通读全文与表格，自动核查样本量分母、百分比算术、统计方法一致性与结论表述">✦ 全文深度审稿</button>
+        <button type="button" class="quiet small-btn review-rules-pill" id="reviewRulesBtn" title="查看或管理已生效的专科审稿习惯（自动豁免同类误报）">专科习惯 <span class="rules-count-badge" id="reviewRulesCount">0</span> ▾</button>
+      </div>
+      <div class="review-rules-drawer" id="reviewRulesDrawer" hidden>
+        <div class="review-rules-head">
+          <b>已生效的专科审稿习惯</b>
+          <span class="muted small">深度审稿时自动遵循以下边界，不再重复误报同类问题</span>
+        </div>
+        <div class="review-rules-list" id="reviewRulesList"></div>
+        <div class="review-rules-add">
+          <input type="text" id="reviewRuleInput" placeholder="新增专科习惯（如：回顾性单臂研究免报随机对照要求）">
+          <button type="button" class="small-btn primary" id="reviewRuleAddBtn">添加</button>
+        </div>
+      </div>
+      <div class="review-snapshot-bar" id="reviewSnapshotBar" hidden></div>
       <div id="newComment" class="card" hidden>
         <div class="quote" id="newCommentQuote"></div>
         <textarea id="newCommentText" rows="2" placeholder="写下修改要求；含 @heurion 时 AI 自动处理"></textarea>
         <div class="row end">
           <button id="newCommentCancel">取消</button>
-          <button id="newCommentSave">评论</button>
-          <button id="newCommentAsk" class="ai">评论并让 AI 处理</button>
+          <button id="newCommentSave">添加批注</button>
+          <button id="newCommentAsk" class="ai">批注并让 AI 改稿</button>
         </div>
       </div>
       <div id="comments"></div>
@@ -403,30 +405,8 @@
     <div class="welcome-cards">
       <button class="welcome-card" data-start="doc"><b>新建文档</b><span>论文、综述、病例报告、基金标书，导出 Word</span></button>
       <button class="welcome-card" data-start="deck"><b>新建幻灯片</b><span>学术汇报、文献解读、组会答辩，导出 PowerPoint</span></button>
-      <button class="welcome-card" data-start="upload"><b>上传文件</b><span>导入 docx / pptx / pdf，保留原格式继续改</span></button>
-      <button class="welcome-card" data-start="studio"><b>独立医学制图工作台</b><span>不建文档或课题，单独画标书机制图与实验统计图</span></button>
-    </div>
-    <div class="rs-scenario-banner" style="text-align:left;margin-top:18px;">
-      <div class="rs-scenario-head">
-        <b>科研制图场景引导：什么时候在写作里画图？什么时候单独画或去临床研究画？</b>
-      </div>
-      <div class="rs-scenario-grid">
-        <div class="rs-scenario-card">
-          <div class="rs-scenario-tag">场景 1 · 写作中内嵌配图</div>
-          <b>正在写论文 / 综述 / 标书正文</b>
-          <p class="muted small">打开文档或幻灯片后，点顶部工具栏 <b>「科研制图」</b> 或右下方 <b>「＋ 科研制图」</b>：可把成果库里的矢量图直接插进当前段落，或就地画新图插入，自动带「来自分析」代码溯源。</p>
-        </div>
-        <div class="rs-scenario-card">
-          <div class="rs-scenario-tag">场景 2 · 全局独立制图</div>
-          <b>单次快速成图 / 基金标书机制图 / 审稿补图</b>
-          <p class="muted small">手头已有 WB/qPCR/CCK-8 汇总数值，或只需画一张信号通路图、技术路线图并导出 Prism (<code>.pzfx</code>) / Draw.io 原工程文件 → 点左侧栏 <b>「制图」</b> 即开即画。</p>
-        </div>
-        <div class="rs-scenario-card">
-          <div class="rs-scenario-tag">场景 3 · 临床课题闭环制图</div>
-          <b>正式临床队列 / RCT 强溯源研究</b>
-          <p class="muted small">需要从患者库筛选入组、提取 eCRF 宽表，并自动生成绑定入组人数的 CONSORT 流向图、Table 1、KM 生存曲线与 SCI 投稿压缩包 → 点左侧栏 <b>「研究」</b>。</p>
-        </div>
-      </div>
+      <button class="welcome-card" data-start="upload"><b>上传文件</b><span>导入 docx / pptx / pdf，保留原格式继续改与深度审稿</span></button>
+      <button class="welcome-card" data-start="studio"><b>独立医学制图工作台</b><span>单独画标书机制图与实验统计图</span></button>
     </div>
     <h2>试试这样让 Heurion 帮你</h2>
     <div class="welcome-examples">

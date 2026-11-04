@@ -102,7 +102,7 @@ const ALL_PARITY: Record<string, string> = {
   // 评论与引用
   'POST /api/docs/:id/comments': 'comment_manage.create', 'POST /api/docs/:id/comments/:cid/replies': 'comment_reply',
   'POST /api/docs/:id/comments/:cid/:action{resolve|reopen}': 'comment_manage.resolve', 'DELETE /api/docs/:id/comments/:cid': 'comment_manage.delete',
-  'POST /api/docs/:id/citations': 'insert_citation', 'POST /api/docs/:id/citations/import': 'import_references', 'POST /api/docs/:id/verify': 'verify_claims',
+  'POST /api/docs/:id/citations': 'insert_citation', 'POST /api/docs/:id/citations/import': 'import_references', 'POST /api/docs/:id/verify': 'verify_claims', 'POST /api/docs/:id/deep-review': 'verify_claims',
   // 测量原子（W4.2）：绑定与查看；严格模式开关只给用户（见 NOT_FOR_AI）
   'POST /api/docs/:id/measurements': 'insert_measurement', 'GET /api/docs/:id/measurements': 'list_measurements',
   // 资料库
@@ -319,6 +319,10 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/aegis/mcp': 'AAP-1.0 统一 MCP 协议网关入口本身（承载全部 MCP 工具调用）',
   'PUT /api/imaging/findings-templates': '所见模板是科室的书写规范（决定之后所有草稿的措辞），由机构管理员或本科室审核医师本人维护；AI 只读（imaging_findings_templates），服务层同样拒绝 via=ai',
   'PUT /api/docs/:id/measurements/policy': '测量严格模式是用户对 AI 写入的约束（禁止裸测量数字），AI 不能自己开关；接口同样拒绝 via=ai',
+  // W6.4 去标识化影像与结节数据导出申请及 PI 审批留痕（T2.8）：服务层拒绝 via=ai
+  'GET /api/studies/:sid/cohort/imaging-exports': '去标识影像导出申请与 PI 审批记录及已批准的导出清单由研究者与 PI 在界面查阅和下载；AI 通过 study_cohort_dataset / study_vars_list 读取已核实研究数据',
+  'POST /api/studies/:sid/cohort/imaging-exports': '发起去标识影像与结节数据导出申请涉及伦理合规用途声明，须由研究者本人在界面提交（服务层拒绝 via=ai）',
+  'POST /api/studies/:sid/cohort/imaging-exports/:eid/review': '批准或驳回科研去标识影像导出须由研究负责人（PI）本人在界面审批并记入留痕（服务层拒绝 via=ai）',
 }
 
 describe('人机对等：每个接口（AI 的权限 = 用户的权限）', () => {
