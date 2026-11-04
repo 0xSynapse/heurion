@@ -14,19 +14,249 @@ export interface CopilotHooks {
 const ESC_MAP: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 const esc = (s: string) => String(s ?? '').replace(/[&<>"']/g, c => ESC_MAP[c] ?? c)
 
-function formatMarkdown(text: string): string {
+function splitTableCells(line: string): string[] {
+  let s = line.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1)
+  const PIPE_TOKEN = '\u0000PIPE\u0000'
+  return s
+    .replace(/\\\|/g, PIPE_TOKEN)
+    .split('|')
+    .map(c => c.replace(/\u0000PIPE\u0000/g, '|').trim())
+}
+
+function isTableSeparator(line: string): boolean {
+  const s = line.trim()
+  if (!s.includes('|') || !/[-—]/.test(s)) return false
+  const cells = splitTableCells(s)
+  if (cells.length === 0) return false
+  if (cells.length === 1 && !(s.startsWith('|') && s.endsWith('|'))) return false
+  return cells.every(c => /^:?[-—]+:?$/.test(c))
+}
+
+function parseTableAlignments(sepLine: string): Array<'left' | 'center' | 'right' | ''> {
+  return splitTableCells(sepLine).map(c => {
+    const left = c.startsWith(':')
+    const right = c.endsWith(':')
+    if (left && right) return 'center'
+    if (right) return 'right'
+    if (left) return 'left'
+    return ''
+  })
+}
+
+export function formatInlineMarkdown(raw: string): string {
+  if (!raw) return ''
+  const inlineCodes: string[] = []
+  let text = raw.replace(/`([^`\n]+)`/g, (_m, code: string) => {
+    const idx = inlineCodes.length
+    inlineCodes.push(`<code class="md-code">${esc(code)}</code>`)
+    return `\u0000ICODE_${idx}\u0000`
+  })
+  // 允许表格或段落中显式的 <br> / <br/> 换行
+  text = text.replace(/<br\s*\/?>/gi, '\u0000BR\u0000')
   let html = esc(text)
-  // 代码块
-  html = html.replace(/```([\w-]*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code class="lang-${lang}">${code}</code></pre>`)
-  // 行内代码
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
-  // 加粗
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+  html = html.replace(/\u0000BR\u0000/g, '<br>')
   // 引用标记 [@c:xxx]
-  html = html.replace(/\[@c:([a-z0-9]+)\]/g, '<span class="pill green" style="font-size:10.5px;padding:0 4px;">引用 $1</span>')
-  // 换行
-  html = html.replace(/\n/g, '<br>')
+  html = html.replace(/\[@c:([a-zA-Z0-9_-]+)\]/g, '<span class="pill green md-cite-pill">引用 $1</span>')
+  // 安全链接 [text](url)
+  html = html.replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/|#\/)[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="md-link">$1</a>')
+  // 粗斜体 ***text***
+  html = html.replace(/\*\*\*([^*\n]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+  // 粗体 **text** 或 __text__
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+  html = html.replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
+  // 斜体 *text*
+  html = html.replace(/(?<!\*)\*([^*\s][^*\n]*?)\*(?!\*)/g, '<em>$1</em>')
+  // 删除线 ~~text~~
+  html = html.replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
+  // 还原行内代码
+  html = html.replace(/\u0000ICODE_(\d+)\u0000/g, (_m, idx: string) => inlineCodes[Number(idx)] ?? '')
   return html
+}
+
+export function formatMarkdown(text: string): string {
+  if (!text) return ''
+  const normalized = String(text).replace(/\r\n?/g, '\n')
+
+  // 1. 先提取多行围栏代码块（支持流式输出中尚未闭合的代码块）
+  const codeBlocks: string[] = []
+  const withBlockTokens = normalized.replace(/```([\w+-]*)\n([\s\S]*?)(?:```|$)/g, (_m, lang: string, code: string) => {
+    const idx = codeBlocks.length
+    const cleanLang = esc(lang.trim())
+    const cleanCode = esc(code.replace(/\n$/, ''))
+    codeBlocks.push(`<pre class="md-pre"><code${cleanLang ? ` class="lang-${cleanLang}"` : ''}>${cleanCode}</code></pre>`)
+    return `\n\u0000CBLOCK_${idx}\u0000\n`
+  })
+
+  const lines = withBlockTokens.split('\n')
+  const blocks: string[] = []
+  let i = 0
+
+  const isBlockStart = (idx: number): boolean => {
+    if (idx >= lines.length) return true
+    const l = lines[idx]!
+    const t = l.trim()
+    if (!t) return true
+    if (/^\u0000CBLOCK_\d+\u0000$/.test(t)) return true
+    if (/^(#{1,6})(?:\s+|(?=[一二三四五六七八九十百千万\d]))/.test(t)) return true
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(t)) return true
+    if (/^>\s?/.test(t)) return true
+    if (/^(\s*)([-*+•]|\d+[.)])\s+/.test(l)) return true
+    if (t.includes('|') && idx + 1 < lines.length && isTableSeparator(lines[idx + 1]!)) return true
+    return false
+  }
+
+  while (i < lines.length) {
+    const line = lines[i]!
+    const trimmed = line.trim()
+
+    if (!trimmed) {
+      i++
+      continue
+    }
+
+    const cbMatch = /^\u0000CBLOCK_(\d+)\u0000$/.exec(trimmed)
+    if (cbMatch) {
+      blocks.push(codeBlocks[Number(cbMatch[1])] ?? '')
+      i++
+      continue
+    }
+
+    // GFM 表格（表头行 + 分隔行 + 数据行）
+    if (trimmed.includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1]!)) {
+      const headerCells = splitTableCells(line)
+      const aligns = parseTableAlignments(lines[i + 1]!)
+      const colCount = Math.max(headerCells.length, aligns.length)
+      const thHtml = headerCells
+        .map((c, idx) => {
+          const al = aligns[idx]
+          return `<th${al ? ` style="text-align:${al}"` : ''}>${formatInlineMarkdown(c)}</th>`
+        })
+        .join('')
+      i += 2
+      const bodyRows: string[] = []
+      while (i < lines.length) {
+        const rowLine = lines[i]!
+        const rowTrimmed = rowLine.trim()
+        if (!rowTrimmed || !rowTrimmed.includes('|') || /^\u0000CBLOCK_\d+\u0000$/.test(rowTrimmed) || /^(#{1,6})\s/.test(rowTrimmed)) {
+          break
+        }
+        if (isTableSeparator(rowLine)) {
+          i++
+          continue
+        }
+        const rawCells = splitTableCells(rowLine)
+        const totalCols = Math.max(colCount, rawCells.length)
+        const tds: string[] = []
+        for (let c = 0; c < totalCols; c++) {
+          const al = aligns[c]
+          tds.push(`<td${al ? ` style="text-align:${al}"` : ''}>${formatInlineMarkdown(rawCells[c] ?? '')}</td>`)
+        }
+        bodyRows.push(`<tr>${tds.join('')}</tr>`)
+        i++
+      }
+      blocks.push(
+        `<div class="md-table-wrap"><table class="md-table"><thead><tr>${thHtml}</tr></thead>${
+          bodyRows.length > 0 ? `<tbody>${bodyRows.join('')}</tbody>` : ''
+        }</table></div>`
+      )
+      continue
+    }
+
+    // 标题 (# ~ ######)
+    const hMatch = /^(#{1,6})(?:\s+|(?=[一二三四五六七八九十百千万\d]))(.+?)\s*#*$/.exec(trimmed)
+    if (hMatch) {
+      const level = Math.min(6, hMatch[1]!.length)
+      blocks.push(`<h${level} class="md-h md-h${level}">${formatInlineMarkdown(hMatch[2]!)}</h${level}>`)
+      i++
+      continue
+    }
+
+    // 水平分割线 (--- / *** / ___)
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      blocks.push('<hr class="md-hr">')
+      i++
+      continue
+    }
+
+    // 引用块 (> ...)
+    if (/^>\s?/.test(trimmed)) {
+      const quoteLines: string[] = []
+      while (i < lines.length && /^>\s?/.test(lines[i]!.trim())) {
+        quoteLines.push(lines[i]!.trim().replace(/^>\s?/, ''))
+        i++
+      }
+      blocks.push(`<blockquote class="md-quote">${quoteLines.map(l => formatInlineMarkdown(l)).join('<br>')}</blockquote>`)
+      continue
+    }
+
+    // 列表（无序 - * + • 与有序 1. 2)）
+    const listMatch = /^(\s*)([-*+•]|\d+[.)])\s+(.+)$/.exec(line)
+    if (listMatch) {
+      const isOrdered = /^\d+[.)]$/.test(listMatch[2]!)
+      const startNum = isOrdered ? parseInt(listMatch[2]!, 10) : 1
+      const baseIndent = listMatch[1]!.length
+      const items: Array<{ html: string; subItems: string[]; subOrdered: boolean }> = []
+
+      while (i < lines.length) {
+        const curLine = lines[i]!
+        if (!curLine.trim()) {
+          const nextLine = lines[i + 1]
+          const nextMatch = nextLine ? /^(\s*)([-*+•]|\d+[.)])\s+(.+)$/.exec(nextLine) : null
+          if (nextMatch) {
+            const nextOrdered = /^\d+[.)]$/.test(nextMatch[2]!)
+            if (nextOrdered === isOrdered || nextMatch[1]!.length > baseIndent) {
+              i++
+              continue
+            }
+          }
+          break
+        }
+        const m = /^(\s*)([-*+•]|\d+[.)])\s+(.+)$/.exec(curLine)
+        if (!m) break
+        const indent = m[1]!.length
+        const itemOrdered = /^\d+[.)]$/.test(m[2]!)
+        if (indent > baseIndent && items.length > 0) {
+          const last = items[items.length - 1]!
+          last.subOrdered = itemOrdered
+          last.subItems.push(`<li>${formatInlineMarkdown(m[3]!)}</li>`)
+          i++
+          continue
+        }
+        if (itemOrdered !== isOrdered && indent <= baseIndent) break
+        items.push({ html: formatInlineMarkdown(m[3]!), subItems: [], subOrdered: false })
+        i++
+      }
+
+      const tag = isOrdered ? 'ol' : 'ul'
+      const startAttr = isOrdered && startNum > 1 ? ` start="${startNum}"` : ''
+      const liHtml = items
+        .map(it => {
+          const subTag = it.subOrdered ? 'ol' : 'ul'
+          const sub = it.subItems.length > 0 ? `<${subTag} class="md-sublist">${it.subItems.join('')}</${subTag}>` : ''
+          return `<li>${it.html}${sub}</li>`
+        })
+        .join('')
+      blocks.push(`<${tag}${startAttr} class="md-list">${liHtml}</${tag}>`)
+      continue
+    }
+
+    // 普通段落（合并连续非块级行）
+    const paraLines: string[] = []
+    while (i < lines.length && !isBlockStart(i)) {
+      paraLines.push(formatInlineMarkdown(lines[i]!))
+      i++
+    }
+    if (paraLines.length > 0) {
+      blocks.push(`<p class="md-p">${paraLines.join('<br>')}</p>`)
+    } else {
+      blocks.push(`<p class="md-p">${formatInlineMarkdown(line)}</p>`)
+      i++
+    }
+  }
+
+  return blocks.join('')
 }
 
 export function initCopilot(hooks: CopilotHooks) {

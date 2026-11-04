@@ -23,7 +23,7 @@ import { applyTheme, mountThemeSwitch } from './theme.ts'
 import { photoFigure } from './photos.ts'
 import { openPhotoSearch, photoSearchEnabled } from './unsplash.ts'
 import { openHelpGuide, importHelpAsDoc } from './help.ts'
-import { initCopilot } from './copilot.ts'
+import { initCopilot, formatMarkdown } from './copilot.ts'
 import { icon } from './icons.ts'
 
 const TOKEN = storedToken()
@@ -1788,9 +1788,9 @@ function displayMessage(text: string): string {
     .replace(/\n\n［图片］.*/g, m => [...m.matchAll(/asset_id=([A-Za-z0-9]+)/g)].map(x => `⟦img:${x[1]}⟧`).join(''))
 }
 
-/** AI 文字常带 **粗体** 与 `代码`：转义后只渲染这两种。 */
+/** 对话与子智能体分析文本统一支持完整 Markdown（含 GFM 表格、多级标题、列表、代码块、粗斜体与引用标记）。 */
 function lightMarkdown(text: string): string {
-  return esc(text).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`\n]+)`/g, '<code>$1</code>')
+  return `<div class="chat-md">${formatMarkdown(text)}</div>`
 }
 
 function addMsg(role: 'user' | 'assistant', text: string, revertTurn: string | null = null, msgTurnId: string | null = revertTurn): HTMLElement {
