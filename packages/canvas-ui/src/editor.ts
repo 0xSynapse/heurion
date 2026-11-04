@@ -873,6 +873,12 @@ export class Editor {
     this.view.focus()
   }
 
+  /** 在光标处插入测量原子（m_id 已在服务端登记，W4.2 / T2.5）。 */
+  insertMeasurement(mId: string): void {
+    this.view.dispatch(this.view.state.tr.replaceSelectionWith(schema.nodes.measurement!.create({ m_id: mId })).scrollIntoView())
+    this.view.focus()
+  }
+
   /** 上传图片并在光标处插入图块（逐张，保持顺序）。 */
   async insertImages(files: File[]): Promise<void> {
     for (const file of files) {
