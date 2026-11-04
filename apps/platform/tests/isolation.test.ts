@@ -51,6 +51,8 @@ const PARAMS: Record<string, (s: Seed) => string> = {
   stid: () => 'is-none',
   // 随访对比的对应关系（T2.4）：不存在的 id 也必须 4xx
   lkid: () => 'lk000000000000',
+  // 科研队列影像去标识导出申请（T2.8）：不存在的 id 也必须 4xx
+  eid: () => 'ie-none',
 }
 /** 按设计公开的接口（不需要登录或本身就是给持有链接的人用的）。 */
 const PUBLIC: Record<string, string> = {
