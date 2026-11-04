@@ -158,9 +158,12 @@ const CUES: Record<string, { msg?: RegExp; state?: (s: DocCueState, m: string) =
   existing_citation: { msg: /重写|改写|精简|润色|引用|文献/i },
   citation_unsupported: { msg: /引用|参考文献|文献|支持|cite|citation|reference/i },
   citation_detached: { msg: /引用|参考文献|文献|支持|cite|citation|reference/i },
-  bare_measurement: { msg: /结节|病灶|测量|大小|直径|体积|CT 值|mm|报告/i },
-  unbound_measurement: { msg: /结节|病灶|测量|报告/i },
+  bare_measurement: { msg: /测量|大小|直径|体积|CT\s*值|mm|cm|HU|测量原子/i },
+  unbound_measurement: { msg: /未绑定|测量原子|unbound/i },
   measurement_lost: { msg: /重写|改写|精简|润色|测量/i },
+  lesion_not_confirmed: { msg: /阅片|确认|未确认|confirmed/i },
+  pending_lesions: { msg: /阅片|签发|提交报告|待确认/i },
+  mask_required: { msg: /分割|掩膜|mask/i },
   safevantage_low_coverage: {
     msg: /仅摘要|缺少全文|无全文|oa_fulltext|低覆盖|证据覆盖/i,
     state: s => Boolean(s.lowCoverageCitations),
@@ -313,6 +316,18 @@ export function synthesizeRuleFromSignal(group: {
       '外部文献不能直接裸挂在陈述本研究自身方法或队列结果的原句末尾，应完整保留原句并在句末补写“, consistent with prior studies demonstrating … [@c:id].”对比分句。'
   } else if (code === 'citation_detached') {
     protocol = '引用标记前的英文缩写词勿带句号（如将 vs. 改为 vs），防止句子在引用标记前被切碎。'
+  } else if (code === 'bare_measurement' || code === 'unbound_measurement') {
+    protocol =
+      '写入病灶定量数值（mm/cm/mm³/HU）时严禁手写裸数字，须先调用 insert_measurement 绑定已确认病灶的 [@m:id] 测量原子。'
+  } else if (code === 'measurement_lost') {
+    protocol =
+      '改写或精简含影像测量的段落时，完整保留段内已有的 [@m:…] 反应式测量原子标记，勿退化为纯文本数字。'
+  } else if (code === 'lesion_not_confirmed' || code === 'pending_lesions') {
+    protocol =
+      '签发阅片报告前须逐枚核对 AI 候选结节（设为 confirmed 或 rejected），禁止含 pending 候选病灶时直接签发。'
+  } else if (code === 'mask_required') {
+    protocol =
+      '确认病灶前须确保已生成三维分割掩膜（mask_key），禁止无三维掩膜的病灶进入已确认态。'
   }
 
   const head = protocol

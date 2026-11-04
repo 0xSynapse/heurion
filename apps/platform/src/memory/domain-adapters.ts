@@ -4,11 +4,12 @@
  * 从单一的医学论文写作解耦，泛化支持：
  * - manuscript：学术与研究报告写作
  * - biostats：生物统计建模、队列筛选与生存分析（对接 research/* 与 datasets/*）
+ * - imaging：医学影像三维分割质控、纵向随访配准与反应式测量原子（对接 imaging/* 与 measurements/*）
  * - deck：学术与高管演示文稿排版工程（对接 ops/deck.ts 与 convert/pptx-*）
  * - general_mcp：通用代码、SQL 查询与外部 MCP 工具调用
  */
 
-export type SkillDomain = 'manuscript' | 'biostats' | 'deck' | 'general_mcp' | (string & {})
+export type SkillDomain = 'manuscript' | 'biostats' | 'imaging' | 'deck' | 'general_mcp' | (string & {})
 
 /** 兼容现有文档状态线索（DocState）。 */
 export interface DocCueState {
@@ -84,6 +85,12 @@ function commonInstanceLeakage(ruleText: string): string | null {
     }
     if (/\b(?:SELECT|UPDATE|DELETE)\b[\s\S]*\bWHERE\s+\w+_id\s*=\s*['"]?[a-z0-9_-]{4,}/i.test(ruleText)) {
       return '包含具体数据库行主键字面量（instance_primary_key_leak）'
+    }
+    if (/\b(?:1\.2\.840|2\.25)\.\d+(?:\.\d+){2,}\b/.test(ruleText)) {
+      return '包含单次检查的具体 DICOM Study/Series UID 字面量（instance_dicom_uid_leak）'
+    }
+    if (/(?:slice\s*#\s*\d+|第\s*\d{2,}\s*层)/i.test(ruleText) && /\b\d+\.\d+\s*mm\b/i.test(ruleText)) {
+      return '包含单名患者的具体 CT 层面号与病灶尺寸字面量（instance_lesion_literal_leak）'
     }
   }
   return null
@@ -276,7 +283,97 @@ export const biostatsAdapter: DomainSkillAdapter = {
   },
 }
 
-/** 3. 演示文稿与视觉排版工程适配器（Slide Deck & Visual Layout Adapter）。 */
+/** 3. 医学影像与三维分割质控适配器（Clinical Imaging & 3D Segmentation Adapter）。 */
+export const imagingAdapter: DomainSkillAdapter = {
+  domain: 'imaging',
+  label: '医学影像与三维分割质控',
+  cueRegex: /影像|dicom|nifti|ct\b|hrct|mri|pet|结节|病灶|分割|肺窗|纵隔窗|层厚|重建核|体积倍增|vdt|lung-?rads|bts\b|recist|hu\b|测量原子|\[@m:|nodule|lesion|segmentation|slice\s*thickness|attenuation/i,
+
+  corruptDeterministic(exemplar: string): string {
+    return exemplar
+      .replace(/\[@m:[a-zA-Z0-9_-]+\]/g, '')
+      .replace(/(?:HRCT\s*)?薄层(?:序列)?\s*[（(][^）)]*1\.25\s*mm[^）)]*[）)]/gi, 'CT')
+      .replace(/[（(]?(?:层厚|slice\s*thickness)\s*[≤<=]\s*1\.25\s*mm[^)）]*[)）]?/gi, '')
+      .replace(/(?:扣除|考虑|依据)?[^,，。；;]*(?:BTS(?:\s*2015)?|Lung-?RADS)[^,，。；;]*(?:重复性|量测误差|阈值)[^,，。；;]*/gi, '')
+      .replace(/[^,，。；;]*(?:仅供临床研究参考|不作为临床诊断依据|客观形态学描述)[^,，。；;]*/g, '')
+      .split(/\n+/)
+      .map(s => s.replace(/^[-*•#]+\s*/, '').trim())
+      .filter(Boolean)
+      .map(l => `- ${l}`)
+      .join('\n')
+  },
+
+  corruptionPrompt(exemplar: string) {
+    return {
+      system:
+        '你是医学影像领域的退化算子。请将输入的规范影像所见/纵向随访评估方案退化为“仅包含粗略病灶位置与裸数字的原始观察流水账（x_tilde）”，剥离 CT 层厚与重建核质控、BTS/Lung-RADS 量测重复性误差阈值（±25% 体积 / ±1.5 mm 直径）、反应式测量原子 [@m:id] 绑定规范及非诊断性客观表述约束。只输出退化后的要点。',
+      user: exemplar,
+    }
+  },
+
+  reconstructionPrompt(skeleton: string, activeSkillsBlock: string) {
+    return {
+      system:
+        '你是医学影像质控与结构化所见重建器。请根据给定的原始病灶观察要点与当前激活的“医学影像技能卡”，生成符合放射学质控与随访规范的结构化影像评估方案。\n' +
+        (activeSkillsBlock ? `\n${activeSkillsBlock}\n` : '') +
+        '只输出重建后的影像评估方案。',
+      user: skeleton,
+    }
+  },
+
+  backwardPrompt(skeleton, reconstructed, exemplar, activeSkills) {
+    return {
+      system:
+        '你是医学影像与三维分割领域的反向归因器。对比【原始观察骨架 x_tilde】、【重建影像方案 x_hat】与【黄金影像规范 x_0】，提炼可跨病例复用的影像质控与报告技能（如 HRCT 薄层 ≤1.25mm 与重建核一致性预检、BTS 2015 体积 ±25% 与 Lung-RADS 平均径 ±1.5mm 随访稳定阈值、病灶定量数值必须绑定经确认的 [@m:id] 测量原子而非裸写数字、仅作客观形态学描述等）。严禁包含具体患者的 Study UID、特定层面号或单个病灶的具体毫米数值。\n' +
+        '输出 JSON：{"ops":[{"op":"create"|"update"|"merge","kind":"preference"|"style"|"term","content":"≤80字的可迁移医学影像规则","target_ids":[],"reason":"归因依据"}]}',
+      user: JSON.stringify({ skeleton, reconstructed, exemplar, active_skills: activeSkills }),
+    }
+  },
+
+  extractContrastCandidates(_skeleton, reconstructed, exemplar, activeSkills) {
+    const out: ExtractedSkillCandidate[] = []
+    if (/1\.25\s*mm|薄层|重建核|slice\s*thickness|kernel/i.test(exemplar) && !/1\.25|薄层|重建核|slice\s*thickness|kernel/i.test(reconstructed)) {
+      const content = '[domain:imaging] 执行三维肺结节体积测量与亚实性成分分割前，先核验 CT 层厚 ≤ 1.25 mm 且重建核一致；厚层（> 2.5 mm）序列仅报告二维长径并标注部分容积效应限制。'
+      const existing = activeSkills.find(s => /1\.25\s*mm|薄层|重建核/i.test(s.content))
+      if (existing) {
+        out.push({ op: 'update', kind: 'preference', target_ids: [existing.id], content, reason: '强化薄层 CT 层厚与重建核前置质控约束（strengthen）' })
+      } else {
+        out.push({ op: 'create', kind: 'preference', content, reason: '黄金影像方案包含 HRCT 层厚 ≤1.25mm 与重建核质控，重建方案遗漏' })
+      }
+    }
+    if (/25%|1\.5\s*mm|BTS|Lung-?RADS|VDT|体积倍增|量测误差/i.test(exemplar) && !/25%|1\.5\s*mm|BTS|Lung-?RADS|量测误差/i.test(reconstructed)) {
+      out.push({
+        op: 'create',
+        kind: 'preference',
+        content: '[domain:imaging] 纵向随访对比结节大小变化时，须扣除量测重复性误差阈值（体积变化 ≥ 25% 或平均径变化 ≥ 1.5 mm 才判定实质性生长并计算 VDT），变化位于误差带内一律报告为稳定。',
+        reason: '黄金影像方案遵循 BTS 2015 / Lung-RADS v2022 随访重复性阈值，防止将分割噪声误判为肿瘤进展',
+      })
+    }
+    if (/\[@m:|测量原子|confirmed|已确认病灶/i.test(exemplar) && !/\[@m:|测量原子/i.test(reconstructed)) {
+      out.push({
+        op: 'create',
+        kind: 'style',
+        content: '[domain:imaging] 撰写影像所见或论文结果中的病灶定量数值（长短径 mm、体积 mm³、CT 值 HU）时，必须绑定经阅片确认（confirmed）的测量原子 [@m:id]，严禁手写裸数字。',
+        reason: '黄金影像方案通过反应式测量原子 [@m:id] 保障文内数值与三维分割掩膜溯源同步',
+      })
+    }
+    if (/客观形态学|非临床诊断|仅供.*参考|形态学描述|findings[- ]only/i.test(exemplar) && /(?:确诊为|明确为恶性|浸润性腺癌|立即手术切除)/i.test(reconstructed)) {
+      out.push({
+        op: 'create',
+        kind: 'preference',
+        content: '[domain:imaging] 影像自动分割与随访摘要仅输出客观形态学与定量测量描述（位置、密度分型、边界与测量原子），严禁直接下达定性病理诊断或治疗处方结论。',
+        reason: '黄金影像方案严格遵循客观形态学所见边界，避免越界下达定性病理诊断',
+      })
+    }
+    return out
+  },
+
+  hasInstanceLeakage(ruleText: string) {
+    return commonInstanceLeakage(ruleText)
+  },
+}
+
+/** 4. 演示文稿与视觉排版工程适配器（Slide Deck & Visual Layout Adapter）。 */
 export const deckAdapter: DomainSkillAdapter = {
   domain: 'deck',
   label: '演示文稿与视觉排版工程',
@@ -285,6 +382,8 @@ export const deckAdapter: DomainSkillAdapter = {
   corruptDeterministic(exemplar: string): string {
     return exemplar
       .replace(/\[(?:layout|slide_layout|chart_pairing|action_title):[^\]]*\]/gi, '')
+      .replace(/^Action\s+Title:\s*[^\n]+/im, 'Results Overview')
+      .replace(/paired\s+[\w\s-]*chart[^\n]*/gi, 'data summary')
       .split(/\n+/)
       .map(s => s.replace(/^#+\s*/, '').replace(/^[-*•]\s*/, '').trim())
       .filter(Boolean)
@@ -362,7 +461,13 @@ export const generalMcpAdapter: DomainSkillAdapter = {
   corruptDeterministic(exemplar: string): string {
     return exemplar
       .split(/\n+/)
-      .map(s => s.replace(/--.*$/, '').replace(/\/\/.*$/, '').trim())
+      .map(s =>
+        s
+          .replace(/--.*$/, '')
+          .replace(/\/\/.*$/, '')
+          .replace(/\bLIMIT\s+\d+(?:\s+OFFSET\s+\d+)?/gi, '')
+          .trim(),
+      )
       .filter(Boolean)
       .slice(0, 3)
       .join(' ')
@@ -414,6 +519,7 @@ export const generalMcpAdapter: DomainSkillAdapter = {
 const ADAPTERS: Record<string, DomainSkillAdapter> = {
   manuscript: manuscriptAdapter,
   biostats: biostatsAdapter,
+  imaging: imagingAdapter,
   deck: deckAdapter,
   general_mcp: generalMcpAdapter,
 }
@@ -426,7 +532,7 @@ export function registerDomainSkillAdapter(adapter: DomainSkillAdapter): void {
 /** 获取指定领域的技能适配器；未指定时按提示词/工具上下文自动推断。 */
 export function getDomainSkillAdapter(domain?: SkillDomain, contextHint = ''): DomainSkillAdapter {
   if (domain && ADAPTERS[domain]) return ADAPTERS[domain]!
-  for (const adapter of [biostatsAdapter, deckAdapter, generalMcpAdapter, manuscriptAdapter]) {
+  for (const adapter of [imagingAdapter, biostatsAdapter, deckAdapter, generalMcpAdapter, manuscriptAdapter]) {
     if (adapter.cueRegex.test(contextHint)) return adapter
   }
   return manuscriptAdapter
@@ -438,6 +544,7 @@ export function inferSkillDomain(message: string, ctx?: EnvironmentCueContext, d
   if (docKind === 'deck') return 'deck'
   const toolsStr = (ctx?.activeTools ?? []).join(' ')
   if (/deck_|slide_|layout_check|pptx/i.test(toolsStr) || deckAdapter.cueRegex.test(message)) return 'deck'
+  if (/imaging_|dicom_|lesion_|nodule_|measurement_/i.test(toolsStr) || imagingAdapter.cueRegex.test(message)) return 'imaging'
   if (/dataset_|cohort_|survival|table1|ecrf|causal/i.test(toolsStr) || biostatsAdapter.cueRegex.test(message)) return 'biostats'
   if (generalMcpAdapter.cueRegex.test(message) && !manuscriptAdapter.cueRegex.test(message)) return 'general_mcp'
   return 'manuscript'

@@ -361,12 +361,31 @@ function deterministicSkillGuidedReconstruct(
       extras.push('Verify proportional hazards via Schoenfeld residuals (EPV >= 10).')
     }
     if (extras.length > 0) out = `${out} ${extras.join(' ')}`
+  } else if (domain === 'imaging') {
+    const imgNotes: string[] = []
+    if (/1\.25\s*mm|薄层|重建核/i.test(rulesText)) {
+      imgNotes.push('(HRCT slice thickness ≤ 1.25 mm, kernel-matched)')
+    }
+    if (/25%|1\.5\s*mm|BTS|Lung-?RADS|量测误差/i.test(rulesText)) {
+      imgNotes.push('扣除 BTS 2015 / Lung-RADS v2022 量测重复性误差阈值（体积变化 < 25% 且平均径变化 < 1.5 mm 判定为稳定）')
+    }
+    if (/\[@m:|测量原子/i.test(rulesText)) {
+      imgNotes.push('绑定已确认测量原子 [@m:lesion_ref]')
+    }
+    if (/客观形态学|非临床诊断/i.test(rulesText)) {
+      imgNotes.push('客观形态学所见，仅供临床研究参考')
+    }
+    if (imgNotes.length > 0) out = `${out}；${imgNotes.join('；')}。`
   } else if (domain === 'deck') {
     const tags: string[] = []
     if (/Action Title|结论先行/i.test(rulesText)) tags.push('[action_title: Quantitative outcome headline]')
     if (/two_column|双栏/i.test(rulesText)) tags.push('[layout: two_column, max_bullets=4]')
     if (/chart|图表/i.test(rulesText)) tags.push('[chart_pairing: paired_visual_chart]')
     if (tags.length > 0) out = `${tags.join(' ')}\n${out}`
+  } else if (domain === 'general_mcp') {
+    if (/LIMIT|分页|pagination/i.test(rulesText) && !/LIMIT/i.test(out)) {
+      out = `${out} LIMIT 100 /* with pagination & schema pre-check */`
+    }
   }
 
   return out
@@ -407,11 +426,34 @@ export function computeDomainAlignment(
         if (recRe.test(reconstructed)) featureHits++
       }
     }
+  } else if (domain === 'imaging') {
+    const checks: Array<[RegExp, RegExp]> = [
+      [/1\.25\s*mm|薄层|重建核|slice\s*thickness/i, /1\.25\s*mm|薄层|重建核|slice\s*thickness/i],
+      [/25%|1\.5\s*mm|BTS|Lung-?RADS|量测误差/i, /25%|1\.5\s*mm|BTS|Lung-?RADS|量测误差/i],
+      [/\[@m:|测量原子/i, /\[@m:|测量原子/i],
+      [/客观形态学|非临床诊断|仅供.*参考/i, /客观形态学|非临床诊断|仅供.*参考/i],
+    ]
+    for (const [exRe, recRe] of checks) {
+      if (exRe.test(exemplar)) {
+        featureChecks++
+        if (recRe.test(reconstructed)) featureHits++
+      }
+    }
   } else if (domain === 'deck') {
     const checks: Array<[RegExp, RegExp]> = [
       [/Action Title|结论先行|reduced|increased|降低了|提升了/i, /action_title|reduced|increased|降低了|提升了/i],
       [/two_column|双栏/i, /two_column|双栏/i],
       [/chart|图表/i, /chart|图表/i],
+    ]
+    for (const [exRe, recRe] of checks) {
+      if (exRe.test(exemplar)) {
+        featureChecks++
+        if (recRe.test(reconstructed)) featureHits++
+      }
+    }
+  } else if (domain === 'general_mcp') {
+    const checks: Array<[RegExp, RegExp]> = [
+      [/LIMIT\s+\d+|pagination|分页/i, /LIMIT|pagination|分页/i],
     ]
     for (const [exRe, recRe] of checks) {
       if (exRe.test(exemplar)) {
@@ -430,7 +472,7 @@ function tokenOverlapRatio(a: string, b: string): number {
   const tokenize = (s: string) =>
     new Set(
       (s.toLowerCase().match(/[a-z0-9]{2,}|[\u4e00-\u9fff]{2}/g) ?? []).filter(
-        w => !['domain', 'manuscript', 'biostats', 'deck', 'general_mcp'].includes(w),
+        w => !['domain', 'manuscript', 'biostats', 'imaging', 'deck', 'general_mcp'].includes(w),
       ),
     )
   const setA = tokenize(a)

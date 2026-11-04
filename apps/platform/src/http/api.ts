@@ -2156,7 +2156,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         : `【已采纳审稿建议】：${replace}`,
     )
     store.setCommentStatus(row.id, cid, 'resolved', 'user')
-    return c.json({ ok: true, comment_id: cid, replaced: { find, replace, applied: replacedText }, rev, evolution })
+    return c.json({ ok: true, comment_id: cid, replaced: { find, replace }, applied: replacedText, rev, evolution })
   })
 
   /** 删除评论：去掉正文里的锚点标记与线程。 */
