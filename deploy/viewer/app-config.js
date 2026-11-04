@@ -11,7 +11,8 @@ window.config = {
   // 把 Heurion 结节面板放到 viewer 模式右侧面板的第一个（不改 OHIF 自带模式的源码）
   customizationService: {
     // 分割（AI 结节轮廓）在阅片器里只读：修正走结节面板与平台留痕，不在 OHIF 里直接改 SEG
-    global: [{ 'panelSegmentation.disableEditing': { $set: true } }],
+    // ohif.tours 置空：关掉 OHIF 自带的英文新手引导（每个新会话都会弹，挡住影像，医生从患者页进来不需要）
+    global: [{ 'panelSegmentation.disableEditing': { $set: true } }, { 'ohif.tours': { $set: [] } }],
     mode: {
       viewer: {
         rightPanels: { $unshift: ['@heurion/extension-nodules.panelModule.nodules'] },

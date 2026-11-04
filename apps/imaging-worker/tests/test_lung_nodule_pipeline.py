@@ -632,3 +632,22 @@ def test_nodule_cut_by_window_is_flagged(phantom):
     fake = TruncatedNeural(nodules, lobe_map, _detections(nodules, {"A": 0.9}), stray_component=False)
     res = run_lung_nodule_pipeline(fake, vol, SPACING)
     assert any("推理区域边界" in w for w in res["nodules"][0]["warnings"])
+
+
+def test_default_lobe_mode_by_device(client, monkeypatch, phantom):
+    """不传 lobe_mode 时：CPU 用结节周围局部（roi），GPU 用全肺（full）；显式传入时照传入"""
+    assert server.default_lobe_mode("cpu") == "roi"
+    assert server.default_lobe_mode("cuda") == "full"
+    vol, nodules, lobe_map = phantom
+    fake = FakeNeural(nodules, lobe_map, _detections(nodules, {"A": 0.6, "B": 0.95, "C": 0.8}))
+    _install_fake(monkeypatch, fake)
+    server.engine.register_volume("t15-default-lobe", vol, SPACING, "CT")
+    try:
+        expected = server.default_lobe_mode(server.engine.device.type)
+        r = client.post("/api/v1/pipeline/lung-nodule", json={"volume_id": "t15-default-lobe"})
+        assert r.status_code == 200, r.text
+        assert r.json()["lobe_segmentation"]["mode"] == expected
+        r = client.post("/api/v1/pipeline/lung-nodule", json={"volume_id": "t15-default-lobe", "lobe_mode": "full"})
+        assert r.json()["lobe_segmentation"]["mode"] == "full"
+    finally:
+        server.engine.remove_volume("t15-default-lobe")
