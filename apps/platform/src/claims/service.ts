@@ -1168,6 +1168,8 @@ export class ClaimService {
               norm: narrowRule.toLowerCase(),
               reason: `审稿批注作者申辩收窄边界：${opts.rebuttalText.trim().slice(0, 80)}`,
               source: 'auto',
+              source_doc_id: docId,
+              source_turn_id: null,
               actor: 'user',
               explicit: 1,
               evidence: 1,

@@ -1485,12 +1485,27 @@ export class Store {
 
   private static readonly MEM_COLS = 'id, owner, scope, project_id, kind, content, reason, source, source_doc_id, source_turn_id, status, explicit, created_at, updated_at, use_count, last_used_at'
 
-  addMemory(input: Omit<MemoryRow, 'id' | 'created_at' | 'updated_at' | 'use_count' | 'last_used_at'> & { norm: string }): MemoryRow {
+  addMemory(input: Omit<MemoryRow, 'id' | 'created_at' | 'updated_at' | 'use_count' | 'last_used_at' | 'source_doc_id' | 'source_turn_id'> & { norm: string; source_doc_id?: string | null; source_turn_id?: string | null }): MemoryRow {
     const id = 'm' + randomUUID().replace(/-/g, '').slice(0, 11)
     const t = now()
     this.db.prepare(`INSERT INTO memories (id, owner, scope, project_id, kind, content, norm, reason, source, source_doc_id, source_turn_id, status, explicit, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, input.owner, input.scope, input.project_id, input.kind, input.content, input.norm, input.reason,
-      input.source, input.source_doc_id, input.source_turn_id, input.status, input.explicit, t, t)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id,
+      input.owner,
+      input.scope,
+      input.project_id ?? null,
+      input.kind,
+      input.content,
+      input.norm,
+      input.reason ?? '',
+      input.source ?? 'auto',
+      input.source_doc_id ?? null,
+      input.source_turn_id ?? null,
+      input.status ?? 'active',
+      input.explicit ?? 1,
+      t,
+      t,
+    )
     return this.getMemory(id)!
   }
 
