@@ -7,19 +7,11 @@ export type BlogSlug =
   | 'dual-surface-crdt-clinical-ai'
   | 'human-agent-capability-parity-ai-native-software'
   | 'aegis-os-transactional-agent-kernel'
-  | 'cross-modal-self-evolution-clinical-deep-review'
-  | 'zero-leakage-phi-gatekeeper-and-uomp'
-  | 'multi-agent-dogfooding-aegis-os-cow'
-  | 'ai-native-document-crdt-publishing'
 
 export const BLOG_SLUGS: readonly BlogSlug[] = [
   'dual-surface-crdt-clinical-ai',
   'human-agent-capability-parity-ai-native-software',
   'aegis-os-transactional-agent-kernel',
-  'cross-modal-self-evolution-clinical-deep-review',
-  'zero-leakage-phi-gatekeeper-and-uomp',
-  'multi-agent-dogfooding-aegis-os-cow',
-  'ai-native-document-crdt-publishing',
 ] as const
 
 export function isBlogSlug(s: string): s is BlogSlug {
@@ -200,7 +192,7 @@ export const BLOG_POSTS: readonly BlogPostMeta[] = [
 }</code></pre>
       <p>在 <code>applyOps</code> 内部，算子执行器通过以下三步保证绝对的确定性：</p>
       <ol>
-        <li><strong>$O(1)$ 块寻址与跨格式范围定位</strong>：通过 <code>indexById(tr.doc).get("p8f2")</code> 直接定位目标块在文档树中的精确偏移量 <code>pos</code>，并在块内构建展平文本切片（将 <code>citation</code> 映射为 <code>[@cite_id]</code>、<code>measurement</code> 映射为 <code>[m:m_id]</code>），使得 <code>find</code> 即使跨越粗体、斜体或行内引用标记也能精确命中对应的 ProseMirror 坐标区间 <code>[from, to]</code>。</li>
+        <li><strong>O(1) 块寻址与跨格式范围定位</strong>：通过 <code>indexById(tr.doc).get("p8f2")</code> 直接定位目标块在文档树中的精确偏移量 <code>pos</code>，并在块内构建展平文本切片（将 <code>citation</code> 映射为 <code>[@cite_id]</code>、<code>measurement</code> 映射为 <code>[m:m_id]</code>），使得 <code>find</code> 即使跨越粗体、斜体或行内引用标记也能精确命中对应的 ProseMirror 坐标区间 <code>[from, to]</code>。</li>
         <li><strong>行内格式自动继承（Inherited Marks）</strong>：当用新文本替换原区间时，<code>replace_text</code> 自动读取被替换首字符的样式标记（<code>inheritedMarks</code>，如原有的字体、字号或超链接），让 AI 改写后的文字天然融入周围排版。</li>
         <li><strong>人类编辑行级锁（<code>userEditedIds</code>）</strong>：若在 AI 思考期间，人类作者正在前端编辑器中手动修改 <code>{#p8f2}</code>，前端协同网关会将 <code>"p8f2"</code> 标记进当前回合的 <code>userEditedIds</code> 集合。此时任何试图覆写该块的 AI 算子都会在 <strong>&lt;0.2 ms</strong> 内被拒绝并抛出 <code>USER_EDITED_CONFLICT</code>，彻底杜绝静默覆写。</li>
       </ol>
@@ -308,8 +300,8 @@ export const BLOG_POSTS: readonly BlogPostMeta[] = [
 &lt;/w:p&gt;</code></pre>
 
       <h2 id="sec-selective-undo">04. 0.128ms 单轮 AI 靶向回滚：块级逆变换与人类修改优先（<code>revertByNodes</code>）</h2>
-      <p>在真实科研写作中，一个常见场景是：AI 在第 $T_1$ 回合修改了 <code>{#p01}</code>、<code>{#p02}</code> 并新增了 <code>{#p03}</code>；随后人类作者在第 $T_2$ 时刻顺手润色了 <code>{#p02}</code> 并在 <code>{#p09}</code> 写下了新的结论；到了第 $T_3$ 时刻，作者决定<strong>“撤回第 $T_1$ 回合的 AI 修改”</strong>。</p>
-      <p>如果是传统的线性 Undo 栈或 Git Revert，撤回 $T_1$ 要么会连带把人类在 $T_2$ 对 <code>{#p02}</code> 和 <code>{#p09}</code> 的修改一起冲掉，要么直接报合并冲突失败。而在块级逆变换引擎中，我们利用块级寻址实现了延迟仅 <strong>0.128 ms</strong>、且严格遵循<strong>“人类修改绝对优先（Human-Edits-Win）”</strong>的靶向回滚函数 <code>revertByNodes(current, base, changes, userTouched)</code>：</p>
+      <p>在真实科研写作中，一个常见场景是：AI 在第 <i>T</i><sub>1</sub> 回合修改了 <code>{#p01}</code>、<code>{#p02}</code> 并新增了 <code>{#p03}</code>；随后人类作者在第 <i>T</i><sub>2</sub> 时刻顺手润色了 <code>{#p02}</code> 并在 <code>{#p09}</code> 写下了新的结论；到了第 <i>T</i><sub>3</sub> 时刻，作者决定<strong>“撤回第 <i>T</i><sub>1</sub> 回合的 AI 修改”</strong>。</p>
+      <p>如果是传统的线性 Undo 栈或 Git Revert，撤回 <i>T</i><sub>1</sub> 要么会连带把人类在 <i>T</i><sub>2</sub> 对 <code>{#p02}</code> 和 <code>{#p09}</code> 的修改一起冲掉，要么直接报合并冲突失败。而在块级逆变换引擎中，我们利用块级寻址实现了延迟仅 <strong>0.128 ms</strong>、且严格遵循<strong>“人类修改绝对优先（Human-Edits-Win）”</strong>的靶向回滚函数 <code>revertByNodes(current, base, changes, userTouched)</code>：</p>
 
       <pre><code>// 单轮块级靶向回滚核心算法精简展示
 export function revertByNodes(
@@ -341,7 +333,7 @@ export function revertByNodes(
   return { doc: tr.doc, skipped }
 }</code></pre>
 
-      <p>回到刚才的例子：执行 <code>revertByNodes</code> 后，<code>{#p01}</code> 瞬间恢复为 $T_1$ 之前的原貌，AI 新增的 <code>{#p03}</code> 被干净移除，而人类在 $T_2$ 亲手润色过的 <code>{#p02}</code>（在 <code>skipped</code> 列表中返回提示）与 <code>{#p09}</code> 则完好无损地保留在文档中。</p>
+      <p>回到刚才的例子：执行 <code>revertByNodes</code> 后，<code>{#p01}</code> 瞬间恢复为 <i>T</i><sub>1</sub> 之前的原貌，AI 新增的 <code>{#p03}</code> 被干净移除，而人类在 <i>T</i><sub>2</sub> 亲手润色过的 <code>{#p02}</code>（在 <code>skipped</code> 列表中返回提示）与 <code>{#p09}</code> 则完好无损地保留在文档中。</p>
 
       <h3>4.1 综合性能与保真度实测对比</h3>
       <div class="blog-table-wrap">
@@ -496,7 +488,7 @@ export function revertByNodes(
 }</code></pre>
       <p>Internally, <code>applyOps</code> guarantees deterministic execution through three steps:</p>
       <ol>
-        <li><strong>$O(1)$ Block Resolution &amp; Cross-Mark Span Matching</strong>: <code>indexById(tr.doc).get("p8f2")</code> resolves the exact document offset <code>pos</code> in constant time. A flattened text-slice mapper translates inline atoms (mapping <code>citation</code> to <code>[@cite_id]</code> and <code>measurement</code> to <code>[m:m_id]</code>) so <code>find</code> locates the exact ProseMirror coordinate span <code>[from, to]</code> even across bold/italic boundaries.</li>
+        <li><strong>O(1) Block Resolution &amp; Cross-Mark Span Matching</strong>: <code>indexById(tr.doc).get("p8f2")</code> resolves the exact document offset <code>pos</code> in constant time. A flattened text-slice mapper translates inline atoms (mapping <code>citation</code> to <code>[@cite_id]</code> and <code>measurement</code> to <code>[m:m_id]</code>) so <code>find</code> locates the exact ProseMirror coordinate span <code>[from, to]</code> even across bold/italic boundaries.</li>
         <li><strong>Automatic Mark Inheritance (<code>inheritedMarks</code>)</strong>: Newly inserted text automatically inherits the inline formatting marks of the first replaced character, blending seamlessly into the surrounding typography.</li>
         <li><strong>Row-Level Human Edit Locks (<code>userEditedIds</code>)</strong>: If a human author edits <code>{#p8f2}</code> while the agent turn is in flight, the collaboration gateway adds <code>"p8f2"</code> to <code>userEditedIds</code>. Any AI primitive targeting that locked block is rejected in <strong>&lt;0.2 ms</strong> with <code>USER_EDITED_CONFLICT</code>, preventing silent overwrites.</li>
       </ol>
@@ -604,8 +596,8 @@ export function revertByNodes(
 &lt;/w:p&gt;</code></pre>
 
       <h2 id="sec-selective-undo">04. 0.128ms Selective Per-Turn Rollback: Block-Indexed Inverse Transforms</h2>
-      <p>Consider a common collaborative timeline: during Turn $T_1$, an AI agent modifies blocks <code>{#p01}</code> and <code>{#p02}</code> and inserts <code>{#p03}</code>. At $T_2$, the human researcher refines <code>{#p02}</code> and writes a new paragraph <code>{#p09}</code>. At $T_3$, the researcher clicks <strong>"Undo AI Turn $T_1$"</strong>.</p>
-      <p>A linear undo stack or file-level revert would either wipe out the human’s $T_2$ edits on <code>{#p02}</code> and <code>{#p09}</code> or fail with a merge conflict. Instead, the block-indexed inverse transform engine <code>revertByNodes(current, base, changes, userTouched)</code> leverages block addressing to execute a <strong>0.128 ms selective rollback that strictly prioritizes subsequent human edits</strong>:</p>
+      <p>Consider a common collaborative timeline: during Turn <i>T</i><sub>1</sub>, an AI agent modifies blocks <code>{#p01}</code> and <code>{#p02}</code> and inserts <code>{#p03}</code>. At <i>T</i><sub>2</sub>, the human researcher refines <code>{#p02}</code> and writes a new paragraph <code>{#p09}</code>. At <i>T</i><sub>3</sub>, the researcher clicks <strong>"Undo AI Turn <i>T</i><sub>1</sub>"</strong>.</p>
+      <p>A linear undo stack or file-level revert would either wipe out the human’s <i>T</i><sub>2</sub> edits on <code>{#p02}</code> and <code>{#p09}</code> or fail with a merge conflict. Instead, the block-indexed inverse transform engine <code>revertByNodes(current, base, changes, userTouched)</code> leverages block addressing to execute a <strong>0.128 ms selective rollback that strictly prioritizes subsequent human edits</strong>:</p>
 
       <pre><code>// Core selective rollback algorithm
 export function revertByNodes(
@@ -637,7 +629,7 @@ export function revertByNodes(
   return { doc: tr.doc, skipped }
 }</code></pre>
 
-      <p>In the scenario above, <code>revertByNodes</code> restores <code>{#p01}</code> to its pre-$T_1$ state and removes <code>{#p03}</code>, while leaving the human’s $T_2$ refinements on <code>{#p02}</code> (returned in <code>skipped</code>) and <code>{#p09}</code> completely intact.</p>
+      <p>In the scenario above, <code>revertByNodes</code> restores <code>{#p01}</code> to its pre-<i>T</i><sub>1</sub> state and removes <code>{#p03}</code>, while leaving the human’s <i>T</i><sub>2</sub> refinements on <code>{#p02}</code> (returned in <code>skipped</code>) and <code>{#p09}</code> completely intact.</p>
 
       <h3>4.1 Empirical Performance &amp; Fidelity Comparison</h3>
       <div class="blog-table-wrap">
@@ -782,38 +774,71 @@ export function revertByNodes(
       <h2 id="sec-zero-fork-kernel">03. 零分叉同源内核：进程内回环调用与双轨溯源审计</h2>
       <p>在工程落地上，如何保证“AI 的权限与人类的权限永远保持 100% 一致，且绝不随代码演进而发生漂移”？</p>
       <p>如果为 AI 的工具单独编写一套权限判断与数据库读写逻辑，只要系统迭代超过三个月，人类接口与 AI 接口的鉴权规则就必然会出现分叉（Permission Drift）。为此，我们在内核中采用了<strong>零分叉进程内同源回环（Zero-Fork In-Process Loopback Invocation）</strong>设计：</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 284" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="零分叉进程内同源调用与防伪造双轨审计流水线">
+          <rect x="1" y="1" width="758" height="282" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Path 1: Human Browser -->
+          <rect x="20" y="22" width="214" height="64" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+          <text x="127" y="43" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PATH A · HUMAN GUI REQUEST</text>
+          <text x="127" y="61" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">浏览器携 Bearer Session 发起请求</text>
+          <text x="127" y="76" text-anchor="middle" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.2">actor = u, via = "human"</text>
+
+          <!-- Path 2: AI In-Process -->
+          <rect x="20" y="106" width="214" height="74" fill="#233E33" stroke="#151C19" stroke-width="1"/>
+          <text x="127" y="127" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PATH B · AI IN-PROCESS INVOKER</text>
+          <text x="127" y="145" text-anchor="middle" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9.5">MCP 工具进程内内存直调 (零网络)</text>
+          <text x="127" y="161" text-anchor="middle" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">注入 256-bit RAM Secret + act_as = u</text>
+          <text x="127" y="174" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.2">via = "ai" | "ai-confirmed"</text>
+
+          <!-- Path 3: Spoofed External -->
+          <rect x="20" y="200" width="214" height="62" fill="#F9ECE8" stroke="#8F5638" stroke-width="1"/>
+          <text x="127" y="221" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PATH C · SPOOFED NETWORK CALL</text>
+          <text x="127" y="239" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">外部网络伪造 x-internal-secret 头</text>
+          <text x="127" y="254" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.2">timingSafeEqual 校验失败 → 401 拦截</text>
+
+          <!-- Arrows to Gate -->
+          <path d="M234 54 L276 54 L276 112 L302 112" stroke="#233E33" stroke-width="1.3"/>
+          <line x1="234" y1="143" x2="302" y2="143" stroke="#00C472" stroke-width="1.5"/>
+          <line x1="234" y1="231" x2="286" y2="231" stroke="#8F5638" stroke-width="1.3" stroke-dasharray="3 3"/>
+          <text x="294" y="235" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="11" font-weight="700">✕</text>
+
+          <!-- Center: Unified Router & RBAC -->
+          <rect x="302" y="68" width="212" height="132" fill="#EFECE4" stroke="#151C19" stroke-width="1.2"/>
+          <text x="408" y="92" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">UNIFIED ROUTE &amp; RBAC KERNEL</text>
+          <line x1="302" y1="102" x2="514" y2="102" stroke="#C8C1B4"/>
+          <text x="316" y="124" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">1. 恒定时间核验内存瞬态密钥</text>
+          <text x="316" y="144" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">2. 100% 复用同一套租户/项目鉴权</text>
+          <text x="316" y="164" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">3. 执行完全一致的领域业务状态机</text>
+          <text x="316" y="184" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.4" font-weight="600">零重复权限代码 · 零规则漂移</text>
+
+          <line x1="514" y1="134" x2="548" y2="134" stroke="#233E33" stroke-width="1.4"/>
+
+          <!-- Right: Dual-Track Audit Log -->
+          <rect x="548" y="68" width="192" height="132" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+          <text x="644" y="92" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">DUAL-TRACK AUDIT LOG</text>
+          <line x1="548" y1="102" x2="740" y2="102" stroke="#DFDAD0"/>
+          <text x="560" y="124" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.5">actor:       user_id (u)</text>
+          <text x="560" y="144" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5">via:         human | ai |</text>
+          <text x="560" y="158" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5">             ai-confirmed</text>
+          <text x="560" y="178" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.5">confirmedBy: approver_id</text>
+        </svg>
+        <figcaption>图 2：零分叉进程内同源回环流水线——MCP 工具通过内存瞬态密钥直调统一路由内核，与人类共享 100% 鉴权逻辑并输出双轨溯源审计。</figcaption>
+      </figure>
+
       <ul>
-        <li><strong>绝不编写第二套权限代码</strong>：所有的管理类与业务类 AI 原生工具本身不包含任何独立的数据库修改或权限分支，而是将结构化参数映射为对应的标准内部路由请求，交由进程内调用器（<code>Invoker</code>）直接投递给同一个核心 HTTP 应用实例处理。</li>
-        <li><strong>防伪造进程内瞬态密钥（Ephemeral In-Memory Secret）</strong>：进程内调用器在转发请求时，会自动注入一个每次服务启动时在内存中随机生成的 256-bit 瞬态密钥（不落盘、不出进程），并通过常驻内存的恒定时间比对（<code>timingSafeEqual</code>）校验。任何来自外部网络的请求一旦试图伪造内部委托头，都会被无条件识别为未授权伪造并拦截。</li>
-        <li><strong>细粒度人机双轨审计（Dual-Track Provenance Audit）</strong>：因为人机共用同一套业务管道，每一次状态变更都会自动落入统一的不可篡改审计日志，并额外记录两个核心溯源维度：操作通道 <code>via</code>（<code>human</code> 代表人类直接操作，<code>ai</code> 代表智能体直接执行，<code>ai-confirmed</code> 代表智能体发起提案并经人类确认后执行）以及确认人 <code>confirmed_by</code>。</li>
+        <li><strong>绝不编写第二套权限代码</strong>：所有的管理类与业务类 AI 原生工具本身不包含任何独立的数据库修改或权限分支，而是将结构化参数映射为对应的标准内部路由请求，交由进程内调用器直接投递给同一个核心应用实例处理。</li>
+        <li><strong>防伪造进程内瞬态密钥（Ephemeral In-Memory Secret）</strong>：进程内调用器在转发请求时，会自动注入一个每次服务启动时在内存中随机生成的 256-bit 瞬态密钥（不落盘、不出进程），并通过恒定时间比对（<code>timingSafeEqual</code>）校验。任何来自外部网络的请求一旦试图伪造内部委托头，都会被无条件识别为未授权伪造并拦截。</li>
+        <li><strong>细粒度人机双轨审计（Dual-Track Provenance Audit）</strong>：因为人机共用同一套业务管道，每一次状态变更都会自动落入统一的不可篡改审计日志，并同时记录操作主体 <code>actor</code>、触发通道 <code>via</code>（<code>human</code> / <code>ai</code> / <code>ai-confirmed</code>）与确认人 <code>confirmed_by</code>。</li>
       </ul>
 
-      <pre><code>// 进程内零分叉同源调用核心机制示意
-export const INTERNAL_SECRET = randomBytes(32).toString('hex')
+      <pre><code>// 零分叉进程内同源调用伪代码
+RAM_SECRET = randomBytes(32) // 进程启动时于内存生成，永不落盘或出网
 
-export function internalVia(header: (name: string) =&gt; string | undefined): ViaInfo | 'forged' | null {
-  const secret = header('x-internal-secret')
-  if (secret === undefined) return null
-  const a = Buffer.from(secret), b = Buffer.from(INTERNAL_SECRET)
-  // 恒定时间比对：网络外部请求绝对无法伪造进程内委托身份
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return 'forged'
-  const via = header('x-via') === 'ai-confirmed' ? 'ai-confirmed' : 'ai'
-  return { via, confirmedBy: header('x-confirmed-by') ?? null }
-}
-
-// AI 工具通过进程内内存直调同一个应用路由，100% 复用人类的鉴权、租户隔离与审计规则
-export function makeInvoker(app: { request: (path: string, init: RequestInit) =&gt; Promise&lt;Response&gt; }): Invoke {
-  return async (user, method, path, body, opts = {}) =&gt; {
-    const headers: Record&lt;string, string&gt; = {
-      'x-internal-secret': INTERNAL_SECRET,
-      'x-act-as-user': user,
-      'x-via': opts.via ?? 'ai',
-    }
-    if (opts.confirmedBy) headers['x-confirmed-by'] = opts.confirmedBy
-    const res = await app.request(path, { method, headers, body: serializeBody(body) })
-    return parseInvokeResult(res)
-  }
-}</code></pre>
+function invokeAsUser(currentUser, method, routePath, payload, via = "ai", confirmedBy = null):
+  headers = { "x-internal-secret": RAM_SECRET, "x-act-as": currentUser, "x-via": via, "x-confirmed-by": confirmedBy }
+  return app.request(routePath, { method, headers, body: payload }) // 进程内直调同一个路由与鉴权内核</code></pre>
 
       <h2 id="sec-three-tier-boundary">04. 权责边界的三分法：自主执行、确认卡门控与人类专属主权</h2>
       <p>“AI 拥有与用户对等的能力接口”绝不意味着让 AI 在高风险操作上替人类做主。为了让人类在与 AI 高效协作的同时始终手握最终控制权，我们将全部系统接口划分为三个界限分明的治理层级：</p>
@@ -855,12 +880,12 @@ export function makeInvoker(app: { request: (path: string, init: RequestInit) =&
           <text x="526" y="166" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.6">• 移除约束 AI 自身的记忆避坑规则</text>
           <text x="526" y="198" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">→ 显式豁免登记并由内核硬拒绝</text>
         </svg>
-        <figcaption>图 2：人机权责边界的三分法——日常可逆操作全速自主执行，高风险操作经确认卡门控，主权与终审操作严守人类底线。</figcaption>
+        <figcaption>图 3：人机权责边界的三分法——日常可逆操作全速自主执行，高风险操作经确认卡门控，主权与终审操作严守人类底线。</figcaption>
       </figure>
 
       <ol>
-        <li><strong>第一层：可逆日常操作 $\rightarrow$ AI 直接自主执行（<code>via = ai</code>）</strong>。包括文稿起草、数据统计、知识库检索、文档重命名、移入回收站（可随时恢复）以及版本保存。由于底层有 CRDT 靶向回滚与回收站兜底，AI 可以零打扰地全速推进工作。</li>
-        <li><strong>第二层：高风险与不可逆操作 $\rightarrow$ AI 发起提案 + 人类确认卡门控（<code>via = ai-confirmed</code>）</strong>。涵盖三个高敏类别：<strong>不可恢复的物理删除（如清空回收站、删除数据集）</strong>、<strong>权限与安全边界变更（如修改机构设置、变更成员角色、项目所有权移交）</strong>以及<strong>对外机构标识变更</strong>。当用户让 AI 执行此类任务时：
+        <li><strong>第一层：可逆日常操作 → AI 直接自主执行（<code>via = ai</code>）</strong>。包括文稿起草、数据统计、知识库检索、文档重命名、移入回收站（可随时恢复）以及版本保存。由于底层有 CRDT 靶向回滚与回收站兜底，AI 可以零打扰地全速推进工作。</li>
+        <li><strong>第二层：高风险与不可逆操作 → AI 发起提案 + 人类确认卡门控（<code>via = ai-confirmed</code>）</strong>。涵盖三个高敏类别：<strong>不可恢复的物理删除（如清空回收站、删除数据集）</strong>、<strong>权限与安全边界变更（如修改机构设置、变更成员角色、项目所有权移交）</strong>以及<strong>对外机构标识变更</strong>。当用户让 AI 执行此类任务时：
           <ul>
             <li>AI 调用对应的原生工具后，内核首先校验<strong>当前用户本身是否具备该权限</strong>（若无权限则直接返回 <code>Forbidden</code>，绝不生成骚扰卡片），并探测目标资源是否真实存在；</li>
             <li>校验通过后，系统在 <code>pending_actions</code> 表中生成一条有效期 24 小时的待确认记录（包含目标接口、结构化参数、AI 给出的执行理由以及供用户微调的可编辑字段），向当前对话流与全局顶栏推送一张<strong>确认卡（Confirmation Card）</strong>；</li>
@@ -877,33 +902,70 @@ export function makeInvoker(app: { request: (path: string, init: RequestInit) =&
         </li>
       </ol>
 
+      <h3>4.1 为什么“AI 申请权限的过程”本身必须与执行结果同样可审计？</h3>
+      <p>在传统软件审计中，系统往往只记录“最终成功落库的写操作”。但在人机共治系统中，<strong>“AI 申请了什么权限、基于什么理由申请、人类最终批准还是驳回”这一申请过程本身的可审计性（Auditability of Permission Requests），与最终执行结果同样关键</strong>：</p>
+      <ul>
+        <li><strong>告别“弹窗点完即焚”的审计黑洞</strong>：许多本地 Agent 工具依赖一次性模态弹窗（“Allow command?”）请求权限，用户随手点击后弹窗即刻消失，事后既无法追溯 AI 当时传入的完整参数，也无法复盘是否存在诱导性提权（Prompt Injection Escalation）。</li>
+        <li><strong>全生命周期留痕（含未获批与越权拦截）</strong>：在我们的内核中，AI 发起的每一次高敏权限申请都会作为一等公民持久化，完整记录<strong>代理主体（<code>actor</code>）</strong>、<strong>目标接口与参数快照（<code>method + path + params</code>）</strong>、<strong>AI 声明的申请理由（<code>reason</code>）</strong>以及<strong>最终裁决状态（<code>approved</code> / <code>rejected</code> / <code>expired</code> / <code>rbac_denied</code>）与审批人（<code>confirmed_by</code>）</strong>。即便某次权限申请被人类驳回或因越权被内核直接拦截，安全团队依然能通过审计链清晰复盘智能体的每一次边界试探。</li>
+      </ul>
+
       <h2 id="sec-parity-invariant">05. 用反射测试锁死契约：全路由对等性不变量</h2>
       <p>在多人协作演进的大型软件系统中，口头倡导“为 AI 构建原生接口”极易退化——当工程师为了赶进度在前端加了一个新按钮和新 HTTP 路由，却忘记同步注册 MCP 工具时，人机对等性就会出现裂缝。</p>
-      <p>为了将“人机能力与权限对等”上升为不可违背的系统级定律，我们在自动化测试套件中植入了一条<strong>全路由对等性反射不变量（Route-to-Tool Parity Invariant）</strong>：</p>
+      <p>为了将“人机能力与权限对等”上升为不可违背的系统级定律，我们在持续集成流水线中植入了一条<strong>全路由对等性反射不变量（Route-to-Tool Parity Invariant）</strong>：</p>
 
-      <pre><code>// 编译期与 CI 必跑的全路由人机对等性反射断言
-describe('Human-Agent Capability Parity Invariant', () =&gt; {
-  it('verifies every HTTP route maps to an MCP tool or declares a NOT_FOR_AI reason', async () =&gt; {
-    const routes = enumerateAllApiRoutes(app)
-    const registeredMap = { ...DOMAIN_PARITY, ...ADMIN_PARITY }
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="编译期与 CI 全路由对等性反射测试不变量架构图">
+          <rect x="1" y="1" width="758" height="254" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
 
-    // 1. 完备性断言：任何新增接口若既未绑定 MCP 工具，也未在 NOT_FOR_AI 写明理由，CI 立即失败
-    expect(routes.filter(r =&gt; !registeredMap[r] &amp;&amp; !NOT_FOR_AI[r])).toEqual([])
+          <!-- Left: Auto-Enumerated Routes -->
+          <rect x="20" y="34" width="188" height="188" fill="#F2EFE9" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="114" y="56" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">ALL APPLICATION ROUTES</text>
+          <line x1="20" y1="66" x2="208" y2="66" stroke="#DFDAD0"/>
+          <text x="32" y="90" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">POST /api/docs/:id/edit</text>
+          <text x="32" y="112" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">POST /api/datasets/:id/table1</text>
+          <text x="32" y="134" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.2">DELETE /api/docs/:id/purge</text>
+          <text x="32" y="156" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.2">POST /api/actions/:id/confirm</text>
+          <text x="32" y="178" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.2">POST /api/auth/login</text>
+          <text x="32" y="204" fill="#151C19" font-family="Inter, sans-serif" font-size="8.8" font-weight="500">反射枚举全部 HTTP 路由集合 R</text>
 
-    // 2. 互斥性断言：同一个接口绝不能既开放给 AI 又列入 NOT_FOR_AI
-    expect(Object.keys(registeredMap).filter(r =&gt; NOT_FOR_AI[r])).toEqual([])
+          <line x1="208" y1="128" x2="242" y2="128" stroke="#233E33" stroke-width="1.4"/>
 
-    // 3. 路由同源反射：自动实例化每个管理类 MCP 工具动作，校验其底层调用的 HTTP 方法与路径正则完全一致
-    for (const [route, target] of Object.entries(ADMIN_PARITY)) {
-      const [toolName, actionName] = target.split('.')
-      const actionDef = findAdminToolAction(toolName, actionName)
-      expect(matchesRoutePattern(route, actionDef.method, actionDef.path)).toBe(true)
-    }
+          <!-- Center: 4 Reflection Invariant Laws -->
+          <rect x="242" y="22" width="286" height="212" fill="#233E33" stroke="#151C19" stroke-width="1.2"/>
+          <text x="385" y="45" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">CI PARITY REFLECTION VERIFIER</text>
+          <line x1="242" y1="55" x2="528" y2="55" stroke="#395A4C"/>
+          <text x="256" y="80" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">定律 1 · 完备覆盖断言 (Completeness)</text>
+          <text x="256" y="97" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">∀ r ∈ R: r ∈ MCP_MAP ∨ r ∈ NOT_FOR_AI</text>
+          <text x="256" y="122" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">定律 2 · 严格互斥断言 (Disjointness)</text>
+          <text x="256" y="139" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">keys(MCP_MAP) ∩ keys(NOT_FOR_AI) = ∅</text>
+          <text x="256" y="164" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">定律 3 · 路由双射核验 (Route Bijection)</text>
+          <text x="256" y="181" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">tool.action.method &amp; pathRegex === r</text>
+          <text x="256" y="206" fill="#00C472" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">定律 4 · 门控对齐 (confirm === AI_CONFIRM)</text>
 
-    // 4. 高风险门控一致性：所有标记为 confirm: true 的工具动作必须与 AI_CONFIRM 名单严格相等
-    expect(collectConfirmActions(ADMIN_TOOLS)).toEqual(AI_CONFIRM.sort())
-  })
-})</code></pre>
+          <path d="M528 96 L562 96" stroke="#00C472" stroke-width="1.4"/>
+          <path d="M528 176 L562 176" stroke="#8F5638" stroke-width="1.4"/>
+
+          <!-- Right Top: Pass -->
+          <rect x="562" y="42" width="178" height="84" fill="#E3ECE7" stroke="#233E33" stroke-width="1"/>
+          <text x="651" y="65" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PASS · 100% PARITY</text>
+          <text x="651" y="87" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">人机能力与门控严格同步</text>
+          <text x="651" y="107" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">允许合并与发布</text>
+
+          <!-- Right Bottom: Fail -->
+          <rect x="562" y="142" width="178" height="80" fill="#F9ECE8" stroke="#8F5638" stroke-width="1"/>
+          <text x="651" y="165" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">FAIL · UNMAPPED ROUTE</text>
+          <text x="651" y="187" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">新增接口漏配 AI 原生工具</text>
+          <text x="651" y="207" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.2">CI 直接阻断提交</text>
+        </svg>
+        <figcaption>图 4：全路由对等性反射不变量——在 CI 阶段自动枚举全部路由并执行四条双射断言，从根本上杜绝新增功能遗漏 AI 原生接口。</figcaption>
+      </figure>
+
+      <pre><code>// 全路由对等性反射不变量伪代码 (CI 门禁)
+for each route in app.enumerateAllRoutes():
+  assert (route in MCP_TOOL_MAP) XOR (route in NOT_FOR_AI_REASONS) // 必配原生工具或显式写明豁免理由
+  if route in MCP_TOOL_MAP:
+    assert resolveToolAction(MCP_TOOL_MAP[route]).matches(route)   // 校验工具底层调用路径与路由严格吻合
+assert collectToolsWhere(confirm == true) == AI_CONFIRM_REGISTRY   // 高风险确认卡清单 100% 闭合</code></pre>
 
       <h3>5.1 三代软件人机交互范式对比</h3>
       <div class="blog-table-wrap">
@@ -1014,38 +1076,71 @@ describe('Human-Agent Capability Parity Invariant', () =&gt; {
       <h2 id="sec-zero-fork-kernel">03. Zero-Fork Kernel: In-Process Loopback &amp; Dual-Track Provenance</h2>
       <p>How do we guarantee that agent permissions and human permissions never drift apart as the codebase evolves?</p>
       <p>Writing a separate authorization layer for AI tools is an architectural anti-pattern that inevitably leads to <strong>Permission Drift</strong>. Instead, we engineered a <strong>Zero-Fork In-Process Loopback Kernel</strong>:</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 284" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Zero-Fork In-Process Loopback and Dual-Track Audit Pipeline">
+          <rect x="1" y="1" width="758" height="282" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Path 1: Human Browser -->
+          <rect x="20" y="22" width="214" height="64" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+          <text x="127" y="43" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PATH A · HUMAN GUI REQUEST</text>
+          <text x="127" y="61" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">Browser sends Bearer Session</text>
+          <text x="127" y="76" text-anchor="middle" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.2">actor = u, via = "human"</text>
+
+          <!-- Path 2: AI In-Process -->
+          <rect x="20" y="106" width="214" height="74" fill="#233E33" stroke="#151C19" stroke-width="1"/>
+          <text x="127" y="127" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PATH B · AI IN-PROCESS INVOKER</text>
+          <text x="127" y="145" text-anchor="middle" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9.5">Zero-network in-memory MCP call</text>
+          <text x="127" y="161" text-anchor="middle" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">Injects 256-bit RAM Secret + act_as = u</text>
+          <text x="127" y="174" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.2">via = "ai" | "ai-confirmed"</text>
+
+          <!-- Path 3: Spoofed External -->
+          <rect x="20" y="200" width="214" height="62" fill="#F9ECE8" stroke="#8F5638" stroke-width="1"/>
+          <text x="127" y="221" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PATH C · SPOOFED NETWORK CALL</text>
+          <text x="127" y="239" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">External client spoofs internal header</text>
+          <text x="127" y="254" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.2">timingSafeEqual mismatch → 401 Blocked</text>
+
+          <!-- Arrows to Gate -->
+          <path d="M234 54 L276 54 L276 112 L302 112" stroke="#233E33" stroke-width="1.3"/>
+          <line x1="234" y1="143" x2="302" y2="143" stroke="#00C472" stroke-width="1.5"/>
+          <line x1="234" y1="231" x2="286" y2="231" stroke="#8F5638" stroke-width="1.3" stroke-dasharray="3 3"/>
+          <text x="294" y="235" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="11" font-weight="700">✕</text>
+
+          <!-- Center: Unified Router & RBAC -->
+          <rect x="302" y="68" width="212" height="132" fill="#EFECE4" stroke="#151C19" stroke-width="1.2"/>
+          <text x="408" y="92" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">UNIFIED ROUTE &amp; RBAC KERNEL</text>
+          <line x1="302" y1="102" x2="514" y2="102" stroke="#C8C1B4"/>
+          <text x="316" y="124" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">1. Constant-time RAM secret check</text>
+          <text x="316" y="144" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">2. 100% shared tenant/project RBAC</text>
+          <text x="316" y="164" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">3. Identical domain state machine</text>
+          <text x="316" y="184" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.4" font-weight="600">Zero duplicate auth · Zero drift</text>
+
+          <line x1="514" y1="134" x2="548" y2="134" stroke="#233E33" stroke-width="1.4"/>
+
+          <!-- Right: Dual-Track Audit Log -->
+          <rect x="548" y="68" width="192" height="132" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+          <text x="644" y="92" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">DUAL-TRACK AUDIT LOG</text>
+          <line x1="548" y1="102" x2="740" y2="102" stroke="#DFDAD0"/>
+          <text x="560" y="124" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.5">actor:       user_id (u)</text>
+          <text x="560" y="144" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5">via:         human | ai |</text>
+          <text x="560" y="158" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5">             ai-confirmed</text>
+          <text x="560" y="178" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.5">confirmedBy: approver_id</text>
+        </svg>
+        <figcaption>Figure 2: Zero-Fork In-Process Loopback Pipeline—MCP tools dispatch into the unified router using an ephemeral RAM secret, sharing 100% of RBAC logic and emitting dual-track provenance logs.</figcaption>
+      </figure>
+
       <ul>
-        <li><strong>Zero Duplicate Authorization Code</strong>: Administrative and domain MCP tools do not implement custom database mutations or bespoke permission checks. Each tool action maps declaratively to an underlying HTTP route and dispatches through an in-process loopback invoker (<code>makeInvoker</code>) directly into the same application router under the user’s identity.</li>
+        <li><strong>Zero Duplicate Authorization Code</strong>: Administrative and domain MCP tools do not implement custom database mutations or bespoke permission checks. Each tool action maps declaratively to an underlying HTTP route and dispatches through an in-process loopback invoker directly into the same application router under the user’s identity.</li>
         <li><strong>Unforgeable Ephemeral In-Memory Secret</strong>: Every in-process invocation carries a 256-bit random secret generated in memory at process startup (never written to disk or exposed over the network) and verified via constant-time comparison (<code>timingSafeEqual</code>). Any external network request attempting to spoof internal delegation headers is immediately rejected as unauthenticated.</li>
-        <li><strong>Dual-Track Provenance Auditing</strong>: Because human and agent operations traverse the exact same domain pipeline, every state mutation writes to a unified audit log enriched with two provenance fields: <code>via</code> (<code>human</code> for direct UI actions, <code>ai</code> for autonomous agent execution, and <code>ai-confirmed</code> for agent-initiated actions approved by the user) and <code>confirmed_by</code>.</li>
+        <li><strong>Dual-Track Provenance Auditing</strong>: Because human and agent operations traverse the exact same domain pipeline, every state mutation writes to a unified audit log enriched with <code>actor</code>, <code>via</code> (<code>human</code> / <code>ai</code> / <code>ai-confirmed</code>), and <code>confirmed_by</code>.</li>
       </ul>
 
-      <pre><code>// Zero-fork in-process loopback invoker &amp; timing-safe delegation check
-export const INTERNAL_SECRET = randomBytes(32).toString('hex')
+      <pre><code>// Concise pseudocode for Zero-Fork In-Process Loopback
+RAM_SECRET = randomBytes(32) // Ephemeral in-memory secret generated at boot
 
-export function internalVia(header: (name: string) =&gt; string | undefined): ViaInfo | 'forged' | null {
-  const secret = header('x-internal-secret')
-  if (secret === undefined) return null
-  const a = Buffer.from(secret), b = Buffer.from(INTERNAL_SECRET)
-  // Constant-time comparison prevents network forgery of internal agent delegation
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return 'forged'
-  const via = header('x-via') === 'ai-confirmed' ? 'ai-confirmed' : 'ai'
-  return { via, confirmedBy: header('x-confirmed-by') ?? null }
-}
-
-// MCP tools invoke the exact same application router in-memory—sharing 100% of RBAC &amp; audit rules
-export function makeInvoker(app: { request: (path: string, init: RequestInit) =&gt; Promise&lt;Response&gt; }): Invoke {
-  return async (user, method, path, body, opts = {}) =&gt; {
-    const headers: Record&lt;string, string&gt; = {
-      'x-internal-secret': INTERNAL_SECRET,
-      'x-act-as-user': user,
-      'x-via': opts.via ?? 'ai',
-    }
-    if (opts.confirmedBy) headers['x-confirmed-by'] = opts.confirmedBy
-    const res = await app.request(path, { method, headers, body: serializeBody(body) })
-    return parseInvokeResult(res)
-  }
-}</code></pre>
+function invokeAsUser(currentUser, method, routePath, payload, via = "ai", confirmedBy = null):
+  headers = { "x-internal-secret": RAM_SECRET, "x-act-as": currentUser, "x-via": via, "x-confirmed-by": confirmedBy }
+  return app.request(routePath, { method, headers, body: payload }) // Dispatches into the exact same RBAC &amp; route kernel</code></pre>
 
       <h2 id="sec-three-tier-boundary">04. The Three-Tier Boundary: Autonomous Ops, Confirmation Cards &amp; Human Sovereignty</h2>
       <p>Giving an agent symmetric capability interfaces does not mean allowing it to unilaterally execute destructive actions. To maximize velocity while preserving human authority, every capability in the system is partitioned into a strict <strong>Three-Tier Governance Boundary</strong>:</p>
@@ -1087,12 +1182,12 @@ export function makeInvoker(app: { request: (path: string, init: RequestInit) =&
           <text x="526" y="166" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.6">• Deleting AI safety guard rules</text>
           <text x="526" y="198" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">→ Explicitly barred at kernel</text>
         </svg>
-        <figcaption>Figure 2: The Three-Tier Governance Boundary—autonomous execution for reversible work, confirmation cards for high-impact mutations, and strict human sovereignty over sign-off and credentials.</figcaption>
+        <figcaption>Figure 3: The Three-Tier Governance Boundary—autonomous execution for reversible work, confirmation cards for high-impact mutations, and strict human sovereignty over sign-off and credentials.</figcaption>
       </figure>
 
       <ol>
-        <li><strong>Tier 1: Reversible Daily Operations $\rightarrow$ Direct Autonomous Execution (<code>via = ai</code>)</strong>. Drafting sections, querying literature, computing statistical tables, renaming documents, moving items to the recoverable trash, and saving version snapshots execute immediately without interrupting the user.</li>
-        <li><strong>Tier 2: High-Impact &amp; Irreversible Operations $\rightarrow$ Agent Proposal + Human Confirmation Card (<code>via = ai-confirmed</code>)</strong>. This covers three sensitive classes: <strong>irreversible deletion (<code>purge</code>, dataset deletion)</strong>, <strong>security and governance mutations (member role changes, project ownership transfer, organization settings)</strong>, and <strong>external organizational identity changes</strong>. When an agent invokes one of these tools:
+        <li><strong>Tier 1: Reversible Daily Operations → Direct Autonomous Execution (<code>via = ai</code>)</strong>. Drafting sections, querying literature, computing statistical tables, renaming documents, moving items to the recoverable trash, and saving version snapshots execute immediately without interrupting the user.</li>
+        <li><strong>Tier 2: High-Impact &amp; Irreversible Operations → Agent Proposal + Human Confirmation Card (<code>via = ai-confirmed</code>)</strong>. This covers three sensitive classes: <strong>irreversible deletion (<code>purge</code>, dataset deletion)</strong>, <strong>security and governance mutations (member role changes, project ownership transfer, organization settings)</strong>, and <strong>external organizational identity changes</strong>. When an agent invokes one of these tools:
           <ul>
             <li>The kernel first checks whether the user possesses the required permission (immediately returning <code>Forbidden</code> if not, never spamming unauthorized confirmation cards) and probes whether the target resource exists;</li>
             <li>If authorized, the kernel records a 24-hour <code>pending_action</code> containing the HTTP method, path, payload, agent rationale, and user-editable fields, pushing an interactive <strong>Confirmation Card</strong> into the conversation stream and global header;</li>
@@ -1109,33 +1204,70 @@ export function makeInvoker(app: { request: (path: string, init: RequestInit) =&
         </li>
       </ol>
 
+      <h3>4.1 Why the Act of Requesting Permission Must Be as Auditable as Execution</h3>
+      <p>Legacy audit logs only record mutations that successfully commit to the database. In human-AI collaborative systems, <strong>auditing the permission request lifecycle itself—what capability the AI requested, why it requested it, and how the human adjudicated it—is just as critical as auditing the final execution</strong>:</p>
+      <ul>
+        <li><strong>Eliminating Ephemeral Modal Blind Spots</strong>: Conventional agent wrappers rely on transient \"Allow?\" popups that vanish the instant a user clicks through, leaving zero forensic record of what parameters were proposed or whether a prompt injection attempted to escalate privileges.</li>
+        <li><strong>Full-Lifecycle Request Provenance (Including Rejections &amp; Denials)</strong>: Every high-stakes capability request initiated by an agent is persisted as a structured record capturing the <strong>delegating principal (<code>actor</code>)</strong>, <strong>target route and parameter snapshot</strong>, <strong>declared rationale (<code>reason</code>)</strong>, and <strong>adjudication outcome (<code>approved</code> / <code>rejected</code> / <code>expired</code> / <code>rbac_denied</code>) alongside <code>confirmed_by</code></strong>. Even rejected or blocked requests remain permanently queryable for security and compliance review.</li>
+      </ul>
+
       <h2 id="sec-parity-invariant">05. Locking the Contract: Automated Route-to-Tool Parity Invariants</h2>
       <p>Architectural principles decay quickly if they rely solely on developer discipline. If an engineer adds a new HTTP endpoint for a UI button but forgets to expose the corresponding MCP tool, the agent becomes blind to that feature.</p>
-      <p>To make Capability Parity an unbreakable system invariant, our continuous integration pipeline runs an automated <strong>Route-to-Tool Parity Reflection Test</strong> on every commit:</p>
+      <p>To make Capability Parity an unbreakable system invariant, our continuous integration pipeline runs an automated <strong>Route-to-Tool Parity Reflection Verifier</strong> on every commit:</p>
 
-      <pre><code>// Compile-time &amp; CI reflection invariant enforcing 100% Human-Agent Parity
-describe('Human-Agent Capability Parity Invariant', () =&gt; {
-  it('verifies every HTTP route maps to an MCP tool or declares a NOT_FOR_AI reason', async () =&gt; {
-    const routes = enumerateAllApiRoutes(app)
-    const registeredMap = { ...DOMAIN_PARITY, ...ADMIN_PARITY }
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Compile-Time and CI Route-to-Tool Parity Invariant Verifier">
+          <rect x="1" y="1" width="758" height="254" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
 
-    // 1. Completeness: any new route missing both an MCP tool and a NOT_FOR_AI justification fails CI
-    expect(routes.filter(r =&gt; !registeredMap[r] &amp;&amp; !NOT_FOR_AI[r])).toEqual([])
+          <!-- Left: Auto-Enumerated Routes -->
+          <rect x="20" y="34" width="188" height="188" fill="#F2EFE9" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="114" y="56" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">ALL APPLICATION ROUTES</text>
+          <line x1="20" y1="66" x2="208" y2="66" stroke="#DFDAD0"/>
+          <text x="32" y="90" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">POST /api/docs/:id/edit</text>
+          <text x="32" y="112" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">POST /api/datasets/:id/table1</text>
+          <text x="32" y="134" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.2">DELETE /api/docs/:id/purge</text>
+          <text x="32" y="156" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.2">POST /api/actions/:id/confirm</text>
+          <text x="32" y="178" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.2">POST /api/auth/login</text>
+          <text x="32" y="204" fill="#151C19" font-family="Inter, sans-serif" font-size="8.8" font-weight="500">Auto-enumerated route set R</text>
 
-    // 2. Mutual Exclusivity: no route may be simultaneously exposed to AI and listed in NOT_FOR_AI
-    expect(Object.keys(registeredMap).filter(r =&gt; NOT_FOR_AI[r])).toEqual([])
+          <line x1="208" y1="128" x2="242" y2="128" stroke="#233E33" stroke-width="1.4"/>
 
-    // 3. Route Bijection: verify each administrative tool action invokes the exact registered HTTP method &amp; path
-    for (const [route, target] of Object.entries(ADMIN_PARITY)) {
-      const [toolName, actionName] = target.split('.')
-      const actionDef = findAdminToolAction(toolName, actionName)
-      expect(matchesRoutePattern(route, actionDef.method, actionDef.path)).toBe(true)
-    }
+          <!-- Center: 4 Reflection Invariant Laws -->
+          <rect x="242" y="22" width="286" height="212" fill="#233E33" stroke="#151C19" stroke-width="1.2"/>
+          <text x="385" y="45" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">CI PARITY REFLECTION VERIFIER</text>
+          <line x1="242" y1="55" x2="528" y2="55" stroke="#395A4C"/>
+          <text x="256" y="80" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">Law 1 · Completeness Assertion</text>
+          <text x="256" y="97" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">∀ r ∈ R: r ∈ MCP_MAP ∨ r ∈ NOT_FOR_AI</text>
+          <text x="256" y="122" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">Law 2 · Strict Disjointness</text>
+          <text x="256" y="139" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">keys(MCP_MAP) ∩ keys(NOT_FOR_AI) = ∅</text>
+          <text x="256" y="164" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">Law 3 · Route Target Bijection</text>
+          <text x="256" y="181" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">tool.action.method &amp; pathRegex === r</text>
+          <text x="256" y="206" fill="#00C472" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">Law 4 · Gate Alignment (confirm === AI_CONFIRM)</text>
 
-    // 4. Confirmation Gate Consistency: tool actions marked confirm: true must match AI_CONFIRM exactly
-    expect(collectConfirmActions(ADMIN_TOOLS)).toEqual(AI_CONFIRM.sort())
-  })
-})</code></pre>
+          <path d="M528 96 L562 96" stroke="#00C472" stroke-width="1.4"/>
+          <path d="M528 176 L562 176" stroke="#8F5638" stroke-width="1.4"/>
+
+          <!-- Right Top: Pass -->
+          <rect x="562" y="42" width="178" height="84" fill="#E3ECE7" stroke="#233E33" stroke-width="1"/>
+          <text x="651" y="65" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PASS · 100% PARITY</text>
+          <text x="651" y="87" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">Human &amp; AI capabilities synced</text>
+          <text x="651" y="107" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">Commit approved for merge</text>
+
+          <!-- Right Bottom: Fail -->
+          <rect x="562" y="142" width="178" height="80" fill="#F9ECE8" stroke="#8F5638" stroke-width="1"/>
+          <text x="651" y="165" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">FAIL · UNMAPPED ROUTE</text>
+          <text x="651" y="187" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">New UI route missing MCP tool</text>
+          <text x="651" y="207" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.2">CI blocks build immediately</text>
+        </svg>
+        <figcaption>Figure 4: Automated Route-to-Tool Parity Verifier—enumerating every application route in CI and enforcing four bijection laws so no feature ever ships without its AI-native counterpart.</figcaption>
+      </figure>
+
+      <pre><code>// Concise pseudocode for the CI Route-to-Tool Parity Invariant
+for each route in app.enumerateAllRoutes():
+  assert (route in MCP_TOOL_MAP) XOR (route in NOT_FOR_AI_REASONS) // Every route must map to MCP or declare an exemption
+  if route in MCP_TOOL_MAP:
+    assert resolveToolAction(MCP_TOOL_MAP[route]).matches(route)   // Tool action must invoke the exact route pattern
+assert collectToolsWhere(confirm == true) == AI_CONFIRM_REGISTRY   // High-risk confirmation registry stays 100% synced</code></pre>
 
       <h3>5.1 Comparing Three Generations of Software Architecture</h3>
       <div class="blog-table-wrap">
@@ -1189,300 +1321,667 @@ describe('Human-Agent Capability Parity Invariant', () =&gt; {
     slug: 'aegis-os-transactional-agent-kernel',
     num: '03',
     category: 'aegis-os',
-    category_label_zh: 'AEGIS OS · 智能体内核',
-    category_label_en: 'AEGIS OS · RUST KERNEL',
+    category_label_zh: 'AEGIS OS · 版本与协作范式',
+    category_label_en: 'AEGIS OS · COLLABORATION PARADIGM',
     date: '2026-11-02',
     reading_time_zh: '16 分钟深读',
     reading_time_en: '16 min read',
-    title_zh: 'Aegis OS 架构解构：用 Rust 构建 0.42ms 写时复制影子工作区与 AAP-1.0 人类签名租约内核',
-    title_en: 'Inside Aegis OS: Building a Transactional Multi-Tenant Agent Kernel in Rust with 0.42ms CoW Workspaces & AAP-1.0 Ed25519 Leases',
-    subtitle_zh: '消除自治编程智能体 90.7%–97.9% 的权限确认弹窗疲劳，同时以写时复制影子工作区、四级 LCS 三路归并与双层内核沙箱实现 0% 静默覆写与 0% 越狱率。',
-    subtitle_en: 'Eliminating 90.7%–97.9% of authorization prompts in autonomous coding agents via Copy-on-Write shadow workspaces, 4-tier LCS 3-way auto-merge, dual kernel sandboxing, and offline Ed25519 capability leases.',
-    summary_zh: '当多个自治智能体并发修改同一个代码仓库时，开发者往往陷入“每步弹窗点到手麻（授权疲劳）”与“开启全自动模式导致代码被静默覆写”的两难困境。本文深入解析 Aegis OS（aegis-os）的五大 Rust 核心 Crate：如何用 APFS clonefile / Linux FICLONE 实现毫秒级影子工作区派生，如何用四级 LCS Diff3 实现 98.7% 自动无冲突归并，以及如何通过 AAP-1.0 离线 Ed25519 人类签名租约重塑人机信任边界。',
-    summary_en: 'When multiple autonomous agents concurrently mutate a repository, developers face a painful dilemma between constant permission prompts (authorization fatigue) and reckless live-tree overwrites. This monograph dissects Aegis OS (aegis-os) across its five Rust crates: millisecond CoW shadow workspaces via APFS clonefile and Linux FICLONE, 98.7% conflict-free 4-tier LCS Diff3 auto-merge, Seatbelt/Bubblewrap kernel confinement, and AAP-1.0 Ed25519 capability leases.',
-    keywords_zh: 'Aegis OS, aegis-os, 智能体操作系统, 写时复制, APFS clonefile, 权限疲劳, AAP-1.0, Ed25519 租约, Rust',
-    keywords_en: 'Aegis OS, aegis-os, Agent Operating System, Copy-on-Write Workspace, APFS clonefile, Authorization Fatigue, AAP-1.0, Ed25519 Lease, Rust',
-    tags_zh: ['Rust 智能体内核', '0.42ms CoW 派生', 'AAP-1.0 签名租约', '98.7% 三路归并'],
-    tags_en: ['Rust Agent Kernel', '0.42ms CoW Fork', 'AAP-1.0 Ed25519 Leases', '98.7% LCS Auto-Merge'],
+    title_zh: '超越 Git 分支：面向人机与多智能体协作的影子工作区、文件锁与事务归并范式',
+    title_en: 'Beyond Git Feature Branches: Shadow Workspaces, Advisory File Claims, and Transactional Auto-Merge for Human-Agent Collaboration',
+    subtitle_zh: '为什么“每个功能拉一个 Git 分支、最后硬解合并冲突”的模式在多 Agent 时代失灵了？通过 0.42ms 主干锚定影子工作区、事前租约文件锁、内嵌信箱实时通信与四级 LCS 自动三路归并，重塑人机与多智能体版本管理。',
+    subtitle_en: 'Why the classic "checkout a feature branch and resolve merge conflicts later" workflow breaks down under multi-agent concurrency—and how 0.42ms trunk-anchored Copy-on-Write shadow workspaces, TTL file claims, piggybacked IPC, and 4-tier LCS auto-merge replace branch ceremonies.',
+    summary_zh: '传统的 Git Feature Branch 工作流是为“人类天级、低频、异步开发”设计的：每开一个特性就要切换分支或拷贝沉重的 Worktree，且不同分支在隔离状态下盲改，直到最后合并时才集中引爆代码冲突。当 1 名人类开发者与 3–5 个自治智能体在同一个代码库上以秒级频率协同演进时，Git 分支模式会陷入环境割裂与合并地狱。本文提出一套全新的人机与多智能体版本协作范式：（1）主干锚定的 0.42ms 写时复制影子工作区；（2）从“事后解冲突”转向“事前防撞”的 TTL 文件认领锁；（3）零轮询内嵌信箱实时协同通信；（4）带沙箱测试预检门的四级 LCS 连续微事务归并。',
+    summary_en: 'Git feature branches were designed for slow, asynchronous human development: every feature requires switching branches or duplicating worktrees, while collaborators edit blindly in isolation until merge conflicts explode at pull-request time. When one human and multiple autonomous agents collaborate on the same codebase at second-by-second cadence, branch workflows collapse into environment fragmentation and merge hell. This monograph introduces a post-branch collaboration paradigm: (1) 0.42ms trunk-anchored Copy-on-Write shadow workspaces, (2) proactive TTL file claims that prevent collisions before edits begin, (3) zero-polling piggybacked IPC coordination, and (4) continuous micro-transactions powered by 4-tier LCS auto-merge and sandboxed pre-commit verification.',
+    keywords_zh: '版本管理范式, 影子工作区, Copy-on-Write, 文件锁, 多智能体协作, 人机协作, 四级 LCS 三路归并, Aegis OS, Git 分支替代',
+    keywords_en: 'Version Control Paradigm, Copy-on-Write Shadow Workspace, File Claims, Multi-Agent Collaboration, Human-Agent Collaboration, 4-Tier LCS Auto-Merge, Aegis OS',
+    tags_zh: ['超越 Git 分支', '0.42ms 影子工作区', '事前文件认领锁', '98.7% 自动三路归并'],
+    tags_en: ['Beyond Git Branches', '0.42ms Shadow Workspace', 'Proactive File Claims', '98.7% LCS Auto-Merge'],
     stats: [
-      { val: '0.42ms', lbl_zh: 'CoW 影子工作区派生', lbl_en: 'CoW Metadata Fork' },
-      { val: '97.9%', lbl_zh: '授权弹窗消除率', lbl_en: 'Prompt Reduction' },
-      { val: '98.7%', lbl_zh: '四级 LCS 自动归并', lbl_en: '4-Tier LCS Auto-Merge' },
+      { val: '0.42ms', lbl_zh: '写时复制影子派生', lbl_en: 'CoW Shadow Fork' },
+      { val: '0', lbl_zh: '事前文件锁冲突踩踏', lbl_en: 'Mid-Flight Collisions' },
+      { val: '98.7%', lbl_zh: '四级 LCS 无冲突归并', lbl_en: '4-Tier LCS Auto-Merge' },
     ],
     repo_url: 'https://github.com/heurion-org/aegis-os',
     paper_url: 'https://github.com/heurion-org/aegis-os/blob/main/paper/main.pdf',
     toc: [
-      { id: 'sec-auth-fatigue', zh: '01. 授权疲劳与并发踩踏：当前 Agent 运行时的两大死结', en: '01. Authorization Fatigue & Concurrent Tree Corruption' },
-      { id: 'sec-cow-vfs', zh: '02. 投机执行与写时复制影子工作区（aos-vfs）', en: '02. Speculative Execution & Copy-on-Write Shadow Workspaces (aos-vfs)' },
-      { id: 'sec-lcs-merge', zh: '03. 四级 LCS Diff3 三路结构化归并与沙箱预检门', en: '03. 4-Tier LCS Diff3 Auto-Merge & Sandboxed Pre-Commit Verification' },
-      { id: 'sec-aap-leases', zh: '04. AAP-1.0 协议与离线 Ed25519 人类能力租约（aos-policy）', en: '04. AAP-1.0 & Offline Ed25519 Human Capability Leases (aos-policy)' },
-      { id: 'sec-aegis-eval', zh: '05. 28,087 次真实工具调用与 80 项红队攻防评测', en: '05. Empirical Evaluation: 28,087 Tool Calls & 80 Red-Team Vectors' },
+      { id: 'sec-git-bottleneck', zh: '01. 为什么传统的 Git Feature Branch 模式在多 Agent 时代失灵了？', en: '01. Why Git Feature Branches Break Down in the Multi-Agent Era' },
+      { id: 'sec-cow-shadow', zh: '02. 主干锚定的写时复制影子工作区：0.42ms 免分支隔离', en: '02. Trunk-Anchored Copy-on-Write Shadow Workspaces: 0.42ms Branchless Isolation' },
+      { id: 'sec-claim-ipc', zh: '03. 从“事后解冲突”到“事前防撞”：租约文件锁与内嵌信箱协同', en: '03. From Late Conflict Resolution to Proactive Prevention: File Claims & Piggybacked IPC' },
+      { id: 'sec-micro-commit', zh: '04. 连续微事务落地：四级 LCS 自动三路归并与预检门', en: '04. Continuous Micro-Transactions: 4-Tier LCS Auto-Merge & Verification Gate' },
+      { id: 'sec-permission-audit', zh: '05. 为什么 AI 申请权限必须具备“全链路可审计性”？', en: '05. Why AI Permission Requests Must Be End-to-End Auditable' },
     ],
     body_zh: `
-      <h2 id="sec-auth-fatigue">01. 授权疲劳与并发踩踏：当前 Agent 运行时的两大死结</h2>
-      <p>今天的主流编程智能体（Claude Code、Cursor、Gemini CLI、Codex）默认直接运行在宿主机的真实工作目录（Host Working Tree）之上。由于每一次 <code>write_file</code> 或 <code>bash</code> 调用都会立刻产生不可逆的宿主机副作用，工具设计者被迫将安全判断推给人类开发者——每执行一条命令就弹出一个确认框。</p>
-      <p>我们在对真实多智能体开发会话的统计中发现：这种“写前逐条弹窗”模式会导致严重的<strong>授权疲劳（Authorization Fatigue）</strong>——人类开发者在连续点击十几次 Approve 后会陷入机械性盲点，或者干脆开启 <code>--dangerously-skip-permissions</code>。更糟糕的是，当 3 个子智能体（Subagents）并发在同一个目录上工作时，一个智能体的半成品修改会直接污染另一个智能体的编译环境，引发灾难性的并发踩踏。</p>
-
-      <div class="blog-callout">
-        <div class="blog-callout-title">Aegis OS 的核心洞察：把“写前逐次审批”重构为“写时复制投机执行 + 提交时事务级归并”</div>
-        <p>就像现代数据库用 MVCC（多版本并发控制）替代全局表锁一样，<strong>Aegis OS (<code>aegis-os</code>)</strong> 将智能体的日常文件读写与沙箱编译全部下放到零成本的<strong>写时复制影子工作区（Copy-on-Write Shadow Workspace）</strong>中实现<strong>免弹窗投机执行（Zero-Prompt Speculative Execution）</strong>，仅在将变更真正提交回宿主机（<code>workspace_commit</code>）或跨出安全边界时进行密码学租约校验。</p>
-      </div>
-
-      <h2 id="sec-cow-vfs">02. 投机执行与写时复制影子工作区（<code>aos-vfs</code>）</h2>
-      <p>Aegis OS 采用纯 Rust 编写，底层由五大核心 Crate 构成：<code>aos-vfs</code>（事务型写时复制虚拟文件系统）、<code>aos-sandbox</code>（macOS Seatbelt + Linux Bubblewrap 双层内核沙箱）、<code>aos-policy</code>（五阶段策略与 Ed25519 租约引擎）、<code>aos-ipc</code>（事件驱动 A2A 消息与路径声明总线）以及 <code>aos-egress</code>（L7 零信任密钥注入与出站 DLP）。</p>
-
-      <figure class="blog-figure">
-        <svg viewBox="0 0 760 270" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Aegis OS 事务型写时复制与三路归并架构图">
-          <rect x="1" y="1" width="758" height="268" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
-          <rect x="24" y="88" width="144" height="92" fill="#F2EFE9" stroke="#233E33" stroke-width="1.2"/>
-          <text x="96" y="118" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">HOST REPOSITORY</text>
-          <text x="96" y="140" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="11" font-weight="500">Base Snapshot (T₀)</text>
-          <text x="96" y="160" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, monospace" font-size="8.8">APFS clonefile / FICLONE</text>
-
-          <path d="M168 134 L204 134 L216 58 L236 58" stroke="#233E33" stroke-width="1.2"/>
-          <line x1="168" y1="134" x2="236" y2="134" stroke="#233E33" stroke-width="1.2"/>
-          <path d="M168 134 L204 134 L216 210 L236 210" stroke="#233E33" stroke-width="1.2"/>
-
-          <rect x="236" y="28" width="234" height="60" fill="#FDFCF9" stroke="#C8C1B4"/>
-          <text x="353" y="52" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">Agent 01 · CoW Shadow (0.42ms)</text>
-          <text x="353" y="72" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, monospace" font-size="8.5">Zero-Prompt fs_edit + Seatbelt proc_exec</text>
-
-          <rect x="236" y="104" width="234" height="60" fill="#E3ECE7" stroke="#233E33"/>
-          <text x="353" y="128" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">Agent 02 · CoW Shadow (0.42ms)</text>
-          <text x="353" y="148" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5">coord_claim + Speculative Test Run</text>
-
-          <rect x="236" y="180" width="234" height="60" fill="#FDFCF9" stroke="#C8C1B4"/>
-          <text x="353" y="204" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">Agent 03 · CoW Shadow (0.42ms)</text>
-          <text x="353" y="224" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, monospace" font-size="8.5">Isolated Upper Layer + Read-Only Deps</text>
-
-          <path d="M470 58 L496 58 L508 134 L532 134" stroke="#233E33" stroke-width="1.2"/>
-          <line x1="470" y1="134" x2="532" y2="134" stroke="#233E33" stroke-width="1.2"/>
-          <path d="M470 210 L496 210 L508 134 L532 134" stroke="#233E33" stroke-width="1.2"/>
-
-          <rect x="532" y="72" width="204" height="124" fill="#233E33" stroke="#151C19"/>
-          <text x="634" y="100" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">WORKSPACE_COMMIT GATE</text>
-          <line x1="532" y1="110" x2="736" y2="110" stroke="#395A4C"/>
-          <text x="634" y="132" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="9">1. Auto-Rebase vs Host</text>
-          <text x="634" y="150" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="9">2. 4-Tier LCS Diff3 (98.7%)</text>
-          <text x="634" y="168" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="9">3. Sandboxed verify_cmd</text>
-          <text x="634" y="184" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9">4. Ed25519 Lease Atomic Land</text>
-        </svg>
-        <figcaption>图 2：Aegis OS 基于写时复制影子工作区（CoW Shadow Workspace）的多智能体并发投机执行与四阶段原子提交流水线。</figcaption>
-      </figure>
-
-      <p>当一个智能体会话启动时，<code>aos-vfs</code> 利用操作系统原生的块级写时复制系统调用——macOS APFS 上的 <code>clonefile(2)</code> 与 Linux XFS/Btrfs/OverlayFS 上的 <code>ioctl_ficlone(2)</code>——为该智能体派生一个独立的影子工作区：</p>
+      <h2 id="sec-git-bottleneck">01. 为什么传统的 Git Feature Branch 模式在多 Agent 时代失灵了？</h2>
+      <p>在过去二十年里，软件工程的版本管理几乎完全等同于 <strong>Git 分支工作流（Feature Branch Workflow）</strong>：每开发一个新特性，工程师就拉取一条独立的 <code>feature/xxx</code> 分支，在各自的分支上开发数小时乃至数天，最后发起 Pull Request 并集中处理合并冲突。这套模式非常契合<strong>“低频、异步的人类协作”</strong>。</p>
+      <p>然而，当开发模式演进为<strong>“1 名人类架构师 + 3 到 5 个并发 AI Agent 在同一个代码库上高频推进”</strong>时，传统的 Git 分支模式暴露出了三个根本性的结构缺陷：</p>
       <ul>
-        <li><strong>毫秒级零拷贝派生</strong>：元数据树克隆仅需 <strong>0.42 ms</strong>，完整代码库 CoW 派生在 macOS 上仅需 <strong>6.3 ms</strong>（Linux <strong>15.6 ms</strong>），比传统的 <code>cp -R</code> 快 <strong>66 倍</strong>，且未修改文件占用 <strong>0 字节</strong>额外磁盘空间。</li>
-        <li><strong>只读重型依赖自动穿透</strong>：类似 <code>node_modules</code>、<code>.venv</code>、<code>target</code> 等数 GB 的构建缓存通过内核沙箱只读绑定挂载（Read-Only Bind Link）直接复用，同时阻止智能体篡改供应链依赖。</li>
-        <li><strong>零弹窗投机执行</strong>：在影子工作区内，<code>fs_read</code>、<code>fs_write</code>、<code>fs_edit</code> 以及受 Seatbelt/Bubblewrap 内核强制约束的 <code>proc_exec</code> 均为 <strong>Zero-Prompt</strong>——因为无论智能体如何修改或运行测试，宿主机真实目录始终保持 100% 纯净。</li>
+        <li><strong>滞后的盲改与冲突大爆炸（Late Conflict Discovery）</strong>：Git 分支的设计哲学是“先隔离盲改，最后事后合并”。两个分支在演化过程中彼此完全不可见——Agent A 与 Agent B 可能在各自的分支里同时重构同一个核心接口长达二十分钟，直到最后执行 <code>git merge / rebase</code> 时才炸出满屏的 <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code> 冲突标记。让大模型去手动解复杂的三路冲突不仅消耗海量上下文 Token，而且极易在解冲突时引入隐蔽的语法破坏或逻辑丢失。</li>
+        <li><strong>切分支与多 Worktree 的沉重环境负担</strong>：同一个工作目录无法同时检出多个分支；而如果为每个并发 Agent 创建独立的 <code>git worktree</code>，要么需要重复拷贝或编译数 GB 的重型依赖（如 <code>node_modules</code>、Python 虚拟环境、Rust <code>target</code> 缓存），要么无法感知人类开发者此时此刻正在 IDE 里修改、但尚未 <code>git commit</code> 的未提交状态。</li>
+        <li><strong>缺乏实时状态协同与通信语义</strong>：Git 只能记录已经发生的历史快照，无法表达“谁此时正在锁定修改哪几个文件”，也无法在两个并发 Agent 之间实时同步“我刚刚改完了后端 Schema，你现在可以拉取并对接前端组件了”。</li>
       </ul>
 
-      <h2 id="sec-lcs-merge">03. 四级 LCS Diff3 三路结构化归并与沙箱预检门</h2>
-      <p>当多个智能体（或人类开发者在 IDE 中）并发修改同一个仓库甚至同一个文件时，<code>workspace_commit</code> 绝不会简单地用新文件覆盖旧文件，而是基于智能体派生时的 Base 快照 $O$、当前宿主机最新状态 $H$ 与智能体影子状态 $A$，执行<strong>四级渐进式三路归并（4-Tier LCS Diff3 Auto-Merge）</strong>：</p>
+      <div class="blog-callout">
+        <div class="blog-callout-title">新一代人机与多 Agent 协作的核心转变</div>
+        <p>在高频人机共编时代，我们不再让每个 Agent 拉取长生命周期的隔离 Git 分支去“盲改并祈祷合并时不冲突”，而是转向<strong>主干锚定的实时事务协作模式（Trunk-Anchored Shadow Collaboration）</strong>：通过<strong>毫秒级写时复制影子工作区</strong>隔离未完成状态，用<strong>事前租约文件锁</strong>代替事后解冲突，用<strong>内嵌事件信箱</strong>实现 Agent 间秒级对齐，并以<strong>带测试预检的连续微事务</strong>直接合入主干。</p>
+      </div>
+
+      <h2 id="sec-cow-shadow">02. 主干锚定的写时复制影子工作区：0.42ms 免分支隔离</h2>
+      <p>为了让人和多个 Agent 能够在同一个仓库主干上同时工作而互不污染，我们在底层虚拟文件系统层用<strong>写时复制影子工作区（Copy-on-Write Shadow Workspace）</strong>取代了传统的 Git 分支切换：</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 286" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="传统 Git 分支盲改模式与主干锚定写时复制影子工作区对比架构图">
+          <rect x="1" y="1" width="758" height="284" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Left Side: Legacy Git Branch Model -->
+          <rect x="20" y="22" width="332" height="242" fill="#F9ECE8" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="186" y="45" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">LEGACY · GIT FEATURE BRANCHES &amp; WORKTREES</text>
+          <line x1="20" y1="55" x2="352" y2="55" stroke="#DFDAD0"/>
+
+          <rect x="40" y="72" width="128" height="38" fill="#FAF8F4" stroke="#8F5638"/>
+          <text x="104" y="95" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.6">feat/agent-a (Blind)</text>
+
+          <rect x="204" y="72" width="128" height="38" fill="#FAF8F4" stroke="#8F5638"/>
+          <text x="268" y="95" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.6">feat/agent-b (Blind)</text>
+
+          <path d="M104 110 L164 150" stroke="#8F5638" stroke-width="1.3"/>
+          <path d="M268 110 L208 150" stroke="#8F5638" stroke-width="1.3"/>
+
+          <rect x="52" y="150" width="268" height="94" fill="#FAF8F4" stroke="#8F5638" stroke-dasharray="4 3"/>
+          <text x="186" y="174" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9" font-weight="700">✕ LATE MERGE CONFLICT EXPLOSION</text>
+          <text x="66" y="196" fill="#4A534E" font-family="Inter, sans-serif" font-size="9.2">• 分支间彼此不可见，重复修改同一文件</text>
+          <text x="66" y="214" fill="#4A534E" font-family="Inter, sans-serif" font-size="9.2">• 每个 Worktree 重复占用 GB 级构建缓存</text>
+          <text x="66" y="232" fill="#8F5638" font-family="Inter, sans-serif" font-size="9.2">• 合并时产生大量 &lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD 冲突标记</text>
+
+          <!-- Right Side: Trunk-Anchored CoW Shadow Model -->
+          <rect x="376" y="22" width="364" height="242" fill="#F2EFE9" stroke="#233E33" stroke-width="1.2"/>
+          <text x="558" y="45" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">NEW · TRUNK-ANCHORED COW SHADOW WORKSPACES</text>
+          <line x1="376" y1="55" x2="740" y2="55" stroke="#C8C1B4"/>
+
+          <!-- Host Trunk + Read-only Deps -->
+          <rect x="394" y="70" width="328" height="46" fill="#233E33" stroke="#151C19"/>
+          <text x="558" y="90" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.8" font-weight="600">LIVE HOST TRUNK (Human IDE + Shared Read-Only Cache)</text>
+          <text x="558" y="106" text-anchor="middle" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9">人类直接在主干工作 · 零拷贝共享重型依赖库</text>
+
+          <line x1="448" y1="116" x2="448" y2="142" stroke="#233E33" stroke-width="1.3"/>
+          <line x1="558" y1="116" x2="558" y2="142" stroke="#233E33" stroke-width="1.3"/>
+          <line x1="668" y1="116" x2="668" y2="142" stroke="#233E33" stroke-width="1.3"/>
+
+          <!-- 3 CoW Shadows -->
+          <rect x="394" y="142" width="102" height="58" fill="#E3ECE7" stroke="#233E33"/>
+          <text x="445" y="163" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">Shadow A (0.42ms)</text>
+          <text x="445" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">独立修改与跑测</text>
+
+          <rect x="507" y="142" width="102" height="58" fill="#E3ECE7" stroke="#233E33"/>
+          <text x="558" y="163" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">Shadow B (0.42ms)</text>
+          <text x="558" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">独立修改与跑测</text>
+
+          <rect x="620" y="142" width="102" height="58" fill="#E3ECE7" stroke="#233E33"/>
+          <text x="671" y="163" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">Shadow C (0.42ms)</text>
+          <text x="671" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">独立修改与跑测</text>
+
+          <rect x="394" y="214" width="328" height="34" fill="#EFECE4" stroke="#151C19"/>
+          <text x="558" y="235" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">✓ 事前文件锁防撞 + 实时 IPC 通知 + 连续微事务自动归并</text>
+        </svg>
+        <figcaption>图 1：传统 Git 分支“隔离盲改、事后冲突爆炸”模式（左）与主干锚定写时复制影子工作区模式（右）的架构对比。</figcaption>
+      </figure>
+
+      <ul>
+        <li><strong>0.42 ms 零拷贝瞬间派生</strong>：当一个 Agent 启动任务时，无需执行任何 Git 分支操作，内核直接利用操作系统底层的块级写时复制原语（macOS APFS <code>clonefile</code> / Linux <code>FICLONE</code>）在 <strong>0.42 ms</strong> 内派生出一个与当前宿主机主干完全一致的影子工作区。未修改的文件与宿主机共享同一份磁盘物理块（0 字节额外占用）。</li>
+        <li><strong>人类主干零打扰与重型缓存穿透</strong>：人类开发者始终留在自己熟悉的宿主机主目录和 IDE 中工作；而每个 Agent 在各自的写时复制上层视图（Upper Layer）中修改代码并执行沙箱编译。数 GB 的重型依赖目录通过内核只读挂载直接穿透复用，既免去了重复安装，又防止了某个 Agent 写坏半成品代码时导致其他 Agent 或人类 IDE 编译报错。</li>
+        <li><strong>毫秒级增量变基（Auto-Refresh）</strong>：每当有人类或其他 Agent 将新变更合入宿主机主干时，其余正在运行的影子工作区会在下一次工具调用时自动对未触碰的文件完成增量快进同步（Fast-Forward Refresh），让所有 Agent 时刻站在最新的主干基线上工作。</li>
+      </ul>
+
+      <h2 id="sec-claim-ipc">03. 从“事后解冲突”到“事前防撞”：租约文件锁与内嵌信箱协同</h2>
+      <p>既然所有 Agent 都围绕同一个主干协同工作，如何避免两个 Agent 同时去改同一个文件？答案是把协同控制从 Git 的“合并时事后报错”前移到<strong>“动笔前事前认领 + 实时事件广播”</strong>：</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 276" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="多智能体文件认领锁与内嵌信箱实时接力时序图">
+          <rect x="1" y="1" width="758" height="274" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Lifelines Headers -->
+          <rect x="28" y="20" width="144" height="36" fill="#233E33" stroke="#151C19"/>
+          <text x="100" y="42" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">AGENT 01 (Backend)</text>
+
+          <rect x="224" y="20" width="160" height="36" fill="#EFECE4" stroke="#151C19"/>
+          <text x="304" y="42" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">COORD &amp; IPC BUS</text>
+
+          <rect x="436" y="20" width="144" height="36" fill="#F2EFE9" stroke="#233E33"/>
+          <text x="508" y="42" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">AGENT 02 (Frontend)</text>
+
+          <rect x="616" y="20" width="118" height="36" fill="#F2EFE9" stroke="#8F5638"/>
+          <text x="675" y="42" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">HUMAN IDE</text>
+
+          <!-- Vertical Lifelines -->
+          <line x1="100" y1="56" x2="100" y2="256" stroke="#C8C1B4" stroke-dasharray="3 3"/>
+          <line x1="304" y1="56" x2="304" y2="256" stroke="#151C19" stroke-width="1.2"/>
+          <line x1="508" y1="56" x2="508" y2="256" stroke="#C8C1B4" stroke-dasharray="3 3"/>
+          <line x1="675" y1="56" x2="675" y2="256" stroke="#C8C1B4" stroke-dasharray="3 3"/>
+
+          <!-- Step 1: Claim -->
+          <line x1="100" y1="82" x2="304" y2="82" stroke="#233E33" stroke-width="1.4"/>
+          <text x="202" y="75" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.3" font-weight="600">1. coord_claim([schema, api], ttl)</text>
+
+          <!-- Step 2: Piggyback Broadcast to Agent 02 -->
+          <line x1="304" y1="104" x2="508" y2="104" stroke="#8F5638" stroke-width="1.3"/>
+          <text x="406" y="97" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.2">2. _inbox: [coord] schema locked by A1</text>
+
+          <!-- Step 3: Agent 02 pivots to UI files -->
+          <rect x="442" y="114" width="132" height="28" fill="#E3ECE7" stroke="#233E33"/>
+          <text x="508" y="132" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="8.6">3. 避开锁区，认领并改 UI 层</text>
+
+          <!-- Step 4: Agent 01 Commits & Releases -->
+          <line x1="100" y1="164" x2="304" y2="164" stroke="#00C472" stroke-width="1.5"/>
+          <text x="202" y="157" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.3" font-weight="600">4. commit(verify) + coord_release</text>
+
+          <!-- Step 5: IPC Hand-off & Auto-Rebase -->
+          <line x1="304" y1="194" x2="508" y2="194" stroke="#233E33" stroke-width="1.4"/>
+          <text x="406" y="187" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">5. ipc_send("Schema ready") + Auto-Rebase</text>
+
+          <line x1="304" y1="224" x2="675" y2="224" stroke="#233E33" stroke-width="1.3"/>
+          <text x="490" y="217" text-anchor="middle" fill="#4A534E" font-family="Inter, sans-serif" font-size="8.6">6. 连续微事务原子落盘，人类 IDE 实时看到已验证代码</text>
+        </svg>
+        <figcaption>图 2：从“事后解冲突”到“事前防撞与实时接力”——通过租约文件锁（<code>coord_claim</code>）与内嵌事件信箱实现多智能体零踩踏协作。</figcaption>
+      </figure>
+
       <ol>
-        <li><strong>Tier 1（Fast-Forward 哈希直通）</strong>：若 $H = O$（宿主机未被并发触碰），直接以原子重命名落地；</li>
-        <li><strong>Tier 2（行级标准 LCS Diff3）</strong>：基于最长公共子序列（Longest Common Subsequence）自动合并不重叠的代码块修改；</li>
-        <li><strong>Tier 3（空白与缩进归一化归并）</strong>：消解因代码格式化器（Prettier / rustfmt）引发的伪冲突；</li>
-        <li><strong>Tier 4（邻接无交集 Hunk 细粒度拼接）</strong>：对同一函数内相邻但互不覆盖的修改块进行亚行级验证合并，如遇真实语义冲突则立即中止并精确报告冲突行号，实现 <strong>0% 静默覆写</strong> 与 <strong>98.7% 自动无冲突归并率</strong>。</li>
+        <li><strong>带 TTL 的租约文件锁（Advisory Path Claims）</strong>：任何 Agent 在修改文件前，先通过协调总线声明锁定目标文件集合（<code>coord_claim(paths, ttl_ms)</code>）。单调递增的锁版本号（<code>claims_version</code>）确保全局视图严格一致；如果某个 Agent 意外卡死，TTL 到期后锁会自动释放，绝不造成死锁。</li>
+        <li><strong>零轮询的内嵌信箱通知（Piggybacked Reactive Inbox）</strong>：Agent 之间不需要写循环轮询锁状态。每一次常规工具调用的返回包中，内核都会自动附带一个极轻量的 <code>_inbox</code> 字段，实时推送其他同伴的锁声明、锁释放事件或点对点协同消息（<code>ipc_send / ipc_request</code>）。</li>
+        <li><strong>主动避让与无缝接力</strong>：如图 2 所示，当 Agent 02 从信箱得知 Agent 01 已锁定后端接口文件时，它会主动避开该文件，转而认领并编写前端视图层；一旦 Agent 01 提交代码并释放锁，Agent 02 立即收到信箱通知，自动将新接口同步进自己的影子工作区并完成前后端对接——<strong>全过程 0 次代码冲突，也无需人类在两个窗口之间复制粘贴传话</strong>。</li>
       </ol>
-      <p>在三路归并生成暂存树（Staging Tree）后、真正写入宿主机之前，<code>workspace_commit</code> 还支持在内核沙箱中自动执行预检命令（如 <code>verify_cmd: "cargo check --offline"</code>），若编译或测试失败则自动回滚本次提交。</p>
 
-      <h2 id="sec-aap-leases">04. AAP-1.0 协议与离线 Ed25519 人类能力租约（<code>aos-policy</code>）</h2>
-      <p>为了在“团队级治理”与“开发者零打扰”之间取得最优解，我们制定了 <strong>AAP-1.0（Aegis Application Protocol）</strong>。当智能体请求提交代码或执行高敏动作时，人类审批者（通过本地 CLI、Web 控制台或移动端审批页 <code>/aegis-cloud/approve</code>）签发的不再是一次性的“Yes”，而是一张经过 <strong>Ed25519 私钥签名、可离线验证的能力租约（Capability Lease）</strong>：</p>
-      <pre><code>{
-  "lease_id": "lease-9f41c8a2",
-  "org_id": "heurion2",
-  "agent_id": "agy-87a204",
-  "scope": {
-    "actions": ["workspace_commit"],
-    "resources": ["apps/platform/src/http/routes/**"],
-    "verify_required": true
-  },
-  "expires_at_ms": 1793812000000,
-  "approver_pubkey": "ed25519:7f8a...3c91",
-  "signature": "ed25519:4b12e9...d08a"
-}</code></pre>
-      <p>只要后续提交落在租约限定的路径 Glob 与时间窗口内，且通过沙箱预检，<code>aos-policy</code> 即可在本地以微秒级完成 Ed25519 验签并放行，无需再次打断人类。</p>
+      <pre><code>// 多智能体事前认领锁与内嵌信箱协同伪代码
+claim_result = coord_claim(agent_id, paths = ["api.ts", "schema.ts"], ttl_ms = 600000)
+if claim_result.rejected is not empty:
+  // 发现同伴已锁定目标文件 → 主动切换至正交子任务或等待信箱唤醒
+  pivotToOrthogonalModule(claim_result.active_holder)
+else:
+  editInCowShadow(paths)                     // 在隔离的 0.42ms 影子工作区内安全修改
+  workspace_commit(paths, verify_cmd = "test") // 预检通过后原子合入主干
+  coord_release(agent_id, paths)             // 释放文件锁并通过内嵌信箱自动唤醒同伴</code></pre>
 
-      <h2 id="sec-aegis-eval">05. 28,087 次真实工具调用与 80 项红队攻防评测</h2>
-      <p>我们在涵盖 28,087 次真实多智能体工具调用与 80 项对抗性红队攻击向量的基准测试中对 Aegis OS 进行了全面评测：</p>
+      <h2 id="sec-micro-commit">04. 连续微事务落地：四级 LCS 自动三路归并与预检门</h2>
+      <p>即便有了文件锁，有时人类开发者也会在 IDE 中顺手修改某个公共配置文件，或者两个 Agent 需要修改同一个大型路由表里的不同区块。为了彻底告别手动解 Git 冲突的痛苦，我们将每次提交设计为<strong>带自动三路归并与沙箱预检的原子微事务（<code>workspace_commit</code>）</strong>：</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 250" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="四级 LCS 三路自动归并与沙箱预检门原子提交流水线">
+          <rect x="1" y="1" width="758" height="248" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Left: 3 Inputs -->
+          <rect x="20" y="24" width="166" height="56" fill="#F2EFE9" stroke="#C8C1B4"/>
+          <text x="103" y="46" text-anchor="middle" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">BASE SNAPSHOT (O)</text>
+          <text x="103" y="65" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9">影子工作区派生时刻基线</text>
+
+          <rect x="20" y="96" width="166" height="56" fill="#F2EFE9" stroke="#233E33"/>
+          <text x="103" y="118" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">LIVE HOST TRUNK (H)</text>
+          <text x="103" y="137" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9">含人类 IDE 与同伴最新提交</text>
+
+          <rect x="20" y="168" width="166" height="56" fill="#E3ECE7" stroke="#233E33"/>
+          <text x="103" y="190" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">AGENT SHADOW (A)</text>
+          <text x="103" y="209" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="9">当前智能体影子工作区修改</text>
+
+          <path d="M186 52 L222 104" stroke="#4A534E" stroke-width="1.2"/>
+          <line x1="186" y1="124" x2="222" y2="124" stroke="#233E33" stroke-width="1.3"/>
+          <path d="M186 196 L222 144" stroke="#233E33" stroke-width="1.3"/>
+
+          <!-- Center: 4-Tier LCS Diff3 -->
+          <rect x="222" y="32" width="276" height="184" fill="#233E33" stroke="#151C19" stroke-width="1.2"/>
+          <text x="360" y="55" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">4-TIER LCS DIFF3 AUTO-MERGE</text>
+          <line x1="222" y1="65" x2="498" y2="65" stroke="#395A4C"/>
+          <text x="236" y="90" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 1 · Fast-Forward (H == O 直通)</text>
+          <text x="236" y="116" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 2 · 行级标准 LCS 非重叠区块合并</text>
+          <text x="236" y="142" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 3 · 缩进与空白符归一化消解伪冲突</text>
+          <text x="236" y="168" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 4 · 邻接无交集子块拼接 (98.7% 成功)</text>
+          <text x="236" y="196" fill="#E3ECE7" font-family="Inter, sans-serif" font-size="8.8">真冲突立即中止报错 · 0% 静默覆盖人类代码</text>
+
+          <line x1="498" y1="124" x2="532" y2="124" stroke="#00C472" stroke-width="1.5"/>
+
+          <!-- Right: Pre-Commit Gate & Atomic Land -->
+          <rect x="532" y="32" width="208" height="184" fill="#EFECE4" stroke="#151C19" stroke-width="1.2"/>
+          <text x="636" y="55" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PRE-COMMIT VERIFY GATE</text>
+          <line x1="532" y1="65" x2="740" y2="65" stroke="#C8C1B4"/>
+          <text x="546" y="92" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">1. 在归并后的暂存树上运行</text>
+          <text x="546" y="110" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.4">   verify_cmd (单元测试/类型检查)</text>
+          <text x="546" y="138" fill="#8F5638" font-family="Inter, sans-serif" font-size="9.5">2. 若测试失败 → 自动回滚本次提交</text>
+          <text x="546" y="166" fill="#233E33" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">3. 若测试全绿 → 原子重命名落盘</text>
+          <text x="546" y="194" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2">主干永远处于 100% 可编译状态</text>
+        </svg>
+        <figcaption>图 3：连续微事务提交流水线——基于 <i>O / H / A</i> 三态执行四级 LCS 自动归并，并在沙箱测试预检通过后原子写入宿主机主干。</figcaption>
+      </figure>
+
+      <p>与 Git PR 动辄攒上千行代码再一次性人工合并不同，Agent 每完成一个小闭环（通常 3–5 分钟），就会调用 <code>workspace_commit</code> 触发上述流水线：</p>
+      <ul>
+        <li><strong>98.7% 自动无冲突合入，0% 静默覆写</strong>：即使人类刚刚在 IDE 里改了同一个文件的上半部分，而 Agent 改了下半部分，四级 LCS 归并器也会在毫秒内将两者的修改无损融合，绝不会像普通文件写入那样把人类的修改冲掉。</li>
+        <li><strong>主干永远可编译（Always-Green Trunk）</strong>：归并后的代码必须先在隔离暂存树里跑过 <code>verify_cmd</code>（如单元测试与静态类型检查），才会真正落入宿主机主目录。任何破坏构建的半成品修改都会被拦在影子层内自愈重试。</li>
+      </ul>
+
+      <h2 id="sec-permission-audit">05. 为什么 AI 申请权限必须具备“全链路可审计性”？</h2>
+      <p>在讨论人机与多智能体协作时，还有一个常被忽视却至关重要的基础设施命题：<strong>当 AI 向系统或人类申请权限时，这一“权限申请行为”本身必须是结构化且全链路可审计的（End-to-End Auditable Permission Requests）。</strong></p>
+      <p>观察现有的 AI 编程工具，其权限交互往往停留在两个极端：</p>
+      <ul>
+        <li><strong>“弹窗点完即焚”的瞬态授权</strong>：每当 Agent 要写文件、跑脚本或请求外网时，界面弹出一个临时对话框（“Allow command?”），人类迫于频繁打断往往习惯性点击同意。弹窗消失后，系统没有留下任何关于“AI 当时为什么申请该权限、携带了什么参数、影响了哪些文件边界”的结构化审计记录；</li>
+        <li><strong>“跳过权限检查”的黑盒裸奔</strong>：为了免受弹窗干扰，许多开发者直接开启免审批模式，导致一旦发生越权修改、敏感配置泄露或破坏性落盘，事后完全无法界定是哪一个 Agent、在哪一步推理中发起了越界请求。</li>
+      </ul>
+      <p>在我们的影子工作区协作范式中，我们通过<strong>“沙箱内免打扰投机执行 + 跨边界结构化权限申请账本”</strong>彻底解决了“效率与可审计性”的矛盾：Agent 在自己的写时复制影子层内可以零弹窗全速编码，但<strong>每一次跨越安全或协作边界的权限申请</strong>——无论是申请锁定核心文件（<code>coord_claim</code>）、申请将影子变更合入宿主机主干（生成 <code>esc-*</code> 提权审批单）、申请受控外网访问（<code>egress_http_request</code>），还是申请读写长期记忆（<code>memory_policy_evaluate</code>）——都会被内核强制铸造为一条不可篡改的<strong>权限申请审计记录</strong>：</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AI 权限申请与跨边界提权全链路可审计账本架构图">
+          <rect x="1" y="1" width="758" height="254" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Stage 1: Boundary Request -->
+          <rect x="20" y="30" width="166" height="196" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+          <text x="103" y="54" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.8" font-weight="600">1. PERMISSION REQUEST</text>
+          <line x1="20" y1="64" x2="186" y2="64" stroke="#DFDAD0"/>
+          <text x="32" y="88" fill="#151C19" font-family="Inter, sans-serif" font-size="9.2" font-weight="600">跨边界权限申请类型：</text>
+          <text x="32" y="110" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">• coord_claim (路径租约锁)</text>
+          <text x="32" y="130" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">• workspace_commit (落盘)</text>
+          <text x="32" y="150" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">• egress_http (受控外网)</text>
+          <text x="32" y="170" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">• memory_policy (记忆授权)</text>
+          <text x="32" y="202" fill="#4A534E" font-family="Inter, sans-serif" font-size="8.5">沙箱内零打扰 · 跨边界必留痕</text>
+
+          <line x1="186" y1="128" x2="216" y2="128" stroke="#233E33" stroke-width="1.4"/>
+
+          <!-- Stage 2: Escalation Ticket -->
+          <rect x="216" y="30" width="248" height="196" fill="#233E33" stroke="#151C19" stroke-width="1.2"/>
+          <text x="340" y="54" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.8" font-weight="600">2. STRUCTURED ESCALATION TICKET</text>
+          <line x1="216" y1="64" x2="464" y2="64" stroke="#395A4C"/>
+          <text x="230" y="88" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.3">ticket_id:   "esc-89e2a50b"</text>
+          <text x="230" y="108" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.3">principal:   agent_id + user_id</text>
+          <text x="230" y="128" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.3">scope:       精确文件路径 / 域名 / TTL</text>
+          <text x="230" y="148" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.3">rationale:   AI 声明的申请意图与上下文</text>
+          <text x="230" y="168" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.3">evidence:    Unified Diff + 预检测试结果</text>
+          <text x="230" y="200" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="8.6" font-weight="500">申请参数与证据载荷在审批前即不可变</text>
+
+          <line x1="464" y1="128" x2="494" y2="128" stroke="#00C472" stroke-width="1.4"/>
+
+          <!-- Stage 3: Hash-Chained Audit Ledger -->
+          <rect x="494" y="30" width="246" height="196" fill="#EFECE4" stroke="#151C19" stroke-width="1.2"/>
+          <text x="617" y="54" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.8" font-weight="600">3. HASH-CHAINED AUDIT LEDGER</text>
+          <line x1="494" y1="64" x2="740" y2="64" stroke="#C8C1B4"/>
+          <text x="508" y="88" fill="#151C19" font-family="Inter, sans-serif" font-size="9.2" font-weight="600">全状态裁决永久归档：</text>
+          <text x="508" y="110" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">✓ APPROVED (含审批人/策略规则)</text>
+          <text x="508" y="130" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.2">✕ REJECTED / DENIED (越界试探留痕)</text>
+          <text x="508" y="150" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.2">⏱ EXPIRED (超时自动失效记录)</text>
+          <text x="508" y="174" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2">prev_hash → sha256(ticket + decision)</text>
+          <text x="508" y="202" fill="#233E33" font-family="Inter, sans-serif" font-size="8.6" font-weight="600">支持事后合规回放、越权归因与一键回滚</text>
+        </svg>
+        <figcaption>图 4：AI 权限申请的可审计性架构——将每一次跨边界权限请求（文件锁、主干提交、外网与记忆访问）固化为带证据载荷与防篡改哈希链的审批账本。</figcaption>
+      </figure>
+
+      <pre><code>// 跨边界权限申请与防篡改哈希链审计伪代码
+function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rationale, evidence):
+  ticket = { id: newEscalationId(), agent_id, user_id, perm_type, scope, rationale, evidence, ts: now() }
+  decision = evaluatePolicyOrAwaitHuman(ticket) // 评估策略白名单或生成待人类审批单 (APPROVED | REJECTED | DENIED)
+  audit_ledger.appendHashChained({ ...ticket, decision, prev_hash: audit_ledger.tailHash() }) // 无论准驳均永久留痕
+  return decision</code></pre>
+
+      <h3>5.1 三种版本管理与多智能体协作模式对比</h3>
       <div class="blog-table-wrap">
         <table class="blog-table">
           <thead>
             <tr>
-              <th>评测指标 (Benchmark Dimension)</th>
-              <th>传统逐次确认模式 (Standard CLI)</th>
-              <th>全放行无沙箱模式 (YOLO Mode)</th>
-              <th>Aegis OS (CoW + AAP-1.0 Leases)</th>
+              <th>协作维度 (Dimension)</th>
+              <th>传统 Git Feature Branch / Worktree</th>
+              <th>多 Agent 直接共用同一目录</th>
+              <th>影子工作区 + 文件锁 + 事务归并</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>打断式弹窗率 (Interruptive Prompt Rate)</td>
-              <td>12.04% (3,381 次弹窗)</td>
-              <td>0.00%（完全裸奔）</td>
-              <td><strong>0.25% (消除 97.9% 授权弹窗)</strong></td>
+              <td>工作区隔离启动耗时与空间开销</td>
+              <td>400+ ms 拷贝 / 数 GB 重复构建缓存</td>
+              <td>0 ms（完全无隔离）</td>
+              <td><strong>0.42 ms 元数据派生 / 0 B 重复占用</strong></td>
             </tr>
             <tr>
-              <td>多智能体并发修改静默覆写率</td>
-              <td>41.2%（后写覆盖先写）</td>
-              <td>41.2%</td>
-              <td><strong>0.0% (98.7% 四级 LCS 自动归并)</strong></td>
+              <td>并发修改冲突发现时机</td>
+              <td>事后滞后发现（PR Merge 时冲突爆炸）</td>
+              <td>无感知（后写静默覆盖先写，41.2% 丢失）</td>
+              <td><strong>事前租约文件锁防撞（<code>coord_claim</code>）</strong></td>
             </tr>
             <tr>
-              <td>工作区克隆耗时 (macOS APFS / Linux)</td>
-              <td>418.0 ms (<code>cp -R</code>)</td>
-              <td>N/A（直接改原目录）</td>
-              <td><strong>6.3 ms / 15.6 ms (66× 加速)</strong></td>
+              <td>智能体间接口与进度对齐方式</td>
+              <td>靠人类在不同分支/窗口间手动传话</td>
+              <td>轮询本地文件或频繁相撞</td>
+              <td><strong>零轮询内嵌事件信箱（Piggybacked IPC）</strong></td>
             </tr>
             <tr>
-              <td>80 项红队沙箱逃逸与密钥窃取攻击成功率 (ASR)</td>
-              <td>37.5%（获批后共享宿主环境）</td>
-              <td>100.0%</td>
-              <td><strong>0.0% ASR (0.0% 误报率)</strong></td>
+              <td>同一文件非重叠并发修改处理</td>
+              <td>需手动 checkout / rebase 解冲突</td>
+              <td>直接覆盖丢失</td>
+              <td><strong>四级 LCS 自动三路归并（98.7% 自动合入）</strong></td>
             </tr>
             <tr>
-              <td>多智能体协作通信开销 (Push IPC vs 轮询)</td>
-              <td>轮询文件锁 / 高冲突</td>
-              <td>无协调</td>
-              <td><strong>-99.4% IPC 轮询开销</strong></td>
+              <td>宿主机主干构建健康度保障</td>
+              <td>合并前未知，合并后常破坏主干</td>
+              <td>某个 Agent 写到一半即导致全局编译崩溃</td>
+              <td><strong>提交前强制跑通 <code>verify_cmd</code> 沙箱预检门</strong></td>
+            </tr>
+            <tr>
+              <td>AI 申请权限与变更的可审计性</td>
+              <td>仅记录最终 Git Commit，无权限申请过程</td>
+              <td>一次性弹窗点完即焚，或跳过权限无日志</td>
+              <td><strong>全链路结构化权限申请单与哈希链审计账本</strong></td>
             </tr>
           </tbody>
         </table>
       </div>
+      <p>通过将<strong>写时复制影子工作区</strong>、<strong>事前租约文件锁</strong>、<strong>事件驱动信箱通信</strong>、<strong>四级 LCS 微事务归并</strong>以及<strong>全链路可审计的权限申请机制</strong>融为一体，我们将人类与多智能体的协作从沉重滞后的“Git 分支合并仪式”解放出来，真正实现了像多人协同文档一样丝滑、却又具备严格事务级安全与可追溯保障的代码共编体验。</p>
     `,
     body_en: `
-      <h2 id="sec-auth-fatigue">01. Authorization Fatigue &amp; Concurrent Tree Corruption</h2>
-      <p>Modern coding agents (Claude Code, Cursor, Gemini CLI, Codex) operate directly on the developer’s live host working tree by default. Because every <code>write_file</code> or <code>bash</code> invocation immediately mutates host state, tool builders push safety decisions onto the human operator via synchronous confirmation prompts.</p>
-      <p>Across real multi-agent engineering sessions, this per-write prompting model induces severe <strong>Authorization Fatigue</strong>: developers either habituate into rubber-stamping prompts without inspection or enable <code>--dangerously-skip-permissions</code>. Worse still, when multiple subagents execute concurrently on a shared directory, one agent’s partial edits corrupt another agent’s build state, causing silent data loss and race conditions.</p>
-
-      <div class="blog-callout">
-        <div class="blog-callout-title">Core Insight of Aegis OS: Replace Per-Write Prompts with Speculative CoW Execution + Transactional Commit</div>
-        <p>Just as modern databases replaced coarse table locks with MVCC (Multi-Version Concurrency Control), <strong>Aegis OS (<code>aegis-os</code>)</strong> isolates everyday agent file mutations and test executions inside zero-cost <strong>Copy-on-Write Shadow Workspaces</strong> for <strong>Zero-Prompt Speculative Execution</strong>—enforcing cryptographic human-in-the-loop leases only at the transactional <code>workspace_commit</code> boundary.</p>
-      </div>
-
-      <h2 id="sec-cow-vfs">02. Speculative Execution &amp; Copy-on-Write Shadow Workspaces (<code>aos-vfs</code>)</h2>
-      <p>Written in Rust, Aegis OS comprises five modular kernel crates: <code>aos-vfs</code> (transactional CoW virtual filesystem), <code>aos-sandbox</code> (macOS Seatbelt + Linux Bubblewrap kernel confinement), <code>aos-policy</code> (5-stage evaluator &amp; Ed25519 lease engine), <code>aos-ipc</code> (event-driven A2A mailbox &amp; path claims), and <code>aos-egress</code> (L7 zero-trust secret injection &amp; outbound DLP).</p>
-
-      <figure class="blog-figure">
-        <svg viewBox="0 0 760 270" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Aegis OS Transactional Copy-on-Write and 3-Way Merge Architecture">
-          <rect x="1" y="1" width="758" height="268" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
-          <rect x="24" y="88" width="144" height="92" fill="#F2EFE9" stroke="#233E33" stroke-width="1.2"/>
-          <text x="96" y="118" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">HOST REPOSITORY</text>
-          <text x="96" y="140" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="11" font-weight="500">Base Snapshot (T₀)</text>
-          <text x="96" y="160" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, monospace" font-size="8.8">APFS clonefile / FICLONE</text>
-
-          <path d="M168 134 L204 134 L216 58 L236 58" stroke="#233E33" stroke-width="1.2"/>
-          <line x1="168" y1="134" x2="236" y2="134" stroke="#233E33" stroke-width="1.2"/>
-          <path d="M168 134 L204 134 L216 210 L236 210" stroke="#233E33" stroke-width="1.2"/>
-
-          <rect x="236" y="28" width="234" height="60" fill="#FDFCF9" stroke="#C8C1B4"/>
-          <text x="353" y="52" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">Agent 01 · CoW Shadow (0.42ms)</text>
-          <text x="353" y="72" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, monospace" font-size="8.5">Zero-Prompt fs_edit + Seatbelt proc_exec</text>
-
-          <rect x="236" y="104" width="234" height="60" fill="#E3ECE7" stroke="#233E33"/>
-          <text x="353" y="128" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">Agent 02 · CoW Shadow (0.42ms)</text>
-          <text x="353" y="148" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5">coord_claim + Speculative Test Run</text>
-
-          <rect x="236" y="180" width="234" height="60" fill="#FDFCF9" stroke="#C8C1B4"/>
-          <text x="353" y="204" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">Agent 03 · CoW Shadow (0.42ms)</text>
-          <text x="353" y="224" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, monospace" font-size="8.5">Isolated Upper Layer + Read-Only Deps</text>
-
-          <path d="M470 58 L496 58 L508 134 L532 134" stroke="#233E33" stroke-width="1.2"/>
-          <line x1="470" y1="134" x2="532" y2="134" stroke="#233E33" stroke-width="1.2"/>
-          <path d="M470 210 L496 210 L508 134 L532 134" stroke="#233E33" stroke-width="1.2"/>
-
-          <rect x="532" y="72" width="204" height="124" fill="#233E33" stroke="#151C19"/>
-          <text x="634" y="100" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">WORKSPACE_COMMIT GATE</text>
-          <line x1="532" y1="110" x2="736" y2="110" stroke="#395A4C"/>
-          <text x="634" y="132" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="9">1. Auto-Rebase vs Host</text>
-          <text x="634" y="150" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="9">2. 4-Tier LCS Diff3 (98.7%)</text>
-          <text x="634" y="168" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="9">3. Sandboxed verify_cmd</text>
-          <text x="634" y="184" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9">4. Ed25519 Lease Atomic Land</text>
-        </svg>
-        <figcaption>Figure 2: Aegis OS multi-agent speculative execution in CoW shadow workspaces and 4-stage atomic commit pipeline.</figcaption>
-      </figure>
-
-      <p>When an agent spawns, <code>aos-vfs</code> invokes OS-native copy-on-write primitives—<code>clonefile(2)</code> on macOS APFS and <code>ioctl_ficlone(2)</code> on Linux—to provision an isolated shadow workspace:</p>
+      <h2 id="sec-git-bottleneck">01. Why Git Feature Branches Break Down in the Multi-Agent Era</h2>
+      <p>For the past two decades, version control in software engineering has been synonymous with the <strong>Git Feature Branch workflow</strong>: for every new feature, a developer checks out an isolated <code>feature/xxx</code> branch, works asynchronously for hours or days, and eventually opens a Pull Request to resolve merge conflicts. This model was purpose-built for <strong>low-frequency, asynchronous human collaboration</strong>.</p>
+      <p>However, when the engineering workflow shifts to <strong>one human architect orchestrating 3 to 5 concurrent AI agents mutating the same repository at second-by-second cadence</strong>, the traditional Git branch model hits three fundamental walls:</p>
       <ul>
-        <li><strong>Sub-Millisecond Metadata Fork</strong>: Forking workspace metadata takes <strong>0.42 ms</strong>, and cloning a full repository takes <strong>6.3 ms</strong> on macOS (<strong>15.6 ms</strong> on Linux)—<strong>66× faster</strong> than <code>cp -R</code> with zero duplicate disk blocks for unmodified files.</li>
-        <li><strong>Read-Only Dependency Auto-Linking</strong>: Multi-gigabyte directories such as <code>node_modules</code>, <code>.venv</code>, and <code>target</code> are linked read-only into the sandbox, preventing supply-chain tampering while enabling instant builds.</li>
-        <li><strong>Zero-Prompt Speculative Execution</strong>: Inside the shadow workspace, <code>fs_read</code>, <code>fs_write</code>, <code>fs_edit</code>, and kernel-confined <code>proc_exec</code> require zero user prompts because the host tree remains completely untouched until commit.</li>
+        <li><strong>Blind Divergence &amp; Late Conflict Explosions</strong>: Git branches isolate collaborators by keeping them completely blind to each other’s in-flight edits. Agent A and Agent B may spend twenty minutes refactoring overlapping interfaces on separate branches, only to trigger a massive explosion of <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code> conflict markers at merge time. Forcing an LLM to manually resolve complex Git conflict markers burns enormous context windows and frequently introduces subtle syntax or semantic regressions.</li>
+        <li><strong>Heavyweight Branch Switching &amp; Worktree Fragmentation</strong>: A single working directory cannot check out multiple branches simultaneously. Creating separate <code>git worktree</code> directories for each agent either duplicates multi-gigabyte build caches (<code>node_modules</code>, Python virtual environments, Rust <code>target</code> directories) or leaves agents completely blind to uncommitted edits the human developer is actively making in their IDE.</li>
+        <li><strong>Zero Real-Time Coordination or File-Locking Semantics</strong>: Git records historical snapshots after the fact; it has no native concept of "which agent is actively editing which files right now" or any low-latency messaging channel for agents to hand off updated API contracts in real time.</li>
       </ul>
 
-      <h2 id="sec-lcs-merge">03. 4-Tier LCS Diff3 Auto-Merge &amp; Sandboxed Pre-Commit Verification</h2>
-      <p>Upon <code>workspace_commit</code>, Aegis OS reconciles the agent’s base snapshot $O$, the current live host state $H$, and the agent’s shadow state $A$ via a <strong>4-Tier Longest Common Subsequence (LCS) Diff3 Engine</strong>:</p>
+      <div class="blog-callout">
+        <div class="blog-callout-title">The Paradigm Shift in Human-Agent &amp; Multi-Agent Version Control</div>
+        <p>Instead of spawning long-lived Git feature branches where agents edit blindly and pray for a clean merge later, we shift to <strong>Trunk-Anchored Shadow Collaboration</strong>: isolating in-flight work inside <strong>0.42ms Copy-on-Write shadow workspaces</strong>, replacing late merge conflicts with <strong>proactive TTL file claims</strong>, coordinating hand-offs via <strong>piggybacked reactive IPC</strong>, and landing changes continuously through <strong>4-tier LCS auto-merge micro-transactions</strong>.</p>
+      </div>
+
+      <h2 id="sec-cow-shadow">02. Trunk-Anchored Copy-on-Write Shadow Workspaces: 0.42ms Branchless Isolation</h2>
+      <p>To let a human developer and multiple autonomous agents work on the main trunk simultaneously without corrupting each other’s compiler state, our virtual filesystem replaces Git branch checkouts with <strong>Trunk-Anchored Copy-on-Write (CoW) Shadow Workspaces</strong>:</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 286" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Comparison between Legacy Git Feature Branches and Trunk-Anchored Copy-on-Write Shadow Workspaces">
+          <rect x="1" y="1" width="758" height="284" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Left Side: Legacy Git Branch Model -->
+          <rect x="20" y="22" width="332" height="242" fill="#F9ECE8" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="186" y="45" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">LEGACY · GIT FEATURE BRANCHES &amp; WORKTREES</text>
+          <line x1="20" y1="55" x2="352" y2="55" stroke="#DFDAD0"/>
+
+          <rect x="40" y="72" width="128" height="38" fill="#FAF8F4" stroke="#8F5638"/>
+          <text x="104" y="95" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.6">feat/agent-a (Blind)</text>
+
+          <rect x="204" y="72" width="128" height="38" fill="#FAF8F4" stroke="#8F5638"/>
+          <text x="268" y="95" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.6">feat/agent-b (Blind)</text>
+
+          <path d="M104 110 L164 150" stroke="#8F5638" stroke-width="1.3"/>
+          <path d="M268 110 L208 150" stroke="#8F5638" stroke-width="1.3"/>
+
+          <rect x="52" y="150" width="268" height="94" fill="#FAF8F4" stroke="#8F5638" stroke-dasharray="4 3"/>
+          <text x="186" y="174" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9" font-weight="700">✕ LATE MERGE CONFLICT EXPLOSION</text>
+          <text x="66" y="196" fill="#4A534E" font-family="Inter, sans-serif" font-size="9.2">• Branches evolve blindly; duplicate file edits</text>
+          <text x="66" y="214" fill="#4A534E" font-family="Inter, sans-serif" font-size="9.2">• Multi-GB build caches duplicated per worktree</text>
+          <text x="66" y="232" fill="#8F5638" font-family="Inter, sans-serif" font-size="9.2">• Merge time erupts in &lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD markers</text>
+
+          <!-- Right Side: Trunk-Anchored CoW Shadow Model -->
+          <rect x="376" y="22" width="364" height="242" fill="#F2EFE9" stroke="#233E33" stroke-width="1.2"/>
+          <text x="558" y="45" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">NEW · TRUNK-ANCHORED COW SHADOW WORKSPACES</text>
+          <line x1="376" y1="55" x2="740" y2="55" stroke="#C8C1B4"/>
+
+          <!-- Host Trunk + Read-only Deps -->
+          <rect x="394" y="70" width="328" height="46" fill="#233E33" stroke="#151C19"/>
+          <text x="558" y="90" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.8" font-weight="600">LIVE HOST TRUNK (Human IDE + Shared Read-Only Cache)</text>
+          <text x="558" y="106" text-anchor="middle" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9">Human stays on main tree · Zero-copy shared dependencies</text>
+
+          <line x1="448" y1="116" x2="448" y2="142" stroke="#233E33" stroke-width="1.3"/>
+          <line x1="558" y1="116" x2="558" y2="142" stroke="#233E33" stroke-width="1.3"/>
+          <line x1="668" y1="116" x2="668" y2="142" stroke="#233E33" stroke-width="1.3"/>
+
+          <!-- 3 CoW Shadows -->
+          <rect x="394" y="142" width="102" height="58" fill="#E3ECE7" stroke="#233E33"/>
+          <text x="445" y="163" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">Shadow A (0.42ms)</text>
+          <text x="445" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">Isolated edit &amp; test</text>
+
+          <rect x="507" y="142" width="102" height="58" fill="#E3ECE7" stroke="#233E33"/>
+          <text x="558" y="163" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">Shadow B (0.42ms)</text>
+          <text x="558" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">Isolated edit &amp; test</text>
+
+          <rect x="620" y="142" width="102" height="58" fill="#E3ECE7" stroke="#233E33"/>
+          <text x="671" y="163" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">Shadow C (0.42ms)</text>
+          <text x="671" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">Isolated edit &amp; test</text>
+
+          <rect x="394" y="214" width="328" height="34" fill="#EFECE4" stroke="#151C19"/>
+          <text x="558" y="235" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">✓ Proactive File Claims + Live IPC + Continuous Micro-Merges</text>
+        </svg>
+        <figcaption>Figure 1: Contrasting legacy Git feature branches with blind divergence and late merge conflicts (left) against trunk-anchored Copy-on-Write shadow workspaces (right).</figcaption>
+      </figure>
+
+      <ul>
+        <li><strong>0.42 ms Zero-Copy Forking</strong>: When an agent starts a task, the kernel invokes OS-level copy-on-write primitives (<code>clonefile</code> on macOS APFS / <code>FICLONE</code> on Linux) to provision an isolated shadow workspace in <strong>0.42 ms</strong>. Unmodified files share physical disk blocks with the host (zero extra disk space).</li>
+        <li><strong>Uninterrupted Human IDE &amp; Shared Dependency Caches</strong>: The human developer stays on the main working tree in their IDE while each agent edits and runs tests inside its own CoW upper layer. Multi-gigabyte dependency directories are linked read-only into every shadow workspace, eliminating re-install overhead and ensuring an agent’s half-written syntax error never breaks the human’s IDE or peer agents.</li>
+        <li><strong>Continuous Auto-Refresh</strong>: Whenever the human or a peer agent lands a change onto the host trunk, active shadow workspaces automatically fast-forward their untouched files on the next syscall, keeping every collaborator continuously anchored to the latest trunk state.</li>
+      </ul>
+
+      <h2 id="sec-claim-ipc">03. From Late Conflict Resolution to Proactive Prevention: File Claims &amp; Piggybacked IPC</h2>
+      <p>If all agents operate against the same trunk, how do we prevent two agents from editing the same file simultaneously? We replace Git’s "discover conflicts after the fact" with <strong>proactive advisory file claims and piggybacked event notifications</strong>:</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 276" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Multi-Agent File Claim and Piggybacked IPC Sequence Diagram">
+          <rect x="1" y="1" width="758" height="274" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Lifelines Headers -->
+          <rect x="28" y="20" width="144" height="36" fill="#233E33" stroke="#151C19"/>
+          <text x="100" y="42" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">AGENT 01 (Backend)</text>
+
+          <rect x="224" y="20" width="160" height="36" fill="#EFECE4" stroke="#151C19"/>
+          <text x="304" y="42" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">COORD &amp; IPC BUS</text>
+
+          <rect x="436" y="20" width="144" height="36" fill="#F2EFE9" stroke="#233E33"/>
+          <text x="508" y="42" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">AGENT 02 (Frontend)</text>
+
+          <rect x="616" y="20" width="118" height="36" fill="#F2EFE9" stroke="#8F5638"/>
+          <text x="675" y="42" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">HUMAN IDE</text>
+
+          <!-- Vertical Lifelines -->
+          <line x1="100" y1="56" x2="100" y2="256" stroke="#C8C1B4" stroke-dasharray="3 3"/>
+          <line x1="304" y1="56" x2="304" y2="256" stroke="#151C19" stroke-width="1.2"/>
+          <line x1="508" y1="56" x2="508" y2="256" stroke="#C8C1B4" stroke-dasharray="3 3"/>
+          <line x1="675" y1="56" x2="675" y2="256" stroke="#C8C1B4" stroke-dasharray="3 3"/>
+
+          <!-- Step 1: Claim -->
+          <line x1="100" y1="82" x2="304" y2="82" stroke="#233E33" stroke-width="1.4"/>
+          <text x="202" y="75" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.3" font-weight="600">1. coord_claim([schema, api], ttl)</text>
+
+          <!-- Step 2: Piggyback Broadcast to Agent 02 -->
+          <line x1="304" y1="104" x2="508" y2="104" stroke="#8F5638" stroke-width="1.3"/>
+          <text x="406" y="97" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.2">2. _inbox: [coord] schema locked by A1</text>
+
+          <!-- Step 3: Agent 02 pivots to UI files -->
+          <rect x="442" y="114" width="132" height="28" fill="#E3ECE7" stroke="#233E33"/>
+          <text x="508" y="132" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="8.6">3. Pivots to UI files</text>
+
+          <!-- Step 4: Agent 01 Commits & Releases -->
+          <line x1="100" y1="164" x2="304" y2="164" stroke="#00C472" stroke-width="1.5"/>
+          <text x="202" y="157" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.3" font-weight="600">4. commit(verify) + coord_release</text>
+
+          <!-- Step 5: IPC Hand-off & Auto-Rebase -->
+          <line x1="304" y1="194" x2="508" y2="194" stroke="#233E33" stroke-width="1.4"/>
+          <text x="406" y="187" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">5. ipc_send("Schema ready") + Auto-Rebase</text>
+
+          <line x1="304" y1="224" x2="675" y2="224" stroke="#233E33" stroke-width="1.3"/>
+          <text x="490" y="217" text-anchor="middle" fill="#4A534E" font-family="Inter, sans-serif" font-size="8.6">6. Verified micro-commit lands on host trunk in real time</text>
+        </svg>
+        <figcaption>Figure 2: Proactive collision prevention and real-time hand-off via TTL file claims (<code>coord_claim</code>) and piggybacked IPC notifications.</figcaption>
+      </figure>
+
       <ol>
-        <li><strong>Tier 1 (Fast-Forward Hash Match)</strong>: If $H = O$, changes stage immediately via atomic rename;</li>
-        <li><strong>Tier 2 (Standard Line-Level LCS Diff3)</strong>: Non-overlapping hunks edited concurrently by human or peer agents merge automatically;</li>
-        <li><strong>Tier 3 (Whitespace &amp; Indentation Normalized Merge)</strong>: Resolves false conflicts caused by code formatters;</li>
-        <li><strong>Tier 4 (Adjacent Non-Overlapping Sub-Hunk Splicing)</strong>: Merges adjacent edits within the same block while halting on true semantic collisions—achieving <strong>0% silent overwrites</strong> and a <strong>98.7% conflict-free auto-merge rate</strong>.</li>
+        <li><strong>TTL-Leased File Claims (<code>coord_claim</code>)</strong>: Before modifying any file, an agent claims its target paths on the coordination bus with a bounded TTL. A monotonically increasing <code>claims_version</code> guarantees a consistent global lock table, while automatic TTL expiration prevents deadlocks if an agent stalls.</li>
+        <li><strong>Zero-Polling Piggybacked Inbox (<code>_inbox</code>)</strong>: Agents never waste turns polling for lock updates. Every syscall response automatically piggybacks unread coordination events and peer-to-peer messages (<code>ipc_send / ipc_request</code>).</li>
+        <li><strong>Proactive Pivoting &amp; Seamless Relay</strong>: As shown in Figure 2, when Agent 02 sees that Agent 01 holds the lock on backend schema files, it immediately pivots to claiming and building the frontend components. As soon as Agent 01 commits and releases the lock, Agent 02 receives the wake-up notification, auto-rebases the new schema into its shadow workspace, and completes the integration—with <strong>zero merge conflicts and zero human copy-paste relay</strong>.</li>
       </ol>
-      <p>Before touching the host tree, <code>workspace_commit</code> optionally executes a kernel-sandboxed <code>verify_cmd</code> (e.g., <code>cargo test</code>) against the merged staging tree, aborting the commit if verification fails.</p>
 
-      <h2 id="sec-aap-leases">04. AAP-1.0 &amp; Offline Ed25519 Human Capability Leases (<code>aos-policy</code>)</h2>
-      <p>Under the <strong>Aegis Application Protocol (AAP-1.0)</strong>, human approvals issue cryptographically signed, offline-verifiable <strong>Ed25519 Capability Leases</strong> scoped by organization, agent identity, action, resource glob, and TTL:</p>
-      <pre><code>{
-  "lease_id": "lease-9f41c8a2",
-  "org_id": "heurion2",
-  "agent_id": "agy-87a204",
-  "scope": {
-    "actions": ["workspace_commit"],
-    "resources": ["apps/platform/src/http/routes/**"],
-    "verify_required": true
-  },
-  "expires_at_ms": 1793812000000,
-  "approver_pubkey": "ed25519:7f8a...3c91",
-  "signature": "ed25519:4b12e9...d08a"
-}</code></pre>
+      <pre><code>// Concise pseudocode for Proactive File Claims &amp; Reactive Hand-Off
+claim = coord_claim(agent_id, paths = ["api.ts", "schema.ts"], ttl_ms = 600000)
+if claim.rejected is not empty:
+  // Peer agent holds the lock → pivot to orthogonal files or await inbox wake-up
+  pivotToOrthogonalModule(claim.active_holder)
+else:
+  editInCowShadow(paths)                     // Mutate safely inside isolated 0.42ms shadow workspace
+  workspace_commit(paths, verify_cmd = "test") // Land verified micro-transaction onto host trunk
+  coord_release(agent_id, paths)             // Release lock &amp; notify peers via piggybacked inbox</code></pre>
 
-      <h2 id="sec-aegis-eval">05. Empirical Evaluation: 28,087 Tool Calls &amp; 80 Red-Team Vectors</h2>
+      <h2 id="sec-micro-commit">04. Continuous Micro-Transactions: 4-Tier LCS Auto-Merge &amp; Verification Gate</h2>
+      <p>What happens when a human developer edits the top of a shared configuration file in their IDE while an agent edits the bottom of that same file in its shadow workspace? Instead of dumping raw conflict markers, <code>workspace_commit</code> executes a <strong>4-Tier Longest Common Subsequence (LCS) Diff3 Auto-Merge coupled with a Sandboxed Verification Gate</strong>:</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 250" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="4-Tier LCS Diff3 Auto-Merge and Sandboxed Pre-Commit Verification Pipeline">
+          <rect x="1" y="1" width="758" height="248" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Left: 3 Inputs -->
+          <rect x="20" y="24" width="166" height="56" fill="#F2EFE9" stroke="#C8C1B4"/>
+          <text x="103" y="46" text-anchor="middle" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">BASE SNAPSHOT (O)</text>
+          <text x="103" y="65" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9">State at shadow fork time</text>
+
+          <rect x="20" y="96" width="166" height="56" fill="#F2EFE9" stroke="#233E33"/>
+          <text x="103" y="118" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">LIVE HOST TRUNK (H)</text>
+          <text x="103" y="137" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9">Includes human IDE &amp; peer edits</text>
+
+          <rect x="20" y="168" width="166" height="56" fill="#E3ECE7" stroke="#233E33"/>
+          <text x="103" y="190" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">AGENT SHADOW (A)</text>
+          <text x="103" y="209" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="9">Current agent’s shadow edits</text>
+
+          <path d="M186 52 L222 104" stroke="#4A534E" stroke-width="1.2"/>
+          <line x1="186" y1="124" x2="222" y2="124" stroke="#233E33" stroke-width="1.3"/>
+          <path d="M186 196 L222 144" stroke="#233E33" stroke-width="1.3"/>
+
+          <!-- Center: 4-Tier LCS Diff3 -->
+          <rect x="222" y="32" width="276" height="184" fill="#233E33" stroke="#151C19" stroke-width="1.2"/>
+          <text x="360" y="55" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.2" font-weight="600">4-TIER LCS DIFF3 AUTO-MERGE</text>
+          <line x1="222" y1="65" x2="498" y2="65" stroke="#395A4C"/>
+          <text x="236" y="90" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 1 · Fast-Forward (when H == O)</text>
+          <text x="236" y="116" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 2 · Line-level LCS non-overlapping merge</text>
+          <text x="236" y="142" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 3 · Whitespace &amp; indentation normalized</text>
+          <text x="236" y="168" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 4 · Adjacent sub-hunk splice (98.7% rate)</text>
+          <text x="236" y="196" fill="#E3ECE7" font-family="Inter, sans-serif" font-size="8.8">Aborts on true collision · 0% silent overwrite</text>
+
+          <line x1="498" y1="124" x2="532" y2="124" stroke="#00C472" stroke-width="1.5"/>
+
+          <!-- Right: Pre-Commit Gate & Atomic Land -->
+          <rect x="532" y="32" width="208" height="184" fill="#EFECE4" stroke="#151C19" stroke-width="1.2"/>
+          <text x="636" y="55" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PRE-COMMIT VERIFY GATE</text>
+          <line x1="532" y1="65" x2="740" y2="65" stroke="#C8C1B4"/>
+          <text x="546" y="92" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">1. Executes sandboxed</text>
+          <text x="546" y="110" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.4">   verify_cmd on merged tree</text>
+          <text x="546" y="138" fill="#8F5638" font-family="Inter, sans-serif" font-size="9.5">2. If tests fail → auto-abort</text>
+          <text x="546" y="166" fill="#233E33" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">3. If green → atomic host land</text>
+          <text x="546" y="194" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2">Host trunk stays 100% buildable</text>
+        </svg>
+        <figcaption>Figure 3: Continuous micro-transaction commit pipeline—reconciling <i>O / H / A</i> states via 4-tier LCS auto-merge and enforcing a sandboxed verification gate before atomic host landing.</figcaption>
+      </figure>
+
+      <h2 id="sec-permission-audit">05. Why AI Permission Requests Must Be End-to-End Auditable</h2>
+      <p>A critical yet frequently overlooked pillar of human-agent collaboration is <strong>the auditability of AI permission requests themselves (End-to-End Auditable Permission Escalations)</strong>.</p>
+      <p>Current agentic coding tools typically fall into one of two broken extremes:</p>
+      <ul>
+        <li><strong>Ephemeral Modal Fatigue</strong>: The agent interrupts the developer with transient \"Allow command?\" dialogs for every file edit or shell execution. Once clicked, the dialog vanishes without recording a structured audit trail of <em>why</em> the agent requested the permission, what parameters were attached, or what scope was affected;</li>
+        <li><strong>Unlogged Auto-Approve Mode</strong>: Frustrated by constant prompts, developers enable flags that skip permission checks entirely—leaving zero forensic attribution when an agent modifies sensitive configuration files or attempts unauthorized operations.</li>
+      </ul>
+      <p>Our shadow workspace architecture resolves the tension between velocity and governance through <strong>Zero-Prompt Speculative Execution Inside the Sandbox + Structured Permission Escalation Ledgers at the Boundary</strong>. While an agent works freely inside its isolated Copy-on-Write layer, <strong>every permission request that crosses a collaboration or security boundary</strong>—claiming shared file locks (<code>coord_claim</code>), committing shadow changes to the host trunk (<code>esc-*</code> escalation tickets), requesting external network egress (<code>egress_http_request</code>), or accessing long-term memory namespaces (<code>memory_policy_evaluate</code>)—is recorded as an immutable <strong>Permission Escalation Ticket</strong>:</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="End-to-End Auditable AI Permission Escalation and Hash-Chained Ledger">
+          <rect x="1" y="1" width="758" height="254" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Stage 1: Boundary Request -->
+          <rect x="20" y="30" width="166" height="196" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+          <text x="103" y="54" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.8" font-weight="600">1. PERMISSION REQUEST</text>
+          <line x1="20" y1="64" x2="186" y2="64" stroke="#DFDAD0"/>
+          <text x="32" y="88" fill="#151C19" font-family="Inter, sans-serif" font-size="9.2" font-weight="600">Boundary Capabilities:</text>
+          <text x="32" y="110" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">• coord_claim (file locks)</text>
+          <text x="32" y="130" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">• workspace_commit (trunk)</text>
+          <text x="32" y="150" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">• egress_http (network)</text>
+          <text x="32" y="170" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">• memory_policy (consent)</text>
+          <text x="32" y="202" fill="#4A534E" font-family="Inter, sans-serif" font-size="8.5">Zero prompts in CoW · Audited at boundary</text>
+
+          <line x1="186" y1="128" x2="216" y2="128" stroke="#233E33" stroke-width="1.4"/>
+
+          <!-- Stage 2: Escalation Ticket -->
+          <rect x="216" y="30" width="248" height="196" fill="#233E33" stroke="#151C19" stroke-width="1.2"/>
+          <text x="340" y="54" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.8" font-weight="600">2. STRUCTURED ESCALATION TICKET</text>
+          <line x1="216" y1="64" x2="464" y2="64" stroke="#395A4C"/>
+          <text x="230" y="88" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.3">ticket_id:   "esc-89e2a50b"</text>
+          <text x="230" y="108" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.3">principal:   agent_id + user_id</text>
+          <text x="230" y="128" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.3">scope:       Exact paths / domain / TTL</text>
+          <text x="230" y="148" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.3">rationale:   Declared intent &amp; task context</text>
+          <text x="230" y="168" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.3">evidence:    Unified Diff + verify exit code</text>
+          <text x="230" y="200" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="8.6" font-weight="500">Immutable request &amp; evidence snapshot</text>
+
+          <line x1="464" y1="128" x2="494" y2="128" stroke="#00C472" stroke-width="1.4"/>
+
+          <!-- Stage 3: Hash-Chained Audit Ledger -->
+          <rect x="494" y="30" width="246" height="196" fill="#EFECE4" stroke="#151C19" stroke-width="1.2"/>
+          <text x="617" y="54" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.8" font-weight="600">3. HASH-CHAINED AUDIT LEDGER</text>
+          <line x1="494" y1="64" x2="740" y2="64" stroke="#C8C1B4"/>
+          <text x="508" y="88" fill="#151C19" font-family="Inter, sans-serif" font-size="9.2" font-weight="600">All Adjudication Outcomes Logged:</text>
+          <text x="508" y="110" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.2">✓ APPROVED (approver / policy rule)</text>
+          <text x="508" y="130" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.2">✕ REJECTED / DENIED (blocked probe)</text>
+          <text x="508" y="150" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.2">⏱ EXPIRED (TTL timeout record)</text>
+          <text x="508" y="174" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2">prev_hash → sha256(ticket + decision)</text>
+          <text x="508" y="202" fill="#233E33" font-family="Inter, sans-serif" font-size="8.6" font-weight="600">Forensic replay, attribution &amp; rollback</text>
+        </svg>
+        <figcaption>Figure 4: End-to-end auditable AI permission requests—capturing every boundary capability request (file claims, trunk commits, network egress, memory access) in a hash-chained ledger.</figcaption>
+      </figure>
+
+      <pre><code>// Concise pseudocode for Auditable Boundary Permission Requests
+function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rationale, evidence):
+  ticket = { id: newEscalationId(), agent_id, user_id, perm_type, scope, rationale, evidence, ts: now() }
+  decision = evaluatePolicyOrAwaitHuman(ticket) // Evaluates policy rules or awaits human approval (APPROVED | REJECTED | DENIED)
+  audit_ledger.appendHashChained({ ...ticket, decision, prev_hash: audit_ledger.tailHash() }) // Logged regardless of outcome
+  return decision</code></pre>
+
+      <h3>5.1 Comparing Version Control &amp; Multi-Agent Collaboration Paradigms</h3>
       <div class="blog-table-wrap">
         <table class="blog-table">
           <thead>
             <tr>
-              <th>Benchmark Dimension</th>
-              <th>Standard Per-Write Prompting</th>
-              <th>Unconfined Auto-Approve (YOLO)</th>
-              <th>Aegis OS (CoW + AAP-1.0 Leases)</th>
+              <th>Collaboration Dimension</th>
+              <th>Git Feature Branches / Worktrees</th>
+              <th>Shared-Directory Multi-Agent</th>
+              <th>Shadow Workspaces + File Claims + Auto-Merge</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Interruptive Prompt Rate (IPR)</td>
-              <td>12.04% (3,381 prompts)</td>
-              <td>0.00% (unconfined)</td>
-              <td><strong>0.25% (97.9% prompt reduction)</strong></td>
+              <td>Workspace Isolation Overhead</td>
+              <td>400+ ms copy / multi-GB cache duplication</td>
+              <td>0 ms (no isolation)</td>
+              <td><strong>0.42 ms CoW fork / 0 B duplicate blocks</strong></td>
             </tr>
             <tr>
-              <td>Concurrent Edit Silent Overwrite Rate</td>
-              <td>41.2% (last-writer-wins)</td>
-              <td>41.2%</td>
-              <td><strong>0.0% (98.7% 4-Tier LCS auto-merge)</strong></td>
+              <td>Conflict Discovery Timing</td>
+              <td>Late (explodes at PR merge time)</td>
+              <td>Blind (41.2% silent last-writer overwrites)</td>
+              <td><strong>Proactive pre-edit TTL file claims (<code>coord_claim</code>)</strong></td>
             </tr>
             <tr>
-              <td>Workspace Provisioning Latency (macOS / Linux)</td>
-              <td>418.0 ms (<code>cp -R</code>)</td>
-              <td>N/A (mutates host directly)</td>
-              <td><strong>6.3 ms / 15.6 ms (66× speedup)</strong></td>
+              <td>Cross-Agent Contract Hand-Off</td>
+              <td>Manual human relay across branches</td>
+              <td>File polling or race conditions</td>
+              <td><strong>Zero-polling piggybacked IPC mailbox</strong></td>
             </tr>
             <tr>
-              <td>Red-Team Escape &amp; Exfiltration ASR (80 Vectors)</td>
-              <td>37.5% (post-approval host access)</td>
-              <td>100.0%</td>
-              <td><strong>0.0% ASR (0.0% false positives)</strong></td>
+              <td>Concurrent Edits in Same File</td>
+              <td>Manual rebase &amp; conflict marker resolution</td>
+              <td>Silent overwrite</td>
+              <td><strong>4-Tier LCS Diff3 auto-merge (98.7% conflict-free)</strong></td>
             </tr>
             <tr>
-              <td>Multi-Agent Coordination Overhead</td>
-              <td>Polling file locks</td>
-              <td>Uncoordinated</td>
-              <td><strong>-99.4% IPC polling overhead</strong></td>
+              <td>Host Trunk Build Health</td>
+              <td>Unverified until post-merge CI</td>
+              <td>Broken mid-flight by partial edits</td>
+              <td><strong>Mandatory pre-commit <code>verify_cmd</code> sandbox gate</strong></td>
+            </tr>
+            <tr>
+              <td>Permission Request Auditability</td>
+              <td>Final Git commit only; no escalation log</td>
+              <td>Ephemeral modal popups or unlogged bypass</td>
+              <td><strong>Structured escalation tickets + hash-chained audit ledger</strong></td>
             </tr>
           </tbody>
         </table>
       </div>
+      <p>By replacing heavyweight Git branch ceremonies with <strong>0.42ms Copy-on-Write shadow workspaces</strong>, <strong>proactive TTL file claims</strong>, <strong>piggybacked IPC messaging</strong>, <strong>verified 4-tier LCS micro-commits</strong>, and <strong>end-to-end auditable permission escalations</strong>, human developers and autonomous agents can finally collaborate on a single live codebase with the fluidity of a multiplayer canvas and the safety of a transactional database.</p>
     `,
   },
+]
+
+export const DRAFT_BLOG_POSTS: ReadonlyArray<Omit<BlogPostMeta, 'slug'> & { slug: string }> = [
   {
     slug: 'cross-modal-self-evolution-clinical-deep-review',
     num: '04',
@@ -1525,7 +2024,7 @@ describe('Human-Agent Capability Parity Invariant', () =&gt; {
       <p>Heurion 2.0 启发自形式化数学证明助手的验证思想，在 <code>apps/platform/src/claims/service.ts</code> 中构建了针对医学手稿的<strong>四阶段临床深度审稿流水线（Four-Stage Clinical Deep Review）</strong>：</p>
       <ol>
         <li><strong>Stage 1 · 外部文献四级证据对齐（External Citation Grounding）</strong>：拉取 PubMed 摘要与 PMC 开放获取全文 XML（含原文表格），将文内断言划分为 <code>table</code>（原文表格精确匹配）、<code>fulltext</code>（正文段落支持）、<code>abstract</code>（摘要支持）与 <code>none</code>（无据或数值相悖）四级正交覆盖度。</li>
-        <li><strong>Stage 2 · 内部文-表-图算术一致性核查（Internal Arithmetic Audit）</strong>：自动交叉比对正文 Results 中的样本量 $N$、百分比、HR/OR 置信区间是否与文内 Table 1 及 CONSORT 纳排漏斗完全闭合。</li>
+        <li><strong>Stage 2 · 内部文-表-图算术一致性核查（Internal Arithmetic Audit）</strong>：自动交叉比对正文 Results 中的样本量 <i>N</i>、百分比、HR/OR 置信区间是否与文内 Table 1 及 CONSORT 纳排漏斗完全闭合。</li>
         <li><strong>Stage 3 · 生物统计方法学审计（Biostatistical Methodology Audit）</strong>：核查偏态分布连续变量是否误用均值±标准差、小样本分类变量是否遗漏 Fisher 精确检验、观察性队列是否补充未测量混杂因素 E-value 敏感性分析。</li>
         <li><strong>Stage 4 · 临床夸大偏倚（Spin Bias）与报告规范核查</strong>：识别 P &gt; 0.05 时仍使用“趋势显著”等夸大表述，并在对应段落上直接锚定行内批注线程 <code>{#c:id}</code>。</li>
       </ol>
@@ -1577,7 +2076,7 @@ describe('Human-Agent Capability Parity Invariant', () =&gt; {
       </ul>
 
       <h2 id="sec-track-b">04. Track B（程序层）：零模板写前守卫规则合成与归因过滤</h2>
-      <p>与认知技能正交，<code>ProceduralHarnessService</code>（Track B）专门从智能体的工具报错与恢复轨迹（Guard Reject $\\to$ Successful Retry）中自主合成写前预检规则：</p>
+      <p>与认知技能正交，<code>ProceduralHarnessService</code>（Track B）专门从智能体的工具报错与恢复轨迹（Guard Reject → Successful Retry）中自主合成写前预检规则：</p>
       <ul>
         <li><strong>循证提交门槛（Commit-on-Evidence）</strong>：单次偶发报错绝不直接写入规则库（保证 <strong>0.0% 单轮噪声记忆污染</strong>），只有当同一失败模式在至少 2 个独立证据对中复现并成功恢复时才触发合成；</li>
         <li><strong>归因过滤与在线效用卫生（Attribution-Filtered Hygiene）</strong>：每次规则激活后追踪目标家族错误是否真正收敛，自动归档低效规则。</li>
@@ -1632,9 +2131,9 @@ describe('Human-Agent Capability Parity Invariant', () =&gt; {
       <p>Inspired by formal proof assistants, Heurion 2.0 implements a <strong>Four-Stage Clinical Deep Review</strong> pipeline inside <code>apps/platform/src/claims/service.ts</code>:</p>
       <ol>
         <li><strong>Stage 1 · External Citation Grounding</strong>: Aligns manuscript sentences against NCBI PubMed abstracts and PubMed Central (PMC) full-text XML (including parsed tables), classifying evidence into four orthogonal coverage tiers: <code>table</code>, <code>fulltext</code>, <code>abstract</code>, and <code>none</code>.</li>
-        <li><strong>Stage 2 · Internal Prose-to-Table Arithmetic Audit</strong>: Cross-checks sample sizes $N$, percentages, and HR/OR confidence intervals in prose against Table 1 and CONSORT flowcharts.</li>
+        <li><strong>Stage 2 · Internal Prose-to-Table Arithmetic Audit</strong>: Cross-checks sample sizes <i>N</i>, percentages, and HR/OR confidence intervals in prose against Table 1 and CONSORT flowcharts.</li>
         <li><strong>Stage 3 · Biostatistical Methodology Audit</strong>: Verifies normality branching (Mean±SD vs. Median [IQR]), exact tests for sparse cells, and E-value sensitivity analysis for unmeasured confounding in observational cohorts.</li>
-        <li><strong>Stage 4 · Clinical Spin Bias &amp; Guideline Compliance</strong>: Flags spin language when $P &gt; 0.05$ and anchors actionable review threads <code>{#c:id}</code> directly onto the target CRDT block.</li>
+        <li><strong>Stage 4 · Clinical Spin Bias &amp; Guideline Compliance</strong>: Flags spin language when <i>P</i> &gt; 0.05 and anchors actionable review threads <code>{#c:id}</code> directly onto the target CRDT block.</li>
       </ol>
 
       <figure class="blog-figure">
@@ -1683,7 +2182,7 @@ describe('Human-Agent Capability Parity Invariant', () =&gt; {
       </ul>
 
       <h2 id="sec-track-b">04. Track B (Procedural): Zero-Template Pre-Flight Rule Synthesis</h2>
-      <p><code>ProceduralHarnessService</code> (Track B) observes <em>Guard Rejection $\\to$ Recovery</em> pairs during live execution. Rather than polluting memory on single-turn noise, it enforces a <strong>Commit-on-Evidence</strong> threshold ($\\ge 2$ corroborated recovery trajectories) and attribution-filtered credit assignment to synthesize executable pre-flight checks.</p>
+      <p><code>ProceduralHarnessService</code> (Track B) observes <em>Guard Rejection → Recovery</em> pairs during live execution. Rather than polluting memory on single-turn noise, it enforces a <strong>Commit-on-Evidence</strong> threshold (≥ 2 corroborated recovery trajectories) and attribution-filtered credit assignment to synthesize executable pre-flight checks.</p>
 
       <h2 id="sec-evolution-eval">05. Empirical Results on Held-Out Benchmarks &amp; 20 PMC Clinical Trials</h2>
       <div class="blog-table-wrap">
@@ -1769,7 +2268,7 @@ describe('Human-Agent Capability Parity Invariant', () =&gt; {
       <h2 id="sec-checksum-phi">02. 告别盲目正则：基于 MOD 11-2 与 Luhn 校验和的确定性 PHI 守门员</h2>
       <p>在医学文本中，单纯依赖宽泛的正则表达式（如匹配连续数字）会把 PubMed PMID（8 位数字）、高精度检验数值或 DICOM Series UID 误判为电话号码或证件号。Heurion 2.0 在 <code>apps/platform/src/ops/phi-scan.ts</code> 中实现了结合<strong>数学校验和与临床语境锚点</strong>的多阶段本地扫描器：</p>
       <ul>
-        <li><strong>ISO 7064 MOD 11-2 身份证校验</strong>：对 18 位中国居民身份证号严格验证行政区划前缀、出生日期合法性以及第 18 位校验码 $\\sum_{i=1}^{17} a_i w_i \\equiv 1 \\pmod{11}$，在实现 100% 召回的同时消除科学数值误报；</li>
+        <li><strong>ISO 7064 MOD 11-2 身份证校验</strong>：对 18 位中国居民身份证号严格验证行政区划前缀、出生日期合法性以及第 18 位校验码（∑ <i>a<sub>i</sub>w<sub>i</sub></i> ≡ 1 mod 11），在实现 100% 召回的同时消除科学数值误报；</li>
         <li><strong>Luhn Mod-10 校验与临床语境锚定</strong>：对医保卡/银行卡执行 Luhn 模 10 校验，对住院号（MRN）、门诊号、床位号及“患者姓名+诊断”模式进行双向语境消歧；</li>
         <li><strong>课题受试者伪匿名映射（<code>P001</code> / <code>S001</code>）与租户级信封加密</strong>：入组时即在本地完成受试者编号替换，底层 SQLite 按机构派生独立 DEK（Data Encryption Key）进行信封加密存储。</li>
       </ul>
@@ -1835,7 +2334,7 @@ describe('Human-Agent Capability Parity Invariant', () =&gt; {
       <h2 id="sec-checksum-phi">02. Beyond Naive Regex: Deterministic Checksum PHI Gatekeeping</h2>
       <p>In biomedical text, naive regular expressions frequently misclassify 8-digit PubMed PMIDs, laboratory values, or DICOM UIDs as phone or ID numbers. Heurion 2.0’s local scanner (<code>apps/platform/src/ops/phi-scan.ts</code>) combines <strong>mathematical checksum validation with clinical context anchors</strong>:</p>
       <ul>
-        <li><strong>ISO 7064 MOD 11-2 National ID Verification</strong>: Validates region prefixes, calendar dates, and the 18th check digit $\\sum_{i=1}^{17} a_i w_i \\equiv 1 \\pmod{11}$, achieving 100% recall across 1,200 PHI samples at <strong>0.85 ms/document</strong> without false alarms on scientific numbers;</li>
+        <li><strong>ISO 7064 MOD 11-2 National ID Verification</strong>: Validates region prefixes, calendar dates, and the 18th check digit (∑ <i>a<sub>i</sub>w<sub>i</sub></i> ≡ 1 mod 11), achieving 100% recall across 1,200 PHI samples at <strong>0.85 ms/document</strong> without false alarms on scientific numbers;</li>
         <li><strong>Luhn Mod-10 &amp; Clinical Context Disambiguation</strong>: Verifies payment/insurance numbers via Luhn checksums and pairs inpatient/outpatient identifiers with lexical clinical anchors;</li>
         <li><strong>Pseudonymous Subject Mapping (<code>P001</code> / <code>S001</code>) &amp; Per-Tenant Envelope Encryption</strong>: Replaces real identities at cohort ingestion and encrypts tenant SQLite databases with per-organization DEKs wrapped by a master KEK.</li>
       </ul>
@@ -1888,186 +2387,8 @@ describe('Human-Agent Capability Parity Invariant', () =&gt; {
     `,
   },
   {
-    slug: 'multi-agent-dogfooding-aegis-os-cow',
-    num: '06',
-    category: 'aegis-os',
-    category_label_zh: 'AEGIS OS · 多智能体实战复盘',
-    category_label_en: 'AEGIS OS · DOGFOODING CASE STUDY',
-    date: '2026-11-04',
-    reading_time_zh: '15 分钟深读',
-    reading_time_en: '15 min read',
-    title_zh: 'Dogfooding 实录：我是如何让 3 个并发 Agent 在 Aegis OS 影子工作区里同时重构 Heurion 2.0 的',
-    title_en: 'Dogfooding Aegis OS: How 3 Concurrent Agents Simultaneously Refactored Heurion 2.0 in Copy-on-Write Shadow Workspaces',
-    subtitle_zh: '来自 heurion2 生产仓库的真实多智能体协同遥测：当 3 个自治 Agent 同时修改 40+ 个前后端与影像内核文件时，如何实现 0 次构建污染、0 次静默覆写与零弹窗投机执行。',
-    subtitle_en: 'Real production telemetry from the heurion2 repository: how three autonomous agents concurrently modified 40+ full-stack and medical imaging files with zero build corruption, zero silent overwrites, and zero-prompt speculative execution.',
-    summary_zh: '任何宣称解决多智能体并发冲突的系统，最好的检验标准就是用它自己来开发一套大型生产级系统。本文复盘了我们在开发 Heurion 2.0 过程中，同时运行 agy-b59e5a（自演进与知家 PHR）、agy-2b5b68（MONAI 3D 肺结节与 GPU 容器）与 agy-87a204（独立博客与双表面发布引擎）3 个自治 Agent 的真实生产日志，详述 coord_claim 路径锁、Push IPC 邮箱、workspace_diff 自动变基与四级 LCS 归并的实战表现。',
-    summary_en: 'The ultimate test for any multi-agent operating system is dogfooding it on a complex production codebase. This post dissects real telemetry from running three concurrent agents—agy-b59e5a (Self-Evolution & PHR), agy-2b5b68 (MONAI 3D Lung Nodule GPU Pipeline), and agy-87a204 (Dual-Surface Blog Engine)—on the heurion2 monorepo using APFS CoW shadow workspaces, coord_claim path leases, push IPC, and 4-tier LCS auto-merge.',
-    keywords_zh: 'Aegis OS, Dogfooding, 多智能体并发, 写时复制影子工作区, coord_claim, 四级 LCS 归并, Heurion 2.0',
-    keywords_en: 'Aegis OS, Dogfooding, Multi-Agent Concurrency, Copy-on-Write Shadow Workspace, coord_claim, 4-Tier LCS Merge, Heurion 2.0',
-    tags_zh: ['3 Agents 并发实录', 'coord_claim 路径锁', '24 文件零冲突变基', 'Seatbelt 内核沙箱'],
-    tags_en: ['3 Concurrent Agents', 'coord_claim Leases', '24-File Auto-Rebase', 'Seatbelt Sandbox'],
-    stats: [
-      { val: '3 Agents', lbl_zh: '同库并发自治开发', lbl_en: 'Concurrent Agents' },
-      { val: '24 Files', lbl_zh: '宿主机自动快进变基', lbl_en: 'Auto Fast-Forwarded' },
-      { val: '0', lbl_zh: '并发踩踏与构建污染', lbl_en: 'Build Corruptions' },
-    ],
-    repo_url: 'https://github.com/heurion-org/aegis-os',
-    paper_url: 'https://github.com/heurion-org/aegis-os/blob/main/paper/main.pdf',
-    toc: [
-      { id: 'sec-dogfood-scene', zh: '01. 真实生产现场：1 个 Monorepo，3 个并发重度任务', en: '01. The Production Scene: One Monorepo, Three Heavy Concurrent Tasks' },
-      { id: 'sec-shadow-isolation', zh: '02. 为什么 Git Worktree 不够用？CoW 影子工作区的真正威力', en: '02. Why Git Worktrees Fall Short & How CoW Shadow Workspaces Win' },
-      { id: 'sec-coord-ipc', zh: '03. coord_claim 悲观路径锁与事件驱动 IPC 总线实录', en: '03. Pessimistic Path Claims (coord_claim) & Push-Based IPC Mailbox' },
-      { id: 'sec-rebase-commit', zh: '04. workspace_diff 自动变基与带沙箱预检门禁的原子提交', en: '04. Auto-Rebase on workspace_diff & Pre-Commit Sandboxed Verification' },
-    ],
-    body_zh: `
-      <h2 id="sec-dogfood-scene">01. 真实生产现场：1 个 Monorepo，3 个并发重度任务</h2>
-      <p>很多开发者问我：“Aegis OS 论文里的 0.42ms 写时复制派生和 98.7% 四级 LCS 三路归并，在真实高强度开发里到底是什么体验？”答案很简单——<strong>此时此刻你正在阅读的这行文字，就是在 3 个自治智能体并发修改 <code>heurion2</code> 生产仓库的过程中写就并提交的。</strong></p>
-      <p>在 <code>org_id: "heurion2"</code> 的同一个宿主机目录（<code>/workspace/heurion2</code>）上，我们同时挂载了 3 个承担截然不同使命的自治 Agent 会话：</p>
-      <ul>
-        <li><strong>Agent 1 (<code>agy-b59e5a</code> · 自演进记忆与前端工作台)</strong>：正在重构四阶段临床深度审稿（<code>claims/service.ts</code>）、程序性守卫合成（<code>memory/procedural.ts</code>）以及知家 PHR 移动端界面（<code>apps/platform/web/src/phr.ts</code>、<code>style.css</code>），单次涉及 20+ 个核心文件；</li>
-        <li><strong>Agent 2 (<code>agy-2b5b68</code> · 3D 医学影像与 GPU 流水线)</strong>：正在并发改写 MONAI 肺结节分割与 RECIST 1.1 评估引擎（<code>apps/imaging-worker/src/lung_nodule_pipeline.py</code>、<code>recist.py</code>、<code>deploy/docker-compose.gpu.yml</code>）；</li>
-        <li><strong>Agent 3 (<code>agy-87a204</code> · 个人博客与双表面 CRDT 发布引擎)</strong>：正在构建 <code>blog.heurion.org</code> 的 SSR 路由、双表面 CRDT 博客编译器与 Vitest 集成测试（<code>apps/platform/src/http/routes/blog-*.ts</code>、<code>deploy/Caddyfile</code>）。</li>
-      </ul>
-
-      <figure class="blog-figure">
-        <svg viewBox="0 0 760 260" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="3 个并发 Agent 在 Aegis OS 影子工作区协同重构 Heurion 2.0 实录">
-          <rect x="1" y="1" width="758" height="258" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
-          <rect x="20" y="24" width="220" height="64" fill="#F2EFE9" stroke="#C8C1B4"/>
-          <text x="130" y="46" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">AGENT agy-b59e5a (CoW Upper 1)</text>
-          <text x="130" y="66" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, monospace" font-size="8.5">claims/* · memory/* · web/src/phr.ts</text>
-
-          <rect x="20" y="98" width="220" height="64" fill="#F2EFE9" stroke="#C8C1B4"/>
-          <text x="130" y="120" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">AGENT agy-2b5b68 (CoW Upper 2)</text>
-          <text x="130" y="140" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, monospace" font-size="8.5">imaging-worker/* · recist.py · gpu.yml</text>
-
-          <rect x="20" y="172" width="220" height="64" fill="#E3ECE7" stroke="#233E33" stroke-width="1.4"/>
-          <text x="130" y="194" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">AGENT agy-87a204 (CoW Upper 3)</text>
-          <text x="130" y="214" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5">routes/blog-*.ts · Caddyfile · tests</text>
-
-          <line x1="240" y1="56" x2="288" y2="112" stroke="#848D88" stroke-width="1.2"/>
-          <line x1="240" y1="130" x2="288" y2="130" stroke="#848D88" stroke-width="1.2"/>
-          <line x1="240" y1="204" x2="288" y2="148" stroke="#233E33" stroke-width="1.5"/>
-
-          <rect x="288" y="54" width="214" height="152" fill="#233E33" stroke="#151C19"/>
-          <text x="395" y="82" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">AEGIS OS COORDINATION BUS</text>
-          <line x1="288" y1="92" x2="502" y2="92" stroke="#395A4C"/>
-          <text x="395" y="116" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.8">• coord_claim (Claims v31→v40)</text>
-          <text x="395" y="138" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.8">• Push IPC Mailbox (0 Polling)</text>
-          <text x="395" y="160" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.8">• Auto-Rebase (24 Fast-Forwards)</text>
-          <text x="395" y="182" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.8">• Seatbelt Kernel Confinement</text>
-
-          <line x1="502" y1="130" x2="546" y2="130" stroke="#233E33" stroke-width="1.5"/>
-
-          <rect x="546" y="68" width="194" height="124" fill="#EFECE4" stroke="#151C19"/>
-          <text x="643" y="96" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">HOST MONOREPO (/heurion2)</text>
-          <line x1="546" y1="106" x2="740" y2="106" stroke="#C8C1B4"/>
-          <text x="643" y="130" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10">• 0 次半成品语法报错污染</text>
-          <text x="643" y="150" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10">• verify_cmd 预检通过后落盘</text>
-          <text x="643" y="170" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9" font-weight="500">• 100% 原子性事务提交</text>
-        </svg>
-        <figcaption>图 5：3 个自治 Agent（agy-b59e5a、agy-2b5b68、agy-87a204）在 Aegis OS 写时复制影子工作区中并发演进 Heurion 2.0 的真实拓扑。</figcaption>
-      </figure>
-
-      <h2 id="sec-shadow-isolation">02. 为什么 Git Worktree 不够用？CoW 影子工作区的真正威力</h2>
-      <p>如果不用 Aegis OS，在同一个目录上跑这 3 个 Agent 会发生什么？当 <code>agy-b59e5a</code> 正在修改 <code>claims/service.ts</code> 尚未写完时，整个 TypeScript 工程处于半编译报错状态；此时 <code>agy-87a204</code> 跑测试或构建就会立刻因为别人的半成品代码而崩溃。而如果手动建 3 个 <code>git worktree</code>，不仅每个 worktree 需要重新安装或软链数 GB 的 <code>node_modules</code> 与 Python <code>.venv-compute</code>，而且无法对未提交（Uncommitted）的宿主机状态进行细粒度三路归并。</p>
-      <p>在 Aegis OS 中，每个 Agent 都在 <code>/private/tmp/aegis-os-runtime/orgs/heurion2/agents/&lt;agent_id&gt;/cow_workspace/upper_workspace</code> 下拥有独立的 APFS 写时复制视图。当 <code>agy-b59e5a</code> 在宿主机落地了一次提交（但尚未 <code>git commit</code>）时，<code>agy-87a204</code> 的下一次操作会自动触发增量变基（Auto-Refresh），在不影响自身未提交修改的前提下瞬间同步最新宿主机基线。</p>
-
-      <h2 id="sec-coord-ipc">03. <code>coord_claim</code> 悲观路径锁与事件驱动 IPC 总线实录</h2>
-      <p>虽然三路归并能解决 98.7% 的事后合并，但最佳的并发控制是“事前防撞”。在本次开发会话中，Aegis OS 的 <code>aos-ipc</code> 总线自动向我们的邮箱推送了其它两个 Agent 的实时锁声明（无需任何轮询）：</p>
-      <pre><code>{
-  "_aegis_inbox": {
-    "latest": [
-      "msg-9eec082a from agy-2b5b68: [coord] claimed deploy/docker-compose.yml, apps/imaging-worker/...",
-      "msg-a0f9899b from agy-b59e5a: [coord] claimed packages/canvas-ui/src/theme.ts, apps/platform/web/..."
-    ]
-  },
-  "agent_id": "agy-87a204",
-  "changed": ["apps/platform/src/http/routes/blog-pages.ts", "deploy/Caddyfile"],
-  "claims_version": 40,
-  "rejected": [],
-  "status": "ok"
-}</code></pre>
-      <p>通过 <code>coord_claim</code>，3 个 Agent 的修改边界在单调递增的 <code>claims_version</code>（从 v31 演进到 v40）下实现了零交集划分。</p>
-
-      <h2 id="sec-rebase-commit">04. <code>workspace_diff</code> 自动变基与带沙箱预检门禁的原子提交</h2>
-      <p>当我们在 <code>agy-87a204</code> 中调用 <code>workspace_diff</code> 准备提交博客系统时，期间 <code>agy-b59e5a</code> 和 <code>agy-2b5b68</code> 已经在宿主机上先后落地了 24 个源码文件与 16 个前端构建产物。Aegis OS 在后台瞬间完成了 <strong>24 个文件的 Fast-Forward 自动变基与 0 冲突校验</strong>，并在 Seatbelt 内核沙箱（<code>macos-seatbelt-kernel-enforced</code>）中跑通 14 项 Vitest 预检测试后生成 <code>esc-89e2a50b</code> 审批单——全程 <strong>0 次写文件弹窗打断</strong>。</p>
-    `,
-    body_en: `
-      <h2 id="sec-dogfood-scene">01. The Production Scene: One Monorepo, Three Heavy Concurrent Tasks</h2>
-      <p>Developers often ask what Aegis OS’s 0.42ms Copy-on-Write workspace fork and 98.7% 4-tier LCS auto-merge feel like in day-to-day production engineering. The answer is simple: <strong>the blog engine serving this very page was built and tested while three autonomous agents concurrently refactored the <code>heurion2</code> monorepo.</strong></p>
-      <p>Inside <code>org_id: "heurion2"</code> on a single host checkout (<code>/workspace/heurion2</code>), three autonomous agent sessions executed simultaneously:</p>
-      <ul>
-        <li><strong>Agent 1 (<code>agy-b59e5a</code> · Self-Evolution &amp; Zhijia PHR)</strong>: Refactoring Four-Stage Clinical Deep Review (<code>claims/service.ts</code>), procedural guard synthesis (<code>memory/procedural.ts</code>), and the Zhijia PHR mobile web UI across 20+ files;</li>
-        <li><strong>Agent 2 (<code>agy-2b5b68</code> · 3D Medical Imaging &amp; GPU Pipeline)</strong>: Updating the MONAI lung nodule segmentation pipeline and RECIST 1.1 evaluation engine (<code>apps/imaging-worker/src/lung_nodule_pipeline.py</code>, <code>recist.py</code>, <code>deploy/docker-compose.gpu.yml</code>);</li>
-        <li><strong>Agent 3 (<code>agy-87a204</code> · Blog &amp; Dual-Surface Publishing Engine)</strong>: Building <code>blog.heurion.org</code> SSR routes, the Dual-Surface CRDT blog compiler, and Vitest integration suites (<code>apps/platform/src/http/routes/blog-*.ts</code>, <code>deploy/Caddyfile</code>).</li>
-      </ul>
-
-      <figure class="blog-figure">
-        <svg viewBox="0 0 760 260" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Three Concurrent Agents Refactoring Heurion 2.0 in Aegis OS CoW Shadow Workspaces">
-          <rect x="1" y="1" width="758" height="258" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
-          <rect x="20" y="24" width="220" height="64" fill="#F2EFE9" stroke="#C8C1B4"/>
-          <text x="130" y="46" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">AGENT agy-b59e5a (CoW Upper 1)</text>
-          <text x="130" y="66" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, monospace" font-size="8.5">claims/* · memory/* · web/src/phr.ts</text>
-
-          <rect x="20" y="98" width="220" height="64" fill="#F2EFE9" stroke="#C8C1B4"/>
-          <text x="130" y="120" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">AGENT agy-2b5b68 (CoW Upper 2)</text>
-          <text x="130" y="140" text-anchor="middle" fill="#525B56" font-family="JetBrains Mono, monospace" font-size="8.5">imaging-worker/* · recist.py · gpu.yml</text>
-
-          <rect x="20" y="172" width="220" height="64" fill="#E3ECE7" stroke="#233E33" stroke-width="1.4"/>
-          <text x="130" y="194" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">AGENT agy-87a204 (CoW Upper 3)</text>
-          <text x="130" y="214" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5">routes/blog-*.ts · Caddyfile · tests</text>
-
-          <line x1="240" y1="56" x2="288" y2="112" stroke="#848D88" stroke-width="1.2"/>
-          <line x1="240" y1="130" x2="288" y2="130" stroke="#848D88" stroke-width="1.2"/>
-          <line x1="240" y1="204" x2="288" y2="148" stroke="#233E33" stroke-width="1.5"/>
-
-          <rect x="288" y="54" width="214" height="152" fill="#233E33" stroke="#151C19"/>
-          <text x="395" y="82" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">AEGIS OS COORDINATION BUS</text>
-          <line x1="288" y1="92" x2="502" y2="92" stroke="#395A4C"/>
-          <text x="395" y="116" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.8">• coord_claim (Claims v31→v40)</text>
-          <text x="395" y="138" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.8">• Push IPC Mailbox (0 Polling)</text>
-          <text x="395" y="160" text-anchor="middle" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.8">• Auto-Rebase (24 Fast-Forwards)</text>
-          <text x="395" y="182" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.8">• Seatbelt Kernel Confinement</text>
-
-          <line x1="502" y1="130" x2="546" y2="130" stroke="#233E33" stroke-width="1.5"/>
-
-          <rect x="546" y="68" width="194" height="124" fill="#EFECE4" stroke="#151C19"/>
-          <text x="643" y="96" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="500">HOST MONOREPO (/heurion2)</text>
-          <line x1="546" y1="106" x2="740" y2="106" stroke="#C8C1B4"/>
-          <text x="643" y="130" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10">• Zero mid-flight syntax breakage</text>
-          <text x="643" y="150" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10">• Sandboxed verify_cmd gate</text>
-          <text x="643" y="170" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9" font-weight="500">• 100% Atomic Host Landings</text>
-        </svg>
-        <figcaption>Figure 5: Live topology of three autonomous agents (agy-b59e5a, agy-2b5b68, agy-87a204) evolving Heurion 2.0 concurrently in Aegis OS CoW shadow workspaces.</figcaption>
-      </figure>
-
-      <h2 id="sec-shadow-isolation">02. Why Git Worktrees Fall Short &amp; How CoW Shadow Workspaces Win</h2>
-      <p>Without Aegis OS, running three agents on a single directory is a recipe for chaos: while <code>agy-b59e5a</code> is halfway through editing <code>claims/service.ts</code>, the TypeScript build is temporarily broken for every other agent sharing that tree. Manual <code>git worktree</code> setups require duplicating or manually symlinking multi-gigabyte <code>node_modules</code> and Python virtualenvs, and cannot three-way merge against uncommitted host edits.</p>
-      <p>In Aegis OS, each agent operates inside an isolated APFS Copy-on-Write upper layer (<code>/private/tmp/aegis-os-runtime/orgs/heurion2/agents/&lt;id&gt;/cow_workspace/upper_workspace</code>) with read-only kernel bind mounts for dependencies. Whenever a peer agent lands changes onto the host, other agents automatically fast-forward untouched files without disrupting their own in-progress shadow edits.</p>
-
-      <h2 id="sec-coord-ipc">03. Pessimistic Path Claims (<code>coord_claim</code>) &amp; Push-Based IPC Mailbox</h2>
-      <p>While 4-tier LCS Diff3 resolves 98.7% of concurrent file edits at commit time, proactive path coordination prevents semantic collisions before they happen. Throughout the session, <code>aos-ipc</code> pushed real-time claim notifications across agents with zero polling:</p>
-      <pre><code>{
-  "_aegis_inbox": {
-    "latest": [
-      "msg-9eec082a from agy-2b5b68: [coord] claimed deploy/docker-compose.yml, apps/imaging-worker/...",
-      "msg-a0f9899b from agy-b59e5a: [coord] claimed packages/canvas-ui/src/theme.ts, apps/platform/web/..."
-    ]
-  },
-  "agent_id": "agy-87a204",
-  "changed": ["apps/platform/src/http/routes/blog-pages.ts", "deploy/Caddyfile"],
-  "claims_version": 40,
-  "rejected": [],
-  "status": "ok"
-}</code></pre>
-
-      <h2 id="sec-rebase-commit">04. Auto-Rebase on <code>workspace_diff</code> &amp; Pre-Commit Sandboxed Verification</h2>
-      <p>When <code>agy-87a204</code> invoked <code>workspace_diff</code> prior to committing the blog subsystem, Aegis OS automatically detected that <code>agy-b59e5a</code> and <code>agy-2b5b68</code> had landed 24 source files and 16 build artifacts on the host. It fast-forwarded all 24 files with <strong>0 conflicts</strong>, executed the Vitest verification suite inside the <code>macos-seatbelt-kernel-enforced</code> sandbox, and staged atomic commit request <code>esc-89e2a50b</code>—with <strong>zero per-write permission prompts</strong> during development.</p>
-    `,
-  },
-  {
     slug: 'ai-native-document-crdt-publishing',
-    num: '07',
+    num: '06',
     category: 'omnidoc',
     category_label_zh: 'OMNIDOC · 独立 AI-Native 文档引擎',
     category_label_en: 'OMNIDOC · AI-NATIVE DOCUMENT ENGINE',

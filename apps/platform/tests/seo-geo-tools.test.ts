@@ -332,8 +332,8 @@ describe('Stateless No-Login Mini-Tools Public API (/api/public/tools/*)', () =>
 })
 
 describe('Personal Technical Blog (blog.heurion.org & heurion.org/blog)', () => {
-  it('renders bilingual Personal Blog Homepage and all 7 technical monographs with zero CJK leak in EN <main>', () => {
-    expect(BLOG_SLUGS.length).toBe(7)
+  it('renders bilingual Personal Blog Homepage and all 3 published technical monographs with zero CJK leak in EN <main>', () => {
+    expect(BLOG_SLUGS.length).toBe(3)
     const zhHome = renderBlogHomeHtml('zh', { subdomain: true })
     const enHome = renderBlogHomeHtml('en', { subdomain: true })
 
@@ -439,7 +439,7 @@ describe('Personal Technical Blog (blog.heurion.org & heurion.org/blog)', () => 
       { headers: { Host: 'blog.heurion.org' } },
     )
     expect(subEnPost.status).toBe(200)
-    expect(await subEnPost.text()).toContain('Inside Aegis OS')
+    expect(await subEnPost.text()).toContain('Beyond Git Feature Branches')
 
     const subRedirect = await blogApp.request('http://blog.heurion.org/blog', {
       headers: { Host: 'blog.heurion.org' },
@@ -456,8 +456,8 @@ describe('Personal Technical Blog (blog.heurion.org & heurion.org/blog)', () => 
     expect(rssText).toContain('https://blog.heurion.org/dual-surface-crdt-clinical-ai')
 
     const sitemapXml = renderBlogSitemapXml()
-    expect(sitemapXml).toContain('https://blog.heurion.org/cross-modal-self-evolution-clinical-deep-review')
-    expect(renderBlogRssXml('en')).toContain('https://blog.heurion.org/en/zero-leakage-phi-gatekeeper-and-uomp')
+    expect(sitemapXml).toContain('https://blog.heurion.org/human-agent-capability-parity-ai-native-software')
+    expect(renderBlogRssXml('en')).toContain('https://blog.heurion.org/en/aegis-os-transactional-agent-kernel')
 
     // 2. Main domain Host: heurion.org (/blog & ?redirect=1)
     const mainBlog = await blogApp.request('http://heurion.org/blog', {
@@ -477,7 +477,7 @@ describe('Personal Technical Blog (blog.heurion.org & heurion.org/blog)', () => 
       method: 'POST',
       headers: { Host: 'blog.heurion.org', 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        slug: 'multi-agent-dogfooding-aegis-os-cow',
+        slug: 'aegis-os-transactional-agent-kernel',
         author: 'Systems Reader',
         content: 'Great breakdown of APFS clonefile CoW workspaces!',
       }),
@@ -487,7 +487,7 @@ describe('Personal Technical Blog (blog.heurion.org & heurion.org/blog)', () => 
     expect(commentJson.ok).toBe(true)
     expect(commentJson.comment.author).toBe('Systems Reader')
 
-    const postWithComment = renderBlogPostHtml('multi-agent-dogfooding-aegis-os-cow', 'en', { subdomain: true })!
+    const postWithComment = renderBlogPostHtml('aegis-os-transactional-agent-kernel', 'en', { subdomain: true })!
     expect(postWithComment).toContain('Systems Reader')
     expect(postWithComment).toContain('Great breakdown of APFS clonefile CoW workspaces!')
   })

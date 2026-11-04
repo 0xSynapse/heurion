@@ -468,11 +468,9 @@ export function loadMarkdownBlogDir(dirPath?: string): BlogPostMeta[] {
 }
 
 export function getDynamicBlogPosts(): BlogPostMeta[] {
-  loadMarkdownBlogDir()
   return Array.from(dynamicPublishedPosts.values())
 }
 
 export function getDynamicBlogPost(slug: string): BlogPostMeta | null {
-  loadMarkdownBlogDir()
   return dynamicPublishedPosts.get(slug) ?? null
 }
