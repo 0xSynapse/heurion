@@ -7866,5 +7866,50 @@ svg.mail-star-icon-filled polygon {
   margin-left: 4px;
 }
 
+/* 患者影像卡片次要操作折叠抽屉 */
+.pt-more-actions {
+  display: inline-block;
+  position: relative;
+}
+.pt-more-actions > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.pt-more-actions > summary::-webkit-details-marker {
+  display: none;
+}
+.pt-more-actions[open] .pt-more-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+}
+
+/* 正文内审稿锚点按严重度柔和区分（数据矛盾=红、方法建议=琥珀、规范=青蓝） */
+#page .claim-warn-text[data-rv-sev="critical"],
+#page [data-comment][data-rv-sev="critical"] {
+  background: rgba(239, 68, 68, 0.12);
+  border-bottom: 2px dashed #ef4444;
+  cursor: pointer;
+}
+#page .claim-warn-text[data-rv-sev="major"],
+#page [data-comment][data-rv-sev="major"] {
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom: 2px dashed #f59e0b;
+  cursor: pointer;
+}
+#page .claim-warn-text[data-rv-sev="minor"],
+#page [data-comment][data-rv-sev="minor"] {
+  background: rgba(56, 189, 248, 0.10);
+  border-bottom: 1.5px dotted #38bdf8;
+  cursor: pointer;
+}
+
+
 
 

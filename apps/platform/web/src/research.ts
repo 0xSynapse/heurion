@@ -2825,16 +2825,12 @@ ${modelsDesc}
     let lastTitle = `${contextTitle}_Figure`
 
     const studyContextBarHtml = !isGlobal ? `
-      <div class="rs-scenario-banner compact" style="margin-bottom:10px;padding:8px 12px;">
+      <div class="rs-scenario-banner compact" style="margin-bottom:8px;padding:6px 10px;">
         <div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="small">
             ${icon('microscope', { size: 13 })} <b>当前课题：${esc(s.title)}</b>
-            <span class="muted">（在组 ${activeCount} 人 · 数据集 ${readyDs.length} 个 · 图表保存至本研究 <code>figures/</code>）</span>
+            <span class="muted">（在组 ${activeCount} 人 · 数据集 ${readyDs.length} 个 · 归档至本研究 <code>figures/</code>）</span>
           </span>
-          <div class="row" style="gap:6px;">
-            <button type="button" class="small-btn quiet" data-st-nav="global-studio">${icon('chart', { size: 12 })} 切换至独立制图空间</button>
-            <button type="button" class="small-btn quiet" data-st-nav="write">${icon('write', { size: 12 })} 去写作插图</button>
-          </div>
         </div>
       </div>
     ` : ''
@@ -2878,35 +2874,6 @@ ${modelsDesc}
             <option value="bio_volcano">生信图：转录组差异表达火山图</option>
             <option value="img_flow">流式图：Annexin V/PI 凋亡四象限</option>
           </select>
-
-          <details class="rs-scenario-pop">
-            <summary class="small-btn quiet">${icon('info', { size: 13 })} 场景说明</summary>
-            <div class="rs-scenario-pop-card">
-              <div class="rs-scenario-grid">
-                <div class="rs-scenario-card${isGlobal ? ' active' : ''}">
-                  <div class="rs-scenario-tag">场景一 · 独立科研制图</div>
-                  <b>临床队列单表成图 / 标书机制图 / 审稿补图</b>
-                  <p class="muted small">无需创建临床研究课题，直接上传 Excel/CSV 或即开即画，一键导出 600 DPI <code>.png</code> / <code>.svg</code> / <code>.pzfx</code> / <code>.R</code> / <code>.drawio</code> / <code>.pptx</code>。</p>
-                </div>
-                <div class="rs-scenario-card">
-                  <div class="rs-scenario-tag">场景二 · 写作中内嵌配图</div>
-                  <b>论文正文 Results / 组会汇报 PPT</b>
-                  <p class="muted small">在写作编辑器中边写边画，一键插入当前段落并自动附带「来自分析」可复现代码溯源。</p>
-                  <div style="margin-top:auto;padding-top:6px;">
-                    <button type="button" class="small-btn" data-st-nav="write">${icon('write', { size: 12 })} 前往写作空间 →</button>
-                  </div>
-                </div>
-                <div class="rs-scenario-card${!isGlobal ? ' active' : ''}">
-                  <div class="rs-scenario-tag">场景三 · 临床研究课题内制图</div>
-                  <b>RCT / 队列研究全链路数据闭环</b>
-                  <p class="muted small">与入组患者队列和课题数据集版本绑定，自动归档至项目 <code>figures/</code> 并打包 SCI 投稿包。</p>
-                  <div style="margin-top:auto;padding-top:6px;">
-                    <button type="button" class="small-btn" data-st-nav="study">${icon('microscope', { size: 12 })} 前往临床研究 →</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </details>
         </div>
       </div>
 

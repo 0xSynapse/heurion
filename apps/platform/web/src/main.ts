@@ -3120,6 +3120,53 @@ function renderComments(): void {
 
   $('comments').innerHTML = openHtml + resolvedDrawerHtml
   syncCommentAskButtons()
+  syncManuscriptReviewHighlights(openList)
+}
+
+function syncManuscriptReviewHighlights(openList: any[]): void {
+  if (!session?.editor) return
+  const baseChecks: any[] = Array.isArray(detail?.claim_checks) ? detail.claim_checks : []
+  const existingCommentIds = new Set(baseChecks.map(chk => chk.comment_id).filter(Boolean))
+  const reviewChecks: Array<{ claim_id: string; node_id: string; sentence: string; verdict: string; reason: string; severity?: string }> = []
+  const sevByClaimId = new Map<string, 'critical' | 'major' | 'minor'>()
+
+  for (const chk of baseChecks) {
+    if (chk.claim_id) {
+      sevByClaimId.set(chk.claim_id, chk.verdict === 'unsupported' ? 'critical' : 'major')
+    }
+  }
+
+  for (const c of openList) {
+    const meta = parseReviewComment(c)
+    if (!meta.isReview) continue
+    sevByClaimId.set(c.id, meta.severity)
+    if (existingCommentIds.has(c.id)) continue
+    const sentence = (c.anchor?.text || c.snippet || '').trim()
+    if (!sentence) continue
+    reviewChecks.push({
+      claim_id: c.id,
+      node_id: c.anchor?.node_id ?? '',
+      sentence,
+      verdict: `${meta.severityLabel} · ${meta.categoryLabel}`,
+      reason: meta.cleanReason,
+    })
+  }
+
+  session.editor.setClaimChecks([...baseChecks, ...reviewChecks])
+
+  requestAnimationFrame(() => {
+    document.querySelectorAll<HTMLElement>('#page .claim-warn-text[data-claim-id]').forEach(el => {
+      const cid = el.dataset.claimId ?? ''
+      const sev = sevByClaimId.get(cid)
+      if (sev) el.dataset.rvSev = sev
+    })
+    document.querySelectorAll<HTMLElement>('#page [data-comment]').forEach(el => {
+      const ids = (el.dataset.comment ?? '').split(/\s+/).filter(Boolean)
+      const matchedSev = ids.map(id => sevByClaimId.get(id)).find(Boolean)
+      if (matchedSev) el.dataset.rvSev = matchedSev
+      else delete el.dataset.rvSev
+    })
+  })
 }
 
 $('comments').onclick = async e => {
@@ -3131,6 +3178,7 @@ $('comments').onclick = async e => {
       const check = (detail?.claim_checks ?? []).find((c: any) => c.comment_id === cid)
       const target = document.querySelector(`[data-comment~="${CSS.escape(cid)}"]`)
         ?? (check ? document.querySelector(`.claim-warn-text[data-claim-id="${CSS.escape(check.claim_id)}"]`) : null)
+        ?? document.querySelector(`.claim-warn-text[data-claim-id="${CSS.escape(cid)}"]`)
       target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       target?.classList.add('ai-flash')
       setTimeout(() => target?.classList.remove('ai-flash'), 1400)
