@@ -8385,6 +8385,146 @@ a.auth-home-btn:hover {
   background: var(--hover);
 }
 
+/* 批注与审稿卡片：章节定位徽标、引用框定位提示、批注讨论抽屉与正文对应章节高亮 */
+.card[data-cid] {
+  cursor: pointer;
+}
+.card.card-active-focus {
+  border-color: var(--mint-text) !important;
+  box-shadow: 0 0 0 1px var(--mint-text), 0 4px 14px rgba(10, 125, 82, 0.08);
+  background: var(--green-soft);
+}
+.rv-sec-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--mint-text);
+  background: var(--green-soft);
+  border: 1px solid var(--green-line);
+  border-radius: 3px;
+  padding: 1px 6px;
+  cursor: pointer;
+  max-width: 155px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: all 0.14s ease;
+}
+.rv-sec-badge:hover {
+  background: var(--mint);
+  color: #fff;
+  border-color: var(--mint);
+}
+.card .quote[data-locate] {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px 5px 10px;
+  border-radius: 0 3px 3px 0;
+  background: rgba(180, 83, 9, 0.04);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.card .quote[data-locate]:hover {
+  background: rgba(10, 125, 82, 0.08);
+  border-left-color: var(--mint-text);
+  color: var(--text);
+}
+.card .quote-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.card .quote-locate-pill {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--mint-text);
+  opacity: 0.78;
+  white-space: nowrap;
+  padding-top: 1px;
+}
+.card .quote[data-locate]:hover .quote-locate-pill {
+  opacity: 1;
+  text-decoration: underline;
+}
+.rv-replies-list {
+  margin: 6px 0 8px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border-left: 2px solid var(--green-line);
+  border-radius: 0 3px 3px 0;
+}
+.rv-reply-drawer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.rv-reply-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rv-reply-input-row input[data-reply] {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+
+/* 正文内审稿块级装饰与点击批注后的章节 + 段落联动高亮 */
+#page .claim-warn-block {
+  border-left: 3px solid var(--warn);
+  padding-left: 8px;
+  background: rgba(245, 181, 68, 0.05);
+  transition: background 0.2s ease;
+}
+#page .section-focus-heading {
+  position: relative;
+  background: linear-gradient(90deg, rgba(10, 125, 82, 0.14), rgba(10, 125, 82, 0.02));
+  border-left: 4px solid var(--mint-text);
+  padding-left: 10px !important;
+  border-radius: 0 4px 4px 0;
+  transition: all 0.25s ease;
+}
+#page .section-focus-heading::after {
+  content: attr(data-sec-focus-label);
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: middle;
+  color: var(--mint-text);
+  background: var(--panel);
+  border: 1px solid var(--green-line);
+  border-radius: 3px;
+}
+#page .section-focus-block {
+  border-left: 2px solid rgba(10, 125, 82, 0.32);
+  padding-left: 8px;
+  background: rgba(10, 125, 82, 0.025);
+  transition: all 0.25s ease;
+}
+#page .comment-focus-block {
+  background: rgba(10, 125, 82, 0.09) !important;
+  border-left: 3px solid var(--mint-text) !important;
+  padding-left: 8px;
+  border-radius: 0 4px 4px 0;
+  box-shadow: 0 0 0 1px rgba(10, 125, 82, 0.22);
+}
+#page mark.comment.comment-focus-target,
+#page .claim-warn-text.comment-focus-target {
+  background: rgba(10, 125, 82, 0.24) !important;
+  outline: 2px solid var(--mint-text);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+
 
 
 

@@ -257,6 +257,9 @@ const servePublicHtml = (c: any, html: string) => {
   recordPublicTrafficHit(c.req.path, c.req.header('user-agent'))
   return c.html(html, 200, { 'Cache-Control': PUBLIC_HTML_CACHE })
 }
+const HEURION_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10 -2 112 104"><rect x="-10" y="-2" width="112" height="104" rx="22" fill="#FAF8F4" stroke="#E5E0D6" stroke-width="2"/><rect x="6" y="18" width="16" height="66" rx="8" fill="#151C19"/><rect x="60" y="35" width="16" height="49" rx="8" fill="#151C19"/><rect x="18" y="45" width="46" height="16" rx="8" fill="#0A7D52"/><circle cx="76" cy="24" r="10" fill="#00C472"/></svg>`
+app.get('/favicon.svg', c => c.body(HEURION_FAVICON_SVG, 200, { 'Content-Type': 'image/svg+xml; charset=utf-8', 'Cache-Control': 'public, max-age=86400, s-maxage=604800' }))
+app.get('/favicon.ico', c => c.body(HEURION_FAVICON_SVG, 200, { 'Content-Type': 'image/svg+xml; charset=utf-8', 'Cache-Control': 'public, max-age=86400, s-maxage=604800' }))
 registerBlogRoutes(app, { serveHtml: servePublicHtml })
 app.get('/', c => servePublicHtml(c, readFileSync(join(SITE, 'index.html'), 'utf8')))
 app.get('/en', c => servePublicHtml(c, renderEnglishIndexHtml(readFileSync(join(SITE, 'index.html'), 'utf8'))))

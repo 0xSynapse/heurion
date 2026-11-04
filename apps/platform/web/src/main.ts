@@ -801,10 +801,12 @@ async function open(docId: string): Promise<void> {
   const stream = openStream(docId)
   const onCommentClick = (thread: string) => {
     switchTab('commentPane')
-    const card = document.querySelector(`#comments [data-cid="${CSS.escape(thread)}"]`)
+    const card = document.querySelector<HTMLElement>(`#comments [data-cid="${CSS.escape(thread)}"]`)
+    document.querySelectorAll('#comments .card.card-active-focus').forEach(el => el.classList.remove('card-active-focus'))
     card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    card?.classList.add('card-highlight')
+    card?.classList.add('card-highlight', 'card-active-focus')
     setTimeout(() => card?.classList.remove('card-highlight'), 1600)
+    locateCommentInDoc(thread)
   }
   if (meta.kind === 'deck') {
     const deck = new DeckView($('page'), {
@@ -841,10 +843,12 @@ async function open(docId: string): Promise<void> {
         switchTab('commentPane')
         const check = (detail?.claim_checks ?? []).find((c: any) => c.claim_id === claimId)
         const targetId = check?.comment_id ?? claimId
-        const card = document.querySelector(`#comments [data-cid="${CSS.escape(targetId)}"]`)
+        const card = document.querySelector<HTMLElement>(`#comments [data-cid="${CSS.escape(targetId)}"]`)
+        document.querySelectorAll('#comments .card.card-active-focus').forEach(el => el.classList.remove('card-active-focus'))
         card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        card?.classList.add('card-highlight')
+        card?.classList.add('card-highlight', 'card-active-focus')
         setTimeout(() => card?.classList.remove('card-highlight'), 1600)
+        locateCommentInDoc(targetId)
       },
       analysis: { has: id => datasets.hasProvenance(id), show: id => void datasets.showProvenance(id) },
       onSuggestion: (group, accept) => void resolveSuggestion(group, accept),
@@ -3103,21 +3107,27 @@ document.getElementById('reviewSnapshotBar')?.addEventListener('click', async e 
 
 function renderCommentCardHtml(c: any): string {
   const meta = parseReviewComment(c)
-  const quoteText = c.anchor.text || c.snippet || '（定位段落）'
+  const quoteText = c.anchor?.text || c.snippet || '（点击定位正文段落）'
+  const sectionTitle = c.anchor?.section_title || ''
+  const secLabel = sectionTitle ? `§ ${sectionTitle.slice(0, 22)}` : '§ 定位章节'
   if (meta.isReview) {
     const extraReplies = (c.replies ?? []).slice(1)
-    const defaultFix = meta.suggestion || c.anchor.text || c.snippet || ''
+    const defaultFix = meta.suggestion || c.anchor?.text || c.snippet || ''
     return `
     <div class="card rv-card ${esc(c.status)} sev-${esc(meta.severity)}" data-cid="${esc(c.id)}" data-cat="${esc(meta.categoryKey)}" data-reason="${esc(meta.cleanReason)}">
       <div class="rv-card-header">
         <span class="rv-sev-badge sev-${esc(meta.severity)}">${esc(meta.severityLabel)}</span>
         <span class="rv-cat-tag">${esc(meta.categoryLabel)}</span>
+        <button type="button" class="rv-sec-badge" data-locate="1" title="点击定位并高亮所属章节与原句">${esc(secLabel)}</button>
         <span class="grow"></span>
-        ${c.status === 'open' ? `<button type="button" class="quiet small-btn rv-more-btn" data-act="toggle-more" title="更多操作（追问 AI / 删除）">⋯</button>` : ''}
+        ${c.status === 'open' ? `<button type="button" class="quiet small-btn rv-more-btn" data-act="toggle-more" title="更多操作（删除）">⋯</button>` : ''}
       </div>
-      <div class="quote ${c.anchor.located ? '' : 'lost'}" ${c.anchor.located ? 'data-locate="1" title="点击在正文中定位并高亮原句"' : ''}>${esc(quoteText)}${c.anchor.located ? '' : ' · 原句位置已变更'}</div>
+      <div class="quote" data-locate="1" title="点击在正文中定位并高亮原句与所属章节">
+        <span class="quote-text">${esc(quoteText)}</span>
+        <span class="quote-locate-pill">定位原文 ↗</span>
+      </div>
       <div class="rv-reason-body">${lightMarkdown(meta.cleanReason)}</div>
-      ${extraReplies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}
+      ${extraReplies.length > 0 ? `<div class="rv-replies-list">${extraReplies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}</div>` : ''}
       ${c.status === 'open' ? `
         ${meta.suggestion ? `
         <div class="rv-suggest-box">
@@ -3126,8 +3136,16 @@ function renderCommentCardHtml(c: any): string {
         </div>` : ''}
         <div class="rv-action-bar">
           ${meta.suggestion ? `<button type="button" class="primary small-btn" data-act="apply-claim-fix" data-fix="${esc(defaultFix)}">采纳修改</button>` : ''}
+          <button type="button" class="quiet small-btn rv-comment-btn" data-act="toggle-reply" title="对该审稿意见添加批注说明、团队讨论或让 AI 按批注修改">批注讨论${extraReplies.length > 0 ? ` (${extraReplies.length})` : ''}</button>
           <button type="button" class="quiet small-btn" data-act="resolve" title="知晓该提醒，保留正文原写法并归档">知晓保留</button>
           <button type="button" class="quiet small-btn rv-fp-btn" data-act="toggle-fp" title="标记为误报或专科常规写法，系统会自动提炼规则，后续不再误报">误报 · 以后免报</button>
+        </div>
+        <div class="rv-reply-drawer" data-reply-drawer ${extraReplies.length > 0 ? '' : 'hidden'}>
+          <div class="rv-reply-input-row">
+            <input type="text" placeholder="添加批注说明、回复意见或补充改稿要求（回车发送批注）…" data-reply>
+            <button type="button" class="small-btn primary" data-act="reply">添加批注</button>
+            <button type="button" class="small-btn ai" data-act="ask" title="按您的批注要求让 AI 修改对应段落">让 AI 改稿</button>
+          </div>
         </div>
         <div class="rv-fp-drawer" data-fp-drawer hidden>
           <div class="rv-fp-title">选择原因（系统将自动记住此专科习惯，后续免报同类情况）：</div>
@@ -3142,9 +3160,9 @@ function renderCommentCardHtml(c: any): string {
           </div>
         </div>
         <div class="rv-more-drawer" data-more-drawer hidden>
-          <input type="text" placeholder="补充要求并让 AI 修改正文…" data-reply>
-          <button type="button" class="small-btn ai" data-act="ask">让 AI 改稿</button>
-          <button type="button" class="small-btn quiet" data-act="delete">删除</button>
+          <span class="muted small">管理此条审稿记录：</span>
+          <span class="grow"></span>
+          <button type="button" class="small-btn quiet" data-act="delete">删除此条批注</button>
         </div>
       ` : `
         <div class="row rv-resolved-row">
@@ -3160,16 +3178,20 @@ function renderCommentCardHtml(c: any): string {
     <div class="card ${esc(c.status)}" data-cid="${esc(c.id)}">
       <div class="rv-card-header">
         <span class="rv-cat-tag">批注</span>
+        <button type="button" class="rv-sec-badge" data-locate="1" title="点击定位并高亮所属章节与原句">${esc(secLabel)}</button>
         <span class="grow"></span>
         ${c.status === 'open' ? `<button type="button" class="quiet small-btn" data-act="resolve" title="归档此批注">完成</button>` : `<button type="button" class="quiet small-btn" data-act="reopen">重新打开</button>`}
         <button type="button" class="quiet small-btn" data-act="delete" title="删除批注">✕</button>
       </div>
-      <div class="quote ${c.anchor.located ? '' : 'lost'}" ${c.anchor.located ? 'data-locate="1" title="点击定位到正文位置"' : ''}>${esc(quoteText)}${c.anchor.located ? '' : ' · 锚点已移除'}</div>
+      <div class="quote" data-locate="1" title="点击定位到正文位置并高亮对应章节">
+        <span class="quote-text">${esc(quoteText)}</span>
+        <span class="quote-locate-pill">定位原文 ↗</span>
+      </div>
       ${c.replies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}
       ${c.status === 'open' ? `
       <div class="row">
-        <input type="text" placeholder="补充要求或回复…" data-reply>
-        <button data-act="reply" class="small-btn">回复</button>
+        <input type="text" placeholder="添加批注回复或补充要求（回车发送）…" data-reply>
+        <button data-act="reply" class="small-btn primary">添加批注</button>
         <button data-act="ask" class="ai small-btn">让 AI 处理</button>
       </div>` : ''}
     </div>`
@@ -3233,10 +3255,11 @@ function syncManuscriptReviewHighlights(openList: any[]): void {
     sevByClaimId.set(c.id, meta.severity)
     if (existingCommentIds.has(c.id)) continue
     const sentence = (c.anchor?.text || c.snippet || '').trim()
-    if (!sentence) continue
+    const nodeId = c.anchor?.node_ids?.[0] || c.node_id || ''
+    if (!sentence && !nodeId) continue
     reviewChecks.push({
       claim_id: c.id,
-      node_id: c.anchor?.node_id ?? '',
+      node_id: nodeId,
       sentence,
       verdict: `${meta.severityLabel} · ${meta.categoryLabel}`,
       reason: meta.cleanReason,
@@ -3246,10 +3269,16 @@ function syncManuscriptReviewHighlights(openList: any[]): void {
   session.editor.setClaimChecks([...baseChecks, ...reviewChecks])
 
   requestAnimationFrame(() => {
-    document.querySelectorAll<HTMLElement>('#page .claim-warn-text[data-claim-id]').forEach(el => {
+    document.querySelectorAll<HTMLElement>('#page .claim-warn-text[data-claim-id], #page .claim-warn-block[data-claim-id]').forEach(el => {
       const cid = el.dataset.claimId ?? ''
       const sev = sevByClaimId.get(cid)
       if (sev) el.dataset.rvSev = sev
+    })
+    document.querySelectorAll<HTMLElement>('#page mark.comment[data-thread]').forEach(el => {
+      const tid = el.dataset.thread ?? ''
+      const sev = sevByClaimId.get(tid)
+      if (sev) el.dataset.rvSev = sev
+      else delete el.dataset.rvSev
     })
     document.querySelectorAll<HTMLElement>('#page [data-comment]').forEach(el => {
       const ids = (el.dataset.comment ?? '').split(/\s+/).filter(Boolean)
@@ -3260,28 +3289,85 @@ function syncManuscriptReviewHighlights(openList: any[]): void {
   })
 }
 
-$('comments').onclick = async e => {
-  const quoteEl = (e.target as HTMLElement).closest('.quote[data-locate]') as HTMLElement | null
-  if (quoteEl) {
-    const card = quoteEl.closest('[data-cid]') as HTMLElement | null
-    const cid = card?.dataset.cid
-    if (cid) {
-      const check = (detail?.claim_checks ?? []).find((c: any) => c.comment_id === cid)
-      const target = document.querySelector(`[data-comment~="${CSS.escape(cid)}"]`)
-        ?? (check ? document.querySelector(`.claim-warn-text[data-claim-id="${CSS.escape(check.claim_id)}"]`) : null)
-        ?? document.querySelector(`.claim-warn-text[data-claim-id="${CSS.escape(cid)}"]`)
-      target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      target?.classList.add('ai-flash')
-      setTimeout(() => target?.classList.remove('ai-flash'), 1400)
+function locateCommentInDoc(cid: string): void {
+  const card = document.querySelector<HTMLElement>(`#comments [data-cid="${CSS.escape(cid)}"]`)
+  document.querySelectorAll('#comments .card.card-active-focus').forEach(el => el.classList.remove('card-active-focus'))
+  card?.classList.add('card-active-focus')
+
+  const c = (detail?.comments ?? []).find((x: any) => x.id === cid)
+  const check = (detail?.claim_checks ?? []).find((x: any) => x.comment_id === cid)
+
+  if (session?.editor) {
+    const res = session.editor.locateAndHighlightComment({
+      commentId: cid,
+      claimId: check?.claim_id,
+      nodeId: c?.node_id,
+      nodeIds: c?.anchor?.node_ids,
+      sectionNodeId: c?.anchor?.section_node_id,
+      snippet: c?.anchor?.text || c?.snippet,
+    })
+    if (res.sectionTitle && card) {
+      const secBtn = card.querySelector<HTMLElement>('.rv-sec-badge')
+      if (secBtn && secBtn.textContent?.includes('定位章节')) {
+        secBtn.textContent = `§ ${res.sectionTitle.slice(0, 22)}`
+      }
     }
     return
   }
-  const btn = (e.target as HTMLElement).closest('button[data-act]') as HTMLButtonElement | null
-  if (!btn || !session) return
+
+  // Deck 幻灯片模式定位回退
+  const target = document.querySelector<HTMLElement>(`[data-comment~="${CSS.escape(cid)}"]`)
+    ?? (c?.node_id ? document.querySelector<HTMLElement>(`[data-id="${CSS.escape(c.node_id)}"]`) : null)
+  target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  target?.classList.add('ai-flash')
+  setTimeout(() => target?.classList.remove('ai-flash'), 1600)
+}
+
+$('comments').onkeydown = e => {
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return
+  const input = (e.target as HTMLElement).closest<HTMLInputElement>('input[data-reply]')
+  if (!input) return
+  const card = input.closest<HTMLElement>('[data-cid]')
+  const replyBtn = card?.querySelector<HTMLButtonElement>('button[data-act="reply"]')
+  if (replyBtn && input.value.trim()) {
+    e.preventDefault()
+    replyBtn.click()
+  }
+}
+
+$('comments').onclick = async e => {
+  const targetEl = e.target as HTMLElement
+  const locateTrigger = targetEl.closest('[data-locate]') as HTMLElement | null
+  if (locateTrigger) {
+    const card = locateTrigger.closest<HTMLElement>('[data-cid]')
+    if (card?.dataset.cid) locateCommentInDoc(card.dataset.cid)
+    return
+  }
+  const btn = targetEl.closest('button[data-act]') as HTMLButtonElement | null
+  if (!btn) {
+    // 点击卡片空白或理由区域（非输入框/文本框/抽屉）时，同样自动定位并高亮对应章节与原句
+    if (!targetEl.closest('input, textarea, a, .rv-fp-drawer, .rv-reply-drawer, .rv-suggest-box')) {
+      const clickedCard = targetEl.closest<HTMLElement>('[data-cid]')
+      if (clickedCard?.dataset.cid) locateCommentInDoc(clickedCard.dataset.cid)
+    }
+    return
+  }
+  if (!session) return
   const card = btn.closest('[data-cid]') as HTMLElement
   const cid = card.dataset.cid!
   const act = btn.dataset.act
 
+  if (act === 'toggle-reply') {
+    const replyDrawer = card.querySelector<HTMLElement>('[data-reply-drawer]')
+    if (replyDrawer) {
+      replyDrawer.hidden = !replyDrawer.hidden
+      if (!replyDrawer.hidden) {
+        locateCommentInDoc(cid)
+        replyDrawer.querySelector<HTMLInputElement>('[data-reply]')?.focus()
+      }
+    }
+    return
+  }
   if (act === 'toggle-fp') {
     const fpDrawer = card.querySelector<HTMLElement>('[data-fp-drawer]')
     if (fpDrawer) {

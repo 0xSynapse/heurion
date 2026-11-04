@@ -838,6 +838,8 @@ export function renderBlogHomeHtml(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)}</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="shortcut icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-10 -2 112 104'%3E%3Crect x='-10' y='-2' width='112' height='104' rx='22' fill='%23FAF8F4' stroke='%23E5E0D6' stroke-width='2'/%3E%3Crect x='6' y='18' width='16' height='66' rx='8' fill='%23151C19'/%3E%3Crect x='60' y='35' width='16' height='49' rx='8' fill='%23151C19'/%3E%3Crect x='18' y='45' width='46' height='16' rx='8' fill='%230A7D52'/%3E%3Ccircle cx='76' cy='24' r='10' fill='%2300C472'/%3E%3C/svg%3E">
   <meta name="description" content="${escapeHtml(description)}">
   <meta name="author" content="Heurion Research">
   <link rel="canonical" href="${u.canonicalUrl}">
@@ -966,6 +968,8 @@ export function renderBlogPostHtml(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(postTitle)} · Heurion Research</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="shortcut icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-10 -2 112 104'%3E%3Crect x='-10' y='-2' width='112' height='104' rx='22' fill='%23FAF8F4' stroke='%23E5E0D6' stroke-width='2'/%3E%3Crect x='6' y='18' width='16' height='66' rx='8' fill='%23151C19'/%3E%3Crect x='60' y='35' width='16' height='49' rx='8' fill='%23151C19'/%3E%3Crect x='18' y='45' width='46' height='16' rx='8' fill='%230A7D52'/%3E%3Ccircle cx='76' cy='24' r='10' fill='%2300C472'/%3E%3C/svg%3E">
   <meta name="description" content="${escapeHtml(description)}">
   <meta name="keywords" content="${escapeHtml(keywords)}">
   <meta name="author" content="Heurion Research">

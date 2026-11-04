@@ -548,20 +548,23 @@ export const claimPluginKey = new PluginKey<{ checks: ClaimCheckItem[]; decos: D
 
 function claimCheckPlugin() {
   const build = (doc: PMNode, checks: ClaimCheckItem[]) => {
-    const flagged = checks.filter(c => c.verdict !== 'supported' && c.sentence && c.sentence.trim())
+    const flagged = checks.filter(c => c.verdict !== 'supported' && ((c.sentence && c.sentence.trim()) || c.node_id))
     if (flagged.length === 0) return DecorationSet.empty
 
     const decos: Decoration[] = []
+    const matchedIds = new Set<string>()
     doc.descendants((node, pos) => {
       if (!node.isTextblock) return true
       const text = node.textContent
       for (const check of flagged) {
-        const s = check.sentence.trim()
+        const s = (check.sentence || '').trim()
+        if (!s) continue
         let idx = text.indexOf(s)
         while (idx >= 0) {
           const from = charOffsetToPos(node, pos, idx)
           const to = charOffsetToPos(node, pos, idx + s.length)
           if (to > from) {
+            matchedIds.add(check.claim_id)
             decos.push(Decoration.inline(from, to, {
               class: 'claim-warn-text',
               'data-claim-id': check.claim_id,
@@ -573,6 +576,27 @@ function claimCheckPlugin() {
       }
       return true
     })
+    // 对表格块、复合块或跨行内引用未命中精确子串的条目，在对应 node_id 块上挂载块级高亮装饰
+    const unmatchedByNode = new Map<string, ClaimCheckItem>()
+    for (const check of flagged) {
+      if (!matchedIds.has(check.claim_id) && check.node_id && !unmatchedByNode.has(check.node_id)) {
+        unmatchedByNode.set(check.node_id, check)
+      }
+    }
+    if (unmatchedByNode.size > 0) {
+      doc.descendants((node, pos) => {
+        const id = node.attrs?.id as string | undefined
+        if (id && unmatchedByNode.has(id)) {
+          const check = unmatchedByNode.get(id)!
+          decos.push(Decoration.node(pos, pos + node.nodeSize, {
+            class: 'claim-warn-block',
+            'data-claim-id': check.claim_id,
+            title: `审稿核查 [${check.verdict}]：${check.reason}`,
+          }))
+        }
+        return true
+      })
+    }
     return DecorationSet.create(doc, decos)
   }
 
@@ -816,7 +840,7 @@ export class Editor {
         return true
       },
       handleClickOn: (_view, _pos, _node, _nodePos, event) => {
-        const claimEl = (event.target as HTMLElement).closest('.claim-warn-text') as HTMLElement | null
+        const claimEl = (event.target as HTMLElement).closest('.claim-warn-text, .claim-warn-block') as HTMLElement | null
         if (claimEl?.dataset.claimId) {
           opts.onClaimClick?.(claimEl.dataset.claimId)
           return true
@@ -1042,9 +1066,134 @@ export class Editor {
     return parent.type.name === 'heading' ? `h${parent.attrs.level}` : 'p'
   }
 
+  private focusCleanupTimer: ReturnType<typeof setTimeout> | null = null
+
   scrollToThread(thread: string): void {
-    const el = this.view.dom.querySelector(`mark.comment[data-thread="${CSS.escape(thread)}"]`)
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    this.locateAndHighlightComment({ commentId: thread })
+  }
+
+  /**
+   * 定位批注/审稿意见所在的原句或表格，并同时高亮其所属的章节（heading + 章节段落范围），
+   * 帮助用户在长文稿中立即看清该批注落在哪一章节与哪一段落。
+   */
+  locateAndHighlightComment(opts: {
+    commentId: string
+    claimId?: string
+    nodeId?: string
+    nodeIds?: string[]
+    sectionNodeId?: string
+    snippet?: string
+  }): { found: boolean; sectionTitle?: string } {
+    const root = this.view.dom
+    if (this.focusCleanupTimer) {
+      clearTimeout(this.focusCleanupTimer)
+      this.focusCleanupTimer = null
+    }
+    root.querySelectorAll('.comment-focus-target, .comment-focus-block, .section-focus-heading, .section-focus-block').forEach(el => {
+      el.classList.remove('comment-focus-target', 'comment-focus-block', 'section-focus-heading', 'section-focus-block')
+      if (el instanceof HTMLElement) delete el.dataset.secFocusLabel
+    })
+
+    const cid = opts.commentId
+    const claimId = opts.claimId || cid
+    let targetEl: HTMLElement | null =
+      root.querySelector<HTMLElement>(`mark.comment[data-thread="${CSS.escape(cid)}"]`) ??
+      root.querySelector<HTMLElement>(`.claim-warn-text[data-claim-id="${CSS.escape(claimId)}"]`) ??
+      root.querySelector<HTMLElement>(`.claim-warn-text[data-claim-id="${CSS.escape(cid)}"]`) ??
+      root.querySelector<HTMLElement>(`.claim-warn-block[data-claim-id="${CSS.escape(claimId)}"]`) ??
+      root.querySelector<HTMLElement>(`.claim-warn-block[data-claim-id="${CSS.escape(cid)}"]`)
+
+    const candidateNodeIds = [...(opts.nodeIds ?? []), ...(opts.nodeId ? [opts.nodeId] : [])].filter(Boolean)
+    if (!targetEl) {
+      for (const nid of candidateNodeIds) {
+        const byNode = root.querySelector<HTMLElement>(`[data-id="${CSS.escape(nid)}"]`)
+        if (byNode) {
+          targetEl = byNode
+          break
+        }
+      }
+    }
+
+    if (!targetEl && opts.snippet) {
+      const cleanProbe = opts.snippet
+        .replace(/^\[表格\]\s*/, '')
+        .replace(/\[@[cm]:[^\]]+\]/g, '')
+        .trim()
+      const probes = [
+        cleanProbe.slice(0, 28),
+        ...cleanProbe.split(/[，。；：,;（）()[\]\s]+/).filter(s => s.length >= 5),
+      ].filter(Boolean)
+      const blocks = Array.from(root.querySelectorAll<HTMLElement>('p, table, li, h1, h2, h3, h4, figure'))
+      for (const p of probes) {
+        const hit = blocks.find(b => (b.textContent ?? '').includes(p))
+        if (hit) {
+          targetEl = hit
+          break
+        }
+      }
+    }
+
+    if (!targetEl) return { found: false }
+
+    const blockEl = (targetEl.closest('p, table, li, figure, h1, h2, h3, h4') as HTMLElement | null) ?? targetEl
+    targetEl.classList.add('comment-focus-target')
+    if (blockEl !== targetEl) {
+      blockEl.classList.add('comment-focus-block')
+    } else {
+      blockEl.classList.add('comment-focus-block')
+    }
+
+    // 查找所属顶层块并解析所属章节（heading + 该章节下的连续块）
+    let topBlock: HTMLElement | null = blockEl
+    while (topBlock && topBlock.parentElement && topBlock.parentElement !== root) {
+      topBlock = topBlock.parentElement
+    }
+
+    const isHeading = (el: Element) => /^H[1-6]$/.test(el.tagName)
+    const headingLevel = (el: Element) => Number(el.tagName.slice(1)) || 6
+
+    let sectionHeading: HTMLElement | null = null
+    if (opts.sectionNodeId) {
+      sectionHeading = root.querySelector<HTMLElement>(`[data-id="${CSS.escape(opts.sectionNodeId)}"]`)
+    }
+    if (!sectionHeading && topBlock) {
+      let cur: Element | null = topBlock
+      while (cur) {
+        if (isHeading(cur) && (cur.textContent ?? '').trim()) {
+          sectionHeading = cur as HTMLElement
+          break
+        }
+        cur = cur.previousElementSibling
+      }
+    }
+
+    let sectionTitle: string | undefined
+    if (sectionHeading) {
+      sectionTitle = (sectionHeading.textContent ?? '').trim()
+      sectionHeading.classList.add('section-focus-heading')
+      sectionHeading.dataset.secFocusLabel = '当前批注所在章节'
+      const baseLevel = headingLevel(sectionHeading)
+      let cursor: Element | null = sectionHeading.nextElementSibling
+      let count = 0
+      while (cursor && count < 40) {
+        if (isHeading(cursor) && headingLevel(cursor) <= baseLevel) break
+        cursor.classList.add('section-focus-block')
+        cursor = cursor.nextElementSibling
+        count++
+      }
+    }
+
+    targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+
+    this.focusCleanupTimer = setTimeout(() => {
+      root.querySelectorAll('.comment-focus-target, .comment-focus-block, .section-focus-heading, .section-focus-block').forEach(el => {
+        el.classList.remove('comment-focus-target', 'comment-focus-block', 'section-focus-heading', 'section-focus-block')
+        if (el instanceof HTMLElement) delete el.dataset.secFocusLabel
+      })
+      this.focusCleanupTimer = null
+    }, 4500)
+
+    return { found: true, sectionTitle }
   }
 
   /** 服务端给出的引用编号规则（正文末尾有用户自己的文献表时接着编号）。 */

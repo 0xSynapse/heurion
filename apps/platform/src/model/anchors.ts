@@ -15,6 +15,41 @@ export interface AnchorLocation {
   node_ids: string[]
   /** 当前被锚定的文字。 */
   text: string
+  /** 所属章节标题（如「1 引言」「方法」「结果」）。 */
+  section_title?: string
+  /** 所属章节标题块的 node_id。 */
+  section_node_id?: string
+}
+
+/** 查找目标块所属的最近章节标题（heading）及其 node_id。 */
+export function findSectionForNode(doc: PMNode, targetNodeId: string): { section_title?: string; section_node_id?: string } {
+  if (!targetNodeId) return {}
+  let currentTitle: string | undefined
+  let currentId: string | undefined
+  for (let i = 0; i < doc.childCount; i++) {
+    const block = doc.child(i)
+    if (block.type.name === 'heading') {
+      const t = block.textContent.trim()
+      if (t) {
+        currentTitle = t
+        currentId = (block.attrs.id as string | undefined) ?? undefined
+      }
+    }
+    let matched = block.attrs.id === targetNodeId
+    if (!matched && !block.isTextblock) {
+      block.descendants(n => {
+        if (n.attrs?.id === targetNodeId) {
+          matched = true
+          return false
+        }
+        return true
+      })
+    }
+    if (matched) {
+      return { section_title: currentTitle, section_node_id: currentId }
+    }
+  }
+  return {}
 }
 
 /** 文档中每条线程 mark 覆盖的块与文字。 */
@@ -46,13 +81,26 @@ export function threadMarks(doc: PMNode): Map<string, { node_ids: string[]; text
 
 export function locate(doc: PMNode, comment: Pick<CommentRow, 'id' | 'node_id' | 'snippet'>, marks = threadMarks(doc)): AnchorLocation {
   const hit = marks.get(comment.id)
-  if (hit) return { located: true, node_ids: hit.node_ids, text: hit.text }
+  if (hit) {
+    const primaryNodeId = hit.node_ids[0] ?? comment.node_id
+    const sec = findSectionForNode(doc, primaryNodeId)
+    return { located: true, node_ids: hit.node_ids, text: hit.text, ...sec }
+  }
+  const byId = indexById(doc)
+  const nodeHit = byId.get(comment.node_id)
   // 无 mark 的块级锚点：块还在即定位
   if (!comment.snippet) {
-    const node = indexById(doc).get(comment.node_id)
-    return node ? { located: true, node_ids: [comment.node_id], text: plainText(node.node).slice(0, 200) } : { located: false, node_ids: [], text: '' }
+    if (!nodeHit) return { located: false, node_ids: [], text: '' }
+    const sec = findSectionForNode(doc, comment.node_id)
+    return { located: true, node_ids: [comment.node_id], text: plainText(nodeHit.node).slice(0, 200), ...sec }
   }
-  return { located: false, node_ids: [], text: '' }
+  // 表格 / 图表等复合块审稿批注（带可读摘要 snippet 但锚在整块 node_id 上）：块还在即视为已定位
+  if (nodeHit && (nodeHit.node.type.name === 'table' || nodeHit.node.type.name === 'figure' || comment.snippet.startsWith('[表格]'))) {
+    const sec = findSectionForNode(doc, comment.node_id)
+    return { located: true, node_ids: [comment.node_id], text: comment.snippet, ...sec }
+  }
+  const sec = nodeHit ? findSectionForNode(doc, comment.node_id) : {}
+  return { located: false, node_ids: nodeHit ? [comment.node_id] : [], text: '', ...sec }
 }
 
 export class AnchorError extends Error {}

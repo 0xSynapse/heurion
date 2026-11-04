@@ -1,6 +1,7 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import type { Complete } from '../harness/complete.ts'
 import { attachComment, AnchorError } from '../model/anchors.ts'
+import { indexById } from '../model/ids.ts'
 import type { Documents } from '../model/runtime.ts'
 import { relevantPassages, type FullTextClient } from '../literature/fulltext.ts'
 import type { PubMedClient } from '../literature/pubmed.ts'
@@ -621,22 +622,111 @@ export class ClaimService {
       supported: '高风险定量/亚组论断仅由摘要支持（缺少全文或数据表佐证，建议核对原文全文）',
       exempted: '',
     }[verdict]
-    const row = store.addComment({ doc_id: docId, node_id: claim.node_id, snippet: claim.snippet })
+    const resolved = this.resolveTargetNodeAndSnippet(doc, claim.node_id, claim.snippet, claim.sentence)
+    const row = store.addComment({ doc_id: docId, node_id: resolved.nodeId, snippet: resolved.snippet })
     let nextDoc = doc
     let anchored = false
     try {
-      nextDoc = attachComment(doc, claim.node_id, claim.snippet, row.id).doc
+      nextDoc = attachComment(doc, resolved.nodeId, resolved.anchorSnippet, row.id).doc
       anchored = true
     } catch (err) {
       if (!(err instanceof AnchorError)) throw err
-      // 找不到锚定文字：退化为整块锚点
-      store.db.prepare("UPDATE comments SET snippet = '' WHERE id = ?").run(row.id)
+      // 找不到段落内精确连续文字（如跨行内引用原子或表格块）：退化为整块 comment mark 锚点
+      try {
+        nextDoc = attachComment(doc, resolved.nodeId, '', row.id).doc
+        anchored = true
+      } catch {
+        store.db.prepare("UPDATE comments SET snippet = '' WHERE id = ?").run(row.id)
+      }
     }
     const quoteBlock = evidenceQuote
       ? `\n${evidenceTier === 'table' || evidenceTier === 'fulltext' ? '【匹配全文/表格原文】' : '【匹配摘要原文】'}：${evidenceQuote}`
       : ''
     store.addReply(row.id, 'ai', `论断核对：${label}。${reason}${quoteBlock}\n句子：${claim.sentence}`)
     return { commentId: row.id, doc: nextDoc, anchored }
+  }
+
+  /**
+   * 为审稿/核查批注解析最匹配的文档块 ID 与可锚定片段：
+   * - 当 LLM Stage 3 给出的 node_id 缺失、为章节标题或文字落在其他段落/表格时，自动按文本重叠度回溯真实块；
+   * - 当句子中间夹有引用原子 [@c:...] / 测量原子 [@m:...] 时，自动提取段落内最长连续子串用于精确打标。
+   */
+  private resolveTargetNodeAndSnippet(
+    doc: PMNode,
+    rawNodeId: string,
+    rawSnippet: string,
+    sentence: string,
+  ): { nodeId: string; snippet: string; anchorSnippet: string } {
+    const byId = indexById(doc)
+    const cleanSentence = sentence.replace(/\[@[cm]:[^\]]+\]/g, ' ').replace(/\s+/g, ' ').trim()
+    const displaySnippet = (rawSnippet || cleanSentence).trim().slice(0, 80)
+
+    let targetId = rawNodeId
+    const initialHit = byId.get(targetId)
+    const probe = rawSnippet.replace(/^\[表格\]\s*/, '').trim().slice(0, 32) || cleanSentence.slice(0, 32)
+
+    const blockContainsProbe = (node: PMNode): boolean => {
+      if (!probe) return true
+      const txt = node.textContent
+      if (txt.includes(probe)) return true
+      const clauses = ( cleanSentence || rawSnippet )
+        .split(/[，。；、,;：:\s[\]()（）]+/)
+        .map(s => s.trim())
+        .filter(s => s.length >= 5)
+      return clauses.some(c => txt.includes(c))
+    }
+
+    if (!initialHit || (initialHit.node.type.name !== 'table' && !blockContainsProbe(initialHit.node))) {
+      let bestId = initialHit ? targetId : ''
+      let bestScore = initialHit ? this.scoreOverlap(initialHit.node.textContent, cleanSentence || rawSnippet) : -1
+      doc.descendants(node => {
+        const id = node.attrs?.id as string | undefined
+        if (!id) return true
+        if (!node.isTextblock && node.type.name !== 'table') return true
+        const txt = node.textContent
+        if (!txt.trim()) return false
+        let s = this.scoreOverlap(txt, cleanSentence || rawSnippet)
+        if (probe && txt.includes(probe)) s += 25
+        if (node.type.name === 'paragraph' || node.type.name === 'table') s += 1
+        if (s > bestScore) {
+          bestScore = s
+          bestId = id
+        }
+        return node.type.name !== 'table'
+      })
+      if (bestId) targetId = bestId
+    }
+
+    const finalHit = byId.get(targetId)
+    if (!finalHit) {
+      return { nodeId: targetId, snippet: displaySnippet, anchorSnippet: displaySnippet }
+    }
+
+    if (!finalHit.node.isTextblock) {
+      // 表格、列表、图片等复合块：使用空 anchorSnippet 打整块 comment mark，同时保留可读 snippet
+      return { nodeId: targetId, snippet: displaySnippet, anchorSnippet: '' }
+    }
+
+    const blockText = finalHit.node.textContent
+    if (displaySnippet && blockText.includes(displaySnippet)) {
+      return { nodeId: targetId, snippet: displaySnippet, anchorSnippet: displaySnippet }
+    }
+
+    // 从句子或 snippet 中提取在该段落中唯一出现的最长连续子串（避开 [@c:...] 行内原子断点）
+    const segments = [rawSnippet, cleanSentence]
+      .flatMap(s => s.split(/\[@[cm]:[^\]]+\]|[\r\n]+|[，。；：,;（）()[\]]+/))
+      .map(s => s.trim())
+      .filter(s => s.length >= 4)
+      .sort((a, b) => b.length - a.length)
+
+    for (const seg of segments) {
+      const sub = seg.slice(0, 60)
+      if (blockText.includes(sub)) {
+        return { nodeId: targetId, snippet: displaySnippet || sub, anchorSnippet: sub }
+      }
+    }
+
+    return { nodeId: targetId, snippet: displaySnippet, anchorSnippet: '' }
   }
 
   /**
@@ -719,17 +809,25 @@ export class ClaimService {
         let doc = this.docs.get(docId)
         const ops: Array<{ op: 'claim_comment'; thread: string }> = []
         for (const item of deduplicated) {
+          const resolved = this.resolveTargetNodeAndSnippet(doc, item.node_id, item.snippet, item.sentence)
+          item.node_id = resolved.nodeId
           const row = store.addComment({
             doc_id: docId,
-            node_id: item.node_id,
-            snippet: item.snippet.slice(0, 80),
+            node_id: resolved.nodeId,
+            snippet: resolved.snippet,
           })
           item.comment_id = row.id
           try {
-            doc = attachComment(doc, item.node_id, item.snippet.slice(0, 80), row.id).doc
+            doc = attachComment(doc, resolved.nodeId, resolved.anchorSnippet, row.id).doc
             ops.push({ op: 'claim_comment', thread: row.id })
           } catch {
-            /* 锚点退化为块级评论 */
+            /* 段落内多处重复或跨行内原子时，退化为整块 comment mark 锚点，确保正文中始终可定位高亮 */
+            try {
+              doc = attachComment(doc, resolved.nodeId, '', row.id).doc
+              ops.push({ op: 'claim_comment', thread: row.id })
+            } catch {
+              /* 块级兜底 */
+            }
           }
           if (typeof store?.addReply === 'function') {
             store.addReply(
