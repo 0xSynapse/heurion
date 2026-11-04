@@ -756,6 +756,22 @@ export class ClaimService {
    * - `heurion_deep`：PAT 四阶段 + Stage 3 结构化四维核查（Pass A/B/C/D）+ Stage 4 全局合成与批注锚定；
    * - `heurion_evolved`：PAT 四阶段 + 结构化四维核查 + 医生批注反驳自进化记忆（Track A narrow + Track B）。
    */
+  async deepReview(
+    docId: string,
+    opts: {
+      mode?: DeepReviewMode
+      complete?: Complete | null
+      owner?: string
+      anchorComments?: boolean
+      passK?: number
+    } = {},
+  ): Promise<FourStageReviewResult> {
+    return this.runFourStageDeepReview(docId, {
+      mode: opts.mode ?? 'heurion_evolved',
+      ...opts,
+    })
+  }
+
   async runFourStageDeepReview(
     docId: string,
     opts: {
