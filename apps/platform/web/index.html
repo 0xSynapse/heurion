@@ -70,11 +70,9 @@
       </div>
       <div class="actions" id="studioActions" hidden>
         <button id="studioUploadDatasetBtn" class="sky block" title="上传 Excel (.xlsx) / CSV / SPSS / Stata 数据表用于制图">＋ 上传数据表制图</button>
-        <div class="split">
-          <button id="newStudioFigBtn" class="ghost-dark" title="临床队列预后制图（mRS Grotta / 桑基图 / 森林图 / KM 曲线）">临床队列图</button>
-          <button id="studioQuickMechBtn" class="ghost-dark" title="机制通路图（BioRender / Draw.io / PPTX）">机制通路图</button>
-        </div>
-        <button id="studioQuickStatsBtn" class="ghost-dark" hidden>实验统计图</button>
+        <button id="newStudioFigBtn" hidden>临床队列图</button>
+        <button id="studioQuickMechBtn" hidden>机制通路图</button>
+        <button id="studioQuickStatsBtn" hidden>实验统计图</button>
         <input id="studioDatasetFileInput" type="file" accept=".csv,.tsv,.xlsx,.xls,.sav,.dta,.sas7bdat,.xpt,.rds,.rda,.rdata" multiple hidden>
       </div>
       <div class="actions" id="calActions" hidden>
@@ -193,8 +191,6 @@
       <span class="sep"></span>
       <button data-cmd="undo" title="撤销 ⌘Z">↶</button>
       <button data-cmd="redo" title="重做 ⌘⇧Z">↷</button>
-      <span class="grow"></span>
-      <button data-cmd="deepReview" class="tb-review-btn" title="一键通读全文与表格，核查样本量分母、算术自洽、统计方法与结论表述">✦ 深度审稿</button>
     </div>
     <div class="suggest-banner" id="suggestBanner" hidden>
       <span class="dot"></span><span id="suggestSummary"></span>
@@ -323,17 +319,22 @@
         <div class="kb-picked" id="dsPicked" hidden></div>
         <div class="kb-picked" id="ptPicked" hidden></div>
         <div class="chat-images" id="chatImages" hidden></div>
-        <textarea id="chatInput" rows="3" placeholder="输入写作、润色或制图需求（⌘↩ 发送；全文数据与逻辑审查请点上方「审稿与批注」）"></textarea>
+        <textarea id="chatInput" rows="3" placeholder="输入写作、润色或统计分析需求（⌘↩ 发送）"></textarea>
         <div class="row">
           <div class="composer-opts">
-            <button class="quiet small-btn" id="kbPickBtn" title="选资料库里的资料，让 AI 依据它们写">＋ 资料</button>
-            <button class="quiet small-btn" id="ptPickBtn" title="选患者，让 AI 读这位患者的资料与化验" hidden>＋ 患者</button>
-            <button class="quiet small-btn" id="dsPickBtn" title="选上传的数据，让 AI 做统计分析">＋ 数据</button>
-            <button class="quiet small-btn" id="chatStudioBtn" title="插入已归档科研图表或就地绘制新图">＋ 制图</button>
-            <button class="quiet small-btn" id="imgUploadBtn" title="上传或粘贴图片">＋ 图片</button>
+            <div class="menu-wrap">
+              <button type="button" class="quiet small-btn" id="composerContextBtn" aria-haspopup="menu" title="关联参考资料库、研究数据集、患者档案或上传图片">＋ 关联上下文 ▾</button>
+              <div class="dropdown" id="composerContextMenu" role="menu" hidden>
+                <button type="button" id="kbPickBtn" role="menuitem">参考资料库…</button>
+                <button type="button" id="dsPickBtn" role="menuitem">研究数据集…</button>
+                <button type="button" id="ptPickBtn" role="menuitem" hidden>在管患者档案…</button>
+                <button type="button" id="imgUploadBtn" role="menuitem">上传或粘贴图片…</button>
+              </div>
+            </div>
             <input type="file" id="chatImageInput" accept="image/*" multiple hidden>
           </div>
-          <button id="cancelBtn" disabled>停止</button>
+          <span class="grow"></span>
+          <button id="cancelBtn" disabled hidden>停止</button>
           <button id="sendBtn" class="ai" disabled>发送</button>
         </div>
       </div>
@@ -407,7 +408,6 @@
       <button class="welcome-card" data-start="doc"><b>新建文档</b><span>论文、综述、病例报告、基金标书，导出 Word</span></button>
       <button class="welcome-card" data-start="deck"><b>新建幻灯片</b><span>学术汇报、文献解读、组会答辩，导出 PowerPoint</span></button>
       <button class="welcome-card" data-start="upload"><b>上传文件</b><span>导入 docx / pptx / pdf，保留原格式继续改与深度审稿</span></button>
-      <button class="welcome-card" data-start="studio"><b>独立医学制图工作台</b><span>单独画标书机制图与实验统计图</span></button>
     </div>
     <h2>试试这样让 Heurion 帮你</h2>
     <div class="welcome-examples">

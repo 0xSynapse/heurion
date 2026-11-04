@@ -405,7 +405,6 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
             <div class="row" style="gap: 8px; flex-wrap: wrap">
               <button class="primary small-btn" data-generate-full-report="${latestImg.id}" title="生成影像量化所见报告（只列实测值与相关化验，不含诊断结论；AI 生成的存为待医生确认的草稿）">${icon('report')} 影像所见报告</button>
               <button class="small-btn quiet" data-open-mpr="${latestImg.id}" title="进入 3D 多平面重建 (MPR) 互动切片浏览器">${icon('mpr')} 3D 切片</button>
-              <button class="small-btn quiet" data-img-report="${latestImg.id}">${icon('write')} 写病例报告</button>
               <button class="quiet small-btn" data-tab="records">详细指标与更多 →</button>
             </div>
           </div>
@@ -631,10 +630,10 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
                   <div class="pt-imaging-actions">
                     <button class="primary small-btn" data-generate-full-report="${r.id}" title="生成影像量化所见报告（只列实测值与相关化验，不含诊断结论；AI 生成的存为待医生确认的草稿）">${icon('report')} 影像所见报告</button>
                     ${data.model_id !== 'recist_longitudinal_comparator' ? `<button class="small-btn quiet" data-open-mpr="${r.id}" title="打开 3D 多平面重建 (MPR) 互动浏览器：实时滑动轴位/冠状位/矢状位连续切片、切换窗宽窗位并定位病灶">${icon('mpr')} 3D 切片 (MPR)</button>` : ''}
-                    <button class="small-btn quiet" data-img-report="${r.id}" title="自动创建文档并由 AI 撰写 CARE 准则病例报告，插入该影像量化指标与关键截面图">${icon('write')} 写影像病例报告</button>
                     <details class="pt-more-actions">
                       <summary class="quiet small-btn">更多 ▾</summary>
                       <div class="pt-more-actions-row">
+                        <button class="small-btn quiet" data-img-report="${r.id}" title="自动创建文档并由 AI 撰写 CARE 准则病例报告，插入该影像量化指标与关键截面图">${icon('write')} 写影像病例报告</button>
                         <button class="small-btn quiet" data-img-canvas="${r.id}" title="在 Heurion 原生幻灯片工作台制作包含此影像指标的多页会诊 Slide (PPTX)">${icon('deck')} 制作会诊 Slide</button>
                         <button class="small-btn quiet" data-open-evidence="${r.id}" title="查看多模态因果诊断链 (影像 + 化验 + 病史)">${icon('evidence')} 因果诊断链</button>
                         ${hasMultiImaging && data.model_id !== 'recist_longitudinal_comparator' ? `<button class="small-btn quiet" data-compare-with="${r.id}" title="以该影像为基准进行 RECIST 1.1 多期随访对比">${icon('compare')} 随访对比</button>` : ''}

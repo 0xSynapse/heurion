@@ -508,7 +508,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           <input class="rs-title" id="rsTitle" value="${esc(s.title)}" aria-label="研究名称" style="flex:1;min-width:240px;"${ro ? ' readonly' : ''}>
           <button class="small-btn primary" data-act="bundle" title="一键导出包含 Word Table 1、Figure 1~6 矢量图、Prism/R/Draw.io/Visio/PPT 原工程文件、方法与结果初稿及 STROBE 清单的完整投稿压缩包 (.zip)">${icon('download', { size: 13 })} 导出 SCI 投稿出版包 (.zip)</button>
           <div class="menu-wrap"><button data-act="more" aria-haspopup="menu">更多 ▾</button>
-            <div class="dropdown" id="rsMore" hidden>${w('<button data-act="attach">归入已有文档…</button>')}<button data-act="figures">弹窗版快速制图…</button>${isOwner ? '<button data-act="delete" class="danger-text">删除研究项目</button>' : '<button data-act="leave" class="danger-text">退出研究</button>'}</div></div>
+            <div class="dropdown" id="rsMore" hidden>${w('<button data-act="attach">归入已有文档…</button>')}${isOwner ? '<button data-act="delete" class="danger-text">删除研究项目</button>' : '<button data-act="leave" class="danger-text">退出研究</button>'}</div></div>
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap;">
           <select id="rsDesign" aria-label="研究设计"${ro}><option value="">研究设计（未定）</option>${Object.entries(DESIGNS).map(([k, v]) => `<option value="${k}"${s.design === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
@@ -538,7 +538,6 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           </section>
           <section class="rs-card">
             <div class="rs-card-head"><h3>数据集 (Datasets)</h3>
-              <button class="quiet small-btn" data-rs-tab="data">Table 1 工作区 →</button>
               ${w('<button class="small-btn" data-act="upload">＋ 上传数据</button><input type="file" id="rsUpload" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.xpt,.sas7bdat,.sav,.zsav,.dta" multiple hidden>')}
             </div>
             ${s.datasets.length ? `<ul class="rs-list">${s.datasets.map(d => `<li class="rs-item" data-dataset="${d.dataset_id}"><span class="rs-kind">${esc(d.format)}</span><b>${esc(d.name)}</b>
@@ -550,10 +549,6 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           <section class="rs-card wide rs-folder-card">
             <div class="rs-card-head">
               <h3><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>项目图表成果库 (figures/ · ${s.analyses.length} 份产出)</h3>
-              <div style="margin-left:auto; display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                <button class="small-btn" data-rs-tab="gallery">${icon('grid', { size: 13 })} 多面板拼图</button>
-                <button class="small-btn primary" data-rs-tab="studio">${icon('chart', { size: 13 })} 进入统计与制图工作台 →</button>
-              </div>
             </div>
             <div class="rs-folder-browser">
               <div class="rs-folder-header">

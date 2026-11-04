@@ -2003,37 +2003,8 @@ $('turnBanner').onclick = async e => {
 let activeSubagentTask: { role: string; role_label: string; task: string } | null = null
 
 function renderSubagentWelcome(): void {
-  const chatLog = $('chatLog')
-  if (!chatLog || chatLog.querySelector('.msg') || $('chatSubagentWelcome')) return
-  const welcome = document.createElement('div')
-  welcome.id = 'chatSubagentWelcome'
-  welcome.className = 'chat-subagent-welcome'
-  welcome.innerHTML = `
-    <div class="welcome-header">
-      <div class="welcome-title"><span class="welcome-pulse"></span>写作与科研助手已就绪</div>
-      <div class="welcome-subtitle">直接输入起草、润色、统计分析或检索需求；全文数据与方法学核查可在「审稿与批注」中一键完成：</div>
-    </div>
-    <div class="chat-quick-starts">
-      <button type="button" class="chat-action-pill primary-pill" data-quick-review="1">✦ 一键全文深度审稿</button>
-      <button type="button" class="chat-action-pill" data-quick-prompt="请检索 PubMed 相关权威文献，补充当前章节的临床证据并按 AMA 格式插入引用">检索 PubMed 并补齐引用</button>
-      <button type="button" class="chat-action-pill" data-quick-prompt="请按 SCI 临床医学期刊规范润色当前段落的学术表达，保持客观严谨">润色当前章节学术表达</button>
-    </div>
-  `
-  welcome.addEventListener('click', e => {
-    const revBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-quick-review]')
-    if (revBtn) {
-      switchTab('commentPane')
-      void runDeepReview()
-      return
-    }
-    const promptBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-quick-prompt]')
-    if (promptBtn?.dataset.quickPrompt) {
-      const input = $<HTMLTextAreaElement>('chatInput')
-      input.value = promptBtn.dataset.quickPrompt
-      input.focus()
-    }
-  })
-  chatLog.appendChild(welcome)
+  // 对话区保持极简清爽，不再展示与「审稿与批注」重叠的欢迎卡片与快捷胶囊
+  $('chatSubagentWelcome')?.remove()
 }
 
 interface SubagentCardState {
@@ -2314,7 +2285,9 @@ function renderTurnEvent(ev: any): void {
 }
 
 function setBusy(b: boolean): void {
-  $<HTMLButtonElement>('cancelBtn').disabled = !b
+  const cancelBtn = $<HTMLButtonElement>('cancelBtn')
+  cancelBtn.disabled = !b
+  cancelBtn.hidden = !b
   $<HTMLButtonElement>('sendBtn').textContent = b ? '排队发送' : '发送'
 }
 
@@ -2498,15 +2471,27 @@ $('chatImages').onclick = e => {
 }
 
 $('imgUploadBtn')?.addEventListener('click', () => {
+  const ctxMenu = document.getElementById('composerContextMenu')
+  if (ctxMenu) ctxMenu.hidden = true
   $<HTMLInputElement>('chatImageInput')?.click()
 })
-$('chatStudioBtn')?.addEventListener('click', () => {
-  void researchUi.openDocFigureModal({
-    docTitle: detail?.title || '当前文稿',
-    onInsert: async (assetId, caption) => {
-      await insertFigureIntoActiveSession(assetId, caption)
-    },
-  })
+document.getElementById('composerContextBtn')?.addEventListener('click', e => {
+  e.stopPropagation()
+  const btn = e.currentTarget as HTMLElement
+  const menu = document.getElementById('composerContextMenu')
+  if (!menu) return
+  menu.hidden = !menu.hidden
+  if (!menu.hidden) placeFixedPopup(menu, btn.getBoundingClientRect(), false)
+})
+document.getElementById('composerContextMenu')?.addEventListener('click', () => {
+  const menu = document.getElementById('composerContextMenu')
+  if (menu) menu.hidden = true
+})
+document.addEventListener('click', e => {
+  const menu = document.getElementById('composerContextMenu')
+  if (menu && !menu.hidden && !(e.target as HTMLElement).closest('#composerContextBtn')) {
+    menu.hidden = true
+  }
 })
 $<HTMLInputElement>('chatImageInput')?.addEventListener('change', e => {
   const input = e.target as HTMLInputElement
@@ -3041,7 +3026,7 @@ function renderCommentCardHtml(c: any): string {
           <textarea class="rv-fix-input" data-fix-input rows="2">${esc(defaultFix)}</textarea>
         </div>` : ''}
         <div class="rv-action-bar">
-          <button type="button" class="primary small-btn" data-act="apply-claim-fix" data-fix="${esc(defaultFix)}">采纳修改</button>
+          ${meta.suggestion ? `<button type="button" class="primary small-btn" data-act="apply-claim-fix" data-fix="${esc(defaultFix)}">采纳修改</button>` : ''}
           <button type="button" class="quiet small-btn" data-act="resolve" title="知晓该提醒，保留正文原写法并归档">知晓保留</button>
           <button type="button" class="quiet small-btn rv-fp-btn" data-act="toggle-fp" title="标记为误报或专科常规写法，系统会自动提炼规则，后续不再误报">误报 · 以后免报</button>
         </div>
@@ -3074,13 +3059,20 @@ function renderCommentCardHtml(c: any): string {
   }
   return `
     <div class="card ${esc(c.status)}" data-cid="${esc(c.id)}">
+      <div class="rv-card-header">
+        <span class="rv-cat-tag">批注</span>
+        <span class="grow"></span>
+        ${c.status === 'open' ? `<button type="button" class="quiet small-btn" data-act="resolve" title="归档此批注">完成</button>` : `<button type="button" class="quiet small-btn" data-act="reopen">重新打开</button>`}
+        <button type="button" class="quiet small-btn" data-act="delete" title="删除批注">✕</button>
+      </div>
       <div class="quote ${c.anchor.located ? '' : 'lost'}" ${c.anchor.located ? 'data-locate="1" title="点击定位到正文位置"' : ''}>${esc(quoteText)}${c.anchor.located ? '' : ' · 锚点已移除'}</div>
       ${c.replies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}
+      ${c.status === 'open' ? `
       <div class="row">
-        ${c.status === 'open'
-          ? `<input type="text" placeholder="追问或补充（含 @heurion 自动处理）" data-reply><button data-act="reply">回复</button><button data-act="ask" class="ai">让 AI 处理</button><button data-act="resolve">完成</button><button data-act="delete" title="删除评论">删除</button>`
-          : `<span class="muted">已完成</span><span class="grow"></span><button data-act="reopen">重新打开</button><button data-act="delete" title="删除评论">删除</button>`}
-      </div>
+        <input type="text" placeholder="补充要求或回复…" data-reply>
+        <button data-act="reply" class="small-btn">回复</button>
+        <button data-act="ask" class="ai small-btn">让 AI 处理</button>
+      </div>` : ''}
     </div>`
 }
 
@@ -3433,39 +3425,16 @@ let refImportHtml = ''
 
 function renderCites(): void {
   const list: any[] = detail?.citations ?? []
-  const checks: any[] = detail?.claim_checks ?? []
-  const counts = checks.reduce((m: Record<string, number>, c: any) => { m[c.verdict] = (m[c.verdict] ?? 0) + 1; return m }, {})
-  const supportedChecks = checks.filter(c => c.verdict === 'supported')
-  const fulltextCount = supportedChecks.filter(chk => chk.evidence_tier === 'fulltext' || chk.evidence_tier === 'table').length
-  const abstractOnlyCount = supportedChecks.filter(chk => !chk.evidence_tier || chk.evidence_tier === 'abstract').length
-  const summary = checks.length === 0 ? '<span class="muted">还没有核对过</span>'
-    : Object.entries(counts).map(([v, n]) => {
-      const label = v === 'supported' && n > 0
-        ? `已支持 ${supportedChecks.length} 条（全文/表格核验 ${fulltextCount} · 仅摘要 ${abstractOnlyCount}）`
-        : `${VERDICT[v] ?? v} ${n}`
-      return `<span class="verdict ${esc(v)}">${esc(label)}</span>`
-    }).join(' ')
-  const renderQuote = (c: any) => c.evidence_quote
-    ? `<div class="claim-quote muted small" style="margin-top:4px;padding:6px 8px;background:var(--bg-soft,#f8fafc);border-left:3px solid var(--accent,#0ea5e9);border-radius:4px"><b>${c.evidence_tier === 'table' || c.evidence_tier === 'fulltext' ? '匹配全文/表格原文' : '匹配摘要原文'}：</b>${esc(c.evidence_quote)}</div>`
-    : ''
-  const flagged = checks.filter(c => c.verdict !== 'supported').map(c =>
-    `<div class="claim"><span class="verdict ${esc(c.verdict)}">${esc(VERDICT[c.verdict] ?? c.verdict)}</span> <span class="badge">${esc(TIER_LABEL[c.evidence_tier] ?? '仅摘要核验')}</span> ${esc(c.sentence)}<div class="muted">${esc(c.reason)}</div>${renderQuote(c)}</div>`).join('')
-  const supportedDetails = supportedChecks.length === 0 ? ''
-    : `<details style="margin-top:8px"><summary class="muted small" style="cursor:pointer">已支持 ${supportedChecks.length} 条（全文/表格核验 ${fulltextCount} · 仅摘要 ${abstractOnlyCount}）</summary>${supportedChecks.map(c =>
-      `<div class="claim" style="margin-top:6px"><span class="verdict supported">支持</span> <span class="badge">${esc(TIER_LABEL[c.evidence_tier] ?? '仅摘要核验')}</span> ${esc(c.sentence)}${c.reason ? `<div class="muted small">${esc(c.reason)}</div>` : ''}${renderQuote(c)}</div>`).join('')}</details>`
   $('cites').innerHTML =
-    `<div class="card"><div class="row"><b>参考文献</b><span class="grow"></span><button id="refImportBtn" title="从 Zotero / EndNote / Mendeley / PubMed 导出的文件，或每行一个 DOI / PMID">导入参考文献</button>
+    `<div class="card"><div class="row"><b>参考文献 (${list.length})</b><span class="grow"></span><button id="refImportBtn" class="small-btn" title="从 Zotero / EndNote / Mendeley / PubMed 导出的文件，或每行一个 DOI / PMID">导入文献</button>
       <input type="file" id="refImportInput" accept=".ris,.bib,.nbib,.txt,.xml,.enw" hidden></div>
-      <div class="muted" style="margin:4px 0">导入后登记在这里，你和 AI 都能直接引用；每条按 DOI / PMID 核实。</div>${refMergeText() ? `<div class="ref-merge-note">${esc(refMergeText())}；导出 Word / Markdown 时合并成一份文献表。</div>` : ''}<div id="refImportResult">${refImportHtml}</div></div>` +
-    (list.length === 0 ? '<div class="muted" style="margin:8px 0">AI 通过文献检索登记的引用会显示在这里</div>' : list.map(c => {
+      <div class="muted small" style="margin:4px 0">按 DOI / PMID 自动核实登记，正文与 AI 均可直接引用（引文与数据核查已集成于「审稿与批注」）。</div>${refMergeText() ? `<div class="ref-merge-note">${esc(refMergeText())}；导出 Word / Markdown 时合并成一份文献表。</div>` : ''}<div id="refImportResult">${refImportHtml}</div></div>` +
+    (list.length === 0 ? '<div class="muted small" style="margin:8px 0">暂无已登记引用。点击上方「导入文献」或在正文工具栏点「引用」添加。</div>' : list.map(c => {
       const candidateUrl = typeof c.url === 'string' && /^https?:\/\//i.test(c.url)
         ? c.url
         : (c.doi ? `https://doi.org/${encodeURIComponent(String(c.doi))}` : '')
       return `<div class="card"><b>${c.number ? `[${esc(c.number)}]` : '未使用'}</b> ${esc(c.formatted)}${candidateUrl ? ` <a href="${esc(candidateUrl)}" target="_blank" rel="noopener">原文</a>` : ''}</div>`
-    }).join('')) +
-    `<div class="card" style="margin-top:10px"><div class="row"><b>文献引文核对</b><span class="grow"></span><button id="verifyBtn" class="quiet small-btn">核对文献摘要</button></div>
-      <div class="muted small" style="margin:4px 0">对照所引文献的 PubMed 摘要逐句核对；全文数据与方法学深审请使用「审稿与批注」。</div>
-      <div>${summary}</div>${flagged}${supportedDetails}</div>`
+    }).join(''))
   $('refImportBtn').onclick = () => $('refImportInput').click()
   $<HTMLInputElement>('refImportInput').onchange = async e => {
     const input = e.target as HTMLInputElement
@@ -3482,16 +3451,6 @@ function renderCites(): void {
       await refresh(false)
     } catch (err) {
       box.innerHTML = `<div class="form-error">${esc((err as Error).message)}</div>`
-    }
-  }
-  $('verifyBtn').onclick = async () => {
-    if (!session) return
-    try {
-      await api(`/api/docs/${session.docId}/verify?async=1`, { method: 'POST' })
-      showNotice('已发起文献摘要后台核对，发现问题将自动生成在「审稿与批注」中')
-      switchTab('commentPane')
-    } catch (err) {
-      showNotice((err as Error).message, true)
     }
   }
 }
