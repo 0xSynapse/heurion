@@ -2612,7 +2612,8 @@ function syncCommentAskButtons(): void {
     const running = activeList.some(item => item.doc_id === session?.docId && item.comment_id === cid)
     const queued = !running && queue.queued.some(item => item.doc_id === session?.docId && item.comment_id === cid)
     btn.disabled = running || queued
-    btn.textContent = running ? 'AI 处理中…' : queued ? '排队中…' : '让 AI 处理'
+    const idleLabel = btn.dataset.defaultLabel || '交给 AI 处理'
+    btn.textContent = running ? 'AI 处理中…' : queued ? '排队中…' : idleLabel
   })
 }
 
@@ -3112,7 +3113,6 @@ function renderCommentCardHtml(c: any): string {
   const secLabel = sectionTitle ? `§ ${sectionTitle.slice(0, 22)}` : '§ 定位章节'
   if (meta.isReview) {
     const extraReplies = (c.replies ?? []).slice(1)
-    const defaultFix = meta.suggestion || c.anchor?.text || c.snippet || ''
     return `
     <div class="card rv-card ${esc(c.status)} sev-${esc(meta.severity)}" data-cid="${esc(c.id)}" data-cat="${esc(meta.categoryKey)}" data-reason="${esc(meta.cleanReason)}">
       <div class="rv-card-header">
@@ -3127,24 +3127,19 @@ function renderCommentCardHtml(c: any): string {
         <span class="quote-locate-pill">定位原文 ↗</span>
       </div>
       <div class="rv-reason-body">${lightMarkdown(meta.cleanReason)}</div>
+      ${meta.suggestion ? `<div class="rv-suggest-hint"><span class="rv-suggest-hint-tag">修改建议参考</span>${lightMarkdown(meta.suggestion)}</div>` : ''}
       ${extraReplies.length > 0 ? `<div class="rv-replies-list">${extraReplies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}</div>` : ''}
       ${c.status === 'open' ? `
-        ${meta.suggestion ? `
-        <div class="rv-suggest-box">
-          <div class="rv-suggest-label">建议修改（可直接微调后一键替换原句）：</div>
-          <textarea class="rv-fix-input" data-fix-input rows="2">${esc(defaultFix)}</textarea>
-        </div>` : ''}
         <div class="rv-action-bar">
-          ${meta.suggestion ? `<button type="button" class="primary small-btn" data-act="apply-claim-fix" data-fix="${esc(defaultFix)}">采纳修改</button>` : ''}
-          <button type="button" class="quiet small-btn rv-comment-btn" data-act="toggle-reply" title="对该审稿意见添加批注说明、团队讨论或让 AI 按批注修改">批注讨论${extraReplies.length > 0 ? ` (${extraReplies.length})` : ''}</button>
+          <button type="button" class="ai small-btn" data-act="ask" data-default-label="交给 AI 处理" title="将该审稿意见（及您的批注要求）交给 AI 修改对应段落">交给 AI 处理</button>
+          <button type="button" class="quiet small-btn rv-comment-btn" data-act="toggle-reply" title="对该审稿意见添加批注说明、团队讨论或补充改稿要求">批注讨论${extraReplies.length > 0 ? ` (${extraReplies.length})` : ''}</button>
           <button type="button" class="quiet small-btn" data-act="resolve" title="知晓该提醒，保留正文原写法并归档">知晓保留</button>
           <button type="button" class="quiet small-btn rv-fp-btn" data-act="toggle-fp" title="标记为误报或专科常规写法，系统会自动提炼规则，后续不再误报">误报 · 以后免报</button>
         </div>
         <div class="rv-reply-drawer" data-reply-drawer ${extraReplies.length > 0 ? '' : 'hidden'}>
           <div class="rv-reply-input-row">
-            <input type="text" placeholder="添加批注说明、回复意见或补充改稿要求（回车发送批注）…" data-reply>
-            <button type="button" class="small-btn primary" data-act="reply">添加批注</button>
-            <button type="button" class="small-btn ai" data-act="ask" title="按您的批注要求让 AI 修改对应段落">让 AI 改稿</button>
+            <input type="text" placeholder="输入批注讨论，或补充具体改稿要求后点「交给 AI 处理」（回车发送批注）…" data-reply>
+            <button type="button" class="small-btn primary" data-act="reply">发送批注</button>
           </div>
         </div>
         <div class="rv-fp-drawer" data-fp-drawer hidden>
@@ -3192,7 +3187,7 @@ function renderCommentCardHtml(c: any): string {
       <div class="row">
         <input type="text" placeholder="添加批注回复或补充要求（回车发送）…" data-reply>
         <button data-act="reply" class="small-btn primary">添加批注</button>
-        <button data-act="ask" class="ai small-btn">让 AI 处理</button>
+        <button data-act="ask" data-default-label="交给 AI 处理" class="ai small-btn">交给 AI 处理</button>
       </div>` : ''}
     </div>`
 }
