@@ -27,6 +27,16 @@
 | [`design/AI_PERMISSIONS.md`](design/AI_PERMISSIONS.md) | AI 权限与红线 | 医疗大模型外发红线、操作前权限校验、安全话术兜底机制。 |
 | [`design/AEGIS_APP_PROTOCOL.md`](design/AEGIS_APP_PROTOCOL.md) | Aegis OS 应用协议 (`AAP-1.0`) | 第一方/第三方统一鉴权、App Store 自发现清单 (`/.well-known/aegis-app.json`)、Ed25519 加密租约验签与 Heurion 2.0 接入方案。 |
 | [`design/MEMORY_GOVERNANCE_PRD.md`](design/MEMORY_GOVERNANCE_PRD.md) | 自演进记忆治理 PRD | 从临床医生、统计师与 PI 视角定义三层记忆治理升级的用户场景、UI 显性交互变化、对话隐性体感指标与完整架构逻辑。 |
+| [`design/IMAGING_STUDIES.md`](design/IMAGING_STUDIES.md) | 医学影像与阅片 | Orthanc DICOMweb 代理、浏览器端 PS3.15 去标识上传、肺结节模型链与 DICOM SEG、OHIF 结节面板与点选补漏、随访配准与 VDT、所见草稿与 RIS 纯文本、审核定稿与效率埋点。 |
+
+---
+
+## 产品需求与工作计划 (PRD & Workplan)
+
+| 文档 | 描述 |
+|---|---|
+| [`prd/IMAGING_PRD_v3.md`](prd/IMAGING_PRD_v3.md) | **医学影像一期产品需求文档（v3.0）**：在线 PRD 完整快照（含第 13 节工作列表），覆盖放射科 W1–W7 工作流、AI 职责边界、隐私合规与分期关口。 |
+| [`prd/IMAGING_WORKPLAN.md`](prd/IMAGING_WORKPLAN.md) | **影像一期工作列表与后续安排**：记录各阶段任务完成进度、生产实测发现的问题与后续工程/临床评估优先级。 |
 
 ---
 

@@ -45,6 +45,7 @@ fi
 COMPOSE=(docker compose -p heurion2 --env-file .env.production -f docker-compose.yml)
 HOSTNAME=$(grep '^HOSTNAME=' .env.production | head -1 | cut -d= -f2-)
 [ -n "$HOSTNAME" ] || { echo "HOSTNAME 没有设置" >&2; exit 1; }
+export HOSTNAME
 
 # 回滚点：当前在跑的 2.0 镜像 ID（不是 tag）
 PREV_APP=$(docker inspect --format '{{.Image}}' heurion2 2>/dev/null || true)

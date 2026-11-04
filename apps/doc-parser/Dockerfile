@@ -20,14 +20,17 @@ WORKDIR /app/apps/doc-parser
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 libglib2.0-0 && \
     rm -rf /var/lib/apt/lists/*
 
-# 1. CPU 版 PyTorch（剥离 CUDA，镜像小几个 GB）
+# 1. 按 uv.lock 锁定的精确版本安装全部依赖（CPU 版 PyTorch 从官方 CPU 源安装同版本轮子，剥离 4GB+ CUDA 依赖）
+COPY apps/doc-parser/pyproject.toml apps/doc-parser/uv.lock apps/doc-parser/README.md ./
 RUN uv venv /opt/venv && \
+    uv export --frozen --no-dev --no-emit-project --no-hashes > /tmp/lock.txt && \
+    grep -E '^(torch|torchvision)==' /tmp/lock.txt > /tmp/torch-cpu.txt && \
+    grep -vE '^(#|\.|torch==|torchvision==|triton==|nvidia-|cuda-)' /tmp/lock.txt > /tmp/requirements.txt && \
     uv pip install --no-cache --python /opt/venv/bin/python \
-      --index-url https://download.pytorch.org/whl/cpu "torch>=2.2.0" "torchvision"
-
-# 2. 其余依赖（Docling、FastAPI、ONNX Runtime 等，见 pyproject.toml）
-COPY apps/doc-parser/pyproject.toml apps/doc-parser/README.md ./
-RUN uv pip install --no-cache --python /opt/venv/bin/python -r pyproject.toml
+      --index-url https://download.pytorch.org/whl/cpu -r /tmp/torch-cpu.txt && \
+    uv pip install --no-cache --python /opt/venv/bin/python \
+      --no-deps -r /tmp/requirements.txt && \
+    rm -f /tmp/lock.txt /tmp/torch-cpu.txt /tmp/requirements.txt
 
 # 3. 先仅拷贝模型预下载脚本，确保修改 parser.py / server.py 时不会使 1.5GB 模型下载缓存失效
 COPY apps/doc-parser/src/__init__.py apps/doc-parser/src/settings.py apps/doc-parser/src/prefetch_models.py ./src/

@@ -72,7 +72,7 @@ function seriesLine(s: SeriesView): string {
   return [s.modality, s.body_part, s.description, s.slice_thickness ? `${s.slice_thickness} mm` : null, s.kernel, `${s.instances} 层`].filter(Boolean).map(x => esc(String(x))).join(' · ')
 }
 
-function render(list: StudyView[], canEdit: boolean, reviews: Map<string, ReviewSummary>, open: Set<string>): string {
+function render(list: StudyView[], canEdit: boolean, reviews: Map<string, ReviewSummary>, open: Set<string>, openFollowup: Set<string>): string {
   if (!list.length) return '<div class="muted small">还没有影像检查。上传 DICOM 后会在这里按检查列出，并自动进入 AI 分析。</div>'
   return `<table class="users"><thead><tr><th>检查日期</th><th>模态</th><th>检查描述</th><th>序列</th><th>AI 分析</th><th>病灶</th><th>审核</th></tr></thead><tbody>
     ${list.map(st => {
@@ -80,13 +80,16 @@ function render(list: StudyView[], canEdit: boolean, reviews: Map<string, Review
       const busy = last && (last.status === 'queued' || last.status === 'running')
       const gone = st.originals_deleted
       const goneNote = gone ? `<div class="muted small" title="删除于 ${esc(new Date(gone.at).toLocaleString('zh-CN', { hour12: false }))}；AI 结果、病灶、测量与审核留痕仍保留">${esc(gone.message)}</div>` : ''
+      const isCt = st.modalities.includes('CT')
       return `<tr>
       <td class="pt-dicom-date">${esc(st.study_date ?? '未知')}<div class="muted small">${st.source === 'pacs' ? 'PACS' : '手工上传'}</div>${gone ? goneNote : st.study_uid ? `<div><button class="small-btn" data-view="${esc(st.study_uid)}">在阅片器中打开</button></div>` : ''}</td><td>${esc(st.modalities.join(' / ') || '—')}</td><td>${esc(st.description ?? '')}</td>
       <td class="small">${st.series.map(s => `<div>${seriesLine(s)}</div>`).join('')}</td>
       <td class="small">${st.ai_shadow && !last ? '<span class="muted" title="上线前评估：AI 在后台分析，结果只进机构的对照报告">影子模式，结果不显示</span>' : `${runLine(last)}${canEdit && !busy && !gone ? `<div><button class="small-btn" data-analyze="${esc(st.id)}">${last ? '重新分析' : '开始分析'}</button></div>` : ''}`}</td>
-      <td class="small">${st.lesions.proposed + st.lesions.confirmed + st.lesions.rejected ? `待确认 ${st.lesions.proposed} · 已确认 ${st.lesions.confirmed} · 已否决 ${st.lesions.rejected}` : '<span class="muted">—</span>'}</td>
+      <td class="small">${st.lesions.proposed + st.lesions.confirmed + st.lesions.rejected ? `待确认 ${st.lesions.proposed} · 已确认 ${st.lesions.confirmed} · 已否决 ${st.lesions.rejected}` : '<span class="muted">—</span>'}
+        ${isCt ? `<div><button class="small-btn" data-followup="${esc(st.id)}" title="查看与前片胸部 CT 的结节配准对应、径线与体积变化及倍增时间（VDT）">${openFollowup.has(st.id) ? '收起随访' : '随访对比'}</button></div>` : ''}</td>
       <td class="small">${reviewBadge(reviews.get(st.id))}${reviews.has(st.id) ? `<div><button class="small-btn" data-review="${esc(st.id)}">${open.has(st.id) ? '收起审核' : '审核视图'}</button></div>` : ''}
-        ${canEdit && st.modalities.includes('CT') ? `<div><button class="small-btn" data-draft="${esc(st.id)}" title="按科室模板，由已确认的结节生成所见草稿（测量数字绑定病灶，医生重测后自动更新）">生成所见草稿</button></div>` : ''}</td></tr>
+        ${canEdit && isCt ? `<div><button class="small-btn" data-draft="${esc(st.id)}" title="按科室模板，由已确认的结节生成所见草稿（测量数字绑定病灶，医生重测后自动更新）">生成所见草稿</button></div>` : ''}</td></tr>
+      ${openFollowup.has(st.id) ? `<tr class="pt-imgreview-row"><td colspan="7"><div class="pt-imgreview" data-followup-box="${esc(st.id)}">正在读取随访对比…</div></td></tr>` : ''}
       ${open.has(st.id) ? `<tr class="pt-imgreview-row"><td colspan="7"><div class="pt-imgreview" data-review-box="${esc(st.id)}">正在读取审核视图…</div></td></tr>` : ''}`
     }).join('')}
   </tbody></table>`
@@ -226,11 +229,13 @@ interface DraftOutcome {
   doc_id: string; created: boolean; nodules: number; warnings: string[]
   template: { source: string; version: number; department_name: string | null }
   blocks: { written: string[]; unchanged: string[]; kept: Array<{ key: string; reason: string }>; removed: string[] }
+  guideline_reference?: { status_label: string; requires_confirmation: boolean; reference_sentence: string } | null
+  guideline_appended?: boolean
 }
 type ApiError = Error & { body?: { code?: string; doc_id?: string; departments?: string[] } }
 
 /**
- * 生成所见草稿（T2.6）：已有草稿时让医生选「更新那份」（只改没人动过的段落）或「另建一份」；
+ * 生成所见草稿（T2.6 + W4.3 二期指南分级参考）：已有草稿时让医生选「更新那份」（只改没人动过的段落）或「另建一份」；
  * 在多个有模板的科室时选科室。完成后打开草稿文档。
  */
 async function generateDraft(api: Api, notice: Notice, patientId: string, studyId: string, openDoc: ((docId: string) => Promise<void>) | undefined, extra: Record<string, unknown> = {}): Promise<void> {
@@ -239,8 +244,13 @@ async function generateDraft(api: Api, notice: Notice, patientId: string, studyI
     const tpl = r.template.source === 'builtin' ? '内置模板' : `${r.template.department_name ?? '机构默认'}模板 v${r.template.version}`
     const kept = r.blocks.kept.filter(k => k.reason !== 'deleted').length
     const head = r.created ? `已生成所见草稿（${r.nodules} 个结节，${tpl}）` : `已更新所见草稿：改写 ${r.blocks.written.length} 段、删去 ${r.blocks.removed.length} 段${kept ? `，你改过的 ${kept} 段原样保留` : ''}`
+    const guideTip = r.guideline_reference
+      ? r.guideline_appended
+        ? '；已按医生确认附入 Lung-RADS / Fleischner 指南参考'
+        : `；指南参考（${r.guideline_reference.status_label}）：${r.guideline_reference.reference_sentence}`
+      : ''
     // 有「请核对」也是生成成功，不用错误样式（错误样式会以「出错了」开头）
-    notice(`${head}${r.warnings.length ? `。请核对：${r.warnings.join('；')}` : ''}`)
+    notice(`${head}${r.warnings.length ? `。请核对：${r.warnings.join('；')}` : ''}${guideTip}`)
     if (openDoc) await openDoc(r.doc_id)
   } catch (err) {
     const body = (err as ApiError).body
@@ -283,15 +293,54 @@ async function mountTemplates(api: Api, notice: Notice, box: HTMLElement): Promi
     const info = sc.tpl ? `当前 v${sc.tpl.version}${sc.tpl.created_by_name ? ` · ${esc(sc.tpl.created_by_name)}` : ''}${sc.tpl.created_at ? ` · ${new Date(sc.tpl.created_at).toLocaleString('zh-CN', { hour12: false })}` : ''}${sc.tpl.note ? ` · ${esc(sc.tpl.note)}` : ''}`
       : sc.value === 'org' ? '未设置：使用内置模板' : '未设置：使用机构默认模板（再没有则用内置模板）'
     const ph = Object.entries(data.placeholders.nodule ?? {}).map(([k, v]) => `<code>{${esc(k)}}</code> ${esc(v.label)}${v.measure ? '（测量原子）' : ''}`).join('；')
+    const impPh = Object.entries(data.placeholders.impression ?? {}).map(([k, v]) => `<code>{${esc(k)}}</code> ${esc(v.label)}${v.measure ? '（测量原子）' : ''}`).join('；')
     box.innerHTML = `<div class="row" style="gap:6px"><b>所见模板</b>
         <select data-tpl-scope>${scopes.map((x, k) => `<option value="${k}"${k === i ? ' selected' : ''}>${esc(x.label)}</option>`).join('')}</select>
-        <span class="muted small">${info}</span><span class="grow"></span><button class="small-btn quiet" data-tpl-close>收起</button></div>
-      <div class="muted small" style="margin:4px 0">语法：<code>{占位符}</code>、<code>{占位符|缺省文字}</code>、<code>[可选片段]</code>（片段里有占位符没有值时整段省略）、<code>\\{</code> 等写字面量。模板文字不能写测量数字；每句一段。结节句子可用：${ph}</div>
+        <span class="muted small">${info}</span><span class="grow"></span>
+        ${sc.tpl ? '<button class="small-btn quiet" data-tpl-history>历史版本</button>' : ''}
+        <button class="small-btn quiet" data-tpl-close>收起</button></div>
+      <div class="muted small" style="margin:4px 0">语法：<code>{占位符}</code>、<code>{占位符|缺省文字}</code>、<code>[可选片段]</code>（片段里有占位符没有值时整段省略）、<code>\\{</code> 等写字面量。模板文字不能写测量数字；每句一段。结节句子可用：${ph}${impPh ? `<br>印象段（W4.3，只作客观总结，不写诊断结论或随访建议）可用：${impPh}` : ''}</div>
+      <div data-tpl-hist-box class="muted small" style="margin:4px 0" hidden></div>
       <textarea data-tpl-body rows="14" style="width:100%;font:12px ui-monospace,monospace"${sc.can ? '' : ' readonly'}>${esc(JSON.stringify(cur.body, null, 2))}</textarea>
-      ${sc.can ? `<div class="row" style="gap:6px;margin-top:4px"><input type="text" data-tpl-note placeholder="这一版改了什么（可选）" maxlength="200" style="min-width:16em"><button class="small-btn primary" data-tpl-save>保存为新版本</button></div>`
+      ${sc.can ? `<div class="row" style="gap:6px;margin-top:4px"><input type="text" data-tpl-note placeholder="这一版改了什么（可选）" maxlength="200" style="min-width:16em"><button class="small-btn quiet" data-tpl-add-imp title="在模板中加入 W4.3 客观影像印象段（自动汇总已确认结节数、最大结节径线与随访变化）">填入客观印象段（W4.3）</button><button class="small-btn primary" data-tpl-save>保存为新版本</button></div>`
         : '<div class="muted small">只有机构管理员（机构默认）或本科室的审核医师（科室模板）能修改。</div>'}`
     box.querySelector<HTMLSelectElement>('[data-tpl-scope]')!.onchange = e => show(Number((e.target as HTMLSelectElement).value))
     box.querySelector<HTMLButtonElement>('[data-tpl-close]')!.onclick = () => { box.hidden = true }
+    const addImp = box.querySelector<HTMLButtonElement>('[data-tpl-add-imp]')
+    if (addImp) addImp.onclick = () => {
+      const ta = box.querySelector<HTMLTextAreaElement>('[data-tpl-body]')!
+      try {
+        const obj = JSON.parse(ta.value) as Record<string, unknown>
+        obj.impression = {
+          default: '印象：双肺见 {结节数} 枚结节[，较大者位于{最大结节位置|肺内}，平均径 {最大结节平均径}][，体积 {最大结节体积}][；与 {前片日期} 片比较，{随访概况}]。',
+          none: '印象：双肺未见明确结节。',
+        }
+        ta.value = JSON.stringify(obj, null, 2)
+        notice('已填入客观印象段模板（W4.3），点「保存为新版本」生效')
+      } catch { notice('当前编辑框内容不是有效 JSON，请先修正后再填入', true) }
+    }
+    const histBtn = box.querySelector<HTMLButtonElement>('[data-tpl-history]')
+    const histBox = box.querySelector<HTMLElement>('[data-tpl-hist-box]')
+    if (histBtn && histBox) histBtn.onclick = async () => {
+      if (!histBox.hidden) { histBox.hidden = true; return }
+      histBox.hidden = false
+      histBox.textContent = '正在读取历史版本…'
+      try {
+        const versions = await api<TemplateView[]>(`/api/imaging/findings-templates/versions?scope=${encodeURIComponent(sc.value)}`)
+        if (!versions.length) { histBox.textContent = '暂无历史版本'; return }
+        histBox.innerHTML = versions.map((v, idx) => `<div class="row" style="gap:6px;margin-top:2px"><span>v${v.version} · ${esc(v.created_by_name ?? '未知')} · ${v.created_at ? new Date(v.created_at).toLocaleString('zh-CN', { hour12: false }) : ''}${v.note ? ` · ${esc(v.note)}` : ''}</span>${sc.can ? `<button class="small-btn quiet" data-tpl-load-ver="${idx}">载入此版到编辑框</button>` : ''}</div>`).join('')
+        histBox.querySelectorAll<HTMLButtonElement>('[data-tpl-load-ver]').forEach(btn => {
+          btn.onclick = () => {
+            const ver = versions[Number(btn.dataset.tplLoadVer)]
+            if (!ver) return
+            box.querySelector<HTMLTextAreaElement>('[data-tpl-body]')!.value = JSON.stringify(ver.body, null, 2)
+            const noteInput = box.querySelector<HTMLInputElement>('[data-tpl-note]')
+            if (noteInput) noteInput.value = `回退自 v${ver.version}`
+            notice(`已将 v${ver.version} 载入编辑框，点「保存为新版本」即可生效`)
+          }
+        })
+      } catch (err) { histBox.textContent = `读取历史版本失败：${(err as Error).message}` }
+    }
     const save = box.querySelector<HTMLButtonElement>('[data-tpl-save]')
     if (save) save.onclick = async () => {
       let body: unknown
@@ -307,6 +356,137 @@ async function mountTemplates(api: Api, notice: Notice, box: HTMLElement): Promi
   show(0)
 }
 
+interface FollowupViewData {
+  study_id: string
+  prior: { study_id: string; study_date: string | null; interval_days: number | null; reference: 'finalized' | 'confirmed'; signoff_version: number | null } | null
+  prior_lesions?: Array<{ id: string; label: string | null; location: string | null; mean_diameter_mm: number | null }>
+  registration: { quality: 'fine' | 'coarse' | 'none'; reliable: boolean; notes: string[] } | null
+  notes: string[]
+  items: Array<{
+    link_id: string | null
+    lesion_id: string | null
+    prior_lesion_id: string | null
+    source: 'ai' | 'manual' | null
+    change: 'new' | 'enlarged' | 'shrunk' | 'stable' | 'disappeared' | null
+    needs_review: boolean
+    notes: string[]
+    lesion: { id: string; label: string | null; location: string | null; status: string; mean_diameter_mm: number | null; volume_mm3: number | null } | null
+    prior_lesion: { id: string; label: string | null; location: string | null; mean_diameter_mm: number | null; volume_mm3: number | null } | null
+    metrics: {
+      delta_mean_diameter_mm: number | null
+      delta_volume_mm3: number | null
+      delta_volume_pct: number | null
+      vdt_days: number | null
+      vdt_note: string | null
+      within_error: boolean
+    } | null
+  }>
+}
+
+const FU_LOBE: Record<string, string> = { RUL: '右肺上叶', RML: '右肺中叶', RLL: '右肺下叶', LUL: '左肺上叶', LLL: '左肺下叶' }
+const FU_CHANGE: Record<string, { text: string; cls: string }> = {
+  new: { text: '新发', cls: 'warn' },
+  enlarged: { text: '较前增大', cls: 'warn' },
+  shrunk: { text: '较前缩小', cls: 'ok' },
+  stable: { text: '较前相仿', cls: 'ok' },
+  disappeared: { text: '本次未见', cls: '' },
+}
+const fmtSigned = (n: number | null | undefined, digits = 1, unit = '') =>
+  typeof n === 'number' && Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(digits)}${unit}` : '—'
+
+/** 患者页内联随访对比视图（W3：前片配准、逐结节变化分类、径线与体积差值、VDT、双片并排阅片 W3.4、重新匹配与拆开对应） */
+async function mountFollowup(
+  api: Api,
+  notice: Notice,
+  patientId: string,
+  studyId: string,
+  canEdit: boolean,
+  box: HTMLElement,
+  openViewer: (lesionId: string) => void,
+  openCompare?: (priorStudyId: string) => void,
+): Promise<void> {
+  const base = `/api/patients/${patientId}/imaging/studies/${encodeURIComponent(studyId)}/followup`
+  const load = async () => {
+    try {
+      const v = await api<FollowupViewData>(base)
+      const regBadge = v.registration
+        ? `<span class="pill ${v.registration.reliable ? 'ok' : 'warn'}" style="margin-left:6px">${v.registration.quality === 'fine' ? '配准可靠' : v.registration.quality === 'coarse' ? '粗配准（请核对）' : '未配准（请核对）'}</span>`
+        : ''
+      const priorText = v.prior
+        ? `前片：<b>${esc(v.prior.study_date ?? '日期未知')}</b>${v.prior.interval_days != null ? `（间隔 ${v.prior.interval_days} 天）` : ''} · 参照：${v.prior.reference === 'finalized' ? `第 ${v.prior.signoff_version ?? 1} 版定稿快照` : '已确认结节（前片尚未定稿）'}`
+        : '无可用前片检查'
+      const allNotes = [...(v.notes ?? []), ...(v.registration?.notes ?? [])]
+      const rows = v.items.map(it => {
+        const cur = it.lesion
+        const pri = it.prior_lesion
+        const ch = it.needs_review
+          ? `<span class="pill warn">待核对${it.change && FU_CHANGE[it.change] ? `（${FU_CHANGE[it.change]!.text}）` : ''}</span>`
+          : it.change && FU_CHANGE[it.change]
+            ? `<span class="pill ${FU_CHANGE[it.change]!.cls}">${FU_CHANGE[it.change]!.text}</span>`
+            : '<span class="muted">未对比</span>'
+        const dm = it.metrics ? fmtSigned(it.metrics.delta_mean_diameter_mm, 1, ' mm') : '—'
+        const dv = it.metrics && it.metrics.delta_volume_mm3 !== null
+          ? `${fmtSigned(it.metrics.delta_volume_mm3, 0, ' mm³')}${it.metrics.delta_volume_pct !== null ? `（${fmtSigned(it.metrics.delta_volume_pct, 0, '%')}）` : ''}`
+          : '—'
+        const vdt = it.metrics
+          ? (it.metrics.vdt_days !== null ? `${Math.round(it.metrics.vdt_days)} 天${it.metrics.within_error ? '（误差内）' : ''}` : esc(it.metrics.vdt_note ?? '—'))
+          : '—'
+        const itemNotes = [
+          it.metrics?.within_error ? '变化在测量误差范围内' : '',
+          it.source === 'manual' ? '医生手动对应' : '',
+          ...it.notes,
+        ].filter(Boolean)
+        return `<tr>
+          <td class="small">${cur ? `<b>${esc(cur.label ?? cur.id)}</b> · ${esc(FU_LOBE[cur.location ?? ''] ?? cur.location ?? '未定位')} · ${cur.mean_diameter_mm != null ? `${cur.mean_diameter_mm.toFixed(1)} mm` : '—'}` : '<span class="muted">（前片结节消失）</span>'}</td>
+          <td class="small">${pri ? `<b>${esc(pri.label ?? pri.id)}</b> · ${esc(FU_LOBE[pri.location ?? ''] ?? pri.location ?? '未定位')} · ${pri.mean_diameter_mm != null ? `${pri.mean_diameter_mm.toFixed(1)} mm` : '—'}` : '<span class="muted">—</span>'}</td>
+          <td class="small">${ch}${itemNotes.length ? `<div class="muted">${esc(itemNotes.join('；'))}</div>` : ''}</td>
+          <td class="small">${esc(dm)}</td>
+          <td class="small">${esc(dv)}</td>
+          <td class="small">${vdt}</td>
+          <td class="small">
+            ${cur ? `<button class="small-btn" data-fu-jump="${esc(cur.id)}">定位</button>` : ''}
+            ${canEdit && it.link_id && cur && pri ? `<button class="small-btn quiet" data-fu-unlink="${esc(it.link_id)}" title="拆开这一对对应，改为本次新发 + 前片消失">拆开</button>` : ''}
+          </td>
+        </tr>`
+      }).join('')
+      box.innerHTML = `<div class="row" style="gap:8px"><b>随访对比</b><span class="small">${priorText}</span>${regBadge}<span class="grow"></span>
+        ${v.prior && openCompare ? `<button class="small-btn primary" data-fu-compare="${esc(v.prior.study_id)}" title="以当前片与前片双 StudyInstanceUID 挂片打开 OHIF 1x2 并排对比视图（W3.4）">双片并排阅片（W3.4）</button>` : ''}
+        ${canEdit ? '<button class="small-btn" data-fu-rematch>重新匹配</button>' : ''}</div>
+        ${allNotes.length ? `<div class="muted small" style="margin:4px 0">${allNotes.map(n => esc(n)).join('；')}</div>` : ''}
+        ${v.items.length ? `<table class="users" style="margin-top:4px"><thead><tr><th>本次结节</th><th>前片对应</th><th>变化</th><th>Δ平均径</th><th>Δ体积</th><th>VDT</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="muted small" style="margin-top:4px">暂无可对比的结节。</div>'}`
+    } catch (err) {
+      box.textContent = `随访对比读取失败：${(err as Error).message}`
+    }
+  }
+  box.onclick = async e => {
+    const el = e.target as HTMLElement
+    const jump = el.closest<HTMLButtonElement>('[data-fu-jump]')
+    if (jump) { openViewer(jump.dataset.fuJump!); return }
+    const compare = el.closest<HTMLButtonElement>('[data-fu-compare]')
+    if (compare && openCompare) { openCompare(compare.dataset.fuCompare!); return }
+    const rematch = el.closest<HTMLButtonElement>('[data-fu-rematch]')
+    if (rematch) {
+      rematch.disabled = true
+      try {
+        await api(`${base}/rematch`, { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } })
+        notice('已触发随访重新匹配')
+      } catch (err) { notice(`重新匹配失败：${(err as Error).message}`, true) }
+      await load()
+      return
+    }
+    const unlink = el.closest<HTMLButtonElement>('[data-fu-unlink]')
+    if (unlink) {
+      unlink.disabled = true
+      try {
+        await api(`/api/patients/${patientId}/imaging/followup-links/${encodeURIComponent(unlink.dataset.fuUnlink!)}/unlink`, { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } })
+        notice('已拆开随访对应关系')
+      } catch (err) { notice(`拆开失败：${(err as Error).message}`, true) }
+      await load()
+    }
+  }
+  await load()
+}
+
 /** 读取并显示影像检查；绑定上传按钮。患者页每次重绘「原始报告 / 影像」标签后调用。openDoc：生成所见草稿后打开文档。 */
 export async function mountStudies(api: Api, notice: Notice, patientId: string, isCurrent: () => boolean, openDoc?: (docId: string) => Promise<void>): Promise<void> {
   const box = document.getElementById('ptDicomStudies')
@@ -314,15 +494,16 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
   if (!box || !listEl) return
   const canEdit = Boolean(box.querySelector('[data-dicom]'))
   let timer: ReturnType<typeof setTimeout> | null = null
-  /** 展开了审核视图的检查（列表定时刷新后重新挂上） */
+  /** 展开了审核视图 / 随访对比的检查（列表定时刷新后重新挂上） */
   const open = new Set<string>()
+  const openFollowup = new Set<string>()
   let studies: StudyView[] = []
-  /** 在阅片器中打开（lesionId：审核视图里「跳转」，打开后结节面板定位到该结节） */
-  const openViewer = async (studyUid: string, lesionId?: string) => {
+  /** 在阅片器中打开（lesionId：审核视图里「跳转」，打开后结节面板定位到该结节；priorStudyUid：W3.4 双片并排挂片） */
+  const openViewer = async (studyUid: string, lesionId?: string, priorStudyUid?: string) => {
     // 先同步开窗（异步之后再开会被浏览器拦截）；阅片器在独立子域名，凭一次性票据换取那里的只读 Cookie
     const win = window.open('', '_blank')
     try {
-      const t = await api<{ url: string }>('/api/imaging/viewer-ticket', { method: 'POST', body: JSON.stringify({ study_uid: studyUid, lesion_id: lesionId }), headers: { 'Content-Type': 'application/json' } })
+      const t = await api<{ url: string }>('/api/imaging/viewer-ticket', { method: 'POST', body: JSON.stringify({ study_uid: studyUid, ...(priorStudyUid ? { prior_study_uid: priorStudyUid } : {}), ...(lesionId ? { lesion_id: lesionId } : {}) }), headers: { 'Content-Type': 'application/json' } })
       if (win) { win.opener = null; win.location.href = t.url }
     } catch (err) {
       win?.close()
@@ -332,6 +513,27 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
   /** 医生刚点开的审核视图（只有这一次的请求记效率埋点；之后的自动刷新不记） */
   let justOpened: string | null = null
   const mountOpen = () => {
+    for (const id of openFollowup) {
+      const el = listEl.querySelector<HTMLElement>(`[data-followup-box="${CSS.escape(id)}"]`)
+      const uid = studies.find(s => s.id === id)?.study_uid
+      if (el) void mountFollowup(
+        api,
+        notice,
+        patientId,
+        id,
+        canEdit,
+        el,
+        lesionId => { if (uid) void openViewer(uid, lesionId) },
+        priorStudyId => {
+          const prior = studies.find(s => s.id === priorStudyId)
+          if (!uid || !prior?.study_uid || prior.originals_deleted) {
+            notice(prior?.originals_deleted ? `前片原件已删除：${prior.originals_deleted.message}` : '找不到前片影像 UID，暂无法并排阅片', true)
+            return
+          }
+          void openViewer(uid, undefined, prior.study_uid)
+        },
+      )
+    }
     for (const id of open) {
       const el = listEl.querySelector<HTMLElement>(`[data-review-box="${CSS.escape(id)}"]`)
       const uid = studies.find(s => s.id === id)?.study_uid
@@ -349,7 +551,7 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
       ])
       if (!isCurrent()) return
       studies = list
-      listEl.innerHTML = render(list, canEdit, new Map(reviews.map(r => [r.study_id, r])), open)
+      listEl.innerHTML = render(list, canEdit, new Map(reviews.map(r => [r.study_id, r])), open, openFollowup)
       mountOpen()
       // 有排队 / 分析中的检查时隔几秒刷新
       if (list.some(st => st.runs[0] && (st.runs[0].status === 'queued' || st.runs[0].status === 'running'))) timer = setTimeout(() => void refresh(), 5000)
@@ -358,10 +560,18 @@ export async function mountStudies(api: Api, notice: Notice, patientId: string, 
     }
   }
   listEl.onclick = async e => {
-    // 审核视图里的点击由 mountReview 处理
-    if ((e.target as HTMLElement).closest('[data-review-box]')) return
+    // 审核视图与随访对比里的点击由各自面板处理
+    if ((e.target as HTMLElement).closest('[data-review-box], [data-followup-box]')) return
     const view = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-view]')
     if (view) { await openViewer(view.dataset.view!); return }
+    const fu = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-followup]')
+    if (fu) {
+      const id = fu.dataset.followup!
+      if (openFollowup.has(id)) openFollowup.delete(id)
+      else openFollowup.add(id)
+      await refresh()
+      return
+    }
     const rv = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-review]')
     if (rv) {
       const id = rv.dataset.review!

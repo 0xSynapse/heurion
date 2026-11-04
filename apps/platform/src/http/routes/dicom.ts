@@ -269,12 +269,21 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
       if (a.via === 'ai') throw new ImagingError('forbidden', '阅片器只给医生本人在界面上打开', 403)
       const vh = viewerHostOf()
       if (!vh || !viewerUrl()) throw new ImagingError('viewer_not_configured', '阅片器还没有部署（VIEWER_HOST / VIEWER_URL 未配置）', 503)
-      const { study_uid: uid, lesion_id: lesionId } = await c.req.json().catch(() => ({})) as { study_uid?: string; lesion_id?: string }
+      const { study_uid: uid, prior_study_uid: priorUid, lesion_id: lesionId } = await c.req.json().catch(() => ({})) as { study_uid?: string; prior_study_uid?: string; lesion_id?: string }
       if (!uid || !UID.test(uid)) throw new ImagingError('bad_uid', 'StudyInstanceUID 格式不对')
-      const { studyId } = svc(c).resolveStudyUid(a, uid)
-      const gone = svc(c).originalsDeleted(a, studyId)
+      const cur = svc(c).resolveStudyUid(a, uid)
+      const gone = svc(c).originalsDeleted(a, cur.studyId)
       if (gone) throw new ImagingError('originals_deleted', gone.message, 409)
-      const ticket = ctx.viewerTokens.issue(a.userId, 'viewer', TICKET_TTL, [uid])
+      const docs = [uid]
+      if (priorUid !== undefined && priorUid !== null && priorUid !== '') {
+        if (!UID.test(priorUid) || priorUid === uid) throw new ImagingError('bad_uid', '前片 StudyInstanceUID 格式不对')
+        const pri = svc(c).resolveStudyUid(a, priorUid)
+        if (pri.scope.patientId !== cur.scope.patientId) throw new ImagingError('cross_patient_compare', '前片与当前检查不属于同一位患者，不能并排对比', 409)
+        const priGone = svc(c).originalsDeleted(a, pri.studyId)
+        if (priGone) throw new ImagingError('originals_deleted', `前片原件已删除：${priGone.message}`, 409)
+        docs.push(priorUid)
+      }
+      const ticket = ctx.viewerTokens.issue(a.userId, 'viewer', TICKET_TTL, docs)
       if (!ticket) throw new ImagingError('forbidden', '账户状态不允许打开阅片器', 403)
       // 审核视图里「跳转」：打开后结节面板直接定位到这个结节（只是界面定位，不是权限；面板只在 Cookie 允许的检查里找）
       const focus = typeof lesionId === 'string' && LESION_ID.test(lesionId) ? `&lesion=${lesionId}` : ''
@@ -290,17 +299,17 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
     return v && Array.isArray(v.docs) ? { a: { userId: v.userId, via: 'user', space: 'work' }, allowed: v.docs } : null
   }
 
-  /** 票据换 Cookie：Cookie 记住这次及之前打开过的检查（同一用户），然后进入 OHIF 打开该检查 */
+  /** 票据换 Cookie：Cookie 记住这次及之前打开过的检查（同一用户），然后进入 OHIF 打开该检查（W3.4 双片并排挂片时含前片 UID） */
   surface.get('/session', c => {
     const now = Date.now() / 1000
     for (const [k, exp] of usedTickets) if (exp < now) usedTickets.delete(k)
     const raw = c.req.query('ticket') ?? ''
     const t = ctx.viewerTokens.verify(raw, 'viewer')
-    if (!t || !Array.isArray(t.docs) || t.docs.length !== 1 || usedTickets.has(raw)) return c.text('阅片链接已失效，请回到患者页重新打开', 401)
+    if (!t || !Array.isArray(t.docs) || t.docs.length < 1 || t.docs.length > 2 || usedTickets.has(raw)) return c.text('阅片链接已失效，请回到患者页重新打开', 401)
     usedTickets.set(raw, t.exp)
     const uid = t.docs[0]!
     const prev = ctx.viewerTokens.verify(getCookie(c, VIEWER_COOKIE), 'dicomweb')
-    const studies = [...new Set([uid, ...(prev && prev.userId === t.userId && Array.isArray(prev.docs) ? prev.docs : [])])].slice(0, VIEWER_MAX_STUDIES)
+    const studies = [...new Set([...t.docs, ...(prev && prev.userId === t.userId && Array.isArray(prev.docs) ? prev.docs : [])])].slice(0, VIEWER_MAX_STUDIES)
     const cookie = ctx.viewerTokens.issue(t.userId, 'dicomweb', VIEWER_COOKIE_TTL, studies)
     if (!cookie) return c.text('账户状态不允许打开阅片器', 403)
     setCookie(c, VIEWER_COOKIE, cookie, { path: '/api', httpOnly: true, sameSite: 'Strict', secure: protoOf(c) === 'https', maxAge: VIEWER_COOKIE_TTL })
@@ -308,8 +317,9 @@ export function registerDicomRoutes(app: Hono<{ Variables: { user: string } }>, 
     try { ctx.metrics?.(c as never).recordViewerOpen({ userId: t.userId, via: 'user', space: 'work' }, uid) } catch { /* 埋点尽力而为 */ }
     c.header('Cache-Control', 'no-store')
     c.header('Referrer-Policy', 'no-referrer')
+    const compare = t.docs.length > 1 ? '&HeurionCompare=1' : ''
     const focus = LESION_ID.test(c.req.query('lesion') ?? '') ? `&HeurionLesion=${c.req.query('lesion')}` : ''
-    return c.redirect(`/viewer?StudyInstanceUIDs=${encodeURIComponent(uid)}${focus}`)
+    return c.redirect(`/viewer?StudyInstanceUIDs=${t.docs.map(encodeURIComponent).join(',')}${compare}${focus}`)
   })
   const unauthorized = (c: Context) => c.json({ error: '阅片会话已过期，请回到患者页重新打开', code: 'unauthorized' }, 401)
   surface.get('/api/dicomweb/studies', c => { const v = viewerActor(c); return v ? qido(c, v.a, v.allowed) : unauthorized(c) })

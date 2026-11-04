@@ -125,6 +125,18 @@ export function registerResearchRoutes(
       return cohortFailure(c, err)
     }
   })
+  /** 科研去标识影像与定稿测量导出申请列表（W6.4，T2.8） */
+  app.get('/api/studies/:sid/cohort/imaging-exports', c => {
+    try { return c.json(co().listImagingExports(me(c), c.req.param('sid'))) } catch (err) { return cohortFailure(c, err) }
+  })
+  /** 发起科研去标识影像与定稿测量导出申请（W6.4，T2.8）：{include_dicom?, include_seg?, include_csv?, reason?, series_headers?} */
+  app.post('/api/studies/:sid/cohort/imaging-exports', async c => {
+    try { return c.json(co().requestImagingExport(me(c), c.req.param('sid'), await c.req.json().catch(() => ({}))), 201) } catch (err) { return cohortFailure(c, err) }
+  })
+  /** 课题负责人（PI / owner）审批科研影像导出申请（W6.4，T2.8）：{decision: 'approve' | 'reject', note?} */
+  app.post('/api/studies/:sid/cohort/imaging-exports/:eid/review', async c => {
+    try { return c.json(co().reviewImagingExport(me(c), c.req.param('sid'), c.req.param('eid'), await c.req.json().catch(() => ({})))) } catch (err) { return cohortFailure(c, err) }
+  })
 
   /**
    * 受试者流向图：只用平台真实入组记录（在组 / 已移出）。

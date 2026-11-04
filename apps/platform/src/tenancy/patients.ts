@@ -173,6 +173,14 @@ class TenantPatientDb {
         verified_by TEXT, verified_at TEXT,
         PRIMARY KEY (study_id, patient_id, var_id)
       );
+      -- 科研队列去标识影像导出与 PI 审批记录（W6.4，T2.8）：只含伪匿名编号与定稿快照，每次导出须 PI 审批并留审计
+      CREATE TABLE IF NOT EXISTS cohort_imaging_exports (
+        id TEXT PRIMARY KEY, study_id TEXT NOT NULL, status TEXT NOT NULL,
+        include_dicom INTEGER NOT NULL DEFAULT 1, include_seg INTEGER NOT NULL DEFAULT 1, include_csv INTEGER NOT NULL DEFAULT 1,
+        reason TEXT, requested_by TEXT NOT NULL, requested_via TEXT NOT NULL, requested_at TEXT NOT NULL,
+        reviewed_by TEXT, reviewed_at TEXT, review_note TEXT, manifest TEXT NOT NULL DEFAULT '{}'
+      );
+      CREATE INDEX IF NOT EXISTS cohort_imaging_exports_study ON cohort_imaging_exports (study_id, requested_at);
       -- 影像检查（docs/design/IMAGING_STUDIES.md）：DICOM UID 属于可识别信息，只存加密值和机构密钥下的 HMAC（去重、按 UID 查找）
       CREATE TABLE IF NOT EXISTS imaging_studies (
         id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
@@ -1111,7 +1119,21 @@ export class PatientService {
       interpretation = `粘液栓总体积由 ${bMucus} cm³ 变为 ${fMucus} cm³（${pctMucus > 0 ? '+' : ''}${pctMucus}%）；高密度粘液栓体积由 ${bHam} cm³ 变为 ${fHam} cm³。`
     } else {
       targetType = 'tumor_lesion'
-      const r = assessRecist(bm, fm, baseline.imaging_data ?? {}, followup.imaging_data ?? {})
+      const fTime = new Date(followDateStr).getTime()
+      const bTime = new Date(baseDateStr).getTime()
+      const priorRecords = validRows
+        .filter(r => {
+          if (r.id === followup.id || r.id === baseline.id) return false
+          const dStr = r.report_date || r.created_at.slice(0, 10)
+          const t = new Date(dStr).getTime()
+          return t >= bTime && t <= fTime
+        })
+        .map(r => ({
+          metrics: r.imaging_data?.metrics ?? {},
+          imaging_data: r.imaging_data ?? {},
+          date: r.report_date || r.created_at.slice(0, 10),
+        }))
+      const r = assessRecist(bm, fm, baseline.imaging_data ?? {}, followup.imaging_data ?? {}, { prior_records: priorRecords })
       category = r.category
       categoryName = r.name
       naReason = r.reason
@@ -2430,16 +2452,58 @@ ${followAssetId ? `- **随访关键切片**: ![随访关键切片](asset:${follo
     const cr = parseCriteria(criteria)
     const rows = (c.db.db.prepare("SELECT p.* FROM patients p JOIN care_team t ON t.patient_id = p.id AND t.user_id = ? WHERE p.status = 'active' ORDER BY p.code").all(a.userId) as Array<Record<string, unknown>>).map(r => patientOf(r))
     const year = new Date().getUTCFullYear()
+    const needImaging = Boolean(cr.imaging_nodules?.length)
     const out = []
     for (const p of rows) {
       const labs = (c.db.db.prepare("SELECT * FROM labs WHERE patient_id = ? AND status = 'confirmed' ORDER BY collected_on, COALESCE(collected_at, collected_on), created_at").all(p.id) as Array<Record<string, unknown>>).map(labOf)
-      const m = matchCriteria(cr, p, labs, year)
+      const finStudies = needImaging ? this.finalizedStudiesOf(c, p.id) : []
+      const m = matchCriteria(cr, p, labs, year, finStudies)
       if (!m) continue
       const enrolled = c.db.db.prepare("SELECT subject_id FROM enrollments WHERE study_id = ? AND patient_id = ? AND status = 'active'").get(studyId, p.id) as { subject_id: string } | undefined
       out.push({ patient_id: p.id, code: p.code, sex: p.sex, age: p.birth_year ? year - p.birth_year : null, tags: p.tags, matched: m, subject_id: enrolled?.subject_id ?? null })
       this.log(c, a, p.id, 'cohort_screen', `研究 ${studyId}`)
     }
     return { criteria: cr, total: out.length, patients: out }
+  }
+
+  /**
+   * 读取患者所有已定稿（W5 imaging_signoffs）的影像检查快照及其序列元数据。
+   * 未定稿检查（没有 imaging_signoffs 记录）一律不返回，确保科研筛选与导出只使用定稿数据（W6.1 / W6.4）。
+   */
+  private finalizedStudiesOf(c: ReturnType<PatientService['ctx']>, patientId: string): FinalizedStudyForCohort[] {
+    const hasSignoffs = Boolean(c.db.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'imaging_signoffs'").get())
+    if (!hasSignoffs) return []
+    const studies = c.db.db.prepare('SELECT id, study_date, modalities FROM imaging_studies WHERE patient_id = ? ORDER BY COALESCE(study_date, created_at), created_at, rowid').all(patientId) as Array<{ id: string; study_date: string | null; modalities: string }>
+    const out: FinalizedStudyForCohort[] = []
+    for (const st of studies) {
+      const signoff = c.db.db.prepare('SELECT id, version, signed_by, signed_at, snapshot, snapshot_hash FROM imaging_signoffs WHERE study_id = ? ORDER BY version DESC LIMIT 1').get(st.id) as { id: string; version: number; signed_by: string; signed_at: string; snapshot: string; snapshot_hash: string } | undefined
+      if (!signoff) continue
+      let snapLesions: Array<{ id: string; status: string; label: string | null; location: string | null; metrics: Record<string, unknown>; seg_ref: string | null }> = []
+      try {
+        snapLesions = (JSON.parse(signoff.snapshot) as typeof snapLesions).filter(l => l.status === 'confirmed')
+      } catch {}
+      const seriesRows = c.db.db.prepare('SELECT id, modality, body_part, description_enc, slice_thickness, instances FROM imaging_series WHERE study_id = ? ORDER BY created_at, rowid').all(st.id) as Array<{ id: string; modality: string | null; body_part: string | null; description_enc: string | null; slice_thickness: number | null; instances: number }>
+      const series = seriesRows.map(sr => ({
+        id: sr.id,
+        modality: sr.modality,
+        body_part: sr.body_part,
+        description: sr.description_enc ? this.keys.decryptText(c.tenantId, sr.description_enc) : null,
+        slice_thickness: sr.slice_thickness,
+        instances: sr.instances,
+      }))
+      out.push({
+        study_id: st.id,
+        study_date: st.study_date,
+        signoff_id: signoff.id,
+        version: signoff.version,
+        signed_by: signoff.signed_by,
+        signed_at: signoff.signed_at,
+        snapshot_hash: signoff.snapshot_hash,
+        lesions: snapLesions,
+        series,
+      })
+    }
+    return out
   }
 
   /**
@@ -2564,12 +2628,113 @@ ${followAssetId ? `- **随访关键切片**: ![随访关键切片](asset:${follo
       subjects.push(s)
       fp.update(JSON.stringify([s.subject_id, s.sex, p.birth_year, s.tags, labs.map(l => [l.id, l.value_num, l.unit, l.collected_on])]))
       if (imgRows.length > 0) fp.update(JSON.stringify(imgRows.map(i => [i.id, i.report_date])))
-      // 研究数据集含已核实的 SMI：核实状态或值变化时数据集应过期（没有已核实 SMI 时不改变指纹）
-      if (vars.l3_smi?.status === 'verified') fp.update(JSON.stringify(['l3_smi', vars.l3_smi.value, vars.l3_smi.verified_at]))
+      // 研究数据集含已核实的 SMI 与肺结节变量：核实状态或值变化时数据集应过期（未核实时不改变指纹）
+      for (const vid of ['l3_smi', 'nodule_type', 'nodule_mean_diameter_mm', 'nodule_volume_mm3', 'nodule_solid_core_mm', 'nodule_vdt_days'] as const) {
+        if (vars[vid]?.status === 'verified') fp.update(JSON.stringify([vid, vars[vid]!.value, vars[vid]!.verified_at]))
+      }
       if (opts.log) this.log(c, a, pid, 'cohort_export', `研究 ${studyId} · ${s.subject_id}`)
     }
     fp.update(JSON.stringify(skipped))
     return { subjects, skipped, fingerprint: fp.digest('hex').slice(0, 24) }
+  }
+
+  /**
+   * 科研队列已定稿影像与病灶快照（W6.2 / W6.4，T2.8）：
+   * 只返回伪匿名研究编号（subject_id，绝不暴露 patient_id / code / 真实姓名）及 W5 定稿快照数据。
+   */
+  cohortFinalizedImaging(a: Actor, studyId: string): {
+    subjects: Array<{
+      subject_id: string
+      patient_id: string
+      finalized_studies: FinalizedStudyForCohort[]
+      unfinalized_count: number
+    }>
+    skipped_subjects: string[]
+  } {
+    const c = this.ctx(a)
+    const rows = c.db.db.prepare("SELECT e.subject_id, e.patient_id FROM enrollments e JOIN patients p ON p.id = e.patient_id WHERE e.study_id = ? AND e.status = 'active' ORDER BY e.subject_id").all(studyId) as Array<{ subject_id: string; patient_id: string }>
+    const subjects: Array<{ subject_id: string; patient_id: string; finalized_studies: FinalizedStudyForCohort[]; unfinalized_count: number }> = []
+    const skipped_subjects: string[] = []
+    for (const r of rows) {
+      if (!this.teamRole(c.db, r.patient_id, a.userId)) {
+        skipped_subjects.push(r.subject_id)
+        continue
+      }
+      const totalStudies = (c.db.db.prepare('SELECT COUNT(*) AS n FROM imaging_studies WHERE patient_id = ?').get(r.patient_id) as { n: number }).n
+      const finalized_studies = this.finalizedStudiesOf(c, r.patient_id)
+      subjects.push({
+        subject_id: r.subject_id,
+        patient_id: r.patient_id,
+        finalized_studies,
+        unfinalized_count: Math.max(0, totalStudies - finalized_studies.length),
+      })
+    }
+    return { subjects, skipped_subjects }
+  }
+
+  /** 记录科研影像导出申请（status = pending_pi_approval）并对涉及的受试者记访问审计日志。 */
+  createCohortImagingExport(
+    a: Actor,
+    studyId: string,
+    input: {
+      include_dicom: boolean
+      include_seg: boolean
+      include_csv: boolean
+      reason: string | null
+      manifest: Record<string, unknown>
+      patient_ids: string[]
+    },
+  ): CohortImagingExportRow {
+    const c = this.ctx(a)
+    const id = 'cie_' + randomUUID().replace(/-/g, '').slice(0, 12)
+    const at = now()
+    return c.db.transaction(() => {
+      c.db.db.prepare(`INSERT INTO cohort_imaging_exports (id, study_id, status, include_dicom, include_seg, include_csv, reason, requested_by, requested_via, requested_at, manifest)
+        VALUES (?, ?, 'pending_pi_approval', ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, studyId, input.include_dicom ? 1 : 0, input.include_seg ? 1 : 0, input.include_csv ? 1 : 0,
+        input.reason, a.userId, a.via, at, JSON.stringify(input.manifest),
+      )
+      for (const pid of input.patient_ids) {
+        this.log(c, a, pid, 'cohort_imaging_export_request', `研究 ${studyId} · 导出申请 ${id}`)
+      }
+      return cohortImagingExportOf(c.db.db.prepare('SELECT * FROM cohort_imaging_exports WHERE id = ?').get(id) as Record<string, unknown>)
+    })
+  }
+
+  /** 列出研究的科研影像导出申请记录。 */
+  listCohortImagingExports(a: Actor, studyId: string): CohortImagingExportRow[] {
+    const c = this.ctx(a)
+    const rows = c.db.db.prepare('SELECT * FROM cohort_imaging_exports WHERE study_id = ? ORDER BY requested_at DESC, rowid DESC').all(studyId) as Array<Record<string, unknown>>
+    return rows.map(cohortImagingExportOf)
+  }
+
+  /** PI 审批科研影像导出申请（approved / rejected），只允许研究者本人（非 AI）操作并写入患者访问审计日志。 */
+  reviewCohortImagingExport(
+    a: Actor,
+    studyId: string,
+    exportId: string,
+    input: { decision: 'approve' | 'reject'; note?: string | null },
+  ): CohortImagingExportRow {
+    if (a.via !== 'user') throw new PatientError('forbidden', '科研影像导出审批须由课题负责人（PI）本人在界面上操作，AI 不能代批', 403)
+    const c = this.ctx(a)
+    return c.db.transaction(() => {
+      const row = c.db.db.prepare('SELECT * FROM cohort_imaging_exports WHERE id = ? AND study_id = ?').get(exportId, studyId) as Record<string, unknown> | undefined
+      if (!row) throw new PatientError('not_found', '未找到该科研影像导出申请', 404)
+      if (row.status !== 'pending_pi_approval') {
+        throw new PatientError('already_reviewed', `该导出申请已处于 ${row.status} 状态，不可重复审批`, 409)
+      }
+      const nextStatus = input.decision === 'approve' ? 'approved' : 'rejected'
+      const at = now()
+      const note = input.note ? input.note.trim().slice(0, 500) : null
+      c.db.db.prepare('UPDATE cohort_imaging_exports SET status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ? WHERE id = ?')
+        .run(nextStatus, a.userId, at, note, exportId)
+      const enrolled = c.db.db.prepare("SELECT patient_id, subject_id FROM enrollments WHERE study_id = ? AND status = 'active'").all(studyId) as Array<{ patient_id: string; subject_id: string }>
+      const action = nextStatus === 'approved' ? 'cohort_imaging_export_approve' : 'cohort_imaging_export_reject'
+      for (const e of enrolled) {
+        this.log(c, a, e.patient_id, action, `研究 ${studyId} · 导出申请 ${exportId} (${nextStatus})`)
+      }
+      return cohortImagingExportOf(c.db.db.prepare('SELECT * FROM cohort_imaging_exports WHERE id = ?').get(exportId) as Record<string, unknown>)
+    })
   }
 
   // —— 研究变量（来源与核实状态）——
@@ -2648,6 +2813,7 @@ ${followAssetId ? `- **随访关键切片**: ![随访关键切片](asset:${follo
       for (const r of c.db.db.prepare("SELECT patient_id FROM enrollments WHERE study_id = ? AND status = 'active'").all(studyId) as Array<{ patient_id: string }>) this.log(c, a, r.patient_id, 'unenroll', `研究 ${studyId} 已删除`)
       c.db.db.prepare('DELETE FROM enrollments WHERE study_id = ?').run(studyId)
       c.db.db.prepare('DELETE FROM subject_vars WHERE study_id = ?').run(studyId)
+      c.db.db.prepare('DELETE FROM cohort_imaging_exports WHERE study_id = ?').run(studyId)
       c.db.db.prepare("UPDATE proposals SET status = 'rejected', resolved_by = ?, resolved_at = ? WHERE status = 'pending' AND kind IN ('enroll', 'unenroll') AND json_extract(payload, '$.study_id') = ?").run(a.userId, now(), studyId)
       c.db.db.prepare('DELETE FROM seq WHERE name = ?').run(`subject:${studyId}`)
     })
@@ -2717,6 +2883,64 @@ export interface LabChangeCriterion {
   op: LabOp
   value: number
 }
+export type NoduleMetricField = 'mean_diameter_mm' | 'volume_mm3' | 'solid_core_mm' | 'vdt_days'
+export type NoduleDensityType = 'solid' | 'part_solid' | 'ground_glass' | 'calcified'
+export interface ImagingNoduleCriterion {
+  field: NoduleMetricField
+  op: LabOp
+  value: number
+  /** 可选：限定结节密度类型（solid / part_solid / ground_glass / calcified） */
+  nodule_type?: NoduleDensityType | null
+  /** 可选：要求至少 N 次已定稿检查（如「部分实性结节 ≥ 6 mm 且至少 2 次随访」） */
+  min_finalized_studies?: number | null
+}
+export interface FinalizedStudyForCohort {
+  study_id: string
+  study_date: string | null
+  signoff_id: string
+  version: number
+  signed_by: string
+  signed_at: string
+  snapshot_hash: string
+  lesions: Array<{ id: string; status: string; label: string | null; location: string | null; metrics: Record<string, unknown>; seg_ref: string | null }>
+  series: Array<{ id: string; modality: string | null; body_part: string | null; description: string | null; slice_thickness: number | null; instances: number }>
+}
+export interface CohortImagingExportRow {
+  id: string
+  study_id: string
+  status: 'pending_pi_approval' | 'approved' | 'rejected'
+  include_dicom: boolean
+  include_seg: boolean
+  include_csv: boolean
+  reason: string | null
+  requested_by: string
+  requested_via: 'user' | 'ai'
+  requested_at: string
+  reviewed_by: string | null
+  reviewed_at: string | null
+  review_note: string | null
+  manifest: Record<string, unknown>
+}
+function cohortImagingExportOf(r: Record<string, unknown>): CohortImagingExportRow {
+  let manifest: Record<string, unknown> = {}
+  try { manifest = JSON.parse((r.manifest as string) || '{}') } catch {}
+  return {
+    id: r.id as string,
+    study_id: r.study_id as string,
+    status: (r.status as CohortImagingExportRow['status']) || 'pending_pi_approval',
+    include_dicom: Boolean(r.include_dicom),
+    include_seg: Boolean(r.include_seg),
+    include_csv: Boolean(r.include_csv),
+    reason: (r.reason as string | null) ?? null,
+    requested_by: r.requested_by as string,
+    requested_via: r.requested_via === 'ai' ? 'ai' : 'user',
+    requested_at: r.requested_at as string,
+    reviewed_by: (r.reviewed_by as string | null) ?? null,
+    reviewed_at: (r.reviewed_at as string | null) ?? null,
+    review_note: (r.review_note as string | null) ?? null,
+    manifest,
+  }
+}
 export interface Criteria {
   sex: 'M' | 'F' | null; age_min: number | null; age_max: number | null
   /** 诊断标签包含其中任一（不分大小写、部分匹配） */
@@ -2727,11 +2951,28 @@ export interface Criteria {
   labs: LabCriterion[]
   /** 化验指标动态变化条件（例如 ALT 下降幅度 >= 30% 或肌酐上升绝对值 >= 50） */
   lab_changes: LabChangeCriterion[]
-  /** 报告日期窗口：只看这段时间内的化验；只给窗口时要求窗口内至少有一次化验 */
+  /** 已定稿肺结节条件（W6.1：只使用 W5 定稿快照里 confirmed 的结节；未定稿检查一律不匹配） */
+  imaging_nodules?: ImagingNoduleCriterion[]
+  /** 报告日期窗口：只看这段时间内的化验或定稿检查；只给窗口时要求窗口内至少有一次化验 */
   from: string | null; to: string | null
 }
 
 const OPS: LabOp[] = ['>', '>=', '<', '<=', '=']
+const NODULE_FIELDS: NoduleMetricField[] = ['mean_diameter_mm', 'volume_mm3', 'solid_core_mm', 'vdt_days']
+const NODULE_TYPES: NoduleDensityType[] = ['solid', 'part_solid', 'ground_glass', 'calcified']
+const NODULE_FIELD_LABELS: Record<NoduleMetricField, { label: string; unit: string }> = {
+  mean_diameter_mm: { label: '平均径', unit: 'mm' },
+  volume_mm3: { label: '体积', unit: 'mm³' },
+  solid_core_mm: { label: '实性成分平均径', unit: 'mm' },
+  vdt_days: { label: '倍增时间 VDT', unit: 'd' },
+}
+const NODULE_TYPE_LABELS: Record<NoduleDensityType, string> = {
+  solid: '实性',
+  part_solid: '部分实性',
+  ground_glass: '纯磨玻璃',
+  calcified: '钙化',
+}
+
 export function parseCriteria(v: unknown): Criteria {
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
   const num = (x: unknown) => typeof x === 'number' && Number.isFinite(x) ? x : typeof x === 'string' && x.trim() !== '' && Number.isFinite(Number(x)) ? Number(x) : null
@@ -2753,18 +2994,40 @@ export function parseCriteria(v: unknown): Criteria {
     if (!test || !op || value === null) throw new PatientError('bad_criteria', '化验变化条件要有项目、比较符（> >= < <= =）和数值')
     return { test, test_key: testKey(test), change_type, op, value }
   })
+  const imaging_nodules = Array.isArray(o.imaging_nodules)
+    ? o.imaging_nodules.slice(0, 10).map(x => {
+        const n = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>
+        const rawField = typeof n.field === 'string' && n.field.trim() ? n.field.trim() : 'mean_diameter_mm'
+        const field = NODULE_FIELDS.includes(rawField as NoduleMetricField) ? (rawField as NoduleMetricField) : null
+        const op = OPS.includes(n.op as LabOp) ? (n.op as LabOp) : null
+        const value = num(n.value)
+        if (!field || !op || value === null) {
+          throw new PatientError('bad_criteria', '影像结节条件要有指标（mean_diameter_mm / volume_mm3 / solid_core_mm / vdt_days）、比较符（> >= < <= =）和数值')
+        }
+        let nodule_type: NoduleDensityType | null = null
+        if (n.nodule_type !== undefined && n.nodule_type !== null && n.nodule_type !== '') {
+          if (!NODULE_TYPES.includes(n.nodule_type as NoduleDensityType)) {
+            throw new PatientError('bad_criteria', '结节类型须为 solid / part_solid / ground_glass / calcified')
+          }
+          nodule_type = n.nodule_type as NoduleDensityType
+        }
+        const minStudies = num(n.min_finalized_studies)
+        const min_finalized_studies = minStudies !== null && minStudies >= 1 ? Math.floor(minStudies) : null
+        return { field, op, value, ...(nodule_type ? { nodule_type } : {}), ...(min_finalized_studies ? { min_finalized_studies } : {}) }
+      })
+    : undefined
   return {
     sex: o.sex === 'M' || o.sex === 'F' ? o.sex : null, age_min: num(o.age_min), age_max: num(o.age_max),
     tags_any: (Array.isArray(o.tags_any) ? o.tags_any : []).filter((t): t is string => typeof t === 'string' && t.trim() !== '').map(t => t.trim()).slice(0, 20),
     tags_exclude: (Array.isArray(o.tags_exclude) ? o.tags_exclude : []).filter((t): t is string => typeof t === 'string' && t.trim() !== '').map(t => t.trim()).slice(0, 20),
-    labs, lab_changes, from: date(o.from), to: date(o.to),
+    labs, lab_changes, ...(imaging_nodules?.length ? { imaging_nodules } : {}), from: date(o.from), to: date(o.to),
   }
 }
 
 const cmp = (a: number, op: LabOp, b: number) => op === '>' ? a > b : op === '>=' ? a >= b : op === '<' ? a < b : op === '<=' ? a <= b : Math.abs(a - b) < 1e-9
 
-/** 符合条件时返回匹配依据（给医生核对），不符合返回 null。labs：这位患者的已确认化验（按日期升序）。 */
-export function matchCriteria(cr: Criteria, p: PatientRow, labs: LabRow[], year: number): string[] | null {
+/** 符合条件时返回匹配依据（给医生核对），不符合返回 null。labs：这位患者的已确认化验（按日期升序）；finalizedStudies：已定稿检查快照。 */
+export function matchCriteria(cr: Criteria, p: PatientRow, labs: LabRow[], year: number, finalizedStudies: FinalizedStudyForCohort[] = []): string[] | null {
   const why: string[] = []
   if (cr.sex) { if (p.sex !== cr.sex) return null; why.push(cr.sex === 'M' ? '男' : '女') }
   if (cr.age_min !== null || cr.age_max !== null) {
@@ -2783,7 +3046,7 @@ export function matchCriteria(cr: Criteria, p: PatientRow, labs: LabRow[], year:
     why.push(`标签「${hit}」`)
   }
   const inWin = labs.filter(l => l.collected_on && (!cr.from || l.collected_on >= cr.from) && (!cr.to || l.collected_on <= cr.to))
-  if ((cr.from || cr.to) && !cr.labs.length && !cr.lab_changes.length) {
+  if ((cr.from || cr.to) && !cr.labs.length && !cr.lab_changes.length && !(cr.imaging_nodules?.length)) {
     if (!inWin.length) return null
     why.push(`窗口内 ${inWin.length} 次化验`)
   }
@@ -2812,6 +3075,30 @@ export function matchCriteria(cr: Criteria, p: PatientRow, labs: LabRow[], year:
     const sign = calculated >= 0 ? '+' : ''
     const changeStr = q.change_type === 'pct' ? `${sign}${calculated.toFixed(1)}%` : `${sign}${calculated.toFixed(2)}${unit}`
     why.push(`${last.test_name} 变化 ${changeStr}（基线 ${baseVal} → 最近 ${lastVal}）`)
+  }
+  for (const q of cr.imaging_nodules ?? []) {
+    const winStudies = finalizedStudies.filter(st => (!cr.from || (st.study_date && st.study_date >= cr.from)) && (!cr.to || (st.study_date && st.study_date <= cr.to)))
+    if (!winStudies.length) return null
+    if (q.min_finalized_studies && winStudies.length < q.min_finalized_studies) return null
+    let hitInfo: { study: FinalizedStudyForCohort; lesion: FinalizedStudyForCohort['lesions'][number]; val: number } | null = null
+    for (const st of winStudies) {
+      for (const l of st.lesions) {
+        if (l.status !== 'confirmed') continue
+        const m = l.metrics ?? {}
+        if (q.nodule_type && m.nodule_type !== q.nodule_type) continue
+        const rawVal = m[q.field]
+        const val = typeof rawVal === 'number' && Number.isFinite(rawVal) ? rawVal : null
+        if (val === null || !cmp(val, q.op, q.value)) continue
+        hitInfo = { study: st, lesion: l, val }
+        break
+      }
+      if (hitInfo) break
+    }
+    if (!hitInfo) return null
+    const fMeta = NODULE_FIELD_LABELS[q.field]
+    const tLabel = q.nodule_type ? `${NODULE_TYPE_LABELS[q.nodule_type]}结节 ` : '已定稿结节 '
+    const followStr = q.min_finalized_studies ? `，定稿随访 ${winStudies.length} 次` : ''
+    why.push(`${tLabel}${fMeta.label} ${hitInfo.val} ${fMeta.unit}（${hitInfo.study.study_date ?? hitInfo.study.study_id} 定稿 v${hitInfo.study.version}${followStr}）`)
   }
   return why
 }
@@ -2860,10 +3147,12 @@ function subjectVarOf(subjectId: string, r: Record<string, unknown>): SubjectVar
   }
 }
 
-// —— RECIST 1.1 分类（收紧）——
+// —— RECIST 1.1 分类（收紧 + 多靶病灶 + 最低值 Nadir 参照，PRD T3.1）——
 
 export type RecistCategory = 'CR' | 'PR' | 'SD' | 'PD' | 'NA'
 export const RECIST_NOTE = '按 RECIST 1.1 阈值计算，未经阅片确认'
+export const RECIST_MAX_TARGETS_TOTAL = 5
+export const RECIST_MAX_TARGETS_PER_ORGAN = 2
 
 const finiteOrNull = (v: unknown): number | null => {
   if (v === null || v === undefined || v === '') return null
@@ -2871,11 +3160,46 @@ const finiteOrNull = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null
 }
 
-/** 一次检查的靶病灶长径：优先 target_lesions 数组，否则单个 longest_diameter_mm；缺测为 null */
-function lesionDiameters(m: Record<string, any>): Array<number | null> {
-  if (Array.isArray(m.target_lesions)) return m.target_lesions.map((l: any) => finiteOrNull(l?.longest_diameter_mm ?? l?.diameter_mm))
+interface ParsedLesion {
+  index: number
+  id: string | null
+  organ: string | null
+  isLymphNode: boolean
+  diameterMm: number | null
+}
+
+function parseLesions(m: Record<string, any>): ParsedLesion[] {
+  if (Array.isArray(m.target_lesions)) {
+    return m.target_lesions.map((l: any, index: number) => {
+      const isLymphNode = Boolean(l?.is_lymph_node || l?.kind === 'lymph_node' || l?.type === 'lymph_node')
+      const rawDiam = isLymphNode
+        ? (l?.short_axis_mm ?? l?.longest_diameter_mm ?? l?.diameter_mm)
+        : (l?.longest_diameter_mm ?? l?.diameter_mm ?? l?.long_axis_mm)
+      const rawId = l?.prior_lesion_id ?? l?.lesion_id ?? l?.id
+      const id = rawId !== undefined && rawId !== null && String(rawId).trim() !== '' ? String(rawId).trim() : null
+      const organ = l?.organ !== undefined && l?.organ !== null && String(l.organ).trim() !== '' ? String(l.organ).trim().toLowerCase() : null
+      return {
+        index,
+        id,
+        organ,
+        isLymphNode,
+        diameterMm: finiteOrNull(rawDiam),
+      }
+    })
+  }
   const one = finiteOrNull(m.longest_diameter_mm)
-  return one === null ? [] : [one]
+  return one === null ? [] : [{ index: 0, id: null, organ: null, isLymphNode: false, diameterMm: one }]
+}
+
+/**
+ * 在随访或中间期检查中匹配基线选定的靶病灶：优先按 id / lesion_id / prior_lesion_id 匹配，否则按序号回退。
+ */
+function matchFollowupLesion(target: ParsedLesion, folLesions: ParsedLesion[]): ParsedLesion | undefined {
+  if (target.id !== null) {
+    const byId = folLesions.find(f => f.id === target.id)
+    if (byId) return byId
+  }
+  return folLesions[target.index]
 }
 
 /** 两次检查的测量方法描述（分析模型、模态、层厚）；缺模型记录时返回 null */
@@ -2886,18 +3210,72 @@ function measurementMethod(img: Record<string, any>, m: Record<string, any>): { 
   return { model, modality: img.modality ? String(img.modality) : null, thickness: finiteOrNull(qc.slice_thickness_mm ?? m.slice_thickness_mm ?? img.slice_thickness_mm) }
 }
 
+export interface RecistAssessOptions {
+  /** 显式传入的既往最低直径总和（Nadir SOD，mm） */
+  nadir_sum_mm?: number | null
+  /** 基线与本次随访之间的历次已确认影像记录（自动计算多时间点最低点 Nadir） */
+  prior_records?: Array<{
+    metrics?: Record<string, any>
+    imaging_data?: Record<string, any>
+    date?: string | null
+  }>
+}
+
+export interface RecistAssessResult {
+  category: RecistCategory
+  name: string
+  reason: string | null
+  detail: string
+  baseline_sum_mm?: number
+  nadir_sum_mm?: number
+  followup_sum_mm?: number
+  pct_from_baseline?: number
+  pct_from_nadir?: number
+  selected_target_count?: number
+}
+
 /**
- * RECIST 1.1：仅当基线有 ≥ 10 mm 的可测量靶病灶、随访有对应测值、两次测量方法一致时才分类；
- * 按全部靶病灶直径总和计算；随访有新发病灶记录时判 PD。参照点为基线（平台没有既往最低值记录）。
+ * RECIST 1.1（PRD T3.1）：
+ * 1. 基线可测量靶病灶：非淋巴结实性病灶长径 ≥ 10 mm，病理性淋巴结短径 ≥ 15 mm；
+ * 2. 多靶病灶上限：全身最多选 5 个靶病灶，同一器官（当标注 organ 时）最多 2 个；
+ * 3. 病灶匹配：优先复用随访配准的病灶 ID（id / lesion_id / prior_lesion_id），无 ID 时按序号对应；
+ * 4. 参照点：CR（非淋巴结归零且淋巴结短径 < 10 mm）与 PR（较基线缩小 ≥ 30%）以基线直径总和（SOD）为参照；
+ *    PD（较最低点增加 ≥ 20% 且绝对增加 ≥ 5 mm，或出现新发病灶 / 非靶病灶明确进展）以历次随访最低点（Nadir SOD）为参照。
  */
-export function assessRecist(bm: Record<string, any>, fm: Record<string, any>, bImg: Record<string, any>, fImg: Record<string, any>): { category: RecistCategory; name: string; reason: string | null; detail: string } {
-  const na = (reason: string) => ({ category: 'NA' as const, name: '不适用', reason, detail: reason })
-  const base = lesionDiameters(bm)
-  if (!base.length || base.some(v => v === null)) return na('基线没有靶病灶长径测值')
-  const targets = base.map((v, i) => ({ v: v!, i })).filter(t => t.v >= 10)
-  if (!targets.length) return na('基线没有 ≥ 10 mm 的可测量靶病灶')
-  const fol = lesionDiameters(fm)
-  if (targets.some(t => fol[t.i] === null || fol[t.i] === undefined)) return na('随访缺少对应靶病灶的长径测值')
+export function assessRecist(
+  bm: Record<string, any>,
+  fm: Record<string, any>,
+  bImg: Record<string, any>,
+  fImg: Record<string, any>,
+  opts?: RecistAssessOptions,
+): RecistAssessResult {
+  const na = (reason: string): RecistAssessResult => ({ category: 'NA' as const, name: '不适用', reason, detail: reason })
+  const base = parseLesions(bm)
+  if (!base.length || base.some(l => l.diameterMm === null)) return na('基线没有靶病灶长径测值')
+
+  // 筛选满足基线可测量标准的靶病灶（非淋巴结 ≥ 10 mm，淋巴结短径 ≥ 15 mm）
+  const measurable = base.filter(l => (l.isLymphNode ? l.diameterMm! >= 15 : l.diameterMm! >= 10))
+  if (!measurable.length) return na('基线没有 ≥ 10 mm 的可测量靶病灶')
+
+  // 按 RECIST 1.1 限制最多 5 个靶病灶、每器官最多 2 个
+  const organCounts = new Map<string, number>()
+  const targets: ParsedLesion[] = []
+  for (const l of measurable) {
+    if (targets.length >= RECIST_MAX_TARGETS_TOTAL) break
+    if (l.organ) {
+      const c = organCounts.get(l.organ) ?? 0
+      if (c >= RECIST_MAX_TARGETS_PER_ORGAN) continue
+      organCounts.set(l.organ, c + 1)
+    }
+    targets.push(l)
+  }
+
+  const fol = parseLesions(fm)
+  const matchedFol = targets.map(t => matchFollowupLesion(t, fol))
+  if (matchedFol.some(m => !m || m.diameterMm === null || m.diameterMm === undefined)) {
+    return na('随访缺少对应靶病灶的长径测值')
+  }
+
   const mb = measurementMethod(bImg, bm), mf = measurementMethod(fImg, fm)
   if (!mb || !mf) return na('缺少测量方法记录，无法确认两次测量方法一致')
   const diffs: string[] = []
@@ -2906,16 +3284,74 @@ export function assessRecist(bm: Record<string, any>, fm: Record<string, any>, b
   if (mb.thickness !== null && mf.thickness !== null && mb.thickness !== mf.thickness) diffs.push(`层厚 ${mb.thickness} / ${mf.thickness} mm`)
   if (diffs.length) return na(`两次测量方法不一致（${diffs.join('；')}）`)
 
-  const sumB = Math.round(targets.reduce((n, t) => n + t.v, 0) * 10) / 10
-  const sumF = Math.round(targets.reduce((n, t) => n + (fol[t.i] as number), 0) * 10) / 10
-  const diff = Math.round((sumF - sumB) * 10) / 10
-  const pct = Math.round((diff / sumB) * 1000) / 10
+  const sumB = Math.round(targets.reduce((n, t) => n + t.diameterMm!, 0) * 10) / 10
+  const sumF = Math.round(matchedFol.reduce((n, m) => n + (m!.diameterMm as number), 0) * 10) / 10
+
+  // 计算历次随访中的最低点直径总和（Nadir SOD，初值为基线 sumB）
+  let nadirSum = sumB
+  const explicitNadir = finiteOrNull(opts?.nadir_sum_mm ?? fm.nadir_sum_mm ?? bm.nadir_sum_mm)
+  if (explicitNadir !== null && explicitNadir >= 0 && explicitNadir < nadirSum) {
+    nadirSum = Math.round(explicitNadir * 10) / 10
+  }
+  if (Array.isArray(fm.prior_sums_mm)) {
+    for (const s of fm.prior_sums_mm) {
+      const v = finiteOrNull(s)
+      if (v !== null && v >= 0 && v < nadirSum) nadirSum = Math.round(v * 10) / 10
+    }
+  }
+  if (Array.isArray(opts?.prior_records)) {
+    for (const rec of opts!.prior_records) {
+      const pm = rec.metrics ?? rec.imaging_data?.metrics ?? {}
+      const pImg = rec.imaging_data ?? bImg
+      const mp = measurementMethod(pImg, pm)
+      if (mp && mp.model === mb.model && (!mb.modality || !mp.modality || mb.modality === mp.modality)) {
+        const pLesions = parseLesions(pm)
+        const pMatched = targets.map(t => matchFollowupLesion(t, pLesions))
+        if (pMatched.every(m => m && m.diameterMm !== null && m.diameterMm !== undefined)) {
+          const sumP = Math.round(pMatched.reduce((n, m) => n + (m!.diameterMm as number), 0) * 10) / 10
+          if (sumP >= 0 && sumP < nadirSum) nadirSum = sumP
+        }
+      }
+    }
+  }
+
+  const diffFromBase = Math.round((sumF - sumB) * 10) / 10
+  const pctFromBase = Math.round((diffFromBase / sumB) * 1000) / 10
+  const diffFromNadir = Math.round((sumF - nadirSum) * 10) / 10
+  const pctFromNadir = nadirSum > 0 ? Math.round((diffFromNadir / nadirSum) * 1000) / 10 : (sumF >= 5 ? 100 : 0)
+
   const newLesion = fm.new_lesions === true || (finiteOrNull(fm.new_lesion_count) ?? 0) > 0
-  const detail = `${targets.length} 个基线 ≥ 10 mm 靶病灶的直径总和由 ${sumB} mm 变为 ${sumF} mm（${pct > 0 ? '+' : ''}${pct}%，${diff > 0 ? '+' : ''}${diff} mm）${newLesion ? '；随访记录有新发病灶' : ''}；以基线为参照（无既往最低值记录）。`
-  const named = (c: RecistCategory, zh: string) => ({ category: c, name: `${c}（${zh}）`, reason: null, detail })
+  const nonTargetPd = fm.unequivocal_non_target_pd === true
+
+  // CR 判定：所有非淋巴结靶病灶为 0 mm，且所有病理性淋巴结靶病灶短径 < 10 mm
+  const isCr = targets.every((t, idx) => {
+    const fVal = matchedFol[idx]!.diameterMm as number
+    return t.isLymphNode ? fVal < 10 : fVal === 0
+  })
+
+  const nadirClause = nadirSum < sumB
+    ? `；既往最低值（Nadir）${nadirSum} mm，较最低值 ${pctFromNadir > 0 ? '+' : ''}${pctFromNadir}%（${diffFromNadir > 0 ? '+' : ''}${diffFromNadir} mm）；CR/PR 以基线为参照，PD 以最低值（Nadir）为参照`
+    : `；最低值（Nadir）同基线 ${sumB} mm（CR/PR 以基线为参照，PD 以最低值为参照）`
+
+  const detail = `${targets.length} 个基线 ≥ 10 mm 靶病灶的直径总和由 ${sumB} mm 变为 ${sumF} mm（${pctFromBase > 0 ? '+' : ''}${pctFromBase}%，${diffFromBase > 0 ? '+' : ''}${diffFromBase} mm）${newLesion ? '；随访记录有新发病灶' : ''}${nonTargetPd ? '；非靶病灶明确进展' : ''}${nadirClause}。`
+
+  const named = (c: RecistCategory, zh: string): RecistAssessResult => ({
+    category: c,
+    name: `${c}（${zh}）`,
+    reason: null,
+    detail,
+    baseline_sum_mm: sumB,
+    nadir_sum_mm: nadirSum,
+    followup_sum_mm: sumF,
+    pct_from_baseline: pctFromBase,
+    pct_from_nadir: pctFromNadir,
+    selected_target_count: targets.length,
+  })
+
   if (newLesion) return named('PD', '疾病进展：新发病灶')
-  if (sumF === 0) return named('CR', '完全缓解')
-  if (pct <= -30) return named('PR', '部分缓解')
-  if (pct >= 20 && diff >= 5) return named('PD', '疾病进展')
+  if (nonTargetPd) return named('PD', '疾病进展：非靶病灶明确进展')
+  if (isCr) return named('CR', '完全缓解')
+  if (pctFromNadir >= 20 && diffFromNadir >= 5) return named('PD', '疾病进展')
+  if (pctFromBase <= -30) return named('PR', '部分缓解')
   return named('SD', '疾病稳定')
 }

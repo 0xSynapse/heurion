@@ -18,10 +18,12 @@ export const MEASURE_UNITS = {
   cm3: { label: 'cm³', dim: 'volume', factor: 0.001, decimals: 2 },
   HU: { label: 'HU', dim: 'density', factor: 1, decimals: 0 },
   ratio: { label: '', dim: 'ratio', factor: 1, decimals: 2 },
-  /** 百分比（随访对比的体积变化率）：数值与 % 之间不留空格。 */
+  /** 百分比（随访对比的体积变化率 / 队列分型占比）：数值与 % 之间不留空格。 */
   pct: { label: '%', dim: 'percent', factor: 1, decimals: 0 },
   /** 天（体积倍增时间）。 */
   day: { label: '天', dim: 'time', factor: 1, decimals: 0 },
+  /** 计数（科研队列统计值 W6.5：受试者数、定稿检查数、结节数）。 */
+  count: { label: '', dim: 'count', factor: 1, decimals: 0 },
 } as const
 export type MeasureUnit = keyof typeof MEASURE_UNITS
 
@@ -51,9 +53,29 @@ export const FOLLOWUP_FIELDS: Record<string, MeasureField> = {
   vdt_days: { label: '体积倍增时间', base: 'day' },
 }
 
+/**
+ * 科研队列统计值（cohort_stat，source_id = 研究 study_id，PRD W6.5 / T3.9）：
+ * 只汇总已定稿（W5 Finalized）检查里的已确认结节，随队列扩充或新检查定稿自动同步更新。
+ */
+export const COHORT_FIELDS: Record<string, MeasureField> = {
+  subjects_n: { label: '入组受试者数', base: 'count' },
+  finalized_studies_n: { label: '已定稿检查数', base: 'count' },
+  confirmed_nodules_n: { label: '已定稿确认结节总数', base: 'count' },
+  mean_diameter_mm: { label: '结节平均径均值', base: 'mm' },
+  median_diameter_mm: { label: '结节平均径中位数', base: 'mm' },
+  mean_volume_mm3: { label: '结节体积均值', base: 'mm3' },
+  median_volume_mm3: { label: '结节体积中位数', base: 'mm3' },
+  median_vdt_days: { label: '结节体积倍增时间中位数', base: 'day' },
+  solid_pct: { label: '实性结节占比', base: 'pct' },
+  subsolid_pct: { label: '亚实性结节占比', base: 'pct' },
+}
+
 /** 来源类型的测量字段目录（未知来源为空）。 */
 export function fieldsOf(kind: string): Record<string, MeasureField> {
-  return kind === 'imaging_lesion' ? LESION_FIELDS : kind === 'imaging_followup' ? FOLLOWUP_FIELDS : {}
+  if (kind === 'imaging_lesion') return LESION_FIELDS
+  if (kind === 'imaging_followup') return FOLLOWUP_FIELDS
+  if (kind === 'cohort_stat') return COHORT_FIELDS
+  return {}
 }
 
 /** 某个基准单位可选的显示单位。 */

@@ -54,6 +54,7 @@ export function renderEnglishIndexHtml(zhHtml: string): string {
     .replace('<span id="langText">EN</span>', '<span id="langText">中文</span>')
     .replace(/href="\/tools"/g, 'href="/en/tools"')
     .replace(/href="\/tools\//g, 'href="/en/tools/')
+    .replace(/href="\/blog"/g, 'href="/en/blog"')
     .replace(/href="\/aegis-os\/"/g, 'href="/en/aegis-os/"')
     .replace(/href="\/aegis-os\/tutorial\/"/g, 'href="/en/aegis-os/tutorial/"')
 

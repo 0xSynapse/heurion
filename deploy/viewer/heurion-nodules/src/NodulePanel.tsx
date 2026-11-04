@@ -67,9 +67,14 @@ function keyNote(m: Lesion['metrics']): string | null {
 const CLICK_EVENT = 'CORNERSTONE_TOOLS_MOUSE_CLICK';
 
 const fmt = (v: number | null | undefined, digits = 1) => (v === null || v === undefined || Number.isNaN(v) ? '—' : v.toFixed(digits));
-const studyUidFromUrl = () => new URLSearchParams(window.location.search).get('StudyInstanceUIDs')?.split(',')[0] ?? null;
+const allStudyUidsFromUrl = () => (new URLSearchParams(window.location.search).get('StudyInstanceUIDs') ?? '').split(',').map(s => s.trim()).filter(Boolean);
+const studyUidFromUrl = () => allStudyUidsFromUrl()[0] ?? null;
+const priorStudyUidFromUrl = () => allStudyUidsFromUrl()[1] ?? null;
+const isCompareFromUrl = () => new URLSearchParams(window.location.search).get('HeurionCompare') === '1' || allStudyUidsFromUrl().length >= 2;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const LOBE_TEXT = (l: Lesion) => (l.location ? LOBE[l.location] ?? l.location : l.metrics.lobe_status === 'pending' ? '肺叶定位中…' : '肺叶未定');
+const isLowConfidenceLesion = (l: Lesion) =>
+  l.source === 'ai' && l.status === 'proposed' && typeof l.metrics?.detection_score === 'number' && l.metrics.detection_score < 0.30;
 
 /** 阅片器子域名上的写接口：带 Cookie 与自定义请求头（平台据此拒绝跨站伪造的请求） */
 async function post(path: string, body: unknown) {
@@ -86,6 +91,8 @@ async function post(path: string, body: unknown) {
 
 export default function NodulePanel({ servicesManager, commandsManager, extensionManager }) {
   const studyUid = studyUidFromUrl();
+  const priorStudyUid = priorStudyUidFromUrl();
+  const compareMode = isCompareFromUrl();
   const [lesions, setLesions] = useState<Lesion[]>([]);
   const [reasons, setReasons] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -96,10 +103,53 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
   /** 正在进行的点选分割（显示「分割中…」，期间不接受新的点击） */
   const [working, setWorking] = useState<string | null>(null);
   const prepared = useRef(new Set<string>());
+  const comparePrepared = useRef(false);
   const [reviewState, setReviewState] = useState<ReviewSummary | null>(null);
+  const [lowOpen, setLowOpen] = useState(false);
   const focused = useRef(false);
   /** 随访对比（T2.4）：与前片的对应与变化 */
   const followup = useFollowup(studyUid);
+
+  /** W3.4 双片并排挂片：URL 含当前与前片两个 StudyInstanceUID 时自动切换 1×2 视口并分别装入当期与前片 CT */
+  useEffect(() => {
+    if (!compareMode || !studyUid || !priorStudyUid || comparePrepared.current) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      if (comparePrepared.current || tries > 40) {
+        clearInterval(timer);
+        return;
+      }
+      tries += 1;
+      const { displaySetService, viewportGridService } = servicesManager.services;
+      const allDs = displaySetService.getActiveDisplaySets?.() ?? [];
+      const currCt = allDs.find(d => d.StudyInstanceUID === studyUid && d.Modality === 'CT');
+      const priorCt = allDs.find(d => d.StudyInstanceUID === priorStudyUid && d.Modality === 'CT');
+      if (!currCt || !priorCt) return;
+      comparePrepared.current = true;
+      clearInterval(timer);
+      try {
+        commandsManager.runCommand('setViewportGridLayout', { numRows: 1, numCols: 2 });
+      } catch {
+        // fallback if command is unavailable
+      }
+      setTimeout(() => {
+        try {
+          const vps = Array.from(viewportGridService.getState().viewports.keys()) as string[];
+          if (vps[0]) {
+            viewportGridService.setDisplaySetsForViewport({ viewportId: vps[0], displaySetInstanceUIDs: [currCt.displaySetInstanceUID] });
+            commandsManager.runCommand('setViewportWindowLevel', { viewportId: vps[0], ...LUNG_WINDOW });
+          }
+          if (vps[1]) {
+            viewportGridService.setDisplaySetsForViewport({ viewportId: vps[1], displaySetInstanceUIDs: [priorCt.displaySetInstanceUID] });
+            commandsManager.runCommand('setViewportWindowLevel', { viewportId: vps[1], ...LUNG_WINDOW });
+          }
+        } catch {
+          // ignore viewport assignment timing errors
+        }
+      }, 300);
+    }, 500);
+    return () => clearInterval(timer);
+  }, [compareMode, studyUid, priorStudyUid, servicesManager, commandsManager]);
 
   const load = useCallback(async () => {
     if (!studyUid) return setError('地址里没有检查编号');
@@ -147,6 +197,14 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
     if (!viewportId) return;
     if (await jumpBySeg(l, viewportId).catch(() => false)) {
       commandsManager.runCommand('setViewportWindowLevel', { viewportId, ...LUNG_WINDOW });
+      if (compareMode && l.metrics.center_lps_mm) {
+        for (const otherId of viewportGridService.getState().viewports.keys()) {
+          if (otherId === viewportId) continue;
+          const vpOther = cornerstoneViewportService.getCornerstoneViewport(otherId);
+          vpOther?.jumpToWorld?.(l.metrics.center_lps_mm);
+          commandsManager.runCommand('setViewportWindowLevel', { viewportId: otherId, ...LUNG_WINDOW });
+        }
+      }
       return;
     }
     const ds = displaySetService.getActiveDisplaySets().find(d => d.SeriesInstanceUID === l.series_uid);
@@ -172,7 +230,15 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
       await sleep(100);
     }
     commandsManager.runCommand('setViewportWindowLevel', { viewportId, ...LUNG_WINDOW });
-  }, [servicesManager, commandsManager, jumpBySeg]);
+    if (compareMode && l.metrics.center_lps_mm) {
+      for (const otherId of viewportGridService.getState().viewports.keys()) {
+        if (otherId === viewportId) continue;
+        const vpOther = cornerstoneViewportService.getCornerstoneViewport(otherId);
+        vpOther?.jumpToWorld?.(l.metrics.center_lps_mm);
+        commandsManager.runCommand('setViewportWindowLevel', { viewportId: otherId, ...LUNG_WINDOW });
+      }
+    }
+  }, [servicesManager, commandsManager, jumpBySeg, compareMode]);
 
   /** 从审核视图「跳转」打开：结节列表到了、视口有了之后定位一次（视口还没就绪时稍后再试） */
   useEffect(() => {
@@ -180,6 +246,7 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
     if (!id || focused.current) return;
     const l = lesions.find(x => x.id === id);
     if (!l) return;
+    if (isLowConfidenceLesion(l)) setLowOpen(true);
     let tries = 0;
     const tick = () => {
       if (focused.current) return;
@@ -371,6 +438,75 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
 
   const counts = { proposed: 0, confirmed: 0, rejected: 0 };
   lesions.forEach(l => { counts[l.status] = (counts[l.status] ?? 0) + 1; });
+  const primaryLesions = lesions.filter(l => !isLowConfidenceLesion(l));
+  const lowConfidenceLesions = lesions.filter(isLowConfidenceLesion);
+
+  const renderLesionCard = (l: Lesion) => {
+    const m = l.metrics ?? {};
+    const st = STATUS[l.status];
+    const details = [...(m.warnings ?? []), ...(m.lobe_note ? [m.lobe_note] : [])];
+    return (
+      <div
+        key={l.id}
+        data-cy="heurion-nodule"
+        onClick={() => void jump(l)}
+        style={{ border: `1px solid ${selected === l.id ? '#58a6ff' : '#30363d'}`, borderRadius: 6, padding: 8, marginBottom: 6, cursor: 'pointer' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <b>{l.label ?? '结节'}</b>
+          <span style={{ marginLeft: 6 }}>{LOBE_TEXT(l)}</span>
+          <span style={{ marginLeft: 'auto', color: st.color }}>{st.text}</span>
+        </div>
+        <div style={{ marginTop: 4 }}>
+          平均径 {fmt(m.mean_diameter_mm)} mm（长 {fmt(m.long_axis_mm)} × 短 {fmt(m.short_axis_mm)}）· 体积 {fmt(m.volume_mm3, 0)} mm³
+        </div>
+        <div style={{ color: '#8b949e' }}>
+          {TYPE[m.nodule_type ?? ''] ?? '密度未定'} · 平均 CT 值 {fmt(m.mean_hu, 0)} HU
+          {l.source === 'ai' ? ` · 检出分数 ${fmt(m.detection_score, 2)}` : ' · 医生补充'}
+        </div>
+        {keyNote(m) && <div style={{ color: '#f5a623' }}>{keyNote(m)}</div>}
+        {details.length > 0 && (
+          <details onClick={e => e.stopPropagation()} style={{ color: '#8b949e', fontSize: 12 }}>
+            <summary style={{ cursor: 'pointer' }}>详情（{details.length} 条）</summary>
+            {details.map(w => <div key={w}>· {w}</div>)}
+          </details>
+        )}
+        {l.status === 'rejected' && l.reject_reason && <div style={{ color: '#8b949e' }}>否决原因：{l.reject_reason}</div>}
+        <FollowupLine f={followup} lesionId={l.id} />
+        <div style={{ marginTop: 6, display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
+          {l.status !== 'confirmed' && (
+            <button disabled={busy === l.id} onClick={() => void review(l, 'confirmed')}>确认</button>
+          )}
+          {l.status !== 'rejected' && rejecting?.id !== l.id && (
+            <button disabled={busy === l.id} onClick={() => setRejecting({ id: l.id, reason: reasons[0] ?? '其他' })}>否决</button>
+          )}
+          {rejecting?.id === l.id && (
+            <>
+              <select value={rejecting.reason} onChange={e => setRejecting({ id: l.id, reason: e.target.value })} style={{ color: '#000' }}>
+                {reasons.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+              <button disabled={busy === l.id} onClick={() => void review(l, 'rejected', rejecting.reason)}>确定否决</button>
+              <button onClick={() => setRejecting(null)}>取消</button>
+            </>
+          )}
+          {l.status !== 'rejected' && rejecting?.id !== l.id && !(mode?.kind === 'refine' && mode.lesionId === l.id) && !!(m.center_lps_mm || m.prompt_points?.length) && (
+            <button data-cy="heurion-refine" disabled={!!working} onClick={() => { setMode({ kind: 'refine', lesionId: l.id, positive: true }); void jump(l); }}>修正边界</button>
+          )}
+          {l.source === 'manual' && (
+            <button disabled={busy === l.id || !!working} onClick={() => void withdraw(l)}>撤销</button>
+          )}
+        </div>
+        {mode?.kind === 'refine' && mode.lesionId === l.id && (
+          <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
+            <button data-cy="heurion-refine-include" style={{ fontWeight: mode.positive ? 'bold' : 'normal' }} onClick={() => setMode({ ...mode, positive: true })}>补入</button>
+            <button data-cy="heurion-refine-exclude" style={{ fontWeight: mode.positive ? 'normal' : 'bold' }} onClick={() => setMode({ ...mode, positive: false })}>排除</button>
+            <button disabled={!!working || (m.prompt_points?.length ?? 0) < 2} onClick={() => void undoPoint(l)}>撤销上一点</button>
+            <button onClick={() => setMode(null)}>完成</button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div style={{ padding: 8, color: '#e6edf3', fontSize: 13, overflowY: 'auto', height: '100%' }} data-cy="heurion-nodule-panel">
@@ -400,74 +536,22 @@ export default function NodulePanel({ servicesManager, commandsManager, extensio
         </div>
       )}
       {error && <div style={{ color: '#f85149', marginBottom: 8 }}>{error}</div>}
-      <FollowupHeader f={followup} />
+      <FollowupHeader f={followup} compareMode={compareMode} />
       {!error && lesions.length === 0 && <div style={{ color: '#8b949e' }}>这个检查还没有结节结果。</div>}
-      {lesions.map(l => {
-        const m = l.metrics ?? {};
-        const st = STATUS[l.status];
-        const details = [...(m.warnings ?? []), ...(m.lobe_note ? [m.lobe_note] : [])];
-        return (
-          <div
-            key={l.id}
-            data-cy="heurion-nodule"
-            onClick={() => void jump(l)}
-            style={{ border: `1px solid ${selected === l.id ? '#58a6ff' : '#30363d'}`, borderRadius: 6, padding: 8, marginBottom: 6, cursor: 'pointer' }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              <b>{l.label ?? '结节'}</b>
-              <span style={{ marginLeft: 6 }}>{LOBE_TEXT(l)}</span>
-              <span style={{ marginLeft: 'auto', color: st.color }}>{st.text}</span>
-            </div>
-            <div style={{ marginTop: 4 }}>
-              平均径 {fmt(m.mean_diameter_mm)} mm（长 {fmt(m.long_axis_mm)} × 短 {fmt(m.short_axis_mm)}）· 体积 {fmt(m.volume_mm3, 0)} mm³
-            </div>
-            <div style={{ color: '#8b949e' }}>
-              {TYPE[m.nodule_type ?? ''] ?? '密度未定'} · 平均 CT 值 {fmt(m.mean_hu, 0)} HU
-              {l.source === 'ai' ? ` · 检出分数 ${fmt(m.detection_score, 2)}` : ' · 医生补充'}
-            </div>
-            {keyNote(m) && <div style={{ color: '#f5a623' }}>{keyNote(m)}</div>}
-            {details.length > 0 && (
-              <details onClick={e => e.stopPropagation()} style={{ color: '#8b949e', fontSize: 12 }}>
-                <summary style={{ cursor: 'pointer' }}>详情（{details.length} 条）</summary>
-                {details.map(w => <div key={w}>· {w}</div>)}
-              </details>
-            )}
-            {l.status === 'rejected' && l.reject_reason && <div style={{ color: '#8b949e' }}>否决原因：{l.reject_reason}</div>}
-            <FollowupLine f={followup} lesionId={l.id} />
-            <div style={{ marginTop: 6, display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
-              {l.status !== 'confirmed' && (
-                <button disabled={busy === l.id} onClick={() => void review(l, 'confirmed')}>确认</button>
-              )}
-              {l.status !== 'rejected' && rejecting?.id !== l.id && (
-                <button disabled={busy === l.id} onClick={() => setRejecting({ id: l.id, reason: reasons[0] ?? '其他' })}>否决</button>
-              )}
-              {rejecting?.id === l.id && (
-                <>
-                  <select value={rejecting.reason} onChange={e => setRejecting({ id: l.id, reason: e.target.value })} style={{ color: '#000' }}>
-                    {reasons.map(r => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                  <button disabled={busy === l.id} onClick={() => void review(l, 'rejected', rejecting.reason)}>确定否决</button>
-                  <button onClick={() => setRejecting(null)}>取消</button>
-                </>
-              )}
-              {l.status !== 'rejected' && rejecting?.id !== l.id && !(mode?.kind === 'refine' && mode.lesionId === l.id) && !!(m.center_lps_mm || m.prompt_points?.length) && (
-                <button data-cy="heurion-refine" disabled={!!working} onClick={() => { setMode({ kind: 'refine', lesionId: l.id, positive: true }); void jump(l); }}>修正边界</button>
-              )}
-              {l.source === 'manual' && (
-                <button disabled={busy === l.id || !!working} onClick={() => void withdraw(l)}>撤销</button>
-              )}
-            </div>
-            {mode?.kind === 'refine' && mode.lesionId === l.id && (
-              <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
-                <button data-cy="heurion-refine-include" style={{ fontWeight: mode.positive ? 'bold' : 'normal' }} onClick={() => setMode({ ...mode, positive: true })}>补入</button>
-                <button data-cy="heurion-refine-exclude" style={{ fontWeight: mode.positive ? 'normal' : 'bold' }} onClick={() => setMode({ ...mode, positive: false })}>排除</button>
-                <button disabled={!!working || (m.prompt_points?.length ?? 0) < 2} onClick={() => void undoPoint(l)}>撤销上一点</button>
-                <button onClick={() => setMode(null)}>完成</button>
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {primaryLesions.map(renderLesionCard)}
+      {lowConfidenceLesions.length > 0 && (
+        <details
+          data-cy="heurion-low-conf-nodules"
+          open={lowOpen || lowConfidenceLesions.some(l => l.id === selected || (mode?.kind === 'refine' && mode.lesionId === l.id))}
+          onToggle={e => setLowOpen((e.currentTarget as HTMLDetailsElement).open)}
+          style={{ marginTop: 8, borderTop: '1px dashed #30363d', paddingTop: 6 }}
+        >
+          <summary style={{ cursor: 'pointer', color: '#8b949e', fontSize: 12, marginBottom: 6 }}>
+            低置信度候选（{lowConfidenceLesions.length} 个，检出分数 &lt; 0.30，点击展开核对）
+          </summary>
+          {lowConfidenceLesions.map(renderLesionCard)}
+        </details>
+      )}
     </div>
   );
 }

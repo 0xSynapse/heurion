@@ -16,7 +16,9 @@ import { SlideRenderer } from '../src/render/slides.ts'
 import { TenantService } from '../src/auth/tenants.ts'
 import { parseCsv, DatasetService } from '../src/datasets/service.ts'
 import type { Ingest } from '../src/datasets/ingest.ts'
+import { ensureReviewSchema, ImagingReviewService } from '../src/imaging/review.ts'
 import { CohortService } from '../src/research/cohort.ts'
+import { SubjectVarService } from '../src/research/subject-vars.ts'
 import { StudyService } from '../src/research/service.ts'
 import { Store } from '../src/store/db.ts'
 import { kekFrom, TenantKeys } from '../src/tenancy/keys.ts'
@@ -291,5 +293,223 @@ describe('研究入组：MCP（AI 与人相同）', () => {
     expect((await call('dataset_describe', { dataset_id: ds.body.dataset_id })).body.code).toBe('external_model_off')
     // 人仍能在界面上用
     expect(t.datasets.preview(t.u.drA, ds.body.dataset_id).rows).toHaveLength(1)
+  })
+})
+
+describe('W6 临床科研队列连接（T2.8：定稿肺结节筛选、已核实结节变量入宽表、去标识影像导出与 PI 审批）', () => {
+  let seq = 0
+  function insertImagingStudy(
+    t: ReturnType<typeof env>,
+    patientId: string,
+    studyUid: string,
+    studyDate: string,
+    lesionMetrics: Record<string, unknown>,
+    opts: { finalize?: boolean; extraSeries?: { uid: string; modality: string; description: string } } = {},
+  ) {
+    const s = t.patients.imagingScope(t.a, patientId, 'write')
+    ensureReviewSchema(s.db)
+    const now = new Date().toISOString()
+    const studyId = `ist_${++seq}`
+    s.db.prepare(`INSERT INTO imaging_studies (id, patient_id, uid_hmac, uid_enc, source, study_date, modalities, status, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'upload', ?, '["CT"]', 'completed', ?, ?, ?)`).run(
+      studyId, patientId, s.uidKey('study', studyUid), s.encrypt(studyUid), studyDate, t.u.drA, now, now,
+    )
+    const seriesId = `isr_${++seq}`
+    s.db.prepare(`INSERT INTO imaging_series (id, study_id, uid_hmac, uid_enc, modality, body_part, description_enc, slice_thickness, instances, created_at)
+      VALUES (?, ?, ?, ?, 'CT', 'CHEST', ?, 1.0, 120, ?)`).run(
+      seriesId, studyId, s.uidKey('series', `${studyUid}.1`), s.encrypt(`${studyUid}.1`), s.encrypt('Lung 1.0mm'), now,
+    )
+    let riskySeriesId: string | null = null
+    if (opts.extraSeries) {
+      riskySeriesId = `isr_${++seq}`
+      s.db.prepare(`INSERT INTO imaging_series (id, study_id, uid_hmac, uid_enc, modality, body_part, description_enc, slice_thickness, instances, created_at)
+        VALUES (?, ?, ?, ?, ?, 'CHEST', ?, 5.0, 1, ?)`).run(
+        riskySeriesId, studyId, s.uidKey('series', opts.extraSeries.uid), s.encrypt(opts.extraSeries.uid),
+        opts.extraSeries.modality, s.encrypt(opts.extraSeries.description), now,
+      )
+    }
+    const lesionId = `les_${++seq}`
+    s.db.prepare(`INSERT INTO imaging_lesions (id, study_id, kind, source, status, label, location, metrics, seg_ref, version, created_by, created_at, updated_at)
+      VALUES (?, ?, 'lung_nodule', 'ai', 'confirmed', '结节 1', '右肺上叶', ?, ?, 1, ?, ?, ?)`).run(
+      lesionId, studyId, JSON.stringify(lesionMetrics), `orthanc:seg-${studyUid}`, t.u.drA, now, now,
+    )
+    s.db.prepare(`INSERT INTO imaging_lesion_events (lesion_id, at, user_id, via, action, before, after)
+      VALUES (?, ?, ?, 'user', 'confirm', NULL, ?)`).run(
+      lesionId, now, t.u.drA, JSON.stringify({ status: 'confirmed', metrics: lesionMetrics }),
+    )
+
+    if (opts.finalize !== false) {
+      const review = new ImagingReviewService(t.patients)
+      t.tenants.update(t.u.adminA, { settings: { imaging_self_review: true } })
+      review.setReadingRole(t.as(t.u.adminA), t.u.drA, 'reviewer', () => true)
+      review.submitRead(t.a, studyId)
+      const rv = review.view(t.a, studyId)
+      review.finalize(t.a, studyId, { expected_revision: rv.revision })
+    }
+    return { studyId, seriesId, riskySeriesId, lesionId }
+  }
+
+  it('W6.1：按已定稿肺结节条件筛选队列（部分实性 ≥ 6 mm 且至少 2 次定稿随访）；未定稿检查绝不命中', () => {
+    const t = env()
+    // p1：2 次已定稿胸部 CT，含 ≥ 6 mm 部分实性结节
+    insertImagingStudy(t, t.p1.id, '2.25.1001', '2025-01-10', {
+      nodule_type: 'part_solid',
+      mean_diameter_mm: 6.2,
+      solid_core_mm: 2.5,
+      volume_mm3: 130.5,
+    })
+    insertImagingStudy(t, t.p1.id, '2.25.1002', '2025-06-15', {
+      nodule_type: 'part_solid',
+      mean_diameter_mm: 8.4,
+      solid_core_mm: 4.1,
+      volume_mm3: 310.2,
+      vdt_days: 198,
+    })
+
+    // p2：有 10.0 mm 部分实性结节并已 confirmed，但未执行 W5 finalize 定稿
+    insertImagingStudy(
+      t,
+      t.p2.id,
+      '2.25.2001',
+      '2025-05-01',
+      { nodule_type: 'part_solid', mean_diameter_mm: 10.0 },
+      { finalize: false },
+    )
+
+    // 筛选：部分实性结节 ≥ 6 mm 且至少 2 次定稿检查 -> 只命中 P-0001，未定稿的 P-0002 被严格排除
+    const res = t.cohort.preview(t.a, t.study.id, {
+      imaging_nodules: [
+        { field: 'mean_diameter_mm', op: '>=', value: 6, nodule_type: 'part_solid', min_finalized_studies: 2 },
+      ],
+    })
+    expect(res.patients.map(p => p.code)).toEqual(['P-0001'])
+    expect(res.patients[0]!.matched[0]).toContain('部分实性结节 平均径 6.2 mm')
+    expect(res.patients[0]!.matched[0]).toContain('定稿随访 2 次')
+  })
+
+  it('W6.3：已核实的肺结节研究变量自动进入队列宽表 CSV，且核实后使旧版宽表标为过期', async () => {
+    const t = env()
+    insertImagingStudy(t, t.p1.id, '2.25.3001', '2025-06-15', {
+      nodule_type: 'part_solid',
+      mean_diameter_mm: 8.4,
+      solid_core_diameter_mm: 4.1,
+      volume_mm3: 310.2,
+      vdt_days: 198,
+      segmentation: 'vista3d',
+    })
+    t.cohort.enroll(t.a, t.study.id, { patient_ids: [t.p1.id] })
+    const v1 = await t.cohort.dataset(t.a, t.study.id, { shape: 'wide' })
+    expect(v1.dataset.version).toBe(1)
+
+    const sv = new SubjectVarService(t.studies, t.patients, t.datasets)
+    const imp = sv.importImaging(t.a, t.study.id, {
+      var_ids: ['nodule_type', 'nodule_mean_diameter_mm', 'nodule_volume_mm3', 'nodule_solid_core_mm'],
+    })
+    expect(imp.written).toBe(4)
+    // 未核实前宽表指纹不变
+    expect(t.cohort.list(t.a, t.study.id).datasets[0]!.stale).toBe(false)
+
+    // 研究者本人核实肺结节变量 -> 旧宽表立即标为 stale
+    sv.verify(t.a, t.study.id, {
+      items: [
+        { subject_id: 'S001', var_id: 'nodule_type' },
+        { subject_id: 'S001', var_id: 'nodule_mean_diameter_mm' },
+        { subject_id: 'S001', var_id: 'nodule_volume_mm3' },
+        { subject_id: 'S001', var_id: 'nodule_solid_core_mm' },
+      ],
+    })
+    expect(t.cohort.list(t.a, t.study.id).datasets[0]!.stale).toBe(true)
+
+    const v2 = await t.cohort.dataset(t.a, t.study.id, { shape: 'wide' })
+    expect(v2.dataset.version).toBe(2)
+    const pv = t.datasets.preview(t.u.drA, v2.dataset.id)
+    expect(pv.header).toEqual(
+      expect.arrayContaining([
+        'nodule_type_verified',
+        'nodule_mean_diameter_mm_verified',
+        'nodule_volume_mm3_verified',
+        'nodule_solid_core_mm_verified',
+        'nodule_vars_source',
+      ]),
+    )
+    const idxType = pv.header.indexOf('nodule_type_verified')
+    const idxDiam = pv.header.indexOf('nodule_mean_diameter_mm_verified')
+    expect(pv.rows[0]![idxType]).toBe('部分实性')
+    expect(pv.rows[0]![idxDiam]).toBe('8.4')
+  })
+
+  it('W6.4：去标识影像与测量导出自动拦截烧录文字/截屏序列，只含伪匿名编号，且须 PI（owner）审批留痕后才开放导出内容', () => {
+    const t = env()
+    const fin = insertImagingStudy(
+      t,
+      t.p1.id,
+      '2.25.4001',
+      '2025-06-15',
+      {
+        nodule_type: 'solid',
+        mean_diameter_mm: 7.5,
+        long_axis_mm: 8.0,
+        short_axis_mm: 7.0,
+        volume_mm3: 220.4,
+        mean_hu: -45,
+      },
+      { extraSeries: { uid: '2.25.4001.99', modality: 'SC', description: 'Dose Info Screen Save' } },
+    )
+    // p1 再加一次未定稿检查（应被自动跳过）
+    insertImagingStudy(t, t.p1.id, '2.25.4002', '2025-07-01', { nodule_type: 'solid', mean_diameter_mm: 5.0 }, { finalize: false })
+
+    t.cohort.enroll(t.a, t.study.id, { patient_ids: [t.p1.id] })
+    t.patients.addMember(t.a, t.p1.id, t.u.nurseA)
+    t.studies.addMember(t.u.drA, t.study.id, { user_id: t.u.nurseA, role: 'editor' })
+
+    // 数据管理员/协作者发起导出申请
+    const req = t.cohort.requestImagingExport(t.as(t.u.nurseA), t.study.id, {
+      reason: '肺癌早筛队列统计导出',
+    })
+    expect(req.status).toBe('pending_pi_approval')
+    expect(req.approval_required).toBe(true)
+    expect(req.finalized_studies_count).toBe(1)
+    expect(req.skipped_unfinalized_studies).toBe(1)
+    expect(req.exported_series_count).toBe(1)
+    // 含烧录风险的 SC 序列被自动拦截
+    expect(req.blocked_series).toHaveLength(1)
+    expect(req.blocked_series[0]).toMatchObject({
+      subject_id: 'S001',
+      series_id: fin.riskySeriesId,
+      modality: 'SC',
+    })
+    // PI 审批通过前，不返回 csv_content 与 exported_series 明细
+    expect(req.csv_content).toBeNull()
+    expect(req.exported_series).toBeNull()
+
+    // 非 PI（editor）不能审批，AI 也不能审批
+    expect(() => t.cohort.reviewImagingExport(t.as(t.u.nurseA), t.study.id, req.id, { decision: 'approve' })).toThrow('只有课题负责人')
+    expect(() => t.cohort.reviewImagingExport(t.as(t.u.drA, 'ai'), t.study.id, req.id, { decision: 'approve' })).toThrow('AI 不能代批')
+
+    // PI（owner）本人审批通过 -> 开放去标识导出内容并写入审计日志
+    const approved = t.cohort.reviewImagingExport(t.a, t.study.id, req.id, {
+      decision: 'approve',
+      note: '已核对伦理批件与去标识范围，同意导出',
+    })
+    expect(approved.status).toBe('approved')
+    expect(approved.approval_required).toBe(false)
+    expect(approved.reviewed_by).toBe(t.u.drA)
+    expect(approved.exported_series).toHaveLength(1)
+    expect(approved.exported_series![0]).toMatchObject({
+      subject_id: 'S001',
+      deid_patient_id: 'S001',
+      series_id: fin.seriesId,
+    })
+    expect(approved.csv_content).toContain('S001')
+    expect(approved.csv_content).toContain('7.5')
+    // 绝不泄露患者代号 P-0001 或内部 patient_id
+    expect(approved.csv_content).not.toContain('P-0001')
+    expect(approved.csv_content).not.toContain(t.p1.id)
+
+    // 核验患者访问审计日志中包含导出申请与 PI 审批记录
+    const s = t.patients.imagingScope(t.a, t.p1.id, 'read')
+    const logs = (s.db.prepare('SELECT action FROM access_log WHERE patient_id = ?').all(t.p1.id) as Array<{ action: string }>).map(l => l.action)
+    expect(logs).toContain('cohort_imaging_export_request')
+    expect(logs).toContain('cohort_imaging_export_approve')
   })
 })

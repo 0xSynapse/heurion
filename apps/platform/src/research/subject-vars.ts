@@ -10,6 +10,9 @@
 
 import { readFileSync } from 'node:fs'
 import { parseCsv, type DatasetService } from '../datasets/service.ts'
+import { sharedFollowup } from '../imaging/followup.ts'
+import { ImagingReviewService } from '../imaging/review.ts'
+import { ImagingStudyService } from '../imaging/studies.ts'
 import type { Actor, PatientService, SubjectVar, SubjectVarInput, SubjectVarSource } from '../tenancy/patients.ts'
 import { StudyError, type StudyService } from './service.ts'
 
@@ -31,7 +34,15 @@ export const STUDY_VARS: StudyVarDef[] = [
   { id: 'pfs_status', label: '进展 / 死亡事件 (1=发生, 0=删失)', type: 'event', sources: ['dataset_import', 'ecrf_manual'] },
   { id: 'l3_smi', label: 'L3 骨骼肌指数 SMI', type: 'number', unit: 'cm²/m²', sources: ['imaging_analysis'] },
   { id: 'vat_to_sat', label: '内脏 / 皮下脂肪比 VAT/SAT', type: 'number', sources: ['imaging_analysis'] },
+  { id: 'nodule_type', label: '主病灶结节密度类型', type: 'text', sources: ['imaging_analysis'] },
+  { id: 'nodule_mean_diameter_mm', label: '主病灶结节平均径', type: 'number', unit: 'mm', sources: ['imaging_analysis'] },
+  { id: 'nodule_volume_mm3', label: '主病灶结节体积', type: 'number', unit: 'mm³', sources: ['imaging_analysis'] },
+  { id: 'nodule_solid_core_mm', label: '主病灶实性成分直径', type: 'number', unit: 'mm', sources: ['imaging_analysis'] },
+  { id: 'nodule_vdt_days', label: '主病灶体积倍增时间 VDT', type: 'number', unit: '天', sources: ['imaging_analysis'] },
 ]
+
+const NODULE_VARS = new Set(['nodule_type', 'nodule_mean_diameter_mm', 'nodule_volume_mm3', 'nodule_solid_core_mm', 'nodule_vdt_days'])
+const NODULE_TYPE_LABELS: Record<string, string> = { solid: '实性', part_solid: '部分实性', pure_ggo: '磨玻璃', 实性: '实性', 部分实性: '部分实性', 磨玻璃: '磨玻璃' }
 
 const DEF = new Map(STUDY_VARS.map(v => [v.id, v]))
 
@@ -143,21 +154,98 @@ export class SubjectVarService {
   }
 
   /**
-   * 从受试者的影像分析记录导入影像变量（只取实测值）。which：baseline=最早一次（默认），latest=最近一次。
+   * 从受试者的影像分析记录与已定稿 DICOM 检查导入影像变量（只取实测值；肺结节变量遵循 T2.8 只取定稿快照数据）。
+   * which：baseline=最早一次（默认），latest=最近一次。
    * SMI 需要记录里有身高：没有身高的记录不采用，记入 skipped。
    */
   importImaging(a: Actor, studyId: string, input: { var_ids?: string[]; which?: 'baseline' | 'latest' } = {}) {
     this.studies.get(a.userId, studyId, 'write')
-    const varIds = input.var_ids?.length ? input.var_ids : STUDY_VARS.filter(v => v.sources.includes('imaging_analysis')).map(v => v.id)
+    const explicitVars = Boolean(input.var_ids?.length)
+    const varIds = explicitVars ? input.var_ids! : STUDY_VARS.filter(v => v.sources.includes('imaging_analysis')).map(v => v.id)
     for (const v of varIds) requireDef(v, 'imaging_analysis')
     const snap = this.patients.cohortSnapshot(a, studyId)
+    const enrolled = new Map(this.patients.enrollments(a, studyId).subjects.filter(s => s.status === 'active').map(s => [s.subject_id, s.patient_id]))
+    const reviewSvc = new ImagingReviewService(this.patients)
+    const studySvc = new ImagingStudyService(this.patients, null)
+    const followupSvc = sharedFollowup(this.patients)
     const rows: SubjectVarInput[] = []
     const skipped: Array<{ subject_id: string; var_id: string; reason: string }> = []
 
     for (const s of snap.subjects) {
       const scans = [...(s.imaging ?? [])]
       if (input.which === 'latest') scans.reverse()
+      const pid = enrolled.get(s.subject_id) ?? null
+      const allDicom = pid ? studySvc.listStudies(a, pid) : []
+      const finalizedDicom = pid ? reviewSvc.finalizedStudies(a, pid) : []
+
       for (const varId of varIds) {
+        if (NODULE_VARS.has(varId)) {
+          // 未显式指定结节变量且受试者没有任何 DICOM 检查时，静默跳过以免干扰纯体成分记录导入
+          if (!explicitVars && allDicom.length === 0) continue
+          if (allDicom.length === 0) {
+            skipped.push({ subject_id: s.subject_id, var_id: varId, reason: '没有 DICOM 影像检查' })
+            continue
+          }
+          if (finalizedDicom.length === 0) {
+            skipped.push({ subject_id: s.subject_id, var_id: varId, reason: '有影像检查但尚未定稿（科研只取定稿数据）' })
+            continue
+          }
+          const ordered = [...finalizedDicom]
+          // VDT 需要前片对比：未显式要求 baseline 时优先从最近一次定稿检查取
+          if (input.which === 'latest' || (!input.which && varId === 'nodule_vdt_days')) ordered.reverse()
+          let found = false
+          let reason = '定稿快照中无已确认肺结节'
+          for (const fs of ordered) {
+            const nodules = fs.lesions.filter(l => l.kind === 'lung_nodule' && l.status === 'confirmed')
+            const dom = [...nodules].sort((x, y) => (finite(y.metrics.mean_diameter_mm) ?? -1) - (finite(x.metrics.mean_diameter_mm) ?? -1)
+              || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))[0]
+            if (!dom) { reason = '定稿快照中无已确认肺结节'; continue }
+            const dm = dom.metrics
+            let value: number | string | null = null
+            let method = `定稿快照 v${fs.version}（${fs.study_date ?? fs.study_id}）· 主病灶 ${dom.label ?? dom.id}`
+            const ref: Record<string, unknown> = {
+              dicom_study_id: fs.study_id, study_date: fs.study_date, signoff_id: fs.signoff_id, signoff_version: fs.version,
+              lesion_id: dom.id, lesion_version: dom.version,
+            }
+            if (varId === 'nodule_type') {
+              const rawType = typeof dm.nodule_type === 'string' ? NODULE_TYPE_LABELS[dm.nodule_type] ?? null : null
+              if (!rawType) { reason = '定稿主病灶未记录密度分型'; continue }
+              value = rawType
+            } else if (varId === 'nodule_mean_diameter_mm') {
+              const d = finite(dm.mean_diameter_mm)
+              if (d === null || d <= 0) { reason = '定稿主病灶没有平均径测值'; continue }
+              value = d
+            } else if (varId === 'nodule_volume_mm3') {
+              const v = finite(dm.volume_mm3)
+              if (dm.segmentation === 'failed' || v === null || v <= 0) { reason = '定稿主病灶分割失败或没有体积测值'; continue }
+              value = v
+            } else if (varId === 'nodule_solid_core_mm') {
+              const sc = finite(dm.solid_core_diameter_mm)
+              if (sc === null || sc < 0) { reason = '定稿主病灶没有实性成分直径（非部分实性或未测）'; continue }
+              value = sc
+            } else if (varId === 'nodule_vdt_days') {
+              const fu = followupSvc.view(a, fs.study_id)
+              if (!fu.prior) { reason = '该定稿检查无前片，无法计算 VDT'; continue }
+              if (fu.prior.reference !== 'finalized') { reason = '前片尚未定稿，科研不采用未定稿前片的 VDT'; continue }
+              const it = fu.items.find(i => i.lesion_id === dom.id)
+              if (!it || it.needs_review || !it.metrics) { reason = '主病灶无可靠的随访配对'; continue }
+              if (it.metrics.within_error) { reason = '体积变化在测量误差范围内，VDT 不可靠'; continue }
+              const vdt = finite(it.metrics.vdt_days)
+              if (vdt === null || vdt <= 0) { reason = '主病灶体积未增大或缺少体积，无 VDT'; continue }
+              value = vdt
+              ref.prior_study_id = fu.prior.study_id
+              ref.prior_study_date = fu.prior.study_date
+              method += ` · 对比定稿前片 ${fu.prior.study_date ?? fu.prior.study_id}（间隔 ${fu.prior.interval_days ?? '?'} 天）`
+            }
+            if (value === null) continue
+            rows.push({ subject_id: s.subject_id, var_id: varId, value, source: 'imaging_analysis', source_ref: ref, method })
+            found = true
+            break
+          }
+          if (!found) skipped.push({ subject_id: s.subject_id, var_id: varId, reason })
+          continue
+        }
+
         let found = false
         let reason = '没有影像分析记录'
         for (const scan of scans) {

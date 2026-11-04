@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
  * 随访对比（PRD T2.4 / W3）在结节面板里的显示：每个结节与前片的对应、变化分类、Δ平均径、Δ体积、倍增时间、
  * 「在误差范围内」；面板顶部显示前片日期、配准质量、前片里消失的结节，并可重新匹配。
  * 医生可拆开对应或改对应到前片的另一个结节（平台接口 /api/viewer/followup*，与确认 / 否决相同的 Cookie 与请求头要求）。
- * 字段见 apps/platform/src/imaging/followup.ts FollowupView。两期并排显示（W3.4）本次不做，只给出前片对应结节的信息。
+ * 字段见 apps/platform/src/imaging/followup.ts FollowupView。支持两期并排显示（W3.4）。
  */
 
 export interface FollowupBrief { id: string; label: string | null; location: string | null; mean_diameter_mm: number | null; volume_mm3: number | null }
@@ -97,7 +97,7 @@ export function useFollowup(studyUid: string | null) {
 }
 
 /** 面板顶部：前片、配准质量、提示、消失的结节、重新匹配 */
-export function FollowupHeader({ f }: { f: ReturnType<typeof useFollowup> }) {
+export function FollowupHeader({ f, compareMode = false }: { f: ReturnType<typeof useFollowup>; compareMode?: boolean }) {
   const v = f.view;
   if (!v) return f.error ? <div style={{ color: '#f85149', marginBottom: 8 }}>{f.error}</div> : null;
   const gone = v.items.filter(i => !i.lesion_id && i.prior_lesion);
@@ -112,6 +112,11 @@ export function FollowupHeader({ f }: { f: ReturnType<typeof useFollowup> }) {
         </span>
         <button style={{ marginLeft: 'auto' }} disabled={!!running} onClick={() => void f.rematch()}>重新匹配</button>
       </div>
+      {compareMode && (
+        <div data-cy="heurion-compare-badge" style={{ color: '#58a6ff', fontSize: 12, marginTop: 2 }}>
+          双片并排对比模式（左：当前检查 · 右：既往前片）
+        </div>
+      )}
       {v.registration && <div style={{ color: v.registration.reliable ? '#8b949e' : '#f5a623' }}>{QUALITY[v.registration.quality] ?? v.registration.quality}</div>}
       {v.run?.status === 'failed' && <div style={{ color: '#f85149' }}>匹配失败：{v.run.error}</div>}
       {v.run?.status === 'interrupted' && <div style={{ color: '#f5a623' }}>上次匹配被中断，请重新匹配</div>}

@@ -288,6 +288,9 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/studies/:sid/ecrf/save-dataset': '将 eCRF 提取矩阵保存固化为研究快照数据集，由医生在界面操作确认',
   // SCI 投稿包全量导出与预后预测模型 (Nomogram / ROC / DCA)
   'POST /api/studies/:sid/vars/verify': '研究变量的核实须研究者本人确认，AI 不能核实（服务层同样拒绝 via=ai）',
+  'GET /api/studies/:sid/cohort/imaging-exports': '科研队列去标识影像导出申请与审批记录列表（T2.8，由界面展示与 PI 审批）',
+  'POST /api/studies/:sid/cohort/imaging-exports': '发起科研队列去标识影像导出申请（T2.8，只导出定稿快照并检测烧录文字，须研究者本人在界面发起，拒绝 via=ai）',
+  'POST /api/studies/:sid/cohort/imaging-exports/:eid/review': '科研队列去标识影像导出 PI 审批（T2.8，必须由课题负责人 PI 本人审批留痕，严禁 AI 代批，拒绝 via=ai）',
   'POST /api/studies/:sid/publication-bundle': 'SCI 投稿级成果包一键全量导出打包 (.zip) 二进制文件流，由浏览器界面直接下载',
   'POST /api/datasets/:did/nomogram': '预后预测列线图 (Nomogram) 标尺映射与矢量图生成，由界面交互弹窗计算与渲染',
   'POST /api/datasets/:did/roc-dca': 'ROC 诊断效能对比与 DCA 临床决策净获益曲线分析，由界面交互弹窗渲染',
@@ -319,6 +322,23 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/aegis/mcp': 'AAP-1.0 统一 MCP 协议网关入口本身（承载全部 MCP 工具调用）',
   'PUT /api/imaging/findings-templates': '所见模板是科室的书写规范（决定之后所有草稿的措辞），由机构管理员或本科室审核医师本人维护；AI 只读（imaging_findings_templates），服务层同样拒绝 via=ai',
   'PUT /api/docs/:id/measurements/policy': '测量严格模式是用户对 AI 写入的约束（禁止裸测量数字），AI 不能自己开关；接口同样拒绝 via=ai',
+  // 阶段 3 扩展（T3.2–T3.4, T3.6, T3.7, T3.8）：模型演进门控、双人审批、MRMC 盲法读片、危急值确认与 PACS 回调严禁 AI 代操作
+  'GET /api/imaging/curation-bank': '定稿标注库（W7.1）归档列表仅供人类研究员/管理员在界面查阅与管理（服务层拒绝 via=ai）',
+  'POST /api/imaging/curation-bank/export-manifest': '离线训练清单导出（W7.2）仅允许人类研究员触发，严禁 AI 自动触发模型重训（服务层拒绝 via=ai）',
+  'POST /api/imaging/releases/evaluate': '候选模型锁定测试集不退化门控（W7.3）由人类工程师/管理员提交核验（服务层拒绝 via=ai）',
+  'POST /api/imaging/releases/:rid/approve': '模型发布审批（W7.4）必须由科室主任/PI 与信息科负责人本人签署，严禁 AI 代替审批（服务层拒绝 via=ai）',
+  'POST /api/imaging/releases/:rid/promote': '生产模型版本上线切换（W7.4）必须由人类管理员执行（服务层拒绝 via=ai）',
+  'POST /api/imaging/releases/:rid/rollback': '生产模型一键回滚（W7.4）必须由人类管理员执行（服务层拒绝 via=ai）',
+  'POST /api/imaging/mrmc/studies': 'MRMC 多阅片者多病例交叉读片研究（T3.7）由人类研究者创建与管理（服务层拒绝 via=ai）',
+  'GET /api/imaging/mrmc/studies/:mid/tasks': 'MRMC 盲法读片任务（T3.7）仅限受邀阅片医师本人领取，不进 AI 上下文以免破坏盲法（服务层拒绝 via=ai）',
+  'POST /api/imaging/mrmc/studies/:mid/reads': 'MRMC 盲法读片结果（T3.7）必须由阅片医师本人提交，严禁 AI 代替人类医师读片（服务层拒绝 via=ai）',
+  'GET /api/imaging/mrmc/studies/:mid/analysis': 'MRMC 读片研究终点统计与 iMRMC 导出（T3.7）仅供研究者本人在界面查阅（服务层拒绝 via=ai）',
+  'POST /api/imaging/ct-extensions/pneumonia-ctss': '肺炎五肺叶受累比例与 CTSS 评分（T3.2）临床定量审核接口（服务层拒绝 via=ai）',
+  'POST /api/imaging/ct-extensions/rib-fractures': '肋骨骨折第 1-12 肋编号与新旧分期（T3.3）临床定量审核接口（服务层拒绝 via=ai）',
+  'POST /api/imaging/ct-extensions/head-ich': '头颅平扫 CT 急性脑出血分型/体积与急诊优先通道评估（T3.4）临床接口（服务层拒绝 via=ai）',
+  'POST /api/imaging/ct-extensions/head-ich/confirm-critical': '急性脑出血危急值确认（T3.4）必须由值班/审核医师本人签署，严禁 AI 自动确认危急值（服务层拒绝 via=ai）',
+  'POST /api/imaging/pacs/webhook': '院内 Orthanc C-STORE StableSeries 自动转发回调（T3.8），凭共享密钥与 AE Title/IP 白名单由 Orthanc 调用',
+  'GET /api/imaging/pacs/events': 'PACS 自动转发序列分流日志（T3.8）仅供机构管理员在界面查阅（服务层拒绝 via=ai）',
 }
 
 describe('人机对等：每个接口（AI 的权限 = 用户的权限）', () => {

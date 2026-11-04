@@ -24,6 +24,10 @@ interface Lesion {
   finalized: { signoff_version: number; lesion_version: number; status: string; current: boolean } | null
 }
 interface SignoffMeta { id: string; version: number; signed_by_name: string | null; signed_by: string; signed_at: string; mode: string; snapshot_hash: string; lesions: { total: number; confirmed: number; rejected: number } }
+interface SignoffFull extends SignoffMeta {
+  note: string | null
+  lesions_snapshot: Array<{ id: string; version: number; status: string; reject_reason: string | null; label: string | null; location: string | null; metrics: Record<string, unknown> }>
+}
 interface View {
   study_id: string; state: ReviewState; revision: number; reading_mode: 'org' | 'personal'; my_role: 'reader' | 'reviewer' | null
   counts: { proposed: number; confirmed: number; rejected: number }
@@ -60,15 +64,24 @@ function valueText(k: string, v: unknown): string {
   if (typeof v === 'number') return k === 'volume_mm3' || k === 'mean_hu' ? num(v, 0) : num(v)
   return String(v)
 }
-/** 一个结节的主要测量：平均径（长 × 短）、密度、位置 */
+/** 一个结节的主要测量：平均径（长 × 短）、密度、位置、检出分数与分割提示 */
 function measures(m: Record<string, unknown>, location: string | null): string {
   const parts = [
     `平均径 ${num(m.mean_diameter_mm)} mm${m.long_axis_mm !== undefined ? `（${num(m.long_axis_mm)} × ${num(m.short_axis_mm)}）` : ''}`,
     m.volume_mm3 !== undefined ? `体积 ${num(m.volume_mm3, 0)} mm³` : '',
     TYPE[String(m.nodule_type ?? '')] ?? '',
     location ? LOBE[location] ?? location : '',
+    typeof m.detection_score === 'number' && Number.isFinite(m.detection_score) ? `分数 ${num(m.detection_score, 2)}` : '',
   ].filter(Boolean)
-  return parts.map(esc).join(' · ')
+  const warn = m.segmentation === 'failed' ? ' <span class="danger-text">（分割失败，取检出框径，请核对）</span>' : ''
+  return parts.map(esc).join(' · ') + warn
+}
+
+const LOW_CONFIDENCE_THRESHOLD = 0.30
+function isLowConfidence(l: Lesion): boolean {
+  if (l.source !== 'ai' || l.status !== 'proposed') return false
+  const s = l.metrics?.detection_score
+  return typeof s === 'number' && Number.isFinite(s) && s < LOW_CONFIDENCE_THRESHOLD
 }
 function changeList(list: Change[]): string {
   if (!list.length) return '<span class="muted">—</span>'
@@ -95,7 +108,7 @@ function render(v: View): string {
   const head = `<div class="row"><b>审核视图</b><span class="pill ${st.cls}" style="margin-left:8px">${st.text}${latest ? ` · 第 ${latest.version} 版` : ''}</span>
     <span class="muted" style="margin-left:8px">${v.reading_mode === 'personal' ? '个人空间：本人即可定稿' : v.my_role === 'reviewer' ? '我的阅片角色：审核' : '我的阅片角色：初写'}</span>
     ${v.submissions.length ? `<span class="muted" style="margin-left:8px">初写完成：${v.submissions.map(s => `${esc(s.user_name ?? '')} ${when(s.at)}`).join('；')}</span>` : ''}</div>`
-  const rows = v.lesions.map(l => {
+  const renderRow = (l: Lesion) => {
     const ai = l.ai_original ? measures(l.ai_original.metrics, l.ai_original.location) : l.added_by ? `<span class="muted">医生补充（${esc(l.added_by.user_name ?? '')}）</span>` : '<span class="muted">—</span>'
     const fin = l.finalized ? (l.finalized.current ? `<div class="muted">与第 ${l.finalized.signoff_version} 版定稿一致</div>` : `<div class="danger-text">定稿后有改动（定稿时 v${l.finalized.lesion_version}）</div>`) : ''
     return `<tr>
@@ -106,10 +119,16 @@ function render(v: View): string {
       <td class="small">${measures(l.metrics, l.location)}</td>
       <td class="small">${esc(STATUS[l.status] ?? l.status)}${l.reject_reason ? `（${esc(l.reject_reason)}）` : ''}<div class="muted">v${l.version}</div>${fin}</td>
       <td><button class="small-btn" data-rv-jump="${esc(l.id)}">跳转</button></td></tr>`
-  }).join('')
+  }
+  const primaryLesions = v.lesions.filter(l => !isLowConfidence(l))
+  const lowConfLesions = v.lesions.filter(isLowConfidence)
+  const rows = primaryLesions.map(renderRow).join('')
+  const lowConfBlock = lowConfLesions.length
+    ? `<details class="small" style="margin-top:6px" data-rv-low-conf><summary class="muted" style="cursor:pointer">低置信度候选（${lowConfLesions.length} 个，检出分数 &lt; 0.30，点击展开核对）</summary><table class="users" style="margin-top:4px"><thead><tr><th>结节</th><th>AI 原值</th><th>初写修改</th><th>审核修改</th><th>当前值</th><th>状态 / 版本</th><th></th></tr></thead><tbody>${lowConfLesions.map(renderRow).join('')}</tbody></table></details>`
+    : ''
   const removed = v.removed_since_finalized.length ? `<div class="danger-text small">定稿后撤销：${v.removed_since_finalized.map(r => esc(r.label ?? r.id)).join('、')}</div>` : ''
   const table = v.lesions.length
-    ? `<table class="users"><thead><tr><th>结节</th><th>AI 原值</th><th>初写修改</th><th>审核修改</th><th>当前值</th><th>状态 / 版本</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+    ? `${primaryLesions.length ? `<table class="users"><thead><tr><th>结节</th><th>AI 原值</th><th>初写修改</th><th>审核修改</th><th>当前值</th><th>状态 / 版本</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="muted small">无检出分数 ≥ 0.30 或已确认的结节（见下方低置信度候选）。</div>'}${lowConfBlock}`
     : '<div class="muted small">没有结节（定稿即「未见结节」）。</div>'
   // 已提交且之后病灶没有改动时不再显示（再交一次只会重复记一条初写完成）
   const lastSub = v.submissions[v.submissions.length - 1]
@@ -120,8 +139,10 @@ function render(v: View): string {
       <button class="small-btn primary" data-rv="finalize">${latest ? `定稿（生成第 ${latest.version + 1} 版）` : '定稿'}</button>` : ''}
     ${!v.finalize.allowed && v.finalize.blockers.length && v.state !== 'finalized' ? `<span class="muted small">暂不能定稿：${v.finalize.blockers.map(b => esc(b.message)).join('；')}</span>` : ''}
   </div>`
-  const history = v.signoffs.length ? `<div class="small" style="margin-top:6px"><b>定稿记录</b>${v.signoffs.map(s => `<div>第 ${s.version} 版 · ${esc(s.signed_by_name ?? s.signed_by)} · ${when(s.signed_at)} · ${esc(MODE[s.mode] ?? s.mode)} · 已确认 ${s.lesions.confirmed} · 已否决 ${s.lesions.rejected}
-    <span class="muted" title="快照 SHA-256">#${esc(s.snapshot_hash.slice(0, 8))}</span></div>`).join('')}</div>` : ''
+  const history = v.signoffs.length ? `<div class="small" style="margin-top:6px"><b>定稿记录</b>${v.signoffs.map(s => `<div class="row" style="gap:6px;margin-top:2px"><span>第 ${s.version} 版 · ${esc(s.signed_by_name ?? s.signed_by)} · ${when(s.signed_at)} · ${esc(MODE[s.mode] ?? s.mode)} · 已确认 ${s.lesions.confirmed} · 已否决 ${s.lesions.rejected}
+    <span class="muted" title="快照 SHA-256">#${esc(s.snapshot_hash.slice(0, 8))}</span></span>
+    <button class="small-btn quiet" data-rv-signoff="${s.version}">查看快照</button></div>`).join('')}
+    <div data-rv-snap-box class="muted small" style="margin-top:4px" hidden></div></div>` : ''
   return `${head}${table}${removed}${actions}${history}`
 }
 
@@ -144,6 +165,24 @@ export async function mountReview(api: Api, notice: Notice, patientId: string, s
     const el = e.target as HTMLElement
     const jump = el.closest<HTMLButtonElement>('[data-rv-jump]')
     if (jump) { openViewer(jump.dataset.rvJump!); return }
+    const snapBtn = el.closest<HTMLButtonElement>('[data-rv-signoff]')
+    if (snapBtn) {
+      const snapBox = box.querySelector<HTMLElement>('[data-rv-snap-box]')
+      if (!snapBox) return
+      const ver = snapBtn.dataset.rvSignoff!
+      if (!snapBox.hidden && snapBox.dataset.ver === ver) { snapBox.hidden = true; return }
+      snapBox.hidden = false
+      snapBox.dataset.ver = ver
+      snapBox.textContent = `正在读取第 ${ver} 版定稿快照…`
+      try {
+        const sf = await api<SignoffFull>(`${base}/signoffs/${encodeURIComponent(ver)}`)
+        const list = sf.lesions_snapshot.length
+          ? sf.lesions_snapshot.map(l => `<div>· <b>${esc(l.label ?? l.id)}</b>（v${l.version}，${esc(STATUS[l.status] ?? l.status)}${l.reject_reason ? `：${esc(l.reject_reason)}` : ''}）— ${measures(l.metrics, l.location)}</div>`).join('')
+          : '<div>· 未见结节（空快照）</div>'
+        snapBox.innerHTML = `<div style="padding:6px 8px;border-left:2px solid var(--border,#cbd5e1)"><b>第 ${sf.version} 版定稿快照</b>（#${esc(sf.snapshot_hash.slice(0, 12))}）${sf.note ? ` · 审核意见：${esc(sf.note)}` : ''}${list}</div>`
+      } catch (err) { snapBox.textContent = `读取定稿快照失败：${(err as Error).message}` }
+      return
+    }
     const btn = el.closest<HTMLButtonElement>('[data-rv]')
     if (!btn || !view) return
     if (btn.dataset.rv === 'finalize' && !btn.dataset.confirm) {

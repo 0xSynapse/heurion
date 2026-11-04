@@ -11,7 +11,7 @@ import { ClaimService } from '../src/claims/service.ts'
 import { PostCheck } from '../src/collab/postcheck.ts'
 import { buildApi } from '../src/http/api.ts'
 import { FindingsDraftService, sortNodules } from '../src/imaging/findings-draft.ts'
-import { BUILTIN_TEMPLATE, BUILTIN_VERSION, escapeMarkdown, parseSentence, parseTemplate, PLACEHOLDERS, renderSentence } from '../src/imaging/findings-template.ts'
+import { BUILTIN_TEMPLATE, BUILTIN_VERSION, DEFAULT_IMPRESSION_TEMPLATE, escapeMarkdown, parseSentence, parseTemplate, PLACEHOLDERS, renderSentence } from '../src/imaging/findings-template.ts'
 import { ImagingReviewService } from '../src/imaging/review.ts'
 import { risPlainText } from '../src/imaging/ris-text.ts'
 import { ImagingStudyService } from '../src/imaging/studies.ts'
@@ -121,6 +121,10 @@ describe('模板语法（纯函数）', () => {
     expect(err('{"title":1}')).toMatch(/应为 JSON 对象/)
     // 指南阈值（比较词）可以写
     expect(err({ ...BUILTIN_TEMPLATE, closing: '≥ 6 mm 的实性结节建议随访。' })).toBeNull()
+    // W4.3 影像印象段：客观总结可以写，主观诊断结论或随访建议被拒绝
+    expect(err({ ...BUILTIN_TEMPLATE, impression: DEFAULT_IMPRESSION_TEMPLATE })).toBeNull()
+    expect(err({ ...BUILTIN_TEMPLATE, impression: '印象：双肺见 {结节数} 枚结节，建议随访。' })).toMatch(/W4\.3.*不能写诊断结论或随访建议/)
+    expect(err({ ...BUILTIN_TEMPLATE, impression: { default: '印象：右肺结节，考虑恶性。' } })).toMatch(/W4\.3.*不能写诊断结论或随访建议/)
     // 字面量转义
     expect(renderSentence(parseSentence('\\{位置\\} \\[x\\] a\\|b \\\\', 't', PLACEHOLDERS.nodule), {})).toEqual([{ text: '{位置} [x] a|b \\' }])
   })
@@ -158,6 +162,7 @@ describe('生成所见草稿', () => {
       '无前片可供比较。',
       '1. 右肺上叶见实性结节，平均径 8.2 mm，体积 288 mm³。',
       '2. 左下叶见结节，平均径 5.5 mm。'.replace('左下叶', '左肺下叶'),
+      '印象：双肺见 2 枚结节，较大者位于右肺上叶，平均径 8.2 mm，体积 288 mm³。',
     ])
     const text = topText(t, r.doc_id).join('\n')
     expect(text).not.toContain('结节 3')
@@ -193,7 +198,7 @@ describe('生成所见草稿', () => {
     const t = await seeded({ confirm: false })
     for (const l of [t.n1, t.n2, t.n3]) t.svc.reviewLesion(t.A, l.id, { status: 'rejected', reason: '伪影' })
     const r = t.drafts.generate(t.A, t.p.id, { study_id: t.study.id }, { turnId: null })
-    expect(topText(t, r.doc_id).slice(2)).toEqual(['无前片可供比较。', '双肺未见明确结节。'])
+    expect(topText(t, r.doc_id).slice(2)).toEqual(['无前片可供比较。', '双肺未见明确结节。', '印象：双肺未见明确结节。'])
     expect(t.store.listMeasurements(r.doc_id)).toEqual([])
 
     const u = env()
@@ -229,7 +234,7 @@ describe('生成所见草稿', () => {
     const st = (await u.svc.importDicom(u.A, p.id, [{ name: 'IM1', bytes: dicom(STUDY, SERIES, '1') }])).studies[0]!
     u.review.submitRead(u.A, st.id)
     u.review.finalize(u.as(u.rev), st.id, { expected_revision: u.review.view(u.as(u.rev), st.id).revision })
-    expect(topText(u, u.drafts.generate(u.A, p.id, { study_id: st.id }, { turnId: null }).doc_id).at(-1)).toBe('双肺未见明确结节。')
+    expect(topText(u, u.drafts.generate(u.A, p.id, { study_id: st.id }, { turnId: null }).doc_id).slice(-2)).toEqual(['双肺未见明确结节。', '印象：双肺未见明确结节。'])
   })
 
   it('确定性：同样的输入同样的输出；结节没有位置时用缺省文字', async () => {
@@ -240,6 +245,48 @@ describe('生成所见草稿', () => {
     expect(shown(t, a.doc_id, t.A)).toEqual(shown(t, b.doc_id, t.A))
     expect(shown(t, a.doc_id, t.A)[4]).toBe('2. 肺内见结节，平均径 5.5 mm。')
     expect(a.warnings).toContain('结节 2没有肺叶定位')
+  })
+
+  it('W4.3 影像印象段：科室模板配置客观印象段时，自动汇总已确认结节数与最大结节测量原子；无结节时用 impression.none', async () => {
+    const t = await seeded()
+    t.drafts.templates.save(t.as(t.admin), 'org', { ...BUILTIN_TEMPLATE, impression: DEFAULT_IMPRESSION_TEMPLATE }, '启用客观印象段')
+    const r = t.drafts.generate(t.A, t.p.id, { study_id: t.study.id }, { turnId: null })
+    expect(shown(t, r.doc_id, t.A).at(-1)).toBe('印象：双肺见 2 枚结节，较大者位于右肺上叶，平均径 8.2 mm，体积 288 mm³。')
+    // 无已确认结节时采用 impression.none
+    t.svc.reviewLesion(t.A, t.n1.id, { status: 'rejected', reason: '伪影' })
+    t.svc.reviewLesion(t.A, t.n2.id, { status: 'rejected', reason: '伪影' })
+    const rNone = t.drafts.generate(t.A, t.p.id, { study_id: t.study.id, new: true }, { turnId: null })
+    expect(shown(t, rNone.doc_id, t.A).at(-1)).toBe('印象：双肺未见明确结节。')
+  })
+
+  it('W4.3 二期（T3.5）：返回 Lung-RADS v2022 与 Fleischner 2017 指南分类参考（「规则推算，待医生确认」）；医生不确认不进草稿，医生确认后写入草稿，AI 禁止代确认', async () => {
+    const t = await seeded()
+    // 1) 默认生成：返回 guideline_reference 卡片（8.2 mm 实性结节 -> Lung-RADS 4A），但不写入草稿正文
+    const r = t.drafts.generate(t.A, t.p.id, { study_id: t.study.id }, { turnId: null })
+    expect(r.guideline_reference.status_label).toBe('规则推算，待医生确认')
+    expect(r.guideline_reference.confirmed_into_draft).toBe(false)
+    expect(r.guideline_reference.lung_rads_2022.category).toBe('4A')
+    expect(r.guideline_reference.fleischner_2017.clause_citation).toContain('Fleischner Society 2017')
+    expect(shown(t, r.doc_id, t.A).join('\n')).not.toContain('指南分类参考')
+
+    // 2) AI 尝试代医生确认 confirm_guideline_reference: true -> 403 拒绝
+    expect(code(() => t.drafts.generate(t.as(t.dr, 'ai'), t.p.id, {
+      study_id: t.study.id,
+      doc_id: r.doc_id,
+      confirm_guideline_reference: true,
+    }, { turnId: 't-ai' }))).toBe('guideline_confirmation_human_only')
+
+    // 3) 医生本人确认采纳 -> 写入草稿且附指南条款与「规则推算，待医生确认 · 医生已确认采纳」
+    const rConfirmed = t.drafts.generate(t.A, t.p.id, {
+      study_id: t.study.id,
+      doc_id: r.doc_id,
+      confirm_guideline_reference: true,
+    }, { turnId: null })
+    expect(rConfirmed.guideline_reference.confirmed_into_draft).toBe(true)
+    const lastLine = shown(t, r.doc_id, t.A).at(-1)!
+    expect(lastLine).toContain('指南分类参考（规则推算，待医生确认 · 医生已确认采纳）')
+    expect(lastLine).toContain('ACR Lung-RADS v2022 4A 类')
+    expect(lastLine).toContain('Fleischner 2017')
   })
 })
 
@@ -254,7 +301,7 @@ describe('重复生成与医生的修改', () => {
     const again = t.drafts.generate(t.A, t.p.id, { study_id: t.study.id, doc_id: r.doc_id }, { turnId: null })
     expect(again).toMatchObject({ created: false, rev })
     expect(again.blocks.written).toEqual([])
-    expect(again.blocks.unchanged.length).toBe(5)
+    expect(again.blocks.unchanged.length).toBe(6)
     expect(t.drafts.getDraft(r.doc_id)!.generations).toBe(2)
   })
 
@@ -280,7 +327,7 @@ describe('重复生成与医生的修改', () => {
     expect(serializeBlock(t.docs.get(r.doc_id).child(3), {}, '')).toBe(edited)
     expect(ids()).not.toContain(b2)
     // 医生改过的句子里，测量原子仍随病灶更新
-    expect(shown(t, r.doc_id, t.A).slice(3)).toEqual(['1. 右肺上叶见实性结节，边缘见分叶，平均径 8.6 mm，体积 288 mm³。', '2. 右肺中叶见磨玻璃结节，平均径 4.2 mm。'])
+    expect(shown(t, r.doc_id, t.A).slice(3)).toEqual(['1. 右肺上叶见实性结节，边缘见分叶，平均径 8.6 mm，体积 288 mm³。', '2. 右肺中叶见磨玻璃结节，平均径 4.2 mm。', '印象：双肺见 2 枚结节，较大者位于右肺上叶，平均径 8.6 mm，体积 288 mm³。'])
     // 再生成一次：医生改过的块依旧不动
     const v = t.drafts.generate(t.A, t.p.id, { study_id: t.study.id, doc_id: r.doc_id }, { turnId: null })
     expect(v.blocks.kept).toEqual([{ key: `nodule:${t.n1.id}`, block_id: b1, reason: 'edited' }])
@@ -344,7 +391,7 @@ describe('写入经操作层与守卫', () => {
     let marks = 0, atoms = 0
     doc.descendants(n => { if (n.marks.length) marks++; if (n.type.name === 'measurement') atoms++; return true })
     expect(marks).toBe(0)
-    expect(atoms).toBe(2)
+    expect(atoms).toBe(4)
     // RIS 纯文本里字面量的内部记号也去掉
     const ris = t.drafts.risText(t.A, t.store.getDoc(r.doc_id)!, new MeasurementService(t.store, t.patients).views(t.store.getDoc(r.doc_id)!, t.A))
     expect(ris.text).not.toContain('[@m:')
@@ -359,7 +406,7 @@ describe('RIS 纯文本', () => {
     const row = t.store.getDoc(r.doc_id)!
     const views = new MeasurementService(t.store, t.patients).views(row, t.A)
     const ris = t.drafts.risText(t.A, row, views)
-    expect(ris.text).toBe('无前片可供比较。\n1. 右肺上叶见实性结节，平均径 8.2 mm，体积 288 mm³。\n2. 左肺下叶见结节，平均径 5.5 mm。')
+    expect(ris.text).toBe('无前片可供比较。\n1. 右肺上叶见实性结节，平均径 8.2 mm，体积 288 mm³。\n2. 左肺下叶见结节，平均径 5.5 mm。\n印象：双肺见 2 枚结节，较大者位于右肺上叶，平均径 8.2 mm，体积 288 mm³。')
     expect(ris.text).not.toMatch(/[#*_`<>{}]|\[@|草稿|影像所见/)
     for (const m of t.store.listMeasurements(r.doc_id)) expect(ris.text).not.toContain(m.id)
     for (const l of [t.n1, t.n2]) expect(ris.text).not.toContain(l.id)

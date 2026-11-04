@@ -392,6 +392,9 @@ def run_lung_nodule_pipeline(
     lobe_resample_mm: Optional[float] = None,
     geometry: Optional[Dict[str, Any]] = None,
     return_masks: bool = False,
+    vista_class_prompt: Optional[int] = None,
+    filter_edge_extrapulmonary: bool = False,
+    detector_sw_overlap: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     neural：engine.MonaiNeuralInferencePipeline 实例，需提供 _verified_weights、detect_lung_nodules、
@@ -401,6 +404,7 @@ def run_lung_nodule_pipeline(
     geometry：体积几何（volume_geometry），用于把结节换算到 DICOM 病人坐标与 SOPInstanceUID；为空时这些字段为 null。
     return_masks：为真时结果带内部键 "_masks" = {结节编号: 规范化体素下标 (zz, yy, xx)}，只含分割成功的结节，
     供调用方生成 DICOM SEG（调用方须在返回响应前移除该键）。
+    vista_class_prompt / filter_edge_extrapulmonary / detector_sw_overlap：B.3 评估消融实验可选参数（默认保持生产行为不变）。
     返回契约见 apps/imaging-worker 的 POST /api/v1/pipeline/lung-nodule；timings_ms 为各阶段耗时。
     """
     t0 = time.time()
@@ -412,6 +416,8 @@ def run_lung_nodule_pipeline(
         raise ValueError(f"lobe_mode 须为 {'/'.join(LOBE_MODES)}")
     if lobe_resample_mm is not None and not (1.0 <= float(lobe_resample_mm) <= 5.0):
         raise ValueError("lobe_resample_mm 须在 1~5 mm 之间")
+    if detector_sw_overlap is not None and not (0.0 <= float(detector_sw_overlap) < 1.0):
+        raise ValueError("detector_sw_overlap 须在 [0, 1) 之间")
     volume = np.asarray(volume)
     if volume.ndim != 3:
         raise ValueError(f"需要三维体积，收到 {volume.ndim} 维")
@@ -438,7 +444,10 @@ def run_lung_nodule_pipeline(
 
     # 1) 检出 + 去重 + 数量上限
     t = time.time()
-    detections, det_info = neural.detect_lung_nodules(volume, spacing, min_score=min_score)
+    if detector_sw_overlap is not None:
+        detections, det_info = neural.detect_lung_nodules(volume, spacing, min_score=min_score, sw_overlap=detector_sw_overlap)
+    else:
+        detections, det_info = neural.detect_lung_nodules(volume, spacing, min_score=min_score)
     kept, merged = deduplicate_detections(detections, spacing)
     truncated = max(0, len(kept) - int(max_nodules))
     if truncated:
@@ -461,7 +470,12 @@ def run_lung_nodule_pipeline(
         mask_vox = None
         t = time.time()
         try:
-            raw_mask, seg_meta = neural.infer_vista3d_nodule(volume, spacing, prompt_point=prompt)
+            if vista_class_prompt is not None:
+                raw_mask, seg_meta = neural.infer_vista3d_nodule(
+                    volume, spacing, prompt_point=prompt, prompt_class=int(vista_class_prompt)
+                )
+            else:
+                raw_mask, seg_meta = neural.infer_vista3d_nodule(volume, spacing, prompt_point=prompt)
             seg_times.append(_ms(t))
             t = time.time()
             mask = select_components_overlapping_box(raw_mask, box)
@@ -542,6 +556,29 @@ def run_lung_nodule_pipeline(
             warnings.append(f"VISTA-3D 肺叶分割失败，所有结节 lobe 为 null：{exc}")
     timings["lobe_segmentation"] = _ms(t)
 
+    # 3.5) 可选：过滤首尾层/边缘与肺外（lobe=None）假阳性候选（B.3 消融实验，默认关闭）
+    filtered_edge_extrapulmonary = 0
+    if filter_edge_extrapulmonary and nodules:
+        z_dim, y_dim, x_dim = [int(s) for s in volume.shape]
+        lobe_ok = lobe_meta.get("status") == "ok"
+        kept_nodules: List[Dict[str, Any]] = []
+        for n in nodules:
+            cz, cy, cx = [int(v) for v in n["center_vox_zyx"]]
+            on_edge = (
+                cz <= 0
+                or cz >= z_dim - 1
+                or cy <= 1
+                or cy >= y_dim - 2
+                or cx <= 1
+                or cx >= x_dim - 2
+            )
+            outside_lung = lobe_ok and n["lobe"] is None
+            if on_edge or outside_lung:
+                filtered_edge_extrapulmonary += 1
+            else:
+                kept_nodules.append(n)
+        nodules = kept_nodules
+
     # 4) 按平均径从大到小排序并编号
     nodules.sort(key=lambda n: -(n["metrics"]["mean_diameter_mm"] or 0.0))
     masks: Dict[int, Any] = {}
@@ -561,6 +598,18 @@ def run_lung_nodule_pipeline(
                     "center_lps_mm", "box_lps_mm", "key_slice_sop_instance_uid", "seg_segment_number")
     nodules = [{k: n[k] for k in ordered_keys} for n in nodules]
 
+    det_summary: Dict[str, Any] = {
+        **det_info,
+        "candidates_after_threshold": len(detections),
+        "merged_duplicates": merged,
+        "analyzed": len(nodules),
+        "box_convention": "[z0, y0, x0, z1, y1, x1] 体素下标，左闭右开",
+    }
+    if filter_edge_extrapulmonary:
+        det_summary["filtered_edge_extrapulmonary"] = filtered_edge_extrapulmonary
+    if vista_class_prompt is not None:
+        det_summary["vista_class_prompt"] = int(vista_class_prompt)
+
     result = {
         "model_id": PIPELINE_ID,
         "model_version": model_version,
@@ -569,13 +618,7 @@ def run_lung_nodule_pipeline(
         "series_qc": series_qc,
         "nodules": nodules,
         "warnings": warnings,
-        "detection": {
-            **det_info,
-            "candidates_after_threshold": len(detections),
-            "merged_duplicates": merged,
-            "analyzed": len(nodules),
-            "box_convention": "[z0, y0, x0, z1, y1, x1] 体素下标，左闭右开",
-        },
+        "detection": det_summary,
         "lobe_segmentation": lobe_meta,
         "timings_ms": timings,
         "seg": None,

@@ -941,7 +941,7 @@ class MonaiNeuralInferencePipeline:
     LUNG_NODULE_HU_MAX = 300.0
 
     def _run_lung_nodule_detector(
-        self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]
+        self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float], sw_overlap: Optional[float] = None
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         lung_nodule_ct_detection 的 RetinaNet 前向，按 bundle 约定预处理：
@@ -963,8 +963,19 @@ class MonaiNeuralInferencePipeline:
         scaled = torch.clamp((t[0] - self.LUNG_NODULE_HU_MIN) / (self.LUNG_NODULE_HU_MAX - self.LUNG_NODULE_HU_MIN), 0.0, 1.0)
         in_tensor = scaled.float().to(self.device)
         use_sw = bool(np.prod(res_xyz) > (128 * 128 * 64))
-        with torch.no_grad():
-            preds = detector([in_tensor], use_inferer=use_sw)
+        custom_sw = sw_overlap is not None and hasattr(detector, "set_sliding_window_inferer")
+        if custom_sw:
+            detector.set_sliding_window_inferer(
+                roi_size=[192, 192, 80], overlap=float(sw_overlap), sw_batch_size=1, mode="constant", device="cpu"
+            )
+        try:
+            with torch.no_grad():
+                preds = detector([in_tensor], use_inferer=use_sw)
+        finally:
+            if custom_sw:
+                detector.set_sliding_window_inferer(
+                    roi_size=[192, 192, 80], overlap=0.25, sw_batch_size=1, mode="constant", device="cpu"
+                )
         det = preds[0] if preds else {}
         boxes_t = det.get("boxes", torch.empty((0, 6)))
         scores_t = det.get("labels_scores", det.get("scores", torch.empty((0,))))
@@ -995,6 +1006,7 @@ class MonaiNeuralInferencePipeline:
         vol_zyx: np.ndarray,
         spacing: Tuple[float, float, float],
         min_score: Optional[float] = None,
+        sw_overlap: Optional[float] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         只做 RetinaNet 检出（不画椭球掩膜）。返回按分数降序的检出列表与检出元信息：
@@ -1002,7 +1014,10 @@ class MonaiNeuralInferencePipeline:
         - score: 模型置信度。
         min_score 为空时用 default_lung_nodule_score_threshold。
         """
-        boxes_np, scores_np = self._run_lung_nodule_detector(vol_zyx, spacing)
+        if sw_overlap is not None:
+            boxes_np, scores_np = self._run_lung_nodule_detector(vol_zyx, spacing, sw_overlap=sw_overlap)
+        else:
+            boxes_np, scores_np = self._run_lung_nodule_detector(vol_zyx, spacing)
         thr = float(min_score) if min_score is not None else self.default_lung_nodule_score_threshold(scores_np)
         z_dim, y_dim, x_dim = vol_zyx.shape
         detections: List[Dict[str, Any]] = []
@@ -1016,11 +1031,13 @@ class MonaiNeuralInferencePipeline:
             iz1, iz2 = max(0, int(np.floor(z1))), min(z_dim, int(np.ceil(z2)))
             if ix2 > ix1 and iy2 > iy1 and iz2 > iz1:
                 detections.append({"box_zyx": [iz1, iy1, ix1, iz2, iy2, ix2], "score": sc})
-        info = {
+        info: Dict[str, Any] = {
             "raw_candidate_count": int(len(scores_np)),
             "score_threshold": None if thr is None else round(float(thr), 4),
             "score_threshold_source": "request.min_score" if min_score is not None else "default_rule",
         }
+        if sw_overlap is not None:
+            info["sw_overlap"] = round(float(sw_overlap), 4)
         return detections, info
 
     def infer_lung_nodule_ct(self, vol_zyx: np.ndarray, spacing: Tuple[float, float, float]) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -1766,6 +1783,10 @@ class MONAIEngine:
         lobe_mode: str = "full",
         lobe_resample_mm: Optional[float] = None,
         seg: bool = True,
+        vista_class_prompt: Optional[int] = None,
+        filter_edge_extrapulmonary: bool = False,
+        detector_sw_overlap: Optional[float] = None,
+        return_masks: bool = False,
     ) -> Dict[str, Any]:
         """
         肺结节模型链（RetinaNet 检出 → VISTA-3D 分割与肺叶定位 → 测量），实现见 lung_nodule_pipeline。
@@ -1779,9 +1800,12 @@ class MONAIEngine:
             self.neural_pipeline, vol, spacing, modality=modality,
             max_nodules=max_nodules, min_score=min_score,
             lobe_mode=lobe_mode, lobe_resample_mm=lobe_resample_mm,
-            geometry=geometry_of(entry), return_masks=bool(seg),
+            geometry=geometry_of(entry), return_masks=bool(seg or return_masks),
+            vista_class_prompt=vista_class_prompt,
+            filter_edge_extrapulmonary=filter_edge_extrapulmonary,
+            detector_sw_overlap=detector_sw_overlap,
         )
-        masks = res.pop("_masks", None) or {}
+        masks = (res.get("_masks") if return_masks else res.pop("_masks", None)) or {}
         seg_ms = 0
         if seg:
             t1 = time.time()

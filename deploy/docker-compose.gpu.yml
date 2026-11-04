@@ -1,0 +1,42 @@
+# Heurion 2.0 生产部署 GPU 覆盖配置（T0.5：NVIDIA T4 / L4 / A10G 节点）
+# 用法：
+#   docker compose -p heurion2 --env-file .env.production \
+#     -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d
+#
+# 说明：
+# - 使用 apps/imaging-worker/Dockerfile.gpu 构建或拉取 GPU 镜像，默认预烘焙 lung_nodule_ct + vista3d 权重
+# - 开启 TORCH_DEVICE=cuda 与 LOBE_LOC_MODE=full（GPU 端整例推理约 12 秒，显存峰值约 4 GB）
+# - 通过 deploy.resources.reservations.devices 挂载单卡 NVIDIA GPU
+
+services:
+  heurion2:
+    environment:
+      # GPU 节点单卡整例仅 ~12s，可将平台侧并发派发提升至 2
+      - IMAGING_PIPELINE_CONCURRENCY=${IMAGING_PIPELINE_CONCURRENCY:-2}
+
+  imaging-worker:
+    image: ${IMAGING_WORKER_GPU_IMAGE:-heurion2-imaging-worker:gpu}
+    build:
+      context: ..
+      dockerfile: apps/imaging-worker/Dockerfile.gpu
+      args:
+        HEURION_BAKE_LUNG_NODULE: "1"
+    environment:
+      - PORT=8004
+      - TORCH_DEVICE=cuda
+      - LOBE_LOC_MODE=${LOBE_LOC_MODE:-full}
+      - IMAGING_MEMORY_BUDGET_GB=26
+      - IMAGING_CONCURRENCY=2
+      - IMAGING_INTERACTIVE_RESERVE_GB=4
+      - IMAGING_VOLUME_CACHE_GB=4
+      - OMP_NUM_THREADS=4
+      - MKL_NUM_THREADS=4
+      - OPENBLAS_NUM_THREADS=4
+      - HEURION_MODEL_DIR=/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.ndimage as ndi
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 from scipy.spatial import ConvexHull
 from scipy.spatial.distance import pdist, squareform
 
@@ -514,3 +514,127 @@ def calculate_emphysema_metrics(
         "method": method,
         "quality_control": quality_control
     }
+
+
+def evaluate_recist_11_response(
+    baseline_lesions: List[Dict[str, Any]],
+    followup_lesions: List[Dict[str, Any]],
+    prior_timepoints: Optional[List[List[Dict[str, Any]]]] = None,
+    nadir_sum_mm: Optional[float] = None,
+    new_lesions: bool = False,
+    unequivocal_non_target_pd: bool = False,
+) -> Dict[str, Any]:
+    """
+    RECIST 1.1 多靶病灶与最低点（Nadir）参照评估（PRD T3.1）：
+    - 基线可测量靶病灶：非淋巴结长径 >= 10 mm，病理性淋巴结短径 >= 15 mm；
+    - 多靶病灶上限：全身最多 5 个靶病灶，每个器官（organ）最多 2 个；
+    - 病灶匹配：优先复用配准 ID（prior_lesion_id / lesion_id / id），否则按索引对应；
+    - 参照点：CR（非淋巴结为 0 mm 且淋巴结短径 < 10 mm）与 PR（较基线缩小 >= 30%）以基线直径总和（SOD）为参照；
+      PD（较最低点 Nadir 增加 >= 20% 且绝对值增加 >= 5 mm，或出现新发病灶 / 非靶病灶明确进展）以历次随访最低点（Nadir SOD）为参照。
+    """
+    def _parse(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for idx, item in enumerate(items or []):
+            is_ln = bool(item.get("is_lymph_node") or item.get("kind") == "lymph_node" or item.get("type") == "lymph_node")
+            raw_d = (
+                item.get("short_axis_mm") if is_ln and item.get("short_axis_mm") is not None
+                else (item.get("longest_diameter_mm") if item.get("longest_diameter_mm") is not None else item.get("diameter_mm"))
+            )
+            d_val = None
+            if raw_d is not None:
+                try:
+                    d_val = float(raw_d)
+                except (TypeError, ValueError):
+                    d_val = None
+            raw_id = item.get("prior_lesion_id") or item.get("lesion_id") or item.get("id")
+            lid = str(raw_id).strip() if raw_id is not None and str(raw_id).strip() else None
+            organ = str(item.get("organ")).strip().lower() if item.get("organ") else None
+            out.append({"index": idx, "id": lid, "organ": organ, "is_lymph_node": is_ln, "diameter_mm": d_val})
+        return out
+
+    def _match(target: Dict[str, Any], pool: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if target["id"] is not None:
+            for cand in pool:
+                if cand["id"] == target["id"]:
+                    return cand
+        idx = target["index"]
+        return pool[idx] if 0 <= idx < len(pool) else None
+
+    base = _parse(baseline_lesions)
+    if not base or any(x["diameter_mm"] is None for x in base):
+        return {"category": "NA", "reason": "基线没有靶病灶长径测值", "requires_confirmation": True}
+
+    measurable = [x for x in base if (x["diameter_mm"] >= 15.0 if x["is_lymph_node"] else x["diameter_mm"] >= 10.0)]
+    if not measurable:
+        return {"category": "NA", "reason": "基线没有 ≥ 10 mm 的可测量靶病灶", "requires_confirmation": True}
+
+    organ_counts: Dict[str, int] = {}
+    targets: List[Dict[str, Any]] = []
+    for x in measurable:
+        if len(targets) >= 5:
+            break
+        org = x["organ"]
+        if org:
+            if organ_counts.get(org, 0) >= 2:
+                continue
+            organ_counts[org] = organ_counts.get(org, 0) + 1
+        targets.append(x)
+
+    fol = _parse(followup_lesions)
+    matched_fol = [_match(t, fol) for t in targets]
+    if any(m is None or m["diameter_mm"] is None for m in matched_fol):
+        return {"category": "NA", "reason": "随访缺少对应靶病灶的长径测值", "requires_confirmation": True}
+
+    sum_b = round(sum(float(t["diameter_mm"]) for t in targets), 1)
+    sum_f = round(sum(float(m["diameter_mm"]) for m in matched_fol if m is not None), 1)
+
+    nadir = sum_b
+    if nadir_sum_mm is not None and float(nadir_sum_mm) >= 0:
+        nadir = min(nadir, round(float(nadir_sum_mm), 1))
+    for tp in prior_timepoints or []:
+        p_parsed = _parse(tp)
+        p_matched = [_match(t, p_parsed) for t in targets]
+        if all(m is not None and m["diameter_mm"] is not None for m in p_matched):
+            sum_p = round(sum(float(m["diameter_mm"]) for m in p_matched if m is not None), 1)
+            if 0.0 <= sum_p < nadir:
+                nadir = sum_p
+
+    diff_base = round(sum_f - sum_b, 1)
+    pct_base = round((diff_base / sum_b) * 100.0, 1) if sum_b > 0 else 0.0
+    diff_nadir = round(sum_f - nadir, 1)
+    pct_nadir = round((diff_nadir / nadir) * 100.0, 1) if nadir > 0 else (100.0 if sum_f >= 5.0 else 0.0)
+
+    is_cr = all(
+        (float(matched_fol[i]["diameter_mm"]) < 10.0 if t["is_lymph_node"] else float(matched_fol[i]["diameter_mm"]) == 0.0)
+        for i, t in enumerate(targets)
+    )
+
+    if new_lesions:
+        cat, label = "PD", "PD（疾病进展：新发病灶）"
+    elif unequivocal_non_target_pd:
+        cat, label = "PD", "PD（疾病进展：非靶病灶明确进展）"
+    elif is_cr:
+        cat, label = "CR", "CR（完全缓解）"
+    elif pct_nadir >= 20.0 and diff_nadir >= 5.0:
+        cat, label = "PD", "PD（疾病进展）"
+    elif pct_base <= -30.0:
+        cat, label = "PR", "PR（部分缓解）"
+    else:
+        cat, label = "SD", "SD（疾病稳定）"
+
+    return {
+        "category": cat,
+        "name": label,
+        "reason": None,
+        "selected_target_count": len(targets),
+        "baseline_sum_mm": sum_b,
+        "nadir_sum_mm": nadir,
+        "followup_sum_mm": sum_f,
+        "diff_from_baseline_mm": diff_base,
+        "pct_from_baseline": pct_base,
+        "diff_from_nadir_mm": diff_nadir,
+        "pct_from_nadir": pct_nadir,
+        "status_label": "按 RECIST 1.1 阈值计算，未经阅片确认",
+        "requires_confirmation": True,
+    }
+

@@ -10,8 +10,10 @@ import { issueToken, verifyToken } from '../src/auth/token.ts'
 import { ClaimService } from '../src/claims/service.ts'
 import { extractClaims } from '../src/claims/extract.ts'
 import { docxFor, pptxFor } from '../src/convert/exports.ts'
+import { ImagingReviewService } from '../src/imaging/review.ts'
 import { ImagingStudyService } from '../src/imaging/studies.ts'
 import { MeasurementError, MeasurementService } from '../src/measurements/service.ts'
+import { StudyService } from '../src/research/service.ts'
 import { buildMcpServer } from '../src/mcp/server.ts'
 import { TurnRegistry } from '../src/mcp/turns.ts'
 import { duplicateDoc } from '../src/model/duplicate.ts'
@@ -348,5 +350,54 @@ describe('导出、复制、读视图与 MCP', () => {
     expect(res.content[0]!.text).toContain(`[@m:${bound.body.m_id}] = 9.1 mm`)
     const list = await call('list_measurements', { doc_id: row.id })
     expect(list.body).toMatchObject({ strict: true, measurements: [{ m_id: bound.body.m_id, field: 'long_axis_mm', text: '9.1 mm', status: 'ok', used: true }] })
+  })
+})
+
+describe('T3.9 / W6.5 科研手稿里的队列统计值绑定（cohort_stat）', () => {
+  it('只汇总已定稿（W5 Finalized）检查的结节；新受试者定稿入组后手稿里的 [@m:id] 自动同步更新', async () => {
+    const t = await env()
+    const admin = t.store.createUser({ username: 'admin_c', display_name: '管理员', password_hash: 'x', tenant: { id: t.hosp.id, role: 'admin' } }).id
+    const rev = t.store.createUser({ username: 'rev_c', display_name: '审核主任', password_hash: 'x', tenant: { id: t.hosp.id, role: 'member' } }).id
+    const review = new ImagingReviewService(t.patients)
+    review.setReadingRole({ userId: admin, via: 'user' }, rev, 'reviewer', (u, tid) => t.store.getUser(u)?.tenant_id === tid)
+    t.patients.addMember(t.a, t.p.id, rev)
+
+    const studies = new StudyService(t.store)
+    const rStudy = studies.create(t.dr, { title: '肺结节队列研究', design: 'prospective_cohort' })
+    t.patients.enroll(t.a, rStudy.id, [t.p.id], null)
+
+    const manuscript = t.doc('本研究共纳入受试者。')
+    studies.link(t.dr, rStudy.id, { kind: 'doc', ref_id: manuscript.id, role: 'manuscript' })
+    const msRow = t.store.getDoc(manuscript.id)!
+
+    // 定稿前：绑定队列统计值被拒绝（cohort_no_finalized_imaging）
+    expect(code(() => t.measure.bind(t.a, msRow, { source: 'cohort_stat', source_id: rStudy.id, field: 'subjects_n' }))).toBe('cohort_no_finalized_imaging')
+
+    // 完成第 1 位受试者的检查定稿（8.2 mm 实性结节）
+    review.submitRead(t.a, t.study.id)
+    const revActor: Actor = { userId: rev, via: 'user' }
+    review.finalize(revActor, t.study.id, { expected_revision: review.view(revActor, t.study.id).revision })
+
+    const bN = t.measure.bind(t.a, msRow, { source: 'cohort_stat', source_id: rStudy.id, field: 'subjects_n' })
+    const bMed = t.measure.bind(t.a, msRow, { source: 'cohort_stat', source_id: rStudy.id, field: 'median_diameter_mm' })
+    const bSolid = t.measure.bind(t.a, msRow, { source: 'cohort_stat', source_id: rStudy.id, field: 'solid_pct' })
+
+    expect(bN.view).toMatchObject({ text: '1', status: 'ok' })
+    expect(bMed.view).toMatchObject({ text: '8.2 mm', status: 'ok' })
+    expect(bSolid.view).toMatchObject({ text: '100%', status: 'ok' })
+
+    // 第 2 位受试者入组并完成定稿（12.6 mm 纯磨玻璃结节）-> 手稿里的 [@m:id] 自动更新为最新队列统计值
+    const p2 = t.patients.create(t.a, { sex: 'F', birth_year: 1966 })
+    t.patients.addMember(t.a, p2.id, rev)
+    t.patients.enroll(t.a, rStudy.id, [p2.id], null)
+    const st2 = (await t.svc.importDicom(t.a, p2.id, [{ name: 'IM2', bytes: dicom(`${STUDY}2`, `${STUDY}2.2`, '1') }])).studies[0]!
+    t.svc.addLesion(t.a, st2.id, { kind: 'lung_nodule', source: 'manual', label: '结节 A', location: 'LUL', metrics: { mean_diameter_mm: 12.6, volume_mm3: 900, nodule_type: 'pure_ggo' } })
+    review.submitRead(t.a, st2.id)
+    review.finalize(revActor, st2.id, { expected_revision: review.view(revActor, st2.id).revision })
+
+    const viewsAfter = t.measure.views(msRow, t.a)
+    expect(viewsAfter.get(bN.row.id)).toMatchObject({ text: '2', status: 'updated', bound_text: '1' })
+    expect(viewsAfter.get(bMed.row.id)).toMatchObject({ text: '10.4 mm', status: 'updated', bound_text: '8.2 mm' })
+    expect(viewsAfter.get(bSolid.row.id)).toMatchObject({ text: '50%', status: 'updated', bound_text: '100%' })
   })
 })

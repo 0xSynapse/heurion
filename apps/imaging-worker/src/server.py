@@ -19,7 +19,8 @@ def parse_flexible_float(v: Any, default: Optional[float] = None) -> Optional[fl
 try:
     from .device import get_device_info
     from .engine import MONAIEngine, generate_synthetic_ct_volume, ModelUnavailableError
-    from .recist import calculate_volume_doubling_time, calculate_subsolid_metrics, calculate_emphysema_metrics
+    from .recist import calculate_volume_doubling_time, calculate_subsolid_metrics, calculate_emphysema_metrics, evaluate_recist_11_response
+    from .ct_extensions import quantify_pneumonia_ctss, analyze_rib_fractures, analyze_head_ct_ich, lobe_ctss_score
     from .model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
     from .dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from .task_queue import task_manager, TaskStage, batch_process_cohort
@@ -29,7 +30,8 @@ try:
 except (ImportError, ValueError):
     from device import get_device_info
     from engine import MONAIEngine, generate_synthetic_ct_volume, ModelUnavailableError
-    from recist import calculate_volume_doubling_time, calculate_subsolid_metrics, calculate_emphysema_metrics
+    from recist import calculate_volume_doubling_time, calculate_subsolid_metrics, calculate_emphysema_metrics, evaluate_recist_11_response
+    from ct_extensions import quantify_pneumonia_ctss, analyze_rib_fractures, analyze_head_ct_ich, lobe_ctss_score
     from model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
     from dicom_io import anonymize_dicom_zip, anonymize_dicom_file
     from task_queue import task_manager, TaskStage, batch_process_cohort
@@ -246,6 +248,164 @@ def compute_volume_doubling_time(req: VolumeDoublingTimeRequest = Body(...)):
         followup_vol_cm3=req.followup_volume_cm3,
         days_interval=req.days_interval
     )
+
+
+class Recist11EvaluationRequest(BaseModel):
+    baseline_lesions: List[Dict[str, Any]]
+    followup_lesions: List[Dict[str, Any]]
+    prior_timepoints: Optional[List[List[Dict[str, Any]]]] = None
+    has_new_lesions: bool = False
+    non_target_pd: bool = False
+
+
+@app.post("/api/v1/pipeline/recist-11")
+def evaluate_recist_11_endpoint(req: Recist11EvaluationRequest = Body(...)):
+    """
+    RECIST 1.1 多靶病灶疗效评估（T3.1）：支持最多 5 个靶病灶、每器官最多 2 个、病理性淋巴结短径，
+    CR/PR 以基线总和（Baseline SOD）为参照，PD 以历次随访最低点（Nadir SOD）为参照。
+    """
+    try:
+        return evaluate_recist_11_response(
+            baseline_lesions=req.baseline_lesions,
+            followup_lesions=req.followup_lesions,
+            prior_timepoints=req.prior_timepoints,
+            new_lesions=req.has_new_lesions,
+            unequivocal_non_target_pd=req.non_target_pd,
+        )
+    except Exception as exc:
+        raise_http(exc, "RECIST 1.1 疗效评估失败")
+
+
+class PneumoniaCtssRequest(BaseModel):
+    volume_id: Optional[str] = None
+    sample_id: Optional[str] = None
+    file_path: Optional[str] = None
+    lobes: Optional[List[Dict[str, Any]]] = None
+    ggo_hu_range: Optional[List[float]] = None
+    consolidation_hu_range: Optional[List[float]] = None
+
+
+@app.post("/api/v1/pipeline/pneumonia-ctss")
+def run_pneumonia_ctss_endpoint(req: PneumoniaCtssRequest = Body(...)):
+    """
+    肺炎与间质性病变 CT 定量（T3.2）：支持三维 HU 体积或五肺叶体积汇总输入，
+    输出五肺叶（RUL/RML/RLL/LUL/LLL）磨玻璃/实变受累比例与 0-25 分 CTSS 严重度评分。
+    """
+    try:
+        if req.lobes is not None:
+            lobe_reports: Dict[str, Any] = {}
+            total_ctss = 0
+            total_lung_ml = 0.0
+            total_lesion_ml = 0.0
+            total_ggo_ml = 0.0
+            total_cons_ml = 0.0
+            for item in req.lobes:
+                code = str(item.get("lobe", "")).upper()
+                lobe_ml = max(0.0, float(item.get("lobe_volume_ml", 0.0)))
+                ggo_ml = max(0.0, float(item.get("ggo_volume_ml", 0.0)))
+                cons_ml = max(0.0, float(item.get("consolidation_volume_ml", 0.0)))
+                lesion_ml = min(lobe_ml, ggo_ml + cons_ml)
+                inv_pct = (lesion_ml / lobe_ml * 100.0) if lobe_ml > 0 else 0.0
+                ggo_pct = (ggo_ml / lobe_ml * 100.0) if lobe_ml > 0 else 0.0
+                cons_pct = (cons_ml / lobe_ml * 100.0) if lobe_ml > 0 else 0.0
+                score = lobe_ctss_score(inv_pct)
+                total_ctss += score
+                total_lung_ml += lobe_ml
+                total_lesion_ml += lesion_ml
+                total_ggo_ml += ggo_ml
+                total_cons_ml += cons_ml
+                lobe_reports[code] = {
+                    "lobe_code": code,
+                    "lobe_volume_ml": round(lobe_ml, 2),
+                    "ggo_volume_ml": round(ggo_ml, 2),
+                    "consolidation_volume_ml": round(cons_ml, 2),
+                    "lesion_volume_ml": round(lesion_ml, 2),
+                    "ggo_pct": round(ggo_pct, 2),
+                    "consolidation_pct": round(cons_pct, 2),
+                    "involvement_pct": round(inv_pct, 2),
+                    "ctss_score": score,
+                }
+            whole_pct = (total_lesion_ml / total_lung_ml * 100.0) if total_lung_ml > 0 else 0.0
+            severity_band = "none" if total_ctss == 0 else ("mild" if total_ctss <= 7 else ("moderate" if total_ctss <= 17 else "severe"))
+            return {
+                "task": "pneumonia_ild_ct",
+                "lobes": lobe_reports,
+                "whole_lung": {
+                    "total_lung_volume_ml": round(total_lung_ml, 2),
+                    "total_lesion_volume_ml": round(total_lesion_ml, 2),
+                    "total_ggo_volume_ml": round(total_ggo_ml, 2),
+                    "total_consolidation_volume_ml": round(total_cons_ml, 2),
+                    "total_involvement_pct": round(whole_pct, 2),
+                },
+                "total_ctss": int(total_ctss),
+                "max_ctss": 25,
+                "severity_reference": severity_band,
+                "status_label": "规则推算，待医生确认",
+                "requires_confirmation": True,
+            }
+        target = _require_target(req.volume_id, req.sample_id, req.file_path)
+        vol, spacing, _ = engine.load_volume_data(target)
+        # 按 Z 轴五等分近似五肺叶掩码（若有真实肺叶掩码可在引擎层替换）
+        z_dim = vol.shape[0]
+        lobe_mask = np.zeros_like(vol, dtype=np.int32)
+        lung_vox = (vol >= -950.0) & (vol <= 50.0)
+        for idx in range(5):
+            z0 = int(idx * z_dim / 5)
+            z1 = int((idx + 1) * z_dim / 5)
+            sub = np.zeros_like(lung_vox)
+            sub[z0:z1, :, :] = lung_vox[z0:z1, :, :]
+            lobe_mask[sub] = idx + 1
+        ggo_range = tuple(req.ggo_hu_range[:2]) if req.ggo_hu_range and len(req.ggo_hu_range) >= 2 else (-750.0, -300.0)
+        cons_range = tuple(req.consolidation_hu_range[:2]) if req.consolidation_hu_range and len(req.consolidation_hu_range) >= 2 else (-300.0, 50.0)
+        return quantify_pneumonia_ctss(
+            hu_volume=vol,
+            lobe_mask=lobe_mask,
+            spacing_mm=(float(spacing[0]), float(spacing[1]), float(spacing[2])),
+            ggo_hu_range=(float(ggo_range[0]), float(ggo_range[1])),
+            consolidation_hu_range=(float(cons_range[0]), float(cons_range[1])),
+        )
+    except Exception as exc:
+        raise_http(exc, "肺炎与间质性病变 CTSS 定量失败")
+
+
+class RibFracturePipelineRequest(BaseModel):
+    candidates: List[Dict[str, Any]]
+
+
+@app.post("/api/v1/pipeline/rib-fractures")
+def run_rib_fractures_endpoint(req: RibFracturePipelineRequest = Body(...)):
+    """
+    肋骨骨折检出定位与新旧分期（T3.3）：双侧第 1–12 肋编号、前/外侧/后肋弓分段及急性/亚急性愈合期/陈旧性判定。
+    """
+    try:
+        return analyze_rib_fractures(req.candidates)
+    except Exception as exc:
+        raise_http(exc, "肋骨骨折分析失败")
+
+
+class HeadIchPipelineRequest(BaseModel):
+    hemorrhages: List[Dict[str, Any]]
+    midline_shift_mm: float = 0.0
+    priority: str = "stat"
+
+
+@app.post("/api/v1/pipeline/head-ich")
+def run_head_ich_endpoint(req: HeadIchPipelineRequest = Body(...)):
+    """
+    头颅平扫 CT 急性脑出血检出与急诊优先通道（T3.4）：五类出血分型、ABC/2 与三维体素出血量（mL）、
+    中线移位（mm）测量，以及急诊 stat 最高优先通道（P90 <= 60s SLA）。
+    """
+    try:
+        # 急诊 stat 走 priority=True 交互优先闸门，确保不被普通批量队列阻塞
+        is_stat = req.priority in ("stat", "urgent")
+        with INFERENCE_GATE.acquire(task_cost_gb("lung_nodule_point", engine.device.type), "head_ich_ct", priority=is_stat):
+            return analyze_head_ct_ich(
+                hemorrhages=req.hemorrhages,
+                midline_shift_mm=req.midline_shift_mm,
+                priority=req.priority,
+            )
+    except Exception as exc:
+        raise_http(exc, "头颅平扫 CT 脑出血分析失败")
 
 
 @app.post("/api/v1/cohort/batch-analyze")

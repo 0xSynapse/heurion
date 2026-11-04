@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { extname, join } from 'node:path'
 import type { DatasetService, DatasetView } from '../datasets/service.ts'
-import type { Actor, LabRow, PatientService, SubjectVar } from '../tenancy/patients.ts'
+import { DEID_METHOD, DEID_SCHEME } from '../imaging/deid/deidentify.ts'
+import type { Actor, CohortImagingExportRow, LabRow, PatientService, SubjectVar } from '../tenancy/patients.ts'
 import { StudyError, type StudyService } from './service.ts'
 
 /**
@@ -260,6 +261,287 @@ export class CohortService {
       rmSync(tempDir, { recursive: true, force: true })
     }
   }
+
+  // —— 科研队列去标识影像与测量导出（W6.2 / W6.4，T2.8：只用定稿数据、PS3.15 去标识、烧录文字拦截、PI 审批）——
+
+  /**
+   * 发起科研去标识影像与定稿结节测量导出申请（W6.4）：
+   * - 只纳人 W5 已定稿（imaging_signoffs）的检查快照，未定稿检查自动跳过并计数；
+   * - 自动检测并拦截含烧录文字或截屏风险的序列（BurnedInAnnotation=YES、Secondary Capture、SCREEN SAVE 等）；
+   * - 导出清单与 CSV 只含伪匿名研究编号（subject_id，如 S001），绝不出现真实姓名或院内病历号；
+   * - 创建后状态为 pending_pi_approval，须由课题负责人（PI / owner）审批通过后方可获取导出内容。
+   */
+  requestImagingExport(
+    a: Actor,
+    studyId: string,
+    input: {
+      include_dicom?: unknown
+      include_seg?: unknown
+      include_csv?: unknown
+      reason?: unknown
+      series_headers?: Record<string, { burned_in_annotation?: string; image_type?: string; sop_class_uid?: string; modality?: string }>
+    } = {},
+  ) {
+    this.studies.get(a.userId, studyId, 'write')
+    const includeDicom = input.include_dicom !== false
+    const includeSeg = input.include_seg !== false
+    const includeCsv = input.include_csv !== false
+    if (!includeDicom && !includeSeg && !includeCsv) {
+      throw new StudyError('bad_export_options', '请至少选择一项导出内容（DICOM / DICOM SEG / 测量 CSV）')
+    }
+    const reason = typeof input.reason === 'string' && input.reason.trim() ? input.reason.trim().slice(0, 500) : null
+    const extraHeaders = input.series_headers && typeof input.series_headers === 'object' ? input.series_headers : {}
+
+    const { subjects, skipped_subjects } = this.patients.cohortFinalizedImaging(a, studyId)
+    if (!subjects.length) {
+      throw new StudyError('empty_cohort', skipped_subjects.length ? '入组的受试者你都不在诊疗组里，不能发起导出' : '该研究暂无有效入组受试者')
+    }
+
+    const exportedSeries: Array<{
+      subject_id: string
+      imaging_study_id: string
+      study_date: string | null
+      signoff_version: number
+      series_id: string
+      modality: string | null
+      slice_thickness: number | null
+      instances: number
+      deid_patient_id: string
+      deid_method: string
+    }> = []
+    const exportedSegs: Array<{
+      subject_id: string
+      imaging_study_id: string
+      signoff_version: number
+      lesion_id: string
+      seg_ref: string
+    }> = []
+    const blockedSeries: Array<{
+      subject_id: string
+      imaging_study_id: string
+      series_id: string
+      modality: string | null
+      reason: string
+    }> = []
+    const csvHeader = [
+      'subject_id', 'imaging_study_id', 'study_date', 'signoff_version',
+      'lesion_id', 'label', 'location', 'nodule_type',
+      'mean_diameter_mm', 'long_axis_mm', 'short_axis_mm', 'solid_core_mm',
+      'volume_mm3', 'mean_hu', 'vdt_days', 'seg_ref',
+    ]
+    const csvRows: unknown[][] = []
+    const includedPatientIds: string[] = []
+    let finalizedStudyCount = 0
+    let skippedUnfinalizedStudies = 0
+
+    for (const s of subjects) {
+      skippedUnfinalizedStudies += s.unfinalized_count
+      if (!s.finalized_studies.length) continue
+      includedPatientIds.push(s.patient_id)
+      for (const st of s.finalized_studies) {
+        finalizedStudyCount++
+        for (const sr of st.series) {
+          const risk = checkSeriesBurnedInRisk(sr, extraHeaders[sr.id])
+          if (risk) {
+            blockedSeries.push({
+              subject_id: s.subject_id,
+              imaging_study_id: st.study_id,
+              series_id: sr.id,
+              modality: sr.modality,
+              reason: risk,
+            })
+            continue
+          }
+          if (includeDicom) {
+            exportedSeries.push({
+              subject_id: s.subject_id,
+              imaging_study_id: st.study_id,
+              study_date: st.study_date,
+              signoff_version: st.version,
+              series_id: sr.id,
+              modality: sr.modality,
+              slice_thickness: sr.slice_thickness,
+              instances: sr.instances,
+              deid_patient_id: s.subject_id,
+              deid_method: DEID_METHOD,
+            })
+          }
+        }
+        for (const l of st.lesions) {
+          const m = l.metrics ?? {}
+          if (includeSeg && l.seg_ref) {
+            exportedSegs.push({
+              subject_id: s.subject_id,
+              imaging_study_id: st.study_id,
+              signoff_version: st.version,
+              lesion_id: l.id,
+              seg_ref: l.seg_ref,
+            })
+          }
+          if (includeCsv) {
+            csvRows.push([
+              s.subject_id,
+              st.study_id,
+              st.study_date,
+              st.version,
+              l.id,
+              l.label,
+              l.location,
+              m.nodule_type ?? null,
+              m.mean_diameter_mm ?? null,
+              m.long_axis_mm ?? null,
+              m.short_axis_mm ?? null,
+              m.solid_core_mm ?? null,
+              m.volume_mm3 ?? null,
+              m.mean_hu ?? null,
+              m.vdt_days ?? null,
+              l.seg_ref ?? null,
+            ])
+          }
+        }
+      }
+    }
+
+    if (finalizedStudyCount === 0) {
+      throw new StudyError('no_finalized_imaging', '入组受试者暂无已定稿（W5 Finalized）的影像检查，未定稿数据不可用于科研导出')
+    }
+
+    const csvContent = includeCsv ? csv([csvHeader, ...csvRows]) : ''
+    const manifest = {
+      deid_scheme: DEID_SCHEME,
+      deid_method: DEID_METHOD,
+      pseudonym_only: true,
+      finalized_only: true,
+      subjects_included: includedPatientIds.length,
+      finalized_studies_count: finalizedStudyCount,
+      skipped_unfinalized_studies: skippedUnfinalizedStudies,
+      skipped_subjects,
+      exported_series_count: exportedSeries.length,
+      exported_segs_count: exportedSegs.length,
+      measurements_count: csvRows.length,
+      blocked_series: blockedSeries,
+      exported_series: exportedSeries,
+      exported_segs: exportedSegs,
+      csv_content: csvContent,
+    }
+
+    const row = this.patients.createCohortImagingExport(a, studyId, {
+      include_dicom: includeDicom,
+      include_seg: includeSeg,
+      include_csv: includeCsv,
+      reason,
+      manifest,
+      patient_ids: includedPatientIds,
+    })
+    return formatImagingExport(row)
+  }
+
+  /** 列出本研究的科研影像导出申请（未获 PI 审批前不返回 csv_content 与序列下载明细）。 */
+  listImagingExports(a: Actor, studyId: string) {
+    this.studies.get(a.userId, studyId)
+    return {
+      study_id: studyId,
+      my_role: this.studies.role(a.userId, studyId),
+      exports: this.patients.listCohortImagingExports(a, studyId).map(formatImagingExport),
+    }
+  }
+
+  /**
+   * 课题负责人（PI / owner）审批科研影像导出申请（W6.4）：
+   * 只有研究 owner 本人（非 AI）可批准或驳回；审批结果写入患者访问审计日志。
+   */
+  reviewImagingExport(a: Actor, studyId: string, exportId: string, input: { decision?: unknown; note?: unknown }) {
+    this.studies.get(a.userId, studyId)
+    const role = this.studies.role(a.userId, studyId)
+    if (role !== 'owner') {
+      throw new StudyError('pi_only', '只有课题负责人（PI / owner）可以审批科研影像导出', 403)
+    }
+    const decision = input.decision === 'approve' || input.decision === 'reject' ? input.decision : null
+    if (!decision) {
+      throw new StudyError('bad_decision', '审批结论（decision）须为 approve（批准）或 reject（驳回）')
+    }
+    const note = typeof input.note === 'string' ? input.note : null
+    const row = this.patients.reviewCohortImagingExport(a, studyId, exportId, { decision, note })
+    return formatImagingExport(row)
+  }
+}
+
+const SERIES_MODALITY_RISK: Record<string, string> = {
+  SC: '二次采集（Secondary Capture）影像常有烧录的患者信息',
+  OT: '模态为 OT（其他），常是截图或文档，可能有烧录文字',
+  US: '超声影像通常在画面里烧录患者信息',
+  IVUS: '血管内超声影像通常在画面里烧录患者信息',
+  XC: '外部相机照片可能拍到患者面部或文字',
+  ES: '内镜影像通常在画面里烧录患者信息',
+  GM: '大体照片可能有标签文字',
+  OP: '眼科照片可能有烧录文字',
+  DOC: '扫描文档含患者信息',
+  SR: '结构化报告含自由文本，不在影像去标识范围内',
+  KO: '关键图像标注（KO）不在影像去标识范围内',
+  PR: '显示状态（PR）可能含文字标注',
+}
+const SERIES_SOP_RISK: Array<[string, string]> = [
+  ['1.2.840.10008.1.3.10', 'DICOMDIR 目录文件不导出'],
+  ['1.2.840.10008.5.1.4.1.1.7', '二次采集（Secondary Capture）影像常有烧录的患者信息'],
+  ['1.2.840.10008.5.1.4.1.1.88.', '结构化报告含自由文本，不在影像去标识范围内'],
+  ['1.2.840.10008.5.1.4.1.1.11.', '显示状态（PR）可能含文字标注'],
+  ['1.2.840.10008.5.1.4.1.1.104.', '封装文档（PDF / CDA）含患者信息'],
+  ['1.2.840.10008.5.1.4.1.1.77.', '可见光照片 / 视频可能有烧录文字或面部'],
+]
+const SERIES_TEXT_RISK = ['SCREEN SAVE', 'SCREENSHOT', 'DOSE INFO', 'DOSE_INFO', 'DOSE REPORT', 'BURNED_IN', 'BURNEDIN']
+
+function checkSeriesBurnedInRisk(
+  sr: { modality: string | null; description: string | null },
+  extra?: { burned_in_annotation?: string; image_type?: string; sop_class_uid?: string; modality?: string },
+): string | null {
+  if ((extra?.burned_in_annotation ?? '').toUpperCase() === 'YES') {
+    return '标记为有烧录文字（BurnedInAnnotation = YES），画面里可能有患者信息'
+  }
+  const sop = extra?.sop_class_uid ?? ''
+  for (const [prefix, why] of SERIES_SOP_RISK) {
+    if (sop === prefix || (prefix.endsWith('.') ? sop.startsWith(prefix) : sop.startsWith(`${prefix}.`))) return why
+  }
+  const mod = (extra?.modality ?? sr.modality ?? '').toUpperCase()
+  if (SERIES_MODALITY_RISK[mod]) return SERIES_MODALITY_RISK[mod]!
+  const combined = `${sr.description ?? ''} ${extra?.image_type ?? ''}`.toUpperCase()
+  const hit = SERIES_TEXT_RISK.find(t => combined.includes(t))
+  if (hit) return `序列描述或图像类型含 ${hit}（截屏 / 剂量报告），画面里可能有烧录患者信息`
+  return null
+}
+
+function formatImagingExport(row: CohortImagingExportRow) {
+  const m = row.manifest ?? {}
+  const approved = row.status === 'approved'
+  return {
+    id: row.id,
+    study_id: row.study_id,
+    status: row.status,
+    approval_required: !approved,
+    include_dicom: row.include_dicom,
+    include_seg: row.include_seg,
+    include_csv: row.include_csv,
+    reason: row.reason,
+    requested_by: row.requested_by,
+    requested_via: row.requested_via,
+    requested_at: row.requested_at,
+    reviewed_by: row.reviewed_by,
+    reviewed_at: row.reviewed_at,
+    review_note: row.review_note,
+    deid_scheme: m.deid_scheme ?? DEID_SCHEME,
+    deid_method: m.deid_method ?? DEID_METHOD,
+    pseudonym_only: true,
+    finalized_only: true,
+    subjects_included: Number(m.subjects_included ?? 0),
+    finalized_studies_count: Number(m.finalized_studies_count ?? 0),
+    skipped_unfinalized_studies: Number(m.skipped_unfinalized_studies ?? 0),
+    exported_series_count: Number(m.exported_series_count ?? 0),
+    exported_segs_count: Number(m.exported_segs_count ?? 0),
+    measurements_count: Number(m.measurements_count ?? 0),
+    blocked_series: Array.isArray(m.blocked_series) ? m.blocked_series : [],
+    exported_series: approved && Array.isArray(m.exported_series) ? m.exported_series : null,
+    exported_segs: approved && Array.isArray(m.exported_segs) ? m.exported_segs : null,
+    csv_content: approved && typeof m.csv_content === 'string' ? m.csv_content : null,
+  }
 }
 
 type Subject = ReturnType<PatientService['cohortSnapshot']>['subjects'][number]
@@ -317,6 +599,23 @@ function wide(subjects: Subject[], relativeDays = false) {
     labels.l3_smi_source = 'SMI 来源'
   }
 
+  const noduleWideVars = [
+    { id: 'nodule_type', col: 'nodule_type_verified', label: '主要肺结节密度类型（已核实）' },
+    { id: 'nodule_mean_diameter_mm', col: 'nodule_mean_diameter_mm_verified', label: '主要肺结节平均径（已核实，mm）' },
+    { id: 'nodule_volume_mm3', col: 'nodule_volume_mm3_verified', label: '主要肺结节三维体积（已核实，mm³）' },
+    { id: 'nodule_solid_core_mm', col: 'nodule_solid_core_mm_verified', label: '部分实性结节实性成分平均径（已核实，mm）' },
+    { id: 'nodule_vdt_days', col: 'nodule_vdt_days_verified', label: '肺结节体积倍增时间 VDT（已核实，d）' },
+  ] as const
+  const activeNoduleVars = noduleWideVars.filter(nv => subjects.some(s => s.vars?.[nv.id]?.status === 'verified'))
+  if (activeNoduleVars.length > 0) {
+    for (const nv of activeNoduleVars) {
+      header.push(nv.col)
+      labels[nv.col] = nv.label
+    }
+    header.push('nodule_vars_source')
+    labels.nodule_vars_source = '肺结节变量来源（W5 定稿快照）'
+  }
+
   const rows = subjects.map(s => {
     const r: unknown[] = [s.subject_id, s.sex, s.age_at_enroll, s.tags.join('; '), s.enrolled_on]
     for (const t of tests) {
@@ -354,6 +653,18 @@ function wide(subjects: Subject[], relativeDays = false) {
       r.push(ok ? v.value : null, ok ? smiSource(v) : null)
     }
 
+    // 肺结节研究变量（T2.8）：只取研究者已核实的值（源自 W5 定稿快照）
+    if (activeNoduleVars.length > 0) {
+      let firstVerified: SubjectVar | null = null
+      for (const nv of activeNoduleVars) {
+        const v = s.vars?.[nv.id]
+        const ok = v && v.status === 'verified'
+        if (ok && !firstVerified) firstVerified = v
+        r.push(ok ? v.value : null)
+      }
+      r.push(firstVerified ? noduleVarSource(firstVerified) : null)
+    }
+
     return r
   })
   return { header, rows, labels }
@@ -366,6 +677,17 @@ function smiSource(v: SubjectVar): string {
   if (ref.imaging_record_id) parts.push(String(ref.imaging_record_id))
   if (ref.report_date) parts.push(String(ref.report_date))
   if (v.method) parts.push(v.method)
+  return `${parts.join(' · ')}（已核实）`
+}
+
+/** 肺结节定稿变量来源说明：定稿检查 id、定稿版本、病灶 id 与方法 */
+function noduleVarSource(v: SubjectVar): string {
+  const ref = v.source_ref ?? {}
+  const parts = ['W5定稿快照']
+  if (ref.imaging_study_id) parts.push(String(ref.imaging_study_id))
+  if (ref.signoff_version) parts.push(`v${ref.signoff_version}`)
+  if (ref.lesion_id) parts.push(String(ref.lesion_id))
+  if (ref.study_date) parts.push(String(ref.study_date))
   return `${parts.join(' · ')}（已核实）`
 }
 

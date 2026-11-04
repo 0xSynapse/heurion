@@ -17,12 +17,17 @@ ALL_IMPLEMENTED_MODELS = [
 
 # During Docker image build (default), only bake the lightweight core baseline weight (spleen_ct, 23 MB)
 # so CI image builds & GHCR pushes stay fast and small; in production, deploy.sh warms up all 16 weights
-# into the persistent `imaging-models` Docker volume. Set HEURION_BAKE_ALL=1 to bake all 16 weights.
-MODELS = (
-    ALL_IMPLEMENTED_MODELS
-    if os.environ.get("HEURION_BAKE_ALL") == "1"
-    else ["spleen_ct"]
-)
+# into the persistent `imaging-models` Docker volume.
+# Set HEURION_BAKE_LUNG_NODULE=1 (or --lung-nodule) in GPU images to pre-bake RetinaNet + VISTA-3D weights,
+# or set HEURION_BAKE_ALL=1 (or --all) to bake all 16 weights.
+LUNG_NODULE_MODELS = ["lung_nodule_ct", "vista3d", "spleen_ct"]
+
+if os.environ.get("HEURION_BAKE_ALL") == "1":
+    MODELS = ALL_IMPLEMENTED_MODELS
+elif os.environ.get("HEURION_BAKE_LUNG_NODULE") == "1":
+    MODELS = LUNG_NODULE_MODELS
+else:
+    MODELS = ["spleen_ct"]
 
 
 def _bake_one(m: str) -> bool:
@@ -47,7 +52,12 @@ def _bake_one(m: str) -> bool:
 
 
 def main():
-    targets = ALL_IMPLEMENTED_MODELS if "--all" in sys.argv else MODELS
+    if "--all" in sys.argv:
+        targets = ALL_IMPLEMENTED_MODELS
+    elif "--lung-nodule" in sys.argv:
+        targets = LUNG_NODULE_MODELS
+    else:
+        targets = MODELS
     workers = min(4, max(1, len(targets)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_bake_one, m): m for m in targets}

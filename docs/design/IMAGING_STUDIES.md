@@ -276,7 +276,7 @@ reading            submitted         finalized               amending
 
 - `ImagingReviewService.finalizedLesions(actor, studyId)`：最近一次定稿快照里已确认的结节（版本与测量为签字时的值），`stale = true` 表示之后又有未定稿的改动；没定稿过为 null。
 - `finalizedStudies(actor, patientId)`：患者全部已定稿检查，按检查日期从早到晚。
-- 随访对比（T2.4）已按定稿快照取前片（`ImagingFollowup.priorLesions`，直接读同一张 `imaging_signoffs`）；科研取数（T2.8）也应只读定稿值。
+- 随访对比（T2.4）已按定稿快照取前片（`ImagingFollowup.priorLesions`，直接读同一张 `imaging_signoffs`）；科研取数（T2.8，含 `SubjectVarService.importImaging`、队列纳排 `imaging_nodules` 及去标识导出 `cohortFinalizedImaging`）同样严格只读定稿快照（`imaging_signoffs`）。
 
 ## 随访对比（T2.4）
 
@@ -337,7 +337,7 @@ PRD W3：同一患者的前后两期胸部 CT，配准后对应结节，标出�
 
 - 顶部：前片日期与间隔、配准质量（不可靠时用醒目颜色）、误差范围、说明（锚点、层厚、跳过的检查等）、前片里消失的结节、「重新匹配」。
 - 每个结节：变化分类、前片对应结节（编号与平均径）、Δ平均径、Δ体积（含百分比）、VDT、「在误差范围内」、「医生对应」「请核对」；「拆开」「改对应」（下拉选前片结节或「前片没有」）。
-- 两期并排、联动翻页（W3.4，P1）本次没做：OHIF 的挂片协议要按两期检查改，面板只给出前片对应结节的信息。
+- 两期并排、联动翻页（W3.4）：患者页随访对比面板提供「双片并排阅片（W3.4）」按钮，票据签发支持携带当前与前片两个 `StudyInstanceUIDs` 及 `HeurionCompare=1`；OHIF 结节面板自动切换 1×2 并排视口（左：当前检查 CT · 右：既往前片 CT，统一应用肺窗）并在点击结节时按 LPS 坐标双视口同步联动跳转。
 
 ### 局限与待办
 
@@ -556,7 +556,7 @@ PRD W4.1（按科室模板生成所见句）、W4.4（医生自由编辑，AI �
 
 ### 局限与待办
 
-- 一期只做胸部 CT 肺结节（`kind = lung_nodule`）。其它病灶类型、印象 / 结论段（W4.3）未做。
+- 一期只做胸部 CT 肺结节（`kind = lung_nodule`）。客观印象段（W4.3）已在内置模板默认启用（汇总检出总数、最大结节部位与客观长短径/体积、随访变化，同样绑定 `[@m:id]` 并严禁主观诊断词）。其它病灶类型未做。
 - RIS 对接（W4.5 二期：HL7 / 接口直写）未做，一期只复制纯文本；`mm³` 用上标字符，个别老 RIS 可能显示不了，需要时科室可在模板里改用 `cm3` 等写法（需另加单位显示选项，未做）。
 - 模板只有 JSON 编辑框（带语法说明与校验），没有可视化编辑器；模板历史可查（`GET /api/imaging/findings-templates/versions?scope=`），界面还没有「回退到某一版」的按钮（可把旧版本内容另存为新版本）。
 - 「更新那份」的判断按块内容是否与上次生成一致，块内一处很小的改动（哪怕只改一个标点）也会让整块保留；这是有意偏保守。
@@ -644,3 +644,69 @@ PRD 工作列表 T2.10「效率埋点：打开检查、提交、审核三个时�
 - 读病灶经 `ImagingStudyService.measurementSource`（读权限，影子病灶当不存在）；只能绑定 `status = confirmed` 的病灶。
 - 病灶被否决、撤销或被取代后，报告里对应的数字醒目标出，导出时注明。
 - 文档读者没有该患者权限时只看到绑定时的快照。
+
+## 指南规则引擎与 RECIST 1.1 纵向评估（T3.5 / T3.1）
+
+- **肺结节指南规则引擎（T3.5，`src/imaging/guideline-rules.ts`）与所见草稿联动（W4.3 二期，`src/imaging/findings-draft.ts`）**：
+  - `evaluateLungRads2022`：按 ACR Lung-RADS v2022 计算筛查结节分类（`0`、`1`、`2`、`3`、`4A`、`4B`），支持基线与随访新发、增长（12 个月内平均径或实性成分增长 `> 1.5 mm`）及稳定 `≥ 3` 个月降级（3 类→2 类、4A 类→3 类）。
+  - `evaluateFleischner2017`：按 Fleischner Society 2017 偶发肺结节指南计算随访建议（区分单发/多发、实性/纯磨玻璃/部分实性、低危/高危，并自动拦截 `< 35` 岁、已知恶性肿瘤、免疫抑制及筛查人群）。
+  - 所有规则引擎输出均强制携带 `status_label: "规则推算，待医生确认"`、`requires_confirmation: true` 与具体指南条款引用 `clause_citation`。
+  - 生成所见草稿时默认返回 `guideline_reference` 供界面展示，**不自动写入草稿正文**；仅当医生本人显式传入 `confirm_guideline_reference: true`（拒绝 `via = ai` 的 `guideline_confirmation_human_only`）时才将指南参考段落附入客观印象段。
+- **RECIST 1.1 多靶病灶与最低点（Nadir）参照（T3.1，`src/tenancy/patients.ts` `assessRecist` & `apps/imaging-worker/src/recist.py` `evaluate_recist_11_response`）**：
+  - 支持多靶病灶选择上限（全身最多 5 个、同一器官最多 2 个），区分非淋巴结靶病灶（基线长径 `≥ 10 mm`）与病理性淋巴结靶病灶（基线短径 `≥ 15 mm`，随访短径 `< 10 mm` 满足 CR 条件），并优先按病灶配准 ID（`prior_lesion_id` / `lesion_id` / `id`）跨期匹配。
+  - CR 与 PR 以基线直径总和（Baseline SOD）为参照；PD（直径总和增加 `≥ 20%` 且绝对值增加 `≥ 5 mm`）以历次随访最低点直径总和（Nadir SOD）为参照。
+
+## 阶段 3 扩展模块（T3.2–T3.4, T3.6, T3.7, T3.9）
+
+- **标注库与模型发布门控闭环（T3.6 / W7.1–W7.4，`src/imaging/curation-gate.ts`）**：
+  - **W7.1 定稿入标注库**：`ImagingReviewService.finalize` 定稿时自动将审核医师确认的病灶、定稿 SEG 引用、AI 原始检出与医生的修饰差异（`unchanged` / `refined_boundary` / `manual_added` / `rejected_fp`）写入 `imaging_curation_entries`。
+  - **W7.2 离线训练快照导出**：仅允许读取已定稿标注库，禁止在线自动改权重。
+  - **W7.3 锁定测试集不退化门控**：候选模型在锁定测试集上的敏感度、每例假阳性数、分割 Dice 与校准阈值均不得劣化于当前生产模型，否则硬阻断（`gate_passed = false`）。
+  - **W7.4 双人异构角色审批与一键回滚**：要求 `pi`（科室主任/PI）与 `it_admin`（信息科）两名不同用户分别签署批准，禁止 AI 代替审批（`approval_human_only`），支持生产版本一键回滚并保留审计记录。
+- **MRMC 多阅片者多病例交叉读片研究（T3.7，`src/imaging/mrmc-study.ts`）**：
+  - 支持两阶段平衡交叉设计（Group A 先 `without_ai` 后 `with_ai`，Group B 相反）、按阶段独立确定性洗牌重排病例顺序、强制洗脱期门控（默认 28 天，洗脱期未满返回 `409 washout_period_active`）、盲法读片派发（隐藏金标准真值，且 `without_ai` 模式剥离一切 AI 提示），以及按结节尺寸分层的敏感度、每例假阳性、阅片耗时缩短率、阅片者间长径一致性 SD 与 iMRMC 明细导出。
+- **科研手稿队列统计值绑定（T3.9 / W6.5，`src/model/measurements.ts` & `src/measurements/service.ts`）**：
+  - 新增 `cohort_stat` 测量原子来源，支持在科研手稿中通过 `[@m:id]` 直接绑定队列级统计量（`enrolled_subject_count`、`finalized_study_count`、`confirmed_nodule_count`、`mean_diameter_mm_mean`、`mean_diameter_mm_median`、`volume_mm3_mean`、`vdt_days_mean`），且严格汇总队列入组受试者的已定稿检查快照。
+- **CT 多病种扩展与急诊优先通道（T3.2–T3.4，`apps/imaging-worker/src/ct_extensions.py` & `src/imaging/ct-extensions.ts` & `src/http/routes/imaging-stage3.ts`）**：
+  - **T3.2 肺炎与间质性病变定量**：五肺叶（RUL/RML/RLL/LUL/LLL）磨玻璃影（GGO）与实变体积占比计算及 CTSS 评分（每叶 0–5 分，总分 0–25 分；FastAPI `/api/v1/pipeline/pneumonia-ctss` & 平台 `/api/imaging/ct-extensions/pneumonia-ctss`）。
+  - **T3.3 肋骨骨折检出与分期**：双侧第 1–12 肋自动编号、前/外侧/后弓定位、基于皮质断端间隙与骨痂比例的急性（`acute`）/亚急性愈合期（`subacute_healing`）/陈旧性（`chronic_old`）分期（FastAPI `/api/v1/pipeline/rib-fractures` & 平台 `/api/imaging/ct-extensions/rib-fractures`）。
+  - **T3.4 头颅平扫 CT 急性脑出血与急诊优先通道**：五类颅内出血分型（脑实质、脑室、蛛网膜下腔、硬膜下、硬膜外）、ABC/2 与三维体素出血量（mL）、中线移位（mm）量化，以及 `stat` 急诊最高优先队列（`P90 ≤ 60 秒` SLA 预算，排在普通队列之前；FastAPI `/api/v1/pipeline/head-ich` & 平台 `/api/imaging/ct-extensions/head-ich`）。所有结果统一标注「规则推算，待医生确认」且禁止 AI 自动确认危急值（`/api/imaging/ct-extensions/head-ich/confirm-critical`）。
+- **PACS 自动转发与序列自动分流预置（T3.8 / W1.1–W1.2，`src/imaging/pacs-forward.ts` & `POST /api/imaging/pacs/webhook`）**：
+  - 默认安全关闭（`DicomServerEnabled: false` / `pacsForwardEnabled: false`），院内启用后强制校验 `X-Orthanc-Webhook-Secret` 共享密钥以及医院信息科配置的 `allowedAeTitles` 与 `allowedRemoteIps` 白名单。
+  - 自动过滤非 CT 模态、定位像（`localizer` / `scout` 或层数过少）及超厚层序列（胸部 `> 2.5 mm`、头颅 `> 5.0 mm`），并将合规薄层胸部 CT 自动分流至 `lung_nodule`（按需附带 `pneumonia_ild_ct` / `rib_fracture_ct`）、急诊头颅平扫 CT 自动分流至 `head_ich_ct`（`stat` 优先通道，`P90 ≤ 60s` SLA）；部位无法自动识别时只建索引、标记 `needs_region_confirmation: true` 等待医生确认。
+
+## 器械软件要求：需求追溯矩阵、版本记录与风险控制表（PRD 第 10 节）
+
+### 1. 需求追溯矩阵（PRD 条款 ↔ 实现模块 ↔ 自动化验证）
+
+| PRD 编号与工作项 | 核心临床与安全需求 | 实现代码模块 | 自动化测试验证 |
+| --- | --- | --- | --- |
+| **W1.0 / T1.1–T1.2** 手工上传与浏览器端去标识 | DICOM PS3.15 白名单去标识、UID 租户密钥 HMAC 假名化、烧录文字标签拦截、DICOMweb 鉴权代理 | `src/imaging/deid/`、`src/imaging/studies.ts`、`src/http/routes/dicom.ts` | `tests/dicom-deid.test.ts`、`tests/dicomweb-qido-wado.test.ts` |
+| **W1.1–W1.2 / T3.8** PACS 自动转发与序列自动分流 | C-STORE 接收默认关闭；开启后校验 Webhook 密钥与 AE Title/IP 白名单；过滤非 CT/定位像/厚层；自动分流胸部与急诊头颅 CT | `src/imaging/pacs-forward.ts`、`src/imaging/pipeline.ts`、`src/http/routes/imaging-stage3.ts` | `tests/imaging-stage3-routes.test.ts` |
+| **W2 / T1.5–T1.7** 肺结节模型链与离线评估脚本 | RetinaNet 检出 + VISTA-3D 点提示分割 + 肺叶定位 + DICOM SEG；评估脚本含三维 Dice、扫描参数分层、工作点推荐与消融开关 | `apps/imaging-worker/src/lung_nodule_pipeline.py`、`src/nodule_eval.py`、`scripts/eval_nodule.py` | `apps/imaging-worker/tests/test_nodule_eval.py` |
+| **W2.2–W2.3 / T2.2–T2.3** OHIF 结节面板与点选补漏/修边界 | 低置信度候选（`< 0.30`）默认折叠；点选正/负点分割与边界修正；已审核结节重分析去重 | `deploy/viewer/heurion-nodules/`、`src/imaging/interactive.ts` | `tests/imaging-review.test.ts` |
+| **W3.1–W3.4 / T2.4** 随访配准、匹配、VDT 与双片并排挂片 | 前片只取定稿快照；刚性配准 + 匈牙利指派；Schwartz VDT；OHIF 1×2 双视口并排对比与 LPS 坐标同步跳转 | `src/imaging/followup.ts`、`apps/imaging-worker/src/nodule_matching.py`、`deploy/viewer/heurion-nodules/` | `apps/imaging-worker/tests/test_nodule_matching.py`、`tests/imaging-followup.test.ts` |
+| **W4.1–W4.5 / T2.5–T2.6** 所见草稿、测量原子 `[@m:id]` 与客观印象段 | 测量数字强制绑定已确认病灶或随访派生值；禁用裸测量数字与主观良恶性诊断词；内置模板默认含客观印象段；一键复制 RIS 纯文本前阻断失效来源 | `src/imaging/findings-template.ts`、`src/imaging/findings-draft.ts`、`src/measurements/service.ts`、`src/imaging/ris-text.ts` | `tests/findings-draft.test.ts`、`tests/measurements.test.ts` |
+| **W5.1–W5.2 / T2.7** 审核视图、初写/审核角色与定稿快照 | 初写—审核—签发三级状态；禁止未授权自审；定稿生成 SHA-256 不可篡改快照；AI 严禁调用定稿 | `src/imaging/review.ts`、`src/http/routes/imaging-review.ts` | `tests/imaging-review.test.ts`、`tests/parity.test.ts` |
+| **W6.1–W6.5 / T2.8 & T3.9** 科研队列结节变量、去标识导出审批与手稿统计原子 | 科研取数严格只读定稿快照；导出须 PS3.15 去标识、拦截烧录文字并经 PI 本人审批；手稿支持 `cohort_stat` `[@m:id]` 统计值绑定 | `src/research/cohort.ts`、`src/research/vars.ts`、`src/measurements/service.ts` | `tests/imaging-cohort.test.ts`、`tests/measurements.test.ts` |
+| **W7.1–W7.4 / T3.6** 标注库回收与模型发布门控闭环 | 定稿自动归档入标注库（未定稿严禁入库）；双人独立抽样一致性（Dice + Bland-Altman）；锁定测试集全亚组非劣效门控；PI + 信息科异构双人审批与一键回滚 | `src/imaging/curation-gate.ts`、`src/imaging/review.ts`、`src/http/routes/imaging-stage3.ts` | `tests/curation-gate.test.ts`、`tests/imaging-stage3-routes.test.ts` |
+| **T3.1** 实体瘤疗效评估（RECIST 1.1） | 最多 5 个靶病灶、每器官最多 2 个、病理性淋巴结短径；CR/PR 以基线总和为参照，PD 以历次随访最低点（Nadir）为参照 | `src/tenancy/patients.ts`、`apps/imaging-worker/src/recist.py` | `apps/imaging-worker/tests/test_recist_11.py`、`tests/test_stage3_routes.py` |
+| **T3.2–T3.4** 肺炎 CTSS、肋骨骨折与急性脑出血急诊通道 | 肺炎五肺叶 GGO/实变占比与 0–25 分 CTSS；肋骨 1–12 肋编号与急性/愈合期/陈旧性分期；脑出血五分型、ABC/2 体积、中线移位与 `stat` 急诊优先通道（`P90 ≤ 60s`） | `apps/imaging-worker/src/ct_extensions.py`、`src/imaging/ct-extensions.ts` | `apps/imaging-worker/tests/test_ct_extensions.py`、`tests/ct-extensions.test.ts` |
+| **T3.5** Lung-RADS v2022 / Fleischner 2017 规则引擎 | 纯确定性规则计算分级与随访区间，统一标注「规则推算，待医生确认」与条款出处；仅在医生本人显式确认后才附入所见草稿 | `src/imaging/guideline-rules.ts`、`src/imaging/findings-draft.ts` | `tests/lung-rads-fleischner.test.ts`、`tests/findings-draft.test.ts` |
+| **T3.7** MRMC 多阅片者多病例交叉读片研究 | 两阶段平衡交叉分组、按阶段确定性洗牌、强制 28 天洗脱期门控、盲法派发、灵敏度/假阳性/耗时缩短率与观察者间径线 SD 汇总 | `src/imaging/mrmc-study.ts`、`src/http/routes/imaging-stage3.ts` | `tests/mrmc-study.test.ts`、`tests/imaging-stage3-routes.test.ts` |
+
+---
+
+### 2. 风险控制记录表（ISO 14971 / 医疗器械软件风险管理对照）
+
+| 风险编号 | 潜在危害与触发场景 | 严重度 | 控制措施（工程硬约束） | 验证结果 |
+| --- | --- | --- | --- | --- |
+| **R-01** | AI 越权自动签发报告、自动确认病灶、自动发送脑出血危急值或自动审批模型上线 | 高 | 服务层强制校验 `via !== 'ai'`，违规立即抛出 `403 forbidden / *_human_only`；接口登记于 `tests/parity.test.ts` 的 `NOT_FOR_AI`，不暴露为 MCP 工具 | ✅ 已验证（`parity.test.ts`、`curation-gate.test.ts`、`ct-extensions.test.ts`） |
+| **R-02** | 大模型润色报告时编造病灶尺寸/体积数字或篡改测量值 | 高 | 测量原子 `[@m:id]` + 操作层写前守卫 `guardMeasurements`（拦截裸测量数字 `bare_measurement`、未登记测量 `unbound_measurement` 及丢弃已有测量 `measurement_lost`） | ✅ 已验证（`measurements.test.ts`、`findings-draft.test.ts`） |
+| **R-03** | 所见模板或 AI 写入「考虑肺癌/恶性」等主观诊断结论或未经确认的随访医嘱 | 高 | 模板保存与草稿生成双层拦截主观诊断禁用词；Lung-RADS / Fleischner 输出强制标注「规则推算，待医生确认」，医生未勾选确认前绝不写入草稿正文 | ✅ 已验证（`findings-draft.test.ts`、`lung-rads-fleischner.test.ts`） |
+| **R-04** | 未定稿或被否决的病灶流入随访对比、科研队列 eCRF 或模型训练标注库 | 高 | 随访前片、科研入组/导出（`cohortFinalizedImaging`）与标注库回收（`ingestFinalizedStudy`）一律只读 `imaging_signoffs` 定稿快照，未定稿检查返回 `409` | ✅ 已验证（`imaging-cohort.test.ts`、`curation-gate.test.ts`） |
+| **R-05** | 新训练模型版本在特定亚组（如 `< 6 mm` 或亚实性结节）出现灵敏度回退或假阳性激增 | 高 | `evaluateNonInferiorityGate` 对整体及全部尺寸/密度亚组的灵敏度、FP/scan、分割 Dice 实施非劣效硬门控，未通过门控禁止审批；上线须 PI + 信息科异构双签且支持一键回滚 | ✅ 已验证（`curation-gate.test.ts`、`imaging-stage3-routes.test.ts`） |
+| **R-06** | 患者隐私信息（姓名、住院号、烧录文字）泄露至云端或科研导出包 | 高 | 浏览器端与科研导出均执行 DICOM PS3.15 白名单重写与租户 HMAC UID 假名化，服务端二次核验并拦截 `BurnedInAnnotation` / 截屏 SOP 类；科研导出须 PI 审批留痕 | ✅ 已验证（`dicom-deid.test.ts`、`imaging-cohort.test.ts`） |
+| **R-07** | 急诊头颅 CT 脑出血任务被普通批量分析任务阻塞导致延误 | 高 | `server.py` `/api/v1/pipeline/head-ich` 与 `EmergencyStatQueue` 对 `stat` 优先级启用 `priority=True` 交互优先推理闸门，保障 `P90 ≤ 60 秒` SLA | ✅ 已验证（`test_stage3_routes.py`、`ct-extensions.test.ts`） |
+
+

@@ -53,15 +53,16 @@ export function registerImagingDraftRoutes(app: Hono<{ Variables: { user: string
     } catch (err) { return fail(c, err) }
   })
 
-  /** 生成所见草稿：body.doc_id = 更新已有草稿（只改没人动过的段落）；body.new = 已有草稿时仍新建；body.department_id = 用哪个科室的模板 */
+  /** 生成所见草稿：body.doc_id = 更新已有草稿（只改没人动过的段落）；body.new = 已有草稿时仍新建；body.department_id = 用哪个科室的模板；body.confirm_guideline_reference = 医生本人确认把指南分级/随访建议参考附入草稿 */
   app.post('/api/patients/:ptid/imaging/studies/:stid/findings-draft', async c => {
     try {
-      const body = await c.req.json().catch(() => ({})) as { doc_id?: unknown; new?: unknown; department_id?: unknown }
+      const body = await c.req.json().catch(() => ({})) as { doc_id?: unknown; new?: unknown; department_id?: unknown; confirm_guideline_reference?: unknown }
       const r = drafts(c).generate(me(c), c.req.param('ptid'), {
         study_id: c.req.param('stid'),
         doc_id: typeof body.doc_id === 'string' && body.doc_id ? body.doc_id : null,
         new: body.new === true,
         department_id: typeof body.department_id === 'string' && body.department_id ? body.department_id : null,
+        confirm_guideline_reference: body.confirm_guideline_reference === true,
       }, { turnId: null })
       return c.json(r, r.created ? 201 : 200)
     } catch (err) { return fail(c, err) }

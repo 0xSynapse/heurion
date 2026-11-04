@@ -8,9 +8,12 @@ import type { Ingest } from '../src/datasets/ingest.ts'
 import { buildNomogram } from '../src/research/prediction-models.ts'
 import { StudyError, StudyService } from '../src/research/service.ts'
 import { SubjectVarService } from '../src/research/subject-vars.ts'
+import { ImagingReviewService } from '../src/imaging/review.ts'
+import { ImagingStudyService } from '../src/imaging/studies.ts'
 import { Store } from '../src/store/db.ts'
 import { kekFrom, TenantKeys } from '../src/tenancy/keys.ts'
 import { PatientError, PatientService, type Actor } from '../src/tenancy/patients.ts'
+import { dicom, FakeOrthanc } from './imaging-fakes.ts'
 
 const ingest: Ingest = async (_owner, src) => {
   const dir = mkdtempSync(join(tmpdir(), 'sv-ing-'))
@@ -127,6 +130,44 @@ describe('研究变量：来源与核实状态', () => {
     expect(vals.find(v => v.subject_id === 'S002' && v.var_id === 'vat_to_sat')!.value).toBe(1.2)
     expect(r.skipped).toContainEqual({ subject_id: 'S002', var_id: 'l3_smi', reason: '影像记录没有身高，不采用 SMI' })
     expect(r.skipped).toContainEqual({ subject_id: 'S003', var_id: 'l3_smi', reason: '没有影像分析记录' })
+  })
+
+  it('T2.8 肺结节科研变量：只取定稿快照数据（类型、平均径、体积、实性成分），未定稿不导入，定稿后未重签的修改不影响已签值', async () => {
+    const t = env()
+    const admin = t.store.createUser({ username: 'admin', display_name: '主任', password_hash: 'x', tenant: { id: t.store.getUser(t.user.id)!.tenant_id!, role: 'admin' } })
+    const rev = t.store.createUser({ username: 'rev', display_name: '审核医师', password_hash: 'x', tenant: { id: t.store.getUser(t.user.id)!.tenant_id!, role: 'member' } })
+    t.patients.addMember(t.a, t.pts[0]!.id, rev.id)
+    const orthanc = new FakeOrthanc()
+    const imgSvc = new ImagingStudyService(t.patients, orthanc, { acceptIdentified: true })
+    const reviewSvc = new ImagingReviewService(t.patients)
+    reviewSvc.setReadingRole({ userId: admin.id, via: 'user' }, rev.id, 'reviewer', (u, tid) => t.store.getUser(u)?.tenant_id === tid)
+
+    const dicomStudy = (await imgSvc.importDicom(t.a, t.pts[0]!.id, [{ name: 'IM1', bytes: dicom('1.2.840.113619.2.55.3.9901', '1.2.840.113619.2.55.3.9901.1', '1') }])).studies[0]!
+    const n1 = imgSvc.addLesion(t.a, dicomStudy.id, {
+      kind: 'lung_nodule', source: 'manual', label: '主病灶', location: 'RUL',
+      metrics: { nodule_type: 'part_solid', mean_diameter_mm: 14.2, volume_mm3: 1120, solid_core_diameter_mm: 6.4, segmentation: 'vista3d' },
+    })
+
+    // 1) 尚未定稿时：不能导入结节科研变量
+    const beforeSign = t.svars.importImaging(t.a, t.study.id, { var_ids: ['nodule_type', 'nodule_mean_diameter_mm', 'nodule_volume_mm3', 'nodule_solid_core_mm'] })
+    expect(beforeSign.written).toBe(0)
+    expect(beforeSign.skipped).toContainEqual({ subject_id: 'S001', var_id: 'nodule_mean_diameter_mm', reason: '有影像检查但尚未定稿（科研只取定稿数据）' })
+
+    // 2) 初写提交并由审核医师定稿 v1
+    reviewSvc.submitRead(t.a, dicomStudy.id)
+    const V: Actor = { userId: rev.id, via: 'user' }
+    reviewSvc.finalize(V, dicomStudy.id, { expected_revision: reviewSvc.view(V, dicomStudy.id).revision })
+
+    // 3) 定稿后又改了病灶但尚未再次定稿：导入的仍是第 1 版定稿快照的值（14.2 mm，而不是未签字的 19.9 mm）
+    imgSvc.editLesion(t.a, n1.id, { metrics: { nodule_type: 'solid', mean_diameter_mm: 19.9, volume_mm3: 2500, solid_core_diameter_mm: 19.9, segmentation: 'vista3d' } })
+    const afterSign = t.svars.importImaging(t.a, t.study.id, { var_ids: ['nodule_type', 'nodule_mean_diameter_mm', 'nodule_volume_mm3', 'nodule_solid_core_mm'] })
+    expect(afterSign.written).toBe(4)
+    const vals = t.svars.list(t.a, t.study.id).values.filter(v => v.subject_id === 'S001')
+    expect(vals.find(v => v.var_id === 'nodule_type')?.value).toBe('部分实性')
+    expect(vals.find(v => v.var_id === 'nodule_mean_diameter_mm')?.value).toBe(14.2)
+    expect(vals.find(v => v.var_id === 'nodule_volume_mm3')?.value).toBe(1120)
+    expect(vals.find(v => v.var_id === 'nodule_solid_core_mm')?.value).toBe(6.4)
+    expect(vals.find(v => v.var_id === 'nodule_mean_diameter_mm')?.source_ref).toMatchObject({ dicom_study_id: dicomStudy.id, signoff_version: 1 })
   })
 })
 

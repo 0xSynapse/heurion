@@ -24,28 +24,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       fonts-dejavu-core fonts-wqy-microhei && \
     rm -rf /var/lib/apt/lists/*
 
-# 1. 预先安装 CPU 专用的 PyTorch 轮子（强制剥离无用 CUDA 驱动，缩减镜像体积 4GB 以上）
-RUN uv venv /opt/venv && \
+# 1. 按 uv.lock 锁定的精确版本安装全部依赖（CPU 版 PyTorch 从官方 CPU 源安装同版本轮子，剥离 4GB+ CUDA 依赖）
+COPY apps/imaging-worker/pyproject.toml apps/imaging-worker/uv.lock ./apps/imaging-worker/
+RUN cd /app/apps/imaging-worker && \
+    uv venv /opt/venv && \
+    uv export --frozen --no-dev --no-emit-project --no-hashes > /tmp/lock.txt && \
+    grep -E '^torch==' /tmp/lock.txt > /tmp/torch-cpu.txt && \
+    grep -vE '^(#|\.|torch==|triton==|nvidia-|cuda-)' /tmp/lock.txt > /tmp/requirements.txt && \
     uv pip install --no-cache --python /opt/venv/bin/python \
-      --index-url https://download.pytorch.org/whl/cpu \
-      "torch>=2.2.0"
-
-# 2. 安装其余医学计算与 API 依赖（MONAI, NiBabel, SciPy, NumPy, FastAPI 等）
-COPY apps/imaging-worker/pyproject.toml ./apps/imaging-worker/
-RUN uv pip install --no-cache --python /opt/venv/bin/python \
-      "fastapi>=0.115.0" \
-      "uvicorn>=0.34.0" \
-      "pydantic>=2.10.0" \
-      "monai>=1.3.0" \
-      "pydicom>=2.4.0" \
-      "python-gdcm>=3.0.24" \
-      "nibabel>=5.2.0" \
-      "numpy>=1.26.0" \
-      "pillow>=13.0.0" \
-      "scipy>=1.12.0" \
-      "einops>=0.7.0" \
-      "python-multipart>=0.0.32" \
-      "highdicom==0.28.2"
+      --index-url https://download.pytorch.org/whl/cpu -r /tmp/torch-cpu.txt && \
+    uv pip install --no-cache --python /opt/venv/bin/python \
+      --no-deps -r /tmp/requirements.txt && \
+    rm -f /tmp/lock.txt /tmp/torch-cpu.txt /tmp/requirements.txt
 
 # 3. 先仅拷贝模型注册表与预热脚本，并默认仅烘焙轻量核心基座权重 (spleen_ct 23MB)；
 #    其余大体积模型权重（合计 ~2.3GB）在生产环境持久化卷 imaging-models 中并发预热并长期保留，

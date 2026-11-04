@@ -11,6 +11,13 @@ dependencies = [
     "python-multipart>=0.0.20",
     "pypdfium2>=4.30.0",
     "onnxruntime>=1.20.0",
+    "pillow>=13.0.0",
+]
+
+[tool.uv]
+# Pillow 13.0.0（2026-10-16 发布，已满两周）修复 12.3.0 的多项图像解析漏洞；覆盖旧版 docling-core/docling-parse 的 <13 上界
+override-dependencies = [
+    "pillow>=13.0.0,<14.0.0",
 ]
 
 [project.optional-dependencies]

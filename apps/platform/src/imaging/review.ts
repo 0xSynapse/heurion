@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { PatientError, type Actor, type ImagingScope, type PatientService } from '../tenancy/patients.ts'
+import { ingestSignoffIntoCurationBank } from './curation-gate.ts'
 import { ImagingError, POINT_TASK, type LesionRow, type LesionStatus } from './studies.ts'
 
 /**
@@ -357,6 +358,16 @@ export class ImagingReviewService {
       // 每个病灶记一条定稿留痕（不计入留痕位置，见 revision）
       const ev = s.db.prepare('INSERT INTO imaging_lesion_events (lesion_id, at, user_id, via, action, before, after) VALUES (?, ?, ?, ?, ?, ?, ?)')
       for (const l of snapshot) ev.run(l.id, t, a.userId, a.via, 'finalize', null, JSON.stringify({ signoff_id: id, signoff_version: version, lesion_version: l.version, status: l.status }))
+      // W7.1（T3.6）：审核医师定稿后，定稿快照自动进入已核实标注库（保留 AI 原值、定稿终值与修改幅度）
+      ingestSignoffIntoCurationBank(s.db, {
+        studyId,
+        signoffId: id,
+        signoffVersion: version,
+        signoffMode: mode,
+        signedBy: a.userId,
+        signedAt: t,
+        snapshot,
+      })
       s.log('imaging_finalize', `${id} v${version}`)
       s.db.exec('RELEASE SAVEPOINT imaging_finalize')
       return this.full(s, s.db.prepare('SELECT * FROM imaging_signoffs WHERE id = ?').get(id) as unknown as SignoffRow)

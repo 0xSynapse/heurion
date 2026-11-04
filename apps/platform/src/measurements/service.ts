@@ -1,7 +1,7 @@
 import { ImagingStudyService, type LesionRow } from '../imaging/studies.ts'
 import { sharedFollowup } from '../imaging/followup.ts'
 import {
-  FOLLOWUP_FIELDS, LESION_FIELDS, MEASURE_UNITS, convertMeasure, fieldsOf, formatMeasure, isMeasureUnit, snapshotText, statusNote, unitsFor,
+  COHORT_FIELDS, FOLLOWUP_FIELDS, LESION_FIELDS, MEASURE_UNITS, convertMeasure, fieldsOf, formatMeasure, isMeasureUnit, snapshotText, statusNote, unitsFor,
   type MeasureField, type MeasureStatus, type MeasureView,
 } from '../model/measurements.ts'
 import type { DocRow, MeasurementRow, Store } from '../store/db.ts'
@@ -92,7 +92,88 @@ function imagingFollowupSource(patients: PatientService): MeasureSource {
   }
 }
 
-export const SOURCE_KINDS = ['imaging_lesion', 'imaging_followup'] as const
+function calcMedian(nums: number[]): number | undefined {
+  if (!nums.length) return undefined
+  const s = [...nums].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2
+}
+
+function calcMean(nums: number[]): number | undefined {
+  if (!nums.length) return undefined
+  return nums.reduce((a, b) => a + b, 0) / nums.length
+}
+
+/**
+ * 科研手稿里的队列统计值（PRD W6.5 / T3.9，source_id = 研究 study_id）：
+ * 只汇总该研究入组受试者已定稿（W5 Finalized）检查里的已确认结节；未定稿检查一律排除。
+ * 当新受试者入组或新的检查完成 W5 定稿后，手稿里的 [@m:id] 渲染/导出时自动同步为最新队列统计值（status = 'updated'）。
+ */
+function cohortStatSource(store: Store, patients: PatientService): MeasureSource {
+  return {
+    fields: COHORT_FIELDS,
+    read(actor, studyId) {
+      const study = store.getStudy(studyId)
+      const role = study ? store.studyRole(studyId, actor.userId) : null
+      if (!study || !role) {
+        throw new MeasurementError('not_found', '研究不存在或无权查看', 404)
+      }
+      const { subjects } = patients.cohortFinalizedImaging(actor, studyId)
+      const withFinalized = subjects.filter(s => s.finalized_studies.length > 0)
+      const finalizedStudies = subjects.flatMap(s => s.finalized_studies)
+      if (finalizedStudies.length === 0) {
+        return {
+          state: 'unconfirmed',
+          version: 0,
+          values: {},
+          label: `队列 ${study.title}`,
+          patientId: null,
+          tenantId: study.tenant_id ?? null,
+        }
+      }
+      const lesions = finalizedStudies.flatMap(st => st.lesions)
+      const diameters = lesions
+        .map(l => Number(l.metrics?.mean_diameter_mm))
+        .filter(n => Number.isFinite(n) && n > 0)
+      const volumes = lesions
+        .map(l => Number(l.metrics?.volume_mm3))
+        .filter(n => Number.isFinite(n) && n > 0)
+      const vdts = lesions
+        .map(l => Number(l.metrics?.vdt_days))
+        .filter(n => Number.isFinite(n) && n > 0)
+      const typed = lesions.filter(l => ['solid', 'part_solid', 'pure_ggo'].includes(String(l.metrics?.nodule_type ?? '')))
+      const solidCount = typed.filter(l => l.metrics?.nodule_type === 'solid').length
+      const subsolidCount = typed.filter(l => l.metrics?.nodule_type === 'part_solid' || l.metrics?.nodule_type === 'pure_ggo').length
+
+      const values: Record<string, unknown> = {
+        subjects_n: withFinalized.length,
+        finalized_studies_n: finalizedStudies.length,
+        confirmed_nodules_n: lesions.length,
+        mean_diameter_mm: calcMean(diameters),
+        median_diameter_mm: calcMedian(diameters),
+        mean_volume_mm3: calcMean(volumes),
+        median_volume_mm3: calcMedian(volumes),
+        median_vdt_days: calcMedian(vdts),
+        solid_pct: typed.length > 0 ? (solidCount / typed.length) * 100 : undefined,
+        subsolid_pct: typed.length > 0 ? (subsolidCount / typed.length) * 100 : undefined,
+      }
+      const version = finalizedStudies.reduce(
+        (acc, st) => acc + st.version * 100 + st.lesions.length,
+        withFinalized.length * 1000,
+      )
+      return {
+        state: 'valid',
+        version,
+        values,
+        label: `队列 ${study.title}`,
+        patientId: null,
+        tenantId: study.tenant_id ?? null,
+      }
+    },
+  }
+}
+
+export const SOURCE_KINDS = ['imaging_lesion', 'imaging_followup', 'cohort_stat'] as const
 export type SourceKind = (typeof SOURCE_KINDS)[number]
 
 export interface BindInput {
@@ -106,8 +187,8 @@ export interface BindInput {
   decimals?: number
 }
 
-/** 文档归属（patients.linkDoc 写的 context）。 */
-function docContext(doc: DocRow): { kind?: string; patient_id?: string; tenant_id?: string; space?: string } | null {
+/** 文档归属（patients.linkDoc 或 studies.link 写的 context）。 */
+function docContext(doc: DocRow): { kind?: string; patient_id?: string; study_id?: string; tenant_id?: string; space?: string } | null {
   try { return doc.context ? JSON.parse(doc.context) : null } catch { return null }
 }
 
@@ -120,8 +201,11 @@ export class MeasurementService {
   constructor(private readonly store: Store, private readonly patients: PatientService | null | undefined) {}
 
   private source(kind: string): MeasureSource {
-    if (kind !== 'imaging_lesion' && kind !== 'imaging_followup') throw new MeasurementError('measurement_source_unknown', `不支持的测量来源 ${kind}`, 400, `可绑定的来源：影像病灶测量（imaging_lesion）、随访对比的派生值（imaging_followup）。`)
+    if (kind !== 'imaging_lesion' && kind !== 'imaging_followup' && kind !== 'cohort_stat') {
+      throw new MeasurementError('measurement_source_unknown', `不支持的测量来源 ${kind}`, 400, `可绑定的来源：影像病灶测量（imaging_lesion）、随访对比的派生值（imaging_followup）、科研队列统计值（cohort_stat）。`)
+    }
     if (!this.patients) throw new MeasurementError('patient_module_off', '患者模块未启用，不能绑定影像测量', 403)
+    if (kind === 'cohort_stat') return cohortStatSource(this.store, this.patients)
     return kind === 'imaging_followup' ? imagingFollowupSource(this.patients) : imagingLesionSource(this.patients)
   }
 
@@ -150,21 +234,33 @@ export class MeasurementService {
 
     const r = src.read(actor, input.source_id)
     if (r.state !== 'valid') {
+      if (kind === 'cohort_stat') {
+        throw new MeasurementError('cohort_no_finalized_imaging', '该研究队列尚无已定稿（W5 Finalized）的影像检查，不能绑定队列统计值', 409, '请审核医师先在影像审核视图完成检查定稿后再绑定队列统计值。')
+      }
       const why = { rejected: '已被否决', withdrawn: '已撤销或被新的分析取代', unconfirmed: '还没有经医生确认' }[r.state]
       throw new MeasurementError('lesion_not_confirmed', `病灶${why}，不能绑定它的测量`, 409, '只能绑定医生已确认的病灶（imaging_lesions 里 status = confirmed）；待确认的请让医生先在阅片器里确认。')
     }
     const raw = r.values[input.field]
     if (typeof raw !== 'number' || !Number.isFinite(raw)) {
-      throw new MeasurementError('measurement_field_missing', kind === 'imaging_followup' ? `这个结节的随访对比没有${field.label}（${input.field}）` : `病灶没有 ${field.label}（${input.field}）的测量值`, 422,
+      throw new MeasurementError('measurement_field_missing', kind === 'imaging_followup' ? `这个结节的随访对比没有${field.label}（${input.field}）` : kind === 'cohort_stat' ? `该研究队列暂无 ${field.label}（${input.field}）的统计值` : `病灶没有 ${field.label}（${input.field}）的测量值`, 422,
         kind === 'imaging_followup' ? '只有与前片成对、两期都有相应测量的结节才有差值；体积倍增时间只在体积增大时给出。用 imaging_followup 查看。' : '换一个有数值的字段，或请医生补测后再绑定。')
     }
     const ctx = docContext(doc)
-    if (ctx?.kind === 'patient' && (ctx.patient_id !== r.patientId || (ctx.tenant_id && r.tenantId && ctx.tenant_id !== r.tenantId))) {
-      throw new MeasurementError('measurement_patient_mismatch', '这份文档关联的是另一位患者，不能绑定这位患者的病灶测量', 409, '只能绑定文档所关联患者的病灶；确认患者与检查后再绑定。')
-    }
-    const other = this.store.listMeasurements(doc.id).find(m => m.source_kind === kind && m.patient_id && m.patient_id !== r.patientId)
-    if (other) {
-      throw new MeasurementError('measurement_patient_mismatch', '这份文档里已经绑定了另一位患者的测量，不能混入其他患者的病灶测量', 409, '一份报告只引用一位患者的测量；另一位患者的内容请写在单独的文档里。')
+    if (kind === 'cohort_stat') {
+      if (ctx?.kind === 'patient') {
+        throw new MeasurementError('measurement_study_mismatch', '这份文档属于单患者病例报告，不能绑定科研队列统计值', 409)
+      }
+      if (ctx?.kind === 'study' && ctx.study_id && ctx.study_id !== input.source_id) {
+        throw new MeasurementError('measurement_study_mismatch', '这份文档归属于另一项临床研究，不能绑定本研究的队列统计值', 409)
+      }
+    } else {
+      if (ctx?.kind === 'patient' && (ctx.patient_id !== r.patientId || (ctx.tenant_id && r.tenantId && ctx.tenant_id !== r.tenantId))) {
+        throw new MeasurementError('measurement_patient_mismatch', '这份文档关联的是另一位患者，不能绑定这位患者的病灶测量', 409, '只能绑定文档所关联患者的病灶；确认患者与检查后再绑定。')
+      }
+      const other = this.store.listMeasurements(doc.id).find(m => m.source_kind === kind && m.patient_id && m.patient_id !== r.patientId)
+      if (other) {
+        throw new MeasurementError('measurement_patient_mismatch', '这份文档里已经绑定了另一位患者的测量，不能混入其他患者的病灶测量', 409, '一份报告只引用一位患者的测量；另一位患者的内容请写在单独的文档里。')
+      }
     }
     const value = convertMeasure(raw, field.base, unit)
     const row = this.store.upsertMeasurement({

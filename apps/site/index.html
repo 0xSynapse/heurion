@@ -157,6 +157,7 @@
       <nav class="nav-links" aria-label="Primary">
         <a href="#flagships" class="nav-link" data-i18n="nav_systems">核心系统</a>
         <a href="/aegis-os/" class="nav-link" data-aegis-link="overview">Aegis OS</a>
+        <a href="/blog" class="nav-link" data-i18n="nav_blog">技术博客</a>
         <a href="#research" class="nav-link" data-i18n="nav_research">发表论文</a>
         <a href="/tools" class="nav-link" data-i18n="nav_tools">临床工具</a>
         <a href="/phr" class="nav-link" data-i18n="nav_phr">知家档案</a>
@@ -542,6 +543,7 @@
         </a>
         <div class="foot-right">
           <span>© 2026 Heurion Research · MIT Licensed</span>
+          <a href="https://blog.heurion.org/" class="foot-link">Blog</a>
           <a href="/llms.txt" class="foot-link">LLMs.txt</a>
           <a href="/sitemap.xml" class="foot-link">Sitemap</a>
         </div>
@@ -554,6 +556,7 @@
       zh: {
         doc_title: 'Heurion Research · 临床科研 AI 工作台与 Aegis OS 智能体内核',
         nav_systems: '核心系统',
+        nav_blog: '技术博客',
         nav_research: '发表论文',
         nav_tools: '临床工具',
         nav_phr: '知家档案',
@@ -745,7 +748,8 @@
         p2_meta: '2026 · AGENT SYSTEMS',
         p2_title: 'Aegis OS: Transactional Multi-Tenant Agent Operating System',
         p2_pdf: 'PDF →',
-        p2_tex: 'LaTeX →'
+        p2_tex: 'LaTeX →',
+        nav_blog: 'Blog'
       }
     };
 
@@ -770,6 +774,8 @@
       if (btn) btn.textContent = lang === 'zh' ? 'EN' : '中文';
       const navTools = document.querySelector('a[data-i18n="nav_tools"]');
       if (navTools) navTools.setAttribute('href', lang === 'en' ? '/en/tools' : '/tools');
+      const navBlog = document.querySelector('a[data-i18n="nav_blog"]');
+      if (navBlog) navBlog.setAttribute('href', lang === 'en' ? '/en/blog' : '/blog');
       const heroTools = document.querySelector('a[data-i18n="hero_cta_tools"]');
       if (heroTools) heroTools.setAttribute('href', lang === 'en' ? '/en/tools' : '/tools');
       document.querySelectorAll('[data-tool-slug]').forEach(el => {

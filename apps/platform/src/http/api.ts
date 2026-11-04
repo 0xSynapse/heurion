@@ -31,6 +31,8 @@ import { registerImagingRoutes } from './routes/imaging.ts'
 import { registerDicomRoutes, viewerHostOf } from './routes/dicom.ts'
 import { registerImagingReviewRoutes } from './routes/imaging-review.ts'
 import { draftFailure, registerImagingDraftRoutes } from './routes/imaging-draft.ts'
+import { registerImagingStage3Routes } from './routes/imaging-stage3.ts'
+import type { PacsForwardConfig } from '../imaging/pacs-forward.ts'
 import { FindingsDraftService } from '../imaging/findings-draft.ts'
 import { risPlainText } from '../imaging/ris-text.ts'
 import { ImagingMetricsService } from '../imaging/metrics.ts'
@@ -131,6 +133,8 @@ export interface ApiDeps {
   imagingInteractive?: ImagingInteractive | null
   /** 随访对比（T2.4）；不给时用进程内共用的，null 表示不开放。 */
   imagingFollowup?: ImagingFollowup | null
+  /** PACS 自动转发配置（T3.8，默认关闭，院内部署传入共享密钥与 AE Title / IP 白名单）。 */
+  pacsConfig?: Partial<PacsForwardConfig>
   /** 研究入组与研究数据集（不给时由 studies + patients 组装）。 */
   cohort?: CohortService
   /** 用户的 AI 工作区（对话里贴的图片放这里，AI 用 read_image 看）。 */
@@ -590,6 +594,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     // 外部来信 Webhook 无需用户 Session；公开微型工具接口无需登录；Aegis 独立鉴权接口已在上方处理
     if (
       c.req.path === '/api/mail/inbound' ||
+      c.req.path === '/api/imaging/pacs/webhook' ||
       c.req.path.startsWith('/api/public/tools/') ||
       c.req.path === '/api/aegis/auth/device' ||
       c.req.path === '/api/aegis/auth/token' ||
@@ -949,6 +954,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return draftService
   }
   registerImagingDraftRoutes(app, { audit, me, drafts, patientFailure })
+  // —— 阶段 3 扩展：标注库与模型发布门控（T3.6）、MRMC 读片研究（T3.7）、CT 多病种扩展（T3.2–T3.4）、PACS 自动转发（T3.8）——
+  registerImagingStage3Routes(app, { store, audit, me, pt, patientFailure, pacsConfig: deps.pacsConfig })
 
   // —— 知家分享给医生（docs/design/SHARING.md）——
   const shares = deps.shares ?? (deps.patients ? new ShareService(store, tenants, deps.patients, docs) : null)

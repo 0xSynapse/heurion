@@ -15,6 +15,14 @@ import {
   renderToolPageHtml,
   renderToolsHubHtml,
 } from '../src/http/routes/site-pages.ts'
+import {
+  BLOG_SLUGS,
+  registerBlogRoutes,
+  renderBlogHomeHtml,
+  renderBlogPostHtml,
+  renderBlogRssXml,
+  renderBlogSitemapXml,
+} from '../src/http/routes/blog-pages.ts'
 
 const SITE_DIR = fileURLToPath(new URL('../../site/', import.meta.url))
 
@@ -322,3 +330,166 @@ describe('Stateless No-Login Mini-Tools Public API (/api/public/tools/*)', () =>
     expect(snap.total_tool_invocations).toBeGreaterThanOrEqual(6)
   })
 })
+
+describe('Personal Technical Blog (blog.heurion.org & heurion.org/blog)', () => {
+  it('renders bilingual Personal Blog Homepage and all 7 technical monographs with zero CJK leak in EN <main>', () => {
+    expect(BLOG_SLUGS.length).toBe(7)
+    const zhHome = renderBlogHomeHtml('zh', { subdomain: true })
+    const enHome = renderBlogHomeHtml('en', { subdomain: true })
+
+    expect(zhHome).toContain('Heurion Research')
+    expect(zhHome).toContain('Engineering &amp; Systems Blog')
+    expect(zhHome).toContain('<link rel="canonical" href="https://blog.heurion.org/">')
+    expect(enHome).toContain('<link rel="canonical" href="https://blog.heurion.org/en">')
+
+    const enHomeMain = enHome.match(/<main[\s\S]*?<\/main>/)?.[0] ?? ''
+    expect(enHomeMain).not.toMatch(/[\u4e00-\u9fa5]/)
+
+    for (const slug of BLOG_SLUGS) {
+      const zhPost = renderBlogPostHtml(slug, 'zh', { subdomain: true })!
+      const enPost = renderBlogPostHtml(slug, 'en', { subdomain: true })!
+      expect(zhPost).toContain(`<link rel="canonical" href="https://blog.heurion.org/${slug}">`)
+      expect(enPost).toContain(`<link rel="canonical" href="https://blog.heurion.org/en/${slug}">`)
+      expect(zhPost).toContain('BlogPosting')
+      const enPostMain = enPost.match(/<main[\s\S]*?<\/main>/)?.[0] ?? ''
+      expect(enPostMain).not.toMatch(/[\u4e00-\u9fa5]/)
+    }
+  })
+
+  it('executes real Dual-Surface CRDT structural ops, blocks concurrent human-edit conflicts, and 1-click publishes live to blog.heurion.org', async () => {
+    const blogApp = new Hono()
+    registerBlogRoutes(blogApp)
+
+    const sampleMd = [
+      '{#h01} ## 1. Architecture Overview',
+      '',
+      '{#p02} Original paragraph in ProseMirror CRDT space.',
+    ].join('\n')
+
+    // 1. Targeted replace_block op via ProseMirror applyOps
+    const compileRes = await blogApp.request('http://blog.heurion.org/api/public/blog/crdt-compile', {
+      method: 'POST',
+      headers: { Host: 'blog.heurion.org', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        markdown: sampleMd,
+        ops: [{ op: 'replace_block', id: 'p02', markdown: 'Updated **atomically** via `replace_block`.' }],
+      }),
+    })
+    expect(compileRes.status).toBe(200)
+    const compiled = await compileRes.json() as any
+    expect(compiled.ok).toBe(true)
+    expect(compiled.block_count).toBe(2)
+    expect(compiled.agent_surface_markdown).toContain('{#p02} Updated **atomically**')
+    expect(compiled.human_surface_html).toContain('data-crdt-id="p02"')
+
+    // 2. Concurrent human-edit lock conflict interception (user_locked_ids)
+    const conflictRes = await blogApp.request('http://blog.heurion.org/api/public/blog/crdt-compile', {
+      method: 'POST',
+      headers: { Host: 'blog.heurion.org', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        markdown: sampleMd,
+        ops: [{ op: 'replace_all', scope: 'p02', find: 'Original', replace: 'Clobbered' }],
+        user_locked_ids: ['p02'],
+      }),
+    })
+    expect(conflictRes.status).toBe(200)
+    const conflictBody = await conflictRes.json() as any
+    expect(conflictBody.ok).toBe(false)
+
+    // 3. 1-Click Publish from Dual-Surface CRDT to blog.heurion.org
+    const pubRes = await blogApp.request('http://blog.heurion.org/api/public/blog/publish', {
+      method: 'POST',
+      headers: { Host: 'blog.heurion.org', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug: 'omnidoc-crdt-test-post',
+        title_zh: 'OmniDoc Dual-Surface Live Post',
+        title_en: 'OmniDoc Dual-Surface Live Post',
+        markdown_zh: compiled.agent_surface_markdown,
+        markdown_en: compiled.agent_surface_markdown,
+      }),
+    })
+    expect(pubRes.status).toBe(200)
+    const pubData = await pubRes.json() as any
+    expect(pubData.ok).toBe(true)
+    expect(pubData.subdomain_url).toBe('/omnidoc-crdt-test-post')
+
+    // Verify the newly published post is immediately live on blog.heurion.org and heurion.org/blog
+    const liveSubRes = await blogApp.request('http://blog.heurion.org/omnidoc-crdt-test-post', {
+      headers: { Host: 'blog.heurion.org' },
+    })
+    expect(liveSubRes.status).toBe(200)
+    const liveSubHtml = await liveSubRes.text()
+    expect(liveSubHtml).toContain('OmniDoc Dual-Surface Live Post')
+    expect(liveSubHtml).toContain('{#p02}')
+  })
+
+  it('serves blog.heurion.org subdomain routes, heurion.org/blog routes, RSS 2.0 feed, and redirect mode', async () => {
+    const blogApp = new Hono()
+    registerBlogRoutes(blogApp)
+
+    // 1. Subdomain Host: blog.heurion.org
+    const subRoot = await blogApp.request('http://blog.heurion.org/', {
+      headers: { Host: 'blog.heurion.org' },
+    })
+    expect(subRoot.status).toBe(200)
+    expect(await subRoot.text()).toContain('Heurion Research')
+
+    const subEnPost = await blogApp.request(
+      'http://blog.heurion.org/en/aegis-os-transactional-agent-kernel',
+      { headers: { Host: 'blog.heurion.org' } },
+    )
+    expect(subEnPost.status).toBe(200)
+    expect(await subEnPost.text()).toContain('Inside Aegis OS')
+
+    const subRedirect = await blogApp.request('http://blog.heurion.org/blog', {
+      headers: { Host: 'blog.heurion.org' },
+    })
+    expect(subRedirect.status).toBe(301)
+    expect(subRedirect.headers.get('location')).toBe('/')
+
+    const rssRes = await blogApp.request('http://blog.heurion.org/feed.xml', {
+      headers: { Host: 'blog.heurion.org' },
+    })
+    expect(rssRes.status).toBe(200)
+    const rssText = await rssRes.text()
+    expect(rssText).toContain('<rss version="2.0"')
+    expect(rssText).toContain('https://blog.heurion.org/dual-surface-crdt-clinical-ai')
+
+    const sitemapXml = renderBlogSitemapXml()
+    expect(sitemapXml).toContain('https://blog.heurion.org/cross-modal-self-evolution-clinical-deep-review')
+    expect(renderBlogRssXml('en')).toContain('https://blog.heurion.org/en/zero-leakage-phi-gatekeeper-and-uomp')
+
+    // 2. Main domain Host: heurion.org (/blog & ?redirect=1)
+    const mainBlog = await blogApp.request('http://heurion.org/blog', {
+      headers: { Host: 'heurion.org' },
+    })
+    expect(mainBlog.status).toBe(200)
+    expect(await mainBlog.text()).toContain('/blog/dual-surface-crdt-clinical-ai')
+
+    const mainBlogRedirect = await blogApp.request('http://heurion.org/blog?redirect=1', {
+      headers: { Host: 'heurion.org' },
+    })
+    expect(mainBlogRedirect.status).toBe(302)
+    expect(mainBlogRedirect.headers.get('location')).toBe('https://blog.heurion.org/')
+
+    // 3. Minimalist Reader Comments API & rendering
+    const commentPostRes = await blogApp.request('http://blog.heurion.org/blog/api/comments', {
+      method: 'POST',
+      headers: { Host: 'blog.heurion.org', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug: 'multi-agent-dogfooding-aegis-os-cow',
+        author: 'Systems Reader',
+        content: 'Great breakdown of APFS clonefile CoW workspaces!',
+      }),
+    })
+    expect(commentPostRes.status).toBe(200)
+    const commentJson = await commentPostRes.json() as any
+    expect(commentJson.ok).toBe(true)
+    expect(commentJson.comment.author).toBe('Systems Reader')
+
+    const postWithComment = renderBlogPostHtml('multi-agent-dogfooding-aegis-os-cow', 'en', { subdomain: true })!
+    expect(postWithComment).toContain('Systems Reader')
+    expect(postWithComment).toContain('Great breakdown of APFS clonefile CoW workspaces!')
+  })
+})
+

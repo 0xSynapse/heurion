@@ -316,44 +316,54 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
     })
   })
 
-  // 4. 辅助工具：RECIST 1.1 疗效评估（基线 vs 随访评估 CR / PR / SD / PD）
+  // 4. 辅助工具：RECIST 1.1 疗效评估（基线 / 最低值 Nadir vs 随访评估 CR / PR / SD / PD，PRD T3.1）
   server.registerTool('imaging_recist_evaluate', {
     description:
       '根据 RECIST 1.1（实体瘤疗效评价标准）评估靶病灶变化等级：' +
-      '输入基线长径之和（baseline_sum_mm）与随访长径之和（followup_sum_mm），' +
-      '自动计算变化百分比与疗效等级（CR 完全缓解 / PR 部分缓解 / SD 疾病稳定 / PD 疾病进展）。',
+      '输入基线长径之和（baseline_sum_mm）、随访长径之和（followup_sum_mm）及可选的既往最低长径之和（nadir_sum_mm），' +
+      'CR/PR 以基线为参照，PD 以最低值（Nadir）为参照，自动计算变化百分比与疗效等级（CR / PR / SD / PD）。',
     inputSchema: {
       baseline_sum_mm: z.number().min(0.1).describe('基线靶病灶最大长径之和（毫米）'),
       followup_sum_mm: z.number().min(0).describe('本次随访靶病灶最大长径之和（毫米）'),
+      nadir_sum_mm: z.number().min(0).optional().describe('既往随访靶病灶直径总和最低值 Nadir（毫米；不填则默认等于 baseline_sum_mm）'),
+      new_lesions: z.boolean().optional().describe('本次随访是否出现明确新发病灶（有则直接判 PD）'),
     },
-  }, async ({ baseline_sum_mm, followup_sum_mm }) => {
-    const diff = followup_sum_mm - baseline_sum_mm
-    const percentChange = round((diff / baseline_sum_mm) * 100, 1)
+  }, async ({ baseline_sum_mm, followup_sum_mm, nadir_sum_mm, new_lesions }) => {
+    const effectiveNadir = nadir_sum_mm !== undefined ? Math.min(baseline_sum_mm, nadir_sum_mm) : baseline_sum_mm
+    const diffBase = followup_sum_mm - baseline_sum_mm
+    const percentChange = round((diffBase / baseline_sum_mm) * 100, 1)
+    const diffNadir = followup_sum_mm - effectiveNadir
+    const percentChangeFromNadir = effectiveNadir > 0 ? round((diffNadir / effectiveNadir) * 100, 1) : (followup_sum_mm >= 5 ? 100 : 0)
 
     let evaluation = 'SD'
     let interpretation = '疾病稳定 (Stable Disease)'
 
-    if (followup_sum_mm === 0) {
+    if (new_lesions) {
+      evaluation = 'PD'
+      interpretation = '疾病进展 (Progressive Disease)：随访出现明确新发病灶。'
+    } else if (followup_sum_mm === 0) {
       evaluation = 'CR'
       interpretation = '完全缓解 (Complete Response)：所有靶病灶均完全消失。'
+    } else if (percentChangeFromNadir >= 20.0 && diffNadir >= 5.0) {
+      evaluation = 'PD'
+      interpretation = `疾病进展 (Progressive Disease)：靶病灶长径总和较最低值（Nadir ${effectiveNadir} mm）增加 ≥ 20% 且绝对值增加 ≥ 5mm（当前较 Nadir 增加 ${percentChangeFromNadir}% / +${round(diffNadir, 1)} mm）。`
     } else if (percentChange <= -30.0) {
       evaluation = 'PR'
-      interpretation = `部分缓解 (Partial Response)：靶病灶长径总和缩小 ≥ 30%（当前减少 ${Math.abs(percentChange)}%）。`
-    } else if (percentChange >= 20.0 && diff >= 5.0) {
-      evaluation = 'PD'
-      interpretation = `疾病进展 (Progressive Disease)：靶病灶长径总和增加 ≥ 20% 且绝对值增加 ≥ 5mm（当前增加 ${percentChange}%）。`
+      interpretation = `部分缓解 (Partial Response)：靶病灶长径总和较基线缩小 ≥ 30%（当前减少 ${Math.abs(percentChange)}%）。`
     } else {
       evaluation = 'SD'
-      interpretation = `疾病稳定 (Stable Disease)：未达到 PR 缩小标准，亦未达到 PD 增大标准（变化率 ${percentChange > 0 ? '+' : ''}${percentChange}%）。`
+      interpretation = `疾病稳定 (Stable Disease)：未达到 PR 缩小标准，亦未达到较最低值（Nadir ${effectiveNadir} mm）PD 增大标准（较基线变化率 ${percentChange > 0 ? '+' : ''}${percentChange}%，较 Nadir 变化率 ${percentChangeFromNadir > 0 ? '+' : ''}${percentChangeFromNadir}%）。`
     }
 
     return json({
       baseline_sum_mm,
+      nadir_sum_mm: effectiveNadir,
       followup_sum_mm,
       percent_change: `${percentChange > 0 ? '+' : ''}${percentChange}%`,
+      percent_change_from_nadir: `${percentChangeFromNadir > 0 ? '+' : ''}${percentChangeFromNadir}%`,
       recist_category: evaluation,
       interpretation,
-      academic_statement: `根据 RECIST 1.1 评价标准，患者靶病灶长径总和由基线 ${baseline_sum_mm} mm 变化至 ${followup_sum_mm} mm（${percentChange > 0 ? '+' : ''}${percentChange}%），疗效评估为 ${evaluation}（${interpretation.split('：')[0]}）。`,
+      academic_statement: `根据 RECIST 1.1 评价标准，患者靶病灶长径总和由基线 ${baseline_sum_mm} mm（既往最低值 Nadir ${effectiveNadir} mm）变化至 ${followup_sum_mm} mm（较基线 ${percentChange > 0 ? '+' : ''}${percentChange}%，较最低值 ${percentChangeFromNadir > 0 ? '+' : ''}${percentChangeFromNadir}%），疗效评估为 ${evaluation}（${interpretation.split('：')[0]}）。`,
     })
   })
 

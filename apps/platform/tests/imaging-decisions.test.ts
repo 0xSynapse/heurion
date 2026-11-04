@@ -57,6 +57,43 @@ describe('RECIST 1.1 分类收紧', () => {
     expect(assessRecist(lesions(20), lesions(19), img, img).category).toBe('SD')
     expect(RECIST_NOTE).toBe('按 RECIST 1.1 阈值计算，未经阅片确认')
   })
+
+  it('T3.1：支持多靶病灶（每器官最多 2 个、全身最多 5 个）、病灶 ID 匹配、淋巴结短径及以最低值（Nadir）为参照判 PD', () => {
+    // 1) Nadir 参照：基线 50 mm -> 中间期缩小到 25 mm -> 本次随访反弹到 32 mm
+    // 较基线 -36%（若按基线会误判 PR），但较最低点 Nadir 25 mm 增大 +28% 且 +7 mm（≥20% 且 ≥5mm）→ PD
+    const nadirPd = assessRecist(
+      { longest_diameter_mm: 50 },
+      { longest_diameter_mm: 32 },
+      img,
+      img,
+      { prior_records: [{ metrics: { longest_diameter_mm: 25 }, imaging_data: img, date: '2026-10-15' }] },
+    )
+    expect(nadirPd.category).toBe('PD')
+    expect(nadirPd.nadir_sum_mm).toBe(25)
+    expect(nadirPd.pct_from_nadir).toBe(28)
+    expect(nadirPd.detail).toContain('既往最低值（Nadir）25 mm')
+
+    // 2) 多靶病灶（每器官最多 2 个）+ 随访乱序按 id 匹配 + 病理性淋巴结短径 < 10 mm 判 CR
+    const multiBase = {
+      target_lesions: [
+        { id: 'L1', organ: 'lung', longest_diameter_mm: 20 },
+        { id: 'L2', organ: 'lung', longest_diameter_mm: 15 },
+        { id: 'L3', organ: 'lung', longest_diameter_mm: 12 }, // 同一器官第 3 个，按规则跳过
+        { id: 'LN1', organ: 'mediastinum', is_lymph_node: true, short_axis_mm: 18 },
+      ],
+    }
+    const multiFolCr = {
+      target_lesions: [
+        { id: 'LN1', is_lymph_node: true, short_axis_mm: 8.5 },
+        { id: 'L2', longest_diameter_mm: 0 },
+        { id: 'L1', longest_diameter_mm: 0 },
+      ],
+    }
+    const crRes = assessRecist(multiBase, multiFolCr, img, img)
+    expect(crRes.selected_target_count).toBe(3)
+    expect(crRes.baseline_sum_mm).toBe(53)
+    expect(crRes.category).toBe('CR')
+  })
 })
 
 describe('AI 生成的影像报告存为待医生确认的草稿', () => {

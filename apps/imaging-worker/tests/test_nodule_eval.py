@@ -12,8 +12,9 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
 from nodule_eval import (  # noqa: E402
-    Case, PredNodule, RefNodule, bland_altman, evaluate, froc, match_case, operating_point, refs_from_mask, render_markdown,
-    size_bin, stratified_sensitivity,
+    Case, PredNodule, RefNodule, bland_altman, evaluate, froc, match_case, operating_point,
+    recommend_operating_point, refs_from_mask, render_markdown, size_bin, slice_thickness_bin,
+    stratified_by_meta, stratified_sensitivity, voxel_dice,
 )
 
 SP = (1.0, 1.0, 1.0)
@@ -105,3 +106,53 @@ def test_evaluate_and_markdown_report():
     assert "敏感度 100.0%（1/1），每例假阳性 0.00 个" in md
     assert "| 0.05 | 100.0% | 1.00 |" in md  # 阈值 0.05 时 0.1 分的假阳性被计入
     assert "分割 Dice" in md
+
+
+def test_voxel_dice_and_mask_evaluation():
+    m_ref = np.zeros((20, 20, 20), dtype=np.uint8)
+    m_pred = np.zeros((20, 20, 20), dtype=np.uint8)
+    m_ref[4:8, 4:8, 4:8] = 1     # 64 voxels
+    m_pred[5:9, 4:8, 4:8] = 1    # 64 voxels, overlap 3*4*4 = 48 voxels -> Dice = 96 / 128 = 0.75
+    refs = refs_from_mask(m_ref, SP)
+    assert len(refs) == 1 and refs[0].mask_vox_zyx is not None
+    pred_vox = tuple(v.astype(np.int32) for v in np.nonzero(m_pred))
+    assert voxel_dice(pred_vox, refs[0].mask_vox_zyx) == pytest.approx(0.75)
+
+    p = PredNodule(score=0.85, center_vox_zyx=(6.0, 5.5, 5.5), mean_diameter_mm=5.0, volume_mm3=64.0, mask_vox_zyx=pred_vox)
+    rep = evaluate([Case("c1", SP, refs=refs, preds=[p])], 0.15)
+    assert rep["measurement"]["dice"]["n"] == 1
+    assert rep["measurement"]["dice"]["mean"] == pytest.approx(0.75)
+    md = render_markdown(rep)
+    assert "- 分割 Dice：n=1，均值 0.750" in md
+
+
+def test_stratified_by_meta_and_recommend_operating_point():
+    assert [slice_thickness_bin(x) for x in (0.625, 1.25, 1.5, 2.5, 3.0, None)] == [
+        "≤1.25mm", "≤1.25mm", "1.25–2.5mm", "1.25–2.5mm", ">2.5mm", "unknown"
+    ]
+    cases = [
+        Case(
+            "c1", (1.0, 0.8, 0.8),
+            refs=[ref("r1", (10, 10, 10), 8.0)],
+            preds=[pred(0.82, (10, 10, 10)), pred(0.22, (40, 40, 40))],
+            meta={"scanner": "Siemens", "dose": "LDCT", "slice_thickness_mm": 1.0},
+        ),
+        Case(
+            "c2", (3.0, 0.8, 0.8),
+            refs=[ref("r2", (20, 20, 20), 8.0)],
+            preds=[pred(0.45, (20, 20, 20)), pred(0.18, (50, 50, 50))],
+            meta={"scanner": "GE", "dose": "SDCT", "slice_thickness_mm": 3.0},
+        ),
+    ]
+    s_meta = stratified_by_meta(cases, 0.30)
+    assert s_meta["slice_thickness"]["≤1.25mm"]["sensitivity"] == 1.0
+    assert s_meta["slice_thickness"]["≤1.25mm"]["fp_per_scan"] == 0.0
+    assert s_meta["slice_thickness"][">2.5mm"]["sensitivity"] == 1.0
+    assert s_meta["dose"]["LDCT"]["cases"] == 1
+
+    rec = recommend_operating_point(cases, target_sensitivity=0.95, max_fp_per_scan=1.0)
+    assert rec["meets_target"] is True
+    assert rec["sensitivity"] == 1.0
+    assert rec["fp_per_scan"] == 0.0
+    assert rec["threshold"] == pytest.approx(0.45)
+

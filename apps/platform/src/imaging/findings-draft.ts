@@ -13,6 +13,7 @@ import {
   BUILTIN_TEMPLATE, BUILTIN_VERSION, PLACEHOLDERS, TEMPLATE_KIND, TemplateError, parseTemplate, partsToMarkdown, partsToPlain, renderSentence,
   type FindingsTemplateBody, type NoduleCase, type ParsedTemplate, type Part, type Value,
 } from './findings-template.ts'
+import { evaluateNoduleGuidelines, GUIDELINE_PROVENANCE_LABEL, type NoduleGuidelineSummary } from './guideline-rules.ts'
 import { ensureReviewSchema, ImagingReviewService, type ReviewSummary } from './review.ts'
 import { risPlainText } from './ris-text.ts'
 import { ImagingStudyService, type LesionRow } from './studies.ts'
@@ -262,18 +263,25 @@ export class FindingsTemplates {
 interface AtomRef { source: 'imaging_lesion' | 'imaging_followup'; source_id: string; field: string; unit: MeasureUnit }
 interface PlanBlock {
   key: string
-  kind: 'title' | 'status' | 'comparison' | 'nodule' | 'disappeared' | 'none' | 'closing'
+  kind: 'title' | 'status' | 'comparison' | 'nodule' | 'disappeared' | 'none' | 'impression' | 'guideline_reference' | 'closing'
   parts: Part[]
   lesion_id?: string
   case?: NoduleCase | null
   change?: ChangeKind | null
   label?: string | null
 }
+export interface DraftGuidelineReference extends NoduleGuidelineSummary {
+  dominant_lesion_id: string | null
+  dominant_lesion_label: string | null
+  confirmed_into_draft: boolean
+  reference_sentence: string
+}
 interface Plan {
   blocks: PlanBlock[]
   atoms: Map<string, AtomRef>
   review: ReviewSummary
   followup: FollowupView
+  guidelineReference: DraftGuidelineReference
   warnings: string[]
   nodules: number
   pending: number
@@ -287,6 +295,8 @@ export interface DraftOutcome {
   review_state: ReviewSummary['state']
   signoff_version: number | null
   nodules: number
+  /** W4.3 二期（T3.5）：Lung-RADS v2022 与 Fleischner 2017 规则推算参考（默认不写进草稿正文，仅在医生显式确认 confirm_guideline_reference=true 时写入） */
+  guideline_reference: DraftGuidelineReference
   /** 写入 / 未变 / 保留（医生或 AI 改过、医生删掉的）/ 删除（结节已不是确认状态且块没人改过）的块 */
   blocks: { written: string[]; unchanged: string[]; kept: Array<{ key: string; block_id: string | null; reason: 'edited' | 'deleted' | 'edited_obsolete' }>; removed: string[] }
   warnings: string[]
@@ -339,7 +349,14 @@ export class FindingsDraftService {
    * 按检查与模板算出草稿的每一块（只读，不写任何东西）。读权限 = 操作者对患者的读权限；影子检出、被否决 / 撤销 / 待确认的病灶一律不进。
    * strict = 生成时的规则（有待确认检出、没读过片就拒绝）；核对时为 false，只把情况写进 warnings。
    */
-  private plan(a: Actor, patientId: string, studyId: string, tpl: ParsedTemplate, strict: boolean): Plan {
+  private plan(
+    a: Actor,
+    patientId: string,
+    studyId: string,
+    tpl: ParsedTemplate,
+    strict: boolean,
+    opts: { confirmGuidelineReference?: boolean; riskLevel?: 'low' | 'high'; isScreening?: boolean } = {},
+  ): Plan {
     const studies = new ImagingStudyService(this.patients, null)
     const study = studies.listStudies(a, patientId).find(s => s.id === studyId)
     if (!study) throw new PatientError('not_found', '影像检查不存在', 404)
@@ -409,12 +426,130 @@ export class FindingsDraftService {
         })
       })
     } else if (gone.length) warnings.push(`前片有 ${gone.length} 个结节本次未见，模板没有「消失」的句子，未写入`)
+    const impPieces = confirmed.length ? tpl.impression.default : tpl.impression.none
+    if (impPieces) {
+      const impValues = this.impressionValues(confirmed, gone.length, fu, itemOf, studyValues, atom)
+      blocks.push({ key: 'impression', kind: 'impression', parts: renderSentence(impPieces, impValues) })
+    }
+    const guidelineReference = this.computeGuidelineReference(a, patientId, confirmed, fu, itemOf, opts)
+    if (opts.confirmGuidelineReference) {
+      blocks.push({
+        key: 'guideline_reference',
+        kind: 'guideline_reference',
+        parts: [{ text: guidelineReference.reference_sentence }],
+      })
+    }
     if (tpl.closing) blocks.push({ key: 'closing', kind: 'closing', parts: renderSentence(tpl.closing, studyValues) })
     // 只登记正文里真正用到的测量（模板没用到的字段不绑定）
     const kept = blocks.filter(b => b.parts.length)
     const used = new Set(kept.flatMap(b => b.parts.flatMap(p => 'atom' in p ? [p.atom] : [])))
     for (const k of [...atoms.keys()]) if (!used.has(k)) atoms.delete(k)
-    return { blocks: kept, atoms, review, followup: fu, warnings, nodules: confirmed.length, pending }
+    return { blocks: kept, atoms, review, followup: fu, guidelineReference, warnings, nodules: confirmed.length, pending }
+  }
+
+  private computeGuidelineReference(
+    a: Actor,
+    patientId: string,
+    confirmed: LesionRow[],
+    fu: FollowupView,
+    itemOf: Map<string, FollowupItem>,
+    opts: { confirmGuidelineReference?: boolean; riskLevel?: 'low' | 'high'; isScreening?: boolean },
+  ): DraftGuidelineReference {
+    const top = [...confirmed].sort((x, y) => (num(y.metrics.mean_diameter_mm) ?? -1) - (num(x.metrics.mean_diameter_mm) ?? -1)
+      || lobeRank(x.location) - lobeRank(y.location)
+      || labelNo(x.label) - labelNo(y.label)
+      || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))[0] ?? null
+
+    let ageYears: number | null = null
+    try {
+      const p = this.patients.read(a, patientId)
+      if (typeof p.birth_year === 'number' && Number.isFinite(p.birth_year)) {
+        ageYears = new Date().getUTCFullYear() - p.birth_year
+      }
+    } catch { /* ignore if patient demographic unavailable */ }
+
+    const topItem = top ? (itemOf.get(top.id) ?? null) : null
+    const summary = evaluateNoduleGuidelines({
+      nodule_type: top ? (String(top.metrics.nodule_type ?? '') || undefined) : 'none',
+      mean_diameter_mm: top ? num(top.metrics.mean_diameter_mm) : null,
+      solid_core_diameter_mm: top ? num(top.metrics.solid_core_diameter_mm) : null,
+      scan_context: fu.prior ? 'followup' : 'baseline',
+      is_new: topItem?.change === 'new',
+      delta_mean_diameter_mm: topItem?.metrics?.delta_mean_diameter_mm ?? null,
+      multiplicity: confirmed.length > 1 ? 'multiple' : 'single',
+      risk_level: opts.riskLevel ?? 'low',
+      age_years: ageYears,
+      is_screening: opts.isScreening ?? false,
+    })
+
+    const lr = summary.lung_rads_2022
+    const fl = summary.fleischner_2017
+    const flClauseClean = fl.clause_citation.replace(/\s*\(MacMahon[^)]*\)/g, '')
+    const confirmedIntoDraft = Boolean(opts.confirmGuidelineReference)
+    const referenceSentence = [
+      `指南分类参考（${GUIDELINE_PROVENANCE_LABEL}${confirmedIntoDraft ? ' · 医生已确认采纳' : ''}）：`,
+      `ACR Lung-RADS v2022 ${lr.category_label_zh}，建议${lr.recommendation_zh}（依据：${lr.clause_citation}）；`,
+      `Fleischner 2017 建议${fl.recommendation_zh}（依据：${flClauseClean}）。`,
+    ].join('')
+
+    return {
+      ...summary,
+      dominant_lesion_id: top?.id ?? null,
+      dominant_lesion_label: top?.label ?? null,
+      confirmed_into_draft: confirmedIntoDraft,
+      reference_sentence: referenceSentence,
+    }
+  }
+
+  private impressionValues(
+    confirmed: LesionRow[],
+    goneCount: number,
+    fu: FollowupView,
+    itemOf: Map<string, FollowupItem>,
+    studyValues: Record<string, Value>,
+    atom: (s: AtomRef['source'], id: string, f: string, u: MeasureUnit) => Value,
+  ): Record<string, Value> {
+    const top = [...confirmed].sort((x, y) => (num(y.metrics.mean_diameter_mm) ?? -1) - (num(x.metrics.mean_diameter_mm) ?? -1)
+      || lobeRank(x.location) - lobeRank(y.location)
+      || labelNo(x.label) - labelNo(y.label)
+      || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))[0] ?? null
+    let followupSummary: string | null = null
+    if (fu.prior) {
+      const counts = { new: 0, enlarged: 0, shrunk: 0, stable: 0 }
+      let anyReview = false
+      for (const l of confirmed) {
+        const it = itemOf.get(l.id)
+        if (!it || it.change === null) continue
+        if (it.needs_review) { anyReview = true; continue }
+        if (it.change in counts) counts[it.change as keyof typeof counts]++
+      }
+      if (!anyReview) {
+        if (counts.stable === confirmed.length && confirmed.length > 0 && goneCount === 0) {
+          followupSummary = '较前相仿'
+        } else {
+          const parts = [
+            counts.new ? `新发 ${counts.new} 枚` : '',
+            counts.enlarged ? `较前增大 ${counts.enlarged} 枚` : '',
+            counts.shrunk ? `较前缩小 ${counts.shrunk} 枚` : '',
+            counts.stable ? `较前相仿 ${counts.stable} 枚` : '',
+            goneCount ? `前片所见 ${goneCount} 枚本次未见` : '',
+          ].filter(Boolean)
+          if (parts.length) followupSummary = parts.join('，')
+        }
+      }
+    }
+    const tm = top?.metrics ?? {}
+    return {
+      ...studyValues,
+      结节数: confirmed.length ? String(confirmed.length) : null,
+      最大结节编号: top ? cleanText(top.label) || null : null,
+      最大结节位置: top ? lobeName(top.location) || null : null,
+      最大结节密度: top ? DENSITY[String(tm.nodule_type ?? '')] ?? null : null,
+      最大结节平均径: top && num(tm.mean_diameter_mm) !== null ? atom('imaging_lesion', top.id, 'mean_diameter_mm', 'mm') : null,
+      最大结节长径: top && num(tm.long_axis_mm) !== null ? atom('imaging_lesion', top.id, 'long_axis_mm', 'mm') : null,
+      最大结节体积: top && volumeOk(tm) ? atom('imaging_lesion', top.id, 'volume_mm3', 'mm3') : null,
+      随访概况: followupSummary,
+    }
   }
 
   private noduleValues(l: LesionRow, i: number, it: FollowupItem | null, studyValues: Record<string, Value>, atom: (s: AtomRef['source'], id: string, f: string, u: MeasureUnit) => Value, warnings: string[]): Record<string, Value> {
@@ -445,11 +580,28 @@ export class FindingsDraftService {
 
   /**
    * 生成所见草稿。input.doc_id = 更新这份草稿（只改没人动过的块）；input.new = 已有草稿时仍新建一份。
+   * input.confirm_guideline_reference = 医生本人确认将 Lung-RADS v2022 / Fleischner 2017 指南分类参考写入草稿（默认 false 不进入草稿；AI 禁止代确认）。
    * meta.turnId：AI 在对话里触发时的回合（doc_revert_turn 可撤销）；界面按钮触发时为 null。
    */
-  generate(a: Actor, patientId: string, input: { study_id: string; doc_id?: string | null; new?: boolean; department_id?: string | null }, meta: { turnId: string | null }): DraftOutcome {
+  generate(
+    a: Actor,
+    patientId: string,
+    input: {
+      study_id: string
+      doc_id?: string | null
+      new?: boolean
+      department_id?: string | null
+      confirm_guideline_reference?: boolean
+      risk_level?: 'low' | 'high'
+      is_screening?: boolean
+    },
+    meta: { turnId: string | null },
+  ): DraftOutcome {
     const t0 = Date.now()
     if (a.space === 'personal') throw new DraftError('personal_space', '知家（个人空间）里不生成影像所见草稿；请在工作台的患者页生成', 403)
+    if (input.confirm_guideline_reference && a.via === 'ai') {
+      throw new DraftError('guideline_confirmation_human_only', '指南分类与随访建议属「规则推算，待医生确认」，只能由医生本人确认后写入草稿，AI 不能代为确认', 403)
+    }
     // 写权限（诊疗组成员）：没有就当不存在 / 403，与其它影像写操作一致
     this.patients.imagingScope(a, patientId, 'write')
     const tplView = this.templates.resolve(a, input.department_id)
@@ -470,7 +622,13 @@ export class FindingsDraftService {
       if (record.study_id !== input.study_id) throw new DraftError('draft_other_study', '这份草稿是另一次检查的；请为本检查新建草稿', 409, { study_id: record.study_id })
       existingDoc = doc
     }
-    const plan = this.plan(a, patientId, input.study_id, tpl, true)
+    const hadConfirmedGuideline = Boolean(record?.blocks.some(b => b.key === 'guideline_reference'))
+    const confirmGuideline = input.confirm_guideline_reference !== undefined ? Boolean(input.confirm_guideline_reference) : hadConfirmedGuideline
+    const plan = this.plan(a, patientId, input.study_id, tpl, true, {
+      confirmGuidelineReference: confirmGuideline,
+      riskLevel: input.risk_level,
+      isScreening: input.is_screening,
+    })
     const tenantId = this.patients.tenantService.of(a.userId, a.space ?? 'work').id
 
     let row: DocRow
@@ -552,6 +710,7 @@ export class FindingsDraftService {
         doc_id: row.id, rev, created,
         template: { id: tplView.id, source: tplView.source, department_id: tplView.department_id, department_name: tplView.department_name, version: tplView.version },
         review_state: plan.review.state, signoff_version: signoff, nodules: plan.nodules,
+        guideline_reference: plan.guidelineReference,
         blocks: { written: out.written, unchanged: out.unchanged, kept: out.kept, removed: out.removed },
         warnings: [...new Set(plan.warnings)], elapsed_ms: Date.now() - t0,
       }

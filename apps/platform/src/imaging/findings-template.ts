@@ -20,6 +20,8 @@ export const NODULE_CASES = ['default', 'new', 'enlarged', 'shrunk', 'stable', '
 export type NoduleCase = (typeof NODULE_CASES)[number]
 export const COMPARISON_CASES = ['finalized', 'unfinalized', 'none'] as const
 export type ComparisonCase = (typeof COMPARISON_CASES)[number]
+export const IMPRESSION_CASES = ['default', 'none'] as const
+export type ImpressionCase = (typeof IMPRESSION_CASES)[number]
 
 export interface FindingsTemplateBody {
   /** 草稿正文的标题（不进 RIS 纯文本） */
@@ -32,6 +34,8 @@ export interface FindingsTemplateBody {
   disappeared?: string
   /** 比较说明（放在结节句子之前）：前片已定稿 / 前片未定稿（按已确认结节对比）/ 没有前片 */
   comparison?: Partial<Record<ComparisonCase, string>>
+  /** 影像印象段（W4.3：客观总结，不给诊断结论或随访建议；可为字符串或 { default, none }） */
+  impression?: string | Partial<Record<ImpressionCase, string>>
   /** 结尾句（可选） */
   closing?: string
 }
@@ -73,7 +77,24 @@ const STUDY_PH: Record<string, PlaceholderDef> = {
   间隔: P('与前片间隔天数'),
   检查日期: P('本次检查日期'),
 }
-export const PLACEHOLDERS = { nodule: NODULE_PH, disappeared: PRIOR_PH, study: STUDY_PH } as const
+const IMPRESSION_PH: Record<string, PlaceholderDef> = {
+  ...STUDY_PH,
+  结节数: P('已确认结节总数（如「2」）'),
+  最大结节编号: P('平均径最大的已确认结节名称'),
+  最大结节位置: P('平均径最大的已确认结节所在肺叶'),
+  最大结节密度: P('平均径最大的已确认结节密度分型'),
+  最大结节平均径: P('平均径最大的已确认结节的平均径', true),
+  最大结节长径: P('平均径最大的已确认结节的长径', true),
+  最大结节体积: P('平均径最大的已确认结节的体积（分割失败时为空）', true),
+  随访概况: P('与前片对比的客观变化汇总（如「新发 1 枚，较前增大 1 枚」「较前相仿」；未对比时为空）'),
+}
+export const PLACEHOLDERS = { nodule: NODULE_PH, disappeared: PRIOR_PH, study: STUDY_PH, impression: IMPRESSION_PH } as const
+
+/** W4.3 客观影像印象段参考模板（只作客观总结，不给诊断结论或随访建议；可在科室模板中选用） */
+export const DEFAULT_IMPRESSION_TEMPLATE: Record<ImpressionCase, string> = {
+  default: '印象：双肺见 {结节数} 枚结节[，较大者位于{最大结节位置|肺内}，平均径 {最大结节平均径}][，体积 {最大结节体积}][；与 {前片日期} 片比较，{随访概况}]。',
+  none: '印象：双肺未见明确结节。',
+}
 
 const MAX_SENTENCE = 400
 const MAX_TITLE = 60
@@ -99,6 +120,7 @@ export const BUILTIN_TEMPLATE: FindingsTemplateBody = {
     unfinalized: '与 {前片日期} 片比较（前片尚未定稿，按其已确认的结节对比）。',
     none: '无前片可供比较。',
   },
+  impression: DEFAULT_IMPRESSION_TEMPLATE,
 }
 
 // —— 语法 ——
@@ -183,16 +205,19 @@ export interface ParsedTemplate {
   none: Piece[]
   disappeared: Piece[] | null
   comparison: Record<ComparisonCase, Piece[] | null>
+  impression: Record<ImpressionCase, Piece[] | null>
   closing: Piece[] | null
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+/** W4.3 影像印象段禁写主观诊断结论或随访建议（只做客观总结） */
+const IMPRESSION_FORBIDDEN_RE = /(考虑.{0,6}(?:恶性|癌|肿瘤|转移|结核|炎)|疑似.{0,6}(?:恶性|癌|肿瘤)|不能除外|不除外|建议.{0,8}(?:随访|复查|穿刺|活检|手术|增强|治疗|就诊)|Lung-?RADS|BI-?RADS)/i
 
 /** 校验并解析整份模板；有错时抛 TemplateError（指出哪一句、什么问题）。 */
 export function parseTemplate(input: unknown): ParsedTemplate {
   if (!isObj(input)) throw new TemplateError('模板', '应为 JSON 对象')
   if (JSON.stringify(input).length > MAX_BODY) throw new TemplateError('模板', `太大（上限 ${MAX_BODY} 字符）`)
-  const known = new Set(['title', 'nodule', 'none', 'disappeared', 'comparison', 'closing'])
+  const known = new Set(['title', 'nodule', 'none', 'disappeared', 'comparison', 'impression', 'closing'])
   for (const k of Object.keys(input)) if (!known.has(k)) throw new TemplateError('模板', `不认识的字段「${k}」；可用：${[...known].join('、')}`)
   const title = input.title
   if (typeof title !== 'string' || !title.trim()) throw new TemplateError('title', '标题不能为空')
@@ -214,18 +239,47 @@ export function parseTemplate(input: unknown): ParsedTemplate {
   if (comp !== undefined && !isObj(comp)) throw new TemplateError('comparison', '应为对象')
   if (comp) for (const k of Object.keys(comp)) if (!(COMPARISON_CASES as readonly string[]).includes(k)) throw new TemplateError('comparison', `不认识的情况「${k}」；可用：${COMPARISON_CASES.join('、')}`)
   const comparison = Object.fromEntries(COMPARISON_CASES.map(c => [c, opt(comp?.[c], `comparison.${c}`, STUDY_PH)])) as Record<ComparisonCase, Piece[] | null>
+
+  const impRaw = input.impression
+  let impObj: Record<string, unknown> | null = null
+  if (impRaw !== undefined && impRaw !== '') {
+    if (typeof impRaw === 'string') impObj = { default: impRaw }
+    else if (isObj(impRaw)) impObj = impRaw
+    else throw new TemplateError('impression', '应为字符串或对象（{ default, none }）')
+    for (const k of Object.keys(impObj)) if (!(IMPRESSION_CASES as readonly string[]).includes(k)) throw new TemplateError('impression', `不认识的情况「${k}」；可用：${IMPRESSION_CASES.join('、')}`)
+  }
+  const parseImpression = (v: unknown, where: string): Piece[] | null => {
+    if (v === undefined || v === '') return null
+    const pieces = parseSentence(v as string, where, IMPRESSION_PH)
+    if (IMPRESSION_FORBIDDEN_RE.test(v as string)) {
+      throw new TemplateError(where, '影像印象段（W4.3）只作客观总结，不能写诊断结论或随访建议（如「考虑恶性」「建议随访」）')
+    }
+    return pieces
+  }
+  const impression: Record<ImpressionCase, Piece[] | null> = {
+    default: parseImpression(impObj?.default, typeof impRaw === 'string' ? 'impression' : 'impression.default'),
+    none: parseImpression(impObj?.none, 'impression.none'),
+  }
+  const normalizedImp = typeof impRaw === 'string' && impRaw
+    ? impRaw
+    : impObj
+      ? Object.fromEntries(IMPRESSION_CASES.filter(c => typeof impObj![c] === 'string' && impObj![c]).map(c => [c, impObj![c] as string]))
+      : undefined
+
   const body: FindingsTemplateBody = {
     title: title.trim(),
     nodule: Object.fromEntries(NODULE_CASES.filter(c => typeof (input.nodule as Record<string, unknown>)[c] === 'string' && (input.nodule as Record<string, string>)[c]).map(c => [c, (input.nodule as Record<string, string>)[c]])) as FindingsTemplateBody['nodule'],
     none: input.none,
     ...(typeof input.disappeared === 'string' && input.disappeared ? { disappeared: input.disappeared } : {}),
     ...(comp && Object.keys(comp).length ? { comparison: Object.fromEntries(COMPARISON_CASES.filter(c => typeof comp[c] === 'string' && comp[c]).map(c => [c, comp[c]])) } : {}),
+    ...(normalizedImp && (typeof normalizedImp === 'string' || Object.keys(normalizedImp).length) ? { impression: normalizedImp } : {}),
     ...(typeof input.closing === 'string' && input.closing ? { closing: input.closing } : {}),
   }
   return {
     body, title: body.title, nodule, none,
     disappeared: opt(input.disappeared, 'disappeared', PRIOR_PH),
     comparison,
+    impression,
     closing: opt(input.closing, 'closing', STUDY_PH),
   }
 }

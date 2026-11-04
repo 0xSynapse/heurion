@@ -158,7 +158,7 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 
 报告里的每个测量数字都是测量原子 `[@m:<m_id>]`，绑定一个已确认的测量值；AI 不手写测量数字。对照引用原子实现（`model/measurements.ts`、`measurements/service.ts`）。
 
-- **绑定**：`imaging_lesions` 查病灶 → `insert_measurement`（`POST /api/docs/:id/measurements`）绑定一个字段（平均径、长 / 短径、实性成分直径、体积、平均 CT 值、CTR）与显示单位（mm / cm、mm³ / cm³、HU）、小数位 → 正文写返回的 `[@m:id]`。登记表 `measurements` 在文档库，与引用同库、随文档删除；记来源（类型 + id + 字段）、显示单位与小数位、来源所属机构与患者、绑定时的版本与数值快照。同一文档里同一来源、字段、单位只登记一次，再次绑定刷新快照（id 不变）。
+- **绑定**：`imaging_lesions` 查病灶 → `insert_measurement`（`POST /api/docs/:id/measurements`）或编辑器顶栏「测量」按钮（T2.5 弹窗：选择患者、检查、已确认病灶、测量字段与单位，或直接复用本文档已登记的测量原子）绑定一个字段（平均径、长 / 短径、实性成分直径、体积、平均 CT 值、CTR）与显示单位（mm / cm、mm³ / cm³、HU）、小数位 → 正文写返回的 `[@m:id]`。登记表 `measurements` 在文档库，与引用同库、随文档删除；记来源（类型 + id + 字段）、显示单位与小数位、来源所属机构与患者、绑定时的版本与数值快照。同一文档里同一来源、字段、单位只登记一次，再次绑定刷新快照（id 不变）。
 - **绑定规则**：以操作者本人的权限读来源（`ImagingStudyService.measurementSource` → `imagingScope` 读权限）；影子模式的病灶当不存在；只接受已确认的病灶（`lesionBindable`，T2.7「定稿」合并后若改为只接受已定稿的，只改这一处）；字段须有数值。**跨患者**：文档关联了患者时只能绑定该患者的病灶；未关联的文档里一旦绑定了某位患者，就不能再混入其他患者（`measurement_patient_mismatch`）——一份报告张冠李戴的代价远大于偶尔要另起一份文档。
 - **取值与同步**：文档里只存原子 `measurement(m_id)`，数值在渲染时按读者的权限取来源的当前值。医生重测（`editLesion`）后，界面、HTML、markdown、docx、pptx、AI 读视图都显示新值，并标为「已随来源更新」（悬停可见绑定时的值与版本）；重新绑定即确认更新（刷新快照）。选这条路而不是「病灶修改时推送修订到文档」：文档内容不变，不产生系统修订，按轮撤销（`doc_revert_turn`）、版本历史、协同编辑都不受影响；导出与界面用同一个取值函数，结果一致。代价：导出的文件是导出时刻的值（与界面一致），幻灯片渲染缓存按 rev 计，测量改了而文档没改时预览图要等下次 rev 变化才刷新。
 - **权限**：文档库与患者库是不同的权限域，文档的读者不一定能看这位患者。读者看不到来源（不在诊疗组、别的机构、患者模块未开、机构不允许把患者数据交给外部模型时的 AI、公开分享页）时只给**绑定时的快照**与绑定时记下的来源说明（「病灶 结节 1 · 右上叶 · 平均径」，不含患者标识），状态为 `no_access`，不透露来源现在的值或是否被否决。快照是绑定者写进文档的内容，与把数字写成文字等价。
@@ -167,7 +167,7 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 - **复制粘贴与复制文档**：编辑器里复制粘贴保留原子（同一测量可多次出现，取同一值）；`duplicate` 复制文档时登记换新 id、正文标记跟着改。
 - **论断核对**：测量原子是有出处的数字，不进「缺出处」；句子里按快照显示数值。
 - **随访派生值**（T2.6）：来源 `imaging_followup`（`source_id` = 本次检查的病灶 id）绑定随访对比的两期之差与体积倍增时间（`delta_mean_diameter_mm` / `delta_volume_mm3` / `delta_volume_pct` / `vdt_days`；单位 `pct`、`day`；差值带正负号）。取值读该病灶在随访对比里的当前一项，医生重测任一期后随之更新；状态跟随本次病灶，不再成对或缺值时为「来源测量已缺失」。所见草稿（`docs/design/IMAGING_STUDIES.md`「所见草稿（T2.6）」）用它写差值与 VDT。
-- **以后**（W6.5）：科研手稿里的队列统计值也以 `[@m:id]` 绑定分析结果——来源类型可扩展（`SOURCES`），本期实现影像病灶测量与随访派生值。
+- **科研手稿队列统计值**（T3.9 / W6.5）：来源 `cohort_stat`（`source_id` = 临床研究 `study_id`）支持在科研手稿正文中以 `[@m:id]` 绑定队列级汇总统计结果（`enrolled_subject_count`、`finalized_study_count`、`confirmed_nodule_count`、`mean_diameter_mm_mean`、`mean_diameter_mm_median`、`volume_mm3_mean`、`vdt_days_mean`；新增单位 `count`），严格汇总入组（`enrolled`）受试者的 W5 已定稿检查快照，随新患者入组或重测定稿自动刷新。
 
 ### 5.6 撤销
 
@@ -239,8 +239,8 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | `comments_list` / `comment_reply` / `comment_resolve` | `doc_id, …` | 线程与锚点 / 回复（role=ai）/ 关闭（规则见 §5.4） |
 | `pubmed_search` / `doi_lookup` | 检索式 / DOI | 文献元数据 |
 | `insert_citation` / `list_citations` | `doc_id, doi \| pmid \| query` / `doc_id` | `cite_id`、`[@c:id]` 标记与摘要摘录（只给 query 时返回候选，不登记）/ 登记表与文中编号 |
-| `insert_measurement` / `list_measurements` | `doc_id, lesion_id, field, unit?, decimals?, source?` / `doc_id` | `m_id`、`[@m:id]` 标记与显示值（只接受已确认病灶；`source = imaging_followup` 绑定随访差值与 VDT）/ 登记表、当前值与状态、严格模式（§5.5.1） |
-| `imaging_findings_draft` / `imaging_findings_draft_check` / `imaging_findings_templates` | `patient_id, imaging_study_id, doc_id?, new?, department_id?` / `doc_id` / `scope?` | 按科室模板生成所见草稿（经操作层与守卫写入，记在当前回合上）/ RIS 纯文本与复制前要处理的问题 / 所见模板（只读）。见 `docs/design/IMAGING_STUDIES.md`「所见草稿（T2.6）」 |
+| `insert_measurement` / `list_measurements` | `doc_id, lesion_id, field, unit?, decimals?, source?` / `doc_id` | `m_id`、`[@m:id]` 标记与显示值（只接受已确认病灶；`source = imaging_followup` 绑定随访差值与 VDT；`source = cohort_stat` 绑定科研队列汇总统计值）/ 登记表、当前值与状态、严格模式（§5.5.1） |
+| `imaging_findings_draft` / `imaging_findings_draft_check` / `imaging_findings_templates` | `patient_id, imaging_study_id, doc_id?, new?, department_id?, confirm_guideline_reference?` / `doc_id` / `scope?` | 按科室模板生成所见草稿（含 W4.3 客观印象段与经医生本人确认后的 Lung-RADS / Fleischner 指南参考，经操作层与守卫写入，记在当前回合上）/ RIS 纯文本与复制前要处理的问题 / 所见模板（只读）。见 `docs/design/IMAGING_STUDIES.md`「所见草稿（T2.6）」 |
 | `asset_upload` | 工作区内相对路径 | `asset_id`（png/jpg/svg/gif/webp ≤ 10MB；路径限制在工作区内） |
 | `kb_search` | `query, file_ids?, project?, top_k?` | 参考资料库片段与出处（文件、页码、DOI / PMID）；关键词 + 向量（本地 bge-m3）RRF 合并 |
 | `kb_read` | `file_id, from_page?, to_page?` | 资料原文（按页） |

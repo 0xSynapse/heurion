@@ -120,6 +120,7 @@ describe('所见草稿 × 随访对比', () => {
       '2. 左肺上叶结节，平均径 6.3 mm，体积 120 mm³，与前片相仿（变化在测量误差范围内）。',
       '3. 左肺下叶见结节，平均径 4.0 mm，体积 33 mm³，为新发结节。',
       '前片所见右肺下叶结节，本次未见。',
+      '印象：双肺见 3 枚结节，较大者位于右肺上叶，平均径 10.5 mm，体积 600 mm³；与 2025-10-20 片比较，新发 1 枚，较前增大 1 枚，较前相仿 1 枚，前片所见 1 枚本次未见。',
     ])
     const rows = t.store.listMeasurements(r.doc_id)
     expect(rows.filter(m => m.source_kind === 'imaging_followup').map(m => [m.source_id, m.field]).sort()).toEqual([
@@ -144,9 +145,9 @@ describe('所见草稿 × 随访对比', () => {
     t.svc.editLesion(t.A, t.C.same.id, { metrics: { ...t.C.same.metrics, volume_mm3: 300 } })
     const chk = t.drafts.check(t.A, t.store.getDoc(r.doc_id)!, new MeasurementService(t.store, t.patients).views(t.store.getDoc(r.doc_id)!, t.A))
     expect(chk.issues.find(i => i.code === 'change_changed')?.message).toContain('稳定 → 增大')
-    // 重新生成（块没人改过）：句子换成增大
+    // 重新生成（块没人改过）：句子换成增大，且印象段的随访概况也同步更新
     const u = t.drafts.generate(t.A, t.p.id, { study_id: t.cur.id, doc_id: r.doc_id }, { turnId: null })
-    expect(u.blocks.written).toEqual([`nodule:${t.C.same.id}`])
+    expect(u.blocks.written).toEqual([`nodule:${t.C.same.id}`, 'impression'])
     expect(t.shown(r.doc_id)[4]).toMatch(/^2\. 左肺上叶结节，平均径 6\.3 mm，体积 300 mm³，较前增大，平均径变化 \+0\.3 mm，体积变化 \+166%，体积倍增时间约 259 天。$/)
   })
 
