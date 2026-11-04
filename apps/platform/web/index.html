@@ -121,7 +121,6 @@
       <span class="title" id="docTitle" title="点击重命名">未选择文档</span>
       <span class="doc-collab" id="docCollab" hidden></span>
       <span class="status" id="syncStatus"></span>
-      <button class="topbar-help-btn" id="topbarHelpBtn" title="查看产品全流程使用手册与操作指南（快捷键、3D影像量化、写作与科研全流程）"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7.75 7.75a2.25 2.25 0 0 1 3.82-1.59c.7.7.6 1.44.18 2.09-.45.69-1.25 1.25-1.25 2.25v.5 M10 14.5v.25" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>使用手册</span></button>
       <div class="menu-wrap">
         <button id="exportBtn" disabled aria-haspopup="menu">导出 <span aria-hidden="true">▾</span></button>
         <div class="dropdown" id="exportMenu" role="menu" hidden>
@@ -133,7 +132,7 @@
             <span class="muted">中文字体</span><button data-fonts="mac">Mac</button><button data-fonts="win">Windows</button></div>
         </div>
       </div>
-      <button class="side-toggle" id="sideToggle" aria-label="展开或收起右侧栏 (AI 对话/审查/评论)" title="展开或收起右侧栏 (快捷键 Cmd+] / Ctrl+])"><svg viewBox="0 0 20 20" class="ui-icon" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 3v14" stroke="currentColor" stroke-width="1.5"/><path d="M7 8l2 2-2 2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><span>AI 对话</span></button>
+      <button class="side-toggle" id="sideToggle" aria-label="展开或收起右侧栏 (审稿与 AI 助手)" title="展开或收起右侧栏 (快捷键 Cmd+] / Ctrl+])"><svg viewBox="0 0 20 20" class="ui-icon" aria-hidden="true"><rect x="3" y="3" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 3v14" stroke="currentColor" stroke-width="1.5"/><path d="M7 8l2 2-2 2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><span>审稿与 AI</span><span class="tab-badge" id="sideToggleBadge" hidden>0</span></button>
     </header>
     <div class="toolbar" id="toolbar" hidden>
       <select id="blockType" title="段落样式">
@@ -187,13 +186,15 @@
         <button data-cmd="tableBackground" title="单元格底纹">底纹</button>
       </span>
       <button data-cmd="image" title="插入图片（也可粘贴或拖入）">图片</button>
-      <button data-cmd="figureStudio" title="从医学制图成果库插入矢量图，或就地绘制实验统计图、机制通路图、生信图并插入当前段落（自动附带代码与数据溯源）">科研制图</button>
-      <button data-cmd="cite" title="按 DOI 插入引用">引用</button>
-      <button data-cmd="measure" title="插入已确认的影像病灶测量原子 [@m:id]（W4.2 / T2.5）">测量</button>
+      <button data-cmd="figureStudio" class="tb-academic-btn" title="从医学制图成果库插入矢量图，或就地绘制实验统计图、机制通路图、生信图并插入当前段落（自动附带代码与数据溯源）">科研制图</button>
+      <button data-cmd="cite" class="tb-academic-btn" title="按 DOI / PMID / 标题插入引用">引用</button>
+      <button data-cmd="measure" class="tb-academic-btn" title="插入已确认的影像病灶测量原子 [@m:id]（W4.2 / T2.5）">测量</button>
       <input id="imageInput" type="file" accept="image/png,image/jpeg,image/gif" multiple hidden>
       <span class="sep"></span>
       <button data-cmd="undo" title="撤销 ⌘Z">↶</button>
       <button data-cmd="redo" title="重做 ⌘⇧Z">↷</button>
+      <span class="grow"></span>
+      <button data-cmd="deepReview" class="tb-review-btn" title="一键通读全文与表格，核查样本量分母、算术自洽、统计方法与结论表述">✦ 深度审稿</button>
     </div>
     <div class="suggest-banner" id="suggestBanner" hidden>
       <span class="dot"></span><span id="suggestSummary"></span>
@@ -303,13 +304,13 @@
     <div class="side-resizer" id="sideResizer" role="separator" aria-orientation="vertical" title="按住拖拽调整右侧栏宽度，双击恢复默认宽度"></div>
     <div class="side-head narrow-only"><span class="eyebrow">Heurion AI</span><button class="icon-btn" id="sideClose" aria-label="关闭"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
     <div class="tabs">
-      <button data-tab="commentPane" id="commentTab">审稿与批注 <span class="tab-badge" id="commentBadge" hidden>0</span></button>
-      <button data-tab="chatPane" class="active">AI 助手</button>
+      <button data-tab="commentPane" id="commentTab" class="active">审稿与批注 <span class="tab-badge" id="commentBadge" hidden>0</span></button>
+      <button data-tab="chatPane">AI 助手</button>
       <button data-tab="citePane">引用</button>
       <button data-tab="versionPane">版本</button>
       <button class="side-collapse-btn" id="sideCollapseBtn" title="收起右侧栏 (快捷键 Cmd+] / Ctrl+])" aria-label="收起右侧栏"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 6v8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
     </div>
-    <div class="tabpane active" id="chatPane">
+    <div class="tabpane" id="chatPane">
       <div class="queue idle" id="queuePanel">
         <div class="queue-head"><span>任务队列</span><span class="queue-summary" id="queueSummary">空闲</span><span class="grow"></span><button id="queueClear" title="停止当前任务并清空排队" hidden>全部停止</button></div>
         <ol id="queueList"></ol>
@@ -337,7 +338,7 @@
         </div>
       </div>
     </div>
-    <div class="tabpane" id="commentPane">
+    <div class="tabpane active" id="commentPane">
       <div class="review-hub-bar" id="reviewHubBar">
         <button type="button" class="ai review-run-btn" id="deepReviewBtn" title="通读全文与表格，自动核查样本量分母、百分比算术、统计方法一致性与结论表述">✦ 全文深度审稿</button>
         <button type="button" class="quiet small-btn review-rules-pill" id="reviewRulesBtn" title="查看或管理已生效的专科审稿习惯（自动豁免同类误报）">专科习惯 <span class="rules-count-badge" id="reviewRulesCount">0</span> ▾</button>

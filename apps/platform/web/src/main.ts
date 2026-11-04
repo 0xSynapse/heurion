@@ -542,6 +542,7 @@ async function createDoc(kind: 'doc' | 'deck', renameNow = true): Promise<void> 
   const d = await api('/api/docs', { method: 'POST', body: JSON.stringify(kind === 'deck' ? { title: '未命名汇报', kind, project_id, template } : { title: '未命名文档', project_id }) })
   await loadDocs()
   await open(d.id)
+  switchTab('chatPane')
   if (renameNow) editTitle()
 }
 $('newDoc').onclick = () => void createDoc('doc')
@@ -1392,6 +1393,11 @@ $('toolbar').onclick = async e => {
   const btn = (e.target as HTMLElement).closest('button')
   const cmd = btn?.dataset.cmd
   if (!cmd || !session?.editor) return
+  if (cmd === 'deepReview') {
+    switchTab('commentPane')
+    void runDeepReview()
+    return
+  }
   const c = session.editor.commands as Record<string, (...a: any[]) => void>
   if (cmd === 'image') { $('imageInput').click(); return }
   if (cmd === 'figureStudio') {
@@ -2959,7 +2965,10 @@ function renderReviewSnapshot(): void {
   snapEl.innerHTML = `
     <div class="rv-snap-top">
       ${filterHtml}
-      ${exempted > 0 ? `<span class="rv-exempt-badge" title="已根据您的专科审稿习惯自动过滤同类误报">已按专科习惯免报 ${exempted} 处</span>` : ''}
+      <div class="rv-snap-actions">
+        ${exempted > 0 ? `<span class="rv-exempt-badge" title="已根据您的专科审稿习惯自动过滤同类误报">已按专科习惯免报 ${exempted} 处</span>` : ''}
+        ${openReviewItems.length > 0 ? `<button type="button" class="quiet small-btn rv-copy-btn" data-rv-copy="1" title="将待处理审稿问题复制为 Markdown 清单，方便发给合作者或学生修改">复制清单</button>` : ''}
+      </div>
     </div>
     ${sp ? `
       <details class="rv-scratchpad-details">
@@ -2974,7 +2983,33 @@ function renderReviewSnapshot(): void {
   `
 }
 
-document.getElementById('reviewSnapshotBar')?.addEventListener('click', e => {
+document.getElementById('reviewSnapshotBar')?.addEventListener('click', async e => {
+  const copyBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-copy]')
+  if (copyBtn) {
+    const list: any[] = detail?.comments ?? []
+    const openReviewItems = list
+      .filter(c => c.status === 'open')
+      .map(c => ({ c, meta: parseReviewComment(c) }))
+      .filter(x => x.meta.isReview)
+    if (openReviewItems.length === 0) return
+    const docTitle = detail?.title || '未命名文稿'
+    const lines = [
+      `# 《${docTitle}》深度审稿核查清单（待处理 ${openReviewItems.length} 项）`,
+      '',
+      ...openReviewItems.map((item, idx) => {
+        const quote = item.c.anchor?.text || item.c.snippet || '（定位段落）'
+        const fixLine = item.meta.suggestion ? `\n   - **建议修改**：${item.meta.suggestion}` : ''
+        return `${idx + 1}. **[${item.meta.severityLabel} · ${item.meta.categoryLabel}]**\n   - **原句**：「${quote}」\n   - **核查说明**：${item.meta.cleanReason}${fixLine}`
+      }),
+    ]
+    try {
+      await navigator.clipboard.writeText(lines.join('\n\n'))
+      showNotice(`✓ 已复制 ${openReviewItems.length} 项审稿清单到剪贴板`)
+    } catch {
+      showNotice('复制失败，请检查浏览器剪贴板权限', true)
+    }
+    return
+  }
   const pill = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-filter]')
   if (!pill?.dataset.rvFilter) return
   activeReviewFilter = pill.dataset.rvFilter as 'all' | 'critical' | 'major' | 'minor'
@@ -2982,32 +3017,13 @@ document.getElementById('reviewSnapshotBar')?.addEventListener('click', e => {
   renderComments()
 })
 
-function renderComments(): void {
-  const list: any[] = detail?.comments ?? []
-  const openCount = list.filter(c => c.status === 'open').length
-  const badge = document.getElementById('commentBadge')
-  if (badge) {
-    badge.textContent = String(openCount)
-    badge.hidden = openCount === 0
-  }
-  renderReviewSnapshot()
-  void loadReviewRules()
-
-  const filteredList = list.filter(c => {
-    if (activeReviewFilter === 'all' || c.status !== 'open') return true
-    const meta = parseReviewComment(c)
-    return !meta.isReview || meta.severity === activeReviewFilter
-  })
-
-  $('comments').innerHTML = filteredList.length === 0
-    ? `<div class="rv-empty-hint muted">点击上方 <b>「✦ 全文深度审稿」</b> 一键核查全文数据自洽与统计规范；也可以在正文中选中句子手动添加批注。</div>`
-    : filteredList.map(c => {
-      const meta = parseReviewComment(c)
-      const quoteText = c.anchor.text || c.snippet || '（定位段落）'
-      if (meta.isReview) {
-        const extraReplies = (c.replies ?? []).slice(1)
-        const defaultFix = meta.suggestion || c.anchor.text || c.snippet || ''
-        return `
+function renderCommentCardHtml(c: any): string {
+  const meta = parseReviewComment(c)
+  const quoteText = c.anchor.text || c.snippet || '（定位段落）'
+  if (meta.isReview) {
+    const extraReplies = (c.replies ?? []).slice(1)
+    const defaultFix = meta.suggestion || c.anchor.text || c.snippet || ''
+    return `
     <div class="card rv-card ${esc(c.status)} sev-${esc(meta.severity)}" data-cid="${esc(c.id)}" data-cat="${esc(meta.categoryKey)}" data-reason="${esc(meta.cleanReason)}">
       <div class="rv-card-header">
         <span class="rv-sev-badge sev-${esc(meta.severity)}">${esc(meta.severityLabel)}</span>
@@ -3055,8 +3071,8 @@ function renderComments(): void {
         </div>
       `}
     </div>`
-      }
-      return `
+  }
+  return `
     <div class="card ${esc(c.status)}" data-cid="${esc(c.id)}">
       <div class="quote ${c.anchor.located ? '' : 'lost'}" ${c.anchor.located ? 'data-locate="1" title="点击定位到正文位置"' : ''}>${esc(quoteText)}${c.anchor.located ? '' : ' · 锚点已移除'}</div>
       ${c.replies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}
@@ -3066,7 +3082,43 @@ function renderComments(): void {
           : `<span class="muted">已完成</span><span class="grow"></span><button data-act="reopen">重新打开</button><button data-act="delete" title="删除评论">删除</button>`}
       </div>
     </div>`
-    }).join('')
+}
+
+function renderComments(): void {
+  const list: any[] = detail?.comments ?? []
+  const openList = list.filter(c => c.status === 'open')
+  const resolvedList = list.filter(c => c.status !== 'open')
+  const openCount = openList.length
+  for (const id of ['commentBadge', 'sideToggleBadge']) {
+    const badge = document.getElementById(id)
+    if (badge) {
+      badge.textContent = String(openCount)
+      badge.hidden = openCount === 0
+    }
+  }
+  renderReviewSnapshot()
+  void loadReviewRules()
+
+  const filteredOpenList = openList.filter(c => {
+    if (activeReviewFilter === 'all') return true
+    const meta = parseReviewComment(c)
+    return !meta.isReview || meta.severity === activeReviewFilter
+  })
+
+  const openHtml = filteredOpenList.length === 0
+    ? (openList.length === 0
+      ? `<div class="rv-empty-hint muted">${resolvedList.length > 0 ? `当前待处理问题已全部清零（下方已归档 ${resolvedList.length} 项）。` : ''}点击上方 <b>「✦ 全文深度审稿」</b> 一键核查全文数据自洽与统计规范；也可以在正文中选中句子手动添加批注。</div>`
+      : `<div class="rv-empty-hint muted">当前筛选条件下无待处理项。</div>`)
+    : filteredOpenList.map(renderCommentCardHtml).join('')
+
+  const resolvedDrawerHtml = resolvedList.length > 0
+    ? `<details class="rv-resolved-drawer">
+        <summary>已处理归档 (${resolvedList.length})</summary>
+        <div class="rv-resolved-list">${resolvedList.map(renderCommentCardHtml).join('')}</div>
+      </details>`
+    : ''
+
+  $('comments').innerHTML = openHtml + resolvedDrawerHtml
   syncCommentAskButtons()
 }
 
