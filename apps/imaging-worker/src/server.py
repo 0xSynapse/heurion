@@ -578,11 +578,20 @@ class LungNodulePipelineRequest(BaseModel):
     file_path: Optional[str] = None
     max_nodules: int = 20
     min_score: Optional[float] = None
-    # 肺叶定位方式：full（默认，全肺）/ roi（结节周围局部）/ off（不做）；lobe_resample_mm 为空时按 bundle 的 1.5 mm
-    lobe_mode: str = "full"
+    # 肺叶定位方式：full（全肺）/ roi（结节周围局部）/ off（不做）；不传时 GPU 用 full、CPU 用 roi（见 default_lobe_mode）。
+    # lobe_resample_mm 为空时按 bundle 的 1.5 mm
+    lobe_mode: Optional[str] = None
     lobe_resample_mm: Optional[float] = None
     # 是否把分割成功的结节写成 DICOM SEG（能生成时生成，结果在响应顶层 seg）
     seg: bool = True
+
+
+def default_lobe_mode(device_type: str) -> str:
+    """
+    CPU 上全肺 VISTA-3D 肺叶分割很慢：生产 6 核实测一套 269 层胸部 CT 全肺 278 秒，结节周围局部 70 秒，
+    肺叶归属一致（2026-11-04 本机 CPU 6 线程对比）。所以 CPU 默认 roi，GPU 仍用 full。
+    """
+    return "full" if device_type != "cpu" else "roi"
 
 
 @app.post("/api/v1/pipeline/lung-nodule")
@@ -597,7 +606,7 @@ def run_lung_nodule_pipeline_endpoint(req: LungNodulePipelineRequest = Body(...)
         with INFERENCE_GATE.acquire(task_cost_gb("lung_nodule_pipeline", engine.device.type), "lung_nodule_pipeline"):
             return engine.run_lung_nodule_pipeline(
                 target, max_nodules=req.max_nodules, min_score=req.min_score,
-                lobe_mode=req.lobe_mode, lobe_resample_mm=req.lobe_resample_mm, seg=req.seg,
+                lobe_mode=req.lobe_mode or default_lobe_mode(engine.device.type), lobe_resample_mm=req.lobe_resample_mm, seg=req.seg,
             )
     except Exception as e:
         raise_http(e, "肺结节模型链运行失败")
