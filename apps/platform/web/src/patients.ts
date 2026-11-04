@@ -404,13 +404,8 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
             <div class="muted small" style="margin: 6px 0 10px; line-height: 1.5">${esc(latestImg.extraction_note || '已完成三维体素分割与定量测量')}</div>
             <div class="row" style="gap: 8px; flex-wrap: wrap">
               <button class="primary small-btn" data-generate-full-report="${latestImg.id}" title="生成影像量化所见报告（只列实测值与相关化验，不含诊断结论；AI 生成的存为待医生确认的草稿）">${icon('report')} 影像所见报告</button>
-              <button class="small-btn quiet" data-img-report="${latestImg.id}">${icon('write')} 基于此影像写报告</button>
-              <button class="small-btn" data-img-canvas="${latestImg.id}">${icon('deck')} 会诊 Slide</button>
               <button class="small-btn quiet" data-open-mpr="${latestImg.id}" title="进入 3D 多平面重建 (MPR) 互动切片浏览器">${icon('mpr')} 3D 切片</button>
-              <button class="small-btn quiet" data-open-evidence="${latestImg.id}" title="查看多模态因果诊断链 (影像 + 化验 + 病史)">${icon('evidence')} 因果诊断链</button>
-              <button class="small-btn quiet" data-export-standard="${latestImg.id}" title="导出 HL7 FHIR 或 DICOM SR 标准医学交换格式">${icon('download')} 导出标准数据</button>
-              ${hasMultiImaging ? `<button class="small-btn quiet" data-compare-with="${latestImg.id}" title="以该影像为基准进行 RECIST 1.1 多期随访对比">${icon('compare')} 随访对比</button>` : ''}
-              <button class="quiet small-btn" data-tab="records">详细指标</button>
+              <button class="quiet small-btn" data-tab="records">详细指标与更多 →</button>
             </div>
           </div>
         </div>
@@ -635,13 +630,18 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
                   <div class="pt-imaging-actions">
                     <button class="primary small-btn" data-generate-full-report="${r.id}" title="生成影像量化所见报告（只列实测值与相关化验，不含诊断结论；AI 生成的存为待医生确认的草稿）">${icon('report')} 影像所见报告</button>
                     ${data.model_id !== 'recist_longitudinal_comparator' ? `<button class="small-btn quiet" data-open-mpr="${r.id}" title="打开 3D 多平面重建 (MPR) 互动浏览器：实时滑动轴位/冠状位/矢状位连续切片、切换窗宽窗位并定位病灶">${icon('mpr')} 3D 切片 (MPR)</button>` : ''}
-                    <button class="small-btn quiet" data-open-evidence="${r.id}" title="查看多模态因果诊断链 (影像 + 化验 + 病史)">${icon('evidence')} 因果诊断链</button>
-                    <button class="small-btn quiet" data-export-standard="${r.id}" title="导出 HL7 FHIR 或 DICOM SR 标准医学交换格式">${icon('download')} 导出标准数据</button>
-                    ${hasMultiImaging && data.model_id !== 'recist_longitudinal_comparator' ? `<button class="small-btn quiet" data-compare-with="${r.id}" title="以该影像为基准进行 RECIST 1.1 多期随访对比">${icon('compare')} 随访对比</button>` : ''}
-                    <button class="small-btn quiet" data-img-report="${r.id}" title="自动创建文档并由 AI 撰写 CARE 准则病例报告，插入该影像量化指标与关键截面图">${icon('write')} 写影像病例报告</button>
-                    <button class="small-btn" data-img-canvas="${r.id}" title="在 Heurion 原生幻灯片工作台制作包含此影像指标的多页会诊 Slide (PPTX)">${icon('deck')} 制作会诊 Slide</button>
-                    ${imgUrl ? `<button class="quiet small-btn" data-view-img="${imgUrl}">${icon('eye')} 查看量化切片</button>` : ''}
-                    ${rawFid ? `<a class="quiet small-btn" href="/api/patients/${d.id}/files/${rawFid}?token=${encodeURIComponent(hooks.token())}" target="_blank" download="${esc(rawFileName)}" title="下载该患者已归档的原始 3D 序列扫描文件">${icon('download')} 下载 3D 原卷${rawSizeText ? ` (${esc(rawSizeText)})` : ''}</a>` : ''}
+                    <details class="pt-more-actions">
+                      <summary class="quiet small-btn">更多 ▾</summary>
+                      <div class="pt-more-actions-row">
+                        <button class="small-btn quiet" data-img-report="${r.id}" title="自动创建文档并由 AI 撰写 CARE 准则病例报告，插入该影像量化指标与关键截面图">${icon('write')} 写影像病例报告</button>
+                        <button class="small-btn quiet" data-img-canvas="${r.id}" title="在 Heurion 原生幻灯片工作台制作包含此影像指标的多页会诊 Slide (PPTX)">${icon('deck')} 制作会诊 Slide</button>
+                        <button class="small-btn quiet" data-open-evidence="${r.id}" title="查看多模态因果诊断链 (影像 + 化验 + 病史)">${icon('evidence')} 因果诊断链</button>
+                        ${hasMultiImaging && data.model_id !== 'recist_longitudinal_comparator' ? `<button class="small-btn quiet" data-compare-with="${r.id}" title="以该影像为基准进行 RECIST 1.1 多期随访对比">${icon('compare')} 随访对比</button>` : ''}
+                        <button class="small-btn quiet" data-export-standard="${r.id}" title="导出 HL7 FHIR 或 DICOM SR 标准医学交换格式">${icon('download')} 导出标准数据</button>
+                        ${imgUrl ? `<button class="quiet small-btn" data-view-img="${imgUrl}">${icon('eye')} 查看量化切片</button>` : ''}
+                        ${rawFid ? `<a class="quiet small-btn" href="/api/patients/${d.id}/files/${rawFid}?token=${encodeURIComponent(hooks.token())}" target="_blank" download="${esc(rawFileName)}" title="下载该患者已归档的原始 3D 序列扫描文件">${icon('download')} 下载 3D 原卷${rawSizeText ? ` (${esc(rawSizeText)})` : ''}</a>` : ''}
+                      </div>
+                    </details>
                   </div>
                 </div>
               </div>`

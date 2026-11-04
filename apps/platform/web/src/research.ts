@@ -506,10 +506,9 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
       <div class="rs-head">
         <div class="row" style="align-items:center;gap:10px;flex-wrap:wrap;">
           <input class="rs-title" id="rsTitle" value="${esc(s.title)}" aria-label="研究名称" style="flex:1;min-width:240px;"${ro ? ' readonly' : ''}>
-          <button class="small-btn" data-rs-tab="studio" title="进入一体化统计与 6 大类医学论文图表工作台">${icon('chart', { size: 13 })} 统计与制图工作台</button>
           <button class="small-btn primary" data-act="bundle" title="一键导出包含 Word Table 1、Figure 1~6 矢量图、Prism/R/Draw.io/Visio/PPT 原工程文件、方法与结果初稿及 STROBE 清单的完整投稿压缩包 (.zip)">${icon('download', { size: 13 })} 导出 SCI 投稿出版包 (.zip)</button>
           <div class="menu-wrap"><button data-act="more" aria-haspopup="menu">更多 ▾</button>
-            <div class="dropdown" id="rsMore" hidden>${w('<button data-act="attach">归入已有文档…</button>')}<button data-act="figures">弹窗版快速制图…</button>${isOwner ? '<button data-act="delete" class="danger-text">删除研究项目</button>' : '<button data-act="leave" class="danger-text">退出研究</button>'}</div></div>
+            <div class="dropdown" id="rsMore" hidden>${w('<button data-act="attach">归入已有文档…</button>')}${isOwner ? '<button data-act="delete" class="danger-text">删除研究项目</button>' : '<button data-act="leave" class="danger-text">退出研究</button>'}</div></div>
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap;">
           <select id="rsDesign" aria-label="研究设计"${ro}><option value="">研究设计（未定）</option>${Object.entries(DESIGNS).map(([k, v]) => `<option value="${k}"${s.design === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
@@ -524,41 +523,13 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
       <div class="tabs rs-tabs" role="tablist" aria-label="临床研究工作流阶段">
         <button type="button" data-tab="overview" data-rs-tab="overview" class="${activeTab === 'overview' ? 'active' : ''}">1. 方案、队列与概览</button>
         <button type="button" data-tab="data" data-rs-tab="data" class="${activeTab === 'data' ? 'active' : ''}">2. 数据治理与 Table 1 <span class="count">${s.datasets.length || ''}</span></button>
-        <button type="button" data-tab="studio" data-rs-tab="studio" class="${activeTab === 'studio' ? 'active' : ''}">3. 统计与医学制图工作台</button>
-        <button type="button" data-tab="biostats" data-rs-tab="biostats" class="${activeTab === 'biostats' ? 'active' : ''}">4. 临床统计模型与因果推断</button>
-        <button type="button" data-tab="gallery" data-rs-tab="gallery" class="${activeTab === 'gallery' ? 'active' : ''}">5. 图表成果库与多面板拼图 <span class="count">${s.analyses.length || ''}</span></button>
+        <button type="button" data-tab="studio" data-rs-tab="studio" class="${activeTab === 'studio' ? 'active' : ''}">3. 统计与医学制图</button>
+        <button type="button" data-tab="biostats" data-rs-tab="biostats" class="${activeTab === 'biostats' ? 'active' : ''}">4. 统计模型与因果推断</button>
+        <button type="button" data-tab="gallery" data-rs-tab="gallery" class="${activeTab === 'gallery' ? 'active' : ''}">5. 图表库与多面板拼图 <span class="count">${s.analyses.length || ''}</span></button>
       </div>
 
       <!-- ==================== 页签 1：方案、队列与概览 ==================== -->
       <div id="rsPaneOverview" ${activeTab === 'overview' ? '' : 'hidden'}>
-        <div class="rs-pipeline" aria-label="科研全流程进度引导">
-          <button type="button" class="rs-step-card ${protocols.length ? 'done' : ''}" data-step-jump="protocol">
-            <span class="rs-step-top"><span>STEP 01</span><span>${protocols.length ? '✓ 已就绪' : '待起草'}</span></span>
-            <span class="rs-step-title">研究设计与方案</span>
-            <span class="rs-step-metric">${protocols.length} 份研究方案</span>
-          </button>
-          <button type="button" class="rs-step-card ${activeSubjects.length ? 'done' : ''}" data-step-jump="cohort">
-            <span class="rs-step-top"><span>STEP 02</span><span>${activeSubjects.length ? '✓ 已入组' : '待筛选'}</span></span>
-            <span class="rs-step-title">纳排筛选与队列</span>
-            <span class="rs-step-metric">${activeSubjects.length} 名在组受试者</span>
-          </button>
-          <button type="button" class="rs-step-card ${s.datasets.length ? 'done' : ''}" data-rs-tab="data">
-            <span class="rs-step-top"><span>STEP 03</span><span>进入工作区 →</span></span>
-            <span class="rs-step-title">eCRF 变量与基线表</span>
-            <span class="rs-step-metric">${s.datasets.length} 个研究数据集 · Table 1</span>
-          </button>
-          <button type="button" class="rs-step-card ${s.analyses.length ? 'done' : ''}" data-rs-tab="studio">
-            <span class="rs-step-top"><span>STEP 04</span><span>进入工作台 →</span></span>
-            <span class="rs-step-title">统计与医学制图</span>
-            <span class="rs-step-metric">6 大类图表 · 原工程文件</span>
-          </button>
-          <button type="button" class="rs-step-card ${manuscripts.length || s.analyses.length ? 'done' : ''}" data-rs-tab="gallery">
-            <span class="rs-step-top"><span>STEP 05</span><span>进入拼图台 →</span></span>
-            <span class="rs-step-title">多面板拼图与论文</span>
-            <span class="rs-step-metric">${s.analyses.length} 张图表 · ${manuscripts.length} 篇稿件</span>
-          </button>
-        </div>
-
         <div class="rs-grid">
           ${cohortCard(cohort, cohortOff, canEdit)}
           <section class="rs-card" id="rsProtocolCard">
@@ -567,7 +538,6 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           </section>
           <section class="rs-card">
             <div class="rs-card-head"><h3>数据集 (Datasets)</h3>
-              <button class="quiet small-btn" data-rs-tab="data">Table 1 工作区 →</button>
               ${w('<button class="small-btn" data-act="upload">＋ 上传数据</button><input type="file" id="rsUpload" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.xpt,.sas7bdat,.sav,.zsav,.dta" multiple hidden>')}
             </div>
             ${s.datasets.length ? `<ul class="rs-list">${s.datasets.map(d => `<li class="rs-item" data-dataset="${d.dataset_id}"><span class="rs-kind">${esc(d.format)}</span><b>${esc(d.name)}</b>
@@ -579,11 +549,6 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           <section class="rs-card wide rs-folder-card">
             <div class="rs-card-head">
               <h3><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>项目图表成果库 (figures/ · ${s.analyses.length} 份产出)</h3>
-              <div style="margin-left:auto; display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                <button class="small-btn" data-rs-tab="biostats">${icon('chart', { size: 13 })} 生存/列线图/ROC/因果推断</button>
-                <button class="small-btn" data-rs-tab="gallery">${icon('grid', { size: 13 })} 顶刊 A/B/C/D 多面板拼图</button>
-                <button class="small-btn primary" data-rs-tab="studio">${icon('chart', { size: 13 })} 打开统计与医学制图工作台 →</button>
-              </div>
             </div>
             <div class="rs-folder-browser">
               <div class="rs-folder-header">
@@ -696,6 +661,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
             <span class="rs-action-cluster-label">变量与质控</span>
             <button class="small-btn" data-act="ecrf" title="Auto-eCRF 多模态影像与临床指标批量提取与溯源">${icon('write', { size: 13 })} Auto-eCRF 提取</button>
             <button class="small-btn" data-act="vars" title="分组、随访、结局与影像变量：来源与核实状态；投稿材料只用已核实的值">${icon('check', { size: 13 })} 研究变量核实</button>
+            <button class="small-btn" data-act="img-export" title="W6.4 去标识化影像与结节数据导出申请、烧录文字扫描拦截及 PI 审批留痕">${icon('download', { size: 13 })} 影像导出与 PI 审批</button>
           </div>
         </div>
       </div>
@@ -725,14 +691,16 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     const dlg = $('dialog')
     const labRow = () => `<div class="row rs-labrow"><input name="lab_test" placeholder="化验项目，如 肌酐 / HbA1c" list="rsTests"><select name="lab_mode"><option value="latest">最近一次</option><option value="any">任一次</option></select>
       <select name="lab_op"><option>&gt;</option><option>&gt;=</option><option>&lt;</option><option>&lt;=</option><option>=</option></select><input name="lab_value" type="number" step="any" placeholder="阈值（标准单位）"><button type="button" class="quiet" data-dellab aria-label="删除这条">✕</button></div>`
+    const noduleRow = () => `<div class="row rs-nodulerow"><select name="nodule_field" aria-label="结节指标"><option value="mean_diameter_mm">平均径 (mm)</option><option value="volume_mm3">体积 (mm³)</option><option value="solid_core_mm">实性成分径 (mm)</option><option value="vdt_days">倍增时间 VDT (天)</option></select><select name="nodule_type" aria-label="结节密度"><option value="">密度不限</option><option value="solid">实性</option><option value="part_solid">部分实性</option><option value="ground_glass">纯磨玻璃</option><option value="calcified">钙化</option></select><select name="nodule_op"><option>&gt;=</option><option>&gt;</option><option>&lt;=</option><option>&lt;</option><option>=</option></select><input name="nodule_value" type="number" step="any" placeholder="阈值"><input name="nodule_min_studies" type="number" min="1" step="1" placeholder="最少定稿随访次数" style="max-width:140px;"><button type="button" class="quiet" data-delnodule aria-label="删除这条">✕</button></div>`
     dlg.innerHTML = `<div class="dialog-card" role="dialog" aria-modal="true" aria-label="筛选入组">
       <div class="dialog-head"><h2>筛选入组</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
       <form class="dialog-body form" id="screenForm">
-        <div class="muted small">在你在诊疗组里的在管患者中筛选。化验用换算到标准单位后的已确认值（肌酐 µmol/L、血糖 mmol/L、血红蛋白 g/L…）。</div>
+        <div class="muted small">在你在诊疗组里的在管患者中筛选。化验用换算到标准单位后的已确认值（肌酐 µmol/L、血糖 mmol/L、血红蛋白 g/L…）；肺结节条件严格只匹配已定稿（Sign-off）影像快照。</div>
         <div class="row"><label>性别<select name="sex"><option value="">不限</option><option value="M">男</option><option value="F">女</option></select></label>
           <label>年龄 ≥<input name="age_min" type="number" min="0" max="130"></label><label>年龄 ≤<input name="age_max" type="number" min="0" max="130"></label></div>
         <label>诊断标签包含（任一，逗号分隔）<input name="tags" placeholder="例如：CKD, 糖尿病"></label>
         <div><div class="muted small">化验条件（都要满足）</div><div id="rsLabs"></div><button type="button" class="small-btn" data-addlab>＋ 化验条件</button></div>
+        <div><div class="muted small">已定稿肺结节条件（W6.1，都要满足；只匹配已定稿检查）</div><div id="rsNodules"></div><button type="button" class="small-btn" data-addnodule>＋ 已定稿肺结节条件</button></div>
         <datalist id="rsTests"><option value="肌酐"><option value="eGFR"><option value="HbA1c"><option value="血糖"><option value="血红蛋白"><option value="ALT"><option value="AST"><option value="白蛋白"><option value="尿酸"><option value="LDL-C"></datalist>
         <div class="row"><label>化验日期从<input name="from" type="date"></label><label>到<input name="to" type="date"></label></div>
         <div class="row end"><button type="submit" class="primary">预览</button></div>
@@ -748,13 +716,38 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         test: r.querySelector<HTMLInputElement>('[name=lab_test]')!.value.trim(), mode: r.querySelector<HTMLSelectElement>('[name=lab_mode]')!.value,
         op: r.querySelector<HTMLSelectElement>('[name=lab_op]')!.value, value: r.querySelector<HTMLInputElement>('[name=lab_value]')!.value,
       })).filter(l => l.test || l.value).map(l => ({ ...l, value: Number(l.value) }))
-      return { sex: f.get('sex') || undefined, age_min: num('age_min'), age_max: num('age_max'), tags_any: String(f.get('tags') ?? '').split(/[,，、]/).map(x => x.trim()).filter(Boolean), labs, from: f.get('from') || undefined, to: f.get('to') || undefined }
+      const imaging_nodules = [...form.querySelectorAll<HTMLElement>('.rs-nodulerow')].map(r => {
+        const field = r.querySelector<HTMLSelectElement>('[name=nodule_field]')!.value
+        const nodule_type = r.querySelector<HTMLSelectElement>('[name=nodule_type]')!.value || undefined
+        const op = r.querySelector<HTMLSelectElement>('[name=nodule_op]')!.value
+        const rawVal = r.querySelector<HTMLInputElement>('[name=nodule_value]')!.value.trim()
+        const rawMin = r.querySelector<HTMLInputElement>('[name=nodule_min_studies]')!.value.trim()
+        return {
+          field,
+          nodule_type,
+          op,
+          value: rawVal ? Number(rawVal) : NaN,
+          min_finalized_studies: rawMin ? Number(rawMin) : undefined,
+        }
+      }).filter(n => Number.isFinite(n.value))
+      return {
+        sex: f.get('sex') || undefined,
+        age_min: num('age_min'),
+        age_max: num('age_max'),
+        tags_any: String(f.get('tags') ?? '').split(/[,，、]/).map(x => x.trim()).filter(Boolean),
+        labs,
+        imaging_nodules: imaging_nodules.length ? imaging_nodules : undefined,
+        from: f.get('from') || undefined,
+        to: f.get('to') || undefined,
+      }
     }
     dlg.onclick = async e => {
       const t = e.target as HTMLElement
       if (e.target === dlg || t.closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = ''; return }
       if (t.closest('[data-addlab]')) { $('rsLabs').insertAdjacentHTML('beforeend', labRow()); return }
       if (t.closest('[data-dellab]')) { t.closest('.rs-labrow')?.remove(); return }
+      if (t.closest('[data-addnodule]')) { $('rsNodules').insertAdjacentHTML('beforeend', noduleRow()); return }
+      if (t.closest('[data-delnodule]')) { t.closest('.rs-nodulerow')?.remove(); return }
       if (t.closest('[data-enroll]')) {
         const ids = [...form.querySelectorAll<HTMLInputElement>('input[name=pick]:checked')].map(i => i.value)
         if (!ids.length) { notice('先勾选要入组的患者', true); return }
@@ -815,6 +808,152 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         void openStudy(studyId); void loadList()
       } catch (err) { btn.disabled = false; btn.textContent = '生成'; notice((err as Error).message, true) }
     }
+  }
+
+  /** W6.4 去标识化影像与结节数据导出申请、烧录文字扫描拦截及 PI 审批留痕。 */
+  async function imagingExportDialog(studyId: string): Promise<void> {
+    let myRole: Role = 'viewer'
+    try { myRole = (await api<{ my_role?: Role }>(`/api/studies/${studyId}`)).my_role ?? 'viewer' } catch {}
+    const isOwner = myRole === 'owner'
+    const canEdit = myRole !== 'viewer'
+    type ExportItem = {
+      id: string
+      study_id: string
+      requested_by: string
+      reason: string
+      status: 'pending_pi_approval' | 'approved' | 'rejected'
+      reviewed_by: string | null
+      review_note: string | null
+      deid_profile: string
+      included_subjects: number
+      included_studies: number
+      included_series: number
+      blocked_series: Array<{ subject_id: string; study_uid: string; series_uid: string; modality: string | null; description: string | null; reason: string }>
+      manifest: Array<{ subject_id: string; study_date: string | null; signoff_version: number; lesion_count: number }>
+      csv_preview: string
+      created_at: string
+      reviewed_at: string | null
+    }
+    const STATUS_BADGE: Record<ExportItem['status'], string> = {
+      pending_pi_approval: '<span class="flag-L small">待 PI 审批</span>',
+      approved: '<span class="pill green small">PI 已批准</span>',
+      rejected: '<span class="flag-H small">已驳回</span>',
+    }
+    const dlg = $('dialog')
+    const close = () => { dlg.hidden = true; dlg.innerHTML = '' }
+    const render = async () => {
+      let exportsList: ExportItem[] = []
+      try {
+        const res = await api<{ exports: ExportItem[] }>(`/api/studies/${studyId}/cohort/imaging-exports`)
+        exportsList = res.exports ?? []
+      } catch (err) {
+        notice((err as Error).message, true)
+        close()
+        return
+      }
+      dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="去标识影像导出与 PI 审批">
+        <div class="dialog-head"><h2>去标识影像导出与 PI 审批（W6.4）</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
+        <div class="dialog-body" style="display:flex;flex-direction:column;gap:12px;">
+          <div class="muted small">
+            严格遵循 DICOM PS3.15 Basic Application Level Confidentiality Profile 去标识规范：受试者统一映射为研究编号（S001…），仅纳入已定稿（Sign-off）影像检查，自动拦截带烧录文字风险（BurnedInAnnotation=YES 或截图/派生序列 SC/OT/SR）的序列，且须由研究负责人（PI）审批留痕后方可下载。
+          </div>
+          ${canEdit ? `<form class="form" id="imgExpForm" style="background:var(--raised);padding:10px;border:1px solid var(--line);border-radius:6px;">
+            <div class="row" style="align-items:flex-end;gap:8px;">
+              <label style="flex:1;">申请导出用途说明（必填，记入伦理与合规审计留痕）
+                <input name="reason" required placeholder="例如：队列基线肺结节形态学特征与倍增时间统计分析">
+              </label>
+              <button type="submit" class="primary small-btn">发起导出申请</button>
+            </div>
+          </form>` : ''}
+          ${exportsList.length === 0 ? '<div class="muted small">暂无影像导出申请记录。</div>' : `
+            <div class="ds-scroll">
+              <table class="help-table">
+                <thead><tr><th>申请时间</th><th>状态</th><th>用途说明</th><th>纳入范围（已定稿）</th><th>烧录风险拦截</th><th>审批意见 / 操作</th></tr></thead>
+                <tbody>
+                  ${exportsList.map(x => `
+                    <tr data-exp-id="${esc(x.id)}">
+                      <td class="small">${date(x.created_at)}</td>
+                      <td>${STATUS_BADGE[x.status] ?? esc(x.status)}</td>
+                      <td>${esc(x.reason)}</td>
+                      <td class="small">${x.included_subjects} 名受试者 · ${x.included_studies} 份定稿检查 · ${x.included_series} 个安全序列</td>
+                      <td class="small">
+                        ${x.blocked_series.length === 0
+                          ? '<span class="muted">无拦截</span>'
+                          : `<details><summary class="flag-L" style="cursor:pointer;">已拦截 ${x.blocked_series.length} 个序列</summary>
+                              ${x.blocked_series.map(b => `<div class="muted small">· ${esc(b.subject_id)} (${esc(b.modality ?? '—')}): ${esc(b.reason)}</div>`).join('')}
+                            </details>`}
+                      </td>
+                      <td class="small">
+                        ${x.status === 'pending_pi_approval'
+                          ? (isOwner
+                            ? `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                                <input type="text" data-exp-note="${esc(x.id)}" placeholder="审批备注（可选）" style="width:130px;">
+                                <button type="button" class="small-btn primary" data-exp-review="${esc(x.id)}" data-decision="approved">PI 批准</button>
+                                <button type="button" class="small-btn quiet danger-text" data-exp-review="${esc(x.id)}" data-decision="rejected">驳回</button>
+                              </div>`
+                            : '<span class="muted">等待 PI 审批</span>')
+                          : `<div>${x.review_note ? `备注：${esc(x.review_note)} · ` : ''}${x.reviewed_at ? date(x.reviewed_at) : ''}</div>
+                             ${x.status === 'approved' && x.csv_preview
+                               ? `<button type="button" class="small-btn primary" data-exp-dl="${esc(x.id)}" style="margin-top:4px;">下载去标识结节清单 (.csv)</button>`
+                               : ''}`}
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+      </div>`
+      dlg.hidden = false
+      const form = dlg.querySelector<HTMLFormElement>('#imgExpForm')
+      if (form) {
+        form.onsubmit = async ev => {
+          ev.preventDefault()
+          const fd = new FormData(form)
+          const reason = String(fd.get('reason') ?? '').trim()
+          if (!reason) return
+          try {
+            await api(`/api/studies/${studyId}/cohort/imaging-exports`, { method: 'POST', body: JSON.stringify({ reason }) })
+            notice('已提交去标识影像导出申请，等待 PI 审批')
+            await render()
+          } catch (err) {
+            notice((err as Error).message, true)
+          }
+        }
+      }
+      dlg.onclick = async ev => {
+        const t = ev.target as HTMLElement
+        if (ev.target === dlg || t.closest('[data-close]')) { close(); return }
+        const revBtn = t.closest<HTMLElement>('[data-exp-review]')
+        if (revBtn) {
+          const eid = revBtn.dataset.expReview!
+          const decision = revBtn.dataset.decision as 'approved' | 'rejected'
+          const noteInput = dlg.querySelector<HTMLInputElement>(`[data-exp-note="${eid}"]`)
+          const note = noteInput?.value.trim() || undefined
+          try {
+            await api(`/api/studies/${studyId}/cohort/imaging-exports/${eid}/review`, {
+              method: 'POST',
+              body: JSON.stringify({ decision, note }),
+            })
+            notice(decision === 'approved' ? 'PI 已批准该导出申请' : '已驳回该导出申请')
+            await render()
+          } catch (err) {
+            notice((err as Error).message, true)
+          }
+          return
+        }
+        const dlBtn = t.closest<HTMLElement>('[data-exp-dl]')
+        if (dlBtn) {
+          const eid = dlBtn.dataset.expDl!
+          const item = exportsList.find(x => x.id === eid)
+          if (item?.csv_preview) {
+            downloadBlobContent(item.csv_preview, `cohort_deid_nodules_${studyId.slice(0, 8)}_${eid.slice(0, 6)}.csv`, 'text/csv;charset=utf-8')
+          }
+        }
+      }
+    }
+    await render()
   }
 
   /** 原生 Word (.docx) Table 1 导出下载 */
@@ -2681,16 +2820,12 @@ ${modelsDesc}
     let lastTitle = `${contextTitle}_Figure`
 
     const studyContextBarHtml = !isGlobal ? `
-      <div class="rs-scenario-banner compact" style="margin-bottom:10px;padding:8px 12px;">
+      <div class="rs-scenario-banner compact" style="margin-bottom:8px;padding:6px 10px;">
         <div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="small">
             ${icon('microscope', { size: 13 })} <b>当前课题：${esc(s.title)}</b>
-            <span class="muted">（在组 ${activeCount} 人 · 数据集 ${readyDs.length} 个 · 图表保存至本研究 <code>figures/</code>）</span>
+            <span class="muted">（在组 ${activeCount} 人 · 数据集 ${readyDs.length} 个 · 归档至本研究 <code>figures/</code>）</span>
           </span>
-          <div class="row" style="gap:6px;">
-            <button type="button" class="small-btn quiet" data-st-nav="global-studio">${icon('chart', { size: 12 })} 切换至独立制图空间</button>
-            <button type="button" class="small-btn quiet" data-st-nav="write">${icon('write', { size: 12 })} 去写作插图</button>
-          </div>
         </div>
       </div>
     ` : ''
@@ -2734,35 +2869,6 @@ ${modelsDesc}
             <option value="bio_volcano">生信图：转录组差异表达火山图</option>
             <option value="img_flow">流式图：Annexin V/PI 凋亡四象限</option>
           </select>
-
-          <details class="rs-scenario-pop">
-            <summary class="small-btn quiet">${icon('info', { size: 13 })} 场景说明</summary>
-            <div class="rs-scenario-pop-card">
-              <div class="rs-scenario-grid">
-                <div class="rs-scenario-card${isGlobal ? ' active' : ''}">
-                  <div class="rs-scenario-tag">场景一 · 独立科研制图</div>
-                  <b>临床队列单表成图 / 标书机制图 / 审稿补图</b>
-                  <p class="muted small">无需创建临床研究课题，直接上传 Excel/CSV 或即开即画，一键导出 600 DPI <code>.png</code> / <code>.svg</code> / <code>.pzfx</code> / <code>.R</code> / <code>.drawio</code> / <code>.pptx</code>。</p>
-                </div>
-                <div class="rs-scenario-card">
-                  <div class="rs-scenario-tag">场景二 · 写作中内嵌配图</div>
-                  <b>论文正文 Results / 组会汇报 PPT</b>
-                  <p class="muted small">在写作编辑器中边写边画，一键插入当前段落并自动附带「来自分析」可复现代码溯源。</p>
-                  <div style="margin-top:auto;padding-top:6px;">
-                    <button type="button" class="small-btn" data-st-nav="write">${icon('write', { size: 12 })} 前往写作空间 →</button>
-                  </div>
-                </div>
-                <div class="rs-scenario-card${!isGlobal ? ' active' : ''}">
-                  <div class="rs-scenario-tag">场景三 · 临床研究课题内制图</div>
-                  <b>RCT / 队列研究全链路数据闭环</b>
-                  <p class="muted small">与入组患者队列和课题数据集版本绑定，自动归档至项目 <code>figures/</code> 并打包 SCI 投稿包。</p>
-                  <div style="margin-top:auto;padding-top:6px;">
-                    <button type="button" class="small-btn" data-st-nav="study">${icon('microscope', { size: 12 })} 前往临床研究 →</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </details>
         </div>
       </div>
 
@@ -5855,6 +5961,7 @@ ${modelsDesc}
     if (act === 'evalue') { evalueDialog(id); return }
     if (act === 'ecrf') { void ecrfDialog(id); return }
     if (act === 'vars') { void varsDialog(id); return }
+    if (act === 'img-export') { void imagingExportDialog(id); return }
     if (act === 'attach') { $('rsMore').hidden = true; await attachExisting(s); return }
     if (act === 'addmember') {
       const user = ($('rsAddUser') as HTMLSelectElement).value, role = ($('rsAddRole') as HTMLSelectElement).value

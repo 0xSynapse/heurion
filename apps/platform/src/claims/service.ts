@@ -1,4 +1,5 @@
 import type { Node as PMNode } from 'prosemirror-model'
+import type { Complete } from '../harness/complete.ts'
 import { attachComment, AnchorError } from '../model/anchors.ts'
 import type { Documents } from '../model/runtime.ts'
 import { relevantPassages, type FullTextClient } from '../literature/fulltext.ts'
@@ -6,20 +7,32 @@ import type { PubMedClient } from '../literature/pubmed.ts'
 import type { CitationRow, ClaimVerdict, EvidenceTier } from '../store/db.ts'
 import { referencePlan } from '../model/references.ts'
 import { snapshotText } from '../model/measurements.ts'
+import { getDomainSkillAdapter } from '../memory/domain-adapters.ts'
 import {
+  auditInternalConsistency,
+  auditMethodResultConsistency,
+  auditSpinAndGuidelines,
+  buildManuscriptScratchpad,
+  classifySectionRole,
+  classifyVerificationTier,
   extractClaims,
   extractTableSummaries,
+  isExemptedByActiveRules,
   type Claim,
+  type DeepReviewAuditIssue,
+  type DeepReviewCategory,
+  type ManuscriptScratchpad,
   type SectionRole,
   type TableSummary,
   type VerificationTier,
 } from './extract.ts'
 
 /**
- * 论断核对（M1，PLATFORM.md §5.5）。分工：
- * - 平台：抽出带引用的句子与「缺出处」的数值句，附带章节角色（Stage 1）、核查预算分级（Stage 2）与全表数值摘要，为每条引用取 PubMed 摘要作为证据（缓存）；
- * - 调用方模型：逐条判断「支持 / 不支持 / 无法判断」，经 claim_report 提交；
- * - 平台：不支持、无法判断、缺出处的论断以 AI 评论挂到该句，由用户决定是否修改（不自动改写）。
+ * 论断核对与四阶段深度临床评审服务（M1，PLATFORM.md §5.5 & Google PAT arXiv:2606.28277 扩展）：
+ * - Stage 1：章节感知切分（intro / methods / results / discussion）与跨章节共享 Scratchpad 构建；
+ * - Stage 2：自适应推理预算分配（light / medium / high）；
+ * - Stage 3：并行多维专项深审（Pass A 文献/PMC表格核对 + Pass B 表文算术自洽 + Pass C 统计方法配对 + Pass D Spin/规范）；
+ * - Stage 4：全局合成 Judge（跨章节去重、严重度门控、基于自进化记忆过滤假阳性，并挂载为文内批注 {#c:id}）。
  */
 
 const PAGE = 8
@@ -59,25 +72,192 @@ export interface ClaimEvidence {
   section_title?: string
   section_role?: SectionRole
   verification_tier?: VerificationTier
-  citations: Array<{ cite_id: string; number: number | null; reference: string; abstract: string | null
+  citations: Array<{
+    cite_id: string
+    number: number | null
+    reference: string
+    abstract: string | null
     /** 开放获取全文里与该句最相关的片段（摘要之外的证据；没有开放全文时缺省）。 */
-    fulltext?: { source: string; passages: string[] } }>
+    fulltext?: { source: string; passages: string[] }
+  }>
   /** 所引文献都没有可用摘要：没有可核对的证据。 */
   no_abstract?: true
   last_verdict?: ClaimVerdict
 }
 
-export class ClaimService {
-  constructor(private readonly docs: Documents, private readonly pubmed: PubMedClient, private readonly fulltext: FullTextClient | null = null) {}
+export type DeepReviewMode =
+  | 'zero_shot'
+  | 'pass_at_k'
+  | 'pat_baseline'
+  | 'heurion_deep'
+  | 'heurion_evolved'
 
-  private extract(docId: string): { claims: Claim[]; unsourced: Claim[]; tables: TableSummary[] } {
+export interface SynthesizedReviewComment {
+  id: string
+  comment_id?: string
+  node_id: string
+  section_title?: string
+  section_role: SectionRole
+  verification_tier: VerificationTier
+  category: DeepReviewCategory | 'missing_citation'
+  subtype?: string
+  severity: 'critical' | 'major' | 'minor'
+  sentence: string
+  snippet: string
+  reason: string
+  suggestion: string
+  source_pass: 'llm_stage3' | 'pass_a_citation' | 'pass_b_internal' | 'pass_c_method' | 'pass_d_spin'
+}
+
+export interface FourStageReviewResult {
+  doc_id: string
+  mode: DeepReviewMode
+  scratchpad: ManuscriptScratchpad
+  stage1_sections: number
+  stage2_budget_counts: Record<VerificationTier, number>
+  stage3_raw_candidates: number
+  stage4_deduplicated_comments: SynthesizedReviewComment[]
+  active_rules_applied: string[]
+}
+
+/**
+ * 从临床医生的自然语言反驳（Rebuttal）与原句上下文中提炼去数字化的专科边界规则（Track A narrow）。
+ * 强制剥离具体样本量、P 值、HR、置信区间等实例数字，确保 0% 跨队列实例泄漏（Instance Contamination = 0%）。
+ */
+export function synthesizeSanitizedBoundaryRule(
+  rebuttalText: string,
+  context: { sentence?: string; category?: string; reason?: string } = {},
+): { patternKey: string; rule: string } {
+  const combined = `${rebuttalText} ${context.sentence ?? ''} ${context.reason ?? ''}`.toLowerCase()
+
+  // 1. 目标试验模拟（TTE）克隆-删失-加权（CCW）伪队列与因果效应指标
+  if (
+    /(?:target\s+trial\s+emulation|\btte\b|clone|克隆|删失|ccw|不死时间|immortal\s+time|伪队列)/i.test(combined)
+  ) {
+    return {
+      patternKey: 'target_trial_emulation_ccw',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary:target_trial_emulation_ccw] 审稿核查边界收窄：在目标试验模拟（Target Trial Emulation, TTE）采用克隆-删失-加权（CCW）消除不死时间偏倚的研究中，结果表中的克隆伪队列样本量（clones）允许大于或不同于原始入组分组人数，且优先报告绝对风险差（RD）与相对风险（RR）而非传统 HR，免于触发样本量不一致或缺失 HR 误报。',
+    }
+  }
+
+  // 2. 单臂 II 期临床试验与历史对照 / ITT vs 手术切除分母
+  if (
+    /(?:单臂|single[\s-]arm|历史对照|historical\s+control|无需.*对照组|without\s+a\s+control\s+arm|手术.*人群.*itt)/i.test(
+      combined,
+    )
+  ) {
+    return {
+      patternKey: 'single_arm_phase2_trial',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary:single_arm_phase2_trial] 审稿核查边界收窄：在探索性单臂 II 期临床试验（Single-Arm Phase II Trial）中，基线特征表与生存终点系与预设历史对照阈值比对，无需平行对照组及组间比较 P 值；且病理缓解率（pCR/MPR）允许按接受手术切除人群（Per-Protocol）与全入组人群（ITT）分别报告，免于触发缺平行对照组误报。',
+    }
+  }
+
+  // 3. 临床筛查人群 vs 随机化队列 vs 非随机观察队列 / 发现-训练-验证多层子队列设计
+  if (
+    /(?:非\s*ccr|non[\s-]ccr|观察队列|筛查.*随机|平行观察|双队列|多队列|发现队列|训练队列|验证队列|子队列|multi[\s-]cohort)/i.test(
+      combined,
+    )
+  ) {
+    return {
+      patternKey: 'multi_cohort_trial_structure',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary:multi_cohort_trial_structure] 审稿核查边界收窄：当临床研究同时包含总筛查人群、达完全缓解（cCR）随机化队列与未达标平行观察队列时，各亚表分母按对应子队列独立核算，不强制要求随机表两组之和等于总筛查人数。',
+    }
+  }
+
+  // 4. 转化医学体内外动物实验分组与临床组织芯片队列（TMA）双体系规范
+  if (
+    /(?:小鼠|动物实验|荷瘤|xenograft|\bmice\b|组织芯片|\btma\b|流式|免疫微环境|体外实验)/i.test(combined)
+  ) {
+    return {
+      patternKey: 'translational_animal_tma_dual_cohort',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary:translational_animal_tma_dual_cohort] 审稿核查边界收窄：在肿瘤放射免疫转化医学研究中，体内动物荷瘤实验（mice per group）与临床组织芯片（TMA）患者队列属于独立实验体系，不同独立实验批次的小鼠每组样本量允许按实验模块分别设定，且实验组自身测量结果无需标注外部文献引用。',
+    }
+  }
+
+  // 5. 通用去数字化反驳规则合成（剥离所有阿拉伯数字、百分比与患者标识）
+  const sanitizedRebuttal = rebuttalText
+    .replace(/\b(?:n|N|clones?|HR|OR|RR|P|p)\s*[=<>≤≥:：]\s*\d+(?:\.\d+)?%?/g, '指定统计量')
+    .replace(/\b\d+(?:\.\d+)?\s*(?:%|％|例|人|名|个|只|天|月|年|mm³|mm3|mm|Gy)\b/g, '特定定量值')
+    .replace(/\b\d+(?:\.\d+)?\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120)
+
+  const candidate = `[domain:manuscript] [narrow:review_boundary] 审稿核查边界收窄：当方法或结果段陈述本研究自身入组队列、基线统计或专科设计（${sanitizedRebuttal || '不含外部研究对比词'}）时，属于合理专科研究边界，免于触发缺文献引用或教条误报。`
+
+  // 通过实例解耦守卫二次校验，若仍含实例数字泄露则回退为安全抽象规则
+  const adapter = getDomainSkillAdapter('manuscript')
+  if (adapter.hasInstanceLeakage(candidate)) {
+    return {
+      patternKey: 'self_cohort_boundary',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary] 审稿核查边界收窄：当方法或结果段陈述本研究自身入组队列、基线统计或本中心随访协议数据（且不含外部研究对比词）时，属于自报数据边界，免于触发缺文献引用（missing_citation）告警。',
+    }
+  }
+
+  return {
+    patternKey: 'custom_clinical_boundary',
+    rule: candidate,
+  }
+}
+
+export class ClaimService {
+  constructor(
+    private readonly docs: Documents,
+    private readonly pubmed: PubMedClient,
+    private readonly fulltext: FullTextClient | null = null,
+  ) {}
+
+  private getActiveBoundaryRules(owner?: string): string[] {
+    const store = this.docs.store as any
+    if (typeof store?.listMemories !== 'function') return []
+    const resolvedOwner = owner ?? 'local'
+    try {
+      const mems = store.listMemories(resolvedOwner, ['active']) as Array<{ content: string; status?: string }>
+      return (mems ?? [])
+        .filter(m => !m.status || m.status === 'active')
+        .map(m => m.content)
+        .filter(c => c.includes('[narrow:review_boundary'))
+    } catch {
+      return []
+    }
+  }
+
+  private extract(docId: string, activeRules: string[] = []): {
+    claims: Claim[]
+    unsourced: Claim[]
+    tables: TableSummary[]
+    scratchpad: ManuscriptScratchpad
+  } {
     const doc = this.docs.get(docId)
-    // 编号与导出一致（正文末尾有用户自己的文献表时接在其后编号）
-    // 测量原子按绑定时的快照显示（核对的是引文论断；测量的数值来自绑定的来源，不算手写数字）
-    const measures = new Map(this.docs.store.listMeasurements(docId).map(m => [m.id, snapshotText(m)]))
-    const { claims, unsourced } = extractClaims(doc, referencePlan(doc, this.docs.store.listCitations(docId)).numbers, measures)
+    const store = this.docs.store as any
+    const rawMeasures = typeof store?.listMeasurements === 'function' ? store.listMeasurements(docId) : []
+    const measures = new Map<string, string>((rawMeasures as any[]).map((m: any) => [String(m.id), snapshotText(m)]))
+    const rawCitations = typeof store?.listCitations === 'function' ? store.listCitations(docId) : []
+    const { claims, unsourced: rawUnsourced } = extractClaims(
+      doc,
+      referencePlan(doc, rawCitations).numbers,
+      measures,
+    )
     const tables = extractTableSummaries(doc)
-    return { claims, unsourced, tables }
+    const scratchpad = buildManuscriptScratchpad(doc, tables)
+    const unsourced = rawUnsourced.filter(
+      u =>
+        !isExemptedByActiveRules(
+          {
+            category: 'missing_citation',
+            reason: '数值型论断缺少出处',
+            sentence: u.sentence,
+            section_role: u.section_role,
+          },
+          activeRules,
+        ),
+    )
+    return { claims, unsourced, tables, scratchpad }
   }
 
   private async abstractFor(doi: string, pmid: string | null): Promise<string | null> {
@@ -95,7 +275,7 @@ export class ClaimService {
     return abstract
   }
 
-  /** 一页待核对的论断（带证据）+ 缺出处的数值句 + 文档表格数值摘要（首页）。 */
+  /** 一页待核对的论断（带证据）+ 缺出处的数值句 + 文档表格数值摘要 + 四阶段深审问题（首页）。 */
   async evidence(docId: string, cursor = 0): Promise<{
     rev: number
     claims: ClaimEvidence[]
@@ -108,12 +288,18 @@ export class ClaimService {
       verification_tier?: VerificationTier
     }>
     tables?: TableSummary[]
+    audit_issues?: DeepReviewAuditIssue[]
+    scratchpad?: ManuscriptScratchpad
     total: number
     next_cursor: number | null
   }> {
-    const { claims, unsourced, tables } = this.extract(docId)
-    const store = this.docs.store
-    const cites = new Map(store.listCitations(docId).map(c => [c.id, c]))
+    const store = this.docs.store as any
+    const owner = typeof store?.getDoc === 'function' ? store.getDoc(docId)?.owner : undefined
+    const activeRules = this.getActiveBoundaryRules(owner)
+    const { claims, unsourced, tables, scratchpad } = this.extract(docId, activeRules)
+    const cites = new Map<string, CitationRow>(
+      ((typeof store?.listCitations === 'function' ? store.listCitations(docId) : []) as CitationRow[]).map(c => [c.id, c]),
+    )
     const numbers = referencePlan(this.docs.get(docId), [...cites.values()]).numbers
     const page = claims.slice(cursor, cursor + PAGE)
     const out: ClaimEvidence[] = []
@@ -126,11 +312,14 @@ export class ClaimService {
         const full = this.fulltext ? await this.fulltext.get(row.doi).catch(() => null) : null
         const passages = full ? relevantPassages(full.text, c.sentence) : []
         citations.push({
-          cite_id: id, number: numbers.get(id) ?? null, reference: row.formatted, abstract: abstract ? fitAbstract(abstract) : null,
+          cite_id: id,
+          number: numbers.get(id) ?? null,
+          reference: row.formatted,
+          abstract: abstract ? fitAbstract(abstract) : null,
           ...(passages.length ? { fulltext: { source: full!.source === 'pmc' ? 'PMC 开放获取全文' : '开放获取全文（Unpaywall）', passages } } : {}),
         })
       }
-      const last = store.getClaimCheck(docId, c.claim_id)?.verdict
+      const last = typeof store?.getClaimCheck === 'function' ? store.getClaimCheck(docId, c.claim_id)?.verdict : undefined
       const noAbstract = citations.every(x => !x.abstract && !x.fulltext)
       out.push({
         claim_id: c.claim_id,
@@ -145,18 +334,23 @@ export class ClaimService {
       })
     }
     const next = cursor + PAGE < claims.length ? cursor + PAGE : null
+    const auditIssues = cursor === 0 ? this.auditDeepReviewPasses(docId, { owner }) : undefined
     return {
       rev: this.docs.rev(docId),
       claims: out,
-      unsourced: cursor === 0 ? unsourced.map(u => ({
-        claim_id: u.claim_id,
-        node_id: u.node_id,
-        sentence: u.sentence,
-        ...(u.section_title ? { section_title: u.section_title } : {}),
-        ...(u.section_role ? { section_role: u.section_role } : {}),
-        ...(u.verification_tier ? { verification_tier: u.verification_tier } : {}),
-      })) : [],
+      unsourced: cursor === 0
+        ? unsourced.map(u => ({
+            claim_id: u.claim_id,
+            node_id: u.node_id,
+            sentence: u.sentence,
+            ...(u.section_title ? { section_title: u.section_title } : {}),
+            ...(u.section_role ? { section_role: u.section_role } : {}),
+            ...(u.verification_tier ? { verification_tier: u.verification_tier } : {}),
+          }))
+        : [],
       ...(cursor === 0 && tables.length > 0 ? { tables } : {}),
+      ...(cursor === 0 && auditIssues && auditIssues.length > 0 ? { audit_issues: auditIssues } : {}),
+      ...(cursor === 0 ? { scratchpad } : {}),
       total: claims.length,
       next_cursor: next,
     }
@@ -164,8 +358,6 @@ export class ClaimService {
 
   /**
    * 记录核对结果；不支持 / 无法判断 / 缺出处 → 在该句挂 AI 评论（同一句同一结论不重复挂）。
-   * 没有可核对证据的「无法判断」（no_evidence，或所引文献都没有摘要）只记录、不挂评论（C2：否则八成正确的句子被挂评论），
-   * 状态为 no_evidence，由回合总结汇总。返回每条的处理结果。
    */
   report(
     docId: string,
@@ -182,14 +374,21 @@ export class ClaimService {
     const { claims, unsourced } = this.extract(docId)
     const byId = new Map([...claims, ...unsourced].map(c => [c.claim_id, c]))
     const cites = new Map(store.listCitations(docId).map(c => [c.id, c]))
-    const hasAbstract = (claim: Claim) => claim.cite_ids.some(id => { const row = cites.get(id); return !!(row && (store.getAbstract(row.doi)?.abstract || store.getFullText(row.doi)?.text)) })
+    const hasAbstract = (claim: Claim) =>
+      claim.cite_ids.some(id => {
+        const row = cites.get(id)
+        return !!(row && (store.getAbstract(row.doi)?.abstract || store.getFullText(row.doi)?.text))
+      })
     const out: Array<{ claim_id: string; status: 'recorded' | 'commented' | 'unchanged' | 'stale' | 'no_evidence'; comment_id?: string }> = []
     let doc = this.docs.get(docId)
     const commentOps: Array<{ op: 'claim_comment'; thread: string }> = []
     const pendingChecks: Array<() => void> = []
     for (const r of results) {
       const claim = byId.get(r.claim_id)
-      if (!claim) { out.push({ claim_id: r.claim_id, status: 'stale' }); continue }
+      if (!claim) {
+        out.push({ claim_id: r.claim_id, status: 'stale' })
+        continue
+      }
       const prev = store.getClaimCheck(docId, r.claim_id)
       if (prev && prev.verdict === 'exempted' && r.verdict !== 'supported') {
         out.push({ claim_id: r.claim_id, status: 'unchanged' })
@@ -210,7 +409,7 @@ export class ClaimService {
         prev &&
         prev.verdict === effectiveVerdict &&
         prev.evidence_tier === effectiveTier &&
-        (effectiveVerdict === 'supported' ? (!needsHighRiskAbstractNotice || Boolean(prev.comment_id)) : Boolean(prev.comment_id))
+        (effectiveVerdict === 'supported' ? !needsHighRiskAbstractNotice || Boolean(prev.comment_id) : Boolean(prev.comment_id))
       ) {
         out.push({ claim_id: r.claim_id, status: 'unchanged', ...(prev.comment_id ? { comment_id: prev.comment_id } : {}) })
         continue
@@ -238,7 +437,11 @@ export class ClaimService {
           rev: this.docs.rev(docId),
         })
       })
-      out.push({ claim_id: r.claim_id, status: noEvidence ? 'no_evidence' : commentId ? 'commented' : 'recorded', ...(commentId ? { comment_id: commentId } : {}) })
+      out.push({
+        claim_id: r.claim_id,
+        status: noEvidence ? 'no_evidence' : commentId ? 'commented' : 'recorded',
+        ...(commentId ? { comment_id: commentId } : {}),
+      })
     }
     if (commentOps.length > 0) {
       this.docs.commit(docId, doc, { actor: 'system', turnId: null, ops: commentOps })
@@ -295,9 +498,8 @@ export class ClaimService {
     }
 
     if (fullPassages.length > 0 && (tier === 'table' || tier === 'fulltext')) {
-      const targetPassages = tier === 'table' && fullPassages.some(isTablePassage)
-        ? fullPassages.filter(isTablePassage)
-        : fullPassages
+      const targetPassages =
+        tier === 'table' && fullPassages.some(isTablePassage) ? fullPassages.filter(isTablePassage) : fullPassages
       const bestPassage = this.pickBestText(targetPassages, claim.sentence) ?? targetPassages[0]!
       const lines = bestPassage.split('\n').map(l => l.trim()).filter(Boolean)
       const tableLines = lines.filter(l => l.includes('|') && !/^\|\s*[-:]+(?:\s*\|\s*[-:]+)*\s*\|?$/.test(l))
@@ -428,13 +630,469 @@ export class ClaimService {
     } catch (err) {
       if (!(err instanceof AnchorError)) throw err
       // 找不到锚定文字：退化为整块锚点
-      store.db.prepare('UPDATE comments SET snippet = \'\' WHERE id = ?').run(row.id)
+      store.db.prepare("UPDATE comments SET snippet = '' WHERE id = ?").run(row.id)
     }
     const quoteBlock = evidenceQuote
       ? `\n${evidenceTier === 'table' || evidenceTier === 'fulltext' ? '【匹配全文/表格原文】' : '【匹配摘要原文】'}：${evidenceQuote}`
       : ''
     store.addReply(row.id, 'ai', `论断核对：${label}。${reason}${quoteBlock}\n句子：${claim.sentence}`)
     return { commentId: row.id, doc: nextDoc, anchored }
+  }
+
+  /**
+   * 静态/记忆感知的四阶段深度审稿专项巡检（Stage 3 Pass B 内部表文自洽 + Pass C 方法-结果配对 + Pass D Spin Bias 与规范）：
+   * 可独立调用或与 verify_claims / runFourStageDeepReview 联合执行。
+   */
+  auditDeepReviewPasses(
+    docId: string,
+    opts: { includeInternal?: boolean; useMemory?: boolean; owner?: string } = {},
+  ): DeepReviewAuditIssue[] {
+    const doc = this.docs.get(docId)
+    const tables = extractTableSummaries(doc)
+    const activeRules = opts.useMemory !== false ? this.getActiveBoundaryRules(opts.owner) : []
+    const includeInternal = opts.includeInternal !== false
+    return [
+      ...(includeInternal ? auditInternalConsistency(doc, tables, activeRules) : []),
+      ...auditMethodResultConsistency(doc, tables, activeRules),
+      ...auditSpinAndGuidelines(doc, activeRules),
+    ]
+  }
+
+  /**
+   * Stage 4 全局合成 Judge（Global Synthesis, Deduplication, Severity Gating & {#c:id} Comment Anchoring）：
+   * 对应 Google PAT (arXiv:2606.28277) Stage 4：
+   * 1. 跨章节/多通道重复问题去重（Deduplication）；
+   * 2. 严重度分级排序（critical -> major -> minor）；
+   * 3. 若开启自进化记忆（useMemory），依据活跃 `[narrow:review_boundary]` 规则过滤假阳性；
+   * 4. 可选将去重后的审稿意见直接挂载为文档内联批注 `{#c:id}`。
+   */
+  synthesizeStage4Review(
+    docId: string,
+    candidates: SynthesizedReviewComment[],
+    opts: {
+      deduplicate?: boolean
+      useMemory?: boolean
+      owner?: string
+      anchorComments?: boolean
+    } = {},
+  ): SynthesizedReviewComment[] {
+    const activeRules = opts.useMemory ? this.getActiveBoundaryRules(opts.owner) : []
+    const deduplicate = opts.deduplicate !== false
+
+    const filtered = candidates.filter(c => !isExemptedByActiveRules(c, activeRules))
+    const deduplicated: SynthesizedReviewComment[] = []
+    const seenKeys = new Set<string>()
+
+    for (const item of filtered) {
+      if (deduplicate) {
+        const normSentence = item.sentence.replace(/\s+/g, '').toLowerCase().slice(0, 60)
+        const key = `${item.category}|${item.subtype ?? ''}|${item.node_id}|${normSentence}`
+        if (seenKeys.has(key)) continue
+
+        // 跨通道语义去重：同一段落/表格块若已被结构化精确核查（Pass B/C/D）定位，或同表同一子类型（如双零笔误、修订粘连含HR），合并去重
+        const isRedundantWithExisting = deduplicated.some(existing => {
+          if (existing.node_id !== item.node_id) return false
+          if (existing.subtype && existing.subtype === item.subtype) return true
+          if (
+            existing.subtype === 'uncleaned_revision_merge_artifact' &&
+            item.subtype === 'cross_section_hr_mismatch'
+          ) {
+            return true
+          }
+          if (existing.source_pass !== 'llm_stage3' && item.source_pass === 'llm_stage3') {
+            return true
+          }
+          return false
+        })
+        if (isRedundantWithExisting) continue
+        seenKeys.add(key)
+      }
+      deduplicated.push(item)
+    }
+
+    const sevRank: Record<'critical' | 'major' | 'minor', number> = { critical: 0, major: 1, minor: 2 }
+    deduplicated.sort((a, b) => sevRank[a.severity] - sevRank[b.severity])
+
+    if (opts.anchorComments && deduplicated.length > 0) {
+      const store = this.docs.store as any
+      if (typeof store?.addComment === 'function') {
+        let doc = this.docs.get(docId)
+        const ops: Array<{ op: 'claim_comment'; thread: string }> = []
+        for (const item of deduplicated) {
+          const row = store.addComment({
+            doc_id: docId,
+            node_id: item.node_id,
+            snippet: item.snippet.slice(0, 80),
+          })
+          item.comment_id = row.id
+          try {
+            doc = attachComment(doc, item.node_id, item.snippet.slice(0, 80), row.id).doc
+            ops.push({ op: 'claim_comment', thread: row.id })
+          } catch {
+            /* 锚点退化为块级评论 */
+          }
+          if (typeof store?.addReply === 'function') {
+            store.addReply(
+              row.id,
+              'ai',
+              `[${item.severity.toUpperCase()} | ${item.category}] ${item.reason}\n【建议修改】：${item.suggestion}`,
+            )
+          }
+        }
+        if (ops.length > 0 && typeof (this.docs as any).commit === 'function') {
+          this.docs.commit(docId, doc, { actor: 'system', turnId: null, ops })
+        }
+      }
+    }
+
+    return deduplicated
+  }
+
+  /**
+   * 端到端四阶段临床深度审稿管线（支持 Google PAT 基线与 Heurion 2.0 模式同台对比）：
+   * - `zero_shot`：单次全文调用（Google PAT Table 2 基线）；
+   * - `pass_at_k`：k=3 独立全文采样汇总、无 Stage 4 去重（Google PAT Section 2 精度崩塌基线）；
+   * - `pat_baseline`：原版 Google PAT 四阶段纯文本管线（Stage 1 章节切分 + Stage 2 预算分级 + Stage 3 共享 Scratchpad 分段 LLM 深审 + Stage 4 去重合成，不含结构化表文 AST 核查与批注自进化记忆）；
+   * - `heurion_deep`：PAT 四阶段 + Stage 3 结构化四维核查（Pass A/B/C/D）+ Stage 4 全局合成与批注锚定；
+   * - `heurion_evolved`：PAT 四阶段 + 结构化四维核查 + 医生批注反驳自进化记忆（Track A narrow + Track B）。
+   */
+  async runFourStageDeepReview(
+    docId: string,
+    opts: {
+      mode: DeepReviewMode
+      complete?: Complete | null
+      owner?: string
+      anchorComments?: boolean
+      passK?: number
+    },
+  ): Promise<FourStageReviewResult> {
+    const doc = this.docs.get(docId)
+    const tables = extractTableSummaries(doc)
+    const scratchpad = buildManuscriptScratchpad(doc, tables)
+    const useMemory = opts.mode === 'heurion_evolved'
+    const activeRules = useMemory ? this.getActiveBoundaryRules(opts.owner) : []
+
+    // Stage 1 & Stage 2：按章节切分文档并统计 Light / Medium / High 预算分布
+    const sections: Array<{
+      title: string
+      role: SectionRole
+      tier: VerificationTier
+      blocks: Array<{ nodeId: string; text: string; tier: VerificationTier }>
+    }> = []
+    let curSection = {
+      title: 'Abstract / Header',
+      role: 'other' as SectionRole,
+      tier: 'medium' as VerificationTier,
+      blocks: [] as Array<{ nodeId: string; text: string; tier: VerificationTier }>,
+    }
+    const budgetCounts: Record<VerificationTier, number> = { light: 0, medium: 0, high: 0 }
+
+    doc.forEach(node => {
+      if (node.type.name === 'heading') {
+        if (curSection.blocks.length > 0) sections.push(curSection)
+        const hText = node.textContent.trim()
+        const role = classifySectionRole(hText)
+        curSection = { title: hText, role, tier: role === 'methods' || role === 'results' ? 'high' : 'medium', blocks: [] }
+        return
+      }
+      if (node.isTextblock) {
+        const text = node.textContent.trim()
+        if (!text) return
+        const nodeId = (node.attrs.id as string | null) ?? `p_${curSection.blocks.length + 1}`
+        const tier = classifyVerificationTier(text, 0, curSection.role)
+        budgetCounts[tier]++
+        if (tier === 'high') curSection.tier = 'high'
+        curSection.blocks.push({ nodeId, text, tier })
+      }
+    })
+    if (curSection.blocks.length > 0) sections.push(curSection)
+
+    const candidates: SynthesizedReviewComment[] = []
+    let seq = 1
+
+    // 1. 若在 heurion_deep 或 heurion_evolved 模式下，执行 Stage 3 结构化临床四维核查（Pass B + Pass C + Pass D）
+    if (opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved') {
+      const structIssues = [
+        ...auditInternalConsistency(doc, tables, activeRules),
+        ...auditMethodResultConsistency(doc, tables, activeRules),
+        ...auditSpinAndGuidelines(doc, activeRules),
+      ]
+      for (const iss of structIssues) {
+        candidates.push({
+          id: `rev_struct_${seq++}`,
+          node_id: iss.node_id,
+          ...(iss.section_title ? { section_title: iss.section_title } : {}),
+          section_role: iss.section_role,
+          verification_tier: 'high',
+          category: iss.category,
+          ...(iss.subtype ? { subtype: iss.subtype } : {}),
+          severity: iss.severity,
+          sentence: iss.sentence,
+          snippet: iss.snippet,
+          reason: iss.reason,
+          suggestion: iss.suggestion,
+          source_pass:
+            iss.category === 'internal_inconsistency'
+              ? 'pass_b_internal'
+              : iss.category === 'method_result_mismatch'
+                ? 'pass_c_method'
+                : 'pass_d_spin',
+        })
+      }
+    }
+
+    // 2. 若提供了在线大模型（complete），按对应模式执行 LLM 审稿推理
+    if (opts.complete) {
+      const rulesContext =
+        useMemory && activeRules.length > 0
+          ? `\n【本课题组已确认的专科审稿边界豁免规则（请严格遵守，切勿对以下情况误报）】：\n${activeRules.map(r => `- ${r}`).join('\n')}\n`
+          : ''
+
+      const parseLlmIssues = (rawJson: string, fallbackSection?: { title: string; role: SectionRole; firstNodeId: string }) => {
+        const cleaned = rawJson.replace(/```(?:json)?/g, '').trim()
+        const match = /\[[\s\S]*\]/.exec(cleaned) ?? /\{[\s\S]*\}/.exec(cleaned)
+        if (!match) return
+        try {
+          const parsed = JSON.parse(match[0])
+          const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed.issues) ? parsed.issues : []
+          for (const item of list) {
+            if (!item || typeof item.reason !== 'string' || !item.reason.trim()) continue
+            const catRaw = String(item.category ?? 'method_result_mismatch')
+            const category: DeepReviewCategory =
+              catRaw === 'internal_inconsistency' ||
+              catRaw === 'method_result_mismatch' ||
+              catRaw === 'spin_or_guideline' ||
+              catRaw === 'citation_distortion'
+                ? catRaw
+                : 'method_result_mismatch'
+            const sevRaw = String(item.severity ?? 'major')
+            const severity: 'critical' | 'major' | 'minor' =
+              sevRaw === 'critical' || sevRaw === 'major' || sevRaw === 'minor' ? sevRaw : 'major'
+            const sentence = String(item.sentence ?? item.quote ?? fallbackSection?.title ?? '').trim()
+            candidates.push({
+              id: `rev_llm_${seq++}`,
+              node_id: String(item.node_id ?? fallbackSection?.firstNodeId ?? 'p_1'),
+              ...(fallbackSection?.title ? { section_title: fallbackSection.title } : {}),
+              section_role: fallbackSection?.role ?? 'other',
+              verification_tier: 'high',
+              category,
+              ...(item.subtype ? { subtype: String(item.subtype) } : {}),
+              severity,
+              sentence: sentence || '全文段落',
+              snippet: sentence.slice(0, 60),
+              reason: item.reason.trim(),
+              suggestion: String(item.suggestion ?? '请核实并修正该处表述或数据。').trim(),
+              source_pass: 'llm_stage3',
+            })
+          }
+        } catch {
+          /* JSON 解析容错 */
+        }
+      }
+
+      const fullProse = sections
+        .map(s => `## ${s.title}\n` + s.blocks.map(b => `[${b.nodeId}] ${b.text}`).join('\n'))
+        .join('\n\n')
+
+      const tableMarkdown =
+        opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
+          ? tables
+              .map(
+                t =>
+                  `### Table (${t.node_id}): ${t.caption ?? ''}\n| ${t.headers.join(' | ')} |\n` +
+                  t.rows.map(r => `| ${r.join(' | ')} |`).join('\n'),
+              )
+              .join('\n\n')
+          : tables.map(t => `Table (${t.node_id}) headers: ${t.headers.join(', ')}`).join('\n')
+
+      if (opts.mode === 'zero_shot') {
+        const sys =
+          '你是医学与科学期刊审稿专家。请单次通读以下论文全文，找出其中的客观计算/分母错误、统计方法与结果矛盾、研究设计缺陷或结论夸大问题。输出 JSON 数组：[{"node_id":"...","sentence":"原文原句","category":"internal_inconsistency|method_result_mismatch|spin_or_guideline","severity":"critical|major|minor","reason":"中文原因","suggestion":"中文修改建议"}]。'
+        const raw = await opts.complete(sys, `${fullProse}\n\n${tableMarkdown}`)
+        parseLlmIssues(raw)
+      } else if (opts.mode === 'pass_at_k') {
+        const k = opts.passK ?? 3
+        const passPromises = Array.from({ length: k }, async (_, i) => {
+          const sys = `你是科学论文审稿员（Pass #${i + 1}/${k}，侧重维度：${
+            i === 0 ? '样本量与数值前后矛盾' : i === 1 ? '研究设计与对照组/统计学检验缺陷' : '结论夸大与缩写/排版规范'
+          }）。请找出论文中所有可疑问题（宁可多报勿漏报）。输出 JSON 数组：[{"node_id":"...","sentence":"原文原句","category":"internal_inconsistency|method_result_mismatch|spin_or_guideline","severity":"critical|major|minor","reason":"中文原因","suggestion":"中文修改建议"}]。`
+          return opts.complete!(sys, `${fullProse}\n\n${tableMarkdown}`)
+        })
+        const raws = await Promise.all(passPromises)
+        for (const raw of raws) parseLlmIssues(raw)
+      } else {
+        // pat_baseline / heurion_deep / heurion_evolved：按 Stage 1 章节与 Stage 2 预算（重点审查 High/Medium 章节）共享 Scratchpad 并行执行（Stage 3 Parallel Deep Review）
+        const scratchpadSummary =
+          `【跨章节共享 Scratchpad】：入组样本量 N=${scratchpad.enrolled_sample_sizes.join('/') || '未知'}；` +
+          `表格样本量 n=${scratchpad.table_sample_sizes.join('/') || '未知'}；` +
+          (scratchpad.clone_sample_sizes.length ? `表头 clones=${scratchpad.clone_sample_sizes.join('/')}；` : '') +
+          `声明统计指标=${scratchpad.declared_summary_metrics.join(', ') || '未声明'}；` +
+          `声明检验方法=${scratchpad.declared_tests.join(', ') || '未声明'}。`
+
+        const targetSections = sections.filter(sec => !(sec.tier === 'light' && sec.role === 'intro'))
+        const secResults = await Promise.all(
+          targetSections.map(async sec => {
+            const secText = sec.blocks.map(b => `[${b.nodeId}] ${b.text}`).join('\n')
+            const sys =
+              `你是四阶段科学深度审稿系统（Stage 3 Specialist Reviewer，当前分配预算：${sec.tier.toUpperCase()} Thinking Track）。\n` +
+              `${scratchpadSummary}${rulesContext}\n` +
+              `请结合全局 Scratchpad 深入审查当前章节「${sec.title}」（角色：${sec.role}），重点核查：\n` +
+              `1) 样本量分母、百分比算术（n/N）、置信区间上下界或修订粘连错误；\n` +
+              `2) 统计方法（Mean±SD vs SEM vs Median[IQR]）、对照组设计与结果报告是否矛盾；\n` +
+              `3) 跨章节终点指标（如 pCR、OS、HR）或缩略语定义是否前后不一致。\n` +
+              `若无客观问题请返回 []；若有问题请严格输出 JSON 数组：[{"node_id":"块ID","sentence":"原文原句","category":"internal_inconsistency|method_result_mismatch|spin_or_guideline","severity":"critical|major|minor","reason":"中文具体原因","suggestion":"中文修改建议"}]。`
+            const userPayload =
+              sec.role === 'results' || sec.role === 'methods'
+                ? `【当前章节正文】：\n${secText}\n\n【关联表格信息】：\n${tableMarkdown}`
+                : `【当前章节正文】：\n${secText}`
+            const raw = await opts.complete!(sys, userPayload)
+            return { raw, sec }
+          }),
+        )
+        for (const { raw, sec } of secResults) {
+          parseLlmIssues(raw, {
+            title: sec.title,
+            role: sec.role,
+            firstNodeId: sec.blocks[0]?.nodeId ?? 'p_1',
+          })
+        }
+      }
+    }
+
+    // Stage 4：全局合成（pass_at_k 模式下不去重以展示 Google Section 2 的假阳性堆积效应；其余模式执行 Stage 4 去重与过滤）
+    const synthesized = this.synthesizeStage4Review(docId, candidates, {
+      deduplicate: opts.mode !== 'pass_at_k',
+      useMemory,
+      owner: opts.owner,
+      anchorComments: opts.anchorComments,
+    })
+
+    return {
+      doc_id: docId,
+      mode: opts.mode,
+      scratchpad,
+      stage1_sections: sections.length,
+      stage2_budget_counts: budgetCounts,
+      stage3_raw_candidates: candidates.length,
+      stage4_deduplicated_comments: synthesized,
+      active_rules_applied: activeRules,
+    }
+  }
+
+  /**
+   * 审稿批注自演进闭环（Comment-Driven Dual-Track Evolution Loop）：
+   * 将研究者在 `{#c:id}` 审稿批注上的交互反馈回流至双轨自演进引擎：
+   * 1. 作者驳回/申辩（rebuttalText 非空且 acceptedFix !== true）：
+   *    - 将关联的 claim_check 标记为 `exempted`（幂等豁免，后续复审不再重复挂批注）；
+   *    - 触发 Track A `narrow` 算子：通过 `synthesizeSanitizedBoundaryRule` 动态提炼去数字化的专科边界记忆，避免对同类自报队列、TTE 克隆伪队列、单臂试验或转化实验再次误报。
+   * 2. 作者采纳审稿意见并改稿修复（acceptedFix === true）：
+   *    - 写入带 `recovery_ops` 的已验证执行信号（execution_signal），供 Track B 程序性策略引擎提炼前置守卫规则。
+   */
+  evolveFromReviewComment(
+    docId: string,
+    commentId: string,
+    opts: {
+      owner?: string
+      rebuttalText?: string
+      acceptedFix?: boolean
+      issueCategory?: string
+      recoveryOp?: string
+      sentence?: string
+      reason?: string
+    } = {},
+  ): {
+    track: 'track_a_narrow' | 'track_b_procedural' | 'none'
+    exemptedClaimId?: string
+    memoryId?: string
+    signalId?: string
+    distilledRule?: string
+  } {
+    const store = this.docs.store as any
+    const owner = opts.owner ?? (typeof store?.getDoc === 'function' ? store.getDoc(docId)?.owner : undefined) ?? 'local'
+    const checks = (typeof store?.listClaimChecks === 'function' ? store.listClaimChecks(docId) : []) as Array<any>
+    const linkedCheck = checks.find(c => c.comment_id === commentId)
+    const commentObj = typeof store?.getComment === 'function' ? store.getComment(docId, commentId) : undefined
+    const aiReplyText = commentObj?.replies?.find((r: any) => r.role === 'ai')?.text ?? ''
+
+    // Case 1: 研究者回复驳回（Rebuttal）-> 豁免该论断 + Track A narrow 动态收窄边界记忆
+    if (opts.rebuttalText && !opts.acceptedFix) {
+      if (linkedCheck && typeof store?.putClaimCheck === 'function') {
+        store.putClaimCheck({
+          doc_id: docId,
+          claim_id: linkedCheck.claim_id,
+          node_id: linkedCheck.node_id,
+          sentence: linkedCheck.sentence,
+          verdict: 'exempted',
+          evidence_tier: linkedCheck.evidence_tier,
+          evidence_quote: linkedCheck.evidence_quote,
+          reason: `作者申辩豁免：${opts.rebuttalText.trim()}`,
+          comment_id: commentId,
+          rev: this.docs.rev(docId),
+        })
+      }
+
+      const { patternKey, rule: narrowRule } = synthesizeSanitizedBoundaryRule(opts.rebuttalText, {
+        sentence: opts.sentence ?? linkedCheck?.sentence ?? commentObj?.snippet,
+        category: opts.issueCategory,
+        reason: opts.reason ?? linkedCheck?.reason ?? aiReplyText,
+      })
+
+      const existingMems = (typeof store?.listMemories === 'function' ? store.listMemories(owner) : []) as Array<any>
+      const matchTag = `[narrow:review_boundary:${patternKey}]`
+      const existingMem = existingMems.find(
+        m => m.content.includes(matchTag) || (patternKey === 'self_cohort_boundary' && m.content.includes('[narrow:review_boundary]')),
+      )
+      const memRow =
+        existingMem && typeof store?.updateMemory === 'function'
+          ? (store.updateMemory(existingMem.id, { content: narrowRule }), existingMem)
+          : store.addMemory({
+              scope: 'user',
+              owner,
+              project_id: null,
+              kind: 'preference',
+              content: narrowRule,
+              norm: narrowRule.toLowerCase(),
+              reason: `审稿批注作者申辩收窄边界：${opts.rebuttalText.trim().slice(0, 80)}`,
+              source: 'auto',
+              actor: 'user',
+              explicit: 1,
+              evidence: 1,
+              status: 'active',
+            })
+      return {
+        track: 'track_a_narrow',
+        ...(linkedCheck ? { exemptedClaimId: linkedCheck.claim_id } : {}),
+        memoryId: memRow.id,
+        distilledRule: narrowRule,
+      }
+    }
+
+    // Case 2: 研究者采纳审稿意见并改稿修复 -> 记录带恢复轨迹的信号供 Track B 提炼前置规则
+    if (opts.acceptedFix) {
+      const code = opts.issueCategory ?? (linkedCheck?.verdict === 'unsupported' ? 'citation_unsupported' : 'review_comment_fix')
+      const recovery = opts.recoveryOp ?? 'doc_read → replace_text (align prose with table/method/citation evidence) → resolve_comment'
+      const sigRow = store.addExecutionSignal({
+        owner,
+        doc_id: docId,
+        turn_id: `review_fix_${commentId}`,
+        kind: 'guard_reject',
+        code,
+        detail: JSON.stringify({
+          message: `作者采纳审稿批注 ${commentId} 并完成正文修正`,
+          hint: opts.reason ?? linkedCheck?.reason ?? '落笔前先核对正文数值与表格/统计方法/文献原文一致性，避免产生需审稿返工的不一致或夸大表述',
+          failed_ops: 'unverified_prose_claim',
+          recovery_ops: recovery,
+          domain: 'manuscript',
+        }),
+      })
+      return {
+        track: 'track_b_procedural',
+        ...(linkedCheck ? { exemptedClaimId: linkedCheck.claim_id } : {}),
+        signalId: sigRow.id,
+      }
+    }
+
+    return { track: 'none' }
   }
 }
 
@@ -443,10 +1101,11 @@ export function verifyPrompt(docId: string): string {
   return (
     `请按四阶段学术审稿工作流核对并审查文档 ${docId}，只把真正有问题、需要作者注意的地方挂为评论，不直接修改正文：\n` +
     `1. [Stage 1 & 2 章节感知与预算分级核对]：调用 verify_claims（doc_id="${docId}"），按 next_cursor 翻页直到取完；结合每条论断的 section_role（intro/methods/results/discussion）与 verification_tier（high/medium/light）分配审查力度，重点深挖 high 级统计与定量论断；${CLAIM_CRITERIA}每页判断完用 claim_report 提交；\n` +
-    `2. [Stage 3 多维专项审查（文献对齐 / 正文-表格自洽 / 外部论断溯源）]：结合 verify_claims 返回的 tables 摘要与 doc_read 通读全文：\n` +
+    `2. [Stage 3 多维专项审查（文献对齐 / 正文-表格自洽 / 方法-结果对齐 / Spin 与报告规范）]：结合 verify_claims 返回的 tables 摘要、audit_issues 与 doc_read 通读全文：\n` +
     `   - Pass A（外部文献对齐）：核实数值（含百分比与小数等价性）及效应方向是否与所引文献一致；若文献缺失摘要，可调用 pubmed_search 实时检索补全证据；\n` +
-    `   - Pass B（跨章节与正文-表格自洽）：核对摘要、方法、结果及表格（如 Table 1）之间的总样本量 N、亚组频数/百分比加总、HR/OR/P 值是否前后一致；\n` +
-    `   - Pass C（缺出处外部论断甄别）：对本研究自身队列、方法与结果数据切勿机械判为 missing_citation；对引言/讨论中引述外部研究或指南数据却漏标引用的句子，用 claim_report 标记并可通过 pubmed_search 推荐候选文献；\n` +
+    `   - Pass B（跨章节与正文-表格自洽）：核对摘要、方法、结果及表格（如 Table 1）之间的总样本量 N、亚组频数/百分比加总、HR/OR/P 值及影像测量原子 [@m:id] 是否前后一致；\n` +
+    `   - Pass C（统计/影像方法与结果一致性及缺出处溯源）：核查统计方法（正态 Mean±SD vs 偏态 Median[IQR] vs 标准误 SEM、卡方 vs Fisher 精确检验）及缩略语定义是否与结果一致；对引言/讨论中漏标引用的外部研究论断用 claim_report 标记；\n` +
+    `   - Pass D（Spin Bias 与 CONSORT/STROBE 规范）：拦截 P ≥ 0.05 却使用“显著获益”阳性夸大措辞（Spin Bias）或观察性研究使用强因果定性措辞；\n` +
     `3. [Stage 4 全局汇总与严重度分级]：对跨章节重复问题去重，按严重度（严重 Critical / 主要 Major / 次要 Minor）在两三句话内总结核对结果。`
   )
 }

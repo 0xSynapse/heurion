@@ -1789,7 +1789,17 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
     const views = measureViews(c, row)
-    return c.json({ strict: measurementSvc().strict(row.id), measurements: store.listMeasurements(row.id).map(m => ({ ...m, view: views.get(m.id) })) })
+    const rows = store.listMeasurements(row.id)
+    const ctxPatientId = (() => {
+      try { return row.context ? (JSON.parse(row.context)?.patient_id ?? null) : null } catch { return null }
+    })()
+    const patientId = ctxPatientId ?? rows.find(m => m.patient_id)?.patient_id ?? null
+    return c.json({
+      strict: measurementSvc().strict(row.id),
+      explicit_strict: store.measurementStrict(row.id),
+      patient_id: patientId,
+      measurements: rows.map(m => ({ ...m, view: views.get(m.id) })),
+    })
   })
 
   /**
@@ -1901,6 +1911,34 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
     return streamTurn(c, deps, row.id, verifyPrompt(row.id))
+  })
+
+  /** 四阶段全文深度审稿（默认启用自演化模式 heurion_evolved，直接挂载结构化审稿批注并返回全文数字核对快照）。 */
+  app.post('/api/docs/:id/deep-review', async c => {
+    const row = owned(c)
+    if (!row) return c.json({ error: 'not found' }, 404)
+    docs.flush(row.id)
+    const userId = c.get('user')
+    const llmComplete =
+      (deps.skillTrainer as unknown as { complete?: (s: string, u: string) => Promise<string> })?.complete ??
+      (deps.evolution as unknown as { complete?: (s: string, u: string) => Promise<string> })?.complete ??
+      (mail as unknown as { complete?: (s: string, u: string) => Promise<string> })?.complete
+    const result = await aegisMcpDeps.claims.deepReview(row.id, {
+      mode: 'heurion_evolved',
+      owner: userId,
+      anchorComments: true,
+      ...(typeof llmComplete === 'function' ? { complete: llmComplete } : {}),
+    })
+    return c.json({
+      ok: true,
+      doc_id: row.id,
+      rev: docs.rev(row.id),
+      scratchpad: result.scratchpad,
+      raw_candidates_count: result.stage3_raw_candidates,
+      comments_created: result.stage4_deduplicated_comments,
+      exempted_count: Math.max(0, result.stage3_raw_candidates - result.stage4_deduplicated_comments.length),
+      active_rules: result.active_rules_applied,
+    })
   })
 
   /** 采纳 / 拒绝待采纳修订（group = all 表示全部）。 */
@@ -2043,18 +2081,26 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
 
   /** 将某条论断标记为临床经验豁免并关闭关联评论。 */
-  app.post('/api/docs/:id/comments/:cid/exempt-claim', c => {
+  app.post('/api/docs/:id/comments/:cid/exempt-claim', async c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
     const cid = c.req.param('cid')
+    const body = await c.req.json<{ rebuttal?: string; category?: string; sentence?: string; reason?: string }>().catch(() => ({} as { rebuttal?: string; category?: string; sentence?: string; reason?: string }))
     const check = store.db.prepare('SELECT claim_id FROM claim_checks WHERE doc_id = ? AND comment_id = ?').get(row.id, cid) as { claim_id: string } | undefined
+    const evolution = aegisMcpDeps.claims.evolveFromReviewComment(row.id, cid, {
+      owner: c.get('user'),
+      rebuttalText: body.rebuttal?.trim() || '临床经验/自身研究结果豁免，无需外部文献出处。',
+      issueCategory: body.category,
+      sentence: body.sentence,
+      reason: body.reason,
+    })
     if (check) {
       store.exemptClaim(row.id, check.claim_id)
     } else {
-      store.addReply(cid, 'user', '【临床经验豁免】：已标记为临床经验/无需出处，豁免文献核对。')
+      store.addReply(cid, 'user', `【临床经验豁免】：${body.rebuttal?.trim() || '已标记为临床经验/无需出处，豁免文献核对。'}`)
       store.setCommentStatus(row.id, cid, 'resolved', 'user')
     }
-    return c.json({ ok: true, comment_id: cid, status: 'resolved' })
+    return c.json({ ok: true, comment_id: cid, status: 'resolved', evolution })
   })
 
   /** 采纳 AI 论断修改建议并一键纠正正文。 */
@@ -2069,7 +2115,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     let replace = body.replace?.trim()
     if (!replace) {
       for (const r of target.replies) {
-        const m = /【建议修改为】：([^\n]+)/.exec(r.text) || /建议修改为：([^\n]+)/.exec(r.text)
+        const m = /【建议修改(?:为)?】：([^\n]+)/.exec(r.text) || /建议修改(?:为)?：([^\n]+)/.exec(r.text)
         if (m) { replace = m[1]?.trim(); break }
       }
     }
@@ -2082,17 +2128,35 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const find = body.find?.trim() || loc.text || target.snippet
     if (!find || !nodeId) return c.json({ error: 'anchor not found' }, 400)
 
-    const editRes = deps.ops.edit({
-      doc_id: row.id,
-      base_rev: docs.rev(row.id),
-      mode: 'apply',
-      ack_comments: [cid],
-      ops: [{ op: 'replace_text', id: nodeId, find, replace }],
-    }, { actor: 'user', turnId: null, user: c.get('user') })
+    let rev = docs.rev(row.id)
+    let replacedText = false
+    try {
+      const editRes = deps.ops.edit({
+        doc_id: row.id,
+        base_rev: rev,
+        mode: 'apply',
+        ack_comments: [cid],
+        ops: [{ op: 'replace_text', id: nodeId, find, replace }],
+      }, { actor: 'user', turnId: null, user: c.get('user') })
+      rev = editRes.rev
+      replacedText = true
+    } catch {
+      /* 若锚点已被改写或建议为指导性说明，仍记录采纳信号并关闭批注 */
+    }
 
-    store.addReply(cid, 'user', `【一键采纳建议】：已将「${find}」替换为「${replace}」`)
+    const evolution = aegisMcpDeps.claims.evolveFromReviewComment(row.id, cid, {
+      owner: c.get('user'),
+      acceptedFix: true,
+    })
+    store.addReply(
+      cid,
+      'user',
+      replacedText
+        ? `【一键采纳修改】：已将「${find}」替换为「${replace}」`
+        : `【已采纳审稿建议】：${replace}`,
+    )
     store.setCommentStatus(row.id, cid, 'resolved', 'user')
-    return c.json({ ok: true, comment_id: cid, replaced: { find, replace }, rev: editRes.rev })
+    return c.json({ ok: true, comment_id: cid, replaced: { find, replace, applied: replacedText }, rev, evolution })
   })
 
   /** 删除评论：去掉正文里的锚点标记与线程。 */
