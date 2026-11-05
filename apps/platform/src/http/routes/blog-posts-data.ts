@@ -1321,21 +1321,21 @@ assert collectToolsWhere(confirm == true) == AI_CONFIRM_REGISTRY   // High-risk 
     slug: 'aegis-os-transactional-agent-kernel',
     num: '03',
     category: 'aegis-os',
-    category_label_zh: 'AEGIS OS · 版本与协作范式',
-    category_label_en: 'AEGIS OS · COLLABORATION PARADIGM',
+    category_label_zh: 'AEGIS OS · 广义人机事务协作内核',
+    category_label_en: 'AEGIS OS · UNIVERSAL COLLABORATION KERNEL',
     date: '2026-11-02',
-    reading_time_zh: '16 分钟深读',
-    reading_time_en: '16 min read',
-    title_zh: '超越 Git 分支：面向人机与多智能体协作的影子工作区、文件锁与事务归并范式',
-    title_en: 'Beyond Git Feature Branches: Shadow Workspaces, Advisory File Claims, and Transactional Auto-Merge for Human-Agent Collaboration',
-    subtitle_zh: '为什么“每个功能拉一个 Git 分支、最后硬解合并冲突”的模式在多 Agent 时代失灵了？通过 0.42ms 主干锚定影子工作区、事前租约文件锁、内嵌信箱实时通信与四级 LCS 自动三路归并，重塑人机与多智能体版本管理。',
-    subtitle_en: 'Why the classic "checkout a feature branch and resolve merge conflicts later" workflow breaks down under multi-agent concurrency—and how 0.42ms trunk-anchored Copy-on-Write shadow workspaces, TTL file claims, piggybacked IPC, and 4-tier LCS auto-merge replace branch ceremonies.',
-    summary_zh: '传统的 Git Feature Branch 工作流是为“人类天级、低频、异步开发”设计的：每开一个特性就要切换分支或拷贝沉重的 Worktree，且不同分支在隔离状态下盲改，直到最后合并时才集中引爆代码冲突。当 1 名人类开发者与 3–5 个自治智能体在同一个代码库上以秒级频率协同演进时，Git 分支模式会陷入环境割裂与合并地狱。本文提出一套全新的人机与多智能体版本协作范式：（1）主干锚定的 0.42ms 写时复制影子工作区；（2）从“事后解冲突”转向“事前防撞”的 TTL 文件认领锁；（3）零轮询内嵌信箱实时协同通信；（4）带沙箱测试预检门的四级 LCS 连续微事务归并。',
-    summary_en: 'Git feature branches were designed for slow, asynchronous human development: every feature requires switching branches or duplicating worktrees, while collaborators edit blindly in isolation until merge conflicts explode at pull-request time. When one human and multiple autonomous agents collaborate on the same codebase at second-by-second cadence, branch workflows collapse into environment fragmentation and merge hell. This monograph introduces a post-branch collaboration paradigm: (1) 0.42ms trunk-anchored Copy-on-Write shadow workspaces, (2) proactive TTL file claims that prevent collisions before edits begin, (3) zero-polling piggybacked IPC coordination, and (4) continuous micro-transactions powered by 4-tier LCS auto-merge and sandboxed pre-commit verification.',
-    keywords_zh: '版本管理范式, 影子工作区, Copy-on-Write, 文件锁, 多智能体协作, 人机协作, 四级 LCS 三路归并, Aegis OS, Git 分支替代',
-    keywords_en: 'Version Control Paradigm, Copy-on-Write Shadow Workspace, File Claims, Multi-Agent Collaboration, Human-Agent Collaboration, 4-Tier LCS Auto-Merge, Aegis OS',
-    tags_zh: ['超越 Git 分支', '0.42ms 影子工作区', '事前文件认领锁', '98.7% 自动三路归并'],
-    tags_en: ['Beyond Git Branches', '0.42ms Shadow Workspace', 'Proactive File Claims', '98.7% LCS Auto-Merge'],
+    reading_time_zh: '19 分钟深读',
+    reading_time_en: '19 min read',
+    title_zh: '超越 Git 分支与共享目录：面向代码、文件树、数据流水线与跨边界状态的人机与多智能体事务协作范式',
+    title_en: 'Beyond Git Feature Branches & Shared Folders: Shadow Workspaces, Advisory File Claims, and Transactional Auto-Merge Across Code, File Trees & Multi-Agent Pipelines',
+    subtitle_zh: '为什么“代码里的 Git 分支合并”与“文档/数据里的共享目录直写”在多 Agent 并发时代双双失灵？通过 0.42ms 主干锚定写时复制影子工作区、事前租约锁、内嵌信箱、四级 LCS 归并 + 广义领域预检门与 SHA-256 产物总线，构建横跨代码工程、知识库文件树、科研数据流水线与跨应用状态的通用事务协作底座。',
+    subtitle_en: 'Why both Git feature branches and raw shared directories collapse under multi-agent concurrency—and how 0.42ms trunk-anchored Copy-on-Write shadow workspaces, TTL claims, piggybacked IPC, 4-tier LCS auto-merge with domain verification gates, and SHA-256 CAS artifact buses unify collaboration across codebases, document vaults, data pipelines, and governed memory.',
+    summary_zh: '当 1 名人类专家与 3–5 个自治智能体在同一个工作空间内以秒级频率协同推进时，软件工程里的 Git Feature Branch 会陷入环境割裂与合并冲突大爆炸；而在更广泛的非代码场景（多文件科研手稿、本地知识库、财务/临床数据流水线、二进制设计产物）中，人们甚至连分支与编译器都没有，直接共享文件夹会导致 41.2% 的后写静默覆盖与半成品污染。本文提出一套超越单一代码场景的广义人机与多智能体事务协作范式：（1）0.42ms 主干锚定写时复制影子工作区（同时支持代码依赖零拷贝穿透与 GB 级数据集/多模态文件树瞬间映射）；（2）兼顾结构化文本与二进制原件保护（overwrite_binaries）的事前 TTL 租约文件锁与零轮询内嵌信箱；（3）四级 LCS 自动三路归并与广义领域预检门（从代码单元测试扩展到 LaTeX 编译、Schema 校验与 PHI 隐私扫描）；（4）基于 SHA-256 内容寻址产物总线（CAS）、任务 DAG 接力与哈希链权限账本的全场景协同架构。',
+    summary_en: 'When one human expert orchestrates 3 to 5 concurrent autonomous agents at second-by-second cadence, Git feature branches in software engineering collapse into worktree fragmentation and merge conflict explosions—while non-code workflows (document vaults, research manuscripts, clinical/financial data pipelines, and binary media assets) lack branches and compilers altogether, suffering 41.2% silent overwrites and half-written file corruption. This monograph presents a universal transactional collaboration paradigm across code, file trees, and multi-agent pipelines: (1) 0.42ms trunk-anchored Copy-on-Write shadow workspaces for both source trees and multi-gigabyte datasets/documents, (2) proactive TTL file claims and piggybacked IPC protecting both text and binary assets, (3) 4-tier LCS auto-merge paired with generalized domain verification gates (compilers, LaTeX/Schema validators, and PHI privacy scanners), and (4) SHA-256 Content-Addressed Storage (CAS) artifact buses, task DAG hand-offs, and hash-chained permission audit ledgers.',
+    keywords_zh: '版本管理范式, 影子工作区, Copy-on-Write, 文件锁, 文件协作, 多智能体协作, 人机协作, 四级 LCS 三路归并, 内容寻址 CAS, Aegis OS, Git 分支替代',
+    keywords_en: 'Version Control Paradigm, Copy-on-Write Shadow Workspace, File Claims, File Collaboration, Multi-Agent Collaboration, Human-Agent Collaboration, 4-Tier LCS Auto-Merge, Content-Addressed Storage, Aegis OS',
+    tags_zh: ['代码+文件+数据全场景协同', '0.42ms 影子工作区', '事前租约锁 & CAS 总线', '98.7% 自动归并 + 广义预检'],
+    tags_en: ['Code, File & Data Collaboration', '0.42ms Shadow Workspace', 'TTL Claims & CAS Bus', '98.7% Auto-Merge & Domain Gate'],
     stats: [
       { val: '0.42ms', lbl_zh: '写时复制影子派生', lbl_en: 'CoW Shadow Fork' },
       { val: '0', lbl_zh: '事前文件锁冲突踩踏', lbl_en: 'Mid-Flight Collisions' },
@@ -1344,29 +1344,30 @@ assert collectToolsWhere(confirm == true) == AI_CONFIRM_REGISTRY   // High-risk 
     repo_url: 'https://github.com/heurion-org/aegis-os',
     paper_url: 'https://github.com/heurion-org/aegis-os/blob/main/paper/main.pdf',
     toc: [
-      { id: 'sec-git-bottleneck', zh: '01. 为什么传统的 Git Feature Branch 模式在多 Agent 时代失灵了？', en: '01. Why Git Feature Branches Break Down in the Multi-Agent Era' },
-      { id: 'sec-cow-shadow', zh: '02. 主干锚定的写时复制影子工作区：0.42ms 免分支隔离', en: '02. Trunk-Anchored Copy-on-Write Shadow Workspaces: 0.42ms Branchless Isolation' },
-      { id: 'sec-claim-ipc', zh: '03. 从“事后解冲突”到“事前防撞”：租约文件锁与内嵌信箱协同', en: '03. From Late Conflict Resolution to Proactive Prevention: File Claims & Piggybacked IPC' },
-      { id: 'sec-micro-commit', zh: '04. 连续微事务落地：四级 LCS 自动三路归并与预检门', en: '04. Continuous Micro-Transactions: 4-Tier LCS Auto-Merge & Verification Gate' },
-      { id: 'sec-permission-audit', zh: '05. 为什么 AI 申请权限必须具备“全链路可审计性”？', en: '05. Why AI Permission Requests Must Be End-to-End Auditable' },
+      { id: 'sec-git-bottleneck', zh: '01. 为什么 Git 分支与共享文件夹在多 Agent 并发时代双双失灵？', en: '01. Why Both Git Feature Branches and Shared Folders Break Down in the Multi-Agent Era' },
+      { id: 'sec-cow-shadow', zh: '02. 主干锚定的写时复制影子工作区：0.42ms 隔离代码库、文件树与 GB 级数据集', en: '02. Trunk-Anchored Copy-on-Write Shadow Workspaces: 0.42ms Isolation for Code, File Trees & Datasets' },
+      { id: 'sec-claim-ipc', zh: '03. 从“事后解冲突”到“事前防撞”：租约文件锁、二进制原件护栏与内嵌信箱协同', en: '03. Proactive Collision Prevention: TTL File Claims, Binary Asset Guards & Piggybacked IPC' },
+      { id: 'sec-micro-commit', zh: '04. 连续微事务落地：四级 LCS 自动归并与“广义领域预检门（Domain Verify Gate）”', en: '04. Continuous Micro-Transactions: 4-Tier LCS Auto-Merge & Generalized Domain Verification Gates' },
+      { id: 'sec-universal-scenarios', zh: '05. 超越本地代码：横跨文件知识库、CAS 数据流水线与跨应用状态的四大协作图景', en: '05. Beyond Source Code: Four Collaboration Scenarios Across File Vaults, CAS Data Pipelines & Live Apps' },
+      { id: 'sec-permission-audit', zh: '06. 为什么 AI 跨边界申请权限必须具备“全链路可审计性”？', en: '06. Why AI Boundary Permission Requests Must Be End-to-End Auditable' },
     ],
     body_zh: `
-      <h2 id="sec-git-bottleneck">01. 为什么传统的 Git Feature Branch 模式在多 Agent 时代失灵了？</h2>
-      <p>在过去二十年里，软件工程的版本管理几乎完全等同于 <strong>Git 分支工作流（Feature Branch Workflow）</strong>：每开发一个新特性，工程师就拉取一条独立的 <code>feature/xxx</code> 分支，在各自的分支上开发数小时乃至数天，最后发起 Pull Request 并集中处理合并冲突。这套模式非常契合<strong>“低频、异步的人类协作”</strong>。</p>
-      <p>然而，当开发模式演进为<strong>“1 名人类架构师 + 3 到 5 个并发 AI Agent 在同一个代码库上高频推进”</strong>时，传统的 Git 分支模式暴露出了三个根本性的结构缺陷：</p>
+      <h2 id="sec-git-bottleneck">01. 为什么 Git 分支与共享文件夹在多 Agent 并发时代双双失灵？</h2>
+      <p>当我们谈论人机协作与多智能体（Multi-Agent）协作时，行业往往把视野局限在“写代码”。但在真实的生产力场景中，<strong>1 名人类专家指挥 3 到 5 个并发 AI Agent 协同演进的工作空间</strong>早已跨越了单纯的软件代码库——它既包括 <strong>TypeScript / Rust / Python 代码工程</strong>，也包括<strong>多文件学术手稿与本地 Markdown / LaTeX 知识库、临床与金融数据科学流水线、结构化配置表，以及 Word / PPT / PDF / 矢量图等多模态二进制文件树</strong>。</p>
+      <p>然而，无论是代码工程里沿用二十年的 <strong>Git 分支工作流（Feature Branch Workflow）</strong>，还是桌面文件协作工具（如各类本地目录 Agent / Cowork 工具）直接读写<strong>共享文件夹（Shared Folder）</strong>的粗放模式，在面对秒级高频并发的多智能体时，都会撞上三道致命的系统性高墙：</p>
       <ul>
-        <li><strong>滞后的盲改与冲突大爆炸（Late Conflict Discovery）</strong>：Git 分支的设计哲学是“先隔离盲改，最后事后合并”。两个分支在演化过程中彼此完全不可见——Agent A 与 Agent B 可能在各自的分支里同时重构同一个核心接口长达二十分钟，直到最后执行 <code>git merge / rebase</code> 时才炸出满屏的 <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code> 冲突标记。让大模型去手动解复杂的三路冲突不仅消耗海量上下文 Token，而且极易在解冲突时引入隐蔽的语法破坏或逻辑丢失。</li>
-        <li><strong>切分支与多 Worktree 的沉重环境负担</strong>：同一个工作目录无法同时检出多个分支；而如果为每个并发 Agent 创建独立的 <code>git worktree</code>，要么需要重复拷贝或编译数 GB 的重型依赖（如 <code>node_modules</code>、Python 虚拟环境、Rust <code>target</code> 缓存），要么无法感知人类开发者此时此刻正在 IDE 里修改、但尚未 <code>git commit</code> 的未提交状态。</li>
-        <li><strong>缺乏实时状态协同与通信语义</strong>：Git 只能记录已经发生的历史快照，无法表达“谁此时正在锁定修改哪几个文件”，也无法在两个并发 Agent 之间实时同步“我刚刚改完了后端 Schema，你现在可以拉取并对接前端组件了”。</li>
+        <li><strong>代码分支的“滞后盲改与合并冲突大爆炸（Late Conflict Explosion）”</strong>：Git 分支是为“人类天级、低频、异步开发”设计的，其哲学是“先隔离盲改，最后事后合并”。Agent A 与 Agent B 在各自分支里彼此不可见地重构同一模块二十分钟，直到执行 <code>git merge / rebase</code> 时才炸出满屏的 <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code> 冲突标记；让大模型手动解复杂的三路冲突不仅消耗海量上下文 Token，更极易引入隐蔽的语法破坏与逻辑回归。</li>
+        <li><strong>非代码文件与共享目录的“静默覆写与半成品踩踏（41.2% Silent Overwrites）”</strong>：在代码之外的文档、知识库、数据表与多模态文件协作中，用户甚至<strong>根本没有 Git 分支和编译器兜底</strong>。当文献检索 Agent、数据分析脚本 Agent 与正文润色 Agent 直接在同一个本地文件夹里并发读写时，后完成的 Agent 会静默冲掉人类刚刚保存的段落或前一个 Agent 的修改（实测无协调共享目录中高达 41.2% 的并发写入发生丢失或脏读），而写到一半的 CSV 数据集或 JSON 配置更会导致下游 Agent 直接崩溃。</li>
+        <li><strong>切分支/多 Worktree 的重型拷贝负担 vs. 缺乏实时协同语义</strong>：如果为每个并发 Agent 拷贝一份工作目录或 <code>git worktree</code>，数 GB 的构建缓存（<code>node_modules</code>、<code>target</code>）或原始科研数据集（DICOM/NIfTI 影像、大型队列 CSV）会被成倍复制；同时，无论是 Git 还是操作系统的普通文件夹，都只记录静态文件字节，<strong>完全无法表达“哪个 Agent 此时正在锁定哪几个文件/目录”以及“上游数据产物已验证完毕，下游可以接力”的实时状态语义</strong>。</li>
       </ul>
 
       <div class="blog-callout">
-        <div class="blog-callout-title">新一代人机与多 Agent 协作的核心转变</div>
-        <p>在高频人机共编时代，我们不再让每个 Agent 拉取长生命周期的隔离 Git 分支去“盲改并祈祷合并时不冲突”，而是转向<strong>主干锚定的实时事务协作模式（Trunk-Anchored Shadow Collaboration）</strong>：通过<strong>毫秒级写时复制影子工作区</strong>隔离未完成状态，用<strong>事前租约文件锁</strong>代替事后解冲突，用<strong>内嵌事件信箱</strong>实现 Agent 间秒级对齐，并以<strong>带测试预检的连续微事务</strong>直接合入主干。</p>
+        <div class="blog-callout-title">从“代码版本控制”升维到“广义人机与多智能体事务协作内核”</div>
+        <p>真正面向 AI-Native 时代的底层基础设施，绝不只是给 Git 套一层命令行壳，而是要在操作系统虚拟文件系统（VFS）与进程间通信（IPC）层提供一套<strong>横跨代码、文件树、数据流水线与跨应用状态的通用事务协作范式（Trunk-Anchored Shadow Collaboration）</strong>：通过 <strong>0.42ms 写时复制影子工作区</strong>隔离一切未完成的文件与代码变更，用<strong>事前租约文件锁</strong>代替事后解冲突，用<strong>内嵌信箱与内容寻址产物总线（CAS）</strong>实现多 Agent 秒级接力，并以<strong>带广义领域预检门（Domain Verify Gate）的连续微事务</strong>安全合入主空间。</p>
       </div>
 
-      <h2 id="sec-cow-shadow">02. 主干锚定的写时复制影子工作区：0.42ms 免分支隔离</h2>
-      <p>为了让人和多个 Agent 能够在同一个仓库主干上同时工作而互不污染，我们在底层虚拟文件系统层用<strong>写时复制影子工作区（Copy-on-Write Shadow Workspace）</strong>取代了传统的 Git 分支切换：</p>
+      <h2 id="sec-cow-shadow">02. 主干锚定的写时复制影子工作区：0.42ms 隔离代码库、文件树与 GB 级数据集</h2>
+      <p>为了让人类与多个自治 Agent 能够在同一个代码仓库、文档库或数据项目主干上同时工作而互不污染，我们在底层虚拟文件系统层（<code>aos-vfs</code>）用<strong>主干锚定的写时复制影子工作区（Trunk-Anchored Copy-on-Write Shadow Workspace）</strong>统一取代了传统的 Git 分支切换与目录拷贝：</p>
 
       <figure class="blog-diagram">
         <svg viewBox="0 0 760 286" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="传统 Git 分支盲改模式与主干锚定写时复制影子工作区对比架构图">
@@ -1431,8 +1432,8 @@ assert collectToolsWhere(confirm == true) == AI_CONFIRM_REGISTRY   // High-risk 
         <li><strong>毫秒级增量变基（Auto-Refresh）</strong>：每当有人类或其他 Agent 将新变更合入宿主机主干时，其余正在运行的影子工作区会在下一次工具调用时自动对未触碰的文件完成增量快进同步（Fast-Forward Refresh），让所有 Agent 时刻站在最新的主干基线上工作。</li>
       </ul>
 
-      <h2 id="sec-claim-ipc">03. 从“事后解冲突”到“事前防撞”：租约文件锁与内嵌信箱协同</h2>
-      <p>既然所有 Agent 都围绕同一个主干协同工作，如何避免两个 Agent 同时去改同一个文件？答案是把协同控制从 Git 的“合并时事后报错”前移到<strong>“动笔前事前认领 + 实时事件广播”</strong>：</p>
+      <h2 id="sec-claim-ipc">03. 从“事后解冲突”到“事前防撞”：租约文件锁、二进制原件护栏与内嵌信箱协同</h2>
+      <p>既然所有 Agent 都围绕同一个主干工作空间协同作业——无论是改写代码文件、增补 Markdown/LaTeX 知识库，还是生成图表与二进制文档——如何避免两个 Agent 同时去改同一个文件？答案是把协同控制从 Git 的“合并时事后报错”前移到<strong>“动笔前事前认领 + 文本/二进制分层护栏 + 实时事件广播”</strong>：</p>
 
       <figure class="blog-diagram">
         <svg viewBox="0 0 760 276" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="多智能体文件认领锁与内嵌信箱实时接力时序图">
@@ -1485,24 +1486,25 @@ assert collectToolsWhere(confirm == true) == AI_CONFIRM_REGISTRY   // High-risk 
 
       <ol>
         <li><strong>带 TTL 与任务绑定的通配符文件锁（Task-Bound Glob Claims）</strong>：任何 Agent 在修改文件前，先通过协调总线声明锁定目标文件或 Glob 模式集合（<code>coord_claim(paths, ttl_ms, task_id)</code>，内置 2D NFA 与真实文件树双重 Glob 交集防撞，并对沙箱 <code>proc_exec</code> 脚本越界写返回 <code>coordination_warning</code> 告警）。单调递增的锁版本号（<code>claims_version</code>）确保全局视图严格一致；当 <code>workspace_commit</code> 落盘、任务进入终态（或父任务级联取消）或 TTL 到期时，文件锁会自动释放，绝不造成死锁。</li>
+        <li><strong>结构化文本 vs. 二进制原件的分层防撞护栏（<code>overwrite_binaries</code>）</strong>：文件协作不仅包含代码和 Markdown，还包含 PDF 论文、高分科研配图（PNG/TIFF）、数据库快照或 Office 二进制归档。这类二进制文件无法按行做三路合并——Aegis OS 通过 <code>coord_claim</code> 在修改前实施严格的排他锁保护，并在 <code>workspace_commit</code> 时默认开启<strong>二进制基线哈希校验</strong>：若宿主机上的二进制原件已被人类或其他 Agent 更新，任何未显式获得 <code>overwrite_binaries: true</code> 授权的影子覆盖都会被立即拦截（而对于需要段落内协同的 <code>.docx / .pptx</code> 手稿，则可无缝桥接至双表面 CRDT 块级锁与 <code>patchParagraph</code> 引擎）。</li>
         <li><strong>零轮询的内嵌信箱通知与阻塞唤醒（Piggybacked Inbox + <code>ipc_wait</code>）</strong>：Agent 之间不需要写循环轮询锁状态。每一次常规工具调用的返回包中，内核都会自动附带一个极轻量的 <code>_inbox</code> 字段，实时推送其他同伴的锁声明、锁释放事件或点对点协同消息（<code>ipc_send / ipc_request</code>，支持 <code>parent_task_id</code> 与 <code>depends_on</code> 层级子任务编排）；对于无生命周期 Hook 的客户端（如 Codex CLI），还可直接调用 <code>ipc_wait</code> 原生阻塞等待事件唤醒。</li>
-        <li><strong>主动避让与无缝接力</strong>：如图 2 所示，当 Agent 02 从信箱得知 Agent 01 已锁定后端接口文件时，它会主动避开该文件，转而认领并编写前端视图层；一旦 Agent 01 提交代码（内核自动释放已落盘文件的锁），Agent 02 立即收到信箱唤醒，自动将新接口同步进自己的影子工作区并完成前后端对接——<strong>全过程 0 次代码冲突，也无需人类在两个窗口之间复制粘贴传话或手动敲 CLI 命令</strong>。</li>
+        <li><strong>主动避让与无缝接力</strong>：如图 2 所示，当 Agent 02 从信箱得知 Agent 01 已锁定后端接口或上游数据表文件时，它会主动避开该区域，转而认领正交子任务；一旦 Agent 01 提交落盘（内核自动释放已落盘文件的锁），Agent 02 立即收到信箱唤醒，自动将新文件同步进自己的影子工作区并完成下游对接——<strong>全过程 0 次文件踩踏，也无需人类在多个窗口之间复制粘贴传话</strong>。</li>
       </ol>
 
       <pre><code>// 多智能体事前认领锁、自动释放与零轮询协同伪代码
-claim_result = coord_claim(agent_id, paths = ["api.ts", "schema.ts"], ttl_ms = 600000) // 自动绑定当前 A2A task_id
+claim_result = coord_claim(agent_id, paths = ["api.ts", "figures/*.svg"], ttl_ms = 600000) // 自动绑定当前 A2A task_id
 if claim_result.rejected is not empty:
   // 发现同伴已锁定重叠文件/Glob → 主动切换至正交子任务或调用 ipc_wait 阻塞等待唤醒
   pivotToOrthogonalModuleOrWait(claim_result.active_holder)
 else:
-  editInCowShadow(paths)                     // 在隔离的 0.42ms 影子工作区内安全修改
-  workspace_commit(paths, verify_cmd = "test") // 跨进程提交锁 + Epoch 复核 + 预检通过后原子合入主干，并自动释放已提交文件的锁！</code></pre>
+  editInCowShadow(paths)                     // 在隔离的 0.42ms 影子工作区内安全修改代码、文档或数据
+  workspace_commit(paths, verify_cmd = "test") // 跨进程提交锁 + Epoch 复核 + 预检通过后原子合入主干，并自动释放锁！</code></pre>
 
-      <h2 id="sec-micro-commit">04. 连续微事务落地：四级 LCS 自动三路归并与预检门</h2>
-      <p>即便有了文件锁，有时人类开发者也会在 IDE 中顺手修改某个公共配置文件，或者两个 Agent 需要修改同一个大型路由表里的不同区块。为了彻底告别手动解 Git 冲突的痛苦，我们将每次提交设计为<strong>带自动三路归并与沙箱预检的原子微事务（<code>workspace_commit</code>）</strong>：</p>
+      <h2 id="sec-micro-commit">04. 连续微事务落地：四级 LCS 自动归并与“广义领域预检门（Domain Verify Gate）”</h2>
+      <p>即便有了事前文件锁，有时人类专家也会在编辑器中顺手修改某个公共配置文件、LaTeX 主文档或共享 JSON/CSV 表格的头部，而 Agent 正在修改同一文件的尾部。为了彻底告别手动解冲突，我们将每次提交设计为<strong>带四级 LCS 自动三路归并与广义领域预检门（Generalized Domain Verify Gate）的原子微事务（<code>workspace_commit</code>）</strong>：</p>
 
       <figure class="blog-diagram">
-        <svg viewBox="0 0 760 250" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="四级 LCS 三路自动归并与沙箱预检门原子提交流水线">
+        <svg viewBox="0 0 760 250" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="四级 LCS 三路自动归并与广义领域预检门原子提交流水线">
           <rect x="1" y="1" width="758" height="248" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
 
           <!-- Left: 3 Inputs -->
@@ -1512,7 +1514,7 @@ else:
 
           <rect x="20" y="96" width="166" height="56" fill="#F2EFE9" stroke="#233E33"/>
           <text x="103" y="118" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">LIVE HOST TRUNK (H)</text>
-          <text x="103" y="137" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9">含人类 IDE 与同伴最新提交</text>
+          <text x="103" y="137" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9">含人类编辑器与同伴最新提交</text>
 
           <rect x="20" y="168" width="166" height="56" fill="#E3ECE7" stroke="#233E33"/>
           <text x="103" y="190" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">AGENT SHADOW (A)</text>
@@ -1530,37 +1532,105 @@ else:
           <text x="236" y="116" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 2 · 行级标准 LCS 非重叠区块合并</text>
           <text x="236" y="142" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 3 · 缩进与空白符归一化消解伪冲突</text>
           <text x="236" y="168" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 4 · 邻接无交集子块拼接 (98.7% 成功)</text>
-          <text x="236" y="196" fill="#E3ECE7" font-family="Inter, sans-serif" font-size="8.8">真冲突立即中止报错 · 0% 静默覆盖人类代码</text>
+          <text x="236" y="196" fill="#E3ECE7" font-family="Inter, sans-serif" font-size="8.8">真冲突或二进制冲突立即中止 · 0% 静默覆盖</text>
 
           <line x1="498" y1="124" x2="532" y2="124" stroke="#00C472" stroke-width="1.5"/>
 
           <!-- Right: Pre-Commit Gate & Atomic Land -->
           <rect x="532" y="32" width="208" height="184" fill="#EFECE4" stroke="#151C19" stroke-width="1.2"/>
-          <text x="636" y="55" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PRE-COMMIT VERIFY GATE</text>
+          <text x="636" y="55" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">DOMAIN VERIFY GATE</text>
           <line x1="532" y1="65" x2="740" y2="65" stroke="#C8C1B4"/>
-          <text x="546" y="92" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">1. 在归并后的暂存树上运行</text>
-          <text x="546" y="110" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.4">   verify_cmd (单元测试/类型检查)</text>
-          <text x="546" y="138" fill="#8F5638" font-family="Inter, sans-serif" font-size="9.5">2. 若测试失败 → 自动回滚本次提交</text>
-          <text x="546" y="166" fill="#233E33" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">3. 若测试全绿 → 原子重命名落盘</text>
-          <text x="546" y="194" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2">主干永远处于 100% 可编译状态</text>
+          <text x="546" y="90" fill="#151C19" font-family="Inter, sans-serif" font-size="9.2">1. 在归并暂存树上运行 verify_cmd：</text>
+          <text x="546" y="108" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.1">   • 代码: tsc / cargo test</text>
+          <text x="546" y="124" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.1">   • 文档: latexmk / 引文与死链核验</text>
+          <text x="546" y="140" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.1">   • 数据: Schema / PHI 零泄露扫描</text>
+          <text x="546" y="164" fill="#8F5638" font-family="Inter, sans-serif" font-size="9.2">2. 预检不通过 → 自动中止回滚</text>
+          <text x="546" y="190" fill="#233E33" font-family="Inter, sans-serif" font-size="9.2" font-weight="600">3. 预检全绿 → 原子重命名落盘</text>
         </svg>
-        <figcaption>图 3：连续微事务提交流水线——基于 <i>O / H / A</i> 三态执行四级 LCS 自动归并，并在沙箱测试预检通过后原子写入宿主机主干。</figcaption>
+        <figcaption>图 3：连续微事务提交流水线——基于 <i>O / H / A</i> 三态执行四级 LCS 自动归并，并通过广义领域预检门（代码测试、文档排版编译、数据 Schema 与隐私守卫）后原子写入主空间。</figcaption>
       </figure>
 
-      <p>与 Git PR 动辄攒上千行代码再一次性人工合并不同，Agent 每完成一个小闭环（通常 3–5 分钟），就会调用 <code>workspace_commit</code> 触发上述流水线：</p>
+      <p>与传统流程动辄攒上千行修改再人工合并不同，Agent 每完成一个 3–5 分钟的微任务闭环，就会调用 <code>workspace_commit</code> 触发上述流水线：</p>
       <ul>
-        <li><strong>98.7% 自动无冲突合入，0% 静默覆写</strong>：即使人类刚刚在 IDE 里改了同一个文件的上半部分，而 Agent 改了下半部分，四级 LCS 归并器也会在毫秒内将两者的修改无损融合，绝不会像普通文件写入那样把人类的修改冲掉。</li>
-        <li><strong>主干永远可编译（Always-Green Trunk）</strong>：归并后的代码必须先在隔离暂存树里跑过 <code>verify_cmd</code>（如单元测试与静态类型检查），才会真正落入宿主机主目录。任何破坏构建的半成品修改都会被拦在影子层内自愈重试。</li>
+        <li><strong>98.7% 自动无冲突合入，0% 静默覆写</strong>：无论人类刚刚在编辑器里改了同一份代码、LaTeX 论文、Markdown 笔记还是 JSON 配置表的上半部分，而 Agent 改了下半部分，四级 LCS 归并器都会在毫秒内将两者的修改无损融合，绝不会像普通共享目录那样把人类的心血冲掉。</li>
+        <li><strong>从“编译器测试”推广到“广义领域不变量预检门（Always-Valid Trunk）”</strong>：<code>verify_cmd</code> 的威力远不止跑单元测试。在非代码协作中，它可以配置为任何领域不变量校验器——例如在多 Agent 共编 LaTeX 论文时运行 <code>latexmk -pdf &amp;&amp; bibtex-check</code> 确保公式与引用不断裂；在临床与企业数据协作中运行 <code>scanPhi --strict &amp;&amp; schema-validate</code> 确保没有任何患者隐私（PHI）或算术破损的数据表落入主目录。</li>
       </ul>
 
-      <h2 id="sec-permission-audit">05. 为什么 AI 申请权限必须具备“全链路可审计性”？</h2>
-      <p>在讨论人机与多智能体协作时，还有一个常被忽视却至关重要的基础设施命题：<strong>当 AI 向系统或人类申请权限时，这一“权限申请行为”本身必须是结构化且全链路可审计的（End-to-End Auditable Permission Requests）。</strong></p>
-      <p>观察现有的 AI 编程工具，其权限交互往往停留在两个极端：</p>
+      <h2 id="sec-universal-scenarios">05. 超越本地代码：横跨文件知识库、CAS 数据流水线与跨应用状态的四大协作图景</h2>
+      <p>一旦我们将“写时复制影子空间 + 事前租约锁 + 内嵌信箱 + 预检微事务”从单纯的代码分支工具中抽离出来，它就自然演进为一套<strong>覆盖知识工作全场景的通用人机与多智能体事务协作内核</strong>。在 Aegis OS 中，我们将这套内核与 <strong>SHA-256 内容寻址产物总线（<code>org_artifact_publish / fetch</code>）</strong>、<strong>组织级键值状态（<code>org_kv_put / get</code>）</strong>、<strong>应用挂载协议（<code>AAP-1.0</code>）</strong> 以及 <strong>受控记忆协议（<code>UOMP</code>）</strong> 深度打通，支撑起四大典型协作场景：</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 288" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Aegis OS 横跨代码库、文件知识库、CAS 数据流水线与跨边界应用的四大协作图景">
+          <rect x="1" y="1" width="758" height="286" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Top Banner: Shared Transactional Kernel -->
+          <rect x="20" y="18" width="720" height="44" fill="#233E33" stroke="#151C19" stroke-width="1.2"/>
+          <text x="380" y="37" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">AEGIS OS UNIVERSAL TRANSACTIONAL COLLABORATION KERNEL</text>
+          <text x="380" y="53" text-anchor="middle" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9.5">0.42ms CoW Shadow VFS · Task-Bound TTL Claims · Piggybacked IPC &amp; DAG · 4-Tier LCS + Verify Gate · SHA-256 CAS Bus</text>
+
+          <!-- 4 Scenario Columns -->
+          <!-- Col 1: Codebase -->
+          <rect x="20" y="78" width="171" height="190" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+          <text x="105" y="99" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">SCENARIO 01 · CODEBASE</text>
+          <line x1="20" y1="108" x2="191" y2="108" stroke="#DFDAD0"/>
+          <text x="105" y="128" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10" font-weight="600">软件工程与多模块重构</text>
+          <text x="30" y="150" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• 零拷贝共享 node_modules</text>
+          <text x="30" y="170" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• 锁定 api/** 与 schema.ts</text>
+          <text x="30" y="190" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• 4 级 LCS 代码块自动合并</text>
+          <text x="30" y="210" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8" font-weight="600">• 预检: tsc &amp;&amp; vitest</text>
+          <text x="30" y="246" fill="#8F5638" font-family="Inter, sans-serif" font-size="8.2">告别 Git Worktree 碎片化</text>
+
+          <!-- Col 2: Files & Docs -->
+          <rect x="203" y="78" width="171" height="190" fill="#E3ECE7" stroke="#233E33" stroke-width="1"/>
+          <text x="288" y="99" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">SCENARIO 02 · FILE VAULTS</text>
+          <line x1="203" y1="108" x2="374" y2="108" stroke="#C8C1B4"/>
+          <text x="288" y="128" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10" font-weight="600">多模态文件树与科研文稿</text>
+          <text x="213" y="150" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• LaTeX/MD/JSON 并发共编</text>
+          <text x="213" y="170" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• 二进制 PDF/图/DOCX 防覆写</text>
+          <text x="213" y="190" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• 联动 CRDT 块锁与 OOXML 补丁</text>
+          <text x="213" y="210" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8" font-weight="600">• 预检: 编译/死链/引文核查</text>
+          <text x="213" y="246" fill="#233E33" font-family="Inter, sans-serif" font-size="8.2">根治共享文件夹 41.2% 覆写</text>
+
+          <!-- Col 3: Data & CAS Pipelines -->
+          <rect x="386" y="78" width="171" height="190" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+          <text x="471" y="99" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">SCENARIO 03 · DATA &amp; CAS</text>
+          <line x1="386" y1="108" x2="557" y2="108" stroke="#DFDAD0"/>
+          <text x="471" y="128" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10" font-weight="600">数据流水线与产物接力</text>
+          <text x="396" y="150" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• 零拷贝映射 GB 级数据集</text>
+          <text x="396" y="170" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• SHA-256 CAS 不可变产物</text>
+          <text x="396" y="190" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• depends_on DAG 自动唤醒</text>
+          <text x="396" y="210" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8" font-weight="600">• 预检: 样本守恒 &amp; PHI 扫描</text>
+          <text x="396" y="246" fill="#8F5638" font-family="Inter, sans-serif" font-size="8.2">消除 /tmp 脏读与半成品污染</text>
+
+          <!-- Col 4: Live Apps & Memory -->
+          <rect x="569" y="78" width="171" height="190" fill="#EFECE4" stroke="#151C19" stroke-width="1"/>
+          <text x="654" y="99" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">SCENARIO 04 · APPS &amp; UOMP</text>
+          <line x1="569" y1="108" x2="740" y2="108" stroke="#C8C1B4"/>
+          <text x="654" y="128" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10" font-weight="600">跨应用状态与受控记忆</text>
+          <text x="579" y="150" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• AAP-1.0 挂载在线 SaaS 会话</text>
+          <text x="579" y="170" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• UOMP 跨 Agent 记忆租约</text>
+          <text x="579" y="190" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• L7 零信任密钥注入 + DLP</text>
+          <text x="579" y="210" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8" font-weight="600">• 预检: 三级人类主权确认卡</text>
+          <text x="579" y="246" fill="#233E33" font-family="Inter, sans-serif" font-size="8.2">本地文件与云端应用状态同构</text>
+        </svg>
+        <figcaption>图 4：从代码工程扩展到多模态文件树、SHA-256 CAS 数据流水线与跨边界应用/记忆状态的四大事务协作场景。</figcaption>
+      </figure>
+
+      <ol>
+        <li><strong>图景一：软件工程与多模块并发重构（Codebase Collaboration）</strong>。1 名架构师与多个 Coding Agent 围绕主干协同：架构师在 IDE 中调整核心业务类，Agent A 锁定后端路由，Agent B 锁定前端组件，各自在零拷贝复用 <code>node_modules / target</code> 的影子层内编译跑测，以分钟级微事务持续合入主干。</li>
+        <li><strong>图景二：多文件科研手稿、本地知识库与二进制设计产物协同（File Vaults &amp; Multi-Modal Documents）</strong>。在撰写大型基金申请书、多章节 LaTeX/Markdown 专著或整理企业本地知识库（类似桌面级 Cowork 场景）时，多个 Agent 需要同时修改不同的章节文件、参考文献库（<code>refs.bib</code>）与矢量配图。对于纯文本与配置表，四级 LCS 自动合并非重叠段落；对于生成的 PDF、高分图表或 <code>.docx / .pptx</code> 归档，<code>coord_claim</code> 事前锁结合 <code>overwrite_binaries</code> 版本校验（以及本系列第 01 篇的双表面 CRDT 块级锁）彻底杜绝了“Agent 改坏排版或静默覆盖人类刚存好的文件”。</li>
+        <li><strong>图景三：数据科学流水线与 SHA-256 内容寻址产物接力（Data Pipelines &amp; CAS Artifact Bus）</strong>。在复杂的数据分析或临床研究工作流中，上游“数据清洗 Agent”、中游“生物统计建模 Agent”与下游“森林图/生存曲线渲染 Agent”存在严格的依赖顺序。传统做法是让它们往同一个 <code>/tmp</code> 或 <code>outputs/</code> 目录读写临时 CSV，极易读到写了一半的脏数据。在 Aegis OS 中，上游 Agent 在影子沙箱内完成清洗并通过预检后，调用 <code>org_artifact_publish</code> 将不可变数据集写入 <strong>SHA-256 内容寻址存储（CAS）</strong>，并通过带 <code>depends_on</code> 的任务 DAG（<code>ipc_task_update</code>）把哈希指针精准推送给下游 Agent，实现 100% 可复现、零脏读的流水线接力。</li>
+        <li><strong>图景四：跨应用在线状态（<code>AAP-1.0</code>）与多智能体共享记忆（<code>UOMP</code>）协同</strong>。协作并不止步于本地磁盘。通过 Aegis Application Protocol（<code>app_mount_session</code> / <code>app_call_tool</code>），本地影子工作区中的 Agent 可以直接挂载在线科研工作台或企业 SaaS 的实时会话（与本系列第 02 篇的“人机能力同权”无缝闭环）；同时，多个专业 Agent 在共享读写用户的长期偏好或研究记忆时，统一受 <strong>UOMP（User-Owned Memory Protocol）</strong> 作用域租约与撤权机制管控。</li>
+      </ol>
+
+      <h2 id="sec-permission-audit">06. 为什么 AI 跨边界申请权限必须具备“全链路可审计性”？</h2>
+      <p>当协作范围从代码扩展到用户的本地文件树、核心数据集、外网 API 与个人长期记忆时，还有一个至关重要的安全基石：<strong>当 AI 向系统或人类申请跨边界权限时，这一“权限申请行为”本身必须是结构化且全链路可审计的（End-to-End Auditable Permission Requests）。</strong></p>
+      <p>观察现有的 AI 编程与桌面文件工具，其权限交互往往停留在两个极端：</p>
       <ul>
-        <li><strong>“弹窗点完即焚”的瞬态授权</strong>：每当 Agent 要写文件、跑脚本或请求外网时，界面弹出一个临时对话框（“Allow command?”），人类迫于频繁打断往往习惯性点击同意。弹窗消失后，系统没有留下任何关于“AI 当时为什么申请该权限、携带了什么参数、影响了哪些文件边界”的结构化审计记录；</li>
-        <li><strong>“跳过权限检查”的黑盒裸奔</strong>：为了免受弹窗干扰，许多开发者直接开启免审批模式，导致一旦发生越权修改、敏感配置泄露或破坏性落盘，事后完全无法界定是哪一个 Agent、在哪一步推理中发起了越界请求。</li>
+        <li><strong>“弹窗点完即焚”的瞬态授权</strong>：每当 Agent 要改文件、删目录、跑脚本或请求外网时，界面弹出一个临时对话框（“Allow command?”），人类迫于频繁打断往往习惯性点击同意。弹窗消失后，系统没有留下任何关于“AI 当时为什么申请该权限、携带了什么参数、影响了哪些文件或数据边界”的结构化审计记录；</li>
+        <li><strong>“跳过权限检查”的黑盒裸奔</strong>：为了免受弹窗干扰，许多用户直接开启免审批模式，导致一旦发生越权修改、重要文档被覆盖、敏感配置泄露或破坏性落盘，事后完全无法界定是哪一个 Agent、在哪一步推理中发起了越界请求。</li>
       </ul>
-      <p>在我们的影子工作区协作范式中，我们通过<strong>“沙箱内免打扰投机执行 + 跨边界结构化权限申请账本”</strong>彻底解决了“效率与可审计性”的矛盾：Agent 在自己的写时复制影子层内可以零弹窗全速编码，但<strong>每一次跨越安全或协作边界的权限申请</strong>——无论是申请锁定核心文件（<code>coord_claim</code>）、申请将影子变更合入宿主机主干（生成 <code>esc-*</code> 提权审批单）、申请受控外网访问（<code>egress_http_request</code>），还是申请读写长期记忆（<code>memory_policy_evaluate</code>）——都会被内核强制铸造为一条不可篡改的<strong>权限申请审计记录</strong>：</p>
+      <p>在我们的影子工作区协作范式中，我们通过<strong>“沙箱内免打扰投机执行 + 跨边界结构化权限申请账本”</strong>彻底解决了“效率与可审计性”的矛盾：Agent 在自己的写时复制影子层内可以零弹窗全速工作，但<strong>每一次跨越安全或协作边界的权限申请</strong>——无论是申请锁定共享文件（<code>coord_claim</code>）、申请将影子变更或二进制文件合入宿主机主目录（生成 <code>esc-*</code> 提权审批单）、申请受控外网访问（<code>egress_http_request</code>），还是申请读写长期记忆（<code>memory_policy_evaluate</code>）——都会被内核强制铸造为一条不可篡改的<strong>权限申请审计记录</strong>：</p>
 
       <figure class="blog-diagram">
         <svg viewBox="0 0 760 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AI 权限申请与跨边界提权全链路可审计账本架构图">
@@ -1603,7 +1673,7 @@ else:
           <text x="508" y="174" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2">prev_hash → sha256(ticket + decision)</text>
           <text x="508" y="202" fill="#233E33" font-family="Inter, sans-serif" font-size="8.6" font-weight="600">支持事后合规回放、越权归因与一键回滚</text>
         </svg>
-        <figcaption>图 4：AI 权限申请的可审计性架构——将每一次跨边界权限请求（文件锁、主干提交、外网与记忆访问）固化为带证据载荷与防篡改哈希链的审批账本。</figcaption>
+        <figcaption>图 5：AI 权限申请的可审计性架构——将每一次跨边界权限请求（文件锁、主干提交、外网与记忆访问）固化为带证据载荷与防篡改哈希链的审批账本。</figcaption>
       </figure>
 
       <pre><code>// 跨边界权限申请与防篡改哈希链审计伪代码
@@ -1613,76 +1683,82 @@ function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rational
   audit_ledger.appendHashChained({ ...ticket, decision, prev_hash: audit_ledger.tailHash() }) // 无论准驳均永久留痕
   return decision</code></pre>
 
-      <h3>5.1 三种版本管理与多智能体协作模式对比</h3>
+      <h3>6.1 三种版本管理与广义多智能体协作模式对比</h3>
       <div class="blog-table-wrap">
         <table class="blog-table">
           <thead>
             <tr>
               <th>协作维度 (Dimension)</th>
               <th>传统 Git Feature Branch / Worktree</th>
-              <th>多 Agent 直接共用同一目录</th>
-              <th>影子工作区 + 文件锁 + 事务归并</th>
+              <th>共享目录直写 (Shared Folder / Cowork)</th>
+              <th>Aegis OS 影子工作区 + 租约锁 + 事务内核</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>工作区隔离启动耗时与空间开销</td>
-              <td>400+ ms 拷贝 / 数 GB 重复构建缓存</td>
-              <td>0 ms（完全无隔离）</td>
-              <td><strong>0.42 ms 元数据派生 / 0 B 重复占用</strong></td>
+              <td>适用资产范围 (Artifact Scope)</td>
+              <td>仅限纯文本源代码（对大文件与数据流笨重）</td>
+              <td>任意本地文件，但完全缺乏事务与版本保护</td>
+              <td><strong>代码库 + 多模态文件树 + CAS 数据流 + 跨应用状态</strong></td>
+            </tr>
+            <tr>
+              <td>工作区隔离耗时与空间开销</td>
+              <td>400+ ms 拷贝 / 数 GB 重复构建与数据缓存</td>
+              <td>0 ms（完全无隔离，半成品直接污染主目录）</td>
+              <td><strong>0.42 ms 元数据派生 / 0 B 重复物理块占用</strong></td>
             </tr>
             <tr>
               <td>并发修改冲突发现时机</td>
-              <td>事后滞后发现（PR Merge 时冲突爆炸）</td>
-              <td>无感知（后写静默覆盖先写，41.2% 丢失）</td>
-              <td><strong>事前租约文件锁防撞（<code>coord_claim</code>）</strong></td>
+              <td>事后滞后发现（PR Merge 时冲突大爆炸）</td>
+              <td>无感知（后写静默覆盖先写，41.2% 修改丢失）</td>
+              <td><strong>事前 TTL 租约锁防撞（<code>coord_claim</code>）+ 二进制护栏</strong></td>
             </tr>
             <tr>
-              <td>智能体间接口与进度对齐方式</td>
-              <td>靠人类在不同分支/窗口间手动传话</td>
-              <td>轮询本地文件或频繁相撞</td>
-              <td><strong>零轮询内嵌事件信箱（Piggybacked IPC）</strong></td>
+              <td>跨智能体进度对齐与产物交付</td>
+              <td>靠人类在不同分支/窗口间手动复制传话</td>
+              <td>轮询本地临时文件或发生脏读踩踏</td>
+              <td><strong>零轮询内嵌信箱（<code>_inbox</code>）+ SHA-256 CAS 产物总线</strong></td>
             </tr>
             <tr>
               <td>同一文件非重叠并发修改处理</td>
               <td>需手动 checkout / rebase 解冲突</td>
-              <td>直接覆盖丢失</td>
-              <td><strong>四级 LCS 自动三路归并（98.7% 自动合入）</strong></td>
+              <td>整文件直接覆盖丢失</td>
+              <td><strong>四级 LCS 自动三路归并（98.7% 自动无损合入）</strong></td>
             </tr>
             <tr>
-              <td>宿主机主干构建健康度保障</td>
+              <td>主空间质量与合规保障 (Verify Gate)</td>
               <td>合并前未知，合并后常破坏主干</td>
-              <td>某个 Agent 写到一半即导致全局编译崩溃</td>
-              <td><strong>提交前强制跑通 <code>verify_cmd</code> 沙箱预检门</strong></td>
+              <td>无校验，坏脚本/坏排版/隐私泄露直接落盘</td>
+              <td><strong>提交前强制跑通广义 <code>verify_cmd</code>（测试/排版/PHI 扫描）</strong></td>
             </tr>
             <tr>
               <td>AI 申请权限与变更的可审计性</td>
               <td>仅记录最终 Git Commit，无权限申请过程</td>
               <td>一次性弹窗点完即焚，或跳过权限无日志</td>
-              <td><strong>全链路结构化权限申请单与哈希链审计账本</strong></td>
+              <td><strong>全链路结构化权限申请单与防篡改哈希链审计账本</strong></td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p>通过将<strong>写时复制影子工作区</strong>、<strong>事前租约文件锁</strong>、<strong>事件驱动信箱通信</strong>、<strong>四级 LCS 微事务归并</strong>以及<strong>全链路可审计的权限申请机制</strong>融为一体，我们将人类与多智能体的协作从沉重滞后的“Git 分支合并仪式”解放出来，真正实现了像多人协同文档一样丝滑、却又具备严格事务级安全与可追溯保障的代码共编体验。</p>
+      <p>通过将<strong>写时复制影子工作区</strong>、<strong>事前租约文件锁与二进制护栏</strong>、<strong>事件驱动信箱与 SHA-256 产物总线</strong>、<strong>带广义领域预检门的四级 LCS 微事务归并</strong>以及<strong>全链路可审计的权限申请机制</strong>融为一体，我们将人机与多智能体协作从局限于软件工程的“Git 分支合并仪式”以及脆弱的“共享文件夹盲写”中彻底解放出来，为代码工程、科研文档写作、数据科学流水线与企业级智能体协作提供了统一、丝滑且具备严格事务级安全保障的操作系统底座。</p>
     `,
     body_en: `
-      <h2 id="sec-git-bottleneck">01. Why Git Feature Branches Break Down in the Multi-Agent Era</h2>
-      <p>For the past two decades, version control in software engineering has been synonymous with the <strong>Git Feature Branch workflow</strong>: for every new feature, a developer checks out an isolated <code>feature/xxx</code> branch, works asynchronously for hours or days, and eventually opens a Pull Request to resolve merge conflicts. This model was purpose-built for <strong>low-frequency, asynchronous human collaboration</strong>.</p>
-      <p>However, when the engineering workflow shifts to <strong>one human architect orchestrating 3 to 5 concurrent AI agents mutating the same repository at second-by-second cadence</strong>, the traditional Git branch model hits three fundamental walls:</p>
+      <h2 id="sec-git-bottleneck">01. Why Both Git Feature Branches and Shared Folders Break Down in the Multi-Agent Era</h2>
+      <p>When the industry discusses human-agent and multi-agent collaboration, the conversation often narrows to writing source code. Yet in real-world technical and scientific workflows, <strong>one human expert orchestrating 3 to 5 concurrent AI agents</strong> spans far beyond software repositories—encompassing <strong>TypeScript / Rust / Python codebases, multi-file LaTeX / Markdown research manuscripts and local knowledge vaults, clinical and financial data pipelines, structured JSON/CSV configurations, and binary deliverables such as Word (<code>.docx</code>), PowerPoint (<code>.pptx</code>), PDFs, and vector figures</strong>.</p>
+      <p>Whether teams rely on the twenty-year-old <strong>Git Feature Branch workflow</strong> for software engineering or allow desktop file agents (such as local Cowork utilities) to mutate a <strong>raw Shared Folder</strong> for documents and data, second-by-second multi-agent concurrency hits three structural walls:</p>
       <ul>
-        <li><strong>Blind Divergence &amp; Late Conflict Explosions</strong>: Git branches isolate collaborators by keeping them completely blind to each other’s in-flight edits. Agent A and Agent B may spend twenty minutes refactoring overlapping interfaces on separate branches, only to trigger a massive explosion of <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code> conflict markers at merge time. Forcing an LLM to manually resolve complex Git conflict markers burns enormous context windows and frequently introduces subtle syntax or semantic regressions.</li>
-        <li><strong>Heavyweight Branch Switching &amp; Worktree Fragmentation</strong>: A single working directory cannot check out multiple branches simultaneously. Creating separate <code>git worktree</code> directories for each agent either duplicates multi-gigabyte build caches (<code>node_modules</code>, Python virtual environments, Rust <code>target</code> directories) or leaves agents completely blind to uncommitted edits the human developer is actively making in their IDE.</li>
-        <li><strong>Zero Real-Time Coordination or File-Locking Semantics</strong>: Git records historical snapshots after the fact; it has no native concept of "which agent is actively editing which files right now" or any low-latency messaging channel for agents to hand off updated API contracts in real time.</li>
+        <li><strong>Blind Divergence &amp; Late Conflict Explosions in Git Branches</strong>: Git branches were designed for low-frequency, asynchronous human development ("isolate blindly now, resolve conflicts later"). Agent A and Agent B may spend twenty minutes refactoring overlapping interfaces on separate branches, only to trigger a massive explosion of <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code> conflict markers at merge time. Forcing an LLM to manually untangle complex conflict markers burns huge context windows and frequently introduces subtle syntax or logic regressions.</li>
+        <li><strong>41.2% Silent Overwrites &amp; Half-Written Corruption in Non-Code Shared Folders</strong>: Outside of software engineering—in research papers, local knowledge bases, spreadsheets, and data pipelines—collaborators <strong>do not even have Git branches or compilers as a safety net</strong>. When a literature agent, a data-cleaning script agent, and a manuscript drafting agent read and write directly inside the same shared directory, the last writer silently clobbers human edits or peer outputs (causing a <strong>41.2% overwrite/corruption rate</strong> in uncoordinated multi-agent file benchmarks), while half-written CSVs or JSON schemas crash downstream agents mid-flight.</li>
+        <li><strong>Heavyweight Worktree Duplication vs. Zero Real-Time Coordination Semantics</strong>: Duplicating a working directory or <code>git worktree</code> for every concurrent agent clones multi-gigabyte build caches (<code>node_modules</code>, <code>target</code>) or raw research datasets (DICOM/NIfTI imaging volumes, cohort tables). Worse, neither Git nor raw OS folders can express live coordination state—such as <em>"which agent currently holds a lock on these files or binary assets"</em> or <em>"upstream data cleaning has passed verification and the downstream plotting agent can now proceed."</em></li>
       </ul>
 
       <div class="blog-callout">
-        <div class="blog-callout-title">The Paradigm Shift in Human-Agent &amp; Multi-Agent Version Control</div>
-        <p>Instead of spawning long-lived Git feature branches where agents edit blindly and pray for a clean merge later, we shift to <strong>Trunk-Anchored Shadow Collaboration</strong>: isolating in-flight work inside <strong>0.42ms Copy-on-Write shadow workspaces</strong>, replacing late merge conflicts with <strong>proactive TTL file claims</strong>, coordinating hand-offs via <strong>piggybacked reactive IPC</strong>, and landing changes continuously through <strong>4-tier LCS auto-merge micro-transactions</strong>.</p>
+        <div class="blog-callout-title">From Code Version Control to a Universal Transactional Collaboration Kernel</div>
+        <p>True AI-native infrastructure cannot merely wrap Git CLI commands. Instead, Aegis OS provides a <strong>universal transactional collaboration paradigm across code, file trees, data pipelines, and cross-boundary application state (Trunk-Anchored Shadow Collaboration)</strong>: isolating in-flight mutations inside <strong>0.42ms Copy-on-Write shadow workspaces</strong>, preventing collisions proactively via <strong>TTL file &amp; binary claims</strong>, orchestrating hand-offs over a <strong>piggybacked IPC &amp; SHA-256 Content-Addressed Storage (CAS) bus</strong>, and landing changes continuously through <strong>4-tier LCS auto-merge and generalized domain verification gates</strong>.</p>
       </div>
 
-      <h2 id="sec-cow-shadow">02. Trunk-Anchored Copy-on-Write Shadow Workspaces: 0.42ms Branchless Isolation</h2>
-      <p>To let a human developer and multiple autonomous agents work on the main trunk simultaneously without corrupting each other’s compiler state, our virtual filesystem replaces Git branch checkouts with <strong>Trunk-Anchored Copy-on-Write (CoW) Shadow Workspaces</strong>:</p>
+      <h2 id="sec-cow-shadow">02. Trunk-Anchored Copy-on-Write Shadow Workspaces: 0.42ms Isolation for Code, File Trees &amp; Datasets</h2>
+      <p>To let a human expert and multiple autonomous agents work on the same repository, document vault, or data project simultaneously without corrupting each other’s state, our virtual filesystem (<code>aos-vfs</code>) replaces Git branch checkouts and folder copies with <strong>Trunk-Anchored Copy-on-Write (CoW) Shadow Workspaces</strong>:</p>
 
       <figure class="blog-diagram">
         <svg viewBox="0 0 760 286" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Comparison between Legacy Git Feature Branches and Trunk-Anchored Copy-on-Write Shadow Workspaces">
@@ -1704,9 +1780,9 @@ function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rational
 
           <rect x="52" y="150" width="268" height="94" fill="#FAF8F4" stroke="#8F5638" stroke-dasharray="4 3"/>
           <text x="186" y="174" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9" font-weight="700">✕ LATE MERGE CONFLICT EXPLOSION</text>
-          <text x="66" y="196" fill="#4A534E" font-family="Inter, sans-serif" font-size="9.2">• Branches evolve blindly; duplicate file edits</text>
-          <text x="66" y="214" fill="#4A534E" font-family="Inter, sans-serif" font-size="9.2">• Multi-GB build caches duplicated per worktree</text>
-          <text x="66" y="232" fill="#8F5638" font-family="Inter, sans-serif" font-size="9.2">• Merge time erupts in &lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD markers</text>
+          <text x="66" y="196" fill="#4A534E" font-family="Inter, sans-serif" font-size="9.2">• Branches evolve blindly; shared folders overwrite</text>
+          <text x="66" y="214" fill="#4A534E" font-family="Inter, sans-serif" font-size="9.2">• Multi-GB build caches &amp; datasets duplicated</text>
+          <text x="66" y="232" fill="#8F5638" font-family="Inter, sans-serif" font-size="9.2">• Merge erupts in &lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD or silent loss</text>
 
           <!-- Right Side: Trunk-Anchored CoW Shadow Model -->
           <rect x="376" y="22" width="364" height="242" fill="#F2EFE9" stroke="#233E33" stroke-width="1.2"/>
@@ -1715,8 +1791,8 @@ function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rational
 
           <!-- Host Trunk + Read-only Deps -->
           <rect x="394" y="70" width="328" height="46" fill="#233E33" stroke="#151C19"/>
-          <text x="558" y="90" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.8" font-weight="600">LIVE HOST TRUNK (Human IDE + Shared Read-Only Cache)</text>
-          <text x="558" y="106" text-anchor="middle" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9">Human stays on main tree · Zero-copy shared dependencies</text>
+          <text x="558" y="90" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.8" font-weight="600">LIVE HOST TRUNK (Code + File Vault + Shared Datasets)</text>
+          <text x="558" y="106" text-anchor="middle" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9">Human stays on main tree · Zero-copy shared caches &amp; data</text>
 
           <line x1="448" y1="116" x2="448" y2="142" stroke="#233E33" stroke-width="1.3"/>
           <line x1="558" y1="116" x2="558" y2="142" stroke="#233E33" stroke-width="1.3"/>
@@ -1725,30 +1801,30 @@ function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rational
           <!-- 3 CoW Shadows -->
           <rect x="394" y="142" width="102" height="58" fill="#E3ECE7" stroke="#233E33"/>
           <text x="445" y="163" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">Shadow A (0.42ms)</text>
-          <text x="445" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">Isolated edit &amp; test</text>
+          <text x="445" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">Code &amp; schema</text>
 
           <rect x="507" y="142" width="102" height="58" fill="#E3ECE7" stroke="#233E33"/>
           <text x="558" y="163" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">Shadow B (0.42ms)</text>
-          <text x="558" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">Isolated edit &amp; test</text>
+          <text x="558" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">Docs &amp; LaTeX</text>
 
           <rect x="620" y="142" width="102" height="58" fill="#E3ECE7" stroke="#233E33"/>
           <text x="671" y="163" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2" font-weight="600">Shadow C (0.42ms)</text>
-          <text x="671" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">Isolated edit &amp; test</text>
+          <text x="671" y="180" text-anchor="middle" fill="#233E33" font-family="Inter, sans-serif" font-size="8.5">Data &amp; figures</text>
 
           <rect x="394" y="214" width="328" height="34" fill="#EFECE4" stroke="#151C19"/>
-          <text x="558" y="235" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">✓ Proactive File Claims + Live IPC + Continuous Micro-Merges</text>
+          <text x="558" y="235" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">✓ Proactive File Claims + CAS Bus + Verified Micro-Merges</text>
         </svg>
-        <figcaption>Figure 1: Contrasting legacy Git feature branches with blind divergence and late merge conflicts (left) against trunk-anchored Copy-on-Write shadow workspaces (right).</figcaption>
+        <figcaption>Figure 1: Contrasting legacy Git feature branches and uncoordinated shared folders (left) against trunk-anchored Copy-on-Write shadow workspaces (right).</figcaption>
       </figure>
 
       <ul>
-        <li><strong>0.42 ms Zero-Copy Forking</strong>: When an agent starts a task, the kernel invokes OS-level copy-on-write primitives (<code>clonefile</code> on macOS APFS / <code>FICLONE</code> on Linux) to provision an isolated shadow workspace in <strong>0.42 ms</strong>. Unmodified files share physical disk blocks with the host (zero extra disk space).</li>
-        <li><strong>Uninterrupted Human IDE &amp; Shared Dependency Caches</strong>: The human developer stays on the main working tree in their IDE while each agent edits and runs tests inside its own CoW upper layer. Multi-gigabyte dependency directories are linked read-only into every shadow workspace, eliminating re-install overhead and ensuring an agent’s half-written syntax error never breaks the human’s IDE or peer agents.</li>
-        <li><strong>Continuous Auto-Refresh</strong>: Whenever the human or a peer agent lands a change onto the host trunk, active shadow workspaces automatically fast-forward their untouched files on the next syscall, keeping every collaborator continuously anchored to the latest trunk state.</li>
+        <li><strong>0.42 ms Zero-Copy Forking Across Code &amp; Large File Trees</strong>: When an agent starts a task, the kernel invokes OS-level copy-on-write primitives (<code>clonefile</code> on macOS APFS / <code>FICLONE</code> on Linux) to provision an isolated shadow workspace in <strong>0.42 ms</strong>. Unmodified source files, document vaults, and gigabyte-scale datasets share physical disk blocks with the host (zero extra disk space).</li>
+        <li><strong>Uninterrupted Human Workspace &amp; Read-Only Cache Passthrough</strong>: The human stays on the main working tree while each agent edits files, compiles documents, or runs statistical scripts inside its own CoW upper layer. Heavy dependency directories and raw reference datasets are mounted read-only into every shadow workspace, ensuring an agent’s half-written file never pollutes the human’s folder or peer agents.</li>
+        <li><strong>Continuous Auto-Refresh</strong>: Whenever the human or a peer agent lands a change onto the host trunk, active shadow workspaces automatically fast-forward their untouched files on the next syscall, keeping every collaborator continuously anchored to the latest state.</li>
       </ul>
 
-      <h2 id="sec-claim-ipc">03. From Late Conflict Resolution to Proactive Prevention: File Claims &amp; Piggybacked IPC</h2>
-      <p>If all agents operate against the same trunk, how do we prevent two agents from editing the same file simultaneously? We replace Git’s "discover conflicts after the fact" with <strong>proactive advisory file claims and piggybacked event notifications</strong>:</p>
+      <h2 id="sec-claim-ipc">03. Proactive Collision Prevention: TTL File Claims, Binary Asset Guards &amp; Piggybacked IPC</h2>
+      <p>When multiple agents operate against the same trunk—whether refactoring code, updating a Markdown/LaTeX vault, or generating binary figures and Word manuscripts—how do we prevent mid-flight collisions? We replace post-hoc conflict resolution with <strong>proactive advisory file claims, text/binary stratified guards, and piggybacked event notifications</strong>:</p>
 
       <figure class="blog-diagram">
         <svg viewBox="0 0 760 276" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Multi-Agent File Claim and Piggybacked IPC Sequence Diagram">
@@ -1801,24 +1877,25 @@ function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rational
 
       <ol>
         <li><strong>Task-Bound Glob File Claims (<code>coord_claim</code>)</strong>: Before modifying any file, an agent claims its target paths or glob patterns on the coordination bus (backed by a 2D NFA + live workspace file-tree intersection engine and <code>coordination_warning</code> alerts on out-of-claim sandbox writes). A monotonically increasing <code>claims_version</code> guarantees a consistent global lock table, while automatic release upon <code>workspace_commit</code>, task completion/cascade cancellation, or TTL expiration prevents deadlocks.</li>
+        <li><strong>Stratified Protection for Structured Text vs. Binary Deliverables (<code>overwrite_binaries</code>)</strong>: File collaboration frequently involves non-mergeable binary artifacts—PDF reports, high-DPI scientific figures (PNG/TIFF), SQLite snapshots, or Office archives. Because binary files cannot be merged line-by-line, Aegis OS enforces exclusive pre-edit claims via <code>coord_claim</code> and checks base SHA-256 digests during <code>workspace_commit</code>: if a binary artifact on the host was modified concurrently, shadow overwrites are blocked unless explicitly authorized with <code>overwrite_binaries: true</code> (while rich <code>.docx / .pptx</code> manuscripts bridge seamlessly to Monograph 01’s Dual-Surface CRDT block locks and <code>patchParagraph</code> exporter).</li>
         <li><strong>Zero-Polling Piggybacked Inbox &amp; Blocking Wakeup (<code>_inbox</code> + <code>ipc_wait</code>)</strong>: Agents never waste turns polling for lock updates. Every syscall response automatically piggybacks unread coordination events and peer-to-peer messages (<code>ipc_send / ipc_request</code> with hierarchical <code>parent_task_id</code> and <code>depends_on</code> DAG support), while clients without lifecycle hooks (such as Codex CLI) can invoke <code>ipc_wait</code> to block until an event arrives.</li>
-        <li><strong>Proactive Pivoting &amp; Seamless Relay</strong>: As shown in Figure 2, when Agent 02 sees that Agent 01 holds the lock on backend schema files, it immediately pivots to claiming and building the frontend components. As soon as Agent 01 commits (automatically releasing its claimed paths), Agent 02 receives the wake-up notification, auto-rebases the new schema into its shadow workspace, and completes the integration—with <strong>zero merge conflicts, zero manual CLI commands, and zero human copy-paste relay</strong>.</li>
+        <li><strong>Proactive Pivoting &amp; Seamless Relay</strong>: As shown in Figure 2, when Agent 02 sees that Agent 01 holds the lock on upstream schema or dataset files, it immediately pivots to claiming orthogonal files. As soon as Agent 01 commits (automatically releasing its claimed paths), Agent 02 receives the wake-up notification, auto-rebases the new files into its shadow workspace, and completes the integration—with <strong>zero merge conflicts and zero human copy-paste relay</strong>.</li>
       </ol>
 
       <pre><code>// Concise pseudocode for Task-Bound Glob Claims, Auto-Release &amp; Reactive Hand-Off
-claim = coord_claim(agent_id, paths = ["api.ts", "schema.ts"], ttl_ms = 600000) // Auto-bound to active A2A task_id
+claim = coord_claim(agent_id, paths = ["api.ts", "figures/*.svg"], ttl_ms = 600000) // Auto-bound to active A2A task_id
 if claim.rejected is not empty:
   // Peer agent holds overlapping file/glob lock → pivot to orthogonal files or block on ipc_wait
   pivotToOrthogonalModuleOrWait(claim.active_holder)
 else:
-  editInCowShadow(paths)                     // Mutate safely inside isolated 0.42ms shadow workspace
+  editInCowShadow(paths)                     // Mutate code, docs, or data safely inside 0.42ms shadow workspace
   workspace_commit(paths, verify_cmd = "test") // Serialized commit lock + epoch re-verify + auto-releases claimed paths!</code></pre>
 
-      <h2 id="sec-micro-commit">04. Continuous Micro-Transactions: 4-Tier LCS Auto-Merge &amp; Verification Gate</h2>
-      <p>What happens when a human developer edits the top of a shared configuration file in their IDE while an agent edits the bottom of that same file in its shadow workspace? Instead of dumping raw conflict markers, <code>workspace_commit</code> executes a <strong>4-Tier Longest Common Subsequence (LCS) Diff3 Auto-Merge coupled with a Sandboxed Verification Gate</strong>:</p>
+      <h2 id="sec-micro-commit">04. Continuous Micro-Transactions: 4-Tier LCS Auto-Merge &amp; Generalized Domain Verification Gates</h2>
+      <p>What happens when a human expert edits the top of a shared configuration file, LaTeX manuscript, or JSON/CSV table in their editor while an agent edits the bottom of that same file in its shadow workspace? Instead of dumping raw conflict markers or clobbering edits, <code>workspace_commit</code> executes a <strong>4-Tier Longest Common Subsequence (LCS) Diff3 Auto-Merge coupled with a Generalized Domain Verification Gate</strong>:</p>
 
       <figure class="blog-diagram">
-        <svg viewBox="0 0 760 250" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="4-Tier LCS Diff3 Auto-Merge and Sandboxed Pre-Commit Verification Pipeline">
+        <svg viewBox="0 0 760 250" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="4-Tier LCS Diff3 Auto-Merge and Generalized Domain Verification Pipeline">
           <rect x="1" y="1" width="758" height="248" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
 
           <!-- Left: 3 Inputs -->
@@ -1828,7 +1905,7 @@ else:
 
           <rect x="20" y="96" width="166" height="56" fill="#F2EFE9" stroke="#233E33"/>
           <text x="103" y="118" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">LIVE HOST TRUNK (H)</text>
-          <text x="103" y="137" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9">Includes human IDE &amp; peer edits</text>
+          <text x="103" y="137" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="9">Includes human &amp; peer edits</text>
 
           <rect x="20" y="168" width="166" height="56" fill="#E3ECE7" stroke="#233E33"/>
           <text x="103" y="190" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.6" font-weight="600">AGENT SHADOW (A)</text>
@@ -1846,31 +1923,103 @@ else:
           <text x="236" y="116" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 2 · Line-level LCS non-overlapping merge</text>
           <text x="236" y="142" fill="#FAF8F4" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 3 · Whitespace &amp; indentation normalized</text>
           <text x="236" y="168" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.4">Tier 4 · Adjacent sub-hunk splice (98.7% rate)</text>
-          <text x="236" y="196" fill="#E3ECE7" font-family="Inter, sans-serif" font-size="8.8">Aborts on true collision · 0% silent overwrite</text>
+          <text x="236" y="196" fill="#E3ECE7" font-family="Inter, sans-serif" font-size="8.8">Aborts on true/binary collision · 0% overwrite</text>
 
           <line x1="498" y1="124" x2="532" y2="124" stroke="#00C472" stroke-width="1.5"/>
 
           <!-- Right: Pre-Commit Gate & Atomic Land -->
           <rect x="532" y="32" width="208" height="184" fill="#EFECE4" stroke="#151C19" stroke-width="1.2"/>
-          <text x="636" y="55" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">PRE-COMMIT VERIFY GATE</text>
+          <text x="636" y="55" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">DOMAIN VERIFY GATE</text>
           <line x1="532" y1="65" x2="740" y2="65" stroke="#C8C1B4"/>
-          <text x="546" y="92" fill="#151C19" font-family="Inter, sans-serif" font-size="9.5">1. Executes sandboxed</text>
-          <text x="546" y="110" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.4">   verify_cmd on merged tree</text>
-          <text x="546" y="138" fill="#8F5638" font-family="Inter, sans-serif" font-size="9.5">2. If tests fail → auto-abort</text>
-          <text x="546" y="166" fill="#233E33" font-family="Inter, sans-serif" font-size="9.5" font-weight="600">3. If green → atomic host land</text>
-          <text x="546" y="194" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2">Host trunk stays 100% buildable</text>
+          <text x="546" y="90" fill="#151C19" font-family="Inter, sans-serif" font-size="9.2">1. Runs sandboxed verify_cmd:</text>
+          <text x="546" y="108" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.1">   • Code: tsc / cargo test</text>
+          <text x="546" y="124" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.1">   • Docs: latexmk / link check</text>
+          <text x="546" y="140" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.1">   • Data: Schema &amp; PHI scan</text>
+          <text x="546" y="164" fill="#8F5638" font-family="Inter, sans-serif" font-size="9.2">2. Gate fails → auto-abort</text>
+          <text x="546" y="190" fill="#233E33" font-family="Inter, sans-serif" font-size="9.2" font-weight="600">3. Gate green → atomic land</text>
         </svg>
-        <figcaption>Figure 3: Continuous micro-transaction commit pipeline—reconciling <i>O / H / A</i> states via 4-tier LCS auto-merge and enforcing a sandboxed verification gate before atomic host landing.</figcaption>
+        <figcaption>Figure 3: Continuous micro-transaction commit pipeline—reconciling <i>O / H / A</i> states via 4-tier LCS auto-merge and enforcing a generalized domain verification gate before atomic host landing.</figcaption>
       </figure>
 
-      <h2 id="sec-permission-audit">05. Why AI Permission Requests Must Be End-to-End Auditable</h2>
-      <p>A critical yet frequently overlooked pillar of human-agent collaboration is <strong>the auditability of AI permission requests themselves (End-to-End Auditable Permission Escalations)</strong>.</p>
-      <p>Current agentic coding tools typically fall into one of two broken extremes:</p>
       <ul>
-        <li><strong>Ephemeral Modal Fatigue</strong>: The agent interrupts the developer with transient \"Allow command?\" dialogs for every file edit or shell execution. Once clicked, the dialog vanishes without recording a structured audit trail of <em>why</em> the agent requested the permission, what parameters were attached, or what scope was affected;</li>
-        <li><strong>Unlogged Auto-Approve Mode</strong>: Frustrated by constant prompts, developers enable flags that skip permission checks entirely—leaving zero forensic attribution when an agent modifies sensitive configuration files or attempts unauthorized operations.</li>
+        <li><strong>98.7% Conflict-Free Convergence Across All Text Formats</strong>: Whether a human and an agent concurrently edit different sections of a TypeScript module, a LaTeX paper, a Markdown knowledge vault, or a JSON configuration file, the 4-tier LCS resolver merges non-overlapping hunks in milliseconds with 0% silent overwrites.</li>
+        <li><strong>Generalizing <code>verify_cmd</code> Beyond Code Compilers (Always-Valid Trunk)</strong>: In code repositories, <code>verify_cmd</code> runs typecheckers and unit tests. In document and data workspaces, it acts as a <strong>universal domain invariant gate</strong>—running <code>latexmk -pdf</code> and citation/link verifiers for research manuscripts, or executing JSON Schema checks, CONSORT arithmetic conservation audits, and <code>scanPhi --strict</code> privacy gates so no corrupted document or PHI leak ever lands in the host workspace.</li>
       </ul>
-      <p>Our shadow workspace architecture resolves the tension between velocity and governance through <strong>Zero-Prompt Speculative Execution Inside the Sandbox + Structured Permission Escalation Ledgers at the Boundary</strong>. While an agent works freely inside its isolated Copy-on-Write layer, <strong>every permission request that crosses a collaboration or security boundary</strong>—claiming shared file locks (<code>coord_claim</code>), committing shadow changes to the host trunk (<code>esc-*</code> escalation tickets), requesting external network egress (<code>egress_http_request</code>), or accessing long-term memory namespaces (<code>memory_policy_evaluate</code>)—is recorded as an immutable <strong>Permission Escalation Ticket</strong>:</p>
+
+      <h2 id="sec-universal-scenarios">05. Beyond Source Code: Four Collaboration Scenarios Across File Vaults, CAS Data Pipelines &amp; Live Apps</h2>
+      <p>Once we decouple "Copy-on-Write shadow workspaces + proactive TTL claims + piggybacked IPC + verified micro-commits" from Git-specific assumptions, Aegis OS emerges as a <strong>universal transactional collaboration kernel for all knowledge work</strong>. By combining the VFS and coordination bus with <strong>SHA-256 Content-Addressed Storage (<code>org_artifact_publish / fetch</code>)</strong>, <strong>scoped KV state (<code>org_kv_put / get</code>)</strong>, <strong>live application mounting (<code>AAP-1.0</code>)</strong>, and <strong>governed memory leases (<code>UOMP</code>)</strong>, the kernel powers four distinct collaboration domains:</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 288" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Four Universal Collaboration Scenarios Powered by Aegis OS">
+          <rect x="1" y="1" width="758" height="286" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Top Banner: Shared Transactional Kernel -->
+          <rect x="20" y="18" width="720" height="44" fill="#233E33" stroke="#151C19" stroke-width="1.2"/>
+          <text x="380" y="37" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600">AEGIS OS UNIVERSAL TRANSACTIONAL COLLABORATION KERNEL</text>
+          <text x="380" y="53" text-anchor="middle" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="9.5">0.42ms CoW Shadow VFS · Task-Bound TTL Claims · Piggybacked IPC &amp; DAG · 4-Tier LCS + Verify Gate · SHA-256 CAS Bus</text>
+
+          <!-- Col 1: Codebase -->
+          <rect x="20" y="78" width="171" height="190" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+          <text x="105" y="99" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">SCENARIO 01 · CODEBASE</text>
+          <line x1="20" y1="108" x2="191" y2="108" stroke="#DFDAD0"/>
+          <text x="105" y="128" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10" font-weight="600">Software Engineering</text>
+          <text x="30" y="150" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• Zero-copy node_modules</text>
+          <text x="30" y="170" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• Claim api/** &amp; schema.ts</text>
+          <text x="30" y="190" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• 4-Tier LCS hunk merge</text>
+          <text x="30" y="210" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8" font-weight="600">• Gate: tsc &amp; vitest</text>
+          <text x="30" y="246" fill="#8F5638" font-family="Inter, sans-serif" font-size="8.2">Replaces Git worktree sprawl</text>
+
+          <!-- Col 2: Files & Docs -->
+          <rect x="203" y="78" width="171" height="190" fill="#E3ECE7" stroke="#233E33" stroke-width="1"/>
+          <text x="288" y="99" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">SCENARIO 02 · FILE VAULTS</text>
+          <line x1="203" y1="108" x2="374" y2="108" stroke="#C8C1B4"/>
+          <text x="288" y="128" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10" font-weight="600">Docs &amp; File Trees</text>
+          <text x="213" y="150" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• LaTeX/MD/JSON co-editing</text>
+          <text x="213" y="170" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• Binary PDF/DOCX guard</text>
+          <text x="213" y="190" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• Bridges to CRDT &amp; OOXML</text>
+          <text x="213" y="210" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8" font-weight="600">• Gate: Build &amp; citation check</text>
+          <text x="213" y="246" fill="#233E33" font-family="Inter, sans-serif" font-size="8.2">Eliminates 41.2% file overwrites</text>
+
+          <!-- Col 3: Data & CAS Pipelines -->
+          <rect x="386" y="78" width="171" height="190" fill="#F2EFE9" stroke="#233E33" stroke-width="1"/>
+          <text x="471" y="99" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">SCENARIO 03 · DATA &amp; CAS</text>
+          <line x1="386" y1="108" x2="557" y2="108" stroke="#DFDAD0"/>
+          <text x="471" y="128" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10" font-weight="600">Data &amp; Artifact Pipelines</text>
+          <text x="396" y="150" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• Zero-copy multi-GB data</text>
+          <text x="396" y="170" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• Immutable SHA-256 CAS</text>
+          <text x="396" y="190" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8">• depends_on DAG wakeups</text>
+          <text x="396" y="210" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8" font-weight="600">• Gate: Math &amp; PHI scan</text>
+          <text x="396" y="246" fill="#8F5638" font-family="Inter, sans-serif" font-size="8.2">Prevents /tmp dirty reads</text>
+
+          <!-- Col 4: Live Apps & Memory -->
+          <rect x="569" y="78" width="171" height="190" fill="#EFECE4" stroke="#151C19" stroke-width="1"/>
+          <text x="654" y="99" text-anchor="middle" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">SCENARIO 04 · APPS &amp; UOMP</text>
+          <line x1="569" y1="108" x2="740" y2="108" stroke="#C8C1B4"/>
+          <text x="654" y="128" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="10" font-weight="600">Live Apps &amp; Memory</text>
+          <text x="579" y="150" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• AAP-1.0 live app sessions</text>
+          <text x="579" y="170" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• UOMP memory consent</text>
+          <text x="579" y="190" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8">• L7 secret injection &amp; DLP</text>
+          <text x="579" y="210" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8" font-weight="600">• Gate: 3-Tier confirmation</text>
+          <text x="579" y="246" fill="#233E33" font-family="Inter, sans-serif" font-size="8.2">Unifies local &amp; SaaS state</text>
+        </svg>
+        <figcaption>Figure 4: Four universal collaboration scenarios powered by Aegis OS—spanning source code, multi-modal file vaults, SHA-256 CAS data pipelines, and cross-boundary applications/memory.</figcaption>
+      </figure>
+
+      <ol>
+        <li><strong>Scenario 01 · Software Engineering &amp; Multi-Module Refactoring (Codebase Collaboration)</strong>: A human architect and multiple coding agents collaborate directly on the main trunk. While the human refines core domain models in their IDE, Agent A claims backend routes and Agent B claims frontend components—each compiling and testing inside a 0.42ms CoW shadow that shares read-only build caches before landing verified micro-commits.</li>
+        <li><strong>Scenario 02 · Multi-File Research Manuscripts, Local Knowledge Vaults &amp; Binary Assets (File Collaboration)</strong>: When co-authoring grant proposals, LaTeX/Markdown books, or enterprise knowledge bases (similar to desktop Cowork workflows), multiple agents edit chapter files, bibliography databases (<code>refs.bib</code>), and vector figures concurrently. Structured text files merge automatically via 4-Tier LCS Diff3, while non-mergeable binary assets (PDFs, figures, <code>.docx / .pptx</code> archives) are protected by exclusive <code>coord_claim</code> locks and <code>overwrite_binaries</code> hash checks (bridging to Monograph 01’s Dual-Surface CRDT for sub-paragraph manuscript collaboration).</li>
+        <li><strong>Scenario 03 · Data Science Pipelines &amp; SHA-256 Content-Addressed Artifact Handoffs (Data Collaboration)</strong>: In multi-stage analytical workflows (e.g., Cohort Cleaning Agent → Biostatistical Modeling Agent → Forest Plot SVG Agent), sharing a raw <code>/tmp</code> directory leads to dirty reads of half-written CSVs. Instead, Aegis OS agents process gigabyte-scale datasets inside zero-copy shadow workspaces, publish validated outputs as immutable <strong>SHA-256 Content-Addressed Storage (CAS)</strong> blobs via <code>org_artifact_publish</code>, and trigger downstream peers through <code>depends_on</code> task DAGs (<code>ipc_task_update</code>) with 100% reproducibility.</li>
+        <li><strong>Scenario 04 · Live SaaS Applications (<code>AAP-1.0</code>) &amp; Governed Multi-Agent Memory (<code>UOMP</code>)</strong>: Collaboration extends beyond the local disk. Through the Aegis Application Protocol (<code>app_mount_session</code> / <code>app_call_tool</code>), local agents mount authenticated sessions in live web applications (connecting directly to Monograph 02’s Capability Parity architecture), while cross-agent access to personal or organizational memory is governed by revocable <strong>UOMP (User-Owned Memory Protocol)</strong> leases.</li>
+      </ol>
+
+      <h2 id="sec-permission-audit">06. Why AI Boundary Permission Requests Must Be End-to-End Auditable</h2>
+      <p>When collaboration expands from source code to a user’s local document folders, research datasets, external APIs, and personal memory, a foundational governance requirement emerges: <strong>the act of an AI requesting a boundary permission must be structured and end-to-end auditable (End-to-End Auditable Permission Escalations)</strong>.</p>
+      <p>Current coding and desktop file agents typically fall into one of two broken extremes:</p>
+      <ul>
+        <li><strong>Ephemeral Modal Fatigue</strong>: The agent interrupts the user with transient \"Allow command?\" dialogs for every file edit or script execution. Once clicked, the dialog vanishes without recording a structured audit trail of <em>why</em> the agent requested the permission, what parameters were attached, or which files/data were affected;</li>
+        <li><strong>Unlogged Auto-Approve Mode</strong>: Frustrated by constant prompts, users enable flags that skip permission checks entirely—leaving zero forensic attribution when an agent overwrites important documents, leaks sensitive configurations, or mutates production resources.</li>
+      </ul>
+      <p>Our shadow workspace architecture resolves the tension between velocity and governance through <strong>Zero-Prompt Speculative Execution Inside the Sandbox + Structured Permission Escalation Ledgers at the Boundary</strong>. While an agent works freely inside its isolated Copy-on-Write layer, <strong>every permission request that crosses a collaboration or security boundary</strong>—claiming shared file locks (<code>coord_claim</code>), committing shadow changes or binary files to the host directory (<code>esc-*</code> escalation tickets), requesting external network egress (<code>egress_http_request</code>), or accessing long-term memory namespaces (<code>memory_policy_evaluate</code>)—is recorded as an immutable <strong>Permission Escalation Ticket</strong>:</p>
 
       <figure class="blog-diagram">
         <svg viewBox="0 0 760 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="End-to-End Auditable AI Permission Escalation and Hash-Chained Ledger">
@@ -1913,7 +2062,7 @@ else:
           <text x="508" y="174" fill="#151C19" font-family="JetBrains Mono, monospace" font-size="8.2">prev_hash → sha256(ticket + decision)</text>
           <text x="508" y="202" fill="#233E33" font-family="Inter, sans-serif" font-size="8.6" font-weight="600">Forensic replay, attribution &amp; rollback</text>
         </svg>
-        <figcaption>Figure 4: End-to-end auditable AI permission requests—capturing every boundary capability request (file claims, trunk commits, network egress, memory access) in a hash-chained ledger.</figcaption>
+        <figcaption>Figure 5: End-to-end auditable AI permission requests—capturing every boundary capability request (file claims, trunk commits, network egress, memory access) in a hash-chained ledger.</figcaption>
       </figure>
 
       <pre><code>// Concise pseudocode for Auditable Boundary Permission Requests
@@ -1923,47 +2072,53 @@ function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rational
   audit_ledger.appendHashChained({ ...ticket, decision, prev_hash: audit_ledger.tailHash() }) // Logged regardless of outcome
   return decision</code></pre>
 
-      <h3>5.1 Comparing Version Control &amp; Multi-Agent Collaboration Paradigms</h3>
+      <h3>6.1 Comparing Version Control &amp; Universal Multi-Agent Collaboration Paradigms</h3>
       <div class="blog-table-wrap">
         <table class="blog-table">
           <thead>
             <tr>
               <th>Collaboration Dimension</th>
               <th>Git Feature Branches / Worktrees</th>
-              <th>Shared-Directory Multi-Agent</th>
-              <th>Shadow Workspaces + File Claims + Auto-Merge</th>
+              <th>Raw Shared Folder (Cowork / File Agents)</th>
+              <th>Aegis OS Transactional Collaboration Kernel</th>
             </tr>
           </thead>
           <tbody>
             <tr>
+              <td>Supported Artifact Scope</td>
+              <td>Source code only (heavyweight for data/docs)</td>
+              <td>Any local file, but zero transactional safety</td>
+              <td><strong>Codebases + File Vaults + CAS Data Pipelines + Live Apps</strong></td>
+            </tr>
+            <tr>
               <td>Workspace Isolation Overhead</td>
               <td>400+ ms copy / multi-GB cache duplication</td>
-              <td>0 ms (no isolation)</td>
-              <td><strong>0.42 ms CoW fork / 0 B duplicate blocks</strong></td>
+              <td>0 ms (no isolation; partial writes pollute host)</td>
+              <td><strong>0.42 ms CoW fork / 0 B duplicate physical blocks</strong></td>
             </tr>
             <tr>
               <td>Conflict Discovery Timing</td>
               <td>Late (explodes at PR merge time)</td>
               <td>Blind (41.2% silent last-writer overwrites)</td>
-              <td><strong>Proactive pre-edit TTL file claims (<code>coord_claim</code>)</strong></td>
+              <td><strong>Proactive TTL file claims (<code>coord_claim</code>) + binary guards</strong></td>
             </tr>
             <tr>
-              <td>Cross-Agent Contract Hand-Off</td>
+              <td>Cross-Agent Artifact &amp; State Handoff</td>
               <td>Manual human relay across branches</td>
-              <td>File polling or race conditions</td>
-              <td><strong>Zero-polling piggybacked IPC mailbox</strong></td>
+              <td>Dirty reads from shared <code>/tmp</code> files</td>
+              <td><strong>Piggybacked IPC mailbox + SHA-256 CAS artifact bus</strong></td>
             </tr>
             <tr>
               <td>Concurrent Edits in Same File</td>
               <td>Manual rebase &amp; conflict marker resolution</td>
-              <td>Silent overwrite</td>
+              <td>Whole-file silent overwrite</td>
               <td><strong>4-Tier LCS Diff3 auto-merge (98.7% conflict-free)</strong></td>
             </tr>
             <tr>
-              <td>Host Trunk Build Health</td>
+              <td>Host Quality &amp; Compliance Gate</td>
               <td>Unverified until post-merge CI</td>
-              <td>Broken mid-flight by partial edits</td>
-              <td><strong>Mandatory pre-commit <code>verify_cmd</code> sandbox gate</strong></td>
+              <td>None; broken scripts or PHI leaks land directly</td>
+              <td><strong>Generalized <code>verify_cmd</code> gate (Tests / LaTeX / PHI scan)</strong></td>
             </tr>
             <tr>
               <td>Permission Request Auditability</td>
@@ -1974,7 +2129,7 @@ function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rational
           </tbody>
         </table>
       </div>
-      <p>By replacing heavyweight Git branch ceremonies with <strong>0.42ms Copy-on-Write shadow workspaces</strong>, <strong>proactive TTL file claims</strong>, <strong>piggybacked IPC messaging</strong>, <strong>verified 4-tier LCS micro-commits</strong>, and <strong>end-to-end auditable permission escalations</strong>, human developers and autonomous agents can finally collaborate on a single live codebase with the fluidity of a multiplayer canvas and the safety of a transactional database.</p>
+      <p>By uniting <strong>0.42ms Copy-on-Write shadow workspaces</strong>, <strong>proactive TTL file claims and binary guards</strong>, <strong>piggybacked IPC and SHA-256 CAS artifact buses</strong>, <strong>4-tier LCS micro-commits with generalized domain verification gates</strong>, and <strong>end-to-end auditable permission escalations</strong>, Aegis OS moves beyond code-only Git branch ceremonies and fragile shared folders—providing a universal, transactional operating system foundation for human-agent collaboration across code, documents, data science, and live enterprise software.</p>
     `,
   },
 ]

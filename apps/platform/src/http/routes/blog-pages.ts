@@ -380,6 +380,10 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
         q: 'Aegis OS 如何在消除 90.7%–97.9% 授权确认弹窗的同时保证 0.0% 逃逸攻击成功率？',
         a: '因为所有绿区（Green Zone）文件读写与构建测试都被内核级 Seatbelt/Bubblewrap 沙箱严格限制在隔离的 CoW 影子工作区内，无法直接污染宿主机主干或读取 ~/.ssh、~/.aws 等凭据（80 项红队攻击测试 0.0% ASR）。只有当智能体请求提交回宿主机（workspace_commit）或触碰敏感边界时，才通过全链路哈希链可审计账本与离线 Ed25519 人类审批租约放行。',
       },
+      {
+        q: '除了代码协作，Aegis OS 如何支持多文件文档库、二进制产物与数据科学流水线协作？',
+        a: '在非代码协作中，共享目录直写会导致 41.2% 的后写覆盖与脏读。Aegis OS 通过四项机制覆盖全场景协作：（1）对 Markdown/LaTeX/JSON/CSV 走四级 LCS 自动三路归并，对 PDF/图表/DOCX 等二进制文件实施 coord_claim 排他锁与 overwrite_binaries 基线校验；（2）将 verify_cmd 扩展为广义领域预检门（如 LaTeX 编译、死链校验、PHI 隐私扫描）；（3）通过 org_artifact_publish（SHA-256 内容寻址 CAS）与 depends_on 任务 DAG 实现零脏读数据流水线接力；（4）通过 AAP-1.0 与 UOMP 协议将协作边界延伸至在线应用与受控记忆。',
+      },
     ],
     faq_en: [
       {
@@ -389,6 +393,10 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
       {
         q: 'How does Aegis OS eliminate 90.7%–97.9% of authorization prompts while maintaining 0.0% attack success rate?',
         a: 'Routine edits, builds, and tests run inside kernel-enforced macOS Seatbelt / Linux Bubblewrap sandboxes bound to an isolated CoW shadow workspace with default-deny $HOME credential isolation (0.0% ASR across 80 adversarial attacks). Human confirmation is reserved strictly for boundary transitions (such as workspace_commit or policy escalations), which are recorded in a SHA-256 hash-chained audit ledger and gated by offline Ed25519 capability leases.',
+      },
+      {
+        q: 'How does Aegis OS generalize beyond source code to document vaults, binary assets, and data pipelines?',
+        a: 'Outside of software engineering, shared-folder agents suffer a 41.2% silent overwrite rate because they lack branches and compilers. Aegis OS unifies four collaboration domains: (1) 4-tier LCS auto-merge for text/LaTeX/Markdown/JSON paired with exclusive coord_claim locks and overwrite_binaries hash guards for PDFs, figures, and Office archives; (2) generalized verify_cmd domain gates (LaTeX compilation, citation checks, and PHI privacy scans); (3) immutable SHA-256 Content-Addressed Storage (org_artifact_publish) with depends_on DAG task wakeups for data pipelines; and (4) AAP-1.0 live application mounting and UOMP memory consent.',
       },
     ],
   },
