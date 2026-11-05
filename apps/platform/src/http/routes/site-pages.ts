@@ -500,6 +500,9 @@ function renderCommonLayout(opts: {
   const switchLabel = isEn ? '中文' : 'EN'
   const homeHref = isEn ? '/en' : '/'
   const toolsHref = isEn ? '/en/tools' : '/tools'
+  const ogImage = isEn
+    ? 'https://heurion.org/site/og-tools-en.png'
+    : 'https://heurion.org/site/og-tools-zh.png'
 
   return `<!doctype html>
 <html lang="${isEn ? 'en' : 'zh-CN'}">
@@ -523,14 +526,18 @@ function renderCommonLayout(opts: {
   <meta property="og:description" content="${escapeHtml(description)}">
   <meta property="og:url" content="${canonicalUrl}">
   <meta property="og:locale" content="${isEn ? 'en_US' : 'zh_CN'}">
-  <meta property="og:image" content="https://heurion.org/site/demo-chest-mpr-3view.png">
+  <meta property="og:image" content="${ogImage}">
+  <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="${escapeHtml(title)}">
   <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@0xSynapse">
+  <meta name="twitter:creator" content="@0xSynapse">
   <meta name="twitter:title" content="${escapeHtml(title)}">
   <meta name="twitter:description" content="${escapeHtml(description)}">
-  <meta name="twitter:image" content="https://heurion.org/site/demo-chest-mpr-3view.png">
+  <meta name="twitter:image" content="${ogImage}">
+  <meta name="twitter:image:alt" content="${escapeHtml(title)}">
   <script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

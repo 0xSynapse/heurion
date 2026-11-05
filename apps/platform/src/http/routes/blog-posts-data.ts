@@ -41,6 +41,14 @@ export interface BlogPostMeta {
   subtitle_en: string
   summary_zh: string
   summary_en: string
+  /** Concise copy used by Open Graph / X cards (falls back to title + summary). */
+  og_title_zh?: string
+  og_title_en?: string
+  og_description_zh?: string
+  og_description_en?: string
+  /** Absolute 1200x630 social card URLs; the shared default is used when omitted. */
+  og_image_zh?: string
+  og_image_en?: string
   keywords_zh: string
   keywords_en: string
   tags_zh: string[]
@@ -69,6 +77,12 @@ export const BLOG_POSTS: readonly BlogPostMeta[] = [
     subtitle_en: 'Moving beyond destructive full-file overwrites and OOXML drift: dual projection between human WYSIWYG authoring and AI structural primitives, intra-paragraph Run-level OOXML LCS patching, and 0.128ms selective per-turn rollback.',
     summary_zh: '在软件工程中大放异彩的“写 Python 脚本直接改文件”范式，一旦迁移到严肃的学术科研论文（Research Manuscripts, .docx）与学术汇报幻灯片（.pptx）中，就会导致期刊排版坍塌、静默覆盖人类作者的并发修改以及全量重吐带来的 Token 浪费。本文深入剖析 Heurion 的三大底层机制：（1）基于 ProseMirror + Yjs 的双表面对偶投影与 {#id} 块级靶向算子；（2）兼顾块级 Clean Splicing 与段落内 Run 级 LCS 补丁（patchParagraph）的 100% 字节保真 OOXML 导出器；（3）保留人类后续修改的 0.128ms 单轮 AI 靶向回滚（revertByNodes）。',
     summary_en: 'The free-form script-and-overwrite paradigm that excels in software engineering introduces severe failure modes across academic research manuscripts (.docx) and slide decks (.pptx): OOXML formatting destruction, silent overwriting of concurrent co-author edits, and massive token waste. This monograph dissects three foundational mechanisms in Heurion: (1) Dual-Surface CRDT projection with {#id} structural primitives, (2) two-level 100% byte-preserving OOXML splicing and intra-paragraph Run-level LCS patching (patchParagraph), and (3) 0.128ms selective per-turn AI rollback (revertByNodes) with human-priority conflict skipping.',
+    og_title_zh: '为什么自由 Shell 智能体写不好科研论文？',
+    og_title_en: 'Why Free-Form Shell Agents Fail at Research Manuscripts',
+    og_description_zh: '双表面 CRDT、字节级 OOXML 补丁与 0.128ms 单轮靶向回滚：让 AI 改论文不破坏排版，也不覆盖人类修改。',
+    og_description_en: 'Dual-Surface CRDT, byte-preserving OOXML patching, and 0.128ms selective rollback—without destroying formatting or overwriting human edits.',
+    og_image_zh: 'https://heurion.org/site/og-blog-dual-surface-zh.png',
+    og_image_en: 'https://heurion.org/site/og-blog-dual-surface-en.png',
     keywords_zh: '双表面 CRDT, Yjs, ProseMirror, 科研论文写作, Research Manuscript, OOXML 补丁导出, patchParagraph, revertByNodes, Heurion Research',
     keywords_en: 'Dual-Surface CRDT, Yjs, ProseMirror, Research Manuscript Authoring, OOXML Byte Identity, patchParagraph, revertByNodes, Heurion Research',
     tags_zh: ['双表面 CRDT', 'ProseMirror + Yjs', 'OOXML 100% 保真', '0.128ms 靶向回滚'],
@@ -694,6 +708,12 @@ export function revertByNodes(
     subtitle_en: 'Moving beyond brittle GUI screen-scraping and unauthenticated backdoor scripts: rebuilding software infrastructure around the axiom that "An Agent’s Permissions Equal the User’s Permissions" through dual Human GUI and AI-native MCP interfaces.',
     summary_zh: '过去的软件系统只为单一主体——操作图形界面（GUI）的人类——而设计。当自治智能体进入工作流时，传统软件迫使 AI 要么退化为缓慢脆弱的“屏幕点击爬虫”，要么异化为绕过业务鉴权的“特权脚本”。本文阐述为什么我们需要为更好的人机协作重新构建软件系统：通过“AI 的权限 = 用户的权限”与“每个界面能力必有对应原生工具”的对等公理、进程内零分叉同源调用、高风险操作确认卡门控以及编译期全路由反射不变量，构建真正面向人机共生的一等基础设施。',
     summary_en: 'Legacy software was architected for a single actor: a human clicking a graphical user interface (GUI). Integrating autonomous agents into such systems forces AI into either brittle GUI screen-scraping or dangerous privilege-bypassing scripts. This monograph explains why software systems must be rebuilt from the ground up for human-AI collaboration: enforcing strict Capability and Permission Parity ("An Agent’s Permissions Equal the User’s Permissions"), zero-fork in-process loopback invocation, human-gated confirmation cards for irreversible actions, and compile-time route-to-tool parity invariants.',
+    og_title_zh: '人机权限与能力对等',
+    og_title_en: 'Human-Agent Capability Parity',
+    og_description_zh: 'AI 的权限 = 用户的权限，每个界面能力都有对应的原生工具：为智能体重构一等软件接口，而不是让 AI 点击屏幕。',
+    og_description_en: 'AI permissions equal user permissions, with a native tool for every UI capability—rebuilding software interfaces for agents instead of screen-scraping.',
+    og_image_zh: 'https://heurion.org/site/og-blog-parity-zh.png',
+    og_image_en: 'https://heurion.org/site/og-blog-parity-en.png',
     keywords_zh: 'AI-Native 软件架构, 人机权限对等, Capability Parity, MCP 原生接口, 进程内同源调用, 确认卡门控, 人机协作基础设施, Heurion Research',
     keywords_en: 'AI-Native Software Architecture, Capability Parity, Permission Parity, Model Context Protocol, In-Process Invoker, Human-AI Collaboration Infrastructure, Heurion Research',
     tags_zh: ['AI-Native 接口', '人机权限对等', '进程内同源内核', '编译期对等不变量'],
@@ -1332,6 +1352,12 @@ assert collectToolsWhere(confirm == true) == AI_CONFIRM_REGISTRY   // High-risk 
     subtitle_en: 'Why both Git feature branches and raw shared directories collapse under multi-agent concurrency—and how 0.42ms trunk-anchored Copy-on-Write shadow workspaces, TTL claims, piggybacked IPC, 4-tier LCS auto-merge with domain verification gates, and SHA-256 CAS artifact buses unify collaboration across codebases, document vaults, data pipelines, and governed memory.',
     summary_zh: '当 1 名人类专家与 3–5 个自治智能体在同一个工作空间内以秒级频率协同推进时，软件工程里的 Git Feature Branch 会陷入环境割裂与合并冲突大爆炸；而在更广泛的非代码场景（多文件科研手稿、本地知识库、财务/临床数据流水线、二进制设计产物）中，人们甚至连分支与编译器都没有，直接共享文件夹会导致 41.2% 的后写静默覆盖与半成品污染。本文提出一套超越单一代码场景的广义人机与多智能体事务协作范式：（1）0.42ms 主干锚定写时复制影子工作区（同时支持代码依赖零拷贝穿透与 GB 级数据集/多模态文件树瞬间映射）；（2）兼顾结构化文本与二进制原件保护（overwrite_binaries）的事前 TTL 租约文件锁与零轮询内嵌信箱；（3）四级 LCS 自动三路归并与广义领域预检门（从代码单元测试扩展到 LaTeX 编译、Schema 校验与 PHI 隐私扫描）；（4）基于 SHA-256 内容寻址产物总线（CAS）、任务 DAG 接力与哈希链权限账本的全场景协同架构。',
     summary_en: 'When one human expert orchestrates 3 to 5 concurrent autonomous agents at second-by-second cadence, Git feature branches in software engineering collapse into worktree fragmentation and merge conflict explosions—while non-code workflows (document vaults, research manuscripts, clinical/financial data pipelines, and binary media assets) lack branches and compilers altogether, suffering 41.2% silent overwrites and half-written file corruption. This monograph presents a universal transactional collaboration paradigm across code, file trees, and multi-agent pipelines: (1) 0.42ms trunk-anchored Copy-on-Write shadow workspaces for both source trees and multi-gigabyte datasets/documents, (2) proactive TTL file claims and piggybacked IPC protecting both text and binary assets, (3) 4-tier LCS auto-merge paired with generalized domain verification gates (compilers, LaTeX/Schema validators, and PHI privacy scanners), and (4) SHA-256 Content-Addressed Storage (CAS) artifact buses, task DAG hand-offs, and hash-chained permission audit ledgers.',
+    og_title_zh: '超越 Git 分支与共享目录',
+    og_title_en: 'Beyond Git Branches & Shared Folders',
+    og_description_zh: '0.42ms 写时复制影子工作区、事前租约锁、四级 LCS 归并与 SHA-256 CAS 总线：面向代码、文件树与数据流水线的多智能体事务协作内核。',
+    og_description_en: '0.42ms Copy-on-Write shadow workspaces, TTL claims, 4-tier LCS auto-merge, and a SHA-256 CAS artifact bus for multi-agent work across code, files, and data pipelines.',
+    og_image_zh: 'https://heurion.org/site/og-blog-aegis-zh.png',
+    og_image_en: 'https://heurion.org/site/og-blog-aegis-en.png',
     keywords_zh: '版本管理范式, 影子工作区, Copy-on-Write, 文件锁, 文件协作, 多智能体协作, 人机协作, 四级 LCS 三路归并, 内容寻址 CAS, Aegis OS, Git 分支替代',
     keywords_en: 'Version Control Paradigm, Copy-on-Write Shadow Workspace, File Claims, File Collaboration, Multi-Agent Collaboration, Human-Agent Collaboration, 4-Tier LCS Auto-Merge, Content-Addressed Storage, Aegis OS',
     tags_zh: ['代码+文件+数据全场景协同', '0.42ms 影子工作区', '事前租约锁 & CAS 总线', '98.7% 自动归并 + 广义预检'],

@@ -16,6 +16,7 @@ import {
   renderToolsHubHtml,
 } from '../src/http/routes/site-pages.ts'
 import {
+  BLOG_POSTS,
   BLOG_SLUGS,
   registerBlogRoutes,
   renderBlogHomeHtml,
@@ -63,6 +64,41 @@ describe('SEO & AI Search (GEO) Static Assets & /en SSR', () => {
       expect(html).not.toContain('images.unsplash.com')
       expect(html).toContain('property="og:image"')
       expect(html).toContain('name="twitter:image"')
+    }
+  })
+
+  it('serves dedicated 1200x630 cards on the homepage, Aegis OS pages and clinical tools', () => {
+    const expectations: Array<[string, string]> = [
+      ['index.html', 'og-home-en.png'],
+      ['aegis-os/index.html', 'og-aegis-os-zh.png'],
+      ['en/aegis-os/index.html', 'og-aegis-os-en.png'],
+      ['aegis-os/tutorial/index.html', 'og-aegis-os-zh.png'],
+      ['en/aegis-os/tutorial/index.html', 'og-aegis-os-en.png'],
+    ]
+
+    for (const [rel, image] of expectations) {
+      const html = readFileSync(join(SITE_DIR, rel), 'utf8')
+      expect(html).toContain(`property="og:image" content="https://heurion.org/site/${image}"`)
+      expect(html).toContain(`name="twitter:image" content="https://heurion.org/site/${image}"`)
+      expect(html).toContain('property="og:image:type" content="image/png"')
+      expect(html).toContain('property="og:image:width" content="1200"')
+      expect(html).toContain('property="og:image:height" content="630"')
+      expect(html).toContain('name="twitter:site" content="@0xSynapse"')
+      expect(html).not.toMatch(/property="og:image"[^>]*demo-chest-mpr-3view/)
+      const png = readFileSync(join(SITE_DIR, image))
+      expect(png.readUInt32BE(16)).toBe(1200)
+      expect(png.readUInt32BE(20)).toBe(630)
+    }
+
+    for (const [lang, image] of [['zh', 'og-tools-zh.png'], ['en', 'og-tools-en.png']] as const) {
+      for (const html of [renderToolsHubHtml(lang), renderToolPageHtml('e-value-calculator', lang)!]) {
+        expect(html).toContain(`property="og:image" content="https://heurion.org/site/${image}"`)
+        expect(html).toContain(`name="twitter:image" content="https://heurion.org/site/${image}"`)
+        expect(html).toContain('property="og:image:width" content="1200"')
+        expect(html).toContain('property="og:image:height" content="630"')
+        expect(html).toContain('name="twitter:site" content="@0xSynapse"')
+        expect(html).not.toMatch(/property="og:image"[^>]*demo-chest-mpr-3view/)
+      }
     }
   })
 
@@ -362,6 +398,41 @@ describe('Personal Technical Blog (blog.heurion.org & heurion.org/blog)', () => 
       const enPostMain = enPost.match(/<main[\s\S]*?<\/main>/)?.[0] ?? ''
       expect(enPostMain).not.toMatch(/[\u4e00-\u9fa5]/)
     }
+  })
+
+  it('ships a dedicated 1200x630 Open Graph / X card for every post and both languages', () => {
+    for (const post of BLOG_POSTS) {
+      for (const lang of ['zh', 'en'] as const) {
+        const html = renderBlogPostHtml(post.slug, lang, { subdomain: false })!
+        const image = (lang === 'en' ? post.og_image_en : post.og_image_zh)!
+        expect(image).toMatch(/^https:\/\/heurion\.org\/site\/og-blog-.+\.png$/)
+        expect(html).toContain(`<meta property="og:image" content="${image}">`)
+        expect(html).toContain(`<meta name="twitter:image" content="${image}">`)
+        expect(html).toContain('<meta property="og:image:width" content="1200">')
+        expect(html).toContain('<meta property="og:image:height" content="630">')
+        expect(html).toContain('<meta property="og:image:type" content="image/png">')
+        expect(html).toContain('<meta name="twitter:card" content="summary_large_image">')
+        expect(html).toContain('<meta name="twitter:site" content="@0xSynapse">')
+        expect(html).toContain('<meta name="twitter:creator" content="@0xSynapse">')
+        expect(html).toContain('property="og:image:alt"')
+        expect(html).toContain('name="twitter:image:alt"')
+
+        // The declared 2:1 card must be a real, correctly sized PNG (X rejects mismatched/oversized cards).
+        const file = join(SITE_DIR, image.split('/').pop()!)
+        const png = readFileSync(file)
+        expect(png.subarray(1, 4).toString('ascii')).toBe('PNG')
+        expect(png.readUInt32BE(16)).toBe(1200)
+        expect(png.readUInt32BE(20)).toBe(630)
+        expect(png.byteLength).toBeLessThan(5 * 1024 * 1024)
+      }
+    }
+
+    const zhHome = renderBlogHomeHtml('zh', { subdomain: false })
+    const enHome = renderBlogHomeHtml('en', { subdomain: false })
+    expect(zhHome).toContain('https://heurion.org/site/og-blog-home-zh.png')
+    expect(enHome).toContain('https://heurion.org/site/og-blog-home-en.png')
+    expect(zhHome).toContain('<meta property="og:image:width" content="1200">')
+    expect(enHome).toContain('<meta name="twitter:site" content="@0xSynapse">')
   })
 
   it('executes real Dual-Surface CRDT structural ops, blocks concurrent human-edit conflicts, and 1-click publishes live to blog.heurion.org', async () => {

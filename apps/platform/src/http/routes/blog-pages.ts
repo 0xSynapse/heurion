@@ -1157,7 +1157,37 @@ const HEURION_MARK_SVG = `<svg class="brand-mark" viewBox="-2 6 96 88" aria-hidd
   <circle class="mark-accent" cx="80" cy="20" r="11"/>
 </svg>`
 
-const DEFAULT_OG_IMAGE = 'https://heurion.org/site/demo-chest-mpr-3view.png'
+const OG_IMAGE_WIDTH = 1200
+const OG_IMAGE_HEIGHT = 630
+const DEFAULT_OG_IMAGE = 'https://heurion.org/site/og-heurion-research.png'
+const TWITTER_HANDLE = '@0xSynapse'
+
+function postOgImage(post: BlogPostMeta, isEn: boolean): string {
+  return (isEn ? post.og_image_en : post.og_image_zh) ?? DEFAULT_OG_IMAGE
+}
+
+function postOgTitle(post: BlogPostMeta, isEn: boolean): string {
+  return (isEn ? post.og_title_en : post.og_title_zh) ?? (isEn ? post.title_en : post.title_zh)
+}
+
+function postOgDescription(post: BlogPostMeta, isEn: boolean): string {
+  return (isEn ? post.og_description_en : post.og_description_zh) ?? (isEn ? post.summary_en : post.summary_zh)
+}
+
+function socialImageMeta(image: string, alt: string): string {
+  return `<meta property="og:image" content="${escapeHtml(image)}">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="${OG_IMAGE_WIDTH}">
+  <meta property="og:image:height" content="${OG_IMAGE_HEIGHT}">
+  <meta property="og:image:alt" content="${escapeHtml(alt)}">
+  <meta name="twitter:image" content="${escapeHtml(image)}">
+  <meta name="twitter:image:alt" content="${escapeHtml(alt)}">`
+}
+
+function twitterSiteMeta(): string {
+  return `<meta name="twitter:site" content="${TWITTER_HANDLE}">
+  <meta name="twitter:creator" content="${TWITTER_HANDLE}">`
+}
 
 /**
  * 渲染个人博客首页（Nordic 纸感色调 + 结构化标题/摘要列表 + CollectionPage JSON-LD）
@@ -1180,6 +1210,18 @@ export function renderBlogHomeHtml(
   const keywords = isEn
     ? 'Heurion Research, Technical Blog, Dual-Surface CRDT, OOXML patchParagraph, ProseMirror Yjs, Capability Parity, AI Agent Permission Auditability, Aegis OS, Copy-on-Write Shadow Workspace, Hui Zhao, 0xSynapse'
     : 'Heurion Research, 技术博客, 双表面 CRDT, OOXML 字节级补丁, 人机同权, Capability Parity, AI 权限审计, Aegis OS, 影子工作区, 文件认领锁'
+  const ogImage = isEn
+    ? 'https://heurion.org/site/og-blog-home-en.png'
+    : 'https://heurion.org/site/og-blog-home-zh.png'
+  const ogTitle = isEn
+    ? 'Heurion Research · Systems Monographs'
+    : 'Heurion Research · 系统架构专论'
+  const ogDescription = isEn
+    ? 'Dual-Surface CRDTs, human-agent capability parity, and the Aegis OS transactional agent kernel—long-form systems monographs by Hui Zhao.'
+    : '双表面 CRDT、人机同权与 Aegis OS 事务级智能体操作系统：Hui Zhao 的系统架构长文与工程手记。'
+  const ogImageAlt = isEn
+    ? 'Heurion Research — Systems Monographs'
+    : 'Heurion Research — 系统架构专论'
 
   const listItemsHtml = allPosts
     .map(p => {
@@ -1294,16 +1336,16 @@ export function renderBlogHomeHtml(
   <link rel="alternate" type="text/plain" title="LLM Technical Manual" href="/llms-full.txt">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Heurion Research">
-  <meta property="og:title" content="${escapeHtml(title)}">
-  <meta property="og:description" content="${escapeHtml(description)}">
+  <meta property="og:title" content="${escapeHtml(ogTitle)}">
+  <meta property="og:description" content="${escapeHtml(ogDescription)}">
   <meta property="og:url" content="${u.canonicalUrl}">
   <meta property="og:locale" content="${isEn ? 'en_US' : 'zh_CN'}">
   <meta property="og:locale:alternate" content="${isEn ? 'zh_CN' : 'en_US'}">
-  <meta property="og:image" content="${DEFAULT_OG_IMAGE}">
+  ${socialImageMeta(ogImage, ogImageAlt)}
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="${escapeHtml(title)}">
-  <meta name="twitter:description" content="${escapeHtml(description)}">
-  <meta name="twitter:image" content="${DEFAULT_OG_IMAGE}">
+  ${twitterSiteMeta()}
+  <meta name="twitter:title" content="${escapeHtml(ogTitle)}">
+  <meta name="twitter:description" content="${escapeHtml(ogDescription)}">
   <script type="application/ld+json">${JSON.stringify(homeJsonLd)}</script>
   ${GOOGLE_FONTS_LINK}
   <style>${HEURION_EDITORIAL_BLOG_STYLES}</style>
@@ -1385,6 +1427,10 @@ export function renderBlogPostHtml(
   const description = isEn ? post.summary_en : post.summary_zh
   const keywords = isEn ? post.keywords_en : post.keywords_zh
   const readTime = isEn ? post.reading_time_en : post.reading_time_zh
+  const ogTitle = postOgTitle(post, isEn)
+  const ogDescription = postOgDescription(post, isEn)
+  const ogImage = postOgImage(post, isEn)
+  const ogImageAlt = `${ogTitle} — Heurion Research`
 
   const rawProse = isEn ? post.body_en : post.body_zh
   const finalProse = rawProse.replace('<div id="omnidoc-live-studio-mount"></div>', '')
@@ -1545,18 +1591,18 @@ export function renderBlogPostHtml(
   <link rel="alternate" type="text/plain" title="LLM Technical Manual" href="/llms-full.txt">
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="Heurion Research">
-  <meta property="og:title" content="${escapeHtml(postTitle)}">
-  <meta property="og:description" content="${escapeHtml(description)}">
+  <meta property="og:title" content="${escapeHtml(ogTitle)}">
+  <meta property="og:description" content="${escapeHtml(ogDescription)}">
   <meta property="og:url" content="${u.canonicalUrl}">
   <meta property="og:locale" content="${isEn ? 'en_US' : 'zh_CN'}">
   <meta property="og:locale:alternate" content="${isEn ? 'zh_CN' : 'en_US'}">
-  <meta property="og:image" content="${DEFAULT_OG_IMAGE}">
+  ${socialImageMeta(ogImage, ogImageAlt)}
   <meta property="article:published_time" content="${escapeHtml(post.date)}">
   <meta property="article:author" content="https://github.com/0xSynapse">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="${escapeHtml(postTitle)}">
-  <meta name="twitter:description" content="${escapeHtml(description)}">
-  <meta name="twitter:image" content="${DEFAULT_OG_IMAGE}">
+  ${twitterSiteMeta()}
+  <meta name="twitter:title" content="${escapeHtml(ogTitle)}">
+  <meta name="twitter:description" content="${escapeHtml(ogDescription)}">
   <script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
   ${GOOGLE_FONTS_LINK}
   <style>${HEURION_EDITORIAL_BLOG_STYLES}</style>
