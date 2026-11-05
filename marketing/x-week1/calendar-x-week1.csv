@@ -1,0 +1,119 @@
+"date","time_cet","day","language","format","text","link","image","notes"
+"2026-11-09","08:00","Mon 11/09","EN","link","Git branches were designed for human-speed, asynchronous work—not 3–5 agents editing the same workspace every second.
+
+The result: late conflict explosions, GB-scale worktree copies, and 41.2% silent overwrites in shared folders.
+
+New essay:
+https://heurion.org/en/blog/aegis-os-transactional-agent-kernel","https://heurion.org/en/blog/aegis-os-transactional-agent-kernel","","Main link post; let X pull the OG card."
+"2026-11-09","14:00","Mon 11/09","中文","link","Git 分支是为人类「以天为单位、低频、异步」的开发设计的——不是为 3–5 个 Agent 每秒并发编辑同一工作区设计的。
+
+结果是：滞后冲突爆炸、GB 级 worktree 复制，以及共享目录里 41.2% 的静默覆写。
+
+新长文：
+https://heurion.org/blog/aegis-os-transactional-agent-kernel","https://heurion.org/blog/aegis-os-transactional-agent-kernel","","Main link post; Chinese OG card."
+"2026-11-09","20:00","Mon 11/09","EN","poll","Your multi-agent setup edits the same workspace concurrently.
+
+What breaks first?
+□ Merge conflicts
+□ Silent overwrites
+□ Half-written files
+□ Authorization prompts
+
+I've been measuring all four. Curious what you see.","","https://heurion.org/site/x-week1-day1.png","Use X native poll; remove □ from options. Image optional."
+"2026-11-10","08:00","Tue 11/10","EN","link","0.42ms is not a benchmark flex. It's the difference between forking a workspace and copying 8GB of node_modules for every agent.
+
+Trunk-anchored CoW shadow workspaces:
+https://heurion.org/en/blog/aegis-os-transactional-agent-kernel#sec-cow-shadow","https://heurion.org/en/blog/aegis-os-transactional-agent-kernel#sec-cow-shadow","","Anchor link to the CoW section."
+"2026-11-10","14:00","Tue 11/10","中文","link","0.42ms 写时复制影子工作区：Agent 在独立上层视图里改代码、跑编译，人类主干零打扰；改坏了直接丢弃。
+
+不是更快的 cp -R，是把隔离下沉到 VFS：
+https://heurion.org/blog/aegis-os-transactional-agent-kernel#sec-cow-shadow","https://heurion.org/blog/aegis-os-transactional-agent-kernel#sec-cow-shadow","","Anchor link to the CoW section."
+"2026-11-10","20:00","Tue 11/10","EN","visual","cp -R an 8GB repo for every agent: seconds, gigabytes, stale the moment it finishes.
+
+CoW fork: 0.42ms, zero extra bytes until a write.
+
+The benchmark isn't the point. The workflow it unlocks is.","","https://heurion.org/site/x-week1-day2.png","Attach x-week1-day2.png."
+"2026-11-11","08:00","Wed 11/11","EN","link","The best merge conflict is the one that never happens.
+
+Aegis OS gives agents TTL file claims + piggybacked IPC, so they reserve a file before writing—and hand off verified artifacts without polling.
+
+https://heurion.org/en/blog/aegis-os-transactional-agent-kernel#sec-claim-ipc","https://heurion.org/en/blog/aegis-os-transactional-agent-kernel#sec-claim-ipc","","Anchor link to the claims/IPC section."
+"2026-11-11","14:00","Wed 11/11","中文","link","最好的合并冲突，是根本没发生的冲突。
+
+事前 TTL 租约文件锁 + 内嵌信箱：Agent 先认领再写入，上游产物验证完自动接力给下游，不需要轮询。
+
+https://heurion.org/blog/aegis-os-transactional-agent-kernel#sec-claim-ipc","https://heurion.org/blog/aegis-os-transactional-agent-kernel#sec-claim-ipc","","Anchor link to the claims/IPC section."
+"2026-11-11","20:00","Wed 11/11","EN","visual","Hot take: file locks are back.
+
+Not 1990s lockfiles—TTL leases with agent identity, heartbeat renewal, binary-asset guards, and a hash-chained audit trail.
+
+Prevent collisions before they become merge conflicts.","","https://heurion.org/site/x-week1-day3.png","Attach x-week1-day3.png. Link in first reply if needed."
+"2026-11-12","08:00","Thu 11/12","EN","link","98.7% of multi-agent edits merge without human intervention.
+
+The other 1.3% hit domain gates: compilers, LaTeX, schema validators, PHI scanners.
+
+Auto-merge is only safe when ""verified"" means something:
+https://heurion.org/en/blog/aegis-os-transactional-agent-kernel#sec-micro-commit","https://heurion.org/en/blog/aegis-os-transactional-agent-kernel#sec-micro-commit","","Anchor link to the auto-merge/domain-gate section."
+"2026-11-12","14:00","Thu 11/12","中文","link","98.7% 的四级 LCS 自动归并，不是靠更聪明的 LLM，而是靠结构化的 diff3 + 广义领域预检门。
+
+代码跑测试，LaTeX 要编译，Schema 要校验，临床数据还要过 PHI 扫描。
+
+https://heurion.org/blog/aegis-os-transactional-agent-kernel#sec-micro-commit","https://heurion.org/blog/aegis-os-transactional-agent-kernel#sec-micro-commit","","Anchor link to the auto-merge/domain-gate section."
+"2026-11-12","20:00","Thu 11/12","EN","visual","4-tier conflict resolution:
+1. identical → skip
+2. fast-forward → apply
+3. LCS diff3 → auto-merge
+4. domain gate → human/verifier
+
+98.7% never reaches step 4.","","https://heurion.org/site/x-week1-day4.png","Attach x-week1-day4.png."
+"2026-11-13","08:00","Fri 11/13","EN","link","Authorization fatigue is the real bottleneck—not model capability.
+
+28,087 real tool calls.
+90.7–97.9% fewer confirmation prompts.
+0.0% attack success rate across 80 red-team vectors.
+
+The lease-based model:
+https://heurion.org/en/blog/aegis-os-transactional-agent-kernel#sec-permission-audit","https://heurion.org/en/blog/aegis-os-transactional-agent-kernel#sec-permission-audit","","Anchor link to the permission/audit section."
+"2026-11-13","14:00","Fri 11/13","中文","link","真正的瓶颈不是模型能力，是授权疲劳。
+
+28,087 次真实工具调用，确认弹窗减少 90.7–97.9%，80 项红队攻击 0.0% ASR。
+
+不是给 Agent 更多权限，是给它可验证、可撤销的租约：
+https://heurion.org/blog/aegis-os-transactional-agent-kernel#sec-permission-audit","https://heurion.org/blog/aegis-os-transactional-agent-kernel#sec-permission-audit","","Anchor link to the permission/audit section."
+"2026-11-13","20:00","Fri 11/13","EN","thread","Your agent doesn't need more permissions.
+It needs a lease: scoped, expiring, signed, and auditable.
+A short thread on why ""approve every action"" doesn't scale—and what replaces it. 🧵","","https://heurion.org/site/x-week1-day5.png","4-tweet thread; use Typefully or X composer. Attach x-week1-day5.png to tweet 1. Tweets are joined by blank lines in the Typefully CSV, so keep internal line breaks single."
+"2026-11-14","08:00","Sat 11/14","EN","link","The hardest multi-agent workspace isn't a code repo.
+
+It's a clinical research team: manuscripts, statistics, imaging, citations, and PHI—all changing at once.
+
+Heurion 2.0 is the first app running on the Aegis OS kernel:
+https://heurion.org/en/blog/dual-surface-crdt-clinical-ai","https://heurion.org/en/blog/dual-surface-crdt-clinical-ai","","Links to the Dual-Surface CRDT essay."
+"2026-11-14","14:00","Sat 11/14","中文","link","最难的多 Agent 工作空间不是代码仓库，是临床科研团队。
+
+论文、统计、影像、引用、PHI 同时在变。Heurion 2.0 是跑在 Aegis OS 内核上的第一个第一方应用：
+https://heurion.org/blog/dual-surface-crdt-clinical-ai","https://heurion.org/blog/dual-surface-crdt-clinical-ai","","Links to the Chinese Dual-Surface CRDT essay."
+"2026-11-14","20:00","Sat 11/14","EN","visual","The kernel doesn't care whether the artifact is TypeScript, .docx, .pptx, CSV, DICOM, or LaTeX.
+
+The hard part is never the file type. It's the coordination state: who owns it, what changed, and what must be verified before hand-off.","","https://heurion.org/site/x-week1-day6.png","Attach x-week1-day6.png."
+"2026-11-15","08:00","Sun 11/15","EN","link","This week in one sentence:
+
+Git branches isolate, shared folders collide, transactional shadow workspaces coordinate.
+
+3 essays, 1 kernel, all open source:
+https://heurion.org/en/blog","https://heurion.org/en/blog","","Blog index link; English OG card."
+"2026-11-15","14:00","Sun 11/15","中文","link","这周用一句话总结：
+
+Git 分支负责隔离，共享目录负责碰撞，事务型影子工作区负责协作。
+
+3 篇长文、1 个内核，全部开源：
+https://heurion.org/blog","https://heurion.org/blog","","Blog index link; Chinese OG card."
+"2026-11-15","20:00","Sun 11/15","EN","cta","Start in 30 seconds:
+
+1. Install Aegis OS
+2. Connect your coding agent
+3. Run your first A2A task
+4. Revoke and audit it
+
+Tutorial:
+https://heurion.org/en/aegis-os/tutorial/","https://heurion.org/en/aegis-os/tutorial/","https://heurion.org/site/x-week1-day7.png","Put the GitHub repo in the first reply: https://github.com/heurion-org/aegis-os"
