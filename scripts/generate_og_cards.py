@@ -62,6 +62,42 @@ class Card:
 
 CARDS: list[Card] = [
     Card(
+        filename="og-blog-enforced-zh.png",
+        number="04",
+        category="AEGIS OS",
+        eyebrow="AEGIS OS · ENFORCED KERNEL RUNTIME",
+        title_lines=["为什么 Agent 插件", "不是安全边界？"],
+        subtitle_lines=["从 Advisory Hook 到 aegis-os run 父进程沙箱、", "只读 .git 穿透与 L4/L7 双层出站网关"],
+        metrics=[
+            ("3 Tiers", "分级强制边界"),
+            ("0 Touch", "只读 .git 穿透"),
+            ("L4+L7", "双模出站网关"),
+        ],
+        panel_layers=["ADVISORY", "ENFORCED", "ISOLATED"],
+        panel_stat="3 Tiers",
+        panel_stat_label="KERNEL BOUNDARY",
+        title_size=68,
+    ),
+    Card(
+        filename="og-blog-enforced-en.png",
+        number="04",
+        category="AEGIS OS",
+        eyebrow="AEGIS OS · ENFORCED KERNEL RUNTIME",
+        title_lines=["Why Agent Plugins Are", "Not a Security Boundary"],
+        subtitle_lines=["From advisory hooks to parent-process sandboxing,", "read-only .git views & dual-mode L4/L7 egress"],
+        metrics=[
+            ("3 Tiers", "Explicit boundary"),
+            ("0 Touch", "Read-only .git view"),
+            ("L4+L7", "Dual egress proxy"),
+        ],
+        panel_layers=["ADVISORY", "ENFORCED", "ISOLATED"],
+        panel_stat="3 Tiers",
+        panel_stat_label="KERNEL BOUNDARY",
+        lang="en",
+        title_size=60,
+        title_line_height=74,
+    ),
+    Card(
         filename="og-blog-aegis-zh.png",
         number="03",
         category="AEGIS OS",

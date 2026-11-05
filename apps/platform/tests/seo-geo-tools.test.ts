@@ -376,8 +376,8 @@ describe('Stateless No-Login Mini-Tools Public API (/api/public/tools/*)', () =>
 })
 
 describe('Personal Technical Blog (blog.heurion.org & heurion.org/blog)', () => {
-  it('renders bilingual Personal Blog Homepage and all 3 published technical monographs with zero CJK leak in EN <main>', () => {
-    expect(BLOG_SLUGS.length).toBe(3)
+  it('renders bilingual Personal Blog Homepage and all 4 published technical monographs with zero CJK leak in EN <main>', () => {
+    expect(BLOG_SLUGS.length).toBe(4)
     const zhHome = renderBlogHomeHtml('zh', { subdomain: true })
     const enHome = renderBlogHomeHtml('en', { subdomain: true })
 

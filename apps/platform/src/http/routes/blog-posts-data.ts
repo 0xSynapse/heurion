@@ -7,11 +7,13 @@ export type BlogSlug =
   | 'dual-surface-crdt-clinical-ai'
   | 'human-agent-capability-parity-ai-native-software'
   | 'aegis-os-transactional-agent-kernel'
+  | 'from-agent-plugins-to-enforced-runtime'
 
 export const BLOG_SLUGS: readonly BlogSlug[] = [
   'dual-surface-crdt-clinical-ai',
   'human-agent-capability-parity-ai-native-software',
   'aegis-os-transactional-agent-kernel',
+  'from-agent-plugins-to-enforced-runtime',
 ] as const
 
 export function isBlogSlug(s: string): s is BlogSlug {
@@ -2176,12 +2178,474 @@ function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rational
       <p>By uniting <strong>0.42ms Copy-on-Write shadow workspaces</strong>, <strong>proactive TTL file claims and binary guards</strong>, <strong>piggybacked IPC and SHA-256 CAS artifact buses</strong>, <strong>4-tier LCS micro-commits with generalized domain verification gates</strong>, and <strong>end-to-end auditable permission escalations</strong>, Aegis OS moves beyond code-only Git branch ceremonies and fragile shared folders—providing a universal, transactional operating system foundation for human-agent collaboration across code, documents, data science, and live enterprise software.</p>
     `,
   },
+  {
+    slug: 'from-agent-plugins-to-enforced-runtime',
+    num: '04',
+    category: 'aegis-os',
+    category_label_zh: 'AEGIS OS · 内核强制边界',
+    category_label_en: 'AEGIS OS · ENFORCED RUNTIME',
+    date: '2026-11-05',
+    reading_time_zh: '18 分钟深读',
+    reading_time_en: '18 min read',
+    title_zh: '为什么 Agent 插件不是安全边界：从 Advisory Hook 到内核级 Enforced Runtime 的架构演进',
+    title_en: 'Why Agent Plugins Are Not a Security Boundary: From Advisory Hooks to a Kernel-Enforced Agent Runtime',
+    subtitle_zh: '当 Agent 与它的监督器运行在同一个宿主权限域时，任何 Hook 与提示词都只是“礼貌的建议”。本文详解 Aegis OS 如何通过父进程内核启动器（aegis-os run）、单文件只读配置挂载、只读 .git 穿透与两层网络网关，将安全边界下沉至操作系统内核。',
+    subtitle_en: 'When an autonomous agent shares a privilege domain with its supervisor, hooks and system prompts are merely polite suggestions. This monograph details how Aegis OS lowers the enforcement boundary into the OS kernel via parent-process sandboxing, read-only .git pass-through, granular state-dir mounts, and a two-tier network gateway.',
+    summary_zh: '当前主流 AI 编程与通用智能体（Claude Code、Codex、OpenCode、AGY、Hermes）大多依赖客户端插件、PreToolUse Hook、MCP 路由与系统提示词来约束工具调用。然而在对抗性提示词注入或配置漂移下，这种“插件内嵌式治理”存在根本性架构缺陷：未覆盖的原生工具、守护进程绕过、配置文件篡改以及在宿主机直接执行子进程。本文系统阐述 Aegis OS 的三档强制模型（Advisory / Enforced / Isolated）：通过 aegis-os run 父进程内核启动器反转控制权，结合 --ro-bind / / 发行版兼容遮蔽、GIT_INDEX_FILE 只读 .git 穿透、Agent 状态目录单文件只读锁、CONNECT + Base URL 两层网络网关，以及跨代码、文档、数据与在线应用的通用事务提交流水线。',
+    summary_en: 'Most contemporary AI coding and general-purpose agents (Claude Code, Codex, OpenCode, AGY, Hermes) rely on client plugins, PreToolUse hooks, MCP routing, and system prompts to govern tool execution. Under prompt injection or configuration drift, plugin-level governance fails as a security boundary due to uncovered native tools, shared daemon bypasses, self-modifying settings files, and direct host subprocess spawning. This monograph presents the Aegis OS Three-Tier Enforcement Architecture (Advisory / Enforced / Isolated): inverting control via the aegis-os run parent launcher, read-only .git index separation, single-file read-only config locking, a two-tier L4/L7 network gateway, and a generalized transactional commit pipeline across code, documents, datasets, and live applications.',
+    og_title_zh: '为什么 Agent 插件不是安全边界？从 Advisory Hook 到 Enforced Runtime',
+    og_title_en: 'Why Agent Plugins Are Not a Security Boundary: The Enforced Runtime Architecture',
+    og_description_zh: '剖析 PreToolUse Hook 与 MCP 插件的 6 类绕过面，详解 aegis-os run 父进程内核沙箱、只读 .git 穿透与两层网络网关。',
+    og_description_en: 'Dissecting 6 bypass vectors of plugin-based agent governance and how aegis-os run enforces kernel-level isolation, .git index separation, and L4/L7 egress control.',
+    og_image_zh: 'https://heurion.org/site/og-blog-aegis-zh.png',
+    og_image_en: 'https://heurion.org/site/og-blog-aegis-en.png',
+    keywords_zh: 'Aegis OS, Enforced Runtime, Agent 安全边界, Bubblewrap, Landlock, Seatbelt, PreToolUse Hook, Claude Code, OpenCode, Codex, CoW 影子工作区, Cedar 策略引擎',
+    keywords_en: 'Aegis OS, Enforced Runtime, Agent Security Boundary, Bubblewrap, Landlock, Seatbelt, PreToolUse Hook, Claude Code, OpenCode, Codex, CoW Shadow Workspace, Cedar Policy Engine',
+    tags_zh: ['Enforced Runtime', '父进程沙箱 bwrap/Seatbelt', '只读 .git 穿透', 'L4/L7 出站网关', '三档强制边界'],
+    tags_en: ['Enforced Runtime', 'Parent-Process Sandbox', 'Read-Only .git View', 'L4/L7 Egress Gateway', '3-Tier Enforcement'],
+    stats: [
+      { val: '3 Tiers', lbl_zh: 'Advisory / Enforced / Isolated', lbl_en: 'Explicit Enforcement Levels' },
+      { val: '0 Host Touch', lbl_zh: '影子内编译与 git status 零宿主污染', lbl_en: 'Zero Host Mutation Pre-Commit' },
+      { val: 'L4 + L7', lbl_zh: 'CONNECT 流式白名单 + 反向代理 DLP', lbl_en: 'Dual-Mode Network Gateway' },
+    ],
+    repo_url: 'https://github.com/heurion-org/aegis-os',
+    paper_url: 'https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_ENFORCED_RUNTIME_DESIGN.md',
+    toc: [
+      { id: 'sec-advisory-illusion', zh: '01. 诚实的威胁建模：为什么 Agent 插件与 Hook 只是“建议”而非安全边界？', en: '01. Honest Threat Modeling: Why Agent Plugins & Hooks Are Advisory, Not Enforced' },
+      { id: 'sec-three-tier-boundary', zh: '02. 三档强制边界（Advisory / Enforced / Isolated）：把生产力协作与强制隔离解耦', en: '02. Three-Tier Enforcement (Advisory / Enforced / Isolated): Decoupling Ergonomics from Security' },
+      { id: 'sec-parent-launcher', zh: '03. 控制权反转：aegis-os run 父进程启动器、只读 .git 穿透与状态目录分层挂载', en: '03. Inverting Control: The aegis-os run Parent Launcher, Read-Only .git View & State-Dir Layering' },
+      { id: 'sec-effect-policy', zh: '04. Effect 驱动策略与两层出站网关：区分 CONNECT 隧道与 Base URL 反向代理', en: '04. Effect-Driven Policy & Dual-Mode Egress: Separating CONNECT Tunnels from L7 Reverse Proxies' },
+      { id: 'sec-domain-pipeline', zh: '05. 跨领域通用事务流水线与无破坏 TUI 审批（DECSTBM / OSC / 离线租约）', en: '05. Generalized Domain Commit Pipelines & Non-Destructive TUI Approvals' },
+    ],
+    body_zh: `
+      <h2 id="sec-advisory-illusion">01. 诚实的威胁建模：为什么 Agent 插件与 Hook 只是“建议”而非安全边界？</h2>
+      <p>在构建智能体基础设施时，最危险的工程幻觉莫过于<strong>把“工作流编排插件”当成“操作系统安全边界”</strong>。今天主流的终端与 IDE 智能体（如 Claude Code、OpenCode、Codex CLI、Antigravity AGY、Hermes 等）普遍提供了三类扩展接口：系统提示词规则（<code>CLAUDE.md</code> / <code>AGENTS.md</code>）、工具拦截钩子（<code>PreToolUse</code> Hook / Plugin）以及 Model Context Protocol（MCP）工具服务器。</p>
+      <p>当智能体处于良性协作状态时，基于插件的治理非常高效：Hook 可以把宿主机上的原生 <code>Read</code>、<code>Edit</code>、<code>Bash</code> 自动重写并透明路由到 Aegis OS 的写时复制（CoW）影子工作区中。然而，只要我们从操作系统内核的视角审视进程树，就会发现一个不可回避的事实：<strong>在插件模式下，Agent 主进程本身直接运行在宿主机的用户权限域中，拥有与人类开发者完全相同的 <code>UID</code>、<code>$HOME</code> 目录可见性与系统调用能力。</strong></p>
+
+      <div class="blog-callout">
+        <div class="blog-callout-title">安全边界第一性原理（Kernel Boundary Axiom）</div>
+        <p><strong>任何运行在被监管进程同一权限域内、或依赖被监管进程主动配合调用的拦截器，都不是安全边界。</strong>只要 Agent 自身未被置于内核沙箱（Mount / PID / Network Namespace 或 Seatbelt / microVM）之内，Hook 与 MCP 提供的就只是<strong>建议级防护（Advisory Governance）</strong>，而非<strong>强制级隔离（Enforced Isolation）</strong>。</p>
+      </div>
+
+      <p>我们在对主流 CLI 与桌面 Agent 进行端到端审计时，梳理出仅靠 Hook + MCP 无法根除的<strong>六大结构性绕过面</strong>：</p>
+      <div class="blog-table-wrap">
+        <table class="blog-table">
+          <thead>
+            <tr>
+              <th>绕过向量（Bypass Vector）</th>
+              <th>触发机制与真实客户端表现</th>
+              <th>仅靠 Hook / 插件为何无法根治</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>1. 原生工具覆盖盲区</strong></td>
+              <td>如 <code>NotebookEdit</code>、内置 LSP 重构、第三方 MCP Server（如直接挂载宿主的 <code>filesystem</code> MCP）未列入重写规则</td>
+              <td>Hook 采用黑名单枚举工具名，一旦客户端升级新增工具或项目注入 <code>.mcp.json</code>，立即穿透至宿主机</td>
+            </tr>
+            <tr>
+              <td><strong>2. 客户端根本不支持工具级 Hook</strong></td>
+              <td>例如 Codex CLI 支持 MCP Server 与自带沙箱，但当前版本并未向外部暴露 <code>PreToolUse</code> 拦截钩子</td>
+              <td>只能依靠 <code>AGENTS.md</code> 软提示词引导模型调用 MCP 工具，对恶意提示词注入（Prompt Injection）零硬性约束</td>
+            </tr>
+            <tr>
+              <td><strong>3. 共享守护进程状态逃逸</strong></td>
+              <td>OpenCode TUI 若通过 <code>--attach</code> 连接到已运行的后台 Server，插件的加载与否完全取决于守护进程启动时的环境</td>
+              <td>外层 CLI 包装器无法改变已存活守护进程的命名空间与插件表，导致工具调用脱离当前会话沙箱</td>
+            </tr>
+            <tr>
+              <td><strong>4. 配置文件自篡改与项目级覆盖</strong></td>
+              <td>Agent 或仓库内的构建脚本修改 <code>~/.claude/settings.json</code>、<code>.claude/settings.local.json</code> 或 <code>opencode.json</code></td>
+              <td>当 Agent 进程对自身配置目录拥有写权限时，可通过清空 Hook 配置在下一轮会话中彻底摘除监管</td>
+            </tr>
+            <tr>
+              <td><strong>5. 只读命令与构建脚本的宿主副作用</strong></td>
+              <td>放行看似无害的 <code>git status</code>、<code>cargo test</code> 或 <code>npm test</code> 在宿主机执行</td>
+              <td><code>build.rs</code>、<code>postinstall</code> 或 <code>.git/config</code> 中的 <code>core.fsmonitor</code> 可在宿主侧执行任意代码并窃取 <code>~/.ssh</code></td>
+            </tr>
+            <tr>
+              <td><strong>6. 本机 Loopback 越权自批</strong></td>
+              <td>沙箱内或本机脚本直接访问 <code>127.0.0.1</code> 上的审批守护进程 API 尝试自动批准 Escalation Ticket</td>
+              <td>若 Broker 缺乏按角色隔离的 Session Token（Agent Token vs Human Admin Token），同 UID 进程可伪造人类审批</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="sec-three-tier-boundary">02. 三档强制边界（Advisory / Enforced / Isolated）：把生产力协作与强制隔离解耦</h2>
+      <p>承认插件模式的局限性，并不意味着要废弃插件；恰恰相反，工程上最糟糕的做法是“用极端的默认拒绝破坏 95% 的日常开发体验，或者用模糊的宣传掩盖安全边界”。为此，Aegis OS 将运行时明确划分为<strong>三档可验证的强制等级（Enforcement Tiers）</strong>，并在 <code>aegis-os status</code> 与 <code>aegis-os doctor</code> 中实时向用户诚实展示当前所处的安全等级：</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 310" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Aegis OS 三档强制边界架构对比图：Advisory、Enforced 与 Isolated">
+          <rect x="1" y="1" width="758" height="308" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Tier 1: Advisory -->
+          <rect x="20" y="24" width="226" height="236" fill="#F2EFE9" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="133" y="46" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">TIER 1 · ADVISORY (PLUGIN)</text>
+          <line x1="20" y1="56" x2="246" y2="56" stroke="#DFDAD0"/>
+          <text x="133" y="78" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="11.5" font-weight="600">插件与 Hook 协同模式</text>
+          <text x="34" y="102" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• 入口: 直接运行 claude / agy</text>
+          <text x="34" y="122" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• 机制: PreToolUse + MCP 路由</text>
+          <text x="34" y="142" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• 收益: CoW 影子写 + 多 Agent 锁</text>
+          <text x="34" y="162" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• 宿主隔离: 仅 MCP 内子进程沙箱</text>
+          <rect x="34" y="182" width="198" height="62" fill="#FAF8F4" stroke="#DFDAD0"/>
+          <text x="44" y="200" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">定位：防误操作生产力护栏</text>
+          <text x="44" y="218" fill="#646D68" font-family="Inter, sans-serif" font-size="8.5">防意外覆写与并发冲突；不承诺抵御</text>
+          <text x="44" y="232" fill="#646D68" font-family="Inter, sans-serif" font-size="8.5">恶意 Prompt Injection 绕过原生工具</text>
+
+          <!-- Tier 2: Enforced -->
+          <rect x="267" y="24" width="226" height="236" fill="#233E33" stroke="#151C19" stroke-width="1.5"/>
+          <text x="380" y="46" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">TIER 2 · ENFORCED (KERNEL)</text>
+          <line x1="267" y1="56" x2="493" y2="56" stroke="#395A4C"/>
+          <text x="380" y="78" text-anchor="middle" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="11.5" font-weight="600">父进程内核沙箱模式（核心）</text>
+          <text x="281" y="102" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.8">• 入口: aegis-os run -- &lt;agent&gt;</text>
+          <text x="281" y="122" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.8">• 机制: bwrap + Landlock / Seatbelt</text>
+          <text x="281" y="142" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.8">• 视图: 路径重映射 CoW + .git 只读</text>
+          <text x="281" y="162" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.8">• 网络: --unshare-net + Unix 代理桥</text>
+          <rect x="281" y="182" width="198" height="62" fill="#1A2F26" stroke="#395A4C"/>
+          <text x="291" y="200" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">定位：OS 内核强制安全边界</text>
+          <text x="291" y="218" fill="#E3ECE7" font-family="Inter, sans-serif" font-size="8.5">即使 Hook 失效或模型被劫持，整个</text>
+          <text x="291" y="232" fill="#E3ECE7" font-family="Inter, sans-serif" font-size="8.5">Agent 进程树也无法触碰宿主与凭据</text>
+
+          <!-- Tier 3: Isolated -->
+          <rect x="514" y="24" width="226" height="236" fill="#F2EFE9" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="627" y="46" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">TIER 3 · ISOLATED (MICROVM)</text>
+          <line x1="514" y1="56" x2="740" y2="56" stroke="#DFDAD0"/>
+          <text x="627" y="78" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="11.5" font-weight="600">独立内核与远程沙箱模式</text>
+          <text x="528" y="102" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• 入口: aegis-os run --isolated</text>
+          <text x="528" y="122" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• 机制: libkrun MicroVM / Cloud VM</text>
+          <text x="528" y="142" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• 视图: virtiofs 仅挂载影子工作区</text>
+          <text x="528" y="162" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• 凭据: 零本地挂载，网关代填密钥</text>
+          <rect x="528" y="182" width="198" height="62" fill="#FAF8F4" stroke="#DFDAD0"/>
+          <text x="538" y="200" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">定位：不受信任代码与高敏合规</text>
+          <text x="538" y="218" fill="#646D68" font-family="Inter, sans-serif" font-size="8.5">硬件虚拟化隔离宿主机内核，适用于</text>
+          <text x="538" y="232" fill="#646D68" font-family="Inter, sans-serif" font-size="8.5">医院内网、金融合规与无人值守 CI</text>
+
+          <!-- Bottom Banner -->
+          <text x="380" y="286" text-anchor="middle" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="9">统一不变量：未降级静默放行（Fail-Closed） · 宿主写入必经 Diff 审批 · Agent Token 严禁调用审批接口</text>
+        </svg>
+        <figcaption>图 1：Aegis OS 三档强制边界（Advisory / Enforced / Isolated）。明确区分“建议级生产力护栏”与“内核强制安全边界”。</figcaption>
+      </figure>
+
+      <h2 id="sec-parent-launcher">03. 控制权反转：<code>aegis-os run</code> 父进程启动器、只读 <code>.git</code> 穿透与状态目录分层挂载</h2>
+      <p>要从 Advisory 跃迁到 Enforced，核心架构动作只有一句话：<strong>反转父子进程关系——不再让 Agent 在宿主机里按需调用 Aegis，而是由 <code>aegis-os run -- &lt;agent&gt;</code> 作为父进程先构建受限内核命名空间，再在沙箱内部 <code>execve</code> 启动 Agent 本身。</strong></p>
+      <p>然而，将一个复杂的现代 CLI Agent（如 Claude Code 或 OpenCode）整个放进 Linux <code>bubblewrap (bwrap)</code> + <code>Landlock</code> + <code>seccomp</code> 或 macOS <code>Seatbelt</code> 沙箱中，如果设计粗糙，立刻就会遇到三个棘手的工程死锁：（1）NixOS / Homebrew / 动态链接器路径缺失导致二进制无法启动；（2）Agent 在沙箱内运行 <code>git status</code> / <code>git diff</code> 报错或触发宿主机恶意 Git Hook；（3）Agent 无法写入自己的会话历史（<code>~/.claude/projects</code>）或被允许篡改自己的安全配置（<code>~/.claude/settings.json</code>）。</p>
+      <p>Aegis Enforced Runtime 通过三项精巧的系统设计彻底解决了上述矛盾：</p>
+
+      <h3>3.1 保留 <code>--ro-bind / /</code> 的发行版兼容遮蔽 + 路径重映射（Path Remapping）</h3>
+      <p>如果放弃根目录只读绑定而尝试手工枚举 <code>/usr</code>、<code>/lib</code>，在 NixOS（<code>/nix/store</code>）、Linuxbrew（<code>/home/linuxbrew/.linuxbrew</code>）、Snap 或自定义 CA 证书路径下极易触发 <code>ENOENT</code> 与 TLS 握手失败。因此，我们在 Linux 下保留 <code>--ro-bind / /</code> 保证 100% 发行版二进制兼容，紧接着使用 <code>--tmpfs</code> 彻底遮蔽 <code>/home</code>、<code>/root</code>、<code>/run</code>、<code>/var</code>、<code>/tmp</code>、<code>/mnt</code>、<code>/media</code> 与 <code>/etc</code> 敏感凭据文件，最后按最小白名单把 <strong>CoW 影子工作区原路径挂载到 <code>/home/user/project</code></strong>，而把宿主机真实项目只读挂载到 <code>/aegis/host/project</code>。这样，Agent 无论使用原生工具还是直接 <code>python -c "open('src/main.rs', 'w')"</code>，它以为自己在改宿主路径，实际上全部落入了隔离的 CoW 影子层！</p>
+
+      <h3>3.2 只读 <code>.git</code> 对象库穿透与 <code>GIT_INDEX_FILE</code> 会话索引分离</h3>
+      <p>开发者和 Agent 高度依赖 <code>git status</code>、<code>git diff</code>、<code>git log</code> 与状态栏分支显示。如果为了省事在影子目录拷贝中排除 <code>.git</code>，所有 Git 命令都会崩溃；但如果把整个 <code>.git</code> 拷贝一份，大型仓库会增加数百 MB 的启动开销；如果直接把宿主 <code>.git</code> 可写暴露给沙箱，Agent 写入 <code>.git/hooks/pre-commit</code> 或 <code>.git/config</code> 的 <code>core.fsmonitor</code> 就会在宿主机上实现远程代码执行（RCE）。</p>
+      <p>Aegis OS 的解法是<strong>“只读对象库 + 独立可写暂存区索引 + 安全 Git Shim”</strong>：</p>
+      <pre><code># 1. 宿主 .git 整个只读挂载到沙箱工作区（objects / refs / HEAD 零拷贝可见，hooks / config 不可写）
+bwrap ... --ro-bind /aegis/host/project/.git /home/jz/project/.git
+
+# 2. 会话启动时复制单文件 .git/index 到沙箱私有目录，并通过环境变量重定向写入
+cp /aegis/host/project/.git/index ~/.aegis/sessions/$SESSION_ID/git-index
+export GIT_INDEX_FILE="$HOME/.aegis-git-index"
+export GIT_OPTIONAL_LOCKS=0
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL=/dev/null
+
+# 3. 内置 Git 安全 Shim 强制注入禁用外部执行器参数，拦截 commit/push 引导至 aos commit
+git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --no-ext-diff</code></pre>
+      <p>如此一来，<code>git status</code> 与 <code>git diff</code> 在 10 万文件级仓库中依然瞬时响应且需要刷新 stat 缓存时只写沙箱私有的 <code>.aegis-git-index</code>，宿主机 <code>.git/index</code> 的 <code>mtime</code> 纹丝不动，且任何恶意的仓库级 Git Hook 均无法被安装或触发。</p>
+
+      <h3>3.3 Agent 状态目录的“单文件只读锁（Config Lock）”</h3>
+      <p>CLI Agent 在运行期必须写入会话日志、Todo 列表与 OAuth 刷新令牌（如 <code>~/.claude/projects/*.jsonl</code>、<code>~/.codex/sessions</code>、<code>~/.local/share/opencode</code> 的 SQLite），但绝不能允许它修改 <code>~/.claude/settings.json</code>、<code>~/.gemini/config/hooks.json</code> 或 <code>~/.codex/config.toml</code>。我们利用 Linux Mount Namespace 的顺序覆盖特性：<strong>先按需可写挂载状态子目录（<code>projects/</code>、<code>todos/</code>），再在顶层对敏感配置文件执行单文件 <code>--ro-bind</code> 只读覆盖</strong>——既保障了客户端完整有状态体验，又从内核层封死了“Agent 篡改自身配置摘除监管”的逃逸路径。</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 280" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="aegis-os run 内核挂载视图与两层网络网关架构图">
+          <rect x="1" y="1" width="758" height="278" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Left: Host Supervisor -->
+          <rect x="20" y="22" width="218" height="234" fill="#F2EFE9" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="129" y="44" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">HOST BROKER · aegis-os run</text>
+          <line x1="20" y1="54" x2="238" y2="54" stroke="#DFDAD0"/>
+          <text x="34" y="76" fill="#151C19" font-family="Inter, sans-serif" font-size="10.5" font-weight="600">宿主可信监管层（沙箱外）</text>
+          <text x="34" y="98" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Session Token (Agent != Human)</text>
+          <text x="34" y="118" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Cedar Effect 策略与租约引擎</text>
+          <text x="34" y="138" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• SHA-256 证据锁定审批队列</text>
+          <text x="34" y="158" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• CoW backend: APFS / OverlayFS</text>
+          <rect x="34" y="176" width="190" height="64" fill="#FAF8F4" stroke="#DFDAD0"/>
+          <text x="44" y="194" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">真实宿主仓库 (/aegis/host)</text>
+          <text x="44" y="212" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">• 仅在 workspace_commit 审批后</text>
+          <text x="44" y="226" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">  通过三路 LCS 原子落地</text>
+
+          <!-- Center: Kernel Sandbox Namespace -->
+          <rect x="266" y="22" width="236" height="234" fill="#233E33" stroke="#151C19" stroke-width="1.5"/>
+          <text x="384" y="44" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">KERNEL SANDBOX NAMESPACE</text>
+          <line x1="266" y1="54" x2="502" y2="54" stroke="#395A4C"/>
+          <text x="280" y="76" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="10.5" font-weight="600">受控视图（Agent 进程树）</text>
+          <text x="280" y="98" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.6">• cwd 映射至 CoW Shadow (rw)</text>
+          <text x="280" y="118" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.6">• .git 对象库只读 + 独立 index</text>
+          <text x="280" y="138" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.6">• settings.json / hooks.json (ro)</text>
+          <text x="280" y="158" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.6">• ~/.ssh, ~/.aws, /etc/shadow 遮蔽</text>
+          <rect x="280" y="176" width="208" height="64" fill="#1A2F26" stroke="#395A4C"/>
+          <text x="290" y="194" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">OpenCode 强制 --standalone</text>
+          <text x="290" y="212" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">• 禁止附着沙箱外共享守护进程</text>
+          <text x="290" y="226" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">• seccomp 拦截 mount/ptrace/bpf</text>
+
+          <!-- Right: Dual-Mode Egress Proxy -->
+          <rect x="530" y="22" width="210" height="234" fill="#F2EFE9" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="635" y="44" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">DUAL-MODE EGRESS PROXY</text>
+          <line x1="530" y1="54" x2="740" y2="54" stroke="#DFDAD0"/>
+          <text x="544" y="76" fill="#151C19" font-family="Inter, sans-serif" font-size="10.5" font-weight="600">--unshare-net + Unix 桥接</text>
+          <text x="544" y="98" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.6">1. CONNECT 隧道 (net.connect)</text>
+          <text x="554" y="114" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">域名/端口白名单 · 零流式延迟</text>
+          <text x="544" y="136" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.6">2. Base URL 反向代理 (net.request)</text>
+          <text x="554" y="152" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">L7 Method 审计 · 密钥边界代填</text>
+          <rect x="544" y="176" width="182" height="64" fill="#FAF8F4" stroke="#DFDAD0"/>
+          <text x="554" y="194" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">3. Opt-in MITM（按需显式开启）</text>
+          <text x="554" y="212" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">仅针对声明域名启用会话级 CA</text>
+          <text x="554" y="226" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">绝不默认破坏 TLS Pinning</text>
+        </svg>
+        <figcaption>图 2：<code>aegis-os run</code> 父进程沙箱的内核挂载拓扑与两层网络出站代理架构。</figcaption>
+      </figure>
+
+      <h2 id="sec-effect-policy">04. Effect 驱动策略与两层出站网关：区分 CONNECT 隧道与 Base URL 反向代理</h2>
+      <p>传统安全工具常犯的另一个错误是<strong>“对命令字符串做正则匹配审批”</strong>。但在真实工程中，“命令（Command）”不是安全原语，“效果（Effect）”才是——<code>cargo test</code> 会在影子工作区内读写数百个文件并编译执行测试二进制，只要它被严格限制在 CoW 影子和只读工具链内，就不应该弹窗打扰用户；相反，一次看似简单的文件写入如果触碰了 <code>.github/workflows/release.yml</code> 或 <code>build.rs</code>，在提交回宿主机时就属于高危的持久化投毒（Commit-Time Poisoning）。</p>
+      <p>因此，Aegis OS 将所有底层动作统一抽象为 <code>(EffectKind, ResourceScope, Reversibility)</code> 三元组：影子区内的可逆读写（<code>Reversible</code>）默认静默放行并自动建立快照；只有跨越边界的不可逆动作（<code>workspace.commit</code>、<code>workspace.commit_sensitive</code>、访问项目外 <code>$HOME</code> 路径或未授权外网连接）才进入 Cedar 策略引擎与人类租约审批。</p>
+      <p>在网络出站（Egress）治理上，我们也摒弃了“把 HTTPS CONNECT 代理吹嘘成全能 L7 DLP”的不诚实做法。标准 HTTPS <code>CONNECT</code> 是端到端 TLS 加密隧道，代理只能看到 <code>host:port</code>，根本看不到 HTTP Method（GET/POST）、URL Path 或 Request Body。因此，Aegis OS 明确划分了<strong>两层默认出站网关 + 一层可选扩展</strong>：</p>
+      <ul>
+        <li><strong>L4 <code>CONNECT</code> 隧道模式（默认覆盖包管理器与通用 HTTPS）</strong>：策略动作对应 <code>net.connect</code>（如 <code>net:registry.npmjs.org:443</code>）。仅执行零延迟的域名/端口白名单与流量字节统计，绝不伪造 Method 审计，也不破坏任何客户端的 TLS 证书固定（Certificate Pinning）。</li>
+        <li><strong>L7 <code>Base URL</code> 反向代理模式（推荐用于大模型与核心 SaaS API）</strong>：由 Launcher 自动注入 <code>ANTHROPIC_BASE_URL</code> / <code>OPENAI_BASE_URL</code> 指向沙箱本地网关。客户端到网关走本地环回 HTTP，网关再以 TLS 连接真实上游并完成<strong>边界密钥代填（Agent 进程内永远拿不到真实的 <code>ANTHROPIC_API_KEY</code> 明文）</strong>、HTTP Method/Path 审计（<code>net.request</code>）与请求体敏感信息（PHI / 密钥）DLP 拦截，同时对 SSE 流式响应保持零首 Token 缓冲延迟。</li>
+        <li><strong>Opt-in MITM 模式（仅限企业显式声明域名）</strong>：仅对列入 <code>mitm_domains</code> 的目标签发会话级 CA 并注入信任链，若遇证书 Pinning 失败则显式告警降级，绝不静默假装存在 DLP。</li>
+      </ul>
+
+      <h2 id="sec-domain-pipeline">05. 跨领域通用事务流水线与无破坏 TUI 审批（DECSTBM / OSC / 离线租约）</h2>
+      <p>今天知识工作者的 Agent 早已走出纯代码仓库（Code），广泛进入学术论文与标书（Documents）、临床与生物统计数据集（Data）、设计图与医学影像（Binary）以及在线业务系统（AppState）。如果一套运行时只会保护 <code>git diff</code>，在面对非代码场景时就会退化回裸奔状态。</p>
+      <p>Aegis Enforced Runtime 将底层的 <strong><code>shadow → verify → approve → land</code></strong> 提交流水线抽象为可插拔的领域配置（<code>DomainProfile</code>）：</p>
+      <ul>
+        <li><strong>Code &amp; Documents（代码与 Markdown/LaTeX 手稿）</strong>：采用四级 LCS 三路自动合并；预检门（<code>verify_cmd</code>）在沙箱内执行 <code>cargo test</code> 或 <code>latexmk -pdf</code> + 死链检查；Office 文档（<code>.docx</code> / <code>.pptx</code>）在 Phase 5 对接 Heurion 双表面 CRDT 的块级锁与 <code>patchParagraph</code> 字节级补丁。</li>
+        <li><strong>Binary（二进制图表、PDF、TIFF 影像）</strong>：天然不可按行合并。强制执行 <code>coord_claim</code> 排他文件锁 + 影子创建时的<strong>基线 SHA-256 哈希锚定（Baseline Hash Guard）</strong>，任何覆盖宿主二进制资产的提交必须通过 <code>overwrite_binaries</code> 单次审批并附带新旧哈希对比证据。</li>
+        <li><strong>Data &amp; Org CAS（科研数据集与跨智能体产物总线）</strong>：上游清洗智能体必须通过沙箱内的 Schema 校验与 <code>scanPhi --strict</code> 隐私扫描后，将产物发布至不可变的 SHA-256 内容寻址总线（<code>org_artifact_publish</code>），从机制上杜绝下游智能体读取未完成的半成品文件。</li>
+      </ul>
+
+      <div class="blog-callout">
+        <div class="blog-callout-title">工程细节决定成败：为什么审批绝不能直接往活跃 TUI 的 stderr 写文本？</div>
+        <p>当 Claude Code、OpenCode 或 Codex 正在全屏 Alternate Screen / Raw Mode 下渲染高帧率 TUI 时，如果父进程沙箱直接往同一个 PTY 的 <code>stderr</code> 打印审批提示或争抢 <code>[a]pprove / [d]eny</code> 键盘输入，会瞬间导致终端花屏与输入死锁。因此，Aegis OS 在检测到全屏 TUI 活跃时，<strong>严禁向主屏幕直接写入审批字符</strong>，而是通过桌面通知、终端 <code>OSC 0</code> 标题栏闪烁提示（<code>⏳ Aegis: 1 approval pending</code>）、另一终端的 <code>aegis-os approve</code> CLI 或带 SHA-256 Diff 锁定的本地 Web 审批台完成场外确认；在纯 SSH 场景下则可选使用 <code>DECSTBM</code> 划定顶部 1 行独立状态栏。只有尊重每一个系统工程细节，内核级安全边界才能真正成为开发者每天愿意默认开启的基础设施。</p>
+      </div>
+    `,
+    body_en: `
+      <h2 id="sec-advisory-illusion">01. Honest Threat Modeling: Why Agent Plugins &amp; Hooks Are Advisory, Not Enforced</h2>
+      <p>The most dangerous architectural illusion in AI agent infrastructure is <strong>mistaking a workflow orchestration plugin for an operating system security boundary</strong>. Modern terminal and IDE agents—including Claude Code, OpenCode, Codex CLI, Antigravity (AGY), and Hermes—typically expose three extension surfaces: system prompt instructions (<code>CLAUDE.md</code> / <code>AGENTS.md</code>), tool interception hooks (<code>PreToolUse</code> hooks and plugins), and Model Context Protocol (MCP) servers.</p>
+      <p>Under benign collaboration, plugin-based governance works remarkably well: hooks can transparently intercept native <code>Read</code>, <code>Edit</code>, and <code>Bash</code> calls and reroute them into an Aegis OS Copy-on-Write (CoW) shadow workspace. Yet the moment we inspect the process tree from the OS kernel’s perspective, an inescapable truth emerges: <strong>in plugin mode, the agent main process itself runs directly inside the host user’s privilege domain, inheriting the human developer’s exact <code>UID</code>, <code>$HOME</code> visibility, and raw system call surface.</strong></p>
+
+      <div class="blog-callout">
+        <div class="blog-callout-title">The Kernel Boundary Axiom</div>
+        <p><strong>No interceptor that executes within the same privilege domain as the supervised process—or relies on the supervised process to voluntarily invoke it—can ever be a security boundary.</strong> Unless the agent process tree itself is confined inside an OS kernel sandbox (Linux Mount/PID/Network namespaces + Landlock/seccomp, macOS Seatbelt, or a microVM), hooks and MCP provide <strong>Advisory Governance</strong>, not <strong>Enforced Isolation</strong>.</p>
+      </div>
+
+      <p>During our end-to-end security audit across mainstream CLI and desktop agents, we cataloged <strong>six structural bypass vectors</strong> that plugin-only governance cannot eliminate:</p>
+      <div class="blog-table-wrap">
+        <table class="blog-table">
+          <thead>
+            <tr>
+              <th>Bypass Vector</th>
+              <th>Mechanism &amp; Real-World Client Behavior</th>
+              <th>Why Hooks / Plugins Alone Cannot Fix It</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>1. Uncovered Native &amp; 3rd-Party Tools</strong></td>
+              <td>Built-in tools like <code>NotebookEdit</code>, LSP refactoring actions, or project-injected <code>.mcp.json</code> servers (e.g., a raw <code>filesystem</code> MCP)</td>
+              <td>Hooks rely on denylisting known tool names; any newly added client tool or unknown MCP server mutates the host directly</td>
+            </tr>
+            <tr>
+              <td><strong>2. Clients Without Tool-Level Hooks</strong></td>
+              <td>Clients such as Codex CLI support MCP servers and native sandboxing but do not currently expose an external <code>PreToolUse</code> interception hook</td>
+              <td>Routing relies entirely on soft prompt instructions in <code>AGENTS.md</code>, offering zero hard resistance against prompt injection</td>
+            </tr>
+            <tr>
+              <td><strong>3. Shared Daemon Escape</strong></td>
+              <td>When OpenCode TUI connects via <code>--attach</code> to an already-running background server, plugin enforcement depends on the daemon’s startup state</td>
+              <td>A CLI wrapper cannot retroactively sandbox or inject plugins into a pre-existing host daemon process</td>
+            </tr>
+            <tr>
+              <td><strong>4. Self-Modifying Config &amp; Local Overrides</strong></td>
+              <td>An agent or build script modifies <code>~/.claude/settings.json</code>, <code>.claude/settings.local.json</code>, or <code>~/.config/opencode/opencode.json</code></td>
+              <td>Because the agent has write access to its own config directory, it can strip its own hooks for subsequent turns or sessions</td>
+            </tr>
+            <tr>
+              <td><strong>5. Host Side-Effects in "Read-Only" Commands</strong></td>
+              <td>Allowing seemingly benign commands like <code>git status</code>, <code>cargo test</code>, or <code>npm test</code> to run on the host workspace</td>
+              <td><code>build.rs</code>, <code>postinstall</code> scripts, or <code>core.fsmonitor</code> in <code>.git/config</code> execute arbitrary host code and can read <code>~/.ssh</code></td>
+            </tr>
+            <tr>
+              <td><strong>6. Loopback Self-Approval</strong></td>
+              <td>A local subprocess sends an HTTP request to the local broker on <code>127.0.0.1</code> to approve its own pending escalation ticket</td>
+              <td>Without cryptographic separation between Agent Session Tokens and Human Admin Tokens, a same-UID process can forge approvals</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="sec-three-tier-boundary">02. Three-Tier Enforcement (Advisory / Enforced / Isolated): Decoupling Ergonomics from Security</h2>
+      <p>Acknowledging the limits of plugins does not mean abandoning them. In systems engineering, the two worst mistakes are breaking 95% of daily developer workflows with overly brittle defaults, or overclaiming security guarantees that do not hold under adversarial conditions. Aegis OS therefore defines <strong>three explicit, verifiable Enforcement Tiers</strong>, reported transparently in real time via <code>aegis-os status</code> and <code>aegis-os doctor</code>:</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 310" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Aegis OS Three-Tier Enforcement Architecture: Advisory, Enforced, and Isolated">
+          <rect x="1" y="1" width="758" height="308" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Tier 1: Advisory -->
+          <rect x="20" y="24" width="226" height="236" fill="#F2EFE9" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="133" y="46" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">TIER 1 · ADVISORY (PLUGIN)</text>
+          <line x1="20" y1="56" x2="246" y2="56" stroke="#DFDAD0"/>
+          <text x="133" y="78" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="11.5" font-weight="600">Plugin &amp; Hook Integration</text>
+          <text x="34" y="102" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Entry: Native claude / agy CLI</text>
+          <text x="34" y="122" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Mech: PreToolUse + MCP routing</text>
+          <text x="34" y="142" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Value: CoW shadow + file claims</text>
+          <text x="34" y="162" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Scope: Subprocesses via proc_exec</text>
+          <rect x="34" y="182" width="198" height="62" fill="#FAF8F4" stroke="#DFDAD0"/>
+          <text x="44" y="200" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">Role: Ergonomic Safety Rail</text>
+          <text x="44" y="218" fill="#646D68" font-family="Inter, sans-serif" font-size="8.5">Prevents accidental overwrites; does</text>
+          <text x="44" y="232" fill="#646D68" font-family="Inter, sans-serif" font-size="8.5">not claim resistance to hijacked agents</text>
+
+          <!-- Tier 2: Enforced -->
+          <rect x="267" y="24" width="226" height="236" fill="#233E33" stroke="#151C19" stroke-width="1.5"/>
+          <text x="380" y="46" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">TIER 2 · ENFORCED (KERNEL)</text>
+          <line x1="267" y1="56" x2="493" y2="56" stroke="#395A4C"/>
+          <text x="380" y="78" text-anchor="middle" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="11.5" font-weight="600">Parent-Process Kernel Sandbox</text>
+          <text x="281" y="102" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.8">• Entry: aegis-os run -- &lt;agent&gt;</text>
+          <text x="281" y="122" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.8">• Mech: bwrap + Landlock / Seatbelt</text>
+          <text x="281" y="142" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.8">• View: Remapped CoW + ro .git</text>
+          <text x="281" y="162" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.8">• Net: --unshare-net + Unix bridge</text>
+          <rect x="281" y="182" width="198" height="62" fill="#1A2F26" stroke="#395A4C"/>
+          <text x="291" y="200" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">Role: OS Kernel Security Boundary</text>
+          <text x="291" y="218" fill="#E3ECE7" font-family="Inter, sans-serif" font-size="8.5">Even if hooks fail or prompts are</text>
+          <text x="291" y="232" fill="#E3ECE7" font-family="Inter, sans-serif" font-size="8.5">injected, host &amp; secrets stay unreachable</text>
+
+          <!-- Tier 3: Isolated -->
+          <rect x="514" y="24" width="226" height="236" fill="#F2EFE9" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="627" y="46" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">TIER 3 · ISOLATED (MICROVM)</text>
+          <line x1="514" y1="56" x2="740" y2="56" stroke="#DFDAD0"/>
+          <text x="627" y="78" text-anchor="middle" fill="#151C19" font-family="Inter, sans-serif" font-size="11.5" font-weight="600">Dedicated Kernel &amp; Cloud VM</text>
+          <text x="528" y="102" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Entry: aegis-os run --isolated</text>
+          <text x="528" y="122" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Mech: libkrun MicroVM / Cloud VM</text>
+          <text x="528" y="142" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• View: virtiofs shadow-only mount</text>
+          <text x="528" y="162" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Keys: Zero local secrets, gateway</text>
+          <rect x="528" y="182" width="198" height="62" fill="#FAF8F4" stroke="#DFDAD0"/>
+          <text x="538" y="200" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">Role: High-Assurance &amp; Untrusted</text>
+          <text x="538" y="218" fill="#646D68" font-family="Inter, sans-serif" font-size="8.5">Hardware-virtualized kernel boundary</text>
+          <text x="538" y="232" fill="#646D68" font-family="Inter, sans-serif" font-size="8.5">for clinical, financial &amp; CI workloads</text>
+
+          <!-- Bottom Banner -->
+          <text x="380" y="286" text-anchor="middle" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="9">Universal Invariants: Fail-Closed Startup · Diff-Locked Host Commits · Cryptographic Agent/Human Token Separation</text>
+        </svg>
+        <figcaption>Figure 1: The Aegis OS Three-Tier Enforcement Architecture (Advisory / Enforced / Isolated), separating productivity guardrails from kernel-enforced security boundaries.</figcaption>
+      </figure>
+
+      <h2 id="sec-parent-launcher">03. Inverting Control: The <code>aegis-os run</code> Parent Launcher, Read-Only <code>.git</code> View &amp; State-Dir Layering</h2>
+      <p>Moving from Advisory to Enforced requires a single foundational shift: <strong>inverting the parent-child process relationship. Instead of an agent living on the host and optionally calling Aegis, <code>aegis-os run -- &lt;agent&gt;</code> acts as the parent process—constructing a restricted kernel namespace first and spawning the agent binary inside it.</strong></p>
+      <p>Yet placing a full-featured modern CLI agent (such as Claude Code or OpenCode) inside a Linux <code>bubblewrap (bwrap)</code> + <code>Landlock</code> + <code>seccomp</code> or macOS <code>Seatbelt</code> sandbox immediately surfaces three practical systems challenges: (1) distro-specific dynamic linkers and package stores (NixOS, Linuxbrew, Snap) failing with <code>ENOENT</code>; (2) <code>git status</code> and <code>git diff</code> breaking or triggering malicious host Git hooks; and (3) the agent either losing its session history (<code>~/.claude/projects</code>) or retaining the ability to overwrite its own security settings (<code>~/.claude/settings.json</code>).</p>
+      <p>Aegis Enforced Runtime resolves all three without sacrificing security or developer ergonomics:</p>
+
+      <h3>3.1 Distro-Compatible Root Masking (<code>--ro-bind / /</code>) &amp; Path Remapping</h3>
+      <p>Manually enumerating <code>/usr</code> and <code>/lib</code> breaks immediately on NixOS (<code>/nix/store</code>), Linuxbrew (<code>/home/linuxbrew/.linuxbrew</code>), and custom enterprise CA bundles. On Linux, Aegis preserves <code>--ro-bind / /</code> for universal binary compatibility, then immediately masks user and runtime state by mounting fresh <code>--tmpfs</code> over <code>/home</code>, <code>/root</code>, <code>/run</code>, <code>/var</code>, <code>/tmp</code>, <code>/mnt</code>, <code>/media</code>, and sensitive <code>/etc</code> credential files. Finally, it bind-mounts the <strong>writable CoW shadow workspace directly onto the original host project path (<code>/home/user/project</code>)</strong> while mounting the real host tree read-only at <code>/aegis/host/project</code>. Even if a prompt-injected agent bypasses every MCP tool and runs <code>python -c "open('src/lib.rs', 'w')"</code>, the kernel transparently redirects the write into the isolated CoW shadow.</p>
+
+      <h3>3.2 Read-Only <code>.git</code> Object Pass-Through with <code>GIT_INDEX_FILE</code> Separation</h3>
+      <p>Both developers and agents rely heavily on <code>git status</code>, <code>git diff</code>, <code>git log</code>, and prompt branch indicators. Stripping <code>.git</code> from the shadow breaks Git tooling; copying <code>.git</code> wastes hundreds of megabytes on large repositories; and exposing the host <code>.git</code> writable allows an agent to achieve host code execution by writing to <code>.git/hooks/pre-commit</code> or setting <code>core.fsmonitor</code> in <code>.git/config</code>.</p>
+      <p>Aegis OS solves this via a <strong>Read-Only Object Store + Per-Session Writable Index + Hardened Git Shim</strong>:</p>
+      <pre><code># 1. Bind-mount the host .git directory read-only into the shadow workspace
+bwrap ... --ro-bind /aegis/host/project/.git /home/jz/project/.git
+
+# 2. Copy only the single-file .git/index into the private session dir and redirect Git's index pointer
+cp /aegis/host/project/.git/index ~/.aegis/sessions/$SESSION_ID/git-index
+export GIT_INDEX_FILE="$HOME/.aegis-git-index"
+export GIT_OPTIONAL_LOCKS=0
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL=/dev/null
+
+# 3. Prepend a Git safety shim that disables external diff/fsmonitor helpers and routes mutations to aos commit
+git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --no-ext-diff</code></pre>
+      <p>This guarantees zero-copy <code>.git/objects</code> access and instant <code>git status</code> / <code>git diff</code> across 100k-file repositories while ensuring the host’s <code>.git/index</code> mtime is never touched and repository hooks can neither be modified nor executed.</p>
+
+      <h3>3.3 Granular Agent State-Directory Layering (Single-File Read-Only Config Locks)</h3>
+      <p>CLI agents must write conversation logs, todo lists, and OAuth refresh tokens at runtime (e.g., <code>~/.claude/projects/*.jsonl</code>, <code>~/.codex/sessions</code>, or OpenCode’s SQLite state in <code>~/.local/share/opencode</code>), but they must never be allowed to modify <code>~/.claude/settings.json</code>, <code>~/.gemini/config/hooks.json</code>, or <code>~/.codex/config.toml</code>. Leveraging ordered mount layering in <code>bwrap</code>, Aegis mounts state subdirectories writable first and then overlays <strong>single-file <code>--ro-bind</code> locks onto every security-critical configuration file</strong>—preserving full stateful session continuity while making self-modification of hooks and permissions kernel-impossible.</p>
+
+      <figure class="blog-diagram">
+        <svg viewBox="0 0 760 280" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="aegis-os run Kernel Mount Topology and Dual-Mode Network Egress Architecture">
+          <rect x="1" y="1" width="758" height="278" fill="#FAF8F4" stroke="#DFDAD0" stroke-width="1"/>
+
+          <!-- Left: Host Supervisor -->
+          <rect x="20" y="22" width="218" height="234" fill="#F2EFE9" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="129" y="44" text-anchor="middle" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">HOST BROKER · aegis-os run</text>
+          <line x1="20" y1="54" x2="238" y2="54" stroke="#DFDAD0"/>
+          <text x="34" y="76" fill="#151C19" font-family="Inter, sans-serif" font-size="10.5" font-weight="600">Trusted Host Supervisor</text>
+          <text x="34" y="98" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Role-Separated Session Tokens</text>
+          <text x="34" y="118" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• Cedar Effect Policy &amp; Leases</text>
+          <text x="34" y="138" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• SHA-256 Evidence Approval Queue</text>
+          <text x="34" y="158" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.8">• CoW: APFS / Btrfs / OverlayFS</text>
+          <rect x="34" y="176" width="190" height="64" fill="#FAF8F4" stroke="#DFDAD0"/>
+          <text x="44" y="194" fill="#233E33" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">Host Project (/aegis/host)</text>
+          <text x="44" y="212" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">• Mutated only after approved</text>
+          <text x="44" y="226" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">  workspace_commit &amp; verify_cmd</text>
+
+          <!-- Center: Kernel Sandbox Namespace -->
+          <rect x="266" y="22" width="236" height="234" fill="#233E33" stroke="#151C19" stroke-width="1.5"/>
+          <text x="384" y="44" text-anchor="middle" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">KERNEL SANDBOX NAMESPACE</text>
+          <line x1="266" y1="54" x2="502" y2="54" stroke="#395A4C"/>
+          <text x="280" y="76" fill="#FAF8F4" font-family="Inter, sans-serif" font-size="10.5" font-weight="600">Confined Agent Process Tree</text>
+          <text x="280" y="98" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.6">• cwd remapped to CoW Shadow (rw)</text>
+          <text x="280" y="118" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.6">• .git ro-bind + private git-index</text>
+          <text x="280" y="138" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.6">• settings.json / hooks.json (ro)</text>
+          <text x="280" y="158" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.6">• ~/.ssh, ~/.aws, /etc/shadow masked</text>
+          <rect x="280" y="176" width="208" height="64" fill="#1A2F26" stroke="#395A4C"/>
+          <text x="290" y="194" fill="#00C472" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">OpenCode Forced --standalone</text>
+          <text x="290" y="212" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">• Blocks unsandboxed daemon attach</text>
+          <text x="290" y="226" fill="#E3ECE7" font-family="JetBrains Mono, monospace" font-size="8.2">• seccomp blocks mount/ptrace/bpf</text>
+
+          <!-- Right: Dual-Mode Egress Proxy -->
+          <rect x="530" y="22" width="210" height="234" fill="#F2EFE9" stroke="#C8C1B4" stroke-width="1"/>
+          <text x="635" y="44" text-anchor="middle" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="9.5" font-weight="600">DUAL-MODE EGRESS PROXY</text>
+          <line x1="530" y1="54" x2="740" y2="54" stroke="#DFDAD0"/>
+          <text x="544" y="76" fill="#151C19" font-family="Inter, sans-serif" font-size="10.5" font-weight="600">--unshare-net + Unix Bridge</text>
+          <text x="544" y="98" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.6">1. CONNECT Tunnel (net.connect)</text>
+          <text x="554" y="114" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">Host:port allowlist · 0 TLS overhead</text>
+          <text x="544" y="136" fill="#4A534E" font-family="JetBrains Mono, monospace" font-size="8.6">2. Base URL Proxy (net.request)</text>
+          <text x="554" y="152" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">L7 Method audit · Secret injection</text>
+          <rect x="544" y="176" width="182" height="64" fill="#FAF8F4" stroke="#DFDAD0"/>
+          <text x="554" y="194" fill="#8F5638" font-family="JetBrains Mono, monospace" font-size="8.5" font-weight="600">3. Opt-in MITM (Explicit Only)</text>
+          <text x="554" y="212" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">Session CA only for declared hosts;</text>
+          <text x="554" y="226" fill="#646D68" font-family="JetBrains Mono, monospace" font-size="8.2">never silently breaks TLS pinning</text>
+        </svg>
+        <figcaption>Figure 2: Kernel mount topology and dual-mode network egress architecture under <code>aegis-os run</code>.</figcaption>
+      </figure>
+
+      <h2 id="sec-effect-policy">04. Effect-Driven Policy &amp; Dual-Mode Egress: Separating CONNECT Tunnels from L7 Reverse Proxies</h2>
+      <p>A pervasive anti-pattern in agent security is prompting the user to approve raw shell command strings. <strong>Commands are not security primitives; Effects are.</strong> Running <code>cargo test</code> reads and writes hundreds of files inside the build directory, yet as long as those effects are confined to the disposable CoW shadow workspace and read-only toolchains, the user should never be interrupted. Conversely, a single file write that touches <code>.github/workflows/release.yml</code> or <code>build.rs</code> represents a high-risk persistence vector when committed back to the host.</p>
+      <p>Aegis OS models every operation as a structured <code>(EffectKind, ResourceScope, Reversibility)</code> tuple evaluated by our Cedar policy engine. Reversible mutations inside the shadow workspace are auto-allowed with automatic snapshots; irreversible boundary transitions (<code>workspace.commit</code>, <code>workspace.commit_sensitive</code>, out-of-workspace reads, or unallowlisted network egress) require a capability lease or human approval.</p>
+      <p>For network egress inside <code>--unshare-net</code>, we also reject the dishonest industry claim that a standard HTTPS <code>CONNECT</code> proxy provides L7 Data Loss Prevention (DLP). Because <code>CONNECT</code> establishes an end-to-end encrypted TLS tunnel, the proxy only observes <code>host:port</code> and byte counts—never the HTTP method, path, or request body. Aegis OS therefore separates egress into explicit modes:</p>
+      <ul>
+        <li><strong>Mode 1: L4 <code>CONNECT</code> Tunnel (Default for package managers &amp; general HTTPS)</strong> — Evaluates <code>net.connect</code> against domain/port allowlists with zero streaming latency and zero TLS certificate breakage, without fabricating L7 method logs.</li>
+        <li><strong>Mode 2: L7 <code>Base URL</code> Reverse Proxy (Default for LLM &amp; SaaS APIs)</strong> — The launcher points <code>ANTHROPIC_BASE_URL</code> / <code>OPENAI_BASE_URL</code> to a local gateway. The gateway inspects full L7 <code>net.request</code> methods and paths, scans request bodies for PHI/secrets before forwarding, <strong>injects API keys at the boundary so raw credentials never enter the sandbox environment</strong>, and streams SSE responses without buffering time-to-first-token.</li>
+        <li><strong>Mode 3: Opt-in MITM (Explicit enterprise domains only)</strong> — Issues a per-session CA strictly for domains listed in <code>mitm_domains</code>, failing closed or visibly downgrading if a binary uses hardcoded certificate pinning.</li>
+      </ul>
+
+      <h2 id="sec-domain-pipeline">05. Generalized Domain Commit Pipelines &amp; Non-Destructive TUI Approvals</h2>
+      <p>Autonomous agents are no longer confined to software repositories; they author research manuscripts (<code>Documents</code>), clean clinical cohorts (<code>Data</code>), generate figures (<code>Binary</code>), and mutate live enterprise software (<code>AppState</code>). A runtime that only understands <code>git diff</code> leaves non-code workflows completely unprotected.</p>
+      <p>Aegis Enforced Runtime generalizes the <strong><code>shadow → verify → approve → land</code></strong> transaction pipeline across domains via declarative <code>DomainProfile</code> configurations:</p>
+      <ul>
+        <li><strong>Code &amp; Documents</strong>: 4-tier LCS 3-way auto-merge with sandboxed pre-flight verification gates (<code>cargo test</code>, <code>latexmk -pdf</code>, citation &amp; link checks), pairing in Phase 5 with Heurion’s Dual-Surface CRDT block locks and <code>patchParagraph</code> byte-preserving OOXML splicer for Word/PowerPoint archives.</li>
+        <li><strong>Binary Assets (Figures, PDFs, Medical Imaging)</strong>: Because binary files cannot be merged line-by-line, Aegis enforces exclusive <code>coord_claim</code> locks and records a <strong>baseline SHA-256 hash</strong> at shadow creation—requiring explicit <code>overwrite_binaries</code> approval with before/after hash evidence prior to landing on the host.</li>
+        <li><strong>Data &amp; Content-Addressed Pipelines (Org CAS)</strong>: Upstream data agents must pass schema validation and <code>scanPhi --strict</code> inside the sandbox before publishing immutable SHA-256 artifacts via <code>org_artifact_publish</code>, structurally preventing downstream agents from reading half-written files.</li>
+      </ul>
+
+      <div class="blog-callout">
+        <div class="blog-callout-title">Respecting Terminal Physics: Never Write Raw Approval Prompts into an Active Full-Screen TUI</div>
+        <p>When Claude Code, OpenCode, or Codex is rendering a full-screen Alternate Screen TUI in raw mode, having a parent supervisor write approval text directly to the shared PTY’s <code>stderr</code>—or compete for <code>stdin</code> keystrokes—instantly corrupts the terminal layout and deadlocks input. When a full-screen TUI is active, Aegis OS <strong>never writes raw approval text into the main screen</strong>: instead, it notifies the human out-of-band via desktop notifications, terminal <code>OSC 0</code> title bar badges (<code>⏳ Aegis: 1 approval pending</code>), a companion <code>aegis-os approve</code> CLI in a second terminal, or the SHA-256 diff-locked local Web console (with an optional 1-line <code>DECSTBM</code> scroll-region status bar for headless SSH). Only when kernel security respects terminal physics will developers keep enforcement enabled by default.</p>
+      </div>
+    `,
+  },
 ]
 
 export const DRAFT_BLOG_POSTS: ReadonlyArray<Omit<BlogPostMeta, 'slug'> & { slug: string }> = [
   {
     slug: 'cross-modal-self-evolution-clinical-deep-review',
-    num: '04',
+    num: '05',
     category: 'self-evolution',
     category_label_zh: 'HEURION 2.0 · 双轨自演进',
     category_label_en: 'HEURION 2.0 · SELF-EVOLVING AI',

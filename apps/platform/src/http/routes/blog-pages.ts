@@ -400,6 +400,72 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
       },
     ],
   },
+  'from-agent-plugins-to-enforced-runtime': {
+    repoUrl: 'https://github.com/heurion-org/aegis-os',
+    paperUrl: 'https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_ENFORCED_RUNTIME_DESIGN.md',
+    links_zh: [
+      {
+        label: 'Aegis Enforced Runtime 完整架构规范 (GitHub)',
+        href: 'https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_ENFORCED_RUNTIME_DESIGN.md',
+        desc: '阅读包含威胁模型、bwrap/Seatbelt 挂载表、.git 只读穿透与两层网关的完整工程规范',
+      },
+      {
+        label: 'Aegis OS 事务级智能体内核专论（No. 03）',
+        href: '/blog/aegis-os-transactional-agent-kernel',
+        desc: '回顾 0.42ms CoW 影子工作区、四级 LCS 自动合并与多智能体文件认领锁的基准评测',
+      },
+      {
+        label: 'Aegis OS 主页与安装指南',
+        href: '/aegis-os/',
+        desc: '了解如何为 Claude Code、OpenCode、Codex 与 AGY 一键接入 Aegis 运行时',
+      },
+    ],
+    links_en: [
+      {
+        label: 'Aegis Enforced Runtime Full Specification (GitHub)',
+        href: 'https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_ENFORCED_RUNTIME_DESIGN.md',
+        desc: 'Read the complete engineering specification covering bwrap/Seatbelt mounts, .git index separation, and L4/L7 egress',
+      },
+      {
+        label: 'Aegis OS Transactional Agent Kernel Monograph (No. 03)',
+        href: '/en/blog/aegis-os-transactional-agent-kernel',
+        desc: 'Review the 0.42ms CoW shadow workspace, 4-tier LCS auto-merge, and advisory file claim benchmarks',
+      },
+      {
+        label: 'Aegis OS Product Page & CLI Quickstart',
+        href: '/en/aegis-os/',
+        desc: 'Install Aegis OS for Claude Code, OpenCode, Codex CLI, and Antigravity (AGY)',
+      },
+    ],
+    faq_zh: [
+      {
+        q: '为什么 Claude Code、OpenCode 或 Codex 的插件（PreToolUse Hook + MCP）不能作为严格的安全边界？',
+        a: '因为插件与被监管的 Agent 主进程运行在同一个宿主机用户权限域（相同 UID 与系统调用面）中。在对抗性提示词注入或配置漂移下，Agent 可能调用未列入 Hook 的原生工具（如 NotebookEdit）、连接沙箱外已运行的共享守护进程（OpenCode --attach）、修改自身的 ~/.claude/settings.json 摘除 Hook，或借由看似只读的 git status / cargo test 触发宿主机上的恶意 .git/config fsmonitor 与 build.rs 脚本。因此插件模式属于 Advisory（建议级生产力护栏），真正的安全边界必须由 aegis-os run 作为父进程通过 OS 内核沙箱（Enforced / Isolated）强制实施。',
+      },
+      {
+        q: 'aegis-os run 如何在禁止 Agent 篡改宿主机 .git 与自身配置的同时，保留正常的 git status 和客户端会话历史？',
+        a: 'Aegis OS 采取两项内核级分层挂载设计：（1）将宿主机 .git 目录只读绑定（--ro-bind）到影子工作区以零拷贝共享 objects/refs，同时将单文件 .git/index 复制到沙箱私有目录并通过 GIT_INDEX_FILE 环境变量指向该副本，配合安全 Git Shim 禁用 core.fsmonitor 与 hooksPath；（2）对 ~/.claude/projects、~/.codex/sessions 等运行期状态子目录按需可写挂载，随后在顶层对 ~/.claude/settings.json、~/.gemini/config/hooks.json、~/.codex/config.toml 执行单文件 --ro-bind 只读锁定，防止 Agent 自篡改配置。',
+      },
+      {
+        q: '为什么不能用标准 HTTPS CONNECT 代理宣称具备 L7 DLP 与请求方法审计？Aegis OS 如何解决？',
+        a: '标准 HTTPS CONNECT 是端到端 TLS 加密隧道，代理只能观测到 host:port 与流量字节数，无法看到 HTTP Method（GET/POST）、URL Path 或 Request Body。Aegis OS 诚实区分两层默认出站网关：对通用 HTTPS 与包管理器采用零延迟的 L4 CONNECT 隧道（仅评估 net.connect 域名/端口白名单，不破坏证书 Pinning）；对大模型与核心 SaaS API 则通过注入 ANTHROPIC_BASE_URL / OPENAI_BASE_URL 采用 L7 反向代理模式（评估 net.request、在边界代填 API 密钥使沙箱内零明文凭据，并执行请求体 DLP 扫描与 SSE 零缓冲流式转发）。',
+      },
+    ],
+    faq_en: [
+      {
+        q: 'Why can’t agent plugins (PreToolUse hooks + MCP servers) serve as a true security boundary?',
+        a: 'Because plugins and hooks execute inside the same host user privilege domain (same UID, filesystem view, and syscall surface) as the supervised agent. Under prompt injection or configuration drift, an agent can invoke uncovered native tools (e.g., NotebookEdit), attach to an unsandboxed background daemon (OpenCode --attach), overwrite its own ~/.claude/settings.json to strip hooks, or trigger host code execution via build.rs or .git/config fsmonitor during seemingly benign commands. Plugins provide Advisory ergonomics; true Enforced isolation requires aegis-os run to act as the parent process and confine the entire agent tree inside an OS kernel sandbox.',
+      },
+      {
+        q: 'How does aegis-os run keep git status and stateful agent sessions working without letting the agent tamper with .git or its own security settings?',
+        a: 'Through two layered mount mechanisms: (1) It bind-mounts the host .git directory read-only into the shadow workspace for zero-copy object access, copies only the single-file .git/index into a private session path pointed to by GIT_INDEX_FILE, and injects a hardened Git shim that disables core.fsmonitor and hooksPath; (2) It mounts runtime state directories (~/.claude/projects, ~/.codex/sessions, ~/.local/share/opencode) writable first, then overlays single-file read-only mounts (--ro-bind) onto ~/.claude/settings.json, ~/.gemini/config/hooks.json, and ~/.codex/config.toml so the agent cannot disarm its own supervision.',
+      },
+      {
+        q: 'Why does Aegis OS separate L4 HTTPS CONNECT tunnels from L7 Base URL reverse proxies?',
+        a: 'A standard HTTPS CONNECT proxy only sees host:port over an encrypted TLS tunnel—it cannot inspect HTTP methods, URL paths, or request bodies without breaking TLS via MITM. Aegis OS therefore uses a dual-mode gateway: general HTTPS traffic uses an L4 CONNECT tunnel (enforcing net.connect domain/port allowlists with zero streaming overhead and intact certificate pinning), while LLM and SaaS APIs use an L7 Base URL reverse proxy (via ANTHROPIC_BASE_URL / OPENAI_BASE_URL) that performs net.request method auditing, boundary API key injection (keeping raw keys out of the sandbox), and request-body DLP without buffering streaming SSE tokens.',
+      },
+    ],
+  },
 }
 
 const HEURION_EDITORIAL_BLOG_STYLES = `
