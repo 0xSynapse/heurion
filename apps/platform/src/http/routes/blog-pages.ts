@@ -456,19 +456,22 @@ const HEURION_EDITORIAL_BLOG_STYLES = `
     border-bottom: 1px solid var(--border);
   }
   .top-nav-inner {
-    max-width: 780px;
+    max-width: 1080px;
     margin: 0 auto;
     padding: 0.95rem 1.75rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: 1.5rem;
+    flex-wrap: nowrap;
   }
   .brand {
     display: inline-flex;
     align-items: center;
     gap: 0.65rem;
     color: var(--ink);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .brand-mark {
     width: 20px;
@@ -478,9 +481,11 @@ const HEURION_EDITORIAL_BLOG_STYLES = `
   .mark-bar { fill: var(--ink); }
   .mark-accent { fill: var(--heurion-mint); }
   .brand-text {
-    display: flex;
+    display: inline-flex;
     align-items: baseline;
     gap: 0.55rem;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .brand-name {
     font-family: var(--serif);
@@ -488,28 +493,45 @@ const HEURION_EDITORIAL_BLOG_STYLES = `
     font-weight: 500;
     letter-spacing: -0.01em;
     color: var(--ink);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .brand-role {
     font-size: 0.78rem;
     color: var(--ink-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .nav-links {
     display: flex;
     align-items: center;
-    gap: 1.15rem;
+    gap: 1.25rem;
     font-size: 0.82rem;
     color: var(--ink-secondary);
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .nav-links a {
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .nav-links a:hover {
     color: var(--accent);
   }
   .lang-switch {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-family: var(--mono);
     font-size: 0.73rem;
-    padding: 0.2rem 0.55rem;
+    line-height: 1.2;
+    padding: 0.24rem 0.6rem;
     border: 1px solid var(--border);
     background: var(--bg-elevated);
     color: var(--ink);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .lang-switch:hover {
     border-color: var(--ink);
@@ -1100,9 +1122,13 @@ const HEURION_EDITORIAL_BLOG_STYLES = `
     color: var(--accent);
   }
 
-  @media (max-width: 640px) {
-    .top-nav-inner { padding: 0.85rem 1.2rem; }
+  @media (max-width: 880px) {
     .brand-role { display: none; }
+  }
+
+  @media (max-width: 640px) {
+    .top-nav-inner { padding: 0.85rem 1.2rem; gap: 1rem; overflow-x: auto; }
+    .nav-links { gap: 0.85rem; }
     .wrap { padding: 2.25rem 1.2rem 4rem; }
     .post-row-link { grid-template-columns: 1fr; gap: 0.35rem; padding: 1.15rem 0; }
     .post-row-arrow { display: none; }
