@@ -271,7 +271,12 @@ export interface StudyRow {
   /** 研究所属机构（建研究时负责人的机构；成员必须同机构）。开发模式等没有机构的用户为 null，只能自己用。 */
   tenant_id: string | null
   design: 'retrospective_cohort' | 'prospective_cohort' | 'rct' | 'case_control' | 'cross_sectional' | 'other' | null
-  status: 'planning' | 'ongoing' | 'completed'; summary: string | null; created_at: string; updated_at: string
+  status: 'planning' | 'ongoing' | 'completed'; summary: string | null
+  /** 结构化纳排方案与最新筛选漏斗快照（JSON：EligibilityProtocol） */
+  eligibility_plan?: string | null
+  /** 研究专属扩展变量定义（JSON：CustomVarDef[]） */
+  custom_vars?: string | null
+  created_at: string; updated_at: string
 }
 /** 机构幻灯片模板：机构管理员维护（院徽、机构名称、标准色），只有本机构成员能用；deck 里的模板 key 是 org_<id>。 */
 /** 机构内的科室（知家分享的落点：分享给某医院的某科室，该科室的医生都能看）。 */
@@ -901,6 +906,8 @@ export class Store {
     // 研究团队协作之前的研究：负责人补成成员表里的 owner；研究记下所属机构（负责人当时的机构）
     const studyCols = (this.db.prepare('PRAGMA table_info(studies)').all() as Array<{ name: string }>).map(c => c.name)
     if (!studyCols.includes('tenant_id')) this.db.exec('ALTER TABLE studies ADD COLUMN tenant_id TEXT')
+    if (!studyCols.includes('eligibility_plan')) this.db.exec('ALTER TABLE studies ADD COLUMN eligibility_plan TEXT')
+    if (!studyCols.includes('custom_vars')) this.db.exec('ALTER TABLE studies ADD COLUMN custom_vars TEXT')
     this.db.exec(`INSERT OR IGNORE INTO study_members (study_id, user_id, role, added_by, added_at) SELECT id, owner, 'owner', owner, created_at FROM studies`)
     // 租户上线前的用户：各自一个个人租户，本人为机构管理员
     for (const u of this.db.prepare('SELECT id, display_name FROM users WHERE tenant_id IS NULL').all() as Array<{ id: string; display_name: string }>) {
@@ -1806,8 +1813,8 @@ export class Store {
     })
   }
 
-  updateStudy(id: string, patch: Partial<Pick<StudyRow, 'title' | 'design' | 'status' | 'summary'>>): void {
-    const ALLOWED = ['title', 'design', 'status', 'summary'] as const
+  updateStudy(id: string, patch: Partial<Pick<StudyRow, 'title' | 'design' | 'status' | 'summary' | 'eligibility_plan' | 'custom_vars'>>): void {
+    const ALLOWED = ['title', 'design', 'status', 'summary', 'eligibility_plan', 'custom_vars'] as const
     const keys = (Object.keys(patch) as Array<keyof typeof patch>).filter(k => (ALLOWED as readonly string[]).includes(k))
     if (keys.length === 0) return
     this.db.prepare(`UPDATE studies SET ${[...keys.map(k => `${k} = ?`), 'updated_at = ?'].join(', ')} WHERE id = ?`).run(...keys.map(k => patch[k] as string | null), now(), id)

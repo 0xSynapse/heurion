@@ -258,6 +258,12 @@ function escapeXml(unsafe: string): string {
 
 export interface EnrollmentFlowData {
   title?: string
+  /** 若研究执行了结构化纳排方案筛选，记录真实的初筛评估人数与各规则排除原因 */
+  screening_funnel?: {
+    assessed_total: number
+    excluded_total: number
+    exclusions: Array<{ reason: string; count: number }>
+  } | null
   /** 平台入组记录中曾入组本研究的受试者数（在组 + 已移出） */
   enrolled_ever: number
   /** 入组记录状态为「已移出」的受试者数（平台不记录移出原因） */
@@ -279,7 +285,7 @@ export interface EnrollmentFlowData {
  * 也不画失访、依从性等没有记录来源的格子：每个数字都必须来自平台入组记录。
  */
 export function renderEnrollmentFlowSvg(data: EnrollmentFlowData): string {
-  const { title = 'Participant Flow', enrolled_ever, withdrawn, inaccessible, analyzed, arms, unassigned = 0, note } = data
+  const { title = 'Participant Flow', screening_funnel, enrolled_ever, withdrawn, inaccessible, analyzed, arms, unassigned = 0, note } = data
   const width = 860
   const cx = width / 2
   const boxW = 300
@@ -302,6 +308,19 @@ export function renderEnrollmentFlowSvg(data: EnrollmentFlowData): string {
     parts.push(`<line x1="${cx}" y1="${centerY}" x2="${sx}" y2="${centerY}" stroke="#475569" stroke-width="1.4" marker-end="url(#arrow)" />`)
     parts.push(`<rect x="${sx}" y="${centerY - 18}" width="${width - sx - 20}" height="36" rx="4" fill="#fff7ed" stroke="#c2410c" stroke-width="1.2" />`)
     parts.push(`<text x="${sx + 10}" y="${centerY + 5}" ${font} font-size="12" fill="#7c2d12">${escapeXml(text)}</text>`)
+  }
+
+  if (screening_funnel && screening_funnel.assessed_total > 0) {
+    box(cx - boxW / 2, y, boxW, '评估初筛受试者 (Assessed for eligibility)', `n = ${screening_funnel.assessed_total}`)
+    const exReasons = screening_funnel.exclusions.filter(e => e.count > 0)
+    const exSides = [
+      `纳排筛选排除 (Excluded): n = ${screening_funnel.excluded_total}`,
+      ...exReasons.slice(0, 4).map(e => `• ${e.reason}: n = ${e.count}`),
+    ]
+    const exGap = 50 + exSides.length * 40
+    exSides.forEach((t, i) => sideBox(y + boxH + 28 + i * 40, t))
+    arrow(cx, y + boxH, cx, y + boxH + exGap)
+    y += boxH + exGap
   }
 
   box(cx - boxW / 2, y, boxW, '入组受试者 (Enrolled)', `n = ${enrolled_ever}`)

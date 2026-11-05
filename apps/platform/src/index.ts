@@ -104,12 +104,17 @@ const mailer = createMailer({
 })
 // 运维告警：模型服务不可用、回合大量失败时发邮件给管理员
 const alerts = new Alerts(store, mailer)
-// 数据集（实验室数据分析）：上传的表格在该用户的隔离环境里解析（与 AI 代码同一个 uid）
-const datasets = new DatasetService(store, config.datasetsDir, makeIngest({
-  python: config.computePython,
-  script: fileURLToPath(new URL('../scripts/dataset_ingest.py', import.meta.url)),
-  sandbox: config.sandbox ? { uid: userId => store.sandboxUid(userId), workspaceDir: userId => pool.workspaceDir(userId), homeDir: userId => pool.homeDir(userId) } : null,
-}))
+// 数据集（实验室数据分析）：上传的表格在该用户的隔离环境里解析（与 AI 代码同一个 uid），支持 AI 语义核验工作簿与数据字典
+const datasets = new DatasetService(
+  store,
+  config.datasetsDir,
+  makeIngest({
+    python: config.computePython,
+    script: fileURLToPath(new URL('../scripts/dataset_ingest.py', import.meta.url)),
+    sandbox: config.sandbox ? { uid: userId => store.sandboxUid(userId), workspaceDir: userId => pool.workspaceDir(userId), homeDir: userId => pool.homeDir(userId) } : null,
+  }),
+  makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }),
+)
 // 患者（按机构分库、机构密钥加密，见 docs/design/TENANCY.md）
 // 上传的报告：PDF（文字层，扫描件 OCR）、图片（OCR）、docx / txt → 每页文字，打码后交给模型提取（patients.ts / extract-report.ts）
 const reportOcr = localOcr(config.ocrCacheDir)

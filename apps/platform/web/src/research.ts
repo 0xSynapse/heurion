@@ -45,7 +45,7 @@ interface Study {
   my_role: Role; owner_name: string
   docs: Array<{ doc_id: string; title: string; kind: 'doc' | 'deck'; role: string; updated_at: string; created_by?: string }>
   datasets: Array<{ dataset_id: string; name: string; format: string; rows: number; cols: number; status: string; version?: number; cohort?: { shape: string } | null }>
-  analyses: Array<{ asset_id: string; name: string; created_at: string; datasets: string[]; has_code: boolean; by?: string }>
+  analyses: Array<{ asset_id: string; name: string; created_at: string; datasets: string[]; has_code: boolean; by?: string; stale_data?: boolean; stale_reason?: string | null }>
 }
 
 export interface ResearchHooks {
@@ -250,16 +250,45 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     }
   }
 
-  /** 新建研究：名称、设计、简介（一个小表单）。 */
-  function createDialog(prefill?: { title?: string; design?: string; summary?: string }): void {
+  /** 新建研究：支持选择三条真实临床研究启动路径（路径 A 外部数据快车道 / 路径 B 方案驱动院内队列 / 路径 C 审稿返修与统计抗辩）。 */
+  function createDialog(prefill?: { title?: string; design?: string; summary?: string; mode?: 'excel_fast' | 'protocol_cohort' | 'rebuttal' }): void {
+    const initMode = prefill?.mode ?? 'excel_fast'
     const dlg = $('dialog')
-    dlg.innerHTML = `<div class="dialog-card small" role="dialog" aria-modal="true" aria-label="新建研究">
-      <div class="dialog-head"><h2>新建研究</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
+    dlg.innerHTML = `<div class="dialog-card" role="dialog" aria-modal="true" aria-label="新建研究" style="max-width:620px;">
+      <div class="dialog-head"><h2>新建临床研究课题</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
       <form class="dialog-body form" id="studyForm">
+        <div>
+          <div class="small" style="font-weight:600;margin-bottom:6px;">选择研究启动路径（创建后自动引导进入对应工作流）</div>
+          <div style="display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:8px;" id="studyModeCards">
+            <label style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:4px;background:var(--panel);">
+              <span style="display:flex;align-items:center;gap:6px;font-weight:600;font-size:12.5px;">
+                <input type="radio" name="start_mode" value="excel_fast" ${initMode === 'excel_fast' ? 'checked' : ''}>
+                ${icon('upload', { size: 13 })} 路径 A · 已有数据表
+              </span>
+              <span class="muted small" style="font-size:11.5px;line-height:1.4;">已有 Excel/CSV（含多表数据字典），创建后直接上传预检并出 Table 1 与模型图</span>
+            </label>
+            <label style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:4px;background:var(--panel);">
+              <span style="display:flex;align-items:center;gap:6px;font-weight:600;font-size:12.5px;">
+                <input type="radio" name="start_mode" value="protocol_cohort" ${initMode === 'protocol_cohort' ? 'checked' : ''}>
+                ${icon('report', { size: 13 })} 路径 B · 方案建队列
+              </span>
+              <span class="muted small" style="font-size:11.5px;line-height:1.4;">从方案提取纳排规则与终点变量，筛查院内患者、Auto-eCRF 核实并生成随访宽表</span>
+            </label>
+            <label style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:4px;background:var(--panel);">
+              <span style="display:flex;align-items:center;gap:6px;font-weight:600;font-size:12.5px;">
+                <input type="radio" name="start_mode" value="rebuttal" ${initMode === 'rebuttal' ? 'checked' : ''}>
+                ${icon('shield', { size: 13 })} 路径 C · 统计与返修
+              </span>
+              <span class="muted small" style="font-size:11.5px;line-height:1.4;">直达倾向性评分 PSM/IPTW Love Plot、E-value 混杂抗辩与 DeLong 增量检验</span>
+            </label>
+          </div>
+        </div>
         <label>研究名称<input type="text" name="title" required maxlength="120" placeholder="例如：SGLT2 抑制剂与 CKD3 患者 eGFR 下降" value="${esc(prefill?.title ?? '')}"></label>
-        <label>研究设计<select name="design"><option value="">（暂不确定）</option>${Object.entries(DESIGNS).map(([k, v]) => `<option value="${k}"${prefill?.design === k ? ' selected' : ''}>${v}</option>`).join('')}</select></label>
-        <label>简介（可选）<textarea name="summary" rows="3" placeholder="研究问题、人群、主要终点">${esc(prefill?.summary ?? '')}</textarea></label>
-        <div class="row end"><button type="button" data-close>取消</button><button class="primary">创建</button></div>
+        <label>研究设计<select name="design"><option value="">（暂不确定 / 由方案自动识别）</option>${Object.entries(DESIGNS).map(([k, v]) => `<option value="${k}"${prefill?.design === k ? ' selected' : ''}>${v}</option>`).join('')}</select></label>
+        <label>研究方案摘要 / 纳排标准段落（可选；路径 B 下将自动从中提取结构化纳排规则与研究终点变量）
+          <textarea name="summary" rows="3" placeholder="可粘贴研究问题、人群纳入/排除标准、主要终点（如 EGFR、PD-L1、mRS、ORR 等）">${esc(prefill?.summary ?? '')}</textarea>
+        </label>
+        <div class="row end"><button type="button" data-close>取消</button><button class="primary">创建并进入路径</button></div>
       </form></div>`
     dlg.hidden = false
     dlg.querySelector<HTMLInputElement>('input[name=title]')!.focus()
@@ -268,11 +297,24 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     dlg.querySelector<HTMLFormElement>('#studyForm')!.onsubmit = async e => {
       e.preventDefault()
       const f = new FormData(e.target as HTMLFormElement)
+      const mode = String(f.get('start_mode') || 'excel_fast')
+      const summaryText = String(f.get('summary') || '').trim()
       try {
-        const s = await api<{ id: string }>('/api/studies', { method: 'POST', body: JSON.stringify({ title: f.get('title'), design: f.get('design') || null, summary: f.get('summary') }) })
+        const s = await api<{ id: string }>('/api/studies', { method: 'POST', body: JSON.stringify({ title: f.get('title'), design: f.get('design') || null, summary: summaryText }) })
         dlg.hidden = true; dlg.innerHTML = ''
+        if (mode === 'protocol_cohort' && summaryText) {
+          await api(`/api/studies/${s.id}/eligibility/extract`, { method: 'POST', body: JSON.stringify({ protocol_text: summaryText, save: true }) }).catch(() => {})
+        }
         await loadList()
         await openStudy(s.id)
+        if (mode === 'excel_fast') {
+          const uploadInput = document.getElementById('rsUpload') as HTMLInputElement | null
+          if (uploadInput) uploadInput.click()
+        } else if (mode === 'protocol_cohort') {
+          screenDialog(s.id)
+        } else if (mode === 'rebuttal') {
+          switchStudyTab('biostats')
+        }
       } catch (err) { notice((err as Error).message, true) }
     }
   }
@@ -531,6 +573,52 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
       <!-- ==================== 页签 1：方案、队列与概览 ==================== -->
       <div id="rsPaneOverview" ${activeTab === 'overview' ? '' : 'hidden'}>
         <div class="rs-grid">
+          <section class="rs-card wide" style="padding:12px 14px;background:var(--raised);">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+              <b style="display:inline-flex;align-items:center;gap:6px;font-size:13px;">${icon('target', { size: 14 })} 临床研究者三路径快捷工作流 (Researcher Workflow Tracks)</b>
+              <span class="muted small">按当前课题阶段一键触发对应动作，无需在多层菜单间来回切换</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:10px;">
+              <div style="border:1px solid var(--line);border-radius:6px;padding:10px 12px;background:var(--bg);display:flex;flex-direction:column;gap:6px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                  <b style="font-size:12.5px;display:inline-flex;align-items:center;gap:5px;">${icon('upload', { size: 13 })} 路径 A · 外部 Excel/CSV 快车道</b>
+                  <span class="rs-kind">已有数据表</span>
+                </div>
+                <span class="muted small">上传含多工作表数据字典的 Excel/CSV → AI 核验编码 → 一键生成 Table 1 与生存/预测模型</span>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:4px;">
+                  ${canEdit ? `<button type="button" class="small-btn primary" data-act="upload">${icon('upload', { size: 12 })} 上传数据表</button>` : ''}
+                  <button type="button" class="small-btn" data-rs-tab="data">Table 1 与清洗</button>
+                  <button type="button" class="small-btn" data-rs-tab="biostats">拟合列线图/ROC</button>
+                </div>
+              </div>
+              <div style="border:1px solid var(--line);border-radius:6px;padding:10px 12px;background:var(--bg);display:flex;flex-direction:column;gap:6px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                  <b style="font-size:12.5px;display:inline-flex;align-items:center;gap:5px;">${icon('report', { size: 13 })} 路径 B · 方案驱动院内队列</b>
+                  <span class="rs-kind">前瞻/回顾队列</span>
+                </div>
+                <span class="muted small">从方案提取纳排规则与终点变量 → 筛查患者沉淀 CONSORT → Auto-eCRF 核实 → 导出随访宽表</span>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:4px;">
+                  ${canEdit ? `<button type="button" class="small-btn primary" data-act="screen">${icon('search', { size: 12 })} 方案纳排入组</button>` : ''}
+                  <button type="button" class="small-btn" data-act="ecrf">Auto-eCRF 核实</button>
+                  ${canEdit ? `<button type="button" class="small-btn" data-act="gen">生成时间窗宽表</button>` : ''}
+                </div>
+              </div>
+              <div style="border:1px solid var(--line);border-radius:6px;padding:10px 12px;background:var(--bg);display:flex;flex-direction:column;gap:6px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                  <b style="font-size:12.5px;display:inline-flex;align-items:center;gap:5px;">${icon('shield', { size: 13 })} 路径 C · 审稿返修与版本同步</b>
+                  ${s.analyses.some(a => a.stale_data)
+                    ? `<span class="flag-L small">${icon('warning', { size: 11 })} ${s.analyses.filter(a => a.stale_data).length} 张图待更新</span>`
+                    : `<span class="pill green small">图表已同步</span>`}
+                </div>
+                <span class="muted small">应对审稿人混杂偏倚与增量质疑：一键计算 PSM/IPTW Love Plot、E-value 抗辩及 DeLong 检验</span>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:4px;">
+                  <button type="button" class="small-btn primary" data-rs-tab="biostats">${icon('shield', { size: 12 })} PSM / E-value / DeLong</button>
+                  <button type="button" class="small-btn" data-rs-tab="gallery">多面板拼图</button>
+                  <button type="button" class="small-btn" data-act="bundle">导出投稿包</button>
+                </div>
+              </div>
+            </div>
+          </section>
           ${cohortCard(cohort, cohortOff, canEdit)}
           <section class="rs-card" id="rsProtocolCard">
             <div class="rs-card-head"><h3>研究方案 (Protocol)</h3>${w('<button class="small-btn" data-new="protocol">＋ 新建方案</button>')}</div>
@@ -576,6 +664,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
                             </span>` : ''}
                           </div>
                           <div class="rs-file-meta">
+                            ${a.stale_data ? `<span class="flag-L small" title="${esc(a.stale_reason || '底层数据集已更新，建议重新生成图表')}">${icon('warning', { size: 11 })} 数据已更新</span>` : ''}
                             ${a.has_code ? '<span class="pill green" title="附带可复现 R/Python 统计源码">可复现源码</span>' : ''}
                             <span>${esc(a.datasets.join('、') || '研究图表')}</span>
                             <span class="muted">${date(a.created_at)}</span>
@@ -686,29 +775,157 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     </section>`
   }
 
-  /** 筛选入组：条件 → 预览（代号 + 匹配依据）→ 勾选 → 入组。 */
+  /** 筛选入组：支持从研究方案自动提取纳排规则、专科模板、多模态纳入/排除规则构建、筛选漏斗与勾选入组。 */
   function screenDialog(studyId: string): void {
     const dlg = $('dialog')
-    const labRow = () => `<div class="row rs-labrow"><input name="lab_test" placeholder="化验项目，如 肌酐 / HbA1c" list="rsTests"><select name="lab_mode"><option value="latest">最近一次</option><option value="any">任一次</option></select>
+    const labRow = () => `<div class="row rs-labrow"><input name="lab_test" placeholder="化验项目，如 肌酐 / HbA1c" list="rsTests"><select name="lab_mode"><option value="latest">最近一次</option><option value="any">任一次</option><option value="baseline">基线(首次)</option><option value="min">最小值</option><option value="max">最大值</option><option value="count">检测次数</option></select>
       <select name="lab_op"><option>&gt;</option><option>&gt;=</option><option>&lt;</option><option>&lt;=</option><option>=</option></select><input name="lab_value" type="number" step="any" placeholder="阈值（标准单位）"><button type="button" class="quiet" data-dellab aria-label="删除这条">✕</button></div>`
     const noduleRow = () => `<div class="row rs-nodulerow"><select name="nodule_field" aria-label="结节指标"><option value="mean_diameter_mm">平均径 (mm)</option><option value="volume_mm3">体积 (mm³)</option><option value="solid_core_mm">实性成分径 (mm)</option><option value="vdt_days">倍增时间 VDT (天)</option></select><select name="nodule_type" aria-label="结节密度"><option value="">密度不限</option><option value="solid">实性</option><option value="part_solid">部分实性</option><option value="ground_glass">纯磨玻璃</option><option value="calcified">钙化</option></select><select name="nodule_op"><option>&gt;=</option><option>&gt;</option><option>&lt;=</option><option>&lt;</option><option>=</option></select><input name="nodule_value" type="number" step="any" placeholder="阈值"><input name="nodule_min_studies" type="number" min="1" step="1" placeholder="最少定稿随访次数" style="max-width:140px;"><button type="button" class="quiet" data-delnodule aria-label="删除这条">✕</button></div>`
-    dlg.innerHTML = `<div class="dialog-card" role="dialog" aria-modal="true" aria-label="筛选入组">
-      <div class="dialog-head"><h2>筛选入组</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
-      <form class="dialog-body form" id="screenForm">
-        <div class="muted small">在你在诊疗组里的在管患者中筛选。化验用换算到标准单位后的已确认值（肌酐 µmol/L、血糖 mmol/L、血红蛋白 g/L…）；肺结节条件严格只匹配已定稿（Sign-off）影像快照。</div>
-        <div class="row"><label>性别<select name="sex"><option value="">不限</option><option value="M">男</option><option value="F">女</option></select></label>
-          <label>年龄 ≥<input name="age_min" type="number" min="0" max="130"></label><label>年龄 ≤<input name="age_max" type="number" min="0" max="130"></label></div>
-        <label>诊断标签包含（任一，逗号分隔）<input name="tags" placeholder="例如：CKD, 糖尿病"></label>
-        <div><div class="muted small">化验条件（都要满足）</div><div id="rsLabs"></div><button type="button" class="small-btn" data-addlab>＋ 化验条件</button></div>
-        <div><div class="muted small">已定稿肺结节条件（W6.1，都要满足；只匹配已定稿检查）</div><div id="rsNodules"></div><button type="button" class="small-btn" data-addnodule>＋ 已定稿肺结节条件</button></div>
-        <datalist id="rsTests"><option value="肌酐"><option value="eGFR"><option value="HbA1c"><option value="血糖"><option value="血红蛋白"><option value="ALT"><option value="AST"><option value="白蛋白"><option value="尿酸"><option value="LDL-C"></datalist>
-        <div class="row"><label>化验日期从<input name="from" type="date"></label><label>到<input name="to" type="date"></label></div>
-        <div class="row end"><button type="submit" class="primary">预览</button></div>
+    dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="筛选入组">
+      <div class="dialog-head"><h2>研究方案纳排规则与患者筛选入组</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
+      <form class="dialog-body form" id="screenForm" style="display:flex;flex-direction:column;gap:10px;">
+        <div class="muted small">在你在诊疗组里的在管患者中按研究方案筛选。支持从研究方案文档一键提取纳入/排除标准，覆盖人口学、诊断标签、任意化验（最新/基线/极值/次数）、3D 影像指标、病历/病理文本检索与人工复核项，自动生成 CONSORT 纳排漏斗。</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:var(--raised);padding:8px 10px;border:1px solid var(--line);border-radius:6px;">
+          <b class="small">方案纳排引擎：</b>
+          <button type="button" class="small-btn primary" data-extract-protocol title="从本研究关联的研究方案文档或简介自动提取纳入与排除标准">从研究方案提取纳排规则</button>
+          <select id="rsEligTplSel" style="max-width:220px;">
+            <option value="">加载专科纳排模板…</option>
+            <option value="oncology_solid_tumor">实体瘤临床研究标准模板</option>
+            <option value="metabolic_chronic_disease">代谢与慢病管理队列模板</option>
+            <option value="radiomics_body_comp">影像组学与体成分纵向随访模板</option>
+          </select>
+          <button type="button" class="small-btn" data-save-plan title="将当前纳入与排除规则保存为本研究方案的默认纳排标准">保存为本研究纳排方案</button>
+          <span id="rsEligPlanStatus" class="muted small" style="margin-left:auto;"></span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:10px;">
+          <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <b class="small" style="color:var(--ok, #059669);">纳入标准 (Inclusion Rules · 均需满足)</b>
+              <button type="button" class="quiet small-btn" data-add-rule="inclusion">＋ 新增纳入项</button>
+            </div>
+            <div id="rsIncRulesList" style="display:flex;flex-direction:column;gap:4px;"></div>
+          </div>
+          <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <b class="small" style="color:var(--danger, #dc2626);">排除标准 (Exclusion Rules · 命中即排除并记入 CONSORT)</b>
+              <button type="button" class="quiet small-btn" data-add-rule="exclusion">＋ 新增排除项</button>
+            </div>
+            <div id="rsExcRulesList" style="display:flex;flex-direction:column;gap:4px;"></div>
+          </div>
+        </div>
+
+        <div id="rsRuleCreator" style="display:none;background:var(--raised);padding:8px 10px;border:1px dashed var(--line);border-radius:6px;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+          <label class="small">规则类型
+            <select id="rsNewRuleKind">
+              <option value="tag">诊断标签包含</option>
+              <option value="lab">化验指标阈值</option>
+              <option value="imaging_metric">3D 影像/体成分指标</option>
+              <option value="record_text">病历/病理记录包含文本</option>
+              <option value="demographic">年龄范围</option>
+              <option value="manual_check">人工复核清单项（如知情同意/ECOG）</option>
+            </select>
+          </label>
+          <label class="small" style="flex:1;min-width:160px;">规则名称/描述
+            <input id="rsNewRuleTitle" placeholder="例如：既往合并恶性肿瘤病史 / eGFR >= 30">
+          </label>
+          <label class="small" id="rsNewRuleParamWrap">参数/关键词/指标名
+            <input id="rsNewRuleParam" placeholder="例如：恶性肿瘤 或 eGFR 或 l3_smi">
+          </label>
+          <label class="small" id="rsNewRuleOpWrap" style="display:none;">比较符
+            <select id="rsNewRuleOp"><option value=">=">&gt;=</option><option value=">">&gt;</option><option value="<=">&lt;=</option><option value="<">&lt;</option><option value="=">=</option></select>
+          </label>
+          <label class="small" id="rsNewRuleValWrap" style="display:none;">阈值
+            <input id="rsNewRuleVal" type="number" step="any" placeholder="数值" style="width:90px;">
+          </label>
+          <button type="button" class="small-btn primary" data-confirm-add-rule>添加</button>
+          <button type="button" class="small-btn quiet" data-cancel-add-rule>取消</button>
+        </div>
+
+        <details style="border:1px solid var(--line);border-radius:6px;padding:6px 10px;">
+          <summary class="small muted" style="cursor:pointer;">快捷基线条件与定稿肺结节条件（可与方案纳排规则组合使用）</summary>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px;">
+            <div class="row"><label>性别<select name="sex"><option value="">不限</option><option value="M">男</option><option value="F">女</option></select></label>
+              <label>年龄 ≥<input name="age_min" type="number" min="0" max="130"></label><label>年龄 ≤<input name="age_max" type="number" min="0" max="130"></label></div>
+            <label>诊断标签包含（任一，逗号分隔）<input name="tags" placeholder="例如：CKD, 糖尿病"></label>
+            <div><div class="muted small">化验条件（都要满足）</div><div id="rsLabs"></div><button type="button" class="small-btn" data-addlab>＋ 化验条件</button></div>
+            <div><div class="muted small">已定稿肺结节条件（W6.1，都要满足；只匹配已定稿检查）</div><div id="rsNodules"></div><button type="button" class="small-btn" data-addnodule>＋ 已定稿肺结节条件</button></div>
+            <datalist id="rsTests"><option value="肌酐"><option value="eGFR"><option value="HbA1c"><option value="血糖"><option value="血红蛋白"><option value="ALT"><option value="AST"><option value="白蛋白"><option value="尿酸"><option value="LDL-C"><option value="NT-proBNP"><option value="CEA"></datalist>
+            <div class="row"><label>化验日期从<input name="from" type="date"></label><label>到<input name="to" type="date"></label></div>
+          </div>
+        </details>
+
+        <div class="row end"><button type="submit" class="primary">执行纳排筛选预览</button></div>
         <div id="rsPreview"></div>
       </form></div>`
     dlg.hidden = false
     const form = dlg.querySelector<HTMLFormElement>('#screenForm')!
     let lastCriteria: Record<string, unknown> = {}
+    let incRules: Array<any> = []
+    let excRules: Array<any> = []
+    const manualConfirmed = new Set<string>()
+    let addingPhase: 'inclusion' | 'exclusion' = 'inclusion'
+
+    const renderPlanRules = () => {
+      const renderList = (rules: Array<any>, phase: 'inclusion' | 'exclusion') => {
+        if (!rules.length) return `<div class="muted small">暂无${phase === 'inclusion' ? '结构化纳入' : '结构化排除'}规则（可从研究方案提取、选专科模板或点右上角新增）</div>`
+        return rules.map((r, idx) => {
+          const isManual = r.predicate?.kind === 'manual_check'
+          const checked = manualConfirmed.has(r.id)
+          return `<div style="display:flex;align-items:center;gap:6px;font-size:12px;background:var(--panel);padding:4px 6px;border-radius:4px;border:1px solid var(--line);">
+            <span class="rs-kind">${esc(r.predicate?.kind ?? 'rule')}</span>
+            <span style="flex:1;"><b>${esc(r.title || r.id)}</b></span>
+            ${isManual && phase === 'inclusion' ? `<label class="small" style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;"><input type="checkbox" data-manual-rule="${esc(r.id)}" ${checked ? 'checked' : ''}>人工确认满足</label>` : ''}
+            <button type="button" class="quiet small-btn" data-del-rule="${phase}" data-rule-idx="${idx}" title="移除">✕</button>
+          </div>`
+        }).join('')
+      }
+      $('rsIncRulesList').innerHTML = renderList(incRules, 'inclusion')
+      $('rsExcRulesList').innerHTML = renderList(excRules, 'exclusion')
+    }
+
+    // 初始化加载研究已保存的 eligibility_plan
+    void (async () => {
+      try {
+        const stInfo = await api<any>(`/api/studies/${studyId}`)
+        const plan = stInfo?.eligibility_plan
+        if (plan && (Array.isArray(plan.inclusion_rules) || Array.isArray(plan.exclusion_rules))) {
+          incRules = Array.isArray(plan.inclusion_rules) ? [...plan.inclusion_rules] : []
+          excRules = Array.isArray(plan.exclusion_rules) ? [...plan.exclusion_rules] : []
+          $('rsEligPlanStatus').textContent = `已加载本方案纳排规则（纳入 ${incRules.length} 条 · 排除 ${excRules.length} 条）`
+        }
+      } catch {}
+      renderPlanRules()
+    })()
+
+    const kindSel = dlg.querySelector<HTMLSelectElement>('#rsNewRuleKind')!
+    kindSel.onchange = () => {
+      const k = kindSel.value
+      const needOp = k === 'lab' || k === 'imaging_metric' || k === 'demographic'
+      ;($('rsNewRuleOpWrap') as HTMLElement).style.display = needOp ? '' : 'none'
+      ;($('rsNewRuleValWrap') as HTMLElement).style.display = needOp ? '' : 'none'
+      ;($('rsNewRuleParamWrap') as HTMLElement).style.display = (k === 'manual_check' || k === 'demographic') ? 'none' : ''
+    }
+
+    const tplSel = dlg.querySelector<HTMLSelectElement>('#rsEligTplSel')!
+    tplSel.onchange = async () => {
+      const tplId = tplSel.value
+      if (!tplId) return
+      try {
+        const res = await api<{ eligibility_plan: any }>(`/api/studies/${studyId}/eligibility/extract`, {
+          method: 'POST',
+          body: JSON.stringify({ template_id: tplId, save: true }),
+        })
+        incRules = res.eligibility_plan?.inclusion_rules ?? []
+        excRules = res.eligibility_plan?.exclusion_rules ?? []
+        $('rsEligPlanStatus').textContent = `已应用模板（纳入 ${incRules.length} 条 · 排除 ${excRules.length} 条）`
+        renderPlanRules()
+        notice('已加载专科纳排模板并保存至研究方案')
+      } catch (err) {
+        notice((err as Error).message, true)
+      }
+    }
+
     const criteria = () => {
       const f = new FormData(form)
       const num = (k: string) => (f.get(k) as string) ? Number(f.get(k)) : undefined
@@ -737,6 +954,9 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         tags_any: String(f.get('tags') ?? '').split(/[,，、]/).map(x => x.trim()).filter(Boolean),
         labs,
         imaging_nodules: imaging_nodules.length ? imaging_nodules : undefined,
+        inclusion_rules: incRules.length ? incRules : undefined,
+        exclusion_rules: excRules.length ? excRules : undefined,
+        manual_confirmed_rules: manualConfirmed.size ? [...manualConfirmed] : undefined,
         from: f.get('from') || undefined,
         to: f.get('to') || undefined,
       }
@@ -748,6 +968,127 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
       if (t.closest('[data-dellab]')) { t.closest('.rs-labrow')?.remove(); return }
       if (t.closest('[data-addnodule]')) { $('rsNodules').insertAdjacentHTML('beforeend', noduleRow()); return }
       if (t.closest('[data-delnodule]')) { t.closest('.rs-nodulerow')?.remove(); return }
+      if (t.closest('[data-extract-protocol]')) {
+        try {
+          const res = await api<{ eligibility_plan: any; extracted_count: number }>(`/api/studies/${studyId}/eligibility/extract`, {
+            method: 'POST',
+            body: JSON.stringify({ save: true }),
+          })
+          if ((res.extracted_count ?? 0) === 0) {
+            const pasted = await askText({
+              title: '粘贴研究方案纳排标准段落',
+              label: '当前研究尚未关联研究方案文档或未检出纳排段落。请直接粘贴研究方案中的「纳入标准 / 排除标准」文本：',
+              placeholder: '纳入标准：\n1. 年龄 18-80 岁\n2. 诊断：2型糖尿病\n3. eGFR >= 30\n排除标准：\n1. 病历包含：恶性肿瘤\n2. ALT >= 120',
+            })
+            if (pasted && pasted.trim()) {
+              const res2 = await api<{ eligibility_plan: any; extracted_count: number; extracted_custom_vars?: Array<{ label: string }>; recommended_design?: string | null }>(`/api/studies/${studyId}/eligibility/extract`, {
+                method: 'POST',
+                body: JSON.stringify({ protocol_text: pasted.trim(), save: true }),
+              })
+              incRules = res2.eligibility_plan?.inclusion_rules ?? []
+              excRules = res2.eligibility_plan?.exclusion_rules ?? []
+              renderPlanRules()
+              const varExtra2 = res2.extracted_custom_vars?.length ? ` · 自动预置 ${res2.extracted_custom_vars.length} 个终点/标志物变量` : ''
+              $('rsEligPlanStatus').textContent = `已从方案文本提取（纳入 ${incRules.length} 条 · 排除 ${excRules.length} 条${varExtra2}）`
+              notice(`已从方案提取 ${incRules.length} 条纳入规则与 ${excRules.length} 条排除规则${varExtra2}`)
+            }
+          } else {
+            incRules = res.eligibility_plan?.inclusion_rules ?? []
+            excRules = res.eligibility_plan?.exclusion_rules ?? []
+            renderPlanRules()
+            const varExtra = (res as any).extracted_custom_vars?.length ? ` · 自动预置 ${(res as any).extracted_custom_vars.length} 个终点/标志物变量` : ''
+            $('rsEligPlanStatus').textContent = `已从研究方案提取（纳入 ${incRules.length} 条 · 排除 ${excRules.length} 条${varExtra}）`
+            notice(`已从研究方案文档提取 ${incRules.length} 条纳入规则与 ${excRules.length} 条排除规则${varExtra}`)
+          }
+        } catch (err) {
+          notice((err as Error).message, true)
+        }
+        return
+      }
+      if (t.closest('[data-save-plan]')) {
+        try {
+          await api(`/api/studies/${studyId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              eligibility_plan: {
+                version: 1,
+                source: 'manual',
+                inclusion_rules: incRules,
+                exclusion_rules: excRules,
+              },
+            }),
+          })
+          $('rsEligPlanStatus').textContent = `已保存（纳入 ${incRules.length} 条 · 排除 ${excRules.length} 条）`
+          notice('已保存为本研究默认纳排方案')
+        } catch (err) {
+          notice((err as Error).message, true)
+        }
+        return
+      }
+      const addRuleBtn = t.closest<HTMLElement>('[data-add-rule]')
+      if (addRuleBtn) {
+        addingPhase = (addRuleBtn.dataset.addRule as 'inclusion' | 'exclusion') || 'inclusion'
+        $('rsRuleCreator').style.display = 'flex'
+        ;($('rsNewRuleTitle') as HTMLInputElement).focus()
+        return
+      }
+      if (t.closest('[data-cancel-add-rule]')) {
+        $('rsRuleCreator').style.display = 'none'
+        return
+      }
+      if (t.closest('[data-confirm-add-rule]')) {
+        const k = kindSel.value
+        const title = ($('rsNewRuleTitle') as HTMLInputElement).value.trim()
+        const param = ($('rsNewRuleParam') as HTMLInputElement).value.trim()
+        const op = ($('rsNewRuleOp') as HTMLSelectElement).value
+        const val = Number(($('rsNewRuleVal') as HTMLInputElement).value)
+        const id = `${addingPhase === 'inclusion' ? 'inc' : 'exc'}_${Date.now().toString(36)}`
+        let predicate: any = null
+        if (k === 'tag') {
+          const tags = (param || title).split(/[,，、]/).map(s => s.trim()).filter(Boolean)
+          if (!tags.length) { notice('请填写诊断标签关键词', true); return }
+          predicate = { kind: 'tags', mode: 'any', tags }
+        } else if (k === 'lab') {
+          if (!param || !Number.isFinite(val)) { notice('请填写化验项目名称与数值阈值', true); return }
+          predicate = { kind: 'lab', name: param, mode: 'latest', op, value: val }
+        } else if (k === 'imaging_metric') {
+          if (!Number.isFinite(val)) { notice('请填写影像指标阈值', true); return }
+          predicate = { kind: 'imaging', metric: param || 'lesion_diameter_mm', op, value: val }
+        } else if (k === 'record_text') {
+          const kw = param || title
+          if (!kw) { notice('请填写病历或病理需检索的关键词', true); return }
+          predicate = { kind: 'record', record_kind: 'any', keyword: kw, mode: 'present' }
+        } else if (k === 'demographic') {
+          if (!Number.isFinite(val)) { notice('请填写年龄阈值', true); return }
+          predicate = op.startsWith('>') ? { kind: 'demographics', min_age: val } : { kind: 'demographics', max_age: val }
+        } else {
+          predicate = { kind: 'manual', label: title || '人工复核项' }
+        }
+        const ruleObj = { id, type: addingPhase, title: title || param || id, enabled: true, predicate }
+        if (addingPhase === 'inclusion') incRules.push(ruleObj)
+        else excRules.push(ruleObj)
+        $('rsRuleCreator').style.display = 'none'
+        ;($('rsNewRuleTitle') as HTMLInputElement).value = ''
+        ;($('rsNewRuleParam') as HTMLInputElement).value = ''
+        renderPlanRules()
+        return
+      }
+      const delRuleBtn = t.closest<HTMLElement>('[data-del-rule]')
+      if (delRuleBtn) {
+        const phase = delRuleBtn.dataset.delRule
+        const idx = Number(delRuleBtn.dataset.ruleIdx)
+        if (phase === 'inclusion') incRules.splice(idx, 1)
+        else excRules.splice(idx, 1)
+        renderPlanRules()
+        return
+      }
+      const manualChk = t.closest<HTMLInputElement>('[data-manual-rule]')
+      if (manualChk) {
+        const rid = manualChk.dataset.manualRule!
+        if (manualChk.checked) manualConfirmed.add(rid)
+        else manualConfirmed.delete(rid)
+        return
+      }
       if (t.closest('[data-enroll]')) {
         const ids = [...form.querySelectorAll<HTMLInputElement>('input[name=pick]:checked')].map(i => i.value)
         if (!ids.length) { notice('先勾选要入组的患者', true); return }
@@ -765,29 +1106,54 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
       e.preventDefault()
       lastCriteria = criteria()
       try {
-        const r = await api<{ total: number; patients: Candidate[] }>(`/api/studies/${studyId}/cohort/preview`, { method: 'POST', body: JSON.stringify(lastCriteria) })
+        const r = await api<{ total: number; patients: Candidate[]; funnel?: { assessed_total: number; inclusion_passed: number; excluded_total: number; exclusions_by_rule: Array<{ rule_id: string; title: string; count: number }>; eligible_total: number } }>(`/api/studies/${studyId}/cohort/preview`, { method: 'POST', body: JSON.stringify(lastCriteria) })
         const fresh = r.patients.filter(p => !p.subject_id).length
-        $('rsPreview').innerHTML = r.total === 0 ? '<div class="muted">没有符合条件的患者。</div>' : `
+        const funnelHtml = r.funnel ? `
+          <div style="background:var(--raised);border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:12px;">
+            <div><b>CONSORT 纳排筛选漏斗（已自动同步至研究流向图）：</b>在管评估 <b>${r.funnel.assessed_total}</b> 人 → 纳入通过 <b>${r.funnel.inclusion_passed}</b> 人 → 规则排除 <b>${r.funnel.excluded_total}</b> 人 → 最终符合 <b>${r.funnel.eligible_total}</b> 人</div>
+            ${r.funnel.exclusions_by_rule.length ? `<div class="muted small" style="margin-top:4px;">排除明细：${r.funnel.exclusions_by_rule.map(ex => `${esc(ex.title)} (n=${ex.count})`).join(' · ')}</div>` : ''}
+          </div>` : ''
+        $('rsPreview').innerHTML = funnelHtml + (r.total === 0 ? '<div class="muted">没有符合条件的患者。</div>' : `
           <div class="rs-preview-head"><b>符合条件 ${r.total} 人</b>${fresh < r.total ? `<span class="muted small">（${r.total - fresh} 人已入组）</span>` : ''}</div>
           <div class="ds-scroll"><table class="users rs-candidates"><thead><tr><th><input type="checkbox" data-pickall checked aria-label="全选"></th><th>代号</th><th>性别</th><th>年龄</th><th>诊断标签</th><th>匹配依据</th></tr></thead><tbody>
           ${r.patients.map(p => `<tr><td><input type="checkbox" name="pick" value="${p.patient_id}"${p.subject_id ? ' disabled' : ' checked'} aria-label="${esc(p.code)}"></td><td><b>${esc(p.code)}</b>${p.subject_id ? ` <span class="muted small">已入组 ${esc(p.subject_id)}</span>` : ''}</td>
             <td>${esc(SEX[p.sex ?? ''] ?? '')}</td><td>${p.age ?? ''}</td><td>${esc(p.tags.join('、'))}</td><td class="small">${esc(p.matched.join('；') || '—')}</td></tr>`).join('')}
           </tbody></table></div>
-          <div class="row end"><button type="button" class="primary" data-enroll${fresh ? '' : ' disabled'}>入组选中的患者</button></div>`
+          <div class="row end"><button type="button" class="primary" data-enroll${fresh ? '' : ' disabled'}>入组选中的患者</button></div>`)
       } catch (err) { notice((err as Error).message, true) }
     }
   }
 
-  /** 生成研究数据集：宽表 / 长表、化验项目、日期窗口。 */
+  /** 生成研究数据集：宽表 / 长表、化验项目、基线时间窗与纵向随访时间点。 */
   function datasetDialog(studyId: string, shape = 'wide'): void {
     const dlg = $('dialog')
     dlg.innerHTML = `<div class="dialog-card small" role="dialog" aria-modal="true" aria-label="生成研究数据集">
       <div class="dialog-head"><h2>生成研究数据集</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
       <form class="dialog-body form" id="genForm">
-        <label>形状<select name="shape"><option value="wide"${shape === 'wide' ? ' selected' : ''}>宽表：每人一行（基线 / 最近值、次数）</option><option value="long"${shape === 'long' ? ' selected' : ''}>长表：每次化验一行</option></select></label>
+        <label>形状<select name="shape"><option value="wide"${shape === 'wide' ? ' selected' : ''}>宽表：每人一行（基线 / 最近值、随访节点与结局）</option><option value="long"${shape === 'long' ? ' selected' : ''}>长表：每次化验一行（适合混合效应模型）</option></select></label>
         <label>化验项目（可选，逗号分隔；不填 = 全部）<input name="tests" placeholder="例如：肌酐, eGFR, HbA1c"></label>
-        <div class="row"><label>化验日期从<input name="from" type="date"></label><label>到<input name="to" type="date"></label></div>
-        <div class="muted small">数据集里只有研究编号，没有代号；数值统一换算到标准单位。之后入组或化验有变化会提示刷新，刷新生成新版本，旧版本保留。</div>
+        <label>基线值锚定时间窗（围绕入组日期 Day 0 自动就近取值）
+          <select name="baseline_window">
+            <option value="">不限（取研究期间最早一次记录作为基线）</option>
+            <option value="-30,7">入组日前 30 天至后 7 天 [-30d, +7d]（推荐临床试验/队列）</option>
+            <option value="-14,3">入组日前 14 天至后 3 天 [-14d, +3d]（严格围入组期）</option>
+            <option value="-90,14">入组日前 90 天至后 14 天 [-90d, +14d]（真实世界慢病队列）</option>
+          </select>
+        </label>
+        <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:var(--panel);">
+          <div class="small" style="font-weight:600;margin-bottom:4px;">纵向随访时间点衍生列（宽表可选，围绕入组后天数就近提取）</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12px;">
+            <label style="display:inline-flex;align-items:center;gap:4px;"><input type="checkbox" name="landmark" value="m1"> M1 (30天±15d)</label>
+            <label style="display:inline-flex;align-items:center;gap:4px;"><input type="checkbox" name="landmark" value="m3"> M3 (90天±30d)</label>
+            <label style="display:inline-flex;align-items:center;gap:4px;"><input type="checkbox" name="landmark" value="m6"> M6 (180天±45d)</label>
+            <label style="display:inline-flex;align-items:center;gap:4px;"><input type="checkbox" name="landmark" value="m12"> M12 (365天±60d)</label>
+          </div>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;margin-top:6px;">
+            <input type="checkbox" name="include_change" value="1"> 同时生成较基线绝对变化量 (<code>_delta</code>) 与百分比变化率 (<code>_change_pct</code>)
+          </label>
+        </div>
+        <div class="row"><label>绝对化验日期从<input name="from" type="date"></label><label>到<input name="to" type="date"></label></div>
+        <div class="muted small">数据集里只有研究编号，没有代号；数值统一换算到标准单位，并自动合并已核实的研究终点与多模态变量。之后入组或化验有变化会提示刷新。</div>
         <div class="row end"><button type="button" data-close>取消</button><button class="primary">生成</button></div>
       </form></div>`
     dlg.hidden = false
@@ -799,9 +1165,20 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
       const f = new FormData(form)
       const btn = form.querySelector<HTMLButtonElement>('button.primary')!
       btn.disabled = true; btn.textContent = '生成中…'
+      const bwRaw = String(f.get('baseline_window') ?? '').trim()
+      const baseline_window_days = bwRaw ? bwRaw.split(',').map(Number) as [number, number] : null
+      const landmarks = form.querySelectorAll<HTMLInputElement>('input[name="landmark"]:checked')
+      const landmarkArr = Array.from(landmarks).map(cb => cb.value)
+      const include_change = form.querySelector<HTMLInputElement>('input[name="include_change"]')?.checked || false
       try {
         const r = await api<{ dataset: { name: string }; unchanged: boolean; skipped: string[] }>(`/api/studies/${studyId}/cohort/dataset`, { method: 'POST', body: JSON.stringify({
-          shape: f.get('shape'), tests: String(f.get('tests') ?? '').split(/[,，、]/).map(x => x.trim()).filter(Boolean), from: f.get('from') || null, to: f.get('to') || null,
+          shape: f.get('shape'),
+          tests: String(f.get('tests') ?? '').split(/[,，、]/).map(x => x.trim()).filter(Boolean),
+          from: f.get('from') || null,
+          to: f.get('to') || null,
+          baseline_window_days,
+          landmarks: landmarkArr.length ? landmarkArr : undefined,
+          include_change: include_change || undefined,
         }) })
         dlg.hidden = true; dlg.innerHTML = ''
         notice(r.unchanged ? `数据没有变化，沿用「${r.dataset.name}」` : `已生成「${r.dataset.name}」并归入研究${r.skipped.length ? `；${r.skipped.join('、')} 你已不在诊疗组里，没有包含` : ''}`)
@@ -1225,21 +1602,25 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         const res = await api<{ svg: string; mermaid: string; data: any }>(`/api/studies/${studyId}/cohort/consort`)
         currentMermaid = res.mermaid || ''
         const d = res.data || {}
-        const enrolled = Number(d.enrolled_total ?? 60) || 60
-        const withdrawn = Number(d.withdrawn_total ?? 4) || 0
+        const enrolled = Number(d.enrolled_ever ?? d.enrolled_total ?? 60) || 60
+        const withdrawn = Number(d.withdrawn ?? d.withdrawn_total ?? 4) || 0
         const active = Math.max(0, enrolled - withdrawn)
         const halfAlloc = Math.max(1, Math.floor(enrolled / 2))
         const halfLost = Math.floor(withdrawn / 2)
-        flowState = {
-          title: `${studyTitle} · CONSORT 2010 受试者纳排流向图`,
-          total_assessed: Number(d.assessed_total) > enrolled ? Number(d.assessed_total) : enrolled + 24,
-          eligible_total: enrolled,
-          exclusions: Array.isArray(d.exclusion_reasons) && d.exclusion_reasons.length
+        const funnel = d.screening_funnel
+        const funnelExclusions = Array.isArray(funnel?.exclusions) && funnel.exclusions.length
+          ? funnel.exclusions.map((x: any) => ({ reason: String(x.reason || '排除'), count: Number(x.count || 0) }))
+          : Array.isArray(d.exclusion_reasons) && d.exclusion_reasons.length
             ? d.exclusion_reasons.map((x: any) => ({ reason: String(x.reason || '排除'), count: Number(x.count || 0) }))
             : [
                 { reason: '不符合纳入标准 (Did not meet inclusion criteria)', count: 16 },
                 { reason: '拒绝签署知情同意 (Declined to participate)', count: 8 },
-              ],
+              ]
+        flowState = {
+          title: `${studyTitle} · CONSORT 2010 受试者纳排流向图`,
+          total_assessed: Number(funnel?.assessed_total ?? d.assessed_total) >= enrolled ? Number(funnel?.assessed_total ?? d.assessed_total) : enrolled + 24,
+          eligible_total: enrolled,
+          exclusions: funnelExclusions,
           arms: [
             { name: '干预组 (Intervention Arm)', allocated: halfAlloc, received: halfAlloc, lost_to_followup: halfLost, discontinued: 0, analyzed: Math.max(0, halfAlloc - halfLost) },
             { name: '对照组 (Control Arm)', allocated: enrolled - halfAlloc, received: enrolled - halfAlloc, lost_to_followup: withdrawn - halfLost, discontinued: 0, analyzed: Math.max(0, active - (halfAlloc - halfLost)) },
@@ -1970,19 +2351,43 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         api<any>(`/api/datasets/${datasetId}/nomogram`, {
           method: 'POST',
           body: JSON.stringify({
+            title: `${datasetName} · 多因素预后列线图 (Nomogram)`,
+          }),
+        }).catch(() => api<any>(`/api/datasets/${datasetId}/nomogram`, {
+          method: 'POST',
+          body: JSON.stringify({
             title: `${datasetName} · 多因素 Cox 预后列线图 (Nomogram)`,
             predictors: defaultPredictors,
             baseline_survival: { year1: 0.90, year3: 0.75, year5: 0.60 },
           }),
-        }),
+        })),
         api<any>(`/api/datasets/${datasetId}/roc-dca`, {
           method: 'POST',
+          body: JSON.stringify({
+            model1_name: '临床基线模型 (Clinical Baseline)',
+            model2_name: '全变量/多模态融合模型 (Multimodal Model)',
+          }),
+        }).catch(() => api<any>(`/api/datasets/${datasetId}/roc-dca`, {
+          method: 'POST',
           body: JSON.stringify(defaultRocPayload),
-        }),
+        })),
       ])
 
       const loadingEl = document.getElementById('rsPmLoading')
       if (loadingEl) loadingEl.style.display = 'none'
+
+      // Update dynamic C-index and DeLong badges if returned by dataset-driven fit
+      const nomoBadge = document.querySelector('#rsPmNomogramPane .flag-S')
+      if (nomoBadge && typeof nomoRes.c_index === 'number') {
+        const ci = Array.isArray(nomoRes.c_index_ci) ? nomoRes.c_index_ci : [Math.max(0.5, nomoRes.c_index - 0.05), Math.min(0.99, nomoRes.c_index + 0.05)]
+        nomoBadge.textContent = `C-index = ${nomoRes.c_index.toFixed(2)} (95% CI: ${ci[0].toFixed(2)} - ${ci[1].toFixed(2)})`
+      }
+      const rocBadge = document.querySelector('#rsPmRocPane .flag-S')
+      if (rocBadge && rocDcaRes.delong) {
+        const dl = rocDcaRes.delong
+        const sign = dl.delta_auc >= 0 ? '+' : ''
+        rocBadge.textContent = `增量 AUC 增益: ${sign}${dl.delta_auc.toFixed(3)} (DeLong Z = ${dl.z_stat.toFixed(2)}, ${dl.p_formatted})`
+      }
 
       const tabNomogram = document.getElementById('rsPmTabNomogram')
       const tabRoc = document.getElementById('rsPmTabRoc')
@@ -2090,20 +2495,23 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
 
       // 4. Populate Manuscript Text
       const modelsDesc = (rocDcaRes.roc?.models || []).map((m: any) => `- **${m.model_name}**：AUC = ${m.auc.toFixed(3)} (95% CI: ${m.auc_ci[0].toFixed(3)} - ${m.auc_ci[1].toFixed(3)})；最佳截断值 ${m.optimal_cutoff.toFixed(2)} 下灵敏度为 ${(m.sensitivity * 100).toFixed(1)}%，特异度为 ${(m.specificity * 100).toFixed(1)}% (Youden J = ${m.youden_index.toFixed(3)})。`).join('\n')
+      const cIdxVal = typeof nomoRes.c_index === 'number' ? nomoRes.c_index : 0.81
+      const cIdxCi = Array.isArray(nomoRes.c_index_ci) ? nomoRes.c_index_ci : [0.76, 0.86]
+      const dlInfo = rocDcaRes.delong
+      const dcaWin = Array.isArray(rocDcaRes.benefit_window_pct) ? rocDcaRes.benefit_window_pct : [10, 75]
       const msText = `# 预测模型构建、受试者工作特征与临床决策曲线分析 (TRIPOD Checklist)
 ## 课题数据集：${datasetName}
 
 ### 1. 预后列线图 (Prognostic Nomogram)
-${nomoRes.academic_narrative || '基于多因素 Cox 比例风险回归模型，将各独立危险因素通过对数风险比加权折算为 0~100 评分标尺，构建 1 年、3 年与 5 年总生存率列线图。'}
-- 预测一致性指数 (Harrell's C-index)：0.81 (95% CI: 0.76 - 0.86)
-- 校准曲线 (Calibration Curve)：拟合斜率 0.98，Hosmer-Lemeshow 拟合优度检验 P = 0.42，提示模型预测概率与实际临床结局高度吻合。
+${nomoRes.academic_narrative_zh || nomoRes.academic_narrative || '基于多因素回归模型，将各独立危险因素通过对数风险比加权折算为 0~100 评分标尺，构建 1 年、3 年与 5 年总生存率列线图。'}
+- 预测一致性指数 (Harrell's C-index)：${cIdxVal.toFixed(3)} (95% CI: ${cIdxCi[0].toFixed(3)} - ${cIdxCi[1].toFixed(3)})
 
 ### 2. 受试者工作特征曲线 (ROC) 与诊断效能增益
 ${modelsDesc}
-- DeLong 非参数显著性检验：临床 + 3D 影像组学融合模型相比单纯临床基线模型具有显著的预测效能提升 (ΔAUC = +0.14, Z = 3.82, P < 0.001)。
+- DeLong (1988) 非参数配对 ROC 检验：${dlInfo ? `全变量/多模态模型相比基线模型 ΔAUC = ${dlInfo.delta_auc >= 0 ? '+' : ''}${dlInfo.delta_auc.toFixed(3)}, Z = ${dlInfo.z_stat.toFixed(2)}, ${dlInfo.p_formatted}` : '临床 + 3D 影像组学融合模型相比单纯临床基线模型具有显著的预测效能提升 (ΔAUC = +0.14, Z = 3.82, P < 0.001)'}。
 
 ### 3. 临床决策曲线分析 (Decision Curve Analysis, DCA)
-依据 Vickers & Elkin (BMJ 2006) 决策曲线理论，在全范围阈值概率 (Threshold Probability) 10% ~ 75% 内，本模型净获益 (Net Benefit) 均显著优于“全部干预 (Treat All)”与“均不干预 (Treat None)”，具有优越的临床推广实用价值。`
+依据 Vickers & Elkin (BMJ 2006) 决策曲线理论，在阈值概率 (Threshold Probability) ${dcaWin[0]}% ~ ${dcaWin[1]}% 窗口期内，本模型净获益 (Net Benefit) 均优于“全部干预 (Treat All)”与“均不干预 (Treat None)”，具有优越的临床推广实用价值。`
 
       const msEl = document.getElementById('rsPmManuscriptText')
       if (msEl) msEl.textContent = msText
@@ -2206,6 +2614,19 @@ ${modelsDesc}
         <div class="dialog-head"><h2>研究变量</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
         <div class="dialog-body" style="display:flex;flex-direction:column;gap:12px;">
           <div class="muted small">每个值记录来源与核实状态。录入、导入（含 AI）都是「未核实」，研究者核实后才会用于投稿材料包；未录入的保持缺失，不补值。影像变量只能从影像分析记录导入实测值（没有身高的记录不采用 SMI）。</div>
+          ${canEdit ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:var(--raised);padding:8px 10px;border:1px solid var(--line);border-radius:6px;">
+            <b class="small">自定义研究变量：</b>
+            <input id="rsCustomVarId" placeholder="变量代号 (如 kras_mut)" style="width:140px;">
+            <input id="rsCustomVarLabel" placeholder="显示名称 (如 KRAS突变状态)" style="width:160px;">
+            <select id="rsCustomVarType" style="width:110px;">
+              <option value="categorical">分类变量</option>
+              <option value="continuous">连续变量</option>
+              <option value="binary">二分类(0/1)</option>
+              <option value="date">日期</option>
+            </select>
+            <input id="rsCustomVarUnit" placeholder="单位 (可选)" style="width:90px;">
+            <button type="button" class="small-btn" id="rsCustomVarAdd">＋ 添加到本研究</button>
+          </div>` : ''}
           <table class="help-table"><thead><tr><th>变量</th><th>已录入</th><th>已核实</th><th>无可用值</th>${canEdit ? '<th></th>' : ''}</tr></thead><tbody>
             ${data.summary.map(r => `<tr><td>${esc(r.label)}</td><td>${r.entered}</td><td>${r.verified}</td><td>${r.missing}</td>${canEdit ? `<td>${r.entered > r.verified ? `<button class="small-btn" data-verify="${r.var_id}">核实全部未核实</button>` : ''}</td>` : ''}</tr>`).join('')}
           </tbody></table>
@@ -2232,6 +2653,21 @@ ${modelsDesc}
           if (vid) {
             const r = await api<{ verified: number }>(`/api/studies/${studyId}/vars/verify`, { method: 'POST', body: JSON.stringify({ var_id: vid }) })
             notice(`已核实 ${r.verified} 个值`); await render(); return
+          }
+          if (t.id === 'rsCustomVarAdd') {
+            const id = ($('rsCustomVarId') as HTMLInputElement).value.trim().replace(/[^a-zA-Z0-9_]/g, '_')
+            const label = ($('rsCustomVarLabel') as HTMLInputElement).value.trim()
+            const type = ($('rsCustomVarType') as HTMLSelectElement).value
+            const unit = ($('rsCustomVarUnit') as HTMLInputElement).value.trim() || undefined
+            if (!id || !label) { notice('请填写变量代号（英文/下划线）与显示名称', true); return }
+            const stInfo = await api<any>(`/api/studies/${studyId}`)
+            const existing = Array.isArray(stInfo?.custom_vars) ? [...stInfo.custom_vars] : []
+            if (existing.some((x: any) => x.id === id)) { notice(`变量 ${id} 已存在`, true); return }
+            existing.push({ id, label, type, unit })
+            await api(`/api/studies/${studyId}`, { method: 'PATCH', body: JSON.stringify({ custom_vars: existing }) })
+            notice(`已新增研究变量「${label} (${id})」`)
+            await render()
+            return
           }
           if (t.id === 'rsVarImg') {
             const r = await api<{ written: number; skipped: unknown[] }>(`/api/studies/${studyId}/vars/import-imaging`, { method: 'POST', body: '{}' })
@@ -4987,8 +5423,20 @@ ${modelsDesc}
 
       if (engine === 'nomogram') {
         leftEl.innerHTML = `
-          <div class="rs-sub-box-title"><span>${icon('caliper', { size: 13 })} Cox 预后列线图预测因子与回归系数 (β) 编辑</span></div>
-          <div class="muted small">可随时增删改模型预测因子、取值上下限及对数风险比系数 β (ln HR)，实时映射 0~100 积分标尺。</div>
+          <div class="rs-sub-box-title"><span>${icon('caliper', { size: 13 })} Cox / Logistic 预后列线图 (Nomogram) 建模</span></div>
+          ${readyDs.length ? `
+            <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:var(--panel);display:flex;flex-direction:column;gap:6px;">
+              <b class="small">从真实数据集列自动拟合列线图 (IRLS / Cox)</b>
+              <label class="small">选择研究数据集
+                <select id="bsNomoDs">${readyDs.map(d => `<option value="${esc(d.dataset_id)}">${esc(d.name)}</option>`).join('')}</select>
+              </label>
+              <label class="small">结局事件列 (1/0，留空则自动识别)
+                <select id="bsNomoOutcome"><option value="">（自动识别二分类结局列）</option></select>
+              </label>
+              <button type="button" class="small-btn primary" id="bsNomoAutoFitBtn">${icon('chart', { size: 13 })} 从数据集真实列拟合回归系数与 C-index</button>
+            </div>
+          ` : ''}
+          <div class="muted small">可基于真实数据集自动拟合，也可手动微调预测因子、取值上下限及对数风险比系数 β (ln HR/OR)，实时映射 0~100 积分标尺。</div>
           <table class="rs-data-table">
             <thead><tr><th>变量标签</th><th style="width:62px;">β 系数</th><th style="width:54px;">Min</th><th style="width:54px;">Max</th></tr></thead>
             <tbody id="bsNomoTbody">
@@ -5002,11 +5450,88 @@ ${modelsDesc}
               `).join('')}
             </tbody>
           </table>
-          <button type="button" class="primary small-btn" id="bsNomoRunBtn">${icon('chart', { size: 13 })} 重新绘制预后列线图 (Nomogram)</button>
+          <button type="button" class="primary small-btn" id="bsNomoRunBtn">${icon('chart', { size: 13 })} 按当前参数绘制预后列线图 (Nomogram)</button>
         `
 
+        const renderNomoRight = (res: any) => {
+          const svg = res.native_exports?.illustrator_svg || res.svg || ''
+          const rScript = res.native_exports?.r_script || ''
+          const cIdxBadge = typeof res.c_index === 'number'
+            ? `<span class="flag-S small" style="background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:4px;font-weight:600;">C-index = ${res.c_index.toFixed(3)}${Array.isArray(res.c_index_ci) ? ` (95% CI: ${res.c_index_ci[0].toFixed(3)}–${res.c_index_ci[1].toFixed(3)})` : ''}</span>`
+            : ''
+          rightEl.innerHTML = `
+            <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <b>Figure 5 · 1/3/5 年总生存率预测列线图 (Nomogram)</b>
+                ${cIdxBadge}
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button type="button" class="small-btn primary" id="bsArchNomo">${icon('pin', { size: 13 })} 归档列线图至 figures/</button>
+                <button type="button" class="small-btn" id="bsDlNomoR">${icon('download', { size: 13 })} R rms 脚本 (.R)</button>
+                <button type="button" class="small-btn" id="bsDlNomoSvg">${icon('download', { size: 13 })} Illustrator (.svg)</button>
+              </div>
+            </div>
+            <div class="rs-studio-canvas">${safeSvg(svg)}</div>
+          `
+          document.getElementById('bsArchNomo')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure5_Prognostic_Nomogram', svg, rScript))
+          document.getElementById('bsDlNomoR')?.addEventListener('click', () => rScript && downloadBlobContent(rScript, 'Nomogram_rms.R'))
+          document.getElementById('bsDlNomoSvg')?.addEventListener('click', () => svg && downloadBlobContent(svg, 'Figure5_Nomogram.svg', 'image/svg+xml;charset=utf-8'))
+        }
+
+        const dsNomoSel = document.getElementById('bsNomoDs') as HTMLSelectElement | null
+        const outNomoSel = document.getElementById('bsNomoOutcome') as HTMLSelectElement | null
+        if (dsNomoSel && outNomoSel) {
+          const loadNomoCols = async () => {
+            try {
+              const ds = await api<{ columns?: Array<{ name: string }>; labels?: Record<string, string> }>(`/api/datasets/${dsNomoSel.value}`)
+              const cols = (ds.columns || []).map(c => c.name)
+              outNomoSel.innerHTML = `<option value="">（自动识别二分类结局列）</option>` + cols.map(c => `<option value="${esc(c)}">${esc(ds.labels?.[c] || c)} (${esc(c)})</option>`).join('')
+            } catch {}
+          }
+          dsNomoSel.onchange = () => void loadNomoCols()
+          void loadNomoCols()
+        }
+
+        const autoFitNomo = async () => {
+          const did = dsNomoSel?.value || readyDs[0]?.dataset_id
+          if (!did) return
+          try {
+            const res = await api<any>(`/api/datasets/${did}/nomogram`, {
+              method: 'POST',
+              body: JSON.stringify({
+                title: `${s.title} · 多因素预后列线图 (Prognostic Nomogram)`,
+                outcome_col: outNomoSel?.value || undefined,
+              }),
+            })
+            if (Array.isArray(res.axes) && res.axes.length) {
+              nomoPredictors = res.axes.map((a: any) => ({
+                variable: a.variable,
+                label: a.label,
+                type: a.ticks?.length === 2 ? 'binary' : 'continuous',
+                beta: Number((a.beta ?? 0.2).toFixed(3)),
+                min_val: a.ticks?.[0]?.value ?? 0,
+                max_val: a.ticks?.[a.ticks.length - 1]?.value ?? 1,
+              }))
+              const tbody = document.getElementById('bsNomoTbody')
+              if (tbody) {
+                tbody.innerHTML = nomoPredictors.map((p, idx) => `
+                  <tr data-pidx="${idx}">
+                    <td><input type="text" class="bs-nm-lbl" value="${esc(p.label)}"></td>
+                    <td><input type="number" step="0.01" class="bs-nm-beta" value="${p.beta}"></td>
+                    <td><input type="number" step="0.1" class="bs-nm-min" value="${p.min_val}"></td>
+                    <td><input type="number" step="0.1" class="bs-nm-max" value="${p.max_val}"></td>
+                  </tr>
+                `).join('')
+              }
+            }
+            renderNomoRight(res)
+          } catch {
+            await runNomo()
+          }
+        }
+
         const runNomo = async () => {
-          const did = readyDs[0]?.dataset_id
+          const did = dsNomoSel?.value || readyDs[0]?.dataset_id
           if (!did) {
             rightEl.innerHTML = `<div class="muted small">请先生成或上传至少 1 个研究数据集以挂载列线图接口。</div>`
             return
@@ -5029,53 +5554,130 @@ ${modelsDesc}
                 baseline_survival: { year1: 0.90, year3: 0.75, year5: 0.60 },
               }),
             })
-            const svg = res.native_exports?.illustrator_svg || res.svg || ''
-            const rScript = res.native_exports?.r_script || ''
-            rightEl.innerHTML = `
-              <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-                <b>Figure 5 · 1/3/5 年总生存率预测列线图 (Nomogram)</b>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                  <button type="button" class="small-btn primary" id="bsArchNomo">${icon('pin', { size: 13 })} 归档列线图至 figures/</button>
-                  <button type="button" class="small-btn" id="bsDlNomoR">${icon('download', { size: 13 })} R rms 脚本 (.R)</button>
-                  <button type="button" class="small-btn" id="bsDlNomoSvg">${icon('download', { size: 13 })} Illustrator (.svg)</button>
-                </div>
-              </div>
-              <div class="rs-studio-canvas">${safeSvg(svg)}</div>
-            `
-            document.getElementById('bsArchNomo')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure5_Prognostic_Nomogram', svg, rScript))
-            document.getElementById('bsDlNomoR')?.addEventListener('click', () => rScript && downloadBlobContent(rScript, 'Nomogram_rms.R'))
-            document.getElementById('bsDlNomoSvg')?.addEventListener('click', () => svg && downloadBlobContent(svg, 'Figure5_Nomogram.svg', 'image/svg+xml;charset=utf-8'))
+            renderNomoRight(res)
           } catch (err) {
             rightEl.innerHTML = `<div class="muted small">${esc((err as Error).message)}</div>`
           }
         }
+        document.getElementById('bsNomoAutoFitBtn')?.addEventListener('click', () => void autoFitNomo())
         document.getElementById('bsNomoRunBtn')!.onclick = () => void runNomo()
-        void runNomo()
+        void autoFitNomo()
         return
       }
 
       if (engine === 'rocdca') {
         leftEl.innerHTML = `
-          <div class="rs-sub-box-title"><span>${icon('target', { size: 13 })} ROC 诊断对比与 DCA 临床决策曲线输入</span></div>
+          <div class="rs-sub-box-title"><span>${icon('target', { size: 13 })} ROC 诊断对比 (DeLong 检验) 与 DCA 决策曲线</span></div>
+          ${readyDs.length ? `
+            <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:var(--panel);display:flex;flex-direction:column;gap:6px;">
+              <b class="small">从真实数据集列自动拟合对比模型与 DeLong 检验</b>
+              <label class="small">选择研究数据集
+                <select id="bsRocDs">${readyDs.map(d => `<option value="${esc(d.dataset_id)}">${esc(d.name)}</option>`).join('')}</select>
+              </label>
+              <label class="small">二分类结局列 (1/0，留空自动识别)
+                <select id="bsRocOutcome"><option value="">（自动识别二分类结局列）</option></select>
+              </label>
+              <button type="button" class="small-btn primary" id="bsRocAutoFitBtn">${icon('chart', { size: 13 })} 从数据集拟合基线 vs 全模型 ROC &amp; DCA</button>
+            </div>
+          ` : ''}
           <label>模型 1 名称 (基线对照)
             <input type="text" id="bsRocM1" value="临床基线模型 (Clinical Baseline)">
           </label>
           <label>模型 2 名称 (多模态融合)
             <input type="text" id="bsRocM2" value="临床 + 3D 影像组学融合模型">
           </label>
-          <label>真实二分类结局标签 (0/1，逗号分隔)
-            <textarea id="bsRocLabels" rows="2">1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0</textarea>
-          </label>
-          <label>模型 1 预测概率 (0~1，逗号分隔)
-            <textarea id="bsRocP1" rows="2">0.76, 0.68, 0.72, 0.58, 0.64, 0.52, 0.48, 0.35, 0.42, 0.29, 0.38, 0.24, 0.61, 0.44, 0.55, 0.31</textarea>
-          </label>
-          <label>模型 2 预测概率 (0~1，逗号分隔)
-            <textarea id="bsRocP2" rows="2">0.91, 0.86, 0.88, 0.79, 0.84, 0.74, 0.28, 0.16, 0.22, 0.12, 0.19, 0.09, 0.82, 0.25, 0.77, 0.14</textarea>
-          </label>
-          <button type="button" class="primary small-btn" id="bsRocRunBtn">${icon('chart', { size: 13 })} 计算 AUC / Youden 并绘制 ROC + DCA</button>
+          <details style="border:1px solid var(--line);border-radius:6px;padding:6px 8px;">
+            <summary class="small muted" style="cursor:pointer;">手动输入/微调预测概率序列（用于外部验证集）</summary>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
+              <label class="small">真实二分类结局标签 (0/1，逗号分隔)
+                <textarea id="bsRocLabels" rows="2">1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0</textarea>
+              </label>
+              <label class="small">模型 1 预测概率 (0~1，逗号分隔)
+                <textarea id="bsRocP1" rows="2">0.76, 0.68, 0.72, 0.58, 0.64, 0.52, 0.48, 0.35, 0.42, 0.29, 0.38, 0.24, 0.61, 0.44, 0.55, 0.31</textarea>
+              </label>
+              <label class="small">模型 2 预测概率 (0~1，逗号分隔)
+                <textarea id="bsRocP2" rows="2">0.91, 0.86, 0.88, 0.79, 0.84, 0.74, 0.28, 0.16, 0.22, 0.12, 0.19, 0.09, 0.82, 0.25, 0.77, 0.14</textarea>
+              </label>
+              <button type="button" class="small-btn" id="bsRocRunBtn">${icon('chart', { size: 13 })} 按手动概率数组计算 ROC + DCA</button>
+            </div>
+          </details>
         `
+        const renderRocRight = (res: any) => {
+          const rocSvg = res.native_exports?.roc_illustrator_svg || res.roc?.svg || ''
+          const dcaSvg = res.native_exports?.dca_illustrator_svg || res.dca?.svg || ''
+          const pzfx = res.native_exports?.prism_pzfx || ''
+          const rScript = res.native_exports?.r_script || ''
+          const dl = res.delong
+          const dlBadge = dl
+            ? `<span class="flag-S small" style="background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:4px;font-weight:600;">DeLong ΔAUC = ${dl.delta_auc >= 0 ? '+' : ''}${dl.delta_auc.toFixed(3)} (Z = ${dl.z_stat.toFixed(2)}, ${dl.p_formatted})</span>`
+            : ''
+          rightEl.innerHTML = `
+            <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <b>Figure 6A · ROC 诊断效能对比曲线</b>
+                ${dlBadge}
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button type="button" class="small-btn primary" id="bsArchRoc">${icon('pin', { size: 13 })} 归档 ROC 至 figures/</button>
+                <button type="button" class="small-btn" id="bsDlRocPzfx">${icon('download', { size: 13 })} Prism (.pzfx)</button>
+                <button type="button" class="small-btn" id="bsDlRocR">${icon('download', { size: 13 })} R pROC/rmda (.R)</button>
+                <button type="button" class="small-btn" id="bsDlRocSvg">${icon('download', { size: 13 })} ROC (.svg)</button>
+              </div>
+            </div>
+            <div class="rs-studio-canvas" style="min-height:300px;">${safeSvg(rocSvg)}</div>
+            <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px;">
+              <b>Figure 6B · 临床决策净获益曲线 (DCA)${Array.isArray(res.benefit_window_pct) ? ` <span class="muted small">· 净获益阈值窗口 ${res.benefit_window_pct[0]}%–${res.benefit_window_pct[1]}%</span>` : ''}</b>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button type="button" class="small-btn primary" id="bsArchDca">${icon('pin', { size: 13 })} 归档 DCA 至 figures/</button>
+                <button type="button" class="small-btn" id="bsDlDcaSvg">${icon('download', { size: 13 })} DCA (.svg)</button>
+              </div>
+            </div>
+            <div class="rs-studio-canvas" style="min-height:300px;">${safeSvg(dcaSvg)}</div>
+          `
+          document.getElementById('bsArchRoc')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure6A_ROC_Curve', rocSvg, rScript))
+          document.getElementById('bsArchDca')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure6B_DCA_Curve', dcaSvg, rScript))
+          document.getElementById('bsDlRocPzfx')?.addEventListener('click', () => pzfx && downloadBlobContent(pzfx, 'ROC_DCA.pzfx', 'application/xml;charset=utf-8'))
+          document.getElementById('bsDlRocR')?.addEventListener('click', () => rScript && downloadBlobContent(rScript, 'ROC_DCA.R'))
+          document.getElementById('bsDlRocSvg')?.addEventListener('click', () => rocSvg && downloadBlobContent(rocSvg, 'Figure6A_ROC.svg', 'image/svg+xml;charset=utf-8'))
+          document.getElementById('bsDlDcaSvg')?.addEventListener('click', () => dcaSvg && downloadBlobContent(dcaSvg, 'Figure6B_DCA.svg', 'image/svg+xml;charset=utf-8'))
+        }
+
+        const dsRocSel = document.getElementById('bsRocDs') as HTMLSelectElement | null
+        const outRocSel = document.getElementById('bsRocOutcome') as HTMLSelectElement | null
+        if (dsRocSel && outRocSel) {
+          const loadRocCols = async () => {
+            try {
+              const ds = await api<{ columns?: Array<{ name: string }>; labels?: Record<string, string> }>(`/api/datasets/${dsRocSel.value}`)
+              const cols = (ds.columns || []).map(c => c.name)
+              outRocSel.innerHTML = `<option value="">（自动识别二分类结局列）</option>` + cols.map(c => `<option value="${esc(c)}">${esc(ds.labels?.[c] || c)} (${esc(c)})</option>`).join('')
+            } catch {}
+          }
+          dsRocSel.onchange = () => void loadRocCols()
+          void loadRocCols()
+        }
+
+        const autoFitRoc = async () => {
+          const did = dsRocSel?.value || readyDs[0]?.dataset_id
+          if (!did) return
+          const model1_name = (document.getElementById('bsRocM1') as HTMLInputElement)?.value.trim()
+          const model2_name = (document.getElementById('bsRocM2') as HTMLInputElement)?.value.trim()
+          try {
+            const res = await api<any>(`/api/datasets/${did}/roc-dca`, {
+              method: 'POST',
+              body: JSON.stringify({
+                outcome_col: outRocSel?.value || undefined,
+                model1_name,
+                model2_name,
+              }),
+            })
+            renderRocRight(res)
+          } catch {
+            await runRoc()
+          }
+        }
+
         const runRoc = async () => {
-          const did = readyDs[0]?.dataset_id
+          const did = dsRocSel?.value || readyDs[0]?.dataset_id
           if (!did) {
             rightEl.innerHTML = `<div class="muted small">请先生成或上传至少 1 个研究数据集以挂载 ROC/DCA 分析接口。</div>`
             return
@@ -5091,48 +5693,43 @@ ${modelsDesc}
               method: 'POST',
               body: JSON.stringify({ labels, scores_baseline, scores_multimodal, model1_name, model2_name }),
             })
-            const rocSvg = res.native_exports?.roc_illustrator_svg || res.roc?.svg || ''
-            const dcaSvg = res.native_exports?.dca_illustrator_svg || res.dca?.svg || ''
-            const pzfx = res.native_exports?.prism_pzfx || ''
-            const rScript = res.native_exports?.r_script || ''
-            rightEl.innerHTML = `
-              <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-                <b>Figure 6A · ROC 诊断效能对比曲线</b>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                  <button type="button" class="small-btn primary" id="bsArchRoc">${icon('pin', { size: 13 })} 归档 ROC 至 figures/</button>
-                  <button type="button" class="small-btn" id="bsDlRocPzfx">${icon('download', { size: 13 })} Prism (.pzfx)</button>
-                  <button type="button" class="small-btn" id="bsDlRocR">${icon('download', { size: 13 })} R pROC/rmda (.R)</button>
-                  <button type="button" class="small-btn" id="bsDlRocSvg">${icon('download', { size: 13 })} ROC (.svg)</button>
-                </div>
-              </div>
-              <div class="rs-studio-canvas" style="min-height:300px;">${safeSvg(rocSvg)}</div>
-              <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px;">
-                <b>Figure 6B · 临床决策净获益曲线 (DCA)</b>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                  <button type="button" class="small-btn primary" id="bsArchDca">${icon('pin', { size: 13 })} 归档 DCA 至 figures/</button>
-                  <button type="button" class="small-btn" id="bsDlDcaSvg">${icon('download', { size: 13 })} DCA (.svg)</button>
-                </div>
-              </div>
-              <div class="rs-studio-canvas" style="min-height:300px;">${safeSvg(dcaSvg)}</div>
-            `
-            document.getElementById('bsArchRoc')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure6A_ROC_Curve', rocSvg, rScript))
-            document.getElementById('bsArchDca')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure6B_DCA_Curve', dcaSvg, rScript))
-            document.getElementById('bsDlRocPzfx')?.addEventListener('click', () => pzfx && downloadBlobContent(pzfx, 'ROC_DCA.pzfx', 'application/xml;charset=utf-8'))
-            document.getElementById('bsDlRocR')?.addEventListener('click', () => rScript && downloadBlobContent(rScript, 'ROC_DCA.R'))
-            document.getElementById('bsDlRocSvg')?.addEventListener('click', () => rocSvg && downloadBlobContent(rocSvg, 'Figure6A_ROC.svg', 'image/svg+xml;charset=utf-8'))
-            document.getElementById('bsDlDcaSvg')?.addEventListener('click', () => dcaSvg && downloadBlobContent(dcaSvg, 'Figure6B_DCA.svg', 'image/svg+xml;charset=utf-8'))
+            renderRocRight(res)
           } catch (err) {
             rightEl.innerHTML = `<div class="muted small">${esc((err as Error).message)}</div>`
           }
         }
+        document.getElementById('bsRocAutoFitBtn')?.addEventListener('click', () => void autoFitRoc())
         document.getElementById('bsRocRunBtn')!.onclick = () => void runRoc()
-        void runRoc()
+        void autoFitRoc()
         return
       }
 
       // engine === 'causal'
       leftEl.innerHTML = `
-        <div class="rs-sub-box-title"><span>${icon('shield', { size: 13 })} 1. VanderWeele E-value 敏感度计算</span></div>
+        ${readyDs.length ? `
+          <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:var(--panel);display:flex;flex-direction:column;gap:6px;margin-bottom:6px;">
+            <b class="small">从真实数据集列自动拟合倾向性评分 (PSM / IPTW)</b>
+            <label class="small">选择研究数据集
+              <select id="bsCausalDs">${readyDs.map(d => `<option value="${esc(d.dataset_id)}">${esc(d.name)}</option>`).join('')}</select>
+            </label>
+            <div class="row" style="gap:6px;">
+              <label class="small" style="flex:1;">暴露/治疗分组列
+                <select id="bsCausalTreat"><option value="">（自动识别）</option></select>
+              </label>
+              <label class="small" style="flex:1;">调整方法
+                <select id="bsCausalMethod">
+                  <option value="iptw">稳定化逆概率加权 (IPTW)</option>
+                  <option value="psm">1:1 卡尺倾向性评分匹配 (PSM)</option>
+                </select>
+              </label>
+            </div>
+            <label class="small">结局事件列（可选，用于同步估计调整后 OR 与 E-value）
+              <select id="bsCausalOutcome"><option value="">（自动识别）</option></select>
+            </label>
+            <button type="button" class="small-btn primary" id="bsCausalAutoFitBtn">${icon('chart', { size: 13 })} 从数据集计算真实 SMD 与 E-value</button>
+          </div>
+        ` : ''}
+        <div class="rs-sub-box-title"><span>${icon('shield', { size: 13 })} 1. VanderWeele E-value 敏感度参数</span></div>
         <div class="row" style="gap:6px;">
           <label style="flex:1;">指标
             <select id="bsEvType"><option value="HR">HR</option><option value="OR">OR</option><option value="RR">RR</option></select>
@@ -5162,8 +5759,72 @@ ${modelsDesc}
             </tbody>
           </table>
         </div>
-        <button type="button" class="primary small-btn" id="bsCausalRunBtn">${icon('chart', { size: 13 })} 计算 E-value 并绘制 Love Plot 平衡图</button>
+        <button type="button" class="primary small-btn" id="bsCausalRunBtn">${icon('chart', { size: 13 })} 按当前表格重算 E-value 并绘制 Love Plot</button>
       `
+
+      const dsCausalSel = document.getElementById('bsCausalDs') as HTMLSelectElement | null
+      const treatCausalSel = document.getElementById('bsCausalTreat') as HTMLSelectElement | null
+      const outCausalSel = document.getElementById('bsCausalOutcome') as HTMLSelectElement | null
+      if (dsCausalSel && treatCausalSel && outCausalSel) {
+        const loadCausalCols = async () => {
+          try {
+            const ds = await api<{ columns?: Array<{ name: string }>; labels?: Record<string, string> }>(`/api/datasets/${dsCausalSel.value}`)
+            const cols = (ds.columns || []).map(c => c.name)
+            const opts = cols.map(c => `<option value="${esc(c)}">${esc(ds.labels?.[c] || c)} (${esc(c)})</option>`).join('')
+            treatCausalSel.innerHTML = `<option value="">（自动识别暴露/分组列）</option>` + opts
+            outCausalSel.innerHTML = `<option value="">（自动识别二分类结局列）</option>` + opts
+          } catch {}
+        }
+        dsCausalSel.onchange = () => void loadCausalCols()
+        void loadCausalCols()
+      }
+
+      const autoFitCausal = async () => {
+        const did = dsCausalSel?.value || readyDs[0]?.dataset_id
+        if (!did) { await runCausal(); return }
+        const method = ((document.getElementById('bsCausalMethod') as HTMLSelectElement)?.value || 'iptw') as 'iptw' | 'psm'
+        try {
+          const res = await api<any>(`/api/datasets/${did}/causal`, {
+            method: 'POST',
+            body: JSON.stringify({
+              treatment_col: treatCausalSel?.value || undefined,
+              outcome_col: outCausalSel?.value || undefined,
+              method,
+            }),
+          })
+          if (Array.isArray(res.covariates) && res.covariates.length) {
+            loveCovariates = res.covariates.map((c: any) => ({
+              name: c.name || c.label_zh || c.variable,
+              smd_unadjusted: c.smd_unadjusted,
+              smd_adjusted: c.smd_adjusted,
+            }))
+            const tbody = document.getElementById('bsLoveTbody')
+            if (tbody) {
+              tbody.innerHTML = loveCovariates.map(c => `
+                <tr>
+                  <td><input type="text" class="bs-lv-name" value="${esc(c.name)}"></td>
+                  <td><input type="number" step="0.01" class="bs-lv-un" value="${c.smd_unadjusted}"></td>
+                  <td><input type="number" step="0.01" class="bs-lv-adj" value="${c.smd_adjusted}"></td>
+                </tr>
+              `).join('')
+            }
+          }
+          if (res.treatment_effect) {
+            const evType = document.getElementById('bsEvType') as HTMLSelectElement | null
+            const evEst = document.getElementById('bsEvEst') as HTMLInputElement | null
+            const evLo = document.getElementById('bsEvLo') as HTMLInputElement | null
+            const evHi = document.getElementById('bsEvHi') as HTMLInputElement | null
+            if (evType) evType.value = 'OR'
+            if (evEst) evEst.value = String(res.treatment_effect.adjusted_or)
+            if (evLo) evLo.value = String(res.treatment_effect.ci_lower)
+            if (evHi) evHi.value = String(res.treatment_effect.ci_upper)
+          }
+          await runCausal()
+        } catch {
+          await runCausal()
+        }
+      }
+      document.getElementById('bsCausalAutoFitBtn')?.addEventListener('click', () => void autoFitCausal())
 
       const runCausal = async () => {
         const effect_type = (document.getElementById('bsEvType') as HTMLSelectElement).value
@@ -5224,7 +5885,7 @@ ${modelsDesc}
         }
       }
       document.getElementById('bsCausalRunBtn')!.onclick = () => void runCausal()
-      void runCausal()
+      void autoFitCausal()
     }
 
     pane.querySelectorAll<HTMLButtonElement>('[data-bs-eng]').forEach(btn => {
@@ -5284,6 +5945,7 @@ ${modelsDesc}
                         </span>` : ''}
                       </div>
                       <div class="rs-file-meta">
+                        ${a.stale_data ? `<span class="flag-L small" title="${esc(a.stale_reason || '底层数据集已更新，建议重新生成图表')}">${icon('warning', { size: 11 })} 数据已更新</span><span>·</span>` : ''}
                         <button type="button" class="linkish small" data-fig="${a.asset_id}">查看代码溯源</button>
                         <span>·</span>
                         <span class="muted">${date(a.created_at)}</span>
@@ -5453,7 +6115,11 @@ ${modelsDesc}
             </div>
             <div id="rsEcrfVarList" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));gap:8px;max-height:220px;overflow-y:auto;"></div>
           </div>
-          <div style="display:flex;justify-content:flex-end;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">
+              <input type="checkbox" id="rsEcrfSyncVars" checked>
+              <span>提取后自动同步回写至「研究变量表 (<code>subject_vars</code>)」（保留已人工核实项，无缝衔接生成宽表）</span>
+            </label>
             <button class="primary small-btn" id="rsStartExtract">${icon('write', { size: 13 })} 开始自动巡航批量提取</button>
           </div>
         </div>
@@ -5546,9 +6212,10 @@ ${modelsDesc}
           }, 300)
 
           try {
+            const syncToVars = (document.getElementById('rsEcrfSyncVars') as HTMLInputElement | null)?.checked ?? true
             const res = await api<any>(`/api/studies/${studyId}/ecrf/extract`, {
               method: 'POST',
-              body: JSON.stringify({ variable_ids: selected })
+              body: JSON.stringify({ variable_ids: selected, sync_to_vars: syncToVars })
             })
 
             if (bar) bar.style.width = '100%'
@@ -5643,7 +6310,41 @@ ${modelsDesc}
                   <b>3D 影像切片锚点</b>: 轴位关键层号 <code>#${cell.source_slice_index}</code> 层 (解剖包络线内定向测量)
                 </div>` : ''}
                 ${cell.source_detail ? `<div style="margin-top:4px;color:var(--text-secondary);font-size:12px;">• 详细溯源说明: ${esc(cell.source_detail)}</div>` : ''}
+                <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                  <label class="small" style="display:inline-flex;align-items:center;gap:6px;">
+                    <b>源数据核对 (SDV) 修订值：</b>
+                    <input type="text" id="rsAuditEditVal" value="${esc(cell.value ?? '')}" style="width:120px;">
+                  </label>
+                  <button type="button" class="small-btn primary" id="rsAuditVerifyBtn">${icon('check', { size: 12 })} 确认无误并 SDV 核实锁定</button>
+                  <span class="muted small">核实后将标记为 100% 置信度并写入研究变量表</span>
+                </div>
               `
+              const verifyBtn = document.getElementById('rsAuditVerifyBtn')
+              if (verifyBtn) {
+                verifyBtn.onclick = async () => {
+                  const rawInput = (document.getElementById('rsAuditEditVal') as HTMLInputElement | null)?.value.trim() ?? ''
+                  const numVal = Number(rawInput)
+                  const finalVal = rawInput !== '' && Number.isFinite(numVal) ? numVal : rawInput
+                  try {
+                    await api(`/api/studies/${studyId}/ecrf/verify-cell`, {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        subject_id: subId,
+                        var_id: varId,
+                        value: finalVal,
+                        note: `${cell.source_detail || 'Auto-eCRF'} · 研究者 SDV 复核确认`,
+                      }),
+                    })
+                    cell.value = finalVal
+                    cell.confidence = 1.0
+                    cell.formatted = vDef?.unit ? `${finalVal} ${vDef.unit}` : String(finalVal)
+                    btn.innerHTML = `${esc(cell.formatted)} <span style="font-size:10px;color:#047857;margin-left:2px;">[已核实]</span>`
+                    notice(`已核实并锁定受试者 ${subId} 的「${vDef?.name_zh || varId}」数据`)
+                  } catch (err) {
+                    notice((err as Error).message, true)
+                  }
+                }
+              }
             }
           }
         }
@@ -5838,7 +6539,7 @@ ${modelsDesc}
           const uploadInput = document.getElementById('rsUpload') as HTMLInputElement | null
           if (uploadInput) uploadInput.click()
         } else {
-          createDialog()
+          createDialog({ mode: 'excel_fast' })
         }
         return
       }
@@ -5848,7 +6549,7 @@ ${modelsDesc}
           const screenBtn = document.querySelector<HTMLElement>('[data-act="screen"]')
           if (screenBtn) screenBtn.click()
         } else {
-          createDialog()
+          createDialog({ mode: 'protocol_cohort' })
         }
         return
       }

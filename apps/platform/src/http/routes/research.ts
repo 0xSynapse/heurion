@@ -2,7 +2,7 @@ import type { Context, Hono } from 'hono'
 import type { Store } from '../../store/db.ts'
 import { Access } from '../../research/access.ts'
 import { TenantError } from '../../auth/tenants.ts'
-import { StudyError, type StudyService } from '../../research/service.ts'
+import { StudyError, parseEligibilityPlan, type StudyService } from '../../research/service.ts'
 import { PatientError, type PatientService, type Actor } from '../../tenancy/patients.ts'
 import { CohortService } from '../../research/cohort.ts'
 import { EcrfService } from '../../research/ecrf.ts'
@@ -109,7 +109,16 @@ export function registerResearchRoutes(
   const co = () => { if (!cohort) throw new StudyError('unavailable', '研究入组需要启用患者模块', 400); return cohort }
   const cohortFailure = (c: Context, err: unknown) => err instanceof PatientError || err instanceof TenantError ? patientFailure(c, err) : studyFailure(c, err)
   app.get('/api/studies/:sid/cohort', c => { try { return c.json(co().list(me(c), c.req.param('sid'))) } catch (err) { return cohortFailure(c, err) } })
-  /** 预览：{sex?, age_min?, age_max?, tags_any?, labs?: [{test, mode: latest | any, op, value}], from?, to?} */
+  /** 从研究方案文档或方案文本提取纳排规则（或加载专科模板）：{protocol_text?, template_id?, save?} */
+  app.post('/api/studies/:sid/eligibility/extract', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({}))
+      return c.json(st().extractEligibilityFromProtocol(c.get('user'), c.req.param('sid'), body))
+    } catch (err) {
+      return studyFailure(c, err)
+    }
+  })
+  /** 预览：{sex?, age_min?, age_max?, tags_any?, labs?: [{test, mode: latest | any, op, value}], from?, to?, inclusion_rules?, exclusion_rules?, use_study_plan?, extract_from_protocol?} */
   app.post('/api/studies/:sid/cohort/preview', async c => { try { return c.json(co().preview(me(c), c.req.param('sid'), await c.req.json())) } catch (err) { return cohortFailure(c, err) } })
   /** 入组：{patient_ids, criteria?} */
   app.post('/api/studies/:sid/cohort', async c => { try { return c.json(co().enroll(me(c), c.req.param('sid'), await c.req.json()), 201) } catch (err) { return cohortFailure(c, err) } })
@@ -149,6 +158,8 @@ export function registerResearchRoutes(
       const study = st().get(c.get('user'), sid)
       const listRes = co().list(me(c), sid)
       const withdrawn = listRes.subjects.filter(s => s.status === 'withdrawn').length
+      const eligPlan = parseEligibilityPlan(study.eligibility_plan)
+      const savedFunnel = eligPlan?.last_funnel
       const diagramData: EnrollmentFlowData = {
         title: `${study.title} · Participant Flow`,
         enrolled_ever: listRes.active + withdrawn,
@@ -156,7 +167,18 @@ export function registerResearchRoutes(
         inaccessible: 0,
         analyzed: listRes.active,
         arms: [],
-        note: '平台未记录筛选人数、排除原因与治疗分组，因此未绘制 Assessed / Excluded / Allocation 环节。',
+        note: savedFunnel
+          ? '已关联最近一次研究方案纳排筛选漏斗与入组记录；未登记治疗分组时暂不绘制 Allocation 分组环节。'
+          : '平台未记录筛选人数、排除原因与治疗分组，因此未绘制 Assessed / Excluded / Allocation 环节。',
+        ...(savedFunnel
+          ? {
+              screening_funnel: {
+                assessed_total: savedFunnel.assessed_total,
+                excluded_total: savedFunnel.excluded_total,
+                exclusions: savedFunnel.exclusions_by_rule.map(e => ({ reason: e.title, count: e.count })),
+              },
+            }
+          : {}),
       }
       const svg = renderEnrollmentFlowSvg(diagramData)
       const mermaid = renderEnrollmentFlowMermaid(diagramData)
@@ -353,13 +375,20 @@ export function registerResearchRoutes(
           ? category
           : String(body.subtype || body.plotType || body.plot_type || 'grotta')) as 'grotta' | 'sankey' | 'upset' | 'logistic' | 'survival'
         const did = typeof body.dataset_id === 'string' && body.dataset_id.trim() ? body.dataset_id.trim() : undefined
-        const fallbackRecords = () => (Array.isArray(body.records) && body.records.length > 0 ? body.records : buildDefaultClinicalCohortRecords())
+        const hasInlineRecords = Array.isArray(body.records) && body.records.length > 0
+        const isDemoData = !did && !hasInlineRecords
+        const fallbackRecords = () => (hasInlineRecords ? body.records : buildDefaultClinicalCohortRecords())
+        const dsCols = did && datasets ? (datasets.get(userId, did).columns || []).map(c => c.name).filter(n => !/^(id|pid|uuid|subject_id)$/i.test(n)) : []
+        const pickCol = (re: RegExp, fallbackIdx = 0, demoCol = '') => {
+          if (!did || !dsCols.length) return demoCol
+          return dsCols.find(c => re.test(c)) || dsCols[Math.min(fallbackIdx, dsCols.length - 1)] || demoCol
+        }
 
         let result: any
         if (subtype === 'grotta') {
           const opts = {
-            group_col: body.group_col || '第一次治疗方式',
-            score_col: body.score_col || '确诊时mRS',
+            group_col: body.group_col || pickCol(/group|arm|treat|分组|治疗|sex|性别/i, 0, '第一次治疗方式'),
+            score_col: body.score_col || pickCol(/score|mrs|grade|stage|ecog|nyha|评分|分级|分期/i, 1, '确诊时mRS'),
             score_order: Array.isArray(body.score_order) && body.score_order.length ? body.score_order : undefined,
             labels: body.labels,
             title: body.title || 'Functional Outcome (mRS) Shift Analysis (Grotta Plot)',
@@ -367,8 +396,9 @@ export function registerResearchRoutes(
           result = did && datasets ? datasets.grotta(userId, did, opts) : generateGrottaPlot(fallbackRecords(), opts)
         } else if (subtype === 'sankey') {
           const hasStageCols = Array.isArray(body.stage_cols) && body.stage_cols.filter(Boolean).length >= 2
+          const defaultStages = did && dsCols.length >= 2 ? dsCols.slice(0, Math.min(3, dsCols.length)) : ['第一次治疗方式', '闭塞程度', '治疗后出血']
           const opts = {
-            stage_cols: hasStageCols ? body.stage_cols.filter(Boolean) : (!body.sequence_col ? ['第一次治疗方式', '闭塞程度', '治疗后出血'] : undefined),
+            stage_cols: hasStageCols ? body.stage_cols.filter(Boolean) : (!body.sequence_col ? defaultStages : undefined),
             sequence_col: body.sequence_col || undefined,
             code_map: body.code_map,
             outcome_col: body.outcome_col || undefined,
@@ -378,12 +408,13 @@ export function registerResearchRoutes(
           }
           result = did && datasets ? datasets.sankey(userId, did, opts) : generateSankeyDiagram(fallbackRecords(), opts)
         } else if (subtype === 'upset') {
+          const defaultBinCols = did && dsCols.length >= 2 ? dsCols.slice(0, Math.min(5, dsCols.length)) : ['额叶', '颞叶', '顶叶', '枕叶', '基底节', '脑室']
           const cols = Array.isArray(body.binary_cols) && body.binary_cols.filter(Boolean).length >= 2
             ? body.binary_cols.filter(Boolean)
-            : ['额叶', '颞叶', '顶叶', '枕叶', '基底节', '脑室']
+            : defaultBinCols
           const opts = {
             binary_cols: cols,
-            outcome_col: body.outcome_col || '治疗后出血',
+            outcome_col: body.outcome_col || pickCol(/status|event|outcome|dead|出血|结局|事件/i, dsCols.length - 1, '治疗后出血'),
             positive_value: body.positive_value,
             max_intersections: body.max_intersections,
             labels: body.labels,
@@ -391,11 +422,13 @@ export function registerResearchRoutes(
           }
           result = did && datasets ? datasets.upset(userId, did, opts) : generateUpSetPlot(fallbackRecords(), opts)
         } else if (subtype === 'logistic') {
+          const outCol = body.outcome_col || pickCol(/status|event|outcome|dead|出血|结局|事件/i, dsCols.length - 1, '治疗后出血')
+          const defaultCovs = did && dsCols.length >= 2 ? dsCols.filter(c => c !== outCol).slice(0, 4) : ['供血动脉扩张', '单一动脉供血', '基底节', '年龄']
           const covs = Array.isArray(body.covariates) && body.covariates.filter(Boolean).length >= 1
             ? body.covariates.filter(Boolean)
-            : ['供血动脉扩张', '单一动脉供血', '基底节', '年龄']
+            : defaultCovs
           const opts = {
-            outcome_col: body.outcome_col || '治疗后出血',
+            outcome_col: outCol,
             covariates: covs,
             positive_value: body.positive_value,
             labels: body.labels,
@@ -404,13 +437,13 @@ export function registerResearchRoutes(
           result = did && datasets ? datasets.logistic(userId, did, opts) : generateLogisticRegression(fallbackRecords(), opts)
         } else {
           const opts = {
-            time_col: body.time_col || 'followup_months',
+            time_col: body.time_col || pickCol(/time|month|day|follow|surv|os|随访|时间/i, 0, 'followup_months'),
             start_date_col: body.start_date_col || undefined,
             event_date_col: body.event_date_col || undefined,
             censor_date_col: body.censor_date_col || undefined,
             default_censor_date: body.default_censor_date || undefined,
-            event_col: body.event_col || '治疗后出血',
-            group_col: body.group_col || '第一次治疗方式',
+            event_col: body.event_col || pickCol(/status|event|outcome|dead|出血|结局|事件/i, 1, '治疗后出血'),
+            group_col: body.group_col || pickCol(/group|arm|treat|分组|治疗/i, 2, '第一次治疗方式'),
             covariates: Array.isArray(body.covariates) ? body.covariates : undefined,
             time_unit: body.time_unit || 'Months',
             title: body.title || 'Kaplan-Meier Event-Free Survival Analysis',
@@ -448,6 +481,7 @@ export function registerResearchRoutes(
         return c.json({
           category: 'clinical_cohort',
           subtype,
+          is_demo_data: isDemoData,
           svg: svgOut,
           illustrator_svg: svgOut,
           prism_pzfx: pzfxOut,
@@ -871,15 +905,24 @@ export function registerResearchRoutes(
     try {
       if (!ecrf) throw new StudyError('unavailable', 'eCRF 服务未初始化', 400)
       st().get(c.get('user'), c.req.param('sid'))
-      return c.json(ecrf.getTemplate())
+      return c.json(ecrf.getTemplate(me(c), c.req.param('sid')))
     } catch (err) { return studyFailure(c, err) }
   })
   app.post('/api/studies/:sid/ecrf/extract', async c => {
     try {
       if (!ecrf) throw new StudyError('unavailable', 'eCRF 服务未初始化', 400)
       const sid = c.req.param('sid')
-      const body = await c.req.json<{ variable_ids?: string[] }>().catch(() => ({} as { variable_ids?: string[] }))
-      const res = await ecrf.extractCohortEcrf(me(c), sid, body.variable_ids)
+      const body = await c.req.json<{ variable_ids?: string[]; sync_to_vars?: boolean }>().catch(() => ({} as { variable_ids?: string[]; sync_to_vars?: boolean }))
+      const res = await ecrf.extractCohortEcrf(me(c), sid, body.variable_ids, { sync_to_vars: Boolean(body.sync_to_vars) })
+      return c.json(res)
+    } catch (err) { return cohortFailure(c, err) }
+  })
+  app.post('/api/studies/:sid/ecrf/verify-cell', async c => {
+    try {
+      if (!ecrf) throw new StudyError('unavailable', 'eCRF 服务未初始化', 400)
+      const sid = c.req.param('sid')
+      const body = await c.req.json<any>().catch(() => ({}))
+      const res = ecrf.verifyCell(me(c), sid, body)
       return c.json(res)
     } catch (err) { return cohortFailure(c, err) }
   })
@@ -954,10 +997,15 @@ export function registerResearchRoutes(
     const form = await c.req.parseBody({ all: true })
     const files = ([] as unknown[]).concat(form.file ?? []).filter((f): f is File => f instanceof File)
     if (files.length === 0) return c.json({ error: '请选择文件' }, 400)
+    const sheetOpt = typeof form.sheet === 'string' && form.sheet.trim() ? form.sheet.trim() : undefined
+    const dictSheetOpt = typeof form.dict_sheet === 'string' ? form.dict_sheet.trim() : undefined
     const out: unknown[] = []
     for (const f of files) {
       try {
-        const r = datasets.upload(c.get('user'), f.name, new Uint8Array(await f.arrayBuffer()))
+        const r = datasets.upload(c.get('user'), f.name, new Uint8Array(await f.arrayBuffer()), {
+          sheet: sheetOpt,
+          dict_sheet: dictSheetOpt,
+        })
         out.push({ ...r.dataset, duplicate: r.duplicate })
       } catch (err) {
         if (err instanceof DatasetError) out.push({ filename: f.name, error: err.message })
@@ -973,8 +1021,17 @@ export function registerResearchRoutes(
     try { return c.json(datasets!.preview(c.get('user'), c.req.param('did'), Math.min(5000, Number(c.req.query('limit')) || 50))) } catch (err) { return datasetFailure(c, err) }
   })
   app.patch('/api/datasets/:did', async c => {
-    const body = await c.req.json<{ name?: string; labels?: Record<string, string> }>()
+    const body = await c.req.json<{ name?: string; labels?: Record<string, string>; value_labels?: Record<string, Record<string, string>> }>()
     try { return c.json(datasets!.update(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
+  })
+  /** 多工作表 Excel 切换主数据表与数据字典页并重新联动解析 */
+  app.post('/api/datasets/:did/sheets', async c => {
+    const body = await c.req.json<{ sheet?: string; dict_sheet?: string | null }>().catch(() => ({} as { sheet?: string; dict_sheet?: string | null }))
+    try { return c.json(await datasets!.selectSheets(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
+  })
+  /** 触发 AI 多工作表结构与数据字典深度语义核验（仅传表结构与字典文本，绝不传受试者行数据） */
+  app.post('/api/datasets/:did/ai-audit', async c => {
+    try { return c.json(await datasets!.auditWorkbook(c.get('user'), c.req.param('did'))) } catch (err) { return datasetFailure(c, err) }
   })
   /** 疑似身份信息的列：drop 删掉，keep 确认不是身份信息（每一列二选一）。 */
   app.post('/api/datasets/:did/phi', async c => {
@@ -1073,24 +1130,40 @@ export function registerResearchRoutes(
     try { return c.json(datasets.upset(c.get('user'), c.req.param('did'), body)) } catch (err) { return datasetFailure(c, err) }
   })
 
-  // —— 预后列线图与预测模型 (Nomogram & ROC / DCA) ——
+  // —— 预后列线图与预测模型 (Nomogram & ROC / DCA & Causal PSM/IPTW) ——
   app.post('/api/datasets/:did/nomogram', async c => {
     if (!datasets) return c.json({ error: '数据集未启用' }, 503)
     const did = c.req.param('did')
     const body = await c.req.json<any>().catch(() => ({}))
     try {
       const ds = datasets.get(c.get('user'), did)
+      if (typeof body.outcome_col === 'string' && body.outcome_col.trim() && Array.isArray(body.covariates) && body.covariates.length > 0) {
+        const res = datasets.nomogram(c.get('user'), did, {
+          title: body.title || `${ds.name} · 预后列线图 (Nomogram)`,
+          outcome_col: body.outcome_col.trim(),
+          time_col: typeof body.time_col === 'string' && body.time_col.trim() ? body.time_col.trim() : undefined,
+          covariates: body.covariates,
+          labels: body.labels,
+          positive_value: body.positive_value,
+        })
+        return c.json(res)
+      }
       if (body.predictors && Array.isArray(body.predictors) && body.predictors.length > 0) {
         const res = buildNomogram({
           title: body.title || `${ds.name} · 预后列线图 (Nomogram)`,
           predictors: body.predictors,
-          baseline_survival: body.baseline_survival
+          baseline_survival: body.baseline_survival,
+          c_index: body.c_index,
+          c_index_ci: body.c_index_ci,
         })
         return c.json(res)
       }
-      // 不再用写死的 β 系数画「示例」列线图：没有真实拟合的模型系数就拒绝
-      return c.json({ error: '需要提供由真实模型拟合得到的预测因子与系数 (predictors)；平台不会用示例系数生成列线图' }, 400)
-    } catch (err) { return datasetFailure(c, err) }
+      // 不再用写死的 β 系数画「示例」列线图：没有真实拟合的模型系数或数据集列就拒绝
+      return c.json({ error: '需要选择数据集结局列 (outcome_col) 与预测变量列 (covariates)，或提供由真实模型拟合得到的预测因子与系数 (predictors)' }, 400)
+    } catch (err) {
+      if (err instanceof DatasetError) return datasetFailure(c, err)
+      return c.json({ error: (err as Error).message || '列线图拟合失败' }, 400)
+    }
   })
 
   app.post('/api/datasets/:did/roc-dca', async c => {
@@ -1099,13 +1172,34 @@ export function registerResearchRoutes(
     const body = await c.req.json<any>().catch(() => ({}))
     try {
       const ds = datasets.get(c.get('user'), did)
+      if (typeof body.outcome_col === 'string' && body.outcome_col.trim() && Array.isArray(body.baseline_covariates) && body.baseline_covariates.length > 0) {
+        const res = datasets.rocDca(c.get('user'), did, {
+          dataset_name: ds.name,
+          outcome_col: body.outcome_col.trim(),
+          baseline_covariates: body.baseline_covariates,
+          full_covariates: Array.isArray(body.full_covariates) ? body.full_covariates : undefined,
+          model1_name: body.model1_name,
+          model2_name: body.model2_name,
+          labels: body.labels,
+          positive_value: body.positive_value,
+        })
+        return c.json({
+          ...res,
+          native_exports: {
+            ...res.native_exports,
+            roc_illustrator_svg: upgradeSvgForIllustrator(res.roc.svg, { title: `${ds.name} ROC Curve` }),
+            dca_illustrator_svg: upgradeSvgForIllustrator(res.dca.svg, { title: `${ds.name} DCA Curve` }),
+          },
+        })
+      }
+
       // 结局标签与两组模型预测概率必须来自真实数据，不提供示例数组
       const isNumArr = (x: unknown): x is number[] => Array.isArray(x) && x.length > 0 && x.every(v => typeof v === 'number' && Number.isFinite(v))
       const labels = body.labels
       const probs1 = body.scores_baseline
       const probs2 = body.scores_multimodal
       if (!isNumArr(labels) || !isNumArr(probs1) || !isNumArr(probs2) || probs1.length !== labels.length || probs2.length !== labels.length) {
-        return c.json({ error: '需要提供等长的真实结局标签 (labels) 与两组模型预测概率 (scores_baseline、scores_multimodal)；平台不会用示例数据生成 ROC / DCA' }, 400)
+        return c.json({ error: '需要选择数据集结局列 (outcome_col) 与模型预测变量列 (baseline_covariates)，或提供等长的真实结局标签 (labels) 与预测概率 (scores_baseline、scores_multimodal)' }, 400)
       }
 
       const roc1 = calculateRocCurve(labels, probs1, body.model1_name || '临床基线模型 (Clinical Baseline)', '#94a3b8')
@@ -1127,7 +1221,32 @@ export function registerResearchRoutes(
           dca_illustrator_svg: upgradeSvgForIllustrator(dcaSvg, { title: `${ds.name} DCA Curve` }),
         },
       })
-    } catch (err) { return datasetFailure(c, err) }
+    } catch (err) {
+      if (err instanceof DatasetError) return datasetFailure(c, err)
+      return c.json({ error: (err as Error).message || 'ROC / DCA 分析失败' }, 400)
+    }
+  })
+
+  app.post('/api/datasets/:did/causal', async c => {
+    if (!datasets) return c.json({ error: '数据集未启用' }, 503)
+    const did = c.req.param('did')
+    const body = await c.req.json<any>().catch(() => ({}))
+    if (!body.treatment_col || !Array.isArray(body.covariates) || body.covariates.length === 0) {
+      return c.json({ error: '必须指定暴露/治疗分组列 (treatment_col) 与至少 1 个混杂协变量列 (covariates)' }, 400)
+    }
+    try {
+      const res = datasets.causal(c.get('user'), did, body)
+      return c.json({
+        ...res,
+        love_plot: {
+          ...res.love_plot,
+          illustrator_svg: upgradeSvgForIllustrator(res.love_plot.svg, { title: body.title || 'Covariate Balance Love Plot' }),
+        },
+      })
+    } catch (err) {
+      if (err instanceof DatasetError) return datasetFailure(c, err)
+      return c.json({ error: (err as Error).message || '倾向性评分与因果推断分析失败' }, 400)
+    }
   })
 
   // —— 全局 Co-Pilot 用户身份强绑定与关联上下文越权防线 ——

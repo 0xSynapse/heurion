@@ -1676,12 +1676,21 @@ else:
         <figcaption>图 5：AI 权限申请的可审计性架构——将每一次跨边界权限请求（文件锁、主干提交、外网与记忆访问）固化为带证据载荷与防篡改哈希链的审批账本。</figcaption>
       </figure>
 
-      <pre><code>// 跨边界权限申请与防篡改哈希链审计伪代码
+      <pre><code>// 跨边界权限申请与防篡改哈希链审计伪代码 (含 One-Shot 证据哈希锚定防 TOCTOU 调包)
 function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rationale, evidence):
-  ticket = { id: newEscalationId(), agent_id, user_id, perm_type, scope, rationale, evidence, ts: now() }
-  decision = evaluatePolicyOrAwaitHuman(ticket) // 评估策略白名单或生成待人类审批单 (APPROVED | REJECTED | DENIED)
-  audit_ledger.appendHashChained({ ...ticket, decision, prev_hash: audit_ledger.tailHash() }) // 无论准驳均永久留痕
+  evidence_hash = sha256(canonicalJson(evidence)) // 锚定审批时刻的精确 Unified Diff 与开关参数
+  ticket = { id: newEscalationId(), agent_id, user_id, perm_type, scope, rationale, evidence, evidence_hash, expires_at: now() + 30m }
+  decision = evaluatePolicyOrAwaitHuman(ticket)   // 评估策略租约（单次租约强制校验 sha256:<evidence_hash>）或生成待人类审批单
+  audit_ledger.appendHashChained({ ...ticket, decision, prev_hash: audit_ledger.tailHash() }) // APPROVED / DENIED / EXPIRED 全状态留痕
   return decision</code></pre>
+
+      <p>为了彻底封堵高自主性 Agent 在极端博弈下“绕过权限审批”的所有攻击路径，内核在权限申请与执行层之间实施了四重硬件级防绕过守卫：</p>
+      <ul>
+        <li><strong>防 TOCTOU“狸猫换太子”证据哈希锚定（<code>sha256:&lt;evidence_hash&gt;</code>）</strong>：当人类对某张提权单授予单次批准（<code>One-Shot Lease</code>）时，内核将该租约的 <code>resource_pattern</code> 密码学锁定为审批时刻的规范化 Diff 摘要（<code>sha256:&lt;evidence_hash&gt;</code>）。若 Agent 在人类点击同意后、执行落盘前哪怕篡改了影子工作区中的 1 个字节或偷偷追加了后门文件，二次提交时的 <code>evidence_hash</code> 将立即失配，单次租约拒绝放行并强制重新提权；</li>
+        <li><strong>防落盘投毒与防预检跳过守卫（<code>workspace_commit_sensitive</code>）</strong>：即便 Agent 持有常规文本落盘的时间窗租约（TTL Lease），一旦提交涉及可触发宿主机自动执行代码的敏感配置（如 <code>.git/hooks/*</code>、<code>.husky/*</code>、<code>build.rs</code>、<code>Makefile</code>、<code>package.json</code>、<code>Cargo.toml</code>、<code>.agents/hooks.json</code>），或企图通过 <code>overwrite_binaries: true</code> 强行覆盖二进制资产、通过 <code>skip_verify: true</code> 跳过仓库预检门禁（<code>.aegis/verify.json</code>），内核都会强制穿透现有租约并升级为独立的 <code>workspace_commit_sensitive</code> 人工审批；</li>
+        <li><strong>外网域名最小权限收窄（Domain-Scoped Egress Lease）</strong>：对未列入白名单的外部域名发起 <code>egress_http_request</code> 时，审批通过所签发的租约严格绑定至该单一目标域名（如 <code>api.stripe.com</code>），绝不泛化为通配符 <code>*</code>；同时 L7 DLP 对请求体与查询串中的 <code>$AOS_SECRET_*</code> 占位符及私钥签名实施零信任拦截并写入拒绝审计链；</li>
+        <li><strong>PreToolUse Ring-0 与 OS 沙箱双重自保（Self-Approval Immunity）</strong>：IDE 侧 <code>PreToolUse</code> 钩子深度解析子 Shell（<code>$(...)</code>、<code>bash -c</code>、<code>eval</code>）与解释器内联脚本（<code>python -c</code>、<code>node -e</code>），并在 macOS Seatbelt / Linux Landlock 内核层将宿主机源码树、<code>policy_state.json</code>、<code>claims.json</code> 与钩子配置设为物理只读，彻底杜绝 Agent 伪造租约或自行调用 <code>aegis-os approve</code>。</li>
+      </ul>
 
       <h3>6.1 三种版本管理与广义多智能体协作模式对比</h3>
       <div class="blog-table-wrap">
@@ -2065,12 +2074,21 @@ else:
         <figcaption>Figure 5: End-to-end auditable AI permission requests—capturing every boundary capability request (file claims, trunk commits, network egress, memory access) in a hash-chained ledger.</figcaption>
       </figure>
 
-      <pre><code>// Concise pseudocode for Auditable Boundary Permission Requests
+      <pre><code>// Concise pseudocode for Auditable Boundary Permission Requests (with One-Shot evidence_hash TOCTOU pinning)
 function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rationale, evidence):
-  ticket = { id: newEscalationId(), agent_id, user_id, perm_type, scope, rationale, evidence, ts: now() }
-  decision = evaluatePolicyOrAwaitHuman(ticket) // Evaluates policy rules or awaits human approval (APPROVED | REJECTED | DENIED)
-  audit_ledger.appendHashChained({ ...ticket, decision, prev_hash: audit_ledger.tailHash() }) // Logged regardless of outcome
+  evidence_hash = sha256(canonicalJson(evidence)) // Cryptographically pins exact Unified Diff &amp; commit flags
+  ticket = { id: newEscalationId(), agent_id, user_id, perm_type, scope, rationale, evidence, evidence_hash, expires_at: now() + 30m }
+  decision = evaluatePolicyOrAwaitHuman(ticket)   // Verifies sha256:&lt;evidence_hash&gt; on One-Shot leases or awaits human approval
+  audit_ledger.appendHashChained({ ...ticket, decision, prev_hash: audit_ledger.tailHash() }) // APPROVED / DENIED / EXPIRED all hash-chained
   return decision</code></pre>
+
+      <p>To close every avenue by which an autonomous agent might attempt to bypass permission approval, the kernel enforces four defense-in-depth anti-bypass invariants between request time and execution time:</p>
+      <ul>
+        <li><strong>TOCTOU Bait-and-Switch Prevention via Cryptographic Evidence Pinning (<code>sha256:&lt;evidence_hash&gt;</code>)</strong>: When a human approves an escalation ticket as a single-use lease (<code>One-Shot Lease</code>), the kernel binds the lease’s <code>resource_pattern</code> to the exact SHA-256 digest of the canonical diff and commit flags (<code>sha256:&lt;evidence_hash&gt;</code>). If an agent modifies even a single byte in its shadow workspace between human inspection and commit execution, the recomputed <code>evidence_hash</code> mismatches and the kernel refuses to consume the lease, triggering a fresh escalation;</li>
+        <li><strong>Commit-Time Poisoning &amp; Gate-Skip Escalation (<code>workspace_commit_sensitive</code>)</strong>: Even when an agent holds an active TTL session lease for routine text commits, touching any path capable of automatic host code execution (<code>.git/hooks/*</code>, <code>.husky/*</code>, <code>build.rs</code>, <code>Makefile</code>, <code>package.json</code>, <code>Cargo.toml</code>, <code>.agents/hooks.json</code>), setting <code>overwrite_binaries: true</code>, or passing <code>skip_verify: true</code> when a repository verification gate (<code>.aegis/verify.json</code>) is configured bypasses the general lease and requires an explicit <code>workspace_commit_sensitive</code> human approval;</li>
+        <li><strong>Domain-Scoped Egress Leases &amp; L7 DLP</strong>: Approving an <code>egress_unlisted_domain</code> ticket scopes the resulting lease strictly to that exact domain (e.g., <code>api.stripe.com</code>) rather than <code>*</code>, while L7 DLP blocks any request query or body containing <code>$AOS_SECRET_*</code> placeholders or raw credential signatures and appends a <code>deny:dlp:*</code> event to the Flight Recorder;</li>
+        <li><strong>PreToolUse Ring-0 &amp; Kernel Sandbox Self-Approval Immunity</strong>: The client-side <code>PreToolUse</code> hook recursively inspects subshells (<code>$(...)</code>, <code>bash -c</code>, <code>eval</code>) and inline interpreter scripts (<code>python -c</code>, <code>node -e</code>), while macOS Seatbelt / Linux Landlock confinement mounts the host source tree, <code>policy_state.json</code>, <code>claims.json</code>, and hook configurations read-only inside the sandbox—making it physically impossible for an agent to forge leases or invoke <code>aegis-os approve</code> on its own behalf.</li>
+      </ul>
 
       <h3>6.1 Comparing Version Control &amp; Universal Multi-Agent Collaboration Paradigms</h3>
       <div class="blog-table-wrap">

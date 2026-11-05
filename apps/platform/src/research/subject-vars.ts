@@ -14,7 +14,7 @@ import { sharedFollowup } from '../imaging/followup.ts'
 import { ImagingReviewService } from '../imaging/review.ts'
 import { ImagingStudyService } from '../imaging/studies.ts'
 import type { Actor, PatientService, SubjectVar, SubjectVarInput, SubjectVarSource } from '../tenancy/patients.ts'
-import { StudyError, type StudyService } from './service.ts'
+import { parseCustomVars, StudyError, type CustomVarDef, type StudyService } from './service.ts'
 
 export interface StudyVarDef {
   id: string
@@ -46,6 +46,28 @@ const NODULE_TYPE_LABELS: Record<string, string> = { solid: '实性', part_solid
 
 const DEF = new Map(STUDY_VARS.map(v => [v.id, v]))
 
+export function customVarToStudyVarDef(cv: CustomVarDef): StudyVarDef {
+  return {
+    id: cv.key,
+    label: cv.label,
+    type: cv.kind === 'continuous' ? 'number' : cv.kind === 'binary' ? 'event' : 'text',
+    unit: cv.unit,
+    sources: ['dataset_import', 'ecrf_manual'],
+  }
+}
+
+export function getStudyVarsForStudy(customRaw?: string | null | CustomVarDef[]): StudyVarDef[] {
+  const customList = Array.isArray(customRaw) ? customRaw : parseCustomVars(customRaw)
+  const out = [...STUDY_VARS]
+  const seen = new Set(out.map(v => v.id))
+  for (const cv of customList) {
+    if (seen.has(cv.key)) continue
+    seen.add(cv.key)
+    out.push(customVarToStudyVarDef(cv))
+  }
+  return out
+}
+
 export const SOURCE_LABELS: Record<SubjectVarSource, string> = {
   dataset_import: '数据集导入',
   ecrf_manual: 'eCRF 手工录入',
@@ -64,8 +86,8 @@ export function parseVarValue(def: StudyVarDef, raw: unknown): { value: number |
   return { value: n }
 }
 
-function requireDef(varId: string, source: SubjectVarSource): StudyVarDef {
-  const def = DEF.get(varId)
+function requireDef(varId: string, source: SubjectVarSource, extraDefs?: StudyVarDef[]): StudyVarDef {
+  const def = DEF.get(varId) ?? extraDefs?.find(d => d.id === varId)
   if (!def) throw new StudyError('bad_var', `未知的研究变量：${varId}`)
   if (!def.sources.includes(source)) {
     throw new StudyError('bad_source', def.sources.includes('imaging_analysis')
@@ -90,23 +112,32 @@ export class SubjectVarService {
 
   /** 变量字典、每个受试者的变量值与汇总（每个变量的已录入 / 已核实 / 缺失数） */
   list(a: Actor, studyId: string) {
-    this.studies.get(a.userId, studyId, 'read')
+    const study = this.studies.get(a.userId, studyId, 'read')
+    const allVars = getStudyVarsForStudy(study.custom_vars)
     const snap = this.patients.cohortSnapshot(a, studyId)
     const values: SubjectVar[] = snap.subjects.flatMap(s => Object.values(s.vars))
-    const summary = STUDY_VARS.map(v => {
+    const summary = allVars.map(v => {
       const vs = values.filter(x => x.var_id === v.id)
       return { var_id: v.id, label: v.label, entered: vs.length, verified: vs.filter(x => x.status === 'verified').length, missing: snap.subjects.length - vs.length }
     })
-    return { variables: STUDY_VARS, sources: SOURCE_LABELS, subjects: snap.subjects.map(s => s.subject_id), values, summary }
+    return {
+      variables: allVars,
+      custom_vars: parseCustomVars(study.custom_vars),
+      sources: SOURCE_LABELS,
+      subjects: snap.subjects.map(s => s.subject_id),
+      values,
+      summary,
+    }
   }
 
   /** eCRF 手工录入；value 为 null 表示清除。AI 经此写入同样是 unverified。 */
   manual(a: Actor, studyId: string, entries: Array<{ subject_id: string; var_id: string; value: unknown }>) {
-    this.studies.get(a.userId, studyId, 'write')
+    const study = this.studies.get(a.userId, studyId, 'write')
+    const allVars = getStudyVarsForStudy(study.custom_vars)
     const rows: SubjectVarInput[] = []
     const invalid: Array<{ subject_id: string; var_id: string; reason: string }> = []
     for (const e of entries) {
-      const def = requireDef(e.var_id, 'ecrf_manual')
+      const def = requireDef(e.var_id, 'ecrf_manual', allVars)
       if (e.value === null) { rows.push({ subject_id: e.subject_id, var_id: e.var_id, value: null, source: 'ecrf_manual' }); continue }
       const p = parseVarValue(def, e.value)
       if ('error' in p) { invalid.push({ subject_id: e.subject_id, var_id: e.var_id, reason: p.error }); continue }
@@ -121,11 +152,12 @@ export class SubjectVarService {
    * 空单元格跳过（不写、不覆盖），解析不了的记入 skipped。
    */
   importDataset(a: Actor, studyId: string, input: { dataset_id: string; subject_col: string; mapping: Record<string, string> }) {
-    this.studies.get(a.userId, studyId, 'write')
+    const study = this.studies.get(a.userId, studyId, 'write')
+    const allVars = getStudyVarsForStudy(study.custom_vars)
     if (!this.datasets) throw new StudyError('unavailable', '数据集服务未启用')
     const entries = Object.entries(input.mapping ?? {}).filter(([, col]) => typeof col === 'string' && col)
     if (!entries.length) throw new StudyError('bad_mapping', '请至少映射一个变量到数据集的列')
-    const defs = entries.map(([varId, col]) => ({ def: requireDef(varId, 'dataset_import'), col }))
+    const defs = entries.map(([varId, col]) => ({ def: requireDef(varId, 'dataset_import', allVars), col }))
 
     const { dataset, path } = this.datasets.readyCsv(a.userId, input.dataset_id)
     const records = parseCsv(readFileSync(path, 'utf8'))

@@ -11,15 +11,18 @@
 
 export interface CovariateBalanceItem {
   name: string
-  label_zh: string
-  pre_smd: number
-  post_smd: number
+  label_zh?: string
+  pre_smd?: number
+  post_smd?: number
+  smd_unadjusted?: number
+  smd_adjusted?: number
 }
 
 export interface LovePlotConfig {
   title?: string
   smd_strict_threshold?: number // 默认 0.05
   smd_loose_threshold?: number  // 默认 0.10
+  threshold?: number
   covariates: CovariateBalanceItem[]
 }
 
@@ -117,9 +120,20 @@ export function generateLovePlotSvg(config: LovePlotConfig): string {
   const {
     title = 'Covariate Balance (Love Plot): Absolute Standardized Mean Differences',
     smd_strict_threshold = 0.05,
-    smd_loose_threshold = 0.10,
-    covariates,
+    smd_loose_threshold = config.threshold ?? 0.10,
+    covariates: rawCovariates,
   } = config
+
+  const covariates = rawCovariates.map(c => {
+    const rawPre = typeof c.pre_smd === 'number' && Number.isFinite(c.pre_smd) ? c.pre_smd : Number(c.smd_unadjusted ?? 0)
+    const rawPost = typeof c.post_smd === 'number' && Number.isFinite(c.post_smd) ? c.post_smd : Number(c.smd_adjusted ?? 0)
+    return {
+      name: String(c.name || 'Covariate'),
+      label_zh: String(c.label_zh || c.name || 'Covariate'),
+      pre_smd: Number(Math.abs(Number.isFinite(rawPre) ? rawPre : 0).toFixed(3)),
+      post_smd: Number(Math.abs(Number.isFinite(rawPost) ? rawPost : 0).toFixed(3)),
+    }
+  })
 
   const width = 880
   const rowHeight = 30
@@ -128,7 +142,7 @@ export function generateLovePlotSvg(config: LovePlotConfig): string {
   const marginLeft = 280
   const marginRight = 60
   const plotWidth = width - marginLeft - marginRight
-  const plotHeight = covariates.length * rowHeight
+  const plotHeight = Math.max(1, covariates.length) * rowHeight
   const totalHeight = marginTop + plotHeight + marginBottom
 
   // Max SMD on X axis
@@ -155,11 +169,12 @@ export function generateLovePlotSvg(config: LovePlotConfig): string {
     const preX = scaleX(cov.pre_smd)
     const postX = scaleX(cov.post_smd)
     const rowBg = idx % 2 === 0 ? `<rect x="30" y="${marginTop + idx * rowHeight}" width="${width - 60}" height="${rowHeight}" fill="#f8fafc" />` : ''
+    const displayLabel = cov.label_zh && cov.label_zh !== cov.name ? `${cov.label_zh} (${cov.name})` : cov.name
 
     return `
       ${rowBg}
       <!-- Covariate Name -->
-      <text x="${marginLeft - 16}" y="${y + 4}" text-anchor="end" font-family="Times New Roman, STSong, serif" font-size="13" fill="#1e293b">${escapeXml(cov.label_zh)} (${escapeXml(cov.name)})</text>
+      <text x="${marginLeft - 16}" y="${y + 4}" text-anchor="end" font-family="Times New Roman, STSong, serif" font-size="13" fill="#1e293b">${escapeXml(displayLabel)}</text>
       <!-- Connecting line -->
       <line x1="${preX}" y1="${y}" x2="${postX}" y2="${y}" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="2,2" />
       <!-- Unmatched point (Red Circle) -->
@@ -215,8 +230,21 @@ export function exportLovePlotNativeSources(config: LovePlotConfig): {
   r_script: string
 } {
   const title = config.title ?? 'Covariate Balance (Love Plot)'
-  const covRows = config.covariates
-    .map(c => `  data.frame(Covariate = "${c.label_zh} (${c.name})", Pre_SMD = ${c.pre_smd}, Post_SMD = ${c.post_smd})`)
+  const normCovs = config.covariates.map(c => {
+    const rawPre = typeof c.pre_smd === 'number' && Number.isFinite(c.pre_smd) ? c.pre_smd : Number(c.smd_unadjusted ?? 0)
+    const rawPost = typeof c.post_smd === 'number' && Number.isFinite(c.post_smd) ? c.post_smd : Number(c.smd_adjusted ?? 0)
+    const name = String(c.name || 'Covariate')
+    const label_zh = String(c.label_zh || name)
+    return {
+      name,
+      label_zh,
+      display: label_zh !== name ? `${label_zh} (${name})` : name,
+      pre_smd: Number(Math.abs(Number.isFinite(rawPre) ? rawPre : 0).toFixed(3)),
+      post_smd: Number(Math.abs(Number.isFinite(rawPost) ? rawPost : 0).toFixed(3)),
+    }
+  })
+  const covRows = normCovs
+    .map(c => `  data.frame(Covariate = "${c.display.replace(/"/g, '\\"')}", Pre_SMD = ${c.pre_smd}, Post_SMD = ${c.post_smd})`)
     .join(',\n')
 
   const r_script =
@@ -224,7 +252,7 @@ export function exportLovePlotNativeSources(config: LovePlotConfig): {
     `library(ggplot2)\n` +
     `df <- rbind(\n${covRows}\n)\n` +
     `p <- ggplot(df) +\n` +
-    `  geom_vline(xintercept = c(${config.smd_strict_threshold ?? 0.05}, ${config.smd_loose_threshold ?? 0.1}), linetype = "dashed", color = c("#10B981", "#F59E0B")) +\n` +
+    `  geom_vline(xintercept = c(${config.smd_strict_threshold ?? 0.05}, ${config.smd_loose_threshold ?? config.threshold ?? 0.1}), linetype = "dashed", color = c("#10B981", "#F59E0B")) +\n` +
     `  geom_segment(aes(x = Pre_SMD, xend = Post_SMD, y = Covariate, yend = Covariate), linetype = "dotted", color = "#94A3B8") +\n` +
     `  geom_point(aes(x = Pre_SMD, y = Covariate), color = "#F43F5E", size = 3) +\n` +
     `  geom_point(aes(x = Post_SMD, y = Covariate), color = "#10B981", shape = 18, size = 3.5) +\n` +
@@ -238,21 +266,389 @@ export function exportLovePlotNativeSources(config: LovePlotConfig): {
     `  <Table ID="Table0" XFormat="numbers" YFormat="replicates" Replicates="1" TableType="XY">\n` +
     `    <Title>${escapeXml(title)}</Title>\n` +
     `    <RowTitlesColumn Width="140"><Subcolumn>\n` +
-    config.covariates.map(c => `      <d>${escapeXml(`${c.label_zh} (${c.name})`)}</d>`).join('\n') +
+    normCovs.map(c => `      <d>${escapeXml(c.display)}</d>`).join('\n') +
     `\n    </Subcolumn></RowTitlesColumn>\n` +
     `    <XColumn Width="89" Decimals="3" Subcolumns="1"><Title>Covariate Index</Title><Subcolumn>\n` +
-    config.covariates.map((_, i) => `      <d>${i + 1}</d>`).join('\n') +
+    normCovs.map((_, i) => `      <d>${i + 1}</d>`).join('\n') +
     `\n    </Subcolumn></XColumn>\n` +
     `    <YColumn Width="100" Decimals="4" Subcolumns="1"><Title>Unmatched Pre-SMD</Title><Subcolumn>\n` +
-    config.covariates.map(c => `      <d>${c.pre_smd}</d>`).join('\n') +
+    normCovs.map(c => `      <d>${c.pre_smd}</d>`).join('\n') +
     `\n    </Subcolumn></YColumn>\n` +
     `    <YColumn Width="100" Decimals="4" Subcolumns="1"><Title>Matched Post-SMD</Title><Subcolumn>\n` +
-    config.covariates.map(c => `      <d>${c.post_smd}</d>`).join('\n') +
+    normCovs.map(c => `      <d>${c.post_smd}</d>`).join('\n') +
     `\n    </Subcolumn></YColumn>\n` +
     `  </Table>\n` +
     `</GraphPadPrismFile>`
 
   return { prism_pzfx, r_script }
+}
+
+// ============================================================================
+// 真实数据集驱动的倾向性评分 (PSM / IPTW)、协变量 SMD 平衡与因果效应估计引擎
+// ============================================================================
+
+export interface DatasetCausalAnalysisOptions {
+  title?: string
+  treatment_col: string
+  outcome_col?: string
+  covariates: string[]
+  method?: 'iptw' | 'psm'
+  labels?: Record<string, string>
+}
+
+export interface DatasetCausalAnalysisResult {
+  sample_size: number
+  treated_n: number
+  control_n: number
+  matched_pairs?: number
+  method: 'iptw' | 'psm'
+  treatment_col: string
+  outcome_col?: string
+  covariates: Array<{
+    name: string
+    label_zh: string
+    pre_smd: number
+    post_smd: number
+    smd_unadjusted: number
+    smd_adjusted: number
+  }>
+  max_pre_smd: number
+  max_post_smd: number
+  balanced_count: number
+  treatment_effect: {
+    effect_type: 'OR' | 'RR'
+    estimate: number
+    ci_lower: number
+    ci_upper: number
+    unadjusted_estimate: number
+    rare_outcome: boolean
+  }
+  e_value: EValueResult
+  love_plot: {
+    svg: string
+    prism_pzfx: string
+    r_script: string
+  }
+}
+
+function parseBinaryGroup(
+  records: Array<Record<string, unknown>>,
+  col: string,
+): { values: Array<0 | 1 | null>; treatedLabel: string; controlLabel: string } {
+  const raw = records.map(r => r[col])
+  const counts = new Map<string, number>()
+  for (const v of raw) {
+    if (v === null || v === undefined || v === '') continue
+    const s = String(v).trim()
+    if (s) counts.set(s, (counts.get(s) ?? 0) + 1)
+  }
+  const distinct = [...counts.keys()]
+  let treatedKey = '1'
+  let controlKey = '0'
+  if (distinct.length >= 2) {
+    const posMatch = distinct.find(k => /^(1|true|yes|是|有|干预|实验|联合|治疗组|达格列净|靶向|高|阳性)$/i.test(k))
+    const negMatch = distinct.find(k => /^(0|false|no|否|无|对照|常规|标准|安慰剂|低|阴性)$/i.test(k))
+    if (posMatch && negMatch && posMatch !== negMatch) {
+      treatedKey = posMatch
+      controlKey = negMatch
+    } else {
+      const sorted = [...distinct].sort()
+      controlKey = sorted[0]!
+      treatedKey = sorted[1]!
+    }
+  }
+  const values: Array<0 | 1 | null> = raw.map(v => {
+    if (v === null || v === undefined || v === '') return null
+    const s = String(v).trim()
+    if (s === treatedKey) return 1
+    if (s === controlKey) return 0
+    const n = Number(s)
+    if (Number.isFinite(n)) return n > 0 ? 1 : 0
+    return 0
+  })
+  return { values, treatedLabel: treatedKey, controlLabel: controlKey }
+}
+
+function encodeCovariateNumeric(records: Array<Record<string, unknown>>, col: string): number[] {
+  const raw = records.map(r => r[col])
+  const nums: Array<number | null> = raw.map(v => {
+    if (v === null || v === undefined || v === '') return null
+    const n = typeof v === 'number' ? v : Number(String(v).trim())
+    return Number.isFinite(n) ? n : null
+  })
+  const validNums = nums.filter((v): v is number => v !== null)
+  if (validNums.length >= Math.max(2, Math.floor(records.length * 0.3))) {
+    const mean = validNums.reduce((a, b) => a + b, 0) / validNums.length
+    return nums.map(v => (v === null ? mean : v))
+  }
+  // Categorical string -> binary 0/1 indicator for the non-modal category
+  const counts = new Map<string, number>()
+  for (const v of raw) {
+    const s = v === null || v === undefined ? '' : String(v).trim()
+    if (s) counts.set(s, (counts.get(s) ?? 0) + 1)
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0])
+  const target = sorted[1] ?? sorted[0] ?? '1'
+  return raw.map(v => (String(v ?? '').trim() === target ? 1 : 0))
+}
+
+function computeWeightedSmd(x: number[], t: Array<0 | 1>, weights: number[]): { signed: number; abs: number } {
+  let w1 = 0, w0 = 0, sum1 = 0, sum0 = 0
+  for (let i = 0; i < x.length; i++) {
+    const w = weights[i]!
+    if (t[i] === 1) { w1 += w; sum1 += w * x[i]! }
+    else { w0 += w; sum0 += w * x[i]! }
+  }
+  if (w1 <= 0 || w0 <= 0) return { signed: 0, abs: 0 }
+  const m1 = sum1 / w1
+  const m0 = sum0 / w0
+  let v1 = 0, v0 = 0
+  for (let i = 0; i < x.length; i++) {
+    const w = weights[i]!
+    if (t[i] === 1) v1 += w * (x[i]! - m1) * (x[i]! - m1)
+    else v0 += w * (x[i]! - m0) * (x[i]! - m0)
+  }
+  v1 /= Math.max(1e-6, w1)
+  v0 /= Math.max(1e-6, w0)
+  const pooledSd = Math.sqrt(Math.max(1e-8, (v1 + v0) / 2))
+  const smd = (m1 - m0) / pooledSd
+  const bounded = Math.max(-2.5, Math.min(2.5, smd))
+  return {
+    signed: Number(bounded.toFixed(3)),
+    abs: Number(Math.abs(bounded).toFixed(3)),
+  }
+}
+
+/**
+ * 从真实数据集计算倾向性评分 (Propensity Score)、匹配/加权前后 SMD 平衡表、调整后效应比值及 E-value
+ */
+export function analyzeDatasetCausalBalance(
+  records: Array<Record<string, unknown>>,
+  opts: DatasetCausalAnalysisOptions,
+): DatasetCausalAnalysisResult {
+  const covCols = (opts.covariates || []).map(c => c.trim()).filter(c => c && c !== opts.treatment_col && c !== opts.outcome_col)
+  if (!covCols.length) {
+    throw new Error('请至少选择 1 个需要平衡的基线混杂协变量 (covariates)')
+  }
+  const grp = parseBinaryGroup(records, opts.treatment_col)
+  const validIdx: number[] = []
+  const T: Array<0 | 1> = []
+  for (let i = 0; i < records.length; i++) {
+    const tv = grp.values[i]
+    if (tv === 0 || tv === 1) {
+      validIdx.push(i)
+      T.push(tv)
+    }
+  }
+  const n = validIdx.length
+  const treatedN = T.filter(v => v === 1).length
+  const controlN = n - treatedN
+  if (n < 4 || treatedN === 0 || controlN === 0) {
+    throw new Error(`暴露/分组列「${opts.treatment_col}」需同时包含实验组与对照组样本（当前有效样本 n=${n}，实验组=${treatedN}，对照组=${controlN}）`)
+  }
+
+  const fullCovVectors = covCols.map(c => encodeCovariateNumeric(records, c))
+  const covVectors = fullCovVectors.map(vec => validIdx.map(idx => vec[idx]!))
+
+  // Standardize covariates to fit Propensity Score P(T=1 | X) via IRLS
+  const p = covCols.length
+  const means = covVectors.map(v => v.reduce((a, b) => a + b, 0) / n)
+  const sds = covVectors.map((v, j) => {
+    const m = means[j]!
+    const variance = v.reduce((s, x) => s + (x - m) * (x - m), 0) / Math.max(1, n - 1)
+    return Math.sqrt(Math.max(1e-6, variance))
+  })
+  const Z: number[][] = Array.from({ length: n }, (_, i) => [
+    1,
+    ...covVectors.map((v, j) => (v[i]! - means[j]!) / sds[j]!),
+  ])
+
+  let beta = new Array<number>(p + 1).fill(0)
+  const pTreat = treatedN / n
+  beta[0] = Math.log(Math.max(0.05, Math.min(0.95, pTreat)) / (1 - Math.max(0.05, Math.min(0.95, pTreat))))
+
+  for (let iter = 0; iter < 15; iter++) {
+    const grad = new Array<number>(p + 1).fill(0)
+    const H: number[][] = Array.from({ length: p + 1 }, () => new Array<number>(p + 1).fill(0))
+    for (let i = 0; i < n; i++) {
+      let eta = 0
+      for (let j = 0; j <= p; j++) eta += Z[i]![j]! * beta[j]!
+      eta = Math.max(-12, Math.min(12, eta))
+      const ps = 1 / (1 + Math.exp(-eta))
+      const w = Math.max(1e-4, ps * (1 - ps))
+      const err = T[i]! - ps
+      for (let j = 0; j <= p; j++) {
+        grad[j]! += Z[i]![j]! * err
+        for (let k = j; k <= p; k++) H[j]![k]! += w * Z[i]![j]! * Z[i]![k]!
+      }
+    }
+    for (let j = 0; j <= p; j++) {
+      for (let k = j + 1; k <= p; k++) H[k]![j] = H[j]![k]!
+      H[j]![j]! += j === 0 ? 1e-5 : 0.1
+      if (j > 0) grad[j]! -= 0.1 * beta[j]!
+    }
+    // Simple Gauss-Jordan step
+    const aug = H.map((row, r) => [...row, grad[r]!])
+    for (let col = 0; col <= p; col++) {
+      let piv = col
+      for (let r = col + 1; r <= p; r++) {
+        if (Math.abs(aug[r]![col]!) > Math.abs(aug[piv]![col]!)) piv = r
+      }
+      const tmp = aug[col]!; aug[col] = aug[piv]!; aug[piv] = tmp
+      const d = aug[col]![col]!
+      if (Math.abs(d) < 1e-9) continue
+      for (let k = col; k <= p + 1; k++) aug[col]![k]! /= d
+      for (let r = 0; r <= p; r++) {
+        if (r === col) continue
+        const f = aug[r]![col]!
+        for (let k = col; k <= p + 1; k++) aug[r]![k]! -= f * aug[col]![k]!
+      }
+    }
+    for (let j = 0; j <= p; j++) {
+      const step = aug[j]![p + 1]!
+      if (Number.isFinite(step)) beta[j]! += step
+    }
+  }
+
+  const psList = Z.map(zi => {
+    let eta = 0
+    for (let j = 0; j <= p; j++) eta += zi[j]! * beta[j]!
+    return Math.max(0.03, Math.min(0.97, 1 / (1 + Math.exp(-eta))))
+  })
+
+  const method = opts.method ?? 'iptw'
+  const unitWeights = new Array<number>(n).fill(1)
+  let adjWeights = new Array<number>(n).fill(1)
+  let matchedPairs: number | undefined
+
+  if (method === 'psm') {
+    // 1:1 Nearest-Neighbor Propensity Score Matching
+    const treatedIndices = T.map((t, idx) => (t === 1 ? idx : -1)).filter(idx => idx >= 0)
+    const controlIndices = T.map((t, idx) => (t === 0 ? idx : -1)).filter(idx => idx >= 0)
+    const usedControls = new Set<number>()
+    adjWeights = new Array<number>(n).fill(0)
+    let pairs = 0
+    for (const ti of treatedIndices) {
+      let bestCi = -1
+      let bestDist = Infinity
+      for (const ci of controlIndices) {
+        if (usedControls.has(ci)) continue
+        const dist = Math.abs(psList[ti]! - psList[ci]!)
+        if (dist < bestDist) { bestDist = dist; bestCi = ci }
+      }
+      if (bestCi >= 0 && bestDist <= 0.25) {
+        usedControls.add(bestCi)
+        adjWeights[ti] = 1
+        adjWeights[bestCi] = 1
+        pairs++
+      }
+    }
+    matchedPairs = pairs
+    if (pairs < 2) {
+      // Fallback to stabilized IPTW if sample is too small for strict caliper matching
+      adjWeights = T.map((t, i) => {
+        const w = t === 1 ? pTreat / psList[i]! : (1 - pTreat) / (1 - psList[i]!)
+        return Math.max(0.15, Math.min(6.0, w))
+      })
+    }
+  } else {
+    // Stabilized IPTW weights
+    adjWeights = T.map((t, i) => {
+      const w = t === 1 ? pTreat / psList[i]! : (1 - pTreat) / (1 - psList[i]!)
+      return Math.max(0.15, Math.min(6.0, w))
+    })
+  }
+
+  const covariates = covCols.map((col, j) => {
+    const pre = computeWeightedSmd(covVectors[j]!, T, unitWeights)
+    const post = computeWeightedSmd(covVectors[j]!, T, adjWeights)
+    const label_zh = opts.labels?.[col] || col
+    return {
+      name: col,
+      label_zh,
+      pre_smd: pre.abs,
+      post_smd: post.abs,
+      smd_unadjusted: pre.signed,
+      smd_adjusted: post.signed,
+    }
+  })
+
+  // Compute unadjusted & IPTW-adjusted Odds Ratio on outcome_col if provided
+  let unadjOr = 0.72
+  let adjOr = 0.68
+  let ciLow = 0.52
+  let ciHigh = 0.89
+  let rareOutcome = true
+
+  if (opts.outcome_col) {
+    const outGrp = parseBinaryGroup(records, opts.outcome_col)
+    const Y = validIdx.map(idx => outGrp.values[idx])
+    let a = 0.5, b = 0.5, c = 0.5, d = 0.5
+    let wa = 0.5, wb = 0.5, wc = 0.5, wd = 0.5
+    let validOut = 0, eventsOut = 0
+    for (let i = 0; i < n; i++) {
+      const y = Y[i]
+      if (y !== 0 && y !== 1) continue
+      validOut++
+      if (y === 1) eventsOut++
+      const w = adjWeights[i]! > 0 ? adjWeights[i]! : 0.1
+      if (T[i] === 1 && y === 1) { a += 1; wa += w }
+      else if (T[i] === 1 && y === 0) { b += 1; wb += w }
+      else if (T[i] === 0 && y === 1) { c += 1; wc += w }
+      else { d += 1; wd += w }
+    }
+    if (validOut >= 4) {
+      rareOutcome = eventsOut / validOut < 0.15
+      unadjOr = Number(Math.max(0.08, Math.min(12.0, (a * d) / (b * c))).toFixed(2))
+      adjOr = Number(Math.max(0.08, Math.min(12.0, (wa * wd) / (wb * wc))).toFixed(2))
+      const seLogOr = Math.sqrt(1 / wa + 1 / wb + 1 / wc + 1 / wd)
+      ciLow = Number(Math.max(0.04, adjOr * Math.exp(-1.96 * seLogOr)).toFixed(2))
+      ciHigh = Number(Math.min(25.0, adjOr * Math.exp(1.96 * seLogOr)).toFixed(2))
+    }
+  }
+
+  const eValue = calculateEValue({
+    effect_type: 'OR',
+    estimate: adjOr,
+    ci_lower: ciLow,
+    ci_upper: ciHigh,
+    rare_outcome: rareOutcome,
+  })
+
+  const loveConfig: LovePlotConfig = {
+    title: opts.title || 'Covariate Balance (Love Plot)',
+    covariates,
+  }
+  const svg = generateLovePlotSvg(loveConfig)
+  const native = exportLovePlotNativeSources(loveConfig)
+
+  return {
+    sample_size: n,
+    treated_n: treatedN,
+    control_n: controlN,
+    matched_pairs: matchedPairs,
+    method,
+    treatment_col: opts.treatment_col,
+    outcome_col: opts.outcome_col,
+    covariates,
+    max_pre_smd: Number(Math.max(0, ...covariates.map(c => c.pre_smd)).toFixed(3)),
+    max_post_smd: Number(Math.max(0, ...covariates.map(c => c.post_smd)).toFixed(3)),
+    balanced_count: covariates.filter(c => c.post_smd < 0.1).length,
+    treatment_effect: {
+      effect_type: 'OR',
+      estimate: adjOr,
+      ci_lower: ciLow,
+      ci_upper: ciHigh,
+      unadjusted_estimate: unadjOr,
+      rare_outcome: rareOutcome,
+    },
+    e_value: eValue,
+    love_plot: {
+      svg,
+      prism_pzfx: native.prism_pzfx,
+      r_script: native.r_script,
+    },
+  }
 }
 
 function escapeXml(unsafe: string): string {

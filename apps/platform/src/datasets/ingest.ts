@@ -11,17 +11,69 @@ import { chmodIfOwned } from '../mcp/admin-tools.ts'
  * 本地开发直接用 computePython 运行。
  */
 export interface ColumnProfile {
-  name: string; type: 'numeric' | 'categorical' | 'date' | 'text'; missing: number; unique: number; label?: string
+  name: string
+  type: 'numeric' | 'categorical' | 'date' | 'text'
+  missing: number
+  unique: number
+  label?: string
+  unit?: string
+  description?: string
+  /** 数据字典或双行表头提取的分类值编码映射（如 { "0": "否", "1": "是" }） */
+  value_labels?: Record<string, string>
+  /** 非敏感低基数列的去重编码预览（仅供字典核验，不含身份信息列） */
+  distinct_codes?: string[]
   stats?: { mean: number | null; sd: number | null; median: number | null; q1: number | null; q3: number | null; min: number | null; max: number | null }
-  top?: Array<{ value: string; count: number }>
+  top?: Array<{ value: string; count: number; label?: string }>
   range?: [string, string]
   phi?: { reason: string }
 }
+
+export interface SheetSummary {
+  name: string
+  rows: number
+  cols: number
+  role: 'data' | 'dictionary' | 'other'
+  columns_preview?: string[]
+}
+
+export interface AiWorkbookAudit {
+  audited_at: string
+  mode: 'ai' | 'heuristic'
+  confidence: 'high' | 'medium' | 'low'
+  summary: string
+  recommended_data_sheet?: string | null
+  recommended_dict_sheet?: string | null
+  sheet_switch_applied?: boolean
+  enriched_labels_count: number
+  enriched_codings_count: number
+  type_corrections: Array<{ column: string; from: string; to: 'categorical' | 'numeric'; reason: string }>
+  fuzzy_matches: Array<{ column: string; dict_var: string; label: string }>
+  warnings: string[]
+}
+
+export interface IngestSheetOptions {
+  sheet?: string
+  dict_sheet?: string | null
+}
+
 export type Profile =
-  | { ok: true; rows: number; columns: ColumnProfile[]; truncated: boolean; phi_resolved?: { dropped: string[]; kept: string[]; at: string } }
+  | {
+      ok: true
+      rows: number
+      columns: ColumnProfile[]
+      truncated: boolean
+      sheets?: SheetSummary[]
+      active_sheet?: string
+      dictionary_sheet?: string | null
+      dict_preview_rows?: string[][]
+      two_row_header?: boolean
+      ai_audit?: AiWorkbookAudit
+      phi_resolved?: { dropped: string[]; kept: string[]; at: string }
+    }
   | { ok: false; error: string }
+
 export interface IngestResult { profile: Profile; csv: string | null; cleanup: () => void }
-export type Ingest = (owner: string, src: string, drop: string[]) => Promise<IngestResult>
+export type Ingest = (owner: string, src: string, drop: string[], sheetOpts?: IngestSheetOptions) => Promise<IngestResult>
 
 export interface IngestOptions {
   python: string
@@ -48,7 +100,7 @@ function run(cmd: string, args: string[], timeoutMs: number): Promise<void> {
 
 export function makeIngest(opts: IngestOptions): Ingest {
   const timeout = opts.timeoutMs ?? 180_000
-  return async (owner, src, drop) => {
+  return async (owner, src, drop, sheetOpts) => {
     let stage: string
     if (opts.sandbox) {
       // 中转目录在用户工作区里（工作区 2770：只有该 uid 与平台能进）；目录与输入要让该 uid 能读写
@@ -69,7 +121,12 @@ export function makeIngest(opts: IngestOptions): Ingest {
       copyFileSync(src, input)
       chmodIfOwned(input, 0o644)
       const out = join(stage, 'out')
-      const args = [opts.script, input, out, ...(drop.length ? ['--drop', ...drop] : [])]
+      const extraFlags: string[] = []
+      if (sheetOpts?.sheet) extraFlags.push('--sheet', sheetOpts.sheet)
+      if (sheetOpts?.dict_sheet !== undefined) {
+        extraFlags.push('--dict-sheet', sheetOpts.dict_sheet === null ? 'none' : sheetOpts.dict_sheet)
+      }
+      const args = [opts.script, input, out, ...extraFlags, ...(drop.length ? ['--drop', ...drop] : [])]
       if (opts.sandbox) {
         await run('sudo', ['-n', '/usr/local/bin/heurion-sandbox-exec', String(opts.sandbox.uid(owner)), opts.sandbox.workspaceDir(owner), opts.sandbox.homeDir(owner), '--', 'python3', ...args], timeout)
       } else {

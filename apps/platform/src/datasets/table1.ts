@@ -776,7 +776,7 @@ export function generateTable1FromData(
 
   const groups: Table1Group[] = groupNames.map(g => ({
     name: g,
-    label: labels[g] ?? g,
+    label: (group_col ? labels[`${group_col}.${g}`] : undefined) ?? labels[g] ?? g,
     count: groupCounts[g]!,
     percentage: totalN > 0 ? (groupCounts[g]! / totalN) * 100 : 0,
   }))

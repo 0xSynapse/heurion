@@ -1987,8 +1987,16 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
     inputSchema: { study_id: z.string() },
   }, async ({ study_id }) => sd(svc => svc.read(claims.u, study_id)))
   server.registerTool('study_update', {
-    description: '改研究项目的名称、设计、状态、简介。',
-    inputSchema: { study_id: z.string(), title: z.string().max(120).optional(), design: z.string().optional(), status: z.string().optional(), summary: z.string().max(4000).optional() },
+    description: '改研究项目的名称、设计、状态、简介、研究方案纳排规则（eligibility_plan）或研究特定自定义变量（custom_vars）。',
+    inputSchema: {
+      study_id: z.string(),
+      title: z.string().max(120).optional(),
+      design: z.string().optional(),
+      status: z.string().optional(),
+      summary: z.string().max(4000).optional(),
+      eligibility_plan: z.any().optional().describe('研究方案纳排规则配置（含 inclusion_rules / exclusion_rules）'),
+      custom_vars: z.array(z.any()).optional().describe('本研究特定的自定义随访/暴露/结局变量定义'),
+    },
   }, async ({ study_id, ...patch }) => sd(svc => { const x = svc.update(claims.u, study_id, patch); return { study_id: x.id, title: x.title, status: x.status } }))
   server.registerTool('study_link', {
     description: '把文档或数据集归入研究（action=unlink 移出）。文档 role：protocol 研究方案 / manuscript 论文 / slides 幻灯片 / other。归入的文档不出现在文档列表里，在研究页里。',
@@ -2012,7 +2020,16 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
   const criteriaSchema = {
     sex: z.enum(['M', 'F']).optional(), age_min: z.number().optional(), age_max: z.number().optional(),
     tags_any: z.array(z.string()).optional().describe('诊断标签包含其中任一（部分匹配）'),
-    labs: z.array(z.object({ test: z.string().describe('项目名或缩写，如 肌酐 / Cr / HbA1c'), mode: z.enum(['latest', 'any']).optional().describe('latest=最近一次（默认），any=任一次'), op: z.enum(['>', '>=', '<', '<=', '=']), value: z.number().describe('标准单位下的阈值（如肌酐 µmol/L、血糖 mmol/L）') })).optional(),
+    labs: z.array(z.object({ test: z.string().describe('项目名或缩写，如 肌酐 / Cr / HbA1c'), mode: z.enum(['latest', 'any', 'baseline', 'min', 'max', 'count']).optional().describe('latest=最近一次（默认），any=任一次，baseline=基线，min/max=极值，count=次数'), op: z.enum(['>', '>=', '<', '<=', '=', 'between']), value: z.number().describe('标准单位下的阈值（如肌酐 µmol/L、血糖 mmol/L）'), value_to: z.number().optional(), change_op: z.enum(['delta_gt', 'delta_lt', 'pct_gt', 'pct_lt']).optional(), change_value: z.number().optional() })).optional(),
+    imaging: z.object({ modality: z.string().optional(), body_part: z.string().optional(), metric: z.enum(['signoff_count', 'lesion_diameter_mm', 'lesion_volume_cm3', 'l3_smi', 'vat_to_sat_ratio', 'bar_ratio', 'ham_volume_cm3']), op: z.enum(['>', '>=', '<', '<=', '=', 'between']), value: z.number(), value_to: z.number().optional() }).optional(),
+    records: z.array(z.object({ kind: z.string().optional(), text_contains: z.string(), negate: z.boolean().optional() })).optional(),
+    inclusion_rules: z.array(z.any()).optional().describe('结构化纳入标准规则列表'),
+    exclusion_rules: z.array(z.any()).optional().describe('结构化排除标准规则列表'),
+    manual_confirmed_rules: z.array(z.string()).optional().describe('人工确认满足的规则 ID 列表'),
+    use_study_plan: z.boolean().optional().describe('是否直接使用研究方案已保存的纳排规则'),
+    extract_from_protocol: z.boolean().optional().describe('是否自动从研究方案文档提取纳排规则并预览'),
+    protocol_text: z.string().optional().describe('用于提取纳排规则的方案文本（可选）'),
+    template_id: z.string().optional().describe('专科纳排规则模板 ID（可选）'),
     from: z.string().optional().describe('化验日期窗口起 YYYY-MM-DD'), to: z.string().optional().describe('化验日期窗口止 YYYY-MM-DD'),
   }
   server.registerTool('study_cohort_preview', {

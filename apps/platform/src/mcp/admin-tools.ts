@@ -217,11 +217,13 @@ export const ADMIN_TOOLS: ToolSpec[] = [
   },
   {
     name: 'dataset_manage',
-    description: '数据集管理：upload 把工作区文件 file_path 上传为数据集（CSV / Excel / SAS / SPSS / Stata）；rename(name, labels)；resolve_phi 处理身份信息列（drop 删除的列、keep 确认不是身份信息的列）；delete 删除数据集（不可恢复，需确认）。看数据用 dataset_list / dataset_describe / dataset_open。',
-    input: { action: z.enum(['upload', 'rename', 'resolve_phi', 'delete']), dataset_id: z.string().optional(), file_path: z.string().optional(), name: z.string().max(200).optional(), labels: z.record(z.string()).optional(), drop: z.array(z.string()).optional(), keep: z.array(z.string()).optional(), reason: reasonField },
+    description: '数据集管理：upload 把工作区文件 file_path 上传为数据集（CSV / Excel / SAS / SPSS / Stata；支持多工作表 Excel 自动识别数据表与数据字典页）；rename(name, labels, value_labels)；select_sheets 切换 Excel 主数据工作表 (sheet) 与数据字典工作表 (dict_sheet) 并重新联动解析；ai_audit 触发 AI 深度核验工作簿与数据字典映射；resolve_phi 处理身份信息列（drop 删除的列、keep 确认不是身份信息的列）；delete 删除数据集（不可恢复，需确认）。看数据用 dataset_list / dataset_describe / dataset_open。',
+    input: { action: z.enum(['upload', 'rename', 'select_sheets', 'ai_audit', 'resolve_phi', 'delete']), dataset_id: z.string().optional(), file_path: z.string().optional(), name: z.string().max(200).optional(), labels: z.record(z.string()).optional(), value_labels: z.record(z.record(z.string())).optional(), sheet: z.string().optional(), dict_sheet: z.string().nullable().optional(), drop: z.array(z.string()).optional(), keep: z.array(z.string()).optional(), reason: reasonField },
     actions: {
-      upload: { method: 'POST', path: () => '/api/datasets', body: (a, file) => ({ form: {}, file: file(a.file_path) }) },
-      rename: { method: 'PATCH', path: a => `/api/datasets/${enc(a.dataset_id)}`, body: a => ({ json: only(a, ['name', 'labels']) }) },
+      upload: { method: 'POST', path: () => '/api/datasets', body: (a, file) => ({ form: { ...(a.sheet ? { sheet: String(a.sheet) } : {}), ...(a.dict_sheet ? { dict_sheet: String(a.dict_sheet) } : {}) }, file: file(a.file_path) }) },
+      rename: { method: 'PATCH', path: a => `/api/datasets/${enc(a.dataset_id)}`, body: a => ({ json: only(a, ['name', 'labels', 'value_labels']) }) },
+      select_sheets: { method: 'POST', path: a => `/api/datasets/${enc(a.dataset_id)}/sheets`, body: a => ({ json: only(a, ['sheet', 'dict_sheet']) }) },
+      ai_audit: { method: 'POST', path: a => `/api/datasets/${enc(a.dataset_id)}/ai-audit` },
       resolve_phi: { method: 'POST', path: a => `/api/datasets/${enc(a.dataset_id)}/phi`, body: a => ({ json: { drop: a.drop ?? [], keep: a.keep ?? [] } }) },
       delete: { method: 'DELETE', path: a => `/api/datasets/${enc(a.dataset_id)}`, confirm: true, probe: a => `/api/datasets/${enc(a.dataset_id)}`, summary: a => `删除数据集 ${a.dataset_id}（不可恢复；用它画过的图仍保留）` },
     },

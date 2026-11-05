@@ -237,4 +237,70 @@ describe('投稿材料包：流向图与 Love Plot 不编造', () => {
     const xml = text(unzipSync(files['Table1_Baseline_Characteristics.docx']!)['word/document.xml'])
     expect(xml).not.toContain('总随访时间')
   })
+
+  it('支持研究自定义变量（custom_vars）与外部上传数据集直接打包 SCI 成果包（0 在院入组受试者场景）', async () => {
+    const { studies, patients, datasets, actor, user } = setupEnv()
+    // 1. 验证在院队列下的自定义研究变量 (custom_vars) 录入、核实与打包
+    const study1 = studies.create(user.id, { title: '结直肠癌分子标志物队列', design: 'retrospective_cohort' })
+    studies.update(user.id, study1.id, {
+      custom_vars: [
+        { id: 'kras_status', label: 'KRAS 突变状态', type: 'categorical' },
+        { id: 'cea_postop', label: '术后 CEA 水平', type: 'continuous', unit: 'ng/mL' },
+      ],
+    })
+    const year = new Date().getUTCFullYear()
+    const pts = Array.from({ length: 4 }, (_, i) => patients.create(actor, { sex: i % 2 ? 'M' : 'F', birth_year: year - 58 - i, tags: ['结直肠癌'] }))
+    patients.enroll(actor, study1.id, pts.map(p => p.id))
+
+    const svars = new SubjectVarService(studies, patients, datasets)
+    const list1 = svars.list(actor, study1.id)
+    expect(list1.variables.some(v => v.id === 'kras_status' && v.label === 'KRAS 突变状态')).toBe(true)
+    expect(list1.variables.some(v => v.id === 'cea_postop' && v.unit === 'ng/mL')).toBe(true)
+
+    svars.manual(actor, study1.id, [
+      { subject_id: 'S001', var_id: 'kras_status', value: 'Wild-type' },
+      { subject_id: 'S002', var_id: 'kras_status', value: 'Mutant' },
+      { subject_id: 'S003', var_id: 'kras_status', value: 'Wild-type' },
+      { subject_id: 'S004', var_id: 'kras_status', value: 'Mutant' },
+      { subject_id: 'S001', var_id: 'cea_postop', value: 2.4 },
+      { subject_id: 'S002', var_id: 'cea_postop', value: 8.6 },
+    ])
+    svars.verify(actor, study1.id, { var_id: 'kras_status' })
+
+    const bundle1 = await new PublicationBundleService(studies, patients, datasets).buildBundle(actor, study1.id)
+    expect(bundle1.report.provenance.find(p => p.var_id === 'kras_status')?.verified).toBe(4)
+    expect(bundle1.report.provenance.find(p => p.var_id === 'cea_postop')?.unverified_excluded).toBe(2)
+    const xml1 = text(unzipSync(unzipSync(bundle1.zipBuffer)['Table1_Baseline_Characteristics.docx']!)['word/document.xml'])
+    expect(xml1).toContain('KRAS 突变状态')
+    expect(xml1).not.toContain('术后 CEA 水平')
+
+    // 2. 验证纯外部上传数据集研究（0 在院入组患者）直接生成 SCI 投稿包 (.zip)
+    const study2 = studies.create(user.id, { title: '外部多中心上传数据集研究', design: 'retrospective_cohort' })
+    const csvBody = [
+      'subject_id,treatment_arm,age,sex,lvef,followup_months,os_status',
+      'P01,达格列净组,62,M,31.2,18,0',
+      'P02,达格列净组,65,F,33.5,24,0',
+      'P03,达格列净组,68,M,29.0,12,1',
+      'P04,达格列净组,60,M,35.1,28,0',
+      'P05,达格列净组,71,F,30.4,15,0',
+      'P06,标准对照组,64,M,31.0,10,1',
+      'P07,标准对照组,67,F,32.1,14,1',
+      'P08,标准对照组,69,M,28.5,8,1',
+      'P09,标准对照组,63,F,33.0,20,0',
+      'P10,标准对照组,66,M,30.2,11,1',
+    ].join('\n')
+    const up = datasets.upload(user.id, 'external_cohort.csv', new TextEncoder().encode(csvBody))
+    await datasets.idle()
+    studies.link(user.id, study2.id, { kind: 'dataset', ref_id: up.dataset.id })
+
+    const bundle2 = await new PublicationBundleService(studies, patients, datasets).buildBundle(actor, study2.id)
+    expect(bundle2.report.n_subjects).toBe(10)
+    expect(bundle2.report.grouped).toBe(true)
+    expect(bundle2.report.survival.generated).toBe(true)
+    const files2 = Object.keys(unzipSync(bundle2.zipBuffer))
+    expect(files2).toContain('Table1_Baseline_Characteristics.docx')
+    expect(files2).toContain('Figure1_Participant_Flow.svg')
+    expect(files2).toContain('Figure2_Kaplan_Meier_Survival_Curve.svg')
+    expect(files2).toContain('Manuscript_Statistical_Methods_and_Results.md')
+  })
 })

@@ -19,6 +19,7 @@
  * 8. README_Submission_Manifest.txt（总是生成，含数据完整性与未生成项说明）
  */
 
+import { readFileSync } from 'node:fs'
 import { strToU8, zipSync } from 'fflate'
 import {
   renderEnrollmentFlowSvg,
@@ -32,14 +33,15 @@ import { calculateEValue, type EValueResult } from './causal-inference.ts'
 import { generateSurvivalAnalysis, normalizeEventStatus, type SurvivalAnalysisResult } from '../datasets/survival.ts'
 import { exportTable1ToDocx } from '../datasets/table1-docx.ts'
 import { generateTable1FromData, type Table1Result } from '../datasets/table1.ts'
-import { StudyError, type StudyService } from './service.ts'
+import { parseCustomVars, parseEligibilityPlan, StudyError, type CustomVarDef, type StudyService } from './service.ts'
 import type { PatientService, SubjectVar } from '../tenancy/patients.ts'
 import { SOURCE_LABELS, STUDY_VARS } from './subject-vars.ts'
-import type { DatasetService } from '../datasets/service.ts'
+import { parseCsv, type DatasetService } from '../datasets/service.ts'
 import type { Actor } from '../tenancy/patients.ts'
 
 export interface PublicationBundleOptions {
   include_code?: boolean
+  dataset_id?: string
   time_col?: string
   event_col?: string
   group_col?: string
@@ -105,18 +107,18 @@ function normalizeSex(v: unknown): string | null {
 type SnapshotSubject = { subject_id: string; sex: string | null; age_at_enroll: number | null; vars?: Record<string, SubjectVar> }
 
 /** 已核实的值才使用；未核实、缺失一律为 null（不补值） */
-function verifiedValue(s: SnapshotSubject, id: BundleVarId): number | string | null {
+function verifiedValue(s: SnapshotSubject, id: string): number | string | null {
   const v = s.vars?.[id]
   return v && v.status === 'verified' ? v.value : null
 }
 
 /** 把入组快照里的受试者转成材料包记录：年龄 / 性别来自患者主档案，其余只取已核实的研究变量 */
-export function toBundleRecords(subjects: SnapshotSubject[]): BundleRecord[] {
+export function toBundleRecords(subjects: SnapshotSubject[], customVars: CustomVarDef[] = []): BundleRecord[] {
   return subjects.map(s => {
-    const num = (id: BundleVarId) => { const v = verifiedValue(s, id); return typeof v === 'number' ? v : v === null ? null : (Number.isFinite(Number(v)) ? Number(v) : null) }
+    const num = (id: string) => { const v = verifiedValue(s, id); return typeof v === 'number' ? v : v === null ? null : (Number.isFinite(Number(v)) ? Number(v) : null) }
     const arm = verifiedValue(s, 'treatment_arm')
     const os = verifiedValue(s, 'os_status')
-    return {
+    const base: BundleRecord = {
       subject_id: String(s.subject_id),
       treatment_arm: arm === null ? null : String(arm),
       age: s.age_at_enroll ?? null,
@@ -126,17 +128,27 @@ export function toBundleRecords(subjects: SnapshotSubject[]): BundleRecord[] {
       followup_months: num('followup_months'),
       os_status: os === null ? null : normalizeEventStatus(os),
     }
+    for (const cv of customVars) {
+      if (cv.key in base) continue
+      const v = verifiedValue(s, cv.key)
+      base[cv.key] = cv.kind === 'continuous' || cv.kind === 'binary' ? num(cv.key) : (v === null ? null : String(v))
+    }
+    return base
   })
 }
 
 /** 统计每个研究变量的来源与核实状态 */
-export function varProvenance(subjects: SnapshotSubject[]): VarProvenance[] {
-  return BUNDLE_VARS.map(id => {
+export function varProvenance(subjects: SnapshotSubject[], customVars: CustomVarDef[] = []): VarProvenance[] {
+  const ids: Array<{ id: string; label: string }> = [
+    ...BUNDLE_VARS.map(id => ({ id, label: STUDY_VARS.find(d => d.id === id)?.label ?? id })),
+    ...customVars.filter(cv => !(BUNDLE_VARS as readonly string[]).includes(cv.key)).map(cv => ({ id: cv.key, label: cv.label })),
+  ]
+  return ids.map(({ id, label }) => {
     const vs = subjects.map(s => s.vars?.[id]).filter((v): v is SubjectVar => !!v)
     const verified = vs.filter(v => v.status === 'verified').length
     return {
       var_id: id,
-      label: STUDY_VARS.find(d => d.id === id)?.label ?? id,
+      label,
       sources: [...new Set(vs.map(v => SOURCE_LABELS[v.source] ?? v.source))],
       entered: vs.length,
       verified,
@@ -165,9 +177,14 @@ export class PublicationBundleService {
     const study = this.studies.get(a.userId, studyId, 'read')
     const nowStr = new Date().toISOString().slice(0, 10)
 
-    // 1. 入组快照：只用真实受试者
+    // 1. 入组快照：只用真实受试者（若无入组受试者但归入了已就绪的外部上传数据集，则走外部数据集轨道）
     const snap = this.patients.cohortSnapshot(a, studyId, { log: true })
     if (snap.subjects.length === 0) {
+      const readyDs = this.datasets ? this.studies.readyDatasets(a.userId, studyId) : []
+      const targetDsId = _options.dataset_id ?? readyDs[0]?.dataset_id
+      if (this.datasets && targetDsId && snap.skipped.length === 0) {
+        return this.buildBundleFromDataset(a, study, targetDsId, nowStr, _options)
+      }
       throw new StudyError(
         'empty_cohort',
         snap.skipped.length > 0
@@ -176,14 +193,15 @@ export class PublicationBundleService {
         400,
       )
     }
-    const records = toBundleRecords(snap.subjects)
-    const provenance = varProvenance(snap.subjects)
+    const customVars = parseCustomVars(study.custom_vars)
+    const records = toBundleRecords(snap.subjects, customVars)
+    const provenance = varProvenance(snap.subjects, customVars)
     const n = records.length
 
     // 缺失数：未核实的值按缺失计（没有进入分析）
     const missing: Record<string, number> = {}
-    for (const k of ['treatment_arm', 'age', 'sex', 'l3_smi', 'vat_to_sat', 'followup_months', 'os_status'] as const) {
-      missing[k] = records.filter(r => r[k] === null).length
+    for (const k of ['treatment_arm', 'age', 'sex', 'l3_smi', 'vat_to_sat', 'followup_months', 'os_status', ...customVars.map(c => c.key)]) {
+      missing[k] = records.filter(r => r[k] === null || r[k] === undefined).length
     }
     const omitted: string[] = []
     for (const pv of provenance) {
@@ -198,20 +216,35 @@ export class PublicationBundleService {
     const armMissing = missing.treatment_arm!
 
     // 3. Table 1：有 ≥2 个真实分组时分组比较，否则只做总体描述；缺失值由 table1 统计为 Missing 行
+    const verifiedCustomCols = customVars.filter(cv => (provenance.find(p => p.var_id === cv.key)?.verified ?? 0) > 0)
+    const table1Labels: Record<string, string> = {
+      age: '年龄 (岁)',
+      sex: '生理性别',
+      l3_smi: 'L3 骨骼肌质量指数 SMI (cm²/m²)',
+      vat_to_sat: '内脏/皮下脂肪比 (VAT/SAT)',
+      followup_months: '总随访时间 (月)',
+    }
+    for (const cv of verifiedCustomCols) {
+      table1Labels[cv.key] = cv.unit ? `${cv.label} (${cv.unit})` : cv.label
+      if (cv.value_labels) {
+        for (const [code, meaning] of Object.entries(cv.value_labels)) {
+          table1Labels[`${cv.key}.${code}`] = meaning
+        }
+      }
+    }
     const table1Result: Table1Result = generateTable1FromData(records, {
       group_col: grouped ? 'treatment_arm' : undefined,
       // 没有任何已核实值的研究变量不进 Table 1（原因写在 README 与正文）
-      columns: ['age', 'sex', ...(['l3_smi', 'vat_to_sat', 'followup_months'] as const).filter(k => provenance.find(p => p.var_id === k)!.verified > 0)],
-      continuous_vars: ['age', 'l3_smi', 'vat_to_sat', 'followup_months'],
-      categorical_vars: ['sex'],
+      columns: [
+        'age',
+        'sex',
+        ...(['l3_smi', 'vat_to_sat', 'followup_months'] as const).filter(k => provenance.find(p => p.var_id === k)!.verified > 0),
+        ...verifiedCustomCols.map(cv => cv.key),
+      ],
+      continuous_vars: ['age', 'l3_smi', 'vat_to_sat', 'followup_months', ...verifiedCustomCols.filter(cv => cv.kind === 'continuous').map(cv => cv.key)],
+      categorical_vars: ['sex', ...verifiedCustomCols.filter(cv => cv.kind !== 'continuous').map(cv => cv.key)],
       show_missing: true,
-      labels: {
-        age: '年龄 (岁)',
-        sex: '生理性别',
-        l3_smi: 'L3 骨骼肌质量指数 SMI (cm²/m²)',
-        vat_to_sat: '内脏/皮下脂肪比 (VAT/SAT)',
-        followup_months: '总随访时间 (月)',
-      },
+      labels: table1Labels,
       title: `${study.title} · Baseline Characteristics (Table 1)`,
     })
     table1Result.footnotes.push('Age and sex: patient registry (来源：患者主档案). Other variables: researcher-verified values only.')
@@ -224,20 +257,32 @@ export class PublicationBundleService {
     const table1Docx = exportTable1ToDocx(table1Result)
     if (!grouped) omitted.push('Table 1 组间比较（受试者没有记录至少 2 个治疗分组）')
 
-    // 4. 受试者流向图：只用平台入组记录（在组 / 已移出 / 无权限未导出）
+    // 4. 受试者流向图：只用平台入组记录（若研究保存了结构化纳排筛选漏斗快照，则如实展示初筛评估与排除明细）
     const roster = this.patients.enrollments(a, studyId).subjects
     const withdrawn = roster.filter(s => s.status === 'withdrawn').length
     const inaccessible = snap.skipped.length
     const enrolledEver = n + inaccessible + withdrawn
+    const savedFunnel = parseEligibilityPlan(study.eligibility_plan)?.last_funnel ?? null
     const flowData: EnrollmentFlowData = {
       title: `${study.title} · Participant Flow`,
+      ...(savedFunnel
+        ? {
+            screening_funnel: {
+              assessed_total: savedFunnel.assessed_total,
+              excluded_total: savedFunnel.excluded_total,
+              exclusions: savedFunnel.exclusions_by_rule.map(e => ({ reason: e.title, count: e.count })),
+            },
+          }
+        : {}),
       enrolled_ever: enrolledEver,
       withdrawn,
       inaccessible,
       analyzed: n,
       arms: grouped || arms.length === 1 ? arms : [],
       unassigned: arms.length > 0 ? armMissing : 0,
-      note: '平台未记录筛选人数与排除原因，因此未绘制 Assessed / Excluded 环节；请作者按原始纳排记录补充。',
+      note: savedFunnel
+        ? `初筛评估 N = ${savedFunnel.assessed_total}，排除 n = ${savedFunnel.excluded_total}（来源：本研究纳排方案筛选记录）。`
+        : '平台未记录筛选人数与排除原因，因此未绘制 Assessed / Excluded 环节；请作者按原始纳排记录补充。',
     }
     const flowSvg = upgradeSvgForIllustrator(renderEnrollmentFlowSvg(flowData), {
       title: `${study.title} Participant Flow`,
@@ -246,7 +291,9 @@ export class PublicationBundleService {
     const flowDrawio = exportFlowchartToDrawio(flowData)
     const flowVisioVdx = exportFlowchartToVisioVdx(flowData)
     const flowPptx = exportFlowchartToPptx(flowData)
-    omitted.push('CONSORT 筛选 / 排除环节（平台没有纳排筛选记录）')
+    if (!savedFunnel) {
+      omitted.push('CONSORT 筛选 / 排除环节（平台没有纳排筛选记录）')
+    }
 
     // 5. Love Plot：平台没有倾向性评分匹配 / 加权实现，不生成
     omitted.push('Love Plot 协变量平衡图（未做倾向性评分匹配或加权；两组未匹配的 SMD 见 Table 1）')
@@ -341,6 +388,246 @@ export class PublicationBundleService {
 
     const zipBuffer = zipSync(zipMap)
     const filename = `SCI_Submission_Bundle_${studyId}_${nowStr}.zip`
+    return { filename, zipBuffer, totalFiles: Object.keys(zipMap).length, report }
+  }
+
+  /**
+   * 当研究尚未从院内患者库入组受试者，但归入了外部上传的科研数据集（如多工作表 Excel + 数据字典）时，
+   * 直接基于该数据集及其数据字典标签/取值编码编译投稿材料包（Phase 3 双轨合一）。
+   */
+  private async buildBundleFromDataset(
+    a: Actor,
+    study: { id: string; title: string; design: string | null; eligibility_plan?: string | null },
+    datasetId: string,
+    nowStr: string,
+    options: PublicationBundleOptions,
+  ): Promise<{ filename: string; zipBuffer: Uint8Array; totalFiles: number; report: BundleDataReport }> {
+    const { dataset, path } = this.datasets!.readyCsv(a.userId, datasetId)
+    const rawRows = parseCsv(readFileSync(path, 'utf8'))
+    const header = rawRows[0] ?? []
+    const body = rawRows.slice(1).filter(r => r.some(c => String(c ?? '').trim() !== ''))
+    if (body.length === 0 || header.length === 0) {
+      throw new StudyError('empty_cohort', '研究关联的数据集为空，无法生成投稿材料包。', 400)
+    }
+
+    const colProfiles = new Map((dataset.columns ?? []).map(c => [c.name, c]))
+    const labels: Record<string, string> = { ...(dataset.labels ?? {}) }
+    for (const [col, map] of Object.entries(dataset.value_labels ?? {})) {
+      if (map && typeof map === 'object') {
+        for (const [code, meaning] of Object.entries(map)) {
+          if (meaning) labels[`${col}.${code}`] = meaning
+        }
+      }
+    }
+
+    const records: Array<Record<string, unknown>> = body.map((row, rIdx) => {
+      const obj: Record<string, unknown> = { subject_id: `D${String(rIdx + 1).padStart(3, '0')}` }
+      header.forEach((col, cIdx) => {
+        const raw = String(row[cIdx] ?? '').trim()
+        if (!raw) {
+          obj[col] = null
+          return
+        }
+        const prof = colProfiles.get(col)
+        const valMap = dataset.value_labels?.[col]
+        if (valMap && valMap[raw] !== undefined) {
+          obj[col] = raw
+          return
+        }
+        const n = Number(raw)
+        if (Number.isFinite(n) && (prof?.type === 'numeric' || !prof)) {
+          obj[col] = n
+        } else {
+          obj[col] = raw
+        }
+      })
+      return obj
+    })
+
+    const idColPattern = /^(id|subject_id|patient_id|编号|受试者编号|病历号)$/i
+    const analysisCols = header.filter(c => !idColPattern.test(c))
+    const groupCol = options.group_col && header.includes(options.group_col)
+      ? options.group_col
+      : analysisCols.find(c => /^(group|treatment|treatment_arm|arm|分组|组别|治疗组)$/i.test(c) || /^(分组|组别|治疗)/.test(labels[c] ?? ''))
+    const timeCol = options.time_col && header.includes(options.time_col)
+      ? options.time_col
+      : analysisCols.find(c => /^(time|os_time|os_months|followup_months|pfs_months|随访时间|生存时间)$/i.test(c))
+    const eventCol = options.event_col && header.includes(options.event_col)
+      ? options.event_col
+      : analysisCols.find(c => /^(event|status|os_status|pfs_status|death|结局|终点事件|死亡)$/i.test(c))
+
+    const n = records.length
+    const missing: Record<string, number> = {}
+    const provenance: VarProvenance[] = []
+    for (const col of analysisCols) {
+      const missCnt = records.filter(r => r[col] === null || r[col] === undefined || r[col] === '').length
+      missing[col] = missCnt
+      provenance.push({
+        var_id: col,
+        label: labels[col] || col,
+        sources: [`研究数据集《${dataset.name}》`],
+        entered: n - missCnt,
+        verified: n - missCnt,
+        unverified_excluded: 0,
+        missing: missCnt,
+        methods: dataset.dictionary_sheet ? [`数据字典工作表: ${dataset.dictionary_sheet}`] : [],
+      })
+    }
+
+    const armCounts = new Map<string, number>()
+    let armMissing = 0
+    if (groupCol) {
+      for (const r of records) {
+        const rawG = r[groupCol]
+        if (rawG === null || rawG === undefined || rawG === '') {
+          armMissing++
+        } else {
+          const code = String(rawG)
+          const gLabel = labels[`${groupCol}.${code}`] ?? labels[code] ?? code
+          armCounts.set(gLabel, (armCounts.get(gLabel) ?? 0) + 1)
+        }
+      }
+    } else {
+      armMissing = n
+    }
+    const arms = [...armCounts.entries()].sort((x, y) => x[0].localeCompare(y[0])).map(([name, cnt]) => ({ name, n: cnt }))
+    const grouped = Boolean(groupCol && arms.length >= 2)
+
+    const tableCols = analysisCols.filter(c => c !== groupCol)
+    const continuousVars = tableCols.filter(c => {
+      if (dataset.value_labels?.[c] && Object.keys(dataset.value_labels[c]!).length > 0) return false
+      return colProfiles.get(c)?.type === 'numeric'
+    })
+    const categoricalVars = tableCols.filter(c => !continuousVars.includes(c))
+
+    const table1Result: Table1Result = generateTable1FromData(records, {
+      group_col: grouped ? groupCol : undefined,
+      columns: tableCols,
+      continuous_vars: continuousVars,
+      categorical_vars: categoricalVars,
+      show_missing: true,
+      labels,
+      title: `${study.title} · Baseline Characteristics (Table 1)`,
+    })
+    table1Result.footnotes.push(`Source dataset: ${dataset.name} (n = ${n})${dataset.dictionary_sheet ? `, linked with Data Dictionary sheet "${dataset.dictionary_sheet}"` : ''}.`)
+    const table1Docx = exportTable1ToDocx(table1Result)
+
+    const omitted: string[] = []
+    if (!grouped) omitted.push('Table 1 组间比较（数据集未指定或少于 2 个分组）')
+
+    const savedFunnel = parseEligibilityPlan(study.eligibility_plan)?.last_funnel ?? null
+    const flowData: EnrollmentFlowData = {
+      title: `${study.title} · Participant Flow`,
+      ...(savedFunnel
+        ? {
+            screening_funnel: {
+              assessed_total: savedFunnel.assessed_total,
+              excluded_total: savedFunnel.excluded_total,
+              exclusions: savedFunnel.exclusions_by_rule.map(e => ({ reason: e.title, count: e.count })),
+            },
+          }
+        : {}),
+      enrolled_ever: n,
+      withdrawn: 0,
+      inaccessible: 0,
+      analyzed: n,
+      arms: grouped || arms.length === 1 ? arms : [],
+      unassigned: arms.length > 0 ? armMissing : 0,
+      note: `数据来源：研究关联数据集《${dataset.name}》（N = ${n}）`,
+    }
+    const flowSvg = upgradeSvgForIllustrator(renderEnrollmentFlowSvg(flowData), {
+      title: `${study.title} Participant Flow`,
+      layerName: 'Participant_Flowchart',
+    })
+    const flowDrawio = exportFlowchartToDrawio(flowData)
+    const flowVisioVdx = exportFlowchartToVisioVdx(flowData)
+    const flowPptx = exportFlowchartToPptx(flowData)
+
+    let survRes: SurvivalAnalysisResult | null = null
+    let coxOk = false
+    let survIncluded = 0
+    let excludedMissingOutcome = n
+    let excludedMissingArm = 0
+
+    if (timeCol && eventCol) {
+      const withOutcome = records.filter(r => {
+        const t = Number(r[timeCol])
+        const ev = normalizeEventStatus(r[eventCol])
+        return Number.isFinite(t) && t >= 0 && ev !== null
+      })
+      excludedMissingOutcome = n - withOutcome.length
+      const survRecords = grouped && groupCol
+        ? withOutcome.filter(r => r[groupCol] !== null && r[groupCol] !== undefined && r[groupCol] !== '')
+        : withOutcome
+      excludedMissingArm = withOutcome.length - survRecords.length
+      survIncluded = survRecords.length
+      if (survRecords.length > 0) {
+        survRes = generateSurvivalAnalysis(survRecords, {
+          time_col: timeCol,
+          event_col: eventCol,
+          group_col: grouped ? groupCol : undefined,
+          covariates: [],
+          time_unit: 'Months',
+          labels,
+          title: `${study.title} · Kaplan-Meier Survival Analysis`,
+        })
+        const cox = survRes.cox
+        coxOk = !!cox && cox.covariates.length > 0 && cox.events_count >= 2 && cox.sample_size >= cox.covariates.length + 2
+      }
+    } else {
+      omitted.push('Kaplan-Meier 生存曲线（数据集中未配置或未检出随访时间与结局事件列）')
+    }
+
+    let evalue: EValueResult | null = null
+    if (survRes && coxOk) {
+      const c0 = survRes.cox!.covariates[0]!
+      if (c0.hr > 0 && c0.hr_ci_lower > 0 && c0.hr_ci_upper > 0) {
+        evalue = calculateEValue({ effect_type: 'HR', estimate: c0.hr, ci_lower: c0.hr_ci_lower, ci_upper: c0.hr_ci_upper })
+      }
+    }
+
+    const report: BundleDataReport = {
+      n_subjects: n,
+      missing,
+      provenance,
+      arms,
+      arm_missing: armMissing,
+      grouped,
+      enrollment: { enrolled_ever: n, withdrawn: 0, inaccessible: 0 },
+      survival: {
+        included: survIncluded,
+        excluded_missing_time_or_status: excludedMissingOutcome,
+        excluded_missing_arm: excludedMissingArm,
+        generated: !!survRes,
+        cox_generated: coxOk,
+      },
+      omitted,
+    }
+
+    const manuscriptMd = this.generateManuscriptDraft(study.title, report, table1Result, survRes, evalue)
+    const strobeMd = this.generateStrobeChecklist(study.title, report)
+    const reproPy = this.generateReproducibilityPythonScript(study.title, report)
+
+    const zipMap: Record<string, Uint8Array> = {
+      'Table1_Baseline_Characteristics.docx': table1Docx,
+      'Figure1_Participant_Flow.svg': strToU8(flowSvg),
+      'Figure1_Participant_Flow.drawio': strToU8(flowDrawio),
+      'Figure1_Participant_Flow.vdx': strToU8(flowVisioVdx),
+      'Figure1_Participant_Flow.pptx': flowPptx,
+    }
+    if (survRes) {
+      zipMap['Figure2_Kaplan_Meier_Survival_Curve.svg'] = strToU8(survRes.native_exports?.illustrator_svg ?? survRes.svg)
+    }
+    if (survRes && coxOk && survRes.forest_svg) {
+      zipMap['Figure3_Cox_Forest_Plot.svg'] = strToU8(survRes.native_exports?.forest_illustrator_svg ?? survRes.forest_svg)
+    }
+    zipMap['Manuscript_Statistical_Methods_and_Results.md'] = strToU8(manuscriptMd)
+    zipMap['STROBE_Statement_Checklist.md'] = strToU8(strobeMd)
+    zipMap['Statistical_Reproducibility_Script.py'] = strToU8(reproPy)
+    zipMap['README_Submission_Manifest.txt'] = strToU8(this.generateManifest(study.title, study.design, nowStr, report, Object.keys(zipMap)))
+
+    const zipBuffer = zipSync(zipMap)
+    const filename = `SCI_Submission_Bundle_${study.id}_${nowStr}.zip`
     return { filename, zipBuffer, totalFiles: Object.keys(zipMap).length, report }
   }
 

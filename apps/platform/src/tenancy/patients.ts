@@ -6,6 +6,7 @@ import type { Space, TenantService, TenantSettings } from '../auth/tenants.ts'
 import type { Store } from '../store/db.ts'
 import type { TenantKeys } from './keys.ts'
 import type { Complete } from '../memory/evolve.ts'
+import type { EligibilityRule, RulePredicate, ScreeningFunnelSnapshot } from '../research/service.ts'
 import { extractReport, redact } from './extract-report.ts'
 import { standardize, standardizeRange } from './units.ts'
 
@@ -2446,24 +2447,91 @@ ${followAssetId ? `- **随访关键切片**: ![随访关键切片](asset:${follo
   /** 机构是否允许 AI 用患者数据（含由患者生成的研究数据集）；不允许时抛错。 */
   assertAi(a: Actor): void { this.ctx(a) }
 
-  /** 按条件筛选「我在诊疗组里的」在管患者。只返回代号与匹配依据；命中的患者各记一条访问日志。 */
-  screen(a: Actor, studyId: string, criteria: unknown): { criteria: Criteria; total: number; patients: Array<{ patient_id: string; code: string; sex: string | null; age: number | null; tags: string[]; matched: string[]; subject_id: string | null }> } {
+  /** 按条件筛选「我在诊疗组里的」在管患者。只返回代号与匹配依据；命中的患者各记一条访问日志，并附带 CONSORT 纳排漏斗统计。 */
+  screen(a: Actor, studyId: string, criteria: unknown): {
+    criteria: Criteria
+    total: number
+    patients: Array<{
+      patient_id: string
+      code: string
+      sex: string | null
+      age: number | null
+      tags: string[]
+      matched: string[]
+      subject_id: string | null
+    }>
+    funnel: ScreeningFunnelSnapshot
+  } {
     const c = this.ctx(a)
     const cr = parseCriteria(criteria)
     const rows = (c.db.db.prepare("SELECT p.* FROM patients p JOIN care_team t ON t.patient_id = p.id AND t.user_id = ? WHERE p.status = 'active' ORDER BY p.code").all(a.userId) as Array<Record<string, unknown>>).map(r => patientOf(r))
     const year = new Date().getUTCFullYear()
-    const needImaging = Boolean(cr.imaging_nodules?.length)
+    const hasRuleImagingOrRecord = [...(cr.inclusion_rules ?? []), ...(cr.exclusion_rules ?? [])].some(
+      r => r.enabled !== false && (r.predicate.kind === 'imaging' || r.predicate.kind === 'record' || r.predicate.kind === 'manual'),
+    )
+    const needImaging = Boolean(cr.imaging_nodules?.length || hasRuleImagingOrRecord || cr.records?.length)
+    const needRecords = Boolean(hasRuleImagingOrRecord || cr.records?.length)
     const out = []
+    let inclusionPassed = 0
+    const ruleExcludeCounts = new Map<string, { rule_id: string; title: string; kind: 'inclusion_failed' | 'exclusion_matched'; count: number }>()
+    const bumpRuleCount = (rule_id: string, title: string, kind: 'inclusion_failed' | 'exclusion_matched') => {
+      const cur = ruleExcludeCounts.get(rule_id)
+      if (cur) cur.count++
+      else ruleExcludeCounts.set(rule_id, { rule_id, title, kind, count: 1 })
+    }
+
     for (const p of rows) {
       const labs = (c.db.db.prepare("SELECT * FROM labs WHERE patient_id = ? AND status = 'confirmed' ORDER BY collected_on, COALESCE(collected_at, collected_on), created_at").all(p.id) as Array<Record<string, unknown>>).map(labOf)
       const finStudies = needImaging ? this.finalizedStudiesOf(c, p.id) : []
-      const m = matchCriteria(cr, p, labs, year, finStudies)
-      if (!m) continue
+      const patientRecords = needRecords ? this.confirmedRecordsForScreen(c, p.id) : []
+      const evalRes = evaluateEligibilityForPatient(cr, p, labs, year, finStudies, patientRecords)
+      if (evalRes.failed_inclusion_rules.length > 0) {
+        for (const f of evalRes.failed_inclusion_rules) bumpRuleCount(f.rule_id, f.title, 'inclusion_failed')
+        continue
+      }
+      inclusionPassed++
+      if (evalRes.matched_exclusion_rules.length > 0) {
+        for (const ex of evalRes.matched_exclusion_rules) bumpRuleCount(ex.rule_id, ex.title, 'exclusion_matched')
+        continue
+      }
       const enrolled = c.db.db.prepare("SELECT subject_id FROM enrollments WHERE study_id = ? AND patient_id = ? AND status = 'active'").get(studyId, p.id) as { subject_id: string } | undefined
-      out.push({ patient_id: p.id, code: p.code, sex: p.sex, age: p.birth_year ? year - p.birth_year : null, tags: p.tags, matched: m, subject_id: enrolled?.subject_id ?? null })
+      out.push({ patient_id: p.id, code: p.code, sex: p.sex, age: p.birth_year ? year - p.birth_year : null, tags: p.tags, matched: evalRes.matched, subject_id: enrolled?.subject_id ?? null })
       this.log(c, a, p.id, 'cohort_screen', `研究 ${studyId}`)
     }
-    return { criteria: cr, total: out.length, patients: out }
+    const funnel: ScreeningFunnelSnapshot = {
+      assessed_total: rows.length,
+      inclusion_passed: inclusionPassed,
+      excluded_total: rows.length - out.length,
+      exclusions_by_rule: [...ruleExcludeCounts.values()],
+      eligible_total: out.length,
+      updated_at: now(),
+    }
+    return { criteria: cr, total: out.length, patients: out, funnel }
+  }
+
+  private confirmedRecordsForScreen(c: ReturnType<PatientService['ctx']>, patientId: string): ScreenRecordContext[] {
+    const recRows = c.db.db.prepare("SELECT id, kind, title, report_date, text_enc FROM records WHERE patient_id = ? AND status = 'confirmed' ORDER BY COALESCE(report_date, created_at) DESC").all(patientId) as Array<{
+      id: string
+      kind: string
+      title: string
+      report_date: string | null
+      text_enc: string | null
+    }>
+    return recRows.map(r => {
+      const dec = r.text_enc ? this.keys.decryptText(c.tenantId, r.text_enc) : null
+      let imaging_data: Record<string, any> | null = null
+      if (r.kind === 'imaging' && dec) {
+        try { imaging_data = JSON.parse(dec) } catch {}
+      }
+      return {
+        id: r.id,
+        kind: r.kind,
+        title: r.title,
+        report_date: r.report_date,
+        text: dec,
+        imaging_data,
+      }
+    })
   }
 
   /**
@@ -2874,8 +2942,16 @@ function flagOf(l: ReturnType<typeof labInput>): 'H' | 'L' | null {
 
 // —— 入组筛选条件 ——
 
-export type LabOp = '>' | '>=' | '<' | '<=' | '='
-export interface LabCriterion { test: string; test_key: string; mode: 'latest' | 'any'; op: LabOp; value: number }
+export type LabOp = '>' | '>=' | '<' | '<=' | '=' | 'between'
+export type LabMatchMode = 'latest' | 'any' | 'baseline' | 'min' | 'max' | 'count'
+export interface LabCriterion {
+  test: string
+  test_key: string
+  mode: LabMatchMode
+  op: LabOp
+  value: number
+  value_to?: number
+}
 export interface LabChangeCriterion {
   test: string
   test_key: string
@@ -2893,6 +2969,19 @@ export interface ImagingNoduleCriterion {
   nodule_type?: NoduleDensityType | null
   /** 可选：要求至少 N 次已定稿检查（如「部分实性结节 ≥ 6 mm 且至少 2 次随访」） */
   min_finalized_studies?: number | null
+}
+export interface RecordCriterion {
+  record_kind?: 'pathology' | 'discharge' | 'imaging' | 'lab_report' | 'note' | 'any'
+  keyword?: string
+  mode?: 'present' | 'absent'
+}
+export interface ScreenRecordContext {
+  id: string
+  kind: string
+  title: string
+  report_date: string | null
+  text: string | null
+  imaging_data?: Record<string, any> | null
 }
 export interface FinalizedStudyForCohort {
   study_id: string
@@ -2953,11 +3042,20 @@ export interface Criteria {
   lab_changes: LabChangeCriterion[]
   /** 已定稿肺结节条件（W6.1：只使用 W5 定稿快照里 confirmed 的结节；未定稿检查一律不匹配） */
   imaging_nodules?: ImagingNoduleCriterion[]
+  /** 病历/病理报告条件 */
+  records?: RecordCriterion[]
+  /** 协议化纳入规则列表（EligibilityProtocol.inclusion_rules） */
+  inclusion_rules?: EligibilityRule[]
+  /** 协议化排除规则列表（EligibilityProtocol.exclusion_rules） */
+  exclusion_rules?: EligibilityRule[]
+  /** 人工复核清单中已勾选确认的规则 ID */
+  manual_confirmed_rules?: string[]
   /** 报告日期窗口：只看这段时间内的化验或定稿检查；只给窗口时要求窗口内至少有一次化验 */
   from: string | null; to: string | null
 }
 
-const OPS: LabOp[] = ['>', '>=', '<', '<=', '=']
+const OPS: LabOp[] = ['>', '>=', '<', '<=', '=', 'between']
+const LAB_MODES: LabMatchMode[] = ['latest', 'any', 'baseline', 'min', 'max', 'count']
 const NODULE_FIELDS: NoduleMetricField[] = ['mean_diameter_mm', 'volume_mm3', 'solid_core_mm', 'vdt_days']
 const NODULE_TYPES: NoduleDensityType[] = ['solid', 'part_solid', 'ground_glass', 'calcified']
 const NODULE_FIELD_LABELS: Record<NoduleMetricField, { label: string; unit: string }> = {
@@ -2977,15 +3075,17 @@ export function parseCriteria(v: unknown): Criteria {
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
   const num = (x: unknown) => typeof x === 'number' && Number.isFinite(x) ? x : typeof x === 'string' && x.trim() !== '' && Number.isFinite(Number(x)) ? Number(x) : null
   const date = (x: unknown) => typeof x === 'string' && DATE.test(x) ? x : null
-  const labs = (Array.isArray(o.labs) ? o.labs : []).slice(0, 10).map(x => {
+  const labs = (Array.isArray(o.labs) ? o.labs : []).slice(0, 20).map(x => {
     const l = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>
     const test = typeof l.test === 'string' ? l.test.trim() : ''
     const op = OPS.includes(l.op as LabOp) ? l.op as LabOp : null
     const value = num(l.value)
-    if (!test || !op || value === null) throw new PatientError('bad_criteria', '化验条件要有项目、比较符（> >= < <= =）和数值')
-    return { test, test_key: testKey(test), mode: l.mode === 'any' ? 'any' as const : 'latest' as const, op, value }
+    const value_to = num(l.value_to)
+    if (!test || !op || value === null) throw new PatientError('bad_criteria', '化验条件要有项目、比较符（> >= < <= = between）和数值')
+    const mode: LabMatchMode = LAB_MODES.includes(l.mode as LabMatchMode) ? (l.mode as LabMatchMode) : 'latest'
+    return { test, test_key: testKey(test), mode, op, value, ...(value_to !== null ? { value_to } : {}) }
   })
-  const lab_changes = (Array.isArray(o.lab_changes) ? o.lab_changes : []).slice(0, 10).map(x => {
+  const lab_changes = (Array.isArray(o.lab_changes) ? o.lab_changes : []).slice(0, 20).map(x => {
     const l = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>
     const test = typeof l.test === 'string' ? l.test.trim() : ''
     const op = OPS.includes(l.op as LabOp) ? l.op as LabOp : null
@@ -2995,7 +3095,7 @@ export function parseCriteria(v: unknown): Criteria {
     return { test, test_key: testKey(test), change_type, op, value }
   })
   const imaging_nodules = Array.isArray(o.imaging_nodules)
-    ? o.imaging_nodules.slice(0, 10).map(x => {
+    ? o.imaging_nodules.slice(0, 20).map(x => {
         const n = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>
         const rawField = typeof n.field === 'string' && n.field.trim() ? n.field.trim() : 'mean_diameter_mm'
         const field = NODULE_FIELDS.includes(rawField as NoduleMetricField) ? (rawField as NoduleMetricField) : null
@@ -3016,70 +3116,344 @@ export function parseCriteria(v: unknown): Criteria {
         return { field, op, value, ...(nodule_type ? { nodule_type } : {}), ...(min_finalized_studies ? { min_finalized_studies } : {}) }
       })
     : undefined
+  const records = Array.isArray(o.records)
+    ? o.records.slice(0, 20).map(x => {
+        const r = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>
+        const record_kind = typeof r.record_kind === 'string' ? (r.record_kind as RecordCriterion['record_kind']) : 'any'
+        const keyword = typeof r.keyword === 'string' ? r.keyword.trim() : ''
+        const mode = r.mode === 'absent' ? ('absent' as const) : ('present' as const)
+        return { record_kind, keyword, mode }
+      })
+    : undefined
+  const inclusion_rules = Array.isArray(o.inclusion_rules)
+    ? (o.inclusion_rules.filter(r => r && typeof r === 'object' && (r as EligibilityRule).predicate) as EligibilityRule[])
+    : undefined
+  const exclusion_rules = Array.isArray(o.exclusion_rules)
+    ? (o.exclusion_rules.filter(r => r && typeof r === 'object' && (r as EligibilityRule).predicate) as EligibilityRule[])
+    : undefined
+  const manual_confirmed_rules = Array.isArray(o.manual_confirmed_rules)
+    ? o.manual_confirmed_rules.filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+    : undefined
   return {
     sex: o.sex === 'M' || o.sex === 'F' ? o.sex : null, age_min: num(o.age_min), age_max: num(o.age_max),
     tags_any: (Array.isArray(o.tags_any) ? o.tags_any : []).filter((t): t is string => typeof t === 'string' && t.trim() !== '').map(t => t.trim()).slice(0, 20),
     tags_exclude: (Array.isArray(o.tags_exclude) ? o.tags_exclude : []).filter((t): t is string => typeof t === 'string' && t.trim() !== '').map(t => t.trim()).slice(0, 20),
-    labs, lab_changes, ...(imaging_nodules?.length ? { imaging_nodules } : {}), from: date(o.from), to: date(o.to),
+    labs, lab_changes,
+    ...(imaging_nodules?.length ? { imaging_nodules } : {}),
+    ...(records?.length ? { records } : {}),
+    ...(inclusion_rules?.length ? { inclusion_rules } : {}),
+    ...(exclusion_rules?.length ? { exclusion_rules } : {}),
+    ...(manual_confirmed_rules?.length ? { manual_confirmed_rules } : {}),
+    from: date(o.from), to: date(o.to),
   }
 }
 
-const cmp = (a: number, op: LabOp, b: number) => op === '>' ? a > b : op === '>=' ? a >= b : op === '<' ? a < b : op === '<=' ? a <= b : Math.abs(a - b) < 1e-9
+const cmp = (a: number, op: LabOp, b: number, bTo?: number) =>
+  op === 'between'
+    ? a >= Math.min(b, bTo ?? b) && a <= Math.max(b, bTo ?? b)
+    : op === '>'
+      ? a > b
+      : op === '>='
+        ? a >= b
+        : op === '<'
+          ? a < b
+          : op === '<='
+            ? a <= b
+            : Math.abs(a - b) < 1e-9
 
-/** 符合条件时返回匹配依据（给医生核对），不符合返回 null。labs：这位患者的已确认化验（按日期升序）；finalizedStudies：已定稿检查快照。 */
-export function matchCriteria(cr: Criteria, p: PatientRow, labs: LabRow[], year: number, finalizedStudies: FinalizedStudyForCohort[] = []): string[] | null {
-  const why: string[] = []
-  if (cr.sex) { if (p.sex !== cr.sex) return null; why.push(cr.sex === 'M' ? '男' : '女') }
-  if (cr.age_min !== null || cr.age_max !== null) {
-    if (!p.birth_year) return null
-    const age = year - p.birth_year
-    if ((cr.age_min !== null && age < cr.age_min) || (cr.age_max !== null && age > cr.age_max)) return null
-    why.push(`${age} 岁`)
+function matchSingleLabCriterion(
+  q: { test: string; test_key: string; mode: LabMatchMode; op: LabOp; value: number; value_to?: number; since?: string; until?: string; change?: { type: 'abs_drop' | 'pct_drop' | 'abs_rise' | 'pct_rise'; min_delta: number; within_days?: number } },
+  inWin: LabRow[],
+): string | null {
+  const vals = inWin.filter(
+    l =>
+      (l.test_key === q.test_key || l.test_name.toLowerCase().includes(q.test.toLowerCase())) &&
+      l.std_value !== null &&
+      (!q.since || (l.collected_on && l.collected_on >= q.since)) &&
+      (!q.until || (l.collected_on && l.collected_on <= q.until)),
+  )
+  if (q.mode === 'count') {
+    if (!cmp(vals.length, q.op, q.value, q.value_to)) return null
+    return `${q.test} 检测次数 ${vals.length} 次`
   }
-  if (cr.tags_exclude.length) {
-    const excluded = p.tags.find(t => cr.tags_exclude.some(q => t.toLowerCase().includes(q.toLowerCase())))
-    if (excluded) return null
+  if (!vals.length) return null
+
+  let matchedReason: string | null = null
+  if (q.mode === 'latest') {
+    const hit = vals[vals.length - 1]!
+    if (!cmp(hit.std_value!, q.op, q.value, q.value_to)) return null
+    matchedReason = `${hit.test_name} ${hit.std_value}${hit.std_unit ? ' ' + hit.std_unit : ''}（${hit.collected_on}，最近一次）`
+  } else if (q.mode === 'baseline') {
+    const hit = vals[0]!
+    if (!cmp(hit.std_value!, q.op, q.value, q.value_to)) return null
+    matchedReason = `${hit.test_name} ${hit.std_value}${hit.std_unit ? ' ' + hit.std_unit : ''}（${hit.collected_on}，基线）`
+  } else if (q.mode === 'min') {
+    const minRow = vals.reduce((acc, cur) => (cur.std_value! < acc.std_value! ? cur : acc), vals[0]!)
+    if (!cmp(minRow.std_value!, q.op, q.value, q.value_to)) return null
+    matchedReason = `${minRow.test_name} 最低值 ${minRow.std_value}${minRow.std_unit ? ' ' + minRow.std_unit : ''}（${minRow.collected_on}）`
+  } else if (q.mode === 'max') {
+    const maxRow = vals.reduce((acc, cur) => (cur.std_value! > acc.std_value! ? cur : acc), vals[0]!)
+    if (!cmp(maxRow.std_value!, q.op, q.value, q.value_to)) return null
+    matchedReason = `${maxRow.test_name} 最高值 ${maxRow.std_value}${maxRow.std_unit ? ' ' + maxRow.std_unit : ''}（${maxRow.collected_on}）`
+  } else {
+    const hit = vals.find(l => cmp(l.std_value!, q.op, q.value, q.value_to))
+    if (!hit) return null
+    matchedReason = `${hit.test_name} ${hit.std_value}${hit.std_unit ? ' ' + hit.std_unit : ''}（${hit.collected_on}）`
+  }
+
+  if (q.change) {
+    if (vals.length < 2) return null
+    const baseVal = vals[0]!.std_value!
+    const lastVal = vals[vals.length - 1]!.std_value!
+    const delta = lastVal - baseVal
+    const pct = Math.abs(baseVal) > 1e-9 ? (delta / Math.abs(baseVal)) * 100 : 0
+    if (q.change.type === 'abs_drop' && -(delta) < q.change.min_delta) return null
+    if (q.change.type === 'pct_drop' && -(pct) < q.change.min_delta) return null
+    if (q.change.type === 'abs_rise' && delta < q.change.min_delta) return null
+    if (q.change.type === 'pct_rise' && pct < q.change.min_delta) return null
+    matchedReason += ` · 较基线变化 ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`
+  }
+
+  return matchedReason
+}
+
+function matchRulePredicate(
+  rule: EligibilityRule,
+  p: PatientRow,
+  inWinLabs: LabRow[],
+  year: number,
+  winStudies: FinalizedStudyForCohort[],
+  records: ScreenRecordContext[],
+  manualConfirmed: Set<string>,
+): { matched: boolean; reason: string | null } {
+  const pred: RulePredicate = rule.predicate
+  switch (pred.kind) {
+    case 'demographics': {
+      if (pred.sex && p.sex !== pred.sex) return { matched: false, reason: null }
+      let ageStr = ''
+      if (pred.min_age !== undefined || pred.max_age !== undefined) {
+        if (!p.birth_year) return { matched: false, reason: null }
+        const age = year - p.birth_year
+        if ((pred.min_age !== undefined && age < pred.min_age) || (pred.max_age !== undefined && age > pred.max_age)) {
+          return { matched: false, reason: null }
+        }
+        ageStr = `${age} 岁`
+      }
+      const sexStr = pred.sex ? (pred.sex === 'M' ? '男' : '女') : ''
+      return { matched: true, reason: [sexStr, ageStr].filter(Boolean).join(' · ') || rule.title }
+    }
+    case 'tags': {
+      if (!pred.tags.length) return { matched: true, reason: rule.title }
+      const hits = pred.tags.filter(q => p.tags.some(t => t.toLowerCase().includes(q.toLowerCase())))
+      if (pred.mode === 'all') {
+        if (hits.length < pred.tags.length) return { matched: false, reason: null }
+        return { matched: true, reason: `标签「${hits.join('、')}」` }
+      }
+      if (pred.mode === 'none') {
+        if (hits.length > 0) return { matched: false, reason: null }
+        return { matched: true, reason: `不含标签「${pred.tags.join('、')}」` }
+      }
+      // mode === 'any'
+      if (hits.length === 0) return { matched: false, reason: null }
+      return { matched: true, reason: `标签「${hits.join('、')}」` }
+    }
+    case 'lab': {
+      const reason = matchSingleLabCriterion(
+        {
+          test: pred.name,
+          test_key: testKey(pred.name),
+          mode: pred.mode ?? 'latest',
+          op: pred.op,
+          value: pred.value,
+          value_to: pred.value_to,
+          since: pred.since,
+          until: pred.until,
+          change: pred.change,
+        },
+        inWinLabs,
+      )
+      return { matched: reason !== null, reason }
+    }
+    case 'imaging': {
+      const imgRecords = records.filter(r => r.kind === 'imaging')
+      if (pred.metric === 'signoff_count') {
+        const count = Math.max(winStudies.length, imgRecords.length)
+        if (!cmp(count, pred.op, pred.value)) return { matched: false, reason: null }
+        if (pred.min_followups && count < pred.min_followups + 1) return { matched: false, reason: null }
+        return { matched: true, reason: `定稿/确认影像 ${count} 次` }
+      }
+      // Check finalizedStudies lesions first
+      for (const st of winStudies) {
+        for (const l of st.lesions) {
+          if (l.status !== 'confirmed') continue
+          const m = l.metrics ?? {}
+          const candidateVal =
+            pred.metric === 'lesion_diameter_mm'
+              ? Number(m.mean_diameter_mm ?? m.longest_diameter_mm)
+              : pred.metric === 'lesion_volume_cm3'
+                ? (Number.isFinite(Number(m.total_volume_cm3)) ? Number(m.total_volume_cm3) : Number(m.volume_mm3) / 1000)
+                : Number(m[pred.metric])
+          if (Number.isFinite(candidateVal) && cmp(candidateVal, pred.op, pred.value)) {
+            return { matched: true, reason: `${rule.title}（实测 ${candidateVal}）` }
+          }
+        }
+      }
+      // Check confirmed imaging records
+      for (const rec of imgRecords) {
+        const imgData = rec.imaging_data ?? {}
+        const rawM = imgData.raw_metrics ?? imgData.metrics ?? {}
+        const recistM = imgData.recist_metrics ?? {}
+        const bc = rawM.body_composition ?? imgData.body_composition ?? {}
+        let candidateVal = NaN
+        if (pred.metric === 'l3_smi') {
+          candidateVal = Number(bc.skeletal_muscle_index_cm2_m2 ?? rawM.l3_smi ?? rawM.skeletal_muscle_index_cm2_m2)
+        } else if (pred.metric === 'vat_to_sat_ratio') {
+          candidateVal = Number(bc.vat_to_sat_ratio ?? rawM.vat_to_sat_ratio)
+        } else if (pred.metric === 'lesion_diameter_mm') {
+          candidateVal = Number(recistM.longest_diameter_mm ?? rawM.longest_diameter_mm ?? rawM.mean_diameter_mm)
+        } else if (pred.metric === 'lesion_volume_cm3') {
+          candidateVal = Number(recistM.total_volume_cm3 ?? rawM.total_volume_cm3)
+        } else if (pred.metric === 'bar_ratio') {
+          candidateVal = Number(rawM.bar_ratio ?? rawM.broncho_arterial_ratio ?? rawM.bar_max)
+        } else if (pred.metric === 'ham_volume_cm3') {
+          candidateVal = Number(rawM.total_mucus_volume_cm3 ?? rawM.ham_volume_cm3)
+        }
+        if (Number.isFinite(candidateVal) && cmp(candidateVal, pred.op, pred.value)) {
+          return { matched: true, reason: `${rule.title}（实测 ${candidateVal}）` }
+        }
+      }
+      return { matched: false, reason: null }
+    }
+    case 'record': {
+      const targetKind = pred.record_kind && pred.record_kind !== 'any' ? pred.record_kind : null
+      const kw = (pred.keyword || '').trim().toLowerCase()
+      const matchedRec = records.find(r => {
+        if (targetKind && r.kind !== targetKind) return false
+        if (!kw) return true
+        const hay = `${r.title ?? ''}\n${r.text ?? ''}`.toLowerCase()
+        return hay.includes(kw)
+      })
+      // Also allow matching patient diagnosis tags if pathology/discharge record isn't separately uploaded yet but tag confirms diagnosis
+      const tagFallback = !matchedRec && kw && (targetKind === 'pathology' || targetKind === 'discharge')
+        ? p.tags.find(t => t.toLowerCase().includes(kw))
+        : undefined
+      const isPresent = Boolean(matchedRec || tagFallback)
+      if (pred.mode === 'absent') {
+        return isPresent ? { matched: false, reason: null } : { matched: true, reason: `无「${pred.keyword || targetKind || '指定记录'}」` }
+      }
+      if (!isPresent) return { matched: false, reason: null }
+      return {
+        matched: true,
+        reason: matchedRec ? `病历「${matchedRec.title}」` : `诊断记录「${tagFallback}」`,
+      }
+    }
+    case 'manual': {
+      if (manualConfirmed.has(rule.id)) {
+        return { matched: true, reason: `人工复核确认：${pred.label}` }
+      }
+      const kw = pred.label.trim().toLowerCase()
+      const tagHit = kw ? p.tags.find(t => kw.includes(t.toLowerCase()) || t.toLowerCase().includes(kw)) : undefined
+      if (rule.type === 'exclusion') {
+        if (tagHit) return { matched: true, reason: `触犯排除项：${tagHit}` }
+        return { matched: false, reason: null }
+      }
+      // For inclusion manual checklist items, pass with a reminder badge unless explicitly failed
+      return { matched: true, reason: `待人工复核：${pred.label}` }
+    }
+  }
+}
+
+export function evaluateEligibilityForPatient(
+  cr: Criteria,
+  p: PatientRow,
+  labs: LabRow[],
+  year: number,
+  finalizedStudies: FinalizedStudyForCohort[] = [],
+  records: ScreenRecordContext[] = [],
+): {
+  eligible: boolean
+  matched: string[]
+  failed_inclusion_rules: Array<{ rule_id: string; title: string }>
+  matched_exclusion_rules: Array<{ rule_id: string; title: string }>
+} {
+  const why: string[] = []
+  const failed_inclusion_rules: Array<{ rule_id: string; title: string }> = []
+  const matched_exclusion_rules: Array<{ rule_id: string; title: string }> = []
+  const manualConfirmed = new Set(cr.manual_confirmed_rules ?? [])
+
+  const inWin = labs.filter(l => l.collected_on && (!cr.from || l.collected_on >= cr.from) && (!cr.to || l.collected_on <= cr.to))
+  const winStudies = finalizedStudies.filter(st => (!cr.from || (st.study_date && st.study_date >= cr.from)) && (!cr.to || (st.study_date && st.study_date <= cr.to)))
+
+  // 1. Legacy inclusion criteria
+  if (cr.sex) {
+    if (p.sex !== cr.sex) failed_inclusion_rules.push({ rule_id: 'legacy_sex', title: `性别：${cr.sex === 'M' ? '男' : '女'}` })
+    else why.push(cr.sex === 'M' ? '男' : '女')
+  }
+  if (cr.age_min !== null || cr.age_max !== null) {
+    const title = cr.age_min !== null && cr.age_max !== null ? `年龄 ${cr.age_min}–${cr.age_max} 岁` : cr.age_min !== null ? `年龄 ≥ ${cr.age_min} 岁` : `年龄 ≤ ${cr.age_max} 岁`
+    if (!p.birth_year) {
+      failed_inclusion_rules.push({ rule_id: 'legacy_age', title })
+    } else {
+      const age = year - p.birth_year
+      if ((cr.age_min !== null && age < cr.age_min) || (cr.age_max !== null && age > cr.age_max)) {
+        failed_inclusion_rules.push({ rule_id: 'legacy_age', title })
+      } else {
+        why.push(`${age} 岁`)
+      }
+    }
   }
   if (cr.tags_any.length) {
     const hit = p.tags.find(t => cr.tags_any.some(q => t.toLowerCase().includes(q.toLowerCase())))
-    if (!hit) return null
-    why.push(`标签「${hit}」`)
+    if (!hit) failed_inclusion_rules.push({ rule_id: 'legacy_tags_any', title: `包含诊断标签：${cr.tags_any.join(' / ')}` })
+    else why.push(`标签「${hit}」`)
   }
-  const inWin = labs.filter(l => l.collected_on && (!cr.from || l.collected_on >= cr.from) && (!cr.to || l.collected_on <= cr.to))
-  if ((cr.from || cr.to) && !cr.labs.length && !cr.lab_changes.length && !(cr.imaging_nodules?.length)) {
-    if (!inWin.length) return null
-    why.push(`窗口内 ${inWin.length} 次化验`)
+  if ((cr.from || cr.to) && !cr.labs.length && !cr.lab_changes.length && !(cr.imaging_nodules?.length) && !(cr.inclusion_rules?.length)) {
+    if (!inWin.length) failed_inclusion_rules.push({ rule_id: 'legacy_window', title: '时间窗口内有已确认化验' })
+    else why.push(`窗口内 ${inWin.length} 次化验`)
   }
-  for (const q of cr.labs) {
+  for (let i = 0; i < cr.labs.length; i++) {
+    const q = cr.labs[i]!
+    const reason = matchSingleLabCriterion(q, inWin)
+    if (!reason) failed_inclusion_rules.push({ rule_id: `legacy_lab_${i + 1}`, title: `化验 ${q.test} ${q.op} ${q.value}` })
+    else why.push(reason)
+  }
+  for (let i = 0; i < cr.lab_changes.length; i++) {
+    const q = cr.lab_changes[i]!
     const vals = inWin.filter(l => l.test_key === q.test_key && l.std_value !== null)
-    if (!vals.length) return null
-    const pick = q.mode === 'latest' ? [vals[vals.length - 1]!] : vals
-    const hit = pick.find(l => cmp(l.std_value!, q.op, q.value))
-    if (!hit) return null
-    why.push(`${hit.test_name} ${hit.std_value}${hit.std_unit ? ' ' + hit.std_unit : ''}（${hit.collected_on}${q.mode === 'latest' ? '，最近一次' : ''}）`)
-  }
-  for (const q of cr.lab_changes) {
-    const vals = inWin.filter(l => l.test_key === q.test_key && l.std_value !== null)
-    if (vals.length < 2) return null
+    const ruleTitle = `${q.test} 动态变化 ${q.op} ${q.value}${q.change_type === 'pct' ? '%' : ''}`
+    if (vals.length < 2) {
+      failed_inclusion_rules.push({ rule_id: `legacy_lab_chg_${i + 1}`, title: ruleTitle })
+      continue
+    }
     const first = vals[0]!, last = vals[vals.length - 1]!
     const baseVal = first.std_value!, lastVal = last.std_value!
     let calculated = 0
     if (q.change_type === 'pct') {
-      if (Math.abs(baseVal) < 1e-9) return null
+      if (Math.abs(baseVal) < 1e-9) {
+        failed_inclusion_rules.push({ rule_id: `legacy_lab_chg_${i + 1}`, title: ruleTitle })
+        continue
+      }
       calculated = ((lastVal - baseVal) / Math.abs(baseVal)) * 100
     } else {
       calculated = lastVal - baseVal
     }
-    if (!cmp(calculated, q.op, q.value)) return null
+    if (!cmp(calculated, q.op, q.value)) {
+      failed_inclusion_rules.push({ rule_id: `legacy_lab_chg_${i + 1}`, title: ruleTitle })
+      continue
+    }
     const unit = last.std_unit ? ` ${last.std_unit}` : ''
     const sign = calculated >= 0 ? '+' : ''
     const changeStr = q.change_type === 'pct' ? `${sign}${calculated.toFixed(1)}%` : `${sign}${calculated.toFixed(2)}${unit}`
     why.push(`${last.test_name} 变化 ${changeStr}（基线 ${baseVal} → 最近 ${lastVal}）`)
   }
-  for (const q of cr.imaging_nodules ?? []) {
-    const winStudies = finalizedStudies.filter(st => (!cr.from || (st.study_date && st.study_date >= cr.from)) && (!cr.to || (st.study_date && st.study_date <= cr.to)))
-    if (!winStudies.length) return null
-    if (q.min_finalized_studies && winStudies.length < q.min_finalized_studies) return null
+  for (let i = 0; i < (cr.imaging_nodules ?? []).length; i++) {
+    const q = cr.imaging_nodules![i]!
+    const fMeta = NODULE_FIELD_LABELS[q.field]
+    const ruleTitle = `已定稿结节 ${fMeta.label} ${q.op} ${q.value} ${fMeta.unit}`
+    if (!winStudies.length || (q.min_finalized_studies && winStudies.length < q.min_finalized_studies)) {
+      failed_inclusion_rules.push({ rule_id: `legacy_nodule_${i + 1}`, title: ruleTitle })
+      continue
+    }
     let hitInfo: { study: FinalizedStudyForCohort; lesion: FinalizedStudyForCohort['lesions'][number]; val: number } | null = null
     for (const st of winStudies) {
       for (const l of st.lesions) {
@@ -3094,13 +3468,71 @@ export function matchCriteria(cr: Criteria, p: PatientRow, labs: LabRow[], year:
       }
       if (hitInfo) break
     }
-    if (!hitInfo) return null
-    const fMeta = NODULE_FIELD_LABELS[q.field]
+    if (!hitInfo) {
+      failed_inclusion_rules.push({ rule_id: `legacy_nodule_${i + 1}`, title: ruleTitle })
+      continue
+    }
     const tLabel = q.nodule_type ? `${NODULE_TYPE_LABELS[q.nodule_type]}结节 ` : '已定稿结节 '
     const followStr = q.min_finalized_studies ? `，定稿随访 ${winStudies.length} 次` : ''
     why.push(`${tLabel}${fMeta.label} ${hitInfo.val} ${fMeta.unit}（${hitInfo.study.study_date ?? hitInfo.study.study_id} 定稿 v${hitInfo.study.version}${followStr}）`)
   }
-  return why
+  for (let i = 0; i < (cr.records ?? []).length; i++) {
+    const rc = cr.records![i]!
+    const fakeRule: EligibilityRule = {
+      id: `legacy_record_${i + 1}`,
+      type: 'inclusion',
+      title: `病历记录 ${rc.keyword || rc.record_kind || ''}`,
+      enabled: true,
+      predicate: { kind: 'record', record_kind: rc.record_kind, keyword: rc.keyword, mode: rc.mode },
+    }
+    const res = matchRulePredicate(fakeRule, p, inWin, year, winStudies, records, manualConfirmed)
+    if (!res.matched) failed_inclusion_rules.push({ rule_id: fakeRule.id, title: fakeRule.title })
+    else if (res.reason) why.push(res.reason)
+  }
+
+  // 2. Structured protocol inclusion rules
+  for (const rule of cr.inclusion_rules ?? []) {
+    if (rule.enabled === false) continue
+    const res = matchRulePredicate(rule, p, inWin, year, winStudies, records, manualConfirmed)
+    if (!res.matched) {
+      failed_inclusion_rules.push({ rule_id: rule.id, title: rule.title })
+    } else if (res.reason && !why.includes(res.reason)) {
+      why.push(res.reason)
+    }
+  }
+
+  // 3. Legacy exclusion tags
+  if (cr.tags_exclude.length) {
+    const excluded = p.tags.find(t => cr.tags_exclude.some(q => t.toLowerCase().includes(q.toLowerCase())))
+    if (excluded) {
+      matched_exclusion_rules.push({ rule_id: 'legacy_tags_exclude', title: `排除标签：${excluded}` })
+    }
+  }
+
+  // 4. Structured protocol exclusion rules
+  for (const rule of cr.exclusion_rules ?? []) {
+    if (rule.enabled === false) continue
+    const res = matchRulePredicate(rule, p, inWin, year, winStudies, records, manualConfirmed)
+    if (res.matched) {
+      matched_exclusion_rules.push({ rule_id: rule.id, title: rule.title })
+    }
+  }
+
+  const eligible = failed_inclusion_rules.length === 0 && matched_exclusion_rules.length === 0
+  return { eligible, matched: why, failed_inclusion_rules, matched_exclusion_rules }
+}
+
+/** 符合条件时返回匹配依据（给医生核对），不符合返回 null。labs：这位患者的已确认化验（按日期升序）；finalizedStudies：已定稿检查快照。 */
+export function matchCriteria(
+  cr: Criteria,
+  p: PatientRow,
+  labs: LabRow[],
+  year: number,
+  finalizedStudies: FinalizedStudyForCohort[] = [],
+  records: ScreenRecordContext[] = [],
+): string[] | null {
+  const res = evaluateEligibilityForPatient(cr, p, labs, year, finalizedStudies, records)
+  return res.eligible ? res.matched : null
 }
 
 // —— 研究变量 ——

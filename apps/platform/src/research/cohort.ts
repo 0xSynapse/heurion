@@ -4,7 +4,7 @@ import { extname, join } from 'node:path'
 import type { DatasetService, DatasetView } from '../datasets/service.ts'
 import { DEID_METHOD, DEID_SCHEME } from '../imaging/deid/deidentify.ts'
 import type { Actor, CohortImagingExportRow, LabRow, PatientService, SubjectVar } from '../tenancy/patients.ts'
-import { StudyError, type StudyService } from './service.ts'
+import { parseCustomVars, parseEligibilityPlan, StudyError, type CustomVarDef, type StudyService } from './service.ts'
 
 /**
  * 研究入组与研究数据集（docs/design/COHORT.md）。
@@ -18,8 +18,10 @@ import { StudyError, type StudyService } from './service.ts'
  */
 
 export type Shape = 'wide' | 'long'
+export type FollowupLandmark = 'm1' | 'm3' | 'm6' | 'm12'
 export interface CohortOrigin {
   kind: 'cohort'; study_id: string; shape: Shape; tests: string[] | null; from: string | null; to: string | null; relative_days?: boolean
+  baseline_window_days?: [number, number] | null; landmarks?: FollowupLandmark[]; include_change?: boolean
   generated_at: string; fingerprint: string; subjects: number; trusted_columns: string[]
 }
 
@@ -43,8 +45,38 @@ export class CohortService {
   }
 
   preview(a: Actor, studyId: string, criteria: unknown) {
-    this.studies.get(a.userId, studyId, 'write')
-    return this.patients.screen(a, studyId, criteria)
+    const study = this.studies.get(a.userId, studyId, 'write')
+    const raw = (criteria && typeof criteria === 'object' ? { ...(criteria as Record<string, unknown>) } : {}) as Record<string, unknown>
+    if (raw.extract_from_protocol) {
+      const extracted = this.studies.extractEligibilityFromProtocol(a.userId, studyId, {
+        protocol_text: typeof raw.protocol_text === 'string' ? raw.protocol_text : undefined,
+        template_id: typeof raw.template_id === 'string' ? raw.template_id : undefined,
+      })
+      if (!Array.isArray(raw.inclusion_rules)) raw.inclusion_rules = extracted.eligibility_plan.inclusion_rules
+      if (!Array.isArray(raw.exclusion_rules)) raw.exclusion_rules = extracted.eligibility_plan.exclusion_rules
+    } else if (raw.use_study_plan) {
+      const plan = parseEligibilityPlan(study.eligibility_plan)
+      if (plan) {
+        if (!Array.isArray(raw.inclusion_rules)) raw.inclusion_rules = plan.inclusion_rules
+        if (!Array.isArray(raw.exclusion_rules)) raw.exclusion_rules = plan.exclusion_rules
+      }
+    }
+    const res = this.patients.screen(a, studyId, raw)
+    const hasProtocolRules = Boolean(
+      raw.use_study_plan ||
+      raw.extract_from_protocol ||
+      raw.save_plan ||
+      (Array.isArray(raw.inclusion_rules) && raw.inclusion_rules.length > 0) ||
+      (Array.isArray(raw.exclusion_rules) && raw.exclusion_rules.length > 0),
+    )
+    let eligibility_plan = parseEligibilityPlan(this.studies.get(a.userId, studyId).eligibility_plan)
+    if (hasProtocolRules && raw.save_funnel !== false) {
+      eligibility_plan = this.studies.saveScreeningFunnel(a.userId, studyId, res.funnel, {
+        inclusion_rules: res.criteria.inclusion_rules,
+        exclusion_rules: res.criteria.exclusion_rules,
+      })
+    }
+    return { ...res, eligibility_plan }
   }
 
   enroll(a: Actor, studyId: string, input: { patient_ids?: unknown; criteria?: unknown }) {
@@ -59,11 +91,17 @@ export class CohortService {
     return this.patients.unenroll(a, studyId, patientId)
   }
 
-  /** 入组名单、待确认的入组提议、研究数据集（最新版本是否过期）。 */
+  /** 入组名单、待确认的入组提议、研究数据集（最新版本是否过期）以及研究纳排方案。 */
   list(a: Actor, studyId: string) {
-    this.studies.get(a.userId, studyId)
+    const study = this.studies.get(a.userId, studyId)
     const { subjects, pending } = this.patients.enrollments(a, studyId)
-    return { active: subjects.filter(s => s.status === 'active').length, subjects, pending, datasets: this.cohortDatasets(a, studyId) }
+    return {
+      active: subjects.filter(s => s.status === 'active').length,
+      subjects,
+      pending,
+      datasets: this.cohortDatasets(a, studyId),
+      eligibility_plan: parseEligibilityPlan(study.eligibility_plan),
+    }
   }
 
   /** 研究里由队列生成的数据集；每种形状最新的一版判断是否过期，更早的标为旧版本。 */
@@ -84,21 +122,56 @@ export class CohortService {
   /**
    * 生成（或刷新）研究数据集：快照 → CSV → 数据集（自动归入研究）。
    * tests 不填 = 入组受试者有过的全部化验项目；from / to 限定化验日期；relative_days=true 计算相对入组日（Day 0）天数。
+   * 支持 baseline_window_days（如 [-30, 7] 锚定入组日前后基线时间窗）与 landmarks（['m1','m3','m6','m12'] 纵向随访节点及基线变化率）。
    */
-  async dataset(a: Actor, studyId: string, input: { shape?: unknown; tests?: unknown; from?: unknown; to?: unknown; relative_days?: unknown }): Promise<{ dataset: DatasetView; unchanged: boolean; skipped: string[] }> {
+  async dataset(
+    a: Actor,
+    studyId: string,
+    input: {
+      shape?: unknown
+      tests?: unknown
+      from?: unknown
+      to?: unknown
+      relative_days?: unknown
+      baseline_window_days?: unknown
+      landmarks?: unknown
+      include_change?: unknown
+    },
+  ): Promise<{ dataset: DatasetView; unchanged: boolean; skipped: string[] }> {
     const study = this.studies.get(a.userId, studyId, 'write')
     if (!this.datasets) throw new StudyError('unavailable', '数据集未启用')
     const shape: Shape = input.shape === 'long' ? 'long' : 'wide'
     const relativeDays = Boolean(input.relative_days)
     const tests = Array.isArray(input.tests) ? input.tests.filter((t): t is string => typeof t === 'string' && t.trim() !== '').slice(0, 50) : []
     const from = date(input.from), to = date(input.to)
+    const baselineWindow: [number, number] | null =
+      Array.isArray(input.baseline_window_days) &&
+      input.baseline_window_days.length === 2 &&
+      Number.isFinite(Number(input.baseline_window_days[0])) &&
+      Number.isFinite(Number(input.baseline_window_days[1]))
+        ? [Number(input.baseline_window_days[0]), Number(input.baseline_window_days[1])]
+        : null
+    const validLandmarks = new Set<FollowupLandmark>(['m1', 'm3', 'm6', 'm12'])
+    const landmarks: FollowupLandmark[] = Array.isArray(input.landmarks)
+      ? input.landmarks.filter((x): x is FollowupLandmark => typeof x === 'string' && validLandmarks.has(x as FollowupLandmark))
+      : []
+    const includeChange = Boolean(input.include_change || landmarks.length > 0)
+
     const snap = this.patients.cohortSnapshot(a, studyId, { tests, from, to, log: true })
     if (!snap.subjects.length) throw new StudyError('empty_cohort', snap.skipped.length ? '入组的患者你都不在诊疗组里了，不能生成数据集' : '还没有入组的患者')
-    const { header, rows, labels } = shape === 'wide' ? wide(snap.subjects, relativeDays) : long(snap.subjects, relativeDays)
+    const customVars = parseCustomVars(study.custom_vars)
+    const { header, rows, labels } = shape === 'wide'
+      ? wide(snap.subjects, relativeDays, customVars, { baselineWindow, landmarks, includeChange })
+      : long(snap.subjects, relativeDays)
     const prev = this.cohortDatasets(a, studyId).filter(d => d.shape === shape)
     const version = (prev[0]?.version ?? 0) + 1
     const origin: CohortOrigin = {
-      kind: 'cohort', study_id: studyId, shape, tests: tests.length ? tests : null, from, to, relative_days: relativeDays ? true : undefined, generated_at: new Date().toISOString(),
+      kind: 'cohort', study_id: studyId, shape, tests: tests.length ? tests : null, from, to,
+      relative_days: relativeDays ? true : undefined,
+      baseline_window_days: baselineWindow ?? undefined,
+      landmarks: landmarks.length ? landmarks : undefined,
+      include_change: includeChange ? true : undefined,
+      generated_at: new Date().toISOString(),
       fingerprint: snap.fingerprint, subjects: snap.subjects.length, trusted_columns: header,
     }
     const label = shape === 'wide' ? '宽表' : '长表'
@@ -546,8 +619,24 @@ function formatImagingExport(row: CohortImagingExportRow) {
 
 type Subject = ReturnType<PatientService['cohortSnapshot']>['subjects'][number]
 
-/** 宽表：每人一行；每个化验项目一组列（基线 = 窗口内第一次，最近 = 最后一次，次数），统一用该项目最常见的标准单位，单位不同的值只进长表。 */
-function wide(subjects: Subject[], relativeDays = false) {
+const LANDMARK_SPECS: Record<FollowupLandmark, { label: string; targetDays: number; minDays: number; maxDays: number }> = {
+  m1: { label: '1个月随访', targetDays: 30, minDays: 14, maxDays: 45 },
+  m3: { label: '3个月随访', targetDays: 90, minDays: 60, maxDays: 120 },
+  m6: { label: '6个月随访', targetDays: 180, minDays: 135, maxDays: 225 },
+  m12: { label: '12个月随访', targetDays: 365, minDays: 300, maxDays: 430 },
+}
+
+/** 宽表：每人一行；每个化验项目一组列（基线 = 窗口内第一次，最近 = 最后一次，随访节点与变化率，次数），统一用该项目最常见的标准单位，单位不同的值只进长表。 */
+function wide(
+  subjects: Subject[],
+  relativeDays = false,
+  customVars: CustomVarDef[] = [],
+  opts?: { baselineWindow?: [number, number] | null; landmarks?: FollowupLandmark[]; includeChange?: boolean },
+) {
+  const landmarks = opts?.landmarks ?? []
+  const includeChange = Boolean(opts?.includeChange)
+  const baselineWindow = opts?.baselineWindow ?? null
+
   const byKey = new Map<string, { name: string; units: Map<string, number> }>()
   for (const s of subjects) for (const l of s.labs) {
     if (l.std_value === null) continue
@@ -565,11 +654,21 @@ function wide(subjects: Subject[], relativeDays = false) {
       [`${t.key}_baseline_date`, `${t.name} 基线日期`],
     ]
     if (relativeDays) cols.push([`${t.key}_baseline_day_rel`, `${t.name} 基线相对入组天数`])
+    for (const lm of landmarks) {
+      const spec = LANDMARK_SPECS[lm]
+      cols.push([`${t.key}_${lm}${u}`, `${t.name} ${spec.label}${shown}`])
+    }
     cols.push(
       [`${t.key}_latest${u}`, `${t.name} 最近${shown}`],
       [`${t.key}_latest_date`, `${t.name} 最近日期`],
     )
     if (relativeDays) cols.push([`${t.key}_latest_day_rel`, `${t.name} 最近相对入组天数`])
+    if (includeChange) {
+      cols.push(
+        [`${t.key}_delta${u}`, `${t.name} 较基线绝对变化${shown}`],
+        [`${t.key}_change_pct`, `${t.name} 较基线变化率（%）`],
+      )
+    }
     cols.push([`${t.key}_n`, `${t.name} 次数`])
 
     for (const [col, lab] of cols) {
@@ -616,15 +715,63 @@ function wide(subjects: Subject[], relativeDays = false) {
     labels.nodule_vars_source = '肺结节变量来源（W5 定稿快照）'
   }
 
+  const clinicalStudyVars = [
+    { id: 'treatment_arm', col: 'treatment_arm', label: '治疗分组（已核实）' },
+    { id: 'followup_months', col: 'followup_months', label: '总随访时间（已核实，月）' },
+    { id: 'os_status', col: 'os_status', label: '全因死亡/主要终点事件（已核实，1/0）' },
+    { id: 'pfs_months', col: 'pfs_months', label: '无进展生存期（已核实，月）' },
+    { id: 'pfs_status', col: 'pfs_status', label: '进展/死亡事件（已核实，1/0）' },
+    { id: 'vat_to_sat', col: 'vat_to_sat_verified', label: '内脏/皮下脂肪比 VAT/SAT（已核实）' },
+  ] as const
+  const activeClinicalVars = clinicalStudyVars.filter(cv => subjects.some(s => s.vars?.[cv.id]?.status === 'verified'))
+  for (const cv of activeClinicalVars) {
+    header.push(cv.col)
+    labels[cv.col] = cv.label
+  }
+
+  const activeCustomVars = customVars.filter(cv => subjects.some(s => s.vars?.[cv.key]?.status === 'verified'))
+  for (const cv of activeCustomVars) {
+    header.push(cv.key)
+    labels[cv.key] = cv.unit ? `${cv.label}（${cv.unit}）` : cv.label
+  }
+
   const rows = subjects.map(s => {
     const r: unknown[] = [s.subject_id, s.sex, s.age_at_enroll, s.tags.join('; '), s.enrolled_on]
     for (const t of tests) {
       const vals = s.labs.filter((l: LabRow) => l.test_key === t.key && l.std_value !== null && (l.std_unit ?? null) === t.unit)
-      const first = vals[0], last = vals[vals.length - 1]
+      let first = vals[0]
+      if (baselineWindow && vals.length > 0 && s.enrolled_on) {
+        const [minD, maxD] = baselineWindow
+        const inWin = vals
+          .map(v => ({ v, rel: daysDiff(v.collected_on, s.enrolled_on) }))
+          .filter(x => x.rel !== null && x.rel >= minD && x.rel <= maxD)
+          .sort((a, b) => Math.abs(a.rel!) - Math.abs(b.rel!))
+        if (inWin.length > 0) first = inWin[0]!.v
+      }
+      const last = vals[vals.length - 1]
       r.push(first?.std_value ?? null, first?.collected_on ?? null)
       if (relativeDays) r.push(daysDiff(first?.collected_on, s.enrolled_on))
+
+      for (const lm of landmarks) {
+        const spec = LANDMARK_SPECS[lm]
+        const hit = s.enrolled_on
+          ? vals
+              .map(v => ({ v, rel: daysDiff(v.collected_on, s.enrolled_on) }))
+              .filter(x => x.rel !== null && x.rel >= spec.minDays && x.rel <= spec.maxDays)
+              .sort((a, b) => Math.abs(a.rel! - spec.targetDays) - Math.abs(b.rel! - spec.targetDays))[0]?.v
+          : undefined
+        r.push(hit?.std_value ?? null)
+      }
+
       r.push(last?.std_value ?? null, last?.collected_on ?? null)
       if (relativeDays) r.push(daysDiff(last?.collected_on, s.enrolled_on))
+      if (includeChange) {
+        const bVal = first?.std_value ?? null
+        const lVal = last?.std_value ?? null
+        const delta = bVal !== null && lVal !== null ? Number((lVal - bVal).toFixed(4)) : null
+        const pct = bVal !== null && lVal !== null && Math.abs(bVal) > 1e-8 ? Number((((lVal - bVal) / Math.abs(bVal)) * 100).toFixed(2)) : null
+        r.push(delta, pct)
+      }
       r.push(vals.length)
     }
 
@@ -663,6 +810,18 @@ function wide(subjects: Subject[], relativeDays = false) {
         r.push(ok ? v.value : null)
       }
       r.push(firstVerified ? noduleVarSource(firstVerified) : null)
+    }
+
+    for (const cv of activeClinicalVars) {
+      const v = s.vars?.[cv.id]
+      const ok = v && v.status === 'verified'
+      r.push(ok ? v.value : null)
+    }
+
+    for (const cv of activeCustomVars) {
+      const v = s.vars?.[cv.key]
+      const ok = v && v.status === 'verified'
+      r.push(ok ? v.value : null)
     }
 
     return r

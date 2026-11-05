@@ -52,6 +52,7 @@ const STUDY_PARITY: Record<string, string> = {
   'POST /api/studies/:sid/items': 'study_link',
   'DELETE /api/studies/:sid/items/:kind/:rid': 'study_link',
   'GET /api/studies/:sid/cohort': 'study_cohort_list',
+  'POST /api/studies/:sid/eligibility/extract': 'study_cohort_preview',
   'POST /api/studies/:sid/cohort/preview': 'study_cohort_preview',
   'POST /api/studies/:sid/cohort': 'study_enroll',
   'DELETE /api/studies/:sid/cohort/:ptid': 'study_unenroll',
@@ -112,7 +113,7 @@ const ALL_PARITY: Record<string, string> = {
   'GET /api/datasets': 'dataset_list', 'GET /api/datasets/:did': 'dataset_describe', 'GET /api/datasets/:did/preview': 'dataset_open',
   'POST /api/datasets/:did/table1': 'dataset_table1', 'POST /api/datasets/:did/survival': 'dataset_survival', 'POST /api/datasets/:did/imaging-survival': 'dataset_imaging_survival',
   'POST /api/datasets/:did/logistic': 'dataset_logistic', 'POST /api/datasets/:did/grotta': 'dataset_grotta', 'POST /api/datasets/:did/sankey': 'dataset_sankey', 'POST /api/datasets/:did/upset': 'dataset_upset',
-  'POST /api/datasets': 'dataset_manage.upload', 'PATCH /api/datasets/:did': 'dataset_manage.rename', 'POST /api/datasets/:did/phi': 'dataset_manage.resolve_phi', 'DELETE /api/datasets/:did': 'dataset_manage.delete',
+  'POST /api/datasets': 'dataset_manage.upload', 'PATCH /api/datasets/:did': 'dataset_manage.rename', 'POST /api/datasets/:did/sheets': 'dataset_manage.select_sheets', 'POST /api/datasets/:did/ai-audit': 'dataset_manage.ai_audit', 'POST /api/datasets/:did/phi': 'dataset_manage.resolve_phi', 'DELETE /api/datasets/:did': 'dataset_manage.delete',
   // 记忆
   'GET /api/memory': 'memory_manage.list', 'GET /api/memory/:mid/events': 'memory_manage.events', 'PATCH /api/memory/:mid': 'memory_manage.edit',
   'POST /api/memory': 'memory_propose', 'DELETE /api/memory/:mid': 'memory_forget', 'POST /api/memory/review': 'memory_review', 'POST /api/memory/skill-train': 'memory_manage.train_from_doc',
