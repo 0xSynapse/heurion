@@ -1102,17 +1102,27 @@
         msgEl.textContent = currentLang === 'zh' ? '正在提交审批…' : 'Submitting decision…';
       }
       try {
-        const res = await fetch(apiBase + '/v1/approvals/decide', {
+        const reqBody = JSON.stringify({
+          escalation_id: escId,
+          decision,
+          ttl_secs: ttlSecs,
+          totp: totp || undefined,
+          approved_by: 'web-developer-console'
+        });
+        let res = await fetch(apiBase + '/v1/approvals/decide', {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({
-            escalation_id: escId,
-            decision,
-            ttl_secs: ttlSecs,
-            totp: totp || undefined,
-            approved_by: 'web-developer-console'
-          })
+          body: reqBody
         });
+        if (res.status === 401 && authKey) {
+          authKey = '';
+          sessionStorage.removeItem('aegis_approve_key');
+          res = await fetch(apiBase + '/v1/approvals/decide', {
+            method: 'POST',
+            headers: authHeaders(),
+            body: reqBody
+          });
+        }
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || res.statusText);
         await refreshAll();
@@ -1461,8 +1471,17 @@
       const totpBadge = document.getElementById('totp-status-badge');
 
       try {
+        if (currentOrgId === '*') {
+          currentOrgId = '';
+          sessionStorage.removeItem('aegis_org_id');
+        }
         const statusUrl = apiBase + '/v1/status' + (currentOrgId ? '?org_id=' + encodeURIComponent(currentOrgId) : '');
-        const res = await fetch(statusUrl, { headers: authHeaders() });
+        let res = await fetch(statusUrl, { headers: authHeaders() });
+        if (res.status === 401 && authKey) {
+          authKey = '';
+          sessionStorage.removeItem('aegis_approve_key');
+          res = await fetch(statusUrl, { headers: authHeaders() });
+        }
         if (res.status === 401 || res.status === 403) {
           if (connBadge && !currentOrgId) {
             connBadge.className = 'badge';
@@ -1471,38 +1490,47 @@
           return;
         }
         const data = await res.json();
-        if (data.org_id) currentOrgId = data.org_id;
+        if (data.org_id && data.org_id !== '*') {
+          currentOrgId = data.org_id;
+        }
+        const activeOrg = currentOrgId ||
+          (Array.isArray(data.pending_escalations) && data.pending_escalations[0] && data.pending_escalations[0].org_id) ||
+          (Array.isArray(data.peers) && data.peers[0] && data.peers[0].org_id) ||
+          (Array.isArray(data.workspaces) && data.workspaces[0] && data.workspaces[0].org_id) ||
+          'aegis-os';
 
         if (connBadge) {
           connBadge.className = 'badge badge-ok';
-          connBadge.textContent = (currentLang === 'zh' ? '已连接 · ' : 'Connected · ') + (currentOrgId || 'cloud');
+          connBadge.textContent = (currentLang === 'zh' ? '已连接 · ' : 'Connected · ') + activeOrg;
         }
         const hintEl = document.getElementById('key-org-hint');
-        if (hintEl && currentOrgId) hintEl.textContent = 'Org: ' + currentOrgId;
+        if (hintEl && activeOrg) hintEl.textContent = 'Org: ' + activeOrg;
 
-        if (currentOrgId) {
-          const bRes = await fetch(apiBase + '/v1/billing/status?org_id=' + encodeURIComponent(currentOrgId), { headers: authHeaders() });
+        if (activeOrg) {
+          const bRes = await fetch(apiBase + '/v1/billing/status?org_id=' + encodeURIComponent(activeOrg), { headers: authHeaders() });
           if (bRes.ok) {
             const bData = await bRes.json();
-            updateSubscriptionAndQuotaUi(bData.plan_tier, bData.org_id || currentOrgId, bData.subscription_active, bData.quotas);
+            updateSubscriptionAndQuotaUi(bData.plan_tier, bData.org_id || activeOrg, bData.subscription_active, bData.quotas);
           }
         }
 
         const isOperator = authKey.startsWith('aop_');
-        if (!isOperator) {
-          const appRes = await fetch(apiBase + '/v1/approver' + (currentOrgId ? '?org_id=' + encodeURIComponent(currentOrgId) : ''), { headers: authHeaders() });
-          if (appRes.ok) {
-            const appData = await appRes.json();
-            requireTotp = !!appData.enrolled;
-            if (totpBadge) {
-              totpBadge.className = appData.enrolled ? 'badge badge-ok' : 'badge badge-warn';
-              totpBadge.textContent = appData.enrolled
-                ? (currentLang === 'zh' ? '已绑定 (' + (appData.email_masked || 'TOTP') + ')' : 'Enrolled (' + (appData.email_masked || 'TOTP') + ')')
-                : (currentLang === 'zh' ? '未绑定 TOTP' : 'Not Enrolled');
-            }
+        const appRes = await fetch(apiBase + '/v1/approver' + (activeOrg ? '?org_id=' + encodeURIComponent(activeOrg) : ''), { headers: authHeaders() });
+        if (appRes.ok) {
+          const appData = await appRes.json();
+          const enrolled = !!appData.enrolled;
+          requireTotp = enrolled && !isOperator;
+          if (totpBadge) {
+            const masked = appData.email || appData.email_masked || 'TOTP';
+            totpBadge.className = enrolled ? 'badge badge-ok' : 'badge badge-warn';
+            totpBadge.textContent = enrolled
+              ? (currentLang === 'zh' ? '已绑定 (' + masked + ')' : 'Enrolled (' + masked + ')')
+              : (currentLang === 'zh' ? '未绑定 TOTP (本地直连可审批)' : 'Not Enrolled (Local Ready)');
           }
-        } else {
+        } else if (isOperator && totpBadge) {
           requireTotp = false;
+          totpBadge.className = 'badge badge-ok';
+          totpBadge.textContent = currentLang === 'zh' ? '本地直连已就绪' : 'Operator Ready';
         }
 
         renderEscalations(Array.isArray(data.pending_escalations) ? data.pending_escalations : []);

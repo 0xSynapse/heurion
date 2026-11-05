@@ -282,6 +282,24 @@ app.get('/aegis-cloud/dashboard/', c => c.redirect('/aegis-cloud/dashboard'))
 app.get('/aegis-cloud/approve', c => c.html(readFileSync(join(SITE, 'aegis-cloud/dashboard.html'), 'utf8')))
 app.get('/aegis-cloud/approve/', c => c.redirect('/aegis-cloud/approve'))
 app.get('/aegis-cloud/install.sh', c => c.text(readFileSync(join(SITE, 'aegis-cloud/install.sh'), 'utf8'), 200, { 'Content-Type': 'text/x-shellscript; charset=utf-8' }))
+app.all('/aegis-cloud/*', async c => {
+  const upstreamBase = process.env.AOS_UPSTREAM_URL || 'http://127.0.0.1:7080'
+  const url = new URL(c.req.url)
+  const strippedPath = url.pathname.replace(/^\/aegis-cloud/, '') || '/'
+  const targetUrl = `${upstreamBase}${strippedPath}${url.search}`
+  const headers = new Headers(c.req.raw.headers)
+  headers.delete('host')
+  const body = c.req.method === 'GET' || c.req.method === 'HEAD' ? undefined : await c.req.raw.arrayBuffer()
+  const upstreamRes = await fetch(targetUrl, {
+    method: c.req.method,
+    headers,
+    body,
+  })
+  return new Response(upstreamRes.body, {
+    status: upstreamRes.status,
+    headers: upstreamRes.headers,
+  })
+})
 app.get('/tools', c => servePublicHtml(c, renderToolsHubHtml('zh')))
 app.get('/tools/', c => c.redirect('/tools'))
 app.get('/en/tools', c => servePublicHtml(c, renderToolsHubHtml('en')))
