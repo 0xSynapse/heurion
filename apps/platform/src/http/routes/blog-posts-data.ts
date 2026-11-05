@@ -1484,20 +1484,19 @@ assert collectToolsWhere(confirm == true) == AI_CONFIRM_REGISTRY   // High-risk 
       </figure>
 
       <ol>
-        <li><strong>带 TTL 的租约文件锁（Advisory Path Claims）</strong>：任何 Agent 在修改文件前，先通过协调总线声明锁定目标文件集合（<code>coord_claim(paths, ttl_ms)</code>）。单调递增的锁版本号（<code>claims_version</code>）确保全局视图严格一致；如果某个 Agent 意外卡死，TTL 到期后锁会自动释放，绝不造成死锁。</li>
-        <li><strong>零轮询的内嵌信箱通知（Piggybacked Reactive Inbox）</strong>：Agent 之间不需要写循环轮询锁状态。每一次常规工具调用的返回包中，内核都会自动附带一个极轻量的 <code>_inbox</code> 字段，实时推送其他同伴的锁声明、锁释放事件或点对点协同消息（<code>ipc_send / ipc_request</code>）。</li>
-        <li><strong>主动避让与无缝接力</strong>：如图 2 所示，当 Agent 02 从信箱得知 Agent 01 已锁定后端接口文件时，它会主动避开该文件，转而认领并编写前端视图层；一旦 Agent 01 提交代码并释放锁，Agent 02 立即收到信箱通知，自动将新接口同步进自己的影子工作区并完成前后端对接——<strong>全过程 0 次代码冲突，也无需人类在两个窗口之间复制粘贴传话</strong>。</li>
+        <li><strong>带 TTL 与任务绑定的通配符文件锁（Task-Bound Glob Claims）</strong>：任何 Agent 在修改文件前，先通过协调总线声明锁定目标文件或 Glob 模式集合（<code>coord_claim(paths, ttl_ms, task_id)</code>，内置 2D NFA 与真实文件树双重 Glob 交集防撞，并对沙箱 <code>proc_exec</code> 脚本越界写返回 <code>coordination_warning</code> 告警）。单调递增的锁版本号（<code>claims_version</code>）确保全局视图严格一致；当 <code>workspace_commit</code> 落盘、任务进入终态（或父任务级联取消）或 TTL 到期时，文件锁会自动释放，绝不造成死锁。</li>
+        <li><strong>零轮询的内嵌信箱通知与阻塞唤醒（Piggybacked Inbox + <code>ipc_wait</code>）</strong>：Agent 之间不需要写循环轮询锁状态。每一次常规工具调用的返回包中，内核都会自动附带一个极轻量的 <code>_inbox</code> 字段，实时推送其他同伴的锁声明、锁释放事件或点对点协同消息（<code>ipc_send / ipc_request</code>，支持 <code>parent_task_id</code> 与 <code>depends_on</code> 层级子任务编排）；对于无生命周期 Hook 的客户端（如 Codex CLI），还可直接调用 <code>ipc_wait</code> 原生阻塞等待事件唤醒。</li>
+        <li><strong>主动避让与无缝接力</strong>：如图 2 所示，当 Agent 02 从信箱得知 Agent 01 已锁定后端接口文件时，它会主动避开该文件，转而认领并编写前端视图层；一旦 Agent 01 提交代码（内核自动释放已落盘文件的锁），Agent 02 立即收到信箱唤醒，自动将新接口同步进自己的影子工作区并完成前后端对接——<strong>全过程 0 次代码冲突，也无需人类在两个窗口之间复制粘贴传话或手动敲 CLI 命令</strong>。</li>
       </ol>
 
-      <pre><code>// 多智能体事前认领锁与内嵌信箱协同伪代码
-claim_result = coord_claim(agent_id, paths = ["api.ts", "schema.ts"], ttl_ms = 600000)
+      <pre><code>// 多智能体事前认领锁、自动释放与零轮询协同伪代码
+claim_result = coord_claim(agent_id, paths = ["api.ts", "schema.ts"], ttl_ms = 600000) // 自动绑定当前 A2A task_id
 if claim_result.rejected is not empty:
-  // 发现同伴已锁定目标文件 → 主动切换至正交子任务或等待信箱唤醒
-  pivotToOrthogonalModule(claim_result.active_holder)
+  // 发现同伴已锁定重叠文件/Glob → 主动切换至正交子任务或调用 ipc_wait 阻塞等待唤醒
+  pivotToOrthogonalModuleOrWait(claim_result.active_holder)
 else:
   editInCowShadow(paths)                     // 在隔离的 0.42ms 影子工作区内安全修改
-  workspace_commit(paths, verify_cmd = "test") // 预检通过后原子合入主干
-  coord_release(agent_id, paths)             // 释放文件锁并通过内嵌信箱自动唤醒同伴</code></pre>
+  workspace_commit(paths, verify_cmd = "test") // 跨进程提交锁 + Epoch 复核 + 预检通过后原子合入主干，并自动释放已提交文件的锁！</code></pre>
 
       <h2 id="sec-micro-commit">04. 连续微事务落地：四级 LCS 自动三路归并与预检门</h2>
       <p>即便有了文件锁，有时人类开发者也会在 IDE 中顺手修改某个公共配置文件，或者两个 Agent 需要修改同一个大型路由表里的不同区块。为了彻底告别手动解 Git 冲突的痛苦，我们将每次提交设计为<strong>带自动三路归并与沙箱预检的原子微事务（<code>workspace_commit</code>）</strong>：</p>
@@ -1801,20 +1800,19 @@ function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rational
       </figure>
 
       <ol>
-        <li><strong>TTL-Leased File Claims (<code>coord_claim</code>)</strong>: Before modifying any file, an agent claims its target paths on the coordination bus with a bounded TTL. A monotonically increasing <code>claims_version</code> guarantees a consistent global lock table, while automatic TTL expiration prevents deadlocks if an agent stalls.</li>
-        <li><strong>Zero-Polling Piggybacked Inbox (<code>_inbox</code>)</strong>: Agents never waste turns polling for lock updates. Every syscall response automatically piggybacks unread coordination events and peer-to-peer messages (<code>ipc_send / ipc_request</code>).</li>
-        <li><strong>Proactive Pivoting &amp; Seamless Relay</strong>: As shown in Figure 2, when Agent 02 sees that Agent 01 holds the lock on backend schema files, it immediately pivots to claiming and building the frontend components. As soon as Agent 01 commits and releases the lock, Agent 02 receives the wake-up notification, auto-rebases the new schema into its shadow workspace, and completes the integration—with <strong>zero merge conflicts and zero human copy-paste relay</strong>.</li>
+        <li><strong>Task-Bound Glob File Claims (<code>coord_claim</code>)</strong>: Before modifying any file, an agent claims its target paths or glob patterns on the coordination bus (backed by a 2D NFA + live workspace file-tree intersection engine and <code>coordination_warning</code> alerts on out-of-claim sandbox writes). A monotonically increasing <code>claims_version</code> guarantees a consistent global lock table, while automatic release upon <code>workspace_commit</code>, task completion/cascade cancellation, or TTL expiration prevents deadlocks.</li>
+        <li><strong>Zero-Polling Piggybacked Inbox &amp; Blocking Wakeup (<code>_inbox</code> + <code>ipc_wait</code>)</strong>: Agents never waste turns polling for lock updates. Every syscall response automatically piggybacks unread coordination events and peer-to-peer messages (<code>ipc_send / ipc_request</code> with hierarchical <code>parent_task_id</code> and <code>depends_on</code> DAG support), while clients without lifecycle hooks (such as Codex CLI) can invoke <code>ipc_wait</code> to block until an event arrives.</li>
+        <li><strong>Proactive Pivoting &amp; Seamless Relay</strong>: As shown in Figure 2, when Agent 02 sees that Agent 01 holds the lock on backend schema files, it immediately pivots to claiming and building the frontend components. As soon as Agent 01 commits (automatically releasing its claimed paths), Agent 02 receives the wake-up notification, auto-rebases the new schema into its shadow workspace, and completes the integration—with <strong>zero merge conflicts, zero manual CLI commands, and zero human copy-paste relay</strong>.</li>
       </ol>
 
-      <pre><code>// Concise pseudocode for Proactive File Claims &amp; Reactive Hand-Off
-claim = coord_claim(agent_id, paths = ["api.ts", "schema.ts"], ttl_ms = 600000)
+      <pre><code>// Concise pseudocode for Task-Bound Glob Claims, Auto-Release &amp; Reactive Hand-Off
+claim = coord_claim(agent_id, paths = ["api.ts", "schema.ts"], ttl_ms = 600000) // Auto-bound to active A2A task_id
 if claim.rejected is not empty:
-  // Peer agent holds the lock → pivot to orthogonal files or await inbox wake-up
-  pivotToOrthogonalModule(claim.active_holder)
+  // Peer agent holds overlapping file/glob lock → pivot to orthogonal files or block on ipc_wait
+  pivotToOrthogonalModuleOrWait(claim.active_holder)
 else:
   editInCowShadow(paths)                     // Mutate safely inside isolated 0.42ms shadow workspace
-  workspace_commit(paths, verify_cmd = "test") // Land verified micro-transaction onto host trunk
-  coord_release(agent_id, paths)             // Release lock &amp; notify peers via piggybacked inbox</code></pre>
+  workspace_commit(paths, verify_cmd = "test") // Serialized commit lock + epoch re-verify + auto-releases claimed paths!</code></pre>
 
       <h2 id="sec-micro-commit">04. Continuous Micro-Transactions: 4-Tier LCS Auto-Merge &amp; Verification Gate</h2>
       <p>What happens when a human developer edits the top of a shared configuration file in their IDE while an agent edits the bottom of that same file in its shadow workspace? Instead of dumping raw conflict markers, <code>workspace_commit</code> executes a <strong>4-Tier Longest Common Subsequence (LCS) Diff3 Auto-Merge coupled with a Sandboxed Verification Gate</strong>:</p>

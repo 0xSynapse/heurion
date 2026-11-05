@@ -178,10 +178,10 @@ agy</pre>
           </table>
           <p>也可以在对话里直接说“切换到 Local 模式”或“切换到 Cloud 模式”。</p>
           <h3>验证隔离与边界审批</h3>
-          <p>让 Agent 修改一个文件，然后运行：</p>
-          <pre class="cmd">aegis-os workspace status
-aegis-os workspace diff</pre>
-          <p>你会看到修改先落在 CoW 影子工作区，尚未写回宿主目录。当 Agent 调用 <code>workspace_commit</code> 合并回宿主机时，桌面环境会自动打开网页审批台（<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a>，点击批准后自动续跑），纯终端/SSH 下也可运行 <code>aegis-os approve</code>（或简写 <code>aos approve</code>）一键放行。</p>
+          <p>日常使用时无需手动输入 <code>aegis-os</code> 命令，直接在 Agent 对话中发出指令即可：</p>
+          <pre class="cmd"><span class="c"># 在 Claude / Codex / AGY 对话中输入：</span>
+修改 README 的标题，检查 diff 并提交回主目录</pre>
+          <p>Agent 会先在 CoW 影子工作区内完成修改（<code>fs_edit</code> / <code>workspace_diff</code>），尚未写回宿主目录。当 Agent 调用 <code>workspace_commit</code> 合并回宿主机时，桌面环境会自动弹出 IDE 内置确认框或打开网页审批台（<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a>，点击批准后自动续跑），并在合并前通过跨进程提交锁与 <code>verify_cmd</code> 沙箱门禁确保主干始终可编译。纯终端/SSH 下也可运行 <code>aegis-os approve</code>（或简写 <code>aos approve</code>）一键放行。</p>
         </section>
 
         <section id="memory">
@@ -217,40 +217,42 @@ aegis-os memory audit --limit 20</pre>
         <section id="a2a">
           <p class="label-caps">04 / MULTI-AGENT</p>
           <h2 class="heading-2">多 Agent / A2A</h2>
-          <p>Aegis OS 用 Google A2A 作为 Agent 之间的协作总线。创建一个 stateful task：</p>
-          <pre class="cmd">aegis-os ipc request \
-  --to worker \
-  --subject "Review auth module" \
-  --message "Read the auth module and report risks"</pre>
-          <p>查看任务：</p>
-          <pre class="cmd">aegis-os a2a board
-aegis-os a2a show &lt;task-id&gt;</pre>
+          <p>Aegis OS 用 Google A2A 作为 Agent 之间的协作总线。日常协作完全以 <strong>Agent 为入口（无需手动敲 CLI）</strong>——直接在主控 Agent（如 <code>agy</code> 或 <code>claude</code>）对话中下达多 Agent 协作指令：</p>
+          <pre class="cmd"><span class="c"># 在主控 Agent 对话中直接输入自然语言：</span>
+把 auth 模块的代码审查派发给另一个窗口的 claude-code，锁定我正在修改的路由文件，等它完成后合并</pre>
+          <p>底层运行时会自动通过 MCP 完成全套事务级配合：</p>
+          <ul>
+            <li><strong>通配符文件认领锁与自动释放（<code>coord_claim</code>）</strong>：Agent 动笔前自动声明锁定目标路径（支持 <code>src/**</code> 与 <code>src/auth/*.rs</code> 二维 NFA + 真实文件树重叠防撞，并对沙箱脚本越界写返回 <code>coordination_warning</code> 告警）；当 <code>workspace_commit</code> 成功落盘或任务结束时，<strong>文件锁会自动释放</strong>。</li>
+            <li><strong>层级化 A2A 子任务图与级联取消（<code>ipc_request</code>）</strong>：支持 <code>parent_task_id</code> 父子任务树与 <code>depends_on</code> 依赖编排；当父任务被取消时，内核自动递归取消所有未完成的子任务，并级联回收锁与租约。</li>
+            <li><strong>零轮询阻塞唤醒（<code>ipc_wait</code>）</strong>：既有生命周期 Hook 的实时信箱推送（<code>_aegis_inbox</code>），也为无 Hook 客户端（如 Codex CLI）提供原生 <code>ipc_wait</code> 阻塞等待同伴回复或任务状态变更。</li>
+          </ul>
+          <h3>任务级租约与可选终端看板</h3>
+          <p>在网页审批台（<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a>）批准绑定了任务的提交请求时，签发的租约会自动绑定到该 <code>task_id</code>（<code>"kind": "task_scoped"</code>），任务进入终态后租约立即自动撤销，同一 Agent 无法将任务 A 的租约挪用于任务 B。</p>
+          <p>如果你想在终端只读查看全局任务看板或手动管理租约，也可使用以下可选诊断命令：</p>
+          <pre class="cmd"><span class="c"># 可选：终端只读查看 A2A 任务看板与详情</span>
+aegis-os a2a board
+aegis-os a2a show &lt;task-id&gt;
+aegis-os top</pre>
           <p><code>board</code> 会显示 task、state、from → to、age、flags、subject。<code>input-required</code> 会置顶并标记 <code>BLOCKED</code>；失去 assignee 的任务会标记 <code>STALE</code>。</p>
-          <h3>任务级租约</h3>
-          <p>如果某个任务需要一段时间的自动提交权限，可以把 lease 绑定到 task：</p>
-          <pre class="cmd">aegis-os policy lease \
-  --action-pattern workspace_commit \
-  --ttl-secs 3600 \
-  --task-id &lt;task-id&gt;</pre>
-          <p>输出会包含 <code>"kind": "task_scoped"</code> 和 <code>task_id</code>。任务进入终态后，绑定 lease 会被撤销；同一个 Agent 不能把 task A 的 lease 用到 task B。</p>
           <p class="note">如果使用自定义 <code>--runtime-dir</code>，所有 <code>a2a</code> / <code>policy</code> / <code>memory revoke</code> 命令都要传同一个 runtime 目录。</p>
         </section>
 
         <section id="revoke">
           <p class="label-caps">05 / REVOKE &amp; AUDIT</p>
-          <h2 class="heading-2">撤销与审计</h2>
-          <p>查看并撤销一个 memory session：</p>
+          <h2 class="heading-2">撤销与防篡改哈希链审计</h2>
+          <p>你可以直接在 Agent 对话中说“查看当前多 Agent 任务的子任务进展和审计记录”——Agent 调用 <code>ipc_task_get</code> / <code>ipc_task_list</code> 即可直接返回子任务树（<code>subtasks</code>）、关联的跨边界操作轨迹（<code>audit_trace</code>）以及 <strong>SHA-256 哈希链完整性校验结果（<code>hash_chain_verified: true</code>）</strong>。</p>
+          <p>若需查看并撤销一个 UOMP memory session：</p>
           <pre class="cmd">aegis-os memory sessions
 aegis-os memory revoke &lt;session-id&gt;</pre>
           <p>撤销后：</p>
           <ul>
             <li>下一个 memory 请求返回 <code>401 SESSION_NOT_ACTIVE</code></li>
             <li>如果 session 绑定了 A2A task，task 会转为 <code>input-required</code>（标记 <code>BLOCKED</code>）</li>
-            <li>审计会记录 revoke 事件和 task id</li>
+            <li>审计账本会以防篡改哈希链（<code>prev_hash → event_hash</code>）永久记录 revoke 事件和 task id</li>
           </ul>
           <pre class="cmd">aegis-os memory audit --limit 20
 aegis-os a2a board</pre>
-          <p>如果任务通过 gateway 进入终态（例如 <code>tasks/cancel</code>），Aegis OS 会调用 memory server 的 <code>revoke-by-task</code>，自动撤销该任务的 memory sessions。</p>
+          <p>如果任务通过 gateway 进入终态（例如 <code>tasks/cancel</code> 或父任务级联取消），Aegis OS 会自动释放该任务绑定的所有文件锁（<code>coord_claim</code>）、撤销任务级租约，并调用 memory server 的 <code>revoke-by-task</code> 自动撤销关联的 memory sessions。</p>
         </section>
 
         <section id="troubleshoot">

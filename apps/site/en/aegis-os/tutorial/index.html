@@ -177,10 +177,10 @@ agy</pre>
           </table>
           <p>You can switch later by telling the agent “switch to Local mode” or “switch to Cloud mode”.</p>
           <h3>Verify isolation &amp; boundary approval</h3>
-          <p>Ask the agent to modify a file, then run:</p>
-          <pre class="cmd">aegis-os workspace status
-aegis-os workspace diff</pre>
-          <p>The change lands in the CoW shadow workspace first and is not written to the host until <code>workspace_commit</code>. When <code>workspace_commit</code> runs, Aegis OS auto-opens the web approval console (<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a>) and auto-resumes once approved, or you can run <code>aegis-os approve</code> (alias: <code>aos approve</code>) in terminal.</p>
+          <p>In daily work you never need to run <code>aegis-os</code> CLI subcommands manually—just instruct your coding agent in natural language:</p>
+          <pre class="cmd"><span class="c"># Inside your Claude / Codex / AGY conversation:</span>
+Update the README title, inspect the diff, and commit it back to the host repo</pre>
+          <p>The agent edits inside its CoW shadow workspace first (<code>fs_edit</code> / <code>workspace_diff</code>) without touching the host directory. When the agent calls <code>workspace_commit</code>, Aegis OS prompts inline or auto-opens the web approval console (<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a>), serializes concurrent commits via the host commit lock, and runs <code>verify_cmd</code> before landing. On headless SSH sessions you can also run <code>aegis-os approve</code> (alias: <code>aos approve</code>).</p>
         </section>
 
         <section id="memory">
@@ -216,40 +216,42 @@ aegis-os memory audit --limit 20</pre>
         <section id="a2a">
           <p class="label-caps">04 / MULTI-AGENT</p>
           <h2 class="heading-2">Multi-agent / A2A</h2>
-          <p>Aegis OS uses Google A2A as the agent-to-agent collaboration bus. Create a stateful task:</p>
-          <pre class="cmd">aegis-os ipc request \
-  --to worker \
-  --subject "Review auth module" \
-  --message "Read the auth module and report risks"</pre>
-          <p>Inspect tasks:</p>
-          <pre class="cmd">aegis-os a2a board
-aegis-os a2a show &lt;task-id&gt;</pre>
+          <p>Aegis OS uses Google A2A as the agent-to-agent collaboration bus. Collaboration is <strong>Agent-First (zero manual CLI commands required)</strong>—simply ask your lead agent (<code>agy</code>, <code>claude</code>, or <code>codex</code>) in natural language:</p>
+          <pre class="cmd"><span class="c"># Inside your lead agent conversation:</span>
+Delegate an auth module security review to claude-code in the other window, claim the router files I am editing, and merge once it finishes</pre>
+          <p>Under the hood, the runtime coordinates the agents automatically over MCP:</p>
+          <ul>
+            <li><strong>Task-Bound Glob File Claims &amp; Auto-Release (<code>coord_claim</code>)</strong>: Agents claim target paths before editing (with 2D NFA + live file-tree glob intersection detection for patterns like <code>src/**</code> vs. <code>src/auth/*.rs</code>, plus <code>coordination_warning</code> alerts if a sandboxed <code>proc_exec</code> script touches peer-claimed files). Claims are <strong>released automatically</strong> upon <code>workspace_commit</code> or task completion.</li>
+            <li><strong>Hierarchical A2A Subtask Graph &amp; Cascade Cancellation (<code>ipc_request</code>)</strong>: Tasks support <code>parent_task_id</code> hierarchies and <code>depends_on</code> DAG dependencies. Canceling a parent task recursively cancels all non-terminal child tasks and revokes their bound claims and leases.</li>
+            <li><strong>Zero-Polling Blocking Wakeup (<code>ipc_wait</code>)</strong>: Alongside piggybacked <code>_aegis_inbox</code> notifications on every tool call, clients without lifecycle hooks (such as Codex CLI) can call <code>ipc_wait</code> to block until a peer replies or a task transitions state.</li>
+          </ul>
+          <h3>Task-scoped leases &amp; optional CLI board</h3>
+          <p>When you approve a task's escalation in the web approval console (<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a>), the issued lease is bound to that <code>task_id</code> (<code>"kind": "task_scoped"</code>). When the task reaches a terminal state, its lease is revoked automatically; an agent cannot reuse task A's lease for task B.</p>
+          <p>If you want a read-only terminal view of live tasks across your workstation, you can optionally run:</p>
+          <pre class="cmd"><span class="c"># Optional read-only terminal inspectors</span>
+aegis-os a2a board
+aegis-os a2a show &lt;task-id&gt;
+aegis-os top</pre>
           <p><code>board</code> shows task, state, from → to, age, flags, and subject. <code>input-required</code> is pinned with <code>BLOCKED</code>; a task whose assignee disappeared is marked <code>STALE</code>.</p>
-          <h3>Task-scoped lease</h3>
-          <p>If a task needs temporary auto-commit permission, bind a lease to it:</p>
-          <pre class="cmd">aegis-os policy lease \
-  --action-pattern workspace_commit \
-  --ttl-secs 3600 \
-  --task-id &lt;task-id&gt;</pre>
-          <p>The output contains <code>"kind": "task_scoped"</code> and <code>task_id</code>. When the task reaches a terminal state the lease is revoked; the same agent cannot reuse task A's lease for task B.</p>
           <p class="note">If you use a custom <code>--runtime-dir</code>, pass the same runtime directory to all <code>a2a</code> / <code>policy</code> / <code>memory revoke</code> commands.</p>
         </section>
 
         <section id="revoke">
           <p class="label-caps">05 / REVOKE &amp; AUDIT</p>
-          <h2 class="heading-2">Revoke and audit</h2>
-          <p>Inspect and revoke a memory session:</p>
+          <h2 class="heading-2">Revoke and hash-chained audit</h2>
+          <p>You can ask your agent directly in chat to “show the subtask status and audit trail for the current A2A task”—the agent calls <code>ipc_task_get</code> / <code>ipc_task_list</code> to inspect the child <code>subtasks</code>, the task-correlated <code>audit_trace</code>, and <strong>cryptographic SHA-256 hash-chain verification (<code>hash_chain_verified: true</code>)</strong>.</p>
+          <p>To inspect and revoke a UOMP memory session from the terminal:</p>
           <pre class="cmd">aegis-os memory sessions
 aegis-os memory revoke &lt;session-id&gt;</pre>
           <p>After revocation:</p>
           <ul>
             <li>the next memory request returns <code>401 SESSION_NOT_ACTIVE</code></li>
             <li>if the session is bound to an A2A task, the task moves to <code>input-required</code> (marked <code>BLOCKED</code>)</li>
-            <li>the audit records the revoke event and task id</li>
+            <li>the tamper-evident hash-chained audit ledger (<code>prev_hash → event_hash</code>) records the revoke event and task id</li>
           </ul>
           <pre class="cmd">aegis-os memory audit --limit 20
 aegis-os a2a board</pre>
-          <p>If a task reaches a terminal state through the gateway (for example <code>tasks/cancel</code>), Aegis OS calls the memory server's <code>revoke-by-task</code> endpoint and revokes that task's memory sessions automatically.</p>
+          <p>If a task reaches a terminal state through the gateway (for example <code>tasks/cancel</code> or parent cascade cancellation), Aegis OS automatically releases all task-bound file claims (<code>coord_claim</code>), revokes task-scoped leases, and calls the memory server's <code>revoke-by-task</code> endpoint to revoke that task's memory sessions.</p>
         </section>
 
         <section id="troubleshoot">
