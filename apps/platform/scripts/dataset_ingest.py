@@ -634,7 +634,7 @@ def clean_missing_and_types(df: pd.DataFrame) -> pd.DataFrame:
     """将临床表格中的文本型缺失占位符（如「缺失」、纯数值/日期列里的 'N'）转为缺失值，并恢复被污染的数值列类型。"""
     for c in df.columns:
         s = df[c]
-        if s.dtype != object:
+        if s.dtype != object and not pd.api.types.is_string_dtype(s):
             continue
         stripped = s.map(lambda v: v.strip() if isinstance(v, str) else v)
         mask = stripped.map(lambda v: bool(MISSING_RE.match(v)) if isinstance(v, str) else False)
@@ -651,7 +651,7 @@ def clean_missing_and_types(df: pd.DataFrame) -> pd.DataFrame:
                 if num_ratio >= 0.8 or date_ratio >= 0.8:
                     mask = mask | (stripped.map(lambda v: isinstance(v, str) and v.strip().upper() == 'N'))
         if mask.any():
-            s = s.mask(mask, pd.NA)
+            s = s.astype(object).mask(mask, pd.NA)
             df[c] = s
         # 去掉缺失占位符后，若剩余非空值全部可转为数值，则还原为数值列（例如含「缺失」的供血动脉数量、含 'N' 的中心剂量）
         nonnull = df[c].dropna()
@@ -696,6 +696,9 @@ def col_type(s: pd.Series, col_meta: dict | None = None) -> str:
     nonnull = s.dropna().astype(str)
     if value_labels:
         return 'categorical'
+    if unit and not value_labels and len(nonnull) > 0:
+        if pd.to_numeric(nonnull, errors='coerce').notna().mean() >= 0.8:
+            return 'numeric'
     return 'categorical' if nonnull.nunique() <= max(20, len(nonnull) * 0.05) else 'text'
 
 
