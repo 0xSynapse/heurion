@@ -9,6 +9,7 @@ export interface CopilotHooks {
   user: () => CopilotBoundUser | null
   onUnauthorized?: () => void
   activeDoc: () => { id: string; title: string } | null
+  onFocusDocChat?: () => void
   onInsertTable?: (rows: string[][]) => void | Promise<void>
   onNotice?: (msg: string, error?: boolean) => void
 }
@@ -542,6 +543,11 @@ export function initCopilot(hooks: CopilotHooks) {
   function toggleCopilot() {
     if (!isAuthenticated()) {
       handleUnauthorized()
+      return
+    }
+    if (hooks.activeDoc()?.id && hooks.onFocusDocChat) {
+      closeCopilot()
+      hooks.onFocusDocChat()
       return
     }
     if (isOpen) closeCopilot()

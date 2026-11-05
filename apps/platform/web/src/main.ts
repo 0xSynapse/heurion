@@ -727,6 +727,16 @@ function leaveDoc(): void {
   $('suggestBanner').hidden = true
   const csb = document.getElementById('chatSuggestBanner')
   if (csb) csb.hidden = true
+  const tocPanel = document.getElementById('docOutlinePanel')
+  if (tocPanel) tocPanel.hidden = true
+  const bSep = document.getElementById('docBreadcrumbSep')
+  if (bSep) bSep.hidden = true
+  const sibWrap = document.getElementById('docSiblingWrap')
+  if (sibWrap) sibWrap.hidden = true
+  if (TOKEN && ME?.id) {
+    const cpBtn = document.getElementById('btnCopilotToggle')
+    if (cpBtn) cpBtn.hidden = false
+  }
   turnUi = null
   $('chatLog').innerHTML = ''
   $('page').className = 'page'
@@ -785,6 +795,10 @@ async function open(docId: string): Promise<void> {
   const seq = ++openSeq
   streamHellos = 0
   $('app').classList.remove('no-doc')
+  // 写作视图下统一使用右侧栏「AI 助手」，自动收起右下角悬浮球避免双 AI 入口重叠与遮挡
+  const cpBtn = document.getElementById('btnCopilotToggle')
+  if (cpBtn) cpBtn.hidden = true
+  document.getElementById('copilotDrawer')?.classList.add('hidden')
   refImportHtml = ''
   patientsUi.leave()
   researchUi.leave()
@@ -850,6 +864,12 @@ async function open(docId: string): Promise<void> {
         setTimeout(() => card?.classList.remove('card-highlight'), 1600)
         locateCommentInDoc(targetId)
       },
+      onCitationClick: citeId => {
+        focusCitationCardInPanel(citeId)
+      },
+      onDocChange: () => {
+        renderDocOutline()
+      },
       analysis: { has: id => datasets.hasProvenance(id), show: id => void datasets.showProvenance(id) },
       onSuggestion: (group, accept) => void resolveSuggestion(group, accept),
       onSelection: a => { anchor = a; placeFab(); syncToolbar() },
@@ -857,18 +877,10 @@ async function open(docId: string): Promise<void> {
     session = { docId, kind: 'doc', stream, ydoc, provider, editor }
     $('page').classList.remove('deck')
   }
-  // 属于患者的文档（病例报告等）：顶栏显示归属，点击回到患者页
   const ctx = (() => { try { return meta.context ? JSON.parse(meta.context) : null } catch { return null } })()
-  // 属于研究的文档（方案、论文、幻灯片）：同样显示归属、能回到研究页
-  $('docContext').hidden = ctx?.kind !== 'patient' && ctx?.kind !== 'study'
   docPatient = ctx?.kind === 'patient' ? ctx.patient_id : null
-  if (ctx?.kind === 'patient') {
-    $('docContext').textContent = `← ${ctx.code} · ${({ case_report: '病例报告', followup: '随访小结', discussion: '病例讨论', findings: '所见草稿' } as Record<string, string>)[ctx.doc_kind] ?? '患者文档'}`
-    $('docContext').onclick = () => void patientsUi.open(ctx.patient_id)
-  } else if (ctx?.kind === 'study') {
-    $('docContext').textContent = `← ${ctx.title} · ${({ protocol: '研究方案', manuscript: '论文', slides: '幻灯片' } as Record<string, string>)[ctx.role] ?? '研究文档'}`
-    $('docContext').onclick = () => void researchUi.open(ctx.study_id)
-  }
+  renderDocContextBreadcrumb(ctx, meta)
+  renderChatQuickChips(ctx, meta)
   // 研究共享文档：顶栏显示协作者；只读成员不显示编辑工具条
   const readOnly = meta.my_role === 'viewer'
   renderCollaborators(meta.collaborators ?? [], readOnly)
@@ -885,6 +897,292 @@ async function open(docId: string): Promise<void> {
   await loadDocs()
   if (seq !== openSeq) return
   await refresh(true)
+}
+
+/**
+ * 顶栏课题 / 患者面包屑导航与同课题关联文稿一键切换器（Batch 4）：
+ * 显示「← 临床研究 / 课题名」+「[当前文稿类型 ▾]」，点击下拉即可一键切换到同课题/同患者的其他方案、论文、幻灯片或图表工作台。
+ */
+function renderDocContextBreadcrumb(ctx: any, meta: any): void {
+  const ctxBtn = $('docContext')
+  const sepEl = document.getElementById('docBreadcrumbSep')
+  const sibWrap = document.getElementById('docSiblingWrap')
+  const sibBtn = document.getElementById('docSiblingBtn')
+  const sibLabel = document.getElementById('docSiblingLabel')
+  const sibMenu = document.getElementById('docSiblingMenu')
+
+  const isPatient = ctx?.kind === 'patient'
+  const isStudy = ctx?.kind === 'study'
+  ctxBtn.hidden = !isPatient && !isStudy
+  if (sepEl) sepEl.hidden = !isPatient && !isStudy
+  if (sibWrap) sibWrap.hidden = !isPatient && !isStudy
+  if (sibMenu) sibMenu.hidden = true
+
+  if (!isPatient && !isStudy) return
+
+  const patientRoleMap: Record<string, string> = {
+    case_report: '病例报告',
+    followup: '随访小结',
+    discussion: '病例讨论',
+    findings: '影像所见草稿',
+  }
+  const studyRoleMap: Record<string, string> = {
+    protocol: '研究方案',
+    manuscript: '论文主稿',
+    slides: '学术幻灯片',
+  }
+
+  if (isPatient) {
+    const roleLabel = patientRoleMap[ctx.doc_kind] ?? '患者文稿'
+    ctxBtn.textContent = `← 患者 · ${ctx.code}`
+    ctxBtn.title = `回到患者 ${ctx.code} 档案主页`
+    ctxBtn.onclick = () => void patientsUi.open(ctx.patient_id)
+    if (sibLabel) sibLabel.textContent = roleLabel
+  } else if (isStudy) {
+    const roleLabel = studyRoleMap[ctx.role] ?? '研究文稿'
+    ctxBtn.textContent = `← 课题 · ${ctx.title}`
+    ctxBtn.title = `回到临床研究《${ctx.title}》主页`
+    ctxBtn.onclick = () => void researchUi.open(ctx.study_id)
+    if (sibLabel) sibLabel.textContent = roleLabel
+  }
+
+  if (sibBtn && sibMenu) {
+    sibBtn.onclick = async e => {
+      e.stopPropagation()
+      sibMenu.hidden = !sibMenu.hidden
+      if (sibMenu.hidden) return
+      const siblingDocs = docRows.filter(d => {
+        if (!d.context) return false
+        try {
+          const c = typeof d.context === 'object' ? d.context : JSON.parse(d.context)
+          if (isStudy) return c?.kind === 'study' && c?.study_id === ctx.study_id
+          if (isPatient) return c?.kind === 'patient' && c?.patient_id === ctx.patient_id
+          return false
+        } catch {
+          return false
+        }
+      })
+      const itemsHtml = siblingDocs.map(d => {
+        let tag = d.kind === 'deck' ? '幻灯片' : '文稿'
+        try {
+          const c = typeof d.context === 'object' ? d.context : JSON.parse(d.context)
+          tag = (isStudy ? studyRoleMap[c?.role] : patientRoleMap[c?.doc_kind]) || tag
+        } catch {}
+        const isCurrent = d.id === meta.id
+        return `<button type="button" role="menuitem" class="${isCurrent ? 'active' : ''}" data-sib-doc="${esc(d.id)}">
+          <span>${isCurrent ? '● ' : ''}${esc(d.title)}</span>
+          <span class="muted">${esc(tag)}</span>
+        </button>`
+      }).join('')
+      const hubActionHtml = isStudy
+        ? `<div class="doc-sibling-sep"></div>
+           <button type="button" role="menuitem" data-sib-hub="study">前往课题总览与数据集 ↗</button>
+           <button type="button" role="menuitem" data-sib-hub="studio">前往课题科研制图工作台 ↗</button>`
+        : `<div class="doc-sibling-sep"></div>
+           <button type="button" role="menuitem" data-sib-hub="patient">前往患者档案与 3D 影像中心 ↗</button>`
+      sibMenu.innerHTML = (itemsHtml || `<div class="muted small" style="padding:6px 10px;">当前仅此一篇关联文稿</div>`) + hubActionHtml
+      placeFixedPopup(sibMenu, sibBtn.getBoundingClientRect(), false)
+    }
+
+    sibMenu.onclick = e => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button')
+      if (!btn) return
+      sibMenu.hidden = true
+      if (btn.dataset.sibDoc && btn.dataset.sibDoc !== session?.docId) {
+        void open(btn.dataset.sibDoc)
+        return
+      }
+      if (btn.dataset.sibHub === 'study' && isStudy) {
+        void researchUi.open(ctx.study_id)
+      } else if (btn.dataset.sibHub === 'studio' && isStudy) {
+        void researchUi.openStudio(ctx.study_id)
+      } else if (btn.dataset.sibHub === 'patient' && isPatient) {
+        void patientsUi.open(ctx.patient_id)
+      }
+    }
+  }
+}
+
+document.addEventListener('click', e => {
+  const sibMenu = document.getElementById('docSiblingMenu')
+  if (sibMenu && !sibMenu.hidden && !(e.target as HTMLElement).closest('#docSiblingWrap')) {
+    sibMenu.hidden = true
+  }
+})
+
+/**
+ * 右侧栏「AI 助手」快捷指令胶囊（Batch 2）：
+ * 将原先悬浮 Co-Pilot 的场景化快捷提示收敛至文档「AI 助手」输入框上方，实现单入口无缝体验。
+ */
+function renderChatQuickChips(ctx: any, meta: any): void {
+  const box = document.getElementById('chatQuickChips')
+  if (!box) return
+  let chips: Array<{ label: string; prompt: string }> = []
+  if (meta.kind === 'deck') {
+    chips = [
+      { label: '✦ 优化当页排版与要点精炼', prompt: '请精炼当前幻灯片页面的文字要点，使其符合学术答辩汇报规范，并检查版面布局。' },
+      { label: '📊 补充关键结果数据页', prompt: '请根据文稿核心结论在当前页后新增一页结构化结果汇总幻灯片。' },
+      { label: '📚 补充参考文献尾页', prompt: '请整理当前汇报涉及的核心文献，在末尾生成规范的参考文献页。' },
+    ]
+  } else if (ctx?.kind === 'patient') {
+    chips = [
+      { label: '✦ 规范化病例报告润色', prompt: '请按期刊 Case Report 规范润色本文稿的病史、诊治经过与讨论段落（生成待采纳修订）。' },
+      { label: '📏 核对影像病灶测量与 RECIST', prompt: '请核对文稿中的病灶尺寸、长短径及疗效评价是否前后一致。' },
+      { label: '📚 检索同类罕见/靶向病例文献', prompt: '请检索 PubMed 中近 3 年同类靶向治疗或临床表现的权威文献并补充到讨论段。' },
+    ]
+  } else {
+    chips = [
+      { label: '✦ 学术润色与逻辑强化', prompt: '请对当前文稿进行医学学术润色，提升表述严谨性与可读性（以修订模式生成对比）。' },
+      { label: '📊 核对表文数据与统计指标', prompt: '请逐一核对正文描述的样本量、百分比、P 值与表格数据是否完全自洽。' },
+      { label: '📚 检索 PubMed 补充最新引文', prompt: '请针对引言与讨论中的核心论断，检索近 3 年高影响因子临床文献并在相应位置插入规范引用。' },
+      { label: '🧪 生成或完善 Table 1 三线表', prompt: '请根据文中基线特征描述，整理生成符合顶刊规范的 Table 1 基线特征三线表。' },
+    ]
+  }
+  box.innerHTML = chips
+    .map(c => `<button type="button" class="chat-quick-chip" data-chip-prompt="${esc(c.prompt)}" title="${esc(c.prompt)}">${esc(c.label)}</button>`)
+    .join('')
+}
+
+document.getElementById('chatQuickChips')?.addEventListener('click', e => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-chip-prompt]')
+  if (!btn?.dataset.chipPrompt) return
+  const input = $<HTMLTextAreaElement>('chatInput')
+  input.value = btn.dataset.chipPrompt
+  input.focus()
+  input.setSelectionRange(input.value.length, input.value.length)
+})
+
+/**
+ * 长文稿实时章节与图表目录（Batch 3）：
+ * 自动提取 H1–H3 标题、表格与科研图片，联动显示每个章节下未处理的审稿批注数量，支持一键平滑跳转。
+ */
+let isOutlineCollapsed = false
+
+function renderDocOutline(): void {
+  const panel = document.getElementById('docOutlinePanel')
+  const listEl = document.getElementById('docOutlineList')
+  const metaEl = document.getElementById('docOutlineMeta')
+  const toggleBtn = document.getElementById('docOutlineCollapseBtn')
+  if (!panel || !listEl) return
+
+  if (!session || session.kind !== 'doc' || !session.editor) {
+    panel.hidden = true
+    return
+  }
+
+  const items = session.editor.getDocOutline()
+  if (items.length === 0) {
+    panel.hidden = true
+    return
+  }
+
+  panel.hidden = false
+  listEl.hidden = isOutlineCollapsed
+  if (toggleBtn) toggleBtn.textContent = isOutlineCollapsed ? '▸' : '▾'
+
+  const openComments: any[] = (detail?.comments ?? []).filter((c: any) => c.status === 'open')
+  const countByNodeId = new Map<string, { count: number; maxSev: 'critical' | 'major' | 'minor'; firstCid: string }>()
+  const countByTitle = new Map<string, { count: number; maxSev: 'critical' | 'major' | 'minor'; firstCid: string }>()
+
+  const bump = (
+    map: Map<string, { count: number; maxSev: 'critical' | 'major' | 'minor'; firstCid: string }>,
+    key: string,
+    sev: 'critical' | 'major' | 'minor',
+    cid: string,
+  ) => {
+    if (!key) return
+    const prev = map.get(key)
+    const rank = { critical: 3, major: 2, minor: 1 }
+    if (!prev) {
+      map.set(key, { count: 1, maxSev: sev, firstCid: cid })
+    } else {
+      prev.count++
+      if (rank[sev] > rank[prev.maxSev]) prev.maxSev = sev
+    }
+  }
+
+  for (const c of openComments) {
+    const meta = parseReviewComment(c)
+    const sev = meta.severity
+    const directIds: string[] = [...(c.anchor?.node_ids ?? []), ...(c.node_id ? [c.node_id] : [])]
+    let matchedDirect = false
+    for (const nid of directIds) {
+      if (items.some(it => it.id === nid && (it.kind === 'table' || it.kind === 'figure'))) {
+        bump(countByNodeId, nid, sev, c.id)
+        matchedDirect = true
+        break
+      }
+    }
+    if (matchedDirect) continue
+    if (c.anchor?.section_node_id) {
+      bump(countByNodeId, c.anchor.section_node_id, sev, c.id)
+    } else if (c.anchor?.section_title) {
+      bump(countByTitle, c.anchor.section_title.trim(), sev, c.id)
+    }
+  }
+
+  const headingCount = items.filter(i => i.kind.startsWith('h')).length
+  const mediaCount = items.filter(i => i.kind === 'table' || i.kind === 'figure').length
+  if (metaEl) {
+    metaEl.textContent = `${headingCount} 节${mediaCount > 0 ? ` · ${mediaCount} 图表` : ''}`
+  }
+
+  listEl.innerHTML = items
+    .map(it => {
+      const badgeInfo = countByNodeId.get(it.id) ?? (it.kind.startsWith('h') ? countByTitle.get(it.title.trim()) : undefined)
+      const iconPrefix =
+        it.kind === 'table' ? '⊞ ' : it.kind === 'figure' ? '◫ ' : it.kind === 'h1' ? '§ ' : ''
+      const badgeHtml = badgeInfo
+        ? `<span class="toc-badge sev-${esc(badgeInfo.maxSev)}" data-toc-cid="${esc(badgeInfo.firstCid)}" title="该章节/图表有 ${badgeInfo.count} 项待处理批注，点击直接定位批注">${badgeInfo.count}</span>`
+        : it.suggest
+          ? `<span class="toc-badge suggest" title="包含待采纳修订">修</span>`
+          : ''
+      return `<li class="toc-item toc-${esc(it.kind)}" data-toc-node="${esc(it.id)}" title="${esc(it.title)}">
+        <span class="toc-label">${iconPrefix}${esc(it.title)}</span>
+        ${badgeHtml}
+      </li>`
+    })
+    .join('')
+}
+
+document.getElementById('docOutlineHead')?.addEventListener('click', () => {
+  isOutlineCollapsed = !isOutlineCollapsed
+  renderDocOutline()
+})
+
+document.getElementById('docOutlineList')?.addEventListener('click', e => {
+  const badge = (e.target as HTMLElement).closest<HTMLElement>('[data-toc-cid]')
+  if (badge?.dataset.tocCid) {
+    e.stopPropagation()
+    const cid = badge.dataset.tocCid
+    switchTab('commentPane')
+    const card = document.querySelector<HTMLElement>(`#comments [data-cid="${CSS.escape(cid)}"]`)
+    card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    card?.classList.add('card-highlight')
+    setTimeout(() => card?.classList.remove('card-highlight'), 1500)
+    locateCommentInDoc(cid)
+    return
+  }
+  const li = (e.target as HTMLElement).closest<HTMLElement>('[data-toc-node]')
+  if (!li?.dataset.tocNode || !session?.editor) return
+  document.querySelectorAll('#docOutlineList .toc-item.active').forEach(el => el.classList.remove('active'))
+  li.classList.add('active')
+  session.editor.scrollToSectionNode(li.dataset.tocNode)
+})
+
+/**
+ * 点击正文中引用上标 [n] 时：自动展开右侧「引用」面板并滚动高亮对应文献卡片（Batch 5）。
+ */
+function focusCitationCardInPanel(citeId: string): void {
+  if (!citeId) return
+  switchTab('citePane')
+  const card = document.querySelector<HTMLElement>(`#cites [data-cite-id="${CSS.escape(citeId)}"]`)
+  document.querySelectorAll('#cites .card.card-active-focus').forEach(el => el.classList.remove('card-active-focus'))
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    card.classList.add('card-highlight', 'card-active-focus')
+    setTimeout(() => card.classList.remove('card-highlight'), 1800)
+  }
 }
 
 /** 顶栏的协作者（研究成员）：头像缩写 + 名字提示；我是只读成员时加一个「只读」标记 */
@@ -1022,6 +1320,7 @@ async function refresh(full: boolean): Promise<void> {
   renderSuggestions()
   renderVersions()
   renderCites()
+  renderDocOutline()
   syncRevertButtons()
   syncToolbar()
 }
@@ -2011,6 +2310,11 @@ function addRetry(turnId: string): void {
 let banner: { turnId: string; ids: string[]; cursor: number } | null = null
 
 function showTurnBanner(turnId: string): void {
+  // 若当前已有待采纳修订横幅，则不再同时叠加显示 turnBanner，避免正文顶部双横幅挤压（Batch 2）
+  if ((detail?.suggestions?.length ?? 0) > 0) {
+    hideTurnBanner()
+    return
+  }
   const c = turnChanges.get(turnId)
   if (!c || c.count === 0) return
   // 修订模式下的改动由修订提示条处理；这里只列出正文里真实存在的块
@@ -2602,6 +2906,9 @@ if (suggestCheckbox) {
 
 interface QueueItem { id: string; doc_id: string; doc_title: string; label: string; suggest: boolean; since: string; comment_id?: string | null }
 let queue: { running: QueueItem | null; active?: QueueItem[]; queued: QueueItem[] } = { running: null, active: [], queued: [] }
+/** 记录哪些批注卡片曾触发过 AI 处理，用于原地显示「正在修订 → 已生成段落修订建议」状态（Batch 1）。 */
+const aiAskedCommentIds = new Set<string>()
+const aiCompletedCommentIds = new Set<string>()
 
 function syncCommentAskButtons(): void {
   const activeList = queue.active ?? (queue.running ? [queue.running] : [])
@@ -2611,9 +2918,39 @@ function syncCommentAskButtons(): void {
     if (!cid || !btn) return
     const running = activeList.some(item => item.doc_id === session?.docId && item.comment_id === cid)
     const queued = !running && queue.queued.some(item => item.doc_id === session?.docId && item.comment_id === cid)
+    if (running || queued) {
+      aiAskedCommentIds.add(cid)
+      aiCompletedCommentIds.delete(cid)
+    } else if (aiAskedCommentIds.has(cid)) {
+      aiAskedCommentIds.delete(cid)
+      aiCompletedCommentIds.add(cid)
+    }
     btn.disabled = running || queued
     const idleLabel = btn.dataset.defaultLabel || '交给 AI 处理'
-    btn.textContent = running ? 'AI 处理中…' : queued ? '排队中…' : idleLabel
+    btn.textContent = running ? '✦ AI 正在修订…' : queued ? '排队中…' : aiCompletedCommentIds.has(cid) ? '再次交给 AI' : idleLabel
+
+    let statusBar = card.querySelector<HTMLElement>('.rv-ai-status-bar')
+    if (running || queued || aiCompletedCommentIds.has(cid)) {
+      if (!statusBar) {
+        statusBar = document.createElement('div')
+        statusBar.className = 'rv-ai-status-bar'
+        const actionBar = card.querySelector('.rv-action-bar') ?? card.querySelector('.row')
+        if (actionBar) card.insertBefore(statusBar, actionBar)
+        else card.appendChild(statusBar)
+      }
+      if (running) {
+        statusBar.className = 'rv-ai-status-bar running'
+        statusBar.innerHTML = `<span class="subagent-pulse"></span><span>AI 正在对照审稿意见修订对应段落（您可继续审阅下方其他卡片）…</span>`
+      } else if (queued) {
+        statusBar.className = 'rv-ai-status-bar queued'
+        statusBar.innerHTML = `<span class="subagent-pulse"></span><span>已加入 AI 修订队列，正在排队处理…</span>`
+      } else {
+        statusBar.className = 'rv-ai-status-bar done'
+        statusBar.innerHTML = `<span>✓ AI 已生成段落修订建议</span><button type="button" class="small-btn quiet" data-rv-jump-diff="${esc(cid)}">定位查看对比 ↗</button>`
+      }
+    } else if (statusBar) {
+      statusBar.remove()
+    }
   })
 }
 
@@ -2773,6 +3110,7 @@ $('commentFab').onmousedown = async e => {
   }
 
   pendingAnchor = curAnchor
+  session?.editor?.highlightPendingAnchor(curAnchor)
   if ($('app').classList.contains('side-collapsed')) setSideCollapsed(false)
   switchTab('commentPane')
   $('newComment').hidden = false
@@ -2780,7 +3118,11 @@ $('commentFab').onmousedown = async e => {
   $<HTMLTextAreaElement>('newCommentText').value = ''
   $('newCommentText').focus()
 }
-$('newCommentCancel').onclick = () => { $('newComment').hidden = true; pendingAnchor = null }
+$('newCommentCancel').onclick = () => {
+  $('newComment').hidden = true
+  pendingAnchor = null
+  session?.editor?.highlightPendingAnchor(null)
+}
 
 async function saveComment(ask: boolean): Promise<void> {
   const text = $<HTMLTextAreaElement>('newCommentText').value.trim()
@@ -2789,8 +3131,12 @@ async function saveComment(ask: boolean): Promise<void> {
     const c = await api(`/api/docs/${session.docId}/comments`, { method: 'POST', body: JSON.stringify({ ...pendingAnchor, text }) })
     $('newComment').hidden = true
     pendingAnchor = null
+    session.editor?.highlightPendingAnchor(null)
     if (ask && !c.queued) {
+      aiAskedCommentIds.add(c.id)
       await api(`/api/docs/${session.docId}/comments/${c.id}/ask?async=1`, { method: 'POST', body: JSON.stringify({ suggest: $<HTMLInputElement>('suggestMode').checked }) })
+      await loadQueue()
+      showNotice('已存为批注并加入 AI 修订队列（修订完成后可直接在卡片或正文中查看对比）')
     }
     await refresh(false)
   } catch (err) {
@@ -2818,6 +3164,7 @@ interface ReviewSnapshotState {
 
 let lastReviewSnapshot: ReviewSnapshotState | null = null
 let activeReviewFilter: 'all' | 'critical' | 'major' | 'minor' = 'all'
+let reviewSortMode: 'severity' | 'section' = 'severity'
 let isRunningDeepReview = false
 
 function formatCleanRuleText(raw: string): string {
@@ -3050,6 +3397,13 @@ function renderReviewSnapshot(): void {
     <div class="rv-snap-top">
       ${filterHtml}
       <div class="rv-snap-actions">
+        ${openReviewItems.length > 1 ? `
+          <div class="rv-sort-seg" role="group" aria-label="排序方式">
+            <button type="button" class="rv-sort-btn ${reviewSortMode === 'severity' ? 'active' : ''}" data-rv-sort="severity" title="优先处理高严重度的数据矛盾与方法学问题">按严重度</button>
+            <button type="button" class="rv-sort-btn ${reviewSortMode === 'section' ? 'active' : ''}" data-rv-sort="section" title="按正文从上到下的章节顺序分组">按章节顺序</button>
+          </div>
+        ` : ''}
+        ${openReviewItems.length > 0 ? `<button type="button" class="small-btn ai rv-batch-ask-btn" data-rv-batch-ask="1" title="将当前筛选下的待处理审稿项一次性汇总交给 AI 生成段落修订建议">✦ 批量交给 AI 修订</button>` : ''}
         ${exempted > 0 ? `<span class="rv-exempt-badge" title="已根据您的专科审稿习惯自动过滤同类误报">已按专科习惯免报 ${exempted} 处</span>` : ''}
         ${openReviewItems.length > 0 ? `<button type="button" class="quiet small-btn rv-copy-btn" data-rv-copy="1" title="将待处理审稿问题复制为 Markdown 清单，方便发给合作者或学生修改">复制清单</button>` : ''}
       </div>
@@ -3068,6 +3422,50 @@ function renderReviewSnapshot(): void {
 }
 
 document.getElementById('reviewSnapshotBar')?.addEventListener('click', async e => {
+  const sortBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-sort]')
+  if (sortBtn?.dataset.rvSort) {
+    reviewSortMode = sortBtn.dataset.rvSort as 'severity' | 'section'
+    renderReviewSnapshot()
+    renderComments()
+    return
+  }
+  const batchBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-batch-ask]')
+  if (batchBtn && session) {
+    const list: any[] = detail?.comments ?? []
+    const openReviewItems = list
+      .filter(c => c.status === 'open')
+      .map(c => ({ c, meta: parseReviewComment(c) }))
+      .filter(x => x.meta.isReview && (activeReviewFilter === 'all' || x.meta.severity === activeReviewFilter))
+    if (openReviewItems.length === 0) return
+    batchBtn.disabled = true
+    batchBtn.textContent = '已发起批量修订…'
+    for (const item of openReviewItems) {
+      aiAskedCommentIds.add(item.c.id)
+    }
+    syncCommentAskButtons()
+    const summaryTasks = openReviewItems.map((item, idx) => {
+      const quote = item.c.anchor?.text || item.c.snippet || '（定位段落）'
+      const fix = item.meta.suggestion ? `（参考修改建议：${item.meta.suggestion}）` : ''
+      return `${idx + 1}. [${item.meta.severityLabel}] 原句：「${quote}」 -> 问题：${item.meta.cleanReason} ${fix}`
+    }).join('\n')
+    try {
+      await api(`/api/docs/${session.docId}/chat?async=1`, {
+        method: 'POST',
+        body: JSON.stringify({
+          message: `请按修订模式（生成待采纳对比）一次性逐条处理以下 ${openReviewItems.length} 项审稿意见，修改正文中对应的段落或表格，并在修改完成后将对应批注标记为已处理：\n${summaryTasks}`,
+          suggest: true,
+        }),
+      })
+      await loadQueue()
+      showNotice(`✦ 已将 ${openReviewItems.length} 项审稿问题汇总交给 AI 批量修订（完成后可在正文中逐处对比采纳）`)
+    } catch (err) {
+      showNotice((err as Error).message, true)
+    } finally {
+      batchBtn.disabled = false
+      batchBtn.textContent = '✦ 批量交给 AI 修订'
+    }
+    return
+  }
   const copyBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-copy]')
   if (copyBtn) {
     const list: any[] = detail?.comments ?? []
@@ -3208,11 +3606,37 @@ function renderComments(): void {
     return !meta.isReview || meta.severity === activeReviewFilter
   })
 
-  const openHtml = filteredOpenList.length === 0
-    ? (openList.length === 0
+  const sevRank: Record<'critical' | 'major' | 'minor', number> = { critical: 3, major: 2, minor: 1 }
+  let openHtml = ''
+  if (filteredOpenList.length === 0) {
+    openHtml = openList.length === 0
       ? `<div class="rv-empty-hint muted">${resolvedList.length > 0 ? `当前待处理问题已全部清零（下方已归档 ${resolvedList.length} 项）。` : ''}点击上方 <b>「✦ 全文深度审稿」</b> 一键核查全文数据自洽与统计规范；也可以在正文中选中句子手动添加批注。</div>`
-      : `<div class="rv-empty-hint muted">当前筛选条件下无待处理项。</div>`)
-    : filteredOpenList.map(renderCommentCardHtml).join('')
+      : `<div class="rv-empty-hint muted">当前筛选条件下无待处理项。</div>`
+  } else if (reviewSortMode === 'section') {
+    const groups = new Map<string, any[]>()
+    for (const c of filteredOpenList) {
+      const sec = (c.anchor?.section_title || '正文段落与综合讨论').trim()
+      const arr = groups.get(sec) ?? []
+      arr.push(c)
+      groups.set(sec, arr)
+    }
+    openHtml = Array.from(groups.entries())
+      .map(
+        ([secName, items]) => `
+        <div class="rv-sec-group">
+          <div class="rv-sec-group-head"><span>§ ${esc(secName)}</span><span class="muted">${items.length} 项</span></div>
+          ${items.map(renderCommentCardHtml).join('')}
+        </div>`,
+      )
+      .join('')
+  } else {
+    const sorted = [...filteredOpenList].sort((a, b) => {
+      const ma = parseReviewComment(a)
+      const mb = parseReviewComment(b)
+      return sevRank[mb.severity] - sevRank[ma.severity]
+    })
+    openHtml = sorted.map(renderCommentCardHtml).join('')
+  }
 
   const resolvedDrawerHtml = resolvedList.length > 0
     ? `<details class="rv-resolved-drawer">
@@ -3327,6 +3751,12 @@ $('comments').onkeydown = e => {
 
 $('comments').onclick = async e => {
   const targetEl = e.target as HTMLElement
+  const jumpDiffBtn = targetEl.closest<HTMLElement>('[data-rv-jump-diff]')
+  if (jumpDiffBtn?.dataset.rvJumpDiff) {
+    locateCommentInDoc(jumpDiffBtn.dataset.rvJumpDiff)
+    jumpToSuggestion(1)
+    return
+  }
   const locateTrigger = targetEl.closest('[data-locate]') as HTMLElement | null
   if (locateTrigger) {
     const card = locateTrigger.closest<HTMLElement>('[data-cid]')
@@ -3408,9 +3838,12 @@ $('comments').onclick = async e => {
       if (btn.disabled) return
       btn.disabled = true
       btn.textContent = '排队中…'
+      aiAskedCommentIds.add(cid)
+      aiCompletedCommentIds.delete(cid)
+      syncCommentAskButtons()
       await api(`/api/docs/${session.docId}/comments/${cid}/ask?async=1`, { method: 'POST', body: JSON.stringify({ text, suggest: $<HTMLInputElement>('suggestMode').checked }) })
       await loadQueue()
-      switchTab('chatPane')
+      // 保持停留在「审稿与批注」Tab（不强制切去 AI 助手），卡片原地显示 AI 正在修订状态（Batch 1）
     } else if (act === 'delete') {
       if (!await askConfirm({ title: '删除批注', message: '删除这条批注及其全部回复？正文里的标记也会去掉。', confirm: '删除', danger: true })) return
       await api(`/api/docs/${session.docId}/comments/${cid}`, { method: 'DELETE' })
@@ -3506,19 +3939,19 @@ function attachChatReviewBar(container: HTMLElement, count: number): void {
 function renderSuggestions(): void {
   const groups: any[] = detail?.suggestions ?? []
   $('suggestBanner').hidden = groups.length === 0
+  // 消除重复横幅噪音（Batch 2）：正文顶部仅保留一条统一状态栏，不再与 turnBanner 或输入框上方横幅重复叠加
   const chatBanner = document.getElementById('chatSuggestBanner')
-  const chatSummary = document.getElementById('chatSuggestSummary')
-  if (chatBanner) chatBanner.hidden = groups.length === 0
+  if (chatBanner) chatBanner.hidden = true
+  if (groups.length > 0) {
+    hideTurnBanner()
+  }
   if (groups.length === 0) {
     suggestCursor = -1
     document.querySelectorAll('#chatLog .chat-turn-review-bar').forEach(el => el.remove())
     return
   }
   const blocks = groups.reduce((n, g) => n + g.inserts + g.deletes, 0)
-  $('suggestSummary').textContent = `${groups.length} 处待采纳修订（涉及 ${blocks} 块）· 请点击「全部采纳」或正文内「采纳」使其正式生效`
-  if (chatSummary) {
-    chatSummary.textContent = `${groups.length} 处修订待采纳（采纳后生效与导出）`
-  }
+  $('suggestSummary').textContent = `✦ 待审阅修订（${groups.length} 处 · 涉及 ${blocks} 块）`
   const existingBars = document.querySelectorAll<HTMLElement>('#chatLog .chat-turn-review-bar')
   if (existingBars.length > 0) {
     existingBars.forEach(bar => {
@@ -3556,7 +3989,7 @@ const SOURCE: Record<string, string> = { create: '新建', import: '导入', tur
 
 function renderVersions(): void {
   $('versions').innerHTML = `<div class="row" style="margin-bottom:8px"><button id="saveVersion">保存当前为版本</button></div>` +
-    (detail?.versions ?? []).map((v: any) => `<div class="vitem"><div><b>v${esc(v.seq)}</b> · ${esc(SOURCE[v.source] ?? v.source)} · ${esc(v.note)}<div class="muted">rev ${esc(v.rev)} · ${new Date(v.created_at).toLocaleString()}</div></div>
+    (detail?.versions ?? []).map((v: any) => `<div class="vitem" data-vseq="${esc(v.seq)}"><div><b>v${esc(v.seq)}</b> · ${esc(SOURCE[v.source] ?? v.source)} · ${esc(v.note)}<div class="muted">rev ${esc(v.rev)} · ${new Date(v.created_at).toLocaleString()}</div></div>
       <div class="row"><button data-diff="${esc(v.seq)}">对比</button><button data-restore="${esc(v.seq)}">回滚</button></div></div>`).join('')
   $('saveVersion').onclick = async () => {
     if (!session) return
@@ -3566,21 +3999,55 @@ function renderVersions(): void {
 }
 
 $('versions').onclick = async e => {
-  const d = (e.target as HTMLElement).dataset
+  const btn = (e.target as HTMLElement).closest('button') as HTMLButtonElement | null
+  const d = btn?.dataset ?? (e.target as HTMLElement).dataset
   if (!session) return
+  if (d.closeDiff) {
+    btn?.closest('.vitem-diff-box')?.remove()
+    $('diffView').innerHTML = ''
+    return
+  }
   if (d.restore && await askConfirm({ title: `回滚到 v${d.restore}`, message: '文档会恢复成这个版本的内容。回滚本身会生成一个新版本，之前的历史都保留，随时可以再回到现在。', confirm: '回滚' })) {
     try {
       await api(`/api/docs/${session.docId}/versions/${d.restore}/restore`, { method: 'POST' })
+      $('diffView').innerHTML = ''
       await refresh(false)
     } catch (err) {
       showNotice((err as Error).message, true)
     }
   }
   if (d.diff) {
+    const vitem = (e.target as HTMLElement).closest<HTMLElement>('.vitem')
+    const existingBox = vitem?.querySelector<HTMLElement>('.vitem-diff-box')
+    if (existingBox) {
+      existingBox.remove()
+      $('diffView').innerHTML = ''
+      return
+    }
     const r = await api(`/api/docs/${session.docId}/diff?from=${d.diff}`)
     const label: Record<string, string> = { added: '新增', removed: '删除', modified: '修改' }
-    $('diffView').innerHTML = `<h4>v${esc(d.diff)} → 当前</h4>` + (r.changes.length === 0 ? '<div class="muted">无变化</div>' : r.changes.map((c: any) =>
-      `<div class="${esc(c.kind)}">[${esc(label[c.kind] ?? c.kind)}] ${esc(c.kind === 'removed' ? c.before : c.after)}${c.kind === 'modified' ? `<div class="muted">原：${esc(c.before)}</div>` : ''}</div>`).join(''))
+    const changesHtml = r.changes.length === 0
+      ? '<div class="muted small">与当前版本内容完全一致，无变化</div>'
+      : r.changes.map((c: any) =>
+        `<div class="${esc(c.kind)}">[${esc(label[c.kind] ?? c.kind)}] ${esc(c.kind === 'removed' ? c.before : c.after)}${c.kind === 'modified' ? `<div class="muted">原：${esc(c.before)}</div>` : ''}</div>`).join('')
+    const boxHtml = `
+      <div class="vitem-diff-head">
+        <b>v${esc(d.diff)} → 当前版本差异对比（${r.changes.length} 处）</b>
+        <span class="grow"></span>
+        <button type="button" class="small-btn primary" data-restore="${esc(d.diff)}">恢复到此版本 v${esc(d.diff)}</button>
+        <button type="button" class="small-btn quiet" data-close-diff="1">收起 ✕</button>
+      </div>
+      <div class="vitem-diff-body">${changesHtml}</div>
+    `
+    $('diffView').innerHTML = `<div class="vitem-diff-box">${boxHtml}</div>`
+    document.querySelectorAll('#versions .vitem-diff-box').forEach(el => el.remove())
+    if (vitem) {
+      const inlineBox = document.createElement('div')
+      inlineBox.className = 'vitem-diff-box'
+      inlineBox.innerHTML = boxHtml
+      vitem.appendChild(inlineBox)
+      inlineBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
   }
 }
 
@@ -3603,12 +4070,20 @@ function renderCites(): void {
   $('cites').innerHTML =
     `<div class="card"><div class="row"><b>参考文献 (${list.length})</b><span class="grow"></span><button id="refImportBtn" class="small-btn" title="从 Zotero / EndNote / Mendeley / PubMed 导出的文件，或每行一个 DOI / PMID">导入文献</button>
       <input type="file" id="refImportInput" accept=".ris,.bib,.nbib,.txt,.xml,.enw" hidden></div>
-      <div class="muted small" style="margin:4px 0">按 DOI / PMID 自动核实登记，正文与 AI 均可直接引用（引文与数据核查已集成于「审稿与批注」）。</div>${refMergeText() ? `<div class="ref-merge-note">${esc(refMergeText())}；导出 Word / Markdown 时合并成一份文献表。</div>` : ''}<div id="refImportResult">${refImportHtml}</div></div>` +
+      <div class="muted small" style="margin:4px 0">按 DOI / PMID 自动核实登记，点击正文 [n] 上标或下方卡片可双向联动定位（Batch 5）。</div>${refMergeText() ? `<div class="ref-merge-note">${esc(refMergeText())}；导出 Word / Markdown 时合并成一份文献表。</div>` : ''}<div id="refImportResult">${refImportHtml}</div></div>` +
     (list.length === 0 ? '<div class="muted small" style="margin:8px 0">暂无已登记引用。点击上方「导入文献」或在正文工具栏点「引用」添加。</div>' : list.map(c => {
+      const cid = c.id || c.cite_id || ''
       const candidateUrl = typeof c.url === 'string' && /^https?:\/\//i.test(c.url)
         ? c.url
-        : (c.doi ? `https://doi.org/${encodeURIComponent(String(c.doi))}` : '')
-      return `<div class="card"><b>${c.number ? `[${esc(c.number)}]` : '未使用'}</b> ${esc(c.formatted)}${candidateUrl ? ` <a href="${esc(candidateUrl)}" target="_blank" rel="noopener">原文</a>` : ''}</div>`
+        : (c.doi ? `https://doi.org/${encodeURIComponent(String(c.doi))}` : (c.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(String(c.pmid))}/` : ''))
+      return `<div class="card cite-card-item" data-cite-id="${esc(cid)}">
+        <div class="cite-card-main"><b>${c.number ? `[${esc(c.number)}]` : '[未引用]'}</b> ${esc(c.formatted)}</div>
+        <div class="cite-card-actions">
+          ${session?.kind === 'doc' ? `<button type="button" class="small-btn quiet" data-cite-act="insert" data-cid="${esc(cid)}" title="将此文献引用标记插入正文当前光标处">＋ 插入到光标处</button>` : ''}
+          ${c.number ? `<button type="button" class="small-btn quiet" data-cite-act="locate" data-cid="${esc(cid)}" title="在正文中定位并高亮引用该文献的句子">定位正文引用 ↗</button>` : ''}
+          ${candidateUrl ? `<a class="small-btn quiet cite-ext-link" href="${esc(candidateUrl)}" target="_blank" rel="noopener">查看原文 ↗</a>` : ''}
+        </div>
+      </div>`
     }).join(''))
   $('refImportBtn').onclick = () => $('refImportInput').click()
   $<HTMLInputElement>('refImportInput').onchange = async e => {
@@ -3627,6 +4102,20 @@ function renderCites(): void {
     } catch (err) {
       box.innerHTML = `<div class="form-error">${esc((err as Error).message)}</div>`
     }
+  }
+}
+
+$('cites').onclick = e => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-cite-act]')
+  if (!btn?.dataset.cid || !session?.editor) return
+  const cid = btn.dataset.cid
+  if (btn.dataset.citeAct === 'insert') {
+    session.editor.insertCitation(cid)
+    showNotice('已将文献引用插入当前光标处')
+    scheduleRefresh()
+  } else if (btn.dataset.citeAct === 'locate') {
+    const ok = session.editor.locateCitationInDoc(cid)
+    if (!ok) showNotice('正文中暂未找到该文献的上标引用位置', true)
   }
 }
 
@@ -3771,6 +4260,10 @@ async function boot(): Promise<void> {
     activeDoc: () => session ? { id: session.docId, title: detail?.title || '未命名文档' } : null,
     onInsertTable: insertTableIntoActiveOrNewDoc,
     onNotice: showNotice,
+    onFocusDocChat: () => {
+      switchTab('chatPane')
+      $<HTMLTextAreaElement>('chatInput').focus()
+    },
   })
   // 回到上次停留的工作空间（显示该空间的开始页）
   spaces.setEnabled('patients', me.tenant?.settings.patient_module !== false)

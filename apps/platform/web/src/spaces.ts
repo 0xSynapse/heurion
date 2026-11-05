@@ -39,14 +39,38 @@ export function initSpaces(defs: Record<Space, SpaceDef>) {
     $('navLabel').textContent = d.label
     $('newProject').hidden = space !== 'write'
     ;($('docSearch') as HTMLInputElement).placeholder = d.placeholder
+    const moreBtn = document.getElementById('railMoreBtn')
+    const moreLabel = document.getElementById('railMoreLabel')
+    const isSecondarySpace = space === 'calendar' || space === 'mail'
+    if (moreBtn) moreBtn.classList.toggle('on', isSecondarySpace)
+    if (moreLabel) moreLabel.textContent = space === 'calendar' ? '日历' : space === 'mail' ? '邮箱' : '更多'
+    const moreMenu = document.getElementById('railMoreMenu')
+    if (moreMenu) moreMenu.hidden = true
     try { localStorage.setItem(KEY, space) } catch { /* 无痕模式 */ }
     void d.enter()
   }
 
-  document.querySelector('.rail-spaces')!.addEventListener('click', e => {
+  document.querySelector('.rail')!.addEventListener('click', e => {
     const b = (e.target as HTMLElement).closest<HTMLElement>('.rail-btn[data-space]')
     if (b) set(b.dataset.space as Space)
   })
+
+  const moreBtn = document.getElementById('railMoreBtn')
+  const moreMenu = document.getElementById('railMoreMenu')
+  if (moreBtn && moreMenu) {
+    moreBtn.addEventListener('click', e => {
+      e.stopPropagation()
+      moreMenu.hidden = !moreMenu.hidden
+    })
+    moreMenu.addEventListener('click', () => {
+      moreMenu.hidden = true
+    })
+    document.addEventListener('click', e => {
+      if (!moreMenu.hidden && !(e.target as HTMLElement).closest('#railMoreWrap')) {
+        moreMenu.hidden = true
+      }
+    })
+  }
 
   return {
     set,

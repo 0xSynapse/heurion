@@ -29,6 +29,10 @@ export interface EditorOptions {
   onSelection: (anchor: SelectionAnchor | null) => void
   /** 点击论断标注时回调（定位或展开伴随审查卡片） */
   onClaimClick?: (claimId: string) => void
+  /** 点击正文引用上标 [1] 时回调（在右侧引用面板定位并高亮对应文献卡片） */
+  onCitationClick?: (citeId: string) => void
+  /** 正文结构或内容变更时回调（用于实时更新左侧章节与图表大纲） */
+  onDocChange?: () => void
   /** 图是否由数据分析生成（有则显示「来自分析」，点开看代码与数据来源）。 */
   analysis?: { has: (assetId: string) => Promise<boolean>; show: (assetId: string) => void }
   /** 只读（研究里的只读成员）：能看、能选中文字评论，不能改 */
@@ -840,6 +844,11 @@ export class Editor {
         return true
       },
       handleClickOn: (_view, _pos, _node, _nodePos, event) => {
+        const citeEl = (event.target as HTMLElement).closest('sup.cite') as HTMLElement | null
+        if (citeEl?.dataset.cite) {
+          opts.onCitationClick?.(citeEl.dataset.cite)
+          return true
+        }
         const claimEl = (event.target as HTMLElement).closest('.claim-warn-text, .claim-warn-block') as HTMLElement | null
         if (claimEl?.dataset.claimId) {
           opts.onClaimClick?.(claimEl.dataset.claimId)
@@ -853,6 +862,7 @@ export class Editor {
       dispatchTransaction(this: EditorView, tr) {
         this.updateState(this.state.apply(tr))
         if (editor.view && (tr.selectionSet || tr.docChanged)) editor.reportSelection()
+        if (editor.view && tr.docChanged) editor.notifyDocChanged()
       },
     })
   }
@@ -1194,6 +1204,177 @@ export class Editor {
     }, 4500)
 
     return { found: true, sectionTitle }
+  }
+
+  private docChangeTimer: ReturnType<typeof setTimeout> | null = null
+  private citeLocateCursor = new Map<string, number>()
+
+  private notifyDocChanged(): void {
+    if (!this.opts.onDocChange) return
+    if (this.docChangeTimer) clearTimeout(this.docChangeTimer)
+    this.docChangeTimer = setTimeout(() => {
+      this.docChangeTimer = null
+      this.opts.onDocChange?.()
+    }, 180)
+  }
+
+  /**
+   * 提取当前文稿的实时章节与图表大纲（H1–H3 标题、三线表、科研图片），
+   * 供左侧目录导航与审稿批注章节联动使用。
+   */
+  getDocOutline(): Array<{
+    id: string
+    kind: 'h1' | 'h2' | 'h3' | 'table' | 'figure'
+    title: string
+    sectionNodeId: string
+    sectionTitle: string
+    suggest?: boolean
+  }> {
+    const items: Array<{
+      id: string
+      kind: 'h1' | 'h2' | 'h3' | 'table' | 'figure'
+      title: string
+      sectionNodeId: string
+      sectionTitle: string
+      suggest?: boolean
+    }> = []
+    let currentSectionId = ''
+    let currentSectionTitle = '正文前导'
+    let tableIdx = 0
+    let figIdx = 0
+    const doc = this.view.state.doc
+    for (let i = 0; i < doc.childCount; i++) {
+      const node = doc.child(i)
+      if (node.attrs?.suggest === 'delete') continue
+      const id = (node.attrs?.id as string) || ''
+      const isSuggest = node.attrs?.suggest === 'insert'
+      if (node.type.name === 'heading') {
+        const level = Math.min(3, Math.max(1, Number(node.attrs?.level) || 1))
+        const text = node.textContent.trim()
+        if (!text || !id) continue
+        currentSectionId = id
+        currentSectionTitle = text
+        items.push({
+          id,
+          kind: (`h${level}`) as 'h1' | 'h2' | 'h3',
+          title: text,
+          sectionNodeId: id,
+          sectionTitle: text,
+          suggest: isSuggest,
+        })
+      } else if (node.type.name === 'table' && id) {
+        tableIdx++
+        let prevCaption = ''
+        if (i > 0) {
+          const prev = doc.child(i - 1)
+          const pt = prev.textContent.trim()
+          if (/^(表|Table)\s*\d+/i.test(pt) && pt.length <= 120) prevCaption = pt
+        }
+        const firstRowText = node.firstChild?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 32) || ''
+        const title = prevCaption || `表 ${tableIdx}${firstRowText ? ` · ${firstRowText}` : ''}`
+        items.push({
+          id,
+          kind: 'table',
+          title,
+          sectionNodeId: currentSectionId || id,
+          sectionTitle: currentSectionTitle,
+          suggest: isSuggest,
+        })
+      } else if (node.type.name === 'figure' && id) {
+        figIdx++
+        const cap = ((node.attrs?.caption as string) || (node.attrs?.alt as string) || '').trim()
+        const title = cap ? (/^(图|Figure|Fig\.?)\s*\d+/i.test(cap) ? cap : `图 ${figIdx} · ${cap}`) : `图 ${figIdx}`
+        items.push({
+          id,
+          kind: 'figure',
+          title,
+          sectionNodeId: currentSectionId || id,
+          sectionTitle: currentSectionTitle,
+          suggest: isSuggest,
+        })
+      }
+    }
+    return items
+  }
+
+  /**
+   * 点击目录大纲项时：平滑滚动到对应章节标题或图表，并高亮该章节范围。
+   */
+  scrollToSectionNode(nodeId: string): void {
+    const root = this.view.dom
+    if (this.focusCleanupTimer) {
+      clearTimeout(this.focusCleanupTimer)
+      this.focusCleanupTimer = null
+    }
+    root.querySelectorAll('.comment-focus-target, .comment-focus-block, .section-focus-heading, .section-focus-block').forEach(el => {
+      el.classList.remove('comment-focus-target', 'comment-focus-block', 'section-focus-heading', 'section-focus-block')
+      if (el instanceof HTMLElement) delete el.dataset.secFocusLabel
+    })
+    const target = root.querySelector<HTMLElement>(`[data-id="${CSS.escape(nodeId)}"]`)
+    if (!target) return
+    const isHeading = /^H[1-6]$/.test(target.tagName)
+    const headingLevel = (el: Element) => Number(el.tagName.slice(1)) || 6
+    if (isHeading) {
+      target.classList.add('section-focus-heading')
+      target.dataset.secFocusLabel = '当前定位章节'
+      const baseLevel = headingLevel(target)
+      let cursor: Element | null = target.nextElementSibling
+      let count = 0
+      while (cursor && count < 40) {
+        if (/^H[1-6]$/.test(cursor.tagName) && headingLevel(cursor) <= baseLevel) break
+        cursor.classList.add('section-focus-block')
+        cursor = cursor.nextElementSibling
+        count++
+      }
+    } else {
+      target.classList.add('comment-focus-block')
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    this.focusCleanupTimer = setTimeout(() => {
+      root.querySelectorAll('.comment-focus-target, .comment-focus-block, .section-focus-heading, .section-focus-block').forEach(el => {
+        el.classList.remove('comment-focus-target', 'comment-focus-block', 'section-focus-heading', 'section-focus-block')
+        if (el instanceof HTMLElement) delete el.dataset.secFocusLabel
+      })
+      this.focusCleanupTimer = null
+    }, 3500)
+  }
+
+  /**
+   * 在右侧填写新建批注期间，保持正文被选中段落的临时锚定高亮边框。
+   */
+  highlightPendingAnchor(anchor: { node_id: string; snippet?: string } | null): void {
+    const root = this.view.dom
+    root.querySelectorAll('.pending-comment-anchor').forEach(el => el.classList.remove('pending-comment-anchor'))
+    if (!anchor?.node_id) return
+    const el = root.querySelector<HTMLElement>(`[data-id="${CSS.escape(anchor.node_id)}"]`)
+    if (el) {
+      el.classList.add('pending-comment-anchor')
+    }
+  }
+
+  /**
+   * 在正文中定位某篇参考文献的引用上标 [n]（支持多次点击循环跳转到下一处引用）。
+   */
+  locateCitationInDoc(citeId: string): boolean {
+    const root = this.view.dom
+    const sups = Array.from(root.querySelectorAll<HTMLElement>(`sup.cite[data-cite="${CSS.escape(citeId)}"]`))
+    if (sups.length === 0) return false
+    const prev = this.citeLocateCursor.get(citeId) ?? -1
+    const idx = (prev + 1) % sups.length
+    this.citeLocateCursor.set(citeId, idx)
+    const target = sups[idx]!
+    root.querySelectorAll('.comment-focus-target, .comment-focus-block').forEach(el => {
+      el.classList.remove('comment-focus-target', 'comment-focus-block')
+    })
+    target.classList.add('comment-focus-target')
+    const block = target.closest<HTMLElement>('p, li, table, h1, h2, h3, h4')
+    block?.classList.add('comment-focus-block')
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setTimeout(() => {
+      target.classList.remove('comment-focus-target')
+      block?.classList.remove('comment-focus-block')
+    }, 3200)
+    return true
   }
 
   /** 服务端给出的引用编号规则（正文末尾有用户自己的文献表时接着编号）。 */
