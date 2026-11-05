@@ -181,7 +181,13 @@ agy</pre>
           <p>日常使用时无需手动输入 <code>aegis-os</code> 命令，直接在 Agent 对话中发出指令即可：</p>
           <pre class="cmd"><span class="c"># 在 Claude / Codex / AGY 对话中输入：</span>
 修改 README 的标题，检查 diff 并提交回主目录</pre>
-          <p>Agent 会先在 CoW 影子工作区内完成修改（<code>fs_edit</code> / <code>workspace_diff</code>），尚未写回宿主目录。当 Agent 调用 <code>workspace_commit</code> 合并回宿主机时，桌面环境会自动弹出 IDE 内置确认框或打开网页审批台（<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a>，点击批准后自动续跑），并在合并前通过跨进程提交锁与 <code>verify_cmd</code> 沙箱门禁确保主干始终可编译。纯终端/SSH 下也可运行 <code>aegis-os approve</code>（或简写 <code>aos approve</code>）一键放行。</p>
+          <p>Agent 会先在 CoW 影子工作区内完成修改（<code>fs_edit</code> / <code>workspace_diff</code>），尚未写回宿主目录。当 Agent 调用 <code>workspace_commit</code> 合并回宿主机时，桌面环境会自动弹出 IDE 内置确认框或打开免密钥网页审批台（<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a> 与 <a href="/aegis-cloud/dashboard" style="color:var(--accent);">/aegis-cloud/dashboard</a>，本地模式零配置直连、云端仅需输入订阅邮箱），点击批准后自动续跑，并在合并前通过跨进程提交锁与 <code>verify_cmd</code> 沙箱门禁确保主干始终可编译：</p>
+          <ul>
+            <li><strong>网页内联彩色 Diff 预览（<code>查看变更 Diff</code>）</strong>：无需切回终端，直接在审批卡片内展开语法高亮的 Unified Diff（<code>GET /v1/approvals/diff</code>）与变更文件列表，所见即所审。</li>
+            <li><strong>防 TOCTOU 篡改的密码学哈希锁定（<code>批准本次 · SHA-256 锁定</code>）</strong>：单次批准会将租约严格锚定至审批时刻的规范化 Diff 摘要（<code>sha256:&lt;evidence_hash&gt;</code>，最长 15 分钟有效）。若 Agent 在你点击同意后偷偷修改哪怕 1 个字节，二次提交将立即因哈希失配被拦截。</li>
+            <li><strong>多敏感文件合并单卡审批与时间窗租约</strong>：一次提交若同时触碰多个构建/钩子敏感文件（如 <code>Cargo.toml</code>、<code>package.json</code>、<code>Makefile</code>），系统会自动合并为单张 <code>workspace_commit_sensitive</code> 审批单；同时也支持授予 <strong>15 分钟</strong>或 <strong>1 小时</strong>常规文本提交租约。</li>
+          </ul>
+          <p>纯终端/SSH 下也可运行 <code>aegis-os approve</code>（或简写 <code>aos approve</code>）一键放行。</p>
         </section>
 
         <section id="memory">
@@ -241,6 +247,7 @@ aegis-os top</pre>
           <p class="label-caps">05 / REVOKE &amp; AUDIT</p>
           <h2 class="heading-2">撤销与防篡改哈希链审计</h2>
           <p>你可以直接在 Agent 对话中说“查看当前多 Agent 任务的子任务进展和审计记录”——Agent 调用 <code>ipc_task_get</code> / <code>ipc_task_list</code> 即可直接返回子任务树（<code>subtasks</code>）、关联的跨边界操作轨迹（<code>audit_trace</code>）以及 <strong>SHA-256 哈希链完整性校验结果（<code>hash_chain_verified: true</code>）</strong>。</p>
+          <p>若需随时收回已授予的会话租约（如 15 分钟 / 1 小时落盘租约或外网域名租约），可在 <a href="/aegis-cloud/dashboard" style="color:var(--accent);">Aegis 控制台 (/aegis-cloud/dashboard)</a> 或 <a href="/aegis-cloud/approve" style="color:var(--accent);">边界审批台 (/approve)</a> 的<strong>「我已授权的生效租约 (ACTIVE SESSION LEASES)」</strong>列表中直接点击 <strong>撤销 (Revoke)</strong> 按钮（调用 <code>POST /v1/leases/revoke</code>），租约将立即失效并记入哈希链审计账本。</p>
           <p>若需查看并撤销一个 UOMP memory session：</p>
           <pre class="cmd">aegis-os memory sessions
 aegis-os memory revoke &lt;session-id&gt;</pre>

@@ -180,7 +180,13 @@ agy</pre>
           <p>In daily work you never need to run <code>aegis-os</code> CLI subcommands manually—just instruct your coding agent in natural language:</p>
           <pre class="cmd"><span class="c"># Inside your Claude / Codex / AGY conversation:</span>
 Update the README title, inspect the diff, and commit it back to the host repo</pre>
-          <p>The agent edits inside its CoW shadow workspace first (<code>fs_edit</code> / <code>workspace_diff</code>) without touching the host directory. When the agent calls <code>workspace_commit</code>, Aegis OS prompts inline or auto-opens the web approval console (<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a>), serializes concurrent commits via the host commit lock, and runs <code>verify_cmd</code> before landing. On headless SSH sessions you can also run <code>aegis-os approve</code> (alias: <code>aos approve</code>).</p>
+          <p>The agent edits inside its CoW shadow workspace first (<code>fs_edit</code> / <code>workspace_diff</code>) without touching the host directory. When the agent calls <code>workspace_commit</code>, Aegis OS prompts inline or auto-opens the keyless web approval console (<a href="/aegis-cloud/approve" style="color:var(--accent);">/approve</a> and <a href="/aegis-cloud/dashboard" style="color:var(--accent);">/aegis-cloud/dashboard</a>—zero manual API key entry on local workstations, or email lookup for cloud subscriptions), serializes concurrent commits via the host commit lock, and runs <code>verify_cmd</code> before landing:</p>
+          <ul>
+            <li><strong>Inline Colored Unified Diff Preview (<code>Inspect Diff</code>)</strong>: Expand the syntax-highlighted Unified Diff (<code>GET /v1/approvals/diff</code>) and changed file list directly inside the approval card before deciding—no terminal context switching required.</li>
+            <li><strong>Cryptographic TOCTOU-Pinned Approval (<code>Approve Once · SHA-256 Pinned</code>)</strong>: One-shot approval pins the lease to the exact SHA-256 digest of the canonical diff and commit flags (<code>sha256:&lt;evidence_hash&gt;</code>, bounded to 15m). If an agent alters even a single byte after you click approve, the commit is blocked immediately.</li>
+            <li><strong>Batched Single-Card Sensitive Approval &amp; Bounded TTL Leases</strong>: Commits touching multiple sensitive build or hook files (<code>Cargo.toml</code>, <code>package.json</code>, <code>Makefile</code>) are consolidated into a single <code>workspace_commit_sensitive</code> card, alongside optional <strong>15-minute</strong> or <strong>1-hour</strong> session leases for routine text commits.</li>
+          </ul>
+          <p>On headless SSH sessions you can also run <code>aegis-os approve</code> (alias: <code>aos approve</code>).</p>
         </section>
 
         <section id="memory">
@@ -240,6 +246,7 @@ aegis-os top</pre>
           <p class="label-caps">05 / REVOKE &amp; AUDIT</p>
           <h2 class="heading-2">Revoke and hash-chained audit</h2>
           <p>You can ask your agent directly in chat to “show the subtask status and audit trail for the current A2A task”—the agent calls <code>ipc_task_get</code> / <code>ipc_task_list</code> to inspect the child <code>subtasks</code>, the task-correlated <code>audit_trace</code>, and <strong>cryptographic SHA-256 hash-chain verification (<code>hash_chain_verified: true</code>)</strong>.</p>
+          <p>To revoke an active session lease (such as a 15-minute or 1-hour commit lease or a domain-scoped egress lease) at any time, click <strong>Revoke (撤销)</strong> next to the lease in the <strong>Active Session Leases</strong> panel of the <a href="/aegis-cloud/dashboard" style="color:var(--accent);">Aegis Console (/aegis-cloud/dashboard)</a> or <a href="/aegis-cloud/approve" style="color:var(--accent);">Approval Console (/approve)</a> (backed by <code>POST /v1/leases/revoke</code>). Revocation takes effect immediately and is recorded in the hash-chained audit ledger.</p>
           <p>To inspect and revoke a UOMP memory session from the terminal:</p>
           <pre class="cmd">aegis-os memory sessions
 aegis-os memory revoke &lt;session-id&gt;</pre>

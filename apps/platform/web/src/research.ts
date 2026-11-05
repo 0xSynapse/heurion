@@ -486,20 +486,25 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
   function switchStudyTab(tab: 'overview' | 'data' | 'studio' | 'biostats' | 'gallery'): void {
     activeTab = tab
     const page = $('page')
+    const topTab = tab === 'studio' ? 'biostats' : tab
     page.querySelectorAll<HTMLButtonElement>('.rs-tabs button[data-tab]').forEach(b => {
-      b.classList.toggle('active', b.dataset.tab === tab)
+      b.classList.toggle('active', b.dataset.tab === topTab)
     })
-    const panes: Record<typeof tab, string> = {
-      overview: 'rsPaneOverview',
-      data: 'rsPaneData',
-      studio: 'rsPaneStudio',
-      biostats: 'rsPaneBiostats',
-      gallery: 'rsPaneGallery',
-    }
-    for (const [k, pid] of Object.entries(panes) as Array<[typeof tab, string]>) {
-      const el = document.getElementById(pid)
-      if (el) el.hidden = k !== tab
-    }
+    page.querySelectorAll<HTMLButtonElement>('.rs-subview-switch button[data-rs-tab]').forEach(b => {
+      b.classList.toggle('active', b.dataset.rsTab === tab)
+    })
+    const ov = document.getElementById('rsPaneOverview')
+    const dt = document.getElementById('rsPaneData')
+    const an = document.getElementById('rsPaneAnalytics')
+    const bs = document.getElementById('rsPaneBiostats')
+    const st = document.getElementById('rsPaneStudio')
+    const ga = document.getElementById('rsPaneGallery')
+    if (ov) ov.hidden = tab !== 'overview'
+    if (dt) dt.hidden = tab !== 'data'
+    if (an) an.hidden = tab !== 'biostats' && tab !== 'studio'
+    if (bs) bs.hidden = tab !== 'biostats'
+    if (st) st.hidden = tab !== 'studio'
+    if (ga) ga.hidden = tab !== 'gallery'
   }
 
   async function openStudy(id: string): Promise<void> {
@@ -543,12 +548,15 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     const readyDatasets = s.datasets.filter(d => d.status === 'ready')
     const ro = canEdit ? '' : ' disabled'
 
+    const topTab = activeTab === 'studio' ? 'biostats' : activeTab
+    const staleCount = s.analyses.filter(a => a.stale_data).length
+
     page.innerHTML = `
       ${canEdit ? '' : `<div class="banner rs-readonly"><span class="dot"></span>你是这个研究的只读成员（负责人 ${esc(s.owner_name)}）：能看文档、数据和分析，能评论；要修改请负责人把你改成「可编辑」。</div>`}
       <div class="rs-head">
         <div class="row" style="align-items:center;gap:10px;flex-wrap:wrap;">
           <input class="rs-title" id="rsTitle" value="${esc(s.title)}" aria-label="研究名称" style="flex:1;min-width:240px;"${ro ? ' readonly' : ''}>
-          <button class="small-btn primary" data-act="bundle" title="一键导出包含 Word Table 1、Figure 1~6 矢量图、Prism/R/Draw.io/Visio/PPT 原工程文件、方法与结果初稿及 STROBE 清单的完整投稿压缩包 (.zip)">${icon('download', { size: 13 })} 导出 SCI 投稿出版包 (.zip)</button>
+          <button class="small-btn primary" data-act="bundle" title="一键导出包含 Word Table 1、Figure 矢量图、原工程文件、方法与结果初稿及 STROBE 清单的完整投稿压缩包 (.zip)">${icon('download', { size: 13 })} 导出投稿包 (.zip)</button>
           <div class="menu-wrap"><button data-act="more" aria-haspopup="menu">更多 ▾</button>
             <div class="dropdown" id="rsMore" hidden>${w('<button data-act="attach">归入已有文档…</button>')}${isOwner ? '<button data-act="delete" class="danger-text">删除研究项目</button>' : '<button data-act="leave" class="danger-text">退出研究</button>'}</div></div>
         </div>
@@ -557,148 +565,61 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           <select id="rsStatus" aria-label="状态"${ro}>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}"${s.status === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
           <span class="rs-role muted small">我的角色：${ROLE_LABEL[s.my_role]}</span>
           <span class="muted small">· 团队 ${members.length} 人 · 在组 ${activeSubjects.length} 人 · 数据集 ${s.datasets.length} 个 · 图表 ${s.analyses.length} 张</span>
+          ${staleCount ? `<span class="flag-L small">${icon('warning', { size: 11 })} ${staleCount} 张图表待同步</span>` : ''}
         </div>
-        <textarea id="rsSummary" rows="2" placeholder="简介：研究问题、人群、暴露 / 干预、主要终点"${ro ? ' readonly' : ''}>${esc(s.summary ?? '')}</textarea>
+        <textarea id="rsSummary" rows="1" placeholder="简介：研究问题、人群、暴露 / 干预、主要终点"${ro ? ' readonly' : ''}>${esc(s.summary ?? '')}</textarea>
       </div>
 
-      <!-- 科研全链路五步导航页签 (同患者页 .tabs.pt-tabs 统一设计语言) -->
       <div class="tabs rs-tabs" role="tablist" aria-label="临床研究工作流阶段">
-        <button type="button" data-tab="overview" data-rs-tab="overview" class="${activeTab === 'overview' ? 'active' : ''}">1. 方案、队列与概览</button>
-        <button type="button" data-tab="data" data-rs-tab="data" class="${activeTab === 'data' ? 'active' : ''}">2. 数据治理与 Table 1 <span class="count">${s.datasets.length || ''}</span></button>
-        <button type="button" data-tab="studio" data-rs-tab="studio" class="${activeTab === 'studio' ? 'active' : ''}">3. 统计与医学制图</button>
-        <button type="button" data-tab="biostats" data-rs-tab="biostats" class="${activeTab === 'biostats' ? 'active' : ''}">4. 统计模型与因果推断</button>
-        <button type="button" data-tab="gallery" data-rs-tab="gallery" class="${activeTab === 'gallery' ? 'active' : ''}">5. 图表库与多面板拼图 <span class="count">${s.analyses.length || ''}</span></button>
+        <button type="button" data-tab="overview" data-rs-tab="overview" class="${topTab === 'overview' ? 'active' : ''}">概览</button>
+        <button type="button" data-tab="data" data-rs-tab="data" class="${topTab === 'data' ? 'active' : ''}">数据与 Table 1${s.datasets.length ? ` <span class="count">${s.datasets.length}</span>` : ''}</button>
+        <button type="button" data-tab="biostats" data-rs-tab="biostats" class="${topTab === 'biostats' ? 'active' : ''}">统计与制图</button>
+        <button type="button" data-tab="gallery" data-rs-tab="gallery" class="${topTab === 'gallery' ? 'active' : ''}">图表库${s.analyses.length ? ` <span class="count">${s.analyses.length}</span>` : ''}</button>
       </div>
 
-      <!-- ==================== 页签 1：方案、队列与概览 ==================== -->
+      <!-- ==================== 页签 1：概览 ==================== -->
       <div id="rsPaneOverview" ${activeTab === 'overview' ? '' : 'hidden'}>
         <div class="rs-grid">
-          <section class="rs-card wide" style="padding:12px 14px;background:var(--raised);">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-              <b style="display:inline-flex;align-items:center;gap:6px;font-size:13px;">${icon('target', { size: 14 })} 临床研究者三路径快捷工作流 (Researcher Workflow Tracks)</b>
-              <span class="muted small">按当前课题阶段一键触发对应动作，无需在多层菜单间来回切换</span>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:10px;">
-              <div style="border:1px solid var(--line);border-radius:6px;padding:10px 12px;background:var(--bg);display:flex;flex-direction:column;gap:6px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;">
-                  <b style="font-size:12.5px;display:inline-flex;align-items:center;gap:5px;">${icon('upload', { size: 13 })} 路径 A · 外部 Excel/CSV 快车道</b>
-                  <span class="rs-kind">已有数据表</span>
-                </div>
-                <span class="muted small">上传含多工作表数据字典的 Excel/CSV → AI 核验编码 → 一键生成 Table 1 与生存/预测模型</span>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:4px;">
-                  ${canEdit ? `<button type="button" class="small-btn primary" data-act="upload">${icon('upload', { size: 12 })} 上传数据表</button>` : ''}
-                  <button type="button" class="small-btn" data-rs-tab="data">Table 1 与清洗</button>
-                  <button type="button" class="small-btn" data-rs-tab="biostats">拟合列线图/ROC</button>
-                </div>
-              </div>
-              <div style="border:1px solid var(--line);border-radius:6px;padding:10px 12px;background:var(--bg);display:flex;flex-direction:column;gap:6px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;">
-                  <b style="font-size:12.5px;display:inline-flex;align-items:center;gap:5px;">${icon('report', { size: 13 })} 路径 B · 方案驱动院内队列</b>
-                  <span class="rs-kind">前瞻/回顾队列</span>
-                </div>
-                <span class="muted small">从方案提取纳排规则与终点变量 → 筛查患者沉淀 CONSORT → Auto-eCRF 核实 → 导出随访宽表</span>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:4px;">
-                  ${canEdit ? `<button type="button" class="small-btn primary" data-act="screen">${icon('search', { size: 12 })} 方案纳排入组</button>` : ''}
-                  <button type="button" class="small-btn" data-act="ecrf">Auto-eCRF 核实</button>
-                  ${canEdit ? `<button type="button" class="small-btn" data-act="gen">生成时间窗宽表</button>` : ''}
-                </div>
-              </div>
-              <div style="border:1px solid var(--line);border-radius:6px;padding:10px 12px;background:var(--bg);display:flex;flex-direction:column;gap:6px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;">
-                  <b style="font-size:12.5px;display:inline-flex;align-items:center;gap:5px;">${icon('shield', { size: 13 })} 路径 C · 审稿返修与版本同步</b>
-                  ${s.analyses.some(a => a.stale_data)
-                    ? `<span class="flag-L small">${icon('warning', { size: 11 })} ${s.analyses.filter(a => a.stale_data).length} 张图待更新</span>`
-                    : `<span class="pill green small">图表已同步</span>`}
-                </div>
-                <span class="muted small">应对审稿人混杂偏倚与增量质疑：一键计算 PSM/IPTW Love Plot、E-value 抗辩及 DeLong 检验</span>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:4px;">
-                  <button type="button" class="small-btn primary" data-rs-tab="biostats">${icon('shield', { size: 12 })} PSM / E-value / DeLong</button>
-                  <button type="button" class="small-btn" data-rs-tab="gallery">多面板拼图</button>
-                  <button type="button" class="small-btn" data-act="bundle">导出投稿包</button>
-                </div>
-              </div>
-            </div>
-          </section>
           ${cohortCard(cohort, cohortOff, canEdit)}
           <section class="rs-card" id="rsProtocolCard">
-            <div class="rs-card-head"><h3>研究方案 (Protocol)</h3>${w('<button class="small-btn" data-new="protocol">＋ 新建方案</button>')}</div>
-            ${protocols.length ? `<ul class="rs-list">${protocols.map(docRow).join('')}</ul>` : '<p class="muted small">还没有研究方案。点「＋ 新建方案」，AI 可依据研究问题自动起草研究设计、纳排标准、终点、样本量与统计分析计划。</p>'}
+            <div class="rs-card-head"><h3>研究方案</h3>${w('<button class="small-btn" data-new="protocol">＋ 新建方案</button>')}</div>
+            ${protocols.length ? `<ul class="rs-list">${protocols.map(docRow).join('')}</ul>` : '<p class="muted small">还没有研究方案。点「＋ 新建方案」起草研究设计、纳排标准与主要终点。</p>'}
           </section>
           <section class="rs-card">
-            <div class="rs-card-head"><h3>数据集 (Datasets)</h3>
+            <div class="rs-card-head"><h3>数据集</h3>
               ${w('<button class="small-btn" data-act="upload">＋ 上传数据</button><input type="file" id="rsUpload" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.xpt,.sas7bdat,.sav,.zsav,.dta" multiple hidden>')}
             </div>
             ${s.datasets.length ? `<ul class="rs-list">${s.datasets.map(d => `<li class="rs-item" data-dataset="${d.dataset_id}"><span class="rs-kind">${esc(d.format)}</span><b>${esc(d.name)}</b>
               <span class="muted small">${d.status === 'ready' ? `${d.rows.toLocaleString()} 行 × ${d.cols} 列` : d.status === 'review' ? '<span class="flag-L">待处理身份信息</span>' : d.status === 'failed' ? '<span class="flag-H">导入失败</span>' : '处理中…'}</span>
               ${d.status === 'ready' ? `<button class="quiet small-btn" data-export-table1="${d.dataset_id}" title="导出符合医学期刊标准的原生 Word (.docx) Table 1 三线表">Word Table 1</button>` : ''}
               ${w(`<button class="quiet small-btn" data-unlink="dataset:${d.dataset_id}" title="移出研究（数据集回到上传者的「全部数据集」里）">移出</button>`)}</li>`).join('')}</ul>`
-              : '<p class="muted small">支持上传 CSV、Excel、SAS、SPSS、Stata，或从上方入组患者直接生成队列宽表 / 长表。</p>'}
-          </section>
-          <section class="rs-card wide rs-folder-card">
-            <div class="rs-card-head">
-              <h3><svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:4px;"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>项目图表成果库 (figures/ · ${s.analyses.length} 份产出)</h3>
-            </div>
-            <div class="rs-folder-browser">
-              <div class="rs-folder-header">
-                <span class="rs-folder-path" style="display:inline-flex; align-items:center; gap:4px;"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> 项目根目录 / <b>figures/</b></span>
-                <span class="grow"></span>
-                <span class="muted small">点击任意图表可穿透查看底层统计代码与数据溯源；在「工作台」归档的图表自动汇总于此</span>
-              </div>
-              ${s.analyses.length ? `
-                <div class="rs-folder-files">
-                  ${s.analyses.map(a => {
-                    const filename = a.name.split('/').pop() || a.name
-                    const ext = filename.split('.').pop() || 'svg'
-                    return `
-                      <div class="rs-file-item" data-fig="${a.asset_id}" title="点击查看代码与溯源：${esc(a.name)}">
-                        <div class="rs-file-preview">
-                          <img src="/api/assets/${a.asset_id}?token=${encodeURIComponent(hooks.token())}" alt="${esc(a.name)}">
-                          <span class="rs-file-badge">${esc(ext.toUpperCase())}</span>
-                        </div>
-                        <div class="rs-file-info">
-                          <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
-                            <b class="rs-file-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;">${esc(filename.replace(/\.svg$/i, ''))}</b>
-                            ${canEdit ? `<span style="display:inline-flex;gap:2px;flex-shrink:0;">
-                              <button type="button" class="quiet small-btn" data-fig-rename="${esc(a.asset_id)}" data-fig-name="${esc(a.name)}" title="重命名图表" style="padding:2px 5px;">${icon('edit', { size: 12 })}</button>
-                              <button type="button" class="quiet small-btn danger-text" data-fig-delete="${esc(a.asset_id)}" data-fig-name="${esc(a.name)}" title="删除图表" style="padding:2px 5px;">${icon('trash', { size: 12 })}</button>
-                            </span>` : ''}
-                          </div>
-                          <div class="rs-file-meta">
-                            ${a.stale_data ? `<span class="flag-L small" title="${esc(a.stale_reason || '底层数据集已更新，建议重新生成图表')}">${icon('warning', { size: 11 })} 数据已更新</span>` : ''}
-                            ${a.has_code ? '<span class="pill green" title="附带可复现 R/Python 统计源码">可复现源码</span>' : ''}
-                            <span>${esc(a.datasets.join('、') || '研究图表')}</span>
-                            <span class="muted">${date(a.created_at)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    `
-                  }).join('')}
-                </div>
-              ` : `
-                <div class="rs-folder-empty">
-                  <p class="muted small">图表文件夹当前为空。前往 <b>「3. 统计与医学制图工作台」</b> 或 <b>「4. 临床统计模型」</b> 绘制图表并点击「归档至本研究 figures/」，或在文稿中让 AI 绘图，成果将自动归档至此处。</p>
-                </div>
-              `}
-            </div>
+              : '<p class="muted small">支持上传 CSV、Excel、SAS、SPSS、Stata，或从上方入组患者直接生成队列宽表。</p>'}
           </section>
           <section class="rs-card wide">
-            <div class="rs-card-head"><h3>论文与汇报稿件 (Manuscripts &amp; Slides)</h3>${w('<button class="small-btn" data-new="manuscript">＋ 新建论文</button><button class="small-btn" data-new="slides">＋ 新建幻灯片</button>')}</div>
-            ${manuscripts.length ? `<ul class="rs-list">${manuscripts.map(docRow).join('')}</ul>` : '<p class="muted small">新建论文或组会汇报幻灯片后，AI 写作助手会自动挂载本研究的数据集与 figures/ 图表成果。</p>'}
+            <div class="rs-card-head"><h3>论文与汇报稿件</h3>${w('<button class="small-btn" data-new="manuscript">＋ 新建论文</button><button class="small-btn" data-new="slides">＋ 新建幻灯片</button>')}</div>
+            ${manuscripts.length ? `<ul class="rs-list">${manuscripts.map(docRow).join('')}</ul>` : '<p class="muted small">新建论文或汇报幻灯片后，AI 写作助手会自动挂载本研究的数据集与图表。</p>'}
           </section>
           ${membersCard(members, candidates, isOwner)}
         </div>
       </div>
 
-      <!-- ==================== 页签 2：数据治理与 Table 1 ==================== -->
+      <!-- ==================== 页签 2：数据与 Table 1 ==================== -->
       <div id="rsPaneData" ${activeTab === 'data' ? '' : 'hidden'}></div>
 
-      <!-- ==================== 页签 3：统计与医学制图工作台 ==================== -->
-      <div id="rsPaneStudio" ${activeTab === 'studio' ? '' : 'hidden'}></div>
+      <!-- ==================== 页签 3：统计与制图 ==================== -->
+      <div id="rsPaneAnalytics" ${activeTab === 'biostats' || activeTab === 'studio' ? '' : 'hidden'}>
+        <div class="rs-subview-switch" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <div class="seg" role="tablist" aria-label="统计与制图切换">
+            <button type="button" data-rs-tab="biostats" class="${activeTab === 'biostats' ? 'active' : ''}">${icon('chart', { size: 13 })} 统计模型与因果推断</button>
+            <button type="button" data-rs-tab="studio" class="${activeTab === 'studio' ? 'active' : ''}">${icon('layers', { size: 13 })} 科研制图画布</button>
+          </div>
+          <span class="muted small">生成的统计图与机制图均可一键归档至「图表库」或插入论文</span>
+        </div>
+        <div id="rsPaneBiostats" ${activeTab === 'biostats' ? '' : 'hidden'}></div>
+        <div id="rsPaneStudio" ${activeTab === 'studio' ? '' : 'hidden'}></div>
+      </div>
 
-      <!-- ==================== 页签 4：临床统计模型与因果推断 ==================== -->
-      <div id="rsPaneBiostats" ${activeTab === 'biostats' ? '' : 'hidden'}></div>
-
-      <!-- ==================== 页签 5：图表成果库与多面板拼图 ==================== -->
+      <!-- ==================== 页签 4：图表库 ==================== -->
       <div id="rsPaneGallery" ${activeTab === 'gallery' ? '' : 'hidden'}></div>
     `
 
@@ -721,37 +642,30 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
            <button class="quiet small-btn" data-mremove="${m.user_id}" data-mname="${esc(m.name)}">移出</button>`
         : `<span class="rs-kind role-badge-${m.role}">${ROLE_LABEL[m.role] ?? m.role}</span>`}</li>`
     return `<section class="rs-card wide" id="rsMembers">
-      <div class="rs-card-head"><h3>临床研究项目成员<span class="muted small"> · ${members.length} 人</span></h3>${isOwner ? '' : '<button class="quiet small-btn" data-act="leave">退出研究</button>'}</div>
+      <div class="rs-card-head"><h3>项目成员<span class="muted small"> · ${members.length} 人</span></h3>${isOwner ? '' : '<button class="quiet small-btn" data-act="leave">退出研究</button>'}</div>
       <ul class="rs-list">${members.map(row).join('')}</ul>
       ${isOwner ? (candidates.length
         ? `<div class="row rs-addmember"><select id="rsAddUser" aria-label="加成员">${candidates.map(u => `<option value="${u.user_id}">${esc(u.name)}（${esc(u.username)}）</option>`).join('')}</select>
             <select id="rsAddRole" aria-label="角色">${ROLE_OPTIONS.map(opt => `<option value="${opt.value}">${esc(opt.label)}</option>`).join('')}</select><button class="small-btn" data-act="addmember">＋ 加成员</button></div>`
-        : `<p class="muted small">${members.length > 1 ? '本机构的同事都已在研究里。' : '同机构的同事可以按 GCP 角色加进研究（Sub-I、CRA、CRC、统计师、DM、放射医师等）。你的机构里还没有其他同事——机构管理员可在「机构管理」里邀请。'}</p>`) : ''}
-      <p class="muted small">成员权限制度：PI 享有全局管理权；Sub-I、CRC、生物统计师、数据管理员及放射医师具备协同编写与分析权限；CRA 及质控稽查员享有受试者隐私脱敏后的只读监查与数据核对 (SDV) 权限。</p>
+        : `<p class="muted small">${members.length > 1 ? '本机构的同事都已在研究里。' : '机构管理员可在「机构管理」里邀请同机构成员协同参与课题。'}</p>`) : ''}
     </section>`
   }
 
-  /** 入组患者卡片：清爽分组操作栏（纳排入组 vs 变量治理），不再堆砌无关按钮。 */
+  /** 入组患者卡片：清爽紧凑工具栏。 */
   function cohortCard(c: Cohort | null, off: string, canEdit = true): string {
     if (!c) return `<section class="rs-card wide"><div class="rs-card-head"><h3>入组患者</h3></div><p class="muted small">${esc(off || '研究入组需要启用患者模块')}</p></section>`
     const active = c.subjects.filter(x => x.status === 'active')
     const sets = c.datasets.filter(d => d.latest)
     const SHAPE: Record<string, string> = { wide: '宽表', long: '长表' }
     return `<section class="rs-card wide" id="rsCohort">
-      <div class="rs-card-head" style="flex-wrap:wrap;gap:10px;">
-        <h3>入组患者队列 (Cohort)${active.length ? `<span class="muted small"> · ${active.length} 人在组</span>` : ''}</h3>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <div class="rs-action-cluster">
-            <span class="rs-action-cluster-label">队列纳排</span>
-            ${canEdit ? `<button class="small-btn primary" data-act="screen">＋ 筛选入组</button>${active.length ? '<button class="small-btn" data-act="gen">生成研究数据集</button>' : ''}` : ''}
-            <button class="small-btn" data-act="consort" title="查看并导出 CONSORT 2010 受试者纳排流向图 (Figure 1)">${icon('chart', { size: 13 })} CONSORT 流向图</button>
-          </div>
-          <div class="rs-action-cluster">
-            <span class="rs-action-cluster-label">变量与质控</span>
-            <button class="small-btn" data-act="ecrf" title="Auto-eCRF 多模态影像与临床指标批量提取与溯源">${icon('write', { size: 13 })} Auto-eCRF 提取</button>
-            <button class="small-btn" data-act="vars" title="分组、随访、结局与影像变量：来源与核实状态；投稿材料只用已核实的值">${icon('check', { size: 13 })} 研究变量核实</button>
-            <button class="small-btn" data-act="img-export" title="W6.4 去标识化影像与结节数据导出申请、烧录文字扫描拦截及 PI 审批留痕">${icon('download', { size: 13 })} 影像导出与 PI 审批</button>
-          </div>
+      <div class="rs-card-head" style="flex-wrap:wrap;gap:8px;">
+        <h3>入组患者${active.length ? `<span class="muted small"> · ${active.length} 人在组</span>` : ''}</h3>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          ${canEdit ? `<button class="small-btn primary" data-act="screen">＋ 筛选入组</button>${active.length ? '<button class="small-btn" data-act="gen">生成研究数据集</button>' : ''}` : ''}
+          <button class="small-btn" data-act="ecrf" title="Auto-eCRF 多模态影像与临床指标批量提取与溯源">Auto-eCRF 提取</button>
+          <button class="small-btn" data-act="vars" title="分组、随访、结局与影像变量：来源与核实状态">变量核实</button>
+          <button class="small-btn" data-act="consort" title="查看并导出 CONSORT 2010 受试者纳排流向图">CONSORT 图</button>
+          <button class="small-btn quiet" data-act="img-export" title="去标识化影像与结节数据导出申请及 PI 审批留痕">影像导出审批</button>
         </div>
       </div>
       ${c.pending.length ? `<div class="banner pt-pending"><span class="dot"></span>AI 建议了 ${c.pending.length} 项入组 / 移出，待你确认</div>
@@ -759,11 +673,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           <button class="small-btn primary" data-prop="${p.proposal_id}" data-pt="${p.patient_id}" data-propx="accept">确认</button><button class="quiet small-btn" data-prop="${p.proposal_id}" data-pt="${p.patient_id}" data-propx="reject">不采纳</button></li>`).join('')}</ul>` : ''}
       ${sets.map(d => `<div class="rs-cohort-ds${d.stale ? ' stale' : ''}" data-dataset="${d.dataset_id}"><span class="rs-kind">${SHAPE[d.shape] ?? d.shape} v${d.version}</span>
         <span style="flex:1;">${esc(d.name)} <span class="muted small">${d.rows} 行 · ${date(d.generated_at)}</span></span>
-        ${d.shape === 'wide' ? `
-          <button class="small-btn primary" data-export-table1="${d.dataset_id}" title="一键导出符合医学期刊标准的原生 Word (.docx) Table 1 基线三线表">${icon('download', { size: 13 })} 导出 Table 1</button>
-          <button class="small-btn" data-survival="${d.dataset_id}" data-dsname="${esc(d.name)}" title="KM 生存曲线与 Cox 比例风险森林图分析">${icon('chart', { size: 13 })} 生存分析 &amp; 森林图</button>
-          <button class="small-btn" data-nomogram="${d.dataset_id}" data-dsname="${esc(d.name)}" title="Cox 预后列线图 (Nomogram) 与 ROC/DCA 决策曲线">${icon('target', { size: 13 })} 列线图 &amp; ROC/DCA</button>
-        ` : ''}
+        ${d.shape === 'wide' ? `<button class="small-btn" data-export-table1="${d.dataset_id}" title="一键导出原生 Word (.docx) Table 1 基线三线表">Word Table 1</button>` : ''}
         ${d.stale ? `<span class="flag-L small">入组或化验有变化，数据集已过期</span>${canEdit ? `<button class="small-btn" data-regen="${d.shape}">刷新</button>` : ''}` : '<span class="muted small">最新</span>'}</div>`).join('')}
       ${c.subjects.length ? `<div class="ds-scroll"><table class="users rs-subjects"><thead><tr><th>研究编号</th><th>代号</th><th>性别</th><th>入组时年龄</th><th>诊断标签</th><th>入组日期</th><th></th></tr></thead><tbody>
         ${c.subjects.map(x => `<tr class="${x.status === 'active' ? '' : 'muted'}"><td><b>${esc(x.subject_id)}</b></td>
@@ -771,7 +681,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
           <td>${esc(SEX[x.sex ?? ''] ?? '')}</td><td>${x.age_at_enroll ?? ''}</td><td>${esc(x.tags.join('、'))}</td><td>${date(x.enrolled_at)}</td>
           <td>${x.status === 'active' ? (canEdit && x.code ? `<button class="quiet small-btn" data-unenroll="${x.patient_id}" data-subject="${esc(x.subject_id)}">移出</button>` : '') : '<span class="small">已移出</span>'}</td></tr>`).join('')}
         </tbody></table></div>`
-        : '<p class="muted small">按性别、年龄、诊断标签、化验结果、检查日期从你在诊疗组里的患者中筛选入组；每人得到研究编号（S001…），生成的研究数据集里只有研究编号，没有代号。</p>'}
+        : '<p class="muted small">按性别、年龄、诊断标签、化验结果、检查日期从患者中筛选入组；生成的研究数据集里只有研究编号（S001…），不含患者代号。</p>'}
     </section>`
   }
 
@@ -2934,40 +2844,21 @@ ${modelsDesc}
 
     pane.innerHTML = `
       <div class="rs-grid">
-        <section class="rs-card wide">
-          <div class="rs-card-head" style="flex-wrap:wrap;gap:8px;">
-            <h3>步骤 A · 临床数据采集、多模态 eCRF 提取、变量核实与 CONSORT 纳排流向图</h3>
-            <span class="muted small">当前在组受试者 ${activeCount} 人 · 数据集 ${s.datasets.length} 个</span>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:12px;">
-            <div class="rs-sub-box">
-              <div class="rs-sub-box-title"><span>1. Auto-eCRF 多模态批量提取</span><span class="rs-kind">MONAI + 检验单</span></div>
-              <p class="muted small" style="margin:0;">从入组患者的 3D CT/MRI 序列与化验报告自动批量提取骨骼肌指数 (L3 SMI)、内脏脂肪比、病灶径线及生化指标，带切片层号与置信度穿透溯源。</p>
-              <div style="margin-top:auto;padding-top:6px;"><button type="button" class="small-btn primary" data-act="ecrf">${icon('write', { size: 13 })} 启动 Auto-eCRF 巡航提取</button></div>
-            </div>
-            <div class="rs-sub-box">
-              <div class="rs-sub-box-title"><span>2. 研究变量来源与 SDV 核实</span><span class="rs-kind">GCP 合规质控</span></div>
-              <p class="muted small" style="margin:0;">所有手工录入或 AI 提取的变量默认标记为「未核实」，须由研究者本人核实后才纳入正式投稿材料包与生存分析，杜绝未核实数据混入。</p>
-              <div style="margin-top:auto;padding-top:6px;"><button type="button" class="small-btn primary" data-act="vars">${icon('check', { size: 13 })} 打开研究变量核实矩阵</button></div>
-            </div>
-            <div class="rs-sub-box">
-              <div class="rs-sub-box-title"><span>3. 队列数据集固化与外部表导入</span><span class="rs-kind">CSV / Excel / SPSS / SAS</span></div>
-              <p class="muted small" style="margin:0;">将在组患者快照生成去标识化宽表/长表，或直接上传外部统计表格（含自动 PHI 隐私列扫描拦截）。</p>
-              <div style="margin-top:auto;padding-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
-                ${canEdit ? `<button type="button" class="small-btn" data-act="gen">生成队列宽表/长表</button><button type="button" class="small-btn" data-act="upload">＋ 上传外部数据集</button>` : ''}
-              </div>
-            </div>
-            <div class="rs-sub-box">
-              <div class="rs-sub-box-title"><span>4. CONSORT 2010 受试者纳排流向图</span><span class="rs-kind">Figure 1 · Visio/PPT</span></div>
-              <p class="muted small" style="margin:0;">自动依据本研究入组队列或研究数据集汇总评估、排除原因、各组分配、失访与纳入分析人数，一键归档至本研究 <code>figures/</code> 或导出 Visio / Draw.io / PPTX。</p>
-              <div style="margin-top:auto;padding-top:6px;"><button type="button" class="small-btn primary" data-act="consort">${icon('ruler', { size: 13 })} 编辑并导出 CONSORT 流向图</button></div>
+        <section class="rs-card wide" style="padding:10px 14px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <span class="muted small">当前在组受试者 <b>${activeCount}</b> 人 · 就绪数据集 <b>${readyDs.length}</b> / ${s.datasets.length} 个</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+              <button type="button" class="small-btn" data-act="ecrf">${icon('write', { size: 12 })} Auto-eCRF 提取</button>
+              <button type="button" class="small-btn" data-act="vars">${icon('check', { size: 12 })} 变量核实</button>
+              <button type="button" class="small-btn" data-act="consort">${icon('ruler', { size: 12 })} CONSORT 流向图</button>
+              ${canEdit ? `<button type="button" class="small-btn" data-act="gen">生成队列宽表</button><button type="button" class="small-btn primary" data-act="upload">＋ 上传数据集</button>` : ''}
             </div>
           </div>
         </section>
 
         <section class="rs-card wide">
           <div class="rs-card-head" style="flex-wrap:wrap;gap:8px;">
-            <h3>步骤 B · 交互式基线特征三线表 (Table 1) 在线预览与原生 Word (.docx) 导出</h3>
+            <h3>基线特征三线表 (Table 1)</h3>
           </div>
           ${readyDs.length ? `
             <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end;background:var(--raised);padding:12px;border:1px solid var(--line);">
@@ -2978,15 +2869,15 @@ ${modelsDesc}
                 <select id="rsT1GroupSel"><option value="">(不分组 · 仅总体汇总)</option></select>
               </label>
               <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <button type="button" class="small-btn primary" id="rsT1RunBtn">${icon('chart', { size: 13 })} 在线生成 Table 1 三线表</button>
-                <button type="button" class="small-btn" id="rsT1DocxBtn">${icon('download', { size: 13 })} 导出原生 Word (.docx) 三线表</button>
+                <button type="button" class="small-btn primary" id="rsT1RunBtn">${icon('chart', { size: 13 })} 在线生成 Table 1</button>
+                <button type="button" class="small-btn" id="rsT1DocxBtn">${icon('download', { size: 13 })} 导出 Word (.docx)</button>
               </div>
             </div>
             <div id="rsT1PreviewWrap" style="margin-top:8px;">
               <div class="muted small" style="padding:16px;text-align:center;">正在载入数据集字段并计算基线特征三线表…</div>
             </div>
           ` : `
-            <p class="muted small">当前研究还没有就绪的数据集。请先点击上方「生成队列宽表/长表」、「Auto-eCRF 提取」或「＋ 上传外部数据集」。</p>
+            <p class="muted small">当前研究还没有就绪的数据集。请先点击右上角「生成队列宽表」、「Auto-eCRF 提取」或「＋ 上传数据集」。</p>
           `}
         </section>
       </div>
@@ -5275,23 +5166,21 @@ ${modelsDesc}
     ]
 
     pane.innerHTML = `
-      <div class="rs-studio-modes" style="grid-template-columns:repeat(4, minmax(0, 1fr));" role="tablist">
-        <button type="button" class="rs-studio-mode-btn active" data-bs-eng="survival">
-          <b>${icon('compare', { size: 14 })} 1. KM 生存分析 &amp; Cox 森林图</b>
-          <span>Greenwood 置信带 + Number at Risk 风险表 + 多因素 HR 森林图</span>
-        </button>
-        <button type="button" class="rs-studio-mode-btn" data-bs-eng="nomogram">
-          <b>${icon('caliper', { size: 14 })} 2. Cox 预后列线图 (Nomogram)</b>
-          <span>0~100 积分标尺映射 + 1/3/5 年生存率预测 + R rms 脚本</span>
-        </button>
-        <button type="button" class="rs-studio-mode-btn" data-bs-eng="rocdca">
-          <b>${icon('target', { size: 14 })} 3. ROC 诊断曲线 &amp; DCA 决策曲线</b>
-          <span>AUC 增量对比 + Youden 最佳截断值 + BMJ 临床净获益窗口</span>
-        </button>
-        <button type="button" class="rs-studio-mode-btn" data-bs-eng="causal">
-          <b>${icon('shield', { size: 14 })} 4. 因果推断 E-value &amp; Love Plot</b>
-          <span>VanderWeele 未测量混杂敏感度 + 倾向性评分匹配前后 SMD 平衡图</span>
-        </button>
+      <div class="rs-studio-topbar">
+        <div class="rs-studio-modes" role="tablist" aria-label="统计与因果模型分类">
+          <button type="button" class="rs-studio-mode-btn active" data-bs-eng="survival">
+            ${icon('compare', { size: 14 })} <span>KM 生存分析 &amp; Cox 森林图</span>
+          </button>
+          <button type="button" class="rs-studio-mode-btn" data-bs-eng="nomogram">
+            ${icon('caliper', { size: 14 })} <span>Cox 预后列线图</span>
+          </button>
+          <button type="button" class="rs-studio-mode-btn" data-bs-eng="rocdca">
+            ${icon('target', { size: 14 })} <span>ROC &amp; DCA 决策曲线</span>
+          </button>
+          <button type="button" class="rs-studio-mode-btn" data-bs-eng="causal">
+            ${icon('shield', { size: 14 })} <span>因果推断 &amp; 倾向性评分</span>
+          </button>
+        </div>
       </div>
       <div class="rs-studio-shell">
         <div class="rs-studio-left" id="rsBsLeft"></div>
@@ -5305,7 +5194,7 @@ ${modelsDesc}
     const renderEngine = () => {
       if (engine === 'survival') {
         if (!readyDs.length) {
-          leftEl.innerHTML = `<div class="muted small">请先在「1. 方案、队列与概览」或「2. 数据治理」中生成或上传研究数据集。</div>`
+          leftEl.innerHTML = `<div class="muted small">请先在「概览」或「数据与 Table 1」中生成或上传研究数据集。</div>`
           rightEl.innerHTML = `<div class="muted small">等待研究数据集就绪后即可运行 Kaplan-Meier 生存分析与多因素 Cox 森林图。</div>`
           return
         }
@@ -5957,7 +5846,7 @@ ${modelsDesc}
             </div>
           ` : `
             <div class="rs-folder-empty">
-              <p class="muted small">当前 <code>figures/</code> 还没有已归档图表。你可以先去「3. 统计与医学制图工作台」或「4. 临床统计模型」点击「归档至本研究 figures/」，或者直接点击下方按钮使用默认四面板示例体验顶刊多面板拼图。</p>
+              <p class="muted small">当前 <code>figures/</code> 还没有已归档图表。你可以先在「统计与制图」页签绘制图表并点击「归档至本研究」，或直接使用下方默认示例合成顶刊多面板大图。</p>
             </div>
           `}
         </section>
@@ -6434,45 +6323,13 @@ ${modelsDesc}
     page.innerHTML = `<div class="welcome">
       <svg class="mark" viewBox="-2 6 96 88" aria-hidden="true"><rect class="mark-ink" x="0" y="10" width="18" height="80" rx="9"/><rect class="mark-ink" x="62" y="30" width="18" height="60" rx="9"/><rect class="mark-sky" x="14" y="42" width="52" height="18" rx="9"/><circle class="mark-sky" cx="80" cy="20" r="11"/></svg>
       <h1>开展一项临床研究课题</h1>
-      <p class="welcome-sub">一个研究项目集中管理方案、队列、统计与稿件；在隔离受限沙箱中秒级运行 Table 1 与生存曲线，数据与代码可追溯，自主演进科研记忆。</p>
+      <p class="welcome-sub">一个研究项目集中管理方案、队列、统计与稿件；在隔离受限沙箱中秒级运行 Table 1 与生存曲线，数据与代码可追溯。</p>
       <div class="welcome-cards">
         <button class="welcome-card primary" data-rw="new"><b>＋ 新建研究项目</b><span>研究设计、纳入排除标准、主要终点与方案起草</span></button>
         <button class="welcome-card" data-rw="dataset"><b>导入数据集</b><span>支持 CSV、Excel、SAS、SPSS、Stata 质控导入</span></button>
         ${list[0]
           ? `<button class="welcome-card" data-rw="open"><b>打开最近研究</b><span>打开「${esc(list[0].title)}」</span></button>`
           : `<button class="welcome-card" data-rw="cohort"><b>筛选入组队列</b><span>从患者库多维条件筛选入组生成研究数据集</span></button>`}
-      </div>
-      <div class="rs-scenario-banner" style="margin-top:22px;text-align:left;">
-        <div class="rs-scenario-head">
-          <b>${icon('target', { size: 15 })} 科研制图三大使用场景引导：我该在何处画图？</b>
-          <span class="muted small">按实际科研阶段选择最匹配的入口，图表与底层源码全平台互通</span>
-        </div>
-        <div class="rs-scenario-grid">
-          <div class="rs-scenario-card">
-            <div class="rs-scenario-tag">场景一 · 独立/预实验快速出图</div>
-            <b>国自然标书配图 / 单次 WB·qPCR·CCK-8 / 审稿补图</b>
-            <p class="muted small">不需要入组患者或建立完整临床课题，即开即画信号通路机制图、柱状散点图、4PL IC50 曲线、火山图与流式四象限，一键导出 <code>.pzfx</code> / <code>.R</code> / <code>.drawio</code> 原工程文件。</p>
-            <div style="margin-top:auto;padding-top:6px;">
-              <button type="button" class="small-btn primary" data-rw="studio">打开全局独立制图 →</button>
-            </div>
-          </div>
-          <div class="rs-scenario-card">
-            <div class="rs-scenario-tag">场景二 · 写作中内嵌配图</div>
-            <b>正在写论文 Results / 综述正文 / 组会 PPT</b>
-            <p class="muted small">边写正文边配图：在文档或幻灯片工具栏点击「科研制图」，就地生成或从成果库插入矢量图至当前光标段落，自动携带「来自分析」可复现代码溯源。</p>
-            <div style="margin-top:auto;padding-top:6px;">
-              <button type="button" class="small-btn" data-rw="write">前往写作空间边写边画 →</button>
-            </div>
-          </div>
-          <div class="rs-scenario-card">
-            <div class="rs-scenario-tag">场景三 · 临床研究课题闭环</div>
-            <b>正式立项 RCT / 前瞻或回顾性队列研究</b>
-            <p class="muted small">需从患者库筛选入组、提取 eCRF 宽表，要求 CONSORT 流程图、Table 1 基线三线表、KM 生存分析与课题数据版本严格绑定并打包 SCI 投稿出版包 (<code>.zip</code>)。</p>
-            <div style="margin-top:auto;padding-top:6px;">
-              <button type="button" class="small-btn" data-rw="new">＋ 新建临床研究课题 →</button>
-            </div>
-          </div>
-        </div>
       </div>
       <div style="margin-top: 24px; text-align: center; display: flex; justify-content: center; align-items: center; gap: 16px;">
         <button class="linkish small muted" data-guide-action="open">查阅 Heurion 临床科研工作流与生物统计分析指南 ↗</button>
