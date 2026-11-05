@@ -86,6 +86,14 @@ describe('SEO & AI Search (GEO) Static Assets & /en SSR', () => {
       expect(sitemap).toContain(`https://heurion.org/tools/${slug}`)
       expect(sitemap).toContain(`https://heurion.org/en/tools/${slug}`)
     }
+    for (const slug of BLOG_SLUGS) {
+      expect(llms).toContain(`https://heurion.org/blog/${slug}`)
+      expect(llms).toContain(`https://heurion.org/en/blog/${slug}`)
+      expect(llms).toContain(`https://heurion.org/blog/${slug}.md`)
+      expect(sitemap).toContain(`https://heurion.org/blog/${slug}`)
+      expect(sitemap).toContain(`https://heurion.org/en/blog/${slug}`)
+    }
+    expect(sitemap).not.toContain('cross-modal-self-evolution-clinical-deep-review')
   })
 
   it('renders bilingual Tools Hub (/tools and /en/tools) and all 7 standalone mini-tool pages', () => {
@@ -456,15 +464,55 @@ describe('Personal Technical Blog (blog.heurion.org & heurion.org/blog)', () => 
     expect(rssText).toContain('https://blog.heurion.org/dual-surface-crdt-clinical-ai')
 
     const sitemapXml = renderBlogSitemapXml()
-    expect(sitemapXml).toContain('https://blog.heurion.org/human-agent-capability-parity-ai-native-software')
-    expect(renderBlogRssXml('en')).toContain('https://blog.heurion.org/en/aegis-os-transactional-agent-kernel')
+    expect(sitemapXml).toContain('https://heurion.org/blog/human-agent-capability-parity-ai-native-software')
+    expect(sitemapXml).toContain('https://heurion.org/en/blog/human-agent-capability-parity-ai-native-software')
+    expect(renderBlogSitemapXml({ subdomain: true })).toContain('https://blog.heurion.org/human-agent-capability-parity-ai-native-software')
+    expect(renderBlogRssXml('en')).toContain('https://heurion.org/en/blog/aegis-os-transactional-agent-kernel')
+    expect(renderBlogRssXml('en', { subdomain: true })).toContain('https://blog.heurion.org/en/aegis-os-transactional-agent-kernel')
 
-    // 2. Main domain Host: heurion.org (/blog & ?redirect=1)
+    // 2. Main domain Host: heurion.org (/blog, /en/blog, /blog/en/:slug 301 redirect, .md GEO endpoints, & ?redirect=1)
     const mainBlog = await blogApp.request('http://heurion.org/blog', {
       headers: { Host: 'heurion.org' },
     })
     expect(mainBlog.status).toBe(200)
-    expect(await mainBlog.text()).toContain('/blog/dual-surface-crdt-clinical-ai')
+    const mainBlogHtml = await mainBlog.text()
+    expect(mainBlogHtml).toContain('<link rel="canonical" href="https://heurion.org/blog">')
+    expect(mainBlogHtml).toContain('/blog/dual-surface-crdt-clinical-ai')
+    expect(mainBlogHtml).toContain('CollectionPage')
+    expect(mainBlogHtml).toContain('BreadcrumbList')
+    expect(mainBlogHtml).toContain('type="text/markdown"')
+
+    const mainEnPost = await blogApp.request('http://heurion.org/en/blog/aegis-os-transactional-agent-kernel', {
+      headers: { Host: 'heurion.org' },
+    })
+    expect(mainEnPost.status).toBe(200)
+    const mainEnPostHtml = await mainEnPost.text()
+    expect(mainEnPostHtml).toContain('<link rel="canonical" href="https://heurion.org/en/blog/aegis-os-transactional-agent-kernel">')
+    expect(mainEnPostHtml).toContain('TechArticle')
+    expect(mainEnPostHtml).toContain('FAQPage')
+    expect(mainEnPostHtml).toContain('BreadcrumbList')
+    expect(mainEnPostHtml).toContain('Reproducible Artifacts')
+
+    const legacyEnRedirect = await blogApp.request('http://heurion.org/blog/en/dual-surface-crdt-clinical-ai', {
+      headers: { Host: 'heurion.org' },
+    })
+    expect(legacyEnRedirect.status).toBe(301)
+    expect(legacyEnRedirect.headers.get('location')).toBe('/en/blog/dual-surface-crdt-clinical-ai')
+
+    const mdPostRes = await blogApp.request('http://heurion.org/en/blog/dual-surface-crdt-clinical-ai.md', {
+      headers: { Host: 'heurion.org' },
+    })
+    expect(mdPostRes.status).toBe(200)
+    expect(mdPostRes.headers.get('content-type')).toContain('text/markdown')
+    const mdPostText = await mdPostRes.text()
+    expect(mdPostText).toContain('canonical_url: "https://heurion.org/en/blog/dual-surface-crdt-clinical-ai"')
+    expect(mdPostText).toContain('## Frequently Asked Questions (Technical FAQ)')
+
+    const mdIndexRes = await blogApp.request('http://heurion.org/blog.md', {
+      headers: { Host: 'heurion.org' },
+    })
+    expect(mdIndexRes.status).toBe(200)
+    expect(await mdIndexRes.text()).toContain('https://heurion.org/blog/dual-surface-crdt-clinical-ai.md')
 
     const mainBlogRedirect = await blogApp.request('http://heurion.org/blog?redirect=1', {
       headers: { Host: 'heurion.org' },

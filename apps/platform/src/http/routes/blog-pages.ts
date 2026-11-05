@@ -1,7 +1,8 @@
 /**
  * Heurion Research — Nordic Editorial Minimalist Technical Blog
  * Palette & Typography aligned with heurion.org (site.css v6).
- * Supports both standalone subdomain (https://blog.heurion.org) and main-site path (https://heurion.org/blog).
+ * Canonical host: https://heurion.org/blog (with English at https://heurion.org/en/blog)
+ * Also supports standalone subdomain (https://blog.heurion.org) when accessed via blog.* host.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -143,7 +144,6 @@ export function isBlogSubdomainHost(hostHeader: string | undefined): boolean {
 
 function buildBlogUrls(lang: 'zh' | 'en', subdomain: boolean, slug?: string) {
   const isEn = lang === 'en'
-  const canonicalOrigin = 'https://blog.heurion.org'
 
   const homeHref = subdomain ? (isEn ? '/en' : '/') : isEn ? '/en/blog' : '/blog'
   const zhHomeHref = subdomain ? '/' : '/blog'
@@ -152,6 +152,21 @@ function buildBlogUrls(lang: 'zh' | 'en', subdomain: boolean, slug?: string) {
     subdomain ? (isEn ? `/en/${s}` : `/${s}`) : isEn ? `/en/blog/${s}` : `/blog/${s}`
   const zhPostHref = (s: string) => (subdomain ? `/${s}` : `/blog/${s}`)
   const enPostHref = (s: string) => (subdomain ? `/en/${s}` : `/en/blog/${s}`)
+  const mdHref = slug
+    ? subdomain
+      ? isEn
+        ? `/en/${slug}.md`
+        : `/${slug}.md`
+      : isEn
+        ? `/en/blog/${slug}.md`
+        : `/blog/${slug}.md`
+    : subdomain
+      ? isEn
+        ? '/en/blog.md'
+        : '/blog.md'
+      : isEn
+        ? '/en/blog.md'
+        : '/blog.md'
   const rssHref = subdomain
     ? isEn
       ? '/en/feed.xml'
@@ -160,15 +175,23 @@ function buildBlogUrls(lang: 'zh' | 'en', subdomain: boolean, slug?: string) {
       ? '/en/blog/feed.xml'
       : '/blog/feed.xml'
 
-  const canonicalUrl = slug
-    ? isEn
-      ? `${canonicalOrigin}/en/${slug}`
-      : `${canonicalOrigin}/${slug}`
-    : isEn
-      ? `${canonicalOrigin}/en`
-      : `${canonicalOrigin}/`
-  const zhCanonicalUrl = slug ? `${canonicalOrigin}/${slug}` : `${canonicalOrigin}/`
-  const enCanonicalUrl = slug ? `${canonicalOrigin}/en/${slug}` : `${canonicalOrigin}/en`
+  const zhCanonicalUrl = subdomain
+    ? slug
+      ? `https://blog.heurion.org/${slug}`
+      : 'https://blog.heurion.org/'
+    : slug
+      ? `https://heurion.org/blog/${slug}`
+      : 'https://heurion.org/blog'
+
+  const enCanonicalUrl = subdomain
+    ? slug
+      ? `https://blog.heurion.org/en/${slug}`
+      : 'https://blog.heurion.org/en'
+    : slug
+      ? `https://heurion.org/en/blog/${slug}`
+      : 'https://heurion.org/en/blog'
+
+  const canonicalUrl = isEn ? enCanonicalUrl : zhCanonicalUrl
 
   return {
     homeHref,
@@ -177,11 +200,198 @@ function buildBlogUrls(lang: 'zh' | 'en', subdomain: boolean, slug?: string) {
     postHref,
     zhPostHref,
     enPostHref,
+    mdHref,
     rssHref,
     canonicalUrl,
     zhCanonicalUrl,
     enCanonicalUrl,
   }
+}
+
+interface BlogGeoExtra {
+  faq_zh: ReadonlyArray<{ q: string; a: string }>
+  faq_en: ReadonlyArray<{ q: string; a: string }>
+  links_zh: ReadonlyArray<{ label: string; href: string; desc: string }>
+  links_en: ReadonlyArray<{ label: string; href: string; desc: string }>
+  repoUrl: string
+  paperUrl: string
+}
+
+const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
+  'dual-surface-crdt-clinical-ai': {
+    repoUrl: 'https://github.com/heurion-org/heurion',
+    paperUrl: 'https://github.com/heurion-org/heurion/blob/main/paper/main.pdf',
+    links_zh: [
+      {
+        label: 'Table 1 原生 Word (.docx) 生成器',
+        href: '/tools/table-1-generator',
+        desc: '体验字节级 OOXML 1.5pt/0.5pt 顶刊三线表直出与 SMD 均衡性计算',
+      },
+      {
+        label: 'PubMed 文献真伪与 HR/OR 效应量核验器',
+        href: '/tools/pubmed-citation-checker',
+        desc: '实时对照 NCBI PubMed 与 Crossref 拦截幻觉 PMID 与张冠李戴效应量',
+      },
+      {
+        label: 'Heurion 2.0 临床科研工作台',
+        href: '/app',
+        desc: '进入双表面 ProseMirror + Yjs CRDT 协同画布与沙箱统计环境',
+      },
+    ],
+    links_en: [
+      {
+        label: 'Native Word (.docx) Table 1 Generator',
+        href: '/en/tools/table-1-generator',
+        desc: 'Experience byte-accurate OOXML 1.5pt/0.5pt three-line table export with SMD & P-values',
+      },
+      {
+        label: 'PubMed Citation & Effect Size Auditor',
+        href: '/en/tools/pubmed-citation-checker',
+        desc: 'Cross-verify PMIDs/DOIs and inline HR/OR claims against live NCBI PubMed XML',
+      },
+      {
+        label: 'Heurion 2.0 Clinical Workstation',
+        href: '/app',
+        desc: 'Launch the full Dual-Surface ProseMirror + Yjs CRDT studio and biostatistics sandbox',
+      },
+    ],
+    faq_zh: [
+      {
+        q: '为什么使用 python-docx 或自由 Shell 脚本修改医学论文会破坏 Word 排版？',
+        a: '自由 Shell 智能体通过 python-docx 解析并重序列化整个 .docx 压缩包时，会丢失未触碰段落的复杂域代码（EndNote/Zotero 域）、修订标记（w:ins/w:del）、自定义样式继承与分节符，实测仅能保留 21.4% 的原始排版保真度。Heurion 采用双表面 CRDT 与两级字节保留 OOXML 补丁架构（未改块 100% 原始二进制切片直拷 + 修改块 Run 级 LCS 差分），将排版保留率提升至 96.4%。',
+      },
+      {
+        q: '什么是双表面 CRDT（Dual-Surface CRDT），它如何实现 0.128ms 的按轮次精准回滚？',
+        a: 'Heurion 以单一 ProseMirror + Yjs CRDT 状态树作为唯一事实源：向人类研究者投影富文本/幻灯片画布，向 AI 智能体投影带持久块 ID（{#id}）的受控注解 Markdown。每次 AI 操作均打上 turnId 与 before_markdown 快照标签；当用户点击回滚某一轮 AI 修改时，系统仅需 0.128ms 即可非连续精准撤销该轮涉及的节点（revertByNodes），绝不误伤人类后续并发编辑。',
+      },
+    ],
+    faq_en: [
+      {
+        q: 'Why do free-form shell agents and python-docx scripts corrupt clinical Word (.docx) manuscripts?',
+        a: 'When shell-based coding agents parse and re-serialize an entire .docx archive via python-docx or pandoc, they strip complex field codes (EndNote/Zotero citations), tracked changes (w:ins/w:del), custom hospital style hierarchies, and section breaks—retaining only 21.4% formatting fidelity. Heurion uses a Dual-Surface CRDT paired with a 2-level byte-preserving OOXML patch engine (100% binary slice identity on untouched blocks and Run-level LCS patchParagraph on edited blocks), achieving 96.4% layout retention.',
+      },
+      {
+        q: 'How does Dual-Surface CRDT achieve 0.128ms selective per-turn AI rollback without losing concurrent human edits?',
+        a: 'Heurion maintains a single ProseMirror + Yjs CRDT source of truth projected simultaneously as a rich-text studio for clinicians and Annotated Markdown with stable {#id} block identifiers for AI agents. Every agent mutation records node-level turn attribution; rolling back a historical AI turn (revertByNodes) selectively restores only the nodes modified in that turn in 0.128ms while preserving subsequent human edits on adjacent paragraphs.',
+      },
+    ],
+  },
+  'human-agent-capability-parity-ai-native-software': {
+    repoUrl: 'https://github.com/heurion-org/heurion',
+    paperUrl: 'https://github.com/heurion-org/heurion/blob/main/paper/main.pdf',
+    links_zh: [
+      {
+        label: '临床病历与文稿 PHI 隐私扫描与脱敏器',
+        href: '/tools/phi-deidentifier',
+        desc: '体验 MOD 11-2 身份证校验和、Luhn 卡号校验与零误伤医学指标的前置隐私守卫',
+      },
+      {
+        label: 'Aegis OS 事务级智能体运行时',
+        href: '/aegis-os/',
+        desc: '了解 AAP-1.0 协议如何将人机同权与离线 Ed25519 审批租约下沉至操作系统内核',
+      },
+      {
+        label: 'Kaplan-Meier 生存分析与 Cox 风险比计算器',
+        href: '/tools/kaplan-meier-survival',
+        desc: '直接调用与 MCP 工具同源的确定性生物统计内核生成出版级矢量图',
+      },
+    ],
+    links_en: [
+      {
+        label: 'Clinical PHI Privacy Scanner & De-identifier',
+        href: '/en/tools/phi-deidentifier',
+        desc: 'Test deterministic MOD 11-2 & Luhn checksum PHI redaction before LLM prompting',
+      },
+      {
+        label: 'Aegis OS Transactional Agent Runtime',
+        href: '/en/aegis-os/',
+        desc: 'Explore how AAP-1.0 enforces Capability Parity and Ed25519 human approval leases',
+      },
+      {
+        label: 'Kaplan-Meier Survival & Log-rank Calculator',
+        href: '/en/tools/kaplan-meier-survival',
+        desc: 'Invoke the same deterministic biostatistical engine exposed to MCP agents',
+      },
+    ],
+    faq_zh: [
+      {
+        q: '什么是 AI 原生软件的“人机同权公理（Capability & Permission Parity Axiom）”？',
+        a: '人机同权公理包含两条硬性约束：(1) 能力同权（Agent Capability = User Capability），即人类在 GUI 能完成的每一项操作都有 1:1 对应的结构化 MCP 工具，消除脆弱的 DOM 屏幕抓取；(2) 权限同权（Agent Permission = User Permission），即智能体通过进程内 256-bit 环回内核完全继承当前人类用户的租户身份与 RBAC 边界，绝不允许走高权限 Service Role 数据库后门。',
+      },
+      {
+        q: '为什么“AI 申请权限的过程”本身必须与最终执行结果同样可审计？',
+        a: '如果系统只记录已批准的操作而不记录权限申请全过程，被提示词注入劫持的智能体就可以静默探测敏感边界、伪造模糊申请理由或高频轰炸诱导疲劳误批。Heurion 与 Aegis OS 将每一次权限申请建模为一等不可变审计事件（记录触发工具上下文、结构化理由、风险分级与审批耗时），并在协议层硬性拦截智能体自批（HTTP 403 Anti-Self-Approval Guard）。',
+      },
+    ],
+    faq_en: [
+      {
+        q: 'What is the Capability & Permission Parity Axiom in AI-native software architecture?',
+        a: 'It establishes two formal invariants: (1) Agent Capability = User Capability—every human GUI action has a 1:1 deterministic MCP tool backed by the same route handler, eliminating brittle DOM scraping; and (2) Agent Permission = User Permission—agents execute through a zero-fork in-process loopback kernel authenticated with a 256-bit RAM secret, inheriting the exact human user session and RBAC scope rather than an over-privileged database service key.',
+      },
+      {
+        q: 'Why must the act of an AI agent requesting permission be as auditable as the execution itself?',
+        a: 'If only approved executions are logged, a prompt-injected agent can silently probe forbidden boundaries, craft deceptive escalation rationales, or spam confirmation prompts without leaving forensic evidence. Heurion and Aegis OS record every permission escalation request—whether approved, denied, or expired—as an immutable audit event with full tool call arguments, agent rationale, and a strict 403 anti-self-approval guard.',
+      },
+    ],
+  },
+  'aegis-os-transactional-agent-kernel': {
+    repoUrl: 'https://github.com/heurion-org/aegis-os',
+    paperUrl: 'https://github.com/heurion-org/aegis-os/blob/main/paper/aegis_os_arxiv_preprint.pdf',
+    links_zh: [
+      {
+        label: 'Aegis OS 架构主页与 Homebrew 安装指南',
+        href: '/aegis-os/',
+        desc: '深入了解 APFS clonefile / Btrfs FICLONE 写时复制影子工作区与双层内核沙箱',
+      },
+      {
+        label: 'Aegis OS 快速上手教程（Install → UOMP 授权 → A2A 协同）',
+        href: '/aegis-os/tutorial/',
+        desc: '10 分钟跑通多智能体文件认领锁（coord_claim）与无冲突自动合并',
+      },
+      {
+        label: 'Aegis OS GitHub 开源仓库 (heurion-org/aegis-os)',
+        href: 'https://github.com/heurion-org/aegis-os',
+        desc: '查阅 Rust 源码、80 项红队对抗测试集与 28,087 次真实工具调用基准报告',
+      },
+    ],
+    links_en: [
+      {
+        label: 'Aegis OS Product Page & Homebrew Install',
+        href: '/en/aegis-os/',
+        desc: 'Deep dive into APFS clonefile / Btrfs FICLONE CoW shadow workspaces and kernel sandboxing',
+      },
+      {
+        label: 'Aegis OS Interactive Tutorial (Install → UOMP → A2A)',
+        href: '/en/aegis-os/tutorial/',
+        desc: 'Step-by-step guide to advisory file claims (coord_claim) and transactional auto-merge',
+      },
+      {
+        label: 'Aegis OS Open-Source Repository (heurion-org/aegis-os)',
+        href: 'https://github.com/heurion-org/aegis-os',
+        desc: 'Inspect the Rust crates, 80-attack red-team suite, and 28,087-call benchmark report',
+      },
+    ],
+    faq_zh: [
+      {
+        q: '为什么传统的 Git Feature Branch 分支模式不适合高频多智能体（Multi-Agent）并发协作？',
+        a: 'Git 分支是为人类数小时至数天的异步开发设计的：每个智能体拉取独立分支或 git worktree 会导致 .git 元数据膨胀、构建缓存（target/、node_modules/）重复编译，且在事后合并时引发高昂的语义冲突解决成本。Aegis OS 采用锚定主干的 CoW 影子工作区（单文件 0.42ms、整仓 6.3ms APFS clonefile）配合事前咨询式文件认领锁（coord_claim）与捎带式 IPC 总线，在 500 次三智能体并发提交中实现 98.7% 自动无冲突收敛。',
+      },
+      {
+        q: 'Aegis OS 如何在消除 90.7%–97.9% 授权确认弹窗的同时保证 0.0% 逃逸攻击成功率？',
+        a: '因为所有绿区（Green Zone）文件读写与构建测试都被内核级 Seatbelt/Bubblewrap 沙箱严格限制在隔离的 CoW 影子工作区内，无法直接污染宿主机主干或读取 ~/.ssh、~/.aws 等凭据（80 项红队攻击测试 0.0% ASR）。只有当智能体请求提交回宿主机（workspace_commit）或触碰敏感边界时，才通过全链路哈希链可审计账本与离线 Ed25519 人类审批租约放行。',
+      },
+    ],
+    faq_en: [
+      {
+        q: 'Why do traditional Git feature branches break down for concurrent multi-agent collaboration?',
+        a: 'Git branches and worktrees were designed for human-timescale asynchronous work: spawning a branch per agent task duplicates build caches, fragments working trees, and defers conflict detection until expensive post-hoc merges. Aegis OS replaces feature branches with trunk-anchored Copy-on-Write shadow workspaces (0.42ms per-file / 6.3ms repo-wide APFS clonefile), proactive TTL file claims (coord_claim), and piggybacked _aegis_inbox IPC—achieving 98.7% automatic 4-tier LCS Diff3 convergence.',
+      },
+      {
+        q: 'How does Aegis OS eliminate 90.7%–97.9% of authorization prompts while maintaining 0.0% attack success rate?',
+        a: 'Routine edits, builds, and tests run inside kernel-enforced macOS Seatbelt / Linux Bubblewrap sandboxes bound to an isolated CoW shadow workspace with default-deny $HOME credential isolation (0.0% ASR across 80 adversarial attacks). Human confirmation is reserved strictly for boundary transitions (such as workspace_commit or policy escalations), which are recorded in a SHA-256 hash-chained audit ledger and gated by offline Ed25519 capability leases.',
+      },
+    ],
+  },
 }
 
 const HEURION_EDITORIAL_BLOG_STYLES = `
@@ -358,7 +568,7 @@ const HEURION_EDITORIAL_BLOG_STYLES = `
     grid-template-columns: 7.5rem 1fr auto;
     align-items: baseline;
     gap: 1.5rem;
-    padding: 1.35rem 0.25rem;
+    padding: 1.5rem 0.25rem;
     transition: background-color 0.15s ease;
   }
   .post-row-link:hover .post-row-title {
@@ -376,12 +586,28 @@ const HEURION_EDITORIAL_BLOG_STYLES = `
     font-size: 0.78rem;
     color: var(--ink-muted);
     display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .post-row-meta-top {
+    display: flex;
     align-items: baseline;
     gap: 0.5rem;
+  }
+  .post-row-cat {
+    font-size: 0.68rem;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
   .post-row-num {
     color: var(--accent-warm);
     font-weight: 500;
+  }
+  .post-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.38rem;
   }
   .post-row-title {
     font-family: var(--serif);
@@ -395,6 +621,12 @@ const HEURION_EDITORIAL_BLOG_STYLES = `
   html[lang="zh-CN"] .post-row-title {
     font-weight: 500;
     font-size: 1.12rem;
+  }
+  .post-row-sub {
+    font-size: 0.88rem;
+    line-height: 1.58;
+    color: var(--ink-secondary);
+    margin: 0;
   }
   .post-row-arrow {
     font-family: var(--mono);
@@ -424,6 +656,21 @@ const HEURION_EDITORIAL_BLOG_STYLES = `
   .article-meta-num {
     color: var(--accent-warm);
     font-weight: 500;
+  }
+  .article-md-link {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--accent);
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    padding: 0.12rem 0.48rem;
+    text-transform: none;
+    letter-spacing: 0.02em;
+  }
+  .article-md-link:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
   }
   .article-title {
     font-family: var(--serif);
@@ -605,6 +852,78 @@ const HEURION_EDITORIAL_BLOG_STYLES = `
     user-select: none;
   }
 
+  /* GEO Capsule: Reproducible Artifacts, Internal Mesh & FAQ */
+  .geo-capsule-box {
+    margin-top: 3.25rem;
+    padding: 1.65rem 1.75rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--accent);
+  }
+  .geo-capsule-eyebrow {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.4rem;
+  }
+  .geo-capsule-heading {
+    font-family: var(--serif);
+    font-size: 1.22rem;
+    font-weight: 500;
+    color: var(--ink);
+    margin: 0 0 1rem 0;
+  }
+  .geo-mesh-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.85rem;
+    margin-bottom: 1.5rem;
+  }
+  .geo-mesh-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.85rem 0.95rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    transition: border-color 0.15s ease;
+  }
+  .geo-mesh-card:hover {
+    border-color: var(--accent);
+  }
+  .geo-mesh-title {
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .geo-mesh-desc {
+    font-size: 0.78rem;
+    line-height: 1.48;
+    color: var(--ink-secondary);
+  }
+  .geo-faq-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    border-top: 1px solid var(--border);
+    padding-top: 1.15rem;
+  }
+  .geo-faq-item h3 {
+    font-family: var(--serif);
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--ink);
+    margin: 0 0 0.3rem 0;
+  }
+  .geo-faq-item p {
+    font-size: 0.88rem;
+    line-height: 1.65;
+    color: var(--ink-secondary);
+    margin: 0;
+  }
+
   /* Prev / Next Article Pager */
   .post-pager {
     display: grid;
@@ -772,13 +1091,22 @@ const HEURION_EDITORIAL_BLOG_STYLES = `
     font-size: 0.75rem;
     color: var(--ink-muted);
   }
+  .footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+  .footer-links a:hover {
+    color: var(--accent);
+  }
 
   @media (max-width: 640px) {
     .top-nav-inner { padding: 0.85rem 1.2rem; }
     .brand-role { display: none; }
     .wrap { padding: 2.25rem 1.2rem 4rem; }
-    .post-row-link { grid-template-columns: 1fr; gap: 0.3rem; padding: 1.1rem 0; }
+    .post-row-link { grid-template-columns: 1fr; gap: 0.35rem; padding: 1.15rem 0; }
     .post-row-arrow { display: none; }
+    .geo-mesh-grid { grid-template-columns: 1fr; }
     .post-pager { grid-template-columns: 1fr; }
     .pager-link.next { text-align: left; }
   }
@@ -795,8 +1123,10 @@ const HEURION_MARK_SVG = `<svg class="brand-mark" viewBox="-2 6 96 88" aria-hidd
   <circle class="mark-accent" cx="80" cy="20" r="11"/>
 </svg>`
 
+const DEFAULT_OG_IMAGE = 'https://heurion.org/site/demo-chest-mpr-3view.png'
+
 /**
- * 渲染个人博客首页（Nordic 纸感色调 + 专业极简标题列表）
+ * 渲染个人博客首页（Nordic 纸感色调 + 结构化标题/摘要列表 + CollectionPage JSON-LD）
  */
 export function renderBlogHomeHtml(
   lang: 'zh' | 'en',
@@ -808,29 +1138,106 @@ export function renderBlogHomeHtml(
   const allPosts = getAllPostsMerged()
 
   const title = isEn
-    ? 'Heurion Research · Technical Blog & Architecture Notes'
-    : 'Heurion Research · 技术博客与架构手记'
+    ? 'Heurion Research · Systems Monographs & Technical Blog (Dual-Surface CRDT, Capability Parity & Aegis OS)'
+    : 'Heurion Research · 技术博客与系统架构专论（双表面 CRDT · 人机同权 · Aegis OS）'
   const description = isEn
-    ? 'Technical writing and systems research notes by Heurion Research on Heurion 2.0, Aegis OS, and AI-Native Document Engines.'
-    : 'Heurion Research 技术文章与系统架构手记：聚焦 Heurion 2.0、Aegis OS 与 AI-Native 文档引擎。'
+    ? 'Long-form systems architecture monographs by Hui Zhao (@0xSynapse) at Heurion Research: Dual-Surface ProseMirror + Yjs CRDTs, byte-preserving OOXML patching, Human-Agent Capability Parity, and Aegis OS Copy-on-Write shadow workspaces.'
+    : 'Heurion Research 系统架构专论与工程手记：深度解析双表面 ProseMirror + Yjs CRDT、字节级 OOXML 补丁架构、人机同权（Capability Parity）、AI 申请权限全链路可审计性，以及 Aegis OS 写时复制影子工作区与文件锁协同。'
+  const keywords = isEn
+    ? 'Heurion Research, Technical Blog, Dual-Surface CRDT, OOXML patchParagraph, ProseMirror Yjs, Capability Parity, AI Agent Permission Auditability, Aegis OS, Copy-on-Write Shadow Workspace, Hui Zhao, 0xSynapse'
+    : 'Heurion Research, 技术博客, 双表面 CRDT, OOXML 字节级补丁, 人机同权, Capability Parity, AI 权限审计, Aegis OS, 影子工作区, 文件认领锁'
 
   const listItemsHtml = allPosts
     .map(p => {
       const pTitle = isEn ? p.title_en : p.title_zh
+      const pSub = isEn ? p.subtitle_en : p.subtitle_zh
+      const pCat = p.category
       const href = u.postHref(p.slug)
       return `
       <li class="post-row">
         <a class="post-row-link" href="${href}">
           <span class="post-row-meta">
-            <span class="post-row-num">${escapeHtml(p.num)}</span>
-            <time datetime="${escapeHtml(p.date)}">${escapeHtml(p.date)}</time>
+            <span class="post-row-meta-top">
+              <span class="post-row-num">${escapeHtml(p.num)}</span>
+              <time datetime="${escapeHtml(p.date)}">${escapeHtml(p.date)}</time>
+            </span>
+            <span class="post-row-cat">${escapeHtml(pCat)}</span>
           </span>
-          <h2 class="post-row-title">${escapeHtml(pTitle)}</h2>
+          <div class="post-row-main">
+            <h2 class="post-row-title">${escapeHtml(pTitle)}</h2>
+            <p class="post-row-sub">${escapeHtml(pSub)}</p>
+          </div>
           <span class="post-row-arrow" aria-hidden="true">→</span>
         </a>
       </li>`
     })
     .join('\n')
+
+  const homeJsonLd = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': ['Blog', 'CollectionPage'],
+        '@id': `${u.canonicalUrl}#blog`,
+        name: title,
+        description,
+        url: u.canonicalUrl,
+        inLanguage: isEn ? 'en-US' : 'zh-CN',
+        author: {
+          '@type': 'Person',
+          name: 'Hui Zhao',
+          alternateName: '0xSynapse',
+          url: 'https://github.com/0xSynapse',
+          affiliation: {
+            '@type': 'Organization',
+            name: 'Heurion Research',
+            url: 'https://heurion.org',
+          },
+        },
+        publisher: {
+          '@type': 'Organization',
+          name: 'Heurion Research',
+          url: 'https://heurion.org',
+          sameAs: ['https://github.com/heurion-org', 'https://github.com/0xSynapse'],
+        },
+        blogPost: allPosts.map(p => ({
+          '@type': 'TechArticle',
+          headline: isEn ? p.title_en : p.title_zh,
+          description: isEn ? p.summary_en : p.summary_zh,
+          datePublished: p.date,
+          url: isEn
+            ? subdomain
+              ? `https://blog.heurion.org/en/${p.slug}`
+              : `https://heurion.org/en/blog/${p.slug}`
+            : subdomain
+              ? `https://blog.heurion.org/${p.slug}`
+              : `https://heurion.org/blog/${p.slug}`,
+          author: {
+            '@type': 'Person',
+            name: 'Hui Zhao',
+            url: 'https://github.com/0xSynapse',
+          },
+        })),
+      },
+      {
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          {
+            '@type': 'ListItem',
+            position: 1,
+            name: 'Heurion Research',
+            item: isEn ? 'https://heurion.org/en' : 'https://heurion.org/',
+          },
+          {
+            '@type': 'ListItem',
+            position: 2,
+            name: isEn ? 'Technical Blog & Systems Monographs' : '技术博客与系统架构专论',
+            item: u.canonicalUrl,
+          },
+        ],
+      },
+    ],
+  }
 
   return `<!doctype html>
 <html lang="${isEn ? 'en' : 'zh-CN'}">
@@ -841,12 +1248,29 @@ export function renderBlogHomeHtml(
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="shortcut icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-10 -2 112 104'%3E%3Crect x='-10' y='-2' width='112' height='104' rx='22' fill='%23FAF8F4' stroke='%23E5E0D6' stroke-width='2'/%3E%3Crect x='6' y='18' width='16' height='66' rx='8' fill='%23151C19'/%3E%3Crect x='60' y='35' width='16' height='49' rx='8' fill='%23151C19'/%3E%3Crect x='18' y='45' width='46' height='16' rx='8' fill='%230A7D52'/%3E%3Ccircle cx='76' cy='24' r='10' fill='%2300C472'/%3E%3C/svg%3E">
   <meta name="description" content="${escapeHtml(description)}">
-  <meta name="author" content="Heurion Research">
+  <meta name="keywords" content="${escapeHtml(keywords)}">
+  <meta name="author" content="Hui Zhao (@0xSynapse) · Heurion Research">
   <link rel="canonical" href="${u.canonicalUrl}">
   <link rel="alternate" hreflang="zh-CN" href="${u.zhCanonicalUrl}">
   <link rel="alternate" hreflang="en" href="${u.enCanonicalUrl}">
   <link rel="alternate" hreflang="x-default" href="${u.zhCanonicalUrl}">
   <link rel="alternate" type="application/rss+xml" title="Heurion Research RSS Feed" href="${u.rssHref}">
+  <link rel="alternate" type="text/markdown" title="Markdown Blog Index" href="${u.mdHref}">
+  <link rel="alternate" type="text/plain" title="LLM Overview" href="/llms.txt">
+  <link rel="alternate" type="text/plain" title="LLM Technical Manual" href="/llms-full.txt">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Heurion Research">
+  <meta property="og:title" content="${escapeHtml(title)}">
+  <meta property="og:description" content="${escapeHtml(description)}">
+  <meta property="og:url" content="${u.canonicalUrl}">
+  <meta property="og:locale" content="${isEn ? 'en_US' : 'zh_CN'}">
+  <meta property="og:locale:alternate" content="${isEn ? 'zh_CN' : 'en_US'}">
+  <meta property="og:image" content="${DEFAULT_OG_IMAGE}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${escapeHtml(title)}">
+  <meta name="twitter:description" content="${escapeHtml(description)}">
+  <meta name="twitter:image" content="${DEFAULT_OG_IMAGE}">
+  <script type="application/ld+json">${JSON.stringify(homeJsonLd)}</script>
   ${GOOGLE_FONTS_LINK}
   <style>${HEURION_EDITORIAL_BLOG_STYLES}</style>
 </head>
@@ -861,7 +1285,9 @@ export function renderBlogHomeHtml(
         </span>
       </a>
       <nav class="nav-links">
-        <a href="https://heurion.org">heurion.org</a>
+        <a href="${isEn ? 'https://heurion.org/en' : 'https://heurion.org'}">heurion.org</a>
+        <a href="${isEn ? '/en/tools' : '/tools'}">${isEn ? 'Clinical Tools' : '临床工具'}</a>
+        <a href="${isEn ? '/en/aegis-os/' : '/aegis-os/'}">Aegis OS</a>
         <a href="https://github.com/heurion-org" target="_blank" rel="noopener">GitHub</a>
         <a href="${u.rssHref}">RSS</a>
         <a href="${isEn ? u.zhHomeHref : u.enHomeHref}" class="lang-switch">${isEn ? '中文' : 'EN'}</a>
@@ -877,8 +1303,8 @@ export function renderBlogHomeHtml(
         <p class="index-desc">
           ${
             isEn
-              ? 'Notes on Dual-Surface CRDT document engines, clinical research AI, and transactional agent operating systems.'
-              : '关于双表面 CRDT 文档引擎、受控临床科研 AI 与 Aegis OS 事务级智能体操作系统的工程实践。'
+              ? 'Bilingual systems monographs by Hui Zhao (@0xSynapse) on Dual-Surface CRDT document engines, human-agent capability parity, auditable permission governance, and transactional agent operating systems.'
+              : '由 Hui Zhao (@0xSynapse) 撰写的双语系统架构专论：聚焦双表面 CRDT 文档引擎、人机同权（Capability Parity）、AI 申请权限全链路可审计性，以及 Aegis OS 事务级智能体操作系统。'
           }
         </p>
       </div>
@@ -889,8 +1315,13 @@ export function renderBlogHomeHtml(
     </main>
 
     <footer class="site-footer">
-      <span>© 2026 Heurion Research</span>
-      <span>blog.heurion.org</span>
+      <span>© 2026 Heurion Research · Hui Zhao (@0xSynapse)</span>
+      <div class="footer-links">
+        <a href="https://heurion.org/blog">heurion.org/blog</a>
+        <a href="${u.mdHref}">Markdown (.md)</a>
+        <a href="/llms.txt">LLMs.txt</a>
+        <a href="/sitemap.xml">Sitemap</a>
+      </div>
     </footer>
   </div>
 </body>
@@ -898,7 +1329,7 @@ export function renderBlogHomeHtml(
 }
 
 /**
- * 渲染单篇博客文章页（Nordic 纸感专业排版 + 直接显示正文 + 底部读者评论）
+ * 渲染单篇博客文章页（Nordic 纸感专业排版 + GEO 证据与问答胶囊 + E-E-A-T 复合 JSON-LD + 读者评论）
  */
 export function renderBlogPostHtml(
   slug: string,
@@ -924,6 +1355,38 @@ export function renderBlogPostHtml(
   const rawProse = isEn ? post.body_en : post.body_zh
   const finalProse = rawProse.replace('<div id="omnidoc-live-studio-mount"></div>', '')
 
+  const geoExtra = BLOG_GEO_EXTRAS[slug]
+  const faqItems = geoExtra ? (isEn ? geoExtra.faq_en : geoExtra.faq_zh) : []
+  const meshLinks = geoExtra ? (isEn ? geoExtra.links_en : geoExtra.links_zh) : []
+
+  const geoCapsuleHtml = geoExtra
+    ? `
+      <aside class="geo-capsule-box" aria-label="${isEn ? 'Reproducible Artifacts & Technical FAQ' : '可复现开源构件与核心技术问答'}">
+        <div class="geo-capsule-eyebrow">${isEn ? 'REPRODUCIBLE ARTIFACTS · LIVE TOOLS & TECHNICAL FAQ' : 'REPRODUCIBLE ARTIFACTS · 关联线上系统与核心技术问答'}</div>
+        <h2 class="geo-capsule-heading">${isEn ? 'Explore Live Systems & Open-Source Code' : '关联在线工具、开源仓库与核心问答'}</h2>
+        <div class="geo-mesh-grid">
+          ${meshLinks
+            .map(
+              l => `<a class="geo-mesh-card" href="${l.href}">
+                <span class="geo-mesh-title">${escapeHtml(l.label)} →</span>
+                <span class="geo-mesh-desc">${escapeHtml(l.desc)}</span>
+              </a>`,
+            )
+            .join('\n')}
+        </div>
+        <div class="geo-faq-list">
+          ${faqItems
+            .map(
+              f => `<div class="geo-faq-item">
+                <h3>${escapeHtml(f.q)}</h3>
+                <p>${escapeHtml(f.a)}</p>
+              </div>`,
+            )
+            .join('\n')}
+        </div>
+      </aside>`
+    : ''
+
   const existingComments = getBlogComments(slug)
   const commentsListHtml = existingComments.length
     ? existingComments
@@ -940,26 +1403,92 @@ export function renderBlogPostHtml(
         .join('\n')
     : ''
 
+  const graphNodes: Record<string, unknown>[] = [
+    {
+      '@type': ['TechArticle', 'BlogPosting'],
+      '@id': `${u.canonicalUrl}#article`,
+      headline: postTitle,
+      alternativeHeadline: postSubtitle,
+      description,
+      datePublished: post.date,
+      dateModified: post.date,
+      url: u.canonicalUrl,
+      mainEntityOfPage: u.canonicalUrl,
+      inLanguage: isEn ? 'en-US' : 'zh-CN',
+      author: {
+        '@type': 'Person',
+        name: 'Hui Zhao',
+        alternateName: '0xSynapse',
+        url: 'https://github.com/0xSynapse',
+        affiliation: {
+          '@type': 'Organization',
+          name: 'Heurion Research',
+          url: 'https://heurion.org',
+        },
+      },
+      publisher: {
+        '@type': 'Organization',
+        name: 'Heurion Research',
+        url: 'https://heurion.org/',
+        sameAs: ['https://github.com/heurion-org', 'https://github.com/0xSynapse'],
+      },
+      isPartOf: {
+        '@type': 'Blog',
+        name: isEn
+          ? 'Heurion Research · Technical Blog & Systems Monographs'
+          : 'Heurion Research · 技术博客与系统架构专论',
+        url: isEn ? 'https://heurion.org/en/blog' : 'https://heurion.org/blog',
+      },
+      ...(geoExtra
+        ? {
+            codeRepository: geoExtra.repoUrl,
+            citation: geoExtra.paperUrl,
+          }
+        : {}),
+      keywords,
+    },
+    {
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        {
+          '@type': 'ListItem',
+          position: 1,
+          name: 'Heurion Research',
+          item: isEn ? 'https://heurion.org/en' : 'https://heurion.org/',
+        },
+        {
+          '@type': 'ListItem',
+          position: 2,
+          name: isEn ? 'Technical Blog' : '技术博客',
+          item: isEn ? 'https://heurion.org/en/blog' : 'https://heurion.org/blog',
+        },
+        {
+          '@type': 'ListItem',
+          position: 3,
+          name: postTitle,
+          item: u.canonicalUrl,
+        },
+      ],
+    },
+  ]
+
+  if (faqItems.length > 0) {
+    graphNodes.push({
+      '@type': 'FAQPage',
+      mainEntity: faqItems.map(f => ({
+        '@type': 'Question',
+        name: f.q,
+        acceptedAnswer: {
+          '@type': 'Answer',
+          text: f.a,
+        },
+      })),
+    })
+  }
+
   const jsonLd = {
     '@context': 'https://schema.org',
-    '@type': 'BlogPosting',
-    headline: postTitle,
-    description,
-    datePublished: post.date,
-    dateModified: post.date,
-    url: u.canonicalUrl,
-    inLanguage: isEn ? 'en-US' : 'zh-CN',
-    author: {
-      '@type': 'Organization',
-      name: 'Heurion Research',
-      url: 'https://blog.heurion.org/',
-    },
-    publisher: {
-      '@type': 'Organization',
-      name: 'Heurion Research',
-      url: 'https://heurion.org/',
-    },
-    keywords,
+    '@graph': graphNodes,
   }
 
   return `<!doctype html>
@@ -972,11 +1501,28 @@ export function renderBlogPostHtml(
   <link rel="shortcut icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-10 -2 112 104'%3E%3Crect x='-10' y='-2' width='112' height='104' rx='22' fill='%23FAF8F4' stroke='%23E5E0D6' stroke-width='2'/%3E%3Crect x='6' y='18' width='16' height='66' rx='8' fill='%23151C19'/%3E%3Crect x='60' y='35' width='16' height='49' rx='8' fill='%23151C19'/%3E%3Crect x='18' y='45' width='46' height='16' rx='8' fill='%230A7D52'/%3E%3Ccircle cx='76' cy='24' r='10' fill='%2300C472'/%3E%3C/svg%3E">
   <meta name="description" content="${escapeHtml(description)}">
   <meta name="keywords" content="${escapeHtml(keywords)}">
-  <meta name="author" content="Heurion Research">
+  <meta name="author" content="Hui Zhao (@0xSynapse) · Heurion Research">
   <link rel="canonical" href="${u.canonicalUrl}">
   <link rel="alternate" hreflang="zh-CN" href="${u.zhCanonicalUrl}">
   <link rel="alternate" hreflang="en" href="${u.enCanonicalUrl}">
   <link rel="alternate" hreflang="x-default" href="${u.zhCanonicalUrl}">
+  <link rel="alternate" type="text/markdown" title="Markdown Source for LLMs & Agents" href="${u.mdHref}">
+  <link rel="alternate" type="text/plain" title="LLM Overview" href="/llms.txt">
+  <link rel="alternate" type="text/plain" title="LLM Technical Manual" href="/llms-full.txt">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Heurion Research">
+  <meta property="og:title" content="${escapeHtml(postTitle)}">
+  <meta property="og:description" content="${escapeHtml(description)}">
+  <meta property="og:url" content="${u.canonicalUrl}">
+  <meta property="og:locale" content="${isEn ? 'en_US' : 'zh_CN'}">
+  <meta property="og:locale:alternate" content="${isEn ? 'zh_CN' : 'en_US'}">
+  <meta property="og:image" content="${DEFAULT_OG_IMAGE}">
+  <meta property="article:published_time" content="${escapeHtml(post.date)}">
+  <meta property="article:author" content="https://github.com/0xSynapse">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${escapeHtml(postTitle)}">
+  <meta name="twitter:description" content="${escapeHtml(description)}">
+  <meta name="twitter:image" content="${DEFAULT_OG_IMAGE}">
   <script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
   ${GOOGLE_FONTS_LINK}
   <style>${HEURION_EDITORIAL_BLOG_STYLES}</style>
@@ -992,6 +1538,7 @@ export function renderBlogPostHtml(
       </a>
       <nav class="nav-links">
         <a href="${u.homeHref}">← ${isEn ? 'All Articles' : '返回目录'}</a>
+        <a href="${u.mdHref}" class="lang-switch" title="${isEn ? 'View clean Markdown for LLM/Agent ingestion' : '查看面向大模型与智能体的纯净 Markdown'}">.MD</a>
         <a href="${isEn ? u.zhPostHref(slug) : u.enPostHref(slug)}" class="lang-switch">${isEn ? '中文' : 'EN'}</a>
       </nav>
     </div>
@@ -1007,6 +1554,9 @@ export function renderBlogPostHtml(
             <time datetime="${escapeHtml(post.date)}">${escapeHtml(post.date)}</time>
             <span>·</span>
             <span>${escapeHtml(readTime)}</span>
+            <span>·</span>
+            <span>Hui Zhao (@0xSynapse)</span>
+            <a class="article-md-link" href="${u.mdHref}">Markdown (.md)</a>
           </div>
           <h1 class="article-title">${escapeHtml(postTitle)}</h1>
           <p class="article-subtitle">${escapeHtml(postSubtitle)}</p>
@@ -1015,6 +1565,8 @@ export function renderBlogPostHtml(
         <div class="prose">
           ${finalProse}
         </div>
+
+        ${geoCapsuleHtml}
       </article>
 
       <nav class="post-pager">
@@ -1080,8 +1632,12 @@ export function renderBlogPostHtml(
     </main>
 
     <footer class="site-footer">
-      <span>© 2026 Heurion Research</span>
-      <a href="${u.homeHref}">${isEn ? '← Back to All Articles' : '← 返回全部文章'}</a>
+      <span>© 2026 Heurion Research · Hui Zhao (@0xSynapse)</span>
+      <div class="footer-links">
+        <a href="${u.homeHref}">${isEn ? '← All Articles' : '← 全部文章'}</a>
+        <a href="${u.mdHref}">Markdown (.md)</a>
+        <a href="/llms.txt">LLMs.txt</a>
+      </div>
     </footer>
   </div>
 
@@ -1150,33 +1706,170 @@ export function renderBlogPostHtml(
 }
 
 /**
+ * 将文章 HTML 正文转换为面向 AI Crawler / RAG / Agent 的高信噪比 Markdown
+ */
+function htmlProseToCleanMarkdown(html: string): string {
+  return html
+    .replace(/<figure class="blog-diagram">[\s\S]*?<figcaption>([\s\S]*?)<\/figcaption>\s*<\/figure>/gi, '\n> **[Diagram]** $1\n')
+    .replace(/<svg[\s\S]*?<\/svg>/gi, '')
+    .replace(/<div class="blog-callout">\s*<div class="blog-callout-title">([\s\S]*?)<\/div>\s*<p>([\s\S]*?)<\/p>\s*<\/div>/gi, '\n> **$1**: $2\n')
+    .replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n## $1\n')
+    .replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n### $1\n')
+    .replace(/<pre><code>([\s\S]*?)<\/code><\/pre>/gi, '\n```\n$1\n```\n')
+    .replace(/<code>([\s\S]*?)<\/code>/gi, '`$1`')
+    .replace(/<strong>([\s\S]*?)<\/strong>/gi, '**$1**')
+    .replace(/<em>([\s\S]*?)<\/em>/gi, '*$1*')
+    .replace(/<li>([\s\S]*?)<\/li>/gi, '- $1\n')
+    .replace(/<\/?(?:ul|ol|p|div|section|article|header|tbody|thead|table)[^>]*>/gi, '\n')
+    .replace(/<tr[^>]*>([\s\S]*?)<\/tr>/gi, (_, row: string) => {
+      const cells = Array.from(row.matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)).map(m =>
+        m[1]!.replace(/<[^>]+>/g, '').trim(),
+      )
+      return cells.length ? `| ${cells.join(' | ')} |\n` : ''
+    })
+    .replace(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/**
+ * 渲染面向 AI Agent / Perplexity / ChatGPT Search 的纯净 Markdown 博客索引 (`/blog.md` & `/en/blog.md`)
+ */
+export function renderBlogIndexMarkdown(lang: 'zh' | 'en'): string {
+  const isEn = lang === 'en'
+  const allPosts = getAllPostsMerged()
+  const lines: string[] = [
+    isEn
+      ? '# Heurion Research — Systems Architecture Monographs & Technical Blog'
+      : '# Heurion Research — 技术博客与系统架构专论',
+    '',
+    `> Canonical Index: ${isEn ? 'https://heurion.org/en/blog' : 'https://heurion.org/blog'}`,
+    '> Author: Hui Zhao (`@0xSynapse`, Founder of Heurion Research, Rotterdam, Netherlands)',
+    '> Organization: Heurion Research (`https://heurion.org` · `https://github.com/heurion-org`)',
+    '',
+    isEn ? '## Published Systems Monographs' : '## 已发布系统架构专论',
+    '',
+  ]
+
+  for (const p of allPosts) {
+    const title = isEn ? p.title_en : p.title_zh
+    const sub = isEn ? p.subtitle_en : p.subtitle_zh
+    const summary = isEn ? p.summary_en : p.summary_zh
+    const htmlUrl = isEn ? `https://heurion.org/en/blog/${p.slug}` : `https://heurion.org/blog/${p.slug}`
+    const mdUrl = isEn ? `https://heurion.org/en/blog/${p.slug}.md` : `https://heurion.org/blog/${p.slug}.md`
+    lines.push(`### ${p.num}. ${title}`)
+    lines.push(`- **Date**: ${p.date} · **Category**: ${p.category}`)
+    lines.push(`- **Subtitle**: ${sub}`)
+    lines.push(`- **Summary**: ${summary}`)
+    lines.push(`- **Canonical URL**: ${htmlUrl}`)
+    lines.push(`- **Clean Markdown Source**: ${mdUrl}`)
+    lines.push('')
+  }
+
+  return lines.join('\n')
+}
+
+/**
+ * 渲染单篇专论的纯净 Markdown 源 (`/blog/:slug.md` & `/en/blog/:slug.md`)
+ */
+export function renderBlogPostMarkdown(slug: string, lang: 'zh' | 'en'): string | null {
+  const found = findBlogPostBySlug(slug)
+  if (!found) return null
+  const { post } = found
+  const isEn = lang === 'en'
+  const title = isEn ? post.title_en : post.title_zh
+  const sub = isEn ? post.subtitle_en : post.subtitle_zh
+  const summary = isEn ? post.summary_en : post.summary_zh
+  const canonicalUrl = isEn
+    ? `https://heurion.org/en/blog/${post.slug}`
+    : `https://heurion.org/blog/${post.slug}`
+  const alternateUrl = isEn
+    ? `https://heurion.org/blog/${post.slug}`
+    : `https://heurion.org/en/blog/${post.slug}`
+  const extra = BLOG_GEO_EXTRAS[slug]
+  const faqs = extra ? (isEn ? extra.faq_en : extra.faq_zh) : []
+
+  const bodyMd = htmlProseToCleanMarkdown(isEn ? post.body_en : post.body_zh)
+
+  const faqMd = faqs.length
+    ? [
+        '',
+        isEn ? '## Frequently Asked Questions (Technical FAQ)' : '## 核心技术问答 (Technical FAQ)',
+        '',
+        ...faqs.flatMap(f => [`### Q: ${f.q}`, `${f.a}`, '']),
+      ].join('\n')
+    : ''
+
+  return [
+    '---',
+    `title: "${title.replace(/"/g, '\\"')}"`,
+    `subtitle: "${sub.replace(/"/g, '\\"')}"`,
+    `author: "Hui Zhao (@0xSynapse, Heurion Research)"`,
+    `date: "${post.date}"`,
+    `canonical_url: "${canonicalUrl}"`,
+    `alternate_language_url: "${alternateUrl}"`,
+    ...(extra ? [`code_repository: "${extra.repoUrl}"`, `paper_preprint: "${extra.paperUrl}"`] : []),
+    '---',
+    '',
+    `# ${title}`,
+    '',
+    `> **${sub}**`,
+    `>`,
+    `> **Executive Summary**: ${summary}`,
+    '',
+    bodyMd,
+    faqMd,
+  ].join('\n')
+}
+
+/**
  * 渲染 RSS 2.0 订阅源 XML
  */
-export function renderBlogRssXml(lang: 'zh' | 'en'): string {
+export function renderBlogRssXml(lang: 'zh' | 'en', opts?: { subdomain?: boolean }): string {
   const isEn = lang === 'en'
+  const subdomain = opts?.subdomain ?? false
   const channelTitle = isEn
     ? 'Heurion Research — Technical Notes (Heurion 2.0 & Aegis OS)'
     : 'Heurion Research — 技术博客（Heurion 2.0 与 Aegis OS）'
   const channelDesc = isEn
     ? 'Technical monographs by Heurion Research on Dual-Surface CRDTs, Clinical Research AI, and Transactional Agent Operating Systems.'
     : 'Heurion Research 关于双表面 CRDT、临床科研工作台与 Aegis OS 事务级智能体操作系统的技术文章。'
-  const channelLink = isEn ? 'https://blog.heurion.org/en' : 'https://blog.heurion.org/'
+  const channelLink = subdomain
+    ? isEn
+      ? 'https://blog.heurion.org/en'
+      : 'https://blog.heurion.org/'
+    : isEn
+      ? 'https://heurion.org/en/blog'
+      : 'https://heurion.org/blog'
+  const selfFeedUrl = subdomain
+    ? `https://blog.heurion.org/${isEn ? 'en/feed.xml' : 'feed.xml'}`
+    : `https://heurion.org/${isEn ? 'en/blog/feed.xml' : 'blog/feed.xml'}`
   const allPosts = getAllPostsMerged()
 
   const itemsXml = allPosts
     .map(p => {
       const title = isEn ? p.title_en : p.title_zh
       const desc = isEn ? p.summary_en : p.summary_zh
-      const link = isEn
-        ? `https://blog.heurion.org/en/${p.slug}`
-        : `https://blog.heurion.org/${p.slug}`
+      const link = subdomain
+        ? isEn
+          ? `https://blog.heurion.org/en/${p.slug}`
+          : `https://blog.heurion.org/${p.slug}`
+        : isEn
+          ? `https://heurion.org/en/blog/${p.slug}`
+          : `https://heurion.org/blog/${p.slug}`
       const pubDate = new Date(`${p.date}T09:00:00Z`).toUTCString()
       return `    <item>
       <title>${escapeHtml(title)}</title>
       <link>${link}</link>
       <guid isPermaLink="true">${link}</guid>
       <pubDate>${pubDate}</pubDate>
-      <author>research@heurion.org (Heurion Research)</author>
+      <author>huizhao@heurion.org (Hui Zhao · Heurion Research)</author>
       <description>${escapeHtml(desc)}</description>
     </item>`
     })
@@ -1189,39 +1882,46 @@ export function renderBlogRssXml(lang: 'zh' | 'en'): string {
     <link>${channelLink}</link>
     <description>${escapeHtml(channelDesc)}</description>
     <language>${isEn ? 'en-US' : 'zh-CN'}</language>
-    <atom:link href="https://blog.heurion.org/${isEn ? 'en/feed.xml' : 'feed.xml'}" rel="self" type="application/rss+xml"/>
+    <atom:link href="${selfFeedUrl}" rel="self" type="application/rss+xml"/>
 ${itemsXml}
   </channel>
 </rss>`
 }
 
 /**
- * 渲染独立子域名 `blog.heurion.org` 的专属 Sitemap XML
+ * 渲染博客专属 Sitemap XML（同时包含主站 `heurion.org/blog` 规范地址与双语互链）
  */
-export function renderBlogSitemapXml(): string {
+export function renderBlogSitemapXml(opts?: { subdomain?: boolean }): string {
+  const subdomain = opts?.subdomain ?? false
   const allPosts = getAllPostsMerged()
+  const baseZh = subdomain ? 'https://blog.heurion.org/' : 'https://heurion.org/blog'
+  const baseEn = subdomain ? 'https://blog.heurion.org/en' : 'https://heurion.org/en/blog'
   const urls: string[] = [
     `  <url>
-    <loc>https://blog.heurion.org/</loc>
+    <loc>${baseZh}</loc>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>`,
     `  <url>
-    <loc>https://blog.heurion.org/en</loc>
+    <loc>${baseEn}</loc>
     <changefreq>weekly</changefreq>
     <priority>0.95</priority>
   </url>`,
   ]
 
   for (const p of allPosts) {
+    const zhLoc = subdomain ? `https://blog.heurion.org/${p.slug}` : `https://heurion.org/blog/${p.slug}`
+    const enLoc = subdomain
+      ? `https://blog.heurion.org/en/${p.slug}`
+      : `https://heurion.org/en/blog/${p.slug}`
     urls.push(`  <url>
-    <loc>https://blog.heurion.org/${p.slug}</loc>
+    <loc>${zhLoc}</loc>
     <lastmod>${p.date}</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>`)
     urls.push(`  <url>
-    <loc>https://blog.heurion.org/en/${p.slug}</loc>
+    <loc>${enLoc}</loc>
     <lastmod>${p.date}</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
@@ -1235,7 +1935,7 @@ ${urls.join('\n')}
 }
 
 /**
- * 注册博客路由（同时挂载：`blog.heurion.org` 子域名中间件 + `heurion.org/blog*` 路径 + 评论与双表面 CRDT 发布 API）
+ * 注册博客路由（同时挂载：`heurion.org/blog*` 规范路径 + `.md` GEO 端点 + `blog.heurion.org` 子域名兼容 + 评论与双表面 CRDT 发布 API）
  */
 export function registerBlogRoutes(
   app: any,
@@ -1251,6 +1951,11 @@ export function registerBlogRoutes(
     c.body(xml, 200, {
       'Content-Type': 'application/xml; charset=utf-8',
       'Cache-Control': 'public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400',
+    })
+  const sendMarkdown = (c: any, md: string) =>
+    c.body(md, 200, {
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Cache-Control': 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400',
     })
 
   // 1. 读者评论公开接口
@@ -1355,20 +2060,34 @@ export function registerBlogRoutes(
     if (path === '/en/blog' || path === '/en/blog/') {
       return c.redirect('/en', 301)
     }
+    if (path === '/blog.md') {
+      return sendMarkdown(c, renderBlogIndexMarkdown('zh'))
+    }
+    if (path === '/en/blog.md') {
+      return sendMarkdown(c, renderBlogIndexMarkdown('en'))
+    }
     if (path === '/feed.xml' || path === '/rss.xml' || path === '/blog/feed.xml') {
-      return sendXml(c, renderBlogRssXml('zh'))
+      return sendXml(c, renderBlogRssXml('zh', { subdomain: true }))
     }
     if (path === '/en/feed.xml' || path === '/en/rss.xml' || path === '/en/blog/feed.xml') {
-      return sendXml(c, renderBlogRssXml('en'))
+      return sendXml(c, renderBlogRssXml('en', { subdomain: true }))
     }
     if (path === '/sitemap.xml') {
-      return sendXml(c, renderBlogSitemapXml())
+      return sendXml(c, renderBlogSitemapXml({ subdomain: true }))
     }
     if (path === '/robots.txt') {
       return c.text(
-        'User-agent: *\nAllow: /\nSitemap: https://blog.heurion.org/sitemap.xml\n',
+        'User-agent: *\nAllow: /\nSitemap: https://heurion.org/sitemap.xml\n',
         200,
       )
+    }
+    const zhMdMatch = /^\/(?:posts\/|blog\/)?([a-z0-9-]+)\.md$/.exec(path)
+    if (zhMdMatch?.[1] && findBlogPostBySlug(zhMdMatch[1])) {
+      return sendMarkdown(c, renderBlogPostMarkdown(zhMdMatch[1], 'zh')!)
+    }
+    const enMdMatch = /^\/en\/(?:posts\/|blog\/)?([a-z0-9-]+)\.md$/.exec(path)
+    if (enMdMatch?.[1] && findBlogPostBySlug(enMdMatch[1])) {
+      return sendMarkdown(c, renderBlogPostMarkdown(enMdMatch[1], 'en')!)
     }
     const zhPostMatch = /^\/(?:posts\/|blog\/)?([a-z0-9-]+)\/?$/.exec(path)
     if (zhPostMatch?.[1] && findBlogPostBySlug(zhPostMatch[1])) {
@@ -1387,48 +2106,84 @@ export function registerBlogRoutes(
     return c.notFound()
   })
 
-  // 主站路径 (heurion.org/blog*) 兼容与可选重定向
+  // 主站规范路径 (https://heurion.org/blog*) 与 GEO Markdown 端点
   const shouldRedirectToSubdomain = (c: any): boolean =>
     process.env.BLOG_REDIRECT_SUBDOMAIN === '1' || c.req.query('redirect') === '1'
 
-  app.get('/blog', (c: any) =>
-    shouldRedirectToSubdomain(c)
-      ? c.redirect('https://blog.heurion.org/', 302)
-      : sendHtml(c, renderBlogHomeHtml('zh', { subdomain: false })),
-  )
+  app.get('/blog.md', (c: any) => sendMarkdown(c, renderBlogIndexMarkdown('zh')))
+  app.get('/en/blog.md', (c: any) => sendMarkdown(c, renderBlogIndexMarkdown('en')))
+
+  app.get('/blog', (c: any) => {
+    if (shouldRedirectToSubdomain(c)) return c.redirect('https://blog.heurion.org/', 302)
+    const accept = String(c.req.header('accept') ?? '')
+    if (accept.includes('text/markdown')) return sendMarkdown(c, renderBlogIndexMarkdown('zh'))
+    return sendHtml(c, renderBlogHomeHtml('zh', { subdomain: false }))
+  })
   app.get('/blog/', (c: any) =>
     shouldRedirectToSubdomain(c)
       ? c.redirect('https://blog.heurion.org/', 302)
       : c.redirect('/blog', 301),
   )
-  app.get('/en/blog', (c: any) =>
-    shouldRedirectToSubdomain(c)
-      ? c.redirect('https://blog.heurion.org/en', 302)
-      : sendHtml(c, renderBlogHomeHtml('en', { subdomain: false })),
-  )
+  app.get('/en/blog', (c: any) => {
+    if (shouldRedirectToSubdomain(c)) return c.redirect('https://blog.heurion.org/en', 302)
+    const accept = String(c.req.header('accept') ?? '')
+    if (accept.includes('text/markdown')) return sendMarkdown(c, renderBlogIndexMarkdown('en'))
+    return sendHtml(c, renderBlogHomeHtml('en', { subdomain: false }))
+  })
   app.get('/en/blog/', (c: any) =>
     shouldRedirectToSubdomain(c)
       ? c.redirect('https://blog.heurion.org/en', 302)
       : c.redirect('/en/blog', 301),
   )
-  app.get('/blog/feed.xml', (c: any) => sendXml(c, renderBlogRssXml('zh')))
-  app.get('/blog/rss.xml', (c: any) => sendXml(c, renderBlogRssXml('zh')))
-  app.get('/en/blog/feed.xml', (c: any) => sendXml(c, renderBlogRssXml('en')))
-  app.get('/en/blog/rss.xml', (c: any) => sendXml(c, renderBlogRssXml('en')))
-  app.get('/blog/:slug', (c: any) => {
-    const slug = c.req.param('slug')
-    if (!findBlogPostBySlug(slug)) return c.notFound()
-    if (shouldRedirectToSubdomain(c)) {
-      return c.redirect(`https://blog.heurion.org/${slug}`, 302)
-    }
-    return sendHtml(c, renderBlogPostHtml(slug, 'zh', { subdomain: false })!)
+
+  // 容错 301 重定向：将误写的 /blog/en 及 /blog/en/:slug 自动引导至规范路径 /en/blog*
+  app.get('/blog/en', (c: any) => c.redirect('/en/blog', 301))
+  app.get('/blog/en/', (c: any) => c.redirect('/en/blog', 301))
+  app.get('/blog/en/:slug', (c: any) => {
+    const slug = String(c.req.param('slug') ?? '').replace(/\/+$/, '')
+    return c.redirect(`/en/blog/${slug}`, 301)
   })
-  app.get('/en/blog/:slug', (c: any) => {
-    const slug = c.req.param('slug')
-    if (!findBlogPostBySlug(slug)) return c.notFound()
-    if (shouldRedirectToSubdomain(c)) {
-      return c.redirect(`https://blog.heurion.org/en/${slug}`, 302)
+
+  app.get('/blog/feed.xml', (c: any) => sendXml(c, renderBlogRssXml('zh', { subdomain: false })))
+  app.get('/blog/rss.xml', (c: any) => sendXml(c, renderBlogRssXml('zh', { subdomain: false })))
+  app.get('/en/blog/feed.xml', (c: any) => sendXml(c, renderBlogRssXml('en', { subdomain: false })))
+  app.get('/en/blog/rss.xml', (c: any) => sendXml(c, renderBlogRssXml('en', { subdomain: false })))
+
+  app.get('/blog/:slug', (c: any) => {
+    const rawParam = String(c.req.param('slug') ?? '')
+    if (rawParam.endsWith('.md')) {
+      const slug = rawParam.slice(0, -3)
+      const md = renderBlogPostMarkdown(slug, 'zh')
+      if (!md) return c.notFound()
+      return sendMarkdown(c, md)
     }
-    return sendHtml(c, renderBlogPostHtml(slug, 'en', { subdomain: false })!)
+    if (!findBlogPostBySlug(rawParam)) return c.notFound()
+    if (shouldRedirectToSubdomain(c)) {
+      return c.redirect(`https://blog.heurion.org/${rawParam}`, 302)
+    }
+    const accept = String(c.req.header('accept') ?? '')
+    if (accept.includes('text/markdown')) {
+      return sendMarkdown(c, renderBlogPostMarkdown(rawParam, 'zh')!)
+    }
+    return sendHtml(c, renderBlogPostHtml(rawParam, 'zh', { subdomain: false })!)
+  })
+
+  app.get('/en/blog/:slug', (c: any) => {
+    const rawParam = String(c.req.param('slug') ?? '')
+    if (rawParam.endsWith('.md')) {
+      const slug = rawParam.slice(0, -3)
+      const md = renderBlogPostMarkdown(slug, 'en')
+      if (!md) return c.notFound()
+      return sendMarkdown(c, md)
+    }
+    if (!findBlogPostBySlug(rawParam)) return c.notFound()
+    if (shouldRedirectToSubdomain(c)) {
+      return c.redirect(`https://blog.heurion.org/en/${rawParam}`, 302)
+    }
+    const accept = String(c.req.header('accept') ?? '')
+    if (accept.includes('text/markdown')) {
+      return sendMarkdown(c, renderBlogPostMarkdown(rawParam, 'en')!)
+    }
+    return sendHtml(c, renderBlogPostHtml(rawParam, 'en', { subdomain: false })!)
   })
 }

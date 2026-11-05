@@ -598,6 +598,7 @@ function renderCommonLayout(opts: {
           <span>© 2026 Heurion Research · MIT Licensed</span>
           <a href="${homeHref}" class="foot-link">${isEn ? 'Home' : '首页'}</a>
           <a href="${toolsHref}" class="foot-link">${isEn ? 'Tools' : '临床工具'}</a>
+          <a href="${isEn ? '/en/blog' : '/blog'}" class="foot-link">${isEn ? 'Technical Blog' : '技术博客'}</a>
           <a href="/phr" class="foot-link">${isEn ? 'Patient PHR' : '知家档案'}</a>
           <a href="/llms.txt" class="foot-link">LLMs.txt</a>
           <a href="/sitemap.xml" class="foot-link">Sitemap</a>
