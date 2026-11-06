@@ -804,6 +804,8 @@ async function open(docId: string): Promise<void> {
   researchUi.leave()
   close()
   selectedCommentIds.clear()
+  commentNavCursor = -1
+  lastReviewSnapshot = loadReviewSnapshot(docId)
   hideTurnBanner()
   turnUi = null
   $('chatLog').innerHTML = ''
@@ -3161,6 +3163,8 @@ $('newCommentAsk').onclick = () => void saveComment(true)
 
 interface ReviewSnapshotState {
   docId: string
+  /** 生成快照时的文档 rev（之后文档有改动时提示快照可能过期）。 */
+  rev?: number
   scratchpad?: {
     enrolled_sample_sizes?: number[]
     table_sample_sizes?: number[]
@@ -3173,6 +3177,27 @@ interface ReviewSnapshotState {
   exemptedCount: number
 }
 
+const REVIEW_SNAPSHOT_PREFIX = 'heurion.reviewSnapshot.'
+
+function loadReviewSnapshot(docId: string): ReviewSnapshotState | null {
+  try {
+    const raw = localStorage.getItem(REVIEW_SNAPSHOT_PREFIX + docId)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as ReviewSnapshotState
+    return parsed?.docId === docId ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function saveReviewSnapshot(snapshot: ReviewSnapshotState): void {
+  try {
+    localStorage.setItem(REVIEW_SNAPSHOT_PREFIX + snapshot.docId, JSON.stringify(snapshot))
+  } catch {
+    /* 浏览器禁用本地存储时只保留当前会话 */
+  }
+}
+
 let lastReviewSnapshot: ReviewSnapshotState | null = null
 type ReviewFilter = 'all' | 'critical' | 'major' | 'minor' | 'plain'
 let activeReviewFilter: ReviewFilter = 'all'
@@ -3182,6 +3207,7 @@ let deepReviewAbort: AbortController | null = null
 /** 右侧批注批量选择（只保存 id；刷新后按当前列表过滤）。 */
 const selectedCommentIds = new Set<string>()
 let visibleOpenCommentIds: string[] = []
+let commentNavCursor = -1
 let bulkBusy = false
 
 function formatCleanRuleText(raw: string): string {
@@ -3293,6 +3319,10 @@ async function runDeepReview(): Promise<void> {
     }
     activeReviewFilter = 'all'
     await refresh(false)
+    if (lastReviewSnapshot) {
+      lastReviewSnapshot.rev = detail?.rev
+      saveReviewSnapshot(lastReviewSnapshot)
+    }
     await loadReviewRules()
     renderReviewSnapshot()
     const created = lastReviewSnapshot.createdCount
@@ -3398,6 +3428,7 @@ function renderReviewSnapshot(): void {
     return
   }
   snapEl.hidden = false
+  const snapshotStale = !!hasSnapshot && lastReviewSnapshot?.rev != null && detail?.rev != null && lastReviewSnapshot.rev !== detail.rev
   const critCount = openReviewItems.filter(x => x.meta.severity === 'critical').length
   const majCount = openReviewItems.filter(x => x.meta.severity === 'major').length
   const minCount = openReviewItems.filter(x => x.meta.severity === 'minor').length
@@ -3429,6 +3460,7 @@ function renderReviewSnapshot(): void {
           </div>
         ` : ''}
         ${openReviewItems.length > 0 ? `<button type="button" class="quiet small-btn rv-copy-btn" data-rv-copy="1" title="将待处理审稿问题复制为 Markdown 清单，方便发给合作者或学生修改">复制清单</button>` : ''}
+        ${snapshotStale ? `<span class="rv-stale-badge" title="快照生成后文档已修改，关键数字可能已变化">快照基于 rev ${esc(lastReviewSnapshot!.rev)}</span>` : ''}
         ${exempted > 0 ? `<span class="rv-exempt-badge" title="已根据您的审稿偏好自动过滤同类误报">已按审稿偏好免报 ${exempted} 处</span>` : ''}
       </div>
     </div>
@@ -3482,9 +3514,17 @@ document.getElementById('reviewSnapshotBar')?.addEventListener('click', async e 
   const pill = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-filter]')
   if (!pill?.dataset.rvFilter) return
   activeReviewFilter = pill.dataset.rvFilter as ReviewFilter
+  commentNavCursor = -1
   renderReviewSnapshot()
   renderComments()
 })
+
+function formatCommentTime(iso?: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
 
 function renderCommentCardHtml(c: any): string {
   const meta = parseReviewComment(c)
@@ -3493,6 +3533,9 @@ function renderCommentCardHtml(c: any): string {
   // 审稿卡片的第一条 AI 回复是审稿理由，正文里单独展示；其余回复（含用户最初的批注）都进讨论区
   const reasonReply = isReview ? replies.find(r => r.role === 'ai') : undefined
   const visibleReplies = reasonReply ? replies.filter(r => r !== reasonReply) : replies
+  const originReply = isReview ? reasonReply : replies[0]
+  const originLabel = isReview ? 'AI 审稿' : (originReply?.author || '我')
+  const originTime = formatCommentTime(originReply?.created_at)
   const quoteText = c.anchor?.text || c.snippet || '（点击定位正文段落）'
   const sectionTitle = c.anchor?.section_title || (session?.kind === 'deck' ? session.deck?.shapeSlideContext(c.node_id) ?? '' : '')
   const secLabel = sectionTitle ? (session?.kind === 'deck' ? sectionTitle.slice(0, 22) : `§ ${sectionTitle.slice(0, 22)}`) : '§ 定位章节'
@@ -3507,6 +3550,7 @@ function renderCommentCardHtml(c: any): string {
         ${c.status === 'open' && visibleOpenCommentIds.length > 1 ? `<label class="card-select" title="选择此批注"><input type="checkbox" data-select-cid="${esc(c.id)}" ${selected ? 'checked' : ''}></label>` : ''}
         ${isReview ? `<span class="rv-sev-badge sev-${esc(meta.severity)}">${esc(meta.severityLabel)}</span>` : ''}
         <span class="rv-cat-tag">${esc(isReview ? meta.categoryLabel : '批注')}</span>
+        <span class="rv-origin">${esc(originLabel)}${originTime ? ` · ${esc(originTime)}` : ''}</span>
         <button type="button" class="rv-sec-badge" data-locate="1" title="点击定位并高亮所属章节与原句">${esc(secLabel)}</button>
         <span class="grow"></span>
         ${c.status === 'open' ? `<button type="button" class="quiet small-btn" data-act="delete" title="删除批注">✕</button>` : ''}
@@ -3517,7 +3561,10 @@ function renderCommentCardHtml(c: any): string {
       </div>
       ${isReview && meta.cleanReason ? `<div class="rv-reason-body">${lightMarkdown(meta.cleanReason)}</div>` : ''}
       ${isReview && meta.suggestion ? `<div class="rv-suggest-hint"><span class="rv-suggest-hint-tag">修改建议参考</span>${lightMarkdown(meta.suggestion)}</div>` : ''}
-      ${visibleReplies.length > 0 ? `<div class="rv-replies-list">${visibleReplies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}</div>` : ''}
+      ${visibleReplies.length > 0 ? `<div class="rv-replies-list">${visibleReplies.map((r: any) => {
+        const when = formatCommentTime(r.created_at)
+        return `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>${when ? `<span class="reply-time">${esc(when)}</span>` : ''}：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`
+      }).join('')}</div>` : ''}
       ${c.status === 'open' ? `
         <div class="rv-action-bar${isReview ? '' : ' rv-action-simple'}">
           <button type="button" class="ai small-btn" data-act="ask" data-default-label="交给 AI 处理" title="将该批注（及您的补充要求）交给 AI 修改对应段落">交给 AI 处理</button>
@@ -3585,6 +3632,10 @@ function renderComments(): void {
   const bulkBar = filteredOpenList.length > 1
     ? `<div class="comment-bulk-bar${selectedVisible.length > 0 ? ' active' : ''}" data-bulk-bar>
         <label class="comment-select-all"><input type="checkbox" data-select-all ${allVisibleSelected ? 'checked' : ''}> 全选当前 ${filteredOpenList.length} 条</label>
+        <span class="comment-nav-actions">
+          <button type="button" class="quiet small-btn" data-comment-nav="-1" title="上一条未处理批注（⌥↑）">↑</button>
+          <button type="button" class="quiet small-btn" data-comment-nav="1" title="下一条未处理批注（⌥↓）">↓</button>
+        </span>
         <span class="grow"></span>
         ${selectedVisible.length > 0
           ? `<span class="muted small">已选 ${selectedVisible.length} 条</span>
@@ -3708,6 +3759,14 @@ async function bulkCloseSelected(): Promise<void> {
   }
 }
 
+function navigateComment(delta: number): void {
+  if (!session || visibleOpenCommentIds.length === 0) return
+  commentNavCursor = (commentNavCursor + delta + visibleOpenCommentIds.length) % visibleOpenCommentIds.length
+  const id = visibleOpenCommentIds[commentNavCursor]!
+  locateCommentInDoc(id)
+  document.querySelector<HTMLElement>(`#comments [data-cid="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
 function syncManuscriptReviewHighlights(openList: any[]): void {
   if (!session?.editor) return
   const openIds = new Set(openList.map(c => c.id))
@@ -3765,6 +3824,8 @@ function syncManuscriptReviewHighlights(openList: any[]): void {
 }
 
 function locateCommentInDoc(cid: string): void {
+  const navIndex = visibleOpenCommentIds.indexOf(cid)
+  if (navIndex >= 0) commentNavCursor = navIndex
   const card = document.querySelector<HTMLElement>(`#comments [data-cid="${CSS.escape(cid)}"]`)
   document.querySelectorAll('#comments .card.card-active-focus').forEach(el => el.classList.remove('card-active-focus'))
   card?.classList.add('card-active-focus')
@@ -3827,8 +3888,24 @@ $('comments').addEventListener('change', e => {
   renderComments()
 })
 
+document.addEventListener('keydown', e => {
+  if (!e.altKey || e.metaKey || e.ctrlKey || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return
+  if (!session || document.querySelector('.dialog:not([hidden])')) return
+  if (!$('commentPane').classList.contains('active')) return
+  const target = e.target as HTMLElement
+  if (target.closest('input, textarea, [contenteditable="true"]')) return
+  if (visibleOpenCommentIds.length === 0) return
+  e.preventDefault()
+  navigateComment(e.key === 'ArrowDown' ? 1 : -1)
+})
+
 $('comments').onclick = async e => {
   const targetEl = e.target as HTMLElement
+  const navBtn = targetEl.closest<HTMLButtonElement>('[data-comment-nav]')
+  if (navBtn?.dataset.commentNav) {
+    navigateComment(Number(navBtn.dataset.commentNav))
+    return
+  }
   const bulkBtn = targetEl.closest<HTMLButtonElement>('[data-bulk-act]')
   if (bulkBtn?.dataset.bulkAct) {
     if (bulkBtn.dataset.bulkAct === 'ask') void bulkAskSelected()

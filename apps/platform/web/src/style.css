@@ -1377,6 +1377,7 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .reply strong { font-weight: 600; color: var(--text); }
 .reply b { font-weight: 500; color: var(--text); }
 .reply.ai b { color: var(--mint-text); }
+.reply-time { font-size: 10.5px; color: var(--muted); margin-left: 4px; }
 .muted { color: var(--muted); font-size: 12px; }
 .vitem { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
 .diff div { font-size: 13px; margin: 6px 0; }
@@ -7852,6 +7853,13 @@ svg.mail-star-icon-filled polygon {
   color: var(--mint-text, var(--mint));
   border: 1px solid rgba(0, 229, 153, 0.3);
 }
+.rv-stale-badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  background: var(--warn-soft, rgba(245, 181, 68, 0.14));
+  color: var(--paper-warn, #b45309);
+  border: 1px solid rgba(245, 181, 68, 0.4);
+}
 .rv-summary-ok {
   color: var(--mint-text, var(--mint));
   font-weight: 600;
@@ -7901,7 +7909,14 @@ svg.mail-star-icon-filled polygon {
 .rv-card-header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
+  row-gap: 4px;
+}
+.rv-origin {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 .rv-sev-badge {
   font-size: 11px;
@@ -8005,6 +8020,10 @@ svg.mail-star-icon-filled polygon {
 .comment-select-all {
   color: var(--muted);
   font-size: 12px;
+}
+.comment-nav-actions {
+  display: inline-flex;
+  gap: 2px;
 }
 .card-select {
   flex: none;
