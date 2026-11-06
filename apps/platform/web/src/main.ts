@@ -3506,40 +3506,46 @@ document.getElementById('reviewSnapshotBar')?.addEventListener('click', async e 
 
 function renderCommentCardHtml(c: any): string {
   const meta = parseReviewComment(c)
+  const isReview = meta.isReview
+  const replies: any[] = c.replies ?? []
+  // 审稿卡片的第一条 AI 回复是审稿理由，正文里单独展示；其余回复（含用户最初的批注）都进讨论区
+  const reasonReply = isReview ? replies.find(r => r.role === 'ai') : undefined
+  const visibleReplies = reasonReply ? replies.filter(r => r !== reasonReply) : replies
   const quoteText = c.anchor?.text || c.snippet || '（点击定位正文段落）'
   const sectionTitle = c.anchor?.section_title || ''
   const secLabel = sectionTitle ? `§ ${sectionTitle.slice(0, 22)}` : '§ 定位章节'
-  if (meta.isReview) {
-    const extraReplies = (c.replies ?? []).slice(1)
-    return `
-    <div class="card rv-card ${esc(c.status)} sev-${esc(meta.severity)}" data-cid="${esc(c.id)}" data-cat="${esc(meta.categoryKey)}" data-reason="${esc(meta.cleanReason)}">
+  const cardClass = ['card', isReview ? 'rv-card' : '', isReview ? `sev-${esc(meta.severity)}` : '', esc(c.status)].filter(Boolean).join(' ')
+  const cardAttrs = `data-cid="${esc(c.id)}"${isReview ? ` data-cat="${esc(meta.categoryKey)}" data-reason="${esc(meta.cleanReason)}"` : ''}`
+  return `
+    <div class="${cardClass}" ${cardAttrs}>
       <div class="rv-card-header">
-        <span class="rv-sev-badge sev-${esc(meta.severity)}">${esc(meta.severityLabel)}</span>
-        <span class="rv-cat-tag">${esc(meta.categoryLabel)}</span>
+        ${isReview ? `<span class="rv-sev-badge sev-${esc(meta.severity)}">${esc(meta.severityLabel)}</span>` : ''}
+        <span class="rv-cat-tag">${esc(isReview ? meta.categoryLabel : '批注')}</span>
         <button type="button" class="rv-sec-badge" data-locate="1" title="点击定位并高亮所属章节与原句">${esc(secLabel)}</button>
         <span class="grow"></span>
-        ${c.status === 'open' ? `<button type="button" class="quiet small-btn rv-more-btn" data-act="toggle-more" title="更多操作（删除）">⋯</button>` : ''}
+        ${c.status === 'open' ? `<button type="button" class="quiet small-btn" data-act="delete" title="删除批注">✕</button>` : ''}
       </div>
       <div class="quote" data-locate="1" title="点击在正文中定位并高亮原句与所属章节">
         <span class="quote-text">${esc(quoteText)}</span>
         <span class="quote-locate-pill">定位原文 ↗</span>
       </div>
-      <div class="rv-reason-body">${lightMarkdown(meta.cleanReason)}</div>
-      ${meta.suggestion ? `<div class="rv-suggest-hint"><span class="rv-suggest-hint-tag">修改建议参考</span>${lightMarkdown(meta.suggestion)}</div>` : ''}
-      ${extraReplies.length > 0 ? `<div class="rv-replies-list">${extraReplies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}</div>` : ''}
+      ${isReview && meta.cleanReason ? `<div class="rv-reason-body">${lightMarkdown(meta.cleanReason)}</div>` : ''}
+      ${isReview && meta.suggestion ? `<div class="rv-suggest-hint"><span class="rv-suggest-hint-tag">修改建议参考</span>${lightMarkdown(meta.suggestion)}</div>` : ''}
+      ${visibleReplies.length > 0 ? `<div class="rv-replies-list">${visibleReplies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}</div>` : ''}
       ${c.status === 'open' ? `
         <div class="rv-action-bar">
-          <button type="button" class="ai small-btn" data-act="ask" data-default-label="交给 AI 处理" title="将该审稿意见（及您的批注要求）交给 AI 修改对应段落">交给 AI 处理</button>
-          <button type="button" class="quiet small-btn rv-comment-btn" data-act="toggle-reply" title="对该审稿意见添加批注说明、团队讨论或补充改稿要求">批注讨论${extraReplies.length > 0 ? ` (${extraReplies.length})` : ''}</button>
-          <button type="button" class="quiet small-btn" data-act="resolve" title="知晓该提醒并关闭批注，保留正文原写法">知晓并关闭</button>
-          <button type="button" class="quiet small-btn rv-fp-btn" data-act="toggle-fp" title="标记为误报或专科常规写法，系统会自动提炼规则，后续不再误报">误报 · 以后免报</button>
+          <button type="button" class="ai small-btn" data-act="ask" data-default-label="交给 AI 处理" title="将该批注（及您的补充要求）交给 AI 修改对应段落">交给 AI 处理</button>
+          <button type="button" class="quiet small-btn rv-comment-btn" data-act="toggle-reply" title="添加批注说明、团队讨论或补充改稿要求">批注讨论${visibleReplies.length > 0 ? ` (${visibleReplies.length})` : ''}</button>
+          <button type="button" class="quiet small-btn" data-act="resolve" title="关闭此批注并归档；正文原写法不变">关闭批注</button>
+          ${isReview ? `<button type="button" class="quiet small-btn rv-fp-btn" data-act="toggle-fp" title="标记为误报或专科常规写法，系统会自动提炼规则，后续不再误报">误报 · 以后免报</button>` : ''}
         </div>
-        <div class="rv-reply-drawer" data-reply-drawer ${extraReplies.length > 0 ? '' : 'hidden'}>
+        <div class="rv-reply-drawer" data-reply-drawer ${visibleReplies.length > 0 ? '' : 'hidden'}>
           <div class="rv-reply-input-row">
-            <input type="text" placeholder="输入批注讨论，或补充具体改稿要求后点「交给 AI 处理」（回车发送批注）…" data-reply>
+            <input type="text" placeholder="添加批注讨论，或补充具体改稿要求后点「交给 AI 处理」（回车发送批注）…" data-reply>
             <button type="button" class="small-btn primary" data-act="reply">发送批注</button>
           </div>
         </div>
+        ${isReview ? `
         <div class="rv-fp-drawer" data-fp-drawer hidden>
           <div class="rv-fp-title">选择原因（系统将自动记住此专科习惯，后续免报同类情况）：</div>
           <div class="rv-fp-chips">
@@ -3551,12 +3557,7 @@ function renderCommentCardHtml(c: any): string {
             <input type="text" data-fp-input placeholder="或输入一句话原因…">
             <button type="button" class="small-btn primary" data-act="exempt-claim">确认免报</button>
           </div>
-        </div>
-        <div class="rv-more-drawer" data-more-drawer hidden>
-          <span class="muted small">管理此条审稿记录：</span>
-          <span class="grow"></span>
-          <button type="button" class="small-btn quiet" data-act="delete">删除此条批注</button>
-        </div>
+        </div>` : ''}
       ` : `
         <div class="row rv-resolved-row">
           <span class="muted small">已处理归档</span>
@@ -3565,28 +3566,6 @@ function renderCommentCardHtml(c: any): string {
           <button type="button" class="small-btn quiet" data-act="delete">删除</button>
         </div>
       `}
-    </div>`
-  }
-  return `
-    <div class="card ${esc(c.status)}" data-cid="${esc(c.id)}">
-      <div class="rv-card-header">
-        <span class="rv-cat-tag">批注</span>
-        <button type="button" class="rv-sec-badge" data-locate="1" title="点击定位并高亮所属章节与原句">${esc(secLabel)}</button>
-        <span class="grow"></span>
-        ${c.status === 'open' ? `<button type="button" class="quiet small-btn" data-act="resolve" title="关闭此批注并归档">关闭批注</button>` : `<button type="button" class="quiet small-btn" data-act="reopen">重新打开</button>`}
-        <button type="button" class="quiet small-btn" data-act="delete" title="删除批注">✕</button>
-      </div>
-      <div class="quote" data-locate="1" title="点击定位到正文位置并高亮对应章节">
-        <span class="quote-text">${esc(quoteText)}</span>
-        <span class="quote-locate-pill">定位原文 ↗</span>
-      </div>
-      ${c.replies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}
-      ${c.status === 'open' ? `
-      <div class="row">
-        <input type="text" placeholder="添加批注回复或补充要求（回车发送）…" data-reply>
-        <button data-act="reply" class="small-btn primary">添加批注</button>
-        <button data-act="ask" data-default-label="交给 AI 处理" class="ai small-btn">交给 AI 处理</button>
-      </div>` : ''}
     </div>`
 }
 
@@ -3803,11 +3782,6 @@ $('comments').onclick = async e => {
       fpDrawer.hidden = !fpDrawer.hidden
       if (!fpDrawer.hidden) fpDrawer.querySelector<HTMLInputElement>('[data-fp-input]')?.focus()
     }
-    return
-  }
-  if (act === 'toggle-more') {
-    const moreDrawer = card.querySelector<HTMLElement>('[data-more-drawer]')
-    if (moreDrawer) moreDrawer.hidden = !moreDrawer.hidden
     return
   }
 

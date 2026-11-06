@@ -22,7 +22,7 @@
   --paper: #0b1813; --paper-edge: #1e2925; --paper-text: #e8eeeb; --paper-text-2: rgba(232, 238, 235, .8); --paper-muted: rgba(232, 238, 235, .56); --paper-faint: rgba(232, 238, 235, .32);
   --paper-line: #22302b; --paper-line-strong: #34443e; --paper-raised: #12211b; --paper-cite: #3ee6a0;
   --paper-warn: #f5b544; --paper-warn-soft: rgba(245, 181, 68, .14); --paper-danger: #ff8080; --paper-danger-soft: rgba(255, 107, 107, .16);
-  --paper-ok: #2bd99a; --paper-ok-soft: rgba(6, 182, 128, .18); --paper-comment: rgba(245, 165, 36, .24);
+  --paper-ok: #2bd99a; --paper-ok-soft: rgba(6, 182, 128, .18); --paper-comment: rgba(245, 165, 36, .38);
   /* 旧名字（组件里还在用）映射到新色板 */
   --ink: #06110d; --ink-2: #0d1d17; --ink-3: #2d3d37;
   --sky: var(--green); --sky-ink: var(--mint); --sky-soft: var(--green-soft); --sky-line: var(--green-line);
@@ -50,7 +50,7 @@
   --paper: #ffffff; --paper-edge: #e2e5e4; --paper-text: #0b1410; --paper-text-2: #2d3b36; --paper-muted: #5d6c67; --paper-faint: #9aa6a2;
   --paper-line: #e2e8e5; --paper-line-strong: #c9d3cf; --paper-raised: #f3f7f5; --paper-cite: #047857;
   --paper-warn: #b45309; --paper-warn-soft: #fff4dc; --paper-danger: #c81e1e; --paper-danger-soft: #ffe8e8;
-  --paper-ok: #047857; --paper-ok-soft: #e3f7ee; --paper-comment: #fff1c2;
+  --paper-ok: #047857; --paper-ok-soft: #e3f7ee; --paper-comment: #FDE68A;
 }
 
 * { box-sizing: border-box; }
@@ -245,7 +245,7 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .ProseMirror figcaption.placeholder { opacity: .5; }
 .ProseMirror figure.ProseMirror-selectednode { outline: 2px solid var(--green); }
 .ProseMirror .opaque { border: 1px dashed var(--line-strong); color: var(--muted); padding: 8px 12px; font-size: 13px; margin: 8px 0; }
-.ProseMirror mark.comment { background: var(--paper-comment); color: inherit; border-bottom: 2px solid #f5a524; cursor: pointer; }
+.ProseMirror mark.comment { background: var(--paper-comment); color: inherit; border-bottom: 2px solid #d97706; border-radius: 2px; cursor: pointer; }
 /* 已关闭批注：锚点保留（归档定位 / 重新打开），但不再显示高亮与下划线 */
 .ProseMirror mark.comment:has(.comment-resolved),
 .ProseMirror mark.comment.comment-resolved { background: transparent; border-bottom: 0; cursor: text; }
@@ -577,7 +577,7 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .shape.ai-flash { background: rgba(0, 255, 147, .22); }
 .shape[data-suggest="delete"] { background: #fee2e2; text-decoration: line-through; opacity: .7; }
 .shape[data-suggest="insert"] { background: #dcfce7; outline: 2px solid #15803d; }
-.shape mark.comment { background: rgba(245, 158, 11, .26); border-bottom: 2px solid #f59e0b; color: inherit; }
+.shape mark.comment { background: rgba(245, 158, 11, .36); border-bottom: 2px solid #d97706; border-radius: 2px; color: inherit; }
 /* 已关闭批注：锚点保留，但不再显示高亮与下划线 */
 .shape mark.comment.comment-resolved { background: transparent; border-bottom: 0; cursor: inherit; }
 .slide-notes { display: flex; gap: 10px; font-size: 12.5px; color: var(--text-2); margin-top: 0; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-top: 0; }

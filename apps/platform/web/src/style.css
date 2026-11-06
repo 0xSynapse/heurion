@@ -32,7 +32,7 @@
   --paper: #FDFCF9; --paper-edge: #DFDAD0; --paper-text: #151C19; --paper-text-2: #36403B; --paper-muted: #646D68; --paper-faint: #949B96;
   --paper-line: #E6E1D6; --paper-line-strong: #CEC8BC; --paper-raised: #F4F1EA; --paper-cite: #1B6B4A;
   --paper-warn: #9A5B13; --paper-warn-soft: #FDF3E1; --paper-danger: #B42318; --paper-danger-soft: #FDECEB;
-  --paper-ok: #1B6B4A; --paper-ok-soft: #E3ECE7; --paper-comment: #FBF0C9;
+  --paper-ok: #1B6B4A; --paper-ok-soft: #E3ECE7; --paper-comment: #FDE68A;
   /* 旧名字（组件里还在用）映射到新色板 */
   --ink: #151C19; --ink-2: #EFECE4; --ink-3: #C8C2B6;
   --sky: var(--mint); --sky-ink: var(--mint-text); --sky-soft: var(--green-soft); --sky-line: var(--green-line);
@@ -61,7 +61,7 @@
   --paper: #151C19; --paper-edge: #26312C; --paper-text: #ECE9E2; --paper-text-2: #B8C2BC; --paper-muted: #84918A; --paper-faint: #58655E;
   --paper-line: #26312C; --paper-line-strong: #35443D; --paper-raised: #1C2521; --paper-cite: #2CE092;
   --paper-warn: #F5B544; --paper-warn-soft: rgba(245, 181, 68, .14); --paper-danger: #FF8080; --paper-danger-soft: rgba(255, 107, 107, .16);
-  --paper-ok: #2CE092; --paper-ok-soft: rgba(0, 196, 114, .18); --paper-comment: rgba(245, 165, 36, .24);
+  --paper-ok: #2CE092; --paper-ok-soft: rgba(0, 196, 114, .18); --paper-comment: rgba(245, 165, 36, .38);
   --ink: #111614; --ink-2: #1C2521; --ink-3: #35443D;
   --shadow-sm: none; --shadow: 0 24px 60px -24px rgba(0, 0, 0, .7);
 }
@@ -420,7 +420,7 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .ProseMirror figcaption.placeholder { opacity: .5; }
 .ProseMirror figure.ProseMirror-selectednode { outline: 2px solid var(--green); }
 .ProseMirror .opaque { border: 1px dashed var(--line-strong); color: var(--muted); padding: 8px 12px; font-size: 13px; margin: 8px 0; }
-.ProseMirror mark.comment { background: var(--paper-comment); color: inherit; border-bottom: 2px solid #f5a524; cursor: pointer; }
+.ProseMirror mark.comment { background: var(--paper-comment); color: inherit; border-bottom: 2px solid #d97706; border-radius: 2px; cursor: pointer; }
 /* 已关闭批注：锚点保留（归档定位 / 重新打开），但不再显示高亮与下划线 */
 .ProseMirror mark.comment:has(.comment-resolved),
 .ProseMirror mark.comment.comment-resolved { background: transparent; border-bottom: 0; cursor: text; }
@@ -1485,7 +1485,7 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .shape.ai-flash { background: rgba(0, 255, 147, .22); }
 .shape[data-suggest="delete"] { background: #fee2e2; text-decoration: line-through; opacity: .7; }
 .shape[data-suggest="insert"] { background: #dcfce7; outline: 2px solid #15803d; }
-.shape mark.comment { background: rgba(245, 158, 11, .26); border-bottom: 2px solid #f59e0b; color: inherit; }
+.shape mark.comment { background: rgba(245, 158, 11, .36); border-bottom: 2px solid #d97706; border-radius: 2px; color: inherit; }
 /* 已关闭批注：锚点保留，但不再显示高亮与下划线 */
 .shape mark.comment.comment-resolved { background: transparent; border-bottom: 0; cursor: inherit; }
 .slide-notes { display: flex; gap: 10px; font-size: 12.5px; color: var(--text-2); margin-top: 0; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-top: 0; }
@@ -8099,20 +8099,23 @@ svg.mail-star-icon-filled polygon {
 
 /* 正文内审稿锚点按严重度柔和区分（数据矛盾=红、方法建议=琥珀、规范=青蓝） */
 #page .claim-warn-text[data-rv-sev="critical"],
+#page mark.comment[data-rv-sev="critical"],
 #page [data-comment][data-rv-sev="critical"] {
-  background: rgba(239, 68, 68, 0.12);
+  background: rgba(239, 68, 68, 0.18);
   border-bottom: 2px dashed #ef4444;
   cursor: pointer;
 }
 #page .claim-warn-text[data-rv-sev="major"],
+#page mark.comment[data-rv-sev="major"],
 #page [data-comment][data-rv-sev="major"] {
-  background: rgba(245, 158, 11, 0.12);
+  background: rgba(245, 158, 11, 0.22);
   border-bottom: 2px dashed #f59e0b;
   cursor: pointer;
 }
 #page .claim-warn-text[data-rv-sev="minor"],
+#page mark.comment[data-rv-sev="minor"],
 #page [data-comment][data-rv-sev="minor"] {
-  background: rgba(56, 189, 248, 0.10);
+  background: rgba(56, 189, 248, 0.16);
   border-bottom: 1.5px dotted #38bdf8;
   cursor: pointer;
 }
