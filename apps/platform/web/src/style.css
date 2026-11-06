@@ -620,6 +620,29 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .tabpane { flex: 1; overflow: auto; padding: 14px; display: none; }
 .tabpane.active { display: block; }
 #chatPane.active { display: flex; flex-direction: column; padding: 0; }
+#chatPane.ai-drawer {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: none;
+  flex-direction: column;
+  padding: 0;
+  background: var(--panel);
+  box-shadow: -8px 0 28px rgba(0, 0, 0, .18);
+}
+#chatPane.ai-drawer.open { display: flex; }
+.ai-drawer-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-deep);
+}
+.ai-drawer-head .icon-btn { margin-left: auto; }
+.ai-dock-btn { white-space: nowrap; }
+.ai-dock-btn.active { color: var(--mint-text); border-color: var(--mint); background: var(--green-soft); }
 .log { flex: 1; overflow: auto; padding: 10px 16px 16px; }
 
 /* 对话 */

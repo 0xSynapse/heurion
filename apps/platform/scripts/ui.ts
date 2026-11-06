@@ -612,7 +612,8 @@ await page.setInputFiles('#refImportInput', { name: 'refs.txt', mimeType: 'text/
 await page.waitForSelector('#refImportResult :text("新登记")', { timeout: 30000 }).catch(() => {})
 const refResult = await page.locator('#refImportResult').innerText().catch(() => '')
 ok('引用页导入参考文献：登记可核实的、列出查不到的', /新登记 [01] 条/.test(refResult) && refResult.includes('跳过 1 条'), refResult.replace(/\s+/g, ' ').slice(0, 80))
-await page.click('.tabs button[data-tab="chatPane"]')
+await page.click('#aiDockBtn')
+await page.waitForSelector('#chatPane.open')
 
 // —— 记忆：导入进待确认 → 采纳；手动添加；不用记忆开关随消息发送 ——
 await api('/api/memory', { method: 'DELETE' })
@@ -646,6 +647,7 @@ await page.click('#sendBtn')
 await wait(400)
 await page.unroute('**/chat?async=1')
 ok('「不用记忆」随消息发送并复位', memBody?.memory === false && !(await page.isChecked('#noMemory')))
+await page.click('#aiDrawerClose')
 await api('/api/memory', { method: 'DELETE' })
 
 // —— 研究入组：筛选 → 预览 → 入组 → 生成研究数据集；患者页显示所在研究 ——

@@ -336,13 +336,18 @@
     <div class="side-resizer" id="sideResizer" role="separator" aria-orientation="vertical" title="按住拖拽调整右侧栏宽度，双击恢复默认宽度"></div>
     <div class="side-head narrow-only"><span class="eyebrow">Heurion AI</span><button class="icon-btn" id="sideClose" aria-label="关闭"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
     <div class="tabs">
-      <button data-tab="commentPane" id="commentTab" class="active">审稿与批注 <span class="tab-badge" id="commentBadge" hidden>0</span></button>
-      <button data-tab="chatPane">AI 助手 <span class="tab-badge" id="chatBadge" hidden>0</span></button>
+      <button data-tab="commentPane" id="commentTab" class="active">审稿与 AI <span class="tab-badge" id="commentBadge" hidden>0</span></button>
       <button data-tab="citePane">引用</button>
       <button data-tab="versionPane">版本</button>
       <button class="side-collapse-btn" id="sideCollapseBtn" title="收起右侧栏 (快捷键 Cmd+] / Ctrl+])" aria-label="收起右侧栏"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 6v8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
     </div>
-    <div class="tabpane" id="chatPane">
+    <div class="tabpane ai-drawer" id="chatPane">
+      <div class="ai-drawer-head">
+        <b>AI 对话</b>
+        <span class="muted small">写作、修订与任务队列</span>
+        <span class="grow"></span>
+        <button type="button" class="icon-btn" id="aiDrawerClose" aria-label="关闭 AI 对话">✕</button>
+      </div>
       <div class="queue idle" id="queuePanel">
         <div class="queue-head"><span>任务队列</span><span class="queue-summary" id="queueSummary">空闲</span><span class="grow"></span><button id="queueClear" title="停止当前任务并清空排队" hidden>全部停止</button></div>
         <ol id="queueList"></ol>
@@ -380,6 +385,7 @@
       <div class="review-hub-bar" id="reviewHubBar">
         <button type="button" class="ai review-run-btn" id="deepReviewBtn" title="通读全文与表格，自动核查样本量分母、百分比算术、统计方法一致性与结论表述">✦ 全文深度审稿</button>
         <button type="button" class="quiet small-btn review-rules-pill" id="reviewRulesBtn" title="查看或管理已生效的审稿偏好（自动豁免同类误报）">审稿偏好 <span class="rules-count-badge" id="reviewRulesCount">0</span> ▾</button>
+        <button type="button" class="quiet small-btn ai-dock-btn" id="aiDockBtn" title="打开 AI 对话与任务队列">AI 对话 <span class="tab-badge" id="chatBadge" hidden>0</span></button>
       </div>
       <div class="review-rules-drawer" id="reviewRulesDrawer" hidden>
         <div class="review-rules-head">

@@ -803,6 +803,7 @@ async function open(docId: string): Promise<void> {
   patientsUi.leave()
   researchUi.leave()
   close()
+  openAiDrawer(false)
   selectedCommentIds.clear()
   commentNavCursor = -1
   lastReviewSnapshot = loadReviewSnapshot(docId)
@@ -4296,7 +4297,23 @@ function setSideCollapsed(collapsed: boolean): void {
   } catch {}
 }
 
+function openAiDrawer(open: boolean): void {
+  const pane = document.getElementById('chatPane')
+  if (!pane) return
+  pane.classList.toggle('open', open)
+  document.getElementById('aiDockBtn')?.classList.toggle('active', open)
+  if (open) {
+    if ($('app').classList.contains('side-collapsed')) setSideCollapsed(false)
+    setTimeout(() => $('chatInput').focus(), 0)
+  }
+}
+
 function switchTab(id: string): void {
+  if (id === 'chatPane') {
+    openAiDrawer(true)
+    return
+  }
+  openAiDrawer(false)
   document.querySelectorAll<HTMLButtonElement>('.tabs button[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === id))
   document.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('active', p.id === id))
   if ($('app').classList.contains('side-collapsed')) {
@@ -4307,6 +4324,8 @@ document.querySelector<HTMLElement>('.tabs')!.onclick = e => {
   const tab = (e.target as HTMLElement).closest('button')?.dataset.tab
   if (tab) switchTab(tab)
 }
+$('aiDockBtn').onclick = () => openAiDrawer(!$('chatPane').classList.contains('open'))
+$('aiDrawerClose').onclick = () => openAiDrawer(false)
 
 $('exportBtn').onclick = e => {
   e.stopPropagation()
@@ -4478,6 +4497,11 @@ function friendlyError(message: string): string {
   $('scrim').onclick = () => setPanel(null)
 
   document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !document.querySelector('.dialog:not([hidden])') && document.getElementById('chatPane')?.classList.contains('open')) {
+      e.preventDefault()
+      openAiDrawer(false)
+      return
+    }
     if (e.key === 'Escape' && !document.querySelector('.dialog:not([hidden])')) {
       setPanel(null)
     }
