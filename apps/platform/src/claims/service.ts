@@ -647,6 +647,31 @@ export class ClaimService {
   }
 
   /**
+   * 批注锚点只取完整句子，避免把“半句话”挂到正文上：
+   * - sentence 本身就是完整原句时原样返回；
+   * - 结构化核查传入整段时，按 snippet 定位到所在句子；
+   * - 超长且没有句末标点时，按逗号回退，尽量不截断在词中间。
+   */
+  private sentenceForAnchor(text: string, probe: string, maxChars = 300): string {
+    const clean = text.replace(/\s+/g, ' ').trim()
+    if (!clean) return probe.trim()
+    if (clean.length <= maxChars) return clean
+    const needle = probe.replace(/\s+/g, ' ').trim().slice(0, 32)
+    const at = needle ? clean.indexOf(needle) : -1
+    let start = at >= 0 ? at : 0
+    while (start > 0 && !/[。！？；!?;]/.test(clean[start - 1]!)) start--
+    let end = at >= 0 ? at + Math.max(needle.length, 1) : Math.min(clean.length, maxChars)
+    while (end < clean.length && !/[。！？；!?;]/.test(clean[end]!)) end++
+    if (end < clean.length) end++
+    let out = clean.slice(start, end).trim()
+    if (out.length > maxChars) {
+      const comma = out.lastIndexOf('，', maxChars)
+      out = out.slice(0, comma > maxChars * 0.6 ? comma + 1 : maxChars).trim()
+    }
+    return out || clean.slice(0, maxChars)
+  }
+
+  /**
    * 为审稿/核查批注解析最匹配的文档块 ID 与可锚定片段：
    * - 当 LLM Stage 3 给出的 node_id 缺失、为章节标题或文字落在其他段落/表格时，自动按文本重叠度回溯真实块；
    * - 当句子中间夹有引用原子 [@c:...] / 测量原子 [@m:...] 时，自动提取段落内最长连续子串用于精确打标。
@@ -659,7 +684,7 @@ export class ClaimService {
   ): { nodeId: string; snippet: string; anchorSnippet: string } {
     const byId = indexById(doc)
     const cleanSentence = sentence.replace(/\[@[cm]:[^\]]+\]/g, ' ').replace(/\s+/g, ' ').trim()
-    const displaySnippet = (rawSnippet || cleanSentence).trim().slice(0, 80)
+    const displaySnippet = this.sentenceForAnchor(cleanSentence || rawSnippet, rawSnippet || cleanSentence)
 
     let targetId = rawNodeId
     const initialHit = byId.get(targetId)
@@ -720,7 +745,7 @@ export class ClaimService {
       .sort((a, b) => b.length - a.length)
 
     for (const seg of segments) {
-      const sub = seg.slice(0, 60)
+      const sub = this.sentenceForAnchor(seg, seg)
       if (blockText.includes(sub)) {
         return { nodeId: targetId, snippet: displaySnippet || sub, anchorSnippet: sub }
       }
@@ -993,7 +1018,7 @@ export class ClaimService {
               ...(item.subtype ? { subtype: String(item.subtype) } : {}),
               severity,
               sentence: sentence || '全文段落',
-              snippet: sentence.slice(0, 60),
+              snippet: sentence || '全文段落',
               reason: item.reason.trim(),
               suggestion: String(item.suggestion ?? '请核实并修正该处表述或数据。').trim(),
               source_pass: 'llm_stage3',
