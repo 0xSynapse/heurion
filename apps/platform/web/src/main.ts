@@ -24,7 +24,7 @@ import { photoFigure } from './photos.ts'
 import { openPhotoSearch, photoSearchEnabled } from './unsplash.ts'
 import { openHelpGuide, importHelpAsDoc } from './help.ts'
 import { initCopilot, formatMarkdown, bindMarkdownActions } from './copilot.ts'
-import { icon } from './icons.ts'
+import { icon, type IconName } from './icons.ts'
 
 const TOKEN = storedToken()
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
@@ -1027,29 +1027,29 @@ document.addEventListener('click', e => {
 function renderChatQuickChips(ctx: any, meta: any): void {
   const box = document.getElementById('chatQuickChips')
   if (!box) return
-  let chips: Array<{ label: string; prompt: string }> = []
+  let chips: Array<{ icon: IconName; label: string; prompt: string }> = []
   if (meta.kind === 'deck') {
     chips = [
-      { label: '✦ 优化当页排版与要点精炼', prompt: '请精炼当前幻灯片页面的文字要点，使其符合学术答辩汇报规范，并检查版面布局。' },
-      { label: '📊 补充关键结果数据页', prompt: '请根据文稿核心结论在当前页后新增一页结构化结果汇总幻灯片。' },
-      { label: '📚 补充参考文献尾页', prompt: '请整理当前汇报涉及的核心文献，在末尾生成规范的参考文献页。' },
+      { icon: 'sparkles', label: '优化当页排版与要点精炼', prompt: '请精炼当前幻灯片页面的文字要点，使其符合学术答辩汇报规范，并检查版面布局。' },
+      { icon: 'chart', label: '补充关键结果数据页', prompt: '请根据文稿核心结论在当前页后新增一页结构化结果汇总幻灯片。' },
+      { icon: 'book', label: '补充参考文献尾页', prompt: '请整理当前汇报涉及的核心文献，在末尾生成规范的参考文献页。' },
     ]
   } else if (ctx?.kind === 'patient') {
     chips = [
-      { label: '✦ 规范化病例报告润色', prompt: '请按期刊 Case Report 规范润色本文稿的病史、诊治经过与讨论段落（生成待采纳修订）。' },
-      { label: '📏 核对影像病灶测量与 RECIST', prompt: '请核对文稿中的病灶尺寸、长短径及疗效评价是否前后一致。' },
-      { label: '📚 检索同类罕见/靶向病例文献', prompt: '请检索 PubMed 中近 3 年同类靶向治疗或临床表现的权威文献并补充到讨论段。' },
+      { icon: 'sparkles', label: '规范化病例报告润色', prompt: '请按期刊 Case Report 规范润色本文稿的病史、诊治经过与讨论段落（生成待采纳修订）。' },
+      { icon: 'ruler', label: '核对影像病灶测量与 RECIST', prompt: '请核对文稿中的病灶尺寸、长短径及疗效评价是否前后一致。' },
+      { icon: 'book', label: '检索同类罕见/靶向病例文献', prompt: '请检索 PubMed 中近 3 年同类靶向治疗或临床表现的权威文献并补充到讨论段。' },
     ]
   } else {
     chips = [
-      { label: '✦ 学术润色与逻辑强化', prompt: '请对当前文稿进行医学学术润色，提升表述严谨性与可读性（以修订模式生成对比）。' },
-      { label: '📊 核对表文数据与统计指标', prompt: '请逐一核对正文描述的样本量、百分比、P 值与表格数据是否完全自洽。' },
-      { label: '📚 检索 PubMed 补充最新引文', prompt: '请针对引言与讨论中的核心论断，检索近 3 年高影响因子临床文献并在相应位置插入规范引用。' },
-      { label: '🧪 生成或完善 Table 1 三线表', prompt: '请根据文中基线特征描述，整理生成符合顶刊规范的 Table 1 基线特征三线表。' },
+      { icon: 'sparkles', label: '学术润色与逻辑强化', prompt: '请对当前文稿进行医学学术润色，提升表述严谨性与可读性（以修订模式生成对比）。' },
+      { icon: 'chart', label: '核对表文数据与统计指标', prompt: '请逐一核对正文描述的样本量、百分比、P 值与表格数据是否完全自洽。' },
+      { icon: 'search', label: '检索 PubMed 补充最新引文', prompt: '请针对引言与讨论中的核心论断，检索近 3 年高影响因子临床文献并在相应位置插入规范引用。' },
+      { icon: 'grid', label: '生成或完善 Table 1 三线表', prompt: '请根据文中基线特征描述，整理生成符合顶刊规范的 Table 1 基线特征三线表。' },
     ]
   }
-  box.innerHTML = chips
-    .map(c => `<button type="button" class="chat-quick-chip" data-chip-prompt="${esc(c.prompt)}" title="${esc(c.prompt)}">${esc(c.label)}</button>`)
+  box.innerHTML = `<div class="chat-quick-chips-hint">快捷指令 · 点击填入输入框，不会自动发送</div>` + chips
+    .map(c => `<button type="button" class="chat-quick-chip" data-chip-prompt="${esc(c.prompt)}" title="${esc(c.prompt)}">${icon(c.icon, { size: 12 })}<span>${esc(c.label)}</span></button>`)
     .join('')
 }
 
@@ -2942,7 +2942,7 @@ function syncCommentAskButtons(): void {
     }
     btn.disabled = running || queued
     const idleLabel = btn.dataset.defaultLabel || '交给 AI 处理'
-    btn.textContent = running ? '✦ AI 正在修订…' : queued ? '排队中…' : aiCompletedCommentIds.has(cid) ? '再次交给 AI' : idleLabel
+    btn.textContent = running ? 'AI 正在修订…' : queued ? '排队中…' : aiCompletedCommentIds.has(cid) ? '再次交给 AI' : idleLabel
 
     let statusBar = card.querySelector<HTMLElement>('.rv-ai-status-bar')
     if (running || queued || aiCompletedCommentIds.has(cid)) {
@@ -3348,7 +3348,7 @@ async function runDeepReview(): Promise<void> {
     deepReviewAbort = null
     if (btn) {
       btn.disabled = false
-      btn.textContent = '✦ 全文深度审稿'
+      btn.textContent = '全文深度审稿'
     }
   }
 }
@@ -3657,7 +3657,7 @@ function renderComments(): void {
   let openHtml = bulkBar
   if (filteredOpenList.length === 0) {
     openHtml = openList.length === 0
-      ? `<div class="rv-empty-hint muted">${resolvedList.length > 0 ? `当前待处理问题已全部清零（下方已归档 ${resolvedList.length} 项）。` : ''}点击上方 <b>「✦ 全文深度审稿」</b> 一键核查全文数据自洽与统计规范；也可以在正文中选中句子手动添加批注。</div>`
+      ? `<div class="rv-empty-hint muted">${resolvedList.length > 0 ? `当前待处理问题已全部清零（下方已归档 ${resolvedList.length} 项）。` : ''}点击上方 <b>「全文深度审稿」</b> 一键核查全文数据自洽与统计规范；也可以在正文中选中句子手动添加批注。</div>`
       : `<div class="rv-empty-hint muted">当前筛选条件下无待处理项。</div>`
   } else if (reviewSortMode === 'section') {
     const groups = new Map<string, any[]>()
@@ -4117,7 +4117,7 @@ function renderSuggestions(): void {
     return
   }
   const blocks = groups.reduce((n, g) => n + g.inserts + g.deletes, 0)
-  $('suggestSummary').textContent = `✦ 待审阅修订（${groups.length} 处 · 涉及 ${blocks} 块）`
+  $('suggestSummary').textContent = `待审阅修订（${groups.length} 处 · 涉及 ${blocks} 块）`
   const existingBars = document.querySelectorAll<HTMLElement>('#chatLog .chat-turn-review-bar')
   if (existingBars.length > 0) {
     existingBars.forEach(bar => {

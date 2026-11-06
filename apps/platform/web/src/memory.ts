@@ -85,8 +85,8 @@ export function initMemory(api: Api, notice: (msg: string, error?: boolean) => v
     function ruleRow(r: HarnessRule): string {
       const isSystem = r.owner === 'system'
       const statusBadge = r.status === 'pending'
-        ? '<span class="badge">⏳ 观察验证中 (Pending)</span>'
-        : '<span class="badge ok">✅ 已生效</span>'
+        ? '<span class="badge">观察验证中 (Pending)</span>'
+        : '<span class="badge ok">已生效</span>'
       const pendingHint = r.status === 'pending'
         ? ' · 待跨回合验证后生效'
         : ''
