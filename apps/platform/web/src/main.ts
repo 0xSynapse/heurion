@@ -3531,7 +3531,7 @@ function renderCommentCardHtml(c: any): string {
         <div class="rv-action-bar">
           <button type="button" class="ai small-btn" data-act="ask" data-default-label="交给 AI 处理" title="将该审稿意见（及您的批注要求）交给 AI 修改对应段落">交给 AI 处理</button>
           <button type="button" class="quiet small-btn rv-comment-btn" data-act="toggle-reply" title="对该审稿意见添加批注说明、团队讨论或补充改稿要求">批注讨论${extraReplies.length > 0 ? ` (${extraReplies.length})` : ''}</button>
-          <button type="button" class="quiet small-btn" data-act="resolve" title="知晓该提醒，保留正文原写法并归档">知晓保留</button>
+          <button type="button" class="quiet small-btn" data-act="resolve" title="知晓该提醒并关闭批注，保留正文原写法">知晓并关闭</button>
           <button type="button" class="quiet small-btn rv-fp-btn" data-act="toggle-fp" title="标记为误报或专科常规写法，系统会自动提炼规则，后续不再误报">误报 · 以后免报</button>
         </div>
         <div class="rv-reply-drawer" data-reply-drawer ${extraReplies.length > 0 ? '' : 'hidden'}>
@@ -3573,7 +3573,7 @@ function renderCommentCardHtml(c: any): string {
         <span class="rv-cat-tag">批注</span>
         <button type="button" class="rv-sec-badge" data-locate="1" title="点击定位并高亮所属章节与原句">${esc(secLabel)}</button>
         <span class="grow"></span>
-        ${c.status === 'open' ? `<button type="button" class="quiet small-btn" data-act="resolve" title="归档此批注">完成</button>` : `<button type="button" class="quiet small-btn" data-act="reopen">重新打开</button>`}
+        ${c.status === 'open' ? `<button type="button" class="quiet small-btn" data-act="resolve" title="关闭此批注并归档">关闭批注</button>` : `<button type="button" class="quiet small-btn" data-act="reopen">重新打开</button>`}
         <button type="button" class="quiet small-btn" data-act="delete" title="删除批注">✕</button>
       </div>
       <div class="quote" data-locate="1" title="点击定位到正文位置并高亮对应章节">
