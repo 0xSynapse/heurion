@@ -135,7 +135,9 @@ export const DeckOp = z.discriminatedUnion('op', [
   z.object({ op: z.literal('set_z'), shape_id: z.string(), to: z.enum(['front', 'back', 'forward', 'backward']).describe('置顶 / 置底 / 上移一层 / 下移一层') }),
   z.object({
     op: z.literal('apply_theme'),
-    theme: z.string().refine(v => !!DECK_THEMES[v], v => ({ message: `没有模板「${v}」（deck_templates 列出可用模板）` })).describe(BUILTIN_THEME_KEYS.map(k => `${k}：${DECK_THEMES[k]!.label}（${DECK_THEMES[k]!.description}）`).join('；') + '；以及本机构的模板 org_…（deck_templates 列出，只有本机构成员能用）'),
+    theme: z.string().superRefine((v, ctx) => {
+      if (!DECK_THEMES[v]) ctx.addIssue({ code: 'custom', message: `没有模板「${v}」（deck_templates 列出可用模板）` })
+    }).describe(BUILTIN_THEME_KEYS.map(k => `${k}：${DECK_THEMES[k]!.label}（${DECK_THEMES[k]!.description}）`).join('；') + '；以及本机构的模板 org_…（deck_templates 列出，只有本机构成员能用）'),
     slide_ids: z.array(z.string()).optional().describe('只套用到这些页；缺省全部'),
   }).describe('换模板：配色与字体；平台新建的 deck 还会换掉模板装饰（色条、色块等），继承版式位置的占位符挪到新模板的位置'),
   z.object({

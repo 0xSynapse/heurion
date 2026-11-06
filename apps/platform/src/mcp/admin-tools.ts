@@ -84,7 +84,7 @@ export const ADMIN_TOOLS: ToolSpec[] = [
     input: {
       action: z.enum(['view', 'update_settings', 'members', 'set_member', 'remove_member', 'invites', 'invite', 'invite_user', 'revoke_invite', 'audit', 'colleagues', 'studies', 'handover', 'departments', 'create_department', 'rename_department', 'delete_department', 'set_department_members']),
       department_id: z.string().optional(), user_ids: z.array(z.string()).optional(),
-      name: z.string().max(60).optional(), settings: z.record(z.unknown()).optional(),
+      name: z.string().max(60).optional(), settings: z.record(z.string(), z.unknown()).optional(),
       user_id: z.string().optional(), tenant_role: z.enum(['admin', 'member']).optional(), status: z.enum(['active', 'disabled']).optional(),
       username: z.string().max(64).optional(),
       invite_role: z.enum(['admin', 'member']).optional(), email: z.string().max(120).optional(), days: z.number().int().min(1).max(30).optional(), code: z.string().optional(),
@@ -117,7 +117,7 @@ export const ADMIN_TOOLS: ToolSpec[] = [
     input: {
       action: z.enum(['list', 'create', 'update', 'delete', 'set_logo', 'clear_logo']), template_id: z.string().optional(),
       label: z.string().max(40).optional(), org_name: z.string().max(80).optional(), footer: z.string().max(80).optional(), description: z.string().max(200).optional(),
-      base: z.string().optional(), colors: z.record(z.string()).optional(), fonts: z.record(z.string()).optional(), preset: z.enum(['ahslyy']).optional(), file_path: z.string().optional(), reason: reasonField,
+      base: z.string().optional(), colors: z.record(z.string(), z.string()).optional(), fonts: z.record(z.string(), z.string()).optional(), preset: z.enum(['ahslyy']).optional(), file_path: z.string().optional(), reason: reasonField,
     },
     actions: {
       list: { method: 'GET', path: () => '/api/tenant/templates' },
@@ -218,7 +218,7 @@ export const ADMIN_TOOLS: ToolSpec[] = [
   {
     name: 'dataset_manage',
     description: '数据集管理：upload 把工作区文件 file_path 上传为数据集（CSV / Excel / SAS / SPSS / Stata；支持多工作表 Excel 自动识别数据表与数据字典页）；rename(name, labels, value_labels)；select_sheets 切换 Excel 主数据工作表 (sheet) 与数据字典工作表 (dict_sheet) 并重新联动解析；ai_audit 触发 AI 深度核验工作簿与数据字典映射；resolve_phi 处理身份信息列（drop 删除的列、keep 确认不是身份信息的列）；delete 删除数据集（不可恢复，需确认）。看数据用 dataset_list / dataset_describe / dataset_open。',
-    input: { action: z.enum(['upload', 'rename', 'select_sheets', 'ai_audit', 'resolve_phi', 'delete']), dataset_id: z.string().optional(), file_path: z.string().optional(), name: z.string().max(200).optional(), labels: z.record(z.string()).optional(), value_labels: z.record(z.record(z.string())).optional(), sheet: z.string().optional(), dict_sheet: z.string().nullable().optional(), drop: z.array(z.string()).optional(), keep: z.array(z.string()).optional(), reason: reasonField },
+    input: { action: z.enum(['upload', 'rename', 'select_sheets', 'ai_audit', 'resolve_phi', 'delete']), dataset_id: z.string().optional(), file_path: z.string().optional(), name: z.string().max(200).optional(), labels: z.record(z.string(), z.string()).optional(), value_labels: z.record(z.string(), z.record(z.string(), z.string())).optional(), sheet: z.string().optional(), dict_sheet: z.string().nullable().optional(), drop: z.array(z.string()).optional(), keep: z.array(z.string()).optional(), reason: reasonField },
     actions: {
       upload: { method: 'POST', path: () => '/api/datasets', body: (a, file) => ({ form: { ...(a.sheet ? { sheet: String(a.sheet) } : {}), ...(a.dict_sheet ? { dict_sheet: String(a.dict_sheet) } : {}) }, file: file(a.file_path) }) },
       rename: { method: 'PATCH', path: a => `/api/datasets/${enc(a.dataset_id)}`, body: a => ({ json: only(a, ['name', 'labels', 'value_labels']) }) },
