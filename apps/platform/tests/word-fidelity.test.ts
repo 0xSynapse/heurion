@@ -209,7 +209,7 @@ describe('Word 批注：导入为平台评论线程，导出为 Word 线程回�
   })
 
   it('合并段落：被批注的文字原样并入前一段，评论跟着文字走（不用确认丢弃），导出时批注仍在这几个字上（v2 预实验：合并后合作者批注丢失）', () => {
-    const t = importWithComments(docx(p('前一段的内容。') + COMMENTED.replace('<w:p>', '<w:p>') + p('其他段落。'), { rels: COMMENT_RELS, files: { 'word/comments.xml': enc(COMMENTS_XML), 'word/commentsExtended.xml': enc(COMMENTS_EX) } }))
+    const t = importWithComments(docx(p('前一段的内容。') + COMMENTED + p('其他段落。'), { rels: COMMENT_RELS, files: { 'word/comments.xml': enc(COMMENTS_XML), 'word/commentsExtended.xml': enc(COMMENTS_EX) } }))
     const doc = t.docs.get(t.docId)
     const [a, b] = [0, 1].map(i => doc.child(i).attrs.id as string)
     const merged = `前一段的内容。${doc.child(1).textContent}`

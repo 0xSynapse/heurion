@@ -30,7 +30,7 @@ export class FakeOrthanc implements Orthanc {
   accessions = new Map<string, string | null>()
   private uids = new Map<string, string>()
   private oid(uid: string): string {
-    const id = createHash('sha1').update(uid).digest('hex').slice(0, 16)
+    const id = createHash('sha256').update(uid).digest('hex').slice(0, 16)
     this.uids.set(id, uid)
     return id
   }
