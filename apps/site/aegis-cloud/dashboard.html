@@ -876,9 +876,8 @@
     }
     applyLang(currentLang);
 
-    let authKey = hashParams.get('key') || sessionStorage.getItem('aegis_approve_key') || '';
+    let authKey = hashParams.get('key') || '';
     if (hashParams.get('key')) {
-      sessionStorage.setItem('aegis_approve_key', authKey);
       history.replaceState(null, '', location.pathname + location.search);
     }
 

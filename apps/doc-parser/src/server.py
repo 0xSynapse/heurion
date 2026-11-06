@@ -51,9 +51,9 @@ def _warmup() -> None:
         state.warmup_seconds = round(time.monotonic() - t0, 1)
         state.status = "ready"
         log.info("预热完成，用时 %.1fs", state.warmup_seconds)
-    except Exception as err:  # 预热失败：服务保持 not ready，平台走兜底
+    except Exception:  # 预热失败：服务保持 not ready，平台走兜底
         state.status = "error"
-        state.error = str(err)[:500]
+        state.error = "模型初始化失败（详见服务日志）"
         log.exception("预热失败")
 
 

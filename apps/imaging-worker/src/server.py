@@ -1,12 +1,15 @@
 import os
 import re
 import time
+import logging
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Union
+
+logger = logging.getLogger("imaging-worker")
 
 def parse_flexible_float(v: Any, default: Optional[float] = None) -> Optional[float]:
     if v is None or v == "" or str(v).lower() == "none":
@@ -73,16 +76,20 @@ INFERENCE_SEMAPHORE = INFERENCE_GATE.slot(task_cost_gb("default"), "inference")
 
 
 def raise_http(exc: Exception, prefix: str) -> None:
-    """把引擎异常如实映射为 HTTP 状态：缺影像 404、参数/输入问题 400、模型不可用 501，其余 500。"""
+    """把引擎异常映射为 HTTP 状态；对外只返回通用说明，完整异常留在服务日志。"""
     if isinstance(exc, HTTPException):
         raise exc
     if isinstance(exc, FileNotFoundError):
-        raise HTTPException(status_code=404, detail=f"{prefix}: {exc}")
+        logger.warning("%s: %s", prefix, exc)
+        raise HTTPException(status_code=404, detail=f"{prefix}: 文件不存在")
     if isinstance(exc, ValueError):
-        raise HTTPException(status_code=400, detail=f"{prefix}: {exc}")
+        logger.warning("%s: %s", prefix, exc)
+        raise HTTPException(status_code=400, detail=f"{prefix}: 输入参数不合法")
     if isinstance(exc, ModelUnavailableError):
-        raise HTTPException(status_code=501, detail=f"{prefix}: {exc}")
-    raise HTTPException(status_code=500, detail=f"{prefix}: {exc}")
+        logger.warning("%s: %s", prefix, exc)
+        raise HTTPException(status_code=501, detail=f"{prefix}: 模型不可用")
+    logger.exception("%s 内部错误", prefix)
+    raise HTTPException(status_code=500, detail=f"{prefix}: 内部错误")
 
 class BenchmarkRequest(BaseModel):
     model_name: Optional[str] = "lung_nodule_segmenter"

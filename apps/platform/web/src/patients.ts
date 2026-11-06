@@ -965,7 +965,7 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
           <button class="quiet" data-close aria-label="关闭" style="color: #ccc">✕</button>
         </div>
         <div class="dialog-body" style="padding: 16px; display: flex; justify-content: center; align-items: center">
-          <img src="${imgUrl}" style="max-width: 100%; max-height: 80vh; object-fit: contain; border-radius: 4px; box-shadow: 0 8px 32px rgba(0,0,0,0.6)">
+          <img src="${esc(imgUrl)}" style="max-width: 100%; max-height: 80vh; object-fit: contain; border-radius: 4px; box-shadow: 0 8px 32px rgba(0,0,0,0.6)">
         </div>
       </div>`
     dlg.hidden = false
