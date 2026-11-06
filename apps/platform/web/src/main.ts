@@ -806,6 +806,12 @@ async function open(docId: string): Promise<void> {
   openAiDrawer(false)
   selectedCommentIds.clear()
   commentNavCursor = -1
+  pendingAnchor = null
+  anchor = null
+  $('newComment').hidden = true
+  $('newCommentQuote').textContent = ''
+  $<HTMLTextAreaElement>('newCommentText').value = ''
+  $('commentFab').style.display = 'none'
   lastReviewSnapshot = loadReviewSnapshot(docId)
   hideTurnBanner()
   turnUi = null
