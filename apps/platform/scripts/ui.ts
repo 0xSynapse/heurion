@@ -74,12 +74,12 @@ await wait(300)
 ok('点击右侧批注可定位正文并高亮原句', await page.locator('.ProseMirror .comment-focus-target').count() > 0 && await page.locator('.ProseMirror .comment-focus-block').count() > 0)
 // 关闭批注后正文不再显示高亮 / 下划线；重新打开恢复（锚点一直在模型里）
 await page.click('#comments .card.open button[data-act="resolve"]')
-await page.waitForFunction(() => document.querySelectorAll('.ProseMirror mark.comment.comment-resolved').length > 0, null, { timeout: 5000 }).catch(() => {})
-ok('关闭批注后正文高亮与下划线消失', await page.locator('.ProseMirror mark.comment.comment-resolved').count() > 0 && await page.locator('.ProseMirror mark.comment:not(.comment-resolved)').count() === 0)
+await page.waitForFunction(() => document.querySelectorAll('.ProseMirror .comment-resolved').length > 0, null, { timeout: 5000 }).catch(() => {})
+ok('关闭批注后正文高亮与下划线消失', await page.locator('.ProseMirror .comment-resolved').count() > 0 && await page.locator('.ProseMirror mark.comment').first().evaluate(el => getComputedStyle(el).backgroundColor === 'rgba(0, 0, 0, 0)'))
 await page.click('#comments details.rv-resolved-drawer summary')
 await page.click('#comments details.rv-resolved-drawer button[data-act="reopen"]')
-await page.waitForFunction(() => document.querySelectorAll('.ProseMirror mark.comment.comment-resolved').length === 0, null, { timeout: 5000 }).catch(() => {})
-ok('重新打开批注后正文高亮恢复', await page.locator('.ProseMirror mark.comment.comment-resolved').count() === 0)
+await page.waitForFunction(() => document.querySelectorAll('.ProseMirror .comment-resolved').length === 0, null, { timeout: 5000 }).catch(() => {})
+ok('重新打开批注后正文高亮恢复', await page.locator('.ProseMirror .comment-resolved').count() === 0 && await page.locator('.ProseMirror mark.comment').first().evaluate(el => getComputedStyle(el).backgroundColor !== 'rgba(0, 0, 0, 0)'))
 
 // 跨段落选区：只提示，不能评论（与 Claude Docs 一致）
 await page.click('.ProseMirror h1')

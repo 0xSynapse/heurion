@@ -628,29 +628,41 @@ function claimCheckPlugin() {
   })
 }
 
-export const commentStatusKey = new PluginKey<Set<string>>('comment-status')
+export const commentStatusKey = new PluginKey<{ resolved: Set<string>; decos: DecorationSet }>('comment-status')
 
 /**
  * 已关闭批注：锚点保留在正文里（重新打开、归档定位仍可用），但不再显示
- * 高亮 / 下划线。状态来自线程列表，直接给 mark 元素加类，避免改动文档。
+ * 高亮 / 下划线。用行内装饰给锚点文字加类（CSS 用 :has 收掉外层 mark 的底色），
+ * 不改编辑器自己的 DOM，避免批量加类触发 ProseMirror 反复重绘。
  */
 function commentStatusPlugin() {
-  return new Plugin<Set<string>>({
+  const build = (doc: PMNode, resolved: Set<string>) => {
+    if (resolved.size === 0) return DecorationSet.empty
+    const decos: Decoration[] = []
+    doc.descendants((node, pos) => {
+      if (!node.isText) return true
+      if (!node.marks.some(m => m.type.name === 'comment' && resolved.has(m.attrs.thread as string))) return true
+      decos.push(Decoration.inline(pos, pos + node.nodeSize, { class: 'comment-resolved' }))
+      return true
+    })
+    return DecorationSet.create(doc, decos)
+  }
+  return new Plugin<{ resolved: Set<string>; decos: DecorationSet }>({
     key: commentStatusKey,
     state: {
-      init: () => new Set(),
-      apply: (tr, prev) => (tr.getMeta(commentStatusKey) as Set<string> | undefined) ?? prev,
+      init: () => ({ resolved: new Set(), decos: DecorationSet.empty }),
+      apply(tr, prev) {
+        const meta = tr.getMeta(commentStatusKey) as Set<string> | undefined
+        if (meta) {
+          const same = meta.size === prev.resolved.size && [...meta].every(id => prev.resolved.has(id))
+          if (same) return prev
+          return { resolved: meta, decos: build(tr.doc, meta) }
+        }
+        if (tr.docChanged) return { resolved: prev.resolved, decos: build(tr.doc, prev.resolved) }
+        return prev
+      },
     },
-    view: view => {
-      const paint = () => {
-        const resolved = commentStatusKey.getState(view.state) ?? new Set<string>()
-        view.dom.querySelectorAll<HTMLElement>('mark.comment[data-thread]').forEach(mark => {
-          mark.classList.toggle('comment-resolved', resolved.has(mark.dataset.thread ?? ''))
-        })
-      }
-      paint()
-      return { update: paint }
-    },
+    props: { decorations: state => commentStatusKey.getState(state)?.decos ?? DecorationSet.empty },
   })
 }
 
@@ -1013,7 +1025,8 @@ export class Editor {
           return true
         }
         const mark = (event.target as HTMLElement).closest('mark.comment') as HTMLElement | null
-        if (mark?.dataset.thread && !mark.classList.contains('comment-resolved')) opts.onCommentClick(mark.dataset.thread)
+        const resolved = !!mark && (mark.classList.contains('comment-resolved') || !!mark.querySelector('.comment-resolved'))
+        if (mark?.dataset.thread && !resolved) opts.onCommentClick(mark.dataset.thread)
         return false
       },
       // ySyncPlugin 在构造期间就会 dispatch（this.view 尚未赋值）：用 ProseMirror 绑定的 this（即 view）
@@ -1468,7 +1481,10 @@ export class Editor {
 
   /** 已关闭批注：正文锚点保留，但不再显示高亮 / 下划线（重新打开后自动恢复）。 */
   setCommentStatuses(comments: ReadonlyArray<CommentThreadStatus>): void {
-    this.view.dispatch(this.view.state.tr.setMeta(commentStatusKey, resolvedThreadIds(comments)))
+    const next = resolvedThreadIds(comments)
+    const current = commentStatusKey.getState(this.view.state)?.resolved
+    if (current && current.size === next.size && [...next].every(id => current.has(id))) return
+    this.view.dispatch(this.view.state.tr.setMeta(commentStatusKey, next))
   }
 
   destroy(): void {
