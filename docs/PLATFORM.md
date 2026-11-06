@@ -146,6 +146,7 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
   - **无响应超时**：回合连续 5 分钟没有任何动静（dsh 的模型输出、工具调用 / 结果，或本回合的提交）→ 按「停止」同样的方式自动停止，回合记为 `timeout`，页面提示「模型服务 5 分钟无响应，已自动停止」，队列继续。`TURN_IDLE_TIMEOUT_MS` 可调。起因：DeepSeek 接口曾出现请求发出后十余分钟不返回（实测直连 `chat/completions` 同样挂起）。
   - 开发令牌 `<token>:<名字>` 映射到独立的开发用户；e2e 用 `dev:e2e`，不占手工测试用户的队列。
 - AI 回复写入线程（role 固定为 ai）；**本回合改过文档时 `comment_resolve` 被拒绝**（`user_confirms_changes`），只有判断无需修改并说明后 AI 才能关闭线程。
+- 关闭的线程保留锚点（重新打开、归档定位仍可用），但正文不再显示高亮与下划线，关联的论断核查也不再划线；doc 与 deck 同一规则。
 - 导出 docx 时 open 线程写为 `comments.xml`（Word 用户可见）。
 
 ### 5.5 引用规范

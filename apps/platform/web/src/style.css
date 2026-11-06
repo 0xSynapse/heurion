@@ -421,6 +421,8 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .ProseMirror figure.ProseMirror-selectednode { outline: 2px solid var(--green); }
 .ProseMirror .opaque { border: 1px dashed var(--line-strong); color: var(--muted); padding: 8px 12px; font-size: 13px; margin: 8px 0; }
 .ProseMirror mark.comment { background: var(--paper-comment); color: inherit; border-bottom: 2px solid #f5a524; cursor: pointer; }
+/* 已关闭批注：锚点保留（归档定位 / 重新打开），但不再显示高亮与下划线 */
+.ProseMirror mark.comment.comment-resolved { background: transparent; border-bottom: 0; cursor: text; }
 .ProseMirror sup.cite { color: var(--sky-ink); font-weight: 600; }
 /* 测量原子 [@m:id]：数值来自绑定的病灶测量（虚线底边 = 不是手写的数字）；悬停看来源与状态 */
 .measure { border-bottom: 1px dashed var(--sky-ink); cursor: help; white-space: nowrap; user-select: all; }
@@ -1483,6 +1485,8 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .shape[data-suggest="delete"] { background: #fee2e2; text-decoration: line-through; opacity: .7; }
 .shape[data-suggest="insert"] { background: #dcfce7; outline: 2px solid #15803d; }
 .shape mark.comment { background: rgba(245, 158, 11, .26); border-bottom: 2px solid #f59e0b; color: inherit; }
+/* 已关闭批注：锚点保留，但不再显示高亮与下划线 */
+.shape mark.comment.comment-resolved { background: transparent; border-bottom: 0; cursor: inherit; }
 .slide-notes { display: flex; gap: 10px; font-size: 12.5px; color: var(--text-2); margin-top: 0; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-top: 0; }
 .notes-label { color: var(--muted); flex: none; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; }
 .notes-text { flex: 1; white-space: pre-wrap; min-height: 1.4em; cursor: text; }
@@ -8534,6 +8538,7 @@ a.auth-home-btn:hover {
   border-radius: 0 4px 4px 0;
   box-shadow: 0 0 0 1px rgba(10, 125, 82, 0.22);
 }
+#page .comment-focus-target,
 #page mark.comment.comment-focus-target,
 #page .claim-warn-text.comment-focus-target {
   background: rgba(10, 125, 82, 0.24) !important;

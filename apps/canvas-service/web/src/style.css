@@ -246,6 +246,8 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .ProseMirror figure.ProseMirror-selectednode { outline: 2px solid var(--green); }
 .ProseMirror .opaque { border: 1px dashed var(--line-strong); color: var(--muted); padding: 8px 12px; font-size: 13px; margin: 8px 0; }
 .ProseMirror mark.comment { background: var(--paper-comment); color: inherit; border-bottom: 2px solid #f5a524; cursor: pointer; }
+/* 已关闭批注：锚点保留（归档定位 / 重新打开），但不再显示高亮与下划线 */
+.ProseMirror mark.comment.comment-resolved { background: transparent; border-bottom: 0; cursor: text; }
 .ProseMirror sup.cite { color: var(--sky-ink); font-weight: 600; }
 .ProseMirror .style-Quote { border-left: 3px solid var(--line-strong); padding-left: 12px; color: var(--muted); }
 .ProseMirror .style-Code { font-family: var(--mono); background: var(--raised); padding: 8px 10px; font-size: 13px; }
@@ -575,6 +577,8 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .shape[data-suggest="delete"] { background: #fee2e2; text-decoration: line-through; opacity: .7; }
 .shape[data-suggest="insert"] { background: #dcfce7; outline: 2px solid #15803d; }
 .shape mark.comment { background: rgba(245, 158, 11, .26); border-bottom: 2px solid #f59e0b; color: inherit; }
+/* 已关闭批注：锚点保留，但不再显示高亮与下划线 */
+.shape mark.comment.comment-resolved { background: transparent; border-bottom: 0; cursor: inherit; }
 .slide-notes { display: flex; gap: 10px; font-size: 12.5px; color: var(--text-2); margin-top: 0; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-top: 0; }
 .notes-label { color: var(--muted); flex: none; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; }
 .notes-text { flex: 1; white-space: pre-wrap; min-height: 1.4em; cursor: text; }

@@ -1694,7 +1694,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     // ph_styles：各版式占位符继承的文字样式（画布显示导入的占位符用）
     const ph_styles = Object.fromEntries(info.layouts.map(l => [l.part, l.placeholders.map(p => ({ type: p.type, idx: p.idx, style: p.style ?? {} }))]))
     const render_info = await deps.renderer.diagnose()
-    return c.json({ rev: docs.rev(row.id), size: info.size, layouts: info.layouts.map(l => l.name), ph_styles, doc: docs.get(row.id).toJSON(), measurements: [...measureViews(c, row).values()], render_info })
+    return c.json({ rev: docs.rev(row.id), size: info.size, layouts: info.layouts.map(l => l.name), ph_styles, doc: docs.get(row.id).toJSON(), measurements: [...measureViews(c, row).values()], comments: store.listComments(row.id).map(x => ({ id: x.id, status: x.status })), render_info })
   })
 
 

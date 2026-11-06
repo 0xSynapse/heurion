@@ -8,6 +8,7 @@ import { liftListItem, sinkListItem, splitListItem, wrapInList } from 'prosemirr
 import { EditorState, Plugin, PluginKey, TextSelection, type Command } from 'prosemirror-state'
 import { addColumnAfter, addColumnBefore, addRowAfter, addRowBefore, CellSelection, deleteColumn, deleteRow, findTable, goToNextCell, isInTable, mergeCells, setCellAttr, splitCell, tableEditing } from 'prosemirror-tables'
 import { Decoration, DecorationSet, EditorView, type NodeView } from 'prosemirror-view'
+import { resolvedThreadIds, type CommentThreadStatus } from './comments.ts'
 import { askText } from './dialogs.ts'
 import { redo, undo, ySyncPlugin, ySyncPluginKey, yUndoPlugin } from 'y-prosemirror'
 import type * as Y from 'yjs'
@@ -627,6 +628,161 @@ function claimCheckPlugin() {
   })
 }
 
+export const commentStatusKey = new PluginKey<Set<string>>('comment-status')
+
+/**
+ * 已关闭批注：锚点保留在正文里（重新打开、归档定位仍可用），但不再显示
+ * 高亮 / 下划线。状态来自线程列表，直接给 mark 元素加类，避免改动文档。
+ */
+function commentStatusPlugin() {
+  return new Plugin<Set<string>>({
+    key: commentStatusKey,
+    state: {
+      init: () => new Set(),
+      apply: (tr, prev) => (tr.getMeta(commentStatusKey) as Set<string> | undefined) ?? prev,
+    },
+    view: view => {
+      const paint = () => {
+        const resolved = commentStatusKey.getState(view.state) ?? new Set<string>()
+        view.dom.querySelectorAll<HTMLElement>('mark.comment[data-thread]').forEach(mark => {
+          mark.classList.toggle('comment-resolved', resolved.has(mark.dataset.thread ?? ''))
+        })
+      }
+      paint()
+      return { update: paint }
+    },
+  })
+}
+
+/** 批注定位高亮（原句 / 所在块 / 所属章节）用装饰实现，避免被编辑器自身的 DOM 重绘抹掉。 */
+const commentFocusKey = new PluginKey<DecorationSet>('comment-focus')
+
+function commentFocusPlugin() {
+  return new Plugin<DecorationSet>({
+    key: commentFocusKey,
+    state: {
+      init: () => DecorationSet.empty,
+      apply(tr, set) {
+        const meta = tr.getMeta(commentFocusKey) as DecorationSet | 'clear' | undefined
+        if (meta === 'clear') return DecorationSet.empty
+        if (meta) return meta
+        return set.map(tr.mapping, tr.doc)
+      },
+    },
+    props: { decorations: state => commentFocusKey.getState(state) ?? DecorationSet.empty },
+  })
+}
+
+interface CommentFocusOptions {
+  commentId: string
+  claimId?: string
+  nodeId?: string
+  nodeIds?: string[]
+  sectionNodeId?: string
+  snippet?: string
+}
+
+function textblockAt(doc: PMNode, pos: number): { node: PMNode; start: number } | null {
+  const $pos = doc.resolve(Math.max(0, Math.min(pos, doc.content.size)))
+  for (let d = $pos.depth; d > 0; d--) {
+    if ($pos.node(d).isTextblock) return { node: $pos.node(d), start: $pos.before(d) }
+  }
+  return null
+}
+
+/** 按正文位置生成批注定位装饰：原句、所在块、所属章节。 */
+function buildCommentFocusDecos(doc: PMNode, opts: CommentFocusOptions): { decos: DecorationSet; targetFrom: number; sectionTitle?: string } | null {
+  const decos: Decoration[] = []
+  const ranges: Array<{ from: number; to: number }> = []
+  let targetFrom = -1
+  const focus: { block: { node: PMNode; start: number } | null } = { block: null }
+
+  doc.descendants((node, pos) => {
+    if (!node.isText) return true
+    if (!node.marks.some(m => m.type.name === 'comment' && m.attrs.thread === opts.commentId)) return true
+    ranges.push({ from: pos, to: pos + node.nodeSize })
+    if (targetFrom < 0) {
+      targetFrom = pos
+      focus.block = textblockAt(doc, pos)
+    }
+    return true
+  })
+
+  // 没有锚点标记（如只存在于论断核查里的记录）：按块 id 定位
+  if (targetFrom < 0) {
+    const ids = [...(opts.nodeIds ?? []), ...(opts.nodeId ? [opts.nodeId] : [])].filter(Boolean)
+    if (ids.length > 0) {
+      doc.descendants((node, pos) => {
+        if (targetFrom >= 0) return false
+        if (node.attrs?.id && ids.includes(node.attrs.id as string)) {
+          targetFrom = pos
+          focus.block = node.isTextblock ? { node, start: pos } : (textblockAt(doc, pos + 1) ?? (node.isBlock ? { node, start: pos } : null))
+          return false
+        }
+        return true
+      })
+    }
+  }
+
+  // 最后按锚定文字定位（引用 / 测量原子等不计入 textContent 的部分已先清理）
+  if (targetFrom < 0 && opts.snippet) {
+    const clean = opts.snippet.replace(/^\[表格\]\s*/, '').replace(/\[@[cm]:[^\]]+\]/g, '').trim()
+    const probes = [clean.slice(0, 28), ...clean.split(/[，。；：,;（）()[\]\s]+/).filter(s => s.length >= 5)].filter(Boolean)
+    doc.descendants((node, pos) => {
+      if (targetFrom >= 0 || !node.isTextblock) return true
+      const text = node.textContent
+      for (const probe of probes) {
+        const idx = text.indexOf(probe)
+        if (idx < 0) continue
+        const from = charOffsetToPos(node, pos, idx)
+        const to = charOffsetToPos(node, pos, idx + probe.length)
+        ranges.push({ from, to })
+        targetFrom = from
+        focus.block = { node, start: pos }
+        return false
+      }
+      return true
+    })
+  }
+
+  if (targetFrom < 0 || !focus.block) return null
+  const targetBlock = focus.block
+  for (const range of ranges) {
+    if (range.to > range.from) decos.push(Decoration.inline(range.from, range.to, { class: 'comment-focus-target' }))
+  }
+  decos.push(Decoration.node(targetBlock.start, targetBlock.start + targetBlock.node.nodeSize, { class: 'comment-focus-block' }))
+
+  // 所属章节：优先用调用方给的标题块 id，否则向前找最近的标题
+  const tops: Array<{ node: PMNode; pos: number }> = []
+  doc.forEach((node, offset) => { tops.push({ node, pos: offset }) })
+  const topIndex = tops.findIndex(t => targetBlock.start >= t.pos && targetBlock.start < t.pos + t.node.nodeSize)
+  let headingIndex = opts.sectionNodeId
+    ? tops.findIndex(t => t.node.type.name === 'heading' && t.node.attrs?.id === opts.sectionNodeId)
+    : -1
+  if (headingIndex < 0 && topIndex >= 0) {
+    for (let i = topIndex; i >= 0; i--) {
+      if (tops[i]!.node.type.name === 'heading') { headingIndex = i; break }
+    }
+  }
+  let sectionTitle: string | undefined
+  if (headingIndex >= 0) {
+    const heading = tops[headingIndex]!
+    sectionTitle = heading.node.textContent.trim() || undefined
+    decos.push(Decoration.node(heading.pos, heading.pos + heading.node.nodeSize, {
+      class: 'section-focus-heading',
+      'data-sec-focus-label': '当前批注所在章节',
+    }))
+    const level = Number(heading.node.attrs.level) || 1
+    for (let i = headingIndex + 1; i < tops.length; i++) {
+      const top = tops[i]!
+      if (top.node.type.name === 'heading' && (Number(top.node.attrs.level) || 1) <= level) break
+      decos.push(Decoration.node(top.pos, top.pos + top.node.nodeSize, { class: 'section-focus-block' }))
+    }
+  }
+
+  return { decos: DecorationSet.create(doc, decos), targetFrom, sectionTitle }
+}
+
 /** 改块类型时保留 id 等属性（setBlockType 会丢掉）。 */
 function setBlock(type: NodeType, level?: number): Command {
   return (state, dispatch) => {
@@ -770,6 +926,8 @@ export class Editor {
         flashPlugin,
         suggestionDiffPlugin(opts.onSuggestion),
         claimCheckPlugin(),
+        commentStatusPlugin(),
+        commentFocusPlugin(),
       ],
     })
     const editor = this
@@ -855,7 +1013,7 @@ export class Editor {
           return true
         }
         const mark = (event.target as HTMLElement).closest('mark.comment') as HTMLElement | null
-        if (mark?.dataset.thread) opts.onCommentClick(mark.dataset.thread)
+        if (mark?.dataset.thread && !mark.classList.contains('comment-resolved')) opts.onCommentClick(mark.dataset.thread)
         return false
       },
       // ySyncPlugin 在构造期间就会 dispatch（this.view 尚未赋值）：用 ProseMirror 绑定的 this（即 view）
@@ -1086,124 +1244,39 @@ export class Editor {
    * 定位批注/审稿意见所在的原句或表格，并同时高亮其所属的章节（heading + 章节段落范围），
    * 帮助用户在长文稿中立即看清该批注落在哪一章节与哪一段落。
    */
-  locateAndHighlightComment(opts: {
-    commentId: string
-    claimId?: string
-    nodeId?: string
-    nodeIds?: string[]
-    sectionNodeId?: string
-    snippet?: string
-  }): { found: boolean; sectionTitle?: string } {
+  locateAndHighlightComment(opts: CommentFocusOptions): { found: boolean; sectionTitle?: string } {
     const root = this.view.dom
     if (this.focusCleanupTimer) {
       clearTimeout(this.focusCleanupTimer)
       this.focusCleanupTimer = null
     }
+    // 兼容旧的目录 / 引用定位：清掉它们手写在 DOM 上的高亮
     root.querySelectorAll('.comment-focus-target, .comment-focus-block, .section-focus-heading, .section-focus-block').forEach(el => {
       el.classList.remove('comment-focus-target', 'comment-focus-block', 'section-focus-heading', 'section-focus-block')
       if (el instanceof HTMLElement) delete el.dataset.secFocusLabel
     })
 
-    const cid = opts.commentId
-    const claimId = opts.claimId || cid
-    let targetEl: HTMLElement | null =
-      root.querySelector<HTMLElement>(`mark.comment[data-thread="${CSS.escape(cid)}"]`) ??
-      root.querySelector<HTMLElement>(`.claim-warn-text[data-claim-id="${CSS.escape(claimId)}"]`) ??
-      root.querySelector<HTMLElement>(`.claim-warn-text[data-claim-id="${CSS.escape(cid)}"]`) ??
-      root.querySelector<HTMLElement>(`.claim-warn-block[data-claim-id="${CSS.escape(claimId)}"]`) ??
-      root.querySelector<HTMLElement>(`.claim-warn-block[data-claim-id="${CSS.escape(cid)}"]`)
-
-    const candidateNodeIds = [...(opts.nodeIds ?? []), ...(opts.nodeId ? [opts.nodeId] : [])].filter(Boolean)
-    if (!targetEl) {
-      for (const nid of candidateNodeIds) {
-        const byNode = root.querySelector<HTMLElement>(`[data-id="${CSS.escape(nid)}"]`)
-        if (byNode) {
-          targetEl = byNode
-          break
-        }
-      }
+    const built = buildCommentFocusDecos(this.view.state.doc, opts)
+    if (!built) {
+      this.view.dispatch(this.view.state.tr.setMeta(commentFocusKey, 'clear'))
+      return { found: false }
     }
+    this.view.dispatch(this.view.state.tr.setMeta(commentFocusKey, built.decos))
 
-    if (!targetEl && opts.snippet) {
-      const cleanProbe = opts.snippet
-        .replace(/^\[表格\]\s*/, '')
-        .replace(/\[@[cm]:[^\]]+\]/g, '')
-        .trim()
-      const probes = [
-        cleanProbe.slice(0, 28),
-        ...cleanProbe.split(/[，。；：,;（）()[\]\s]+/).filter(s => s.length >= 5),
-      ].filter(Boolean)
-      const blocks = Array.from(root.querySelectorAll<HTMLElement>('p, table, li, h1, h2, h3, h4, figure'))
-      for (const p of probes) {
-        const hit = blocks.find(b => (b.textContent ?? '').includes(p))
-        if (hit) {
-          targetEl = hit
-          break
-        }
-      }
-    }
-
-    if (!targetEl) return { found: false }
-
-    const blockEl = (targetEl.closest('p, table, li, figure, h1, h2, h3, h4') as HTMLElement | null) ?? targetEl
-    targetEl.classList.add('comment-focus-target')
-    if (blockEl !== targetEl) {
-      blockEl.classList.add('comment-focus-block')
-    } else {
-      blockEl.classList.add('comment-focus-block')
-    }
-
-    // 查找所属顶层块并解析所属章节（heading + 该章节下的连续块）
-    let topBlock: HTMLElement | null = blockEl
-    while (topBlock && topBlock.parentElement && topBlock.parentElement !== root) {
-      topBlock = topBlock.parentElement
-    }
-
-    const isHeading = (el: Element) => /^H[1-6]$/.test(el.tagName)
-    const headingLevel = (el: Element) => Number(el.tagName.slice(1)) || 6
-
-    let sectionHeading: HTMLElement | null = null
-    if (opts.sectionNodeId) {
-      sectionHeading = root.querySelector<HTMLElement>(`[data-id="${CSS.escape(opts.sectionNodeId)}"]`)
-    }
-    if (!sectionHeading && topBlock) {
-      let cur: Element | null = topBlock
-      while (cur) {
-        if (isHeading(cur) && (cur.textContent ?? '').trim()) {
-          sectionHeading = cur as HTMLElement
-          break
-        }
-        cur = cur.previousElementSibling
-      }
-    }
-
-    let sectionTitle: string | undefined
-    if (sectionHeading) {
-      sectionTitle = (sectionHeading.textContent ?? '').trim()
-      sectionHeading.classList.add('section-focus-heading')
-      sectionHeading.dataset.secFocusLabel = '当前批注所在章节'
-      const baseLevel = headingLevel(sectionHeading)
-      let cursor: Element | null = sectionHeading.nextElementSibling
-      let count = 0
-      while (cursor && count < 40) {
-        if (isHeading(cursor) && headingLevel(cursor) <= baseLevel) break
-        cursor.classList.add('section-focus-block')
-        cursor = cursor.nextElementSibling
-        count++
-      }
-    }
-
-    targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const threadMark = root.querySelector<HTMLElement>(`mark.comment[data-thread="${CSS.escape(opts.commentId)}"]`)
+    const nodeId = opts.nodeId ?? opts.nodeIds?.[0]
+    const byNode = nodeId ? root.querySelector<HTMLElement>(`[data-id="${CSS.escape(nodeId)}"]`) : null
+    const domAt = this.view.domAtPos(Math.min(built.targetFrom + 1, this.view.state.doc.content.size)).node
+    const domEl = domAt.nodeType === 3 ? domAt.parentElement : (domAt as HTMLElement)
+    const targetEl = threadMark ?? byNode ?? domEl?.closest<HTMLElement>('p, table, li, figure, h1, h2, h3, h4') ?? domEl
+    targetEl?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 
     this.focusCleanupTimer = setTimeout(() => {
-      root.querySelectorAll('.comment-focus-target, .comment-focus-block, .section-focus-heading, .section-focus-block').forEach(el => {
-        el.classList.remove('comment-focus-target', 'comment-focus-block', 'section-focus-heading', 'section-focus-block')
-        if (el instanceof HTMLElement) delete el.dataset.secFocusLabel
-      })
+      this.view.dispatch(this.view.state.tr.setMeta(commentFocusKey, 'clear'))
       this.focusCleanupTimer = null
     }, 4500)
 
-    return { found: true, sectionTitle }
+    return { found: true, sectionTitle: built.sectionTitle }
   }
 
   private docChangeTimer: ReturnType<typeof setTimeout> | null = null
@@ -1306,6 +1379,7 @@ export class Editor {
       clearTimeout(this.focusCleanupTimer)
       this.focusCleanupTimer = null
     }
+    this.view.dispatch(this.view.state.tr.setMeta(commentFocusKey, 'clear'))
     root.querySelectorAll('.comment-focus-target, .comment-focus-block, .section-focus-heading, .section-focus-block').forEach(el => {
       el.classList.remove('comment-focus-target', 'comment-focus-block', 'section-focus-heading', 'section-focus-block')
       if (el instanceof HTMLElement) delete el.dataset.secFocusLabel
@@ -1359,6 +1433,7 @@ export class Editor {
     const root = this.view.dom
     const sups = Array.from(root.querySelectorAll<HTMLElement>(`sup.cite[data-cite="${CSS.escape(citeId)}"]`))
     if (sups.length === 0) return false
+    this.view.dispatch(this.view.state.tr.setMeta(commentFocusKey, 'clear'))
     const prev = this.citeLocateCursor.get(citeId) ?? -1
     const idx = (prev + 1) % sups.length
     this.citeLocateCursor.set(citeId, idx)
@@ -1389,6 +1464,11 @@ export class Editor {
 
   setClaimChecks(checks: ClaimCheckItem[]): void {
     this.view.dispatch(this.view.state.tr.setMeta(claimPluginKey, checks))
+  }
+
+  /** 已关闭批注：正文锚点保留，但不再显示高亮 / 下划线（重新打开后自动恢复）。 */
+  setCommentStatuses(comments: ReadonlyArray<CommentThreadStatus>): void {
+    this.view.dispatch(this.view.state.tr.setMeta(commentStatusKey, resolvedThreadIds(comments)))
   }
 
   destroy(): void {

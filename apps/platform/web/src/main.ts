@@ -1316,6 +1316,11 @@ async function refresh(full: boolean): Promise<void> {
   if (session?.editor && Array.isArray(d.measurements)) {
     session.editor.setMeasurements(d.measurements)
   }
+  // 已关闭批注：锚点保留在正文里，但不再显示高亮 / 下划线
+  if (Array.isArray(d.comments)) {
+    if (session?.editor) session.editor.setCommentStatuses(d.comments)
+    if (session?.deck) session.deck.setCommentStatuses(d.comments)
+  }
   renderComments()
   renderSuggestions()
   renderVersions()
@@ -3652,7 +3657,10 @@ function renderComments(): void {
 
 function syncManuscriptReviewHighlights(openList: any[]): void {
   if (!session?.editor) return
-  const baseChecks: any[] = Array.isArray(detail?.claim_checks) ? detail.claim_checks : []
+  const openIds = new Set(openList.map(c => c.id))
+  // 已关闭（或已删除）批注对应的论断核查记录不再在正文里划线；重新打开后恢复
+  const baseChecks: any[] = (Array.isArray(detail?.claim_checks) ? detail.claim_checks : [])
+    .filter((chk: any) => !chk.comment_id || openIds.has(chk.comment_id))
   const existingCommentIds = new Set(baseChecks.map(chk => chk.comment_id).filter(Boolean))
   const reviewChecks: Array<{ claim_id: string; node_id: string; sentence: string; verdict: string; reason: string; severity?: string }> = []
   const sevByClaimId = new Map<string, 'critical' | 'major' | 'minor'>()
@@ -3709,16 +3717,16 @@ function locateCommentInDoc(cid: string): void {
   card?.classList.add('card-active-focus')
 
   const c = (detail?.comments ?? []).find((x: any) => x.id === cid)
-  const check = (detail?.claim_checks ?? []).find((x: any) => x.comment_id === cid)
+  const check = (detail?.claim_checks ?? []).find((x: any) => x.comment_id === cid || x.claim_id === cid)
 
   if (session?.editor) {
     const res = session.editor.locateAndHighlightComment({
       commentId: cid,
       claimId: check?.claim_id,
-      nodeId: c?.node_id,
-      nodeIds: c?.anchor?.node_ids,
+      nodeId: c?.node_id ?? check?.node_id,
+      nodeIds: c?.anchor?.node_ids ?? (check?.node_id ? [check.node_id] : undefined),
       sectionNodeId: c?.anchor?.section_node_id,
-      snippet: c?.anchor?.text || c?.snippet,
+      snippet: c?.anchor?.text || c?.snippet || check?.sentence,
     })
     if (res.sectionTitle && card) {
       const secBtn = card.querySelector<HTMLElement>('.rv-sec-badge')
@@ -3732,6 +3740,7 @@ function locateCommentInDoc(cid: string): void {
   // Deck 幻灯片模式定位回退
   const target = document.querySelector<HTMLElement>(`[data-comment~="${CSS.escape(cid)}"]`)
     ?? (c?.node_id ? document.querySelector<HTMLElement>(`[data-id="${CSS.escape(c.node_id)}"]`) : null)
+    ?? (check?.node_id ? document.querySelector<HTMLElement>(`[data-id="${CSS.escape(check.node_id)}"]`) : null)
   target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   target?.classList.add('ai-flash')
   setTimeout(() => target?.classList.remove('ai-flash'), 1600)

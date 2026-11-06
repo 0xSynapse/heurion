@@ -1,4 +1,5 @@
 export * from './chart-dialog.ts'
+export * from './comments.ts'
 export * from './deck.ts'
 export * from './dialogs.ts'
 export * from './editor.ts'

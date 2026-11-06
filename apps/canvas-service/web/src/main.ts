@@ -247,6 +247,7 @@ async function openDoc(docId: string) {
     })
     activeSession.deck = deck
     await deck.load()
+    deck.setCommentStatuses(meta.comments ?? [])
     setSyncStatus('synced')
   } else {
     setSyncStatus('connecting')
@@ -265,6 +266,7 @@ async function openDoc(docId: string) {
     })
 
     activeSession = { ydoc, provider, editor }
+    editor.setCommentStatuses(meta.comments ?? [])
   }
 
   // 高亮左侧文档项

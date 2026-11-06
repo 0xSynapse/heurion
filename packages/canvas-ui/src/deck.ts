@@ -9,6 +9,7 @@
 
 import { icon } from '../../../apps/platform/web/src/icons.ts'
 import { measureExportText, type MeasureView } from '../../../apps/platform/src/model/measurements.ts'
+import { resolvedThreadIds, type CommentThreadStatus } from './comments.ts'
 
 interface PMJson { type: string; attrs?: Record<string, any>; content?: PMJson[]; text?: string; marks?: Array<{ type: string; attrs?: Record<string, any> }> }
 
@@ -60,6 +61,8 @@ export class DeckView {
     doc: PMJson
     /** 测量原子按当前用户权限取到的显示值（GET /api/docs/:id/deck） */
     measurements?: MeasureView[]
+    /** 批注线程状态：已关闭的锚点不再显示高亮 / 下划线（GET /api/docs/:id/deck） */
+    comments?: CommentThreadStatus[]
     ph_styles?: Record<string, Array<{ type: string; idx: string | null; style: PhStyle }>>
     render_info?: {
       available: boolean
@@ -72,6 +75,8 @@ export class DeckView {
   } | null = null
   /** 正在渲染的形状继承的占位符样式（导入的占位符才有）。 */
   private phStyle: PhStyle | null = null
+  /** 已关闭批注线程：锚点保留，但不再显示高亮 / 下划线。 */
+  private resolvedThreads = new Set<string>()
   private precise = new Set<number>()
   private numbers = new Map<string, number>()
   /** 渲染中当前形状的段落计数（与服务端 attachComment 的段落序号一致：形状内文本块的文档顺序）。 */
@@ -111,7 +116,7 @@ export class DeckView {
     mount.addEventListener('click', e => {
       const t = e.target as HTMLElement
       const mark = t.closest('mark.comment') as HTMLElement | null
-      if (mark?.dataset.thread) opts.onCommentClick(mark.dataset.thread)
+      if (mark?.dataset.thread && !mark.classList.contains('comment-resolved')) opts.onCommentClick(mark.dataset.thread)
 
       const copyBtn = t.closest('[data-copy-cmd]') as HTMLElement | null
       if (copyBtn) {
@@ -148,6 +153,15 @@ export class DeckView {
   async load(): Promise<void> {
     const res = await fetch(`/api/docs/${this.opts.docId}/deck`, { headers: { Authorization: `Bearer ${this.opts.token}` } })
     this.data = await res.json()
+    this.resolvedThreads = resolvedThreadIds(this.data?.comments)
+    this.render()
+  }
+
+  /** 已关闭批注：正文锚点保留，但不再显示高亮 / 下划线（重新打开后自动恢复）。 */
+  setCommentStatuses(comments: ReadonlyArray<CommentThreadStatus>): void {
+    const next = resolvedThreadIds(comments)
+    if (next.size === this.resolvedThreads.size && [...next].every(id => this.resolvedThreads.has(id))) return
+    this.resolvedThreads = next
     this.render()
   }
 
@@ -680,7 +694,10 @@ export class DeckView {
         if (m.type === 'underline') html = `<u>${html}</u>`
         if (m.type === 'sup') html = `<sup>${html}</sup>`
         if (m.type === 'sub') html = `<sub>${html}</sub>`
-        if (m.type === 'comment') html = `<mark class="comment" data-thread="${esc(m.attrs?.thread)}">${html}</mark>`
+        if (m.type === 'comment') {
+          const resolved = this.resolvedThreads.has(String(m.attrs?.thread ?? ''))
+          html = `<mark class="comment${resolved ? ' comment-resolved' : ''}" data-thread="${esc(m.attrs?.thread)}">${html}</mark>`
+        }
       }
       const styles = [
         color ? `color:#${color}` : '',
