@@ -1,5 +1,5 @@
-import { randomBytes } from 'node:crypto'
 import type { TenantService } from '../auth/tenants.ts'
+import { secureRandomInt } from '../auth/random.ts'
 import type { PhrClaimRow, PersonLinkRow, Store } from '../store/db.ts'
 import { PatientError, type Actor, type PatientService } from './patients.ts'
 
@@ -16,11 +16,9 @@ import { PatientError, type Actor, type PatientService } from './patients.ts'
 const CODE_CHARS = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
 
 function generateCode(): string {
-  const bytes = randomBytes(8)
   let code = ''
   for (let i = 0; i < 8; i++) {
-    const byte = bytes[i] ?? 0
-    code += CODE_CHARS[byte % CODE_CHARS.length]
+    code += CODE_CHARS[secureRandomInt(CODE_CHARS.length)]
     if (i === 3) code += '-' // 形式如: 9ABC-2DEF
   }
   return code

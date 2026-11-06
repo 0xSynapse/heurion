@@ -2756,15 +2756,13 @@ $<HTMLTextAreaElement>('chatInput').addEventListener('paste', async e => {
   if (files.length === 0) {
     const html = cd.getData('text/html')
     if (html) {
-      const match = /<img[^>]+src=["'](data:image\/([a-zA-Z0-9+]+);base64,([^"']+))["']/i.exec(html)
-      const dataUrl = match?.[1]
-      if (dataUrl) {
+      const match = /<img[^>]+src=["'](data:image\/([a-zA-Z0-9+.-]+);base64,([^"']+))["']/i.exec(html)
+      if (match?.[3]) {
         try {
-          const res = await fetch(dataUrl)
-          const blob = await res.blob()
-          if (blob.size > 0) {
-            files.push(new File([blob], 'pasted-image.' + (match[2] || 'png'), { type: blob.type || 'image/png' }))
-          }
+          const subtype = (match[2] || 'png').toLowerCase().replace(/[^a-z0-9+.-]/g, '') || 'png'
+          const binary = atob(match[3].replace(/\s+/g, ''))
+          const bytes = Uint8Array.from(binary, ch => ch.charCodeAt(0))
+          files.push(new File([bytes], `pasted-image.${subtype}`, { type: `image/${subtype}` }))
         } catch { /* 忽略 */ }
       }
     }

@@ -16,6 +16,9 @@ name: Deploy Staging
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-staging
   cancel-in-progress: false
@@ -164,6 +167,7 @@ jobs:
           cache-to: type=registry,ref=${{ env.VIEWER_IMAGE }}:buildcache,mode=max
 
   deploy:
+    permissions: { contents: read, packages: read }
     name: 部署到预发
     if: github.repository_id == '1301746811'
     needs: [images, viewer]

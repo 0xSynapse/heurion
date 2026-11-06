@@ -1,4 +1,5 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, KeyObject, randomBytes, timingSafeEqual, verify as cryptoVerify, sign as cryptoSign } from 'node:crypto'
+import { secureRandomInt } from '../auth/random.ts'
 import type { AgentGrantRow, Store, TenantRow, UserRow } from '../store/db.ts'
 
 /**
@@ -216,9 +217,8 @@ export class AegisAuthService {
     // 排除易混淆字符 0/O/1/I，生成 8 位大写字母数字短码 HEUR-XXXX-XXXX（32^8 ≈ 40 bit，4 位只有 20 bit 可被穷举）
     const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
     let suffix = ''
-    const rand = randomBytes(8)
     for (let i = 0; i < 8; i++) {
-      suffix += alphabet[rand[i]! % alphabet.length]
+      suffix += alphabet[secureRandomInt(alphabet.length)]
     }
     const userCode = `HEUR-${suffix.slice(0, 4)}-${suffix.slice(4)}`
     const ttlSecs = Math.max(30, Math.min(1800, input.ttlSecs ?? 600))

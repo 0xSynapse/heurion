@@ -11,6 +11,9 @@ on:
     paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # 与 1.0 的 Deploy Server 共用并发组：同一台机器上不能同时部署
 concurrency:
   group: deploy-server
@@ -159,6 +162,7 @@ jobs:
           cache-to: type=registry,ref=${{ env.VIEWER_IMAGE }}:buildcache,mode=max
 
   deploy:
+    permissions: { contents: read, packages: read }
     name: 部署到生产
     if: github.repository_id == '1301746811'
     needs: [images, viewer]

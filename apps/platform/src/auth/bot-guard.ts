@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { secureRandomInt } from './random.ts'
 
 /**
  * 注册 / 登录的防机器人（自建，不依赖第三方验证码，境内可用、不外发用户信息）：
@@ -57,7 +58,7 @@ export class BotGuard {
     const level = f && f.reset > now ? Math.min(4, f.count) : 0
     const maxnumber = this.baseMax * 2 ** level
     const salt = `${randomBytes(12).toString('hex')}?issued=${now}&expires=${now + this.ttl}`
-    const n = randomBytes(4).readUInt32BE() % (maxnumber + 1)
+    const n = secureRandomInt(maxnumber + 1)
     const challenge = sha256(salt + n)
     return { algorithm: 'SHA-256', challenge, salt, maxnumber, signature: this.sign(`${challenge}:${salt}`) }
   }
