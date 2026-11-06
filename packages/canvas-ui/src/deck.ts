@@ -230,9 +230,22 @@ export class DeckView {
     this.opts.onSlidesUpdated?.(this.getSlides())
   }
 
+  /** 形状所在页的上下文：批注卡片显示「第 N 页 · 标题」，避免幻灯片批注只有空泛的“定位章节”。 */
+  shapeSlideContext(shapeId: string): string | null {
+    const slides = this.data?.doc.content ?? []
+    for (let i = 0; i < slides.length; i++) {
+      const shapes = (slides[i]?.content ?? []).filter(c => c.type === 'shape')
+      const hit = shapes.find(s => s.attrs?.id === shapeId)
+      if (!hit) continue
+      const titleShape = shapes.find(s => s.attrs?.ph === 'title' || s.attrs?.ph === 'ctrTitle')
+      const title = (titleShape ? this.text(titleShape) : String(hit.attrs?.description ?? '')).trim()
+      return `第 ${i + 1} 页${title ? ` · ${title.slice(0, 20)}` : ''}`
+    }
+    return null
+  }
+
   /** 获取各幻灯片页的元数据（缩略图胶卷条用）。 */
-  getSlides(): Array<{ id: string; index: number; layoutName: string; title: string }> {
-    if (!this.data) return []
+  getSlides(): Array<{ id: string; index: number; layoutName: string; title: string }> {    if (!this.data) return []
     return (this.data.doc.content ?? []).map((slide, i) => {
       let title = ''
       for (const shape of slide.content ?? []) {

@@ -337,7 +337,7 @@
     <div class="side-head narrow-only"><span class="eyebrow">Heurion AI</span><button class="icon-btn" id="sideClose" aria-label="关闭"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
     <div class="tabs">
       <button data-tab="commentPane" id="commentTab" class="active">审稿与批注 <span class="tab-badge" id="commentBadge" hidden>0</span></button>
-      <button data-tab="chatPane">AI 助手</button>
+      <button data-tab="chatPane">AI 助手 <span class="tab-badge" id="chatBadge" hidden>0</span></button>
       <button data-tab="citePane">引用</button>
       <button data-tab="versionPane">版本</button>
       <button class="side-collapse-btn" id="sideCollapseBtn" title="收起右侧栏 (快捷键 Cmd+] / Ctrl+])" aria-label="收起右侧栏"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 6l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 6v8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
@@ -379,16 +379,16 @@
     <div class="tabpane active" id="commentPane">
       <div class="review-hub-bar" id="reviewHubBar">
         <button type="button" class="ai review-run-btn" id="deepReviewBtn" title="通读全文与表格，自动核查样本量分母、百分比算术、统计方法一致性与结论表述">✦ 全文深度审稿</button>
-        <button type="button" class="quiet small-btn review-rules-pill" id="reviewRulesBtn" title="查看或管理已生效的专科审稿习惯（自动豁免同类误报）">专科习惯 <span class="rules-count-badge" id="reviewRulesCount">0</span> ▾</button>
+        <button type="button" class="quiet small-btn review-rules-pill" id="reviewRulesBtn" title="查看或管理已生效的审稿偏好（自动豁免同类误报）">审稿偏好 <span class="rules-count-badge" id="reviewRulesCount">0</span> ▾</button>
       </div>
       <div class="review-rules-drawer" id="reviewRulesDrawer" hidden>
         <div class="review-rules-head">
-          <b>已生效的专科审稿习惯</b>
+          <b>已生效的审稿偏好</b>
           <span class="muted small">深度审稿时自动遵循以下边界，不再重复误报同类问题</span>
         </div>
         <div class="review-rules-list" id="reviewRulesList"></div>
         <div class="review-rules-add">
-          <input type="text" id="reviewRuleInput" placeholder="新增专科习惯（如：回顾性单臂研究免报随机对照要求）">
+          <input type="text" id="reviewRuleInput" placeholder="新增审稿偏好（如：回顾性单臂研究免报随机对照要求）">
           <button type="button" class="small-btn primary" id="reviewRuleAddBtn">添加</button>
         </div>
       </div>

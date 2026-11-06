@@ -7817,6 +7817,8 @@ svg.mail-star-icon-filled polygon {
   color: var(--mint-text, var(--text));
   font-weight: 500;
 }
+.rv-progress-line span:not(.subagent-pulse) { flex: 1; }
+.rv-progress-line #deepReviewCancel { flex: none; margin-left: auto; }
 .rv-snap-top {
   display: flex;
   align-items: center;
@@ -7961,15 +7963,60 @@ svg.mail-star-icon-filled polygon {
   resize: vertical;
 }
 .rv-action-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
   gap: 6px;
   margin-top: 2px;
 }
 .rv-action-bar button {
-  flex: 1;
+  width: 100%;
+  min-width: 0;
+  white-space: nowrap;
   text-align: center;
   justify-content: center;
+}
+.rv-action-simple button[data-act="resolve"] {
+  grid-column: 1 / -1;
+}
+.comment-bulk-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  background: var(--bg);
+  font-size: 12px;
+}
+.comment-bulk-bar.active {
+  border-left-color: var(--mint);
+  background: var(--green-soft);
+}
+.comment-select-all,
+.card-select {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.comment-select-all {
+  color: var(--muted);
+  font-size: 12px;
+}
+.card-select {
+  flex: none;
+  margin-right: 1px;
+}
+.comment-select-all input,
+.card-select input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--mint);
+  cursor: pointer;
 }
 .rv-fp-drawer {
   margin-top: 4px;
@@ -8396,6 +8443,10 @@ a.auth-home-btn:hover {
 /* 批注与审稿卡片：章节定位徽标、引用框定位提示、批注讨论抽屉与正文对应章节高亮 */
 .card[data-cid] {
   cursor: pointer;
+}
+.card.card-selected {
+  border-color: var(--mint-text);
+  box-shadow: inset 0 0 0 1px var(--mint-text);
 }
 .card.card-active-focus {
   border-color: var(--mint-text) !important;

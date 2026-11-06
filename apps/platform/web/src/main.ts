@@ -803,6 +803,7 @@ async function open(docId: string): Promise<void> {
   patientsUi.leave()
   researchUi.leave()
   close()
+  selectedCommentIds.clear()
   hideTurnBanner()
   turnUi = null
   $('chatLog').innerHTML = ''
@@ -2985,6 +2986,11 @@ function renderQueue(): void {
   $('queueClear').hidden = items.length === 0
   const runningCount = activeList.length
   $('queueSummary').textContent = items.length === 0 ? '空闲' : `${runningCount > 0 ? `${runningCount} 个执行中` : ''}${runningCount > 0 && queue.queued.length ? '，' : ''}${queue.queued.length ? `${queue.queued.length} 个排队` : ''}`
+  const chatBadge = document.getElementById('chatBadge')
+  if (chatBadge) {
+    chatBadge.textContent = String(items.length)
+    chatBadge.hidden = items.length === 0
+  }
   $('queueList').innerHTML = items.map(q => {
     const queuePos = q.running ? '执行中' : `第 ${queue.queued.findIndex(x => x.id === q.id) + 1} 位`
     const isCurrentDocActive = q.running && q.doc_id === session?.docId && activeSubagentTask
@@ -3151,7 +3157,7 @@ async function saveComment(ask: boolean): Promise<void> {
 $('newCommentSave').onclick = () => void saveComment(false)
 $('newCommentAsk').onclick = () => void saveComment(true)
 
-// —— 统一深度审稿与批注面板（零认知负担：一键审稿 + 专科习惯抽屉 + 三选一卡片） ——
+// —— 统一深度审稿与批注面板（零认知负担：一键审稿 + 审稿偏好抽屉 + 三选一卡片） ——
 
 interface ReviewSnapshotState {
   docId: string
@@ -3168,9 +3174,15 @@ interface ReviewSnapshotState {
 }
 
 let lastReviewSnapshot: ReviewSnapshotState | null = null
-let activeReviewFilter: 'all' | 'critical' | 'major' | 'minor' = 'all'
+type ReviewFilter = 'all' | 'critical' | 'major' | 'minor' | 'plain'
+let activeReviewFilter: ReviewFilter = 'all'
 let reviewSortMode: 'severity' | 'section' = 'severity'
 let isRunningDeepReview = false
+let deepReviewAbort: AbortController | null = null
+/** 右侧批注批量选择（只保存 id；刷新后按当前列表过滤）。 */
+const selectedCommentIds = new Set<string>()
+let visibleOpenCommentIds: string[] = []
+let bulkBusy = false
 
 function formatCleanRuleText(raw: string): string {
   return raw
@@ -3190,7 +3202,7 @@ async function loadReviewRules(): Promise<void> {
     const listEl = document.getElementById('reviewRulesList')
     if (!listEl) return
     if (activeRules.length === 0) {
-      listEl.innerHTML = `<div class="muted small">暂无已记住的专科习惯。在下方审稿卡片点击「误报 · 以后免报」时，系统会自动提炼并记住您的专科边界规则。</div>`
+      listEl.innerHTML = `<div class="muted small">暂无已记住的审稿偏好。在下方审稿卡片点击「误报 · 以后免报」时，系统会自动提炼并记住您的专科边界规则。</div>`
       return
     }
     listEl.innerHTML = activeRules
@@ -3199,7 +3211,7 @@ async function loadReviewRules(): Promise<void> {
       <div class="review-rule-item" data-mid="${esc(r.id)}">
         <span class="review-rule-dot">●</span>
         <span class="review-rule-text">${esc(formatCleanRuleText(r.content))}</span>
-        <button type="button" class="quiet small-btn review-rule-del" data-del-rule="${esc(r.id)}" title="移除此条专科习惯">✕</button>
+        <button type="button" class="quiet small-btn review-rule-del" data-del-rule="${esc(r.id)}" title="移除此条审稿偏好">✕</button>
       </div>`,
       )
       .join('')
@@ -3221,7 +3233,7 @@ document.getElementById('reviewRulesList')?.addEventListener('click', async e =>
   try {
     await api(`/api/memory/${delBtn.dataset.delRule}`, { method: 'DELETE' })
     await loadReviewRules()
-    showNotice('已移除该条专科审稿习惯')
+    showNotice('已移除该条审稿偏好')
   } catch (err) {
     showNotice((err as Error).message, true)
   }
@@ -3242,7 +3254,7 @@ document.getElementById('reviewRuleAddBtn')?.addEventListener('click', async () 
     })
     if (input) input.value = ''
     await loadReviewRules()
-    showNotice('已添加专科审稿习惯，后续审稿将自动遵循')
+    showNotice('已添加审稿偏好，后续审稿将自动遵循')
   } catch (err) {
     showNotice((err as Error).message, true)
   }
@@ -3251,6 +3263,8 @@ document.getElementById('reviewRuleAddBtn')?.addEventListener('click', async () 
 async function runDeepReview(): Promise<void> {
   if (!session || isRunningDeepReview) return
   isRunningDeepReview = true
+  const abort = new AbortController()
+  deepReviewAbort = abort
   const btn = document.getElementById('deepReviewBtn') as HTMLButtonElement | null
   const snapEl = document.getElementById('reviewSnapshotBar')
   if (btn) {
@@ -3259,7 +3273,8 @@ async function runDeepReview(): Promise<void> {
   }
   if (snapEl) {
     snapEl.hidden = false
-    snapEl.innerHTML = `<div class="rv-progress-line"><span class="subagent-pulse"></span> 正在通读全文与表格，核查样本量分母、算术自洽、统计方法与结论表述…</div>`
+    snapEl.innerHTML = `<div class="rv-progress-line"><span class="subagent-pulse"></span><span>正在通读全文与表格，核查样本量分母、算术自洽、统计方法与结论表述…</span><button type="button" class="small-btn quiet" id="deepReviewCancel">停止等待</button></div>`
+    snapEl.querySelector('#deepReviewCancel')?.addEventListener('click', () => abort.abort())
   }
   try {
     const r = await api<{
@@ -3268,7 +3283,7 @@ async function runDeepReview(): Promise<void> {
       raw_candidates_count?: number
       comments_created?: Array<any>
       exempted_count?: number
-    }>(`/api/docs/${session.docId}/deep-review`, { method: 'POST' })
+    }>(`/api/docs/${session.docId}/deep-review`, { method: 'POST', signal: abort.signal })
     lastReviewSnapshot = {
       docId: session.docId,
       scratchpad: r.scratchpad,
@@ -3284,14 +3299,16 @@ async function runDeepReview(): Promise<void> {
     const exempted = lastReviewSnapshot.exemptedCount
     showNotice(
       created > 0
-        ? `深度审稿完成：检出 ${created} 处建议关注项${exempted > 0 ? `（已按专科习惯自动免报 ${exempted} 处）` : ''}`
-        : `深度审稿完成：全文核心数据与方法学自洽${exempted > 0 ? `（已按专科习惯自动免报 ${exempted} 处）` : ''}`,
+        ? `深度审稿完成：检出 ${created} 处建议关注项${exempted > 0 ? `（已按审稿偏好自动免报 ${exempted} 处）` : ''}`
+        : `深度审稿完成：全文核心数据与方法学自洽${exempted > 0 ? `（已按审稿偏好自动免报 ${exempted} 处）` : ''}`,
     )
   } catch (err) {
     if (snapEl) snapEl.hidden = true
-    showNotice(`审稿失败：${(err as Error).message}`, true)
+    if ((err as Error).name === 'AbortError') showNotice('已停止等待深度审稿（服务端可能仍在后台处理，结果会以批注形式出现）')
+    else showNotice(`审稿失败：${(err as Error).message}`, true)
   } finally {
     isRunningDeepReview = false
+    deepReviewAbort = null
     if (btn) {
       btn.disabled = false
       btn.textContent = '✦ 全文深度审稿'
@@ -3371,7 +3388,9 @@ function renderReviewSnapshot(): void {
   const snapEl = document.getElementById('reviewSnapshotBar')
   if (!snapEl) return
   const list: any[] = detail?.comments ?? []
-  const openReviewItems = list.filter(c => c.status === 'open').map(c => ({ c, meta: parseReviewComment(c) })).filter(x => x.meta.isReview)
+  const openList = list.filter(c => c.status === 'open')
+  const openReviewItems = openList.map(c => ({ c, meta: parseReviewComment(c) })).filter(x => x.meta.isReview)
+  const plainCount = openList.filter(c => !parseReviewComment(c).isReview).length
   const hasSnapshot = lastReviewSnapshot && lastReviewSnapshot.docId === session?.docId
   if (!hasSnapshot && openReviewItems.length === 0) {
     snapEl.hidden = true
@@ -3385,12 +3404,13 @@ function renderReviewSnapshot(): void {
   const sp = hasSnapshot ? lastReviewSnapshot?.scratchpad : undefined
   const exempted = hasSnapshot ? (lastReviewSnapshot?.exemptedCount ?? 0) : 0
 
-  const filterHtml = openReviewItems.length > 0 ? `
+  const filterHtml = openList.length > 0 ? `
     <div class="rv-filter-pills">
-      <button type="button" class="rv-filter-pill ${activeReviewFilter === 'all' ? 'active' : ''}" data-rv-filter="all">全部 (${openReviewItems.length})</button>
+      <button type="button" class="rv-filter-pill ${activeReviewFilter === 'all' ? 'active' : ''}" data-rv-filter="all">全部 (${openList.length})</button>
       ${critCount > 0 ? `<button type="button" class="rv-filter-pill crit ${activeReviewFilter === 'critical' ? 'active' : ''}" data-rv-filter="critical">数据矛盾 (${critCount})</button>` : ''}
       ${majCount > 0 ? `<button type="button" class="rv-filter-pill maj ${activeReviewFilter === 'major' ? 'active' : ''}" data-rv-filter="major">方法建议 (${majCount})</button>` : ''}
       ${minCount > 0 ? `<button type="button" class="rv-filter-pill min ${activeReviewFilter === 'minor' ? 'active' : ''}" data-rv-filter="minor">规范 (${minCount})</button>` : ''}
+      ${plainCount > 0 ? `<button type="button" class="rv-filter-pill ${activeReviewFilter === 'plain' ? 'active' : ''}" data-rv-filter="plain">普通批注 (${plainCount})</button>` : ''}
     </div>
   ` : `<div class="rv-summary-ok">✓ 全文核心数据与方法学核对通过</div>`
 
@@ -3408,9 +3428,8 @@ function renderReviewSnapshot(): void {
             <button type="button" class="rv-sort-btn ${reviewSortMode === 'section' ? 'active' : ''}" data-rv-sort="section" title="按正文从上到下的章节顺序分组">按章节顺序</button>
           </div>
         ` : ''}
-        ${openReviewItems.length > 0 ? `<button type="button" class="small-btn ai rv-batch-ask-btn" data-rv-batch-ask="1" title="将当前筛选下的待处理审稿项一次性汇总交给 AI 生成段落修订建议">✦ 批量交给 AI 修订</button>` : ''}
-        ${exempted > 0 ? `<span class="rv-exempt-badge" title="已根据您的专科审稿习惯自动过滤同类误报">已按专科习惯免报 ${exempted} 处</span>` : ''}
         ${openReviewItems.length > 0 ? `<button type="button" class="quiet small-btn rv-copy-btn" data-rv-copy="1" title="将待处理审稿问题复制为 Markdown 清单，方便发给合作者或学生修改">复制清单</button>` : ''}
+        ${exempted > 0 ? `<span class="rv-exempt-badge" title="已根据您的审稿偏好自动过滤同类误报">已按审稿偏好免报 ${exempted} 处</span>` : ''}
       </div>
     </div>
     ${sp ? `
@@ -3432,43 +3451,6 @@ document.getElementById('reviewSnapshotBar')?.addEventListener('click', async e 
     reviewSortMode = sortBtn.dataset.rvSort as 'severity' | 'section'
     renderReviewSnapshot()
     renderComments()
-    return
-  }
-  const batchBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-batch-ask]')
-  if (batchBtn && session) {
-    const list: any[] = detail?.comments ?? []
-    const openReviewItems = list
-      .filter(c => c.status === 'open')
-      .map(c => ({ c, meta: parseReviewComment(c) }))
-      .filter(x => x.meta.isReview && (activeReviewFilter === 'all' || x.meta.severity === activeReviewFilter))
-    if (openReviewItems.length === 0) return
-    batchBtn.disabled = true
-    batchBtn.textContent = '已发起批量修订…'
-    for (const item of openReviewItems) {
-      aiAskedCommentIds.add(item.c.id)
-    }
-    syncCommentAskButtons()
-    const summaryTasks = openReviewItems.map((item, idx) => {
-      const quote = item.c.anchor?.text || item.c.snippet || '（定位段落）'
-      const fix = item.meta.suggestion ? `（参考修改建议：${item.meta.suggestion}）` : ''
-      return `${idx + 1}. [${item.meta.severityLabel}] 原句：「${quote}」 -> 问题：${item.meta.cleanReason} ${fix}`
-    }).join('\n')
-    try {
-      await api(`/api/docs/${session.docId}/chat?async=1`, {
-        method: 'POST',
-        body: JSON.stringify({
-          message: `请按修订模式（生成待采纳对比）一次性逐条处理以下 ${openReviewItems.length} 项审稿意见，修改正文中对应的段落或表格，并在修改完成后将对应批注标记为已处理：\n${summaryTasks}`,
-          suggest: true,
-        }),
-      })
-      await loadQueue()
-      showNotice(`✦ 已将 ${openReviewItems.length} 项审稿问题汇总交给 AI 批量修订（完成后可在正文中逐处对比采纳）`)
-    } catch (err) {
-      showNotice((err as Error).message, true)
-    } finally {
-      batchBtn.disabled = false
-      batchBtn.textContent = '✦ 批量交给 AI 修订'
-    }
     return
   }
   const copyBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-copy]')
@@ -3499,7 +3481,7 @@ document.getElementById('reviewSnapshotBar')?.addEventListener('click', async e 
   }
   const pill = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-rv-filter]')
   if (!pill?.dataset.rvFilter) return
-  activeReviewFilter = pill.dataset.rvFilter as 'all' | 'critical' | 'major' | 'minor'
+  activeReviewFilter = pill.dataset.rvFilter as ReviewFilter
   renderReviewSnapshot()
   renderComments()
 })
@@ -3512,13 +3494,17 @@ function renderCommentCardHtml(c: any): string {
   const reasonReply = isReview ? replies.find(r => r.role === 'ai') : undefined
   const visibleReplies = reasonReply ? replies.filter(r => r !== reasonReply) : replies
   const quoteText = c.anchor?.text || c.snippet || '（点击定位正文段落）'
-  const sectionTitle = c.anchor?.section_title || ''
-  const secLabel = sectionTitle ? `§ ${sectionTitle.slice(0, 22)}` : '§ 定位章节'
-  const cardClass = ['card', isReview ? 'rv-card' : '', isReview ? `sev-${esc(meta.severity)}` : '', esc(c.status)].filter(Boolean).join(' ')
+  const sectionTitle = c.anchor?.section_title || (session?.kind === 'deck' ? session.deck?.shapeSlideContext(c.node_id) ?? '' : '')
+  const secLabel = sectionTitle ? (session?.kind === 'deck' ? sectionTitle.slice(0, 22) : `§ ${sectionTitle.slice(0, 22)}`) : '§ 定位章节'
+  const selected = c.status === 'open' && visibleOpenCommentIds.length > 1 && selectedCommentIds.has(c.id)
+  const cardClass = ['card', isReview ? 'rv-card' : '', isReview ? `sev-${esc(meta.severity)}` : '', esc(c.status), selected ? 'card-selected' : ''].filter(Boolean).join(' ')
   const cardAttrs = `data-cid="${esc(c.id)}"${isReview ? ` data-cat="${esc(meta.categoryKey)}" data-reason="${esc(meta.cleanReason)}"` : ''}`
+  // 初始批注本身不算一次“讨论”；只统计后续回复
+  const discussionCount = Math.max(0, replies.length - 1)
   return `
     <div class="${cardClass}" ${cardAttrs}>
       <div class="rv-card-header">
+        ${c.status === 'open' && visibleOpenCommentIds.length > 1 ? `<label class="card-select" title="选择此批注"><input type="checkbox" data-select-cid="${esc(c.id)}" ${selected ? 'checked' : ''}></label>` : ''}
         ${isReview ? `<span class="rv-sev-badge sev-${esc(meta.severity)}">${esc(meta.severityLabel)}</span>` : ''}
         <span class="rv-cat-tag">${esc(isReview ? meta.categoryLabel : '批注')}</span>
         <button type="button" class="rv-sec-badge" data-locate="1" title="点击定位并高亮所属章节与原句">${esc(secLabel)}</button>
@@ -3533,13 +3519,13 @@ function renderCommentCardHtml(c: any): string {
       ${isReview && meta.suggestion ? `<div class="rv-suggest-hint"><span class="rv-suggest-hint-tag">修改建议参考</span>${lightMarkdown(meta.suggestion)}</div>` : ''}
       ${visibleReplies.length > 0 ? `<div class="rv-replies-list">${visibleReplies.map((r: any) => `<div class="reply ${esc(r.role)}"><b>${r.role === 'ai' ? 'Heurion' : r.author ? esc(r.author) : '我'}</b>：${r.role === 'ai' ? lightMarkdown(r.text) : esc(r.text)}</div>`).join('')}</div>` : ''}
       ${c.status === 'open' ? `
-        <div class="rv-action-bar">
+        <div class="rv-action-bar${isReview ? '' : ' rv-action-simple'}">
           <button type="button" class="ai small-btn" data-act="ask" data-default-label="交给 AI 处理" title="将该批注（及您的补充要求）交给 AI 修改对应段落">交给 AI 处理</button>
-          <button type="button" class="quiet small-btn rv-comment-btn" data-act="toggle-reply" title="添加批注说明、团队讨论或补充改稿要求">批注讨论${visibleReplies.length > 0 ? ` (${visibleReplies.length})` : ''}</button>
-          <button type="button" class="quiet small-btn" data-act="resolve" title="关闭此批注并归档；正文原写法不变">关闭批注</button>
+          <button type="button" class="quiet small-btn rv-comment-btn" data-act="toggle-reply" title="添加批注说明、团队讨论或补充改稿要求">批注讨论${discussionCount > 0 ? ` (${discussionCount})` : ''}</button>
+          <button type="button" class="quiet small-btn" data-act="resolve" title="关闭此批注并归档（不撤销已完成的修改）">关闭批注</button>
           ${isReview ? `<button type="button" class="quiet small-btn rv-fp-btn" data-act="toggle-fp" title="标记为误报或专科常规写法，系统会自动提炼规则，后续不再误报">误报 · 以后免报</button>` : ''}
         </div>
-        <div class="rv-reply-drawer" data-reply-drawer ${visibleReplies.length > 0 ? '' : 'hidden'}>
+        <div class="rv-reply-drawer" data-reply-drawer hidden>
           <div class="rv-reply-input-row">
             <input type="text" placeholder="添加批注讨论，或补充具体改稿要求后点「交给 AI 处理」（回车发送批注）…" data-reply>
             <button type="button" class="small-btn primary" data-act="reply">发送批注</button>
@@ -3547,7 +3533,7 @@ function renderCommentCardHtml(c: any): string {
         </div>
         ${isReview ? `
         <div class="rv-fp-drawer" data-fp-drawer hidden>
-          <div class="rv-fp-title">选择原因（系统将自动记住此专科习惯，后续免报同类情况）：</div>
+          <div class="rv-fp-title">选择原因（系统将自动记住此审稿偏好，后续免报同类情况）：</div>
           <div class="rv-fp-chips">
             <button type="button" class="rv-fp-chip" data-act="exempt-claim" data-rebuttal="本研究自报队列数据，无需外部文献或跨表强行对齐">本研究自报数据</button>
             <button type="button" class="rv-fp-chip" data-act="exempt-claim" data-rebuttal="亚组分析、删失或克隆队列的合理分母差异，并非算术错误">亚组/删失合理分母</button>
@@ -3573,6 +3559,9 @@ function renderComments(): void {
   const list: any[] = detail?.comments ?? []
   const openList = list.filter(c => c.status === 'open')
   const resolvedList = list.filter(c => c.status !== 'open')
+  for (const id of [...selectedCommentIds]) {
+    if (!openList.some(c => c.id === id)) selectedCommentIds.delete(id)
+  }
   const openCount = openList.length
   for (const id of ['commentBadge', 'sideToggleBadge']) {
     const badge = document.getElementById(id)
@@ -3587,11 +3576,27 @@ function renderComments(): void {
   const filteredOpenList = openList.filter(c => {
     if (activeReviewFilter === 'all') return true
     const meta = parseReviewComment(c)
-    return !meta.isReview || meta.severity === activeReviewFilter
+    if (activeReviewFilter === 'plain') return !meta.isReview
+    return meta.isReview && meta.severity === activeReviewFilter
   })
+  visibleOpenCommentIds = filteredOpenList.map(c => c.id)
+  const selectedVisible = filteredOpenList.filter(c => selectedCommentIds.has(c.id))
+  const allVisibleSelected = filteredOpenList.length > 0 && selectedVisible.length === filteredOpenList.length
+  const bulkBar = filteredOpenList.length > 1
+    ? `<div class="comment-bulk-bar${selectedVisible.length > 0 ? ' active' : ''}" data-bulk-bar>
+        <label class="comment-select-all"><input type="checkbox" data-select-all ${allVisibleSelected ? 'checked' : ''}> 全选当前 ${filteredOpenList.length} 条</label>
+        <span class="grow"></span>
+        ${selectedVisible.length > 0
+          ? `<span class="muted small">已选 ${selectedVisible.length} 条</span>
+             <button type="button" class="small-btn ai" data-bulk-act="ask" ${bulkBusy ? 'disabled' : ''}>AI 修订</button>
+             <button type="button" class="small-btn quiet" data-bulk-act="resolve" ${bulkBusy ? 'disabled' : ''}>关闭</button>
+             <button type="button" class="small-btn quiet" data-bulk-act="clear" ${bulkBusy ? 'disabled' : ''}>清除</button>`
+          : `<span class="muted small">勾选卡片左侧复选框可批量处理</span>`}
+      </div>`
+    : ''
 
   const sevRank: Record<'critical' | 'major' | 'minor', number> = { critical: 3, major: 2, minor: 1 }
-  let openHtml = ''
+  let openHtml = bulkBar
   if (filteredOpenList.length === 0) {
     openHtml = openList.length === 0
       ? `<div class="rv-empty-hint muted">${resolvedList.length > 0 ? `当前待处理问题已全部清零（下方已归档 ${resolvedList.length} 项）。` : ''}点击上方 <b>「✦ 全文深度审稿」</b> 一键核查全文数据自洽与统计规范；也可以在正文中选中句子手动添加批注。</div>`
@@ -3604,7 +3609,7 @@ function renderComments(): void {
       arr.push(c)
       groups.set(sec, arr)
     }
-    openHtml = Array.from(groups.entries())
+    openHtml += Array.from(groups.entries())
       .map(
         ([secName, items]) => `
         <div class="rv-sec-group">
@@ -3619,7 +3624,7 @@ function renderComments(): void {
       const mb = parseReviewComment(b)
       return sevRank[mb.severity] - sevRank[ma.severity]
     })
-    openHtml = sorted.map(renderCommentCardHtml).join('')
+    openHtml += sorted.map(renderCommentCardHtml).join('')
   }
 
   const resolvedDrawerHtml = resolvedList.length > 0
@@ -3632,6 +3637,75 @@ function renderComments(): void {
   $('comments').innerHTML = openHtml + resolvedDrawerHtml
   syncCommentAskButtons()
   syncManuscriptReviewHighlights(openList)
+}
+
+function selectedOpenComments(): any[] {
+  const visible = new Set(visibleOpenCommentIds)
+  return (detail?.comments ?? []).filter((c: any) => c.status === 'open' && selectedCommentIds.has(c.id) && visible.has(c.id))
+}
+
+async function bulkAskSelected(): Promise<void> {
+  if (!session || bulkBusy) return
+  const selected = selectedOpenComments().map(c => ({ c, meta: parseReviewComment(c) }))
+  if (selected.length === 0) return
+  if (!await askConfirm({
+    title: '批量交给 AI 修订',
+    message: `将把选中的 ${selected.length} 条批注一次性交给 AI，按修订模式生成待采纳对比。修改完成后批注会保持待确认，由你逐条或批量关闭。`,
+    confirm: '交给 AI',
+  })) return
+  bulkBusy = true
+  renderComments()
+  const summaryTasks = selected.map((item, idx) => {
+    const quote = item.c.anchor?.text || item.c.snippet || '（定位段落）'
+    const fix = item.meta.suggestion ? `（参考修改建议：${item.meta.suggestion}）` : ''
+    const issue = item.meta.isReview
+      ? item.meta.cleanReason
+      : ((item.c.replies ?? []).filter((r: any) => r.role === 'user').at(-1)?.text ?? '请按批注要求处理')
+    const label = item.meta.isReview ? item.meta.severityLabel : '普通批注'
+    return `${idx + 1}. [${label}] 原句：「${quote}」 -> 要求：${issue} ${fix}`
+  }).join('\n')
+  try {
+    await api(`/api/docs/${session.docId}/chat?async=1`, {
+      method: 'POST',
+      body: JSON.stringify({
+        message: `请按修订模式（生成待采纳对比）逐条处理以下 ${selected.length} 条批注，修改正文中对应的段落或表格。修改完成后保持对应批注为待确认状态，不要自行关闭：\n${summaryTasks}`,
+        suggest: true,
+      }),
+    })
+    selectedCommentIds.clear()
+    await loadQueue()
+    showNotice(`已提交 ${selected.length} 条批注的批量修订，进度可在「AI 助手」查看`)
+  } catch (err) {
+    showNotice((err as Error).message, true)
+  } finally {
+    bulkBusy = false
+    renderComments()
+  }
+}
+
+async function bulkCloseSelected(): Promise<void> {
+  if (!session || bulkBusy) return
+  const selected = selectedOpenComments()
+  if (selected.length === 0) return
+  if (!await askConfirm({
+    title: '批量关闭批注',
+    message: `关闭选中的 ${selected.length} 条批注并归档？正文内容不会被修改。`,
+    confirm: '关闭批注',
+  })) return
+  bulkBusy = true
+  renderComments()
+  try {
+    const results = await Promise.allSettled(selected.map(c => api(`/api/docs/${session!.docId}/comments/${c.id}/resolve`, { method: 'POST' })))
+    const failed = results.filter(r => r.status === 'rejected').length
+    selectedCommentIds.clear()
+    await refresh(false)
+    showNotice(failed > 0 ? `已关闭 ${selected.length - failed} 条，${failed} 条失败` : `已关闭 ${selected.length} 条批注`, failed > 0)
+  } catch (err) {
+    showNotice((err as Error).message, true)
+  } finally {
+    bulkBusy = false
+    renderComments()
+  }
 }
 
 function syncManuscriptReviewHighlights(openList: any[]): void {
@@ -3737,8 +3811,33 @@ $('comments').onkeydown = e => {
   }
 }
 
+$('comments').addEventListener('change', e => {
+  const input = e.target as HTMLInputElement
+  if (input.matches('[data-select-all]')) {
+    if (input.checked) visibleOpenCommentIds.forEach(id => selectedCommentIds.add(id))
+    else visibleOpenCommentIds.forEach(id => selectedCommentIds.delete(id))
+    renderComments()
+    return
+  }
+  if (!input.matches('input[data-select-cid]')) return
+  const id = input.dataset.selectCid
+  if (!id) return
+  if (input.checked) selectedCommentIds.add(id)
+  else selectedCommentIds.delete(id)
+  renderComments()
+})
+
 $('comments').onclick = async e => {
   const targetEl = e.target as HTMLElement
+  const bulkBtn = targetEl.closest<HTMLButtonElement>('[data-bulk-act]')
+  if (bulkBtn?.dataset.bulkAct) {
+    if (bulkBtn.dataset.bulkAct === 'ask') void bulkAskSelected()
+    else if (bulkBtn.dataset.bulkAct === 'resolve') void bulkCloseSelected()
+    else if (bulkBtn.dataset.bulkAct === 'clear') { selectedCommentIds.clear(); renderComments() }
+    return
+  }
+  // 勾选框只负责选择，不触发卡片定位
+  if (targetEl.closest('.card-select, .comment-select-all, input[data-select-cid], input[data-select-all]')) return
   const jumpDiffBtn = targetEl.closest<HTMLElement>('[data-rv-jump-diff]')
   if (jumpDiffBtn?.dataset.rvJumpDiff) {
     locateCommentInDoc(jumpDiffBtn.dataset.rvJumpDiff)
@@ -3813,7 +3912,7 @@ $('comments').onclick = async e => {
       const rulesBtn = document.getElementById('reviewRulesBtn')
       rulesBtn?.classList.add('card-highlight')
       setTimeout(() => rulesBtn?.classList.remove('card-highlight'), 1500)
-      showNotice('✓ 已记住该专科审稿习惯，后续审稿将自动豁免同类表述')
+      showNotice('✓ 已记住该审稿偏好，后续审稿将自动豁免同类表述')
     } else if (act === 'reply') {
       if (!text) return
       await api(`/api/docs/${session.docId}/comments/${cid}/replies`, { method: 'POST', body: JSON.stringify({ text }) })
