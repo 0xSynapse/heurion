@@ -43,7 +43,8 @@ ENV HEURION_MODEL_DIR=/app/models \
     HEURION_BAKE_LUNG_NODULE=${HEURION_BAKE_LUNG_NODULE} \
     HEURION_BAKE_ALL=${HEURION_BAKE_ALL}
 RUN mkdir -p /app/apps/imaging-worker/src /app/apps/imaging-worker/data /app/models
-COPY apps/imaging-worker/src/model_registry.py apps/imaging-worker/src/bake_models.py /app/apps/imaging-worker/src/
+# 预热脚本依赖的本地模块都要列在这里（tests/test_dockerfile_bake_deps.py 会检查）
+COPY apps/imaging-worker/src/model_registry.py apps/imaging-worker/src/bake_models.py apps/imaging-worker/src/errors.py /app/apps/imaging-worker/src/
 RUN /opt/venv/bin/python /app/apps/imaging-worker/src/bake_models.py
 
 # 3. 复制其余业务源码

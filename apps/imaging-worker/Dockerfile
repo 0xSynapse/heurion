@@ -42,7 +42,8 @@ RUN cd /app/apps/imaging-worker && \
 #    从而避免每次修改 engine.py / server.py 时在 CI 构建期重复串行下载和上传 2.3GB 镜像层。
 RUN mkdir -p /app/apps/imaging-worker/src /app/apps/imaging-worker/data /app/models
 ENV HEURION_MODEL_DIR=/app/models
-COPY apps/imaging-worker/src/model_registry.py apps/imaging-worker/src/bake_models.py /app/apps/imaging-worker/src/
+# 预热脚本依赖的本地模块都要列在这里（tests/test_dockerfile_bake_deps.py 会检查）
+COPY apps/imaging-worker/src/model_registry.py apps/imaging-worker/src/bake_models.py apps/imaging-worker/src/errors.py /app/apps/imaging-worker/src/
 RUN python3 /app/apps/imaging-worker/src/bake_models.py
 
 # 4. 复制其余业务源码
