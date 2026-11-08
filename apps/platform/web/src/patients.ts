@@ -94,6 +94,11 @@ const origNote = (l: Lab) => l.converted ? `原值 ${l.value_num} ${l.unit ?? ''
 const when = (l: Lab) => l.collected_at ?? l.collected_on ?? ''
 
 export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
+  // 影像切片地址：编号来自服务端记录，按路径段编码，拼进 HTML 属性时再 esc 一次
+  const tokenQs = () => `token=${encodeURIComponent(hooks.token())}`
+  const assetUrl = (assetId: unknown) => `/api/assets/${encodeURIComponent(String(assetId))}?${tokenQs()}`
+  const patientFileUrl = (patientId: unknown, fileId: unknown) =>
+    `/api/patients/${encodeURIComponent(String(patientId))}/files/${encodeURIComponent(String(fileId))}?${tokenQs()}`
   let list: Patient[] = []
   let current: string | null = null
   let tab: 'overview' | 'labs' | 'records' | 'docs' | 'review' = 'overview'
@@ -409,13 +414,13 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
       const aid = imgData.asset_id
       const sliceFid = imgData.file_id
       const rawFid = imgData.raw_file_id || (latestImg.file_id && latestImg.file_id !== sliceFid ? latestImg.file_id : null)
-      const imgUrl = aid
-        ? `/api/assets/${aid}?token=${encodeURIComponent(hooks.token())}`
+      const imgUrl = esc(aid
+        ? assetUrl(aid)
         : (sliceFid && sliceFid !== rawFid)
-        ? `/api/patients/${d.id}/files/${sliceFid}?token=${encodeURIComponent(hooks.token())}`
+        ? patientFileUrl(d.id, sliceFid)
         : (!rawFid && latestImg.file_id)
-        ? `/api/patients/${d.id}/files/${latestImg.file_id}?token=${encodeURIComponent(hooks.token())}`
-        : ''
+        ? patientFileUrl(d.id, latestImg.file_id)
+        : '')
 
       const m = (imgData.metrics || imgData.raw_metrics || {}) as Record<string, any>
       const isHAM = Boolean(m.high_attenuation_mucus || (m.ham_max_hu && m.ham_max_hu > 70) || (m.high_attenuation_mucus_cm3 && m.high_attenuation_mucus_cm3 > 0))
@@ -655,11 +660,11 @@ export function initPatients(api: Api, notice: Notice, hooks: PatientHooks) {
             const aid = data.asset_id
             const sliceFid = data.file_id
             const rawFid = data.raw_file_id || (r.file_id && r.file_id !== sliceFid ? r.file_id : null)
-            const imgUrl = aid
-              ? `/api/assets/${aid}?token=${encodeURIComponent(hooks.token())}`
+            const imgUrl = esc(aid
+              ? assetUrl(aid)
               : (sliceFid && sliceFid !== rawFid)
-              ? `/api/patients/${d.id}/files/${sliceFid}?token=${encodeURIComponent(hooks.token())}`
-              : ''
+              ? patientFileUrl(d.id, sliceFid)
+              : '')
             const rawFileName = data.raw_file_name || (rawFid ? 'scan.nii.gz' : '')
             const rawSizeText = data.raw_file_size ? `${(data.raw_file_size / (1024 * 1024)).toFixed(1)} MB` : ''
             const isBronchiectasis = data.model_id === 'bronchiectasis_mucus_analyzer' || r.title.includes('支气管')
@@ -3218,20 +3223,15 @@ ${impression}
     function renderComparisonResult(res: any) {
       const rec = res.recist || {}
       const cat = (rec.category || 'SD').toLowerCase()
-      const bImgUrl = res.baseline?.asset_id
-        ? `/api/assets/${res.baseline.asset_id}?token=${encodeURIComponent(hooks.token())}`
-        : res.baseline?.slice_file_id
-        ? `/api/patients/${patientId}/files/${res.baseline.slice_file_id}?token=${encodeURIComponent(hooks.token())}`
-        : (res.baseline?.file_id && res.baseline?.file_id !== res.baseline?.raw_file_id)
-        ? `/api/patients/${patientId}/files/${res.baseline.file_id}?token=${encodeURIComponent(hooks.token())}`
-        : ''
-      const fImgUrl = res.followup?.asset_id
-        ? `/api/assets/${res.followup.asset_id}?token=${encodeURIComponent(hooks.token())}`
-        : res.followup?.slice_file_id
-        ? `/api/patients/${patientId}/files/${res.followup.slice_file_id}?token=${encodeURIComponent(hooks.token())}`
-        : (res.followup?.file_id && res.followup?.file_id !== res.followup?.raw_file_id)
-        ? `/api/patients/${patientId}/files/${res.followup.file_id}?token=${encodeURIComponent(hooks.token())}`
-        : ''
+      const sliceUrl = (side: any): string => esc(side?.asset_id
+        ? assetUrl(side.asset_id)
+        : side?.slice_file_id
+        ? patientFileUrl(patientId, side.slice_file_id)
+        : (side?.file_id && side.file_id !== side.raw_file_id)
+        ? patientFileUrl(patientId, side.file_id)
+        : '')
+      const bImgUrl = sliceUrl(res.baseline)
+      const fImgUrl = sliceUrl(res.followup)
 
       const signLd = rec.percent_change_ld > 0 ? `+${rec.percent_change_ld}%` : `${rec.percent_change_ld}%`
       const signVol = rec.percent_change_volume > 0 ? `+${rec.percent_change_volume}%` : `${rec.percent_change_volume}%`

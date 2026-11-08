@@ -9,6 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Union
 
+logging.basicConfig(
+    level=os.environ.get("IMAGING_WORKER_LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 logger = logging.getLogger("imaging-worker")
 
 def parse_flexible_float(v: Any, default: Optional[float] = None) -> Optional[float]:
@@ -75,21 +79,37 @@ INFERENCE_GATE = MemoryGate(default_budget_gb(), int(os.environ.get("IMAGING_CON
 INFERENCE_SEMAPHORE = INFERENCE_GATE.slot(task_cost_gb("default"), "inference")
 
 
+_EXPECTED_ERRORS = (FileNotFoundError, ValueError, ModelUnavailableError)
+
+
 def raise_http(exc: Exception, prefix: str) -> None:
-    """把引擎异常映射为 HTTP 状态；对外只返回通用说明，完整异常留在服务日志。"""
+    """把引擎异常如实映射为 HTTP 状态：缺影像 404、参数/输入问题 400、模型不可用 501，其余 500。
+
+    worker 只监听本机、只被平台调用，detail 保留引擎原因，平台据此排查；
+    对用户和 AI 的清理（去服务器路径、5xx 只给通用说明）在平台出口做，见 platform/src/imaging/worker-error.ts。
+    """
     if isinstance(exc, HTTPException):
         raise exc
+    if isinstance(exc, _EXPECTED_ERRORS):
+        logger.warning("%s: %s", prefix, exc)
+    else:
+        logger.exception("%s：未预期的异常", prefix)
     if isinstance(exc, FileNotFoundError):
-        logger.warning("%s: %s", prefix, exc)
-        raise HTTPException(status_code=404, detail=f"{prefix}: 文件不存在")
+        raise HTTPException(status_code=404, detail=f"{prefix}: {exc}")
     if isinstance(exc, ValueError):
-        logger.warning("%s: %s", prefix, exc)
-        raise HTTPException(status_code=400, detail=f"{prefix}: 输入参数不合法")
+        raise HTTPException(status_code=400, detail=f"{prefix}: {exc}")
     if isinstance(exc, ModelUnavailableError):
-        logger.warning("%s: %s", prefix, exc)
-        raise HTTPException(status_code=501, detail=f"{prefix}: 模型不可用")
-    logger.exception("%s 内部错误", prefix)
-    raise HTTPException(status_code=500, detail=f"{prefix}: 内部错误")
+        raise HTTPException(status_code=501, detail=f"{prefix}: {exc}")
+    raise HTTPException(status_code=500, detail=f"{prefix}: {exc}")
+
+
+def job_failure_detail(exc: Exception) -> str:
+    """后台任务进度里的失败原因：预期异常给引擎原因，其它只给通用说明（进度会被平台轮询转给前端）。"""
+    if isinstance(exc, HTTPException):
+        return str(exc.detail)
+    if isinstance(exc, _EXPECTED_ERRORS):
+        return str(exc)
+    return "内部错误（详见影像服务日志）"
 
 class BenchmarkRequest(BaseModel):
     model_name: Optional[str] = "lung_nodule_segmenter"
@@ -1312,7 +1332,7 @@ async def run_upload_analysis(
         )
     except Exception as e:
         if job_id:
-            _update_upload_job(job_id, "推理异常中断", 100, str(e), status="failed")
+            _update_upload_job(job_id, "推理异常中断", 100, job_failure_detail(e), status="failed")
         raise_http(e, "分析失败")
 
 

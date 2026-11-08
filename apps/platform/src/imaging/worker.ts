@@ -4,6 +4,7 @@
  */
 
 import { Agent, fetch as undiciFetch } from 'undici'
+import { publicWorkerDetail, readWorkerDetail, scrubPaths } from './worker-error.ts'
 
 /**
  * Node 自带的 fetch（undici）默认 5 分钟收不到响应头就断开（headersTimeout），报的是笼统的「fetch failed」。
@@ -21,9 +22,23 @@ function longAgent(timeoutMs: number): Agent {
   return a
 }
 
-/** worker 返回非 2xx 或连不上；status 为 HTTP 状态码（连接失败、超时为 null） */
+/**
+ * worker 返回非 2xx 或连不上；status 为 HTTP 状态码（连接失败、超时为 null）。
+ * message 是可直接给用户 / AI 看的说明（5xx 不带 worker 原文）；
+ * detail 是去掉服务器路径的完整原因，只进分析运行记录（运维 / 影子期报告）与日志。
+ */
 export class WorkerError extends Error {
-  constructor(readonly status: number | null, message: string) { super(message) }
+  readonly detail: string
+  constructor(readonly status: number | null, message: string, detail?: string) {
+    super(message)
+    this.detail = detail ?? message
+  }
+}
+
+/** 写进分析运行记录的失败原因：WorkerError 用完整原因，其它异常用 message */
+export function runFailureReason(err: unknown): string {
+  if (err instanceof WorkerError) return err.detail
+  return err instanceof Error ? err.message : String(err)
 }
 
 /** 调 worker；错误如实转成中文说明（501 模型不可用、404 影像不存在、其它 4xx 输入问题、其余为服务故障） */
@@ -44,10 +59,10 @@ export async function callWorker(fetchImpl: typeof fetch, base: string, path: st
     throw new WorkerError(null, `影像服务连接失败：${(err as Error).message}${cause ? `（${cause.code ?? cause.message ?? ''}）` : ''}`)
   }
   if (!resp.ok) {
-    let detail = ''
-    try { const t = await resp.text(); try { const j = JSON.parse(t); detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail ?? j) } catch { detail = t } } catch {}
+    const raw = await readWorkerDetail(resp)
     const kind = resp.status === 501 ? '模型不可用' : resp.status === 404 ? '影像不存在' : resp.status >= 400 && resp.status < 500 ? '影像输入有误' : '影像服务出错'
-    throw new WorkerError(resp.status, `${kind}（HTTP ${resp.status}）：${detail.slice(0, 300)}`)
+    const head = `${kind}（HTTP ${resp.status}）：`
+    throw new WorkerError(resp.status, head + publicWorkerDetail(resp.status, raw, 300, `callWorker ${path}`), head + scrubPaths(raw).slice(0, 300))
   }
   const text = await resp.text()
   return text ? JSON.parse(text) : null

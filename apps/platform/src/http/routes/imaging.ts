@@ -5,6 +5,7 @@ import type { PatientService, Actor } from '../../tenancy/patients.ts'
 import { finishJob, insertJob, latestJob, type AnalyzeJob, type JobStore } from '../../imaging/analyze-jobs.ts'
 import { guardImagingPayload } from '../../tenancy/imaging-guard.ts'
 import { isNifti } from '../../imaging/nifti-sniff.ts'
+import { publicWorkerDetail, readWorkerDetail, scrubPaths } from '../../imaging/worker-error.ts'
 import type { Access } from '../../research/access.ts'
 import { generateSlicerAndItkSnapPackage, generateImageJAnalysis } from '../../research/medical-figures.ts'
 
@@ -26,8 +27,8 @@ export interface ImagingRouteContext {
  * L3 体成分（HU 阈值法）测量、靶病灶测量与影像所见报告生成（不给诊断结论）。
  */
 /**
- * 把影像微服务的错误如实转给调用方：缺参数 / 影像不存在 / 模型不可用（400 / 404 / 422 / 501）原样返回状态码与原因，
- * 其它错误为 502。
+ * 把影像微服务的错误转给调用方：缺参数 / 影像不存在 / 模型不可用（400 / 404 / 422 / 501）原样返回状态码与原因
+ * （服务器路径只留文件名）；其它错误为 502，只给通用说明，原因记平台日志（见 imaging/worker-error.ts）。
  */
 export async function workerFail(c: Context, resp: Response, code: string): Promise<Response> {
   const { status, message } = await workerFailInfo(resp)
@@ -36,14 +37,10 @@ export async function workerFail(c: Context, resp: Response, code: string): Prom
 
 /** workerFail 的状态码与可读原因（后台任务里没有请求可回，只记原因） */
 export async function workerFailInfo(resp: Response): Promise<{ status: number; message: string }> {
-  let message = ''
-  try {
-    const text = await resp.text()
-    try { const j = JSON.parse(text); message = typeof j.detail === 'string' ? j.detail : j.detail ? JSON.stringify(j.detail) : (j.message ?? j.error ?? text) } catch { message = text }
-  } catch {}
+  const detail = publicWorkerDetail(resp.status, await readWorkerDetail(resp), 500, 'HTTP 路由')
   const pass = [400, 404, 422, 501].includes(resp.status)
   const prefix = resp.status === 501 ? '模型不可用：' : resp.status === 404 ? '影像或样本不存在：' : resp.status === 400 || resp.status === 422 ? '请求参数有误：' : `影像微服务出错（HTTP ${resp.status}）：`
-  return { status: pass ? resp.status : 502, message: `${prefix}${String(message).slice(0, 500)}` }
+  return { status: pass ? resp.status : 502, message: `${prefix}${detail}` }
 }
 
 export function registerImagingRoutes(
@@ -549,7 +546,7 @@ export function registerImagingRoutes(
           const wData = await wResp.json()
           if (job.status === 'running') {
             if (typeof wData.stage === 'string' && wData.stage) job.stage = wData.stage
-            if (typeof wData.detail === 'string' && wData.detail) job.detail = wData.detail
+            if (typeof wData.detail === 'string' && wData.detail) job.detail = scrubPaths(wData.detail).slice(0, 500)
             if (typeof wData.percent === 'number' && wData.percent > job.percent && wData.percent < 98) {
               job.percent = wData.percent
             }

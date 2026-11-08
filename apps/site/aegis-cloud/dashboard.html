@@ -876,8 +876,11 @@
     }
     applyLang(currentLang);
 
-    let authKey = hashParams.get('key') || '';
+    // key 只从链接 hash 带入：立即从地址栏抹掉（不进历史记录 / Referer），存 sessionStorage 让本标签页刷新后仍可用；
+    // 关闭标签页即失效，「清除」与 401 时一并删除
+    let authKey = hashParams.get('key') || sessionStorage.getItem('aegis_approve_key') || '';
     if (hashParams.get('key')) {
+      sessionStorage.setItem('aegis_approve_key', authKey);
       history.replaceState(null, '', location.pathname + location.search);
     }
 

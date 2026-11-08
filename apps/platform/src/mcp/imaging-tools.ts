@@ -7,6 +7,7 @@ import { ImagingStudyService } from '../imaging/studies.ts'
 import { orthancFromEnv } from '../imaging/orthanc.ts'
 import { sharedPipeline } from '../imaging/pipeline.ts'
 import { guardImagingPayload } from '../tenancy/imaging-guard.ts'
+import { publicWorkerDetail, readWorkerDetail } from '../imaging/worker-error.ts'
 import type { StudyService } from '../research/service.ts'
 import type { DatasetService } from '../datasets/service.ts'
 import type { CohortService } from '../research/cohort.ts'
@@ -36,12 +37,11 @@ import {
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] })
 const json = (value: unknown) => text(JSON.stringify(value, null, 2))
-/** 影像微服务错误如实转给 AI：400/422 参数有误、404 影像不存在、501 模型不可用 */
+/** 影像微服务错误转给 AI：400/422 参数有误、404 影像不存在、501 模型不可用如实给原因；其它 5xx 只给通用说明 */
 async function workerToolFail(code: string, resp: Response) {
-  let detail = ''
-  try { const t = await resp.text(); try { const j = JSON.parse(t); detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail ?? j) } catch { detail = t } } catch {}
+  const detail = publicWorkerDetail(resp.status, await readWorkerDetail(resp), 500, `MCP ${code}`)
   const kind = resp.status === 501 ? '模型不可用' : resp.status === 404 ? '影像或样本不存在' : resp.status === 400 || resp.status === 422 ? '请求参数有误' : '影像微服务出错'
-  return fail(code, `${kind}（HTTP ${resp.status}）：${detail.slice(0, 500)}`, { worker_status: resp.status })
+  return fail(code, `${kind}（HTTP ${resp.status}）：${detail}`, { worker_status: resp.status })
 }
 
 /** 不使用默认演示样本：既没有样本也没有文件时直接报错 */
