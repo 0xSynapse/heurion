@@ -7,6 +7,11 @@ from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Dict, Any, List, Optional, Callable
 
+try:
+    from .errors import InputError
+except (ImportError, ValueError):
+    from errors import InputError
+
 # Default model directory: configurable via HEURION_MODEL_DIR or defaults to user cache
 DEFAULT_CACHE_DIR = Path(os.environ.get("HEURION_MODEL_DIR", Path.home() / ".cache" / "heurion" / "models"))
 
@@ -555,7 +560,7 @@ def pull_model(
     """
     spec = OFFICIAL_MODEL_REGISTRY.get(name)
     if not spec:
-        raise ValueError(f"Model '{name}' is not in the official model registry.")
+        raise InputError(f"Model '{name}' is not in the official model registry.")
 
     cache_dir = get_model_cache_dir()
     local_file = cache_dir / spec.file_name

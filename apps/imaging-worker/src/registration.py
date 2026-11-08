@@ -16,6 +16,11 @@ from scipy.ndimage import (
 )
 
 try:
+    from .errors import InputError
+except (ImportError, ValueError):
+    from errors import InputError
+
+try:
     from .device import get_optimal_device, get_device_info
     from .dicom_io import apply_ct_window
     from .renderer import png_to_base64
@@ -239,15 +244,15 @@ def compute_pet_metrics_and_fusion(
     if roi_mask is not None:
         roi = np.asarray(roi_mask).astype(bool)
         if roi.shape != pet_volume.shape:
-            raise ValueError(f"roi_mask 形状 {roi.shape} 与 PET 体积 {pet_volume.shape} 不一致")
+            raise InputError(f"roi_mask 形状 {roi.shape} 与 PET 体积 {pet_volume.shape} 不一致")
         if not np.any(roi):
-            raise ValueError("roi_mask 为空，无法计算 SUV 指标")
+            raise InputError("roi_mask 为空，无法计算 SUV 指标")
         roi_desc = "调用方提供的 ROI"
     elif physiological_exclusion_note and str(physiological_exclusion_note).strip():
         roi = np.ones(pet_volume.shape, dtype=bool)
         roi_desc = f"全体积（调用方说明：{str(physiological_exclusion_note).strip()}）"
     else:
-        raise ValueError(
+        raise InputError(
             "未提供 roi_mask 或生理性摄取排除说明：全体积阈值会把脑、膀胱等生理性摄取计入 MTV，拒绝计算"
         )
 
@@ -255,7 +260,7 @@ def compute_pet_metrics_and_fusion(
     units = meta.get("Units")
     units_norm = str(units).strip().upper().replace("/", "") if units else None
     if units_norm in ("BQML", "BQ", "CNTS", "COUNTS"):
-        raise ValueError(f"PET 体素单位为 {units}，不是 SUV；需先按注射剂量、衰变与体重换算为 SUV")
+        raise InputError(f"PET 体素单位为 {units}，不是 SUV；需先按注射剂量、衰变与体重换算为 SUV")
     if units_norm in ("GML", "SUV", "SUVBW"):
         suv_note = f"PET 单位标记为 {units}，按 SUV 使用；换算过程未在本模块复核"
         suv_units_verified = True
@@ -389,9 +394,9 @@ def delineate_radiotherapy_targets(
 
     gtv_mask = np.asarray(metabolic_or_lesion_mask).astype(bool)
     if gtv_mask.shape != ct_volume.shape:
-        raise ValueError(f"GTV 掩膜形状 {gtv_mask.shape} 与 CT 体积 {ct_volume.shape} 不一致")
+        raise InputError(f"GTV 掩膜形状 {gtv_mask.shape} 与 CT 体积 {ct_volume.shape} 不一致")
     if not np.any(gtv_mask):
-        raise ValueError("GTV 掩膜为空，无法外扩靶区")
+        raise InputError("GTV 掩膜为空，无法外扩靶区")
 
     # 1. GTV Volume in cm³
     gtv_voxels = int(np.sum(gtv_mask))

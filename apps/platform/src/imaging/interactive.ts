@@ -1,7 +1,7 @@
 import type { Actor, PatientService } from '../tenancy/patients.ts'
 import { orthancFromEnv, type Orthanc } from './orthanc.ts'
 import { ImagingError, ImagingStudyService, POINT_TASK, parseSegRef, segRef, type LesionRow } from './studies.ts'
-import { callWorker, runFailureReason, uploadSeries, WorkerError } from './worker.ts'
+import { callWorker, uploadSeries, WorkerError } from './worker.ts'
 
 /**
  * 阅片器里医生点选分割结节（PRD T2.3，docs/design/IMAGING_STUDIES.md「点选补漏与修边界」）：
@@ -230,7 +230,7 @@ export class ImagingInteractive {
     } catch (err) {
       if (err instanceof Handled) throw err.inner
       if (!(err instanceof ImagingError && err.code === 'nothing_segmented')) {
-        try { this.studies.setRunStatus(a, run.id, 'failed', runFailureReason(err)) } catch {}
+        try { this.studies.setRunStatus(a, run.id, 'failed', err instanceof Error ? err.message : String(err)) } catch {}
         if (err instanceof WorkerError) throw new ImagingError('worker_failed', err.message, err.status === 400 ? 422 : 502)
       }
       throw err

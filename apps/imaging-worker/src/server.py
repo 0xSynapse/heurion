@@ -9,8 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Union
 
+def _log_level(raw: Optional[str]) -> int:
+    """IMAGING_WORKER_LOG_LEVEL 不区分大小写；写错时退回 INFO，不让服务因此起不来。"""
+    level = logging.getLevelName((raw or "INFO").strip().upper())
+    return level if isinstance(level, int) else logging.INFO
+
+
 logging.basicConfig(
-    level=os.environ.get("IMAGING_WORKER_LOG_LEVEL", "INFO"),
+    level=_log_level(os.environ.get("IMAGING_WORKER_LOG_LEVEL")),
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 logger = logging.getLogger("imaging-worker")
@@ -34,6 +40,7 @@ try:
     from .volume_geometry import geometry_of, geometry_summary, source_headers_of
     from .resource_gate import MemoryGate, default_budget_gb, default_interactive_reserve_gb, task_cost_gb
     from .nodule_matching import match_nodules
+    from .errors import InputError
 except (ImportError, ValueError):
     from device import get_device_info
     from engine import MONAIEngine, generate_synthetic_ct_volume, ModelUnavailableError
@@ -45,6 +52,7 @@ except (ImportError, ValueError):
     from volume_geometry import geometry_of, geometry_summary, source_headers_of
     from resource_gate import MemoryGate, default_budget_gb, default_interactive_reserve_gb, task_cost_gb
     from nodule_matching import match_nodules
+    from errors import InputError
 
 from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -79,13 +87,14 @@ INFERENCE_GATE = MemoryGate(default_budget_gb(), int(os.environ.get("IMAGING_CON
 INFERENCE_SEMAPHORE = INFERENCE_GATE.slot(task_cost_gb("default"), "inference")
 
 
-_EXPECTED_ERRORS = (FileNotFoundError, ValueError, ModelUnavailableError)
+# 调用方能改正的问题；只有 InputError 算参数错误，第三方库抛的普通 ValueError 按内部错误处理（见 errors.py）
+_EXPECTED_ERRORS = (FileNotFoundError, InputError, ModelUnavailableError)
 
 
 def raise_http(exc: Exception, prefix: str) -> None:
-    """把引擎异常如实映射为 HTTP 状态：缺影像 404、参数/输入问题 400、模型不可用 501，其余 500。
+    """把引擎异常如实映射为 HTTP 状态：缺影像 404、输入问题（InputError）400、模型不可用 501，其余 500。
 
-    worker 只监听本机、只被平台调用，detail 保留引擎原因，平台据此排查；
+    worker 只在内网、只被平台调用，detail 保留引擎原因，平台据此排查；
     对用户和 AI 的清理（去服务器路径、5xx 只给通用说明）在平台出口做，见 platform/src/imaging/worker-error.ts。
     """
     if isinstance(exc, HTTPException):
@@ -96,7 +105,7 @@ def raise_http(exc: Exception, prefix: str) -> None:
         logger.exception("%s：未预期的异常", prefix)
     if isinstance(exc, FileNotFoundError):
         raise HTTPException(status_code=404, detail=f"{prefix}: {exc}")
-    if isinstance(exc, ValueError):
+    if isinstance(exc, InputError):
         raise HTTPException(status_code=400, detail=f"{prefix}: {exc}")
     if isinstance(exc, ModelUnavailableError):
         raise HTTPException(status_code=501, detail=f"{prefix}: {exc}")
@@ -106,7 +115,7 @@ def raise_http(exc: Exception, prefix: str) -> None:
 def job_failure_detail(exc: Exception) -> str:
     """后台任务进度里的失败原因：预期异常给引擎原因，其它只给通用说明（进度会被平台轮询转给前端）。"""
     if isinstance(exc, HTTPException):
-        return str(exc.detail)
+        return str(exc.detail) if exc.status_code < 500 else "内部错误（详见影像服务日志）"
     if isinstance(exc, _EXPECTED_ERRORS):
         return str(exc)
     return "内部错误（详见影像服务日志）"
@@ -718,8 +727,12 @@ async def upload_volume(
     try:
         loaded = await run_in_threadpool(load_volume, content, file.filename)
         vol, spacing, modality = loaded
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to decode imaging file '{file.filename}': {str(e)}")
+    except InputError as e:
+        raise HTTPException(status_code=400, detail=f"无法解析影像文件 '{file.filename}'：{e}")
+    except Exception:
+        # 解码库的原始异常只进日志；对外说明文件损坏或格式不支持
+        logger.exception("影像文件解码失败: %s", file.filename)
+        raise HTTPException(status_code=400, detail=f"无法解析影像文件 '{file.filename}'：文件损坏或格式不受支持")
 
     info = engine.register_volume(volume_id, vol, spacing, modality, geometry=geometry_of(loaded),
                                   source_headers=source_headers_of(loaded))
@@ -1536,7 +1549,7 @@ def pull_model_endpoint(req: PullModelRequest = Body(...)):
     """Downloads official model weights from Model Zoo / HuggingFace with SHA-256 integrity validation."""
     try:
         return pull_model(name=req.model_name, force=req.force or False)
-    except ValueError as e:
+    except InputError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"拉取模型失败: {str(e)}")

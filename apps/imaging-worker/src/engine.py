@@ -9,6 +9,11 @@ import numpy as np
 import torch
 from typing import Dict, Any, Tuple, Optional, List
 try:
+    from .errors import InputError
+except (ImportError, ValueError):
+    from errors import InputError
+
+try:
     from .device import get_optimal_device, get_device_info
     from .dicom_io import apply_ct_window, CT_WINDOWS
     from .recist import calculate_recist_metrics, calculate_subsolid_metrics, calculate_volume_doubling_time
@@ -141,7 +146,7 @@ def display_plane_slice(vol_zyx: np.ndarray, plane: str, index: int) -> np.ndarr
         return vol_zyx[::-1, index, :]
     if plane == "sagittal":
         return vol_zyx[::-1, :, index]
-    raise ValueError(f"未知截面方向: {plane}")
+    raise InputError(f"未知截面方向: {plane}")
 
 
 def _plane_geometry(shape: Tuple[int, int, int], spacing: Tuple[float, float, float], plane: str) -> Tuple[int, float, float, str]:
@@ -735,23 +740,23 @@ class MonaiNeuralInferencePipeline:
         from monai.inferers import sliding_window_inference
 
         if not file_path or not os.path.exists(str(file_path)):
-            raise ValueError("BraTS 推理需要原始 4 通道 MRI 文件路径（单通道体积不能用于该模型）")
+            raise InputError("BraTS 推理需要原始 4 通道 MRI 文件路径（单通道体积不能用于该模型）")
         if not channel_order:
-            raise ValueError(f"BraTS 推理需声明输入文件的通道顺序（例如 ['FLAIR','T1','T1c','T2']），模型要求顺序为 {list(BRATS_CHANNEL_ORDER)}")
+            raise InputError(f"BraTS 推理需声明输入文件的通道顺序（例如 ['FLAIR','T1','T1c','T2']），模型要求顺序为 {list(BRATS_CHANNEL_ORDER)}")
         order = [str(c).strip() for c in channel_order]
         norm = {c.upper().replace("GD", "C").replace("CE", "C"): i for i, c in enumerate(order)}
         missing = [c for c in BRATS_CHANNEL_ORDER if c.upper() not in norm]
         if missing or len(order) != 4:
-            raise ValueError(f"通道顺序声明须恰好包含 {list(BRATS_CHANNEL_ORDER)} 四个序列，缺少: {missing}")
+            raise InputError(f"通道顺序声明须恰好包含 {list(BRATS_CHANNEL_ORDER)} 四个序列，缺少: {missing}")
 
         t0 = time.time()
         nimg = nib.load(str(file_path))
         data = np.asarray(nimg.get_fdata(dtype=np.float32))
         if data.ndim != 4 or data.shape[3] != 4:
-            raise ValueError(f"BraTS 推理需要 4 通道体积，当前数据形状为 {data.shape}；缺序列时不能推理")
+            raise InputError(f"BraTS 推理需要 4 通道体积，当前数据形状为 {data.shape}；缺序列时不能推理")
         zooms = nimg.header.get_zooms()[:3]
         if any(abs(float(z) - 1.0) > 0.1 for z in zooms):
-            raise ValueError(f"BraTS bundle 要求 1 mm 各向同性输入，当前体素间距 {tuple(float(z) for z in zooms)}，请先重采样")
+            raise InputError(f"BraTS bundle 要求 1 mm 各向同性输入，当前体素间距 {tuple(float(z) for z in zooms)}，请先重采样")
 
         idx = [norm[c.upper()] for c in BRATS_CHANNEL_ORDER]
         img = torch.from_numpy(np.transpose(data[..., idx], (3, 0, 1, 2)).copy())
@@ -1160,7 +1165,7 @@ class MonaiNeuralInferencePipeline:
         for q, label in extra_points or []:
             q = [int(v) for v in q]
             if any(not (l <= v < h) for v, l, h in zip(q, lo, hi)):
-                raise ValueError(f"提示点 {q} 不在以 {p} 为中心的推理窗口内（约 {round(half_mm)} mm 见方的一半），离结节太远")
+                raise InputError(f"提示点 {q} 不在以 {p} 为中心的推理窗口内（约 {round(half_mm)} mm 见方的一半），离结节太远")
             prompts.append((q, int(label)))
         if prompts:
             # 原网格下标 -> 重采样网格下标（align_corners=False 的中心对齐），再换到 RAS 轴
@@ -1180,7 +1185,7 @@ class MonaiNeuralInferencePipeline:
             kwargs["class_vector"] = cls_vec
             kwargs["prompt_class"] = cls_vec
         if not kwargs:
-            raise ValueError("VISTA-3D 需要点提示或类别提示")
+            raise InputError("VISTA-3D 需要点提示或类别提示")
         with torch.no_grad():
             logits = model(input_images=inp, **kwargs)
         lg = logits[0, 0].detach().float().cpu().numpy()
@@ -1260,7 +1265,7 @@ class MonaiNeuralInferencePipeline:
         t0 = time.time()
         p = self._parse_point_zyx(prompt_point, vol_zyx.shape)
         if p is None:
-            raise ValueError(f"无法解析提示点: {prompt_point}")
+            raise InputError(f"无法解析提示点: {prompt_point}")
         mask_zyx, info = self._vista3d_window_inference(vol_zyx, spacing, p, use_point=True, window=window,
                                                         extra_points=extra_points, prompt_class=prompt_class)
         if prompt_class is not None:
@@ -1869,15 +1874,15 @@ class MONAIEngine:
         vol, spacing, _ = entry
         geometry = geometry_of(entry)
         if not geometry or geometry.get("affine_zyx_to_lps") is None:
-            raise ValueError("体积没有 DICOM 病人坐标几何，不能按阅片器坐标点选")
+            raise InputError("体积没有 DICOM 病人坐标几何，不能按阅片器坐标点选")
         points = []
         for q in points_lps or []:
             lps = q.get("lps_mm")
             if not isinstance(lps, (list, tuple)) or len(lps) != 3:
-                raise ValueError(f"提示点坐标须为 [X, Y, Z]（mm）：{lps}")
+                raise InputError(f"提示点坐标须为 [X, Y, Z]（mm）：{lps}")
             zyx = lps_to_voxel(geometry, lps)
             if any(not (0 <= v < n) for v, n in zip(zyx, vol.shape)):
-                raise ValueError(f"提示点 {list(lps)} 不在所分析的序列范围内（换算到体素 {zyx}）")
+                raise InputError(f"提示点 {list(lps)} 不在所分析的序列范围内（换算到体素 {zyx}）")
             points.append({"zyx": zyx, "positive": bool(q.get("positive", True))})
         load_ms = int(round((time.time() - t0) * 1000))
         res = segment_nodule_at_points(self.neural_pipeline, vol, spacing, points, geometry=geometry, lobe=lobe)
@@ -1909,12 +1914,12 @@ class MONAIEngine:
         vol, spacing, _ = entry
         geometry = geometry_of(entry)
         if not geometry or geometry.get("affine_zyx_to_lps") is None:
-            raise ValueError("体积没有 DICOM 病人坐标几何，不能按病人坐标定位")
+            raise InputError("体积没有 DICOM 病人坐标几何，不能按病人坐标定位")
         if not isinstance(lps_mm, (list, tuple)) or len(lps_mm) != 3:
-            raise ValueError(f"坐标须为 [X, Y, Z]（mm）：{lps_mm}")
+            raise InputError(f"坐标须为 [X, Y, Z]（mm）：{lps_mm}")
         zyx = lps_to_voxel(geometry, lps_mm)
         if any(not (0 <= v < n) for v, n in zip(zyx, vol.shape)):
-            raise ValueError(f"坐标 {list(lps_mm)} 不在所分析的序列范围内")
+            raise InputError(f"坐标 {list(lps_mm)} 不在所分析的序列范围内")
         _, status = self.neural_pipeline._verified_weights("vista3d")
         lobe, note = locate_lobe_roi(self.neural_pipeline, vol, spacing, zyx, max(0.0, float(radius_mm)))
         return {
@@ -1932,7 +1937,7 @@ class MONAIEngine:
     ) -> Dict[str, Any]:
         """读取 NIfTI 或 DICOM 并运行指定模型；模型必须由调用方给出。"""
         if not model_name:
-            raise ValueError("缺少 model_name：请指定要运行的分析模型")
+            raise InputError("缺少 model_name：请指定要运行的分析模型")
         progress_cb = kwargs.get("progress_cb")
         if callable(progress_cb):
             progress_cb("解析 DICOM / NIfTI 体素矩阵", 18, "正在读取影像文件并校验空间仿射矩阵...")
@@ -1982,7 +1987,7 @@ class MONAIEngine:
         4. 影像所见描述（只写测量所见，不给诊断结论与处置建议）。
         """
         if not model_name:
-            raise ValueError("缺少 model_name：请指定要运行的分析模型")
+            raise InputError("缺少 model_name：请指定要运行的分析模型")
         if model_name in NOT_IMPLEMENTED_MODELS:
             raise ModelUnavailableError(f"模型 '{model_name}' 未实现：{NOT_IMPLEMENTED_MODELS[model_name]}")
 
@@ -2277,7 +2282,7 @@ class MONAIEngine:
             elif isinstance(prompt_pt, (list, tuple)) and len(prompt_pt) == 3:
                 seed = tuple(int(v) for v in prompt_pt)
             else:
-                raise ValueError("HU 区域生长需要种子点 prompt_point={z, y, x}")
+                raise InputError("HU 区域生长需要种子点 prompt_point={z, y, x}")
             seed = tuple(int(np.clip(s, 0, volume.shape[i] - 1)) for i, s in enumerate(seed))
             seed_val = float(volume[seed])
             tol = 45.0
@@ -2450,7 +2455,7 @@ class MONAIEngine:
     def load_volume_data(self, sample_id_or_path: str) -> Tuple[np.ndarray, Tuple[float, float, float], str]:
         """按内存缓存 -> data 目录样本 ID -> 文件/目录路径的顺序读取体积；都找不到就报错，不生成合成体。"""
         if not sample_id_or_path:
-            raise ValueError("缺少影像来源：请提供 sample_id、volume_id 或 file_path")
+            raise InputError("缺少影像来源：请提供 sample_id、volume_id 或 file_path")
         if hasattr(self, "volume_cache") and sample_id_or_path in self.volume_cache:
             return self.volume_cache[sample_id_or_path]
 
@@ -2578,7 +2583,7 @@ class MONAIEngine:
 
         plane = (plane or "axial").lower()
         if plane not in ("axial", "coronal", "sagittal"):
-            raise ValueError(f"未知截面方向: {plane}")
+            raise InputError(f"未知截面方向: {plane}")
 
         mask = self.get_or_compute_mask(sample_id_or_path, vol, spacing, model_name=model_name) if overlay else None
         overlay_method = self.mask_method_cache.get(f"{sample_id_or_path}:{model_name}") if mask is not None else None
@@ -2640,11 +2645,11 @@ class MONAIEngine:
         红色 = CT 值升高超过阈值，绿色 = CT 值降低超过阈值。
         """
         if not baseline_id_or_path or not followup_id_or_path:
-            raise ValueError("缺少基线或随访影像")
+            raise InputError("缺少基线或随访影像")
         vol_b, spacing_b, _ = self.load_volume_data(baseline_id_or_path)
         vol_f, spacing_f, _ = self.load_volume_data(followup_id_or_path)
         if vol_f.shape != vol_b.shape or not np.allclose(spacing_b, spacing_f, atol=1e-3):
-            raise ValueError(
+            raise InputError(
                 f"基线 {vol_b.shape}/{tuple(round(float(s), 3) for s in spacing_b)} 与随访 "
                 f"{vol_f.shape}/{tuple(round(float(s), 3) for s in spacing_f)} 体素网格不一致；未配准的体积不能逐体素比较，请先完成配准"
             )
@@ -2661,7 +2666,7 @@ class MONAIEngine:
 
         plane = (plane or "axial").lower()
         if plane not in ("axial", "coronal", "sagittal"):
-            raise ValueError(f"未知截面方向: {plane}")
+            raise InputError(f"未知截面方向: {plane}")
         window_defaulted = False
         if not window_preset:
             window_preset = "abdomen"
@@ -2725,18 +2730,18 @@ class MONAIEngine:
         """
         if volume is None:
             if not sample_id_or_path:
-                raise ValueError("缺少影像：请提供 sample_id / file_path 或直接传入体积")
+                raise InputError("缺少影像：请提供 sample_id / file_path 或直接传入体积")
             volume, detected_spacing, _ = self.load_volume_data(sample_id_or_path)
             if spacing is None:
                 spacing = detected_spacing
         if spacing is None:
-            raise ValueError("缺少体素间距 spacing")
+            raise InputError("缺少体素间距 spacing")
 
         mask_source = "caller_array"
         if mask is None and mask_id_or_path:
             m_vol, m_spacing, _ = self.load_volume_data(mask_id_or_path)
             if m_vol.shape != volume.shape:
-                raise ValueError(f"掩膜网格 {m_vol.shape} 与影像 {volume.shape} 不一致")
+                raise InputError(f"掩膜网格 {m_vol.shape} 与影像 {volume.shape} 不一致")
             mask = (m_vol > 0.5).astype(np.uint8)
             mask_source = f"mask_file:{mask_id_or_path}"
         if mask is None and model_name and sample_id_or_path:
@@ -2746,9 +2751,9 @@ class MONAIEngine:
                 mask = cached
                 mask_source = f"cached_segmentation:{model_name}"
         if mask is None:
-            raise ValueError("缺少 ROI 掩膜：请提供掩膜文件，或先用指定模型对该影像完成分割")
+            raise InputError("缺少 ROI 掩膜：请提供掩膜文件，或先用指定模型对该影像完成分割")
         if not np.any(mask):
-            raise ValueError("ROI 掩膜为空，无法计算影像组学特征")
+            raise InputError("ROI 掩膜为空，无法计算影像组学特征")
 
         res = extract_radiomics_features(volume=volume, mask=mask, spacing=spacing, num_bins=num_bins)
         if isinstance(res, dict):
@@ -2776,14 +2781,14 @@ class MONAIEngine:
         modality = "CT"
         if volume is None:
             if not sample_id_or_path:
-                raise ValueError("缺少影像：请提供 sample_id / file_path 或直接传入体积")
+                raise InputError("缺少影像：请提供 sample_id / file_path 或直接传入体积")
             volume, detected_spacing, modality = self.load_volume_data(sample_id_or_path)
             if spacing is None:
                 spacing = detected_spacing
         if spacing is None:
-            raise ValueError("缺少体素间距 spacing")
+            raise InputError("缺少体素间距 spacing")
         if not points and not bbox:
-            raise ValueError("交互分割需要至少一个提示点或外接盒")
+            raise InputError("交互分割需要至少一个提示点或外接盒")
 
         anatomical_prior = None
         if window_preset in ("lung", "mediastinum"):

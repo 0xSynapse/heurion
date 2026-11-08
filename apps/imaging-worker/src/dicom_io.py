@@ -7,6 +7,11 @@ import numpy as np
 from typing import Dict, Any, List, Tuple, Optional, Union
 
 try:
+    from .errors import InputError
+except (ImportError, ValueError):
+    from errors import InputError
+
+try:
     from .volume_geometry import CachedVolume, canonical_affine_from_ras, make_geometry, match_sop_uids, strip_pixel_data
 except (ImportError, ValueError):
     from volume_geometry import CachedVolume, canonical_affine_from_ras, make_geometry, match_sop_uids, strip_pixel_data
@@ -309,7 +314,7 @@ def load_dicom_series(folder_path: str) -> Tuple[np.ndarray, Tuple[float, float,
             
     if not slices:
         detail = f"（原因：{last_err}）" if last_err else ""
-        raise ValueError(f"在影像路径 ({folder_path}) 中未找到合法的 DICOM 切片文件{detail}")
+        raise InputError(f"在影像路径 ({folder_path}) 中未找到合法的 DICOM 切片文件{detail}")
         
     return _build_volume_from_slices(slices)
 
@@ -348,7 +353,7 @@ def load_dicom_from_zip(zip_source: Union[str, bytes, io.BytesIO]) -> Tuple[np.n
 
     if not slices:
         detail = f"（原因：{last_err}）" if last_err else ""
-        raise ValueError(f"ZIP 序列包中未解析出合法的 DICOM 影像切片{detail}")
+        raise InputError(f"ZIP 序列包中未解析出合法的 DICOM 影像切片{detail}")
 
     return _build_volume_from_slices(slices)
 
@@ -387,7 +392,7 @@ def _normalize_dicom_pixel_array(arr: np.ndarray) -> np.ndarray:
         return a.reshape((-1, a.shape[-2], a.shape[-1]))
     if a.ndim > 4:
         return a.reshape((-1, a.shape[-2], a.shape[-1]))
-    raise ValueError(f"不支持的 DICOM 像素矩阵维度: {a.shape}")
+    raise InputError(f"不支持的 DICOM 像素矩阵维度: {a.shape}")
 
 
 def load_dicom_file(file_source: Union[str, bytes, io.BytesIO]) -> Tuple[np.ndarray, Tuple[float, float, float], Dict[str, Any]]:
@@ -399,7 +404,7 @@ def load_dicom_file(file_source: Union[str, bytes, io.BytesIO]) -> Tuple[np.ndar
         file_source = io.BytesIO(file_source)
     ds = pydicom.dcmread(file_source, force=True)
     if not hasattr(ds, "PixelData") and not hasattr(ds, "FloatPixelData") and not hasattr(ds, "DoubleFloatPixelData"):
-        raise ValueError("DICOM 文件不包含体素矩阵数据 (pixel_array)")
+        raise InputError("DICOM 文件不包含体素矩阵数据 (pixel_array)")
 
     pixel_array = _safe_read_pixel_array(ds)
     try:
@@ -498,7 +503,7 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
     Supports single-slice 2D, multi-slice 2D series, multi-frame 3D DICOMs, and RGB DICOMs.
     """
     if not slices:
-        raise ValueError("未检测到有效 DICOM 切片")
+        raise InputError("未检测到有效 DICOM 切片")
 
     # 1. Group slices by SeriesInstanceUID to isolate Scout / Localizer / Secondary Captures
     series_groups: Dict[str, list] = {}
@@ -533,7 +538,7 @@ def _build_volume_from_slices(slices: list) -> Tuple[np.ndarray, Tuple[float, fl
 
     if not shape_groups:
         detail = f"（解码错误：{last_decode_err}）" if last_decode_err else ""
-        raise ValueError(f"无法从选定 DICOM 序列中读取体素切片矩阵{detail}")
+        raise InputError(f"无法从选定 DICOM 序列中读取体素切片矩阵{detail}")
 
     valid_slices = max(shape_groups.values(), key=_series_frame_count)
 

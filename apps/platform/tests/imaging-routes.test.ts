@@ -44,6 +44,24 @@ describe('scrubPaths', () => {
     expect(scrubPaths('PET 体素单位为 Bq/ml，不是 SUV')).toBe('PET 体素单位为 Bq/ml，不是 SUV')
     expect(scrubPaths('至少需要一个正点')).toBe('至少需要一个正点')
   })
+
+  it('冒号后紧跟的路径、中文目录名也整段替换', () => {
+    expect(scrubPaths('影像文件不存在:/srv/data/tenants/t1/ct_001.nii.gz')).toBe('影像文件不存在:ct_001.nii.gz')
+    expect(scrubPaths('文件不存在: /srv/data/患者张三/ct.nii.gz')).toBe('文件不存在: ct.nii.gz')
+    expect(scrubPaths('在影像路径 (/srv/data/患者张三/dcm) 中未找到合法的 DICOM 切片文件')).toBe('在影像路径 (dcm) 中未找到合法的 DICOM 切片文件')
+    expect(scrubPaths('路径 /srv/data/x/ct.nii.gz。请检查')).toBe('路径 ct.nii.gz。请检查')
+  })
+})
+
+describe('worker 其它 4xx', () => {
+  it('413 等状态码原样转出，不报成 502', async () => {
+    const app = new Hono()
+    app.get('/', c => workerFail(c, new Response(JSON.stringify({ detail: '上传文件过大' }), { status: 413 }), 'imaging_upload_failed'))
+    const res = await app.request('/')
+    expect(res.status).toBe(413)
+    const body = await res.json() as { message: string }
+    expect(body.message).toBe('请求参数有误：上传文件过大')
+  })
 })
 
 describe('MPR 不使用默认演示样本', () => {

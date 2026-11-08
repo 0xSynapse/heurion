@@ -17,6 +17,11 @@ import numpy as np
 import scipy.ndimage as ndi
 
 try:
+    from .errors import InputError
+except (ImportError, ValueError):
+    from errors import InputError
+
+try:
     from .recist import calculate_subsolid_metrics
     from .volume_geometry import box_to_lps_bounds, geometry_summary, sop_uid_at, voxel_to_lps
 except (ImportError, ValueError):
@@ -409,18 +414,18 @@ def run_lung_nodule_pipeline(
     """
     t0 = time.time()
     if max_nodules is None or int(max_nodules) < 1 or int(max_nodules) > 100:
-        raise ValueError("max_nodules 须在 1~100 之间")
+        raise InputError("max_nodules 须在 1~100 之间")
     if min_score is not None and not (0.0 <= float(min_score) <= 1.0):
-        raise ValueError("min_score 须在 0~1 之间")
+        raise InputError("min_score 须在 0~1 之间")
     if lobe_mode not in LOBE_MODES:
-        raise ValueError(f"lobe_mode 须为 {'/'.join(LOBE_MODES)}")
+        raise InputError(f"lobe_mode 须为 {'/'.join(LOBE_MODES)}")
     if lobe_resample_mm is not None and not (1.0 <= float(lobe_resample_mm) <= 5.0):
-        raise ValueError("lobe_resample_mm 须在 1~5 mm 之间")
+        raise InputError("lobe_resample_mm 须在 1~5 mm 之间")
     if detector_sw_overlap is not None and not (0.0 <= float(detector_sw_overlap) < 1.0):
-        raise ValueError("detector_sw_overlap 须在 [0, 1) 之间")
+        raise InputError("detector_sw_overlap 须在 [0, 1) 之间")
     volume = np.asarray(volume)
     if volume.ndim != 3:
-        raise ValueError(f"需要三维体积，收到 {volume.ndim} 维")
+        raise InputError(f"需要三维体积，收到 {volume.ndim} 维")
     spacing = tuple(float(s) for s in spacing)
     timings: Dict[str, Any] = {}
 
@@ -654,21 +659,21 @@ def segment_nodule_at_points(
     t0 = time.time()
     volume = np.asarray(volume)
     if volume.ndim != 3:
-        raise ValueError(f"需要三维体积，收到 {volume.ndim} 维")
+        raise InputError(f"需要三维体积，收到 {volume.ndim} 维")
     spacing = tuple(float(s) for s in spacing)
     if not points or len(points) > 20:
-        raise ValueError("提示点须为 1~20 个")
+        raise InputError("提示点须为 1~20 个")
     pts = []
     for q in points:
         zyx = [int(v) for v in q["zyx"]]
         if any(not (0 <= v < n) for v, n in zip(zyx, volume.shape)):
-            raise ValueError(f"提示点 {zyx} 不在影像范围内")
+            raise InputError(f"提示点 {zyx} 不在影像范围内")
         pts.append((zyx, bool(q.get("positive", True))))
     positives = [z for z, pos in pts if pos]
     if not positives:
-        raise ValueError("至少需要一个正点（点在结节上）")
+        raise InputError("至少需要一个正点（点在结节上）")
     if lobe_resample_mm is not None and not (1.0 <= float(lobe_resample_mm) <= 5.0):
-        raise ValueError("lobe_resample_mm 须在 1~5 mm 之间")
+        raise InputError("lobe_resample_mm 须在 1~5 mm 之间")
 
     _, seg_status = neural._verified_weights(SEGMENTER_REGISTRY_NAME)
     model_version = f"{SEGMENTER_REGISTRY_NAME}@{_version_tag(seg_status)}"

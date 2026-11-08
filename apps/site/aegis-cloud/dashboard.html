@@ -860,14 +860,26 @@
       } catch (_) {}
     }
 
-    let currentLang = localStorage.getItem('aegis_lang') || 'zh';
+    // 存储被禁用（沙箱 iframe、屏蔽站点数据等）时访问器会抛 SecurityError：读返回 null、写静默跳过，页面照常初始化
+    function guardedStorage(getStore) {
+      const run = (fn, fallback) => { try { return fn(getStore()); } catch (_) { return fallback; } };
+      return {
+        get: k => run(s => s.getItem(k), null),
+        set: (k, v) => run(s => s.setItem(k, v)),
+        del: k => run(s => s.removeItem(k)),
+      };
+    }
+    const ss = guardedStorage(() => window.sessionStorage);
+    const ls = guardedStorage(() => window.localStorage);
+
+    let currentLang = ls.get('aegis_lang') || 'zh';
     function applyLang(lang) {
       currentLang = lang === 'en' ? 'en' : 'zh';
       document.body.setAttribute('data-lang', currentLang);
       document.documentElement.lang = currentLang === 'en' ? 'en' : 'zh-CN';
       const btn = document.getElementById('lang-toggle');
       if (btn) btn.textContent = currentLang === 'en' ? '中文' : 'EN';
-      localStorage.setItem('aegis_lang', currentLang);
+      ls.set('aegis_lang', currentLang);
     }
     function toggleLang() {
       applyLang(currentLang === 'zh' ? 'en' : 'zh');
@@ -878,14 +890,14 @@
 
     // key 只从链接 hash 带入：立即从地址栏抹掉（不进历史记录 / Referer），存 sessionStorage 让本标签页刷新后仍可用；
     // 关闭标签页即失效，「清除」与 401 时一并删除
-    let authKey = hashParams.get('key') || sessionStorage.getItem('aegis_approve_key') || '';
+    let authKey = hashParams.get('key') || ss.get('aegis_approve_key') || '';
     if (hashParams.get('key')) {
-      sessionStorage.setItem('aegis_approve_key', authKey);
+      ss.set('aegis_approve_key', authKey);
       history.replaceState(null, '', location.pathname + location.search);
     }
 
-    let currentOrgId = qs.get('org') || sessionStorage.getItem('aegis_org_id') || '';
-    const savedEmail = localStorage.getItem('aegis_user_email') || '';
+    let currentOrgId = qs.get('org') || ss.get('aegis_org_id') || '';
+    const savedEmail = ls.get('aegis_user_email') || '';
     if (savedEmail && document.getElementById('lookup-email-input')) {
       document.getElementById('lookup-email-input').value = savedEmail;
     }
@@ -900,9 +912,9 @@
     function disconnectKey() {
       authKey = '';
       currentOrgId = '';
-      sessionStorage.removeItem('aegis_approve_key');
-      sessionStorage.removeItem('aegis_org_id');
-      localStorage.removeItem('aegis_user_email');
+      ss.del('aegis_approve_key');
+      ss.del('aegis_org_id');
+      ls.del('aegis_user_email');
       const emailEl = document.getElementById('lookup-email-input');
       if (emailEl) emailEl.value = '';
       document.getElementById('key-org-hint').textContent = '';
@@ -995,8 +1007,8 @@
         if (!res.ok) throw new Error(data.error || res.statusText);
 
         currentOrgId = data.org_id || currentOrgId;
-        if (email) localStorage.setItem('aegis_user_email', email);
-        if (currentOrgId) sessionStorage.setItem('aegis_org_id', currentOrgId);
+        if (email) ls.set('aegis_user_email', email);
+        if (currentOrgId) ss.set('aegis_org_id', currentOrgId);
         updateSubscriptionAndQuotaUi(data.plan_tier, data.org_id, data.subscription_active, data.quotas);
 
         const badge = document.getElementById('conn-badge');
@@ -1118,7 +1130,7 @@
         });
         if (res.status === 401 && authKey) {
           authKey = '';
-          sessionStorage.removeItem('aegis_approve_key');
+          ss.del('aegis_approve_key');
           res = await fetch(apiBase + '/v1/approvals/decide', {
             method: 'POST',
             headers: authHeaders(),
@@ -1475,13 +1487,13 @@
       try {
         if (currentOrgId === '*') {
           currentOrgId = '';
-          sessionStorage.removeItem('aegis_org_id');
+          ss.del('aegis_org_id');
         }
         const statusUrl = apiBase + '/v1/status' + (currentOrgId ? '?org_id=' + encodeURIComponent(currentOrgId) : '');
         let res = await fetch(statusUrl, { headers: authHeaders() });
         if (res.status === 401 && authKey) {
           authKey = '';
-          sessionStorage.removeItem('aegis_approve_key');
+          ss.del('aegis_approve_key');
           res = await fetch(statusUrl, { headers: authHeaders() });
         }
         if (res.status === 401 || res.status === 403) {

@@ -11,6 +11,11 @@ from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 import scipy.ndimage as ndi
 
+try:
+    from .errors import InputError
+except (ImportError, ValueError):
+    from errors import InputError
+
 
 def interactive_segment_3d(
     volume: np.ndarray,
@@ -48,18 +53,18 @@ def interactive_segment_3d(
     if mode == "deep":
         mode = "hu_likelihood_gradient"
     if mode not in ("hu_likelihood_gradient", "fast"):
-        raise ValueError(f"未知分割模式：{mode}（可选 hu_likelihood_gradient / fast）")
+        raise InputError(f"未知分割模式：{mode}（可选 hu_likelihood_gradient / fast）")
 
     # 提示点必须带完整坐标，缺失即报错，不补中心
     for idx, p in enumerate(points or []):
         missing = [k for k in ("z", "y", "x") if p.get(k) is None]
         if missing:
-            raise ValueError(f"第 {idx + 1} 个提示点缺少坐标 {missing}")
+            raise InputError(f"第 {idx + 1} 个提示点缺少坐标 {missing}")
 
     pos_points = [p for p in (points or []) if p.get('is_positive', True)]
     neg_points = [p for p in (points or []) if not p.get('is_positive', True)]
     if not pos_points:
-        raise ValueError("至少需要一个正提示点（is_positive=True）才能分割，不使用默认种子")
+        raise InputError("至少需要一个正提示点（is_positive=True）才能分割，不使用默认种子")
 
     # 1. Collect sample intensities at positive click seeds
     seed_values = []

@@ -1,7 +1,7 @@
 import type { Actor, PatientService } from '../tenancy/patients.ts'
 import { orthancFromEnv, type Orthanc } from './orthanc.ts'
 import { ImagingStudyService, segRef, type RunRow, type SeriesView } from './studies.ts'
-import { callWorker, runFailureReason, uploadSeries } from './worker.ts'
+import { callWorker, uploadSeries } from './worker.ts'
 import { sharedFollowup } from './followup.ts'
 
 /**
@@ -281,7 +281,7 @@ export class ImagingPipeline {
       })
       try { this.opts.onRunDone?.(a, doneRun) } catch { /* 后续处理出错不影响本次分析 */ }
     } catch (err) {
-      try { this.studies.setRunStatus(a, runId, 'failed', runFailureReason(err)) } catch {}
+      try { this.studies.setRunStatus(a, runId, 'failed', err instanceof Error ? err.message : String(err)) } catch {}
     } finally {
       if (uploaded) await this.worker(`/api/v1/volume/${encodeURIComponent(volumeId)}`, { method: 'DELETE' }, 10_000).catch(() => {})
     }

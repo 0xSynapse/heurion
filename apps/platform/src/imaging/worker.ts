@@ -4,7 +4,7 @@
  */
 
 import { Agent, fetch as undiciFetch } from 'undici'
-import { publicWorkerDetail, readWorkerDetail, scrubPaths } from './worker-error.ts'
+import { publicWorkerDetail, readWorkerDetail, workerErrorKind } from './worker-error.ts'
 
 /**
  * Node 自带的 fetch（undici）默认 5 分钟收不到响应头就断开（headersTimeout），报的是笼统的「fetch failed」。
@@ -24,24 +24,14 @@ function longAgent(timeoutMs: number): Agent {
 
 /**
  * worker 返回非 2xx 或连不上；status 为 HTTP 状态码（连接失败、超时为 null）。
- * message 是可直接给用户 / AI 看的说明（5xx 不带 worker 原文）；
- * detail 是去掉服务器路径的完整原因，只进分析运行记录（运维 / 影子期报告）与日志。
+ * message 已经过 worker-error.ts 清理（5xx 不带 worker 原文，路径只留文件名），
+ * 可以直接给用户 / AI 看、写进分析运行记录；worker 原文只在平台日志里。
  */
 export class WorkerError extends Error {
-  readonly detail: string
-  constructor(readonly status: number | null, message: string, detail?: string) {
-    super(message)
-    this.detail = detail ?? message
-  }
+  constructor(readonly status: number | null, message: string) { super(message) }
 }
 
-/** 写进分析运行记录的失败原因：WorkerError 用完整原因，其它异常用 message */
-export function runFailureReason(err: unknown): string {
-  if (err instanceof WorkerError) return err.detail
-  return err instanceof Error ? err.message : String(err)
-}
-
-/** 调 worker；错误如实转成中文说明（501 模型不可用、404 影像不存在、其它 4xx 输入问题、其余为服务故障） */
+/** 调 worker；错误转成中文说明（501 模型不可用、404 影像不存在、其它 4xx 参数问题、其余为服务故障，见 worker-error.ts） */
 export async function callWorker(fetchImpl: typeof fetch, base: string, path: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
   let resp: Response
   try {
@@ -59,10 +49,8 @@ export async function callWorker(fetchImpl: typeof fetch, base: string, path: st
     throw new WorkerError(null, `影像服务连接失败：${(err as Error).message}${cause ? `（${cause.code ?? cause.message ?? ''}）` : ''}`)
   }
   if (!resp.ok) {
-    const raw = await readWorkerDetail(resp)
-    const kind = resp.status === 501 ? '模型不可用' : resp.status === 404 ? '影像不存在' : resp.status >= 400 && resp.status < 500 ? '影像输入有误' : '影像服务出错'
-    const head = `${kind}（HTTP ${resp.status}）：`
-    throw new WorkerError(resp.status, head + publicWorkerDetail(resp.status, raw, 300, `callWorker ${path}`), head + scrubPaths(raw).slice(0, 300))
+    const detail = publicWorkerDetail(resp.status, await readWorkerDetail(resp), 300, `callWorker ${path}`)
+    throw new WorkerError(resp.status, `${workerErrorKind(resp.status)}（HTTP ${resp.status}）：${detail}`)
   }
   const text = await resp.text()
   return text ? JSON.parse(text) : null

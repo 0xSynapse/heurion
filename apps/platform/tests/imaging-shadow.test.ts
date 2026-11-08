@@ -157,7 +157,9 @@ describe('影子模式（T1.8）', () => {
     const rep = t.svc.shadowReport(adminActor)
     expect(rep.mode).toBe('shadow')
     expect(rep.runs).toMatchObject({ total: 2, done: 1, failed: 1, pending: 0 })
-    expect(rep.runs.failures[0]!.error).toContain('显存不足')
+    // 运行记录对医生和 AI 可见：worker 5xx 原文不进记录，只进平台日志
+    expect(rep.runs.failures[0]!.error).toContain('影像微服务出错（HTTP 500）')
+    expect(rep.runs.failures[0]!.error).not.toContain('显存不足')
     expect(rep.runs.turnaround_ms!.p90).toBeGreaterThanOrEqual(0)
     expect(rep.studies).toHaveLength(1)
     // 2 号没有病人坐标，配不上 → 只有 AI

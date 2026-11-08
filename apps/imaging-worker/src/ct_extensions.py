@@ -10,6 +10,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 import numpy as np
 
+try:
+    from .errors import InputError
+except (ImportError, ValueError):
+    from errors import InputError
+
 LOBE_ORDER: Tuple[str, ...] = ("RUL", "RML", "RLL", "LUL", "LLL")
 LOBE_NAMES_ZH: Dict[str, str] = {
     "RUL": "右肺上叶",
@@ -181,10 +186,10 @@ def analyze_rib_fractures(
             continue
         side = str(c.get("side", "right")).lower().strip()
         if side not in ("right", "left"):
-            raise ValueError(f"Invalid rib side: {side}")
+            raise InputError(f"Invalid rib side: {side}")
         rib_no = int(c.get("rib_number", 0))
         if rib_no < 1 or rib_no > 12:
-            raise ValueError(f"Rib number must be in 1..12, got {rib_no}")
+            raise InputError(f"Rib number must be in 1..12, got {rib_no}")
         arc = str(c.get("anatomical_arc", "lateral")).lower().strip()
         if arc not in ("anterior", "lateral", "posterior"):
             arc = "lateral"
@@ -260,7 +265,7 @@ def analyze_head_ct_ich(
     for idx, h in enumerate(hemorrhages, start=1):
         subtype = str(h.get("subtype", "intraparenchymal")).lower().strip()
         if subtype not in ICH_SUBTYPES_ZH:
-            raise ValueError(f"Unsupported ICH subtype: {subtype}")
+            raise InputError(f"Unsupported ICH subtype: {subtype}")
         if subtype not in subtypes_present:
             subtypes_present.append(subtype)
 
