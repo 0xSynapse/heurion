@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { Node as PMNode } from 'prosemirror-model'
+import { readGrid } from '../model/table-grid.ts'
 
 /**
  * 论断抽取与四阶段深度临床审查提取器（M1 verify_claims & Stage 1-3 Deep Review）：
@@ -66,6 +67,12 @@ const HIGH_COMPLEXITY_METRIC = /\b(?:HR|OR|RR|CI|IQR|SD|SEM|aHR|aOR|RD)\b|\b[Pp]
 const PLACEHOLDER = /(?:待定|待填|待补充|待确认|TODO|TBD|\[待|【待)/i
 /** 句末：中文句号类，或英文句点 / 问叹号后跟空白或结尾（避免把 0.74 断开）。 */
 const END = /[。！？；!?]|\.(?=\s|$)/
+
+/** 待采纳删除的修订块（导入的 Word 修订里被删掉的原文）：审稿与论断核对只看采纳修订后的文字，不读被删掉的旧数字 */
+export const isPendingDeletion = (node: PMNode): boolean => node.attrs?.suggest === 'delete'
+
+/** 标题文字（带 Word 自动编号，如「2.1 Study design」；编号单独存在 number 属性里） */
+export const headingText = (node: PMNode): string => `${node.attrs?.number ? `${node.attrs.number} ` : ''}${node.textContent}`.trim()
 
 export function classifySectionRole(title: string): SectionRole {
   const t = title.trim()
@@ -165,8 +172,9 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
   let lastParagraphText = ''
 
   const visit = (node: PMNode) => {
+    if (isPendingDeletion(node)) return
     if (node.type.name === 'heading') {
-      const hText = node.textContent.trim()
+      const hText = headingText(node)
       if (hText) currentSectionTitle = hText
       return
     }
@@ -182,29 +190,31 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
       const sampleSizes = new Set<number>()
       const cloneSizes = new Set<number>()
 
-      node.forEach(rowNode => {
-        if (rowNode.type.name !== 'table_row') return
-        const rowCells: string[] = []
-        rowNode.forEach(cellNode => {
-          const cellText = cellNode.textContent.replace(/\s+/g, ' ').trim()
-          rowCells.push(cellText)
-          const nMatches = cellText.matchAll(/\b[nN]\s*[=＝]\s*(\d+)\b/g)
-          for (const m of nMatches) {
-            const val = Number(m[1])
-            if (val > 0) sampleSizes.add(val)
-          }
-          const cloneMatches = cellText.matchAll(/\bclones?\s*[=＝]\s*(\d+)\b/gi)
-          for (const m of cloneMatches) {
-            const val = Number(m[1])
-            if (val > 0) cloneSizes.add(val)
-          }
-          const numMatches = cellText.match(/\b\d+(?:\.\d+)?[%％]?/g) ?? []
-          for (const nm of numMatches) {
-            numbersSet.add(nm.replace(/％/g, '%'))
-          }
+      // 按逻辑网格（colspan / rowspan）对齐列：合并单元格的文字只在起始格；
+      // 表头里的跨列合并（如「Drug (n = 79)」盖住 Pre / Post 两列）铺到每一列，使各列都能对上表头样本量
+      const grid = readGrid(node)
+      for (const cell of grid.cells) {
+        const cellText = cell.node.textContent.replace(/\s+/g, ' ').trim()
+        for (const m of cellText.matchAll(/\b[nN]\s*[=＝]\s*(\d+)\b/g)) {
+          const val = Number(m[1])
+          if (val > 0) sampleSizes.add(val)
+        }
+        for (const m of cellText.matchAll(/\bclones?\s*[=＝]\s*(\d+)\b/gi)) {
+          const val = Number(m[1])
+          if (val > 0) cloneSizes.add(val)
+        }
+        for (const nm of cellText.match(/\b\d+(?:\.\d+)?[%％]?/g) ?? []) numbersSet.add(nm.replace(/％/g, '%'))
+      }
+      for (let r = 0; r < grid.height; r++) {
+        const rowCells = Array.from({ length: grid.width }, (_, c) => {
+          const cell = grid.at(r, c)
+          if (!cell) return ''
+          const anchor = cell.top === r && cell.left === c
+          const headerSpan = cell.top === r && cell.colspan > 1 && (r === 0 || cell.node.attrs.header === true)
+          return anchor || headerSpan ? cell.node.textContent.replace(/\s+/g, ' ').trim() : ''
         })
         if (rowCells.some(Boolean)) rows.push(rowCells)
-      })
+      }
 
       const headers = rows[0] ?? []
       const caption = /^(?:Table|表)\s*\d+/i.test(lastParagraphText) ? lastParagraphText : undefined
@@ -252,9 +262,10 @@ export function buildManuscriptScratchpad(doc: PMNode, tables: TableSummary[] = 
   let fullText = ''
 
   const visit = (node: PMNode, inTable: boolean) => {
+    if (isPendingDeletion(node)) return
     if (node.type.name === 'figure' || node.type.name === 'code_block' || node.type.name === 'table') return
     if (node.type.name === 'heading' && !inTable) {
-      const hText = node.textContent.trim()
+      const hText = headingText(node)
       if (hText) {
         currentSectionTitle = hText
         currentSectionRole = classifySectionRole(hText)
@@ -469,13 +480,14 @@ export function extractClaims(
   let currentSectionRole: SectionRole = 'other'
 
   const visit = (node: PMNode, inTable: boolean) => {
+    if (isPendingDeletion(node)) return
     if (node.type.name === 'figure' || node.type.name === 'code_block') return
     if (node.type.name === 'table') {
       node.forEach(child => visit(child, true))
       return
     }
     if (node.type.name === 'heading' && !inTable) {
-      const hText = node.textContent.trim()
+      const hText = headingText(node)
       if (hText) {
         currentSectionTitle = hText
         currentSectionRole = classifySectionRole(hText)
@@ -562,9 +574,11 @@ export function auditInternalConsistency(
   doc: PMNode,
   tables: TableSummary[] = [],
   activeRules: string[] = [],
+  /** skipTables：表格结构不可靠（如 PDF 走 poppler 兜底导入）时不做任何依赖表格的核查，只核对正文 */
+  opts: { skipTables?: boolean } = {},
 ): DeepReviewAuditIssue[] {
   const issues: DeepReviewAuditIssue[] = []
-  const resolvedTables = tables.length > 0 ? tables : extractTableSummaries(doc)
+  const resolvedTables = opts.skipTables ? [] : tables.length > 0 ? tables : extractTableSummaries(doc)
 
   const allTableSampleSizes = new Set<number>()
   const allTableNumbers = new Set<string>()
@@ -583,9 +597,10 @@ export function auditInternalConsistency(
   const blocks: Array<{ nodeId: string; text: string; sectionTitle: string; sectionRole: SectionRole }> = []
 
   const visit = (node: PMNode, inTable: boolean) => {
+    if (isPendingDeletion(node)) return
     if (node.type.name === 'figure' || node.type.name === 'code_block' || node.type.name === 'table') return
     if (node.type.name === 'heading' && !inTable) {
-      const hText = node.textContent.trim()
+      const hText = headingText(node)
       if (hText) {
         currentSectionTitle = hText
         currentSectionRole = classifySectionRole(hText)
@@ -954,9 +969,10 @@ export function auditMethodResultConsistency(
   const allBlocks: Array<{ nodeId: string; text: string; sectionTitle: string; sectionRole: SectionRole }> = []
 
   const visit = (node: PMNode, inTable: boolean) => {
+    if (isPendingDeletion(node)) return
     if (node.type.name === 'figure' || node.type.name === 'code_block' || node.type.name === 'table') return
     if (node.type.name === 'heading' && !inTable) {
-      const hText = node.textContent.trim()
+      const hText = headingText(node)
       if (hText) {
         currentSectionTitle = hText
         currentSectionRole = classifySectionRole(hText)
@@ -1114,9 +1130,10 @@ export function auditSpinAndGuidelines(doc: PMNode, activeRules: string[] = []):
   const blocks: Array<{ nodeId: string; text: string; sectionTitle: string; sectionRole: SectionRole }> = []
 
   const visit = (node: PMNode, inTable: boolean) => {
+    if (isPendingDeletion(node)) return
     if (node.type.name === 'figure' || node.type.name === 'code_block' || node.type.name === 'table') return
     if (node.type.name === 'heading' && !inTable) {
-      const hText = node.textContent.trim()
+      const hText = headingText(node)
       if (hText) {
         currentSectionTitle = hText
         currentSectionRole = classifySectionRole(hText)

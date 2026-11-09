@@ -186,6 +186,15 @@ purge()
 setInterval(purge, 12 * 3600_000).unref()
 // 内存优化：空闲文档自动驱逐（每 5 分钟检查一次，驱逐无活跃连接且超过 10 分钟未被访问的文档，防长期运行内存泄漏）
 setInterval(() => docs.evictIdle(), 5 * 60_000).unref()
+// PDF 解析服务健康检查：每 5 分钟一次，连续两次不就绪告警给管理员（不就绪时 PDF 会悄悄退回 poppler，表格不可靠）。
+// 启动后 10 分钟再开始，避开 doc-parser 与平台同时重启时的模型预热期
+if (docParser) {
+  setTimeout(() => {
+    const check = () => void docParser.ready().then(ok => alerts.docParserHealth(ok, config.docParserUrl))
+    check()
+    setInterval(check, 5 * 60_000).unref()
+  }, 10 * 60_000).unref()
+}
 // 定时整理记忆与后台静默演进执行策略：每 6 小时看一次（MEMORY_AUTO_REVIEW=0 关闭）
 if (evolution.available() && process.env.MEMORY_AUTO_REVIEW !== '0') {
   setInterval(() => void (async () => {
@@ -215,7 +224,7 @@ const mail = new MailService(store, mailer, {
   complete: makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }),
 })
 const calendar = new CalendarService(store, mail)
-const app = buildApi({ docs, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, aegisEnabled: config.aegisEnabled, imagingAcceptIdentified: config.imagingAcceptIdentified, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, workspaceDir: userId => pool.workspaceDir(userId) })
+const app = buildApi({ docs, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, aegisEnabled: config.aegisEnabled, imagingAcceptIdentified: config.imagingAcceptIdentified, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, alerts, workspaceDir: userId => pool.workspaceDir(userId) })
 // MCP 的管理类工具以用户身份进程内调用同一个 HTTP 应用（AI 的权限 = 用户的权限，见 http/invoke.ts）
 ;(mcpDeps as { invoke?: Invoke }).invoke = makeInvoker(app)
 

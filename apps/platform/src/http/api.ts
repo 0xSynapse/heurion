@@ -69,6 +69,7 @@ import type { OpenAlexClient } from '../literature/openalex.ts'
 import { newCommentId, type DocRow } from '../store/db.ts'
 import { bindAssets, bindComments, DocxImportError, importDocx } from '../convert/docx-import.ts'
 import type { DocParser } from '../convert/doc-parser.ts'
+import type { Alerts } from '../ops-alert/alerts.ts'
 import { importPdf, PdfImportError } from '../convert/pdf-import.ts'
 import type { Ocr } from '../kb/ocr.ts'
 import { AnchorError, attachComment, locate, threadMarks } from '../model/anchors.ts'
@@ -153,6 +154,8 @@ export interface ApiDeps {
   pdfOcr?: Ocr
   /** PDF 导入主路径：本地 doc-parser 服务（Docling）；不给或不可用时退回 poppler */
   docParser?: DocParser | null
+  /** 运维告警（PDF 解析服务不可用等） */
+  alerts?: Alerts
   /** 日历与排期服务。 */
   calendar?: CalendarService
   /** Aegis-OS / MCP 共享回合注册表（可选；不传时在 buildApi 内自动创建）。 */
@@ -1409,6 +1412,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       try {
         const bytes = new Uint8Array(await file.arrayBuffer())
         const imported = await importPdf(bytes, file.name, { ocr: deps.pdfOcr, docParser: deps.docParser })
+        // 解析服务已配置却退回了 poppler（未就绪 / 出错）：告警给管理员
+        if (imported.engine === 'poppler' && deps.docParser && imported.fallbackReason) deps.alerts?.docParserFallback(imported.fallbackReason)
         const ids = new Map(imported.assets.map(a => [a.key, store.putAsset({ owner: user, mime: a.mime, name: a.name, bytes: a.bytes }).id]))
         const baseTitle = file.name.replace(/\.pdf$/i, '').trim()
         const isGenericName = /^(未命名|文档|document|untitled|draft|\d+|[a-f0-9-]{12,}|s\d{5}-\d{3}-\d{5}-[a-z0-9]|pmc\d+|nihms\d+|arxiv[\d.-]+)$/i.test(baseTitle)
@@ -1427,7 +1432,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         }
         const boundDoc = bindAssets(imported.doc, ids)
         const row = docs.create({ owner: user, title: docTitle, content: boundDoc, source: 'import' })
-        store.putPackage(row.id, 'pdf', bytes)
+        store.putPackage(row.id, 'pdf', bytes, imported.engine)
         const warnings = [...imported.warnings]
         if (imported.title && isGenericName) warnings.unshift(`已自动识别论文标题：《${docTitle}》`)
         if (imported.doi) warnings.push(`检测到 DOI: ${imported.doi}`)
@@ -1930,10 +1935,16 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       (deps.skillTrainer as unknown as { complete?: (s: string, u: string) => Promise<string> })?.complete ??
       (deps.evolution as unknown as { complete?: (s: string, u: string) => Promise<string> })?.complete ??
       (mail as unknown as { complete?: (s: string, u: string) => Promise<string> })?.complete
+    // PDF 走 poppler 兜底导入的稿件：表格结构不可靠，审稿跳过依赖表格的核查并提示用户；
+    // 走 Docling 的逐表判断，只跳过不可信的表（旧数据未记录解析路径，按可靠处理）
+    const imp = store.getImportInfo(row.id)
     const result = await aegisMcpDeps.claims.deepReview(row.id, {
       mode: 'heurion_evolved',
       owner: userId,
       anchorComments: true,
+      tablesUnreliable: imp?.kind === 'pdf' && imp.import_engine === 'poppler',
+      // Docling 导入的 PDF：表格由版面推断，逐表判断可信度
+      assessTables: imp?.kind === 'pdf' && imp.import_engine === 'docling',
       ...(typeof llmComplete === 'function' ? { complete: llmComplete } : {}),
     })
     return c.json({
@@ -1945,6 +1956,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       comments_created: result.stage4_deduplicated_comments,
       exempted_count: Math.max(0, result.stage3_raw_candidates - result.stage4_deduplicated_comments.length),
       active_rules: result.active_rules_applied,
+      warnings: result.warnings,
     })
   })
 

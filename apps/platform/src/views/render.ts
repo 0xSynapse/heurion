@@ -82,7 +82,8 @@ function block(node: PMNode, ctx: RenderContext): string {
     }
     case 'heading': {
       const level = Math.min(6, Math.max(1, Number(node.attrs.level) || 1))
-      return `<h${level}${id}${align}>${inline(node, ctx)}</h${level}>`
+      const num = node.attrs.number ? `<span class="heading-number">${esc(String(node.attrs.number))}</span> ` : ''
+      return `<h${level}${id}${align}>${num}${inline(node, ctx)}</h${level}>`
     }
     case 'bullet_list': return `<ul${id}>${children()}</ul>`
     case 'ordered_list': {

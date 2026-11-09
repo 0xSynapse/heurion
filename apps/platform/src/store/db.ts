@@ -818,6 +818,9 @@ export class Store {
     if (!docCols.includes('project_id')) this.db.exec('ALTER TABLE docs ADD COLUMN project_id TEXT')
     if (!docCols.includes('deleted_at')) this.db.exec('ALTER TABLE docs ADD COLUMN deleted_at TEXT')
     if (!docCols.includes('context')) this.db.exec('ALTER TABLE docs ADD COLUMN context TEXT')
+    // 导入时 PDF 走的解析路径（docling / poppler）：poppler 兜底时表格结构不可靠，审稿据此跳过依赖表格的核查
+    const pkgCols = (this.db.prepare('PRAGMA table_info(doc_packages)').all() as Array<{ name: string }>).map(c => c.name)
+    if (!pkgCols.includes('import_engine')) this.db.exec('ALTER TABLE doc_packages ADD COLUMN import_engine TEXT')
     const userCols = (this.db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map(c => c.name)
     if (!userCols.includes('email')) this.db.exec('ALTER TABLE users ADD COLUMN email TEXT')
     if (!userCols.includes('tenant_id')) this.db.exec('ALTER TABLE users ADD COLUMN tenant_id TEXT')
@@ -2346,8 +2349,13 @@ export class Store {
 
   // —— 原始文件包（修补式导出的底座：样式、编号、关系、媒体） ——
 
-  putPackage(docId: string, kind: 'docx' | 'pptx' | 'pdf', bytes: Uint8Array): void {
-    this.db.prepare('INSERT OR REPLACE INTO doc_packages (doc_id, kind, bytes) VALUES (?, ?, ?)').run(docId, kind, bytes)
+  putPackage(docId: string, kind: 'docx' | 'pptx' | 'pdf', bytes: Uint8Array, importEngine: 'docling' | 'poppler' | null = null): void {
+    this.db.prepare('INSERT OR REPLACE INTO doc_packages (doc_id, kind, bytes, import_engine) VALUES (?, ?, ?, ?)').run(docId, kind, bytes, importEngine)
+  }
+
+  /** 导入记录：原始文件类型与 PDF 解析路径（没有原始文件包的文档返回 null；旧数据的解析路径为 null，表示未知） */
+  getImportInfo(docId: string): { kind: 'docx' | 'pptx' | 'pdf'; import_engine: 'docling' | 'poppler' | null } | null {
+    return (this.db.prepare('SELECT kind, import_engine FROM doc_packages WHERE doc_id = ?').get(docId) as { kind: 'docx' | 'pptx' | 'pdf'; import_engine: 'docling' | 'poppler' | null } | undefined) ?? null
   }
 
   getPackage(docId: string): Uint8Array | null {

@@ -69,10 +69,12 @@ export const schema = new Schema({
     heading: {
       group: 'block',
       content: 'inline*',
-      attrs: { ...blockAttrs, level: { default: 1 }, style: { default: null }, align: { default: null } },
+      // number：Word 自动编号算出的标题编号（如「2.1」）。编号由 Word 的多级列表生成、不在正文文字里，
+      // 单独存放：导出时不写回（Word 按段落编号属性自己生成），显示与审稿时拼在标题前
+      attrs: { ...blockAttrs, level: { default: 1 }, style: { default: null }, align: { default: null }, number: { default: null } },
       defining: true,
-      parseDOM: [1, 2, 3, 4, 5, 6].map(level => ({ tag: `h${level}`, attrs: { level } })),
-      toDOM: (node): DOMOutputSpec => [`h${node.attrs.level}`, domAttrs(node, { style: textAlign(node) }), 0],
+      parseDOM: [1, 2, 3, 4, 5, 6].map(level => ({ tag: `h${level}`, getAttrs: (dom: HTMLElement) => ({ level, number: dom.getAttribute('data-number') || null }) })),
+      toDOM: (node): DOMOutputSpec => [`h${node.attrs.level}`, domAttrs(node, { style: textAlign(node), 'data-number': (node.attrs.number as string | null) ?? undefined }), 0],
     },
     bullet_list: {
       group: 'block',
@@ -197,6 +199,14 @@ export const schema = new Schema({
       atom: true,
       attrs: { key: { default: '' }, kind: { default: 'field' }, text: { default: '' }, xml: { default: '' } },
       toDOM: (node): DOMOutputSpec => [node.attrs.kind === 'field' ? 'span' : 'sup', { class: `word-inline word-${node.attrs.kind as string}`, 'data-key': node.attrs.key as string }, (node.attrs.text as string) || '¤'],
+      // 对外文字（textContent / 检索 / 论断核对 / 审稿读到的内容）：域代码的显示结果（引文编号、题注编号）
+      // 与文本框里的文字算正文；脚注 / 尾注引用只是上标标记，正文在别处，不并入
+      leafText: (node): string => {
+        const kind = node.attrs.kind as string
+        if (kind === 'field') return String(node.attrs.text ?? '')
+        if (kind === 'object') return String(node.attrs.text ?? '').replace(/^(?:文本框|公式)：/, '')
+        return ''
+      },
     },
   },
   marks: {

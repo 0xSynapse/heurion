@@ -57,3 +57,32 @@ def test_document_to_blocks_merges_inline_formula_and_skips_furniture() -> None:
     assert blocks[3]["caption"] == "Table 1. Demo."
     assert blocks[4]["latex"] == "E = mc^2"
     assert all("Journal header" not in str(b) for b in blocks)
+    assert "spans" not in blocks[3]
+
+
+def test_table_block_keeps_merged_cells() -> None:
+    """合并单元格输出 spans；与已有合并区重叠、或盖住有字单元格的合并区丢弃，文字不丢。"""
+    from docling_core.types.doc import DoclingDocument, TableCell, TableData
+
+    from src.parser import document_to_blocks
+
+    def cell(t: str, r: int, c: int, rs: int = 1, cs: int = 1, hdr: bool = False) -> TableCell:
+        return TableCell(text=t, row_span=rs, col_span=cs, start_row_offset_idx=r, end_row_offset_idx=r + rs,
+                         start_col_offset_idx=c, end_col_offset_idx=c + cs, column_header=hdr)
+
+    cells = [
+        cell("Characteristic", 0, 0, rs=2, hdr=True), cell("Drug (n = 79)", 0, 1, cs=2, hdr=True), cell("P", 0, 3, rs=2, hdr=True),
+        cell("Pre", 1, 1, hdr=True), cell("Post", 1, 2, hdr=True),
+        cell("Sex", 2, 0, rs=2), cell("Male", 2, 1), cell("40", 2, 2), cell("0.3", 2, 3),
+        cell("Female", 3, 1), cell("39", 3, 2), cell("0.4", 3, 3),
+        # 盖住了有字的「0.4」：丢弃合并，只留文字
+        cell("Bad", 4, 2, rs=1, cs=2), cell("X", 4, 3),
+    ]
+    doc = DoclingDocument(name="t")
+    doc.add_table(data=TableData(num_rows=5, num_cols=4, table_cells=cells))
+    blocks, _ = document_to_blocks(doc)
+    t = blocks[0]
+    assert t["header_rows"] == 2
+    assert t["spans"] == [[0, 0, 2, 1], [0, 1, 1, 2], [0, 3, 2, 1], [2, 0, 2, 1]]
+    assert t["rows"][0] == ["Characteristic", "Drug (n = 79)", "", "P"]
+    assert t["rows"][4] == ["", "", "Bad", "X"]

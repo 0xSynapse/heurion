@@ -52,4 +52,22 @@ describe('运维告警', () => {
     const empty = new Alerts(new Store(':memory:'), { configured: true, available: true, mode: 'dev-mock', send: async () => { throw new Error('不该发') } }, { log: () => {} })
     expect(await empty.notify('model_auth', 'x')).toBe('no_recipient')
   })
+
+  it('PDF 解析服务：健康检查连续两次不就绪才告警，中间恢复则重新计数；导入退回 poppler 立即告警', async () => {
+    const t = env()
+    expect(t.alerts.docParserHealth(false)).toBe(false) // 第一次不就绪：可能是重启预热，先不告警
+    expect(t.alerts.docParserHealth(true)).toBe(false) // 恢复：计数清零
+    expect(t.alerts.docParserHealth(false)).toBe(false)
+    expect(t.alerts.docParserHealth(false, 'http://doc-parser:8005')).toBe(true)
+    await flush()
+    expect(t.sent.map(s => s.subject)).toEqual(['[Heurion 告警] PDF 解析服务不可用（导入已退回 poppler，表格识别不可靠）'])
+
+    const u = env()
+    u.alerts.docParserFallback('文档解析服务未就绪')
+    await flush()
+    expect(u.sent).toHaveLength(1)
+    u.alerts.docParserFallback('文档解析服务未就绪') // 一小时冷却内不重复
+    await flush()
+    expect(u.sent).toHaveLength(1)
+  })
 })

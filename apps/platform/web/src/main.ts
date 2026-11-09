@@ -3314,6 +3314,7 @@ async function runDeepReview(): Promise<void> {
       raw_candidates_count?: number
       comments_created?: Array<any>
       exempted_count?: number
+      warnings?: string[]
     }>(`/api/docs/${session.docId}/deep-review`, { method: 'POST', signal: abort.signal })
     lastReviewSnapshot = {
       docId: session.docId,
@@ -3332,10 +3333,17 @@ async function runDeepReview(): Promise<void> {
     renderReviewSnapshot()
     const created = lastReviewSnapshot.createdCount
     const exempted = lastReviewSnapshot.exemptedCount
+    const reviewWarnings = r.warnings ?? []
+    const exemptNote = exempted > 0 ? `（已按审稿偏好自动免报 ${exempted} 处）` : ''
+    // 有审稿说明（如跳过了表格核查）时不能说「全文自洽」：只说没有检出，并把说明一并告诉用户
     showNotice(
-      created > 0
-        ? `深度审稿完成：检出 ${created} 处建议关注项${exempted > 0 ? `（已按审稿偏好自动免报 ${exempted} 处）` : ''}`
-        : `深度审稿完成：全文核心数据与方法学自洽${exempted > 0 ? `（已按审稿偏好自动免报 ${exempted} 处）` : ''}`,
+      (created > 0
+        ? `深度审稿完成：检出 ${created} 处建议关注项${exemptNote}`
+        : reviewWarnings.length
+          ? `深度审稿完成：未检出问题${exemptNote}`
+          : `深度审稿完成：全文核心数据与方法学自洽${exemptNote}`)
+        + (reviewWarnings.length ? `。${reviewWarnings.join(' ')}` : ''),
+      reviewWarnings.length > 0,
     )
   } catch (err) {
     if (snapEl) snapEl.hidden = true

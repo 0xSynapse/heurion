@@ -4,13 +4,17 @@
  */
 export type Complete = (system: string, user: string) => Promise<string>
 
-export function makeComplete(opts: { upstream: string; apiKey: string; model: string; timeoutMs?: number }): Complete | null {
+/** 一次成功调用的用量（上游 Messages 响应里的 usage；缺字段时为 0） */
+export interface CompleteUsage { model: string; input_tokens: number; output_tokens: number; ms: number }
+
+export function makeComplete(opts: { upstream: string; apiKey: string; model: string; timeoutMs?: number; onUsage?: (u: CompleteUsage) => void }): Complete | null {
   if (!opts.apiKey) return null
   return async (system: string, user: string): Promise<string> => {
     let last: Error | null = null
     for (let attempt = 0; attempt < 3; attempt++) {
       let noRetry = false
       try {
+        const t0 = Date.now()
         const res = await fetch(opts.upstream.replace(/\/$/, '') + '/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': opts.apiKey, 'anthropic-version': '2023-06-01' },
@@ -21,7 +25,10 @@ export function makeComplete(opts: { upstream: string; apiKey: string; model: st
           if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 404) noRetry = true
           throw new Error(`模型服务 ${res.status}：${(await res.text()).slice(0, 200)}`)
         }
-        const body = await res.json() as { content?: Array<{ type: string; text?: string }> }
+        const body = await res.json() as { content?: Array<{ type: string; text?: string }>; usage?: { input_tokens?: number; output_tokens?: number } }
+        try {
+          opts.onUsage?.({ model: opts.model, input_tokens: body.usage?.input_tokens ?? 0, output_tokens: body.usage?.output_tokens ?? 0, ms: Date.now() - t0 })
+        } catch { /* 计量失败不影响调用结果 */ }
         return (body.content ?? []).filter(c => c.type === 'text').map(c => c.text ?? '').join('')
       } catch (err) {
         last = err as Error

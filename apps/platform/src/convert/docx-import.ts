@@ -179,7 +179,7 @@ function childrenFrom(xml: string, from: number): string[] {
   return out
 }
 
-interface StyleInfo { name: string; outline: number | null; basedOn: string | null }
+interface StyleInfo { name: string; outline: number | null; basedOn: string | null; numId: string | null; ilvl: number | null }
 interface ListInfo { numId: string; ilvl: number; ordered: boolean }
 
 const MAX_ZIP_BYTES = 150 * 1024 * 1024
@@ -214,6 +214,48 @@ export function importDocx(bytes: Uint8Array): DocxImport {
 
   const styles = parseStyles(xml('word/styles.xml'))
   const numbering = parseNumbering(xml('word/numbering.xml'))
+  const numberingDefs = parseNumberingDefs(xml('word/numbering.xml'))
+  // 自动编号计数：按抽象编号累计（同一套多级列表共用一组计数），带「重新编号」覆盖的单独计数
+  const numCounters = new Map<string, number[]>()
+  /**
+   * 这一段的自动编号文字（如「2.1」「(a)」），没有编号返回 null。编号来自段落的 numPr，
+   * 没有时沿样式继承链找样式里定义的编号（期刊模板常把编号挂在「标题 1/2」样式上）。
+   * 每个带编号的段落都要调用一次（含列表项），计数才与 Word 一致。
+   */
+  const autoNumber = (styleId: string | null, pPr: XElement | undefined): string | null => {
+    const numPr = pPr && child(pPr, 'numPr')
+    let numId = wAttr(numPr && child(numPr, 'numId'), 'val')
+    let ilvlRaw = wAttr(numPr && child(numPr, 'ilvl'), 'val')
+    let viaStyle: string | null = null
+    if (numId === null) {
+      for (let id = styleId, depth = 0; id && depth < 8; depth++) {
+        const s = styles.get(id)
+        if (!s) break
+        if (s.numId !== null) { numId = s.numId; if (ilvlRaw === null && s.ilvl !== null) ilvlRaw = String(s.ilvl); viaStyle = styleId; break }
+        id = s.basedOn
+      }
+    }
+    if (numId === null || numId === '0') return null
+    const num = numberingDefs.nums.get(numId)
+    const levels = num && numberingDefs.abstracts.get(num.abs)
+    if (!num || !levels) return null
+    // 样式上的编号没写层级时，按编号定义里关联到这个样式的那一层
+    let ilvl = ilvlRaw !== null ? Number(ilvlRaw) : 0
+    if (ilvlRaw === null && viaStyle) for (const [k, l] of levels) if (l.pStyle === viaStyle) ilvl = k
+    const key = num.starts.size ? `num:${numId}` : `abs:${num.abs}`
+    const counts = numCounters.get(key) ?? []
+    const startOf = (k: number) => num.starts.get(k) ?? levels.get(k)?.start ?? 1
+    counts[ilvl] = counts[ilvl] === undefined ? startOf(ilvl) : counts[ilvl]! + 1
+    counts.length = ilvl + 1 // 更深的层重新开始
+    numCounters.set(key, counts)
+    const lvl = levels.get(ilvl)
+    if (!lvl || lvl.fmt === 'bullet' || lvl.fmt === 'none' || !lvl.text) return null
+    const label = lvl.text.replace(/%(\d)/g, (_, d: string) => {
+      const k = Number(d) - 1
+      return formatNumber(counts[k] ?? startOf(k), levels.get(k)?.fmt ?? 'decimal')
+    }).trim()
+    return label || null
+  }
   const rels = parseRels(xml('word/_rels/document.xml.rels'))
   const serializer = new XMLSerializer()
   const assets: ImportedAsset[] = []
@@ -378,7 +420,12 @@ export function importDocx(bytes: Uint8Array): DocxImport {
       return mText ? `公式：${mText}` : '公式'
     }
     const box = el.getElementsByTagNameNS(W, 'txbxContent')[0]
-    if (box) return `文本框：${(box.textContent ?? '').trim().slice(0, 80)}`
+    // 文本框文字完整保留（表题、图注常放在文本框里，审稿与检索要读到全文；界面显示时自行截断）。
+    // 只取显示出来的文字（w:t）：域指令（instrText，如 SEQ Table）与修订删掉的文字（delText）不算
+    if (box) {
+      const shown = Array.from(box.getElementsByTagNameNS(W, 't')).map(t => t.textContent ?? '').join('')
+      return `文本框：${shown.replace(/\s+/g, ' ').trim()}`
+    }
     if (el.getElementsByTagNameNS('http://schemas.openxmlformats.org/drawingml/2006/chart', 'chart').length) return '图表'
     const ole = [...Array.from(el.getElementsByTagName('o:OLEObject'))][0]
     if (ole) return `嵌入对象（${ole.getAttribute('ProgID') ?? 'OLE'}）`
@@ -530,6 +577,9 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     const numPr = pPr && child(pPr, 'numPr')
     const numId = wAttr(numPr && child(numPr, 'numId'), 'val')
     const ilvl = Number(wAttr(numPr && child(numPr, 'ilvl'), 'val') ?? 0)
+    // 每段都算一次（列表项也要计数），只有标题把编号存进 number 属性
+    const numberLabel = autoNumber(styleId, pPr)
+    const headingNumber = level !== null ? numberLabel : null
     const styleName = styleId ? styles.get(styleId)?.name ?? styleId : null
     const alignAttr = align === 'center' ? 'center' : align === 'right' || align === 'end' ? 'right' : align === 'both' ? 'justify' : null
     const xmlText = xmlOf(p)
@@ -578,7 +628,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     if (original) {
       // 原文版本（待删除）挂原始 XML，未改动时整段原样写回（修订仍在）；修订版（待新增）紧跟其后
       const type = level !== null ? 'heading' : 'paragraph'
-      const base = level !== null ? { level, style: styleName, align: alignAttr } : { style: styleName, align: alignAttr }
+      const base = level !== null ? { level, style: styleName, align: alignAttr, number: headingNumber } : { style: styleName, align: alignAttr }
       const rev = { suggest_group: `g${randomBytes(4).toString('hex')}`, suggest_author: revision.author }
       if (textOf(original).trim() === '') {
         // 整段都是新插入的
@@ -614,7 +664,7 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     }
     if (inline.length > 0 || figures.length === 0) {
       const node = level !== null
-        ? schema.node('heading', { level, style: styleName, align: alignAttr }, inline)
+        ? schema.node('heading', { level, style: styleName, align: alignAttr, number: headingNumber }, inline)
         : schema.node('paragraph', { style: styleName, align: alignAttr }, inline)
       blocks.push(node)
       pendingSrc.push({ node, xml: xmlText })
@@ -749,9 +799,71 @@ function parseStyles(doc: ReturnType<DOMParser['parseFromString']> | null): Map<
     const name = wAttr(child(s, 'name'), 'val') ?? id
     const pPr = child(s, 'pPr')
     const outline = wAttr(pPr && child(pPr, 'outlineLvl'), 'val')
-    map.set(id, { name, outline: outline === null ? null : Number(outline), basedOn: wAttr(child(s, 'basedOn'), 'val') })
+    const numPr = pPr && child(pPr, 'numPr')
+    const ilvl = wAttr(numPr && child(numPr, 'ilvl'), 'val')
+    map.set(id, {
+      name, outline: outline === null ? null : Number(outline), basedOn: wAttr(child(s, 'basedOn'), 'val'),
+      numId: wAttr(numPr && child(numPr, 'numId'), 'val'), ilvl: ilvl === null ? null : Number(ilvl),
+    })
   }
   return map
+}
+
+interface NumLevel { fmt: string; text: string; start: number; pStyle: string | null }
+interface NumberingDefs {
+  /** numId → 抽象编号 id 与各层的起始值覆盖（lvlOverride / startOverride：「重新编号」） */
+  nums: Map<string, { abs: string; starts: Map<number, number> }>
+  abstracts: Map<string, Map<number, NumLevel>>
+}
+
+/** numbering.xml 里算编号文字需要的定义：格式、编号文本模板（%1.%2）、起始值、关联样式。 */
+function parseNumberingDefs(doc: ReturnType<DOMParser['parseFromString']> | null): NumberingDefs {
+  const defs: NumberingDefs = { nums: new Map(), abstracts: new Map() }
+  if (!doc) return defs
+  const abs = doc.getElementsByTagNameNS(W, 'abstractNum')
+  for (let i = 0; i < abs.length; i++) {
+    const a = abs.item(i)!
+    const levels = new Map<number, NumLevel>()
+    for (const lvl of children(a).filter(c => local(c) === 'lvl')) {
+      levels.set(Number(wAttr(lvl, 'ilvl') ?? 0), {
+        fmt: wAttr(child(lvl, 'numFmt'), 'val') ?? 'decimal',
+        text: wAttr(child(lvl, 'lvlText'), 'val') ?? '',
+        start: Number(wAttr(child(lvl, 'start'), 'val') ?? 1),
+        pStyle: wAttr(child(lvl, 'pStyle'), 'val'),
+      })
+    }
+    defs.abstracts.set(wAttr(a, 'abstractNumId') ?? '', levels)
+  }
+  const nums = doc.getElementsByTagNameNS(W, 'num')
+  for (let i = 0; i < nums.length; i++) {
+    const n = nums.item(i)!
+    const starts = new Map<number, number>()
+    for (const o of children(n).filter(c => local(c) === 'lvlOverride')) {
+      const so = wAttr(child(o, 'startOverride'), 'val')
+      if (so !== null) starts.set(Number(wAttr(o, 'ilvl') ?? 0), Number(so))
+    }
+    defs.nums.set(wAttr(n, 'numId') ?? '', { abs: wAttr(child(n, 'abstractNumId'), 'val') ?? '', starts })
+  }
+  return defs
+}
+
+const ROMAN: Array<[number, string]> = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']]
+const CN_DIGITS = '零一二三四五六七八九'
+
+/** 编号格式化：Word 常见的 numFmt；不认识的按阿拉伯数字 */
+export function formatNumber(n: number, fmt: string): string {
+  const letters = (k: number) => { let s = ''; for (let x = k; x > 0; x = Math.floor((x - 1) / 26)) s = String.fromCharCode(97 + ((x - 1) % 26)) + s; return s }
+  const roman = (k: number) => { let s = '', x = k; for (const [v, r] of ROMAN) while (x >= v) { s += r; x -= v } return s }
+  const cn = (k: number) => (k < 10 ? CN_DIGITS[k]! : k < 20 ? `十${k % 10 ? CN_DIGITS[k % 10] : ''}` : `${CN_DIGITS[Math.floor(k / 10) % 10]}十${k % 10 ? CN_DIGITS[k % 10] : ''}`)
+  switch (fmt) {
+    case 'lowerLetter': return letters(n)
+    case 'upperLetter': return letters(n).toUpperCase()
+    case 'lowerRoman': return roman(n)
+    case 'upperRoman': return roman(n).toUpperCase()
+    case 'decimalZero': return n < 10 ? `0${n}` : String(n)
+    case 'chineseCounting': case 'chineseCountingThousand': case 'ideographTraditional': case 'japaneseCounting': return cn(n)
+    default: return String(n)
+  }
 }
 
 /** `${numId}:${ilvl}` → 是否有序。 */

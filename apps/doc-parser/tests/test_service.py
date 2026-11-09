@@ -105,7 +105,9 @@ def test_warmup_failure_stays_not_ready(monkeypatch: pytest.MonkeyPatch) -> None
         r = client.get("/health")
         assert r.status_code == 503
         assert r.json()["status"] == "error"
-        assert "模型损坏" in r.json()["error"]
+        # 对外只给通用提示，原始异常只进服务日志
+        assert r.json()["error"] == "模型初始化失败（详见服务日志）"
+        assert "模型损坏" not in r.text
 
 
 def test_sample_pdf_has_text_layer() -> None:

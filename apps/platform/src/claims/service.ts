@@ -27,6 +27,8 @@ import {
   type TableSummary,
   type VerificationTier,
 } from './extract.ts'
+import { headingText, isPendingDeletion } from './extract.ts'
+import { assessTableTrust } from './table-trust.ts'
 
 /**
  * 论断核对与四阶段深度临床评审服务（M1，PLATFORM.md §5.5 & Google PAT arXiv:2606.28277 扩展）：
@@ -119,7 +121,24 @@ export interface FourStageReviewResult {
   stage3_raw_candidates: number
   stage4_deduplicated_comments: SynthesizedReviewComment[]
   active_rules_applied: string[]
+  /** 给用户看的审稿说明（如表格结构不可靠、已跳过表格核查） */
+  warnings: string[]
 }
+
+/** PDF 走 poppler 兜底导入时的审稿提示 */
+/** 提示里称呼一张表：优先用表题开头（「Table 2. …」），否则用序号 */
+function tableLabel(t: TableSummary, index: number): string {
+  const cap = (t.caption ?? '').trim()
+  if (!cap) return `第 ${index + 1} 张表`
+  return cap.length > 40 ? `${cap.slice(0, 40)}…` : cap
+}
+
+export function untrustedTablesWarning(skipped: string[]): string {
+  return `此 PDF 有 ${skipped.length} 张表格未能可靠识别，本次审稿没有核查这些表格：${skipped.join('；')}。建议上传 Word 原稿以获得完整审稿。`
+}
+
+export const TABLES_UNRELIABLE_WARNING =
+  '此 PDF 的表格未能可靠识别（文档解析服务不可用，已用备用方式导入），本次审稿跳过了依赖表格的核查。建议上传 Word 原稿以获得完整审稿。'
 
 /**
  * 从临床医生的自然语言反驳（Rebuttal）与原句上下文中提炼去数字化的专科边界规则（Track A narrow）。
@@ -701,7 +720,9 @@ export class ClaimService {
       return clauses.some(c => txt.includes(c))
     }
 
-    if (!initialHit || (initialHit.node.type.name !== 'table' && !blockContainsProbe(initialHit.node))) {
+    // 表格与图（问题出在图注里）按整块定位，不去别的段落里找相似文字
+    const wholeBlock = (n: PMNode) => n.type.name === 'table' || n.type.name === 'figure'
+    if (!initialHit || (!wholeBlock(initialHit.node) && !blockContainsProbe(initialHit.node))) {
       let bestId = initialHit ? targetId : ''
       let bestScore = initialHit ? this.scoreOverlap(initialHit.node.textContent, cleanSentence || rawSnippet) : -1
       doc.descendants(node => {
@@ -887,6 +908,8 @@ export class ClaimService {
       owner?: string
       anchorComments?: boolean
       passK?: number
+      tablesUnreliable?: boolean
+      assessTables?: boolean
     } = {},
   ): Promise<FourStageReviewResult> {
     return this.runFourStageDeepReview(docId, {
@@ -903,10 +926,26 @@ export class ClaimService {
       owner?: string
       anchorComments?: boolean
       passK?: number
+      /** 表格结构不可靠（PDF 走 poppler 兜底导入）：规则核查与模型输入都不使用表格，并提示用户 */
+      tablesUnreliable?: boolean
+      /** 表格由版面推断（PDF 经 Docling 导入）：逐表判断可信度，不可信的表不参与核查、不交给模型，并提示用户 */
+      assessTables?: boolean
     },
   ): Promise<FourStageReviewResult> {
     const doc = this.docs.get(docId)
-    const tables = extractTableSummaries(doc)
+    let tables = opts.tablesUnreliable ? [] : extractTableSummaries(doc)
+    const warnings = opts.tablesUnreliable ? [TABLES_UNRELIABLE_WARNING] : []
+    if (opts.assessTables && tables.length) {
+      const skipped: string[] = []
+      tables = tables.filter((t, i) => {
+        const trust = assessTableTrust(t)
+        if (!trust.reliable) skipped.push(`${tableLabel(t, i)}（${trust.reasons[0]}）`)
+        return trust.reliable
+      })
+      if (skipped.length) warnings.push(untrustedTablesWarning(skipped))
+    }
+    // 全部表格都不可用时显式跳过，避免规则核查把空列表当成「未提供」而重新从文档提取表格
+    const skipTables = opts.tablesUnreliable || (opts.assessTables === true && tables.length === 0)
     const scratchpad = buildManuscriptScratchpad(doc, tables)
     const useMemory = opts.mode === 'heurion_evolved'
     const activeRules = useMemory ? this.getActiveBoundaryRules(opts.owner) : []
@@ -927,11 +966,21 @@ export class ClaimService {
     const budgetCounts: Record<VerificationTier, number> = { light: 0, medium: 0, high: 0 }
 
     doc.forEach(node => {
+      if (isPendingDeletion(node)) return
       if (node.type.name === 'heading') {
         if (curSection.blocks.length > 0) sections.push(curSection)
-        const hText = node.textContent.trim()
+        const hText = headingText(node)
         const role = classifySectionRole(hText)
         curSection = { title: hText, role, tier: role === 'methods' || role === 'results' ? 'high' : 'medium', blocks: [] }
+        return
+      }
+      // 图注存在图块的 caption 属性里（Word 题注与 PDF 图注都并进图块）：样本量、P 值常写在图注里，一并审读
+      const figCaption = node.type.name === 'figure' ? String(node.attrs.caption ?? '').trim() : ''
+      if (figCaption) {
+        const nodeId = (node.attrs.id as string | null) ?? `fig_${curSection.blocks.length + 1}`
+        const tier = classifyVerificationTier(figCaption, 0, curSection.role)
+        budgetCounts[tier]++
+        curSection.blocks.push({ nodeId, text: figCaption, tier })
         return
       }
       if (node.isTextblock) {
@@ -952,7 +1001,7 @@ export class ClaimService {
     // 1. 若在 heurion_deep 或 heurion_evolved 模式下，执行 Stage 3 结构化临床四维核查（Pass B + Pass C + Pass D）
     if (opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved') {
       const structIssues = [
-        ...auditInternalConsistency(doc, tables, activeRules),
+        ...auditInternalConsistency(doc, tables, activeRules, { skipTables }),
         ...auditMethodResultConsistency(doc, tables, activeRules),
         ...auditSpinAndGuidelines(doc, activeRules),
       ]
@@ -1033,8 +1082,9 @@ export class ClaimService {
         .map(s => `## ${s.title}\n` + s.blocks.map(b => `[${b.nodeId}] ${b.text}`).join('\n'))
         .join('\n\n')
 
-      const tableMarkdown =
-        opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
+      const tableMarkdown = opts.tablesUnreliable
+        ? '（本稿表格由 PDF 版面推断，行列结构不可靠，已略去；请不要依据表格做数值核对。）'
+        : opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
           ? tables
               .map(
                 t =>
@@ -1115,6 +1165,7 @@ export class ClaimService {
       stage3_raw_candidates: candidates.length,
       stage4_deduplicated_comments: synthesized,
       active_rules_applied: activeRules,
+      warnings,
     }
   }
 
