@@ -982,7 +982,9 @@ export function auditInternalConsistency(
             if (!isMedianIqrRow && count <= colN) {
               const expectedPct = (count / colN) * 100
               const pctDiff = Math.abs(expectedPct - repPct)
-              if (pctDiff > 1.5 || (!hasPctSign && repPct > 0)) {
+              // 只报算不对的：格子里不写「%」是常见写法（行名或表头已注明「n (%)」），单独漏标百分号不报——
+              // 原来对每个这样的格子都报一条，同一张表几十条，全是误报（深度审稿评测 2026-11-09）
+              if (pctDiff > 1.5) {
                 pushIfNotExempt({
                   node_id: tbl.node_id,
                   sentence: `${rowLabel} [${colHeader}, n=${colN}]: ${cell}`,
@@ -992,12 +994,9 @@ export function auditInternalConsistency(
                   section_role: 'results',
                   category: 'internal_inconsistency',
                   subtype: 'table_cell_percentage_arithmetic_error',
-                  severity: pctDiff > 1.5 ? 'critical' : 'minor',
-                  reason: `表格（${tbl.caption || tbl.node_id}）行「${rowLabel}」列「${colHeader} (n=${colN})」单元格「${cell}」${
-                    pctDiff > 1.5
-                      ? `百分比计算错误：${count}/${colN} 应为 ${expectedPct.toFixed(1)}%，而非 ${repPct}%`
-                      : `漏标百分号（%）`
-                  }${!hasPctSign && pctDiff > 1.5 ? '（且漏标 % 号）' : ''}。`,
+                  severity: 'critical',
+                  reason: `表格（${tbl.caption || tbl.node_id}）行「${rowLabel}」列「${colHeader} (n=${colN})」单元格「${cell}」` +
+                    `百分比计算错误：${count}/${colN} 应为 ${expectedPct.toFixed(1)}%，而非 ${repPct}%${!hasPctSign ? '（且漏标 % 号）' : ''}。`,
                   suggestion: `请将该单元格修正为「${count} (${expectedPct.toFixed(1).replace(/\.0$/, '')}%)」。`,
                 })
               }

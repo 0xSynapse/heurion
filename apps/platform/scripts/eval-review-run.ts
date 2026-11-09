@@ -32,6 +32,8 @@ export interface RunFinding {
   anchor: string
   reason: string
   suggestion: string
+  /** 模型审稿给的对照原文（已核实在稿件里） */
+  evidence?: string[]
 }
 
 export interface RunRecord {
@@ -95,6 +97,7 @@ async function reviewOnce(markdown: string, title: string, useLlm: boolean): Pro
       anchor: (c.comment_id ? comments.get(c.comment_id) : undefined) ?? c.snippet,
       reason: c.reason,
       suggestion: c.suggestion,
+      ...(c.evidence?.length ? { evidence: c.evidence } : {}),
     }))
     return {
       ok: true, error: null, ms: Date.now() - t0, calls: usage.length,
@@ -122,7 +125,8 @@ async function main(): Promise<void> {
   const papers = readManifest().filter(p => (split === 'all' || p.split === split) && (!only || only.includes(p.id)))
   if (!papers.length) throw new Error('没有符合条件的论文；先运行 eval:review:fetch')
 
-  const runId = `${new Date().toISOString().slice(0, 10)}-${gitSha()}-${useLlm ? config.model : 'rules'}`
+  // --tag：同一代码版本跑几种配置（如改动前后对比）时区分运行
+  const runId = `${new Date().toISOString().slice(0, 10)}-${gitSha()}-${useLlm ? config.model : 'rules'}${arg('--tag') ? `-${arg('--tag')}` : ''}`
   const dir = join(RUNS_DIR, runId)
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'meta.json'), JSON.stringify({ run_id: runId, model: useLlm ? config.model : null, mode: 'heurion_evolved', split, repeat, variants, started_at: new Date().toISOString() }, null, 2))

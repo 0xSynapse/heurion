@@ -16,6 +16,7 @@ describe('审稿批注锚点', () => {
     const complete = async () => JSON.stringify([{
       node_id: p1,
       sentence,
+      evidence: ['本研究纳入 120 例患者'],
       category: 'method_result_mismatch',
       severity: 'major',
       reason: '统计方法与结果报告的指标不一致。',

@@ -30,6 +30,7 @@ import {
 } from './extract.ts'
 import { headingText, isPendingDeletion } from './extract.ts'
 import { assessTablesWithVision, type TableVision } from './table-vision.ts'
+import { normForMatch, numberKey, parseVerdicts, quotedIn, VERIFY_SYSTEM } from './review-evidence.ts'
 
 /**
  * 论断核对与四阶段深度临床评审服务（M1，PLATFORM.md §5.5 & Google PAT arXiv:2606.28277 扩展）：
@@ -113,6 +114,8 @@ export interface SynthesizedReviewComment {
   source_pass: 'llm_stage3' | 'pass_a_citation' | 'pass_b_internal' | 'pass_c_method' | 'pass_d_spin'
   /** 针对表格某一格：[网格行, 列]（node_id 是表格） */
   cell?: [number, number]
+  /** 模型审稿给的证据：与原句矛盾的另一处原文（已核实在稿件里） */
+  evidence?: string[]
 }
 
 export interface FourStageReviewResult {
@@ -126,6 +129,31 @@ export interface FourStageReviewResult {
   active_rules_applied: string[]
   /** 给用户看的审稿说明（如表格结构不可靠、已跳过表格核查） */
   warnings: string[]
+}
+
+/**
+ * 深度审稿 Stage 3 的章节审稿提示词（产品模式）。审稿的成败在误报：只报能用稿件原文证明的客观错误，
+ * 每条必须逐字引用原句与证据（另一处矛盾的原文、表格单元格或统计量），程序会核实引文确实在稿件里。
+ */
+export function sectionReviewPrompt(title: string, role: SectionRole, scratchpadSummary: string, rulesContext: string): string {
+  return (
+    `你是医学期刊的统计与数据核对审稿人，正在审查章节「${title}」（角色：${role}）。\n` +
+    `${scratchpadSummary}${rulesContext}\n` +
+    '只报告能用本稿原文证明的客观错误，例如：\n' +
+    '- 同一个数（样本量、结局人数、效应量、P 值）在两处写得不一样（正文与摘要、正文与表格、前后章节）；\n' +
+    '- 百分比与分子分母算不上、分组人数加起来不等于总数；\n' +
+    '- 点估计落在置信区间外、区间上下界倒挂；\n' +
+    '- 方法里写的统计方法 / 汇总指标与结果里报告的不一致；\n' +
+    '- 结论与报告的统计结果不符（如 P > 0.05 却写「显著」，观察性研究写成因果）。\n' +
+    '不要报告：写作与表达建议、研究设计或方法学的主观评价、局限性、建议补充的分析、缺少的引用、你无法在本稿中找到对照原文的怀疑。\n' +
+    '也不要报告「没有报告 / 没有给出 / 缺少某项结果、方法或数据」：你只看到本章节和摘要，缺的内容多半写在方法、结果或表格的别处。' +
+    '只报告两处原文直接矛盾、或原文自身算不上的问题。\n' +
+    '每条必须给出两段逐字摘录：sentence = 有问题的原句（从提供的正文或表格中逐字复制，不要改写）；' +
+    'evidence = 证明它有问题的另一处原文（逐字复制的矛盾句子、表格行或统计量，可以有 1–3 段）。拿不出 evidence 的不要报。\n' +
+    '严重程度：critical = 主要结局、主要样本量或关键数字错误；major = 次要结局的数值矛盾、方法与结果不一致、结论夸大；minor = 次要变量的小算术错误。\n' +
+    '宁缺毋滥：没有把握就不报；一个章节通常 0–2 条，最多 3 条。没有问题返回 []。\n' +
+    '严格输出 JSON 数组：[{"node_id":"块ID","sentence":"原句","evidence":["证据原文"],"category":"internal_inconsistency|method_result_mismatch|spin_or_guideline","severity":"critical|major|minor","reason":"中文：哪两处对不上、具体数字","suggestion":"中文修改建议"}]。'
+  )
 }
 
 export function untrustedTablesWarning(skipped: string[]): string {
@@ -853,9 +881,18 @@ export class ClaimService {
         const key = `${item.category}|${item.subtype ?? ''}|${item.node_id}|${normSentence}`
         if (seenKeys.has(key)) continue
 
+        // 跨章节去重：同一处数字矛盾常被几个章节换着说法报出来（各章节都拿到了表格）——数字组合（至少两个数）相同、类别相同算一条
+        const nums = item.source_pass === 'llm_stage3' ? numberKey([item.sentence, ...(item.evidence ?? [])]) : ''
+        if (nums.split(',').length >= 2 && deduplicated.some(e => e.source_pass === 'llm_stage3' && e.category === item.category
+          && numberKey([e.sentence, ...(e.evidence ?? [])]) === nums)) continue
+
         // 跨通道语义去重：同一段落/表格块若已被结构化精确核查（Pass B/C/D）定位，或同表同一子类型（如双零笔误、修订粘连含HR），合并去重
         const isRedundantWithExisting = deduplicated.some(existing => {
           if (existing.node_id !== item.node_id) return false
+          // 表格单元格的意见：不同的格是不同的错误，不合并（只合并同一格）
+          if (existing.cell && item.cell) {
+            return existing.subtype === item.subtype && existing.cell[0] === item.cell[0] && existing.cell[1] === item.cell[1]
+          }
           if (existing.subtype && existing.subtype === item.subtype) return true
           if (
             existing.subtype === 'uncleaned_revision_merge_artifact' &&
@@ -863,8 +900,12 @@ export class ClaimService {
           ) {
             return true
           }
+          // 模型意见只在与规则意见说的是同一件事时让位：规则意见针对的是一个短的单元格值（带数字），模型意见的原句、证据或理由里有这个值。
+          // 原来同一张表 / 同一段落上只要有规则意见，模型意见一律去掉，把模型查出的别的真问题也吞了（深度审稿评测 2026-11-09）
           if (existing.source_pass !== 'llm_stage3' && item.source_pass === 'llm_stage3') {
-            return true
+            const snip = (existing.snippet ?? '').trim()
+            return snip.length > 0 && snip.length <= 30 && /\d/.test(snip) &&
+              normForMatch([item.sentence, ...(item.evidence ?? []), item.reason].join(' ')).includes(normForMatch(snip))
           }
           return false
         })
@@ -907,7 +948,9 @@ export class ClaimService {
             store.addReply(
               row.id,
               'ai',
-              `[${item.severity.toUpperCase()} | ${item.category}] ${item.reason}\n【建议修改】：${item.suggestion}`,
+              `[${item.severity.toUpperCase()} | ${item.category}] ${item.reason}` +
+                (item.evidence?.length ? `\n【对照原文】：${item.evidence.map(e => `「${e.slice(0, 300)}」`).join(' ')}` : '') +
+                `\n【建议修改】：${item.suggestion}`,
             )
           }
         }
@@ -1064,13 +1107,30 @@ export class ClaimService {
           ? `\n【本课题组已确认的专科审稿边界豁免规则（请严格遵守，切勿对以下情况误报）】：\n${activeRules.map(r => `- ${r}`).join('\n')}\n`
           : ''
 
+      // 产品模式（heurion_deep / heurion_evolved）：意见要带原文证据并逐条核实、每章节最多 3 条；PAT 基线模式保持原样以便对照
+      const verifyEvidence = opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
+      let corpus: string | null = null
+      const corpusText = () => (corpus ??= normForMatch(`${fullProse}\n${tableMarkdown}`))
+      const sevRank: Record<string, number> = { critical: 0, major: 1, minor: 2 }
+
       const parseLlmIssues = (rawJson: string, fallbackSection?: { title: string; role: SectionRole; firstNodeId: string }) => {
         const cleaned = rawJson.replace(/```(?:json)?/g, '').trim()
         const match = /\[[\s\S]*\]/.exec(cleaned) ?? /\{[\s\S]*\}/.exec(cleaned)
         if (!match) return
         try {
           const parsed = JSON.parse(match[0])
-          const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed.issues) ? parsed.issues : []
+          let list: any[] = Array.isArray(parsed) ? parsed : Array.isArray(parsed.issues) ? parsed.issues : []
+          if (verifyEvidence) {
+            // 原句与证据都要真在稿件里（模型编造或复述走样的引文对不上就不报），再按严重度每章节最多留 3 条
+            list = list
+              .filter(item => {
+                const sentence = String(item?.sentence ?? item?.quote ?? '').trim()
+                const evidence = (Array.isArray(item?.evidence) ? item.evidence : item?.evidence ? [item.evidence] : []).map((e: unknown) => String(e))
+                return sentence && quotedIn(sentence, corpusText()) && evidence.some((e: string) => quotedIn(e, corpusText()))
+              })
+              .sort((a, b) => (sevRank[String(a.severity)] ?? 1) - (sevRank[String(b.severity)] ?? 1))
+              .slice(0, 3)
+          }
           for (const item of list) {
             if (!item || typeof item.reason !== 'string' || !item.reason.trim()) continue
             const catRaw = String(item.category ?? 'method_result_mismatch')
@@ -1099,6 +1159,9 @@ export class ClaimService {
               reason: item.reason.trim(),
               suggestion: String(item.suggestion ?? '请核实并修正该处表述或数据。').trim(),
               source_pass: 'llm_stage3',
+              ...(Array.isArray(item.evidence) || item.evidence
+                ? { evidence: (Array.isArray(item.evidence) ? item.evidence : [item.evidence]).map((e: unknown) => String(e)).slice(0, 3) }
+                : {}),
             })
           }
         } catch {
@@ -1147,10 +1210,13 @@ export class ClaimService {
           `声明检验方法=${scratchpad.declared_tests.join(', ') || '未声明'}。`
 
         const targetSections = sections.filter(sec => !(sec.tier === 'light' && sec.role === 'intro'))
+        // 摘要：标题含 Abstract / 摘要 的章节，没有就取第一个章节（标题前的摘要段落）；最多 4000 字
+        const abstractSection = sections.find(s => /abstract|摘要|summary/i.test(s.title)) ?? sections[0]
+        const abstractText = abstractSection ? abstractSection.blocks.map(b => b.text).join('\n').slice(0, 4000) : ''
         const secResults = await Promise.all(
           targetSections.map(async sec => {
             const secText = sec.blocks.map(b => `[${b.nodeId}] ${b.text}`).join('\n')
-            const sys =
+            const sys = verifyEvidence ? sectionReviewPrompt(sec.title, sec.role, scratchpadSummary, rulesContext) :
               `你是四阶段科学深度审稿系统（Stage 3 Specialist Reviewer，当前分配预算：${sec.tier.toUpperCase()} Thinking Track）。\n` +
               `${scratchpadSummary}${rulesContext}\n` +
               `请结合全局 Scratchpad 深入审查当前章节「${sec.title}」（角色：${sec.role}），重点核查：\n` +
@@ -1158,10 +1224,14 @@ export class ClaimService {
               `2) 统计方法（Mean±SD vs SEM vs Median[IQR]）、对照组设计与结果报告是否矛盾；\n` +
               `3) 跨章节终点指标（如 pCR、OS、HR）或缩略语定义是否前后不一致。\n` +
               `若无客观问题请返回 []；若有问题请严格输出 JSON 数组：[{"node_id":"块ID","sentence":"原文原句","category":"internal_inconsistency|method_result_mismatch|spin_or_guideline","severity":"critical|major|minor","reason":"中文具体原因","suggestion":"中文修改建议"}]。`
+            // 产品模式：各章节附上摘要作对照（摘要与正文数值不一致是常见错误，按章节审时看不到摘要就拿不出证据）
+            const abstractRef = verifyEvidence && abstractText && sec !== abstractSection
+              ? `\n\n【摘要（供对照；与本章节不一致时可逐字引用作为 evidence）】：\n${abstractText}`
+              : ''
             const userPayload =
               sec.role === 'results' || sec.role === 'methods'
-                ? `【当前章节正文】：\n${secText}\n\n【关联表格信息】：\n${tableMarkdown}`
-                : `【当前章节正文】：\n${secText}`
+                ? `【当前章节正文】：\n${secText}\n\n【关联表格信息】：\n${tableMarkdown}${abstractRef}`
+                : `【当前章节正文】：\n${secText}${abstractRef}`
             const raw = await opts.complete!(sys, userPayload)
             return { raw, sec }
           }),
@@ -1172,6 +1242,29 @@ export class ClaimService {
             role: sec.role,
             firstNodeId: sec.blocks[0]?.nodeId ?? 'p_1',
           })
+        }
+
+        // 全文复核：章节审稿只看到本章节与摘要，把全部模型意见连同全文交给模型逐条复核，判为不成立的不报（每 20 条一次调用）
+        if (verifyEvidence) {
+          const llm = candidates.filter(c => c.source_pass === 'llm_stage3')
+          const rejected = new Set<SynthesizedReviewComment>()
+          const fullText = `${fullProse}\n\n${tableMarkdown}`
+          for (let i = 0; i < llm.length; i += 20) {
+            const batch = llm.slice(i, i + 20)
+            const list = batch.map((c, k) =>
+              `${k + 1}. [${c.severity}] 原句：${c.sentence}\n   证据：${(c.evidence ?? []).join(' / ') || '（无）'}\n   理由：${c.reason}`).join('\n')
+            try {
+              const verdicts = parseVerdicts(await opts.complete!(VERIFY_SYSTEM, `【论文全文】\n${fullText}\n\n【待复核的意见】\n${list}`))
+              batch.forEach((c, k) => { if (verdicts.get(k + 1) === 'rejected') rejected.add(c) })
+            } catch {
+              /* 复核调用失败：这一批照常报出 */
+            }
+          }
+          if (rejected.size) {
+            const kept = candidates.filter(c => !rejected.has(c))
+            candidates.length = 0
+            candidates.push(...kept)
+          }
         }
       }
     }

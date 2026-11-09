@@ -263,7 +263,8 @@ export function sourceSnapshot(xml: string, opts: { printed?: boolean } = {}): S
     .filter(p => !nestedBlock.has(p) && !hasAncestor(p, ['table-wrap', 'fig', 'caption', 'list', 'abstract', 'trans-abstract', 'boxed-text', 'disp-quote', 'supplementary-material', 'ack', 'back']))
     .map(p => wordSeq(spacedText(p)))
     .filter(s => s.trim().split(' ').length >= 25)
-  return { text: collapseCiteRuns(parts.join(' ')), refText, tables, headings, title: titleEl ? tokens(spacedText(titleEl)) : '', headingDepths, allTitles, figCaptions, paragraphs, formulas }
+  // 引用编号区间只在 PDF 上印成首尾；由 JATS 生成的 markdown / Word 保留逐个编号，不收
+  return { text: printed ? collapseCiteRuns(parts.join(' ')) : parts.join(' '), refText, tables, headings, title: titleEl ? tokens(spacedText(titleEl)) : '', headingDepths, allTitles, figCaptions, paragraphs, formulas }
 }
 
 /** 文本块的文字，上下标两边插空格（与原文侧 spacedText 对 <sup>/<sub> 的处理一致：10⁹ 不算成 109） */
@@ -314,7 +315,8 @@ const multiset = (xs: string[]) => xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0) 
 export function checkFidelity(xml: string, markdown: string): FidelityReport {
   const docs = new Documents(new Store(':memory:'))
   const row = docs.create({ owner: 'check', title: 'check', markdown })
-  return checkFidelityDoc(xml, docs.get(row.id))
+  // markdown 由 JATS 直接转出：按 JATS 原样比（不按 PDF 的印法）
+  return checkFidelityDoc(xml, docs.get(row.id), { printed: false })
 }
 
 /** 直接检查平台文档（如产品 PDF / Word 导入的结果） */

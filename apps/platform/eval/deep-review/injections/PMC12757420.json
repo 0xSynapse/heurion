@@ -1,0 +1,37 @@
+[
+  {
+    "label_id": "PMC12757420-1",
+    "type": "E5",
+    "severity": "major",
+    "find": "Continuous variables were compared using the Mann-Whitney U test.",
+    "replace": "Continuous variables were compared using the independent-samples t-test.",
+    "description": "方法中连续变量组间比较由Mann-Whitney U检验改为独立样本t检验，但表2对大多数连续变量报告中位数(IQR)（偏态分布），与参数检验不匹配。",
+    "related_quotes": [
+      "| CRP (mg/L), median (IQR) | 3.0 (2.0 7.0) | 2.0 (1.0 3.8) | 0.003 |",
+      "continuous variables were presented as mean ± standard deviation (SD) or median with interquartile range (IQR), depending on the normality of their distribution"
+    ]
+  },
+  {
+    "label_id": "PMC12757420-2",
+    "type": "E1",
+    "severity": "critical",
+    "find": "Subsequently, 27 patients with incomplete data were excluded",
+    "replace": "Subsequently, 24 patients with incomplete data were excluded",
+    "description": "结果中因数据不全排除的人数由27改为24，则207−24=183≠180，且与流程图说明“27 were excluded”矛盾。",
+    "related_quotes": [
+      "207 patients met inclusion criteria",
+      "and 27 were excluded for incomplete data, resulting in 180 patients for final analysis"
+    ]
+  },
+  {
+    "label_id": "PMC12757420-3",
+    "type": "E6",
+    "severity": "major",
+    "find": "was significantly higher than that in the low activity group (17.1%)",
+    "replace": "was significantly higher than that in the moderate activity group (28.1%)",
+    "description": "讨论中把高疾病活动组与“低活动组(17.1%)”的显著差异改为与“中活动组(28.1%)”显著不同，而结果显示中、高活动组差异P=0.194不显著。",
+    "related_quotes": [
+      "while the difference between moderate and high activity groups was not statistically significant (P = 0.194)"
+    ]
+  }
+]
