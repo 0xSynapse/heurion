@@ -9,7 +9,7 @@ import type { Ocr } from '../kb/ocr.ts'
 import { deckSchema, emu } from '../model/deck-schema.ts'
 import { assignIds } from '../model/ids.ts'
 import { schema } from '../model/schema.ts'
-import { docParserToDoc, type DocParser } from './doc-parser.ts'
+import { bindSourceMap, docParserToDoc, type DocParser, type SourceMap } from './doc-parser.ts'
 import type { ImportedAsset } from './docx-import.ts'
 
 const run = promisify(execFile)
@@ -38,6 +38,8 @@ export interface PdfImport {
   engine: 'docling' | 'poppler'
   /** 走兜底时的原因（服务未配置 / 未就绪 / 解析失败） */
   fallbackReason?: string
+  /** 原版视图的映射（只有 Docling 路径、新版 doc-parser 才有；块 id 与 doc 一致） */
+  sourceMap?: SourceMap
 }
 
 export interface PdfImportOptions {
@@ -140,10 +142,12 @@ export async function importPdf(bytes: Uint8Array, filename: string, opts: PdfIm
         const r = await opts.docParser.parse(bytes, filename)
         const built = docParserToDoc(r, baseName)
         const head = built.text.slice(0, 6000)
+        const doc = assignIds(built.doc, new Set())
         return {
           kind: 'doc',
           title: built.title ?? null,
-          doc: assignIds(built.doc, new Set()),
+          doc,
+          ...(built.sourceMap ? { sourceMap: bindSourceMap(doc, built.sourceMap) } : {}),
           assets: built.assets,
           warnings: built.warnings,
           doi: DOI_RE.exec(head)?.[1] ?? null,
@@ -806,6 +810,70 @@ export function extractDocTitle(pages: PdfPage[]): string | null {
   return titleLines.map(l => l.text).join(' ').trim() || null
 }
 
+/** 论文的标准章节（不论有无编号）：正文从第一个标准章节开始 */
+const STD_SECTION = /^(?:\d+(?:\.\d+)*\.?\s*)?(?:abstract|summary|introduction|background|methods?|materials? (?:and|&) methods|patients and methods|methodology|results|discussion|conclusions?|references|acknowledge?ments?|摘\s*要|引\s*言|前\s*言|资料与方法|对象与方法|方\s*法|结\s*果|讨\s*论|结\s*论|参考文献)\s*[.:：]?$/i
+
+/**
+ * 兜底路径的版面整理（与 doc-parser 的 _postprocess 同样的思路，只用文字与字号）：
+ * - 论文标题：被拆成几行、每行一个标题的，合成一个 1 级标题放到最前；
+ * - 每页重复三次以上的短标题（页眉、侧栏标签）去掉；
+ * - 不像标题的「标题」还原成段落：字母不到一半或没有字母词（图里的坐标轴数字）、作者行（三个以上数字且不是章节编号）；
+ * - 第一个标准章节之前的其他标题（期刊名、文章类型、作者名）还原成段落；
+ * - 换栏 / 换页或被图表隔开、句子没写完且下一段以小写开头的段落接上。
+ */
+export function tidyPopplerBlocks(blocks: Block[], title: string | null): Block[] {
+  const sq = (t: string) => t.toLowerCase().replace(/[\s\-‐–]+/g, '')
+  const out: Block[] = blocks.map(b => ({ ...b }) as Block)
+  const firstStd = () => out.findIndex(b => b.kind === 'heading' && STD_SECTION.test(b.text.trim()))
+  const toPara = (i: number) => { const b = out[i]!; if (b.kind === 'heading') out[i] = { kind: 'paragraph', text: b.text, top: b.top } }
+
+  // 标题
+  const tq = title ? sq(title) : ''
+  if (tq.length >= 12) {
+    const end = firstStd() < 0 ? out.length : firstStd()
+    let removed = false
+    for (let i = end - 1; i >= 0; i--) {
+      const b = out[i]!
+      if ((b.kind === 'heading' || b.kind === 'paragraph') && sq(b.text).length >= 4 && tq.includes(sq(b.text))) { out.splice(i, 1); removed = true }
+    }
+    if (removed) out.unshift({ kind: 'heading', level: 1, text: title!, top: 0 })
+  }
+  // 页眉
+  const counts = new Map<string, number>()
+  for (const b of out) if (b.kind === 'heading' && b.text.split(/\s+/).length <= 8) counts.set(sq(b.text), (counts.get(sq(b.text)) ?? 0) + 1)
+  for (let i = out.length - 1; i >= 0; i--) {
+    const b = out[i]!
+    if (b.kind === 'heading' && (counts.get(sq(b.text)) ?? 0) >= 3 && !/\d/.test(b.text) && !STD_SECTION.test(b.text.trim())) out.splice(i, 1)
+  }
+  // 不像标题的标题、正文开始前的标题（正文开始 = 第一个摘要 / 引言 / 背景标题；只认得出文末章节时不判断）
+  const std = out.findIndex(b => b.kind === 'heading' && /^(?:\d+\.?\s*)?(?:abstract|summary|introduction|background|摘\s*要|引\s*言|前\s*言)\s*[.:：]?$/i.test(b.text.trim()))
+  for (let i = 0; i < out.length; i++) {
+    const b = out[i]!
+    if (b.kind !== 'heading' || i === 0) continue  // 第一个标题当论文标题保留
+    const letters = (b.text.match(/\p{L}/gu) ?? []).length
+    const words = (b.text.match(/\p{L}{2,}/gu) ?? []).length + (b.text.match(/[㐀-鿿]/g) ?? []).length / 2
+    const numbered = /^\d+(?:\.\d+)*\.?\s+\S/.test(b.text)
+    // 作者行：人名后的单位编号是独立的一两位数（「Smith 1,2 Lee 3」），词里的数字（miRNA-200a）不算
+    const markers = (b.text.match(/(?:^|[\s,])\d{1,2}(?=[\s,*†‡]|$)/g) ?? []).length
+    if (letters < b.text.replace(/\s/g, '').length / 2 || words < 1 || (!numbered && markers >= 3)
+      || (std > 0 && i < std)) toPara(i)
+  }
+  // 断开的段落
+  for (let i = 0; i < out.length; i++) {
+    const a = out[i]!
+    if (a.kind !== 'paragraph' || a.text.length < 40 || SENTENCE_END.test(a.text)) continue
+    let j = i + 1
+    while (j < out.length && j - i <= 4 && (out[j]!.kind === 'figure' || out[j]!.kind === 'table')) j++
+    const n = out[j]
+    if (n?.kind === 'paragraph' && /^[a-z(]/.test(n.text) && n.text.split(/\s+/).length >= 3) {
+      a.text = joinLine(a.text, n.text)
+      out.splice(j, 1)
+      i--
+    }
+  }
+  return out
+}
+
 export function buildPdfDoc(
   pages: PdfPage[],
   ctx: { baseName: string; ocrText?: Map<number, string>; pageImages?: Map<number, Uint8Array> },
@@ -943,7 +1011,7 @@ export function buildPdfDoc(
   const para = (t: string) => schema.node('paragraph', null, t ? [schema.text(t)] : [])
   const nodes: PMNode[] = []
   if (notes.length) nodes.push(para(`导入说明：${notes.join('；')}。`))
-  for (const b of merged) {
+  for (const b of tidyPopplerBlocks(merged, title ?? null)) {
     switch (b.kind) {
       case 'heading': nodes.push(schema.node('heading', { level: b.level }, [schema.text(b.text)])); break
       case 'paragraph': nodes.push(para(b.text)); break

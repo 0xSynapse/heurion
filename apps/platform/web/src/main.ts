@@ -9,6 +9,7 @@ import { pickLayout, pickTemplate } from './templates.ts'
 import { EDITABLE_CHART_TYPES, editChartData } from './chart-dialog.ts'
 import { askConfirm, askText } from './dialogs.ts'
 import { Editor, type SelectionAnchor } from './editor.ts'
+import { OriginalView } from './original.ts'
 import { initDatasets } from './datasets.ts'
 import { initPatients } from './patients.ts'
 import { initResearch } from './research.ts'
@@ -1205,7 +1206,55 @@ function renderCollaborators(list: Array<{ name: string; role: string }>, readOn
     + (readOnly ? '<span class="pill off collab-ro" title="你在这个研究里是只读成员：能看、能评论，不能修改">只读</span>' : '')
 }
 
+// —— 原版 PDF 视图（PDF 导入的文档；只读，评论与审稿标注画在原版上，见 original.ts） ——
+
+let origView: OriginalView | null = null
+
+function setOriginalMode(on: boolean): void {
+  if (!session || session.kind !== 'doc' || !detail?.original) on = false
+  $('origToggle').classList.toggle('active', on)
+  $('origToggle').textContent = on ? '转换稿' : '原版 PDF'
+  $('origToggle').title = on ? '回到可编辑的转换稿' : '按原样查看导入的 PDF（只读），评论与审稿标注显示在原文位置'
+  $('scroller').hidden = on
+  $('toolbar').classList.toggle('orig-hidden', on)
+  anchor = null
+  $('commentFab').style.display = 'none'
+  if (!on) { origView?.el.setAttribute('hidden', ''); return }
+  if (!origView) {
+    const docId = session!.docId
+    origView = new OriginalView({
+      docId,
+      fetchBytes: async path => {
+        const res = await fetch(path, { headers: { Authorization: `Bearer ${TOKEN}` } })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.arrayBuffer()
+      },
+      fetchJson: path => api(path),
+      currentDoc: () => session?.editor?.view.state.doc ?? null,
+      onSelection: a => { anchor = a; placeFab() },
+      onCommentClick: id => {
+        if ($('app').classList.contains('side-collapsed')) setSideCollapsed(false)
+        switchTab('commentPane')
+        locateCommentInDoc(id)
+      },
+    })
+    $('scroller').after(origView.el)
+    void origView.load(!!detail.original.mapped).then(() => origView?.setComments(detail?.comments ?? []))
+  }
+  origView.el.removeAttribute('hidden')
+}
+
+function closeOriginal(): void {
+  origView?.destroy()
+  origView = null
+  $('scroller').hidden = false
+  $('toolbar').classList.remove('orig-hidden')
+  $('origToggle').classList.remove('active')
+  $('origToggle').textContent = '原版 PDF'
+}
+
 function close(): void {
+  closeOriginal()
   activeSubagentTask = null
   subagentCards.clear()
   clearAllChatImages()
@@ -1330,7 +1379,9 @@ async function refresh(full: boolean): Promise<void> {
   if (Array.isArray(d.comments)) {
     if (session?.editor) session.editor.setCommentStatuses(d.comments)
     if (session?.deck) session.deck.setCommentStatuses(d.comments)
+    origView?.setComments(d.comments)
   }
+  $('origToggle').hidden = !(session?.kind === 'doc' && d.original)
   renderComments()
   renderSuggestions()
   renderVersions()
@@ -3084,6 +3135,7 @@ function placeFab(): void {
   fab.style.left = `${Math.round(left)}px`
 }
 $('scroller').addEventListener('scroll', () => { $('commentFab').style.display = 'none' })
+$('origToggle').onclick = () => setOriginalMode(!$('origToggle').classList.contains('active'))
 
 $('commentFab').onmousedown = async e => {
   e.preventDefault()
@@ -3845,6 +3897,14 @@ function locateCommentInDoc(cid: string): void {
 
   const c = (detail?.comments ?? []).find((x: any) => x.id === cid)
   const check = (detail?.claim_checks ?? []).find((x: any) => x.comment_id === cid || x.claim_id === cid)
+
+  // 原版视图里：滚到原版上的位置（锚定的块在原版里没有对应位置时，提示到转换稿里看）
+  if (origView && !origView.el.hasAttribute('hidden')) {
+    if (!origView.scrollToComment(cid) && !origView.scrollToNode(c?.anchor?.node_ids?.[0] ?? c?.node_id ?? '')) {
+      showNotice('这条评论锚定的内容在原版里没有对应位置（导入后新写的内容），请切换到转换稿查看')
+    }
+    return
+  }
 
   if (session?.editor) {
     const res = session.editor.locateAndHighlightComment({

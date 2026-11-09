@@ -1,5 +1,6 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import { schema } from '../model/schema.ts'
+import { readGrid } from '../model/table-grid.ts'
 import type { ImportedAsset } from './docx-import.ts'
 
 /**
@@ -7,13 +8,38 @@ import type { ImportedAsset } from './docx-import.ts'
  * 服务只在本机 / 内部网络；不可用、未就绪或解析失败时由 pdf-import.ts 退回 poppler 方案。
  */
 
+/** 文字范围上的格式（doc-parser 从 PDF 文字层读出）：[起, 止, 种类]，按 text 的字符下标 */
+export type DocParserMark = [number, number, string]
+
+/**
+ * 块在原版 PDF 上的位置（原版视图用，docs/design/PDF_ORIGINAL_VIEW.md §3）：
+ * regions [[页, 左, 上, 右, 下], …]；spans [[起, 止, 词序号], …] 按块 text 的下标；表格 cells [[行, 列, spans], …]
+ */
+export interface DocParserSrc { regions: number[][]; spans?: number[][]; cells?: Array<[number, number, number[][]]> }
+/** 各页尺寸与全文的词：[页, 左, 上, 右, 下, 文字]（PDF 点，左上原点、显示方向） */
+export interface DocParserSource { pages: Array<{ w: number; h: number }>; words: Array<[number, number, number, number, number, string]> }
+
+/** 导入后、块 id 分配前的原版映射：按文档顶层块的位置记 */
+export interface PendingSourceMap {
+  pages: DocParserSource['pages']
+  words: DocParserSource['words']
+  blocks: Array<{ index: number; text?: string; spans?: number[][]; regions: number[][]; cells?: Array<[number, number, number[][]]> }>
+}
+/** 存下来的原版映射：块 id → 导入时的文字、对齐与区域 */
+export interface SourceMap {
+  version: 1
+  pages: DocParserSource['pages']
+  words: DocParserSource['words']
+  nodes: Record<string, { text?: string; spans?: number[][]; regions?: number[][] }>
+}
+
 export type DocParserBlock =
-  | { type: 'heading'; level: number; text: string; page?: number | null }
-  | { type: 'paragraph'; text: string; page?: number | null }
-  | { type: 'list'; ordered: boolean; start?: number; items: string[]; page?: number | null }
+  | { type: 'heading'; level: number; text: string; page?: number | null; marks?: DocParserMark[]; src?: DocParserSrc }
+  | { type: 'paragraph'; text: string; page?: number | null; marks?: DocParserMark[]; src?: DocParserSrc }
+  | { type: 'list'; ordered: boolean; start?: number; items: string[]; page?: number | null; src?: DocParserSrc }
   /** spans：合并单元格 [起始行, 起始列, 跨行数, 跨列数]，文字只在起始格，被覆盖的格为空 */
-  | { type: 'table'; rows: string[][]; header_rows?: number; caption?: string; page?: number | null; spans?: number[][] }
-  | { type: 'figure'; mime?: string; data: string; caption?: string; page?: number | null }
+  | { type: 'table'; rows: string[][]; header_rows?: number; caption?: string; page?: number | null; spans?: number[][]; src?: DocParserSrc }
+  | { type: 'figure'; mime?: string; data: string; caption?: string; page?: number | null; src?: DocParserSrc }
   | { type: 'formula'; latex: string; text?: string; page?: number | null }
 
 export interface DocParserScannedPage {
@@ -32,6 +58,8 @@ export interface DocParseResult {
   blocks: DocParserBlock[]
   scanned_pages: DocParserScannedPage[]
   warnings: string[]
+  /** 原版视图的映射原料（新版 doc-parser 才有） */
+  source?: DocParserSource
 }
 
 export interface DocParser {
@@ -156,7 +184,12 @@ export function mergeContinuedTables(blocks: DocParserBlock[]): DocParserBlock[]
       const offset = cur.rows.length - skip
       const moved = (n.spans ?? []).filter(s => s[0]! >= skip).map(([r, c, rs, cs]) => [r! + offset, c!, rs!, cs!])
       const spans = [...(cur.spans ?? []), ...moved]
-      cur = { ...cur, rows: [...cur.rows, ...n.rows.slice(skip)], page: n.page, ...(spans.length ? { spans } : {}) }
+      // 原版位置：区域接上，续表单元格的行号同样下移
+      const src = cur.src || n.src ? {
+        regions: [...(cur.src?.regions ?? []), ...(n.src?.regions ?? [])],
+        cells: [...(cur.src?.cells ?? []), ...(n.src?.cells ?? []).filter(([r]) => r >= skip).map(([r, c, sp]) => [r + offset, c, sp] as [number, number, number[][]])],
+      } : undefined
+      cur = { ...cur, rows: [...cur.rows, ...n.rows.slice(skip)], page: n.page, ...(spans.length ? { spans } : {}), ...(src ? { src } : {}) }
       after.push(...held)
       held = []
       i = j // 续表及其间的页面杂项都已并入
@@ -262,7 +295,45 @@ export function scriptedText(t: string): PMNode[] {
   return out
 }
 
-export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNode; assets: ImportedAsset[]; warnings: string[]; text: string; title?: string | null } {
+const MARK_KINDS = new Set(['sup', 'sub', 'italic'])
+
+/**
+ * 带格式的文字：doc-parser 给了上下标 / 斜体范围的按范围加格式，其余部分仍按 scriptedText 的规则补上标
+ * （文字层读不出格式时的兜底）。首尾空白去掉，范围随之平移；重叠或越界的范围丢弃。
+ */
+export function richText(text: string, marks?: DocParserMark[] | null): PMNode[] {
+  const lead = text.length - text.trimStart().length
+  const t = text.trim()
+  const ms = (marks ?? [])
+    .filter(m => Array.isArray(m) && MARK_KINDS.has(m[2]) && Number.isInteger(m[0]) && Number.isInteger(m[1]))
+    .map(([s, e, k]) => [Math.max(0, s - lead), Math.min(t.length, e - lead), k] as const)
+    .filter(([s, e]) => s < e)
+    .sort((a, b) => a[0] - b[0])
+  if (!ms.length) return t ? scriptedText(t) : []
+  const out: PMNode[] = []
+  let p = 0
+  for (const [s, e, k] of ms) {
+    if (s < p) continue
+    if (s > p) out.push(...scriptedText(t.slice(p, s)))
+    out.push(schema.text(t.slice(s, e), [schema.marks[k]!.create()]))
+    p = e
+  }
+  if (p < t.length) out.push(...scriptedText(t.slice(p)))
+  return out
+}
+
+export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNode; assets: ImportedAsset[]; warnings: string[]; text: string; title?: string | null; sourceMap?: PendingSourceMap } {
+  // 原版位置：记在生成的节点上，最后按顶层位置汇总（段落 / 标题的文字去掉了首尾空白，对齐下标随之平移）
+  const srcOf = new Map<PMNode, PendingSourceMap['blocks'][number]>()
+  const keep = (node: PMNode, src: DocParserSrc | undefined, raw?: string) => {
+    if (!src?.regions?.length) return node
+    if (raw === undefined) { srcOf.set(node, { index: -1, regions: src.regions, ...(src.cells?.length ? { cells: src.cells } : {}) }); return node }
+    const lead = raw.length - raw.trimStart().length
+    const text = raw.trim()
+    const spans = (src.spans ?? []).map(([s, e, w]) => [s! - lead, Math.min(e! - lead, text.length), w!]).filter(([s, e]) => s! >= 0 && s! < e!)
+    srcOf.set(node, { index: -1, text, regions: src.regions, ...(spans.length ? { spans } : {}) })
+    return node
+  }
   const assets: ImportedAsset[] = []
   const warnings: string[] = [...(r.warnings ?? [])]
   const notes: string[] = []
@@ -305,14 +376,14 @@ export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNo
         if (!detectedTitle && (b.level === 1 || !detectedTitle) && text.length >= 4 && text.length <= 250) {
           detectedTitle = text
         }
-        nodes.push(schema.node('heading', { level: Math.min(Math.max(Math.round(b.level) || 1, 1), 6) }, [schema.text(text)]))
+        nodes.push(keep(schema.node('heading', { level: Math.min(Math.max(Math.round(b.level) || 1, 1), 6) }, richText(b.text, b.marks)), b.src, b.text))
         textParts.push(text)
         break
       }
       case 'paragraph': {
         const text = b.text.trim()
         if (!text) break
-        nodes.push(para(text))
+        nodes.push(keep(schema.node('paragraph', null, richText(b.text, b.marks)), b.src, b.text))
         textParts.push(text)
         break
       }
@@ -328,7 +399,7 @@ export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNo
         const table = buildTable(b, para)
         if (!table) break
         if (b.caption?.trim()) { nodes.push(para(b.caption.trim())); textParts.push(b.caption.trim()) }
-        nodes.push(table)
+        nodes.push(keep(table, b.src))
         textParts.push(...b.rows.flat().filter(c => c.trim()))
         break
       }
@@ -343,7 +414,7 @@ export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNo
         }
         const key = `pdf_img_${b.page ?? 0}_${++figN}`
         assets.push({ key, name: `${baseName}_图${figN}.${extOf(mime)}`, mime, bytes: decodeB64(b.data) })
-        nodes.push(schema.node('figure', { asset_id: key, alt: caption, caption }))
+        nodes.push(keep(schema.node('figure', { asset_id: key, alt: caption, caption }), b.src))
         if (caption) textParts.push(caption)
         break
       }
@@ -366,5 +437,41 @@ export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNo
     warnings.push('PDF 中没有可识别的文字或图片')
   }
   warnings.push(...notes)
-  return { doc: schema.node('doc', null, nodes), assets, warnings, text: textParts.join('\n'), title: detectedTitle }
+  let sourceMap: PendingSourceMap | undefined
+  if (r.source?.words?.length && srcOf.size) {
+    const blocks = nodes.flatMap((n, index) => { const s = srcOf.get(n); return s ? [{ ...s, index }] : [] })
+    sourceMap = { pages: r.source.pages, words: r.source.words, blocks }
+  }
+  return { doc: schema.node('doc', null, nodes), assets, warnings, text: textParts.join('\n'), title: detectedTitle, ...(sourceMap ? { sourceMap } : {}) }
+}
+
+/**
+ * 文档建好、块 id 分配后，把原版映射换成按块 id 记（表格单元格的对齐落到格里第一个段落上）。
+ * 节点文字与导入时对不上的（理论上不会）只留区域。
+ */
+export function bindSourceMap(doc: PMNode, pending: PendingSourceMap): SourceMap {
+  const nodes: SourceMap['nodes'] = {}
+  for (const b of pending.blocks) {
+    if (b.index >= doc.childCount) continue
+    const node = doc.child(b.index)
+    const id = node.attrs.id as string | undefined
+    if (!id) continue
+    if (b.text !== undefined) {
+      nodes[id] = node.textContent === b.text ? { text: b.text, regions: b.regions, ...(b.spans ? { spans: b.spans } : {}) } : { regions: b.regions }
+      continue
+    }
+    nodes[id] = { regions: b.regions }
+    if (node.type.name === 'table' && b.cells) {
+      const grid = readGrid(node)
+      for (const [r, c, spans] of b.cells) {
+        const cell = grid.at(r, c)
+        if (!cell || cell.top !== r || cell.left !== c) continue
+        let para: PMNode | null = null
+        cell.node.descendants(n => { if (!para && n.isTextblock && n.attrs.id) para = n; return !para })
+        const p = para as PMNode | null
+        if (p && p.textContent.length) nodes[p.attrs.id as string] = { text: p.textContent, spans: spans.filter(([s, e]) => s! < p.textContent.length && e! <= p.textContent.length) }
+      }
+    }
+  }
+  return { version: 1, pages: pending.pages, words: pending.words, nodes }
 }

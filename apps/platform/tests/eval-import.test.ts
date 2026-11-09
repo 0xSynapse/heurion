@@ -4,7 +4,7 @@ import { regressions, summarize, type PaperResult } from '../scripts/eval-import
 const paper = (over: Partial<PaperResult> = {}): PaperResult => ({
   id: 'P', ok: true, error: null, seconds: 1, numbers: 100, missingNumbers: 0, extraNumbers: 0, missingWordPct: 0,
   tablesSource: 2, tablesConverted: 2, tablesDimsOk: 2, cellExact: 100, cellRecall: 100, spanCells: 0, spanHit: 0, spanExtra: 0, headingsMissing: 0,
-  titleOk: true, figSource: 0, figCaptioned: 0, figImages: 0, figUncaptioned: 0, headingsExtra: 0, headingLevelWrong: 0, paraTotal: 0, paraBroken: 0,
+  titleOk: true, figSource: 0, figCaptioned: 0, figImages: 0, figUncaptioned: 0, headingsExtra: 0, headingLevelWrong: 0, paraTotal: 0, paraBroken: 0, formulaSource: 0, formulaConverted: 0,
   deletedLeaked: false, instrLeaked: false, ...over,
 })
 

@@ -153,6 +153,38 @@ function sentences(block: PMNode): Sentence[] {
   return merged
 }
 
+/**
+ * 段落按句切开（返回原文的子串，可直接作锚点文字）：句末标点后跟空白处切；句末标点后紧跟上标引用
+ * （「…12 months.²³ Gender …」，Word 稿与 PDF 文字层导入都这样）时，在上标后面的空白处切。
+ */
+export function sentenceTexts(node: PMNode): string[] {
+  let s = ''
+  const cuts: number[] = []
+  let afterEnd = false
+  node.forEach(child => {
+    // 与 node.textContent 一致（锚点按它找文字）
+    const t = child.textContent
+    const sup = child.isText && child.marks.some(m => m.type.name === 'sup')
+    if (sup && (afterEnd || /[.!?。！？；]$/.test(s))) {
+      s += t
+      afterEnd = true
+      return
+    }
+    if (afterEnd) {
+      const m = /^\s+/.exec(t)
+      if (m) cuts.push(s.length, s.length + m[0].length)
+    }
+    afterEnd = false
+    s += t
+  })
+  // 先在上标后的空白处切，再按普通句末切
+  const parts: string[] = []
+  let start = 0
+  for (let k = 0; k < cuts.length; k += 2) { parts.push(s.slice(start, cuts[k])); start = cuts[k + 1]! }
+  parts.push(s.slice(start))
+  return parts.flatMap(p => p.trim().split(/(?<=[.!?。！？；])\s+/)).filter(Boolean)
+}
+
 const hash = (s: string) => createHash('sha1').update(s).digest('hex').slice(0, 10)
 
 /** 句中含外部研究或外部对比词时，即便同时提到「本研究/表 1」也可能是半句缺引用，需保留给模型判断。 */
@@ -594,7 +626,7 @@ export function auditInternalConsistency(
 
   let currentSectionTitle = ''
   let currentSectionRole: SectionRole = 'other'
-  const blocks: Array<{ nodeId: string; text: string; sectionTitle: string; sectionRole: SectionRole }> = []
+  const blocks: Array<{ nodeId: string; text: string; sectionTitle: string; sectionRole: SectionRole; sents: string[] }> = []
 
   const visit = (node: PMNode, inTable: boolean) => {
     if (isPendingDeletion(node)) return
@@ -614,7 +646,7 @@ export function auditInternalConsistency(
     const text = node.textContent.trim()
     if (!text) return
     const nodeId = (node.attrs.id as string | null) ?? 'p_unknown'
-    blocks.push({ nodeId, text, sectionTitle: currentSectionTitle, sectionRole: currentSectionRole })
+    blocks.push({ nodeId, text, sectionTitle: currentSectionTitle, sectionRole: currentSectionRole, sents: sentenceTexts(node) })
   }
   doc.forEach(child => visit(child, false))
 
@@ -678,8 +710,7 @@ export function auditInternalConsistency(
 
     // 2. 正文单句直接引用「表 1 / Table 1」时的百分比对齐检查（按单句粒度核对，避免跨句误匹配）
     if (/(?:表\s*1\b|\bTable\s*1\b)/i.test(text) && resolvedTables[0] && resolvedTables[0].numbers.length > 0) {
-      const sents = text.split(/(?<=[.!?。！？；])\s+/)
-      for (const sent of sents) {
+      for (const sent of blk.sents) {
         if (!/(?:表\s*1\b|\bTable\s*1\b)/i.test(sent)) continue
         const withoutCi = sent.replace(/\b95%\s*CI\b/gi, '')
         const pctMatches = withoutCi.match(/\b\d+(?:\.\d+)?[%％]/g) ?? []
@@ -1127,7 +1158,7 @@ export function auditSpinAndGuidelines(doc: PMNode, activeRules: string[] = []):
   let currentSectionTitle = ''
   let currentSectionRole: SectionRole = 'other'
   let fullDocText = ''
-  const blocks: Array<{ nodeId: string; text: string; sectionTitle: string; sectionRole: SectionRole }> = []
+  const blocks: Array<{ nodeId: string; text: string; sectionTitle: string; sectionRole: SectionRole; sents: string[] }> = []
 
   const visit = (node: PMNode, inTable: boolean) => {
     if (isPendingDeletion(node)) return
@@ -1148,7 +1179,7 @@ export function auditSpinAndGuidelines(doc: PMNode, activeRules: string[] = []):
     if (!text) return
     fullDocText += ` ${text}`
     const nodeId = (node.attrs.id as string | null) ?? 'p_unknown'
-    blocks.push({ nodeId, text, sectionTitle: currentSectionTitle, sectionRole: currentSectionRole })
+    blocks.push({ nodeId, text, sectionTitle: currentSectionTitle, sectionRole: currentSectionRole, sents: sentenceTexts(node) })
   }
   doc.forEach(child => visit(child, false))
 

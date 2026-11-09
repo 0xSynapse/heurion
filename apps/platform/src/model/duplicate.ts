@@ -44,7 +44,11 @@ export function duplicateDoc(docs: Documents, row: DocRow, owner: string): DocRo
   const pkg = store.getPackage(row.id)
   if (pkg) {
     const isZip = pkg.length >= 4 && pkg[0] === 0x50 && pkg[1] === 0x4B
-    store.putPackage(copy.id, !isZip ? 'pdf' : row.kind === 'deck' ? 'pptx' : 'docx', pkg)
+    const info = store.getImportInfo(row.id)
+    store.putPackage(copy.id, !isZip ? 'pdf' : row.kind === 'deck' ? 'pptx' : 'docx', pkg, info?.import_engine ?? null)
+    // 原版映射按块 id 记，复制后的文档块 id 不变，照搬
+    const gz = store.getSourceMapGz(row.id)
+    if (gz) store.putSourceMapGz(copy.id, gz)
   }
   store.copyNodeSrc(row.id, copy.id)
   return store.getDoc(copy.id)!

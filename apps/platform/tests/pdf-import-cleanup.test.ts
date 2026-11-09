@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { docParserToDoc, mergeContinuedTables, scriptedText, type DocParserBlock } from '../src/convert/doc-parser.ts'
+import { docParserToDoc, mergeContinuedTables, richText, scriptedText, type DocParserBlock } from '../src/convert/doc-parser.ts'
+import { sentenceTexts } from '../src/claims/extract.ts'
+import { tidyPopplerBlocks } from '../src/convert/pdf-import.ts'
+import { schema } from '../src/model/schema.ts'
 
 const HEAD = ['Variables', 'Control (n = 30)', 'Itraconazole (n = 30)']
 const t = (page: number, rows: string[][], caption?: string): DocParserBlock => ({ type: 'table', rows, header_rows: 1, page, ...(caption ? { caption } : {}) })
@@ -61,5 +64,74 @@ describe('PDF 上标还原', () => {
     expect(sups).toEqual(['2', '2', '2'])
     expect(doc.textContent).toContain('Mean BMI was 29 kg/m2 at baseline.')
     expect(doc.textContent).toContain('$$x = m 2$$')
+  })
+})
+
+describe('poppler 兜底路径的版面整理', () => {
+  it('标题合并放最前；页眉、坐标轴数字、作者行、正文前的版面标题还原或去掉；断段接上', () => {
+    type B = Parameters<typeof tidyPopplerBlocks>[0][number]
+    const h = (text: string, level = 3): B => ({ kind: 'heading', level, text, top: 0 })
+    const p = (text: string): B => ({ kind: 'paragraph', text, top: 0 })
+    const out = tidyPopplerBlocks([
+      h('Clinical epidemiology of', 2), h('hypertension in rural Thailand', 2), h('Original Research'),
+      h('Smith 1,2 Lee 3 Wong 1'), h('Abstract'), p('Body text.'), h('Articles'), h('12'),
+      h('miRNA-200a and miRNA-200b expression in obesity'), p('The data collection consisted of three parts and was performed at'),
+      { kind: 'figure', key: 'k', caption: '', top: 0 }, p('primary care units by well trained staff.'), h('Articles'), h('Articles'),
+    ], 'Clinical epidemiology of hypertension in rural Thailand')
+    expect(out.filter(b => b.kind === 'heading').map(b => (b as { text: string }).text)).toEqual([
+      'Clinical epidemiology of hypertension in rural Thailand', 'Abstract', 'miRNA-200a and miRNA-200b expression in obesity',
+    ])
+    expect(out.some(b => b.kind === 'paragraph' && b.text === 'Original Research')).toBe(true)
+    expect(out.some(b => b.kind === 'paragraph' && b.text.endsWith('performed at primary care units by well trained staff.'))).toBe(true)
+  })
+})
+
+describe('审稿断句认得句末上标引用', () => {
+  it('「months.²³ Gender …」在上标后切开，句子是原文子串', () => {
+    const sup = schema.marks.sup!.create()
+    const p = schema.node('paragraph', null, [
+      schema.text('Follow-up ranged from 4 weeks'), schema.text('29', [sup]), schema.text(' to 12 months.'), schema.text('23', [sup]),
+      schema.text(' Gender ranged from roughly equal (placebo group 47% male'), schema.text('31', [sup]),
+      schema.text(') to female only.'), schema.text('28', [sup]), schema.text(' The remainder are summarized in Table 1. Done.'),
+    ])
+    const s = sentenceTexts(p)
+    expect(s).toEqual([
+      'Follow-up ranged from 4 weeks29 to 12 months.23',
+      'Gender ranged from roughly equal (placebo group 47% male31) to female only.28',
+      'The remainder are summarized in Table 1.', 'Done.',
+    ])
+    for (const x of s) expect(p.textContent).toContain(x)
+  })
+})
+
+describe('PDF 文字层给出的上下标与斜体（doc-parser marks）', () => {
+  const runs = (nodes: ReturnType<typeof richText>) => nodes.map(n => [n.text, n.marks.map(m => m.type.name).join(',')])
+
+  it('按范围加格式；其余部分仍按规则补上标', () => {
+    const t = '  M. tuberculosis risk3,4. BMI 26 kg/m 2 overall'
+    // 范围按原文（含开头空白）的下标
+    const nodes = richText(t, [[2, 17, 'italic'], [22, 25, 'sup']])
+    expect(runs(nodes)).toEqual([
+      ['M. tuberculosis', 'italic'], [' risk', ''], ['3,4', 'sup'], ['. BMI 26 kg/m', ''], ['2', 'sup'], [' overall', ''],
+    ])
+  })
+
+  it('重叠、越界、不认识的范围丢弃', () => {
+    const nodes = richText('abc def', [[0, 3, 'sup'], [2, 5, 'sub'], [4, 99, 'bold'], [5, 3, 'italic']])
+    expect(runs(nodes)).toEqual([['abc', 'sup'], [' def', '']])
+  })
+
+  it('段落与标题都用 marks 生成', () => {
+    const { doc } = docParserToDoc({
+      engine: 'docling', page_count: 1, warnings: [], scanned_pages: [],
+      blocks: [
+        { type: 'heading', level: 2, text: 'Effect of CO2 exposure', marks: [[12, 13, 'sub']] },
+        { type: 'paragraph', text: 'by 106 fold', marks: [[5, 6, 'sup']] },
+      ],
+    }, 'x')
+    const marked: string[] = []
+    doc.descendants(n => { if (n.isText && n.marks.length) marked.push(`${n.text}:${n.marks[0]!.type.name}`) })
+    expect(marked).toEqual(['2:sub', '6:sup'])
+    expect(doc.textContent).toBe('Effect of CO2 exposureby 106 fold')
   })
 })

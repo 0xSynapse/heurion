@@ -30,6 +30,7 @@
 | [`design/DEEP_REVIEW_PRODUCT.md`](design/DEEP_REVIEW_PRODUCT.md) | 深度审稿独立产品（草案） | 定位、现状摸底、单篇成本实测、产品形态、付费与数据政策、学科扩展与里程碑。 |
 | [`design/DEEP_REVIEW_EVAL.md`](design/DEEP_REVIEW_EVAL.md) | 深度审稿评测集 | 干净 / 植入错误 / 真实勘误三类样本、误报为主指标、开发集与封存测试集、标注与判定格式。 |
 | [`design/IMPORT_EVAL.md`](design/IMPORT_EVAL.md) | 导入质量评测 | 以同版本 JATS 为标准答案逐项比对 PDF（Docling / poppler）与 Word 导入，基线与防退步容差。 |
+| [`design/PDF_ORIGINAL_VIEW.md`](design/PDF_ORIGINAL_VIEW.md) | 学术 PDF 原版视图（第 1–4 阶段已实现） | pdf.js 逐页显示原版，PDF 词与转换稿块的对齐映射，评论、深度审稿标注画在原版上并可在原版上新建评论（只读）。 |
 | [`design/IMAGING_STUDIES.md`](design/IMAGING_STUDIES.md) | 医学影像与阅片 | Orthanc DICOMweb 代理、浏览器端 PS3.15 去标识上传、肺结节模型链与 DICOM SEG、OHIF 结节面板与点选补漏、随访配准与 VDT、所见草稿与 RIS 纯文本、审核定稿与效率埋点。 |
 
 ---

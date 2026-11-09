@@ -22,9 +22,9 @@ def box(l: float, t: float, r: float, b: float) -> list[float]:
 def para(text: str, page: int = 1, b: list[float] | None = None, **kw: Any) -> dict[str, Any]:
     # 默认按正文字号（约 10 点、每字 5 点宽）给框：最宽 400，超出折行
     if b is None:
+        # 框的面积按字数算（最后一行不满时也按满行折算），字号估出来都是 10 点
         width = min(400.0, len(text) * 5.0)
-        lines = -(-len(text) * 5 // 400)
-        b = box(100, 300, 100 + width, 300 + lines * 10)
+        b = box(100, 300, 100 + width, 300 + len(text) * 50.0 / width)
     return {"type": "paragraph", "text": text, "page": page, "_box": b, **kw}
 
 
@@ -215,3 +215,105 @@ def test_document_to_blocks_cleans_floats() -> None:
     assert blocks[1]["text"] == "FIGURE 3 Short-term pain relief."
     assert blocks[3]["text"] == "BMI, body mass index."
     assert not any(k.startswith("_") for b in blocks for k in b)
+
+
+# —— 2026-11-09：按 PDF 文字层与扩充评测集补的规则 ——
+
+def test_runin_heading_split_below_current_section() -> None:
+    title = head("A randomized trial of something in adults with disease", b=box(100, 60, 500, 110))
+    blocks = [
+        title, head("Methods"),
+        para("Eligibility. This study included adults with suspected tuberculosis at four sites.", _bold=12),
+        # 作者贡献：人名后面是 CRediT 角色，不拆
+        para("Jane Doe: conceptualization, methodology, writing - original draft.", _bold=9),
+        # 带数字（作者行）的不拆
+        para("Smith 1,2: this is not a heading at all but an author list line.", _bold=10),
+    ]
+    blocks[2]["page"] = blocks[3]["page"] = blocks[4]["page"] = 2
+    out = _postprocess(blocks)
+    assert levels(out)[1:] == [("Methods", 2), ("Eligibility", 3)]
+    paras = [b["text"] for b in out if b["type"] == "paragraph"]
+    assert paras[0].startswith("This study included") and paras[1].startswith("Jane Doe:") and paras[2].startswith("Smith 1,2")
+
+
+def test_abstract_labels_are_not_split() -> None:
+    blocks = [
+        head("A randomized trial of something in adults with disease", b=box(100, 60, 500, 110)),
+        para("Background: Ovarian cancer survival remains poor despite many years of chemotherapy research.", _bold=11),
+        head("Introduction", page=2),
+    ]
+    out = _postprocess(blocks)
+    assert out[1]["type"] == "paragraph" and out[1]["text"].startswith("Background:")
+
+
+def test_running_heads_in_margin_dropped_but_repeated_notes_kept() -> None:
+    blocks = []
+    for p in (1, 2, 3):
+        blocks += [head("Articles", page=p, b=box(500, 20, 560, 30)), para(BODY, page=p), para("*p < 0.05.", page=p, b=box(100, 700, 150, 708))]
+    out = _postprocess(blocks)
+    assert not any(b["text"] == "Articles" for b in out if "text" in b)
+    assert sum(1 for b in out if b.get("text") == "*p < 0.05.") == 3
+
+
+def test_label_only_caption_takes_following_legend_and_orphan_caption_moves_back() -> None:
+    blocks = [
+        fig("FIG. 1.", page=3, data="AAAA"),
+        {"type": "list", "ordered": False, "items": ["a Median time to surgery.", "b Predicted annual time."], "page": 3},
+        fig("Age specific vaccination strategy", page=5),  # 吸进来的坐标轴文字，不是图注
+        para(BODY, page=5),
+        para("Fig. 2: Impact of outbreak response strategies on predicted cases.", page=5),
+        fig("Fig. 3: Efficiency of strategies.", page=6),
+    ]
+    out = _postprocess(blocks)
+    figs = [b for b in out if b["type"] == "figure"]
+    assert figs[0]["caption"] == "FIG. 1. a Median time to surgery. b Predicted annual time."
+    assert figs[1]["caption"].startswith("Fig. 2: Impact")
+    assert figs[2]["caption"].startswith("Fig. 3")
+
+
+def test_rotated_table_is_unrotated() -> None:
+    from src.parser import _unrotate_table
+
+    # 原表 3 行 × 2 列，按自下而上排的字读出来是 2 行 × 3 列、行序反过来
+    t = {"rows": [["2", "4", "6"], ["1", "3", "5"]], "header_rows": 0, "spans": [[0, 0, 1, 2]]}
+    _unrotate_table(t, 270)
+    assert t["rows"] == [["1", "2"], ["3", "4"], ["5", "6"]] and t["header_rows"] == 1 and "spans" not in t
+    t = {"rows": [["5", "3", "1"], ["6", "4", "2"]], "header_rows": 0}
+    _unrotate_table(t, 90)
+    assert t["rows"] == [["1", "2"], ["3", "4"], ["5", "6"]]
+
+
+def test_paragraph_joins_across_full_page_figure_url_and_chinese() -> None:
+    blocks = [
+        para(BODY), para(BODY),
+        para("Notably, when the vaccines protect against both"),
+        fig("Fig. 1: Impact.", page=2),
+        para("disease and infection, vaccinating older adults was more efficient.", page=3),
+        para("Data were obtained from the study website (https://charls.pku.edu.", page=3),
+        para("cn). The protocols were approved by the ethics committee.", page=3),
+        para("牙周辅助加速成骨正畸治疗是在传统的正畸治疗中加入了切开牙槽骨骨皮质的措施", page=3),
+        para("从而达到加速正畸牙移动的目的。", page=4),
+    ]
+    texts = [b["text"] for b in _postprocess(blocks) if b["type"] == "paragraph"][2:]
+    assert texts[0] == "Notably, when the vaccines protect against both disease and infection, vaccinating older adults was more efficient."
+    assert texts[1] == "Data were obtained from the study website (https://charls.pku.edu.cn). The protocols were approved by the ethics committee."
+    assert texts[2] == "牙周辅助加速成骨正畸治疗是在传统的正畸治疗中加入了切开牙槽骨骨皮质的措施从而达到加速正畸牙移动的目的。"
+
+
+def test_front_matter_headings_before_first_section_demoted() -> None:
+    blocks = [
+        head("World Journal of Clinical Cases", b=box(285, 30, 454, 80)),
+        head("Observational Study", b=box(55, 210, 148, 220)),
+        head("MiRNA-200a and miRNA-200b expression and vitamin-D level in obese patients", b=box(55, 226, 500, 291)),
+        para(BODY),
+        head("Abstract"),
+    ]
+    out = _postprocess(blocks)
+    assert out[0]["text"].startswith("MiRNA-200a") and out[0]["level"] == 1
+    assert [b["text"] for b in out if b["type"] == "heading"][1:] == ["Abstract"]
+
+
+def test_clean_removes_line_break_spaces_in_chinese() -> None:
+    from src.parser import _clean
+
+    assert _clean("是在传统 的正畸治疗中，加入了 切开牙槽骨 (PAOO) 技术") == "是在传统的正畸治疗中，加入了切开牙槽骨 (PAOO) 技术"

@@ -1433,6 +1433,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         const boundDoc = bindAssets(imported.doc, ids)
         const row = docs.create({ owner: user, title: docTitle, content: boundDoc, source: 'import' })
         store.putPackage(row.id, 'pdf', bytes, imported.engine)
+        if (imported.sourceMap) store.putSourceMap(row.id, imported.sourceMap)
         const warnings = [...imported.warnings]
         if (imported.title && isGenericName) warnings.unshift(`已自动识别论文标题：《${docTitle}》`)
         if (imported.doi) warnings.push(`检测到 DOI: ${imported.doi}`)
@@ -1484,6 +1485,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       failed_turns: store.failedTurns(row.id),
       suggestions: pendingGroups(doc),
       claim_checks: store.listClaimChecks(row.id),
+      // 原版视图：导入的 PDF 还在就能看原版；有映射才能对齐评论、在原版上建评论
+      original: (() => { const imp = store.getImportInfo(row.id); return imp?.kind === 'pdf' ? { pdf: true, mapped: store.hasSourceMap(row.id), engine: imp.import_engine } : null })(),
       // 研究共享：我的角色、协作者（顶栏显示）
       my_role: access.docRole(user, row),
       collaborators: (() => { const st = access.studyOfDoc(row); return st ? store.studyMembers(st).map(m => ({ user_id: m.user_id, name: store.getUser(m.user_id)?.display_name ?? m.user_id, role: m.role })) : [] })(),
@@ -1702,6 +1705,24 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json({ rev: docs.rev(row.id), size: info.size, layouts: info.layouts.map(l => l.name), ph_styles, doc: docs.get(row.id).toJSON(), measurements: [...measureViews(c, row).values()], comments: store.listComments(row.id).map(x => ({ id: x.id, status: x.status })), render_info })
   })
 
+
+  /** 导入时的原始 PDF（原版视图用；只读，读权限即可）。 */
+  app.get('/api/docs/:id/original.pdf', c => {
+    const row = owned(c)
+    const info = row ? store.getImportInfo(row.id) : null
+    const bytes = row && info?.kind === 'pdf' ? store.getPackage(row.id) : null
+    if (!bytes) return c.json({ error: 'not found' }, 404)
+    // 由页面里的 pdf.js 读取渲染，不交给浏览器自带的 PDF 查看器打开
+    return c.body(new Uint8Array(bytes), 200, { 'Content-Type': 'application/pdf', 'Cache-Control': 'private, max-age=3600', 'Content-Disposition': 'attachment', 'X-Content-Type-Options': 'nosniff' })
+  })
+
+  /** 原版视图的映射：PDF 上的词与块 id → 导入时文字、对齐、区域（导入后不变，可长缓存）。 */
+  app.get('/api/docs/:id/source-map', c => {
+    const row = owned(c)
+    const gz = row ? store.getSourceMapGz(row.id) : null
+    if (!gz) return c.json({ error: 'not found' }, 404)
+    return c.body(new Uint8Array(gz), 200, { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip', 'Cache-Control': 'private, max-age=86400' })
+  })
 
   /** 幻灯片的精确预览（LibreOffice 或内置 Resvg 矢量光栅化渲染，按 rev 缓存）。 */
   app.get('/api/docs/:id/slides/:index/render.png', async c => {

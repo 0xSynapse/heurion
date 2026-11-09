@@ -232,6 +232,7 @@ const app = buildApi({ docs, ops, turns, turnRegistry: registry, postcheck, cros
 const DIST = fileURLToPath(new URL('../dist-web/', import.meta.url))
 const MIME: Record<string, string> = {
   '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
   '.css': 'text/css',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',

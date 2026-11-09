@@ -410,8 +410,31 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .ProseMirror h1 { font-family: var(--serif); font-size: 28px; font-weight: 500; line-height: 1.3; margin: .2em 0 .8em; letter-spacing: -.015em; }
 .ProseMirror h2 { font-family: var(--serif); font-size: 21px; font-weight: 500; line-height: 1.4; margin: 1.5em 0 .6em; padding-left: 12px; border-left: 3px solid var(--green); }
 .ProseMirror h3 { font-size: 17px; font-weight: 600; margin: 1.2em 0 .5em; }
-.ProseMirror table { border-collapse: collapse; width: 100%; max-width: 100%; table-layout: fixed; margin: 16px 0; font-size: 14px; }
-.ProseMirror td, .ProseMirror th { border: 1px solid var(--line-strong); padding: 6px 10px; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
+/* 表格按内容排宽、超出编辑区横向滚动（导入的宽表列多，压到编辑区宽度会把词逐字母拆开）；
+   单元格里的段落限宽，长文字列照常折行，只有超长的词（网址等）才在词中断开 */
+.ProseMirror table { display: block; overflow-x: auto; border-collapse: collapse; width: max-content; min-width: 50%; max-width: 100%; table-layout: auto; margin: 16px 0; font-size: 14px; }
+.ProseMirror td, .ProseMirror th { border: 1px solid var(--line-strong); padding: 6px 10px; vertical-align: top; min-width: 3em; overflow-wrap: break-word; word-break: normal; }
+.ProseMirror td > p, .ProseMirror th > p { max-width: 26em; }
+
+/* 原版 PDF 视图（web/src/original.ts） */
+.orig-toggle { padding: 5px 10px; font-size: 13px; border: 1px solid var(--line-strong); background: transparent; color: var(--text-2); white-space: nowrap; }
+.orig-toggle.active, .orig-toggle.active:hover { background: var(--mint); color: var(--mint-ink); border-color: var(--mint); }
+.toolbar.orig-hidden { display: none !important; }
+.orig-view { flex: 1; min-height: 0; overflow: auto; padding: 24px; background: var(--bg-deep); display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.orig-view[hidden] { display: none; }
+.orig-status { color: var(--muted); font-size: 13px; max-width: 920px; }
+.orig-status.err { color: var(--danger); }
+.orig-page { position: relative; flex: none; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .18); }
+.orig-page canvas { position: absolute; inset: 0; }
+.orig-hls, .orig-words { position: absolute; inset: 0; }
+.orig-words span { position: absolute; color: transparent; white-space: pre; line-height: 1; overflow: hidden; cursor: text; }
+.orig-words span::selection { background: rgba(46, 125, 255, .28); }
+.orig-words span.free { cursor: default; }
+.orig-hl { position: absolute; pointer-events: auto; cursor: pointer; }
+.orig-hl.text { background: rgba(255, 196, 0, .32); border-bottom: 2px solid rgba(230, 160, 0, .9); }
+.orig-hl.block { outline: 2px dashed rgba(230, 160, 0, .9); outline-offset: 2px; }
+.orig-hl.focus { background: rgba(255, 140, 0, .45); }
+.orig-hl.block.focus { outline-color: #e67700; }
 .ProseMirror th { background: var(--raised); font-weight: 600; }
 .ProseMirror td p, .ProseMirror th p { margin: 0; }
 .ProseMirror figure { margin: 20px 0; text-align: center; cursor: default; }

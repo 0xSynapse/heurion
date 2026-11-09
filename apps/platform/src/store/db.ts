@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { gzipSync } from 'node:zlib'
 import { cleanBibText } from '../literature/format.ts'
 
 /**
@@ -821,6 +822,8 @@ export class Store {
     // 导入时 PDF 走的解析路径（docling / poppler）：poppler 兜底时表格结构不可靠，审稿据此跳过依赖表格的核查
     const pkgCols = (this.db.prepare('PRAGMA table_info(doc_packages)').all() as Array<{ name: string }>).map(c => c.name)
     if (!pkgCols.includes('import_engine')) this.db.exec('ALTER TABLE doc_packages ADD COLUMN import_engine TEXT')
+    // 原版 PDF 视图的映射（gzip 后的 JSON，docs/design/PDF_ORIGINAL_VIEW.md §3）
+    if (!pkgCols.includes('source_map')) this.db.exec('ALTER TABLE doc_packages ADD COLUMN source_map BLOB')
     const userCols = (this.db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map(c => c.name)
     if (!userCols.includes('email')) this.db.exec('ALTER TABLE users ADD COLUMN email TEXT')
     if (!userCols.includes('tenant_id')) this.db.exec('ALTER TABLE users ADD COLUMN tenant_id TEXT')
@@ -2351,6 +2354,26 @@ export class Store {
 
   putPackage(docId: string, kind: 'docx' | 'pptx' | 'pdf', bytes: Uint8Array, importEngine: 'docling' | 'poppler' | null = null): void {
     this.db.prepare('INSERT OR REPLACE INTO doc_packages (doc_id, kind, bytes, import_engine) VALUES (?, ?, ?, ?)').run(docId, kind, bytes, importEngine)
+  }
+
+  /** 原版视图的映射：存 gzip 后的 JSON；要先有原始文件包 */
+  putSourceMap(docId: string, map: unknown): void {
+    this.db.prepare('UPDATE doc_packages SET source_map = ? WHERE doc_id = ?').run(gzipSync(Buffer.from(JSON.stringify(map))), docId)
+  }
+
+  hasSourceMap(docId: string): boolean {
+    const row = this.db.prepare('SELECT source_map IS NOT NULL AS has FROM doc_packages WHERE doc_id = ?').get(docId) as { has: number } | undefined
+    return !!row?.has
+  }
+
+  putSourceMapGz(docId: string, gz: Uint8Array): void {
+    this.db.prepare('UPDATE doc_packages SET source_map = ? WHERE doc_id = ?').run(gz, docId)
+  }
+
+  /** 原版视图的映射（gzip 后的 JSON 原样返回，接口直接带 Content-Encoding 发给浏览器）；没有时返回 null */
+  getSourceMapGz(docId: string): Uint8Array | null {
+    const row = this.db.prepare('SELECT source_map FROM doc_packages WHERE doc_id = ?').get(docId) as { source_map: Uint8Array | null } | undefined
+    return row?.source_map ?? null
   }
 
   /** 导入记录：原始文件类型与 PDF 解析路径（没有原始文件包的文档返回 null；旧数据的解析路径为 null，表示未知） */

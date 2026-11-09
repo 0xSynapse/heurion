@@ -55,6 +55,9 @@ export interface FidelityReport {
     headingLevelWrong: number
     paraTotal: number
     paraBroken: number
+    /** 原文的独立公式（disp-formula）数、转换结果里的公式块数（只比个数：原文是 MathML，转换结果是 TeX） */
+    formulaSource: number
+    formulaConverted: number
   }
   ok: boolean
 }
@@ -64,7 +67,8 @@ const elements = (n: El): El[] => each(n.childNodes).filter(c => c.nodeType === 
 const child = (n: El, name: string) => elements(n).find(c => c.nodeName === name)
 
 const NUM = /\d+(?:\.\d+)?/g
-const WORD = /\p{L}{2,}/gu
+// 中日韩文字没有空格：每个字算一个词，其余文字按连续两个以上字母算词（「PAOO技术」与「PAOO 技术」一样）
+const WORD = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]|(?:(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])\p{L}){2,}/gu
 const numbers = (s: string) => s.match(NUM) ?? []
 const words = (s: string) => (s.toLowerCase().match(WORD) ?? [])
 const tokens = (s: string) => [...numbers(s), ...words(s)].join(' ')
@@ -74,7 +78,7 @@ const wordSeq = (s: string) => ` ${words(s).join(' ')} `
  * 文末声明类标题（作者贡献、基金、数据可用性、利益冲突等）：原文多放在脚注组 / notes 里（不比对的部分），
  * PDF 里是正常的小节标题，不算多余标题
  */
-const BACK_MATTER = /^(?:authors?(?: s)? contributions?|contributions|funding(?: information| statement)?|financial support|data(?: and code)? availability(?: statement)?|code availability|availability of data and materials|competing interests?|conflicts? of interests?|declaration(?:s| of interests?)?|ethics(?: approval and consent to participate| statement| declarations)?|consent for publication|additional information|publisher(?: s)? note|supplementary (?:material|information|data)|abbreviations|generative ai statement|author details|study limitations?|reporting summary)$/
+const BACK_MATTER = /^(?:authors?(?: s)? contributions?|contributions|funding(?: information| statement)?|financial support|data(?: and code)? availability(?: statement)?|code availability|availability of data and materials|competing interests?|conflicts? of interests?|declaration(?:s| of interests?)?|ethics(?: approval and consent to participate| statement| declarations)?|consent for publication|additional information|publisher(?: s)? note|supplementary (?:material|information|data)|abbreviations|generative ai statement|author details|study limitations?|reporting summary|institutional review board statement|informed consent statement|disclaimer publisher(?: s)? note|nonstandard abbreviations and acronyms)$/
 const hasAncestor = (n: El, names: string[]) => { for (let p = n.parentNode as El | null; p; p = p.parentNode as El | null) if (names.includes(p.nodeName)) return true; return false }
 const depthOf = (n: El) => { let d = 0; for (let p = n as El | null; p; p = p.parentNode as El | null) if (p.nodeName === 'sec') d++; return d }
 
@@ -99,6 +103,7 @@ export interface SourceSnapshot {
   allTitles: Set<string>
   figCaptions: string[]
   paragraphs: string[]
+  formulas: number
 }
 
 export function sourceSnapshot(xml: string): SourceSnapshot {
@@ -110,6 +115,7 @@ export function sourceSnapshot(xml: string): SourceSnapshot {
   for (const name of ['list', 'def-list', 'table-wrap', 'fig', 'disp-formula', 'disp-quote', 'boxed-text']) {
     for (const e of each(article.getElementsByTagName(name))) for (let p = e.parentNode as El | null; p; p = p.parentNode as El | null) if (p.nodeName === 'p') nestedBlock.add(p)
   }
+  const formulas = each(article.getElementsByTagName('disp-formula')).filter(f => !hasAncestor(f, ['sub-article', 'response'])).length
   const refText = [...each(article.getElementsByTagName('ref-list')), ...each(article.getElementsByTagName('inline-formula')),
     ...each(article.getElementsByTagName('disp-formula'))].map(spacedText).join(' ')
   // 不属于稿件内容、不比对的部分：
@@ -118,7 +124,9 @@ export function sourceSnapshot(xml: string): SourceSnapshot {
   // - 公式（转换器取 TeX 写法，与原文 MathML 文字不同）、图形、无障碍描述
   // - 表格 / 图的对象编号（DOI）、版权与来源声明
   for (const name of ['sub-article', 'response', 'ref-list', 'notes', 'fn-group', 'inline-formula', 'disp-formula',
-    'graphic', 'inline-graphic', 'media', 'alt-text', 'long-desc', 'object-id', 'permissions', 'attrib']) {
+    'graphic', 'inline-graphic', 'media', 'alt-text', 'long-desc', 'object-id', 'permissions', 'attrib',
+    // 基金机构的注册号（FundRef 10.13039/501100000265）：只在元数据里，PDF 上不印
+    'institution-id']) {
     remove(each(article.getElementsByTagName(name)))
   }
   remove(each(article.getElementsByTagName('fn')).filter(f => f.parentNode?.nodeName === 'p'))
@@ -185,7 +193,17 @@ export function sourceSnapshot(xml: string): SourceSnapshot {
     .filter(p => !nestedBlock.has(p) && !hasAncestor(p, ['table-wrap', 'fig', 'caption', 'list', 'abstract', 'trans-abstract', 'boxed-text', 'disp-quote', 'supplementary-material', 'ack', 'back']))
     .map(p => wordSeq(spacedText(p)))
     .filter(s => s.trim().split(' ').length >= 25)
-  return { text: parts.join(' '), refText, tables, headings, title: titleEl ? tokens(spacedText(titleEl)) : '', headingDepths, allTitles, figCaptions, paragraphs }
+  return { text: parts.join(' '), refText, tables, headings, title: titleEl ? tokens(spacedText(titleEl)) : '', headingDepths, allTitles, figCaptions, paragraphs, formulas }
+}
+
+/** 文本块的文字，上下标两边插空格（与原文侧 spacedText 对 <sup>/<sub> 的处理一致：10⁹ 不算成 109） */
+function spacedNodeText(n: PMNode): string {
+  if (n.isText) return n.marks.some(m => m.type.name === 'sup' || m.type.name === 'sub') ? ` ${n.text} ` : n.text ?? ''
+  // 行内原子（Word 域代码、脚注引用等）的文字由节点自己给出
+  if (n.isLeaf) return n.textContent
+  let s = ''
+  n.forEach(c => { s += spacedNodeText(c) })
+  return s
 }
 
 function docText(doc: PMNode, skipRefLabels = false): string {
@@ -197,7 +215,7 @@ function docText(doc: PMNode, skipRefLabels = false): string {
     if (n.type.name === 'figure') { out.push(' ', String(n.attrs.caption ?? '')); return false }
     if (n.isTextblock) {
       // 文献条目开头的「[n]」：原文没有编号时由转换器按顺序补上，不算多出的数字；标题带上 Word 自动编号
-      const t = `${n.attrs?.number ? `${n.attrs.number} ` : ''}${n.textContent}`
+      const t = `${n.attrs?.number ? `${n.attrs.number} ` : ''}${spacedNodeText(n)}`
       out.push(' ', skipRefLabels ? t.replace(/^\[[^\]\s]{1,8}\]\s/, '') : t)
       return false
     }
@@ -214,7 +232,7 @@ function docTables(doc: PMNode): string[][][] {
     out.push(Array.from({ length: g.height }, (_, r) => Array.from({ length: g.width }, (_, c) => {
       const cell = g.at(r, c)
       if (!cell) return ''
-      return cell.top === r && cell.left === c ? tokens(cell.node.textContent) : '\u0000'
+      return cell.top === r && cell.left === c ? tokens(spacedNodeText(cell.node)) : '\u0000'
     })))
     return false
   })
@@ -309,10 +327,11 @@ export function checkFidelityDoc(xml: string, doc: PMNode): FidelityReport {
   // 6. 结构
   const levels: Array<{ h: string; level: number }> = []
   const blocksSeq: string[] = []
-  let figImages = 0, figUncaptioned = 0
+  let figImages = 0, figUncaptioned = 0, formulaConverted = 0
   const figCaps: string[] = []
   doc.descendants(n => {
     if (n.attrs?.suggest === 'delete') return false
+    if (n.type.name === 'paragraph' && n.attrs.style === 'Code' && n.textContent.startsWith('$$')) formulaConverted++
     if (n.type.name === 'figure') {
       figImages++
       const cap = String(n.attrs.caption ?? '').trim()
@@ -342,6 +361,7 @@ export function checkFidelityDoc(xml: string, doc: PMNode): FidelityReport {
   const structure = {
     titleOk, figSource: src.figCaptions.length, figCaptioned, figImages, figUncaptioned,
     headingsExtra, headingLevelWrong, paraTotal: src.paragraphs.length, paraBroken,
+    formulaSource: src.formulas, formulaConverted,
   }
 
   // 5. 转义残留

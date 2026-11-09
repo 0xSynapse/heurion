@@ -62,6 +62,8 @@ export interface PaperResult {
   headingLevelWrong: number
   paraTotal: number
   paraBroken: number
+  formulaSource: number
+  formulaConverted: number
   /** Word：修订删除的内容出现在采纳后的正文里 */
   deletedLeaked: boolean
   /** Word：域指令（ADDIN、SEQ 等）出现在正文里 */
@@ -97,6 +99,9 @@ export interface PathSummary {
   paraTotal?: number
   /** 原文较长段落中首尾不在同一块里的个数 */
   paraBroken?: number
+  /** 原文独立公式数、转换出的公式块数（只比个数） */
+  formulaSource?: number
+  formulaConverted?: number
   deletedLeaked: number
   instrLeaked: number
 }
@@ -176,6 +181,7 @@ function measure(id: string, xml: string, doc: PMNode, t0: number): PaperResult 
     figImages: fid.structure.figImages, figUncaptioned: fid.structure.figUncaptioned,
     headingsExtra: fid.structure.headingsExtra.length, headingLevelWrong: fid.structure.headingLevelWrong,
     paraTotal: fid.structure.paraTotal, paraBroken: fid.structure.paraBroken,
+    formulaSource: fid.structure.formulaSource, formulaConverted: fid.structure.formulaConverted,
     deletedLeaked: text.includes(DELETED_MARK),
     instrLeaked: /\bADDIN\b|EN\.CITE|EN\.REFLIST|\bSEQ (?:Table|Figure)\b/.test(text),
   }
@@ -185,7 +191,7 @@ const failed = (id: string, error: string, t0: number): PaperResult => ({
   id, ok: false, error, seconds: round((Date.now() - t0) / 1000), numbers: 0, missingNumbers: 0, extraNumbers: 0, missingWordPct: 0,
   tablesSource: 0, tablesConverted: 0, tablesDimsOk: 0, cellExact: null, cellRecall: null, spanCells: 0, spanHit: 0, spanExtra: 0, headingsMissing: 0,
   titleOk: false, figSource: 0, figCaptioned: 0, figImages: 0, figUncaptioned: 0, headingsExtra: 0, headingLevelWrong: 0, paraTotal: 0, paraBroken: 0,
-  deletedLeaked: false, instrLeaked: false,
+  formulaSource: 0, formulaConverted: 0, deletedLeaked: false, instrLeaked: false,
 })
 
 export async function runPath(path: ImportPath, ids: string[]): Promise<PaperResult[]> {
@@ -243,6 +249,8 @@ export function summarize(rows: PaperResult[]): PathSummary {
     headingLevelWrong: sum(r => r.headingLevelWrong),
     paraTotal: sum(r => r.paraTotal),
     paraBroken: sum(r => r.paraBroken),
+    formulaSource: sum(r => r.formulaSource),
+    formulaConverted: sum(r => r.formulaConverted),
     deletedLeaked: ok.filter(r => r.deletedLeaked).length,
     instrLeaked: ok.filter(r => r.instrLeaked).length,
   }
@@ -284,6 +292,7 @@ export function regressions(now: PathSummary, base: PathSummary): string[] {
   more('headingsExtra', '多余标题')
   more('headingLevelWrong', '层级不对的标题')
   more('paraBroken', '被截断的段落')
+  fewer('formulaConverted', '转换出的公式块', true)
   less('tablesDimsOk', '行列对上的表格')
   less('cellExact', '单元格位置精确率')
   less('cellRecall', '单元格内容召回率')
@@ -297,16 +306,38 @@ const fmt = (s: PathSummary) =>
   + `表格 ${s.tablesDimsOk}/${s.tablesSource} 行列对上（识别 ${s.tablesConverted}）· 格精确 ${s.cellExact ?? '—'}% 格召回 ${s.cellRecall ?? '—'}% · `
   + `合并格 ${s.spanRecall ?? '—'}%（共 ${s.spanCells}，多 ${s.spanExtra}）· `
   + `缺标题 ${s.headingsMissing}\n  结构 · 标题认对 ${s.titleOk ?? '—'}/${s.papers - s.failed} 篇 · 图注落位 ${s.figCaptioned ?? '—'}/${s.figSource ?? '—'} · 无图注图块 ${s.figUncaptioned ?? '—'} · `
-  + `多余标题 ${s.headingsExtra ?? '—'} · 层级不对 ${s.headingLevelWrong ?? '—'} · 段落截断 ${s.paraBroken ?? '—'}/${s.paraTotal ?? '—'}${s.deletedLeaked || s.instrLeaked ? ` · 修订泄漏 ${s.deletedLeaked} 域指令泄漏 ${s.instrLeaked}` : ''}`
+  + `多余标题 ${s.headingsExtra ?? '—'} · 层级不对 ${s.headingLevelWrong ?? '—'} · 段落截断 ${s.paraBroken ?? '—'}/${s.paraTotal ?? '—'} · 公式 ${s.formulaConverted ?? '—'}/${s.formulaSource ?? '—'}${s.deletedLeaked || s.instrLeaked ? ` · 修订泄漏 ${s.deletedLeaked} 域指令泄漏 ${s.instrLeaked}` : ''}`
+
+/**
+ * 评测集：
+ * - main：深度审稿评测的 19 篇（规则主要对着它们调，基线 baseline.json）；
+ * - extra：扩充集（eval/import/extra.json），覆盖别的出版社、中文期刊、作者稿件。
+ *   其中 split=dev 的可以逐篇查看、据此改规则；split=holdout 只看汇总数字，用来检查规则有没有过拟合。基线 baseline-extra.json。
+ */
+interface ExtraPaper { id: string; journal: string; publisher: string; kind: string; split: 'dev' | 'holdout' }
+export const EXTRA_MANIFEST = join(import.meta.dirname, '..', 'eval', 'import', 'extra.json')
+function setIds(set: string, split?: string): string[] {
+  if (set === 'main') return readManifest().map(p => p.id)
+  if (set === 'extra') {
+    const all = JSON.parse(readFileSync(EXTRA_MANIFEST, 'utf8')) as ExtraPaper[]
+    return all.filter(p => !split || p.split === split).map(p => p.id)
+  }
+  throw new Error(`未知评测集 ${set}（可选 main / extra）`)
+}
 
 async function main(): Promise<void> {
   const only = arg('--only')?.split(',')
-  const ids = readManifest().map(p => p.id).filter(id => !only || only.includes(id))
+  const set = arg('--set') ?? 'main'
+  const split = arg('--split')
+  const ids = setIds(set, split).filter(id => !only || only.includes(id))
+  const baselineFile = set === 'main' ? IMPORT_BASELINE : join(IMPORT_BASELINE, '..', `baseline-${set}.json`)
+  // 只跑部分论文（--only / --split）时与全量基线不可比
+  const partial = Boolean(only || split)
   if (flag('--fetch')) { await fetchAll(ids); return }
   const paths = (arg('--path')?.split(',') ?? [...PATHS]) as ImportPath[]
   for (const p of paths) if (!PATHS.includes(p)) throw new Error(`未知路径 ${p}（可选 ${PATHS.join(' / ')}）`)
 
-  const baseline: Partial<Record<ImportPath, PathSummary>> = existsSync(IMPORT_BASELINE) ? JSON.parse(readFileSync(IMPORT_BASELINE, 'utf8')) : {}
+  const baseline: Partial<Record<ImportPath, PathSummary>> = existsSync(baselineFile) ? JSON.parse(readFileSync(baselineFile, 'utf8')) : {}
   const results: Partial<Record<ImportPath, { summary: PathSummary; papers: PaperResult[] }>> = {}
   const problems: string[] = []
   for (const p of paths) {
@@ -316,8 +347,7 @@ async function main(): Promise<void> {
     console.log(`\n## ${p}\n${fmt(summary)}`)
     for (const r of papers.filter(x => !x.ok)) console.log(`  ✗ ${r.id}：${r.error}`)
     const base = baseline[p]
-    // 只跑部分论文时与全量基线不可比
-    if (base && !only) {
+    if (base && !partial) {
       const reg = regressions(summary, base)
       if (reg.length) { problems.push(...reg.map(x => `${p}：${x}`)); console.log(`  ⚠ 比基线变差：${reg.join('；')}`) }
       else console.log('  与基线相比没有变差')
@@ -325,17 +355,17 @@ async function main(): Promise<void> {
   }
 
   mkdirSync(RUNS_DIR, { recursive: true })
-  const file = join(RUNS_DIR, `${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
+  const file = join(RUNS_DIR, `${set}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
   writeFileSync(file, JSON.stringify(results, null, 2))
   console.log(`\n逐篇结果：${file}`)
 
   if (flag('--write-baseline')) {
-    if (only) throw new Error('只跑了部分论文，不能写基线')
+    if (partial) throw new Error('只跑了部分论文，不能写基线')
     const next = { ...baseline }
     for (const p of paths) next[p] = results[p]!.summary
-    mkdirSync(join(IMPORT_BASELINE, '..'), { recursive: true })
-    writeFileSync(IMPORT_BASELINE, JSON.stringify(next, null, 2) + '\n')
-    console.log(`已写入基线：${IMPORT_BASELINE}`)
+    mkdirSync(join(baselineFile, '..'), { recursive: true })
+    writeFileSync(baselineFile, JSON.stringify(next, null, 2) + '\n')
+    console.log(`已写入基线：${baselineFile}`)
   } else if (problems.length) {
     console.log(`\n比基线变差 ${problems.length} 项`)
     process.exitCode = 1
