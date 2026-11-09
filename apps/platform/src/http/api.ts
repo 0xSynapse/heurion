@@ -53,6 +53,9 @@ import { verifyPrompt } from '../claims/service.ts'
 import { docxFor, pptxFor } from '../convert/exports.ts'
 import { bindDeckAssets, importPptx, PptxImportError } from '../convert/pptx-import.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
+import { sourcePager } from '../convert/source-pages.ts'
+import { tableSourceProvider } from '../convert/pdf-crop.ts'
+import type { VisionComplete } from '../harness/complete.ts'
 import { exportFontsParam, withFonts } from '../convert/fonts.ts'
 import { templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
@@ -95,6 +98,8 @@ import { CalendarService } from '../calendar/service.ts'
 
 export interface ApiDeps {
   docs: Documents
+  /** 审稿时按页面图像核对表格用的图像模型（可选；没有时表格只按文字规则判断可信度） */
+  reviewVision?: VisionComplete | null
   ops: OpService
   turns: TurnService
   postcheck: PostCheck
@@ -1499,7 +1504,15 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         user_refs: refPlan.userCount,
         duplicates: refPlan.duplicates,
       },
-      comments: store.listComments(row.id).map(x => ({ ...x, anchor: locate(doc, x, marks) })),
+      // 有原版映射的 PDF 稿：评论带原版页码（§5.4）
+      comments: (() => {
+        const pageOf = sourcePager(row.id, store.getSourceMapGz(row.id))
+        return store.listComments(row.id).map(x => {
+          const anchor = locate(doc, x, marks)
+          const page = pageOf?.([...(anchor.node_ids ?? []), x.node_id]) ?? null
+          return { ...x, anchor, ...(page != null ? { page } : {}) }
+        })
+      })(),
       // 测量原子：按当前用户对来源的权限取值（编辑器显示数值、悬停显示来源与状态）
       measurements: [...measureViews(c, row).values()],
       measurement_strict: measurementSvc().strict(row.id),
@@ -1959,13 +1972,18 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     // PDF 走 poppler 兜底导入的稿件：表格结构不可靠，审稿跳过依赖表格的核查并提示用户；
     // 走 Docling 的逐表判断，只跳过不可信的表（旧数据未记录解析路径，按可靠处理）
     const imp = store.getImportInfo(row.id)
+    const docling = imp?.kind === 'pdf' && imp.import_engine === 'docling'
+    // 有图像模型与原版映射时，先按页面图像核对表格（只发表格区域的截图，PDF_ORIGINAL_VIEW.md §12.3）
+    const mapGz = docling && deps.reviewVision ? store.getSourceMapGz(row.id) : null
+    const pdf = mapGz ? store.getPackage(row.id) : null
     const result = await aegisMcpDeps.claims.deepReview(row.id, {
       mode: 'heurion_evolved',
       owner: userId,
       anchorComments: true,
       tablesUnreliable: imp?.kind === 'pdf' && imp.import_engine === 'poppler',
       // Docling 导入的 PDF：表格由版面推断，逐表判断可信度
-      assessTables: imp?.kind === 'pdf' && imp.import_engine === 'docling',
+      assessTables: docling,
+      ...(mapGz && pdf && deps.reviewVision ? { tableVision: { source: tableSourceProvider(pdf, mapGz), complete: deps.reviewVision } } : {}),
       ...(typeof llmComplete === 'function' ? { complete: llmComplete } : {}),
     })
     return c.json({

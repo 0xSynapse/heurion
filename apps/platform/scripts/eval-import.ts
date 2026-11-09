@@ -163,7 +163,7 @@ function acceptedText(doc: PMNode): string {
 }
 
 function measure(id: string, xml: string, doc: PMNode, t0: number, word = false): PaperResult {
-  const fid = checkFidelityDoc(xml, doc)
+  const fid = checkFidelityDoc(xml, doc, { printed: !word })
   const d = fid.tables.detail
   const avg = (xs: number[]) => (xs.length ? round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) : null)
   const text = acceptedText(doc)

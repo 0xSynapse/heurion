@@ -72,9 +72,16 @@ def extract(pdf_bytes: bytes, pages: list[int] | None = None) -> dict[int, Page]
             w, h = page.get_size()  # 显示方向的页面尺寸（已按 /Rotate 转过）
             rot = page.get_rotation() % 360
             pw, ph = (w, h) if rot in (0, 180) else (h, w)  # 未旋转的页面尺寸（字框坐标用的）
+            # 页面框的原点不一定是 (0, 0)（裁过的页、有的排版软件输出）：字框坐标先减去原点
+            try:
+                cx0, cy0 = page.get_cropbox()[:2]
+            except Exception:
+                cx0, cy0 = 0.0, 0.0
 
-            def disp(x: float, y: float, rot: int = rot, pw: float = pw, ph: float = ph) -> tuple[float, float]:
+            def disp(x: float, y: float, rot: int = rot, pw: float = pw, ph: float = ph,
+                     x0: float = cx0, y0: float = cy0) -> tuple[float, float]:
                 """PDF 用户空间的点（左下原点、未旋转）→ 显示方向、左上原点（与 Docling 的坐标一致）。"""
+                x, y = x - x0, y - y0
                 if rot == 90:
                     return y, x
                 if rot == 180:

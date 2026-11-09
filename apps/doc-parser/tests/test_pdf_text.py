@@ -189,6 +189,105 @@ def test_merged_table_rows_split_by_label_lines() -> None:
     assert len(t2["rows"]) == 2
 
 
+def _mixed_pdf() -> bytes:
+    """一页上左边是竖排印刷的表（字自下而上），右边是横排正文（横竖混排，整页不转正）。"""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setFont("Helvetica", 9)
+    for k in range(30):
+        c.drawString(320, 780 - k * 14, f"Body text line {k} of the right column goes here.")
+    c.saveState()
+    c.translate(100, 100)
+    c.rotate(90)
+    for k in range(10):
+        c.drawString(0, -k * 14, f"Row {k} value 1.{k} (0.{k}-2.{k}) p = 0.0{k}")
+    c.restoreState()
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def test_mixed_page_rotated_table_is_cropped_and_mapped_back() -> None:
+    from src.parser import _uncrop_box, crop_rotated, normalize_rotation, rotated_regions
+
+    pdf = _mixed_pdf()
+    assert normalize_rotation(pdf)[1] == {}  # 竖排的字不到六成：整页不转
+    pages = T.extract(pdf)
+    pg = pages[1]
+    pg.rot = 0  # type: ignore[attr-defined]
+    vert = [c for c in pg.chars if c.angle in (90, 270)]
+    box = [min(c.l for c in vert) + 5, min(c.t for c in vert) + 5, max(c.r for c in vert) - 5, max(c.b for c in vert) - 5, pg.width, pg.height]
+    regions = rotated_regions([{"type": "table", "page": 1, "_box": box}], pages)
+    assert len(regions) == 1
+    no, angle, region = regions[0]
+    # 区域从表格框扩到全部竖排的字，不含右边的正文
+    assert region[0] <= min(c.l for c in vert) and region[2] >= max(c.r for c in vert) and region[2] < 320
+    add = 90 if angle == 270 else 270
+    crop = T.extract(crop_rotated(pdf, no, region, add))[1]
+    inside = [c for c in crop.chars if 0 <= c.l <= crop.width and 0 <= c.t <= crop.height]
+    # 裁出的页转正了：竖排的字变成横排，宽高对调；页面框原点不是 (0, 0) 也读对位置
+    assert inside and T.rotation(inside) == 0 and all(c.angle == 0 for c in inside)
+    assert abs(crop.width - (region[3] - region[1])) < 1 and abs(crop.height - (region[2] - region[0])) < 1
+    assert "Row 0 value" in "".join((" " if c.space_before else "") + c.c for c in inside)
+    # 裁出页上的位置换回原页：落在区域里
+    for c in inside[:20]:
+        l, t, r, b = _uncrop_box([c.l, c.t, c.r, c.b], region, add)
+        assert region[0] - 1 <= (l + r) / 2 <= region[2] + 1 and region[1] - 1 <= (t + b) / 2 <= region[3] + 1
+
+
+def test_table_footnote_merged_into_last_row_is_trimmed() -> None:
+    from src.parser import _trim_table_footnotes
+
+    def table(foot: str) -> tuple[dict, T.Page]:
+        pg = T.Page(1, 600, 800, _cell_chars([("Group", 10, 100), ("n", 80, 100), ("A", 10, 112), ("12", 80, 112),
+                                              ("B", 10, 124), ("15", 80, 124), (foot, 10, 136)]))
+        t = {"rows": [["Group", "n"], ["A", "12"], ["B " + foot[:12], "15 " + foot[12:]]], "header_rows": 1,
+             "_box": [5, 92, 160, 140, 600, 800],
+             "_cells": [[0, 0, [5, 92, 75, 104]], [0, 1, [75, 92, 160, 104]], [1, 0, [5, 104, 75, 116]], [1, 1, [75, 104, 160, 116]],
+                        [2, 0, [5, 116, 75, 140]], [2, 1, [75, 116, 160, 140]]]}
+        return t, pg
+
+    t, pg = table("Abbreviations: n number of patients")
+    note = _trim_table_footnotes(t, pg)
+    assert note and note[0] == "Abbreviations: n number of patients"
+    assert t["rows"] == [["Group", "n"], ["A", "12"], ["B", "15"]] and t["_box"][3] < 130
+    # 挤在一起的一串区间值（数据行）不是脚注
+    t2, pg2 = table("(43,918 to 80,330) (103 to 193)")
+    assert _trim_table_footnotes(t2, pg2) is None and len(t2["rows"]) == 3
+
+
+def test_value_ci_rows_rebuilt_from_text_layer() -> None:
+    from src.parser import _rebuild_rows
+
+    pg = T.Page(1, 600, 800, _cell_chars([
+        ("Region", 10, 100), ("2021", 120, 100), ("2030", 200, 100),
+        ("Global", 10, 112), ("1,645", 120, 112), ("1,108", 200, 112),
+        ("(1,408 to 1,934)", 120, 124), ("(370 to 1,846)", 200, 124),
+        ("Central Europe, Eastern", 10, 136), ("170,006", 120, 136), ("233,838", 200, 136),
+        ("Europe and Asia", 10, 148), ("(102 to 281)", 120, 148), ("(0 to 1,290)", 200, 148),
+        ("High-income", 10, 160), ("110,021", 120, 160), ("94,418", 200, 160),
+        ("(63 to 164)", 120, 172), ("(0 to 189)", 200, 172),
+    ]))
+    # 模型的行边界错开：后一行的数值和前一行的区间挤在一格
+    rows = [["Region", "2021", "2030"],
+            ["Global", "1,645 (1,408 to 1,934)", "1,108 (370 to 1,846)"],
+            ["Central Europe, Eastern Europe and Asia", "170,006", "233,838"],
+            ["", "(102 to 281) 110,021", "(0 to 1,290) 94,418"],
+            ["High-income", "(63 to 164)", "(0 to 189)"]]
+    bands = [(92, 104), (104, 128), (128, 152), (152, 164), (164, 178)]
+    cols = [(5, 115), (115, 195), (195, 270)]
+    t = {"rows": rows, "header_rows": 1, "_box": [5, 92, 270, 178, 600, 800],
+         "_cells": [[r, c, [cols[c][0], a, cols[c][1], b]] for r, (a, b) in enumerate(bands) for c in range(3) if rows[r][c]]}
+    assert _rebuild_rows(t, pg)
+    assert t["rows"] == [["Region", "2021", "2030"],
+                         ["Global", "1,645 (1,408 to 1,934)", "1,108 (370 to 1,846)"],
+                         ["Central Europe, Eastern Europe and Asia", "170,006 (102 to 281)", "233,838 (0 to 1,290)"],
+                         ["High-income", "110,021 (63 to 164)", "94,418 (0 to 189)"]]
+
+
 def test_table_cells_keep_spaces_around_superscripts() -> None:
     # 单元格（scripts=False）：不去上标两边的空格，也不给格式
     p1 = PAGES[1]

@@ -89,6 +89,42 @@ function spacedText(n: El): string {
   return ` ${each(n.childNodes).map(spacedText).join('')} `
 }
 
+/** 单元格按 <break/> 或格内 <p> 分出的各行文字（都没有时只有一行）。 */
+function breakLines(n: El): string[] {
+  const out = ['']
+  const walk = (x: El) => {
+    if (x.nodeType === 3 || x.nodeType === 4) { out[out.length - 1] += x.textContent ?? ''; return }
+    if (x.nodeType !== 1) return
+    if (x.nodeName === 'break') { out.push(''); return }
+    // 格内几个 <p> 也是分行
+    const para = x.nodeName === 'p'
+    if (para) out.push('')
+    out[out.length - 1] += ' '
+    each(x.childNodes).forEach(walk)
+    out[out.length - 1] += ' '
+    if (para) out.push('')
+  }
+  walk(n)
+  return out.map(s => s.trim()).filter(Boolean)
+}
+
+/**
+ * 有的 JATS（中文期刊常见）把整张表的几十行塞进一行，每格用 <break/> 或几个 <p> 分行；PDF 上是逐行排的。
+ * 一行里每个有字的格都正好有 k（≥3）行、且没有合并单元格时，展开成 k 行，与 PDF 的排法一致。
+ */
+function splitBreakRows(cells: El[]): string[][] | null {
+  if (cells.some(c => (Number(c.getAttribute('rowspan')) || 1) > 1 || (Number(c.getAttribute('colspan')) || 1) > 1)) return null
+  const lines = cells.map(breakLines)
+  const filled = lines.filter(l => l.length)
+  const k = filled[0]?.length ?? 0
+  // 至少 3 行：两行的多是表头里折行的标签（「Control」「(n=50)」），PDF 上也在一格里
+  if (k < 3 || filled.length < 2 || filled.some(l => l.length !== k)) return null
+  // 格内的项目列表（「• 18 years old …」）不是压缩的多行：带项目符号、或各行是长句时不展开
+  const all = filled.flat()
+  if (all.some(s => /^[•·▪◦‣\-–]\s/.test(s)) || all.reduce((n, s) => n + s.length, 0) / all.length > 40) return null
+  return Array.from({ length: k }, (_, i) => lines.map(l => l[i] ?? ''))
+}
+
 const remove = (els: El[]) => { for (const e of els) e.parentNode?.removeChild(e) }
 
 /**
@@ -126,7 +162,12 @@ export interface SourceSnapshot {
   formulas: number
 }
 
-export function sourceSnapshot(xml: string): SourceSnapshot {
+/**
+ * printed：按 PDF 上的印法比（默认）。压缩成一行的多行表（splitBreakRows）展开；
+ * Word 路径的文件由 JATS 直接生成、保留了这种压缩，比 Word 时传 false。
+ */
+export function sourceSnapshot(xml: string, opts: { printed?: boolean } = {}): SourceSnapshot {
+  const printed = opts.printed ?? true
   const doc = new DOMParser().parseFromString(xml, 'text/xml') as unknown as El
   const article = each(doc.getElementsByTagName('article'))[0] ?? doc
   // 文献表与公式的文字单独留着：转换结果里多出的数字若来自它们，属于正常
@@ -167,13 +208,20 @@ export function sourceSnapshot(xml: string): SourceSnapshot {
     const rows = each(table.getElementsByTagName('tr'))
     const grid: string[][] = []
     const taken: boolean[][] = []
-    rows.forEach((tr, r) => {
+    let r = 0
+    rows.forEach((tr, ri) => {
+      const cells = elements(tr).filter(x => x.nodeName === 'td' || x.nodeName === 'th')
+      const split = !printed || taken[r]?.some(Boolean) ? null : splitBreakRows(cells)
+      if (split) {
+        for (const line of split) { grid[r] = line.map(tokens); taken[r] = line.map(() => true); r++ }
+        return
+      }
       grid[r] ??= []; taken[r] ??= []
       let c = 0
-      for (const cell of elements(tr).filter(x => x.nodeName === 'td' || x.nodeName === 'th')) {
+      for (const cell of cells) {
         while (taken[r]![c]) c++
         const cs = Math.max(1, Number(cell.getAttribute('colspan')) || 1)
-        const rs = Math.max(1, Math.min(rows.length - r, Number(cell.getAttribute('rowspan')) || 1))
+        const rs = Math.max(1, Math.min(rows.length - ri, Number(cell.getAttribute('rowspan')) || 1))
         for (let dr = 0; dr < rs; dr++) for (let dc = 0; dc < cs; dc++) {
           grid[r + dr] ??= []; taken[r + dr] ??= []
           taken[r + dr]![c + dc] = true
@@ -181,6 +229,7 @@ export function sourceSnapshot(xml: string): SourceSnapshot {
         }
         c += cs
       }
+      r++
     })
     const width = Math.max(0, ...grid.map(r => r.length))
     return grid.map(r => Array.from({ length: width }, (_, i) => r[i] ?? ''))
@@ -269,8 +318,8 @@ export function checkFidelity(xml: string, markdown: string): FidelityReport {
 }
 
 /** 直接检查平台文档（如产品 PDF / Word 导入的结果） */
-export function checkFidelityDoc(xml: string, doc: PMNode): FidelityReport {
-  const src = sourceSnapshot(xml)
+export function checkFidelityDoc(xml: string, doc: PMNode, opts: { printed?: boolean } = {}): FidelityReport {
+  const src = sourceSnapshot(xml, opts)
   const text = docText(doc)
 
   // 1. 数字（按出现次数）

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { gunzipSync } from 'node:zlib'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { bindSourceMap, docParserToDoc, mergeContinuedTables, type DocParserBlock, type DocParseResult } from '../src/convert/doc-parser.ts'
 import { assignIds } from '../src/model/ids.ts'
 import { Store } from '../src/store/db.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { duplicateDoc } from '../src/model/duplicate.ts'
+import { findQuoteWords, type Word } from '../web/src/quote-match.ts'
+import { sourcePager } from '../src/convert/source-pages.ts'
 
 // 原版 PDF 视图的映射（docs/design/PDF_ORIGINAL_VIEW.md §3）：doc-parser 给的 src → 按块 id 存
 
@@ -70,5 +72,44 @@ describe('原版映射', () => {
     const copy = duplicateDoc(docs, store.getDoc(row.id)!, 'u')
     expect(store.hasSourceMap(copy.id)).toBe(true)
     expect(store.getImportInfo(copy.id)?.import_engine).toBe('docling')
+  })
+})
+
+describe('原版视图的引用兜底定位（§12.2）', () => {
+  // 表格两行：「Age | 62 | 61」「Men | 124 (60.2%) | 118 (57.3%)」
+  const W: Word[] = [
+    [2, 10, 100, 30, 110, 'Age'], [2, 100, 100, 115, 110, '62'], [2, 200, 100, 215, 110, '61'],
+    [2, 10, 120, 30, 130, 'Men'], [2, 100, 120, 115, 130, '124'], [2, 117, 120, 150, 130, '(60.2%)'],
+    [2, 200, 120, 215, 130, '118'], [2, 217, 120, 250, 130, '(57.3%)'],
+    [3, 10, 100, 30, 110, '124'],
+  ]
+  const table = [[2, 5, 95, 260, 135]]
+
+  it('在块的区域里按文字找到单元格：空白与短横不同也能对上，只取区域内的词', () => {
+    expect(findQuoteWords(W, table, '124 (60.2%)')).toEqual([4, 5])
+    expect(findQuoteWords(W, table, '124(60.2 %)')).toEqual([4, 5])
+    expect(findQuoteWords(W, table, 'Men')).toEqual([3])
+  })
+
+  it('找不到、出现不止一次或太短时返回 null（退回画整块）', () => {
+    expect(findQuoteWords(W, table, '99 (1.0%)')).toBeNull()
+    expect(findQuoteWords(W, table, '6')).toBeNull()
+    expect(findQuoteWords(W, [[2, 5, 95, 260, 135], [3, 5, 95, 260, 135]], '124')).toBeNull()
+  })
+})
+
+describe('评论的原版页码（§5.4）', () => {
+  it('块取第一处区域的页，只有词对齐的单元格段落取第一个词的页；都没有时 null', () => {
+    const map = {
+      version: 1, pages: [{ w: 600, h: 800 }, { w: 600, h: 800 }, { w: 600, h: 800 }],
+      words: [[1, 0, 0, 1, 1, 'a'], [3, 0, 0, 1, 1, 'b']],
+      nodes: { p1: { regions: [[2, 0, 0, 10, 10]] }, cell: { text: 'b', spans: [[0, 1, 1]] }, empty: {} },
+    }
+    const pager = sourcePager('doc-pager-test', gzipSync(Buffer.from(JSON.stringify(map))))!
+    expect(pager(['p1'])).toBe(2)
+    expect(pager(['cell'])).toBe(3)
+    expect(pager(['missing', 'empty', 'p1'])).toBe(2)
+    expect(pager(['missing', null])).toBeNull()
+    expect(sourcePager('x', null)).toBeNull()
   })
 })

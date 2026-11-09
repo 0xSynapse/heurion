@@ -42,6 +42,12 @@ export const config = {
   /** dsh 调模型走平台代理（真实 key 不进 dsh）：dsh 用的地址与代理转发的上游。 */
   llmProxyUrl: env('HEURION_LLM_URL', `http://127.0.0.1:${port}/llm/v1`),
   llmUpstream: env('DEEPSEEK_UPSTREAM_URL', 'https://api.deepseek.com/anthropic/v1'),
+  /**
+   * 审稿时按页面图像核对表格（docs/design/PDF_ORIGINAL_VIEW.md §12.3）：把 PDF 稿表格区域的截图发给同一个上游的图像模型。
+   * REVIEW_TABLE_VISION=0 关闭；REVIEW_VISION_MODEL 指定图像模型（默认用 DSH_MODEL，它不支持图像时不启用）。
+   */
+  reviewTableVision: env('REVIEW_TABLE_VISION', '1') !== '0',
+  reviewVisionModel: process.env.REVIEW_VISION_MODEL ?? '',
   /** 邮件发信服务配置：标准 SMTP (首选) 或 Resend API */
   smtpHost: process.env.SMTP_HOST || process.env.NEXUS_SMTP_HOST || '',
   smtpPort: Number(process.env.SMTP_PORT || process.env.NEXUS_SMTP_PORT || '465'),

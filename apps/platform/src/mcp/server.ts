@@ -31,6 +31,7 @@ import { importReferences, parseReferences } from '../literature/import-refs.ts'
 import { OpenAlexClient } from '../literature/openalex.ts'
 import type { PubMedClient } from '../literature/pubmed.ts'
 import { AnchorError, attachComment, locate, threadMarks } from '../model/anchors.ts'
+import { sourcePager } from '../convert/source-pages.ts'
 import type { Documents } from '../model/runtime.ts'
 import type { OpService } from '../ops/service.ts'
 import { DocOp, EditBatch, OpError } from '../ops/types.ts'
@@ -641,13 +642,16 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     const list = comment_id
       ? [store.getComment(doc_id, comment_id)].filter(c => c !== undefined)
       : store.listComments(doc_id, status ?? 'open')
+    // PDF 稿：锚点带原版页码，回复时可以说「第 5 页表 2」
+    const pageOf = sourcePager(doc_id, store.getSourceMapGz(doc_id))
     return json({
       rev: docs.rev(doc_id),
       comments: list.map(c => {
         const loc = locate(doc, c, marks)
+        const page = pageOf?.([...(loc.node_ids ?? []), c.node_id]) ?? null
         return {
           comment_id: c.id, status: c.status,
-          anchor: { located: loc.located, node_ids: loc.node_ids, text: loc.text || c.snippet },
+          anchor: { located: loc.located, node_ids: loc.node_ids, text: loc.text || c.snippet, ...(page != null ? { page } : {}) },
           thread: c.replies.map(r => ({ role: r.role, text: r.text, ...(r.author ? { author: r.author } : {}) })),
         }
       }),

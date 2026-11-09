@@ -7,8 +7,7 @@
  */
 import type { Node as PMNode } from 'prosemirror-model'
 import type { SelectionAnchor } from './editor.ts'
-
-type Word = [number, number, number, number, number, string]
+import { findQuoteWords, type Word } from './quote-match.ts'
 interface SourceMap {
   version: 1
   /** rot：解析时为转正竖排页额外加的旋转（顺时针度数），渲染时同样转，词坐标按转正后的页面 */
@@ -234,8 +233,13 @@ export class OriginalView {
         const words = [...new Set(n.spans.filter(([a, b]) => a! < at + quote.length && b! > at).map(x => x[2]!))].sort((x, y) => x - y)
         for (const line of mergeLines(words.map(w => this.map!.words[w]!))) add(line[0]!, line.slice(1), c.id, 'text')
       } else {
-        // 整块评论，或块在转换稿里改过、文字对不上：画块的区域
-        for (const r of n.regions ?? []) add(r[0]!, r.slice(1), c.id, 'block')
+        // 块在转换稿里改过、或锚在整块（表格意见按图像重新识别后锚在整张表）：在块的区域里按文字找；
+        // 先找评论记下的文字（表格意见是单元格文字），再找锚定的文字；都找不到才画块的区域
+        const regions = n.regions ?? []
+        const hit = [c.snippet, c.anchor?.text].map(q => (q ?? '').trim()).filter(q => q && q.length < 400)
+          .map(q => findQuoteWords(this.map!.words, regions, q)).find(Boolean)
+        if (hit) for (const line of mergeLines(hit.map(w => this.map!.words[w]!))) add(line[0]!, line.slice(1), c.id, 'text')
+        else for (const r of regions) add(r[0]!, r.slice(1), c.id, 'block')
       }
     }
   }

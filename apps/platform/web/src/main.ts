@@ -1209,6 +1209,8 @@ function renderCollaborators(list: Array<{ name: string; role: string }>, readOn
 // —— 原版 PDF 视图（PDF 导入的文档；只读，评论与审稿标注画在原版上，见 original.ts） ——
 
 let origView: OriginalView | null = null
+/** 已按默认打开过原版的文档（同一次打开里刷新详情时不再切回原版） */
+let origAutoOpened: string | null = null
 
 function setOriginalMode(on: boolean): void {
   if (!session || session.kind !== 'doc' || !detail?.original) on = false
@@ -1255,6 +1257,7 @@ function closeOriginal(): void {
 
 function close(): void {
   closeOriginal()
+  origAutoOpened = null
   activeSubagentTask = null
   subagentCards.clear()
   clearAllChatImages()
@@ -1382,6 +1385,13 @@ async function refresh(full: boolean): Promise<void> {
     origView?.setComments(d.comments)
   }
   $('origToggle').hidden = !(session?.kind === 'doc' && d.original)
+  // 有原版映射的 PDF 稿：每次打开默认显示原版 + 审稿侧栏（§12；转换稿是编辑入口），之后的刷新不再切换
+  if (session?.kind === 'doc' && d.original?.mapped && origAutoOpened !== session.docId) {
+    origAutoOpened = session.docId
+    setOriginalMode(true)
+    if ($('app').classList.contains('side-collapsed')) setSideCollapsed(false)
+    switchTab('commentPane')
+  }
   renderComments()
   renderSuggestions()
   renderVersions()
@@ -3617,6 +3627,7 @@ function renderCommentCardHtml(c: any): string {
         <span class="rv-cat-tag">${esc(isReview ? meta.categoryLabel : '批注')}</span>
         <span class="rv-origin">${esc(originLabel)}${originTime ? ` · ${esc(originTime)}` : ''}</span>
         <button type="button" class="rv-sec-badge" data-locate="1" title="点击定位并高亮所属章节与原句">${esc(secLabel)}</button>
+        ${typeof c.page === 'number' ? `<span class="rv-page-badge" title="在原版 PDF 中的页码">第 ${c.page} 页</span>` : ''}
         <span class="grow"></span>
         ${c.status === 'open' ? `<button type="button" class="quiet small-btn" data-act="delete" title="删除批注">✕</button>` : ''}
       </div>

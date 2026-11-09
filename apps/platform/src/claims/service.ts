@@ -2,6 +2,7 @@ import type { Node as PMNode } from 'prosemirror-model'
 import type { Complete } from '../harness/complete.ts'
 import { attachComment, AnchorError } from '../model/anchors.ts'
 import { indexById } from '../model/ids.ts'
+import { readGrid } from '../model/table-grid.ts'
 import type { Documents } from '../model/runtime.ts'
 import { relevantPassages, type FullTextClient } from '../literature/fulltext.ts'
 import type { PubMedClient } from '../literature/pubmed.ts'
@@ -28,7 +29,7 @@ import {
   type VerificationTier,
 } from './extract.ts'
 import { headingText, isPendingDeletion } from './extract.ts'
-import { assessTableTrust } from './table-trust.ts'
+import { assessTablesWithVision, rereadTablesWarning, type TableVision } from './table-vision.ts'
 
 /**
  * 论断核对与四阶段深度临床评审服务（M1，PLATFORM.md §5.5 & Google PAT arXiv:2606.28277 扩展）：
@@ -110,6 +111,8 @@ export interface SynthesizedReviewComment {
   reason: string
   suggestion: string
   source_pass: 'llm_stage3' | 'pass_a_citation' | 'pass_b_internal' | 'pass_c_method' | 'pass_d_spin'
+  /** 针对表格某一格：[网格行, 列]（node_id 是表格） */
+  cell?: [number, number]
 }
 
 export interface FourStageReviewResult {
@@ -123,14 +126,6 @@ export interface FourStageReviewResult {
   active_rules_applied: string[]
   /** 给用户看的审稿说明（如表格结构不可靠、已跳过表格核查） */
   warnings: string[]
-}
-
-/** PDF 走 poppler 兜底导入时的审稿提示 */
-/** 提示里称呼一张表：优先用表题开头（「Table 2. …」），否则用序号 */
-function tableLabel(t: TableSummary, index: number): string {
-  const cap = (t.caption ?? '').trim()
-  if (!cap) return `第 ${index + 1} 张表`
-  return cap.length > 40 ? `${cap.slice(0, 40)}…` : cap
 }
 
 export function untrustedTablesWarning(skipped: string[]): string {
@@ -671,6 +666,32 @@ export class ClaimService {
    * - 结构化核查传入整段时，按 snippet 定位到所在句子；
    * - 超长且没有句末标点时，按逗号回退，尽量不截断在词中间。
    */
+  /**
+   * 表格意见要落的单元格段落：给了 [网格行, 列] 时取那一格（合并单元格取起始格）；否则在表内找唯一包含该文字的单元格。
+   * anchor 是格内要标的文字（格里找得到 snippet 时只标它，否则标整格）。找不到时返回 null（退回整张表）。
+   */
+  private cellTarget(table: PMNode, snippet: string, cell?: [number, number]): { nodeId: string; anchor: string } | null {
+    const grid = readGrid(table)
+    const paraOf = (n: PMNode): PMNode | null => {
+      let para: PMNode | null = null
+      n.descendants(d => { if (!para && d.isTextblock && d.attrs.id && d.textContent.trim()) para = d; return !para })
+      return para
+    }
+    const pick = (n: PMNode | null): { nodeId: string; anchor: string } | null => {
+      if (!n) return null
+      const text = n.textContent
+      return { nodeId: n.attrs.id as string, anchor: snippet && text.includes(snippet) ? snippet : '' }
+    }
+    if (cell) {
+      const c = grid.at(cell[0], cell[1])
+      const hit = c ? pick(paraOf(c.node)) : null
+      if (hit) return hit
+    }
+    if (!snippet) return null
+    const found = grid.cells.map(c => paraOf(c.node)).filter((p): p is PMNode => !!p && p.textContent.includes(snippet))
+    return found.length === 1 ? pick(found[0]!) : null
+  }
+
   private sentenceForAnchor(text: string, probe: string, maxChars = 300): string {
     const clean = text.replace(/\s+/g, ' ').trim()
     if (!clean) return probe.trim()
@@ -700,6 +721,7 @@ export class ClaimService {
     rawNodeId: string,
     rawSnippet: string,
     sentence: string,
+    cell?: [number, number],
   ): { nodeId: string; snippet: string; anchorSnippet: string } {
     const byId = indexById(doc)
     const cleanSentence = sentence.replace(/\[@[cm]:[^\]]+\]/g, ' ').replace(/\s+/g, ' ').trim()
@@ -746,6 +768,12 @@ export class ClaimService {
     const finalHit = byId.get(targetId)
     if (!finalHit) {
       return { nodeId: targetId, snippet: displaySnippet, anchorSnippet: displaySnippet }
+    }
+
+    if (finalHit.node.type.name === 'table') {
+      // 表格意见落到单元格：给了行列用那一格；否则按单元格文字在表内唯一匹配。转换稿与原版都只标那一格
+      const inCell = this.cellTarget(finalHit.node, rawSnippet.replace(/^\[表格\]\s*/, '').trim(), cell)
+      if (inCell) return { nodeId: inCell.nodeId, snippet: inCell.anchor || displaySnippet, anchorSnippet: inCell.anchor }
     }
 
     if (!finalHit.node.isTextblock) {
@@ -855,7 +883,7 @@ export class ClaimService {
         let doc = this.docs.get(docId)
         const ops: Array<{ op: 'claim_comment'; thread: string }> = []
         for (const item of deduplicated) {
-          const resolved = this.resolveTargetNodeAndSnippet(doc, item.node_id, item.snippet, item.sentence)
+          const resolved = this.resolveTargetNodeAndSnippet(doc, item.node_id, item.snippet, item.sentence, item.cell)
           item.node_id = resolved.nodeId
           const row = store.addComment({
             doc_id: docId,
@@ -910,6 +938,7 @@ export class ClaimService {
       passK?: number
       tablesUnreliable?: boolean
       assessTables?: boolean
+      tableVision?: TableVision | null
     } = {},
   ): Promise<FourStageReviewResult> {
     return this.runFourStageDeepReview(docId, {
@@ -930,19 +959,18 @@ export class ClaimService {
       tablesUnreliable?: boolean
       /** 表格由版面推断（PDF 经 Docling 导入）：逐表判断可信度，不可信的表不参与核查、不交给模型，并提示用户 */
       assessTables?: boolean
+      /** 与 assessTables 一起用：先按页面图像核对表格（PDF_ORIGINAL_VIEW.md §12.3），核对不了的再按文字规则判断 */
+      tableVision?: TableVision | null
     },
   ): Promise<FourStageReviewResult> {
     const doc = this.docs.get(docId)
     let tables = opts.tablesUnreliable ? [] : extractTableSummaries(doc)
     const warnings = opts.tablesUnreliable ? [TABLES_UNRELIABLE_WARNING] : []
     if (opts.assessTables && tables.length) {
-      const skipped: string[] = []
-      tables = tables.filter((t, i) => {
-        const trust = assessTableTrust(t)
-        if (!trust.reliable) skipped.push(`${tableLabel(t, i)}（${trust.reasons[0]}）`)
-        return trust.reliable
-      })
-      if (skipped.length) warnings.push(untrustedTablesWarning(skipped))
+      const checked = await assessTablesWithVision(tables, opts.tableVision)
+      tables = checked.tables
+      if (checked.reread.length) warnings.push(rereadTablesWarning(checked.reread))
+      if (checked.skipped.length) warnings.push(untrustedTablesWarning(checked.skipped))
     }
     // 全部表格都不可用时显式跳过，避免规则核查把空列表当成「未提供」而重新从文档提取表格
     const skipTables = opts.tablesUnreliable || (opts.assessTables === true && tables.length === 0)
@@ -1014,6 +1042,7 @@ export class ClaimService {
           verification_tier: 'high',
           category: iss.category,
           ...(iss.subtype ? { subtype: iss.subtype } : {}),
+          ...(iss.cell ? { cell: iss.cell } : {}),
           severity: iss.severity,
           sentence: iss.sentence,
           snippet: iss.snippet,

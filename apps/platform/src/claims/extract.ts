@@ -49,6 +49,8 @@ export interface TableSummary {
   clone_sizes?: number[]
   /** 表格内出现的全部数值与百分比字符串（用于正文-表格一致性核对）。 */
   numbers: string[]
+  /** headers 与 rows 各行在表格网格里的行号（[表头, 第 1 行, …]；空行不进 rows，行号会跳）：意见据此落到单元格 */
+  grid_rows?: number[]
 }
 
 export interface ManuscriptScratchpad {
@@ -233,6 +235,7 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
     if (node.type.name === 'table') {
       const nodeId = (node.attrs.id as string | null) ?? `tbl_${summaries.length + 1}`
       const rows: string[][] = []
+      const gridRows: number[] = []
       const numbersSet = new Set<string>()
       const sampleSizes = new Set<number>()
       const cloneSizes = new Set<number>()
@@ -260,7 +263,10 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
           const headerSpan = cell.top === r && cell.colspan > 1 && (r === 0 || cell.node.attrs.header === true)
           return anchor || headerSpan ? cellPlainText(cell.node) : ''
         })
-        if (rowCells.some(Boolean)) rows.push(rowCells)
+        if (rowCells.some(Boolean)) {
+          rows.push(rowCells)
+          gridRows.push(r)
+        }
       }
 
       const headers = rows[0] ?? []
@@ -274,6 +280,7 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
         sample_sizes: [...sampleSizes],
         ...(cloneSizes.size > 0 ? { clone_sizes: [...cloneSizes] } : {}),
         numbers: [...numbersSet],
+        grid_rows: gridRows,
       })
       return
     }
@@ -284,6 +291,32 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
 
   doc.forEach(child => visit(child))
   return summaries
+}
+
+/**
+ * 用另一份网格（按页面图像重新识别的表格，PDF_ORIGINAL_VIEW.md §12.3）代替表格的内容：
+ * 首行作表头，样本量、伪队列人数与数值按新网格重算；不带网格行号（意见锚在整张表，原版上按单元格文字定位）。
+ */
+export function summaryFromRows(base: TableSummary, grid: string[][]): TableSummary {
+  const sampleSizes = new Set<number>()
+  const cloneSizes = new Set<number>()
+  const numbers = new Set<string>()
+  for (const cell of grid.flat()) {
+    for (const m of cell.matchAll(/\b[nN]\s*[=＝]\s*(\d+)\b/g)) if (Number(m[1]) > 0) sampleSizes.add(Number(m[1]))
+    for (const m of cell.matchAll(/\bclones?\s*[=＝]\s*(\d+)\b/gi)) if (Number(m[1]) > 0) cloneSizes.add(Number(m[1]))
+    for (const nm of cell.match(/\b\d+(?:\.\d+)?[%％]?/g) ?? []) numbers.add(nm.replace(/％/g, '%'))
+  }
+  const width = Math.max(0, ...grid.map(r => r.length))
+  const rows = grid.map(r => Array.from({ length: width }, (_, i) => r[i] ?? ''))
+  const { grid_rows: _gridRows, clone_sizes: _clones, ...rest } = base
+  return {
+    ...rest,
+    headers: rows[0] ?? [],
+    rows: rows.slice(1),
+    sample_sizes: [...sampleSizes],
+    ...(cloneSizes.size > 0 ? { clone_sizes: [...cloneSizes] } : {}),
+    numbers: [...numbers],
+  }
 }
 
 /**
@@ -609,6 +642,8 @@ export interface DeepReviewAuditIssue {
   suggestion: string
   /** 用于实验评测与医生批注归类的细粒度子类型标签 */
   subtype?: string
+  /** 意见针对表格里的某一格：[网格行, 列]（node_id 是表格）；锚定时落到这一格，不标整张表 */
+  cell?: [number, number]
 }
 
 /**
@@ -916,6 +951,7 @@ export function auditInternalConsistency(
           node_id: tbl.node_id,
           sentence: headerLine,
           snippet: tbl.headers[1] ?? headerLine.slice(0, 50),
+          ...(tbl.headers[1] && tbl.grid_rows ? { cell: [tbl.grid_rows[0]!, 1] as [number, number] } : {}),
           ...(tbl.section_title ? { section_title: tbl.section_title } : {}),
           section_role: 'results',
           category: 'internal_inconsistency',
@@ -933,13 +969,15 @@ export function auditInternalConsistency(
       return m && m[1] ? Number(m[1]) : null
     })
 
-    for (const row of tbl.rows) {
+    for (const [rowIdx, row] of tbl.rows.entries()) {
       const rowLabel = row[0] ?? ''
+      const gridRow = tbl.grid_rows?.[rowIdx + 1]
       for (let colIdx = 1; colIdx < row.length; colIdx++) {
         const cell = (row[colIdx] ?? '').trim()
         if (!cell) continue
         const colHeader = tbl.headers[colIdx] ?? `Col ${colIdx}`
         const colN = colNs[colIdx] ?? null
+        const at = gridRow != null ? { cell: [gridRow, colIdx] as [number, number] } : {}
 
         // 检测 `00 (0.0%)` 双零排版笔误
         if (/^00\s*\(/.test(cell)) {
@@ -947,6 +985,7 @@ export function auditInternalConsistency(
             node_id: tbl.node_id,
             sentence: `${rowLabel}: ${colHeader} = ${cell}`,
             snippet: cell,
+            ...at,
             ...(tbl.section_title ? { section_title: tbl.section_title } : {}),
             section_role: 'results',
             category: 'internal_inconsistency',
@@ -974,6 +1013,7 @@ export function auditInternalConsistency(
                   node_id: tbl.node_id,
                   sentence: `${rowLabel} [${colHeader}, n=${colN}]: ${cell}`,
                   snippet: cell,
+                  ...at,
                   ...(tbl.section_title ? { section_title: tbl.section_title } : {}),
                   section_role: 'results',
                   category: 'internal_inconsistency',

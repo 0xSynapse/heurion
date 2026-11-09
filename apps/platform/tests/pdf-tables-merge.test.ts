@@ -29,6 +29,22 @@ describe('PDF 跨页续表合并', () => {
     expect(mergeContinuedTables([t(1), { type: 'paragraph', text: 'Text', page: 2 }, t(2)])).toHaveLength(3)
   })
 
+  it('表题印在表下方的跨页表：前半张没表题、后半张带表题且没有表头时合并，表题给合并后的表', () => {
+    const out = mergeContinuedTables([
+      { type: 'table', rows: [HEAD, ['Age', '62', '61']], header_rows: 1, page: 3 },
+      { type: 'table', rows: [['Male', '124', '118']], header_rows: 0, caption: 'TABLE 1: Baseline characteristics', page: 4 },
+    ])
+    expect(out).toHaveLength(1)
+    const t = out[0] as Extract<DocParserBlock, { type: 'table' }>
+    expect(t.caption).toBe('TABLE 1: Baseline characteristics')
+    expect(t.rows).toEqual([HEAD, ['Age', '62', '61'], ['Male', '124', '118']])
+    // 后半张有自己的表头：是另一张表
+    expect(mergeContinuedTables([
+      { type: 'table', rows: [HEAD, ['Age', '62', '61']], header_rows: 1, page: 3 },
+      { type: 'table', rows: [HEAD, ['Male', '124', '118']], header_rows: 1, caption: 'TABLE 2: Outcomes', page: 4 },
+    ])).toHaveLength(2)
+  })
+
   it('续表之间隔着页眉页脚、「(Continued)」与「Table 1 (continued)」也合并；表格下方的表题归给前一张表', () => {
     const blocks: DocParserBlock[] = [
       { type: 'table', rows: [HEAD, ['Age', '62', '61']], header_rows: 1, page: 5 },

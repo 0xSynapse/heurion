@@ -15,7 +15,11 @@ export type DocParserMark = [number, number, string]
  * 块在原版 PDF 上的位置（原版视图用，docs/design/PDF_ORIGINAL_VIEW.md §3）：
  * regions [[页, 左, 上, 右, 下], …]；spans [[起, 止, 词序号], …] 按块 text 的下标；表格 cells [[行, 列, spans], …]
  */
-export interface DocParserSrc { regions: number[][]; spans?: number[][]; cells?: Array<[number, number, number[][]]> }
+export interface DocParserSrc {
+  regions: number[][]; spans?: number[][]; cells?: Array<[number, number, number[][]]>
+  /** 块里的字在原页上是竖排的（横竖混排页上裁出来转正识别的表）：顺时针转 rot 度才是正的 */
+  rot?: number
+}
 /** 各页尺寸与全文的词：[页, 左, 上, 右, 下, 文字]（PDF 点，左上原点、显示方向） */
 export interface DocParserSource {
   /** rot：解析时为转正竖排页额外加的旋转（顺时针度数）；坐标按转正后的页面 */
@@ -27,14 +31,14 @@ export interface DocParserSource {
 export interface PendingSourceMap {
   pages: DocParserSource['pages']
   words: DocParserSource['words']
-  blocks: Array<{ index: number; text?: string; spans?: number[][]; regions: number[][]; cells?: Array<[number, number, number[][]]> }>
+  blocks: Array<{ index: number; text?: string; spans?: number[][]; regions: number[][]; cells?: Array<[number, number, number[][]]>; rot?: number }>
 }
 /** 存下来的原版映射：块 id → 导入时的文字、对齐与区域 */
 export interface SourceMap {
   version: 1
   pages: DocParserSource['pages']
   words: DocParserSource['words']
-  nodes: Record<string, { text?: string; spans?: number[][]; regions?: number[][] }>
+  nodes: Record<string, { text?: string; spans?: number[][]; regions?: number[][]; rot?: number }>
 }
 
 export type DocParserBlock =
@@ -177,11 +181,14 @@ export function mergeContinuedTables(blocks: DocParserBlock[]): DocParserBlock[]
       const cap = (n.caption ?? '').trim()
       const a = tableNumber(cur.caption), b2 = tableNumber(cap)
       const explicit = !!cap && CONTINUED_CAPTION.test(cap) && (!a || !b2 || a === b2)
+      // 表题印在表下方（Cureus 等）：跨页的表，表题跟着后半张。前半张没有表题、后半张没有自己的表头时是同一张表
+      const captionBelow = !!cap && !explicit && !(cur.caption ?? '').trim() && !(n.header_rows ?? 0) && (cur.header_rows ?? 0) > 0
       if (
         cur.page == null || n.page == null || !(n.page === cur.page + 1 || (explicit && n.page === cur.page)) ||
         width(n.rows) !== width(cur.rows) || width(n.rows) === 0 ||
-        (cap && !explicit) || (held.length > 0 && !explicit)
+        (cap && !explicit && !captionBelow) || (held.length > 0 && !explicit)
       ) break
+      if (captionBelow) cur = { ...cur, caption: cap }
       const head = cur.rows.slice(0, Math.max(cur.header_rows ?? 0, 1)).map(norm)
       let skip = 0
       while (skip < n.rows.length && skip < head.length && norm(n.rows[skip]!) === head[skip]) skip++
@@ -193,6 +200,7 @@ export function mergeContinuedTables(blocks: DocParserBlock[]): DocParserBlock[]
       const src = cur.src || n.src ? {
         regions: [...(cur.src?.regions ?? []), ...(n.src?.regions ?? [])],
         cells: [...(cur.src?.cells ?? []), ...(n.src?.cells ?? []).filter(([r]) => r >= skip).map(([r, c, sp]) => [r + offset, c, sp] as [number, number, number[][]])],
+        ...((cur.src?.rot ?? n.src?.rot) ? { rot: cur.src?.rot ?? n.src?.rot } : {}),
       } : undefined
       const cellMarks = [...(cur.cell_marks ?? []), ...(n.cell_marks ?? []).filter(([r]) => r >= skip).map(([r, c, m]) => [r + offset, c, m] as [number, number, DocParserMark[]])]
       cur = { ...cur, rows: [...cur.rows, ...n.rows.slice(skip)], page: n.page, ...(spans.length ? { spans } : {}), ...(src ? { src } : {}), ...(cellMarks.length ? { cell_marks: cellMarks } : {}) }
@@ -339,11 +347,12 @@ export function docParserToDoc(r: DocParseResult, baseName: string): { doc: PMNo
   const srcOf = new Map<PMNode, PendingSourceMap['blocks'][number]>()
   const keep = (node: PMNode, src: DocParserSrc | undefined, raw?: string) => {
     if (!src?.regions?.length) return node
-    if (raw === undefined) { srcOf.set(node, { index: -1, regions: src.regions, ...(src.cells?.length ? { cells: src.cells } : {}) }); return node }
+    const rot = src.rot ? { rot: src.rot } : {}
+    if (raw === undefined) { srcOf.set(node, { index: -1, regions: src.regions, ...(src.cells?.length ? { cells: src.cells } : {}), ...rot }); return node }
     const lead = raw.length - raw.trimStart().length
     const text = raw.trim()
     const spans = (src.spans ?? []).map(([s, e, w]) => [s! - lead, Math.min(e! - lead, text.length), w!]).filter(([s, e]) => s! >= 0 && s! < e!)
-    srcOf.set(node, { index: -1, text, regions: src.regions, ...(spans.length ? { spans } : {}) })
+    srcOf.set(node, { index: -1, text, regions: src.regions, ...(spans.length ? { spans } : {}), ...rot })
     return node
   }
   const assets: ImportedAsset[] = []
@@ -469,10 +478,11 @@ export function bindSourceMap(doc: PMNode, pending: PendingSourceMap): SourceMap
     const id = node.attrs.id as string | undefined
     if (!id) continue
     if (b.text !== undefined) {
-      nodes[id] = node.textContent === b.text ? { text: b.text, regions: b.regions, ...(b.spans ? { spans: b.spans } : {}) } : { regions: b.regions }
+      const rot = b.rot ? { rot: b.rot } : {}
+      nodes[id] = node.textContent === b.text ? { text: b.text, regions: b.regions, ...(b.spans ? { spans: b.spans } : {}), ...rot } : { regions: b.regions, ...rot }
       continue
     }
-    nodes[id] = { regions: b.regions }
+    nodes[id] = { regions: b.regions, ...(b.rot ? { rot: b.rot } : {}) }
     if (node.type.name === 'table' && b.cells) {
       const grid = readGrid(node)
       for (const [r, c, spans] of b.cells) {

@@ -27,4 +27,24 @@ describe('审稿批注锚点', () => {
     expect(comment).toBeDefined()
     expect(locate(docs.get(row.id), comment!).text).toBe(sentence)
   })
+
+  it('表格单元格的意见锚到那一格，不标整张表（同样的文字在别的格也有时按行列定位）', async () => {
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const md = `# 结果\n\nTable 1. Baseline\n\n| Variable | Group A (n=200) | Group B (n=50) |\n|---|---|---|\n| Male, n (%) | 50 (40%) | 50 (40%) |\n| Age | 62 | 61 |\n`
+    const row = docs.create({ owner: 'u1', title: '表格锚点', markdown: md })
+    const claims = new ClaimService(docs, {} as PubMedClient)
+    await claims.runFourStageDeepReview(row.id, { mode: 'heurion_deep', anchorComments: true })
+    const doc = docs.get(row.id)
+    // 50/200 = 25% ≠ 40%：只有 A 组那一格报错（B 组 50/50 = 100% 也不对，但 count ≤ n，同样报）
+    const pct = store.listComments(row.id).filter(c => c.snippet === '50 (40%)')
+    expect(pct.length).toBeGreaterThan(0)
+    for (const c of pct) {
+      const a = locate(doc, c)
+      expect(a.text).toBe('50 (40%)')
+      expect(a.node_ids).toHaveLength(1)
+    }
+    // 两条意见落在不同的格（同样的文字，按行列区分）
+    expect(new Set(pct.map(c => c.node_id)).size).toBe(pct.length)
+  })
 })

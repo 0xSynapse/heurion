@@ -4,12 +4,19 @@
  */
 export type Complete = (system: string, user: string) => Promise<string>
 
+/** 带图的一次调用：图片按顺序放在文字前面（base64，PNG / JPEG） */
+export interface InlineImage { mime: 'image/png' | 'image/jpeg'; data: string }
+export type VisionComplete = (system: string, user: string, images: InlineImage[]) => Promise<string>
+
 /** 一次成功调用的用量（上游 Messages 响应里的 usage；缺字段时为 0） */
 export interface CompleteUsage { model: string; input_tokens: number; output_tokens: number; ms: number }
 
-export function makeComplete(opts: { upstream: string; apiKey: string; model: string; timeoutMs?: number; onUsage?: (u: CompleteUsage) => void }): Complete | null {
-  if (!opts.apiKey) return null
-  return async (system: string, user: string): Promise<string> => {
+interface CompleteOptions { upstream: string; apiKey: string; model: string; timeoutMs?: number; onUsage?: (u: CompleteUsage) => void }
+
+type Content = string | Array<{ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }>
+
+function caller(opts: CompleteOptions): (system: string, content: Content) => Promise<string> {
+  return async (system, content) => {
     let last: Error | null = null
     for (let attempt = 0; attempt < 3; attempt++) {
       let noRetry = false
@@ -18,7 +25,7 @@ export function makeComplete(opts: { upstream: string; apiKey: string; model: st
         const res = await fetch(opts.upstream.replace(/\/$/, '') + '/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': opts.apiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({ model: opts.model, max_tokens: 8000, temperature: 0, system, messages: [{ role: 'user', content: user }] }),
+          body: JSON.stringify({ model: opts.model, max_tokens: 8000, temperature: 0, system, messages: [{ role: 'user', content }] }),
           signal: AbortSignal.timeout(opts.timeoutMs ?? 180_000),
         })
         if (!res.ok) {
@@ -38,4 +45,26 @@ export function makeComplete(opts: { upstream: string; apiKey: string; model: st
     }
     throw last!
   }
+}
+
+export function makeComplete(opts: CompleteOptions): Complete | null {
+  if (!opts.apiKey) return null
+  const call = caller(opts)
+  return (system, user) => call(system, user)
+}
+
+/** 支持图像输入的模型（按 id；部署可以用 REVIEW_VISION_MODEL 另指定） */
+export const VISION_MODELS = new Set(['deepseek-flash'])
+
+/**
+ * 带图调用（审稿时按页面图像核对表格，docs/design/PDF_ORIGINAL_VIEW.md §12.3）。
+ * 发往与文字调用相同的上游；模型不支持图像时返回 null，调用方退回不用图的做法。
+ */
+export function makeVisionComplete(opts: CompleteOptions): VisionComplete | null {
+  if (!opts.apiKey || !VISION_MODELS.has(opts.model)) return null
+  const call = caller(opts)
+  return (system, user, images) => call(system, [
+    ...images.map(img => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: img.mime, data: img.data } })),
+    { type: 'text' as const, text: user },
+  ])
 }

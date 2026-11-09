@@ -378,7 +378,9 @@ def _absorbed_caption(texts: list[tuple[str, list[float]]]) -> str:
 def _clean(text: str) -> str:
     # 软连字符（U+00AD，有的期刊排版写进了文字里）不显示，也不是文字
     # 行末的软连字符后面跟着换行留下的空白（「indepen­ dently」）：连同空白一起去掉，词接回去
-    t = re.sub(r"\s+", " ", re.sub(r"­\s*", "", (text or "").replace("\u0000", ""))).strip()
+    # 控制字符（有的期刊用 \x07 之类的字形排缩进或项目符号）不是文字
+    t = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text or "")
+    t = re.sub(r"\s+", " ", re.sub(r"­\s*", "", t)).strip()
     # 中文行末换行被拼成了空格（「是在传统 的正畸治疗中」）：两边都是汉字或中文标点时去掉
     return re.sub(r"(?<=[㐀-鿿　-〿，；：（）])\s+(?=[㐀-鿿　-〿，；：（）])", "", t)
 
@@ -531,6 +533,191 @@ def _split_merged_rows(t: dict[str, Any], pg: Any) -> None:
         t.pop("cell_marks", None)
 
 
+def _text_lines(chars: list[Any]) -> list[dict[str, Any]]:
+    """字按基线分行（上下标归到所在行），每行给出左右上下、文字与字间最大空隙（相对字号）。"""
+    rows: list[list[Any]] = []
+    for c in sorted((c for c in chars if not c.script), key=lambda c: (c.base, c.l)):
+        if rows and abs(c.base - rows[-1][0].base) <= max(c.size, 1.0) * 0.5:
+            rows[-1].append(c)
+        else:
+            rows.append([c])
+    # 上下标归到纵向最近的一行
+    for c in chars:
+        if c.script and rows:
+            mid = (c.t + c.b) / 2
+            min(rows, key=lambda row: abs(mid - (row[0].t + row[0].b) / 2)).append(c)
+    out = []
+    for row in rows:
+        row.sort(key=lambda c: c.l)
+        size = statistics.median(c.size for c in row) or 1.0
+        gap = max([(b.l - a.r) / size for a, b in zip(row, row[1:])] or [0.0])
+        text = "".join((" " if c.space_before and i else "") + c.c for i, c in enumerate(row))
+        out.append({"l": row[0].l, "r": max(c.r for c in row), "t": min(c.t for c in row), "b": max(c.b for c in row),
+                    "text": text, "gap": gap})
+    return out
+
+
+def _trim_table_footnotes(t: dict[str, Any], pg: Any) -> tuple[str, list[float]] | None:
+    """表格模型把表下的脚注（「*Score range …」「BMQ, Beliefs about …」）并进了最后几行：按文字层切出来。
+
+    从表框底部往上，连续的「正文行」（横跨大半个表宽、字之间没有栏间空隙）算脚注；切点以下的字从各格去掉，
+    变空的末行删掉。返回切出的脚注文字与位置（没切时返回 None）。
+    """
+    box = t.get("_box")
+    if not box or not t.get("_cells"):
+        return None
+    lines = _text_lines(pdf_text.chars_in(pg, box, pad=1.0))
+    width = box[2] - box[0]
+    if len(lines) < 3 or width <= 0:
+        return None
+    # 第一行横跨大半个表宽、没有栏间空隙、以字母为主（不是挤在一起的一串区间值），且它以下各行都没有栏间空隙（脚注末行可以很短）
+    def wordy(s: str) -> bool:
+        s = s.replace(" ", "")
+        return bool(s) and sum(ch.isalpha() for ch in s) >= len(s) * 0.6
+
+    k = next((i for i, ln in enumerate(lines) if i >= 2 and ln["r"] - ln["l"] >= width * 0.5 and ln["gap"] < 1.5
+              and wordy(ln["text"]) and all(x["gap"] < 1.5 for x in lines[i:])), None)
+    if k is None:
+        return None
+    cut = lines[k]["t"] - 0.5
+    rows: list[list[str]] = t["rows"]
+    header_bottom = max([b[3] for r, _c, b in t["_cells"] if r < max(t.get("header_rows", 0), 1)] or [box[1]])
+    if cut <= header_bottom:
+        return None
+    changed = False
+    cells = []
+    norm = lambda s: re.sub(r"[‐-―−]", "-", s)  # noqa: E731
+    for r, c, b in t["_cells"]:
+        if b[3] <= cut:
+            cells.append([r, c, b])
+            continue
+        changed = True
+        nb = [b[0], b[1], b[2], cut]
+        # 保留模型给的格内文字，只去掉切点以上找不到的词（格框常压到邻列，不能按框重新取字）
+        above = norm(" ".join(ln["text"] for ln in _text_lines(pdf_text.chars_in(pg, nb, pad=1.0)))) if b[1] < cut else ""
+        rows[r][c] = " ".join(w for w in rows[r][c].split() if norm(w) in above)
+        if rows[r][c]:
+            cells.append([r, c, nb])
+    if not changed:
+        return None
+    t["_cells"] = cells
+    t["cell_marks"] = [m for m in t.get("cell_marks", []) if any(m[0] == r and m[1] == c and b[3] <= cut for r, c, b in cells)]
+    while len(rows) > 1 and not any(x.strip() for x in rows[-1]):
+        rows.pop()
+    t["spans"] = [s for s in t.get("spans", []) if s[0] + s[2] <= len(rows)]
+    for key in ("spans", "cell_marks"):
+        if not t.get(key):
+            t.pop(key, None)
+    t["_box"] = [box[0], box[1], box[2], cut, *box[4:]]
+    foot = lines[k:]
+    return _clean(" ".join(ln["text"] for ln in foot)), [min(x["l"] for x in foot), min(x["t"] for x in foot),
+                                                           max(x["r"] for x in foot), max(x["b"] for x in foot), *box[4:]]
+
+
+# 只有一个区间的文字：「(0.5 to 0.7)」「(1.2–3.4)」「(0.5, 0.7)†」（「(n = 49)」不算）
+_CI_ONLY = re.compile(r"[(\[]\s*[−\-–]?\d[\d.,]*\s*(?:to|[-–−,])\s*[−\-–]?\d[\d.,]*\s*[)\]]\s*[†‡*§¶]?")
+
+
+def _malformed(cell: str) -> bool:
+    """一格里像是放错了东西：括号不配对、括号后面又跟着一个数（两条记录挤进一格），或只有一个区间（数值落到了别的格）。"""
+    s = cell.strip()
+    return bool(s) and (not _balanced(s) or bool(re.search(r"\)\s*[†‡*§¶]?\s+[−\-–]?\(?\d", s)) or bool(_CI_ONLY.fullmatch(s)))
+
+
+def _rebuild_rows(t: dict[str, Any], pg: Any) -> bool:
+    """表格模型的行边界整体错位（上一行的区间和下一行的数值挤在一格）：列沿用模型的，表体各行按文字层重排。
+
+    第 1 列（标签列）的每行字开一个新行，除非它是上一个标签折行的续行：同一基线上别的列只有括号开头的区间
+    （「数值一行、区间一行」的排法），或它以小写开头、上一行以逗号 / 连词结尾。
+    只处理「数值一行、区间一行」的表；重排后各格文字合起来与原来一致、且放错东西的格至少减半时才采用。返回是否采用。
+    """
+    rows: list[list[str]] = t["rows"]
+    h = t.get("header_rows", 0) or 0
+    nc = len(rows[0]) if rows else 0
+    if len(rows) - h < 3 or nc < 3 or not t.get("_box"):
+        return False
+    body_cells = [(r, c, b) for r, c, b in t["_cells"] if r >= h]
+    span_cells = {(r + dr, c + dc) for r, c, rs, cs in t.get("spans", []) for dr in range(rs) for dc in range(cs) if rs > 1 or cs > 1}
+    before = sum(_malformed(x) for row in rows[h:] for x in row)
+    if not before or not body_cells:
+        return False
+    # 各列的横向范围（不算合并单元格）
+    cols: list[list[float] | None] = [None] * nc
+    for r, c, b in body_cells:
+        if (r, c) in span_cells or c >= nc:
+            continue
+        cur = cols[c]
+        cols[c] = [b[0], b[2]] if cur is None else [min(cur[0], b[0]), max(cur[1], b[2])]
+    if any(x is None for x in cols):
+        return False
+    top = min(b[1] for _r, _c, b in body_cells)
+    bottom = t["_box"][3]
+    chars = [ch for ch in pdf_text.chars_in(pg, [t["_box"][0], top, t["_box"][2], bottom], pad=1.0) if (ch.t + ch.b) / 2 >= top - 1]
+
+    def col_of(ch: Any) -> int:
+        x = (ch.l + ch.r) / 2
+        inside = [i for i, cr in enumerate(cols) if cr[0] - 1 <= x <= cr[1] + 1]  # type: ignore[index]
+        pool = inside or range(nc)
+        return min(pool, key=lambda i: abs(x - (cols[i][0] + cols[i][1]) / 2))  # type: ignore[index]
+
+    by_col: list[list[Any]] = [[] for _ in range(nc)]
+    for ch in chars:
+        by_col[col_of(ch)].append(ch)
+    lines = [_text_lines(cs) for cs in by_col]
+    labels = lines[0]
+    if len(labels) < 2:
+        return False
+    others = [ln for c in range(1, nc) for ln in lines[c]]
+    # 只处理「数值一行、区间一行」的排法（这种表模型最容易把行切错）；别的表里标签折行难以和分组标题区分，不重排
+    if sum(1 for o in others if _CI_ONLY.fullmatch(o["text"].strip())) < 3:
+        return False
+    starts: list[float] = []
+    prev = ""
+    for ln in labels:
+        size = max(ln["b"] - ln["t"], 1.0)
+        same = [o for o in others if abs((o["t"] + o["b"]) / 2 - (ln["t"] + ln["b"]) / 2) <= size * 0.5]
+        cont = bool(starts) and (
+            (same and all(_CI_ONLY.fullmatch(o["text"].strip()) for o in same))
+            or (not same and (ln["text"][:1].islower() or bool(re.search(r"(?:[,\-–/(]|\band|\bor|\bof|\bwith|\bin)$", prev.strip()))))
+        )
+        if not cont:
+            starts.append(ln["t"] - 0.5)
+        prev = ln["text"]
+    starts[0] = min(starts[0], top - 1)
+    bands = [(s, starts[i + 1] if i + 1 < len(starts) else bottom + 1) for i, s in enumerate(starts)]
+    body = [["" for _ in range(nc)] for _ in bands]
+    boxes: list[list[Any]] = []
+    for c in range(nc):
+        for ln in lines[c]:
+            mid = (ln["t"] + ln["b"]) / 2
+            i = next((k for k, (a, b) in enumerate(bands) if a <= mid < b), len(bands) - 1 if mid >= bands[-1][0] else 0)
+            body[i][c] = f"{body[i][c]} {ln['text']}".strip()
+    for i, (a, b) in enumerate(bands):
+        for c in range(nc):
+            if body[i][c]:
+                boxes.append([h + i, c, [cols[c][0], a, cols[c][1], b]])  # type: ignore[index]
+    # 文字守恒（去空白、统一短横后比较字符多重集，差异不超过 2%），且放错东西的格变少
+    from collections import Counter
+
+    norm = lambda s: Counter(re.sub(r"[\s‐-―−-]", "", s))  # noqa: E731
+    old, new = norm("".join(x for row in rows[h:] for x in row)), norm("".join(x for row in body for x in row))
+    if sum(((old - new) + (new - old)).values()) > max(3, 0.02 * sum(old.values())):
+        return False
+    if sum(_malformed(x) for row in body for x in row) > before // 2 or before < 2:
+        return False
+    # 重排只修行边界，行数不该大变；少了三成以上多半是标签列有跨行合并（一个标签管几行），按标签分行不成立
+    if len(body) < (len(rows) - h) * 0.7:
+        return False
+    t["rows"] = rows[:h] + body
+    t["_cells"] = [[r, c, b] for r, c, b in t["_cells"] if r < h] + boxes
+    t["spans"] = [s for s in t.get("spans", []) if s[0] + s[2] <= h]
+    t["cell_marks"] = [m for m in t.get("cell_marks", []) if m[0] < h]
+    for key in ("spans", "cell_marks"):
+        if not t.get(key):
+            t.pop(key, None)
+    return True
+
+
 def _unrotate_table(t: dict[str, Any], angle: int) -> None:
     """竖排印刷的表（整张表转了 90°）：表格模型按页面方向读出来是转置的，转回原来的行列。
 
@@ -548,6 +735,147 @@ def _unrotate_table(t: dict[str, Any], angle: int) -> None:
     t["header_rows"] = 1
     t.pop("spans", None)
     t["_unrotated"] = True  # 单元格位置还是转回前的行列，原版映射不给单元格对齐
+
+
+def rotated_regions(blocks: list[dict[str, Any]], pages: dict[int, Any]) -> list[tuple[int, int, list[float]]]:
+    """横竖混排页上的竖排表（同一页正文横排、表格竖排印刷）：[(页, 竖排字的角度, 区域[左, 上, 右, 下])]。
+
+    区域从表格框出发，把相邻（25 点以内）的同向竖排字逐步并进来，表题、表注一般也在里面。
+    整页都是竖排的页已由 normalize_rotation 转正，不在这里。只处理未设 /Rotate 的页。
+    """
+    out: list[tuple[int, int, list[float]]] = []
+    for t in blocks:
+        if t["type"] != "table" or not t.get("_box") or not t.get("page"):
+            continue
+        pg = pages.get(t["page"])
+        if pg is None or getattr(pg, "rot", 0):
+            continue
+        a = pdf_text.rotation(pdf_text.chars_in(pg, t["_box"]))
+        if not a:
+            continue
+        vert = [c for c in pg.chars if abs(c.angle - a) <= 5]
+        l, tp, r, b = t["_box"][:4]
+        for _ in range(20):
+            near = [c for c in vert if l - 25 <= (c.l + c.r) / 2 <= r + 25 and tp - 25 <= (c.t + c.b) / 2 <= b + 25]
+            nb = (min([l, *(c.l for c in near)]), min([tp, *(c.t for c in near)]),
+                  max([r, *(c.r for c in near)]), max([b, *(c.b for c in near)]))
+            if nb == (l, tp, r, b):
+                break
+            l, tp, r, b = nb
+        region = [max(0.0, l - 2), max(0.0, tp - 2), min(pg.width, r + 2), min(pg.height, b + 2)]
+        if any(p == t["page"] and region[0] < rg[2] and rg[0] < region[2] and region[1] < rg[3] and rg[1] < region[3]
+               for p, _a, rg in out):
+            continue
+        out.append((t["page"], a, region))
+    return out
+
+
+def crop_rotated(pdf_bytes: bytes, page_no: int, region: list[float], add: int) -> bytes:
+    """把一页上的一片区域裁成单页 PDF 并加旋转（顺时针 add 度），让竖排的表在版面与表格模型看来是正的。"""
+    import pypdfium2 as pdfium
+
+    src = pdfium.PdfDocument(io.BytesIO(pdf_bytes))
+    new = pdfium.PdfDocument.new()
+    try:
+        sp = src[page_no - 1]
+        ph = sp.get_size()[1]
+        x0, y0 = sp.get_cropbox()[:2]  # 页面框原点不一定是 (0, 0)
+        sp.close()
+        new.import_pages(src, [page_no - 1])
+        page = new[0]
+        l, t, r, b = region
+        box = (x0 + l, y0 + ph - b, x0 + r, y0 + ph - t)
+        page.set_mediabox(*box)
+        page.set_cropbox(*box)
+        page.set_rotation(add)
+        page.close()
+        buf = io.BytesIO()
+        new.save(buf)
+        return buf.getvalue()
+    finally:
+        new.close()
+        src.close()
+
+
+def _uncrop_box(box: list[float], region: list[float], add: int) -> list[float]:
+    """裁出页（转过 add 度）上的框 → 原页显示坐标。"""
+    L, T, R, B = region
+
+    def back(x: float, y: float) -> tuple[float, float]:
+        # 顺时针 90°：原 (x, y) → (B - y, x - L)；逆时针（270）：原 (x, y) → (y - T, R - x)
+        return (L + y, B - x) if add == 90 else (R - y, T + x)
+
+    (x1, y1), (x2, y2) = back(box[0], box[1]), back(box[2], box[3])
+    return [round(min(x1, x2), 1), round(min(y1, y2), 1), round(max(x1, x2), 1), round(max(y1, y2), 1)]
+
+
+def _uncrop_block(b: dict[str, Any], page_no: int, region: list[float], add: int, pw: float, ph: float) -> None:
+    """裁出页上解析出的块：页码、各处位置换回原页。"""
+    b["page"] = page_no
+    if b.get("_box"):
+        b["_box"] = [*_uncrop_box(b["_box"], region, add), pw, ph]
+    for key in ("_regions", "_cap_regions"):
+        if b.get(key):
+            b[key] = [[page_no, *_uncrop_box(rg[1:5], region, add)] for rg in b[key]]
+    if b.get("_cells"):
+        b["_cells"] = [[r, c, _uncrop_box(box, region, add)] for r, c, box in b["_cells"]]
+    b["_crop"] = True  # 已按裁出页的文字层修过字，全文修字时跳过（原页上的字是竖排的，按行对不上）
+    b["_rot"] = add  # 原版映射里记下：这块的字在原页上要顺时针转 add 度才是正的（平台按区域裁图给模型看时转正）
+
+
+def reparse_rotated_tables(blocks: list[dict[str, Any]], pdf_bytes: bytes,
+                           convert: Any) -> list[dict[str, Any]]:
+    """横竖混排页上的竖排表：区域裁出来转正后重新解析，替换原页上这片区域里的块（表、表题、表注）。
+
+    按页面方向识别的竖排表行列全乱（不只是转置：几十个格挤成几列），整页转正又会让同页的正文变成竖排。
+    convert(单页 PDF, 原页码) 返回 DoclingDocument 或 None；任何一步失败都保留原来的块。
+    """
+    pages_needed = sorted({b["page"] for b in blocks if b["type"] == "table" and b.get("page")})
+    if not pages_needed:
+        return blocks
+    try:
+        pages = pdf_text.extract(pdf_bytes, pages_needed)
+        import pypdfium2 as pdfium
+
+        pdf = pdfium.PdfDocument(io.BytesIO(pdf_bytes))
+        try:
+            for no, pg in pages.items():
+                pg.rot = pdf[no - 1].get_rotation() % 360  # type: ignore[attr-defined]
+        finally:
+            pdf.close()
+    except Exception:
+        return blocks
+    for page_no, angle, region in rotated_regions(blocks, pages):
+        add = 90 if angle == 270 else 270
+        try:
+            crop = crop_rotated(pdf_bytes, page_no, region, add)
+            doc = convert(crop, page_no)
+            if doc is None:
+                continue
+            new, _w = document_to_blocks(doc, post=False)
+            if not any(b["type"] == "table" for b in new):
+                continue
+            _enrich_from_text_layer(new, crop)
+        except Exception:  # 重新解析失败不影响整篇
+            continue
+        pg = pages[page_no]
+        for b in new:
+            _uncrop_block(b, page_no, region, add, pg.width, pg.height)
+
+        def inside(b: dict[str, Any]) -> bool:
+            x = b.get("_box")
+            if b.get("page") != page_no or not x:
+                return False
+            cx, cy = (x[0] + x[2]) / 2, (x[1] + x[3]) / 2
+            return region[0] <= cx <= region[2] and region[1] <= cy <= region[3]
+
+        idx = [i for i, b in enumerate(blocks) if inside(b)]
+        if not idx:
+            continue
+        pos = idx[0]
+        blocks = [b for i, b in enumerate(blocks) if i not in set(idx)]
+        blocks[pos:pos] = new
+    return blocks
 
 
 def _heading_level(text: str, docling_level: int, has_title: bool) -> int:
@@ -600,7 +928,14 @@ def document_to_blocks(doc: Any, post: bool = True) -> tuple[list[dict[str, Any]
             except Exception:
                 continue
             if t:
-                blocks.append({"type": "paragraph", "text": t, "page": _page_of(it)})
+                fb: dict[str, Any] = {"type": "paragraph", "text": t, "page": _page_of(it), "_note": True}
+                try:
+                    box = _box(ref.resolve(doc), doc)
+                except Exception:
+                    box = None
+                if box:
+                    fb["_box"] = box
+                blocks.append(fb)
 
     items = list(doc.iterate_items())
     has_title = any(isinstance(it, TitleItem) for it, _ in items)
@@ -848,6 +1183,8 @@ def _source_map(blocks: list[dict[str, Any]], pages: dict[int, Any]) -> dict[str
         if not regions:
             continue
         src: dict[str, Any] = {"regions": regions}
+        if b.get("_rot"):
+            src["rot"] = b["_rot"]
         if b["type"] in ("paragraph", "heading") and b.get("text"):
             src["spans"] = spans(b["text"], chars_of(regions))
         elif b["type"] == "table" and b.get("_cells") and b.get("page"):
@@ -870,8 +1207,8 @@ def _enrich_from_text_layer(blocks: list[dict[str, Any]], pdf_bytes: bytes | Non
     """
     if not pdf_bytes:
         return {}
-    todo = [b for b in blocks if b["type"] in ("paragraph", "heading") and b.get("_box") and b.get("page")]
-    tables = [b for b in blocks if b["type"] == "table" and b.get("_cells") and b.get("page")]
+    todo = [b for b in blocks if b["type"] in ("paragraph", "heading") and b.get("_box") and b.get("page") and not b.get("_crop")]
+    tables = [b for b in blocks if b["type"] == "table" and b.get("_cells") and b.get("page") and not b.get("_crop")]
     try:
         pages = pdf_text.extract(pdf_bytes)  # 全部页：原版映射要每页的词
     except Exception:
@@ -889,6 +1226,21 @@ def _enrich_from_text_layer(blocks: list[dict[str, Any]], pdf_bytes: bytes | Non
         pg = pages.get(t["page"])
         if pg is None or not pg.chars:
             continue
+        if t.get("_box") and not pdf_text.rotation(pdf_text.chars_in(pg, t["_box"])):
+            try:
+                note = _trim_table_footnotes(t, pg)
+            except Exception:  # 修表失败不影响整篇解析
+                note = None
+            # 切出的脚注放到表后（表后已有同样文字的段落时不重复）
+            if note:
+                i = next(i for i, b in enumerate(blocks) if b is t)
+                after = " ".join(b.get("text", "") for b in blocks[i + 1:i + 4])
+                if note[0][:40] not in after:
+                    blocks.insert(i + 1, {"type": "paragraph", "text": note[0], "page": t["page"], "_box": note[1], "_note": True})
+            try:
+                _rebuild_rows(t, pg)
+            except Exception:
+                pass
         cell_marks = []
         for r, c, box in t["_cells"]:
             text = t["rows"][r][c]
@@ -941,7 +1293,7 @@ def _enrich_from_text_layer(blocks: list[dict[str, Any]], pdf_bytes: bytes | Non
     # 图表题注：Docling 的题注条目没经过上面的修补，同样补字（题注是纯文字属性，不给格式）
     for b in blocks:
         regs = b.get("_cap_regions")
-        if b["type"] in ("figure", "table") and regs and b.get("caption"):
+        if b["type"] in ("figure", "table") and regs and b.get("caption") and not b.get("_crop"):
             cs = [c for p, *box in regs if pages.get(int(p)) for c in pdf_text.chars_in(pages[int(p)], box)]
             e = pdf_text.enrich(b["caption"], cs, scripts=False, vocab=vocab)
             if e.matched >= 0.8:
@@ -999,7 +1351,8 @@ def _promote_bold_lines(blocks: list[dict[str, Any]]) -> None:
     for i, b in enumerate(blocks[:-1]):
         t = b.get("text", "")
         nxt = blocks[i + 1]
-        if (b["type"] != "paragraph" or not b.get("_allbold") or b.get("_caption") or b.get("_demoted") or not t or len(t.split()) > 10
+        if (b["type"] != "paragraph" or not b.get("_allbold") or b.get("_caption") or b.get("_demoted") or b.get("_note")
+                or not t or len(t.split()) > 10
                 or _FURNITURE_HEADING.match(re.sub(r"\s+", "", t.lower()))
                 or len(t) > 90 or re.search(r"[.;,]$", t) or _FIG_LABEL.match(t) or _TABLE_LABEL.match(t) or _RUNIN_SKIP.match(t.rstrip(" :："))
                 or not re.search(r"[^\W\d_]{2,}", t) or b.get("page") == 1):
@@ -1080,7 +1433,7 @@ def _split_runin_headings(blocks: list[dict[str, Any]]) -> None:
         b = blocks[i]
         bp = b.get("_bold", 0)
         i += 1
-        if b["type"] != "paragraph" or not bp or b.get("_caption"):
+        if b["type"] != "paragraph" or not bp or b.get("_caption") or b.get("_note"):  # 表注里的粗体缩写不是小标题
             continue
         name0 = b["text"][:bp].strip().rstrip(" .:：。-–—").strip()
         if _ABSTRACT_SUB.match(name0) and ((intro is None and b.get("page") == 1) or (intro is not None and i - 1 < intro)):
@@ -1314,7 +1667,8 @@ def _pick_title(blocks: list[dict[str, Any]], pages: dict[int, Any] | None = Non
     body = _body_font_size(blocks)
     best, best_size, best_score = None, 0.0, 0.0
     for i, b in enumerate(blocks):
-        if b.get("page") != 1 or b["type"] not in ("heading", "paragraph") or not b.get("_box") or b.get("_caption"):
+        if (b.get("page") != 1 or b["type"] not in ("heading", "paragraph") or not b.get("_box") or b.get("_caption")
+                or b.get("_note")):
             continue
         t = b["text"]
         # 至少 4 个词，且不是字母拆开的期刊标志（「W J C C」）
@@ -1643,6 +1997,16 @@ class Parser:
                     del res
                 finally:
                     _release_memory()
+
+            def convert_crop(crop: bytes, _page: int) -> Any:
+                res = self._converter.convert(DocumentStream(name="crop.pdf", stream=io.BytesIO(crop)), raises_on_error=False)
+                return res.document if res.status in (ConversionStatus.SUCCESS, ConversionStatus.PARTIAL_SUCCESS) else None
+
+            # 横竖混排页上的竖排表：裁出来转正后重新解析
+            try:
+                blocks = reparse_rotated_tables(blocks, pdf_bytes, convert_crop)
+            finally:
+                _release_memory()
         extra: dict[str, Any] = {}
         blocks = _postprocess(blocks, pdf_bytes, extra)
         _mark_rotation(extra, rotated)
