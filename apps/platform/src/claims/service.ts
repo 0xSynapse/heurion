@@ -148,12 +148,40 @@ export function sectionReviewPrompt(title: string, role: SectionRole, scratchpad
     '不要报告：写作与表达建议、研究设计或方法学的主观评价、局限性、建议补充的分析、缺少的引用、你无法在本稿中找到对照原文的怀疑。\n' +
     '也不要报告「没有报告 / 没有给出 / 缺少某项结果、方法或数据」：你只看到本章节和摘要，缺的内容多半写在方法、结果或表格的别处。' +
     '只报告两处原文直接矛盾、或原文自身算不上的问题。\n' +
+    '以下不算错误，不要报告：\n' +
+    '- 用原始人数或样本构成去验算加权、校正、标化后的估计（加权患病率、校正 OR / HR、年龄标化率本来就与粗算不同）；\n' +
+    '- 四舍五入造成的小差异（几个百分比相加为 99.9% 或 100.1%、末位相差 1）；\n' +
+    '- 两处数字属于不同的结局、人群、时间点、模型或分析集（如粗 OR 与校正 OR、ITT 与 PP、总人群与亚组）——比较前先确认说的是同一件事。\n' +
     '每条必须给出两段逐字摘录：sentence = 有问题的原句（从提供的正文或表格中逐字复制，不要改写）；' +
     'evidence = 证明它有问题的另一处原文（逐字复制的矛盾句子、表格行或统计量，可以有 1–3 段）。拿不出 evidence 的不要报。\n' +
     '严重程度：critical = 主要结局、主要样本量或关键数字错误；major = 次要结局的数值矛盾、方法与结果不一致、结论夸大；minor = 次要变量的小算术错误。\n' +
     '宁缺毋滥：没有把握就不报；一个章节通常 0–2 条，最多 3 条。没有问题返回 []。\n' +
     '严格输出 JSON 数组：[{"node_id":"块ID","sentence":"原句","evidence":["证据原文"],"category":"internal_inconsistency|method_result_mismatch|spin_or_guideline","severity":"critical|major|minor","reason":"中文：哪两处对不上、具体数字","suggestion":"中文修改建议"}]。'
   )
+}
+
+/** 声明性章节：伦理、基金、致谢、数据可得性、作者贡献、利益冲突、缩写、补充材料等，没有可核对的结果数据，不送审 */
+const BOILERPLATE_SECTION = /\b(?:ethic|funding|financial support|acknowledg|data (?:availab|sharing)|availability of data|code availab|author(?:s'?|ship)? contribution|contributions|conflicts? of interest|competing interest|disclosure|declaration|consent for publication|patient consent|informed consent statement|abbreviation|supplementary|publisher'?s note|trial registration|registration|patient and public involvement)\b|^\s*references?\s*$|^\s*参考文献\s*$|伦理|基金|资助|致谢|数据(?:可用|可得|共享)|作者贡献|利益冲突|缩略|补充材料/i
+
+interface ReviewSection { title: string; role: SectionRole; tier: VerificationTier; blocks: Array<{ nodeId: string; text: string; tier: VerificationTier }> }
+
+/**
+ * 深度审稿的章节调度（产品模式）：不审声明性章节；相邻的同角色小章节（每节不到 1500 字）合成一次调用，凑到约 3000 字为止。
+ * 评测稿件里三成的调用审的是不到 600 字的章节，每次都要带上系统提示与对照材料。摘要章节单独审，不与别的合并。
+ */
+export function scheduleReviewSections<T extends ReviewSection>(sections: T[], abstractSection?: T): T[] {
+  const size = (s: ReviewSection) => s.blocks.reduce((n, b) => n + b.text.length, 0)
+  const out: T[] = []
+  for (const s of sections) {
+    if (s !== abstractSection && BOILERPLATE_SECTION.test(s.title)) continue
+    const last = out[out.length - 1]
+    if (last && s !== abstractSection && last !== abstractSection && last.role === s.role && size(s) < 1500 && size(last) < 3000) {
+      out[out.length - 1] = { ...last, title: `${last.title} / ${s.title}`, tier: last.tier === 'high' || s.tier === 'high' ? 'high' : last.tier, blocks: [...last.blocks, ...s.blocks] }
+      continue
+    }
+    out.push(s)
+  }
+  return out
 }
 
 export function untrustedTablesWarning(skipped: string[]): string {
@@ -1034,13 +1062,23 @@ export class ClaimService {
       blocks: [] as Array<{ nodeId: string; text: string; tier: VerificationTier }>,
     }
     const budgetCounts: Record<VerificationTier, number> = { light: 0, medium: 0, high: 0 }
+    const productMode = opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
+    // 产品模式：小节标题看不出角色时（「Insulin resistance」「Statistics and reproducibility」），沿用上一级章节的角色——
+    // 评测稿件里七成的标题是这种小节，原来都算「其他」，结果小节拿不到表格、统计方法小节认不出
+    const roleStack: Array<{ level: number; role: SectionRole }> = []
 
     doc.forEach(node => {
       if (isPendingDeletion(node)) return
       if (node.type.name === 'heading') {
         if (curSection.blocks.length > 0) sections.push(curSection)
         const hText = headingText(node)
-        const role = classifySectionRole(hText)
+        let role = classifySectionRole(hText)
+        if (productMode) {
+          const level = Number(node.attrs.level ?? 2)
+          while (roleStack.length && roleStack[roleStack.length - 1]!.level >= level) roleStack.pop()
+          if (role === 'other' && roleStack.length) role = roleStack[roleStack.length - 1]!.role
+          if (role !== 'other') roleStack.push({ level, role })
+        }
         curSection = { title: hText, role, tier: role === 'methods' || role === 'results' ? 'high' : 'medium', blocks: [] }
         return
       }
@@ -1209,10 +1247,17 @@ export class ClaimService {
           `声明统计指标=${scratchpad.declared_summary_metrics.join(', ') || '未声明'}；` +
           `声明检验方法=${scratchpad.declared_tests.join(', ') || '未声明'}。`
 
-        const targetSections = sections.filter(sec => !(sec.tier === 'light' && sec.role === 'intro'))
+        let targetSections = sections.filter(sec => !(sec.tier === 'light' && sec.role === 'intro'))
         // 摘要：标题含 Abstract / 摘要 的章节，没有就取第一个章节（标题前的摘要段落）；最多 4000 字
         const abstractSection = sections.find(s => /abstract|摘要|summary/i.test(s.title)) ?? sections[0]
         const abstractText = abstractSection ? abstractSection.blocks.map(b => b.text).join('\n').slice(0, 4000) : ''
+        // 统计方法段落（方法里标题或正文写着统计分析的段落）：结果与讨论章节审稿时作对照（方法与结果不一致是常见错误）
+        const statsText = verifyEvidence
+          ? sections.filter(s => s.role === 'methods').flatMap(s => s.blocks
+            .filter(b => /statistic|统计/i.test(s.title) || /statistical analys|were analy[sz]ed (?:using|with)|\b(?:SPSS|Stata|SAS)\b|R software|统计学?分析|统计软件/i.test(b.text))
+            .map(b => b.text)).join('\n').slice(0, 3000)
+          : ''
+        if (verifyEvidence) targetSections = scheduleReviewSections(targetSections, abstractSection)
         const secResults = await Promise.all(
           targetSections.map(async sec => {
             const secText = sec.blocks.map(b => `[${b.nodeId}] ${b.text}`).join('\n')
@@ -1224,14 +1269,21 @@ export class ClaimService {
               `2) 统计方法（Mean±SD vs SEM vs Median[IQR]）、对照组设计与结果报告是否矛盾；\n` +
               `3) 跨章节终点指标（如 pCR、OS、HR）或缩略语定义是否前后不一致。\n` +
               `若无客观问题请返回 []；若有问题请严格输出 JSON 数组：[{"node_id":"块ID","sentence":"原文原句","category":"internal_inconsistency|method_result_mismatch|spin_or_guideline","severity":"critical|major|minor","reason":"中文具体原因","suggestion":"中文修改建议"}]。`
-            // 产品模式：各章节附上摘要作对照（摘要与正文数值不一致是常见错误，按章节审时看不到摘要就拿不出证据）
-            const abstractRef = verifyEvidence && abstractText && sec !== abstractSection
+            // 产品模式：结果与讨论章节附上摘要与统计方法段落作对照（摘要与正文、方法与结果不一致是常见错误，
+            // 按章节审时看不到就拿不出证据）；方法、引言等章节不附，省输入
+            const crossCheck = verifyEvidence && (sec.role === 'results' || sec.role === 'discussion')
+            const abstractRef = crossCheck && abstractText && sec !== abstractSection
               ? `\n\n【摘要（供对照；与本章节不一致时可逐字引用作为 evidence）】：\n${abstractText}`
               : ''
-            const userPayload =
-              sec.role === 'results' || sec.role === 'methods'
-                ? `【当前章节正文】：\n${secText}\n\n【关联表格信息】：\n${tableMarkdown}${abstractRef}`
-                : `【当前章节正文】：\n${secText}${abstractRef}`
+            const statsRef = crossCheck && statsText
+              ? `\n\n【统计方法（供对照；与本章节报告的方法不一致时可逐字引用作为 evidence）】：\n${statsText}`
+              : ''
+            // 表格：结果章节都给；方法章节原来都给，产品模式下只给统计分析小节（小节角色沿用上级后，方法小节很多，逐个附全部表格太费）
+            const withTables = sec.role === 'results' ||
+              (sec.role === 'methods' && (!verifyEvidence || /statistic|统计/i.test(`${sec.title}\n${secText.slice(0, 600)}`)))
+            const userPayload = withTables
+              ? `【当前章节正文】：\n${secText}\n\n【关联表格信息】：\n${tableMarkdown}${abstractRef}${statsRef}`
+              : `【当前章节正文】：\n${secText}${abstractRef}${statsRef}`
             const raw = await opts.complete!(sys, userPayload)
             return { raw, sec }
           }),

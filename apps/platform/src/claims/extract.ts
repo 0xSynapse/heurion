@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { Node as PMNode } from 'prosemirror-model'
 import { readGrid } from '../model/table-grid.ts'
+import { findCiProblems } from './ci-check.ts'
 
 /**
  * 论断抽取与四阶段深度临床审查提取器（M1 verify_claims & Stage 1-3 Deep Review）：
@@ -410,6 +411,7 @@ const NON_EXEMPTABLE_SUBTYPES = new Set([
   'table1_cited_percentage_mismatch',
   'fraction_percentage_arithmetic_error',
   'ci_bounds_inverted_or_missing_decimal',
+  'ci_estimate_outside_interval',
   'uncleaned_revision_merge_artifact',
   'cross_section_endpoint_denominator_switch',
   'cross_section_hr_mismatch',
@@ -739,9 +741,11 @@ export function auditInternalConsistency(
         const withoutCi = sent.replace(/\b95%\s*CI\b/gi, '')
         const pctMatches = withoutCi.match(/\b\d+(?:\.\d+)?[%％]/g) ?? []
         const tableNums = resolvedTables[0].numbers
+        // 表格里的百分比常不写 % 号（「Sex (% male) 60」「54 (66.7)」），去掉 % 后在表里也算对上
         const missingPcts = pctMatches.filter(p => {
           const norm = p.replace(/％/g, '%')
-          return !tableNums.includes(norm) && !tableNums.includes(norm.replace(/\.0%$/, '%'))
+          const bare = norm.replace(/%$/, '')
+          return ![norm, norm.replace(/\.0%$/, '%'), bare, bare.replace(/\.0$/, '')].some(x => tableNums.includes(x))
         })
         if (pctMatches.length > 0 && missingPcts.length === pctMatches.length) {
           pushIfNotExempt({
@@ -822,6 +826,22 @@ export function auditInternalConsistency(
             : `请核对 95% 置信区间的下界与上界数值。`,
         })
       }
+    }
+
+    // 4b. 点估计落在置信区间（或中位数落在 IQR）之外（上下界倒挂由上一条报）
+    for (const p of findCiProblems(text).filter(p => p.kind === 'outside')) {
+      pushIfNotExempt({
+        node_id: nodeId,
+        sentence: text,
+        snippet: p.text,
+        ...(sectionTitle ? { section_title: sectionTitle } : {}),
+        section_role: sectionRole,
+        category: 'internal_inconsistency',
+        subtype: 'ci_estimate_outside_interval',
+        severity: 'major',
+        reason: `点估计 ${p.estimate} 不在其区间 ${p.low}–${p.high} 之内：「${p.text}」。估计值或区间上下界可能有误。`,
+        suggestion: '请核对该估计值及其置信区间（或四分位数间距）的上下界。',
+      })
     }
 
     // 5. 修订痕迹残留粘连检测（如 60.062.3% 或 HR = 0.824 0.841）
@@ -943,6 +963,24 @@ export function auditInternalConsistency(
       return m && m[1] ? Number(m[1]) : null
     })
 
+    // 每个「n (%)」格子反推的分母（n × 100 / %）：同一列别的行、或同一行别的列有格子反推出同一个分母时，
+    // 说明这组百分比用的是另一个统一的分母（亚组人数、按行合计），不是算错——只有孤立的才报
+    const parsedPct = tbl.rows.map(row => row.map(c => {
+      const m = /^(\d+)\s*\(\s*(\d+(?:\.\d+)?)\s*[%％]?\s*\)$/.exec((c ?? '').trim())
+      return m && Number(m[2]) > 0 ? { n: (Number(m[1]) * 100) / Number(m[2]), pct: Number(m[2]) } : null
+    }))
+    const sharedDenominator = (r: number, c: number, colN: number): boolean => {
+      const n = parsedPct[r]?.[c]?.n
+      if (n == null) return false
+      const near = (x: { n: number } | null | undefined) => x != null && Math.abs(x.n - n) <= Math.max(1, n * 0.02)
+      // 亚组：同一列别的行反推出同一个更小的分母
+      if (n < colN && parsedPct.some((row, rr) => rr !== r && near(row[c]))) return true
+      // 按行算的百分比：这一行的百分比加起来约 100，且各格反推的分母一致
+      const rowCells = (parsedPct[r] ?? []).filter((x): x is { n: number; pct: number } => x != null)
+      const rowSum = rowCells.reduce((s, x) => s + x.pct, 0)
+      return rowCells.length >= 2 && Math.abs(rowSum - 100) <= 1.5 && rowCells.every(x => near(x))
+    }
+
     for (const [rowIdx, row] of tbl.rows.entries()) {
       const rowLabel = row[0] ?? ''
       const gridRow = tbl.grid_rows?.[rowIdx + 1]
@@ -952,6 +990,26 @@ export function auditInternalConsistency(
         const colHeader = tbl.headers[colIdx] ?? `Col ${colIdx}`
         const colN = colNs[colIdx] ?? null
         const at = gridRow != null ? { cell: [gridRow, colIdx] as [number, number] } : {}
+
+        // 单元格里的「估计值 (下界–上界)」：表头或行名写了 CI / IQR / 95% 时按区间判断
+        const ciContext = /\bCI\b|IQR|95\s*%|confidence|置信区间|四分位/i.test(`${colHeader} ${rowLabel} ${tbl.headers.join(' ')}`)
+        for (const p of findCiProblems(cell, ciContext)) {
+          pushIfNotExempt({
+            node_id: tbl.node_id,
+            sentence: `${rowLabel} [${colHeader}]: ${cell}`,
+            snippet: cell,
+            ...at,
+            ...(tbl.section_title ? { section_title: tbl.section_title } : {}),
+            section_role: 'results',
+            category: 'internal_inconsistency',
+            subtype: p.kind === 'outside' ? 'ci_estimate_outside_interval' : 'ci_bounds_inverted_or_missing_decimal',
+            severity: 'major',
+            reason: p.kind === 'outside'
+              ? `表格（${tbl.caption || tbl.node_id}）行「${rowLabel}」列「${colHeader}」：点估计 ${p.estimate} 不在区间 ${p.low}–${p.high} 之内（「${p.text}」）。`
+              : `表格（${tbl.caption || tbl.node_id}）行「${rowLabel}」列「${colHeader}」：区间下界 ${p.low} 大于上界 ${p.high}（「${p.text}」）。`,
+            suggestion: '请核对该单元格的估计值与区间上下界。',
+          })
+        }
 
         // 检测 `00 (0.0%)` 双零排版笔误
         if (/^00\s*\(/.test(cell)) {
@@ -979,7 +1037,7 @@ export function auditInternalConsistency(
             const hasPctSign = Boolean(cellMatch[3])
             // 仅当行标签不含 IQR/range/median 且 count <= colN 时按频数百分比验算
             const isMedianIqrRow = /\b(?:median|IQR|range|均值|中位数)\b/i.test(rowLabel)
-            if (!isMedianIqrRow && count <= colN) {
+            if (!isMedianIqrRow && count <= colN && !sharedDenominator(rowIdx, colIdx, colN)) {
               const expectedPct = (count / colN) * 100
               const pctDiff = Math.abs(expectedPct - repPct)
               // 只报算不对的：格子里不写「%」是常见写法（行名或表头已注明「n (%)」），单独漏标百分号不报——

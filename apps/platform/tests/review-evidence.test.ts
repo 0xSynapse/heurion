@@ -131,6 +131,27 @@ describe('模型审稿意见的过滤', () => {
     expect(llm).toEqual(['均值不应配 IQR'])
   })
 
+  it('章节调度：声明性章节不审；小节沿用上级角色（结果小节拿到表格）；相邻小节合并；摘要与统计方法只附给结果与讨论', async () => {
+    const md = `# 稿件\n\n## Abstract\n\nWe enrolled 412 patients.\n\n## Methods\n\n### Participants\n\nAdults were eligible.\n\n### Statistical analysis\n\nGroups were compared with t tests.\n\n## Results\n\n### Insulin resistance\n\nEGP fell by 10%.\n\n### Body weight\n\nWeight fell by 2 kg.\n\nTable 1. Baseline\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n## Discussion\n\nMetformin helped.\n\n## Funding\n\nNone.\n\n## Author contributions\n\nAll authors.\n`
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const row = docs.create({ owner: 'u', title: '稿件', markdown: md })
+    const calls: Array<[string, string]> = []
+    await new ClaimService(docs, {} as PubMedClient).runFourStageDeepReview(row.id, {
+      mode: 'heurion_evolved', owner: 'u', complete: async (sys, user) => { if (sys !== VERIFY_SYSTEM) calls.push([sys, user]); return '[]' },
+    })
+    const titleOf = (sys: string) => /「(.+?)」/.exec(sys)![1]
+    const titles = calls.map(([s]) => titleOf(s))
+    // Funding、Author contributions 不审；两个方法小节、两个结果小节各合成一次
+    expect(titles).toEqual(['Abstract', 'Participants / Statistical analysis', 'Insulin resistance / Body weight', 'Discussion'])
+    const payload = (t: string) => calls.find(([s]) => titleOf(s) === t)![1]
+    expect(payload('Insulin resistance / Body weight')).toContain('【关联表格信息】')
+    expect(payload('Insulin resistance / Body weight')).toContain('【摘要')
+    expect(payload('Insulin resistance / Body weight')).toContain('Groups were compared with t tests.')
+    expect(payload('Discussion')).toContain('【统计方法')
+    expect(payload('Participants / Statistical analysis')).not.toContain('【摘要')
+  })
+
   it('提示词要求逐字引用原句与证据、不报主观意见', async () => {
     const prompts: string[] = []
     await run(sys => { prompts.push(sys); return [] })
