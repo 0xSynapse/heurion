@@ -36,8 +36,8 @@ def _pdf() -> bytes:
     c.translate(300, 100)
     c.rotate(90)
     c.setFont("Helvetica", 9)
-    for k in range(6):
-        c.drawString(0, -k * 14, f"Row {k} value 1.{k}{k} (0.{k}-2.{k}) p = 0.0{k}")
+    for k in range(24):
+        c.drawString(0, -k * 14, f"Row {k} value 1.{k % 10}{k % 10} (0.{k % 10}-2.{k % 10}) p = 0.0{k % 10}")
     c.restoreState()
     c.showPage()
     # 第 3 页：页面属性设成横向（/Rotate 90），字在显示方向上是正的
@@ -141,6 +141,52 @@ def test_source_map_aligns_block_text_to_pdf_words() -> None:
     assert [words[w][5] for _, _, w in b["src"]["spans"]][:3] == ["Eligibility.", "This", "study"]
     s, e, w = b["src"]["spans"][1]
     assert b["text"][s:e] == "This" and b["src"]["regions"][0][0] == 1
+
+
+def test_rotated_pages_are_normalized() -> None:
+    from src.parser import normalize_rotation
+
+    fixed, rot = normalize_rotation(PDF)
+    assert rot == {2: 90}
+    assert T.rotation(T.extract(fixed, {2})[2].chars) == 0
+    assert normalize_rotation(fixed)[1] == {}  # 已经转正的不再转
+
+
+def test_compound_hyphen_restored_only_for_real_compounds() -> None:
+    spec = [(c, 10 + k * 5, False) for k, c in enumerate("well")] + [("­", 30, False)]
+    spec += [(c, 10 + k * 5, k == 0) for k, c in enumerate("trained")]
+    cs = _chars(spec)
+    assert T.enrich("welltrained staff", cs, vocab={"well", "trained", "staff"}).text.startswith("well-trained")
+    assert T.enrich("welltrained staff", cs, vocab={"staff"}).text.startswith("welltrained")
+    assert T.enrich("welltrained staff", cs, vocab={"well-trained"}).text.startswith("well-trained")
+
+
+def _cell_chars(lines: list[tuple[str, float, float]]) -> list[Char]:
+    """合成单元格里的字：(文字, 左边位置, 基线)；每字宽 4、字号 8。"""
+    out: list[Char] = []
+    for text, x, base in lines:
+        for k, ch in enumerate(text):
+            if ch == " ":
+                continue
+            out.append(Char(ch, x + k * 4, base - 7, x + k * 4 + 4, base + 1, False, False, 8.0, base,
+                            space_before=k > 0 and text[k - 1] == " ", newline_before=k == 0))
+    return out
+
+
+def test_merged_table_rows_split_by_label_lines() -> None:
+    from src.parser import _split_merged_rows
+
+    pg = T.Page(1, 600, 800, _cell_chars([("Male", 10, 110), ("Female", 10, 122), ("12 (3.0)", 60, 110), ("15 (4.1)", 60, 122)]))
+    t = {"rows": [["Sex", "n (%)"], ["Male Female", "12 (3.0) 15 (4.1)"]], "header_rows": 1,
+         "_cells": [[0, 0, [5, 80, 55, 95]], [0, 1, [55, 80, 120, 95]], [1, 0, [5, 100, 55, 125]], [1, 1, [55, 100, 120, 125]]]}
+    _split_merged_rows(t, pg)
+    assert t["rows"] == [["Sex", "n (%)"], ["Male", "12 (3.0)"], ["Female", "15 (4.1)"]]
+    # 「数值一行、区间一行」不拆
+    pg2 = T.Page(1, 600, 800, _cell_chars([("Waist", 10, 110), ("circumference", 10, 122), ("1.05", 80, 110), ("(0.67, 1.66)", 80, 122)]))
+    t2 = {"rows": [["Item", "OR"], ["Waist circumference", "1.05 (0.67, 1.66)"]], "header_rows": 1,
+          "_cells": [[1, 0, [5, 100, 75, 125]], [1, 1, [75, 100, 140, 125]]]}
+    _split_merged_rows(t2, pg2)
+    assert len(t2["rows"]) == 2
 
 
 def test_table_cells_keep_spaces_around_superscripts() -> None:

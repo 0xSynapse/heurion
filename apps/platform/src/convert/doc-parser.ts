@@ -17,7 +17,11 @@ export type DocParserMark = [number, number, string]
  */
 export interface DocParserSrc { regions: number[][]; spans?: number[][]; cells?: Array<[number, number, number[][]]> }
 /** 各页尺寸与全文的词：[页, 左, 上, 右, 下, 文字]（PDF 点，左上原点、显示方向） */
-export interface DocParserSource { pages: Array<{ w: number; h: number }>; words: Array<[number, number, number, number, number, string]> }
+export interface DocParserSource {
+  /** rot：解析时为转正竖排页额外加的旋转（顺时针度数）；坐标按转正后的页面 */
+  pages: Array<{ w: number; h: number; rot?: number }>
+  words: Array<[number, number, number, number, number, string]>
+}
 
 /** 导入后、块 id 分配前的原版映射：按文档顶层块的位置记 */
 export interface PendingSourceMap {
@@ -38,7 +42,8 @@ export type DocParserBlock =
   | { type: 'paragraph'; text: string; page?: number | null; marks?: DocParserMark[]; src?: DocParserSrc }
   | { type: 'list'; ordered: boolean; start?: number; items: string[]; page?: number | null; src?: DocParserSrc }
   /** spans：合并单元格 [起始行, 起始列, 跨行数, 跨列数]，文字只在起始格，被覆盖的格为空 */
-  | { type: 'table'; rows: string[][]; header_rows?: number; caption?: string; page?: number | null; spans?: number[][]; src?: DocParserSrc }
+  /** cell_marks：单元格里的上下标 / 斜体 [行, 列, marks]（marks 按该格原文的下标） */
+  | { type: 'table'; rows: string[][]; header_rows?: number; caption?: string; page?: number | null; spans?: number[][]; src?: DocParserSrc; cell_marks?: Array<[number, number, DocParserMark[]]> }
   | { type: 'figure'; mime?: string; data: string; caption?: string; page?: number | null; src?: DocParserSrc }
   | { type: 'formula'; latex: string; text?: string; page?: number | null }
 
@@ -189,7 +194,8 @@ export function mergeContinuedTables(blocks: DocParserBlock[]): DocParserBlock[]
         regions: [...(cur.src?.regions ?? []), ...(n.src?.regions ?? [])],
         cells: [...(cur.src?.cells ?? []), ...(n.src?.cells ?? []).filter(([r]) => r >= skip).map(([r, c, sp]) => [r + offset, c, sp] as [number, number, number[][]])],
       } : undefined
-      cur = { ...cur, rows: [...cur.rows, ...n.rows.slice(skip)], page: n.page, ...(spans.length ? { spans } : {}), ...(src ? { src } : {}) }
+      const cellMarks = [...(cur.cell_marks ?? []), ...(n.cell_marks ?? []).filter(([r]) => r >= skip).map(([r, c, m]) => [r + offset, c, m] as [number, number, DocParserMark[]])]
+      cur = { ...cur, rows: [...cur.rows, ...n.rows.slice(skip)], page: n.page, ...(spans.length ? { spans } : {}), ...(src ? { src } : {}), ...(cellMarks.length ? { cell_marks: cellMarks } : {}) }
       after.push(...held)
       held = []
       i = j // 续表及其间的页面杂项都已并入
@@ -241,18 +247,24 @@ export function buildTable(
 
   const nonEmpty = rows.map((r, ri) => ri).filter(ri => rows[ri]!.some(Boolean))
   if (!nonEmpty.length) return null
+  // 有格式的格按 doc-parser 给的范围生成（richText 自己去首尾空白、平移范围）
+  const marks = new Map((b.cell_marks ?? []).map(([r, c, m]) => [`${r},${c}`, m]))
+  const cellPara = (ri: number, ci: number) => {
+    const m = marks.get(`${ri},${ci}`)
+    return m ? schema.node('paragraph', null, richText(b.rows[ri]?.[ci] ?? '', m)) : para(rows[ri]![ci]!)
+  }
   const plain = () => schema.node('table', null, nonEmpty.map(ri => schema.node('table_row', null,
-    rows[ri]!.map(t => schema.node('table_cell', { header: ri < header }, [para(t)])))))
+    rows[ri]!.map((_, ci) => schema.node('table_cell', { header: ri < header }, [cellPara(ri, ci)])))))
 
   const out: PMNode[] = []
   for (const ri of kept) {
     const cells: PMNode[] = []
     for (let ci = 0; ci < width; ci++) {
       const si = owner.get(`${ri},${ci}`)
-      if (si === undefined) { cells.push(schema.node('table_cell', { header: ri < header }, [para(rows[ri]![ci]!)])); continue }
+      if (si === undefined) { cells.push(schema.node('table_cell', { header: ri < header }, [cellPara(ri, ci)])); continue }
       const s = spans[si]!
       if (s.r !== ri || s.c !== ci) continue // 被合并区覆盖
-      cells.push(schema.node('table_cell', { header: ri < header, colspan: s.cs, rowspan: s.rs }, [para(rows[ri]![ci]!)]))
+      cells.push(schema.node('table_cell', { header: ri < header, colspan: s.cs, rowspan: s.rs }, [cellPara(ri, ci)]))
     }
     if (!cells.length) return plain()
     out.push(schema.node('table_row', null, cells))

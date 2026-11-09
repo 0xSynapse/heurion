@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { docParserToDoc, mergeContinuedTables, richText, scriptedText, type DocParserBlock } from '../src/convert/doc-parser.ts'
-import { sentenceTexts } from '../src/claims/extract.ts'
+import { cellPlainText, sentenceTexts } from '../src/claims/extract.ts'
 import { tidyPopplerBlocks } from '../src/convert/pdf-import.ts'
 import { schema } from '../src/model/schema.ts'
 
@@ -83,6 +83,30 @@ describe('poppler 兜底路径的版面整理', () => {
     ])
     expect(out.some(b => b.kind === 'paragraph' && b.text === 'Original Research')).toBe(true)
     expect(out.some(b => b.kind === 'paragraph' && b.text.endsWith('performed at primary care units by well trained staff.'))).toBe(true)
+  })
+})
+
+describe('表格单元格的上下标（cell_marks）', () => {
+  it('按格加格式；审稿读格子时上标两边加空格，脚注号不会粘进数值', () => {
+    const { doc } = docParserToDoc({
+      engine: 'docling', page_count: 1, warnings: [], scanned_pages: [],
+      blocks: [{ type: 'table', header_rows: 1, rows: [['Item', 'P'], ['Stroke', '0.751'], ['WBC', '10.2×109/L']], cell_marks: [[1, 1, [[4, 5, 'sup']]], [2, 1, [[7, 8, 'sup']]]] }],
+    }, 'x')
+    const sups: string[] = []
+    doc.descendants(n => { if (n.isText && n.marks.some(m => m.type.name === 'sup')) sups.push(n.text!); return true })
+    expect(sups).toEqual(['1', '9'])
+    const cells: string[] = []
+    doc.descendants(n => { if (n.type.name === 'table_cell') { cells.push(cellPlainText(n)); return false } return true })
+    expect(cells).toEqual(['Item', 'P', 'Stroke', '0.75 1', 'WBC', '10.2×10 9 /L'])
+  })
+
+  it('续表合并时格式的行号跟着下移', () => {
+    const head = ['Variable', 'Value']
+    const out = mergeContinuedTables([
+      { type: 'table', rows: [head, ['Age', '37']], header_rows: 1, caption: 'Table 1. Baseline.', page: 1 },
+      { type: 'table', rows: [head, ['BMI', '26 a']], header_rows: 1, caption: 'Table 1. Cont.', page: 2, cell_marks: [[1, 1, [[3, 4, 'sup']]]] },
+    ])
+    expect((out[0] as Extract<DocParserBlock, { type: 'table' }>).cell_marks).toEqual([[2, 1, [[3, 4, 'sup']]]])
   })
 })
 

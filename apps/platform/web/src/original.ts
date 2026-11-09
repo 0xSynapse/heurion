@@ -11,7 +11,8 @@ import type { SelectionAnchor } from './editor.ts'
 type Word = [number, number, number, number, number, string]
 interface SourceMap {
   version: 1
-  pages: Array<{ w: number; h: number }>
+  /** rot：解析时为转正竖排页额外加的旋转（顺时针度数），渲染时同样转，词坐标按转正后的页面 */
+  pages: Array<{ w: number; h: number; rot?: number }>
   words: Word[]
   nodes: Record<string, { text?: string; spans?: number[][]; regions?: number[][] }>
 }
@@ -40,7 +41,9 @@ export class OriginalView {
   readonly el: HTMLElement
   private map: SourceMap | null = null
   private pdf: any = null
-  private scale = 1
+  /** 每页的缩放：各页按可用宽度放满（横向页比竖向页宽，用同一个比例会超出视图） */
+  private scales: number[] = []
+  private scaleOf(page: number): number { return this.scales[page - 1] ?? this.scales[0] ?? 1 }
   private pagesEl: HTMLElement[] = []
   /** 词 → 它在哪些块的哪段文字里 */
   private wordOwners = new Map<number, Array<{ node: string; s: number; e: number }>>()
@@ -109,7 +112,7 @@ export class OriginalView {
     if (!r) return false
     const page = this.pagesEl[r[0]! - 1]
     if (!page) return false
-    this.el.scrollTo({ top: page.offsetTop + r[2]! * this.scale - 80, behavior: 'smooth' })
+    this.el.scrollTo({ top: page.offsetTop + r[2]! * this.scaleOf(r[0]!) - 80, behavior: 'smooth' })
     return true
   }
 
@@ -129,9 +132,9 @@ export class OriginalView {
   private async layout(): Promise<void> {
     const n = this.pdf.numPages as number
     const first = await this.pdf.getPage(1)
-    const vp0 = first.getViewport({ scale: 1 })
+    const vp0 = first.getViewport({ scale: 1, rotation: this.rotationOf(first, 1) })
     const avail = Math.min(MAX_WIDTH, (this.el.clientWidth || MAX_WIDTH) - 48)
-    this.scale = avail / vp0.width
+    this.scales = []
     this.el.innerHTML = ''
     if (!this.map) {
       const note = document.createElement('div')
@@ -142,8 +145,10 @@ export class OriginalView {
     this.pagesEl = []
     for (let i = 1; i <= n; i++) {
       const size = this.map?.pages[i - 1]
-      const w = (size?.w ?? vp0.width) * this.scale
-      const h = (size?.h ?? vp0.height) * this.scale
+      const s = avail / (size?.w ?? vp0.width)
+      this.scales.push(s)
+      const w = (size?.w ?? vp0.width) * s
+      const h = (size?.h ?? vp0.height) * s
       const page = document.createElement('div')
       page.className = 'orig-page'
       page.dataset.page = String(i)
@@ -167,10 +172,14 @@ export class OriginalView {
     for (const p of this.pagesEl) this.observer.observe(p)
   }
 
+  private rotationOf(page: any, no: number): number {
+    return ((page.rotate ?? 0) + (this.map?.pages[no - 1]?.rot ?? 0)) % 360
+  }
+
   private async renderPage(no: number, el: HTMLElement): Promise<void> {
     const page = await this.pdf.getPage(no)
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
-    const vp = page.getViewport({ scale: this.scale * dpr })
+    const vp = page.getViewport({ scale: this.scaleOf(no) * dpr, rotation: this.rotationOf(page, no) })
     const canvas = el.querySelector('canvas')!
     canvas.width = Math.floor(vp.width)
     canvas.height = Math.floor(vp.height)
@@ -182,11 +191,11 @@ export class OriginalView {
   /** 词层：透明文字盖在页面上，浏览器原生选区；没对上任何块的词（页眉、图里的字）也能选，但不能评论 */
   private renderWords(): void {
     if (!this.map) return
-    const s = this.scale
     const frags = this.pagesEl.map(() => document.createDocumentFragment())
     this.map.words.forEach(([p, l, t, r, b, text], i) => {
       const f = frags[p - 1]
       if (!f) return
+      const s = this.scaleOf(p)
       const span = document.createElement('span')
       span.dataset.w = String(i)
       span.textContent = `${text} `
@@ -201,10 +210,10 @@ export class OriginalView {
   private drawHighlights(): void {
     if (!this.map || !this.pagesEl.length) return
     for (const p of this.pagesEl) p.querySelector('.orig-hls')!.innerHTML = ''
-    const s = this.scale
     const add = (page: number, box: number[], thread: string, cls: string) => {
       const host = this.pagesEl[page - 1]?.querySelector('.orig-hls')
       if (!host) return
+      const s = this.scaleOf(page)
       const d = document.createElement('div')
       d.className = `orig-hl ${cls}`
       d.dataset.thread = thread

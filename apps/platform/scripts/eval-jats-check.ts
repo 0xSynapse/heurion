@@ -78,7 +78,7 @@ const wordSeq = (s: string) => ` ${words(s).join(' ')} `
  * 文末声明类标题（作者贡献、基金、数据可用性、利益冲突等）：原文多放在脚注组 / notes 里（不比对的部分），
  * PDF 里是正常的小节标题，不算多余标题
  */
-const BACK_MATTER = /^(?:authors?(?: s)? contributions?|contributions|funding(?: information| statement)?|financial support|data(?: and code)? availability(?: statement)?|code availability|availability of data and materials|competing interests?|conflicts? of interests?|declaration(?:s| of interests?)?|ethics(?: approval and consent to participate| statement| declarations)?|consent for publication|additional information|publisher(?: s)? note|supplementary (?:material|information|data)|abbreviations|generative ai statement|author details|study limitations?|reporting summary|institutional review board statement|informed consent statement|disclaimer publisher(?: s)? note|nonstandard abbreviations and acronyms)$/
+const BACK_MATTER = /^(?:authors?(?: s)? contributions?|contributions|funding(?: information| statement)?|financial support|data(?: and code)? availability(?: statement)?|code availability|availability of data and materials|competing interests?|conflicts? of interests?|declaration(?:s| of interests?)?|ethics(?: approval and consent to participate| statement| declarations)?|consent for publication|additional information|publisher(?: s)? note|supplementary (?:material|information|data)|abbreviations|generative ai statement|author details|study limitations?|reporting summary|institutional review board statement|informed consent statement|disclaimer publisher(?: s)? note|nonstandard abbreviations and acronyms|authors? affiliations|authors and affiliations|ethic(?:s|al) approval|grant disclosures|supplementary files|disclosures?|declaration of conflicting (?:of )?interests.*|competing interests.*|authors relationships and activities)$/
 const hasAncestor = (n: El, names: string[]) => { for (let p = n.parentNode as El | null; p; p = p.parentNode as El | null) if (names.includes(p.nodeName)) return true; return false }
 const depthOf = (n: El) => { let d = 0; for (let p = n as El | null; p; p = p.parentNode as El | null) if (p.nodeName === 'sec') d++; return d }
 
@@ -90,6 +90,26 @@ function spacedText(n: El): string {
 }
 
 const remove = (els: El[]) => { for (const e of els) e.parentNode?.removeChild(e) }
+
+/**
+ * 展开的引用编号收回区间：JATS 把「[28–36]」写成 28, 29, …, 36（每个一个 xref），PDF 上只印首尾。
+ * 三个以上逐一递增的整数用逗号连着时只留首尾（正文里这样连写的通常就是引用）。
+ */
+export function collapseCiteRuns(s: string): string {
+  // 逗号两边都有空格（xref 元素边界插的），千分位数字（1,092,385）不会被当成编号
+  return s.replace(/(?<![\d.,])\d{1,3}(?:\s+,\s+\d{1,3}){2,}(?![\d.])/g, run => {
+    const parts = run.split(/\s+,\s+/)
+    const ns = parts.map(Number)
+    const out: string[] = []
+    for (let i = 0; i < ns.length;) {
+      let j = i
+      while (j + 1 < ns.length && ns[j + 1] === ns[j]! + 1) j++
+      out.push(j - i >= 2 ? `${parts[i]} – ${parts[j]}` : parts.slice(i, j + 1).join(' , '))
+      i = j + 1
+    }
+    return out.join(' , ')
+  })
+}
 
 /** 原文中「应当出现在转换结果里」的部分 */
 export interface SourceSnapshot {
@@ -130,6 +150,7 @@ export function sourceSnapshot(xml: string): SourceSnapshot {
     remove(each(article.getElementsByTagName(name)))
   }
   remove(each(article.getElementsByTagName('fn')).filter(f => f.parentNode?.nodeName === 'p'))
+
 
   const meta = each(article.getElementsByTagName('article-meta'))[0]
   const parts: string[] = []
@@ -193,7 +214,7 @@ export function sourceSnapshot(xml: string): SourceSnapshot {
     .filter(p => !nestedBlock.has(p) && !hasAncestor(p, ['table-wrap', 'fig', 'caption', 'list', 'abstract', 'trans-abstract', 'boxed-text', 'disp-quote', 'supplementary-material', 'ack', 'back']))
     .map(p => wordSeq(spacedText(p)))
     .filter(s => s.trim().split(' ').length >= 25)
-  return { text: parts.join(' '), refText, tables, headings, title: titleEl ? tokens(spacedText(titleEl)) : '', headingDepths, allTitles, figCaptions, paragraphs, formulas }
+  return { text: collapseCiteRuns(parts.join(' ')), refText, tables, headings, title: titleEl ? tokens(spacedText(titleEl)) : '', headingDepths, allTitles, figCaptions, paragraphs, formulas }
 }
 
 /** 文本块的文字，上下标两边插空格（与原文侧 spacedText 对 <sup>/<sub> 的处理一致：10⁹ 不算成 109） */

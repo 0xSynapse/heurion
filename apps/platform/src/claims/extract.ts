@@ -185,6 +185,21 @@ export function sentenceTexts(node: PMNode): string[] {
   return parts.flatMap(p => p.trim().split(/(?<=[.!?。！？；])\s+/)).filter(Boolean)
 }
 
+/**
+ * 单元格的纯文字（表格核查用）：上下标两边加空格，脚注角标、引用上标不会和数值粘成一个数
+ * （「12.3¹」读成「12.3 1」而不是「12.31」；「10⁹/L」读成「10 9 /L」，与导入前 Docling 的写法一致）。
+ */
+export function cellPlainText(cell: PMNode): string {
+  let s = ''
+  cell.descendants(n => {
+    if (n.isText) s += n.marks.some(m => m.type.name === 'sup' || m.type.name === 'sub') ? ` ${n.text} ` : n.text
+    else if (n.isBlock && s) s += ' '
+    else if (n.isLeaf) s += n.textContent
+    return true
+  })
+  return s.replace(/\s+/g, ' ').trim()
+}
+
 const hash = (s: string) => createHash('sha1').update(s).digest('hex').slice(0, 10)
 
 /** 句中含外部研究或外部对比词时，即便同时提到「本研究/表 1」也可能是半句缺引用，需保留给模型判断。 */
@@ -226,7 +241,7 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
       // 表头里的跨列合并（如「Drug (n = 79)」盖住 Pre / Post 两列）铺到每一列，使各列都能对上表头样本量
       const grid = readGrid(node)
       for (const cell of grid.cells) {
-        const cellText = cell.node.textContent.replace(/\s+/g, ' ').trim()
+        const cellText = cellPlainText(cell.node)
         for (const m of cellText.matchAll(/\b[nN]\s*[=＝]\s*(\d+)\b/g)) {
           const val = Number(m[1])
           if (val > 0) sampleSizes.add(val)
@@ -243,7 +258,7 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
           if (!cell) return ''
           const anchor = cell.top === r && cell.left === c
           const headerSpan = cell.top === r && cell.colspan > 1 && (r === 0 || cell.node.attrs.header === true)
-          return anchor || headerSpan ? cell.node.textContent.replace(/\s+/g, ' ').trim() : ''
+          return anchor || headerSpan ? cellPlainText(cell.node) : ''
         })
         if (rowCells.some(Boolean)) rows.push(rowCells)
       }

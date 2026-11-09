@@ -112,6 +112,50 @@ def build_converter(models_dir: Path, present: dict[str, bool]) -> Any:
 # —— PDF 文字层：判定扫描页、渲染整页图（pypdfium2，Docling 自带依赖） ——
 
 
+def normalize_rotation(pdf_bytes: bytes) -> tuple[bytes, dict[int, int]]:
+    """内容整页竖排印刷的页（横排大表常这样排）：给页面加旋转，让版面与表格模型看到正向的页面。
+
+    只改页面的 /Rotate，不动内容。返回新的 PDF 与各页额外加的旋转（顺时针度数）；没有这样的页时原样返回。
+    竖排表按页面方向识别时行列是转置的、几十个类别会挤进几列，转正后才能识别对。
+    """
+    try:
+        pages = pdf_text.extract(pdf_bytes)
+    except Exception:
+        return pdf_bytes, {}
+    extra: dict[int, int] = {}
+    for no, pg in pages.items():
+        letters = [c for c in pg.chars if c.c.isalnum()]
+        if len(letters) < 200:
+            continue
+        a = pdf_text.rotation(letters)
+        # 自下而上排的字（pdfium 角度 270）：页面顺时针转 90° 后变正
+        if a:
+            extra[no] = 90 if a == 270 else 270
+    if not extra:
+        return pdf_bytes, {}
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(io.BytesIO(pdf_bytes))
+    try:
+        for no, add in extra.items():
+            page = pdf[no - 1]
+            page.set_rotation((page.get_rotation() + add) % 360)
+            page.close()
+        buf = io.BytesIO()
+        pdf.save(buf)
+        return buf.getvalue(), extra
+    finally:
+        pdf.close()
+
+
+def _mark_rotation(extra: dict[str, Any], rotated: dict[int, int]) -> None:
+    """原版映射里记下各页额外加的旋转（rot，顺时针度数）：原版视图按原文件渲染时同样转，坐标才对得上。"""
+    pages = (extra.get("source") or {}).get("pages") or []
+    for no, add in rotated.items():
+        if 0 < no <= len(pages):
+            pages[no - 1]["rot"] = add
+
+
 def page_text_chars(pdf_bytes: bytes) -> list[int]:
     import pypdfium2 as pdfium
 
@@ -186,7 +230,8 @@ _FURNITURE_HEADING = re.compile(
     r"originalinvestigation|originalpaper|review|reviewarticle|briefreport|shortcommunication|editedby|reviewedby|"
     r"correspondence|correspondingauthors?|citation|copyright|keywords?|tocitethisarticle|checkforupdates|peerreview|"
     r"open|contentslistsavailableatsciencedirect|hhspublicaccess|authormanuscripts?|orcidi?ds?|articleinformation|articleinfo|"
-    r"affiliations?|footnotes)[:.]?$"
+    r"affiliations?|footnotes|correspondenceto|reviewingeditor|seniorandreviewingeditor|orcids?|authororcids|"
+    r"citethisarticleas|supportedby|processingtime|coretip|peerreviewmaterial)[:.]?$"
 )
 # 第一页上、论文正文开始前可以保留的标题（导读框、要点）
 _FRONT_KEEP = re.compile(
@@ -211,7 +256,9 @@ _TOP_SECTION = re.compile(
     r"credit authorship contribution statement|disclosures?(?: statement)?|sources? of funding|consent(?: for publication)?|"
     r"perspectives|research insights?|ethics approval.*|appendix.*|supplementary data|supporting information|"
     # 导读框（JAMA、Lancet、AHA 等期刊放在摘要旁边的要点框），与一级章节同级
-    r"what is new\??|what is known.*|what is relevant\??|what are the clinical implications\??|"
+    r"what is new\??|what is known.*|what is already known.*|what this study adds|how this study might affect.*|"
+    r"what is the key question\??|what are the new findings\??|how might this impact.*|"
+    r"what is relevant\??|what are the clinical implications\??|"
     r"clinical (?:and )?pathophysiological implications?|evidence before this study|added value of this study|"
     r"implications of all the available evidence|key points|key messages)$",
     re.I,
@@ -329,7 +376,9 @@ def _absorbed_caption(texts: list[tuple[str, list[float]]]) -> str:
 
 
 def _clean(text: str) -> str:
-    t = re.sub(r"\s+", " ", (text or "").replace("\u0000", "")).strip()
+    # 软连字符（U+00AD，有的期刊排版写进了文字里）不显示，也不是文字
+    # 行末的软连字符后面跟着换行留下的空白（「indepen­ dently」）：连同空白一起去掉，词接回去
+    t = re.sub(r"\s+", " ", re.sub(r"­\s*", "", (text or "").replace("\u0000", ""))).strip()
     # 中文行末换行被拼成了空格（「是在传统 的正畸治疗中」）：两边都是汉字或中文标点时去掉
     return re.sub(r"(?<=[㐀-鿿　-〿，；：（）])\s+(?=[㐀-鿿　-〿，；：（）])", "", t)
 
@@ -382,6 +431,7 @@ def _table_block(item: Any, doc: Any) -> dict[str, Any]:
     while h in header_rows:
         h += 1
     caption = _clean(item.caption_text(doc)) if hasattr(item, "caption_text") else ""
+    cap_regions = _caption_regions(item, doc)
     block: dict[str, Any] = {"type": "table", "rows": rows, "header_rows": h, "caption": caption, "page": _page_of(item)}
     if spans:
         block["spans"] = spans
@@ -389,7 +439,96 @@ def _table_block(item: Any, doc: Any) -> dict[str, Any]:
         block["_cells"] = cell_boxes
     if tb is not None:
         block["_box"] = tb
+    if cap_regions:
+        block["_cap_regions"] = cap_regions
     return block
+
+
+def _caption_regions(item: Any, doc: Any) -> list[list[float]]:
+    """图表题注条目的位置（按文字层修题注里的粘词用）。"""
+    out: list[list[float]] = []
+    for ref in getattr(item, "captions", None) or []:
+        try:
+            out += _all_regions(ref.resolve(doc), doc)
+        except Exception:
+            continue
+    return out
+
+
+def _balanced(s: str) -> bool:
+    return s.count("(") == s.count(")") and s.count("[") == s.count("]")
+
+
+def _split_merged_rows(t: dict[str, Any], pg: Any) -> None:
+    """表格模型把相邻几行并成一行（「Male Female」挤在一格，数值格里也各有两个数）：按文字层拆回去。
+
+    一行里每个非空格子都正好有 k（≥2）行字、各格同一行的基线对齐（差不到半个字高），且每行文字括号配对（不是一个值折了行）时，
+    把这一行拆成 k 行，各格的第 i 行字放进第 i 行。碰到合并单元格的行不拆。
+    """
+    rows: list[list[str]] = t["rows"]
+    boxes = {(r, c): box for r, c, box in t.get("_cells", [])}
+    span_rows = {r + d for r, _c, rs, _cs in t.get("spans", []) for d in range(rs)}
+    header = t.get("header_rows", 0) or 0
+    r = header
+    while r < len(rows):
+        cells = [(c, rows[r][c]) for c in range(len(rows[r])) if rows[r][c].strip()]
+        if len(cells) < 2 or r in span_rows or any((r, c) not in boxes for c, _ in cells):
+            r += 1
+            continue
+        # 取字范围：横向按各格，纵向从本行顶到下一行顶（模型给的格框常截掉本行最后一行字）
+        top = min(boxes[(r, c)][1] for c, _ in cells)
+        nxt = [b[1] for (rr, _c), b in boxes.items() if rr == r + 1]
+        bottom = min(nxt) - 0.5 if nxt else max(boxes[(r, c)][3] for c, _ in cells) + 1.0
+        if cells[0][0] != 0:
+            r += 1
+            continue
+        lines = {c: pdf_text.lines_of(pdf_text.chars_in(pg, [boxes[(r, c)][0], top, boxes[(r, c)][2], bottom], pad=0.5)) for c, _ in cells}
+        # 标签列：第 1 列；第 1 列只有一行（分组名，如「Age」）而第 2 列有几行时用第 2 列（「<80 years」「≥80 years」）
+        wordy = lambda v: all(re.search(r"[^\W\d_]{2,}", txt) for _b, txt in v)  # noqa: E731  标签是文字，不是数值
+        first = 0
+        if len(lines[0]) < 2 and 1 in lines and len(lines[1]) >= 2 and wordy(lines[1]):
+            first = 1
+        labels = lines[first]
+        k = len(labels)
+        if k < 2 or not wordy(labels):
+            r += 1
+            continue
+        # 每格的各行归到上方最近的标签行（一条记录可以占几行：数值一行、区间一行）
+        segs: dict[int, list[str]] = {}
+        for c, v in lines.items():
+            parts = ["" for _ in range(k)]
+            for base, txt in v:
+                i = max([j for j, (lb, _t) in enumerate(labels) if lb <= base + 2.0] or [0])
+                parts[i] = f"{parts[i]} {txt}".strip()
+            segs[c] = parts
+        # 只有一行字的格（分组名、只写一次的 P 值）不参与判断，放在第一个子行
+        others = [segs[c] for c, _ in cells if c != first and len(lines[c]) >= 2]
+        numeric = [p for p in others if all(re.search(r"\d", s) for s in p)]
+        # 只拆数据行：标签列有 k（≥2）个标签，其余多行的格一半以上在每个标签下都有带数字的值，且各段括号配对（不是一个值折了行）
+        # 「数值一行、区间一行」的排法：后面的段以括号开头，是上一个值的区间，不是另一条记录
+        ci_only = any(s.startswith(("(", "[")) for p in others for s in p[1:])
+        ok = (k >= 2 and len(others) >= 1 and len(numeric) >= max(1, (len(others) + 1) // 2)
+              and all(_balanced(s) for p in others for s in p) and not ci_only)
+        if not ok:
+            r += 1
+            continue
+        new_rows = [["" for _ in rows[r]] for _ in range(k)]
+        for c, parts in segs.items():
+            for i, s in enumerate(parts):
+                new_rows[i][c] = s
+        rows[r:r + 1] = new_rows
+        add = k - 1
+        # 后面各行的合并区、格式、单元格位置跟着下移；拆开的这一行不再有格内对齐与格式
+        t["spans"] = [[sr + add if sr > r else sr, sc, rs, cs] for sr, sc, rs, cs in t.get("spans", [])]
+        t["cell_marks"] = [[mr + add if mr > r else mr, mc, m] for mr, mc, m in t.get("cell_marks", []) if mr != r]
+        t["_cells"] = [[cr + add if cr > r else cr, cc, b] for cr, cc, b in t.get("_cells", []) if cr != r]
+        boxes = {(rr, cc): b for rr, cc, b in t["_cells"]}
+        span_rows = {sr + d for sr, _c, rs, _cs in t["spans"] for d in range(rs)}
+        r += k
+    if not t.get("spans"):
+        t.pop("spans", None)
+    if not t.get("cell_marks"):
+        t.pop("cell_marks", None)
 
 
 def _unrotate_table(t: dict[str, Any], angle: int) -> None:
@@ -558,7 +697,8 @@ def document_to_blocks(doc: Any, post: bool = True) -> tuple[list[dict[str, Any]
             if data is None:
                 warnings.append(f"第 {_page_of(item)} 页有一张图片未能提取")
                 continue
-            blocks.append({"type": "figure", "mime": "image/png", "data": data, "caption": caption, "page": _page_of(item), "_box": box})
+            blocks.append({"type": "figure", "mime": "image/png", "data": data, "caption": caption, "page": _page_of(item), "_box": box,
+                           "_cap_regions": _caption_regions(item, doc)})
             footnotes(item)
         elif isinstance(item, FormulaItem):
             latex = (item.text or "").strip()
@@ -631,6 +771,8 @@ def _postprocess(blocks: list[dict[str, Any]], pdf_bytes: bytes | None = None,
     _merge_panels(blocks)
     has_title = _pick_title(blocks, pages)
     _demote_headings(blocks)
+    _split_merged_headings(blocks)
+    _promote_bold_lines(blocks)
     _split_runin_headings(blocks)
     if has_title or any("_dl" in b for b in blocks):
         _assign_levels(blocks, has_title)
@@ -734,21 +876,38 @@ def _enrich_from_text_layer(blocks: list[dict[str, Any]], pdf_bytes: bytes | Non
         pages = pdf_text.extract(pdf_bytes)  # 全部页：原版映射要每页的词
     except Exception:
         return {}
-    # 表格单元格只修文字（行末被当成断词去掉的区间短横、丢掉的空格），不标上下标：单元格里没有格式通道，
-    # 去掉上标两边的空格会把「10 9 /L」拼成「109/L」
+    # 全文单独出现过的词（判断行末被去掉的连字符是不是复合词用）
+    vocab: set[str] = set()
+    for b in blocks:
+        for s in [b.get("text", ""), b.get("caption", "") or "", *(c for row in b.get("rows", []) for c in row)]:
+            # 只收独立的整词：「pre-existing」里的「pre」不算（否则「pre-\nsentation」会被当成复合词）
+            vocab.update(w.lower() for w in re.findall(r"(?<![\w\-‐–])[^\W\d_]+(?![\w\-‐–])", s))
+            # 行中出现的带连字符复合词（「pre-eclampsia」），行末断开时据此补回连字符
+            vocab.update(w.lower().replace("‐", "-") for w in re.findall(r"[^\W\d_]+[\-‐][^\W\d_]+", s))
+    # 表格单元格：同样补字、去掉上标两边的空格，上下标 / 斜体放进 cell_marks（[行, 列, marks]，平台按格加格式）
     for t in tables:
         pg = pages.get(t["page"])
         if pg is None or not pg.chars:
             continue
+        cell_marks = []
         for r, c, box in t["_cells"]:
             text = t["rows"][r][c]
-            e = pdf_text.enrich(text, pdf_text.chars_in(pg, box, pad=1.0), scripts=False)
+            e = pdf_text.enrich(text, pdf_text.chars_in(pg, box, pad=1.0), vocab=vocab)
             if e.matched >= 0.8:
                 t["rows"][r][c] = e.text
-        if t.get("_box"):
-            angle = pdf_text.rotation(pdf_text.chars_in(pg, t["_box"]))
-            if angle:
-                _unrotate_table(t, angle)
+                if e.marks:
+                    cell_marks.append([r, c, e.marks])
+        if cell_marks:
+            t["cell_marks"] = cell_marks
+        angle = pdf_text.rotation(pdf_text.chars_in(pg, t["_box"])) if t.get("_box") else 0
+        if angle:
+            _unrotate_table(t, angle)
+            t.pop("cell_marks", None)  # 行列转过了，格式的位置对不上
+        else:
+            try:
+                _split_merged_rows(t, pg)
+            except Exception:  # 修表失败不影响整篇解析
+                pass
     for b in todo:
         pg = pages.get(b["page"])
         if pg is None or not pg.chars:
@@ -756,7 +915,7 @@ def _enrich_from_text_layer(blocks: list[dict[str, Any]], pdf_bytes: bytes | Non
         # 跨页 / 跨栏的段落有几处位置：按顺序取各处的字
         cs = [c for p, *box in b["_regions"] if pages.get(int(p)) for c in pdf_text.chars_in(pages[int(p)], box)] \
             if b.get("_regions") else pdf_text.chars_in(pg, b["_box"])
-        e = pdf_text.enrich(b["text"], cs)
+        e = pdf_text.enrich(b["text"], cs, vocab=vocab)
         if e.matched < 0.6:
             continue
         if b["type"] == "heading":
@@ -771,7 +930,87 @@ def _enrich_from_text_layer(blocks: list[dict[str, Any]], pdf_bytes: bytes | Non
             b["marks"] = e.marks
         if e.bold_prefix:
             b["_bold"] = e.bold_prefix
+        if b["type"] == "paragraph" and e.all_bold:
+            b["_allbold"] = True
+            letters = [c for c in cs if c.c.isalpha()]
+            if letters:
+                b["_sig"] = (round(statistics.median(c.size for c in letters) * 2) / 2, True,
+                             sum(c.italic for c in letters) > len(letters) / 2, e.text.upper() == e.text)
+        if b["type"] == "heading":
+            b["_lines"] = _styled_lines(cs)
+    # 图表题注：Docling 的题注条目没经过上面的修补，同样补字（题注是纯文字属性，不给格式）
+    for b in blocks:
+        regs = b.get("_cap_regions")
+        if b["type"] in ("figure", "table") and regs and b.get("caption"):
+            cs = [c for p, *box in regs if pages.get(int(p)) for c in pdf_text.chars_in(pages[int(p)], box)]
+            e = pdf_text.enrich(b["caption"], cs, scripts=False, vocab=vocab)
+            if e.matched >= 0.8:
+                b["caption"] = e.text
     return pages
+
+
+def _styled_lines(cs: list[Any]) -> list[tuple[str, tuple[float, bool]]]:
+    """标题块按行的文字与字样（字号、粗体）：一个块里两行字样不同时，是两个标题被并在了一起。"""
+    out = []
+    for base, text in pdf_text.lines_of(cs):
+        line = [c for c in cs if not c.script and abs(c.base - base) <= max(c.size, 1.0) * 0.5 and c.c.isalpha()]
+        if not line:
+            continue
+        out.append((text, (round(statistics.median(c.size for c in line) * 2) / 2, sum(c.bold for c in line) > len(line) / 2)))
+    return out
+
+
+def _split_merged_headings(blocks: list[dict[str, Any]]) -> None:
+    """一个标题块里前后两段字样不同（「Results」大字 + 「Population characteristic」小字）：拆成两个标题。"""
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        lines = b.get("_lines") or []
+        if b["type"] != "heading" or b.get("_title") or len(lines) < 2:
+            i += 1
+            continue
+        k = next((j for j in range(1, len(lines)) if abs(lines[j][1][0] - lines[0][1][0]) >= 0.8 or lines[j][1][1] != lines[0][1][1]), None)
+        if k is None:
+            i += 1
+            continue
+        first = " ".join(t for t, _ in lines[:k]).strip()
+        second = " ".join(t for t, _ in lines[k:]).strip()
+        squash = lambda s: re.sub(r"\s+", "", s)  # noqa: E731
+        # 第二段要像一个新标题（大写字母或编号开头）；小写开头的是同一个标题折了行
+        if not first or not second or squash(first + second) != squash(b["text"]) or not re.match(r"[A-Z0-9㐀-鿿]", second):
+            i += 1
+            continue
+        b1 = {**b, "text": first, "_lines": lines[:k]}
+        b2 = {**b, "text": second, "_lines": lines[k:]}
+        b2.pop("_dl", None)
+        sig = b.get("_sig")
+        if sig:
+            b1["_sig"] = (lines[0][1][0], lines[0][1][1], sig[2], first.upper() == first)
+            b2["_sig"] = (lines[k][1][0], lines[k][1][1], sig[2], second.upper() == second)
+        for x in (b1, b2):
+            x.pop("marks", None)
+        blocks[i:i + 1] = [b1, b2]
+        i += 2
+
+
+def _promote_bold_lines(blocks: list[dict[str, Any]]) -> None:
+    """版面模型漏认的小标题：单独一行、整行粗体、不超过 10 个词、不以句号结尾、后面紧跟正文段落的段落，提升为标题。"""
+    body = _body_font_size(blocks)
+    for i, b in enumerate(blocks[:-1]):
+        t = b.get("text", "")
+        nxt = blocks[i + 1]
+        if (b["type"] != "paragraph" or not b.get("_allbold") or b.get("_caption") or b.get("_demoted") or not t or len(t.split()) > 10
+                or _FURNITURE_HEADING.match(re.sub(r"\s+", "", t.lower()))
+                or len(t) > 90 or re.search(r"[.;,]$", t) or _FIG_LABEL.match(t) or _TABLE_LABEL.match(t) or _RUNIN_SKIP.match(t.rstrip(" :："))
+                or not re.search(r"[^\W\d_]{2,}", t) or b.get("page") == 1):
+            continue
+        if nxt["type"] not in ("paragraph", "list") or nxt.get("_allbold") or len(nxt.get("text", "x" * 50)) < 40:
+            continue
+        if body and b.get("_box") and _font_size(t, b["_box"]) < body * 0.85:
+            continue
+        b["type"] = "heading"
+        b["level"] = 3
+        b["text"] = t.rstrip(" :：")
 
 
 def _drop_running_heads(blocks: list[dict[str, Any]]) -> None:
@@ -800,8 +1039,14 @@ def _drop_running_heads(blocks: list[dict[str, Any]]) -> None:
         if k:
             counts.setdefault(k, set()).add(b.get("page"))
     repeated = {k for k, pages in counts.items() if len(pages) >= 3}
-    if repeated:
-        blocks[:] = [b for b in blocks if key(b) not in repeated]
+    # 页面上下边缘、带 DOI / 网址 / 「et al.」的短段落：页眉页脚（每页内容不同，按重复认不出）
+    footer = lambda b: (b["type"] == "paragraph" and margin(b) and len(b["text"].split()) <= 25  # noqa: E731
+                        and bool(re.search(r"\bdoi\b|https?://|\bet al\.", b["text"], re.I)) and (b.get("page") or 0) > 1)
+    # 完全落在左右页边里的短标题（竖排印在页边的期刊名「Brain and Behavior」）
+    edge = lambda b: (b["type"] == "heading" and bool(b.get("_box")) and len(b["text"].split()) <= 6  # noqa: E731
+                      and (b["_box"][2] < b["_box"][4] * 0.1 or b["_box"][0] > b["_box"][4] * 0.9))
+    if repeated or any(footer(b) or edge(b) for b in blocks):
+        blocks[:] = [b for b in blocks if key(b) not in repeated and not footer(b) and not edge(b)]
 
 
 # 段首粗体但不是小节标题的标签：版权页信息、作者贡献（CRediT）、图表与附件编号、脚注
@@ -843,8 +1088,16 @@ def _split_runin_headings(blocks: list[dict[str, Any]]) -> None:
         t = b["text"]
         head, rest = t[:bp].strip(), t[bp:].strip()
         name = head.rstrip(" .:：。").strip()
-        if not head or head[-1] not in ".:：。" or not name:
+        if not head or not name:
             continue
+        # 小标题后面要有句号 / 冒号；没有标点时（Springer 的「Study design The DIPP study …」）要求小标题不超过 6 个词、
+        # 每个词首字母大写或是小写虚词，且后文以大写字母开头
+        if head[-1] not in ".:：。":
+            words = name.split()
+            if not (len(words) <= 6 and re.match(r"[A-Z]", rest) and words[0][:1].isupper()
+                    and all(w[:1].isupper() or w.lower() in ("and", "of", "the", "in", "for", "to", "on", "with", "a", "an", "or", "vs")
+                            or w[:1].islower() for w in words)):
+                continue
         if not (1 <= len(name.split()) <= 12 and len(name) <= 100 and len(rest.split()) >= 3):
             continue
         # 作者行、带单位编号的人名：除了开头的章节编号外不能有数字；也不能带上下标
@@ -854,6 +1107,9 @@ def _split_runin_headings(blocks: list[dict[str, Any]]) -> None:
             continue
         # 作者贡献（「Xiaoqing Jiang: conceptualization, methodology …」）
         if _CREDIT_ROLE.search(rest[:200]):
+            continue
+        # 缩写表的释义（「AAP: American Academy of Pediatrics」）
+        if re.fullmatch(r"[A-Z0-9][A-Z0-9\-–/&αβγ]{0,11}s?", name) and re.search(r"[A-Z].*[A-Z0-9]", name) and len(rest.split()) <= 15:
             continue
         if body and _font_size(t, b.get("_box")) < body * 0.85:
             continue  # 侧栏、脚注里的小字
@@ -1079,6 +1335,8 @@ def _pick_title(blocks: list[dict[str, Any]], pages: dict[int, Any] | None = Non
     if not found:
         return False
     t = blocks.pop(best)  # type: ignore[arg-type]
+    # 标题旁边的「Check for updates」角标有时被并进标题
+    t["text"] = re.sub(r"\s*check for updates\s*$", "", t["text"], flags=re.I)
     blocks.insert(0, {"type": "heading", "level": 1, "text": t["text"], "page": t.get("page"), "_box": t.get("_box"), "_title": True})
     return True
 
@@ -1132,7 +1390,22 @@ def _demote_headings(blocks: list[dict[str, Any]]) -> None:
         if (first_std is not None and i < first_std and b["type"] == "heading" and not b.get("_title") and b.get("page") == 1
                 and b.get("_box") and any(x.get("_title") for x in blocks) and not _FRONT_KEEP.match(b["text"].strip(" .:"))):
             b["type"] = "paragraph"
+            b["_demoted"] = True
             b.pop("level", None)
+    # 缩写表里一个个缩写词被认成标题（「AAP」「BFNE」「FCS」…）：连续三个以上、不含空格的短大写词还原成段落
+    acr = lambda b: b["type"] == "heading" and re.fullmatch(r"[A-Z0-9][A-Z0-9\-–/&αβγ]{1,9}", b["text"].strip(" .:")) is not None  # noqa: E731
+    i = 0
+    while i < len(blocks):
+        j = i
+        while j < len(blocks) and (acr(blocks[j]) or (j > i and blocks[j]["type"] == "paragraph" and len(blocks[j]["text"].split()) <= 12)):
+            j += 1
+        run = [b for b in blocks[i:j] if acr(b)]
+        if len(run) >= 3:
+            for b in run:
+                b["type"] = "paragraph"
+                b["_demoted"] = True
+                b.pop("level", None)
+        i = max(j, i + 1)
     for b in blocks:
         if b["type"] != "heading" or b.get("_title"):
             continue
@@ -1141,19 +1414,35 @@ def _demote_headings(blocks: list[dict[str, Any]]) -> None:
         small_front = b.get("page") == 1 and body and b.get("_box") and _font_size(t, b["_box"]) < body * 0.8
         # 第一页上夹着单位编号的作者行（「SophieRoche 1,2 NimeshNaran 1 …」）
         author_line = b.get("page") == 1 and not _NUMBERED.match(t) and len(re.findall(r"\d", t)) >= 3
+        # 没有字母的「标题」（页码、图里的数字）、附件编号（「Multimedia Appendix 1」）、引用格式提示
+        no_words = not re.search(r"[^\W\d_]{2,}", t)
+        attachment = bool(re.match(r"^(?:multimedia appendix|additional file|supplementary (?:file|table|figure|data|material))\s*s?\d+\b", t, re.I))
         if (_FURNITURE_HEADING.match(squashed) or _META_HEADING.search(t) or small_front or author_line
-                or t.count("[") != t.count("]") or len(t.split()) > 30):
+                or t.count("[") != t.count("]") or len(t.split()) > 30 or no_words or attachment
+                or re.match(r"^please cite (?:this article )?as\b", t, re.I)):
             b["type"] = "paragraph"
+            b["_demoted"] = True  # 后面「整行粗体提升为标题」不再提升
             b.pop("level", None)
 
 
 def _assign_levels(blocks: list[dict[str, Any]], has_title: bool) -> None:
     base = 1 if has_title else 0
     heads = [b for b in blocks if b["type"] == "heading" and not b.get("_title")]
-    is_top = lambda b: not _NUMBERED.match(b["text"]) and bool(_TOP_SECTION.match(_section_name(b["text"])))  # noqa: E731
+    # 标准一级章节：名字对得上（「Methods: participants, interventions …」按冒号前的部分认）
+    is_top_name = lambda b: not _NUMBERED.match(b["text"]) and bool(  # noqa: E731
+        _TOP_SECTION.match(_section_name(b["text"])) or _TOP_SECTION.match(_section_name(b["text"].split(":")[0])))
+    # 字样与正文标准一级章节（引言、方法、结果、讨论）相同的（期刊自己起名的一级章节）也是一级。
+    # 只看正文开始以后、至少两个标准章节用的同一字样（摘要里的「Methods」「Results」小标题字样不算）
+    start = next((k for k, b in enumerate(heads) if re.match(r"^(?:\d+\.?\s*)?(?:introduction|background)$", _section_name(b["text"]), re.I)), None)
+    body_tops = [b["_sig"] for b in heads[start:] if b.get("_sig") and not b.get("_runin") and _BODY_START.match(_section_name(b["text"]))] \
+        if start is not None else []
+    near = lambda s, x: s[1:] == x[1:] and abs(s[0] - x[0]) <= 0.6  # noqa: E731
+    top_sigs = [s for s in body_tops if sum(1 for x in body_tops if near(s, x)) >= 2]
+    is_top = lambda b: is_top_name(b) or (  # noqa: E731
+        bool(b.get("_sig")) and not _NUMBERED.match(b["text"]) and not b.get("_runin") and any(near(b["_sig"], x) for x in top_sigs))
     sig_order: list[tuple[float, bool, bool, bool]] = []
     body_started = False
-    canonical = sum(1 for b in heads if is_top(b)) >= 3
+    canonical = sum(1 for b in heads if is_top_name(b)) >= 3
     # 结构式摘要的范围：「Abstract」之后、「Introduction」之前
     names = [b["text"].strip(" .:").lower() for b in heads]
     in_abstract: set[int] = set()
@@ -1262,13 +1551,16 @@ def _join_paragraphs(blocks: list[dict[str, Any]]) -> None:
             i += 1
             continue
         tb = nb["text"]
-        lower = bool(re.match(r"[a-z(]", tb))
+        # 续段以小写字母、括号或数字开头（「…Ultra identified」+「97 (37.3%) cases」）；多级编号（「2.3 …」）是新小节
+        lower = bool(re.match(r"[a-z(]", tb) or (re.match(r"\d", tb) and not re.match(r"\d+(?:\.\d+)+\.?\s", tb)))
         # 中文：上一段末尾不是句末标点的汉字、下一段以汉字开头
         cjk_cont = bool(re.search(cjk + r"$", ta) and re.match(cjk, tb))
         if url_end and not lower:
             i += 1
             continue
-        if not (lower or cjk_cont or (_DANGLING_END.search(ta) and not crossed)):
+        # 末尾是上标（单位角标、脚注号「Zanni³,ᵃ」）的不算「以虚词结尾」：那个「a」不是冠词
+        ends_sup = any(m[1] >= len(ta.rstrip()) and m[2] == "sup" for m in a.get("marks", []))
+        if not (lower or cjk_cont or (_DANGLING_END.search(ta) and not crossed and not ends_sup)):
             i += 1
             continue
         hyphen = ta.endswith("-") and ta[-2:-1].isalpha() and tb[:1].islower()
@@ -1321,6 +1613,10 @@ class Parser:
         from docling.datamodel.base_models import ConversionStatus, DocumentStream
 
         chars = page_text_chars(pdf_bytes)
+        rotated: dict[int, int] = {}
+        if len(chars) <= settings.MAX_PAGES:
+            # 竖排印刷的页先转正（解析、裁图、原版映射都按转正后的页面；平台显示原版时同样转）
+            pdf_bytes, rotated = normalize_rotation(pdf_bytes)
         if len(chars) > settings.MAX_PAGES:
             raise ValueError(f"PDF 共 {len(chars)} 页，超过上限 {settings.MAX_PAGES} 页")
         total = len(chars)
@@ -1349,6 +1645,7 @@ class Parser:
                     _release_memory()
         extra: dict[str, Any] = {}
         blocks = _postprocess(blocks, pdf_bytes, extra)
+        _mark_rotation(extra, rotated)
         if partial:
             warnings.append("部分页面解析失败，内容可能不完整")
 

@@ -149,13 +149,17 @@ def _mark_scripts(chars: list[Char]) -> None:
         normal = [c.base for c in letters if c.size >= main * 0.9]
         if not normal:
             continue
-        base = statistics.median(normal)
-        for c in line:
+        line_base = statistics.median(normal)
+        for idx, c in enumerate(line):
             if c.size >= main * 0.85:
                 continue
-            if c.base < base - main * 0.15:
+            # 基线跟紧挨着的正常字号的字比（表格一行里各格的基线可能高低不齐）；找不到时用整行的
+            ref = next((x.base for x in reversed(line[:idx]) if x.size >= main * 0.9 and x.c.isalnum()), None)
+            if ref is None:
+                ref = next((x.base for x in line[idx + 1:] if x.size >= main * 0.9 and x.c.isalnum()), line_base)
+            if c.base < ref - main * 0.15:
                 c.script = "sup"
-            elif c.base > base + main * 0.08:
+            elif c.base > ref + main * 0.08:
                 c.script = "sub"
 
 
@@ -176,6 +180,25 @@ def rotation(chars: list[Char]) -> int:
         if sum(1 for c in letters if abs(c.angle - a) <= 5) >= len(letters) * 0.6:
             return a
     return 0
+
+
+def lines_of(chars: list[Char]) -> list[tuple[float, str]]:
+    """一片区域里的字按基线分行：[(基线, 文字), …]，自上而下；上下标归到所在行。"""
+    rows: list[list[Char]] = []
+    for c in sorted((c for c in chars if not c.script), key=lambda c: (c.base, c.l)):
+        if rows and abs(c.base - rows[-1][0].base) <= max(c.size, 1.0) * 0.5:
+            rows[-1].append(c)
+        else:
+            rows.append([c])
+    for c in chars:
+        if c.script and rows:
+            min(rows, key=lambda r: abs(r[0].base - c.base)).append(c)
+    out = []
+    for r in rows:
+        r.sort(key=lambda c: c.l)
+        text = "".join((" " if c.space_before and i else "") + c.c for i, c in enumerate(r))
+        out.append((r[0].base, re.sub(r"\s+", " ", text).strip()))
+    return out
 
 
 def chars_in(page: Page, box: list[float], pad: float = 2.0) -> list[Char]:
@@ -232,9 +255,10 @@ class Enriched:
     marks: list[list[Any]]           # [起, 止, "sup" | "sub" | "italic"]
     bold_prefix: int                  # 开头连续粗体的字数（0 = 没有）
     matched: float                    # 块文字里对上的比例
+    all_bold: bool = False            # 整块都是粗体（或与正文不同的字体）
 
 
-def enrich(text: str, chars: list[Char], scripts: bool = True) -> Enriched:
+def enrich(text: str, chars: list[Char], scripts: bool = True, vocab: set[str] | None = None) -> Enriched:
     """按 PDF 文字层修块文字：补回丢掉的空格与行末区间短横、去掉 Docling 在上标两边加的空格，给出上下标 / 斜体范围与开头粗体长度。
 
     scripts=False（表格单元格）：只补空格与短横，不动上标两边的空格，也不给格式。
@@ -267,6 +291,19 @@ def enrich(text: str, chars: list[Char], scripts: bool = True) -> Enriched:
         if mid and all(c in _DASHES and c != _SOFT for c in mid) and text[i - 1] not in _DASHES:
             if mid[-1] != "-" or text[i - 1].isdigit() or text[i].isdigit():
                 dash_at[i] = mid[-1]
+        # 行末的连字符被当成断词去掉，但这是复合词（「well-\ntrained」→「welltrained」）：
+        # 前后两半在全文里都单独出现过才算复合词；「treat-\nment」的「ment」不是独立的词，照旧接上
+        elif (mid and all(c in _DASHES for c in mid) and vocab and text[i - 1].isalpha() and text[i].isalpha()
+              and text[i - 1] not in _DASHES):
+            ls = i
+            while ls > 0 and text[ls - 1].isalpha():
+                ls -= 1
+            le = i
+            while le < len(text) and text[le].isalpha():
+                le += 1
+            left, right = text[ls:i].lower(), text[i:le].lower()
+            if f"{left}-{right}" in vocab or (len(left) >= 3 and len(right) >= 3 and left in vocab and right in vocab):
+                dash_at[i] = "-"
     # 反过来：Docling 留下了「dia- betes」，而 PDF 文字层里这两个字前后相接、只隔一个换行（排版软件的断词连字符不进文字层）
     drop: set[int] = set()
     for k in range(1, len(text) - 2):
@@ -281,7 +318,8 @@ def enrich(text: str, chars: list[Char], scripts: bool = True) -> Enriched:
         if not cuts:
             continue
         edges = [tok.start(), *cuts, tok.end()]
-        if any(b - a < 2 for a, b in zip(edges, edges[1:])):
+        # 两段以上只有一个字才是字距拉开（「p overall」里单独一个斜体 p 是正常的）
+        if sum(1 for a, b in zip(edges, edges[1:]) if b - a < 2) >= 2:
             ins.difference_update(cuts)
 
     out: list[str] = []
@@ -361,8 +399,9 @@ def enrich(text: str, chars: list[Char], scripts: bool = True) -> Enriched:
         mm = re.match(r"\s*[.:：。]", new[bp:])
         if mm:
             bp += mm.end()
-    if bp >= len(new.rstrip()):
+    all_bold = bool(new.strip()) and bp >= len(new.rstrip())
+    if all_bold:
         bp = 0  # 整块都是粗体：不是段首小标题
     if not scripts:
         return Enriched(new, [], 0, matched)
-    return Enriched(new, marks, bp, matched)
+    return Enriched(new, marks, bp, matched, all_bold)

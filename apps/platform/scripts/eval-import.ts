@@ -162,7 +162,7 @@ function acceptedText(doc: PMNode): string {
   return s
 }
 
-function measure(id: string, xml: string, doc: PMNode, t0: number): PaperResult {
+function measure(id: string, xml: string, doc: PMNode, t0: number, word = false): PaperResult {
   const fid = checkFidelityDoc(xml, doc)
   const d = fid.tables.detail
   const avg = (xs: number[]) => (xs.length ? round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) : null)
@@ -182,8 +182,9 @@ function measure(id: string, xml: string, doc: PMNode, t0: number): PaperResult 
     headingsExtra: fid.structure.headingsExtra.length, headingLevelWrong: fid.structure.headingLevelWrong,
     paraTotal: fid.structure.paraTotal, paraBroken: fid.structure.paraBroken,
     formulaSource: fid.structure.formulaSource, formulaConverted: fid.structure.formulaConverted,
-    deletedLeaked: text.includes(DELETED_MARK),
-    instrLeaked: /\bADDIN\b|EN\.CITE|EN\.REFLIST|\bSEQ (?:Table|Figure)\b/.test(text),
+    // 修订与域指令只在 Word 稿里有（标记数字 98765 可能正好出现在 PDF 正文里）
+    deletedLeaked: word && text.includes(DELETED_MARK),
+    instrLeaked: word && /\bADDIN\b|EN\.CITE|EN\.REFLIST|\bSEQ (?:Table|Figure)\b/.test(text),
   }
 }
 
@@ -213,7 +214,7 @@ export async function runPath(path: ImportPath, ids: string[]): Promise<PaperRes
       } else {
         const clean = cleanDocx(id, xml)
         const bytes = path === 'docx-realistic' ? applyConstructs(clean).out : clean
-        out.push(measure(id, xml, importDocx(bytes).doc, t0))
+        out.push(measure(id, xml, importDocx(bytes).doc, t0, true))
       }
     } catch (err) {
       out.push(failed(id, String((err as Error)?.message ?? err).slice(0, 300), t0))

@@ -313,7 +313,49 @@ def test_front_matter_headings_before_first_section_demoted() -> None:
     assert [b["text"] for b in out if b["type"] == "heading"][1:] == ["Abstract"]
 
 
+def test_bold_line_promoted_and_furniture_not_repromoted() -> None:
+    blocks = [
+        head("A randomized trial of something in adults with disease", b=box(100, 60, 500, 110)),
+        head("Introduction"),
+        para(BODY, page=2),
+        para("Clinical Question", page=2, _allbold=True),
+        para(BODY, page=2),
+        head("Correspondence to", page=2),
+        para(BODY, page=2),
+    ]
+    blocks[5]["_allbold"] = True
+    out = _postprocess(blocks)
+    hs = [b["text"] for b in out if b["type"] == "heading"]
+    assert "Clinical Question" in hs and "Correspondence to" not in hs
+
+
+def test_merged_heading_lines_with_different_styles_split() -> None:
+    from src.parser import _split_merged_headings
+
+    b = {"type": "heading", "text": "Results Population characteristic", "page": 3,
+         "_lines": [("Results", (12.0, True)), ("Population characteristic", (10.0, True))], "_sig": (12.0, True, False, False)}
+    wrapped = {"type": "heading", "text": "Influencing factors of global delta-NIHSS", "page": 3,
+               "_lines": [("Influencing factors of global", (10.0, True)), ("delta-NIHSS", (10.0, False))]}
+    blocks = [b, wrapped]
+    _split_merged_headings(blocks)
+    assert [x["text"] for x in blocks] == ["Results", "Population characteristic", "Influencing factors of global delta-NIHSS"]
+    assert blocks[0]["_sig"][0] == 12.0 and blocks[1]["_sig"][0] == 10.0
+
+
+def test_abbreviation_definitions_not_split_as_runin() -> None:
+    blocks = [
+        head("A randomized trial of something in adults with disease", b=box(100, 60, 500, 110)),
+        head("Abbreviations"),
+        para("AAP: American Academy of Pediatrics", page=2, _bold=4),
+        para("Eligibility. This study included adults with suspected tuberculosis at four sites.", page=2, _bold=12),
+    ]
+    hs = [b["text"] for b in _postprocess(blocks) if b["type"] == "heading"]
+    assert "AAP" not in hs and "Eligibility" in hs
+
+
 def test_clean_removes_line_break_spaces_in_chinese() -> None:
     from src.parser import _clean
 
     assert _clean("是在传统 的正畸治疗中，加入了 切开牙槽骨 (PAOO) 技术") == "是在传统的正畸治疗中，加入了切开牙槽骨 (PAOO) 技术"
+    # 软连字符连同后面换行留下的空白一起去掉
+    assert _clean("two physicians indepen­ dently adjudicated") == "two physicians independently adjudicated"
