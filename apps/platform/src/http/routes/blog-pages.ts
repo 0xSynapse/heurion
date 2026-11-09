@@ -336,8 +336,13 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
   },
   'aegis-os-transactional-agent-kernel': {
     repoUrl: 'https://github.com/heurion-org/aegis-os',
-    paperUrl: 'https://github.com/heurion-org/aegis-os/blob/main/paper/aegis_os_arxiv_preprint.pdf',
+    paperUrl: 'https://arxiv.org/abs/2611.08516',
     links_zh: [
+      {
+        label: 'Aegis OS 学术论文 (arXiv:2611.08516)',
+        href: 'https://arxiv.org/abs/2611.08516',
+        desc: '阅读完整 arXiv 预印本（19 页，含 28,087 次真实工具调用与 80 项红队基准评测）',
+      },
       {
         label: 'Aegis OS 架构主页与 Homebrew 安装指南',
         href: '/aegis-os/',
@@ -355,6 +360,11 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
       },
     ],
     links_en: [
+      {
+        label: 'Aegis OS Research Paper (arXiv:2611.08516)',
+        href: 'https://arxiv.org/abs/2611.08516',
+        desc: 'Read the full 19-page arXiv preprint covering 28,087 real tool calls and the 80-attack red-team suite',
+      },
       {
         label: 'Aegis OS Product Page & Homebrew Install',
         href: '/en/aegis-os/',

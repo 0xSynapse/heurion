@@ -1370,7 +1370,7 @@ assert collectToolsWhere(confirm == true) == AI_CONFIRM_REGISTRY   // High-risk 
       { val: '98.7%', lbl_zh: '四级 LCS 无冲突归并', lbl_en: '4-Tier LCS Auto-Merge' },
     ],
     repo_url: 'https://github.com/heurion-org/aegis-os',
-    paper_url: 'https://github.com/heurion-org/aegis-os/blob/main/paper/main.pdf',
+    paper_url: 'https://arxiv.org/abs/2611.08516',
     toc: [
       { id: 'sec-git-bottleneck', zh: '01. 为什么 Git 分支与共享文件夹在多 Agent 并发时代双双失灵？', en: '01. Why Both Git Feature Branches and Shared Folders Break Down in the Multi-Agent Era' },
       { id: 'sec-cow-shadow', zh: '02. 主干锚定的写时复制影子工作区：0.42ms 隔离代码库、文件树与 GB 级数据集', en: '02. Trunk-Anchored Copy-on-Write Shadow Workspaces: 0.42ms Isolation for Code, File Trees & Datasets' },

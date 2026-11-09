@@ -253,6 +253,7 @@
         <a href="#install" class="nav-link">Quick Install</a>
         <a href="#pricing" class="nav-link">Plans &amp; Buy</a>
         <a href="/en/aegis-os/tutorial/" class="nav-link">Tutorial</a>
+        <a href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener" class="nav-link">arXiv Paper ↗</a>
         <a href="/aegis-cloud/dashboard" class="nav-link">My Console</a>
         <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub ↗</a>
       </nav>
@@ -291,12 +292,14 @@
               <div>
                 <p class="label-caps" style="margin-bottom:0.25rem;">01 / CLIENTS</p>
                 <h3 class="arch-stage-title">Coding Agent Clients</h3>
-                <p class="arch-stage-desc">Wired automatically with MCP routing and lifecycle hooks via a single <code>aegis-os install</code> command.</p>
+                <p class="arch-stage-desc">Wired automatically with MCP routing and hooks via <code>aegis-os install</code>, or confined under a parent kernel sandbox via <code>aegis-os run -- &lt;agent&gt;</code>.</p>
               </div>
               <div class="arch-tags">
                 <span class="arch-tag">Claude Code</span>
                 <span class="arch-tag">OpenAI Codex</span>
                 <span class="arch-tag">Antigravity (AGY)</span>
+                <span class="arch-tag">OpenCode</span>
+                <span class="arch-tag">Hermes</span>
               </div>
             </div>
 
@@ -352,9 +355,13 @@
 brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
 brew install aegis-os
 aegis-os install
+aegis-os audit-me            <span class="c"># 5s local credential exposure &amp; prompt fatigue checkup (--share for badge)</span>
 
 <span class="c"># Option B: One-line signed installer (automatically runs aegis-os install)</span>
 curl -fsSL https://heurion.org/aegis-cloud/install.sh | sh
+
+<span class="c"># Enforced parent-process kernel sandbox mode (Linux bwrap &amp; macOS Seatbelt)</span>
+aegis-os run -- claude
 
 <span class="c"># Launch 64GB cloud workspace (includes 1 free trial workspace)</span>
 aegis-os cloud up</pre>
@@ -362,6 +369,7 @@ aegis-os cloud up</pre>
           <a class="btn-solid" href="/en/aegis-os/tutorial/">Read the full tutorial →</a>
           <a class="link-arrow" href="#pricing" onclick="setTimeout(()=>document.getElementById('pro-email-input')?.focus(),150)">Upgrade to Pro for 16 Workspaces &amp; 8 Parallel Agents ($29/mo) →</a>
           <a class="link-arrow" href="/aegis-cloud/dashboard">Open My Console (Approvals &amp; Quotas) →</a>
+          <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">Read arXiv Paper (2611.08516) →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub Repository →</a>
         </div>
       </div>

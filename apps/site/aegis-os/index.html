@@ -253,6 +253,7 @@
         <a href="#install" class="nav-link">快速安装</a>
         <a href="#pricing" class="nav-link">方案与购买</a>
         <a href="/aegis-os/tutorial/" class="nav-link">使用教程</a>
+        <a href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener" class="nav-link">arXiv 论文 ↗</a>
         <a href="/aegis-cloud/dashboard" class="nav-link">我的控制台</a>
         <a href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener" class="nav-link">GitHub ↗</a>
       </nav>
@@ -291,12 +292,14 @@
               <div>
                 <p class="label-caps" style="margin-bottom:0.25rem;">01 / CLIENTS</p>
                 <h3 class="arch-stage-title">编码智能体接入</h3>
-                <p class="arch-stage-desc">一行 <code>aegis-os install</code> 自动注入 MCP 路由与生命周期 Hook。</p>
+                <p class="arch-stage-desc">一行 <code>aegis-os install</code> 自动注入 MCP 路由与 Hook，或用 <code>aegis-os run -- &lt;agent&gt;</code> 启动父进程内核沙箱。</p>
               </div>
               <div class="arch-tags">
                 <span class="arch-tag">Claude Code</span>
                 <span class="arch-tag">OpenAI Codex</span>
                 <span class="arch-tag">Antigravity (AGY)</span>
+                <span class="arch-tag">OpenCode</span>
+                <span class="arch-tag">Hermes</span>
               </div>
             </div>
 
@@ -352,9 +355,13 @@
 brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
 brew install aegis-os
 aegis-os install
+aegis-os audit-me            <span class="c"># 5 秒体检本机凭据裸奔风险与弹窗疲劳（--share 导出徽章卡）</span>
 
 <span class="c"># 方式 B：一行签名校验安装脚本（自动完成 aegis-os install）</span>
 curl -fsSL https://heurion.org/aegis-cloud/install.sh | sh
+
+<span class="c"># Enforced 父进程内核沙箱模式（Linux bwrap &amp; macOS Seatbelt）</span>
+aegis-os run -- claude
 
 <span class="c"># 开启 64GB 云端工作区（免费赠送 1 个云端工作区体验）</span>
 aegis-os cloud up</pre>
@@ -362,6 +369,7 @@ aegis-os cloud up</pre>
           <a class="btn-solid" href="/aegis-os/tutorial/">阅读完整使用教程 →</a>
           <a class="link-arrow" href="#pricing" onclick="setTimeout(()=>document.getElementById('pro-email-input')?.focus(),150)">升级 Pro 解锁 16 工作区与 8 Agent 并行 ($29/月) →</a>
           <a class="link-arrow" href="/aegis-cloud/dashboard">进入我的控制台（审批与配额查询）→</a>
+          <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">阅读 arXiv 论文 (2611.08516) →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 源码仓库 →</a>
         </div>
       </div>
