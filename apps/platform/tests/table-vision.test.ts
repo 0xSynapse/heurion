@@ -7,7 +7,7 @@ import type { PubMedClient } from '../src/literature/pubmed.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { Store } from '../src/store/db.ts'
 
-// 审稿按页面图像核对表格（docs/design/PDF_ORIGINAL_VIEW.md §12.3）
+// 审稿按页面图像核对表格（docs/design/PDF_ORIGINAL_VIEW.md §12.3）：图像只用来确认，不替换转换结果
 
 const IMG = [{ mime: 'image/png' as const, data: 'AAAA' }]
 
@@ -15,12 +15,12 @@ function summary(headers: string[], rows: string[][], caption = 'Table 1. Baseli
   return { node_id: 't1', caption, headers, rows, sample_sizes: [], numbers: [] }
 }
 
-/** 表格模型把两行并成了一行、表注混进了表格（按文字规则判为不可信）；页面上实际是两行 */
-const MERGED = summary(['Variable', 'Group A (n=200)'], [['Male Female', '50 (40%) 150 (75%)'], ['Age', '62'], ['Abbreviations: n, number', '']])
-const PAGE = [['Variable', 'Group A (n=200)'], ['Male', '50 (40%)'], ['Female', '150 (75%)'], ['Age', '62']]
-const PAGE_WORDS = ['Variable', 'Group', 'A', '(n=200)', 'Male', '50', '(40%)', 'Female', '150', '(75%)', 'Age', '62']
+/** 表头是年份（首行大半是数字），按文字规则判为不可信；其实表格是对的 */
+const YEARS = summary(['Variable', '2019 (n=200)', '2020 (n=100)'], [['Male, n (%)', '50 (40%)', '30 (30%)'], ['Age', '62', '61']])
+const YEARS_GRID = [YEARS.headers, ...YEARS.rows]
+const YEARS_WORDS = ['Variable', '2019', '(n=200)', '2020', '(n=100)', 'Male,', 'n', '(%)', '50', '(40%)', '30', '(30%)', 'Age', '62', '61']
 
-function vision(reply: string | Error, words = PAGE_WORDS): TableVision & { calls: number } {
+function vision(reply: string | Error, words = YEARS_WORDS): TableVision & { calls: number } {
   const v = {
     calls: 0,
     source: async () => ({ images: IMG, words }),
@@ -36,42 +36,50 @@ describe('按页面图像核对表格', () => {
     expect(parseGrid('{"rows": [["only one row"]]}')).toBeNull()
   })
 
+  it('表头文字折行被拆成两行时并回一行；真正的第二层表头（上一行空着的列）不并', () => {
+    const wrapped = parseGrid(JSON.stringify({ header_rows: 2, rows: [['Variables', 'Control Arm', 'p'], ['', '(n = 30)', ''], ['Age', '54.7', '0.8']] }))
+    expect(wrapped).toEqual({ rows: [['Variables', 'Control Arm (n = 30)', 'p'], ['Age', '54.7', '0.8']], headerRows: 1 })
+    const twoLevel = parseGrid(JSON.stringify({ header_rows: 2, rows: [['', 'Overuse', ''], ['', 'n', 'HR (95% CI)'], ['BMQ', '449', '0.91']] }))
+    expect(twoLevel!.headerRows).toBe(2)
+  })
+
   it('抄出的数字要在文字层里：认错的数字拉低比例（按出现次数，统一千分位写法）', () => {
-    expect(numbersFaithful(PAGE, PAGE_WORDS)).toBe(1)
+    expect(numbersFaithful(YEARS_GRID, YEARS_WORDS)).toBe(1)
     expect(numbersFaithful([['1,234', '5']], ['1,234', '5'])).toBe(1)
-    expect(numbersFaithful([['Male', '58 (40%)']], PAGE_WORDS)).toBe(0.5)
+    expect(numbersFaithful([['Male', '58 (40%)']], ['50', '(40%)'])).toBe(0.5)
     expect(numbersFaithful([['62', '62']], ['62'])).toBe(0.5)
   })
 
-  it('网格比较只看表头以下；空白、短横写法不同算相同', () => {
+  it('网格比较不看表头：按图像的第一行表体对齐；空白、短横写法不同算相同', () => {
     expect(gridsAgree([['A', 'B'], ['x', '1–2']], [['A merged', ''], ['x', '1 - 2']])).toBe(true)
+    // 转换结果是两层表头、图像把表头并成了一层：表体对得上就算一致
+    expect(gridsAgree([['', 'Overuse'], ['', 'n'], ['BMQ', '449'], ['Sex', '']], [['', 'Overuse n'], ['BMQ', '449'], ['Sex', '']])).toBe(true)
     expect(gridsAgree([['A', 'B'], ['x', '1']], [['A', 'B'], ['x', '1'], ['y', '2']])).toBe(false)
+    // 相邻两列并成一格（列数不同）：不一致
+    expect(gridsAgree([['A', 'B', 'C'], ['x', '1', '2']], [['A', 'B C'], ['x', '1 2']])).toBe(false)
   })
 
-  it('与转换结果一致：确认可信，照常核查（即使按文字规则原本不可信）', async () => {
-    const v = vision(JSON.stringify({ header_rows: 1, rows: [MERGED.headers, ...MERGED.rows] }))
-    const r = await assessTablesWithVision([MERGED], v)
+  it('与图像一致：确认可信，按文字规则原本不可信的表也照常核查', async () => {
+    const v = vision(JSON.stringify({ header_rows: 1, rows: YEARS_GRID }))
+    const r = await assessTablesWithVision([YEARS], v)
     expect(r.verified).toBe(1)
-    expect(r.tables[0]).toBe(MERGED)
+    expect(r.tables[0]).toBe(YEARS)
     expect(r.skipped).toEqual([])
   })
 
-  it('不一致且数字都对得上文字层：改用图像识别的表格，并说明', async () => {
-    const r = await assessTablesWithVision([MERGED], vision(JSON.stringify({ header_rows: 1, rows: PAGE })))
-    expect(r.reread).toEqual(['Table 1. Baseline'])
-    expect(r.tables[0]!.rows).toEqual(PAGE.slice(1))
-    expect(r.tables[0]!.sample_sizes).toEqual([200])
-    expect(r.tables[0]!.grid_rows).toBeUndefined()
-  })
-
-  it('抄错数字、调用失败、没有图像时：退回按文字规则判断（不可信的表跳过）', async () => {
-    const wrong = PAGE.map(row => row.map(c => c.replace('50', '58')))
-    for (const v of [vision(JSON.stringify({ rows: wrong })), vision(new Error('timeout')), null]) {
-      const r = await assessTablesWithVision([MERGED], v)
+  it('不一致、抄错数字、调用失败、没有图像时：按文字规则判断（不可信的表跳过），不改用图像抄出的表', async () => {
+    const shifted = [YEARS.headers, ['Male, n (%)', '50 (40%) 30 (30%)', ''], ['Age', '62', '61']]
+    const wrong = YEARS_GRID.map(row => row.map(c => c.replace('50', '58')))
+    for (const v of [vision(JSON.stringify({ rows: shifted })), vision(JSON.stringify({ rows: wrong })), vision(new Error('timeout')), null]) {
+      const r = await assessTablesWithVision([YEARS], v)
       expect(r.tables).toEqual([])
       expect(r.skipped).toHaveLength(1)
-      expect(r.reread).toEqual([])
+      expect(r.verified).toBe(0)
     }
+    // 按文字规则可信的表：不一致也照常核查（用转换结果）
+    const good = summary(['Variable', 'n'], [['Age', '62']])
+    const r = await assessTablesWithVision([good], vision(JSON.stringify({ rows: [['Variable', 'n'], ['Age', '63']] }), ['Variable', 'n', 'Age', '62', '63']))
+    expect(r.tables).toEqual([good])
   })
 
   it('最多核对 max 张；按文字规则不可信的表优先', async () => {
@@ -79,10 +87,10 @@ describe('按页面图像核对表格', () => {
     const seen: string[] = []
     const v: TableVision = {
       max: 1,
-      source: async id => { seen.push(id); return { images: IMG, words: PAGE_WORDS } },
-      complete: async () => JSON.stringify({ rows: PAGE }),
+      source: async id => { seen.push(id); return { images: IMG, words: YEARS_WORDS } },
+      complete: async () => JSON.stringify({ rows: YEARS_GRID }),
     }
-    await assessTablesWithVision([good, MERGED], v)
+    await assessTablesWithVision([good, YEARS], v)
     expect(seen).toEqual(['t1'])
   })
 
@@ -98,19 +106,29 @@ describe('按页面图像核对表格', () => {
 })
 
 describe('深度审稿接上图像核对', () => {
-  it('转换稿的表格并错了行：按图像识别的表格核查出百分比错误，并给出说明', async () => {
+  const md = `# 稿件\n\n## Results\n\nTable 1. Baseline\n\n| Variable | 2019 (n=200) | 2020 (n=100) |\n|---|---|---|\n| Male, n (%) | 50 (40%) | 30 (30%) |\n| Age | 62 | 61 |\n`
+
+  async function review(withVision: boolean) {
     const store = new Store(':memory:')
     const docs = new Documents(store)
-    const md = `# 稿件\n\n## Results\n\nTable 1. Baseline\n\n| Variable | Group A (n=200) |\n|---|---|\n| Male Female | 50 (40%) 150 (75%) |\n| Age | 62 |\n| Abbreviations: n, number | |\n`
     const row = docs.create({ owner: 'u', title: '稿件', markdown: md })
     const claims = new ClaimService(docs, {} as PubMedClient)
-    const v = vision(JSON.stringify({ header_rows: 1, rows: PAGE }))
-    const tableId = (() => { let id = ''; docs.get(row.id).descendants(n => { if (n.type.name === 'table') id = n.attrs.id; return !id }); return id })()
-    v.source = async id => (id === tableId ? { images: IMG, words: PAGE_WORDS } : null)
-    const r = await claims.runFourStageDeepReview(row.id, { mode: 'heurion_evolved', owner: 'u', assessTables: true, tableVision: v })
-    expect(v.calls).toBe(1)
-    expect(r.warnings.some(w => w.includes('按页面图像重新识别'))).toBe(true)
-    // 50/200 = 25% ≠ 40%：转换稿里这一格是「50 (40%) 150 (75%)」，不按图像识别就核查不出来
+    const v = vision(JSON.stringify({ header_rows: 1, rows: YEARS_GRID }))
+    const r = await claims.runFourStageDeepReview(row.id, { mode: 'heurion_evolved', owner: 'u', assessTables: true, ...(withVision ? { tableVision: v } : {}) })
+    return { r, calls: v.calls }
+  }
+
+  it('按文字规则不可信、但与页面图像一致的表：照常核查，查出百分比错误', async () => {
+    const { r, calls } = await review(true)
+    expect(calls).toBe(1)
+    expect(r.warnings).toEqual([])
+    // 50/200 = 25% ≠ 40%
     expect(r.stage4_deduplicated_comments.some(c => c.subtype === 'table_cell_percentage_arithmetic_error' && c.snippet === '50 (40%)')).toBe(true)
+  })
+
+  it('没有图像核对时同一张表被跳过并提示', async () => {
+    const { r } = await review(false)
+    expect(r.warnings.some(w => w.includes('未能可靠识别'))).toBe(true)
+    expect(r.stage4_deduplicated_comments.some(c => c.subtype === 'table_cell_percentage_arithmetic_error')).toBe(false)
   })
 })

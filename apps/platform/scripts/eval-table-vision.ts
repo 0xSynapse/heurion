@@ -3,12 +3,12 @@
  * 分别和 JATS 原表比（与导入评测同一套比对：行列对上的张数、单元格精确率），外加抄出的数字在文字层里的比例、与转换结果一致的张数。
  *
  * 会把表格区域的截图发给 DEEPSEEK_UPSTREAM_URL（评测论文都是开放获取的 PMC 论文）。
- * 用法：DEEPSEEK_API_KEY=… DOC_PARSER_URL=http://127.0.0.1:8005 npx tsx scripts/eval-table-vision.ts [--set main|extra] [--only id,id] [--model deepseek-flash]
+ * 用法：DEEPSEEK_API_KEY=… DOC_PARSER_URL=http://127.0.0.1:8005 npx tsx scripts/eval-table-vision.ts [--set main|extra] [--only id,id] [--model deepseek-flash] [--dump 目录]
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { gridsAgree, numbersFaithful, parseGrid } from '../src/claims/table-vision.ts'
+import { gridsAgree, numbersFaithful, parseGrid, TRANSCRIBE_SYSTEM } from '../src/claims/table-vision.ts'
 import { HttpDocParser } from '../src/convert/doc-parser.ts'
 import { importPdf } from '../src/convert/pdf-import.ts'
 import { tableSourceProvider } from '../src/convert/pdf-crop.ts'
@@ -22,12 +22,8 @@ import { IMPORT_DATA_DIR } from './eval-review-paths.ts'
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : undefined }
 
-// 与 claims/table-vision.ts 的转录要求相同（这里单独调用，拿到原始网格做比对）
-const SYSTEM =
-  '你是表格转录员。把图片里的表格逐格抄成 JSON，只输出 JSON：{"header_rows": <表头行数>, "rows": [["格", "格", …], …]}。' +
-  '规则：逐字照抄（数字、符号、上下标、括号、正负号原样保留，上标写成 ^x），不翻译、不计算、不补全、不改正；' +
-  '每一行的格数相同；合并单元格的文字只写在左上那一格，被它覆盖的格写空字符串；' +
-  '表题、表注、脚注不算表格，不要抄；有几张图时它们是同一张表的连续几页，按顺序接起来，续页重复的表头只保留一次。'
+// 与审稿用同一个转录要求（这里单独调用，拿到原始网格做比对）
+const SYSTEM = TRANSCRIBE_SYSTEM
 
 const md = (grid: string[][]) => {
   const w = Math.max(...grid.map(r => r.length))
@@ -46,6 +42,8 @@ async function main(): Promise<void> {
   const dp = new HttpDocParser(url, { timeoutMs: 600_000 })
   const only = arg('--only')?.split(',')
   const ids = evalIds(arg('--set') ?? 'main').filter(id => !only || only.includes(id))
+  const dump = arg('--dump')
+  if (dump) mkdirSync(dump, { recursive: true })
   const tot = { tables: 0, read: 0, faithful: 0, agree: 0, doclingDims: 0, visionDims: 0, doclingExact: 0, visionExact: 0, matched: 0 }
   for (const id of ids) {
     const pdf = new Uint8Array(readFileSync(join(IMPORT_DATA_DIR, 'pdf', `${id}.pdf`)))
@@ -70,7 +68,13 @@ async function main(): Promise<void> {
       let grid = docling[k]!
       if (src) {
         try {
-          const parsed = parseGrid(await vision(SYSTEM, '请抄出这张表。', src.images))
+          // --dump：每张表的抄写结果存下来（文件已在时直接用，不再调模型），便于逐格查看
+          const file = dump ? join(dump, `${id}-${k}.json`) : ''
+          const raw = file && existsSync(file)
+            ? (JSON.parse(readFileSync(file, 'utf8')) as { raw: string }).raw
+            : await vision(SYSTEM, '请抄出这张表。', src.images)
+          if (file) writeFileSync(file, JSON.stringify({ id, table: k, raw, docling: docling[k], words: src.words }, null, 1))
+          const parsed = parseGrid(raw)
           if (parsed) {
             tot.read++
             const f = numbersFaithful(parsed.rows, src.words)

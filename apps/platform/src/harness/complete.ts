@@ -15,7 +15,7 @@ interface CompleteOptions { upstream: string; apiKey: string; model: string; tim
 
 type Content = string | Array<{ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }>
 
-function caller(opts: CompleteOptions): (system: string, content: Content) => Promise<string> {
+function caller(opts: CompleteOptions, extra: Record<string, unknown> = {}): (system: string, content: Content) => Promise<string> {
   return async (system, content) => {
     let last: Error | null = null
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -25,7 +25,7 @@ function caller(opts: CompleteOptions): (system: string, content: Content) => Pr
         const res = await fetch(opts.upstream.replace(/\/$/, '') + '/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': opts.apiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({ model: opts.model, max_tokens: 8000, temperature: 0, system, messages: [{ role: 'user', content }] }),
+          body: JSON.stringify({ model: opts.model, max_tokens: 8000, temperature: 0, ...extra, system, messages: [{ role: 'user', content }] }),
           signal: AbortSignal.timeout(opts.timeoutMs ?? 180_000),
         })
         if (!res.ok) {
@@ -62,7 +62,8 @@ export const VISION_MODELS = new Set(['deepseek-flash'])
  */
 export function makeVisionComplete(opts: CompleteOptions): VisionComplete | null {
   if (!opts.apiKey || !VISION_MODELS.has(opts.model)) return null
-  const call = caller(opts)
+  // 转录不需要推理：开着思考时大表的思考会用光输出上限，回复里没有正文（实测约两成的表）
+  const call = caller(opts, { thinking: { type: 'disabled' } })
   return (system, user, images) => call(system, [
     ...images.map(img => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: img.mime, data: img.data } })),
     { type: 'text' as const, text: user },

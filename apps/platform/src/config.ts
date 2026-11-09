@@ -44,9 +44,9 @@ export const config = {
   llmUpstream: env('DEEPSEEK_UPSTREAM_URL', 'https://api.deepseek.com/anthropic/v1'),
   /**
    * 审稿时按页面图像核对表格（docs/design/PDF_ORIGINAL_VIEW.md §12.3）：把 PDF 稿表格区域的截图发给同一个上游的图像模型。
-   * REVIEW_TABLE_VISION=0 关闭；REVIEW_VISION_MODEL 指定图像模型（默认用 DSH_MODEL，它不支持图像时不启用）。
+   * 默认关闭（评测里收益很小，见 §12.5）；REVIEW_TABLE_VISION=1 打开；REVIEW_VISION_MODEL 指定图像模型（默认用 DSH_MODEL）。
    */
-  reviewTableVision: env('REVIEW_TABLE_VISION', '1') !== '0',
+  reviewTableVision: env('REVIEW_TABLE_VISION', '0') === '1',
   reviewVisionModel: process.env.REVIEW_VISION_MODEL ?? '',
   /** 邮件发信服务配置：标准 SMTP (首选) 或 Resend API */
   smtpHost: process.env.SMTP_HOST || process.env.NEXUS_SMTP_HOST || '',

@@ -29,7 +29,7 @@ import {
   type VerificationTier,
 } from './extract.ts'
 import { headingText, isPendingDeletion } from './extract.ts'
-import { assessTablesWithVision, rereadTablesWarning, type TableVision } from './table-vision.ts'
+import { assessTablesWithVision, type TableVision } from './table-vision.ts'
 
 /**
  * 论断核对与四阶段深度临床评审服务（M1，PLATFORM.md §5.5 & Google PAT arXiv:2606.28277 扩展）：
@@ -969,7 +969,6 @@ export class ClaimService {
     if (opts.assessTables && tables.length) {
       const checked = await assessTablesWithVision(tables, opts.tableVision)
       tables = checked.tables
-      if (checked.reread.length) warnings.push(rereadTablesWarning(checked.reread))
       if (checked.skipped.length) warnings.push(untrustedTablesWarning(checked.skipped))
     }
     // 全部表格都不可用时显式跳过，避免规则核查把空列表当成「未提供」而重新从文档提取表格

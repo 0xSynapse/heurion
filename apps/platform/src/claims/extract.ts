@@ -294,32 +294,6 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
 }
 
 /**
- * 用另一份网格（按页面图像重新识别的表格，PDF_ORIGINAL_VIEW.md §12.3）代替表格的内容：
- * 首行作表头，样本量、伪队列人数与数值按新网格重算；不带网格行号（意见锚在整张表，原版上按单元格文字定位）。
- */
-export function summaryFromRows(base: TableSummary, grid: string[][]): TableSummary {
-  const sampleSizes = new Set<number>()
-  const cloneSizes = new Set<number>()
-  const numbers = new Set<string>()
-  for (const cell of grid.flat()) {
-    for (const m of cell.matchAll(/\b[nN]\s*[=＝]\s*(\d+)\b/g)) if (Number(m[1]) > 0) sampleSizes.add(Number(m[1]))
-    for (const m of cell.matchAll(/\bclones?\s*[=＝]\s*(\d+)\b/gi)) if (Number(m[1]) > 0) cloneSizes.add(Number(m[1]))
-    for (const nm of cell.match(/\b\d+(?:\.\d+)?[%％]?/g) ?? []) numbers.add(nm.replace(/％/g, '%'))
-  }
-  const width = Math.max(0, ...grid.map(r => r.length))
-  const rows = grid.map(r => Array.from({ length: width }, (_, i) => r[i] ?? ''))
-  const { grid_rows: _gridRows, clone_sizes: _clones, ...rest } = base
-  return {
-    ...rest,
-    headers: rows[0] ?? [],
-    rows: rows.slice(1),
-    sample_sizes: [...sampleSizes],
-    ...(cloneSizes.size > 0 ? { clone_sizes: [...cloneSizes] } : {}),
-    numbers: [...numbers],
-  }
-}
-
-/**
  * 构建跨章节共享草稿板（对应 Google PAT Stage 3 的 Shared Scratchpad）：
  * 汇总全文入组样本量、研究设计、声明的统计检验指标与缩写表。
  */
