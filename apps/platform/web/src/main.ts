@@ -1211,6 +1211,10 @@ function renderCollaborators(list: Array<{ name: string; role: string }>, readOn
 let origView: OriginalView | null = null
 /** 已按默认打开过原版的文档（同一次打开里刷新详情时不再切回原版） */
 let origAutoOpened: string | null = null
+/** 原版视图加载完后要定位的评论 */
+let pendingOrigFocus: string | null = null
+/** 刚补生成过原版对照的文档（重开原版视图时不用缓存的映射） */
+let origMapRebuilt: string | null = null
 
 function setOriginalMode(on: boolean): void {
   if (!session || session.kind !== 'doc' || !detail?.original) on = false
@@ -1239,9 +1243,31 @@ function setOriginalMode(on: boolean): void {
         switchTab('commentPane')
         locateCommentInDoc(id)
       },
+      freshMap: origMapRebuilt === docId,
+      ...(detail.original.mapped ? {} : {
+        // 没有原版对照（早期导入 / 当时退回兜底解析）：重新解析原文件补生成，生成后重开原版视图
+        onRebuildMap: async () => {
+          try {
+            const r = await api<{ matched: number; total: number }>(`/api/docs/${docId}/source-map/rebuild`, { method: 'POST' })
+            showNotice(`已生成原版对照（对上 ${r.matched} / ${r.total} 处）`)
+            origMapRebuilt = docId
+          } catch (err) {
+            showNotice(`生成原版对照失败：${(err as Error).message}`, true)
+          }
+          closeOriginal()
+          await refresh(true)
+          setOriginalMode(true)
+        },
+      }),
     })
     $('scroller').after(origView.el)
-    void origView.load(!!detail.original.mapped).then(() => origView?.setComments(detail?.comments ?? []))
+    void origView.load(!!detail.original.mapped).then(() => {
+      origView?.setComments(detail?.comments ?? [])
+      // 从评论卡片的「第 N 页」打开时：加载完再定位
+      const focus = pendingOrigFocus
+      pendingOrigFocus = null
+      if (focus) setTimeout(() => locateCommentInDoc(focus), 200)
+    })
   }
   origView.el.removeAttribute('hidden')
 }
@@ -3627,7 +3653,8 @@ function renderCommentCardHtml(c: any): string {
         <span class="rv-cat-tag">${esc(isReview ? meta.categoryLabel : '批注')}</span>
         <span class="rv-origin">${esc(originLabel)}${originTime ? ` · ${esc(originTime)}` : ''}</span>
         <button type="button" class="rv-sec-badge" data-locate="1" title="点击定位并高亮所属章节与原句">${esc(secLabel)}</button>
-        ${typeof c.page === 'number' ? `<span class="rv-page-badge" title="在原版 PDF 中的页码">第 ${c.page} 页</span>` : ''}
+        ${typeof c.page === 'number' ? `<button type="button" class="rv-page-badge" data-orig-view="1" title="在原版 PDF 中查看这一处">第 ${c.page} 页</button>` : ''}
+        ${c.edited ? `<span class="rv-edited-badge" title="导入后这段在转换稿里改过：原版上的高亮按导入时的文字，可能不准">已修改</span>` : ''}
         <span class="grow"></span>
         ${c.status === 'open' ? `<button type="button" class="quiet small-btn" data-act="delete" title="删除批注">✕</button>` : ''}
       </div>
@@ -4003,6 +4030,19 @@ $('comments').onclick = async e => {
   if (jumpDiffBtn?.dataset.rvJumpDiff) {
     locateCommentInDoc(jumpDiffBtn.dataset.rvJumpDiff)
     jumpToSuggestion(1)
+    return
+  }
+  // 「第 N 页」：切到原版并定位（原版第一次打开时等加载完再定位）
+  const origBtn = targetEl.closest<HTMLElement>('[data-orig-view]')
+  if (origBtn) {
+    const cid = origBtn.closest<HTMLElement>('[data-cid]')?.dataset.cid
+    if (!cid) return
+    if (!origView || origView.el.hasAttribute('hidden')) {
+      const fresh = !origView
+      if (fresh) pendingOrigFocus = cid
+      setOriginalMode(true)
+      if (!fresh) locateCommentInDoc(cid)
+    } else locateCommentInDoc(cid)
     return
   }
   const locateTrigger = targetEl.closest('[data-locate]') as HTMLElement | null

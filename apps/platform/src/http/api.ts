@@ -53,7 +53,9 @@ import { verifyPrompt } from '../claims/service.ts'
 import { docxFor, pptxFor } from '../convert/exports.ts'
 import { bindDeckAssets, importPptx, PptxImportError } from '../convert/pptx-import.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
-import { sourcePager } from '../convert/source-pages.ts'
+import { sourceIndex } from '../convert/source-pages.ts'
+import { rebindSourceMap } from '../convert/source-rebind.ts'
+import { indexById } from '../model/ids.ts'
 import { tableSourceProvider } from '../convert/pdf-crop.ts'
 import type { VisionComplete } from '../harness/complete.ts'
 import { exportFontsParam, withFonts } from '../convert/fonts.ts'
@@ -1504,13 +1506,18 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         user_refs: refPlan.userCount,
         duplicates: refPlan.duplicates,
       },
-      // 有原版映射的 PDF 稿：评论带原版页码（§5.4）
+      // 有原版映射的 PDF 稿：评论带原版页码（§5.4）；锚定的段落在转换稿里改过时标 edited（原版上的位置可能不准，§5.3）
       comments: (() => {
-        const pageOf = sourcePager(row.id, store.getSourceMapGz(row.id))
+        const src = sourceIndex(row.id, store.getSourceMapGz(row.id))
+        const byId = src ? indexById(doc) : null
         return store.listComments(row.id).map(x => {
           const anchor = locate(doc, x, marks)
-          const page = pageOf?.([...(anchor.node_ids ?? []), x.node_id]) ?? null
-          return { ...x, anchor, ...(page != null ? { page } : {}) }
+          const page = src?.page([...(anchor.node_ids ?? []), x.node_id]) ?? null
+          const nodeId = anchor.node_ids?.length === 1 ? anchor.node_ids[0]! : x.node_id
+          const was = src?.importText(nodeId)
+          const now = byId?.get(nodeId)?.node.textContent
+          const edited = was !== undefined && now !== undefined && was !== now
+          return { ...x, anchor, ...(page != null ? { page } : {}), ...(edited ? { edited: true } : {}) }
         })
       })(),
       // 测量原子：按当前用户对来源的权限取值（编辑器显示数值、悬停显示来源与状态）
@@ -1735,6 +1742,30 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const gz = row ? store.getSourceMapGz(row.id) : null
     if (!gz) return c.json({ error: 'not found' }, 404)
     return c.body(new Uint8Array(gz), 200, { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip', 'Cache-Control': 'private, max-age=86400' })
+  })
+
+  /**
+   * 给没有原版映射的 PDF 稿补生成映射（早期导入、或当时退回了兜底解析）：重新解析原文件，按文字把块对到当前文档上。
+   * 只写映射（原版视图的显示数据），不改文档内容。
+   */
+  app.post('/api/docs/:id/source-map/rebuild', async c => {
+    const row = owned(c)
+    if (!row) return c.json({ error: 'not found' }, 404)
+    const bytes = store.getImportInfo(row.id)?.kind === 'pdf' ? store.getPackage(row.id) : null
+    if (!bytes) return c.json({ error: '这份文档不是从 PDF 导入的' }, 404)
+    if (!deps.docParser) return c.json({ error: '没有配置 PDF 解析服务，无法生成原版对照' }, 503)
+    let fresh: Awaited<ReturnType<typeof importPdf>>
+    try {
+      fresh = await importPdf(bytes, `${row.title}.pdf`, { docParser: deps.docParser })
+    } catch (err) {
+      if (err instanceof PdfImportError) return c.json({ error: err.message }, 422)
+      throw err
+    }
+    if (!fresh.sourceMap) return c.json({ error: '解析服务暂时不可用（这次退回了兜底解析），请稍后再试' }, 503)
+    const rebound = rebindSourceMap(docs.get(row.id), fresh.doc, fresh.sourceMap)
+    if (rebound.matched === 0) return c.json({ error: '重新解析的结果与当前文档对不上，无法生成原版对照' }, 409)
+    store.putSourceMap(row.id, rebound.map)
+    return c.json({ ok: true, matched: rebound.matched, total: rebound.total })
   })
 
   /** 幻灯片的精确预览（LibreOffice 或内置 Resvg 矢量光栅化渲染，按 rev 缓存）。 */

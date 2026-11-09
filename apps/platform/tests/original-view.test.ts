@@ -5,8 +5,9 @@ import { assignIds } from '../src/model/ids.ts'
 import { Store } from '../src/store/db.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { duplicateDoc } from '../src/model/duplicate.ts'
-import { findQuoteWords, type Word } from '../web/src/quote-match.ts'
-import { sourcePager } from '../src/convert/source-pages.ts'
+import { findQuoteWords, locateQuote, type Word } from '../web/src/quote-match.ts'
+import { sourceIndex, sourcePager } from '../src/convert/source-pages.ts'
+import { rebindSourceMap } from '../src/convert/source-rebind.ts'
 
 // 原版 PDF 视图的映射（docs/design/PDF_ORIGINAL_VIEW.md §3）：doc-parser 给的 src → 按块 id 存
 
@@ -91,6 +92,16 @@ describe('原版视图的引用兜底定位（§12.2）', () => {
     expect(findQuoteWords(W, table, 'Men')).toEqual([3])
   })
 
+  it('兜底顺序：区域内 → 去掉 Markdown 表格行的竖线 → 全文唯一（图注在图片区域外）', () => {
+    const pages = [{ w: 600, h: 800 }, { w: 600, h: 800 }, { w: 600, h: 800 }]
+    expect(locateQuote(W, table, pages, ['Men | 124 (60.2%) | 118 (57.3%)'])).toEqual([3, 4, 5, 6, 7])
+    // 图注不在图块区域里：全文找，唯一才算
+    const fig = [...W, [2, 10, 300, 60, 310, 'Figure'] as Word, [2, 62, 300, 70, 310, '1.'] as Word, [2, 72, 300, 120, 310, 'Flowchart'] as Word]
+    expect(locateQuote(fig, [[2, 5, 200, 260, 290]], pages, ['Figure 1. Flowchart'])).toEqual([9, 10, 11])
+    // 太短的引用不到全文里找（「124」在两页都有）
+    expect(locateQuote(W, [], pages, ['124'])).toBeNull()
+  })
+
   it('找不到、出现不止一次或太短时返回 null（退回画整块）', () => {
     expect(findQuoteWords(W, table, '99 (1.0%)')).toBeNull()
     expect(findQuoteWords(W, table, '6')).toBeNull()
@@ -111,5 +122,31 @@ describe('评论的原版页码（§5.4）', () => {
     expect(pager(['missing', 'empty', 'p1'])).toBe(2)
     expect(pager(['missing', null])).toBeNull()
     expect(sourcePager('x', null)).toBeNull()
+    // 导入时的文字：判断段落后来是否改过
+    const idx = sourceIndex('doc-pager-test-2', gzipSync(Buffer.from(JSON.stringify(map))))!
+    expect(idx.importText('cell')).toBe('b')
+    expect(idx.importText('p1')).toBeUndefined()
+  })
+})
+
+describe('早期导入的文档补生成原版对照（§7）', () => {
+  it('重新解析的块按顺序、类型与文字对到当前文档的块 id；改过的块不进映射', () => {
+    const docs = new Documents(new Store(':memory:'))
+    const cur = docs.get(docs.create({ owner: 'u', title: 'c', markdown: '# Methods\n\nWe enrolled adults.\n\nAdded later by the author.\n\nAge was recorded (edited).\n\nResults follow.' }).id)
+    const fresh = docs.get(docs.create({ owner: 'u', title: 'f', markdown: '# Methods\n\nWe enrolled adults.\n\nAge was recorded.\n\nResults follow.' }).id)
+    const ids = (d: typeof cur) => { const out: string[] = []; d.forEach(n => out.push(n.attrs.id as string)); return out }
+    const [fh, fa, fb, fc] = ids(fresh)
+    const map = { version: 1 as const, pages: [{ w: 600, h: 800 }], words: [], nodes: {
+      [fh!]: { regions: [[1, 0, 0, 10, 10]] }, [fa!]: { text: 'We enrolled adults.', regions: [[1, 0, 20, 10, 30]] },
+      [fb!]: { text: 'Age was recorded.', regions: [[1, 0, 40, 10, 50]] }, [fc!]: { text: 'Results follow.', regions: [[1, 0, 60, 10, 70]] },
+    } }
+    const r = rebindSourceMap(cur, fresh, map)
+    const [ch, ca, cNew, cb, cc] = ids(cur)
+    expect(r.total).toBe(4)
+    expect(r.matched).toBe(3)
+    expect(Object.keys(r.map.nodes).sort()).toEqual([ch, ca, cc].sort())
+    expect(r.map.nodes[ca!]!.regions).toEqual([[1, 0, 20, 10, 30]])
+    expect(r.map.nodes[cNew!]).toBeUndefined()
+    expect(r.map.nodes[cb!]).toBeUndefined()
   })
 })

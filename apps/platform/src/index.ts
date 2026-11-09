@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { basename, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'node:http'
 import { getRequestListener } from '@hono/node-server'
@@ -250,6 +250,13 @@ app.get('/assets/:file', c => {
   const file = join(DIST, 'assets', basename(c.req.param('file')))
   if (!existsSync(file)) return c.notFound()
   return c.body(readFileSync(file), 200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'public, max-age=31536000, immutable' })
+})
+// pdf.js 的 CMap 与标准字体（原版视图渲染没内嵌字体的 PDF 用）：从依赖包里自托管，不走 CDN；公开的库文件，不需登录
+const PDFJS_DIR = dirname(fileURLToPath(import.meta.resolve('pdfjs-dist/package.json')))
+app.get('/pdfjs/:kind{cmaps|standard_fonts}/:file{[A-Za-z0-9._-]+}', c => {
+  const file = join(PDFJS_DIR, c.req.param('kind'), basename(c.req.param('file')))
+  if (!existsSync(file)) return c.notFound()
+  return c.body(readFileSync(file), 200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'public, max-age=31536000, immutable' })
 })
 // 带图模板的照片（模板选择器的缩略图用；Unsplash 授权，公开）
 app.get('/theme-photos/:id', c => {

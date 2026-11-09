@@ -8547,12 +8547,27 @@ a.auth-home-btn:hover {
   color: #fff;
   border-color: var(--mint);
 }
-/* 原版 PDF 页码（PDF 导入的稿件） */
+/* 原版 PDF 页码（PDF 导入的稿件）：点击切到原版并定位 */
 .rv-page-badge {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--muted);
+  background: none;
   border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rv-page-badge:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+/* 锚定的段落导入后在转换稿里改过：原版上的位置可能不准 */
+.rv-edited-badge {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px dashed var(--line-strong);
   border-radius: 3px;
   padding: 1px 6px;
   white-space: nowrap;

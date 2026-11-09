@@ -14,6 +14,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': 'http://127.0.0.1:8787',
+      // pdf.js 的 CMap 与标准字体由平台服务提供
+      '/pdfjs': 'http://127.0.0.1:8787',
       '/collab': { target: 'ws://127.0.0.1:8787', ws: true },
     },
   },

@@ -18,6 +18,27 @@ function norm(s: string): string {
 }
 
 /**
+ * 引用兜底定位的完整顺序（审稿意见按块对不上文字时）：
+ * 1. 块的区域里找原文；2. 模型按 Markdown 表格行引用（「G1 and 2 | 26 (86.7%) | …」）时去掉竖线再找；
+ * 3. 块的区域里找不到（图注在图片区域外、块不在映射里）时到全文里找，文字够长（≥ 8 字）且全文唯一才算。
+ */
+export function locateQuote(words: Word[], regions: number[][], pages: Array<{ w: number; h: number }>, quotes: Array<string | undefined>): number[] | null {
+  const qs = quotes.map(q => (q ?? '').trim()).filter(q => q && q.length < 400)
+  const variants = qs.flatMap(q => (q.includes('|') ? [q, q.replace(/\s*\|\s*/g, ' ')] : [q]))
+  const all = pages.map((p, i) => [i + 1, 0, 0, p.w, p.h])
+  for (const q of variants) {
+    const hit = findQuoteWords(words, regions, q)
+    if (hit) return hit
+  }
+  for (const q of variants) {
+    if (q.length < 8) continue
+    const hit = findQuoteWords(words, all, q)
+    if (hit) return hit
+  }
+  return null
+}
+
+/**
  * 在给定区域（[页, 左, 上, 右, 下]，词框中心落在区域内的词）里按阅读顺序找 quote，返回覆盖它的词序号。
  * 找不到、quote 太短（少于 2 个字）或出现不止一次时返回 null（由调用方退回画整块）。
  */

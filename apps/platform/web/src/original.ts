@@ -7,7 +7,7 @@
  */
 import type { Node as PMNode } from 'prosemirror-model'
 import type { SelectionAnchor } from './editor.ts'
-import { findQuoteWords, type Word } from './quote-match.ts'
+import { locateQuote, type Word } from './quote-match.ts'
 interface SourceMap {
   version: 1
   /** rot：解析时为转正竖排页额外加的旋转（顺时针度数），渲染时同样转，词坐标按转正后的页面 */
@@ -32,6 +32,10 @@ export interface OriginalViewOptions {
   currentDoc: () => PMNode | null
   onSelection: (anchor: SelectionAnchor | null) => void
   onCommentClick: (id: string) => void
+  /** 没有原版对照时显示「生成原版对照」按钮，点击调用（PDF 稿才给） */
+  onRebuildMap?: () => void
+  /** 刚补生成过对照：读映射时不用浏览器缓存 */
+  freshMap?: boolean
 }
 
 const MAX_WIDTH = 920
@@ -65,7 +69,7 @@ export class OriginalView {
     try {
       const [bytes, map] = await Promise.all([
         this.opts.fetchBytes(`/api/docs/${this.opts.docId}/original.pdf`),
-        mapped ? this.opts.fetchJson(`/api/docs/${this.opts.docId}/source-map`).catch(() => null) : Promise.resolve(null),
+        mapped ? this.opts.fetchJson(`/api/docs/${this.opts.docId}/source-map${this.opts.freshMap ? `?v=${Date.now()}` : ''}`).catch(() => null) : Promise.resolve(null),
       ])
       if (this.destroyed) return
       this.map = map as SourceMap | null
@@ -73,7 +77,11 @@ export class OriginalView {
       const worker = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default
       pdfjs.GlobalWorkerOptions.workerSrc = worker
       // 不执行 PDF 里的脚本、不加载远程资源（CVE-2024-4367 之类的字体脚本问题由 isEvalSupported:false 关掉）
-      this.pdf = await pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, enableXfa: false }).promise
+      // CMap 与标准字体由平台自托管（/pdfjs/…，见 src/index.ts）：没内嵌字体、用了 CJK CMap 的 PDF 也能正常显示
+      this.pdf = await pdfjs.getDocument({
+        data: new Uint8Array(bytes), isEvalSupported: false, enableXfa: false,
+        cMapUrl: '/pdfjs/cmaps/', cMapPacked: true, standardFontDataUrl: '/pdfjs/standard_fonts/',
+      }).promise
       if (this.destroyed) return
       this.indexWords()
       await this.layout()
@@ -139,6 +147,15 @@ export class OriginalView {
       const note = document.createElement('div')
       note.className = 'orig-status'
       note.textContent = '这份文档没有原版对照信息（兜底解析导入或早期导入）：只能查看原版，评论与审稿标注不显示在原版上。'
+      if (this.opts.onRebuildMap) {
+        // 重新解析原文件补生成对照（不改文档内容）
+        const btn = document.createElement('button')
+        btn.type = 'button'
+        btn.className = 'small-btn'
+        btn.textContent = '生成原版对照'
+        btn.onclick = () => { btn.disabled = true; btn.textContent = '正在重新解析 PDF…'; this.opts.onRebuildMap!() }
+        note.append(' ', btn)
+      }
       this.el.append(note)
     }
     this.pagesEl = []
@@ -225,7 +242,12 @@ export class OriginalView {
       const ids = c.anchor?.node_ids ?? []
       const nodeId = ids.length === 1 ? ids[0]! : c.node_id
       const n = this.map.nodes[nodeId] ?? this.map.nodes[c.node_id]
-      if (!n) continue
+      if (!n) {
+        // 块不在映射里（平台按表格题注生成的表题段落等）：在全文的词里找这段文字，全文唯一时高亮
+        const hit = locateQuote(this.map.words, [], this.map.pages, [c.snippet, c.anchor?.text])
+        if (hit) for (const line of mergeLines(hit.map(w => this.map!.words[w]!))) add(line[0]!, line.slice(1), c.id, 'text')
+        continue
+      }
       const quote = (c.anchor?.text ?? c.snippet ?? '').trim()
       const at = quote && n.text ? n.text.indexOf(quote) : -1
       if (at >= 0 && n.spans) {
@@ -236,8 +258,7 @@ export class OriginalView {
         // 块在转换稿里改过、或锚在整块（表格意见按图像重新识别后锚在整张表）：在块的区域里按文字找；
         // 先找评论记下的文字（表格意见是单元格文字），再找锚定的文字；都找不到才画块的区域
         const regions = n.regions ?? []
-        const hit = [c.snippet, c.anchor?.text].map(q => (q ?? '').trim()).filter(q => q && q.length < 400)
-          .map(q => findQuoteWords(this.map!.words, regions, q)).find(Boolean)
+        const hit = locateQuote(this.map.words, regions, this.map.pages, [c.snippet, c.anchor?.text])
         if (hit) for (const line of mergeLines(hit.map(w => this.map!.words[w]!))) add(line[0]!, line.slice(1), c.id, 'text')
         else for (const r of regions) add(r[0]!, r.slice(1), c.id, 'block')
       }

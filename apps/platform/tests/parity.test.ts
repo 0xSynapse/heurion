@@ -204,6 +204,7 @@ const NOT_FOR_AI: Record<string, string> = {
   // 原版 PDF 视图（docs/design/PDF_ORIGINAL_VIEW.md）：页面渲染用的原文件与词坐标；AI 读转换稿（doc_read），评论照常经评论工具
   'GET /api/docs/:id/original.pdf': '原版视图在浏览器里用 pdf.js 渲染的 PDF 原文件；AI 读的是同一份内容的转换稿（doc_read）',
   'GET /api/docs/:id/source-map': '原版视图的词坐标与块对齐，只用来在页面上画高亮、把选区换回块；AI 用块 id 与文字（comments_list）定位',
+  'POST /api/docs/:id/source-map/rebuild': '给早期导入的 PDF 稿补生成原版视图的显示数据（不改文档内容）；AI 不用原版视图，按块 id 与文字定位',
   'GET /api/images': '界面用来决定是否显示搜图入口；AI 从 image_search 返回的 unsplash_unconfigured 得知图库没配置',
   'GET /api/imaging/samples': '界面用来获取可供医生体验的临床预置样本列表（如 chest_lung_ct 269层）；AI 可直接通过 imaging_analyze 的 sample_id 指定',
   'GET /api/imaging/samples/:id/file': '预置 3D 样本体素文件二进制下载流，由界面下载；AI 读量化指标与关键截面',
