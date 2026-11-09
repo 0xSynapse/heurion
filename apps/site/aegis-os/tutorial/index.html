@@ -143,7 +143,7 @@
           <ul class="checklist">
             <li>macOS 或 Linux 终端</li>
             <li>Homebrew（macOS / Linux 均可）</li>
-            <li>一个 coding agent：Claude Code、Codex CLI 或 AGY</li>
+            <li>一个 coding agent：Claude Code、OpenCode、Codex CLI、Hermes 或 AGY</li>
             <li>一个 Markdown / Obsidian 笔记库（可选，用于记忆同意）</li>
           </ul>
           <p class="warn">Aegis OS 目前不支持 Windows。不要把真实生产密钥放进示例目录；教程使用本地临时项目。</p>
@@ -157,25 +157,30 @@ brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
 brew trust heurion-org/aegis-os
 brew install aegis-os
 
-<span class="c"># 接入 AGY / Claude Code / Codex（运行一次）</span>
+<span class="c"># 接入 AGY / Claude Code / OpenCode / Codex / Hermes（运行一次；加 --enforce 可安装父进程内核强制包装器）</span>
 aegis-os install
 
 <span class="c"># 验证与 5 秒本地安全体检</span>
 aegis-os --version
 aegis-os doctor
 aegis-os audit-me</pre>
-          <p>Homebrew 安装二进制后，运行一次 <code>aegis-os install</code>，把 Aegis OS 接入 <code>agy</code>、<code>claude</code> 与 <code>codex</code>；随后 <code>doctor</code> 应全部通过。</p>
+          <p>Homebrew 安装二进制后，运行一次 <code>aegis-os install</code>，把 Aegis OS 接入 <code>agy</code>、<code>claude</code>、<code>opencode</code>、<code>codex</code> 与 <code>hermes</code>；随后 <code>doctor</code> 应全部通过。</p>
           <p class="note">如果不用 Homebrew：从 <a href="https://github.com/heurion-org/aegis-os/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载对应平台二进制，或从源码 <code>cargo install --path crates/aos-cli</code>。安装后同样运行 <code>aegis-os install</code>。</p>
         </section>
 
         <section id="agent">
           <p class="label-caps">02 / FIRST RUN</p>
           <h2 class="heading-2">接入 Agent</h2>
-          <p>进入一个项目目录，直接启动你常用的 Agent：</p>
-          <pre class="cmd"><span class="c"># 任选其一</span>
+          <p>进入一个项目目录，按协作场景选择 Advisory 插件模式或 Enforced 父进程内核沙箱模式启动：</p>
+          <pre class="cmd"><span class="c"># 方式 A（Advisory 生产力护栏）：直接启动常用 Agent</span>
 claude
+opencode
 codex
-agy</pre>
+agy
+
+<span class="c"># 方式 B（Enforced 内核强制边界）：由 aegis-os run 作为父进程在 bwrap / Seatbelt 内启动</span>
+aegis-os run -- claude
+aegis-os run -- opencode</pre>
           <p>Aegis OS 的 hook 会自动附加运行时。默认直接进入免费的 Local CoW 沙箱模式，你也可随时切换到 Cloud 模式：</p>
           <table class="tut-table">
             <thead><tr><th>模式</th><th>说明与入口</th></tr></thead>
@@ -290,7 +295,9 @@ aegis-os a2a board</pre>
             <a class="btn-solid" href="/aegis-cloud/dashboard">打开 Aegis Cloud 控制台 / 订阅 Pro →</a>
             <a class="link-arrow" href="/aegis-os/">返回 Aegis OS 概览 →</a>
             <a class="link-arrow" href="/aegis-cloud/approve">边界审批台 (/approve) →</a>
-            <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">arXiv 论文 (2611.08516) →</a>
+            <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">Paper 1 (arXiv:2611.08516) →</a>
+            <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf" target="_blank" rel="noopener">Paper 2 (Enforced Runtime PDF) →</a>
+            <a class="link-arrow" href="/blog/from-agent-plugins-to-enforced-runtime">专论 04：从插件到内核运行时 →</a>
             <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 仓库 →</a>
             <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP 规范 →</a>
           </div>

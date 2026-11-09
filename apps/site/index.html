@@ -101,6 +101,19 @@
         "about": ["Agent Operating System", "Copy-on-Write Shadow Workspace", "Model Context Protocol", "Ed25519 Lease Governance"]
       },
       {
+        "@type": "ScholarlyArticle",
+        "@id": "https://heurion.org/#paper-aegis-enforced",
+        "headline": "Why Agent Plugins Are Not a Security Boundary: Inverting Control from In-Process Hooks to a Kernel-Enforced Agent Runtime",
+        "author": { "@id": "https://heurion.org/#organization" },
+        "publisher": { "@id": "https://heurion.org/#organization" },
+        "url": "https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf",
+        "sameAs": [
+          "https://github.com/heurion-org/aegis-os/blob/main/paper2/main.tex",
+          "https://heurion.org/en/blog/from-agent-plugins-to-enforced-runtime"
+        ],
+        "about": ["Kernel Sandbox", "Bubblewrap & Seatbelt", "Agent Security Boundary", "Dual-Mode Egress Proxy"]
+      },
+      {
         "@type": "MedicalWebPage",
         "@id": "https://heurion.org/#webpage",
         "url": "https://heurion.org/",
@@ -536,6 +549,16 @@
               <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper/main.tex" target="_blank" rel="noopener" data-i18n="p2_tex">LaTeX →</a>
             </div>
           </article>
+
+          <article class="pub-row">
+            <span class="label-caps" data-i18n="p3_meta">2026 · 内核安全边界 · Preprint</span>
+            <h3 class="heading-3" data-i18n="p3_title">Why Agent Plugins Are Not a Security Boundary: Inverting Control from In-Process Hooks to a Kernel-Enforced Agent Runtime</h3>
+            <div class="pub-links">
+              <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf" target="_blank" rel="noopener" data-i18n="p3_pdf">PDF →</a>
+              <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper2/main.tex" target="_blank" rel="noopener" data-i18n="p3_tex">LaTeX →</a>
+              <a class="link-arrow" href="/blog/from-agent-plugins-to-enforced-runtime" data-blog-slug="from-agent-plugins-to-enforced-runtime" data-i18n="p3_blog">技术专论 →</a>
+            </div>
+          </article>
         </div>
       </div>
     </section>
@@ -664,7 +687,12 @@
         p2_meta: '2026 · 智能体系统 · arXiv:2611.08516',
         p2_title: 'Aegis OS: A Transactional Multi-Tenant Operating System Runtime for Eliminating Authorization Fatigue in Autonomous Coding Agents',
         p2_pdf: 'PDF →',
-        p2_tex: 'LaTeX →'
+        p2_tex: 'LaTeX →',
+        p3_meta: '2026 · 内核安全边界 · Preprint',
+        p3_title: 'Why Agent Plugins Are Not a Security Boundary: Inverting Control from In-Process Hooks to a Kernel-Enforced Agent Runtime',
+        p3_pdf: 'PDF →',
+        p3_tex: 'LaTeX →',
+        p3_blog: '技术专论 →'
       },
       en: {
         doc_title: 'Heurion Research · Contract-Guarded Clinical AI Workstation & Aegis OS Agent Runtime',
@@ -764,6 +792,11 @@
         p2_title: 'Aegis OS: A Transactional Multi-Tenant Operating System Runtime for Eliminating Authorization Fatigue in Autonomous Coding Agents',
         p2_pdf: 'PDF →',
         p2_tex: 'LaTeX →',
+        p3_meta: '2026 · KERNEL SECURITY · Preprint',
+        p3_title: 'Why Agent Plugins Are Not a Security Boundary: Inverting Control from In-Process Hooks to a Kernel-Enforced Agent Runtime',
+        p3_pdf: 'PDF →',
+        p3_tex: 'LaTeX →',
+        p3_blog: 'Monograph →',
         nav_blog: 'Blog'
       }
     };
@@ -796,6 +829,10 @@
       document.querySelectorAll('[data-tool-slug]').forEach(el => {
         const slug = el.getAttribute('data-tool-slug');
         if (slug) el.setAttribute('href', (lang === 'en' ? '/en/tools/' : '/tools/') + slug);
+      });
+      document.querySelectorAll('[data-blog-slug]').forEach(el => {
+        const slug = el.getAttribute('data-blog-slug');
+        if (slug) el.setAttribute('href', (lang === 'en' ? '/en/blog/' : '/blog/') + slug);
       });
       document.querySelectorAll('[data-aegis-link]').forEach(el => {
         const tutorial = el.getAttribute('data-aegis-link') === 'tutorial';

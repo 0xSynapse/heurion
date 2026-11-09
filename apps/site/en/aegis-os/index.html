@@ -271,8 +271,8 @@
         <p class="label-caps">FLAGSHIP 02 · RUST · TRANSACTIONAL MULTI-AGENT OS</p>
         <h1 class="heading-1">Aegis OS<br><em>Transactional multi-agent control plane</em></h1>
         <p class="lede">
-          Aegis OS lets multiple coding agents (Claude Code, Codex, AGY) run safely in parallel: each agent gets its own CoW shadow workspace and kernel sandbox,
-          collaborates through Google A2A, requests personal memory through UOMP, and can offload heavy builds to 64GB cloud workspaces in one command.
+          Aegis OS lets multiple autonomous coding agents (Claude Code, OpenCode, AGY, Hermes, Codex) run safely in parallel: each agent gets its own parent-process kernel sandbox (Linux <code>bwrap</code> / macOS Seatbelt) and CoW shadow workspace,
+          collaborates through Google A2A, requests personal memory through UOMP, and offloads heavy builds to 64GB cloud workspaces in one command.
         </p>
         <div class="hero-actions">
           <a class="btn-solid" href="#install">30-Second Free Install →</a>
@@ -284,7 +284,7 @@
         <div class="arch-hero-card" id="architecture">
           <div class="arch-hero-head">
             <span class="label-caps" style="margin:0;">SYSTEM ARCHITECTURE · END-TO-END 3-STAGE CONTROL PLANE</span>
-            <span style="font-family:var(--mono); font-size:0.72rem; color:var(--accent);">90.7%–97.9% FEWER PROMPTS · 0.0% RED-TEAM ASR</span>
+            <span style="font-family:var(--mono); font-size:0.72rem; color:var(--accent);">0/30 (0.0%) V1–V6 BYPASS · 22.4× FASTER THAN CONTAINERS · 90.7%–97.9% FEWER PROMPTS</span>
           </div>
           <div class="arch-flow">
             <!-- Stage 1 -->
@@ -292,14 +292,14 @@
               <div>
                 <p class="label-caps" style="margin-bottom:0.25rem;">01 / CLIENTS</p>
                 <h3 class="arch-stage-title">Coding Agent Clients</h3>
-                <p class="arch-stage-desc">Wired automatically with MCP routing and hooks via <code>aegis-os install</code>, or confined under a parent kernel sandbox via <code>aegis-os run -- &lt;agent&gt;</code>.</p>
+                <p class="arch-stage-desc">Wired automatically with MCP routing and hooks via <code>aegis-os install</code>, or confined under a parent kernel sandbox via <code>aegis-os run -- &lt;agent&gt;</code> across all major production CLIs.</p>
               </div>
               <div class="arch-tags">
                 <span class="arch-tag">Claude Code</span>
-                <span class="arch-tag">OpenAI Codex</span>
-                <span class="arch-tag">Antigravity (AGY)</span>
                 <span class="arch-tag">OpenCode</span>
+                <span class="arch-tag">Antigravity (AGY)</span>
                 <span class="arch-tag">Hermes</span>
+                <span class="arch-tag">OpenAI Codex</span>
               </div>
             </div>
 
@@ -312,13 +312,14 @@
             <div class="arch-stage arch-stage-core">
               <div>
                 <p class="label-caps" style="margin-bottom:0.25rem; color:var(--accent);">02 / AEGIS OS KERNEL</p>
-                <h3 class="arch-stage-title">Transactional Microkernel</h3>
-                <p class="arch-stage-desc">Zero prompts for in-sandbox edits and tests; host commits (<code>workspace_commit</code>) feature inline Web Diff inspection, <code>SHA-256</code> TOCTOU-pinned approval, phone TOTP, and 1-click lease revocation.</p>
+                <h3 class="arch-stage-title">Transactional Microkernel &amp; Egress</h3>
+                <p class="arch-stage-desc">Zero prompts inside the sandbox; split-plane L4/L7 proxy injects <code>$AOS_SECRET_*</code> keys at the host boundary (+0.221 ms TTFT); host commits use frozen-stage <code>SHA-256</code> TOCTOU pinning and phone TOTP.</p>
               </div>
               <div class="arch-tags">
-                <span class="arch-tag arch-tag-core"><strong>aos-vfs</strong> · CoW &amp; Diff3 Merge</span>
+                <span class="arch-tag arch-tag-core"><strong>aos-vfs</strong> · CoW &amp; Split .git</span>
+                <span class="arch-tag arch-tag-core"><strong>aos-egress</strong> · L4/L7 Vault &amp; DLP</span>
                 <span class="arch-tag arch-tag-core"><strong>aos-ipc</strong> · A2A DAG &amp; Glob Claims</span>
-                <span class="arch-tag arch-tag-core"><strong>aos-policy</strong> · SHA-256 Pinned Lease &amp; Hash-Chain Audit</span>
+                <span class="arch-tag arch-tag-core"><strong>aos-policy</strong> · SHA-256 Pinned Lease</span>
               </div>
             </div>
 
@@ -332,7 +333,7 @@
               <div>
                 <p class="label-caps" style="margin-bottom:0.25rem;">03 / RUNTIME</p>
                 <h3 class="arch-stage-title">Local Sandbox ⇄ 64GB Cloud</h3>
-                <p class="arch-stage-desc">Run locally for free forever, or offload heavy builds to 64GB cloud workers in one command.</p>
+                <p class="arch-stage-desc">Run locally for free forever (99.05% physical disk saved on 500MB packed Git repos on APFS), or offload heavy builds to 64GB cloud workers.</p>
               </div>
               <div class="arch-tags">
                 <span class="arch-tag">Local Sandbox ($0)</span>
@@ -348,28 +349,34 @@
     <!-- 01 / QUICK INSTALL (Users install and start using Aegis OS first!) -->
     <section id="install" class="aegis-section">
       <div class="container">
-        <p class="label-caps">01 / QUICK INSTALL</p>
+        <p class="label-caps">01 / QUICK INSTALL &amp; ENFORCED RUNTIME</p>
         <h2 class="heading-2">Install Aegis OS in 30 Seconds</h2>
-        <p>Supports macOS and Linux. Run <code>aegis-os install</code> once after installation to wire <code>claude</code>, <code>codex</code>, and <code>agy</code> — local sandboxing is free forever. For complete multi-agent and cloud workflows, read the <a href="/en/aegis-os/tutorial/" style="color:var(--accent);font-weight:500;">Full Tutorial →</a></p>
+        <p>Supports macOS and Linux. Run <code>aegis-os install</code> for advisory integration, or wrap <code>claude</code>, <code>opencode</code>, <code>agy</code>, <code>hermes</code>, and <code>codex</code> inside a parent-process kernel sandbox via <code>aegis-os run -- &lt;agent&gt;</code> — free forever locally. Read the <a href="/en/aegis-os/tutorial/" style="color:var(--accent);font-weight:500;">Full Tutorial →</a></p>
         <pre class="cmd"><span class="c"># Option A: Homebrew (macOS &amp; Linux)</span>
 brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
 brew install aegis-os
 aegis-os install
-aegis-os audit-me            <span class="c"># 5s local credential exposure &amp; prompt fatigue checkup (--share for badge)</span>
+aegis-os audit-me            <span class="c"># 5s local V1–V6 bypass &amp; credential exposure checkup (--share for badge)</span>
 
 <span class="c"># Option B: One-line signed installer (automatically runs aegis-os install)</span>
 curl -fsSL https://heurion.org/aegis-cloud/install.sh | sh
 
-<span class="c"># Enforced parent-process kernel sandbox mode (Linux bwrap &amp; macOS Seatbelt)</span>
-aegis-os run -- claude
+<span class="c"># Enforced parent-process kernel sandbox mode (Linux bwrap --bind-fd &amp; macOS Seatbelt)</span>
+aegis-os install --enforce
+aegis-os run -- claude       <span class="c"># or: opencode / agy / hermes / codex</span>
+aegis-os diff --json &amp;&amp; aegis-os commit --expected-diff-hash &lt;sha256&gt;
 
 <span class="c"># Launch 64GB cloud workspace (includes 1 free trial workspace)</span>
 aegis-os cloud up</pre>
+        <p class="note" style="margin-top:1.25rem;">
+          <strong>New Cross-Platform &amp; 60-Run Live CLI Agent Evaluation:</strong> Across 30 executable V1–V6 bypass payloads on macOS Seatbelt &amp; Ubuntu 24.04 Linux plus 60 live cloud-API runs of <code>claude</code> (Sonnet &amp; Opus), <code>opencode</code>, <code>agy</code>, and <code>hermes</code>, in-process advisory hooks suffer <strong>93.3%</strong> bypass coverage and <code>nerdctl</code> devcontainers suffer <strong>80.0%</strong>, whereas <code>aegis-os run</code> achieves <strong>0/30 (0.0%) bypass coverage and 0% live repo-trap compromise</strong> with a <strong>9.91 ms</strong> Linux startup latency (<strong>22.4× faster</strong> than containers) and <strong>100% (4/4)</strong> multi-file test pass rate.
+        </p>
         <div class="link-row">
           <a class="btn-solid" href="/en/aegis-os/tutorial/">Read the full tutorial →</a>
           <a class="link-arrow" href="#pricing" onclick="setTimeout(()=>document.getElementById('pro-email-input')?.focus(),150)">Upgrade to Pro for 16 Workspaces &amp; 8 Parallel Agents ($29/mo) →</a>
-          <a class="link-arrow" href="/aegis-cloud/dashboard">Open My Console (Approvals &amp; Quotas) →</a>
-          <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">Read arXiv Paper (2611.08516) →</a>
+          <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">Paper 1: Transactional Agent OS (arXiv:2611.08516) →</a>
+          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf" target="_blank" rel="noopener">Paper 2: Why Agent Plugins Are Not a Security Boundary (PDF) →</a>
+          <a class="link-arrow" href="/en/blog/from-agent-plugins-to-enforced-runtime">Monograph 04 →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub Repository →</a>
         </div>
       </div>

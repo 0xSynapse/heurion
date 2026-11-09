@@ -142,7 +142,7 @@
           <ul class="checklist">
             <li>macOS or Linux terminal</li>
             <li>Homebrew</li>
-            <li>A coding agent: Claude Code, Codex CLI, or AGY</li>
+            <li>A coding agent: Claude Code, OpenCode, Codex CLI, Hermes, or AGY</li>
             <li>A Markdown / Obsidian vault (optional, for memory consent)</li>
           </ul>
           <p class="warn">Windows is not supported. Do not put real production credentials in the sample workspace; use a local temporary project for this tutorial.</p>
@@ -156,25 +156,30 @@ brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
 brew trust heurion-org/aegis-os
 brew install aegis-os
 
-<span class="c"># Wire AGY / Claude Code / Codex (run once)</span>
+<span class="c"># Wire AGY / Claude Code / OpenCode / Codex / Hermes (pass --enforce for OS-enforced wrapper shims)</span>
 aegis-os install
 
 <span class="c"># Verify &amp; 5-second local security checkup</span>
 aegis-os --version
 aegis-os doctor
 aegis-os audit-me</pre>
-          <p>After Homebrew installs the binary, run <code>aegis-os install</code> once to wire Aegis OS into <code>agy</code>, <code>claude</code>, and <code>codex</code>; <code>doctor</code> should then pass.</p>
+          <p>After Homebrew installs the binary, run <code>aegis-os install</code> once to wire Aegis OS into <code>agy</code>, <code>claude</code>, <code>opencode</code>, <code>codex</code>, and <code>hermes</code>; <code>doctor</code> should then pass.</p>
           <p class="note">Without Homebrew: download the platform binary from <a href="https://github.com/heurion-org/aegis-os/releases" target="_blank" rel="noopener">GitHub Releases</a> or build with <code>cargo install --path crates/aos-cli</code>. Then run <code>aegis-os install</code>.</p>
         </section>
 
         <section id="agent">
           <p class="label-caps">02 / FIRST RUN</p>
           <h2 class="heading-2">Connect an agent</h2>
-          <p>Enter a project directory and launch your agent directly:</p>
-          <pre class="cmd"><span class="c"># Pick one</span>
+          <p>Enter a project directory and launch in either Advisory plugin mode or Enforced parent-process OS sandbox mode:</p>
+          <pre class="cmd"><span class="c"># Option A (Advisory productivity rails): launch directly</span>
 claude
+opencode
 codex
-agy</pre>
+agy
+
+<span class="c"># Option B (Enforced OS kernel boundary): spawn inside bwrap / Seatbelt via aegis-os run</span>
+aegis-os run -- claude
+aegis-os run -- opencode</pre>
           <p>Aegis OS hooks attach the runtime automatically. It starts silently in Free Local CoW mode by default, and you can switch to Cloud mode anytime:</p>
           <table class="tut-table">
             <thead><tr><th>Mode</th><th>What it means &amp; entry point</th></tr></thead>
@@ -289,7 +294,9 @@ aegis-os a2a board</pre>
             <a class="btn-solid" href="/aegis-cloud/dashboard">Open Aegis Cloud Console / Subscribe Pro →</a>
             <a class="link-arrow" href="/en/aegis-os/">Back to Aegis OS overview →</a>
             <a class="link-arrow" href="/aegis-cloud/approve">Boundary Approval Console (/approve) →</a>
-            <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">arXiv Paper (2611.08516) →</a>
+            <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">Paper 1 (arXiv:2611.08516) →</a>
+            <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf" target="_blank" rel="noopener">Paper 2 (Enforced Runtime PDF) →</a>
+            <a class="link-arrow" href="/en/blog/from-agent-plugins-to-enforced-runtime">Monograph 04: Enforced Runtime →</a>
             <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub repository →</a>
             <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP spec →</a>
           </div>

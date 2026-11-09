@@ -271,7 +271,7 @@
         <p class="label-caps">FLAGSHIP 02 · RUST · TRANSACTIONAL MULTI-AGENT OS</p>
         <h1 class="heading-1">Aegis OS<br><em>面向多 Agent 并行的安全控制平面</em></h1>
         <p class="lede">
-          Aegis OS 让多个 coding agent（Claude Code、Codex、AGY）安全并行：每个 Agent 拥有独立的 CoW 影子工作区与内核沙箱，
+          Aegis OS 让多个自主编程 Agent（Claude Code、OpenCode、AGY、Hermes、Codex）安全并行：每个 Agent 拥有独立的父进程内核沙箱（Linux <code>bwrap</code> / macOS Seatbelt）与 CoW 影子工作区，
           通过 Google A2A 协作，通过 UOMP 请求用户记忆，并支持一键将重型编译与多分支任务卸载至 64GB 云端工作区。
         </p>
         <div class="hero-actions">
@@ -284,7 +284,7 @@
         <div class="arch-hero-card" id="architecture">
           <div class="arch-hero-head">
             <span class="label-caps" style="margin:0;">SYSTEM ARCHITECTURE · 全链路三阶段控制架构</span>
-            <span style="font-family:var(--mono); font-size:0.72rem; color:var(--accent);">90.7%–97.9% FEWER PROMPTS · 0.0% RED-TEAM ASR</span>
+            <span style="font-family:var(--mono); font-size:0.72rem; color:var(--accent);">0/30 (0.0%) V1–V6 BYPASS · 22.4× FASTER THAN CONTAINERS · 90.7%–97.9% FEWER PROMPTS</span>
           </div>
           <div class="arch-flow">
             <!-- Stage 1 -->
@@ -292,14 +292,14 @@
               <div>
                 <p class="label-caps" style="margin-bottom:0.25rem;">01 / CLIENTS</p>
                 <h3 class="arch-stage-title">编码智能体接入</h3>
-                <p class="arch-stage-desc">一行 <code>aegis-os install</code> 自动注入 MCP 路由与 Hook，或用 <code>aegis-os run -- &lt;agent&gt;</code> 启动父进程内核沙箱。</p>
+                <p class="arch-stage-desc">一行 <code>aegis-os install</code> 自动注入 MCP 路由与 Hook，或用 <code>aegis-os run -- &lt;agent&gt;</code> 启动父进程内核沙箱（已实测支持全部 4 款主流生产 CLI）。</p>
               </div>
               <div class="arch-tags">
                 <span class="arch-tag">Claude Code</span>
-                <span class="arch-tag">OpenAI Codex</span>
-                <span class="arch-tag">Antigravity (AGY)</span>
                 <span class="arch-tag">OpenCode</span>
+                <span class="arch-tag">Antigravity (AGY)</span>
                 <span class="arch-tag">Hermes</span>
+                <span class="arch-tag">OpenAI Codex</span>
               </div>
             </div>
 
@@ -312,13 +312,14 @@
             <div class="arch-stage arch-stage-core">
               <div>
                 <p class="label-caps" style="margin-bottom:0.25rem; color:var(--accent);">02 / AEGIS OS KERNEL</p>
-                <h3 class="arch-stage-title">事务型微内核控制平面</h3>
-                <p class="arch-stage-desc">沙箱内读写测试 0 弹窗打扰；落盘宿主机（<code>workspace_commit</code>）支持网页内联 Diff 预览、<code>SHA-256</code> 防篡改单次锁定与手机 TOTP 审批，已授权租约可随时一键撤销。</p>
+                <h3 class="arch-stage-title">事务型微内核与出站边界</h3>
+                <p class="arch-stage-desc">沙箱内读写测试 0 弹窗打扰；L4/L7 出站网关在宿主边界注入 <code>$AOS_SECRET_*</code> 真实密钥（回环开销仅 +0.221 ms）；落盘宿主机采用冻结暂存区 <code>SHA-256</code> 锁定审批与手机 TOTP 验证。</p>
               </div>
               <div class="arch-tags">
-                <span class="arch-tag arch-tag-core"><strong>aos-vfs</strong> · CoW 隔离 &amp; Diff3</span>
-                <span class="arch-tag arch-tag-core"><strong>aos-ipc</strong> · A2A 子任务图 &amp; Glob 文件锁</span>
-                <span class="arch-tag arch-tag-core"><strong>aos-policy</strong> · SHA-256 锁定审批 &amp; 哈希链审计</span>
+                <span class="arch-tag arch-tag-core"><strong>aos-vfs</strong> · CoW 隔离 &amp; 分离式 .git</span>
+                <span class="arch-tag arch-tag-core"><strong>aos-egress</strong> · L4/L7 密钥注入 &amp; DLP</span>
+                <span class="arch-tag arch-tag-core"><strong>aos-ipc</strong> · A2A 子任务图 &amp; Glob 锁</span>
+                <span class="arch-tag arch-tag-core"><strong>aos-policy</strong> · SHA-256 锁定 &amp; 哈希链审计</span>
               </div>
             </div>
 
@@ -332,7 +333,7 @@
               <div>
                 <p class="label-caps" style="margin-bottom:0.25rem;">03 / RUNTIME</p>
                 <h3 class="arch-stage-title">本机沙箱 ⇄ 64GB 云端</h3>
-                <p class="arch-stage-desc">默认本机永久免费运行；重型编译测试可一键切换至 64GB 云端节点。</p>
+                <p class="arch-stage-desc">默认本机永久免费运行（500MB Git 仓库 APFS 省盘 99.05%）；重型编译测试可一键切换至 64GB 云端节点。</p>
               </div>
               <div class="arch-tags">
                 <span class="arch-tag">Local Sandbox ($0)</span>
@@ -348,28 +349,34 @@
     <!-- 01 / QUICK INSTALL (Users install and start using Aegis OS first!) -->
     <section id="install" class="aegis-section">
       <div class="container">
-        <p class="label-caps">01 / QUICK INSTALL</p>
+        <p class="label-caps">01 / QUICK INSTALL &amp; ENFORCED RUNTIME</p>
         <h2 class="heading-2">30 秒安装 Aegis OS</h2>
-        <p>支持 macOS 与 Linux。安装后运行一次 <code>aegis-os install</code> 即可自动接入 <code>claude</code>、<code>codex</code> 与 <code>agy</code>，本机沙箱永久免费。完整多 Agent 与云端工作流请查阅 <a href="/aegis-os/tutorial/" style="color:var(--accent);font-weight:500;">使用教程 →</a></p>
+        <p>支持 macOS 与 Linux。运行 <code>aegis-os install</code> 接入兼容模式，或通过 <code>aegis-os run -- &lt;agent&gt;</code> 以父进程内核沙箱包裹 <code>claude</code>、<code>opencode</code>、<code>agy</code>、<code>hermes</code> 与 <code>codex</code>，本机永久免费。完整多 Agent 与云端工作流请查阅 <a href="/aegis-os/tutorial/" style="color:var(--accent);font-weight:500;">使用教程 →</a></p>
         <pre class="cmd"><span class="c"># 方式 A：Homebrew（macOS &amp; Linux）</span>
 brew tap heurion-org/aegis-os https://github.com/heurion-org/aegis-os.git
 brew install aegis-os
 aegis-os install
-aegis-os audit-me            <span class="c"># 5 秒体检本机凭据裸奔风险与弹窗疲劳（--share 导出徽章卡）</span>
+aegis-os audit-me            <span class="c"># 5 秒体检本机 V1–V6 插件绕过风险与凭据裸奔（--share 导出徽章卡）</span>
 
 <span class="c"># 方式 B：一行签名校验安装脚本（自动完成 aegis-os install）</span>
 curl -fsSL https://heurion.org/aegis-cloud/install.sh | sh
 
-<span class="c"># Enforced 父进程内核沙箱模式（Linux bwrap &amp; macOS Seatbelt）</span>
-aegis-os run -- claude
+<span class="c"># Enforced 父进程内核沙箱模式（Linux bwrap --bind-fd &amp; macOS Seatbelt）</span>
+aegis-os install --enforce
+aegis-os run -- claude       <span class="c"># 或 opencode / agy / hermes / codex</span>
+aegis-os diff --json &amp;&amp; aegis-os commit --expected-diff-hash &lt;sha256&gt;
 
 <span class="c"># 开启 64GB 云端工作区（免费赠送 1 个云端工作区体验）</span>
 aegis-os cloud up</pre>
+        <p class="note" style="margin-top:1.25rem;">
+          <strong>最新跨平台与 60 次真实 CLI Agent 实测结论：</strong>在 macOS Seatbelt 与 Ubuntu 24.04 Linux 上针对 30 项 V1–V6 攻击载荷及 4 款真实生产 CLI Agent（含 Claude Opus 对照）实测表明，进程内 Advisory Hook 失守率达 <strong>93.3%</strong>、标准 <code>nerdctl</code> 容器失守率达 <strong>80.0%</strong>，而 <code>aegis-os run</code> 实现 <strong>0/30 (0.0%) 失守与 0% 仓库木马沦陷</strong>，启动延迟仅 <strong>9.91 ms</strong>（比容器快 <strong>22.4 倍</strong>），并保持 <strong>100% (4/4)</strong> 多文件测试通过率。
+        </p>
         <div class="link-row">
           <a class="btn-solid" href="/aegis-os/tutorial/">阅读完整使用教程 →</a>
           <a class="link-arrow" href="#pricing" onclick="setTimeout(()=>document.getElementById('pro-email-input')?.focus(),150)">升级 Pro 解锁 16 工作区与 8 Agent 并行 ($29/月) →</a>
-          <a class="link-arrow" href="/aegis-cloud/dashboard">进入我的控制台（审批与配额查询）→</a>
-          <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">阅读 arXiv 论文 (2611.08516) →</a>
+          <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">论文一：事务型 Agent OS (arXiv:2611.08516) →</a>
+          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf" target="_blank" rel="noopener">论文二：为什么 Agent 插件不是安全边界 (PDF) →</a>
+          <a class="link-arrow" href="/blog/from-agent-plugins-to-enforced-runtime">技术专论 04 →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 源码仓库 →</a>
         </div>
       </div>

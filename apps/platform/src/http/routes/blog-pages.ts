@@ -412,8 +412,13 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
   },
   'from-agent-plugins-to-enforced-runtime': {
     repoUrl: 'https://github.com/heurion-org/aegis-os',
-    paperUrl: 'https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_ENFORCED_RUNTIME_DESIGN.md',
+    paperUrl: 'https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf',
     links_zh: [
+      {
+        label: 'Aegis Enforced Runtime 学术预印本论文 (PDF)',
+        href: 'https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf',
+        desc: '阅读完整 14 页论文（含 macOS/Linux V1–V6 0/30 零绕过与 60 次真实 CLI Agent 评测）',
+      },
       {
         label: 'Aegis Enforced Runtime 完整架构规范 (GitHub)',
         href: 'https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_ENFORCED_RUNTIME_DESIGN.md',
@@ -427,10 +432,15 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
       {
         label: 'Aegis OS 主页与安装指南',
         href: '/aegis-os/',
-        desc: '了解如何为 Claude Code、OpenCode、Codex 与 AGY 一键接入 Aegis 运行时',
+        desc: '了解如何为 Claude Code、OpenCode、Codex、Hermes 与 AGY 一键接入 Aegis 运行时',
       },
     ],
     links_en: [
+      {
+        label: 'Aegis Enforced Runtime Preprint Paper (PDF)',
+        href: 'https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf',
+        desc: 'Read the 14-page paper covering 0/30 V1-V6 bypass on macOS & Linux and 60 live CLI agent runs',
+      },
       {
         label: 'Aegis Enforced Runtime Full Specification (GitHub)',
         href: 'https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_ENFORCED_RUNTIME_DESIGN.md',
@@ -444,7 +454,7 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
       {
         label: 'Aegis OS Product Page & CLI Quickstart',
         href: '/en/aegis-os/',
-        desc: 'Install Aegis OS for Claude Code, OpenCode, Codex CLI, and Antigravity (AGY)',
+        desc: 'Install Aegis OS for Claude Code, OpenCode, Codex CLI, Hermes, and Antigravity (AGY)',
       },
     ],
     faq_zh: [
