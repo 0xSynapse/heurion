@@ -1,4 +1,5 @@
 import os
+import re
 import io
 import base64
 import time
@@ -26,7 +27,8 @@ try:
     from .spatial_canonicalizer import to_canonical_lps
     from .lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, locate_lobe_roi, run_lung_nodule_pipeline, segment_nodule_at_points
     from .volume_geometry import CachedVolume, geometry_of, lps_to_voxel, source_headers_of
-    from .dicom_seg import SegUnavailable, build_nodule_seg
+    from .dicom_seg import SEG_UNAVAILABLE_MESSAGES, SegUnavailable, build_nodule_seg
+    from .dicom_io import ALLOWED_MEDICAL_PREFIXES
     from .resource_gate import VolumeCache, default_cache_bytes
     from .nodule_matching import lung_anchor
 except (ImportError, ValueError):
@@ -43,7 +45,8 @@ except (ImportError, ValueError):
     from lung_nodule_pipeline import VISTA3D_LUNG_LOBE_LABELS, locate_lobe_roi, run_lung_nodule_pipeline, segment_nodule_at_points
     from nodule_matching import lung_anchor
     from volume_geometry import CachedVolume, geometry_of, lps_to_voxel, source_headers_of
-    from dicom_seg import SegUnavailable, build_nodule_seg
+    from dicom_seg import SEG_UNAVAILABLE_MESSAGES, SegUnavailable, build_nodule_seg
+    from dicom_io import ALLOWED_MEDICAL_PREFIXES
     from resource_gate import VolumeCache, default_cache_bytes
 
 
@@ -739,7 +742,10 @@ class MonaiNeuralInferencePipeline:
         from monai.transforms import NormalizeIntensity
         from monai.inferers import sliding_window_inference
 
-        if not file_path or not os.path.exists(str(file_path)):
+        if not file_path:
+            raise InputError("BraTS 推理需要原始 4 通道 MRI 文件路径（单通道体积不能用于该模型）")
+        safe_brats_path = os.path.realpath(str(file_path))
+        if not safe_brats_path.startswith(ALLOWED_MEDICAL_PREFIXES) or not os.path.exists(safe_brats_path):
             raise InputError("BraTS 推理需要原始 4 通道 MRI 文件路径（单通道体积不能用于该模型）")
         if not channel_order:
             raise InputError(f"BraTS 推理需声明输入文件的通道顺序（例如 ['FLAIR','T1','T1c','T2']），模型要求顺序为 {list(BRATS_CHANNEL_ORDER)}")
@@ -750,7 +756,7 @@ class MonaiNeuralInferencePipeline:
             raise InputError(f"通道顺序声明须恰好包含 {list(BRATS_CHANNEL_ORDER)} 四个序列，缺少: {missing}")
 
         t0 = time.time()
-        nimg = nib.load(str(file_path))
+        nimg = nib.load(safe_brats_path)
         data = np.asarray(nimg.get_fdata(dtype=np.float32))
         if data.ndim != 4 or data.shape[3] != 4:
             raise InputError(f"BraTS 推理需要 4 通道体积，当前数据形状为 {data.shape}；缺序列时不能推理")
@@ -1827,13 +1833,14 @@ class MONAIEngine:
                     n["seg_segment_number"] = by_index.get(n["index"])
             except SegUnavailable as exc:
                 res["seg"] = None
-                res["warnings"].append(f"未生成 DICOM SEG：{exc}")
-            except Exception as exc:
+                seg_msg = SEG_UNAVAILABLE_MESSAGES.get(getattr(exc, "code", ""), "源图几何或头信息不满足 DICOM SEG 要求")
+                res["warnings"].append(f"未生成 DICOM SEG：{seg_msg}")
+            except Exception:
                 # 源图头缺少 highdicom 要求的属性等：不影响结节结果，只是不出 SEG
                 res["seg"] = None
                 for n in res["nodules"]:
                     n["seg_segment_number"] = None
-                res["warnings"].append(f"未生成 DICOM SEG：构造失败（{type(exc).__name__}: {exc}）")
+                res["warnings"].append("未生成 DICOM SEG：构造失败")
             seg_ms = int(round((time.time() - t1) * 1000))
         # 随访对比（T2.4）用的肺部锚点：按 CT 值阈值粗分肺，给出质心与肺尖高度；失败不影响结节结果
         t2 = time.time()
@@ -1848,8 +1855,8 @@ class MONAIEngine:
         vol, spacing, _ = entry
         try:
             return lung_anchor(vol, spacing, geometry_of(entry))
-        except Exception as exc:
-            return {"ok": False, "note": f"肺部锚点计算失败：{type(exc).__name__}: {exc}"}
+        except Exception:
+            return {"ok": False, "note": "肺部锚点计算失败"}
 
     def lung_anchor_of(self, volume_id: str) -> Dict[str, Any]:
         """已缓存体积的肺部锚点（随访对比时前片没有锚点才调用：平台把前片序列上传后取锚点）。"""
@@ -1896,9 +1903,12 @@ class MONAIEngine:
                 seg_out = build_nodule_seg([(1, vox)], geometry, source_headers_of(entry), res["model_version"], semiautomatic=True)
                 res["seg"] = seg_out
                 nodule["seg_segment_number"] = seg_out["segments"][0]["segment_number"]
-            except Exception as exc:
-                # SegUnavailable 或源图头缺少 highdicom 要求的属性：结节结果照常返回，只是没有轮廓
-                nodule["warnings"].append(f"未生成 DICOM SEG：{exc}")
+            except SegUnavailable as exc:
+                seg_msg = SEG_UNAVAILABLE_MESSAGES.get(getattr(exc, "code", ""), "源图几何或头信息不满足 DICOM SEG 要求")
+                nodule["warnings"].append(f"未生成 DICOM SEG：{seg_msg}")
+            except Exception:
+                # 源图头缺少 highdicom 要求的属性：结节结果照常返回，只是没有轮廓
+                nodule["warnings"].append("未生成 DICOM SEG：构造失败")
             seg_ms = int(round((time.time() - t1) * 1000))
         res["timings_ms"] = {"load": load_ms, **res.get("timings_ms", {}), "seg": seg_ms}
         res["elapsed_ms"] = int(res["elapsed_ms"]) + load_ms + seg_ms
@@ -1945,9 +1955,12 @@ class MONAIEngine:
             from .dicom_io import load_volume
         except (ImportError, ValueError):
             from dicom_io import load_volume
-        if not os.path.exists(file_path):
+        safe_file_path = os.path.realpath(str(file_path))
+        if not safe_file_path.startswith(ALLOWED_MEDICAL_PREFIXES):
             raise FileNotFoundError(f"影像文件不存在: {file_path}")
-        vol, spacing, modality = load_volume(file_path)
+        if not os.path.exists(safe_file_path):
+            raise FileNotFoundError(f"影像文件不存在: {file_path}")
+        vol, spacing, modality = load_volume(safe_file_path)
         if kwargs.get("modality"):
             modality = str(kwargs.pop("modality"))
         if callable(progress_cb):
@@ -1966,7 +1979,7 @@ class MONAIEngine:
             model_name=model_name,
             window_preset=window_preset,
             modality=modality,
-            file_path=file_path,
+            file_path=safe_file_path,
             **kwargs
         )
 
@@ -2389,8 +2402,8 @@ class MONAIEngine:
                 lung_nodule_context=(model_name == "lung_nodule_segmenter"),
             )
             clinical_feats.update(extra_feature_fields)
-        except Exception as e:
-            clinical_feats = {"status": "error", "error": f"结构化特征提取失败: {e}"}
+        except Exception:
+            clinical_feats = {"status": "error", "error": "结构化特征提取失败"}
 
         # 影像所见描述：失败时如实返回错误，不编造所见
         patient_ctx = kwargs.get("patient_context")
@@ -2403,8 +2416,8 @@ class MONAIEngine:
                     patient_context=patient_ctx,
                     key_slice_png_base64=None
                 )
-            except Exception as e:
-                clinical_ai = {"status": "error", "error": f"报告生成失败：{e}"}
+            except Exception:
+                clinical_ai = {"status": "error", "error": "报告生成失败"}
 
         if clinical_ai.get("status") == "error":
             ai_report_md = f"\n\n### 影像所见\n{clinical_ai['error']}\n"
@@ -2465,16 +2478,21 @@ class MONAIEngine:
             from dicom_io import load_volume
 
         data_dir = Path(__file__).resolve().parent.parent / "data"
+        data_root = os.path.realpath(str(data_dir))
 
-        for ext in (".nii.gz", ".nii", ".zip", ".gz"):
-            p = data_dir / f"{sample_id_or_path}{ext}"
-            if p.exists():
-                entry = load_volume(str(p), filename=f"{sample_id_or_path}{ext}")
-                self.volume_cache[sample_id_or_path] = entry
-                return entry
+        if re.fullmatch(r"[a-zA-Z0-9_\-]+", sample_id_or_path):
+            for ext in (".nii.gz", ".nii", ".zip", ".gz"):
+                cand = os.path.realpath(os.path.join(data_root, f"{sample_id_or_path}{ext}"))
+                if not cand.startswith(data_root + os.sep):
+                    continue
+                if os.path.exists(cand):
+                    entry = load_volume(cand, filename=f"{sample_id_or_path}{ext}")
+                    self.volume_cache[sample_id_or_path] = entry
+                    return entry
 
-        if os.path.exists(sample_id_or_path):
-            entry = load_volume(sample_id_or_path)
+        cand_path = os.path.realpath(str(sample_id_or_path))
+        if cand_path.startswith(ALLOWED_MEDICAL_PREFIXES) and os.path.exists(cand_path):
+            entry = load_volume(cand_path)
             self.volume_cache[sample_id_or_path] = entry
             return entry
 

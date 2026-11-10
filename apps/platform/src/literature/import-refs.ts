@@ -53,7 +53,19 @@ function bibtex(t: string): ParsedRef[] {
 }
 
 function endnoteXml(t: string): ParsedRef[] {
-  const strip = (s: string) => s.replace(/<[^>]+>/g, '')
+  const strip = (s: string) => {
+    let out = ''
+    let i = 0
+    while (i < s.length) {
+      const lt = s.indexOf('<', i)
+      if (lt === -1) { out += s.slice(i); break }
+      out += s.slice(i, lt)
+      const gt = s.indexOf('>', lt + 1)
+      if (gt === -1) break
+      i = gt + 1
+    }
+    return out
+  }
   return [...t.matchAll(/<record>([\s\S]*?)<\/record>/gi)].map(([, rec]) => {
     const doi = /<electronic-resource-num>([\s\S]*?)<\/electronic-resource-num>/i.exec(rec!)?.[1]
     const pmid = /<accession-num>[\s\S]*?(\d{6,9})[\s\S]*?<\/accession-num>/i.exec(rec!)?.[1] ?? null

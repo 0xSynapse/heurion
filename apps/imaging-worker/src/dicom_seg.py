@@ -52,7 +52,7 @@ def prepare_source_headers(headers: Sequence[Any]) -> Tuple[List[Any], bool]:
         from volume_geometry import strip_pixel_data
     has_for = [bool(getattr(h, "FrameOfReferenceUID", "")) for h in headers]
     if any(has_for) and not all(has_for):
-        raise SegUnavailable("部分源图缺少 FrameOfReferenceUID，不能生成 DICOM SEG")
+        raise SegUnavailable("部分源图缺少 FrameOfReferenceUID，不能生成 DICOM SEG", code="partial_for_uid")
     derived = not any(has_for)
     out = []
     for h in headers:
@@ -66,8 +66,26 @@ def prepare_source_headers(headers: Sequence[Any]) -> Tuple[List[Any], bool]:
     return out, derived
 
 
+SEG_UNAVAILABLE_MESSAGES: Dict[str, str] = {
+    "partial_for_uid": "部分源图缺少 FrameOfReferenceUID，不能生成 DICOM SEG",
+    "missing_sop": "规范化切片没有对应的源图（SOPInstanceUID 缺失），不能生成 DICOM SEG",
+    "missing_spatial": "源图缺少 IPP / IOP / PixelSpacing，不能生成 DICOM SEG",
+    "grid_misaligned": "规范化体素映射到源图时不落在整数像素上（源图与规范化网格不对齐）",
+    "out_of_bounds": "规范化体素映射到源图时越界，不能生成 DICOM SEG",
+    "no_geometry": "体积没有病人坐标几何（非 DICOM 来源），不能生成 DICOM SEG",
+    "no_source_headers": "体积没有逐层对应的源图 SOPInstanceUID / 头信息（NIfTI 或非轴位采集），不能生成 DICOM SEG",
+    "multiframe": "源图为多帧 DICOM，暂不支持生成 SEG",
+    "no_segments": "没有成功分割（segmentation = vista3d）的结节，未生成 DICOM SEG",
+    "inconsistent_dims": "源图行列数不一致，不能生成 DICOM SEG",
+}
+
+
 class SegUnavailable(Exception):
     """不能生成 SEG（源图信息缺失、多帧源图、没有可写入的分割等）；消息写进响应 warnings。"""
+
+    def __init__(self, message: str, code: str = "no_geometry"):
+        super().__init__(message)
+        self.code = code
 
 
 def _floats(raw: Any, n: int) -> Optional[np.ndarray]:
@@ -96,13 +114,13 @@ def map_mask_to_source_frames(
         k = int(k)
         uid = uids[k] if 0 <= k < len(uids) else None
         if uid is None or uid not in source_headers:
-            raise SegUnavailable(f"规范化第 {k} 层没有对应的源图（SOPInstanceUID 缺失）")
+            raise SegUnavailable(f"规范化第 {k} 层没有对应的源图（SOPInstanceUID 缺失）", code="missing_sop")
         hdr = source_headers[uid]
         ipp = _floats(getattr(hdr, "ImagePositionPatient", None), 3)
         iop = _floats(getattr(hdr, "ImageOrientationPatient", None), 6)
         ps = _floats(getattr(hdr, "PixelSpacing", None), 2)
         if ipp is None or iop is None or ps is None:
-            raise SegUnavailable(f"源图 {uid} 缺少 IPP / IOP / PixelSpacing")
+            raise SegUnavailable(f"源图 {uid} 缺少 IPP / IOP / PixelSpacing", code="missing_spatial")
         r_vec, c_vec = iop[:3], iop[3:]
         sel = zz == k
         pts = np.stack([zz[sel], yy[sel], xx[sel], np.ones(int(sel.sum()), dtype=np.int64)], axis=0).astype(np.float64)
@@ -111,10 +129,10 @@ def map_mask_to_source_frames(
         cols_f = lps @ r_vec / ps[1]
         rows, cols = np.rint(rows_f).astype(np.int64), np.rint(cols_f).astype(np.int64)
         if np.max(np.abs(rows_f - rows)) > 0.01 or np.max(np.abs(cols_f - cols)) > 0.01:
-            raise SegUnavailable(f"规范化体素映射到源图 {uid} 时不落在整数像素上（源图与规范化网格不对齐）")
+            raise SegUnavailable(f"规范化体素映射到源图 {uid} 时不落在整数像素上（源图与规范化网格不对齐）", code="grid_misaligned")
         n_rows, n_cols = int(hdr.Rows), int(hdr.Columns)
         if rows.min() < 0 or cols.min() < 0 or rows.max() >= n_rows or cols.max() >= n_cols:
-            raise SegUnavailable(f"规范化体素映射到源图 {uid} 时越界")
+            raise SegUnavailable(f"规范化体素映射到源图 {uid} 时越界", code="out_of_bounds")
         prev = out.get(uid)
         if prev is None:
             out[uid] = [rows, cols]
@@ -140,13 +158,13 @@ def build_nodule_seg(
     from pydicom.sr.codedict import codes
 
     if not geometry or geometry.get("affine_zyx_to_lps") is None:
-        raise SegUnavailable("体积没有病人坐标几何（非 DICOM 来源），不能生成 DICOM SEG")
+        raise SegUnavailable("体积没有病人坐标几何（非 DICOM 来源），不能生成 DICOM SEG", code="no_geometry")
     if not source_headers or not geometry.get("sop_instance_uids") or all(u is None for u in geometry["sop_instance_uids"]):
-        raise SegUnavailable("体积没有逐层对应的源图 SOPInstanceUID / 头信息（NIfTI 或非轴位采集），不能生成 DICOM SEG")
+        raise SegUnavailable("体积没有逐层对应的源图 SOPInstanceUID / 头信息（NIfTI 或非轴位采集），不能生成 DICOM SEG", code="no_source_headers")
     if geometry.get("frame_numbers"):
-        raise SegUnavailable("源图为多帧 DICOM，暂不支持生成 SEG")
+        raise SegUnavailable("源图为多帧 DICOM，暂不支持生成 SEG", code="multiframe")
     if not segments:
-        raise SegUnavailable("没有成功分割（segmentation = vista3d）的结节，未生成 DICOM SEG")
+        raise SegUnavailable("没有成功分割（segmentation = vista3d）的结节，未生成 DICOM SEG", code="no_segments")
 
     # 每个 segment 映射到源图（行, 列）
     per_segment: List[Dict[str, Tuple[np.ndarray, np.ndarray]]] = []
@@ -163,7 +181,7 @@ def build_nodule_seg(
     src, for_derived = prepare_source_headers([source_headers[u] for u in order])
     rows, cols = int(src[0].Rows), int(src[0].Columns)
     if any(int(h.Rows) != rows or int(h.Columns) != cols for h in src):
-        raise SegUnavailable("源图行列数不一致，不能生成 DICOM SEG")
+        raise SegUnavailable("源图行列数不一致，不能生成 DICOM SEG", code="inconsistent_dims")
     pos = {u: i for i, u in enumerate(order)}
     pixel = np.zeros((len(order), rows, cols, len(segments)), dtype=bool)
     for s_i, mapped in enumerate(per_segment):

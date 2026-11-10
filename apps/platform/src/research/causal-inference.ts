@@ -243,8 +243,9 @@ export function exportLovePlotNativeSources(config: LovePlotConfig): {
       post_smd: Number(Math.abs(Number.isFinite(rawPost) ? rawPost : 0).toFixed(3)),
     }
   })
+  const escR = (s: string) => s.replace(/([\\"])/g, '\\$1')
   const covRows = normCovs
-    .map(c => `  data.frame(Covariate = "${c.display.replace(/"/g, '\\"')}", Pre_SMD = ${c.pre_smd}, Post_SMD = ${c.post_smd})`)
+    .map(c => `  data.frame(Covariate = "${escR(c.display)}", Pre_SMD = ${c.pre_smd}, Post_SMD = ${c.post_smd})`)
     .join(',\n')
 
   const r_script =
@@ -256,7 +257,7 @@ export function exportLovePlotNativeSources(config: LovePlotConfig): {
     `  geom_segment(aes(x = Pre_SMD, xend = Post_SMD, y = Covariate, yend = Covariate), linetype = "dotted", color = "#94A3B8") +\n` +
     `  geom_point(aes(x = Pre_SMD, y = Covariate), color = "#F43F5E", size = 3) +\n` +
     `  geom_point(aes(x = Post_SMD, y = Covariate), color = "#10B981", shape = 18, size = 3.5) +\n` +
-    `  theme_bw(base_family = "Arial") + labs(title = "${title.replace(/"/g, '\\"')}", x = "Absolute Standardized Mean Difference (SMD)", y = "")\n` +
+    `  theme_bw(base_family = "Arial") + labs(title = "${escR(title)}", x = "Absolute Standardized Mean Difference (SMD)", y = "")\n` +
     `ggsave("Figure_Love_Plot.pdf", plot = p, width = 8, height = 5, dpi = 600)\n`
 
   const prism_pzfx =

@@ -23,7 +23,9 @@ jobs:
     environment: production
     steps:
       - name: 确认
-        run: '[ "${{ inputs.confirm }}" = "DELETE-V1" ] || { echo "::error::需要输入 DELETE-V1"; exit 1; }'
+        env:
+          CONFIRM_INPUT: ${{ inputs.confirm }}
+        run: '[ "$CONFIRM_INPUT" = "DELETE-V1" ] || { echo "::error::需要输入 DELETE-V1"; exit 1; }'
       - name: 启动主 VPS SSH Agent
         env:
           SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_KEY }}

@@ -406,24 +406,184 @@ export function parseMimeText(rawText: string): string {
         const bodyPart = split.slice(1).join('\n\n').trim()
         const csMatch = split[0]!.match(/charset="?([^"\r\n;]+)"?/i)
         const html = decodeEmailBody(bodyPart, csMatch ? csMatch[1] : undefined)
-        return html
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-          .replace(/<br\s*\/?>/gi, '\n')
-          .replace(/<\/p>/gi, '\n\n')
-          .replace(/<\/div>/gi, '\n')
-          .replace(/<[^>]+>/g, '')
-          .replace(/&nbsp;/gi, ' ')
-          .replace(/&lt;/gi, '<')
-          .replace(/&gt;/gi, '>')
-          .replace(/&amp;/gi, '&')
-          .replace(/&quot;/gi, '"')
-          .replace(/&#39;/gi, "'")
-          .trim()
+        return htmlToMailPlainText(html, 'mime')
       }
     }
   }
   return rawText
+}
+
+const WEB_MAIL_ENTITIES: Record<string, string> = {
+  '&nbsp;': ' ',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&amp;': '&',
+  '&quot;': '"',
+  '&apos;': "'",
+  '&#39;': "'",
+}
+
+function findWebMailTagEnd(src: string, fromIdx: number): number {
+  let quote = ''
+  for (let i = fromIdx; i < src.length; i++) {
+    const ch = src[i]!
+    if (quote) {
+      if (ch === quote) quote = ''
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+    } else if (ch === '>') {
+      return i
+    }
+  }
+  return -1
+}
+
+function skipWebMailRawBlock(src: string, lower: string, tagName: string, fromIdx: number): number {
+  const needle = `</${tagName}`
+  let pos = fromIdx
+  while (pos < src.length) {
+    const closeIdx = lower.indexOf(needle, pos)
+    if (closeIdx === -1) return src.length
+    const after = lower[closeIdx + needle.length]
+    if (!after || after === '>' || after === '/' || after === ' ' || after === '\t' || after === '\n' || after === '\r') {
+      const gt = findWebMailTagEnd(src, closeIdx + needle.length)
+      return gt === -1 ? src.length : gt + 1
+    }
+    pos = closeIdx + needle.length
+  }
+  return src.length
+}
+
+function htmlToMailPlainText(html: string, mode: 'mime' | 'snippet' | 'quote'): string {
+  if (!html) return ''
+  const lower = html.toLowerCase()
+  let out = ''
+  let i = 0
+  while (i < html.length) {
+    const lt = html.indexOf('<', i)
+    if (lt === -1) { out += html.slice(i); break }
+    out += html.slice(i, lt)
+    if (lower.startsWith('<!--', lt)) {
+      const endComment = lower.indexOf('-->', lt + 4)
+      if (endComment === -1) break
+      i = endComment + 3
+      continue
+    }
+    let p = lt + 1
+    let closing = false
+    if (lower[p] === '/') { closing = true; p++ }
+    const nameStart = p
+    while (p < lower.length && /[a-z0-9]/.test(lower[p]!)) p++
+    const tagName = lower.slice(nameStart, p)
+    const gt = findWebMailTagEnd(html, p)
+    if (gt === -1) break
+    const selfClosing = html[gt - 1] === '/'
+    if (!closing && !selfClosing && (tagName === 'script' || tagName === 'style' || tagName === 'xml')) {
+      i = skipWebMailRawBlock(html, lower, tagName, gt + 1)
+      continue
+    }
+    if (mode === 'snippet') {
+      out += ' '
+    } else if (mode === 'quote') {
+      if (tagName === 'br' || (closing && (tagName === 'p' || tagName === 'div' || tagName === 'tr' || /^h\d$/.test(tagName)))) out += '\n'
+    } else {
+      if (tagName === 'br') out += '\n'
+      else if (closing && tagName === 'p') out += '\n\n'
+      else if (closing && tagName === 'div') out += '\n'
+    }
+    i = gt + 1
+  }
+  return out.replace(/&(?:nbsp|lt|gt|amp|quot|apos|#39);/gi, m => WEB_MAIL_ENTITIES[m.toLowerCase()] ?? m)
+}
+
+function sanitizeTagAttributes(attrSection: string): string {
+  let clean = ''
+  let i = 0
+  const n = attrSection.length
+  while (i < n) {
+    while (i < n && /\s/.test(attrSection[i]!)) i++
+    if (i >= n) break
+    if (attrSection[i] === '/') {
+      clean += '/'
+      i++
+      continue
+    }
+    const nameStart = i
+    while (i < n && !/[\s=/>"']/.test(attrSection[i]!)) i++
+    if (i === nameStart) { i++; continue }
+    const rawName = attrSection.slice(nameStart, i)
+    const lowerName = rawName.toLowerCase()
+    let wsAfterName = i
+    while (wsAfterName < n && /\s/.test(attrSection[wsAfterName]!)) wsAfterName++
+    let rawVal = ''
+    if (attrSection[wsAfterName] === '=') {
+      let v = wsAfterName + 1
+      while (v < n && /\s/.test(attrSection[v]!)) v++
+      const valStart = wsAfterName
+      if (attrSection[v] === '"' || attrSection[v] === "'") {
+        const q = attrSection[v]!
+        v++
+        while (v < n && attrSection[v] !== q) v++
+        if (v < n) v++
+      } else {
+        while (v < n && !/[\s>]/.test(attrSection[v]!)) v++
+      }
+      rawVal = attrSection.slice(valStart, v)
+      i = v
+    } else {
+      i = wsAfterName
+    }
+    if (lowerName.startsWith('on')) continue
+    clean += ` ${rawName}${rawVal}`
+  }
+  return clean
+}
+
+function sanitizeHtmlEmailForIframe(src: string): string {
+  const trimmed = src.trim()
+  const lower = trimmed.toLowerCase()
+  let out = ''
+  let i = 0
+  while (i < trimmed.length) {
+    const lt = trimmed.indexOf('<', i)
+    if (lt === -1) { out += trimmed.slice(i); break }
+    out += trimmed.slice(i, lt)
+    if (lower.startsWith('<!--', lt)) {
+      const endComment = lower.indexOf('-->', lt + 4)
+      if (endComment === -1) break
+      out += trimmed.slice(lt, endComment + 3)
+      i = endComment + 3
+      continue
+    }
+    if (trimmed[lt + 1] === '!') {
+      const gt = findWebMailTagEnd(trimmed, lt + 2)
+      if (gt === -1) break
+      out += trimmed.slice(lt, gt + 1)
+      i = gt + 1
+      continue
+    }
+    let p = lt + 1
+    let closing = false
+    if (lower[p] === '/') { closing = true; p++ }
+    const nameStart = p
+    while (p < lower.length && /[a-z0-9:-]/.test(lower[p]!)) p++
+    const tagName = lower.slice(nameStart, p)
+    const gt = findWebMailTagEnd(trimmed, p)
+    if (gt === -1) break
+    if (tagName === 'script') {
+      i = closing ? gt + 1 : skipWebMailRawBlock(trimmed, lower, 'script', gt + 1)
+      continue
+    }
+    if (closing || !tagName) {
+      out += trimmed.slice(lt, gt + 1)
+    } else {
+      const rawTagName = trimmed.slice(nameStart, p)
+      const attrPart = sanitizeTagAttributes(trimmed.slice(p, gt))
+      out += `<${rawTagName}${attrPart}>`
+    }
+    i = gt + 1
+  }
+  return out
 }
 
 /** 智能判定正文是否为标准 HTML 富文本格式邮件 (如包含 DOCTYPE、html 骨架或 table/div 邮件模板标签) */
@@ -525,7 +685,8 @@ export function normalizeSubject(sub?: string): string {
 
 export function getAvatarInitial(nameOrEmail?: string): string {
   if (!nameOrEmail) return 'M'
-  const clean = nameOrEmail.replace(/<[^>]+>/g, '').trim()
+  const ltIdx = nameOrEmail.indexOf('<')
+  const clean = (ltIdx > 0 ? nameOrEmail.slice(0, ltIdx) : nameOrEmail.replace(/[<>]/g, ' ')).trim()
   const first = clean[0] || 'M'
   return first.toUpperCase()
 }
@@ -539,20 +700,7 @@ export function formatTimeShort(dateStr?: string): string {
 export function snippetText(str?: string, max = 80): string {
   if (!str) return ''
   const decoded = decodeEmailBody(str)
-  let clean = decoded
-  if (isHtmlEmail(decoded)) {
-    clean = decoded
-      .replace(/<!--[\s\S]*?-->/g, '')
-      .replace(/<xml[^>]*>[\s\S]*?<\/xml>/gi, '')
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/gi, ' ')
-      .replace(/&amp;/gi, '&')
-      .replace(/&lt;/gi, '<')
-      .replace(/&gt;/gi, '>')
-      .replace(/&quot;/gi, '"')
-  }
+  let clean = isHtmlEmail(decoded) ? htmlToMailPlainText(decoded, 'snippet') : decoded
   clean = clean.replace(/[\r\n\t\s]+/g, ' ').replace(/>+[^\n]*/g, '').trim()
   return clean.length > max ? clean.slice(0, max) + '...' : clean
 }
@@ -562,19 +710,7 @@ export function generateThreadQuote(msg: MailMessage): string {
   const senderStr = formatSenderDisplay(msg.sender_name, msg.sender)
   let rawBody = msg.body || ''
   if (isHtmlEmail(rawBody)) {
-    rawBody = rawBody
-      .replace(/<!--[\s\S]*?-->/g, '')
-      .replace(/<xml[^>]*>[\s\S]*?<\/xml>/gi, '')
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/(p|div|tr|h\d)>/gi, '\n')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&nbsp;/gi, ' ')
-      .replace(/&amp;/gi, '&')
-      .replace(/&lt;/gi, '<')
-      .replace(/&gt;/gi, '>')
-      .replace(/&quot;/gi, '"')
+    rawBody = htmlToMailPlainText(rawBody, 'quote')
       .replace(/\n{3,}/g, '\n\n')
       .trim()
   }
@@ -591,10 +727,7 @@ function formatEmailBody(raw: string): string {
 
   // 1. 若为标准 HTML 邮件（如 NVIDIA 等外部系统通知），采用无脚本隔离沙箱 iframe 渲染真实排版与样式
   if (isHtmlEmail(decoded)) {
-    let html = decoded
-      .trim()
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-      .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    let html = sanitizeHtmlEmailForIframe(decoded)
     if (!/<base\s/i.test(html)) {
       if (/<head[^>]*>/i.test(html)) {
         html = html.replace(/<head[^>]*>/i, '$&<base target="_blank" rel="noopener noreferrer">')

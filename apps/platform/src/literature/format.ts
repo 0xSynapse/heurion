@@ -84,13 +84,47 @@ export function decodeEntities(s: string): string {
   })
 }
 
+const BIB_INLINE_TAGS = new Set(['i', 'b', 'u', 'em', 'strong', 'sup', 'sub', 'scp', 'span', 'p'])
+
+function stripBibInlineTags(raw: string): string {
+  let cur = raw
+  for (;;) {
+    let out = ''
+    let i = 0
+    let changed = false
+    while (i < cur.length) {
+      const lt = cur.indexOf('<', i)
+      if (lt === -1) { out += cur.slice(i); break }
+      out += cur.slice(i, lt)
+      let p = lt + 1
+      if (cur[p] === '/') p++
+      const nameStart = p
+      while (p < cur.length && /[a-zA-Z]/.test(cur[p]!)) p++
+      const name = cur.slice(nameStart, p).toLowerCase()
+      const ch = cur[p]
+      if (BIB_INLINE_TAGS.has(name) && (ch === '>' || ch === '/' || ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r')) {
+        const gt = cur.indexOf('>', p)
+        if (gt !== -1) {
+          i = gt + 1
+          changed = true
+          continue
+        }
+      }
+      out += '<'
+      i = lt + 1
+    }
+    if (!changed) return out
+    cur = out
+  }
+}
+
 /**
  * 清理文献元数据中的 HTML/JATS 标签、转义实体与多余换行空白。
  * 不是幂等的（解码会改变含字面量 `&lt;` 的文本），所以只在抓取器把外部元数据转成 Article 时调用一次；
  * 之后的格式化、入库、导出都直接使用清理过的文本。
  */
 export function cleanBibText(raw: string): string {
-  return decodeEntities(raw.replace(/<\/?(?:i|b|u|em|strong|sup|sub|scp|span|p)\b[^>]*>/gi, ''))
+  return decodeEntities(stripBibInlineTags(raw))
     .replace(/\s+/g, ' ')
     .trim()
 }

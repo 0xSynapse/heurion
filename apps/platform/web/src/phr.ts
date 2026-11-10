@@ -855,7 +855,20 @@ async function briefView(docId: string): Promise<void> {
       const r = await api<{ rev: number; html: string }>(`/api/docs/${docId}/html`)
       const doc = $('#doc')
       doc.classList.remove('loading')
-      const blank = !r.html || !r.html.replace(/<[^>]+>/g, '').trim()
+      const hasVisibleText = (html: string): boolean => {
+        let i = 0
+        while (i < html.length) {
+          const lt = html.indexOf('<', i)
+          const chunk = lt === -1 ? html.slice(i) : html.slice(i, lt)
+          if (chunk.trim().length > 0) return true
+          if (lt === -1) break
+          const gt = html.indexOf('>', lt + 1)
+          if (gt === -1) break
+          i = gt + 1
+        }
+        return false
+      }
+      const blank = !r.html || !hasVisibleText(r.html)
       if (!blank) { doc.innerHTML = r.html; return }
       if (docViewTitle !== '健康档案') { doc.innerHTML = '<div class="empty">简报还没内容，稍等…</div>'; return }
       // 空的健康档案：说明它记什么，并可以让知家先整理一份（走同一个对话回合，写入受红线守卫）

@@ -35,7 +35,7 @@ try:
     from .recist import calculate_volume_doubling_time, calculate_subsolid_metrics, calculate_emphysema_metrics, evaluate_recist_11_response
     from .ct_extensions import quantify_pneumonia_ctss, analyze_rib_fractures, analyze_head_ct_ich, lobe_ctss_score
     from .model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
-    from .dicom_io import anonymize_dicom_zip, anonymize_dicom_file
+    from .dicom_io import ALLOWED_MEDICAL_PREFIXES, anonymize_dicom_zip, anonymize_dicom_file
     from .task_queue import task_manager, TaskStage, batch_process_cohort
     from .volume_geometry import geometry_of, geometry_summary, source_headers_of
     from .resource_gate import MemoryGate, default_budget_gb, default_interactive_reserve_gb, task_cost_gb
@@ -47,7 +47,7 @@ except (ImportError, ValueError):
     from recist import calculate_volume_doubling_time, calculate_subsolid_metrics, calculate_emphysema_metrics, evaluate_recist_11_response
     from ct_extensions import quantify_pneumonia_ctss, analyze_rib_fractures, analyze_head_ct_ich, lobe_ctss_score
     from model_registry import list_registered_models, pull_model, verify_model, get_model_status, get_pipeline_status, list_registered_pipelines
-    from dicom_io import anonymize_dicom_zip, anonymize_dicom_file
+    from dicom_io import ALLOWED_MEDICAL_PREFIXES, anonymize_dicom_zip, anonymize_dicom_file
     from task_queue import task_manager, TaskStage, batch_process_cohort
     from volume_geometry import geometry_of, geometry_summary, source_headers_of
     from resource_gate import MemoryGate, default_budget_gb, default_interactive_reserve_gb, task_cost_gb
@@ -685,13 +685,16 @@ def list_samples():
 @app.get("/api/v1/samples/{sample_id}/file")
 def get_sample_file(sample_id: str):
     """下载样本原始文件；样本不存在返回 404，不生成任何替代数据。"""
-    if not re.match(r"^[a-zA-Z0-9_\-]+$", sample_id):
+    if not re.fullmatch(r"[a-zA-Z0-9_\-]+", sample_id):
         raise HTTPException(status_code=400, detail="Invalid sample_id format")
+    data_root = os.path.realpath(str(DATA_DIR))
     for ext in (".nii.gz", ".nii", ".zip", ".gz"):
-        sample_file = DATA_DIR / f"{sample_id}{ext}"
-        if sample_file.exists():
+        candidate = os.path.realpath(os.path.join(data_root, f"{sample_id}{ext}"))
+        if not candidate.startswith(data_root + os.sep):
+            raise HTTPException(status_code=400, detail="Invalid sample_id format")
+        if os.path.exists(candidate):
             return FileResponse(
-                path=str(sample_file),
+                path=candidate,
                 media_type="application/gzip",
                 filename=f"{sample_id}{ext}"
             )
@@ -950,11 +953,10 @@ def get_mpr_slice(req: MprSliceRequest = Body(...)):
 @app.post("/api/v1/mpr/diff-slice")
 def get_diff_slice(req: DiffSliceRequest = Body(...)):
     """基线/随访逐体素 CT 值差图（未配准，仅供目视，不给趋势结论）。"""
-    for p in (req.baseline_path, req.followup_path):
-        if p and not os.path.exists(p):
-            raise HTTPException(status_code=404, detail=f"影像文件不存在: {p}")
-    base_target = _require_target(req.baseline_path, req.baseline_volume_id, req.baseline_id)
-    follow_target = _require_target(req.followup_path, req.followup_volume_id, req.followup_id)
+    safe_base_path = validate_safe_medical_path(req.baseline_path) if req.baseline_path else None
+    safe_follow_path = validate_safe_medical_path(req.followup_path) if req.followup_path else None
+    base_target = _require_target(safe_base_path, req.baseline_volume_id, req.baseline_id)
+    follow_target = _require_target(safe_follow_path, req.followup_volume_id, req.followup_id)
     try:
         return engine.extract_diff_slice(
             baseline_id_or_path=base_target,
@@ -1035,10 +1037,13 @@ def run_bronchiectasis_analysis(req: BenchmarkRequest = Body(...)):
 
 
 def _sample_file(sample_id: str) -> Optional[Path]:
+    if not sample_id or not re.fullmatch(r"[a-zA-Z0-9_\-]+", sample_id):
+        return None
+    data_root = os.path.realpath(str(DATA_DIR))
     for ext in (".nii.gz", ".nii"):
-        p = DATA_DIR / f"{sample_id}{ext}"
-        if p.exists():
-            return p
+        cand = os.path.realpath(os.path.join(data_root, f"{sample_id}{ext}"))
+        if cand.startswith(data_root + os.sep) and os.path.exists(cand):
+            return Path(cand)
     return None
 
 
@@ -1083,18 +1088,20 @@ def run_sample_analysis(req: SampleRequest = Body(...)):
         raise_http(e, "分析失败")
 
 def validate_safe_medical_path(file_path: Optional[str]) -> Optional[str]:
-    """Validates that file_path does not traverse into prohibited system paths."""
+    """Validates that file_path resolves inside allowed medical directories and does not traverse into system paths."""
     if not file_path:
         return None
     real_p = os.path.realpath(file_path)
-    sensitive_prefixes = ("/etc", "/var/root", "/root", "/proc", "/sys", "/dev", "/usr/bin", "/bin", "/sbin")
-    if any(real_p.startswith(p) for p in sensitive_prefixes):
+    sensitive_prefixes = ("/etc/", "/var/root/", "/root/", "/proc/", "/sys/", "/dev/", "/usr/bin/", "/bin/", "/sbin/")
+    if real_p.startswith(sensitive_prefixes) or real_p in ("/etc", "/var/root", "/root", "/proc", "/sys", "/dev", "/usr/bin", "/bin", "/sbin"):
         raise HTTPException(status_code=403, detail="Access denied: prohibited path")
+    if not real_p.startswith(ALLOWED_MEDICAL_PREFIXES):
+        raise HTTPException(status_code=404, detail="File not found")
     if not os.path.exists(real_p):
-        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+        raise HTTPException(status_code=404, detail="File not found")
     if os.path.isfile(real_p):
         lower = real_p.lower()
-        if not (lower.endswith((".nii", ".nii.gz", ".dcm", ".zip", ".tar.gz", ".npz", ".npy"))):
+        if not (lower.endswith((".nii", ".nii.gz", ".dcm", ".dicom", ".ima", ".zip", ".tar.gz", ".npz", ".npy"))):
             raise HTTPException(status_code=400, detail="Invalid medical image file format")
     return real_p
 
@@ -1163,11 +1170,17 @@ def run_interactive_segmentation_endpoint(req: InteractiveSegmentRequest = Body(
 @app.post("/api/v1/analyze/whole-body")
 def run_whole_body_analysis_endpoint(req: WholeBodyAnalysisRequest = Body(...)):
     """L3 层 HU 阈值法体成分测量（非 TotalSegmentator 模型）。"""
-    target = req.file_path or (str(DATA_DIR / f"{req.sample_id}.nii.gz") if req.sample_id else None)
-    if target and os.path.exists(target):
+    safe_target: Optional[str] = None
+    if req.file_path:
+        safe_target = validate_safe_medical_path(req.file_path)
+    elif req.sample_id:
+        sf = _sample_file(req.sample_id)
+        if sf is not None:
+            safe_target = str(sf)
+    if safe_target:
         try:
             return engine.analyze_file(
-                file_path=target,
+                file_path=safe_target,
                 model_name="whole_body_ct_segmenter",
                 patient_sex=req.patient_sex,
                 patient_height_m=req.patient_height_m,
@@ -1603,14 +1616,17 @@ async def anonymize_dicom_endpoint(
             finally:
                 if os.path.exists(tmp_in_path):
                     os.remove(tmp_in_path)
-    elif file_path and os.path.exists(file_path):
-        if file_path.lower().endswith(".zip"):
-            dst_zip = file_path + ".anon.zip"
-            _, report = await run_in_threadpool(anonymize_dicom_zip, file_path, dst_zip, anonymous_id)
+    elif file_path:
+        safe_dicom_path = validate_safe_medical_path(file_path)
+        if not safe_dicom_path:
+            raise HTTPException(status_code=400, detail="必须提供上传文件或已存在的 DICOM 文件路径")
+        if safe_dicom_path.lower().endswith(".zip"):
+            dst_zip = safe_dicom_path + ".anon.zip"
+            _, report = await run_in_threadpool(anonymize_dicom_zip, safe_dicom_path, dst_zip, anonymous_id)
             return report
         else:
-            dst_dcm = file_path + ".anon.dcm"
-            return await run_in_threadpool(anonymize_dicom_file, file_path, dst_dcm, anonymous_id)
+            dst_dcm = safe_dicom_path + ".anon.dcm"
+            return await run_in_threadpool(anonymize_dicom_file, safe_dicom_path, dst_dcm, anonymous_id)
     else:
         raise HTTPException(status_code=400, detail="必须提供上传文件或已存在的 DICOM 文件路径")
 

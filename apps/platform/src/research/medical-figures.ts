@@ -1497,7 +1497,7 @@ export function generateWetLabPlot(spec: WetLabPlotSpec): {
       : `  stat_summary(fun = mean, geom = "bar", width = 0.55, alpha = 0.35, linewidth = 0.8) +\n` +
         `  stat_summary(fun.data = mean_sdl, fun.args = list(mult = 1), geom = "errorbar", width = 0.2, color = "#0F172A") +\n`) +
     `  geom_jitter(width = 0.12, size = 2.2, alpha = 0.9) +\n` +
-    `  labs(title = "${title.replace(/"/g, '\\"')}", y = "${yLabel.replace(/"/g, '\\"')}", x = "") +\n` +
+    `  labs(title = "${title.replace(/([\\"])/g, '\\$1')}", y = "${yLabel.replace(/([\\"])/g, '\\$1')}", x = "") +\n` +
     `  theme_classic(base_size = 12, base_family = "Arial") + theme(legend.position = "none")\n` +
     `ggsave("Figure_Statistical_Plot.svg", plot = p, width = 6.5, height = 4.5)\n` +
     `ggsave("Figure_Statistical_Plot.pdf", plot = p, width = 6.5, height = 4.5, dpi = 600)\n`
@@ -1672,7 +1672,7 @@ export function generateBioinformaticsFigure(spec: BioinformaticsFigureSpec): {
       `  geom_vline(xintercept = c(-${fcCut}, ${fcCut}), linetype = "dashed") +\n` +
       `  geom_hline(yintercept = ${negLogPCut.toFixed(3)}, linetype = "dashed") +\n` +
       `  geom_text_repel(data = subset(df, Regulation != "NS"), aes(label = Gene), size = 3.2, max.overlaps = 15) +\n` +
-      `  theme_bw(base_family = "Arial") + labs(title = "${title.replace(/"/g, '\\"')}")\n` +
+      `  theme_bw(base_family = "Arial") + labs(title = "${title.replace(/([\\"])/g, '\\$1')}")\n` +
       `ggsave("Figure_Volcano_Plot.pdf", plot = p, width = 7, height = 5.5, dpi = 600)\n`
 
     const pzfx = exportToPrismPzfx(
@@ -1871,7 +1871,7 @@ export function generateBioinformaticsFigure(spec: BioinformaticsFigureSpec): {
       `df <- read.csv("enrichment_results.csv")\n` +
       `p <- ggplot(df, aes(x = GeneRatio, y = reorder(Term, GeneRatio), size = Count, color = negLog10FDR)) +\n` +
       `  geom_point(alpha = 0.88) + scale_color_gradient(low = "#2563EB", high = "#DC2626") +\n` +
-      `  theme_bw(base_family = "Arial") + labs(title = "${title.replace(/"/g, '\\"')}", y = "")\n` +
+      `  theme_bw(base_family = "Arial") + labs(title = "${title.replace(/([\\"])/g, '\\$1')}", y = "")\n` +
       `ggsave("Figure_KEGG_GO_Enrichment.pdf", plot = p, width = 8, height = 5.5, dpi = 600)\n`
 
     return {

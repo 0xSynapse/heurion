@@ -1077,7 +1077,7 @@ export function registerPublicToolsApi(app: Hono<any>, deps: PublicToolsDeps = {
         `# Reproducible R Script (forestploter)\n` +
         `library(forestploter)\n` +
         `df <- data.frame(\n` +
-        `  Subgroup = c(${numericRows.map(r => `"${r.label.replace(/"/g, '\\"')}"`).join(', ')}),\n` +
+        `  Subgroup = c(${numericRows.map(r => `"${r.label.replace(/([\\"])/g, '\\$1')}"`).join(', ')}),\n` +
         `  Est = c(${numericRows.map(r => r.estimate.toFixed(3)).join(', ')}),\n` +
         `  Low = c(${numericRows.map(r => r.ci_lower.toFixed(3)).join(', ')}),\n` +
         `  High = c(${numericRows.map(r => r.ci_upper.toFixed(3)).join(', ')})\n` +

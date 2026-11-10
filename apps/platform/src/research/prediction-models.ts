@@ -779,7 +779,7 @@ export function exportRocDcaNativeSources(
     `df <- read.csv("prediction_cohort.csv")\n` +
     `roc_obj <- roc(df$outcome, df$pred_score, ci = TRUE)\n` +
     `pdf("Figure_ROC_Curve.pdf", width = 6, height = 6)\n` +
-    `plot(roc_obj, print.auc = TRUE, col = "#0284C7", lwd = 2.5, main = "${title.replace(/"/g, '\\"')}")\n` +
+    `plot(roc_obj, print.auc = TRUE, col = "#0284C7", lwd = 2.5, main = "${title.replace(/([\\"])/g, '\\$1')}")\n` +
     `dev.off()\n` +
     `dca_obj <- decision_curve(outcome ~ pred_score, data = df, family = binomial(link = "logit"), thresholds = seq(0.05, 0.80, by = 0.05))\n` +
     `pdf("Figure_DCA_Curve.pdf", width = 6.5, height = 5.5)\n` +

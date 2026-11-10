@@ -49,8 +49,8 @@ const child = (n: El, name: string): El | undefined => elements(n).find(c => c.n
 const children = (n: El, name: string): El[] => elements(n).filter(c => c.nodeName === name)
 const squash = (s: string) => s.replace(/\s+/g, ' ').trim()
 
-/** 行内 markdown 转义：强调、代码、反斜杠；段首的块级标记另行处理 */
-const escapeInline = (s: string) => s.replace(/([\\`*_])/g, '\\$1')
+/** 行内 markdown 转义：强调、代码、反斜杠（表格单元格内同时转义竖线）；段首的块级标记另行处理 */
+const escapeInline = (s: string, inCell = false) => s.replace(inCell ? /([\\`*_\|])/g : /([\\`*_])/g, '\\$1')
 /** 段首会被当成标题、列表、引用块、表格的写法前面加反斜杠 */
 const escapeBlockStart = (s: string) => s.replace(/^(\s*)(#{1,6}\s|[-+*]\s|\d+[.)]\s|>|\|)/, '$1\\$2')
 
@@ -69,13 +69,13 @@ export function jatsToMarkdown(xml: string): JatsDoc {
   const unknown = (name: string) => { stats.unknown[name] = (stats.unknown[name] ?? 0) + 1 }
 
   // —— 行内 ——
-  const inline = (n: El): string => {
-    if (n.nodeType === 3 || n.nodeType === 4) return escapeInline(n.textContent ?? '')
+  const inline = (n: El, inCell = false): string => {
+    if (n.nodeType === 3 || n.nodeType === 4) return escapeInline(n.textContent ?? '', inCell)
     if (n.nodeType !== 1) return ''
     const name = n.nodeName
     if (name === 'xref') {
       const t = squash(n.textContent ?? '')
-      if (n.getAttribute('ref-type') !== 'bibr') return escapeInline(t)
+      if (n.getAttribute('ref-type') !== 'bibr') return escapeInline(t, inCell)
       stats.citations++
       // 纯数字引用前后都没有括号或分隔符：原文是靠样式显示的上标，补成「[n]」；原文自带括号的保持原样
       const before = n.previousSibling?.nodeType === 3 ? (n.previousSibling.textContent ?? '') : ''
@@ -84,41 +84,41 @@ export function jatsToMarkdown(xml: string): JatsDoc {
       const prev = n.previousSibling
       const glued = prev?.nodeType === 1 && prev.nodeName === 'xref' && prev.getAttribute('ref-type') === 'bibr'
       const bare = !glued && /^\d+(?:\s*[–-]\s*\d+)?$/.test(t) && !/[[(,，;–-]\s*$/.test(before) && !/^\s*[\]),，;–-]/.test(after)
-      return `${glued ? ', ' : ''}${bare ? `[${escapeInline(t)}]` : escapeInline(t)}`
+      return `${glued ? ', ' : ''}${bare ? `[${escapeInline(t, inCell)}]` : escapeInline(t, inCell)}`
     }
     if (name === 'sup') {
       const kids = elements(n)
       // 只含引用的上标（Vancouver 上标写法）：整组补一对方括号，「1,2」→「[1,2]」
       if (kids.length > 0 && kids.every(c => c.nodeName === 'xref' && c.getAttribute('ref-type') === 'bibr')) {
         stats.citations += kids.length
-        const t = squash(each(n.childNodes).map(c => escapeInline(c.textContent ?? '')).join(''))
+        const t = squash(each(n.childNodes).map(c => escapeInline(c.textContent ?? '', inCell)).join(''))
         return /^\[.*\]$/.test(t) ? t : `[${t.replace(/^[[(]|[\])]$/g, '')}]`
       }
-      const t = each(n.childNodes).map(inline).join('')
+      const t = each(n.childNodes).map(c => inline(c, inCell)).join('')
       if (!t.trim()) return ''
       // 脚注标记后面紧跟单词（「^cAverage」）时补空格，不让标记和单词粘成一个词
       const next = n.nextSibling?.nodeType === 3 ? (n.nextSibling.textContent ?? '') : ''
       return /^\p{L}/u.test(next) && /\p{L}$/u.test(t) ? `^${t} ` : `^${t}`
     }
-    if (name === 'inline-formula') { stats.formulas++; return formulaText(n) }
+    if (name === 'inline-formula') { stats.formulas++; return formulaText(n, inCell) }
     if (name === 'break') return ' '
     if (name === 'fn' || name === 'target') return ''
     if (name === 'inline-graphic' || name === 'graphic' || name === 'media') return ''
     if (name === 'alternatives') {
       const pick = child(n, 'tex-math') ?? child(n, 'mml:math') ?? elements(n)[0]
-      return pick ? escapeInline(squash(pick.textContent ?? '')) : ''
+      return pick ? escapeInline(squash(pick.textContent ?? ''), inCell) : ''
     }
     if (!INLINE_PASSTHROUGH.has(name)) unknown(name)
-    return each(n.childNodes).map(inline).join('')
+    return each(n.childNodes).map(c => inline(c, inCell)).join('')
   }
 
-  const formulaText = (n: El): string => {
+  const formulaText = (n: El, inCell = false): string => {
     const tex = each(n.getElementsByTagName('tex-math'))[0]
-    if (tex) return escapeInline(squash((tex.textContent ?? '').replace(/\\documentclass[\s\S]*?\\begin\{document\}|\\end\{document\}/g, '')))
-    return escapeInline(squash(n.textContent ?? ''))
+    if (tex) return escapeInline(squash((tex.textContent ?? '').replace(/\\documentclass[\s\S]*?\\begin\{document\}|\\end\{document\}/g, '')), inCell)
+    return escapeInline(squash(n.textContent ?? ''), inCell)
   }
 
-  const inlineText = (n: El | undefined) => (n ? squash(each(n.childNodes).map(inline).join('')) : '')
+  const inlineText = (n: El | undefined) => (n ? squash(each(n.childNodes).map(c => inline(c)).join('')) : '')
 
   const pushPara = (text: string) => {
     const t = squash(text)
@@ -238,7 +238,7 @@ export function jatsToMarkdown(xml: string): JatsDoc {
   }
 
   const cellText = (cell: El): string => {
-    const t = squash(each(cell.childNodes).map(inline).join(' ')).replace(/\|/g, '\\|')
+    const t = squash(each(cell.childNodes).map(c => inline(c, true)).join(' '))
     // 单独的 ^ / < 会被当成合并标记
     return t === '^' || t === '<' ? `\\${t}` : t
   }

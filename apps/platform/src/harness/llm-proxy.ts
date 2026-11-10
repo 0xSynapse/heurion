@@ -26,17 +26,24 @@ export async function handleLlmProxy(deps: LlmProxyDeps, req: IncomingMessage, r
   const fail = (status: number, message: string) => {
     res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message } }))
   }
-  const auth = req.headers['x-api-key'] ?? req.headers.authorization?.replace(/^Bearer\s+/i, '')
-  const claims = typeof auth === 'string' ? verifyToken(deps.secret, auth, 'llm') : null
+  const headers = new Headers()
+  let proxyBearer: string | undefined
+  let authHeader: string | undefined
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (v === undefined) continue
+    const lower = k.toLowerCase()
+    const first = Array.isArray(v) ? v[0] : v
+    if (lower === 'x-api-key' && typeof first === 'string') proxyBearer ??= first
+    else if (lower === 'authorization' && typeof first === 'string') authHeader ??= first.replace(/^Bearer\s+/i, '')
+    if (DROP_REQUEST.has(lower)) continue
+    headers.set(k, Array.isArray(v) ? v.join(', ') : v)
+  }
+  const bearer = proxyBearer ?? authHeader
+  const claims = bearer ? verifyToken(deps.secret, bearer, 'llm') : null
   if (!claims || !claims.s || !deps.isLive(claims.u, claims.s)) return fail(401, '模型代理令牌无效或已过期')
   if (!deps.apiKey) return fail(503, '平台没有配置 DEEPSEEK_API_KEY')
   if (req.method !== 'POST' && req.method !== 'GET') return fail(405, '不支持的方法')
 
-  const headers = new Headers()
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (v === undefined || DROP_REQUEST.has(k.toLowerCase())) continue
-    headers.set(k, Array.isArray(v) ? v.join(', ') : v)
-  }
   headers.set('x-api-key', deps.apiKey)
   const rest = (req.url ?? '').slice(LLM_PREFIX.length)
   let decodedRest = rest

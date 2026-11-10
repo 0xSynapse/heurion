@@ -15,7 +15,12 @@ export interface Template {
   org?: boolean; org_name?: string; base?: string
 }
 
-const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
+const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
+const escHex = (s: unknown) => {
+  const clean = String(s ?? '').replace(/^#/, '')
+  return /^[0-9a-fA-F]{3,8}$/.test(clean) ? clean : '000000'
+}
+const num = (n: unknown) => (typeof n === 'number' && Number.isFinite(n) ? n : 0)
 
 let cache: Template[] | null = null
 export async function loadTemplates(api: (path: string) => Promise<any>): Promise<Template[]> {
@@ -52,35 +57,42 @@ export function layoutSvg(t: Template, layoutKey: string): string {
   const l = t.layouts.find(x => x.key === layoutKey)
   if (!l) return ''
   const font = t.serif ? `'Songti SC','STSong','SimSun',serif` : `'PingFang SC','Microsoft YaHei','Noto Sans SC',sans-serif`
-  const parts = [`<rect width="960" height="540" fill="#${t.bg}"/>`]
+  const parts = [`<rect width="960" height="540" fill="#${esc(escHex(t.bg))}"/>`]
   for (const d of l.decorations) {
-    const [x, y, w, h] = d.box
+    const x = num(d.box[0]), y = num(d.box[1]), w = num(d.box[2]), h = num(d.box[3])
     // 带图模板的照片（内置、公开）：按框裁切铺满；机构院徽：按原比例放进框里
     if (d.image || d.href) { parts.push(`<image href="${esc(decoHref(d))}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="${d.image?.startsWith('tp_') ? 'xMidYMid slice' : 'xMidYMid meet'}"/>`); continue }
     // 文字装饰（机构名称）
-    if (d.text) { parts.push(`<text x="${d.text.align === 'r' ? x + w : x}" y="${y + d.text.size * 1.2}" font-size="${d.text.size}" fill="#${d.text.color}" text-anchor="${d.text.align === 'r' ? 'end' : 'start'}" font-family="${font}">${esc(d.text.value)}</text>`); continue }
+    if (d.text) {
+      const ts = num(d.text.size)
+      parts.push(`<text x="${d.text.align === 'r' ? x + w : x}" y="${y + ts * 1.2}" font-size="${ts}" fill="#${esc(escHex(d.text.color))}" text-anchor="${d.text.align === 'r' ? 'end' : 'start'}" font-family="${esc(font)}">${esc(d.text.value)}</text>`)
+      continue
+    }
+    const fillAttr = d.fill === 'none' ? 'none' : `#${esc(escHex(d.fill))}`
     parts.push(d.geom === 'ellipse'
-      ? `<ellipse cx="${x + w / 2}" cy="${y + h / 2}" rx="${w / 2}" ry="${h / 2}" fill="#${d.fill}"/>`
-      : `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${d.geom === 'roundRect' ? Math.min(w, h) * 0.16 : 0}" fill="#${d.fill}"/>`)
+      ? `<ellipse cx="${x + w / 2}" cy="${y + h / 2}" rx="${w / 2}" ry="${h / 2}" fill="${fillAttr}"/>`
+      : `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${d.geom === 'roundRect' ? Math.min(w, h) * 0.16 : 0}" fill="${fillAttr}"/>`)
   }
   for (const p of l.placeholders) {
     if (p.type === 'pic') continue
-    const [x, y, w, h] = p.box
+    const x = num(p.box[0]), y = num(p.box[1]), w = num(p.box[2]), h = num(p.box[3])
+    const ps = num(p.size)
+    const pColor = esc(escHex(p.color))
     const text = SAMPLE[l.key]?.[p.role]
     const anchor = p.align === 'ctr' ? 'middle' : 'start'
     const tx = p.align === 'ctr' ? x + w / 2 : x
     if (text) {
-      parts.push(`<text x="${tx}" y="${y + p.size * 1.05}" font-size="${p.size}" font-weight="${p.bold ? 700 : 400}" fill="#${p.color}" text-anchor="${anchor}" font-family="${font}">${esc(text)}</text>`)
+      parts.push(`<text x="${tx}" y="${y + ps * 1.05}" font-size="${ps}" font-weight="${p.bold ? 700 : 400}" fill="#${pColor}" text-anchor="${anchor}" font-family="${esc(font)}">${esc(text)}</text>`)
       continue
     }
     // 正文：几行示意条（项目符号 + 长短不一）
-    const line = Math.max(14, p.size * 1.6)
+    const line = Math.max(14, ps * 1.6)
     const rows = Math.min(5, Math.floor(h / line))
     for (let i = 0; i < rows; i++) {
       const len = w * [0.86, 0.7, 0.78, 0.6, 0.72][i]!
       const ly = y + i * line + line * 0.25
-      parts.push(`<circle cx="${x + p.size * 0.3}" cy="${ly + p.size * 0.3}" r="${p.size * 0.16}" fill="#${p.color}" opacity=".55"/>`)
-      parts.push(`<rect x="${x + p.size * 0.9}" y="${ly}" width="${len - p.size}" height="${p.size * 0.6}" rx="${p.size * 0.3}" fill="#${p.color}" opacity=".22"/>`)
+      parts.push(`<circle cx="${x + ps * 0.3}" cy="${ly + ps * 0.3}" r="${ps * 0.16}" fill="#${pColor}" opacity=".55"/>`)
+      parts.push(`<rect x="${x + ps * 0.9}" y="${ly}" width="${len - ps}" height="${ps * 0.6}" rx="${ps * 0.3}" fill="#${pColor}" opacity=".22"/>`)
     }
   }
   return `<svg viewBox="0 0 960 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(t.label)} · ${esc(l.name)}">${parts.join('')}</svg>`

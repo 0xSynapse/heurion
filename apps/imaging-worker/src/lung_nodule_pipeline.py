@@ -503,7 +503,7 @@ def run_lung_nodule_pipeline(
             if type(exc).__name__ == "ModelUnavailableError":
                 raise
             seg_times.append(_ms(t))
-            n_warnings.append(f"VISTA-3D 分割出错：{exc}")
+            n_warnings.append("VISTA-3D 分割出错")
 
         if segmentation == "failed":
             metrics, key_z, fb_warnings = box_fallback_metrics(box, spacing)
@@ -558,7 +558,7 @@ def run_lung_nodule_pipeline(
             lobe_meta = {"status": "failed", "mode": lobe_mode}
             for n in nodules:
                 n["lobe"] = None
-            warnings.append(f"VISTA-3D 肺叶分割失败，所有结节 lobe 为 null：{exc}")
+            warnings.append("VISTA-3D 肺叶分割失败，所有结节 lobe 为 null")
     timings["lobe_segmentation"] = _ms(t)
 
     # 3.5) 可选：过滤首尾层/边缘与肺外（lobe=None）假阳性候选（B.3 消融实验，默认关闭）
@@ -749,7 +749,7 @@ def segment_nodule_at_points(
         except Exception as exc:
             if type(exc).__name__ == "ModelUnavailableError":
                 raise
-            warnings.append(f"VISTA-3D 肺叶分割失败，肺叶未定：{exc}")
+            warnings.append("VISTA-3D 肺叶分割失败，肺叶未定")
     timings["lobe_segmentation"] = _ms(t)
 
     nodule = {

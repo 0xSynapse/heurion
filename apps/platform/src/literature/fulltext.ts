@@ -96,6 +96,45 @@ export class FullTextClient {
   }
 }
 
+function stripXmlTags(raw: string): string {
+  let out = ''
+  let i = 0
+  while (i < raw.length) {
+    const lt = raw.indexOf('<', i)
+    if (lt === -1) { out += raw.slice(i); break }
+    out += raw.slice(i, lt)
+    const gt = raw.indexOf('>', lt + 1)
+    if (gt === -1) break
+    i = gt + 1
+  }
+  return out
+}
+
+function removeXmlElement(raw: string, tagName: string): string {
+  let out = ''
+  let i = 0
+  const lower = raw.toLowerCase()
+  const openToken = `<${tagName.toLowerCase()}`
+  const closeToken = `</${tagName.toLowerCase()}`
+  while (i < raw.length) {
+    const start = lower.indexOf(openToken, i)
+    if (start === -1) { out += raw.slice(i); break }
+    const after = lower[start + openToken.length]
+    if (after && after !== '>' && after !== '/' && after !== ' ' && after !== '\t' && after !== '\n' && after !== '\r') {
+      out += raw.slice(i, start + openToken.length)
+      i = start + openToken.length
+      continue
+    }
+    out += raw.slice(i, start)
+    const close = lower.indexOf(closeToken, start + openToken.length)
+    if (close === -1) break
+    const closeGt = raw.indexOf('>', close + closeToken.length)
+    if (closeGt === -1) break
+    i = closeGt + 1
+  }
+  return out
+}
+
 /** 从 PMC 开放 XML 提取正文、表格（带表头切片）与图注，解决临床试验数值大多藏在表格中的证据缺失瓶颈。 */
 export function extractFromPmcXml(xmlRaw: string): string {
   const parts: string[] = []
@@ -103,23 +142,23 @@ export function extractFromPmcXml(xmlRaw: string): string {
   // 1. 标题与摘要
   const titleM = /<article-title\b[^>]*>([\s\S]*?)<\/article-title>/i.exec(xmlRaw)
   if (titleM) {
-    const title = titleM[1]!.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+    const title = stripXmlTags(titleM[1]!).replace(/\s+/g, ' ').trim()
     if (title) parts.push(title)
   }
   const absM = /<abstract\b[^>]*>([\s\S]*?)<\/abstract>/i.exec(xmlRaw)
   if (absM) {
-    const absText = absM[1]!.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+    const absText = stripXmlTags(absM[1]!).replace(/\s+/g, ' ').trim()
     if (absText) parts.push(`Abstract: ${absText}`)
   }
 
   // 2. 正文段落（排除表格与图注，避免重复）
   const bodyM = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(xmlRaw)
   const body = bodyM ? bodyM[1]! : xmlRaw
-  const cleanBody = body.replace(/<table-wrap[\s\S]*?<\/table-wrap>/gi, '').replace(/<fig[\s\S]*?<\/fig>/gi, '')
+  const cleanBody = removeXmlElement(removeXmlElement(body, 'table-wrap'), 'fig')
   const pRegex = /<p\b[^>]*>([\s\S]*?)<\/p>/gi
   let pM: RegExpExecArray | null
   while ((pM = pRegex.exec(cleanBody)) !== null) {
-    const pt = pM[1]!.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+    const pt = stripXmlTags(pM[1]!).replace(/\s+/g, ' ').trim()
     if (pt.length >= 40) parts.push(pt)
   }
 
@@ -128,8 +167,8 @@ export function extractFromPmcXml(xmlRaw: string): string {
   let twM: RegExpExecArray | null
   while ((twM = twRegex.exec(xmlRaw)) !== null) {
     const tw = twM[1]!
-    const label = (/<label>([\s\S]*?)<\/label>/i.exec(tw)?.[1] || 'Table').replace(/<[^>]+>/g, '').trim()
-    const caption = (/<caption>([\s\S]*?)<\/caption>/i.exec(tw)?.[1] || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+    const label = stripXmlTags(/<label>([\s\S]*?)<\/label>/i.exec(tw)?.[1] || 'Table').trim()
+    const caption = stripXmlTags(/<caption>([\s\S]*?)<\/caption>/i.exec(tw)?.[1] || '').replace(/\s+/g, ' ').trim()
     const rows: string[] = []
     const trRegex = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi
     let trM: RegExpExecArray | null
@@ -138,7 +177,7 @@ export function extractFromPmcXml(xmlRaw: string): string {
       const cellRegex = /<(?:th|td)\b[^>]*>([\s\S]*?)<\/(?:th|td)>/gi
       let cellM: RegExpExecArray | null
       while ((cellM = cellRegex.exec(trM[1]!)) !== null) {
-        cells.push(cellM[1]!.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim())
+        cells.push(stripXmlTags(cellM[1]!).replace(/\s+/g, ' ').trim())
       }
       if (cells.length > 0) rows.push(cells.join(' | '))
     }
@@ -163,8 +202,8 @@ export function extractFromPmcXml(xmlRaw: string): string {
   let figM: RegExpExecArray | null
   while ((figM = figRegex.exec(xmlRaw)) !== null) {
     const fig = figM[1]!
-    const label = (/<label>([\s\S]*?)<\/label>/i.exec(fig)?.[1] || 'Figure').replace(/<[^>]+>/g, '').trim()
-    const caption = (/<caption>([\s\S]*?)<\/caption>/i.exec(fig)?.[1] || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+    const label = stripXmlTags(/<label>([\s\S]*?)<\/label>/i.exec(fig)?.[1] || 'Figure').trim()
+    const caption = stripXmlTags(/<caption>([\s\S]*?)<\/caption>/i.exec(fig)?.[1] || '').replace(/\s+/g, ' ').trim()
     if (caption) parts.push(`[${label}: ${caption}]`)
   }
 

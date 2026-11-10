@@ -40,13 +40,14 @@ export interface Mailer {
 export class MailerError extends Error {}
 
 function makeFrom(baseFrom: string, senderName?: string, senderAddress?: string): string {
-  const emailMatch = baseFrom.match(/<([^>]+)>/)
-  const defaultAddr = (emailMatch ? emailMatch[1] : baseFrom.trim()) || 'no-reply@heurion.org'
+  const ltIdx = baseFrom.indexOf('<')
+  const gtIdx = ltIdx >= 0 ? baseFrom.indexOf('>', ltIdx + 1) : -1
+  const defaultAddr = (ltIdx >= 0 && gtIdx > ltIdx ? baseFrom.slice(ltIdx + 1, gtIdx).trim() : baseFrom.trim()) || 'no-reply@heurion.org'
   let addr = senderAddress || defaultAddr
   if (addr.endsWith('@heurion.com')) {
     addr = addr.replace(/@heurion\.com$/, '@heurion.org')
   }
-  const defaultName = emailMatch ? baseFrom.replace(/<[^>]+>/, '').trim().replace(/^"|"$/g, '') : 'Heurion'
+  const defaultName = ltIdx >= 0 ? (baseFrom.slice(0, ltIdx).trim().replace(/^"|"$/g, '') || 'Heurion') : 'Heurion'
   const name = senderName || defaultName
   return `"${name}" <${addr}>`
 }

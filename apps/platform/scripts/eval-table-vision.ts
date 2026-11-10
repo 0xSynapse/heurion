@@ -27,7 +27,7 @@ const SYSTEM = TRANSCRIBE_SYSTEM
 
 const md = (grid: string[][]) => {
   const w = Math.max(...grid.map(r => r.length))
-  const cell = (s: string) => (s || ' ').replace(/\|/g, '\\|').replace(/\^/g, '')
+  const cell = (s: string) => (s || ' ').replace(/([\\|])/g, '\\$1').replace(/\^/g, '')
   const row = (r: string[]) => `| ${Array.from({ length: w }, (_, i) => cell(r[i] ?? '')).join(' | ')} |`
   return [row(grid[0]!), `|${' --- |'.repeat(w)}`, ...grid.slice(1).map(row)].join('\n')
 }

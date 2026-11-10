@@ -1123,7 +1123,7 @@ export function generateTable1FromData(
   mdLines.push('')
 
   // 标头行
-  const escMd = (s: string) => String(s).replace(/\|/g, '\\|')
+  const escMd = (s: string) => String(s).replace(/([\\|])/g, '\\$1')
   mdLines.push(`| ${headers.map(escMd).join(' | ')} |`)
   // 对齐行：首列左对齐，其余居中
   const alignTokens = headers.map((_, idx) => (idx === 0 ? ':---' : ':---:'))

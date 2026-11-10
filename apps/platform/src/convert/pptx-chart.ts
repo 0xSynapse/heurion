@@ -22,7 +22,8 @@ export interface ChartData {
 /** 平台能改数据的图表类型（其余类型只读显示）。 */
 export const EDITABLE_CHART_TYPES: ChartType[] = ['column', 'bar', 'line', 'pie', 'area', 'doughnut']
 
-const unescapeXml = (s: string) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+const XML_ENTITIES: Record<string, string> = { '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&amp;': '&' }
+const unescapeXml = (s: string) => s.replace(/&(?:lt|gt|quot|apos|amp);/g, e => XML_ENTITIES[e] ?? e)
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 /** 片段里第一个 <name> 元素（自闭合或带内容）。 */

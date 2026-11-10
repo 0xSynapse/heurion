@@ -19,7 +19,13 @@ interface OrgTpl {
 }
 interface Meta { templates: OrgTpl[]; bases: Array<{ key: string; label: string }>; presets: Array<{ label: string; org_name: string; base: string; colors: Record<ColorKey, string> }> }
 
-const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
+const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
+const cleanHex = (s: unknown) => {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(s ?? '').trim())
+  if (!m) return '000000'
+  const n = Number.parseInt(m[1]!, 16)
+  return Number.isInteger(n) && n >= 0 && n <= 0xffffff ? n.toString(16).padStart(6, '0').toUpperCase() : '000000'
+}
 const token = () => { try { return localStorage.getItem('heurion.token') ?? '' } catch { return '' } }
 
 /** PNG / JPEG / SVG 的像素尺寸（预览按比例放院徽）。 */
@@ -82,7 +88,7 @@ export async function mountOrgTemplates(box: HTMLElement, api: ApiFn, notify: No
   const editor = (t: OrgTpl | null) => {
     const preset = meta.presets[0]
     const colors: Record<ColorKey, string> = { ...(t?.colors ?? preset?.colors ?? baseOf('clinical') as unknown as Record<ColorKey, string>) }
-    for (const k of COLOR_KEYS) colors[k] = (colors[k] ?? '').toUpperCase() || '000000'
+    for (const k of COLOR_KEYS) colors[k] = cleanHex(colors[k])
     let logoFile: File | null = null
     let logoUrl: string | null = t?.logo_url ? `${t.logo_url}?token=${encodeURIComponent(token())}` : null
     let clearLogo = false
@@ -112,7 +118,7 @@ export async function mountOrgTemplates(box: HTMLElement, api: ApiFn, notify: No
     }
     form.addEventListener('input', e => {
       const el = e.target as HTMLInputElement
-      if (el.dataset.color) { colors[el.dataset.color as ColorKey] = el.value.replace('#', '').toUpperCase(); el.parentElement!.querySelector('i')!.textContent = `#${colors[el.dataset.color as ColorKey]}` }
+      if (el.dataset.color) { colors[el.dataset.color as ColorKey] = cleanHex(el.value); el.parentElement!.querySelector('i')!.textContent = `#${colors[el.dataset.color as ColorKey]}` }
       void draw()
     })
     form.addEventListener('change', () => void draw())

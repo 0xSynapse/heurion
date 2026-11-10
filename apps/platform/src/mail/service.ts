@@ -298,24 +298,90 @@ export function parseMimeText(rawText: string): string {
         const bodyPart = split.slice(1).join('\n\n').trim()
         const csMatch = split[0]!.match(/charset="?([^"\r\n;]+)"?/i)
         const html = decodeEmailBody(bodyPart, csMatch ? csMatch[1] : undefined)
-        return html
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-          .replace(/<br\s*\/?>/gi, '\n')
-          .replace(/<\/p>/gi, '\n\n')
-          .replace(/<\/div>/gi, '\n')
-          .replace(/<[^>]+>/g, '')
-          .replace(/&nbsp;/gi, ' ')
-          .replace(/&lt;/gi, '<')
-          .replace(/&gt;/gi, '>')
-          .replace(/&amp;/gi, '&')
-          .replace(/&quot;/gi, '"')
-          .replace(/&#39;/gi, "'")
-          .trim()
+        return htmlEmailToPlainText(html)
       }
     }
   }
   return rawText
+}
+
+const MAIL_HTML_ENTITIES: Record<string, string> = {
+  '&nbsp;': ' ',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&amp;': '&',
+  '&quot;': '"',
+  '&apos;': "'",
+  '&#39;': "'",
+}
+
+function findMailTagEnd(src: string, fromIdx: number): number {
+  let quote = ''
+  for (let i = fromIdx; i < src.length; i++) {
+    const ch = src[i]!
+    if (quote) {
+      if (ch === quote) quote = ''
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+    } else if (ch === '>') {
+      return i
+    }
+  }
+  return -1
+}
+
+function skipMailRawBlock(src: string, lower: string, tagName: string, fromIdx: number): number {
+  const needle = `</${tagName}`
+  let pos = fromIdx
+  while (pos < src.length) {
+    const closeIdx = lower.indexOf(needle, pos)
+    if (closeIdx === -1) return src.length
+    const after = lower[closeIdx + needle.length]
+    if (!after || after === '>' || after === '/' || after === ' ' || after === '\t' || after === '\n' || after === '\r') {
+      const gt = findMailTagEnd(src, closeIdx + needle.length)
+      return gt === -1 ? src.length : gt + 1
+    }
+    pos = closeIdx + needle.length
+  }
+  return src.length
+}
+
+function htmlEmailToPlainText(html: string): string {
+  if (!html) return ''
+  const lower = html.toLowerCase()
+  let out = ''
+  let i = 0
+  while (i < html.length) {
+    const lt = html.indexOf('<', i)
+    if (lt === -1) { out += html.slice(i); break }
+    out += html.slice(i, lt)
+    if (lower.startsWith('<!--', lt)) {
+      const endComment = lower.indexOf('-->', lt + 4)
+      if (endComment === -1) break
+      i = endComment + 3
+      continue
+    }
+    let p = lt + 1
+    let closing = false
+    if (lower[p] === '/') { closing = true; p++ }
+    const nameStart = p
+    while (p < lower.length && /[a-z0-9]/.test(lower[p]!)) p++
+    const tagName = lower.slice(nameStart, p)
+    const gt = findMailTagEnd(html, p)
+    if (gt === -1) break
+    const selfClosing = html[gt - 1] === '/'
+    if (!closing && !selfClosing && (tagName === 'script' || tagName === 'style' || tagName === 'xml')) {
+      i = skipMailRawBlock(html, lower, tagName, gt + 1)
+      continue
+    }
+    if (tagName === 'br') out += '\n'
+    else if (closing && tagName === 'p') out += '\n\n'
+    else if (closing && tagName === 'div') out += '\n'
+    i = gt + 1
+  }
+  return out
+    .replace(/&(?:nbsp|lt|gt|amp|quot|apos|#39);/gi, m => MAIL_HTML_ENTITIES[m.toLowerCase()] ?? m)
+    .trim()
 }
 
 /** 智能探测并解码邮件正文（兼容全文本 Base64、分块 Base64、Quoted-Printable、MIME Multipart 及多字符集） */

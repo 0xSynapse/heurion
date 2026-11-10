@@ -230,7 +230,12 @@ describe('Word 批注：导入为平台评论线程，导出为 Word 线程回�
     const first = firstPara(t.exportNow())
     expect(first).toContain('<w:footnoteReference w:id="1"/>')
     expect(first).toMatch(/<w:commentRangeStart w:id="7"\/>[\s\S]*110 例[\s\S]*<w:commentRangeEnd w:id="7"\/>/)
-    expect(first.replace(/<[^>]+>/g, '')).toContain('本研究为单中心研究。本研究纳入 110 例')
+    const xmlPlain = first.split('<').map((seg, idx) => {
+      if (idx === 0) return seg
+      const gt = seg.indexOf('>')
+      return gt === -1 ? '' : seg.slice(gt + 1)
+    }).join('')
+    expect(xmlPlain).toContain('本研究为单中心研究。本研究纳入 110 例')
     expect(t.thread().node_id).toBe(a)
   })
 

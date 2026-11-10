@@ -1148,7 +1148,7 @@ export function generateSurvivalMarkdownTable(
   groupsKm: KmGroupResult[],
   timeUnit = 'Months'
 ): string {
-  const escMd = (s: string) => String(s).replace(/\|/g, '\\|')
+  const escMd = (s: string) => String(s).replace(/([\\|])/g, '\\$1')
   // C7 修复：根据时间单位自动适配 1 年与 3 年对应里程碑点，避免在 Days/Years 单位下显示错误
   const normUnit = timeUnit.toLowerCase()
   let m1Label = '1-Year Rate'

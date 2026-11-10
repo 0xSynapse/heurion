@@ -505,7 +505,7 @@ export function generateLogisticRegression(
   const svg = renderOrForestPlotSvg(covResults, title, subtitle)
 
   // 6. 生成 Markdown 三线表与医学论文结果段落
-  const escMd = (s: string) => String(s).replace(/\|/g, '\\|')
+  const escMd = (s: string) => String(s).replace(/([\\|])/g, '\\$1')
   let md = `### ${title}\n\n`
   md += `| Predictor | Univariate OR (95% CI) | Univariate P | Adjusted aOR (95% CI) | Multivariate P |\n`
   md += `| :--- | :---: | :---: | :---: | :---: |\n`
@@ -821,7 +821,7 @@ export function generateGrottaPlot(
   svg += `</svg>`
 
   // 4. 生成 Markdown 表格与学术述评
-  const escMd = (s: string) => String(s).replace(/\|/g, '\\|')
+  const escMd = (s: string) => String(s).replace(/([\\|])/g, '\\$1')
   let md = `### ${title}\n\n`
   md += `| Group / Timepoint | Total (N) | ${score_levels.map(s => escMd(s.label)).join(' | ')} |\n`
   md += `| :--- | :---: | ${score_levels.map(() => ':---:').join(' | ')} |\n`
@@ -1145,7 +1145,7 @@ export function generateSankeyDiagram(
   svg += `</svg>`
 
   // 5. 生成流向汇总表与论文述评
-  const escMd = (s: string) => String(s).replace(/\|/g, '\\|')
+  const escMd = (s: string) => String(s).replace(/([\\|])/g, '\\$1')
   const sortedLinks = [...links].sort((a, b) => b.count - a.count)
   let md = `### ${title}\n\n`
   md += `| From Stage | Source Node | To Stage | Target Node | Patients (n, %) |\n`
@@ -1417,7 +1417,7 @@ export function generateUpSetPlot(
 
   svg += `</svg>`
 
-  const escMd = (s: string) => String(s).replace(/\|/g, '\\|')
+  const escMd = (s: string) => String(s).replace(/([\\|])/g, '\\$1')
   let md = `### ${title}\n\n`
   md += `| Combination / Pattern | Regions Involved | Patients (n, %) |${outcome_col ? ` Outcome Events (n, %) |` : ''}\n`
   md += `| :--- | :---: | :---: |${outcome_col ? ' :---: |' : ''}\n`

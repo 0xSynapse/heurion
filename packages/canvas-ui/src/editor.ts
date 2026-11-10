@@ -738,7 +738,7 @@ function buildCommentFocusDecos(doc: PMNode, opts: CommentFocusOptions): { decos
 
   // 最后按锚定文字定位（引用 / 测量原子等不计入 textContent 的部分已先清理）
   if (targetFrom < 0 && opts.snippet) {
-    const clean = opts.snippet.replace(/^\[表格\]\s*/, '').replace(/\[@[cm]:[^\]]+\]/g, '').trim()
+    const clean = opts.snippet.replace(/^\[表格\]\s*/, '').replace(/\[@[cm]:[^[\]]+\]/g, '').trim()
     const probes = [clean.slice(0, 28), ...clean.split(/[，。；：,;（）()[\]\s]+/).filter(s => s.length >= 5)].filter(Boolean)
     doc.descendants((node, pos) => {
       if (targetFrom >= 0 || !node.isTextblock) return true

@@ -1879,13 +1879,58 @@ export function renderBlogPostHtml(
 </html>`
 }
 
+const BLOG_HTML_ENTITIES: Record<string, string> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+}
+
+function stripBlogHtmlTags(raw: string): string {
+  let out = ''
+  let i = 0
+  while (i < raw.length) {
+    const lt = raw.indexOf('<', i)
+    if (lt === -1) { out += raw.slice(i); break }
+    out += raw.slice(i, lt)
+    const gt = raw.indexOf('>', lt + 1)
+    if (gt === -1) break
+    i = gt + 1
+  }
+  return out
+}
+
+function removeSvgBlocks(raw: string): string {
+  let out = ''
+  let i = 0
+  const lower = raw.toLowerCase()
+  while (i < raw.length) {
+    const start = lower.indexOf('<svg', i)
+    if (start === -1) { out += raw.slice(i); break }
+    const after = lower[start + 4]
+    if (after && after !== '>' && after !== '/' && after !== ' ' && after !== '\t' && after !== '\n' && after !== '\r') {
+      out += raw.slice(i, start + 4)
+      i = start + 4
+      continue
+    }
+    out += raw.slice(i, start)
+    const close = lower.indexOf('</svg', start + 4)
+    if (close === -1) break
+    const closeGt = raw.indexOf('>', close + 5)
+    if (closeGt === -1) break
+    i = closeGt + 1
+  }
+  return out
+}
+
 /**
  * 将文章 HTML 正文转换为面向 AI Crawler / RAG / Agent 的高信噪比 Markdown
  */
 function htmlProseToCleanMarkdown(html: string): string {
-  return html
-    .replace(/<figure class="blog-diagram">[\s\S]*?<figcaption>([\s\S]*?)<\/figcaption>\s*<\/figure>/gi, '\n> **[Diagram]** $1\n')
-    .replace(/<svg[\s\S]*?<\/svg>/gi, '')
+  const converted = removeSvgBlocks(
+    html.replace(/<figure class="blog-diagram">[\s\S]*?<figcaption>([\s\S]*?)<\/figcaption>\s*<\/figure>/gi, '\n> **[Diagram]** $1\n'),
+  )
     .replace(/<div class="blog-callout">\s*<div class="blog-callout-title">([\s\S]*?)<\/div>\s*<p>([\s\S]*?)<\/p>\s*<\/div>/gi, '\n> **$1**: $2\n')
     .replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n## $1\n')
     .replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n### $1\n')
@@ -1897,17 +1942,13 @@ function htmlProseToCleanMarkdown(html: string): string {
     .replace(/<\/?(?:ul|ol|p|div|section|article|header|tbody|thead|table)[^>]*>/gi, '\n')
     .replace(/<tr[^>]*>([\s\S]*?)<\/tr>/gi, (_, row: string) => {
       const cells = Array.from(row.matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)).map(m =>
-        m[1]!.replace(/<[^>]+>/g, '').trim(),
+        stripBlogHtmlTags(m[1]!).trim(),
       )
       return cells.length ? `| ${cells.join(' | ')} |\n` : ''
     })
     .replace(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
+  return stripBlogHtmlTags(converted)
+    .replace(/&(?:amp|lt|gt|quot|#39);/g, e => BLOG_HTML_ENTITIES[e] ?? e)
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
@@ -1982,8 +2023,8 @@ export function renderBlogPostMarkdown(slug: string, lang: 'zh' | 'en'): string 
 
   return [
     '---',
-    `title: "${title.replace(/"/g, '\\"')}"`,
-    `subtitle: "${sub.replace(/"/g, '\\"')}"`,
+    `title: "${title.replace(/([\\"])/g, '\\$1')}"`,
+    `subtitle: "${sub.replace(/([\\"])/g, '\\$1')}"`,
     `author: "Hui Zhao (@0xSynapse, Heurion Research)"`,
     `date: "${post.date}"`,
     `canonical_url: "${canonicalUrl}"`,

@@ -1,12 +1,15 @@
 import os
 import time
 import uuid
+import logging
 import threading
 from enum import Enum
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Dict, Any, List, Optional, Callable
+
+logger = logging.getLogger("imaging-worker")
 
 class TaskStatus(str, Enum):
     QUEUED = "queued"
@@ -253,9 +256,13 @@ def process_cohort_case(
                     "total_lung_volume_liters": em.get("total_lung_volume_liters"),
                     "perc15_hu": em.get("perc15_hu"),
                 })
-    except Exception as exc:
+    except FileNotFoundError:
         row["status"] = "failed"
-        row["error"] = str(exc)
+        row["error"] = "受试者影像文件或样本不存在"
+    except Exception as exc:
+        logger.warning("Cohort case %s failed: %s", subject_id, exc)
+        row["status"] = "failed"
+        row["error"] = "受试者影像分析执行失败"
 
     return row
 

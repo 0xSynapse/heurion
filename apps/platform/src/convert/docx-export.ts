@@ -59,10 +59,14 @@ class Package {
   /** 已存在同类型同目标的关系就复用。type 为短名（officeDocument 关系）或完整 URI（如 commentsExtended）。 */
   rel(type: string, target: string, external = false): string {
     const full = type.startsWith('http') ? type : `${REL}/${type}`
-    const t = full.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const existing = new RegExp(`<Relationship[^>]*Id="([^"]+)"[^>]*Type="${t}"[^>]*Target="${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).exec(this.relsXml)
-      ?? new RegExp(`<Relationship[^>]*Target="${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*Type="${t}"[^>]*Id="([^"]+)"`).exec(this.relsXml)
-    if (existing) return existing[1]!
+    const unesc = (s: string) => s.replace(/&(?:quot|gt|lt|amp);/g, e => ({ '&quot;': '"', '&gt;': '>', '&lt;': '<', '&amp;': '&' }[e] ?? e))
+    for (const m of this.relsXml.matchAll(/<Relationship\b[^>]*>/g)) {
+      const tag = m[0]
+      const rType = attrOf(tag, 'Type')
+      const rTarget = attrOf(tag, 'Target')
+      const rId = attrOf(tag, 'Id')
+      if (rId && rType === full && rTarget !== null && (rTarget === target || unesc(rTarget) === target)) return rId
+    }
     const id = `rId${this.nextRel++}`
     this.relsXml = this.relsXml.replace('</Relationships>', `<Relationship Id="${id}" Type="${full}" Target="${esc(target)}"${external ? ' TargetMode="External"' : ''}/></Relationships>`)
     return id
@@ -1121,11 +1125,12 @@ export function exportDocx(input: ExportInput): ExportResult {
     sect = last && /^<w:sectPr\b/.test(last) ? last : ''
     // 确保生成内容用到的命名空间都已声明
     for (const [prefix, uri] of [['r', REL], ['wp', 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'], ['a', 'http://schemas.openxmlformats.org/drawingml/2006/main'], ['pic', 'http://schemas.openxmlformats.org/drawingml/2006/picture'], ['m', 'http://schemas.openxmlformats.org/officeDocument/2006/math']] as const) {
-      if (!new RegExp(`xmlns:${prefix}=`).test(head)) head = head.replace(/<w:document\b/, `<w:document xmlns:${prefix}="${uri}"`)
+      if (!head.includes(`xmlns:${prefix}=`)) head = head.replace(/<w:document\b/, `<w:document xmlns:${prefix}="${uri}"`)
     }
   }
   for (const m of [...body.matchAll(/<w:commentRangeStart\b[^>]*w:id="(\d+)"[^>]*\/>/g)]) {
-    const cid = m[1]!
+    const cid = Number(m[1])
+    if (!Number.isSafeInteger(cid) || cid < 0) continue
     if (!new RegExp(`<w:commentRangeEnd\\b[^>]*w:id="${cid}"`).test(body)) {
       const startIdx = body.indexOf(m[0])
       const closeP = startIdx >= 0 ? body.indexOf('</w:p>', startIdx) : -1

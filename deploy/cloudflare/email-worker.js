@@ -183,21 +183,88 @@ function decodeEmailBody(body, charset) {
   return text;
 }
 
+const PLAIN_HTML_ENTITIES = {
+  "&nbsp;": " ",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&amp;": "&",
+  "&quot;": '"',
+  "&apos;": "'",
+  "&#39;": "'",
+};
+
+function findHtmlTagEnd(src, fromIdx) {
+  let quote = "";
+  for (let i = fromIdx; i < src.length; i++) {
+    const ch = src[i];
+    if (quote) {
+      if (ch === quote) quote = "";
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === ">") {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function findMatchingCloseTagEnd(src, lower, tagName, fromIdx) {
+  const needle = "</" + tagName;
+  let searchFrom = fromIdx;
+  while (searchFrom < src.length) {
+    const closeIdx = lower.indexOf(needle, searchFrom);
+    if (closeIdx === -1) return src.length;
+    const after = lower[closeIdx + needle.length];
+    if (!after || after === ">" || after === "/" || after === " " || after === "\t" || after === "\n" || after === "\r") {
+      const endGt = findHtmlTagEnd(src, closeIdx + needle.length);
+      return endGt === -1 ? src.length : endGt + 1;
+    }
+    searchFrom = closeIdx + needle.length;
+  }
+  return src.length;
+}
+
 function htmlToPlainText(html) {
   if (!html) return "";
-  return html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<\/div>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
+  const lower = html.toLowerCase();
+  let out = "";
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      out += html.slice(i);
+      break;
+    }
+    out += html.slice(i, lt);
+    if (lower.startsWith("<!--", lt)) {
+      const endComment = lower.indexOf("-->", lt + 4);
+      if (endComment === -1) break;
+      i = endComment + 3;
+      continue;
+    }
+    let p = lt + 1;
+    let closing = false;
+    if (lower[p] === "/") {
+      closing = true;
+      p++;
+    }
+    const nameStart = p;
+    while (p < lower.length && /[a-z0-9]/.test(lower[p])) p++;
+    const tagName = lower.slice(nameStart, p);
+    const gt = findHtmlTagEnd(html, p);
+    if (gt === -1) break;
+    const selfClosing = html[gt - 1] === "/";
+    if (!closing && !selfClosing && (tagName === "script" || tagName === "style" || tagName === "xml")) {
+      i = findMatchingCloseTagEnd(html, lower, tagName, gt + 1);
+      continue;
+    }
+    if (tagName === "br") out += "\n";
+    else if (closing && tagName === "p") out += "\n\n";
+    else if (closing && tagName === "div") out += "\n";
+    i = gt + 1;
+  }
+  return out
+    .replace(/&(?:nbsp|lt|gt|amp|quot|apos|#39);/gi, (m) => PLAIN_HTML_ENTITIES[m.toLowerCase()] ?? m)
     .trim();
 }
 

@@ -86,7 +86,16 @@ async function add(pmcid: string, type: string, topic: string): Promise<void> {
   if (entries.some(e => e.pmcid === pmcid)) return
   const m = await metadata(pmcid)
   if (!m.license || !ALLOWED.test(m.license.trim())) throw new Error(`${pmcid} 许可是 ${m.license}，只收 CC-BY / CC0`)
-  const title = m.title.replace(/<[^>]+>/g, '').replace(/\.$/, '')
+  let cleanTitle = ''
+  for (let i = 0; i < m.title.length; ) {
+    const lt = m.title.indexOf('<', i)
+    if (lt === -1) { cleanTitle += m.title.slice(i); break }
+    cleanTitle += m.title.slice(i, lt)
+    const gt = m.title.indexOf('>', lt + 1)
+    if (gt === -1) break
+    i = gt + 1
+  }
+  const title = cleanTitle.replace(/\.$/, '')
   entries.push({
     pmcid, pmid: m.pmid, title, journal: m.journal, year: m.year, type, topic, license: m.license, url: `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid}/`,
     attribution: `${title}. ${m.journal}, ${m.year}. ${pmcid}. Licensed under ${m.license.toUpperCase()}; claim sentences are short excerpts (some deliberately altered for evaluation).`,

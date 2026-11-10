@@ -16,6 +16,24 @@ try:
 except (ImportError, ValueError):
     from volume_geometry import CachedVolume, canonical_affine_from_ras, make_geometry, match_sop_uids, strip_pixel_data
 
+
+def _build_allowed_medical_prefixes() -> Tuple[str, ...]:
+    data_dir = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data"))
+    roots = [
+        data_dir,
+        os.path.realpath(tempfile.gettempdir()),
+        "/tmp",
+        "/private/tmp",
+        "/app/data",
+    ]
+    extra = os.environ.get("IMAGING_ALLOWED_DIRS", "")
+    if extra:
+        roots.extend(os.path.realpath(p) for p in extra.split(os.pathsep) if p.strip())
+    return tuple(r.rstrip(os.sep) + os.sep for r in dict.fromkeys(roots) if r)
+
+
+ALLOWED_MEDICAL_PREFIXES = _build_allowed_medical_prefixes()
+
 # Clinical CT Windows (Center / Width)
 CT_WINDOWS = {
     "abdomen": {"level": 40, "width": 400},
@@ -231,8 +249,11 @@ def load_nifti_with_geometry(path_or_bytes: Union[str, bytes, io.BytesIO]) -> Tu
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
     else:
+        safe_nifti_path = os.path.realpath(str(path_or_bytes))
+        if not safe_nifti_path.startswith(ALLOWED_MEDICAL_PREFIXES):
+            raise FileNotFoundError(f"影像文件不存在: {path_or_bytes}")
         try:
-            nimg = nib.load(path_or_bytes)
+            nimg = nib.load(safe_nifti_path)
             data = nimg.get_fdata(dtype=np.float32)
             header = nimg.header
             zooms = header.get_zooms()[:3]
@@ -240,14 +261,14 @@ def load_nifti_with_geometry(path_or_bytes: Union[str, bytes, io.BytesIO]) -> Tu
             # Check if file has gzip magic bytes (\x1f\x8b), e.g. files uploaded as .gz
             is_gzip = False
             try:
-                with open(path_or_bytes, "rb") as f_chk:
+                with open(safe_nifti_path, "rb") as f_chk:
                     is_gzip = f_chk.read(2) == b"\x1f\x8b"
             except Exception:
                 pass
             if is_gzip:
                 import shutil
                 with tempfile.NamedTemporaryFile(suffix=".nii.gz", delete=False) as tmp_proxy:
-                    shutil.copyfile(path_or_bytes, tmp_proxy.name)
+                    shutil.copyfile(safe_nifti_path, tmp_proxy.name)
                     tmp_proxy_path = tmp_proxy.name
                 try:
                     nimg = nib.load(tmp_proxy_path)
@@ -275,9 +296,12 @@ def load_dicom_series(folder_path: str) -> Tuple[np.ndarray, Tuple[float, float,
     Automatically handles embedded NIfTI archives, multi-series folders, and scout image separation.
     """
     import pydicom
+    safe_folder = os.path.realpath(str(folder_path))
+    if not safe_folder.startswith(ALLOWED_MEDICAL_PREFIXES):
+        raise FileNotFoundError(f"DICOM 目录不存在: {folder_path}")
     # 1. Check if the folder contains any extracted NIfTI archives
     nii_candidates = []
-    for root, _, filenames in os.walk(folder_path):
+    for root, _, filenames in os.walk(safe_folder):
         if "__MACOSX" in root:
             continue
         for f in filenames:
@@ -289,7 +313,7 @@ def load_dicom_series(folder_path: str) -> Tuple[np.ndarray, Tuple[float, float,
         return vol, spacing, {"modality": modality, "slices_count": vol.shape[0], "rows": vol.shape[1], "cols": vol.shape[2], "geometry": geometry}
 
     files = []
-    for root, _, filenames in os.walk(folder_path):
+    for root, _, filenames in os.walk(safe_folder):
         if "__MACOSX" in root:
             continue
         for f in filenames:
@@ -299,7 +323,7 @@ def load_dicom_series(folder_path: str) -> Tuple[np.ndarray, Tuple[float, float,
             if fl.endswith(('.dcm', '.dicom', '.ima')) or ('.' not in f and not f.startswith('.')):
                 files.append(os.path.join(root, f))
     if not files:
-        files = [p for p in glob.glob(os.path.join(folder_path, "*")) if not os.path.basename(p).startswith(".") and not p.lower().endswith(".zip")]
+        files = [p for p in glob.glob(os.path.join(safe_folder, "*")) if not os.path.basename(p).startswith(".") and not p.lower().endswith(".zip")]
     
     slices = []
     last_err: Optional[str] = None
@@ -778,27 +802,30 @@ def load_volume(source: Union[str, bytes, io.BytesIO], filename: Optional[str] =
         return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))
 
     # 2. File path (string)
-    if os.path.isdir(source):
-        vol, spacing, meta = load_dicom_series(source)
+    safe_source = os.path.realpath(str(source))
+    if not safe_source.startswith(ALLOWED_MEDICAL_PREFIXES):
+        raise FileNotFoundError(f"影像文件不存在: {source}")
+    if os.path.isdir(safe_source):
+        vol, spacing, meta = load_dicom_series(safe_source)
         return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))
 
-    if zipfile.is_zipfile(source) or fn.endswith(".zip"):
-        vol, spacing, meta = load_dicom_from_zip(source)
+    if zipfile.is_zipfile(safe_source) or fn.endswith(".zip"):
+        vol, spacing, meta = load_dicom_from_zip(safe_source)
         return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))
 
     if fn.endswith((".nii", ".nii.gz", ".gz")):
-        vol, spacing, geometry = load_nifti_with_geometry(source)
+        vol, spacing, geometry = load_nifti_with_geometry(safe_source)
         modality = "MRI" if "mri" in fn else "CT"
         return CachedVolume(vol, spacing, modality, geometry)
 
     if fn.endswith((".dcm", ".dicom", ".ima")):
-        vol, spacing, meta = load_dicom_file(source)
+        vol, spacing, meta = load_dicom_file(safe_source)
         return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))
 
     # Fallback attempt as NIfTI then DICOM
     try:
-        vol, spacing, geometry = load_nifti_with_geometry(source)
+        vol, spacing, geometry = load_nifti_with_geometry(safe_source)
         return CachedVolume(vol, spacing, "MRI" if "mri" in fn else "CT", geometry)
     except Exception:
-        vol, spacing, meta = load_dicom_file(source)
+        vol, spacing, meta = load_dicom_file(safe_source)
         return CachedVolume(vol, spacing, meta.get("modality", "CT"), meta.get("geometry"), meta.get("source_headers"))

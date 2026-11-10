@@ -165,7 +165,17 @@ function buildBlocks(tokens: Token[], start: number, closeType: string | null, c
         break
       }
       case 'html_block': {
-        const text = t.content.replace(/<[^>]+>/g, '').trim()
+        let text = ''
+        let pos = 0
+        while (pos < t.content.length) {
+          const lt = t.content.indexOf('<', pos)
+          if (lt === -1) { text += t.content.slice(pos); break }
+          text += t.content.slice(pos, lt)
+          const gt = t.content.indexOf('>', lt + 1)
+          if (gt === -1) break
+          pos = gt + 1
+        }
+        text = text.trim()
         if (text) out.push(schema.node('paragraph', null, schema.text(text)))
         i++
         break
@@ -378,7 +388,7 @@ export function serializeBlock(node: PMNode, opts: SerializeOptions, indent: str
     case 'table':
       return (opts.ids && node.attrs.id ? `${indent}{#${node.attrs.id}}${pending ? ' ' + pending.trimEnd() : ''}\n` : '') + serializeTable(node, indent, opts)
     case 'figure': {
-      const caption = node.attrs.caption ? ` "${String(node.attrs.caption).replace(/"/g, '\\"')}"` : ''
+      const caption = node.attrs.caption ? ` "${String(node.attrs.caption).replace(/([\\"])/g, '\\$1')}"` : ''
       return `${indent}${pre}![${node.attrs.alt ?? ''}](asset:${node.attrs.asset_id}${caption})`
     }
     case 'opaque':
@@ -446,8 +456,8 @@ function serializeTable(node: PMNode, indent: string, opts: SerializeOptions): s
       else if (cell.top !== r || cell.left !== c) cells.push(opts.ids ? (cell.left !== c ? '<' : '^') : '')
       else {
         const parts: string[] = []
-        cell.node.forEach(p => parts.push((opts.ids && p.attrs.id ? `{#${p.attrs.id}} ` : '') + serializeInline(p)))
-        const text = parts.join('<br>').replace(/\|/g, '\\|')
+        cell.node.forEach(p => parts.push((opts.ids && p.attrs.id ? `{#${p.attrs.id}} ` : '') + serializeInline(p, { inTable: true })))
+        const text = parts.join('<br>')
         cells.push(text === '^' || text === '<' ? `\\${text}` : text)
       }
     }
@@ -500,10 +510,11 @@ function closeMark(m: Mark): string {
   }
 }
 
-const escapeText = (s: string) => s.replace(/([\\*_`])/g, '\\$1').replace(/<(?=[a-zA-Z/])/g, '&lt;').replace(/\[(?=@[cwm]:)/g, '\\[')
+const escapeText = (s: string, inTable = false) =>
+  s.replace(inTable ? /([\\*_`|])/g : /([\\*_`])/g, '\\$1').replace(/<(?=[a-zA-Z/])/g, '&lt;').replace(/\[(?=@[cwm]:)/g, '\\[')
 
 /** 行内内容 → markdown（评论 mark 不进 markdown，由读视图单独列出）。 */
-export function serializeInline(node: PMNode): string {
+export function serializeInline(node: PMNode, opts?: { inTable?: boolean }): string {
   let out = ''
   const stack: Mark[] = []
   const sorted = (marks: readonly Mark[]) => marks
@@ -520,7 +531,7 @@ export function serializeInline(node: PMNode): string {
     if (child.isText) {
       sync(child.marks)
       const isCode = child.marks.some(m => m.type.name === 'code')
-      out += isCode ? child.text! : escapeText(child.text!)
+      out += isCode ? (opts?.inTable ? child.text!.split('|').join('\\|') : child.text!) : escapeText(child.text!, opts?.inTable)
     } else if (child.type.name === 'hard_break') {
       out += '<br>'
     } else if (child.type.name === 'citation') {
