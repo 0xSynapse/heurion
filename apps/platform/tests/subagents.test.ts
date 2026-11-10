@@ -1,3 +1,6 @@
+/**
+ * Unit tests for SubagentService (literature_researcher, biostatistician, fact_checker) and MCP delegate_task integration.
+ */
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -137,10 +140,11 @@ describe('Subagent 多专家架构协同服务 (SubagentService)', () => {
     expect(bundle.suggested_markers.length).toBe(2)
     expect(bundle.suggested_markers[0]!.marker).toMatch(/\[@c:[a-z0-9]+\]/)
 
-    // 验证引用已自动登记到文档引用表中
+    // 验证引用已自动登记到文档引用表中，且摘要已写入 store.getAbstract 缓存
     const cites = env.store.listCitations(env.docId)
     expect(cites.length).toBe(2)
     expect(cites.some(c => c.pmid === '37123456')).toBe(true)
+    expect(env.store.getAbstract('10.1056/nejmoa2301234')?.abstract).toContain('HR 0.75')
 
     // 验证过程步骤已触发
     expect(steps.some(s => s.includes('PubMed'))).toBe(true)
@@ -262,15 +266,84 @@ describe('Subagent 多专家架构协同服务 (SubagentService)', () => {
       doc_id: env.docId,
     })) as VerificationReport
 
-    // 标题「1. 背景与目的」和占位符「待定」不应被误判为论断，只有后两句被审查
+    // 标题「1. 背景与目的」和占位符「待定」不应被误判为论断，只有后两句被审查；且不应将缺引注误计入内部不自洽
     expect(report.total_claims_audited).toBe(2)
     expect(report.unsupported_count).toBe(1)
     expect(report.unclear_count).toBe(1)
+    expect(report.internal_inconsistency_count).toBe(0)
 
     // 验证有问题的论断已自动在文档上生成打开状态的 AI 评论
     const comments = env.store.listComments(env.docId).filter(c => c.status === 'open')
     expect(comments.length).toBe(2)
     expect(comments.some(c => c.replies.some(r => r.text.includes('论断核对：')))).toBe(true)
+  })
+
+  it('fact_checker: 拦截数值虽巧合出现但缺乏核心主题词重叠的「张冠李戴」引文', async () => {
+    const { env, subagents } = makeTestEnv('## 1. 讨论')
+    const cite = env.store.upsertCitation({
+      doc_id: env.docId,
+      pmid: '37123456',
+      doi: '10.1056/nejmoa2301234',
+      formatted: 'McMurray et al. NEJM 2023.',
+      url: null,
+    })
+
+    const p1 = env.docs.get(env.docId).child(0).attrs.id as string
+    env.ops.edit({
+      doc_id: env.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p1,
+        markdown: `既往研究显示胰岛素强化治疗可将妊娠期视网膜病变发生率降低 25%[@c:${cite.id}]。`,
+      }],
+    }, { actor: 'user', turnId: null })
+
+    const report = (await subagents.delegate('u1', {
+      role: 'fact_checker',
+      task: '核查正文论断是否张冠李戴',
+      doc_id: env.docId,
+    })) as VerificationReport
+
+    expect(report.total_claims_audited).toBe(1)
+    expect(report.supported_count).toBe(0)
+    expect(report.issues.some(f => f.reason.includes('张冠李戴'))).toBe(true)
+  })
+
+  it('fact_checker: 委托 ClaimService.auditDeepReviewPasses 检出算术矛盾与方法-结果脱节', async () => {
+    const { env, subagents } = makeTestEnv('## 1. Methods')
+    const p1 = env.docs.get(env.docId).child(0).attrs.id as string
+    env.ops.edit({
+      doc_id: env.docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p1,
+        markdown: [
+          '## 1. Methods',
+          '',
+          'Continuous variables were expressed as mean ± SD and compared using Student t-test.',
+          '',
+          '## 2. Results',
+          '',
+          'Objective response was observed in 10/30 (50.0%) of patients.',
+          '',
+          'Biomarker levels were reported as median [IQR] and compared via Mann-Whitney U test.',
+        ].join('\n'),
+      }],
+    }, { actor: 'user', turnId: null })
+
+    const report1 = (await subagents.delegate('u1', {
+      role: 'fact_checker',
+      task: '核查全文算术自洽性与方法结果一致性',
+      doc_id: env.docId,
+    })) as VerificationReport
+
+    expect(report1.internal_inconsistency_count).toBeGreaterThanOrEqual(2)
+    expect(report1.issues.some(f => f.category === 'internal_inconsistency')).toBe(true)
+    expect(report1.issues.some(f => f.category === 'method_result_mismatch')).toBe(true)
   })
 })
 

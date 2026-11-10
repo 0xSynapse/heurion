@@ -1,3 +1,6 @@
+/**
+ * Heurion 2.0 平台 HTTP REST + SSE 路由网关。
+ */
 import { OrgTemplateService } from '../auth/org-templates.ts'
 import { ORG_BASES, orgLogo, PRESET_AHSLYY, setOrgTenantResolver, themeAllowed, themeKeysFor } from '../model/org-templates.ts'
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
@@ -57,7 +60,8 @@ import { sourceIndex } from '../convert/source-pages.ts'
 import { rebindSourceMap } from '../convert/source-rebind.ts'
 import { indexById } from '../model/ids.ts'
 import { tableSourceProvider } from '../convert/pdf-crop.ts'
-import type { VisionComplete } from '../harness/complete.ts'
+import type { Complete, VisionComplete } from '../harness/complete.ts'
+import type { FullTextClient } from '../literature/fulltext.ts'
 import { exportFontsParam, withFonts } from '../convert/fonts.ts'
 import { templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
@@ -110,6 +114,12 @@ export interface ApiDeps {
   pubmed?: PubMedClient
   /** OpenAlex 学术文献搜索与元数据解析（可选）。 */
   openalex?: OpenAlexClient
+  /** 开放获取全文客户端（PMC / Unpaywall）；用于论断核对与 MCP oa_fulltext（可选）。 */
+  fulltext?: FullTextClient | null
+  /** 论断核对与四阶段深度审稿服务（可选；不传时在 buildApi 内按 docs + pubmed + fulltext 创建）。 */
+  claims?: ClaimService
+  /** 深度审稿使用的文本大模型完成函数（可选；优先于从 skillTrainer / evolution 提取）。 */
+  reviewComplete?: Complete | null
   renderer: SlideRenderer
   accounts: Accounts
   /** 开发模式：允许把开发用户的数据转给正式账户。 */
@@ -255,15 +265,17 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   const aegisAuth = new AegisAuthService(store, 'heurion')
   const aegisTurnRegistry = deps.turnRegistry ?? ((turns as unknown as { registry?: TurnRegistry })?.registry ?? new TurnRegistry())
   const aegisPubmed = deps.pubmed ?? new PubMedClient(fetch)
+  const sharedClaims = deps.claims ?? new ClaimService(docs, aegisPubmed, deps.fulltext ?? null)
   const aegisMcpDeps: McpDeps = {
     docs,
     ops,
-    claims: new ClaimService(docs, aegisPubmed),
+    claims: sharedClaims,
     renderer: deps.renderer,
     turns: aegisTurnRegistry,
     pubmed: aegisPubmed,
     crossref: deps.crossref,
     openalex: deps.openalex,
+    ...(deps.fulltext ? { fulltext: deps.fulltext } : {}),
     secret: 'aegis-internal-secret',
     devMode: deps.devMode,
     devUser: deps.devUser,
@@ -1426,7 +1438,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         const isGenericName = /^(未命名|文档|document|untitled|draft|\d+|[a-f0-9-]{12,}|s\d{5}-\d{3}-\d{5}-[a-z0-9]|pmc\d+|nihms\d+|arxiv[\d.-]+)$/i.test(baseTitle)
         const docTitle = (isGenericName && imported.title && imported.title.length >= 4) ? imported.title : (baseTitle || '未命名文档')
 
-        if (deps.kb) void deps.kb.upload(user, { name: file.name, bytes, project_id: project }).catch(() => {})
+        if (deps.kb && c.req.query('upload_kb') === '1') void deps.kb.upload(user, { name: file.name, bytes, project_id: project }).catch(() => {})
         if (imported.kind === 'deck') {
           const boundDoc = bindDeckAssets(imported.doc, ids)
           const row = docs.create({ owner: user, title: docTitle, kind: 'deck', content: boundDoc, source: 'import' })
@@ -1814,13 +1826,13 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.post('/api/docs/:id/citations/import', async c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
-    const { text } = await c.req.json<{ text?: string }>()
+    const { text, style } = await c.req.json<{ text?: string; style?: 'ama' | 'apa' | 'vancouver' | 'gbt7714' }>()
     if (!text?.trim()) return c.json({ error: '没有内容' }, 400)
     if (text.length > 5_000_000) return c.json({ error: '文件太大（最多 5MB）' }, 413)
     const refs = parseReferences(text)
     if (refs.length === 0) return c.json({ error: '没有识别出文献（支持 RIS、BibTeX、PubMed、EndNote XML，或每行一个 DOI / PMID）' }, 400)
     const pubmed = deps.pubmed ?? ({ summaries: async () => [] } as unknown as PubMedClient)
-    return c.json(await importReferences({ store, crossref: deps.crossref, pubmed }, row.id, refs))
+    return c.json(await importReferences({ store, crossref: deps.crossref, pubmed }, row.id, refs, style ?? 'ama'))
   })
 
   /** 文献实时模糊检索（PubMed / OpenAlex），供引用搜索建议使用。 */
@@ -1921,7 +1933,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.post('/api/docs/:id/citations', async c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
-    const body = await c.req.json<{ doi?: string; pmid?: string; query?: string; style?: 'ama' | 'apa' | 'vancouver' | 'gbt7714' }>().catch(() => ({} as any))
+    const body = await c.req.json<{ doi?: string; pmid?: string; query?: string; candidates?: boolean; style?: 'ama' | 'apa' | 'vancouver' | 'gbt7714' }>().catch(() => ({} as any))
     let doi = body.doi?.trim()
     let pmid = body.pmid?.trim()
     const query = body.query?.trim()
@@ -1935,6 +1947,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     }
 
     let article: Article | null = null
+    let queryCandidates: Article[] = []
 
     if (doi) {
       article = await deps.crossref.lookup(doi).catch(() => null)
@@ -1962,12 +1975,21 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
 
     if (!article && query) {
       if (deps.pubmed) {
-        const hits = await deps.pubmed.search(query, 3).catch(() => [])
-        if (hits.length) article = hits[0] ?? null
+        const hits = await deps.pubmed.search(query, 5).catch(() => [])
+        if (hits.length) {
+          queryCandidates = hits
+          article = hits[0] ?? null
+        }
       }
       if (!article && deps.openalex) {
-        const hits = await deps.openalex.search(query, 3).catch(() => [])
-        if (hits.length) article = hits[0] ?? null
+        const hits = await deps.openalex.search(query, 5).catch(() => [])
+        if (hits.length) {
+          queryCandidates = hits
+          article = hits[0] ?? null
+        }
+      }
+      if (body.candidates && queryCandidates.length > 0) {
+        return c.json({ candidates: queryCandidates.map(a => ({ ...a, formatted: formatCitation(a, body.style ?? 'ama') })) }, 200)
       }
     }
 
@@ -1980,6 +2002,13 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const finalUrl = article.doi ? `https://doi.org/${article.doi}` : (article.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${article.pmid}/` : null)
     const formatted = formatCitation(article, body.style ?? 'ama')
     const cite = store.upsertCitation({ doc_id: row.id, doi: finalDoi, pmid: article.pmid ?? pmid ?? null, formatted, url: finalUrl })
+    let abs = article.abstract?.trim() || null
+    if (!abs && (article.pmid ?? pmid) && typeof deps.pubmed?.abstract === 'function') {
+      abs = (await deps.pubmed.abstract((article.pmid ?? pmid)!).catch(() => null))?.trim() || null
+    }
+    if (abs) {
+      store.putAbstract(finalDoi, article.pmid ?? pmid ?? null, abs)
+    }
     return c.json({ cite_id: cite.id, formatted: cite.formatted, doi: cite.doi, pmid: cite.pmid }, 201)
   })
 
@@ -1997,6 +2026,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     docs.flush(row.id)
     const userId = c.get('user')
     const llmComplete =
+      deps.reviewComplete ??
       (deps.skillTrainer as unknown as { complete?: (s: string, u: string) => Promise<string> })?.complete ??
       (deps.evolution as unknown as { complete?: (s: string, u: string) => Promise<string> })?.complete ??
       (mail as unknown as { complete?: (s: string, u: string) => Promise<string> })?.complete
@@ -2007,7 +2037,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     // 有图像模型与原版映射时，先按页面图像核对表格（只发表格区域的截图，PDF_ORIGINAL_VIEW.md §12.3）
     const mapGz = docling && deps.reviewVision ? store.getSourceMapGz(row.id) : null
     const pdf = mapGz ? store.getPackage(row.id) : null
-    const result = await aegisMcpDeps.claims.deepReview(row.id, {
+    const result = await sharedClaims.deepReview(row.id, {
       mode: 'heurion_evolved',
       owner: userId,
       anchorComments: true,
@@ -2017,6 +2047,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       ...(mapGz && pdf && deps.reviewVision ? { tableVision: { source: tableSourceProvider(pdf, mapGz), complete: deps.reviewVision } } : {}),
       ...(typeof llmComplete === 'function' ? { complete: llmComplete } : {}),
     })
+    if (typeof llmComplete !== 'function') {
+      result.warnings.push('当前未配置审稿大模型，本次仅执行了确定性算术与规则核查（跳过了第 3 阶段大模型章节审稿与全文复核）。')
+    }
     return c.json({
       ok: true,
       doc_id: row.id,

@@ -1,3 +1,6 @@
+/**
+ * 四阶段论断核对与临床深度审稿管线单元测试（Stage 1-4 Deep Review & Dual-Track Evolution）。
+ */
 import { describe, expect, it, vi } from 'vitest'
 import { schema } from '../model/schema.ts'
 import {
@@ -9,6 +12,8 @@ import {
   classifyVerificationTier,
   extractClaims,
   extractTableSummaries,
+  isExemptedByActiveRules,
+  SectionRoleTracker,
 } from './extract.ts'
 import { ClaimService, synthesizeSanitizedBoundaryRule } from './service.ts'
 import { SubagentService } from '../subagents/service.ts'
@@ -545,5 +550,214 @@ describe('4-Stage Citation & Claim Verification Pipeline', () => {
     expect(addExecutionSignal).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'internal_inconsistency' }),
     )
+  })
+
+  it('SectionRoleTracker: inherits results and methods roles under ### subheadings without role keywords across extract.ts', () => {
+    const tracker = new SectionRoleTracker()
+    expect(tracker.onHeading(2, '2. Materials and Methods')).toBe('methods')
+    expect(tracker.onHeading(3, '2.1 Patient Eligibility')).toBe('methods')
+    expect(tracker.onHeading(2, '3. Results')).toBe('results')
+    expect(tracker.onHeading(3, 'Primary Endpoint')).toBe('results')
+    expect(tracker.onHeading(4, 'Subgroup Stratification')).toBe('results')
+    expect(tracker.onHeading(2, 'Acknowledgments')).toBe('other')
+
+    const doc = schema.nodeFromJSON({
+      type: 'doc',
+      content: [
+        {
+          type: 'heading',
+          attrs: { id: 'h_m', level: 2 },
+          content: [{ type: 'text', text: '2. Methods' }],
+        },
+        {
+          type: 'heading',
+          attrs: { id: 'h_m_sub', level: 3 },
+          content: [{ type: 'text', text: '2.1 Biomarker Quantification' }],
+        },
+        {
+          type: 'paragraph',
+          attrs: { id: 'p_m_sub' },
+          content: [
+            {
+              type: 'text',
+              text: '本研究为单中心回顾性观察性研究。连续变量统一采用均数 ± 标准差（Mean ± SD）表示，组间比较采用独立样本 t 检验。',
+            },
+          ],
+        },
+        {
+          type: 'heading',
+          attrs: { id: 'h_r', level: 2 },
+          content: [{ type: 'text', text: '3. Results' }],
+        },
+        {
+          type: 'heading',
+          attrs: { id: 'h_r_sub', level: 3 },
+          content: [{ type: 'text', text: '3.1 Serum Biomarker Dynamics' }],
+        },
+        {
+          type: 'paragraph',
+          attrs: { id: 'p_r_sub' },
+          content: [
+            {
+              type: 'text',
+              text: '患者血清 IL-6 水平呈偏态分布，中位数 [四分位距] 为 14.2 [6.5–28.9] pg/mL（Mann-Whitney U 检验 P = 0.12），证实了该方案具有显著改善炎症微环境的明确临床获益。',
+            },
+          ],
+        },
+      ],
+    })
+
+    // 1. extractClaims: ### 3.1 Serum Biomarker Dynamics 继承 results 角色，自报数值句不误报为 unsourced
+    const { unsourced } = extractClaims(doc, new Map())
+    expect(unsourced.map(u => u.node_id)).not.toContain('p_r_sub')
+
+    // 2. buildManuscriptScratchpad: ### 2.1 继承 methods 角色，正确提取 mean_sd 与 t_test
+    const scratchpad = buildManuscriptScratchpad(doc)
+    expect(scratchpad.declared_summary_metrics).toContain('mean_sd')
+    expect(scratchpad.declared_tests).toContain('t_test')
+
+    // 3. auditMethodResultConsistency: 跨 ### 子标题检测出 Mean ± SD 方法与 Median [IQR] 结果不匹配
+    const methodIssues = auditMethodResultConsistency(doc)
+    expect(methodIssues.some(i => i.node_id === 'p_r_sub' && i.subtype === 'parametric_method_vs_nonparametric_result')).toBe(true)
+
+    // 4. auditSpinAndGuidelines: 在 ### 3.1 子标题下检测出 P = 0.12 却声称显著改善的 Spin Bias
+    const spinIssues = auditSpinAndGuidelines(doc)
+    expect(spinIssues.some(i => i.node_id === 'p_r_sub' && i.subtype === 'nonsignificant_p_positive_spin')).toBe(true)
+  })
+
+  it('Dual-Track Evolution: evolveFromReviewComment & isExemptedByActiveRules exempt non-missing_citation categories (internal_inconsistency & method_result_mismatch)', () => {
+    const memories: Array<{ id: string; content: string; status: string }> = []
+    const claimSvc = new ClaimService(
+      {
+        rev: () => 1,
+        store: {
+          getDoc: () => ({ id: 'doc_evo', owner: 'dr_wang' }),
+          listClaimChecks: () => [],
+          listMemories: () => memories,
+          addMemory: (m: any) => {
+            const row = { id: `mem_${memories.length + 1}`, content: m.content, status: 'active' }
+            memories.push(row)
+            return row
+          },
+          updateMemory: (id: string, patch: any) => {
+            const hit = memories.find(m => m.id === id)
+            if (hit) hit.content = patch.content
+          },
+        },
+      } as any,
+      {} as any,
+    )
+
+    // 1. 针对 method_result_mismatch 的自定义专科边界反驳演进与豁免
+    const methodIssue = {
+      category: 'method_result_mismatch' as const,
+      subtype: 'parametric_method_vs_nonparametric_result',
+      sentence: 'Serum D-dimer level was reported as median [IQR] of 1.8 [0.6–4.2] mg/L using Mann-Whitney test.',
+      reason: '统计方法章节仅声明 Mean ± SD，但结果段对 D-dimer 报告了 Median [IQR]。',
+    }
+    const evoMethod = claimSvc.evolveFromReviewComment('doc_evo', 'c_m1', {
+      issueCategory: 'method_result_mismatch',
+      sentence: methodIssue.sentence,
+      reason: methodIssue.reason,
+      rebuttalText: 'Serum D-dimer has a skewed distribution in coagulation protocols and is legitimately analyzed via nonparametric median [IQR].',
+    })
+    expect(evoMethod.track).toBe('track_a_narrow')
+    expect(evoMethod.distilledRule).toContain('cat=method_result_mismatch')
+    expect(evoMethod.distilledRule).toContain(':kw=')
+    expect(isExemptedByActiveRules(methodIssue, [evoMethod.distilledRule!])).toBe(true)
+    // 不同类别的告警不会被该规则误豁免
+    expect(
+      isExemptedByActiveRules(
+        { ...methodIssue, category: 'internal_inconsistency' },
+        [evoMethod.distilledRule!],
+      ),
+    ).toBe(false)
+
+    // 2. 针对 internal_inconsistency 的自定义专科边界反驳演进与豁免
+    const internalIssue = {
+      category: 'internal_inconsistency' as const,
+      subtype: 'prose_table_sample_size_mismatch',
+      sentence: 'Endoscopic biopsy subgroup analysis included 48 evaluable subjects from the biomarker registry.',
+      reason: '正文声明的样本量（48 例）与表格样本量（N=60）不一致。',
+    }
+    const evoInternal = claimSvc.evolveFromReviewComment('doc_evo', 'c_i1', {
+      issueCategory: 'internal_inconsistency',
+      sentence: internalIssue.sentence,
+      reason: internalIssue.reason,
+      rebuttalText: 'The endoscopic biopsy subgroup registry excludes patients without paired tissue samples.',
+    })
+    expect(evoInternal.distilledRule).toContain('cat=internal_inconsistency')
+    expect(isExemptedByActiveRules(internalIssue, [evoInternal.distilledRule!])).toBe(true)
+
+    // 3. PDF 表格抽取粘连残片在 missing_citation 下自动豁免，不误报缺文献引用
+    expect(
+      isExemptedByActiveRules(
+        {
+          category: 'missing_citation',
+          sentence: 'The 3-year survival rates were 60.062.3% with HR = 0.824 0.841 (95% CI 403–1.688).',
+          reason: '数值型论断缺少出处',
+        },
+        [],
+      ),
+    ).toBe(true)
+  })
+
+  it('Stage 4 Synthesis: preserves distinct 2-number LLM findings on different clinical variables while deduplicating same-variable findings', () => {
+    const claimSvc = new ClaimService(
+      {
+        rev: () => 1,
+        store: { listMemories: () => [] },
+      } as any,
+      {} as any,
+    )
+
+    const synthesized = claimSvc.synthesizeStage4Review('doc_dedup', [
+      {
+        id: 'llm_1',
+        node_id: 'p_bp',
+        section_role: 'results',
+        verification_tier: 'high',
+        category: 'internal_inconsistency',
+        severity: 'major',
+        sentence: 'Mean systolic blood pressure was 125 vs 140 mmHg in the cohort.',
+        snippet: 'Mean systolic blood pressure was 125 vs 140 mmHg',
+        reason: '收缩压正文 125 vs 140 与表 1 不一致',
+        suggestion: '请核对收缩压数据',
+        source_pass: 'llm_stage3',
+        evidence: ['Systolic blood pressure: 125 vs 140'],
+      },
+      {
+        id: 'llm_2',
+        node_id: 'p_glu',
+        section_role: 'discussion',
+        verification_tier: 'high',
+        category: 'internal_inconsistency',
+        severity: 'major',
+        sentence: 'Fasting plasma glucose concentration was 125 vs 140 mg/dL across arms.',
+        snippet: 'Fasting plasma glucose concentration was 125 vs 140 mg/dL',
+        reason: '空腹血糖 125 vs 140 与表 2 不一致',
+        suggestion: '请核对血糖数据',
+        source_pass: 'llm_stage3',
+        evidence: ['Fasting plasma glucose: 125 vs 140'],
+      },
+      {
+        id: 'llm_3_dup_bp',
+        node_id: 'p_disc_bp',
+        section_role: 'discussion',
+        verification_tier: 'high',
+        category: 'internal_inconsistency',
+        severity: 'minor',
+        sentence: 'In discussion, systolic blood pressure remained 140 vs 125 mmHg.',
+        snippet: 'systolic blood pressure remained 140 vs 125 mmHg',
+        reason: '讨论段再次提及收缩压 140 vs 125 矛盾',
+        suggestion: '统一收缩压数值',
+        source_pass: 'llm_stage3',
+        evidence: ['Mean systolic blood pressure was 125 vs 140 mmHg'],
+      },
+    ])
+
+    // llm_1 (systolic blood pressure) 与 llm_2 (fasting plasma glucose) 虽然都含 {125, 140} 两个数字，但主题词完全不同，均予保留；
+    // llm_3_dup_bp 与 llm_1 同属 systolic blood pressure 且数字组合相同，被跨章节去重合并
+    expect(synthesized.map(s => s.id)).toEqual(['llm_1', 'llm_2'])
   })
 })

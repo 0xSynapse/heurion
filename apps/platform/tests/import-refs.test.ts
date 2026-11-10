@@ -1,3 +1,7 @@
+/**
+ * 参考文献批量导入单元测试：验证 RIS / MEDLINE / BibTeX / EndNote XML / 纯文本解析，
+ * Crossref / PubMed 核实、无 DOI 的纯 PMID 文献登记、摘要缓存（putAbstract）以及引用格式（style）。
+ */
 import { describe, expect, it } from 'vitest'
 import type { CrossrefClient } from '../src/literature/crossref.ts'
 import { importReferences, parseReferences } from '../src/literature/import-refs.ts'
@@ -68,6 +72,60 @@ describe('参考文献导入：核实与登记', () => {
     expect(r.added.map(a => a.formatted)).toEqual(['Doe J. SELECT. N Engl J Med. 2023. doi:10.1056/nejmoa2307563'])
     expect(r.already).toBe(1)
     expect(r.skipped.map(s => s.reason).sort()).toEqual(['DOI 10.9999/fake.1 在 Crossref 查不到', 'PubMed 里查不到这篇文献的 DOI'].sort())
+    expect(store.listCitations(d1)).toHaveLength(2)
+  })
+
+  it('无 DOI 的纯 PMID 文献以 pmid:xxx 登记；缓存摘要到 citation_abstracts；支持指定 style 格式；已登记的 PMID 计入 already', async () => {
+    const store = new Store(':memory:')
+    const d1 = new Documents(store).create({ owner: 'u', title: 'x' }).id
+    const crossref = {
+      lookup: async (doi: string) => doi === '10.1056/nejmoa2307563'
+        ? {
+            doi,
+            pmid: '37952131',
+            title: 'Semaglutide and Cardiovascular Outcomes',
+            authors: ['Lincoff AM', 'Brown-Frandsen K'],
+            journal: 'N Engl J Med',
+            year: '2023',
+            abstract: 'Semaglutide 2.4 mg reduced major adverse cardiovascular events by 20%.',
+          }
+        : null,
+    } as unknown as CrossrefClient
+    const pubmed = {
+      summaries: async (ids: string[]) => ids.filter(i => i === '38000001').map(() => ({
+        pmid: '38000001',
+        doi: null,
+        title: 'Early Heart Failure Intervention Trial',
+        authors: ['Smith J', 'Lee K'],
+        journal: 'Lancet',
+        year: '2024',
+        abstract: 'Early intervention significantly reduced heart failure hospitalization at 12 months.',
+      })),
+    } as unknown as PubMedClient
+
+    const refs = parseReferences('10.1056/NEJMoa2307563\nPMID: 38000001')
+    const r1 = await importReferences({ store, crossref, pubmed }, d1, refs, 'apa')
+    expect(r1.added).toHaveLength(2)
+    expect(r1.already).toBe(0)
+    expect(r1.skipped).toEqual([])
+    // APA 格式：(2023).
+    expect(r1.added.some(a => a.formatted.includes('(2023).'))).toBe(true)
+    expect(r1.added.some(a => a.formatted.includes('(2024).'))).toBe(true)
+
+    const citations = store.listCitations(d1)
+    expect(citations.map(c => c.doi).sort()).toEqual(['10.1056/nejmoa2307563', 'pmid:38000001'])
+    const pmidCite = citations.find(c => c.doi === 'pmid:38000001')!
+    expect(pmidCite.pmid).toBe('38000001')
+    expect(pmidCite.url).toBe('https://pubmed.ncbi.nlm.nih.gov/38000001/')
+
+    // 摘要缓存验证
+    expect(store.getAbstract('10.1056/nejmoa2307563')?.abstract).toContain('reduced major adverse cardiovascular events by 20%')
+    expect(store.getAbstract('pmid:38000001')?.abstract).toContain('reduced heart failure hospitalization at 12 months')
+
+    // 再次导入同一批文献：DOI 与纯 PMID 均应计入 already，不重复插入
+    const r2 = await importReferences({ store, crossref, pubmed }, d1, refs, 'apa')
+    expect(r2.added).toHaveLength(0)
+    expect(r2.already).toBe(2)
     expect(store.listCitations(d1)).toHaveLength(2)
   })
 })

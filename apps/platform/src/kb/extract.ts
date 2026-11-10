@@ -1,3 +1,7 @@
+/**
+ * 参考资料库文档抽取与切块：支持 PDF（pdftotext + 扫描页 OCR）、docx、pptx、txt、md，
+ * 并从前两页自动识别规范化 DOI 与 PMID。
+ */
 import { execFile } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -5,6 +9,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { importDocx } from '../convert/docx-import.ts'
 import { importPptx } from '../convert/pptx-import.ts'
+import { normalizeDoi } from '../literature/format.ts'
 import type { Ocr } from './ocr.ts'
 
 const run = promisify(execFile)
@@ -84,7 +89,8 @@ export async function extractText(name: string, bytes: Uint8Array, opts: { ocr?:
       ? '这份 PDF 几乎没有文字层（可能是扫描件），没有识别到文字，检索不到内容'
       : total === 0 ? '没有抽取到文字' : null
   const head = pages.slice(0, 2).join('\n')
-  const doi = /\b(10\.\d{4,9}\/[^\s"<>,;]+[^\s"<>,;.)\]])/i.exec(head)?.[1] ?? null
+  const doiMatch = /\b(10\.\d{4,9}\/[^\s"<>,;]+[^\s"<>,;.)\]])/i.exec(head)
+  const doi = doiMatch?.[1] ? normalizeDoi(doiMatch[1]).replace(/[.,;)\]]+$/, '') : null
   const pmid = /\bPMID:?\s*(\d{6,9})\b/i.exec(head)?.[1] ?? null
   return { pages, doi, pmid, note }
 }

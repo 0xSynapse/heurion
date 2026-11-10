@@ -1,3 +1,6 @@
+/**
+ * Heurion 2.0 MCP Server（支持本地 dsh 回合与 Aegis-OS AAP-1.0 协议接入）。
+ */
 import { themeAllowed } from '../model/org-templates.ts'
 import { Access, allows } from '../research/access.ts'
 import { randomUUID } from 'node:crypto'
@@ -851,13 +854,43 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       const CLAIM_STOP = new Set([
         'this', 'that', 'with', 'from', 'were', 'have', 'been', 'which', 'their', 'these', 'those', 'into', 'more', 'than', 'also', 'such', 'both', 'between', 'among', 'after', 'before', 'during', 'under', 'over', 'through', 'where', 'when', 'while', 'study', 'studies', 'methodological', 'contribution', 'lies', 'having', 'organized', 'explicit', 'process', 'links', 'context', 'understanding', 'analysis', 'design', 'prospective', 'reported', 'here', 'cohort', 'patients', 'group', 'groups', 'results', 'data', 'used', 'using', 'based', 'showed', 'shown', 'found', 'associated', 'compared', 'similar', 'consistent',
       ])
+      const CJK_STOP_BIGRAMS = new Set([
+        '研究', '表明', '显示', '患者', '结果', '分析', '显著', '可以', '进行', '具有',
+        '通过', '发现', '治疗', '方法', '对比', '高于', '低于', '或者', '以及', '因为',
+        '所以', '如果', '这个', '我们', '其中', '本研', '究纳', '纳入', '观察', '证实',
+        '提示', '报道', '既往', '临床', '试验', '队列', '分组', '对照', '相比', '差异',
+      ])
+      const ASCII_TRIVIAL = new Set(['vs', 'et', 'al', 'ci', 'fig', 'tab', 'no', 'in', 'of', 'to', 'or', 'by', 'on', 'at', 'as', 'is', 'be', 'an', 'we', 'hr', 'rr', 'sd', 'se', 'iqr'])
+      const absLower = `${article.title ?? ''} ${abstract}`.toLowerCase()
       const sigWords = [...new Set((claim.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter(w => !CLAIM_STOP.has(w)))]
       if (sigWords.length >= 2) {
-        const hay = `${article.title ?? ''} ${abstract}`.toLowerCase()
-        const hitCount = sigWords.filter(w => hay.includes(w.slice(0, 5))).length
+        const hitCount = sigWords.filter(w => absLower.includes(w.slice(0, 5))).length
         const minHits = sigWords.length >= 5 ? 2 : 1
         if (hitCount < minHits) {
           return fail('citation_unsupported', '该文献摘要与你要支撑的句子主张无关（核心术语重合不足），请换一篇摘要研究结果直接支持该主张的文献。', { title: article.title, abstract })
+        }
+      } else if (/[\u4e00-\u9fa5]/.test(claim)) {
+        const cjkBigrams: string[] = []
+        for (const run of claim.match(/[\u4e00-\u9fa5]{2,}/g) ?? []) {
+          for (let k = 0; k + 2 <= run.length; k++) {
+            const bg = run.slice(k, k + 2)
+            if (!CJK_STOP_BIGRAMS.has(bg)) cjkBigrams.push(bg)
+          }
+        }
+        const asciiTokens = (claim.match(/[a-zA-Z][a-zA-Z0-9-]{1,}/g) ?? [])
+          .map(w => w.toLowerCase())
+          .filter(w => !CLAIM_STOP.has(w) && !ASCII_TRIVIAL.has(w))
+        const numTokens = (claim.match(/\b\d+(?:\.\d+)?\b/g) ?? []).filter(n => !/^(?:19|20)\d{2}$/.test(n))
+        if (/[\u4e00-\u9fa5]/.test(absLower)) {
+          const anchors = [...new Set([...cjkBigrams, ...asciiTokens, ...numTokens])]
+          if (anchors.length >= 2 && !anchors.some(a => absLower.includes(a))) {
+            return fail('citation_unsupported', '该文献摘要与你要支撑的句子主张无关（核心术语重合不足），请换一篇摘要研究结果直接支持该主张的文献。', { title: article.title, abstract })
+          }
+        } else {
+          const crossLangAnchors = [...new Set([...asciiTokens, ...numTokens])]
+          if (crossLangAnchors.length >= 2 && !crossLangAnchors.some(a => absLower.includes(a))) {
+            return fail('citation_unsupported', '该文献摘要与你要支撑的句子主张无关（核心术语或数值重合不足），请换一篇摘要研究结果直接支持该主张的文献。', { title: article.title, abstract })
+          }
         }
       }
     }

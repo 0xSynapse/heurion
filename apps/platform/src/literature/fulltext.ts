@@ -1,12 +1,12 @@
+/**
+ * 开放获取全文（M3 oa_fulltext）：论断核对在摘要不够时用全文片段作证据，AI 写作时也可以读。
+ * 来源：DOI / PMID → PMC id（NCBI ID 转换）→ PMC 开放数据（只收开放获取，纯文本）；不在 PMC 的用 Unpaywall 找开放 PDF，pdftotext 抽文字。
+ * 结果缓存在 citation_fulltexts（没有全文也缓存，30 天后重查）。
+ */
 import type { Store } from '../store/db.ts'
 import { pdfPages } from '../kb/extract.ts'
 import type { FetchLike } from './types.ts'
 
-/**
- * 开放获取全文（M3 oa_fulltext）：论断核对在摘要不够时用全文片段作证据，AI 写作时也可以读。
- * 来源：DOI → PMC id（NCBI ID 转换）→ PMC 开放数据（只收开放获取，纯文本）；不在 PMC 的用 Unpaywall 找开放 PDF，pdftotext 抽文字。
- * 结果缓存在 citation_fulltexts（没有全文也缓存，30 天后重查）。
- */
 export interface FullText { source: 'pmc' | 'unpaywall'; url: string; license: string | null; text: string }
 
 const PMC_OPENDATA = 'https://pmc-oa-opendata.s3.amazonaws.com'
@@ -16,18 +16,23 @@ const RETRY_AFTER_MS = 30 * 24 * 3600_000
 export class FullTextClient {
   constructor(private readonly store: Store, private readonly fetchImpl: FetchLike = fetch, private readonly email = '') {}
 
-  async get(doi: string): Promise<FullText | null> {
-    const cached = this.store.getFullText(doi)
+  async get(idOrDoi: string): Promise<FullText | null> {
+    const raw = idOrDoi.trim()
+    if (!raw || /^ref:/i.test(raw)) return null
+    const cacheKey = raw.toLowerCase()
+    const cached = this.store.getFullText(cacheKey)
     if (cached && (cached.text || Date.now() - Date.parse(cached.fetched_at) < RETRY_AFTER_MS)) {
       return cached.text ? { source: cached.source as FullText['source'], url: cached.url ?? '', license: cached.license, text: cached.text } : null
     }
+    const lookupId = raw.replace(/^pmid:/i, '').trim()
+    if (!lookupId) return null
     let found: FullText | null = null
     try {
-      found = await this.fromPmc(doi) ?? await this.fromUnpaywall(doi)
+      found = await this.fromPmc(lookupId) ?? (lookupId.startsWith('10.') ? await this.fromUnpaywall(lookupId) : null)
     } catch {
       return null // 网络问题不缓存，下次再试
     }
-    this.store.putFullText(doi, found ? { source: found.source, url: found.url, license: found.license, text: found.text.slice(0, MAX_TEXT) } : { source: null, url: null, license: null, text: null })
+    this.store.putFullText(cacheKey, found ? { source: found.source, url: found.url, license: found.license, text: found.text.slice(0, MAX_TEXT) } : { source: null, url: null, license: null, text: null })
     return found
   }
 

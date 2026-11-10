@@ -20,6 +20,7 @@ import {
   extractClaims,
   extractTableSummaries,
   isExemptedByActiveRules,
+  SectionRoleTracker,
   type Claim,
   type DeepReviewAuditIssue,
   type DeepReviewCategory,
@@ -191,14 +192,115 @@ export function untrustedTablesWarning(skipped: string[]): string {
 export const TABLES_UNRELIABLE_WARNING =
   '此 PDF 的表格未能可靠识别（文档解析服务不可用，已用备用方式导入），本次审稿跳过了依赖表格的核查。建议上传 Word 原稿以获得完整审稿。'
 
+const BOUNDARY_STOP_WORDS_EN = new Set([
+  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'were', 'was', 'are', 'has', 'have', 'had',
+  'not', 'but', 'our', 'their', 'into', 'over', 'after', 'before', 'between', 'among', 'within',
+  'without', 'only', 'also', 'than', 'such', 'both', 'each', 'more', 'most', 'other', 'some',
+  'when', 'where', 'which', 'while', 'who', 'whom', 'whose', 'why', 'how', 'all', 'any', 'can',
+  'may', 'will', 'would', 'should', 'could', 'been', 'being', 'does', 'did', 'done', 'center',
+  'study', 'cohort', 'patients', 'patient', 'group', 'groups', 'table', 'figure', 'data', 'results',
+])
+
+const BOUNDARY_STOP_WORDS_ZH = new Set([
+  '本研究', '研究', '我们', '该数', '该处', '属于', '并非', '无需', '不需', '其中', '以及',
+  '进行', '采用', '显示', '表明', '结果', '方法', '讨论', '摘要', '数据', '分析', '报告',
+  '说明', '由于', '因为', '所以', '如果', '可以', '通过', '根据', '按照', '没有', '存在',
+  '患者', '队列', '本中心', '入组',
+])
+
+function extractSanitizedBoundaryKeywords(texts: string[], maxCount = 5): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const push = (w: string) => {
+    const clean = w.trim().toLowerCase()
+    if (clean.length < 2 || /\d/.test(clean) || seen.has(clean)) return
+    seen.add(clean)
+    out.push(clean)
+  }
+
+  for (const raw of texts) {
+    if (!raw) continue
+    const stripped = raw
+      .replace(/\[@[cm]:[^\]]+\]/g, ' ')
+      .replace(/\b\d+(?:\.\d+)?%?\b/g, ' ')
+      .toLowerCase()
+
+    for (const m of stripped.matchAll(/\b[a-z][a-z-]{2,}\b/g)) {
+      const w = m[0]!
+      if (!BOUNDARY_STOP_WORDS_EN.has(w)) push(w)
+      if (out.length >= maxCount) return out
+    }
+
+    const cjkChunks = stripped.split(/[，。；：？！、（）【】《》“”‘’"',.;:?!()[\]\s的和与在及或为是了于对将按由把被从向到等中内上下的地得仅只但而却且并则即各每]+/)
+    for (const chunk of cjkChunks) {
+      for (const m of chunk.matchAll(/[\u4e00-\u9fff]{2,}/g)) {
+        const seg = m[0]!
+        if (BOUNDARY_STOP_WORDS_ZH.has(seg)) continue
+        const token = seg.length <= 4 ? seg : seg.slice(0, 4)
+        if (!BOUNDARY_STOP_WORDS_ZH.has(token)) push(token)
+        if (out.length >= maxCount) return out
+      }
+    }
+  }
+  return out
+}
+
+const DEDUP_STOP_WORDS_EN = new Set([
+  ...BOUNDARY_STOP_WORDS_EN,
+  'arm', 'arms', 'subject', 'subjects', 'participant', 'participants', 'case', 'cases', 'sample',
+  'total', 'fig', 'section', 'value', 'values', 'rate', 'rates', 'level', 'levels', 'score', 'scores',
+  'method', 'methods', 'analysis', 'compared', 'showed', 'observed', 'reported', 'found', 'using',
+  'based', 'mean', 'median', 'iqr', 'range', 'std', 'sem', 'ci', 'hr', 'or', 'rr', 'vs', 'versus',
+  'mmhg', 'bpm', 'mg', 'kg', 'cm', 'mm', 'ml', 'dl', 'ul', 'ug', 'ng', 'pg', 'mmol', 'umol', 'mol',
+  'iu', 'gy', 'cgy', 'sec', 'min', 'hrs', 'day', 'days', 'week', 'weeks', 'month', 'months', 'year', 'years',
+])
+
+const DEDUP_STOP_WORDS_ZH = new Set([
+  ...BOUNDARY_STOP_WORDS_ZH,
+  '病例', '样本', '组别', '对照组', '试验组', '观察组', '表格', '相比', '比较', '差异', '显著',
+  '平均', '均数', '中位数', '比例', '发生率', '水平', '评分', '纳入', '共计', '总计', '分别', '或者', '之间',
+  '毫米', '个月', '小时', '分钟',
+])
+
+function extractTopicTokensForDedup(texts: string[]): Set<string> {
+  const tokens = new Set<string>()
+  const blob = texts.join(' ').toLowerCase()
+  for (const m of blob.matchAll(/\b[a-z][a-z0-9_-]{1,}\b/g)) {
+    const w = m[0]!
+    if (/^\d+$/.test(w) || DEDUP_STOP_WORDS_EN.has(w)) continue
+    tokens.add(w)
+  }
+  const cjkChunks = blob.split(/[，。；：？！、（）【】《》“”‘’"',.;:?!()[\]\s的和与在及或为是了于对将按由把被从向到等中内上下的地得仅只但而却且并则即各每]+/)
+  for (const chunk of cjkChunks) {
+    for (const m of chunk.matchAll(/[\u4e00-\u9fff]{2,}/g)) {
+      const seg = m[0]!
+      if (DEDUP_STOP_WORDS_ZH.has(seg)) continue
+      tokens.add(seg.length <= 4 ? seg : seg.slice(0, 4))
+    }
+  }
+  return tokens
+}
+
 /**
  * 从临床医生的自然语言反驳（Rebuttal）与原句上下文中提炼去数字化的专科边界规则（Track A narrow）。
  * 强制剥离具体样本量、P 值、HR、置信区间等实例数字，确保 0% 跨队列实例泄漏（Instance Contamination = 0%）。
  */
 export function synthesizeSanitizedBoundaryRule(
-  rebuttalText: string,
-  context: { sentence?: string; category?: string; reason?: string } = {},
+  rebuttalOrCategory: string,
+  contextOrSentence: { sentence?: string; category?: string; reason?: string } | string = {},
+  maybeReason?: string,
+  maybeRebuttal?: string,
 ): { patternKey: string; rule: string } {
+  const isPositional = typeof contextOrSentence === 'string'
+  const rebuttalText = isPositional ? (maybeRebuttal ?? maybeReason ?? rebuttalOrCategory) : rebuttalOrCategory
+  const context: { sentence?: string; category?: string; reason?: string } = isPositional
+    ? {
+        category: rebuttalOrCategory,
+        sentence: contextOrSentence,
+        ...(maybeRebuttal !== undefined && maybeReason !== undefined ? { reason: maybeReason } : {}),
+      }
+    : contextOrSentence
+
   const combined = `${rebuttalText} ${context.sentence ?? ''} ${context.reason ?? ''}`.toLowerCase()
 
   // 1. 目标试验模拟（TTE）克隆-删失-加权（CCW）伪队列与因果效应指标
@@ -249,7 +351,7 @@ export function synthesizeSanitizedBoundaryRule(
     }
   }
 
-  // 5. 通用去数字化反驳规则合成（剥离所有阿拉伯数字、百分比与患者标识）
+  // 5. 通用去数字化反驳规则合成（剥离所有阿拉伯数字、百分比与患者标识，提取 2-5 个领域/结构关键词并携带 cat 与 kw 标签）
   const sanitizedRebuttal = rebuttalText
     .replace(/\b(?:n|N|clones?|HR|OR|RR|P|p)\s*[=<>≤≥:：]\s*\d+(?:\.\d+)?%?/g, '指定统计量')
     .replace(/\b\d+(?:\.\d+)?\s*(?:%|％|例|人|名|个|只|天|月|年|mm³|mm3|mm|Gy)\b/g, '特定定量值')
@@ -258,15 +360,19 @@ export function synthesizeSanitizedBoundaryRule(
     .trim()
     .slice(0, 120)
 
-  const candidate = `[domain:manuscript] [narrow:review_boundary] 审稿核查边界收窄：当方法或结果段陈述本研究自身入组队列、基线统计或专科设计（${sanitizedRebuttal || '不含外部研究对比词'}）时，属于合理专科研究边界，免于触发缺文献引用或教条误报。`
+  const resolvedCat = (context.category || 'missing_citation').trim().toLowerCase()
+  const keywords = extractSanitizedBoundaryKeywords([context.sentence ?? '', rebuttalText, context.reason ?? ''], 5)
+  const kwSuffix = keywords.length > 0 ? `:kw=${keywords.join(',')}` : ''
+  const tag = `[narrow:review_boundary:custom_clinical_boundary:cat=${resolvedCat}${kwSuffix}]`
+
+  const candidate = `[domain:manuscript] ${tag} 审稿核查边界收窄：当方法或结果段陈述本研究自身入组队列、基线统计或专科设计（${sanitizedRebuttal || '不含外部研究对比词'}）时，属于合理专科研究边界，免于触发缺文献引用或教条误报。`
 
   // 通过实例解耦守卫二次校验，若仍含实例数字泄露则回退为安全抽象规则
   const adapter = getDomainSkillAdapter('manuscript')
   if (adapter.hasInstanceLeakage(candidate)) {
     return {
       patternKey: 'self_cohort_boundary',
-      rule:
-        '[domain:manuscript] [narrow:review_boundary] 审稿核查边界收窄：当方法或结果段陈述本研究自身入组队列、基线统计或本中心随访协议数据（且不含外部研究对比词）时，属于自报数据边界，免于触发缺文献引用（missing_citation）告警。',
+      rule: `[domain:manuscript] [narrow:review_boundary:self_cohort_boundary:cat=${resolvedCat}${kwSuffix}] 审稿核查边界收窄：当方法或结果段陈述本研究自身入组队列、基线统计或本中心随访协议数据（且不含外部研究对比词）时，属于自报数据边界，免于触发缺文献引用（missing_citation）告警。`,
     }
   }
 
@@ -909,10 +1015,23 @@ export class ClaimService {
         const key = `${item.category}|${item.subtype ?? ''}|${item.node_id}|${normSentence}`
         if (seenKeys.has(key)) continue
 
-        // 跨章节去重：同一处数字矛盾常被几个章节换着说法报出来（各章节都拿到了表格）——数字组合（至少两个数）相同、类别相同算一条
+        // 跨章节去重：同一处数字矛盾常被几个章节换着说法报出来（各章节都拿到了表格）——
+        // 当仅含 2 个相同数字时，要求同时共享至少 1 个非停用词/非单位的主题词（避免不同变量碰巧含相同 2 个数字被误删）；
+        // 当含 >= 3 个完全相同的数字组合、或共享主题词时，合并去重
         const nums = item.source_pass === 'llm_stage3' ? numberKey([item.sentence, ...(item.evidence ?? [])]) : ''
-        if (nums.split(',').length >= 2 && deduplicated.some(e => e.source_pass === 'llm_stage3' && e.category === item.category
-          && numberKey([e.sentence, ...(e.evidence ?? [])]) === nums)) continue
+        const numList = nums ? nums.split(',').filter(Boolean) : []
+        if (numList.length >= 2) {
+          const itemTokens = extractTopicTokensForDedup([item.sentence, ...(item.evidence ?? [])])
+          const isCrossSectionNumDup = deduplicated.some(e => {
+            if (e.source_pass !== 'llm_stage3' || e.category !== item.category) return false
+            if (numberKey([e.sentence, ...(e.evidence ?? [])]) !== nums) return false
+            if (numList.length >= 3) return true
+            const eTokens = extractTopicTokensForDedup([e.sentence, ...(e.evidence ?? [])])
+            if (itemTokens.size === 0 || eTokens.size === 0) return e.node_id === item.node_id
+            return [...itemTokens].some(t => eTokens.has(t))
+          })
+          if (isCrossSectionNumDup) continue
+        }
 
         // 跨通道语义去重：同一段落/表格块若已被结构化精确核查（Pass B/C/D）定位，或同表同一子类型（如双零笔误、修订粘连含HR），合并去重
         const isRedundantWithExisting = deduplicated.some(existing => {
@@ -1062,23 +1181,15 @@ export class ClaimService {
       blocks: [] as Array<{ nodeId: string; text: string; tier: VerificationTier }>,
     }
     const budgetCounts: Record<VerificationTier, number> = { light: 0, medium: 0, high: 0 }
-    const productMode = opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
-    // 产品模式：小节标题看不出角色时（「Insulin resistance」「Statistics and reproducibility」），沿用上一级章节的角色——
-    // 评测稿件里七成的标题是这种小节，原来都算「其他」，结果小节拿不到表格、统计方法小节认不出
-    const roleStack: Array<{ level: number; role: SectionRole }> = []
+    // 小节标题看不出角色时（「Insulin resistance」「Statistics and reproducibility」），通过 SectionRoleTracker 沿用上一级章节角色
+    const roleTracker = new SectionRoleTracker()
 
     doc.forEach(node => {
       if (isPendingDeletion(node)) return
       if (node.type.name === 'heading') {
         if (curSection.blocks.length > 0) sections.push(curSection)
         const hText = headingText(node)
-        let role = classifySectionRole(hText)
-        if (productMode) {
-          const level = Number(node.attrs.level ?? 2)
-          while (roleStack.length && roleStack[roleStack.length - 1]!.level >= level) roleStack.pop()
-          if (role === 'other' && roleStack.length) role = roleStack[roleStack.length - 1]!.role
-          if (role !== 'other') roleStack.push({ level, role })
-        }
+        const role = roleTracker.onHeading(Number(node.attrs.level ?? 2), hText)
         curSection = { title: hText, role, tier: role === 'methods' || role === 'results' ? 'high' : 'medium', blocks: [] }
         return
       }
@@ -1258,8 +1369,13 @@ export class ClaimService {
             .map(b => b.text)).join('\n').slice(0, 3000)
           : ''
         if (verifyEvidence) targetSections = scheduleReviewSections(targetSections, abstractSection)
-        const secResults = await Promise.all(
-          targetSections.map(async sec => {
+        const concurrency = 4
+        const secResults: Array<{ raw: string; sec: (typeof targetSections)[number] }> = new Array(targetSections.length)
+        let nextSecIdx = 0
+        const runSectionWorker = async () => {
+          while (nextSecIdx < targetSections.length) {
+            const idx = nextSecIdx++
+            const sec = targetSections[idx]!
             const secText = sec.blocks.map(b => `[${b.nodeId}] ${b.text}`).join('\n')
             const sys = verifyEvidence ? sectionReviewPrompt(sec.title, sec.role, scratchpadSummary, rulesContext) :
               `你是四阶段科学深度审稿系统（Stage 3 Specialist Reviewer，当前分配预算：${sec.tier.toUpperCase()} Thinking Track）。\n` +
@@ -1285,8 +1401,11 @@ export class ClaimService {
               ? `【当前章节正文】：\n${secText}\n\n【关联表格信息】：\n${tableMarkdown}${abstractRef}${statsRef}`
               : `【当前章节正文】：\n${secText}${abstractRef}${statsRef}`
             const raw = await opts.complete!(sys, userPayload)
-            return { raw, sec }
-          }),
+            secResults[idx] = { raw, sec }
+          }
+        }
+        await Promise.all(
+          Array.from({ length: Math.min(concurrency, targetSections.length) }, () => runSectionWorker()),
         )
         for (const { raw, sec } of secResults) {
           parseLlmIssues(raw, {
@@ -1394,16 +1513,23 @@ export class ClaimService {
         })
       }
 
+      const inferredCategory =
+        opts.issueCategory ??
+        /\|\s*(internal_inconsistency|method_result_mismatch|spin_or_guideline|citation_distortion|missing_citation)\]/i
+          .exec(aiReplyText)?.[1]
+          ?.toLowerCase() ??
+        (linkedCheck?.verdict === 'missing_citation' ? 'missing_citation' : undefined)
+
       const { patternKey, rule: narrowRule } = synthesizeSanitizedBoundaryRule(opts.rebuttalText, {
         sentence: opts.sentence ?? linkedCheck?.sentence ?? commentObj?.snippet,
-        category: opts.issueCategory,
+        category: inferredCategory,
         reason: opts.reason ?? linkedCheck?.reason ?? aiReplyText,
       })
 
       const existingMems = (typeof store?.listMemories === 'function' ? store.listMemories(owner) : []) as Array<any>
-      const matchTag = `[narrow:review_boundary:${patternKey}]`
+      const tagMatch = /\[narrow:review_boundary:[^\]]+\]/.exec(narrowRule)?.[0] ?? `[narrow:review_boundary:${patternKey}]`
       const existingMem = existingMems.find(
-        m => m.content.includes(matchTag) || (patternKey === 'self_cohort_boundary' && m.content.includes('[narrow:review_boundary]')),
+        m => m.content.includes(tagMatch) || (patternKey === 'self_cohort_boundary' && m.content.includes('[narrow:review_boundary]')),
       )
       const memRow =
         existingMem && typeof store?.updateMemory === 'function'

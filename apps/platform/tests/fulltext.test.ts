@@ -1,3 +1,7 @@
+/**
+ * 开放获取全文客户端单元测试：验证相关段落检索、PMC 全文 / XML 表格与图注抽取、
+ * 缓存机制以及 pmid:xxx 与 ref:xxx 合成键的处理。
+ */
 import { describe, expect, it } from 'vitest'
 import { FullTextClient, relevantPassages } from '../src/literature/fulltext.ts'
 import { Store } from '../src/store/db.ts'
@@ -101,5 +105,44 @@ describe('开放获取全文', () => {
     expect(passages.length).toBeGreaterThan(0)
     expect(passages[0]).toContain('Table 1')
     expect(passages[0]).toContain('0.80 (0.72-0.90)')
+  })
+
+  it('合成键处理：pmid:xxx 调用 NCBI 转换时剥除 pmid: 前缀且不调 Unpaywall；ref:xxx 直接返回 null', async () => {
+    const calls: string[] = []
+    const fake = async (url: string) => {
+      calls.push(url)
+      const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'content-type': 'application/json' } })
+      if (url.includes('idconv')) {
+        // 确保传给 NCBI idconv 的 ids 参数已去掉 pmid: 前缀
+        if (url.includes('ids=123456')) return json({ records: [{ pmcid: 'PMC123' }] })
+        return json({ records: [{}] })
+      }
+      if (url.endsWith('/metadata/PMC123.1.json')) {
+        return json({ is_pmc_openaccess: true, license_code: 'CC BY', text_url: 's3://pmc-oa-opendata/PMC123.1/PMC123.1.txt' })
+      }
+      if (url.includes('/metadata/')) return new Response('', { status: 404 })
+      if (url.endsWith('/PMC123.1/PMC123.1.txt')) return new Response(TEXT)
+      return new Response('', { status: 404 })
+    }
+    const store = new Store(':memory:')
+    const ft = new FullTextClient(store, fake as never, 'test@example.com')
+
+    // ref:xxx 与空白直接返回 null，不发任何请求
+    expect(await ft.get('ref:abcd1234')).toBeNull()
+    expect(await ft.get('   ')).toBeNull()
+    expect(calls).toHaveLength(0)
+
+    // pmid:123456 剥除 pmid: 后查到 PMC123 全文，并以 pmid:123456 为键缓存
+    const got = await ft.get('pmid:123456')
+    expect(got).toMatchObject({ source: 'pmc', url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC123/' })
+    expect(calls.some(u => u.includes('ids=123456'))).toBe(true)
+    expect(calls.some(u => u.includes('pmid%3A'))).toBe(false)
+    expect(store.getFullText('pmid:123456')?.text).toContain('IL-1B')
+
+    // 不在 PMC 的纯 PMID（pmid:999999）：跳过 Unpaywall（即使配置了 email），不向 unpaywall.org 发请求
+    calls.length = 0
+    expect(await ft.get('pmid:999999')).toBeNull()
+    expect(calls.some(u => u.includes('idconv') && u.includes('ids=999999'))).toBe(true)
+    expect(calls.some(u => u.includes('unpaywall.org'))).toBe(false)
   })
 })

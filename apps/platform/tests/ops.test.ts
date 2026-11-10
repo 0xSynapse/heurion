@@ -1,3 +1,6 @@
+/**
+ * Unit tests for document edit operations, table manipulation, comment anchors, and write-time citation guards.
+ */
 import { describe, expect, it } from 'vitest'
 import { attachComment } from '../src/model/anchors.ts'
 import { parseBlocks, serializeBlocks } from '../src/model/markdown.ts'
@@ -761,6 +764,23 @@ describe('Phase 1b 赛后归因回归：已登记引用保护与引文语境/摘
       mode: 'apply',
       ops: [{ op: 'replace_block', id: p!, markdown: `多项大型队列证实远期心血管获益显著[@c:${c1.id}]，且整体安全性良好[@c:${c2.id}]。` }],
     }, { actor: 'ai', turnId: null })
+
+    // 净引文数量减少漏洞修复：原段含 3 条引文，AI 改写时只换上 1 条新引文 [@c:c4] 导致净丢 2 条 -> 必须拒绝
+    const c3 = store.upsertCitation({ doc_id: docId, doi: '10.1056/c', pmid: '33333333', formatted: 'Author C. Trial C. JAMA. 2023.', url: null })
+    const c4 = store.upsertCitation({ doc_id: docId, doi: '10.1056/d', pmid: '44444444', formatted: 'Author D. Trial D. BMJ. 2024.', url: null })
+    ops.edit({
+      doc_id: docId,
+      base_rev: 2,
+      mode: 'apply',
+      ops: [{ op: 'replace_block', id: p!, markdown: `多项大型队列证实获益[@c:${c1.id}][@c:${c2.id}][@c:${c3.id}]。` }],
+    }, { actor: 'user', turnId: null })
+    ops.noteSeen(docId, [p!], 3)
+    expectOpError(() => ops.edit({
+      doc_id: docId,
+      base_rev: 3,
+      mode: 'apply',
+      ops: [{ op: 'replace_block', id: p!, markdown: `既往研究证实获益[@c:${c4.id}]。` }],
+    }, { actor: 'ai', turnId: null }), 'existing_citation')
   })
 
   it('引文语境与摘要关联守卫：拦截缩写句点断句产生的孤立引用、拦截直接挂在「本研究观察结果」句尾的无过渡引用、拦截与缓存摘要零词干重叠的挂名引用', () => {
@@ -824,6 +844,84 @@ describe('Phase 1b 赛后归因回归：已登记引用保护与引文语境/摘
         op: 'replace_block',
         id: p!,
         markdown: `In this retrospective cohort study, we evaluated 120 patients with acute myocarditis using cardiac magnetic resonance, consistent with prior studies showing high diagnostic accuracy for myocardial edema and late gadolinium enhancement [@c:${c.id}].`,
+      }],
+    }, { actor: 'ai', turnId: null })
+    expect(exportMarkdown(docs.get(docId), store.listCitations(docId))).toContain('[1]')
+  })
+
+  it('中文引文守卫：拦截「本研究…」自指句直接挂外部文献，拦截生物医学词元/数值或中文双字词与摘要失配的张冠李戴引文', () => {
+    const { store, docs, ops, docId } = setup('本研究纳入 120 例急性心肌炎患者，观察住院期间心脏不良事件发生率。')
+    const [p] = ids(docs, docId)
+    const cEn = store.upsertCitation({
+      doc_id: docId,
+      doi: '10.1016/j.jacc.2023.01.001',
+      pmid: '37000001',
+      formatted: 'Smith J, et al. Cardiac magnetic resonance in acute myocarditis. J Am Coll Cardiol. 2023;81:100-110.',
+      url: null,
+    })
+    store.putAbstract(
+      '10.1016/j.jacc.2023.01.001',
+      '37000001',
+      'Cardiac magnetic resonance (CMR) imaging provides high diagnostic accuracy (AUC 0.89) for myocardial edema in acute myocarditis.',
+    )
+
+    // 1) 中文自指句（本研究纳入…）未加过渡从句直接挂外部文献 -> citation_unsupported
+    expectOpError(() => ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p!,
+        markdown: `本研究纳入 120 例急性心肌炎患者，观察住院期间心脏不良事件发生率[@c:${cEn.id}]。`,
+      }],
+    }, { actor: 'ai', turnId: null }), 'citation_unsupported')
+
+    // 2) 中文论断含生物医学词元/数值（EGFR, Osimertinib, HR, 0.46），但英文摘要完全无重叠 -> citation_unsupported
+    expectOpError(() => ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p!,
+        markdown: `既往多中心试验显示 EGFR 突变肺癌患者接受 Osimertinib 治疗可显著延长无进展生存期（HR 0.46）[@c:${cEn.id}]。`,
+      }],
+    }, { actor: 'ai', turnId: null }), 'citation_unsupported')
+
+    // 3) 中文论断与中文摘要无任何核心双字词或数值重叠 -> citation_unsupported
+    const cZh = store.upsertCitation({
+      doc_id: docId,
+      doi: '10.3760/cma.j.2023.01',
+      pmid: '37000002',
+      formatted: '张某等. 急性心肌炎心脏磁共振诊断价值. 中华心血管病杂志. 2023.',
+      url: null,
+    })
+    store.putAbstract(
+      '10.3760/cma.j.2023.01',
+      '37000002',
+      '心脏磁共振晚期钆延迟强化对急性心肌炎水肿及心肌纤维化具有较高诊断敏感度。',
+    )
+    expectOpError(() => ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p!,
+        markdown: `既往指南指出胰岛素泵持续皮下输注能改善妊娠期糖尿病血糖波动[@c:${cZh.id}]。`,
+      }],
+    }, { actor: 'ai', turnId: null }), 'citation_unsupported')
+
+    // 4) 中文论断补充对比从句且生物医学词元（CMR, AUC, 0.89）与摘要匹配 -> 正常通过
+    ops.edit({
+      doc_id: docId,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{
+        op: 'replace_block',
+        id: p!,
+        markdown: `本研究纳入 120 例急性心肌炎患者，观察住院期间心脏不良事件发生率，这与既往报道 CMR 诊断心肌水肿（AUC 0.89）的结论一致[@c:${cEn.id}]。`,
       }],
     }, { actor: 'ai', turnId: null })
     expect(exportMarkdown(docs.get(docId), store.listCitations(docId))).toContain('[1]')

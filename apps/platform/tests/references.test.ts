@@ -1,3 +1,7 @@
+/**
+ * 参考文献编号与正文文献表合并单元测试：验证已有文献表识别（含文献节后跟附录章节的场景）、
+ * DOI / PMID / 文本去重沿用原编号，以及 docx / markdown / HTML 导出对齐。
+ */
 import { strFromU8, unzipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { exportDocx } from '../src/convert/docx-export.ts'
@@ -127,5 +131,39 @@ describe('参考文献合并进用户自己的文献表', () => {
   it('编辑器用的编号函数与服务端一致', () => {
     expect([...numberCitations(['a', 'b', 'c'], 2, { b: 1 })]).toEqual([['a', 3], ['b', 1], ['c', 4]])
     expect([...numberCitations(['a', 'b'], 0, {})]).toEqual([['a', 1], ['b', 2]])
+  })
+
+  it('References 章节后紧跟 Supplementary Appendix 章节时仍能识别已有文献表，且支持按 PMID: xxx 去重匹配', () => {
+    const file = docx([
+      p('心衰是常见病。'),
+      p('References', '<w:pStyle w:val="Heading1"/>'),
+      p('[1] Smith A. Foo study. Lancet. 2001. doi:10.1016/lancet.1'),
+      p('[2] Lee B. Bar trial. JAMA. 2002. PMID: 27633186'),
+      p('Supplementary Appendix', '<w:pStyle w:val="Heading1"/>'),
+      p('Supplementary Table S1 and additional baseline characteristics.'),
+    ].join(''))
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const ops = new OpService(docs)
+    const r = importDocx(file)
+    const row = docs.create({ owner: 'u', title: 't', content: bindAssets(r.doc, new Map()), source: 'import' })
+    const cPmid = store.upsertCitation({ doc_id: row.id, doi: 'pmid:27633186', pmid: '27633186', formatted: 'Lee B, et al. Bar trial. JAMA. 2002.', url: null })
+    const cNew = store.upsertCitation({ doc_id: row.id, doi: '10.1056/new', pmid: null, formatted: 'Doe J. New trial. NEJM. 2024.', url: null })
+    const para = docs.get(row.id).child(0).attrs.id as string
+    const text = docs.get(row.id).child(0).textContent
+    ops.edit({
+      doc_id: row.id,
+      base_rev: 0,
+      mode: 'apply',
+      ops: [{ op: 'replace_text', id: para, find: text, replace: `${text}[@c:${cPmid.id}][@c:${cNew.id}]` }],
+    }, { actor: 'user', turnId: null })
+
+    const plan = referencePlan(docs.get(row.id), store.listCitations(row.id))
+    expect(plan.userCount).toBe(2)
+    expect(plan.fixed.get(cPmid.id)).toBe(2)
+    expect(plan.numbers.get(cPmid.id)).toBe(2)
+    expect(plan.numbers.get(cNew.id)).toBe(3)
+    expect(plan.duplicates).toBe(1)
+    expect(plan.append).toEqual([{ id: cNew.id, n: 3 }])
   })
 })

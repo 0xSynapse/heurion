@@ -1,3 +1,6 @@
+/**
+ * Unit tests for MCP server tools, citation registration/verification, HTTP API citation/review wiring, and deck rendering.
+ */
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -139,6 +142,16 @@ describe('MCP 工具', () => {
     const unsupported = await t.call('insert_citation', { doc_id: t.docId, doi: '10.1056/NEJMoa2020', claim: 'Esophageal displacement with transesophageal echocardiography during ablation.' })
     expect(unsupported.isError).toBe(true)
     expect(unsupported.body.code).toBe('citation_unsupported')
+
+    // 中文 claim 含生物医学词元/数值（EGFR, KRAS, 0.42）但与英文摘要完全失配 -> citation_unsupported 拦截
+    const unsupportedZh = await t.call('insert_citation', { doc_id: t.docId, doi: '10.1056/NEJMoa2020', claim: '既往研究提示 EGFR 与 KRAS 共突变患者无进展生存期显著缩短（HR 0.42）。' })
+    expect(unsupportedZh.isError).toBe(true)
+    expect(unsupportedZh.body.code).toBe('citation_unsupported')
+
+    // 中文 claim 含与摘要匹配的生物医学词元/数值（HR 0.80, 6.5%） -> 正常通过
+    const supportedZh = await t.call('insert_citation', { doc_id: t.docId, doi: '10.1056/NEJMoa2020', claim: '主要复合终点发生率在治疗组为 6.5%（HR 0.80）。' })
+    expect(supportedZh.isError).toBe(false)
+    expect(supportedZh.body.marker).toMatch(/^\[@c:c[a-z0-9]+\]$/)
   })
 
   it('回合内的写入带 turn_id，并通知回合', async () => {
@@ -610,5 +623,75 @@ describe('图表（AI 与画布同一套操作）', () => {
     const pie = await t.call('deck_edit', { doc_id: deckId, base_rev: line.body.rev, ops: [{ op: 'chart_set_type', shape_id: chartId, type: 'pie' }] })
     expect([pie.isError, pie.body.code]).toEqual([true, 'invalid_chart'])
     expect(pie.body.hint).toContain('一个系列')
+  })
+})
+
+describe('HTTP 引文摘要缓存与深度审稿无模型告警', () => {
+  it('POST /api/docs/:id/citations 自动缓存摘要至 store.putAbstract，且 POST /api/docs/:id/deep-review 在未配置大模型时返回明确 warning', async () => {
+    const { buildApi } = await import('../src/http/api.ts')
+    const env = setup('# 研究结果\n\n研究观察了 100 例患者。')
+    const pubmed = {
+      search: async () => [],
+      lookup: async () => ({
+        pmid: '38001122',
+        doi: '10.1056/nejmoa2400111',
+        title: 'SGLT2 Inhibition in Chronic Heart Failure',
+        authors: ['Smith A'],
+        journal: 'N Engl J Med',
+        year: '2024',
+        abstract: 'RESULTS: Dapagliflozin reduced hospitalization for heart failure (HR 0.74; 95% CI 0.65-0.85).',
+      }),
+      pmidForDoi: async () => '38001122',
+      abstract: async () => 'RESULTS: Dapagliflozin reduced hospitalization for heart failure (HR 0.74; 95% CI 0.65-0.85).',
+    } as unknown as PubMedClient
+    const crossref = {
+      lookup: async () => ({
+        pmid: '38001122',
+        doi: '10.1056/nejmoa2400111',
+        title: 'SGLT2 Inhibition in Chronic Heart Failure',
+        authors: ['Smith A'],
+        journal: 'N Engl J Med',
+        year: '2024',
+        abstract: 'RESULTS: Dapagliflozin reduced hospitalization for heart failure (HR 0.74; 95% CI 0.65-0.85).',
+      }),
+    } as unknown as CrossrefClient
+
+    const app = buildApi({
+      docs: env.docs,
+      ops: env.ops,
+      turns: {} as any,
+      postcheck: {} as any,
+      renderer: {} as any,
+      accounts: { userFor: () => 'u1', isAdmin: () => false } as any,
+      pubmed,
+      crossref,
+      devMode: true,
+      devUser: 'u1',
+    })
+
+    const citeRes = await app.request(`/api/docs/${env.docId}/citations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer dev-token',
+      },
+      body: JSON.stringify({ doi: '10.1056/NEJMoa2400111' }),
+    })
+    expect(citeRes.status).toBe(201)
+    const cached = env.store.getAbstract('10.1056/nejmoa2400111')
+    expect(cached?.abstract).toContain('HR 0.74')
+
+    const reviewRes = await app.request(`/api/docs/${env.docId}/deep-review`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer dev-token',
+      },
+      body: JSON.stringify({ auto_comment: false }),
+    })
+    expect(reviewRes.status).toBe(200)
+    const reviewBody = await reviewRes.json() as { warnings?: string[] }
+    expect(reviewBody.warnings).toBeDefined()
+    expect(reviewBody.warnings?.some(w => w.includes('当前未配置审稿大模型'))).toBe(true)
   })
 })

@@ -1,3 +1,6 @@
+/**
+ * Heurion 2.0 Web 工作台前端主入口。
+ */
 import 'prosemirror-view/style/prosemirror.css'
 import 'prosemirror-tables/style/tables.css'
 import 'prosemirror-gapcursor/style/gapcursor.css'
@@ -4356,9 +4359,14 @@ function renderCites(): void {
       <div class="muted small" style="margin:4px 0">按 DOI / PMID 自动核实登记，点击正文 [n] 上标或下方卡片可双向联动定位（Batch 5）。</div>${refMergeText() ? `<div class="ref-merge-note">${esc(refMergeText())}；导出 Word / Markdown 时合并成一份文献表。</div>` : ''}<div id="refImportResult">${refImportHtml}</div></div>` +
     (list.length === 0 ? '<div class="muted small" style="margin:8px 0">暂无已登记引用。点击上方「导入文献」或在正文工具栏点「引用」添加。</div>' : list.map(c => {
       const cid = c.id || c.cite_id || ''
+      const rawDoi = typeof c.doi === 'string' ? c.doi.trim() : ''
+      const pmidFromDoi = rawDoi.toLowerCase().startsWith('pmid:') ? rawDoi.slice(5).trim() : ''
+      const effectivePmid = c.pmid ? String(c.pmid).trim() : pmidFromDoi
       const candidateUrl = typeof c.url === 'string' && /^https?:\/\//i.test(c.url)
         ? c.url
-        : (c.doi ? `https://doi.org/${encodeURIComponent(String(c.doi))}` : (c.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(String(c.pmid))}/` : ''))
+        : (rawDoi.startsWith('10.')
+          ? `https://doi.org/${encodeURIComponent(rawDoi)}`
+          : (effectivePmid ? `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(effectivePmid)}/` : ''))
       return `<div class="card cite-card-item" data-cite-id="${esc(cid)}">
         <div class="cite-card-main"><b>${c.number ? `[${esc(c.number)}]` : '[未引用]'}</b> ${esc(c.formatted)}</div>
         <div class="cite-card-actions">

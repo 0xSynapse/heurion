@@ -1,13 +1,13 @@
-import type { Store } from '../store/db.ts'
-import type { CrossrefClient } from './crossref.ts'
-import { formatAma, normalizeDoi } from './format.ts'
-import type { PubMedClient } from './pubmed.ts'
-
 /**
  * 参考文献批量导入（M1）：把用户的文献列表登记到文档的引用登记表，之后人和 AI 都能直接引用。
  * 支持 RIS（EndNote / Zotero / Mendeley 导出）、BibTeX、PubMed（MEDLINE / .nbib）、EndNote XML，以及任意文本里的 DOI / PMID。
- * 与 insert_citation 同一条规矩：DOI 要能在 Crossref 查到；只有 PMID 的经 PubMed 补 DOI；两者都没有的跳过并报告。
+ * 与 insert_citation 同一条规矩：DOI 要能在 Crossref 查到；只有 PMID 的经 PubMed 核实（有 DOI 的补 DOI，无 DOI 的按 pmid:xxx 登记）；两者都没有的跳过并报告。
  */
+import type { Store } from '../store/db.ts'
+import type { CrossrefClient } from './crossref.ts'
+import { formatCitation, normalizeDoi, type CitationStyle } from './format.ts'
+import type { PubMedClient } from './pubmed.ts'
+import type { Article } from './types.ts'
 
 export interface ParsedRef { doi: string | null; pmid: string | null; label: string }
 
@@ -92,20 +92,34 @@ export interface ImportReport {
   skipped: Array<{ label: string; reason: string }>
 }
 
-/** 逐条核实并登记（同一 DOI 只登记一次，已在登记表里的计入 already）。 */
+/** 逐条核实并登记（同一 DOI / PMID 只登记一次，已在登记表里的计入 already）。 */
 export async function importReferences(
   deps: { store: Store; crossref: CrossrefClient; pubmed: PubMedClient },
   docId: string,
   refs: ParsedRef[],
+  style: CitationStyle = 'ama',
 ): Promise<ImportReport> {
   const report: ImportReport = { added: [], already: 0, skipped: [] }
-  const existing = new Set(deps.store.listCitations(docId).map(c => c.doi))
-  // 只有 PMID 的：PubMed 批量补 DOI
+  const existingRows = deps.store.listCitations(docId)
+  const existing = new Set(existingRows.map(c => c.doi.toLowerCase()))
+  const existingPmids = new Set(existingRows.map(c => c.pmid).filter((p): p is string => Boolean(p)))
+  // 只有 PMID 的：PubMed 批量查题录（有 DOI 的补 DOI，无 DOI 的按 pmid:xxx 登记）
   const pmidOnly = refs.filter(r => !r.doi && r.pmid).map(r => r.pmid!)
-  const byPmid = new Map<string, string | null>()
+  const byPmid = new Map<string, Article>()
   for (let i = 0; i < pmidOnly.length; i += 100) {
+    const slice = pmidOnly.slice(i, i + 100)
     try {
-      for (const a of await deps.pubmed.summaries(pmidOnly.slice(i, i + 100))) if (a.pmid) byPmid.set(a.pmid, a.doi ? normalizeDoi(a.doi) : null)
+      const articles = await deps.pubmed.summaries(slice)
+      const needAbs = articles.filter(a => a.pmid && !a.abstract).map(a => a.pmid!)
+      const absMap = needAbs.length > 0 && typeof deps.pubmed.abstracts === 'function'
+        ? await deps.pubmed.abstracts(needAbs).catch(() => new Map<string, string>())
+        : new Map<string, string>()
+      for (const a of articles) {
+        if (a.pmid) {
+          const abs = a.abstract ?? absMap.get(a.pmid)
+          byPmid.set(a.pmid, abs ? { ...a, abstract: abs } : a)
+        }
+      }
     } catch { /* 网络问题：这些条目下面报告为查不到 */ }
   }
   const seen = new Set<string>()
@@ -115,21 +129,56 @@ export async function importReferences(
   const worker = async () => {
     while (next < work.length) {
       const r = work[next++]!
-      const doi = r.doi ?? (r.pmid ? byPmid.get(r.pmid) ?? null : null)
-      if (!doi) { report.skipped.push({ label: r.label || `PMID ${r.pmid}`, reason: r.pmid ? 'PubMed 里查不到这篇文献的 DOI' : '没有 DOI 或 PMID' }); continue }
-      if (seen.has(doi)) continue
-      seen.add(doi)
-      if (existing.has(doi)) { report.already++; continue }
-      // lookup：DOI 不存在返回 null；网络 / 限流抛错——重试一次，仍失败就如实说是暂时访问不了（不能说成「查不到」）
-      let article: Awaited<ReturnType<CrossrefClient['lookup']>>
-      try {
-        article = await deps.crossref.lookup(doi).catch(async () => { await new Promise(res => setTimeout(res, 1500)); return deps.crossref.lookup(doi) })
-      } catch (err) {
-        report.skipped.push({ label: r.label || doi, reason: `Crossref 暂时无法访问（${(err as Error).message.slice(0, 60)}），稍后重新导入即可` })
+      const pmArticle = !r.doi && r.pmid ? byPmid.get(r.pmid) ?? null : null
+      if (!r.doi && r.pmid && !pmArticle && (existingPmids.has(r.pmid) || existing.has(`pmid:${r.pmid}`))) {
+        const pmidKey = `pmid:${r.pmid}`
+        if (!seen.has(pmidKey)) { seen.add(pmidKey); report.already++ }
         continue
       }
+      const rawDoi = r.doi ?? (pmArticle?.doi ? normalizeDoi(pmArticle.doi) : null)
+      const fallbackPmid = pmArticle?.pmid ?? r.pmid ?? null
+      const doi = rawDoi ? normalizeDoi(rawDoi) : (pmArticle && fallbackPmid ? `pmid:${fallbackPmid}` : null)
+      if (!doi) { report.skipped.push({ label: r.label || `PMID ${r.pmid}`, reason: r.pmid ? 'PubMed 里查不到这篇文献的 DOI' : '没有 DOI 或 PMID' }); continue }
+      if (seen.has(doi) || (fallbackPmid && seen.has(`pmid:${fallbackPmid}`))) continue
+      seen.add(doi)
+      if (fallbackPmid) seen.add(`pmid:${fallbackPmid}`)
+      if (existing.has(doi) || (fallbackPmid && (existingPmids.has(fallbackPmid) || existing.has(`pmid:${fallbackPmid}`)))) {
+        const cachedAbs = pmArticle?.abstract?.trim()
+        if (cachedAbs && !deps.store.getAbstract(doi)?.abstract) {
+          deps.store.putAbstract(doi, fallbackPmid, cachedAbs)
+        }
+        report.already++
+        continue
+      }
+      let article: Article | null = null
+      if (doi.startsWith('pmid:')) {
+        article = pmArticle
+      } else {
+        // lookup：DOI 不存在返回 null；网络 / 限流抛错——重试一次，仍失败就如实说是暂时访问不了（不能说成「查不到」）
+        try {
+          article = await deps.crossref.lookup(doi).catch(async () => { await new Promise(res => setTimeout(res, 1500)); return deps.crossref.lookup(doi) })
+        } catch (err) {
+          report.skipped.push({ label: r.label || doi, reason: `Crossref 暂时无法访问（${(err as Error).message.slice(0, 60)}），稍后重新导入即可` })
+          continue
+        }
+        if (!article && pmArticle) article = pmArticle
+      }
       if (!article) { report.skipped.push({ label: r.label || doi, reason: `DOI ${doi} 在 Crossref 查不到` }); continue }
-      const row = deps.store.upsertCitation({ doc_id: docId, doi: article.doi!, pmid: r.pmid ?? null, formatted: formatAma(article), url: `https://doi.org/${article.doi}` })
+      const finalDoi = normalizeDoi(article.doi || '') || (article.pmid ? `pmid:${article.pmid}` : doi)
+      const finalPmid = article.pmid ?? fallbackPmid
+      const finalUrl = article.doi ? `https://doi.org/${normalizeDoi(article.doi)}` : (finalPmid ? `https://pubmed.ncbi.nlm.nih.gov/${finalPmid}/` : null)
+      const row = deps.store.upsertCitation({ doc_id: docId, doi: finalDoi, pmid: finalPmid, formatted: formatCitation(article, style), url: finalUrl })
+      let abstract = article.abstract?.trim() || pmArticle?.abstract?.trim() || null
+      if (!abstract && finalPmid && typeof deps.pubmed.abstract === 'function') {
+        abstract = (await deps.pubmed.abstract(finalPmid).catch(() => null))?.trim() || null
+      }
+      if (!abstract && !finalPmid && finalDoi.startsWith('10.') && typeof deps.pubmed.pmidForDoi === 'function' && typeof deps.pubmed.abstract === 'function') {
+        const foundPmid = await deps.pubmed.pmidForDoi(finalDoi).catch(() => null)
+        if (foundPmid) abstract = (await deps.pubmed.abstract(foundPmid).catch(() => null))?.trim() || null
+      }
+      if (abstract) {
+        deps.store.putAbstract(finalDoi, finalPmid, abstract)
+      }
       report.added.push({ cite_id: row.id, formatted: row.formatted })
     }
   }

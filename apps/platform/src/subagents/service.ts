@@ -175,6 +175,14 @@ export class SubagentService {
       // 如果提供了关联文档，直接为该文档注册正规引用
       let citeId: string | undefined
       const cleanDoi = art.doi ? normalizeDoi(art.doi) : ''
+      const doiKey = cleanDoi || (art.pmid ? `pmid:${art.pmid}` : '')
+      if (doiKey && abstractText?.trim()) {
+        try {
+          ;(this.deps.docs?.store ?? this.deps.store).putAbstract(doiKey.toLowerCase(), art.pmid ?? null, abstractText.trim())
+        } catch {
+          // 忽略摘要缓存写入异常
+        }
+      }
       const formatted = formatAma({
         pmid: art.pmid ?? '',
         doi: cleanDoi,
@@ -188,7 +196,6 @@ export class SubagentService {
         (art.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${art.pmid}/` : cleanDoi ? `https://doi.org/${cleanDoi}` : null)
 
       if (params.doc_id && canWriteDoc) {
-        const doiKey = cleanDoi || (art.pmid ? `pmid:${art.pmid}` : '')
         if (doiKey) {
           try {
             const row = this.deps.store.upsertCitation({
@@ -532,15 +539,18 @@ export class SubagentService {
       const rawNumbers = sentenceWithoutMarkers.match(/\b\d+(?:\.\d+)?[%％]?|\b(?:HR|OR|RR)\s*=?\s*\d+(?:\.\d+)?/gi) ?? []
       const numbersInSentence = rawNumbers.filter(num => !/^(?:19|20)\d{2}$/.test(num.trim()))
 
-      // 核对数值等价性（支持 74% <-> 0.74、尾随零 0.50 <-> 0.5 等）
+      // 核对数值等价性（支持 74% <-> 0.74、尾随零 0.50 <-> 0.5 等）与主题词重叠
       const missingNumbers = numbersInSentence.filter(num => !this.isNumberMatchedInEvidence(num, citationsText))
       const directionConflict = this.detectDirectionalityContradiction(c.sentence, citationsText)
+      const topicOverlap = this.hasTopicOverlap(c.sentence, citationsText)
 
-      if ((missingNumbers.length > 0 || directionConflict) && citationsText.length > 50) {
+      if ((missingNumbers.length > 0 || directionConflict || !topicOverlap) && citationsText.length > 50) {
         unsupportedCount++
         const reason = missingNumbers.length > 0
           ? `正文中提及的数值 [${missingNumbers.join(', ')}] 未在所引文献摘要或结果中核验到对应出处${directionConflict ? `；且${directionConflict}` : ''}。`
-          : `正文结论方向与所引文献矛盾：${directionConflict}。`
+          : directionConflict
+            ? `正文结论方向与所引文献矛盾：${directionConflict}。`
+            : '引文中虽出现相同数值，但缺乏核心主题词重叠，需核实是否张冠李戴。'
         const severity: IssueSeverity = tier === 'high' ? 'critical' : 'major'
         const issue: ClaimCheckIssue = {
           claim_id: c.claim_id,
@@ -559,7 +569,7 @@ export class SubagentService {
           verdict: 'unsupported',
           reason: issue.reason,
         })
-      } else if (numbersInSentence.length > 0) {
+      } else if (numbersInSentence.length > 0 && topicOverlap) {
         supportedCount++
         reportBatch.push({
           claim_id: c.claim_id,
@@ -571,8 +581,8 @@ export class SubagentService {
       }
     }
 
-    // —— Stage 3 Pass B：跨章节与正文-表格内部自洽性核查（样本量 N、表内百分比引用对齐） ——
-    const internalIssues = this.auditInternalConsistency(doc, docTables)
+    // —— Stage 3 Pass B：跨章节与正文-表格内部自洽性核查（委托 ClaimService.auditDeepReviewPasses） ——
+    const internalIssues = this.auditInternalConsistency(doc, docTables, docId, userId)
     for (const intIss of internalIssues) {
       rawIssues.push(intIss)
     }
@@ -760,9 +770,91 @@ export class SubagentService {
   }
 
   /**
-   * Stage 3 Pass B：跨章节与正文-表格内部自洽性核查（比对正文样本量 N 与表格样本量 N、表 1 引用百分比对齐）。
+   * Stage 3 Pass A 辅助：核对正文论断与引文证据之间是否具备核心主题词重叠（防止仅因数值碰巧相同而误判为支持）。
    */
-  private auditInternalConsistency(doc: any, tables: TableSummary[]): ClaimCheckIssue[] {
+  private hasTopicOverlap(sentence: string, evidenceText: string): boolean {
+    const cleanSent = sentence
+      .replace(/\[\d+(?:\s*[,，\-–]\s*\d+)*\]/g, ' ')
+      .replace(/\[@[cmw]:[^\]]+\]/g, ' ')
+      .trim()
+    const evidenceLower = evidenceText.toLowerCase()
+    const STOP = new Set([
+      'this', 'that', 'with', 'from', 'were', 'have', 'been', 'which', 'their', 'these', 'those', 'into', 'more', 'than', 'also', 'such', 'both', 'between', 'among', 'after', 'before', 'during', 'under', 'over', 'through', 'where', 'when', 'while', 'study', 'studies', 'analysis', 'design', 'prospective', 'retrospective', 'reported', 'here', 'cohort', 'patients', 'group', 'groups', 'results', 'data', 'used', 'using', 'based', 'showed', 'shown', 'found', 'associated', 'compared', 'similar', 'consistent', 'prior', 'previous', 'trial', 'trials', 'clinical', 'significant', 'significantly', 'reduced', 'improved', 'increased', 'decreased',
+    ])
+    const CJK_STOP_BIGRAMS = new Set([
+      '研究', '表明', '显示', '患者', '结果', '分析', '显著', '可以', '进行', '具有',
+      '通过', '发现', '治疗', '方法', '对比', '高于', '低于', '或者', '以及', '因为',
+      '所以', '如果', '这个', '我们', '其中', '本研', '究纳', '纳入', '观察', '证实',
+      '提示', '报道', '既往', '临床', '试验', '队列', '分组', '对照', '相比', '差异',
+      '降低', '提高', '升高', '减少', '延长', '改善', '发生', '风险',
+    ])
+    const ASCII_TRIVIAL = new Set(['vs', 'et', 'al', 'ci', 'fig', 'tab', 'table', 'figure', 'no', 'in', 'of', 'to', 'or', 'by', 'on', 'at', 'as', 'is', 'be', 'an', 'we', 'hr', 'rr', 'sd', 'se', 'sem', 'iqr'])
+
+    const sigWords = [...new Set((cleanSent.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter(w => !STOP.has(w)))]
+    if (sigWords.length >= 2) {
+      return sigWords.some(w => evidenceLower.includes(w.slice(0, 5)))
+    }
+
+    if (/[\u4e00-\u9fa5]/.test(cleanSent)) {
+      const asciiTokens = (cleanSent.match(/[a-zA-Z][a-zA-Z0-9-]{1,}/g) ?? [])
+        .map(w => w.toLowerCase())
+        .filter(w => !STOP.has(w) && !ASCII_TRIVIAL.has(w))
+      if (/[\u4e00-\u9fa5]/.test(evidenceLower)) {
+        const cjkBigrams: string[] = []
+        for (const run of cleanSent.match(/[\u4e00-\u9fa5]{2,}/g) ?? []) {
+          for (let k = 0; k + 2 <= run.length; k++) {
+            const bg = run.slice(k, k + 2)
+            if (!CJK_STOP_BIGRAMS.has(bg)) cjkBigrams.push(bg)
+          }
+        }
+        const anchors = [...new Set([...cjkBigrams, ...asciiTokens])]
+        if (anchors.length >= 2) {
+          return anchors.some(a => evidenceLower.includes(a))
+        }
+        return true
+      }
+
+      if (asciiTokens.length >= 1 && !asciiTokens.some(a => evidenceLower.includes(a))) {
+        return false
+      }
+
+      const BILINGUAL_CONCEPTS: Array<[RegExp, RegExp]> = [
+        [/主要复合终点|复合终点/, /primary\s+composite\s+outcome|composite\s+(?:endpoint|outcome)|primary\s+(?:endpoint|outcome)/i],
+        [/心力衰竭|心衰|达格列净|恩格列净/, /heart\s+failure|dapagliflozin|empagliflozin|hfr?ef/i],
+        [/脑卒中|卒中|颅内出血|房颤|心房颤动/, /stroke|hemorrhage|bleeding|atrial\s+fibrillation/i],
+        [/肺癌|非小细胞|乳腺癌|胃癌|肝癌|结直肠癌|肿瘤/, /lung\s+cancer|nsclc|breast\s+cancer|gastric|hepatocellular|colorectal|tumor|carcinoma|oncolog/i],
+        [/心肌炎|心脏磁共振/, /myocarditis|cardiac\s+magnetic\s+resonance|\bcmr\b/i],
+        [/糖尿病|血糖|胰岛素|司美格鲁肽/, /diabetes|glycemic|glucose|insulin|semaglutide/i],
+        [/肾病|白蛋白|肾小球/, /kidney|renal|nephropathy|albumin/i],
+      ]
+      const matchedPairs = BILINGUAL_CONCEPTS.filter(([zh]) => zh.test(cleanSent))
+      if (matchedPairs.length > 0) {
+        return matchedPairs.some(([, en]) => en.test(evidenceLower))
+      }
+    }
+
+    return true
+  }
+
+  /**
+   * Stage 3 Pass B：跨章节与正文-表格内部自洽性核查（优先委托 ClaimService.auditDeepReviewPasses，保持规则统一）。
+   */
+  private auditInternalConsistency(doc: any, tables: TableSummary[], docId?: string, owner?: string): ClaimCheckIssue[] {
+    if (docId && typeof this.deps.claims?.auditDeepReviewPasses === 'function') {
+      const passes = this.deps.claims
+        .auditDeepReviewPasses(docId, { includeInternal: true, useMemory: true, owner })
+        .filter((iss): iss is typeof iss & { category: 'internal_inconsistency' | 'method_result_mismatch' | 'spin_or_guideline' } => iss.category !== 'citation_distortion')
+      return passes.map(iss => ({
+        sentence: iss.sentence,
+        verdict: 'unsupported' as const,
+        reason: iss.reason,
+        suggestion: iss.suggestion,
+        severity: iss.severity,
+        category: iss.category,
+        ...(iss.section_title ? { section_title: iss.section_title } : {}),
+        verification_tier: 'high' as const,
+      }))
+    }
     const issues: ClaimCheckIssue[] = []
     if (!tables || tables.length === 0) return issues
 

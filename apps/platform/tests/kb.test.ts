@@ -1,3 +1,7 @@
+/**
+ * 参考资料库单元测试：验证 PDF（pdftotext + OCR）/ 文本抽取、DOI 规范化、
+ * 分页切块、向量与关键词混合检索。
+ */
 import { describe, expect, it } from 'vitest'
 import type { Embedder } from '../src/kb/embedder.ts'
 import { chunkPages, extractText } from '../src/kb/extract.ts'
@@ -47,11 +51,11 @@ class FakeEmbedder implements Embedder {
 }
 
 describe('参考资料库：抽取与切块', () => {
-  it('PDF 按页抽取（pdftotext），识别 DOI；切块保留页码', async () => {
-    const bytes = pdf(['Semaglutide and Cardiovascular Outcomes\ndoi: 10.1056/NEJMoa2307563\nMajor adverse cardiovascular events were reduced.', 'Page two discusses safety and adverse events leading to discontinuation.'])
+  it('PDF 按页抽取（pdftotext），识别并规范化小写 DOI（剥除句尾标点）；切块保留页码', async () => {
+    const bytes = pdf(['Semaglutide and Cardiovascular Outcomes\ndoi: 10.1056/NEJMoa2307563.\nMajor adverse cardiovascular events were reduced.', 'Page two discusses safety and adverse events leading to discontinuation.'])
     const x = await extractText('select.pdf', bytes)
     expect(x.pages.length).toBe(2)
-    expect(x.doi).toBe('10.1056/NEJMoa2307563')
+    expect(x.doi).toBe('10.1056/nejmoa2307563')
     expect(x.pages[1]).toContain('safety')
     const chunks = chunkPages(x.pages, 80, 10)
     expect(chunks.length).toBeGreaterThan(1)
@@ -103,10 +107,10 @@ describe('参考资料库：处理流水线与检索', () => {
     const b = await kb.upload('u1', { name: '指南.md', bytes: new TextEncoder().encode('# 心衰指南\n\n射血分数降低的心衰推荐使用 SGLT2 抑制剂。') })
     await kb.idle()
     const fa = store.getKbFile(a.file.id)!
-    expect([fa.status, fa.pages, fa.embedded === fa.chunks, fa.doi]).toEqual(['ready', 2, true, '10.1056/NEJMoa2307563'])
+    expect([fa.status, fa.pages, fa.embedded === fa.chunks, fa.doi]).toEqual(['ready', 2, true, '10.1056/nejmoa2307563'])
     expect((await kb.upload('u1', { name: 'again.pdf', bytes: store.getKbBytes(a.file.id)! })).duplicate).toBe(true)
     const hits = await kb.search('u1', 'adverse events discontinuation')
-    expect(hits[0]).toMatchObject({ file_id: a.file.id, page: 2, doi: '10.1056/NEJMoa2307563' })
+    expect(hits[0]).toMatchObject({ file_id: a.file.id, page: 2, doi: '10.1056/nejmoa2307563' })
     expect((await kb.search('u1', 'SGLT2 抑制剂'))[0]!.file_id).toBe(b.file.id)
     expect((await kb.search('u1', '心衰', { fileIds: [a.file.id] })).every(h => h.file_id === a.file.id)).toBe(true)
     expect(await kb.search('u2', 'adverse')).toEqual([]) // 别人的资料

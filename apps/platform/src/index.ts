@@ -1,3 +1,6 @@
+/**
+ * Heurion 2.0 平台服务主入口（组装存储、运行时、文献、审稿、MCP 与 HTTP/WebSocket 网关）。
+ */
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -219,9 +222,10 @@ if (evolution.available() && process.env.MEMORY_AUTO_REVIEW !== '0') {
     console.log(`影像原件保留期：${config.imagingRetentionDays} 天（每天清理一次）`)
   }
 }
+const llmComplete = makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model })
 const mail = new MailService(store, mailer, {
   domain: config.mailDomain,
-  complete: makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }),
+  complete: llmComplete,
 })
 const calendar = new CalendarService(store, mail)
 // 审稿按页面图像核对表格（PDF_ORIGINAL_VIEW.md §12.3）：同一上游；REVIEW_VISION_MODEL 指定的模型视为支持图像
@@ -229,7 +233,7 @@ if (config.reviewVisionModel) VISION_MODELS.add(config.reviewVisionModel)
 const reviewVision = config.reviewTableVision
   ? makeVisionComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.reviewVisionModel || config.model, timeoutMs: 120_000 })
   : null
-const app = buildApi({ docs, reviewVision, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, aegisEnabled: config.aegisEnabled, imagingAcceptIdentified: config.imagingAcceptIdentified, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, alerts, workspaceDir: userId => pool.workspaceDir(userId) })
+const app = buildApi({ docs, reviewVision, reviewComplete: llmComplete, fulltext, claims, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, aegisEnabled: config.aegisEnabled, imagingAcceptIdentified: config.imagingAcceptIdentified, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, alerts, workspaceDir: userId => pool.workspaceDir(userId) })
 // MCP 的管理类工具以用户身份进程内调用同一个 HTTP 应用（AI 的权限 = 用户的权限，见 http/invoke.ts）
 ;(mcpDeps as { invoke?: Invoke }).invoke = makeInvoker(app)
 

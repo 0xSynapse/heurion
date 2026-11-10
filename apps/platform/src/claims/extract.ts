@@ -95,6 +95,24 @@ export function classifySectionRole(title: string): SectionRole {
   return 'other'
 }
 
+export class SectionRoleTracker {
+  private stack: Array<{ level: number; role: SectionRole }> = []
+  current: SectionRole = 'other'
+  onHeading(level: number, text: string): SectionRole {
+    const hLevel = Number(level ?? 2)
+    while (this.stack.length > 0 && this.stack[this.stack.length - 1]!.level >= hLevel) {
+      this.stack.pop()
+    }
+    const directRole = classifySectionRole(text)
+    this.current =
+      directRole === 'other' && this.stack.length > 0
+        ? this.stack[this.stack.length - 1]!.role
+        : directRole
+    this.stack.push({ level: hLevel, role: this.current })
+    return this.current
+  }
+}
+
 export function classifyVerificationTier(plain: string, citeCount: number, sectionRole: SectionRole): VerificationTier {
   const numMatches = plain.match(/\b\d+(?:\.\d+)?[%％]?/g)?.filter(n => !/^(?:19|20)\d{2}$/.test(n)) ?? []
   if (
@@ -313,6 +331,7 @@ export function buildManuscriptScratchpad(doc: PMNode, tables: TableSummary[] = 
   }
 
   let currentSectionTitle = ''
+  const roleTracker = new SectionRoleTracker()
   let currentSectionRole: SectionRole = 'other'
   let fullText = ''
 
@@ -323,7 +342,7 @@ export function buildManuscriptScratchpad(doc: PMNode, tables: TableSummary[] = 
       const hText = headingText(node)
       if (hText) {
         currentSectionTitle = hText
-        currentSectionRole = classifySectionRole(hText)
+        currentSectionRole = roleTracker.onHeading(Number(node.attrs.level ?? 2), hText)
       }
       return
     }
@@ -427,21 +446,90 @@ const NON_EXEMPTABLE_SUBTYPES = new Set([
   'observational_causal_overclaim',
 ])
 
+const PRECLINICAL_CELL_LINE_PATTERN =
+  /\b(?:[A-Z]{1,4}\d{2,4}|HeLa|MCF-?7|A549|H460|LLC|HepG2|PC-?3|U87|RAW264\.7)\b/i
+const OWN_COHORT_COUNT_PCT_PATTERN =
+  /\b\d+\s*\(\s*\d+(?:\.\d+)?%?\s*\)|\b\d+\s*\/\s*\d+\s*[,，(（]\s*\d+(?:\.\d+)?%?\s*\)?/
+const PDF_TABLE_ARTIFACT_PATTERN =
+  /\b\d+\.\d+\d+\.\d+%?\b|\b0\.\d{3}\s+0\.\d{3}\b|\b[2-9]\d{2}\s*[–\-—~to]+\s*\d\.\d+\b/i
+
+function hasArithmeticMismatchInText(text: string): boolean {
+  for (const m of text.matchAll(/\b(\d+)\s*\/\s*(\d+)\s*[,，(（]\s*(\d+(?:\.\d+)?)\s*[%％]/g)) {
+    const num = Number(m[1])
+    const den = Number(m[2])
+    const pct = Number(m[3])
+    if (den > 0 && num <= den && Math.abs((num / den) * 100 - pct) > 1.5) return true
+  }
+  for (const m of text.matchAll(/\b(\d+)\s*\(\s*(\d+(?:\.\d+)?)\s*[%％]?\s*\)/g)) {
+    const count = Number(m[1])
+    const pct = Number(m[2])
+    const nMatch = /\bn\s*=\s*(\d+)\b/i.exec(text)
+    if (nMatch && nMatch[1]) {
+      const colN = Number(nMatch[1])
+      if (colN > 0 && count <= colN && Math.abs((count / colN) * 100 - pct) > 1.5) return true
+    }
+  }
+  return false
+}
+
 export function isExemptedByActiveRules(
   issue: { category: string; subtype?: string; reason: string; sentence: string; section_role?: string },
   activeRules: string[] = [],
 ): boolean {
+  const sLower = issue.sentence.toLowerCase()
+  const reasonLower = issue.reason.toLowerCase()
+  const combined = `${reasonLower} ${sLower}`
+
+  // 若缺出处句子实为 PDF 表格抽取粘连或排版残片（如双小数粘连、双 HR 并列、漏小数点致下界百倍于上界），按表格/排版残片豁免缺文献引用告警
+  if (issue.category === 'missing_citation' && PDF_TABLE_ARTIFACT_PATTERN.test(issue.sentence)) {
+    return true
+  }
+
   if (!activeRules || activeRules.length === 0) return false
+
+  // 优先检查带显式类别与关键词标签的自定义边界规则（[narrow:review_boundary:...:cat=<cat>:kw=<kw1,kw2>]）
+  for (const rawRule of activeRules) {
+    const rLower = rawRule.toLowerCase()
+    if (!rLower.includes('[narrow:review_boundary')) continue
+    const catMatch = /:cat=([a-z0-9_]+)/i.exec(rLower)
+    const kwMatch = /:kw=([^\]\s]+)/i.exec(rLower)
+    if (catMatch || kwMatch) {
+      const targetCat = catMatch?.[1]?.toLowerCase()
+      if (targetCat && targetCat !== issue.category.toLowerCase()) continue
+      if (!targetCat && issue.category !== 'missing_citation') continue
+      if (kwMatch && kwMatch[1]) {
+        const kws = kwMatch[1]
+          .split(',')
+          .map(k => k.trim().toLowerCase())
+          .filter(k => k.length >= 2)
+        if (kws.length > 0 && kws.some(k => sLower.includes(k) || reasonLower.includes(k))) {
+          return true
+        }
+      } else if (
+        issue.category === 'missing_citation' &&
+        (issue.section_role === 'methods' ||
+          issue.section_role === 'results' ||
+          OWN_STUDY_SENTENCE.test(issue.sentence) ||
+          PRECLINICAL_CELL_LINE_PATTERN.test(issue.sentence) ||
+          OWN_COHORT_COUNT_PCT_PATTERN.test(issue.sentence))
+      ) {
+        return true
+      }
+    }
+  }
+
   if (issue.subtype && NON_EXEMPTABLE_SUBTYPES.has(issue.subtype)) return false
 
   const rulesBlob = activeRules.join('\n').toLowerCase()
-  const combined = `${issue.reason} ${issue.sentence}`.toLowerCase()
 
-  // 保护客观数值/排版/缩写硬伤不被 LLM 宽泛文本匹配误豁免
+  // 保护客观数值/排版/缩写硬伤不被宽泛领域预设规则误豁免（采用通用结构化特征检测，不依赖特定论文硬编码数字）
   if (
-    /(?:403[–\-—~to]+1\.688|缺少小数点|60\.062\.3|0\.824\s+0\.841|3\/26|21\s*\(\s*84\s*\)|00\s*\(\s*0\.0%\s*\)|room\s+temperature|838\.55|\bsem\b.*(?:\bsd\b|标准差)|(?:\bsd\b|标准差).*\bsem\b|37%.*31%|31%.*37%)/i.test(
-      combined,
-    )
+    issue.category !== 'missing_citation' &&
+    (PDF_TABLE_ARTIFACT_PATTERN.test(combined) ||
+      hasArithmeticMismatchInText(combined) ||
+      /(?:缺少小数点|下界.*大于上界|修订.*粘连|\b00+\s*\(\s*0(?:\.0+)?%\s*\)|前导零|room\s+temperature|缩略语.*定义|\bsem\b.*(?:\bsd\b|标准差)|(?:\bsd\b|标准差).*\bsem\b|分母切换|(?:pcr|mpr|orr)[^.。]*\b\d+(?:\.\d+)?%.*\b\d+(?:\.\d+)?%)/i.test(
+        combined,
+      ))
   ) {
     return false
   }
@@ -455,7 +543,7 @@ export function isExemptedByActiveRules(
   ) {
     if (
       issue.subtype === 'table_clone_vs_enrolled_sample_size' ||
-      /(?:clone|克隆|ccw|977|2219|ipcw|iptw|伪队列|伪人群|风险差|\brd\b|\brr\b|未提及.*hr|未说明.*hr|safety\s+population|安全性人群|安全性分析|分析集不一致)/i.test(
+      /(?:clone|克隆|ccw|ipcw|iptw|伪队列|伪人群|风险差|\brd\b|\brr\b|未提及.*hr|未说明.*hr|safety\s+population|安全性人群|安全性分析|分析集不一致)/i.test(
         combined,
       )
     ) {
@@ -471,9 +559,10 @@ export function isExemptedByActiveRules(
     rulesBlob.includes('historical control')
   ) {
     if (
-      /(?:单臂|single[\s-]arm|对照组|control\s+arm|历史对照|historical\s+control|组间|simon|两阶段|未手术|proceeded\s+to\s+surgery|85\.7%|32\/35|91\.4%|crude\s+proportion|kaplan-meier)/i.test(
+      /(?:单臂|single[\s-]arm|对照组|control\s+arm|历史对照|historical\s+control|组间|simon|两阶段|未手术|proceeded\s+to\s+surgery|crude\s+proportion|kaplan-meier)/i.test(
         combined,
-      )
+      ) ||
+      OWN_COHORT_COUNT_PCT_PATTERN.test(issue.sentence)
     ) {
       return true
     }
@@ -487,7 +576,7 @@ export function isExemptedByActiveRules(
     rulesBlob.includes('non-ccr')
   ) {
     if (
-      /(?:256|185|91|non[\s-]ccr|观察队列|observational\s+comparison|筛查|非随机|1:1|35\s*(?:与|vs|和)\s*36|奇数|区组|well\s+balanced|induction\s+chemoradiotherapy|判定标准|发现队列|训练队列|验证队列|212|254|148|delong|auc|连续变量|分类变量|复制粘贴|高度雷同|n\s*[=＝]?\s*未知|样本量分母链条|操作化指标)/i.test(
+      /(?:non[\s-]ccr|观察队列|observational\s+comparison|筛查|非随机|1:1|\b\d+\s*(?:与|vs\.?|和|versus)\s*\d+\b|奇数|区组|well\s+balanced|induction\s+chemoradiotherapy|判定标准|发现队列|训练队列|验证队列|discovery\s+cohort|training\s+cohort|validation\s+cohort|delong|auc|连续变量|分类变量|复制粘贴|高度雷同|n\s*[=＝]?\s*未知|样本量分母链条|操作化指标)/i.test(
         combined,
       )
     ) {
@@ -504,19 +593,24 @@ export function isExemptedByActiveRules(
     rulesBlob.includes('tma')
   ) {
     if (
-      /(?:小鼠|mice|mouse|xenograft|tma|组织芯片|动物|生长曲线|n\s*=\s*[356]\b|n\s*=\s*90\b|n\s*=\s*92\b|n\s*=\s*86\b|92\s*例|86\s*例|重复测量|双因素|析因|参照组|a549|h460|llc|构成比|临床病理)/i.test(
+      /(?:小鼠|mice|mouse|xenograft|tma|组织芯片|动物|生长曲线|\bn\s*=\s*\d+\b|\b\d+\s*例\b|重复测量|双因素|析因|参照组|构成比|临床病理)/i.test(
         combined,
-      )
+      ) ||
+      PRECLINICAL_CELL_LINE_PATTERN.test(combined)
     ) {
       return true
     }
   }
 
-  // 5. 自报队列数据免标外部文献引用豁免
+  // 5. 自报队列数据与临床自定义边界规则免标外部文献引用豁免（向后兼容无 :cat= 标签的旧规则）
   if (
     rulesBlob.includes('[narrow:review_boundary') &&
     issue.category === 'missing_citation' &&
-    (issue.section_role === 'methods' || issue.section_role === 'results' || OWN_STUDY_SENTENCE.test(issue.sentence))
+    (issue.section_role === 'methods' ||
+      issue.section_role === 'results' ||
+      OWN_STUDY_SENTENCE.test(issue.sentence) ||
+      PRECLINICAL_CELL_LINE_PATTERN.test(issue.sentence) ||
+      OWN_COHORT_COUNT_PCT_PATTERN.test(issue.sentence))
   ) {
     return true
   }
@@ -533,6 +627,7 @@ export function extractClaims(
   const claims: Claim[] = []
   const unsourced: Claim[] = []
   let currentSectionTitle = ''
+  const roleTracker = new SectionRoleTracker()
   let currentSectionRole: SectionRole = 'other'
 
   const visit = (node: PMNode, inTable: boolean) => {
@@ -546,7 +641,7 @@ export function extractClaims(
       const hText = headingText(node)
       if (hText) {
         currentSectionTitle = hText
-        currentSectionRole = classifySectionRole(hText)
+        currentSectionRole = roleTracker.onHeading(Number(node.attrs.level ?? 2), hText)
       }
     }
     if (!node.isTextblock) {
@@ -651,6 +746,7 @@ export function auditInternalConsistency(
   if (sumOfSubgroupN > 0) allTableSampleSizes.add(sumOfSubgroupN)
 
   let currentSectionTitle = ''
+  const roleTracker = new SectionRoleTracker()
   let currentSectionRole: SectionRole = 'other'
   const blocks: Array<{ nodeId: string; text: string; sectionTitle: string; sectionRole: SectionRole; sents: string[] }> = []
 
@@ -661,7 +757,7 @@ export function auditInternalConsistency(
       const hText = headingText(node)
       if (hText) {
         currentSectionTitle = hText
-        currentSectionRole = classifySectionRole(hText)
+        currentSectionRole = roleTracker.onHeading(Number(node.attrs.level ?? 2), hText)
       }
       return
     }
@@ -690,22 +786,30 @@ export function auditInternalConsistency(
     }
   }
 
-  // 收集跨章节的关键率值（如 pCR rate、OS HR）以执行跨章节一致性比对
-  const pcrMentions: Array<{
-    nodeId: string
-    sectionTitle: string
-    sectionRole: SectionRole
-    pct: number
-    fraction?: string
-    sentence: string
-  }> = []
-  const osHrMentions: Array<{
-    nodeId: string
-    sectionTitle: string
-    sectionRole: SectionRole
-    hr: number
-    sentence: string
-  }> = []
+  // 收集跨章节的关键终点率值（如 pCR / MPR / ORR rate）与生存风险比（如 OS / PFS / DFS HR）以执行跨章节一致性比对
+  const endpointRateMentions = new Map<
+    string,
+    Array<{
+      endpointLabel: string
+      nodeId: string
+      sectionTitle: string
+      sectionRole: SectionRole
+      pct: number
+      fraction?: string
+      sentence: string
+    }>
+  >()
+  const endpointHrMentions = new Map<
+    string,
+    Array<{
+      endpointLabel: string
+      nodeId: string
+      sectionTitle: string
+      sectionRole: SectionRole
+      hr: number
+      sentence: string
+    }>
+  >()
 
   for (const blk of blocks) {
     const { nodeId, text, sectionTitle, sectionRole } = blk
@@ -863,72 +967,88 @@ export function auditInternalConsistency(
       })
     }
 
-    // 收集 pCR 提及
-    const pcrMatch = /\bpCR\s+rate\s+was\s+(?:only\s+)?(\d+(?:\.\d+)?)%\s*(?:\((\d+\/\d+)\))?/i.exec(text)
-    if (pcrMatch && pcrMatch[1]) {
-      pcrMentions.push({
+    // 收集主要疗效终点率提及（如 pCR / MPR / ORR rate）
+    for (const epMatch of text.matchAll(
+      /\b(pCR|MPR|ORR|DCR)\s+rate\s+was\s+(?:only\s+)?(\d+(?:\.\d+)?)%\s*(?:\((\d+\/\d+)\))?/gi,
+    )) {
+      const epRaw = epMatch[1]!
+      const epKey = epRaw.toLowerCase() === 'pcr' ? 'pCR' : epRaw.toUpperCase()
+      const list = endpointRateMentions.get(epKey) ?? []
+      list.push({
+        endpointLabel: epKey,
         nodeId,
         sectionTitle,
         sectionRole,
-        pct: Number(pcrMatch[1]),
-        ...(pcrMatch[2] ? { fraction: pcrMatch[2] } : {}),
+        pct: Number(epMatch[2]),
+        ...(epMatch[3] ? { fraction: epMatch[3] } : {}),
         sentence: text,
       })
+      endpointRateMentions.set(epKey, list)
     }
 
-    // 收集 3-year OS HR 提及
-    if (/3-year\s+OS/i.test(text)) {
+    // 收集跨章节同一生存时间点终点 HR 提及（如 3-year OS HR）
+    const survEpMatch = /\b(\d+-year\s+(?:OS|PFS|DFS|EFS|RFS))\b/i.exec(text)
+    if (survEpMatch && survEpMatch[1]) {
       const hrM = /\bHR\s*=\s*(?:\d+\.\d+\s+)?(\d+\.\d+)/i.exec(text)
       if (hrM && hrM[1]) {
-        osHrMentions.push({
+        const epLabel = survEpMatch[1].replace(/\s+/g, ' ')
+        const epKey = epLabel.toLowerCase()
+        const list = endpointHrMentions.get(epKey) ?? []
+        list.push({
+          endpointLabel: epLabel,
           nodeId,
           sectionTitle,
           sectionRole,
           hr: Number(hrM[1]),
           sentence: text,
         })
+        endpointHrMentions.set(epKey, list)
       }
     }
   }
 
-  // 6. 跨章节 pCR 分母切换或数值冲突核查（如摘要/结果 37% [11/30] vs 讨论 31% [11/35] 未注明分母）
-  if (pcrMentions.length >= 2) {
-    const first = pcrMentions[0]!
-    for (const other of pcrMentions.slice(1)) {
-      if (Math.abs(first.pct - other.pct) >= 2 && !other.fraction) {
-        pushIfNotExempt({
-          node_id: other.nodeId,
-          sentence: other.sentence,
-          snippet: other.sentence.slice(0, 60),
-          ...(other.sectionTitle ? { section_title: other.sectionTitle } : {}),
-          section_role: other.sectionRole,
-          category: 'internal_inconsistency',
-          subtype: 'cross_section_endpoint_denominator_switch',
-          severity: 'major',
-          reason: `跨章节主要终点 pCR 率数值不一致：前文（${first.sectionTitle || '摘要/结果'}）报告为 ${first.pct}%${first.fraction ? ` (${first.fraction})` : ''}，而此处（${other.sectionTitle || '讨论'}）报告为 ${other.pct}% 且未注明分析人群分母切换（手术切除人群 vs. ITT 全入组人群）。`,
-          suggestion: `建议在报告 ${other.pct}% 处明确标注对应分母（如 11/35 in the ITT population vs. 11/30 in the surgical cohort），避免读者误判为前后数据矛盾。`,
-        })
+  // 6. 跨章节主要终点分母切换或数值冲突核查（如摘要/结果按手术切除人群分母 vs 讨论按全入组 ITT 分母未注明切换）
+  for (const [, mentions] of endpointRateMentions) {
+    if (mentions.length >= 2) {
+      const first = mentions[0]!
+      for (const other of mentions.slice(1)) {
+        if (Math.abs(first.pct - other.pct) >= 2 && !other.fraction) {
+          pushIfNotExempt({
+            node_id: other.nodeId,
+            sentence: other.sentence,
+            snippet: other.sentence.slice(0, 60),
+            ...(other.sectionTitle ? { section_title: other.sectionTitle } : {}),
+            section_role: other.sectionRole,
+            category: 'internal_inconsistency',
+            subtype: 'cross_section_endpoint_denominator_switch',
+            severity: 'major',
+            reason: `跨章节主要终点 ${first.endpointLabel} 率数值不一致：前文（${first.sectionTitle || '摘要/结果'}）报告为 ${first.pct}%${first.fraction ? ` (${first.fraction})` : ''}，而此处（${other.sectionTitle || '讨论'}）报告为 ${other.pct}% 且未注明分析人群分母切换（手术切除人群 vs. ITT 全入组人群）。`,
+            suggestion: `建议在报告 ${other.pct}% 处明确标注对应分母（如 ITT 全入组人群 vs. 手术切除亚组），避免读者误判为前后数据矛盾。`,
+          })
+        }
       }
     }
   }
 
-  // 7. 跨章节同一终点 HR 不一致核查（如摘要 HR=0.824 vs 结果/图 HR=0.841）
-  if (osHrMentions.length >= 2) {
-    const firstHr = osHrMentions[0]!
-    for (const otherHr of osHrMentions.slice(1)) {
-      if (Math.abs(firstHr.hr - otherHr.hr) >= 0.005) {
-        pushIfNotExempt({
-          node_id: otherHr.nodeId,
-          sentence: otherHr.sentence,
-          snippet: otherHr.sentence.slice(0, 60),
-          ...(otherHr.sectionTitle ? { section_title: otherHr.sectionTitle } : {}),
-          section_role: otherHr.sectionRole,
-          category: 'internal_inconsistency',
-          subtype: 'cross_section_hr_mismatch',
-          severity: 'major',
-          reason: `跨章节 3-year OS 风险比（HR）不一致：${firstHr.sectionTitle || '前文'}报告 HR = ${firstHr.hr}，而${otherHr.sectionTitle || '此处'}报告 HR = ${otherHr.hr}。`,
-          suggestion: '请核对 Cox 回归模型输出与生存曲线图注，统一摘要与正文中的 HR 数值。',
-        })
+  // 7. 跨章节同一终点 HR 不一致核查
+  for (const [, hrMentions] of endpointHrMentions) {
+    if (hrMentions.length >= 2) {
+      const firstHr = hrMentions[0]!
+      for (const otherHr of hrMentions.slice(1)) {
+        if (Math.abs(firstHr.hr - otherHr.hr) >= 0.005) {
+          pushIfNotExempt({
+            node_id: otherHr.nodeId,
+            sentence: otherHr.sentence,
+            snippet: otherHr.sentence.slice(0, 60),
+            ...(otherHr.sectionTitle ? { section_title: otherHr.sectionTitle } : {}),
+            section_role: otherHr.sectionRole,
+            category: 'internal_inconsistency',
+            subtype: 'cross_section_hr_mismatch',
+            severity: 'major',
+            reason: `跨章节 ${firstHr.endpointLabel} 风险比（HR）不一致：${firstHr.sectionTitle || '前文'}报告 HR = ${firstHr.hr}，而${otherHr.sectionTitle || '此处'}报告 HR = ${otherHr.hr}。`,
+            suggestion: '请核对 Cox 回归模型输出与生存曲线图注，统一摘要与正文中的 HR 数值。',
+          })
+        }
       }
     }
   }
@@ -1012,7 +1132,7 @@ export function auditInternalConsistency(
         }
 
         // 检测 `00 (0.0%)` 双零排版笔误
-        if (/^00\s*\(/.test(cell)) {
+        if (/\b00+\s*\(\s*0(?:\.0+)?%\s*\)|^00+\s*\(/.test(cell)) {
           pushIfNotExempt({
             node_id: tbl.node_id,
             sentence: `${rowLabel}: ${colHeader} = ${cell}`,
@@ -1024,7 +1144,7 @@ export function auditInternalConsistency(
             subtype: 'table_cell_formatting_typo',
             severity: 'minor',
             reason: `表格（${tbl.caption || tbl.node_id}）行「${rowLabel}」列「${colHeader}」存在多余前导零排版笔误：「${cell}」。`,
-            suggestion: `请将单元格「${cell}」修正为「${cell.replace(/^00/, '0')}」。`,
+            suggestion: `请将单元格「${cell}」修正为「${cell.replace(/^00+/, '0')}」。`,
           })
         }
 
@@ -1080,6 +1200,7 @@ export function auditMethodResultConsistency(
 ): DeepReviewAuditIssue[] {
   const issues: DeepReviewAuditIssue[] = []
   let currentSectionTitle = ''
+  const roleTracker = new SectionRoleTracker()
   let currentSectionRole: SectionRole = 'other'
   const methodTexts: string[] = []
   const resultBlocks: Array<{ nodeId: string; text: string; sectionTitle: string; sectionRole: SectionRole }> = []
@@ -1092,7 +1213,7 @@ export function auditMethodResultConsistency(
       const hText = headingText(node)
       if (hText) {
         currentSectionTitle = hText
-        currentSectionRole = classifySectionRole(hText)
+        currentSectionRole = roleTracker.onHeading(Number(node.attrs.level ?? 2), hText)
       }
       return
     }
@@ -1212,22 +1333,54 @@ export function auditMethodResultConsistency(
     }
   }
 
-  // 5. 全文核心缩写定义冲突检查（如全文为放疗 Radiotherapy，但 Abbreviations 将 RT 定义为 Room temperature）
-  const usesRadiotherapyRt = /\b(?:radiotherapy|radiation\s+therapy|irradiation)\s*\(\s*RT\s*\)|\b\d+\s*Gy\b/i.test(fullDocText)
+  // 5. 全文核心缩写定义冲突检查（正文用法/括号展开与缩略语表/表注 `\b([A-Z]{2,6})\s*:\s*([^;,.\n)]+)` 定义矛盾）
+  const establishedAcronyms = new Map<string, string>()
+  if (/\b(?:radiotherapy|radiation\s+therapy|irradiation)\b/i.test(fullDocText) && /\b(?:RT|\d+\s*Gy)\b/i.test(fullDocText)) {
+    establishedAcronyms.set('RT', 'Radiotherapy')
+  }
+  for (const m of fullDocText.matchAll(/\b([A-Za-z][A-Za-z\s-]{4,45}?)\s*\(\s*([A-Z]{2,6})\s*\)/g)) {
+    const rawExp = m[1]!.trim()
+    const abbr = m[2]!.trim()
+    const words = rawExp.split(/\s+/).slice(-Math.min(abbr.length + 1, 5))
+    const candidateExp = words.join(' ').trim()
+    if (
+      candidateExp.length >= 5 &&
+      !/\b(?:table|figure|group|cohort|study|trial|model|method|analysis|test)\b/i.test(candidateExp) &&
+      candidateExp[0]!.toUpperCase() === abbr[0]
+    ) {
+      if (!establishedAcronyms.has(abbr)) {
+        establishedAcronyms.set(abbr, candidateExp)
+      }
+    }
+  }
+
   for (const blk of allBlocks) {
-    if (usesRadiotherapyRt && /\bRT\s*[:：]\s*Room\s+temperature\b/i.test(blk.text)) {
-      pushIfNotExempt({
-        node_id: blk.nodeId,
-        sentence: blk.text,
-        snippet: 'RT: Room temperature',
-        ...(blk.sectionTitle ? { section_title: blk.sectionTitle } : {}),
-        section_role: blk.sectionRole,
-        category: 'method_result_mismatch',
-        subtype: 'abbreviation_definition_conflict',
-        severity: 'minor',
-        reason: '缩略语表（Abbreviations）将全文核心术语「RT」定义为「Room temperature（室温）」，但正文中「RT」实际指代「Radiotherapy（放射治疗）」。',
-        suggestion: '请将 Abbreviations 中的「RT: Room temperature」修正为「RT: Radiotherapy」。',
-      })
+    const isAbbrContext = /abbreviations?|缩略语|缩写|note|脚注|表注/i.test(`${blk.sectionTitle} ${blk.text}`)
+    if (!isAbbrContext) continue
+    for (const m of blk.text.matchAll(/\b([A-Z]{2,6})\s*[:：]\s*([^;,.\n)]+)/g)) {
+      const abbr = m[1]!.trim()
+      const definedExp = m[2]!.trim()
+      if (!definedExp || /^\d/.test(definedExp)) continue
+      const proseExp = establishedAcronyms.get(abbr)
+      if (!proseExp) continue
+      const proseStems = (proseExp.toLowerCase().match(/[a-z]{4,}/g) ?? []).map(w => w.slice(0, 4))
+      const defLower = definedExp.toLowerCase()
+      const hasOverlap = proseStems.length === 0 || proseStems.some(st => defLower.includes(st))
+      if (!hasOverlap) {
+        const snippet = `${abbr}: ${definedExp}`
+        pushIfNotExempt({
+          node_id: blk.nodeId,
+          sentence: blk.text,
+          snippet,
+          ...(blk.sectionTitle ? { section_title: blk.sectionTitle } : {}),
+          section_role: blk.sectionRole,
+          category: 'method_result_mismatch',
+          subtype: 'abbreviation_definition_conflict',
+          severity: 'minor',
+          reason: `缩略语表（Abbreviations）将全文核心术语「${abbr}」定义为「${definedExp}」，但正文中「${abbr}」实际指代「${proseExp}」。`,
+          suggestion: `请将 Abbreviations 中的「${snippet}」修正为「${abbr}: ${proseExp}」。`,
+        })
+      }
     }
   }
 
@@ -1242,6 +1395,7 @@ export function auditMethodResultConsistency(
 export function auditSpinAndGuidelines(doc: PMNode, activeRules: string[] = []): DeepReviewAuditIssue[] {
   const issues: DeepReviewAuditIssue[] = []
   let currentSectionTitle = ''
+  const roleTracker = new SectionRoleTracker()
   let currentSectionRole: SectionRole = 'other'
   let fullDocText = ''
   const blocks: Array<{ nodeId: string; text: string; sectionTitle: string; sectionRole: SectionRole; sents: string[] }> = []
@@ -1253,7 +1407,7 @@ export function auditSpinAndGuidelines(doc: PMNode, activeRules: string[] = []):
       const hText = headingText(node)
       if (hText) {
         currentSectionTitle = hText
-        currentSectionRole = classifySectionRole(hText)
+        currentSectionRole = roleTracker.onHeading(Number(node.attrs.level ?? 2), hText)
       }
       return
     }

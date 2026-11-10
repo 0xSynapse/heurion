@@ -53,7 +53,13 @@ export interface StatisticalBundle {
 }
 
 export type IssueSeverity = 'critical' | 'major' | 'minor'
-export type IssueCategory = 'literature_mismatch' | 'internal_inconsistency' | 'missing_citation' | 'phi_leak'
+export type IssueCategory =
+  | 'literature_mismatch'
+  | 'internal_inconsistency'
+  | 'method_result_mismatch'
+  | 'spin_or_guideline'
+  | 'missing_citation'
+  | 'phi_leak'
 
 export interface ClaimCheckIssue {
   claim_id?: string

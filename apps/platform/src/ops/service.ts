@@ -1,3 +1,6 @@
+/**
+ * 文档与幻灯片原子编辑服务（含写时结构守卫、原有引用保护、平台引用保留守卫与中英文句级引文支撑守卫）。
+ */
 import { isOrgThemeKey, orgLogo, themeAllowed } from '../model/org-templates.ts'
 import type { Node as PMNode } from 'prosemirror-model'
 import { attachComment, locate, threadMarks } from '../model/anchors.ts'
@@ -510,8 +513,7 @@ export class OpService {
       if (oldCites.size === 0) return
       const newCites = citesOf(aNode)
       const lost = [...oldCites].filter(id => !newCites.has(id))
-      const added = [...newCites].filter(id => !oldCites.has(id))
-      if (lost.length > 0 && added.length === 0) {
+      if (lost.length > 0 && newCites.size < oldCites.size) {
         throw new OpError('existing_citation', `块 ${op.id} 中已有的平台引用标记 ${lost.map(c => `[@c:${c}]`).join('、')} 在修改后丢失`, {
           op_index: i,
           hint: '改写或精简段落时必须原样保留块内已有的 [@c:...] 引用标记（切勿写成纯文本 [1] 或直接删掉），否则会导致文末对应的参考文献条目被自动移除。',
@@ -527,11 +529,19 @@ export class OpService {
    *    以及句中核心主张词干与文献摘要不匹配的情况（citation_unsupported）。
    */
   private guardCitationSupport(batch: EditBatch, before: PMNode, after: PMNode): void {
-    const splitSentences = (t: string) => t.split(/(?<=[.。!?！？])\s+(?=[A-Z(\[［\u4e00-\u9fff])/).map(s => s.trim()).filter(Boolean)
+    const splitSentences = (t: string) => t.split(/(?<=[.。!?！？])\s*(?=[A-Z(\[［\u4e00-\u9fff])/).map(s => s.trim()).filter(Boolean)
+    const countTokens = (t: string) => (t.match(/[a-zA-Z0-9]+|[\u4e00-\u9fa5]/g) ?? []).length
     const CLAIM_STOP = new Set([
       'this', 'that', 'with', 'from', 'were', 'have', 'been', 'which', 'their', 'these', 'those', 'into', 'more', 'than', 'also', 'such', 'both', 'between', 'among', 'after', 'before', 'during', 'under', 'over', 'through', 'where', 'when', 'while', 'study', 'studies', 'methodological', 'contribution', 'lies', 'having', 'organized', 'explicit', 'process', 'links', 'context', 'understanding', 'analysis', 'design', 'prospective', 'retrospective', 'reported', 'here', 'cohort', 'patients', 'group', 'groups', 'results', 'data', 'used', 'using', 'based', 'showed', 'shown', 'found', 'associated', 'compared', 'similar', 'consistent', 'prior', 'demonstrating', 'demonstrated',
     ])
-    const SELF_REF = /\b(this study|the study's|the present study|our study|our cohort|in this (?:retrospective |prospective |multicenter |single-center )?(?:cohort|study|analysis|trial)|reported here)\b/i
+    const CJK_STOP_BIGRAMS = new Set([
+      '研究', '表明', '显示', '患者', '结果', '分析', '显著', '可以', '进行', '具有',
+      '通过', '发现', '治疗', '方法', '对比', '高于', '低于', '或者', '以及', '因为',
+      '所以', '如果', '这个', '我们', '其中', '本研', '究纳', '纳入', '观察', '证实',
+      '提示', '报道', '既往', '临床', '试验', '队列', '分组', '对照', '相比', '差异',
+    ])
+    const ASCII_TRIVIAL = new Set(['vs', 'et', 'al', 'ci', 'fig', 'tab', 'no', 'in', 'of', 'to', 'or', 'by', 'on', 'at', 'as', 'is', 'be', 'an', 'we', 'hr', 'rr', 'sd', 'se', 'iqr'])
+    const SELF_REF = /(?:\b(?:this study|the study's|the present study|present study|current study|our study|our cohort|in our|we found|we observed|in this (?:retrospective |prospective |multicenter |single-center )?(?:cohort|study|analysis|trial)|reported here)\b|本研究|本队列|本组|我院|我们发现|我们观察到|本文)/i
     const beforeIdx = indexById(before)
     const citesById = new Map(this.docs.store.listCitations(batch.doc_id).map(c => [c.id, c]))
     const citesIn = (node: PMNode): Set<string> => {
@@ -577,16 +587,19 @@ export class OpService {
           const abs = cite ? this.docs.store.getAbstract(cite.doi)?.abstract : null
           if (!abs) continue
 
-          if (SELF_REF.test(cleanS) && bNode) {
-            const bMatch = bSents.find(bs => SELF_REF.test(bs) && cleanS.slice(0, 24).toLowerCase() === bs.slice(0, 24).toLowerCase())
-              ?? bSents.find(bs => SELF_REF.test(bs))
-            if (bMatch) {
-              const bWords = bMatch.match(/[A-Za-z]{2,}|[\u4e00-\u9fff]/g) ?? []
-              if (words.length - bWords.length < 5) {
-                throw new OpError('citation_unsupported', `句子陈述的是本研究自身的方法或本队列结果，不能直接将 [@c:${citeId}] 裸挂在原句末尾`, {
-                  hint: '外部文献不能直接证明本研究自身的方法或队列数值。请完整保留原句文字，将原句末尾句号改为「, consistent with prior studies demonstrating <文献摘要的具体结论> [@c:id].」，使每条引用支撑其对应的对比分句。',
-                })
-              }
+          if (SELF_REF.test(cleanS)) {
+            const bMatch = bNode
+              ? (bSents.find(bs => SELF_REF.test(bs) && cleanS.slice(0, 12).toLowerCase() === bs.slice(0, 12).toLowerCase())
+                ?? bSents.find(bs => SELF_REF.test(bs)))
+              : undefined
+            const isBareNewChineseSelfRef =
+              !bMatch &&
+              /^(?:本研究|本队列|本组|我院|我们发现|我们观察到|本文)/.test(cleanS) &&
+              !/既往|先前|文献|报道|一致|相符|类似|相比|高于|低于|优于|参照|按照|依据|采用|标准|consistent with|prior stud|previous stud|similar to|in line with/i.test(cleanS)
+            if ((bMatch && countTokens(cleanS) - countTokens(bMatch) < 5) || isBareNewChineseSelfRef) {
+              throw new OpError('citation_unsupported', `句子陈述的是本研究自身的方法或本队列结果，不能直接将 [@c:${citeId}] 裸挂在原句末尾`, {
+                hint: '外部文献不能直接证明本研究自身的方法或队列数值。请完整保留原句文字，将原句末尾句号改为「, consistent with prior studies demonstrating <文献摘要的具体结论> [@c:id].」，使每条引用支撑其对应的对比分句。',
+              })
             }
           }
 
@@ -597,14 +610,41 @@ export class OpService {
             const addedSigWords = allSigWords.filter(w => !bWordSet.has(w))
             if (addedSigWords.length >= 4) sigWords = addedSigWords
           }
+          const absLower = `${cite!.formatted} ${abs}`.toLowerCase()
           if (sigWords.length >= 2) {
-            const hay = `${cite!.formatted} ${abs}`.toLowerCase()
-            const hitCount = sigWords.filter(w => hay.includes(w.slice(0, 5))).length
+            const hitCount = sigWords.filter(w => absLower.includes(w.slice(0, 5))).length
             const minHits = sigWords.length >= 5 ? 2 : 1
             if (hitCount < minHits) {
               throw new OpError('citation_unsupported', `引用 [@c:${citeId}] 的摘要与所在句子的核心主张不匹配（仅重合 ${hitCount}/${sigWords.length} 个核心词干）`, {
                 hint: '请根据该文献摘要的实际研究结果改写支撑分句，或换一篇摘要直接包含该句核心概念（如具体毒性、结局或方法学）的文献。',
               })
+            }
+          } else if (/[\u4e00-\u9fa5]/.test(cleanS)) {
+            const cjkBigrams: string[] = []
+            for (const run of cleanS.match(/[\u4e00-\u9fa5]{2,}/g) ?? []) {
+              for (let k = 0; k + 2 <= run.length; k++) {
+                const bg = run.slice(k, k + 2)
+                if (!CJK_STOP_BIGRAMS.has(bg)) cjkBigrams.push(bg)
+              }
+            }
+            const asciiTokens = (cleanS.match(/[a-zA-Z][a-zA-Z0-9-]{1,}/g) ?? [])
+              .map(w => w.toLowerCase())
+              .filter(w => !CLAIM_STOP.has(w) && !ASCII_TRIVIAL.has(w))
+            const numTokens = (cleanS.match(/\b\d+(?:\.\d+)?\b/g) ?? []).filter(n => !/^(?:19|20)\d{2}$/.test(n))
+            if (/[\u4e00-\u9fa5]/.test(absLower)) {
+              const anchors = [...new Set([...cjkBigrams, ...asciiTokens, ...numTokens])]
+              if (anchors.length >= 2 && !anchors.some(a => absLower.includes(a))) {
+                throw new OpError('citation_unsupported', `引用 [@c:${citeId}] 的摘要与所在中文句子的核心主张不匹配`, {
+                  hint: '请根据该文献摘要的实际研究结果改写支撑分句，或换一篇摘要直接包含该句核心概念的文献。',
+                })
+              }
+            } else {
+              const crossLangAnchors = [...new Set([...asciiTokens, ...numTokens])]
+              if (crossLangAnchors.length >= 2 && !crossLangAnchors.some(a => absLower.includes(a))) {
+                throw new OpError('citation_unsupported', `引用 [@c:${citeId}] 的摘要与所在中文句子的核心生物医学术语或数值不匹配`, {
+                  hint: '请根据该文献摘要的实际研究结果改写支撑分句，或换一篇摘要直接包含该句核心概念（如具体靶点、指标或数值）的文献。',
+                })
+              }
             }
           }
         }
