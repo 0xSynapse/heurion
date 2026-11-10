@@ -2184,38 +2184,39 @@ function requestBoundaryPermission(agent_id, user_id, perm_type, scope, rational
     category: 'aegis-os',
     category_label_zh: 'AEGIS OS · 内核强制边界',
     category_label_en: 'AEGIS OS · ENFORCED RUNTIME',
-    date: '2026-11-05',
-    reading_time_zh: '18 分钟深读',
-    reading_time_en: '18 min read',
+    date: '2026-11-09',
+    reading_time_zh: '22 分钟深读',
+    reading_time_en: '22 min read',
     title_zh: '为什么 Agent 插件不是安全边界：从 Advisory Hook 到内核级 Enforced Runtime 的架构演进',
     title_en: 'Why Agent Plugins Are Not a Security Boundary: From Advisory Hooks to a Kernel-Enforced Agent Runtime',
-    subtitle_zh: '当 Agent 与它的监督器运行在同一个宿主权限域时，任何 Hook 与提示词都只是“礼貌的建议”。本文详解 Aegis OS 如何通过父进程内核启动器（aegis-os run）、单文件只读配置挂载、只读 .git 穿透与两层网络网关，将安全边界下沉至操作系统内核。',
-    subtitle_en: 'When an autonomous agent shares a privilege domain with its supervisor, hooks and system prompts are merely polite suggestions. This monograph details how Aegis OS lowers the enforcement boundary into the OS kernel via parent-process sandboxing, read-only .git pass-through, granular state-dir mounts, and a two-tier network gateway.',
-    summary_zh: '当前主流 AI 编程与通用智能体（Claude Code、Codex、OpenCode、AGY、Hermes）大多依赖客户端插件、PreToolUse Hook、MCP 路由与系统提示词来约束工具调用。然而在对抗性提示词注入或配置漂移下，这种“插件内嵌式治理”存在根本性架构缺陷：未覆盖的原生工具、守护进程绕过、配置文件篡改以及在宿主机直接执行子进程。本文系统阐述 Aegis OS 的三档强制模型（Advisory / Enforced / Isolated）：通过 aegis-os run 父进程内核启动器反转控制权，结合 --ro-bind / / 发行版兼容遮蔽、GIT_INDEX_FILE 只读 .git 穿透、Agent 状态目录单文件只读锁、CONNECT + Base URL 两层网络网关，以及跨代码、文档、数据与在线应用的通用事务提交流水线。',
-    summary_en: 'Most contemporary AI coding and general-purpose agents (Claude Code, Codex, OpenCode, AGY, Hermes) rely on client plugins, PreToolUse hooks, MCP routing, and system prompts to govern tool execution. Under prompt injection or configuration drift, plugin-level governance fails as a security boundary due to uncovered native tools, shared daemon bypasses, self-modifying settings files, and direct host subprocess spawning. This monograph presents the Aegis OS Three-Tier Enforcement Architecture (Advisory / Enforced / Isolated): inverting control via the aegis-os run parent launcher, read-only .git index separation, single-file read-only config locking, a two-tier L4/L7 network gateway, and a generalized transactional commit pipeline across code, documents, datasets, and live applications.',
+    subtitle_zh: '当 Agent 与它的监督器运行在同一个宿主权限域时，任何 Hook 与提示词都只是“礼貌的建议”。本文详解 Aegis OS 如何通过父进程内核启动器（aegis-os run）、单文件只读配置挂载、只读 .git 穿透与两层网络网关将安全边界下沉至操作系统内核，并在 macOS + Linux 双平台（0/30 零绕过）及 4 款真实 CLI Agent 共 60 次云端 API 运行中完成实证检验。',
+    subtitle_en: 'When an autonomous agent shares a privilege domain with its supervisor, hooks and system prompts are merely polite suggestions. This monograph details how Aegis OS lowers the enforcement boundary into the OS kernel via parent-process sandboxing, read-only .git pass-through, granular state-dir mounts, and a two-tier network gateway—verified with 0/30 bypasses on macOS & Linux and 0% repo-trap compromise across 60 live cloud-API CLI agent runs.',
+    summary_zh: '当前主流 AI 编程与通用智能体（Claude Code、Codex、OpenCode、AGY、Hermes）大多依赖客户端插件、PreToolUse Hook、MCP 路由与系统提示词来约束工具调用。然而在对抗性提示词注入或配置漂移下，这种“插件内嵌式治理”存在六大结构性绕过面（V1–V6），实测绕过率达 100%（30/30）。本文系统阐述并实证评测 Aegis OS 的内核强制运行时（aegis-os run）：在 macOS Seatbelt 与 Linux bwrap --bind-fd 双平台实现 0/30（0.0%）绕过率；在覆盖 Claude Code、OpenCode、AGY 与 Hermes 的 60 次真实云端 API 运行中保持 100% 良性任务通过率并将恶意仓库陷阱的宿主失陷率从 100% 降至 0%；同时实现 9.91ms Linux 沙箱启动（较容器快 22.4 倍）、500MB Git 仓库 99.05% 磁盘节省与 +0.221ms L7 代理首包延迟。',
+    summary_en: 'Most contemporary AI coding and general-purpose agents (Claude Code, Codex, OpenCode, AGY, Hermes) rely on client plugins, PreToolUse hooks, MCP routing, and system prompts to govern tool execution. Under prompt injection or configuration drift, plugin-only governance suffers a 100% (30/30) bypass rate across six structural vectors (V1-V6). This monograph presents the architecture and cross-platform evaluation of Aegis OS Enforced Runtime (aegis-os run): achieving 0/30 (0.0%) bypass on both macOS Seatbelt and Linux bwrap --bind-fd, reducing malicious repository-trap host compromise from 100% to 0% with 100% benign utility across 60 live cloud-API runs of Claude Code, OpenCode, AGY, and Hermes, and delivering 9.91ms Linux startup (22.4x faster than containers), 99.05% APFS disk savings on 500MB Git repos, and +0.221ms L7 gateway TTFT overhead.',
     og_title_zh: '为什么 Agent 插件不是安全边界？从 Advisory Hook 到 Enforced Runtime',
     og_title_en: 'Why Agent Plugins Are Not a Security Boundary: The Enforced Runtime Architecture',
-    og_description_zh: '剖析 PreToolUse Hook 与 MCP 插件的 6 类绕过面，详解 aegis-os run 父进程内核沙箱、只读 .git 穿透与两层网络网关。',
-    og_description_en: 'Dissecting 6 bypass vectors of plugin-based agent governance and how aegis-os run enforces kernel-level isolation, .git index separation, and L4/L7 egress control.',
+    og_description_zh: '双平台 V1–V6 0/30 零绕过、60 次真实 CLI Agent 陷阱失陷率 100%→0%、9.91ms 启动：详解 aegis-os run 父进程内核沙箱架构与实测数据。',
+    og_description_en: '0/30 V1-V6 bypass on macOS & Linux, 0% repo-trap compromise across 60 live CLI agent runs, and 9.91ms startup: architecture and benchmarks of aegis-os run.',
     og_image_zh: 'https://heurion.org/site/og-blog-aegis-zh.png',
     og_image_en: 'https://heurion.org/site/og-blog-aegis-en.png',
-    keywords_zh: 'Aegis OS, Enforced Runtime, Agent 安全边界, Bubblewrap, Landlock, Seatbelt, PreToolUse Hook, Claude Code, OpenCode, Codex, CoW 影子工作区, Cedar 策略引擎',
-    keywords_en: 'Aegis OS, Enforced Runtime, Agent Security Boundary, Bubblewrap, Landlock, Seatbelt, PreToolUse Hook, Claude Code, OpenCode, Codex, CoW Shadow Workspace, Cedar Policy Engine',
-    tags_zh: ['Enforced Runtime', '父进程沙箱 bwrap/Seatbelt', '只读 .git 穿透', 'L4/L7 出站网关', '三档强制边界'],
-    tags_en: ['Enforced Runtime', 'Parent-Process Sandbox', 'Read-Only .git View', 'L4/L7 Egress Gateway', '3-Tier Enforcement'],
+    keywords_zh: 'Aegis OS, Enforced Runtime, Agent 安全边界, Bubblewrap, Landlock, Seatbelt, PreToolUse Hook, Claude Code, OpenCode, Hermes, AGY, Codex, CoW 影子工作区, Cedar 策略引擎',
+    keywords_en: 'Aegis OS, Enforced Runtime, Agent Security Boundary, Bubblewrap, Landlock, Seatbelt, PreToolUse Hook, Claude Code, OpenCode, Hermes, AGY, Codex, CoW Shadow Workspace, Cedar Policy Engine',
+    tags_zh: ['Enforced Runtime', '双平台 0/30 零绕过', '60 次真实 Agent 实测', '9.91ms 内核沙箱启动', 'L4/L7 出站网关'],
+    tags_en: ['Enforced Runtime', '0/30 Dual-OS Bypass', '60 Live Agent Runs', '9.91ms Kernel Sandbox', 'L4/L7 Egress Gateway'],
     stats: [
-      { val: '3 Tiers', lbl_zh: 'Advisory / Enforced / Isolated', lbl_en: 'Explicit Enforcement Levels' },
-      { val: '0 Host Touch', lbl_zh: '影子内编译与 git status 零宿主污染', lbl_en: 'Zero Host Mutation Pre-Commit' },
-      { val: 'L4 + L7', lbl_zh: 'CONNECT 流式白名单 + 反向代理 DLP', lbl_en: 'Dual-Mode Network Gateway' },
+      { val: '0/30 (0.0%)', lbl_zh: 'macOS & Linux V1–V6 绕过率', lbl_en: 'V1-V6 Bypass on macOS & Linux' },
+      { val: '100% → 0%', lbl_zh: '60 次真实 CLI Agent 陷阱失陷率', lbl_en: 'Live CLI Agent Trap Compromise' },
+      { val: '9.91ms / 22.4×', lbl_zh: 'Linux bwrap 启动（对比容器）', lbl_en: 'Linux Startup vs. Containers' },
     ],
     repo_url: 'https://github.com/heurion-org/aegis-os',
-    paper_url: 'https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_ENFORCED_RUNTIME_DESIGN.md',
+    paper_url: 'https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf',
     toc: [
       { id: 'sec-advisory-illusion', zh: '01. 诚实的威胁建模：为什么 Agent 插件与 Hook 只是“建议”而非安全边界？', en: '01. Honest Threat Modeling: Why Agent Plugins & Hooks Are Advisory, Not Enforced' },
       { id: 'sec-three-tier-boundary', zh: '02. 三档强制边界（Advisory / Enforced / Isolated）：把生产力协作与强制隔离解耦', en: '02. Three-Tier Enforcement (Advisory / Enforced / Isolated): Decoupling Ergonomics from Security' },
       { id: 'sec-parent-launcher', zh: '03. 控制权反转：aegis-os run 父进程启动器、只读 .git 穿透与状态目录分层挂载', en: '03. Inverting Control: The aegis-os run Parent Launcher, Read-Only .git View & State-Dir Layering' },
       { id: 'sec-effect-policy', zh: '04. Effect 驱动策略与两层出站网关：区分 CONNECT 隧道与 Base URL 反向代理', en: '04. Effect-Driven Policy & Dual-Mode Egress: Separating CONNECT Tunnels from L7 Reverse Proxies' },
       { id: 'sec-domain-pipeline', zh: '05. 跨领域通用事务流水线与无破坏 TUI 审批（DECSTBM / OSC / 离线租约）', en: '05. Generalized Domain Commit Pipelines & Non-Destructive TUI Approvals' },
+      { id: 'sec-empirical-evaluation', zh: '06. 跨平台对抗消融与 60 次真实云端 API CLI Agent 实证评测', en: '06. Cross-Platform Adversarial Ablation & 60-Run Live CLI Agent Evaluation' },
     ],
     body_zh: `
       <h2 id="sec-advisory-illusion">01. 诚实的威胁建模：为什么 Agent 插件与 Hook 只是“建议”而非安全边界？</h2>
@@ -2427,6 +2428,148 @@ git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --no-ext-diff</co
         <div class="blog-callout-title">工程细节决定成败：为什么审批绝不能直接往活跃 TUI 的 stderr 写文本？</div>
         <p>当 Claude Code、OpenCode 或 Codex 正在全屏 Alternate Screen / Raw Mode 下渲染高帧率 TUI 时，如果父进程沙箱直接往同一个 PTY 的 <code>stderr</code> 打印审批提示或争抢 <code>[a]pprove / [d]eny</code> 键盘输入，会瞬间导致终端花屏与输入死锁。因此，Aegis OS 在检测到全屏 TUI 活跃时，<strong>严禁向主屏幕直接写入审批字符</strong>，而是通过桌面通知、终端 <code>OSC 0</code> 标题栏闪烁提示（<code>⏳ Aegis: 1 approval pending</code>）、另一终端的 <code>aegis-os approve</code> CLI 或带 SHA-256 Diff 锁定的本地 Web 审批台完成场外确认；在纯 SSH 场景下则可选使用 <code>DECSTBM</code> 划定顶部 1 行独立状态栏。只有尊重每一个系统工程细节，内核级安全边界才能真正成为开发者每天愿意默认开启的基础设施。</p>
       </div>
+
+      <h2 id="sec-empirical-evaluation">06. 跨平台对抗消融与 60 次真实云端 API CLI Agent 实证评测</h2>
+      <p>为了严格检验上述架构是否真正消除了插件式治理的绕过面且未破坏真实开发体验，我们在 <strong>macOS 26.3（Apple Silicon <code>aarch64</code>，Seatbelt <code>sandbox-exec</code>）</strong>与 <strong>Ubuntu 24.04 LTS（<code>aarch64</code>，Linux 6.8，<code>bubblewrap 0.11.0 --bind-fd</code>）</strong>双平台上完成了配套学术预印本（<a href="https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf" target="_blank" rel="noopener">Paper 2 PDF</a>）的全套可复现基准测试。</p>
+
+      <h3>6.1 确定性 <code>V1–V6</code> 对抗矩阵与五组逐层消融</h3>
+      <p>我们针对第 01 节归纳的六大结构性绕过面（每类 5 个真实载荷，共 30 项确定性攻击：涵盖 <code>V1</code> 未覆盖工具直写宿主与读取 <code>~/.ssh/id_ed25519</code>、<code>V2</code> 无 Hook 客户端原生绕过、<code>V3</code> 后台守护进程 <code>--attach</code> 逃逸、<code>V4</code> 篡改 <code>~/.claude/settings.json</code> / <code>hooks.json</code>、<code>V5</code> 恶意 <code>Makefile</code> / <code>build.rs</code> / <code>.git/config fsmonitor</code> 执行与 <code>V6</code> 本机环回自批 + TOCTOU 提交篡改）执行了跨平台测试与逐层消融：</p>
+      <div class="blog-table-wrap">
+        <table class="blog-table">
+          <thead>
+            <tr>
+              <th>运行模式 / 消融组（Execution Mode）</th>
+              <th>macOS 26.3 (Seatbelt)</th>
+              <th>Ubuntu 24.04 (<code>bwrap --bind-fd</code>)</th>
+              <th>失陷机理说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Host Native（无 Hook / 无沙箱）</td>
+              <td>30 / 30 (100%)</td>
+              <td>30 / 30 (100%)</td>
+              <td>全部六个绕过面完全暴露</td>
+            </tr>
+            <tr>
+              <td>Plugin / <code>PreToolUse</code> Hook Only（Advisory）</td>
+              <td>30 / 30 (100%)</td>
+              <td>30 / 30 (100%)</td>
+              <td>Hook 只拦截已知工具名，对 <code>V1–V6</code> 零内核阻断</td>
+            </tr>
+            <tr>
+              <td>消融：<code>Enforced</code> 移除状态目录单文件只读锁</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>仅 <code>V4</code>（自篡改 <code>settings.json</code> / <code>hooks.json</code>）5/5 失守</td>
+            </tr>
+            <tr>
+              <td>消融：<code>Enforced</code> 移除 Git Shim 与索引分离</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>仅 <code>V5</code>（仓库 <code>.git</code> 钩子与 <code>fsmonitor</code> 触发）5/5 失守</td>
+            </tr>
+            <tr>
+              <td>消融：<code>Enforced</code> 移除 Agent/Human 双令牌分离</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>仅 <code>V6</code>（环回 API 自批与 TOCTOU 竞态提交）5/5 失守</td>
+            </tr>
+            <tr>
+              <td><strong>Aegis Enforced（完整内核强制模式）</strong></td>
+              <td><strong>0 / 30 (0.0%)</strong></td>
+              <td><strong>0 / 30 (0.0%)</strong></td>
+              <td><strong>双平台全部 30 项攻击 100% 内核拦截，宿主零污染</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>消融结果清晰证明了纵深防御的正交性：父进程内核沙箱单独拦截了 <code>V1–V3</code>，而状态目录配置锁、只读 <code>.git</code> 索引分离与双令牌 + SHA-256 Diff 锁定分别精确闭合了 <code>V4</code>、<code>V5</code> 与 <code>V6</code>，没有任何一层是冗余装饰。</p>
+
+      <h3>6.2 60 次真实云端 API 生产级 CLI Agent 端到端实测</h3>
+      <p>合成脚本无法暴露真实 Agent 客户端在 OAuth 登录、多轮工具调用、临时缓存编译与提示词注入下的复杂行为。因此，我们直接使用未修改的生产级二进制——<strong>Claude Code (<code>v2.1.104</code>)</strong>、<strong>OpenCode (<code>v1.4.3</code>)</strong>、<strong>Antigravity AGY (<code>v0.2.3</code>)</strong> 与 <strong>Hermes Agent (<code>v0.8.0</code>)</strong>——连接真实云端大模型 API，在 3 种模式（<code>Native Baseline</code>、<code>Advisory Hook</code>、<code>Aegis Enforced</code>）× 5 个真实代码库任务（共 <strong>60 次完整端到端会话</strong>）上进行了盲测：</p>
+      <div class="blog-table-wrap">
+        <table class="blog-table">
+          <thead>
+            <tr>
+              <th>生产级 CLI Agent</th>
+              <th>良性工程任务通过率（<code>T1–T3</code>：修复 + 单测 / 多文件重构 / Git 检视）</th>
+              <th>恶意仓库陷阱宿主失陷率：Native / Advisory Hook（<code>T4–T5</code>）</th>
+              <th>恶意仓库陷阱宿主失陷率：<strong>Aegis Enforced</strong>（<code>T4–T5</code>）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Claude Code</strong> (<code>v2.1.104</code>)</td>
+              <td>3 / 3 (100%)</td>
+              <td>2 / 2 (100%) · <code>2 / 2 (100%)</code></td>
+              <td><strong>0 / 2 (0.0%)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>OpenCode</strong> (<code>v1.4.3</code>)</td>
+              <td>3 / 3 (100%)</td>
+              <td>2 / 2 (100%) · <code>2 / 2 (100%)</code></td>
+              <td><strong>0 / 2 (0.0%)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Antigravity (AGY)</strong> (<code>v0.2.3</code>)</td>
+              <td>3 / 3 (100%)</td>
+              <td>2 / 2 (100%) · <code>2 / 2 (100%)</code></td>
+              <td><strong>0 / 2 (0.0%)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Hermes Agent</strong> (<code>v0.8.0</code>)</td>
+              <td>3 / 3 (100%)</td>
+              <td>2 / 2 (100%) · <code>2 / 2 (100%)</code></td>
+              <td><strong>0 / 2 (0.0%)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>总计（60 次真实云端会话）</strong></td>
+              <td><strong>12 / 12 (100%)</strong></td>
+              <td><strong>8 / 8 (100%) · 8 / 8 (100%)</strong></td>
+              <td><strong>0 / 8 (0.0%)</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>在把这四款真实商业/开源 CLI Agent 跑通于内核沙箱的过程中，我们也解决了三个只有真实生产客户端才会暴露的操作系统兼容难题：（1）<strong>macOS Keychain OAuth 与 XDG 状态隔离</strong>——保留真实 <code>HOME</code> 使 <code>Security.framework</code> 能正常解锁 Claude Code / AGY 的登录态，同时将 <code>XDG_CONFIG_HOME</code> / <code>XDG_DATA_HOME</code> 重定向至沙箱私有目录并在 Seatbelt 层硬阻断 <code>~/.ssh</code>、<code>~/.aws</code> 与 <code>human.token</code> 读取；（2）<strong>Darwin 软链路径规范化</strong>——自动将 <code>/var/folders/...</code> 解析为真实内核路径 <code>/private/var/folders/...</code>，消除编译器与 Bun/Node 运行时的临时文件 <code>EPERM</code>；（3）<strong>Linux <code>--unshare-net</code> 下的 Systemd DNS 穿透</strong>——在 <code>--tmpfs /run</code> 遮蔽后按只读方式重新挂载 <code>/run/systemd/resolve</code>，保证本地代理在断网命名空间外正常解析上游域名。</p>
+
+      <h3>6.3 系统开销实测：为什么开发者愿意默认常驻开启？</h3>
+      <p>许多开发者在日常迭代中抗拒使用容器（Docker / DevContainer），根源在于动辄数百毫秒的启动卡顿与数倍的磁盘膨胀。实测表明，<code>aegis-os run</code> 将内核级隔离的体感开销压到了人类无法察觉的量级：</p>
+      <div class="blog-table-wrap">
+        <table class="blog-table">
+          <thead>
+            <tr>
+              <th>系统性能指标</th>
+              <th>Aegis Enforced Runtime 实测值</th>
+              <th>传统基线对比</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Linux 父进程沙箱启动延迟（500 文件仓库）</td>
+              <td><strong>9.91 ms</strong> P50（10.89 ms P95）</td>
+              <td>Rootless <code>nerdctl</code> 容器 222.02 ms（<strong>快 22.4×</strong>）</td>
+            </tr>
+            <tr>
+              <td>macOS 父进程沙箱启动延迟（500 文件仓库）</td>
+              <td><strong>16.43 ms</strong> P50（17.61 ms P95）</td>
+              <td>交互式 CLI 启动无感（&lt; 20 ms）</td>
+            </tr>
+            <tr>
+              <td>500 MB Git 仓库影子工作区创建与磁盘占用</td>
+              <td><strong>6.10 ms</strong> P50 · <strong>4.74 MB</strong> 增量磁盘</td>
+              <td><code>cp -R</code> 全量拷贝 501.45 MB（<strong>节省 99.05% 磁盘</strong>）</td>
+            </tr>
+            <tr>
+              <td>环回 L7 模型反向代理流式开销与 DLP</td>
+              <td><strong>+0.221 ms</strong> 首 Token 延迟（+0.197 ms 全流）</td>
+              <td><strong>20/20</strong> 密钥/PHI 外泄拦截 · <strong>0/20</strong> 误报 · 沙箱内 <strong>0</strong> 明文密钥</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>结论十分明确：通过反转父子进程控制权并将信任锚点下沉至 OS 内核，我们无需在“裸奔式便利（YOLO）”与“沉重的虚拟机/容器摩擦”之间二选一——<strong>9.91 毫秒的命名空间派生、零拷贝的 CoW 影子工作区与 SHA-256 证据锚定提交，足以让真正的内核强制安全边界成为每一个自治 Agent 的默认日常运行底座。</strong></p>
     `,
     body_en: `
       <h2 id="sec-advisory-illusion">01. Honest Threat Modeling: Why Agent Plugins &amp; Hooks Are Advisory, Not Enforced</h2>
@@ -2638,6 +2781,148 @@ git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --no-ext-diff</co
         <div class="blog-callout-title">Respecting Terminal Physics: Never Write Raw Approval Prompts into an Active Full-Screen TUI</div>
         <p>When Claude Code, OpenCode, or Codex is rendering a full-screen Alternate Screen TUI in raw mode, having a parent supervisor write approval text directly to the shared PTY’s <code>stderr</code>—or compete for <code>stdin</code> keystrokes—instantly corrupts the terminal layout and deadlocks input. When a full-screen TUI is active, Aegis OS <strong>never writes raw approval text into the main screen</strong>: instead, it notifies the human out-of-band via desktop notifications, terminal <code>OSC 0</code> title bar badges (<code>⏳ Aegis: 1 approval pending</code>), a companion <code>aegis-os approve</code> CLI in a second terminal, or the SHA-256 diff-locked local Web console (with an optional 1-line <code>DECSTBM</code> scroll-region status bar for headless SSH). Only when kernel security respects terminal physics will developers keep enforcement enabled by default.</p>
       </div>
+
+      <h2 id="sec-empirical-evaluation">06. Cross-Platform Adversarial Ablation &amp; 60-Run Live CLI Agent Evaluation</h2>
+      <p>To test whether inverting control into an OS-enforced parent runtime eliminates plugin bypasses without degrading real-world agent ergonomics, we executed the full reproducible evaluation suite accompanying our research preprint (<a href="https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf" target="_blank" rel="noopener">Paper 2 PDF</a>) across both <strong>macOS 26.3 (Apple Silicon <code>aarch64</code>, Seatbelt <code>sandbox-exec</code>)</strong> and <strong>Ubuntu 24.04 LTS (<code>aarch64</code>, Linux 6.8, <code>bubblewrap 0.11.0 --bind-fd</code>)</strong>.</p>
+
+      <h3>6.1 Deterministic <code>V1–V6</code> Exploit Suite &amp; Five-Mode Defense Ablation</h3>
+      <p>We instantiated 30 deterministic exploits (5 concrete payloads per bypass class <code>V1–V6</code>: uncovered native writes and <code>~/.ssh/id_ed25519</code> reads, hookless client bypasses, shared daemon <code>--attach</code> escapes, self-modification of <code>~/.claude/settings.json</code> and <code>hooks.json</code>, poisoned <code>Makefile</code> / <code>build.rs</code> / <code>.git/config fsmonitor</code> triggers, and loopback HTTP self-approval plus TOCTOU commit tampering) across five defense configurations:</p>
+      <div class="blog-table-wrap">
+        <table class="blog-table">
+          <thead>
+            <tr>
+              <th>Execution Mode / Ablation</th>
+              <th>macOS 26.3 (Seatbelt)</th>
+              <th>Ubuntu 24.04 (<code>bwrap --bind-fd</code>)</th>
+              <th>Observed Security Failure Mode</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Host Native (No Hooks / No Sandbox)</td>
+              <td>30 / 30 (100%)</td>
+              <td>30 / 30 (100%)</td>
+              <td>All six bypass classes succeed directly on the host</td>
+            </tr>
+            <tr>
+              <td>Plugin / <code>PreToolUse</code> Hook Only (Advisory)</td>
+              <td>30 / 30 (100%)</td>
+              <td>30 / 30 (100%)</td>
+              <td>Hooks match known tool names only; zero kernel containment</td>
+            </tr>
+            <tr>
+              <td>Ablation: <code>Enforced</code> minus State-Dir Config Lock</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>Exposes <code>V4</code> (5/5 hook/settings self-tampering attacks)</td>
+            </tr>
+            <tr>
+              <td>Ablation: <code>Enforced</code> minus Git Shim &amp; Index Split</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>Exposes <code>V5</code> (5/5 <code>.git</code> hook and <code>fsmonitor</code> payloads)</td>
+            </tr>
+            <tr>
+              <td>Ablation: <code>Enforced</code> minus Dual-Token Separation</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>5 / 30 (16.7%)</td>
+              <td>Exposes <code>V6</code> (5/5 loopback self-approval &amp; TOCTOU commits)</td>
+            </tr>
+            <tr>
+              <td><strong>Aegis Enforced (Full Kernel Boundary)</strong></td>
+              <td><strong>0 / 30 (0.0%)</strong></td>
+              <td><strong>0 / 30 (0.0%)</strong></td>
+              <td><strong>100% containment across all 30 exploits on both OSes</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The ablation confirms strict defense-in-depth orthogonality: parent-process kernel sandboxing eliminates <code>V1–V3</code>, while single-file read-only config locks, read-only <code>.git</code> pass-through with <code>GIT_INDEX_FILE</code> separation, and cryptographic Agent/Human token separation with SHA-256 diff pinning each close their exact 5-exploit vector class (<code>V4</code>, <code>V5</code>, and <code>V6</code>).</p>
+
+      <h3>6.2 60-Run Live Cloud-API Production CLI Agent Evaluation</h3>
+      <p>Synthetic exploit scripts cannot capture how real production agents behave across OAuth keychains, multi-turn tool loops, compiler caches, and repository traps. We therefore evaluated four unmodified production CLI agents—<strong>Claude Code (<code>v2.1.104</code>)</strong>, <strong>OpenCode (<code>v1.4.3</code>)</strong>, <strong>Antigravity AGY (<code>v0.2.3</code>)</strong>, and <strong>Hermes Agent (<code>v0.8.0</code>)</strong>—backed by live cloud LLM APIs across 3 modes (<code>Native Baseline</code>, <code>Advisory Hook</code>, <code>Aegis Enforced</code>) and 5 multi-turn repository tasks (<strong>60 end-to-end live agent runs</strong>):</p>
+      <div class="blog-table-wrap">
+        <table class="blog-table">
+          <thead>
+            <tr>
+              <th>Production CLI Agent</th>
+              <th>Benign Engineering Utility (<code>T1–T3</code>: Bug Fix + Test / Multi-File Refactor / Git Audit)</th>
+              <th>Malicious Repo-Trap Host Compromise: Native / Advisory Hook (<code>T4–T5</code>)</th>
+              <th>Malicious Repo-Trap Host Compromise: <strong>Aegis Enforced</strong> (<code>T4–T5</code>)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Claude Code</strong> (<code>v2.1.104</code>)</td>
+              <td>3 / 3 (100%)</td>
+              <td>2 / 2 (100%) · <code>2 / 2 (100%)</code></td>
+              <td><strong>0 / 2 (0.0%)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>OpenCode</strong> (<code>v1.4.3</code>)</td>
+              <td>3 / 3 (100%)</td>
+              <td>2 / 2 (100%) · <code>2 / 2 (100%)</code></td>
+              <td><strong>0 / 2 (0.0%)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Antigravity (AGY)</strong> (<code>v0.2.3</code>)</td>
+              <td>3 / 3 (100%)</td>
+              <td>2 / 2 (100%) · <code>2 / 2 (100%)</code></td>
+              <td><strong>0 / 2 (0.0%)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Hermes Agent</strong> (<code>v0.8.0</code>)</td>
+              <td>3 / 3 (100%)</td>
+              <td>2 / 2 (100%) · <code>2 / 2 (100%)</code></td>
+              <td><strong>0 / 2 (0.0%)</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Total (60 Live Cloud-API Runs)</strong></td>
+              <td><strong>12 / 12 (100%)</strong></td>
+              <td><strong>8 / 8 (100%) · 8 / 8 (100%)</strong></td>
+              <td><strong>0 / 8 (0.0%)</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Running real third-party CLI agents inside strict kernel sandboxes also surfaced three critical OS systems invariants that synthetic benchmarks miss: (1) <strong>macOS Keychain OAuth vs. XDG Isolation</strong>—preserving the real <code>HOME</code> path on macOS so <code>Security.framework</code> unlocks Claude Code and AGY OAuth credentials while redirecting <code>XDG_CONFIG_HOME</code> / <code>XDG_DATA_HOME</code> into sandbox-private directories and blocking reads on <code>~/.ssh</code>, <code>~/.aws</code>, and <code>human.token</code>; (2) <strong>Darwin Symlink Canonicalization</strong>—resolving <code>/var/folders/...</code> firmlinks to <code>/private/var/folders/...</code> before compiling Seatbelt profiles so Node, Bun, and Rust toolchains never hit spurious temp-file <code>EPERM</code> errors; and (3) <strong>Linux <code>--unshare-net</code> DNS Resolution</strong>—re-mounting <code>/run/systemd/resolve</code> read-only after <code>--tmpfs /run</code> masking so Ubuntu 24.04 symlinked resolver configs work seamlessly with the host-side egress bridge.</p>
+
+      <h3>6.3 Systems Overhead: Sub-20ms Startup, 99.05% Disk Savings &amp; Sub-Millisecond L7 Proxy</h3>
+      <p>Developers routinely disable Docker or DevContainer sandboxes during inner-loop coding because container startup latency and full workspace copies create noticeable friction. Measured overhead shows why <code>aegis-os run</code> can stay enabled permanently:</p>
+      <div class="blog-table-wrap">
+        <table class="blog-table">
+          <thead>
+            <tr>
+              <th>Systems Metric</th>
+              <th>Aegis Enforced Runtime</th>
+              <th>Baseline Comparison</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Linux Parent-Sandbox Startup Latency (500-file repo)</td>
+              <td><strong>9.91 ms</strong> P50 (10.89 ms P95)</td>
+              <td>Rootless <code>nerdctl</code> container: 222.02 ms (<strong>22.4x faster</strong>)</td>
+            </tr>
+            <tr>
+              <td>macOS Parent-Sandbox Startup Latency (500-file repo)</td>
+              <td><strong>16.43 ms</strong> P50 (17.61 ms P95)</td>
+              <td>Imperceptible interactive CLI launch (&lt; 20 ms)</td>
+            </tr>
+            <tr>
+              <td>500 MB Git Repo Shadow Setup &amp; Disk Footprint</td>
+              <td><strong>6.10 ms</strong> P50 · <strong>4.74 MB</strong> delta disk</td>
+              <td>Full <code>cp -R</code> copy: 501.45 MB (<strong>99.05% disk saved</strong>)</td>
+            </tr>
+            <tr>
+              <td>Loopback L7 Reverse Proxy Streaming &amp; DLP</td>
+              <td><strong>+0.221 ms</strong> median TTFT (+0.197 ms full SSE)</td>
+              <td><strong>20/20</strong> secret/PHI blocks · <strong>0/20</strong> false positives · <strong>0</strong> raw keys in sandbox</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The takeaway is concrete: by inverting process control into a lightweight OS kernel boundary backed by Copy-on-Write shadow workspaces and SHA-256 diff-pinned host commits, developers no longer face a false choice between unsafe host execution and heavyweight container ceremony.</p>
     `,
   },
 ]

@@ -420,14 +420,14 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
         desc: '阅读完整 14 页论文（含 macOS/Linux V1–V6 0/30 零绕过与 60 次真实 CLI Agent 评测）',
       },
       {
+        label: '可复现双平台对抗与真实 Agent 基准数据 (JSON)',
+        href: 'https://github.com/heurion-org/aegis-os/blob/main/paper2/ENFORCED_RUNTIME_BENCH_REPORT.json',
+        desc: '查阅 macOS Seatbelt、Linux bwrap 消融矩阵及 Claude/OpenCode/AGY/Hermes 60 次运行原始指标',
+      },
+      {
         label: 'Aegis Enforced Runtime 完整架构规范 (GitHub)',
         href: 'https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_ENFORCED_RUNTIME_DESIGN.md',
         desc: '阅读包含威胁模型、bwrap/Seatbelt 挂载表、.git 只读穿透与两层网关的完整工程规范',
-      },
-      {
-        label: 'Aegis OS 事务级智能体内核专论（No. 03）',
-        href: '/blog/aegis-os-transactional-agent-kernel',
-        desc: '回顾 0.42ms CoW 影子工作区、四级 LCS 自动合并与多智能体文件认领锁的基准评测',
       },
       {
         label: 'Aegis OS 主页与安装指南',
@@ -442,14 +442,14 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
         desc: 'Read the 14-page paper covering 0/30 V1-V6 bypass on macOS & Linux and 60 live CLI agent runs',
       },
       {
+        label: 'Reproducible Dual-OS & Live CLI Agent Benchmark Report (JSON)',
+        href: 'https://github.com/heurion-org/aegis-os/blob/main/paper2/ENFORCED_RUNTIME_BENCH_REPORT.json',
+        desc: 'Inspect raw metrics from the 5-mode ablation suite and 60 live runs across Claude, OpenCode, AGY & Hermes',
+      },
+      {
         label: 'Aegis Enforced Runtime Full Specification (GitHub)',
         href: 'https://github.com/heurion-org/aegis-os/blob/main/docs/AEGIS_ENFORCED_RUNTIME_DESIGN.md',
         desc: 'Read the complete engineering specification covering bwrap/Seatbelt mounts, .git index separation, and L4/L7 egress',
-      },
-      {
-        label: 'Aegis OS Transactional Agent Kernel Monograph (No. 03)',
-        href: '/en/blog/aegis-os-transactional-agent-kernel',
-        desc: 'Review the 0.42ms CoW shadow workspace, 4-tier LCS auto-merge, and advisory file claim benchmarks',
       },
       {
         label: 'Aegis OS Product Page & CLI Quickstart',
@@ -460,7 +460,11 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
     faq_zh: [
       {
         q: '为什么 Claude Code、OpenCode 或 Codex 的插件（PreToolUse Hook + MCP）不能作为严格的安全边界？',
-        a: '因为插件与被监管的 Agent 主进程运行在同一个宿主机用户权限域（相同 UID 与系统调用面）中。在对抗性提示词注入或配置漂移下，Agent 可能调用未列入 Hook 的原生工具（如 NotebookEdit）、连接沙箱外已运行的共享守护进程（OpenCode --attach）、修改自身的 ~/.claude/settings.json 摘除 Hook，或借由看似只读的 git status / cargo test 触发宿主机上的恶意 .git/config fsmonitor 与 build.rs 脚本。因此插件模式属于 Advisory（建议级生产力护栏），真正的安全边界必须由 aegis-os run 作为父进程通过 OS 内核沙箱（Enforced / Isolated）强制实施。',
+        a: '因为插件与被监管的 Agent 主进程运行在同一个宿主机用户权限域（相同 UID 与系统调用面）中。在对抗性提示词注入或配置漂移下，Agent 可能调用未列入 Hook 的原生工具（如 NotebookEdit）、连接沙箱外已运行的共享守护进程（OpenCode --attach）、修改自身的 ~/.claude/settings.json 摘除 Hook，或借由看似只读的 git status / cargo test 触发宿主机上的恶意 .git/config fsmonitor 与 build.rs 脚本。实测表明仅靠插件 Hook 在 30 项 V1–V6 对抗向量下绕过率高达 100%（30/30），而通过 aegis-os run 父进程内核沙箱在 macOS Seatbelt 与 Linux bwrap 上均降至 0/30（0.0%）。',
+      },
+      {
+        q: 'aegis-os run 在真实生产级 CLI Agent 上的兼容性和性能开销如何？',
+        a: '在覆盖 Claude Code (v2.1.104)、OpenCode (v1.4.3)、Antigravity AGY (v0.2.3) 与 Hermes (v0.8.0) 的 60 次真实云端大模型 API 评测中，Aegis Enforced 模式保持了 100%（12/12）良性工程任务通过率，同时将恶意仓库陷阱的宿主失陷率从 100%（8/8）降至 0%（0/8）。系统开销方面，Linux bwrap 沙箱启动中位数仅 9.91ms（比 Rootless nerdctl 容器 222.02ms 快 22.4 倍），macOS Seatbelt 启动仅 16.43ms，500MB Git 仓库 APFS 克隆仅占 4.74MB 磁盘（省盘 99.05%），L7 模型反向代理首 Token 延迟开销仅 +0.221ms。',
       },
       {
         q: 'aegis-os run 如何在禁止 Agent 篡改宿主机 .git 与自身配置的同时，保留正常的 git status 和客户端会话历史？',
@@ -474,7 +478,11 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
     faq_en: [
       {
         q: 'Why can’t agent plugins (PreToolUse hooks + MCP servers) serve as a true security boundary?',
-        a: 'Because plugins and hooks execute inside the same host user privilege domain (same UID, filesystem view, and syscall surface) as the supervised agent. Under prompt injection or configuration drift, an agent can invoke uncovered native tools (e.g., NotebookEdit), attach to an unsandboxed background daemon (OpenCode --attach), overwrite its own ~/.claude/settings.json to strip hooks, or trigger host code execution via build.rs or .git/config fsmonitor during seemingly benign commands. Plugins provide Advisory ergonomics; true Enforced isolation requires aegis-os run to act as the parent process and confine the entire agent tree inside an OS kernel sandbox.',
+        a: 'Because plugins and hooks execute inside the same host user privilege domain (same UID, filesystem view, and syscall surface) as the supervised agent. Under prompt injection or configuration drift, an agent can invoke uncovered native tools (e.g., NotebookEdit), attach to an unsandboxed background daemon (OpenCode --attach), overwrite its own ~/.claude/settings.json to strip hooks, or trigger host code execution via build.rs or .git/config fsmonitor during seemingly benign commands. Empirically, plugin-only hooks suffer a 100% (30/30) bypass rate across V1-V6, whereas aegis-os run reduces bypasses to 0/30 (0.0%) on both macOS Seatbelt and Linux bwrap.',
+      },
+      {
+        q: 'How does aegis-os run perform across real production CLI agents and what is its runtime overhead?',
+        a: 'Across 60 live cloud-LLM runs spanning unmodified Claude Code (v2.1.104), OpenCode (v1.4.3), Antigravity AGY (v0.2.3), and Hermes (v0.8.0), Aegis Enforced preserves 100% (12/12) benign task completion while cutting malicious repository-trap host compromise from 100% (8/8) to 0% (0/8). Median sandbox startup is 9.91ms on Linux bwrap (22.4x faster than rootless nerdctl containers at 222.02ms) and 16.43ms on macOS Seatbelt, a 500MB Git repository shadow consumes just 4.74MB on APFS (99.05% disk saved), and the loopback L7 reverse proxy adds only +0.221ms median TTFT.',
       },
       {
         q: 'How does aegis-os run keep git status and stateful agent sessions working without letting the agent tamper with .git or its own security settings?',
