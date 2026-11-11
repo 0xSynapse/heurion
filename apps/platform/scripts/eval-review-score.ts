@@ -28,9 +28,9 @@ export interface Adjudication {
 const ADJ_DIR = join(EVAL_DIR, 'adjudications')
 const SEVS = ['critical', 'major', 'minor'] as const
 
-/** 植入改动后新出现的词元（数字优先）：用来判断一条问题是否指向这处植入 */
+/** 植入改动后新出现的词元（数字优先，含正负号变化）：用来判断一条问题是否指向这处植入 */
 export function changedTokens(find: string, replace: string): string[] {
-  const tok = (s: string) => normText(s).match(/\d+(?:\.\d+)?%?|[a-z一-龥]{3,}/g) ?? []
+  const tok = (s: string) => normText(s).match(/[−-]?\d+(?:\.\d+)?%?|[a-z一-龥]{3,}/g) ?? []
   const before = new Set(tok(find))
   const added = tok(replace).filter(t => !before.has(t))
   const nums = added.filter(t => /\d/.test(t))
@@ -46,7 +46,35 @@ export function matches(f: RunFinding, label: Label, added: string[]): boolean {
   return overlap && added.length > 0 && added.every(t => text.includes(t))
 }
 
-function readAdjudications(): Map<string, Adjudication> {
+export interface KnownOrganicError {
+  id: string
+  paper_id: string
+  required_tokens: string[]
+  note: string
+}
+
+export function readKnownOrganicErrors(): KnownOrganicError[] {
+  const p = join(EVAL_DIR, 'known-organic-errors.json')
+  if (!existsSync(p)) return []
+  return JSON.parse(readFileSync(p, 'utf8')) as KnownOrganicError[]
+}
+
+export function matchesKnownOrganicError(
+  paperId: string,
+  f: RunFinding,
+  knownList: KnownOrganicError[] = readKnownOrganicErrors(),
+): KnownOrganicError | null {
+  const blob = normText(`${f.sentence} ${f.anchor} ${f.reason}`)
+  for (const item of knownList) {
+    if (item.paper_id !== paperId) continue
+    if (item.required_tokens.length > 0 && item.required_tokens.every(tok => blob.includes(normText(tok)))) {
+      return item
+    }
+  }
+  return null
+}
+
+export function readAdjudications(): Map<string, Adjudication> {
   const out = new Map<string, Adjudication>()
   if (!existsSync(ADJ_DIR)) return out
   for (const f of readdirSync(ADJ_DIR).filter(x => x.endsWith('.jsonl'))) {
@@ -69,6 +97,7 @@ function main(): void {
   const records = readdirSync(dir).filter(f => /\.r\d+\.json$/.test(f)).map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')) as RunRecord)
   const manifest = new Map(readManifest().map(p => [p.id, p]))
   const adj = readAdjudications()
+  const knownOrganic = readKnownOrganicErrors()
 
   const pending: Array<Record<string, unknown>> = []
   const pendingSeen = new Set<string>()
@@ -87,10 +116,11 @@ function main(): void {
     let cleanFp = 0
     for (const f of r.findings) {
       const auto = labels.find(l => { const inj = injections.get(l.label_id)!; return matches(f, l, changedTokens(inj.find, inj.replace)) })
+      const organic = !auto ? matchesKnownOrganicError(r.paper_id, f, knownOrganic) : null
       const a = adj.get(`${r.paper_id}|${f.finding_key}`)
       const s = bySev[f.severity]!
       s.total++
-      const verdict: Verdict | 'auto_match' | null = a?.verdict ?? (auto ? 'auto_match' : null)
+      const verdict: Verdict | 'auto_match' | null = a?.verdict ?? (auto ? 'auto_match' : organic ? 'unexpected_true' : null)
       if (verdict === 'true_positive' || verdict === 'unexpected_true' || verdict === 'auto_match') {
         s.tp++
         const lid = a?.matched_label ?? auto?.label_id
@@ -105,7 +135,11 @@ function main(): void {
         pendingSeen.add(`${r.paper_id}|${f.finding_key}`)
         pending.push({
           paper_id: r.paper_id, variant: r.variant, finding_key: f.finding_key,
-          suggested: auto ? { verdict: 'true_positive', matched_label: auto.label_id } : null,
+          suggested: auto
+            ? { verdict: 'true_positive', matched_label: auto.label_id }
+            : organic
+              ? { verdict: 'unexpected_true', note: organic.note }
+              : null,
           severity: f.severity, category: f.category, subtype: f.subtype, section: f.section_title,
           anchor: f.anchor, reason: f.reason, suggestion: f.suggestion,
           verdict: null, annotator: null, note: null,

@@ -1,3 +1,10 @@
+/**
+ * 论断核对与四阶段深度临床评审服务（M1，PLATFORM.md §5.5 & Google PAT arXiv:2606.28277 扩展）：
+ * - Stage 1：章节感知切分（intro / methods / results / discussion）与跨章节共享 Scratchpad 构建；
+ * - Stage 2：自适应核查预算分级（light / medium / high Thinking Track）；
+ * - Stage 3：多维专项审查（Pass A 外部文献对齐、Pass B 内部自洽、Pass C 方法-结果配对、Pass D Spin 与报告规范）；
+ * - Stage 4：全局去重合成与批注锚定（{#c:id}）及审稿批注驱动的双轨自演进（evolveFromReviewComment）。
+ */
 import type { Node as PMNode } from 'prosemirror-model'
 import type { Complete } from '../harness/complete.ts'
 import { attachComment, AnchorError } from '../model/anchors.ts'
@@ -10,6 +17,7 @@ import type { CitationRow, ClaimVerdict, EvidenceTier } from '../store/db.ts'
 import { referencePlan } from '../model/references.ts'
 import { snapshotText } from '../model/measurements.ts'
 import { getDomainSkillAdapter } from '../memory/domain-adapters.ts'
+import { sensitiveReason } from '../memory/guard.ts'
 import {
   auditInternalConsistency,
   auditMethodResultConsistency,
@@ -281,6 +289,10 @@ function extractTopicTokensForDedup(texts: string[]): Set<string> {
   return tokens
 }
 
+export function hasInstanceLeakage(text: string): boolean {
+  return Boolean(getDomainSkillAdapter('manuscript').hasInstanceLeakage(text))
+}
+
 /**
  * 从临床医生的自然语言反驳（Rebuttal）与原句上下文中提炼去数字化的专科边界规则（Track A narrow）。
  * 强制剥离具体样本量、P 值、HR、置信区间等实例数字，确保 0% 跨队列实例泄漏（Instance Contamination = 0%）。
@@ -327,7 +339,73 @@ export function synthesizeSanitizedBoundaryRule(
     }
   }
 
-  // 3. 临床筛查人群 vs 随机化队列 vs 非随机观察队列 / 发现-训练-验证多层子队列设计
+  // 3a. 回顾性队列研究匹配前原始人群与倾向性匹配/多因素完整协变量亚组边界
+  if (
+    /(?:回顾性队列|retrospective\s+cohort|倾向性评分|propensity|匹配前后|匹配亚组|多因素回归亚组)/i.test(combined)
+  ) {
+    return {
+      patternKey: 'retrospective_cohort_matching_boundary',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary:retrospective_cohort_matching_boundary] 审稿核查边界收窄：在遵循 STROBE 规范的回顾性队列研究中，匹配前原始入组总队列与倾向性评分匹配后子队列（或具有完整多因素协变量记录的分析亚组）属于标准分层报告，允许基线表与多因素回归表采用各自对应的合法分母。',
+    }
+  }
+
+  // 3b. 病例对照研究（Case-Control）多级递进协变量调整模型与相关性/ROC 组合边界
+  if (
+    /(?:病例对照|case-control|递进调整|多模型|粗比值比|crude\s+or|adjusted\s+or|协变量调整模型)/i.test(combined)
+  ) {
+    return {
+      patternKey: 'case_control_multimodel_boundary',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary:case_control_multimodel_boundary] 审稿核查边界收窄：在病例对照研究中，同时报告未调整粗比值比与多级递进协变量调整模型及生物标志物相关性/受试者工作特征曲线（ROC）分析属于标准统计报告范式，不同调整模型间的效应量差异免于触发方法结果矛盾误报。',
+    }
+  }
+
+  // 3c. 诊断准确性研究（STARD）受试者总人数与有效质控标本/参考标准亚组边界
+  if (
+    /(?:诊断准确性|diagnostic\s+accuracy|\bstard\b|参考标准|reference\s+standard|index\s+test|可评估标本|有效质控)/i.test(combined)
+  ) {
+    return {
+      patternKey: 'diagnostic_specimen_reference_boundary',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary:diagnostic_specimen_reference_boundary] 审稿核查边界收窄：在遵循 STARD 规范的诊断准确性研究中，筛查招募总人数、通过质控可评估标本数与金标准阳性/阴性参考标准亚组属于合法多级诊断分母，免于触发样本量分母不一致误报。',
+    }
+  }
+
+  // 3d. 横断面流行病学研究（Cross-Sectional）全样本患病率人群与特定风险预测合格子队列边界
+  if (
+    /(?:横断面|cross-sectional|全人群粗患病率|风险预测子队列|合格预测子队列|年龄合格亚组)/i.test(combined)
+  ) {
+    return {
+      patternKey: 'cross_sectional_subcohort_boundary',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary:cross_sectional_subcohort_boundary] 审稿核查边界收窄：在横断面流行病学研究中，全样本基线患病率分析集与满足特定年龄段或无既往事件要求的心血管/临床风险预测子队列属于合法分层结构，允许两部分采用各自对应的样本分母。',
+    }
+  }
+
+  // 3e. 系统评价与荟萃分析（PRISMA Meta-Analysis）纳入总试验数与特定结局可用试验子集边界
+  if (
+    /(?:荟萃分析|系统评价|meta-analysis|\bprisma\b|特定结局指标|可用试验子集|研究子集)/i.test(combined)
+  ) {
+    return {
+      patternKey: 'meta_analysis_trial_subset_boundary',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary:meta_analysis_trial_subset_boundary] 审稿核查边界收窄：在遵循 PRISMA 规范的系统评价与荟萃分析中，文献检索纳入的总合格试验数与报告某一特定次要结局或时间点的可用试验子集人数自然不同，按各结局实际汇报试验子集合并免于触发总样本量矛盾误报。',
+    }
+  }
+
+  // 4. 转化医学体内外动物实验分组与临床组织芯片队列（TMA）双体系规范
+  if (
+    /(?:小鼠|动物实验|荷瘤|xenograft|\bmice\b|组织芯片|\btma\b|流式|免疫微环境|体外实验|in\s+vitro\s+and\s+in\s+vivo|多实验批次|体内外)/i.test(combined)
+  ) {
+    return {
+      patternKey: 'translational_animal_tma_dual_cohort',
+      rule:
+        '[domain:manuscript] [narrow:review_boundary:translational_animal_tma_dual_cohort] 审稿核查边界收窄：在转化医学体内外联合研究中，体外细胞或虫体培养孔板重复实验（in vitro replicates）与体内动物实验分组（in vivo animal cohorts）及临床组织芯片（TMA）属于独立实验体系，不同独立实验模块的样本量按实验设计分别设定，免于触发跨体系分母不一致误报。',
+    }
+  }
+
+  // 4b. 临床筛查人群 vs 随机化队列 vs 非随机观察队列 / 发现-训练-验证多层子队列设计
   if (
     /(?:非\s*ccr|non[\s-]ccr|观察队列|筛查.*随机|平行观察|双队列|多队列|发现队列|训练队列|验证队列|子队列|multi[\s-]cohort)/i.test(
       combined,
@@ -340,14 +418,14 @@ export function synthesizeSanitizedBoundaryRule(
     }
   }
 
-  // 4. 转化医学体内外动物实验分组与临床组织芯片队列（TMA）双体系规范
+  // 4c. 随机对照试验（RCT）意向性分析集（ITT）与完成随访/符合方案集（Completers/Per-Protocol）双口径边界
   if (
-    /(?:小鼠|动物实验|荷瘤|xenograft|\bmice\b|组织芯片|\btma\b|流式|免疫微环境|体外实验)/i.test(combined)
+    /(?:意向性分析|\bitt\b|per-protocol|completers?|完成随访|完成研究|consort|脱落|随机对照试验|\brct\b)/i.test(combined)
   ) {
     return {
-      patternKey: 'translational_animal_tma_dual_cohort',
+      patternKey: 'rct_itt_completer_boundary',
       rule:
-        '[domain:manuscript] [narrow:review_boundary:translational_animal_tma_dual_cohort] 审稿核查边界收窄：在肿瘤放射免疫转化医学研究中，体内动物荷瘤实验（mice per group）与临床组织芯片（TMA）患者队列属于独立实验体系，不同独立实验批次的小鼠每组样本量允许按实验模块分别设定，且实验组自身测量结果无需标注外部文献引用。',
+        '[domain:manuscript] [narrow:review_boundary:rct_itt_completer_boundary] 审稿核查边界收窄：在遵循 CONSORT 规范的随机对照试验（RCT）中，基线随机化意向性分析集（ITT）与完成随访或纳入终末结局评估的符合方案集（Completers/Per-Protocol）属于合法双分析集结构，允许不同结局表按各自预定义分析集分母报告，免于触发分母切换误报。',
     }
   }
 
@@ -382,6 +460,146 @@ export function synthesizeSanitizedBoundaryRule(
   }
 }
 
+/**
+ * 在线大模型零模板专科边界规则蒸馏（Track A narrow LLM Distiller + 实例脱敏守卫）：
+ * 从临床医生的自由文本反驳（允许含稿件具体样本量/P值/亚组数字）中提炼零数字、跨论文可复用的研究设计边界规则，
+ * 并经 `hasInstanceLeakage` 与 `sensitiveReason` 双重守卫核验（首次含数字自动二次剥离/重试，确保实例数字泄漏率 = 0%）。
+ */
+export async function synthesizeSanitizedBoundaryRuleAsync(
+  complete: Complete | null | undefined,
+  rebuttalText: string,
+  context: { sentence?: string; category?: string; reason?: string } = {},
+): Promise<{
+  patternKey: string
+  rule: string
+  usedLlm: boolean
+  rawRebuttalHadDigits: boolean
+  firstDraftLeaked: boolean
+}> {
+  const rawRebuttalHadDigits = /\d/.test(rebuttalText)
+  if (!complete) {
+    const syncRes = synthesizeSanitizedBoundaryRule(rebuttalText, context)
+    return {
+      ...syncRes,
+      usedLlm: false,
+      rawRebuttalHadDigits,
+      firstDraftLeaked: false,
+    }
+  }
+
+  const resolvedCat = (context.category || 'method_result_mismatch').trim().toLowerCase()
+  const sys =
+    '你是临床研究方法学与审稿记忆治理专家。作者对一条 AI 审稿意见提出了合理的方法学反驳（说明该现象属于合法的研究设计或统计报告边界，而非客观错误）。\n' +
+    '请将该反驳提炼为一条可跨论文复用的通用审稿边界豁免规则，严格遵守以下铁律：\n' +
+    '1. 绝对禁止出现任何阿拉伯数字、样本量、百分比、P值、置信区间、具体药物名、具体疾病名或机构名（零实例泄漏）；\n' +
+    '2. 绝不允许豁免客观算术错误、置信区间越界、表格加总错误或未声明的统计检验混用，只豁免合法的研究设计/分母分层规范；\n' +
+    '3. 输出 JSON：{"pattern_key":"英文snake_case设计标签(如rct_itt_completer_boundary)","keywords":["通用方法学英文词1","词2","词3"],"rule_body":"一句中文通用边界规则说明（不含任何数字）"}。'
+  const usr =
+    `【原审稿意见类别】：${resolvedCat}\n` +
+    `【原审稿意见理由】：${(context.reason ?? '').slice(0, 300)}\n` +
+    `【涉及原句片段】：${(context.sentence ?? '').slice(0, 300)}\n` +
+    `【临床作者反驳原文】：${rebuttalText.slice(0, 500)}`
+
+  try {
+    const raw = await complete(sys, usr)
+    const m = /\{[\s\S]*\}/.exec(raw.replace(/```(?:json)?/g, '').trim())
+    if (m) {
+      const parsed = JSON.parse(m[0]) as { pattern_key?: string; keywords?: string[]; rule_body?: string }
+      const rawKey = String(parsed.pattern_key || 'study_design_boundary')
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '')
+        .slice(0, 48) || 'study_design_boundary'
+      const kws = Array.isArray(parsed.keywords)
+        ? parsed.keywords
+            .map(k => String(k).trim().toLowerCase().replace(/[^a-z0-9_-]/g, ''))
+            .filter(k => k.length >= 3 && !/\d/.test(k))
+            .slice(0, 5)
+        : extractSanitizedBoundaryKeywords([rebuttalText, context.reason ?? ''], 4)
+      const kwSuffix = kws.length > 0 ? `:kw=${kws.join(',')}` : ''
+      const bodyRaw = String(parsed.rule_body ?? '').trim()
+      const firstCandidate = `[domain:manuscript] [narrow:review_boundary:${rawKey}:cat=${resolvedCat}${kwSuffix}] 审稿核查边界收窄：${bodyRaw}`
+      const firstDraftLeaked = hasInstanceLeakage(firstCandidate) || Boolean(sensitiveReason(firstCandidate))
+      if (!firstDraftLeaked && bodyRaw.length >= 12) {
+        return {
+          patternKey: rawKey,
+          rule: firstCandidate,
+          usedLlm: true,
+          rawRebuttalHadDigits,
+          firstDraftLeaked: false,
+        }
+      }
+      // 二次强脱敏剥离所有数字与敏感词元后再校验
+      const scrubbedBody = bodyRaw
+        .replace(/\b(?:n|N|HR|OR|RR|P|p)\s*[=<>≤≥:：]?\s*\d+(?:\.\d+)?%?/g, '')
+        .replace(/\d+(?:\.\d+)?%?/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      const secondCandidate = `[domain:manuscript] [narrow:review_boundary:${rawKey}:cat=${resolvedCat}${kwSuffix}] 审稿核查边界收窄：${scrubbedBody}`
+      if (scrubbedBody.length >= 12 && !hasInstanceLeakage(secondCandidate) && !sensitiveReason(secondCandidate)) {
+        return {
+          patternKey: rawKey,
+          rule: secondCandidate,
+          usedLlm: true,
+          rawRebuttalHadDigits,
+          firstDraftLeaked: true,
+        }
+      }
+    }
+  } catch {
+    /* 网络或解析异常时回退至确定性无泄漏合成器 */
+  }
+
+  const fallback = synthesizeSanitizedBoundaryRule(rebuttalText, context)
+  return {
+    ...fallback,
+    usedLlm: false,
+    rawRebuttalHadDigits,
+    firstDraftLeaked: true,
+  }
+}
+
+/**
+ * 从开发集（dev）漏检复盘信号提炼零数字、可跨论文迁移的审稿核查清单技能（Track B Review Audit Checklist）：
+ * 严禁包含任何特定论文的样本量、数值、药物名或疾病名，仅提炼通用核查动作，供后续测试集 Stage 3 LLM 审稿注入。
+ */
+export async function distillReviewAuditChecklistAsync(
+  complete: Complete | null | undefined,
+  missedPatternDescription: string,
+  errorCategory: string,
+): Promise<{ skillKey: string; checklistRule: string } | null> {
+  if (!complete) return null
+  const sys =
+    '你是医学期刊统计审稿方法学教练。审稿系统在一篇开发集稿件上漏检了一类客观数据/方法学不一致问题。\n' +
+    '请将其抽象为一条面向未来未知稿件的「通用审稿核查动作清单（Audit Checklist）」，严格遵守：\n' +
+    '1. 严禁出现任何阿拉伯数字、具体样本量、具体统计值、具体药物/疾病/器官名称（必须 100% 领域通用、零实例泄漏）；\n' +
+    '2. 只描述通用的跨章节或表文比对动作（45字以内中文）；\n' +
+    '3. 输出 JSON：{"skill_key":"英文snake_case核查键","checklist_action":"一句不含任何数字的中文通用核查动作"}。'
+  const usr = `【漏检问题类别】：${errorCategory}\n【漏检机制简述】：${missedPatternDescription.slice(0, 400)}`
+  try {
+    const raw = await complete(sys, usr)
+    const m = /\{[\s\S]*\}/.exec(raw.replace(/```(?:json)?/g, '').trim())
+    if (!m) return null
+    const parsed = JSON.parse(m[0]) as { skill_key?: string; checklist_action?: string }
+    const skillKey = String(parsed.skill_key || 'cross_section_audit')
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '_')
+      .replace(/_+/g, '_')
+      .slice(0, 40) || 'cross_section_audit'
+    const actionBody = String(parsed.checklist_action ?? '')
+      .replace(/\d+(?:\.\d+)?%?/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (actionBody.length < 10) return null
+    const checklistRule = `[domain:manuscript] [skill:review_audit:${skillKey}] 审稿重点核查清单：${actionBody}`
+    if (hasInstanceLeakage(checklistRule) || sensitiveReason(checklistRule)) return null
+    return { skillKey, checklistRule }
+  } catch {
+    return null
+  }
+}
+
 export class ClaimService {
   constructor(
     private readonly docs: Documents,
@@ -399,6 +617,21 @@ export class ClaimService {
         .filter(m => !m.status || m.status === 'active')
         .map(m => m.content)
         .filter(c => c.includes('[narrow:review_boundary'))
+    } catch {
+      return []
+    }
+  }
+
+  private getActiveReviewAuditChecklists(owner?: string): string[] {
+    const store = this.docs.store as any
+    if (typeof store?.listMemories !== 'function') return []
+    const resolvedOwner = owner ?? 'local'
+    try {
+      const mems = store.listMemories(resolvedOwner, ['active']) as Array<{ content: string; status?: string }>
+      return (mems ?? [])
+        .filter(m => !m.status || m.status === 'active')
+        .map(m => m.content)
+        .filter(c => c.includes('[skill:review_audit:'))
     } catch {
       return []
     }
@@ -1166,6 +1399,7 @@ export class ClaimService {
     const scratchpad = buildManuscriptScratchpad(doc, tables)
     const useMemory = opts.mode === 'heurion_evolved'
     const activeRules = useMemory ? this.getActiveBoundaryRules(opts.owner) : []
+    const activeChecklists = useMemory ? this.getActiveReviewAuditChecklists(opts.owner) : []
 
     // Stage 1 & Stage 2：按章节切分文档并统计 Light / Medium / High 预算分布
     const sections: Array<{
@@ -1251,10 +1485,15 @@ export class ClaimService {
 
     // 2. 若提供了在线大模型（complete），按对应模式执行 LLM 审稿推理
     if (opts.complete) {
-      const rulesContext =
+      const boundaryBlock =
         useMemory && activeRules.length > 0
-          ? `\n【本课题组已确认的专科审稿边界豁免规则（请严格遵守，切勿对以下情况误报）】：\n${activeRules.map(r => `- ${r}`).join('\n')}\n`
+          ? `\n【本课题组已确认的专科审稿边界豁免规则（请严格遵守，切勿对以下合法研究设计边界误报）】：\n${activeRules.map(r => `- ${r}`).join('\n')}\n`
           : ''
+      const checklistBlock =
+        useMemory && activeChecklists.length > 0
+          ? `\n【从既往审稿复盘习得的跨章节高危漏检核查清单（若本章节存在对应客观矛盾请附上逐字 evidence 报出）】：\n${activeChecklists.map(c => `- ${c}`).join('\n')}\n`
+          : ''
+      const rulesContext = `${boundaryBlock}${checklistBlock}`
 
       // 产品模式（heurion_deep / heurion_evolved）：意见要带原文证据并逐条核实、每章节最多 3 条；PAT 基线模式保持原样以便对照
       const verifyEvidence = opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
@@ -1420,12 +1659,15 @@ export class ClaimService {
           const llm = candidates.filter(c => c.source_pass === 'llm_stage3')
           const rejected = new Set<SynthesizedReviewComment>()
           const fullText = `${fullProse}\n\n${tableMarkdown}`
+          const verifySysWithRules = boundaryBlock
+            ? `${VERIFY_SYSTEM}\n${boundaryBlock}注意：若某条待复核意见属于上述合法研究设计边界（且原文并不存在客观算术、置信区间或表文矛盾硬伤），请将其 verdict 判为 rejected。`
+            : VERIFY_SYSTEM
           for (let i = 0; i < llm.length; i += 20) {
             const batch = llm.slice(i, i + 20)
             const list = batch.map((c, k) =>
               `${k + 1}. [${c.severity}] 原句：${c.sentence}\n   证据：${(c.evidence ?? []).join(' / ') || '（无）'}\n   理由：${c.reason}`).join('\n')
             try {
-              const verdicts = parseVerdicts(await opts.complete!(VERIFY_SYSTEM, `【论文全文】\n${fullText}\n\n【待复核的意见】\n${list}`))
+              const verdicts = parseVerdicts(await opts.complete!(verifySysWithRules, `【论文全文】\n${fullText}\n\n【待复核的意见】\n${list}`))
               batch.forEach((c, k) => { if (verdicts.get(k + 1) === 'rejected') rejected.add(c) })
             } catch {
               /* 复核调用失败：这一批照常报出 */
@@ -1558,10 +1800,15 @@ export class ClaimService {
       }
     }
 
-    // Case 2: 研究者采纳审稿意见并改稿修复 -> 记录带恢复轨迹的信号供 Track B 提炼前置规则
+    // Case 2: 研究者采纳审稿意见并改稿修复 -> 记录带恢复轨迹的去数字化信号供 Track B 提炼前置规则
     if (opts.acceptedFix) {
       const code = opts.issueCategory ?? (linkedCheck?.verdict === 'unsupported' ? 'citation_unsupported' : 'review_comment_fix')
       const recovery = opts.recoveryOp ?? 'doc_read → replace_text (align prose with table/method/citation evidence) → resolve_comment'
+      const rawHint = opts.reason ?? linkedCheck?.reason ?? ''
+      const sanitizedHint =
+        rawHint && !hasInstanceLeakage(rawHint)
+          ? rawHint
+          : '落笔前先用 doc_read 核对正文数值与表格/统计方法/文献原文一致性，避免产生表文算术矛盾、方法结果冲突或结论夸大表述'
       const sigRow = store.addExecutionSignal({
         owner,
         doc_id: docId,
@@ -1569,8 +1816,8 @@ export class ClaimService {
         kind: 'guard_reject',
         code,
         detail: JSON.stringify({
-          message: `作者采纳审稿批注 ${commentId} 并完成正文修正`,
-          hint: opts.reason ?? linkedCheck?.reason ?? '落笔前先核对正文数值与表格/统计方法/文献原文一致性，避免产生需审稿返工的不一致或夸大表述',
+          message: '作者采纳审稿批注并完成正文修正',
+          hint: sanitizedHint,
           failed_ops: 'unverified_prose_claim',
           recovery_ops: recovery,
           domain: 'manuscript',
@@ -1584,6 +1831,104 @@ export class ClaimService {
     }
 
     return { track: 'none' }
+  }
+
+  /**
+   * 异步在线大模型版审稿批注自演进闭环：
+   * 当提供 `complete` 时，使用 `synthesizeSanitizedBoundaryRuleAsync` 进行零模板 LLM 规则蒸馏与双重实例脱敏校验。
+   */
+  async evolveFromReviewCommentAsync(
+    docId: string,
+    commentId: string,
+    opts: {
+      complete?: Complete | null
+      owner?: string
+      rebuttalText?: string
+      acceptedFix?: boolean
+      issueCategory?: string
+      recoveryOp?: string
+      sentence?: string
+      reason?: string
+    } = {},
+  ): Promise<{
+    track: 'track_a_narrow' | 'track_b_procedural' | 'none'
+    exemptedClaimId?: string
+    memoryId?: string
+    signalId?: string
+    distilledRule?: string
+    rawRebuttalHadDigits?: boolean
+    firstDraftLeaked?: boolean
+  }> {
+    if (!opts.complete || opts.acceptedFix || !opts.rebuttalText) {
+      return this.evolveFromReviewComment(docId, commentId, opts)
+    }
+    const store = this.docs.store as any
+    const owner = opts.owner ?? (typeof store?.getDoc === 'function' ? store.getDoc(docId)?.owner : undefined) ?? 'local'
+    const checks = (typeof store?.listClaimChecks === 'function' ? store.listClaimChecks(docId) : []) as Array<any>
+    const linkedCheck = checks.find(c => c.comment_id === commentId)
+    const commentObj = typeof store?.getComment === 'function' ? store.getComment(docId, commentId) : undefined
+    const aiReplyText = commentObj?.replies?.find((r: any) => r.role === 'ai')?.text ?? ''
+
+    if (linkedCheck && typeof store?.putClaimCheck === 'function') {
+      store.putClaimCheck({
+        doc_id: docId,
+        claim_id: linkedCheck.claim_id,
+        node_id: linkedCheck.node_id,
+        sentence: linkedCheck.sentence,
+        verdict: 'exempted',
+        evidence_tier: linkedCheck.evidence_tier,
+        evidence_quote: linkedCheck.evidence_quote,
+        reason: `作者申辩豁免：${opts.rebuttalText.trim()}`,
+        comment_id: commentId,
+        rev: this.docs.rev(docId),
+      })
+    }
+
+    const inferredCategory =
+      opts.issueCategory ??
+      /\|\s*(internal_inconsistency|method_result_mismatch|spin_or_guideline|citation_distortion|missing_citation)\]/i
+        .exec(aiReplyText)?.[1]
+        ?.toLowerCase() ??
+      (linkedCheck?.verdict === 'missing_citation' ? 'missing_citation' : undefined)
+
+    const { patternKey, rule: narrowRule, rawRebuttalHadDigits, firstDraftLeaked } =
+      await synthesizeSanitizedBoundaryRuleAsync(opts.complete, opts.rebuttalText, {
+        sentence: opts.sentence ?? linkedCheck?.sentence ?? commentObj?.snippet,
+        category: inferredCategory,
+        reason: opts.reason ?? linkedCheck?.reason ?? aiReplyText,
+      })
+
+    const existingMems = (typeof store?.listMemories === 'function' ? store.listMemories(owner) : []) as Array<any>
+    const tagMatch = /\[narrow:review_boundary:[^\]]+\]/.exec(narrowRule)?.[0] ?? `[narrow:review_boundary:${patternKey}]`
+    const existingMem = existingMems.find(m => m.content.includes(tagMatch))
+    const memRow =
+      existingMem && typeof store?.updateMemory === 'function'
+        ? (store.updateMemory(existingMem.id, { content: narrowRule }), existingMem)
+        : store.addMemory({
+            scope: 'user',
+            owner,
+            project_id: null,
+            kind: 'preference',
+            content: narrowRule,
+            norm: narrowRule.toLowerCase(),
+            reason: `审稿批注作者申辩收窄边界：${opts.rebuttalText.trim().slice(0, 80)}`,
+            source: 'auto',
+            source_doc_id: docId,
+            source_turn_id: null,
+            actor: 'user',
+            explicit: 1,
+            evidence: 1,
+            status: 'active',
+          })
+
+    return {
+      track: 'track_a_narrow',
+      ...(linkedCheck ? { exemptedClaimId: linkedCheck.claim_id } : {}),
+      memoryId: memRow.id,
+      distilledRule: narrowRule,
+      rawRebuttalHadDigits,
+      firstDraftLeaked,
+    }
   }
 }
 

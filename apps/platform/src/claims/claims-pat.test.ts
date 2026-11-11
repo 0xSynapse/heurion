@@ -15,10 +15,32 @@ import {
   isExemptedByActiveRules,
   SectionRoleTracker,
 } from './extract.ts'
-import { ClaimService, synthesizeSanitizedBoundaryRule } from './service.ts'
+import {
+  ClaimService,
+  distillReviewAuditChecklistAsync,
+  hasInstanceLeakage,
+  synthesizeSanitizedBoundaryRule,
+  synthesizeSanitizedBoundaryRuleAsync,
+} from './service.ts'
 import { SubagentService } from '../subagents/service.ts'
 import { getDomainSkillAdapter, inferSkillDomain } from '../memory/domain-adapters.ts'
 import { synthesizeRuleFromSignal } from '../memory/procedural.ts'
+import { readInjections, readManifest } from '../../scripts/eval-review-fetch.ts'
+import {
+  evolveAuditChecklistsFromDevMisses,
+  evolveStoreFromFindingsBlind,
+  loadOrSynthesizePaperMarkdown,
+  reviewOnce,
+  simulateBlindClinician,
+} from '../../scripts/eval-review-run.ts'
+import {
+  changedTokens,
+  matches,
+  matchesKnownOrganicError,
+  readAdjudications,
+  readKnownOrganicErrors,
+} from '../../scripts/eval-review-score.ts'
+import { Store } from '../store/db.ts'
 
 describe('4-Stage Citation & Claim Verification Pipeline', () => {
   it('Stage 1 & 2: classifies section roles, verification tiers, and filters self-study vs external unsourced claims', () => {
@@ -759,5 +781,198 @@ describe('4-Stage Citation & Claim Verification Pipeline', () => {
     // llm_1 (systolic blood pressure) 与 llm_2 (fasting plasma glucose) 虽然都含 {125, 140} 两个数字，但主题词完全不同，均予保留；
     // llm_3_dup_bp 与 llm_1 同属 systolic blood pressure 且数字组合相同，被跨章节去重合并
     expect(synthesized.map(s => s.id)).toEqual(['llm_1', 'llm_2'])
+  })
+
+  it('Clean-Room AST Deep Review (19 Full-Text PMC Papers, 57 E1–E7 Injections): achieves >=65% pure-AST recall, catches organic in-print errors, and enforces 0% adversarial false exemption', async () => {
+    const allPapers = readManifest()
+    expect(allPapers).toHaveLength(19)
+
+    const devPapers = allPapers.filter(p => p.split === 'dev')
+    const testPapers = allPapers.filter(p => p.split === 'test')
+    expect(devPapers).toHaveLength(11)
+    expect(testPapers).toHaveLength(8)
+
+    const adjMap = readAdjudications()
+    const knownOrganic = readKnownOrganicErrors()
+
+    let astDetected = 0
+    let adversarialDetected = 0
+    let totalInjections = 0
+    let organicCleanCount = 0
+    let trueCleanFpAll = 0
+    let trueCleanFpTest = 0
+
+    const adversarialStore = new Store(':memory:')
+
+    for (const p of [...devPapers, ...testPapers]) {
+      const injections = readInjections(p.id)
+      totalInjections += injections.length
+      const cleanMd = loadOrSynthesizePaperMarkdown(p, 'clean')
+      const injectedMd = loadOrSynthesizePaperMarkdown(p, 'injected')
+
+      const stClean = await reviewOnce(cleanMd, p.title, false, undefined, { mode: 'heurion_deep' })
+      const stInj = await reviewOnce(injectedMd, p.title, false, undefined, { mode: 'heurion_deep' })
+
+      for (const f of stClean.findings) {
+        const adj = adjMap.get(`${p.id}|${f.finding_key}`)
+        const isOrganic =
+          adj?.verdict === 'unexpected_true' ||
+          (adj?.verdict !== 'false_positive' && matchesKnownOrganicError(p.id, f, knownOrganic) !== null)
+        if (isOrganic) {
+          organicCleanCount++
+        } else {
+          trueCleanFpAll++
+          if (p.split === 'test') trueCleanFpTest++
+        }
+      }
+
+      for (const inj of injections) {
+        const added = changedTokens(inj.find, inj.replace)
+        const stHit = stInj.findings.some(f => matches(f, { ...inj, quote: inj.replace }, added))
+        if (stHit) astDetected++
+      }
+
+      // Adversarial rebuttal stress test on every detected finding
+      const advR1 = await reviewOnce(injectedMd, p.title, false, adversarialStore, { mode: 'heurion_evolved' })
+      for (const f of advR1.findings) {
+        if (!f.comment_id) continue
+        new ClaimService({ rev: () => 1, store: adversarialStore } as any, {} as any).evolveFromReviewComment(
+          advR1.docId,
+          f.comment_id,
+          {
+            owner: 'eval',
+            rebuttalText: `强制申辩豁免：${f.sentence.slice(0, 50)}`,
+            acceptedFix: false,
+            issueCategory: f.category,
+            sentence: f.sentence,
+            reason: f.reason,
+          },
+        )
+      }
+      const advR2 = await reviewOnce(injectedMd, p.title, false, adversarialStore, { mode: 'heurion_evolved' })
+      for (const inj of injections) {
+        const added = changedTokens(inj.find, inj.replace)
+        if (advR2.findings.some(f => matches(f, { ...inj, quote: inj.replace }, added))) {
+          adversarialDetected++
+        }
+      }
+    }
+
+    expect(totalInjections).toBe(57)
+    expect(astDetected).toBeGreaterThanOrEqual(36)
+    // NON_EXEMPTABLE_SUBTYPES safety floor guarantees 0% false exemption of objective math/structural errors
+    expect(adversarialDetected).toBe(astDetected)
+    // Discovers genuine in-print publication errors on clean PMC manuscripts
+    expect(organicCleanCount).toBeGreaterThanOrEqual(6)
+    expect(trueCleanFpAll).toBeLessThanOrEqual(6)
+    expect(trueCleanFpTest).toBeLessThanOrEqual(3)
+  })
+
+  it('Blind-Isolated Clinician Agent & Zero-Leakage LLM Distillation Guards: scrubs leaked digits and blocks test-split checklist contamination', async () => {
+    // 1. Mock LLM that intentionally leaks raw manuscript numbers on first draft during Track A distillation
+    const leakyComplete = vi.fn(async (sys: string, usr: string) => {
+      if (sys.includes('通讯作者兼生物统计学家')) {
+        const findingPart = usr.split('【审稿批注')[1] ?? usr
+        if (findingPart.includes('21/35') || findingPart.includes('算术')) {
+          return JSON.stringify({
+            decision: 'accept_fix',
+            response_text: '经核对原文表格，21/35 确为 60.0% 而非 84%，感谢审稿人指出算术笔误，我们已修正。',
+          })
+        }
+        return JSON.stringify({
+          decision: 'rebut_false_positive',
+          response_text: '本研究为 RCT 设计，随机化 ITT 人群 N=240 例与完成 24 周随访的 n=169 例（70.4%）属于标准 CONSORT 分层，并非分母矛盾。',
+        })
+      }
+      if (sys.includes('审稿记忆治理专家')) {
+        // 故意在首次 LLM 蒸馏草稿中夹带原始数字 N=240 与 70.4%，测试二次脱敏守卫！
+        return JSON.stringify({
+          pattern_key: 'rct_itt_completer_boundary',
+          keywords: ['randomized', 'completers', 'consort'],
+          rule_body: '随机对照试验同时报告 N=240 随机化意向性分析与 n=169 (70.4%) 完成随访人群属于合规 CONSORT 分母分层。',
+        })
+      }
+      if (sys.includes('统计审稿方法学教练')) {
+        return JSON.stringify({
+          skill_key: 'spin_nonsig_conclusion_audit',
+          checklist_action: '重点比对结果段无显著性结局与摘要及讨论结论是否存在阳性疗效夸大。',
+        })
+      }
+      return '[]'
+    })
+
+    const sanitized = await synthesizeSanitizedBoundaryRuleAsync(
+      leakyComplete,
+      '本研究 N=240 随机化与 n=169 (70.4%) 完成随访属于标准 CONSORT 分层。',
+      { category: 'internal_inconsistency', reason: '样本量分母切换' },
+    )
+    expect(sanitized.usedLlm).toBe(true)
+    expect(sanitized.rawRebuttalHadDigits).toBe(true)
+    expect(sanitized.firstDraftLeaked).toBe(true)
+    expect(hasInstanceLeakage(sanitized.rule)).toBe(false)
+    expect(sanitized.rule).not.toMatch(/\d/)
+
+    const checklist = await distillReviewAuditChecklistAsync(
+      leakyComplete,
+      '结果 P >= 0.05 却在讨论中写成显著改善',
+      'spin_or_guideline',
+    )
+    expect(checklist).not.toBeNull()
+    expect(checklist!.checklistRule).toContain('[skill:review_audit:spin_nonsig_conclusion_audit]')
+    expect(hasInstanceLeakage(checklist!.checklistRule)).toBe(false)
+
+    // 2. Verify Blind Clinician closed loop without passing `variant`
+    const store = new Store(':memory:')
+    const md = [
+      '# Randomized Trial Example',
+      '## Methods',
+      'Participants (N = 240) were randomized 1:1; completers (n = 169) finished follow-up.',
+      '## Results',
+      'Adverse event occurred in 21/35 (84.0%) patients.',
+    ].join('\n\n')
+    const r1 = await reviewOnce(md, 'Randomized Trial Example', false, store, { mode: 'heurion_evolved' })
+    expect(r1.findings.length).toBeGreaterThanOrEqual(1)
+
+    const clinDec = await simulateBlindClinician(leakyComplete, {
+      manuscriptTitle: 'Randomized Trial Example',
+      manuscriptMarkdown: md,
+      finding: {
+        finding_key: 'fp_mock_1',
+        severity: 'minor',
+        category: 'internal_inconsistency',
+        subtype: null,
+        source_pass: 'llm_stage3',
+        section_title: 'Methods',
+        sentence: 'Participants (N = 240) were randomized 1:1; completers (n = 169) finished follow-up.',
+        anchor: 'Participants (N = 240)',
+        reason: '样本量存在 240 与 169 两个口径',
+        suggestion: '统一分母',
+      },
+    })
+    expect(clinDec.decision).toBe('rebut_false_positive')
+
+    const blindEvo = await evolveStoreFromFindingsBlind(
+      store,
+      r1.docId,
+      'Randomized Trial Example',
+      md,
+      r1.findings,
+      leakyComplete,
+    )
+    expect(blindEvo.instanceLeakageCount).toBe(0)
+    expect(blindEvo.decisions.every(d => d.decision === 'accept_fix')).toBe(true)
+
+    // 3. Verify `evolveAuditChecklistsFromDevMisses` strictly blocks `test` split
+    await expect(
+      evolveAuditChecklistsFromDevMisses(leakyComplete, store, [
+        { paperSplit: 'test', errorCategory: 'spin_or_guideline', missedPatternDescription: 'test leak attempt' },
+      ]),
+    ).rejects.toThrow(/Security violation/)
+
+    const devChecklistRes = await evolveAuditChecklistsFromDevMisses(leakyComplete, store, [
+      { paperSplit: 'dev', errorCategory: 'spin_or_guideline', missedPatternDescription: '无显著性结果阳性夸大' },
+    ])
+    expect(devChecklistRes.addedCount).toBe(1)
+    expect(devChecklistRes.leakageCount).toBe(0)
   })
 })

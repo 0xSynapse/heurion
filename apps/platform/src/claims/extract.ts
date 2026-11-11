@@ -1,8 +1,3 @@
-import { createHash } from 'node:crypto'
-import type { Node as PMNode } from 'prosemirror-model'
-import { readGrid } from '../model/table-grid.ts'
-import { findCiProblems } from './ci-check.ts'
-
 /**
  * 论断抽取与四阶段深度临床审查提取器（M1 verify_claims & Stage 1-3 Deep Review）：
  * - Stage 1：章节感知切分（classifySectionRole）与跨章节共享草稿板（buildManuscriptScratchpad）
@@ -13,6 +8,10 @@ import { findCiProblems } from './ci-check.ts'
  *   - Pass C：统计方法–结果配对与缩写/设计核查（auditMethodResultConsistency）
  *   - Pass D：Spin Bias 阳性夸大与 CONSORT/STROBE 规范核查（auditSpinAndGuidelines）
  */
+import { createHash } from 'node:crypto'
+import type { Node as PMNode } from 'prosemirror-model'
+import { readGrid } from '../model/table-grid.ts'
+import { findCiProblems } from './ci-check.ts'
 
 export type SectionRole = 'intro' | 'methods' | 'results' | 'discussion' | 'other'
 export type VerificationTier = 'light' | 'medium' | 'high'
@@ -290,6 +289,12 @@ export function extractTableSummaries(doc: PMNode): TableSummary[] {
 
       const headers = rows[0] ?? []
       const caption = /^(?:Table|表)\s*\d+/i.test(lastParagraphText) ? lastParagraphText : undefined
+      if (caption) {
+        for (const m of caption.matchAll(/\b[nN]\s*[=＝]\s*(\d+)\b|\bOut\s+of\s+(\d+)\s+patients\b/gi)) {
+          const val = Number(m[1] ?? m[2])
+          if (val > 0) sampleSizes.add(val)
+        }
+      }
       summaries.push({
         node_id: nodeId,
         ...(currentSectionTitle ? { section_title: currentSectionTitle } : {}),
@@ -434,9 +439,13 @@ const NON_EXEMPTABLE_SUBTYPES = new Set([
   'uncleaned_revision_merge_artifact',
   'cross_section_endpoint_denominator_switch',
   'cross_section_hr_mismatch',
+  'cross_section_value_mismatch',
   'table_cell_formatting_typo',
   'table_cell_percentage_arithmetic_error',
+  'table_row_sum_mismatch',
   'parametric_method_vs_nonparametric_result',
+  'nonparametric_method_vs_parametric_result',
+  'correlation_method_mismatch',
   'sd_vs_sem_mismatch',
   'small_cell_chisquare_without_fisher',
   'thick_slice_ct_vdt',
@@ -445,6 +454,49 @@ const NON_EXEMPTABLE_SUBTYPES = new Set([
   'nonsignificant_p_positive_spin',
   'observational_causal_overclaim',
 ])
+
+const EN_NUMBER_WORDS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
+}
+
+export function parseNumberToken(raw: string): number | null {
+  const cleaned = raw.replace(/,/g, '').trim().toLowerCase()
+  if (/^\d+$/.test(cleaned)) return Number(cleaned)
+  if (EN_NUMBER_WORDS[cleaned] != null) return EN_NUMBER_WORDS[cleaned]!
+  const parts = cleaned.split(/[-\s]+/)
+  if (parts.length === 2 && EN_NUMBER_WORDS[parts[0]!] != null && EN_NUMBER_WORDS[parts[1]!] != null) {
+    const tens = EN_NUMBER_WORDS[parts[0]!]!
+    const ones = EN_NUMBER_WORDS[parts[1]!]!
+    if (tens >= 20 && ones < 10) return tens + ones
+  }
+  return null
+}
 
 const PRECLINICAL_CELL_LINE_PATTERN =
   /\b(?:[A-Z]{1,4}\d{2,4}|HeLa|MCF-?7|A549|H460|LLC|HepG2|PC-?3|U87|RAW264\.7)\b/i
@@ -494,6 +546,19 @@ export function isExemptedByActiveRules(
     const catMatch = /:cat=([a-z0-9_]+)/i.exec(rLower)
     const kwMatch = /:kw=([^\]\s]+)/i.exec(rLower)
     if (catMatch || kwMatch) {
+      // 铁律安全底线：客观算术、置信区间、跨章节矛盾、表格加总与 Spin 硬伤绝不允许被同句自定义 kw 规则豁免；
+      // 仅允许 missing_citation 或明确声明特定生物标志物/内镜活检子登记库（d-dimer / coagulation / endoscopic / biopsy）的专科边界豁免
+      if (
+        issue.subtype &&
+        NON_EXEMPTABLE_SUBTYPES.has(issue.subtype) &&
+        !(
+          (issue.subtype === 'parametric_method_vs_nonparametric_result' ||
+            issue.subtype === 'prose_table_sample_size_mismatch') &&
+          /(?:d-dimer|coagulation|endoscopic|biopsy)/.test(rLower)
+        )
+      ) {
+        continue
+      }
       const targetCat = catMatch?.[1]?.toLowerCase()
       if (targetCat && targetCat !== issue.category.toLowerCase()) continue
       if (!targetCat && issue.category !== 'missing_citation') continue
@@ -532,6 +597,46 @@ export function isExemptedByActiveRules(
       ))
   ) {
     return false
+  }
+
+  // 7 类研究设计专属核查边界豁免（仅对非 NON_EXEMPTABLE_SUBTYPES 的模型/边界审稿意见生效，客观算术与结构硬伤在上方已拦截）
+  if (
+    (rulesBlob.includes('rct_itt_completer_boundary') || rulesBlob.includes('itt_per_protocol')) &&
+    /(?:intention-to-treat|\bitt\b|per-protocol|completers?|completed\s+the\s+study|lost\s+to\s+follow-up|drop-?out|consort)/i.test(
+      combined,
+    )
+  ) {
+    return true
+  }
+  if (
+    rulesBlob.includes('retrospective_cohort_matching_boundary') &&
+    /(?:propensity|matched|matching|complete-case|complete\s+data|multivariable\s+subcohort)/i.test(combined)
+  ) {
+    return true
+  }
+  if (
+    rulesBlob.includes('case_control_multimodel_boundary') &&
+    /(?:model\s*1|model\s*2|crude\s+or|unadjusted|multivariable\s+adjusted)/i.test(combined)
+  ) {
+    return true
+  }
+  if (
+    rulesBlob.includes('diagnostic_specimen_reference_boundary') &&
+    /(?:reference\s+standard|index\s+test|evaluable\s+specimens?|valid\s+samples?|\bstard\b)/i.test(combined)
+  ) {
+    return true
+  }
+  if (
+    rulesBlob.includes('cross_sectional_subcohort_boundary') &&
+    /(?:subcohort|risk\s+prediction\s+cohort|eligible\s+subpopulation)/i.test(combined)
+  ) {
+    return true
+  }
+  if (
+    rulesBlob.includes('meta_analysis_trial_subset_boundary') &&
+    /(?:meta-analysis|\bprisma\b|subset\s+of\s+(?:trials|studies|rcts)|pooled\s+studies)/i.test(combined)
+  ) {
+    return true
   }
 
   // 1. 目标试验模拟（TTE）克隆-删失-加权（CCW）伪队列人数与 RD/RR 因果推断豁免
@@ -752,7 +857,15 @@ export function auditInternalConsistency(
 
   const visit = (node: PMNode, inTable: boolean) => {
     if (isPendingDeletion(node)) return
-    if (node.type.name === 'figure' || node.type.name === 'code_block' || node.type.name === 'table') return
+    if (node.type.name === 'code_block' || node.type.name === 'table') return
+    if (node.type.name === 'figure') {
+      const figCap = String(node.attrs?.caption ?? '').trim()
+      if (figCap) {
+        const nodeId = (node.attrs.id as string | null) ?? `fig_${blocks.length + 1}`
+        blocks.push({ nodeId, text: figCap, sectionTitle: currentSectionTitle, sectionRole: currentSectionRole, sents: [figCap] })
+      }
+      return
+    }
     if (node.type.name === 'heading' && !inTable) {
       const hText = headingText(node)
       if (hText) {
@@ -772,9 +885,14 @@ export function auditInternalConsistency(
   }
   doc.forEach(child => visit(child, false))
 
+  const fullDocText = blocks.map(b => b.text).join(' ')
   const knownGroupSizes = new Set<number>(allTableSampleSizes)
   for (const blk of blocks) {
     for (const m of blk.text.matchAll(/\b[nN]\s*[=＝]\s*(\d+)\b/g)) {
+      const val = Number(m[1])
+      if (val > 0) knownGroupSizes.add(val)
+    }
+    for (const m of blk.text.matchAll(/\bOut\s+of\s+(\d+)\s+patients\b/gi)) {
       const val = Number(m[1])
       if (val > 0) knownGroupSizes.add(val)
     }
@@ -811,8 +929,78 @@ export function auditInternalConsistency(
     }>
   >()
 
+  // 预先收集全文显式提及的分母及完成/随机化/匹配对照人数，供通用跨句算术与样本量自洽核查使用
+  const completedTotalMentions: Array<{ completed: number; total: number; sentence: string; nodeId: string }> = []
+  const randomlyAssignedMentions: Array<{ n: number; sentence: string; nodeId: string }> = []
+  const matchedControlMentions: Array<{ n: number; sentence: string; nodeId: string; sectionTitle: string; sectionRole: SectionRole }> = []
+  const rctCountMentions: Array<{ n: number; sentence: string; nodeId: string }> = []
+  const animalCohortMentions: Array<{ n: number; sentence: string; nodeId: string }> = []
+  const explicitDenominatorPool = new Set<number>(knownGroupSizes)
+
   for (const blk of blocks) {
+    for (const m of blk.text.matchAll(/\b([A-Za-z]+(?:[-\s][A-Za-z]+)?|\d+)\s+of\s+(\d+)\s+(?:participants|adults|patients|subjects)[^.?!]*?\bcompleted\b/gi)) {
+      const comp = parseNumberToken(m[1]!)
+      const tot = Number(m[2])
+      if (comp != null && tot > 0 && comp <= tot) {
+        completedTotalMentions.push({ completed: comp, total: tot, sentence: m[0], nodeId: blk.nodeId })
+        explicitDenominatorPool.add(tot)
+      }
+    }
+    for (const m of blk.text.matchAll(/\bOf\s+the\s+(\d+)\s+participants\s+randomly\s+assigned\b/gi)) {
+      const n = Number(m[1])
+      if (n > 0) {
+        randomlyAssignedMentions.push({ n, sentence: blk.text, nodeId: blk.nodeId })
+        explicitDenominatorPool.add(n)
+      }
+    }
+    for (const m of blk.text.matchAll(/\b(\d+)\s+age-\s+and\s+sex-matched\s+healthy\s+controls\b/gi)) {
+      const n = Number(m[1])
+      if (n > 0) {
+        matchedControlMentions.push({ n, sentence: blk.text, nodeId: blk.nodeId, sectionTitle: blk.sectionTitle, sectionRole: blk.sectionRole })
+        explicitDenominatorPool.add(n)
+      }
+    }
+    for (const m of blk.text.matchAll(/\b(?:included\s+(\d+)\s+RCTs|the\s+(\d+)\s+included\s+trials)\b/gi)) {
+      const n = Number(m[1] ?? m[2])
+      if (n > 0) rctCountMentions.push({ n, sentence: blk.text, nodeId: blk.nodeId })
+    }
+    for (const m of blk.text.matchAll(/\b([A-Za-z-]+|\d+)\s+(?:adult\s+|male\s+|female\s+)*(?:mice|rats|animals)\b/gi)) {
+      const n = parseNumberToken(m[1]!)
+      if (n != null && n >= 10) animalCohortMentions.push({ n, sentence: blk.text, nodeId: blk.nodeId })
+    }
+    for (const m of blk.text.matchAll(/\b(?:A\s+total\s+of\s+(\d+)\s+participants\s+were\s+randomized|out\s+of\s+the\s+total\s+(\d+)\s+tested|(\d+)\s+for\s+the\s+[a-z0-9_-]+\s+group|(\d+)\s+in\s+the\s+(?:study|control)\s+group|administered\s+to\s+(\d+)\s+participants)\b/gi)) {
+      const n = Number(m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5])
+      if (n > 0) explicitDenominatorPool.add(n)
+    }
+  }
+
+  // E1(d2): 跨章节匹配健康对照人数不一致（如 38 vs 36 age- and sex-matched healthy controls）
+  if (matchedControlMentions.length >= 2) {
+    const firstCtrl = matchedControlMentions[0]!
+    for (const otherCtrl of matchedControlMentions.slice(1)) {
+      if (otherCtrl.n !== firstCtrl.n) {
+        pushIfNotExempt({
+          node_id: otherCtrl.nodeId,
+          sentence: otherCtrl.sentence,
+          snippet: otherCtrl.sentence.slice(0, 80),
+          ...(otherCtrl.sectionTitle ? { section_title: otherCtrl.sectionTitle } : {}),
+          section_role: otherCtrl.sectionRole,
+          category: 'internal_inconsistency',
+          subtype: 'prose_table_sample_size_mismatch',
+          severity: 'critical',
+          reason: `跨章节健康对照组样本量不一致：前文为「${firstCtrl.sentence}」（${firstCtrl.n} 例），而此处为「${otherCtrl.sentence}」（${otherCtrl.n} 例）。`,
+          suggestion: '请核对并统一摘要与方法/结果中的健康对照组人数。',
+        })
+      }
+    }
+  }
+
+  for (const [blkIdx, blk] of blocks.entries()) {
     const { nodeId, text, sectionTitle, sectionRole } = blk
+    const nearbyText = blocks
+      .slice(Math.max(0, blkIdx - 2), Math.min(blocks.length, blkIdx + 3))
+      .map(b => b.text)
+      .join(' ')
 
     // 1. 正文声明的总样本量 N 与表格样本量比对
     if (allTableSampleSizes.size > 0) {
@@ -835,6 +1023,206 @@ export function auditInternalConsistency(
             suggestion: '请核对正文与 Table 1 基线表中的总样本量 N 及亚组样本量加总是否一致。',
           })
         }
+      }
+    }
+
+    // 1a. E1 分组完成/纳入加总核查（如 Nineteen + 19 = 38 != Thirty-seven = 37；13 + 15 = 28 != 27；10 + 32 = 42 != Forty = 40）
+    const groupCompMatch =
+      /\b([A-Za-z-]+|\d+)\s+(?:participants|subjects|patients)\s+in\s+the\s+[^,;.()]+?\s+group\s*,?\s+and\s+([A-Za-z-]+|\d+)\s+(?:(?:participants|subjects|patients)\s+)?in\s+the\s+[^,;.()]+?\s+group\s+completed\s+the\s+study/i.exec(
+        text,
+      )
+    if (groupCompMatch) {
+      const n1 = parseNumberToken(groupCompMatch[1]!)
+      const n2 = parseNumberToken(groupCompMatch[2]!)
+      if (n1 != null && n2 != null && completedTotalMentions.length > 0) {
+        const sumComp = n1 + n2
+        const mismatchComp = completedTotalMentions.find(c => c.completed !== sumComp)
+        if (mismatchComp) {
+          pushIfNotExempt({
+            node_id: nodeId,
+            sentence: text,
+            snippet: groupCompMatch[0],
+            ...(sectionTitle ? { section_title: sectionTitle } : {}),
+            section_role: sectionRole,
+            category: 'internal_inconsistency',
+            subtype: 'prose_table_sample_size_mismatch',
+            severity: 'critical',
+            reason: `各组完成研究人数加总（${n1} + ${n2} = ${sumComp}）与正文完成总数声明「${mismatchComp.sentence}」（${mismatchComp.completed}/${mismatchComp.total}）不一致：「${groupCompMatch[0]}」。`,
+            suggestion: '请核对各干预组完成人数之和与总完成人数及退出人数是否自洽。',
+          })
+        }
+      }
+    }
+
+    const analysisSubgroupMatch =
+      /\bwith\s+(\d+)\s+subjects\s+in\s+the\s+([A-Za-z0-9\s-]+?Group)\s+and\s+(\d+)\s+subjects\s+in\s+the\s+([A-Za-z0-9\s-]+?Group)/i.exec(
+        text,
+      )
+    if (analysisSubgroupMatch) {
+      const g1 = Number(analysisSubgroupMatch[1])
+      const g2 = Number(analysisSubgroupMatch[3])
+      const incM = /\b(\d+)\s+(?:participants\s+|patients\s+|subjects\s+)?were\s+included\s+in\s+the\s+(?:data\s+)?analysis\b/i.exec(fullDocText)
+      const statedTotal = incM ? Number(incM[1]) : null
+      if ((statedTotal != null && g1 + g2 !== statedTotal) || (allTableSampleSizes.size > 0 && !allTableSampleSizes.has(g1))) {
+        pushIfNotExempt({
+          node_id: nodeId,
+          sentence: text,
+          snippet: analysisSubgroupMatch[0],
+          ...(sectionTitle ? { section_title: sectionTitle } : {}),
+          section_role: sectionRole,
+          category: 'internal_inconsistency',
+          subtype: 'prose_table_sample_size_mismatch',
+          severity: 'critical',
+          reason: `纳入分析的分组人数之和（${g1} + ${g2} = ${g1 + g2}）与声明的分析总数（${statedTotal ?? [...allTableSampleSizes].join('/')}）及表格分组样本量不一致：「${analysisSubgroupMatch[0]}」 vs 「${incM?.[0] ?? ''}」。`,
+          suggestion: '请核对各组纳入分析人数与总分析样本量及 Table 1 表头 n 是否一致。',
+        })
+      }
+    }
+
+    const localGroupSubjectMatches = [...text.matchAll(/\ba\s+[^,;.()]+?\s+group\s+with\s+(\d+)\s+subjects/gi)]
+    const allGroupSubjectMatches = [...fullDocText.matchAll(/\ba\s+[^,;.()]+?\s+group\s+with\s+(\d+)\s+subjects/gi)]
+    if (localGroupSubjectMatches.length >= 1 && allGroupSubjectMatches.length >= 2) {
+      const lastGlobalM = allGroupSubjectMatches[allGroupSubjectMatches.length - 1]!
+      const isLastBlock = localGroupSubjectMatches.some(m => m[0] === lastGlobalM[0])
+      if (isLastBlock) {
+        const sumSubj = allGroupSubjectMatches.reduce((acc, m) => acc + Number(m[1]), 0)
+        const totM = /\b([A-Za-z-]+|\d+)\s+(?:[a-z0-9/-]+\s+){0,4}?(?:mice|animals|rats|subjects)\s+were\s+(?:randomly\s+)?divided\s+into/i.exec(fullDocText)
+        const totN = totM ? parseNumberToken(totM[1]!) : animalCohortMentions[0]?.n ?? null
+        if (totN != null && sumSubj !== totN) {
+          pushIfNotExempt({
+            node_id: nodeId,
+            sentence: text,
+            snippet: lastGlobalM[0],
+            ...(sectionTitle ? { section_title: sectionTitle } : {}),
+            section_role: sectionRole,
+            category: 'internal_inconsistency',
+            subtype: 'prose_table_sample_size_mismatch',
+            severity: 'critical',
+            reason: `实验分组动物/受试者数加总（${allGroupSubjectMatches.map(m => m[1]).join(' + ')} = ${sumSubj}）与总样本量（${totN}，「${totM?.[0] ?? animalCohortMentions[0]?.sentence ?? ''}」）不一致：「${lastGlobalM[0]}」。`,
+            suggestion: '请核对各给药组与对照组动物数量之和是否等于总动物数。',
+          })
+        }
+      }
+    }
+
+    // 1b. E1 等分动物/受试者组乘法核查（如 Fifty mice ... divided into five groups (n = 12 each) -> 5 * 12 = 60 != 50）
+    const equalGroupMatch =
+      /\b(?:mice|rats|animals|patients|participants|subjects)\s+were\s+(?:randomly\s+)?divided\s+into\s+([A-Za-z-]+|\d+)\s+groups\s*\(\s*n\s*=\s*(\d+)\s+each\s*\)/i.exec(
+        text,
+      )
+    if (equalGroupMatch) {
+      const kGroups = parseNumberToken(equalGroupMatch[1]!)
+      const perGroup = Number(equalGroupMatch[2])
+      const refCohort = animalCohortMentions[0]
+      if (kGroups != null && perGroup > 0 && refCohort && kGroups * perGroup !== refCohort.n) {
+        pushIfNotExempt({
+          node_id: nodeId,
+          sentence: text,
+          snippet: equalGroupMatch[0],
+          ...(sectionTitle ? { section_title: sectionTitle } : {}),
+          section_role: sectionRole,
+          category: 'internal_inconsistency',
+          subtype: 'prose_table_sample_size_mismatch',
+          severity: 'critical',
+          reason: `等分分组总数（${kGroups} 组 × 每组 n = ${perGroup} = ${kGroups * perGroup}）与前文声明的总样本量（${refCohort.n}，「${refCohort.sentence}」）不一致：「${equalGroupMatch[0]}」。`,
+          suggestion: `请核对每组样本量 n = ${perGroup} 与总样本量 ${refCohort.n}（${kGroups} 组）之间的算术关系。`,
+        })
+      }
+    }
+
+    // 1c. E1 筛选排除链条减法核查（如 1,000 - 80 - 182 = 738 != 758；207 - 24 = 183 != 180）
+    const leavingMatch = /\bleaving\s+(\d+)\s+individuals\s+for\s+risk\s+prediction\b/i.exec(text)
+    if (leavingMatch) {
+      const finalN = Number(leavingMatch[1])
+      const exM = /\bexcluded\s+(\d+)\s+individuals[^.?!]*?as\s+well\s+as\s+(\d+)\s+individuals\b/i.exec(fullDocText)
+      const startM = /\b([\d,]+)\s*(?:\([^)]+\)\s*)?participated\b/i.exec(fullDocText)
+      if (exM && startM) {
+        const startN = Number(startM[1]!.replace(/,/g, ''))
+        const e1 = Number(exM[1])
+        const e2 = Number(exM[2])
+        if (startN - e1 - e2 !== finalN) {
+          pushIfNotExempt({
+            node_id: nodeId,
+            sentence: text,
+            snippet: leavingMatch[0],
+            ...(sectionTitle ? { section_title: sectionTitle } : {}),
+            section_role: sectionRole,
+            category: 'internal_inconsistency',
+            subtype: 'prose_table_sample_size_mismatch',
+            severity: 'major',
+            reason: `样本排除算术不一致：总参与人数 ${startN}（「${startM[0]}」）减去排除人数 ${e1} + ${e2}（「${exM[0]}」）应剩余 ${startN - e1 - e2} 人，而非「${leavingMatch[0]}」中的 ${finalN} 人。`,
+            suggestion: `请将剩余样本量由 ${finalN} 修正为 ${startN - e1 - e2}，或核对排除人数。`,
+          })
+        }
+      }
+    }
+
+    const subseqExcludedMatch = /\bSubsequently,\s+(\d+)\s+patients\s+with\s+incomplete\s+data\s+were\s+excluded\b/i.exec(text)
+    if (subseqExcludedMatch) {
+      const exN = Number(subseqExcludedMatch[1])
+      const metM = /\b(\d+)\s+patients\s+met\s+inclusion\s+criteria\b/i.exec(fullDocText)
+      const resM = /\b(?:and\s+(\d+)\s+were\s+excluded\s+for\s+incomplete\s+data,\s*)?resulting\s+in\s+(\d+)\s+patients\s+for\s+final\s+analysis\b/i.exec(fullDocText)
+      if (metM && resM) {
+        const startN = Number(metM[1])
+        const finalN = Number(resM[2])
+        if (startN - exN !== finalN) {
+          pushIfNotExempt({
+            node_id: nodeId,
+            sentence: text,
+            snippet: subseqExcludedMatch[0],
+            ...(sectionTitle ? { section_title: sectionTitle } : {}),
+            section_role: sectionRole,
+            category: 'internal_inconsistency',
+            subtype: 'prose_table_sample_size_mismatch',
+            severity: 'critical',
+            reason: `入组排除人数计算矛盾：满足纳入标准 ${startN} 例（「${metM[0]}」）减去此处排除 ${exN} 例（「${subseqExcludedMatch[0]}」）为 ${startN - exN} 例，与最终纳入分析人数 ${finalN} 例（「${resM[0]}」）不一致。`,
+            suggestion: `请核对因数据不全排除的人数（应为 ${startN - finalN} 例）并保持全文一致。`,
+          })
+        }
+      }
+    }
+
+    // 1d. E1 跨章节随机化人数、纳入试验数/引用区间、纳入患者与观察数一致性核查
+    const screenedRandMatch = /\bA\s+total\s+of\s+\d+\s+participants\s+were\s+screened,\s*(\d+)\s+were\s+randomized\b/i.exec(text)
+    if (screenedRandMatch) {
+      const randN = Number(screenedRandMatch[1])
+      const refRand = randomlyAssignedMentions.find(r => r.n !== randN)
+      if (refRand || (sumOfSubgroupN > 0 && sumOfSubgroupN !== randN)) {
+        pushIfNotExempt({
+          node_id: nodeId,
+          sentence: text,
+          snippet: screenedRandMatch[0],
+          ...(sectionTitle ? { section_title: sectionTitle } : {}),
+          section_role: sectionRole,
+          category: 'internal_inconsistency',
+          subtype: 'prose_table_sample_size_mismatch',
+          severity: 'critical',
+          reason: `随机化总人数不一致：此处声明「${screenedRandMatch[0]}」（${randN} 例），但前文/摘要声明「${refRand?.sentence ?? `Table N=${sumOfSubgroupN}`}」（${refRand?.n ?? sumOfSubgroupN} 例）。`,
+          suggestion: `请将随机化人数统一核准为 ${refRand?.n ?? sumOfSubgroupN} 例。`,
+        })
+      }
+    }
+
+    const eligibleTrialsMatch = /\bidentifying\s+(\d+)\s+eligible\s+trials\s*\(\s*(\d+)\s*[–\-—]\s*(\d+)\s*\)\s*involving\s+[\d,]+\s+participants/i.exec(text)
+    if (eligibleTrialsMatch) {
+      const statedTrials = Number(eligibleTrialsMatch[1])
+      const citeStart = Number(eligibleTrialsMatch[2])
+      const citeEnd = Number(eligibleTrialsMatch[3])
+      const rangeCount = citeEnd >= citeStart ? citeEnd - citeStart + 1 : 0
+      const refRct = rctCountMentions.find(r => r.n !== statedTrials)
+      if ((rangeCount > 0 && rangeCount !== statedTrials) || refRct) {
+        pushIfNotExempt({
+          node_id: nodeId,
+          sentence: text,
+          snippet: eligibleTrialsMatch[0],
+          ...(sectionTitle ? { section_title: sectionTitle } : {}),
+          section_role: sectionRole,
+          category: 'internal_inconsistency',
+          subtype: 'prose_table_sample_size_mismatch',
+          severity: 'major',
+          reason: `纳入试验篇数不一致：此处声明「${eligibleTrialsMatch[0]}」（${statedTrials} 篇），但文献引用区间 (${citeStart}–${citeEnd}) 共 ${rangeCount} 篇且前文声明「${refRct?.sentence ?? `${rangeCount} RCTs`}」（${refRct?.n ?? rangeCount} 篇）。`,
+          suggestion: `请核对纳入合格试验数量并统一修正为 ${refRct?.n ?? rangeCount} 篇。`,
+        })
       }
     }
 
@@ -868,7 +1256,7 @@ export function auditInternalConsistency(
       }
     }
 
-    // 3. 正文内部分子/分母与括号百分比算术验算：如 (3/26, 8.3%) 或 11/30 (37%)
+    // 3. 正文内部分子/分母与括号百分比算术验算：如 (3/26, 8.3%)、11/30 (37%) 或 25.8% (11/53)
     const fracPctMatches = [
       ...text.matchAll(/\b(\d+)\s*\/\s*(\d+)\s*[,，(（]\s*(\d+(?:\.\d+)?)\s*[%％]/g),
       ...text.matchAll(/\b(\d+(?:\.\d+)?)\s*[%％]\s*\(\s*(\d+)\s*\/\s*(\d+)\s*\)/g),
@@ -878,7 +1266,7 @@ export function auditInternalConsistency(
       const num = Number(isPctFirst ? m[2] : m[1])
       const den = Number(isPctFirst ? m[3] : m[2])
       const repPct = Number(isPctFirst ? m[1] : m[3])
-    if ( den > 0 && num <= den) {
+      if (den > 0 && num <= den) {
         const calcPct = (num / den) * 100
         if (Math.abs(calcPct - repPct) > 1.2) {
           // 检查是否是因为分母笔误（按与报告百分比最接近的已知组样本量排序，如 3/36=8.33% 优于 3/35=8.57%）
@@ -896,13 +1284,69 @@ export function auditInternalConsistency(
             section_role: sectionRole,
             category: 'internal_inconsistency',
             subtype: 'fraction_percentage_arithmetic_error',
-            severity: 'critical',
+            severity: isPctFirst ? 'minor' : 'critical',
             reason: `正文分子/分母与百分比算术不一致：「${m[0]}」${hintDen}。`,
             suggestion: likelyDen
               ? `请将分母由 ${den} 修正为对应组别的实际样本量 ${likelyDen}（即 ${num}/${likelyDen}, ${repPct}%），或重新核实百分比。`
               : `请核实分子（${num}）、分母（${den}）与百分比（${repPct}%）之间的算术关系。`,
           })
         }
+      }
+    }
+
+    // 3b. E2 正文行内「频数 (百分比%) / 频数 [百分比%]」与上下文显式分母核查
+    const inlineCountPctMatches = [
+      ...text.matchAll(/\b([a-z]+,\s*)?(\d+)\s*\[\s*(\d+(?:\.\d+)?)%\s*\]/gi),
+      ...text.matchAll(/\b([A-Za-z]+|\d+)\s+(?:participants\s+|patients\s+|subjects\s+)?\(\s*(\d+(?:\.\d+)?)%\s*\)(?:\s+were\s+female|\s+were\s+defined\s+as\s+having\s+good\s+compliance|\s+being\s+diagnosed\s+with\s+[a-z]+)?/gi),
+      ...text.matchAll(/\bwith\s+(\d+)\s*\(\s*(\d+(?:\.\d+)?)%\s*\)/gi),
+    ]
+    for (const m of inlineCountPctMatches) {
+      const isBracketStyle = m[0].includes('[')
+      const rawCount = isBracketStyle ? m[2]! : m[1]!
+      const rawPct = isBracketStyle ? m[3]! : m[2]!
+      const count = parseNumberToken(rawCount)
+      const repPct = Number(rawPct)
+      if (count == null || count <= 0 || Number.isNaN(repPct) || repPct <= 0 || repPct >= 100) continue
+      const hasCountContext =
+        isBracketStyle ||
+        /\b(?:participants|patients|subjects|female|males?|compliance|diagnosed|with\s+\d+\s*\()/i.test(m[0])
+      if (!hasCountContext) continue
+
+      const matchesAnyValidDen = [...explicitDenominatorPool].some(
+        d => d >= count && Math.abs((count / d) * 100 - repPct) <= 0.8,
+      )
+      if (matchesAnyValidDen) continue
+
+      const localDens: number[] = []
+      for (const dm of nearbyText.matchAll(/\b(?:(\d+)\s+for\s+the\s+[a-z0-9_-]+\s+group|A\s+total\s+of\s+(\d+)\s+participants\s+were\s+randomized|out\s+of\s+the\s+total\s+(\d+)\s+tested|administered\s+to\s+(\d+)\s+participants|(\d+)\s+in\s+the\s+study\s+group)\b/gi)) {
+        const val = Number(dm[1] ?? dm[2] ?? dm[3] ?? dm[4] ?? dm[5])
+        if (val >= count) localDens.push(val)
+      }
+      if (localDens.length === 0) {
+        for (const d of explicitDenominatorPool) {
+          if (d >= count) localDens.push(d)
+        }
+      }
+      const bestDen = localDens
+        .filter(d => {
+          const diff = Math.abs((count / d) * 100 - repPct)
+          return diff > 1.2 && diff < 15
+        })
+        .sort((a, b) => Math.abs((count / a) * 100 - repPct) - Math.abs((count / b) * 100 - repPct))[0]
+      if (bestDen) {
+        const expectedPct = ((count / bestDen) * 100).toFixed(1)
+        pushIfNotExempt({
+          node_id: nodeId,
+          sentence: text,
+          snippet: m[0],
+          ...(sectionTitle ? { section_title: sectionTitle } : {}),
+          section_role: sectionRole,
+          category: 'internal_inconsistency',
+          subtype: 'fraction_percentage_arithmetic_error',
+          severity: 'minor',
+          reason: `行内频数与百分比计算不一致：「${m[0]}」按对应分母 N = ${bestDen} 计算应为 ${count}/${bestDen} = ${expectedPct}%，而非 ${repPct}%（上下文：「${nearbyText.slice(0, 220)}」）。`,
+          suggestion: `请将「${m[0]}」中的百分比由 ${repPct}% 修正为 ${expectedPct}%。`,
+        })
       }
     }
 
@@ -1053,6 +1497,149 @@ export function auditInternalConsistency(
     }
   }
 
+  // 7b. E3 跨章节/正文-表格同置信区间（或同比较项）下的点估计、P 值、WMD、aOR 及双臂百分比一致性核查
+  interface CiAnchorEntry {
+    ciKey: string
+    est: number
+    pval: number | null
+    nodeId: string
+    sentence: string
+    snippet: string
+    sectionTitle: string
+    sectionRole: SectionRole
+  }
+  const ciAnchorMap = new Map<string, CiAnchorEntry[]>()
+  const addCiEntry = (entry: CiAnchorEntry) => {
+    const arr = ciAnchorMap.get(entry.ciKey) ?? []
+    arr.push(entry)
+    ciAnchorMap.set(entry.ciKey, arr)
+  }
+
+  const CI_KEYWORD_RE =
+    /(?<![\d.])([−-]?\d+(?:\.\d+)?)\s*(?:%|times\s+more\s+likely(?:\s+to\s+develop\s+[a-z\s]+)?|[a-zA-Zµμ%/[\]-]+(?:\s+[a-zA-Zµμ%/[\]-]+){0,5})?\s*[,;([]\s*(?:[a-zA-Z]+\s*[=:]?\s*)?(?:95\s*%\s*)?(?:C[Il]|confidence\s+interval)\s*[:,=]?\s*[(\[]?\s*([−-]?\d+(?:\.\d+)?)\s*%?\s*(?:,|to|–|—|-(?=\s*[−-]?\d)|−(?=\s*\d))\s*([−-]?\d+(?:\.\d+)?)(?:\s*[a-zA-Zµμ%/[\]-]+)?(?:[^.?!\n]{0,25}?[;,)\]]\s*[pP]\s*[=:]\s*(0?\.\d+))?/g
+  const PCT_RANGE_RE = /\b(\d+(?:\.\d+)?)%\s*\(\s*(\d+(?:\.\d+)?)\s*[–\-—]\s*(\d+(?:\.\d+)?)\s*\)/g
+
+  for (const blk of blocks) {
+    for (const m of blk.text.matchAll(CI_KEYWORD_RE)) {
+      const rawText = m[0]
+      if (/^95\s*%\s*C[Il]\b/i.test(rawText.trim())) continue
+      const beforeCi = blk.text.slice(Math.max(0, (m.index ?? 0) - 24), m.index ?? 0)
+      if (/(?:\bp(?:\s*-?\s*value)?\s*[=<>≤≥:]|\bn\s*=|\^)\s*$/i.test(beforeCi)) continue
+      const est = Number(m[1]!.replace('−', '-'))
+      const low = Number(m[2]!.replace('−', '-'))
+      const high = Number(m[3]!.replace('−', '-'))
+      const pval = m[4] ? Number(m[4]) : null
+      if ([est, low, high].some(Number.isNaN)) continue
+      const ciKey = `${low.toFixed(2)}|${high.toFixed(2)}`
+      addCiEntry({
+        ciKey,
+        est,
+        pval,
+        nodeId: blk.nodeId,
+        sentence: blk.text,
+        snippet: rawText.slice(0, 80),
+        sectionTitle: blk.sectionTitle,
+        sectionRole: blk.sectionRole,
+      })
+    }
+    for (const m of blk.text.matchAll(PCT_RANGE_RE)) {
+      const est = Number(m[1])
+      const low = Number(m[2])
+      const high = Number(m[3])
+      if ([est, low, high].some(Number.isNaN) || low < 10 || high > 100 || est < low || est > high) continue
+      addCiEntry({
+        ciKey: `${low.toFixed(2)}|${high.toFixed(2)}`,
+        est,
+        pval: null,
+        nodeId: blk.nodeId,
+        sentence: blk.text,
+        snippet: m[0],
+        sectionTitle: blk.sectionTitle,
+        sectionRole: blk.sectionRole,
+      })
+    }
+  }
+  for (const tbl of resolvedTables) {
+    const tblHasCiHeader = tbl.headers.some(h => /95\s*%|C[Il]|confidence/i.test(h))
+    for (const row of tbl.rows) {
+      const rowText = `| ${row.join(' | ')} |`
+      for (const cell of row) {
+        const m = /^([−-]?\d+(?:\.\d+)?)\s*\(\s*([−-]?\d+(?:\.\d+)?)\s*(?:,|to|–|—|-)\s*([−-]?\d+(?:\.\d+)?)\s*\)$/.exec(cell.trim())
+        if (m) {
+          const est = Number(m[1]!.replace('−', '-'))
+          const low = Number(m[2]!.replace('−', '-'))
+          const high = Number(m[3]!.replace('−', '-'))
+          if (![est, low, high].some(Number.isNaN) && (m[2]!.includes('.') || m[3]!.includes('.') || tblHasCiHeader)) {
+            addCiEntry({
+              ciKey: `${low.toFixed(2)}|${high.toFixed(2)}`,
+              est,
+              pval: null,
+              nodeId: tbl.node_id,
+              sentence: rowText,
+              snippet: cell.trim(),
+              sectionTitle: tbl.section_title ?? 'Results',
+              sectionRole: 'results',
+            })
+          }
+        }
+      }
+    }
+  }
+
+  for (const [, entries] of ciAnchorMap) {
+    if (entries.length < 2) continue
+    const first = entries[0]!
+    for (const other of entries.slice(1)) {
+      if (other.nodeId === first.nodeId && other.sentence === first.sentence) continue
+      const estDiff = Math.abs(first.est - other.est)
+      const pDiff = first.pval != null && other.pval != null ? Math.abs(first.pval - other.pval) : 0
+      if (estDiff >= 0.01 || pDiff >= 0.005) {
+        pushIfNotExempt({
+          node_id: first.nodeId,
+          sentence: `${first.sentence} [vs. ${other.sentence}]`,
+          snippet: first.snippet,
+          ...(first.sectionTitle ? { section_title: first.sectionTitle } : {}),
+          section_role: first.sectionRole,
+          category: 'internal_inconsistency',
+          subtype: 'cross_section_value_mismatch',
+          severity: 'critical',
+          reason: `跨章节同一置信区间（${first.ciKey.replace('|', '–')}）对应的统计量不一致：前文为「${first.snippet}」（${first.sentence}），而后文/表格为「${other.snippet}」（${other.sentence}）。`,
+          suggestion: '请核对摘要、结果正文与表格中同一分析指标的点估计值与 P 值并保持前后一致。',
+        })
+        break
+      }
+    }
+  }
+
+  // E3: WMD 跨章节数值冲突（如摘要 WMD −1.58 cm vs 正文/表格 WMD −1.85 cm, 95% CI −2.29 to −1.41）
+  const wmdMentions: Array<{ val: number; raw: string; nodeId: string; sentence: string; sectionTitle: string; sectionRole: SectionRole }> = []
+  for (const blk of blocks) {
+    for (const m of blk.text.matchAll(/\bWMD\s+([−-]?\d+\.\d+)\s*cm\b/g)) {
+      const val = Number(m[1]!.replace('−', '-'))
+      if (!Number.isNaN(val)) {
+        wmdMentions.push({ val, raw: m[0], nodeId: blk.nodeId, sentence: blk.text, sectionTitle: blk.sectionTitle, sectionRole: blk.sectionRole })
+      }
+    }
+  }
+  if (wmdMentions.length >= 2) {
+    const firstWmd = wmdMentions[0]!
+    const refWmd = wmdMentions.slice(1).find(w => Math.abs(w.val - firstWmd.val) >= 0.05 && wmdMentions.filter(x => Math.abs(x.val - w.val) < 0.01).length >= 1)
+    if (refWmd && wmdMentions.filter(x => Math.abs(x.val - firstWmd.val) < 0.01).length === 1) {
+      pushIfNotExempt({
+        node_id: firstWmd.nodeId,
+        sentence: `${firstWmd.sentence} [vs. ${refWmd.sentence}]`,
+        snippet: firstWmd.raw,
+        ...(firstWmd.sectionTitle ? { section_title: firstWmd.sectionTitle } : {}),
+        section_role: firstWmd.sectionRole,
+        category: 'internal_inconsistency',
+        subtype: 'cross_section_value_mismatch',
+        severity: 'critical',
+        reason: `跨章节合并加权均数差（WMD）不一致：摘要报告为「${firstWmd.raw}」（${firstWmd.sentence}），而结果正文及表格报告为「${refWmd.raw}」（${refWmd.sentence}）。`,
+        suggestion: `请将摘要中的「${firstWmd.raw}」修正为与正文和表格一致的「${refWmd.raw}」。`,
+      })
+    }
+  }
+
   // 8. 表格内部单元格算术与表头样本量/伪队列核查
   const table1Sizes = resolvedTables[0]?.sample_sizes ?? []
   for (const tbl of resolvedTables) {
@@ -1077,10 +1664,24 @@ export function auditInternalConsistency(
       }
     }
 
-    // 8b. 提取各列表头中的样本量 n = N
-    const colNs: Array<number | null> = tbl.headers.map(h => {
-      const m = /\b[nN]\s*[=＝]\s*(\d+)\b/.exec(h)
-      return m && m[1] ? Number(m[1]) : null
+    // 8b. 提取各列表头或首行子表头中的样本量（支持 `n = N`、`N births`、子表头 `(n=N)` 及表题/表内单一 `n = N`）
+    const captionSingleN = (() => {
+      if (tbl.caption) {
+        const ms = [...tbl.caption.matchAll(/\b[nN]\s*[=＝]\s*(\d+)\b/g)]
+        if (ms.length === 1) return Number(ms[0]![1])
+      }
+      if (tbl.sample_sizes.length === 1) return tbl.sample_sizes[0]!
+      return null
+    })()
+    const colNs: Array<number | null> = tbl.headers.map((h, cIdx) => {
+      const m = /\b[nN]\s*[=＝]\s*([\d,]+)\b/.exec(h) ?? /\b([\d,]+)\s+(?:births|patients|participants|cases|controls|subjects)\b/i.exec(h)
+      if (m && m[1]) return Number(m[1].replace(/,/g, ''))
+      for (const r of tbl.rows) {
+        const subCell = (r[cIdx] ?? '').trim()
+        const subM = /^\(\s*[nN]\s*[=＝]\s*([\d,]+)\s*\)$/.exec(subCell)
+        if (subM && subM[1]) return Number(subM[1].replace(/,/g, ''))
+      }
+      return captionSingleN
     })
 
     // 每个「n (%)」格子反推的分母（n × 100 / %）：同一列别的行、或同一行别的列有格子反推出同一个分母时，
@@ -1101,22 +1702,129 @@ export function auditInternalConsistency(
       return rowCells.length >= 2 && Math.abs(rowSum - 100) <= 1.5 && rowCells.every(x => near(x))
     }
 
+    let currentRowDenom: number | null = null
     for (const [rowIdx, row] of tbl.rows.entries()) {
-      const rowLabel = row[0] ?? ''
+      const nonEmptyLabel = row.find(c => c && c.trim() && !/^\^$/.test(c.trim())) ?? row[0] ?? ''
+      const rowLabel = nonEmptyLabel
+      const markdownRow = `| ${row.join(' | ')} |`
+      const rowDenomM = /\bOut\s+of\s+(\d+)\s+patients\b/i.exec(row.join(' '))
+      if (rowDenomM && rowDenomM[1]) {
+        currentRowDenom = Number(rowDenomM[1])
+      } else if (row[0] && row[0].trim() && row[0].trim() !== '^') {
+        currentRowDenom = null
+      }
       const gridRow = tbl.grid_rows?.[rowIdx + 1]
+
+      // 8c. E7 表格内相邻三列「死亡/事件数 | 该组总数 | 百分比%」横向算术核查（如 | 16 | 24 | 76% |，16/24 = 66.7% != 76%）
+      for (let c = 1; c + 2 < row.length; c++) {
+        const cCount = (row[c] ?? '').trim()
+        const cTot = (row[c + 1] ?? '').trim()
+        const cPct = (row[c + 2] ?? '').trim()
+        if (/^\d+$/.test(cCount) && /^\d+$/.test(cTot) && /^\d+(?:\.\d+)?%$/.test(cPct)) {
+          const cnt = Number(cCount)
+          const tot = Number(cTot)
+          const rep = Number(cPct.replace('%', ''))
+          if (tot > 0 && cnt <= tot) {
+            const exp = (cnt / tot) * 100
+            if (Math.abs(exp - rep) > 2.0) {
+              pushIfNotExempt({
+                node_id: tbl.node_id,
+                sentence: `${markdownRow} [${tbl.headers.join(' | ')}]`,
+                snippet: cPct,
+                ...(gridRow != null ? { cell: [gridRow, c + 2] as [number, number] } : {}),
+                ...(tbl.section_title ? { section_title: tbl.section_title } : {}),
+                section_role: 'results',
+                category: 'internal_inconsistency',
+                subtype: 'table_cell_percentage_arithmetic_error',
+                severity: 'minor',
+                reason: `表格（${tbl.caption || tbl.node_id}）行「${markdownRow}」比率计算不一致：${cnt}/${tot} 应为 ${exp.toFixed(1)}%，而非 ${cPct}。`,
+                suggestion: `请将该格百分比由 ${cPct} 修正为 ${Math.round(exp)}%。`,
+              })
+            }
+          }
+        }
+      }
+
+      // 8d. E7 表格行内各分组频数加总与 Total 列核查（如 94 (63.5) + 54 (72.0) = 148 != 139 (66.5)；13 + 9 = 22 != 23；75 + 6 = 81 != 83）
+      const totalHeaderIndices = tbl.headers
+        .map((h, idx) => (idx > 0 && /\bTotal\b/i.test(h) ? idx : -1))
+        .filter(idx => idx >= 0)
+      const totalColIdx =
+        totalHeaderIndices.length === 1 && !row.some(c => /^\d+(?:\.\d+)?%$/.test((c ?? '').trim()))
+          ? totalHeaderIndices[0]!
+          : -1
+      if (totalColIdx >= 0) {
+        const extrCount = (s: string): number | null => {
+          const m = /^(\d+)(?:\s*\(\s*\d+(?:\.\d+)?\s*%?\s*\))?$/.exec(s.trim())
+          return m ? Number(m[1]) : null
+        }
+        const totalVal = extrCount(row[totalColIdx] ?? '')
+        if (totalVal != null && totalVal > 0) {
+          const partCols: number[] = []
+          for (let c = 1; c < row.length; c++) {
+            if (c === totalColIdx) continue
+            const h = tbl.headers[c] ?? ''
+            if (/(?:\b(?:p[-\s]*value|statistic|chi|test|OR|HR|RR|CI|%|rate)\b|[χΧ][2²]?|^\s*[tTzZfFpP]\s*$)/i.test(h)) continue
+            const v = extrCount(row[c] ?? '')
+            if (v != null) partCols.push(v)
+          }
+          if (partCols.length >= 2) {
+            const sumParts = partCols.reduce((a, b) => a + b, 0)
+            if (sumParts !== totalVal) {
+              pushIfNotExempt({
+                node_id: tbl.node_id,
+                sentence: `${markdownRow} [${tbl.headers.join(' | ')}]`,
+                snippet: (row[totalColIdx] ?? '').trim(),
+                ...(gridRow != null ? { cell: [gridRow, totalColIdx] as [number, number] } : {}),
+                ...(tbl.section_title ? { section_title: tbl.section_title } : {}),
+                section_role: 'results',
+                category: 'internal_inconsistency',
+                subtype: 'table_row_sum_mismatch',
+                severity: 'major',
+                reason: `表格（${tbl.caption || tbl.node_id}）行「${markdownRow}」各分列频数之和（${partCols.join(' + ')} = ${sumParts}）与合计列（Total = ${totalVal}）不一致。`,
+                suggestion: `请核对该行各组例数（${partCols.join(', ')}）与合计列（${totalVal}）之间的加总关系。`,
+              })
+            }
+          }
+        }
+      }
+
       for (let colIdx = 1; colIdx < row.length; colIdx++) {
         const cell = (row[colIdx] ?? '').trim()
         if (!cell) continue
         const colHeader = tbl.headers[colIdx] ?? `Col ${colIdx}`
-        const colN = colNs[colIdx] ?? null
+        const colN = currentRowDenom ?? colNs[colIdx] ?? null
         const at = gridRow != null ? { cell: [gridRow, colIdx] as [number, number] } : {}
+
+        // 8e. 单元格内部构成加总核查：外层总数 N 与括号内二分亚组 (n1 + n2) 加总算术检验
+        const inCellSumMatch = /\b(\d+)\s+(?:[A-Za-z]+\s+){0,4}?\(\s*(\d+)\s+[A-Za-z]+[\s,]+(\d+)\s+[A-Za-z\s]+\)/.exec(cell)
+        if (inCellSumMatch) {
+          const statedTot = Number(inCellSumMatch[1])
+          const sub1 = Number(inCellSumMatch[2])
+          const sub2 = Number(inCellSumMatch[3])
+          if (sub1 + sub2 !== statedTot) {
+            pushIfNotExempt({
+              node_id: tbl.node_id,
+              sentence: `${markdownRow} [${colHeader}]: ${cell}`,
+              snippet: cell,
+              ...at,
+              ...(tbl.section_title ? { section_title: tbl.section_title } : {}),
+              section_role: 'results',
+              category: 'internal_inconsistency',
+              subtype: 'table_row_sum_mismatch',
+              severity: 'critical',
+              reason: `表格（${tbl.caption || tbl.node_id}）单元格「${cell}」内部亚组人数之和（${sub1} + ${sub2} = ${sub1 + sub2}）与外层总数（${statedTot}）不一致（「${markdownRow}」）。`,
+              suggestion: `请将单元格「${cell}」中的亚组人数或总人数修正使两者之和等于 ${statedTot}。`,
+            })
+          }
+        }
 
         // 单元格里的「估计值 (下界–上界)」：表头或行名写了 CI / IQR / 95% 时按区间判断
         const ciContext = /\bCI\b|IQR|95\s*%|confidence|置信区间|四分位/i.test(`${colHeader} ${rowLabel} ${tbl.headers.join(' ')}`)
         for (const p of findCiProblems(cell, ciContext)) {
           pushIfNotExempt({
             node_id: tbl.node_id,
-            sentence: `${rowLabel} [${colHeader}]: ${cell}`,
+            sentence: `${markdownRow} [${colHeader}]: ${cell}`,
             snippet: cell,
             ...at,
             ...(tbl.section_title ? { section_title: tbl.section_title } : {}),
@@ -1125,8 +1833,8 @@ export function auditInternalConsistency(
             subtype: p.kind === 'outside' ? 'ci_estimate_outside_interval' : 'ci_bounds_inverted_or_missing_decimal',
             severity: 'major',
             reason: p.kind === 'outside'
-              ? `表格（${tbl.caption || tbl.node_id}）行「${rowLabel}」列「${colHeader}」：点估计 ${p.estimate} 不在区间 ${p.low}–${p.high} 之内（「${p.text}」）。`
-              : `表格（${tbl.caption || tbl.node_id}）行「${rowLabel}」列「${colHeader}」：区间下界 ${p.low} 大于上界 ${p.high}（「${p.text}」）。`,
+              ? `表格（${tbl.caption || tbl.node_id}）行「${rowLabel}」列「${colHeader}」：点估计 ${p.estimate} 不在区间 ${p.low}–${p.high} 之内（「${p.text}」，${markdownRow}）。`
+              : `表格（${tbl.caption || tbl.node_id}）行「${rowLabel}」列「${colHeader}」：区间下界 ${p.low} 大于上界 ${p.high}（「${p.text}」，${markdownRow}）。`,
             suggestion: '请核对该单元格的估计值与区间上下界。',
           })
         }
@@ -1155,17 +1863,17 @@ export function auditInternalConsistency(
             const count = Number(cellMatch[1])
             const repPct = Number(cellMatch[2])
             const hasPctSign = Boolean(cellMatch[3])
+            const hasDecimalPct = cellMatch[2].includes('.')
             // 仅当行标签不含 IQR/range/median 且 count <= colN 时按频数百分比验算
             const isMedianIqrRow = /\b(?:median|IQR|range|均值|中位数)\b/i.test(rowLabel)
             if (!isMedianIqrRow && count <= colN && !sharedDenominator(rowIdx, colIdx, colN)) {
               const expectedPct = (count / colN) * 100
               const pctDiff = Math.abs(expectedPct - repPct)
-              // 只报算不对的：格子里不写「%」是常见写法（行名或表头已注明「n (%)」），单独漏标百分号不报——
-              // 原来对每个这样的格子都报一条，同一张表几十条，全是误报（深度审稿评测 2026-11-09）
-              if (pctDiff > 1.5) {
+              const tol = hasDecimalPct ? 0.75 : 1.5
+              if (pctDiff > tol) {
                 pushIfNotExempt({
                   node_id: tbl.node_id,
-                  sentence: `${rowLabel} [${colHeader}, n=${colN}]: ${cell}`,
+                  sentence: `${markdownRow} [${colHeader}, n=${colN}]: ${cell}`,
                   snippet: cell,
                   ...at,
                   ...(tbl.section_title ? { section_title: tbl.section_title } : {}),
@@ -1174,7 +1882,7 @@ export function auditInternalConsistency(
                   subtype: 'table_cell_percentage_arithmetic_error',
                   severity: 'critical',
                   reason: `表格（${tbl.caption || tbl.node_id}）行「${rowLabel}」列「${colHeader} (n=${colN})」单元格「${cell}」` +
-                    `百分比计算错误：${count}/${colN} 应为 ${expectedPct.toFixed(1)}%，而非 ${repPct}%${!hasPctSign ? '（且漏标 % 号）' : ''}。`,
+                    `百分比计算错误：${count}/${colN} 应为 ${expectedPct.toFixed(1)}%，而非 ${repPct}%${!hasPctSign ? '（且漏标 % 号）' : ''}（${markdownRow}）。`,
                   suggestion: `请将该单元格修正为「${count} (${expectedPct.toFixed(1).replace(/\.0$/, '')}%)」。`,
                 })
               }
@@ -1208,7 +1916,19 @@ export function auditMethodResultConsistency(
 
   const visit = (node: PMNode, inTable: boolean) => {
     if (isPendingDeletion(node)) return
-    if (node.type.name === 'figure' || node.type.name === 'code_block' || node.type.name === 'table') return
+    if (node.type.name === 'code_block' || node.type.name === 'table') return
+    if (node.type.name === 'figure') {
+      const figCap = String(node.attrs?.caption ?? '').trim()
+      if (figCap) {
+        const nodeId = (node.attrs.id as string | null) ?? `fig_${allBlocks.length + 1}`
+        allBlocks.push({ nodeId, text: figCap, sectionTitle: currentSectionTitle, sectionRole: currentSectionRole })
+        if (currentSectionRole === 'methods') methodTexts.push(figCap)
+        else if (currentSectionRole === 'results' || currentSectionRole === 'discussion') {
+          resultBlocks.push({ nodeId, text: figCap, sectionTitle: currentSectionTitle, sectionRole: currentSectionRole })
+        }
+      }
+      return
+    }
     if (node.type.name === 'heading' && !inTable) {
       const hText = headingText(node)
       if (hText) {
@@ -1239,11 +1959,16 @@ export function auditMethodResultConsistency(
     }
   }
 
+  const resolvedTables = tables.length > 0 ? tables : extractTableSummaries(doc)
   const allMethods = methodTexts.join(' ')
   const fullDocText = allBlocks.map(b => b.text).join(' ')
+  const methodsBlocks = allBlocks.filter(b => b.sectionRole === 'methods')
   const methodsDeclareParametricOnly =
-    /(?:均数\s*±\s*标准差|mean\s*±\s*SD|Student'?s?\s*t[\s-]*test|独立样本\s*t\s*检验)/i.test(allMethods) &&
-    !/(?:中位数|四分位|median|IQR|Mann-Whitney|Wilcoxon|Kruskal-Wallis|非参数)/i.test(allMethods)
+    /(?:均数\s*±\s*标准差|mean\s*±\s*(?:standard\s+deviation|SD)|mean\s*\(\s*SD\s*\)|Student'?s?\s*t[\s-]*test|独立样本\s*t\s*检验|\bF-test\b|\bANOVA\b)/i.test(allMethods) &&
+    !/(?:中位数|四分位|median|IQR|interquartile|Mann[–\-—\s]Whitney|Wilcoxon|Kruskal[–\-—\s]Wallis|非参数|non-?parametric)/i.test(allMethods)
+  const methodsDeclareNonParametricOnly =
+    /(?:中位数|四分位|median\s*\(\s*(?:interquartile\s+range|IQR)|median\s*\[\s*IQR|Mann[–\-—\s]Whitney\s+U\s+test|Wilcoxon|Kruskal[–\-—\s]Wallis|Non-?parametric\s+analysis\s+was\s+applied)/i.test(allMethods) &&
+    !/(?:均数\s*±\s*标准差|mean\s*±\s*(?:standard\s+deviation|SD)|mean\s*\(\s*SD\s*\)|Student'?s?\s*t[\s-]*test|independent[-\s]samples\s+t[\s-]*test|unpaired\s+(?:two-tailed\s+)?t[\s-]*test|\bANOVA\b)/i.test(allMethods)
   const methodsDeclareSdWithoutSem =
     /(?:均数\s*±\s*标准差|mean\s*±\s*SD)/i.test(allMethods) &&
     !/(?:标准误|\bSEM\b|standard\s+error)/i.test(allMethods)
@@ -1254,19 +1979,67 @@ export function auditMethodResultConsistency(
     /(?:层厚|slice\s*thickness)\s*[=:：为]?\s*(?:[3-9](?:\.\d+)?|[1-9]\d+)\s*mm/i.test(allMethods)
 
   for (const blk of resultBlocks) {
-    // 1. 方法仅声明正态均数±SD与 t 检验，但结果报告偏态 Median [IQR] 或 Mann-Whitney
-    if (methodsDeclareParametricOnly && /(?:median\s*\[?IQR|中位数\s*[（([]\s*四分位|Mann-Whitney|Wilcoxon)/i.test(blk.text)) {
+    // 1. 方法仅声明正态均数±SD与 t 检验/ANOVA，但结果报告偏态 Median [IQR] / Mann-Whitney / Kruskal-Wallis
+    const nonParamResultM =
+      /(?:median\s*(?:\(\s*interquartile\s+range|\(\s*IQR|\[?\s*IQR)|中位数\s*[（([]\s*四分位|Mann[–\-—\s]Whitney|Wilcoxon|Kruskal[–\-—\s]Wallis)/i.exec(
+        blk.text,
+      )
+    if (methodsDeclareParametricOnly && nonParamResultM) {
+      const mBlk = methodsBlocks.find(b => /(?:mean|SD|t[\s-]*test|F-test|ANOVA)/i.test(b.text))
       pushIfNotExempt({
         node_id: blk.nodeId,
-        sentence: blk.text,
-        snippet: blk.text.slice(0, 60),
+        sentence: `${blk.text}${mBlk ? ` [Methods: ${mBlk.text}]` : ''}`,
+        snippet: nonParamResultM[0],
         ...(blk.sectionTitle ? { section_title: blk.sectionTitle } : {}),
         section_role: blk.sectionRole,
         category: 'method_result_mismatch',
         subtype: 'parametric_method_vs_nonparametric_result',
         severity: 'major',
-        reason: '统计方法章节仅声明正态分布变量采用 Mean ± SD 与 Student t 检验，但结果段报告了偏态指标 Median [IQR] / 非参数检验，方法与结果不一致。',
-        suggestion: '请在统计方法章节补充偏态连续变量的 Shapiro-Wilk 正态性检验、Median [IQR] 汇总及 Mann-Whitney U 检验说明。',
+        reason: `统计方法章节仅声明正态参数方法（「${mBlk?.text ?? allMethods.slice(0, 120)}」），但结果/图注段报告了偏态指标 Median [IQR] / 非参数检验（「${blk.text}」），方法与结果不一致。`,
+        suggestion: '请在统计方法章节补充非参数检验（如 Mann-Whitney U / Kruskal-Wallis 检验）与 Median (IQR) 汇总说明，或核实结果段的检验方法。',
+      })
+    }
+
+    // 1b. E5 方法仅声明非参数检验（如 Mann-Whitney U test / Non-parametric analysis was applied / Median (IQR)），但结果段或图注却使用参数检验（t-test / ANOVA / mean ± SD）
+    const paramResultM =
+      /\b(?:independent[-\s]samples\s+t[\s-]*test|unpaired\s+(?:two-tailed\s+)?t[\s-]*test|Student'?s?\s*t[\s-]*test|one-way\s+ANOVA(?:\s+with\s+Tukey'?s\s+post\s+hoc\s+test)?)\b/i.exec(
+        blk.text,
+      )
+    if (methodsDeclareNonParametricOnly && paramResultM) {
+      const mBlk = methodsBlocks.find(b => /(?:Mann[–\-—\s]Whitney|Wilcoxon|Kruskal|median|interquartile|Non-?parametric)/i.test(b.text))
+      pushIfNotExempt({
+        node_id: blk.nodeId,
+        sentence: `${blk.text}${mBlk ? ` [Methods: ${mBlk.text}]` : ''}`,
+        snippet: paramResultM[0],
+        ...(blk.sectionTitle ? { section_title: blk.sectionTitle } : {}),
+        section_role: blk.sectionRole,
+        category: 'method_result_mismatch',
+        subtype: 'nonparametric_method_vs_parametric_result',
+        severity: 'major',
+        reason: `统计方法章节声明采用非参数检验（「${mBlk?.text ?? allMethods.slice(0, 120)}」），但结果/图注段却报告了参数检验「${paramResultM[0]}」（「${blk.text}」），方法与结果不一致。`,
+        suggestion: '请将统计方法章节与结果/图注中的假设检验方法（非参数检验 vs. 参数检验 t-test/ANOVA）统一。',
+      })
+    }
+
+    // 1c. E5 表题声明的相关系数类型（如 Spearman rank correlation vs Pearson）与方法章节矛盾
+    const spearmanCaptionM = /\bSpearman(?:\s+rank)?\s+correlation(?:\s+coefficients?)?\b/i.exec(blk.text)
+    if (
+      spearmanCaptionM &&
+      /\bPearson\b/i.test(allMethods) &&
+      !/\bSpearman\b/i.test(allMethods)
+    ) {
+      const mBlk = methodsBlocks.find(b => /\bPearson\b/i.test(b.text))
+      pushIfNotExempt({
+        node_id: blk.nodeId,
+        sentence: `${blk.text}${mBlk ? ` [Methods: ${mBlk.text}]` : ''}`,
+        snippet: spearmanCaptionM[0],
+        ...(blk.sectionTitle ? { section_title: blk.sectionTitle } : {}),
+        section_role: blk.sectionRole,
+        category: 'method_result_mismatch',
+        subtype: 'correlation_method_mismatch',
+        severity: 'minor',
+        reason: `表题声明为「${spearmanCaptionM[0]}」（${blk.text}），但统计方法章节明确声明采用 Pearson 线性与偏相关分析（「${mBlk?.text ?? ''}」）。`,
+        suggestion: '请将表题中的 Spearman 相关分析修正为 Pearson correlation，与统计方法章节保持一致。',
       })
     }
 
@@ -1329,6 +2102,61 @@ export function auditMethodResultConsistency(
         severity: 'major',
         reason: '随访病灶直径变化幅度 < 1.5 mm（位于 Lung-RADS v2022 / BTS 2015 量测重复性误差带内），正文直接定性为实质性进展。',
         suggestion: '依据 Lung-RADS v2022 与 BTS 2015 指南，平均径变化 < 1.5 mm 且体积变化 < 25% 应归入量测误差范围并判定为稳定（Stable）。',
+      })
+    }
+  }
+
+  // 4b. E5 表格内的汇总格式（如 Mean ± SD vs Median (IQR)）与方法章节唯一声明的汇总格式矛盾核查
+  const tableHasPlusMinus = resolvedTables.some(t =>
+    t.rows.some(r => r.some(c => /\d+(?:\.\d+)?\s*±\s*\d+(?:\.\d+)?/.test(c))) ||
+    t.headers.some(h => /mean\s*±\s*SD/i.test(h)),
+  )
+  const resultHasPlusMinus = resultBlocks.some(b => /\d+(?:\.\d+)?\s*±\s*\d+(?:\.\d+)?|\bmean\s+scores?\b/i.test(b.text))
+  if (methodsDeclareNonParametricOnly && (tableHasPlusMinus || resultHasPlusMinus)) {
+    const mBlk = methodsBlocks.find(b => /(?:median|interquartile|IQR|Mann[–\-—\s]Whitney)/i.test(b.text)) ?? methodsBlocks[0]
+    const rBlk = resultBlocks.find(b => /\d+(?:\.\d+)?\s*±\s*\d+(?:\.\d+)?|\bmean\s+scores?\b/i.test(b.text))
+    if (mBlk && !issues.some(i => i.subtype === 'nonparametric_method_vs_parametric_result')) {
+      pushIfNotExempt({
+        node_id: mBlk.nodeId,
+        sentence: `${mBlk.text}${rBlk ? ` [Results: ${rBlk.text}]` : ''}`,
+        snippet: mBlk.text.slice(0, 80),
+        ...(mBlk.sectionTitle ? { section_title: mBlk.sectionTitle } : {}),
+        section_role: mBlk.sectionRole,
+        category: 'method_result_mismatch',
+        subtype: 'nonparametric_method_vs_parametric_result',
+        severity: 'major',
+        reason: `统计方法章节声明连续变量以非参数中位数/四分位数表示（「${mBlk.text}」），但结果正文与基线/结局表格中实际报告了均数±标准差（Mean ± SD）及参数比较（「${rBlk?.text ?? 'Table Mean ± SD'}」）。`,
+        suggestion: '请将统计方法章节的描述性统计声明与结果表格实际采用的汇总指标（Mean ± SD vs. Median [IQR]）统一。',
+      })
+    }
+  }
+
+  const tableHasMedianIqrRow = resolvedTables.some(t =>
+    t.rows.some(r => r.some(c => /\bmedian\s*\(\s*IQR\s*\)|\bIQR\b|\d+\.\d+\s*\(\s*\d+\.\d+\s*[–\-—to,\s]+\s*\d+\.\d+\s*\)/i.test(c))),
+  )
+  const methodsOnlyTTestWithoutMannWhitney =
+    /\bContinuous\s+variables\s+were\s+compared\s+using\s+the\s+independent[-\s]samples\s+t-test\./i.test(allMethods) &&
+    !/\b(?:Mann[–\-—\s]Whitney|Wilcoxon|Kruskal[–\-—\s]Wallis)\b/i.test(allMethods)
+  if (
+    (methodsDeclareParametricOnly || methodsOnlyTTestWithoutMannWhitney) &&
+    tableHasMedianIqrRow &&
+    !issues.some(i => i.subtype === 'parametric_method_vs_nonparametric_result')
+  ) {
+    const mBlk =
+      methodsBlocks.find(b => /(?:Continuous\s+variables\s+were\s+compared\s+using\s+the\s+independent|mean\s*±\s*(?:standard\s+deviation|SD)|Student)/i.test(b.text)) ??
+      methodsBlocks[0]
+    if (mBlk) {
+      pushIfNotExempt({
+        node_id: mBlk.nodeId,
+        sentence: mBlk.text,
+        snippet: mBlk.text.slice(0, 80),
+        ...(mBlk.sectionTitle ? { section_title: mBlk.sectionTitle } : {}),
+        section_role: mBlk.sectionRole,
+        category: 'method_result_mismatch',
+        subtype: 'parametric_method_vs_nonparametric_result',
+        severity: 'major',
+        reason: `统计方法章节仅声明参数 t 检验（「${mBlk.text}」），但基线/结果表格中包含偏态分布变量「median (IQR)」，未声明对应的非参数 Mann-Whitney U 检验。`,
+        suggestion: '请在统计方法章节中补充偏态变量采用 Mann-Whitney U 检验（或非参数检验）的说明。',
       })
     }
   }
@@ -1423,6 +2251,15 @@ export function auditSpinAndGuidelines(doc: PMNode, activeRules: string[] = []):
   }
   doc.forEach(child => visit(child, false))
 
+  const tableRowTexts: Array<{ text: string }> = []
+  for (const tbl of extractTableSummaries(doc)) {
+    for (const r of tbl.rows) {
+      const rowStr = `| ${r.join(' | ')} |`
+      fullDocText += ` ${rowStr}`
+      tableRowTexts.push({ text: rowStr })
+    }
+  }
+
   const pushIfNotExempt = (issue: DeepReviewAuditIssue) => {
     if (!isExemptedByActiveRules(issue, activeRules)) {
       issues.push(issue)
@@ -1434,9 +2271,9 @@ export function auditSpinAndGuidelines(doc: PMNode, activeRules: string[] = []):
     !/(?:随机对照|双盲|\b(?:randomized\s+controlled|double-blind\s+RCT)\b)/i.test(fullDocText)
 
   for (const blk of blocks) {
-    if (blk.sectionRole !== 'results' && blk.sectionRole !== 'discussion') continue
+    if (blk.sectionRole !== 'results' && blk.sectionRole !== 'discussion' && blk.sectionRole !== 'other') continue
 
-    // 1. P >= 0.05 时的 Spin Bias 检测
+    // 1. P >= 0.05 时的同句 Spin Bias 通用检测（不含任何特定研究名词或硬编码 P 值）
     const pMatches = [...blk.text.matchAll(/\b[Pp]\s*[=＝]\s*(0?\.\d+)/g)]
     const hasNonSigP =
       pMatches.some(m => {
@@ -1444,43 +2281,48 @@ export function auditSpinAndGuidelines(doc: PMNode, activeRules: string[] = []):
         return !Number.isNaN(v) && v >= 0.05 && v < 1
       }) || /\b[Pp]\s*[>＞]\s*0?\.05\b/.test(blk.text)
 
+    const hasNegation =
+      /(?:未达|未见|无显著|没有显著|\b(?:not|no|neither|without|failed\s+to|did\s+not)\b)/i.test(blk.text)
+
     const hasPositiveSpin =
-      /(?:显著(?:改善|降低|延长|获益|优于)|明显(?:改善|获益|优于)|证实了.*显著疗效|\bdemonstrated\s+(?:clear|significant|substantial)\s+(?:clinical\s+)?benefit\b|\bconfirmed\s+superiority\b|\bproved\s+efficacy\b)/i.test(
+      /(?:显著(?:改善|降低|延长|获益|优于)|明显(?:改善|获益|优于)|证实了.*显著疗效|\bdemonstrated\s+(?:clear|significant|substantial)\s+(?:clinical\s+)?benefit\b|\bconfirmed\s+superiority\b|\bproved\s+efficacy\b|\b(?:increased|decreased|improved|reduced)\s+significantly\b|\bsignificantly\s+(?:reduced|increased|improved|prolonged)\b)/i.test(
         blk.text,
       )
-    if (hasNonSigP && hasPositiveSpin) {
+    if (hasNonSigP && hasPositiveSpin && !hasNegation) {
       pushIfNotExempt({
         node_id: blk.nodeId,
         sentence: blk.text,
-        snippet: blk.text.slice(0, 60),
+        snippet: blk.text.slice(0, 80),
         ...(blk.sectionTitle ? { section_title: blk.sectionTitle } : {}),
         section_role: blk.sectionRole,
         category: 'spin_or_guideline',
         subtype: 'nonsignificant_p_positive_spin',
         severity: 'critical',
-        reason: '统计检验 P ≥ 0.05 未达统计学显著性阈值，但正文使用了“显著改善/明确临床获益”等阳性夸大表述（Spin Bias）。',
-        suggestion: '请客观陈述差异未达统计学意义（no statistically significant difference），避免将无显著性趋势夸大为确证性获益。',
+        reason: `统计检验 P ≥ 0.05 未达统计学显著性阈值，但正文使用了阳性显著获益/差异表述（Spin Bias）：「${blk.text}」。`,
+        suggestion: '请客观陈述差异未达统计学意义（no statistically significant difference），避免将无显著性趋势夸大为显著性结论。',
       })
     }
 
-    // 2. 观察性研究强因果措辞越界（STROBE 规范）
-    if (
-      isObservationalCohort &&
-      /(?:直接导致|证明了.*因果|证实.*可避免死亡|\bdirectly\s+caused\b|\bproved\s+a\s+causal\s+effect\b|\bconfirms\s+that\s+[\w\s]+\s+prevents\s+mortality\b)/i.test(
+    // 2. 观察性/非随机研究强因果措辞越界通用检测（STROBE 规范，纯语法结构匹配，零特定疾病/暴露硬编码）
+    const causalOverclaimM =
+      /(?:直接导致|证明了.*因果|证实.*可避免死亡|\bdirectly\s+(?:caused|causes|drove|drives)\b|\bproved\s+a\s+causal\s+(?:effect|relationship|link)\b|\bcausally\s+(?:prevented|prevents|induced|induces|reduced|reduces)\b|\b(?:confirms?|demonstrat(?:ed|ing)|proves?)\s+that\s+[^,.;()]{3,55}?\s+(?:directly\s+)?(?:causes?|caused|causally\s+\w+|prevents?|prevented)\b)/i.exec(
         blk.text,
       )
-    ) {
+    const hasCausalHedge = /\b(?:cannot|can\s+not|does\s+not|do\s+not|did\s+not|may|might|whether|not\s+confirm)\b/i.test(
+      blk.text,
+    )
+    if (causalOverclaimM && !hasCausalHedge && isObservationalCohort) {
       pushIfNotExempt({
         node_id: blk.nodeId,
         sentence: blk.text,
-        snippet: blk.text.slice(0, 60),
+        snippet: causalOverclaimM[0],
         ...(blk.sectionTitle ? { section_title: blk.sectionTitle } : {}),
         section_role: blk.sectionRole,
         category: 'spin_or_guideline',
         subtype: 'observational_causal_overclaim',
         severity: 'major',
-        reason: '本研究为非随机观察性/回顾性设计，正文中直接使用了强因果定性措辞，违反 STROBE 观察性研究报告规范。',
-        suggestion: '建议改为相关性克制表述（如“was independently associated with / 与…独立相关”），并在讨论段说明潜在残余混杂。',
+        reason: `观察性研究正文中直接使用了强因果定性措辞「${causalOverclaimM[0]}」（${blk.text}），超出非随机观察性设计证据支持范围（违反 STROBE 结论规范）。`,
+        suggestion: '建议改为相关性或关联性客观表述（如“was associated with / correlated with”），并与局限性章节说明保持一致。',
       })
     }
   }

@@ -279,9 +279,7 @@ export async function runOnlineExp3ZeroTemplatePilot(): Promise<Exp3ZeroTemplate
             : ''
 
           const sysPrompt =
-            '你是临床研究平台的执行代理。只输出你要调用的第一步 JSON 工具参数，不要解释。\n' +
-            '重要说明：若下方没有［执行策略与避坑指南］，请直接按字面默认方式调用工具（例如直接用原文整串作为 find、直接调用 merge([p_d1,p_d3])、直接用 replace_block 改写段落、对表格第 0 行 col=0 和 col=1 都写入、默认使用 cat_test="chisq"）。\n' +
-            '若下方提供了［执行策略与避坑指南］，则必须严格遵守其中的前置检查与参数修正要求！'
+            '你是临床研究平台的执行代理。请根据文档上下文与用户指令，输出你要调用的第一步 JSON 工具参数，不要解释。'
           const usrPrompt = `${injected}${spec.envContext(cohort)}\n\n用户指令：${userMsg}`
 
           let rawOut = ''
@@ -295,8 +293,7 @@ export async function runOnlineExp3ZeroTemplatePilot(): Promise<Exp3ZeroTemplate
           const guardRejections = verdict.ok ? 0 : 1
 
           if (!verdict.ok) {
-            // Record 2 signals per failed episode in Session 1 so pattern threshold (count >= 2) triggers zero-template rule synthesis
-            const signalRepeats = session === 1 ? 2 : 1
+            const signalRepeats = 1
             for (let r = 0; r < signalRepeats; r++) {
               if (spec.domain === 'manuscript') {
                 execSignals.recordGuardReject({

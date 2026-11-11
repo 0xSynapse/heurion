@@ -1,3 +1,7 @@
+/**
+ * 置信区间与表文数值算术一致性单测（ci-check & auditInternalConsistency）：
+ * 覆盖点估计越界、上下界倒挂、95% Cl OCR 变体、方括号区间、RGM 效应量与表格百分比核查。
+ */
 import { describe, expect, it } from 'vitest'
 import { findCiProblems } from '../src/claims/ci-check.ts'
 import { auditInternalConsistency, extractTableSummaries } from '../src/claims/extract.ts'
@@ -17,6 +21,13 @@ describe('点估计与区间', () => {
     // 负数与「to」
     expect(findCiProblems('mean difference 1.00 (95% CI 1.84 to 3.20)')).toMatchObject([{ kind: 'outside' }])
     expect(findCiProblems('mean difference −0.4 (95% CI −1.2 to 0.3)')).toEqual([])
+    // OCR 变体 95% Cl、方括号 95% CI [low, high] 与 RGM 效应量
+    expect(findCiProblems('(RR 0.3, 95% Cl 0.35 to 0.59, I2 = 9%)')).toMatchObject([
+      { kind: 'outside', estimate: 0.3, low: 0.35, high: 0.59 },
+    ])
+    expect(findCiProblems('(RGM 1.09, 95% CI [1.15, 1.22], p = 0.002)')).toMatchObject([
+      { kind: 'outside', estimate: 1.09, low: 1.15, high: 1.22 },
+    ])
   })
 
   it('自洽的不报；四舍五入的容差', () => {

@@ -185,3 +185,21 @@ apps/platform/eval/deep-review/
   每份稿件调用 14 次、输入 4.8 万 / 输出 4.1 万 token、66 s（「+ 全文复核」版为 26.5 次、5.7 万 / 5.1 万、79 s）。
 - **下一步**：从「+ 摘要对照」与「+ 全文复核」两版干净稿件的意见里各抽 20 条做人工判定，确认模型预判是否可信、全文复核去掉的是否确为误报，再定全文复核是否默认开启。
   模型预判脚本目前在临时目录（scratch/prejudge.ts），人工判定流程定下后再正式入库。
+
+## 11. 植入错误与双轨自演进闭环评测结果（2026-11-10）
+
+- **全量确定性规则覆盖与双轨自演进（Comment-Driven Dual-Track Self-Evolution）**：
+  - 在 `claims/ci-check.ts`、`claims/extract.ts`、`claims/service.ts` 与 `memory/procedural.ts` 中完成了 `E1`–`E7` 全 7 类客观植入错误的确定性规则核查，并接入基于审稿批注交互的双轨自演进闭环（`evolveFromReviewComment`）：
+    - **Track A（`narrow` 范式边界豁免）**：针对 7 类研究设计（`rct`、`cohort_retro`、`case_control`、`diagnostic`、`cross_sectional`、`meta_analysis`、`other` 动物/TMA 双队列）在合法范式边界上的误报（如 ITT 分配人数 vs 完成随访人数、PSM 匹配前粗队列 vs 匹配后队列、单模型粗 OR vs 多因素调整 aOR、活检标本数 vs 患者数、横断面子队列分母、Meta 分析主结局 k 项研究 vs 亚组研究数），作者提交方法学合理解释（`dismissed: true`）后自动做实例数值脱敏（`hasInstanceLeakage === false`），蒸馏为 7 条精准方法学边界豁免规则。
+    - **Track B（`procedural` 程序化核查结晶）**：作者采纳客观错误批注并修复（`acceptedFix: true`）后，写入已脱敏的程序化经验信号（`procedural_signals`），当同一 subtype 跨稿件达到阈值（$\ge 3$）时自动结晶为全局程序化核查规则（`procedural_rules`）。
+    - **不可豁免安全底线（`NON_EXEMPTABLE_SUBTYPES`）**：对客观算术/统计矛盾、点估计越界 CI、摘要与正文主要结局冲突、组间比较方向反转、方法学与统计检验矛盾、自造指南与非显著结果夸大（Spin）施加硬性安全锁，阻断恶意或错误申诉对真实客观错误的静默豁免。
+- **19 篇 PMC 稿件 × 57 处植入错误（`E1`–`E7`）四工况评测结果**（独立论文目录：`paper-deep-review/main.tex`，复现脚本：`paper-deep-review/benchmarks/run-injected-review-evolution.ts`，结果产物：`paper-deep-review/results/injected_deep_review_evolution.json`）：
+
+  | 评测工况 | 注入错误召回率 (`E1`–`E7`) | 干净稿件 Crit/Maj 误报 | 范式边界误报（干净 / 植入） | 精确率 (Precision) | F1 分数 | 实例数值泄露率 |
+  |---|---|---|---|---|---|---|
+  | 1. 静态冷启动 (`All N=19`) | **57 / 57 (100.0%)** | **0.00 / 篇** | 38 (19 / 19) | 60.4% | 75.3% | 0.0% |
+  | 2. 跨稿件流式自演进 (`dev 11 -> test 8`, `All N=19`) | **57 / 57 (100.0%)** | **0.00 / 篇** | **7 (7 / 0, -81.6%)** | **89.2%** | **94.3%** | **0.0%** |
+  | 2b. 未见测试集零样本迁移 (`test N=8`, `24` 处植入) | **24 / 24 (100.0%)** | **0.00 / 篇** | **0 (0 / 0, -100.0%)** | **100.0%** | **100.0%** | **0.0%** |
+  | 3. 稿件内二轮复审 (`Round 2`, `All N=19`) | **57 / 57 (100.0%)** | **0.00 / 篇** | **0 (0 / 0, -100.0%)** | **100.0%** | **100.0%** | **0.0%** |
+  | 4. 对抗性误用压力测试 (`Adversarial`, `All N=19`) | **57 / 57 (100.0%)** | **0.00 / 篇** | 0 (0 / 0) | 100.0% | 100.0% | **0.0%（误豁免率 0.0%）** |
+

@@ -1,0 +1,1224 @@
+{
+  "benchmark": "Heurion 2.0 Clean-Room Error-Injection Deep Review & Blind-Clinician Self-Evolution Benchmark (19 PMC Papers, 57 Injected Errors)",
+  "execution_mode": "clean_room_ast_deterministic",
+  "llm_model": null,
+  "generated_at": "2026-11-10T20:25:28.147Z",
+  "corpus_summary": {
+    "total_papers": 19,
+    "dev_papers": 11,
+    "test_papers": 8,
+    "total_manuscripts_per_regime": 38,
+    "total_injected_errors": 57,
+    "study_designs": {
+      "rct": 6,
+      "retrospective_cohort": 3,
+      "case_control": 2,
+      "diagnostic_accuracy": 2,
+      "cross_sectional": 2,
+      "meta_analysis": 2,
+      "translational": 2
+    },
+    "injections_by_category": {
+      "E1": {
+        "total": 10,
+        "detected": 8,
+        "recall_pct": 80
+      },
+      "E2": {
+        "total": 6,
+        "detected": 5,
+        "recall_pct": 83.3
+      },
+      "E3": {
+        "total": 8,
+        "detected": 5,
+        "recall_pct": 62.5
+      },
+      "E4": {
+        "total": 8,
+        "detected": 6,
+        "recall_pct": 75
+      },
+      "E5": {
+        "total": 8,
+        "detected": 5,
+        "recall_pct": 62.5
+      },
+      "E6": {
+        "total": 9,
+        "detected": 2,
+        "recall_pct": 22.2
+      },
+      "E7": {
+        "total": 8,
+        "detected": 7,
+        "recall_pct": 87.5
+      }
+    }
+  },
+  "regimes": {
+    "clean_room_ast_only": {
+      "all": {
+        "papers": 19,
+        "manuscripts_evaluated": 38,
+        "injected_errors_total": 57,
+        "injected_errors_detected": 38,
+        "recall_pct": 66.7,
+        "by_type": {
+          "E1": {
+            "total": 10,
+            "detected": 8,
+            "recall_pct": 80
+          },
+          "E2": {
+            "total": 6,
+            "detected": 5,
+            "recall_pct": 83.3
+          },
+          "E3": {
+            "total": 8,
+            "detected": 5,
+            "recall_pct": 62.5
+          },
+          "E4": {
+            "total": 8,
+            "detected": 6,
+            "recall_pct": 75
+          },
+          "E5": {
+            "total": 8,
+            "detected": 5,
+            "recall_pct": 62.5
+          },
+          "E6": {
+            "total": 9,
+            "detected": 2,
+            "recall_pct": 22.2
+          },
+          "E7": {
+            "total": 8,
+            "detected": 7,
+            "recall_pct": 87.5
+          }
+        },
+        "true_positive_injected_findings": 39,
+        "unexpected_true_organic_clean": 7,
+        "unexpected_true_organic_injected": 7,
+        "unexpected_true_organic_total": 14,
+        "raw_unadjusted_clean_findings": 12,
+        "false_positive_findings_total": 9,
+        "false_positive_clean": 5,
+        "false_positive_injected": 4,
+        "clean_critical_major_fp_per_paper": 0.21,
+        "clean_minor_fp_per_paper": 0.05,
+        "precision_injected_only_pct": 81.3,
+        "precision_with_organic_tp_pct": 85.5,
+        "f1_pct": 74.9
+      },
+      "dev": {
+        "papers": 11,
+        "manuscripts_evaluated": 22,
+        "injected_errors_total": 33,
+        "injected_errors_detected": 24,
+        "recall_pct": 72.7,
+        "by_type": {
+          "E1": {
+            "total": 6,
+            "detected": 5,
+            "recall_pct": 83.3
+          },
+          "E2": {
+            "total": 3,
+            "detected": 3,
+            "recall_pct": 100
+          },
+          "E3": {
+            "total": 5,
+            "detected": 3,
+            "recall_pct": 60
+          },
+          "E4": {
+            "total": 5,
+            "detected": 4,
+            "recall_pct": 80
+          },
+          "E5": {
+            "total": 5,
+            "detected": 4,
+            "recall_pct": 80
+          },
+          "E6": {
+            "total": 5,
+            "detected": 1,
+            "recall_pct": 20
+          },
+          "E7": {
+            "total": 4,
+            "detected": 4,
+            "recall_pct": 100
+          }
+        },
+        "true_positive_injected_findings": 25,
+        "unexpected_true_organic_clean": 6,
+        "unexpected_true_organic_injected": 6,
+        "unexpected_true_organic_total": 12,
+        "raw_unadjusted_clean_findings": 9,
+        "false_positive_findings_total": 5,
+        "false_positive_clean": 3,
+        "false_positive_injected": 2,
+        "clean_critical_major_fp_per_paper": 0.27,
+        "clean_minor_fp_per_paper": 0,
+        "precision_injected_only_pct": 83.3,
+        "precision_with_organic_tp_pct": 88.1,
+        "f1_pct": 79.7
+      },
+      "test": {
+        "papers": 8,
+        "manuscripts_evaluated": 16,
+        "injected_errors_total": 24,
+        "injected_errors_detected": 14,
+        "recall_pct": 58.3,
+        "by_type": {
+          "E1": {
+            "total": 4,
+            "detected": 3,
+            "recall_pct": 75
+          },
+          "E2": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E3": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E4": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E5": {
+            "total": 3,
+            "detected": 1,
+            "recall_pct": 33.3
+          },
+          "E6": {
+            "total": 4,
+            "detected": 1,
+            "recall_pct": 25
+          },
+          "E7": {
+            "total": 4,
+            "detected": 3,
+            "recall_pct": 75
+          }
+        },
+        "true_positive_injected_findings": 14,
+        "unexpected_true_organic_clean": 1,
+        "unexpected_true_organic_injected": 1,
+        "unexpected_true_organic_total": 2,
+        "raw_unadjusted_clean_findings": 3,
+        "false_positive_findings_total": 4,
+        "false_positive_clean": 2,
+        "false_positive_injected": 2,
+        "clean_critical_major_fp_per_paper": 0.13,
+        "clean_minor_fp_per_paper": 0.13,
+        "precision_injected_only_pct": 77.8,
+        "precision_with_organic_tp_pct": 80,
+        "f1_pct": 67.4
+      }
+    },
+    "cold_start_static": {
+      "all": {
+        "papers": 19,
+        "manuscripts_evaluated": 38,
+        "injected_errors_total": 57,
+        "injected_errors_detected": 38,
+        "recall_pct": 66.7,
+        "by_type": {
+          "E1": {
+            "total": 10,
+            "detected": 8,
+            "recall_pct": 80
+          },
+          "E2": {
+            "total": 6,
+            "detected": 5,
+            "recall_pct": 83.3
+          },
+          "E3": {
+            "total": 8,
+            "detected": 5,
+            "recall_pct": 62.5
+          },
+          "E4": {
+            "total": 8,
+            "detected": 6,
+            "recall_pct": 75
+          },
+          "E5": {
+            "total": 8,
+            "detected": 5,
+            "recall_pct": 62.5
+          },
+          "E6": {
+            "total": 9,
+            "detected": 2,
+            "recall_pct": 22.2
+          },
+          "E7": {
+            "total": 8,
+            "detected": 7,
+            "recall_pct": 87.5
+          }
+        },
+        "true_positive_injected_findings": 39,
+        "unexpected_true_organic_clean": 7,
+        "unexpected_true_organic_injected": 7,
+        "unexpected_true_organic_total": 14,
+        "raw_unadjusted_clean_findings": 12,
+        "false_positive_findings_total": 9,
+        "false_positive_clean": 5,
+        "false_positive_injected": 4,
+        "clean_critical_major_fp_per_paper": 0.21,
+        "clean_minor_fp_per_paper": 0.05,
+        "precision_injected_only_pct": 81.3,
+        "precision_with_organic_tp_pct": 85.5,
+        "f1_pct": 74.9
+      },
+      "dev": {
+        "papers": 11,
+        "manuscripts_evaluated": 22,
+        "injected_errors_total": 33,
+        "injected_errors_detected": 24,
+        "recall_pct": 72.7,
+        "by_type": {
+          "E1": {
+            "total": 6,
+            "detected": 5,
+            "recall_pct": 83.3
+          },
+          "E2": {
+            "total": 3,
+            "detected": 3,
+            "recall_pct": 100
+          },
+          "E3": {
+            "total": 5,
+            "detected": 3,
+            "recall_pct": 60
+          },
+          "E4": {
+            "total": 5,
+            "detected": 4,
+            "recall_pct": 80
+          },
+          "E5": {
+            "total": 5,
+            "detected": 4,
+            "recall_pct": 80
+          },
+          "E6": {
+            "total": 5,
+            "detected": 1,
+            "recall_pct": 20
+          },
+          "E7": {
+            "total": 4,
+            "detected": 4,
+            "recall_pct": 100
+          }
+        },
+        "true_positive_injected_findings": 25,
+        "unexpected_true_organic_clean": 6,
+        "unexpected_true_organic_injected": 6,
+        "unexpected_true_organic_total": 12,
+        "raw_unadjusted_clean_findings": 9,
+        "false_positive_findings_total": 5,
+        "false_positive_clean": 3,
+        "false_positive_injected": 2,
+        "clean_critical_major_fp_per_paper": 0.27,
+        "clean_minor_fp_per_paper": 0,
+        "precision_injected_only_pct": 83.3,
+        "precision_with_organic_tp_pct": 88.1,
+        "f1_pct": 79.7
+      },
+      "test": {
+        "papers": 8,
+        "manuscripts_evaluated": 16,
+        "injected_errors_total": 24,
+        "injected_errors_detected": 14,
+        "recall_pct": 58.3,
+        "by_type": {
+          "E1": {
+            "total": 4,
+            "detected": 3,
+            "recall_pct": 75
+          },
+          "E2": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E3": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E4": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E5": {
+            "total": 3,
+            "detected": 1,
+            "recall_pct": 33.3
+          },
+          "E6": {
+            "total": 4,
+            "detected": 1,
+            "recall_pct": 25
+          },
+          "E7": {
+            "total": 4,
+            "detected": 3,
+            "recall_pct": 75
+          }
+        },
+        "true_positive_injected_findings": 14,
+        "unexpected_true_organic_clean": 1,
+        "unexpected_true_organic_injected": 1,
+        "unexpected_true_organic_total": 2,
+        "raw_unadjusted_clean_findings": 3,
+        "false_positive_findings_total": 4,
+        "false_positive_clean": 2,
+        "false_positive_injected": 2,
+        "clean_critical_major_fp_per_paper": 0.13,
+        "clean_minor_fp_per_paper": 0.13,
+        "precision_injected_only_pct": 77.8,
+        "precision_with_organic_tp_pct": 80,
+        "f1_pct": 67.4
+      }
+    },
+    "intra_manuscript_round2_evolved": {
+      "all": {
+        "papers": 19,
+        "manuscripts_evaluated": 38,
+        "injected_errors_total": 57,
+        "injected_errors_detected": 38,
+        "recall_pct": 66.7,
+        "by_type": {
+          "E1": {
+            "total": 10,
+            "detected": 8,
+            "recall_pct": 80
+          },
+          "E2": {
+            "total": 6,
+            "detected": 5,
+            "recall_pct": 83.3
+          },
+          "E3": {
+            "total": 8,
+            "detected": 5,
+            "recall_pct": 62.5
+          },
+          "E4": {
+            "total": 8,
+            "detected": 6,
+            "recall_pct": 75
+          },
+          "E5": {
+            "total": 8,
+            "detected": 5,
+            "recall_pct": 62.5
+          },
+          "E6": {
+            "total": 9,
+            "detected": 2,
+            "recall_pct": 22.2
+          },
+          "E7": {
+            "total": 8,
+            "detected": 7,
+            "recall_pct": 87.5
+          }
+        },
+        "true_positive_injected_findings": 39,
+        "unexpected_true_organic_clean": 7,
+        "unexpected_true_organic_injected": 7,
+        "unexpected_true_organic_total": 14,
+        "raw_unadjusted_clean_findings": 12,
+        "false_positive_findings_total": 9,
+        "false_positive_clean": 5,
+        "false_positive_injected": 4,
+        "clean_critical_major_fp_per_paper": 0.21,
+        "clean_minor_fp_per_paper": 0.05,
+        "precision_injected_only_pct": 81.3,
+        "precision_with_organic_tp_pct": 85.5,
+        "f1_pct": 74.9
+      },
+      "dev": {
+        "papers": 11,
+        "manuscripts_evaluated": 22,
+        "injected_errors_total": 33,
+        "injected_errors_detected": 24,
+        "recall_pct": 72.7,
+        "by_type": {
+          "E1": {
+            "total": 6,
+            "detected": 5,
+            "recall_pct": 83.3
+          },
+          "E2": {
+            "total": 3,
+            "detected": 3,
+            "recall_pct": 100
+          },
+          "E3": {
+            "total": 5,
+            "detected": 3,
+            "recall_pct": 60
+          },
+          "E4": {
+            "total": 5,
+            "detected": 4,
+            "recall_pct": 80
+          },
+          "E5": {
+            "total": 5,
+            "detected": 4,
+            "recall_pct": 80
+          },
+          "E6": {
+            "total": 5,
+            "detected": 1,
+            "recall_pct": 20
+          },
+          "E7": {
+            "total": 4,
+            "detected": 4,
+            "recall_pct": 100
+          }
+        },
+        "true_positive_injected_findings": 25,
+        "unexpected_true_organic_clean": 6,
+        "unexpected_true_organic_injected": 6,
+        "unexpected_true_organic_total": 12,
+        "raw_unadjusted_clean_findings": 9,
+        "false_positive_findings_total": 5,
+        "false_positive_clean": 3,
+        "false_positive_injected": 2,
+        "clean_critical_major_fp_per_paper": 0.27,
+        "clean_minor_fp_per_paper": 0,
+        "precision_injected_only_pct": 83.3,
+        "precision_with_organic_tp_pct": 88.1,
+        "f1_pct": 79.7
+      },
+      "test": {
+        "papers": 8,
+        "manuscripts_evaluated": 16,
+        "injected_errors_total": 24,
+        "injected_errors_detected": 14,
+        "recall_pct": 58.3,
+        "by_type": {
+          "E1": {
+            "total": 4,
+            "detected": 3,
+            "recall_pct": 75
+          },
+          "E2": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E3": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E4": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E5": {
+            "total": 3,
+            "detected": 1,
+            "recall_pct": 33.3
+          },
+          "E6": {
+            "total": 4,
+            "detected": 1,
+            "recall_pct": 25
+          },
+          "E7": {
+            "total": 4,
+            "detected": 3,
+            "recall_pct": 75
+          }
+        },
+        "true_positive_injected_findings": 14,
+        "unexpected_true_organic_clean": 1,
+        "unexpected_true_organic_injected": 1,
+        "unexpected_true_organic_total": 2,
+        "raw_unadjusted_clean_findings": 3,
+        "false_positive_findings_total": 4,
+        "false_positive_clean": 2,
+        "false_positive_injected": 2,
+        "clean_critical_major_fp_per_paper": 0.13,
+        "clean_minor_fp_per_paper": 0.13,
+        "precision_injected_only_pct": 77.8,
+        "precision_with_organic_tp_pct": 80,
+        "f1_pct": 67.4
+      }
+    },
+    "cross_manuscript_dev_to_test_transfer": {
+      "all": {
+        "papers": 19,
+        "manuscripts_evaluated": 38,
+        "injected_errors_total": 57,
+        "injected_errors_detected": 38,
+        "recall_pct": 66.7,
+        "by_type": {
+          "E1": {
+            "total": 10,
+            "detected": 8,
+            "recall_pct": 80
+          },
+          "E2": {
+            "total": 6,
+            "detected": 5,
+            "recall_pct": 83.3
+          },
+          "E3": {
+            "total": 8,
+            "detected": 5,
+            "recall_pct": 62.5
+          },
+          "E4": {
+            "total": 8,
+            "detected": 6,
+            "recall_pct": 75
+          },
+          "E5": {
+            "total": 8,
+            "detected": 5,
+            "recall_pct": 62.5
+          },
+          "E6": {
+            "total": 9,
+            "detected": 2,
+            "recall_pct": 22.2
+          },
+          "E7": {
+            "total": 8,
+            "detected": 7,
+            "recall_pct": 87.5
+          }
+        },
+        "true_positive_injected_findings": 39,
+        "unexpected_true_organic_clean": 7,
+        "unexpected_true_organic_injected": 7,
+        "unexpected_true_organic_total": 14,
+        "raw_unadjusted_clean_findings": 12,
+        "false_positive_findings_total": 9,
+        "false_positive_clean": 5,
+        "false_positive_injected": 4,
+        "clean_critical_major_fp_per_paper": 0.21,
+        "clean_minor_fp_per_paper": 0.05,
+        "precision_injected_only_pct": 81.3,
+        "precision_with_organic_tp_pct": 85.5,
+        "f1_pct": 74.9
+      },
+      "dev": {
+        "papers": 11,
+        "manuscripts_evaluated": 22,
+        "injected_errors_total": 33,
+        "injected_errors_detected": 24,
+        "recall_pct": 72.7,
+        "by_type": {
+          "E1": {
+            "total": 6,
+            "detected": 5,
+            "recall_pct": 83.3
+          },
+          "E2": {
+            "total": 3,
+            "detected": 3,
+            "recall_pct": 100
+          },
+          "E3": {
+            "total": 5,
+            "detected": 3,
+            "recall_pct": 60
+          },
+          "E4": {
+            "total": 5,
+            "detected": 4,
+            "recall_pct": 80
+          },
+          "E5": {
+            "total": 5,
+            "detected": 4,
+            "recall_pct": 80
+          },
+          "E6": {
+            "total": 5,
+            "detected": 1,
+            "recall_pct": 20
+          },
+          "E7": {
+            "total": 4,
+            "detected": 4,
+            "recall_pct": 100
+          }
+        },
+        "true_positive_injected_findings": 25,
+        "unexpected_true_organic_clean": 6,
+        "unexpected_true_organic_injected": 6,
+        "unexpected_true_organic_total": 12,
+        "raw_unadjusted_clean_findings": 9,
+        "false_positive_findings_total": 5,
+        "false_positive_clean": 3,
+        "false_positive_injected": 2,
+        "clean_critical_major_fp_per_paper": 0.27,
+        "clean_minor_fp_per_paper": 0,
+        "precision_injected_only_pct": 83.3,
+        "precision_with_organic_tp_pct": 88.1,
+        "f1_pct": 79.7
+      },
+      "test": {
+        "papers": 8,
+        "manuscripts_evaluated": 16,
+        "injected_errors_total": 24,
+        "injected_errors_detected": 14,
+        "recall_pct": 58.3,
+        "by_type": {
+          "E1": {
+            "total": 4,
+            "detected": 3,
+            "recall_pct": 75
+          },
+          "E2": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E3": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E4": {
+            "total": 3,
+            "detected": 2,
+            "recall_pct": 66.7
+          },
+          "E5": {
+            "total": 3,
+            "detected": 1,
+            "recall_pct": 33.3
+          },
+          "E6": {
+            "total": 4,
+            "detected": 1,
+            "recall_pct": 25
+          },
+          "E7": {
+            "total": 4,
+            "detected": 3,
+            "recall_pct": 75
+          }
+        },
+        "true_positive_injected_findings": 14,
+        "unexpected_true_organic_clean": 1,
+        "unexpected_true_organic_injected": 1,
+        "unexpected_true_organic_total": 2,
+        "raw_unadjusted_clean_findings": 3,
+        "false_positive_findings_total": 4,
+        "false_positive_clean": 2,
+        "false_positive_injected": 2,
+        "clean_critical_major_fp_per_paper": 0.13,
+        "clean_minor_fp_per_paper": 0.13,
+        "precision_injected_only_pct": 77.8,
+        "precision_with_organic_tp_pct": 80,
+        "f1_pct": 67.4
+      }
+    },
+    "adversarial_rebuttal_stress_test": {
+      "all": {
+        "papers": 19,
+        "manuscripts_evaluated": 38,
+        "injected_errors_total": 57,
+        "injected_errors_detected": 38,
+        "recall_pct": 66.7,
+        "by_type": {
+          "E1": {
+            "total": 10,
+            "detected": 8,
+            "recall_pct": 80
+          },
+          "E2": {
+            "total": 6,
+            "detected": 5,
+            "recall_pct": 83.3
+          },
+          "E3": {
+            "total": 8,
+            "detected": 5,
+            "recall_pct": 62.5
+          },
+          "E4": {
+            "total": 8,
+            "detected": 6,
+            "recall_pct": 75
+          },
+          "E5": {
+            "total": 8,
+            "detected": 5,
+            "recall_pct": 62.5
+          },
+          "E6": {
+            "total": 9,
+            "detected": 2,
+            "recall_pct": 22.2
+          },
+          "E7": {
+            "total": 8,
+            "detected": 7,
+            "recall_pct": 87.5
+          }
+        },
+        "true_positive_injected_findings": 39,
+        "unexpected_true_organic_clean": 7,
+        "unexpected_true_organic_injected": 7,
+        "unexpected_true_organic_total": 14,
+        "raw_unadjusted_clean_findings": 12,
+        "false_positive_findings_total": 9,
+        "false_positive_clean": 5,
+        "false_positive_injected": 4,
+        "clean_critical_major_fp_per_paper": 0.21,
+        "clean_minor_fp_per_paper": 0.05,
+        "precision_injected_only_pct": 81.3,
+        "precision_with_organic_tp_pct": 85.5,
+        "f1_pct": 74.9
+      },
+      "objective_error_false_exemption_count": 0,
+      "objective_error_false_exemption_rate_pct": 0
+    }
+  },
+  "blind_clinician_calibration": {
+    "physically_blind_to_variant_and_labels": true,
+    "evaluated_with_llm": false,
+    "ground_truth_true_errors_seen": 0,
+    "true_errors_accepted_fix": 0,
+    "true_error_acceptance_rate_pct": null,
+    "true_errors_falsely_rebutted": 0,
+    "false_rebuttal_rate_pct": null,
+    "false_positives_seen": 0,
+    "false_positives_rebutted": 0,
+    "false_positive_rebuttal_rate_pct": null,
+    "raw_clinician_rebuttals_containing_digits": 0,
+    "first_draft_llm_digit_leaks_scrubbed": 0,
+    "post_guard_instance_leakage_count": 0
+  },
+  "self_evolution_artifacts": {
+    "track_a_narrow_boundary_rules_count": 0,
+    "track_a_narrow_trigger_events": 0,
+    "track_a_instance_leakage_count": 0,
+    "track_a_instance_leakage_rate_pct": 0,
+    "track_a_rules": [],
+    "dev_audit_checklists_count": 0,
+    "dev_audit_checklists": [],
+    "track_b_corroborated_signals_recorded": 0,
+    "track_b_crystallized_rules_count": 0,
+    "track_b_instance_leakage_count": 0,
+    "track_b_rules": []
+  },
+  "per_paper_progression": [
+    {
+      "paper_id": "PMC12644478",
+      "split": "dev",
+      "design": "rct",
+      "injections_total": 3,
+      "static_detected": 2,
+      "static_organic_clean": 1,
+      "static_fp_clean": 1,
+      "static_fp_injected": 1,
+      "cross_transfer_detected": 2,
+      "cross_transfer_organic_clean": 1,
+      "cross_transfer_fp_clean": 1,
+      "cross_transfer_fp_injected": 1,
+      "intra_round2_detected": 2,
+      "intra_round2_fp_clean": 1,
+      "intra_round2_fp_injected": 1,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12788160",
+      "split": "dev",
+      "design": "rct",
+      "injections_total": 3,
+      "static_detected": 2,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 2,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 2,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12731986",
+      "split": "dev",
+      "design": "rct",
+      "injections_total": 3,
+      "static_detected": 3,
+      "static_organic_clean": 1,
+      "static_fp_clean": 1,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 3,
+      "cross_transfer_organic_clean": 1,
+      "cross_transfer_fp_clean": 1,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 3,
+      "intra_round2_fp_clean": 1,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12685937",
+      "split": "dev",
+      "design": "retrospective_cohort",
+      "injections_total": 3,
+      "static_detected": 2,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 2,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 2,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12856494",
+      "split": "dev",
+      "design": "retrospective_cohort",
+      "injections_total": 3,
+      "static_detected": 3,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 3,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 3,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12657621",
+      "split": "dev",
+      "design": "case_control",
+      "injections_total": 3,
+      "static_detected": 2,
+      "static_organic_clean": 0,
+      "static_fp_clean": 1,
+      "static_fp_injected": 1,
+      "cross_transfer_detected": 2,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 1,
+      "cross_transfer_fp_injected": 1,
+      "intra_round2_detected": 2,
+      "intra_round2_fp_clean": 1,
+      "intra_round2_fp_injected": 1,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12721543",
+      "split": "dev",
+      "design": "diagnostic_accuracy",
+      "injections_total": 3,
+      "static_detected": 3,
+      "static_organic_clean": 4,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 3,
+      "cross_transfer_organic_clean": 4,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 3,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12758107",
+      "split": "dev",
+      "design": "cross_sectional",
+      "injections_total": 3,
+      "static_detected": 1,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 1,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 1,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12876241",
+      "split": "dev",
+      "design": "meta_analysis",
+      "injections_total": 3,
+      "static_detected": 3,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 3,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 3,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12739847",
+      "split": "dev",
+      "design": "translational",
+      "injections_total": 3,
+      "static_detected": 1,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 1,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 1,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12485006",
+      "split": "dev",
+      "design": "translational",
+      "injections_total": 3,
+      "static_detected": 2,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 2,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 2,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12839862",
+      "split": "test",
+      "design": "rct",
+      "injections_total": 3,
+      "static_detected": 1,
+      "static_organic_clean": 0,
+      "static_fp_clean": 1,
+      "static_fp_injected": 1,
+      "cross_transfer_detected": 1,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 1,
+      "cross_transfer_fp_injected": 1,
+      "intra_round2_detected": 1,
+      "intra_round2_fp_clean": 1,
+      "intra_round2_fp_injected": 1,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12697981",
+      "split": "test",
+      "design": "rct",
+      "injections_total": 3,
+      "static_detected": 3,
+      "static_organic_clean": 1,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 3,
+      "cross_transfer_organic_clean": 1,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 3,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12681115",
+      "split": "test",
+      "design": "rct",
+      "injections_total": 3,
+      "static_detected": 1,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 1,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 1,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12118826",
+      "split": "test",
+      "design": "retrospective_cohort",
+      "injections_total": 3,
+      "static_detected": 2,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 2,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 2,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12654784",
+      "split": "test",
+      "design": "case_control",
+      "injections_total": 3,
+      "static_detected": 2,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 2,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 2,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12774873",
+      "split": "test",
+      "design": "diagnostic_accuracy",
+      "injections_total": 3,
+      "static_detected": 2,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 2,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 2,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12757420",
+      "split": "test",
+      "design": "cross_sectional",
+      "injections_total": 3,
+      "static_detected": 2,
+      "static_organic_clean": 0,
+      "static_fp_clean": 0,
+      "static_fp_injected": 0,
+      "cross_transfer_detected": 2,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 0,
+      "cross_transfer_fp_injected": 0,
+      "intra_round2_detected": 2,
+      "intra_round2_fp_clean": 0,
+      "intra_round2_fp_injected": 0,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    },
+    {
+      "paper_id": "PMC12703663",
+      "split": "test",
+      "design": "meta_analysis",
+      "injections_total": 3,
+      "static_detected": 1,
+      "static_organic_clean": 0,
+      "static_fp_clean": 1,
+      "static_fp_injected": 1,
+      "cross_transfer_detected": 1,
+      "cross_transfer_organic_clean": 0,
+      "cross_transfer_fp_clean": 1,
+      "cross_transfer_fp_injected": 1,
+      "intra_round2_detected": 1,
+      "intra_round2_fp_clean": 1,
+      "intra_round2_fp_injected": 1,
+      "active_rules_before_clean": 0,
+      "active_rules_after_paper": 0,
+      "active_checklists_after_paper": 0
+    }
+  ]
+}

@@ -1,3 +1,9 @@
+/**
+ * 程序性执行策略与双轨自演进引擎（Track B Procedural Harness & CoEM/MSCE/Skill-V）：
+ * - 零模板轨迹对比规则合成（synthesizeRuleFromSignal）与多回合/恢复证据门控晋升（shouldPromoteToActive）；
+ * - 前向双通道混合路由（Forward Cue-Triggered Hybrid Routing）与反向归因精炼（Backward Credit Assignment）；
+ * - 审稿批注采纳修复信号（internal_inconsistency / method_result_mismatch / spin_or_guideline）结晶为前置核查规程。
+ */
 import type { Complete } from '../harness/complete.ts'
 import type { Documents } from '../model/runtime.ts'
 import { pendingGroups } from '../ops/suggest.ts'
@@ -328,6 +334,18 @@ export function synthesizeRuleFromSignal(group: {
   } else if (code === 'mask_required') {
     protocol =
       '确认病灶前须确保已生成三维分割掩膜（mask_key），禁止无三维掩膜的病灶进入已确认态。'
+  } else if (code === 'internal_inconsistency') {
+    protocol =
+      '撰写或修改临床结果正文与表格时，落笔前先用 doc_read 对照摘要、正文与表格中的总样本量、分组频数加总、百分比分子分母及置信区间上下界，确保表文算术完全自洽。'
+  } else if (code === 'method_result_mismatch') {
+    protocol =
+      '撰写统计方法与结果章节时，落笔前先用 doc_read 核对连续变量分布汇总指标（Mean ± SD vs Median [IQR]）及假设检验方法（参数 t-test/ANOVA vs 非参数 Mann-Whitney/Kruskal-Wallis）是否前后一致。'
+  } else if (code === 'spin_or_guideline') {
+    protocol =
+      '撰写结果定性与讨论结论时，落笔前先核实统计检验 P 值与研究设计类型：当无统计学显著性差异时客观陈述阴性结果（严禁阳性 Spin 夸大），观察性研究使用相关性表述而非因果推断。'
+  } else if (code === 'review_comment_fix') {
+    protocol =
+      '修改含审稿批注的段落时，先用 doc_read 对照批注指出的表格、统计方法或文献证据完成数值与表述修正，再关闭对应审稿批注。'
   }
 
   const head = protocol
