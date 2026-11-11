@@ -5,7 +5,7 @@
 % ============================================================================
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage[margin=1in]{geometry}
+\usepackage[margin=0.95in]{geometry}
 \usepackage{amsmath,amssymb,amsfonts}
 \usepackage{array}
 \usepackage{booktabs}
@@ -19,27 +19,28 @@
 \usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc,backgrounds}
 \usepackage{enumitem}
 \usepackage{listings}
+\renewcommand{\lstlistingname}{Algorithm}
 \usepackage{microtype}
 \emergencystretch=2em
 \usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
 \expandafter\def\expandafter\UrlBreaks\expandafter{\UrlBreaks\do\_\do\-}
 
-% Helper for clean two-line centered table headers
+% Helper for clean two-line table headers
 \newcommand{\thead}[1]{\begin{tabular}[c]{@{}c@{}}#1\end{tabular}}
 \newcommand{\theadl}[1]{\begin{tabular}[c]{@{}l@{}}#1\end{tabular}}
 
-% Code Listing Style
-\definecolor{codebg}{RGB}{248,249,250}
-\definecolor{codeframe}{RGB}{220,224,230}
-\definecolor{codekw}{RGB}{0,92,197}
-\definecolor{codecmt}{RGB}{106,115,125}
+% Code / Algorithm Box Style
+\definecolor{codebg}{RGB}{248,250,252}
+\definecolor{codeframe}{RGB}{203,213,225}
+\definecolor{codekw}{RGB}{15,76,129}
+\definecolor{codecmt}{RGB}{100,116,139}
 \definecolor{codestr}{RGB}{3,47,98}
 
 \lstdefinestyle{heurionspec}{
   backgroundcolor=\color{codebg},
   frame=single,
   rulecolor=\color{codeframe},
-  basicstyle=\ttfamily\small,
+  basicstyle=\ttfamily\scriptsize,
   keywordstyle=\color{codekw}\bfseries,
   commentstyle=\color{codecmt}\itshape,
   stringstyle=\color{codestr},
@@ -55,8 +56,13 @@
 \title{\textbf{Self-Evolving Clinical Deep Review: Eliminating Recurring Methodological False Alarms without Compromising Objective Error Recall via Comment-Driven Dual-Track Memory}}
 
 \author{
-  \textbf{Heurion Research Team} \\
-  \small Correspondence: \texttt{research@heurion.ai}
+  \textbf{Hui Zhao}$^{1,*}$ \quad \textbf{Dong Qian}$^{2,3}$ \quad \textbf{Heurion Research Team}$^{1}$ \\[5pt]
+  \parbox{0.92\textwidth}{\centering\footnotesize
+    $^{1}$Heurion AI Research \\
+    $^{2}$Department of Radiation Oncology, The First Affiliated Hospital of USTC, Division of Life Sciences and Medicine, University of Science and Technology of China, Hefei, China \\
+    $^{3}$Department of Radiotherapy, Erasmus MC Cancer Institute, University Medical Center Rotterdam, The Netherlands \\[2pt]
+    $^{*}$Correspondence: \texttt{research@heurion.ai}
+  }
 }
 
 \date{November 2026}
@@ -65,18 +71,14 @@
 \maketitle
 
 % ============================================================================
-% ABSTRACT
+% ABSTRACT (< 1,860 characters, < 250 words; arXiv & Top Venue Compliant)
 % ============================================================================
 \begin{abstract}
-Automated peer review and scientific verification systems face a fundamental precision--recall dilemma in clinical medicine. On one hand, single-pass large language model (LLM) reviewers and text-only multi-agent pipelines frequently miss objective numerical contradictions between manuscript prose and multi-column tables, inverted or out-of-bounds $95\%$ confidence intervals, and intra-table row/cell arithmetic errors. Conversely, deterministic structural auditors alone struggle to capture open-ended semantic spin bias ($p \ge 0.05$ framed as clinical efficacy), while hybrid AST+LLM pipelines trigger recurring false alarms on legitimate study-design denominator transitions---such as intention-to-treat (ITT) randomized sample sizes versus per-protocol completers in CONSORT trials, pre- versus post-propensity-matching cohorts in STROBE observational studies, or dual parametric/non-parametric reporting across skewed subscales. Because stateless review pipelines suffer from cross-manuscript amnesia, clinicians must repeatedly dismiss the same methodological false alarms across every revision and every new manuscript.
-
-We present \textbf{Heurion Deep Review}, a clean-room four-stage clinical manuscript verification architecture paired with a \textbf{Comment-Driven Dual-Track Self-Evolution Loop} (\texttt{evolveFromReviewCommentAsync}). First, our four-stage pipeline combines hierarchical section-role segmentation and a ProseMirror 2D table-grid scratchpad (Stage~1), quantitative-density budget routing (Stage~2), four specialist auditing passes covering seven objective clinical error categories (\textbf{E1--E7}) across external literature, internal prose--table arithmetic, statistical method--result pairing, and spin bias alongside quote-verified LLM section review (Stage~3), and full-text LLM verification with cell-level CRDT comment anchoring \texttt{\{\#c:id\}} (Stage~4). Second, \texttt{evolveFromReviewCommentAsync} learns directly from clinician interactions on anchored comments: (i) when a clinician rebuts a study-design boundary alert (\texttt{acceptedFix = false}), \textbf{Track~A} (\texttt{narrow}) uses zero-template LLM rule distillation guarded by dual instance-decoupling checks (\texttt{hasInstanceLeakage} and \texttt{sensitiveReason}) to synthesize a zero-digit reusable boundary rule, while a hard safety floor (\texttt{NON\_EXEMPTABLE\_SUBTYPES}) guarantees that objective mathematical, CI, and table-sum errors can \emph{never} be exempted even under adversarial rebuttal; and (ii) \textbf{Track~B} (\texttt{procedural} and \texttt{review\_audit} checklists) crystallizes corroborated true-positive fixes into pre-write rules and dev-only cross-section audit skills.
-
-We evaluate our framework across two benchmarks: (1) a \textbf{Full-Text Controlled Error-Injection Benchmark} of 19 open-access 2025 PubMed Central (PMC) JATS XML manuscripts ($38$ full-length clean/injected variants averaging $\sim 6{,}000$ words, $57$ injected errors across \textbf{E1--E7}, partitioned into $11$ \texttt{dev} and $8$ held-out \texttt{test} papers) evaluated with both deterministic clean-room AST and live \texttt{deepseek-v4-flash} ($3{,}285$ API calls, $7.90\text{M}$ input tokens) coupled with a physically blind-isolated LLM Simulated Clinician Agent (\texttt{simulateBlindClinician}), and (2) a \textbf{7-Vignette Clinical Oncology Benchmark} with live \texttt{deepseek-chat} calls across $8$ verified organic publication errors. Without a single LLM call or study-specific regex, our clean-room AST engine alone detects $\mathbf{38/57}$ ($\mathbf{66.7\%}$) of injected errors at $\mathbf{85.5\%}$ precision ($0.26$ true false positives per clean paper, $\mathbf{0.0\%}$ false exemption under adversarial rebuttal) and uncovers $7$ genuine in-print errors in published 2025 journals. Adding live \texttt{deepseek-v4-flash} hybrid review (\texttt{heurion\_deep}) lifts full-text recall to $\mathbf{48/57}$ ($\mathbf{84.2\%}$, including $3.5\times$ higher \textbf{E6} spin recall at $\mathbf{77.8\%}$ and $25$ organic in-print errors) while slashing false positives by $\mathbf{93.0\%}$ versus text-only \texttt{pat\_baseline} ($76$ vs.\ $1{,}081$ FPs). Under physically blind clinician interaction ($\mathbf{95.2\%}$ [$179/188$] true-error acceptance and $\mathbf{38.8\%}$ [$40/103$] false-alarm rebuttal), \texttt{heurion\_evolved} cuts intra-manuscript Round~2 clean false positives by $\mathbf{34.0\%}$ ($47 \to 31$; overall FPs $-26.3\%$, F1 $70.2\% \to \mathbf{72.8\%}$) and cross-manuscript false positives by $\mathbf{28.9\%}$ ($76 \to 54$, F1 $70.2\% \to \mathbf{74.0\%}$) with \emph{zero recall loss} ($\mathbf{48/57} = \mathbf{84.2\%}$, achieving $\mathbf{100.0\%}$ on \textbf{E2}, \textbf{E4}, and \textbf{E7}). On strictly frozen unseen \texttt{test} papers ($N=8$), transfer achieves a Pareto improvement---simultaneously lifting \texttt{test} recall from $75.0\%$ to $\mathbf{79.2\%}$ ($18/24 \to 19/24$) while cutting clean false positives by $\mathbf{15.8\%}$ ($19 \to 16$, F1 $63.1\% \to \mathbf{64.8\%}$) with $\mathbf{0.0\%}$ instance leakage; on the 7-vignette oncology benchmark, \texttt{heurion\_evolved} reaches $\mathbf{100.0\%}$ recall ($8/8$) and $\mathbf{100.0\%}$ precision.
+Automated clinical manuscript review faces a precision--recall--memory trilemma: text-only LLMs miss $87.5\%$ of 2D table arithmetic errors with severe alert fatigue; deterministic checkers miss semantic spin ($p \ge 0.05$ framed as efficacy); and globally injecting memorized rebuttals leaks study-specific terms or depresses unseen error sensitivity. We present \textbf{Heurion Deep Review}, a four-stage verification architecture with a \textbf{Comment-Driven Dual-Track Self-Evolution Loop}. It integrates a section-role map and $R \times C$ table-grid scratchpad (Stage~1), density routing (Stage~2), four specialist passes across seven error categories (\textbf{E1--E7}) with dual-quote-verified section LLM review (Stage~3), and candidate-scoped full-text verification with cell-level CRDT anchoring (Stage~4). From clinician replies, \textbf{Track~A} distills methodological rebuttals into zero-digit, specialty-sanitized boundary rules routed selectively per Stage~4 candidate behind a five-invariant safety floor ($\mathcal{F}_{\text{hard}}$); \textbf{Track~B} crystallizes accepted fixes into pre-write guards and additive checklists. Across 19 full-length 2025 PMC papers ($57$ injected errors), zero-LLM AST achieves $66.7\%$ recall at $88.3\%$ precision ($84.8\%$ injected-only) and uncovers $7$ published errors. Hybrid review reaches $87.7\%$ recall ($50/57$, $p=0.0018$), cuts false positives by $92.5\%$ vs.\ text-only PAT, outperforms full-context DeepSeek-V3 ($+18.7\text{ pp}$ injected precision, $p=0.0026$), and matches $64\text{k}$-CoT DeepSeek-R1 F1 ($71.0\%$ vs.\ $71.9\%$) at $14.4\times$ fewer output tokens. Selective routing lifts evolved recall to $89.5\%$ ($83.3\%$ unseen test), eliminating the $-12.3\text{ pp}$ 5-fold CV recall loss of global prompt stuffing ($p=0.0156$). Hardened $\mathcal{F}_{\text{hard}}$ blocks $100\%$ ($64/64$) of adversarial false exemptions, PMC \texttt{<table-wrap>} parsing lifts citation accuracy from $52.8\%$ to $94.4\%$, and Track~B guards raise clean revision pass rates from $58.3\%$ to $87.5\%$.
 \end{abstract}
 
-\vspace{4pt}
-\noindent\textbf{Keywords:} Automated Peer Review, Clinical Research Verification, Self-Evolving LLM Agents, Error-Injection Benchmark, Biostatistics Consistency, Dual-Track Memory
+\vspace{3pt}
+\noindent\textbf{Keywords:} Automated Peer Review, Clinical Research Verification, Self-Evolving LLM Agents, Memory Governance, Biostatistics Consistency, Adversarial Safety Floor
 
 % ============================================================================
 % 1. INTRODUCTION
@@ -84,86 +86,93 @@ We evaluate our framework across two benchmarks: (1) a \textbf{Full-Text Control
 \section{Introduction}
 \label{sec:intro}
 
-Peer-reviewed clinical and translational manuscripts form the evidentiary backbone of modern medicine, yet published medical literature frequently contains preventable objective errors \cite{schulz2010consort,vandenbroucke2007strobe,boutron2010spin}. Empirical audits of clinical journals regularly uncover discrepancies between sample sizes reported in the Abstract and Table~1, percentages that do not match their numerator and denominator ($n/N$), point estimates falling outside their reported $95\%$ confidence intervals (or inverted interval bounds), parametric tests ($t$-test, ANOVA, mean $\pm$ SD) declared in Methods but replaced with non-parametric statistics (Mann--Whitney U, median [IQR]) in Results, and ``spin bias'' where statistically non-significant findings ($p \ge 0.05$) are framed as clinically meaningful improvements \cite{boutron2010spin,page2021prisma,bossuyt2015stard}.
+Peer-reviewed clinical and translational manuscripts form the evidentiary backbone of modern medicine, yet published medical literature frequently contains preventable objective errors \cite{schulz2010consort,vandenbroucke2007strobe,boutron2010spin}. Empirical audits of clinical journals regularly uncover discrepancies between sample sizes reported in the Abstract and Table~1, percentages that disagree with their stated numerator and denominator ($n/N$), point estimates falling outside their reported $95\%$ confidence intervals (or inverted interval bounds), parametric tests ($t$-test, ANOVA, mean $\pm$ SD) declared in Methods but replaced with non-parametric statistics (Mann--Whitney U, median [IQR]) in Results, and ``spin bias'' where statistically non-significant findings ($p \ge 0.05$) are framed as clinically meaningful efficacy \cite{boutron2010spin,page2021prisma,bossuyt2015stard}.
 
-Recent advances in large language models (LLMs) and multi-agent verification pipelines---such as Google's Paper Assistant Tool (PAT) \cite{googlepat2026}, PaperQA2 \cite{skarlinski2024paperqa2}, and fine-grained factual verifiers \cite{min2023factscore,gao2023alce}---have sparked interest in automated pre-submission manuscript review. However, deploying automated deep review in real-world clinical research exposes a sharp \textbf{precision--recall dilemma} driven by three structural limitations:
+Recent advances in frontier reasoning models \cite{deepseekv3_2024,deepseekr1_2025} and multi-agent verification pipelines---such as Google's Paper Assistant Tool (PAT) \cite{googlepat2026}, PaperQA2 \cite{skarlinski2024paperqa2}, and atomic factual verifiers \cite{min2023factscore,gao2023alce}---have sparked intense interest in automated pre-submission manuscript review. However, deploying automated review in real-world clinical authoring exposes an acute \textbf{precision--recall--memory trilemma} driven by four structural failure modes:
 
 \begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Complementary Blind Spots of Text-Only LLMs vs.\ Pure AST Checkers:} Standard LLM review pipelines serialize manuscripts as flat text streams or isolated section chunks. Without an explicit 2D table-grid representation (handling merged headers, \texttt{rowspan}/\texttt{colspan}, subgroup denominator headers, and row-sum columns) and a cross-section numerical scratchpad, text-only prompts miss over $60\%$ of intra-table percentage/sum errors and prose-vs.-table contradictions. Conversely, domain-general AST checkers capture structured arithmetic and confidence interval violations with high precision, but cannot reliably judge open-ended semantic spin ($p \ge 0.05$ overclaims) without resorting to brittle, study-specific lexical heuristics.
-  \item \textbf{Methodological False Alarms at Study-Design Boundaries:} Clinical studies legitimately report multiple sample denominators and statistical distributions within the same paper according to established reporting guidelines. For example, a CONSORT randomized controlled trial (RCT) reports both the randomized intention-to-treat (ITT) sample size and the per-protocol completer sample size; a STROBE retrospective cohort study reports both the pre-matching crude cohort and the propensity-score-matched multivariable subcohort; clinical studies with Shapiro--Wilk normality testing legitimately report Mean $\pm$ SD for age/BMI alongside Median [IQR] for skewed questionnaire scales; and oncology tables define \texttt{SD} as RECIST \emph{stationary disease} while prose uses \texttt{SD} for \emph{standard deviation}. Hybrid reviewers flag such transitions as inconsistencies, creating severe alert fatigue.
-  \item \textbf{Cross-Manuscript Amnesia vs.\ Adversarial Over-Exemption:} Stateless review agents cannot learn from clinician feedback. When an investigator explains in a comment reply that ``Table~1 reports the ITT randomized cohort ($N=240$) whereas Table~2 analyzes completers ($n=169$) per CONSORT,'' a stateless reviewer repeats the exact same false alarm on the next revision and on every subsequent RCT. Conversely, if a system naively memorizes user dismissals as unconstrained prompt instructions, an author (or noisy feedback) could accidentally suppress genuine objective errors---such as a miscalculated cell percentage ($2/20 = 10.0\% \neq 20\%$) or an out-of-bounds confidence interval---and leak study-specific sample sizes ($N=240$) into unrelated future manuscripts.
+  \item \textbf{Complementary Blind Spots of Unstructured LLMs vs.\ Pure AST Checkers:} Standard LLM review pipelines serialize manuscripts as flat text or single-pass prompts. Even when full 2D Markdown tables are supplied in context, single-pass non-reasoning LLMs miss over $60\%$ of intra-table cell/sum arithmetic errors while generating noisy, unanchored critiques; meanwhile, long-chain-of-thought reasoning models require $>35{,}000$ output tokens and $>2$ minutes per manuscript yet still hallucinate unverified alerts. Conversely, domain-general abstract syntax tree (AST) checkers capture structured arithmetic and confidence-interval violations with near-zero false alarms, but miss multi-paragraph semantic spin ($p \ge 0.05$ overclaims).
+  \item \textbf{Methodological False Alarms at Study-Design Boundaries:} Clinical studies legitimately report multiple sample denominators and statistical distributions under CONSORT \cite{schulz2010consort}, STROBE \cite{vandenbroucke2007strobe}, PRISMA \cite{page2021prisma}, and STARD \cite{bossuyt2015stard}: randomized intention-to-treat (ITT) vs.\ per-protocol completers, baseline cohorts vs.\ propensity-matched or target-trial emulation (TTE) clone-censor-weighted pseudocohorts, Shapiro--Wilk normality-stratified Mean $\pm$ SD alongside Median [IQR], or RECIST \emph{stable disease} (\texttt{SD}) vs.\ \emph{standard deviation} (\texttt{SD}). Stateless hybrid reviewers repeatedly flag these valid transitions as contradictions.
+  \item \textbf{Global Memory Stuffing vs.\ Selective Governance:} When a stateless reviewer is augmented with cross-paper memory by globally injecting distilled exemption rules into section-level LLM prompts, accumulated boundary rules induce conservative threshold shift---depressing unseen error recall by over $12$ percentage points on borderline statistical mismatches and spin. Furthermore, parenthetical clinical examples in raw LLM rule drafts risk leaking study-specific numbers ($N=240$, $70.4\%$) or disease/procedure names across unrelated specialties.
+  \item \textbf{Adversarial Over-Exemption on Untyped Hybrid LLM Findings:} If an author mistakenly or adversarially rebuts a genuine mathematical, CI, or spin error using persuasive biostatistical jargon (e.g., claiming ``\emph{unrounded floating-point convention}'' or ``\emph{Hodges--Lehmann distribution-free CI bounds}''), subtype-only safety guards protect deterministic AST alerts but leave untyped LLM findings (\texttt{subtype = null}) vulnerable to intra-document suppression.
 \end{enumerate}
 
 \subsection{Our Approach and Contributions}
-To resolve this dilemma, we design \textbf{Heurion Deep Review}, which couples a clean-room \emph{Four-Stage Hybrid AST+LLM Clinical Review Pipeline} with a \emph{Comment-Driven Dual-Track Self-Evolution Loop} (\texttt{evolveFromReviewCommentAsync}). Every finding is anchored as a lifecycle-tracked CRDT comment (\texttt{\{\#c:id\}}) on the exact sentence or ProseMirror table cell \texttt{[row, col]}. Clinician interactions on these anchored comments drive two orthogonal learning tracks protected by deterministic safety guards.
+We present \textbf{Heurion Deep Review}, uniting a clean-room \emph{Four-Stage Hybrid 2D-AST + Quote-Verified LLM Pipeline} with a \emph{Comment-Driven Dual-Track Self-Evolution Loop} governed by candidate-scoped memory routing and a five-invariant hybrid safety floor. Every verified finding is anchored as a lifecycle-tracked CRDT comment (\texttt{\{\#c:id\}}) onto the exact prose span or 2D table cell \texttt{[row, col]}. Our contributions are fourfold:
 
-Our primary contributions are:
 \begin{itemize}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Clean-Room Hybrid 2D Table-Grid AST + Quote-Verified 4-Stage LLM Review (Section~\ref{sec:pipeline}):} We build a study-agnostic four-stage review engine combining hierarchical section-role tracking and a 2D ProseMirror table-grid scratchpad (Stage~1), quantitative-density verification budget routing (Stage~2), four specialist auditing passes covering seven objective error categories (\textbf{E1--E7}) alongside quote-verified LLM section review (Stage~3), and full-text Stage~4 verification with topic-aware numeric deduplication and cell-level CRDT comment anchoring.
-  \item \textbf{Zero-Template Dual-Track Self-Evolution with Non-Exemptable Safety Floor (Section~\ref{sec:evolution}):} We introduce \texttt{evolveFromReviewCommentAsync}, which routes clinician interactions into: (a) \textbf{Track~A (\texttt{narrow})}, distilling free-text clinician rebuttals via an LLM sanitizer (\texttt{synthesizeSanitizedBoundaryRuleAsync}) protected by dual digit/entity leakage guards (\texttt{hasInstanceLeakage} and \texttt{sensitiveReason}) and an immutable safety floor (\texttt{NON\_EXEMPTABLE\_SUBTYPES}) that guarantees $\mathbf{0.0\%}$ false exemption of objective math/CI/table errors; and (b) \textbf{Track~B (\texttt{procedural} \& \texttt{review\_audit})}, crystallizing accepted fixes into pre-write harness rules and dev-only cross-section audit checklists (\texttt{distillReviewAuditChecklistAsync}).
-  \item \textbf{Physically Blind-Isolated Live-LLM Evaluation \& Organic Error Discovery on 19 Full-Text PMC Papers (Sections~\ref{sec:setup}--\ref{sec:results}):} We construct a full-text error-injection benchmark from 19 open-access 2025 PMC JATS XML articles ($38$ clean/injected manuscripts, $57$ injected errors across \textbf{E1--E7}), paired with an adjudication registry of 30 verified in-print organic error entries (\texttt{known-organic-errors.json}) and a physically blind-isolated \texttt{deepseek-v4-flash} clinician agent (\texttt{simulateBlindClinician}, $\mathbf{95.2\%}$ true-error acceptance across $188$ ground-truth errors and $\mathbf{38.8\%}$ false-alarm rebuttal). Zero-LLM AST detects $\mathbf{66.7\%}$ ($38/57$) of injected errors at $\mathbf{85.5\%}$ precision; live \texttt{heurion\_deep} lifts recall to $\mathbf{84.2\%}$ ($48/57$) while cutting false positives by $\mathbf{93.0\%}$ over \texttt{pat\_baseline}; \texttt{heurion\_evolved} cuts intra-paper Round~2 clean false positives by $\mathbf{34.0\%}$ (overall FPs $-26.3\%$) and cross-paper false positives by $\mathbf{28.9\%}$ with zero overall recall loss ($48/57$), achieving simultaneous recall ($75.0\% \to \mathbf{79.2\%}$) and precision gains on frozen unseen \texttt{test} papers ($\mathbf{0.0\%}$ leakage); and on 7 clinical oncology vignettes, \texttt{heurion\_evolved} achieves $\mathbf{100.0\%}$ recall ($8/8$) and $\mathbf{100.0\%}$ precision.
+  \item \textbf{Four-Stage 2D Table-Grid AST + Quote-Verified Hybrid Architecture (Section~\ref{sec:pipeline}):} We combine stateful hierarchical section-role segmentation and a rectangular $R \times C$ ProseMirror table-grid scratchpad (Stage~1), quantitative-density routing (Stage~2), four specialist passes (\textbf{Pass A--D}) covering seven clinical error categories (\textbf{E1--E7}) plus dual-quote-verified section LLM review (Stage~3), and full-text Stage~4 verification with cell-level CRDT anchoring. Component ablations across 19 full-length PMC papers ($57$ errors) prove each module is indispensable: removing structural AST drops recall by $-33.3\text{ pp}$ ($p=2.1\times 10^{-5}$), removing the 2D table grid drops recall by $-19.3\text{ pp}$ ($p=0.0034$), and removing Stage~4 full-text verification inflates false positives by $+114.6\%$ ($82 \to 176$, $p=3.1\times 10^{-5}$).
+  \item \textbf{Candidate-Scoped Selective Memory Routing \& Specialty-Sanitized Dual-Track Evolution (Section~\ref{sec:evolution}):} We formalize a dual-track evolution protocol (Algorithm~\ref{lst:alg1}) where \textbf{Track~A} distills clinician rebuttals into zero-digit, specialty-sanitized boundary rules ($0.0\%$ digit or disease/procedure leakage across $>90$ distilled rules) and routes matching rules \emph{selectively per Stage~4 candidate} rather than globally stuffing Stage~3 prompts. Both $2\times 2$ held-out disentanglement and 5-fold stratified out-of-fold cross-validation prove that candidate-scoped routing eliminates the statistically significant $-12.3\text{ pp}$ unseen recall degradation of naive global prompt stuffing ($p=0.0156$), lifting evolved recall to $89.5\%$ ($51/57$) overall and $83.3\%$ ($20/24$) on unseen test papers while converging order-invariantly across random paper permutations.
+  \item \textbf{Five-Invariant Hybrid Safety Floor ($\mathcal{F}_{\text{hard}}$) \& Closed-Loop Pass~A / Track~B Verification (Sections~\ref{sec:evolution} \& \ref{sec:results}):} Red-team adversarial stress testing of full hybrid review exposed a $20.8\%$ intra-document false-exemption drop on untyped LLM findings; hardening $\mathcal{F}_{\text{hard}}$ with five domain-general mathematical, CI-geometric, and spin invariants reduces false intra-document exemption records on true errors from $23$ to $\mathbf{0}$ ($64/64 = \mathbf{100.0\%}$ blocked). Dedicated component benchmarks further demonstrate that Pass~A PMC \texttt{<table-wrap>} parsing boosts external citation accuracy from $52.8\%$ to $\mathbf{94.4\%}$ ($N=36$, $p=2.75\times 10^{-4}$), and Track~B pre-write procedural guards raise zero-defect clinical revision pass rates from $58.3\%$ to $\mathbf{87.5\%}$ ($N=24$, $p=0.0156$).
+  \item \textbf{Frontier Reasoning, Cross-Backbone, and Three-Paradigm Judge Validation ($15{,}682$ Live API Calls):} Across \texttt{deepseek-v4-flash}, \texttt{deepseek-chat} (DeepSeek-V3 \cite{deepseekv3_2024}), and \texttt{deepseek-reasoner} (DeepSeek-R1 \cite{deepseekr1_2025}), Heurion Deep Review significantly outperforms single-pass full-context prompting on the identical V3 backbone ($+18.7\text{ pp}$ injected-only precision, $p=0.0026$; $+19.8\text{ pp}$ $\text{F1}_{\text{inj}}$, $p=0.0016$), matches $64\text{k}$-CoT DeepSeek-R1 $\text{F1}_{\text{org}}$ ($71.0\%$ vs.\ $71.9\%$, $p=0.88$) at $\mathbf{14.4\times}$ fewer output tokens, uncovers $7$ deterministic ($28$ hybrid) real errors in published 2025 journals, and achieves substantial three-paradigm blind clinician concordance (Fleiss' $\kappa = \mathbf{0.642}$, $p < 10^{-14}$; chat-pair Cohen's $\kappa = \mathbf{0.932}$).
 \end{itemize}
 
 % ============================================================================
-% 2. TAXONOMY OF OBJECTIVE ERRORS VS. STUDY-DESIGN BOUNDARIES
+% 2. RELATED WORK
 % ============================================================================
-\section{Taxonomy of Objective Clinical Errors vs.\ Legitimate Study-Design Boundaries}
-\label{sec:taxonomy}
+\section{Related Work}
+\label{sec:related}
 
-A core design requirement for clinical peer review is distinguishing \emph{non-negotiable objective errors} from \emph{context-dependent methodological conventions}. Table~\ref{tab:taxonomy} formalizes the seven objective error categories (\textbf{E1--E7}) audited by our pipeline, illustrated with real \texttt{dev}-split examples from our 19-paper PMC corpus, alongside seven legitimate study-design boundary patterns.
+\paragraph{Automated Scientific Peer Review and Tabular Claim Verification.}
+Retrieval-augmented synthesis frameworks such as STORM \cite{shao2024storm} and PaperQA2 \cite{skarlinski2024paperqa2} automate literature QA, while FActScore \cite{min2023factscore} and ALCE \cite{gao2023alce} benchmark atomic citation faithfulness against text passages. Closer to full-manuscript verification, Jayaram et~al.\ introduced Google's Paper Assistant Tool (PAT) \cite{googlepat2026}, decomposing scientific review into multi-stage LLM prompts. However, existing LLM reviewers serialize manuscripts as flat text, omit full-text XML table extraction (\texttt{<table-wrap>}) during citation checking, and remain stateless across revisions. Even frontier reasoning models such as DeepSeek-R1 \cite{deepseekr1_2025} incur prohibitive CoT latency and false-alarm rates when auditing full manuscripts monolithically. Heurion Deep Review bridges deterministic 2D ProseMirror table-grid geometry and precision-aware CI verification with dual-quote-grounded section auditing and cell-level CRDT anchoring.
+
+\paragraph{Self-Evolving LLM Agents and Safety-Critical Memory Governance.}
+Verbal reinforcement and episodic skill libraries---pioneered by Reflexion \cite{shinn2023reflexion}, MemGPT \cite{packer2023memgpt}, and Voyager \cite{wang2023voyager}---enable agents to accumulate experience without weight updates. Recent work on self-supervised skill diffusion \cite{li2026skilltraining}, commit-on-evidence memory (CoEM) \cite{coem2026}, vantage-aware safety gating (SafeVantage) \cite{safevantage2026}, modular skill evolution (MemSkill) \cite{memskill2026}, verifiable skill libraries (Skill-V) \cite{skillv2026}, memory-to-skill co-evolution governance \cite{msce2026}, and cross-task transfer (MemTransfer) \cite{memtransfer2026} highlights two open risks in evolving agents: \emph{negative transfer from global prompt clutter} and \emph{unsafe memory poisoning}. We resolve both in clinical peer review by introducing candidate-scoped Stage~4 boundary routing, dual digit/specialty-example decoupling filters, and a five-invariant hybrid safety floor ($\mathcal{F}_{\text{hard}}$) alongside Track~B pre-write procedural crystallization.
+
+% ============================================================================
+% 3. TAXONOMY & FOUR-STAGE CLINICAL VERIFICATION ARCHITECTURE
+% ============================================================================
+\section{Taxonomy and Four-Stage Clinical Verification Architecture}
+\label{sec:pipeline}
+
+Clinical peer review requires separating \emph{non-negotiable objective errors} (which must never be muted by user preferences) from \emph{context-dependent methodological conventions} (which vary legitimately across study designs). Table~\ref{tab:taxonomy} defines our seven objective clinical error categories (\textbf{E1--E7}) protected by $\mathcal{F}_{\text{hard}}$, paired against seven legitimate study-design denominator and modeling boundaries eligible for Track~A learning.
 
 \begin{table}[!t]
 \centering
-\caption{Taxonomy of the Seven Objective Clinical Error Categories (\textbf{E1--E7}, governed by \texttt{NON\_EXEMPTABLE\_SUBTYPES}) vs.\ Seven Legitimate Study-Design Denominator/Modeling Boundaries (governed by Track~A \texttt{narrow} rules). All examples are drawn from the \texttt{dev} split of our 2025 PMC full-text corpus.}
+\caption{Taxonomy of the Seven Objective Clinical Error Categories (\textbf{E1--E7}, protected by the Hybrid Safety Floor $\mathcal{F}_{\text{hard}}$) vs.\ Seven Legitimate Study-Design Boundaries (exemptable via Track~A zero-digit rules when supported by Methods/footnotes). Concrete examples are from the \texttt{dev} split of our 2025 PMC corpus.}
 \label{tab:taxonomy}
 \vspace{2pt}
-\footnotesize
-\setlength{\tabcolsep}{4pt}
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.3cm}>{\raggedright\arraybackslash}p{4.3cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{3.9cm}@{}}
+\scriptsize
+\setlength{\tabcolsep}{3.8pt}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{2.25cm}>{\raggedright\arraybackslash}p{4.25cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{3.85cm}@{}}
 \toprule
-\textbf{Category \& Pass} & \textbf{Objective Error Definition (Never Exemptable)} & \textbf{Concrete Injected Example from \texttt{dev} Corpus} & \textbf{Paired Study-Design Boundary (Exemptable via Track A)} \\
+\textbf{Category \& Pass} & \textbf{Objective Error Definition ($\in \mathcal{F}_{\text{hard}}$, Never Exemptable)} & \textbf{Concrete Injected Example from \texttt{dev} Corpus} & \textbf{Paired Study-Design Boundary (Exemptable via Track A)} \\
 \midrule
-\textbf{E1: Sample Size \& Flow} (Pass B, $n=10$) & Contradictory total $N$ or arm counts across Abstract, Methods, Results prose, or Table headers; subgroup completers not summing to total completers. & \texttt{PMC12644478}: ``Thirty-seven of 40 participants completed'' in prose vs.\ Fig.~2 caption ``Nineteen in metformin and 19 in placebo completed'' ($19+19=38 \neq 37$). & \textbf{RCT (\texttt{rct}):} Reporting randomized ITT $N$ in baseline text and per-protocol completers $n < N$ in outcome tables (CONSORT). \\
-\addlinespace[3pt]
-\textbf{E2: Inline Arithmetic} (Pass B, $n=6$) & Inline count and percentage $n/N$ disagreeing beyond rounding tolerance ($\ge 1.5$ percentage points) or inline subgroup counts not summing to stated total. & \texttt{PMC12788160}: ``184 participants were randomized \dots\ 161 participants ($89.5\%$) had good compliance'' ($161/184 = 87.5\% \neq 89.5\%$). & \textbf{Retrospective Cohort (\texttt{retrospective\_cohort}):} Unmatched all-comer cohort $N$ vs.\ propensity-score-matched subcohort $n$ (STROBE). \\
-\addlinespace[3pt]
-\textbf{E3: Cross-Section / Table Conflict} (Pass B, $n=8$) & Identical metric, outcome, or subgroup reported with conflicting numeric values, $p$-values, or opposite signs between Abstract, Results prose, and Table cells. & \texttt{PMC12644478}: Abstract reports primary endpoint EGP interaction $p = 0.53$ ($\beta = 0.2$, $95\%$ CI $[-0.4, 0.8]$), whereas Results reports $p = 0.35$ for the identical CI. & \textbf{Cross-Sectional (\texttt{cross\_sectional}):} Full-population prevalence sample $N$ vs.\ age/completeness-filtered risk prediction subcohort $n$. \\
-\addlinespace[3pt]
-\textbf{E4: $95\%$ CI Bounds} (Pass B, $n=8$) & Point estimate $\hat{\theta}$ falling outside $[L, U]$ beyond rounding tolerance $\tau$, or inverted bounds ($L > U$), across \texttt{95\% CI}, \texttt{95\% Cl}, or bracketed formats. & \texttt{PMC12731986}: Table~3 HADS-Anxiety median difference reported as ``$1.00$ ($1.84$ to $3.84$)'' ($\hat{\theta}=1.00 < L=1.84$). & \textbf{Meta-Analysis (\texttt{meta\_analysis}):} Total eligible RCTs $K$ vs.\ outcome-specific trial subsets $k_i < K$ reporting a secondary endpoint (PRISMA). \\
-\addlinespace[3pt]
-\textbf{E5: Method--Result Mismatch} (Pass C, $n=8$) & Declaring parametric summaries/tests (mean $\pm$ SD, $t$-test, ANOVA, Pearson $r$) in Methods while reporting non-parametric results (Median [IQR], Mann--Whitney, Kruskal--Wallis) or vice versa. & \texttt{PMC12788160}: Methods states ITT groups were compared by ``Kruskal--Wallis test,'' whereas Tables~3--5 report ``mean $\pm$ SD with comparison by ANOVA.'' & \textbf{Case--Control (\texttt{case\_control}):} Dual parametric/non-parametric reporting per normality testing, or progressive multivariable Models~1/2. \\
-\addlinespace[3pt]
-\textbf{E6: Spin Bias \& Causal Overclaim} (Pass D, $n=9$) & Claiming efficacy, ``significant improvement,'' or deterministic causal effect when $p \ge 0.05$ or in non-randomized observational designs. & \texttt{PMC12644478}: Claiming ``metformin significantly reduced NEFA compared with placebo'' when interaction $p = 0.54$ and $95\%$ CI $[-0.5, 0.3]$ crosses zero. & \textbf{Diagnostic (\texttt{diagnostic\_accuracy}):} Enrolled patients $N$ vs.\ quality-controlled evaluable specimens / reference-standard subsets (STARD). \\
-\addlinespace[3pt]
-\textbf{E7: Intra-Table Cell / Sum Error} (Pass B, $n=8$) & Table cell $n\text{ (\%)}$ disagreeing with column header $(n=N)$, or category row cells not summing to the Total column/row in the 2D table grid. & \texttt{PMC12788160}: Table~1 ``Coffee drinking'' in $160\text{ mg/d}$ arm ($n=46$) reports ``$7$ ($17.4\%$)'' whereas $7/46 = 15.2\%$. & \textbf{Translational (\texttt{translational}):} Multi-batch in vitro culture replicates vs.\ in vivo animal cohorts ($n$ mice/group) and clinical TMA cohorts. \\
+\textbf{E1: Sample Size \& Flow} (Pass B, $n=10$) & Contradictory total $N$ or arm counts across Abstract, Methods, Results, or Table headers; arm completers not summing to total completers. & \texttt{PMC12644478}: ``Thirty-seven of 40 participants completed'' in prose vs.\ Fig.~2 ``Nineteen in metformin and 19 in placebo completed'' ($19+19=38 \neq 37$). & \textbf{RCT (\texttt{rct}):} Randomized ITT $N$ in baseline prose vs.\ per-protocol completers $n < N$ in outcome tables \cite{schulz2010consort}. \\
+\addlinespace[2.5pt]
+\textbf{E2: Inline Arithmetic} (Pass B, $n=6$) & Inline count and percentage $n/N$ disagreeing beyond rounding tolerance ($\ge 1.5\text{ pp}$) or subgroup counts not summing to stated total. & \texttt{PMC12788160}: ``184 participants were randomized \dots\ 161 participants ($89.5\%$) had good compliance'' ($161/184 = 87.5\% \neq 89.5\%$). & \textbf{Observational / TTE:} Unmatched baseline cohort $N$ vs.\ propensity-matched or clone-censored pseudocohort $n$ \cite{vandenbroucke2007strobe}. \\
+\addlinespace[2.5pt]
+\textbf{E3: Cross-Section Conflict} (Pass B, $n=8$) & Identical metric, outcome, or timepoint reported with conflicting values, $p$-values, or definitions across Abstract, Results, and Tables. & \texttt{PMC12644478}: Abstract reports primary EGP interaction $p = 0.53$ ($\beta = 0.2$, $95\%$ CI $[-0.4, 0.8]$), whereas Results reports $p = 0.35$ for identical CI. & \textbf{Cross-Sectional:} Full-survey sample $N$ vs.\ complete-case multivariable subcohort $n$ per footnote. \\
+\addlinespace[2.5pt]
+\textbf{E4: $95\%$ CI Bounds} (Pass B, $n=8$) & Point estimate $\hat{\theta}$ outside $[L, U]$ beyond precision tolerance $\tau$, or inverted bounds ($L > U$), across standard/OCR/bracketed CIs. & \texttt{PMC12731986}: Table~3 HADS-Anxiety median difference reported as ``$1.00$ ($1.84$ to $3.84$)'' ($\hat{\theta}=1.00 < L=1.84$). & \textbf{Meta-Analysis:} Total eligible trials $K$ vs.\ outcome-specific trial subsets $k_i < K$ \cite{page2021prisma}. \\
+\addlinespace[2.5pt]
+\textbf{E5: Method--Result Mismatch} (Pass C, $n=8$) & Declaring parametric tests/metrics (mean $\pm$ SD, $t$-test, ANOVA, Pearson) in Methods while reporting non-parametric results or vice versa. & \texttt{PMC12788160}: Methods states ITT groups were compared by ``Kruskal--Wallis test,'' whereas Tables~3--5 report ``mean $\pm$ SD with ANOVA.'' & \textbf{Dual-Distribution / Models:} Shapiro--Wilk normality-stratified metrics, or crude vs.\ adjusted Models~1/2. \\
+\addlinespace[2.5pt]
+\textbf{E6: Spin \& Causal Overclaim} (Pass D, $n=9$) & Claiming ``significant'' benefit when $p \ge 0.05$ or null-crossing CI, unbacked pairwise significance, or causal claims in observational studies. & \texttt{PMC12644478}: Claiming ``metformin significantly reduced NEFA'' when interaction $p = 0.54$ and $95\%$ CI $[-0.5, 0.3]$ crosses zero. & \textbf{Diagnostic Accuracy:} Enrolled patients $N$ vs.\ quality-controlled evaluable specimens \cite{bossuyt2015stard}. \\
+\addlinespace[2.5pt]
+\textbf{E7: Intra-Table Cell / Sum} (Pass B, $n=8$) & Table cell $n\text{ (\%)}$ disagreeing with column header $(n=N_c)$, or category cells not summing to Total column/row in 2D grid. & \texttt{PMC12788160}: Table~1 ``Coffee drinking'' in $160\text{ mg/d}$ arm ($n=46$) reports ``$7$ ($17.4\%$)'' whereas $7/46 = 15.2\%$. & \textbf{Translational:} Multi-batch in vitro replicates vs.\ in vivo mouse cohorts and clinical TMA cohorts. \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-% ============================================================================
-% 3. FOUR-STAGE CLINICAL DEEP REVIEW ARCHITECTURE
-% ============================================================================
-\section{Four-Stage Clinical Deep Review Architecture}
-\label{sec:pipeline}
-
-Figure~\ref{fig:arch} illustrates the architecture of \textbf{Heurion Deep Review}. Unlike stateless text-only reviewers that pass raw markdown directly to an LLM, our pipeline parses full-length manuscripts into a structured ProseMirror document tree (\texttt{PMNode}) and executes four sequential stages followed by a closed-loop self-evolution cycle. Crucially, under our \textbf{Clean-Room Design Principle}, the deterministic AST passes contain \emph{zero} study-specific lexical rules or synthetic alert triggers: every check operates purely on mathematical relations, unit/exponent-aware numeric syntax, and 2D table geometry.
+Figure~\ref{fig:arch} depicts the architecture of \textbf{Heurion Deep Review}. Manuscripts ingested from JATS XML or Word (\texttt{.docx}) are parsed into a typed ProseMirror document AST and audited across four stages. Under our \textbf{Clean-Room Design Principle}, all deterministic AST passes operate strictly on general mathematical relations, unit/fraction-aware numeric syntax, and 2D table geometry, containing \emph{zero} corpus-specific lexical triggers.
 
 \begin{figure}[!t]
 \centering
 \resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
   font=\sffamily\scriptsize,
-  stage/.style={draw=blue!65!black, fill=blue!6, rounded corners=3pt, align=center, minimum height=1.15cm, inner sep=5pt},
+  stage/.style={draw=blue!65!black, fill=blue!6, rounded corners=3pt, align=center, minimum height=1.15cm, inner sep=4.5pt},
   pass/.style={draw=violet!65!black, fill=violet!6, rounded corners=3pt, align=center, minimum height=0.95cm, inner sep=4pt},
-  evol/.style={draw=teal!65!black, fill=teal!6, rounded corners=3pt, align=center, minimum height=1.10cm, inner sep=5pt},
-  guard/.style={draw=red!65!black, fill=red!6, rounded corners=3pt, align=center, minimum height=0.95cm, inner sep=4pt},
-  arr/.style={-{Stealth[length=2.2mm]}, thick, draw=black!75}
+  evol/.style={draw=teal!65!black, fill=teal!6, rounded corners=3pt, align=center, minimum height=1.10cm, inner sep=4.5pt},
+  guard/.style={draw=red!65!black, fill=red!6, rounded corners=3pt, align=center, minimum height=1.10cm, inner sep=4.5pt},
+  arr/.style={-{Stealth[length=2.1mm]}, thick, draw=black!75}
 ]
 
 % Top Row: Stages 1, 2, 4
-\node[stage, minimum width=4.3cm] (s1) at (-0.2, 3.9) {\textbf{Stage 1: Segmentation \& Scratchpad}\\Hierarchical \texttt{SectionRoleTracker}\\2D Table Grid (\texttt{readGrid}) \& Sample Size Pool};
-\node[stage, minimum width=4.1cm] (s2) at (6.0, 3.9) {\textbf{Stage 2: Budget Routing}\\Quantitative Density Scoring\\\texttt{light} / \texttt{medium} / \texttt{high} Tracks};
-\node[stage, minimum width=4.8cm] (s4) at (12.6, 3.9) {\textbf{Stage 4: Full-Text Verify \& Anchoring}\\Dual-Quote Check \& LLM Verification\\Inline \& Table-Cell Comments \texttt{\{\#c:id\}}};
+\node[stage, minimum width=4.3cm] (s1) at (-0.2, 3.9) {\textbf{Stage 1: Segmentation \& Scratchpad}\\Hierarchical Section-Role Tracker\\2D Table Grid ($R \times C$) \& Denominator Pool};
+\node[stage, minimum width=4.0cm] (s2) at (5.8, 3.9) {\textbf{Stage 2: Budget Routing}\\Quantitative Assertion Density\\\texttt{light} / \texttt{medium} / \texttt{high} Tracks};
+\node[stage, minimum width=5.1cm] (s4) at (12.5, 3.9) {\textbf{Stage 4: Selective Verify \& Anchoring}\\Per-Candidate Rule Router (\texttt{:cat=}/\texttt{:kw=})\\Full-Text Verifier \& Cell CRDT \texttt{\{\#c:id\}}};
 
 \draw[arr] (s1.east) -- (s2.west);
 
@@ -171,92 +180,89 @@ Figure~\ref{fig:arch} illustrates the architecture of \textbf{Heurion Deep Revie
 \node[pass, minimum width=3.7cm] (pa) at (-0.6, 2.0) {\textbf{Pass A: External Lit}\\PubMed \& PMC \texttt{<table-wrap>}\\4-Tier Coverage Alignment};
 \node[pass, minimum width=4.1cm] (pb) at (4.0, 2.0) {\textbf{Pass B: Clean-Room Table AST}\\E1 Flow, E2 Math, E3 Conflict\\E4 $95\%$ CI Bounds, E7 Grid Sum};
 \node[pass, minimum width=4.2cm] (pc) at (8.8, 2.0) {\textbf{Pass C: Method--Result}\\E5 Parametric vs.\ Non-Parametric\\Correlation, SD/SEM, Acronyms};
-\node[pass, minimum width=3.8cm] (pd) at (13.4, 2.0) {\textbf{Pass D + Stage 3 LLM}\\E6 Spin ($p \ge 0.05$) \& Causal\\Dual-Quote Section LLM Audit};
+\node[pass, minimum width=3.9cm] (pd) at (13.4, 2.0) {\textbf{Pass D + Stage 3 LLM}\\E6 Spin ($p \ge 0.05$) \& Causal\\Dual-Quote Section LLM Audit};
 
-\draw[arr] (s2.south) -- (6.0, 2.85) -| (pa.north);
-\draw[arr] (6.0, 2.85) -| (pb.north);
-\draw[arr] (6.0, 2.85) -| (pc.north);
-\draw[arr] (6.0, 2.85) -| (pd.north);
+\draw[arr] (s2.south) -- (5.8, 2.85) -| (pa.north);
+\draw[arr] (5.8, 2.85) -| (pb.north);
+\draw[arr] (5.8, 2.85) -| (pc.north);
+\draw[arr] (5.8, 2.85) -| (pd.north);
 
-\draw[arr] (pa.north) |- (9.4, 3.15) -| (s4.south);
-\draw[arr] (pb.north) |- (9.4, 3.15);
-\draw[arr] (pc.north) |- (9.4, 3.15);
-\draw[arr] (pd.north) |- (9.4, 3.15);
+\draw[arr] (pa.north) |- (9.3, 3.15) -| (s4.south);
+\draw[arr] (pb.north) |- (9.3, 3.15);
+\draw[arr] (pc.north) |- (9.3, 3.15);
+\draw[arr] (pd.north) |- (9.3, 3.15);
 
 % Bottom Row: Dual-Track Self-Evolution
-\node[evol, minimum width=5.1cm] (ta) at (0.2, 0.05) {\textbf{Track A: LLM Boundary Distiller (\texttt{narrow})}\\Blind Clinician Rebuttal (\texttt{acceptedFix = false})\\Zero-Digit Guard (\texttt{hasInstanceLeakage = false})};
-\node[guard, minimum width=4.3cm] (floor) at (6.3, 0.05) {\textbf{Safety Floor Guard}\\\texttt{NON\_EXEMPTABLE\_SUBTYPES}\\$0.0\%$ Objective Error Exemption};
-\node[evol, minimum width=4.8cm] (tb) at (12.4, 0.05) {\textbf{Track B: Procedural \& Audit Skills}\\Clinician Fix (\texttt{acceptedFix = true})\\Pre-Write Rules \& \texttt{review\_audit} Checklists};
+\node[evol, minimum width=4.9cm] (ta) at (0.1, 0.0) {\textbf{Track A: Boundary Distiller (\texttt{narrow})}\\Clinician Rebuttal ($\text{accept}=0$)\\Digit \& Specialty-Example Sanitizer};
+\node[guard, minimum width=4.6cm] (floor) at (6.3, 0.0) {\textbf{5-Invariant Safety Floor $\mathcal{F}_{\text{hard}}$}\\AST Subtypes + Untyped LLM Guard\\Blocks Math/CI/Spin Exemptions};
+\node[evol, minimum width=4.8cm] (tb) at (12.5, 0.0) {\textbf{Track B: Procedural \& Audit Skills}\\Clinician Fix ($\text{accept}=1$)\\Pre-Write Guards \& Additive Checklists};
 
-\draw[arr] (s4.south east) -- ++(0, -0.3) -- (15.6, 3.0) |- (tb.east);
-\draw[arr] (15.6, 1.05) -| (ta.north);
+\draw[arr] (s4.south east) -- ++(0, -0.3) -- (15.65, 3.0) |- (tb.east);
+\draw[arr] (15.65, 0.95) -| (ta.north);
 \draw[arr] (ta.east) -- (floor.west);
-\draw[arr, dashed, draw=teal!70!black] (floor.north) -- (6.3, 1.15) -| node[pos=0.25, above, font=\sffamily\tiny, text=teal!70!black]{Active Rules \& Checklists} (pd.south);
+\draw[arr, dashed, draw=teal!70!black] (floor.north) -- (6.3, 1.12) -| node[pos=0.23, above, font=\sffamily\tiny, text=teal!70!black]{Per-Candidate Stage 4 Routing (No Stage 3 Stuffing)} (s4.south west);
+\draw[arr, dotted, thick, draw=blue!65!black] (tb.north) -- (pd.south);
 
 \end{tikzpicture}%
 }
-\caption{Architecture of \textbf{Heurion Deep Review} and the \textbf{Comment-Driven Dual-Track Self-Evolution Loop}. Stage~1 builds a section-role map and 2D table-grid scratchpad; Stage~2 allocates verification budgets; Stage~3 runs clean-room AST passes alongside quote-grounded section LLM review; Stage~4 performs full-text verification, deduplication, and CRDT comment anchoring \texttt{\{\#c:id\}}. Clinician replies drive Track~A LLM boundary distillation (gated by \texttt{hasInstanceLeakage}, \texttt{sensitiveReason}, and \texttt{NON\_EXEMPTABLE\_SUBTYPES}) and Track~B procedural/audit-checklist crystallization.}
+\caption{Architecture of \textbf{Heurion Deep Review} and \textbf{Selective Dual-Track Memory Governance}. Stage~1 builds a hierarchical section-role map and $R \times C$ table-grid scratchpad; Stage~2 routes budgets; Stage~3 runs Passes~A--D alongside dual-quote-verified section LLM review; Stage~4 routes Track~A boundary rules \emph{selectively per non-protected candidate} (preventing Stage~3 threshold shift) and anchors comments \texttt{\{\#c:id\}} onto text spans or table cells. Clinician replies drive Track~A (gated by digit/specialty sanitizers and the 5-invariant floor $\mathcal{F}_{\text{hard}}$) and Track~B pre-write guards/additive checklists.}
 \label{fig:arch}
 \end{figure}
 
-\subsection{Stage 1: Hierarchical Section-Role Segmentation and 2D Table-Grid Scratchpad}
-Clinical manuscripts frequently nest domain-specific subheadings (e.g., ``\emph{2.3 Biochemical Assays}'' or ``\emph{3.2 Changes in HRQoL}'') whose titles omit generic keywords like ``Methods'' or ``Results.'' In Stage~1, a stateful \texttt{SectionRoleTracker} traverses the document AST: top-level headings establish the parent role (\texttt{intro}, \texttt{methods}, \texttt{results}, \texttt{discussion}, or \texttt{other}), and lower-level subheadings inherit their parent section's role unless overridden by explicit lexical cues, while administrative sections (ethics, funding, acknowledgments, author contributions) are excluded from review.
+\subsection{Stages 1--2: Hierarchical Section-Role Scratchpad and Density Routing}
+Clinical manuscripts frequently nest domain-specific subheadings (e.g., ``\emph{2.3 Biochemical Assays}'') that omit generic role keywords or place \emph{Methods} after \emph{Discussion}. Stage~1 traverses the ProseMirror AST with a stateful hierarchical tracker: top-level headings set the parent role (\texttt{intro}, \texttt{methods}, \texttt{results}, \texttt{discussion}, \texttt{references}, \texttt{other}), child headings inherit parent roles unless overridden, and bibliography blocks are excluded from prose consistency checks. Simultaneously, Stage~1 compiles a global scratchpad containing: (i) \textbf{Normalized Rectangular $R \times C$ Table Grids} expanding \texttt{colspan} (\texttt{<}) and \texttt{rowspan} (\texttt{\^{}}) so every cell retains its exact column header, arm denominator $(n=N_c)$, and coordinates \texttt{[row, col]}; and (ii) a \textbf{Global Sample-Size \& Method Pool} indexing sample declarations, statistical test specifications, and acronym expansions. Stage~2 scores each block by quantitative assertion density ($p$-values, $95\%$ CIs, HR/OR/RR, mean $\pm$ SD/SEM, median [IQR], $n/N$) to assign \texttt{light}, \texttt{medium}, or \texttt{high} verification budgets.
 
-Simultaneously, \texttt{buildManuscriptScratchpad} constructs a global index shared across all subsequent passes:
-\begin{itemize}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Normalized 2D ProseMirror Table Grids (\texttt{readGrid}):} Rather than reading raw Markdown pipe rows, \texttt{extractTableSummaries} parses each ProseMirror \texttt{table} node into a rectangular $R \times C$ cell grid (\texttt{TableGrid}), resolving horizontal (\texttt{colspan} / \texttt{<}) and vertical (\texttt{rowspan} / \texttt{\^{}}) merged cells so every cell maps to its exact column header and ProseMirror node coordinates.
-  \item \textbf{Global Sample Size Pool:} The scratchpad extracts all explicit sample size declarations ($N=\dots$, $n=\dots$, ``Out of $N$ patients'') from table headers, captions, and prose, along with declared statistical tests and acronym definitions.
-\end{itemize}
-
-\subsection{Stage 2: Quantitative-Density Verification Budget Allocation}
-Stage~2 scores every paragraph and figure caption based on quantitative assertion density ($p$-values, $95\%$ CIs, hazard/odds/risk ratios, mean $\pm$ SD, median [IQR], and percentages) and section role, routing each block to a \texttt{light}, \texttt{medium}, or \texttt{high} verification track.
-
-\subsection{Stage 3: Hybrid Clean-Room AST Passes + Quote-Grounded LLM Review}
-Stage~3 executes four domain-general deterministic passes alongside section-level LLM auditing (in \texttt{heurion\_deep} and \texttt{heurion\_evolved} modes):
+\subsection{Stages 3--4: Hybrid Specialist Passes, Dual-Quote Gate, and Full-Text Verification}
+Stage~3 executes four specialist passes in parallel with section-chunked LLM review:
 \begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Pass A (External Literature \& PMC \texttt{<table-wrap>} Alignment):} Verifies cited assertions (\texttt{[@c:id]}) against PubMed abstracts and PMC full-text XML tables, classifying semantic support orthogonally from evidence coverage depth \cite{safevantage2026}.
-  \item \textbf{Pass B (Clean-Room Internal Arithmetic, CI \& 2D Table-Grid Consistency):} Audits \textbf{E1}, \textbf{E2}, \textbf{E3}, \textbf{E4}, and \textbf{E7}:
-  \begin{itemize}[leftmargin=1.2em,itemsep=1pt]
-    \item \emph{Sample Size \& Flow (\textbf{E1}) and Inline Arithmetic (\textbf{E2}):} Verifies that subgroup counts (including English number words) sum to stated totals and checks inline $n\text{ }(p\%)$ against the explicit denominator pool ($\min_{D} |n/D \times 100 - p| > 1.5\%$).
-    \item \emph{Cross-Section \& Table-vs.-Prose Conflicts (\textbf{E3}):} Matches identical confidence-interval anchors, hazard ratios, weighted mean differences, and Table~1 cited percentages across Abstract, Results prose, and 2D table cells.
-    \item \emph{Precision-Aware $95\%$ Confidence Interval Verification (\textbf{E4}, \texttt{findCiProblems}):} Parses point estimates $\hat{\theta}$ and interval bounds $[L, U]$ across standard (\texttt{95\% CI 1.12--1.85}), OCR-corrupted (\texttt{95\% Cl 0.35 to 0.59}), and bracketed (\texttt{95\% CI [-0.88, -0.10]}) formats while excluding preceding $p$-values (\texttt{p = 0.001, CI \dots}), sample counts (\texttt{n = 48; 95\% CI \dots}), unit exponents (\texttt{kg/m\^{}2; 95\% CI \dots}), and integer reference tuples. Rounding tolerance is computed as:
-    \begin{equation}
-      \tau = \alpha \cdot 10^{-\min(d(\hat{\theta}),\, d(L),\, d(U))}, \quad \alpha = \begin{cases} 0.49 & \text{if } d(L) = d(U) > d(\hat{\theta}), \\ 0.50 & \text{otherwise}, \end{cases}
-      \label{eq:ci_tol}
-    \end{equation}
-    flagging an \texttt{inverted} interval if $L > U + \tau$ and an \texttt{outside} estimate if $\hat{\theta} < L - \tau$ or $\hat{\theta} > U + \tau$.
-    \item \emph{Intra-Table Cell Percentage \& Row-Sum Auditing (\textbf{E7}):} Verifies each cell $n_{r,c}\text{ }(p_{r,c}\%)$ against header denominator $N_c$ (exempting row-wise percentage tables where $\sum_c p_{r,c} \approx 100\%$), checks intra-cell binary splits $N\text{ }(n_1 + n_2)$, and checks $\sum_{c \notin \mathcal{S}_{\text{stat}}} n_{r,c} = n_{r,\text{Total}}$ while excluding test-statistic columns ($\chi^2$, $t$, $Z$, $F$, $p$-value, OR/HR/RR).
-  \end{itemize}
-  \item \textbf{Pass C (Statistical Method--Result Pairing, \textbf{E5}):} Cross-checks statistical declarations in Methods against Results prose and table captions for parametric vs.\ non-parametric mismatches, Pearson vs.\ Spearman correlation mismatches, SD vs.\ SEM confusion, and conflicting acronym definitions.
-  \item \textbf{Pass D \& Quote-Grounded LLM Section Audit (\textbf{E6} \& Semantic Cross-Checks):} Pass~D flags explicit non-significant spin ($p \ge 0.05$ paired with efficacy claims in the same clause), while Stage~3 LLM section review (when enabled) inspects each section against the global manuscript table summary and active memory checklists, requiring verbatim \texttt{quote} + \texttt{evidence} substrings verified against the source document (\texttt{review-evidence.ts}).
+  \item \textbf{Pass A (External Literature \& PMC \texttt{<table-wrap>} Alignment):} Extracts cited claims (\texttt{[@c:id]}) and verifies numerical magnitude, units, and effect direction against both PubMed abstracts and open-access PMC JATS XML \texttt{<table-wrap>} grids and captions, separating semantic support (\texttt{supported}, \texttt{unsupported}, \texttt{unclear}) from 4-tier evidence depth (\texttt{table}, \texttt{fulltext}, \texttt{abstract}, \texttt{none}).
+  \item \textbf{Pass B (Clean-Room Internal Math, CI \& 2D Table-Grid Audit):} Audits \textbf{E1--E4} and \textbf{E7}: subgroup sample flow sums, inline $n\text{ }(p\%)$ against the denominator pool ($\min_D |n/D\times 100 - p| > 1.5\%$), cross-section CI/value conflicts, precision-aware $95\%$ CI containment under rounding tolerance $\tau = \alpha \cdot 10^{-\min(d(\hat{\theta}), d(L), d(U))}$ ($\alpha = 0.49$ when $d(L)=d(U)>d(\hat{\theta})$, else $0.50$; excluding preceding $p=$, $n=$, fraction denominators, and unit exponents), and 2D table cell percentages/row sums (excluding test-statistic columns $\chi^2, t, Z, F, p$, OR/HR/RR and row-percentage tables).
+  \item \textbf{Pass C (Method--Result Pairing, \textbf{E5}) \& Pass D (Spin Audit, \textbf{E6}):} Pass~C cross-checks declared statistical methods against Results prose and table headers for parametric/non-parametric, Pearson/Spearman, SD/SEM, and acronym conflicts; Pass~D flags explicit $p \ge 0.05$ positive efficacy spin and observational causal overclaims.
+  \item \textbf{Dual-Quote Section LLM Review \& Stage 4 Full-Text Reconciliation:} Stage~3 LLM section prompts receive the section text alongside the Stage~1 2D table summary. Every LLM candidate must provide both a verbatim target \texttt{sentence} and a verbatim counterpart \texttt{evidence} quote, verified as exact normalized substrings of the manuscript (retaining top-$3$ by severity per section). Stage~4 reconciles surviving candidates against the \emph{entire} manuscript prose and 2D tables via a full-text LLM verifier, deduplicates cross-section alerts sharing numeric and clinical topic signatures, and anchors CRDT comments \texttt{\{\#c:id\}}.
 \end{enumerate}
 
-\subsection{Stage 4: Full-Text Verification, Deduplication, and Cell-Level CRDT Anchoring}
-In hybrid LLM modes (\texttt{heurion\_deep} and \texttt{heurion\_evolved}), Stage~4 passes surviving LLM candidates together with the complete manuscript prose, tables, and active Track~A boundary rules to a full-text verifier (\texttt{VERIFY\_SYSTEM}) that rejects speculative alarms or legitimate study-design denominator transitions. Cross-section duplicates are merged only when they share both the same numeric signature and overlapping clinical topic tokens, and final comments are anchored directly onto ProseMirror nodes or table cells (\texttt{\{\#c:id\}}).
-
 % ============================================================================
-% 4. COMMENT-DRIVEN DUAL-TRACK SELF-EVOLUTION
+% 4. COMMENT-DRIVEN DUAL-TRACK EVOLUTION & SELECTIVE MEMORY GOVERNANCE
 % ============================================================================
-\section{Comment-Driven Dual-Track Self-Evolution}
+\section{Comment-Driven Dual-Track Evolution and Selective Memory Governance}
 \label{sec:evolution}
 
-Whenever a clinician replies to or resolves an anchored review comment \texttt{\{\#c:id\}}, \texttt{evolveFrom\allowbreak Review\allowbreak Comment\allowbreak Async} routes the interaction into one of two tracks:
+Algorithm~\ref{lst:alg1} formalizes our dual-track self-evolution and selective Stage~4 routing protocol.
 
-\subsection{Track A (\texttt{narrow}): Zero-Template LLM Boundary Distillation and Dual Leakage Guards}
-When a clinician rebuts a false-positive review alert (\texttt{acceptedFix = false}) with a methodological explanation (which naturally cites manuscript-specific sample sizes such as ``\emph{Our RCT randomized $N=240$ ITT participants while $n=169$ ($70.4\%$) completed week~24 per CONSORT}''), \texttt{synthesizeSanitizedBoundary\allowbreak RuleAsync} invokes an LLM memory-governance distiller instructed to abstract the methodological boundary without any digits, drug names, or disease names:
-{\small
-\[
-  \texttt{[domain:manuscript] [narrow:review\_boundary:}\langle\text{pattern\_key}\rangle\texttt{:cat=}\langle\text{cat}\rangle\texttt{:kw=}\langle\text{kws}\rangle\texttt{] } \mathcal{R}_{\text{sanitized}}.
-\]
-}
-Every candidate rule must pass a \textbf{Dual Instance--Skill Decoupling Guard} combining \texttt{hasInstanceLeakage} (which rejects any digit, sample size $N=\dots$, $p$-value, percentage, or date) and \texttt{sensitiveReason} (which blocks patient identifiers and institutional/study UIDs). If the LLM's first draft leaks a raw number, a deterministic second-pass scrubber strips all numeric tokens and re-verifies both guards before memory commit, guaranteeing $\mathbf{0.0\%}$ cross-study numerical contamination.
+\begin{lstlisting}[style=heurionspec,caption={Dual-Track Self-Evolution with 5-Invariant Hybrid Safety Floor $\mathcal{F}_{\text{hard}}$ \& Selective Stage-4 Routing},label={lst:alg1}]
+Input: Manuscript M (docId), anchored finding f, clinician decision d in {AcceptFix, RebutFP}, reply text r
+Parameters: Hybrid Safety Floor F_hard (15 AST subtypes + 5 domain-general math/CI/spin/conflict invariants)
 
-\subsection{Hard Safety Floor (\texttt{NON\_EXEMPTABLE\_SUBTYPES}) and Precision-Preserving Rule Application}
-{\raggedright
-To prevent adversarial or mistaken author rebuttals from suppressing real errors, \path{isHardObjectiveReviewFinding} and \path{isExemptedByActiveRules} enforce an immutable set of \textbf{Non-Exemptable Subtypes} (\path{NON_EXEMPTABLE_SUBTYPES}), covering \path{prose_table_sample_size_mismatch}, \path{table1_cited_percentage_mismatch}, \path{fraction_percentage_arithmetic_error}, \path{ci_bounds_inverted_or_missing_decimal}, \path{ci_estimate_outside_interval}, \path{cross_section_value_mismatch}, \path{table_cell_percentage_arithmetic_error}, \path{table_row_sum_mismatch}, \path{parametric_method_vs_nonparametric_result}, \path{nonparametric_method_vs_parametric_result}, \path{correlation_method_mismatch}, \path{sd_vs_sem_mismatch}, \path{abbreviation_definition_conflict}, \path{nonsignificant_p_positive_spin}, and \path{observational_causal_overclaim}, alongside inline arithmetic and CI violation checks. Even if an active rule matches the exact category and keywords of an objective error sentence, exemption is refused. Moreover, to prevent broad generic words (\texttt{cohort}, \texttt{trial}, \texttt{population}) from over-filtering true positives on unseen papers, non-citation \texttt{:kw=} rules filter out generic study stopwords, require $\ge 2$ distinct methodological/domain keyword hits, and never override \path{VERIFY_SYSTEM}-confirmed full-text verdicts; meanwhile, within the same document (\texttt{docId}), non-hard-objective author rebuttals are persisted as document-scoped \texttt{rev\_exempt\_*} records so Round~2 revisions suppress repeated or reversed-direction false alarms without leaking document state across papers.\par}
+if d == RebutFP:                                       # Track A: Methodological Boundary Learning
+  if InHybridSafetyFloor(f, F_hard):                   # Covers both typed AST & subtype=null Stage 3 LLM findings
+    return BLOCK_INTRA_EXEMPTION                       # 0 false rev_exempt records written on objective errors
+  RecordDocumentScopedExemption(docId, f.anchor, r)    # Idempotently mutes same-span repeat in Round 2 revision
+  draft <- LLM_BoundaryDistiller(f.category, f.reason, r)
+  draft <- ScrubDigitsEntitiesAndSpecialtyExamples(draft) # Strips numbers, UIDs & parenthetical disease/surgery terms
+  if not HasInstanceLeakage(draft) and not IsArithmeticRoundingExcuse(draft) and MethodKeywordCount(draft) >= 2:
+    CommitActiveMemory(kind="narrow:review_boundary", rule=draft)
+else if d == AcceptFix:                                # Track B: Procedural & Additive Audit Skill Crystallization
+  CommitExecutionSignal(DeNumericalizeTrajectory(f.category, [doc_read, replace_text, resolve_comment]))
+  if M.split == "dev":                                 # Hard runtime exception blocks test-split distillation
+    CommitAdditiveZeroDigitChecklist(f.category, f.subtype)
 
-\subsection{Track B (\texttt{procedural} \& \texttt{review\_audit}): Pre-Write Rules and Dev-Only Audit Checklists}
-When a clinician accepts a true-positive review comment (\texttt{acceptedFix = true}), \texttt{evolveFrom\allowbreak Review\allowbreak Comment\allowbreak Async} records a de-numericalized execution signal (\texttt{kind = 'guard\_reject'}) with verified recovery trajectory (\texttt{doc\_read $\to$ replace\_text $\to$ resolve\_comment}). Following commit-on-evidence gating \cite{coem2026}, \texttt{Procedural\allowbreak Harness\allowbreak Service.\allowbreak evolveFrom\allowbreak Signals} crystallizes corroborated signals into active pre-write rules for authoring sessions. Complementarily, on development-split retrospectives (\texttt{paperSplit === 'dev'} enforced via a hard runtime assertion), \texttt{distillReview\allowbreak AuditChecklist\allowbreak Async} abstracts missed error mechanisms into zero-digit \path{[skill:review_audit:<key>]} checklists injected into Stage~3 LLM prompts on future unseen manuscripts.
+# Inference-Time Selective Governance on Unseen Manuscript M_new:
+# Stage 3 runs WITHOUT global Track A rules (additive checklists only); in Stage 4, for each candidate c:
+if not InHybridSafetyFloor(c, F_hard):
+  matched_rules <- MatchCategoryAndMethodKeywords(c, ActiveTrackARules) # Scoped strictly to candidate c
+  c.verdict <- Stage4FullTextVerifier(M_new, c, matched_rules)
+\end{lstlisting}
+
+\subsection{Why Global Memory Stuffing Fails and Candidate-Scoped Stage-4 Routing Works}
+A subtle failure mode in self-evolving review agents arises when distilled boundary exemptions are concatenated globally into Stage~3 section-discovery prompts. Even when phrased conditionally (``\emph{exempt only if Methods declares dual-distribution normality testing}''), presenting five or more exemption rules upfront shifts the LLM's detection prior toward conservatism, causing it to overlook genuine cross-section spin (\textbf{E6}) and method mismatches (\textbf{E5}) on unseen papers. We resolve this via three governance mechanisms:
+\begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
+  \item \textbf{Zero Stage-3 Exemption Stuffing \& Purely Additive Checklists:} Stage~3 never receives Track~A exemption rules, preserving $100\%$ of cold-start candidate discovery sensitivity; \texttt{[skill:review\_audit]} checklists use strictly additive phrasing so intra-section \textbf{E4/E6} checks are never displaced.
+  \item \textbf{Per-Candidate Stage-4 Routing \& Rounding-Excuse Blocking:} In Stage~4, \texttt{selectCandidateScopedBoundaryRules} attaches a Track~A rule to the verifier prompt \emph{only} for the specific candidate whose category (\texttt{:cat=}) and methodological cues (\texttt{:kw=}, $\ge 2$ non-stopword hits) match, while blocking arithmetic/rounding excuse rules (\texttt{rounding\_\allowbreak and\_\allowbreak percentage\_\allowbreak convention}) from cross-paper routing.
+  \item \textbf{Dual Digit \& Specialty-Example Decoupling Guard:} Standard digit checks can be bypassed if an LLM distiller embeds disease or surgical procedure examples inside parentheticals (e.g., ``\emph{such as gestational hypertension or local flap repair}''). Our upgraded \texttt{scrubSpecialtyExampleLeakage} + \texttt{hasInstanceLeakage} guard strips parenthetical clinical examples alongside all digits, sample sizes, $p$-values, and UIDs before commit.
+\end{enumerate}
+
+\subsection{Five-Invariant Hybrid Safety Floor (\texorpdfstring{$\mathcal{F}_{\text{hard}}$}{F\_hard}) and Track B Pre-Write Guards}
+While deterministic AST findings carry explicit subtypes in $\mathcal{F}_{\text{hard}}$ ($15$ objective math/CI/table subtypes), Stage~3 LLM findings carry \texttt{subtype = null}. As our red-team audit demonstrates (Section~\ref{sec:safety_results}), checking subtypes alone allows persuasive adversarial rebuttals to register intra-document \texttt{rev\_exempt} records on LLM-detected errors. We therefore harden \texttt{isHardObjectiveReviewFinding} and \texttt{isExemptedByActiveRules} with \textbf{five domain-general invariants} over $(\texttt{category}, \texttt{sentence}, \texttt{reason})$: (1) \emph{CI geometry violations} (\texttt{findCiProblems} or explicit point-estimate-outside-$[L,U]$ / bound inversion); (2) \emph{multi-term arithmetic inequalities} ($a + b = c \neq d$ or subgroup-sum vs.\ total-$N$ mismatch); (3) \emph{objective spin \& unsupported inference} ($p \ge 0.05$ or null-crossing CI paired with positive significance claims, pairwise significance asserted without test statistics, or direct causal verbs contradicting stated observational limits); (4) \emph{unstratified parametric/non-parametric incompatibility} ($t$-test/ANOVA/Pearson directly contradicting Mann--Whitney/Kruskal--Wallis/Spearman/median [IQR], or $\chi^2$ vs.\ OR/HR); and (5) \emph{same-endpoint cross-section contradictions} (conflicting values or endpoint definitions for an identical CI/analysis set, explicitly excluding propensity-matched or crude-vs.-adjusted multi-stratum boundaries). Conversely, when clinicians accept fixes ($d = \texttt{AcceptFix}$), \textbf{Track~B} logs de-numericalized repair trajectories (\texttt{doc\_read $\to$ replace\_text $\to$ resolve\_comment}) that crystallize via commit-on-evidence gating \cite{coem2026} into pre-write co-authoring guards injected via \texttt{ProceduralHarnessService.forPrompt}.
 
 % ============================================================================
 % 5. EXPERIMENTAL SETUP
@@ -264,16 +270,10 @@ When a clinician accepts a true-positive review comment (\texttt{acceptedFix = t
 \section{Experimental Setup}
 \label{sec:setup}
 
-We evaluate Heurion Deep Review on two complementary benchmarks: (1) a full-length 19-paper PMC JATS XML error-injection corpus evaluated under both deterministic clean-room AST (\texttt{--no-llm}) and live \texttt{deepseek-v4-flash} (\texttt{--llm}, \texttt{temperature = 0}), and (2) a 7-vignette oncology clinical excerpt benchmark with live \texttt{deepseek-chat} calls.
+Across all primary, frontier, ablation, cross-judge, adversarial, Pass~A, and Track~B suites, we executed $\mathbf{15{,}682}$ live API calls ($46.06\text{M}$ input and $4.25\text{M}$ output tokens) spanning three distinct models: \texttt{deepseek-v4-flash}, \texttt{deepseek-chat} (DeepSeek-V3 \cite{deepseekv3_2024}), and \texttt{deepseek-reasoner} (DeepSeek-R1 native CoT \cite{deepseekr1_2025}).
 
-\subsection{Benchmark 1: 19 Full-Length PMC Papers with 57 Controlled Error Injections}
-We curated 19 open-access 2025 clinical and translational full-text articles (averaging $\sim 6{,}000$ words each, converted directly from PMC JATS XML with complete multi-column tables in \path{data/eval/deep-review/md/}), partitioned into an 11-paper development split (\texttt{dev}) and an 8-paper held-out test split (\texttt{test}) across 7 study designs (Table~\ref{tab:corpus_breakdown}). Six of the seven study designs appear in both \texttt{dev} and \texttt{test}, while the two preclinical/translational studies reside in \texttt{dev}.
-
-For each paper, we evaluate two full-length variants ($38$ manuscripts per regime):
-\begin{itemize}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Clean Variant (\texttt{clean}):} The uncorrupted published PMC manuscript. Importantly, as documented in \path{apps/platform/eval/deep-review/known-issues.md} and \path{known-organic-errors.json}, real published papers occasionally contain genuine in-print typographical or statistical errors. Following standard clinical verification practice (\path{eval-review-score.ts}), catches of verified in-print publication errors are adjudicated as \path{unexpected_true} (organic true positives) rather than penalized as false positives, while raw unadjusted clean-paper alert counts are also reported side-by-side for full transparency.
-  \item \textbf{Injected Variant (\texttt{injected}):} The full-length manuscript mutated via \texttt{applyInjections} with exactly $3$ non-overlapping objective errors drawn from categories \textbf{E1--E7} ($19 \times 3 = 57$ injected errors: \textbf{E1} $n=10$, \textbf{E2} $n=6$, \textbf{E3} $n=8$, \textbf{E4} $n=8$, \textbf{E5} $n=8$, \textbf{E6} $n=9$, \textbf{E7} $n=8$), avoiding all positions with known organic issues.
-\end{itemize}
+\subsection{Primary Full-Text PMC Benchmark (\texorpdfstring{$N=19$}{N=19} Papers, \texorpdfstring{$57$}{57} Controlled Injections)}
+We curated 19 open-access 2025 clinical and translational full-text articles ($\sim 6{,}000$ words/paper, losslessly converted from PMC JATS XML with multi-column 2D tables), stratified across 7 study designs into an 11-paper \texttt{dev} split and an 8-paper held-out \texttt{test} split (Table~\ref{tab:corpus_breakdown}). Each paper is evaluated in two full-length variants ($38$ manuscripts/regime): (i) \textbf{\texttt{clean}}, the published PMC article, where genuine in-print errors verified against published PDFs ($30$ adjudicated entries) are tracked as \texttt{Organic True} rather than penalized as false alarms; and (ii) \textbf{\texttt{injected}}, mutated with $3$ non-overlapping objective errors across \textbf{E1--E7} ($19 \times 3 = 57$ errors, disjoint from organic error loci). To ensure full transparency for readers who prefer conservative scoring without organic error credits, all main tables report \textbf{both} conservative injected-only precision ($\text{Prec}_{\text{inj}} = \text{TP}_{\text{inj}} / (\text{TP}_{\text{inj}} + \text{FP}_{\text{total}})$) and organic-adjusted precision ($\text{Prec}_{\text{org}} = (\text{TP}_{\text{inj}} + \text{TP}_{\text{org}}) / (\text{TP}_{\text{inj}} + \text{TP}_{\text{org}} + \text{FP}_{\text{total}})$), alongside $\text{F1}_{\text{inj}}$ and $\text{F1}_{\text{org}}$.
 
 \begin{table}[!t]
 \centering
@@ -304,172 +304,444 @@ PMC12681115 & \texttt{test} & \texttt{rct} & \emph{Cardiovasc.\ Diabetol.} --- F
 PMC12118826 & \texttt{test} & \texttt{retrospective\_cohort} & \emph{PLOS ONE} --- Geriatric ocular trauma and mortality retrospective cohort & E2, E6, E7 \\
 PMC12654784 & \texttt{test} & \texttt{case\_control} & \emph{Medicina} --- Adipokines as prognostic biomarkers in multiple myeloma case--control & E1, E4, E7 \\
 PMC12774873 & \texttt{test} & \texttt{diagnostic\_accuracy} & \emph{NPJ Prim.\ Care Respir.\ Med.} --- Home spirometry diagnostic accuracy for asthma & E2, E3, E4 \\
-PMC12757420 & \texttt{test} & \texttt{cross\_sectional} & \emph{Front.\ Immunol.} --- Frailty and associated risk factors in Sjögren's disease survey & E1, E5, E6 \\
+PMC12757420 & \texttt{test} & \texttt{cross\_sectional} & \emph{Front.\ Immunol.} --- Frailty and associated risk factors in Sj\"ogren's disease survey & E1, E5, E6 \\
 PMC12703663 & \texttt{test} & \texttt{meta\_analysis} & \emph{Alzheimers Dement.} --- PRISMA meta-analysis of antipsychotic discontinuation in dementia & E1, E6, E7 \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-\subsection{Physically Blind-Isolated Simulated Clinician Protocol and Calibration}
+\subsection{Blind Multi-Paradigm Clinician Protocol, Statistical Tests, and Component Benchmarks}
 \label{sec:simulated_clinician}
+\paragraph{Blind Clinician Isolation \& Exact Inference.}
+Our \texttt{simulateBlindClinician} agent receives \emph{only} the manuscript title, its own prose/tables, and one review comment---physically omitting \texttt{variant}, \texttt{injections.json}, organic registries, and \texttt{split}. To rule out single-model self-preference bias, we adjudicate all $n=191$ Round~1 findings independently across \textbf{three distinct model paradigms}: \texttt{deepseek-v4-flash}, \texttt{deepseek-chat} (DeepSeek-V3), and \texttt{deepseek-reasoner} (DeepSeek-R1, $6\text{k}$ CoT budget), computing pairwise Cohen's $\kappa$ and 3-rater Fleiss' $\kappa$ \cite{fleiss1971kappa} with leave-one-out jackknife $95\%$ CIs. Across all experiments, proportions use Wilson $95\%$ CIs, discordant injection detections ($N=57$) use two-sided exact McNemar binomial tests, and paper-level differences ($\Delta$ Recall, $\Delta$ FP, $\Delta$ Precision, $\Delta$ F1) use exact Gray-code enumeration over all $\mathbf{2^{19} = 524{,}288}$ paper-clustered paired sign-swap permutations.
 
-Evaluating interactive comment-driven self-evolution requires realistic clinician responses without oracle cheating. Prior rule-lookup simulations risk leaking ground-truth variant labels (\texttt{clean} vs.\ \texttt{injected}) into the evolution trigger. In our clean-room harness (\path{apps/platform/scripts/eval-review-run.ts}), we enforce a strict \textbf{Three-Pillar Blind Clinician Protocol}:
-
-\begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{Type-Level Information Barrier (\texttt{simulateBlindClinician}):} The function signature \texttt{simulateBlind\allowbreak Clinician(complete,} \texttt{\{manuscriptTitle,} \texttt{manuscriptMarkdown,} \texttt{finding\})} physically omits \texttt{variant} (\texttt{clean}/\texttt{injected}), \path{injections.json}, \path{known-organic-errors.json}, and \texttt{split} (\texttt{dev}/\texttt{test}). Using relevance-ranked extraction across all manuscript tables (including captions and footnotes) and counterpart \texttt{evidence} windows, the simulated corresponding author / biostatistician sees only the manuscript's own text and tables plus the single review comment.
-  \item \textbf{Strict Frozen Test-Split Boundary:} In cross-manuscript transfer (\texttt{dev} $N=11 \to$ \texttt{test} $N=8$), both blind clinician evolution (\texttt{evolveStoreFromFindingsBlind}) and missed-pattern checklist distillation (\texttt{evolveAuditChecklistsFromDevMisses}) execute \emph{exclusively} on \texttt{dev}; attempting to invoke checklist distillation on \texttt{test} throws a hard runtime security exception, and an isolated frozen memory snapshot is cloned per \texttt{test} manuscript.
-  \item \textbf{Post-Hoc Ground-Truth Calibration \& Adversarial Profile:} Because Benchmark~1 possesses exact ground-truth labels ($57$ injected errors + $30$ verified organic error entries), every blind clinician decision (\texttt{accept\_fix} vs.\ \texttt{rebut\_false\_positive}) is audited post-hoc against ground truth via a calibration matrix (True-Error Acceptance Rate, False-Rebuttal Rate, False-Positive Rebuttal Rate, Raw Digit Citation Rate, and Post-Guard Instance Leakage Rate). In addition, a hostile \textbf{Adversarial Author Profile} attempts to rebut \emph{every} detected error across all 19 injected papers (\texttt{acceptedFix = false}) to stress-test \texttt{NON\_EXEMPTABLE\_SUBTYPES}.
-\end{enumerate}
-
-\subsection{Benchmark 2: Live \texttt{deepseek-chat} Evaluation on 7 Clinical Oncology Vignettes}
-To evaluate live LLM multi-stage reasoning and dual-track evolution on real clinical oncology error patterns, Benchmark~2 (\path{paper/benchmarks/run-7papers-review.ts}) executes live \texttt{deepseek-chat} (\texttt{temperature = 0}) across 7 curated clinical oncology manuscript excerpts (\texttt{SEVEN\_PAPERS}, derived from published radiation oncology, target-trial emulation, thoracic imaging, and translational xenograft studies) containing $8$ verified organic publication errors (including an inverted $95\%$ CI $[403, 1.688]$, uncleaned revision merge artifacts \texttt{60.062.3\%}, a Table cell where $21/35 = 60.0\% \neq 84\%$, SD vs.\ SEM confusion, and an acronym definition conflict), comparing \texttt{zero\_shot}, \texttt{pass\_at\_k} ($k=3$), \texttt{pat\_baseline} (4-stage text-only \cite{googlepat2026}), \texttt{heurion\_deep}, and \texttt{heurion\_evolved}.
+\paragraph{Dedicated Adversarial, Pass~A, Track~B, and Vignette Sub-Benchmarks.}
+Beyond the 19-paper full-text benchmark and 5-fold stratified out-of-fold CV, we evaluate: (1) \textbf{Full Hybrid-LLM Adversarial Rebuttal Stress} ($N=19$, forcefully rebutting all $120$ injected-paper and $80$ clean-paper hybrid findings with persuasive methodological excuses before and after $\mathcal{F}_{\text{hard}}$ hardening); (2) \textbf{Pass~A External Citation Fidelity} ($N=36$ paired claims across 12 real 2025 PMC XMLs: 12 abstract-supported, 12 \texttt{<table-wrap>}-only supported, and 12 numeric/directional distortions); (3) \textbf{Track~B Pre-Write Revision Guard} ($N=24$ unseen \texttt{test}-domain clinical revision tasks across 4 error families, comparing \texttt{procedural=off} vs.\ \texttt{dev}-crystallized \texttt{procedural=utility} with system baseline rules archived); and (4) \textbf{7 Clinical Oncology Vignettes} ($8$ verified organic errors evaluated on \texttt{deepseek-chat}) as secondary cross-domain confirmation.
 
 % ============================================================================
-% 6. RESULTS AND ANALYSIS
+% 6. RESULTS AND ABLATIONS
 % ============================================================================
-\section{Results and Analysis}
+\section{Results and Ablations}
 \label{sec:results}
 
-\subsection{Full-Text PMC Benchmark Results: Clean-Room AST vs.\ Live \texttt{deepseek-v4-flash} Hybrid \& Self-Evolving Regimes}
-Table~\ref{tab:deep_review_injection} and Table~\ref{tab:by_design} report end-to-end results across all 38 full-length PMC manuscripts ($19$ clean and $19$ injected, averaging $\sim 6{,}000$ words each), comparing the zero-LLM Clean-Room Deterministic AST baseline (\texttt{--no-llm}) against live \texttt{deepseek-v4-flash} ($3{,}285$ API calls, $7.90\text{M}$ input and $0.67\text{M}$ output tokens at \texttt{temperature = 0}) across \texttt{pat\_baseline}, cold-start \texttt{heurion\_deep}, intra-manuscript Round~2 \texttt{heurion\_evolved}, frozen \texttt{dev $\to$ test} cross-manuscript transfer, and the Adversarial Rebuttal Stress Test.
+\subsection{Frontier Reasoning \& Cross-Backbone Comparison (\texorpdfstring{$N=19$}{N=19} Full Texts, \texorpdfstring{$57$}{57} Errors)}
+Table~\ref{tab:frontier_main} compares Heurion Deep Review against text-only \texttt{pat\_baseline} \cite{googlepat2026}, zero-LLM Clean-Room AST, single-pass full-context \texttt{deepseek-chat} (DeepSeek-V3 supplied with full prose and all 2D Markdown tables, \texttt{max\_tokens=8000}, $0$ truncations), and frontier CoT \texttt{deepseek-reasoner} (DeepSeek-R1 supplied with full prose and all 2D tables, \texttt{max\_tokens=64000}, $48\text{k}$ CoT budget; $10$ calls truncated at $32\text{k}$ were retried at $64\text{k}$ for $0$ unresolved truncations).
 
 \begin{table}[!t]
 \centering
-\caption{End-to-End Clean-Room AST and Live \texttt{deepseek-v4-flash} Benchmark Results across 19 Full-Length 2025 PMC JATS XML Papers ($38$ Clean/Injected Manuscripts, $57$ Injected Objective Errors across E1--E7). Verified in-print organic errors caught on clean papers (\texttt{unexpected\_true}) are reported explicitly alongside true false positives.}
-\label{tab:deep_review_injection}
+\caption{End-to-End Frontier Reasoning, Cross-Backbone, and Self-Evolution Comparison across 19 Full-Length 2025 PMC Papers ($38$ Clean/Injected Manuscripts, $57$ Injected Errors), reporting both conservative injected-only ($\text{Prec}_{\text{inj}}, \text{F1}_{\text{inj}}$) and organic-adjusted ($\text{Prec}_{\text{org}}, \text{F1}_{\text{org}}$) metrics with Wilson $95\%$ CIs and total output tokens across $38$ manuscripts.}
+\label{tab:frontier_main}
 \vspace{2pt}
-\setlength{\tabcolsep}{4.2pt}
+\setlength{\tabcolsep}{3.4pt}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{@{}lcccccc@{}}
+\begin{tabular}{@{}llccccccc@{}}
 \toprule
-\textbf{Evaluation Regime \& Split} & \thead{\textbf{Injected}\\\textbf{Recall ($\uparrow$)}} & \thead{\textbf{Organic True}\\\textbf{(Clean) ($\uparrow$)}} & \thead{\textbf{True FPs}\\\textbf{(Clean / Inj) ($\downarrow$)}} & \thead{\textbf{Precision}\\\textbf{(w/ Org) ($\uparrow$)}} & \thead{\textbf{F1 Score}\\\textbf{($\uparrow$)}} & \thead{\textbf{Safety / Guard}\\\textbf{Verification}} \\
+\textbf{Pipeline Regime ($N=19$ Papers)} & \textbf{Backbone} & \thead{\textbf{Recall ($k/57$)}\\\textbf{[95\% CI] ($\uparrow$)}} & \thead{\textbf{True FPs}\\\textbf{(Cln/Inj) ($\downarrow$)}} & \thead{\textbf{$\text{Prec}_{\text{inj}}$}\\\textbf{[95\% CI] ($\uparrow$)}} & \thead{\textbf{$\text{Prec}_{\text{org}}$}\\\textbf{[95\% CI] ($\uparrow$)}} & \thead{\textbf{$\text{F1}_{\text{inj}}$ /}\\\textbf{$\text{F1}_{\text{org}}$ ($\uparrow$)}} & \thead{\textbf{E7 Grid}\\\textbf{Recall}} & \thead{\textbf{Out Tok}\\\textbf{(38 Docs)}} \\
 \midrule
-Clean-Room AST Only (\texttt{All}, $N=19$) & $66.7\%$ ($38/57$) & $7$ & $\mathbf{9}$ ($5 / 4$) & $\mathbf{85.5\%}$ & $\mathbf{74.9\%}$ & $0$ LLM Calls ($0.26$ Clean FP/p) \\
-Clean-Room AST Only (\texttt{dev}, $N=11$) & $72.7\%$ ($24/33$) & $6$ & $5$ ($3 / 2$) & $88.1\%$ & $79.7\%$ & Raw Clean Alerts: $9$ ($6$ Org + $3$ FP) \\
-Clean-Room AST Only (\texttt{test}, $N=8$) & $58.3\%$ ($14/24$) & $1$ & $4$ ($2 / 2$) & $80.0\%$ & $67.4\%$ & Raw Clean Alerts: $3$ ($1$ Org + $2$ FP) \\
-Adversarial Rebuttal Stress (\texttt{All}, $N=19$) & $66.7\%$ ($38/57$) & $7$ & $9$ ($5 / 4$) & $85.5\%$ & $74.9\%$ & $\mathbf{0.0\%}$ False Ex.\ ($0/38$ Dropped) \\
+\texttt{pat\_baseline} (4-Stage Text LLM \cite{googlepat2026}) & \texttt{v4-flash} & $52.6\%$ ($30/57$) $[39.9, 65.0]$ & $1{,}094$ ($568/526$) & $3.2\%$ $[2.3, 4.4]$ & $5.7\%$ $[4.5, 7.2]$ & $6.0\%$ / $10.3\%$ & $12.5\%$ & $0.31\text{M}$ \\
+Clean-Room AST Only (\texttt{--no-llm}) & None (AST) & $66.7\%$ ($38/57$) $[53.7, 77.5]$ & $\mathbf{7}$ ($\mathbf{4}/\mathbf{3}$) & $\mathbf{84.8\%}$ $[71.8, 92.4]$ & $\mathbf{88.3\%}$ $[77.8, 94.2]$ & $\mathbf{74.7\%}$ / $\mathbf{76.0\%}$ & $87.5\%$ & $\mathbf{0}$ \\
 \midrule
-\texttt{pat\_baseline} Pure-LLM (\texttt{All}, $N=19$) & $56.1\%$ ($32/57$) & $14$ & $1{,}081$ ($532 / 549$) & $5.7\%$ & $10.3\%$ & $15.42$ Crit/Maj Clean FP/p \\
-\texttt{heurion\_deep} Cold-Start (\texttt{All}, $N=19$) & $\mathbf{84.2\%}$ ($48/57$) & $\mathbf{25}$ & $76$ ($47 / 29$) & $60.2\%$ & $70.2\%$ & $-93.0\%$ FPs vs.\ \texttt{pat\_baseline} \\
-\texttt{heurion\_evolved} Intra-Paper R2 (\texttt{All}, $N=19$) & $82.5\%$ ($47/57$) & $23$ & $56$ ($31 / 25$) & $65.2\%$ & $72.8\%$ & $-34.0\%$ Clean FPs ($0.0\%$ Leak) \\
-\textbf{\texttt{heurion\_evolved} Transfer (\texttt{All}, $N=19$)} & $\mathbf{84.2\%}$ ($48/57$) & $20$ & $\mathbf{54}$ ($32 / 22$) & $\mathbf{66.0\%}$ & $\mathbf{74.0\%}$ & $-28.9\%$ FPs ($0.0\%$ Recall Loss) \\
+\textbf{B2}: Full-Context Single-Pass (w/ 2D Tables) & \texttt{deepseek-chat} & $73.7\%$ ($42/57$) $[61.0, 83.4]$ & $104$ ($68/36$) & $28.8\%$ $[22.0, 36.6]$ & $46.7\%$ $[39.8, 53.7]$ & $41.4\%$ / $57.2\%$ & $37.5\%$ & $59.7\text{k}$ \\
+\textbf{B1}: Full-Context Frontier CoT ($64\text{k}$ Budget) & \texttt{deepseek-reasoner} & $\mathbf{94.7\%}$ ($54/57$) $[85.6, 98.2]$ & $80$ ($44/36$) & $40.3\%$ $[32.4, 48.8]$ & $57.9\%$ $[50.8, 64.7]$ & $56.5\%$ / $\mathbf{71.9\%}$ & $\mathbf{100\%}$ & $1{,}389.9\text{k}$ \\
 \midrule
-\texttt{heurion\_deep} Cold-Start (\texttt{test}, $N=8$) & $75.0\%$ ($18/24$) & $\mathbf{7}$ & $30$ ($19 / 11$) & $54.5\%$ & $63.1\%$ & $0$ Rules ($2.25$ Crit/Maj FP/p) \\
-\texttt{heurion\_evolved} Intra-Paper R2 (\texttt{test}, $N=8$) & $70.8\%$ ($17/24$) & $\mathbf{7}$ & $\mathbf{23}$ ($\mathbf{12} / 11$) & $\mathbf{60.3\%}$ & $\mathbf{65.1\%}$ & $-36.8\%$ Clean FPs ($1.38$ FP/p) \\
-\textbf{\texttt{heurion\_evolved} Frozen (\texttt{test}, $N=8$)} & $\mathbf{79.2\%}$ ($19/24$) & $5$ & $28$ ($16 / 12$) & $54.8\%$ & $64.8\%$ & $4$ Rules + $3$ Skills ($\mathbf{0.0\%}$ Leak) \\
-\midrule
-\multicolumn{7}{@{}l}{\textbf{Per-Category Recall Comparison across All 19 Full-Text Papers (\texttt{Clean-Room AST} $\to$ Live \texttt{heurion\_deep} / \texttt{heurion\_evolved} Transfer):}} \\
-\multicolumn{7}{@{}l}{E1 Flow: $80.0\% \to 80.0\% / \mathbf{90.0\%}$ \quad E2 Math: $83.3\% \to 83.3\% / \mathbf{100.0\%}$ \quad E3 Conflict: $62.5\% \to \mathbf{87.5\%} / \mathbf{87.5\%}$ \quad E4 CI: $75.0\% \to 87.5\% / \mathbf{100.0\%}$} \\
-\multicolumn{7}{@{}l}{E5 Method--Result: $62.5\% \to \mathbf{87.5\%} / 62.5\%$ \quad E6 Spin/Causal: $22.2\% \to \mathbf{77.8\%} / 55.6\%$ \quad E7 Table Grid Sum: $87.5\% \to 87.5\% / \mathbf{100.0\%}$} \\
+\textbf{B3}: \texttt{heurion\_deep} (4-Stage Hybrid) & \texttt{deepseek-chat} & $86.0\%$ ($49/57$) $[74.7, 92.7]$ & $\mathbf{73}$ ($\mathbf{41}/\mathbf{32}$) & $\mathbf{47.5\%}$ $[39.4, 55.7]$ & $\mathbf{60.5\%}$ $[53.4, 67.3]$ & $61.2\%$ / $71.0\%$ & $\mathbf{100\%}$ & $96.8\text{k}$ \\
+\texttt{heurion\_deep} (4-Stage Hybrid Cold-Start) & \texttt{v4-flash} & $87.7\%$ ($50/57$) $[76.8, 93.9]$ & $82$ ($45/37$) & $45.0\%$ $[37.2, 53.0]$ & $59.0\%$ $[52.1, 65.6]$ & $59.5\%$ / $70.5\%$ & $87.5\%$ & $101.4\text{k}$ \\
+\textbf{\texttt{heurion\_evolved} (Selective Stage-4 Routing)} & \texttt{v4-flash} & $\mathbf{89.5\%}$ ($51/57$) $[78.9, 95.1]$ & $78$ ($45/33$) & $46.9\%$ $[39.1, 55.0]$ & $59.6\%$ $[52.5, 66.3]$ & $\mathbf{61.5\%}$ / $71.6\%$ & $\mathbf{100\%}$ & $104.2\text{k}$ \\
 \bottomrule
 \end{tabular}%
 }
 \end{table}
 
-\paragraph{Architectural Division of Labor Confirmed on Full-Text Manuscripts.}
-Table~\ref{tab:deep_review_injection} reveals a crisp empirical division of labor across error categories when evaluated on unedited 6,000-word PMC JATS XML articles:
+Table~\ref{tab:frontier_main} establishes three key findings under exact $2^{19}$ paired permutation testing:
 \begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{High Zero-LLM Sensitivity on Mathematical \& 2D Tabular Errors (\textbf{E1, E2, E4, E7}):} Without invoking any language model, the clean-room ProseMirror 2D table-grid and CI engine catches $\mathbf{87.5\%}$ ($7/8$) of intra-table cell/row sum errors (\textbf{E7}), $\mathbf{83.3\%}$ ($5/6$) of inline percentage errors (\textbf{E2}), $\mathbf{80.0\%}$ ($8/10$) of sample-size flow contradictions (\textbf{E1}), and $\mathbf{75.0\%}$ ($6/8$) of out-of-bounds $95\%$ CIs (\textbf{E4}), with only $5$ true false positives across all 19 full-length clean papers ($0.26$ per paper, Precision $= \mathbf{85.5\%}$).
-  \item \textbf{Why Quote-Grounded Hybrid LLM Passes Are Necessary (\textbf{E6} Spin \& Subtle \textbf{E3/E5} Conflicts):} Conversely, pure AST rules detect only $2/9$ ($22.2\%$) of \textbf{E6} spin/causal overclaims (where non-significant $p$-values reside in separate paragraphs or tables from the overclaimed conclusion) and $5/8$ ($62.5\%$) of \textbf{E3} and \textbf{E5} cross-section mismatches. Pairing the 2D table-grid AST with live \texttt{deepseek-v4-flash} section review in \texttt{heurion\_deep} lifts overall recall from $66.7\%$ to $\mathbf{84.2\%}$ ($48/57$), achieving $\mathbf{87.5\%}$ across \textbf{E3}, \textbf{E4}, \textbf{E5}, and \textbf{E7} and lifting \textbf{E6} spin recall $3.5\times$ to $\mathbf{77.8\%}$ ($7/9$), while uncovering $\mathbf{25}$ verified organic in-print errors on clean papers. By contrast, text-only \texttt{pat\_baseline} misses $87.5\%$ ($1/8$; $0/4$ on \texttt{test}) of \textbf{E7} intra-table errors ($56.1\%$ overall recall) while emitting $1{,}081$ false positives ($15.42$ critical/major FPs per clean paper, $5.7\%$ precision) because section reviewers lack 2D grid cells and dual-quote substrate verification (\texttt{quotedIn} + \texttt{VERIFY\_SYSTEM}).
+  \item \textbf{Same-Backbone Proof of Architectural Gain (\texttt{B3} vs.\ \texttt{B2} on DeepSeek-V3):} Even when given full 2D Markdown tables in context, single-pass \texttt{deepseek-chat} (\texttt{B2}) misses $62.5\%$ of intra-table errors (\textbf{E7}: $3/8$) and emits $104$ false positives ($\text{Prec}_{\text{inj}}=28.8\%$). On the \emph{exact same} \texttt{deepseek-chat} model, \texttt{heurion\_deep} (\texttt{B3}) lifts \textbf{E7} recall to $\mathbf{100.0\%}$ ($8/8$), boosts overall recall by $+12.3\text{ pp}$ ($73.7\% \to 86.0\%$), cuts false positives by $-29.8\%$ ($104 \to 73$), and achieves statistically significant gains across all four precision and F1 metrics: $\text{Prec}_{\text{inj}} +18.7\text{ pp}$ ($p=0.0026$), $\text{Prec}_{\text{org}} +13.9\text{ pp}$ ($p=0.0141$), $\text{F1}_{\text{inj}} +19.8\text{ pp}$ ($p=0.0016$), and $\text{F1}_{\text{org}} +13.9\text{ pp}$ ($p=0.0063$).
+  \item \textbf{Efficiency \& Precision Advantage Over Frontier $64\text{k}$-CoT (\texttt{B3} vs.\ \texttt{B1} DeepSeek-R1):} Exhaustive chain-of-thought reasoning in \texttt{B1} reaches $94.7\%$ recall ($54/57$, non-significant $+8.8\text{ pp}$ over \texttt{B3}, McNemar $p=0.180$, permutation $p=0.234$), but consumes $1.39\text{M}$ output tokens ($\sim 145\text{ s}$/call) and emits $80$ unanchored false positives. \texttt{heurion\_deep} (\texttt{B3}) achieves $+7.2\text{ pp}$ higher $\text{Prec}_{\text{inj}}$ ($47.5\%$ vs.\ $40.3\%$), $+4.7\text{ pp}$ higher $\text{F1}_{\text{inj}}$ ($61.2\%$ vs.\ $56.5\%$), and virtually identical $\text{F1}_{\text{org}}$ ($71.0\%$ vs.\ $71.9\%$, $p=0.883$) using $\mathbf{14.4\times}$ \textbf{fewer output tokens} ($96.8\text{k}$) and $\sim 21\text{ s}$/manuscript ($\approx \$0.02$/paper), while remaining backbone-invariant between \texttt{deepseek-chat} and \texttt{deepseek-v4-flash} (all paired $p \ge 0.499$).
+  \item \textbf{Real In-Print Error Discovery:} Across the $19$ uncorrupted \texttt{clean} papers, manual PDF audit confirms $\mathbf{7}$ of $11$ raw deterministic AST alerts ($63.6\%$; only $4$ true clean FPs, $0.21$/paper) and $\mathbf{28}$ hybrid alerts are genuine errors in published 2025 articles---including four out-of-bounds cOR/aOR $95\%$ CIs in \emph{PLOS ONE} (\texttt{PMC12721543}), a Table~3 percentage error (\texttt{2 (20)} for $N=20$) in \emph{Nature Communications} (\texttt{PMC12644478}), a Table~4 safety percentage typo (\texttt{3 (4.7\%)} for $3/81 = 3.7\%$; Figure~\ref{fig:case_study}a) in \emph{PLOS Medicine} (\texttt{PMC12697981}), and a zero-crossing CI paired with $p=0.040$ in \emph{Current Oncology} (\texttt{PMC12731986}).
 \end{enumerate}
 
-\paragraph{Intra-Manuscript Revision \& Zero-Shot Cross-Manuscript Self-Evolution (\texttt{dev $\to$ test}).}
-While \texttt{heurion\_deep} eliminates $93.0\%$ of \texttt{pat\_baseline}'s false alarms ($1{,}081 \to 76$), it still triggers $76$ false positives across 38 manuscripts ($47$ on clean papers; $30$ total on the $8$ unseen \texttt{test} papers) when encountering legitimate clinical denominator stratifications and mixed parametric/non-parametric subscales. Evaluating both intra-manuscript Round~2 revision and causal \texttt{dev $\to$ test} cross-manuscript transfer under our physically blind-isolated \texttt{simulateBlindClinician} protocol yields three key empirical findings:
-\begin{enumerate}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{High-Fidelity Blind Clinician Calibration without Oracle Peeking:} Post-hoc comparison against ground truth across all $291$ blind clinician adjudications ($188$ ground-truth errors and $103$ false positives) shows that \texttt{simulateBlindClinician} independently verifies and accepts $\mathbf{95.2\%}$ ($\mathbf{179/188}$) of true objective errors ($4.8\%$ false rebuttal), while rebutting $\mathbf{38.8\%}$ ($\mathbf{40/103}$) of methodological false alarms where manuscript Methods, table captions, and footnotes justify the stratification. Although $49$ raw clinician rebuttals cite manuscript-specific sample sizes or percentages, \texttt{synthesizeSanitizedBoundaryRuleAsync} achieves $\mathbf{0.0\%}$ ($0$) post-guard instance leakage across all distilled rules.
-  \item \textbf{Substantial Intra-Manuscript Round~2 False-Alarm Suppression:} When an author rebuts false alarms in Round~1 and re-runs review on the same manuscript (\texttt{docId}), \texttt{heurion\_evolved} cuts clean-paper false positives by $\mathbf{34.0\%}$ overall ($47 \to \mathbf{31}$; critical/major clean FPs/paper drop $\mathbf{35.0\%}$ from $2.26$ to $\mathbf{1.47}$; overall FPs $-26.3\%$ from $76 \to \mathbf{56}$) and by $\mathbf{36.8\%}$ on \texttt{test} papers ($19 \to \mathbf{12}$; \texttt{test} precision $54.5\% \to \mathbf{60.3\%}$, F1 $63.1\% \to \mathbf{65.1\%}$), lifting overall precision $+5.0$ points ($60.2\% \to \mathbf{65.2\%}$) and F1 to $\mathbf{72.8\%}$.
-  \item \textbf{Zero-Recall-Loss Cross-Manuscript Evolution \& Pareto Gains on Frozen Unseen \texttt{test} Papers:} Streaming causally through \texttt{dev} ($N=11$) consolidates $4$ canonical Track~A \texttt{[narrow:review\_boundary]} rules (multi-reference diagnostic accuracy, dual-distribution normality reporting, missing-data subcohort denominators, and crude-vs.-adjusted modeling), $3$ \texttt{dev}-only \texttt{[skill:review\_audit]} checklists, and $3$ Track~B crystallized pre-write rules (from $87$ corroborated fix signals). Across all 19 papers, cross-manuscript evolution cuts false positives by $\mathbf{28.9\%}$ ($76 \to \mathbf{54}$; \texttt{dev} FPs drop $\mathbf{43.5\%}$ from $46 \to \mathbf{26}$, \texttt{dev} F1 $74.6\% \to \mathbf{79.9\%}$), raising overall precision $+5.8$ points ($60.2\% \to \mathbf{66.0\%}$; injected-only $+8.1$ points $45.3\% \to \mathbf{53.4\%}$) and F1 $+3.8$ points ($70.2\% \to \mathbf{74.0\%}$) with \emph{zero overall recall loss} ($\mathbf{48/57} = \mathbf{84.2\%}$, reaching $\mathbf{100.0\%}$ on \textbf{E2}, \textbf{E4}, and \textbf{E7}). Crucially, on strictly frozen unseen \texttt{test} papers ($N=8$), transfer achieves a simultaneous \textbf{Pareto improvement} in both recall and precision: unseen \texttt{test} recall rises $+4.2$ points from $75.0\%$ ($18/24$) to $\mathbf{79.2\%}$ ($\mathbf{19/24}$, achieving $\mathbf{100.0\%}$ across \textbf{E1}, \textbf{E2}, \textbf{E4}, and \textbf{E7}) while clean-paper false positives drop $\mathbf{15.8\%}$ ($19 \to \mathbf{16}$; critical/major clean FPs/paper $-16.4\%$ from $2.25 \to \mathbf{1.88}$), lifting injected-only precision $+2.8$ points ($42.3\% \to \mathbf{45.1\%}$) and \texttt{test} F1 from $63.1\%$ to $\mathbf{64.8\%}$ with $\mathbf{0.0\%}$ instance leakage.
-\end{enumerate}
+\subsection{Component Ablations and Missed-Injection Failure Taxonomy}
+Table~\ref{tab:component_ablation} and Figure~\ref{fig:quant_results} dissect the contribution of each architectural component in \texttt{heurion\_deep} (\texttt{deepseek-v4-flash}, $N=19$ papers).
 
-\paragraph{Discovery of Genuine Unannotated Errors in Published 2025 Journals (\texttt{unexpected\_\allowbreak true}).}
-Across the 19 uncorrupted \texttt{clean} manuscripts, the clean-room AST engine emits only $12$ alerts total---and manual verification against the published PDFs confirms that $\mathbf{7}$ of these $12$ alerts ($58.3\%$) are \emph{genuine in-print publication errors} in peer-reviewed 2025 articles:
+\begin{table}[!t]
+\centering
+\caption{Architectural Component Ablation Study across all 19 Full-Text PMC Papers ($38$ Manuscripts, $57$ Injected Errors, Live \texttt{deepseek-v4-flash}), with exact $2^{19}$ paired permutation and McNemar $p$-values relative to full \texttt{heurion\_deep}.}
+\label{tab:component_ablation}
+\vspace{2pt}
+\setlength{\tabcolsep}{3.6pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+\textbf{Ablation Variant ($N=19$)} & \thead{\textbf{Recall ($k/57$)}\\\textbf{[95\% CI]}} & \thead{\textbf{$\Delta$ Recall}\\\textbf{(McNemar $p$)}} & \thead{\textbf{True FPs}\\\textbf{(Cln / Inj)}} & \thead{\textbf{$\text{Prec}_{\text{inj}}$ /}\\\textbf{$\text{Prec}_{\text{org}}$}} & \thead{\textbf{$\text{F1}_{\text{inj}}$ /}\\\textbf{$\text{F1}_{\text{org}}$}} & \thead{\textbf{E2 / E4 / E7}\\\textbf{Recall (\%)}} & \textbf{Primary Impact of Ablation} \\
+\midrule
+\textbf{\texttt{heurion\_deep} (Full Cold-Start)} & $\mathbf{87.7\%}$ ($50/57$) $[76.8, 93.9]$ & --- & $82$ ($45/37$) & $45.0\%$ / $59.0\%$ & $59.5\%$ / $70.5\%$ & $100 / 100 / 87.5$ & Balanced high recall \& verified precision \\
+\midrule
+$-$ Structural AST Passes (LLM Only) & $54.4\%$ ($31/57$) $[41.6, 66.6]$ & $\mathbf{-33.3\text{ pp}}$ ($2.1\!\times\!10^{-5}$) & $64$ ($33/31$) & $34.0\%$ / $54.3\%$ & $41.8\%$ / $54.3\%$ & $33.3 / 75.0 / 12.5$ & Catastrophic collapse on E2 ($-66.7$) \& E7 ($-75.0$) \\
+$-$ 2D Table-Grid Scratchpad & $68.4\%$ ($39/57$) $[55.5, 79.0]$ & $\mathbf{-19.3\text{ pp}}$ ($0.0034$) & $56$ ($30/26$) & $49.1\%$ / $58.8\%$ & $57.2\%$ / $63.2\%$ & $100 / 62.5 / 12.5$ & Severe loss on E7 grid ($-75.0$) \& table CIs ($-37.5$) \\
+$-$ Stage 4 Full-Text Verifier & $84.2\%$ ($48/57$) $[72.6, 91.5]$ & $-3.5\text{ pp}$ ($0.688$) & $\mathbf{176}$ ($94/82$) & $26.7\%$ / $40.1\%$ & $40.5\%$ / $54.3\%$ & $100 / 87.5 / 100$ & \textbf{FPs explode $+114.6\%$} (perm $p=3.1\!\times\!10^{-5}$) \\
+$-$ Stage 3 Dual-Quote Gate & $87.7\%$ ($50/57$) $[76.8, 93.9]$ & $0.0\text{ pp}$ ($1.000$) & $75$ ($42/33$) & $47.2\%$ / $61.5\%$ & $61.4\%$ / $72.3\%$ & $100 / 87.5 / 100$ & Defense-in-depth when Stage 4 Verifier is active \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[!t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}
+  % Panel (a): Precision-Recall Frontier across Architectures & Backbones
+  \begin{axis}[
+    name=prplot,
+    width=0.46\textwidth,
+    height=5.4cm,
+    xlabel={\footnotesize Precision w/ Organic TPs ($\text{Prec}_{\text{org}}$, \%)},
+    ylabel={\footnotesize Injected Error Recall (\%)},
+    xmin=0, xmax=96,
+    ymin=48, ymax=98,
+    grid=both,
+    grid style={dashed, gray!30},
+    tick label style={font=\scriptsize},
+    title={\footnotesize \textbf{(a) Precision--Recall Frontier ($N=19$ Full Texts)}},
+    title style={yshift=-2pt}
+  ]
+    \addplot[only marks, mark=triangle*, mark size=3.2pt, color=red!75!black] coordinates {(5.7, 52.6)};
+    \node[anchor=west, font=\tiny, text=red!75!black] at (axis cs:7.5, 52.6) {\texttt{pat\_baseline} (1,094 FPs)};
+
+    \addplot[only marks, mark=pentagon*, mark size=3.0pt, color=purple!80!black] coordinates {(40.1, 84.2)};
+    \node[anchor=north, font=\tiny, text=purple!80!black] at (axis cs:36.5, 82.5) {w/o Stage 4 (176 FPs)};
+
+    \addplot[only marks, mark=o, mark size=2.8pt, thick, color=brown!80!black] coordinates {(46.7, 73.7)};
+    \node[anchor=north, font=\tiny, text=brown!80!black] at (axis cs:47.0, 72.0) {Full-Ctx V3};
+
+    \addplot[only marks, mark=diamond*, mark size=3.2pt, color=blue!75!black] coordinates {(88.3, 66.7)};
+    \node[anchor=east, font=\tiny, text=blue!75!black] at (axis cs:86.2, 65.5) {Pure AST (7 FPs)};
+
+    \addplot[only marks, mark=square*, mark size=2.7pt, color=violet!80!black] coordinates {(57.9, 94.7)};
+    \node[anchor=east, font=\tiny, text=violet!80!black] at (axis cs:56.0, 94.7) {Full-Ctx R1 (1.39M tok)};
+
+    \addplot[only marks, mark=*, mark size=2.8pt, color=orange!85!black] coordinates {(60.5, 86.0)};
+    \node[anchor=west, font=\tiny, text=orange!80!black] at (axis cs:62.0, 85.2) {\texttt{heurion\_deep} (V3)};
+
+    \addplot[only marks, mark=star, mark size=3.8pt, thick, color=teal!75!black] coordinates {(59.6, 89.5)};
+    \node[anchor=west, font=\tiny\bfseries, text=teal!70!black] at (axis cs:61.2, 90.2) {\texttt{evolved} Selective (89.5\%)};
+
+    \draw[-{Stealth[length=1.8mm]}, dashed, gray!80, thick] (axis cs:46.7, 73.7) -- (axis cs:59.6, 85.4);
+  \end{axis}
+
+  % Panel (b): Per-Category Recall Grouped Bar Chart (E1-E7)
+  \begin{axis}[
+    at={(prplot.east)},
+    anchor=west,
+    xshift=1.30cm,
+    width=0.52\textwidth,
+    height=5.4cm,
+    ybar=1.0pt,
+    bar width=2.8pt,
+    ymin=0, ymax=112,
+    ylabel={\footnotesize Category Recall (\%)},
+    symbolic x coords={E1,E2,E3,E4,E5,E6,E7},
+    xtick=data,
+    tick label style={font=\scriptsize},
+    ymajorgrids=true,
+    grid style={dashed, gray!30},
+    legend style={at={(0.5,1.02)}, anchor=south, legend columns=2, font=\tiny, draw=gray!40, inner sep=2pt},
+    title={\footnotesize \textbf{(b) Complementary Division of Labor Across E1--E7}},
+    title style={yshift=14pt}
+  ]
+    \addplot[fill=red!55, draw=red!75!black] coordinates {(E1,60.0) (E2,83.3) (E3,25.0) (E4,62.5) (E5,62.5) (E6,66.7) (E7,12.5)};
+    \addplot[fill=brown!55, draw=brown!80!black] coordinates {(E1,70.0) (E2,66.7) (E3,87.5) (E4,100.0) (E5,50.0) (E6,100.0) (E7,37.5)};
+    \addplot[fill=blue!50, draw=blue!75!black] coordinates {(E1,80.0) (E2,83.3) (E3,62.5) (E4,75.0) (E5,62.5) (E6,22.2) (E7,87.5)};
+    \addplot[fill=orange!65, draw=orange!85!black] coordinates {(E1,90.0) (E2,100.0) (E3,87.5) (E4,100.0) (E5,75.0) (E6,77.8) (E7,87.5)};
+    \addplot[fill=teal!65, draw=teal!80!black] coordinates {(E1,80.0) (E2,100.0) (E3,100.0) (E4,87.5) (E5,75.0) (E6,88.9) (E7,100.0)};
+    \legend{\texttt{pat\_baseline}, Full-Ctx V3, Clean-Room AST, \texttt{heurion\_deep}, \texttt{evolved} (Selective)}
+  \end{axis}
+\end{tikzpicture}%
+}%
+\caption{Quantitative architecture and category analysis ($N=19$ papers, $57$ errors). \textbf{(a)} Precision--recall frontier showing same-backbone improvement from Full-Context DeepSeek-V3 to \texttt{heurion\_deep} ($p=0.0016$ $\text{F1}_{\text{inj}}$), severe FP explosion when Stage~4 verification is ablated ($176$ FPs), and selective evolution reaching $89.5\%$ recall. \textbf{(b)} Category breakdown showing flat-text and single-pass V3 collapse on 2D intra-table errors (\textbf{E7}: $12.5\%$ and $37.5\%$), pure AST blind spot on semantic spin (\textbf{E6}: $22.2\%$), and selective evolution reaching $100\%$ on \textbf{E2, E3, E7} and $88.9\%$ on \textbf{E6}.}
+\label{fig:quant_results}
+\end{figure}
+
+\paragraph{Indispensability of 2D AST, Stage 4 Verifier, and Failure Analysis of the 7 Missed Injections.}
+Ablating all structural AST passes collapses recall by $-33.3\text{ pp}$ ($87.7\% \to 54.4\%$, exact McNemar $p=2.1\times 10^{-5}$), while ablating only the 2D table-grid scratchpad drops recall by $-19.3\text{ pp}$ ($87.7\% \to 68.4\%$, $p=0.0034$), dragging \textbf{E7} down from $87.5\%$ to $12.5\%$ and \textbf{E4} from $100\%$ to $62.5\%$ (missing table-embedded CIs). Conversely, ablating the Stage~4 full-text verifier causes false positives to more than double ($82 \to \mathbf{176}$, $+114.6\%$, permutation $p=3.1\times 10^{-5}$), collapsing $\text{Prec}_{\text{inj}}$ from $45.0\%$ to $26.7\%$. While ablating the Stage~3 dual-quote gate alone preserves recall ($87.7\%$) when Stage~4 verification remains active, it acts as a zero-cost deterministic substrate filter blocking fabricated quotes prior to Stage~4 LLM spend (consistent across all 7 study designs; Clean-Room AST achieves $66.7\%$ recall across RCTs [$12/18$, $3$ FPs], cohorts [$7/9$, $0$ FPs], case--control [$4/6$, $2$ FPs], diagnostic [$5/6$, $0$ FPs], cross-sectional [$3/6$, $0$ FPs], meta-analyses [$4/6$, $2$ FPs], and translational [$3/6$, $0$ FPs] with $\mathbf{0.0\%}$ [$0/38$] adversarial AST drop). Auditing all $7$ injections missed by cold-start \texttt{heurion\_deep} ($50/57$) reveals zero ($0/7$) losses from the dual-quote gate or section cap: $3/7$ (\texttt{PMC12839862-1}, \texttt{PMC12654784-3}, \texttt{PMC12757420-3}) were validly surfaced by Stage~3 with verbatim quotes but conservatively rejected by Stage~4 reconciliation (all $3$ recovered under selective evolution!), $2/7$ (\texttt{PMC12739847-1}, \texttt{PMC12839862-3}) were unprompted cross-section Stage~3 misses recovered by additive audit checklists, and $2/7$ (\texttt{PMC12657621-2}, \texttt{PMC12681115-3}) required implicit multi-table variable mapping.
+
+\subsection{\texorpdfstring{$2\times 2$}{2x2} Evolution Disentanglement, Selective Routing \& 5-Fold Out-of-Fold CV}
+\label{sec:kfold_results}
+To rigorously test memory generalization beyond a single $N=8$ test split and separate Track~A boundary learning ($0\%$ ground-truth oracle) from \texttt{dev} audit checklists, Table~\ref{tab:evolution_kfold} and Figure~\ref{fig:learning_curve} report both (A) $2\times 2$ orthogonal disentanglement on frozen unseen \texttt{test} ($N=8$, $24$ errors) and (B) \textbf{5-fold stratified out-of-fold cross-validation} across all $19$ unseen papers ($57$ unseen errors, $\sim 15$ train $\to \sim 4$ frozen test papers/fold), directly contrasting \emph{Naive Unfiltered Global Prompt Stuffing} against \emph{Candidate-Scoped Selective Stage-4 Routing}.
+
+\begin{table}[!t]
+\centering
+\caption{Orthogonal $2\times 2$ Evolution Disentanglement (Frozen Unseen \texttt{test} $N=8$, $24$ Errors) and 5-Fold Stratified Out-of-Fold Cross-Validation ($N=19$ Unseen Papers, $57$ Unseen Errors; $0$ Instance/Specialty Leaks across all $73$ Distilled Rules/Checklists).}
+\label{tab:evolution_kfold}
+\vspace{2pt}
+\setlength{\tabcolsep}{3.5pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}llcccccc@{}}
+\toprule
+\textbf{Evaluation Protocol \& Regime} & \textbf{Memory Routing Governance} & \thead{\textbf{Unseen Recall}\\\textbf{[95\% CI] ($\uparrow$)}} & \thead{\textbf{True FPs}\\\textbf{(Cln / Inj) ($\downarrow$)}} & \thead{\textbf{$\text{Prec}_{\text{inj}}$ /}\\\textbf{$\text{Prec}_{\text{org}}$ ($\uparrow$)}} & \thead{\textbf{$\text{F1}_{\text{inj}}$ /}\\\textbf{$\text{F1}_{\text{org}}$ ($\uparrow$)}} & \thead{\textbf{E6 Spin}\\\textbf{Recall}} & \textbf{Exact Paired Test Summary} \\
+\midrule
+\multicolumn{8}{@{}l}{\textbf{Panel A: $2\times 2$ Orthogonal Disentanglement on Frozen Unseen \texttt{test} Split ($N=8$ Papers, $24$ Errors)}} \\
+\texttt{cold\_start} ($0$ Rules, $0$ Checklists) & Static Baseline & $79.2\%$ ($19/24$) $[59.5, 90.8]$ & $37$ ($19/18$) & $39.3\%$ / $50.0\%$ & $52.5\%$ / $61.3\%$ & $75.0\%$ & Reference Cold-Start \\
+Legacy \texttt{unfiltered\_full} ($6$ Rules + $3$ Skills) & Global Stage 3+4 Stuffing & $70.8\%$ ($17/24$) $[50.8, 85.1]$ & $\mathbf{26}$ ($\mathbf{13}/13$) & $44.7\%$ / $55.2\%$ & $54.8\%$ / $62.0\%$ & $75.0\%$ & $-8.4\text{ pp}$ test recall regression \\
+\textbf{\texttt{track\_a\_only\_selective}} ($3$ Rules, $0\%$ Oracle) & \textbf{Selective Stage-4 Only} & $\mathbf{79.2\%}$ ($19/24$) $[59.5, 90.8]$ & $32$ ($15/17$) & $41.8\%$ / $51.5\%$ & $54.7\%$ / $62.4\%$ & $75.0\%$ & $\mathbf{0.0\text{ pp}}$ loss; $-21.1\%$ Clean FP \\
+\textbf{\texttt{checklists\_only\_selective}} ($0$ Rules + $4$ Skills) & \textbf{Additive Stage-3 Only} & $\mathbf{83.3\%}$ ($20/24$) $[64.1, 93.3]$ & $31$ ($18/13$) & $\mathbf{44.6\%}$ / $53.0\%$ & $\mathbf{58.1\%}$ / $\mathbf{64.8\%}$ & $\mathbf{100\%}$ & $\mathbf{+12.5\text{ pp}}$ vs.\ suppressive header \\
+\textbf{\texttt{full\_evolved\_selective}} ($4$ Rules + $2$ Skills) & \textbf{Selective + Additive} & $\mathbf{83.3\%}$ ($20/24$) $[64.1, 93.3]$ & $36$ ($20/16$) & $40.0\%$ / $51.4\%$ & $54.0\%$ / $63.6\%$ & $\mathbf{100\%}$ & $\mathbf{+12.5\text{ pp}}$ vs.\ legacy ($89.5\%$ All-19) \\
+\midrule
+\multicolumn{8}{@{}l}{\textbf{Panel B: 5-Fold Stratified Out-of-Fold CV Across All 19 Unseen Papers ($38$ Manuscripts, $57$ Unseen Errors)}} \\
+\texttt{oof\_cold\_start} ($0$ Rules, $0$ Checklists) & Static OOF Baseline & $\mathbf{87.7\%}$ ($50/57$) $[76.8, 93.9]$ & $82$ ($45/37$) & $45.0\%$ / $59.0\%$ & $59.5\%$ / $70.5\%$ & $77.8\%$ & Fold Mean: $87.2\% \pm 8.7\%$ \\
+Legacy \texttt{oof\_unfiltered\_track\_a} ($0\%$ Oracle) & Global Stage 3+4 Stuffing & $75.4\%$ ($43/57$) $[62.9, 84.8]$ & $61$ ($35/26$) & $47.4\%$ / $61.9\%$ & $58.2\%$ / $68.0\%$ & $44.4\%$ & \textbf{Recall $-12.3\text{ pp}$, $p = 0.0156$*} \\
+Legacy \texttt{oof\_unfiltered\_full} & Global Stage 3+4 Stuffing & $77.2\%$ ($44/57$) $[64.8, 86.2]$ & $\mathbf{48}$ ($\mathbf{22}/26$) & $\mathbf{54.7\%}$ / $\mathbf{68.4\%}$ & $\mathbf{64.0\%}$ / $\mathbf{72.5\%}$ & $44.4\%$ & Strongest FP cut ($-41.5\%$), E6 $-33.4\text{ pp}$ \\
+\textbf{\texttt{oof\_selective\_track\_a\_only}} ($0\%$ Oracle) & \textbf{Selective Stage-4 Only} & $\mathbf{82.5\%}$ ($47/57$) $[70.6, 90.2]$ & $78$ ($47/31$) & $44.7\%$ / $59.6\%$ & $58.0\%$ / $69.2\%$ & $66.7\%$ & \textbf{$+7.0\text{ pp}$ vs.\ global; $p=0.375$ vs.\ cold} \\
+\textbf{\texttt{oof\_selective\_full\_evolved}} & \textbf{Selective + Additive} & $78.9\%$ ($45/57$) $[66.7, 87.5]$ & $68$ ($35/33$) & $47.3\%$ / $61.1\%$ & $59.1\%$ / $68.9\%$ & $66.7\%$ & $-22.2\%$ Clean FP; $p=0.188$ vs.\ cold \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[!t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}
+  % Panel (a): 5-Order Permutation Learning Curve
+  \begin{axis}[
+    name=lcplot,
+    width=0.50\textwidth,
+    height=4.9cm,
+    xlabel={\footnotesize Sequential Manuscripts Reviewed ($t = 1 \dots 19$)},
+    ylabel={\footnotesize Count (Mean $\pm$ SD, 5 Orders)},
+    xmin=1, xmax=19,
+    ymin=0, ymax=38,
+    xtick={1,4,7,10,13,16,19},
+    grid=both,
+    grid style={dashed, gray!30},
+    tick label style={font=\scriptsize},
+    legend style={at={(0.03,0.96)}, anchor=north west, font=\tiny, draw=gray!40, fill=white, inner sep=2pt},
+    title={\footnotesize \textbf{(a) 5-Order Permutation Convergence of Track A Rules}},
+    title style={yshift=-2pt}
+  ]
+    % Cumulative rebuttal triggers (linear growth)
+    \addplot[color=gray!75!black, dashed, thick, mark=o, mark size=1.6pt] coordinates {
+      (1,0.8) (2,2.8) (3,5.8) (4,7.0) (5,8.2) (6,9.6) (7,12.2) (8,13.8) (9,15.4) (10,17.4)
+      (11,19.6) (12,23.0) (13,24.8) (14,27.0) (15,30.0) (16,30.8) (17,32.0) (18,34.0) (19,36.0)
+    };
+    % Active consolidated Track A methodological families (sublinear saturation to 5.00 +- 0.00)
+    \addplot[color=teal!80!black, very thick, mark=*, mark size=1.8pt,
+      error bars/.cd, y dir=both, y explicit
+    ] coordinates {
+      (1,0.8) +- (0,0.45)
+      (2,1.8) +- (0,0.45)
+      (3,2.8) +- (0,0.84)
+      (4,3.2) +- (0,0.84)
+      (5,3.2) +- (0,0.84)
+      (6,3.4) +- (0,0.89)
+      (7,3.8) +- (0,1.10)
+      (8,3.8) +- (0,1.10)
+      (9,3.8) +- (0,1.10)
+      (10,4.2) +- (0,0.84)
+      (11,4.6) +- (0,0.55)
+      (12,4.8) +- (0,0.45)
+      (13,4.8) +- (0,0.45)
+      (14,4.8) +- (0,0.45)
+      (15,4.8) +- (0,0.45)
+      (16,4.8) +- (0,0.45)
+      (17,4.8) +- (0,0.45)
+      (18,5.0) +- (0,0.00)
+      (19,5.0) +- (0,0.00)
+    };
+    \node[anchor=west, font=\tiny\bfseries, text=teal!75!black] at (axis cs:11.2, 7.6) {Converges to $5.00 \pm 0.00$ Families};
+    \legend{Cumulative Rebuttal Triggers ($36.0$), Active Methodological Rule Families}
+  \end{axis}
+
+  % Panel (b): 5-Fold OOF Governance Trade-Off (Global Stuffing vs Selective Routing)
+  \begin{axis}[
+    at={(lcplot.east)},
+    anchor=west,
+    xshift=1.25cm,
+    width=0.47\textwidth,
+    height=4.9cm,
+    ybar=2.5pt,
+    bar width=7.5pt,
+    ymin=35, ymax=106,
+    ylabel={\footnotesize 5-Fold Unseen OOF Recall (\%)},
+    symbolic x coords={Overall,E2-Math,E4-CI,E6-Spin},
+    xtick=data,
+    tick label style={font=\scriptsize},
+    ymajorgrids=true,
+    grid style={dashed, gray!30},
+    legend style={at={(0.5,1.02)}, anchor=south, legend columns=3, font=\tiny, draw=gray!40, inner sep=2pt},
+    title={\footnotesize \textbf{(b) 5-Fold OOF: Global Stuffing vs.\ Selective Routing}},
+    title style={yshift=13pt}
+  ]
+    \addplot[fill=orange!65, draw=orange!85!black] coordinates {(Overall,87.7) (E2-Math,100.0) (E4-CI,100.0) (E6-Spin,77.8)};
+    \addplot[fill=red!55, draw=red!75!black] coordinates {(Overall,75.4) (E2-Math,83.3) (E4-CI,75.0) (E6-Spin,44.4)};
+    \addplot[fill=teal!65, draw=teal!80!black] coordinates {(Overall,82.5) (E2-Math,100.0) (E4-CI,87.5) (E6-Spin,66.7)};
+    \legend{Cold-Start, Naive Global ($p\!=\!0.016$), Selective Stage-4 ($p\!=\!0.38$)}
+  \end{axis}
+\end{tikzpicture}%
+}%
+\caption{Memory convergence and routing governance. \textbf{(a)} Across 5 random paper permutations (\texttt{seeds 101..505}), $36$ clinician rebuttals consolidate sublinearly by canonical pattern key to exactly $5.00 \pm 0.00$ active methodological families ($6.00 \pm 0.00$ prior to rounding-excuse blocking), preventing prompt bloat. \textbf{(b)} In 5-fold stratified OOF CV ($57$ unseen errors), naive global Track~A prompt stuffing induces a significant $-12.3\text{ pp}$ recall drop ($p=0.0156$, collapsing \textbf{E6} spin to $44.4\%$), whereas candidate-scoped selective Stage~4 routing restores $+7.0\text{ pp}$ overall recall ($82.5\%$, $p=0.375$ vs.\ cold-start) and preserves $100\%$ \textbf{E2} math recall.}
+\label{fig:learning_curve}
+\end{figure}
+
+\paragraph{Empirical Resolution of the Memory Governance Trade-Off.}
+Table~\ref{tab:evolution_kfold} uncovers a central architectural lesson for self-evolving agents:
 \begin{itemize}[leftmargin=1.5em,itemsep=2pt]
-  \item \textbf{\texttt{PMC12721543} (\emph{PLOS ONE}, 2025 --- 4 CI Errors):} In both Table~3 (univariate cOR) and Table~4 (multivariate aOR), ``Married/co-habiting'' reports $0.34\text{ }(0.64\text{--}2.86)$ and ``Divorced/widow'' reports $0.15\text{ }(0.30\text{--}3.51)$, where point estimates lie entirely below their $95\%$ confidence intervals.
-  \item \textbf{\texttt{PMC12644478} (\emph{Nature Communications}, 2025 --- Table Percentage Error):} Table~3 ``Maculopathy ($n, \%$)'' in the Metformin arm ($N=20$) reports ``$2\text{ }(20)$'' instead of $10\%$.
-  \item \textbf{\texttt{PMC12697981} (\emph{PLOS Medicine}, 2025 --- Newly Discovered Table~4 Typo):} In Table~4 (Safety outcomes, Metformin $N=81$), ``Dysmenorrhea'' reports ``$3\text{ }(4.7\%)$,'' whereas $3/81 = 3.70\%$ and five other $3$-event rows in the exact same column correctly report ``$3\text{ }(3.7\%)$.''
-  \item \textbf{\texttt{PMC12731986} (\emph{Current Oncology}, 2025 --- CI vs.\ $p$-value Anomaly):} Table~2 ``Fatigue'' reports median difference $-11.11$ ($95\%$ CI $-22.49$ to $5.82$, crossing zero) alongside $p = 0.040$, matching \texttt{known-issues.md}.
+  \item \textbf{Eliminating Unseen Recall Regression via Selective Routing:} Under legacy global prompt stuffing, 5-fold OOF Track~A ($0\%$ oracle) significantly degraded unseen error recall by $-12.3\text{ pp}$ ($87.7\% \to 75.4\%$, exact McNemar $p=0.0156$, $2^{19}$ permutation $p=0.0313$, dragging \textbf{E6} spin from $77.8\%$ to $44.4\%$). Routing Track~A rules selectively per non-protected Stage~4 candidate (\texttt{oof\_selective\_track\_a\_only}, $0\%$ oracle) recovers $+7.0\text{ pp}$ unseen recall ($\mathbf{82.5\%}$, fold mean $82.8\% \pm 7.7\%$), rendering recall statistically indistinguishable from cold-start ($p=0.375$) while preserving $100\%$ \textbf{E2} math recall and recovering \textbf{E6} spin to $66.7\%$. Combining selective Track~A with additive checklists (\texttt{oof\_selective\_full\_evolved}) reduces unseen clean-paper FPs by $\mathbf{-22.2\%}$ ($45 \to 35$) and total FPs by $-17.1\%$ ($82 \to 68$), lifting $\text{Prec}_{\text{inj}}$ ($45.0\% \to 47.3\%$) and $\text{Prec}_{\text{org}}$ ($59.0\% \to 61.1\%$).
+  \item \textbf{Orthogonal $2\times 2$ Gains \& Order-Invariant Convergence:} On the held-out \texttt{test} split ($N=8$), \texttt{track\_\allowbreak a\_\allowbreak only\_\allowbreak selective} ($0\%$ oracle) cuts clean FPs by $-21.1\%$ ($19 \to 15$) at $\mathbf{0.0\text{ pp}}$ recall loss ($79.2\%$), whereas \texttt{checklists\_\allowbreak only\_\allowbreak selective} and \texttt{full\_\allowbreak evolved\_\allowbreak selective} lift unseen \texttt{test} recall to $\mathbf{83.3\%}$ ($20/24$, $+12.5\text{ pp}$ over legacy global stuffing; $89.5\%$ [$51/57$] across all 19 papers). Identical gains hold when \texttt{deepseek-chat} serves as an independent cross-model clinician judge (\texttt{test} recall $75.0\% \to \mathbf{83.3\%}$ under selective routing vs.\ $70.8\%$ under global stuffing). Across 5 random paper orderings (Figure~\ref{fig:learning_curve}a), active rules saturate sublinearly to $\mathbf{5.00 \pm 0.00}$ methodological families with $\mathbf{0}$ leaked digits or specialty terms across all $73$ persisted rules/checklists.
 \end{itemize}
-Meanwhile, the remaining $5$ clean-paper alerts represent authentic clinical reporting boundaries, such as Statistical Methods sections declaring both parametric Mean $\pm$ SD and non-parametric Median [IQR] depending on Shapiro--Wilk normality (\texttt{PMC12731986}, \texttt{PMC12657621}), oncology RECIST \path{SD: stationary disease} vs.\ statistical \path{standard deviation} (\texttt{PMC12839862}), and meta-analysis primary-trial subgroup citations (\texttt{PMC12703663}).
+
+\subsection{Three-Paradigm Blind Clinician Judge Concordance (\texorpdfstring{$n=191$}{n=191} Findings)}
+Table~\ref{tab:cross_judge} evaluates whether self-evolution depends on same-model bias by comparing three blind clinician paradigms on the exact same $191$ Round~1 findings ($114$ ground-truth errors and $77$ false positives).
 
 \begin{table}[!t]
 \centering
-\caption{Per-Study-Design Breakdown of the Clean-Room Deterministic AST Engine (\texttt{--no-llm}) and Adversarial Objective-Error Rebuttal Stress Test across the 19 Full-Text PMC Papers.}
-\label{tab:by_design}
+\caption{Three-Paradigm Blind-Isolated Clinician Calibration across $n=191$ Round~1 Findings ($114$ True Objective Errors + $77$ False Positives across 19 Full-Text PMC Papers; Physically Blind to \texttt{variant}, \texttt{injections.json}, and \texttt{split}).}
+\label{tab:cross_judge}
 \vspace{2pt}
-\setlength{\tabcolsep}{5pt}
+\setlength{\tabcolsep}{4.5pt}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{@{}lcccccc@{}}
+\begin{tabular}{@{}llccccc@{}}
 \toprule
-\textbf{Study Design ($N$ Papers)} & \thead{\textbf{Injected}\\\textbf{Errors}} & \thead{\textbf{Clean-Room}\\\textbf{AST Recall}} & \thead{\textbf{Organic True}\\\textbf{(Clean)}} & \thead{\textbf{True FPs}\\\textbf{(Clean / Inj)}} & \thead{\textbf{Adversarial}\\\textbf{AST Recall}} & \thead{\textbf{False Ex.}\\\textbf{Rate}} \\
+\textbf{Blind Clinician Judge} & \textbf{Reasoning Paradigm} & \thead{\textbf{True-Error Accept}\\\textbf{($k/114$) [95\% CI]}} & \thead{\textbf{False Rebuttal}\\\textbf{Rate ($\downarrow$)}} & \thead{\textbf{FP Rebuttal Rate}\\\textbf{($k/77$) [95\% CI]}} & \thead{\textbf{Post-Guard}\\\textbf{Instance Leaks}} & \textbf{Inter-Judge Agreement ($\kappa$)} \\
 \midrule
-Randomized Controlled Trial ($N=6$: $3$ dev, $3$ test) & $18$ & $12/18$ ($66.7\%$) & $3$ & $5$ ($3 / 2$) & $\mathbf{12/18}$ & $\mathbf{0.0\%}$ \\
-Retrospective Cohort ($N=3$: $2$ dev, $1$ test) & $9$ & $7/9$ ($77.8\%$) & $0$ & $0$ ($0 / 0$) & $\mathbf{7/9}$ & $\mathbf{0.0\%}$ \\
-Case--Control Study ($N=2$: $1$ dev, $1$ test) & $6$ & $4/6$ ($66.7\%$) & $0$ & $2$ ($1 / 1$) & $\mathbf{4/6}$ & $\mathbf{0.0\%}$ \\
-Diagnostic Accuracy ($N=2$: $1$ dev, $1$ test) & $6$ & $5/6$ ($83.3\%$) & $4$ & $0$ ($0 / 0$) & $\mathbf{5/6}$ & $\mathbf{0.0\%}$ \\
-Cross-Sectional Survey ($N=2$: $1$ dev, $1$ test) & $6$ & $3/6$ ($50.0\%$) & $0$ & $0$ ($0 / 0$) & $\mathbf{3/6}$ & $\mathbf{0.0\%}$ \\
-PRISMA Meta-Analysis ($N=2$: $1$ dev, $1$ test) & $6$ & $4/6$ ($66.7\%$) & $0$ & $2$ ($1 / 1$) & $\mathbf{4/6}$ & $\mathbf{0.0\%}$ \\
-Preclinical / Translational ($N=2$: $2$ dev, $0$ test) & $6$ & $3/6$ ($50.0\%$) & $0$ & $0$ ($0 / 0$) & $\mathbf{3/6}$ & $\mathbf{0.0\%}$ \\
-\midrule
-\textbf{Total / Overall ($N=19$: $11$ dev, $8$ test)} & $\mathbf{57}$ & $\mathbf{38/57}$ ($\mathbf{66.7\%}$) & $\mathbf{7}$ & $\mathbf{9}$ ($5 / 4$) & $\mathbf{38/57}$ & $\mathbf{0.0\%}$ \\
+\texttt{deepseek-v4-flash} & Fast Hybrid Reference & $92.1\%$ ($105/114$) $[85.7, 95.8]$ & $7.9\%$ ($9/114$) & $36.4\%$ ($28/77$) $[26.5, 47.5]$ & $\mathbf{0}$ & $\kappa_{\text{flash, V3}} = \mathbf{0.932}$ $[0.865, 0.998]$ \\
+\texttt{deepseek-chat} (V3) & Cross-Model Non-CoT & $93.0\%$ ($106/114$) $[86.8, 96.4]$ & $7.0\%$ ($8/114$) & $35.1\%$ ($27/77$) $[25.3, 46.2]$ & $\mathbf{0}$ & Raw $= \mathbf{97.9\%}$, PABAK $= \mathbf{0.958}$ \\
+\texttt{deepseek-reasoner} (R1) & Explicit First-Principles CoT & $\mathbf{97.4\%}$ ($111/114$) $[92.5, 99.1]$ & $\mathbf{2.6\%}$ ($3/114$) & $35.1\%$ ($27/77$) $[25.3, 46.2]$ & $\mathbf{0}$ & 3-Way Fleiss' $\kappa = \mathbf{0.642}$ $[0.530, 0.754]$ \\
 \bottomrule
 \end{tabular}%
 }
 \end{table}
 
-\subsection{Adversarial Rebuttal Stress Test and Zero-Leakage Guard Verification}
-As shown in the rightmost columns of Table~\ref{tab:by_design}, even when an adversarial user submits explicit same-sentence rebuttals (\texttt{acceptedFix = false}) attempting to dismiss all $38$ detected objective errors across all 19 injected papers, \texttt{NON\_EXEMPTABLE\_SUBTYPES} blocks $\mathbf{100.0\%}$ ($38/38$) of objective errors from being exempted ($\mathbf{0.0\%}$ false-exemption rate). Furthermore, unit-test stress verification (\texttt{claims-pat.test.ts}) confirms that even when an LLM distiller intentionally emits raw sample sizes and percentages ($N=240$, $n=169$, $70.4\%$) in its first draft, \texttt{synthesizeSanitizedBoundaryRuleAsync} detects the leak (\texttt{firstDraftLeaked = true}), scrubs all numeric tokens, and passes \texttt{hasInstanceLeakage = false} ($\mathbf{0.0\%}$ post-guard leakage).
+Across all three paradigms, unanimous $3/3$ agreement reaches $\mathbf{84.3\%}$ ($161/191$, mean pairwise agreement $89.5\%$), yielding substantial 3-rater Fleiss' $\kappa = \mathbf{0.642}$ ($z=7.85, p < 10^{-14}$; $\kappa = 0.657$ on \texttt{dev}, $\kappa = 0.618$ on \texttt{test}, and $\kappa = 0.679$ on ground-truth FPs). Notably, \texttt{deepseek-chat} exhibits near-perfect concordance with \texttt{deepseek-v4-flash} ($\kappa = 0.932$), and under cross-model \texttt{deepseek-chat} replies, intra-manuscript Round~2 cuts FPs by $\mathbf{-35.1\%}$ ($77 \to 50$, exact $2^{19}$ $p=0.0073$, lifting $\text{Prec}_{\text{inj}}$ $+9.6\text{ pp}$, $p=0.0051$) with zero significant recall change ($p=1.00$). Meanwhile, explicit CoT verification in \texttt{deepseek-reasoner} achieves the highest true-error acceptance ($\mathbf{97.4\%}$, rescuing $6$ subtle arithmetic errors falsely rebutted by non-CoT judges, which accounts for moderate pairwise $\kappa = 0.500$ [$85.9\%$ raw agreement, $\text{PABAK}=0.717$] under $83\%$ positive prevalence), with \textbf{zero ($0/114$)} true errors unanimously falsely rebutted.
 
-\subsection{Live \texttt{deepseek-chat} Comparison Against Google PAT Baselines on 7 Oncology Vignettes}
-Table~\ref{tab:deep_review_7papers} presents the end-to-end live \texttt{deepseek-chat} comparison across the 7 clinical oncology manuscript vignettes containing $8$ verified organic publication errors.
+\subsection{Red-Team Adversarial Audit, Pass A \texorpdfstring{\texttt{<table-wrap>}}{<table-wrap>} Fidelity, and Track B Guards}
+\label{sec:safety_results}
+Table~\ref{tab:safety_passa_trackb} and Figure~\ref{fig:case_study} present our three dedicated safety and component sub-benchmarks.
 
 \begin{table}[!t]
 \centering
-\caption{End-to-End Live \texttt{deepseek-chat} Deep Review Comparison across $7$ Clinical Oncology Manuscript Vignettes ($8$ Verified Organic Publication Errors) against Google PAT Baselines \cite{googlepat2026}.}
-\label{tab:deep_review_7papers}
+\caption{Dedicated Red-Team \& Component Sub-Benchmarks: \textbf{(A)} Full Hybrid-LLM Adversarial Rebuttal Stress Test ($N=19$ Papers, $57$ Errors, $120$ Rebutted Injected-Paper Findings); \textbf{(B)} Pass~A External Literature \texttt{<table-wrap>} Citation Benchmark ($N=36$ Paired Claims across 12 PMC XMLs); and \textbf{(C)} Track~B Pre-Write Procedural Revision Guard ($N=24$ Unseen Tasks).}
+\label{tab:safety_passa_trackb}
 \vspace{2pt}
-\setlength{\tabcolsep}{5pt}
+\setlength{\tabcolsep}{3.8pt}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{@{}lccccc@{}}
+\begin{tabular}{@{}llccccc@{}}
 \toprule
-\textbf{Pipeline Mode} & \thead{\textbf{Organic Error}\\\textbf{Recall ($\uparrow$)}} & \thead{\textbf{False Positives}\\\textbf{Total ($\downarrow$)}} & \thead{\textbf{Precision}\\\textbf{($\uparrow$)}} & \thead{\textbf{F1 Score}\\\textbf{($\uparrow$)}} & \thead{\textbf{Active Boundary}\\\textbf{Rules (Leakage)}} \\
+\textbf{Sub-Benchmark \& Regime} & \textbf{Configuration / Guard} & \textbf{Primary Accuracy / Recall [95\% CI]} & \textbf{Key Safety / Error Metric} & \textbf{Secondary Precision / Subset} & \textbf{Exact Paired Test} \\
 \midrule
-\texttt{zero\_shot} (Single-Pass Full Text) & $37.5\%$ ($3/8$) & $15$ & $16.7\%$ & $23.1\%$ & $0$ ($0.0\%$) \\
-\texttt{pass\_at\_k} ($k=3$ Unfiltered Union) & $62.5\%$ ($5/8$) & $26$ & $16.1\%$ & $25.6\%$ & $0$ ($0.0\%$) \\
-\texttt{pat\_baseline} (4-Stage Text Only \cite{googlepat2026}) & $37.5\%$ ($3/8$) & $14$ & $17.6\%$ & $24.0\%$ & $0$ ($0.0\%$) \\
-\texttt{heurion\_deep} (Cold-Start AST + 4-Pass LLM) & $\mathbf{100.0\%}$ ($8/8$) & $16$ & $33.3\%$ & $50.0\%$ & $0$ ($0.0\%$) \\
-\textbf{\texttt{heurion\_evolved} (Dual-Track Evolved)} & $\mathbf{100.0\%}$ ($8/8$) & $\mathbf{0}$ ($\mathbf{-100.0\%}$) & $\mathbf{100.0\%}$ & $\mathbf{100.0\%}$ & $\mathbf{4}$ ($\mathbf{0.0\%}$) \\
+\multicolumn{6}{@{}l}{\textbf{Panel A: Full Hybrid-LLM Adversarial Rebuttal Stress Test ($N=19$ Papers, $57$ Injected Errors, \texttt{acceptedFix=false} on Every Finding)}} \\
+Round 1 Hybrid Cold-Start & \texttt{heurion\_deep} (\texttt{useLlm=true}) & Recall: $84.2\%$ ($48/57$) $[72.6, 91.5]$ & \texttt{test} Recall: $83.3\%$ ($20/24$) & Clean/Tot FP: $52 / 86$ ($\text{F1}_{\text{org}}=68.0\%$) & Reference R1 \\
+Pre-Hardening R2 Intra-Doc & Subtype-Only $\mathcal{F}_{\text{hard}}$ & Recall: $71.9\%$ ($41/57$) $[59.2, 81.9]$ & \textbf{$23$ False \texttt{rev\_exempt} ($10$ TPs Lost)} & \texttt{test} Collapse: $\mathbf{62.5\%}$ ($-20.8\text{ pp}$) & Exposed \texttt{subtype=null} gap \\
+\textbf{Post-Hardening R2 Intra-Doc} & \textbf{5-Invariant Hybrid $\mathcal{F}_{\text{hard}}$} & \textbf{Recall: $\mathbf{82.5\%}$ ($47/57$) $[70.6, 90.2]$} & \textbf{$\mathbf{0}$ False \texttt{rev\_exempt} ($\mathbf{64/64}$ Blocked)} & Clean FP $\mathbf{-61.5\%}$ ($\text{F1}_{\text{org}}=\mathbf{74.1\%}$) & \texttt{dev} $84.8\%$, \texttt{test} $79.2\%$ \\
+Post-Hardening R2 Cross-Paper & Frozen Adversarial Track A & Recall: $82.5\%$ ($47/57$) $[70.6, 90.2]$ & $\mathbf{0/20}$ Leaked Digits/Terms & \texttt{dev} Recall: $87.9\%$ ($29/33$) & $97.9\%$ R1 retention \\
+\midrule
+\multicolumn{6}{@{}l}{\textbf{Panel B: Pass A External Literature Citation Verification ($N=36$ Claims: $12$ Abstract, $12$ PMC \texttt{<table-wrap>}-Only, $12$ Distorted)}} \\
+\texttt{abstract\_only\_pass\_a} & PubMed Title + Abstract & Verdict Acc: $52.8\%$ ($19/36$) & Table-Only Support: $\mathbf{0.0\%}$ ($0/12$) & Distortion Recall: $66.7\%$ ($8/12$) & $100\%$ table false-unclear \\
+\textbf{\texttt{full\_pass\_a\_with\_pmc\_tables}} & \textbf{Abstract + JATS \texttt{<table-wrap>}} & \textbf{Verdict Acc: $\mathbf{94.4\%}$ ($34/36$)} & \textbf{Table-Only Support: $\mathbf{91.7\%}$ ($11/12$)} & \textbf{Distortion Recall: $\mathbf{100\%}$ ($12/12$)} & \textbf{McNemar $p = 2.75\!\times\!10^{-4}$} \\
+\midrule
+\multicolumn{6}{@{}l}{\textbf{Panel C: Track B Pre-Write / Revision Procedural Guard ($N=24$ Unseen Clinical Co-Authoring Tasks across 4 Families)}} \\
+Cold-Start Authoring & \texttt{procedural = off} & Clean-Pass (Hyb): $58.3\%$ ($14/24$) $[38.8, 75.5]$ & Total Hybrid Errors: $15$ ($0.63$/doc) & Clean-Pass (AST): $70.8\%$ ($17/24$) & Flow/Math Clean: $0/6$ ($0\%$) \\
+\textbf{Track B Guarded Authoring} & \textbf{\texttt{procedural = utility} ($3$ Rules)} & \textbf{Clean-Pass (Hyb): $\mathbf{87.5\%}$ ($21/24$) $[69.0, 95.7]$} & \textbf{Total Hybrid Errors: $\mathbf{4}$ ($\mathbf{-73.3\%}$)} & \textbf{Clean-Pass (AST): $\mathbf{91.7\%}$ ($22/24$)} & \textbf{McNemar $p = 0.0156$ ($0$ reg.)} \\
 \bottomrule
 \end{tabular}%
 }
 \end{table}
 
-Single-pass \texttt{zero\_shot} and text-only \texttt{pat\_baseline} \cite{googlepat2026} detect only $3/8$ ($37.5\%$) of organic errors because they fail to cross-check 2D table cells against prose or catch typographical merge artifacts. Running $k=3$ independent LLM passes (\texttt{pass\_at\_k}) raises recall to $62.5\%$ ($5/8$) but inflates false positives to $26$ (Precision $= 16.1\%$). By contrast, \texttt{heurion\_deep} detects $\mathbf{100.0\%}$ ($8/8$) of organic errors, and \texttt{heurion\_evolved} eliminates all $16$ recurring clinical boundary false positives (such as Target Trial Emulation clone-censor-weight pseudocohort denominators and preclinical mouse-vs.-TMA cohort transitions), achieving $\mathbf{100.0\%}$ precision and $\mathbf{100.0\%}$ F1 with $\mathbf{0.0\%}$ instance number leakage.
+\begin{figure}[!t]
+\centering
+\resizebox{0.99\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\sffamily\scriptsize,
+  codebox/.style={draw=gray!55, fill=white, rounded corners=2pt, inner sep=4.5pt, align=left, font=\ttfamily\tiny},
+  alertbox/.style={draw=red!65!black, fill=red!5, rounded corners=2pt, inner sep=4.5pt, align=left},
+  rulebox/.style={draw=teal!70!black, fill=teal!6, rounded corners=2pt, inner sep=4.5pt, align=left},
+  arr/.style={-{Stealth[length=2mm]}, thick, draw=black!70}
+]
+
+% Left Column: Real In-Print Organic Error + 5-Invariant Safety Floor
+\node[draw=red!60!black, fill=red!4, rounded corners=4pt, minimum width=7.5cm, minimum height=5.4cm] (leftbg) at (0, 0) {};
+\node[font=\sffamily\scriptsize\bfseries, text=red!70!black, anchor=north west] at (-3.6, 2.55) {(a) In-Print Error Discovery \& 5-Invariant Floor $\mathcal{F}_{\text{hard}}$};
+
+\node[codebox, text width=6.9cm] (l1) at (0, 1.42) {
+\textbf{Published Paper:} PMC12697981 (\emph{PLOS Medicine}, 2025, Table 4)\\
+\texttt{| Adverse Event | OCP (n=79) | Metformin (n=81) |}\\
+\texttt{| Dysmenorrhea  | 3 (3.8\%)   | }\textbf{\color{red!75!black}3 (4.7\%)}\texttt{         |}\\
+\texttt{| Headache      | 5 (6.3\%)   | 3 (3.7\%)         |}
+};
+
+\node[alertbox, text width=6.9cm] (l2) at (0, -0.22) {
+\textbf{Pass B Grid \texttt{[row=6, col=2]} + Untyped Stage 3 LLM:}\\
+Cell \texttt{3 (4.7\%)} disagrees with header \texttt{(n=81)}: $3/81 = \mathbf{3.70\%} \neq 4.7\%$; E6 spin ($p=0.54$) \& E4 Hodges--Lehmann CI excuses audited.
+};
+
+\node[draw=red!75!black, fill=white, rounded corners=2pt, inner sep=4pt, text width=6.9cm, align=left] (l3) at (0, -1.80) {
+\textbf{Hybrid Adversarial Rebuttal Stress ($\text{accept}=0$, 120 Findings):}\\
+Persuasive biostatistical excuses $\to$ \textbf{\color{red!75!black}$64/64$ ($100\%$) True-Error Exemptions Blocked} ($23 \to \mathbf{0}$ false \texttt{rev\_exempt} records).
+};
+
+\draw[arr] (l1.south) -- (l2.north);
+\draw[arr] (l2.south) -- (l3.north);
+
+% Right Column: Specialty-Sanitized Zero-Digit Distillation + Selective Routing
+\node[draw=teal!65!black, fill=teal!4, rounded corners=4pt, minimum width=7.9cm, minimum height=5.4cm] (rightbg) at (8.1, 0) {};
+\node[font=\sffamily\scriptsize\bfseries, text=teal!75!black, anchor=north west] at (4.3, 2.55) {(b) Specialty-Sanitized Distillation \& Selective Stage-4 Routing};
+
+\node[codebox, text width=7.3cm] (r1) at (8.1, 1.42) {
+\textbf{Clinician Rebuttal on \texttt{dev} Study-Design Boundary:}\\
+{\normalfont\sffamily\tiny ``Table 1 reports enrolled cohort (\textbf{\color{red!75!black}N=240} in \textbf{\color{red!75!black}gestational hypertension}), whereas subgroup columns analyze complete cases (\textbf{\color{red!75!black}n=169, 70.4\%}).''}
+};
+
+\node[draw=blue!65!black, fill=white, rounded corners=2pt, inner sep=4pt, text width=7.3cm, align=left] (r2) at (8.1, -0.20) {
+\textbf{Digit, Entity \& Specialty-Example Sanitizer:}\\
+Scrubs \texttt{\color{red!75!black}240}, \texttt{\color{red!75!black}169}, \texttt{\color{red!75!black}70.4\%} and parenthetical disease/surgical terms $\to$ \textbf{0 Leaks across $>90$ Distilled Rules}.
+};
+
+\node[rulebox, text width=7.3cm] (r3) at (8.1, -1.80) {
+\textbf{Per-Candidate Stage-4 Routing (\texttt{:cat=} + \texttt{:kw=}):}\\
+Attached \emph{only} in Stage~4 to matching non-hard candidates $\to$ \textbf{$89.5\%$ Evolved Recall}, eliminating $-12.3\text{ pp}$ global stuffing loss.
+};
+
+\draw[arr] (r1.south) -- (r2.north);
+\draw[arr] (r2.south) -- (r3.north);
+
+\end{tikzpicture}%
+}%
+\caption{Qualitative safety and governance mechanisms. \textbf{(a)} Pass~B catches a published Table~4 typo in \emph{PLOS Medicine} (\texttt{PMC12697981}), and the hardened 5-invariant hybrid safety floor $\mathcal{F}_{\text{hard}}$ blocks $100\%$ ($64/64$) of adversarial intra-document exemptions across both AST and untyped Stage~3 LLM findings. \textbf{(b)} Track~A strips both raw digits and parenthetical disease/surgical examples before routing rules selectively per Stage~4 candidate.}
+\label{fig:case_study}
+\end{figure}
+
+\paragraph{1. Closing the Untyped Hybrid-LLM Adversarial Loophole (Panel A).}
+When an adversarial author forcefully rebuts all $120$ hybrid findings with plausible biostatistical rationales (e.g., claiming Hodges--Lehmann non-parametric CIs need not contain the median difference or $p=0.54$ reflects exploratory trend framing), subtype-only gating protected $100\%$ of deterministic AST alerts but allowed $23$ untyped \texttt{llm\_stage3} true positives to write \texttt{rev\_exempt} records, dropping intra-document Round~2 recall from $84.2\%$ to $71.9\%$ ($83.3\% \to 62.5\%$ on \texttt{test}). Hardening $\mathcal{F}_{\text{hard}}$ with our five domain-general invariants eliminates \textbf{$100\%$ of false intra-document exemption records ($23 \to \mathbf{0}$; $64/64$ true-positive findings guarded)}, restoring Round~2 recall to $\mathbf{82.5\%}$ ($84.8\%$ on \texttt{dev}, $79.2\%$ on \texttt{test}; $\pm 1$ item from section-level LLM context variance) while still suppressing $\mathbf{61.5\%}$ of clean-paper false alarms ($52 \to 20$, $\text{F1}_{\text{org}} = 74.1\%$).
+
+\paragraph{2. Pass A PMC \texttt{<table-wrap>} Citation Fidelity ($N=36$, Panel B) \& Track B Pre-Write Guard ($N=24$, Panel C).}
+In external citation checking across 12 real 2025 PMC references ($N=36$), abstract-only verification resolves $\mathbf{0.0\%}$ ($0/12$) of faithful claims grounded in reference tables (flagging $12/12$ as \texttt{unclear}) and catches only $2/6$ ($33.3\%$) of table-locus distortions ($52.8\%$ overall verdict accuracy). Parsing JATS XML \texttt{<table-wrap>} grids lifts table-only faithful support to $\mathbf{91.7\%}$ ($11/12$, McNemar $p=9.77\times 10^{-4}$), distortion recall to $\mathbf{100.0\%}$ ($12/12$), and overall verdict accuracy to $\mathbf{94.4\%}$ ($34/36$, McNemar $p=2.75\times 10^{-4}$). Complementarily, in downstream clinical revision across $24$ unseen tasks ($0$ test signals used; $3$ zero-digit Track~B rules crystallized from $38$ \texttt{dev} fix signals), \texttt{ProceduralHarnessService} lifts the live hybrid zero-defect pass rate from $58.3\%$ ($14/24$) to $\mathbf{87.5\%}$ ($21/24$, $+29.2\text{ pp}$, exact McNemar $b=7, c=0, \mathbf{p=0.0156}$, zero regressions) and cuts total hybrid errors by $\mathbf{-73.3\%}$ ($15 \to 4$; sample-flow/arithmetic pass rate $0/6 \to 5/6$). Secondary cross-domain evaluation on the 7 clinical oncology vignettes (\texttt{deepseek-chat}, $8$ organic errors) further confirms these trends: \texttt{heurion\_deep} catches $100\%$ ($8/8$) vs.\ $37.5\%$ ($3/8$) for \texttt{zero\_shot} and \texttt{pat\_baseline}, and \texttt{heurion\_evolved} eliminates all $16$ recurring TTE clone-pseudocohort and translational boundary false alarms ($0.0\%$ leakage).
 
 % ============================================================================
-% 7. RELATED WORK
+% 7. DISCUSSION, LIMITATIONS, AND CONCLUSION
 % ============================================================================
-\section{Related Work}
-\label{sec:related}
+\section{Discussion, Limitations, and Conclusion}
+\label{sec:discussion}
 
-\paragraph{Automated Scientific Peer Review and Claim Verification.}
-Systems such as STORM \cite{shao2024storm} and PaperQA2 \cite{skarlinski2024paperqa2} automate literature synthesis, while FActScore \cite{min2023factscore} and ALCE \cite{gao2023alce} evaluate citation support in generated text. Recently, Jayaram et~al.\ introduced Google's Paper Assistant Tool (PAT) \cite{googlepat2026}, a multi-stage verification framework for scientific manuscripts. However, existing review pipelines operate over flat text and remain stateless across manuscripts. Our work complements multi-stage LLM review with a clean-room 2D ProseMirror table-grid scratchpad, precision-aware confidence interval verification, and a closed-loop CRDT comment self-evolution mechanism.
+Our experiments across $15{,}682$ live API calls establish three design principles for trustworthy scientific review agents: (i) \textbf{2D structural AST and quote-verified LLMs are strictly complementary}, achieving precision and token efficiency unobtainable by single-pass or $64\text{k}$-CoT brute force; (ii) \textbf{agentic memory must be routed selectively at verification time rather than globally stuffed into discovery prompts}, preventing conservative sensitivity shift while preserving order-invariant rule convergence; and (iii) \textbf{adversarial safety floors in hybrid systems must enforce mathematical, CI-geometric, and semantic-spin invariants over untyped LLM rationales}, not merely AST tags.
 
-\paragraph{Self-Evolving LLM Agents and Memory Governance.}
-Reflexion \cite{shinn2023reflexion}, MemGPT \cite{packer2023memgpt}, and Voyager \cite{wang2023voyager} pioneered verbal reinforcement and skill libraries for autonomous agents. Recent advances in self-supervised skill diffusion \cite{li2026skilltraining}, commit-on-evidence memory (CoEM) \cite{coem2026}, vantage-aware memory (SafeVantage) \cite{safevantage2026}, modular skill evolution (MemSkill) \cite{memskill2026}, verifiable skill libraries (Skill-V) \cite{skillv2026}, evidence-grounded memory-to-skill co-evolution governance \cite{msce2026}, and beyond-matched-experience transfer (MemTransfer) \cite{memtransfer2026} have established rigorous foundations for agent memory governance. We bring these principles to clinical peer review, pairing zero-template Track~A boundary distillation (\texttt{hasInstanceLeakage = false} and \texttt{NON\_EXEMPTABLE\_SUBTYPES}) with Track~B procedural rule and audit-checklist crystallization.
+\paragraph{Limitations and Future Work.}
+First, while our pipeline audits full-text prose, multi-column 2D tables, captions, and PMC \texttt{<table-wrap>} XMLs, it does not yet extract optical coordinates from rasterized Kaplan--Meier curves, forest plots, or Western blots. Second, Pass~A full-table verification requires open-access PMC XML or user-uploaded reference PDFs; closed-access citations without full text default to abstract-tier coverage warnings. Third, although 5-fold cross-validation ($57$ errors) and secondary vignettes confirm robust architectural gains, expanding the controlled full-text benchmark to multi-hundred-paper specialty registries and conducting prospective blinded randomized reader studies with practicing physician-investigators are essential next steps. Finally, cloud MoE inference exhibits minor ($\pm 1$--$2$ item) batching variance on borderline semantic findings even at \texttt{temperature = 0}, motivating deterministic ensemble voting in Stage~4 for high-stakes journal screening.
 
-% ============================================================================
-% 8. CONCLUSION
-% ============================================================================
-\section{Conclusion}
-\label{sec:conclusion}
+\paragraph{Conclusion.}
+\textbf{Heurion Deep Review} unifies clean-room 2D table-grid AST verification, quote-verified four-stage hybrid auditing, candidate-scoped dual-track self-evolution, and a five-invariant hybrid safety floor---eliminating recurring clinical study-design false alarms, catching published errors in $\sim 20\text{ s}$/manuscript, and preventing defects during clinical revision without compromising objective error recall.
 
-We have presented \textbf{Heurion Deep Review}, a clean-room four-stage clinical manuscript verification architecture coupled with a comment-driven dual-track self-evolution loop (\texttt{evolveFromReviewCommentAsync}). Without relying on study-specific lexical heuristics or a single LLM call, our 2D ProseMirror table-grid AST engine detects $66.7\%$ ($38/57$) of injected objective errors across 19 full-length PMC manuscripts ($80.0\%$--$87.5\%$ across sample-flow, arithmetic, and table-sum errors) at $85.5\%$ precision ($0.26$ clean false positives per paper), uncovers $7$ genuine in-print errors in published 2025 journals, and enforces a $0.0\%$ false-exemption floor under adversarial rebuttal. Paired with live \texttt{deepseek-v4-flash} quote-verified section passes, \texttt{heurion\_deep} lifts full-text recall to $84.2\%$ ($48/57$, including $77.8\%$ on semantic spin and $25$ organic in-print errors) while cutting false positives by $93.0\%$ relative to text-only \texttt{pat\_baseline}. Under physically blind-isolated clinician interaction ($95.2\%$ true-error acceptance, $38.8\%$ false-alarm rebuttal), \texttt{heurion\_evolved} cuts intra-manuscript Round~2 clean false positives by $34.0\%$ ($-36.8\%$ on \texttt{test}) and cross-manuscript false positives by $28.9\%$ ($76 \to 54$, F1 $70.2\% \to 74.0\%$) with zero overall recall loss ($48/57$), achieves simultaneous recall ($75.0\% \to 79.2\%$) and precision gains on frozen unseen \texttt{test} manuscripts with $0.0\%$ instance leakage, and reaches $100.0\%$ recall ($8/8$) and $100.0\%$ precision on clinical oncology vignettes. Future work will extend this closed-loop architecture to prospective author-in-the-loop clinical reader studies on physician-authored pre-submission cohorts.
+\subsection*{Ethics Statement}
+All Benchmark~1 and Pass~A manuscripts were retrieved from open-access PubMed Central (PMC) under Creative Commons licenses, and vignette excerpts were derived from published oncology literature. No private patient-identifiable health information or EHR data were accessed; IRB approval was not required.
+
+\subsection*{Data and Code Availability}
+The complete clean-room verification engine (\path{apps/platform/src/claims/}), 19-paper corpus and error injections (\path{apps/platform/eval/deep-review/}), and all four live benchmark suites and raw JSON telemetry (\path{paper-deep-review/benchmarks/} and \path{paper-deep-review/results/}) are publicly available at \url{https://github.com/0xSynapse/heurion}.
+
+\subsection*{Competing Interests}
+H.~Zhao and the Heurion Research Team develop the Heurion clinical research platform. D.~Qian declares no competing financial interests.
 
 % ============================================================================
 % REFERENCES (Verified Real Authors & Venues, Standalone arXiv Compatible)
 % ============================================================================
-\begin{thebibliography}{18}
-\setlength{\itemsep}{2pt}
+\begin{thebibliography}{99}
+\setlength{\itemsep}{1.8pt}
 
 \bibitem{schulz2010consort}
 Kenneth~F. Schulz, Douglas~G. Altman, and David Moher.
@@ -487,7 +759,7 @@ Isabelle Boutron, Susan Dutton, Philippe Ravaud, and Douglas~G. Altman.
 \newblock \emph{JAMA}, 303(20):2058--2064, 2010.
 
 \bibitem{page2021prisma}
-Matthew~J. Page, Joanne~E. McKenzie, Patrick~M. Bossuyt, Isabelle Boutron, Tammy~C. Hoffmann, Cynthia~D. Mulrow, Larissa Shamseer, Jennifer~M. Tetzlaff, Elie~A. Akl, Sue~E. Brennan, et~al.
+Matthew~J. Page, Joanne~E. McKenzie, Patrick~M. Bossuyt, Isabelle Boutron, Tammy~C. Hoffmann, Cynthia~C. Mulrow, Larissa Shamseer, Jennifer~M. Tetzlaff, Elie~A. Akl, Sue~E. Brennan, et~al.
 \newblock The PRISMA 2020 statement: an updated guideline for reporting systematic reviews.
 \newblock \emph{BMJ}, 372:n71, 2021.
 
@@ -495,6 +767,21 @@ Matthew~J. Page, Joanne~E. McKenzie, Patrick~M. Bossuyt, Isabelle Boutron, Tammy
 Patrick~M. Bossuyt, Johannes~B. Reitsma, David~E. Bruns, Constantine~A. Gatsonis, Paul~P. Glasziou, Les Irwig, Jeroen~G. Lijmer, David Moher, Drummond Rennie, Henrica C.~W. de~Vet, et~al.
 \newblock STARD 2015: an updated list of essential items for reporting diagnostic accuracy studies.
 \newblock \emph{BMJ}, 351:h5527, 2015.
+
+\bibitem{fleiss1971kappa}
+Joseph~L. Fleiss.
+\newblock Measuring nominal scale agreement among many raters.
+\newblock \emph{Psychological Bulletin}, 76(5):378--382, 1971.
+
+\bibitem{deepseekv3_2024}
+DeepSeek-AI, Aixin Liu, Bei Feng, Bing Xue, Bingxuan Wang, Bochao Wu, Chengda Lu, Chenggang Zhao, Chengqi Deng, Chenyu Zhang, et~al.
+\newblock DeepSeek-V3 technical report.
+\newblock \emph{arXiv preprint arXiv:2412.19437}, 2024.
+
+\bibitem{deepseekr1_2025}
+DeepSeek-AI, Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, et~al.
+\newblock DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforcement learning.
+\newblock \emph{arXiv preprint arXiv:2501.12948}, 2025.
 
 \bibitem{googlepat2026}
 Rajesh Jayaram, Drew Tyler, David Woodruff, Corinna Cortes, Yossi Matias, Vahab Mirrokni, and Vincent Cohen-Addad.

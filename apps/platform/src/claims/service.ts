@@ -291,8 +291,29 @@ function extractTopicTokensForDedup(texts: string[]): Set<string> {
   return tokens
 }
 
+const CLINICAL_SPECIALTY_EXAMPLE_LEAK_RE =
+  /(?:妊娠期高血压|先兆子痫|子痫|糖尿病|冠心病|心肌梗死|高血压病|乳腺癌|肺癌|胃癌|肝癌|结直肠癌|前列腺癌|白血病|淋巴瘤|黑色素瘤|皮瓣|植皮|皮肤移植|骨折|关节炎|肺炎|结核|哮喘|阿尔茨海默|帕金森|抑郁症|精神分裂|脑卒中|preeclampsia|gestational\s+hypertension|diabetes\s+mellitus|carcinoma|melanoma|leukemia|lymphoma|skin\s+graft|flap\s+reconstruction)/i
+
+export function scrubSpecialtyExampleLeakage(body: string): string {
+  if (!body) return body
+  let out = body
+  if (CLINICAL_SPECIALTY_EXAMPLE_LEAK_RE.test(out)) {
+    out = out
+      .replace(/（[^）]*(?:如|例如|比如)[^）]*）/g, '')
+      .replace(/\([^)]*(?:e\.g\.|such\s+as|for\s+example|如|例如)[^)]*\)/gi, '')
+      .replace(CLINICAL_SPECIALTY_EXAMPLE_LEAK_RE, '特定临床专科指标')
+  }
+  return out.replace(/\s+/g, ' ').trim()
+}
+
 export function hasInstanceLeakage(text: string): boolean {
-  return Boolean(getDomainSkillAdapter('manuscript').hasInstanceLeakage(text))
+  if (getDomainSkillAdapter('manuscript').hasInstanceLeakage(text)) return true
+  if (text.includes('[narrow:review_boundary') || text.includes('[skill:review_audit:')) {
+    const bodyWithoutTags = text.replace(/\[[^\]]+\]/g, '')
+    if (/\d/.test(bodyWithoutTags)) return true
+    if (CLINICAL_SPECIALTY_EXAMPLE_LEAK_RE.test(bodyWithoutTags)) return true
+  }
+  return false
 }
 
 /**
@@ -493,10 +514,10 @@ export async function synthesizeSanitizedBoundaryRuleAsync(
   const sys =
     '你是临床研究方法学与审稿记忆治理专家。作者对一条 AI 审稿意见提出了合理的方法学反驳（说明该现象属于合法的研究设计或统计报告边界，而非客观错误）。\n' +
     '请将该反驳提炼为一条可跨论文复用的通用审稿边界豁免规则，严格遵守以下铁律：\n' +
-    '1. 绝对禁止出现任何阿拉伯数字、样本量、百分比、P值、置信区间、具体药物名、具体疾病名或机构名（零实例泄漏）；\n' +
-    '2. 绝不允许豁免客观算术错误、置信区间越界、表格加总错误或未声明的统计检验混用；规则正文必须包含显式触发前提（仅当原文或表头/表注存在对应分析集分层、模型调整层级、双分布声明或四舍五入/行列百分比惯例证据时豁免；同一分析集与同一指标的前后矛盾仍须报错）；\n' +
-    '3. pattern_key 优先归并到规范方法学家族（如 rct_itt_completer_boundary / subcohort_denominator_stratification_boundary / crude_vs_adjusted_model_boundary / dual_distribution_summary_boundary / rounding_and_percentage_convention_boundary / non_additive_multichoice_category_boundary / domain_abbreviation_homonym_boundary / meta_analysis_subset_citation_boundary，若均不匹配再自定义简洁 snake_case）；keywords 仅输出具体方法学英文单词（勿用下划线长词或 cohort/trial/study 等泛词）；\n' +
-    '4. 输出 JSON：{"pattern_key":"英文snake_case设计标签","keywords":["具体方法学英文词1","词2","词3"],"rule_body":"一句带显式原文证据触发前提的中文通用边界规则说明（不含任何数字）"}。'
+    '1. 绝对禁止出现任何阿拉伯数字、样本量、百分比、P值、置信区间、具体药物名、具体疾病名、具体手术术式名或机构名（严禁在括号举例中写出具体病种或术式，必须 100% 零实例泄漏）；\n' +
+    '2. 绝不允许豁免客观算术错误、置信区间越界、表格加总错误、末位小数/四舍五入借口或未声明的统计检验混用；规则正文必须包含显式触发前提（仅当原文或表头/表注存在对应分析集分层、模型调整层级或双分布声明证据时豁免；同一分析集与同一指标的前后矛盾仍须报错）；\n' +
+    '3. pattern_key 优先归并到规范方法学家族（如 rct_itt_completer_boundary / subcohort_denominator_stratification_boundary / crude_vs_adjusted_model_boundary / dual_distribution_summary_boundary / non_additive_multichoice_category_boundary / domain_abbreviation_homonym_boundary / meta_analysis_subset_citation_boundary，严禁使用 rounding_and_percentage 类四舍五入规则，若均不匹配再自定义简洁 snake_case）；keywords 仅输出具体方法学英文单词（勿用下划线长词或 cohort/trial/study 等泛词）；\n' +
+    '4. 输出 JSON：{"pattern_key":"英文snake_case设计标签","keywords":["具体方法学英文词1","词2","词3"],"rule_body":"一句带显式原文证据触发前提的中文通用边界规则说明（不含任何数字与具体病种术式）"}。'
   const usr =
     `【原审稿意见类别】：${resolvedCat}\n` +
     `【原审稿意见理由】：${(context.reason ?? '').slice(0, 300)}\n` +
@@ -541,13 +562,15 @@ export async function synthesizeSanitizedBoundaryRuleAsync(
           firstDraftLeaked: false,
         }
       }
-      // 二次强脱敏剥离所有数字与敏感词元后再校验
+      // 二次强脱敏剥离所有数字、具体病种/术式括号举例与敏感词元后再校验
       const scrubbedBody = ensureExplicitConditionGuard(
-        String(parsed.rule_body ?? '')
-          .replace(/\b(?:n|N|HR|OR|RR|P|p)\s*[=<>≤≥:：]?\s*\d+(?:\.\d+)?%?/g, '')
-          .replace(/\d+(?:\.\d+)?%?/g, '')
-          .replace(/\s+/g, ' ')
-          .trim(),
+        scrubSpecialtyExampleLeakage(
+          String(parsed.rule_body ?? '')
+            .replace(/\b(?:n|N|HR|OR|RR|P|p)\s*[=<>≤≥:：]?\s*\d+(?:\.\d+)?%?/g, '')
+            .replace(/\d+(?:\.\d+)?%?/g, '')
+            .replace(/\s+/g, ' ')
+            .trim(),
+        ),
       )
       const secondCandidate = `[domain:manuscript] [narrow:review_boundary:${rawKey}:cat=${resolvedCat}${kwSuffix}] 审稿核查边界收窄：${scrubbedBody}`
       if (scrubbedBody.length >= 12 && !hasInstanceLeakage(secondCandidate) && !sensitiveReason(secondCandidate)) {
@@ -600,10 +623,12 @@ export async function distillReviewAuditChecklistAsync(
       .replace(/[^a-z0-9_]/g, '_')
       .replace(/_+/g, '_')
       .slice(0, 40) || 'cross_section_audit'
-    const actionBody = String(parsed.checklist_action ?? '')
-      .replace(/\d+(?:\.\d+)?%?/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
+    const actionBody = scrubSpecialtyExampleLeakage(
+      String(parsed.checklist_action ?? '')
+        .replace(/\d+(?:\.\d+)?%?/g, '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
     if (actionBody.length < 10) return null
     const checklistRule = `[domain:manuscript] [skill:review_audit:${skillKey}] 审稿重点核查清单：${actionBody}`
     if (hasInstanceLeakage(checklistRule) || sensitiveReason(checklistRule)) return null
@@ -611,6 +636,154 @@ export async function distillReviewAuditChecklistAsync(
   } catch {
     return null
   }
+}
+
+const SELECTIVE_ROUTING_STOPWORDS = new Set([
+  'cohort', 'cohorts', 'trial', 'trials', 'study', 'studies', 'population', 'populations',
+  'group', 'groups', 'table', 'tables', 'analysis', 'analyses', 'method', 'methods',
+  'result', 'results', 'patient', 'patients', 'participant', 'participants', 'subject', 'subjects',
+  'data', 'value', 'values', 'number', 'numbers', 'rate', 'rates', 'level', 'levels',
+  'reported', 'included', 'clinical', 'statistical', 'consistency', 'internal', 'boundary',
+  'difference', 'summary', 'variable', 'variables', 'characteristic', 'characteristics',
+  'section', 'sections', 'outcome', 'outcomes', 'set', 'sets', 'narrative', 'reading',
+  'convention', 'reporting', 'reproducibility', 'framework', 'presentation', 'description',
+])
+
+export function isArithmeticRoundingBoundaryRule(ruleText: string): boolean {
+  const lower = ruleText.toLowerCase()
+  if (lower.includes('rounding_and_percentage')) return true
+  if (/(?:rounding|decimal|四舍五入|末位舍入|末位小数)/i.test(lower) && !/(?:互补|complement)/i.test(lower)) {
+    return true
+  }
+  return false
+}
+
+function isProtectedHardStage3Candidate(c: {
+  category: string
+  subtype?: string
+  sentence: string
+  reason: string
+  evidence?: string[]
+}): boolean {
+  if (isHardObjectiveReviewFinding(c)) return true
+  const blob = `${c.sentence} ${(c.evidence ?? []).join(' ')} ${c.reason}`.toLowerCase()
+  if (
+    /(?:点估计.*(?:落在|超出|不在|位于).*(?:区间|ci|iqr)|置信区间.*(?:越界|不包含|下界.*大于.*上界)|outside\s+(?:its|the)\s+95%\s*ci|lower\s+bound\s*>\s*upper)/i.test(
+      blob,
+    )
+  ) {
+    return true
+  }
+  if (/(?:百分比计算错误|算术计算错误|算术不符|除以.*应为)/i.test(blob)) {
+    return true
+  }
+  return false
+}
+
+function matchesCanonicalMethodologicalCue(ruleLower: string, candBlob: string): boolean {
+  if (ruleLower.includes('crude_vs_adjusted')) {
+    return /(?:adjusted|unadjusted|crude|multivariable|univariable|ancova|weighted|age-standardized|omnibus|bonferroni|pairwise|校正|未校正|粗模型|粗比值比|多因素|标化|加权|两两比较)/i.test(
+      candBlob,
+    )
+  }
+  if (ruleLower.includes('dual_distribution')) {
+    return /(?:median|iqr|interquartile|nonparametric|non-parametric|normality|shapiro|mann-whitney|wilcoxon|kruskal|中位数|四分位|非参数|正态)/i.test(
+      candBlob,
+    )
+  }
+  if (ruleLower.includes('subcohort_denominator') || ruleLower.includes('retrospective_cohort') || ruleLower.includes('cross_sectional') || ruleLower.includes('diagnostic_specimen') || ruleLower.includes('meta_analysis')) {
+    return /(?:subcohort|subgroup|missing|attrition|completers?|per-protocol|\bitt\b|propensity|matched|subset|evaluable|reference\s+standard|亚组|子队列|子集|缺失|脱落|不同分母|分层分母|可评估)/i.test(
+      candBlob,
+    )
+  }
+  if (ruleLower.includes('rct_itt') || ruleLower.includes('multi_cohort')) {
+    return /(?:intention-to-treat|\bitt\b|per-protocol|completers?|lost\s+to\s+follow-up|consort|randomiz|意向性|符合方案|完成随访|脱落)/i.test(
+      candBlob,
+    )
+  }
+  if (ruleLower.includes('target_trial_emulation')) {
+    return /(?:target\s+trial|\btte\b|clone|ccw|immortal\s+time|克隆|不死时间|伪队列)/i.test(candBlob)
+  }
+  if (ruleLower.includes('single_arm')) {
+    return /(?:single[\s-]arm|historical\s+control|单臂|历史对照)/i.test(candBlob)
+  }
+  if (ruleLower.includes('domain_abbreviation')) {
+    return /(?:abbreviation|synonym|homonym|terminology|缩写|简称|同义|异名|标签)/i.test(candBlob)
+  }
+  if (ruleLower.includes('translational_animal')) {
+    return /(?:xenograft|\bmice\b|\btma\b|in\s+vitro|动物|小鼠|体外|组织芯片)/i.test(candBlob)
+  }
+  return false
+}
+
+/**
+ * Stage 4 候选级选择性记忆路由（Candidate-Scoped Selective Memory Routing）：
+ * 仅对非客观算术/区间硬伤（通过 F_hard 防火墙）且类别与方法学关键词匹配的特定候选审稿意见挂载适用边界规则，
+ * 消除全局 System Prompt 无差别注入导致的跨论文过度保守与召回率坍塌。
+ */
+export function selectCandidateScopedBoundaryRules(
+  candidate: {
+    category: string
+    subtype?: string
+    sentence: string
+    reason: string
+    evidence?: string[]
+  },
+  activeRules: string[],
+): string[] {
+  if (!activeRules.length || isProtectedHardStage3Candidate(candidate)) return []
+  const candBlob = `${candidate.sentence} ${(candidate.evidence ?? []).join(' ')} ${candidate.reason}`.toLowerCase()
+  const scored: Array<{ score: number; cleanText: string }> = []
+
+  for (const rawRule of activeRules) {
+    if (isArithmeticRoundingBoundaryRule(rawRule)) continue
+    const sanitizedRule = scrubSpecialtyExampleLeakage(rawRule)
+    const rLower = sanitizedRule.toLowerCase()
+    if (!rLower.includes('[narrow:review_boundary')) continue
+
+    const catMatch = /:cat=([a-z0-9_]+)/i.exec(rLower)
+    if (catMatch?.[1] && catMatch[1].toLowerCase() !== candidate.category.toLowerCase()) {
+      continue
+    }
+
+    const kwMatch = /:kw=([^\]\s]+)/i.exec(rLower)
+    const familyCue = matchesCanonicalMethodologicalCue(rLower, candBlob)
+    let matchedScore = 0
+
+    if (kwMatch?.[1]) {
+      const specificTokens = new Set<string>()
+      for (const rk of kwMatch[1].split(',')) {
+        const cleanKw = rk.trim().toLowerCase()
+        if (cleanKw.length >= 3 && !cleanKw.includes('_') && !SELECTIVE_ROUTING_STOPWORDS.has(cleanKw)) {
+          specificTokens.add(cleanKw)
+        }
+        for (const sub of cleanKw.split('_')) {
+          if (sub.length >= 3 && !SELECTIVE_ROUTING_STOPWORDS.has(sub)) {
+            specificTokens.add(sub)
+          }
+        }
+      }
+      const hits = [...specificTokens].filter(k => candBlob.includes(k)).length
+      if (hits >= 2 || (hits >= 1 && familyCue)) {
+        matchedScore = hits * 2 + (familyCue ? 1 : 0)
+      }
+    } else if (familyCue) {
+      matchedScore = 2
+    }
+
+    if (matchedScore > 0) {
+      const cleanText = sanitizedRule
+        .replace(/\[[^\]]+\]\s*/g, '')
+        .replace(/^审稿核查边界收窄[：:]\s*/, '')
+        .trim()
+      if (cleanText) scored.push({ score: matchedScore, cleanText })
+    }
+  }
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2)
+    .map(s => s.cleanText)
 }
 
 export class ClaimService {
@@ -1487,9 +1660,21 @@ export class ClaimService {
       assessTables?: boolean
       /** 与 assessTables 一起用：先按页面图像核对表格（PDF_ORIGINAL_VIEW.md §12.3），核对不了的再按文字规则判断 */
       tableVision?: TableVision | null
+      /** 正交消融实验开关（默认全关，生产行为完全不变） */
+      ablation?: {
+        disableStructAst?: boolean
+        disable2dTableGrid?: boolean
+        disableDualQuoteGate?: boolean
+        disableStage4Verifier?: boolean
+        disableTrackARules?: boolean
+        disableAuditChecklists?: boolean
+        /** 消融对照：退回旧版全局无差别将全部 Track A 规则塞入 Stage 3 与 Stage 4 System Prompt */
+        unfilteredGlobalRulePrompt?: boolean
+      }
     },
   ): Promise<FourStageReviewResult> {
     const doc = this.docs.get(docId)
+    const abl = opts.ablation ?? {}
     let tables = opts.tablesUnreliable ? [] : extractTableSummaries(doc)
     const warnings = opts.tablesUnreliable ? [TABLES_UNRELIABLE_WARNING] : []
     if (opts.assessTables && tables.length) {
@@ -1498,11 +1683,11 @@ export class ClaimService {
       if (checked.skipped.length) warnings.push(untrustedTablesWarning(checked.skipped))
     }
     // 全部表格都不可用时显式跳过，避免规则核查把空列表当成「未提供」而重新从文档提取表格
-    const skipTables = opts.tablesUnreliable || (opts.assessTables === true && tables.length === 0)
-    const scratchpad = buildManuscriptScratchpad(doc, tables)
+    const skipTables = opts.tablesUnreliable || abl.disable2dTableGrid === true || (opts.assessTables === true && tables.length === 0)
+    const scratchpad = buildManuscriptScratchpad(doc, abl.disable2dTableGrid ? [] : tables)
     const useMemory = opts.mode === 'heurion_evolved'
-    const activeRules = useMemory ? this.getActiveBoundaryRules(opts.owner) : []
-    const activeChecklists = useMemory ? this.getActiveReviewAuditChecklists(opts.owner) : []
+    const activeRules = useMemory && !abl.disableTrackARules ? this.getActiveBoundaryRules(opts.owner) : []
+    const activeChecklists = useMemory && !abl.disableAuditChecklists ? this.getActiveReviewAuditChecklists(opts.owner) : []
 
     // Stage 1 & Stage 2：按章节切分文档并统计 Light / Medium / High 预算分布
     const sections: Array<{
@@ -1555,10 +1740,11 @@ export class ClaimService {
     let seq = 1
 
     // 1. 若在 heurion_deep 或 heurion_evolved 模式下，执行 Stage 3 结构化临床四维核查（Pass B + Pass C + Pass D）
-    if (opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved') {
+    if ((opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved') && !abl.disableStructAst) {
+      const tablesForAst = abl.disable2dTableGrid ? [] : tables
       const structIssues = [
-        ...auditInternalConsistency(doc, tables, activeRules, { skipTables }),
-        ...auditMethodResultConsistency(doc, tables, activeRules),
+        ...auditInternalConsistency(doc, tablesForAst, activeRules, { skipTables }),
+        ...auditMethodResultConsistency(doc, tablesForAst, activeRules),
         ...auditSpinAndGuidelines(doc, activeRules),
       ]
       for (const iss of structIssues) {
@@ -1587,11 +1773,14 @@ export class ClaimService {
     }
 
     // 2. 若提供了在线大模型（complete），按对应模式执行 LLM 审稿推理
-    const docExemptedReviews = useMemory ? this.getDocExemptedReviewChecks(docId) : []
+    const docExemptedReviews = useMemory && !abl.disableTrackARules ? this.getDocExemptedReviewChecks(docId) : []
     const verifyEvidence = opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
+    const enforceDualQuoteGate = verifyEvidence && !abl.disableDualQuoteGate
+    const runStage4Verifier = verifyEvidence && !abl.disableStage4Verifier
     if (opts.complete) {
-      const boundaryBlock =
-        useMemory && activeRules.length > 0
+      const useLegacyUnfilteredGlobalRules = abl.unfilteredGlobalRulePrompt === true
+      const globalBoundaryBlock =
+        useMemory && useLegacyUnfilteredGlobalRules && activeRules.length > 0
           ? `\n【本课题组已确认的专科审稿边界豁免规则（请严格遵守：仅在原文或表注存在对应分层/调整模型/报告口径依据时免报；同一人群与同一指标的前后硬矛盾仍须报错）】：\n${activeRules.map(r => `- ${r}`).join('\n')}\n`
           : ''
       const docRebuttalBlock =
@@ -1603,9 +1792,9 @@ export class ClaimService {
           : ''
       const checklistBlock =
         useMemory && activeChecklists.length > 0
-          ? `\n【从既往审稿复盘习得的跨章节高危漏检核查提醒（仅当本章节与摘要/方法/表格在同一分析集与同一模型下存在确凿逐字硬矛盾时才附 evidence 报出；切勿因核查清单强行凑数或误报不同分层）】：\n${activeChecklists.map(c => `- ${c}`).join('\n')}\n`
+          ? `\n【补充跨章节核查关注点（在不影响本章节内部算术、置信区间与结论客观核查的前提下，若本章节与所附摘要/统计方法/表格在同一分析集下存在确凿矛盾，亦请附逐字原文 evidence 报出；不同分析集分层请勿误报）】：\n${activeChecklists.map(c => `- ${c}`).join('\n')}\n`
           : ''
-      const rulesContext = `${boundaryBlock}${docRebuttalBlock}${checklistBlock}`
+      const rulesContext = `${globalBoundaryBlock}${docRebuttalBlock}${checklistBlock}`
 
       // 产品模式（heurion_deep / heurion_evolved）：意见要带原文证据并逐条核实、每章节最多 3 条；PAT 基线模式保持原样以便对照
       let corpus: string | null = null
@@ -1619,7 +1808,7 @@ export class ClaimService {
         try {
           const parsed = JSON.parse(match[0])
           let list: any[] = Array.isArray(parsed) ? parsed : Array.isArray(parsed.issues) ? parsed.issues : []
-          if (verifyEvidence) {
+          if (enforceDualQuoteGate) {
             // 原句与证据都要真在稿件里（模型编造或复述走样的引文对不上就不报），再按严重度每章节最多留 3 条
             list = list
               .filter(item => {
@@ -1674,7 +1863,7 @@ export class ClaimService {
 
       const tableMarkdown = opts.tablesUnreliable
         ? '（本稿表格由 PDF 版面推断，行列结构不可靠，已略去；请不要依据表格做数值核对。）'
-        : opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
+        : (opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved') && !abl.disable2dTableGrid
           ? tables
               .map(
                 t =>
@@ -1766,20 +1955,35 @@ export class ClaimService {
         }
 
         // 全文复核：章节审稿只看到本章节与摘要，把全部模型意见连同全文交给模型逐条复核，判为不成立的不报（每 20 条一次调用）
-        if (verifyEvidence) {
+        if (runStage4Verifier) {
           const llm = candidates.filter(c => c.source_pass === 'llm_stage3')
           const rejected = new Set<SynthesizedReviewComment>()
           const fullText = `${fullProse}\n\n${tableMarkdown}`
-          const verifySysWithRules =
-            boundaryBlock || docRebuttalBlock
-              ? `${VERIFY_SYSTEM}\n${boundaryBlock}${docRebuttalBlock}复核准则补充：\n1) 若待复核意见确实属于上述合法研究设计/统计分层/模型调整/四舍五入边界（原文或表头/表注有明确依据），或属于本稿件作者上一轮已核实澄清的同一非算术误报点，请将其 verdict 判为 rejected；\n2) 若待复核意见指出了同一分析集、同一模型、同一指标的前后数值硬矛盾、百分比或分项加总算术不符、点估计落在置信区间外、或 P>=0.05 阳性夸大，必须判为 holds，严禁借边界规则误放过真实客观错误。`
-              : VERIFY_SYSTEM
           for (let i = 0; i < llm.length; i += 20) {
             const batch = llm.slice(i, i + 20)
-            const list = batch.map((c, k) =>
-              `${k + 1}. [${c.severity}] 原句：${c.sentence}\n   证据：${(c.evidence ?? []).join(' / ') || '（无）'}\n   理由：${c.reason}`).join('\n')
+            let anyCandidateScopedRule = false
+            const list = batch
+              .map((c, k) => {
+                const scopedRules =
+                  useMemory && !useLegacyUnfilteredGlobalRules && activeRules.length > 0
+                    ? selectCandidateScopedBoundaryRules(c, activeRules)
+                    : []
+                if (scopedRules.length > 0) anyCandidateScopedRule = true
+                const ruleSuffix =
+                  scopedRules.length > 0
+                    ? `\n   候选适用专科边界规则（仅当原文或表头/表注确有该分层/模型/分布声明依据，且非同一分析集与同一指标的前后硬矛盾时方可判 rejected；否则必须判 holds）：${scopedRules.join(' ｜ ')}`
+                    : ''
+                return `${k + 1}. [${c.severity}] 原句：${c.sentence}\n   证据：${(c.evidence ?? []).join(' / ') || '（无）'}\n   理由：${c.reason}${ruleSuffix}`
+              })
+              .join('\n')
+            const verifySysForBatch =
+              globalBoundaryBlock || docRebuttalBlock
+                ? `${VERIFY_SYSTEM}\n${globalBoundaryBlock}${docRebuttalBlock}复核准则补充：\n1) 若待复核意见确实属于上述合法研究设计/统计分层/模型调整边界（原文或表头/表注有明确依据），或属于本稿件作者上一轮已核实澄清的同一非算术误报点，请将其 verdict 判为 rejected；\n2) 若待复核意见指出了同一分析集、同一模型、同一指标的前后数值硬矛盾、百分比或分项加总算术不符、点估计落在置信区间外、或 P>=0.05 阳性夸大，必须判为 holds，严禁借边界规则误放过真实客观错误。`
+                : anyCandidateScopedRule
+                  ? `${VERIFY_SYSTEM}\n复核准则补充：部分条目下方附有“候选适用专科边界规则”；仅当论文原文或表头/表注确实存在该规则要求的分层/模型/双分布声明依据且并非同一分析集与同一指标的前后硬矛盾时判为 rejected，一切真实客观矛盾与计算/区间/夸大错误必须判为 holds。`
+                  : VERIFY_SYSTEM
             try {
-              const verdicts = parseVerdicts(await opts.complete!(verifySysWithRules, `【论文全文】\n${fullText}\n\n【待复核的意见】\n${list}`))
+              const verdicts = parseVerdicts(await opts.complete!(verifySysForBatch, `【论文全文】\n${fullText}\n\n【待复核的意见】\n${list}`))
               batch.forEach((c, k) => { if (verdicts.get(k + 1) === 'rejected') rejected.add(c) })
             } catch {
               /* 复核调用失败：这一批照常报出 */
@@ -1797,10 +2001,10 @@ export class ClaimService {
     // Stage 4：全局合成（pass_at_k 模式下不去重以展示 Google Section 2 的假阳性堆积效应；其余模式执行 Stage 4 去重与过滤）
     const synthesized = this.synthesizeStage4Review(docId, candidates, {
       deduplicate: opts.mode !== 'pass_at_k',
-      useMemory,
+      useMemory: useMemory && !abl.disableTrackARules,
       owner: opts.owner,
       anchorComments: opts.anchorComments,
-      verifiedByLlm: Boolean(opts.complete && verifyEvidence),
+      verifiedByLlm: Boolean(opts.complete && runStage4Verifier),
     })
 
     return {

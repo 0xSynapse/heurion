@@ -20,6 +20,8 @@ import {
   ClaimService,
   distillReviewAuditChecklistAsync,
   hasInstanceLeakage,
+  scrubSpecialtyExampleLeakage,
+  selectCandidateScopedBoundaryRules,
   synthesizeSanitizedBoundaryRule,
   synthesizeSanitizedBoundaryRuleAsync,
 } from './service.ts'
@@ -1147,5 +1149,80 @@ describe('4-Stage Citation & Claim Verification Pipeline', () => {
     expect(ctx).toContain('Table 6. Multivariable sensitivity subgroup outcomes')
     expect(ctx).toContain('3.42 (1.81-6.45)')
     expect(ctx).toContain('Footnote: Model adjusted for renal function.')
+  })
+
+  it('Selective Stage-4 Candidate-Scoped Memory Routing & Specialty-Example Sanitizer block disease/procedure leaks and arithmetic rounding excuses while preserving matching methodological rules', () => {
+    const obstetricsLeakRule =
+      '[domain:manuscript] [narrow:review_boundary:dual_outcome_definition_boundary:cat=internal_inconsistency:kw=outcome,definition,endpoint] 审稿核查边界收窄：仅当原文明确区分不同结局定义（如临床诊断与妊娠期高血压等不同终点）并分别报告效应量时方可豁免。'
+    const flapLeakRule =
+      '[domain:manuscript] [narrow:review_boundary:domain_abbreviation_homonym_boundary:cat=internal_inconsistency:kw=terminology,labeling,synonymy] 审稿核查边界收窄：仅当表注已声明同义术语（如局部皮瓣修复与皮瓣移植、皮肤移植等异名同指）时方可豁免。'
+    const exampleDigitLeakRule =
+      '[domain:manuscript] [narrow:review_boundary:rct_itt_completer_boundary:cat=internal_inconsistency:kw=randomization,per-protocol] 审稿核查边界收窄：例如 N=240 入组时允许分层报告。'
+
+    expect(hasInstanceLeakage(obstetricsLeakRule)).toBe(true)
+    expect(hasInstanceLeakage(flapLeakRule)).toBe(true)
+    expect(hasInstanceLeakage(exampleDigitLeakRule)).toBe(true)
+
+    const scrubbedObs = scrubSpecialtyExampleLeakage(obstetricsLeakRule)
+    const scrubbedFlap = scrubSpecialtyExampleLeakage(flapLeakRule)
+    expect(scrubbedObs).not.toContain('妊娠期高血压')
+    expect(scrubbedFlap).not.toContain('皮瓣')
+    expect(hasInstanceLeakage(scrubbedObs)).toBe(false)
+    expect(hasInstanceLeakage(scrubbedFlap)).toBe(false)
+
+    const activeRules = [
+      '[domain:manuscript] [narrow:review_boundary:rounding_and_percentage_convention_boundary:cat=internal_inconsistency:kw=rounding,percentage,decimal] 审稿核查边界收窄：末位四舍五入差异可豁免。',
+      '[domain:manuscript] [narrow:review_boundary:dual_distribution_summary_boundary:cat=method_result_mismatch:kw=normality,median,interquartile,parametric] 审稿核查边界收窄：仅当方法章节明确声明连续变量按正态性检验分别采用参数或非参数摘要时方可豁免。',
+      '[domain:manuscript] [narrow:review_boundary:crude_vs_adjusted_model_boundary:cat=internal_inconsistency:kw=crude,adjusted,multivariable,covariate] 审稿核查边界收窄：仅当原文明确区分未校正粗模型与多因素校正模型时方可豁免。',
+    ]
+
+    // 1) Arithmetic / CI hard candidate gets ZERO rules attached even if keywords overlap
+    expect(
+      selectCandidateScopedBoundaryRules(
+        {
+          category: 'internal_inconsistency',
+          sentence: 'Adjusted OR was 3.40 (95% CI 1.10-2.80) in multivariable covariate analysis.',
+          reason: '点估计 3.40 超出其 95% CI (1.10-2.80) 区间上下界。',
+        },
+        activeRules,
+      ),
+    ).toEqual([])
+
+    // 2) Rounding rule is blocked from cross-paper routing
+    expect(
+      selectCandidateScopedBoundaryRules(
+        {
+          category: 'internal_inconsistency',
+          sentence: 'Rounding percentage decimal difference in abstract vs text.',
+          reason: '两处百分比不一致',
+        },
+        activeRules,
+      ),
+    ).toEqual([])
+
+    // 3) Unrelated paper/candidate gets ZERO rules attached (0% prompt drift)
+    expect(
+      selectCandidateScopedBoundaryRules(
+        {
+          category: 'spin_or_guideline',
+          sentence: 'Treatment improved survival despite p = 0.24.',
+          reason: 'P >= 0.05 却夸大为显著有效',
+        },
+        activeRules,
+      ),
+    ).toEqual([])
+
+    // 4) Matching methodological candidate receives ONLY the matching rule
+    const routed = selectCandidateScopedBoundaryRules(
+      {
+        category: 'method_result_mismatch',
+        sentence: 'Age is presented as median (interquartile range) after Shapiro-Wilk normality testing.',
+        evidence: ['Continuous variables were summarized using parametric or non-parametric summaries by normality.'],
+        reason: '同一表格混用了均值与中位数四分位距',
+      },
+      activeRules,
+    )
+    expect(routed).toHaveLength(1)
+    expect(routed[0]).toContain('正态性检验')
   })
 })

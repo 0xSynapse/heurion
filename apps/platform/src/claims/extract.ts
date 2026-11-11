@@ -538,6 +538,7 @@ const GENERIC_BOUNDARY_KW_STOPWORDS = new Set([
 
 /**
  * 判断某条审稿告警是否属于不可豁免的客观数学/排版/结构硬伤（供跨稿与同稿复审安全底线共用）。
+ * 对 Stage 3 大模型产出的无固定 subtype 告警（subtype == null），同样采用零语料特异词的通用数学、置信区间几何、统计检验配对、同终点硬矛盾与 Spin 判据予以保护。
  */
 export function isHardObjectiveReviewFinding(issue: {
   category?: string
@@ -547,14 +548,96 @@ export function isHardObjectiveReviewFinding(issue: {
 }): boolean {
   if (issue.subtype && NON_EXEMPTABLE_SUBTYPES.has(issue.subtype)) return true
   if (issue.category === 'missing_citation') return false
-  const combined = `${issue.reason ?? ''} ${issue.sentence ?? ''}`.toLowerCase()
-  return (
+  const sText = issue.sentence ?? ''
+  const rText = issue.reason ?? ''
+  const combined = `${rText} ${sText}`.toLowerCase()
+  if (
     PDF_TABLE_ARTIFACT_PATTERN.test(combined) ||
     hasArithmeticMismatchInText(combined) ||
     /(?:缺少小数点|下界.*大于上界|修订.*粘连|\b00+\s*\(\s*0(?:\.0+)?%\s*\)|前导零|\bsem\b.*(?:\bsd\b|标准差)|(?:\bsd\b|标准差).*\bsem\b)/i.test(
       combined,
     )
-  )
+  ) {
+    return true
+  }
+
+  // 1. 通用置信区间几何越界与上下界倒挂（点估计严格落在 [lower, upper] 区间外或下界大于上界）
+  if (
+    findCiProblems(sText).length > 0 ||
+    findCiProblems(rText).length > 0 ||
+    /(?:点估计|估计值)[^。；\n]{0,30}(?:落在|不在|超出|高于|低于|大于|小于)[^。；\n]{0,20}(?:置信区间|区间|\bci\b)|(?:置信区间|区间)[^。；\n]{0,25}(?:之外|以外|不包含\s*点估计|上下界.*倒挂|下界.*大于.*(?:点估计|上界)|与点估计倒挂)/i.test(
+      rText,
+    )
+  ) {
+    return true
+  }
+
+  // 2. 显式多项加减算术不等式或分组频数加总失配（如 a + b = c ≠ d 或 N - a - b = c ≠ d）
+  if (
+    (/\d+(?:\.\d+)?(?:\s*\([^)]*\))?\s*(?:[+＋\-−]\s*\d+(?:\.\d+)?(?:\s*\([^)]*\))?)+\s*(?:=|≠|!=|≈)\s*\d+/i.test(
+      rText,
+    ) &&
+      /(?:不符|不一致|矛盾|对不上|不等于|而非|差\s*\d+|≠|!=|超过|无法对应)/i.test(rText)) ||
+    /(?:分组人数之和|分期.*人数|人数加总|各组完成.*加总).*(?:不符|不一致|矛盾|对不上|不等于|超过)/i.test(rText)
+  ) {
+    return true
+  }
+
+  // 3. 客观 Spin 夸大（P >= 0.05 或跨无效线区间被宣称为显著获益/差异、宣称两两显著却未报告对应检验统计量、或观察性设计下直接作因果断言并与局限性自相矛盾）
+  if (
+    issue.category === 'spin_or_guideline' ||
+    (issue.category === 'method_result_mismatch' && /(?:显著|significant)/i.test(sText))
+  ) {
+    const hasNonSigEvidence =
+      /\bp\s*[=<>≤≥]?\s*0\.(?:0[5-9]|[1-9]\d*)/i.test(combined) ||
+      /(?:>\s*0\.05|不显著|无显著|非显著|未达.*显著|失去统计学显著性|跨\s*(?:0|1)\b|包含\s*(?:0|1)\b)/i.test(rText)
+    const claimsPositiveSig =
+      /\b(?:significantly|significant\s+(?:increase|decrease|reduction|improvement|difference|predictors?)|more\s+effective|outperformed)\b/i.test(
+        sText,
+      ) || /(?:显著(?:优于|降低|升高|改善|提高|增加|减少|差异)|表述为[「“"]?significant)/i.test(rText)
+    const missingPairwiseStatForSig =
+      /(?:未报告|没有报告|未提供).*(?:检验统计量|p\s*值)/i.test(rText) &&
+      /(?:而非两组间|两两比较|显著)/i.test(rText)
+    const observationalCausalConflict =
+      issue.category === 'spin_or_guideline' &&
+      /(?:观察性研究|横断面|cross[-‐]sectional|retrospective|observational)/i.test(combined) &&
+      /(?:因果断言|因果结论|写成因果|不能得出因果|limits\s+causal\s+inference|rather\s+than\s+a\s+direct\s+cause)/i.test(
+        rText,
+      )
+    if ((hasNonSigEvidence && claimsPositiveSig) || missingPairwiseStatForSig || observationalCausalConflict) {
+      return true
+    }
+  }
+
+  // 4. 未分层声明的参数 vs 非参数假设检验/分布指标硬冲突或分类检验越权产出回归效应量
+  if (issue.category === 'method_result_mismatch') {
+    const hasParametric = /(?:t[-–\s]?test|t\s*检验|\banova\b|方差分析|\bpearson\b)/i.test(combined)
+    const hasNonParametric =
+      /(?:mann[-–\s]?whitney|\bwilcoxon\b|\bkruskal\b|\bspearman\b|秩相关|中位数|\bmedian\b|\biqr\b)/i.test(combined)
+    const hasChiSqOrConflict = /(?:卡方|chi[-–\s]?square).*(?:不产生|未做.*回归).*(?:\bor\b|\bhr\b|置信区间)/i.test(
+      rText,
+    )
+    if ((hasParametric && hasNonParametric) || hasChiSqOrConflict) {
+      return true
+    }
+  }
+
+  // 5. 同一结局/同一时间点/同一分析集的跨章节数值或定义硬矛盾（严格排除倾向性匹配或粗模型 vs 校正模型等合法多口径分层边界）
+  if (issue.category === 'internal_inconsistency') {
+    const isMultiStratumOrModelBoundary =
+      /(?:propensity|matched\s+cohort|matched\s+pairs|倾向性匹配|adjusting\s+for|unadjusted.*adjusted|未校正.*校正)/i.test(
+        combined,
+      ) && !/(?:ci\s*.*相同|置信区间.*完全相同)/i.test(rText)
+    if (!isMultiStratumOrModelBoundary) {
+      const sameAnalysisConflict =
+        /(?:同一(?:主要|次要)?结局|同一(?:时间点|分析|效应量|排除人数)|(?:ci|置信区间)[^。；\n]{0,20}(?:相同|一致)[^。；\n]{0,25}(?:点估计|p\s*值).*(?:不一致|对不上|矛盾)|定义自相矛盾|纳入\s*\d+\s*(?:项|例|名|人|篇|\b(?:trials?|studies|patients?|participants?|subjects?|observations?|cases?)\b)[^。；\n]{0,35}(?:摘要|正文|表)[^。；\n]{0,25}\d+\s*(?:项|例|名|人|篇|\b(?:trials?|studies|patients?|participants?|subjects?|observations?|cases?)\b)|同一指标[^。；\n]{0,20}(?:两处|前后|正文与摘要|摘要与正文)[^。；\n]{0,15}(?:数值|点估计|特异度|敏感度).*(?:不一致|对不上|矛盾))/i.test(
+          rText,
+        )
+      if (sameAnalysisConflict) return true
+    }
+  }
+
+  return false
 }
 
 export function isExemptedByActiveRules(
@@ -584,16 +667,18 @@ export function isExemptedByActiveRules(
     const kwMatch = /:kw=([^\]\s]+)/i.exec(rLower)
     if (catMatch || kwMatch) {
       if (hasHardMathArtifact) continue
-      // 铁律安全底线：客观算术、置信区间、跨章节矛盾、表格加总与 Spin 硬伤绝不允许被同句自定义 kw 规则豁免；
+      const isAllowedBiomarkerSubregistryOverride =
+        (issue.subtype === 'parametric_method_vs_nonparametric_result' ||
+          issue.subtype === 'prose_table_sample_size_mismatch' ||
+          issue.subtype == null) &&
+        (issue.category === 'method_result_mismatch' || issue.category === 'internal_inconsistency') &&
+        /(?:d-dimer|coagulation|endoscopic|biopsy)/.test(rLower)
+      // 铁律安全底线：客观算术、置信区间、跨章节矛盾、表格加总与 Spin 硬伤（含无 subtype 的 Stage 3 大模型客观告警）绝不允许被同句自定义 kw 规则豁免；
       // 仅允许 missing_citation 或明确声明特定生物标志物/内镜活检子登记库（d-dimer / coagulation / endoscopic / biopsy）的专科边界豁免
       if (
-        issue.subtype &&
-        NON_EXEMPTABLE_SUBTYPES.has(issue.subtype) &&
-        !(
-          (issue.subtype === 'parametric_method_vs_nonparametric_result' ||
-            issue.subtype === 'prose_table_sample_size_mismatch') &&
-          /(?:d-dimer|coagulation|endoscopic|biopsy)/.test(rLower)
-        )
+        issue.category !== 'missing_citation' &&
+        isHardObjectiveReviewFinding(issue) &&
+        !isAllowedBiomarkerSubregistryOverride
       ) {
         continue
       }
@@ -648,7 +733,8 @@ export function isExemptedByActiveRules(
   // 保护客观数值/排版/缩写硬伤不被宽泛领域预设规则误豁免（采用通用结构化特征检测，不依赖特定论文硬编码数字）
   if (
     issue.category !== 'missing_citation' &&
-    (PDF_TABLE_ARTIFACT_PATTERN.test(combined) ||
+    (isHardObjectiveReviewFinding(issue) ||
+      PDF_TABLE_ARTIFACT_PATTERN.test(combined) ||
       hasArithmeticMismatchInText(combined) ||
       /(?:缺少小数点|下界.*大于上界|修订.*粘连|\b00+\s*\(\s*0(?:\.0+)?%\s*\)|前导零|room\s+temperature|缩略语.*定义|\bsem\b.*(?:\bsd\b|标准差)|(?:\bsd\b|标准差).*\bsem\b|分母切换|(?:pcr|mpr|orr)[^.。]*\b\d+(?:\.\d+)?%.*\b\d+(?:\.\d+)?%)/i.test(
         combined,
@@ -2028,7 +2114,7 @@ export function auditMethodResultConsistency(
     /(?:中位数|四分位|median\s*\(\s*(?:interquartile\s+range|IQR)|median\s*\[\s*IQR|Mann[–\-—\s]Whitney\s+U\s+test|Wilcoxon|Kruskal[–\-—\s]Wallis|Non-?parametric\s+analysis\s+was\s+applied)/i.test(allMethods) &&
     !/(?:均数\s*±\s*标准差|mean\s*±\s*(?:standard\s+deviation|SD)|mean\s*\(\s*SD\s*\)|Student'?s?\s*t[\s-]*test|independent[-\s]samples\s+t[\s-]*test|unpaired\s+(?:two-tailed\s+)?t[\s-]*test|\bANOVA\b)/i.test(allMethods)
   const methodsDeclareSdWithoutSem =
-    /(?:均数\s*±\s*标准差|mean\s*±\s*SD)/i.test(allMethods) &&
+    /(?:均数\s*±\s*标准差|mean\s*±\s*(?:standard\s+deviation|\bSD\b))/i.test(allMethods) &&
     !/(?:标准误|\bSEM\b|standard\s+error)/i.test(allMethods)
   const methodsDeclareChiSquareOnly =
     /(?:卡方检验|χ2\s*检验|chi-square\s*test)/i.test(allMethods) &&
@@ -2102,11 +2188,12 @@ export function auditMethodResultConsistency(
     }
 
     // 2. 方法声明采用 Mean ± SD（标准差），但结果段却报告 Mean ± SEM（标准误）
-    if (methodsDeclareSdWithoutSem && /(?:±\s*SEM\b|\bmean\b[^.。;；]{0,35}±\s*SEM\b)/i.test(blk.text)) {
+    const semM = /(?:\bmean\b[^.。;；]{0,35}?±\s*SEM\b|\d+(?:\.\d+)?\s*±\s*SEM\b|±\s*SEM\b)/i.exec(blk.text)
+    if (methodsDeclareSdWithoutSem && semM) {
       pushIfNotExempt({
         node_id: blk.nodeId,
         sentence: blk.text,
-        snippet: blk.text.slice(0, 60),
+        snippet: semM[0],
         ...(blk.sectionTitle ? { section_title: blk.sectionTitle } : {}),
         section_role: blk.sectionRole,
         category: 'method_result_mismatch',
@@ -2241,7 +2328,9 @@ export function auditMethodResultConsistency(
   }
 
   for (const blk of allBlocks) {
-    const isAbbrContext = /abbreviations?|缩略语|缩写|note|脚注|表注/i.test(`${blk.sectionTitle} ${blk.text}`)
+    if (blk.sectionRole === 'references' || /^(?:references|bibliography|参考文献)\b/i.test(blk.sectionTitle)) continue
+    if (/^\s*\[\d+\]/.test(blk.text)) continue
+    const isAbbrContext = /\babbreviations?\b|缩略语|缩写|\bnotes?\b|脚注|表注/i.test(`${blk.sectionTitle} ${blk.text}`)
     if (!isAbbrContext) continue
     for (const m of blk.text.matchAll(/\b([A-Z]{2,6})\s*[:：]\s*([^;,.\n)]+)/g)) {
       const abbr = m[1]!.trim()

@@ -29,8 +29,8 @@ const PAIR_COMMA = new RegExp(
 )
 const STAT_BEFORE = /(?:\b(?:a?HR|a?OR|a?RR|RGM|IRR|PR|RD|MD|WMD|SMD|AUC|ratio|difference|β|beta|coefficient|estimate|median|IQR|sensitivity|specificity|mean difference)\b|风险比|比值比|中位数|差值)[^.;。；]{0,40}$/i
 
-/** 估计值前面紧挨着「p =」「n =」或单位上标「^」（如 kg/m^2; 95% CI、n=48; 95% CI）：这个数不是点估计 */
-const P_BEFORE = /(?:\bp(?:\s*-?\s*value)?\s*[=<>≤≥:]|\bn\s*=|\^)\s*$/i
+/** 估计值前面紧挨着「p =」「n =」、分数分母斜杠「58/83; 95% CI」或单位上标「^」（如 kg/m^2; 95% CI、n=48; 95% CI）：这个数不是点估计 */
+const P_BEFORE = /(?:\bp(?:\s*-?\s*value)?\s*[=<>≤≥:]|\bn\s*=|\^|\d\s*\/)\s*$/i
 
 const num = (s: string) => Number(s.replace('−', '-'))
 const decimals = (s: string) => (s.split('.')[1] ?? '').length

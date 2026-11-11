@@ -311,6 +311,16 @@ export async function reviewOnce(
     complete?: Complete | null
     /** 同稿二次复审（Intra-Manuscript Round 2）时复用已有 docId，使同稿作者驳回记录生效 */
     docId?: string
+    /** 正交消融实验开关 */
+    ablation?: {
+      disableStructAst?: boolean
+      disable2dTableGrid?: boolean
+      disableDualQuoteGate?: boolean
+      disableStage4Verifier?: boolean
+      disableTrackARules?: boolean
+      disableAuditChecklists?: boolean
+      unfilteredGlobalRulePrompt?: boolean
+    }
   } = {},
 ): Promise<Omit<RunRecord, 'run_id' | 'paper_id' | 'variant' | 'repeat'> & { store: Store; docId: string }> {
   const usage: CompleteUsage[] = []
@@ -334,6 +344,7 @@ export async function reviewOnce(
       owner: 'eval',
       anchorComments: true,
       ...(complete ? { complete } : {}),
+      ...(opts.ablation ? { ablation: opts.ablation } : {}),
     })
     const comments = new Map(store.listComments(docId).map((c: { id: string; snippet: string }) => [c.id, c.snippet]))
     const findings = r.stage4_deduplicated_comments.map((c: SynthesizedReviewComment): RunFinding => ({
