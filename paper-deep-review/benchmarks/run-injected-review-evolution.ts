@@ -9,11 +9,11 @@
  * 科学诚信与防泄漏保证（Clean-Room Guarantees）：
  * 1. `extract.ts` 不含任何特定论文词元或合成 `design_boundary_*` 告警；
  * 2. 临床作者模拟代理 `evolveStoreFromFindingsBlind` 物理双盲隔离（不传入 `variant`、不传入 `injections.json`、不传入 `split`）；
- * 3. 跨论文迁移（`dev` N=11 -> `test` N=8）仅在 `dev` 集上执行双盲演化与漏检核查清单蒸馏，进入 `test` 集后记忆库完全冻结以测量严格零样本泛化；
+ * 3. 跨论文迁移（`dev` N=11 -> `test` N=8）仅在 `dev` 集上按严格因果顺序执行双盲演化与漏检核查清单蒸馏，进入 `test` 集后为每篇未见测试论文克隆完全冻结的独立记忆快照以测量严格零样本泛化；
  * 4. 区分发表版原文自带真实错误（`unexpected_true`，依据 `known-issues.md` 与 `adjudications/organic-known-issues.jsonl`）与真正误报（`false_positive`），同时并列报告原始未扣除计数。
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   countActiveAuditChecklists,
@@ -43,7 +43,7 @@ import {
 } from '../../apps/platform/scripts/eval-review-score.ts'
 import { config } from '../../apps/platform/src/config.ts'
 import { ClaimService, hasInstanceLeakage } from '../../apps/platform/src/claims/service.ts'
-import { makeComplete } from '../../apps/platform/src/harness/complete.ts'
+import { makeComplete, type CompleteUsage } from '../../apps/platform/src/harness/complete.ts'
 import type { PubMedClient } from '../../apps/platform/src/literature/pubmed.ts'
 import { ProceduralHarnessService } from '../../apps/platform/src/memory/procedural.ts'
 import { Documents } from '../../apps/platform/src/model/runtime.ts'
@@ -53,6 +53,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
 
 const INJECTION_TYPES: InjectionType[] = ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E7']
+const PAPER_CONCURRENCY = Number(process.env.DEEP_REVIEW_PAPER_CONCURRENCY ?? 5)
 
 const CATEGORY_GENERIC_MECHANISM: Record<InjectionType, { category: string; description: string }> = {
   E1: {
@@ -83,6 +84,60 @@ const CATEGORY_GENERIC_MECHANISM: Record<InjectionType, { category: string; desc
     category: 'internal_inconsistency',
     description: '表格行内各亚组例数之和与合计列（Total）或外层声明总数在算术上不一致。',
   },
+}
+
+async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let nextIdx = 0
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, async () => {
+      while (nextIdx < items.length) {
+        const idx = nextIdx++
+        results[idx] = await fn(items[idx]!, idx)
+      }
+    }),
+  )
+  return results
+}
+
+function readCkpt<T>(ckptDir: string | null, key: string): T | null {
+  if (!ckptDir) return null
+  const p = join(ckptDir, `${key}.json`)
+  if (!existsSync(p)) return null
+  try {
+    return JSON.parse(readFileSync(p, 'utf8')) as T
+  } catch {
+    return null
+  }
+}
+
+function writeCkpt<T>(ckptDir: string | null, key: string, data: T): void {
+  if (!ckptDir) return
+  mkdirSync(ckptDir, { recursive: true })
+  writeFileSync(join(ckptDir, `${key}.json`), JSON.stringify(data, null, 2), 'utf8')
+}
+
+function cloneFrozenStore(srcStore: Store, owner = 'eval'): Store {
+  const dst = new Store(':memory:')
+  for (const m of srcStore.listMemories(owner, ['active'])) {
+    dst.addMemory({
+      scope: 'user',
+      owner,
+      project_id: null,
+      kind: 'preference',
+      content: m.content,
+      norm: m.content.toLowerCase(),
+      reason: m.reason,
+      source: 'auto',
+      source_doc_id: m.source_doc_id,
+      source_turn_id: null,
+      actor: 'user',
+      explicit: 1,
+      evidence: 1,
+      status: 'active',
+    })
+  }
+  return dst
 }
 
 function matchInjection(f: RunFinding, inj: Injection): boolean {
@@ -285,14 +340,36 @@ function aggregateMetrics(
 }
 
 async function main() {
+  const runStartMs = Date.now()
   const explicitLlm = process.argv.includes('--llm')
   const explicitNoLlm = process.argv.includes('--no-llm')
   if (explicitLlm && !config.deepseekApiKey) {
-    throw new Error('指定了 --llm 但缺少 DEEPSEEK_API_KEY：请在仓库根目录 .env 中配置 DEEPSEEK_API_KEY')
+    throw new Error('指定了 --llm 但缺少 DEEPSEEK_API_KEY：请在环境变量或仓库根目录 .env 中配置 DEEPSEEK_API_KEY')
   }
   const useLlm = explicitNoLlm ? false : Boolean(config.deepseekApiKey)
+  const ckptDir = useLlm && process.env.DEEP_REVIEW_CKPT_DIR ? process.env.DEEP_REVIEW_CKPT_DIR : null
+
+  let totalLlmCalls = 0
+  let totalInputTokens = 0
+  let totalOutputTokens = 0
+  const recordUsage = (u: CompleteUsage) => {
+    totalLlmCalls++
+    totalInputTokens += u.input_tokens
+    totalOutputTokens += u.output_tokens
+  }
+  const addReviewRecordUsage = (rec: { calls: number; input_tokens: number; output_tokens: number }) => {
+    totalLlmCalls += rec.calls
+    totalInputTokens += rec.input_tokens
+    totalOutputTokens += rec.output_tokens
+  }
+
   const clinicianComplete = useLlm
-    ? makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model })
+    ? makeComplete({
+        upstream: config.llmUpstream,
+        apiKey: config.deepseekApiKey,
+        model: config.model,
+        onUsage: recordUsage,
+      })
     : null
 
   const adjMap = readAdjudications()
@@ -303,7 +380,9 @@ async function main() {
   const testPapers = allPapers.filter(p => p.split === 'test')
   const orderedPapers = [...devPapers, ...testPapers]
 
-  console.log(`[Clean-Room Benchmark] Mode = ${useLlm ? `LIVE_LLM (${config.model})` : 'CLEAN_ROOM_AST_ONLY (--no-llm)'}`)
+  console.log(
+    `[Clean-Room Benchmark] Mode = ${useLlm ? `LIVE_LLM (${config.model}, concurrency=${PAPER_CONCURRENCY})` : 'CLEAN_ROOM_AST_ONLY (--no-llm)'}`,
+  )
 
   // 1. Deterministic Clean-Room AST Baseline (`useLlm = false`, 0 LLM calls)
   const astOnlyMap = new Map<
@@ -322,6 +401,7 @@ async function main() {
       injections,
     })
   }
+  console.log(`[Phase 1/6] Clean-Room AST Baseline complete (${orderedPapers.length} papers).`)
 
   // 2. PAT Pure-LLM Baseline (`pat_baseline`, only run when `useLlm = true`)
   const patBaselineMap = new Map<
@@ -329,18 +409,52 @@ async function main() {
     { cleanFindings: RunFinding[]; injectedFindings: RunFinding[]; injections: Injection[] }
   >()
   if (useLlm) {
-    for (const p of orderedPapers) {
+    let donePat = 0
+    await mapConcurrent(orderedPapers, PAPER_CONCURRENCY, async p => {
       const injections = readInjections(p.id)
+      const cached = readCkpt<{
+        cleanFindings: RunFinding[]
+        injectedFindings: RunFinding[]
+        calls: number
+        inTok: number
+        outTok: number
+      }>(ckptDir, `pat_${p.id}`)
+      if (cached) {
+        totalLlmCalls += cached.calls
+        totalInputTokens += cached.inTok
+        totalOutputTokens += cached.outTok
+        patBaselineMap.set(p.id, {
+          cleanFindings: cached.cleanFindings,
+          injectedFindings: cached.injectedFindings,
+          injections,
+        })
+        console.log(`[Phase 2/6 pat_baseline ${++donePat}/${orderedPapers.length}] ${p.id} (cached)`)
+        return
+      }
       const cleanMd = loadOrSynthesizePaperMarkdown(p, 'clean')
       const injectedMd = loadOrSynthesizePaperMarkdown(p, 'injected')
-      const cleanRes = await reviewOnce(cleanMd, p.title, true, undefined, { mode: 'pat_baseline' })
-      const injectedRes = await reviewOnce(injectedMd, p.title, true, undefined, { mode: 'pat_baseline' })
+      const [cleanRes, injectedRes] = await Promise.all([
+        reviewOnce(cleanMd, p.title, true, undefined, { mode: 'pat_baseline' }),
+        reviewOnce(injectedMd, p.title, true, undefined, { mode: 'pat_baseline' }),
+      ])
+      addReviewRecordUsage(cleanRes)
+      addReviewRecordUsage(injectedRes)
+      writeCkpt(ckptDir, `pat_${p.id}`, {
+        cleanFindings: cleanRes.findings,
+        injectedFindings: injectedRes.findings,
+        calls: cleanRes.calls + injectedRes.calls,
+        inTok: cleanRes.input_tokens + injectedRes.input_tokens,
+        outTok: cleanRes.output_tokens + injectedRes.output_tokens,
+      })
       patBaselineMap.set(p.id, {
         cleanFindings: cleanRes.findings,
         injectedFindings: injectedRes.findings,
         injections,
       })
-    }
+      console.log(
+        `[Phase 2/6 pat_baseline ${++donePat}/${orderedPapers.length}] ${p.id} clean=${cleanRes.findings.length} inj=${injectedRes.findings.length} (${((Math.max(cleanRes.ms, injectedRes.ms)) / 1000).toFixed(1)}s)`,
+      )
+    })
   }
 
   // 3. Cold-Start Hybrid Deep Review (`heurion_deep`, fresh Store per manuscript, no Memory)
@@ -349,18 +463,52 @@ async function main() {
     { cleanFindings: RunFinding[]; injectedFindings: RunFinding[]; injections: Injection[] }
   >()
   if (useLlm) {
-    for (const p of orderedPapers) {
+    let doneStatic = 0
+    await mapConcurrent(orderedPapers, PAPER_CONCURRENCY, async p => {
       const injections = readInjections(p.id)
+      const cached = readCkpt<{
+        cleanFindings: RunFinding[]
+        injectedFindings: RunFinding[]
+        calls: number
+        inTok: number
+        outTok: number
+      }>(ckptDir, `static_${p.id}`)
+      if (cached) {
+        totalLlmCalls += cached.calls
+        totalInputTokens += cached.inTok
+        totalOutputTokens += cached.outTok
+        staticMap.set(p.id, {
+          cleanFindings: cached.cleanFindings,
+          injectedFindings: cached.injectedFindings,
+          injections,
+        })
+        console.log(`[Phase 3/6 heurion_deep ${++doneStatic}/${orderedPapers.length}] ${p.id} (cached)`)
+        return
+      }
       const cleanMd = loadOrSynthesizePaperMarkdown(p, 'clean')
       const injectedMd = loadOrSynthesizePaperMarkdown(p, 'injected')
-      const cleanRes = await reviewOnce(cleanMd, p.title, true, undefined, { mode: 'heurion_deep' })
-      const injectedRes = await reviewOnce(injectedMd, p.title, true, undefined, { mode: 'heurion_deep' })
+      const [cleanRes, injectedRes] = await Promise.all([
+        reviewOnce(cleanMd, p.title, true, undefined, { mode: 'heurion_deep' }),
+        reviewOnce(injectedMd, p.title, true, undefined, { mode: 'heurion_deep' }),
+      ])
+      addReviewRecordUsage(cleanRes)
+      addReviewRecordUsage(injectedRes)
+      writeCkpt(ckptDir, `static_${p.id}`, {
+        cleanFindings: cleanRes.findings,
+        injectedFindings: injectedRes.findings,
+        calls: cleanRes.calls + injectedRes.calls,
+        inTok: cleanRes.input_tokens + injectedRes.input_tokens,
+        outTok: cleanRes.output_tokens + injectedRes.output_tokens,
+      })
       staticMap.set(p.id, {
         cleanFindings: cleanRes.findings,
         injectedFindings: injectedRes.findings,
         injections,
       })
-    }
+      console.log(
+        `[Phase 3/6 heurion_deep ${++doneStatic}/${orderedPapers.length}] ${p.id} clean=${cleanRes.findings.length} inj=${injectedRes.findings.length} (${((Math.max(cleanRes.ms, injectedRes.ms)) / 1000).toFixed(1)}s)`,
+      )
+    })
   } else {
     for (const [k, v] of astOnlyMap.entries()) staticMap.set(k, v)
   }
@@ -409,41 +557,72 @@ async function main() {
     string,
     { cleanFindings: RunFinding[]; injectedFindings: RunFinding[]; injections: Injection[] }
   >()
-  for (const p of orderedPapers) {
+  let doneIntra = 0
+  const intraResults = await mapConcurrent(orderedPapers, useLlm ? PAPER_CONCURRENCY : 19, async p => {
     const injections = readInjections(p.id)
+    if (useLlm) {
+      const cached = readCkpt<{
+        r1CleanFindings: RunFinding[]
+        evCleanDecisions: BlindClinicianDecision[]
+        r2CleanFindings: RunFinding[]
+        r1InjFindings: RunFinding[]
+        evInjDecisions: BlindClinicianDecision[]
+        r2InjFindings: RunFinding[]
+        calls: number
+        inTok: number
+        outTok: number
+      }>(ckptDir, `intra_${p.id}`)
+      if (cached) {
+        totalLlmCalls += cached.calls
+        totalInputTokens += cached.inTok
+        totalOutputTokens += cached.outTok
+        console.log(`[Phase 4/6 intra_round2 ${++doneIntra}/${orderedPapers.length}] ${p.id} (cached)`)
+        return { p, injections, ...cached }
+      }
+    }
+
     const cleanMd = loadOrSynthesizePaperMarkdown(p, 'clean')
     const injectedMd = loadOrSynthesizePaperMarkdown(p, 'injected')
 
-    const cleanStore = new Store(':memory:')
-    const r1Clean = await reviewOnce(cleanMd, p.title, useLlm, cleanStore, { mode: 'heurion_evolved' })
-    const evClean = await evolveStoreFromFindingsBlind(
-      cleanStore,
-      r1Clean.docId,
-      p.title,
-      cleanMd,
-      r1Clean.findings,
-      clinicianComplete,
-    )
-    recordClinicianCalibration(p.id, r1Clean.findings, injections, false, evClean.decisions)
-    const r2Clean = await reviewOnce(cleanMd, p.title, useLlm, cleanStore, { mode: 'heurion_evolved' })
+    const runVariantIntra = async (md: string) => {
+      const store = new Store(':memory:')
+      const r1 = await reviewOnce(md, p.title, useLlm, store, { mode: 'heurion_evolved' })
+      const ev = await evolveStoreFromFindingsBlind(store, r1.docId, p.title, md, r1.findings, clinicianComplete)
+      const r2 = await reviewOnce(md, p.title, useLlm, store, { mode: 'heurion_evolved', docId: r1.docId })
+      return { r1, ev, r2 }
+    }
 
-    const injStore = new Store(':memory:')
-    const r1Inj = await reviewOnce(injectedMd, p.title, useLlm, injStore, { mode: 'heurion_evolved' })
-    const evInj = await evolveStoreFromFindingsBlind(
-      injStore,
-      r1Inj.docId,
-      p.title,
-      injectedMd,
-      r1Inj.findings,
-      clinicianComplete,
-    )
-    recordClinicianCalibration(p.id, r1Inj.findings, injections, true, evInj.decisions)
-    const r2Injected = await reviewOnce(injectedMd, p.title, useLlm, injStore, { mode: 'heurion_evolved' })
+    const [cleanRun, injRun] = await Promise.all([runVariantIntra(cleanMd), runVariantIntra(injectedMd)])
+    addReviewRecordUsage(cleanRun.r1)
+    addReviewRecordUsage(cleanRun.r2)
+    addReviewRecordUsage(injRun.r1)
+    addReviewRecordUsage(injRun.r2)
 
-    intraRound2Map.set(p.id, {
-      cleanFindings: r2Clean.findings,
-      injectedFindings: r2Injected.findings,
-      injections,
+    const payload = {
+      r1CleanFindings: cleanRun.r1.findings,
+      evCleanDecisions: cleanRun.ev.decisions,
+      r2CleanFindings: cleanRun.r2.findings,
+      r1InjFindings: injRun.r1.findings,
+      evInjDecisions: injRun.ev.decisions,
+      r2InjFindings: injRun.r2.findings,
+      calls: cleanRun.r1.calls + cleanRun.r2.calls + injRun.r1.calls + injRun.r2.calls,
+      inTok: cleanRun.r1.input_tokens + cleanRun.r2.input_tokens + injRun.r1.input_tokens + injRun.r2.input_tokens,
+      outTok: cleanRun.r1.output_tokens + cleanRun.r2.output_tokens + injRun.r1.output_tokens + injRun.r2.output_tokens,
+    }
+    if (useLlm) writeCkpt(ckptDir, `intra_${p.id}`, payload)
+    console.log(
+      `[Phase 4/6 intra_round2 ${++doneIntra}/${orderedPapers.length}] ${p.id} r1Clean=${cleanRun.r1.findings.length}->r2Clean=${cleanRun.r2.findings.length}, r1Inj=${injRun.r1.findings.length}->r2Inj=${injRun.r2.findings.length}`,
+    )
+    return { p, injections, ...payload }
+  })
+
+  for (const item of intraResults) {
+    recordClinicianCalibration(item.p.id, item.r1CleanFindings, item.injections, false, item.evCleanDecisions)
+    recordClinicianCalibration(item.p.id, item.r1InjFindings, item.injections, true, item.evInjDecisions)
+    intraRound2Map.set(item.p.id, {
+      cleanFindings: item.r2CleanFindings,
+      injectedFindings: item.r2InjFindings,
+      injections: item.injections,
     })
   }
 
@@ -465,14 +644,15 @@ async function main() {
   let totalInstanceLeakageEvents = 0
   const missedDevTypesSeen = new Set<InjectionType>()
 
-  // Phase 5A: Stream through `dev` split (N=11), evolving Track A + Track B + Dev Audit Checklists
-  for (const p of devPapers) {
+  // Phase 5A: Stream STRICTLY SEQUENTIALLY through `dev` split (N=11), evolving Track A + Track B + Dev Audit Checklists
+  for (const [devIdx, p] of devPapers.entries()) {
     const injections = readInjections(p.id)
     const cleanMd = loadOrSynthesizePaperMarkdown(p, 'clean')
     const injectedMd = loadOrSynthesizePaperMarkdown(p, 'injected')
 
     const activeBefore = countActiveBoundaryRules(crossTransferStore, 'eval')
     const cleanRes = await reviewOnce(cleanMd, p.title, useLlm, crossTransferStore, { mode: 'heurion_evolved' })
+    addReviewRecordUsage(cleanRes)
     const evClean = await evolveStoreFromFindingsBlind(
       crossTransferStore,
       cleanRes.docId,
@@ -484,6 +664,7 @@ async function main() {
     recordClinicianCalibration(p.id, cleanRes.findings, injections, false, evClean.decisions)
 
     const injectedRes = await reviewOnce(injectedMd, p.title, useLlm, crossTransferStore, { mode: 'heurion_evolved' })
+    addReviewRecordUsage(injectedRes)
     const evInj = await evolveStoreFromFindingsBlind(
       crossTransferStore,
       injectedRes.docId,
@@ -524,14 +705,19 @@ async function main() {
     totalProceduralSignalsRecorded += evClean.proceduralSignalsAdded + evInj.proceduralSignalsAdded
     totalInstanceLeakageEvents += evClean.instanceLeakageCount + evInj.instanceLeakageCount
 
+    const afterRules = countActiveBoundaryRules(crossTransferStore, 'eval')
+    const afterChecklists = countActiveAuditChecklists(crossTransferStore, 'eval')
     crossMap.set(p.id, {
       cleanFindings: cleanRes.findings,
       injectedFindings: injectedRes.findings,
       injections,
       activeRulesBeforeClean: activeBefore,
-      activeRulesAfterPaper: countActiveBoundaryRules(crossTransferStore, 'eval'),
-      activeChecklistsAfterPaper: countActiveAuditChecklists(crossTransferStore, 'eval'),
+      activeRulesAfterPaper: afterRules,
+      activeChecklistsAfterPaper: afterChecklists,
     })
+    console.log(
+      `[Phase 5A/6 dev_evolve ${devIdx + 1}/${devPapers.length}] ${p.id} clean=${cleanRes.findings.length} inj=${injectedRes.findings.length} rules=${activeBefore}->${afterRules} skills=${afterChecklists}`,
+    )
   }
 
   // Trigger Track B Procedural Crystallization from `dev` corroborated signals BEFORE freezing for `test`!
@@ -542,16 +728,23 @@ async function main() {
     .filter(r => r.owner === 'eval')
   const trackBLeakageCount = allUserHarnessRules.filter(r => hasInstanceLeakage(r.rule)).length
 
-  // Phase 5B: Strictly FROZEN evaluation on unseen `test` split (N=8) — zero store mutation during `test`!
+  // Phase 5B: Strictly FROZEN evaluation on unseen `test` split (N=8) — isolated frozen snapshot per test paper!
   const frozenRulesCount = countActiveBoundaryRules(crossTransferStore, 'eval')
   const frozenChecklistsCount = countActiveAuditChecklists(crossTransferStore, 'eval')
-  for (const p of testPapers) {
+  let doneTest = 0
+  await mapConcurrent(testPapers, useLlm ? PAPER_CONCURRENCY : 8, async p => {
     const injections = readInjections(p.id)
     const cleanMd = loadOrSynthesizePaperMarkdown(p, 'clean')
     const injectedMd = loadOrSynthesizePaperMarkdown(p, 'injected')
 
-    const cleanRes = await reviewOnce(cleanMd, p.title, useLlm, crossTransferStore, { mode: 'heurion_evolved' })
-    const injectedRes = await reviewOnce(injectedMd, p.title, useLlm, crossTransferStore, { mode: 'heurion_evolved' })
+    const cleanFrozenStore = cloneFrozenStore(crossTransferStore, 'eval')
+    const injFrozenStore = cloneFrozenStore(crossTransferStore, 'eval')
+    const [cleanRes, injectedRes] = await Promise.all([
+      reviewOnce(cleanMd, p.title, useLlm, cleanFrozenStore, { mode: 'heurion_evolved' }),
+      reviewOnce(injectedMd, p.title, useLlm, injFrozenStore, { mode: 'heurion_evolved' }),
+    ])
+    addReviewRecordUsage(cleanRes)
+    addReviewRecordUsage(injectedRes)
 
     crossMap.set(p.id, {
       cleanFindings: cleanRes.findings,
@@ -561,29 +754,13 @@ async function main() {
       activeRulesAfterPaper: frozenRulesCount,
       activeChecklistsAfterPaper: frozenChecklistsCount,
     })
-  }
+    console.log(
+      `[Phase 5B/6 test_frozen ${++doneTest}/${testPapers.length}] ${p.id} clean=${cleanRes.findings.length} inj=${injectedRes.findings.length} (frozenRules=${frozenRulesCount}, frozenSkills=${frozenChecklistsCount})`,
+    )
+  })
 
   // 6. Adversarial Objective-Error Rebuttal Stress Test (Verify NON_EXEMPTABLE_SUBTYPES Safety Floor = 0% False Exemption)
-  const adversarialStore = new Store(':memory:')
-  for (const m of crossTransferStore.listMemories('eval', ['active'])) {
-    adversarialStore.addMemory({
-      scope: 'user',
-      owner: 'eval',
-      project_id: null,
-      kind: 'preference',
-      content: m.content,
-      norm: m.content.toLowerCase(),
-      reason: m.reason,
-      source: 'auto',
-      source_doc_id: m.source_doc_id,
-      source_turn_id: null,
-      actor: 'user',
-      explicit: 1,
-      evidence: 1,
-      status: 'active',
-    })
-  }
-
+  const adversarialStore = cloneFrozenStore(crossTransferStore, 'eval')
   const adversarialMap = new Map<
     string,
     { cleanFindings: RunFinding[]; injectedFindings: RunFinding[]; injections: Injection[] }
@@ -616,6 +793,7 @@ async function main() {
       injections,
     })
   }
+  console.log(`[Phase 6/6] Adversarial Stress Test complete.`)
 
   const astAll = aggregateMetrics(orderedPapers, astOnlyMap, adjMap, knownOrganic)
   const astDev = aggregateMetrics(devPapers, astOnlyMap, adjMap, knownOrganic)
@@ -661,6 +839,16 @@ async function main() {
     benchmark: 'Heurion 2.0 Clean-Room Error-Injection Deep Review & Blind-Clinician Self-Evolution Benchmark (19 PMC Papers, 57 Injected Errors)',
     execution_mode: useLlm ? 'live_llm_hybrid_and_blind_clinician' : 'clean_room_ast_deterministic',
     llm_model: useLlm ? config.model : null,
+    llm_telemetry: useLlm
+      ? {
+          upstream_protocol: 'anthropic_messages',
+          temperature: 0,
+          total_llm_calls: totalLlmCalls,
+          total_input_tokens: totalInputTokens,
+          total_output_tokens: totalOutputTokens,
+          wall_clock_seconds: Number(((Date.now() - runStartMs) / 1000).toFixed(1)),
+        }
+      : null,
     generated_at: new Date().toISOString(),
     corpus_summary: {
       total_papers: orderedPapers.length,
@@ -813,16 +1001,19 @@ async function main() {
     `3. Cold-Start Hybrid (All N=19):       Recall = ${staticAll.injected_errors_detected}/${staticAll.injected_errors_total} (${staticAll.recall_pct}%), OrganicTrue(Clean) = ${staticAll.unexpected_true_organic_clean}, TrueFP = ${staticAll.false_positive_findings_total} (Clean ${staticAll.false_positive_clean} / Inj ${staticAll.false_positive_injected}), Prec(w/Org) = ${staticAll.precision_with_organic_tp_pct}%, F1 = ${staticAll.f1_pct}%`,
   )
   console.log(
-    `4. Unseen Test Cold-Start (N=8):       Recall = ${staticTest.injected_errors_detected}/${staticTest.injected_errors_total} (${staticTest.recall_pct}%), OrganicTrue(Clean) = ${staticTest.unexpected_true_organic_clean}, TrueFP = ${staticTest.false_positive_findings_total} (Clean ${staticTest.false_positive_clean} / Inj ${staticTest.false_positive_injected}), Prec(w/Org) = ${staticTest.precision_with_organic_tp_pct}%, F1 = ${staticTest.f1_pct}%`,
+    `4. Intra-Paper Round 2 (All N=19):     Recall = ${intraAll.injected_errors_detected}/${intraAll.injected_errors_total} (${intraAll.recall_pct}%), OrganicTrue(Clean) = ${intraAll.unexpected_true_organic_clean}, TrueFP = ${intraAll.false_positive_findings_total} (Clean ${intraAll.false_positive_clean} / Inj ${intraAll.false_positive_injected}), Prec(w/Org) = ${intraAll.precision_with_organic_tp_pct}%, F1 = ${intraAll.f1_pct}%`,
   )
   console.log(
-    `5. Unseen Test Frozen Transfer (N=8):  Recall = ${crossTest.injected_errors_detected}/${crossTest.injected_errors_total} (${crossTest.recall_pct}%), OrganicTrue(Clean) = ${crossTest.unexpected_true_organic_clean}, TrueFP = ${crossTest.false_positive_findings_total} (Clean ${crossTest.false_positive_clean} / Inj ${crossTest.false_positive_injected}), Prec(w/Org) = ${crossTest.precision_with_organic_tp_pct}%, F1 = ${crossTest.f1_pct}%`,
+    `5. Unseen Test Cold-Start (N=8):       Recall = ${staticTest.injected_errors_detected}/${staticTest.injected_errors_total} (${staticTest.recall_pct}%), OrganicTrue(Clean) = ${staticTest.unexpected_true_organic_clean}, TrueFP = ${staticTest.false_positive_findings_total} (Clean ${staticTest.false_positive_clean} / Inj ${staticTest.false_positive_injected}), Prec(w/Org) = ${staticTest.precision_with_organic_tp_pct}%, F1 = ${staticTest.f1_pct}%`,
   )
   console.log(
-    `6. Adversarial Stress Test (All N=19): Recall = ${adversarialAll.injected_errors_detected}/${adversarialAll.injected_errors_total} (${adversarialAll.recall_pct}%), Objective Error False Exemption = ${output.regimes.adversarial_rebuttal_stress_test.objective_error_false_exemption_rate_pct}%`,
+    `6. Unseen Test Frozen Transfer (N=8):  Recall = ${crossTest.injected_errors_detected}/${crossTest.injected_errors_total} (${crossTest.recall_pct}%), OrganicTrue(Clean) = ${crossTest.unexpected_true_organic_clean}, TrueFP = ${crossTest.false_positive_findings_total} (Clean ${crossTest.false_positive_clean} / Inj ${crossTest.false_positive_injected}), Prec(w/Org) = ${crossTest.precision_with_organic_tp_pct}%, F1 = ${crossTest.f1_pct}%`,
   )
   console.log(
-    `7. Evolution & Guard Artifacts:        Track A = ${activeTrackARules.length}, Dev Checklists = ${activeAuditChecklists.length}, Track B Crystallized = ${crystallizedTrackBRules.length}, Post-Guard Leakage = ${output.blind_clinician_calibration.post_guard_instance_leakage_count}`,
+    `7. Adversarial Stress Test (All N=19): Recall = ${adversarialAll.injected_errors_detected}/${adversarialAll.injected_errors_total} (${adversarialAll.recall_pct}%), Objective Error False Exemption = ${output.regimes.adversarial_rebuttal_stress_test.objective_error_false_exemption_rate_pct}%`,
+  )
+  console.log(
+    `8. Evolution & Guard Artifacts:        Track A = ${activeTrackARules.length}, Dev Checklists = ${activeAuditChecklists.length}, Track B Crystallized = ${crystallizedTrackBRules.length}, Post-Guard Leakage = ${output.blind_clinician_calibration.post_guard_instance_leakage_count}`,
   )
   console.log(`Saved JSON results to: ${outPath}`)
 }

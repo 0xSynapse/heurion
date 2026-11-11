@@ -5,6 +5,7 @@
  * - Stage 3：多维专项审查（Pass A 外部文献对齐、Pass B 内部自洽、Pass C 方法-结果配对、Pass D Spin 与报告规范）；
  * - Stage 4：全局去重合成与批注锚定（{#c:id}）及审稿批注驱动的双轨自演进（evolveFromReviewComment）。
  */
+import { createHash } from 'node:crypto'
 import type { Node as PMNode } from 'prosemirror-model'
 import type { Complete } from '../harness/complete.ts'
 import { attachComment, AnchorError } from '../model/anchors.ts'
@@ -28,6 +29,7 @@ import {
   extractClaims,
   extractTableSummaries,
   isExemptedByActiveRules,
+  isHardObjectiveReviewFinding,
   SectionRoleTracker,
   type Claim,
   type DeepReviewAuditIssue,
@@ -492,13 +494,21 @@ export async function synthesizeSanitizedBoundaryRuleAsync(
     '你是临床研究方法学与审稿记忆治理专家。作者对一条 AI 审稿意见提出了合理的方法学反驳（说明该现象属于合法的研究设计或统计报告边界，而非客观错误）。\n' +
     '请将该反驳提炼为一条可跨论文复用的通用审稿边界豁免规则，严格遵守以下铁律：\n' +
     '1. 绝对禁止出现任何阿拉伯数字、样本量、百分比、P值、置信区间、具体药物名、具体疾病名或机构名（零实例泄漏）；\n' +
-    '2. 绝不允许豁免客观算术错误、置信区间越界、表格加总错误或未声明的统计检验混用，只豁免合法的研究设计/分母分层规范；\n' +
-    '3. 输出 JSON：{"pattern_key":"英文snake_case设计标签(如rct_itt_completer_boundary)","keywords":["通用方法学英文词1","词2","词3"],"rule_body":"一句中文通用边界规则说明（不含任何数字）"}。'
+    '2. 绝不允许豁免客观算术错误、置信区间越界、表格加总错误或未声明的统计检验混用；规则正文必须包含显式触发前提（仅当原文或表头/表注存在对应分析集分层、模型调整层级、双分布声明或四舍五入/行列百分比惯例证据时豁免；同一分析集与同一指标的前后矛盾仍须报错）；\n' +
+    '3. pattern_key 优先归并到规范方法学家族（如 rct_itt_completer_boundary / subcohort_denominator_stratification_boundary / crude_vs_adjusted_model_boundary / dual_distribution_summary_boundary / rounding_and_percentage_convention_boundary / non_additive_multichoice_category_boundary / domain_abbreviation_homonym_boundary / meta_analysis_subset_citation_boundary，若均不匹配再自定义简洁 snake_case）；keywords 仅输出具体方法学英文单词（勿用下划线长词或 cohort/trial/study 等泛词）；\n' +
+    '4. 输出 JSON：{"pattern_key":"英文snake_case设计标签","keywords":["具体方法学英文词1","词2","词3"],"rule_body":"一句带显式原文证据触发前提的中文通用边界规则说明（不含任何数字）"}。'
   const usr =
     `【原审稿意见类别】：${resolvedCat}\n` +
     `【原审稿意见理由】：${(context.reason ?? '').slice(0, 300)}\n` +
     `【涉及原句片段】：${(context.sentence ?? '').slice(0, 300)}\n` +
     `【临床作者反驳原文】：${rebuttalText.slice(0, 500)}`
+
+  const ensureExplicitConditionGuard = (body: string): string => {
+    if (!body) return body
+    if (/(?:同一.*仍|未声明.*仍|仅当|仅限|显式声明|显式标明)/.test(body)) return body
+    const trimmed = body.replace(/[。；;]+$/, '')
+    return `${trimmed}（仅限原文或表注显式标明该分层、调整模型或报告口径的情形；同一人群与同一指标的前后数值矛盾仍须报错）。`
+  }
 
   try {
     const raw = await complete(sys, usr)
@@ -513,12 +523,13 @@ export async function synthesizeSanitizedBoundaryRuleAsync(
         .slice(0, 48) || 'study_design_boundary'
       const kws = Array.isArray(parsed.keywords)
         ? parsed.keywords
-            .map(k => String(k).trim().toLowerCase().replace(/[^a-z0-9_-]/g, ''))
+            .flatMap(k => String(k).trim().toLowerCase().split(/[\s_]+/))
+            .map(k => k.replace(/[^a-z0-9-]/g, ''))
             .filter(k => k.length >= 3 && !/\d/.test(k))
             .slice(0, 5)
         : extractSanitizedBoundaryKeywords([rebuttalText, context.reason ?? ''], 4)
       const kwSuffix = kws.length > 0 ? `:kw=${kws.join(',')}` : ''
-      const bodyRaw = String(parsed.rule_body ?? '').trim()
+      const bodyRaw = ensureExplicitConditionGuard(String(parsed.rule_body ?? '').trim())
       const firstCandidate = `[domain:manuscript] [narrow:review_boundary:${rawKey}:cat=${resolvedCat}${kwSuffix}] 审稿核查边界收窄：${bodyRaw}`
       const firstDraftLeaked = hasInstanceLeakage(firstCandidate) || Boolean(sensitiveReason(firstCandidate))
       if (!firstDraftLeaked && bodyRaw.length >= 12) {
@@ -531,11 +542,13 @@ export async function synthesizeSanitizedBoundaryRuleAsync(
         }
       }
       // 二次强脱敏剥离所有数字与敏感词元后再校验
-      const scrubbedBody = bodyRaw
-        .replace(/\b(?:n|N|HR|OR|RR|P|p)\s*[=<>≤≥:：]?\s*\d+(?:\.\d+)?%?/g, '')
-        .replace(/\d+(?:\.\d+)?%?/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
+      const scrubbedBody = ensureExplicitConditionGuard(
+        String(parsed.rule_body ?? '')
+          .replace(/\b(?:n|N|HR|OR|RR|P|p)\s*[=<>≤≥:：]?\s*\d+(?:\.\d+)?%?/g, '')
+          .replace(/\d+(?:\.\d+)?%?/g, '')
+          .replace(/\s+/g, ' ')
+          .trim(),
+      )
       const secondCandidate = `[domain:manuscript] [narrow:review_boundary:${rawKey}:cat=${resolvedCat}${kwSuffix}] 审稿核查边界收窄：${scrubbedBody}`
       if (scrubbedBody.length >= 12 && !hasInstanceLeakage(secondCandidate) && !sensitiveReason(secondCandidate)) {
         return {
@@ -1217,12 +1230,95 @@ export class ClaimService {
     ]
   }
 
+  private getDocExemptedReviewChecks(docId: string): Array<{
+    claim_id: string
+    sentence: string
+    evidence_quote: string
+    reason: string
+  }> {
+    const store = this.docs.store as any
+    if (typeof store?.listClaimChecks !== 'function') return []
+    try {
+      const checks = (store.listClaimChecks(docId) ?? []) as Array<any>
+      return checks
+        .filter(c => c && c.verdict === 'exempted' && String(c.claim_id ?? '').startsWith('rev_exempt_'))
+        .map(c => ({
+          claim_id: String(c.claim_id),
+          sentence: String(c.sentence ?? ''),
+          evidence_quote: String(c.evidence_quote ?? ''),
+          reason: String(c.reason ?? ''),
+        }))
+    } catch {
+      return []
+    }
+  }
+
+  private isMatchedByDocExemptedReview(
+    item: SynthesizedReviewComment,
+    exemptedList: Array<{ claim_id: string; sentence: string; evidence_quote: string; reason: string }>,
+  ): boolean {
+    if (!exemptedList.length) return false
+    if (isHardObjectiveReviewFinding(item)) return false
+
+    const itemNorm = normForMatch(item.sentence)
+    const itemEvidenceNorms = (item.evidence ?? []).map(e => normForMatch(e)).filter(e => e.length >= 10)
+    const itemNums = numberKey([item.sentence, ...(item.evidence ?? [])])
+    const itemNumList = itemNums ? itemNums.split(',').filter(Boolean) : []
+    const itemTokens = extractTopicTokensForDedup([item.sentence, ...(item.evidence ?? [])])
+
+    for (const ex of exemptedList) {
+      const exCat = /\[([a-z_]+)\]/.exec(ex.reason)?.[1]
+      const exNorm = normForMatch(ex.sentence)
+      const exEvNorm = normForMatch(ex.evidence_quote)
+
+      if (
+        itemNorm.length >= 10 &&
+        exNorm.length >= 10 &&
+        (itemNorm.includes(exNorm.slice(0, 48)) || exNorm.includes(itemNorm.slice(0, 48)))
+      ) {
+        return true
+      }
+
+      // 同稿二次复审中，若上一轮驳回的是 (A, B) 对照点，而第二轮调换为 (B, A) 报出，同样按同稿已澄清点幂等消音
+      if ((!exCat || exCat === item.category) && itemNorm.length >= 12 && exEvNorm.length >= 12) {
+        if (
+          (exEvNorm.includes(itemNorm.slice(0, 36)) || itemNorm.includes(exEvNorm.slice(0, 36))) &&
+          itemEvidenceNorms.some(ev => exNorm.includes(ev.slice(0, 32)) || ev.includes(exNorm.slice(0, 32)))
+        ) {
+          return true
+        }
+      }
+
+      if ((!exCat || exCat === item.category) && itemNumList.length >= 2) {
+        const exNums = numberKey([ex.sentence, ex.evidence_quote])
+        const exNumList = exNums ? exNums.split(',').filter(Boolean) : []
+        if (exNums === itemNums) {
+          if (itemNumList.length >= 3) return true
+          const exTokens = extractTopicTokensForDedup([ex.sentence, ex.evidence_quote])
+          if (itemTokens.size > 0 && [...itemTokens].some(t => exTokens.has(t))) {
+            return true
+          }
+        } else if (exNumList.length >= 2) {
+          const exSet = new Set(exNumList)
+          const sharedNums = itemNumList.filter(n => exSet.has(n))
+          if (sharedNums.length >= 2 && sharedNums.length === Math.min(exNumList.length, itemNumList.length)) {
+            const exTokens = extractTopicTokensForDedup([ex.sentence, ex.evidence_quote])
+            if (itemTokens.size > 0 && [...itemTokens].some(t => exTokens.has(t))) {
+              return true
+            }
+          }
+        }
+      }
+    }
+    return false
+  }
+
   /**
    * Stage 4 全局合成 Judge（Global Synthesis, Deduplication, Severity Gating & {#c:id} Comment Anchoring）：
    * 对应 Google PAT (arXiv:2606.28277) Stage 4：
    * 1. 跨章节/多通道重复问题去重（Deduplication）；
    * 2. 严重度分级排序（critical -> major -> minor）；
-   * 3. 若开启自进化记忆（useMemory），依据活跃 `[narrow:review_boundary]` 规则过滤假阳性；
+   * 3. 若开启自进化记忆（useMemory），依据同稿已驳回记录与活跃 `[narrow:review_boundary]` 规则过滤假阳性；
    * 4. 可选将去重后的审稿意见直接挂载为文档内联批注 `{#c:id}`。
    */
   synthesizeStage4Review(
@@ -1233,12 +1329,19 @@ export class ClaimService {
       useMemory?: boolean
       owner?: string
       anchorComments?: boolean
+      verifiedByLlm?: boolean
     } = {},
   ): SynthesizedReviewComment[] {
     const activeRules = opts.useMemory ? this.getActiveBoundaryRules(opts.owner) : []
+    const docExempted = opts.useMemory ? this.getDocExemptedReviewChecks(docId) : []
     const deduplicate = opts.deduplicate !== false
 
-    const filtered = candidates.filter(c => !isExemptedByActiveRules(c, activeRules))
+    const filtered = candidates.filter(c => {
+      if (this.isMatchedByDocExemptedReview(c, docExempted)) return false
+      // 已通过全文 VERIFY_SYSTEM 结合边界规则逐条核实为 holds 的模型意见，不再用单句表层关键词二次误删
+      if (c.source_pass === 'llm_stage3' && opts.verifiedByLlm) return true
+      return !isExemptedByActiveRules(c, activeRules)
+    })
     const deduplicated: SynthesizedReviewComment[] = []
     const seenKeys = new Set<string>()
 
@@ -1328,7 +1431,7 @@ export class ClaimService {
             store.addReply(
               row.id,
               'ai',
-              `[${item.severity.toUpperCase()} | ${item.category}] ${item.reason}` +
+              `[${item.severity.toUpperCase()} | ${item.category}${item.subtype ? ` | ${item.subtype}` : ''}] ${item.reason}` +
                 (item.evidence?.length ? `\n【对照原文】：${item.evidence.map(e => `「${e.slice(0, 300)}」`).join(' ')}` : '') +
                 `\n【建议修改】：${item.suggestion}`,
             )
@@ -1484,19 +1587,27 @@ export class ClaimService {
     }
 
     // 2. 若提供了在线大模型（complete），按对应模式执行 LLM 审稿推理
+    const docExemptedReviews = useMemory ? this.getDocExemptedReviewChecks(docId) : []
+    const verifyEvidence = opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
     if (opts.complete) {
       const boundaryBlock =
         useMemory && activeRules.length > 0
-          ? `\n【本课题组已确认的专科审稿边界豁免规则（请严格遵守，切勿对以下合法研究设计边界误报）】：\n${activeRules.map(r => `- ${r}`).join('\n')}\n`
+          ? `\n【本课题组已确认的专科审稿边界豁免规则（请严格遵守：仅在原文或表注存在对应分层/调整模型/报告口径依据时免报；同一人群与同一指标的前后硬矛盾仍须报错）】：\n${activeRules.map(r => `- ${r}`).join('\n')}\n`
+          : ''
+      const docRebuttalBlock =
+        useMemory && docExemptedReviews.length > 0
+          ? `\n【本稿件上一轮审稿中作者已核实澄清并驳回的误报点（仅限本稿件；若无客观算术/区间越界错误，请勿对同一处重复报错）】：\n${docExemptedReviews
+              .slice(0, 12)
+              .map(e => `- 原句「${e.sentence.slice(0, 120)}」→ ${e.reason.slice(0, 160)}`)
+              .join('\n')}\n`
           : ''
       const checklistBlock =
         useMemory && activeChecklists.length > 0
-          ? `\n【从既往审稿复盘习得的跨章节高危漏检核查清单（若本章节存在对应客观矛盾请附上逐字 evidence 报出）】：\n${activeChecklists.map(c => `- ${c}`).join('\n')}\n`
+          ? `\n【从既往审稿复盘习得的跨章节高危漏检核查提醒（仅当本章节与摘要/方法/表格在同一分析集与同一模型下存在确凿逐字硬矛盾时才附 evidence 报出；切勿因核查清单强行凑数或误报不同分层）】：\n${activeChecklists.map(c => `- ${c}`).join('\n')}\n`
           : ''
-      const rulesContext = `${boundaryBlock}${checklistBlock}`
+      const rulesContext = `${boundaryBlock}${docRebuttalBlock}${checklistBlock}`
 
       // 产品模式（heurion_deep / heurion_evolved）：意见要带原文证据并逐条核实、每章节最多 3 条；PAT 基线模式保持原样以便对照
-      const verifyEvidence = opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved'
       let corpus: string | null = null
       const corpusText = () => (corpus ??= normForMatch(`${fullProse}\n${tableMarkdown}`))
       const sevRank: Record<string, number> = { critical: 0, major: 1, minor: 2 }
@@ -1659,9 +1770,10 @@ export class ClaimService {
           const llm = candidates.filter(c => c.source_pass === 'llm_stage3')
           const rejected = new Set<SynthesizedReviewComment>()
           const fullText = `${fullProse}\n\n${tableMarkdown}`
-          const verifySysWithRules = boundaryBlock
-            ? `${VERIFY_SYSTEM}\n${boundaryBlock}注意：若某条待复核意见属于上述合法研究设计边界（且原文并不存在客观算术、置信区间或表文矛盾硬伤），请将其 verdict 判为 rejected。`
-            : VERIFY_SYSTEM
+          const verifySysWithRules =
+            boundaryBlock || docRebuttalBlock
+              ? `${VERIFY_SYSTEM}\n${boundaryBlock}${docRebuttalBlock}复核准则补充：\n1) 若待复核意见确实属于上述合法研究设计/统计分层/模型调整/四舍五入边界（原文或表头/表注有明确依据），或属于本稿件作者上一轮已核实澄清的同一非算术误报点，请将其 verdict 判为 rejected；\n2) 若待复核意见指出了同一分析集、同一模型、同一指标的前后数值硬矛盾、百分比或分项加总算术不符、点估计落在置信区间外、或 P>=0.05 阳性夸大，必须判为 holds，严禁借边界规则误放过真实客观错误。`
+              : VERIFY_SYSTEM
           for (let i = 0; i < llm.length; i += 20) {
             const batch = llm.slice(i, i + 20)
             const list = batch.map((c, k) =>
@@ -1688,6 +1800,7 @@ export class ClaimService {
       useMemory,
       owner: opts.owner,
       anchorComments: opts.anchorComments,
+      verifiedByLlm: Boolean(opts.complete && verifyEvidence),
     })
 
     return {
@@ -1703,11 +1816,89 @@ export class ClaimService {
     }
   }
 
+  private recordIntraDocReviewExemption(
+    docId: string,
+    commentId: string,
+    linkedCheck: any,
+    commentObj: any,
+    aiReplyText: string,
+    inferredCategory: string | undefined,
+    opts: {
+      rebuttalText: string
+      issueSubtype?: string | null
+      sentence?: string
+      reason?: string
+      evidence?: string[]
+    },
+  ): string | undefined {
+    const store = this.docs.store as any
+    if (linkedCheck && typeof store?.putClaimCheck === 'function') {
+      store.putClaimCheck({
+        doc_id: docId,
+        claim_id: linkedCheck.claim_id,
+        node_id: linkedCheck.node_id,
+        sentence: linkedCheck.sentence,
+        verdict: 'exempted',
+        evidence_tier: linkedCheck.evidence_tier,
+        evidence_quote: linkedCheck.evidence_quote,
+        reason: `作者申辩豁免：${opts.rebuttalText.trim()}`,
+        comment_id: commentId,
+        rev: typeof this.docs?.rev === 'function' ? this.docs.rev(docId) : 0,
+      })
+      return linkedCheck.claim_id
+    }
+
+    const inferredSubtype =
+      opts.issueSubtype ??
+      /\[(?:CRITICAL|MAJOR|MINOR)\s*\|\s*[a-z_]+\s*\|\s*([a-z0-9_]+)\]/i.exec(aiReplyText)?.[1]?.toLowerCase() ??
+      undefined
+    const targetSentence = (opts.sentence ?? commentObj?.snippet ?? '').trim()
+    const targetReason = (opts.reason ?? aiReplyText ?? '').trim()
+
+    if (
+      targetSentence.length > 0 &&
+      typeof store?.putClaimCheck === 'function' &&
+      !isHardObjectiveReviewFinding({
+        category: inferredCategory,
+        subtype: inferredSubtype,
+        sentence: targetSentence,
+        reason: targetReason,
+      })
+    ) {
+      const exemptId =
+        'rev_exempt_' +
+        createHash('sha1')
+          .update(`${inferredCategory ?? 'review'}|${normForMatch(targetSentence).slice(0, 140)}`)
+          .digest('hex')
+          .slice(0, 12)
+      store.putClaimCheck({
+        doc_id: docId,
+        claim_id: exemptId,
+        node_id: commentObj?.node_id ?? '',
+        sentence: targetSentence,
+        verdict: 'exempted',
+        evidence_tier: 'fulltext',
+        evidence_quote: (opts.evidence ?? []).join(' | '),
+        reason: `作者申辩豁免 [${inferredCategory ?? 'review'}]：${opts.rebuttalText.trim()}`,
+        comment_id: commentId,
+        rev: typeof this.docs?.rev === 'function' ? this.docs.rev(docId) : 0,
+      })
+      if (commentObj && typeof store?.setCommentStatus === 'function') {
+        if (typeof store?.addReply === 'function') {
+          store.addReply(commentId, 'user', opts.rebuttalText.trim())
+        }
+        store.setCommentStatus(docId, commentId, 'resolved', 'user')
+      }
+      return exemptId
+    }
+    return undefined
+  }
+
   /**
    * 审稿批注自演进闭环（Comment-Driven Dual-Track Evolution Loop）：
    * 将研究者在 `{#c:id}` 审稿批注上的交互反馈回流至双轨自演进引擎：
    * 1. 作者驳回/申辩（rebuttalText 非空且 acceptedFix !== true）：
-   *    - 将关联的 claim_check 标记为 `exempted`（幂等豁免，后续复审不再重复挂批注）；
+   *    - 将关联的 claim_check（或非硬伤深审批注）标记为 `exempted`（同稿幂等豁免，后续复审不再重复挂批注）；
    *    - 触发 Track A `narrow` 算子：通过 `synthesizeSanitizedBoundaryRule` 动态提炼去数字化的专科边界记忆，避免对同类自报队列、TTE 克隆伪队列、单臂试验或转化实验再次误报。
    * 2. 作者采纳审稿意见并改稿修复（acceptedFix === true）：
    *    - 写入带 `recovery_ops` 的已验证执行信号（execution_signal），供 Track B 程序性策略引擎提炼前置守卫规则。
@@ -1720,9 +1911,11 @@ export class ClaimService {
       rebuttalText?: string
       acceptedFix?: boolean
       issueCategory?: string
+      issueSubtype?: string | null
       recoveryOp?: string
       sentence?: string
       reason?: string
+      evidence?: string[]
     } = {},
   ): {
     track: 'track_a_narrow' | 'track_b_procedural' | 'none'
@@ -1740,27 +1933,28 @@ export class ClaimService {
 
     // Case 1: 研究者回复驳回（Rebuttal）-> 豁免该论断 + Track A narrow 动态收窄边界记忆
     if (opts.rebuttalText && !opts.acceptedFix) {
-      if (linkedCheck && typeof store?.putClaimCheck === 'function') {
-        store.putClaimCheck({
-          doc_id: docId,
-          claim_id: linkedCheck.claim_id,
-          node_id: linkedCheck.node_id,
-          sentence: linkedCheck.sentence,
-          verdict: 'exempted',
-          evidence_tier: linkedCheck.evidence_tier,
-          evidence_quote: linkedCheck.evidence_quote,
-          reason: `作者申辩豁免：${opts.rebuttalText.trim()}`,
-          comment_id: commentId,
-          rev: this.docs.rev(docId),
-        })
-      }
-
       const inferredCategory =
         opts.issueCategory ??
-        /\|\s*(internal_inconsistency|method_result_mismatch|spin_or_guideline|citation_distortion|missing_citation)\]/i
+        /\|\s*(internal_inconsistency|method_result_mismatch|spin_or_guideline|citation_distortion|missing_citation)(?:\s*\||\])/i
           .exec(aiReplyText)?.[1]
           ?.toLowerCase() ??
         (linkedCheck?.verdict === 'missing_citation' ? 'missing_citation' : undefined)
+
+      const exemptedClaimId = this.recordIntraDocReviewExemption(
+        docId,
+        commentId,
+        linkedCheck,
+        commentObj,
+        aiReplyText,
+        inferredCategory,
+        {
+          rebuttalText: opts.rebuttalText,
+          issueSubtype: opts.issueSubtype,
+          sentence: opts.sentence ?? linkedCheck?.sentence,
+          reason: opts.reason ?? linkedCheck?.reason,
+          evidence: opts.evidence,
+        },
+      )
 
       const { patternKey, rule: narrowRule } = synthesizeSanitizedBoundaryRule(opts.rebuttalText, {
         sentence: opts.sentence ?? linkedCheck?.sentence ?? commentObj?.snippet,
@@ -1769,9 +1963,13 @@ export class ClaimService {
       })
 
       const existingMems = (typeof store?.listMemories === 'function' ? store.listMemories(owner) : []) as Array<any>
-      const tagMatch = /\[narrow:review_boundary:[^\]]+\]/.exec(narrowRule)?.[0] ?? `[narrow:review_boundary:${patternKey}]`
+      const keyPrefixColon = `[narrow:review_boundary:${patternKey}:`
+      const keyExact = `[narrow:review_boundary:${patternKey}]`
       const existingMem = existingMems.find(
-        m => m.content.includes(tagMatch) || (patternKey === 'self_cohort_boundary' && m.content.includes('[narrow:review_boundary]')),
+        m =>
+          m.content.includes(keyPrefixColon) ||
+          m.content.includes(keyExact) ||
+          (patternKey === 'self_cohort_boundary' && m.content.includes('[narrow:review_boundary]')),
       )
       const memRow =
         existingMem && typeof store?.updateMemory === 'function'
@@ -1794,7 +1992,7 @@ export class ClaimService {
             })
       return {
         track: 'track_a_narrow',
-        ...(linkedCheck ? { exemptedClaimId: linkedCheck.claim_id } : {}),
+        ...(exemptedClaimId ? { exemptedClaimId } : {}),
         memoryId: memRow.id,
         distilledRule: narrowRule,
       }
@@ -1846,9 +2044,11 @@ export class ClaimService {
       rebuttalText?: string
       acceptedFix?: boolean
       issueCategory?: string
+      issueSubtype?: string | null
       recoveryOp?: string
       sentence?: string
       reason?: string
+      evidence?: string[]
     } = {},
   ): Promise<{
     track: 'track_a_narrow' | 'track_b_procedural' | 'none'
@@ -1869,27 +2069,28 @@ export class ClaimService {
     const commentObj = typeof store?.getComment === 'function' ? store.getComment(docId, commentId) : undefined
     const aiReplyText = commentObj?.replies?.find((r: any) => r.role === 'ai')?.text ?? ''
 
-    if (linkedCheck && typeof store?.putClaimCheck === 'function') {
-      store.putClaimCheck({
-        doc_id: docId,
-        claim_id: linkedCheck.claim_id,
-        node_id: linkedCheck.node_id,
-        sentence: linkedCheck.sentence,
-        verdict: 'exempted',
-        evidence_tier: linkedCheck.evidence_tier,
-        evidence_quote: linkedCheck.evidence_quote,
-        reason: `作者申辩豁免：${opts.rebuttalText.trim()}`,
-        comment_id: commentId,
-        rev: this.docs.rev(docId),
-      })
-    }
-
     const inferredCategory =
       opts.issueCategory ??
-      /\|\s*(internal_inconsistency|method_result_mismatch|spin_or_guideline|citation_distortion|missing_citation)\]/i
+      /\|\s*(internal_inconsistency|method_result_mismatch|spin_or_guideline|citation_distortion|missing_citation)(?:\s*\||\])/i
         .exec(aiReplyText)?.[1]
         ?.toLowerCase() ??
       (linkedCheck?.verdict === 'missing_citation' ? 'missing_citation' : undefined)
+
+    const exemptedClaimId = this.recordIntraDocReviewExemption(
+      docId,
+      commentId,
+      linkedCheck,
+      commentObj,
+      aiReplyText,
+      inferredCategory,
+      {
+        rebuttalText: opts.rebuttalText,
+        issueSubtype: opts.issueSubtype,
+        sentence: opts.sentence ?? linkedCheck?.sentence,
+        reason: opts.reason ?? linkedCheck?.reason,
+        evidence: opts.evidence,
+      },
+    )
 
     const { patternKey, rule: narrowRule, rawRebuttalHadDigits, firstDraftLeaked } =
       await synthesizeSanitizedBoundaryRuleAsync(opts.complete, opts.rebuttalText, {
@@ -1899,8 +2100,9 @@ export class ClaimService {
       })
 
     const existingMems = (typeof store?.listMemories === 'function' ? store.listMemories(owner) : []) as Array<any>
-    const tagMatch = /\[narrow:review_boundary:[^\]]+\]/.exec(narrowRule)?.[0] ?? `[narrow:review_boundary:${patternKey}]`
-    const existingMem = existingMems.find(m => m.content.includes(tagMatch))
+    const keyPrefixColon = `[narrow:review_boundary:${patternKey}:`
+    const keyExact = `[narrow:review_boundary:${patternKey}]`
+    const existingMem = existingMems.find(m => m.content.includes(keyPrefixColon) || m.content.includes(keyExact))
     const memRow =
       existingMem && typeof store?.updateMemory === 'function'
         ? (store.updateMemory(existingMem.id, { content: narrowRule }), existingMem)
@@ -1923,7 +2125,7 @@ export class ClaimService {
 
     return {
       track: 'track_a_narrow',
-      ...(linkedCheck ? { exemptedClaimId: linkedCheck.claim_id } : {}),
+      ...(exemptedClaimId ? { exemptedClaimId } : {}),
       memoryId: memRow.id,
       distilledRule: narrowRule,
       rawRebuttalHadDigits,

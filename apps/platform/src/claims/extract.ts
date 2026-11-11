@@ -524,6 +524,39 @@ function hasArithmeticMismatchInText(text: string): boolean {
   return false
 }
 
+const GENERIC_BOUNDARY_KW_STOPWORDS = new Set([
+  'cohort', 'cohorts', 'trial', 'trials', 'study', 'studies', 'population', 'populations',
+  'group', 'groups', 'table', 'tables', 'analysis', 'analyses', 'method', 'methods',
+  'result', 'results', 'patient', 'patients', 'participant', 'participants', 'subject', 'subjects',
+  'data', 'value', 'values', 'number', 'numbers', 'rate', 'rates', 'level', 'levels',
+  'reported', 'included', 'clinical', 'statistical', 'consistency', 'internal', 'boundary',
+  'difference', 'summary', 'variable', 'variables', 'characteristic', 'characteristics',
+  'section', 'sections', 'denominator', 'baseline', 'outcome', 'outcomes', 'cross-sectional',
+  'alignment', 'assessment', 'appropriate', 'framework', 'presentation', 'description',
+  'prespecification', 'stratification',
+])
+
+/**
+ * 判断某条审稿告警是否属于不可豁免的客观数学/排版/结构硬伤（供跨稿与同稿复审安全底线共用）。
+ */
+export function isHardObjectiveReviewFinding(issue: {
+  category?: string
+  subtype?: string | null
+  sentence?: string
+  reason?: string
+}): boolean {
+  if (issue.subtype && NON_EXEMPTABLE_SUBTYPES.has(issue.subtype)) return true
+  if (issue.category === 'missing_citation') return false
+  const combined = `${issue.reason ?? ''} ${issue.sentence ?? ''}`.toLowerCase()
+  return (
+    PDF_TABLE_ARTIFACT_PATTERN.test(combined) ||
+    hasArithmeticMismatchInText(combined) ||
+    /(?:缺少小数点|下界.*大于上界|修订.*粘连|\b00+\s*\(\s*0(?:\.0+)?%\s*\)|前导零|\bsem\b.*(?:\bsd\b|标准差)|(?:\bsd\b|标准差).*\bsem\b)/i.test(
+      combined,
+    )
+  )
+}
+
 export function isExemptedByActiveRules(
   issue: { category: string; subtype?: string; reason: string; sentence: string; section_role?: string },
   activeRules: string[] = [],
@@ -539,6 +572,10 @@ export function isExemptedByActiveRules(
 
   if (!activeRules || activeRules.length === 0) return false
 
+  const hasHardMathArtifact =
+    issue.category !== 'missing_citation' &&
+    (PDF_TABLE_ARTIFACT_PATTERN.test(combined) || hasArithmeticMismatchInText(combined))
+
   // 优先检查带显式类别与关键词标签的自定义边界规则（[narrow:review_boundary:...:cat=<cat>:kw=<kw1,kw2>]）
   for (const rawRule of activeRules) {
     const rLower = rawRule.toLowerCase()
@@ -546,6 +583,7 @@ export function isExemptedByActiveRules(
     const catMatch = /:cat=([a-z0-9_]+)/i.exec(rLower)
     const kwMatch = /:kw=([^\]\s]+)/i.exec(rLower)
     if (catMatch || kwMatch) {
+      if (hasHardMathArtifact) continue
       // 铁律安全底线：客观算术、置信区间、跨章节矛盾、表格加总与 Spin 硬伤绝不允许被同句自定义 kw 规则豁免；
       // 仅允许 missing_citation 或明确声明特定生物标志物/内镜活检子登记库（d-dimer / coagulation / endoscopic / biopsy）的专科边界豁免
       if (
@@ -563,12 +601,32 @@ export function isExemptedByActiveRules(
       if (targetCat && targetCat !== issue.category.toLowerCase()) continue
       if (!targetCat && issue.category !== 'missing_citation') continue
       if (kwMatch && kwMatch[1]) {
-        const kws = kwMatch[1]
+        const rawKws = kwMatch[1]
           .split(',')
           .map(k => k.trim().toLowerCase())
           .filter(k => k.length >= 2)
-        if (kws.length > 0 && kws.some(k => sLower.includes(k) || reasonLower.includes(k))) {
-          return true
+        if (issue.category === 'missing_citation') {
+          if (rawKws.length > 0 && rawKws.some(k => sLower.includes(k) || reasonLower.includes(k))) {
+            return true
+          }
+        } else {
+          // 对非 missing_citation 类别，拆分 snake_case 复合词并剔除宽泛研究通用词（如 cohort/trial/population），
+          // 要求至少命中 2 个具体方法学/专科边界词元，防止宽泛单字规则误杀真实跨章节或表文矛盾
+          const specificTokens = new Set<string>()
+          for (const rk of rawKws) {
+            if (!rk.includes('_') && !GENERIC_BOUNDARY_KW_STOPWORDS.has(rk)) {
+              specificTokens.add(rk)
+            }
+            for (const sub of rk.split('_')) {
+              if (sub.length >= 3 && !GENERIC_BOUNDARY_KW_STOPWORDS.has(sub)) {
+                specificTokens.add(sub)
+              }
+            }
+          }
+          const matchedCount = [...specificTokens].filter(k => sLower.includes(k) || reasonLower.includes(k)).length
+          if (matchedCount >= 2) {
+            return true
+          }
         }
       } else if (
         issue.category === 'missing_citation' &&

@@ -11,7 +11,7 @@ export type VisionComplete = (system: string, user: string, images: InlineImage[
 /** 一次成功调用的用量（上游 Messages 响应里的 usage；缺字段时为 0） */
 export interface CompleteUsage { model: string; input_tokens: number; output_tokens: number; ms: number }
 
-interface CompleteOptions { upstream: string; apiKey: string; model: string; timeoutMs?: number; onUsage?: (u: CompleteUsage) => void }
+interface CompleteOptions { upstream: string; apiKey: string; model: string; timeoutMs?: number; onUsage?: (u: CompleteUsage) => void; extra?: Record<string, unknown> }
 
 type Content = string | Array<{ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }>
 
@@ -49,7 +49,8 @@ function caller(opts: CompleteOptions, extra: Record<string, unknown> = {}): (sy
 
 export function makeComplete(opts: CompleteOptions): Complete | null {
   if (!opts.apiKey) return null
-  const call = caller(opts)
+  const defaultExtra = opts.model.includes('flash') ? { thinking: { type: 'disabled' } } : {}
+  const call = caller(opts, { ...defaultExtra, ...opts.extra })
   return (system, user) => call(system, user)
 }
 

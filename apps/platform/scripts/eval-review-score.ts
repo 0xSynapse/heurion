@@ -39,7 +39,7 @@ export function changedTokens(find: string, replace: string): string[] {
 
 /** 一条问题是否命中某个标准答案 */
 export function matches(f: RunFinding, label: Label, added: string[]): boolean {
-  const text = normText(`${f.sentence} ${f.anchor} ${f.reason}`)
+  const text = normText(`${f.sentence} ${f.anchor} ${f.reason} ${(f.evidence ?? []).join(' ')}`)
   const quote = normText(label.quote)
   const overlap = text.includes(quote.slice(0, 40)) || quote.includes(normText(f.anchor).slice(0, 40))
     || (label.related_quotes ?? []).some(r => text.includes(normText(r).slice(0, 40)))
@@ -64,7 +64,7 @@ export function matchesKnownOrganicError(
   f: RunFinding,
   knownList: KnownOrganicError[] = readKnownOrganicErrors(),
 ): KnownOrganicError | null {
-  const blob = normText(`${f.sentence} ${f.anchor} ${f.reason}`)
+  const blob = normText(`${f.sentence} ${f.anchor} ${f.reason} ${(f.evidence ?? []).join(' ')}`)
   for (const item of knownList) {
     if (item.paper_id !== paperId) continue
     if (item.required_tokens.length > 0 && item.required_tokens.every(tok => blob.includes(normText(tok)))) {

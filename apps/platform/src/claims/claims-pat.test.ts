@@ -13,6 +13,7 @@ import {
   extractClaims,
   extractTableSummaries,
   isExemptedByActiveRules,
+  isHardObjectiveReviewFinding,
   SectionRoleTracker,
 } from './extract.ts'
 import {
@@ -29,6 +30,7 @@ import { readInjections, readManifest } from '../../scripts/eval-review-fetch.ts
 import {
   evolveAuditChecklistsFromDevMisses,
   evolveStoreFromFindingsBlind,
+  extractClinicianContext,
   loadOrSynthesizePaperMarkdown,
   reviewOnce,
   simulateBlindClinician,
@@ -974,5 +976,176 @@ describe('4-Stage Citation & Claim Verification Pipeline', () => {
     ])
     expect(devChecklistRes.addedCount).toBe(1)
     expect(devChecklistRes.leakageCount).toBe(0)
+  })
+
+  it('Intra-Document Rebuttal Memory, Broad-KW Stopword Guard, and Full-Table Clinician Context', async () => {
+    // 1. Broad generic :kw= tags (cohort/trial/population) MUST NOT wipe out genuine internal_inconsistency findings
+    const broadRule =
+      '[narrow:review_boundary:m_broad_test:cat=internal_inconsistency:kw=population,denominator,cohort,cross-sectional,trial] 宽泛队列分母边界规则。'
+    const realTpFinding = {
+      category: 'internal_inconsistency' as const,
+      sentence: 'In this cohort trial population, mortality was 14.2% in the abstract vs 19.8% in Results.',
+      reason: '摘要与正文同一队列死亡率 14.2% 与 19.8% 前后不一致。',
+    }
+    expect(isExemptedByActiveRules(realTpFinding, [broadRule])).toBe(false)
+
+    // Even when >=2 specific domain tokens match, verifiedByLlm=true protects VERIFY_SYSTEM-confirmed Stage 3 findings
+    const specificRule =
+      '[narrow:review_boundary:m_spec_test:cat=internal_inconsistency:kw=itt,completers,per-protocol] 意向性与完成随访分层边界。'
+    const svcGuard = new ClaimService(
+      {
+        rev: () => 1,
+        store: {
+          listMemories: () => [{ id: 'm1', content: specificRule, status: 'active' }],
+          listClaimChecks: () => [],
+        },
+      } as any,
+      {} as any,
+    )
+    const stage4Protected = svcGuard.synthesizeStage4Review(
+      'doc_verified',
+      [
+        {
+          id: 'c_verified_1',
+          node_id: 'p_res',
+          section_role: 'results',
+          verification_tier: 'high',
+          category: 'internal_inconsistency',
+          severity: 'major',
+          sentence: 'ITT randomized completers mortality was 12.4% in Abstract vs 15.9% in Table 2.',
+          snippet: 'ITT randomized completers mortality was 12.4%',
+          reason: '全文复核确认同一 ITT 人群死亡率 12.4% 与 15.9% 硬冲突。',
+          suggestion: '统一死亡率数值',
+          source_pass: 'llm_stage3',
+          evidence: ['Table 2 ITT completers mortality: 15.9%'],
+        },
+      ],
+      { owner: 'eval', useMemory: true, verifiedByLlm: true },
+    )
+    expect(stage4Protected).toHaveLength(1)
+
+    // 2. Intra-document Round 1 -> Rebuttal -> Same-docId Round 2 suppresses rebutted FP (even with flipped sentence/evidence),
+    //    stays strictly scoped to docId, and NEVER exempts hard arithmetic objective errors!
+    expect(
+      isHardObjectiveReviewFinding({
+        category: 'internal_inconsistency',
+        subtype: null,
+        sentence: 'Adverse events occurred in 21/35 (84.0%) patients.',
+        reason: '21/35 算术结果为 60.0%，与原文 84.0% 不符。',
+      }),
+    ).toBe(true)
+
+    const intraStore = new Store(':memory:')
+    const mdIntra = [
+      '# Cohort Stratification Study',
+      '## Methods',
+      'Overall screened registry included 500 adults; propensity-matched analysis included 220 matched pairs (440 adults).',
+      '## Results',
+      'In the propensity-matched cohort (n = 440), primary event rate was 18.2% compared with overall registry (N = 500).',
+      'Serious adverse events occurred in 21/35 (84.0%) surgical patients.',
+    ].join('\n\n')
+
+    let roundCounter = 0
+    const mockIntraLlm = vi.fn(async (sys: string, usr: string) => {
+      if (sys.includes('正在审查章节')) {
+        if (!usr.includes('propensity-matched cohort (n = 440)')) return '[]'
+        roundCounter++
+        // Round 2 flips sentence and evidence to test symmetric intra-doc suppression
+        const mBlock = /\[(p_[a-z0-9_]+|[a-z0-9_-]+)\]/.exec(usr)
+        const blockId = mBlock ? mBlock[1] : 'b1'
+        if (roundCounter === 1) {
+          return JSON.stringify([
+            {
+              node_id: blockId,
+              sentence:
+                'In the propensity-matched cohort (n = 440), primary event rate was 18.2% compared with overall registry (N = 500).',
+              evidence: ['Overall screened registry included 500 adults'],
+              category: 'internal_inconsistency',
+              severity: 'major',
+              reason: '结果段样本量 n=440 与方法段总样本量 N=500 不一致。',
+              suggestion: '核对样本量',
+            },
+          ])
+        }
+        return JSON.stringify([
+          {
+            node_id: blockId,
+            sentence:
+              'Overall screened registry included 500 adults; propensity-matched analysis included 220 matched pairs (440 adults).',
+            evidence: ['In the propensity-matched cohort (n = 440), primary event rate was 18.2%'],
+            category: 'internal_inconsistency',
+            severity: 'major',
+            reason: '总队列 500 例与匹配队列 440 例分母前后变化。',
+            suggestion: '核对分母',
+          },
+        ])
+      }
+      if (sys.includes('负责复核另一位审稿人')) {
+        return JSON.stringify([{ id: 1, verdict: 'holds', why: '保留测试同稿复审豁免' }])
+      }
+      return '[]'
+    })
+
+    const r1 = await reviewOnce(mdIntra, 'Cohort Stratification Study', true, intraStore, {
+      mode: 'heurion_evolved',
+      complete: mockIntraLlm,
+    })
+    const r1Fp = r1.findings.find(f => f.source_pass === 'llm_stage3')
+    const r1HardMath = r1.findings.find(f => f.sentence.includes('21/35'))
+    expect(r1Fp).toBeDefined()
+    expect(r1HardMath).toBeDefined()
+
+    // Author rebuts BOTH the legitimate propensity-matched FP AND the hard 21/35=84% math error (adversarial attempt)
+    const intraSvc = new ClaimService({ rev: () => 1, store: intraStore } as any, {} as any)
+    for (const f of r1.findings) {
+      if (!f.comment_id) continue
+      intraSvc.evolveFromReviewComment(r1.docId, f.comment_id, {
+        owner: 'eval',
+        rebuttalText: '该处属于研究方案预设的倾向性匹配分层口径，数据无误。',
+        acceptedFix: false,
+        issueCategory: f.category,
+        issueSubtype: f.subtype,
+        sentence: f.sentence,
+        reason: f.reason,
+        ...(f.evidence ? { evidence: f.evidence } : {}),
+      })
+    }
+
+    // Round 2 on the SAME docId: rebutted propensity-matched FP is suppressed, while 21/35 (84.0%) hard math error STILL fires!
+    const r2SameDoc = await reviewOnce(mdIntra, 'Cohort Stratification Study', true, intraStore, {
+      mode: 'heurion_evolved',
+      docId: r1.docId,
+      complete: mockIntraLlm,
+    })
+    expect(r2SameDoc.findings.some(f => f.source_pass === 'llm_stage3')).toBe(false)
+    expect(r2SameDoc.findings.some(f => f.sentence.includes('21/35'))).toBe(true)
+
+    // 3. extractClinicianContext ranks & preserves Table 6 + counterpart evidence excerpt
+    const sixTablesMd = [
+      '# Multi-Table Study',
+      '## Methods',
+      'Adjusted logistic models controlled for age and sex.',
+      ...[1, 2, 3, 4, 5].map(k => `Table ${k}. Irrelevant metrics ${k}\n| Var | Val |\n| --- | --- |\n| Metric_${k} | ${k * 10} |`),
+      'Table 6. Multivariable sensitivity subgroup outcomes\n| Subgroup | Adjusted OR (95% CI) |\n| --- | --- |\n| Biomarker_Z | 3.42 (1.81-6.45) |\nFootnote: Model adjusted for renal function.',
+      '## Discussion',
+      'As shown in Table 6, Biomarker_Z yielded an adjusted OR of 3.42 in the renal-adjusted model.',
+    ].join('\n\n')
+
+    const ctx = extractClinicianContext(sixTablesMd, {
+      finding_key: 'fk_tbl6',
+      severity: 'major',
+      category: 'internal_inconsistency',
+      subtype: null,
+      source_pass: 'llm_stage3',
+      section_title: 'Discussion',
+      sentence: 'As shown in Table 6, Biomarker_Z yielded an adjusted OR of 3.42 in the renal-adjusted model.',
+      anchor: 'Biomarker_Z yielded an adjusted OR of 3.42',
+      evidence: ['| Biomarker_Z | 3.42 (1.81-6.45) |'],
+      reason: '讨论段 OR 3.42 与粗模型不一致',
+      suggestion: '核对表 6',
+    })
+    expect(ctx).toContain('Table 6. Multivariable sensitivity subgroup outcomes')
+    expect(ctx).toContain('3.42 (1.81-6.45)')
+    expect(ctx).toContain('Footnote: Model adjusted for renal function.')
   })
 })

@@ -309,6 +309,8 @@ export async function reviewOnce(
   opts: {
     mode?: ReviewEvalMode
     complete?: Complete | null
+    /** 同稿二次复审（Intra-Manuscript Round 2）时复用已有 docId，使同稿作者驳回记录生效 */
+    docId?: string
   } = {},
 ): Promise<Omit<RunRecord, 'run_id' | 'paper_id' | 'variant' | 'repeat'> & { store: Store; docId: string }> {
   const usage: CompleteUsage[] = []
@@ -321,16 +323,19 @@ export async function reviewOnce(
   const mode: ReviewEvalMode = opts.mode ?? 'heurion_evolved'
   const store = sharedStore ?? new Store(':memory:')
   const docs = new Documents(store)
-  const row = docs.create({ owner: 'eval', title, markdown })
+  const docId =
+    opts.docId && store.getDoc(opts.docId)
+      ? opts.docId
+      : docs.create({ owner: 'eval', title, markdown }).id
   const t0 = Date.now()
   try {
-    const r = await new ClaimService(docs, {} as PubMedClient).runFourStageDeepReview(row.id, {
+    const r = await new ClaimService(docs, {} as PubMedClient).runFourStageDeepReview(docId, {
       mode,
       owner: 'eval',
       anchorComments: true,
       ...(complete ? { complete } : {}),
     })
-    const comments = new Map(store.listComments(row.id).map((c: { id: string; snippet: string }) => [c.id, c.snippet]))
+    const comments = new Map(store.listComments(docId).map((c: { id: string; snippet: string }) => [c.id, c.snippet]))
     const findings = r.stage4_deduplicated_comments.map((c: SynthesizedReviewComment): RunFinding => ({
       finding_key: findingKey(c),
       ...(c.comment_id ? { comment_id: c.comment_id } : {}),
@@ -357,7 +362,7 @@ export async function reviewOnce(
       evolved_active_rules: countActiveBoundaryRules(store, 'eval'),
       evolved_audit_checklists: countActiveAuditChecklists(store, 'eval'),
       store,
-      docId: row.id,
+      docId,
     }
   } catch (err) {
     return {
@@ -372,45 +377,143 @@ export async function reviewOnce(
       evolved_active_rules: countActiveBoundaryRules(store, 'eval'),
       evolved_audit_checklists: countActiveAuditChecklists(store, 'eval'),
       store,
-      docId: row.id,
+      docId,
     }
   }
 }
 
+function locateApproxOffset(markdown: string, query: string): number {
+  const cleaned = query.replace(/\s*\[[^\]]+\]\s*:[^|]*$/, '').trim()
+  if (!cleaned) return -1
+  const direct = markdown.indexOf(cleaned.slice(0, 56).trim())
+  if (direct >= 0) return direct
+
+  const tokens = (cleaned.toLowerCase().match(/\d+(?:\.\d+)?%?|[a-z]{4,}/g) ?? []).slice(0, 8)
+  if (tokens.length === 0) return -1
+
+  const lines = markdown.split('\n')
+  let bestLine = -1
+  let bestHits = 0
+  let offset = 0
+  let bestOffset = -1
+  for (let i = 0; i < lines.length; i++) {
+    const lineLower = lines[i]!.toLowerCase()
+    let hits = 0
+    for (const t of tokens) {
+      if (lineLower.includes(t)) hits++
+    }
+    if (hits > bestHits && hits >= Math.min(2, tokens.length)) {
+      bestHits = hits
+      bestLine = i
+      bestOffset = offset
+    }
+    offset += lines[i]!.length + 1
+  }
+  return bestLine >= 0 ? bestOffset : -1
+}
+
 /**
- * 为物理双盲临床作者代理提取稿件上下文（仅含稿件本身的摘要、统计方法、表格及批注命中段落，绝对不含任何评测标签）。
+ * 为物理双盲临床作者代理提取稿件上下文（仅含稿件本身的摘要、统计方法、全部相关表格及批注/对照证据命中段落，绝对不含任何评测标签）。
  */
 export function extractClinicianContext(markdown: string, finding: RunFinding): string {
   const sections = markdown.split(/\n(?=##?\s+)/g)
-  const picked: string[] = []
+  const methodAndAbstractParts: string[] = []
   for (const sec of sections) {
     const firstLine = sec.split('\n', 1)[0] ?? ''
-    if (/abstract|method|statistical|material|design|participant|patient/i.test(firstLine)) {
-      picked.push(sec.slice(0, 3200))
+    if (/abstract|method|statistical|material|design|participant|patient|population/i.test(firstLine)) {
+      methodAndAbstractParts.push(sec.slice(0, 2600))
     }
   }
-  const tableBlocks = markdown.match(/(?:^\|[^\n]+\|\n){2,}/gm) ?? []
-  if (tableBlocks.length > 0) {
-    picked.push(`### Manuscript Tables (Excerpt)\n${tableBlocks.slice(0, 4).join('\n\n').slice(0, 4000)}`)
+  const picked: string[] = []
+  if (methodAndAbstractParts.length > 0) {
+    picked.push(methodAndAbstractParts.join('\n\n').slice(0, 5200))
   }
-  const needle = finding.anchor.slice(0, 48).trim()
-  if (needle) {
-    const idx = markdown.indexOf(needle)
-    if (idx >= 0) {
-      const start = Math.max(0, idx - 600)
-      const end = Math.min(markdown.length, idx + 900)
-      picked.push(`### Local Context Around Flagged Text\n${markdown.slice(start, end)}`)
+
+  // 提取稿件所有表格（连同表题与表注），按与当前审稿意见的相关度排序，避免第 5–8 张表被硬截断丢失
+  const lines = markdown.split('\n')
+  const tablesWithCaptions: string[] = []
+  let li = 0
+  while (li < lines.length) {
+    if (lines[li]!.trim().startsWith('|') && li + 1 < lines.length && lines[li + 1]!.trim().startsWith('|')) {
+      const startTbl = li
+      while (li < lines.length && lines[li]!.trim().startsWith('|')) li++
+      const endTbl = li
+      const capLines: string[] = []
+      for (let back = Math.max(0, startTbl - 3); back < startTbl; back++) {
+        const bl = lines[back]!.trim()
+        if (bl && !bl.startsWith('|') && !bl.startsWith('#')) capLines.push(bl)
+      }
+      const footLines: string[] = []
+      for (let fwd = endTbl; fwd < Math.min(lines.length, endTbl + 3); fwd++) {
+        const fl = lines[fwd]!.trim()
+        if (!fl) continue
+        if (fl.startsWith('#') || fl.startsWith('|') || /^(?:Table|Fig)/i.test(fl)) break
+        if (fl.length <= 320) footLines.push(fl)
+      }
+      tablesWithCaptions.push([...capLines, ...lines.slice(startTbl, endTbl), ...footLines].join('\n'))
+    } else {
+      li++
     }
   }
-  return picked.join('\n\n').slice(0, 12000)
+
+  if (tablesWithCaptions.length > 0) {
+    const queryBlob = `${finding.sentence} ${finding.anchor} ${(finding.evidence ?? []).join(' ')} ${finding.reason}`.toLowerCase()
+    const queryTokens = [...new Set(queryBlob.match(/\d+(?:\.\d+)?%?|[a-z]{4,}/g) ?? [])]
+    const scoredTables = tablesWithCaptions
+      .map((tbl, idx) => {
+        const tl = tbl.toLowerCase()
+        let score = 0
+        for (const qt of queryTokens) {
+          if (tl.includes(qt)) score += /\d/.test(qt) ? 3 : 1
+        }
+        return { tbl, idx, score }
+      })
+      .sort((a, b) => b.score - a.score || a.idx - b.idx)
+
+    const selectedTables: string[] = []
+    let tblChars = 0
+    for (const item of scoredTables) {
+      if (tblChars + item.tbl.length <= 9500 || selectedTables.length < 2) {
+        selectedTables.push(item.tbl.slice(0, 4800))
+        tblChars += Math.min(item.tbl.length, 4800)
+      } else {
+        const headerPreview = item.tbl.split('\n').slice(0, 4).join('\n')
+        selectedTables.push(`${headerPreview}\n| ... (table rows omitted) |`)
+      }
+    }
+    picked.push(`### Manuscript Tables (Ranked by Relevance)\n${selectedTables.join('\n\n').slice(0, 10000)}`)
+  }
+
+  // 同时定位批注锚点、原句及所有对照证据（evidence）所在的原文局部窗口
+  const queries = [finding.anchor, finding.sentence, ...(finding.evidence ?? [])].filter(Boolean)
+  const ranges: Array<[number, number]> = []
+  for (const q of queries) {
+    const pos = locateApproxOffset(markdown, q)
+    if (pos < 0) continue
+    const start = Math.max(0, pos - 550)
+    const end = Math.min(markdown.length, pos + 850)
+    const merged = ranges.find(r => start <= r[1] + 120 && end >= r[0] - 120)
+    if (merged) {
+      merged[0] = Math.min(merged[0], start)
+      merged[1] = Math.max(merged[1], end)
+    } else if (ranges.length < 4) {
+      ranges.push([start, end])
+    }
+  }
+  if (ranges.length > 0) {
+    const snippets = ranges.map(([s, e], i) => `[Excerpt ${i + 1}]\n${markdown.slice(s, e)}`).join('\n\n')
+    picked.push(`### Local Context Around Flagged Text & Counterpart Evidence\n${snippets.slice(0, 4800)}`)
+  }
+
+  return picked.join('\n\n').slice(0, 18500)
 }
 
 /**
  * 物理双盲隔离的临床通讯作者 / 生物统计学家代理（True Blind-Isolated Simulated Clinician Agent）：
  * - 函数签名在物理上不接收 `variant`（clean/injected）、不接收 `injections.json`、不接收 `split`（dev/test）！
  * - 代理仅能阅读当前稿件的标题、方法/表格/局部正文上下文及单条审稿批注，独立核算该批注属于：
- *   1. `accept_fix`：原文确实存在算术矛盾（n/N != %、亚组之和 != Total）、置信区间越界/倒挂、跨章节数值冲突、统计检验未声明混用或 P>=0.05 阳性夸大；
- *   2. `rebut_false_positive`：原文数据在算术与逻辑上自洽，审稿意见误伤了合法的临床研究设计/统计分层边界（如 CONSORT ITT vs Per-Protocol 分母、STROBE 倾向性匹配前后队列、正态与偏态双分布指标并列报告、RECIST SD=疾病稳定缩写等），并结合本文具体研究设计与样本量撰写作者申辩。
+ *   1. `accept_fix`：原文确实存在算术矛盾（n/N != %、互斥穷尽亚组之和 != Total）、置信区间越界/倒挂、同一指标跨章节数值硬冲突、统计检验未声明混用或 P>=0.05 阳性夸大；
+ *   2. `rebut_false_positive`：原文数据在算术与逻辑上自洽，审稿意见属于误读或误伤了合法的临床研究设计/统计分层/模型调整/四舍五入规范，并结合本文具体研究设计与样本量撰写作者申辩。
  */
 export async function simulateBlindClinician(
   complete: Complete,
@@ -425,11 +528,17 @@ export async function simulateBlindClinician(
 }> {
   const ctx = extractClinicianContext(input.manuscriptMarkdown, input.finding)
   const sys =
-    '你是该临床医学稿件的通讯作者兼生物统计学家，正在逐条回复期刊审稿人的批注。\n' +
-    '请严格基于稿件原文核算该条审稿意见是否属实：\n' +
-    '1. 若稿件原文确实存在客观错误——包括百分比算术不符（n/N != %）、表格分项之和不等于 Total、点估计落在 95% CI 之外或上下界倒挂、摘要/正文/表格同一指标数值前后不一、Methods 仅声明单一检验却在 Results 混用未声明统计量、或将 p >= 0.05 无显著性结果夸大为显著有效/因果结论——你必须诚实采纳并修正，输出 decision = "accept_fix"；\n' +
-    '2. 仅当稿件原文数字算术完全正确，且审稿意见是因为误解了合法的临床研究设计或统计报告规范（例如：CONSORT 随机化 ITT 人数与完成随访 Completer 分析集切换、STROBE 匹配前全队列与匹配后亚组切换、Methods 已同时声明正态 Mean±SD 与偏态 Median(IQR) 双体系、肿瘤 RECIST 疗效 SD=stationary disease 与标准差 SD 同名、荟萃分析单篇文献子集引用等）而产生的误报时，输出 decision = "rebut_false_positive"，并以通讯作者口吻结合本文研究设计和具体样本量撰写专业反驳说明。\n' +
-    '请仅输出严格 JSON：{"decision":"accept_fix" | "rebut_false_positive","response_text":"通讯作者回复原文（中文，50-160字）"}。'
+    '你是该临床医学稿件的通讯作者兼生物统计学家，正在逐条核实并回复期刊审稿人的批注。\n' +
+    '请严格对照所提供的稿件方法、表格及局部原文，客观公正地判定该条审稿批注是否成立：\n' +
+    '1. 何时输出 decision = "accept_fix"（诚实采纳并修正）：\n' +
+    '   仅当核对原文后确认存在真正的客观错误——即针对【同一人群分母、同一统计模型、同一时间点、同一指标】出现前后数值矛盾；百分比算术错误（n/N != % 且超出末位四舍五入误差）；互斥且穷尽的亚组例数之和不等于声明总数；点估计落在自身 95% CI 之外或区间上下界倒挂；Methods 仅声明单一分布/检验却在 Results 使用未声明统计量；或将 p >= 0.05 的非显著结果夸大为显著有效/观察性研究下强因果定论。\n' +
+    '2. 何时输出 decision = "rebut_false_positive"（专业申辩驳回误报）：\n' +
+    '   只要核对原文发现并无客观错误，而是审稿人误读或混淆了合法的统计与研究设计边界，必须坚定驳回——包括但不限于：\n' +
+    '   - 合法的多层级样本分母切换（如 CONSORT 随机化 ITT 人群 vs 完成随访 Completer/Per-Protocol 集、STROBE 总队列 vs 倾向性匹配/完整协变量/合格标本亚组、PRISMA 纳入总试验数 vs 特定结局可用试验子集、体外孔板重复与体内动物分组独立体系）；\n' +
+    '   - 不同的统计模型或百分比计算方向（如未校正 Crude OR/HR vs 多因素校正 aOR/aHR、加权/标化估计 vs 原始例数、表格按行百分比 vs 按列百分比、可多选合并症/结局行原本就不应相加等于 100%）；\n' +
+    '   - 方法学已预先声明按正态性/变量类型分别采用参数（Mean±SD）与非参数（Median[IQR]）双体系报告，或表注临床疗效缩写（如 RECIST SD=疾病稳定）与正文标准差 SD 同名异义；\n' +
+    '   - 常规小数位四舍五入差异（如保留一位小数 0.2 与两位小数 0.24、各分项百分比相加为 99.9%/100.1%），或审稿人看错行列、把两个不同变量/时间点/组别混为一谈。\n' +
+    '请以通讯作者口吻撰写专业回复说明（反驳时可引用本稿具体研究设计、分析集或模型口径），并仅输出严格 JSON：{"decision":"accept_fix" | "rebut_false_positive","response_text":"通讯作者回复原文（中文，50-160字）"}。'
   const usr =
     `【稿件标题】：${input.manuscriptTitle}\n\n` +
     `【稿件方法、表格与局部上下文】：\n${ctx}\n\n` +
@@ -498,21 +607,37 @@ export async function evolveStoreFromFindingsBlind(
   let rawRebuttalWithDigitsCount = 0
   let firstDraftLeakedScrubbedCount = 0
 
-  for (const f of findings) {
-    if (!f.comment_id) continue
-    const clin = await simulateBlindClinician(complete, {
-      manuscriptTitle,
-      manuscriptMarkdown,
-      finding: f,
-    })
-    const evo = await svc.evolveFromReviewCommentAsync(docId, f.comment_id, {
+  const commentFindings = findings.filter(f => Boolean(f.comment_id))
+  const clinResponses = new Array<{ decision: 'accept_fix' | 'rebut_false_positive'; responseText: string }>(commentFindings.length)
+  let nextIdx = 0
+  const clinConcurrency = 4
+  await Promise.all(
+    Array.from({ length: Math.min(clinConcurrency, commentFindings.length) }, async () => {
+      while (nextIdx < commentFindings.length) {
+        const idx = nextIdx++
+        const f = commentFindings[idx]!
+        clinResponses[idx] = await simulateBlindClinician(complete, {
+          manuscriptTitle,
+          manuscriptMarkdown,
+          finding: f,
+        })
+      }
+    }),
+  )
+
+  for (let idx = 0; idx < commentFindings.length; idx++) {
+    const f = commentFindings[idx]!
+    const clin = clinResponses[idx]!
+    const evo = await svc.evolveFromReviewCommentAsync(docId, f.comment_id!, {
       complete,
       owner: 'eval',
       rebuttalText: clin.responseText,
       acceptedFix: clin.decision === 'accept_fix',
       issueCategory: f.category,
+      issueSubtype: f.subtype,
       sentence: f.sentence,
       reason: f.reason,
+      ...(f.evidence?.length ? { evidence: f.evidence } : {}),
     })
     const leaked = evo.distilledRule ? hasInstanceLeakage(evo.distilledRule) : false
     if (evo.track === 'track_a_narrow' && evo.distilledRule) {
