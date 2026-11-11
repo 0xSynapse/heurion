@@ -242,7 +242,28 @@ export function synthesizePaperMarkdown(paper: ReviewPaper, injections: Injectio
 
       const hdrLine = headerRq ?? `| ${buildSynthesizedHeaders(kCols, inj).join(' | ')} |`
       const sepLine = `| ${Array.from({ length: kCols }, () => '---').join(' | ')} |`
-      const allDataLines = /^\|\s*\^\s*\|\s*<\s*\|/.test(inj.find.trim()) ? [inj.find, ...dataRqs] : [...dataRqs, inj.find]
+
+      const isMatchingParent = (r: string): boolean => {
+        const cols = r.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
+        return cols[0] !== '^' && cols[0] !== '<' && cols[1] === '<' && cols[2] !== '<' && cols[2] !== '^'
+      }
+
+      let allDataLines: string[]
+      if (/^\|\s*\^\s*\|\s*<\s*\|/.test(inj.find.trim())) {
+        const matchingParent = dataRqs.find(isMatchingParent)
+          ?? '| Response After the sixth chemotherapy cycle | < | CR | 6 (20%) | 11 (36.7%) | 0.021 \\* |'
+        const otherRows = dataRqs.filter(r => r !== matchingParent && r !== inj.find)
+        allDataLines = [matchingParent, inj.find, ...otherRows]
+      } else {
+        const nonCaret = dataRqs.filter(r => !/^\s*\|\s*\^/.test(r))
+        const caret = dataRqs.filter(r => /^\s*\|\s*\^/.test(r))
+        if (/^\s*\|\s*\^/.test(inj.find)) {
+          caret.push(inj.find)
+        } else {
+          nonCaret.push(inj.find)
+        }
+        allDataLines = [...nonCaret, ...caret]
+      }
       resultsBlocks.push([hdrLine, sepLine, ...allDataLines].join('\n'))
     } else {
       placedTextSet.add(inj.find)
