@@ -1375,7 +1375,7 @@ export function auditInternalConsistency(
       for (const sent of blk.sents) {
         if (!/(?:表\s*1\b|\bTable\s*1\b)/i.test(sent)) continue
         const withoutCi = sent.replace(/\b95%\s*CI\b/gi, '')
-        const pctMatches = withoutCi.match(/\b\d+(?:\.\d+)?[%％]/g) ?? []
+        const pctMatches: string[] = withoutCi.match(/\b\d+(?:\.\d+)?[%％]/g) ?? []
         const tableNums = resolvedTables[0].numbers
         // 表格里的百分比常不写 % 号（「Sex (% male) 60」「54 (66.7)」），去掉 % 后在表里也算对上
         const missingPcts = pctMatches.filter(p => {
@@ -2328,7 +2328,7 @@ export function auditMethodResultConsistency(
   }
 
   for (const blk of allBlocks) {
-    if (blk.sectionRole === 'references' || /^(?:references|bibliography|参考文献)\b/i.test(blk.sectionTitle)) continue
+    if (/^(?:references|bibliography|参考文献)\b/i.test(blk.sectionTitle)) continue
     if (/^\s*\[\d+\]/.test(blk.text)) continue
     const isAbbrContext = /\babbreviations?\b|缩略语|缩写|\bnotes?\b|脚注|表注/i.test(`${blk.sectionTitle} ${blk.text}`)
     if (!isAbbrContext) continue

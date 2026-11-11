@@ -832,7 +832,8 @@ describe('4-Stage Citation & Claim Verification Pipeline', () => {
 
       for (const inj of injections) {
         const added = changedTokens(inj.find, inj.replace)
-        const stHit = stInj.findings.some(f => matches(f, { ...inj, quote: inj.replace }, added))
+        const injLabel = { ...inj, paper_id: p.id, variant: 'injected' as const, source: 'injection' as const, quote: inj.replace }
+        const stHit = stInj.findings.some(f => matches(f, injLabel, added))
         if (stHit) astDetected++
       }
 
@@ -856,7 +857,8 @@ describe('4-Stage Citation & Claim Verification Pipeline', () => {
       const advR2 = await reviewOnce(injectedMd, p.title, false, adversarialStore, { mode: 'heurion_evolved' })
       for (const inj of injections) {
         const added = changedTokens(inj.find, inj.replace)
-        if (advR2.findings.some(f => matches(f, { ...inj, quote: inj.replace }, added))) {
+        const injLabel = { ...inj, paper_id: p.id, variant: 'injected' as const, source: 'injection' as const, quote: inj.replace }
+        if (advR2.findings.some(f => matches(f, injLabel, added))) {
           adversarialDetected++
         }
       }

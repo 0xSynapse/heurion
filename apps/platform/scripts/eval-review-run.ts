@@ -724,19 +724,17 @@ export async function evolveAuditChecklistsFromDevMisses(
       store.updateMemory(existing.id, { content: distilled.checklistRule })
     } else {
       store.addMemory({
-        scope: 'user',
+        scope: 'global',
         owner,
         project_id: null,
         kind: 'preference',
         content: distilled.checklistRule,
         norm: distilled.checklistRule.toLowerCase(),
         reason: `开发集漏检复盘提炼通用核查清单（${item.errorCategory}）`,
-        source: 'auto',
+        source: 'review',
         source_doc_id: null,
         source_turn_id: null,
-        actor: 'user',
         explicit: 1,
-        evidence: 1,
         status: 'active',
       })
     }

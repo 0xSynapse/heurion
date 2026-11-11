@@ -2179,19 +2179,17 @@ export class ClaimService {
         existingMem && typeof store?.updateMemory === 'function'
           ? (store.updateMemory(existingMem.id, { content: narrowRule }), existingMem)
           : store.addMemory({
-              scope: 'user',
+              scope: 'global',
               owner,
               project_id: null,
               kind: 'preference',
               content: narrowRule,
               norm: narrowRule.toLowerCase(),
               reason: `审稿批注作者申辩收窄边界：${opts.rebuttalText.trim().slice(0, 80)}`,
-              source: 'auto',
+              source: 'review',
               source_doc_id: docId,
               source_turn_id: null,
-              actor: 'user',
               explicit: 1,
-              evidence: 1,
               status: 'active',
             })
       return {
@@ -2311,19 +2309,17 @@ export class ClaimService {
       existingMem && typeof store?.updateMemory === 'function'
         ? (store.updateMemory(existingMem.id, { content: narrowRule }), existingMem)
         : store.addMemory({
-            scope: 'user',
+            scope: 'global',
             owner,
             project_id: null,
             kind: 'preference',
             content: narrowRule,
             norm: narrowRule.toLowerCase(),
             reason: `审稿批注作者申辩收窄边界：${opts.rebuttalText.trim().slice(0, 80)}`,
-            source: 'auto',
+            source: 'review',
             source_doc_id: docId,
             source_turn_id: null,
-            actor: 'user',
             explicit: 1,
-            evidence: 1,
             status: 'active',
           })
 
