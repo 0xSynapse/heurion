@@ -70,11 +70,19 @@ describe('临床科研进阶套件测试 (Research Extensions)', () => {
     expect(res.e_value_ci).toBeGreaterThanOrEqual(1.58)
     expect(res.e_value_ci).toBeLessThanOrEqual(1.68)
 
-    // 验证中英文自动生成的审稿抗辩文段
+    // 中英文段落只陈述 E-value 的含义，不替作者下「结论稳健」的判断，也不擅称「调整后」
     expect(res.academic_defense_zh).toContain('VanderWeele E-value')
-    expect(res.academic_defense_zh).toContain('未被观察测量的潜在残留混杂因素')
-    expect(res.academic_defense_zh).toContain('高度的稳健性与抗偏倚能力')
-    expect(res.academic_defense_en).toContain('robust causal resilience against potential unmeasured residual confounding')
+    expect(res.academic_defense_zh).toContain('未测量的混杂因素')
+    expect(res.academic_defense_zh).toContain('需结合本领域已知混杂因素')
+    expect(res.academic_defense_zh).not.toMatch(/高度的稳健性|调整后/)
+    expect(res.academic_defense_en).not.toMatch(/robust causal resilience|multivariable-adjusted/)
+
+    // 置信区间跨 1：明确说明 E-value 不能用于支持稳健性
+    const nonSig = calculateEValue({ effect_type: 'HR', estimate: 0.9, ci_lower: 0.7, ci_upper: 1.15 })
+    expect(nonSig.e_value_ci).toBe(1)
+    expect(nonSig.academic_defense_zh).toContain('未达统计学显著')
+    expect(nonSig.academic_defense_zh).toContain('不能用于支持')
+    expect(nonSig.academic_defense_en).toContain('should not be used to argue for robustness')
   })
 
   it('3. Love Plot 协变量平衡收敛散点图生成验证', () => {
@@ -314,7 +322,8 @@ describe('临床科研 HTTP API 端点集成测试', async () => {
     expect(body.e_value_point).toBeGreaterThanOrEqual(2.0)
     expect(body.e_value_ci).toBeGreaterThanOrEqual(1.58)
     expect(body.academic_defense_zh).toContain('VanderWeele E-value')
-    expect(body.academic_defense_en).toContain('robust causal resilience')
+    expect(body.academic_defense_en).toContain('E-value was')
+    expect(body.academic_defense_en).not.toContain('robust causal resilience')
   })
 
   it('5. POST /api/studies/:sid/causal/love-plot 协变量平衡散点图生成', async () => {
@@ -385,7 +394,8 @@ describe('临床科研 HTTP API 端点集成测试', async () => {
     const smiCell = firstRow.variables.l3_smi
     expect(smiCell).toBeDefined()
     expect(smiCell.value).toBeNull()
-    expect(smiCell.confidence).toBe(0)
+    expect('confidence' in smiCell).toBe(false)
+    expect(smiCell.source_tier).toBe('none')
     expect(smiCell.source_type).toBe('imaging')
     expect(smiCell.source_slice_index).toBeUndefined()
     expect(firstRow.variables.vat_to_sat_ratio.value).toBeNull()

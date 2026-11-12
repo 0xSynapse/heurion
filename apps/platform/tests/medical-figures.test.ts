@@ -581,6 +581,11 @@ describe('医学论文图表 HTTP 路由与一键发刊物打包集成验证', a
         category: 'bioinformatics',
         bio_type: 'volcano',
         title: 'Volcano Plot',
+        volcano_genes: [
+          { gene: 'GENE_A', log2FC: 2.1, pValue: 0.0004 },
+          { gene: 'GENE_B', log2FC: -1.7, pValue: 0.002 },
+          { gene: 'GENE_C', log2FC: 0.3, pValue: 0.41 },
+        ],
       }),
     })
     expect(resBio.status).toBe(200)
@@ -608,6 +613,7 @@ describe('医学论文图表 HTTP 路由与一键发刊物打包集成验证', a
       body: JSON.stringify({
         category: 'image_processing',
         tool: 'flowjo',
+        events: Array.from({ length: 40 }, (_, i) => ({ x: (i % 8) * 0.8, y: (i % 5) * 1.1 })),
       }),
     })
     expect(resWsp.status).toBe(200)
@@ -621,6 +627,9 @@ describe('医学论文图表 HTTP 路由与一键发刊物打包集成验证', a
         category: 'assembly',
         title: 'Journal Multi-Panel Composite Figure',
         journal_spec: 'nature_double',
+        panels: [
+          { panelLetter: 'A', title: 'Panel A', svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 80"><rect width="100" height="80" fill="#eee"/></svg>' },
+        ],
       }),
     })
     expect(resZip.status).toBe(200)

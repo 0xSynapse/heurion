@@ -21,18 +21,19 @@ import {
   assembleJournalFigure,
 } from '../research/medical-figures.ts'
 import {
+  parseConsortInput,
   renderConsortSvg,
   exportFlowchartToDrawio,
   exportFlowchartToVisioVdx,
   exportFlowchartToPptx,
 } from '../research/consort.ts'
+import { detectDemoInput } from '../research/demo-data.ts'
 import { generateSurvivalAnalysis } from '../datasets/survival.ts'
 import {
   generateLogisticRegression,
   generateGrottaPlot,
   generateSankeyDiagram,
   generateUpSetPlot,
-  buildDefaultClinicalCohortRecords,
 } from '../datasets/clinical-plots.ts'
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] })
@@ -1320,10 +1321,17 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
       let svgOut: string | undefined
       let nativeSummary: Record<string, unknown> = {}
 
+      // AI 生成的图会存成资产并插入文档：不允许落到内置示例数据上，缺数据直接报错
+      const demoReason = detectDemoInput(category, payload)
+      if (demoReason) {
+        return fail('demo_data_not_allowed', `${demoReason}。请提供 dataset_id 或真实数据后再生成（示例数据不能用于研究文档）。`)
+      }
+
       if (category === 'clinical_cohort') {
         const subtype = String(payload.subtype || payload.plotType || payload.plot_type || 'grotta') as 'grotta' | 'sankey' | 'upset' | 'logistic' | 'survival'
         const did = typeof payload.dataset_id === 'string' && payload.dataset_id.trim() ? payload.dataset_id.trim() : undefined
-        const fallbackRecords = () => (Array.isArray(payload.records) && payload.records.length > 0 ? payload.records : buildDefaultClinicalCohortRecords())
+        // detectDemoInput 已保证有 dataset_id 或 records；这里只用调用方提供的记录
+        const fallbackRecords = () => payload.records as Array<Record<string, unknown>>
         let res: any
         if (subtype === 'grotta') {
           const opts = {
@@ -1415,13 +1423,8 @@ export function registerImagingTools(server: McpServer, deps: ImagingToolsDeps):
           stats_summary: res.stats_summary,
         }
       } else if (category === 'flowchart') {
-        const cData = {
-          title: payload.title,
-          total_assessed: Number(payload.total_assessed ?? 100),
-          exclusions: Array.isArray(payload.exclusions) ? payload.exclusions : [],
-          eligible_total: Number(payload.eligible_total ?? 80),
-          arms: Array.isArray(payload.arms) ? payload.arms : [],
-        }
+        // 人数必须由调用方提供，缺失时报错，不用示例人数兜底
+        const cData = parseConsortInput(payload, 'CONSORT 2010 Participant Flow')
         svgOut = renderConsortSvg(cData)
         nativeSummary = {
           svg: svgOut,

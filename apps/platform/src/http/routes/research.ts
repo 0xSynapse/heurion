@@ -7,6 +7,7 @@ import { PatientError, type PatientService, type Actor } from '../../tenancy/pat
 import { CohortService } from '../../research/cohort.ts'
 import { EcrfService } from '../../research/ecrf.ts'
 import {
+  parseConsortInput,
   renderConsortSvg,
   renderConsortMermaid,
   renderEnrollmentFlowSvg,
@@ -17,6 +18,7 @@ import {
   type ConsortDiagramData,
   type EnrollmentFlowData,
 } from '../../research/consort.ts'
+import { detectDemoInput, isDemoSvg, isTemplateExport, stripDemoPayload, DEMO_TITLE } from '../../research/demo-data.ts'
 import {
   calculateEValue,
   generateLovePlotSvg,
@@ -216,12 +218,18 @@ export function registerResearchRoutes(
     try {
       const sid = c.req.param('sid')
       st().get(c.get('user'), sid)
-      const body = await c.req.json<ConsortDiagramData & { export_format?: string }>()
+      const raw = await c.req.json<Record<string, any>>().catch(() => ({} as Record<string, any>))
+      let body: ConsortDiagramData
+      try {
+        body = parseConsortInput(raw, 'CONSORT 2010 Participant Flow')
+      } catch (e) {
+        return c.json({ error: (e as Error).message }, 400)
+      }
       const svg = renderConsortSvg(body)
       const mermaid = renderConsortMermaid(body)
       const drawio_xml = exportFlowchartToDrawio(body)
       const visio_vdx = exportFlowchartToVisioVdx(body)
-      const fmt = body.export_format || c.req.query('format')
+      const fmt = raw.export_format || c.req.query('format')
       if (fmt === 'drawio') {
         return c.body(drawio_xml, 200, {
           'Content-Type': 'application/xml; charset=utf-8',
@@ -313,21 +321,27 @@ export function registerResearchRoutes(
       const category = String(body.category || '')
       const exportFormat = String(body.export_format || c.req.query('format') || 'json')
 
+      // 没带真实数据时落到内置示例数据：只给带水印的预览，不导出原文件，标题不出现研究 / 数据集名
+      const demoReason = detectDemoInput(category, body)
+      if (demoReason) {
+        if (exportFormat !== 'json' && !isTemplateExport(category, body, exportFormat)) {
+          return c.json({ error: 'demo_data_not_exportable', message: `${demoReason}：示例数据仅供预览，不能导出。请先选择数据集或录入真实数据。` }, 400)
+        }
+        body.title = DEMO_TITLE
+        if (body.manuscriptTitle) body.manuscriptTitle = DEMO_TITLE
+      }
+      const out = (payload: Record<string, any>) => c.json(demoReason ? stripDemoPayload(payload, demoReason) : payload)
+
       const archiveFigureAsset = (svgStr: string, figName: string, codeStr?: string, codePathStr?: string) => {
         const cleanName = (String(figName || 'Figure').trim().replace(/[\\/:*?"<>|]/g, '_').replace(/\.svg$/i, '').trim() || 'Figure') + '.svg'
+        // 溯源只记录调用方声明的、这张图实际用到的数据集；不再把研究下所有数据集都挂上去
         const provDatasets: Array<{ id: string; name: string; version: number; rows: number }> = []
-        if (sid && study) {
-          provDatasets.push({ id: sid, name: study.title, version: 1, rows: 0 })
-          const dsItems = store.studyItems(sid).filter(i => i.kind === 'dataset')
-          for (const i of dsItems) {
-            const d = store.getDataset(i.ref_id)
-            if (d && !provDatasets.some(x => x.id === d.id)) {
-              provDatasets.push({ id: d.id, name: d.name, version: d.version ?? 1, rows: d.rows })
-            }
-          }
-        }
-        if (typeof body.dataset_id === 'string' && body.dataset_id.trim()) {
-          const d = store.getDataset(body.dataset_id.trim())
+        const declared = [
+          ...(typeof body.dataset_id === 'string' ? [body.dataset_id] : []),
+          ...(Array.isArray(body.dataset_ids) ? body.dataset_ids.filter((x: unknown): x is string => typeof x === 'string') : []),
+        ].map(x => x.trim()).filter(Boolean)
+        for (const id of declared) {
+          const d = store.getDataset(id)
           if (d && d.owner === userId && !provDatasets.some(x => x.id === d.id)) {
             provDatasets.push({ id: d.id, name: d.name, version: d.version ?? 1, rows: d.rows })
           }
@@ -351,6 +365,9 @@ export function registerResearchRoutes(
         const svgStr = String(body.svg || '')
         if (!svgStr.includes('<svg')) {
           return c.json({ error: 'invalid_svg', message: '归档内容必须是有效的 SVG 矢量图表' }, 400)
+        }
+        if (isDemoSvg(svgStr)) {
+          return c.json({ error: 'demo_data_not_archivable', message: '这张图由示例数据生成，不能归档到研究成果库。请选择数据集或录入真实数据后重新生成。' }, 400)
         }
         const asset = archiveFigureAsset(svgStr, body.name || body.title || 'Medical_Figure', body.code, body.code_path)
         return c.json({ ok: true, asset_id: asset.id, name: asset.name, created_at: asset.created_at, study_id: sid ?? null }, 201)
@@ -478,7 +495,7 @@ export function registerResearchRoutes(
         if ((exportFormat === 'svg' || exportFormat === 'ai-svg') && svgOut) {
           return c.body(svgOut, 200, { 'Content-Type': 'image/svg+xml; charset=utf-8' })
         }
-        return c.json({
+        return out({
           category: 'clinical_cohort',
           subtype,
           is_demo_data: isDemoData,
@@ -535,23 +552,8 @@ export function registerResearchRoutes(
       }
 
       if (category === 'flowchart') {
-        const diagramData: ConsortDiagramData = {
-          title: body.title || `${study ? study.title : 'Clinical Study'} · CONSORT 2010 Participant Flow`,
-          total_assessed: Number(body.total_assessed ?? 240),
-          exclusions: Array.isArray(body.exclusions)
-            ? body.exclusions
-            : [
-                { reason: '不符合纳入标准 (Did not meet inclusion criteria)', count: 38 },
-                { reason: '拒绝签署知情同意 (Declined to participate)', count: 14 },
-              ],
-          eligible_total: Number(body.eligible_total ?? 188),
-          arms: Array.isArray(body.arms)
-            ? body.arms
-            : [
-                { name: '干预组 (Intervention Arm)', allocated: 94, received: 92, lost_to_followup: 3, discontinued: 2, analyzed: 89 },
-                { name: '标准对照组 (Control Arm)', allocated: 94, received: 93, lost_to_followup: 4, discontinued: 1, analyzed: 89 },
-              ],
-        }
+        // 人数必须由调用方提供；缺失时 parseConsortInput 抛错 → 400，不再用示例人数兜底
+        const diagramData: ConsortDiagramData = parseConsortInput(body, `${study ? study.title : 'Clinical Study'} · CONSORT 2010 Participant Flow`)
         const svg = renderConsortSvg(diagramData)
         const drawio_xml = exportFlowchartToDrawio(diagramData)
         const visio_vdx = exportFlowchartToVisioVdx(diagramData)
@@ -637,7 +639,7 @@ export function registerResearchRoutes(
             'Content-Disposition': `attachment; filename="OriginPro_Script_${fileTag}.ogs"`,
           })
         }
-        return c.json({ category: 'wet_lab', ...res })
+        return out({ category: 'wet_lab', ...res })
       }
 
       if (category === 'bioinformatics') {
@@ -667,7 +669,7 @@ export function registerResearchRoutes(
             'Content-Disposition': `attachment; filename="Volcano_${fileTag}.pzfx"`,
           })
         }
-        return c.json({ category: 'bioinformatics', ...res })
+        return out({ category: 'bioinformatics', ...res })
       }
 
       if (category === 'image_processing') {
@@ -694,7 +696,7 @@ export function registerResearchRoutes(
               'Content-Disposition': `attachment; filename="FlowJo_Workspace_${fileTag}.wsp"`,
             })
           }
-          return c.json({ category: 'image_processing', tool: 'flowjo', ...res })
+          return out({ category: 'image_processing', tool: 'flowjo', ...res })
         }
         if (subType === 'slicer' || subType === 'itksnap') {
           const res = generateSlicerAndItkSnapPackage({
@@ -727,7 +729,7 @@ export function registerResearchRoutes(
               'Content-Disposition': `attachment; filename="ITK_SNAP_Labels_${fileTag}.txt"`,
             })
           }
-          return c.json({ category: 'image_processing', tool: subType, ...res })
+          return out({ category: 'image_processing', tool: subType, ...res })
         }
         // Default: ImageJ / Fiji
         const res = generateImageJAnalysis({
@@ -751,7 +753,7 @@ export function registerResearchRoutes(
             'Content-Disposition': `attachment; filename="ImageJ_Analysis_${fileTag}.ijm"`,
           })
         }
-        return c.json({ category: 'image_processing', tool: 'imagej', ...res })
+        return out({ category: 'image_processing', tool: 'imagej', ...res })
       }
 
       if (category === 'journal_assembly' || category === 'assembly') {
@@ -781,7 +783,7 @@ export function registerResearchRoutes(
             'Content-Disposition': `attachment; filename="Journal_Figure_Panels_${fileTag}.pptx"`,
           })
         }
-        return c.json({
+        return out({
           category: 'journal_assembly',
           illustrator_svg: res.illustrator_svg,
           png_base64: Buffer.from(res.high_res_png).toString('base64'),
@@ -983,6 +985,8 @@ export function registerResearchRoutes(
   // —— 数据集（实验室数据分析） ——
   const datasetFailure = (c: Context, err: unknown) => {
     if (err instanceof DatasetError) return c.json({ error: err.message, code: err.code }, err.code === 'not_found' ? 404 : err.code === 'forbidden' ? 403 : 400)
+    // 统计函数在数据不足以估计时抛出普通 Error（如样本 / 事件不足、缺随访截止日）：把原因告诉用户，而不是 500
+    if (err instanceof Error) return c.json({ error: err.message, code: 'analysis_not_estimable' }, 400)
     throw err
   }
   /** 数据集所属的研究（数据集页显示「所属研究」并能回到研究；数据集与研究同属一个用户） */
@@ -1155,6 +1159,8 @@ export function registerResearchRoutes(
           baseline_survival: body.baseline_survival,
           c_index: body.c_index,
           c_index_ci: body.c_index_ci,
+          // 用户手填系数时由调用方声明原模型类型，决定 R 脚本与叙述的写法
+          ...(body.model_type === 'logistic' || body.model_type === 'cox' ? { model_type: body.model_type } : {}),
         })
         return c.json(res)
       }
@@ -1202,12 +1208,12 @@ export function registerResearchRoutes(
         return c.json({ error: '需要选择数据集结局列 (outcome_col) 与模型预测变量列 (baseline_covariates)，或提供等长的真实结局标签 (labels) 与预测概率 (scores_baseline、scores_multimodal)' }, 400)
       }
 
-      const roc1 = calculateRocCurve(labels, probs1, body.model1_name || '临床基线模型 (Clinical Baseline)', '#94a3b8')
-      const roc2 = calculateRocCurve(labels, probs2, body.model2_name || '临床 + 3D 影像组学融合模型', '#0284c7')
+      const roc1 = calculateRocCurve(labels, probs1, body.model1_name || '模型 1', '#94a3b8')
+      const roc2 = calculateRocCurve(labels, probs2, body.model2_name || '模型 2', '#0284c7')
       const rocSvg = renderRocCurveSvg([roc1, roc2], `${ds.name} · ROC 诊断效能对比`)
 
-      const dca1 = calculateDcaCurve(labels, probs1, body.model1_name || '临床基线模型', '#94a3b8')
-      const dca2 = calculateDcaCurve(labels, probs2, body.model2_name || '临床 + 3D 影像组学模型', '#0284c7')
+      const dca1 = calculateDcaCurve(labels, probs1, body.model1_name || '模型 1', '#94a3b8')
+      const dca2 = calculateDcaCurve(labels, probs2, body.model2_name || '模型 2', '#0284c7')
       const prev = labels.filter((y: number) => y === 1).length / labels.length
       const dcaSvg = renderDcaCurveSvg([dca1, dca2], prev, `${ds.name} · 临床决策曲线 (DCA)`)
       const nativeExports = exportRocDcaNativeSources([roc1, roc2], [dca1, dca2], ds.name)

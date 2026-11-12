@@ -57,7 +57,60 @@ describe('临床科研专科分析与出版级可视化套件 (clinical-plots)',
     })
     expect(shiftRes.mode).toBe('longitudinal_shift')
     expect(shiftRes.bars.map(b => b.bar_key)).toEqual(['确诊时mRS', '入院mrs评分', '第一次治疗前mRS'])
-    expect(shiftRes.shift_p).not.toBeNull()
+    // 同一批患者的重复测量：不得输出独立样本检验 P 值，只说明需配对检验
+    expect(shiftRes.shift_p).toBeNull()
+    expect(shiftRes.chi_square_p).toBeNull()
+    expect(shiftRes.test_note).toContain('配对检验')
+    expect(shiftRes.narrative).not.toMatch(/significant shift/)
+    expect(shiftRes.narrative).toContain('paired test')
+    expect(shiftRes.markdown_table).toContain('Wilcoxon')
+
+    // 闭塞程度含非数值等级 'N'，未给 score_order 时顺序未知，不输出有序移位 P
+    expect(grpRes.shift_p).toBeNull()
+    expect(grpRes.test_note).toContain('score_order')
+  })
+
+  it('2b. Grotta 非数值等级未给 score_order 时不输出有序移位 P，给了顺序才计算', () => {
+    const recs = [
+      ...Array.from({ length: 6 }, () => ({ g: 'A', grade: '轻' })),
+      ...Array.from({ length: 2 }, () => ({ g: 'A', grade: '重' })),
+      ...Array.from({ length: 2 }, () => ({ g: 'B', grade: '轻' })),
+      ...Array.from({ length: 5 }, () => ({ g: 'B', grade: '中' })),
+      ...Array.from({ length: 3 }, () => ({ g: 'B', grade: '重' })),
+    ]
+    const noOrder = generateGrottaPlot(recs, { group_col: 'g', score_col: 'grade' })
+    expect(noOrder.shift_p).toBeNull()
+    expect(noOrder.test_note).toContain('score_order')
+    expect(noOrder.narrative).not.toMatch(/significant shift/)
+
+    const withOrder = generateGrottaPlot(recs, { group_col: 'g', score_col: 'grade', score_order: ['轻', '中', '重'] })
+    expect(withOrder.shift_p).not.toBeNull()
+    expect(withOrder.test_note).toBeNull()
+    expect(withOrder.score_levels.map(l => l.level)).toEqual(['轻', '中', '重'])
+
+    // 纯数值等级：顺序自明，照常计算
+    const numeric = generateGrottaPlot(recs.map(r => ({ ...r, grade: r.grade === '轻' ? '0' : r.grade === '中' ? '1' : '2' })), { group_col: 'g', score_col: 'grade' })
+    expect(numeric.shift_p).not.toBeNull()
+    expect(numeric.test_note).toBeNull()
+  })
+
+  it('1b. 仅 1 个协变量的 Logistic 只报告粗 OR，不得称 independent / adjusted', () => {
+    const recs = Array.from({ length: 40 }, (_, i) => ({ y: i % 3 === 0 || (i > 25 && i % 2 === 0) ? 1 : 0, x: i }))
+    const res = generateLogisticRegression(recs, { outcome_col: 'y', covariates: ['x'] })
+    expect(res.narrative).not.toMatch(/independent|adjusted|mutual adjustment|multivariable|multivariate/i)
+    expect(res.narrative).toMatch(/univariable/)
+    expect(res.narrative).toMatch(/crude OR/)
+    expect(res.svg).not.toContain('Adjusted OR')
+    expect(res.markdown_table).not.toContain('Adjusted aOR')
+  })
+
+  it('1c. 多水平非数值分类协变量不得按字母序当连续变量，二分类照常编码', () => {
+    const levels = ['介入', '手术', '伽玛刀']
+    const recs = Array.from({ length: 30 }, (_, i) => ({ y: i % 2, tx: levels[i % 3], sex: i % 4 < 2 ? 'M' : 'F', age: 40 + i }))
+    expect(() => generateLogisticRegression(recs, { outcome_col: 'y', covariates: ['tx', 'age'] })).toThrow(/哑变量/)
+    const ok = generateLogisticRegression(recs, { outcome_col: 'y', covariates: ['sex', 'age'] })
+    expect(ok.covariates.length).toBe(2)
+    expect(ok.narrative).toMatch(/multivariable/)
   })
 
   it('3. 多阶段序贯治疗路径桑基图（支持多列 stage_cols 与单列多位数编码 sequence_col）', () => {
@@ -178,10 +231,29 @@ describe('临床科研专科分析与出版级可视化套件 (clinical-plots)',
     }
 
     // 6c. 600 DPI 高清 PNG 渲染接口 (category: 'render_png' 及 ?format=png)
-    const pngResp = await app.request('/api/figures?format=png', {
+    // 示例数据只给预览：不带数据集 / 记录时导出 PNG 被拒绝，JSON 预览带示例水印且不返回原文件
+    const demoPng = await app.request('/api/figures?format=png', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ category: 'clinical_cohort', subtype: 'grotta' }),
+    })
+    expect(demoPng.status).toBe(400)
+    const demoJson = (await (await app.request('/api/figures', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: 'clinical_cohort', subtype: 'grotta', title: '我的研究 · 临床队列' }),
+    })).json()) as any
+    expect(demoJson.is_demo_data).toBe(true)
+    expect(demoJson.svg).toContain('data-heurion-demo="true"')
+    expect(demoJson.svg).not.toContain('我的研究')
+    expect(demoJson.prism_pzfx).toBeUndefined()
+    expect(demoJson.r_script).toBeUndefined()
+
+    // 调用方提供记录（真实数据）时正常导出 600 DPI PNG
+    const pngResp = await app.request('/api/figures?format=png', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: 'clinical_cohort', subtype: 'grotta', records: buildDefaultClinicalCohortRecords() }),
     })
     expect(pngResp.status).toBe(200)
     expect(pngResp.headers.get('content-type')).toBe('image/png')
