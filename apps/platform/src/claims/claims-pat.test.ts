@@ -2,6 +2,9 @@
  * 四阶段论断核对与临床深度审稿管线单元测试（Stage 1-4 Deep Review & Dual-Track Evolution）。
  */
 import { describe, expect, it, vi } from 'vitest'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { MD_DIR } from '../../scripts/eval-review-paths.ts'
 import { schema } from '../model/schema.ts'
 import {
   auditInternalConsistency,
@@ -868,8 +871,13 @@ describe('4-Stage Citation & Claim Verification Pipeline', () => {
     expect(astDetected).toBeGreaterThanOrEqual(36)
     // NON_EXEMPTABLE_SUBTYPES safety floor guarantees 0% false exemption of objective math/structural errors
     expect(adversarialDetected).toBe(astDetected)
-    // Discovers genuine in-print publication errors on clean PMC manuscripts
-    expect(organicCleanCount).toBeGreaterThanOrEqual(6)
+    // 「原稿印刷错误」只存在于真实 PMC 全文中：全文在仓库外（data/eval/deep-review/md，需 eval:review:fetch 下载），
+    // CI 与新机器上没有全文时用的是合成稿，合成稿里不可能有原稿错误，这条断言只在有全文时检查
+    const hasFullText = allPapers.every(p => existsSync(join(MD_DIR, `${p.id}.md`)))
+    if (hasFullText) {
+      // Discovers genuine in-print publication errors on clean PMC manuscripts
+      expect(organicCleanCount).toBeGreaterThanOrEqual(6)
+    }
     expect(trueCleanFpAll).toBeLessThanOrEqual(6)
     expect(trueCleanFpTest).toBeLessThanOrEqual(3)
   })
