@@ -4,7 +4,8 @@
  * 赋能临床科研课题组：
  * 1. 结构化 eCRF 字典定义：涵盖人口学、随访生存终点、3D 影像生物标志物（RECIST/L3 SMI/VAT/BAR/HAM）、关键实验室生化指标；
  * 2. 批量异步巡航提取：一键调度 MONAI 计算节点与患者全景病历库，自动填报受试者数据宽表；
- * 3. 证据溯源审计 (Click-to-Audit Trail)：每个单元格附带客观置信度、来源记录 ID、切片层号及采样时间戳，确保数据 100% 可回溯；
+ * 3. 证据溯源审计 (Click-to-Audit Trail)：每个单元格附带来源等级（主档案 / 化验 / 影像 / 手工录入）、核实状态、来源记录 ID、切片层号及采样时间戳；
+ *    不输出数值「置信度」——平台没有任何模型对单元格给出概率，按来源类型写死的常数会误导用户；
  * 4. 一键沉淀为防篡改研究快照数据集，无缝直通 Table 1、CONSORT、Love Plot 与 KM 生存分析。
  */
 
@@ -25,10 +26,22 @@ export interface EcrfVariableDefinition {
   default_checked: boolean
 }
 
+/**
+ * 单元格来源等级：
+ * - registry：患者主档案（年龄 / 性别），不在研究变量核实流程内
+ * - lab：院内化验记录
+ * - imaging：影像量化分析记录
+ * - manual：研究变量登记（eCRF 手工录入等）
+ * - none：未找到来源（值为缺失）
+ * 是否经研究者核实由 verified 单独表示。
+ */
+export type EcrfSourceTier = 'registry' | 'lab' | 'imaging' | 'manual' | 'none'
+
 export interface EcrfCellAudit {
   value: number | string | null
   formatted: string
-  confidence: number
+  /** 来源等级（替代原数值置信度） */
+  source_tier: EcrfSourceTier
   source_type: 'imaging' | 'lab' | 'demographics' | 'clinical'
   source_record_id?: string
   source_slice_index?: number
@@ -53,7 +66,10 @@ export interface EcrfExtractResult {
     total_cells: number
     extracted_cells: number
     missing_cells: number
-    avg_confidence: number
+    /** 已经研究者核实的非空单元格数 */
+    verified_cells: number
+    /** 各来源等级的非空单元格数 */
+    cells_by_source_tier: Record<Exclude<EcrfSourceTier, 'none'>, number>
   }
   dataset_wide_preview: Array<Record<string, unknown>>
 }
@@ -91,16 +107,56 @@ export const DEFAULT_ECRF_DICTIONARY: EcrfVariableDefinition[] = [
   { id: 'eosinophil_count', name_zh: '嗜酸粒细胞绝对计数', name_en: 'Eosinophil Count', category: 'lab', unit: '10^9/L', description: '外周血嗜酸粒细胞炎症水平', default_checked: false },
 ]
 
+/**
+ * 化验同义词：只做整词精确匹配（见 labNameCandidates），不做子串匹配。
+ * 子串匹配会把 HbA1c 当成血红蛋白（hb）、CRP 当成肌酐（cr）、尿微量白蛋白当成血清白蛋白（alb）。
+ */
 const LAB_SYNONYMS: Record<string, string[]> = {
   nt_pro_bnp: ['nt_pro_bnp', 'ntprobnp', 'nt-probnp', '脑钠肽', '氨基末端脑钠肽前体'],
   egfr: ['egfr', '估算肾小球滤过率', '肾小球滤过率'],
-  creatinine: ['creatinine', 'scr', 'cr', '肌酐', '血肌酐'],
+  creatinine: ['creatinine', 'serum creatinine', 'scr', 'cr', '肌酐', '血肌酐', '血清肌酐'],
   hba1c: ['hba1c', '糖化血红蛋白', '糖化'],
-  albumin: ['albumin', 'alb', '白蛋白', '血清白蛋白'],
+  albumin: ['albumin', 'serum albumin', 'alb', '白蛋白', '血清白蛋白'],
   hemoglobin: ['hemoglobin', 'hgb', 'hb', '血红蛋白'],
   cea: ['cea', '癌胚抗原'],
   ige_total: ['ige_total', 'ige', '总ige', '血清总ige'],
   eosinophil_count: ['eosinophil_count', 'eos', '嗜酸粒细胞', '嗜酸性粒细胞'],
+}
+
+/** 规范化化验名：小写、去掉空白 / 下划线 / 连字符 / 点 */
+function normLabToken(x: string): string {
+  return x.toLowerCase().replace(/[\s_\-·.]/g, '')
+}
+
+/**
+ * 一个化验名或键名可用于精确匹配的候选词：
+ * 去掉括号内容后的整体、括号内的内容（常为缩写或单位）、以及按斜杠 / 逗号切分的各词（均去掉空白后整词比较）。
+ * 如「血红蛋白(Hb)」→ 血红蛋白、hb；「糖化血红蛋白 (HbA1c)」→ 糖化血红蛋白、hba1c。
+ */
+export function labNameCandidates(raw: string): Set<string> {
+  const out = new Set<string>()
+  const s = String(raw ?? '').trim()
+  if (!s) return out
+  const inner = [...s.matchAll(/[（(]([^）)]*)[）)]/g)].map(m => m[1] ?? '')
+  const outer = s.replace(/[（(][^）)]*[）)]/g, ' ')
+  for (const part of [outer, ...inner]) {
+    const whole = normLabToken(part)
+    if (whole) out.add(whole)
+    // 只按斜杠 / 逗号 / 分号切分（常见于「Hb/血红蛋白」这类并列名称）；不按空格切，避免「Hb A1c」拆出 hb
+    for (const tok of part.split(/[/／,，;；]+/)) {
+      const t = normLabToken(tok)
+      if (t) out.add(t)
+    }
+  }
+  return out
+}
+
+/** 化验记录是否对应某个 eCRF 化验变量：键名或名称的候选词与同义词整词相等 */
+export function labMatchesAliases(lab: { test_key: string; test_name: string }, aliases: string[]): boolean {
+  const wanted = new Set(aliases.map(normLabToken).filter(Boolean))
+  const cands = new Set([...labNameCandidates(lab.test_key), ...labNameCandidates(lab.test_name)])
+  for (const c of cands) if (wanted.has(c)) return true
+  return false
 }
 
 export class EcrfService {
@@ -235,7 +291,8 @@ export class EcrfService {
     const datasetWideRows: Array<Record<string, unknown>> = []
     let totalCells = 0
     let extractedCells = 0
-    let confSum = 0
+    let verifiedCells = 0
+    const cellsByTier: Record<Exclude<EcrfSourceTier, 'none'>, number> = { registry: 0, lab: 0, imaging: 0, manual: 0 }
 
     // B4 修复：彻底移除写死数值的 benchmarkKnowledge 与合成伪造保底，未录入字段如实返回 null
     for (let idx = 0; idx < subjects.length; idx++) {
@@ -254,10 +311,11 @@ export class EcrfService {
           cellAudit = {
             value: val,
             formatted: val !== null ? `${val} 岁` : '—',
-            confidence: val !== null ? 0.99 : 0.0,
+            source_tier: val !== null ? 'registry' : 'none',
             source_type: 'demographics',
-            source_detail: val !== null ? '来源：患者主档案（出生年份）' : '患者主档案缺出生年份',
-            verified: true,
+            source_detail: val !== null ? '来源：患者主档案（出生年份），不在研究变量核实流程内' : '患者主档案缺出生年份',
+            // 年龄取自主档案，未经研究者核实流程，不得标为已核实
+            verified: false,
             extracted_at: nowIso,
           }
         } else if (v.id === 'sex') {
@@ -265,10 +323,11 @@ export class EcrfService {
           cellAudit = {
             value: val,
             formatted: val || '—',
-            confidence: val !== null ? 0.99 : 0.0,
+            source_tier: val !== null ? 'registry' : 'none',
             source_type: 'demographics',
-            source_detail: val !== null ? '来源：患者主档案' : '患者主档案缺性别',
-            verified: true,
+            source_detail: val !== null ? '来源：患者主档案，不在研究变量核实流程内' : '患者主档案缺性别',
+            // 性别取自主档案，未经研究者核实流程，不得标为已核实
+            verified: false,
             extracted_at: nowIso,
           }
         } else if (existingVar && existingVar.status === 'verified') {
@@ -276,7 +335,7 @@ export class EcrfService {
           cellAudit = {
             value: existingVar.value,
             formatted: `${existingVar.value}${v.unit ? ` ${v.unit}` : ''}`.trim(),
-            confidence: 1.0,
+            source_tier: existingVar.source === 'imaging_analysis' ? 'imaging' : 'manual',
             source_type: existingVar.source === 'imaging_analysis' ? 'imaging' : 'clinical',
             source_record_id: typeof existingVar.source_ref?.record_id === 'string' ? existingVar.source_ref.record_id : undefined,
             source_slice_index: typeof existingVar.source_ref?.slice_index === 'number' ? existingVar.source_ref.slice_index : undefined,
@@ -288,11 +347,7 @@ export class EcrfService {
         } else if (v.category === 'lab') {
           // 从实测化验中匹配真实数据（支持中英文同义词、标准键名与标准单位换算值；优先取最新送检记录）
           const aliases = LAB_SYNONYMS[v.id] ?? [v.id.toLowerCase(), v.id.replace(/_/g, '').toLowerCase(), v.name_zh.toLowerCase()]
-          const matchedLabs = s.labs.filter(l => {
-            const tk = l.test_key.toLowerCase()
-            const tn = l.test_name.toLowerCase()
-            return aliases.some(al => tk === al || tn === al || tk.includes(al) || tn.includes(al))
-          }).sort((a, b) => String(b.collected_on || '').localeCompare(String(a.collected_on || '')))
+          const matchedLabs = s.labs.filter(l => labMatchesAliases(l, aliases)).sort((a, b) => String(b.collected_on || '').localeCompare(String(a.collected_on || '')))
           const foundLab = matchedLabs[0]
           const numVal = foundLab ? (foundLab.std_value ?? foundLab.value_num) : null
           const unitStr = foundLab ? (foundLab.std_unit || foundLab.unit || v.unit) : v.unit
@@ -300,7 +355,7 @@ export class EcrfService {
             cellAudit = {
               value: numVal,
               formatted: `${numVal} ${unitStr}`.trim(),
-              confidence: existingVar?.status === 'verified' ? 1.0 : 0.98,
+              source_tier: 'lab',
               source_type: 'lab',
               source_record_id: foundLab.record_id || undefined,
               source_exam_date: foundLab.collected_on || undefined,
@@ -312,7 +367,7 @@ export class EcrfService {
             cellAudit = {
               value: existingVar.value,
               formatted: `${existingVar.value} ${v.unit}`.trim(),
-              confidence: existingVar.status === 'verified' ? 1.0 : 0.85,
+              source_tier: existingVar.source === 'imaging_analysis' ? 'imaging' : 'manual',
               source_type: 'lab',
               source_detail: `${SOURCE_LABELS[existingVar.source] ?? existingVar.source} · ${existingVar.status === 'verified' ? '已核实' : '待核实'}`,
               verified: existingVar.status === 'verified',
@@ -322,7 +377,7 @@ export class EcrfService {
             cellAudit = {
               value: null,
               formatted: '—',
-              confidence: 0.0,
+              source_tier: 'none',
               source_type: 'lab',
               source_detail: '未检出对应实验室送检记录',
               verified: false,
@@ -342,7 +397,7 @@ export class EcrfService {
             cellAudit = {
               value: val,
               formatted: `${val} ${v.unit}`.trim(),
-              confidence: 0.98,
+              source_tier: 'imaging',
               source_type: 'imaging',
               source_record_id: foundImg.id,
               source_exam_date: foundImg.report_date || undefined,
@@ -355,7 +410,7 @@ export class EcrfService {
             cellAudit = {
               value: existingVar.value,
               formatted: `${existingVar.value} ${v.unit}`.trim(),
-              confidence: existingVar.status === 'verified' ? 1.0 : 0.85,
+              source_tier: existingVar.source === 'imaging_analysis' ? 'imaging' : 'manual',
               source_type: 'imaging',
               source_detail: `${SOURCE_LABELS[existingVar.source] ?? existingVar.source} · ${existingVar.status === 'verified' ? '已核实' : '待核实'}`,
               verified: existingVar.status === 'verified',
@@ -365,7 +420,7 @@ export class EcrfService {
             cellAudit = {
               value: null,
               formatted: '—',
-              confidence: 0.0,
+              source_tier: 'none',
               source_type: 'imaging',
               source_detail: '未找到对应的影像量化记录',
               verified: false,
@@ -377,7 +432,7 @@ export class EcrfService {
           cellAudit = {
             value: existingVar.value,
             formatted: `${existingVar.value}${v.unit ? ` ${v.unit}` : ''}`,
-            confidence: existingVar.status === 'verified' ? 1 : 0.75,
+            source_tier: existingVar.source === 'imaging_analysis' ? 'imaging' : 'manual',
             source_type: 'clinical',
             source_detail: `${SOURCE_LABELS[existingVar.source] ?? existingVar.source} · ${existingVar.status === 'verified' ? '已核实' : '未核实'}`,
             verified: existingVar.status === 'verified',
@@ -388,7 +443,7 @@ export class EcrfService {
           cellAudit = {
             value: null,
             formatted: '—',
-            confidence: 0.0,
+            source_tier: 'none',
             source_type: 'clinical',
             source_detail: '未登记该研究变量，可在下方溯源卡或「研究变量」中直接录入并核实',
             verified: false,
@@ -398,7 +453,8 @@ export class EcrfService {
 
         if (cellAudit.value !== null) {
           extractedCells++
-          confSum += cellAudit.confidence
+          if (cellAudit.verified) verifiedCells++
+          if (cellAudit.source_tier !== 'none') cellsByTier[cellAudit.source_tier]++
         }
         rowAudit[v.id] = cellAudit
         wideRow[v.id] = cellAudit.value
@@ -426,7 +482,8 @@ export class EcrfService {
         total_cells: totalCells,
         extracted_cells: extractedCells,
         missing_cells: totalCells - extractedCells,
-        avg_confidence: extractedCells > 0 ? Number((confSum / extractedCells).toFixed(3)) : 0,
+        verified_cells: verifiedCells,
+        cells_by_source_tier: cellsByTier,
       },
       dataset_wide_preview: datasetWideRows,
       ...(opts?.sync_to_vars ? { synced_vars_count: syncedVarsCount } : {}),
@@ -499,7 +556,7 @@ export class EcrfService {
             record_id: cell.source_record_id ?? null,
             slice_index: cell.source_slice_index ?? null,
             exam_date: cell.source_exam_date ?? null,
-            confidence: cell.confidence,
+            source_tier: cell.source_tier,
             detail: cell.source_detail ?? null,
           },
         })

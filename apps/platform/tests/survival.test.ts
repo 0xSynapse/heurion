@@ -114,7 +114,8 @@ describe('临床科研生存分析套件 (Survival Analysis Suite)', () => {
       stage: r.stage,
     }))
 
-    const cox = calculateCoxRegression(coxData, ['is_treatment', 'age', 'stage'])
+    const cox = calculateCoxRegression(coxData, ['is_treatment', 'age', 'stage'])!
+    expect(cox).not.toBeNull()
 
     expect(cox.sample_size).toBe(20)
     expect(cox.events_count).toBe(12)
@@ -181,7 +182,8 @@ describe('临床科研生存分析套件 (Survival Analysis Suite)', () => {
       is_treatment: r.arm === 'Treatment' ? 1 : 0,
       stage: r.stage,
     }))
-    const cox = calculateCoxRegression(coxData, ['is_treatment', 'stage'])
+    const cox = calculateCoxRegression(coxData, ['is_treatment', 'stage'])!
+    expect(cox).not.toBeNull()
     const forestSvg = renderForestPlotSvg(cox)
 
     expect(forestSvg).toContain('<svg')
@@ -259,7 +261,8 @@ describe('临床科研生存分析套件 (Survival Analysis Suite)', () => {
       sex: idx % 2 === 0 ? 'Male' : 'Female',
       age: r.age,
     }))
-    const coxRes = calculateCoxRegression(coxWithStr, ['sex', 'age'])
+    const coxRes = calculateCoxRegression(coxWithStr, ['sex', 'age'])!
+    expect(coxRes).not.toBeNull()
     expect(coxRes.sample_size).toBe(20)
     expect(coxRes.covariates.length).toBe(2)
   })

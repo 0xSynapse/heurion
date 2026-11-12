@@ -48,6 +48,11 @@ export interface NomogramOptions {
   c_index_ci?: [number, number]
   sample_size?: number
   events_n?: number
+  /**
+   * 系数来自的模型类型：'logistic'（二分类结局，输出风险概率）或 'cox'（生存结局）。
+   * 未指定时：提供了有效基线生存率则按 Cox 处理（S0(t) 只存在于 Cox 模型），否则视为未知。
+   */
+  model_type?: 'logistic' | 'cox'
 }
 
 export interface NomogramResult {
@@ -256,28 +261,74 @@ export function buildNomogram(options: NomogramOptions): NomogramResult {
 
   const topVar = evaluatedPreds.reduce((prev, curr) => (curr.points_range! > prev.points_range! ? curr : prev), evaluatedPreds[0]!)
   const absolute = s0_1 !== null || s0_3 !== null || s0_5 !== null
-  const narrative = `A nomogram was drawn from the supplied model coefficients. ` +
-    `Among the included predictors, ${topVar.label} has the widest point range (100 points). ` +
+  // 模型类型：显式传入优先；未传但提供了基线生存率时只可能是 Cox；否则未知
+  const modelType: 'logistic' | 'cox' | null = options.model_type ?? (absolute ? 'cox' : null)
+  // 系数来源：有 sample_size 说明由本研究数据集拟合，否则是用户提供的系数
+  const fittedHere = typeof options.sample_size === 'number' && options.sample_size > 0
+  const isMulti = evaluatedPreds.length >= 2
+  const modelNameEn = modelType === 'logistic' ? 'logistic regression model' : modelType === 'cox' ? 'Cox proportional hazards model' : 'regression model'
+  const modelNameZh = modelType === 'logistic' ? 'Logistic 回归模型' : modelType === 'cox' ? 'Cox 比例风险模型' : '回归模型'
+
+  const narrative = (fittedHere
+      ? `A nomogram was drawn from a ${isMulti ? 'multivariable' : 'univariable'} ${modelNameEn} fitted to this study's dataset (n = ${options.sample_size}${options.events_n !== undefined ? `, events = ${options.events_n}` : ''}). `
+      : `A nomogram was drawn from user-supplied ${modelType ? `${modelNameEn} ` : ''}coefficients. `) +
+    (isMulti
+      ? `Among the included predictors, ${topVar.label} has the widest point range (100 points). `
+      : `The nomogram contains a single predictor (${topVar.label}). `) +
     (absolute
       ? `Absolute survival probabilities are shown only for the time points whose baseline survival was supplied.`
-      : `Baseline survival was not supplied, so only total points (a linear predictor / relative risk scale) are shown, without absolute survival probabilities.`)
+      : modelType === 'logistic'
+        ? `Only total points (the linear predictor) are shown; predicted risk can be obtained with the logistic function.`
+        : `Baseline survival was not supplied, so only total points (a linear predictor / relative risk scale) are shown, without absolute survival probabilities.`)
 
-  const rRmsScript =
+  // R 脚本按模型类型生成：Logistic 用 lrm + plogis；Cox 且有基线生存率才写 Survival 函数；未知类型只给注释
+  const rhs = evaluatedPreds.map(p => p.variable).join(' + ')
+  const rHeader =
     `# Reproducible R Script (rms package TRIPOD Nomogram)\n` +
     `library(rms)\n` +
     `df <- read.csv("clinical_cohort.csv")\n` +
-    `dd <- datadist(df); options(datadist = "dd")\n` +
-    `f <- cph(Surv(time, status) ~ ${evaluatedPreds.map(p => p.variable).join(' + ')}, x = TRUE, y = TRUE, surv = TRUE, data = df)\n` +
-    `surv_fn <- Survival(f)\n` +
-    `nom <- nomogram(f, fun = list(function(x) surv_fn(12, x), function(x) surv_fn(36, x), function(x) surv_fn(60, x)), funlabel = c("1-Year Survival", "3-Year Survival", "5-Year Survival"))\n` +
-    `pdf("Figure_Prognostic_Nomogram.pdf", width = 9, height = 6)\nplot(nom)\ndev.off()\n`
+    `dd <- datadist(df); options(datadist = "dd")\n`
+  const rPlot = `pdf("Figure_Prognostic_Nomogram.pdf", width = 9, height = 6)\nplot(nom)\ndev.off()\n`
+  let rRmsScript: string
+  if (modelType === 'logistic') {
+    rRmsScript = rHeader +
+      `# 二分类结局 Logistic 回归：将 outcome 替换为结局列名（1 = 事件，0 = 无事件）\n` +
+      `f <- lrm(outcome ~ ${rhs}, x = TRUE, y = TRUE, data = df)\n` +
+      `nom <- nomogram(f, fun = plogis, funlabel = "Predicted Risk")\n` +
+      rPlot
+  } else if (modelType === 'cox') {
+    const years: Array<[number, string]> = []
+    if (s0_1 !== null) years.push([12, '1-Year Survival'])
+    if (s0_3 !== null) years.push([36, '3-Year Survival'])
+    if (s0_5 !== null) years.push([60, '5-Year Survival'])
+    rRmsScript = rHeader +
+      `# Cox 比例风险模型：将 time / status 替换为随访时间与结局列名\n` +
+      `f <- cph(Surv(time, status) ~ ${rhs}, x = TRUE, y = TRUE, surv = TRUE, data = df)\n` +
+      (years.length > 0
+        ? `# 下列时间点按「月」计；若模型时间单位不同请相应修改\n` +
+          `surv_fn <- Survival(f)\n` +
+          `nom <- nomogram(f, fun = list(${years.map(([t]) => `function(x) surv_fn(${t}, x)`).join(', ')}), funlabel = c(${years.map(([, l]) => JSON.stringify(l)).join(', ')}))\n`
+        : `# 未提供基线生存率：只绘制线性预测值（总分）标尺，不输出绝对生存概率\n` +
+          `nom <- nomogram(f)\n`) +
+      rPlot
+  } else {
+    rRmsScript = rHeader +
+      `# 注意：未指定这些系数来自哪类模型，请按原模型类型修改下列拟合语句后再运行：\n` +
+      `#   Logistic 回归：f <- lrm(outcome ~ ${rhs}, x = TRUE, y = TRUE, data = df); nom <- nomogram(f, fun = plogis, funlabel = "Predicted Risk")\n` +
+      `#   Cox 模型：    f <- cph(Surv(time, status) ~ ${rhs}, x = TRUE, y = TRUE, surv = TRUE, data = df); nom <- nomogram(f)\n` +
+      `# plot(nom)\n`
+  }
 
   const cIdxStr = typeof options.c_index === 'number'
     ? (options.c_index_ci
       ? `C-index = ${options.c_index.toFixed(3)} (95% CI: ${options.c_index_ci[0].toFixed(3)} - ${options.c_index_ci[1].toFixed(3)})`
       : `C-index = ${options.c_index.toFixed(3)}`)
     : ''
-  const narrativeZh = `基于真实研究数据集多因素回归模型（${options.sample_size ? `纳入有效样本 n = ${options.sample_size}，终点事件 e = ${options.events_n ?? '—'}，` : ''}共纳入 ${evaluatedPreds.length} 项预测因子），将各独立预测因子按回归系数权重折算为 0~100 积分标尺构建预后列线图。其中贡献跨度最大的预测因子为「${topVar.label}」（满分 100 分，β = ${topVar.beta.toFixed(3)}）。${cIdxStr ? `模型区分度达 ${cIdxStr}。` : ''}`
+  // 中文叙述：区分「本研究数据集拟合」与「用户提供的系数」；只有 1 个预测因子时不说多因素 / 独立
+  const sourceZh = fittedHere
+    ? `基于本研究数据集拟合的${isMulti ? '多因素' : '单因素'} ${modelNameZh}（纳入有效样本 n = ${options.sample_size}，终点事件 e = ${options.events_n ?? '—'}，共纳入 ${evaluatedPreds.length} 项预测因子）`
+    : `基于用户提供的${modelType ? ` ${modelNameZh}` : ''}回归系数（共 ${evaluatedPreds.length} 项预测因子）`
+  const narrativeZh = `${sourceZh}，${isMulti ? '将各预测因子' : '将该预测因子'}按回归系数权重折算为 0~100 积分标尺构建列线图。${isMulti ? `其中贡献跨度最大的预测因子为「${topVar.label}」（满分 100 分，β = ${topVar.beta.toFixed(3)}）。` : `预测因子为「${topVar.label}」（β = ${topVar.beta.toFixed(3)}）。`}${cIdxStr ? `模型区分度 ${cIdxStr}。` : ''}`
 
   return {
     title,
@@ -433,17 +484,8 @@ export function calculateRocCurve(
   const numNeg = pairs.length - numPos
 
   if (numPos === 0 || numNeg === 0) {
-    return {
-      model_name: modelName,
-      color,
-      auc: 0.5,
-      auc_ci: [0.5, 0.5],
-      optimal_cutoff: 0,
-      sensitivity: 0,
-      specificity: 0,
-      youden_index: 0,
-      points: [{ threshold: 1, fpr: 0, tpr: 0 }, { threshold: 0, fpr: 1, tpr: 1 }]
-    }
+    // 只有一类结局时 AUC 无定义，不返回 0.5 占位值
+    throw new Error(`ROC 需要同时包含阳性与阴性结局（当前阳性 ${numPos}，阴性 ${numNeg}）`)
   }
 
   // 按预测分数降序排序
@@ -1110,9 +1152,9 @@ export function fitNomogramFromRecords(
     const y = parseBinaryOutcomeValue(records[i]![opts.outcome_col], opts.positive_value)
     if (y === null) continue
     if (opts.time_col) {
+      // 缺失的随访时间记为 NaN，计算 C-index 时跳过该受试者，不补假值
       const rawT = Number(records[i]![opts.time_col])
-      if (Number.isFinite(rawT) && rawT > 0) tList.push(rawT)
-      else tList.push(12)
+      tList.push(Number.isFinite(rawT) && rawT > 0 ? rawT : NaN)
     }
     validIndices.push(i)
     yList.push(y)
@@ -1121,19 +1163,24 @@ export function fitNomogramFromRecords(
   if (validIndices.length < 4) {
     throw new Error(`结局列「${opts.outcome_col}」有效非空样本量不足（当前 n=${validIndices.length}），无法拟合多因素列线图`)
   }
+  const eventsAll = yList.filter(v => v === 1).length
+  if (eventsAll === 0 || eventsAll === yList.length) {
+    throw new Error(`结局列「${opts.outcome_col}」需同时包含阳性与阴性结局（当前阳性 ${eventsAll} / ${yList.length}）`)
+  }
 
   const fit = fitMultivariableLogistic(yList, encodedCols, validIndices)
   const roc = calculateRocCurve(yList, fit.probs, 'Nomogram Model')
 
   // Compute Harrell's C-index if survival time is present, else use ROC AUC
   let cIndex = roc.auc
-  let cIndexCi: [number, number] = roc.auc_ci
+  let cIndexCi: [number, number] | undefined = roc.auc_ci
   if (opts.time_col && tList.length === validIndices.length) {
     let concordant = 0
     let comparable = 0
     for (let i = 0; i < validIndices.length; i++) {
       for (let j = i + 1; j < validIndices.length; j++) {
         const ti = tList[i]!, tj = tList[j]!
+        if (!Number.isFinite(ti) || !Number.isFinite(tj)) continue
         const ei = yList[i]!, ej = yList[j]!
         const ri = fit.linearPredictors[i]!, rj = fit.linearPredictors[j]!
         if (ei === 1 && tj > ti) {
@@ -1153,23 +1200,13 @@ export function fitNomogramFromRecords(
     }
     if (comparable >= 5) {
       cIndex = Number((concordant / comparable).toFixed(3))
-      const se = Math.max(0.015, Math.sqrt((cIndex * (1 - cIndex)) / Math.max(10, validIndices.length)))
-      cIndexCi = [
-        Number(Math.max(0.5, cIndex - 1.96 * se).toFixed(3)),
-        Number(Math.min(0.99, cIndex + 1.96 * se).toFixed(3)),
-      ]
+      // Harrell C-index 的置信区间需 bootstrap 或 Noether 方差，尚未实现，不输出自拟区间
+      cIndexCi = undefined
     }
   }
 
-  // Empirical baseline survival S0(t) estimation from dataset
-  const eventsN = yList.filter(v => v === 1).length
-  const eventRate = Math.max(0.05, Math.min(0.85, eventsN / validIndices.length))
-  const sBase = 1 - eventRate
-  const baseline_survival = {
-    year1: Number(Math.max(0.15, Math.min(0.96, Math.pow(sBase, 0.45))).toFixed(2)),
-    year3: Number(Math.max(0.10, Math.min(0.92, Math.pow(sBase, 0.85))).toFixed(2)),
-    year5: Number(Math.max(0.05, Math.min(0.88, Math.pow(sBase, 1.25))).toFixed(2)),
-  }
+  // 本函数拟合的是二分类 Logistic 模型，没有基线生存函数 S0(t)：不输出 1/3/5 年生存概率，只给总分标尺
+  const eventsN = eventsAll
 
   return buildNomogram({
     title: opts.title || 'Prognostic Nomogram',
@@ -1181,11 +1218,11 @@ export function fitNomogramFromRecords(
       min_val: c.min_val,
       max_val: c.max_val,
     })),
-    baseline_survival,
     c_index: cIndex,
-    c_index_ci: cIndexCi,
+    ...(cIndexCi ? { c_index_ci: cIndexCi } : {}),
     sample_size: validIndices.length,
     events_n: eventsN,
+    model_type: 'logistic',
   })
 }
 
@@ -1252,9 +1289,10 @@ export function fitRocDcaFromRecords(
   const dcaSvg = renderDcaCurveSvg([dca1, dca2], prev, `${dsName} · 临床决策曲线 (DCA)`)
 
   const winPoints = dca2.points.filter(p => p.net_benefit_model > Math.max(p.net_benefit_all, p.net_benefit_none))
-  const benefitWindow: [number, number] = winPoints.length
+  // 模型 2 在任何阈值下都不占优时为 null，不填示例区间
+  const benefitWindow: [number, number] | null = winPoints.length
     ? [Math.round(winPoints[0]!.threshold * 100), Math.round(winPoints[winPoints.length - 1]!.threshold * 100)]
-    : [10, 70]
+    : null
 
   const nativeExports = exportRocDcaNativeSources([roc1, roc2], [dca1, dca2], dsName)
   return {

@@ -898,7 +898,12 @@ export function generateTable1FromData(
       let dfVal: number | null = null
       let smdVal: number | null = null
 
-      if (calcPValue) {
+      // 无法检验（参与比较的组不足 2 个、某组样本 < 2、或所有组方差都为 0）时 P 保持 null，显示「—」，
+      // 也不把该方法写进脚注；不再用 p=1（显示为 > 0.999）冒充检验结果
+      const cmpGroups = groupNames.map(g => groupVals[g] ?? [])
+      const hasVariance = cmpGroups.some(v => v.length >= 2 && v.some(x => x !== v[0]))
+      const continuousTestable = cmpGroups.length >= 2 && cmpGroups.every(v => v.length >= 2) && hasVariance
+      if (calcPValue && continuousTestable) {
         if (isTwoGroups) {
           const g1Vals = groupVals[groupNames[0]!] ?? []
           const g2Vals = groupVals[groupNames[1]!] ?? []
@@ -1027,10 +1032,15 @@ export function generateTable1FromData(
         const matrix: number[][] = levels.map(lvl => {
           return groupNames.map(g => groupCategoryCounts[g]![lvl] ?? 0)
         })
-        const chiRes = chiSquareOrFisher(matrix)
-        pValue = chiRes.p
-        testMethod = chiRes.method
-        usedMethods.add(testMethod)
+        // 至少 2 个非空水平、2 个非空组才能检验；否则 P 为 null（显示「—」）
+        const nonEmptyRows = matrix.filter(row => row.some(v => v > 0)).length
+        const nonEmptyCols = groupNames.filter((_, j) => matrix.some(row => (row[j] ?? 0) > 0)).length
+        if (nonEmptyRows >= 2 && nonEmptyCols >= 2) {
+          const chiRes = chiSquareOrFisher(matrix)
+          pValue = chiRes.p
+          testMethod = chiRes.method
+          usedMethods.add(testMethod)
+        }
       }
 
       if (calcSmd && levels.length >= 1) {

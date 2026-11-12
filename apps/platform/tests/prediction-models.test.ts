@@ -126,4 +126,38 @@ describe('临床预后预测模型套件 (Nomogram & ROC / DCA)', () => {
     // 零 Emoji 检查
     expect(svg).not.toMatch(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}]/u)
   })
+
+  it('buildNomogram: 叙述区分数据集拟合与用户系数、单预测因子不称多因素/独立，R 脚本按模型类型生成', () => {
+    const preds = [
+      { variable: 'age', label: '年龄', type: 'continuous' as const, beta: 0.04, min_val: 40, max_val: 80 },
+      { variable: 'stage', label: '分期', type: 'binary' as const, beta: 0.9, min_val: 0, max_val: 1 },
+    ]
+    // 用户手填系数、未指定模型类型：不得称「真实研究数据集」「独立预测因子」，R 脚本只给注释
+    const manual = buildNomogram({ predictors: preds })
+    expect(manual.academic_narrative_zh).toContain('基于用户提供的')
+    expect(manual.academic_narrative_zh).not.toMatch(/真实研究数据集|独立预测因子|本研究数据集拟合/)
+    expect(manual.native_exports?.r_script).toContain('请按原模型类型修改')
+    expect(manual.native_exports?.r_script).not.toMatch(/^f <- cph/m)
+    expect(manual.native_exports?.r_script).not.toContain('Survival(f)')
+
+    // 单个预测因子：不说多因素
+    const single = buildNomogram({ predictors: [preds[0]!], sample_size: 50, events_n: 20, model_type: 'logistic' })
+    expect(single.academic_narrative_zh).toContain('基于本研究数据集拟合的单因素 Logistic 回归模型')
+    expect(single.academic_narrative_zh).not.toMatch(/多因素|独立/)
+    expect(single.academic_narrative).not.toMatch(/multivariable/)
+    expect(single.native_exports?.r_script).toContain('lrm(outcome ~ age')
+    expect(single.native_exports?.r_script).toContain('fun = plogis')
+
+    // Cox 且提供了基线生存率：才写 cph + Survival，且只写提供了的年份
+    const cox = buildNomogram({ predictors: preds, baseline_survival: { year3: 0.7 } })
+    expect(cox.native_exports?.r_script).toContain('cph(Surv(time, status) ~ age + stage')
+    expect(cox.native_exports?.r_script).toContain('surv_fn(36, x)')
+    expect(cox.native_exports?.r_script).not.toContain('surv_fn(12, x)')
+    expect(cox.native_exports?.r_script).not.toContain('5-Year Survival')
+
+    // Cox 但没有基线生存率：不写 Survival 函数
+    const coxNoS0 = buildNomogram({ predictors: preds, model_type: 'cox' })
+    expect(coxNoS0.native_exports?.r_script).toContain('cph(')
+    expect(coxNoS0.native_exports?.r_script).not.toContain('Survival(f)')
+  })
 })

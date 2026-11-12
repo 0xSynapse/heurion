@@ -315,8 +315,10 @@ export function renderOrForestPlotSvg(
   const thY = headerH - 8
   svg += `<text x="${colX.var}" y="${thY}" font-size="11" font-weight="700" fill="#4B5563">Predictor</text>`
   svg += `<text x="${colX.uniText}" y="${thY}" font-size="11" font-weight="700" fill="#4B5563">Univariate OR</text>`
-  svg += `<text x="${colX.plotLeft + plotW / 2}" y="${thY}" font-size="11" font-weight="700" fill="#4B5563" text-anchor="middle">Adjusted OR (95% CI)</text>`
-  svg += `<text x="${colX.multiText}" y="${thY}" font-size="11" font-weight="700" fill="#4B5563">aOR (95% CI)</text>`
+  // 只有 1 个协变量时模型 OR 即粗 OR，不得标「Adjusted / aOR」
+  const adjusted = covariates.length >= 2
+  svg += `<text x="${colX.plotLeft + plotW / 2}" y="${thY}" font-size="11" font-weight="700" fill="#4B5563" text-anchor="middle">${adjusted ? 'Adjusted OR' : 'Crude OR'} (95% CI)</text>`
+  svg += `<text x="${colX.multiText}" y="${thY}" font-size="11" font-weight="700" fill="#4B5563">${adjusted ? 'aOR' : 'OR'} (95% CI)</text>`
   svg += `<text x="${colX.pText}" y="${thY}" font-size="11" font-weight="700" fill="#4B5563">P Value</text>`
   svg += `<line x1="20" y1="${thY + 6}" x2="${W - 20}" y2="${thY + 6}" stroke="#D1D5DB" stroke-width="1.2"/>`
 
@@ -373,17 +375,26 @@ export function generateLogisticRegression(
     covariates,
     positive_value,
     labels = {},
-    title = `Multivariate Logistic Regression for ${labels[outcome_col] || outcome_col}`,
   } = options
 
   const covList = covariates.filter(c => c && c !== outcome_col)
   if (!covList.length) {
     throw new Error('必须至少指定 1 个预测协变量 (covariates)')
   }
+  // 只有 ≥2 个协变量时才是多因素（相互校正）模型；1 个协变量时只是单因素（粗）OR
+  const isMultivariable = covList.length >= 2
+  const title = options.title
+    ?? `${isMultivariable ? 'Multivariable' : 'Univariable'} Logistic Regression for ${labels[outcome_col] || outcome_col}`
 
   // 1. 解析二元结局列 y (0 / 1)
   const outcomeHasY = records.some(r => /^(y|yes)$/i.test(String(r[outcome_col] ?? '').trim()))
   const parseOutcome = (raw: unknown): 0 | 1 | null => {
+    // 结局列用 Y/N 编码时，N 表示「否」而不是缺失（缺失哨兵里含 N，须先于 isCellMissing 判断）
+    if (outcomeHasY && (positive_value === undefined || positive_value === null || String(positive_value).trim() === '')) {
+      const yn = String(raw ?? '').trim()
+      if (/^(y|yes)$/i.test(yn)) return 1
+      if (/^(n|no)$/i.test(yn)) return 0
+    }
     if (isCellMissing(raw)) return null
     const s = String(raw).trim()
     if (!outcomeHasY && /^n$/i.test(s)) return null
@@ -398,7 +409,8 @@ export function generateLogisticRegression(
     return norm === 1 ? 1 : norm === 0 ? 0 : null
   }
 
-  // 2. 对非数值型分类协变量进行有序数值编码
+  // 2. 非数值协变量编码：只允许二分类（按字典序编为 0/1）。
+  //    多水平非数值变量若编为 0,1,2… 当连续变量，等于假设按字母序等距线性效应，OR 无意义，故直接报错
   const categoryEncoding = new Map<string, Map<string, number>>()
   for (const c of covList) {
     let hasNonNumeric = false
@@ -409,6 +421,12 @@ export function generateLogisticRegression(
       const s = String(raw).trim()
       distinct.add(s)
       if (!Number.isFinite(Number(s))) hasNonNumeric = true
+    }
+    if (hasNonNumeric && distinct.size > 2) {
+      throw new Error(
+        `协变量「${labels[c] || c}」为非数值分类变量且有 ${distinct.size} 个水平（${Array.from(distinct).slice(0, 6).join(' / ')}${distinct.size > 6 ? ' …' : ''}），` +
+        '不能按字母序编码为连续变量。请先做哑变量编码（每个水平一列 0/1）或合并为二分类后再拟合。',
+      )
     }
     if (hasNonNumeric && distinct.size >= 1) {
       const sorted = Array.from(distinct).sort()
@@ -450,6 +468,13 @@ export function generateLogisticRegression(
   const sample_size = validRows.length
   const events_count = validRows.filter(r => r.y === 1).length
   const event_rate = sample_size > 0 ? Number(((events_count / sample_size) * 100).toFixed(1)) : 0
+  // 样本不足或结局只有一类时模型无法估计：直接报错，不输出 OR = 1.00 / AUC = 0.5 这类占位结果
+  if (sample_size < covList.length + 2 || events_count === 0 || events_count === sample_size) {
+    throw new Error(
+      `结局列「${labels[outcome_col] || outcome_col}」的完整病例不足以拟合 Logistic 回归` +
+      `（完整病例 n = ${sample_size}，事件 ${events_count}，协变量 ${covList.length} 个；需要同时有事件与非事件，且 n ≥ 协变量数 + 2）`,
+    )
+  }
 
   const yVec = validRows.map(r => r.y)
   const XMat = validRows.map(r => r.x)
@@ -507,7 +532,9 @@ export function generateLogisticRegression(
   // 6. 生成 Markdown 三线表与医学论文结果段落
   const escMd = (s: string) => String(s).replace(/([\\|])/g, '\\$1')
   let md = `### ${title}\n\n`
-  md += `| Predictor | Univariate OR (95% CI) | Univariate P | Adjusted aOR (95% CI) | Multivariate P |\n`
+  md += isMultivariable
+    ? `| Predictor | Univariate OR (95% CI) | Univariate P | Adjusted aOR (95% CI) | Multivariate P |\n`
+    : `| Predictor | Crude OR (95% CI) | Univariate P | Model OR (95% CI) | Model P |\n`
   md += `| :--- | :---: | :---: | :---: | :---: |\n`
   for (const c of covResults) {
     md += `| **${escMd(c.label)}** | ${c.univariate_or_formatted} | ${c.univariate_p_formatted} | ${c.or_formatted} | ${c.p_value_formatted} |\n`
@@ -515,13 +542,23 @@ export function generateLogisticRegression(
   md += `\n*Note*: Complete-case N = ${sample_size} (${events_count} events, ${event_rate}%). Model C-statistic (AUC) = ${auc.toFixed(3)}, Likelihood Ratio P = ${formatP(p_value_overall)}.`
 
   const sigFactors = covResults.filter(c => c.p_value < 0.05)
-  const narrative = sigFactors.length > 0
-    ? `In the multivariate binary logistic regression analysis of ${sample_size} patients (${events_count} outcome events, ${event_rate}%), ${sigFactors.map(s => `${s.label} (adjusted OR = ${s.or_formatted}, P = ${s.p_value_formatted})`).join('; ')} ${sigFactors.length === 1 ? 'was an independent predictor' : 'were independent predictors'} of ${labels[outcome_col] || outcome_col}. The multivariable model achieved a concordance statistic (AUC) of ${auc.toFixed(3)} (overall likelihood ratio P = ${formatP(p_value_overall)}).`
-    : `In the multivariate binary logistic regression analysis of ${sample_size} patients (${events_count} outcome events, ${event_rate}%), none of the evaluated covariates reached statistical significance at the P < 0.05 threshold after mutual adjustment (model AUC = ${auc.toFixed(3)}).`
+  const outcomeLabel = labels[outcome_col] || outcome_col
+  let narrative: string
+  if (isMultivariable) {
+    narrative = sigFactors.length > 0
+      ? `In the multivariable binary logistic regression analysis of ${sample_size} patients (${events_count} outcome events, ${event_rate}%), ${sigFactors.map(s => `${s.label} (adjusted OR = ${s.or_formatted}, P = ${s.p_value_formatted})`).join('; ')} ${sigFactors.length === 1 ? 'was an independent predictor' : 'were independent predictors'} of ${outcomeLabel} after mutual adjustment for ${covResults.map(c => c.label).join(', ')}. The multivariable model achieved a concordance statistic (AUC) of ${auc.toFixed(3)} (overall likelihood ratio P = ${formatP(p_value_overall)}).`
+      : `In the multivariable binary logistic regression analysis of ${sample_size} patients (${events_count} outcome events, ${event_rate}%), none of the evaluated covariates reached statistical significance at the P < 0.05 threshold after mutual adjustment (model AUC = ${auc.toFixed(3)}).`
+  } else {
+    // 单个协变量：未校正任何其他因素，只能报告粗 OR，不得称 independent / adjusted
+    const c0 = covResults[0]!
+    narrative = c0.p_value < 0.05
+      ? `In the univariable binary logistic regression analysis of ${sample_size} patients (${events_count} outcome events, ${event_rate}%), ${c0.label} was significantly associated with ${outcomeLabel} (crude OR = ${c0.or_formatted}, P = ${c0.p_value_formatted}; AUC = ${auc.toFixed(3)}). No other covariates were adjusted for.`
+      : `In the univariable binary logistic regression analysis of ${sample_size} patients (${events_count} outcome events, ${event_rate}%), ${c0.label} was not significantly associated with ${outcomeLabel} (crude OR = ${c0.or_formatted}, P = ${c0.p_value_formatted}; AUC = ${auc.toFixed(3)}).`
+  }
 
   const prismSpec: PrismTableSpec = {
     tableType: 'Forest',
-    title: `${title} - Adjusted Odds Ratios`,
+    title: `${title} - ${isMultivariable ? 'Adjusted' : 'Crude'} Odds Ratios`,
     rows: covResults.map(c => ({
       label: c.label,
       hr: c.or,
@@ -531,7 +568,7 @@ export function generateLogisticRegression(
     })),
   }
 
-  const rScript = `# Reproducible Multivariate Logistic Regression & Forest Plot (R glm / forestploter)
+  const rScript = `# Reproducible ${isMultivariable ? 'Multivariable' : 'Univariable'} Logistic Regression & Forest Plot (R glm / forestploter)
 # Outcome: ${outcome_col} (N = ${sample_size}, Events = ${events_count})
 library(forestploter)
 df_or <- data.frame(
@@ -601,6 +638,8 @@ export interface GrottaPlotResult {
   shift_test_method: string
   shift_p: number | null
   shift_p_formatted: string
+  /** 未输出检验 P 值时的原因说明（如纵向重复测量需配对检验、非数值等级未给顺序）；正常检验时为 null */
+  test_note: string | null
   svg: string
   markdown_table: string
   narrative: string
@@ -718,23 +757,40 @@ export function generateGrottaPlot(
   })
 
   // 2. 显著性检验：卡方检验 + 有序秩和检验 (Mann-Whitney U / Kruskal-Wallis)
+  //    这些都是独立样本检验，只适用于组间横向对比。
+  //    - 纵向模式：各时间点是同一批患者的重复测量，需配对检验（Wilcoxon 符号秩 / Friedman），本工具未实现，故不输出 P 值
+  //    - 等级非数值且未提供 score_order：顺序未知，秩和检验无意义，不输出有序移位 P；
+  //      卡方检验不依赖等级顺序（名义变量检验），组间模式下仍保留
   let chi_square_p: number | null = null
   let shift_p: number | null = null
   let shift_test_method = 'Kruskal-Wallis ordinal shift test'
+  let test_note: string | null = null
 
-  if (bars.length >= 2 && orderedLevels.length >= 2) {
+  const levelsAllNumeric = orderedLevels.every(l => Number.isFinite(Number(l)))
+  const orderProvided = !!score_order && score_order.length > 0 && orderedLevels.every(l => score_order.includes(l))
+  const orderKnown = levelsAllNumeric || orderProvided
+
+  if (isLongitudinal) {
+    shift_test_method = 'Not computed (repeated measures require a paired test)'
+    test_note = '各时间点为同一批患者的重复测量，需用配对检验（如 Wilcoxon 符号秩 / Friedman），本工具未计算；未输出独立样本检验 P 值。'
+  } else if (bars.length >= 2 && orderedLevels.length >= 2) {
     const matrix = orderedLevels.map(lvl => bars.map(b => b.counts[lvl] ?? 0))
     chi_square_p = chiSquareOrFisher(matrix).p
 
-    const rankOf = new Map<string, number>()
-    orderedLevels.forEach((lvl, idx) => rankOf.set(lvl, idx))
-    const rankGroups = rawBars.map(b => b.values.map(v => rankOf.get(v) ?? 0))
-    if (rankGroups.length === 2) {
-      shift_test_method = 'Mann-Whitney U ordinal shift test'
-      shift_p = mannWhitneyUTest(rankGroups[0]!, rankGroups[1]!).p
+    if (!orderKnown) {
+      shift_test_method = 'Not computed (ordinal level order not specified)'
+      test_note = '等级为非数值且未提供 score_order（等级顺序），无法进行有序移位检验；请提供 score_order 后重算。卡方检验不依赖等级顺序，仅作名义分布比较。'
     } else {
-      shift_test_method = 'Kruskal-Wallis ordinal shift test'
-      shift_p = kruskalWallisTest(rankGroups).p
+      const rankOf = new Map<string, number>()
+      orderedLevels.forEach((lvl, idx) => rankOf.set(lvl, idx))
+      const rankGroups = rawBars.map(b => b.values.map(v => rankOf.get(v) ?? 0))
+      if (rankGroups.length === 2) {
+        shift_test_method = 'Mann-Whitney U ordinal shift test'
+        shift_p = mannWhitneyUTest(rankGroups[0]!, rankGroups[1]!).p
+      } else {
+        shift_test_method = 'Kruskal-Wallis ordinal shift test'
+        shift_p = kruskalWallisTest(rankGroups).p
+      }
     }
   }
 
@@ -829,11 +885,23 @@ export function generateGrottaPlot(
     const cells = score_levels.map(s => `${b.counts[s.level] ?? 0} (${(b.percentages[s.level] ?? 0).toFixed(1)}%)`)
     md += `| **${escMd(b.bar_label)}** | ${b.total_n} | ${cells.join(' | ')} |\n`
   }
+  if (test_note) md += `\n*Note*: ${test_note}`
 
   const topLvl = score_levels[0]
-  const narrative = topLvl && bars.length >= 2
-    ? `Ordinal distribution analysis across ${bars.length} ${isLongitudinal ? 'timepoints' : 'groups'} demonstrated ${shift_p !== null && shift_p < 0.05 ? 'a statistically significant shift' : 'the following distribution'} (${shift_test_method} P = ${formatP(shift_p)}, Chi-square P = ${formatP(chi_square_p)}). The proportion in category "${topLvl.label}" was ${bars.map(b => `${(b.percentages[topLvl.level] ?? 0).toFixed(1)}% (${b.counts[topLvl.level] ?? 0}/${b.total_n}) in ${b.bar_label}`).join(', ')}.`
-    : `Ordinal distribution was summarized across ${bars.length} ${isLongitudinal ? 'timepoints' : 'cohorts'}.`
+  const proportionText = topLvl
+    ? ` The proportion in category "${topLvl.label}" was ${bars.map(b => `${(b.percentages[topLvl.level] ?? 0).toFixed(1)}% (${b.counts[topLvl.level] ?? 0}/${b.total_n}) in ${b.bar_label}`).join(', ')}.`
+    : ''
+  let narrative: string
+  if (!topLvl || bars.length < 2) {
+    narrative = `Ordinal distribution was summarized across ${bars.length} ${isLongitudinal ? 'timepoints' : 'cohorts'}.`
+  } else if (isLongitudinal) {
+    // 纵向模式只描述分布，不写 significant shift
+    narrative = `Ordinal score distributions were described across ${bars.length} timepoints.${proportionText} Because the timepoints are repeated measurements of the same patients, independent-sample tests are not applicable; a paired test (e.g., Wilcoxon signed-rank or Friedman test) is required and was not computed.`
+  } else if (shift_p === null) {
+    narrative = `Ordinal distribution was compared across ${bars.length} groups (Chi-square P = ${formatP(chi_square_p)}, nominal comparison).${proportionText} The ordinal shift test was not computed because the order of the score levels was not specified.`
+  } else {
+    narrative = `Ordinal distribution analysis across ${bars.length} groups demonstrated ${shift_p < 0.05 ? 'a statistically significant shift' : 'no statistically significant shift'} (${shift_test_method} P = ${formatP(shift_p)}, Chi-square P = ${formatP(chi_square_p)}).${proportionText}`
+  }
 
   const prismSpec: PrismTableSpec = {
     tableType: 'Column',
@@ -846,7 +914,7 @@ export function generateGrottaPlot(
 
   const rScript = `# Reproducible Grotta Stacked Horizontal Bar Chart (R ggplot2)
 library(ggplot2)
-# Shift Test: ${shift_test_method} P = ${formatP(shift_p)}
+# Shift Test: ${shift_p !== null ? `${shift_test_method} P = ${formatP(shift_p)}` : shift_test_method}
 `
 
   return {
@@ -859,6 +927,7 @@ library(ggplot2)
     shift_test_method,
     shift_p,
     shift_p_formatted: formatP(shift_p),
+    test_note,
     svg,
     markdown_table: md,
     narrative,

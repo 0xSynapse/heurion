@@ -573,16 +573,21 @@ export class StudyService {
         newlyAddedVars.push(cv)
       }
     }
+    const extractedCount = plan.inclusion_rules.length + plan.exclusion_rules.length
     if (opts?.save !== false) {
       this.store.updateStudy(id, {
-        eligibility_plan: JSON.stringify(plan),
+        // 一条都没识别到时不覆盖已有的纳排方案
+        ...(extractedCount > 0 ? { eligibility_plan: JSON.stringify(plan) } : {}),
         ...(newlyAddedVars.length > 0 ? { custom_vars: JSON.stringify(mergedCustomVars) } : {}),
         ...(!s.design && blueprint.recommended_design ? { design: blueprint.recommended_design } : {}),
       })
     }
     return {
       eligibility_plan: plan,
-      extracted_count: plan.inclusion_rules.length + plan.exclusion_rules.length,
+      extracted_count: extractedCount,
+      ...(extractedCount === 0
+        ? { note: '未从方案中识别到纳排条款；已有的纳排方案未改动。可手动添加规则，或从专科模板中选择。' }
+        : {}),
       extracted_custom_vars: newlyAddedVars,
       recommended_design: blueprint.recommended_design,
       source_summary: sourceSummary,
@@ -927,7 +932,7 @@ function normalizeOp(opRaw: string): LabRuleOp {
  */
 export function parseProtocolTextToRules(
   rawText: string,
-  studyDesign?: StudyRow['design'] | null,
+  _studyDesign?: StudyRow['design'] | null,
 ): { inclusion_rules: EligibilityRule[]; exclusion_rules: EligibilityRule[] } {
   const inclusion_rules: EligibilityRule[] = []
   const exclusion_rules: EligibilityRule[] = []
@@ -1217,13 +1222,7 @@ export function parseProtocolTextToRules(
     }
   }
 
-  // Fallback if protocol text had no recognizable clauses at all
-  if (inclusion_rules.length === 0 && exclusion_rules.length === 0) {
-    const defaultTpl = studyDesign === 'rct' ? ELIGIBILITY_TEMPLATES[0]! : ELIGIBILITY_TEMPLATES[1]!
-    defaultTpl.inclusion_rules.forEach((r, idx) => inclusion_rules.push({ ...r, id: `inc_${idx + 1}` }))
-    defaultTpl.exclusion_rules.forEach((r, idx) => exclusion_rules.push({ ...r, id: `exc_${idx + 1}` }))
-  }
-
+  // 未识别到任何条款时返回空规则；不再套用与本研究无关的专科模板并冒充「从方案提取」
   return { inclusion_rules, exclusion_rules }
 }
 

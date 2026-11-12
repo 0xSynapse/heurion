@@ -353,7 +353,10 @@ export function calculateSingleGroupKm(
 
   // 里程碑时间生存率
   const milestone_survival: KmGroupResult['milestone_survival'] = {}
+  // 超出最长随访时间的里程碑无法估计（风险集为空），不外推，直接不输出（下游显示「—」）
+  const maxFollowUp = valid[valid.length - 1]!.time
   for (const ms of milestones) {
+    if (ms > maxFollowUp) continue
     // 找到 <= ms 的最后一个点
     let candidate = timeline[0]!
     for (const pt of timeline) {
@@ -519,7 +522,8 @@ export function calculateCoxRegression(
   records: Array<{ time: number; event: number; [cov: string]: any }>,
   covariates: string[],
   labels: Record<string, string> = {}
-): CoxRegressionResult {
+): CoxRegressionResult | null {
+  // 无法可靠拟合（样本/事件不足、未收敛、信息矩阵奇异）时返回 null，下游不得输出 HR / C-index。
   // 对包含非数值型字符串（如 'Male'/'Female'）的分类协变量进行自动数值编码
   const categoryEncoding = new Map<string, Map<string, number>>()
   for (const c of covariates) {
@@ -532,7 +536,14 @@ export function calculateCoxRegression(
       distinct.add(s)
       if (!Number.isFinite(Number(s))) hasNonNumeric = true
     }
-    if (hasNonNumeric && distinct.size >= 2) {
+    // 多水平（>2）非数值变量若按字母序编为 0,1,2… 当连续变量，等于假设等距线性效应，HR 无意义：直接报错
+    if (hasNonNumeric && distinct.size > 2) {
+      throw new Error(
+        `协变量「${labels[c] || c}」是有 ${distinct.size} 个水平的分类变量，` +
+        '不能按字母序编码为连续变量。请先做哑变量编码（每个水平一列 0/1）或合并为二分类后再拟合 Cox 模型。',
+      )
+    }
+    if (hasNonNumeric && distinct.size === 2) {
       const sortedLevels = Array.from(distinct).sort()
       const map = new Map<string, number>()
       sortedLevels.forEach((lvl, idx) => map.set(lvl, idx))
@@ -568,25 +579,7 @@ export function calculateCoxRegression(
   const p = covariates.length
 
   if (sample_size < p + 2 || events_count < 2 || p === 0) {
-    return {
-      covariates: covariates.map(c => ({
-        variable: c,
-        label: labels[c] || c,
-        beta: 0,
-        se: 1,
-        z: 0,
-        p_value: 1.0,
-        p_value_formatted: '1.000',
-        hr: 1.0,
-        hr_ci_lower: 1.0,
-        hr_ci_upper: 1.0,
-        hr_formatted: '1.00 (1.00–1.00)'
-      })),
-      sample_size,
-      events_count,
-      c_index: 0.5,
-      p_value_overall: 1.0
-    }
+    return null
   }
 
   // 排序：时间从大到小排序方便累积风险集计算
@@ -713,10 +706,12 @@ export function calculateCoxRegression(
   for (let j = 0; j < p; j++) I_final[j]![j]! += 1e-7
 
   const covMatrix = invertMatrix(I_final)
+  // 未收敛（常见于完全分离）或信息矩阵奇异时，SE / CI / P 无法计算，不输出结果
+  if (!converged || !covMatrix || beta.some(b => !Number.isFinite(b) || Math.abs(b) > 20)) return null
 
   const covResults: CoxCovariateResult[] = covariates.map((c, j) => {
     const b = beta[j]!
-    const variance = covMatrix ? Math.max(1e-6, covMatrix[j]![j]!) : 1
+    const variance = Math.max(1e-12, covMatrix[j]![j]!)
     const se = Math.sqrt(variance)
     const z = se > 0 ? b / se : 0
     const p_value = 2 * (1 - normalCdf(Math.abs(z)))
@@ -1226,18 +1221,15 @@ export function generateSurvivalAnalysis(
     title = 'Kaplan-Meier Survival Analysis'
   } = options
 
-  // 若配置了日期列，预先扫描队列最晚日期作为默认右删失截止点
-  let fallbackCensorMs = default_censor_date ? parseClinicalDateMs(default_censor_date) : null
-  if (!fallbackCensorMs && start_date_col) {
-    let maxMs = 0
-    for (const r of records) {
-      for (const col of [event_date_col, censor_date_col, start_date_col]) {
-        if (!col) continue
-        const ms = parseClinicalDateMs(r[col])
-        if (ms !== null && ms > maxMs) maxMs = ms
-      }
-    }
-    fallbackCensorMs = maxMs > 0 ? maxMs : Date.parse('2025-01-01')
+  // 按日期计算随访时，未发生事件者的删失时间必须来自删失日期列或调用方给定的随访截止日；
+  // 不再用「队列中最晚的日期」或写死的日期代替（那等于假定所有人都随访到那天，会系统性拉长随访）
+  const fallbackCensorMs = default_censor_date ? parseClinicalDateMs(default_censor_date) : null
+  if (start_date_col && !censor_date_col && fallbackCensorMs === null) {
+    throw new Error(
+      default_censor_date
+        ? `无法识别随访截止日期「${default_censor_date}」，请使用 YYYY-MM-DD 格式`
+        : '按日期计算随访时需要提供删失日期列（末次随访日期）或统一的随访截止日期，否则无法确定未发生事件者的随访时长',
+    )
   }
 
   const normUnit = time_unit.toLowerCase()
@@ -1319,9 +1311,9 @@ export function generateSurvivalAnalysis(
     }))
     cox = calculateCoxRegression(coxRecords, ['_group_binary'], {
       _group_binary: `${labels[groupNames[1]!] || groupNames[1]!} vs ${labels[g0] || g0}`
-    })
+    }) ?? undefined
   } else if (coxCovs.length > 0) {
-    cox = calculateCoxRegression(cleaned, coxCovs, labels)
+    cox = calculateCoxRegression(cleaned, coxCovs, labels) ?? undefined
   }
 
   // 风险表

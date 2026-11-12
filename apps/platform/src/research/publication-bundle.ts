@@ -45,6 +45,12 @@ export interface PublicationBundleOptions {
   time_col?: string
   event_col?: string
   group_col?: string
+  /**
+   * 数据集路径的随访时间单位（如 'Months' / 'Days' / 'Years' / 'Weeks'）。
+   * 未提供时仅在时间列名明确含单位（如 os_months、随访天数）时推断；推断不出则视为未指定，不默认按月。
+   * 患者路径固定为月（followup_months）。
+   */
+  time_unit?: string
 }
 
 /** 材料包里一条受试者记录；未记录的字段一律为 null */
@@ -77,6 +83,38 @@ export interface BundleDataReport {
     cox_generated: boolean
   }
   omitted: string[]
+  /** 数据来源：平台入组受试者（研究变量经核实流程）或上传的研究数据集（未经平台核实流程） */
+  data_source: 'patients' | 'dataset'
+  /** 数据集路径的数据集名称 */
+  dataset_name?: string
+  /** 生存分析实际使用的列名（可复现脚本据此生成）；未使用时为 null */
+  columns: { time: string | null; event: string | null; group: string | null }
+  /** 随访时间单位；null 表示未指定 */
+  time_unit: string | null
+  /** 时间单位来源：调用方参数 / 时间列名推断 / 变量定义固定（followup_months） */
+  time_unit_source: 'option' | 'column_name' | 'fixed' | null
+  /** 研究是否保存了纳排筛选漏斗记录（决定正文 / STROBE 对筛选环节的表述） */
+  screening: { assessed_total: number; excluded_total: number } | null
+}
+
+/** 按时间列名推断单位；列名里没有明确单位词时返回 null（不默认按月） */
+export function inferTimeUnitFromColumn(col: string): string | null {
+  const c = col.toLowerCase()
+  if (/(^|[_\s-])(months?|mo)($|[_\s-])|月/.test(c)) return 'Months'
+  if (/(^|[_\s-])days?($|[_\s-])|天|日数/.test(c)) return 'Days'
+  if (/(^|[_\s-])weeks?($|[_\s-])|周/.test(c)) return 'Weeks'
+  if (/(^|[_\s-])years?($|[_\s-])|年数/.test(c)) return 'Years'
+  return null
+}
+
+/** 只有单位已知时才给出按单位换算的里程碑时间点；未知单位不输出里程碑 */
+function milestonesForUnit(unit: string | null): number[] {
+  const u = (unit ?? '').toLowerCase()
+  if (u.startsWith('month')) return [12, 24, 36, 60]
+  if (u.startsWith('day')) return [365, 730, 1095, 1825]
+  if (u.startsWith('week')) return [52, 104, 156, 260]
+  if (u.startsWith('year')) return [1, 2, 3, 5]
+  return []
 }
 
 /** 进入材料包的研究变量（来自 subject_vars，只用已核实的值） */
@@ -349,6 +387,11 @@ export class PublicationBundleService {
         cox_generated: coxOk,
       },
       omitted,
+      data_source: 'patients',
+      columns: { time: 'followup_months', event: 'os_status', group: grouped ? 'treatment_arm' : null },
+      time_unit: 'Months',
+      time_unit_source: 'fixed',
+      screening: savedFunnel ? { assessed_total: savedFunnel.assessed_total, excluded_total: savedFunnel.excluded_total } : null,
     }
 
     // 8. 正文、清单、脚本、清单文件
@@ -467,7 +510,8 @@ export class PublicationBundleService {
         label: labels[col] || col,
         sources: [`研究数据集《${dataset.name}》`],
         entered: n - missCnt,
-        verified: n - missCnt,
+        // 上传数据集不经过平台核实流程：不得把非空值记为「已核实」；非空值照常进入分析（见 data_source）
+        verified: 0,
         unverified_excluded: 0,
         missing: missCnt,
         methods: dataset.dictionary_sheet ? [`数据字典工作表: ${dataset.dictionary_sheet}`] : [],
@@ -542,6 +586,15 @@ export class PublicationBundleService {
     const flowDrawio = exportFlowchartToDrawio(flowData)
     const flowVisioVdx = exportFlowchartToVisioVdx(flowData)
     const flowPptx = exportFlowchartToPptx(flowData)
+    if (!savedFunnel) {
+      omitted.push('CONSORT 筛选 / 排除环节（研究没有保存纳排筛选记录）')
+    }
+
+    // 随访时间单位：调用方参数优先，其次按时间列名推断；都没有则为未指定（不默认按月）
+    const optUnit = options.time_unit && options.time_unit.trim() ? options.time_unit.trim() : null
+    const inferredUnit = !optUnit && timeCol ? inferTimeUnitFromColumn(timeCol) : null
+    const timeUnit: string | null = optUnit ?? inferredUnit
+    const timeUnitSource: BundleDataReport['time_unit_source'] = optUnit ? 'option' : inferredUnit ? 'column_name' : null
 
     let survRes: SurvivalAnalysisResult | null = null
     let coxOk = false
@@ -567,7 +620,9 @@ export class PublicationBundleService {
           event_col: eventCol,
           group_col: grouped ? groupCol : undefined,
           covariates: [],
-          time_unit: 'Months',
+          // 单位未知时不写单位、不输出依赖单位的里程碑生存率
+          time_unit: timeUnit ?? 'time units (unspecified)',
+          milestones: milestonesForUnit(timeUnit),
           labels,
           title: `${study.title} · Kaplan-Meier Survival Analysis`,
         })
@@ -602,6 +657,16 @@ export class PublicationBundleService {
         cox_generated: coxOk,
       },
       omitted,
+      data_source: 'dataset',
+      dataset_name: dataset.name,
+      columns: {
+        time: timeCol && eventCol ? timeCol : null,
+        event: timeCol && eventCol ? eventCol : null,
+        group: grouped && groupCol ? groupCol : null,
+      },
+      time_unit: timeUnit,
+      time_unit_source: timeUnitSource,
+      screening: savedFunnel ? { assessed_total: savedFunnel.assessed_total, excluded_total: savedFunnel.excluded_total } : null,
     }
 
     const manuscriptMd = this.generateManuscriptDraft(study.title, report, table1Result, survRes, evalue)
@@ -649,12 +714,16 @@ DATA COMPLETENESS (no values were imputed; missing values remain missing):
  - Participants included: ${r.n_subjects}
  - Enrollment records: ${r.enrollment.enrolled_ever} ever enrolled, ${r.enrollment.withdrawn} withdrawn, ${r.enrollment.inaccessible} not exported (no access)
  - Treatment arms: ${arms}${r.arm_missing ? `; arm missing for ${r.arm_missing}` : ''}
- - Missing values by variable (unverified values count as missing):
+ - Missing values by variable${r.data_source === 'patients' ? ' (unverified values count as missing)' : ''}:
 ${miss}
 
-VARIABLE PROVENANCE (only researcher-verified values are used):
+${r.data_source === 'patients'
+  ? `VARIABLE PROVENANCE (only researcher-verified values are used):
 ${r.provenance.map(p => ` - ${p.var_id} (${p.label}): source ${p.sources.join(' / ') || 'none'}; ${p.verified} verified, ${p.unverified_excluded} unverified (not used), ${p.missing} / ${r.n_subjects} without a usable value${p.methods.length ? `; method: ${p.methods.join(' | ')}` : ''}`).join('\n')}
- - age, sex: 来源：患者主档案 (patient registry: birth year / sex on the patient record); not part of the verification workflow
+ - age, sex: 来源：患者主档案 (patient registry: birth year / sex on the patient record); not part of the verification workflow`
+  : `VARIABLE PROVENANCE (uploaded research dataset "${r.dataset_name ?? ''}"; values were NOT checked through the platform verification workflow and are analysed as uploaded):
+${r.provenance.map(p => ` - ${p.var_id} (${p.label}): source ${p.sources.join(' / ') || 'none'}; ${p.entered} non-missing, ${p.missing} / ${r.n_subjects} missing${p.methods.length ? `; ${p.methods.join(' | ')}` : ''}`).join('\n')}`}
+ - Follow-up time unit: ${r.time_unit ? `${r.time_unit}${r.time_unit_source === 'column_name' ? ' (inferred from column name)' : ''}` : 'not specified'}
  - Survival analysis: ${r.survival.included} included; ${r.survival.excluded_missing_time_or_status} excluded for missing follow-up time or outcome status${r.survival.excluded_missing_arm ? `; ${r.survival.excluded_missing_arm} excluded for missing treatment arm` : ''}
 
 NOT GENERATED (and why):
@@ -672,6 +741,28 @@ ${r.omitted.map(o => ` - ${o}`).join('\n')}
   ): string {
     const t1Methods = t1.footnotes.find(f => f.startsWith('P values are calculated using'))
     const armText = r.arms.map(x => `${x.name} (n = ${x.n})`).join(' and ')
+    const fromDataset = r.data_source === 'dataset'
+    // 受试者流向：按是否保存了纳排筛选记录分支表述
+    const flowText = r.screening
+      ? `Participant flow is shown in **Figure 1**: ${r.screening.assessed_total} individuals were assessed for eligibility and ${r.screening.excluded_total} were excluded according to the study's saved eligibility screening record; exclusion reasons are listed in the figure.`
+      : `Participant flow is shown in **Figure 1**, based on ${fromDataset ? 'the rows of the uploaded dataset' : "the platform's enrollment records"} only; screening counts and exclusion reasons were not recorded on the platform and must be supplied by the authors.`
+    // 变量来源：患者路径只用已核实值；数据集路径未经平台核实流程，必须如实说明
+    const sourceSection = fromDataset
+      ? `#### 1.3 Data Source
+All variables were taken from the uploaded research dataset "${r.dataset_name ?? ''}" (数据来源：上传的研究数据集). These values were not checked through the platform's verification workflow and were analysed as uploaded; the authors are responsible for their accuracy.
+
+| Variable | Source | Non-missing | Missing | Notes |
+| :--- | :--- | :---: | :---: | :--- |
+${r.provenance.map(p => `| ${p.var_id} | ${p.sources.join(' / ') || '—'} | ${p.entered} | ${p.missing} / ${r.n_subjects} | ${p.methods.join('; ') || '—'} |`).join('\n')}`
+      : `#### 1.3 Variable Sources and Verification
+Only values verified by the study investigators were analysed; unverified values were treated as missing. Age and sex were taken from the patient registry (来源：患者主档案) and are not part of the verification workflow.
+
+| Variable | Source | Verified | Unverified (not used) | Without usable value | Method |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+${r.provenance.map(p => `| ${p.var_id} | ${p.sources.join(' / ') || '—'} | ${p.verified} | ${p.unverified_excluded} | ${p.missing} / ${r.n_subjects} | ${p.methods.join('; ') || '—'} |`).join('\n')}`
+    const timeUnitText = r.time_unit
+      ? ` Follow-up time was analysed in ${r.time_unit.toLowerCase()}${r.time_unit_source === 'column_name' ? ` (unit inferred from the column name "${r.columns.time ?? ''}")` : ''}.`
+      : ` The time unit of the follow-up column${r.columns.time ? ` "${r.columns.time}"` : ''} was not specified (时间单位未指定); times are reported in the dataset's original units and no fixed-time survival rates are given.`
     const parts: string[] = []
     parts.push(`# Statistical Methods & Results Section Draft
 ## Study: ${title}
@@ -681,21 +772,16 @@ ${r.omitted.map(o => ` - ${o}`).join('\n')}
 ### 1. Statistical Analysis Methods
 
 #### 1.1 Study Population and Baseline Characteristics
-Participant flow is shown in **Figure 1**, based on the platform's enrollment records only; screening counts and exclusion reasons were not recorded on the platform and must be supplied by the authors. Baseline characteristics are summarized in **Table 1**${r.grouped ? ` by treatment arm` : ' for the overall cohort only (fewer than two treatment arms were recorded, so no between-group comparison was performed)'}. Continuous variables are presented as mean ± SD or median [IQR] according to their distribution, and categorical variables as n (%).${r.grouped && t1Methods ? ` ${t1Methods}` : ''}
+${flowText} Baseline characteristics are summarized in **Table 1**${r.grouped ? ` by treatment arm` : ' for the overall cohort only (fewer than two treatment arms were recorded, so no between-group comparison was performed)'}. Continuous variables are presented as mean ± SD or median [IQR] according to their distribution, and categorical variables as n (%).${r.grouped && t1Methods ? ` ${t1Methods}` : ''}
 
 #### 1.2 Missing Data
 No imputation was performed. Missing values are reported per variable in Table 1, and each analysis used participants with complete data for the variables it required (complete-case analysis).
 
-#### 1.3 Variable Sources and Verification
-Only values verified by the study investigators were analysed; unverified values were treated as missing. Age and sex were taken from the patient registry (来源：患者主档案) and are not part of the verification workflow.
-
-| Variable | Source | Verified | Unverified (not used) | Without usable value | Method |
-| :--- | :--- | :---: | :---: | :---: | :--- |
-${r.provenance.map(p => `| ${p.var_id} | ${p.sources.join(' / ') || '—'} | ${p.verified} | ${p.unverified_excluded} | ${p.missing} / ${r.n_subjects} | ${p.methods.join('; ') || '—'} |`).join('\n')}`)
+${sourceSection}`)
 
     if (surv) {
       parts.push(`#### 1.4 Survival Analysis
-Survival was estimated with the **Kaplan-Meier** method (Greenwood 95% confidence intervals; **Figure 2**).${r.grouped ? ' Survival distributions between treatment arms were compared with the two-sided log-rank test.' : ''}${r.survival.cox_generated ? ' An unadjusted (univariable) Cox proportional hazards model with treatment arm as the only covariate was fitted to estimate the hazard ratio (HR) and 95% CI (**Figure 3**). The proportional hazards assumption was not formally tested.' : ''}${evalue ? ' The VanderWeele E-value was computed for the unadjusted HR to quantify the minimum strength of unmeasured confounding needed to explain away the association.' : ''}`)
+Survival was estimated with the **Kaplan-Meier** method (Greenwood 95% confidence intervals; **Figure 2**).${timeUnitText}${r.grouped ? ' Survival distributions between treatment arms were compared with the two-sided log-rank test.' : ''}${r.survival.cox_generated ? ' An unadjusted (univariable) Cox proportional hazards model with treatment arm as the only covariate was fitted to estimate the hazard ratio (HR) and 95% CI (**Figure 3**). The proportional hazards assumption was not formally tested.' : ''}${evalue ? ' The VanderWeele E-value was computed for the unadjusted HR to quantify the minimum strength of unmeasured confounding needed to explain away the association.' : ''}`)
     }
 
     parts.push(`---
@@ -746,7 +832,7 @@ The right-hand column states what this generated bundle covers. Items marked "${
 | **Methods** |
 | 4 | Present key elements of study design early in the paper | ${todo} |
 | 5 | Describe the setting, locations, and relevant dates | ${todo} |
-| 6a | Give the eligibility criteria, and the sources and methods of selection of participants | ${todo} (screening records not available on the platform) |
+| 6a | Give the eligibility criteria, and the sources and methods of selection of participants | ${r.screening ? `Figure 1 (saved eligibility screening record: ${r.screening.assessed_total} assessed, ${r.screening.excluded_total} excluded); ${todo} (eligibility criteria text)` : `${todo} (screening records not available on the platform)`} |
 | 7 | Clearly define all outcomes, exposures, predictors, potential confounders | ${todo} |
 | 8 | For each variable of interest, give sources of data and details of methods of assessment | ${todo} |
 | 9 | Describe any efforts to address potential sources of bias | ${todo} (no matching or weighting performed) |
@@ -754,10 +840,10 @@ The right-hand column states what this generated bundle covers. Items marked "${
 | 11 | Explain how quantitative variables were handled in the analyses | Methods 1.1, Table 1 |
 | 12a | Describe all statistical methods, including those used to control for confounding | Methods 1.1, 1.3${r.survival.generated ? ', 1.4' : ''} (no confounder adjustment performed) |
 | 12b | Describe any methods used to examine subgroups and interactions | ${todo} (not performed) |
-| 12c | Explain how missing data were addressed | Methods 1.2 (complete-case, no imputation), 1.3 (unverified values treated as missing) |
+| 12c | Explain how missing data were addressed | Methods 1.2 (complete-case, no imputation)${r.data_source === 'patients' ? ', 1.3 (unverified values treated as missing)' : ''} |
 | 12e | Describe any sensitivity analyses | ${r.survival.cox_generated ? 'Methods 1.4 (E-value, unadjusted HR)' : `${todo} (not performed)`} |
 | **Results** |
-| 13a | Report numbers of individuals at each stage of study | Results 2.1, Figure 1 (enrollment records only; screening stage missing) |
+| 13a | Report numbers of individuals at each stage of study | ${r.screening ? 'Results 2.1, Figure 1 (including the saved screening stage)' : `Results 2.1, Figure 1 (${r.data_source === 'dataset' ? 'dataset rows only' : 'enrollment records only'}; screening stage missing)`} |
 | 14a | Give characteristics of study participants and information on exposures | Table 1 |
 | 15 | Report numbers of outcome events or summary measures over time | ${r.survival.generated ? 'Results 2.2, Figure 2' : `${todo} (outcome data not recorded)`} |
 | 16a | Give unadjusted estimates and, if applicable, confounder-adjusted estimates | ${r.survival.cox_generated ? 'Results 2.2, Figure 3 (unadjusted only)' : `${todo}`} |
@@ -773,15 +859,26 @@ The right-hand column states what this generated bundle covers. Items marked "${
   }
 
   private generateReproducibilityPythonScript(title: string, r: BundleDataReport): string {
-    return `#!/usr/bin/env python3
+    // 列名取自实际分析所用的列（数据集路径是用户数据集里的原始列名），不写死 followup_months / os_status / treatment_arm
+    const fromDataset = r.data_source === 'dataset'
+    const timeCol = r.columns.time
+    const eventCol = r.columns.event
+    const groupCol = fromDataset ? r.columns.group : 'treatment_arm'
+    const py = (v: string) => JSON.stringify(v)
+    const unitText = r.time_unit ?? 'unspecified unit'
+    const header = `#!/usr/bin/env python3
 """
 Statistical Reproducibility Script
 Study: ${title.replace(/"""/g, '')}
 Framework: Python 3.10+, lifelines, pandas
 
 Usage: python Statistical_Reproducibility_Script.py analysis_dataset.csv
-The CSV must be exported from the platform and contain the columns:
-  subject_id, treatment_arm, age, sex, l3_smi, vat_to_sat, followup_months, os_status
+${fromDataset
+  ? `The CSV must be the uploaded research dataset "${(r.dataset_name ?? '').replace(/"""/g, '')}" (values not verified on the platform).
+Columns used: time = ${timeCol ?? '(none)'}, event = ${eventCol ?? '(none)'}, group = ${groupCol ?? '(none)'}`
+  : `The CSV must be exported from the platform and contain the columns:
+  subject_id, treatment_arm, age, sex, l3_smi, vat_to_sat, followup_months, os_status`}
+Follow-up time unit: ${unitText}
 Missing values must stay empty; this script does not impute.
 """
 
@@ -797,36 +894,52 @@ df = pd.read_csv(sys.argv[1])
 print(f"Participants: {len(df)} (bundle reported ${r.n_subjects})")
 print("Missing values per column:")
 print(df.isna().sum())
-
-# Survival analysis: complete cases for follow-up time and outcome only
-surv = df.dropna(subset=["followup_months", "os_status"])
-print(f"Survival analysis: {len(surv)} included, {len(df) - len(surv)} excluded for missing time/status")
-if surv.empty:
-    sys.exit("No participants with both follow-up time and outcome status; nothing to analyse.")
-
-arms = surv["treatment_arm"].dropna().unique()
+`
+    if (!timeCol || !eventCol) {
+      return header + `
+# No survival analysis was run for this bundle (no follow-up time / event columns were used).
+`
+    }
+    const groupBlock = groupCol
+      ? `GROUP = ${py(groupCol)}
+arms = surv[GROUP].dropna().unique()
 kmf = KaplanMeierFitter()
 if len(arms) >= 2:
-    surv = surv.dropna(subset=["treatment_arm"])
+    surv = surv.dropna(subset=[GROUP])
     for arm in sorted(arms):
-        sub = surv[surv["treatment_arm"] == arm]
-        kmf.fit(sub["followup_months"], sub["os_status"], label=str(arm))
-        print(f"{arm}: n={len(sub)}, events={int(sub['os_status'].sum())}, median={kmf.median_survival_time_}")
-    lr = multivariate_logrank_test(surv["followup_months"], surv["treatment_arm"], surv["os_status"])
+        sub = surv[surv[GROUP] == arm]
+        kmf.fit(sub[TIME], sub[EVENT], label=str(arm))
+        print(f"{arm}: n={len(sub)}, events={int(sub[EVENT].sum())}, median={kmf.median_survival_time_}")
+    lr = multivariate_logrank_test(surv[TIME], surv[GROUP], surv[EVENT])
     print(f"Log-rank p-value: {lr.p_value:.4f}")
     if len(arms) == 2:
         ref = sorted(arms)[0]
         cox_df = pd.DataFrame({
-            "followup_months": surv["followup_months"],
-            "os_status": surv["os_status"],
-            "arm": (surv["treatment_arm"] != ref).astype(int),
+            TIME: surv[TIME],
+            EVENT: surv[EVENT],
+            "arm": (surv[GROUP] != ref).astype(int),
         })
         cph = CoxPHFitter()
-        cph.fit(cox_df, duration_col="followup_months", event_col="os_status")
+        cph.fit(cox_df, duration_col=TIME, event_col=EVENT)
         cph.print_summary()
 else:
-    kmf.fit(surv["followup_months"], surv["os_status"], label="Overall")
-    print(f"Overall: n={len(surv)}, events={int(surv['os_status'].sum())}, median={kmf.median_survival_time_}")
+    kmf.fit(surv[TIME], surv[EVENT], label="Overall")
+    print(f"Overall: n={len(surv)}, events={int(surv[EVENT].sum())}, median={kmf.median_survival_time_}")
 `
+      : `kmf = KaplanMeierFitter()
+kmf.fit(surv[TIME], surv[EVENT], label="Overall")
+print(f"Overall: n={len(surv)}, events={int(surv[EVENT].sum())}, median={kmf.median_survival_time_}")
+`
+    return header + `
+TIME = ${py(timeCol)}  # follow-up time (${unitText})
+EVENT = ${py(eventCol)}  # event indicator (1 = event, 0 = censored)${fromDataset ? '; recode text labels to 1/0 first if needed' : ''}
+
+# Survival analysis: complete cases for follow-up time and outcome only
+surv = df.dropna(subset=[TIME, EVENT])
+print(f"Survival analysis: {len(surv)} included, {len(df) - len(surv)} excluded for missing time/status")
+if surv.empty:
+    sys.exit("No participants with both follow-up time and outcome status; nothing to analyse.")
+
+${groupBlock}`
   }
 }

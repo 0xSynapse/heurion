@@ -99,16 +99,31 @@ export function runImagingBiomarkerSurvival(
   values.sort((a, b) => a - b)
   const medianVal = values[Math.floor(values.length / 2)]!
 
+  // SMI 共识切点是否实际按性别分组（至少有一行带性别值）
+  const smiUsesSexSpecificCutoff =
+    biomarker.toLowerCase().includes('smi') && validDataset.some(r => !isCellMissing(r[sex_col]))
+  // 缺少性别的行按男性切点 52.4 分组，报告中需说明人数
+  const smiMissingSexCount = biomarker.toLowerCase().includes('smi')
+    ? validDataset.filter(r => isCellMissing(r[sex_col])).length
+    : 0
+
   if (typeof cutoff_strategy === 'number') {
     cutoffVal = cutoff_strategy
     groupHighLabel = `${biomarker} ≥ ${cutoffVal}`
     groupLowLabel = `${biomarker} < ${cutoffVal}`
   } else if (cutoff_strategy === 'consensus') {
     if (biomarker.toLowerCase().includes('smi')) {
-      // 文献切点（Prado / Martin：男性 52.4 cm²/m²）；只做分组，不据此判定肌少症
+      // 文献切点（Prado / Martin：男性 52.4、女性 38.5 cm²/m²）；只做分组，不据此判定肌少症。
+      // 实际分组按行内性别取切点（见下方 enrichedData），组标签须反映男女双切点；
+      // 数据中完全没有性别信息时，所有人按男性切点 52.4 分组，标签如实写单一切点
       cutoffVal = 52.4
-      groupHighLabel = 'SMI ≥ 52.4 cm²/m²'
-      groupLowLabel = 'SMI < 52.4 cm²/m²'
+      if (smiUsesSexSpecificCutoff) {
+        groupHighLabel = 'SMI ≥ 性别切点（男 52.4 / 女 38.5 cm²/m²）'
+        groupLowLabel = 'SMI < 性别切点（男 52.4 / 女 38.5 cm²/m²）'
+      } else {
+        groupHighLabel = 'SMI ≥ 52.4 cm²/m²（无性别信息，统一按男性切点）'
+        groupLowLabel = 'SMI < 52.4 cm²/m²（无性别信息，统一按男性切点）'
+      }
     } else if (biomarker.toLowerCase().includes('vat_to_sat') || biomarker.toLowerCase().includes('ratio')) {
       // 内脏型肥胖切点 (VAT/SAT > 1.0)
       cutoffVal = 1.0
@@ -131,7 +146,7 @@ export function runImagingBiomarkerSurvival(
     const val = Number(row[biomarker])
     let isHigh = false
 
-    if (biomarker.toLowerCase().includes('smi') && cutoff_strategy === 'consensus' && row[sex_col]) {
+    if (biomarker.toLowerCase().includes('smi') && cutoff_strategy === 'consensus' && !isCellMissing(row[sex_col])) {
       const threshold = isFemale(row[sex_col]) ? 38.5 : 52.4
       isHigh = val >= threshold
     } else {
@@ -170,14 +185,48 @@ export function runImagingBiomarkerSurvival(
 
   // 5. 撰写临床放射学专篇 Markdown 报告
   const totalEvents = survResult.groups.reduce((acc, g) => acc + g.events_n, 0)
+  // 实际纳入 KM / log-rank 的人数：已剔除标志物缺失、生存时间或结局无效的行（不能用原始 dataset.length）
+  const analyzedN = survResult.groups.reduce((acc, g) => acc + g.total_n, 0)
+  const excludedN = dataset.length - analyzedN
   const baseReport = `${survResult.markdown_table}\n\n${survResult.narrative}`
-  const consensusNote = (biomarker.toLowerCase().includes('smi') && cutoff_strategy === 'consensus')
-    ? ' (切点出处: Prado / Martin 文献, 男 52.4 cm²/m²；分组不等于肌少症诊断)'
+  const isSmiConsensus = biomarker.toLowerCase().includes('smi') && cutoff_strategy === 'consensus'
+  const consensusNote = isSmiConsensus
+    ? (smiUsesSexSpecificCutoff
+        ? ` (切点出处: Prado / Martin 文献, 男 52.4 / 女 38.5 cm²/m²${smiMissingSexCount > 0 ? `；${smiMissingSexCount} 例缺少性别，按男性切点分组` : ''}；分组不等于肌少症诊断)`
+        : ' (切点出处: Prado / Martin 文献, 男 52.4 cm²/m²；数据无性别信息，全部按男性切点分组；分组不等于肌少症诊断)')
     : ''
+
+  // 多因素 Cox：只有模型里除标志物外确实还有其他协变量时，才能说「校正」与「独立」
+  const cox = survResult.cox
+  const biomarkerCov = cox?.covariates.find(c => c.variable === '_biomarker_high')
+  const otherCoxCovs = cox ? cox.covariates.filter(c => c.variable !== '_biomarker_high') : []
+  const isMultivariable = otherCoxCovs.length > 0
+  const logRankSig = !!survResult.log_rank && survResult.log_rank.p_value < 0.05
+
+  let prognosticLine: string
+  if (!survResult.log_rank) {
+    prognosticLine = '未能形成两组比较，未进行 log-rank 检验。'
+  } else if (logRankSig) {
+    prognosticLine = isMultivariable && biomarkerCov && biomarkerCov.p_value < 0.05
+      ? `**差异具有统计学显著性 (log-rank P < 0.05)**；在校正 ${otherCoxCovs.map(c => c.label).join('、')} 的多因素 Cox 模型中，该标志物仍与预后相关 (HR ${biomarkerCov.hr_formatted}, P = ${biomarkerCov.p_value_formatted})，可视为独立预后因素。`
+      : '**差异具有统计学显著性 (log-rank P < 0.05)**，单因素分析中该影像指标与预后相关；尚无多因素模型支持其为独立预后因素。'
+  } else {
+    prognosticLine = '两组生存轨迹未呈现显著统计学差异 (P ≥ 0.05)，建议结合其他影像组学特征或扩大样本队列复算。'
+  }
+
+  let coxLine: string
+  if (!cox) {
+    coxLine = 'Cox 模型未能可靠拟合（事件数不足或不收敛），未报告 HR。'
+  } else if (isMultivariable) {
+    coxLine = `校正 ${otherCoxCovs.map(c => c.label).join('、')} 后，${biomarkerCov ? `标志物分层 HR 为 ${biomarkerCov.hr_formatted} (P = ${biomarkerCov.p_value_formatted})，` : ''}模型 Harrell's C-index 为 \`${cox.c_index}\`。`
+  } else {
+    coxLine = `仅含标志物分层的单因素 Cox 模型（未纳入其他临床协变量）：${biomarkerCov ? `HR ${biomarkerCov.hr_formatted} (P = ${biomarkerCov.p_value_formatted})，` : ''}Harrell's C-index 为 \`${cox.c_index}\`。`
+  }
+
   const customReport = `## 影像生物标志物临床预后与生存分析报告 (Radiomics & Body Composition Prognostic Report)
 
 - **评估标志物**: \`${biomarker}\` (分层策略: \`${cutoff_strategy}\`, 基准切点: \`${typeof cutoffVal === 'number' ? cutoffVal.toFixed(2) : cutoffVal}\`${consensusNote})
-- **样本总规模**: \`${dataset.length}\` 例患者，共发生 \`${totalEvents}\` 例终点结局事件
+- **纳入分析**: \`${analyzedN}\` 例患者${excludedN > 0 ? `（原始 ${dataset.length} 行，剔除 ${excludedN} 行：标志物缺失或生存时间/结局无效）` : ''}，共发生 \`${totalEvents}\` 例终点结局事件
 - **Log-Rank 显著性检验**: \`P = ${survResult.log_rank ? survResult.log_rank.p_value_formatted : 'N/A'}\`
 
 ---
@@ -187,8 +236,8 @@ ${baseReport}
 ---
 
 ### 放射学与肿瘤学临床科研解读
-1. **预后分层效能**: 在以 \`${biomarker}\` 划分的队列中，${survResult.log_rank && survResult.log_rank.p_value < 0.05 ? '**差异具有统计学显著性 (P < 0.05)**，该影像指标可作为独立无创预后预测因子。' : '两组生存轨迹未呈现显著统计学差异 (P ≥ 0.05)，建议结合其他影像组学特征或扩大样本队列复算。'}
-2. **多变量 Cox 回归**: ${survResult.cox ? `校正临床协变量后，Harrell's C-index 为 \`${survResult.cox.c_index}\`，显示出${survResult.cox.c_index >= 0.7 ? '良好的' : '一定的'}模型判别区分能力。` : '单变量模型'}
+1. **预后分层效能**: 在以 \`${biomarker}\` 划分的队列中，${prognosticLine}
+2. **${isMultivariable ? '多变量' : '单变量'} Cox 回归**: ${coxLine}
 `
 
   return {

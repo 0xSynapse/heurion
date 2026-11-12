@@ -89,17 +89,26 @@ export function calculateEValue(input: EValueInput): EValueResult {
     ? `Because the 95% confidence interval crosses 1.0, the lower-bound E-value is 1.00.`
     : `Even for the conservative confidence interval limit, an unmeasured confounder must reach ${e_ci.toFixed(2)}-fold association to explain away the finding.`
 
-  const defense_zh = `本研究测得调整后 ${effect_type} = ${estimate.toFixed(2)} (95% CI: ${ci_lower.toFixed(2)} - ${ci_upper.toFixed(2)})，` +
-    `计算对应的 VanderWeele E-value 点估计为 ${e_point.toFixed(2)}（置信区间下限为 ${e_ci.toFixed(2)}）。` +
-    `这一量化证据表明，任何未被观察测量的潜在残留混杂因素，必须同时与研究暴露和主要临床结局产生至少 ${e_point.toFixed(2)} 倍的关联强度，` +
-    `且在充分校正了既有全部协变量后依然维持该强关联，才足以将当前观测到的${effectDescZh}完全解释为混杂偏倚；` +
-    `${ciExplanationZh}本研究结论具备高度的稳健性与抗偏倚能力。`
+  // 措辞只陈述 E-value 的含义，不替作者下「结论稳健」的判断；是否已校正由调用方的数据决定，这里不称「调整后」
+  const rareNoteZh = effect_type === 'OR' && !rare_outcome ? '（结局非罕见，OR 已按平方根近似换算为 RR）' : ''
+  const rareNoteEn = effect_type === 'OR' && !rare_outcome ? ' (the outcome was not rare, so the OR was approximated as an RR by square-root transformation)' : ''
+  const closingZh = crossesNull
+    ? '由于置信区间包含 1，观察到的关联本身未达统计学显著，E-value 不能用于支持关联稳健性的结论。'
+    : '是否足以排除未测量混杂，需结合本领域已知混杂因素与暴露、结局之间的关联强度判断。'
+  const closingEn = crossesNull
+    ? 'Because the confidence interval includes 1, the observed association is not statistically significant and the E-value should not be used to argue for robustness.'
+    : 'Whether this is sufficient to rule out unmeasured confounding should be judged against the strength of known confounders in this field.'
 
-  const defense_en = `The observed multivariable-adjusted ${effect_type} was ${estimate.toFixed(2)} (95% CI: ${ci_lower.toFixed(2)}-${ci_upper.toFixed(2)}). ` +
-    `The calculated E-value was ${e_point.toFixed(2)} for the point estimate and ${e_ci.toFixed(2)} for the confidence interval limit. ` +
-    `This indicates that an unmeasured confounder would need an association with both the exposure and outcome of at least ${e_point.toFixed(2)}-fold each, ` +
-    `above and beyond the measured baseline covariates, to fully explain away the observed ${effectDescEn}. ` +
-    `${ciExplanationEn} These findings demonstrate robust causal resilience against potential unmeasured residual confounding.`
+  const defense_zh = `观察到的 ${effect_type} = ${estimate.toFixed(2)} (95% CI: ${ci_lower.toFixed(2)} - ${ci_upper.toFixed(2)})${rareNoteZh}，` +
+    `对应的 VanderWeele E-value 点估计为 ${e_point.toFixed(2)}，置信区间界限的 E-value 为 ${e_ci.toFixed(2)}。` +
+    `即：一个未测量的混杂因素需要同时与暴露和结局有至少 ${e_point.toFixed(2)} 倍（风险比尺度）的关联，且独立于已纳入的协变量，` +
+    `才足以将观察到的${effectDescZh}完全解释为混杂所致。${ciExplanationZh}${closingZh}`
+
+  const defense_en = `The observed ${effect_type} was ${estimate.toFixed(2)} (95% CI: ${ci_lower.toFixed(2)}-${ci_upper.toFixed(2)})${rareNoteEn}. ` +
+    `The E-value was ${e_point.toFixed(2)} for the point estimate and ${e_ci.toFixed(2)} for the confidence interval limit. ` +
+    `An unmeasured confounder would need to be associated with both the exposure and the outcome by a risk ratio of at least ${e_point.toFixed(2)} each, ` +
+    `above and beyond the measured covariates, to fully explain away the observed ${effectDescEn}. ` +
+    `${ciExplanationEn} ${closingEn}`
 
   return {
     effect_type,
@@ -302,7 +311,12 @@ export interface DatasetCausalAnalysisResult {
   treated_n: number
   control_n: number
   matched_pairs?: number
+  /** 实际使用的方法（PSM 匹配对不足时会退回 IPTW，此时为 'iptw'） */
   method: 'iptw' | 'psm'
+  /** 调用方请求的方法 */
+  requested_method: 'iptw' | 'psm'
+  /** 实际方法与请求不同时说明原因 */
+  method_note?: string
   treatment_col: string
   outcome_col?: string
   covariates: Array<{
@@ -316,6 +330,7 @@ export interface DatasetCausalAnalysisResult {
   max_pre_smd: number
   max_post_smd: number
   balanced_count: number
+  /** 未提供结局列或结局数据不足以估计时为 null（不返回示例效应量） */
   treatment_effect: {
     effect_type: 'OR' | 'RR'
     estimate: number
@@ -323,8 +338,11 @@ export interface DatasetCausalAnalysisResult {
     ci_upper: number
     unadjusted_estimate: number
     rare_outcome: boolean
-  }
-  e_value: EValueResult
+  } | null
+  /** treatment_effect 为 null 时同为 null */
+  e_value: EValueResult | null
+  /** treatment_effect 为 null 时说明原因 */
+  effect_note?: string
   love_plot: {
     svg: string
     prism_pzfx: string
@@ -517,12 +535,15 @@ export function analyzeDatasetCausalBalance(
     return Math.max(0.03, Math.min(0.97, 1 / (1 + Math.exp(-eta))))
   })
 
-  const method = opts.method ?? 'iptw'
+  const requestedMethod = opts.method ?? 'iptw'
+  // 实际使用的方法：PSM 匹配对不足时退回 IPTW，返回值必须如实反映
+  let method: 'iptw' | 'psm' = requestedMethod
+  let methodNote: string | undefined
   const unitWeights = new Array<number>(n).fill(1)
   let adjWeights = new Array<number>(n).fill(1)
   let matchedPairs: number | undefined
 
-  if (method === 'psm') {
+  if (requestedMethod === 'psm') {
     // 1:1 Nearest-Neighbor Propensity Score Matching
     const treatedIndices = T.map((t, idx) => (t === 1 ? idx : -1)).filter(idx => idx >= 0)
     const controlIndices = T.map((t, idx) => (t === 0 ? idx : -1)).filter(idx => idx >= 0)
@@ -546,7 +567,9 @@ export function analyzeDatasetCausalBalance(
     }
     matchedPairs = pairs
     if (pairs < 2) {
-      // Fallback to stabilized IPTW if sample is too small for strict caliper matching
+      // 卡钳匹配得到的匹配对不足 2 对：改用稳定化 IPTW，并在返回的 method / method_note 中如实说明
+      method = 'iptw'
+      methodNote = `请求倾向性评分匹配 (PSM)，但 1:1 最近邻卡钳匹配（卡钳 0.25）仅得到 ${pairs} 对，少于 2 对；已改用稳定化逆概率加权 (IPTW)，平衡诊断与效应量均基于 IPTW。`
       adjWeights = T.map((t, i) => {
         const w = t === 1 ? pTreat / psList[i]! : (1 - pTreat) / (1 - psList[i]!)
         return Math.max(0.15, Math.min(6.0, w))
@@ -574,47 +597,66 @@ export function analyzeDatasetCausalBalance(
     }
   })
 
-  // Compute unadjusted & IPTW-adjusted Odds Ratio on outcome_col if provided
-  let unadjOr = 0.72
-  let adjOr = 0.68
-  let ciLow = 0.52
-  let ciHigh = 0.89
-  let rareOutcome = true
+  // 仅在提供结局列且两组都有结局数据时估计效应量；否则 treatment_effect / e_value 为 null，不返回示例数值
+  let treatmentEffect: DatasetCausalAnalysisResult['treatment_effect'] = null
+  let eValue: EValueResult | null = null
+  let effectNote: string | undefined = opts.outcome_col ? undefined : '未提供结局列，未估计处理效应与 E-value'
 
   if (opts.outcome_col) {
     const outGrp = parseBinaryGroup(records, opts.outcome_col)
     const Y = validIdx.map(idx => outGrp.values[idx])
-    let a = 0.5, b = 0.5, c = 0.5, d = 0.5
-    let wa = 0.5, wb = 0.5, wc = 0.5, wd = 0.5
+    let a = 0, b = 0, c = 0, d = 0
+    let wa = 0, wb = 0, wc = 0, wd = 0
     let validOut = 0, eventsOut = 0
     for (let i = 0; i < n; i++) {
       const y = Y[i]
       if (y !== 0 && y !== 1) continue
       validOut++
       if (y === 1) eventsOut++
-      const w = adjWeights[i]! > 0 ? adjWeights[i]! : 0.1
+      const w = adjWeights[i]! > 0 ? adjWeights[i]! : 0
       if (T[i] === 1 && y === 1) { a += 1; wa += w }
       else if (T[i] === 1 && y === 0) { b += 1; wb += w }
       else if (T[i] === 0 && y === 1) { c += 1; wc += w }
       else { d += 1; wd += w }
     }
-    if (validOut >= 4) {
-      rareOutcome = eventsOut / validOut < 0.15
-      unadjOr = Number(Math.max(0.08, Math.min(12.0, (a * d) / (b * c))).toFixed(2))
-      adjOr = Number(Math.max(0.08, Math.min(12.0, (wa * wd) / (wb * wc))).toFixed(2))
+    const treatedOut = a + b
+    const controlOut = c + d
+    if (validOut < 10 || eventsOut === 0 || eventsOut === validOut || treatedOut === 0 || controlOut === 0) {
+      effectNote = `结局列「${opts.outcome_col}」的有效数据不足以估计效应（有效 n=${validOut}，事件 ${eventsOut}，处理组 ${treatedOut}，对照组 ${controlOut}）`
+    } else {
+      // 仅当存在 0 格时做 Haldane 0.5 连续性校正（结果中如实标注）
+      const zeroCell = [a, b, c, d].some(v => v === 0) || [wa, wb, wc, wd].some(v => v <= 0)
+      if (zeroCell) {
+        a += 0.5; b += 0.5; c += 0.5; d += 0.5
+        wa += 0.5; wb += 0.5; wc += 0.5; wd += 0.5
+        effectNote = '存在 0 计数格，已做 Haldane 0.5 连续性校正'
+      }
+      const rareOutcome = eventsOut / validOut < 0.15
+      // 按 3 位有效数字保留（toFixed(2) 会把 < 0.005 的界限舍成 0）
+      const sig3 = (v: number) => Number(v.toPrecision(3))
+      const unadjOr = sig3((a * d) / (b * c))
+      const adjOrRaw = (wa * wd) / (wb * wc)
       const seLogOr = Math.sqrt(1 / wa + 1 / wb + 1 / wc + 1 / wd)
-      ciLow = Number(Math.max(0.04, adjOr * Math.exp(-1.96 * seLogOr)).toFixed(2))
-      ciHigh = Number(Math.min(25.0, adjOr * Math.exp(1.96 * seLogOr)).toFixed(2))
+      const adjOr = sig3(adjOrRaw)
+      const ciLow = sig3(adjOrRaw * Math.exp(-1.96 * seLogOr))
+      const ciHigh = sig3(adjOrRaw * Math.exp(1.96 * seLogOr))
+      treatmentEffect = {
+        effect_type: 'OR',
+        estimate: adjOr,
+        ci_lower: ciLow,
+        ci_upper: ciHigh,
+        unadjusted_estimate: unadjOr,
+        rare_outcome: rareOutcome,
+      }
+      eValue = calculateEValue({
+        effect_type: 'OR',
+        estimate: adjOr,
+        ci_lower: ciLow,
+        ci_upper: ciHigh,
+        rare_outcome: rareOutcome,
+      })
     }
   }
-
-  const eValue = calculateEValue({
-    effect_type: 'OR',
-    estimate: adjOr,
-    ci_lower: ciLow,
-    ci_upper: ciHigh,
-    rare_outcome: rareOutcome,
-  })
 
   const loveConfig: LovePlotConfig = {
     title: opts.title || 'Covariate Balance (Love Plot)',
@@ -629,21 +671,17 @@ export function analyzeDatasetCausalBalance(
     control_n: controlN,
     matched_pairs: matchedPairs,
     method,
+    requested_method: requestedMethod,
+    ...(methodNote ? { method_note: methodNote } : {}),
     treatment_col: opts.treatment_col,
     outcome_col: opts.outcome_col,
     covariates,
     max_pre_smd: Number(Math.max(0, ...covariates.map(c => c.pre_smd)).toFixed(3)),
     max_post_smd: Number(Math.max(0, ...covariates.map(c => c.post_smd)).toFixed(3)),
     balanced_count: covariates.filter(c => c.post_smd < 0.1).length,
-    treatment_effect: {
-      effect_type: 'OR',
-      estimate: adjOr,
-      ci_lower: ciLow,
-      ci_upper: ciHigh,
-      unadjusted_estimate: unadjOr,
-      rare_outcome: rareOutcome,
-    },
+    treatment_effect: treatmentEffect,
     e_value: eValue,
+    ...(effectNote ? { effect_note: effectNote } : {}),
     love_plot: {
       svg,
       prism_pzfx: native.prism_pzfx,

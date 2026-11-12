@@ -50,8 +50,9 @@ describe('影像生物标志物生存分析套件 (Imaging Biomarker Survival Su
     })
 
     expect(res.biomarker).toBe('smi')
-    expect(res.stratification_groups.group_high.name).toBe('SMI ≥ 52.4 cm²/m²')
-    expect(res.stratification_groups.group_low.name).toBe('SMI < 52.4 cm²/m²')
+    // 女性实际按 38.5 分组，组标签必须反映男女双切点
+    expect(res.stratification_groups.group_high.name).toBe('SMI ≥ 性别切点（男 52.4 / 女 38.5 cm²/m²）')
+    expect(res.stratification_groups.group_low.name).toBe('SMI < 性别切点（男 52.4 / 女 38.5 cm²/m²）')
     expect(res.stratification_groups.group_high.sample_size).toBe(7)
     expect(res.stratification_groups.group_low.sample_size).toBe(7)
 
@@ -59,16 +60,73 @@ describe('影像生物标志物生存分析套件 (Imaging Biomarker Survival Su
     expect(res.survival_analysis.groups.length).toBe(2)
     expect(res.survival_analysis.log_rank).toBeDefined()
     expect(res.survival_analysis.log_rank?.p_value).toBeLessThanOrEqual(0.05) // 肌少症组死亡显著高于正常组
-    expect(res.survival_analysis.cox).toBeDefined()
+    // 14 例 / 6 个事件拟合 3 个协变量：age、stage 与结局完全分离，Cox 不收敛（旧实现会输出 stage HR ≈ 683994）。
+    // 无法可靠拟合时不得输出 HR / 森林图
+    expect(res.survival_analysis.cox).toBeUndefined()
+    expect(res.forest_plot_svg || '').not.toContain('<svg')
 
     // 矢量图形与学术报告
     expect(res.km_svg).toContain('<svg')
-    expect(res.km_svg).toContain('SMI ≥ 52.4')
+    expect(res.km_svg).toContain('SMI ≥ 性别切点')
     expect(res.km_svg).not.toContain('Sarcopenia')
-    expect(res.forest_plot_svg).toContain('<svg')
     expect(res.publication_report_markdown).toContain('影像生物标志物临床预后与生存分析报告')
     expect(res.publication_report_markdown).toContain('smi')
     expect(res.publication_report_markdown).toContain('Prado')
+    expect(res.publication_report_markdown).not.toContain('C-index 为')
+    // Cox 未拟合时如实说明；也不得仅凭 log-rank 显著就称「独立」预后因子
+    expect(res.publication_report_markdown).toContain('Cox 模型未能可靠拟合')
+    expect(res.publication_report_markdown).not.toContain('独立无创预后预测因子')
+    expect(res.publication_report_markdown).toContain('单因素分析中该影像指标与预后相关')
+    expect(res.publication_report_markdown).toContain('男 52.4 / 女 38.5')
+  })
+
+  it('1a. 纳入人数按实际分析人数报告，不含标志物缺失而被剔除的行', () => {
+    const cohort = [
+      ...imagingCohort,
+      { ptid: 'P15', sex: 'M', os_months: 10, status: 1, smi: '', vat_to_sat: 1, sphericity: 0.5, age: 60, stage: 2 },
+      { ptid: 'P16', sex: 'F', os_months: 12, status: 0, smi: null, vat_to_sat: 1, sphericity: 0.5, age: 61, stage: 2 },
+    ] as Record<string, unknown>[]
+    const res = runImagingBiomarkerSurvival(cohort, {
+      time_col: 'os_months', event_col: 'status', biomarker: 'smi', cutoff_strategy: 'consensus', sex_col: 'sex',
+    })
+    expect(res.publication_report_markdown).toContain('**纳入分析**: `14` 例')
+    expect(res.publication_report_markdown).toContain('原始 16 行，剔除 2 行')
+    expect(res.publication_report_markdown).not.toContain('`16` 例')
+  })
+
+  it('1c. 无性别列时 SMI 统一按男性切点分组，标签如实说明', () => {
+    const cohort = imagingCohort.map(({ sex: _sex, ...rest }) => rest)
+    const res = runImagingBiomarkerSurvival(cohort, {
+      time_col: 'os_months', event_col: 'status', biomarker: 'smi', cutoff_strategy: 'consensus',
+    })
+    expect(res.stratification_groups.group_high.name).toContain('无性别信息')
+    expect(res.stratification_groups.group_high.name).toContain('52.4')
+  })
+
+  it('1b. 不加临床协变量时，仅以标志物分层拟合的单因素 Cox 可正常收敛并输出森林图', () => {
+    // 原队列中高 SMI 组唯一的事件（第 30 月）发生在低 SMI 组已全部出局之后，偏似然随 β→−∞ 单调增大、MLE 不存在；
+    // 这里让一名高 SMI 患者在第 12 月发生事件，使两组风险集交叠，模型可正常收敛
+    const cohort = imagingCohort.map(r => (r.ptid === 'P06' ? { ...r, os_months: 12, status: 1 } : r))
+    const res = runImagingBiomarkerSurvival(cohort, {
+      time_col: 'os_months',
+      event_col: 'status',
+      biomarker: 'smi',
+      cutoff_strategy: 'consensus',
+      sex_col: 'sex',
+      covariates: [],
+      time_unit: 'Months',
+    })
+    const cox = res.survival_analysis.cox
+    expect(cox).toBeDefined()
+    expect(cox!.covariates).toHaveLength(1)
+    expect(Number.isFinite(cox!.covariates[0]!.hr)).toBe(true)
+    expect(cox!.covariates[0]!.hr).toBeLessThan(100)
+    expect(res.forest_plot_svg).toContain('<svg')
+    // 只有标志物本身一个变量：不得写「校正临床协变量」或「独立」
+    const md = res.publication_report_markdown
+    expect(md).not.toContain('校正')
+    expect(md).not.toContain('独立无创')
+    expect(md).toContain('单因素 Cox 模型')
   })
 
   it('2. 腹部脂肪分布 (VAT/SAT 比值，切点 1.0) 预后分层', () => {

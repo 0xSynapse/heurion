@@ -373,9 +373,34 @@ describe('科研队列高级筛选与相对时间轴（Track B）', () => {
     expect(nomo.svg).toContain('<svg')
     expect(nomo.axes.length).toBe(4)
     expect(nomo.c_index!).toBeGreaterThan(0.6)
-    expect(nomo.c_index_ci![0]).toBeLessThanOrEqual(nomo.c_index!)
-    expect(nomo.c_index_ci![1]).toBeGreaterThanOrEqual(nomo.c_index!)
+    // 提供随访时间时用 Harrell C-index；其置信区间尚无正规估计（bootstrap），不输出自拟区间
+    expect(nomo.c_index_ci).toBeUndefined()
     expect(nomo.academic_narrative_zh).toContain('C-index')
+    // 数据集拟合的是 Logistic 模型，没有基线生存函数：不得输出 1/3/5 年绝对生存概率
+    expect(nomo.absolute_survival).toBe(false)
+    expect(nomo.survival_scale.year1).toHaveLength(0)
+    expect(nomo.survival_scale.year5).toHaveLength(0)
+    // 叙述与 R 脚本须与实际拟合的 Logistic 模型一致
+    expect(nomo.academic_narrative_zh).toContain('基于本研究数据集拟合的多因素 Logistic 回归模型')
+    expect(nomo.native_exports?.r_script).toContain('lrm(outcome ~ treatment_arm + age + l3_smi + vat_to_sat')
+    expect(nomo.native_exports?.r_script).toContain('fun = plogis')
+    expect(nomo.native_exports?.r_script).not.toContain('cph(')
+    expect(nomo.native_exports?.r_script).not.toContain('Survival(f)')
+
+    // 不提供随访时间时 C-index 即 ROC AUC，可带 AUC 的置信区间
+    const nomoNoTime = fitNomogramFromRecords(records, {
+      outcome_col: 'os_status',
+      covariates: ['treatment_arm', 'age', 'l3_smi', 'vat_to_sat'],
+      labels: labelsMap,
+    })
+    expect(nomoNoTime.c_index_ci![0]).toBeLessThanOrEqual(nomoNoTime.c_index!)
+    expect(nomoNoTime.c_index_ci![1]).toBeGreaterThanOrEqual(nomoNoTime.c_index!)
+
+    // 结局只有一类时报错，不返回 C-index = 0.5 占位
+    expect(() => fitNomogramFromRecords(records.map(r => ({ ...r, os_status: 1 })), {
+      outcome_col: 'os_status',
+      covariates: ['age'],
+    })).toThrow(/阳性与阴性/)
 
     // 2. 真实数据集列拟合基线 vs 多模态 ROC & DCA + DeLong 检验
     const rocDca = fitRocDcaFromRecords(records, {
@@ -390,7 +415,12 @@ describe('科研队列高级筛选与相对时间轴（Track B）', () => {
     expect(rocDca.delong).toBeDefined()
     expect(typeof rocDca.delong.z_stat).toBe('number')
     expect(typeof rocDca.delong.p_value).toBe('number')
-    expect(rocDca.benefit_window_pct[1]).toBeGreaterThanOrEqual(rocDca.benefit_window_pct[0])
+    // 净获益占优区间由实际 DCA 曲线得出；模型 2 从不占优时为 null（不再兜底为 10–70%）
+    if (rocDca.benefit_window_pct) {
+      expect(rocDca.benefit_window_pct[1]).toBeGreaterThanOrEqual(rocDca.benefit_window_pct[0])
+    } else {
+      expect(rocDca.benefit_window_pct).toBeNull()
+    }
 
     // 验证 DeLong 检验在明显差异模型上的显著性
     const dl = delongTest(
@@ -423,6 +453,16 @@ describe('科研队列高级筛选与相对时间轴（Track B）', () => {
     })
     expect(causalPsm.method).toBe('psm')
     expect(causalPsm.matched_pairs).toBeGreaterThan(0)
+    expect(causalPsm.requested_method).toBe('psm')
+    expect(causalPsm.method_note).toBeUndefined()
+
+    // 两组倾向性评分完全分离：卡钳内匹配不到 2 对，实际退回 IPTW，返回值必须如实标明
+    const separated = Array.from({ length: 20 }, (_, i) => ({ trt: i < 10 ? 1 : 0, x: i < 10 ? 100 + i : i - 10 }))
+    const fallback = analyzeDatasetCausalBalance(separated, { treatment_col: 'trt', covariates: ['x'], method: 'psm' })
+    expect(fallback.matched_pairs).toBeLessThan(2)
+    expect(fallback.requested_method).toBe('psm')
+    expect(fallback.method).toBe('iptw')
+    expect(fallback.method_note).toContain('IPTW')
   })
 
   it('纵向随访时间窗衍生列、Auto-eCRF 双向同步核实、方案提取终点变量与图表过期检测', async () => {

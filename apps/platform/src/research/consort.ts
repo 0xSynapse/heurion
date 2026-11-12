@@ -31,6 +31,55 @@ export interface ConsortDiagramData {
 }
 
 /**
+ * 校验调用方提供的 CONSORT 人数并规范化。
+ * 人数只能来自调用方（真实纳排记录或用户录入）：缺字段直接报错，绝不填示例人数。
+ */
+export function parseConsortInput(body: unknown, defaultTitle: string): ConsortDiagramData {
+  const b = (body ?? {}) as Record<string, any>
+  const num = (v: unknown, label: string, optional = false): number | undefined => {
+    if (v === undefined || v === null || v === '') {
+      if (optional) return undefined
+      throw new Error(`缺少${label}；流向图人数必须来自真实纳排记录`)
+    }
+    const n = Number(v)
+    if (!Number.isFinite(n) || n < 0) throw new Error(`${label}必须是非负数字`)
+    return Math.round(n)
+  }
+  const total_assessed = num(b.total_assessed, '初筛评估人数 total_assessed')!
+  const eligible_total = num(b.eligible_total, '合格入组人数 eligible_total')!
+  const exclusions: ConsortExclusionItem[] = (Array.isArray(b.exclusions) ? b.exclusions : []).map((e: any, i: number) => {
+    const reason = String(e?.reason ?? '').trim()
+    if (!reason) throw new Error(`排除原因 ${i + 1} 缺少说明`)
+    return { reason, count: num(e?.count, `排除原因「${reason}」的人数`)! }
+  })
+  if (!Array.isArray(b.arms) || !b.arms.length) throw new Error('至少需要 1 个研究组 arms')
+  const arms = b.arms.map((a: any, i: number) => {
+    const name = String(a?.name ?? '').trim()
+    if (!name) throw new Error(`研究组 ${i + 1} 缺少组名`)
+    const arm: ConsortArm & { received?: number } = {
+      name,
+      allocated: num(a?.allocated, `「${name}」的分配人数`)!,
+      analyzed: num(a?.analyzed, `「${name}」的分析人数`)!,
+    }
+    const received = num(a?.received, `「${name}」的接受干预人数`, true)
+    const lost = num(a?.lost_to_followup, `「${name}」的失访人数`, true)
+    const disc = num(a?.discontinued, `「${name}」的中止人数`, true)
+    if (received !== undefined) arm.received = received
+    if (lost !== undefined) arm.lost_to_followup = lost
+    if (disc !== undefined) arm.discontinued = disc
+    return arm
+  })
+  return {
+    title: typeof b.title === 'string' && b.title.trim() ? b.title.trim() : defaultTitle,
+    ...(b.lang === 'en' || b.lang === 'zh' ? { lang: b.lang } : {}),
+    total_assessed,
+    exclusions,
+    eligible_total,
+    arms,
+  }
+}
+
+/**
  * 生成符合医学期刊规范的 CONSORT 2010 矢量流向图 (SVG)
  */
 export function renderConsortSvg(data: ConsortDiagramData): string {

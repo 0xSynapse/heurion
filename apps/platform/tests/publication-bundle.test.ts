@@ -304,3 +304,83 @@ describe('投稿材料包：流向图与 Love Plot 不编造', () => {
     expect(files2).toContain('Manuscript_Statistical_Methods_and_Results.md')
   })
 })
+
+describe('投稿材料包：数据集路径的方法学文字与实际计算一致', () => {
+  const csvRows = [
+    'pid,grp,os_time,dead,age',
+    'P01,A,18,0,62', 'P02,A,24,0,65', 'P03,A,12,1,68', 'P04,A,28,0,60', 'P05,A,15,1,71',
+    'P06,B,10,1,64', 'P07,B,14,1,67', 'P08,B,8,1,69', 'P09,B,20,0,63', 'P10,B,11,1,66',
+  ].join('\n')
+
+  async function datasetStudy(env: ReturnType<typeof setupEnv>, title: string) {
+    const { studies, datasets, user } = env
+    const study = studies.create(user.id, { title, design: 'retrospective_cohort' })
+    const up = datasets.upload(user.id, 'ext.csv', new TextEncoder().encode(csvRows))
+    await datasets.idle()
+    studies.link(user.id, study.id, { kind: 'dataset', ref_id: up.dataset.id })
+    return study
+  }
+
+  it('数据集路径不称已核实、时间单位未知不按月、脚本用实际列名、无筛选记录如实说明', async () => {
+    const env = setupEnv()
+    const study = await datasetStudy(env, '外部数据集研究')
+    const bundle = await env.bundleService.buildBundle(env.actor, study.id, { group_col: 'grp', time_col: 'os_time', event_col: 'dead' })
+    const files = unzipSync(bundle.zipBuffer)
+    expect(bundle.report.data_source).toBe('dataset')
+    expect(bundle.report.survival.generated).toBe(true)
+    // 外部数据集未经平台核实流程
+    expect(bundle.report.provenance.every(p => p.verified === 0)).toBe(true)
+    const ms = text(files['Manuscript_Statistical_Methods_and_Results.md'])
+    expect(ms).not.toContain('Only values verified by the study investigators')
+    expect(ms).not.toContain('patient registry')
+    expect(ms).toContain('数据来源：上传的研究数据集')
+    expect(ms).toContain("not checked through the platform's verification workflow")
+    const readme = text(files['README_Submission_Manifest.txt'])
+    expect(readme).not.toContain('only researcher-verified values are used')
+    expect(readme).not.toContain('患者主档案')
+    expect(readme).toContain('Follow-up time unit: not specified')
+    // 时间单位未指定：不得默认按月，也不输出依赖单位的里程碑
+    expect(bundle.report.time_unit).toBeNull()
+    expect(ms).toContain('时间单位未指定')
+    expect(ms).not.toMatch(/Months|months|1-Year|12-/)
+    // 筛选记录：没有就如实说没有
+    expect(ms).toContain('screening counts and exclusion reasons were not recorded')
+    expect(text(files['STROBE_Statement_Checklist.md'])).toContain('screening records not available on the platform')
+    // 可复现脚本使用数据集里的实际列名
+    const py = text(files['Statistical_Reproducibility_Script.py'])
+    expect(py).toContain('TIME = "os_time"')
+    expect(py).toContain('EVENT = "dead"')
+    expect(py).toContain('GROUP = "grp"')
+    expect(py).not.toMatch(/followup_months|os_status|treatment_arm/)
+  })
+
+  it('数据集路径可传入时间单位；保存了纳排筛选记录时正文与 STROBE 6a/13a 如实引用', async () => {
+    const env = setupEnv()
+    const study = await datasetStudy(env, '外部数据集研究 2')
+    env.studies.saveScreeningFunnel(env.user.id, study.id, {
+      assessed_total: 30, inclusion_passed: 12, excluded_total: 20, eligible_total: 10, updated_at: new Date().toISOString(),
+      exclusions_by_rule: [{ rule_id: 'r1', title: '年龄 < 18', kind: 'inclusion_failed', count: 18 }, { rule_id: 'r2', title: '合并其他肿瘤', kind: 'exclusion_matched', count: 2 }],
+    })
+    const bundle = await env.bundleService.buildBundle(env.actor, study.id, { group_col: 'grp', time_col: 'os_time', event_col: 'dead', time_unit: 'Days' })
+    const files = unzipSync(bundle.zipBuffer)
+    expect(bundle.report.time_unit).toBe('Days')
+    expect(bundle.report.screening).toEqual({ assessed_total: 30, excluded_total: 20 })
+    const ms = text(files['Manuscript_Statistical_Methods_and_Results.md'])
+    expect(ms).toContain('Follow-up time was analysed in days')
+    expect(ms).toContain('30 individuals were assessed for eligibility and 20 were excluded')
+    expect(ms).not.toContain('screening counts and exclusion reasons were not recorded')
+    const strobe = text(files['STROBE_Statement_Checklist.md'])
+    expect(strobe).not.toContain('screening records not available on the platform')
+    expect(strobe).not.toContain('screening stage missing')
+    expect(strobe).toContain('30 assessed, 20 excluded')
+  })
+
+  it('时间列名明确含单位时按列名推断并写明来源', async () => {
+    const { inferTimeUnitFromColumn } = await import('../src/research/publication-bundle.ts')
+    expect(inferTimeUnitFromColumn('os_months')).toBe('Months')
+    expect(inferTimeUnitFromColumn('followup_days')).toBe('Days')
+    expect(inferTimeUnitFromColumn('随访时间(月)')).toBe('Months')
+    expect(inferTimeUnitFromColumn('os_time')).toBeNull()
+    expect(inferTimeUnitFromColumn('time')).toBeNull()
+  })
+})
