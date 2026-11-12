@@ -49,6 +49,7 @@ const STUDY_PARITY: Record<string, string> = {
   'POST /api/studies': 'study_create',
   'GET /api/studies/:sid': 'study_read',
   'PATCH /api/studies/:sid': 'study_update',
+  'POST /api/sample-size': 'study_sample_size',
   'POST /api/studies/:sid/items': 'study_link',
   'DELETE /api/studies/:sid/items/:kind/:rid': 'study_link',
   'GET /api/studies/:sid/cohort': 'study_cohort_list',

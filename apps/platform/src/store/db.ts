@@ -277,6 +277,8 @@ export interface StudyRow {
   eligibility_plan?: string | null
   /** 研究专属扩展变量定义（JSON：CustomVarDef[]） */
   custom_vars?: string | null
+  /** 计划样本量（JSON：SampleSizePlan，由服务端按保存的参数重新计算） */
+  sample_size_plan?: string | null
   created_at: string; updated_at: string
 }
 /** 机构幻灯片模板：机构管理员维护（院徽、机构名称、标准色），只有本机构成员能用；deck 里的模板 key 是 org_<id>。 */
@@ -552,6 +554,8 @@ export interface AssetProvenance {
   datasets: Array<{ id: string; name: string; version: number; rows: number }>
   turn_id: string | null
   at: string
+  /** 归档到哪个研究（研究页按此找到图）；研究不是数据集，不放进 datasets */
+  study_id?: string
 }
 
 export interface TurnRow {
@@ -914,6 +918,7 @@ export class Store {
     if (!studyCols.includes('tenant_id')) this.db.exec('ALTER TABLE studies ADD COLUMN tenant_id TEXT')
     if (!studyCols.includes('eligibility_plan')) this.db.exec('ALTER TABLE studies ADD COLUMN eligibility_plan TEXT')
     if (!studyCols.includes('custom_vars')) this.db.exec('ALTER TABLE studies ADD COLUMN custom_vars TEXT')
+    if (!studyCols.includes('sample_size_plan')) this.db.exec('ALTER TABLE studies ADD COLUMN sample_size_plan TEXT')
     this.db.exec(`INSERT OR IGNORE INTO study_members (study_id, user_id, role, added_by, added_at) SELECT id, owner, 'owner', owner, created_at FROM studies`)
     // 租户上线前的用户：各自一个个人租户，本人为机构管理员
     for (const u of this.db.prepare('SELECT id, display_name FROM users WHERE tenant_id IS NULL').all() as Array<{ id: string; display_name: string }>) {
@@ -1819,8 +1824,8 @@ export class Store {
     })
   }
 
-  updateStudy(id: string, patch: Partial<Pick<StudyRow, 'title' | 'design' | 'status' | 'summary' | 'eligibility_plan' | 'custom_vars'>>): void {
-    const ALLOWED = ['title', 'design', 'status', 'summary', 'eligibility_plan', 'custom_vars'] as const
+  updateStudy(id: string, patch: Partial<Pick<StudyRow, 'title' | 'design' | 'status' | 'summary' | 'eligibility_plan' | 'custom_vars' | 'sample_size_plan'>>): void {
+    const ALLOWED = ['title', 'design', 'status', 'summary', 'eligibility_plan', 'custom_vars', 'sample_size_plan'] as const
     const keys = (Object.keys(patch) as Array<keyof typeof patch>).filter(k => (ALLOWED as readonly string[]).includes(k))
     if (keys.length === 0) return
     this.db.prepare(`UPDATE studies SET ${[...keys.map(k => `${k} = ?`), 'updated_at = ?'].join(', ')} WHERE id = ?`).run(...keys.map(k => patch[k] as string | null), now(), id)
@@ -1861,7 +1866,7 @@ export class Store {
     const clause = datasetIds.map(() => 'instr(provenance, ?) > 0').join(' OR ')
     return (this.db.prepare(`SELECT id, owner, name, created_at, provenance FROM assets WHERE provenance IS NOT NULL AND (${clause}) ORDER BY created_at DESC`).all(...datasetIds.map(id => `"${id}"`)) as Array<{ id: string; owner: string; name: string; created_at: string; provenance: string }>)
       .map(r => ({ ...r, provenance: JSON.parse(r.provenance) as AssetProvenance }))
-      .filter(r => r.provenance.datasets.some(d => ids.has(d.id)))
+      .filter(r => r.provenance.datasets.some(d => ids.has(d.id)) || (!!r.provenance.study_id && ids.has(r.provenance.study_id)))
   }
 
   /** 用户带分析来源的图（研究的「分析」从这里按数据集汇总）。 */

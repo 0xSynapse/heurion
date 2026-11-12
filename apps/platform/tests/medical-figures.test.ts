@@ -639,6 +639,52 @@ describe('医学论文图表 HTTP 路由与一键发刊物打包集成验证', a
     expect(zipMap['Composite_Figure_Editable.pptx']).toBeDefined()
   })
 
+  it('1b. 研究内归档的图出现在研究的分析列表里；溯源不把研究当成数据集', async () => {
+    const res = await app.request(`/api/studies/${study.id}/figures`, {
+      method: 'POST',
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: 'archive', name: 'Study Archived Figure', svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>' }),
+    })
+    expect(res.status).toBe(201)
+    const { asset_id } = (await res.json()) as any
+    const read = (await (await app.request(`/api/studies/${study.id}`, { headers: { Authorization: authToken } })).json()) as any
+    expect(read.analyses.some((a: any) => a.asset_id === asset_id)).toBe(true)
+    const shown = read.analyses.find((a: any) => a.asset_id === asset_id)
+    expect(shown.datasets).toEqual([])
+  })
+
+  it('1c. 样本量：POST /api/sample-size 计算；保存为研究计划样本量时由服务端按参数重算，客户端写入的数字被忽略', async () => {
+    const calc = await app.request('/api/sample-size', {
+      method: 'POST',
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ design: 'two_means', alpha: 0.05, power: 0.8, mean_diff: 5, sd: 10 }),
+    })
+    expect(calc.status).toBe(200)
+    expect(((await calc.json()) as any).total).toBe(128)
+    const bad = await app.request('/api/sample-size', {
+      method: 'POST',
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ design: 'two_means', alpha: 0.05, power: 0.8 }),
+    })
+    expect(bad.status).toBe(400)
+
+    const patch = (body: unknown) => app.request(`/api/studies/${study.id}`, {
+      method: 'PATCH',
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const saved = (await (await patch({
+      sample_size_plan: { input: { design: 'two_means', alpha: 0.05, power: 0.8, mean_diff: 5, sd: 10, dropout: 0.1 }, result: { total: 9999 } },
+    })).json()) as any
+    expect(saved.sample_size_plan.result.total).toBe(128)
+    expect(saved.sample_size_plan.result.total_with_dropout).toBe(144)
+    expect((await patch({ sample_size_plan: { input: { design: 'two_means', alpha: 0.05, power: 0.8 } } })).status).toBe(400)
+    const read = (await (await app.request(`/api/studies/${study.id}`, { headers: { Authorization: authToken } })).json()) as any
+    expect(read.sample_size_plan.result.total_with_dropout).toBe(144)
+    const cleared = (await (await patch({ sample_size_plan: null })).json()) as any
+    expect(cleared.sample_size_plan).toBeNull()
+  })
+
   it('2. GET /api/studies/:sid/cohort/consort 支持 ?format=drawio|vdx|pptx 原生流程图文件直出', async () => {
     const resDrawio = await app.request(`/api/studies/${study.id}/cohort/consort?format=drawio`, {
       method: 'GET',

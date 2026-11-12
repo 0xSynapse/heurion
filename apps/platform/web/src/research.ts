@@ -59,6 +59,29 @@ interface Study {
   docs: Array<{ doc_id: string; title: string; kind: 'doc' | 'deck'; role: string; updated_at: string; created_by?: string }>
   datasets: Array<{ dataset_id: string; name: string; format: string; rows: number; cols: number; status: string; version?: number; cohort?: { shape: string } | null }>
   analyses: Array<{ asset_id: string; name: string; created_at: string; datasets: string[]; has_code: boolean; by?: string; stale_data?: boolean; stale_reason?: string | null }>
+  /** 计划样本量（服务端按保存的参数重新计算） */
+  sample_size_plan?: SampleSizePlanView | null
+}
+
+interface SampleSizeResultView {
+  design: string
+  groups: Array<{ label: string; n: number; n_with_dropout: number }>
+  total: number
+  total_with_dropout: number
+  events_required?: number
+  event_prob_used?: number
+  simon?: Record<'optimal' | 'minimax', { n1: number; r1: number; n: number; r: number; en0: number; pet0: number; actual_alpha: number; actual_power: number }>
+  one_proportion?: { min_responses: number; actual_alpha: number; actual_power: number; normal_approx_n: number }
+  method: string
+  methods_text_zh: string
+  methods_text_en: string
+  warnings?: string[]
+}
+interface SampleSizePlanView {
+  input: Record<string, unknown>
+  result: SampleSizeResultView
+  saved_at: string
+  saved_by: string
 }
 
 export interface ResearchHooks {
@@ -599,8 +622,14 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         <div class="rs-grid">
           ${cohortCard(cohort, cohortOff, canEdit)}
           <section class="rs-card" id="rsProtocolCard">
-            <div class="rs-card-head"><h3>研究方案</h3>${w('<button class="small-btn" data-new="protocol">＋ 新建方案</button>')}</div>
+            <div class="rs-card-head"><h3>研究方案</h3>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button class="small-btn" data-act="samplesize" title="按 α、检验效能与预期效应量计算计划样本量">${icon('ruler', { size: 12 })} 样本量估算</button>
+                ${w('<button class="small-btn" data-new="protocol">＋ 新建方案</button>')}
+              </div>
+            </div>
             ${protocols.length ? `<ul class="rs-list">${protocols.map(docRow).join('')}</ul>` : '<p class="muted small">还没有研究方案。点「＋ 新建方案」起草研究设计、纳排标准与主要终点。</p>'}
+            ${sampleSizePlanSummary(s.sample_size_plan ?? null, cohort ? activeSubjects.length : null)}
           </section>
           <section class="rs-card">
             <div class="rs-card-head"><h3>数据集</h3>
@@ -1319,6 +1348,219 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     } catch (err) {
       notice((err as Error).message, true)
     }
+  }
+
+  /** 研究方案卡片里的计划样本量摘要与入组进度（计划人数按含脱落的入组目标计） */
+  function sampleSizePlanSummary(plan: SampleSizePlanView | null, enrolled: number | null): string {
+    if (!plan) return ''
+    const target = plan.result.total_with_dropout
+    const pct = enrolled !== null && target > 0 ? Math.min(100, Math.round((enrolled / target) * 100)) : null
+    return `<div class="rs-ss-plan">
+      <div class="small"><b>计划样本量：${target} 例</b>${target !== plan.result.total ? `<span class="muted">（未计脱落 ${plan.result.total} 例）</span>` : ''}
+        <span class="muted"> · ${esc(plan.result.method)} · ${esc(plan.saved_by)} 保存于 ${date(plan.saved_at)}</span></div>
+      ${pct !== null ? `<div class="rs-ss-progress" title="已入组 ${enrolled} / 计划 ${target}"><span style="width:${pct}%"></span></div>
+        <div class="muted small">入组进度：${enrolled} / ${target}（${pct}%）</div>` : ''}
+    </div>`
+  }
+
+  /** 样本量估算弹窗：参数改动即重算（后端计算，见 src/research/sample-size.ts），可复制方法学描述、保存为计划样本量、交给 AI 写入方案 */
+  async function sampleSizeDialog(studyId: string): Promise<void> {
+    const study = await api<Study>(`/api/studies/${studyId}`)
+    const canEdit = study.my_role !== 'viewer'
+    const protocol = study.docs.find(d => d.role === 'protocol')
+    const prev = (study.sample_size_plan?.input ?? {}) as Record<string, unknown>
+    const pv = (k: string, scale = 1): string => (typeof prev[k] === 'number' ? String(Number(((prev[k] as number) * scale).toPrecision(6))) : '')
+    const dlg = $('dialog')
+    dlg.innerHTML = `<div class="dialog-card wide" style="width:min(980px, calc(100vw - 24px));" role="dialog" aria-modal="true" aria-label="样本量估算">
+      <div class="dialog-head">
+        <h2>样本量估算</h2>
+        <button class="quiet" data-close aria-label="关闭">✕</button>
+      </div>
+      <div class="dialog-body">
+        <div class="muted small" style="margin-bottom:10px;">按研究设计、检验水准 α、检验效能 1−β 与预期效应量计算<b>计划样本量</b>。效应量应来自预试验、文献或临床上有意义的最小差值；改动参数即重新计算。</div>
+        <div class="rs-studio-shell" style="grid-template-columns:minmax(300px, 380px) minmax(0, 1fr);">
+          <div class="rs-studio-left" id="ssForm">
+            <label>研究设计
+              <select id="ssDesign">
+                <option value="two_proportions">两组率比较（如有效率、事件率）</option>
+                <option value="two_means">两组均值比较（如评分、化验值）</option>
+                <option value="survival_logrank">生存分析（log-rank，按风险比 HR）</option>
+                <option value="one_proportion">单臂率与历史对照比较（精确二项）</option>
+                <option value="simon_two_stage">单臂 Simon 两阶段（II 期）</option>
+              </select>
+            </label>
+            <div class="row" style="gap:8px;">
+              <label style="flex:1;">α<input type="number" id="ssAlpha" step="0.005" min="0.001" max="0.2" value="${pv('alpha') || '0.05'}"></label>
+              <label style="flex:1;">单/双侧
+                <select id="ssSides"><option value="2">双侧</option><option value="1">单侧</option></select>
+              </label>
+              <label style="flex:1;">检验效能 (%)<input type="number" id="ssPower" step="5" min="50" max="99" value="${pv('power', 100) || '80'}"></label>
+            </div>
+            <div class="row" style="gap:8px;" data-ss-show="two_proportions two_means survival_logrank">
+              <label style="flex:1;">分配比 组2:组1<input type="number" id="ssRatio" step="0.5" min="0.1" max="10" value="${pv('ratio') || '1'}"></label>
+            </div>
+            <label>预计脱落率 (%)<input type="number" id="ssDropout" step="1" min="0" max="90" value="${pv('dropout', 100)}" placeholder="如 10；不填按 0"></label>
+
+            <div class="rs-sub-box" data-ss-show="two_proportions">
+              <div class="row" style="gap:8px;">
+                <label style="flex:1;">组 1（对照）率 %<input type="number" id="ssP1a" step="1" value="${pv('p1', 100)}" placeholder="必填"></label>
+                <label style="flex:1;">组 2（试验）率 %<input type="number" id="ssP2a" step="1" value="${pv('p2', 100)}" placeholder="必填"></label>
+              </div>
+              <label class="small" style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="ssCc"${prev.continuity_correction ? ' checked' : ''}> Fleiss 连续性校正（更保守）</label>
+            </div>
+            <div class="rs-sub-box" data-ss-show="two_means">
+              <div class="row" style="gap:8px;">
+                <label style="flex:1;">两组均值差<input type="number" id="ssDiff" step="any" value="${pv('mean_diff')}" placeholder="必填"></label>
+                <label style="flex:1;">共同标准差<input type="number" id="ssSd" step="any" value="${pv('sd')}" placeholder="必填"></label>
+              </div>
+            </div>
+            <div class="rs-sub-box" data-ss-show="survival_logrank">
+              <label>风险比 HR（组 2 相对组 1）<input type="number" id="ssHr" step="0.01" value="${pv('hr')}" placeholder="必填，如 0.7"></label>
+              <label>事件发生比例
+                <select id="ssEvMode"><option value="direct">直接填写研究期间总体事件发生比例</option><option value="median">由对照组中位生存期推算（指数分布）</option></select>
+              </label>
+              <div data-ss-ev="direct"><label>总体事件发生比例 %<input type="number" id="ssEvProb" step="1" value="${pv('event_prob', 100)}" placeholder="必填"></label></div>
+              <div data-ss-ev="median" class="row" style="gap:6px;">
+                <label style="flex:1;">组 1 中位生存期<input type="number" id="ssMed" step="any" value="${pv('median_control')}"></label>
+                <label style="flex:1;">入组期<input type="number" id="ssAcc" step="any" value="${pv('accrual')}"></label>
+                <label style="flex:1;">末例入组后随访<input type="number" id="ssFu" step="any" value="${pv('follow_up')}"></label>
+              </div>
+              <div class="muted small" data-ss-ev="median">三项用同一时间单位（如月）。</div>
+            </div>
+            <div class="rs-sub-box" data-ss-show="one_proportion simon_two_stage">
+              <div class="row" style="gap:8px;">
+                <label style="flex:1;">无效率 p0 %（历史对照）<input type="number" id="ssP0" step="1" value="${pv('p0', 100)}" placeholder="必填"></label>
+                <label style="flex:1;">预期有效率 p1 %<input type="number" id="ssP1b" step="1" value="${pv('p1', 100)}" placeholder="必填"></label>
+              </div>
+            </div>
+          </div>
+          <div class="rs-studio-right" id="ssResult"><div class="muted small" style="padding:30px;">填写左侧参数后自动计算。</div></div>
+        </div>
+      </div>
+    </div>`
+    dlg.hidden = false
+    dlg.onclick = e => { if (e.target === dlg || (e.target as HTMLElement).closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = '' } }
+
+    const el = <T extends HTMLElement = HTMLInputElement>(id: string) => document.getElementById(id) as T
+    const designSel = el<HTMLSelectElement>('ssDesign')
+    const sidesSel = el<HTMLSelectElement>('ssSides')
+    const evModeSel = el<HTMLSelectElement>('ssEvMode')
+    const resultEl = el<HTMLDivElement>('ssResult')
+    if (typeof prev.design === 'string') designSel.value = prev.design
+    if (prev.sides === 1 || prev.sides === 2) sidesSel.value = String(prev.sides)
+    else sidesSel.value = designSel.value === 'one_proportion' || designSel.value === 'simon_two_stage' ? '1' : '2'
+    if (prev.median_control !== undefined && prev.event_prob === undefined) evModeSel.value = 'median'
+
+    const num = (id: string, scale = 1): number | undefined => {
+      const v = el(id).value.trim()
+      return v === '' ? undefined : Number(v) / scale
+    }
+    const applyVisibility = () => {
+      const d = designSel.value
+      dlg.querySelectorAll<HTMLElement>('[data-ss-show]').forEach(x => { x.style.display = x.dataset.ssShow!.split(' ').includes(d) ? '' : 'none' })
+      dlg.querySelectorAll<HTMLElement>('[data-ss-ev]').forEach(x => { x.style.display = x.dataset.ssEv === evModeSel.value ? '' : 'none' })
+      // Simon 只支持单侧
+      sidesSel.disabled = d === 'simon_two_stage'
+      if (d === 'simon_two_stage') sidesSel.value = '1'
+    }
+    const buildInput = (): Record<string, unknown> => {
+      const d = designSel.value
+      const input: Record<string, unknown> = { design: d, alpha: num('ssAlpha'), power: num('ssPower', 100), sides: Number(sidesSel.value) }
+      const dropout = num('ssDropout', 100)
+      if (dropout !== undefined) input.dropout = dropout
+      if (d === 'two_proportions' || d === 'two_means' || d === 'survival_logrank') input.ratio = num('ssRatio')
+      if (d === 'two_proportions') Object.assign(input, { p1: num('ssP1a', 100), p2: num('ssP2a', 100), continuity_correction: el('ssCc').checked })
+      if (d === 'two_means') Object.assign(input, { mean_diff: num('ssDiff'), sd: num('ssSd') })
+      if (d === 'survival_logrank') {
+        input.hr = num('ssHr')
+        if (evModeSel.value === 'direct') input.event_prob = num('ssEvProb', 100)
+        else Object.assign(input, { median_control: num('ssMed'), accrual: num('ssAcc'), follow_up: num('ssFu') })
+      }
+      if (d === 'one_proportion' || d === 'simon_two_stage') Object.assign(input, { p0: num('ssP0', 100), p1: num('ssP1b', 100) })
+      return input
+    }
+
+    let lastInput: Record<string, unknown> | null = null
+    let lastResult: SampleSizeResultView | null = null
+    let seq = 0
+    const renderResult = (r: SampleSizeResultView) => {
+      const groupRows = r.groups.map(g => `<tr><td>${esc(g.label)}</td><td><b>${g.n}</b></td><td>${g.n_with_dropout}</td></tr>`).join('')
+      const simon = r.simon
+        ? `<table class="rs-data-table" style="margin-top:8px;"><thead><tr><th>Simon 设计</th><th>第一阶段</th><th>全程</th><th>H0 下提前终止</th><th>H0 下期望例数</th><th>实际 α / 效能</th></tr></thead><tbody>
+            ${(['optimal', 'minimax'] as const).map(k => { const x = r.simon![k]; return `<tr><td>${k === 'optimal' ? '最优' : '极小极大'}</td><td>${x.n1} 例，有效 ≤ ${x.r1} 则终止</td><td>${x.n} 例，有效 > ${x.r} 判定有效</td><td>${(x.pet0 * 100).toFixed(1)}%</td><td>${x.en0}</td><td>${x.actual_alpha} / ${(x.actual_power * 100).toFixed(1)}%</td></tr>` }).join('')}
+          </tbody></table><div class="muted small">上方例数按最优设计的全程最大样本量计；选择极小极大设计时以表中例数为准。</div>`
+        : ''
+      const op = r.one_proportion
+        ? `<div class="small" style="margin-top:6px;">判定有效：有效例数 ≥ <b>${r.one_proportion.min_responses}</b>（实际 α = ${r.one_proportion.actual_alpha}，实际效能 ${(r.one_proportion.actual_power * 100).toFixed(1)}%）；正态近似参考值 ${r.one_proportion.normal_approx_n} 例。</div>`
+        : ''
+      resultEl.innerHTML = `
+        <div class="row" style="gap:10px;flex-wrap:wrap;">
+          <div class="rs-sub-box" style="flex:1;min-width:150px;"><span class="muted small">需要样本量</span><b style="font-size:24px;">${r.total} 例</b></div>
+          <div class="rs-sub-box" style="flex:1;min-width:150px;"><span class="muted small">考虑脱落后计划入组</span><b style="font-size:24px;color:var(--mint-text);">${r.total_with_dropout} 例</b></div>
+          ${r.events_required !== undefined ? `<div class="rs-sub-box" style="flex:1;min-width:150px;"><span class="muted small">需观察到的事件数</span><b style="font-size:24px;">${r.events_required}</b>${r.event_prob_used !== undefined ? `<span class="muted small">事件比例 ${(r.event_prob_used * 100).toFixed(1)}%</span>` : ''}</div>` : ''}
+        </div>
+        <table class="rs-data-table" style="margin-top:8px;"><thead><tr><th>组别</th><th>例数</th><th>含脱落</th></tr></thead><tbody>${groupRows}</tbody></table>
+        ${op}${simon}
+        ${(r.warnings ?? []).map(w => `<div class="small" style="color:var(--warn);margin-top:6px;">${esc(w)}</div>`).join('')}
+        <div class="rs-sub-box" style="margin-top:10px;">
+          <div class="rs-sub-box-title"><span>方法学描述（可直接写入方案「样本量」一节）</span>
+            <span style="display:flex;gap:6px;"><button type="button" class="small-btn" id="ssCopyZh">${icon('copy', { size: 12 })} 复制中文</button><button type="button" class="small-btn" id="ssCopyEn">${icon('copy', { size: 12 })} 复制英文</button></span>
+          </div>
+          <div class="small" style="line-height:1.7;">${esc(r.methods_text_zh)}</div>
+          <div class="small muted" style="line-height:1.6;margin-top:6px;">${esc(r.methods_text_en)}</div>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px;">
+          ${canEdit ? `<button type="button" class="small-btn primary" id="ssSaveBtn">${icon('check', { size: 12 })} 保存为本研究计划样本量</button>` : ''}
+          <button type="button" class="small-btn" id="ssToProtocolBtn"${protocol ? '' : ' disabled title="请先新建研究方案"'}>${icon('write', { size: 12 })} 让 AI 写入研究方案</button>
+        </div>`
+      const copy = (t: string) => navigator.clipboard.writeText(t).then(() => notice('已复制方法学描述')).catch(() => notice('复制失败', true))
+      el('ssCopyZh').onclick = () => void copy(r.methods_text_zh)
+      el('ssCopyEn').onclick = () => void copy(r.methods_text_en)
+      const saveBtn = document.getElementById('ssSaveBtn')
+      if (saveBtn) saveBtn.onclick = async () => {
+        try {
+          // 只提交参数，服务端重新计算后保存
+          await api(`/api/studies/${studyId}`, { method: 'PATCH', body: JSON.stringify({ sample_size_plan: { input: lastInput } }) })
+          notice(`已保存计划样本量：${r.total_with_dropout} 例`)
+          if (current === studyId) void openStudy(studyId)
+        } catch (err) { notice((err as Error).message, true) }
+      }
+      const toProto = document.getElementById('ssToProtocolBtn')
+      if (toProto && protocol) toProto.onclick = async () => {
+        dlg.hidden = true
+        dlg.innerHTML = ''
+        await hooks.openDoc(protocol.doc_id)
+        hooks.prefillChat(`请把下面的样本量计算写入本研究方案的「样本量」一节（没有该节就在统计分析部分新建），保持数字不变：\n${r.methods_text_zh}`)
+      }
+    }
+    const recalc = async () => {
+      applyVisibility()
+      const input = buildInput()
+      const my = ++seq
+      try {
+        const r = await api<SampleSizeResultView>('/api/sample-size', { method: 'POST', body: JSON.stringify(input) })
+        if (my !== seq) return
+        lastInput = input
+        lastResult = r
+        renderResult(r)
+      } catch (err) {
+        if (my !== seq) return
+        lastResult = null
+        resultEl.innerHTML = `<div class="muted small" style="padding:24px;">${esc((err as Error).message)}</div>`
+      }
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(() => void recalc(), 250) }
+    el('ssForm').addEventListener('input', schedule)
+    el('ssForm').addEventListener('change', e => {
+      if ((e.target as HTMLElement).id === 'ssDesign') {
+        const d = designSel.value
+        sidesSel.value = d === 'one_proportion' || d === 'simon_two_stage' ? '1' : '2'
+      }
+      schedule()
+    })
+    void lastResult
+    await recalc()
   }
 
   /** CONSORT 2010 受试者纳排筛选流向图交互式工作台弹窗（归属于临床研究课题） */
@@ -5669,6 +5911,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     if (act === 'screen') { screenDialog(id); return }
     if (act === 'gen') { datasetDialog(id); return }
     if (act === 'consort') { void consortDialog(id); return }
+    if (act === 'samplesize') { void sampleSizeDialog(id); return }
     if (act === 'ecrf') { void ecrfDialog(id); return }
     if (act === 'vars') { void varsDialog(id); return }
     if (act === 'img-export') { void imagingExportDialog(id); return }

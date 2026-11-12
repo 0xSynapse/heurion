@@ -2,6 +2,20 @@ import { randomUUID } from 'node:crypto'
 import type { DatasetService } from '../datasets/service.ts'
 import type { Store, StudyRole, StudyRow } from '../store/db.ts'
 import { allows, type Access, type Level } from './access.ts'
+import { calculateSampleSize, type SampleSizeInput, type SampleSizeResult } from './sample-size.ts'
+
+/** 研究的计划样本量：只保存计算参数，结果由服务端重新计算（客户端不能直接写入一个样本量数字） */
+export interface SampleSizePlan {
+  input: SampleSizeInput
+  result: Pick<SampleSizeResult, 'design' | 'groups' | 'total' | 'total_with_dropout' | 'events_required' | 'method' | 'methods_text_zh' | 'methods_text_en'>
+  saved_at: string
+  saved_by: string
+}
+
+export function parseSampleSizePlan(raw: string | null | undefined): SampleSizePlan | null {
+  if (!raw) return null
+  try { return JSON.parse(raw) as SampleSizePlan } catch { return null }
+}
 
 /**
  * 临床研究项目：把研究方案、数据集、分析、稿件放在一起。
@@ -305,6 +319,7 @@ export class StudyService {
         ...s,
         eligibility_plan: parseEligibilityPlan(s.eligibility_plan),
         custom_vars: parseCustomVars(s.custom_vars),
+        sample_size_plan: parseSampleSizePlan(s.sample_size_plan),
         my_role: s.my_role, shared: s.owner !== user, shared_by: s.owner !== user ? this.name(s.owner) : null,
         members: this.store.studyMembers(s.id).length,
         docs: items.filter(i => i.kind === 'doc').length, datasets: items.filter(i => i.kind === 'dataset').length,
@@ -417,6 +432,7 @@ export class StudyService {
     summary?: unknown
     eligibility_plan?: unknown
     custom_vars?: unknown
+    sample_size_plan?: unknown
   }) {
     const cur = this.own(owner, id, 'write')
     const next: Parameters<Store['updateStudy']>[1] = {}
@@ -450,6 +466,28 @@ export class StudyService {
         next.custom_vars = JSON.stringify(sanitized)
       }
     }
+    if (patch.sample_size_plan !== undefined) {
+      if (patch.sample_size_plan === null) {
+        next.sample_size_plan = null
+      } else {
+        // 只接受计算参数 { input }；按参数重新计算，计算失败（缺参数 / 非法）直接报错
+        const input = (patch.sample_size_plan as { input?: unknown })?.input
+        if (!input || typeof input !== 'object') throw new StudyError('bad_sample_size', '计划样本量需提供计算参数 input')
+        let r: SampleSizeResult
+        try { r = calculateSampleSize(input as SampleSizeInput) } catch (e) { throw new StudyError('bad_sample_size', (e as Error).message) }
+        const plan: SampleSizePlan = {
+          input: input as SampleSizeInput,
+          result: {
+            design: r.design, groups: r.groups, total: r.total, total_with_dropout: r.total_with_dropout,
+            ...(r.events_required !== undefined ? { events_required: r.events_required } : {}),
+            method: r.method, methods_text_zh: r.methods_text_zh, methods_text_en: r.methods_text_en,
+          },
+          saved_at: new Date().toISOString(),
+          saved_by: this.name(owner),
+        }
+        next.sample_size_plan = JSON.stringify(plan)
+      }
+    }
     this.store.updateStudy(id, next)
     // 研究改名：归入文档的归属标签跟着更新
     if (next.title) for (const i of this.store.studyItems(id).filter(i => i.kind === 'doc')) this.store.setDocContext(i.ref_id, { kind: 'study', study_id: id, title: next.title, role: i.role })
@@ -458,6 +496,7 @@ export class StudyService {
       ...updated,
       eligibility_plan: parseEligibilityPlan(updated.eligibility_plan),
       custom_vars: parseCustomVars(updated.custom_vars),
+      sample_size_plan: parseSampleSizePlan(updated.sample_size_plan),
     }
   }
 
@@ -739,6 +778,7 @@ export class StudyService {
       ...s,
       eligibility_plan: parseEligibilityPlan(s.eligibility_plan),
       custom_vars: parseCustomVars(s.custom_vars),
+      sample_size_plan: parseSampleSizePlan(s.sample_size_plan),
       eligibility_templates: ELIGIBILITY_TEMPLATES,
       my_role: myRole,
       owner_name: this.name(s.owner),

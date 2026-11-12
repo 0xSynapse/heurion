@@ -43,6 +43,7 @@ import { diff, outline, read, ReadError, search } from '../views/read.ts'
 import { DatasetError, type DatasetService } from '../datasets/service.ts'
 import type { KbService } from '../kb/service.ts'
 import { StudyError, type StudyService } from '../research/service.ts'
+import { calculateSampleSize } from '../research/sample-size.ts'
 import { CohortService } from '../research/cohort.ts'
 import { SubjectVarService } from '../research/subject-vars.ts'
 import { PatientError, type PatientService } from '../tenancy/patients.ts'
@@ -2035,6 +2036,42 @@ export function registerHealthcareTools(server: McpServer, ctx: Ctx): void {
       custom_vars: z.array(z.any()).optional().describe('本研究特定的自定义随访/暴露/结局变量定义'),
     },
   }, async ({ study_id, ...patch }) => sd(svc => { const x = svc.update(claims.u, study_id, patch); return { study_id: x.id, title: x.title, status: x.status } }))
+  server.registerTool('study_sample_size', {
+    description: '样本量估算（研究方案阶段的计划样本量）。design：two_proportions 两组率比较（p1、p2）/ two_means 两组均值比较（mean_diff、sd）/ ' +
+      'survival_logrank 生存 log-rank（hr，加 event_prob 或 median_control + accrual + follow_up）/ one_proportion 单臂率（p0、p1，精确二项）/ ' +
+      'simon_two_stage Simon 两阶段（p0、p1，单侧）。alpha、power 必填。效应量必须来自研究者的假设或文献，不得自行编造；缺参数会报错。' +
+      '返回各组例数、考虑脱落后的例数与可写入方案的中英文方法学描述。给 study_id 且 save=true 时保存为该研究的计划样本量（服务端按参数重新计算）。',
+    inputSchema: {
+      design: z.enum(['two_proportions', 'two_means', 'survival_logrank', 'one_proportion', 'simon_two_stage']),
+      alpha: z.number(),
+      power: z.number(),
+      sides: z.union([z.literal(1), z.literal(2)]).optional(),
+      ratio: z.number().optional().describe('分配比：组 2 / 组 1，默认 1'),
+      dropout: z.number().optional().describe('预计脱落率 0–1'),
+      p0: z.number().optional(),
+      p1: z.number().optional(),
+      p2: z.number().optional(),
+      continuity_correction: z.boolean().optional(),
+      mean_diff: z.number().optional(),
+      sd: z.number().optional(),
+      hr: z.number().optional(),
+      event_prob: z.number().optional(),
+      median_control: z.number().optional(),
+      accrual: z.number().optional(),
+      follow_up: z.number().optional(),
+      study_id: z.string().optional(),
+      save: z.boolean().optional(),
+    },
+  }, async ({ study_id, save, ...input }) => {
+    if (save) {
+      if (!study_id) return fail('study_id_required', '保存计划样本量需要 study_id')
+      return sd(svc => {
+        const x = svc.update(claims.u, study_id, { sample_size_plan: { input } })
+        return { study_id: x.id, saved: true, sample_size_plan: x.sample_size_plan }
+      })
+    }
+    try { return json(calculateSampleSize(input)) } catch (err) { return fail('bad_sample_size', (err as Error).message) }
+  })
   server.registerTool('study_link', {
     description: '把文档或数据集归入研究（action=unlink 移出）。文档 role：protocol 研究方案 / manuscript 论文 / slides 幻灯片 / other。归入的文档不出现在文档列表里，在研究页里。',
     inputSchema: { study_id: z.string(), kind: z.enum(['doc', 'dataset']), ref_id: z.string(), role: z.enum(['protocol', 'manuscript', 'slides', 'other']).optional(), action: z.enum(['link', 'unlink']).optional() },

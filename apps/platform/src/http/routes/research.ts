@@ -18,6 +18,7 @@ import {
   type ConsortDiagramData,
   type EnrollmentFlowData,
 } from '../../research/consort.ts'
+import { calculateSampleSize, type SampleSizeInput } from '../../research/sample-size.ts'
 import { detectDemoInput, isDemoSvg, isTemplateExport, stripDemoPayload, DEMO_TITLE } from '../../research/demo-data.ts'
 import {
   calculateEValue,
@@ -90,6 +91,12 @@ export function registerResearchRoutes(
   // —— 临床研究项目 ——
   app.get('/api/studies', c => { try { return c.json(st().list(c.get('user'))) } catch (err) { return studyFailure(c, err) } })
   app.post('/api/studies', async c => { try { return c.json(st().create(c.get('user'), await c.req.json()), 201) } catch (err) { return studyFailure(c, err) } })
+  /** 样本量估算（无状态计算）：参数见 research/sample-size.ts；缺参数或非法时 400 */
+  app.post('/api/sample-size', async c => {
+    const body = await c.req.json<SampleSizeInput>().catch(() => null)
+    if (!body) return c.json({ error: '请求体必须是 JSON' }, 400)
+    try { return c.json(calculateSampleSize(body)) } catch (err) { return c.json({ error: (err as Error).message }, 400) }
+  })
   app.get('/api/studies/:sid', c => { try { return c.json(st().read(c.get('user'), c.req.param('sid'))) } catch (err) { return studyFailure(c, err) } })
   app.patch('/api/studies/:sid', async c => { try { return c.json(st().update(c.get('user'), c.req.param('sid'), await c.req.json())) } catch (err) { return studyFailure(c, err) } })
   app.delete('/api/studies/:sid', c => { try { return c.json({ ok: true, ...st().remove(c.get('user'), c.req.param('sid')) }) } catch (err) { return studyFailure(c, err) } })
@@ -357,6 +364,7 @@ export function registerResearchRoutes(
             code: codeStr || '# Archived via Heurion Medical Figure Studio',
             code_path: codePathStr || 'figure_studio.R',
             datasets: provDatasets,
+            ...(sid && study ? { study_id: sid } : {}),
           },
         })
       }
