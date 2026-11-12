@@ -11,6 +11,19 @@ import { openHelpGuide } from './help.ts'
 import { icon } from './icons.ts'
 import { safeSvg } from './svg.ts'
 
+/** 后端为示例数据生成的 SVG 打的标记（见 src/research/demo-data.ts）：这类图只能预览，不能导出 / 归档 / 插入文稿 */
+const isDemoSvg = (svg: string): boolean => /<svg\b[^>]*\bdata-heurion-demo="true"/.test(svg)
+
+/** Auto-eCRF 单元格来源等级（见 src/research/ecrf.ts 的 EcrfSourceTier） */
+const ECRF_TIER_LABEL: Record<string, string> = {
+  registry: '患者主档案（不在研究变量核实流程内）',
+  lab: '院内化验记录',
+  imaging: '影像量化分析记录',
+  manual: '研究变量登记（手工录入）',
+  none: '未找到来源',
+}
+const ECRF_TIER_SHORT: Record<string, string> = { registry: '主档案', lab: '化验', imaging: '影像', manual: '手工', none: '无来源' }
+
 type Api = <T = any>(path: string, opts?: RequestInit) => Promise<T>
 type Notice = (msg: string, error?: boolean) => void
 
@@ -444,6 +457,10 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
   ): Promise<{ asset_id: string; name: string } | null> {
     if (!svg || !svg.includes('<svg')) {
       notice('当前没有可归档的 SVG 矢量图表', true)
+      return null
+    }
+    if (isDemoSvg(svg)) {
+      notice('这张图由示例数据生成，不能归档或插入文稿。请选择数据集或录入真实数据后重新生成。', true)
       return null
     }
     let finalName = name.replace(/\.svg$/i, '').trim() || 'Medical_Figure'
@@ -1339,10 +1356,10 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
 
             <div class="row" style="gap:8px;">
               <label style="flex:1;">初筛评估总人数 (Assessed)
-                <input type="number" id="rsConsortAssessed" value="180">
+                <input type="number" id="rsConsortAssessed" min="0" placeholder="待录入">
               </label>
               <label style="flex:1;">符合纳排入组人数 (Eligible)
-                <input type="number" id="rsConsortEligible" value="148">
+                <input type="number" id="rsConsortEligible" min="0" placeholder="待录入">
               </label>
             </div>
 
@@ -1367,6 +1384,8 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
                 <tbody id="rsConsortArmTbody"></tbody>
               </table>
             </div>
+
+            <div id="rsConsortStatus" class="small" style="line-height:1.6;"></div>
 
             <button type="button" class="primary small-btn" id="rsConsortRenderBtn">${icon('chart', { size: 13 })} 更新并渲染 CONSORT 流向图</button>
           </div>
@@ -1405,19 +1424,28 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     let currentDrawio = ''
     let currentMermaid = ''
 
-    let flowState = {
-      title: 'CONSORT 2010 Participant Flow Diagram',
-      total_assessed: 120,
-      eligible_total: 96,
-      exclusions: [
-        { reason: '不符合纳入标准 (Did not meet inclusion criteria)', count: 16 },
-        { reason: '拒绝签署知情同意 (Declined to participate)', count: 8 },
-      ],
-      arms: [
-        { name: '干预组 (Intervention Arm)', allocated: 48, received: 48, lost_to_followup: 2, discontinued: 0, analyzed: 46 },
-        { name: '对照组 (Control Arm)', allocated: 48, received: 48, lost_to_followup: 2, discontinued: 0, analyzed: 46 },
-      ],
-    }
+    // 人数一律为「真实来源或用户录入」：无来源时为 null（界面显示「待录入」），绝不填示例数字。
+    type Cnt = number | null
+    /** 字段来源：auto = 由队列 / 数据集带出；manual = 带出后被用户改过；缺省 = 用户从空白录入 */
+    type FieldSrc = Record<string, 'auto' | 'manual'>
+    type ExclRow = { reason: string; count: Cnt; src: FieldSrc }
+    type ArmRow = { name: string; allocated: Cnt; received: Cnt; lost_to_followup: Cnt; discontinued: number; analyzed: Cnt; src: FieldSrc }
+    type FlowState = { title: string; total_assessed: Cnt; eligible_total: Cnt; exclusions: ExclRow[]; arms: ArmRow[]; src: FieldSrc }
+
+    const emptyExcl = (): ExclRow => ({ reason: '', count: null, src: {} })
+    const emptyArm = (): ArmRow => ({ name: '', allocated: null, received: null, lost_to_followup: null, discontinued: 0, analyzed: null, src: {} })
+    const emptyFlow = (title = 'CONSORT 2010 Participant Flow Diagram'): FlowState => ({
+      title, total_assessed: null, eligible_total: null, exclusions: [emptyExcl()], arms: [emptyArm()], src: {},
+    })
+    /** 把带出的字段标记为 auto（仅对非空值） */
+    const autoSrc = (obj: Record<string, unknown>, keys: string[]): FieldSrc =>
+      Object.fromEntries(keys.filter(k => obj[k] != null && obj[k] !== '').map(k => [k, 'auto' as const]))
+
+    let flowState: FlowState = emptyFlow()
+    /** 当前数据来源说明，如「本研究入组队列记录」；为空表示全部手动录入 */
+    let dataOrigin = ''
+    /** 来源相关的补充说明（如平台未记录哪些环节） */
+    let originNote = ''
 
     const assessedInp = document.getElementById('rsConsortAssessed') as HTMLInputElement
     const eligibleInp = document.getElementById('rsConsortEligible') as HTMLInputElement
@@ -1428,33 +1456,76 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     const grpColSel = document.getElementById('rsConsortGrpCol') as HTMLSelectElement
     const outColSel = document.getElementById('rsConsortOutCol') as HTMLSelectElement
     const svgBox = document.getElementById('rsConsortSvgContainer')!
+    const statusEl = document.getElementById('rsConsortStatus')!
+    const exportBtnIds = [
+      'rsConsortCopyPngBtn', 'rsConsortPngBtn', 'rsConsortArchiveBtn', 'rsConsortDownloadDrawio',
+      'rsConsortDownloadVdx', 'rsConsortDownloadPptx', 'rsConsortDownloadSvg', 'rsConsortCopyMermaid',
+    ]
+
+    const numVal = (v: Cnt) => (v == null ? '' : String(v))
+    const readNum = (el: HTMLInputElement | null | undefined): Cnt => {
+      const s = (el?.value ?? '').trim()
+      if (!s) return null
+      const n = Number(s)
+      return Number.isFinite(n) && n >= 0 ? Math.round(n) : null
+    }
+
+    /** 按字段来源给输入框加标记，并在用户修改带出值时转为 manual */
+    const bindOrigin = (el: HTMLInputElement, src: FieldSrc, key: string) => {
+      const paint = () => {
+        const s = src[key]
+        el.classList.toggle('rs-cs-auto', s === 'auto')
+        el.classList.toggle('rs-cs-manual', s === 'manual')
+        el.title = s === 'auto' ? `来自${dataOrigin}` : s === 'manual' ? `已手动修改（原值来自${dataOrigin}）` : ''
+      }
+      paint()
+      el.oninput = () => {
+        if (src[key] === 'auto') { src[key] = 'manual'; paint() }
+      }
+    }
 
     const renderTables = () => {
-      assessedInp.value = String(flowState.total_assessed)
-      eligibleInp.value = String(flowState.eligible_total)
+      assessedInp.value = numVal(flowState.total_assessed)
+      eligibleInp.value = numVal(flowState.eligible_total)
+      bindOrigin(assessedInp, flowState.src, 'total_assessed')
+      bindOrigin(eligibleInp, flowState.src, 'eligible_total')
       exclTbody.innerHTML = flowState.exclusions.map((ex, idx) => `
         <tr data-exidx="${idx}">
-          <td><input type="text" class="rs-cs-exreason" value="${esc(ex.reason)}"></td>
-          <td><input type="number" class="rs-cs-excnt" value="${ex.count}"></td>
+          <td><input type="text" class="rs-cs-exreason" value="${esc(ex.reason)}" placeholder="如：不符合纳入标准"></td>
+          <td><input type="number" min="0" class="rs-cs-excnt" value="${numVal(ex.count)}" placeholder="待录入"></td>
           <td><button type="button" class="quiet small-btn" data-del-ex="${idx}" title="删除">✕</button></td>
         </tr>
       `).join('')
       armTbody.innerHTML = flowState.arms.map((a, idx) => `
         <tr data-armidx="${idx}">
-          <td><input type="text" class="rs-cs-aname" value="${esc(a.name)}"></td>
-          <td><input type="number" class="rs-cs-alloc" value="${a.allocated}"></td>
-          <td><input type="number" class="rs-cs-recv" value="${a.received}"></td>
-          <td><input type="number" class="rs-cs-lost" value="${a.lost_to_followup}"></td>
-          <td><input type="number" class="rs-cs-ana" value="${a.analyzed}"></td>
+          <td><input type="text" class="rs-cs-aname" value="${esc(a.name)}" placeholder="如：干预组"></td>
+          <td><input type="number" min="0" class="rs-cs-alloc" value="${numVal(a.allocated)}" placeholder="—"></td>
+          <td><input type="number" min="0" class="rs-cs-recv" value="${numVal(a.received)}" placeholder="—"></td>
+          <td><input type="number" min="0" class="rs-cs-lost" value="${numVal(a.lost_to_followup)}" placeholder="—"></td>
+          <td><input type="number" min="0" class="rs-cs-ana" value="${numVal(a.analyzed)}" placeholder="—"></td>
           <td><button type="button" class="quiet small-btn" data-del-arm="${idx}" title="删除">✕</button></td>
         </tr>
       `).join('')
 
+      const exFields: Array<[string, string]> = [['.rs-cs-exreason', 'reason'], ['.rs-cs-excnt', 'count']]
+      exclTbody.querySelectorAll<HTMLTableRowElement>('tr').forEach((tr, i) => {
+        const row = flowState.exclusions[i]
+        if (row) for (const [sel, key] of exFields) bindOrigin(tr.querySelector<HTMLInputElement>(sel)!, row.src, key)
+      })
+      const armFields: Array<[string, string]> = [
+        ['.rs-cs-aname', 'name'], ['.rs-cs-alloc', 'allocated'], ['.rs-cs-recv', 'received'],
+        ['.rs-cs-lost', 'lost_to_followup'], ['.rs-cs-ana', 'analyzed'],
+      ]
+      armTbody.querySelectorAll<HTMLTableRowElement>('tr').forEach((tr, i) => {
+        const row = flowState.arms[i]
+        if (row) for (const [sel, key] of armFields) bindOrigin(tr.querySelector<HTMLInputElement>(sel)!, row.src, key)
+      })
+
       exclTbody.querySelectorAll<HTMLButtonElement>('[data-del-ex]').forEach(btn => {
         btn.onclick = () => {
           syncFromDom()
-          if (flowState.exclusions.length <= 1) return
           flowState.exclusions.splice(Number(btn.dataset.delEx), 1)
+          if (!flowState.exclusions.length) flowState.exclusions.push(emptyExcl())
           renderTables()
           void renderFlowSvg()
         }
@@ -1471,28 +1542,129 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     }
 
     const syncFromDom = () => {
-      flowState.total_assessed = Number(assessedInp.value || 0)
-      flowState.eligible_total = Number(eligibleInp.value || 0)
-      flowState.exclusions = Array.from(exclTbody.querySelectorAll<HTMLTableRowElement>('tr')).map(tr => ({
-        reason: tr.querySelector<HTMLInputElement>('.rs-cs-exreason')?.value.trim() || '排除项',
-        count: Number(tr.querySelector<HTMLInputElement>('.rs-cs-excnt')?.value || 0),
+      flowState.total_assessed = readNum(assessedInp)
+      flowState.eligible_total = readNum(eligibleInp)
+      // DOM 行与 flowState 行在 renderTables 时一一对应，按下标保留各行的来源标记
+      flowState.exclusions = Array.from(exclTbody.querySelectorAll<HTMLTableRowElement>('tr')).map((tr, i) => ({
+        src: flowState.exclusions[i]?.src ?? {},
+        reason: tr.querySelector<HTMLInputElement>('.rs-cs-exreason')?.value.trim() || '',
+        count: readNum(tr.querySelector<HTMLInputElement>('.rs-cs-excnt')),
       }))
-      flowState.arms = Array.from(armTbody.querySelectorAll<HTMLTableRowElement>('tr')).map(tr => ({
-        name: tr.querySelector<HTMLInputElement>('.rs-cs-aname')?.value.trim() || '研究组',
-        allocated: Number(tr.querySelector<HTMLInputElement>('.rs-cs-alloc')?.value || 0),
-        received: Number(tr.querySelector<HTMLInputElement>('.rs-cs-recv')?.value || 0),
-        lost_to_followup: Number(tr.querySelector<HTMLInputElement>('.rs-cs-lost')?.value || 0),
+      flowState.arms = Array.from(armTbody.querySelectorAll<HTMLTableRowElement>('tr')).map((tr, i) => ({
+        src: flowState.arms[i]?.src ?? {},
+        name: tr.querySelector<HTMLInputElement>('.rs-cs-aname')?.value.trim() || '',
+        allocated: readNum(tr.querySelector<HTMLInputElement>('.rs-cs-alloc')),
+        received: readNum(tr.querySelector<HTMLInputElement>('.rs-cs-recv')),
+        lost_to_followup: readNum(tr.querySelector<HTMLInputElement>('.rs-cs-lost')),
         discontinued: 0,
-        analyzed: Number(tr.querySelector<HTMLInputElement>('.rs-cs-ana')?.value || 0),
+        analyzed: readNum(tr.querySelector<HTMLInputElement>('.rs-cs-ana')),
       }))
+    }
+
+    const isBlankExcl = (ex: ExclRow) => !ex.reason && ex.count == null
+    const isBlankArm = (a: ArmRow) => !a.name && a.allocated == null && a.received == null && a.lost_to_followup == null && a.analyzed == null
+
+    /** 列出仍待录入的项；全空的排除原因行视为「无排除」，全空的分组行忽略 */
+    const missingFields = (): string[] => {
+      const miss: string[] = []
+      if (flowState.total_assessed == null) miss.push('初筛评估总人数')
+      if (flowState.eligible_total == null) miss.push('符合纳排入组人数')
+      flowState.exclusions.forEach((ex, i) => {
+        if (isBlankExcl(ex)) return
+        if (!ex.reason) miss.push(`排除原因 ${i + 1} 的说明`)
+        if (ex.count == null) miss.push(`排除原因 ${i + 1} 的人数`)
+      })
+      const arms = flowState.arms.filter(a => !isBlankArm(a))
+      if (!arms.length) miss.push('至少一个研究组')
+      arms.forEach((a, i) => {
+        const label = a.name || `研究组 ${i + 1}`
+        if (!a.name) miss.push(`研究组 ${i + 1} 的组名`)
+        const lacks = ([['allocated', '分配'], ['received', '接受'], ['lost_to_followup', '失访'], ['analyzed', '分析']] as const)
+          .filter(([k]) => a[k] == null).map(([, t]) => t)
+        if (lacks.length) miss.push(`${label}：${lacks.join(' / ')}人数`)
+      })
+      return miss
+    }
+
+    const countManual = () => {
+      const all = [flowState.src, ...flowState.exclusions.map(e => e.src), ...flowState.arms.map(a => a.src)]
+      return all.reduce((acc, s) => acc + Object.values(s).filter(v => v === 'manual').length, 0)
+    }
+
+    const renderStatus = (miss: string[]) => {
+      const parts: string[] = []
+      parts.push(dataOrigin
+        ? `<span class="rs-cs-legend rs-cs-auto">带出</span> 来自${esc(dataOrigin)}`
+        : '<span class="muted">数据来源：手动录入</span>')
+      const manual = countManual()
+      if (manual) parts.push(`<span class="rs-cs-legend rs-cs-manual">已改</span> ${manual} 项带出值已被手动修改`)
+      if (originNote) parts.push(`<span class="muted">${esc(originNote)}</span>`)
+      if (miss.length) {
+        parts.push(`<span style="color:var(--warn);">还有 ${miss.length} 项待录入：${esc(miss.slice(0, 4).join('、'))}${miss.length > 4 ? ' 等' : ''}。补齐前不能导出或归档。</span>`)
+      }
+      statusEl.innerHTML = parts.map(p => `<div>${p}</div>`).join('')
+    }
+
+    const setExportsEnabled = (on: boolean) => {
+      for (const id of exportBtnIds) {
+        const b = document.getElementById(id) as HTMLButtonElement | null
+        if (!b) continue
+        b.disabled = !on
+        if (!on) b.dataset.prevTitle ??= b.title
+        b.title = on ? (b.dataset.prevTitle ?? b.title) : '请先补齐左侧待录入的人数'
+      }
+    }
+
+    /** 导出前兜底校验（编辑后未点「更新并渲染」也会拦截） */
+    const ensureComplete = (): boolean => {
+      syncFromDom()
+      const miss = missingFields()
+      if (miss.length) {
+        notice(`还有 ${miss.length} 项待录入，补齐后才能导出：${miss.slice(0, 3).join('、')}${miss.length > 3 ? ' 等' : ''}`, true)
+        renderStatus(miss)
+        return false
+      }
+      return true
     }
 
     const buildPayload = () => ({
       category: 'flowchart',
-      ...flowState,
+      title: flowState.title,
+      total_assessed: flowState.total_assessed ?? 0,
+      eligible_total: flowState.eligible_total ?? 0,
+      exclusions: flowState.exclusions.filter(ex => !isBlankExcl(ex)).map(ex => ({ reason: ex.reason, count: ex.count ?? 0 })),
+      arms: flowState.arms.filter(a => !isBlankArm(a)).map(a => ({
+        name: a.name,
+        allocated: a.allocated ?? 0,
+        received: a.received ?? 0,
+        lost_to_followup: a.lost_to_followup ?? 0,
+        discontinued: a.discontinued,
+        analyzed: a.analyzed ?? 0,
+      })),
     })
 
+    /** 待录入时的灰色骨架预览：只画结构，人数一律显示「—」 */
+    const skeletonHtml = (miss: number) => {
+      const box = (t: string) => `<div style="border:1px dashed var(--line-strong);padding:10px 14px;min-width:220px;text-align:center;color:var(--text-2);font-size:12px;">${t}<br><b>n = —</b></div>`
+      return `<div style="display:flex;flex-direction:column;align-items:center;gap:14px;padding:28px 12px;opacity:.75;">
+        <div class="muted small">流向图待录入（还缺 ${miss} 项）。补齐左侧人数后点击「更新并渲染」生成正式图。</div>
+        ${box('评估初筛受试者 (Assessed for eligibility)')}
+        ${box('排除受试者 (Excluded)')}
+        ${box('合格入组 (Eligible / Allocated)')}
+        <div style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center;">${box('研究组 (Arm)')}</div>
+      </div>`
+    }
+
     const renderFlowSvg = async () => {
+      const miss = missingFields()
+      renderStatus(miss)
+      if (miss.length) {
+        currentSvg = ''
+        currentDrawio = ''
+        svgBox.innerHTML = skeletonHtml(miss.length)
+        setExportsEnabled(false)
+        return
+      }
       svgBox.innerHTML = `<div class="muted small" style="padding:40px;">正在渲染出版级 CONSORT 矢量流向图…</div>`
       try {
         const res = await api<any>(`/api/studies/${studyId}/figures`, {
@@ -1502,46 +1674,66 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         currentSvg = res.illustrator_svg || res.svg || res.native_exports?.illustrator_svg || ''
         currentDrawio = res.drawio_xml || res.native_exports?.drawio_xml || ''
         svgBox.innerHTML = safeSvg(currentSvg) || '<div class="muted small">未生成流程图</div>'
+        setExportsEnabled(!!currentSvg)
       } catch (err) {
         svgBox.innerHTML = `<div class="muted small">${esc((err as Error).message)}</div>`
+        setExportsEnabled(false)
       }
     }
 
+    /**
+     * 从本研究入组记录带出真实人数。平台只记录「入组 / 已移出」与（若做过结构化纳排筛选）筛选漏斗；
+     * 未记录的环节（初筛人数、排除原因、治疗分组、接受干预人数）一律留空待录入，不做任何推算或均分。
+     */
     const loadFromCohort = async () => {
+      currentMermaid = ''
       try {
         const res = await api<{ svg: string; mermaid: string; data: any }>(`/api/studies/${studyId}/cohort/consort`)
-        currentMermaid = res.mermaid || ''
         const d = res.data || {}
-        const enrolled = Number(d.enrolled_ever ?? d.enrolled_total ?? 60) || 60
-        const withdrawn = Number(d.withdrawn ?? d.withdrawn_total ?? 4) || 0
-        const active = Math.max(0, enrolled - withdrawn)
-        const halfAlloc = Math.max(1, Math.floor(enrolled / 2))
-        const halfLost = Math.floor(withdrawn / 2)
+        const enrolled = Math.max(0, Number(d.enrolled_ever) || 0)
+        const withdrawn = Math.max(0, Number(d.withdrawn) || 0)
+        const analyzed = Number.isFinite(Number(d.analyzed)) ? Number(d.analyzed) : Math.max(0, enrolled - withdrawn)
         const funnel = d.screening_funnel
-        const funnelExclusions = Array.isArray(funnel?.exclusions) && funnel.exclusions.length
-          ? funnel.exclusions.map((x: any) => ({ reason: String(x.reason || '排除'), count: Number(x.count || 0) }))
-          : Array.isArray(d.exclusion_reasons) && d.exclusion_reasons.length
-            ? d.exclusion_reasons.map((x: any) => ({ reason: String(x.reason || '排除'), count: Number(x.count || 0) }))
-            : [
-                { reason: '不符合纳入标准 (Did not meet inclusion criteria)', count: 16 },
-                { reason: '拒绝签署知情同意 (Declined to participate)', count: 8 },
-              ]
-        flowState = {
-          title: `${studyTitle} · CONSORT 2010 受试者纳排流向图`,
-          total_assessed: Number(funnel?.assessed_total ?? d.assessed_total) >= enrolled ? Number(funnel?.assessed_total ?? d.assessed_total) : enrolled + 24,
-          eligible_total: enrolled,
-          exclusions: funnelExclusions,
-          arms: [
-            { name: '干预组 (Intervention Arm)', allocated: halfAlloc, received: halfAlloc, lost_to_followup: halfLost, discontinued: 0, analyzed: Math.max(0, halfAlloc - halfLost) },
-            { name: '对照组 (Control Arm)', allocated: enrolled - halfAlloc, received: enrolled - halfAlloc, lost_to_followup: withdrawn - halfLost, discontinued: 0, analyzed: Math.max(0, active - (halfAlloc - halfLost)) },
-          ],
+        const hasFunnel = !!funnel && Number(funnel.assessed_total) > 0
+        const title = `${studyTitle} · CONSORT 2010 受试者纳排流向图`
+
+        if (!enrolled && !hasFunnel) {
+          flowState = emptyFlow(title)
+          dataOrigin = ''
+          originNote = '本研究队列暂无入组记录。请按原始纳排记录手动录入，或在上方选择已上传的数据集。'
+        } else {
+          currentMermaid = res.mermaid || ''
+          dataOrigin = '本研究入组队列记录'
+          const unrecorded: string[] = []
+          const exclusions: ExclRow[] = hasFunnel && Array.isArray(funnel.exclusions) && funnel.exclusions.length
+            ? funnel.exclusions.map((x: any) => {
+                const row = { reason: String(x.reason || ''), count: Number.isFinite(Number(x.count)) ? Number(x.count) : null }
+                return { ...row, src: autoSrc(row, ['reason', 'count']) }
+              })
+            : [emptyExcl()]
+          if (!hasFunnel) unrecorded.push('初筛人数与排除原因')
+          let arms: ArmRow[]
+          if (enrolled) {
+            const arm = { name: '全部入组受试者 (Enrolled)', allocated: enrolled, received: null, lost_to_followup: withdrawn, discontinued: 0, analyzed }
+            arms = [{ ...arm, src: autoSrc(arm, ['name', 'allocated', 'lost_to_followup', 'analyzed']) }]
+            unrecorded.push('治疗分组', '实际接受干预人数')
+          } else {
+            arms = [emptyArm()]
+          }
+          const top = {
+            total_assessed: hasFunnel ? Number(funnel.assessed_total) : null,
+            eligible_total: enrolled || null,
+          }
+          flowState = { title, ...top, exclusions, arms, src: autoSrc(top, ['total_assessed', 'eligible_total']) }
+          originNote = `已带出：入组 ${enrolled} 人、已移出 ${withdrawn} 人（按失访计）${hasFunnel ? `、初筛 ${funnel.assessed_total} 人` : ''}。平台未记录${unrecorded.join('、')}，请按原始记录补充。`
         }
-        renderTables()
-        await renderFlowSvg()
       } catch (err) {
-        renderTables()
-        await renderFlowSvg()
+        flowState = emptyFlow(`${studyTitle} · CONSORT 2010 受试者纳排流向图`)
+        dataOrigin = ''
+        originNote = `读取入组记录失败（${(err as Error).message}），请手动录入。`
       }
+      renderTables()
+      await renderFlowSvg()
     }
 
     let dsHeader: string[] = []
@@ -1573,22 +1765,28 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         else st.analyzed++
         armStats.set(gVal, st)
       }
+      const top = { total_assessed: totalAssessed, eligible_total: totalAssessed - missingGroupCount }
+      const exRow = { reason: `${gCol} 缺失或未满足纳排分配标准`, count: missingGroupCount }
       flowState = {
         title: `${dsName} · CONSORT 2010 队列纳排与分组随访流向图`,
-        total_assessed: totalAssessed,
-        eligible_total: totalAssessed - missingGroupCount,
-        exclusions: missingGroupCount > 0
-          ? [{ reason: `${gCol} 缺失或未满足纳排分配标准`, count: missingGroupCount }]
-          : [{ reason: '初筛无排除受试者 (可在表格中补充医院初筛排除明细)', count: 0 }],
-        arms: [...armStats.entries()].slice(0, 4).map(([name, st]) => ({
-          name: `${dsLabels[gCol] || gCol}: ${name}`,
-          allocated: st.allocated,
-          received: st.allocated,
-          lost_to_followup: st.lost,
-          discontinued: 0,
-          analyzed: st.analyzed,
-        })),
+        ...top,
+        src: autoSrc(top, ['total_assessed', 'eligible_total']),
+        exclusions: missingGroupCount > 0 ? [{ ...exRow, src: autoSrc(exRow, ['reason', 'count']) }] : [emptyExcl()],
+        arms: [...armStats.entries()].slice(0, 4).map(([name, st]) => {
+          const arm = {
+            name: `${dsLabels[gCol] || gCol}: ${name}`,
+            allocated: st.allocated,
+            received: st.allocated,
+            lost_to_followup: st.lost,
+            discontinued: 0,
+            analyzed: st.analyzed,
+          }
+          return { ...arm, src: autoSrc(arm, ['name', 'allocated', 'received', 'lost_to_followup', 'analyzed']) }
+        }),
       }
+      if (!flowState.arms.length) flowState.arms = [emptyArm()]
+      dataOrigin = `数据集「${dsName}」`
+      originNote = `总行数计为初筛人数，「${dsLabels[gCol] || gCol}」缺失计为排除，「${dsLabels[oCol] || oCol}」缺失计为失访；接受人数按分配人数计。如与实际不符请直接修改。`
       renderTables()
       void renderFlowSvg()
     }
@@ -1617,6 +1815,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
         dsHeader = prev.header ?? []
         dsRows = prev.rows ?? []
         dsLabels = meta.labels ?? {}
+        if (dsRows.length >= 5000) notice('该数据集超过 5000 行：流向图人数只按前 5000 行汇总，请核对后手动修正。', true)
         const cols = dsHeader.length ? dsHeader : (meta.columns ?? []).map(c => c.name)
         const optHtml = cols.map(c => `<option value="${esc(c)}">${esc(dsLabels[c] || c)}</option>`).join('')
         grpColSel.innerHTML = optHtml
@@ -1637,13 +1836,13 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
 
     document.getElementById('rsConsortAddExclBtn')!.onclick = () => {
       syncFromDom()
-      flowState.exclusions.push({ reason: '其他排除原因 (Other exclusion)', count: 5 })
+      flowState.exclusions.push(emptyExcl())
       renderTables()
       void renderFlowSvg()
     }
     document.getElementById('rsConsortAddArmBtn')!.onclick = () => {
       syncFromDom()
-      flowState.arms.push({ name: `亚组 ${flowState.arms.length + 1}`, allocated: 20, received: 20, lost_to_followup: 1, discontinued: 0, analyzed: 19 })
+      flowState.arms.push(emptyArm())
       renderTables()
       void renderFlowSvg()
     }
@@ -1653,7 +1852,7 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
     }
 
     document.getElementById('rsConsortArchiveBtn')!.onclick = () => {
-      syncFromDom()
+      if (!ensureComplete() || !currentSvg) return
       const dsId = sourceSel.value !== '__cohort__' ? sourceSel.value : undefined
       void archiveStudyFigure(studyId, `Figure 1 ${studyTitle} CONSORT 纳排流向图`, currentSvg, currentDrawio || currentMermaid, 'CONSORT_Flowchart.drawio', dsId)
     }
@@ -1664,15 +1863,15 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
       void downloadSvgAsPng600Dpi(studyId, currentSvg, `Figure1_CONSORT_2010_${studyId}_600DPI.png`)
     }
     document.getElementById('rsConsortDownloadDrawio')!.onclick = () => {
-      syncFromDom()
+      if (!ensureComplete()) return
       void downloadFigureFormat(studyId, buildPayload(), 'drawio', `Figure1_CONSORT_2010_${studyId}.drawio`)
     }
     document.getElementById('rsConsortDownloadVdx')!.onclick = () => {
-      syncFromDom()
+      if (!ensureComplete()) return
       void downloadFigureFormat(studyId, buildPayload(), 'vdx', `Figure1_CONSORT_2010_${studyId}.vdx`)
     }
     document.getElementById('rsConsortDownloadPptx')!.onclick = () => {
-      syncFromDom()
+      if (!ensureComplete()) return
       void downloadFigureFormat(studyId, buildPayload(), 'pptx', `Figure1_CONSORT_2010_${studyId}.pptx`)
     }
     document.getElementById('rsConsortDownloadSvg')!.onclick = () => {
@@ -1680,821 +1879,12 @@ export function initResearch(api: Api, notice: Notice, hooks: ResearchHooks) {
       downloadBlobContent(currentSvg, `Figure1_CONSORT_2010_${studyId}.svg`, 'image/svg+xml;charset=utf-8')
     }
     document.getElementById('rsConsortCopyMermaid')!.onclick = () => {
+      if (!ensureComplete()) return
       const mmd = currentMermaid || `flowchart TD\n  A["初筛评估 (n=${flowState.total_assessed})"] --> B["符合纳排入组 (n=${flowState.eligible_total})"]`
       navigator.clipboard.writeText(mmd).then(() => notice('已复制 CONSORT Mermaid 流程图代码')).catch(() => notice('复制失败', true))
     }
 
     await loadFromCohort()
-  }
-
-  /** VanderWeele E-value 混杂偏倚敏感性分析弹窗 */
-  function evalueDialog(studyId: string): void {
-    const dlg = $('dialog')
-    dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="因果推断 E-value">
-      <div class="dialog-head">
-        <h2>因果推断混杂偏倚分析 · VanderWeele E-value</h2>
-        <button class="quiet" data-close aria-label="关闭">✕</button>
-      </div>
-      <div class="dialog-body" style="display:flex;flex-direction:column;gap:16px;">
-        <div class="muted small">
-          基于 VanderWeele &amp; Ding (Ann Intern Med 2017) 权威统计学公式。量化评估未知/未测量潜在混杂因素需要达到何种关联强度，才足以完全推翻当前效应估计。专为医学顶刊审稿意见回复 (Reviewer Rebuttal) 设计。
-        </div>
-        <form id="evalueForm" class="form" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;background:var(--panel-active, rgba(0,0,0,0.03));padding:14px;border-radius:8px;border:1px solid var(--line);">
-          <label>效应指标 (Effect Measure)
-            <select name="effect_type">
-              <option value="HR" selected>HR (风险比 - 生存分析/Cox回归)</option>
-              <option value="OR">OR (比值比 - Logistic回归)</option>
-              <option value="RR">RR (相对危险度 - 队列研究)</option>
-            </select>
-          </label>
-          <label>点估计值 (Estimate)
-            <input name="estimate" type="number" step="0.01" value="0.74" required>
-          </label>
-          <div class="row" style="gap:8px;align-items:flex-end;">
-            <label style="flex:1;">95% CI 下限
-              <input name="ci_lower" type="number" step="0.01" value="0.65" required>
-            </label>
-            <label style="flex:1;">95% CI 上限
-              <input name="ci_upper" type="number" step="0.01" value="0.85" required>
-            </label>
-          </div>
-          <div style="grid-column:1 / -1;display:flex;justify-content:space-between;align-items:center;">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-              <input type="checkbox" name="rare_outcome" checked>
-              <span class="small">罕见事件假设 (Rare outcome assumption，结局发生率 &lt; 15%)</span>
-            </label>
-            <button type="submit" class="primary small-btn">计算 E-value 与生成抗辩论述</button>
-          </div>
-        </form>
-        <div id="evalueResult" style="display:none;flex-direction:column;gap:12px;"></div>
-      </div>
-    </div>`
-    dlg.hidden = false
-    dlg.onclick = e => { if (e.target === dlg || (e.target as HTMLElement).closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = '' } }
-
-    const form = dlg.querySelector<HTMLFormElement>('#evalueForm')!
-    const compute = async () => {
-      const f = new FormData(form)
-      const effect_type = f.get('effect_type') as string
-      const estimate = Number(f.get('estimate'))
-      const ci_lower = Number(f.get('ci_lower'))
-      const ci_upper = Number(f.get('ci_upper'))
-      const rare_outcome = f.get('rare_outcome') === 'on'
-
-      try {
-        const res = await api<{
-          effect_type: string
-          estimate: number
-          ci_lower: number
-          ci_upper: number
-          e_value_point: number
-          e_value_ci: number
-          academic_defense_zh: string
-          academic_defense_en: string
-        }>(`/api/studies/${studyId}/causal/e-value`, {
-          method: 'POST',
-          body: JSON.stringify({ effect_type, estimate, ci_lower, ci_upper, rare_outcome }),
-        })
-
-        const resBox = document.getElementById('evalueResult')
-        if (resBox) {
-          resBox.style.display = 'flex'
-          resBox.innerHTML = `
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-              <div style="background:var(--accent-tint, #eff6ff);border:1px solid #bfdbfe;border-radius:8px;padding:12px;text-align:center;">
-                <div class="muted small">VanderWeele E-value (点估计)</div>
-                <div style="font-size:26px;font-weight:700;color:#1d4ed8;margin-top:4px;">${res.e_value_point.toFixed(2)}</div>
-                <div class="muted small" style="margin-top:2px;">未测量混杂需达 ${res.e_value_point.toFixed(2)} 倍关联方可完全消除效应</div>
-              </div>
-              <div style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;text-align:center;">
-                <div class="muted small">95% CI 保守边界 E-value</div>
-                <div style="font-size:26px;font-weight:700;color:#047857;margin-top:4px;">${res.e_value_ci.toFixed(2)}</div>
-                <div class="muted small" style="margin-top:2px;">推翻统计显著性所需之最低混杂强度</div>
-              </div>
-            </div>
-            <div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel);">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                <b>中文审稿抗辩论述 (适用于答复意见书 / 论著讨论段落)</b>
-                <button class="quiet small-btn" id="copyDefenseZh">复制中文论述</button>
-              </div>
-              <p style="font-size:13px;line-height:1.6;margin:0;color:var(--text);">${esc(res.academic_defense_zh)}</p>
-            </div>
-            <div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel);">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                <b>English Reviewer Rebuttal (For NEJM / Lancet / JAMA Response)</b>
-                <button class="quiet small-btn" id="copyDefenseEn">Copy English Rebuttal</button>
-              </div>
-              <p style="font-size:13px;line-height:1.6;margin:0;font-family:Times New Roman, serif;color:var(--text);">${esc(res.academic_defense_en)}</p>
-            </div>
-          `
-
-          document.getElementById('copyDefenseZh')?.addEventListener('click', () => {
-            navigator.clipboard.writeText(res.academic_defense_zh)
-            notice('已复制中文审稿抗辩论述')
-          })
-          document.getElementById('copyDefenseEn')?.addEventListener('click', () => {
-            navigator.clipboard.writeText(res.academic_defense_en)
-            notice('Copied English Reviewer Rebuttal to clipboard')
-          })
-        }
-      } catch (err) {
-        notice((err as Error).message, true)
-      }
-    }
-
-    form.onsubmit = e => {
-      e.preventDefault()
-      void compute()
-    }
-
-    // Trigger initial calculation
-    void compute()
-  }
-
-  /** 临床顶刊生存分析与 Cox 风险回归弹窗 (Kaplan-Meier & Forest Plot) */
-  async function survivalDialog(datasetId: string, datasetName: string): Promise<void> {
-    const dlg = $('dialog')
-    dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="生存分析">
-      <div class="dialog-head">
-        <h2>临床生存分析与 Cox 森林图 (Kaplan-Meier & Forest Plot)</h2>
-        <button class="quiet" data-close aria-label="关闭">✕</button>
-      </div>
-      <div class="dialog-body" style="display:flex;flex-direction:column;gap:14px;">
-        <div class="muted small">
-          符合 NEJM / Lancet / JAMA 医学顶刊统计规范：Kaplan-Meier 累积生存拟合、Greenwood 95% 置信区间、对齐 Number at risk 风险表、Log-rank 显著性检验及多因素 Cox 比例风险回归森林图。
-        </div>
-        <div id="rsSurvLoading" class="muted small" style="padding:20px;text-align:center;">正在载入数据集指标与变量列…</div>
-        <form id="rsSurvForm" class="form" style="display:none;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:12px;background:var(--panel-active, rgba(0,0,0,0.03));padding:14px;border-radius:8px;border:1px solid var(--line);">
-          <label>随访时间变量 (Time)
-            <select name="time_col" id="rsSurvTimeCol"></select>
-          </label>
-          <label>结局事件变量 (Event, 1/0)
-            <select name="event_col" id="rsSurvEventCol"></select>
-          </label>
-          <label>主要分层/暴露变量 (Group)
-            <select name="group_col" id="rsSurvGroupCol"></select>
-          </label>
-          <label>时间单位 (Unit)
-            <select name="time_unit">
-              <option value="Months" selected>月 (Months)</option>
-              <option value="Days">天 (Days)</option>
-              <option value="Years">年 (Years)</option>
-            </select>
-          </label>
-          <div style="grid-column:1 / -1;display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
-            <span class="muted small" id="rsSurvInfo">分析数据集：${esc(datasetName)}</span>
-            <button type="submit" class="primary small-btn">运行 KM 生存拟合与森林图</button>
-          </div>
-        </form>
-        <div id="rsSurvResult" style="display:none;flex-direction:column;gap:16px;">
-          <!-- KM Curve & Risk Table -->
-          <div style="border:1px solid var(--line);border-radius:8px;padding:16px;background:#ffffff;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-              <b>Figure 3: Kaplan-Meier 累积生存率曲线与风险集对照 (Number at Risk)</b>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <button class="small-btn" id="rsDlKmPzfx" title="导出 GraphPad Prism 生存分析工程文件 (.pzfx)">${icon('download', { size: 13 })} Prism (.pzfx)</button>
-                <button class="small-btn" id="rsDlKmR" title="导出 R 语言 survminer/ggplot2 脚本 (.R)">${icon('download', { size: 13 })} R 脚本 (.R)</button>
-                <button class="small-btn primary" id="rsDlKmSvg">${icon('download', { size: 13 })} 下载 KM 矢量图 (SVG)</button>
-              </div>
-            </div>
-            <div id="rsKmSvgWrap" style="overflow:auto;max-height:480px;display:flex;justify-content:center;"></div>
-          </div>
-
-          <!-- Statistical Callout Metrics -->
-          <div id="rsSurvStats" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:12px;"></div>
-
-          <!-- Cox Forest Plot -->
-          <div id="rsForestWrap" style="border:1px solid var(--line);border-radius:8px;padding:16px;background:#ffffff;display:none;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-              <b>Figure 4: 多因素 Cox 比例风险回归亚组森林图 (Hazard Ratio & 95% CI)</b>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <button class="small-btn" id="rsDlForestPzfx" title="导出 GraphPad Prism 森林图工程文件 (.pzfx)">${icon('download', { size: 13 })} Prism (.pzfx)</button>
-                <button class="small-btn" id="rsDlForestR" title="导出 R 语言 forestplot/ggplot2 脚本 (.R)">${icon('download', { size: 13 })} R 脚本 (.R)</button>
-                <button class="small-btn primary" id="rsDlForestSvg">${icon('download', { size: 13 })} 下载森林图 (SVG)</button>
-              </div>
-            </div>
-            <div id="rsForestSvgWrap" style="overflow:auto;max-height:420px;display:flex;justify-content:center;"></div>
-          </div>
-
-          <!-- Manuscript Report & Copy -->
-          <div style="border:1px solid var(--line);border-radius:8px;padding:14px;background:var(--panel);">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-              <b>论文方法学与统计结果论述段落 (Methods & Results)</b>
-              <button class="small-btn" id="rsCopySurvMd">${icon('copy', { size: 13 })} 复制论文论述段落</button>
-            </div>
-            <div id="rsSurvMdText" style="font-size:12.5px;line-height:1.6;color:var(--text);white-space:pre-wrap;font-family:monospace;max-height:220px;overflow-y:auto;background:var(--bg);padding:10px;border-radius:6px;border:1px solid var(--line);"></div>
-          </div>
-        </div>
-      </div>
-    </div>`
-    dlg.hidden = false
-    dlg.onclick = e => { if (e.target === dlg || (e.target as HTMLElement).closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = '' } }
-
-    try {
-      const ds = await api<{ id: string; columns?: Array<{ name: string; type?: string }>; labels?: Record<string, string> }>(`/api/datasets/${datasetId}`)
-      const cols = (ds.columns || []).map(c => c.name)
-      if (!cols.length) {
-        cols.push('followup_months', 'os_status', 'treatment_arm', 'age', 'sex', 'l3_smi', 'vat_to_sat_ratio')
-      }
-
-      const timeSel = document.getElementById('rsSurvTimeCol') as HTMLSelectElement
-      const eventSel = document.getElementById('rsSurvEventCol') as HTMLSelectElement
-      const groupSel = document.getElementById('rsSurvGroupCol') as HTMLSelectElement
-
-      const populate = (sel: HTMLSelectElement, candidates: string[], defMatch: (n: string) => boolean) => {
-        sel.innerHTML = candidates.map(c => {
-          const lbl = ds.labels?.[c] || c
-          return `<option value="${esc(c)}">${esc(lbl)} (${esc(c)})</option>`
-        }).join('')
-        const matched = candidates.find(defMatch)
-        if (matched) sel.value = matched
-      }
-
-      populate(timeSel, cols, n => /time|month|day|follow|surv|os/i.test(n))
-      populate(eventSel, cols, n => /status|event|dead|death|censor|outcome/i.test(n))
-      populate(groupSel, ['(不分组)', ...cols], n => /group|arm|treat|smi|ham/i.test(n))
-
-      const loadingEl = document.getElementById('rsSurvLoading')
-      const formEl = document.getElementById('rsSurvForm')
-      if (loadingEl) loadingEl.style.display = 'none'
-      if (formEl) formEl.style.display = 'grid'
-
-      const runAnalysis = async () => {
-        const timeCol = timeSel.value
-        const eventCol = eventSel.value
-        const groupCol = groupSel.value === '(不分组)' ? undefined : groupSel.value
-        const timeUnit = (document.getElementById('rsSurvForm') as HTMLFormElement)?.querySelector<HTMLSelectElement>('[name="time_unit"]')?.value || 'Months'
-
-        notice('正在运行医学顶刊级生存曲线拟合与 Cox 回归…')
-        try {
-          const res = await api<any>(`/api/datasets/${datasetId}/survival`, {
-            method: 'POST',
-            body: JSON.stringify({
-              time_col: timeCol,
-              event_col: eventCol,
-              group_col: groupCol,
-              time_unit: timeUnit,
-              title: `${datasetName} · Kaplan-Meier 生存率分析`,
-              show_censored: true,
-              show_risk_table: true,
-            })
-          })
-
-          const resWrap = document.getElementById('rsSurvResult')
-          const kmWrap = document.getElementById('rsKmSvgWrap')
-          const statsWrap = document.getElementById('rsSurvStats')
-          const forestWrap = document.getElementById('rsForestWrap')
-          const forestSvgWrap = document.getElementById('rsForestSvgWrap')
-          const mdText = document.getElementById('rsSurvMdText')
-
-          const kmSvg = res.km_svg || res.svg || res.survival_analysis?.svg || ''
-          const forestSvg = res.forest_plot_svg || res.forest_svg || res.survival_analysis?.forest_svg || ''
-          const summaryMd = res.summary_markdown || res.publication_report_markdown || (res.narrative ? `${res.narrative}\n\n${res.markdown_table || ''}` : res.markdown_table) || ''
-          const logRank = res.log_rank || res.survival_analysis?.log_rank
-          const rawGroups = res.groups || res.survival_analysis?.groups
-          const groupList: any[] = Array.isArray(rawGroups) ? rawGroups : (rawGroups ? Object.values(rawGroups) : [])
-
-          if (resWrap) resWrap.style.display = 'flex'
-          if (kmWrap) kmWrap.innerHTML = safeSvg(kmSvg) || '<div class="muted small">未生成 KM 图像</div>'
-
-          // Stats cards
-          let statsHtml = ''
-          if (logRank) {
-            const chi2Num = Number(logRank.chi2)
-            statsHtml += `<div style="border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--panel);">
-              <div class="muted small">Log-rank 显著性检验</div>
-              <div style="font-size:20px;font-weight:700;color:#0284c7;margin-top:2px;">${esc(String(logRank.p_value_formatted ?? ''))}</div>
-              <div class="muted small">Chi2 = ${Number.isFinite(chi2Num) ? chi2Num.toFixed(2) : '—'}, df = ${Number(logRank.df) || 0}</div>
-            </div>`
-          }
-          if (groupList.length > 0) {
-            for (const g of groupList) {
-              const med = g.median_time !== null && g.median_time !== undefined ? `${esc(String(g.median_time))} ${esc(String(timeUnit))}` : '未达 (NR)'
-              const rate = typeof g.event_rate === 'number' ? g.event_rate.toFixed(1) : esc(String(g.event_rate ?? ''))
-              statsHtml += `<div style="border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--panel);">
-                <div class="muted small">${esc(g.label || g.group || '分层组')} (n=${Number(g.total_n) || 0})</div>
-                <div style="font-size:20px;font-weight:700;color:var(--text);margin-top:2px;">中位生存: ${med}</div>
-                <div class="muted small">事件发生率: ${rate}% (${Number(g.events_n) || 0}/${Number(g.total_n) || 0})</div>
-              </div>`
-            }
-          }
-          if (statsWrap) statsWrap.innerHTML = statsHtml
-
-          // Forest plot
-          if (forestSvg && forestWrap && forestSvgWrap) {
-            forestWrap.style.display = 'block'
-            forestSvgWrap.innerHTML = safeSvg(forestSvg)
-          } else if (forestWrap) {
-            forestWrap.style.display = 'none'
-          }
-
-          // Markdown
-          if (mdText) mdText.textContent = summaryMd
-
-          // Buttons
-          const dlKmBtn = document.getElementById('rsDlKmSvg')
-          if (dlKmBtn) {
-            dlKmBtn.onclick = () => {
-              if (!kmSvg) { notice('暂无可下载的 KM 矢量图', true); return }
-              const blob = new Blob([kmSvg], { type: 'image/svg+xml;charset=utf-8' })
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = `Figure3_Kaplan_Meier_${datasetId}.svg`
-              document.body.appendChild(a)
-              a.click()
-              document.body.removeChild(a)
-              URL.revokeObjectURL(url)
-              notice('已下载 Figure 3 KM 矢量图')
-            }
-          }
-
-          const dlKmPzfxBtn = document.getElementById('rsDlKmPzfx')
-          if (dlKmPzfxBtn) {
-            dlKmPzfxBtn.onclick = () => {
-              const pzfx = res.native_exports?.prism_pzfx || res.survival_analysis?.native_exports?.prism_pzfx
-              if (!pzfx) { notice('暂无 Prism (.pzfx) 数据', true); return }
-              const blob = new Blob([pzfx], { type: 'application/xml;charset=utf-8' })
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = `Figure3_Kaplan_Meier_${datasetId}.pzfx`
-              document.body.appendChild(a); a.click(); document.body.removeChild(a)
-              URL.revokeObjectURL(url)
-              notice('已下载 GraphPad Prism (.pzfx) 生存分析原文件')
-            }
-          }
-
-          const dlKmRBtn = document.getElementById('rsDlKmR')
-          if (dlKmRBtn) {
-            dlKmRBtn.onclick = () => {
-              const rCode = res.native_exports?.r_script || res.survival_analysis?.native_exports?.r_script
-              if (!rCode) { notice('暂无 R 脚本数据', true); return }
-              const blob = new Blob([rCode], { type: 'text/plain;charset=utf-8' })
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = `Figure3_Kaplan_Meier_${datasetId}.R`
-              document.body.appendChild(a); a.click(); document.body.removeChild(a)
-              URL.revokeObjectURL(url)
-              notice('已下载 R 语言 survminer/ggplot2 脚本 (.R)')
-            }
-          }
-
-          const dlForestPzfxBtn = document.getElementById('rsDlForestPzfx')
-          if (dlForestPzfxBtn) {
-            dlForestPzfxBtn.onclick = () => {
-              const pzfx = res.native_exports?.forest_prism_pzfx || res.survival_analysis?.native_exports?.forest_prism_pzfx
-              if (!pzfx) { notice('暂无森林图 Prism (.pzfx) 数据', true); return }
-              const blob = new Blob([pzfx], { type: 'application/xml;charset=utf-8' })
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = `Figure4_Cox_Forest_Plot_${datasetId}.pzfx`
-              document.body.appendChild(a); a.click(); document.body.removeChild(a)
-              URL.revokeObjectURL(url)
-              notice('已下载 GraphPad Prism (.pzfx) 森林图原文件')
-            }
-          }
-
-          const dlForestRBtn = document.getElementById('rsDlForestR')
-          if (dlForestRBtn) {
-            dlForestRBtn.onclick = () => {
-              const rCode = res.native_exports?.forest_r_script || res.survival_analysis?.native_exports?.forest_r_script
-              if (!rCode) { notice('暂无森林图 R 脚本数据', true); return }
-              const blob = new Blob([rCode], { type: 'text/plain;charset=utf-8' })
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = `Figure4_Cox_Forest_Plot_${datasetId}.R`
-              document.body.appendChild(a); a.click(); document.body.removeChild(a)
-              URL.revokeObjectURL(url)
-              notice('已下载 R 语言森林图脚本 (.R)')
-            }
-          }
-
-          const dlForestBtn = document.getElementById('rsDlForestSvg')
-          if (dlForestBtn) {
-            dlForestBtn.onclick = () => {
-              if (!forestSvg) { notice('暂无可下载的森林图', true); return }
-              const blob = new Blob([forestSvg], { type: 'image/svg+xml;charset=utf-8' })
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = `Figure4_Cox_Forest_Plot_${datasetId}.svg`
-              document.body.appendChild(a)
-              a.click()
-              document.body.removeChild(a)
-              URL.revokeObjectURL(url)
-              notice('已下载 Figure 4 Cox 森林图')
-            }
-          }
-
-          const copyMdBtn = document.getElementById('rsCopySurvMd')
-          if (copyMdBtn) {
-            copyMdBtn.onclick = () => {
-              navigator.clipboard.writeText(summaryMd).then(() => {
-                notice('已复制论文生存分析 Methods & Results 论述段落')
-              }).catch(() => {
-                notice('复制失败，请手动选取', true)
-              })
-            }
-          }
-
-          notice('生存分析与森林图生成完毕')
-        } catch (err) {
-          notice((err as Error).message, true)
-        }
-      }
-
-      const formElem = document.getElementById('rsSurvForm')
-      if (formElem) {
-        formElem.onsubmit = e => {
-          e.preventDefault()
-          void runAnalysis()
-        }
-      }
-
-      // Initial auto-run
-      void runAnalysis()
-    } catch (err) {
-      notice((err as Error).message, true)
-    }
-  }
-
-  /** 临床预后列线图与 ROC/DCA 预测效能弹窗 (Nomogram, ROC & DCA) */
-  async function predictionModelDialog(datasetId: string, datasetName: string): Promise<void> {
-    const dlg = $('dialog')
-    dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="预后列线图与预测效能">
-      <div class="dialog-head">
-        <h2>临床预后预测列线图 (Nomogram) 与 ROC/DCA 决策曲线分析</h2>
-        <button class="quiet" data-close aria-label="关闭">✕</button>
-      </div>
-      <div class="dialog-body" style="display:flex;flex-direction:column;gap:14px;">
-        <div class="muted small">
-          严格遵循国际医学顶刊 TRIPOD 声明与 JCO / Lancet Oncology 预测模型规范：多因素 Cox 比例风险 0~100 刻度列线图、ROC 曲线灵敏度/特异度与 Youden 指数、BMJ Vickers &amp; Elkin 临床决策曲线 (DCA) 净获益评估。
-        </div>
-
-        <!-- Tab Switcher -->
-        <div style="display:flex;gap:8px;border-bottom:1px solid var(--line);padding-bottom:8px;flex-wrap:wrap;">
-          <button type="button" class="small-btn primary" id="rsPmTabNomogram">${icon('chart', { size: 13 })} 预后列线图 (Nomogram)</button>
-          <button type="button" class="small-btn" id="rsPmTabRoc">${icon('target', { size: 13 })} ROC 诊断对比</button>
-          <button type="button" class="small-btn" id="rsPmTabDca">${icon('chart', { size: 13 })} DCA 决策曲线</button>
-          <button type="button" class="small-btn" id="rsPmTabManuscript">${icon('file', { size: 13 })} 论文方法与结果初稿</button>
-        </div>
-
-        <div id="rsPmLoading" class="muted small" style="padding:40px;text-align:center;">正在计算临床预测模型与绘制出版级矢量图…</div>
-
-        <!-- 1. Nomogram Pane -->
-        <div id="rsPmNomogramPane" style="display:none;flex-direction:column;gap:14px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-            <span class="muted small" style="display:flex;align-items:center;gap:6px;">
-              <span class="flag-S" style="background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:4px;font-weight:600;">C-index = 0.81 (95% CI: 0.76 - 0.86)</span>
-              <span>Figure 5: 1/3/5 年无事件生存率预测标尺</span>
-            </span>
-            <button class="small-btn primary" id="rsDlNomogramSvg">${icon('download', { size: 13 })} 下载 Nomogram 矢量图 (SVG)</button>
-          </div>
-          <div id="rsNomogramSvgWrap" style="background:#ffffff;border:1px solid var(--line);border-radius:8px;padding:16px;overflow:auto;max-height:480px;display:flex;justify-content:center;"></div>
-
-          <!-- Interactive Calculator -->
-          <div style="border:1px solid var(--line);border-radius:8px;padding:14px;background:var(--panel);display:flex;flex-direction:column;gap:12px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <b>交互式个体患者预后评分卡 (Interactive Risk Calculator)</b>
-              <span class="muted small">拖动滑块实时计算总分与生存概率</span>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:12px;">
-              <label>治疗方案 (Treatment)
-                <select id="rsNomoCalcTreatment">
-                  <option value="1">靶向联合治疗组</option>
-                  <option value="0">标准对照组</option>
-                </select>
-              </label>
-              <label>L3 骨骼肌 SMI: <span id="rsNomoSmiVal" style="font-weight:600;">45.0</span> cm²/m²
-                <input type="range" id="rsNomoCalcSmi" min="30" max="65" step="0.5" value="45.0">
-              </label>
-              <label>脂肪比 (VAT/SAT): <span id="rsNomoFatVal" style="font-weight:600;">0.85</span>
-                <input type="range" id="rsNomoCalcFat" min="0.4" max="1.8" step="0.05" value="0.85">
-              </label>
-              <label>年龄: <span id="rsNomoAgeVal" style="font-weight:600;">62</span> 岁
-                <input type="range" id="rsNomoCalcAge" min="40" max="85" step="1" value="62">
-              </label>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;margin-top:6px;border-top:1px dashed var(--line);padding-top:10px;">
-              <div style="background:var(--bg);padding:8px 12px;border-radius:6px;border:1px solid var(--line);">
-                <div class="muted small">总积分 (Total Points)</div>
-                <div id="rsNomoTotalPoints" style="font-size:18px;font-weight:700;color:var(--text);margin-top:2px;">—</div>
-              </div>
-              <div style="background:var(--bg);padding:8px 12px;border-radius:6px;border:1px solid var(--line);">
-                <div class="muted small">1 年生存概率 (1-Year OS)</div>
-                <div id="rsNomoProb1y" style="font-size:18px;font-weight:700;color:#0284c7;margin-top:2px;">—</div>
-              </div>
-              <div style="background:var(--bg);padding:8px 12px;border-radius:6px;border:1px solid var(--line);">
-                <div class="muted small">3 年生存概率 (3-Year OS)</div>
-                <div id="rsNomoProb3y" style="font-size:18px;font-weight:700;color:#0284c7;margin-top:2px;">—</div>
-              </div>
-              <div style="background:var(--bg);padding:8px 12px;border-radius:6px;border:1px solid var(--line);">
-                <div class="muted small">5 年生存概率 (5-Year OS)</div>
-                <div id="rsNomoProb5y" style="font-size:18px;font-weight:700;color:#0284c7;margin-top:2px;">—</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 2. ROC Pane -->
-        <div id="rsPmRocPane" style="display:none;flex-direction:column;gap:14px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-            <span class="muted small" style="display:flex;align-items:center;gap:6px;">
-              <span class="flag-S" style="background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:4px;font-weight:600;">增量 AUC 增益: +0.14 (DeLong P &lt; 0.001)</span>
-              <span>Figure 6A: 受试者工作特征与最佳 Youden 截断点</span>
-            </span>
-            <button class="small-btn primary" id="rsDlRocSvg">${icon('download', { size: 13 })} 下载 ROC 矢量图 (SVG)</button>
-          </div>
-          <div id="rsRocSvgWrap" style="background:#ffffff;border:1px solid var(--line);border-radius:8px;padding:16px;overflow:auto;max-height:480px;display:flex;justify-content:center;"></div>
-          <div id="rsRocMetricsTableWrap" style="overflow-x:auto;"></div>
-        </div>
-
-        <!-- 3. DCA Pane -->
-        <div id="rsPmDcaPane" style="display:none;flex-direction:column;gap:14px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-            <span class="muted small">
-              Figure 6B: 临床决策净获益曲线 (Decision Curve Analysis) · Vickers &amp; Elkin (BMJ 2006)
-            </span>
-            <button class="small-btn primary" id="rsDlDcaSvg">${icon('download', { size: 13 })} 下载 DCA 矢量图 (SVG)</button>
-          </div>
-          <div id="rsDcaSvgWrap" style="background:#ffffff;border:1px solid var(--line);border-radius:8px;padding:16px;overflow:auto;max-height:480px;display:flex;justify-content:center;"></div>
-          <div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel);">
-            <b>临床获益窗口期解读 (Clinical Utility Interpretation)</b>
-            <p class="muted small" style="margin-top:4px;line-height:1.6;">
-              在决策阈值概率 (Threshold Probability) 处于 10% ~ 75% 的极宽临床窗口期内，依据「临床 + 3D 影像组学融合模型」进行临床干预所取得的净获益 (Net Benefit) 均显著优于“对所有患者均干预 (Treat All)”与“对所有患者均不干预 (Treat None)”，可有效避免过度治疗并提高早期精准治疗收益。
-            </p>
-          </div>
-        </div>
-
-        <!-- 4. Manuscript Draft Pane -->
-        <div id="rsPmManuscriptPane" style="display:none;flex-direction:column;gap:12px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <b>TRIPOD 规范论文方法学与统计结果论述段落 (Methods &amp; Results)</b>
-            <button class="small-btn" id="rsCopyPmManuscript">${icon('copy', { size: 13 })} 复制论文论述段落</button>
-          </div>
-          <div id="rsPmManuscriptText" style="font-size:12.5px;line-height:1.6;color:var(--text);white-space:pre-wrap;font-family:monospace;max-height:360px;overflow-y:auto;background:var(--bg);padding:14px;border-radius:6px;border:1px solid var(--line);"></div>
-        </div>
-      </div>
-    </div>`
-    dlg.hidden = false
-    dlg.onclick = e => { if (e.target === dlg || (e.target as HTMLElement).closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = '' } }
-
-    try {
-      const defaultPredictors = [
-        { variable: 'treatment_arm', label: '治疗方案 (0=对照, 1=联合干预)', type: 'binary', beta: -0.68, min_val: 0, max_val: 1 },
-        { variable: 'l3_smi', label: 'L3 骨骼肌指数 SMI (cm²/m²)', type: 'continuous', beta: -0.045, min_val: 30, max_val: 65 },
-        { variable: 'vat_to_sat', label: '内脏/皮下脂肪比 (VAT/SAT)', type: 'continuous', beta: 0.72, min_val: 0.4, max_val: 1.8 },
-        { variable: 'age', label: '年龄 (Age, years)', type: 'continuous', beta: 0.038, min_val: 40, max_val: 85 },
-      ]
-      const defaultRocPayload = {
-        labels: [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0],
-        scores_baseline: [0.76, 0.68, 0.72, 0.58, 0.64, 0.52, 0.48, 0.35, 0.42, 0.29, 0.38, 0.24, 0.61, 0.44, 0.55, 0.31],
-        scores_multimodal: [0.91, 0.86, 0.88, 0.79, 0.84, 0.74, 0.28, 0.16, 0.22, 0.12, 0.19, 0.09, 0.82, 0.25, 0.77, 0.14],
-        model1_name: '临床基线模型 (Clinical Baseline)',
-        model2_name: '临床 + 3D 影像组学融合模型',
-      }
-      const [nomoRes, rocDcaRes] = await Promise.all([
-        api<any>(`/api/datasets/${datasetId}/nomogram`, {
-          method: 'POST',
-          body: JSON.stringify({
-            title: `${datasetName} · 多因素预后列线图 (Nomogram)`,
-          }),
-        }).catch(() => api<any>(`/api/datasets/${datasetId}/nomogram`, {
-          method: 'POST',
-          body: JSON.stringify({
-            title: `${datasetName} · 多因素 Cox 预后列线图 (Nomogram)`,
-            predictors: defaultPredictors,
-            baseline_survival: { year1: 0.90, year3: 0.75, year5: 0.60 },
-          }),
-        })),
-        api<any>(`/api/datasets/${datasetId}/roc-dca`, {
-          method: 'POST',
-          body: JSON.stringify({
-            model1_name: '临床基线模型 (Clinical Baseline)',
-            model2_name: '全变量/多模态融合模型 (Multimodal Model)',
-          }),
-        }).catch(() => api<any>(`/api/datasets/${datasetId}/roc-dca`, {
-          method: 'POST',
-          body: JSON.stringify(defaultRocPayload),
-        })),
-      ])
-
-      const loadingEl = document.getElementById('rsPmLoading')
-      if (loadingEl) loadingEl.style.display = 'none'
-
-      // Update dynamic C-index and DeLong badges if returned by dataset-driven fit
-      const nomoBadge = document.querySelector('#rsPmNomogramPane .flag-S')
-      if (nomoBadge && typeof nomoRes.c_index === 'number') {
-        const ci = Array.isArray(nomoRes.c_index_ci) ? nomoRes.c_index_ci : [Math.max(0.5, nomoRes.c_index - 0.05), Math.min(0.99, nomoRes.c_index + 0.05)]
-        nomoBadge.textContent = `C-index = ${nomoRes.c_index.toFixed(2)} (95% CI: ${ci[0].toFixed(2)} - ${ci[1].toFixed(2)})`
-      }
-      const rocBadge = document.querySelector('#rsPmRocPane .flag-S')
-      if (rocBadge && rocDcaRes.delong) {
-        const dl = rocDcaRes.delong
-        const sign = dl.delta_auc >= 0 ? '+' : ''
-        rocBadge.textContent = `增量 AUC 增益: ${sign}${dl.delta_auc.toFixed(3)} (DeLong Z = ${dl.z_stat.toFixed(2)}, ${dl.p_formatted})`
-      }
-
-      const tabNomogram = document.getElementById('rsPmTabNomogram')
-      const tabRoc = document.getElementById('rsPmTabRoc')
-      const tabDca = document.getElementById('rsPmTabDca')
-      const tabManuscript = document.getElementById('rsPmTabManuscript')
-
-      const paneNomogram = document.getElementById('rsPmNomogramPane')
-      const paneRoc = document.getElementById('rsPmRocPane')
-      const paneDca = document.getElementById('rsPmDcaPane')
-      const paneManuscript = document.getElementById('rsPmManuscriptPane')
-
-      const switchTab = (tab: 'nomo' | 'roc' | 'dca' | 'ms') => {
-        if (tabNomogram) tabNomogram.className = tab === 'nomo' ? 'small-btn primary' : 'small-btn'
-        if (tabRoc) tabRoc.className = tab === 'roc' ? 'small-btn primary' : 'small-btn'
-        if (tabDca) tabDca.className = tab === 'dca' ? 'small-btn primary' : 'small-btn'
-        if (tabManuscript) tabManuscript.className = tab === 'ms' ? 'small-btn primary' : 'small-btn'
-
-        if (paneNomogram) paneNomogram.style.display = tab === 'nomo' ? 'flex' : 'none'
-        if (paneRoc) paneRoc.style.display = tab === 'roc' ? 'flex' : 'none'
-        if (paneDca) paneDca.style.display = tab === 'dca' ? 'flex' : 'none'
-        if (paneManuscript) paneManuscript.style.display = tab === 'ms' ? 'flex' : 'none'
-      }
-
-      if (tabNomogram) tabNomogram.onclick = () => switchTab('nomo')
-      if (tabRoc) tabRoc.onclick = () => switchTab('roc')
-      if (tabDca) tabDca.onclick = () => switchTab('dca')
-      if (tabManuscript) tabManuscript.onclick = () => switchTab('ms')
-
-      // 1. Populate Nomogram
-      const nomoSvgWrap = document.getElementById('rsNomogramSvgWrap')
-      if (nomoSvgWrap) nomoSvgWrap.innerHTML = safeSvg(nomoRes.svg) || '<div class="muted small">未生成列线图</div>'
-
-      // Interactive Risk Calculator
-      const updateCalc = () => {
-        const treatVal = Number((document.getElementById('rsNomoCalcTreatment') as HTMLSelectElement)?.value || '1')
-        const smiVal = Number((document.getElementById('rsNomoCalcSmi') as HTMLInputElement)?.value || '45')
-        const fatVal = Number((document.getElementById('rsNomoCalcFat') as HTMLInputElement)?.value || '0.85')
-        const ageVal = Number((document.getElementById('rsNomoCalcAge') as HTMLInputElement)?.value || '62')
-
-        const smiDisplay = document.getElementById('rsNomoSmiVal')
-        if (smiDisplay) smiDisplay.textContent = smiVal.toFixed(1)
-        const fatDisplay = document.getElementById('rsNomoFatVal')
-        if (fatDisplay) fatDisplay.textContent = fatVal.toFixed(2)
-        const ageDisplay = document.getElementById('rsNomoAgeVal')
-        if (ageDisplay) ageDisplay.textContent = String(ageVal)
-
-        // Points calculation
-        // Treatment: 1 -> 0 pts, 0 -> 38 pts
-        const pTreat = treatVal === 1 ? 0 : 38
-        // SMI: 30 (high risk -> 88 pts) to 65 (low risk -> 0 pts)
-        const pSmi = Math.round(((65 - smiVal) / 35) * 88)
-        // VAT/SAT: 0.4 (low risk -> 0 pts) to 1.8 (high risk -> 56 pts)
-        const pFat = Math.round(((fatVal - 0.4) / 1.4) * 56)
-        // Age: 40 (low risk -> 0 pts) to 85 (high risk -> 96 pts)
-        const pAge = Math.round(((ageVal - 40) / 45) * 96)
-
-        const totalPts = pTreat + pSmi + pFat + pAge
-        const maxPts = nomoRes.max_total_points || 278
-        const totalPointsEl = document.getElementById('rsNomoTotalPoints')
-        if (totalPointsEl) totalPointsEl.textContent = `${totalPts} 分`
-
-        // S(t) = S0 ^ exp(LP)
-        const lp = (totalPts / (maxPts / 3.0)) - 1.2
-        const s1 = Math.max(0.01, Math.min(0.99, Math.pow(0.90, Math.exp(lp))))
-        const s3 = Math.max(0.01, Math.min(0.99, Math.pow(0.75, Math.exp(lp))))
-        const s5 = Math.max(0.01, Math.min(0.99, Math.pow(0.60, Math.exp(lp))))
-
-        const p1El = document.getElementById('rsNomoProb1y')
-        if (p1El) p1El.textContent = `${(s1 * 100).toFixed(1)}%`
-        const p3El = document.getElementById('rsNomoProb3y')
-        if (p3El) p3El.textContent = `${(s3 * 100).toFixed(1)}%`
-        const p5El = document.getElementById('rsNomoProb5y')
-        if (p5El) p5El.textContent = `${(s5 * 100).toFixed(1)}%`
-      }
-
-      document.getElementById('rsNomoCalcTreatment')?.addEventListener('change', updateCalc)
-      document.getElementById('rsNomoCalcSmi')?.addEventListener('input', updateCalc)
-      document.getElementById('rsNomoCalcFat')?.addEventListener('input', updateCalc)
-      document.getElementById('rsNomoCalcAge')?.addEventListener('input', updateCalc)
-      updateCalc()
-
-      // 2. Populate ROC
-      const rocSvgWrap = document.getElementById('rsRocSvgWrap')
-      if (rocSvgWrap) rocSvgWrap.innerHTML = safeSvg(rocDcaRes.roc?.svg) || '<div class="muted small">未生成 ROC 图像</div>'
-
-      const rocTableWrap = document.getElementById('rsRocMetricsTableWrap')
-      if (rocTableWrap && rocDcaRes.roc?.models) {
-        const rows = rocDcaRes.roc.models.map((m: any) => `<tr>
-          <td style="font-weight:600;"><span style="display:inline-block;width:10px;height:10px;background:${m.color};border-radius:2px;margin-right:6px;"></span>${esc(m.model_name)}</td>
-          <td style="font-weight:700;color:#0284c7;">${m.auc.toFixed(3)} (${m.auc_ci[0].toFixed(3)} - ${m.auc_ci[1].toFixed(3)})</td>
-          <td>${m.optimal_cutoff.toFixed(2)}</td>
-          <td>${(m.sensitivity * 100).toFixed(1)}%</td>
-          <td>${(m.specificity * 100).toFixed(1)}%</td>
-          <td>${m.youden_index.toFixed(3)}</td>
-        </tr>`).join('')
-        rocTableWrap.innerHTML = `<table class="users" style="width:100%;font-size:12px;margin-top:8px;">
-          <thead><tr><th>模型名称</th><th>AUC (95% CI)</th><th>最佳截断值</th><th>灵敏度 (Sensitivity)</th><th>特异度 (Specificity)</th><th>Youden 指数</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>`
-      }
-
-      // 3. Populate DCA
-      const dcaSvgWrap = document.getElementById('rsDcaSvgWrap')
-      if (dcaSvgWrap) dcaSvgWrap.innerHTML = safeSvg(rocDcaRes.dca?.svg) || '<div class="muted small">未生成 DCA 图像</div>'
-
-      // 4. Populate Manuscript Text
-      const modelsDesc = (rocDcaRes.roc?.models || []).map((m: any) => `- **${m.model_name}**：AUC = ${m.auc.toFixed(3)} (95% CI: ${m.auc_ci[0].toFixed(3)} - ${m.auc_ci[1].toFixed(3)})；最佳截断值 ${m.optimal_cutoff.toFixed(2)} 下灵敏度为 ${(m.sensitivity * 100).toFixed(1)}%，特异度为 ${(m.specificity * 100).toFixed(1)}% (Youden J = ${m.youden_index.toFixed(3)})。`).join('\n')
-      const cIdxVal = typeof nomoRes.c_index === 'number' ? nomoRes.c_index : 0.81
-      const cIdxCi = Array.isArray(nomoRes.c_index_ci) ? nomoRes.c_index_ci : [0.76, 0.86]
-      const dlInfo = rocDcaRes.delong
-      const dcaWin = Array.isArray(rocDcaRes.benefit_window_pct) ? rocDcaRes.benefit_window_pct : [10, 75]
-      const msText = `# 预测模型构建、受试者工作特征与临床决策曲线分析 (TRIPOD Checklist)
-## 课题数据集：${datasetName}
-
-### 1. 预后列线图 (Prognostic Nomogram)
-${nomoRes.academic_narrative_zh || nomoRes.academic_narrative || '基于多因素回归模型，将各独立危险因素通过对数风险比加权折算为 0~100 评分标尺，构建 1 年、3 年与 5 年总生存率列线图。'}
-- 预测一致性指数 (Harrell's C-index)：${cIdxVal.toFixed(3)} (95% CI: ${cIdxCi[0].toFixed(3)} - ${cIdxCi[1].toFixed(3)})
-
-### 2. 受试者工作特征曲线 (ROC) 与诊断效能增益
-${modelsDesc}
-- DeLong (1988) 非参数配对 ROC 检验：${dlInfo ? `全变量/多模态模型相比基线模型 ΔAUC = ${dlInfo.delta_auc >= 0 ? '+' : ''}${dlInfo.delta_auc.toFixed(3)}, Z = ${dlInfo.z_stat.toFixed(2)}, ${dlInfo.p_formatted}` : '临床 + 3D 影像组学融合模型相比单纯临床基线模型具有显著的预测效能提升 (ΔAUC = +0.14, Z = 3.82, P < 0.001)'}。
-
-### 3. 临床决策曲线分析 (Decision Curve Analysis, DCA)
-依据 Vickers & Elkin (BMJ 2006) 决策曲线理论，在阈值概率 (Threshold Probability) ${dcaWin[0]}% ~ ${dcaWin[1]}% 窗口期内，本模型净获益 (Net Benefit) 均优于“全部干预 (Treat All)”与“均不干预 (Treat None)”，具有优越的临床推广实用价值。`
-
-      const msEl = document.getElementById('rsPmManuscriptText')
-      if (msEl) msEl.textContent = msText
-
-      // Download buttons
-      const dlNomoBtn = document.getElementById('rsDlNomogramSvg')
-      if (dlNomoBtn) {
-        dlNomoBtn.onclick = () => {
-          if (!nomoRes.svg) { notice('暂无 Nomogram 矢量图', true); return }
-          const blob = new Blob([nomoRes.svg], { type: 'image/svg+xml;charset=utf-8' })
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = `Figure5_Nomogram_${datasetId}.svg`
-          document.body.appendChild(a)
-          a.click()
-          document.body.removeChild(a)
-          URL.revokeObjectURL(url)
-          notice('已下载 Figure 5 Nomogram 矢量图')
-        }
-      }
-
-      const dlRocBtn = document.getElementById('rsDlRocSvg')
-      if (dlRocBtn) {
-        dlRocBtn.onclick = () => {
-          const svg = rocDcaRes.roc?.svg
-          if (!svg) { notice('暂无 ROC 矢量图', true); return }
-          const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = `Figure6A_ROC_Performance_${datasetId}.svg`
-          document.body.appendChild(a)
-          a.click()
-          document.body.removeChild(a)
-          URL.revokeObjectURL(url)
-          notice('已下载 Figure 6A ROC 矢量图')
-        }
-      }
-
-      const dlDcaBtn = document.getElementById('rsDlDcaSvg')
-      if (dlDcaBtn) {
-        dlDcaBtn.onclick = () => {
-          const svg = rocDcaRes.dca?.svg
-          if (!svg) { notice('暂无 DCA 矢量图', true); return }
-          const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = `Figure6B_Decision_Curve_Analysis_${datasetId}.svg`
-          document.body.appendChild(a)
-          a.click()
-          document.body.removeChild(a)
-          URL.revokeObjectURL(url)
-          notice('已下载 Figure 6B DCA 矢量图')
-        }
-      }
-
-      const copyMsBtn = document.getElementById('rsCopyPmManuscript')
-      if (copyMsBtn) {
-        copyMsBtn.onclick = () => {
-          navigator.clipboard.writeText(msText).then(() => {
-            notice('已复制预测模型论文 Methods & Results 论述段落')
-          }).catch(() => {
-            notice('复制失败，请手动选取', true)
-          })
-        }
-      }
-
-      switchTab('nomo')
-    } catch (err) {
-      notice((err as Error).message, true)
-    }
   }
 
   /** Auto-eCRF 多模态影像与临床指标批量提取与溯源弹窗 */
@@ -2613,224 +2003,6 @@ ${modelsDesc}
       }
     }
     await render()
-  }
-
-  /** 6 大类医学论文图表工作台与原文件导出弹窗 (Medical Figure Studio & Native File Exporters) */
-  async function figureStudioDialog(studyId: string, studyTitle: string): Promise<void> {
-    const dlg = $('dialog')
-    const SUBTYPES: Record<string, Array<{ value: string; label: string }>> = {
-      mechanism: [
-        { value: 'pathway', label: '细胞信号通路与药物作用机制图 (BioRender / NIH BioArt 矢量图标库)' },
-        { value: 'graphical_abstract', label: '顶刊图形摘要 (Graphical Abstract · 左右三栏结构)' },
-        { value: 'experiment_workflow', label: '体内/体外实验技术路线图 (小鼠/类器官/流式/测序)' },
-      ],
-      statistical_wetlab: [
-        { value: 'bar_dot', label: '带个体散点与 SD 误差棒的柱状图 + P 值星号支架 (Prism 风格)' },
-        { value: 'violin_box', label: '小提琴 + 内嵌箱线图 + 散点分布 (Violin + Boxplot)' },
-        { value: 'dose_response_4pl', label: '4 参数 Logistic (4PL) 药代/剂量反应拟合曲线 + IC50/EC50 (OriginPro 风格)' },
-      ],
-      flowchart: [
-        { value: 'consort', label: 'CONSORT 2010 临床试验受试者筛选与分配流程图' },
-      ],
-      bioinformatics: [
-        { value: 'volcano', label: '差异表达火山图 (Volcano Plot · log2FC vs -log10 FDR)' },
-        { value: 'heatmap', label: '多组学聚类热图 + Z-score 与临床分组注释条 (ComplexHeatmap 风格)' },
-        { value: 'enrichment_bubble', label: 'KEGG / GO 通路富集分析气泡图 (clusterProfiler 风格)' },
-        { value: 'umap', label: '单细胞转录组 UMAP 细胞亚群降维分群图 (Seurat 风格)' },
-      ],
-      image_processing: [
-        { value: 'imagej_wb_ihc', label: 'ImageJ (Fiji) Western Blot 灰度定量 / IHC 阳性率 / 免疫荧光 Scale Bar' },
-        { value: 'flowjo_gating', label: 'FlowJo 流式细胞术双参数伪彩散点图 + 四象限圈门 (Q1-Q4)' },
-        { value: 'slicer_3d_roi', label: '3D Slicer / ITK-SNAP 多模态 CT/MRI 病灶 ROI 分割与三维重建' },
-      ],
-      journal_assembly: [
-        { value: 'double_column', label: 'Nature / Cell / NEJM / Lancet 双栏多面板拼图 (180 mm · A/B/C/D 自动排版)' },
-        { value: 'single_column', label: '顶刊单栏紧凑拼图 (88 mm · 600 DPI 出版级输出)' },
-      ],
-    }
-
-    dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="医学论文图表工作台">
-      <div class="dialog-head">
-        <h2>医学论文图表工作台 &amp; 原工程文件导出 (Figure Studio)</h2>
-        <button class="quiet" data-close aria-label="关闭">✕</button>
-      </div>
-      <div class="dialog-body" style="display:flex;flex-direction:column;gap:14px;">
-        <div class="muted small">
-          覆盖医学顶刊 6 大类核心图表，不仅直接渲染可发表的高清矢量图，还同步生成 <b>GraphPad Prism (.pzfx)</b>、<b>R 语言脚本 (.R)</b>、<b>OriginPro (.csv/.ogs)</b>、<b>Draw.io (.drawio)</b>、<b>Visio (.vdx)</b>、<b>可编辑 PPT (.pptx)</b>、<b>ImageJ 宏 (.ijm)</b>、<b>FlowJo (.wsp)</b>、<b>3D Slicer (.mrml)</b>、<b>ITK-SNAP (.txt)</b> 及 <b>Adobe Illustrator 分层矢量 (.svg)</b> 原工程文件。
-        </div>
-        <form id="rsFigStudioForm" class="form" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(210px, 1fr));gap:12px;background:var(--panel-active, rgba(0,0,0,0.03));padding:14px;border-radius:8px;border:1px solid var(--line);">
-          <label>1. 图表大类 (Category)
-            <select name="category" id="rsFigCat">
-              <option value="mechanism">① 机制图与图形摘要 (BioRender / NIH BioArt)</option>
-              <option value="statistical_wetlab">② 临床与实验统计图 (GraphPad Prism / R / Origin)</option>
-              <option value="flowchart">③ 研究设计与纳排流程图 (Visio / Draw.io / PPT)</option>
-              <option value="bioinformatics">④ 多组学与生信图 (Volcano / Heatmap / KEGG / UMAP)</option>
-              <option value="image_processing">⑤ 影像、流式与病理定量 (ImageJ / FlowJo / 3D Slicer)</option>
-              <option value="journal_assembly">⑥ 顶刊多面板拼图排版 (Adobe Illustrator / 600 DPI)</option>
-            </select>
-          </label>
-          <label>2. 具体图型 (Subtype)
-            <select name="subtype" id="rsFigSubtype"></select>
-          </label>
-          <label>3. 顶刊配色方案 (Palette)
-            <select name="palette" id="rsFigPalette">
-              <option value="npg" selected>Nature Publishing Group (NPG)</option>
-              <option value="nejm">New England Journal of Medicine (NEJM)</option>
-              <option value="lancet">The Lancet</option>
-              <option value="jama">JAMA</option>
-            </select>
-          </label>
-          <div style="grid-column:1 / -1;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-            <input name="title" id="rsFigTitle" placeholder="图表标题（可选）" value="${esc(studyTitle)} · 机制与实验分析图" style="flex:1;min-width:220px;">
-            <button type="submit" class="primary small-btn" id="rsFigRunBtn">${icon('chart', { size: 13 })} 生成图表与全套原工程文件</button>
-          </div>
-        </form>
-
-        <div id="rsFigStudioResult" style="display:none;flex-direction:column;gap:12px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;background:var(--panel);padding:10px 12px;border-radius:8px;border:1px solid var(--line);">
-            <div>
-              <b id="rsFigOutTitle">图表预览与原文件下载</b>
-              <div class="muted small">点击右侧按钮即可下载对应专业软件的原工程文件并在本地二次编辑</div>
-            </div>
-            <div id="rsFigNativeBtns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-          </div>
-          <div id="rsFigSvgPreview" style="background:#ffffff;border:1px solid var(--line);border-radius:8px;padding:18px;overflow:auto;max-height:520px;display:flex;justify-content:center;align-items:flex-start;"></div>
-        </div>
-      </div>
-    </div>`
-    dlg.hidden = false
-    dlg.onclick = e => { if (e.target === dlg || (e.target as HTMLElement).closest('[data-close]')) { dlg.hidden = true; dlg.innerHTML = '' } }
-
-    const catSel = document.getElementById('rsFigCat') as HTMLSelectElement
-    const subSel = document.getElementById('rsFigSubtype') as HTMLSelectElement
-    const updateSubtypes = () => {
-      const opts = SUBTYPES[catSel.value] || []
-      subSel.innerHTML = opts.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')
-    }
-    catSel.onchange = updateSubtypes
-    updateSubtypes()
-
-    const downloadTextBlob = (content: string, filename: string, mime = 'text/plain;charset=utf-8') => {
-      const blob = new Blob([content], { type: mime })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = filename
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-      notice(`已下载原文件：${filename}`)
-    }
-
-    const downloadFormat = async (bodyPayload: Record<string, unknown>, format: string, ext: string) => {
-      try {
-        notice(`正在导出 ${ext} 原文件…`)
-        const token = hooks.token()
-        const r = await fetch(`/api/studies/${studyId}/figures?format=${encodeURIComponent(format)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-          body: JSON.stringify(bodyPayload),
-        })
-        if (!r.ok) throw new Error('导出失败')
-        const blob = await r.blob()
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url; a.download = `Heurion_Figure_${bodyPayload.category}_${bodyPayload.subtype}.${ext}`
-        document.body.appendChild(a); a.click(); document.body.removeChild(a)
-        URL.revokeObjectURL(url)
-        notice(`已成功导出 .${ext} 原文件！`)
-      } catch (err) { notice((err as Error).message, true) }
-    }
-
-    const form = document.getElementById('rsFigStudioForm') as HTMLFormElement
-    const generate = async () => {
-      const category = catSel.value
-      const subtype = subSel.value
-      const palette = (document.getElementById('rsFigPalette') as HTMLSelectElement).value
-      const title = (document.getElementById('rsFigTitle') as HTMLInputElement).value.trim() || `${studyTitle} · 科研图表`
-      const payload: Record<string, unknown> = {
-        category: category === 'statistical_wetlab' ? 'wet_lab' : category,
-        subtype: subtype === 'bar_dot' ? 'bar_scatter' : subtype === 'dose_response_4pl' ? 'dose_response' : subtype,
-        plotType: subtype === 'bar_dot' ? 'bar_scatter' : subtype === 'dose_response_4pl' ? 'dose_response' : subtype,
-        bioType: subtype,
-        tool: subtype === 'flowjo_gating' ? 'flowjo' : subtype === 'slicer_3d_roi' ? 'slicer' : 'imagej',
-        journalPreset: subtype === 'single_column' ? 'nature_single' : 'nature_double',
-        palette,
-        title,
-      }
-      const btn = document.getElementById('rsFigRunBtn') as HTMLButtonElement
-      btn.disabled = true; btn.textContent = '生成中…'
-      try {
-        const res = await api<any>(`/api/studies/${studyId}/figures`, {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        })
-        const resBox = document.getElementById('rsFigStudioResult')
-        const svgBox = document.getElementById('rsFigSvgPreview')
-        const btnsBox = document.getElementById('rsFigNativeBtns')
-        const outSvg = res.illustrator_svg || res.svg || res.native_exports?.illustrator_svg || ''
-        if (resBox) resBox.style.display = 'flex'
-        if (svgBox) svgBox.innerHTML = safeSvg(outSvg) || '<div class="muted small">已生成工程文件</div>'
-
-        if (btnsBox) {
-          btnsBox.innerHTML = ''
-          const ne = res.native_exports || {}
-          const pzfx = res.prism_pzfx || ne.prism_pzfx
-          const rScript = res.r_script || ne.r_script
-          const originCsv = res.origin_csv || ne.origin_csv
-          const originOgs = res.origin_ogs || ne.origin_ogs
-          const drawioXml = res.drawio_xml || ne.drawio_xml
-          const visioVdx = res.visio_vdx || ne.visio_vdx
-          const ijm = res.imagej_macro_ijm || ne.imagej_macro_ijm
-          const wsp = res.flowjo_wsp_xml || ne.flowjo_wsp
-          const mrml = res.slicer_mrml_xml || ne.slicer_mrml
-          const itkTxt = res.itksnap_labels_txt || ne.itksnap_labels_txt
-          const cloudCsv = res.cloud_csv
-          const addBtn = (label: string, onClick: () => void, primary = false) => {
-            const b = document.createElement('button')
-            b.type = 'button'
-            b.className = primary ? 'small-btn primary' : 'small-btn'
-            b.innerHTML = `${icon('download', { size: 13 })} ${esc(label)}`
-            b.onclick = onClick
-            btnsBox.appendChild(b)
-          }
-          if (outSvg) {
-            const archBtn = document.createElement('button')
-            archBtn.type = 'button'
-            archBtn.className = 'small-btn primary'
-            archBtn.innerHTML = `${icon('pin', { size: 13 })} 归档至本研究 figures/`
-            archBtn.onclick = () => void archiveStudyFigure(studyId, `${title}_${subtype}`, outSvg, rScript || ijm || drawioXml)
-            btnsBox.appendChild(archBtn)
-          }
-          if (pzfx) addBtn('GraphPad Prism (.pzfx)', () => downloadTextBlob(pzfx, `Figure_${subtype}.pzfx`, 'application/xml;charset=utf-8'))
-          if (rScript) addBtn('R 脚本 (.R)', () => downloadTextBlob(rScript, `Figure_${subtype}.R`))
-          if (cloudCsv) addBtn('Hiplot/微生信矩阵 (.csv)', () => downloadTextBlob(cloudCsv, `Figure_${subtype}_Matrix.csv`, 'text/csv;charset=utf-8'))
-          if (originCsv) addBtn('OriginPro 数据 (.csv)', () => downloadTextBlob(originCsv, `Figure_${subtype}_Origin.csv`, 'text/csv;charset=utf-8'))
-          if (originOgs) addBtn('OriginLab 脚本 (.ogs)', () => downloadTextBlob(originOgs, `Figure_${subtype}.ogs`))
-          if (drawioXml) addBtn('Draw.io (.drawio)', () => downloadTextBlob(drawioXml, `Figure_${subtype}.drawio`, 'application/xml;charset=utf-8'))
-          if (visioVdx) addBtn('Visio (.vdx)', () => downloadTextBlob(visioVdx, `Figure_${subtype}.vdx`, 'application/xml;charset=utf-8'))
-          if (ne.pptx_editable_available || category === 'mechanism' || category === 'flowchart' || category === 'journal_assembly') {
-            addBtn('可编辑 PPT (.pptx)', () => void downloadFormat(payload, 'pptx', 'pptx'))
-          }
-          if (ijm) addBtn('ImageJ 宏 (.ijm)', () => downloadTextBlob(ijm, `ImageJ_${subtype}.ijm`))
-          if (wsp) addBtn('FlowJo 工作区 (.wsp)', () => downloadTextBlob(wsp, `FlowJo_${subtype}.wsp`, 'application/xml;charset=utf-8'))
-          if (mrml) addBtn('3D Slicer (.mrml)', () => downloadTextBlob(mrml, `Slicer_Scene.mrml`, 'application/xml;charset=utf-8'))
-          if (itkTxt) addBtn('ITK-SNAP 标签 (.txt)', () => downloadTextBlob(itkTxt, `ITKSNAP_Labels.txt`))
-          if (category === 'journal_assembly') {
-            addBtn('600 DPI 高清图 (.png)', () => void downloadFormat(payload, 'png', 'png'))
-            addBtn('完整拼图包 (.zip)', () => void downloadFormat(payload, 'zip', 'zip'))
-          }
-          if (outSvg) addBtn('Illustrator 分层矢量 (.svg)', () => downloadTextBlob(outSvg, `Figure_${category}_${subtype}.svg`, 'image/svg+xml;charset=utf-8'))
-        }
-        notice('已生成出版级矢量图与全套软件原文件')
-      } catch (err) {
-        notice((err as Error).message, true)
-      } finally {
-        btn.disabled = false
-        btn.innerHTML = `${icon('chart', { size: 13 })} 生成图表与全套原工程文件`
-      }
-    }
-
-    form.onsubmit = e => { e.preventDefault(); void generate() }
-    void generate()
   }
 
   // ============================================================================
@@ -2977,7 +2149,7 @@ ${modelsDesc}
       container?: HTMLElement
       globalDatasets?: Array<{ dataset_id: string; name: string }>
       initialDatasetId?: string
-      initialMode?: 'clinical_cohort' | 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
+      initialMode?: 'clinical_cohort' | 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'journal_assembly'
       globalFigures?: Array<{ id: string; name: string; created_at: string }>
     }
   ): void {
@@ -2990,10 +2162,10 @@ ${modelsDesc}
       : (opts?.globalDatasets ?? [])
     const selectedArchiveStudyId = s?.id ?? ''
     let activeDatasetId = opts?.initialDatasetId ?? readyDs[0]?.dataset_id ?? ''
-    const activeCount = cohort ? cohort.subjects.filter(x => x.status === 'active').length : 60
-    const withdrawnCount = cohort ? cohort.subjects.filter(x => x.status === 'withdrawn').length : 4
+    // 未启用入组（cohort 为 null）时人数未知，显示「—」，不兜底
+    const activeCount: number | null = cohort ? cohort.subjects.filter(x => x.status === 'active').length : null
 
-    type StudioMode = 'clinical_cohort' | 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
+    type StudioMode = 'clinical_cohort' | 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'journal_assembly'
     let currentMode: StudioMode = opts?.initialMode ?? (opts?.initialDatasetId || readyDs.length > 0 ? 'clinical_cohort' : 'wet_lab')
 
     // 临床队列与统一数据源状态 (Unified Dataset & Clinical Cohort State)
@@ -3018,7 +2190,8 @@ ${modelsDesc}
     let clinSurvTime = 'followup_months'
     let clinSurvStart = '第一次治疗的时间'
     let clinSurvEnd = '出血时间'
-    let clinSurvCensor = '2025-12-31'
+    // 随访截止日由用户填写（未发生事件者删失于此日）；不预填日期
+    let clinSurvCensor = ''
     let clinSurvEvent = '治疗后出血'
     let clinSurvGroup = '第一次治疗方式'
     let clinSurvUnit: 'Months' | 'Years' | 'Days' = 'Months'
@@ -3027,26 +2200,17 @@ ${modelsDesc}
     let wetDsGrpCol = ''
     let wetDsValCol = ''
     let bioGroupCol = ''
-    let flGroupCol = ''
-    let flOutcomeCol = ''
     let asmPickedIds: string[] | null = null
 
     let wetPlotType: 'bar_scatter' | 'violin_box' | 'dose_response' = 'bar_scatter'
     let wetErrorType: 'SD' | 'SEM' = 'SD'
     let wetYLabel = 'Relative Expression / Biomarker Level'
+    // 实验数值只来自用户录入或数据集：初始只给空的分组与浓度梯度，不预填示例数值
     let wetGroups = [
-      { name: 'Control', values: '1.02, 0.96, 1.05, 0.98, 1.01, 0.95', color: '#3C5488' },
-      { name: 'Low-Dose (10 mg)', values: '1.52, 1.65, 1.48, 1.71, 1.59, 1.63', color: '#00A087' },
-      { name: 'High-Dose (50 mg)', values: '2.45, 2.68, 2.39, 2.75, 2.58, 2.62', color: '#E64B35' },
+      { name: 'Control', values: '', color: '#3C5488' },
+      { name: 'Treatment', values: '', color: '#E64B35' },
     ]
-    let doseRows = [
-      { logConc: -9, values: '4.2, 5.1, 3.8' },
-      { logConc: -8, values: '12.5, 14.2, 11.8' },
-      { logConc: -7, values: '34.0, 36.8, 32.5' },
-      { logConc: -6, values: '62.4, 65.1, 59.8' },
-      { logConc: -5, values: '85.2, 87.6, 83.9' },
-      { logConc: -4, values: '94.8, 96.1, 93.5' },
-    ]
+    let doseRows = [-9, -8, -7, -6, -5, -4].map(logConc => ({ logConc, values: '' }))
 
     let bioType: 'volcano' | 'heatmap' | 'enrichment_bubble' | 'umap' = 'volcano'
     let volcanoFc = 1.0
@@ -3059,7 +2223,7 @@ ${modelsDesc}
       edges: Array<{ from: string; to: string; type: string; label: string }>
     }> = {
       gpcr: {
-        title: `${contextTitle} · GPCR-cAMP-PKA-CREB 信号转导机制`,
+        title: 'GPCR-cAMP-PKA-CREB 信号转导机制（示意）',
         subtitle: '细胞外配体激活跨膜受体并促进核内靶基因转录及线粒体代谢重编程',
         nodes: [
           { id: 'lig', label: 'Agonist Ligand', type: 'ligand', compartment: 'extracellular', x: 240, y: 80, color: '#E64B35' },
@@ -3078,7 +2242,7 @@ ${modelsDesc}
         ],
       },
       pd1: {
-        title: `${contextTitle} · PD-1/PD-L1 免疫检查点阻断与 T 细胞杀伤机制`,
+        title: 'PD-1/PD-L1 免疫检查点阻断与 T 细胞杀伤机制（示意）',
         subtitle: '抗 PD-1 单抗解除 SHP2 去磷酸化抑制并恢复 PI3K-Akt-mTOR 效应通路',
         nodes: [
           { id: 'pdl1', label: 'Tumor PD-L1', type: 'ligand', compartment: 'extracellular', x: 220, y: 80, color: '#E64B35' },
@@ -3122,27 +2286,16 @@ ${modelsDesc}
     let flowYGate = 2.5
     let slicerModality: 'CT' | 'MRI' | 'PET-CT' = 'CT'
 
-    const half = Math.max(1, Math.floor((activeCount || 60) / 2))
-    let consortState = {
-      title: `${contextTitle} · CONSORT 2010 Participant Flow`,
-      total_assessed: (activeCount || 60) + withdrawnCount + 28,
-      exclusions: [
-        { reason: '不符合纳入标准 (Did not meet inclusion criteria)', count: 20 },
-        { reason: '拒绝签署知情同意 (Declined to participate)', count: 8 },
-      ],
-      eligible_total: (activeCount || 60) + withdrawnCount,
-      arms: [
-        { name: '干预组 (Intervention Arm)', allocated: half + Math.floor(withdrawnCount / 2), received: half + Math.floor(withdrawnCount / 2), lost_to_followup: Math.floor(withdrawnCount / 2), discontinued: 0, analyzed: half },
-        { name: '标准对照组 (Control Arm)', allocated: (activeCount || 60) - half + Math.ceil(withdrawnCount / 2), received: (activeCount || 60) - half + Math.ceil(withdrawnCount / 2), lost_to_followup: Math.ceil(withdrawnCount / 2), discontinued: 0, analyzed: (activeCount || 60) - half },
-      ],
-    }
-
     let asmTitle = `${contextTitle} · Multi-Panel Composite Figure`
     let asmPreset: 'nature_double' | 'nature_single' | 'nejm' | 'lancet' = 'nature_double'
     let asmCols = 2
 
     let lastSvg = ''
     let lastCode = ''
+    /** 最近一次渲染实际使用的数据集（用于归档溯源）；未用数据集时为空 */
+    let lastDatasetId = ''
+    /** 最近一次渲染是否落到示例数据（只能预览，不能导出 / 归档 / 插入） */
+    let lastIsDemo = false
     let lastCodePath = 'figure_studio.R'
     let lastTitle = `${contextTitle}_Figure`
 
@@ -3151,7 +2304,7 @@ ${modelsDesc}
         <div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="small">
             ${icon('microscope', { size: 13 })} <b>当前课题：${esc(s.title)}</b>
-            <span class="muted">（在组 ${activeCount} 人 · 数据集 ${readyDs.length} 个 · 归档至本研究 <code>figures/</code>）</span>
+            <span class="muted">（在组 ${activeCount ?? '—'} 人 · 数据集 ${readyDs.length} 个 · 归档至本研究 <code>figures/</code>）</span>
           </span>
         </div>
       </div>
@@ -3234,21 +2387,29 @@ ${modelsDesc}
     const codePre = document.getElementById('rsStudioCodePre')!
     const canvasTitleEl = document.getElementById('rsStudioCanvasTitle')!
 
+    const demoBlocked = () => {
+      if (lastIsDemo) notice('当前是示例数据预览，不能导出、归档或插入文稿。请选择数据集或录入真实数据。', true)
+      return lastIsDemo
+    }
     document.getElementById('rsStudioCopyPngBtn')!.onclick = () => {
+      if (demoBlocked()) return
       const targetSid = s?.id || selectedArchiveStudyId || undefined
       void copySvgAsPngToClipboard(targetSid, lastSvg, lastTitle)
     }
     document.getElementById('rsStudioDownloadPngBtn')!.onclick = () => {
+      if (demoBlocked()) return
       const targetSid = s?.id || selectedArchiveStudyId || undefined
       void downloadSvgAsPng600Dpi(targetSid, lastSvg, `${lastTitle}_600DPI.png`)
     }
     document.getElementById('rsStudioArchiveBtn')!.onclick = () => {
+      if (demoBlocked()) return
       const targetSid = s?.id || selectedArchiveStudyId || undefined
-      void archiveStudyFigure(targetSid, lastTitle, lastSvg, lastCode, lastCodePath, activeDatasetId || undefined)
+      void archiveStudyFigure(targetSid, lastTitle, lastSvg, lastCode, lastCodePath, lastDatasetId || undefined)
     }
     document.getElementById('rsStudioInsertDocBtn')!.onclick = async () => {
+      if (demoBlocked()) return
       const targetSid = s?.id || selectedArchiveStudyId || undefined
-      const archived = await archiveStudyFigure(targetSid, lastTitle, lastSvg, lastCode, lastCodePath, activeDatasetId || undefined)
+      const archived = await archiveStudyFigure(targetSid, lastTitle, lastSvg, lastCode, lastCodePath, lastDatasetId || undefined)
       if (archived && hooks.insertFigureToDoc) {
         await hooks.insertFigureToDoc(archived.asset_id, lastTitle.replace(/_/g, ' '))
       }
@@ -3360,55 +2521,11 @@ ${modelsDesc}
       wetYLabel = clinLabels[wetDsValCol] || wetDsValCol
     }
 
-    /** 从当前统一数据集自动汇总「CONSORT 2010 流程图 (flowchart)」各阶段样本量与分组人数 */
-    const applyDatasetToFlowchart = () => {
-      if (!activeDatasetId || !clinPreviewHeader.length || !clinPreviewRows.length) return
-      const dsName = readyDs.find(d => d.dataset_id === activeDatasetId)?.name || contextTitle
-      const gIdx = clinPreviewHeader.indexOf(flGroupCol)
-      const oIdx = clinPreviewHeader.indexOf(flOutcomeCol)
-      const totalAssessed = clinPreviewRows.length
-      if (gIdx < 0) return
-      let missingGroupCount = 0
-      const armStats = new Map<string, { allocated: number; lost: number; analyzed: number }>()
-      for (const r of clinPreviewRows) {
-        const gVal = (r[gIdx] || '').trim()
-        if (isSentinel(gVal)) {
-          missingGroupCount++
-          continue
-        }
-        const st = armStats.get(gVal) || { allocated: 0, lost: 0, analyzed: 0 }
-        st.allocated++
-        const oVal = oIdx >= 0 ? (r[oIdx] || '').trim() : 'ok'
-        if (oIdx >= 0 && isSentinel(oVal)) {
-          st.lost++
-        } else {
-          st.analyzed++
-        }
-        armStats.set(gVal, st)
-      }
-      const eligibleTotal = totalAssessed - missingGroupCount
-      consortState = {
-        title: `${dsName} · CONSORT 2010 队列纳排与分组随访流向图`,
-        total_assessed: totalAssessed,
-        exclusions: missingGroupCount > 0
-          ? [{ reason: `${flGroupCol} 缺失或未满足分组纳排标准 (Excluded / Missing allocation)`, count: missingGroupCount }]
-          : [{ reason: '无排除受试者 (No exclusions in dataset)', count: 0 }],
-        eligible_total: eligibleTotal,
-        arms: [...armStats.entries()].slice(0, 4).map(([name, st]) => ({
-          name: `${flGroupCol}: ${name}`,
-          allocated: st.allocated,
-          received: st.allocated,
-          lost_to_followup: st.lost,
-          discontinued: 0,
-          analyzed: st.analyzed,
-        })),
-      }
-    }
-
     /** 从当前统一数据集自动计算「生信/多变量组学 (bioinformatics)」差异火山图与聚类热图矩阵 */
+    /** 返回字段名与后端 BioinformaticsFigureSpec 一致（volcano_genes / heatmap_matrix），否则后端会忽略 */
     const computeDatasetBioData = (): {
-      volcanoData?: Array<{ gene: string; log2FC: number; pValue: number }>
-      heatmapData?: { genes: string[]; samples: Array<{ name: string; group: string }>; matrix: number[][] }
+      volcano_genes?: Array<{ gene: string; log2FC: number; pValue: number }>
+      heatmap_matrix?: { row_names: string[]; col_names: string[]; col_groups: string[]; values: number[][] }
     } => {
       if (!activeDatasetId || !clinPreviewHeader.length || !clinPreviewRows.length) return {}
       // 1. 若数据表本身即为差异表达矩阵 (含 gene/symbol, log2FC, pvalue/padj 列)
@@ -3425,7 +2542,7 @@ ${modelsDesc}
             vData.push({ gene, log2FC: fc, pValue: pv })
           }
         }
-        if (vData.length >= 3) return { volcanoData: vData }
+        if (vData.length >= 3) return { volcano_genes: vData }
       }
 
       // 2. 临床/多模态宽表：按 bioGroupCol 前两组自动计算所有数值/二分类指标的差异倍数 (log2FC)、t检验 P 值与 Z-score 热图
@@ -3449,12 +2566,47 @@ ${modelsDesc}
         return Number.isFinite(n) ? n : null
       }
 
-      const normCdf = (x: number): number => {
-        const t = 1 / (1 + 0.2316419 * Math.abs(x))
-        const d = 0.3989423 * Math.exp((-x * x) / 2)
-        const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))))
-        return x > 0 ? 1 - p : p
+      // Welch t 检验的双侧 P 值：t 分布 CDF 经正则化不完全 Beta 函数计算（Numerical Recipes 连分式）
+      const logGamma = (z: number): number => {
+        const c = [76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5]
+        let x = z, y = z
+        let tmp = x + 5.5
+        tmp -= (x + 0.5) * Math.log(tmp)
+        let ser = 1.000000000190015
+        for (const ci of c) ser += ci / ++y
+        return -tmp + Math.log((2.5066282746310005 * ser) / x)
       }
+      const betacf = (a: number, b: number, x: number): number => {
+        const MAXIT = 200, EPS = 3e-14, FPMIN = 1e-300
+        const qab = a + b, qap = a + 1, qam = a - 1
+        let c = 1, d = 1 - (qab * x) / qap
+        if (Math.abs(d) < FPMIN) d = FPMIN
+        d = 1 / d
+        let h = d
+        for (let m = 1; m <= MAXIT; m++) {
+          const m2 = 2 * m
+          let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2))
+          d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN
+          c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN
+          d = 1 / d; h *= d * c
+          aa = (-(a + m) * (qab + m) * x) / ((a + m2) * (qap + m2))
+          d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN
+          c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN
+          d = 1 / d
+          const del = d * c
+          h *= del
+          if (Math.abs(del - 1) < EPS) break
+        }
+        return h
+      }
+      const incBeta = (a: number, b: number, x: number): number => {
+        if (x <= 0) return 0
+        if (x >= 1) return 1
+        const bt = Math.exp(logGamma(a + b) - logGamma(a) - logGamma(b) + a * Math.log(x) + b * Math.log(1 - x))
+        return x < (a + 1) / (a + b + 2) ? (bt * betacf(a, b, x)) / a : 1 - (bt * betacf(b, a, 1 - x)) / b
+      }
+      /** 双侧 P = I_{df/(df+t²)}(df/2, 1/2) */
+      const tTwoSidedP = (t: number, df: number): number => incBeta(df / 2, 0.5, df / (df + t * t))
 
       const volcanoData: Array<{ gene: string; log2FC: number; pValue: number }> = []
       const numericCols: Array<{ idx: number; name: string; mean: number; sd: number }> = []
@@ -3477,24 +2629,29 @@ ${modelsDesc}
         const m2 = vals2.reduce((a, b) => a + b, 0) / vals2.length
         const v1 = vals1.reduce((a, b) => a + (b - m1) ** 2, 0) / Math.max(1, vals1.length - 1)
         const v2 = vals2.reduce((a, b) => a + (b - m2) ** 2, 0) / Math.max(1, vals2.length - 1)
-        const se = Math.sqrt(v1 / vals1.length + v2 / vals2.length)
+        const q1 = v1 / vals1.length
+        const q2 = v2 / vals2.length
+        const se = Math.sqrt(q1 + q2)
         if (se <= 1e-9) return
         const tStat = (m2 - m1) / se
-        const pVal = Math.max(1e-6, Math.min(0.999, 2 * (1 - normCdf(Math.abs(tStat)))))
+        // Welch–Satterthwaite 自由度
+        const df = (q1 + q2) ** 2 / ((q1 * q1) / (vals1.length - 1) + (q2 * q2) / (vals2.length - 1))
+        // 下限仅为避免 -log10(0) 无穷大，不截断上限
+        const pVal = Math.max(1e-300, tTwoSidedP(tStat, df))
         const minAll = Math.min(...allVals)
         const shift = minAll <= 0 ? Math.abs(minAll) + 0.5 : 0.05
         const log2FC = Number(Math.log2((m2 + shift) / (m1 + shift)).toFixed(3))
         volcanoData.push({
           gene: clinLabels[colName] || colName,
-          log2FC: Math.max(-4.5, Math.min(4.5, log2FC)),
-          pValue: Number(pVal.toFixed(5)),
+          log2FC,
+          pValue: Number(pVal.toPrecision(4)),
         })
         const allMean = allVals.reduce((a, b) => a + b, 0) / allVals.length
         const allSd = Math.sqrt(allVals.reduce((a, b) => a + (b - allMean) ** 2, 0) / Math.max(1, allVals.length - 1)) || 1
         numericCols.push({ idx: cIdx, name: clinLabels[colName] || colName, mean: allMean, sd: allSd })
       })
 
-      let heatmapData: { genes: string[]; samples: Array<{ name: string; group: string }>; matrix: number[][] } | undefined
+      let heatmapData: { row_names: string[]; col_names: string[]; col_groups: string[]; values: number[][] } | undefined
       if (numericCols.length >= 3) {
         const pickedCols = numericCols.slice(0, 10)
         const g1Rows = clinPreviewRows.filter(r => (r[gIdx] || '').trim() === g1).slice(0, 4)
@@ -3502,9 +2659,11 @@ ${modelsDesc}
         const sampleRows = [...g1Rows.map((r, i) => ({ row: r, name: `${g1}_#${i + 1}`, group: g1 })), ...g2Rows.map((r, i) => ({ row: r, name: `${g2}_#${i + 1}`, group: g2 }))]
         if (sampleRows.length >= 4) {
           heatmapData = {
-            genes: pickedCols.map(c => c.name),
-            samples: sampleRows.map(s => ({ name: s.name, group: s.group })),
-            matrix: pickedCols.map(c =>
+            row_names: pickedCols.map(c => c.name),
+            col_names: sampleRows.map(s => s.name),
+            col_groups: sampleRows.map(s => s.group),
+            // 行 = 指标，列 = 样本；值为 Z-score（显示截断 ±2.5，缺失记为 0 = 均值）
+            values: pickedCols.map(c =>
               sampleRows.map(sr => {
                 const v = parseCellNum(sr.row[c.idx])
                 if (v === null) return 0
@@ -3516,8 +2675,8 @@ ${modelsDesc}
       }
 
       return {
-        volcanoData: volcanoData.length >= 3 ? volcanoData : undefined,
-        heatmapData,
+        volcano_genes: volcanoData.length >= 3 ? volcanoData : undefined,
+        heatmap_matrix: heatmapData,
       }
     }
 
@@ -3553,15 +2712,12 @@ ${modelsDesc}
       clinSurvEvent = clinLogOutcome
       clinSurvGroup = clinGrottaGroup
 
-      // 同步自动匹配实验统计 (wet_lab)、生信组学 (bioinformatics) 与 CONSORT 流程图 (flowchart) 的列
+      // 同步自动匹配实验统计 (wet_lab)、生信组学 (bioinformatics) 的列
       wetDsGrpCol = pick(/arm|treat|group|sex|第一次治疗|治疗方式|分组|性别|闭塞/i, cols[0]!)
       wetDsValCol = cols.find(c => c !== wetDsGrpCol && /smi|age|vat|value|score|bmi|egfr|中心剂量|周围剂量|剂量|年龄|mRS|体积|直径/i.test(c)) || cols[1] || cols[0]!
       bioGroupCol = pick(/治疗后出血|第一次治疗|首治|闭塞|分组|arm|treat|group|outcome/i, cols[0]!)
-      flGroupCol = pick(/第一次治疗|首治|治疗方式|分组|arm|treat|group/i, cols[0]!)
-      flOutcomeCol = cols.find(c => c !== flGroupCol && /治疗后出血|闭塞程度|确诊时mRS|结局|随访|outcome|status/i.test(c)) || cols[1] || cols[0]!
 
       applyDatasetToWetLab()
-      applyDatasetToFlowchart()
     }
 
     const ensureUnifiedDatasetLoaded = async (did: string) => {
@@ -3586,7 +2742,15 @@ ${modelsDesc}
         clinLabels = ds.labels ?? {}
         clinLoadedDsId = did
         autoMatchAllModeCols(clinCols)
-      } catch {}
+        // 前端汇总（实验统计 / 组学）只读取前 5000 行，超出时必须告知
+        if (clinPreviewRows.length >= 5000) notice('该数据集超过 5000 行：实验统计与组学图在前端只汇总了前 5000 行，临床队列图由后端用全量数据计算。', true)
+      } catch (err) {
+        // 记下已尝试，避免反复重载；把失败原因告诉用户
+        clinLoadedDsId = did
+        clinPreviewHeader = []
+        clinPreviewRows = []
+        notice(`读取数据集失败：${(err as Error).message}`, true)
+      }
     }
 
     /** 统一顶部数据源选择与上传栏（在临床队列、实验统计、生信组学、流程图 4 大模式间共享同一 activeDatasetId） */
@@ -3788,7 +2952,7 @@ ${modelsDesc}
                 </div>
                 <div class="row" style="gap:6px;">
                   <label style="flex:1;">无事件删失截止日
-                    <input type="text" id="stClinSvCensor" value="${esc(clinSurvCensor)}" placeholder="2025-12-31">
+                    <input type="text" id="stClinSvCensor" value="${esc(clinSurvCensor)}" placeholder="必填，YYYY-MM-DD">
                   </label>
                   <label style="flex:1;">折算单位
                     <select id="stClinSvUnit">
@@ -3843,7 +3007,7 @@ ${modelsDesc}
             clinSurvTime = (document.getElementById('stClinSvTime') as HTMLSelectElement)?.value || clinSurvTime
             clinSurvStart = (document.getElementById('stClinSvStart') as HTMLSelectElement)?.value || clinSurvStart
             clinSurvEnd = (document.getElementById('stClinSvEnd') as HTMLSelectElement)?.value || clinSurvEnd
-            clinSurvCensor = (document.getElementById('stClinSvCensor') as HTMLInputElement)?.value.trim() || clinSurvCensor
+            clinSurvCensor = (document.getElementById('stClinSvCensor') as HTMLInputElement)?.value.trim() ?? clinSurvCensor
             clinSurvUnit = ((document.getElementById('stClinSvUnit') as HTMLSelectElement)?.value as 'Months' | 'Years' | 'Days') || clinSurvUnit
             clinSurvEvent = (document.getElementById('stClinSvEvent') as HTMLSelectElement)?.value || clinSurvEvent
             clinSurvGroup = (document.getElementById('stClinSvGroup') as HTMLSelectElement)?.value ?? ''
@@ -3875,7 +3039,7 @@ ${modelsDesc}
       if (currentMode === 'wet_lab') {
         const wetCols = clinPreviewHeader.length ? clinPreviewHeader : clinCols
         leftEl.innerHTML = `
-          ${renderUnifiedDatasetBarHtml('手动输入 / 内置三组实验实测值 (即开即画)')}
+          ${renderUnifiedDatasetBarHtml('手动输入（在下方表格录入各组数值）')}
           <label>图表子类型 (Plot Subtype)
             <select id="stWetSubtype">
               <option value="bar_scatter" ${wetPlotType === 'bar_scatter' ? 'selected' : ''}>柱状图 + 个体散点抖动 + P 值星号支架 (Prism 风格)</option>
@@ -3916,7 +3080,7 @@ ${modelsDesc}
           ${wetPlotType !== 'dose_response' ? `
             <div class="rs-sub-box">
               <div class="rs-sub-box-title">
-                <span>各组样本实测值（可直接编辑，逗号分隔）</span>
+                <span>各组样本数值（逗号分隔）</span>
                 <button type="button" class="quiet small-btn" id="stWetAddGroup">＋ 新增组</button>
               </div>
               <table class="rs-data-table">
@@ -3925,7 +3089,7 @@ ${modelsDesc}
                   ${wetGroups.map((g, idx) => `
                     <tr data-gidx="${idx}">
                       <td><input type="text" class="st-wg-name" value="${esc(g.name)}"></td>
-                      <td><input type="text" class="st-wg-vals" value="${esc(g.values)}"></td>
+                      <td><input type="text" class="st-wg-vals" value="${esc(g.values)}" placeholder="如：1.02, 0.96, 1.05"></td>
                       <td><input type="color" class="st-wg-color" value="${esc(g.color)}" style="width:32px;height:24px;padding:0;border:0;"></td>
                       <td><button type="button" class="quiet small-btn" data-del-wg="${idx}">✕</button></td>
                     </tr>
@@ -3942,7 +3106,7 @@ ${modelsDesc}
                   ${doseRows.map((r, idx) => `
                     <tr data-didx="${idx}">
                       <td><input type="number" step="0.5" class="st-dr-conc" value="${r.logConc}"></td>
-                      <td><input type="text" class="st-dr-vals" value="${esc(r.values)}"></td>
+                      <td><input type="text" class="st-dr-vals" value="${esc(r.values)}" placeholder="重复孔响应值，逗号分隔"></td>
                     </tr>
                   `).join('')}
                 </tbody>
@@ -3989,9 +3153,9 @@ ${modelsDesc}
         document.getElementById('stWetAddGroup')?.addEventListener('click', () => {
           syncWetInputs()
           const palette = ['#3C5488', '#00A087', '#E64B35', '#4DBBD5', '#F39B7F', '#8491B4']
-          wetGroups.push({ name: `Group ${wetGroups.length + 1}`, values: '1.20, 1.35, 1.28, 1.42, 1.31', color: palette[wetGroups.length % palette.length]! })
+          // 新增组不预填数值，由用户录入后再渲染
+          wetGroups.push({ name: `Group ${wetGroups.length + 1}`, values: '', color: palette[wetGroups.length % palette.length]! })
           renderLeftEditor()
-          void runStudioRender()
         })
         leftEl.querySelectorAll<HTMLButtonElement>('[data-del-wg]').forEach(btn => {
           btn.onclick = () => {
@@ -4373,106 +3537,6 @@ ${modelsDesc}
         return
       }
 
-      // currentMode === 'flowchart'
-      const flCols = clinPreviewHeader.length ? clinPreviewHeader : clinCols
-      leftEl.innerHTML = `
-        ${renderUnifiedDatasetBarHtml('手动填写 CONSORT 纳排人数 (即开即画)')}
-        <div class="rs-sub-box-title"><span>${icon('ruler', { size: 13 })} CONSORT 2010 临床试验受试者纳排流向编辑</span></div>
-        ${activeDatasetId && flCols.length ? `
-          <div class="rs-sub-box">
-            <div class="rs-sub-box-title"><span>${icon('link', { size: 13 })} 统一数据表自动汇总纳排与各组随访人数</span></div>
-            <div class="row" style="gap:8px;">
-              <label style="flex:1;">研究分组列 (Study Arm)
-                <select id="stFlGrpCol">
-                  ${flCols.map(h => `<option value="${esc(h)}" ${h === flGroupCol ? 'selected' : ''}>${esc(clinLabels[h] || h)}</option>`).join('')}
-                </select>
-              </label>
-              <label style="flex:1;">随访结局列 (Outcome · 识别「缺失」为失访)
-                <select id="stFlOutCol">
-                  ${flCols.map(h => `<option value="${esc(h)}" ${h === flOutcomeCol ? 'selected' : ''}>${esc(clinLabels[h] || h)}</option>`).join('')}
-                </select>
-              </label>
-            </div>
-          </div>
-        ` : ''}
-        <div class="row" style="gap:8px;">
-          <label style="flex:1;">评估总人数 (Assessed)
-            <input type="number" id="stFlAssessed" value="${consortState.total_assessed}">
-          </label>
-          <label style="flex:1;">符合纳排人数 (Randomized)
-            <input type="number" id="stFlEligible" value="${consortState.eligible_total}">
-          </label>
-        </div>
-        <div class="rs-sub-box">
-          <div class="rs-sub-box-title"><span>排除原因明细 (Exclusions)</span></div>
-          <table class="rs-data-table">
-            <thead><tr><th>排除原因</th><th style="width:72px;">人数</th></tr></thead>
-            <tbody id="stFlExclTbody">
-              ${consortState.exclusions.map(ex => `
-                <tr>
-                  <td><input type="text" class="st-fl-exreason" value="${esc(ex.reason)}"></td>
-                  <td><input type="number" class="st-fl-excnt" value="${ex.count}"></td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-        <div class="rs-sub-box">
-          <div class="rs-sub-box-title"><span>随机分组与随访分析人数 (Study Arms)</span></div>
-          <table class="rs-data-table">
-            <thead><tr><th>组名</th><th>分配</th><th>接受</th><th>失访</th><th>纳入分析</th></tr></thead>
-            <tbody id="stFlArmTbody">
-              ${consortState.arms.map(a => `
-                <tr>
-                  <td><input type="text" class="st-fl-aname" value="${esc(a.name)}"></td>
-                  <td><input type="number" class="st-fl-alloc" value="${a.allocated}"></td>
-                  <td><input type="number" class="st-fl-recv" value="${a.received}"></td>
-                  <td><input type="number" class="st-fl-lost" value="${a.lost_to_followup}"></td>
-                  <td><input type="number" class="st-fl-ana" value="${a.analyzed}"></td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-        <button type="button" class="primary small-btn" id="stFlRenderBtn">${icon('chart', { size: 13 })} 渲染 CONSORT 流程图并更新 Visio/Draw.io/PPTX</button>
-      `
-      bindUnifiedDatasetBarEvents()
-      if (activeDatasetId && clinLoadedDsId !== activeDatasetId) {
-        void ensureUnifiedDatasetLoaded(activeDatasetId).then(() => {
-          renderLeftEditor()
-          void runStudioRender()
-        })
-      }
-      const flGrpSel = document.getElementById('stFlGrpCol') as HTMLSelectElement | null
-      const flOutSel = document.getElementById('stFlOutCol') as HTMLSelectElement | null
-      if (flGrpSel && flOutSel) {
-        const onFlColChange = () => {
-          flGroupCol = flGrpSel.value
-          flOutcomeCol = flOutSel.value
-          applyDatasetToFlowchart()
-          renderLeftEditor()
-          void runStudioRender()
-        }
-        flGrpSel.onchange = onFlColChange
-        flOutSel.onchange = onFlColChange
-      }
-      document.getElementById('stFlRenderBtn')!.onclick = () => {
-        consortState.total_assessed = Number((document.getElementById('stFlAssessed') as HTMLInputElement)?.value || 200)
-        consortState.eligible_total = Number((document.getElementById('stFlEligible') as HTMLInputElement)?.value || 160)
-        consortState.exclusions = Array.from(leftEl.querySelectorAll<HTMLTableRowElement>('#stFlExclTbody tr')).map(tr => ({
-          reason: tr.querySelector<HTMLInputElement>('.st-fl-exreason')?.value.trim() || 'Excluded',
-          count: Number(tr.querySelector<HTMLInputElement>('.st-fl-excnt')?.value || 0),
-        }))
-        consortState.arms = Array.from(leftEl.querySelectorAll<HTMLTableRowElement>('#stFlArmTbody tr')).map(tr => ({
-          name: tr.querySelector<HTMLInputElement>('.st-fl-aname')?.value.trim() || 'Arm',
-          allocated: Number(tr.querySelector<HTMLInputElement>('.st-fl-alloc')?.value || 0),
-          received: Number(tr.querySelector<HTMLInputElement>('.st-fl-recv')?.value || 0),
-          lost_to_followup: Number(tr.querySelector<HTMLInputElement>('.st-fl-lost')?.value || 0),
-          discontinued: 0,
-          analyzed: Number(tr.querySelector<HTMLInputElement>('.st-fl-ana')?.value || 0),
-        }))
-        void runStudioRender()
-      }
     }
 
     const runStudioRender = async () => {
@@ -4550,12 +3614,23 @@ ${modelsDesc}
         const parsedGroups = wetGroups.map(g => ({
           name: g.name,
           color: g.color,
-          values: g.values.split(/[,，\s]+/).map(v => Number(v.trim())).filter(v => Number.isFinite(v)),
+          // 先去掉空片段，否则 Number('') === 0 会把空白当成一个 0 值样本
+          values: g.values.split(/[,，\s]+/).filter(v => v.trim()).map(v => Number(v.trim())).filter(v => Number.isFinite(v)),
         })).filter(g => g.values.length > 0)
         const parsedDose = doseRows.map(d => ({
           logConc: d.logConc,
-          responses: d.values.split(/[,，\s]+/).map(v => Number(v.trim())).filter(v => Number.isFinite(v)),
+          responses: d.values.split(/[,，\s]+/).filter(v => v.trim()).map(v => Number(v.trim())).filter(v => Number.isFinite(v)),
         })).filter(d => d.responses.length > 0)
+        const wetEmpty = wetPlotType === 'dose_response' ? parsedDose.length < 4 : parsedGroups.length < 1
+        if (wetEmpty) {
+          lastSvg = ''
+          lastIsDemo = false
+          canvasEl.innerHTML = `<div class="muted small" style="padding:40px;text-align:center;">${wetPlotType === 'dose_response'
+            ? '请在左侧至少为 4 个浓度录入重复孔响应值，或选择数据集。'
+            : '请在左侧录入各组数值（逗号分隔），或选择数据集。'}</div>`
+          exportBar.innerHTML = ''
+          return
+        }
         payload = {
           category: 'wet_lab',
           plotType: wetPlotType,
@@ -4623,14 +3698,18 @@ ${modelsDesc}
         for (let i = 0; i < checked.length; i++) {
           const cb = checked[i]!
           const r = await fetch(`/api/assets/${cb.value}?token=${encodeURIComponent(token)}`)
-          const text = await r.text()
-          if (text.includes('<svg')) {
-            panels.push({
-              label: String.fromCharCode(65 + i),
-              title: cb.dataset.figname || `Panel ${String.fromCharCode(65 + i)}`,
-              svg: text,
-            })
+          const text = r.ok ? await r.text() : ''
+          // 任一面板取回失败就停止：静默跳过会让面板字母与成果库里的 Panel 编号错位
+          if (!text.includes('<svg')) {
+            canvasEl.innerHTML = `<div class="muted small" style="padding:30px;">面板「${esc(cb.dataset.figname || cb.value)}」读取失败或不是 SVG 矢量图，已停止拼图。请取消勾选该面板后重试。</div>`
+            exportBar.innerHTML = ''
+            return
           }
+          panels.push({
+            label: String.fromCharCode(65 + i),
+            title: cb.dataset.figname || `Panel ${String.fromCharCode(65 + i)}`,
+            svg: text,
+          })
         }
         payload = {
           category: 'journal_assembly',
@@ -4640,12 +3719,6 @@ ${modelsDesc}
           panels,
         }
         lastTitle = `Journal_Composite_${asmPreset}`
-      } else {
-        payload = {
-          category: 'flowchart',
-          ...consortState,
-        }
-        lastTitle = `CONSORT_2010_Flowchart`
       }
 
       try {
@@ -4655,7 +3728,22 @@ ${modelsDesc}
         })
         const svgStr = res.illustrator_svg || res.svg || res.km_svg || res.forest_svg || res.native_exports?.illustrator_svg || ''
         lastSvg = svgStr
+        lastIsDemo = !!res.is_demo_data || isDemoSvg(svgStr)
+        lastDatasetId = lastIsDemo
+          ? ''
+          : typeof payload.dataset_id === 'string' && payload.dataset_id
+            ? payload.dataset_id
+            : currentMode === 'bioinformatics' && (payload.volcano_genes || payload.heatmap_matrix)
+              ? activeDatasetId
+              : ''
         canvasEl.innerHTML = safeSvg(svgStr) || '<div class="muted small">已生成工程原文件</div>'
+        if (lastIsDemo) {
+          canvasTitleEl.textContent = `示例数据预览（非真实研究结果）· ${res.demo_reason || '未提供真实数据'}`
+          exportBar.innerHTML = `<span class="small" style="color:var(--warn);">示例数据仅供预览：不能导出、归档或插入文稿。请在左侧选择数据集或录入真实数据。</span>`
+          lastCode = ''
+          codePre.textContent = '# 示例数据不提供可复现脚本'
+          return
+        }
 
         // 更新画布顶部标题与统计检验摘要
         if (currentMode === 'clinical_cohort') {
@@ -4702,7 +3790,7 @@ ${modelsDesc}
         if (originOgs) addExp('OriginLab 绘图脚本 (.ogs)', () => downloadBlobContent(originOgs, `${lastTitle}.ogs`))
         if (drawioXml) addExp('Draw.io (.drawio)', () => downloadBlobContent(drawioXml, `${lastTitle}.drawio`, 'application/xml;charset=utf-8'), true)
         if (visioVdx) addExp('Microsoft Visio (.vdx)', () => downloadBlobContent(visioVdx, `${lastTitle}.vdx`, 'application/xml;charset=utf-8'))
-        if (currentMode === 'mechanism' || currentMode === 'flowchart' || currentMode === 'journal_assembly') {
+        if (currentMode === 'mechanism' || currentMode === 'journal_assembly') {
           addExp('PowerPoint 可编辑形状 (.pptx)', () => void downloadFigureFormat(targetSid, payload, 'pptx', `${lastTitle}.pptx`))
         }
         if (currentMode === 'journal_assembly') {
@@ -4795,7 +3883,7 @@ ${modelsDesc}
   /** 打开全局独立的科研制图工作台（与临床研究课题完全解耦） */
   async function openGlobalStudio(
     initialDatasetId?: string,
-    initialMode?: 'clinical_cohort' | 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'flowchart' | 'journal_assembly'
+    initialMode?: 'clinical_cohort' | 'wet_lab' | 'bioinformatics' | 'mechanism' | 'image_processing' | 'journal_assembly'
   ): Promise<void> {
     hooks.leaveDoc()
     current = null
@@ -4845,7 +3933,7 @@ ${modelsDesc}
                 ${icon('write', { size: 14 })} 当前处于「场景二 · 写作中边写边配图模式」 · 目标文稿：${docLabel}
               </b>
               <div class="muted small" style="margin-top:2px;">
-                适合撰写论文 Results、基金标书正文或组会 PPT 时就地配图。插入的矢量图将自动绑定底层 R / Prism / Draw.io 可复现脚本，并在文稿中显示「来自分析」溯源标记。
+                数据类图表（临床队列、统计、生信、流式、CONSORT）必须基于真实数据：请在制图工作台或研究的「统计与制图」中选择数据集生成并归档，再从「图表成果库」插入，插入的图保留归档时记录的数据集与脚本溯源。就地绘制只提供不含数据的机制示意图模板。
               </div>
             </div>
             <button type="button" class="small-btn" id="rsDocToFullStudioBtn">${icon('target', { size: 12 })} 切换到全屏医学制图工作台 →</button>
@@ -4853,43 +3941,24 @@ ${modelsDesc}
         </div>
 
         <div class="row" style="gap:8px;border-bottom:1px solid var(--line);padding-bottom:10px;flex-wrap:wrap;">
-          <button type="button" class="small-btn primary" id="rsDocTabDrawBtn">${icon('chart', { size: 13 })} 1. 就地快速绘制并插入当前段落</button>
+          <button type="button" class="small-btn primary" id="rsDocTabDrawBtn">${icon('chart', { size: 13 })} 1. 就地插入机制示意图</button>
           <button type="button" class="small-btn" id="rsDocTabGalleryBtn">${icon('folder', { size: 13 })} 2. 从已归档图表成果库直接插入</button>
         </div>
 
         <div id="rsDocDrawPane" style="display:flex;flex-direction:column;gap:12px;">
-          <div class="rs-preset-bar" style="margin-top:0;padding-top:0;border-top:0;">
-            <span class="muted small" style="font-weight:600;">快速选型：</span>
-            <button type="button" class="rs-preset-chip" data-doc-preset="clin_grotta">[临床预后] mRS Grotta 分布图</button>
-            <button type="button" class="rs-preset-chip" data-doc-preset="clin_sankey">[治疗轨迹] 多阶段 Sankey 桑基图</button>
-            <button type="button" class="rs-preset-chip" data-doc-preset="clin_upset">[部位共现] 解剖部位 UpSet 图</button>
-            <button type="button" class="rs-preset-chip" data-doc-preset="clin_logistic">[危险因素] Logistic OR 森林图</button>
-            <button type="button" class="rs-preset-chip" data-doc-preset="wet_bar">[Results 统计] 柱状散点 + P 值支架</button>
-            <button type="button" class="rs-preset-chip" data-doc-preset="mech_gpcr">[标书/综述] 细胞信号通路机制图</button>
-            <button type="button" class="rs-preset-chip" data-doc-preset="consort">[方法学] CONSORT 纳排流程图</button>
+          <div class="muted small" style="border:1px solid var(--line);background:var(--raised);padding:8px 10px;">
+            需要数据图？<button type="button" class="small-btn" id="rsDocGoGalleryBtn">${icon('folder', { size: 12 })} 从图表成果库插入</button>
+            或 <button type="button" class="small-btn" id="rsDocGoStudioBtn">${icon('target', { size: 12 })} 去制图工作台用数据集生成</button>
           </div>
           <div class="form" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:10px;background:var(--raised);padding:12px;border:1px solid var(--line);">
-            <label>图表类型 (Figure Type)
+            <label>机制示意图模板（不含数据）
               <select id="rsDocFigKind">
-                <option value="clin_grotta">临床队列：mRS / 闭塞分级 Grotta 有序分布偏移图</option>
-                <option value="clin_sankey">临床队列：多阶段序贯治疗轨迹与结局 Sankey 桑基图</option>
-                <option value="clin_upset">临床队列：多解剖部位共现与结局风险率 UpSet 图</option>
-                <option value="clin_logistic">临床队列：多因素 Logistic 回归 OR 森林图 (Forest Plot)</option>
-                <option value="clin_survival">临床队列：Kaplan-Meier 无事件生存曲线 (KM Plot)</option>
-                <option value="wet_bar">实验/临床：柱状散点图 + P 值星号支架 (Prism)</option>
-                <option value="wet_violin">实验/临床：小提琴密度 + 内嵌箱线图 (Violin)</option>
-                <option value="wet_ic50">药理/CCK-8：4PL 剂量反应 IC50 曲线 (Origin)</option>
-                <option value="mech_gpcr">机制通路：GPCR-cAMP-PKA 信号转导图 (BioArt)</option>
-                <option value="mech_pd1">机制通路：PD-1/PD-L1 免疫检查点阻断机制图</option>
-                <option value="bio_volcano">生信组学：差异表达火山图 (Volcano Plot)</option>
-                <option value="bio_heatmap">生信组学：多组学 Z-score 聚类热图</option>
-                <option value="bio_kegg">生信组学：KEGG / GO 通路富集气泡图</option>
-                <option value="img_flow">细胞流式：Annexin V / PI 凋亡四象限圈门</option>
-                <option value="consort">临床设计：CONSORT 2010 受试者纳排流向图</option>
+                <option value="mech_gpcr">GPCR-cAMP-PKA 信号转导示意图</option>
+                <option value="mech_pd1">PD-1/PD-L1 免疫检查点阻断机制示意图</option>
               </select>
             </label>
             <label>图注标题 (Figure Caption / Title)
-              <input type="text" id="rsDocFigTitle" value="${esc(opts?.docTitle || '论文配图')} · Figure 1">
+              <input type="text" id="rsDocFigTitle" value="机制示意图">
             </label>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -4933,92 +4002,13 @@ ${modelsDesc}
     let renderedCode = ''
     let renderedCodePath = 'figure_studio.R'
 
-    const buildPayload = (kind: string, title: string): Record<string, unknown> => {
-      if (kind.startsWith('clin_')) {
-        return {
-          category: 'clinical_cohort',
-          subtype: kind.replace('clin_', ''),
-          title,
-        }
-      }
-      if (kind === 'wet_bar' || kind === 'wet_violin') {
-        return {
-          category: 'wet_lab',
-          plotType: kind === 'wet_bar' ? 'bar_scatter' : 'violin_box',
-          title,
-          yLabel: 'Relative Expression Level',
-          errorBarType: 'SD',
-          groups: [
-            { name: 'Control', values: [1.02, 0.96, 1.05, 0.98, 1.01, 0.95], color: '#3C5488' },
-            { name: 'Treatment A', values: [1.58, 1.65, 1.49, 1.72, 1.61, 1.64], color: '#00A087' },
-            { name: 'Combo Therapy', values: [2.48, 2.66, 2.39, 2.74, 2.55, 2.61], color: '#E64B35' },
-          ],
-        }
-      }
-      if (kind === 'wet_ic50') {
-        const pts = [
-          { logConc: -9, responses: [4.2, 5.1, 3.8] },
-          { logConc: -8, responses: [12.5, 14.2, 11.8] },
-          { logConc: -7, responses: [34.0, 36.8, 32.5] },
-          { logConc: -6, responses: [62.4, 65.1, 59.8] },
-          { logConc: -5, responses: [85.2, 87.6, 83.9] },
-          { logConc: -4, responses: [94.8, 96.1, 93.5] },
-        ]
-        return {
-          category: 'wet_lab',
-          plotType: 'dose_response',
-          title,
-          doseResponse: {
-            compoundName: 'Lead Compound',
-            points: pts,
-            logConcentrations: pts.map(p => p.logConc),
-            series: [{ name: 'Lead Compound', responses: pts.map(p => p.responses.reduce((a, b) => a + b, 0) / p.responses.length) }],
-          },
-        }
-      }
-      if (kind === 'mech_gpcr' || kind === 'mech_pd1') {
-        return {
-          category: 'mechanism',
-          title,
-          subtitle: kind === 'mech_pd1' ? 'PD-1/PD-L1 免疫检查点阻断与效应 T 细胞激活通路' : 'GPCR-cAMP-PKA-CREB 跨膜信号转导与核内转录调控',
-          showCompartments: true,
-        }
-      }
-      if (kind === 'bio_volcano' || kind === 'bio_heatmap' || kind === 'bio_kegg') {
-        return {
-          category: 'bioinformatics',
-          bioType: kind === 'bio_volcano' ? 'volcano' : kind === 'bio_heatmap' ? 'heatmap' : 'enrichment_bubble',
-          title,
-          fcThreshold: 1.0,
-          pThreshold: 0.05,
-        }
-      }
-      if (kind === 'img_flow') {
-        return {
-          category: 'image_processing',
-          tool: 'flowjo',
-          title,
-          xChannel: 'FITC-A (Annexin V)',
-          yChannel: 'PE-A (PI)',
-          xGateThreshold: 2.5,
-          yGateThreshold: 2.5,
-        }
-      }
-      return {
-        category: 'flowchart',
-        title,
-        total_assessed: 180,
-        exclusions: [
-          { reason: '不符合纳入标准 (Did not meet inclusion criteria)', count: 24 },
-          { reason: '拒绝签署知情同意 (Declined to participate)', count: 8 },
-        ],
-        eligible_total: 148,
-        arms: [
-          { name: '干预组 (Intervention Arm)', allocated: 74, received: 74, lost_to_followup: 2, discontinued: 0, analyzed: 72 },
-          { name: '标准对照组 (Control Arm)', allocated: 74, received: 74, lost_to_followup: 3, discontinued: 0, analyzed: 71 },
-        ],
-      }
-    }
+    // 就地绘制只提供机制示意图模板；数据类图表不在这里用写死数值生成
+    const buildPayload = (kind: string, title: string): Record<string, unknown> => ({
+      category: 'mechanism',
+      title,
+      subtitle: kind === 'mech_pd1' ? 'PD-1/PD-L1 免疫检查点阻断与效应 T 细胞激活通路（示意）' : 'GPCR-cAMP-PKA-CREB 跨膜信号转导与核内转录调控（示意）',
+      showCompartments: true,
+    })
 
     const renderQuickPreview = async () => {
       statusEl.textContent = '正在生成出版级矢量图与底层可复现代码…'
@@ -5036,23 +4026,24 @@ ${modelsDesc}
         renderedCode = rScript || drawioXml || wsp || '# Generated by Heurion In-Writing Figure Studio'
         renderedCodePath = rScript ? 'figure_studio.R' : drawioXml ? 'figure_studio.drawio' : 'figure_studio.txt'
         previewBox.innerHTML = safeSvg(renderedSvg) || '<div class="muted small">预览生成完毕</div>'
-        statusEl.textContent = '已就绪 · 点击右侧「生成并插入到当前文稿位置」即可嵌入正文并附带代码溯源'
+        statusEl.textContent = '已就绪 · 点击右侧「生成并插入到当前文稿位置」即可嵌入正文（机制示意图，不含数据）'
       } catch (err) {
+        // 失败时清空，避免随后点击「插入」把上一张图配上新标题插进去
+        renderedSvg = ''
+        renderedCode = ''
         previewBox.innerHTML = `<div class="muted small">${esc((err as Error).message)}</div>`
         statusEl.textContent = '生成失败'
       } finally {
-        insertNowBtn.disabled = false
+        insertNowBtn.disabled = !renderedSvg
       }
     }
 
     kindSel.onchange = () => void renderQuickPreview()
     document.getElementById('rsDocRefreshBtn')!.onclick = () => void renderQuickPreview()
-    dlg.querySelectorAll<HTMLButtonElement>('[data-doc-preset]').forEach(chip => {
-      chip.onclick = () => {
-        kindSel.value = chip.dataset.docPreset!
-        void renderQuickPreview()
-      }
-    })
+    document.getElementById('rsDocGoStudioBtn')!.onclick = () => {
+      close()
+      hooks.goSpace('studio')
+    }
 
     insertNowBtn.onclick = async () => {
       const caption = titleInp.value.trim() || 'Figure 1'
@@ -5085,7 +4076,7 @@ ${modelsDesc}
           }
         }
         if (!items.length) {
-          grid.innerHTML = `<div class="muted small" style="padding:18px;">当前成果库暂无已归档图表。请切换到「1. 就地快速绘制并插入当前段落」直接生成并插入。</div>`
+          grid.innerHTML = `<div class="muted small" style="padding:18px;">当前成果库暂无已归档图表。请先在制图工作台或研究的「统计与制图」中用数据集生成并归档。</div>`
           return
         }
         const token = hooks.token()
@@ -5136,6 +4127,7 @@ ${modelsDesc}
       galPane.style.display = 'flex'
       void loadGallery()
     }
+    document.getElementById('rsDocGoGalleryBtn')!.onclick = () => tabGalBtn.click()
 
     void renderQuickPreview()
   }
@@ -5150,20 +4142,37 @@ ${modelsDesc}
     type BioStatEngine = 'survival' | 'nomogram' | 'rocdca' | 'causal'
     let engine: BioStatEngine = 'survival'
 
-    let nomoPredictors = [
-      { variable: 'treatment_arm', label: '治疗分组 (0=对照, 1=联合)', type: 'binary' as const, beta: -0.68, min_val: 0, max_val: 1 },
-      { variable: 'l3_smi', label: 'L3 骨骼肌指数 SMI (cm²/m²)', type: 'continuous' as const, beta: -0.045, min_val: 30, max_val: 65 },
-      { variable: 'vat_to_sat', label: '内脏/皮下脂肪比 (VAT/SAT)', type: 'continuous' as const, beta: 0.72, min_val: 0.4, max_val: 1.8 },
-      { variable: 'age', label: '年龄 (Age, years)', type: 'continuous' as const, beta: 0.038, min_val: 40, max_val: 85 },
-    ]
-    let loveCovariates = [
-      { name: '年龄 (Age, years)', smd_unadjusted: 0.42, smd_adjusted: 0.04 },
-      { name: '性别 (Male Sex)', smd_unadjusted: -0.28, smd_adjusted: -0.02 },
-      { name: '基线 L3 骨骼肌 SMI', smd_unadjusted: -0.51, smd_adjusted: -0.05 },
-      { name: '内脏/皮下脂肪比 (VAT/SAT)', smd_unadjusted: 0.39, smd_adjusted: 0.03 },
-      { name: '基线 eGFR (mL/min/1.73m²)', smd_unadjusted: -0.34, smd_adjusted: 0.02 },
-      { name: 'ECOG 体能状态评分', smd_unadjusted: 0.31, smd_adjusted: -0.03 },
-    ]
+    // 系数与 SMD 只来自数据集拟合或用户手动录入；不预填任何示例数值
+    type NomoPred = { variable: string; label: string; type: 'binary' | 'continuous'; beta: number; min_val: number; max_val: number }
+    type LoveCov = { name: string; smd_unadjusted: number; smd_adjusted: number }
+    let nomoPredictors: NomoPred[] = []
+    let loveCovariates: LoveCov[] = []
+
+    /** 读取数据集列名与中文标签；数据集没有列时报错，不编造列名 */
+    const loadDatasetCols = async (did: string) => {
+      const ds = await api<{ columns?: Array<{ name: string }>; labels?: Record<string, string> }>(`/api/datasets/${did}`)
+      const cols = (ds.columns || []).map(c => c.name)
+      if (!cols.length) throw new Error('该数据集没有可用的列')
+      return { cols, labels: ds.labels || {} }
+    }
+    const colOptionsHtml = (cols: string[], labels: Record<string, string>) =>
+      cols.map(c => `<option value="${esc(c)}">${esc(labels[c] || c)} (${esc(c)})</option>`).join('')
+    /** 协变量多选框（复选框列表） */
+    const colPickerHtml = (id: string, title: string) => `
+      <div class="small">${title}
+        <div id="${id}" style="max-height:120px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:4px 6px;margin-top:2px;display:flex;flex-wrap:wrap;gap:2px 10px;">
+          <span class="muted">正在读取数据集列…</span>
+        </div>
+      </div>`
+    const fillColPicker = (id: string, cols: string[], labels: Record<string, string>, emptyMsg = '数据集没有可用列') => {
+      const el = document.getElementById(id)
+      if (!el) return
+      el.innerHTML = cols.length
+        ? cols.map(c => `<label style="display:inline-flex;align-items:center;gap:3px;font-weight:400;"><input type="checkbox" value="${esc(c)}"> ${esc(labels[c] || c)}</label>`).join('')
+        : `<span class="muted">${esc(emptyMsg)}</span>`
+    }
+    const readColPicker = (id: string): string[] =>
+      Array.from(document.querySelectorAll<HTMLInputElement>(`#${id} input[type=checkbox]:checked`)).map(i => i.value)
 
     pane.innerHTML = `
       <div class="rs-studio-topbar">
@@ -5215,6 +4224,9 @@ ${modelsDesc}
           <label>时间单位
             <select id="bsSurvUnit"><option value="Months">月 (Months)</option><option value="Days">天 (Days)</option><option value="Years">年 (Years)</option></select>
           </label>
+          <label>随访截止日（仅当随访列是日期时需要；未发生事件者删失于此日）
+            <input type="text" id="bsSurvCensor" placeholder="YYYY-MM-DD">
+          </label>
           <button type="button" class="primary small-btn" id="bsSurvRunBtn">${icon('chart', { size: 13 })} 拟合 KM 曲线与多因素森林图</button>
         `
         rightEl.innerHTML = `<div class="muted small" style="padding:30px;text-align:center;">正在读取数据集列并拟合生存模型…</div>`
@@ -5226,8 +4238,13 @@ ${modelsDesc}
 
         const loadCols = async () => {
           const ds = await api<{ columns?: Array<{ name: string }>; labels?: Record<string, string> }>(`/api/datasets/${dsSel.value}`)
+            .catch(err => { rightEl.innerHTML = `<div class="muted small">读取数据集失败：${esc((err as Error).message)}</div>`; return null })
+          if (!ds) return
           const cols = (ds.columns || []).map(c => c.name)
-          if (!cols.length) cols.push('followup_months', 'os_status', 'treatment_arm', 'age')
+          if (!cols.length) {
+            rightEl.innerHTML = `<div class="muted small">该数据集没有可用的列，无法进行生存分析。</div>`
+            return
+          }
           const fill = (sel: HTMLSelectElement, list: string[], re: RegExp) => {
             sel.innerHTML = list.map(c => `<option value="${esc(c)}">${esc(ds.labels?.[c] || c)} (${esc(c)})</option>`).join('')
             const m = list.find(c => re.test(c))
@@ -5245,12 +4262,15 @@ ${modelsDesc}
             const colNames = (ds.columns || []).map(c => c.name)
             const isDateStart = /时间|日期|date/i.test(tSel.value)
             const evDateCol = colNames.find(c => c !== tSel.value && /出血时间|事件时间|末次随访|event_date/i.test(c))
+            const dateMode = isDateStart && !!evDateCol
+            const censorDate = (document.getElementById('bsSurvCensor') as HTMLInputElement).value.trim()
             const res = await api<any>(`/api/datasets/${dsSel.value}/survival`, {
               method: 'POST',
               body: JSON.stringify({
-                time_col: isDateStart && evDateCol ? undefined : tSel.value,
-                start_date_col: isDateStart && evDateCol ? tSel.value : undefined,
-                event_date_col: isDateStart && evDateCol ? evDateCol : undefined,
+                time_col: dateMode ? undefined : tSel.value,
+                start_date_col: dateMode ? tSel.value : undefined,
+                event_date_col: dateMode ? evDateCol : undefined,
+                default_censor_date: dateMode && censorDate ? censorDate : undefined,
                 event_col: eSel.value,
                 group_col: gSel.value === '(不分组)' ? undefined : gSel.value,
                 time_unit: (document.getElementById('bsSurvUnit') as HTMLSelectElement).value,
@@ -5261,7 +4281,12 @@ ${modelsDesc}
             const kmSvg = res.km_svg || res.svg || ''
             const forestSvg = res.forest_plot_svg || res.forest_svg || ''
             const ne = res.native_exports || {}
+            // 自动切换到「按日期计算随访」时必须让用户看到用了哪两列、删失怎么处理
+            const dateNote = dateMode
+              ? `<div class="small" style="color:var(--warn);margin-bottom:6px;">随访时长按日期计算：起点「${esc(tSel.value)}」→ 事件日期「${esc(evDateCol!)}」；未发生事件者删失于随访截止日 ${esc(censorDate)}。如列选择不对，请改选数值型随访时长列。</div>`
+              : ''
             rightEl.innerHTML = `
+              ${dateNote}
               <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
                 <b>Figure 3 · Kaplan-Meier 累积生存曲线与风险集表</b>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -5288,13 +4313,13 @@ ${modelsDesc}
                 <div class="rs-studio-canvas" style="min-height:260px;">${safeSvg(forestSvg)}</div>
               ` : ''}
             `
-            document.getElementById('bsArchKm')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure3_Kaplan_Meier', kmSvg, ne.r_script))
+            document.getElementById('bsArchKm')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure3_Kaplan_Meier', kmSvg, ne.r_script, undefined, dsSel.value))
             document.getElementById('bsDlKmPng')?.addEventListener('click', () => kmSvg && void downloadSvgAsPng600Dpi(s.id, kmSvg, 'Figure3_Kaplan_Meier_600DPI.png'))
             document.getElementById('bsCpKmPng')?.addEventListener('click', () => kmSvg && void copySvgAsPngToClipboard(s.id, kmSvg, 'Figure3_Kaplan_Meier'))
             document.getElementById('bsDlKmPzfx')?.addEventListener('click', () => ne.prism_pzfx && downloadBlobContent(ne.prism_pzfx, 'Kaplan_Meier.pzfx', 'application/xml;charset=utf-8'))
             document.getElementById('bsDlKmR')?.addEventListener('click', () => ne.r_script && downloadBlobContent(ne.r_script, 'Kaplan_Meier.R'))
             document.getElementById('bsDlKmSvg')?.addEventListener('click', () => kmSvg && downloadBlobContent(kmSvg, 'Kaplan_Meier.svg', 'image/svg+xml;charset=utf-8'))
-            document.getElementById('bsArchForest')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure4_Cox_Forest_Plot', forestSvg, ne.forest_r_script))
+            document.getElementById('bsArchForest')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure4_Cox_Forest_Plot', forestSvg, ne.forest_r_script, undefined, dsSel.value))
             document.getElementById('bsDlForPng')?.addEventListener('click', () => forestSvg && void downloadSvgAsPng600Dpi(s.id, forestSvg, 'Figure4_Cox_Forest_Plot_600DPI.png'))
             document.getElementById('bsDlForPzfx')?.addEventListener('click', () => ne.forest_prism_pzfx && downloadBlobContent(ne.forest_prism_pzfx, 'Cox_Forest_Plot.pzfx', 'application/xml;charset=utf-8'))
             document.getElementById('bsDlForR')?.addEventListener('click', () => ne.forest_r_script && downloadBlobContent(ne.forest_r_script, 'Cox_Forest_Plot.R'))
@@ -5311,48 +4336,76 @@ ${modelsDesc}
       }
 
       if (engine === 'nomogram') {
+        const nomoRowHtml = (p?: NomoPred) => `
+          <tr>
+            <td><input type="text" class="bs-nm-lbl" value="${esc(p?.label ?? '')}" placeholder="变量名"></td>
+            <td><input type="number" step="0.001" class="bs-nm-beta" value="${p ? p.beta : ''}" placeholder="β"></td>
+            <td><input type="number" step="0.1" class="bs-nm-min" value="${p ? p.min_val : ''}" placeholder="—"></td>
+            <td><input type="number" step="0.1" class="bs-nm-max" value="${p ? p.max_val : ''}" placeholder="—"></td>
+          </tr>`
+        const nomoRowsHtml = () => (nomoPredictors.length ? nomoPredictors.map(p => nomoRowHtml(p)) : [nomoRowHtml(), nomoRowHtml(), nomoRowHtml()]).join('')
         leftEl.innerHTML = `
-          <div class="rs-sub-box-title"><span>${icon('caliper', { size: 13 })} Cox / Logistic 预后列线图 (Nomogram) 建模</span></div>
+          <div class="rs-sub-box-title"><span>${icon('caliper', { size: 13 })} 预后列线图 (Nomogram)</span></div>
           ${readyDs.length ? `
             <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:var(--panel);display:flex;flex-direction:column;gap:6px;">
-              <b class="small">从真实数据集列自动拟合列线图 (IRLS / Cox)</b>
+              <b class="small">从数据集拟合（二分类 Logistic 回归）</b>
               <label class="small">选择研究数据集
                 <select id="bsNomoDs">${readyDs.map(d => `<option value="${esc(d.dataset_id)}">${esc(d.name)}</option>`).join('')}</select>
               </label>
-              <label class="small">结局事件列 (1/0，留空则自动识别)
-                <select id="bsNomoOutcome"><option value="">（自动识别二分类结局列）</option></select>
+              <label class="small">二分类结局列（必选）
+                <select id="bsNomoOutcome"><option value="">请选择</option></select>
               </label>
-              <button type="button" class="small-btn primary" id="bsNomoAutoFitBtn">${icon('chart', { size: 13 })} 从数据集真实列拟合回归系数与 C-index</button>
+              ${colPickerHtml('bsNomoCovs', '预测变量列（至少选 1 个）')}
+              <label class="small">随访时间列（可选，仅用于计算 Harrell C-index）
+                <select id="bsNomoTime"><option value="">不使用</option></select>
+              </label>
+              <button type="button" class="small-btn primary" id="bsNomoAutoFitBtn">${icon('chart', { size: 13 })} 从数据集拟合回归系数与 C-index</button>
+              <div class="muted small">数据集拟合的是二分类 Logistic 模型，不使用随访时间建模，因此列线图只给出总分标尺，不给出 1/3/5 年生存概率。</div>
             </div>
           ` : ''}
-          <div class="muted small">可基于真实数据集自动拟合，也可手动微调预测因子、取值上下限及对数风险比系数 β (ln HR/OR)，实时映射 0~100 积分标尺。</div>
+          <div class="rs-sub-box-title" style="margin-top:6px;"><span>或：手动输入外部模型的系数</span></div>
+          <div class="muted small">适用于已发表或在外部软件中拟合的模型：填入各预测因子的回归系数 β（ln HR / ln OR）与取值范围。</div>
+          <label class="small">原模型类型（必选）
+            <select id="bsNomoModelType">
+              <option value="">请选择</option>
+              <option value="cox">Cox 比例风险模型（β = ln HR）</option>
+              <option value="logistic">Logistic 回归（β = ln OR）</option>
+            </select>
+          </label>
           <table class="rs-data-table">
             <thead><tr><th>变量标签</th><th style="width:62px;">β 系数</th><th style="width:54px;">Min</th><th style="width:54px;">Max</th></tr></thead>
-            <tbody id="bsNomoTbody">
-              ${nomoPredictors.map((p, idx) => `
-                <tr data-pidx="${idx}">
-                  <td><input type="text" class="bs-nm-lbl" value="${esc(p.label)}"></td>
-                  <td><input type="number" step="0.01" class="bs-nm-beta" value="${p.beta}"></td>
-                  <td><input type="number" step="0.1" class="bs-nm-min" value="${p.min_val}"></td>
-                  <td><input type="number" step="0.1" class="bs-nm-max" value="${p.max_val}"></td>
-                </tr>
-              `).join('')}
-            </tbody>
+            <tbody id="bsNomoTbody">${nomoRowsHtml()}</tbody>
           </table>
-          <button type="button" class="primary small-btn" id="bsNomoRunBtn">${icon('chart', { size: 13 })} 按当前参数绘制预后列线图 (Nomogram)</button>
+          <button type="button" class="quiet small-btn" id="bsNomoAddRow">＋ 新增预测因子</button>
+          <div class="small">基线生存率 S0(t)（可选；须来自同一 Cox 模型，留空则不输出该时间点的生存概率）</div>
+          <div class="row" style="gap:6px;">
+            <label class="small" style="flex:1;">1 年<input type="number" step="0.01" min="0" max="1" id="bsNomoS1" placeholder="—"></label>
+            <label class="small" style="flex:1;">3 年<input type="number" step="0.01" min="0" max="1" id="bsNomoS3" placeholder="—"></label>
+            <label class="small" style="flex:1;">5 年<input type="number" step="0.01" min="0" max="1" id="bsNomoS5" placeholder="—"></label>
+          </div>
+          <button type="button" class="primary small-btn" id="bsNomoRunBtn">${icon('chart', { size: 13 })} 按手动参数绘制列线图</button>
         `
+        rightEl.innerHTML = `<div class="muted small" style="padding:30px;text-align:center;">${readyDs.length
+          ? '选择结局列和预测变量后点击「从数据集拟合」，或在左侧手动输入外部模型的系数。'
+          : '请先上传研究数据集；手动绘制列线图也需要挂载在一个研究数据集下。'}</div>`
 
-        const renderNomoRight = (res: any) => {
+        /** fromDid：从数据集拟合时传入，用于归档溯源；手动系数时为空 */
+        const renderNomoRight = (res: any, fromDid?: string) => {
           const svg = res.native_exports?.illustrator_svg || res.svg || ''
           const rScript = res.native_exports?.r_script || ''
           const cIdxBadge = typeof res.c_index === 'number'
             ? `<span class="flag-S small" style="background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:4px;font-weight:600;">C-index = ${res.c_index.toFixed(3)}${Array.isArray(res.c_index_ci) ? ` (95% CI: ${res.c_index_ci[0].toFixed(3)}–${res.c_index_ci[1].toFixed(3)})` : ''}</span>`
             : ''
+          const nBadge = typeof res.sample_size === 'number'
+            ? `<span class="muted small">n = ${res.sample_size}，事件 ${res.events_n ?? '—'}</span>`
+            : ''
+          const figTitle = res.absolute_survival ? '预后列线图（含生存概率）' : '预后列线图（总分标尺，无绝对生存概率）'
           rightEl.innerHTML = `
             <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <b>Figure 5 · 1/3/5 年总生存率预测列线图 (Nomogram)</b>
+                <b>Figure 5 · ${figTitle}</b>
                 ${cIdxBadge}
+                ${nBadge}
               </div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;">
                 <button type="button" class="small-btn primary" id="bsArchNomo">${icon('pin', { size: 13 })} 归档列线图至 figures/</button>
@@ -5362,95 +4415,136 @@ ${modelsDesc}
             </div>
             <div class="rs-studio-canvas">${safeSvg(svg)}</div>
           `
-          document.getElementById('bsArchNomo')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure5_Prognostic_Nomogram', svg, rScript))
+          document.getElementById('bsArchNomo')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure5_Prognostic_Nomogram', svg, rScript, undefined, fromDid))
           document.getElementById('bsDlNomoR')?.addEventListener('click', () => rScript && downloadBlobContent(rScript, 'Nomogram_rms.R'))
           document.getElementById('bsDlNomoSvg')?.addEventListener('click', () => svg && downloadBlobContent(svg, 'Figure5_Nomogram.svg', 'image/svg+xml;charset=utf-8'))
         }
 
         const dsNomoSel = document.getElementById('bsNomoDs') as HTMLSelectElement | null
         const outNomoSel = document.getElementById('bsNomoOutcome') as HTMLSelectElement | null
-        if (dsNomoSel && outNomoSel) {
+        const timeNomoSel = document.getElementById('bsNomoTime') as HTMLSelectElement | null
+        let nomoLabels: Record<string, string> = {}
+        if (dsNomoSel && outNomoSel && timeNomoSel) {
           const loadNomoCols = async () => {
             try {
-              const ds = await api<{ columns?: Array<{ name: string }>; labels?: Record<string, string> }>(`/api/datasets/${dsNomoSel.value}`)
-              const cols = (ds.columns || []).map(c => c.name)
-              outNomoSel.innerHTML = `<option value="">（自动识别二分类结局列）</option>` + cols.map(c => `<option value="${esc(c)}">${esc(ds.labels?.[c] || c)} (${esc(c)})</option>`).join('')
-            } catch {}
+              const { cols, labels } = await loadDatasetCols(dsNomoSel.value)
+              nomoLabels = labels
+              outNomoSel.innerHTML = `<option value="">请选择</option>` + colOptionsHtml(cols, labels)
+              timeNomoSel.innerHTML = `<option value="">不使用</option>` + colOptionsHtml(cols, labels)
+              fillColPicker('bsNomoCovs', cols, labels)
+            } catch (err) {
+              fillColPicker('bsNomoCovs', [], {}, `读取数据集列失败：${(err as Error).message}`)
+            }
           }
           dsNomoSel.onchange = () => void loadNomoCols()
           void loadNomoCols()
         }
 
         const autoFitNomo = async () => {
-          const did = dsNomoSel?.value || readyDs[0]?.dataset_id
+          const did = dsNomoSel?.value
           if (!did) return
+          const outcome_col = outNomoSel?.value || ''
+          const time_col = timeNomoSel?.value || ''
+          const covariates = readColPicker('bsNomoCovs').filter(c => c !== outcome_col && c !== time_col)
+          if (!outcome_col || !covariates.length) {
+            notice('请先选择二分类结局列和至少 1 个预测变量列', true)
+            return
+          }
+          rightEl.innerHTML = `<div class="muted small" style="padding:30px;text-align:center;">正在拟合…</div>`
           try {
             const res = await api<any>(`/api/datasets/${did}/nomogram`, {
               method: 'POST',
               body: JSON.stringify({
-                title: `${s.title} · 多因素预后列线图 (Prognostic Nomogram)`,
-                outcome_col: outNomoSel?.value || undefined,
+                title: `${s.title} · 预后列线图 (Nomogram)`,
+                outcome_col,
+                covariates,
+                time_col: time_col || undefined,
+                labels: nomoLabels,
               }),
             })
             if (Array.isArray(res.axes) && res.axes.length) {
               nomoPredictors = res.axes.map((a: any) => ({
                 variable: a.variable,
                 label: a.label,
-                type: a.ticks?.length === 2 ? 'binary' : 'continuous',
-                beta: Number((a.beta ?? 0.2).toFixed(3)),
-                min_val: a.ticks?.[0]?.value ?? 0,
-                max_val: a.ticks?.[a.ticks.length - 1]?.value ?? 1,
+                type: a.type === 'binary' ? 'binary' : 'continuous',
+                beta: Number(Number(a.beta).toFixed(3)),
+                min_val: a.min_val,
+                max_val: a.max_val,
               }))
               const tbody = document.getElementById('bsNomoTbody')
-              if (tbody) {
-                tbody.innerHTML = nomoPredictors.map((p, idx) => `
-                  <tr data-pidx="${idx}">
-                    <td><input type="text" class="bs-nm-lbl" value="${esc(p.label)}"></td>
-                    <td><input type="number" step="0.01" class="bs-nm-beta" value="${p.beta}"></td>
-                    <td><input type="number" step="0.1" class="bs-nm-min" value="${p.min_val}"></td>
-                    <td><input type="number" step="0.1" class="bs-nm-max" value="${p.max_val}"></td>
-                  </tr>
-                `).join('')
-              }
+              if (tbody) tbody.innerHTML = nomoRowsHtml()
+              for (const id of ['bsNomoS1', 'bsNomoS3', 'bsNomoS5']) (document.getElementById(id) as HTMLInputElement).value = ''
             }
-            renderNomoRight(res)
-          } catch {
-            await runNomo()
+            renderNomoRight(res, did)
+          } catch (err) {
+            rightEl.innerHTML = `<div class="muted small" style="padding:20px;">拟合失败：${esc((err as Error).message)}</div>`
           }
         }
 
         const runNomo = async () => {
           const did = dsNomoSel?.value || readyDs[0]?.dataset_id
           if (!did) {
-            rightEl.innerHTML = `<div class="muted small">请先生成或上传至少 1 个研究数据集以挂载列线图接口。</div>`
+            rightEl.innerHTML = `<div class="muted small">请先生成或上传至少 1 个研究数据集。</div>`
             return
           }
-          const rows = leftEl.querySelectorAll<HTMLTableRowElement>('#bsNomoTbody tr')
-          nomoPredictors = Array.from(rows).map((tr, i) => ({
-            variable: nomoPredictors[i]?.variable || `var_${i + 1}`,
-            label: tr.querySelector<HTMLInputElement>('.bs-nm-lbl')?.value.trim() || `Factor ${i + 1}`,
-            type: nomoPredictors[i]?.type || 'continuous',
-            beta: Number(tr.querySelector<HTMLInputElement>('.bs-nm-beta')?.value || 0.1),
-            min_val: Number(tr.querySelector<HTMLInputElement>('.bs-nm-min')?.value || 0),
-            max_val: Number(tr.querySelector<HTMLInputElement>('.bs-nm-max')?.value || 100),
-          }))
+          const rows = Array.from(leftEl.querySelectorAll<HTMLTableRowElement>('#bsNomoTbody tr'))
+          const parsed: NomoPred[] = []
+          const bad: string[] = []
+          rows.forEach((tr, i) => {
+            const label = tr.querySelector<HTMLInputElement>('.bs-nm-lbl')?.value.trim() || ''
+            const raw = ['.bs-nm-beta', '.bs-nm-min', '.bs-nm-max'].map(sel => tr.querySelector<HTMLInputElement>(sel)?.value.trim() || '')
+            if (!label && raw.every(v => !v)) return
+            const [beta, min_val, max_val] = raw.map(v => (v === '' ? NaN : Number(v)))
+            if (!label || !Number.isFinite(beta) || !Number.isFinite(min_val) || !Number.isFinite(max_val) || max_val! <= min_val!) {
+              bad.push(`第 ${i + 1} 行`)
+              return
+            }
+            parsed.push({
+              variable: nomoPredictors[i]?.variable || label,
+              label,
+              type: min_val === 0 && max_val === 1 ? 'binary' : 'continuous',
+              beta: beta!,
+              min_val: min_val!,
+              max_val: max_val!,
+            })
+          })
+          if (bad.length) { notice(`${bad.join('、')}未填完整：需要变量名、β、Min、Max，且 Max 大于 Min`, true); return }
+          const model_type = (document.getElementById('bsNomoModelType') as HTMLSelectElement).value
+          if (model_type !== 'cox' && model_type !== 'logistic') { notice('请选择原模型类型（Cox 或 Logistic）', true); return }
+          if (!parsed.length) { notice('请至少填写 1 个预测因子', true); return }
+          const baseline_survival: Record<string, number> = {}
+          for (const [id, key] of [['bsNomoS1', 'year1'], ['bsNomoS3', 'year3'], ['bsNomoS5', 'year5']] as const) {
+            const v = (document.getElementById(id) as HTMLInputElement).value.trim()
+            if (!v) continue
+            const n = Number(v)
+            if (!(n > 0 && n < 1)) { notice('基线生存率须在 0 到 1 之间（不含端点）', true); return }
+            baseline_survival[key] = n
+          }
+          if (model_type === 'logistic' && Object.keys(baseline_survival).length) {
+            notice('Logistic 模型没有基线生存率，请清空 1/3/5 年 S0，或把模型类型改为 Cox', true)
+            return
+          }
+          nomoPredictors = parsed
           try {
             const res = await api<any>(`/api/datasets/${did}/nomogram`, {
               method: 'POST',
               body: JSON.stringify({
-                title: `${s.title} · 多因素预后列线图 (Prognostic Nomogram)`,
-                predictors: nomoPredictors,
-                baseline_survival: { year1: 0.90, year3: 0.75, year5: 0.60 },
+                title: `${s.title} · 预后列线图 (Nomogram)`,
+                predictors: parsed,
+                baseline_survival,
+                model_type,
               }),
             })
             renderNomoRight(res)
           } catch (err) {
-            rightEl.innerHTML = `<div class="muted small">${esc((err as Error).message)}</div>`
+            rightEl.innerHTML = `<div class="muted small" style="padding:20px;">${esc((err as Error).message)}</div>`
           }
         }
         document.getElementById('bsNomoAutoFitBtn')?.addEventListener('click', () => void autoFitNomo())
         document.getElementById('bsNomoRunBtn')!.onclick = () => void runNomo()
-        void autoFitNomo()
+        document.getElementById('bsNomoAddRow')!.onclick = () => {
+          document.getElementById('bsNomoTbody')?.insertAdjacentHTML('beforeend', nomoRowHtml())
+        }
         return
       }
 
@@ -5459,39 +4553,45 @@ ${modelsDesc}
           <div class="rs-sub-box-title"><span>${icon('target', { size: 13 })} ROC 诊断对比 (DeLong 检验) 与 DCA 决策曲线</span></div>
           ${readyDs.length ? `
             <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:var(--panel);display:flex;flex-direction:column;gap:6px;">
-              <b class="small">从真实数据集列自动拟合对比模型与 DeLong 检验</b>
+              <b class="small">从数据集拟合两个 Logistic 模型并比较</b>
               <label class="small">选择研究数据集
                 <select id="bsRocDs">${readyDs.map(d => `<option value="${esc(d.dataset_id)}">${esc(d.name)}</option>`).join('')}</select>
               </label>
-              <label class="small">二分类结局列 (1/0，留空自动识别)
-                <select id="bsRocOutcome"><option value="">（自动识别二分类结局列）</option></select>
+              <label class="small">二分类结局列（必选）
+                <select id="bsRocOutcome"><option value="">请选择</option></select>
               </label>
-              <button type="button" class="small-btn primary" id="bsRocAutoFitBtn">${icon('chart', { size: 13 })} 从数据集拟合基线 vs 全模型 ROC &amp; DCA</button>
+              ${colPickerHtml('bsRocBase', '模型 1 的预测变量（至少 1 个）')}
+              ${colPickerHtml('bsRocExtra', '模型 2 在模型 1 基础上增加的变量（至少 1 个）')}
+              <button type="button" class="small-btn primary" id="bsRocAutoFitBtn">${icon('chart', { size: 13 })} 从数据集拟合两个模型的 ROC &amp; DCA</button>
             </div>
           ` : ''}
-          <label>模型 1 名称 (基线对照)
-            <input type="text" id="bsRocM1" value="临床基线模型 (Clinical Baseline)">
+          <label>模型 1 名称
+            <input type="text" id="bsRocM1" placeholder="模型 1">
           </label>
-          <label>模型 2 名称 (多模态融合)
-            <input type="text" id="bsRocM2" value="临床 + 3D 影像组学融合模型">
+          <label>模型 2 名称
+            <input type="text" id="bsRocM2" placeholder="模型 2">
           </label>
           <details style="border:1px solid var(--line);border-radius:6px;padding:6px 8px;">
-            <summary class="small muted" style="cursor:pointer;">手动输入/微调预测概率序列（用于外部验证集）</summary>
+            <summary class="small">或：手动粘贴外部模型的结局标签与预测概率</summary>
             <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
-              <label class="small">真实二分类结局标签 (0/1，逗号分隔)
-                <textarea id="bsRocLabels" rows="2">1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0</textarea>
+              <label class="small">真实结局标签（1/0，逗号分隔）
+                <textarea id="bsRocLabels" rows="2" placeholder="如：1, 0, 1, 1, 0"></textarea>
               </label>
-              <label class="small">模型 1 预测概率 (0~1，逗号分隔)
-                <textarea id="bsRocP1" rows="2">0.76, 0.68, 0.72, 0.58, 0.64, 0.52, 0.48, 0.35, 0.42, 0.29, 0.38, 0.24, 0.61, 0.44, 0.55, 0.31</textarea>
+              <label class="small">模型 1 预测概率（与标签等长）
+                <textarea id="bsRocP1" rows="2" placeholder="如：0.72, 0.31, 0.64, 0.58, 0.22"></textarea>
               </label>
-              <label class="small">模型 2 预测概率 (0~1，逗号分隔)
-                <textarea id="bsRocP2" rows="2">0.91, 0.86, 0.88, 0.79, 0.84, 0.74, 0.28, 0.16, 0.22, 0.12, 0.19, 0.09, 0.82, 0.25, 0.77, 0.14</textarea>
+              <label class="small">模型 2 预测概率（与标签等长）
+                <textarea id="bsRocP2" rows="2" placeholder="如：0.81, 0.25, 0.70, 0.66, 0.18"></textarea>
               </label>
               <button type="button" class="small-btn" id="bsRocRunBtn">${icon('chart', { size: 13 })} 按手动概率数组计算 ROC + DCA</button>
             </div>
           </details>
         `
-        const renderRocRight = (res: any) => {
+        rightEl.innerHTML = `<div class="muted small" style="padding:30px;text-align:center;">${readyDs.length
+          ? '选择结局列与两个模型的变量后点击「从数据集拟合」，或展开左侧手动粘贴预测概率。'
+          : '请先上传研究数据集；手动计算 ROC 也需要挂载在一个研究数据集下。'}</div>`
+
+        const renderRocRight = (res: any, fromDid?: string) => {
           const rocSvg = res.native_exports?.roc_illustrator_svg || res.roc?.svg || ''
           const dcaSvg = res.native_exports?.dca_illustrator_svg || res.dca?.svg || ''
           const pzfx = res.native_exports?.prism_pzfx || ''
@@ -5500,6 +4600,9 @@ ${modelsDesc}
           const dlBadge = dl
             ? `<span class="flag-S small" style="background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:4px;font-weight:600;">DeLong ΔAUC = ${dl.delta_auc >= 0 ? '+' : ''}${dl.delta_auc.toFixed(3)} (Z = ${dl.z_stat.toFixed(2)}, ${dl.p_formatted})</span>`
             : ''
+          const win = Array.isArray(res.benefit_window_pct)
+            ? ` <span class="muted small">· 模型 2 净获益占优的阈值区间 ${res.benefit_window_pct[0]}%–${res.benefit_window_pct[1]}%</span>`
+            : (res.benefit_window_pct === null ? ' <span class="muted small">· 模型 2 在任何阈值下净获益均未超过 Treat All / Treat None</span>' : '')
           rightEl.innerHTML = `
             <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -5515,7 +4618,7 @@ ${modelsDesc}
             </div>
             <div class="rs-studio-canvas" style="min-height:300px;">${safeSvg(rocSvg)}</div>
             <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px;">
-              <b>Figure 6B · 临床决策净获益曲线 (DCA)${Array.isArray(res.benefit_window_pct) ? ` <span class="muted small">· 净获益阈值窗口 ${res.benefit_window_pct[0]}%–${res.benefit_window_pct[1]}%</span>` : ''}</b>
+              <b>Figure 6B · 临床决策净获益曲线 (DCA)${win}</b>
               <div style="display:flex;gap:6px;flex-wrap:wrap;">
                 <button type="button" class="small-btn primary" id="bsArchDca">${icon('pin', { size: 13 })} 归档 DCA 至 figures/</button>
                 <button type="button" class="small-btn" id="bsDlDcaSvg">${icon('download', { size: 13 })} DCA (.svg)</button>
@@ -5523,8 +4626,8 @@ ${modelsDesc}
             </div>
             <div class="rs-studio-canvas" style="min-height:300px;">${safeSvg(dcaSvg)}</div>
           `
-          document.getElementById('bsArchRoc')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure6A_ROC_Curve', rocSvg, rScript))
-          document.getElementById('bsArchDca')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure6B_DCA_Curve', dcaSvg, rScript))
+          document.getElementById('bsArchRoc')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure6A_ROC_Curve', rocSvg, rScript, undefined, fromDid))
+          document.getElementById('bsArchDca')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Figure6B_DCA_Curve', dcaSvg, rScript, undefined, fromDid))
           document.getElementById('bsDlRocPzfx')?.addEventListener('click', () => pzfx && downloadBlobContent(pzfx, 'ROC_DCA.pzfx', 'application/xml;charset=utf-8'))
           document.getElementById('bsDlRocR')?.addEventListener('click', () => rScript && downloadBlobContent(rScript, 'ROC_DCA.R'))
           document.getElementById('bsDlRocSvg')?.addEventListener('click', () => rocSvg && downloadBlobContent(rocSvg, 'Figure6A_ROC.svg', 'image/svg+xml;charset=utf-8'))
@@ -5533,77 +4636,100 @@ ${modelsDesc}
 
         const dsRocSel = document.getElementById('bsRocDs') as HTMLSelectElement | null
         const outRocSel = document.getElementById('bsRocOutcome') as HTMLSelectElement | null
+        let rocLabels: Record<string, string> = {}
         if (dsRocSel && outRocSel) {
           const loadRocCols = async () => {
             try {
-              const ds = await api<{ columns?: Array<{ name: string }>; labels?: Record<string, string> }>(`/api/datasets/${dsRocSel.value}`)
-              const cols = (ds.columns || []).map(c => c.name)
-              outRocSel.innerHTML = `<option value="">（自动识别二分类结局列）</option>` + cols.map(c => `<option value="${esc(c)}">${esc(ds.labels?.[c] || c)} (${esc(c)})</option>`).join('')
-            } catch {}
+              const { cols, labels } = await loadDatasetCols(dsRocSel.value)
+              rocLabels = labels
+              outRocSel.innerHTML = `<option value="">请选择</option>` + colOptionsHtml(cols, labels)
+              fillColPicker('bsRocBase', cols, labels)
+              fillColPicker('bsRocExtra', cols, labels)
+            } catch (err) {
+              const msg = `读取数据集列失败：${(err as Error).message}`
+              fillColPicker('bsRocBase', [], {}, msg)
+              fillColPicker('bsRocExtra', [], {}, msg)
+            }
           }
           dsRocSel.onchange = () => void loadRocCols()
           void loadRocCols()
         }
 
+        const modelNames = () => ({
+          model1_name: (document.getElementById('bsRocM1') as HTMLInputElement)?.value.trim() || '模型 1',
+          model2_name: (document.getElementById('bsRocM2') as HTMLInputElement)?.value.trim() || '模型 2',
+        })
+
         const autoFitRoc = async () => {
-          const did = dsRocSel?.value || readyDs[0]?.dataset_id
+          const did = dsRocSel?.value
           if (!did) return
-          const model1_name = (document.getElementById('bsRocM1') as HTMLInputElement)?.value.trim()
-          const model2_name = (document.getElementById('bsRocM2') as HTMLInputElement)?.value.trim()
+          const outcome_col = outRocSel?.value || ''
+          const baseline_covariates = readColPicker('bsRocBase').filter(c => c !== outcome_col)
+          const full_covariates = readColPicker('bsRocExtra').filter(c => c !== outcome_col && !baseline_covariates.includes(c))
+          if (!outcome_col || !baseline_covariates.length || !full_covariates.length) {
+            notice('请选择结局列、模型 1 的变量，以及模型 2 额外增加的变量（与模型 1 不重复）', true)
+            return
+          }
+          rightEl.innerHTML = `<div class="muted small" style="padding:30px;text-align:center;">正在拟合…</div>`
           try {
             const res = await api<any>(`/api/datasets/${did}/roc-dca`, {
               method: 'POST',
-              body: JSON.stringify({
-                outcome_col: outRocSel?.value || undefined,
-                model1_name,
-                model2_name,
-              }),
+              body: JSON.stringify({ outcome_col, baseline_covariates, full_covariates, labels: rocLabels, ...modelNames() }),
             })
-            renderRocRight(res)
-          } catch {
-            await runRoc()
+            renderRocRight(res, did)
+          } catch (err) {
+            rightEl.innerHTML = `<div class="muted small" style="padding:20px;">拟合失败：${esc((err as Error).message)}</div>`
           }
         }
 
         const runRoc = async () => {
           const did = dsRocSel?.value || readyDs[0]?.dataset_id
           if (!did) {
-            rightEl.innerHTML = `<div class="muted small">请先生成或上传至少 1 个研究数据集以挂载 ROC/DCA 分析接口。</div>`
+            rightEl.innerHTML = `<div class="muted small">请先生成或上传至少 1 个研究数据集。</div>`
             return
           }
-          const parseNums = (id: string) => ((document.getElementById(id) as HTMLTextAreaElement)?.value || '').split(/[,，\s]+/).map(v => Number(v.trim())).filter(v => Number.isFinite(v))
+          const parseNums = (id: string) => ((document.getElementById(id) as HTMLTextAreaElement)?.value || '').split(/[,，\s]+/).filter(v => v.trim()).map(v => Number(v.trim()))
           const labels = parseNums('bsRocLabels')
           const scores_baseline = parseNums('bsRocP1')
           const scores_multimodal = parseNums('bsRocP2')
-          const model1_name = (document.getElementById('bsRocM1') as HTMLInputElement)?.value.trim()
-          const model2_name = (document.getElementById('bsRocM2') as HTMLInputElement)?.value.trim()
+          const allFinite = [labels, scores_baseline, scores_multimodal].every(a => a.length && a.every(Number.isFinite))
+          if (!allFinite || scores_baseline.length !== labels.length || scores_multimodal.length !== labels.length) {
+            notice('请填写等长的结局标签和两组预测概率（只能是数字）', true)
+            return
+          }
           try {
             const res = await api<any>(`/api/datasets/${did}/roc-dca`, {
               method: 'POST',
-              body: JSON.stringify({ labels, scores_baseline, scores_multimodal, model1_name, model2_name }),
+              body: JSON.stringify({ labels, scores_baseline, scores_multimodal, ...modelNames() }),
             })
             renderRocRight(res)
           } catch (err) {
-            rightEl.innerHTML = `<div class="muted small">${esc((err as Error).message)}</div>`
+            rightEl.innerHTML = `<div class="muted small" style="padding:20px;">${esc((err as Error).message)}</div>`
           }
         }
         document.getElementById('bsRocAutoFitBtn')?.addEventListener('click', () => void autoFitRoc())
         document.getElementById('bsRocRunBtn')!.onclick = () => void runRoc()
-        void autoFitRoc()
         return
       }
 
       // engine === 'causal'
+      const loveRowHtml = (c?: LoveCov) => `
+        <tr>
+          <td><input type="text" class="bs-lv-name" value="${esc(c?.name ?? '')}" placeholder="协变量名"></td>
+          <td><input type="number" step="0.01" class="bs-lv-un" value="${c ? c.smd_unadjusted : ''}" placeholder="—"></td>
+          <td><input type="number" step="0.01" class="bs-lv-adj" value="${c ? c.smd_adjusted : ''}" placeholder="—"></td>
+        </tr>`
+      const loveRowsHtml = () => (loveCovariates.length ? loveCovariates.map(c => loveRowHtml(c)) : [loveRowHtml(), loveRowHtml(), loveRowHtml()]).join('')
       leftEl.innerHTML = `
         ${readyDs.length ? `
           <div style="border:1px solid var(--line);border-radius:6px;padding:8px 10px;background:var(--panel);display:flex;flex-direction:column;gap:6px;margin-bottom:6px;">
-            <b class="small">从真实数据集列自动拟合倾向性评分 (PSM / IPTW)</b>
+            <b class="small">从数据集计算倾向性评分平衡 (PSM / IPTW)</b>
             <label class="small">选择研究数据集
               <select id="bsCausalDs">${readyDs.map(d => `<option value="${esc(d.dataset_id)}">${esc(d.name)}</option>`).join('')}</select>
             </label>
             <div class="row" style="gap:6px;">
-              <label class="small" style="flex:1;">暴露/治疗分组列
-                <select id="bsCausalTreat"><option value="">（自动识别）</option></select>
+              <label class="small" style="flex:1;">暴露/治疗分组列（必选）
+                <select id="bsCausalTreat"><option value="">请选择</option></select>
               </label>
               <label class="small" style="flex:1;">调整方法
                 <select id="bsCausalMethod">
@@ -5612,169 +4738,208 @@ ${modelsDesc}
                 </select>
               </label>
             </div>
-            <label class="small">结局事件列（可选，用于同步估计调整后 OR 与 E-value）
-              <select id="bsCausalOutcome"><option value="">（自动识别）</option></select>
+            ${colPickerHtml('bsCausalCovs', '混杂协变量（至少 1 个）')}
+            <label class="small">结局事件列（可选；选了才会估计调整后 OR 与 E-value）
+              <select id="bsCausalOutcome"><option value="">不估计效应</option></select>
             </label>
-            <button type="button" class="small-btn primary" id="bsCausalAutoFitBtn">${icon('chart', { size: 13 })} 从数据集计算真实 SMD 与 E-value</button>
+            <button type="button" class="small-btn primary" id="bsCausalAutoFitBtn">${icon('chart', { size: 13 })} 从数据集计算 SMD（及 E-value）</button>
           </div>
         ` : ''}
-        <div class="rs-sub-box-title"><span>${icon('shield', { size: 13 })} 1. VanderWeele E-value 敏感度参数</span></div>
+        <div class="rs-sub-box-title"><span>${icon('shield', { size: 13 })} 1. VanderWeele E-value（可手动填写已发表或外部分析的效应量）</span></div>
         <div class="row" style="gap:6px;">
           <label style="flex:1;">指标
             <select id="bsEvType"><option value="HR">HR</option><option value="OR">OR</option><option value="RR">RR</option></select>
           </label>
           <label style="flex:1;">点估计
-            <input type="number" step="0.01" id="bsEvEst" value="0.68">
+            <input type="number" step="0.01" id="bsEvEst" placeholder="—">
           </label>
           <label style="flex:1;">CI 下限
-            <input type="number" step="0.01" id="bsEvLo" value="0.54">
+            <input type="number" step="0.01" id="bsEvLo" placeholder="—">
           </label>
           <label style="flex:1;">CI 上限
-            <input type="number" step="0.01" id="bsEvHi" value="0.85">
+            <input type="number" step="0.01" id="bsEvHi" placeholder="—">
           </label>
         </div>
+        <label class="small" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="bsEvRare"> 结局罕见（发生率 &lt; 15%；仅对 OR 有影响，不勾选按常见结局保守换算）</label>
         <div class="rs-sub-box">
-          <div class="rs-sub-box-title"><span>2. 倾向性评分匹配 (PSM/IPTW) 协变量 SMD 表</span></div>
+          <div class="rs-sub-box-title">
+            <span>2. 协变量 SMD 表（Love Plot）</span>
+            <button type="button" class="quiet small-btn" id="bsLoveAddRow">＋ 新增协变量</button>
+          </div>
           <table class="rs-data-table">
-            <thead><tr><th>协变量名称</th><th style="width:74px;">匹配前 SMD</th><th style="width:74px;">匹配后 SMD</th></tr></thead>
-            <tbody id="bsLoveTbody">
-              ${loveCovariates.map(c => `
-                <tr>
-                  <td><input type="text" class="bs-lv-name" value="${esc(c.name)}"></td>
-                  <td><input type="number" step="0.01" class="bs-lv-un" value="${c.smd_unadjusted}"></td>
-                  <td><input type="number" step="0.01" class="bs-lv-adj" value="${c.smd_adjusted}"></td>
-                </tr>
-              `).join('')}
-            </tbody>
+            <thead><tr><th>协变量名称</th><th style="width:74px;">调整前 SMD</th><th style="width:74px;">调整后 SMD</th></tr></thead>
+            <tbody id="bsLoveTbody">${loveRowsHtml()}</tbody>
           </table>
         </div>
-        <button type="button" class="primary small-btn" id="bsCausalRunBtn">${icon('chart', { size: 13 })} 按当前表格重算 E-value 并绘制 Love Plot</button>
+        <button type="button" class="primary small-btn" id="bsCausalRunBtn">${icon('chart', { size: 13 })} 按当前填写内容计算 E-value / 绘制 Love Plot</button>
       `
+      rightEl.innerHTML = `<div class="muted small" style="padding:30px;text-align:center;">${readyDs.length
+        ? '选择分组列和混杂协变量后点击「从数据集计算」，或在左侧手动填写效应量 / SMD。'
+        : '在左侧手动填写效应量或 SMD 后计算；也可以先上传研究数据集。'}</div>`
 
       const dsCausalSel = document.getElementById('bsCausalDs') as HTMLSelectElement | null
       const treatCausalSel = document.getElementById('bsCausalTreat') as HTMLSelectElement | null
       const outCausalSel = document.getElementById('bsCausalOutcome') as HTMLSelectElement | null
+      let causalLabels: Record<string, string> = {}
+      /** SMD 表来自数据集计算时记录数据集 ID（归档溯源用）；用户手动改表后清空 */
+      let causalFromDid = ''
       if (dsCausalSel && treatCausalSel && outCausalSel) {
         const loadCausalCols = async () => {
           try {
-            const ds = await api<{ columns?: Array<{ name: string }>; labels?: Record<string, string> }>(`/api/datasets/${dsCausalSel.value}`)
-            const cols = (ds.columns || []).map(c => c.name)
-            const opts = cols.map(c => `<option value="${esc(c)}">${esc(ds.labels?.[c] || c)} (${esc(c)})</option>`).join('')
-            treatCausalSel.innerHTML = `<option value="">（自动识别暴露/分组列）</option>` + opts
-            outCausalSel.innerHTML = `<option value="">（自动识别二分类结局列）</option>` + opts
-          } catch {}
+            const { cols, labels } = await loadDatasetCols(dsCausalSel.value)
+            causalLabels = labels
+            treatCausalSel.innerHTML = `<option value="">请选择</option>` + colOptionsHtml(cols, labels)
+            outCausalSel.innerHTML = `<option value="">不估计效应</option>` + colOptionsHtml(cols, labels)
+            fillColPicker('bsCausalCovs', cols, labels)
+          } catch (err) {
+            fillColPicker('bsCausalCovs', [], {}, `读取数据集列失败：${(err as Error).message}`)
+          }
         }
         dsCausalSel.onchange = () => void loadCausalCols()
         void loadCausalCols()
       }
 
+      const setEvInputs = (v: { type: string; est: string; lo: string; hi: string; rare: boolean }) => {
+        ;(document.getElementById('bsEvType') as HTMLSelectElement).value = v.type
+        ;(document.getElementById('bsEvEst') as HTMLInputElement).value = v.est
+        ;(document.getElementById('bsEvLo') as HTMLInputElement).value = v.lo
+        ;(document.getElementById('bsEvHi') as HTMLInputElement).value = v.hi
+        ;(document.getElementById('bsEvRare') as HTMLInputElement).checked = v.rare
+      }
+
       const autoFitCausal = async () => {
-        const did = dsCausalSel?.value || readyDs[0]?.dataset_id
-        if (!did) { await runCausal(); return }
+        const did = dsCausalSel?.value
+        if (!did) return
+        const treatment_col = treatCausalSel?.value || ''
+        const outcome_col = outCausalSel?.value || ''
+        const covariates = readColPicker('bsCausalCovs').filter(c => c !== treatment_col && c !== outcome_col)
+        if (!treatment_col || !covariates.length) {
+          notice('请先选择暴露/治疗分组列和至少 1 个混杂协变量', true)
+          return
+        }
         const method = ((document.getElementById('bsCausalMethod') as HTMLSelectElement)?.value || 'iptw') as 'iptw' | 'psm'
+        rightEl.innerHTML = `<div class="muted small" style="padding:30px;text-align:center;">正在计算…</div>`
         try {
           const res = await api<any>(`/api/datasets/${did}/causal`, {
             method: 'POST',
             body: JSON.stringify({
-              treatment_col: treatCausalSel?.value || undefined,
-              outcome_col: outCausalSel?.value || undefined,
+              title: `${s.title} · Covariate Balance Love Plot`,
+              treatment_col,
+              outcome_col: outcome_col || undefined,
+              covariates,
               method,
+              labels: causalLabels,
             }),
           })
-          if (Array.isArray(res.covariates) && res.covariates.length) {
-            loveCovariates = res.covariates.map((c: any) => ({
-              name: c.name || c.label_zh || c.variable,
-              smd_unadjusted: c.smd_unadjusted,
-              smd_adjusted: c.smd_adjusted,
-            }))
-            const tbody = document.getElementById('bsLoveTbody')
-            if (tbody) {
-              tbody.innerHTML = loveCovariates.map(c => `
-                <tr>
-                  <td><input type="text" class="bs-lv-name" value="${esc(c.name)}"></td>
-                  <td><input type="number" step="0.01" class="bs-lv-un" value="${c.smd_unadjusted}"></td>
-                  <td><input type="number" step="0.01" class="bs-lv-adj" value="${c.smd_adjusted}"></td>
-                </tr>
-              `).join('')
-            }
-          }
-          if (res.treatment_effect) {
-            const evType = document.getElementById('bsEvType') as HTMLSelectElement | null
-            const evEst = document.getElementById('bsEvEst') as HTMLInputElement | null
-            const evLo = document.getElementById('bsEvLo') as HTMLInputElement | null
-            const evHi = document.getElementById('bsEvHi') as HTMLInputElement | null
-            if (evType) evType.value = 'OR'
-            if (evEst) evEst.value = String(res.treatment_effect.adjusted_or)
-            if (evLo) evLo.value = String(res.treatment_effect.ci_lower)
-            if (evHi) evHi.value = String(res.treatment_effect.ci_upper)
+          loveCovariates = Array.isArray(res.covariates)
+            ? res.covariates.map((c: any) => ({
+                name: c.label_zh || c.name,
+                smd_unadjusted: c.smd_unadjusted,
+                smd_adjusted: c.smd_adjusted,
+              }))
+            : []
+          const tbody = document.getElementById('bsLoveTbody')
+          if (tbody) tbody.innerHTML = loveRowsHtml()
+          causalFromDid = did
+          const te = res.treatment_effect
+          if (te && typeof te.estimate === 'number') {
+            setEvInputs({ type: te.effect_type || 'OR', est: String(te.estimate), lo: String(te.ci_lower), hi: String(te.ci_upper), rare: !!te.rare_outcome })
+          } else {
+            setEvInputs({ type: 'OR', est: '', lo: '', hi: '', rare: false })
           }
           await runCausal()
-        } catch {
-          await runCausal()
+        } catch (err) {
+          rightEl.innerHTML = `<div class="muted small" style="padding:20px;">计算失败：${esc((err as Error).message)}</div>`
         }
       }
       document.getElementById('bsCausalAutoFitBtn')?.addEventListener('click', () => void autoFitCausal())
 
       const runCausal = async () => {
         const effect_type = (document.getElementById('bsEvType') as HTMLSelectElement).value
-        const estimate = Number((document.getElementById('bsEvEst') as HTMLInputElement).value)
-        const ci_lower = Number((document.getElementById('bsEvLo') as HTMLInputElement).value)
-        const ci_upper = Number((document.getElementById('bsEvHi') as HTMLInputElement).value)
-        const trs = leftEl.querySelectorAll<HTMLTableRowElement>('#bsLoveTbody tr')
-        loveCovariates = Array.from(trs).map(tr => ({
-          name: tr.querySelector<HTMLInputElement>('.bs-lv-name')?.value.trim() || 'Covariate',
-          smd_unadjusted: Number(tr.querySelector<HTMLInputElement>('.bs-lv-un')?.value || 0),
-          smd_adjusted: Number(tr.querySelector<HTMLInputElement>('.bs-lv-adj')?.value || 0),
-        }))
+        const evRaw = ['bsEvEst', 'bsEvLo', 'bsEvHi'].map(id => (document.getElementById(id) as HTMLInputElement).value.trim())
+        const rare_outcome = (document.getElementById('bsEvRare') as HTMLInputElement).checked
+        const hasEv = evRaw.every(v => v !== '')
+        if (!hasEv && evRaw.some(v => v !== '')) { notice('E-value 需要同时填写点估计、CI 下限和 CI 上限', true); return }
+        const [estimate, ci_lower, ci_upper] = evRaw.map(Number)
+
+        const trs = Array.from(leftEl.querySelectorAll<HTMLTableRowElement>('#bsLoveTbody tr'))
+        const rows: LoveCov[] = []
+        const bad: string[] = []
+        trs.forEach((tr, i) => {
+          const name = tr.querySelector<HTMLInputElement>('.bs-lv-name')?.value.trim() || ''
+          const un = tr.querySelector<HTMLInputElement>('.bs-lv-un')?.value.trim() || ''
+          const adj = tr.querySelector<HTMLInputElement>('.bs-lv-adj')?.value.trim() || ''
+          if (!name && !un && !adj) return
+          if (!name || un === '' || adj === '' || !Number.isFinite(Number(un)) || !Number.isFinite(Number(adj))) { bad.push(`第 ${i + 1} 行`); return }
+          rows.push({ name, smd_unadjusted: Number(un), smd_adjusted: Number(adj) })
+        })
+        if (bad.length) { notice(`SMD 表${bad.join('、')}未填完整`, true); return }
+        if (!hasEv && !rows.length) { notice('请填写效应量（计算 E-value）或至少 1 行 SMD（绘制 Love Plot）', true); return }
+        loveCovariates = rows
+
         try {
           const [evRes, loveRes] = await Promise.all([
-            api<any>(`/api/studies/${s.id}/causal/e-value`, {
-              method: 'POST',
-              body: JSON.stringify({ effect_type, estimate, ci_lower, ci_upper, rare_outcome: true }),
-            }),
-            api<any>(`/api/studies/${s.id}/causal/love-plot`, {
-              method: 'POST',
-              body: JSON.stringify({ title: `${s.title} · Covariate Balance Love Plot`, covariates: loveCovariates, threshold: 0.1 }),
-            }),
+            hasEv
+              ? api<any>(`/api/studies/${s.id}/causal/e-value`, {
+                  method: 'POST',
+                  body: JSON.stringify({ effect_type, estimate, ci_lower, ci_upper, rare_outcome }),
+                })
+              : Promise.resolve(null),
+            rows.length
+              ? api<any>(`/api/studies/${s.id}/causal/love-plot`, {
+                  method: 'POST',
+                  body: JSON.stringify({ title: `${s.title} · Covariate Balance Love Plot`, covariates: rows, threshold: 0.1 }),
+                })
+              : Promise.resolve(null),
           ])
-          const svg = loveRes.illustrator_svg || loveRes.svg || ''
+          const svg = loveRes ? (loveRes.illustrator_svg || loveRes.svg || '') : ''
           rightEl.innerHTML = `
-            <div class="row" style="gap:10px;flex-wrap:wrap;">
-              <div class="rs-sub-box" style="flex:1;min-width:180px;">
-                <span class="muted small">VanderWeele E-value (点估计)</span>
-                <b style="font-size:22px;color:var(--mint-text);">${evRes.e_value_point.toFixed(2)}</b>
+            ${evRes ? `
+              <div class="row" style="gap:10px;flex-wrap:wrap;">
+                <div class="rs-sub-box" style="flex:1;min-width:180px;">
+                  <span class="muted small">VanderWeele E-value (点估计)</span>
+                  <b style="font-size:22px;color:var(--mint-text);">${evRes.e_value_point.toFixed(2)}</b>
+                </div>
+                <div class="rs-sub-box" style="flex:1;min-width:180px;">
+                  <span class="muted small">95% CI 保守边界 E-value</span>
+                  <b style="font-size:22px;color:var(--text);">${evRes.e_value_ci.toFixed(2)}</b>
+                </div>
+                <button type="button" class="small-btn" id="bsCopyRebuttal">${icon('copy', { size: 13 })} 复制 E-value 敏感性分析段落</button>
               </div>
-              <div class="rs-sub-box" style="flex:1;min-width:180px;">
-                <span class="muted small">95% CI 保守边界 E-value</span>
-                <b style="font-size:22px;color:var(--text);">${evRes.e_value_ci.toFixed(2)}</b>
+            ` : '<div class="muted small">未填写效应量，未计算 E-value。</div>'}
+            ${loveRes ? `
+              <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:6px;">
+                <b>Covariate Balance Love Plot (|SMD| &lt; 0.1 收敛阈值)</b>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button type="button" class="small-btn primary" id="bsArchLove">${icon('pin', { size: 13 })} 归档 Love Plot 至 figures/</button>
+                  <button type="button" class="small-btn" id="bsDlLovePzfx">${icon('download', { size: 13 })} Prism (.pzfx)</button>
+                  <button type="button" class="small-btn" id="bsDlLoveR">${icon('download', { size: 13 })} R cobalt (.R)</button>
+                  <button type="button" class="small-btn" id="bsDlLoveSvg">${icon('download', { size: 13 })} Love Plot (.svg)</button>
+                </div>
               </div>
-              <button type="button" class="small-btn" id="bsCopyRebuttal">${icon('copy', { size: 13 })} 复制顶刊审稿人抗辩段落</button>
-            </div>
-            <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:6px;">
-              <b>Covariate Balance Love Plot (|SMD| &lt; 0.1 收敛阈值)</b>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <button type="button" class="small-btn primary" id="bsArchLove">${icon('pin', { size: 13 })} 归档 Love Plot 至 figures/</button>
-                <button type="button" class="small-btn" id="bsDlLovePzfx">${icon('download', { size: 13 })} Prism (.pzfx)</button>
-                <button type="button" class="small-btn" id="bsDlLoveR">${icon('download', { size: 13 })} R cobalt (.R)</button>
-                <button type="button" class="small-btn" id="bsDlLoveSvg">${icon('download', { size: 13 })} Love Plot (.svg)</button>
-              </div>
-            </div>
-            <div class="rs-studio-canvas">${safeSvg(svg)}</div>
+              <div class="rs-studio-canvas">${safeSvg(svg)}</div>
+            ` : '<div class="muted small" style="margin-top:6px;">未填写 SMD，未绘制 Love Plot。</div>'}
           `
-          document.getElementById('bsCopyRebuttal')?.addEventListener('click', () => {
-            navigator.clipboard.writeText(`${evRes.academic_defense_zh}\n\n${evRes.academic_defense_en}`)
-            notice('已复制中英文审稿回复抗辩论述')
-          })
-          document.getElementById('bsArchLove')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Causal_Love_Plot', svg, loveRes.r_script))
-          document.getElementById('bsDlLovePzfx')?.addEventListener('click', () => loveRes.prism_pzfx && downloadBlobContent(loveRes.prism_pzfx, 'Love_Plot.pzfx', 'application/xml;charset=utf-8'))
-          document.getElementById('bsDlLoveR')?.addEventListener('click', () => loveRes.r_script && downloadBlobContent(loveRes.r_script, 'Love_Plot_cobalt.R'))
-          document.getElementById('bsDlLoveSvg')?.addEventListener('click', () => svg && downloadBlobContent(svg, 'Love_Plot.svg', 'image/svg+xml;charset=utf-8'))
+          if (evRes) {
+            document.getElementById('bsCopyRebuttal')?.addEventListener('click', () => {
+              navigator.clipboard.writeText(`${evRes.academic_defense_zh}\n\n${evRes.academic_defense_en}`)
+              notice('已复制中英文 E-value 敏感性分析段落')
+            })
+          }
+          if (loveRes) {
+            document.getElementById('bsArchLove')?.addEventListener('click', () => void archiveStudyFigure(s.id, 'Causal_Love_Plot', svg, loveRes.r_script, undefined, causalFromDid || undefined))
+            document.getElementById('bsDlLovePzfx')?.addEventListener('click', () => loveRes.prism_pzfx && downloadBlobContent(loveRes.prism_pzfx, 'Love_Plot.pzfx', 'application/xml;charset=utf-8'))
+            document.getElementById('bsDlLoveR')?.addEventListener('click', () => loveRes.r_script && downloadBlobContent(loveRes.r_script, 'Love_Plot_cobalt.R'))
+            document.getElementById('bsDlLoveSvg')?.addEventListener('click', () => svg && downloadBlobContent(svg, 'Love_Plot.svg', 'image/svg+xml;charset=utf-8'))
+          }
         } catch (err) {
-          rightEl.innerHTML = `<div class="muted small">${esc((err as Error).message)}</div>`
+          rightEl.innerHTML = `<div class="muted small" style="padding:20px;">${esc((err as Error).message)}</div>`
         }
       }
-      document.getElementById('bsCausalRunBtn')!.onclick = () => void runCausal()
-      void autoFitCausal()
+      document.getElementById('bsCausalRunBtn')!.onclick = () => { causalFromDid = ''; void runCausal() }
+      document.getElementById('bsLoveAddRow')!.onclick = () => {
+        document.getElementById('bsLoveTbody')?.insertAdjacentHTML('beforeend', loveRowHtml())
+      }
     }
 
     pane.querySelectorAll<HTMLButtonElement>('[data-bs-eng]').forEach(btn => {
@@ -5903,14 +5068,14 @@ ${modelsDesc}
           const cb = checked[i]!
           const assetId = cb.value
           const r = await fetch(`/api/assets/${assetId}?token=${encodeURIComponent(token)}`)
-          const text = await r.text()
-          if (text.includes('<svg')) {
-            panels.push({
-              label: String.fromCharCode(65 + i),
-              title: cb.dataset.figname || `Panel ${String.fromCharCode(65 + i)}`,
-              svg: text,
-            })
-          }
+          const text = r.ok ? await r.text() : ''
+          // 任一面板取回失败就停止，避免面板字母错位
+          if (!text.includes('<svg')) throw new Error(`面板「${cb.dataset.figname || assetId}」读取失败或不是 SVG 矢量图，请取消勾选后重试`)
+          panels.push({
+            label: String.fromCharCode(65 + i),
+            title: cb.dataset.figname || `Panel ${String.fromCharCode(65 + i)}`,
+            svg: text,
+          })
         }
 
         const payload: Record<string, unknown> = {
@@ -5988,7 +5153,7 @@ ${modelsDesc}
       </div>
       <div class="dialog-body" style="display:flex;flex-direction:column;gap:14px;">
         <div class="muted small">
-          全自动巡航提取入组受试者的多期 3D 影像生物标志物（病灶长径 / L3 SMI / 脂肪比 / BAR / 高密度粘液栓）及生化检验数据，全量配备单元格置信度与切片层号穿透溯源，直接生成医学宽表。
+          从平台已有记录汇总入组受试者的影像量化结果（病灶长径 / L3 SMI / 脂肪比等）与化验数据，每个单元格标注来源与核实状态，生成研究宽表。本功能只读取已有记录，不重新分析影像；未核实的值需研究者逐项核实后才会用于投稿材料。
         </div>
 
         <div id="rsEcrfLoading" class="muted small" style="padding:20px;text-align:center;">正在载入多模态 eCRF 字典模版…</div>
@@ -6015,7 +5180,7 @@ ${modelsDesc}
 
         <!-- Extract Progress -->
         <div id="rsEcrfProgress" style="display:none;flex-direction:column;gap:10px;padding:24px 0;align-items:center;">
-          <div class="muted small" id="rsEcrfProgressText">正在调度 MONAI 3D 卷积节点分析入组受试者胸腹 CT 序列与病历库…</div>
+          <div class="muted small" id="rsEcrfProgressText">正在汇总入组受试者的已有影像分析与化验记录…</div>
           <div style="width:80%;height:6px;background:var(--line);border-radius:3px;overflow:hidden;">
             <div id="rsEcrfProgressBar" style="width:20%;height:100%;background:#0284c7;transition:width 0.4s ease;"></div>
           </div>
@@ -6093,11 +5258,11 @@ ${modelsDesc}
           const txt = document.getElementById('rsEcrfProgressText')
           if (progressEl) progressEl.style.display = 'flex'
           if (bar) bar.style.width = '30%'
-          if (txt) txt.textContent = '正在调度 MONAI 3D 卷积节点分析入组受试者胸腹 CT 序列…'
+          if (txt) txt.textContent = '正在汇总入组受试者的已有影像分析与化验记录…'
 
           setTimeout(() => {
             if (bar) bar.style.width = '70%'
-            if (txt) txt.textContent = '正在提取 L3 骨骼肌 SMI、RECIST 径线与生化指标并建立审计溯源指纹…'
+            if (txt) txt.textContent = '正在按变量匹配记录并标注来源…'
           }, 300)
 
           try {
@@ -6132,7 +5297,7 @@ ${modelsDesc}
               受试者: ${res.total_subjects} 人
             </span>
             <span style="background:#f0fdf4;color:#15803d;padding:3px 8px;border-radius:4px;font-size:12px;font-weight:600;border:1px solid #bbf7d0;">
-              成功回填指标: ${s.extracted_cells} 项 (${Math.round(s.avg_confidence * 100)}% 置信度)
+              已回填: ${s.extracted_cells} 项（已核实 ${s.verified_cells ?? 0} 项）
             </span>
             <span style="background:#fef2f2;color:#b91c1c;padding:3px 8px;border-radius:4px;font-size:12px;font-weight:600;border:1px solid #fecaca;">
               缺漏待查: ${s.missing_cells} 项
@@ -6155,11 +5320,12 @@ ${modelsDesc}
             if (!cell || cell.value === null) {
               tableHtml += `<td class="muted" style="text-align:center;">—</td>`
             } else {
-              const confPct = Math.round(cell.confidence * 100)
+              // 标注来源等级与核实状态，而不是写死的「置信度」百分比
+              const tag = cell.verified ? '已核实' : `${ECRF_TIER_SHORT[cell.source_tier] ?? '来源未知'} · 未核实`
               tableHtml += `<td>
                 <button type="button" class="linkish" data-audit-cell="${esc(r.subject_id)}" data-audit-var="${esc(v.id)}" style="font-weight:600;color:var(--text);text-align:left;display:block;width:100%;">
                   ${esc(cell.formatted)}
-                  <span style="font-size:10px;color:#047857;margin-left:2px;">[${confPct}%]</span>
+                  <span style="font-size:10px;color:${cell.verified ? '#047857' : 'var(--warn)'};margin-left:2px;">[${esc(tag)}]</span>
                 </button>
               </td>`
             }
@@ -6191,8 +5357,8 @@ ${modelsDesc}
               auditBody.innerHTML = `
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">
                   <div>• <b>回填数值</b>: <span style="font-weight:700;color:#0284c7;">${esc(cell.formatted)}</span></div>
-                  <div>• <b>模型提取置信度</b>: <span style="font-weight:700;color:#047857;">${Math.round(cell.confidence * 100)}%</span></div>
-                  <div>• <b>数据源模态</b>: <span style="font-weight:600;">${cell.source_type === 'imaging' ? 'MONAI 3D 卷积断层扫描' : cell.source_type === 'lab' ? '院内生化实验室检验单' : '基线临床病历'}</span></div>
+                  <div>• <b>核实状态</b>: <span style="font-weight:700;color:${cell.verified ? '#047857' : 'var(--warn)'};">${cell.verified ? '研究者已核实' : '未核实'}</span></div>
+                  <div>• <b>数据来源</b>: <span style="font-weight:600;">${esc(ECRF_TIER_LABEL[cell.source_tier] ?? '来源未知')}</span></div>
                   <div>• <b>提取时间戳</b>: <span class="muted small">${date(cell.extracted_at)}</span></div>
                 </div>
                 ${cell.source_slice_index ? `<div style="background:#f8fafc;padding:6px 10px;border-radius:4px;border:1px solid #e2e8f0;margin-top:4px;">
@@ -6205,7 +5371,7 @@ ${modelsDesc}
                     <input type="text" id="rsAuditEditVal" value="${esc(cell.value ?? '')}" style="width:120px;">
                   </label>
                   <button type="button" class="small-btn primary" id="rsAuditVerifyBtn">${icon('check', { size: 12 })} 确认无误并 SDV 核实锁定</button>
-                  <span class="muted small">核实后将标记为 100% 置信度并写入研究变量表</span>
+                  <span class="muted small">核实后标记为「已核实」并写入研究变量表</span>
                 </div>
               `
               const verifyBtn = document.getElementById('rsAuditVerifyBtn')
@@ -6225,7 +5391,7 @@ ${modelsDesc}
                       }),
                     })
                     cell.value = finalVal
-                    cell.confidence = 1.0
+                    cell.verified = true
                     cell.formatted = vDef?.unit ? `${finalVal} ${vDef.unit}` : String(finalVal)
                     btn.innerHTML = `${esc(cell.formatted)} <span style="font-size:10px;color:#047857;margin-left:2px;">[已核实]</span>`
                     notice(`已核实并锁定受试者 ${subId} 的「${vDef?.name_zh || varId}」数据`)
@@ -6460,18 +5626,6 @@ ${modelsDesc}
       void downloadTable1Docx(expT1)
       return
     }
-    const surv = t.closest<HTMLElement>('[data-survival]')
-    if (surv) {
-      e.stopPropagation()
-      void survivalDialog(surv.dataset.survival!, surv.dataset.dsname || '研究数据集')
-      return
-    }
-    const nomo = t.closest<HTMLElement>('[data-nomogram]')
-    if (nomo) {
-      e.stopPropagation()
-      void predictionModelDialog(nomo.dataset.nomogram!, nomo.dataset.dsname || '研究数据集')
-      return
-    }
     const regen = t.closest<HTMLElement>('[data-regen]')?.dataset.regen
     if (regen) { datasetDialog(id, regen); return }
     const ds = t.closest<HTMLElement>('[data-dataset]')?.dataset.dataset
@@ -6514,9 +5668,7 @@ ${modelsDesc}
     if (act === 'upload') { ($('rsUpload') as HTMLInputElement).click(); return }
     if (act === 'screen') { screenDialog(id); return }
     if (act === 'gen') { datasetDialog(id); return }
-    if (act === 'figures') { void figureStudioDialog(id, s.title); return }
     if (act === 'consort') { void consortDialog(id); return }
-    if (act === 'evalue') { evalueDialog(id); return }
     if (act === 'ecrf') { void ecrfDialog(id); return }
     if (act === 'vars') { void varsDialog(id); return }
     if (act === 'img-export') { void imagingExportDialog(id); return }
