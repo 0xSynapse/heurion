@@ -29,6 +29,7 @@ import { openPhotoSearch, photoSearchEnabled } from './unsplash.ts'
 import { openHelpGuide, importHelpAsDoc } from './help.ts'
 import { initCopilot, formatMarkdown, bindMarkdownActions } from './copilot.ts'
 import { icon, type IconName } from './icons.ts'
+import { initProvenanceUi, protectionNote } from './provenance-ui.ts'
 
 const TOKEN = storedToken()
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
@@ -290,6 +291,9 @@ document.addEventListener('heurion:import-help-doc', () => {
 const library = initLibrary(api, () => TOKEN, (m, e) => showNotice(m, e), { showPage: (cls, title) => showPage(cls, title) })
 const memory = initMemory(api, (m, e) => showNotice(m, e), id => void open(id))
 const actions = initActions(api, (m, e) => showNotice(m, e))
+// 来源等级：AI 文字底纹、提示栏、确认（docs/design/PROVENANCE.md 第 5 节）
+const provUi = initProvenanceUi({ api, view: () => session?.editor?.view ?? null, docId: () => session?.docId ?? null, notice: (m, e) => showNotice(m, e) })
+void provUi.loadPrefs()
 const datasets = initDatasets(api, (m, e) => showNotice(m, e), {
   showPage: (cls, title) => showPage(cls, title),
   openStudy: id => void researchUi.open(id),
@@ -729,6 +733,7 @@ function leaveDoc(): void {
   close()
   hideTurnBanner()
   $('suggestBanner').hidden = true
+  provUi.hide()
   const csb = document.getElementById('chatSuggestBanner')
   if (csb) csb.hidden = true
   const tocPanel = document.getElementById('docOutlinePanel')
@@ -883,12 +888,14 @@ async function open(docId: string): Promise<void> {
       },
       onDocChange: () => {
         renderDocOutline()
+        provUi.render()
       },
       analysis: { has: id => datasets.hasProvenance(id), show: id => void datasets.showProvenance(id) },
       onSuggestion: (group, accept) => void resolveSuggestion(group, accept),
       onSelection: a => { anchor = a; placeFab(); syncToolbar() },
     })
     session = { docId, kind: 'doc', stream, ydoc, provider, editor }
+    provUi.render()
     $('page').classList.remove('deck')
   }
   const ctx = (() => { try { return meta.context ? JSON.parse(meta.context) : null } catch { return null } })()
@@ -1858,6 +1865,7 @@ $('toolbar').onclick = async e => {
   }
   if (cmd === 'cite') { void addCitation(); return }
   if (cmd === 'measure') { void openMeasureDialog(); return }
+  if (cmd === 'confirmAi') { provUi.confirmSelection(); return }
   if (cmd === 'tableMerge') {
     if (!session.editor.commands.tableMerge()) showNotice('先拖选两个以上相邻的单元格再合并')
     return
@@ -2716,6 +2724,7 @@ function renderTurnEvent(ev: any): void {
     case 'memory': $('chatLog').appendChild(memory.memoryCard(ev)); $('chatLog').scrollTop = 1e9; break
     case 'action': $('chatLog').appendChild(actions.card(ev.action)); $('chatLog').scrollTop = 1e9; break
     case 'version': addStep(`  ✓ 已保存为 v${ev.seq}`, 'ok'); break
+    case 'protection': $('chatLog').appendChild(protectionNote(ev.lines ?? [])); $('chatLog').scrollTop = 1e9; break
     case 'error': {
       addStep(ev.message, 'err')
       // 失败原因直接显示在对话里（不只在折叠的工作过程里）

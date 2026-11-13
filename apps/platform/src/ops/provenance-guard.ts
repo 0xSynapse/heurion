@@ -103,6 +103,28 @@ export function suggestReasons(a: ProvenanceAssessment, safeEdits: boolean): str
   return [...out]
 }
 
+/**
+ * 一轮里来源规则起作用的记录 → 给用户看的「保护记录」（每类一行，平常的话，不提内部代码）。
+ * 没有记录时返回空数组（不显示）。
+ */
+export function protectionSummary(events: Array<{ kind: string; detail: string }>): string[] {
+  const by = new Map<string, string[]>()
+  for (const e of events) { if (!by.has(e.kind)) by.set(e.kind, []); by.get(e.kind)!.push(e.detail) }
+  const n = (k: string) => by.get(k)?.length ?? 0
+  const sample = (k: string) => [...new Set(by.get(k)!.flatMap(d => d.split('、')))].slice(0, 3).join('、')
+  const out: string[] = []
+  if (n('suggest')) out.push(`有 ${n('suggest')} 批修改改到了你写的文字，已转为待采纳修订，采纳后生效`)
+  if (n('conflict_user_edited')) out.push(`保留了你在 AI 读过之后改的内容（${n('conflict_user_edited')} 次）`)
+  if (n('unobserved_number')) out.push(`拦下了找不到出处的数字：${sample('unobserved_number')}`)
+  if (n('unread_citation')) out.push(`拦下了 ${n('unread_citation')} 次未读原文就插入的引用`)
+  const cite = n('existing_citation') + n('citation_not_registered') + n('citation_unknown')
+  if (cite) out.push(`拦下了 ${cite} 次不规范的引用改动`)
+  const measure = n('measurement_lost') + n('bare_measurement')
+  if (measure) out.push(`拦下了 ${measure} 次没有绑定来源的测量数字`)
+  if (n('unverifiable')) out.push(`请对照文献全文核对这些数字（所引文献只有摘要）：${sample('unverifiable')}`)
+  return out
+}
+
 export interface NumberCheck {
   /** 没有出处的数字：拒绝 */
   unsourced: Array<{ number: string; blockId: string }>

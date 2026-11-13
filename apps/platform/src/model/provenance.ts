@@ -102,6 +102,39 @@ export function stripProv(block: PMNode): PMNode {
   return mapTextblocks(block, tb => rebuild(tb, tokens(tb), () => ({ ai: false, turn: null })))
 }
 
+/** 确认：去掉指定块（ids 为空表示全文）里的 AI 标记。返回新文档与确认了多少块。 */
+export function confirmBlocks(doc: PMNode, ids: Set<string> | null): { doc: PMNode; blocks: number } {
+  let blocks = 0
+  const walk = (node: PMNode, inside: boolean): PMNode => {
+    const id = node.attrs.id as string | null | undefined
+    const hit = inside || !ids || (!!id && ids.has(id))
+    if (node.isTextblock) {
+      if (!hit || !hasAiText(node)) return node
+      blocks++
+      return stripProv(node)
+    }
+    if (node.isLeaf) return node
+    let changed = false
+    const kids: PMNode[] = []
+    node.forEach(c => { const n = walk(c, hit && node.type.name !== 'doc'); if (n !== c) changed = true; kids.push(n) })
+    return changed ? node.copy(Fragment.fromArray(kids)) : node
+  }
+  return { doc: walk(doc, false), blocks }
+}
+
+/** 文档里 AI 未确认的文字统计（界面提示栏用）。 */
+export function aiStats(doc: PMNode): { blocks: number; chars: number } {
+  let blocks = 0
+  let chars = 0
+  doc.descendants(n => {
+    if (!n.isTextblock) return true
+    const spans = aiSpans(n)
+    if (spans.length) { blocks++; chars += spans.reduce((s, x) => s + x.text.length, 0) }
+    return false
+  })
+  return { blocks, chars }
+}
+
 /** 把块里全部文字标为 AI 未确认（回填已有文档时用）。 */
 export function markAllAi(block: PMNode, turnId: string | null): PMNode {
   return mapTextblocks(block, tb => {

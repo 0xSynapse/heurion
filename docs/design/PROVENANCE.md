@@ -157,6 +157,13 @@ prov: {
 - **确认**：选中文字或段落，点「确认」；段落菜单里有「确认本段」。
 - **保护记录**：每轮 AI 结束后在对话里显示一行，例如「保护了 2 处：保留了您改的 HR 1.12；拒绝了 1 个未查到来源的数字 0.032」。不弹窗，不打断。
 
+**实现（第 3 期）：**
+
+- 文档上方提示栏（`provBanner`）：「有 N 段含 AI 写的、还没确认的文字」+「下一处」「隐藏底纹」「全部确认」；工具栏「确认」确认光标所在或选中的段落（`web/src/provenance-ui.ts`）。
+- 确认接口 `POST /api/docs/:id/confirm-ai {node_ids?}`，不给 AI（`parity.test.ts` 的 NOT_FOR_AI）。确认只去掉标记、不改文字，以 `system` 落库：否则会被当成「用户改过这一块」，冲突守卫拦下 AI 的后续修改、记忆信号也会误记；谁确认的记在审计（`doc.confirm_ai`）。
+- 个人偏好 `GET / PUT /api/me/provenance {safe_edits, shade}`，个人设置里两个开关；只能用户本人改。
+- 保护记录：OpService 把转为待采纳修订、交给用户核对的数字、以及保护类拒绝（`unobserved_number`、`unread_citation`、`conflict_user_edited`、引用与测量守卫）按回合记进 `provenance_events`（试探不记）；回合结束时 `turns/service.ts` 汇总成几行平常的话（`protectionSummary`），以 `protection` 事件发给对话，显示为「写作保护」小卡片。
+
 ## 6. 兼容性
 
 ### 6.1 已有文档

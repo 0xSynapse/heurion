@@ -319,6 +319,9 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/public/tools/kaplan-meier': '官网着陆页公开无状态 Kaplan-Meier 生存曲线小工具（AI 调 dataset_survival）',
   'POST /api/public/tools/forest-plot': '官网着陆页公开无状态亚组森林图 SVG 小工具（AI 调 dataset_logistic / imaging_medical_figure_studio）',
   'POST /api/public/tools/phi-scan': '官网着陆页公开无状态 PHI 隐私扫描与脱敏小工具（AI 调 phi_scan）',
+  'POST /api/docs/:id/confirm-ai': '确认 AI 写的文字只能由用户本人做（AI 不能确认自己写的东西，docs/design/PROVENANCE.md）',
+  'GET /api/me/provenance': 'AI 写作保护的个人偏好（界面设置；AI 从写入结果里就能知道是否转为待采纳修订）',
+  'PUT /api/me/provenance': 'AI 写作保护的个人偏好只能由用户本人改（AI 不能放宽约束自己的规则）',
   'POST /api/public/survey/clinician-writing': '官网匿名研究问卷的提交入口，只能由受访医生本人填写（AI 不代人作答；管理员经 platform_admin.survey_export 读答卷）',
   // Aegis Application Protocol (AAP-1.0) 协议握手、授权令牌管理与人工租约审批接口
   'POST /api/aegis/auth/device': '由本地 aegis-os app login 发起 RFC 8628 设备码免密绑定请求（AI 不能自行发起）',

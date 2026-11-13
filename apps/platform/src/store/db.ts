@@ -887,6 +887,11 @@ export class Store {
     this.db.exec(`CREATE TABLE IF NOT EXISTS observed_numbers (
       obs_key TEXT NOT NULL, value REAL NOT NULL, at TEXT NOT NULL, PRIMARY KEY (obs_key, value)
     )`)
+    // 每轮 AI 回合里来源规则起作用的记录（转为待采纳修订、拒绝没有出处的数字等），回合结束时汇总成一行「保护记录」
+    this.db.exec(`CREATE TABLE IF NOT EXISTS provenance_events (
+      turn_id TEXT NOT NULL, doc_id TEXT NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL, at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_provenance_events_turn ON provenance_events (turn_id);`)
     // 官网匿名问卷的答卷（survey/clinician-survey.ts）：不记 IP、不关联账户，只存规整后的答案
     this.db.exec(`CREATE TABLE IF NOT EXISTS survey_responses (
       id TEXT PRIMARY KEY, survey TEXT NOT NULL, version TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
@@ -2249,9 +2254,19 @@ export class Store {
     return (this.db.prepare('SELECT value FROM observed_numbers WHERE obs_key = ?').all(key) as Array<{ value: number }>).map(r => r.value)
   }
 
-  /** 清掉 days 天以前的观察记录（回合早已结束）。 */
+  /** 清掉 days 天以前的观察记录与保护记录（回合早已结束）。 */
   purgeObservedNumbers(days: number): void {
-    this.db.prepare('DELETE FROM observed_numbers WHERE at < ?').run(new Date(Date.now() - days * 86400_000).toISOString())
+    const cutoff = new Date(Date.now() - days * 86400_000).toISOString()
+    this.db.prepare('DELETE FROM observed_numbers WHERE at < ?').run(cutoff)
+    this.db.prepare('DELETE FROM provenance_events WHERE at < ?').run(cutoff)
+  }
+
+  addProvenanceEvent(e: { turnId: string; docId: string; kind: string; detail: string }): void {
+    this.db.prepare('INSERT INTO provenance_events (turn_id, doc_id, kind, detail, at) VALUES (?, ?, ?, ?, ?)').run(e.turnId, e.docId, e.kind, e.detail, now())
+  }
+
+  provenanceEvents(turnId: string): Array<{ doc_id: string; kind: string; detail: string }> {
+    return this.db.prepare('SELECT doc_id, kind, detail FROM provenance_events WHERE turn_id = ? ORDER BY rowid').all(turnId) as Array<{ doc_id: string; kind: string; detail: string }>
   }
 
   /** 由 AI 新建、之后从没被人改过的块（来源标记回填用）。 */

@@ -41,6 +41,9 @@ export interface ProvenanceNote {
   unverifiable_numbers?: Array<{ number: string; block_id: string; cites: string[] }>
 }
 
+/** 计入「保护记录」的拒绝：来源规则，以及保护人的修改、引用与测量的守卫。 */
+const PROTECTION_CODES = new Set(['unobserved_number', 'unread_citation', 'conflict_user_edited', 'existing_citation', 'citation_not_registered', 'citation_unknown', 'measurement_lost', 'bare_measurement'])
+
 export interface EditMeta {
   actor: Actor
   turnId: string | null
@@ -87,6 +90,11 @@ export class OpService {
     /** provenance：启用来源规则（线上开启；单元测试默认关闭，免得与其他功能的断言互相干扰） */
     private readonly options: { provenance?: boolean } = {},
   ) {}
+
+  /** 保护记录（回合结束时汇总给用户看）；记录失败不影响写入。 */
+  private recordProvenance(turnId: string, docId: string, kind: string, detail: string): void {
+    try { this.docs.store.addProvenanceEvent({ turnId, docId, kind, detail }) } catch (err) { console.error('[provenance] record:', err) }
+  }
 
   /** 安全小改是否开启（文档所有者在设置里可关，默认开）。 */
   private safeEditsOn(owner: string): boolean {
@@ -298,6 +306,10 @@ export class OpService {
         sim.provenance = { ...sim.provenance, converted_to_suggest: converted }
       }
       const provenance = Object.keys(sim.provenance).length ? sim.provenance : undefined
+      if (!batch.dry_run && meta.actor === 'ai' && meta.turnId && provenance) {
+        if (provenance.converted_to_suggest?.length) this.recordProvenance(meta.turnId, batch.doc_id, 'suggest', provenance.converted_to_suggest.join('；'))
+        for (const n of provenance.unverifiable_numbers ?? []) this.recordProvenance(meta.turnId, batch.doc_id, 'unverifiable', n.number)
+      }
       if (batch.dry_run) {
         return { doc_id: batch.doc_id, rev: sim.rev, results: sim.results, changes: [], ...(provenance ? { provenance } : {}) }
       }
@@ -320,6 +332,10 @@ export class OpService {
       }
       return { doc_id: batch.doc_id, rev: event?.rev ?? sim.rev, results: sim.results, changes: event?.changes ?? [], ...(provenance ? { provenance } : {}) }
     } catch (err) {
+      if (err instanceof OpError && meta.actor === 'ai' && meta.turnId && !batch.dry_run && PROTECTION_CODES.has(err.code)) {
+        const nums = (err.extra.current as { numbers?: string[] } | undefined)?.numbers
+        this.recordProvenance(meta.turnId, batch.doc_id, err.code, nums?.join('、') ?? err.message)
+      }
       if (err instanceof OpError && meta.actor === 'ai') {
         const row = this.docs.store.getDoc(batch.doc_id)
         this.onGuardReject?.({

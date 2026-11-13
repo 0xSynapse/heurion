@@ -13,6 +13,8 @@ export type UiEvent =
   /** 工具结果；失败时带原因（message）与建议（hint），前端显示给用户。 */
   | { type: 'tool_result'; callId: string; isError: boolean; code?: string; message?: string; hint?: string }
   | { type: 'turn_end'; reason: string }
+  /** 本轮来源规则起作用的汇总（保护记录，docs/design/PROVENANCE.md 第 5 节）；没有时不发。 */
+  | { type: 'protection'; lines: string[] }
   /** 文档被本回合修改（实时，每次 doc_edit 提交一次）。 */
   | { type: 'doc_updated'; doc_id: string; rev: number; changes: number }
   /** 回合结束时落的版本。 */

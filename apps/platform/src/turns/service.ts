@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import type { Documents, CommitEvent } from '../model/runtime.ts'
 import { addUsage, emptyUsage, mapNotification, toolResultText, type UiEvent } from '../harness/events.ts'
 import { allNumbers } from '../ops/numbers.ts'
+import { protectionSummary } from '../ops/provenance-guard.ts'
 import { scopeOf } from '../mcp/scope.ts'
 import { filterPhrReply, type PhrMember } from '../ops/phr-guard.ts'
 import type { MemoryService } from '../memory/service.ts'
@@ -580,6 +581,11 @@ export class TurnService {
           try { this.alerts?.turnFailed(failure) } catch {}
         }
         const { ids: _ids, ...turnUsage } = usage
+        // 保护记录：本轮来源规则起作用的地方，汇总成几行平常的话
+        try {
+          const lines = protectionSummary(store.provenanceEvents(turn.id))
+          if (lines.length) emit({ type: 'protection', lines })
+        } catch (err) { console.error('[provenance] summary:', err) }
         try { emit({ type: 'turn_done', turn_id: turn.id, status, docs: [...touched], ...(turnUsage.steps > 0 ? { usage: turnUsage } : {}) }) } catch {}
       }
       this.cancelling.delete(job.id)

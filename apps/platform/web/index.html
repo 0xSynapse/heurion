@@ -223,6 +223,7 @@
       <button data-cmd="figureStudio" class="tb-academic-btn" title="从医学制图成果库插入矢量图，或就地绘制实验统计图、机制通路图、生信图并插入当前段落（自动附带代码与数据溯源）">科研制图</button>
       <button data-cmd="cite" class="tb-academic-btn" title="按 DOI / PMID / 标题插入引用">引用</button>
       <button data-cmd="measure" class="tb-academic-btn" title="插入已确认的影像病灶测量原子 [@m:id]（W4.2 / T2.5）">测量</button>
+      <button data-cmd="confirmAi" id="confirmAiBtn" title="把光标所在段落（或选中的段落）里 AI 写的文字确认为你的" hidden>确认</button>
       <input id="imageInput" type="file" accept="image/png,image/jpeg,image/gif" multiple hidden>
       <span class="sep"></span>
       <button data-cmd="undo" title="撤销 ⌘Z">↶</button>
@@ -237,6 +238,14 @@
       <span class="sep"></span>
       <button data-all="0">全部拒绝</button>
       <button data-all="1" class="primary">全部采纳</button>
+    </div>
+    <div class="suggest-banner prov-banner" id="provBanner" hidden>
+      <span class="dot"></span><span id="provSummary"></span>
+      <span class="grow"></span>
+      <button data-prov="next" title="跳到下一处 AI 写的、还没确认的文字">下一处</button>
+      <button data-prov="shade" id="provShadeBtn" title="在正文里显示 / 隐藏 AI 文字的底纹">隐藏底纹</button>
+      <span class="sep"></span>
+      <button data-prov="all" class="primary" title="把全文 AI 写的文字确认为你的：确认后 AI 再改它们，要按你写的文字的规则来">全部确认</button>
     </div>
     <div class="toolbar deck-toolbar" id="deckToolbar" hidden>
       <button data-dk="slide-add" title="在当前页后面加一页（选版式）">＋新页 ▾</button>

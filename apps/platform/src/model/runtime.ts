@@ -299,7 +299,8 @@ function freshElements(doc: PMNode, from: number, to: number): Y.XmlElement[] {
  */
 function labelsProvenance(doc: PMNode, ops: unknown): boolean {
   if (!doc.type.schema.marks[PROV_MARK]) return false
-  const KEEP = new Set(['restore', 'revert_turn', 'provenance_backfill'])
+  // confirm_text：人确认 AI 文字，只去掉标记，按写者重打会把标记又加回来
+  const KEEP = new Set(['restore', 'revert_turn', 'provenance_backfill', 'confirm_text'])
   return !(Array.isArray(ops) && ops.some(o => o && typeof o === 'object' && KEEP.has((o as { op?: string }).op ?? '')))
 }
 

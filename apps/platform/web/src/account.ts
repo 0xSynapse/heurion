@@ -391,6 +391,11 @@ function openSettings(me: Me, api: <T = any>(path: string, opts?: RequestInit) =
       <div class="form-error" id="workEmailError"></div>
       <div class="row end"><button class="primary" id="workEmailSaveBtn">保存工作邮箱前缀</button></div>
     </form>
+    <div class="form prov-settings" id="provSettings">
+      <h3>AI 写作保护</h3>
+      <label><input type="checkbox" id="provSafeEdits" checked><span>允许 AI 直接对我写的文字做小改动<br><span class="muted small">只限短小、不涉及数字、引用、否定词和措辞强度的改动；关掉后，AI 对你写的文字的任何修改都要你采纳后才生效。</span></span></label>
+      <label><input type="checkbox" id="provShade" checked><span>在正文里用底纹标出 AI 写的、还没确认的文字</span></label>
+    </div>
     <form id="emailForm" class="form">
       <h3>找回密码邮箱</h3>
       <div class="muted">${me.email ? `已绑定 <b>${esc(me.email)}</b>。忘记密码时可以用它自助找回；要换绑，在下面填新邮箱。` : '还没有绑定邮箱：绑定后忘记密码可以自助找回，否则只能找管理员重置。'}</div>
@@ -412,6 +417,21 @@ function openSettings(me: Me, api: <T = any>(path: string, opts?: RequestInit) =
       <div class="muted small">将您的医生/研究员账户与本地 Aegis-OS 运行时（Antigravity / Hermes 多智能体协同沙箱）绑定。智能体将以您的身份和租户权限执行操作，高危对外动作需您批准短期租约 (Session Lease)。</div>
       <div id="aegisGrantsBox" class="muted small" style="margin-top:8px">加载中…</div>
     </div>` : ''}`, true)
+  // AI 写作保护（docs/design/PROVENANCE.md）：两个开关，改了立即保存
+  const safeBox = dlg.querySelector<HTMLInputElement>('#provSafeEdits')!
+  const shadeBox = dlg.querySelector<HTMLInputElement>('#provShade')!
+  void api<{ safe_edits: boolean; shade: boolean }>('/api/me/provenance').then(p => { safeBox.checked = p.safe_edits; shadeBox.checked = p.shade }).catch(() => {})
+  const saveProv = async (patch: Record<string, boolean>) => {
+    try {
+      const p = await api<{ safe_edits: boolean; shade: boolean }>('/api/me/provenance', { method: 'PUT', body: JSON.stringify(patch) })
+      document.body.classList.toggle('hide-prov', !p.shade)
+      const shadeBtn = document.getElementById('provShadeBtn')
+      if (shadeBtn) shadeBtn.textContent = p.shade ? '隐藏底纹' : '显示底纹'
+      notify('已保存')
+    } catch (err) { notify((err as Error).message, true) }
+  }
+  safeBox.onchange = () => void saveProv({ safe_edits: safeBox.checked })
+  shadeBox.onchange = () => void saveProv({ shade: shadeBox.checked })
   dlg.querySelector<HTMLFormElement>('#profileForm')!.onsubmit = async e => {
     e.preventDefault()
     const name = new FormData(e.target as HTMLFormElement).get('display_name') as string

@@ -60,6 +60,7 @@ import { pptxTemplate } from '../convert/pptx-template.ts'
 import { sourceIndex } from '../convert/source-pages.ts'
 import { rebindSourceMap } from '../convert/source-rebind.ts'
 import { indexById } from '../model/ids.ts'
+import { aiStats, confirmBlocks } from '../model/provenance.ts'
 import { tableSourceProvider } from '../convert/pdf-crop.ts'
 import type { Complete, VisionComplete } from '../harness/complete.ts'
 import type { FullTextClient } from '../literature/fulltext.ts'
@@ -1166,6 +1167,23 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.patch('/api/platform/tenants/:tid', async c => {
     try { tenants.setStatus(c.get('user'), c.req.param('tid'), (await c.req.json<{ status?: string }>()).status); return c.json({ ok: true }) } catch (err) { return tenantFailure(c, err) }
   })
+  /**
+   * AI 写作保护的个人偏好（docs/design/PROVENANCE.md）：safe_edits = AI 能否直接对你写的文字做安全小改
+   * （关掉则一律转为待采纳修订）；shade = 编辑器里给 AI 未确认的文字加底纹。都默认开。
+   * 只能由用户本人改：AI 不能放宽约束自己的规则。
+   */
+  app.get('/api/me/provenance', c => {
+    const u = c.get('user')
+    return c.json({ safe_edits: store.getUserSetting(u, 'provenance.safe_edits') !== 'off', shade: store.getUserSetting(u, 'provenance.shade') !== 'off' })
+  })
+  app.put('/api/me/provenance', async c => {
+    const u = c.get('user')
+    const body = await c.req.json<{ safe_edits?: unknown; shade?: unknown }>().catch(() => ({} as { safe_edits?: unknown; shade?: unknown }))
+    if (typeof body.safe_edits === 'boolean') store.setUserSetting(u, 'provenance.safe_edits', body.safe_edits ? null : 'off')
+    if (typeof body.shade === 'boolean') store.setUserSetting(u, 'provenance.shade', body.shade ? null : 'off')
+    return c.json({ safe_edits: store.getUserSetting(u, 'provenance.safe_edits') !== 'off', shade: store.getUserSetting(u, 'provenance.shade') !== 'off' })
+  })
+
   app.patch('/api/me', async c => {
     try {
       return c.json(accounts.updateProfile(c.get('user'), await c.req.json()))
@@ -2113,6 +2131,27 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const next = resolveSuggestions(docs.get(row.id), group, accept)
     const event = docs.commit(row.id, next, { actor: 'user', turnId: null, user: c.get('user'), ops: [{ op: accept ? 'accept_suggestion' : 'reject_suggestion', group }] })
     return c.json({ rev: docs.rev(row.id), changes: event?.changes.length ?? 0 })
+  })
+
+  /**
+   * 确认 AI 写的文字（docs/design/PROVENANCE.md 4.1）：去掉指定块（不给 node_ids = 全文）里的 AI 来源标记，
+   * 确认后这些文字算人写的，AI 再改它要按人写的文字的规则来。只能由用户本人做，不给 AI。
+   */
+  app.post('/api/docs/:id/confirm-ai', async c => {
+    const row = owned(c)
+    if (!row) return c.json({ error: 'not found' }, 404)
+    if (row.kind !== 'doc') return c.json({ error: '只有文档里有 AI 来源标记' }, 400)
+    const body = await c.req.json<{ node_ids?: unknown }>().catch(() => ({} as { node_ids?: unknown }))
+    const ids = Array.isArray(body.node_ids) ? new Set(body.node_ids.filter((x): x is string => typeof x === 'string')) : null
+    docs.flush(row.id)
+    const { doc: next, blocks } = confirmBlocks(docs.get(row.id), ids)
+    // 以 system 落库：确认只去掉标记、不改文字，不能算「用户改过这一块」
+    // （否则冲突守卫会拦下 AI 对它的后续修改，记忆信号也会误记成「用户改了 AI 写的段落」）
+    if (blocks > 0) {
+      docs.commit(row.id, next, { actor: 'system', turnId: null, user: c.get('user'), ops: [{ op: 'confirm_text', node_ids: ids ? [...ids] : 'all' }] })
+      audit(c, 'doc.confirm_ai', { target: row.id, detail: `${blocks} 段` })
+    }
+    return c.json({ confirmed: blocks, rev: docs.rev(row.id), remaining: aiStats(docs.get(row.id)) })
   })
 
   /** 撤销某个 AI 回合对本文档的改动（用户在此期间的编辑保留）。 */
