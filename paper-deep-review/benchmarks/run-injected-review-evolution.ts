@@ -43,7 +43,7 @@ import {
 } from '../../apps/platform/scripts/eval-review-score.ts'
 import { config } from '../../apps/platform/src/config.ts'
 import { ClaimService, hasInstanceLeakage } from '../../apps/platform/src/claims/service.ts'
-import { makeComplete, type CompleteUsage } from '../../apps/platform/src/harness/complete.ts'
+import { NO_THINKING, makeComplete, type CompleteUsage } from '../../apps/platform/src/harness/complete.ts'
 import type { PubMedClient } from '../../apps/platform/src/literature/pubmed.ts'
 import { ProceduralHarnessService } from '../../apps/platform/src/memory/procedural.ts'
 import { Documents } from '../../apps/platform/src/model/runtime.ts'
@@ -369,6 +369,8 @@ async function main() {
         apiKey: config.deepseekApiKey,
         model: config.model,
         onUsage: recordUsage,
+        // 论文里报告的配置：flash 模型关闭深度思考（以前是 makeComplete 的默认行为，现在显式写出，结果可复现）
+        ...(config.model.includes('flash') ? { extra: NO_THINKING } : {}),
       })
     : null
 

@@ -47,10 +47,16 @@ function caller(opts: CompleteOptions, extra: Record<string, unknown> = {}): (sy
   }
 }
 
+/**
+ * 关闭模型的深度思考（只给明确要求的调用方用，如论文基准测试要固定配置）。
+ * 不能作为默认值：2026-11-11 曾按模型名含 flash 默认关闭，线上默认模型 deepseek-flash 因此全部不思考，
+ * 深度审稿、引用核查等只做了表面核查（速度快得不正常）。
+ */
+export const NO_THINKING = { thinking: { type: 'disabled' } } as const
+
 export function makeComplete(opts: CompleteOptions): Complete | null {
   if (!opts.apiKey) return null
-  const defaultExtra = opts.model.includes('flash') ? { thinking: { type: 'disabled' } } : {}
-  const call = caller(opts, { ...defaultExtra, ...opts.extra })
+  const call = caller(opts, { ...opts.extra })
   return (system, user) => call(system, user)
 }
 
