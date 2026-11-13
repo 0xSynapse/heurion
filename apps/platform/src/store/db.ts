@@ -878,6 +878,11 @@ export class Store {
     CREATE INDEX IF NOT EXISTS idx_turn_queue_user ON turn_queue (user_id);
     CREATE INDEX IF NOT EXISTS idx_docs_owner_deleted ON docs (owner, deleted_at);`)
     this.db.exec('CREATE INDEX IF NOT EXISTS users_tenant ON users (tenant_id)')
+    // 官网匿名问卷的答卷（survey/clinician-survey.ts）：不记 IP、不关联账户，只存规整后的答案
+    this.db.exec(`CREATE TABLE IF NOT EXISTS survey_responses (
+      id TEXT PRIMARY KEY, survey TEXT NOT NULL, version TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_survey_responses_survey ON survey_responses (survey, created_at);`)
     this.cleanLegacyCitations()
     // 科室与知家分享（docs/design/SHARING.md）
     this.db.exec(`CREATE TABLE IF NOT EXISTS tenant_departments (
@@ -1437,6 +1442,25 @@ export class Store {
   }
 
   // —— 审计日志（M2） ——
+
+  /** 官网匿名问卷：存一份答卷，返回答卷 id。 */
+  addSurveyResponse(survey: string, version: string, data: unknown): { id: string; created_at: string } {
+    const id = randomUUID()
+    const created_at = new Date().toISOString()
+    this.db.prepare('INSERT INTO survey_responses (id, survey, version, data, created_at) VALUES (?, ?, ?, ?, ?)').run(id, survey, version, JSON.stringify(data), created_at)
+    return { id, created_at }
+  }
+
+  /** 某份问卷的全部答卷，按提交时间先后。 */
+  listSurveyResponses(survey: string): Array<{ id: string; version: string; created_at: string; data: unknown }> {
+    const rows = this.db.prepare('SELECT id, version, data, created_at FROM survey_responses WHERE survey = ? ORDER BY created_at, id').all(survey) as Array<{ id: string; version: string; data: string; created_at: string }>
+    return rows.map(r => ({ id: r.id, version: r.version, created_at: r.created_at, data: JSON.parse(r.data) }))
+  }
+
+  surveyStats(survey: string): { count: number; latest: string | null } {
+    const r = this.db.prepare('SELECT COUNT(*) AS n, MAX(created_at) AS latest FROM survey_responses WHERE survey = ?').get(survey) as { n: number; latest: string | null }
+    return { count: r.n, latest: r.latest }
+  }
 
   addAudit(e: { actor: string | null; action: string; target?: string | null; detail?: string | null; ip?: string | null; status?: number | null; tenant_id?: string | null; via?: string | null; confirmed_by?: string | null }): void {
     // 租户：显式给的，否则取操作者所在的租户（机构管理员只看本机构的审计）

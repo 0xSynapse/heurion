@@ -282,6 +282,7 @@ app.get('/phr.html', c => c.redirect('/phr'))
 import { isToolSlug, renderEnglishIndexHtml, renderToolPageHtml, renderToolsHubHtml } from './http/routes/site-pages.ts'
 import { registerBlogRoutes } from './http/routes/blog-pages.ts'
 import { recordPublicTrafficHit } from './http/routes/public-tools-api.ts'
+import { SURVEY_ID, SURVEY_SECTIONS, SURVEY_VERSION } from './survey/clinician-survey.ts'
 const SITE = fileURLToPath(new URL('../../site/', import.meta.url))
 const PUBLIC_HTML_CACHE = 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400'
 const servePublicHtml = (c: any, html: string) => {
@@ -326,6 +327,11 @@ app.all('/aegis-cloud/*', async c => {
     headers: upstreamRes.headers,
   })
 })
+// 匿名研究问卷：页面模板里注入同一份题目定义（服务端校验和导出也用它）
+const surveyHtml = () => readFileSync(join(SITE, 'survey/index.html'), 'utf8')
+  .replace('__SURVEY_DEF__', JSON.stringify({ id: SURVEY_ID, version: SURVEY_VERSION, sections: SURVEY_SECTIONS }).replace(/</g, '\\u003c'))
+app.get('/survey', c => servePublicHtml(c, surveyHtml()))
+app.get('/survey/', c => c.redirect('/survey'))
 app.get('/tools', c => servePublicHtml(c, renderToolsHubHtml('zh')))
 app.get('/tools/', c => c.redirect('/tools'))
 app.get('/en/tools', c => servePublicHtml(c, renderToolsHubHtml('en')))

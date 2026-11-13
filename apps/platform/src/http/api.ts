@@ -47,6 +47,7 @@ import { sharedFollowup, type ImagingFollowup } from '../imaging/followup.ts'
 import { registerMailCalendarRoutes } from './routes/mail-calendar.ts'
 import { registerResearchRoutes } from './routes/research.ts'
 import { registerPublicToolsApi } from './routes/public-tools-api.ts'
+import { SURVEY_ID, SURVEY_VERSION, SurveyError, exportCsv, exportJson, validateSubmission, type SurveyResponseRow } from '../survey/clinician-survey.ts'
 import type { MemoryEvolution } from '../memory/evolve.ts'
 import { MemoryError, type MemoryService } from '../memory/service.ts'
 import { SkillTrainingService } from '../memory/skill-trainer.ts'
@@ -455,6 +456,32 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   // —— 免登录临床科研公开小工具接口（无状态、限流） ——
   registerPublicToolsApi(app, { pubmed: deps.pubmed, crossref: deps.crossref })
 
+  // —— 官网匿名问卷（/survey）：免登录提交；IP 只用于内存里的限流，不写库 ——
+  const surveyHits = new Map<string, number[]>()
+  app.post(`/api/public/survey/${SURVEY_ID}`, async c => {
+    const ip = clientIp(c)
+    const now = Date.now()
+    const recent = (surveyHits.get(ip) ?? []).filter(t => now - t < 3_600_000)
+    if (recent.length >= 10) return c.json({ error: '提交太频繁，请稍后再试', code: 'rate_limited' }, 429)
+    const text = await c.req.text()
+    if (text.length > 64_000) return c.json({ error: '提交内容过大', code: 'too_large' }, 413)
+    let body: unknown
+    try { body = JSON.parse(text) } catch { return c.json({ error: '提交格式不对', code: 'bad_request' }, 400) }
+    // 蜜罐字段：页面上对人隐藏，机器人会填
+    if (body && typeof body === 'object' && (body as { website?: unknown }).website) return c.json({ ok: true })
+    try {
+      const sub = validateSubmission(body)
+      recent.push(now)
+      surveyHits.set(ip, recent)
+      if (surveyHits.size > 5000) surveyHits.clear()
+      const saved = store.addSurveyResponse(SURVEY_ID, SURVEY_VERSION, sub)
+      return c.json({ ok: true, id: saved.id })
+    } catch (err) {
+      if (err instanceof SurveyError) return c.json({ error: err.message, code: err.code }, 400)
+      throw err
+    }
+  })
+
   // —— AAP-1.0 统一身份鉴权与 MCP 网关（支持 RFC 8628 设备码免密绑定、Session 令牌、账号密码兑换、或 aegis_at_heurion.* 令牌） ——
   app.post('/api/aegis/auth/device', async c => {
     if (viaByReq.get(c.req.raw)) {
@@ -618,6 +645,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       c.req.path === '/api/mail/inbound' ||
       c.req.path === '/api/imaging/pacs/webhook' ||
       c.req.path.startsWith('/api/public/tools/') ||
+      c.req.path.startsWith('/api/public/survey/') ||
       c.req.path === '/api/aegis/auth/device' ||
       c.req.path === '/api/aegis/auth/token' ||
       c.req.path === '/api/aegis/mcp'
@@ -1199,6 +1227,18 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const names = new Map<string, string>()
     const nameOf = (id: string | null) => { if (!id) return null; if (!names.has(id)) names.set(id, store.getUser(id)?.username ?? id); return names.get(id)! }
     return c.json(rows.map(r => ({ ...r, actor_name: nameOf(r.actor) })))
+  })
+
+  // 管理员：官网问卷的答卷统计与导出（JSON / CSV，以 JSON 包一层返回，前端存成文件）
+  app.get(`/api/admin/surveys/${SURVEY_ID}`, c => c.json({ id: SURVEY_ID, version: SURVEY_VERSION, ...store.surveyStats(SURVEY_ID) }))
+  app.get(`/api/admin/surveys/${SURVEY_ID}/export`, c => {
+    const format = c.req.query('format') === 'csv' ? 'csv' : 'json'
+    const rows = store.listSurveyResponses(SURVEY_ID) as SurveyResponseRow[]
+    const date = new Date().toISOString().slice(0, 10)
+    audit(c, 'survey.export', { target: SURVEY_ID, detail: `${format}，${rows.length} 份` })
+    return format === 'csv'
+      ? c.json({ filename: `${SURVEY_ID}-${date}.csv`, mime: 'text/csv;charset=utf-8', count: rows.length, content: exportCsv(rows) })
+      : c.json({ filename: `${SURVEY_ID}-${date}.json`, mime: 'application/json', count: rows.length, content: JSON.stringify(exportJson(rows), null, 2) })
   })
 
   // 管理员：本实例停用记忆（同时删除所有用户的记忆）

@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>医生科研写作与 AI 使用 · Heurion 研究问卷</title>
+<meta name="description" content="Heurion 研究团队的匿名问卷：医生如何写科研论文、如何使用 AI 工具。约 10 分钟。">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* 官网问卷页：沿用 Heurion「Nordic Editorial」暖石纸面 / 深林暗色两套主题，直角；单栏，底部固定进度与提交栏。 */
+:root {
+  --bg: #FAF8F4; --bg-deep: #EFECE4; --panel: #FDFCF9; --raised: #F4F1EA; --hover: #E6E2D8;
+  --line: #DFDAD0; --line-strong: #C8C2B6;
+  --text: #151C19; --text-2: #4A534E; --muted: #646D68; --faint: #949B96;
+  --mint: #233E33; --mint-ink: #F4F1EA; --mint-hover: #151C19; --mint-text: #233E33;
+  --green: #1B6B4A; --green-soft: #E3ECE7;
+  --warn: #9A5B13; --warn-soft: #FDF3E1; --danger: #B42318; --danger-soft: #FDECEB;
+  --hover-tint: rgba(21, 28, 25, .04); --sel-bg: rgba(35, 62, 51, .16);
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --serif: 'Newsreader', 'Noto Serif SC', 'Songti SC', 'STSong', Georgia, serif;
+  --mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111614; --bg-deep: #0C100E; --panel: #151C19; --raised: #1C2521; --hover: #232E29;
+    --line: #26312C; --line-strong: #35443D;
+    --text: #F4F1EA; --text-2: #B8C2BC; --muted: #84918A; --faint: #58655E;
+    --mint: #00C472; --mint-ink: #0C100E; --mint-hover: #1AD484; --mint-text: #2CE092;
+    --green: #00C472; --green-soft: rgba(0, 196, 114, .12);
+    --warn: #F5B544; --warn-soft: rgba(245, 181, 68, .12); --danger: #FF6B6B; --danger-soft: rgba(255, 107, 107, .12);
+    --hover-tint: rgba(244, 241, 234, .04); --sel-bg: rgba(0, 196, 114, .24);
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.65 var(--font); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+::selection { background: var(--sel-bg); }
+a { color: var(--mint-text); }
+[hidden] { display: none !important; }
+
+.eyebrow { font-family: var(--mono); font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); }
+
+button { font: inherit; font-size: 13px; border: 1px solid var(--faint); background: transparent; color: var(--text); border-radius: 0; padding: 7px 16px; cursor: pointer; transition: background .15s, border-color .15s, color .15s; }
+button:hover:not(:disabled) { border-color: var(--text); background: var(--hover-tint); }
+button:focus-visible, textarea:focus-visible, input:focus-visible, label.opt:focus-within { outline: 1px solid var(--mint-text); outline-offset: 2px; }
+button.primary { background: var(--mint); border-color: var(--mint); color: var(--mint-ink); font-weight: 500; }
+button.primary:hover:not(:disabled) { background: var(--mint-hover); border-color: var(--mint-hover); }
+button.quiet { border-color: transparent; color: var(--muted); }
+button.quiet:hover:not(:disabled) { color: var(--text); background: var(--hover); border-color: transparent; }
+button.danger { border-color: var(--danger); color: var(--danger); }
+button.danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); }
+button:disabled { opacity: .45; cursor: default; }
+textarea, input[type=text] { font: inherit; width: 100%; border: 1px solid var(--line-strong); border-radius: 0; padding: 8px 12px; background: var(--bg-deep); color: var(--text); }
+textarea { resize: vertical; min-height: 76px; line-height: 1.6; }
+textarea::placeholder, input::placeholder { color: var(--faint); }
+textarea:focus, input:focus { border-color: var(--mint-text); outline: none; }
+
+.topbar { border-bottom: 1px solid var(--line); background: var(--bg);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-top: env(safe-area-inset-top, 0px); }
+.topbar .inner { max-width: 720px; margin: 0 auto; height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-family: var(--serif); font-size: 18px; }
+.brand svg { width: 22px; height: 22px; }
+
+main { max-width: 720px; margin: 0 auto; display: grid; gap: 44px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 36px 128px; }
+
+header.masthead { display: grid; gap: 12px; padding-bottom: 24px; border-bottom: 1px solid var(--line-strong); }
+h1 { font-family: var(--serif); font-weight: 500; font-size: 36px; line-height: 1.2; letter-spacing: -.015em; margin: 0; text-wrap: balance; }
+.lede { color: var(--text-2); margin: 0; max-width: 60ch; }
+.facts { display: flex; flex-wrap: wrap; gap: 6px 20px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.facts b { color: var(--text); font-weight: 500; }
+
+section.part { display: grid; gap: 26px; }
+.part-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+h2 { font-family: var(--serif); font-weight: 500; font-size: 23px; line-height: 1.3; margin: 0; letter-spacing: -.01em; }
+
+fieldset.q { border: 0; margin: 0; padding: 0; display: grid; gap: 10px; min-width: 0; scroll-margin-top: 24px; }
+.q legend { padding: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 2px 8px; width: 100%; }
+.q .num { font-family: var(--mono); font-size: 12px; color: var(--muted); padding-top: 2px; font-variant-numeric: tabular-nums; }
+.q .text { font-size: 15px; font-weight: 500; }
+.q .kind { grid-column: 2; font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; color: var(--faint); }
+.q .scenario { grid-column: 2; margin: 4px 0 0; padding: 10px 14px; background: var(--raised); font-family: var(--serif); font-size: 15px; color: var(--text-2); line-height: 1.6; }
+.q .body { margin-left: 38px; display: grid; gap: 8px; min-width: 0; }
+.q.missing .num { color: var(--warn); }
+.opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.opts.stack { display: grid; gap: 6px; }
+label.opt { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--line-strong); font-size: 13.5px; line-height: 1.45; cursor: pointer; color: var(--text-2); background: var(--panel); }
+.opts.stack label.opt { display: flex; }
+label.opt:hover { border-color: var(--text-2); }
+label.opt:has(input:checked) { border-color: var(--mint-text); color: var(--text); background: var(--green-soft); }
+label.opt:has(input:disabled) { opacity: .45; cursor: default; }
+label.opt input { accent-color: var(--mint-text); margin: 0; flex: none; }
+.scale { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.scale .end { font-size: 12px; color: var(--faint); }
+.scale label.opt { min-width: 44px; justify-content: center; font-family: var(--mono); }
+.limit { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.limit.full { color: var(--green); }
+
+.consent { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line); background: var(--panel); font-size: 13.5px; color: var(--text-2); cursor: pointer; }
+.consent input { accent-color: var(--mint-text); margin-top: 4px; flex: none; }
+.consent.missing { border-color: var(--warn); }
+.hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+
+.done { display: grid; gap: 14px; padding: 28px 24px; border: 1px solid var(--line); background: var(--panel); }
+.done h2 { font-size: 28px; }
+.done p { margin: 0; color: var(--text-2); }
+
+.actionbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; background: var(--panel); border-top: 1px solid var(--line-strong);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-top: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+.actionbar .inner { max-width: 720px; margin: 0 auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.actionbar .prog { display: grid; gap: 4px; flex: 1; min-width: 150px; }
+.meter { height: 3px; background: var(--line); }
+.meter > i { display: block; height: 100%; width: 0; background: var(--green); transition: width .25s; }
+.status { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.status.warn { color: var(--warn); }
+.status.ok { color: var(--green); }
+.confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--danger); }
+
+@media (max-width: 520px) {
+  h1 { font-size: 29px; }
+  .q .body { margin-left: 0; }
+  .q legend { grid-template-columns: 26px minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="topbar"><div class="inner">
+  <a class="brand" href="/"><svg viewBox="-10 -2 112 104" aria-hidden="true"><rect x="6" y="18" width="16" height="66" rx="8" fill="currentColor"/><rect x="60" y="35" width="16" height="49" rx="8" fill="currentColor"/><rect x="18" y="45" width="46" height="16" rx="8" fill="#0A7D52"/><circle cx="76" cy="24" r="10" fill="#00C472"/></svg>Heurion</a>
+  <span class="eyebrow">研究问卷</span>
+</div></div>
+
+<main>
+  <header class="masthead">
+    <div class="eyebrow">Heurion · 研究问卷</div>
+    <h1>医生科研写作与 AI 使用</h1>
+    <p class="lede">我们想了解医生写论文的真实过程，以及 AI 工具在其中的作用。没有对错之分，按实际情况选择即可。问卷匿名，不收集姓名、单位和联系方式，结果只用于研究。</p>
+    <div class="facts"><span>约 <b>10 分钟</b></span><span><b id="countRequired">19</b> 道选择题 + 1 道选填</span></div>
+  </header>
+
+  <form id="survey" novalidate>
+    <div style="display:grid;gap:44px">
+      <label class="consent" id="consentBox" for="consent"><input type="checkbox" id="consent">我已了解：本问卷匿名，结果只用于研究，我可以随时停止填写。</label>
+      <div id="parts" style="display:grid;gap:44px"></div>
+      <div class="hp" aria-hidden="true"><label for="website">请勿填写</label><input type="text" id="website" tabindex="-1" autocomplete="off"></div>
+    </div>
+  </form>
+
+  <section class="done" id="done" hidden>
+    <span class="eyebrow">已提交</span>
+    <h2>感谢您的填写</h2>
+    <p>答卷已匿名保存。您的回答会帮助我们设计更安全的 AI 写作工具。</p>
+    <p><a href="/">了解 Heurion →</a></p>
+  </section>
+</main>
+
+<div class="actionbar" id="actionbar">
+  <div class="inner">
+    <div class="prog">
+      <div class="meter" aria-hidden="true"><i id="meter"></i></div>
+      <span class="status" id="status" role="status">已答 0 / 0</span>
+    </div>
+    <span class="confirm" id="confirm" hidden>清空后无法恢复，确定吗？<button type="button" class="danger" id="btnConfirmClear">清空</button><button type="button" class="quiet" id="btnCancelClear">取消</button></span>
+    <button type="button" class="quiet" id="btnClear">清空重填</button>
+    <button type="submit" form="survey" class="primary" id="btnSubmit">提交问卷</button>
+  </div>
+</div>
+
+<script id="survey-def" type="application/json">__SURVEY_DEF__</script>
+<script>
+(function () {
+  "use strict";
+  var DEF = JSON.parse(document.getElementById("survey-def").textContent);
+  var STORE_KEY = "heurion.survey." + DEF.id + ".draft";
+  var PARTS = DEF.sections;
+  var ALL = [], REQUIRED = [];
+  PARTS.forEach(function (p) { p.qs.forEach(function (q) { ALL.push(q); if (!q.optional) REQUIRED.push(q); }); });
+  document.getElementById("countRequired").textContent = REQUIRED.length;
+
+  var state = { v: {}, other: {}, consent: false, started_at: null };
+
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function noneList(q) { return q.none || []; }
+  function qById(id) { for (var i = 0; i < ALL.length; i++) if (ALL[i].id === id) return ALL[i]; return null; }
+
+  /* —— 渲染 —— */
+  function qHtml(q) {
+    var num = String(Number(q.id.slice(1)));
+    var kind = q.type === "single" ? "单选" : q.type === "multi" ? (q.max ? "多选 · 最多 " + q.max + " 项" : "多选") : q.type === "scale" ? "1–5 分" : "选填";
+    var h = '<fieldset class="q" id="f_' + q.id + '"><legend><span class="num">' + num + '</span><span class="text">' + esc(q.t) + '</span>' +
+      '<span class="kind">' + kind + '</span>' + (q.s ? '<span class="scenario">' + esc(q.s) + '</span>' : "") + '</legend><div class="body">';
+    if (q.type === "single" || q.type === "multi") {
+      var input = q.type === "single" ? "radio" : "checkbox";
+      h += '<div class="opts' + (q.stack ? " stack" : "") + '">' + q.o.map(function (o, i) {
+        return '<label class="opt"><input type="' + input + '" name="' + q.id + '" id="' + q.id + '_' + i + '" value="' + esc(o) + '">' + esc(o) + '</label>';
+      }).join("") + '</div>';
+      if (q.o.indexOf("其他") >= 0) h += '<input type="text" id="' + q.id + '_other" data-other="' + q.id + '" maxlength="200" placeholder="选「其他」时请注明" hidden>';
+      if (q.max) h += '<span class="limit" id="' + q.id + '_limit">已选 0 / ' + q.max + '</span>';
+    } else if (q.type === "scale") {
+      h += '<div class="scale"><span class="end">' + esc(q.ends[0]) + '</span>' + [1, 2, 3, 4, 5].map(function (n) {
+        return '<label class="opt"><input type="radio" name="' + q.id + '" id="' + q.id + '_' + n + '" value="' + n + '">' + n + '</label>';
+      }).join("") + '<span class="end">' + esc(q.ends[1]) + '</span></div>';
+    } else {
+      h += '<textarea id="' + q.id + '" data-text="' + q.id + '" rows="3" maxlength="2000" placeholder="选填"></textarea>';
+    }
+    return h + '</div></fieldset>';
+  }
+
+  document.getElementById("parts").innerHTML = PARTS.map(function (p) {
+    return '<section class="part"><div class="part-head"><h2>' + esc(p.title) + '</h2><span class="eyebrow">' +
+      p.qs.filter(function (q) { return !q.optional; }).length + ' 题</span></div>' + p.qs.map(qHtml).join("") + '</section>';
+  }).join("");
+
+  /* —— 状态 —— */
+  function readQuestion(q) {
+    if (q.type === "text") return document.getElementById(q.id).value;
+    var picked = Array.prototype.slice.call(document.querySelectorAll('input[name="' + q.id + '"]:checked')).map(function (el) { return el.value; });
+    return q.type === "multi" ? picked : (picked[0] || null);
+  }
+
+  function syncConstraints(q) {
+    if (q.type !== "multi") return;
+    var picked = state.v[q.id] || [], nones = noneList(q);
+    var hasNone = picked.some(function (x) { return nones.indexOf(x) >= 0; });
+    document.querySelectorAll('input[name="' + q.id + '"]').forEach(function (b) {
+      var isNone = nones.indexOf(b.value) >= 0;
+      var overMax = q.max && picked.length >= q.max && !b.checked;
+      b.disabled = (hasNone && !isNone) || (!!overMax && !isNone);
+    });
+    if (q.max) {
+      var lim = document.getElementById(q.id + "_limit");
+      lim.textContent = "已选 " + picked.length + " / " + q.max;
+      lim.classList.toggle("full", picked.length === q.max);
+    }
+  }
+
+  function syncOther(q) {
+    var other = document.getElementById(q.id + "_other");
+    if (!other) return;
+    var v = state.v[q.id];
+    other.hidden = !(Array.isArray(v) ? v.indexOf("其他") >= 0 : v === "其他");
+  }
+
+  function answered(q) { var v = state.v[q.id]; return Array.isArray(v) ? v.length > 0 : v != null && v !== ""; }
+
+  function progress() {
+    var done = REQUIRED.filter(answered).length;
+    document.getElementById("meter").style.width = (done / REQUIRED.length * 100) + "%";
+    setStatus("已答 " + done + " / " + REQUIRED.length, done === REQUIRED.length ? "ok" : "");
+    return done;
+  }
+
+  function setStatus(msg, cls) { var el = document.getElementById("status"); el.textContent = msg; el.className = "status" + (cls ? " " + cls : ""); }
+
+  var timer = null;
+  function touch() {
+    if (!state.started_at) state.started_at = new Date().toISOString();
+    progress();
+    clearTimeout(timer);
+    timer = setTimeout(function () { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (err) { /* 浏览器不允许暂存时忽略 */ } }, 300);
+  }
+
+  function onChange(e) {
+    var el = e.target;
+    if (el.id === "consent") { state.consent = el.checked; document.getElementById("consentBox").classList.remove("missing"); return touch(); }
+    if (el.dataset.other) { state.other[el.dataset.other] = el.value; return touch(); }
+    if (el.dataset.text) { state.v[el.dataset.text] = el.value; return touch(); }
+    var q = qById(el.name);
+    if (!q) return;
+    if (q.type === "multi" && el.checked && noneList(q).indexOf(el.value) >= 0) {
+      document.querySelectorAll('input[name="' + q.id + '"]').forEach(function (b) { if (b !== el) b.checked = false; });
+    }
+    state.v[q.id] = readQuestion(q);
+    document.getElementById("f_" + q.id).classList.remove("missing");
+    syncConstraints(q); syncOther(q);
+    touch();
+  }
+
+  function fill() {
+    document.getElementById("consent").checked = !!state.consent;
+    ALL.forEach(function (q) {
+      var v = state.v[q.id];
+      if (q.type === "text") document.getElementById(q.id).value = v || "";
+      else document.querySelectorAll('input[name="' + q.id + '"]').forEach(function (b) {
+        b.checked = Array.isArray(v) ? v.indexOf(b.value) >= 0 : (v != null && String(v) === b.value);
+      });
+      var other = document.getElementById(q.id + "_other");
+      if (other) other.value = state.other[q.id] || "";
+      syncConstraints(q); syncOther(q);
+    });
+    progress();
+  }
+
+  function load() {
+    try {
+      var s = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+      if (s && s.v) { state = { v: s.v, other: s.other || {}, consent: !!s.consent, started_at: s.started_at || null }; }
+    } catch (err) { /* 无暂存 */ }
+  }
+
+  /* —— 提交 —— */
+  var submitting = false;
+  async function submit(e) {
+    e.preventDefault();
+    if (submitting) return;
+    if (!state.consent) {
+      var box = document.getElementById("consentBox");
+      box.classList.add("missing"); box.scrollIntoView({ block: "center", behavior: "smooth" });
+      setStatus("请先勾选顶部的同意说明", "warn");
+      return;
+    }
+    var missing = REQUIRED.filter(function (q) { return !answered(q); });
+    if (missing.length) {
+      missing.forEach(function (q) { document.getElementById("f_" + q.id).classList.add("missing"); });
+      document.getElementById("f_" + missing[0].id).scrollIntoView({ block: "center", behavior: "smooth" });
+      setStatus("还有 " + missing.length + " 题未答，题号已标黄", "warn");
+      return;
+    }
+    submitting = true;
+    var btn = document.getElementById("btnSubmit");
+    btn.disabled = true; btn.textContent = "提交中…";
+    var answers = {};
+    ALL.forEach(function (q) { answers[q.id] = state.v[q.id] == null ? null : state.v[q.id]; });
+    try {
+      var res = await fetch("/api/public/survey/" + DEF.id, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ consent: true, answers: answers, other: state.other, started_at: state.started_at, website: document.getElementById("website").value })
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok) throw new Error(data.error || "提交失败（" + res.status + "）");
+      try { localStorage.removeItem(STORE_KEY); } catch (err) { /* 忽略 */ }
+      document.getElementById("survey").hidden = true;
+      document.getElementById("actionbar").hidden = true;
+      document.querySelector("header.masthead").hidden = true;
+      document.getElementById("done").hidden = false;
+      window.scrollTo({ top: 0 });
+    } catch (err) {
+      setStatus(err.message + "，请稍后再试", "warn");
+      btn.disabled = false; btn.textContent = "提交问卷";
+    } finally {
+      submitting = false;
+    }
+  }
+
+  /* —— 事件与启动 —— */
+  var form = document.getElementById("survey");
+  form.addEventListener("change", onChange);
+  form.addEventListener("input", function (e) { if (e.target.dataset.text || e.target.dataset.other) onChange(e); });
+  form.addEventListener("submit", submit);
+  var confirmBox = document.getElementById("confirm"), btnClear = document.getElementById("btnClear");
+  btnClear.addEventListener("click", function () { confirmBox.hidden = false; btnClear.hidden = true; document.getElementById("btnCancelClear").focus(); });
+  document.getElementById("btnCancelClear").addEventListener("click", function () { confirmBox.hidden = true; btnClear.hidden = false; });
+  document.getElementById("btnConfirmClear").addEventListener("click", function () {
+    state = { v: {}, other: {}, consent: false, started_at: null };
+    try { localStorage.removeItem(STORE_KEY); } catch (err) { /* 忽略 */ }
+    document.querySelectorAll(".missing").forEach(function (el) { el.classList.remove("missing"); });
+    fill(); confirmBox.hidden = true; btnClear.hidden = false; window.scrollTo({ top: 0 });
+  });
+  load(); fill();
+})();
+</script>
+</body>
+</html>

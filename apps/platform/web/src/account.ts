@@ -645,6 +645,7 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
       <button class="org-tab" data-tab="users">${icon('users')} 全局用户</button>
       <button class="org-tab" data-tab="settings">${icon('template')} 实例设置</button>
       <button class="org-tab" data-tab="audit">${icon('shield')} 全局审计</button>
+      <button class="org-tab" data-tab="surveys">${icon('chart')} 研究问卷</button>
     </div>
     <div class="org-panel" id="tabAdminTenants">
       <div id="platformTenants" class="muted">加载中…</div>
@@ -660,6 +661,9 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
     </div>
     <div class="org-panel" id="tabAdminAudit" hidden>
       ${AUDIT_HTML}
+    </div>
+    <div class="org-panel" id="tabAdminSurveys" hidden>
+      <div id="adminSurveys" class="admin-surveys">加载中…</div>
     </div>`, true)
 
   const tabs = dlg.querySelectorAll<HTMLButtonElement>('#adminTabs .org-tab')
@@ -668,6 +672,7 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
     users: dlg.querySelector('#tabAdminUsers')!,
     settings: dlg.querySelector('#tabAdminSettings')!,
     audit: dlg.querySelector('#tabAdminAudit')!,
+    surveys: dlg.querySelector('#tabAdminSurveys')!,
   }
   tabs.forEach(btn => btn.addEventListener('click', () => {
     const t = btn.dataset.tab!
@@ -699,6 +704,31 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
     }
   }
   void renderSettings().catch(err => notify((err as Error).message, true))
+  // 研究问卷：官网 /survey 收到的匿名答卷，管理员导出 CSV / JSON
+  const renderSurveys = async () => {
+    const st = await api<{ id: string; version: string; count: number; latest: string | null }>('/api/admin/surveys/clinician-writing')
+    const box = dlg.querySelector('#adminSurveys')!
+    const latest = st.latest ? new Date(st.latest).toLocaleString('zh-CN', { hour12: false }) : '—'
+    box.innerHTML = `<div><b>医生科研写作与 AI 使用</b> <span class="muted small">题目版本 ${st.version}</span></div>
+      <div class="muted small">已收到 <b>${st.count}</b> 份答卷 · 最近一份 ${latest} · 问卷地址 <a href="/survey" target="_blank" rel="noopener">${location.origin}/survey</a></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="surveyCsv" ${st.count ? '' : 'disabled'}>${icon('download')} 导出 CSV</button>
+        <button id="surveyJson" ${st.count ? '' : 'disabled'}>${icon('download')} 导出 JSON</button>
+      </div>
+      <span class="muted small">CSV 每份答卷一行，多选题每个选项一列（选了记 1），可直接用 Excel、SPSS 或 R 打开；JSON 带题目原文。</span>`
+    const save = async (format: 'csv' | 'json') => {
+      try {
+        const r = await api<{ filename: string; mime: string; count: number; content: string }>(`/api/admin/surveys/clinician-writing/export?format=${format}`)
+        const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([r.content], { type: r.mime })), download: r.filename })
+        a.click()
+        setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+        notify(`已导出 ${r.count} 份答卷`)
+      } catch (err) { notify((err as Error).message, true) }
+    }
+    box.querySelector<HTMLButtonElement>('#surveyCsv')!.onclick = () => void save('csv')
+    box.querySelector<HTMLButtonElement>('#surveyJson')!.onclick = () => void save('json')
+  }
+  void renderSurveys().catch(err => notify((err as Error).message, true))
   const render = async () => {
     const users: any[] = await api('/api/admin/users')
     dlg.querySelector('#adminUsers')!.outerHTML = `<table class="users" id="adminUsers">

@@ -136,6 +136,7 @@ const ALL_PARITY: Record<string, string> = {
   'GET /api/platform/tenants': 'platform_admin.tenants', 'POST /api/platform/tenants': 'platform_admin.create_tenant', 'PATCH /api/platform/tenants/:tid': 'platform_admin.set_tenant_status',
   'GET /api/admin/users': 'platform_admin.users', 'PATCH /api/admin/users/:uid': 'platform_admin.update_user', 'POST /api/admin/users/:uid/logout': 'platform_admin.logout_user',
   'GET /api/admin/settings': 'platform_admin.settings', 'PUT /api/admin/settings': 'platform_admin.update_settings', 'GET /api/admin/audit': 'platform_admin.audit',
+  'GET /api/admin/surveys/clinician-writing': 'platform_admin.survey_stats', 'GET /api/admin/surveys/clinician-writing/export': 'platform_admin.survey_export',
   // 患者、研究的高权限操作
   'GET /api/patients-directory': 'patient_admin.directory', 'POST /api/patients/:ptid/break-glass': 'patient_admin.break_glass', 'DELETE /api/patients/:ptid': 'patient_admin.delete',
   // 知家（PATIENT.md）：成员健康档案的落点；AI 用 doc_create + patient_doc_link（archive）同样能得到
@@ -318,6 +319,7 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/public/tools/kaplan-meier': '官网着陆页公开无状态 Kaplan-Meier 生存曲线小工具（AI 调 dataset_survival）',
   'POST /api/public/tools/forest-plot': '官网着陆页公开无状态亚组森林图 SVG 小工具（AI 调 dataset_logistic / imaging_medical_figure_studio）',
   'POST /api/public/tools/phi-scan': '官网着陆页公开无状态 PHI 隐私扫描与脱敏小工具（AI 调 phi_scan）',
+  'POST /api/public/survey/clinician-writing': '官网匿名研究问卷的提交入口，只能由受访医生本人填写（AI 不代人作答；管理员经 platform_admin.survey_export 读答卷）',
   // Aegis Application Protocol (AAP-1.0) 协议握手、授权令牌管理与人工租约审批接口
   'POST /api/aegis/auth/device': '由本地 aegis-os app login 发起 RFC 8628 设备码免密绑定请求（AI 不能自行发起）',
   'POST /api/aegis/auth/device/approve': '医生/研究员本人在设置页输入 8 位终端设备码确认绑定（AI 不能自行确认）',
