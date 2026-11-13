@@ -308,8 +308,8 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     const docId = created.body.doc_id as string
 
     const read0 = await callAegisTool(token, 'doc_read', { doc_id: docId }, { agentId: 'agent-lead' })
-    const introParaId = /\{#([a-z0-9]+)\} 心衰背景待补充。/.exec(read0.text ?? '')![1]!
-    const statsParaId = /\{#([a-z0-9]+)\} 生存分析结果待补充。/.exec(read0.text ?? '')![1]!
+    const introParaId = /\{#([a-z0-9]+)\} 心衰背景待补充。/.exec(read0.text?.replace(/[⟦⟧]/g, "") ?? '')![1]!
+    const statsParaId = /\{#([a-z0-9]+)\} 生存分析结果待补充。/.exec(read0.text?.replace(/[⟦⟧]/g, "") ?? '')![1]!
 
     // Agent 1 (agent-writer) 修改「引言」段落
     const editWriter = await callAegisTool(
@@ -354,8 +354,10 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     expect(revertWriter.body.reverted_turn_id).toBe('aegis:agent-writer:turn-w1')
 
     const readAfterRevert = await callAegisTool(token, 'doc_read', { doc_id: docId }, { agentId: 'agent-lead' })
-    expect(readAfterRevert.text).toContain('心衰背景待补充。')
-    expect(readAfterRevert.text).toContain('治疗组 24 个月累积生存率为 86.4%（P<0.001）。')
+    // 读视图用 ⟦⟧ 标出 AI 未确认的文字：比较去掉标记后的文字
+    const afterText = (readAfterRevert.text ?? '').replace(/[⟦⟧]/g, '')
+    expect(afterText).toContain('心衰背景待补充。')
+    expect(afterText).toContain('治疗组 24 个月累积生存率为 86.4%（P<0.001）。')
   })
 
   it('4. [Lease-Gated] 提权拦截、Ed25519 节点公钥离线验签与服务端租约审批', async () => {

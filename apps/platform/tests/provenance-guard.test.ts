@@ -4,12 +4,16 @@
  */
 import type { Node as PMNode } from 'prosemirror-model'
 import { describe, expect, it } from 'vitest'
-import { toolResultText } from '../src/harness/events.ts'
+import { toolCallsOf, toolResultOf, toolResultText } from '../src/harness/events.ts'
+import { read } from '../src/views/read.ts'
+import type { HarnessPool } from '../src/harness/pool.ts'
+import { TurnRegistry } from '../src/mcp/turns.ts'
+import { TurnService } from '../src/turns/service.ts'
 import { parseBlocks } from '../src/model/markdown.ts'
 import { aiSpans, hasAiText } from '../src/model/provenance.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { schema } from '../src/model/schema.ts'
-import { allNumbers, checkableNumbers, numberObserved } from '../src/ops/numbers.ts'
+import { allNumbers, checkableNumbers, isLiteratureTool, numberObserved } from '../src/ops/numbers.ts'
 import { OpService } from '../src/ops/service.ts'
 import { OpError } from '../src/ops/types.ts'
 import { Store } from '../src/store/db.ts'
@@ -52,6 +56,39 @@ describe('数字的提取与匹配', () => {
   it('从 dsh 的工具结果事件里取文字（含 shell / Python 输出）', () => {
     const n = { method: 'session.event', params: { sessionId: 's', event: { type: 'tool/result', data: { message: { content: [{ type: 'text', text: 'pCR = 0.3667 (11/30)' }] } } } } }
     expect(toolResultText(n as never)).toBe('pCR = 0.3667 (11/30)')
+  })
+
+  it('回合里：shell 结果的数字记为看到过，文献检索结果的数字不记（另一项研究的数字须同句引用）', async () => {
+    const { store, docs, docId } = setup()
+    const ev = (event: object) => ({ method: 'session.event', params: { sessionId: 'sub', event } }) as never
+    const pool = {
+      liveSession: () => 's',
+      cancel: async () => {},
+      run: async (_u: string, _p: string, on: (n: never, s: string) => void) => {
+        on(ev({ type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'c1', name: 'mcp__heurion__pubmed_search', arguments: '{}' }, { type: 'tool-call', id: 'c2', name: 'bash', arguments: '{}' }] } } }), 's')
+        on(ev({ type: 'tool/result', data: { message: { toolCallId: 'c1', content: [{ type: 'text', text: 'CROSS trial: pCR 29.4%' }] } } }), 's')
+        on(ev({ type: 'tool/result', data: { message: { toolCallId: 'c2', content: [{ type: 'text', text: 'pCR = 0.3667' }] } } }), 's')
+        return { finalResponse: 'ok' }
+      },
+    } as unknown as HarnessPool
+    const turns = new TurnService(docs, pool, new TurnRegistry())
+    await turns.submit('u1', docId, '帮我写结果')
+    const turnId = store.listTurns(docId).at(-1)!.id
+    const seen = store.observedNumbers(turnId)
+    expect(seen).toContain(0.3667)
+    expect(seen).not.toContain(29.4)
+  })
+
+  it('文献类工具的结果按调用 id 认出（工具名可带 MCP 前缀）；它们的数字不算「看到过」', () => {
+    const call = { method: 'session.event', params: { sessionId: 'sub', event: { type: 'assistant/message', data: { message: { content: [{ type: 'tool-call', id: 'c1', name: 'mcp__heurion__pubmed_search', arguments: '{}' }, { type: 'tool-call', id: 'c2', name: 'bash', arguments: '{}' }] } } } } }
+    expect(toolCallsOf(call as never)).toEqual([['c1', 'mcp__heurion__pubmed_search'], ['c2', 'bash']])
+    const res = { method: 'session.event', params: { sessionId: 'sub', event: { type: 'tool/result', data: { message: { toolCallId: 'c1', content: [{ type: 'text', text: 'pCR 29%' }] } } } } }
+    expect(toolResultOf(res as never)).toEqual({ callId: 'c1', text: 'pCR 29%' })
+    expect(isLiteratureTool('mcp__heurion__pubmed_search')).toBe(true)
+    expect(isLiteratureTool('oa_fulltext')).toBe(true)
+    expect(isLiteratureTool('bash')).toBe(false)
+    expect(isLiteratureTool('dataset_survival')).toBe(false)
+    expect(isLiteratureTool('kb_read')).toBe(false)
   })
 })
 
@@ -103,6 +140,32 @@ describe('规则一：改人写的文字', () => {
     const { ops, docId, ids } = setup('# 讨论\n\n甲乙丙丁戊己庚辛壬癸，子丑寅卯辰巳午未申酉。')
     const r = ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: ['甲', '丙', '戊', '庚', '壬', '子'].map(c => ({ op: 'replace_text' as const, id: ids[1]!, find: c, replace: `${c}之` })) }, AI())
     expect(r.provenance?.converted_to_suggest?.[0]).toContain('超过 5 处')
+  })
+
+  it('5 处的上限按回合累计：拆成多批也不能绕过；换一个回合重新计', () => {
+    const { docs, ops, docId, ids } = setup('# 讨论\n\n甲乙丙丁戊己庚辛壬癸，子丑寅卯辰巳午未申酉。')
+    const batch = (chars: string[]) => ({ doc_id: docId, base_rev: docs.rev(docId), mode: 'apply' as const, ops: chars.map(c => ({ op: 'replace_text' as const, id: ids[1]!, find: c, replace: `${c}之` })) })
+    expect(ops.edit(batch(['甲', '丙', '戊']), AI('t1', 't1')).provenance?.converted_to_suggest).toBeUndefined()
+    const second = ops.edit(batch(['庚', '壬', '子']), AI('t1', 't1'))
+    expect(second.provenance?.converted_to_suggest?.[0]).toContain('累计超过 5 处')
+    expect(hasSuggestions(docs.get(docId))).toBe(true)
+    // 新的回合：从 0 计
+    const { docs: d2, ops: o2, docId: id2, ids: ids2 } = setup('# 讨论\n\n甲乙丙丁戊己庚辛壬癸，子丑寅卯辰巳午未申酉。')
+    const b2 = (chars: string[]) => ({ doc_id: id2, base_rev: d2.rev(id2), mode: 'apply' as const, ops: chars.map(c => ({ op: 'replace_text' as const, id: ids2[1]!, find: c, replace: `${c}之` })) })
+    o2.edit(b2(['甲', '丙', '戊']), AI('t1', 't1'))
+    expect(o2.edit(b2(['庚', '壬']), AI('t2', 't2')).provenance?.converted_to_suggest).toBeUndefined()
+  })
+
+  it('读视图用 ⟦⟧ 标出 AI 未确认的文字；AI 把 ⟦⟧ 原样抄进编辑内容时去掉再处理', () => {
+    const { store, docs, ops, docId, ids } = setup()
+    ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: [{ op: 'insert_after', anchor_id: ids[2]!, markdown: '这一结果需要更大样本验证。' }] }, AI())
+    const view = read({ doc: docs.get(docId), docId, rev: docs.rev(docId), comments: store.listComments(docId, 'open') })
+    expect(view).toContain('⟦这一结果需要更大样本验证。⟧')
+    expect(view).toContain('⟦⟧ 内是 AI 写的')
+    expect(view).not.toContain('⟦在 120 名患者中')
+    const added = docs.get(docId).child(3).attrs.id as string
+    ops.edit({ doc_id: docId, base_rev: docs.rev(docId), mode: 'apply', ops: [{ op: 'replace_text', id: added, find: '⟦这一结果需要', replace: '⟦这一发现需要' }] }, AI())
+    expect(docs.get(docId).child(3).textContent).toBe('这一发现需要更大样本验证。')
   })
 
   it('文档所有者关闭安全小改：改到人写的文字一律转为待采纳修订', () => {

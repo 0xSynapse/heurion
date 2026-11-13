@@ -69,7 +69,7 @@ import { registerImagingFollowupTools } from './imaging-followup-tools.ts'
 import { registerImagingDraftTools } from './imaging-draft-tools.ts'
 import type { Invoke } from '../http/invoke.ts'
 import { chmodIfOwned, registerAdminTools, type LeaseAuthorizeInput, type LeaseAuthorizeResult } from './admin-tools.ts'
-import { allNumbers } from '../ops/numbers.ts'
+import { allNumbers, isLiteratureTool } from '../ops/numbers.ts'
 
 export interface McpDeps {
   claims: ClaimService
@@ -133,7 +133,7 @@ const INSTRUCTIONS = `heurion 文档平台。文档只能通过这些工具读�
 工作流程：doc_outline 看结构 → doc_read 读相关章节（拿到块 id 与 rev）→ doc_edit 一次提交一批操作（base_rev 用读到的 rev）。
 - 小改动优先 replace_text：find 写块内原文（不能跨块），只改变化的字，格式、引用、评论锚点保留；失配时按返回的 near / matches 修正后重试。整段重写用 replace_block；新增用 insert_after / insert_before。
 - 内容格式是 markdown：标题 #、列表 -、表格 GFM、粗体 **、上标 <sup>、图片 ![说明](asset:<asset_id>)。
-- 来源规则（平台强制）：① 人写的文字只能做短小直接修改（单处 ≤ 40 字、一次 ≤ 5 处，不碰数字、比较符号、引用、否定词与「可能 / 显著 / 证实」等措辞强度词）；超出的会自动转为待采纳修订，不要重试，告诉用户去采纳。你自己写的未确认文字可直接改。② 数字须有出处：文档里已有、本轮工具结果或用户消息里出现过，或同一句所引文献原文里有；派生数字先用工具算出。③ 插入的引用要有保存的摘要或全文（没有就先 oa_fulltext）。按 unobserved_number / unread_citation 的 hint 补出处；needs_user_check 时请用户核对。
+- 来源规则（平台强制）：① 人写的文字只能做短小直接修改（单处 ≤ 40 字、每轮累计 ≤ 5 处，不碰数字、比较符号、引用、否定词与「可能 / 显著 / 证实」等措辞强度词）；超出的会自动转为待采纳修订，不要重试，告诉用户去采纳。读视图里 ⟦⟧ 内是 AI 写的未确认文字，可直接改（⟦⟧ 不要写进编辑内容）。② 数字须有出处：文档里已有、本轮工具结果（文献检索与全文不算）或用户消息里出现过，或同一句所引文献原文里有；派生数字先用工具算出。③ 插入的引用要有保存的摘要或全文（没有就先 oa_fulltext）。按 unobserved_number / unread_citation 的 hint 补出处；needs_user_check 时请用户核对。
 - 引用：pubmed_search 找文献 → insert_citation 登记 → 正文写返回的 [@c:<cite_id>]。正文中不能出现 DOI、PMID 或手写参考文献，参考文献表由平台自动生成。
 - 测量：报告里病灶的大小、体积、CT 值等数字一律绑定已确认的测量——imaging_lesions 查病灶（只用 status=confirmed 的）→ insert_measurement 绑定字段 → 正文写返回的 [@m:<m_id>]（显示为「数值 单位」，前后不要再写数字或单位）。不要手写测量数字，也不要用区间（如「6–8 mm」）或「约 N mm」描述某个病灶的大小——区间只用于引用指南阈值；改写段落时原样保留已有的 [@m:…]。doc_read 末尾列出各测量当前显示的值与状态，状态异常（来源已否决 / 撤销）的要提醒用户。
 - 影像所见草稿：imaging_findings_draft 按科室模板从已确认的结节确定性生成（测量都是 [@m:…]）；你只做润色（doc_edit 改措辞，原样保留 [@m:…]，不手写测量数字，随访差值用 insert_measurement 的 source=imaging_followup 绑定）。imaging_findings_draft_check 取 RIS 纯文本与复制前要处理的问题。所见模板只读。
@@ -2411,7 +2411,8 @@ function wrapToolRegistration(
       try {
         const res = await (cb as (a: unknown, e: unknown) => Promise<unknown>)(args, extra)
         // 来源规则二：外部智能体（没有平台回合）只能从本 MCP 的结果里记下看到过的数字；平台回合由 turns 服务统一记
-        if (!ctx.turnId && claims.s && res && typeof res === 'object' && (res as { isError?: boolean }).isError !== true) {
+        // 文献类工具的结果不算（别人的研究，写进稿件须同句引用该文献）
+        if (!ctx.turnId && claims.s && !isLiteratureTool(n) && res && typeof res === 'object' && (res as { isError?: boolean }).isError !== true) {
           const text = (res as { content?: Array<{ text?: string }> }).content?.map(c => c.text ?? '').join('\n') ?? ''
           if (text) {
             try { ctx.deps.docs.store.addObservedNumbers(`sess:${claims.s}`, allNumbers(text)) } catch (err) { console.error('[provenance] observe:', err) }

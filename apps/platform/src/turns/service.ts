@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import type { Documents, CommitEvent } from '../model/runtime.ts'
-import { addUsage, emptyUsage, mapNotification, toolResultText, type UiEvent } from '../harness/events.ts'
-import { allNumbers } from '../ops/numbers.ts'
+import { addUsage, emptyUsage, mapNotification, toolCallsOf, toolResultOf, type UiEvent } from '../harness/events.ts'
+import { allNumbers, isLiteratureTool } from '../ops/numbers.ts'
 import { protectionSummary } from '../ops/provenance-guard.ts'
 import { scopeOf } from '../mcp/scope.ts'
 import { filterPhrReply, type PhrMember } from '../ops/phr-guard.ts'
@@ -516,14 +516,17 @@ export class TurnService {
         this.registry.begin(userId, activeTurnObj, runGen)
       }
 
+      // 工具调用 id → 工具名（含子代理会话）：判断一个工具结果是不是文献类工具的
+      const toolNames = new Map<string, string>()
       const result = await Promise.race([
         this.pool.run(userId, prompt, (n, sessionId) => {
           lastActivity = Date.now()
           addUsage(usage, n)
-          // 来源规则二：工具结果里的数字算 AI 本轮看到过的
-          const seen = toolResultText(n)
-          if (seen) {
-            try { store.addObservedNumbers(turnId, allNumbers(seen)) } catch (err) { console.error('[provenance] observe:', err) }
+          // 来源规则二：工具结果里的数字算 AI 本轮看到过的；文献类工具的结果除外（别人的研究，须同句引用）
+          for (const [id, name] of toolCallsOf(n)) toolNames.set(id, name)
+          const seen = toolResultOf(n)
+          if (seen && !isLiteratureTool(toolNames.get(seen.callId))) {
+            try { store.addObservedNumbers(turnId, allNumbers(seen.text)) } catch (err) { console.error('[provenance] observe:', err) }
           }
           for (const e of mapNotification(n, sessionId)) {
             // 模型调用失败（认证失败、限流、服务出错等）：dsh 正常结束回合但带错误，按失败记，不算「已完成」

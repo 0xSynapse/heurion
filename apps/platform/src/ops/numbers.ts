@@ -26,6 +26,21 @@ function parse(raw: string): WrittenNumber | null {
   return { raw, value, decimals: dot >= 0 ? body.length - dot - 1 : 0, percent }
 }
 
+/**
+ * 文献类工具：检索结果、摘要、全文、引用登记里的数字属于别人的研究，不算「看到过」——
+ * 写进稿件时须在同一句引用该文献，且平台保存的原文里有这个数（规则二的引用分支）。
+ * 否则 AI 可以把检索到的另一项研究的数字不挂引用地写成本研究的结果。
+ * 用户上传的参考资料库（kb_*）不在其中：其中可能是用户自己的数据与内部材料。
+ */
+export const LITERATURE_TOOLS = new Set(['pubmed_search', 'openalex_search', 'oa_fulltext', 'doi_lookup', 'insert_citation', 'import_references', 'list_citations', 'verify_claims'])
+
+/** 工具名（可能带 MCP 服务器前缀，如 `heurion__pubmed_search`、`mcp__heurion__oa_fulltext`）是不是文献类工具。 */
+export function isLiteratureTool(name: string | null | undefined): boolean {
+  if (!name) return false
+  const base = name.split(/__|\/|\./).pop() ?? name
+  return LITERATURE_TOOLS.has(base)
+}
+
 /** 文字里的全部数字（含不需核对的小整数；用作「看到过的数字」）。 */
 export function allNumbers(text: string): number[] {
   const out: number[] = []

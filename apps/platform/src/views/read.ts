@@ -104,13 +104,17 @@ export function read(input: ReadInput): string {
   let size = 0
   let i = start
   for (; i < end; i++) {
-    const md = serializeBlock(blocks[i]!, { ids: true }, '')
+    const md = serializeBlock(blocks[i]!, { ids: true, prov: true }, '')
     if (size > 0 && size + md.length > PAGE_CHARS) break
     parts.push(md)
     size += md.length
   }
   const more = i < end ? ` · 未读完，下一页 cursor=${i}` : ''
-  const header = `doc_id=${input.docId} · rev=${input.rev} · 顶层块 ${start + 1}–${i}/${blocks.length}${more}`
+  // 来源等级：本范围有 AI 未确认的文字时说明 ⟦⟧ 的含义，AI 据此判断哪些可以直接改、哪些只能安全小改或建议
+  const provNote = parts.some(p => p.includes('⟦'))
+    ? '\n⟦⟧ 内是 AI 写的、用户还没确认的文字，可以直接改；其余是人写的，只能做安全小改或用建议模式。编辑时不要把 ⟦⟧ 写进内容。'
+    : ''
+  const header = `doc_id=${input.docId} · rev=${input.rev} · 顶层块 ${start + 1}–${i}/${blocks.length}${more}${provNote}`
 
   // 本范围内的 open 评论（锚点 = 写入目标）
   const range = new Set<string>()

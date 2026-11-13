@@ -41,6 +41,15 @@ export interface ProvenanceNote {
   unverifiable_numbers?: Array<{ number: string; block_id: string; cites: string[] }>
 }
 
+/**
+ * 读视图用 ⟦⟧ 标出 AI 未确认的文字（来源等级）。AI 常把读到的文字原样抄进 find / markdown：
+ * 去掉这两个字符再处理，否则片段替换找不到原文、整块替换会把标记写进正文。
+ */
+function stripProvMarkers<T>(batch: T): T {
+  const json = JSON.stringify(batch)
+  return /[⟦⟧]/.test(json) ? JSON.parse(json.replace(/[⟦⟧]/g, '')) as T : batch
+}
+
 /** 计入「保护记录」的拒绝：来源规则，以及保护人的修改、引用与测量的守卫。 */
 const PROTECTION_CODES = new Set(['unobserved_number', 'unread_citation', 'conflict_user_edited', 'existing_citation', 'citation_not_registered', 'citation_unknown', 'measurement_lost', 'bare_measurement'])
 
@@ -96,6 +105,22 @@ export class OpService {
     try { this.docs.store.addProvenanceEvent({ turnId, docId, kind, detail }) } catch (err) { console.error('[provenance] record:', err) }
   }
 
+  /**
+   * 安全小改的累计处数：键为「观察记录键（回合 / 外部会话）| 文档」，值为本回合在这份文档里已经直接生效的
+   * 「改到人写文字」处数。上限按回合计，AI 不能把改动拆成多批绕过（只在内存里记：回合在一个进程内跑完）。
+   */
+  private readonly safeTouchesUsed = new Map<string, number>()
+
+  private safeKey(meta: EditMeta, docId: string): string | null {
+    const turn = meta.observe ?? meta.turnId
+    return turn ? `${turn}|${docId}` : null
+  }
+
+  private noteSafeTouches(key: string, n: number): void {
+    if (this.safeTouchesUsed.size > 5000) this.safeTouchesUsed.delete(this.safeTouchesUsed.keys().next().value!)
+    this.safeTouchesUsed.set(key, (this.safeTouchesUsed.get(key) ?? 0) + n)
+  }
+
   /** 安全小改是否开启（文档所有者在设置里可关，默认开）。 */
   private safeEditsOn(owner: string): boolean {
     return this.docs.store.getUserSetting(owner, 'provenance.safe_edits') !== 'off'
@@ -137,6 +162,7 @@ export class OpService {
    * 失败时返回结构化原因（code/hint/current），不抛出异常。
    */
   validate(batch: EditBatch | DeckEditBatch, meta: { actor: Actor; turnId?: string | null; answering?: string | null; user?: string | null; observe?: string | null }): ValidateResult {
+    if (meta.actor === 'ai') batch = stripProvMarkers(batch)
     try {
       const sim = this.simulate(batch, { actor: meta.actor, turnId: meta.turnId ?? null, answering: meta.answering, user: meta.user, observe: meta.observe })
       return {
@@ -185,6 +211,8 @@ export class OpService {
     results: Array<Omit<OpResult, 'op'> & { op: string }>
     rev: number
     provenance: ProvenanceNote
+    /** 这批里按安全小改直接生效的「改到人写文字」处数（提交后计入本回合的累计） */
+    safeTouches: number
   } {
     const store = this.docs.store
     const row = store.getDoc(batch.doc_id)
@@ -253,17 +281,18 @@ export class OpService {
       this.guardMeasurementRetention(batch as EditBatch, before, after)
       this.guardCitationSupport(batch as EditBatch, before, after)
     }
-    const provenance = ai && !deck && this.options.provenance ? this.guardProvenance(batch as EditBatch, meta, before, after, row.owner) : {}
+    const guarded = ai && !deck && this.options.provenance ? this.guardProvenance(batch as EditBatch, meta, before, after, row.owner) : { note: {}, safeTouches: 0 }
 
-    return { deck, before, after, reanchored, followed, results, rev, provenance }
+    return { deck, before, after, reanchored, followed, results, rev, provenance: guarded.note, safeTouches: guarded.safeTouches }
   }
 
   /**
    * 来源规则（docs/design/PROVENANCE.md）。规则二不满足时拒绝；规则一不满足时不拒绝，
    * 返回转为待采纳修订的原因，由 edit 整批改用建议模式重做。
    */
-  private guardProvenance(batch: EditBatch, meta: EditMeta, before: PMNode, after: PMNode, owner: string): ProvenanceNote {
-    const a = assessProvenance(before, after)
+  private guardProvenance(batch: EditBatch, meta: EditMeta, before: PMNode, after: PMNode, owner: string): { note: ProvenanceNote; safeTouches: number } {
+    const key = this.safeKey(meta, batch.doc_id)
+    const a = assessProvenance(before, after, key ? this.safeTouchesUsed.get(key) ?? 0 : 0)
     const source = this.citeSource(batch.doc_id)
     const unread = a.newCites.filter(c => !source(c))
     if (unread.length) {
@@ -277,18 +306,20 @@ export class OpService {
       const nums = checkNumbers(before, a, this.docs.store.observedNumbers(meta.observe), source)
       if (nums.unsourced.length) {
         const list = [...new Set(nums.unsourced.map(n => n.number))]
-        throw new OpError('unobserved_number', `这些数字在文档里、本轮看到的结果里和所引文献的原文里都找不到出处：${list.slice(0, 6).join('、')}`, {
-          hint: '不要估算或凭记忆写数字。本研究的结果：先用分析工具算出再写；文献里的数字：同一句引用该文献 [@c:id]，且原文里要有这个数；由已有数字换算得出的（如百分比）：用工具算出，或直接写出原始的分子分母。',
+        throw new OpError('unobserved_number', `这些数字在文档里、本轮看到的结果里（文献检索与全文不算）和同一句所引文献的原文里都找不到出处：${list.slice(0, 6).join('、')}`, {
+          hint: '不要估算或凭记忆写数字。本研究的结果：先用分析工具算出再写；文献里的数字（包括检索结果、摘要、全文里看到的）：同一句引用该文献 [@c:id]，且它保存的原文里要有这个数；由已有数字换算得出的（如百分比）：用工具算出，或直接写出原始的分子分母。',
           current: { numbers: list, block_ids: [...new Set(nums.unsourced.map(n => n.blockId))] },
         })
       }
       if (nums.unverifiable.length) note.unverifiable_numbers = nums.unverifiable.map(n => ({ number: n.number, block_id: n.blockId, cites: n.cites }))
     }
+    let safeTouches = 0
     if (batch.mode !== 'suggest') {
       const reasons = suggestReasons(a, this.safeEditsOn(owner))
       if (reasons.length) note.converted_to_suggest = reasons
+      else safeTouches = a.touches.length
     }
-    return note
+    return { note, safeTouches }
   }
 
   /**
@@ -296,6 +327,7 @@ export class OpService {
    * 重新锚定到原来所在的块 / 形状上，而不是拦下（其他线程仍按锚点守卫）。
    */
   edit(batch: EditBatch | DeckEditBatch, meta: EditMeta): EditResult {
+    if (meta.actor === 'ai') batch = stripProvMarkers(batch)
     try {
       let sim = this.simulate(batch, meta)
       // 规则一：改到人写的文字且不是安全小改 → 整批改用建议模式（人采纳 = 确认）
@@ -314,6 +346,9 @@ export class OpService {
         return { doc_id: batch.doc_id, rev: sim.rev, results: sim.results, changes: [], ...(provenance ? { provenance } : {}) }
       }
       const event = this.docs.commit(batch.doc_id, sim.after, { actor: meta.actor, turnId: meta.turnId, ops: batch.ops, user: meta.user ?? null })
+      // 安全小改的处数按回合累计
+      const safeKey = this.safeKey(meta, batch.doc_id)
+      if (event && sim.safeTouches > 0 && safeKey) this.noteSafeTouches(safeKey, sim.safeTouches)
       // AI 自己写入的块：写入后的内容它是知道的
       if (meta.actor === 'ai' && event && !sim.deck) this.noteSeen(batch.doc_id, event.changes.map(c => c.node_id), event.rev)
       // 重新锚到整块的线程：记录随之改成整块评论（引用文字清空，之后按整块维护）

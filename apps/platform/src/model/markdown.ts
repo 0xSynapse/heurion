@@ -358,6 +358,8 @@ function normalizeInline(nodes: PMNode[]): PMNode[] {
 export interface SerializeOptions {
   /** 读视图：每个可寻址块前加 `{#id}`。 */
   ids?: boolean
+  /** 给 AI 的读视图：AI 写的、还没人确认的文字用 ⟦⟧ 括起（来源等级，docs/design/PROVENANCE.md 4.2）。 */
+  prov?: boolean
 }
 
 export function serializeBlocks(nodes: readonly PMNode[], opts: SerializeOptions = {}): string {
@@ -371,9 +373,9 @@ export function serializeBlock(node: PMNode, opts: SerializeOptions, indent: str
   const pre = opts.ids && node.attrs.id ? `{#${node.attrs.id}} ${pending}` : ''
   switch (node.type.name) {
     case 'paragraph':
-      return indent + pre + serializeInline(node)
+      return indent + pre + serializeInline(node, { prov: opts.prov })
     case 'heading':
-      return indent + pre + '#'.repeat(Math.min(6, Math.max(1, node.attrs.level as number))) + ' ' + serializeInline(node)
+      return indent + pre + '#'.repeat(Math.min(6, Math.max(1, node.attrs.level as number))) + ' ' + serializeInline(node, { prov: opts.prov })
     case 'bullet_list':
     case 'ordered_list': {
       const lines: string[] = []
@@ -432,7 +434,7 @@ function serializeListItem(item: PMNode, marker: string, opts: SerializeOptions,
   item.forEach((child, _off, idx) => {
     if (idx === 0 && child.type.name === 'paragraph') {
       const pre = opts.ids && item.attrs.id ? `{#${item.attrs.id}} ` : ''
-      parts.push(`${indent}${marker} ${pre}${serializeInline(child)}`)
+      parts.push(`${indent}${marker} ${pre}${serializeInline(child, { prov: opts.prov })}`)
     } else {
       parts.push(serializeBlock(child, { ...opts, ids: opts.ids && child.type.name !== 'paragraph' }, pad))
     }
@@ -456,7 +458,7 @@ function serializeTable(node: PMNode, indent: string, opts: SerializeOptions): s
       else if (cell.top !== r || cell.left !== c) cells.push(opts.ids ? (cell.left !== c ? '<' : '^') : '')
       else {
         const parts: string[] = []
-        cell.node.forEach(p => parts.push((opts.ids && p.attrs.id ? `{#${p.attrs.id}} ` : '') + serializeInline(p, { inTable: true })))
+        cell.node.forEach(p => parts.push((opts.ids && p.attrs.id ? `{#${p.attrs.id}} ` : '') + serializeInline(p, { inTable: true, prov: opts.prov })))
         const text = parts.join('<br>')
         cells.push(text === '^' || text === '<' ? `\\${text}` : text)
       }
@@ -514,9 +516,16 @@ const escapeText = (s: string, inTable = false) =>
   s.replace(inTable ? /([\\*_`|])/g : /([\\*_`])/g, '\\$1').replace(/<(?=[a-zA-Z/])/g, '&lt;').replace(/\[(?=@[cwm]:)/g, '\\[')
 
 /** 行内内容 → markdown（评论 mark 不进 markdown，由读视图单独列出）。 */
-export function serializeInline(node: PMNode, opts?: { inTable?: boolean }): string {
+export function serializeInline(node: PMNode, opts?: { inTable?: boolean; prov?: boolean }): string {
   let out = ''
   const stack: Mark[] = []
+  // ⟦⟧：AI 未确认的文字（与格式标记互不嵌套也无妨，编辑时操作层会去掉这两个字符）
+  let inProv = false
+  const prov = (child: PMNode) => {
+    if (!opts?.prov) return
+    const want = child.marks.some(m => m.type.name === 'prov')
+    if (want !== inProv) { out += want ? '⟦' : '⟧'; inProv = want }
+  }
   const sorted = (marks: readonly Mark[]) => marks
     .filter(m => MARK_ORDER.includes(m.type.name))
     .sort((a, b) => MARK_ORDER.indexOf(a.type.name) - MARK_ORDER.indexOf(b.type.name))
@@ -528,6 +537,7 @@ export function serializeInline(node: PMNode, opts?: { inTable?: boolean }): str
     for (let i = keep; i < want.length; i++) { out += openMark(want[i]!); stack.push(want[i]!) }
   }
   node.forEach(child => {
+    prov(child)
     if (child.isText) {
       sync(child.marks)
       const isCode = child.marks.some(m => m.type.name === 'code')
@@ -546,6 +556,7 @@ export function serializeInline(node: PMNode, opts?: { inTable?: boolean }): str
     }
   })
   sync([])
+  if (inProv) out += '⟧'
   return out
 }
 

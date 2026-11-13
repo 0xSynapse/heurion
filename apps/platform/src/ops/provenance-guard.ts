@@ -50,7 +50,11 @@ const citesIn = (node: PMNode): Set<string> => {
   return out
 }
 
-export function assessProvenance(before: PMNode, after: PMNode): ProvenanceAssessment {
+/**
+ * used：同一回合（或外部智能体的同一会话）里，这份文档此前已经直接生效的「改到人写文字」处数。
+ * 安全小改的处数上限按回合累计，AI 不能把改动拆成多批绕过。
+ */
+export function assessProvenance(before: PMNode, after: PMNode, used = 0): ProvenanceAssessment {
   const was = blocks(before, false)
   const now = blocks(after, true)
   const touches: HumanTouch[] = []
@@ -88,7 +92,10 @@ export function assessProvenance(before: PMNode, after: PMNode): ProvenanceAsses
     else if (RISKY_SYMBOLS.test(deleted) || RISKY_SYMBOLS.test(inserted)) Object.assign(t, { safe: false, reason: '涉及数字或比较符号' })
     else if (RISKY_WORDS.test(deleted) || RISKY_WORDS.test(inserted)) Object.assign(t, { safe: false, reason: '涉及否定词或措辞强度' })
   }
-  if (touches.length > SAFE_EDIT.maxRegions) for (const t of touches) Object.assign(t, { safe: false, reason: t.reason ?? `一次改动人写的文字超过 ${SAFE_EDIT.maxRegions} 处` })
+  if (touches.length > 0 && used + touches.length > SAFE_EDIT.maxRegions) {
+    const why = used > 0 ? `本轮直接改动人写的文字累计超过 ${SAFE_EDIT.maxRegions} 处` : `一次改动人写的文字超过 ${SAFE_EDIT.maxRegions} 处`
+    for (const t of touches) Object.assign(t, { safe: false, reason: t.reason ?? why })
+  }
   return { touches, removedHuman, regions, newCites: [...newCites] }
 }
 

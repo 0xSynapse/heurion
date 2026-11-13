@@ -599,7 +599,7 @@ describe('格式写入回归', () => {
     const [p] = ids(docs, docId)
     ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id: p!, markdown: `HR **0.80（95% CI 0.72–0.90）**[@c:${c.id}]。` }] }, { actor: 'user', turnId: null })
     ops.edit({ doc_id: docId, base_rev: 1, mode: 'apply', ops: [{ op: 'replace_text', id: p!, find: `**0.80（95% CI 0.72–0.90）**[@c:${c.id}]。`, replace: `**0.80（95% CI 0.72–0.90）**[@c:${c.id}]。结论不宜外推。` }] }, { actor: 'ai', turnId: null })
-    expect(read({ doc: docs.get(docId), docId, rev: 0, comments: [] })).toContain(`HR **0.80（95% CI 0.72–0.90）**[@c:${c.id}]。结论不宜外推。`)
+    expect(read({ doc: docs.get(docId), docId, rev: 0, comments: [] }).replace(/[⟦⟧]/g, '')).toContain(`HR **0.80（95% CI 0.72–0.90）**[@c:${c.id}]。结论不宜外推。`)
   })
 
   it('引用之后的文字只改格式：Yjs 里同样生效', () => {

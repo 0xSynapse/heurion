@@ -113,12 +113,27 @@ function describeError(e: { message?: string; code?: string }): string {
  * 来源规则二用它记下 AI 本轮看到过的数字（docs/design/PROVENANCE.md 4.3）。不是工具结果时返回 null。
  */
 export function toolResultText(n: HarnessNotification): string | null {
+  return toolResultOf(n)?.text ?? null
+}
+
+/** 工具结果事件：调用 id 与文字（出错的结果、不是工具结果时返回 null）。 */
+export function toolResultOf(n: HarnessNotification): { callId: string; text: string } | null {
   if (n.method !== 'session.event') return null
   const event = n.params.event as { type?: string; data?: Record<string, unknown> } | undefined
   if (event?.type !== 'tool/result') return null
-  const message = event.data?.message as { content?: unknown; isError?: boolean } | undefined
+  const message = event.data?.message as { content?: unknown; isError?: boolean; toolCallId?: string; source?: { toolCallId?: string } } | undefined
   if (!message || message.isError) return null
-  return extractToolOutput(message.content) || null
+  const text = extractToolOutput(message.content)
+  return text ? { callId: message.toolCallId ?? message.source?.toolCallId ?? '', text } : null
+}
+
+/** 模型消息里的工具调用（任何会话，含子代理）：[调用 id, 工具名]。用来知道某个工具结果来自哪个工具。 */
+export function toolCallsOf(n: HarnessNotification): Array<[string, string]> {
+  if (n.method !== 'session.event') return []
+  const event = n.params.event as { type?: string; data?: Record<string, unknown> } | undefined
+  if (event?.type !== 'assistant/message') return []
+  const message = event.data?.message as { content?: Block[] } | undefined
+  return (message?.content ?? []).filter(b => b.type === 'tool-call' && b.id && b.name).map(b => [b.id!, b.name!] as [string, string])
 }
 
 export function extractToolOutput(rec: unknown, isError = false): string {
