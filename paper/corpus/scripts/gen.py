@@ -316,7 +316,8 @@ class Doc:
                 return
         raise RuntimeError('no citation task')
 
-    def build(self, mode, num_style):
+    def build(self, mode, num_style, mutate=None, out_file=None):
+        """mutate：写文件前改动块与批注（评分器自检用：理想答案 / 模拟复制粘贴）；out_file：另存路径，不写 meta / tasks"""
         self.assign_ids()
         self.seed_edits()
         self.seed_comments()
@@ -330,6 +331,10 @@ class Doc:
         out = os.path.join(ROOT, 'out', self.id)
         os.makedirs(out, exist_ok=True)
         ctx = dw.Ctx(self.rng, self.refs, mode, num_style)
+        if mutate:
+            mutate(self)
+            dw.write(out_file, ctx, self.blocks, self.comments, self.parsed['title'])
+            return None
         dw.write(os.path.join(out, 'manuscript.docx'), ctx, self.blocks, self.comments, self.parsed['title'])
         ncite = sum(1 for b in self.blocks for i in b.get('items', []) if i['t'] == 'cite')
         meta = dict(id=self.id, source=self.src, citation_mode=mode, citation_style=num_style, supervisor=self.sup,
@@ -343,6 +348,21 @@ class Doc:
         if revs:
             open(os.path.join(out, 'reviews.txt'), 'w').write('\n\n=====\n\n'.join(f'[{r["type"]}]\n{r["text"]}' for r in revs))
         return meta
+
+
+def plan():
+    """(组, 序号, 来源, 引用方式, 编号样式)"""
+    q = json.load(open(os.path.join(ROOT, 'qian.json')))
+    o = json.load(open(os.path.join(ROOT, 'others.json')))
+    for x in o:
+        x.setdefault('group', 'others')
+        x.setdefault('license', 'CC BY')
+    modes = {'qian': ['endnote'] * 8 + ['zotero'] * 2 + ['plain'] * 2, 'others': ['endnote'] * 9 + ['zotero'] * 6 + ['plain'] * 3}
+    styles = {'endnote': ['bracket', 'bracket', 'sup'], 'zotero': ['bracket', 'paren'], 'plain': ['bracket']}
+    for group, lst in (('qian', q), ('others', o)):
+        for i, src in enumerate(lst):
+            mode = modes[group][i]
+            yield src, i, mode, styles[mode][i % len(styles[mode])]
 
 
 def main():

@@ -159,6 +159,8 @@ def items_xml(ctx, items):
             out += run(it['s'], it['f'])
         elif t == 'cite':
             out += cite_field(ctx, it['refs'], frozenset())
+        elif t == 'citetext':  # 引用被拍平成普通文字（模拟复制粘贴）
+            out += run(display(ctx, it['refs']), frozenset({'sup'}) if ctx.num_style == 'sup' else frozenset())
         elif t == 'ins':
             ctx.rev_id += 1
             out += f'<w:ins w:id="{ctx.rev_id}" w:author="{esc(it["author"])}" w:date="{it["date"]}">{run(it["s"], it.get("f", frozenset()))}</w:ins>'
