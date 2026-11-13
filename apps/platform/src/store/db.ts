@@ -921,6 +921,22 @@ export class Store {
       version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
       UNIQUE (owner, name)
     )`)
+    // 深度审稿质量记录（docs/design/REVIEW_QUALITY.md）：每次审稿一行（耗时、按阶段的用量、模型配置、覆盖范围），
+    // 每条意见一行（后来被采纳 / 驳回 / 没处理）。只存统计与意见的类别，不存稿件原文
+    this.db.exec(`CREATE TABLE IF NOT EXISTS review_runs (
+      id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, owner TEXT NOT NULL, status TEXT NOT NULL,
+      started_at TEXT NOT NULL, finished_at TEXT, duration_ms INTEGER,
+      model TEXT, thinking INTEGER, stages TEXT NOT NULL DEFAULT '{}', coverage TEXT NOT NULL DEFAULT '{}',
+      words INTEGER NOT NULL DEFAULT 0, raw_candidates INTEGER NOT NULL DEFAULT 0, verifier_rejected INTEGER NOT NULL DEFAULT 0,
+      comments INTEGER NOT NULL DEFAULT 0, error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_runs_started ON review_runs (started_at);
+    CREATE TABLE IF NOT EXISTS review_findings (
+      comment_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, doc_id TEXT NOT NULL, node_id TEXT NOT NULL,
+      category TEXT NOT NULL, severity TEXT NOT NULL, source TEXT NOT NULL, created_rev INTEGER NOT NULL,
+      outcome TEXT, outcome_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_findings_run ON review_findings (run_id);`)
     // 官网匿名问卷的答卷（survey/clinician-survey.ts）：不记 IP、不关联账户，只存规整后的答案
     this.db.exec(`CREATE TABLE IF NOT EXISTS survey_responses (
       id TEXT PRIMARY KEY, survey TEXT NOT NULL, version TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
@@ -2318,6 +2334,61 @@ export class Store {
       ? this.db.prepare('SELECT * FROM analysis_results WHERE study_id = ? ORDER BY updated_at DESC').all(f.study_id)
       : this.db.prepare('SELECT * FROM analysis_results WHERE owner = ? ORDER BY updated_at DESC').all(f.owner ?? '')
     return (rows as unknown as RawAnalysisResult[]).map(parseAnalysisResult)
+  }
+
+  // —— 深度审稿质量（docs/design/REVIEW_QUALITY.md） ——
+
+  startReviewRun(r: { id: string; doc_id: string; owner: string }): void {
+    this.db.prepare("INSERT INTO review_runs (id, doc_id, owner, status, started_at) VALUES (?, ?, ?, 'running', ?)").run(r.id, r.doc_id, r.owner, now())
+  }
+
+  finishReviewRun(id: string, r: {
+    status: 'done' | 'error'; duration_ms: number; model: string | null; thinking: boolean | null
+    stages: Record<string, { ms: number; calls: number; input_tokens: number; output_tokens: number }>; coverage: unknown
+    words: number; raw_candidates: number; verifier_rejected: number; comments: number; error?: string | null
+  }): void {
+    this.db.prepare(`UPDATE review_runs SET status = ?, finished_at = ?, duration_ms = ?, model = ?, thinking = ?, stages = ?, coverage = ?,
+      words = ?, raw_candidates = ?, verifier_rejected = ?, comments = ?, error = ? WHERE id = ?`)
+      .run(r.status, now(), r.duration_ms, r.model, r.thinking === null ? null : r.thinking ? 1 : 0, JSON.stringify(r.stages), JSON.stringify(r.coverage ?? {}),
+        r.words, r.raw_candidates, r.verifier_rejected, r.comments, r.error ?? null, id)
+  }
+
+  addReviewFindings(runId: string, docId: string, rev: number, items: Array<{ comment_id: string; node_id: string; category: string; severity: string; source: string }>): void {
+    const ins = this.db.prepare('INSERT OR IGNORE INTO review_findings (comment_id, run_id, doc_id, node_id, category, severity, source, created_rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    this.transaction(() => { for (const f of items) ins.run(f.comment_id, runId, docId, f.node_id, f.category, f.severity, f.source, rev) })
+  }
+
+  /** 医生明确表态（采纳修改 / 驳回）：记下结局。不是审稿意见的批注不受影响。 */
+  setReviewFindingOutcome(commentId: string, outcome: 'accepted' | 'rejected'): void {
+    this.db.prepare('UPDATE review_findings SET outcome = ?, outcome_at = ? WHERE comment_id = ?').run(outcome, now(), commentId)
+  }
+
+  /** 最近 days 天的审稿记录（新的在前）。 */
+  reviewRuns(days: number): Array<{ id: string; doc_id: string; status: string; started_at: string; duration_ms: number | null; model: string | null; thinking: number | null; stages: string; coverage: string; words: number; raw_candidates: number; verifier_rejected: number; comments: number; error: string | null }> {
+    const since = new Date(Date.now() - days * 86400_000).toISOString()
+    return this.db.prepare('SELECT id, doc_id, status, started_at, duration_ms, model, thinking, stages, coverage, words, raw_candidates, verifier_rejected, comments, error FROM review_runs WHERE started_at >= ? ORDER BY started_at DESC').all(since) as never
+  }
+
+  /**
+   * 意见的结局：明确表态的用记录；其余按批注现状推断——批注已解决且锚定的块在意见之后被改过 = 采纳（隐式），
+   * 已解决但没改 = 不了了之，仍开着 = 未处理。
+   */
+  reviewFindingOutcomes(runIds: string[]): Array<{ run_id: string; category: string; severity: string; source: string; outcome: string }> {
+    if (runIds.length === 0) return []
+    const rows = this.db.prepare(`SELECT f.run_id, f.category, f.severity, f.source, f.outcome, f.doc_id, f.node_id, f.created_rev, c.status AS cstatus
+      FROM review_findings f LEFT JOIN comments c ON c.id = f.comment_id WHERE f.run_id IN (${runIds.map(() => '?').join(',')})`).all(...runIds) as Array<{
+      run_id: string; category: string; severity: string; source: string; outcome: string | null; doc_id: string; node_id: string; created_rev: number; cstatus: string | null
+    }>
+    const changed = this.db.prepare("SELECT 1 FROM node_changes WHERE doc_id = ? AND node_id = ? AND rev > ? AND actor IN ('user', 'ai') LIMIT 1")
+    return rows.map(r => {
+      let outcome = r.outcome
+      if (!outcome) {
+        if (r.cstatus === null) outcome = 'deleted'
+        else if (r.cstatus === 'resolved') outcome = changed.get(r.doc_id, r.node_id, r.created_rev) ? 'accepted_implicit' : 'dismissed'
+        else outcome = 'open'
+      }
+      return { run_id: r.run_id, category: r.category, severity: r.severity, source: r.source, outcome }
+    })
   }
 
   addProvenanceEvent(e: { turnId: string; docId: string; kind: string; detail: string }): void {

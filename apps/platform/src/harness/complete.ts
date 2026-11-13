@@ -8,8 +8,19 @@ export type Complete = (system: string, user: string) => Promise<string>
 export interface InlineImage { mime: 'image/png' | 'image/jpeg'; data: string }
 export type VisionComplete = (system: string, user: string, images: InlineImage[]) => Promise<string>
 
-/** 一次成功调用的用量（上游 Messages 响应里的 usage；缺字段时为 0） */
-export interface CompleteUsage { model: string; input_tokens: number; output_tokens: number; ms: number }
+import { AsyncLocalStorage } from 'node:async_hooks'
+
+/** 一次成功调用的用量（上游 Messages 响应里的 usage；缺字段时为 0）。thinking：这次调用是否开着深度思考。 */
+export interface CompleteUsage { model: string; input_tokens: number; output_tokens: number; ms: number; thinking?: boolean }
+
+/**
+ * 用量记录范围：在 withUsageScope 里发起的全部模型调用（含并发、子任务）都记进 record，
+ * 不用改每个调用方的签名。审稿按阶段统计 token、耗时与是否开了思考用它（docs/design/REVIEW_QUALITY.md）。
+ */
+const usageScope = new AsyncLocalStorage<(u: CompleteUsage) => void>()
+export function withUsageScope<T>(record: (u: CompleteUsage) => void, fn: () => Promise<T>): Promise<T> {
+  return usageScope.run(record, fn)
+}
 
 interface CompleteOptions { upstream: string; apiKey: string; model: string; timeoutMs?: number; onUsage?: (u: CompleteUsage) => void; extra?: Record<string, unknown> }
 
@@ -34,7 +45,10 @@ function caller(opts: CompleteOptions, extra: Record<string, unknown> = {}): (sy
         }
         const body = await res.json() as { content?: Array<{ type: string; text?: string }>; usage?: { input_tokens?: number; output_tokens?: number } }
         try {
-          opts.onUsage?.({ model: opts.model, input_tokens: body.usage?.input_tokens ?? 0, output_tokens: body.usage?.output_tokens ?? 0, ms: Date.now() - t0 })
+          const thinkingOff = (extra.thinking as { type?: string } | undefined)?.type === 'disabled'
+          const usage: CompleteUsage = { model: opts.model, input_tokens: body.usage?.input_tokens ?? 0, output_tokens: body.usage?.output_tokens ?? 0, ms: Date.now() - t0, thinking: !thinkingOff }
+          opts.onUsage?.(usage)
+          usageScope.getStore()?.(usage)
         } catch { /* 计量失败不影响调用结果 */ }
         return (body.content ?? []).filter(c => c.type === 'text').map(c => c.text ?? '').join('')
       } catch (err) {

@@ -7,13 +7,14 @@ import type { Store } from '../store/db.ts'
  * PDF 解析服务（doc-parser）不可用（导入会悄悄退回 poppler，表格结构不可靠）。
  * 站点整体宕机由外部探测负责（见 docs/DEPLOY.md）。
  */
-export type AlertKind = 'model_auth' | 'model_balance' | 'turn_failures' | 'doc_parser_down'
+export type AlertKind = 'model_auth' | 'model_balance' | 'turn_failures' | 'doc_parser_down' | 'review_quality'
 
 const SUBJECT: Record<AlertKind, string> = {
   model_auth: '模型服务认证失败（API key 无效）',
   model_balance: '模型服务余额不足',
   turn_failures: 'AI 回合大量失败',
   doc_parser_down: 'PDF 解析服务不可用（导入已退回 poppler，表格识别不可靠）',
+  review_quality: '深度审稿质量异常（耗时、用量或意见数明显低于近期水平）',
 }
 
 export class Alerts {

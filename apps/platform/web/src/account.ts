@@ -666,6 +666,7 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
       <button class="org-tab" data-tab="settings">${icon('template')} 实例设置</button>
       <button class="org-tab" data-tab="audit">${icon('shield')} 全局审计</button>
       <button class="org-tab" data-tab="surveys">${icon('chart')} 研究问卷</button>
+      <button class="org-tab" data-tab="reviewq">${icon('microscope')} 审稿质量</button>
     </div>
     <div class="org-panel" id="tabAdminTenants">
       <div id="platformTenants" class="muted">加载中…</div>
@@ -684,6 +685,9 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
     </div>
     <div class="org-panel" id="tabAdminSurveys" hidden>
       <div id="adminSurveys" class="admin-surveys">加载中…</div>
+    </div>
+    <div class="org-panel" id="tabAdminReviewQ" hidden>
+      <div id="adminReviewQ" class="admin-surveys">加载中…</div>
     </div>`, true)
 
   const tabs = dlg.querySelectorAll<HTMLButtonElement>('#adminTabs .org-tab')
@@ -693,6 +697,7 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
     settings: dlg.querySelector('#tabAdminSettings')!,
     audit: dlg.querySelector('#tabAdminAudit')!,
     surveys: dlg.querySelector('#tabAdminSurveys')!,
+    reviewq: dlg.querySelector('#tabAdminReviewQ')!,
   }
   tabs.forEach(btn => btn.addEventListener('click', () => {
     const t = btn.dataset.tab!
@@ -749,6 +754,28 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
     box.querySelector<HTMLButtonElement>('#surveyJson')!.onclick = () => void save('json')
   }
   void renderSurveys().catch(err => notify((err as Error).message, true))
+  // 审稿质量（docs/design/REVIEW_QUALITY.md）：由真实审稿与医生对意见的处理统计，不另跑测试集
+  const renderReviewQuality = async () => {
+    const q = await api<any>('/api/admin/review-quality?days=30')
+    const box = dlg.querySelector('#adminReviewQ')!
+    const n = (x: number | null, d = 1) => x === null || x === undefined ? '—' : Number(x).toFixed(d)
+    const pct = (x: number | null) => x === null || x === undefined ? '—' : `${Math.round(x * 100)}%`
+    const f = q.findings
+    box.innerHTML = `${q.alert ? `<div class="danger-confirm">${esc(q.alert)}</div>` : ''}
+      <div><b>最近 ${q.days} 天</b> <span class="muted small">共 ${q.runs} 次审稿${q.errors ? `，${q.errors} 次出错` : ''}；模型 ${esc(q.models.join('、') || '—')}；开着深度思考的占 ${pct(q.thinking_share)}</span></div>
+      <table class="mini-table"><tbody>
+        <tr><td>中位耗时</td><td>${n(q.median_duration_s, 0)} 秒（每千字 ${n(q.median_ms_per_k / 1000)} 秒）</td></tr>
+        <tr><td>每千字输出 token</td><td>${n(q.median_out_tokens_per_k, 0)}</td></tr>
+        <tr><td>每千字意见数</td><td>${n(q.median_comments_per_k, 2)}</td></tr>
+        <tr><td>覆盖范围</td><td>章节 ${q.coverage.sections}/${q.coverage.sections_total}，表格 ${q.coverage.tables}/${q.coverage.tables_total}</td></tr>
+        <tr><td>意见结局</td><td>共 ${f.total} 条：采纳 ${f.accepted}，驳回 ${f.rejected}，解决但没改 ${f.dismissed}，未处理 ${f.open}</td></tr>
+        <tr><td>精确率（下限）</td><td>${pct(f.precision)} <span class="muted small">明确表态的意见里被采纳的比例</span></td></tr>
+      </tbody></table>
+      ${q.by_category.length ? `<div class="muted small">按类别</div><table class="mini-table"><thead><tr><th>类别</th><th>采纳</th><th>驳回</th><th>没改</th><th>未处理</th></tr></thead><tbody>${q.by_category.map((c: any) => `<tr><td>${esc(c.category)}</td><td>${c.accepted}</td><td>${c.rejected}</td><td>${c.dismissed}</td><td>${c.open}</td></tr>`).join('')}</tbody></table>` : ''}
+      ${q.daily.length ? `<div class="muted small">每天（中位数，每千字）</div><table class="mini-table"><thead><tr><th>日期</th><th>次数</th><th>耗时 秒</th><th>输出 token</th><th>意见</th><th>思考</th></tr></thead><tbody>${q.daily.slice(-14).reverse().map((d: any) => `<tr><td>${d.day}</td><td>${d.runs}</td><td>${n(d.median_ms_per_k / 1000)}</td><td>${n(d.median_out_tokens_per_k, 0)}</td><td>${n(d.median_comments_per_k, 2)}</td><td>${pct(d.thinking_share)}</td></tr>`).join('')}</tbody></table>` : ''}
+      <span class="muted small">召回率无法只靠医生的操作测出（没报的问题医生不会去处理），这里不显示；漏报信号在下一步加入。</span>`
+  }
+  void renderReviewQuality().catch(err => notify((err as Error).message, true))
   const render = async () => {
     const users: any[] = await api('/api/admin/users')
     dlg.querySelector('#adminUsers')!.outerHTML = `<table class="users" id="adminUsers">

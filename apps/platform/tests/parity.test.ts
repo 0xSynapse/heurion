@@ -138,6 +138,7 @@ const ALL_PARITY: Record<string, string> = {
   'GET /api/platform/tenants': 'platform_admin.tenants', 'POST /api/platform/tenants': 'platform_admin.create_tenant', 'PATCH /api/platform/tenants/:tid': 'platform_admin.set_tenant_status',
   'GET /api/admin/users': 'platform_admin.users', 'PATCH /api/admin/users/:uid': 'platform_admin.update_user', 'POST /api/admin/users/:uid/logout': 'platform_admin.logout_user',
   'GET /api/admin/settings': 'platform_admin.settings', 'PUT /api/admin/settings': 'platform_admin.update_settings', 'GET /api/admin/audit': 'platform_admin.audit',
+  'GET /api/admin/review-quality': 'platform_admin.review_quality',
   'GET /api/admin/surveys/clinician-writing': 'platform_admin.survey_stats', 'GET /api/admin/surveys/clinician-writing/export': 'platform_admin.survey_export',
   // 患者、研究的高权限操作
   'GET /api/patients-directory': 'patient_admin.directory', 'POST /api/patients/:ptid/break-glass': 'patient_admin.break_glass', 'DELETE /api/patients/:ptid': 'patient_admin.delete',
@@ -321,6 +322,7 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/public/tools/kaplan-meier': '官网着陆页公开无状态 Kaplan-Meier 生存曲线小工具（AI 调 dataset_survival）',
   'POST /api/public/tools/forest-plot': '官网着陆页公开无状态亚组森林图 SVG 小工具（AI 调 dataset_logistic / imaging_medical_figure_studio）',
   'POST /api/public/tools/phi-scan': '官网着陆页公开无状态 PHI 隐私扫描与脱敏小工具（AI 调 phi_scan）',
+  'GET /api/docs/:id/deep-review/jobs/:job': '深度审稿进度轮询（界面显示步骤用；AI 发起审稿时同步等待结果）',
   'POST /api/docs/:id/confirm-ai': '确认 AI 写的文字只能由用户本人做（AI 不能确认自己写的东西，docs/design/PROVENANCE.md）',
   'GET /api/me/provenance': 'AI 写作保护的个人偏好（界面设置；AI 从写入结果里就能知道是否转为待采纳修订）',
   'PUT /api/me/provenance': 'AI 写作保护的个人偏好只能由用户本人改（AI 不能放宽约束自己的规则）',

@@ -140,6 +140,30 @@ export interface FourStageReviewResult {
   active_rules_applied: string[]
   /** 给用户看的审稿说明（如表格结构不可靠、已跳过表格核查） */
   warnings: string[]
+  /** 这次审了什么、跳过了什么（docs/design/REVIEW_QUALITY.md） */
+  coverage?: ReviewCoverage
+  /** 全文复核删掉的模型意见数 */
+  verifier_rejected?: number
+}
+
+/** 审稿的步骤（进度显示与按阶段统计用量）。 */
+export type ReviewStep = 'read' | 'rules' | 'sections' | 'verify' | 'synthesize'
+export interface ReviewProgress { step: ReviewStep; status: 'running' | 'done' | 'skipped'; done?: number; total?: number; detail?: string }
+
+/** 覆盖范围：让用户看得出系统到底做了多少。 */
+export interface ReviewCoverage {
+  words: number
+  sections_total: number
+  /** 交给模型逐章节审的章节（合并后的审稿单元数） */
+  sections_reviewed: number
+  /** 没有交给模型的章节标题（致谢、参考文献等样板章节，或核查力度为「轻」的引言） */
+  sections_skipped: string[]
+  tables_total: number
+  tables_checked: number
+  /** 有没有用模型（没配置模型时只做规则核查） */
+  llm: boolean
+  /** 有没有做全文复核 */
+  verifier: boolean
 }
 
 /**
@@ -172,7 +196,9 @@ export function sectionReviewPrompt(title: string, role: SectionRole, scratchpad
 }
 
 /** 声明性章节：伦理、基金、致谢、数据可得性、作者贡献、利益冲突、缩写、补充材料等，没有可核对的结果数据，不送审 */
-const BOILERPLATE_SECTION = /\b(?:ethic|funding|financial support|acknowledg|data (?:availab|sharing)|availability of data|code availab|author(?:s'?|ship)? contribution|contributions|conflicts? of interest|competing interest|disclosure|declaration|consent for publication|patient consent|informed consent statement|abbreviation|supplementary|publisher'?s note|trial registration|registration|patient and public involvement)\b|^\s*references?\s*$|^\s*参考文献\s*$|伦理|基金|资助|致谢|数据(?:可用|可得|共享)|作者贡献|利益冲突|缩略|补充材料/i
+// 只要求词首边界：这些多是词干（acknowledg-ements、ethic-s、availab-ility、interest-s），
+// 以前末尾还要求词尾边界，「Acknowledgements」「Ethics」「Data availability」「Competing interests」都匹配不上，被当正文送去审稿
+const BOILERPLATE_SECTION = /\b(?:ethic|funding|financial support|acknowledg|data (?:availab|sharing)|availability of data|code availab|author(?:s'?|ship)? contribution|contributions|conflicts? of interest|competing interest|disclosure|declaration|consent for publication|patient consent|informed consent statement|abbreviation|supplementary|publisher'?s note|trial registration|registration|patient and public involvement)|^\s*references?\s*$|^\s*参考文献\s*$|伦理|基金|资助|致谢|数据(?:可用|可得|共享)|作者贡献|利益冲突|缩略|补充材料/i
 
 interface ReviewSection { title: string; role: SectionRole; tier: VerificationTier; blocks: Array<{ nodeId: string; text: string; tier: VerificationTier }> }
 
@@ -193,6 +219,23 @@ export function scheduleReviewSections<T extends ReviewSection>(sections: T[], a
     out.push(s)
   }
   return out
+}
+
+/**
+ * 审稿意见的结局（docs/design/REVIEW_QUALITY.md）：采纳修改 / 驳回是自演进 A、B 两轨的同一个入口，在这里记下。
+ * 记录失败不影响演进。
+ */
+function recordFindingOutcome(store: any, commentId: string, opts: { acceptedFix?: boolean; rebuttalText?: string }): void {
+  try {
+    if (typeof store?.setReviewFindingOutcome !== 'function') return
+    if (opts.acceptedFix) store.setReviewFindingOutcome(commentId, 'accepted')
+    else if (opts.rebuttalText) store.setReviewFindingOutcome(commentId, 'rejected')
+  } catch { /* 质量记录不影响审稿与演进 */ }
+}
+
+/** 字数：汉字按字、其他按词（覆盖范围与「每千字意见数」用）。 */
+export function countWords(text: string): number {
+  return (text.match(/[一-鿿]/g)?.length ?? 0) + (text.replace(/[一-鿿]/g, ' ').match(/[A-Za-z0-9]+/g)?.length ?? 0)
 }
 
 export function untrustedTablesWarning(skipped: string[]): string {
@@ -1638,6 +1681,7 @@ export class ClaimService {
       tablesUnreliable?: boolean
       assessTables?: boolean
       tableVision?: TableVision | null
+      onProgress?: (p: ReviewProgress) => void
     } = {},
   ): Promise<FourStageReviewResult> {
     return this.runFourStageDeepReview(docId, {
@@ -1660,6 +1704,8 @@ export class ClaimService {
       assessTables?: boolean
       /** 与 assessTables 一起用：先按页面图像核对表格（PDF_ORIGINAL_VIEW.md §12.3），核对不了的再按文字规则判断 */
       tableVision?: TableVision | null
+      /** 进度回调（界面显示步骤；按阶段统计用量）。回调出错不影响审稿 */
+      onProgress?: (p: ReviewProgress) => void
       /** 正交消融实验开关（默认全关，生产行为完全不变） */
       ablation?: {
         disableStructAst?: boolean
@@ -1675,6 +1721,9 @@ export class ClaimService {
   ): Promise<FourStageReviewResult> {
     const doc = this.docs.get(docId)
     const abl = opts.ablation ?? {}
+    const progress = (p: ReviewProgress) => { try { opts.onProgress?.(p) } catch { /* 进度显示不影响审稿 */ } }
+    progress({ step: 'read', status: 'running' })
+    const tablesAll = opts.tablesUnreliable ? 0 : extractTableSummaries(doc).length
     let tables = opts.tablesUnreliable ? [] : extractTableSummaries(doc)
     const warnings = opts.tablesUnreliable ? [TABLES_UNRELIABLE_WARNING] : []
     if (opts.assessTables && tables.length) {
@@ -1735,9 +1784,19 @@ export class ClaimService {
       }
     })
     if (curSection.blocks.length > 0) sections.push(curSection)
+    const words = sections.reduce((n, s) => n + s.blocks.reduce((m, b) => m + countWords(b.text), 0), 0)
+    progress({ step: 'read', status: 'done', detail: `${sections.length} 个章节、${tables.length}/${tablesAll} 张表格` })
+    const coverage: ReviewCoverage = {
+      words, sections_total: sections.length, sections_reviewed: 0, sections_skipped: [],
+      tables_total: tablesAll, tables_checked: skipTables ? 0 : tables.length,
+      llm: Boolean(opts.complete), verifier: false,
+    }
+    let verifierRejected = 0
+    let verifyFailedBatches = 0
 
     const candidates: SynthesizedReviewComment[] = []
     let seq = 1
+    progress({ step: 'rules', status: 'running' })
 
     // 1. 若在 heurion_deep 或 heurion_evolved 模式下，执行 Stage 3 结构化临床四维核查（Pass B + Pass C + Pass D）
     if ((opts.mode === 'heurion_deep' || opts.mode === 'heurion_evolved') && !abl.disableStructAst) {
@@ -1770,6 +1829,13 @@ export class ClaimService {
                 : 'pass_d_spin',
         })
       }
+    }
+
+    progress({ step: 'rules', status: 'done', detail: `${candidates.length} 处` })
+    if (!opts.complete) {
+      progress({ step: 'sections', status: 'skipped', detail: '没有配置审稿模型' })
+      progress({ step: 'verify', status: 'skipped' })
+      coverage.sections_skipped = sections.map(s => s.title)
     }
 
     // 2. 若提供了在线大模型（complete），按对应模式执行 LLM 审稿推理
@@ -1908,6 +1974,14 @@ export class ClaimService {
             .map(b => b.text)).join('\n').slice(0, 3000)
           : ''
         if (verifyEvidence) targetSections = scheduleReviewSections(targetSections, abstractSection)
+        {
+          // 覆盖范围：合并后的审稿单元标题里出现过的章节都算审过
+          const covered = new Set(targetSections.flatMap(s => s.title.split(' / ')))
+          coverage.sections_reviewed = targetSections.length
+          coverage.sections_skipped = sections.map(s => s.title).filter(t => !covered.has(t))
+        }
+        let sectionsDone = 0
+        progress({ step: 'sections', status: 'running', done: 0, total: targetSections.length })
         const concurrency = 4
         const secResults: Array<{ raw: string; sec: (typeof targetSections)[number] }> = new Array(targetSections.length)
         let nextSecIdx = 0
@@ -1941,6 +2015,7 @@ export class ClaimService {
               : `【当前章节正文】：\n${secText}${abstractRef}${statsRef}`
             const raw = await opts.complete!(sys, userPayload)
             secResults[idx] = { raw, sec }
+            progress({ step: 'sections', status: 'running', done: ++sectionsDone, total: targetSections.length, detail: sec.title })
           }
         }
         await Promise.all(
@@ -1955,9 +2030,14 @@ export class ClaimService {
         }
 
         // 全文复核：章节审稿只看到本章节与摘要，把全部模型意见连同全文交给模型逐条复核，判为不成立的不报（每 20 条一次调用）
+        progress({ step: 'sections', status: 'done', done: sectionsDone, total: targetSections.length, detail: `${candidates.filter(c => c.source_pass === 'llm_stage3').length} 条模型意见` })
+        if (!runStage4Verifier) progress({ step: 'verify', status: 'skipped' })
         if (runStage4Verifier) {
           const llm = candidates.filter(c => c.source_pass === 'llm_stage3')
           const rejected = new Set<SynthesizedReviewComment>()
+          const batches = Math.ceil(llm.length / 20)
+          coverage.verifier = true
+          progress({ step: 'verify', status: 'running', done: 0, total: batches })
           const fullText = `${fullProse}\n\n${tableMarkdown}`
           for (let i = 0; i < llm.length; i += 20) {
             const batch = llm.slice(i, i + 20)
@@ -1986,9 +2066,14 @@ export class ClaimService {
               const verdicts = parseVerdicts(await opts.complete!(verifySysForBatch, `【论文全文】\n${fullText}\n\n【待复核的意见】\n${list}`))
               batch.forEach((c, k) => { if (verdicts.get(k + 1) === 'rejected') rejected.add(c) })
             } catch {
-              /* 复核调用失败：这一批照常报出 */
+              /* 复核调用失败：这一批照常报出（记入质量数据，不再无声无息） */
+              verifyFailedBatches++
             }
+            progress({ step: 'verify', status: 'running', done: i / 20 + 1, total: batches })
           }
+          verifierRejected = rejected.size
+          if (verifyFailedBatches) warnings.push(`全文复核有 ${verifyFailedBatches} 批调用失败，这些意见未经复核，可能有误报。`)
+          progress({ step: 'verify', status: 'done', done: batches, total: batches, detail: `删去 ${rejected.size} 条不成立的意见` })
           if (rejected.size) {
             const kept = candidates.filter(c => !rejected.has(c))
             candidates.length = 0
@@ -1997,6 +2082,7 @@ export class ClaimService {
         }
       }
     }
+    progress({ step: 'synthesize', status: 'running' })
 
     // Stage 4：全局合成（pass_at_k 模式下不去重以展示 Google Section 2 的假阳性堆积效应；其余模式执行 Stage 4 去重与过滤）
     const synthesized = this.synthesizeStage4Review(docId, candidates, {
@@ -2006,6 +2092,7 @@ export class ClaimService {
       anchorComments: opts.anchorComments,
       verifiedByLlm: Boolean(opts.complete && runStage4Verifier),
     })
+    progress({ step: 'synthesize', status: 'done', detail: `${synthesized.length} 条意见` })
 
     return {
       doc_id: docId,
@@ -2017,6 +2104,8 @@ export class ClaimService {
       stage4_deduplicated_comments: synthesized,
       active_rules_applied: activeRules,
       warnings,
+      coverage,
+      verifier_rejected: verifierRejected,
     }
   }
 
@@ -2129,6 +2218,7 @@ export class ClaimService {
     distilledRule?: string
   } {
     const store = this.docs.store as any
+    recordFindingOutcome(store, commentId, opts)
     const owner = opts.owner ?? (typeof store?.getDoc === 'function' ? store.getDoc(docId)?.owner : undefined) ?? 'local'
     const checks = (typeof store?.listClaimChecks === 'function' ? store.listClaimChecks(docId) : []) as Array<any>
     const linkedCheck = checks.find(c => c.comment_id === commentId)
@@ -2265,6 +2355,7 @@ export class ClaimService {
       return this.evolveFromReviewComment(docId, commentId, opts)
     }
     const store = this.docs.store as any
+    recordFindingOutcome(store, commentId, opts)
     const owner = opts.owner ?? (typeof store?.getDoc === 'function' ? store.getDoc(docId)?.owner : undefined) ?? 'local'
     const checks = (typeof store?.listClaimChecks === 'function' ? store.listClaimChecks(docId) : []) as Array<any>
     const linkedCheck = checks.find(c => c.comment_id === commentId)

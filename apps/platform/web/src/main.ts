@@ -30,6 +30,7 @@ import { openHelpGuide, importHelpAsDoc } from './help.ts'
 import { initCopilot, formatMarkdown, bindMarkdownActions } from './copilot.ts'
 import { icon, type IconName } from './icons.ts'
 import { downloadProof, initProvenanceUi, openDisclosure, protectionNote } from './provenance-ui.ts'
+import { coverageText, pollReviewJob, renderReviewProgress, type ReviewCoverage } from './review-progress.ts'
 
 const TOKEN = storedToken()
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
@@ -3410,14 +3411,18 @@ async function runDeepReview(): Promise<void> {
     snapEl.querySelector('#deepReviewCancel')?.addEventListener('click', () => abort.abort())
   }
   try {
-    const r = await api<{
+    // 后台任务 + 轮询：显示每一步的进度（docs/design/REVIEW_QUALITY.md）
+    const reviewDocId = session.docId
+    const { job_id } = await api<{ job_id: string }>(`/api/docs/${reviewDocId}/deep-review?async=1`, { method: 'POST', signal: abort.signal })
+    const r: {
       ok: boolean
       scratchpad?: ReviewSnapshotState['scratchpad']
       raw_candidates_count?: number
       comments_created?: Array<any>
       exempted_count?: number
       warnings?: string[]
-    }>(`/api/docs/${session.docId}/deep-review`, { method: 'POST', signal: abort.signal })
+      coverage?: ReviewCoverage
+    } = await pollReviewJob(api, reviewDocId, job_id, abort.signal, job => { if (snapEl) renderReviewProgress(snapEl, job, () => abort.abort()) })
     lastReviewSnapshot = {
       docId: session.docId,
       scratchpad: r.scratchpad,
@@ -3437,13 +3442,13 @@ async function runDeepReview(): Promise<void> {
     const exempted = lastReviewSnapshot.exemptedCount
     const reviewWarnings = r.warnings ?? []
     const exemptNote = exempted > 0 ? `（已按审稿偏好自动免报 ${exempted} 处）` : ''
-    // 有审稿说明（如跳过了表格核查）时不能说「全文自洽」：只说没有检出，并把说明一并告诉用户
+    // 没检出问题时也不说「全文自洽」：只说没有检出，并说明审了什么、跳过了什么（覆盖范围）
+    const cov = coverageText(r.coverage)
     showNotice(
       (created > 0
         ? `深度审稿完成：检出 ${created} 处建议关注项${exemptNote}`
-        : reviewWarnings.length
-          ? `深度审稿完成：未检出问题${exemptNote}`
-          : `深度审稿完成：全文核心数据与方法学自洽${exemptNote}`)
+        : `深度审稿完成：未检出问题${exemptNote}`)
+        + (cov ? `。${cov}` : '')
         + (reviewWarnings.length ? `。${reviewWarnings.join(' ')}` : ''),
       reviewWarnings.length > 0,
     )

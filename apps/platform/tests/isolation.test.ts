@@ -48,6 +48,8 @@ const PARAMS: Record<string, (s: Seed) => string> = {
   uid: s => s.userA, code: s => s.invite, tid: s => s.tenantA, jid: s => s.job, turnId: s => s.turn, seq: () => '1', index: () => '0', group: () => 'g1',
   action: () => 'x', ptid: s => s.patient, lid: s => s.lab, slide: () => 's0', pfid: s => s.pfile, prid: s => s.proposal, rcid: s => s.record, sid: s => s.study, kind: () => 'doc', rid: s => s.doc, otid: s => s.orgTemplate, aid: s => s.action, decision: () => 'confirm', dpid: s => s.department, shid: s => s.share,
   attId: () => 'att-1',
+  // 深度审稿后台任务（内存里，只有发起人能查）：外人带任何 id 都是 404
+  job: s => s.job,
   stid: () => 'is-none',
   // 随访对比的对应关系（T2.4）：不存在的 id 也必须 4xx
   lkid: () => 'lk000000000000',

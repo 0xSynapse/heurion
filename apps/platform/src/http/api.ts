@@ -10,7 +10,8 @@ import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
 import { handleAegisMcpJsonRpc, type McpDeps } from '../mcp/server.ts'
 import { TurnRegistry } from '../mcp/turns.ts'
-import { ClaimService } from '../claims/service.ts'
+import { ClaimService, type ReviewProgress } from '../claims/service.ts'
+import { detectRegression, reviewQualityReport, trackReview } from '../claims/review-quality.ts'
 import { PubMedClient } from '../literature/pubmed.ts'
 import { tmpdir } from 'node:os'
 import { Transform } from 'prosemirror-transform'
@@ -1249,6 +1250,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json(rows.map(r => ({ ...r, actor_name: nameOf(r.actor) })))
   })
 
+  // 管理员：深度审稿质量（docs/design/REVIEW_QUALITY.md）——耗时、用量、覆盖范围、意见结局与退化告警
+  app.get('/api/admin/review-quality', c => c.json(reviewQualityReport(store, Math.min(180, Math.max(1, Number(c.req.query('days')) || 30)))))
+
   // 管理员：官网问卷的答卷统计与导出（JSON / CSV，以 JSON 包一层返回，前端存成文件）
   app.get(`/api/admin/surveys/${SURVEY_ID}`, c => c.json({ id: SURVEY_ID, version: SURVEY_VERSION, ...store.surveyStats(SURVEY_ID) }))
   app.get(`/api/admin/surveys/${SURVEY_ID}/export`, c => {
@@ -2080,11 +2084,13 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
 
   /** 四阶段全文深度审稿（默认启用自演化模式 heurion_evolved，直接挂载结构化审稿批注并返回全文数字核对快照）。 */
-  app.post('/api/docs/:id/deep-review', async c => {
-    const row = owned(c)
-    if (!row) return c.json({ error: 'not found' }, 404)
+  /**
+   * 深度审稿。每次都记录质量数据（docs/design/REVIEW_QUALITY.md）；?async=1 时立即返回任务 id，
+   * 界面用 GET …/deep-review/jobs/:job 轮询每一步的进度，结束后取结果（AI 调用时仍同步等待）。
+   */
+  const reviewJobs = new Map<string, { doc_id: string; user: string; status: 'running' | 'done' | 'error'; steps: Record<string, ReviewProgress>; started_at: number; result?: unknown; error?: string }>()
+  const runReview = async (row: DocRow, userId: string, onProgress?: (p: ReviewProgress) => void) => {
     docs.flush(row.id)
-    const userId = c.get('user')
     const llmComplete =
       deps.reviewComplete ??
       (deps.skillTrainer as unknown as { complete?: (s: string, u: string) => Promise<string> })?.complete ??
@@ -2097,7 +2103,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     // 有图像模型与原版映射时，先按页面图像核对表格（只发表格区域的截图，PDF_ORIGINAL_VIEW.md §12.3）
     const mapGz = docling && deps.reviewVision ? store.getSourceMapGz(row.id) : null
     const pdf = mapGz ? store.getPackage(row.id) : null
-    const result = await sharedClaims.deepReview(row.id, {
+    const { runId, result } = await trackReview(store, { docId: row.id, owner: userId, rev: () => docs.rev(row.id) }, onP => sharedClaims.deepReview(row.id, {
       mode: 'heurion_evolved',
       owner: userId,
       anchorComments: true,
@@ -2106,13 +2112,17 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       assessTables: docling,
       ...(mapGz && pdf && deps.reviewVision ? { tableVision: { source: tableSourceProvider(pdf, mapGz), complete: deps.reviewVision } } : {}),
       ...(typeof llmComplete === 'function' ? { complete: llmComplete } : {}),
-    })
+      onProgress: onP,
+    }), onProgress)
     if (typeof llmComplete !== 'function') {
       result.warnings.push('当前未配置审稿大模型，本次仅执行了确定性算术与规则核查（跳过了第 3 阶段大模型章节审稿与全文复核）。')
     }
-    return c.json({
+    // 退化检测：近几次审稿的指标明显低于近期水平时告警管理员（一小时最多一封）
+    try { const msg = detectRegression(store); if (msg) void deps.alerts?.notify('review_quality', msg) } catch (err) { console.error('[review-quality]', err) }
+    return {
       ok: true,
       doc_id: row.id,
+      run_id: runId,
       rev: docs.rev(row.id),
       scratchpad: result.scratchpad,
       raw_candidates_count: result.stage3_raw_candidates,
@@ -2120,7 +2130,32 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       exempted_count: Math.max(0, result.stage3_raw_candidates - result.stage4_deduplicated_comments.length),
       active_rules: result.active_rules_applied,
       warnings: result.warnings,
-    })
+      coverage: result.coverage,
+    }
+  }
+
+  app.post('/api/docs/:id/deep-review', async c => {
+    const row = owned(c)
+    if (!row) return c.json({ error: 'not found' }, 404)
+    const userId = c.get('user')
+    if (c.req.query('async') !== '1') return c.json(await runReview(row, userId))
+    // 清掉一小时前的任务
+    for (const [k, j] of reviewJobs) if (Date.now() - j.started_at > 3600_000) reviewJobs.delete(k)
+    const jobId = `job${randomUUID().replace(/-/g, '').slice(0, 10)}`
+    const job = { doc_id: row.id, user: userId, status: 'running' as 'running' | 'done' | 'error', steps: {} as Record<string, ReviewProgress>, started_at: Date.now(), result: undefined as unknown, error: undefined as string | undefined }
+    reviewJobs.set(jobId, job)
+    void runReview(row, userId, p => { job.steps[p.step] = p })
+      .then(r => { job.result = r; job.status = 'done' })
+      .catch(err => { job.error = (err as Error).message ?? String(err); job.status = 'error' })
+    return c.json({ job_id: jobId })
+  })
+
+  /** 深度审稿任务的进度（界面轮询）：每一步的状态与计数，结束后带结果。 */
+  app.get('/api/docs/:id/deep-review/jobs/:job', c => {
+    const row = owned(c)
+    const job = reviewJobs.get(c.req.param('job'))
+    if (!row || !job || job.doc_id !== row.id || job.user !== c.get('user')) return c.json({ error: 'not found' }, 404)
+    return c.json({ status: job.status, steps: job.steps, elapsed_ms: Date.now() - job.started_at, ...(job.status === 'done' ? { result: job.result } : {}), ...(job.error ? { error: job.error } : {}) })
   })
 
   /** 采纳 / 拒绝待采纳修订（group = all 表示全部）。 */

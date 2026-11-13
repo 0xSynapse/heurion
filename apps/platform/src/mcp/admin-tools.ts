@@ -151,9 +151,9 @@ export const ADMIN_TOOLS: ToolSpec[] = [
   },
   {
     name: 'platform_admin',
-    description: '平台运营（只有平台运营账号能做）：tenants 机构列表；create_tenant 新建机构（name、admin_email；需确认）；set_tenant_status 停用（suspended）/ 启用（active）机构（需确认）；users 全部账号；update_user 改账号平台角色 user|admin 或停用（需确认）；logout_user 强制下线（需确认）；settings / update_settings 实例设置（memory_enabled=false 会删除所有人的记忆；需确认）；audit 全平台审计；survey_stats 官网匿名问卷（/survey）收到多少份答卷；survey_export 导出全部答卷（survey_format=json 带题目原文 | csv 每份一行、多选题按选项展开成 0/1）。重置密码不经 AI（AI 不经手密码）。',
+    description: '平台运营（只有平台运营账号能做）：tenants 机构列表；create_tenant 新建机构（name、admin_email；需确认）；set_tenant_status 停用（suspended）/ 启用（active）机构（需确认）；users 全部账号；update_user 改账号平台角色 user|admin 或停用（需确认）；logout_user 强制下线（需确认）；settings / update_settings 实例设置（memory_enabled=false 会删除所有人的记忆；需确认）；audit 全平台审计；survey_stats 官网匿名问卷（/survey）收到多少份答卷；survey_export 导出全部答卷（survey_format=json 带题目原文 | csv 每份一行、多选题按选项展开成 0/1）；review_quality 深度审稿质量（limit = 天数）。重置密码不经 AI（AI 不经手密码）。',
     input: {
-      action: z.enum(['tenants', 'create_tenant', 'set_tenant_status', 'users', 'update_user', 'logout_user', 'settings', 'update_settings', 'audit', 'survey_stats', 'survey_export']),
+      action: z.enum(['tenants', 'create_tenant', 'set_tenant_status', 'users', 'update_user', 'logout_user', 'settings', 'update_settings', 'audit', 'survey_stats', 'survey_export', 'review_quality']),
       survey_format: z.enum(['json', 'csv']).optional(),
       tenant_id: z.string().optional(), user_id: z.string().optional(), name: z.string().max(60).optional(), admin_email: z.string().max(120).optional(),
       status: z.enum(['active', 'disabled', 'suspended']).optional().describe('机构：active | suspended；账号：active | disabled'), role: z.enum(['user', 'admin']).optional(), memory_enabled: z.boolean().optional(),
@@ -170,6 +170,7 @@ export const ADMIN_TOOLS: ToolSpec[] = [
       update_settings: { method: 'PUT', path: () => '/api/admin/settings', role: 'operator', confirm: true, body: a => ({ json: only(a, ['memory_enabled']) }), summary: a => a.memory_enabled === false ? '在整个平台停用记忆，并删除所有用户的记忆（不可恢复）' : '在整个平台启用记忆' },
       audit: { method: 'GET', path: a => `/api/admin/audit${q({ actor: a.actor, action: a.filter_action, limit: a.limit })}` },
       survey_stats: { method: 'GET', path: () => '/api/admin/surveys/clinician-writing' },
+      review_quality: { method: 'GET', path: a => `/api/admin/review-quality${q({ days: a.limit })}` },
       survey_export: { method: 'GET', path: a => `/api/admin/surveys/clinician-writing/export${q({ format: a.survey_format })}` },
     },
   },
