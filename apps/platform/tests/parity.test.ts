@@ -97,6 +97,8 @@ const ALL_PARITY: Record<string, string> = {
   'GET /api/trash': 'doc_manage.trash_list', 'POST /api/docs/:id/restore': 'doc_manage.restore', 'DELETE /api/docs/:id/purge': 'doc_manage.purge',
   'POST /api/docs/:id/save': 'doc_manage.save_version', 'POST /api/docs/:id/versions/:seq/restore': 'doc_manage.restore_version',
   'POST /api/docs/:id/turns/:turnId/revert': 'doc_manage.revert_turn',
+  'GET /api/docs/:id/provenance': 'doc_manage.provenance', 'GET /api/docs/:id/ai-disclosure': 'doc_manage.ai_disclosure',
+  'GET /api/analysis-results': 'result_list', 'POST /api/analysis-results': 'result_register',
   'GET /api/docs/:id/export.docx': 'doc_manage.export', 'GET /api/docs/:id/export.pptx': 'doc_manage.export', 'GET /api/docs/:id/export.md': 'doc_manage.export',
   'POST /api/docs/:id/assets': 'asset_upload', 'GET /api/assets/:id/provenance': 'asset_provenance.read',
   'GET /api/deck-templates': 'deck_templates', 'GET /api/deck-themes': 'deck_templates',

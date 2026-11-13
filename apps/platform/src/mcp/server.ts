@@ -63,7 +63,8 @@ import { UnsplashError } from '../images/unsplash.ts'
 import { registerImagingTools } from './imaging-tools.ts'
 import { registerImagingReviewTools } from './imaging-review-tools.ts'
 import { MeasurementError, MeasurementService, measureSpace, SOURCE_KINDS } from '../measurements/service.ts'
-import { FOLLOWUP_FIELDS, LESION_FIELDS, MEASURE_UNITS } from '../model/measurements.ts'
+import { FOLLOWUP_FIELDS, LESION_FIELDS, MEASURE_UNITS, RESULT_FIELDS } from '../model/measurements.ts'
+import { ResultError, registerResult, visibleResults } from '../research/results.ts'
 import { registerImagingFollowupTools } from './imaging-followup-tools.ts'
 import { registerImagingDraftTools } from './imaging-draft-tools.ts'
 import type { Invoke } from '../http/invoke.ts'
@@ -132,7 +133,7 @@ const INSTRUCTIONS = `heurion 文档平台。文档只能通过这些工具读�
 工作流程：doc_outline 看结构 → doc_read 读相关章节（拿到块 id 与 rev）→ doc_edit 一次提交一批操作（base_rev 用读到的 rev）。
 - 小改动优先 replace_text：find 写块内原文（不能跨块），只改变化的字，格式、引用、评论锚点保留；失配时按返回的 near / matches 修正后重试。整段重写用 replace_block；新增用 insert_after / insert_before。
 - 内容格式是 markdown：标题 #、列表 -、表格 GFM、粗体 **、上标 <sup>、图片 ![说明](asset:<asset_id>)。
-- 来源规则（平台强制）：① 人写的文字你只能做短小的直接修改（单处 ≤ 40 字、一次 ≤ 5 处，且不碰数字、比较符号、引用，不碰否定词和「可能 / 显著 / 证实」这类措辞强度词）；超出的修改、删除人写的段落会自动整批转为待采纳修订，由用户采纳——这是正常结果，不要重试，回复里告诉用户去采纳。你自己写的、用户还没确认的文字可以直接改。② 写进文档的数字必须有出处：文档里已有的、本轮工具结果或用户消息里出现过的（可四舍五入），或者同一句引用的文献原文里有的。不要心算或凭记忆写数字：百分比等派生数字先用工具算出；文献里的数字要在同一句写 [@c:id]。③ 插入的引用要有保存的摘要或全文（insert_citation 会取摘要；没有摘要的先用 oa_fulltext 读全文）。返回 unobserved_number / unread_citation 时按 hint 补上出处再写；返回 needs_user_check 时在回复里请用户核对那几个数字。
+- 来源规则（平台强制）：① 人写的文字只能做短小直接修改（单处 ≤ 40 字、一次 ≤ 5 处，不碰数字、比较符号、引用、否定词与「可能 / 显著 / 证实」等措辞强度词）；超出的会自动转为待采纳修订，不要重试，告诉用户去采纳。你自己写的未确认文字可直接改。② 数字须有出处：文档里已有、本轮工具结果或用户消息里出现过，或同一句所引文献原文里有；派生数字先用工具算出。③ 插入的引用要有保存的摘要或全文（没有就先 oa_fulltext）。按 unobserved_number / unread_citation 的 hint 补出处；needs_user_check 时请用户核对。
 - 引用：pubmed_search 找文献 → insert_citation 登记 → 正文写返回的 [@c:<cite_id>]。正文中不能出现 DOI、PMID 或手写参考文献，参考文献表由平台自动生成。
 - 测量：报告里病灶的大小、体积、CT 值等数字一律绑定已确认的测量——imaging_lesions 查病灶（只用 status=confirmed 的）→ insert_measurement 绑定字段 → 正文写返回的 [@m:<m_id>]（显示为「数值 单位」，前后不要再写数字或单位）。不要手写测量数字，也不要用区间（如「6–8 mm」）或「约 N mm」描述某个病灶的大小——区间只用于引用指南阈值；改写段落时原样保留已有的 [@m:…]。doc_read 末尾列出各测量当前显示的值与状态，状态异常（来源已否决 / 撤销）的要提醒用户。
 - 影像所见草稿：imaging_findings_draft 按科室模板从已确认的结节确定性生成（测量都是 [@m:…]）；你只做润色（doc_edit 改措辞，原样保留 [@m:…]，不手写测量数字，随访差值用 insert_measurement 的 source=imaging_followup 绑定）。imaging_findings_draft_check 取 RIS 纯文本与复制前要处理的问题。所见模板只读。
@@ -149,6 +150,7 @@ const INSTRUCTIONS = `heurion 文档平台。文档只能通过这些工具读�
 - 参考资料库：写作需要依据时用 kb_search 检索用户上传的资料（论文、指南、内部材料），kb_read 读原文；资料是文献时仍用 insert_citation 规范引用。
 - 记忆：回合开头的［记忆］是用户确认过的偏好与事实，照做。用户明确说「记住…」「以后都…」时用 memory_propose（explicit=true）记下；用户说「忘掉…」「别再…」时用 memory_forget；用户要你「整理一下记忆」时用 memory_review（结果是待用户采纳的建议）；发现用户反复强调同一偏好时可以 memory_propose 提议，由用户确认。一条只记一件事，写成以后可直接照做的规则。不要记患者信息、病例细节、账号，也不要记只对本份文档有用的内容。
 - 数据分析（用户选了数据集，或要求分析数据）：dataset_describe 看变量 → dataset_open 放进工作区 → 在 shell 里用 Python（pandas、scipy、statsmodels、lifelines、matplotlib 已装好，不能联网装包）分析。
+  统计结果写进稿件：脚本打印统计量 → result_register 登记（带 code_path、dataset_ids）→ insert_measurement（source = analysis_result）绑定成 [@m:…]，不要手写统计结果。
   报告规范：先说明纳入多少例、缺失怎么处理；连续变量正态用均值±标准差、偏态用中位数（四分位距），分类变量用 n（%）；写清检验方法；效应量给 95% CI，P 值保留三位小数（<0.001 写 P<0.001）。
   Table 1 用文档原生表格写入（表题在表上方、表注写明统计方法）；图用 matplotlib 画（插入时写图注：图号、图题、样本量、统计方法，例如「图 1 两组 Kaplan-Meier 生存曲线（n=312，log-rank 检验）」）（中文用 Noto Sans CJK SC 字体），分析脚本存成 .py 文件运行，asset_upload 时给 code_path 和 dataset_ids，用户能看到图是怎么来的。
   只报告代码实际算出的数字，不要估计或编造；结果与预期不符就如实写。
@@ -965,25 +967,57 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
   }
 
   server.registerTool('insert_measurement', {
-    description: '为文档绑定一个测量（影像病灶的平均径、长短径、体积、CT 值等），返回 m_id。正文里写 [@m:<m_id>]，显示为「数值 单位」，' +
-      '医生修改病灶测量后报告里的数字自动更新。只能绑定已确认的病灶（imaging_lesions 里 status=confirmed）；一份文档只引用一位患者（文档关联了患者时须是该患者）。' +
-      '同一病灶、字段、单位再次绑定返回同一个 m_id，并把绑定时的快照刷新为当前值。',
+    description: '绑定一个测量或统计结果，返回 m_id；正文写 [@m:<m_id>]，来源更新后数字自动更新。' +
+      '影像：已确认病灶（status=confirmed）的测量，一份文档只引用一位患者。科研稿件：source = analysis_result 绑定 result_register 登记的结果。' +
+      '同一来源、字段、单位再次绑定返回同一个 m_id 并刷新快照。',
     inputSchema: {
       doc_id: z.string(),
-      lesion_id: z.string().describe('病灶 id（imaging_lesions 返回的 id）；source = imaging_followup 时是本次检查的病灶 id'),
-      field: z.enum([...Object.keys(LESION_FIELDS), ...Object.keys(FOLLOWUP_FIELDS)] as [string, ...string[]]).describe(`病灶测量：${Object.entries(LESION_FIELDS).map(([k, f]) => `${k}=${f.label}`).join('；')}。随访对比（source = imaging_followup）：${Object.entries(FOLLOWUP_FIELDS).map(([k, f]) => `${k}=${f.label}`).join('；')}`),
-      unit: z.enum(Object.keys(MEASURE_UNITS) as [string, ...string[]]).optional().describe('显示单位：长度 mm / cm，体积 mm3 / cm3，CT 值 HU，CTR 用 ratio，体积变化率 pct，倍增时间 day；缺省为字段的基准单位'),
-      decimals: z.number().int().min(0).max(4).optional().describe('小数位，缺省 mm 1 位、cm 2 位、mm3 0 位、cm3 2 位、HU 0 位、pct 0 位、day 0 位'),
-      source: z.enum(SOURCE_KINDS).optional().describe('来源类型：imaging_lesion（病灶测量，缺省）或 imaging_followup（随访对比的两期之差与体积倍增时间：派生数字同样要绑定，不能手写）'),
+      lesion_id: z.string().optional().describe('病灶 id（imaging_lesions 返回的 id）；source = imaging_followup 时是本次检查的病灶 id'),
+      source_id: z.string().optional().describe('analysis_result 的 result_id'),
+      field: z.enum([...Object.keys(LESION_FIELDS), ...Object.keys(FOLLOWUP_FIELDS), ...Object.keys(RESULT_FIELDS)] as [string, ...string[]]).describe(`病灶测量：${Object.entries(LESION_FIELDS).map(([k, f]) => `${k}=${f.label}`).join('；')}。随访对比（source = imaging_followup）：${Object.entries(FOLLOWUP_FIELDS).map(([k, f]) => `${k}=${f.label}`).join('；')}。分析结果（analysis_result）：字段同 result_register 的统计量`),
+      unit: z.enum(Object.keys(MEASURE_UNITS) as [string, ...string[]]).optional().describe('显示单位：长度 mm / cm，体积 mm3 / cm3，CT 值 HU，CTR 与效应量用 ratio，百分比 pct，倍增时间 day，P 值 pval（<0.001 自动写成「<0.001」）；缺省为字段的基准单位'),
+      decimals: z.number().int().min(0).max(4).optional().describe('小数位，缺省 mm 1 位、cm 2 位、mm3 0 位、cm3 2 位、HU 0 位、pct 0 位、day 0 位、ratio 2 位、pval 3 位'),
+      source: z.enum(SOURCE_KINDS).optional().describe('imaging_lesion（缺省）、imaging_followup（随访两期之差与倍增时间）、analysis_result'),
     },
-  }, async ({ doc_id, lesion_id, field, unit, decimals, source }) => {
+  }, async ({ doc_id, lesion_id, source_id, field, unit, decimals, source }) => {
     const denied = ctx.check(doc_id, 'write')
     if (denied) return denied
     const row = store.getDoc(doc_id)!
+    const sid = source_id ?? lesion_id
+    if (!sid) return fail('missing_source', '缺少来源 id：病灶用 lesion_id，分析结果用 source_id（result_register 返回的 result_id）')
     try {
-      const r = new MeasurementService(store, deps.patients).bind({ userId: claims.u, via: 'ai', space: measureSpace(row) }, row, { source, source_id: lesion_id, field, unit, decimals })
+      const r = new MeasurementService(store, deps.patients).bind({ userId: claims.u, via: 'ai', space: measureSpace(row) }, row, { source, source_id: sid, field, unit, decimals })
       return json({ m_id: r.row.id, marker: `[@m:${r.row.id}]`, text: r.view.text, source: r.view.source_label, version: r.row.bound_version, note: '正文写 marker，显示为 text；不要在标记前后再写数值或单位。' })
     } catch (err) { return measureFail(err) }
+  })
+
+  server.registerTool('result_register', {
+    description: '登记一个分析结果（一个效应一个结果），返回 result_id，再用 insert_measurement（source = analysis_result）绑定进稿件。数值必须来自本轮的分析输出，否则拒绝；同名再登记 = 重新分析，稿件里的数字自动更新。',
+    inputSchema: {
+      doc_id: z.string().optional(),
+      name: z.string().max(80).describe('如「OS 多因素 Cox · 年龄」'),
+      method: z.string().max(60).optional(),
+      values: z.record(z.string(), z.number()).describe(`统计量（estimate 为 HR / OR / 差值等效应量）：${Object.keys(RESULT_FIELDS).join('、')}`),
+      code_path: z.string().optional(),
+      dataset_ids: z.array(z.string()).optional(),
+    },
+  }, async ({ doc_id, name, method, values, code_path, dataset_ids }) => {
+    if (doc_id) { const denied = ctx.check(doc_id, 'write'); if (denied) return denied }
+    try {
+      const r = registerResult(store, { owner: claims.u, name, method, values, doc_id: doc_id ?? null, code_path: code_path ?? null, dataset_ids, via: 'ai', observe: ctx.observeKey })
+      return json({ result_id: r.id, name: r.name, version: r.version, values: r.values, next: `insert_measurement(doc_id, source = analysis_result, source_id = ${r.id}, field = …)` })
+    } catch (err) {
+      if (err instanceof ResultError) return fail(err.code, err.message, err.hint ? { hint: err.hint } : undefined)
+      throw err
+    }
+  })
+
+  server.registerTool('result_list', {
+    description: '自己登记的及稿件所在研究里的分析结果。',
+    inputSchema: { doc_id: z.string().optional() },
+  }, async ({ doc_id }) => {
+    if (doc_id) { const denied = ctx.check(doc_id, 'read'); if (denied) return denied }
+    return json(visibleResults(store, claims.u, doc_id ?? null).map(r => ({ result_id: r.id, name: r.name, method: r.method, values: r.values, version: r.version, code_path: r.code_path, updated_at: r.updated_at })))
   })
 
   server.registerTool('list_measurements', {

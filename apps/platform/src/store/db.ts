@@ -427,6 +427,27 @@ export interface VersionRow {
   created_at: string
 }
 
+/** 分析结果登记（docs/design/PROVENANCE.md 4.5）。values 的键见 model/measurements.ts 的 RESULT_FIELDS。 */
+export interface AnalysisResultRow {
+  id: string
+  owner: string
+  name: string
+  method: string
+  study_id: string | null
+  doc_id: string | null
+  values: Record<string, number>
+  code_path: string | null
+  dataset_ids: string[]
+  version: number
+  created_at: string
+  updated_at: string
+}
+interface RawAnalysisResult extends Omit<AnalysisResultRow, 'values' | 'dataset_ids'> { vals: string; dataset_ids: string }
+const parseAnalysisResult = (r: RawAnalysisResult): AnalysisResultRow => {
+  const { vals, dataset_ids, ...rest } = r
+  return { ...rest, values: JSON.parse(vals), dataset_ids: JSON.parse(dataset_ids) }
+}
+
 export interface CitationRow {
   id: string
   doc_id: string
@@ -892,6 +913,14 @@ export class Store {
       turn_id TEXT NOT NULL, doc_id TEXT NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL, at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_provenance_events_turn ON provenance_events (turn_id);`)
+    // 分析结果登记（docs/design/PROVENANCE.md 4.5）：AI 跑完分析后登记的统计量，稿件里以 [@m:] 绑定（来源 analysis_result）。
+    // 同一用户同名结果再次登记 = 重新分析：数值变了版本 +1，稿件里绑定的数字随之更新。
+    this.db.exec(`CREATE TABLE IF NOT EXISTS analysis_results (
+      id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL, method TEXT NOT NULL DEFAULT '',
+      study_id TEXT, doc_id TEXT, vals TEXT NOT NULL, code_path TEXT, dataset_ids TEXT NOT NULL DEFAULT '[]',
+      version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (owner, name)
+    )`)
     // 官网匿名问卷的答卷（survey/clinician-survey.ts）：不记 IP、不关联账户，只存规整后的答案
     this.db.exec(`CREATE TABLE IF NOT EXISTS survey_responses (
       id TEXT PRIMARY KEY, survey TEXT NOT NULL, version TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
@@ -2261,6 +2290,36 @@ export class Store {
     this.db.prepare('DELETE FROM provenance_events WHERE at < ?').run(cutoff)
   }
 
+  /** 登记（或重新登记）一个分析结果；同一用户同名结果数值变了版本 +1。 */
+  upsertAnalysisResult(r: { owner: string; name: string; method: string; study_id: string | null; doc_id: string | null; values: Record<string, number>; code_path: string | null; dataset_ids: string[] }): AnalysisResultRow {
+    const t = now()
+    const vals = JSON.stringify(r.values)
+    const old = this.db.prepare('SELECT * FROM analysis_results WHERE owner = ? AND name = ?').get(r.owner, r.name) as RawAnalysisResult | undefined
+    if (old) {
+      const version = old.vals === vals ? old.version : old.version + 1
+      this.db.prepare('UPDATE analysis_results SET method = ?, study_id = ?, doc_id = ?, vals = ?, code_path = ?, dataset_ids = ?, version = ?, updated_at = ? WHERE id = ?')
+        .run(r.method, r.study_id ?? old.study_id, r.doc_id ?? old.doc_id, vals, r.code_path, JSON.stringify(r.dataset_ids), version, t, old.id)
+      return this.getAnalysisResult(old.id)!
+    }
+    const id = 'r' + randomUUID().replace(/-/g, '').slice(0, 9)
+    this.db.prepare('INSERT INTO analysis_results (id, owner, name, method, study_id, doc_id, vals, code_path, dataset_ids, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)')
+      .run(id, r.owner, r.name, r.method, r.study_id, r.doc_id, vals, r.code_path, JSON.stringify(r.dataset_ids), t, t)
+    return this.getAnalysisResult(id)!
+  }
+
+  getAnalysisResult(id: string): AnalysisResultRow | undefined {
+    const row = this.db.prepare('SELECT * FROM analysis_results WHERE id = ?').get(id) as RawAnalysisResult | undefined
+    return row ? parseAnalysisResult(row) : undefined
+  }
+
+  /** 某用户登记的、或某研究里的分析结果（新的在前）。 */
+  listAnalysisResults(f: { owner?: string; study_id?: string }): AnalysisResultRow[] {
+    const rows = f.study_id
+      ? this.db.prepare('SELECT * FROM analysis_results WHERE study_id = ? ORDER BY updated_at DESC').all(f.study_id)
+      : this.db.prepare('SELECT * FROM analysis_results WHERE owner = ? ORDER BY updated_at DESC').all(f.owner ?? '')
+    return (rows as unknown as RawAnalysisResult[]).map(parseAnalysisResult)
+  }
+
   addProvenanceEvent(e: { turnId: string; docId: string; kind: string; detail: string }): void {
     this.db.prepare('INSERT INTO provenance_events (turn_id, doc_id, kind, detail, at) VALUES (?, ?, ?, ?, ?)').run(e.turnId, e.docId, e.kind, e.detail, now())
   }
@@ -2288,6 +2347,12 @@ export class Store {
     return (this.db.prepare('SELECT rev, actor, turn_id, affected, created_at FROM op_log WHERE doc_id = ? AND rev > ? ORDER BY rev')
       .all(docId, sinceRev) as Array<{ rev: number; actor: Actor; turn_id: string | null; affected: string; created_at: string }>)
       .map(r => ({ ...r, affected: JSON.parse(r.affected) }))
+  }
+
+  /** 全部操作日志（写者与原始操作；来源证明统计 AI 插入的引用、确认次数用）。 */
+  opsLog(docId: string): Array<{ rev: number; actor: Actor; ops: unknown }> {
+    return (this.db.prepare('SELECT rev, actor, ops FROM op_log WHERE doc_id = ? ORDER BY rev').all(docId) as Array<{ rev: number; actor: Actor; ops: string }>)
+      .map(r => ({ rev: r.rev, actor: r.actor, ops: JSON.parse(r.ops) }))
   }
 
   userEditOps(docId: string): Array<{ rev: number; ops: unknown }> {

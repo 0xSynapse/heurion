@@ -127,6 +127,50 @@ export function initProvenanceUi(deps: Deps) {
   }
 }
 
+const escHtml = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
+
+/** 下载来源证明（JSON）：AI 未确认的文字、绑定数字的来源、引用证据、AI 的修改回合。 */
+export async function downloadProof(api: Deps['api'], docId: string, title: string, notice: Deps['notice']): Promise<void> {
+  try {
+    const proof = await api(`/api/docs/${docId}/provenance`)
+    const a = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(new Blob([JSON.stringify(proof, null, 2)], { type: 'application/json' })),
+      download: `${title || docId}-来源证明.json`,
+    })
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+  } catch (err) { notice(`来源证明生成失败：${(err as Error).message}`, true) }
+}
+
+/** AI 使用声明：中 / 英两版，复制后粘进投稿系统；有未确认的 AI 文字等问题时先列出来。 */
+export async function openDisclosure(api: Deps['api'], docId: string, notice: Deps['notice']): Promise<void> {
+  const dlg = document.getElementById('dialog')!
+  const load = (lang: 'zh' | 'en') => api<{ text: string; warnings: string[] }>(`/api/docs/${docId}/ai-disclosure?lang=${lang}`)
+  let zh: { text: string; warnings: string[] }, en: { text: string }
+  try { [zh, en] = await Promise.all([load('zh'), load('en')]) } catch (err) { notice(`AI 使用声明生成失败：${(err as Error).message}`, true); return }
+  dlg.innerHTML = `<div class="dialog-card wide" role="dialog" aria-modal="true" aria-label="AI 使用声明">
+    <div class="dialog-head"><h2>AI 使用声明（草稿）</h2><button class="quiet" data-close aria-label="关闭">✕</button></div>
+    <div class="dialog-body">
+      <div class="muted small">按平台记录到的事实生成：AI 改了哪些段落、哪些已由你确认、是否新增参考文献、哪些数字绑定到分析结果。期刊要求声明 AI 使用时，核对后粘进投稿系统。</div>
+      ${zh.warnings.length ? `<div class="danger-confirm" style="margin:10px 0">${zh.warnings.map(escHtml).join('<br>')}</div>` : ''}
+      <h3>中文</h3><textarea id="discZh" rows="5" style="width:100%">${escHtml(zh.text)}</textarea>
+      <div class="row end"><button data-copy="discZh">复制中文</button></div>
+      <h3>English</h3><textarea id="discEn" rows="5" style="width:100%">${escHtml(en.text)}</textarea>
+      <div class="row end"><button data-copy="discEn">Copy English</button></div>
+    </div></div>`
+  dlg.hidden = false
+  const close = () => { dlg.hidden = true; dlg.innerHTML = '' }
+  dlg.onclick = async e => {
+    const t = e.target as HTMLElement
+    if (t === dlg || t.closest('[data-close]')) { close(); return }
+    const copy = t.closest<HTMLButtonElement>('button[data-copy]')
+    if (copy) {
+      const ta = document.getElementById(copy.dataset.copy!) as HTMLTextAreaElement
+      try { await navigator.clipboard.writeText(ta.value); notice('已复制') } catch { ta.select(); notice('请按 ⌘C / Ctrl+C 复制') }
+    }
+  }
+}
+
 /** 对话里的保护记录（回合结束时一行汇总）。 */
 export function protectionNote(lines: string[]): HTMLElement {
   const div = document.createElement('div')

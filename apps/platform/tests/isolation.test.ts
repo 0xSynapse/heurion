@@ -269,6 +269,8 @@ describe('越权：MCP 工具，别的机构的 AI 带着 A 的 id 都碰不到'
     imaging_study_id: () => 'is-none',
     // 测量原子绑定的病灶（insert_measurement）：别的机构的令牌连文档都过不了归属检查
     lesion_id: () => 'le-none',
+    // 分析结果的来源 id（insert_measurement source = analysis_result）：同样先过文档归属检查，结果本身按登记者 / 研究成员判断
+    source_id: () => 'r-none',
   }
 
   it('机构 B 的令牌调用每个带 id 的工具', async () => {

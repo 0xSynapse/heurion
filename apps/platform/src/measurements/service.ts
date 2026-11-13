@@ -1,7 +1,7 @@
 import { ImagingStudyService, type LesionRow } from '../imaging/studies.ts'
 import { sharedFollowup } from '../imaging/followup.ts'
 import {
-  COHORT_FIELDS, FOLLOWUP_FIELDS, LESION_FIELDS, MEASURE_UNITS, convertMeasure, fieldsOf, formatMeasure, isMeasureUnit, snapshotText, statusNote, unitsFor,
+  COHORT_FIELDS, FOLLOWUP_FIELDS, LESION_FIELDS, MEASURE_UNITS, RESULT_FIELDS, convertMeasure, fieldsOf, formatMeasure, isMeasureUnit, snapshotText, statusNote, unitsFor,
   type MeasureField, type MeasureStatus, type MeasureView,
 } from '../model/measurements.ts'
 import type { DocRow, MeasurementRow, Store } from '../store/db.ts'
@@ -173,7 +173,23 @@ function cohortStatSource(store: Store, patients: PatientService): MeasureSource
   }
 }
 
-export const SOURCE_KINDS = ['imaging_lesion', 'imaging_followup', 'cohort_stat'] as const
+/**
+ * 分析结果来源（docs/design/PROVENANCE.md 4.5）：读者是登记者本人，或结果所在研究的成员才能看到当前值；
+ * 其余读者只看绑定时的快照。不涉及患者数据，不需要患者模块。
+ */
+function analysisResultSource(store: Store): MeasureSource {
+  return {
+    fields: RESULT_FIELDS,
+    read(actor, resultId) {
+      const r = store.getAnalysisResult(resultId)
+      const allowed = r && (r.owner === actor.userId || (r.study_id && store.studyRole(r.study_id, actor.userId)))
+      if (!r || !allowed) throw new MeasurementError('not_found', '分析结果不存在或无权查看', 404)
+      return { state: 'valid', version: r.version, values: r.values, label: `分析 ${r.name}${r.method ? `（${r.method}）` : ''}`, patientId: null, tenantId: null }
+    },
+  }
+}
+
+export const SOURCE_KINDS = ['imaging_lesion', 'imaging_followup', 'cohort_stat', 'analysis_result'] as const
 export type SourceKind = (typeof SOURCE_KINDS)[number]
 
 export interface BindInput {
@@ -201,9 +217,10 @@ export class MeasurementService {
   constructor(private readonly store: Store, private readonly patients: PatientService | null | undefined) {}
 
   private source(kind: string): MeasureSource {
-    if (kind !== 'imaging_lesion' && kind !== 'imaging_followup' && kind !== 'cohort_stat') {
-      throw new MeasurementError('measurement_source_unknown', `不支持的测量来源 ${kind}`, 400, `可绑定的来源：影像病灶测量（imaging_lesion）、随访对比的派生值（imaging_followup）、科研队列统计值（cohort_stat）。`)
+    if (kind !== 'imaging_lesion' && kind !== 'imaging_followup' && kind !== 'cohort_stat' && kind !== 'analysis_result') {
+      throw new MeasurementError('measurement_source_unknown', `不支持的测量来源 ${kind}`, 400, `可绑定的来源：影像病灶测量（imaging_lesion）、随访对比的派生值（imaging_followup）、科研队列统计值（cohort_stat）、分析结果（analysis_result）。`)
     }
+    if (kind === 'analysis_result') return analysisResultSource(this.store)
     if (!this.patients) throw new MeasurementError('patient_module_off', '患者模块未启用，不能绑定影像测量', 403)
     if (kind === 'cohort_stat') return cohortStatSource(this.store, this.patients)
     return kind === 'imaging_followup' ? imagingFollowupSource(this.patients) : imagingLesionSource(this.patients)
@@ -246,7 +263,9 @@ export class MeasurementService {
         kind === 'imaging_followup' ? '只有与前片成对、两期都有相应测量的结节才有差值；体积倍增时间只在体积增大时给出。用 imaging_followup 查看。' : '换一个有数值的字段，或请医生补测后再绑定。')
     }
     const ctx = docContext(doc)
-    if (kind === 'cohort_stat') {
+    if (kind === 'analysis_result') {
+      // 分析结果不涉及患者：不做患者一致性检查
+    } else if (kind === 'cohort_stat') {
       if (ctx?.kind === 'patient') {
         throw new MeasurementError('measurement_study_mismatch', '这份文档属于单患者病例报告，不能绑定科研队列统计值', 409)
       }
@@ -281,7 +300,7 @@ export class MeasurementService {
     const cache = new Map<string, SourceReading | null>()
     for (const row of rows) {
       let reading: SourceReading | null = null
-      if (viewer && this.patients) {
+      if (viewer && (this.patients || row.source_kind === 'analysis_result')) {
         const key = `${row.source_kind}:${row.source_id}`
         if (!cache.has(key)) {
           try { cache.set(key, this.source(row.source_kind).read(viewer, row.source_id)) } catch { cache.set(key, null) }

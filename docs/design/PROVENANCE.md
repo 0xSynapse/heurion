@@ -164,6 +164,12 @@ prov: {
 - 个人偏好 `GET / PUT /api/me/provenance {safe_edits, shade}`，个人设置里两个开关；只能用户本人改。
 - 保护记录：OpService 把转为待采纳修订、交给用户核对的数字、以及保护类拒绝（`unobserved_number`、`unread_citation`、`conflict_user_edited`、引用与测量守卫）按回合记进 `provenance_events`（试探不记）；回合结束时 `turns/service.ts` 汇总成几行平常的话（`protectionSummary`），以 `protection` 事件发给对话，显示为「写作保护」小卡片。
 
+**实现（第 4 期）：**
+
+- 分析结果登记（`research/results.ts`，表 `analysis_results`）：MCP `result_register` / `result_list`，HTTP `GET / POST /api/analysis-results`。一个效应一个结果，统计量为 `RESULT_FIELDS`（estimate、ci_low、ci_high、p_value、n、events、pct、mean、sd、median、q1、q3）。**AI 登记的数值必须在本轮观察记录里**（与规则二同一套），登记表不能成为绕过数字出处检查的后门；用户本人登记不受此限。同一用户同名再登记 = 重新分析，数值变了版本 +1，稿件里绑定的数字随之更新。
+- 测量来源新增 `analysis_result`：读者是登记者或结果所在研究的成员才看到当前值，其余只看快照；不需要患者模块。P 值单位 `pval`，小于显示精度写「<0.001」。
+- 来源证明 `GET /api/docs/:id/provenance`（导出菜单「来源证明 .json」）；AI 使用声明 `GET /api/docs/:id/ai-disclosure?lang=zh|en`（导出菜单「AI 使用声明」，中英两版可复制，有未确认的 AI 文字或无原文的引用时先提醒）。声明只陈述平台记录到的事实：有未确认的段落时只写「尚未逐段确认」，不替作者声称已审阅。AI 通过 `doc_manage` 的 `provenance` / `ai_disclosure` 同样能取。
+
 ## 6. 兼容性
 
 ### 6.1 已有文档

@@ -61,6 +61,8 @@ import { sourceIndex } from '../convert/source-pages.ts'
 import { rebindSourceMap } from '../convert/source-rebind.ts'
 import { indexById } from '../model/ids.ts'
 import { aiStats, confirmBlocks } from '../model/provenance.ts'
+import { aiDisclosure, provenanceProof } from '../model/provenance-report.ts'
+import { ResultError, registerResult, visibleResults } from '../research/results.ts'
 import { tableSourceProvider } from '../convert/pdf-crop.ts'
 import type { Complete, VisionComplete } from '../harness/complete.ts'
 import type { FullTextClient } from '../literature/fulltext.ts'
@@ -2152,6 +2154,49 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       audit(c, 'doc.confirm_ai', { target: row.id, detail: `${blocks} 段` })
     }
     return c.json({ confirmed: blocks, rev: docs.rev(row.id), remaining: aiStats(docs.get(row.id)) })
+  })
+
+  /**
+   * 来源证明（docs/design/PROVENANCE.md 6.2）：AI 未确认的文字、绑定数字的来源、引用的证据、AI 的修改回合。
+   * 随稿件附带，作者或审稿人逐条核对。
+   */
+  app.get('/api/docs/:id/provenance', c => {
+    const row = owned(c)
+    if (!row) return c.json({ error: 'not found' }, 404)
+    if (row.kind !== 'doc') return c.json({ error: '只有文档有来源证明' }, 400)
+    docs.flush(row.id)
+    return c.json(provenanceProof(store, row.id, docs.get(row.id), measureViews(c, row)))
+  })
+
+  /** AI 使用声明草稿（中 / 英）：按来源证明统计，只陈述平台记录到的事实；有未确认的 AI 文字时附提醒。 */
+  app.get('/api/docs/:id/ai-disclosure', c => {
+    const row = owned(c)
+    if (!row) return c.json({ error: 'not found' }, 404)
+    if (row.kind !== 'doc') return c.json({ error: '只有文档有 AI 使用声明' }, 400)
+    docs.flush(row.id)
+    const proof = provenanceProof(store, row.id, docs.get(row.id), measureViews(c, row))
+    const lang = c.req.query('lang') === 'en' ? 'en' : 'zh'
+    const warnings: string[] = []
+    if (proof.summary.ai_unconfirmed_blocks) warnings.push(`还有 ${proof.summary.ai_unconfirmed_blocks} 段 AI 写的文字没有确认，建议投稿前逐段审阅确认。`)
+    if (proof.summary.citations_no_source) warnings.push(`有 ${proof.summary.citations_no_source} 条引用在平台上没有摘要或全文，无法核对其支持的论断。`)
+    return c.json({ lang, text: aiDisclosure(proof, lang), summary: proof.summary, warnings })
+  })
+
+  /** 分析结果登记（docs/design/PROVENANCE.md 4.5）：用户能看到的结果；用户本人也可以登记（人写的数字，人负责）。 */
+  app.get('/api/analysis-results', c => c.json(visibleResults(store, c.get('user'), c.req.query('doc_id') || null)))
+  app.post('/api/analysis-results', async c => {
+    const body = await c.req.json<{ doc_id?: string; name?: string; method?: string; values?: Record<string, unknown>; code_path?: string; dataset_ids?: string[] }>().catch(() => ({} as Record<string, never>))
+    if (body.doc_id) {
+      const d = store.getDoc(body.doc_id)
+      if (!d || d.deleted_at || !access.docRole(c.get('user'), d)) return c.json({ error: 'not found' }, 404)
+    }
+    const via = viaByReq.get(c.req.raw) ? 'ai' : 'user'
+    try {
+      return c.json(registerResult(store, { owner: c.get('user'), name: String(body.name ?? ''), method: body.method, values: body.values ?? {}, doc_id: body.doc_id ?? null, code_path: body.code_path ?? null, dataset_ids: body.dataset_ids, via }))
+    } catch (err) {
+      if (err instanceof ResultError) return c.json({ error: err.message, code: err.code, hint: err.hint }, 400)
+      throw err
+    }
   })
 
   /** 撤销某个 AI 回合对本文档的改动（用户在此期间的编辑保留）。 */

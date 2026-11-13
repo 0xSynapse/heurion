@@ -29,7 +29,7 @@ import { openPhotoSearch, photoSearchEnabled } from './unsplash.ts'
 import { openHelpGuide, importHelpAsDoc } from './help.ts'
 import { initCopilot, formatMarkdown, bindMarkdownActions } from './copilot.ts'
 import { icon, type IconName } from './icons.ts'
-import { initProvenanceUi, protectionNote } from './provenance-ui.ts'
+import { downloadProof, initProvenanceUi, openDisclosure, protectionNote } from './provenance-ui.ts'
 
 const TOKEN = storedToken()
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
@@ -910,6 +910,8 @@ async function open(docId: string): Promise<void> {
   $('deckToolbar').hidden = meta.kind !== 'deck' || readOnly
   if (meta.kind === 'deck') void initDeckToolbar()
   $('exportDocxBtn').hidden = meta.kind === 'deck'
+  $('aiDisclosureBtn').hidden = meta.kind === 'deck'
+  $('provProofBtn').hidden = meta.kind === 'deck'
   $('exportMdBtn').hidden = meta.kind === 'deck'
   $('exportPptxBtn').hidden = meta.kind !== 'deck'
   // 患者文档（所见草稿、病例报告）：可复制为 RIS 纯文本
@@ -4517,6 +4519,8 @@ $('exportPptxBtn').onclick = async () => {
   await ensureSuggestionsResolvedBeforeExport()
   location.href = `/api/docs/${session.docId}/export.pptx?token=${encodeURIComponent(TOKEN)}&fonts=${exportFonts()}`
 }
+$('aiDisclosureBtn').onclick = () => { if (session) void openDisclosure(api, session.docId, (m, e) => showNotice(m, e)) }
+$('provProofBtn').onclick = () => { if (session) void downloadProof(api, session.docId, detail?.title ?? '', (m, e) => showNotice(m, e)) }
 $('exportMdBtn').onclick = async () => {
   if (!session) return
   await ensureSuggestionsResolvedBeforeExport()

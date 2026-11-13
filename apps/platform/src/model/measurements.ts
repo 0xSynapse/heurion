@@ -24,6 +24,8 @@ export const MEASURE_UNITS = {
   day: { label: '天', dim: 'time', factor: 1, decimals: 0 },
   /** 计数（科研队列统计值 W6.5：受试者数、定稿检查数、结节数）。 */
   count: { label: '', dim: 'count', factor: 1, decimals: 0 },
+  /** P 值（分析结果绑定）：三位小数，小于 0.001 写「<0.001」。 */
+  pval: { label: '', dim: 'pvalue', factor: 1, decimals: 3 },
 } as const
 export type MeasureUnit = keyof typeof MEASURE_UNITS
 
@@ -70,11 +72,32 @@ export const COHORT_FIELDS: Record<string, MeasureField> = {
   subsolid_pct: { label: '亚实性结节占比', base: 'pct' },
 }
 
+/**
+ * 分析结果（analysis_result，source_id = 登记的结果 id，docs/design/PROVENANCE.md 4.5）：
+ * AI 跑完分析后用 result_register 登记的统计量；一个结果是一个效应（多变量模型每个变量各登记一个）。
+ * 重新分析后同名再登记，稿件里绑定的数字随之更新。
+ */
+export const RESULT_FIELDS: Record<string, MeasureField> = {
+  estimate: { label: '效应量（HR / OR / RR / 差值等）', base: 'ratio' },
+  ci_low: { label: '95% CI 下限', base: 'ratio' },
+  ci_high: { label: '95% CI 上限', base: 'ratio' },
+  p_value: { label: 'P 值', base: 'pval' },
+  n: { label: '样本量', base: 'count' },
+  events: { label: '事件数', base: 'count' },
+  pct: { label: '百分比', base: 'pct' },
+  mean: { label: '均值', base: 'ratio' },
+  sd: { label: '标准差', base: 'ratio' },
+  median: { label: '中位数', base: 'ratio' },
+  q1: { label: '下四分位数', base: 'ratio' },
+  q3: { label: '上四分位数', base: 'ratio' },
+}
+
 /** 来源类型的测量字段目录（未知来源为空）。 */
 export function fieldsOf(kind: string): Record<string, MeasureField> {
   if (kind === 'imaging_lesion') return LESION_FIELDS
   if (kind === 'imaging_followup') return FOLLOWUP_FIELDS
   if (kind === 'cohort_stat') return COHORT_FIELDS
+  if (kind === 'analysis_result') return RESULT_FIELDS
   return {}
 }
 
@@ -96,6 +119,8 @@ export function convertMeasure(value: number, base: MeasureUnit, unit: MeasureUn
 /** 「8.2 mm」「-12 HU」「0.45」「+35%」「412 天」。value 已是显示单位的数值；signed 时正数带「+」。 */
 export function formatMeasure(value: number, unit: MeasureUnit, decimals: number, signed = false): string {
   const d = Math.max(0, Math.min(4, Math.floor(decimals)))
+  // P 值：小于显示精度时写「<0.001」（报告规范），不写成 0.000
+  if (unit === 'pval' && value > 0 && value < 10 ** -d) return `<${(10 ** -d).toFixed(d)}`
   let s = value.toFixed(d)
   if (/^-0(?:\.0+)?$/.test(s)) s = s.slice(1) // -0.0 → 0.0
   if (signed && /^[1-9]|^0\.\d*[1-9]/.test(s)) s = `+${s}`
