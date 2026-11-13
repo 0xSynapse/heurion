@@ -91,6 +91,58 @@ describe('Word 行内结构：脚注引用与域代码', () => {
     const t = importInto(original)
     expect(bodyOf(t.exportNow().bytes)).toBe(bodyOf(original))
   })
+
+  // EndNote 参考文献表：begin / 指令 / separate 在第一条文献的段落里，end 在最后一条的段落里（真实文件就是这样）
+  const REFLIST_BEGIN = '<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ADDIN EN.REFLIST </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+  const REFLIST_END = '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+  const bibPara = (text: string, pre = '', post = '') => `<w:p><w:pPr><w:pStyle w:val="EndNoteBibliography"/></w:pPr>${pre}<w:r><w:t xml:space="preserve">${text}</w:t></w:r>${post}</w:p>`
+  const reflist = () => docx(
+    `<w:p><w:r><w:t xml:space="preserve">既往研究支持该结论</w:t></w:r>${ENDNOTE_CITE}<w:r><w:t>。</w:t></w:r></w:p>`
+    + bibPara('1. Smith J. Outcomes of esophagectomy. Lancet. 2019;393:100-9.', REFLIST_BEGIN)
+    + bibPara('2. Wang L. Radiotherapy for T4 tumors. JCO. 2020;38:1-8.')
+    + bibPara('3. Li M. Immunotherapy after CRT. NEJM. 2021;384:5-12.', '', REFLIST_END))
+
+  it('跨段落的参考文献表域：不报残缺；首尾段的域边界是原子，文献文字可读；不改时逐字节写回', () => {
+    const original = reflist()
+    const t = importInto(original)
+    expect(t.warnings.join('')).not.toContain('域代码')
+    const doc = t.docs.get(t.docId)
+    expect(doc.child(1).textContent).toContain('Smith J. Outcomes of esophagectomy')
+    const kinds = (i: number) => { const out: string[] = []; doc.child(i).forEach(n => { if (n.type.name === 'word_inline') out.push(String(n.attrs.xml)) }); return out }
+    expect(kinds(1)).toHaveLength(1)
+    expect(kinds(1)[0]).toContain('EN.REFLIST')
+    expect(kinds(3)).toHaveLength(1)
+    expect(kinds(3)[0]).toContain('fldCharType="end"')
+    expect(t.view()).toContain('跨段落域的边界')
+    expect(bodyOf(t.exportNow().bytes)).toBe(bodyOf(original))
+  })
+
+  it('改参考文献表首、中、尾段的文字：导出后域的 begin / end 仍成对，指令仍在第一段', () => {
+    const t = importInto(reflist())
+    const ids = [1, 2, 3].map(i => t.docs.get(t.docId).child(i).attrs.id as string)
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [
+      { op: 'replace_text', id: ids[0]!, find: 'Lancet', replace: 'Lancet Oncol' },
+      { op: 'replace_text', id: ids[1]!, find: 'JCO', replace: 'J Clin Oncol' },
+      { op: 'replace_text', id: ids[2]!, find: 'NEJM', replace: 'N Engl J Med' },
+    ] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain('Lancet Oncol')
+    expect(body).toContain('J Clin Oncol')
+    expect(body).toContain('N Engl J Med')
+    const paras = body.split('</w:p>')
+    expect(paras[1]).toContain('ADDIN EN.REFLIST')
+    expect(paras[1]).toContain('fldCharType="separate"')
+    expect(paras[3]).toContain('fldCharType="end"')
+    expect(body.match(/fldCharType="begin"/g)).toHaveLength(2)
+    expect(body.match(/fldCharType="end"/g)).toHaveLength(2)
+    // 再导入仍是完整的参考文献表域
+    expect(importDocx(t.exportNow().bytes).warnings.join('')).not.toContain('域代码')
+  })
+
+  it('全文 begin / end 对不上（域没有结束）：仍提示残缺', () => {
+    const t = importInto(docx(bibPara('1. Smith J. Lancet. 2019.', REFLIST_BEGIN) + bibPara('2. Wang L. JCO. 2020.')))
+    expect(t.warnings.join('')).toContain('不完整的域代码')
+  })
 })
 
 // —— Word 批注 ——

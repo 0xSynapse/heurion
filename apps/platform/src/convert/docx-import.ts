@@ -358,6 +358,26 @@ export function importDocx(bytes: Uint8Array): DocxImport {
     return text
   }
   const startsField = (el: XElement) => local(el) === 'r' && children(el).some(c => local(c) === 'fldChar' && wAttr(c, 'fldCharType') === 'begin')
+  /** run 里所有 fldChar 的类型（按出现顺序）。 */
+  const fldTypes = (el: XElement): string[] => local(el) === 'r' ? children(el).filter(c => local(c) === 'fldChar').map(c => wAttr(c, 'fldCharType') ?? '') : []
+  /**
+   * 跨段落的域（EndNote / Zotero 的参考文献表：begin、指令、separate 在第一段，end 在最后一段）：
+   * 段内从 begin 到最外层 separate（没有 separate 就到段末）为「域开始」原子；下一个元素起是可读的域结果文字。
+   * 找不到时返回 -1。与 docx-patch 的 parse 规则一致。
+   */
+  const openFieldEnd = (kids: XElement[], from: number): number => {
+    let depth = 0
+    for (let j = from; j < kids.length; j++) {
+      for (const type of fldTypes(kids[j]!)) {
+        if (type === 'begin') depth++
+        else if (type === 'end') depth--
+        else if (type === 'separate' && depth === 1) return j
+      }
+    }
+    return kids.length - 1
+  }
+  /** 只含 end（关闭前面段落里开始的域）的 run：「域结束」原子。 */
+  const closesOuterField = (el: XElement) => { const t = fldTypes(el); return t.length > 0 && t.every(x => x === 'end') }
 
   const headingLevel = (styleId: string | null, pPr: XElement | undefined): number | null => {
     const outline = pPr ? wAttr(child(pPr, 'outlineLvl'), 'val') : null
@@ -458,7 +478,16 @@ export function importDocx(bytes: Uint8Array): DocxImport {
             i = end
             continue
           }
-          flags.fields = true
+          // 域在后面的段落里结束（参考文献表等）：域开始部分作为原子原样保留，域结果文字照常可读可改
+          const open = openFieldEnd(kids, i)
+          const els = kids.slice(i, open + 1)
+          out.push(wordInline('field', '', els.map(inlineXml).join(''), marks))
+          i = open
+          continue
+        }
+        if (closesOuterField(c)) {
+          out.push(wordInline('field', '', inlineXml(c), marks))
+          continue
         }
         switch (name) {
           case 'r': runOf(c, marks, out, figures, flags, mode); break
@@ -755,7 +784,15 @@ export function importDocx(bytes: Uint8Array): DocxImport {
   flushLists()
   if (unmodelledCount > 0) warnings.push(`${unmodelledCount} 个段落含文本框或嵌入对象，已作为不可编辑块原样保留`)
   if (acceptedRevisions > 0) warnings.push(`${acceptedRevisions} 处 Word 修订位于列表或表格里，已按「接受」导入；未改动时导出仍原样保留修订`)
-  if (fieldParagraphs > 0) warnings.push(`${fieldParagraphs} 个段落含不完整的域代码（缺少结束标记），这些段落被修改后域会变为普通文字`)
+  // 跨段落的域（参考文献表）在段内是成对的「域开始 / 域结束」原子，不算残缺；只有全文 begin / end 对不上才提示
+  const fldChars = body.getElementsByTagNameNS(W, 'fldChar')
+  let fieldBalance = 0
+  for (let k = 0; k < fldChars.length; k++) {
+    const type = wAttr(fldChars.item(k)!, 'fldCharType')
+    if (type === 'begin') fieldBalance++
+    else if (type === 'end') fieldBalance--
+  }
+  if (fieldParagraphs > 0 || fieldBalance !== 0) warnings.push(`文档含不完整的域代码（开始与结束标记对不上${fieldParagraphs > 0 ? `，涉及 ${fieldParagraphs} 个段落` : ''}），相关段落被修改后域可能变为普通文字`)
   if (blocks.length === 0) blocks.push(schema.node('paragraph'))
 
   // Word 常给相邻的列表项分配不同 numId：相邻的同类列表合并成一个

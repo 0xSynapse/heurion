@@ -95,7 +95,24 @@ function parse(raw: string, drawings: boolean): { tree: RNode[]; kinds: string[]
           i = end
           continue
         }
-        bad = true
+        // 域在后面的段落里结束（参考文献表）：begin 到最外层 separate（没有就到段末）为「域开始」原子（与 docx-import 一致）
+        let open = inner.length - 1
+        depth = 0
+        for (let j = i; j < inner.length && open === inner.length - 1; j++) {
+          for (const m of inner[j]!.matchAll(/w:fldCharType="(begin|separate|end)"/g)) {
+            if (m[1] === 'begin') depth++
+            else if (m[1] === 'end') depth--
+            else if (depth === 1) { open = j; break }
+          }
+        }
+        out.push({ k: 'atom', xml: inner.slice(i, open + 1).join(''), tok: kinds.push('field') - 1 })
+        i = open
+        continue
+      }
+      // 只含 end 的 run：关闭前面段落里开始的域，「域结束」原子
+      if (tag === 'w:r' && /w:fldCharType="end"/.test(el) && !/w:fldCharType="(begin|separate)"/.test(el)) {
+        out.push({ k: 'atom', xml: el, tok: kinds.push('field') - 1 })
+        continue
       }
       switch (tag) {
         case 'w:r': {

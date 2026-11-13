@@ -158,7 +158,8 @@ function wordInlineLegend(blocks: PMNode[]): string {
       if (n.type.name !== 'word_inline' || seen.has(n.attrs.key as string)) return true
       seen.add(n.attrs.key as string)
       const text = String(n.attrs.text ?? '').slice(0, 120)
-      const what = n.attrs.kind === 'footnote' ? '脚注' : n.attrs.kind === 'endnote' ? '尾注' : n.attrs.kind === 'object' ? '对象' : `域代码（显示为「${text}」）`
+      const what = n.attrs.kind === 'footnote' ? '脚注' : n.attrs.kind === 'endnote' ? '尾注' : n.attrs.kind === 'object' ? '对象'
+        : text ? `域代码（显示为「${text}」）` : '跨段落域的边界（如 EndNote / Zotero 参考文献表的开始或结束）'
       lines.push(`- [@w:${n.attrs.key}] ${what}${n.attrs.kind === 'field' ? '' : `：${text}`}`)
       return true
     })
