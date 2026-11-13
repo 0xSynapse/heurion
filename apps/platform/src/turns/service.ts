@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import type { Documents, CommitEvent } from '../model/runtime.ts'
-import { addUsage, emptyUsage, mapNotification, type UiEvent } from '../harness/events.ts'
+import { addUsage, emptyUsage, mapNotification, toolResultText, type UiEvent } from '../harness/events.ts'
+import { allNumbers } from '../ops/numbers.ts'
 import { scopeOf } from '../mcp/scope.ts'
 import { filterPhrReply, type PhrMember } from '../ops/phr-guard.ts'
 import type { MemoryService } from '../memory/service.ts'
@@ -493,6 +494,8 @@ export class TurnService {
 
       const history = this.pool.liveSession(userId, slot) === null ? this.recentHistory(docId) : ''
       store.addMessage(docId, 'user', message, turnId)
+      // 用户在消息里给的数字也算 AI 本轮看到过的（「把 HR 改成 1.12」）
+      store.addObservedNumbers(turnId, allNumbers(message))
       const suggestNote = opts.suggest ? '本轮的修改会作为待用户采纳的修订提交。' : ''
       const memoryBlock = memoryOn ? await this.memory!.forPrompt(userId, docId, message) : ''
       const proceduralBlock = this.procedural ? await this.procedural.forPrompt(userId, docId, message) : ''
@@ -516,6 +519,11 @@ export class TurnService {
         this.pool.run(userId, prompt, (n, sessionId) => {
           lastActivity = Date.now()
           addUsage(usage, n)
+          // 来源规则二：工具结果里的数字算 AI 本轮看到过的
+          const seen = toolResultText(n)
+          if (seen) {
+            try { store.addObservedNumbers(turnId, allNumbers(seen)) } catch (err) { console.error('[provenance] observe:', err) }
+          }
           for (const e of mapNotification(n, sessionId)) {
             // 模型调用失败（认证失败、限流、服务出错等）：dsh 正常结束回合但带错误，按失败记，不算「已完成」
             if (e.type === 'error') modelError = e.message

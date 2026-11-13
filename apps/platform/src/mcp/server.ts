@@ -68,6 +68,7 @@ import { registerImagingFollowupTools } from './imaging-followup-tools.ts'
 import { registerImagingDraftTools } from './imaging-draft-tools.ts'
 import type { Invoke } from '../http/invoke.ts'
 import { chmodIfOwned, registerAdminTools, type LeaseAuthorizeInput, type LeaseAuthorizeResult } from './admin-tools.ts'
+import { allNumbers } from '../ops/numbers.ts'
 
 export interface McpDeps {
   claims: ClaimService
@@ -131,6 +132,7 @@ const INSTRUCTIONS = `heurion 文档平台。文档只能通过这些工具读�
 工作流程：doc_outline 看结构 → doc_read 读相关章节（拿到块 id 与 rev）→ doc_edit 一次提交一批操作（base_rev 用读到的 rev）。
 - 小改动优先 replace_text：find 写块内原文（不能跨块），只改变化的字，格式、引用、评论锚点保留；失配时按返回的 near / matches 修正后重试。整段重写用 replace_block；新增用 insert_after / insert_before。
 - 内容格式是 markdown：标题 #、列表 -、表格 GFM、粗体 **、上标 <sup>、图片 ![说明](asset:<asset_id>)。
+- 来源规则（平台强制）：① 人写的文字你只能做短小的直接修改（单处 ≤ 40 字、一次 ≤ 5 处，且不碰数字、比较符号、引用，不碰否定词和「可能 / 显著 / 证实」这类措辞强度词）；超出的修改、删除人写的段落会自动整批转为待采纳修订，由用户采纳——这是正常结果，不要重试，回复里告诉用户去采纳。你自己写的、用户还没确认的文字可以直接改。② 写进文档的数字必须有出处：文档里已有的、本轮工具结果或用户消息里出现过的（可四舍五入），或者同一句引用的文献原文里有的。不要心算或凭记忆写数字：百分比等派生数字先用工具算出；文献里的数字要在同一句写 [@c:id]。③ 插入的引用要有保存的摘要或全文（insert_citation 会取摘要；没有摘要的先用 oa_fulltext 读全文）。返回 unobserved_number / unread_citation 时按 hint 补上出处再写；返回 needs_user_check 时在回复里请用户核对那几个数字。
 - 引用：pubmed_search 找文献 → insert_citation 登记 → 正文写返回的 [@c:<cite_id>]。正文中不能出现 DOI、PMID 或手写参考文献，参考文献表由平台自动生成。
 - 测量：报告里病灶的大小、体积、CT 值等数字一律绑定已确认的测量——imaging_lesions 查病灶（只用 status=confirmed 的）→ insert_measurement 绑定字段 → 正文写返回的 [@m:<m_id>]（显示为「数值 单位」，前后不要再写数字或单位）。不要手写测量数字，也不要用区间（如「6–8 mm」）或「约 N mm」描述某个病灶的大小——区间只用于引用指南阈值；改写段落时原样保留已有的 [@m:…]。doc_read 末尾列出各测量当前显示的值与状态，状态异常（来源已否决 / 撤销）的要提醒用户。
 - 影像所见草稿：imaging_findings_draft 按科室模板从已确认的结节确定性生成（测量都是 [@m:…]）；你只做润色（doc_edit 改措辞，原样保留 [@m:…]，不手写测量数字，随访差值用 insert_measurement 的 source=imaging_followup 绑定）。imaging_findings_draft_check 取 RIS 纯文本与复制前要处理的问题。所见模板只读。
@@ -181,6 +183,14 @@ class Ctx {
 
   get turnId(): string | null {
     return this.deps.turns.active(this.claims.u, this.claims.s)?.turnId ?? null
+  }
+
+  /**
+   * 来源规则二的观察记录键：平台回合用回合 id（dsh 的全部工具结果都记在它名下）；
+   * 外部智能体（Aegis 等，没有平台回合）用会话，只能记到经本 MCP 返回的结果。
+   */
+  get observeKey(): string | null {
+    return this.turnId ?? (this.claims.s ? `sess:${this.claims.s}` : null)
   }
 
   activeTurn(docId?: string) {
@@ -263,7 +273,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     if (markdown?.trim()) {
       const first = docs.get(row.id).child(0).attrs.id as string
       try {
-        deps.ops.edit({ doc_id: row.id, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id: first, markdown }] }, { actor: 'ai', turnId: ctx.turnId })
+        deps.ops.edit({ doc_id: row.id, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id: first, markdown }] }, { actor: 'ai', turnId: ctx.turnId, observe: ctx.observeKey })
       } catch (err) {
         docs.store.deleteDoc(row.id)
         docs.unload(row.id)
@@ -362,17 +372,23 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       const forced = ctx.activeTurn(args.doc_id)?.mode
       const mode = forced ?? args.mode ?? 'apply'
       if (args.dry_run) {
-        const v = deps.ops.validate({ ...args, mode, dry_run: true }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null })
+        const v = deps.ops.validate({ ...args, mode, dry_run: true }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null, observe: ctx.observeKey })
         return json({ dry_run: true, ...v })
       }
-      const result = deps.ops.edit({ ...args, mode }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null })
+      const result = deps.ops.edit({ ...args, mode }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null, observe: ctx.observeKey })
       ctx.touch(args.doc_id)
+      const converted = result.provenance?.converted_to_suggest
+      const unverifiable = result.provenance?.unverifiable_numbers
+      const effectiveMode = converted?.length ? 'suggest' : mode
       return json({
         rev: result.rev,
         results: result.results,
         changed: result.changes.length,
-        mode,
-        note: result.changes.length === 0 ? '操作没有改变文档内容' : mode === 'suggest' ? '已作为待采纳修订提交，用户采纳后生效' : undefined,
+        mode: effectiveMode,
+        note: result.changes.length === 0 ? '操作没有改变文档内容'
+          : converted?.length ? `这批修改改到了人写的文字（${converted.join('；')}），已整批作为待采纳修订提交，用户采纳后生效。不必重试；只改 AI 自己写的文字、或不涉及数字 / 否定词 / 措辞强度的短小改动才会直接生效。`
+            : effectiveMode === 'suggest' ? '已作为待采纳修订提交，用户采纳后生效' : undefined,
+        ...(unverifiable?.length ? { needs_user_check: { numbers: unverifiable, note: '这些数字所在句子引用的文献只有摘要，摘要里找不到；已写入，请在回复里请用户对照全文核对。' } } : {}),
       })
     } catch (err) {
       if (err instanceof OpError) return fail(err.code, err.message, err.extra)
@@ -413,6 +429,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     const res = deps.ops.validate(parsedBatch.data, {
       actor: 'ai',
       turnId: ctx.turnId,
+      observe: ctx.observeKey,
       answering: ctx.activeTurn(args.doc_id)?.answering ?? null,
     })
     return json(res)
@@ -2359,6 +2376,13 @@ function wrapToolRegistration(
         : (ctx.activeTurn()?.docId ?? null)
       try {
         const res = await (cb as (a: unknown, e: unknown) => Promise<unknown>)(args, extra)
+        // 来源规则二：外部智能体（没有平台回合）只能从本 MCP 的结果里记下看到过的数字；平台回合由 turns 服务统一记
+        if (!ctx.turnId && claims.s && res && typeof res === 'object' && (res as { isError?: boolean }).isError !== true) {
+          const text = (res as { content?: Array<{ text?: string }> }).content?.map(c => c.text ?? '').join('\n') ?? ''
+          if (text) {
+            try { ctx.deps.docs.store.addObservedNumbers(`sess:${claims.s}`, allNumbers(text)) } catch (err) { console.error('[provenance] observe:', err) }
+          }
+        }
         if (
           ctx.deps.executionSignals &&
           res &&

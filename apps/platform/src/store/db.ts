@@ -883,6 +883,10 @@ export class Store {
       doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE, node_id TEXT NOT NULL, rev INTEGER NOT NULL,
       PRIMARY KEY (doc_id, node_id)
     )`)
+    // AI 一轮（或一个外部智能体会话）里看到过的数字：工具结果、用户消息（来源规则二，docs/design/PROVENANCE.md 4.3）
+    this.db.exec(`CREATE TABLE IF NOT EXISTS observed_numbers (
+      obs_key TEXT NOT NULL, value REAL NOT NULL, at TEXT NOT NULL, PRIMARY KEY (obs_key, value)
+    )`)
     // 官网匿名问卷的答卷（survey/clinician-survey.ts）：不记 IP、不关联账户，只存规整后的答案
     this.db.exec(`CREATE TABLE IF NOT EXISTS survey_responses (
       id TEXT PRIMARY KEY, survey TEXT NOT NULL, version TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
@@ -2232,6 +2236,22 @@ export class Store {
   aiReadRev(docId: string, nodeId: string): number | null {
     const row = this.db.prepare('SELECT rev FROM ai_reads WHERE doc_id = ? AND node_id = ?').get(docId, nodeId) as { rev: number } | undefined
     return row?.rev ?? null
+  }
+
+  /** 记下 AI 在这一轮 / 这个会话里看到过的数字（去重）。 */
+  addObservedNumbers(key: string, values: Iterable<number>): void {
+    const ins = this.db.prepare('INSERT OR IGNORE INTO observed_numbers (obs_key, value, at) VALUES (?, ?, ?)')
+    const t = now()
+    this.transaction(() => { for (const v of values) if (Number.isFinite(v)) ins.run(key, v, t) })
+  }
+
+  observedNumbers(key: string): number[] {
+    return (this.db.prepare('SELECT value FROM observed_numbers WHERE obs_key = ?').all(key) as Array<{ value: number }>).map(r => r.value)
+  }
+
+  /** 清掉 days 天以前的观察记录（回合早已结束）。 */
+  purgeObservedNumbers(days: number): void {
+    this.db.prepare('DELETE FROM observed_numbers WHERE at < ?').run(new Date(Date.now() - days * 86400_000).toISOString())
   }
 
   /** 由 AI 新建、之后从没被人改过的块（来源标记回填用）。 */

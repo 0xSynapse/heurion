@@ -68,7 +68,8 @@ let phrMemberLookup: ((owner: string, patientId: string, space?: 'work' | 'perso
 const executionSignals = new ExecutionSignals(store, docs)
 const procedural = new ProceduralHarnessService(store, docs, { mode: config.proceduralMode === 'off' ? undefined : config.proceduralMode, budget: config.proceduralBudget })
 executionSignals.setActivationLookup((owner, docId, turnId) => procedural.lastActivation(owner, docId, turnId))
-const ops = new OpService(docs, (owner, pid, space) => phrMemberLookup?.(owner, pid, space) ?? null, e => executionSignals.recordGuardReject(e))
+// provenance：来源规则（docs/design/PROVENANCE.md）线上开启
+const ops = new OpService(docs, (owner, pid, space) => phrMemberLookup?.(owner, pid, space) ?? null, e => executionSignals.recordGuardReject(e), { provenance: true })
 const registry = new TurnRegistry()
 const harnessEvolution = new HarnessEvolutionService(store, makeComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.model }))
 const pool = new HarnessPool(config, userId => store.sandboxUid(userId), () => (config.harnessEvolve ? harnessEvolution.currentOverlay() : null))
@@ -184,7 +185,7 @@ const indexed = search.backfill()
 if (indexed) console.log(`全文索引：补齐 ${indexed} 份文档`)
 // 回收站：30 天后自动彻底删除（启动时一次，之后每 12 小时）
 // 审计日志保留 365 天
-const purge = () => { for (const id of store.purgeTrash(30)) { docs.unload(id); store.unindexDoc(id) } store.purgeAudit(365); store.purgeMemorySignals(60) }
+const purge = () => { for (const id of store.purgeTrash(30)) { docs.unload(id); store.unindexDoc(id) } store.purgeAudit(365); store.purgeMemorySignals(60); store.purgeObservedNumbers(14) }
 purge()
 setInterval(purge, 12 * 3600_000).unref()
 // 来源标记回填（docs/design/PROVENANCE.md 6.1）：只执行一次；逐份文档提交，单份失败不影响其余

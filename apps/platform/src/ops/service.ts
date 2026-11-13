@@ -21,6 +21,7 @@ import { isPlatformPackage } from '../convert/pptx-template.ts'
 import { templateLayouts } from '../model/deck-templates.ts'
 import { DEFAULT_THEME } from '../model/deck-themes.ts'
 import { themePhoto } from '../model/theme-photos.ts'
+import { assessProvenance, checkNumbers, suggestReasons } from './provenance-guard.ts'
 
 type DeckInfo = ReturnType<typeof readLayouts> & { platform: boolean }
 
@@ -29,6 +30,24 @@ export interface EditResult {
   rev: number
   results: Array<Omit<OpResult, 'op'> & { op: string }>
   changes: NodeChange[]
+  /** 来源规则（docs/design/PROVENANCE.md）：改到人写的文字而转成了待采纳修订、或有交给用户确认的数字时才有 */
+  provenance?: ProvenanceNote
+}
+
+export interface ProvenanceNote {
+  /** 整批转成了待采纳修订（原因） */
+  converted_to_suggest?: string[]
+  /** 同一句所引文献只有摘要、摘要里找不到的数字：没有拒绝，需要用户核对 */
+  unverifiable_numbers?: Array<{ number: string; block_id: string; cites: string[] }>
+}
+
+export interface EditMeta {
+  actor: Actor
+  turnId: string | null
+  answering?: string | null
+  user?: string | null
+  /** 观察记录的键（AI 回合 id，或外部智能体的会话）：有它才做数字出处检查 */
+  observe?: string | null
 }
 
 export interface ValidateResult {
@@ -41,6 +60,7 @@ export interface ValidateResult {
   hint?: string
   current?: unknown
   results?: Array<Omit<OpResult, 'op'> & { op: string }>
+  provenance?: ProvenanceNote
 }
 
 
@@ -64,7 +84,27 @@ export class OpService {
     /** 知家红线守卫（PATIENT.md §3）：按归属查成员标记（孕产 / 哺乳 / 儿童年龄）；没有接入时特殊人群规则不启用。 */
     private readonly phrMember?: (owner: string, patientId: string, space?: 'work' | 'personal') => PhrMember | null,
     private readonly onGuardReject?: GuardRejectCallback,
+    /** provenance：启用来源规则（线上开启；单元测试默认关闭，免得与其他功能的断言互相干扰） */
+    private readonly options: { provenance?: boolean } = {},
   ) {}
+
+  /** 安全小改是否开启（文档所有者在设置里可关，默认开）。 */
+  private safeEditsOn(owner: string): boolean {
+    return this.docs.store.getUserSetting(owner, 'provenance.safe_edits') !== 'off'
+  }
+
+  /** 引用保存的原文：有全文用全文，否则摘要；都没有返回 null。 */
+  private citeSource(docId: string): (citeId: string) => { text: string; full: boolean } | null {
+    const cites = new Map(this.docs.store.listCitations(docId).map(c => [c.id, c]))
+    return citeId => {
+      const c = cites.get(citeId)
+      if (!c) return null
+      const full = this.docs.store.getFullText(c.doi)?.text
+      if (full) return { text: full, full: true }
+      const abs = this.docs.store.getAbstract(c.doi)?.abstract
+      return abs ? { text: abs, full: false } : null
+    }
+  }
 
   /** deck 的版式与页面尺寸（来自原始文件包；按文档缓存）。 */
   private readonly deckInfo = new Map<string, DeckInfo>()
@@ -88,14 +128,15 @@ export class OpService {
    * 在内存中执行写前守卫、冲突检查与操作演算，不触发 Yjs 事务，不修改文档。
    * 失败时返回结构化原因（code/hint/current），不抛出异常。
    */
-  validate(batch: EditBatch | DeckEditBatch, meta: { actor: Actor; turnId?: string | null; answering?: string | null; user?: string | null }): ValidateResult {
+  validate(batch: EditBatch | DeckEditBatch, meta: { actor: Actor; turnId?: string | null; answering?: string | null; user?: string | null; observe?: string | null }): ValidateResult {
     try {
-      const sim = this.simulate(batch, { actor: meta.actor, turnId: meta.turnId ?? null, answering: meta.answering, user: meta.user })
+      const sim = this.simulate(batch, { actor: meta.actor, turnId: meta.turnId ?? null, answering: meta.answering, user: meta.user, observe: meta.observe })
       return {
         valid: true,
         doc_id: batch.doc_id,
         rev: sim.rev,
         results: sim.results,
+        ...(Object.keys(sim.provenance).length ? { provenance: sim.provenance } : {}),
       }
     } catch (err) {
       if (err instanceof OpError) {
@@ -126,7 +167,7 @@ export class OpService {
   }
 
   /** 模拟应用与守卫验证（供 edit 与 validate 共用）。 */
-  private simulate(batch: EditBatch | DeckEditBatch, meta: { actor: Actor; turnId: string | null; answering?: string | null; user?: string | null }): {
+  private simulate(batch: EditBatch | DeckEditBatch, meta: EditMeta): {
     deck: boolean
     before: PMNode
     after: PMNode
@@ -135,6 +176,7 @@ export class OpService {
     followed: Array<{ thread: string; nodeId: string }>
     results: Array<Omit<OpResult, 'op'> & { op: string }>
     rev: number
+    provenance: ProvenanceNote
   } {
     const store = this.docs.store
     const row = store.getDoc(batch.doc_id)
@@ -203,19 +245,61 @@ export class OpService {
       this.guardMeasurementRetention(batch as EditBatch, before, after)
       this.guardCitationSupport(batch as EditBatch, before, after)
     }
+    const provenance = ai && !deck && this.options.provenance ? this.guardProvenance(batch as EditBatch, meta, before, after, row.owner) : {}
 
-    return { deck, before, after, reanchored, followed, results, rev }
+    return { deck, before, after, reanchored, followed, results, rev, provenance }
+  }
+
+  /**
+   * 来源规则（docs/design/PROVENANCE.md）。规则二不满足时拒绝；规则一不满足时不拒绝，
+   * 返回转为待采纳修订的原因，由 edit 整批改用建议模式重做。
+   */
+  private guardProvenance(batch: EditBatch, meta: EditMeta, before: PMNode, after: PMNode, owner: string): ProvenanceNote {
+    const a = assessProvenance(before, after)
+    const source = this.citeSource(batch.doc_id)
+    const unread = a.newCites.filter(c => !source(c))
+    if (unread.length) {
+      throw new OpError('unread_citation', `引用 ${unread.map(c => `[@c:${c}]`).join('、')} 还没有保存的摘要或全文，不能确认它支持这句话`, {
+        hint: '先用 oa_fulltext 读这篇文献的全文（或用 insert_citation 重新登记以取得摘要），确认支持后再插入；拿不到原文时请用户确认或换一篇。',
+        current: { cites: unread },
+      })
+    }
+    const note: ProvenanceNote = {}
+    if (meta.observe) {
+      const nums = checkNumbers(before, a, this.docs.store.observedNumbers(meta.observe), source)
+      if (nums.unsourced.length) {
+        const list = [...new Set(nums.unsourced.map(n => n.number))]
+        throw new OpError('unobserved_number', `这些数字在文档里、本轮看到的结果里和所引文献的原文里都找不到出处：${list.slice(0, 6).join('、')}`, {
+          hint: '不要估算或凭记忆写数字。本研究的结果：先用分析工具算出再写；文献里的数字：同一句引用该文献 [@c:id]，且原文里要有这个数；由已有数字换算得出的（如百分比）：用工具算出，或直接写出原始的分子分母。',
+          current: { numbers: list, block_ids: [...new Set(nums.unsourced.map(n => n.blockId))] },
+        })
+      }
+      if (nums.unverifiable.length) note.unverifiable_numbers = nums.unverifiable.map(n => ({ number: n.number, block_id: n.blockId, cites: n.cites }))
+    }
+    if (batch.mode !== 'suggest') {
+      const reasons = suggestReasons(a, this.safeEditsOn(owner))
+      if (reasons.length) note.converted_to_suggest = reasons
+    }
+    return note
   }
 
   /**
    * meta.answering：本回合正在回答的评论线程。它的锚点被改没时（用户要求改的正是被评论的文字），
    * 重新锚定到原来所在的块 / 形状上，而不是拦下（其他线程仍按锚点守卫）。
    */
-  edit(batch: EditBatch | DeckEditBatch, meta: { actor: Actor; turnId: string | null; answering?: string | null; user?: string | null }): EditResult {
+  edit(batch: EditBatch | DeckEditBatch, meta: EditMeta): EditResult {
     try {
-      const sim = this.simulate(batch, meta)
+      let sim = this.simulate(batch, meta)
+      // 规则一：改到人写的文字且不是安全小改 → 整批改用建议模式（人采纳 = 确认）
+      const converted = sim.provenance.converted_to_suggest
+      if (converted?.length) {
+        batch = { ...batch, mode: 'suggest' }
+        sim = this.simulate(batch, meta)
+        sim.provenance = { ...sim.provenance, converted_to_suggest: converted }
+      }
+      const provenance = Object.keys(sim.provenance).length ? sim.provenance : undefined
       if (batch.dry_run) {
-        return { doc_id: batch.doc_id, rev: sim.rev, results: sim.results, changes: [] }
+        return { doc_id: batch.doc_id, rev: sim.rev, results: sim.results, changes: [], ...(provenance ? { provenance } : {}) }
       }
       const event = this.docs.commit(batch.doc_id, sim.after, { actor: meta.actor, turnId: meta.turnId, ops: batch.ops, user: meta.user ?? null })
       // AI 自己写入的块：写入后的内容它是知道的
@@ -234,7 +318,7 @@ export class OpService {
           if (at && at.node_ids.length > 0 && !at.node_ids.includes(c.node_id)) this.docs.store.setCommentAnchor(c.id, at.node_ids[0]!, c.snippet)
         }
       }
-      return { doc_id: batch.doc_id, rev: event?.rev ?? sim.rev, results: sim.results, changes: event?.changes ?? [] }
+      return { doc_id: batch.doc_id, rev: event?.rev ?? sim.rev, results: sim.results, changes: event?.changes ?? [], ...(provenance ? { provenance } : {}) }
     } catch (err) {
       if (err instanceof OpError && meta.actor === 'ai') {
         const row = this.docs.store.getDoc(batch.doc_id)

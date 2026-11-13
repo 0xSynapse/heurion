@@ -106,6 +106,19 @@ function describeError(e: { message?: string; code?: string }): string {
   return (e.code && ERROR_HINTS[e.code]) ?? e.message ?? e.code ?? 'AI 回合失败'
 }
 
+/**
+ * 工具结果事件里的文字（任何会话，含子代理；dsh 自己的 shell / Python 输出也在这里）。
+ * 来源规则二用它记下 AI 本轮看到过的数字（docs/design/PROVENANCE.md 4.3）。不是工具结果时返回 null。
+ */
+export function toolResultText(n: HarnessNotification): string | null {
+  if (n.method !== 'session.event') return null
+  const event = n.params.event as { type?: string; data?: Record<string, unknown> } | undefined
+  if (event?.type !== 'tool/result') return null
+  const message = event.data?.message as { content?: unknown; isError?: boolean } | undefined
+  if (!message || message.isError) return null
+  return extractToolOutput(message.content) || null
+}
+
 export function extractToolOutput(rec: unknown, isError = false): string {
   if (typeof rec === 'string') return rec
   if (Array.isArray(rec)) {
