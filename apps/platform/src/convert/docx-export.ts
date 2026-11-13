@@ -10,6 +10,7 @@ import { looksLikeHeaderRow } from '../model/table-header.ts'
 import type { CitationRow, CommentRow, ReplyRow } from '../store/db.ts'
 import { bodyChildrenRaw, elementChildrenRaw, safeUnzipDocx } from './docx-import.ts'
 import { patchParagraph } from './docx-patch.ts'
+import { stripProv } from '../model/provenance.ts'
 
 /**
  * 平台模型 → docx（PLATFORM.md §6 导出）：修补式。
@@ -211,6 +212,8 @@ function exportable(doc: PMNode): PMNode {
 }
 
 export function exportDocx(input: ExportInput): ExportResult {
+  // 来源标记只在平台内部用，不进 Word：先去掉，免得同一段文字因标记不同被拆成多个 run
+  input = { ...input, doc: stripProv(input.doc) }
   let baseFiles: Record<string, Uint8Array> | null = null
   if (input.pkg) {
     try {

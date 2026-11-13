@@ -878,6 +878,11 @@ export class Store {
     CREATE INDEX IF NOT EXISTS idx_turn_queue_user ON turn_queue (user_id);
     CREATE INDEX IF NOT EXISTS idx_docs_owner_deleted ON docs (owner, deleted_at);`)
     this.db.exec('CREATE INDEX IF NOT EXISTS users_tenant ON users (tenant_id)')
+    // AI 最后一次看到各块内容时的版本（冲突守卫 noteSeen；以前只在内存，服务重启就丢，见 docs/design/PROVENANCE.md 4.3）
+    this.db.exec(`CREATE TABLE IF NOT EXISTS ai_reads (
+      doc_id TEXT NOT NULL REFERENCES docs(id) ON DELETE CASCADE, node_id TEXT NOT NULL, rev INTEGER NOT NULL,
+      PRIMARY KEY (doc_id, node_id)
+    )`)
     // 官网匿名问卷的答卷（survey/clinician-survey.ts）：不记 IP、不关联账户，只存规整后的答案
     this.db.exec(`CREATE TABLE IF NOT EXISTS survey_responses (
       id TEXT PRIMARY KEY, survey TEXT NOT NULL, version TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
@@ -2215,6 +2220,28 @@ export class Store {
     const row = this.db.prepare('SELECT MAX(rev) AS rev FROM node_changes WHERE doc_id = ? AND node_id = ? AND actor = ?')
       .get(docId, nodeId, actor) as { rev: number | null }
     return row.rev ?? 0
+  }
+
+  /** 记下 AI 在 rev 时看到了这些块（只往大里记）。 */
+  noteAiRead(docId: string, nodeIds: Iterable<string>, rev: number): void {
+    const up = this.db.prepare('INSERT INTO ai_reads (doc_id, node_id, rev) VALUES (?, ?, ?) ON CONFLICT (doc_id, node_id) DO UPDATE SET rev = MAX(rev, excluded.rev)')
+    this.transaction(() => { for (const id of nodeIds) up.run(docId, id, rev) })
+  }
+
+  /** AI 最后一次看到该块时的版本；没看过返回 null。 */
+  aiReadRev(docId: string, nodeId: string): number | null {
+    const row = this.db.prepare('SELECT rev FROM ai_reads WHERE doc_id = ? AND node_id = ?').get(docId, nodeId) as { rev: number } | undefined
+    return row?.rev ?? null
+  }
+
+  /** 由 AI 新建、之后从没被人改过的块（来源标记回填用）。 */
+  aiOnlyAddedNodes(docId: string): Map<string, string | null> {
+    const rows = this.db.prepare(`SELECT nc.node_id AS node_id, MAX(o.turn_id) AS turn_id FROM node_changes nc
+      JOIN op_log o ON o.doc_id = nc.doc_id AND o.rev = nc.rev
+      WHERE nc.doc_id = ? AND nc.actor = 'ai' AND nc.kind = 'added'
+        AND NOT EXISTS (SELECT 1 FROM node_changes u WHERE u.doc_id = nc.doc_id AND u.node_id = nc.node_id AND u.actor = 'user')
+      GROUP BY nc.node_id`).all(docId) as Array<{ node_id: string; turn_id: string | null }>
+    return new Map(rows.map(r => [r.node_id, r.turn_id]))
   }
 
   /** 某回合涉及的文档。 */

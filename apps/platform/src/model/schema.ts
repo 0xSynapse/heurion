@@ -228,6 +228,15 @@ export const schema = new Schema({
       }],
       toDOM: mark => ['a', { href: sanitizeHref(mark.attrs.href), target: '_blank', rel: 'noopener' }, 0],
     },
+    /**
+     * 来源标记（docs/design/PROVENANCE.md）：AI 写入、还没人确认的文字。只由服务端维护（model/provenance.ts），
+     * 不进 Markdown 与 Word 导出。inclusive: false —— 在 AI 文字末尾接着打字，不继承标记。
+     */
+    prov: {
+      attrs: { by: { default: 'ai' }, turn: { default: null } },
+      inclusive: false,
+      toDOM: mark => ['span', { class: 'prov-ai', 'data-turn': (mark.attrs.turn as string | null) ?? '' }, 0],
+    },
     /** 评论锚点：同一段文字可同时挂多条线程。 */
     comment: {
       attrs: { thread: {} },

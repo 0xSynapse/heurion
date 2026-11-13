@@ -66,9 +66,9 @@ describe('doc_edit 操作', () => {
     const text = docs.get(docId).textContent
     expect(text).toContain('心力衰竭是高发疾病')
     expect(text).toContain('新增段落二')
-    // 替换继承原格式（粗体）
+    // 替换继承原格式（粗体）；AI 写入的文字另带来源标记（docs/design/PROVENANCE.md）
     const p = docs.get(docId).child(1)
-    expect(p.child(1).marks.map(m => m.type.name)).toEqual(['bold'])
+    expect(p.child(1).marks.map(m => m.type.name).filter(n => n !== 'prov')).toEqual(['bold'])
 
     const added = r1.results[0]!.ids
     ops.edit({ doc_id: docId, base_rev: 1, mode: 'apply', ops: [

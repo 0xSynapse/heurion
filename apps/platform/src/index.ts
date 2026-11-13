@@ -187,6 +187,17 @@ if (indexed) console.log(`全文索引：补齐 ${indexed} 份文档`)
 const purge = () => { for (const id of store.purgeTrash(30)) { docs.unload(id); store.unindexDoc(id) } store.purgeAudit(365); store.purgeMemorySignals(60) }
 purge()
 setInterval(purge, 12 * 3600_000).unref()
+// 来源标记回填（docs/design/PROVENANCE.md 6.1）：只执行一次；逐份文档提交，单份失败不影响其余
+if (!store.getAppSetting('migration.provenance_backfill')) {
+  let marked = 0
+  for (const id of store.allDocIds()) {
+    const wasLoaded = docs.isLoaded(id)
+    try { marked += docs.backfillProvenance(id) } catch (err) { console.error(`[provenance] backfill ${id}:`, err) }
+    if (!wasLoaded) docs.unload(id)
+  }
+  store.setAppSetting('migration.provenance_backfill', new Date().toISOString())
+  console.log(`[provenance] backfill done: ${marked} AI blocks marked`)
+}
 // 内存优化：空闲文档自动驱逐（每 5 分钟检查一次，驱逐无活跃连接且超过 10 分钟未被访问的文档，防长期运行内存泄漏）
 setInterval(() => docs.evictIdle(), 5 * 60_000).unref()
 // PDF 解析服务健康检查：每 5 分钟一次，连续两次不就绪告警给管理员（不就绪时 PDF 会悄悄退回 poppler，表格不可靠）。

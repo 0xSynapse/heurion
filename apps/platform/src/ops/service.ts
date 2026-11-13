@@ -354,13 +354,9 @@ export class OpService {
    * 冲突守卫按这个判断「用户的改动 AI 看过没有」：base_rev 只说明 AI 拿到过某个版本号，
    * 不说明读过这一块的新内容（多轮会话里 AI 凭前几轮的记忆整段重写，会冲掉医生在轮次之间的修改）。
    */
-  private seen = new Map<string, Map<string, number>>()
-
-  /** 记下 AI 在 rev 时看到了这些块的内容。 */
+  /** 记下 AI 在 rev 时看到了这些块的内容（存进 ai_reads，服务重启后仍然有效）。 */
   noteSeen(docId: string, ids: Iterable<string>, rev: number): void {
-    let m = this.seen.get(docId)
-    if (!m) this.seen.set(docId, (m = new Map()))
-    for (const id of ids) m.set(id, Math.max(m.get(id) ?? -1, rev))
+    this.docs.store.noteAiRead(docId, ids, rev)
   }
 
   /** 用户提修订时记在修订上的作者名（显示名，没有则用户名，再没有则「用户」）。 */
@@ -373,21 +369,22 @@ export class OpService {
   private guardConflicts(batch: EditBatch | DeckEditBatch, before: PMNode, targetsOf: (op: unknown) => string[], deck = false): void {
     const index = indexById(before)
     // 幻灯片经 slide_read 读，尚未记录「看过」：仍按 base_rev 判断
-    const seen = deck ? undefined : this.seen.get(batch.doc_id)
+    const seenRev = (id: string) => deck ? null : this.docs.store.aiReadRev(batch.doc_id, id)
     batch.ops.forEach((op, i) => {
       // 按原文修改（replace_text）不看 rev：原文本身就是守卫——用户改了这几个字，原文就匹配不上
       // merge 原样搬运现有内容（用户改过的字也一并保留），同样不看 rev
       if (['replace_text', 'replace_all', 'merge'].includes((op as { op: string }).op)) return
       for (const id of targetsOf(op)) {
         const userRev = this.docs.store.lastChangeBy(batch.doc_id, id, 'user')
-        const since = seen?.get(id) ?? batch.base_rev
+        const read = seenRev(id)
+        const since = read ?? batch.base_rev
         if (userRev > since) {
           // 当前内容随拒绝返回给 AI：算它看过了
           if (!deck) this.noteSeen(batch.doc_id, [id], this.docs.rev(batch.doc_id))
           const node = index.get(id)?.node
           throw new OpError('conflict_user_edited', `块 ${id} 在 rev ${userRev} 被用户修改过（你的 base_rev 是 ${batch.base_rev}）`, {
             op_index: i,
-            hint: since === batch.base_rev && !seen?.has(id)
+            hint: since === batch.base_rev && read === null
               ? '以 current 为准重新决定改法，并用新的 rev 作为 base_rev 再提交；用户的修改优先。'
               : '用户在你上次读到这一块之后改过它（current 是现在的内容）：以 current 为准重新改，保留用户的改动；只换 base_rev 原样重发会再次被拦下。',
             current: { rev: this.docs.rev(batch.doc_id), markdown: node ? (node.type.name === 'shape' || node.type.name === 'slide' ? node.textContent : serializeBlock(node, { ids: true }, '')) : null },

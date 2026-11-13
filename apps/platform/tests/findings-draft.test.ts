@@ -389,7 +389,8 @@ describe('写入经操作层与守卫', () => {
     // 字面量的「[@m:mfake1234]」是文字，不是测量原子（未登记的 id 也没被守卫当成原子拒绝）
     expect(topText(t, r.doc_id)[3]).toMatch(/^1\. <b>右肺上叶<\/b> \*\*实性\*\* \[@m:mfake1234\] \{#abc123\} 结节，平均径 \[@m:(?!mfake)[a-z0-9]+\]。$/)
     let marks = 0, atoms = 0
-    doc.descendants(n => { if (n.marks.length) marks++; if (n.type.name === 'measurement') atoms++; return true })
+    // 来源标记（AI 写入的文字带 prov）不是格式，不计入
+    doc.descendants(n => { if (n.marks.some(m => m.type.name !== 'prov')) marks++; if (n.type.name === 'measurement') atoms++; return true })
     expect(marks).toBe(0)
     expect(atoms).toBe(4)
     // RIS 纯文本里字面量的内部记号也去掉

@@ -8,6 +8,7 @@ import { parseBlocks } from './markdown.ts'
 import { schema } from './schema.ts'
 import { deckSchema } from './deck-schema.ts'
 import { revertByNodes } from '../ops/revert.ts'
+import { PROV_MARK, labelProvenance, markAiBlocks } from './provenance.ts'
 
 /** Yjs 里存放正文的 fragment 名。 */
 const BODY = 'body'
@@ -292,6 +293,16 @@ function freshElements(doc: PMNode, from: number, to: number): Y.XmlElement[] {
   )
 }
 
+/**
+ * 这次提交要不要重打来源标记：只有正文 schema 有 prov 标记；恢复版本、撤销回合、回填是把已有内容原样写回，
+ * 标记跟着内容走，不按写者重打。
+ */
+function labelsProvenance(doc: PMNode, ops: unknown): boolean {
+  if (!doc.type.schema.marks[PROV_MARK]) return false
+  const KEEP = new Set(['restore', 'revert_turn', 'provenance_backfill'])
+  return !(Array.isArray(ops) && ops.some(o => o && typeof o === 'object' && KEEP.has((o as { op?: string }).op ?? '')))
+}
+
 /** 服务端提交的 Yjs origin（区别于浏览器经协同网关送来的更新）。 */
 export interface ServerOrigin { server: true; actor: Actor; turnId: string | null }
 
@@ -460,6 +471,17 @@ export class Documents extends EventEmitter<{ commit: [CommitEvent]; 'commit-det
       l.cache = null
       after = this.get(docId)
     }
+    // 来源标记：浏览器里新输入的文字是人写的（在 AI 文字中间打的字会继承 AI 标记，这里去掉）
+    if (labelsProvenance(after, ops)) {
+      const labeled = labelProvenance(l.committed, after, { actor: 'user', turnId: null })
+      if (labeled !== after) {
+        l.ydoc.transact(() => {
+          writeFragment(l.ydoc, labeled)
+        }, { server: true, actor: 'system', turnId: null } satisfies ServerOrigin)
+        l.cache = null
+        after = this.get(docId)
+      }
+    }
     const user = l.editors.size === 1 ? [...l.editors][0]! : null
     l.editors.clear()
     return this.record(docId, l, after, { actor: 'user', turnId: null, ops, user })
@@ -492,6 +514,9 @@ export class Documents extends EventEmitter<{ commit: [CommitEvent]; 'commit-det
     const l = this.load(docId)
     this.flush(docId)
     const before = this.get(docId)
+    if ((meta.actor === 'ai' || meta.actor === 'user') && labelsProvenance(next, meta.ops)) {
+      next = labelProvenance(before, next, { actor: meta.actor, turnId: meta.turnId })
+    }
     if (before.eq(next)) return null
     // AI 回合第一次写这份文档：记下回合开始前的状态（服务重启后按节点撤销的依据）
     if (meta.actor === 'ai' && meta.turnId) this.store.putTurnBase(meta.turnId, docId, Y.encodeStateAsUpdate(l.ydoc))
@@ -573,6 +598,22 @@ export class Documents extends EventEmitter<{ commit: [CommitEvent]; 'commit-det
     if (!old) throw new Error(`version ${seq} not found`)
     this.commit(docId, old, { actor: 'user', turnId: null, ops: [{ op: 'restore', seq }] })
     return this.snapshot(docId, 'restore', `回滚到 v${seq}`)
+  }
+
+  /**
+   * 来源标记回填（docs/design/PROVENANCE.md 6.1）：由 AI 新建、之后从没被人改过的块整块标为 AI 未确认。
+   * 只回填正文文档；没有要标的块时不提交。返回标了多少块。
+   */
+  backfillProvenance(docId: string): number {
+    const row = this.store.getDoc(docId)
+    if (!row || row.kind !== 'doc' || row.deleted_at) return 0
+    const ids = this.store.aiOnlyAddedNodes(docId)
+    if (ids.size === 0) return 0
+    const doc = this.get(docId)
+    const next = markAiBlocks(doc, ids)
+    if (next.eq(doc)) return 0
+    this.commit(docId, next, { actor: 'system', turnId: null, ops: [{ op: 'provenance_backfill', blocks: ids.size }] })
+    return ids.size
   }
 
   /** 文档内已占用 id（分配新 id 用）。 */
