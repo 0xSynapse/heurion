@@ -112,13 +112,14 @@ if __name__ == '__main__':
         cm = sum(r['comments_kept'] for r in rows), sum(len(r['comments']) for r in rows)
         fl = sum(r['citation_fields']['flattened_to_text'] for r in rows)
         col = sum(r['collateral']['changed'] for r in rows)
+        add = {k: sum(r['citations_added'][k] for r in rows) for k in rows[0]['citations_added']}
         td = {}
         for r in rows:
             for k, v in r['tasks'].items():
                 td.setdefault(k, [0, 0])
                 td[k][0] += bool(v['done'])
                 td[k][1] += 1
-        print(variant, '导师修订保留', he, '批注保留', cm, '引用变文字', fl, '误改段落', col, '任务完成', {k: f'{a}/{b}' for k, (a, b) in sorted(td.items())})
+        print(variant, '导师修订保留', he, '批注保留', cm, '引用变文字', fl, '误改段落', col, '新增引用', add, '任务完成', {k: f'{a}/{b}' for k, (a, b) in sorted(td.items())})
         bad = [(r['id'], k) for r in rows for k, v in r['tasks'].items() if variant == 'oracle' and not v['done']]
         if bad:
             print('  理想答案没判为完成：', bad[:20])
