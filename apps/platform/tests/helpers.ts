@@ -27,5 +27,7 @@ export function ids(docs: Documents, docId: string): string[] {
 export function acceptAll(xml: string): string {
   return xml.replace(/<w:del\b[^>]*\/>/g, '').replace(/<w:del\b[^>]*>[\s\S]*?<\/w:del>/g, '').replace(/<w:ins\b[^>]*\/>/g, '').replace(/<w:ins\b[^>]*>([\s\S]*?)<\/w:ins>/g, '$1')
 }
-/** 接受全部修订后的纯文字（去掉标签） */
-export const acceptedText = (xml: string): string => acceptAll(xml).replace(/<[^>]+>/g, '')
+/** Word XML 里显示出来的文字：各 w:t 的内容依次拼接（不靠删标签，不会把别的标签内容当成文字） */
+export const wordText = (xml: string): string => [...xml.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map(m => m[1]).join('')
+/** 接受全部修订后的纯文字 */
+export const acceptedText = (xml: string): string => wordText(acceptAll(xml))

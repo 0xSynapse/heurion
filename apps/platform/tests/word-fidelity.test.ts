@@ -11,7 +11,7 @@ import { resolveSuggestions } from '../src/ops/suggest.ts'
 import { newCommentId, Store } from '../src/store/db.ts'
 import { read } from '../src/views/read.ts'
 import { docx, p } from './fixtures.ts'
-import { acceptedText } from './helpers.ts'
+import { acceptedText, wordText } from './helpers.ts'
 
 /** 模拟 API 的导入流程（与 export.test.ts 相同）。 */
 function importInto(bytes: Uint8Array) {
@@ -715,7 +715,7 @@ describe('Phase 1b 赛后归因回归：批注+修订共存、有序列表替换
 
 
 describe('AI 未确认的文字导出为 AI 名下的修订（docs/design/PROVENANCE.md）', () => {
-  const rejectAll = (xml: string) => xml.replace(/<w:ins\b[^>]*>[\s\S]*?<\/w:ins>/g, '').replace(/<w:del\b[^>]*>([\s\S]*?)<\/w:del>/g, '$1').replace(/<w:delText\b[^>]*>/g, '<w:t>').replace(/<\/w:delText>/g, '</w:t>').replace(/<[^>]+>/g, '')
+  const rejectAll = (xml: string) => wordText(xml.replace(/<w:ins\b[^>]*>[\s\S]*?<\/w:ins>/g, '').replace(/<w:del\b[^>]*>([\s\S]*?)<\/w:del>/g, '$1').replace(/<w:delText\b[^>]*>/g, '<w:t>').replace(/<\/w:delText>/g, '</w:t>'))
 
   it('AI 改了人写的词：写成 Heurion AI 的词级修订；接受得到 AI 的版本，拒绝回到人写的原文', () => {
     const t = importInto(docx(p('共纳入 98 名 patients，随访 3 年。') + p('其他。')))
