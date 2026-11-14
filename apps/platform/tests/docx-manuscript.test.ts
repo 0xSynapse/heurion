@@ -107,6 +107,12 @@ describe('投稿稿件常见的 Word 结构', () => {
     }).bytes
     const xml = strFromU8(unzipSync(out)['word/document.xml']!)
     expect(xml).not.toMatch(/<w:t[^>]*>\s*2\.1/)
-    expect(headings(out)).toEqual([['1.', 'Introduction'], ['2.', 'Methods'], ['2.1', 'Study design and setting']])
+    // AI 未确认的改写写成 AI 名下的词级修订：标题仍是一段（不会因整段删除 + 整段插入多出一个编号）
+    expect(xml.match(/Study design/g)).toHaveLength(1)
+    expect(xml).toMatch(/<w:ins [^>]*w:author="Heurion AI"[^>]*><w:r><w:t xml:space="preserve"> and setting<\/w:t>/)
+    // 再导入时 Word 修订成为待采纳修订对；按接受修订后的样子数标题
+    const accepted: Array<[string | null, string]> = []
+    importDocx(out).doc.forEach(n => { if (n.type.name === 'heading' && n.attrs.suggest !== 'delete') accepted.push([n.attrs.number as string | null, n.textContent]) })
+    expect(accepted).toEqual([['1.', 'Introduction'], ['2.', 'Methods'], ['2.1', 'Study design and setting']])
   })
 })

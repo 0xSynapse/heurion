@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>专家审阅 · Heurion</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+/* 专家审阅页（apps/platform/src/review/expert-review.ts）：私密链接，题目由接口读取，答案逐题自动保存。
+   沿用官网问卷的「Nordic Editorial」配色与直角风格。 */
+:root {
+  --bg: #FAF8F4; --bg-deep: #EFECE4; --panel: #FDFCF9; --raised: #F4F1EA; --hover: #E6E2D8;
+  --line: #DFDAD0; --line-strong: #C8C2B6;
+  --text: #151C19; --text-2: #4A534E; --muted: #646D68; --faint: #949B96;
+  --mint: #233E33; --mint-ink: #F4F1EA; --mint-text: #233E33;
+  --green: #1B6B4A; --green-soft: #E3ECE7; --warn: #9A5B13; --warn-soft: #FDF3E1; --danger: #B42318;
+  --mark: #F6E3A8;
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --serif: 'Songti SC', 'STSong', 'Noto Serif SC', Georgia, serif;
+  --mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111614; --bg-deep: #0C100E; --panel: #151C19; --raised: #1C2521; --hover: #232E29;
+    --line: #26312C; --line-strong: #35443D;
+    --text: #F4F1EA; --text-2: #B8C2BC; --muted: #84918A; --faint: #58655E;
+    --mint: #00C472; --mint-ink: #0C100E; --mint-text: #2CE092;
+    --green: #00C472; --green-soft: rgba(0,196,114,.12); --warn: #F5B544; --warn-soft: rgba(245,181,68,.12); --danger: #FF6B6B;
+    --mark: rgba(245,181,68,.35);
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.7 var(--font); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+a { color: var(--mint-text); }
+[hidden] { display: none !important; }
+.wrap { max-width: 920px; margin: 0 auto; padding: 32px 20px 120px; }
+.eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+h1 { font-family: var(--serif); font-weight: 500; font-size: 30px; line-height: 1.3; margin: 8px 0 12px; }
+h2 { font-family: var(--serif); font-weight: 500; font-size: 22px; margin: 0 0 8px; }
+.intro p, .sec-intro p { margin: 0 0 10px; color: var(--text-2); }
+.overall { margin: 18px 0 8px; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
+.bar { flex: 1; height: 4px; background: var(--line); }
+.bar > i { display: block; height: 100%; background: var(--green); width: 0; transition: width .3s; }
+nav.tabs { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); margin: 16px -20px 24px; padding: 0 20px; display: flex; gap: 0; overflow-x: auto; }
+nav.tabs button { font: inherit; font-size: 14px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 12px 14px 10px; cursor: pointer; white-space: nowrap; }
+nav.tabs button.on { color: var(--text); border-bottom-color: var(--mint-text); }
+nav.tabs .n { font-family: var(--mono); font-size: 11px; margin-left: 6px; color: var(--faint); }
+nav.tabs .n.done { color: var(--green); }
+.sec-head { margin-bottom: 18px; }
+.sec-head .meta { font-size: 13px; color: var(--muted); }
+.card { background: var(--panel); border: 1px solid var(--line); padding: 20px 22px; margin-bottom: 16px; }
+.card.complete { border-left: 3px solid var(--green); }
+.card h3 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+.card .num { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-right: 8px; }
+.block { margin: 0 0 14px; }
+.block .lbl { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.block .txt { background: var(--raised); border: 1px solid var(--line); padding: 10px 14px; white-space: pre-wrap; word-break: break-word; font-family: var(--serif); font-size: 15px; line-height: 1.75; max-height: 420px; overflow: auto; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
+mark { background: var(--mark); color: inherit; padding: 0 2px; }
+.links { margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 14px; }
+.q { margin: 14px 0 0; padding-top: 12px; border-top: 1px dashed var(--line); }
+.q .ql { font-weight: 500; margin-bottom: 8px; }
+.opts { display: flex; flex-wrap: wrap; gap: 8px; }
+.opts label { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-strong); padding: 6px 12px; cursor: pointer; font-size: 14px; background: var(--bg); }
+.opts label:hover { border-color: var(--text); }
+.opts input { margin: 0; accent-color: var(--green); }
+.opts label.sel { border-color: var(--green); background: var(--green-soft); }
+textarea { font: inherit; width: 100%; border: 1px solid var(--line-strong); padding: 8px 12px; background: var(--bg-deep); color: var(--text); min-height: 64px; resize: vertical; }
+.opt-tag { font-size: 12px; color: var(--faint); font-weight: 400; margin-left: 6px; }
+.status { position: fixed; right: 16px; bottom: 16px; font-size: 13px; background: var(--panel); border: 1px solid var(--line); padding: 6px 12px; color: var(--muted); }
+.status.err { color: var(--danger); border-color: var(--danger); }
+.pager { display: flex; justify-content: space-between; margin-top: 24px; }
+.pager button { font: inherit; font-size: 14px; border: 1px solid var(--line-strong); background: transparent; color: var(--text); padding: 8px 18px; cursor: pointer; }
+.pager button.primary { background: var(--mint); border-color: var(--mint); color: var(--mint-ink); }
+.notice { background: var(--warn-soft); border: 1px solid var(--warn); padding: 14px 18px; color: var(--text); }
+.done-box { background: var(--green-soft); border: 1px solid var(--green); padding: 14px 18px; margin: 16px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Heurion · 专家审阅</div>
+  <h1 id="title">正在加载…</h1>
+  <div class="intro" id="intro"></div>
+  <div class="overall" id="overall" hidden><span id="overall-text"></span><div class="bar"><i id="overall-bar"></i></div></div>
+  <div id="all-done" class="done-box" hidden>全部完成，非常感谢！答案已自动保存，您可以随时回来修改。</div>
+  <nav class="tabs" id="tabs" hidden></nav>
+  <main id="main"></main>
+</div>
+<div class="status" id="status" hidden></div>
+<script>
+(() => {
+  const token = location.pathname.split('/').filter(Boolean).pop() || ''
+  const api = `/api/public/expert-review/${encodeURIComponent(token)}`
+  const $ = id => document.getElementById(id)
+  let pkg = null, answers = {}, progress = null, current = 0
+
+  const el = (tag, attrs = {}, ...kids) => {
+    const n = document.createElement(tag)
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'class') n.className = v
+      else if (k.startsWith('on')) n.addEventListener(k.slice(2), v)
+      else if (v !== false && v !== null && v !== undefined) n.setAttribute(k, v === true ? '' : v)
+    }
+    for (const k of kids.flat()) if (k !== null && k !== undefined && k !== false) n.append(k instanceof Node ? k : document.createTextNode(String(k)))
+    return n
+  }
+  /** 文字里标出要核对的片段（纯文字插入，不解析 HTML） */
+  const marked = (text, hl) => {
+    const box = el('div', { class: 'txt' })
+    const parts = (hl || []).filter(Boolean).sort((a, b) => b.length - a.length)
+    if (!parts.length) { box.textContent = text; return box }
+    const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const re = new RegExp(parts.map(esc).join('|'), 'g')
+    let last = 0
+    for (const m of text.matchAll(re)) {
+      box.append(text.slice(last, m.index), el('mark', {}, m[0]))
+      last = m.index + m[0].length
+    }
+    box.append(text.slice(last))
+    return box
+  }
+
+  // —— 保存：选择题立即保存，文字题停顿 0.8 秒后保存；失败自动重试 ——
+  const pending = new Map()
+  let timer = null, saving = false
+  const status = (text, err) => { const s = $('status'); s.hidden = !text; s.textContent = text || ''; s.classList.toggle('err', !!err) }
+  const queue = (key, value, delay) => {
+    pending.set(key, value)
+    clearTimeout(timer)
+    status('有未保存的修改…')
+    timer = setTimeout(flush, delay)
+  }
+  async function flush() {
+    if (saving || !pending.size) return
+    saving = true
+    const batch = [...pending.entries()].map(([key, value]) => ({ key, value }))
+    pending.clear()
+    status('正在保存…')
+    try {
+      const r = await fetch(`${api}/answers`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: batch }) })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || `保存失败（${r.status}）`)
+      progress = j.progress
+      renderProgress()
+      status('已保存')
+      setTimeout(() => { if (!pending.size && !saving) status('') }, 1500)
+    } catch (e) {
+      for (const b of batch) if (!pending.has(b.key)) pending.set(b.key, b.value)
+      status(`保存失败，稍后自动重试：${e.message}`, true)
+      clearTimeout(timer); timer = setTimeout(flush, 5000)
+    } finally { saving = false; if (pending.size && !timer) timer = setTimeout(flush, 500) }
+  }
+  window.addEventListener('beforeunload', e => { if (pending.size || saving) { flush(); e.preventDefault(); e.returnValue = '' } })
+
+  function renderProgress() {
+    if (!progress) return
+    const { answered, total, bySection } = progress
+    $('overall').hidden = false
+    $('overall-text').textContent = `已完成 ${answered} / ${total} 题`
+    $('overall-bar').style.width = total ? `${Math.round(answered / total * 100)}%` : '0'
+    $('all-done').hidden = !(total && answered >= total)
+    pkg.sections.forEach((s, i) => {
+      const n = document.querySelector(`[data-tab="${i}"] .n`)
+      const p = bySection[s.id] || { answered: 0, total: 0 }
+      if (n) { n.textContent = `${p.answered}/${p.total}`; n.classList.toggle('done', p.total > 0 && p.answered >= p.total) }
+    })
+    document.querySelectorAll('.card[data-item]').forEach(c => c.classList.toggle('complete', itemComplete(c.dataset.item)))
+  }
+  const visible = (it, q) => !q.when || q.when.values.includes(answers[`${it.key}.${q.when.key}`] || '')
+  function itemComplete(key) {
+    for (const s of pkg.sections) for (const it of s.items) if (it.key === key)
+      return it.questions.every(q => q.optional || !visible(it, q) || !!answers[`${it.key}.${q.key}`])
+    return false
+  }
+
+  function question(it, q) {
+    const k = `${it.key}.${q.key}`
+    const box = el('div', { class: 'q', 'data-q': k })
+    box.append(el('div', { class: 'ql' }, q.label, q.optional ? el('span', { class: 'opt-tag' }, '（选填）') : null))
+    if (q.type === 'choice') {
+      const opts = el('div', { class: 'opts', role: 'radiogroup' })
+      for (const o of q.options) {
+        const input = el('input', { type: 'radio', name: k, value: o })
+        input.checked = answers[k] === o
+        const lab = el('label', { class: answers[k] === o ? 'sel' : '' }, input, o)
+        input.addEventListener('change', () => {
+          answers[k] = o
+          opts.querySelectorAll('label').forEach(l => l.classList.toggle('sel', l.querySelector('input').checked))
+          queue(k, o, 0)
+          refreshConditions(it)
+        })
+        opts.append(lab)
+      }
+      box.append(opts)
+    } else {
+      const ta = el('textarea', { rows: 2 })
+      ta.value = answers[k] || ''
+      ta.addEventListener('input', () => { answers[k] = ta.value; queue(k, ta.value, 800) })
+      box.append(ta)
+    }
+    box.hidden = !visible(it, q)
+    return box
+  }
+  function refreshConditions(it) {
+    for (const q of it.questions) {
+      const box = document.querySelector(`[data-q="${CSS.escape(`${it.key}.${q.key}`)}"]`)
+      if (box) box.hidden = !visible(it, q)
+    }
+  }
+
+  function item(it, idx) {
+    const card = el('section', { class: 'card', 'data-item': it.key })
+    if (it.title) card.append(el('h3', {}, el('span', { class: 'num' }, String(idx + 1).padStart(2, '0')), it.title))
+    for (const b of it.blocks || []) {
+      const one = (label, text, hl) => el('div', { class: 'block' }, el('div', { class: 'lbl' }, label), marked(text, hl))
+      card.append(b.compare ? el('div', { class: 'pair' }, one(b.label, b.text, b.highlight), one(b.compare.label, b.compare.text, b.compare.highlight)) : one(b.label, b.text, b.highlight))
+    }
+    const links = [...(it.links || []).map(l => el('a', { href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.label)),
+      ...(it.files || []).map(f => el('a', { href: `${api}/files/${encodeURIComponent(f)}`, download: f }, `下载 ${f}`))]
+    if (links.length) card.append(el('div', { class: 'links' }, links))
+    for (const q of it.questions) card.append(question(it, q))
+    return card
+  }
+
+  function show(i) {
+    current = Math.max(0, Math.min(pkg.sections.length - 1, i))
+    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', Number(b.dataset.tab) === current))
+    const s = pkg.sections[current]
+    const main = $('main')
+    main.replaceChildren()
+    const head = el('div', { class: 'sec-head' }, el('h2', {}, s.title),
+      s.minutes ? el('div', { class: 'meta' }, `共 ${s.items.length} 题 · 预计约 ${s.minutes} 分钟`) : el('div', { class: 'meta' }, `共 ${s.items.length} 题`))
+    main.append(head)
+    if (s.intro?.length) main.append(el('div', { class: 'sec-intro' }, s.intro.map(p => el('p', {}, p))))
+    s.items.forEach((it, k) => main.append(item(it, k)))
+    main.append(el('div', { class: 'pager' },
+      current > 0 ? el('button', { onclick: () => { show(current - 1); scrollTo(0, 0) } }, '← 上一部分') : el('span'),
+      current < pkg.sections.length - 1 ? el('button', { class: 'primary', onclick: () => { show(current + 1); scrollTo(0, 0) } }, '下一部分 →') : el('span')))
+    renderProgress()
+    try { localStorage.setItem(`er:${token}:sec`, String(current)) } catch { /* 无痕模式等 */ }
+  }
+
+  async function load() {
+    try {
+      const r = await fetch(api, { cache: 'no-store' })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || '加载失败')
+      pkg = j.package; answers = j.answers || {}; progress = j.progress
+    } catch (e) {
+      $('title').textContent = '无法打开'
+      $('main').replaceChildren(el('div', { class: 'notice' }, `${e.message}。请确认链接完整，或联系发送链接的人。`))
+      return
+    }
+    document.title = `${pkg.title} · Heurion`
+    $('title').textContent = pkg.title
+    $('intro').replaceChildren(...(pkg.intro || []).map(p => el('p', {}, p)))
+    const tabs = $('tabs')
+    tabs.hidden = false
+    tabs.replaceChildren(...pkg.sections.map((s, i) => el('button', { 'data-tab': i, onclick: () => show(i) }, s.title, el('span', { class: 'n' }))))
+    let start = 0
+    try { start = Number(localStorage.getItem(`er:${token}:sec`) || 0) || 0 } catch { /* 忽略 */ }
+    show(start)
+  }
+  load()
+})()
+</script>
+</body>
+</html>

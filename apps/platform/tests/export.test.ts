@@ -10,6 +10,7 @@ import { schema } from '../src/model/schema.ts'
 import { OpService } from '../src/ops/service.ts'
 import { Store } from '../src/store/db.ts'
 import { docx, drawing, IMAGE_REL, li, p, PNG } from './fixtures.ts'
+import { acceptedText } from './helpers.ts'
 
 /** 模拟 API 的导入流程，返回平台里的文档。 */
 function importInto(bytes: Uint8Array) {
@@ -139,7 +140,8 @@ describe('docx 导出：改过的正文段落沿用原模板格式', () => {
     const id = t.docs.get(t.docId).child(0).attrs.id as string
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '最后一段', replace: '末段' }] }, { actor: 'ai', turnId: 't1' })
     const first = bodyOf(t.exportNow().bytes).split('</w:p>')[0]!
-    expect(first).toContain('末段')
+    expect(acceptedText(first)).toContain('末段')
+    expect(first).toContain('w:author="Heurion AI"')
     expect(first).toContain(sect)
   })
 

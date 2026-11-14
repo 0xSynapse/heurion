@@ -140,6 +140,7 @@ const ALL_PARITY: Record<string, string> = {
   'GET /api/admin/settings': 'platform_admin.settings', 'PUT /api/admin/settings': 'platform_admin.update_settings', 'GET /api/admin/audit': 'platform_admin.audit',
   'GET /api/admin/review-quality': 'platform_admin.review_quality',
   'GET /api/admin/surveys/clinician-writing': 'platform_admin.survey_stats', 'GET /api/admin/surveys/clinician-writing/export': 'platform_admin.survey_export',
+  'GET /api/admin/expert-reviews': 'platform_admin.expert_reviews', 'GET /api/admin/expert-reviews/:id/answers': 'platform_admin.expert_review_answers',
   // 患者、研究的高权限操作
   'GET /api/patients-directory': 'patient_admin.directory', 'POST /api/patients/:ptid/break-glass': 'patient_admin.break_glass', 'DELETE /api/patients/:ptid': 'patient_admin.delete',
   // 知家（PATIENT.md）：成员健康档案的落点；AI 用 doc_create + patient_doc_link（archive）同样能得到
@@ -327,6 +328,10 @@ const NOT_FOR_AI: Record<string, string> = {
   'GET /api/me/provenance': 'AI 写作保护的个人偏好（界面设置；AI 从写入结果里就能知道是否转为待采纳修订）',
   'PUT /api/me/provenance': 'AI 写作保护的个人偏好只能由用户本人改（AI 不能放宽约束自己的规则）',
   'POST /api/public/survey/clinician-writing': '官网匿名研究问卷的提交入口，只能由受访医生本人填写（AI 不代人作答；管理员经 platform_admin.survey_export 读答卷）',
+  'GET /api/public/expert-review/:token': '专家审阅页凭私密链接读题，只给受邀医生本人（管理员经 platform_admin.expert_review_answers 读答案）',
+  'PUT /api/public/expert-review/:token/answers': '专家审阅页的答案只能由受邀医生本人填写（AI 不代人作答）',
+  'GET /api/public/expert-review/:token/files/:name': '专家审阅页里供医生下载的测试稿',
+  'POST /api/admin/expert-reviews': '上传专家审阅题目包只能由管理员本人做：题目包含未公开的测试稿，返回的链接等同于访问凭据',
   // Aegis Application Protocol (AAP-1.0) 协议握手、授权令牌管理与人工租约审批接口
   'POST /api/aegis/auth/device': '由本地 aegis-os app login 发起 RFC 8628 设备码免密绑定请求（AI 不能自行发起）',
   'POST /api/aegis/auth/device/approve': '医生/研究员本人在设置页输入 8 位终端设备码确认绑定（AI 不能自行确认）',

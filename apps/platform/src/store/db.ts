@@ -28,6 +28,8 @@ export interface PendingActionRow {
   doc_id: string | null; turn_id: string | null
   status: 'pending' | 'running' | 'done' | 'failed' | 'rejected' | 'expired'
   result: string | null; created_at: string; decided_at: string | null; decided_by: string | null
+  /** JSON：确认并执行成功后平台要接着做的事（例如采纳合作者修订后重新提交 AI 被拦的修改） */
+  followup?: string | null
 }
 
 /** Aegis Application Protocol (AAP-1.0) Agent Grant：绑定医生/研究员账户、租户与本地 Aegis-OS 节点 Ed25519 公钥。 */
@@ -898,6 +900,8 @@ export class Store {
     CREATE INDEX IF NOT EXISTS idx_op_log_turn ON op_log (turn_id);
     CREATE INDEX IF NOT EXISTS idx_turn_queue_user ON turn_queue (user_id);
     CREATE INDEX IF NOT EXISTS idx_docs_owner_deleted ON docs (owner, deleted_at);`)
+    const actionCols = (this.db.prepare('PRAGMA table_info(pending_actions)').all() as Array<{ name: string }>).map(c => c.name)
+    if (!actionCols.includes('followup')) this.db.exec('ALTER TABLE pending_actions ADD COLUMN followup TEXT')
     this.db.exec('CREATE INDEX IF NOT EXISTS users_tenant ON users (tenant_id)')
     // AI 最后一次看到各块内容时的版本（冲突守卫 noteSeen；以前只在内存，服务重启就丢，见 docs/design/PROVENANCE.md 4.3）
     this.db.exec(`CREATE TABLE IF NOT EXISTS ai_reads (
@@ -942,6 +946,19 @@ export class Store {
       id TEXT PRIMARY KEY, survey TEXT NOT NULL, version TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_survey_responses_survey ON survey_responses (survey, created_at);`)
+    // 专家审阅页（review/expert-review.ts）：题目包与附件由管理员上传；只存访问 token 的哈希；答案按「题目键.问题键」逐条存
+    this.db.exec(`CREATE TABLE IF NOT EXISTS expert_reviews (
+      id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, title TEXT NOT NULL, package TEXT NOT NULL,
+      created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS expert_review_files (
+      review_id TEXT NOT NULL REFERENCES expert_reviews(id) ON DELETE CASCADE, name TEXT NOT NULL, mime TEXT NOT NULL, bytes BLOB NOT NULL,
+      PRIMARY KEY (review_id, name)
+    );
+    CREATE TABLE IF NOT EXISTS expert_review_answers (
+      review_id TEXT NOT NULL REFERENCES expert_reviews(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY (review_id, key)
+    );`)
     this.cleanLegacyCitations()
     // 科室与知家分享（docs/design/SHARING.md）
     this.db.exec(`CREATE TABLE IF NOT EXISTS tenant_departments (
@@ -1516,6 +1533,43 @@ export class Store {
     return rows.map(r => ({ id: r.id, version: r.version, created_at: r.created_at, data: JSON.parse(r.data) }))
   }
 
+  // —— 专家审阅页 ——
+  /** 新建（id 为空）或替换题目包与附件；替换时 token 与已填答案不变。 */
+  putExpertReview(r: { id?: string; tokenHash?: string; title: string; pkg: unknown; files: Array<{ name: string; mime: string; bytes: Uint8Array }>; by: string | null }): string {
+    const t = now()
+    const id = r.id ?? randomUUID()
+    this.db.exec('BEGIN')
+    try {
+      if (r.id) this.db.prepare('UPDATE expert_reviews SET title = ?, package = ?, updated_at = ? WHERE id = ?').run(r.title, JSON.stringify(r.pkg), t, id)
+      else this.db.prepare('INSERT INTO expert_reviews (id, token_hash, title, package, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, r.tokenHash!, r.title, JSON.stringify(r.pkg), r.by, t, t)
+      this.db.prepare('DELETE FROM expert_review_files WHERE review_id = ?').run(id)
+      const ins = this.db.prepare('INSERT INTO expert_review_files (review_id, name, mime, bytes) VALUES (?, ?, ?, ?)')
+      for (const f of r.files) ins.run(id, f.name, f.mime, f.bytes)
+      this.db.exec('COMMIT')
+    } catch (err) { this.db.exec('ROLLBACK'); throw err }
+    return id
+  }
+  getExpertReview(id: string): { id: string; title: string; pkg: unknown; created_at: string; updated_at: string } | undefined {
+    const r = this.db.prepare('SELECT id, title, package, created_at, updated_at FROM expert_reviews WHERE id = ?').get(id) as { id: string; title: string; package: string; created_at: string; updated_at: string } | undefined
+    return r ? { id: r.id, title: r.title, pkg: JSON.parse(r.package), created_at: r.created_at, updated_at: r.updated_at } : undefined
+  }
+  expertReviewByToken(tokenHash: string): string | undefined {
+    return (this.db.prepare('SELECT id FROM expert_reviews WHERE token_hash = ?').get(tokenHash) as { id: string } | undefined)?.id
+  }
+  listExpertReviews(): Array<{ id: string; title: string; created_at: string; updated_at: string; answers: number }> {
+    return this.db.prepare('SELECT r.id, r.title, r.created_at, r.updated_at, (SELECT COUNT(*) FROM expert_review_answers a WHERE a.review_id = r.id) AS answers FROM expert_reviews r ORDER BY r.created_at DESC').all() as Array<{ id: string; title: string; created_at: string; updated_at: string; answers: number }>
+  }
+  expertReviewFile(id: string, name: string): { mime: string; bytes: Uint8Array } | undefined {
+    return this.db.prepare('SELECT mime, bytes FROM expert_review_files WHERE review_id = ? AND name = ?').get(id, name) as { mime: string; bytes: Uint8Array } | undefined
+  }
+  expertReviewAnswers(id: string): Array<{ key: string; value: string; updated_at: string }> {
+    return this.db.prepare('SELECT key, value, updated_at FROM expert_review_answers WHERE review_id = ? ORDER BY key').all(id) as Array<{ key: string; value: string; updated_at: string }>
+  }
+  setExpertReviewAnswer(id: string, key: string, value: string | null): void {
+    if (value === null) this.db.prepare('DELETE FROM expert_review_answers WHERE review_id = ? AND key = ?').run(id, key)
+    else this.db.prepare('INSERT INTO expert_review_answers (review_id, key, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (review_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(id, key, value, now())
+  }
+
   surveyStats(survey: string): { count: number; latest: string | null } {
     const r = this.db.prepare('SELECT COUNT(*) AS n, MAX(created_at) AS latest FROM survey_responses WHERE survey = ?').get(survey) as { n: number; latest: string | null }
     return { count: r.n, latest: r.latest }
@@ -1531,8 +1585,8 @@ export class Store {
   // —— AI 发起、等用户确认的操作 ——
   addPendingAction(a: Omit<PendingActionRow, 'id' | 'status' | 'result' | 'created_at' | 'decided_at' | 'decided_by'>): PendingActionRow {
     const id = 'pa' + randomUUID().replace(/-/g, '').slice(0, 14)
-    this.db.prepare('INSERT INTO pending_actions (id, user_id, tool, action, method, path, body, summary, reason, editable, doc_id, turn_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, a.user_id, a.tool, a.action, a.method, a.path, a.body, a.summary, a.reason, a.editable, a.doc_id, a.turn_id, 'pending', now())
+    this.db.prepare('INSERT INTO pending_actions (id, user_id, tool, action, method, path, body, summary, reason, editable, doc_id, turn_id, status, created_at, followup) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, a.user_id, a.tool, a.action, a.method, a.path, a.body, a.summary, a.reason, a.editable, a.doc_id, a.turn_id, 'pending', now(), a.followup ?? null)
     return this.getPendingAction(id)!
   }
   getPendingAction(id: string): PendingActionRow | undefined {

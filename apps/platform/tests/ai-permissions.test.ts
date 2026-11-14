@@ -18,6 +18,9 @@ import { buildMcpServer } from '../src/mcp/server.ts'
 import { TurnRegistry, type TurnNotice } from '../src/mcp/turns.ts'
 import { MemoryService } from '../src/memory/service.ts'
 import { Documents } from '../src/model/runtime.ts'
+import { parseBlocks } from '../src/model/markdown.ts'
+import { schema } from '../src/model/schema.ts'
+import type { Node as PMNode } from 'prosemirror-model'
 import { OpService } from '../src/ops/service.ts'
 import { SlideRenderer } from '../src/render/slides.ts'
 import { Store } from '../src/store/db.ts'
@@ -215,5 +218,45 @@ describe('AI 的权限 = 用户的权限', () => {
     const restoreRes = await asMember('doc_manage', { action: 'restore_version', doc_id: docId, seq: 1 })
     expect(restoreRes.isError).toBe(false)
     expect(t.docs.get(docId).textContent).toBe('初始第一段。')
+  })
+})
+
+describe('修订决定卡（docs/design/PROTECTION_RESOLUTION.md 第一步）', () => {
+  it('AI 的修改因导师待采纳的修订被拦：生成「采纳修订」确认卡；用户确认后采纳并自动重新提交，AI 用 action_status 查到结果', async () => {
+    const t = await setup()
+    const user = t.admin.user.id
+    const row = t.docs.create({ owner: user, title: '稿件', content: schema.node('doc', null, parseBlocks('结果第一段。\n\n在 120 名患者中，主要终点为总生存期。')) })
+    const doc = t.docs.get(row.id)
+    const para = doc.child(1)
+    const orig = para.type.create({ ...para.attrs, suggest: 'delete', suggest_group: 'gx', suggest_author: 'Li Ming' }, para.content)
+    const rev = para.type.create({ ...para.attrs, id: 'revx', suggest: 'insert', suggest_group: 'gx', suggest_of: para.attrs.id, suggest_author: 'Li Ming' }, schema.text('在 120 名患者中，主要终点为总生存期（意向性人群）。'))
+    const content: PMNode[] = [doc.child(0), orig, rev]
+    t.docs.commit(row.id, doc.type.create(doc.attrs, content), { actor: 'user', turnId: null, ops: [] })
+    const ai = await t.connect(user)
+    const batch = { doc_id: row.id, base_rev: t.docs.rev(row.id), mode: 'apply', ops: [{ op: 'replace_text', id: doc.child(0).attrs.id as string, find: '第一段', replace: '首段' }, { op: 'replace_text', id: 'revx', find: '总生存期（意向性人群）', replace: '总生存期（意向性人群，随访 5 年）' }] }
+    const r = await ai('doc_edit', batch)
+    expect(r.isError).toBe(true)
+    expect(r.data.code).toBe('pending_suggestion')
+    expect(r.data.resolution).toMatchObject({ kind: 'revision_decision', group: 'gx', author: 'Li Ming', revision_id: 'revx' })
+    const actionId = r.data.action_id as string
+    expect(t.notices.some(n => n.type === 'action' && n.action.id === actionId)).toBe(true)
+    // 重复提交不会生成第二张卡
+    expect((await ai('doc_edit', batch)).data.action_id).toBe(actionId)
+    // AI 不能自己确认
+    expect((await t.invoke(user, 'POST', `/api/actions/${actionId}/confirm`, { json: {} })).status).toBe(403)
+    const ok = await t.call('POST', `/api/actions/${actionId}/confirm`, t.admin.token, {})
+    expect(ok.status).toBe(200)
+    expect(ok.json.status).toBe('done')
+    expect(ok.json.result).toMatchObject({ ok: true, retry: { ok: true, mode: 'apply' } })
+    // 导师的修订已采纳，AI 的修改在采纳后的文字上生效；没有东西记在导师名下。
+    // 卡里只记碰到这段的操作：同批里改第一段的那处不随卡重新提交（AI 另行提交）
+    const after: Array<{ text: string; suggest: unknown; author: unknown }> = []
+    t.docs.get(row.id).forEach(n => after.push({ text: n.textContent, suggest: n.attrs.suggest, author: n.attrs.suggest_author }))
+    expect(after.some(b => b.author === 'Li Ming')).toBe(false)
+    expect(after.map(b => b.text)).toEqual(['结果第一段。', '在 120 名患者中，主要终点为总生存期（意向性人群，随访 5 年）。'])
+    expect(after.every(b => !b.suggest)).toBe(true)
+    const status = await ai('action_status', { action_id: actionId })
+    expect(status.data.status).toBe('done')
+    expect(status.data.result.retry.ok).toBe(true)
   })
 })

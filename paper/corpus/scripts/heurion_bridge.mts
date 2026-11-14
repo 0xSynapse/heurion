@@ -1,6 +1,7 @@
 // Heurion 做法：在本地进程里起 Heurion 的 MCP 服务（与线上同一套代码，来源规则开启），经 stdio 给评测用的智能体循环调用。
 // 与外部工具组用同一个智能体循环、同一个模型，差别只在工具层。以外部智能体的身份接入（会话为观察记录键）。
 //   serve  <db> <docx> <session>  ：没有文档时先导入 docx（批注成为评论线程、修订成为待采纳修订），然后提供 MCP 服务
+//   doctor <db>                    ：模拟医生，确认 AI 生成的全部「采纳修订」卡（修订决定卡，docs/design/PROTECTION_RESOLUTION.md）
 //   export <db> <out.docx>         ：导出 Word（未改动的块原样写回，改过的按原 XML 打补丁，待采纳修订写成 Word 修订）
 // 在 apps/platform 目录下运行：node_modules/.bin/tsx <本文件> …（文献检索走真实的 PubMed / Crossref / OpenAlex / 开放获取全文）
 import { readFileSync, writeFileSync, existsSync, mkdtempSync } from 'node:fs'
@@ -26,6 +27,8 @@ const { CrossrefClient } = await imp('src/literature/crossref.ts')
 const { OpenAlexClient } = await imp('src/literature/openalex.ts')
 const { FullTextClient } = await imp('src/literature/fulltext.ts')
 const { SlideRenderer } = await imp('src/render/slides.ts')
+const { allNumbers } = await imp('src/ops/numbers.ts')
+const { acceptRevisionAndRetry } = await imp('src/ops/revision-decision.ts')
 
 const SECRET = 'bench-secret-not-for-production-0123456789'
 const USER = 'author'
@@ -56,6 +59,8 @@ function importOnce(docxPath: string): string {
 if (mode === 'serve') {
   const docId = importOnce(a3!)
   const session = a4 ?? 's1'
+  // 与平台回合一致：用户本轮消息里的数字算 AI 看到过的（平台回合由 turns 服务记；评测里用户消息由智能体循环转来，经环境变量传入）
+  if (process.env.BENCH_USER_MESSAGE) store.addObservedNumbers(`sess:${session}`, allNumbers(process.env.BENCH_USER_MESSAGE))
   const claims = verifyToken(SECRET, issueToken(SECRET, { u: USER, s: session, d: '*', p: ['read', 'write'], aud: 'mcp', ttlSeconds: 86400 }), 'mcp')
   const pubmed = new PubMedClient(fetch, process.env.NCBI_API_KEY ?? '', '')
   const fulltext = new FullTextClient(store, fetch, '')
@@ -68,6 +73,19 @@ if (mode === 'serve') {
   console.error(`[bridge] doc_id=${docId} session=${session}`)
   await server.connect(new StdioServerTransport())
   process.on('SIGTERM', () => { docs.flushAll(); process.exit(0) })
+} else if (mode === 'doctor') {
+  // 模拟医生：确认这道任务里 AI 生成的全部「采纳修订」卡（与网页上点「确认」走同一个函数），结果打印成 JSON
+  const out: unknown[] = []
+  for (const a of store.listPendingActions(USER, 'pending')) {
+    if (a.action !== 'accept_revision' || !a.followup) continue
+    store.setPendingActionStatus(a.id, 'pending', 'running', { decided_by: USER })
+    const r = acceptRevisionAndRetry({ docs, ops }, USER, JSON.parse(a.followup))
+    store.setPendingActionStatus(a.id, 'running', 'done', { result: JSON.stringify({ ok: true, ...r }), decided_by: USER })
+    out.push({ action: a.id, summary: a.summary, ...r })
+  }
+  docs.flushAll()
+  // console.log 在本程序里被转到了 stderr（stdout 留给 MCP），这里直接写 stdout
+  process.stdout.write(JSON.stringify(out) + '\n', () => process.exit(0))
 } else if (mode === 'export') {
   const docId = readFileSync(docIdFile, 'utf8').trim()
   docs.flushAll()
@@ -79,6 +97,6 @@ if (mode === 'serve') {
   console.error(`[bridge] exported ${out.bytes.length} bytes; ${out.warnings.join(' / ')}`)
   process.exit(0)
 } else {
-  console.error('用法：serve <db> <docx> <session> | export <db> <out.docx>')
+  console.error('用法：serve <db> <docx> <session> | doctor <db> | export <db> <out.docx>')
   process.exit(2)
 }

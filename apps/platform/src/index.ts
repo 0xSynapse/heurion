@@ -344,6 +344,10 @@ const surveyHtml = () => readFileSync(join(SITE, 'survey/index.html'), 'utf8')
   .replace('__SURVEY_DEF__', JSON.stringify({ id: SURVEY_ID, version: SURVEY_VERSION, sections: SURVEY_SECTIONS }).replace(/</g, '\\u003c'))
 app.get('/survey', c => servePublicHtml(c, surveyHtml()))
 app.get('/survey/', c => c.redirect('/survey'))
+// 专家审阅页（review/expert-review.ts）：私密链接，页面本身不含数据（题目经 /api/public/expert-review/<token> 读取）；不缓存、不收录
+app.get('/review/:token', c => c.html(readFileSync(join(SITE, 'expert-review/index.html'), 'utf8'), 200, {
+  'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow', 'Referrer-Policy': 'no-referrer',
+}))
 app.get('/tools', c => servePublicHtml(c, renderToolsHubHtml('zh')))
 app.get('/tools/', c => c.redirect('/tools'))
 app.get('/en/tools', c => servePublicHtml(c, renderToolsHubHtml('en')))

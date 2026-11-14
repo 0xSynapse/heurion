@@ -6,7 +6,7 @@
 # 每个任务一次独立对话（像医生逐条提要求），任务依次在同一份稿件上做；模型与调用方式与线上相同（deepseek-flash、temperature 0、默认开深度思考）。
 # 第二组任务（--taskset b）给外部工具组加两个文献工具（Europe PMC 检索、取摘要），Heurion 用它自己的文献工具。
 # MCP 服务器自带的使用说明放进系统提示（与真实客户端一致）。
-# 用法：DEEPSEEK_API_KEY=... python3 run_agent.py <skill|gongrzhe|ronin|heurion> [编号 ...] [--taskset a|b] [--workers 4] [--max-turns 30]
+# 用法：DEEPSEEK_API_KEY=... python3 run_agent.py <skill|gongrzhe|ronin|heurion> [编号 ...] [--taskset a|b] [--workers 4] [--max-turns 30] [--doctor]
 #   环境变量：DOCX_SKILL_DIR（docx 技能目录）、BENCH_ENV（虚拟环境所在目录，默认 <ROOT>/env）、HEURION_PLATFORM_DIR（apps/platform）
 import json, os, re, shutil, subprocess, sys, time, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -46,15 +46,43 @@ def sandbox_profile(work):
 '''
 
 
+MEM_LIMIT = 4 * 2**30  # 一条命令（连同它启动的全部子进程）最多用 4 GB
+
+
+def group_rss(pgid):
+    """进程组内全部进程的常驻内存之和（字节）"""
+    out = subprocess.run(['ps', '-A', '-o', 'pgid=,rss='], capture_output=True, text=True).stdout
+    return sum(int(r) * 1024 for g, r in (l.split() for l in out.splitlines() if l.strip()) if int(g) == pgid)
+
+
 def run_shell(work, cmd, timeout=180):
+    """在沙箱里跑一条命令。命令放进独立的进程组：超时或整组内存超过 MEM_LIMIT 时整组杀掉。
+    （以前超时只杀 shell，它启动的 pandoc 成了孤儿进程继续涨内存——pandoc 把 .bak 备份当 Markdown 解析会无限吃内存，
+    两次把机器拖到看门狗重启，见 2026-11-14 的崩溃报告。）"""
     prof = os.path.join(work, '.sandbox.sb')
     env = {'PATH': f'{ENV}/skill/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin', 'HOME': work, 'LANG': 'en_US.UTF-8'}
-    try:
-        r = subprocess.run(['sandbox-exec', '-f', prof, '/bin/bash', '-c', cmd], cwd=work, env=env, capture_output=True, text=True, timeout=timeout)
-        out = (r.stdout + ('\n[stderr]\n' + r.stderr if r.stderr.strip() else '')).strip()
-        return (out[:12000] + ('\n…（输出过长已截断）' if len(out) > 12000 else '')) or f'(exit {r.returncode})', r.returncode != 0
-    except subprocess.TimeoutExpired:
-        return f'命令超时（{timeout} 秒）', True
+    p = subprocess.Popen(['sandbox-exec', '-f', prof, '/bin/bash', '-c', cmd], cwd=work, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    t0, killed = time.time(), None
+    while True:
+        try:
+            stdout, stderr = p.communicate(timeout=0.5)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        if time.time() - t0 > timeout:
+            killed = f'命令超时（{timeout} 秒）'
+        elif group_rss(p.pid) > MEM_LIMIT:
+            killed = f'命令内存超过 {MEM_LIMIT // 2**30} GB，已终止'
+        if killed:
+            try:
+                os.killpg(p.pid, 9)
+            except ProcessLookupError:
+                pass
+            p.communicate()
+            return killed, True
+    out = (stdout + ('\n[stderr]\n' + stderr if stderr.strip() else '')).strip()
+    return (out[:12000] + ('\n…（输出过长已截断）' if len(out) > 12000 else '')) or f'(exit {p.returncode})', p.returncode != 0
 
 
 def epmc(query, n=5):
@@ -137,17 +165,18 @@ def run_task(arm, model, work, t, fname, max_turns, mcp=None, tools=None, lit=Fa
     return dict(task=t['id'], turns=turn + 1, hit_limit=turn + 1 >= max_turns and bool(uses), tool_calls=calls, usage=usage, seconds=round(time.time() - t0, 1), final=final[:2000])
 
 
-def run_case(arm, cid, model, max_turns, taskset='a'):
+def run_case(arm, cid, model, max_turns, taskset='a', doctor=False):
     case = os.path.join(ROOT, 'out', cid)
-    out = os.path.join(case, 'runs', arm + ('-b' if taskset == 'b' else ''))
+    # --doctor：模拟医生确认修订决定卡，结果另存 heurion-doc[-b]，不覆盖原来的结果
+    out = os.path.join(case, 'runs', arm + ('-doc' if doctor else '') + ('' if taskset == 'a' else '-' + taskset))
     work = os.path.join(out, 'work')
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(work)
     fname = 'manuscript.docx'
     shutil.copy(os.path.join(case, 'manuscript.docx'), os.path.join(work, fname))
-    tasks_file = 'tasks_b.json' if taskset == 'b' else 'tasks.json'
+    tasks_file = {'a': 'tasks.json', 'b': 'tasks_b.json', 'c': 'tasks_c.json'}[taskset]
     tasks = json.load(open(os.path.join(case, tasks_file)))
-    lit = taskset == 'b'
+    lit = taskset in ('b', 'c')
     mcp, tools = None, None
     tools_of = lambda m: [{'name': x['name'], 'description': (x.get('description') or '')[:1000], 'input_schema': x.get('inputSchema') or {'type': 'object'}} for x in m.tools()]
     if arm == 'skill':
@@ -163,12 +192,20 @@ def run_case(arm, cid, model, max_turns, taskset='a'):
         for t in tasks:
             try:
                 if arm == 'heurion':  # 每个任务一个新会话（观察记录按会话），文档在同一个数据库里
-                    mcp = MCP(['node_modules/.bin/tsx', BRIDGE, 'serve', db, os.path.join(work, fname), f'{cid}-{taskset}-{t["id"]}'], cwd=PLATFORM)
+                    # 用户消息（任务指令）经环境变量交给桥接程序记入观察记录，与平台回合记用户消息一致
+                    mcp = MCP(['node_modules/.bin/tsx', BRIDGE, 'serve', db, os.path.join(work, fname), f'{cid}-{taskset}-{t["id"]}'], cwd=PLATFORM,
+                              env={'BENCH_USER_MESSAGE': task_prompt(t, fname, arm, '')})
                     tools = tools_of(mcp)
                     doc_id = open(db + '.docid').read().strip()
                     log.append(run_task(arm, model, work, t, fname, max_turns, mcp, tools, lit, doc_id))
                     mcp.close()
                     mcp = None
+                    if doctor:
+                        r = subprocess.run(['node_modules/.bin/tsx', BRIDGE, 'doctor', db], cwd=PLATFORM, capture_output=True, text=True, timeout=300)
+                        try:
+                            log[-1]['doctor'] = json.loads(r.stdout.strip().splitlines()[-1])
+                        except Exception:
+                            log[-1]['doctor_error'] = (r.stderr or r.stdout)[-500:]
                 else:
                     log.append(run_task(arm, model, work, t, fname, max_turns, mcp, tools, lit))
             except Exception as e:
@@ -187,10 +224,12 @@ def run_case(arm, cid, model, max_turns, taskset='a'):
         sc = score.score(case, res_path, tasks_file)
     except Exception as e:  # 文件被改坏、打不开、被删除也是结果
         sc = dict(id=cid, broken=str(e)[:300])
+    if doctor and 'human_edits' in sc:
+        score.apply_doctor(sc, log)
     json.dump(dict(arm=arm, model=model, log=log), open(os.path.join(out, 'log.json'), 'w'), ensure_ascii=False, indent=1)
     json.dump(sc, open(os.path.join(out, 'score.json'), 'w'), ensure_ascii=False, indent=1)
     shutil.rmtree(os.path.join(work, 'skill'), ignore_errors=True)
-    print(cid, arm, taskset, 'broken' if 'broken' in sc else f"edits {sc['human_edits_kept']} comments {sc['comments_kept']} flat {sc['citation_fields']['flattened_to_text']} "
+    print(cid, arm + ('-doc' if doctor else ''), taskset, 'broken' if 'broken' in sc else f"edits {sc['human_edits_kept']} comments {sc['comments_kept']} flat {sc['citation_fields']['flattened_to_text']} "
           f"dropped {sc['citation_fields']['dropped']} collateral {sc['collateral']['changed']} tasks {sc['tasks_done']}",
           'out_tok', sum(l.get('usage', {}).get('output_tokens', 0) for l in log), flush=True)
 
@@ -207,7 +246,7 @@ if __name__ == '__main__':
 
     def safe(c):
         try:
-            run_case(arm, c, model, max_turns, taskset)
+            run_case(arm, c, model, max_turns, taskset, '--doctor' in argv)
         except Exception as e:  # 一篇出错不影响其他篇
             print(c, arm, 'ERROR', str(e)[:200], flush=True)
     with ThreadPoolExecutor(workers) as ex:

@@ -1,5 +1,5 @@
 import { strFromU8, strToU8, zipSync } from 'fflate'
-import type { Mark, Node as PMNode } from 'prosemirror-model'
+import { Fragment, type Mark, type Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { referencePlan } from '../model/references.ts'
 import { detectCitationManager, displayText, endnoteInstr, entryPrefix, fieldRuns, parseFormatted, zoteroInstr } from './citation-fields.ts'
@@ -11,7 +11,7 @@ import { looksLikeHeaderRow } from '../model/table-header.ts'
 import type { CitationRow, CommentRow, ReplyRow } from '../store/db.ts'
 import { bodyChildrenRaw, elementChildrenRaw, safeUnzipDocx } from './docx-import.ts'
 import { patchParagraph } from './docx-patch.ts'
-import { stripProv } from '../model/provenance.ts'
+import { hasAiText, stripProv, withoutAiText } from '../model/provenance.ts'
 
 /**
  * 平台模型 → docx（PLATFORM.md §6 导出）：修补式。
@@ -34,6 +34,8 @@ export interface ExportInput {
   measurements?: MeasureLookup
   comments: CommentRow[]
   asset: (id: string) => { mime: string; bytes: Uint8Array } | null
+  /** AI 未确认的文字是否写成 AI 名下的修订（默认是；false = 按普通文字导出，例如用户明确要一份干净稿） */
+  aiAsRevisions?: boolean
 }
 
 export interface ExportResult { bytes: Uint8Array; warnings: string[] }
@@ -255,9 +257,41 @@ function restoreIds(n: PMNode, rootId: string | null = null): PMNode {
   return n.type.create(attrs, n.isLeaf ? undefined : kids, n.marks)
 }
 
+/** 导出时 AI 未确认文字的修订作者（Word 里显示的名字） */
+export const AI_AUTHOR = 'Heurion AI'
+
+/**
+ * AI 写的、还没人确认的文字（来源标记，docs/design/PROVENANCE.md）在 Word 里写成 AI 名下的修订：
+ * 顶层段落 / 标题里有这种文字的，改成一对待采纳修订（原文版本 = 拒绝 AI 的文字后的样子，修订版 = 现在的样子），
+ * 由下面的修订导出写成词级的 w:ins / w:del；整段都是 AI 新写的段落写成整段插入。
+ * 这样 Word 里也看得出哪些是 AI 写的、没人确认过，医生接受修订即确认。已经是待采纳修订的块（本来就以修订导出）不动；
+ * 表格单元格、列表项里的 AI 文字仍按普通文字导出（局限，见 PROVENANCE.md）。
+ */
+function aiTextAsRevisions(doc: PMNode, baseline: PMNode | null | undefined): PMNode {
+  const base = new Map<string, PMNode>()
+  baseline?.forEach(n => { if (n.attrs.id) base.set(n.attrs.id as string, n) })
+  const out: PMNode[] = []
+  let changed = false
+  doc.forEach(n => {
+    if (!n.isTextblock || n.attrs.suggest || !('suggest' in n.attrs) || !hasAiText(n)) { out.push(n); return }
+    changed = true
+    const id = n.attrs.id as string
+    const group = `prov-${id}`
+    const now = stripProv(n)
+    const orig = withoutAiText(n, base.get(id))
+    if (!orig.textContent.trim() && !base.has(id)) {
+      out.push(now.type.create({ ...now.attrs, suggest: 'insert', suggest_group: group, suggest_of: null, suggest_author: AI_AUTHOR }, now.content, now.marks))
+      return
+    }
+    out.push(orig.type.create({ ...orig.attrs, suggest: 'delete', suggest_group: group, suggest_of: null, suggest_author: AI_AUTHOR }, orig.content, orig.marks))
+    out.push(now.type.create({ ...now.attrs, id: `${id}~ai`, suggest: 'insert', suggest_group: group, suggest_of: id, suggest_author: AI_AUTHOR }, now.content, now.marks))
+  })
+  return changed ? doc.copy(Fragment.from(out)) : doc
+}
+
 export function exportDocx(input: ExportInput): ExportResult {
-  // 来源标记只在平台内部用，不进 Word：先去掉，免得同一段文字因标记不同被拆成多个 run
-  input = { ...input, doc: stripProv(input.doc) }
+  // AI 未确认的文字写成 AI 名下的修订；其余来源标记只在平台内部用，不进 Word：去掉，免得同一段文字因标记不同被拆成多个 run
+  input = { ...input, doc: stripProv(input.aiAsRevisions === false ? input.doc : aiTextAsRevisions(input.doc, input.baseline)) }
   let baseFiles: Record<string, Uint8Array> | null = null
   if (input.pkg) {
     try {
@@ -562,6 +596,39 @@ export function exportDocx(input: ExportInput): ExportResult {
   const skipRevision = new Set<string>()
   /** 合作者修订里改过修订以外文字的（原文版本 id → 修订版）：写出时按原文 XML 打补丁，合作者的修订原样保留。 */
   const coauthorEdited = new Map<string, PMNode>()
+  /**
+   * 合作者修订所在段落上的平台评论：在原文 XML（合作者的词级修订原样在里面）外围加整段批注范围。
+   * 导入的 Word 批注范围已在原文里，不重复加；跨段落的线程只在它最后一段收尾。
+   */
+  const withParagraphComments = (xml: string, nodes: Array<PMNode | null | undefined>): string => {
+    const threads = new Set<string>()
+    for (const x of nodes) {
+      if (!x) continue
+      for (const t of blockThreads.get(x.attrs.id as string) ?? []) threads.add(t)
+      x.descendants(c => { for (const m of c.marks) if (m.type.name === 'comment' && openComments.has(m.attrs.thread as string)) threads.add(m.attrs.thread as string); return true })
+    }
+    let starts = ''
+    let ends = ''
+    for (const t of threads) {
+      if (started.has(t)) continue
+      started.add(t)
+      commentIds.set(t, wordRef(openComments.get(t)!)?.id ?? nextCommentId++)
+      const cid = commentIds.get(t)!
+      if (xml.includes(`<w:commentRangeStart w:id="${cid}"/>`)) continue // 导入的 Word 批注：范围已在原文里
+      starts += `<w:commentRangeStart w:id="${cid}"/>`
+      const end = lastPara.get(t)
+      if (!end || nodes.includes(end)) ends += `<w:commentRangeEnd w:id="${cid}"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${cid}"/></w:r>`
+    }
+    const ppr = /^<w:p\b[^>]*>(<w:pPr\b[\s\S]*?<\/w:pPr>|<w:pPr\/>)?/.exec(xml)![0]
+    return ppr + starts + xml.slice(ppr.length).replace(/<\/w:p>$/, `${ends}</w:p>`)
+  }
+  /** 去掉平台评论的标记（文字不变）：给合作者修订段落打补丁时只比文字，评论另按整段批注加 */
+  const withoutPlatformComments = (n: PMNode): PMNode => {
+    if (n.isText) return n.mark(n.marks.filter(m => m.type.name !== 'comment' || !openComments.has(m.attrs.thread as string) || !!wordRef(openComments.get(m.attrs.thread as string)!)))
+    const kids: PMNode[] = []
+    n.forEach(c => kids.push(withoutPlatformComments(c)))
+    return n.copy(Fragment.from(kids))
+  }
   input.doc.forEach((n, _off, i) => {
     if (!n.isTextblock || !n.attrs.suggest_author) return
     const next = i + 1 < input.doc.childCount ? input.doc.child(i + 1) : null
@@ -574,29 +641,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       return !!b && sigNoComments(b) === sigNoComments(x)
     }
     if ((!unchanged(n) || (partner && !unchanged(partner))) && input.src(n.attrs.id as string) && commentOnly(n) && commentOnly(partner)) {
-      const threads = new Set<string>()
-      for (const x of [n, partner]) {
-        if (!x) continue
-        for (const t of blockThreads.get(x.attrs.id as string) ?? []) threads.add(t)
-        x.descendants(c => { for (const m of c.marks) if (m.type.name === 'comment' && openComments.has(m.attrs.thread as string)) threads.add(m.attrs.thread as string); return true })
-      }
-      let xml = input.src(n.attrs.id as string)!
-      let starts = ''
-      let ends = ''
-      for (const t of threads) {
-        if (started.has(t)) continue
-        started.add(t)
-        commentIds.set(t, wordRef(openComments.get(t)!)?.id ?? nextCommentId++)
-        const cid = commentIds.get(t)!
-        if (xml.includes(`<w:commentRangeStart w:id="${cid}"/>`)) continue // 导入的 Word 批注：范围已在原文里
-        starts += `<w:commentRangeStart w:id="${cid}"/>`
-        const end = lastPara.get(t)
-        if (!end || end === n || end === partner) ends += `<w:commentRangeEnd w:id="${cid}"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${cid}"/></w:r>`
-      }
-      const ppr = /^<w:p\b[^>]*>(<w:pPr\b[\s\S]*?<\/w:pPr>|<w:pPr\/>)?/.exec(xml)![0]
-      xml = ppr + starts + xml.slice(ppr.length).replace(/<\/w:p>$/, `${ends}</w:p>`)
       if (partner) skipRevision.add(partner.attrs.id as string)
-      verbatimRevision.set(n.attrs.id as string, xml)
+      verbatimRevision.set(n.attrs.id as string, withParagraphComments(input.src(n.attrs.id as string)!, [n, partner]))
       return
     }
     const src = unchanged(n)
@@ -682,7 +728,14 @@ export function exportDocx(input: ExportInput): ExportResult {
     const edited = coauthorEdited.get(id)
     if (edited) {
       // 修订版相对导入时的改动打到原文 XML 上（原文 XML 里有合作者的 w:ins / w:del，接受修订后的文字即修订版）
-      const xml = patchXml(input.src(id)!, baseline.get(edited.attrs.id as string)!, cleared(edited))
+      const base = baseline.get(edited.attrs.id as string)!
+      let xml = patchXml(input.src(id)!, base, cleared(edited))
+      // 段落上还有平台新建的评论（例如 AI 被拦后把建议写成了评论）：只按文字打补丁，评论加成整段批注——
+      // 否则退回「整段删除 + 整段插入」并记在合作者名下：他改的一个词看起来像改了整段，AI 的小改也混进他的修订
+      if (!xml) {
+        const plain = patchXml(input.src(id)!, withoutPlatformComments(base), withoutPlatformComments(cleared(edited)))
+        if (plain) xml = withParagraphComments(plain, [node, edited])
+      }
       if (xml) { skipRevision.add(edited.attrs.id as string); return xml }
     }
     const plain = cleared(node)
