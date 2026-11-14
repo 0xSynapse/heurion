@@ -427,6 +427,23 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
     expect(t.docs.get(t.docId).eq(before)).toBe(true)
   })
 
+  it('合作者修订所在的段落只加了平台评论：原文 XML 原样写回（合作者的词级修订不变），评论作为整段批注加上', () => {
+    const t = importInto(docx(TRACKED + p('其他。')))
+    const ins = t.docs.get(t.docId).child(1).attrs.id as string
+    const c = t.store.addComment({ doc_id: t.docId, node_id: ins, snippet: '总生存期' })
+    t.store.addReply(c.id, 'ai', '建议把这段改得更简洁，请先处理 Li Ming 的修订')
+    t.docs.commit(t.docId, attachComment(t.docs.get(t.docId), ins, '总生存期', c.id).doc, { actor: 'user', turnId: null, ops: [] })
+    const body = bodyOf(t.exportNow().bytes)
+    // 合作者的修订仍是原来的词级修订：只删「。」、插入「（意向性治疗人群）。」，没有整段删除 / 整段插入
+    expect(body).toContain('<w:del w:id="1" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"><w:r><w:delText>。</w:delText></w:r></w:del>')
+    expect(body).toContain('<w:ins w:id="2" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"><w:r><w:t>（意向性治疗人群）。</w:t></w:r></w:ins>')
+    expect(body).not.toMatch(/<w:rPr><w:del w:id="\d+" w:author="Li Ming"/)
+    expect(body.match(/主要终点为总生存期/g)).toHaveLength(1)
+    const starts = [...body.matchAll(/<w:commentRangeStart w:id="(\d+)"\/>/g)].map(m => m[1])
+    expect(starts).toHaveLength(1)
+    expect([...body.matchAll(/<w:commentRangeEnd w:id="(\d+)"\/>/g)].map(m => m[1])).toEqual(starts)
+  })
+
   it('用户本人以待采纳模式改合作者修订以外的文字：仍是同一对修订，不另起一对', () => {
     const t = importInto(docx(TRACKED))
     const ins = t.docs.get(t.docId).child(1).attrs.id as string

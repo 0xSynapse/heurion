@@ -222,6 +222,21 @@ function exportable(doc: PMNode): PMNode {
   return out
 }
 
+/** 块的内容签名（不计评论标记）：判断「只加了评论」。评论范围会把文字切成几段，去掉评论标记后把相邻、格式相同的文字合并再比。 */
+function sigNoComments(n: PMNode): string {
+  const marks = (x: PMNode) => JSON.stringify(x.marks.filter(m => m.type.name !== 'comment').map(m => m.toJSON()))
+  if (!n.isTextblock) return JSON.stringify({ t: n.type.name, a: n.attrs, c: (() => { const c: string[] = []; n.forEach(x => c.push(sigNoComments(x))); return c })() })
+  const segs: Array<{ m: string; text?: string; atom?: string }> = []
+  n.forEach(x => {
+    const m = marks(x)
+    const last = segs.at(-1)
+    if (x.isText && last && last.text !== undefined && last.m === m) last.text += x.text!
+    else if (x.isText) segs.push({ m, text: x.text! })
+    else segs.push({ m, atom: JSON.stringify({ t: x.type.name, a: x.attrs }) })
+  })
+  return JSON.stringify({ t: n.type.name, a: n.attrs, segs })
+}
+
 /** 表格的待采纳修订对：原表（delete）紧跟着修订版（insert，suggest_of = 原表 id）。 */
 function tablePair(doc: PMNode, n: PMNode, index: number): boolean {
   if (n.type.name !== 'table') return false
@@ -551,6 +566,39 @@ export function exportDocx(input: ExportInput): ExportResult {
     if (!n.isTextblock || !n.attrs.suggest_author) return
     const next = i + 1 < input.doc.childCount ? input.doc.child(i + 1) : null
     const partner = n.attrs.suggest === 'delete' && next?.attrs.suggest === 'insert' && next.attrs.suggest_of === n.attrs.id ? next : null
+    // 只加了平台评论（文字与合作者的修订都没动）：原文 XML 原样写回（合作者的词级修订不变），评论作为整段批注加上。
+    // 否则走重新生成，合作者的词级修订会变成「整段删除 + 整段插入」，看不出他改了什么
+    const commentOnly = (x: PMNode | null) => {
+      if (!x) return true
+      const b = baseline.get(x.attrs.id as string)
+      return !!b && sigNoComments(b) === sigNoComments(x)
+    }
+    if ((!unchanged(n) || (partner && !unchanged(partner))) && input.src(n.attrs.id as string) && commentOnly(n) && commentOnly(partner)) {
+      const threads = new Set<string>()
+      for (const x of [n, partner]) {
+        if (!x) continue
+        for (const t of blockThreads.get(x.attrs.id as string) ?? []) threads.add(t)
+        x.descendants(c => { for (const m of c.marks) if (m.type.name === 'comment' && openComments.has(m.attrs.thread as string)) threads.add(m.attrs.thread as string); return true })
+      }
+      let xml = input.src(n.attrs.id as string)!
+      let starts = ''
+      let ends = ''
+      for (const t of threads) {
+        if (started.has(t)) continue
+        started.add(t)
+        commentIds.set(t, wordRef(openComments.get(t)!)?.id ?? nextCommentId++)
+        const cid = commentIds.get(t)!
+        if (xml.includes(`<w:commentRangeStart w:id="${cid}"/>`)) continue // 导入的 Word 批注：范围已在原文里
+        starts += `<w:commentRangeStart w:id="${cid}"/>`
+        const end = lastPara.get(t)
+        if (!end || end === n || end === partner) ends += `<w:commentRangeEnd w:id="${cid}"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${cid}"/></w:r>`
+      }
+      const ppr = /^<w:p\b[^>]*>(<w:pPr\b[\s\S]*?<\/w:pPr>|<w:pPr\/>)?/.exec(xml)![0]
+      xml = ppr + starts + xml.slice(ppr.length).replace(/<\/w:p>$/, `${ends}</w:p>`)
+      if (partner) skipRevision.add(partner.attrs.id as string)
+      verbatimRevision.set(n.attrs.id as string, xml)
+      return
+    }
     const src = unchanged(n)
     // 修订版改过（不论原文版本是否同步改过——AI 的改动会同步过去，用户直接改修订版则不会）：按原文 XML 打补丁
     const partnerChanged = !!partner && !unchanged(partner) && !baseline.get(partner.attrs.id as string)?.eq(partner)
