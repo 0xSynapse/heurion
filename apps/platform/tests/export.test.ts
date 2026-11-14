@@ -1094,7 +1094,8 @@ describe('全链路业务流 Edge Cases（导入 → 编辑/审阅/协同/回滚
     expect(xml).toContain('<w:spacing w:line="360" w:lineRule="auto"/>')
     expect(xml).toContain('<w:t>[1]</w:t>')
     expect(xml).toContain('<w:t>[4]</w:t>')
-    expect(xml).toContain('[4] Qian D, et al. Novel HNSCC trial. NEJM 2026.')
+    // 新条目沿用原表的编号格式（「1、 …」）
+    expect(xml).toContain('4、 Qian D, et al. Novel HNSCC trial. NEJM 2026.')
   })
 })
 

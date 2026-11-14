@@ -20,6 +20,23 @@ export interface PatchRender {
   markOk(mark: Mark): boolean
   /** 段落里嵌着的图（导入时拆成了其后的图块）原样留在原处：调用方已确认这些图块仍原样紧跟在后面。 */
   drawings?: boolean
+  /**
+   * 修订模式（导出平台的待采纳修订）：删掉的文字写成 w:del（w:delText），新文字写成 w:ins，而不是直接改掉。
+   * 返回一次修订的属性（w:id、w:author、w:date），每次调用取一个新的 id。
+   */
+  track?: () => string
+}
+
+/** 把一段（若干 run 的）XML 标为删除：run 包进 w:del，w:t → w:delText，w:instrText → w:delInstrText；超链接等容器包里面的 run。 */
+export function asDeleted(xml: string, attrs: () => string): string {
+  const one = (el: string): string => {
+    if (/^<w:r\b/.test(el)) {
+      return `<w:del ${attrs()}>${el.replace(/<w:t(\s|>|\/)/g, '<w:delText$1').replace(/<\/w:t>/g, '</w:delText>').replace(/<w:instrText(\s|>)/g, '<w:delInstrText$1').replace(/<\/w:instrText>/g, '</w:delInstrText>')}</w:del>`
+    }
+    const m = /^<(w:(?:hyperlink|fldSimple|smartTag|customXml))\b[^>]*>/.exec(el)
+    return m && !/\/>$/.test(m[0]) ? `${m[0]}${elementChildrenRaw(el).map(one).join('')}</${m[1]}>` : el
+  }
+  return elementChildrenRaw(`<x>${xml}</x>`).map(one).join('')
 }
 
 // —— 记号 ——
@@ -228,6 +245,46 @@ function align(a: string[], b: string[]): { keep: boolean[]; ins: number[][] } |
   return { keep, ins }
 }
 
+/**
+ * 修订模式按词对齐：英文单词、数字（含小数点、百分号）整体作为一个单位，汉字、空格、标点、原子各自为一个单位。
+ * 否则「3 年 → 36 个月」会被切成「3」保留、「6」插入，审阅的人很难读。结果换算回逐字符的 keep / ins；
+ * 替换时新文字放在被删文字之后（Word 的习惯是先删后插）。
+ */
+function alignWords(a: Tok[], b: Tok[]): { keep: boolean[]; ins: number[][] } | null {
+  const WORD = /[A-Za-z0-9.%\u00B5\u03B1-\u03C9]/
+  const group = (ts: Tok[]): number[][] => {
+    const out: number[][] = []
+    ts.forEach((t, i) => {
+      const w = t.text !== null && WORD.test(t.text)
+      const last = out.at(-1)
+      const prev = i > 0 ? ts[i - 1]! : null
+      if (w && last && prev && prev.text !== null && WORD.test(prev.text) && markSig(prev.marks) === markSig(t.marks)) last.push(i)
+      else out.push([i])
+    })
+    return out
+  }
+  const ga = group(a)
+  const gb = group(b)
+  const plan = align(ga.map(g => g.map(i => a[i]!.sig).join('\u0000')), gb.map(g => g.map(i => b[i]!.sig).join('\u0000')))
+  if (!plan) return null
+  const keep = new Array<boolean>(a.length).fill(false)
+  const ins: number[][] = Array.from({ length: a.length + 1 }, () => [])
+  ga.forEach((g, k) => { for (const i of g) keep[i] = plan.keep[k]! })
+  plan.ins.forEach((js, k) => {
+    const at = k < ga.length ? ga[k]![0]! : a.length
+    for (const j of js) ins[at]!.push(...gb[j]!)
+  })
+  for (let i = 0; i < a.length; i++) {
+    if (!ins[i]!.length || keep[i]) continue
+    let j = i
+    while (j < a.length && !keep[j]) j++
+    ins[j] = [...ins[i]!, ...ins[j]!]
+    ins[i] = []
+    i = j - 1
+  }
+  return { keep, ins }
+}
+
 // —— 生成 ——
 
 const MARK_PROPS = ['b', 'bCs', 'i', 'iCs', 'u', 'vertAlign', 'rStyle', 'rPrChange', 'ins', 'del']
@@ -257,7 +314,7 @@ export function patchParagraph(raw: string, before: PMNode, after: PMNode, rende
     const same = k.startsWith('t:') ? o.text === k.slice(2) : k === 'br' ? o.node?.type.name === 'hard_break' : o.node?.type.name === 'word_inline'
     if (!same) return null
   }
-  const plan = align(old.map(t => t.sig), now.map(t => t.sig))
+  const plan = render.track ? alignWords(old, now) : align(old.map(t => t.sig), now.map(t => t.sig))
   if (!plan) return null
   const { keep, ins } = plan
   const total = old.length
@@ -290,8 +347,9 @@ export function patchParagraph(raw: string, before: PMNode, after: PMNode, rende
       }
     }
     flush()
-    return out
+    return render.track && out ? `<w:ins ${render.track()}>${out}</w:ins>` : out
   }
+  const track = render.track
 
   const emit = (nodes: RNode[], inLink: boolean): string => {
     let out = ''
@@ -316,6 +374,7 @@ export function patchParagraph(raw: string, before: PMNode, after: PMNode, rende
       else if (n.k === 'atom') {
         if (ins[n.tok]!.length) out += inserted(ins[n.tok]!, inLink)
         if (keep[n.tok]) out += n.xml
+        else if (track) out += asDeleted(n.xml, track)
         if (n.tok === total - 1 && ins[total]!.length) out += inserted(ins[total]!, inLink)
       } else {
         lastRPr = n.rPr
@@ -328,14 +387,18 @@ export function patchParagraph(raw: string, before: PMNode, after: PMNode, rende
         let text = ''
         const flushText = () => { if (text) { seg += `<w:t xml:space="preserve">${esc(text)}</w:t>`; has = true; text = '' } }
         const close = () => { flushText(); if (has || seg) out += `${n.open}${n.rPr}${seg}</w:r>`; seg = ''; has = false }
+        // 修订模式：删掉的文字攒起来，写成一个 w:del 里的 run（沿用原 run 的属性）
+        let deleted = ''
+        const flushDel = () => { if (deleted) { close(); out += `<w:del ${track!()}>${n.open}${n.rPr}<w:delText xml:space="preserve">${esc(deleted)}</w:delText></w:r></w:del>`; deleted = '' } }
         const put = (idx: number[]) => {
           let other: number[] = []
           const spill = () => { if (other.length) { close(); out += inserted(other, inLink); lastRPr = n.rPr; other = [] } }
           for (const j of idx) {
             const t = now[j]!
-            if (t.text !== null && t.text !== '\t' && runSig !== null && markSig(t.marks) === runSig && t.link === inLink) { spill(); text += t.text }
+            if (!track && t.text !== null && t.text !== '\t' && runSig !== null && markSig(t.marks) === runSig && t.link === inLink) { spill(); text += t.text }
             else other.push(j)
           }
+          if (track) flushDel()
           spill()
         }
         const before = (tok: number) => { if (ins[tok]!.length) put(ins[tok]!) }
@@ -345,7 +408,8 @@ export function patchParagraph(raw: string, before: PMNode, after: PMNode, rende
           if (part.k === 'tab' || part.k === 'br') {
             before(part.tok)
             flushText()
-            if (keep[part.tok]) { seg += part.xml; has = true }
+            if (keep[part.tok]) { if (track) flushDel(); seg += part.xml; has = true }
+            else if (track) { flushDel(); close(); out += `<w:del ${track()}>${n.open}${n.rPr}${part.xml}</w:r></w:del>` }
             after(part.tok)
             continue
           }
@@ -360,11 +424,14 @@ export function patchParagraph(raw: string, before: PMNode, after: PMNode, rende
           chars.forEach((ch, c) => {
             const tok = part.tok + c
             before(tok)
-            if (keep[tok]) text += ch
+            if (keep[tok]) { if (track) flushDel(); text += ch }
+            else if (track) { flushText(); deleted += ch }
             after(tok)
           })
+          if (track) flushDel()
           flushText()
         }
+        if (track) flushDel()
         close()
       }
     }

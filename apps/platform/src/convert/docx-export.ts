@@ -2,6 +2,7 @@ import { strFromU8, strToU8, zipSync } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { Resvg } from '@resvg/resvg-js'
 import { referencePlan } from '../model/references.ts'
+import { detectCitationManager, displayText, endnoteInstr, entryPrefix, fieldRuns, parseFormatted, zoteroInstr } from './citation-fields.ts'
 import { measureExportText, type MeasureLookup } from '../model/measurements.ts'
 import { colWidths, normalizeHexColor } from '../model/schema.ts'
 import { resolveSuggestions } from '../ops/suggest.ts'
@@ -206,9 +207,37 @@ function exportable(doc: PMNode): PMNode {
     if (n.attrs.suggest && !(parent === doc && n.isTextblock)) groups.add(n.attrs.suggest_group as string)
     return true
   })
+  // 整表的修订对导出为单元格里的词级修订（见 trackedTable）：只由这种配对和顶层段落组成的组不按拒绝处理
+  const pairOnly = new Set<string>()
+  const blocked = new Set<string>()
+  doc.forEach((n, _o, i) => {
+    const g = n.attrs.suggest_group as string | null
+    if (!g || !n.attrs.suggest) return
+    if (tablePair(doc, n, i)) pairOnly.add(g)
+    else if (!n.isTextblock) blocked.add(g)
+  })
+  for (const g of pairOnly) if (!blocked.has(g)) groups.delete(g)
   let out = doc
   for (const g of groups) out = resolveSuggestions(out, g, false)
   return out
+}
+
+/** 表格的待采纳修订对：原表（delete）紧跟着修订版（insert，suggest_of = 原表 id）。 */
+function tablePair(doc: PMNode, n: PMNode, index: number): boolean {
+  if (n.type.name !== 'table') return false
+  if (n.attrs.suggest === 'delete') { const next = index + 1 < doc.childCount ? doc.child(index + 1) : null; return next?.type.name === 'table' && next.attrs.suggest === 'insert' && next.attrs.suggest_of === n.attrs.id }
+  if (n.attrs.suggest === 'insert' && n.attrs.suggest_of) { const prev = index > 0 ? doc.child(index - 1) : null; return prev?.type.name === 'table' && prev.attrs.suggest === 'delete' && prev.attrs.id === n.attrs.suggest_of }
+  return false
+}
+
+/** 修订版表格里的块取回原表的 id（修订版内部重新分配了 id，原 id 记在 suggest_of），并去掉修订属性。 */
+function restoreIds(n: PMNode, rootId: string | null = null): PMNode {
+  const kids: PMNode[] = []
+  n.forEach(c => kids.push(restoreIds(c)))
+  if (!('id' in n.attrs)) return n.isText ? n : n.type.create(n.attrs, n.isLeaf ? undefined : kids, n.marks)
+  const attrs: Record<string, unknown> = { ...n.attrs, id: rootId ?? (n.attrs.suggest_of as string | null) ?? n.attrs.id }
+  for (const k of ['suggest', 'suggest_group', 'suggest_of', 'suggest_author']) if (k in attrs) attrs[k] = null
+  return n.type.create(attrs, n.isLeaf ? undefined : kids, n.marks)
 }
 
 export function exportDocx(input: ExportInput): ExportResult {
@@ -311,6 +340,20 @@ export function exportDocx(input: ExportInput): ExportResult {
   // 引用编号与参考文献表：正文末尾已有用户自己的文献表时，平台引用接在其后编号（见 model/references.ts）
   const refPlan = referencePlan(input.doc, input.citations)
   const citeNumber = refPlan.numbers
+  // 稿件用 EndNote / Zotero 时，平台引用写成它认得的引用域（带题录），作者在 Word 里更新引用即可正常编号、进参考文献表
+  const citeManager = detectCitationManager(originalXml)
+  const citeRows = new Map(input.citations.map(c => [c.id, c]))
+  let fieldCites = 0
+  const citeRun = (citeId: string, base: string): string => {
+    const num = citeNumber.get(citeId)
+    const row = citeRows.get(citeId)
+    if (!citeManager.manager || num === undefined || !row) return `<w:r>${runProps([], '<w:vertAlign w:val="superscript"/>', base)}<w:t>[${num ?? '?'}]</w:t></w:r>`
+    const shown = displayText(num, citeManager.style)
+    const rPr = runProps([], citeManager.style === 'sup' ? '<w:vertAlign w:val="superscript"/>' : '', base)
+    const ref = parseFormatted(row.formatted, row.doi, row.pmid)
+    fieldCites++
+    return fieldRuns(citeManager.manager === 'endnote' ? endnoteInstr(ref, 90_000 + num, shown) : zoteroInstr(ref, 90_000 + num, `heurion${num}`, shown), shown, rPr)
+  }
   const measureText = (n: PMNode) => measureExportText(input.measurements?.get(n.attrs.m_id as string), n.attrs.m_id as string)
   // 导出的评论线程：open 的，以及导入的 Word 批注（已解决的也写回，在 Word 里标为已解决）
   const openComments = new Map(input.comments.filter(c => c.status === 'open' || c.source_ref).map(c => [c.id, c]))
@@ -398,9 +441,8 @@ export function exportDocx(input: ExportInput): ExportResult {
       if (child.isText) run = textRuns(child.text!, child.marks, baseRPr)
       else if (child.type.name === 'hard_break') run = '<w:r><w:br/></w:r>'
       else if (child.type.name === 'citation') {
-        const n = citeNumber.get(child.attrs.cite_id as string)
-        // 上标编号沿用所在段落的字体字号（导入稿件的模板格式）
-        run = `<w:r>${runProps([], '<w:vertAlign w:val="superscript"/>', baseRPr)}<w:t>[${n ?? '?'}]</w:t></w:r>`
+        // 上标编号沿用所在段落的字体字号（导入稿件的模板格式）；EndNote / Zotero 稿件写成引用域
+        run = citeRun(child.attrs.cite_id as string, baseRPr)
       } else if (child.type.name === 'measurement') {
         // 测量原子写成普通文字（数值 + 单位，状态异常时注明），格式随原子上的 mark 与段落字体
         run = textRuns(measureText(child), child.marks, baseRPr)
@@ -551,11 +593,44 @@ export function exportDocx(input: ExportInput): ExportResult {
     }
     return `${open}${ppr}${kids.filter(k => !/^<w:pPr\b/.test(k)).map(wrap).join('')}</w:p>`
   }
+  const trackAs = (author: string) => () => `w:id="${nextRevision++}" w:author="${esc(author)}" w:date="${revisionDate}"`
+  /** 原文版本 id → 修订版（平台里的待采纳修订对；段落与表格） */
+  const insertOf = new Map<string, PMNode>()
+  input.doc.forEach(n => { if (n.attrs.suggest === 'insert' && n.attrs.suggest_of) insertOf.set(String(n.attrs.suggest_of), n) })
+  /**
+   * 修订对写成一个段落里的词级修订：以原段落的 XML 为底，只把变化的文字写成 w:del / w:ins（导师在 Word 里看到的是改了哪几个字，
+   * 而不是整段删除 + 整段重写）。原段落自导入后没改过时用导入的原文 XML，否则用重新生成的 XML；都不行返回 null（退回整段修订）。
+   */
+  const trackedPair = (orig: PMNode, now: PMNode, author: string): string | null => {
+    const id = orig.attrs.id as string
+    // 挂在整段上的批注（没有文字范围）由重新生成的路径写范围标记：退回整段修订
+    if ((blockThreads.get(id)?.length ?? 0) > 0 || (blockThreads.get(now.attrs.id as string)?.length ?? 0) > 0) return null
+    const plainOrig = cleared(orig)
+    const plainNow = cleared(now).type.create({ ...cleared(now).attrs, id }, now.content, now.marks)
+    if (['level', 'style', 'align'].some(k => plainOrig.attrs[k] !== plainNow.attrs[k]) || plainOrig.type !== plainNow.type) return null
+    const raw = input.src(id)
+    const base = baseline.get(id)
+    if (raw && base && base.eq(plainOrig) && /^<w:p\b/.test(raw)) {
+      const xml = patchXml(raw, base, plainNow, false, trackAs(author))
+      if (xml) return xml
+    }
+    // 重新生成会登记批注范围（有副作用）：带批注的段落不试，退回整段修订
+    let commented = false
+    for (const n of [plainOrig, plainNow]) n.descendants(c => { if (c.marks.some(m => m.type.name === 'comment')) commented = true; return !commented })
+    if (commented) return null
+    const gen = regenerated(plainOrig, '') ?? fallbackPara(plainOrig)
+    return patchXml(gen, plainOrig, plainNow, false, trackAs(author))
+  }
   const tracked = (node: PMNode): string => {
     const id = node.attrs.id as string
     if (skipRevision.has(id)) return ''
     const kept = verbatimRevision.get(id)
     if (kept) return kept
+    const partner = node.attrs.suggest === 'delete' ? insertOf.get(id) : undefined
+    if (partner && !coauthorEdited.has(id) && !skipRevision.has(partner.attrs.id as string)) {
+      const xml = trackedPair(node, partner, String(partner.attrs.suggest_author ?? 'Heurion AI'))
+      if (xml) { skipRevision.add(partner.attrs.id as string); return xml }
+    }
     const edited = coauthorEdited.get(id)
     if (edited) {
       // 修订版相对导入时的改动打到原文 XML 上（原文 XML 里有合作者的 w:ins / w:del，接受修订后的文字即修订版）
@@ -598,7 +673,7 @@ export function exportDocx(input: ExportInput): ExportResult {
   }
 
   /** 按原始 XML 给一个段落打补丁（段落、表格单元格里的段落共用）；不能打补丁返回 null。 */
-  const patchXml = (raw: string, before: PMNode, node: PMNode, drawings = false): string | null => {
+  const patchXml = (raw: string, before: PMNode, node: PMNode, drawings = false, track?: () => string): string | null => {
     // 导入的 Word 批注的范围标记须在这段原文里（评论跟着文字移到了别的段落时，原文里没有它的范围 → 重新生成）
     let rangesHere = true
     node.descendants(c => {
@@ -612,9 +687,10 @@ export function exportDocx(input: ExportInput): ExportResult {
     if (!rangesHere) return null
     const xml = patchParagraph(raw, before, node, {
       drawings,
+      track,
       runs: (text, marks, base) => textRuns(text, marks, base),
       atom: (n, base) => n.type.name === 'hard_break' ? '<w:r><w:br/></w:r>'
-        : n.type.name === 'citation' ? `<w:r>${runProps([], '<w:vertAlign w:val="superscript"/>', base)}<w:t>[${citeNumber.get(n.attrs.cite_id as string) ?? '?'}]</w:t></w:r>`
+        : n.type.name === 'citation' ? citeRun(n.attrs.cite_id as string, base)
         : n.type.name === 'word_inline' ? ((n.attrs.xml as string) || null)
         : n.type.name === 'measurement' ? textRuns(measureText(n), n.marks, base) : null,
       // 平台里新建的批注线程要重新生成范围标记；导入的 Word 批注的范围标记在原文里
@@ -638,7 +714,7 @@ export function exportDocx(input: ExportInput): ExportResult {
    * 表格结构没变（行、单元格、合并、每格段落数都相同）、只改了单元格里的文字：以原表 XML 为底，
    * 改过的单元格段落按原文打补丁。嵌套表、行的修订、单元格属性等模型表达不了的内容都原样保留。
    */
-  const patchedTable = (node: PMNode): string | null => {
+  const patchedTable = (node: PMNode, track?: () => string): string | null => {
     const id = node.attrs.id as string | null
     const raw = id ? input.src(id) : null
     const before = id ? baseline.get(id) : undefined
@@ -678,7 +754,7 @@ export function exportDocx(input: ExportInput): ExportResult {
           if (b.eq(n)) return x
           // 段落属性（样式、对齐）改了：交给重新生成
           const sameAttrs = ['style', 'align'].every(a => b.attrs[a] === n.attrs[a])
-          const patchedP = n.type.name === 'paragraph' && b.type === n.type && sameAttrs ? patchXml(x, b, n, /<w:(drawing|pict)\b/.test(x)) : null
+          const patchedP = n.type.name === 'paragraph' && b.type === n.type && sameAttrs ? patchXml(x, b, n, /<w:(drawing|pict)\b/.test(x), track) : null
           if (patchedP === null) failed = true
           return patchedP ?? x
         })
@@ -814,7 +890,28 @@ export function exportDocx(input: ExportInput): ExportResult {
   const stripEls = (inner: string, names: string[]) =>
     elementChildrenRaw(`<x>${inner}</x>`).filter(k => !names.some(n => new RegExp(`^<w:${n}\\b`).test(k))).join('')
 
+  /**
+   * 整表的待采纳修订对（AI 改了单元格）：以原表 XML 为底，改过的单元格段落写成词级修订（导师在 Word 里看到哪一格改了什么）。
+   * 原表自导入后改过、表格结构变了、或打不了补丁时返回 null：按「拒绝」导出原表（与以前一致）。
+   */
+  const trackedTable = (orig: PMNode, now: PMNode): string | null => {
+    const id = orig.attrs.id as string
+    const base = baseline.get(id)
+    const plainOrig = restoreIds(orig, id)
+    if (!base || !base.eq(plainOrig)) return null
+    return patchedTable(restoreIds(now, id), trackAs(String(now.attrs.suggest_author ?? 'Heurion AI')))
+  }
+
   const table = (node: PMNode): string => {
+    if (node.attrs.suggest) {
+      const id = node.attrs.id as string
+      if (node.attrs.suggest === 'insert') return '' // 与前面的原表配对，已在原表处写出
+      const partner = insertOf.get(id)
+      const xml = partner ? trackedTable(node, partner) : null
+      if (partner) skipRevision.add(partner.attrs.id as string)
+      if (xml) return xml
+      node = restoreIds(node, id)
+    }
     const src = unchanged(node)
     if (src) return src
     const kept = patchedTable(node)
@@ -1111,9 +1208,28 @@ export function exportDocx(input: ExportInput): ExportResult {
       if (!styles.has(h.toLowerCase())) missingHeading.add(1)
       body += `<w:p><w:pPr><w:pStyle w:val="${esc(h)}"/></w:pPr><w:r><w:t>参考文献</w:t></w:r></w:p>`
     }
+    // 编号格式照原表最后一条（「29.」+ 制表符、「29. 」「29、」、「[29] 」）
+    const lastEntry = refPlan.userCount > 0 ? input.doc.child(refPlan.bodyEnd - 1).textContent.trim() : null
+    let appended = ''
     for (const { id, n } of refPlan.append) {
-      body += `<w:p>${pprXml}<w:r>${rprXml}<w:t xml:space="preserve">[${n}] ${esc(byId.get(id)!.formatted)}</w:t></w:r></w:p>`
+      const pre = entryPrefix(lastEntry, n)
+      appended += pre.tab
+        ? `<w:p>${pprXml}<w:r>${rprXml}<w:t xml:space="preserve">${esc(pre.text)}</w:t></w:r><w:r>${rprXml}<w:tab/></w:r><w:r>${rprXml}<w:t xml:space="preserve">${esc(byId.get(id)!.formatted)}</w:t></w:r></w:p>`
+        : `<w:p>${pprXml}<w:r>${rprXml}<w:t xml:space="preserve">${esc(pre.text + byId.get(id)!.formatted)}</w:t></w:r></w:p>`
     }
+    // EndNote / Zotero 的参考文献表是一个跨段落的域：新条目放进域里（把域的结束标记移到最后一条新条目），
+    // 作者更新引用时软件整体重排，不会多出一份
+    const endAt = body.lastIndexOf('w:fldCharType="end"')
+    const listAt = Math.max(body.lastIndexOf('ADDIN EN.REFLIST'), body.lastIndexOf('ADDIN ZOTERO_BIBL'))
+    const rs = endAt > 0 ? Math.max(body.lastIndexOf('<w:r>', endAt), body.lastIndexOf('<w:r ', endAt)) : -1
+    const re = endAt > 0 ? body.indexOf('</w:r>', endAt) : -1
+    const endRun = rs >= 0 && re > 0 ? body.slice(rs, re + 6) : ''
+    if (citeManager.manager && listAt >= 0 && listAt < endAt && endRun && !/<w:t\b/.test(endRun) && refPlan.bodyEnd === input.doc.childCount) {
+      body = body.slice(0, rs) + body.slice(re + 6)
+      appended = appended.replace(/<\/w:p>$/, `${endRun}</w:p>`)
+    }
+    body += appended
+    if (fieldCites > 0) warnings.push(`新加的引用已写成 ${citeManager.manager === 'endnote' ? 'EndNote' : 'Zotero'} 引用（带题录）：在 Word 里用 ${citeManager.manager === 'endnote' ? 'EndNote 的「Update Citations and Bibliography」' : 'Zotero 的「Refresh」'}重新编号`)
   } else if (refPlan.userCount > 0 && refPlan.duplicates > 0) {
     warnings.push(`正文里的引用都已在末尾的参考文献表中（${refPlan.duplicates} 条），沿用表中编号`)
   }

@@ -139,6 +139,71 @@ describe('Word 行内结构：脚注引用与域代码', () => {
     expect(importDocx(t.exportNow().bytes).warnings.join('')).not.toContain('域代码')
   })
 
+  // 带标题的 EndNote / Zotero 稿件：正文一条引用，参考文献表两条（域跨段落）
+  const managed = (kind: 'endnote' | 'zotero') => {
+    const cite = kind === 'endnote' ? ENDNOTE_CITE : ENDNOTE_CITE.replace('ADDIN EN.CITE &lt;EndNote&gt;&lt;/EndNote&gt;', 'ADDIN ZOTERO_ITEM CSL_CITATION {&quot;citationID&quot;:&quot;a1&quot;}')
+    const begin = kind === 'endnote' ? REFLIST_BEGIN : REFLIST_BEGIN.replace('ADDIN EN.REFLIST', 'ADDIN ZOTERO_BIBL {&quot;uncited&quot;:[]} CSL_BIBLIOGRAPHY')
+    return docx(
+      `<w:p><w:r><w:t xml:space="preserve">既往研究支持该结论</w:t></w:r>${cite}<w:r><w:t>。</w:t></w:r></w:p>`
+      + p('还缺一条依据。')
+      + '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>References</w:t></w:r></w:p>'
+      + bibPara('1.\tSmith J. Outcomes of esophagectomy. Lancet. 2019;393:100-9.', begin)
+      + bibPara('2.\tWang L. Radiotherapy for T4 tumors. JCO. 2020;38:1-8.', '', REFLIST_END))
+  }
+  const AMA = 'Ajani JA, D’Amico TA, Bentrem DJ, et al. Esophageal and esophagogastric junction cancers, version 2.2019. J Natl Compr Canc Netw. 2019;17(7):855-883. doi:10.6004/jnccn.2019.0033'
+
+  it('EndNote 稿件里平台新加的引用：写成带题录的 EndNote 引用域（显示样式照原文），新条目放进参考文献表的域里', () => {
+    const t = importInto(managed('endnote'))
+    const id = t.docs.get(t.docId).child(1).attrs.id as string
+    const c = t.store.upsertCitation({ doc_id: t.docId, doi: '10.6004/jnccn.2019.0033', pmid: '31319389', formatted: AMA, url: null })
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '依据。', replace: `依据[@c:${c.id}]。` }] }, { actor: 'user', turnId: null })
+    const r = t.exportNow()
+    const body = bodyOf(r.bytes)
+    expect(body.match(/ADDIN EN\.CITE /g)).toHaveLength(2)
+    expect(body).toContain('&lt;electronic-resource-num&gt;10.6004/jnccn.2019.0033&lt;/electronic-resource-num&gt;')
+    expect(body).toContain('&lt;author&gt;Ajani, JA&lt;/author&gt;')
+    expect(body).toMatch(/<w:t xml:space="preserve">\[3\]<\/w:t>/)
+    // 新条目「3.」+ 制表符，在参考文献表的域里：域结束标记在新条目之后
+    const entryAt = body.lastIndexOf('Esophageal and esophagogastric') // 第一次出现在正文引用域的题录里
+    expect(entryAt).toBeGreaterThan(body.indexOf('Wang L.'))
+    expect(body.lastIndexOf('w:fldCharType="end"')).toBeGreaterThan(entryAt)
+    expect(body).toMatch(/<w:t xml:space="preserve">3\.<\/w:t><\/w:r><w:r><w:tab\/><\/w:r>/)
+    expect(body.match(/fldCharType="begin"/g)!.length).toBe(body.match(/fldCharType="end"/g)!.length)
+    expect(r.warnings.join('')).toContain('EndNote')
+    expect(importDocx(r.bytes).warnings.join('')).not.toContain('域代码')
+  })
+
+  it('Zotero 稿件里平台新加的引用：写成带 itemData 的 ZOTERO_ITEM 引用域', () => {
+    const t = importInto(managed('zotero'))
+    const id = t.docs.get(t.docId).child(1).attrs.id as string
+    const c = t.store.upsertCitation({ doc_id: t.docId, doi: '10.6004/jnccn.2019.0033', pmid: null, formatted: AMA, url: null })
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '依据。', replace: `依据[@c:${c.id}]。` }] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes).replace(/&quot;/g, '"')
+    expect(body).toContain('"citationID":"heurion3"')
+    expect(body).toContain('"DOI":"10.6004/jnccn.2019.0033"')
+    expect(body).toContain('"container-title":"J Natl Compr Canc Netw"')
+    expect(body.match(/fldCharType="begin"/g)!.length).toBe(body.match(/fldCharType="end"/g)!.length)
+  })
+
+  it('题录从格式化文本解析：作者、题目、期刊、年、卷期页', async () => {
+    const { parseFormatted } = await import('../src/convert/citation-fields.ts')
+    const r = parseFormatted(AMA, '10.6004/jnccn.2019.0033', null)
+    expect(r.authors.slice(0, 2)).toEqual([{ family: 'Ajani', given: 'JA' }, { family: 'D’Amico', given: 'TA' }])
+    expect(r.title).toBe('Esophageal and esophagogastric junction cancers, version 2.2019')
+    expect(r.journal).toBe('J Natl Compr Canc Netw')
+    expect([r.year, r.volume, r.issue, r.pages]).toEqual(['2019', '17', '7', '855-883'])
+  })
+
+  it('纯文本编号的稿件：新条目沿用参考文献表的编号格式', () => {
+    const t = importInto(docx(p('还缺一条依据。') + '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>References</w:t></w:r></w:p>' + p('1. Smith J. Outcomes. Lancet. 2019.') + p('2. Wang L. Radiotherapy. JCO. 2020.')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    const c = t.store.upsertCitation({ doc_id: t.docId, doi: '10.6004/jnccn.2019.0033', pmid: null, formatted: AMA, url: null })
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '依据。', replace: `依据[@c:${c.id}]。` }] }, { actor: 'user', turnId: null })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).toContain('<w:t xml:space="preserve">3. Ajani JA')
+    expect(body).not.toContain('ADDIN EN.CITE')
+  })
+
   it('全文 begin / end 对不上（域没有结束）：仍提示残缺', () => {
     const t = importInto(docx(bibPara('1. Smith J. Lancet. 2019.', REFLIST_BEGIN) + bibPara('2. Wang L. JCO. 2020.')))
     expect(t.warnings.join('')).toContain('不完整的域代码')
@@ -389,22 +454,25 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
     expect(body).not.toMatch(/<w:(ins|del)\b/)
   })
 
-  it('平台的待采纳修订导出为 Word 修订（原文删除、修订版插入，段落标记一并标记）；再导入还原为同样的修订', () => {
+  it('平台的待采纳修订导出为同一段里的词级 Word 修订（只标变化的词，数字整体替换）；再导入还原为同样的修订', () => {
     const t = importInto(docx(p('随访 3 年。') + p('其他。')))
     const id = t.docs.get(t.docId).child(0).attrs.id as string
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id, find: '3 年', replace: '36 个月' }] }, { actor: 'ai', turnId: 't1' })
     const out = t.exportNow().bytes
     const body = bodyOf(out)
-    expect(body).toMatch(/<w:del w:id="\d+" w:author="Heurion AI"[^>]*><w:r>(?:<w:rPr>.*?<\/w:rPr>)?<w:delText xml:space="preserve">随访 3 年。<\/w:delText><\/w:r><\/w:del>/)
-    expect(body).toMatch(/<w:ins w:id="\d+" w:author="Heurion AI"[^>]*><w:r>(?:<w:rPr>.*?<\/w:rPr>)?<w:t xml:space="preserve">随访 36 个月。<\/w:t><\/w:r><\/w:ins>/)
-    expect(body).toMatch(/<w:rPr><w:del w:id="\d+" w:author="Heurion AI"/)
+    const first = body.split('</w:p>')[0]!
+    expect(first).toMatch(/<w:t[^>]*>随访 <\/w:t>/)
+    expect(first).toMatch(/<w:del w:id="\d+" w:author="Heurion AI"[^>]*><w:r>(?:<w:rPr>.*?<\/w:rPr>)?<w:delText xml:space="preserve">3 年<\/w:delText><\/w:r><\/w:del>/)
+    expect(first).toMatch(/<w:ins w:id="\d+" w:author="Heurion AI"[^>]*><w:r>(?:<w:rPr>.*?<\/w:rPr>)?<w:t xml:space="preserve">36 个月<\/w:t><\/w:r><\/w:ins>/)
+    // 只有一个段落，段落标记不标删除
+    expect(body).not.toMatch(/<w:rPr><w:del w:id="\d+" w:author="Heurion AI"/)
     const back = importDocx(out)
     const kinds: Array<[unknown, unknown, string]> = []
     back.doc.forEach(n => kinds.push([n.attrs.suggest, n.attrs.suggest_author, n.textContent]))
     expect(kinds.slice(0, 2)).toEqual([['delete', 'Heurion AI', '随访 3 年。'], ['insert', 'Heurion AI', '随访 36 个月。']])
   })
 
-  it('待采纳修订导出时 w14:paraId 保留在修订版（w:ins）段落上，待删除（w:del）段落剥离 paraId 避免重复', () => {
+  it('待采纳修订导出为原段落上的词级修订：w14:paraId 只出现一次，原文的字符格式（斜体 P）原样保留', () => {
     const NS = 'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"'
     const srcPara = `<w:p ${NS} w14:paraId="1A2B3C23" w14:textId="77777777"><w:r><w:t xml:space="preserve">两组差异显著（</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>P</w:t></w:r><w:r><w:t xml:space="preserve"> &lt; 0.001）。</w:t></w:r></w:p>`
     const t = importInto(docx(srcPara + p('其他。')))
@@ -412,11 +480,11 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id, find: '两组差异显著', replace: '意向性人群两组差异显著' }] }, { actor: 'user', turnId: null })
     const body = bodyOf(t.exportNow().bytes)
     const paras = [...body.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)].map(m => m[0])
-    const delPara = paras.find(x => /<w:del\b/.test(x))!
-    const insPara = paras.find(x => /<w:ins\b/.test(x))!
-    expect(delPara).not.toContain('w14:paraId="1A2B3C23"')
-    expect(insPara).toContain('w14:paraId="1A2B3C23"')
-    expect(insPara).toMatch(/<w:rPr>[\s\S]*?<w:i\/>[\s\S]*?<\/w:rPr><w:t[^>]*>P<\/w:t>/)
+    const withId = paras.filter(x => x.includes('w14:paraId="1A2B3C23"'))
+    expect(withId).toHaveLength(1)
+    expect(withId[0]).toMatch(/<w:ins\b[^>]*><w:r>(?:<w:rPr>.*?<\/w:rPr>)?<w:t[^>]*>意向性人群<\/w:t>/)
+    expect(withId[0]).not.toMatch(/<w:del\b/)
+    expect(withId[0]).toMatch(/<w:rPr>[\s\S]*?<w:i\/>[\s\S]*?<\/w:rPr><w:t[^>]*>P<\/w:t>/)
   })
 })
 
@@ -445,6 +513,21 @@ describe('改过的段落按原文 XML 打补丁：只改变化的文字，其�
     expect(out).toContain('<w:color w:val="FF0000"/></w:rPr><w:t xml:space="preserve">甲组 </w:t>')
     expect(out).toMatch(/<w:b\/><\/w:rPr><w:t xml:space="preserve">63\.0%<\/w:t>/)
     expect(out).toContain('，乙组 52.7%（P = 0.13）。')
+  })
+
+  it('AI 以建议模式改表格单元格：导出为该单元格里的词级修订（以前整组按拒绝导出，建议在 Word 里消失）', () => {
+    const tc = (inner: string) => `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr>${inner}</w:tc>`
+    const tbl = `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr>${tc(p('Local recurrence'))}${tc(p('1'))}</w:tr><w:tr>${tc(p('Distant'))}${tc(p('27'))}</w:tr></w:tbl>`
+    const t = importInto(docx(tbl + p('其他。')))
+    const cell = t.docs.get(t.docId).child(0).child(0).child(1).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id: cell, find: '1', replace: '2' }] }, { actor: 'ai', turnId: 't1' })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body.match(/<w:tbl>/g)).toHaveLength(1)
+    expect(body).toMatch(/<w:del w:id="\d+" w:author="Heurion AI"[^>]*><w:r>(?:<w:rPr>.*?<\/w:rPr>)?<w:delText xml:space="preserve">1<\/w:delText><\/w:r><\/w:del><w:ins w:id="\d+" w:author="Heurion AI"[^>]*><w:r>(?:<w:rPr>.*?<\/w:rPr>)?<w:t xml:space="preserve">2<\/w:t>/)
+    expect(body).toContain('27')
+    // 单元格里只有一个段落
+    const cells = [...body.matchAll(/<w:tc>[\s\S]*?<\/w:tc>/g)].map(m => m[0])
+    expect(cells.every(c => (c.match(/<w:p\b/g) ?? []).length === 1)).toBe(true)
   })
 
   it('表格结构没变、改了单元格文字：以原表为底，嵌套表与行的修订原样保留', () => {
