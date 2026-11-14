@@ -138,11 +138,22 @@ export const EditBatch = z.object({
 export type EditBatch = z.infer<typeof EditBatch>
 
 /** 操作层的结构化错误（PLATFORM.md §5.3）。 */
+/** 因合作者修订被拦时附在错误上的出路（见 service.ts revisionDecision） */
+export interface RevisionDecision {
+  kind: 'revision_decision'
+  group: string
+  author: string
+  /** 原文版本（待删除）块 id；采纳后修订版改用这个 id */
+  original_id: string
+  /** 修订版（待新增）块 id */
+  revision_id: string | null
+}
+
 export class OpError extends Error {
   constructor(
     readonly code: string,
     message: string,
-    readonly extra: { op_index?: number; hint?: string; current?: unknown } = {},
+    readonly extra: { op_index?: number; hint?: string; current?: unknown; resolution?: RevisionDecision } = {},
   ) {
     super(message)
   }

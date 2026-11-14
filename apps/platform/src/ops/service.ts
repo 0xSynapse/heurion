@@ -14,7 +14,7 @@ import { toSuggestion } from './suggest.ts'
 import { guardPhrRedlines, type PhrMember } from './phr-guard.ts'
 import { DOI, manualCitation } from './citation-check.ts'
 import { findBareMeasurements, measurementsIn } from '../model/measurements.ts'
-import { OpError, opTexts, targetIds, type DocOp, type EditBatch } from './types.ts'
+import { OpError, opTexts, targetIds, type DocOp, type EditBatch, type RevisionDecision } from './types.ts'
 import { applyDeckOps, deckOpTexts, deckTargetIds, type DeckEditBatch, type DeckOp } from './deck.ts'
 import { readLayouts } from '../convert/pptx-layouts.ts'
 import { isPlatformPackage } from '../convert/pptx-template.ts'
@@ -52,6 +52,29 @@ function stripProvMarkers<T>(batch: T): T {
 
 /** 计入「保护记录」的拒绝：来源规则，以及保护人的修改、引用与测量的守卫。 */
 const PROTECTION_CODES = new Set(['coauthor_revision_pending', 'unobserved_number', 'unread_citation', 'conflict_user_edited', 'existing_citation', 'citation_not_registered', 'citation_unknown', 'measurement_lost', 'bare_measurement'])
+
+/**
+ * 因合作者修订被拦时附在错误上的「出路」（docs/design/PROTECTION_RESOLUTION.md 第一步「修订决定卡」）：
+ * 编辑工具据此给用户生成「采纳这条修订」的确认卡，用户确认后平台先以用户身份采纳，再按 AI 这次的修改重新提交。
+ */
+
+/** 合作者修订对里的任一块 → 这条修订的出路信息；不是成对的合作者修订时返回 undefined。 */
+export function revisionDecision(doc: PMNode, node: PMNode): RevisionDecision | undefined {
+  const group = node.attrs.suggest_group as string | null
+  const author = node.attrs.suggest_author as string | null
+  if (!group || !author) return undefined
+  let original: string | null = node.attrs.suggest === 'delete' ? node.attrs.id as string : (node.attrs.suggest_of as string | null)
+  let revision: string | null = node.attrs.suggest === 'insert' ? node.attrs.id as string : null
+  if (!revision && original) {
+    doc.descendants(n => {
+      if (n.attrs.suggest === 'insert' && n.attrs.suggest_of === original) revision = n.attrs.id as string
+      return !revision
+    })
+  }
+  if (!original) original = revision
+  if (!original) return undefined
+  return { kind: 'revision_decision', group, author, original_id: original, revision_id: revision }
+}
 
 export interface EditMeta {
   actor: Actor
@@ -405,6 +428,7 @@ export class OpService {
         if (!author) continue
         throw new OpError('coauthor_revision_pending', `块 ${id} 里有 ${author} 待采纳的修订：AI 的改动不能并进他的修订（会被记到他名下），这类段落里只能直接做安全小改`, {
           op_index: i,
+          resolution: revisionDecision(before, node!),
           hint: `请用户先在文档里采纳或拒绝 ${author} 的这条修订再改；或者用 comment_add 把修改建议写成评论，告诉用户。`,
         })
       }
@@ -443,6 +467,7 @@ export class OpService {
           const copy = coauthor.attrs.suggest === 'delete' ? copyOf.get(coauthor.attrs.id as string) : undefined
           throw new OpError('pending_suggestion', `块 ${id} 是 ${coauthor.attrs.suggest_author} 留下的待采纳修订`, {
             op_index: i,
+            resolution: revisionDecision(before, coauthor),
             hint: copy
               ? `这是合作者 ${coauthor.attrs.suggest_author} 修订前的原文版本。要改这段里别的文字，请对它的修订版 {#${copy}} 用 replace_text 或 replace_block，只改 ${coauthor.attrs.suggest_author} 修订以外的部分（修订本身不能替他改）。`
               : `这是合作者 ${coauthor.attrs.suggest_author} 在 Word 里留下的修订，不能替他改；只能用 replace_text / replace_block 改修订版里修订以外的文字，或等用户采纳或拒绝后再改。`,
@@ -494,6 +519,7 @@ export class OpService {
         if (!mirrored || extra.length > 0) {
           const changed = ins.textBetween(ms, me, '', '¤') || `（删去了「${d.textBetween(ms, meD, '', '¤')}」）`
           throw new OpError('pending_suggestion', `块 ${ins.attrs.id} 的改动碰到了 ${who} 的修订`, {
+            resolution: revisionDecision(before, ins),
             hint: `${who} 的修订改动的是「${changed}」，这部分不能替他改；只改修订之前或之后的文字（一次一处、改成一段），两处都要改请分两次提交。`,
           })
         }

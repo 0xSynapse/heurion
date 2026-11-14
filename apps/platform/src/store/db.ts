@@ -28,6 +28,8 @@ export interface PendingActionRow {
   doc_id: string | null; turn_id: string | null
   status: 'pending' | 'running' | 'done' | 'failed' | 'rejected' | 'expired'
   result: string | null; created_at: string; decided_at: string | null; decided_by: string | null
+  /** JSON：确认并执行成功后平台要接着做的事（例如采纳合作者修订后重新提交 AI 被拦的修改） */
+  followup?: string | null
 }
 
 /** Aegis Application Protocol (AAP-1.0) Agent Grant：绑定医生/研究员账户、租户与本地 Aegis-OS 节点 Ed25519 公钥。 */
@@ -898,6 +900,8 @@ export class Store {
     CREATE INDEX IF NOT EXISTS idx_op_log_turn ON op_log (turn_id);
     CREATE INDEX IF NOT EXISTS idx_turn_queue_user ON turn_queue (user_id);
     CREATE INDEX IF NOT EXISTS idx_docs_owner_deleted ON docs (owner, deleted_at);`)
+    const actionCols = (this.db.prepare('PRAGMA table_info(pending_actions)').all() as Array<{ name: string }>).map(c => c.name)
+    if (!actionCols.includes('followup')) this.db.exec('ALTER TABLE pending_actions ADD COLUMN followup TEXT')
     this.db.exec('CREATE INDEX IF NOT EXISTS users_tenant ON users (tenant_id)')
     // AI 最后一次看到各块内容时的版本（冲突守卫 noteSeen；以前只在内存，服务重启就丢，见 docs/design/PROVENANCE.md 4.3）
     this.db.exec(`CREATE TABLE IF NOT EXISTS ai_reads (
@@ -1531,8 +1535,8 @@ export class Store {
   // —— AI 发起、等用户确认的操作 ——
   addPendingAction(a: Omit<PendingActionRow, 'id' | 'status' | 'result' | 'created_at' | 'decided_at' | 'decided_by'>): PendingActionRow {
     const id = 'pa' + randomUUID().replace(/-/g, '').slice(0, 14)
-    this.db.prepare('INSERT INTO pending_actions (id, user_id, tool, action, method, path, body, summary, reason, editable, doc_id, turn_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, a.user_id, a.tool, a.action, a.method, a.path, a.body, a.summary, a.reason, a.editable, a.doc_id, a.turn_id, 'pending', now())
+    this.db.prepare('INSERT INTO pending_actions (id, user_id, tool, action, method, path, body, summary, reason, editable, doc_id, turn_id, status, created_at, followup) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, a.user_id, a.tool, a.action, a.method, a.path, a.body, a.summary, a.reason, a.editable, a.doc_id, a.turn_id, 'pending', now(), a.followup ?? null)
     return this.getPendingAction(id)!
   }
   getPendingAction(id: string): PendingActionRow | undefined {

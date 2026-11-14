@@ -57,6 +57,12 @@ export function initActions(api: Api, notice: Notice) {
       const r = a.result?.response as { error?: string } | string | null | undefined
       return `执行失败：${typeof r === 'string' ? r : r?.error ?? `（${a.result?.status}）`}`
     }
+    // 修订决定卡：采纳导师的修订后，平台按 AI 被拦的修改重新提交（仍经全部检查）
+    if (a.action === 'accept_revision' && a.status === 'done') {
+      const retry = (a.result as { retry?: { ok: boolean; mode?: string; message?: string } } | null)?.retry
+      if (retry?.ok) return `已采纳修订；AI 的修改已重新提交${retry.mode === 'suggest' ? '（作为待采纳修订，请在文档里审阅）' : '并生效'}`
+      if (retry) return `已采纳修订；AI 的修改重新提交时被检查拦下：${retry.message ?? ''}（AI 会据此调整）`
+    }
     return STATUS[a.status] ?? ''
   }
 

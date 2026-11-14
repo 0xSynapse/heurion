@@ -93,6 +93,7 @@ import { schema } from '../model/schema.ts'
 import type { OpService } from '../ops/service.ts'
 import { pendingGroups, resolveSuggestions, slidePreviewView, withoutPending } from '../ops/suggest.ts'
 import { EditBatch, OpError } from '../ops/types.ts'
+import { acceptRevisionAndRetry, type RevisionFollowup } from '../ops/revision-decision.ts'
 import { DeckEditBatch } from '../ops/deck.ts'
 import { commentPrompt, wantsAi, phrBriefPrompt, type TurnBusEvent, type TurnOptions, type TurnService } from '../turns/service.ts'
 import { referencePlan } from '../model/references.ts'
@@ -2754,6 +2755,20 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       : stored.json !== undefined ? { json: stored.json }
       : stored.bytes_b64 !== undefined ? { bytes: new Uint8Array(Buffer.from(stored.bytes_b64, 'base64')), mime: stored.mime ?? 'application/octet-stream' }
       : { form: stored.form ?? {}, ...(stored.file ? { file: { bytes: new Uint8Array(Buffer.from(stored.file.b64, 'base64')), name: stored.file.name, mime: stored.file.mime } } : {}) }
+    // 修订决定卡：以用户身份采纳合作者的修订，再以 AI 身份重新提交被拦的修改（仍经全部守卫）
+    if (a.action === 'accept_revision' && a.followup) {
+      const followup = JSON.parse(a.followup) as RevisionFollowup
+      const row = a.doc_id ? store.getDoc(a.doc_id) : undefined
+      const role = row && !row.deleted_at ? access.docRole(user, row) : null
+      if (!row || !role || !allows(role, 'write')) {
+        store.setPendingActionStatus(a.id, 'running', 'failed', { result: JSON.stringify({ ok: false, error: '没有这篇文档的编辑权限' }), decided_by: user })
+        return c.json(actionView(store.getPendingAction(a.id)!), 403)
+      }
+      const out = acceptRevisionAndRetry({ docs, ops: deps.ops }, user, followup)
+      store.setPendingActionStatus(a.id, 'running', 'done', { result: JSON.stringify({ ok: true, ...out }), decided_by: user })
+      audit(c, 'ai.action_confirm', { detail: `${a.tool}.${a.action}：${a.summary}（重新提交${out.retry.ok ? '成功' : `被拦：${out.retry.code}`}）`, status: 200 })
+      return c.json(actionView(store.getPendingAction(a.id)!))
+    }
     const r = await invoke(user, a.method, a.path, body, { via: 'ai-confirmed', confirmedBy: user })
     const result = { status: r.status, ok: r.ok, response: r.json ?? (r.text ? r.text.slice(0, 2000) : null) }
     store.setPendingActionStatus(a.id, 'running', r.ok ? 'done' : 'failed', { result: JSON.stringify(result), decided_by: user })

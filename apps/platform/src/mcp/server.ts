@@ -37,7 +37,8 @@ import { AnchorError, attachComment, locate, threadMarks } from '../model/anchor
 import { sourcePager } from '../convert/source-pages.ts'
 import type { Documents } from '../model/runtime.ts'
 import type { OpService } from '../ops/service.ts'
-import { DocOp, EditBatch, OpError } from '../ops/types.ts'
+import { DocOp, EditBatch, OpError, type RevisionDecision } from '../ops/types.ts'
+import type { RevisionFollowup } from '../ops/revision-decision.ts'
 import { referencePlan } from '../model/references.ts'
 import { diff, outline, read, ReadError, search } from '../views/read.ts'
 import { DatasetError, type DatasetService } from '../datasets/service.ts'
@@ -370,6 +371,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     const denied = ctx.check(args.doc_id, 'write')
     if (denied) return denied
     if (store.getDoc(args.doc_id)!.kind === 'deck') return fail('wrong_tool', '这是幻灯片文档，请用 deck_edit')
+    let batchMode: 'apply' | 'suggest' = 'apply'
     try {
       const forced = ctx.activeTurn(args.doc_id)?.mode
       const mode = forced ?? args.mode ?? 'apply'
@@ -377,6 +379,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
         const v = deps.ops.validate({ ...args, mode, dry_run: true }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null, observe: ctx.observeKey })
         return json({ dry_run: true, ...v })
       }
+      batchMode = mode
       const result = deps.ops.edit({ ...args, mode }, { actor: 'ai', turnId: ctx.turnId, answering: ctx.activeTurn(args.doc_id)?.answering ?? null, observe: ctx.observeKey })
       ctx.touch(args.doc_id)
       const converted = result.provenance?.converted_to_suggest
@@ -393,10 +396,38 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
         ...(unverifiable?.length ? { needs_user_check: { numbers: unverifiable, note: '这些数字所在句子引用的文献只有摘要，摘要里找不到；已写入，请在回复里请用户对照全文核对。' } } : {}),
       })
     } catch (err) {
+      if (err instanceof OpError && err.extra.resolution && !args.dry_run) {
+        return fail(err.code, err.message, { ...err.extra, ...revisionCard(args.doc_id, { ...args, mode: batchMode }, err.extra.resolution) })
+      }
       if (err instanceof OpError) return fail(err.code, err.message, err.extra)
       throw err
     }
   })
+
+  /**
+   * 修订决定卡（docs/design/PROTECTION_RESOLUTION.md 第一步）：AI 的修改因合作者待采纳的修订被拦时，
+   * 给用户生成「采纳 X 的修订」确认卡；用户确认后平台采纳并按 AI 这次的修改重新提交（仍经全部守卫）。
+   * 同一条修订已有待确认的卡时不重复生成。
+   */
+  function revisionCard(docId: string, batch: EditBatch, decision: RevisionDecision): { resolution: RevisionDecision; action_id: string; note: string } {
+    const path = `/api/docs/${docId}/suggestions/${encodeURIComponent(decision.group)}/accept`
+    const existing = store.listPendingActions(claims.u, 'pending').find(a => a.action === 'accept_revision' && a.path === path)
+    const note = `已在对话里给用户生成「采纳 ${decision.author} 的修订」确认卡。用户确认后，平台会先采纳这条修订，再自动按你这次的修改重新提交（仍经全部检查）。向用户说明原因，不要重复提交这批修改；结果用 action_status 查。用户也可能拒绝，那时改用 comment_add 把建议写成评论。`
+    if (existing) return { resolution: decision, action_id: existing.id, note }
+    const turn = ctx.activeTurn(docId)
+    const followup: RevisionFollowup = {
+      kind: 'revision_decision', decision, batch: { ...batch, dry_run: undefined },
+      meta: { turnId: ctx.turnId, observe: ctx.observeKey, answering: turn?.answering ?? null },
+    }
+    const row = store.addPendingAction({
+      user_id: claims.u, tool: 'doc_edit', action: 'accept_revision', method: 'POST', path, body: null,
+      summary: `采纳 ${decision.author} 在这段的修订，然后按 AI 的修改继续`,
+      reason: `AI 要改的段落里有 ${decision.author} 尚未采纳的修订。为了不把 AI 的改动记到 ${decision.author} 名下，需要你先决定是否采纳这条修订。`,
+      editable: null, doc_id: docId, turn_id: turn?.turnId ?? ctx.turnId, followup: JSON.stringify(followup),
+    })
+    ctx.notify({ type: 'action', action: { id: row.id, tool: row.tool, action: row.action, summary: row.summary, reason: row.reason, editable: null, status: 'pending', created_at: row.created_at } })
+    return { resolution: decision, action_id: row.id, note }
+  }
 
   server.registerTool('doc_validate', {
     description:
