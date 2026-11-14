@@ -51,7 +51,7 @@ function stripProvMarkers<T>(batch: T): T {
 }
 
 /** 计入「保护记录」的拒绝：来源规则，以及保护人的修改、引用与测量的守卫。 */
-const PROTECTION_CODES = new Set(['unobserved_number', 'unread_citation', 'conflict_user_edited', 'existing_citation', 'citation_not_registered', 'citation_unknown', 'measurement_lost', 'bare_measurement'])
+const PROTECTION_CODES = new Set(['coauthor_revision_pending', 'unobserved_number', 'unread_citation', 'conflict_user_edited', 'existing_citation', 'citation_not_registered', 'citation_unknown', 'measurement_lost', 'bare_measurement'])
 
 export interface EditMeta {
   actor: Actor
@@ -236,6 +236,7 @@ export class OpService {
     }
 
     this.guardPending(batch, before, targetsOf, ai)
+    if (ai && !deck && batch.mode === 'suggest') this.guardCoauthorSuggest(batch as EditBatch, before, targetsOf)
     if (ai) {
       this.guardConflicts(batch, before, targetsOf, deck)
       this.guardCitations(batch, textsOf)
@@ -390,6 +391,26 @@ export class OpService {
    * 待采纳修订：「待删除」的原文版本（块自身或它所在的表格、列表）不能再改——改了会让修订失去配对，
    * 采纳或导出时出现两份内容。待新增的修订版可以继续改，改动并入同一条修订（见 toSuggestion）。
    */
+  /**
+   * AI 的建议模式改动不能落在合作者（或用户本人）待采纳修订所在的段落：修订是整段配对的，改动会并进他的修订、记到他名下，
+   * 在平台和导出的 Word 里都看不出哪些是 AI 改的（来源规则 P1：人的内容不被暗改）。这类段落里 AI 只能直接做安全小改；
+   * 规则一要求转建议、或 AI 自己要求建议模式时拒绝，让用户先采纳或拒绝那条修订，或把建议写进评论。
+   */
+  private guardCoauthorSuggest(batch: EditBatch, before: PMNode, targetsOf: (op: unknown) => string[]): void {
+    const index = indexById(before)
+    batch.ops.forEach((op, i) => {
+      for (const id of targetsOf(op)) {
+        const node = index.get(id)?.node
+        const author = node?.attrs.suggest && node.attrs.suggest_author ? String(node.attrs.suggest_author) : null
+        if (!author) continue
+        throw new OpError('coauthor_revision_pending', `块 ${id} 里有 ${author} 待采纳的修订：AI 的改动不能并进他的修订（会被记到他名下），这类段落里只能直接做安全小改`, {
+          op_index: i,
+          hint: `请用户先在文档里采纳或拒绝 ${author} 的这条修订再改；或者用 comment_add 把修改建议写成评论，告诉用户。`,
+        })
+      }
+    })
+  }
+
   private guardPending(batch: EditBatch | DeckEditBatch, before: PMNode, targetsOf: (op: unknown) => string[], ai = true): void {
     const index = indexById(before)
     // 原文块 id → 它的修订版（待新增）块 id

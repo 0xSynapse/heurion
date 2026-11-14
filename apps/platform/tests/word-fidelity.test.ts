@@ -417,13 +417,24 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
     expect(first).not.toContain('Heurion AI')
   })
 
-  it('待采纳模式（suggest）下改合作者修订以外的文字：仍是同一对修订，不另起一对', () => {
+  it('AI 以待采纳模式改合作者修订所在的段落：拒绝（会并进合作者的修订、记到他名下），文档不变', () => {
     const t = importInto(docx(TRACKED))
     const ins = t.docs.get(t.docId).child(1).attrs.id as string
-    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id: ins, find: '主要终点为', replace: '首要终点是' }] }, { actor: 'ai', turnId: 't1' })
+    const before = t.docs.get(t.docId)
+    let code = ''
+    try { t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id: ins, find: '主要终点为', replace: '首要终点是' }] }, { actor: 'ai', turnId: 't1' }) } catch (e) { code = (e as { code?: string }).code ?? '' }
+    expect(code).toBe('coauthor_revision_pending')
+    expect(t.docs.get(t.docId).eq(before)).toBe(true)
+  })
+
+  it('用户本人以待采纳模式改合作者修订以外的文字：仍是同一对修订，不另起一对', () => {
+    const t = importInto(docx(TRACKED))
+    const ins = t.docs.get(t.docId).child(1).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'suggest', ops: [{ op: 'replace_text', id: ins, find: '主要终点为', replace: '首要终点是' }] }, { actor: 'user', turnId: null })
     const kinds: Array<[unknown, string]> = []
     t.docs.get(t.docId).forEach(n => kinds.push([n.attrs.suggest, n.textContent]))
-    expect(kinds).toEqual([['delete', '首要终点是总生存期。'], ['insert', '首要终点是总生存期（意向性治疗人群）。']])
+    expect(kinds.filter(k => k[0]).map(k => k[0])).toEqual(['delete', 'insert'])
+    expect(kinds.find(k => k[0] === 'insert')![1]).toBe('首要终点是总生存期（意向性治疗人群）。')
   })
 
   it('用户直接改合作者修订版里修订以外的文字：导出时合作者的修订原样保留（只按原文 XML 打补丁）', () => {

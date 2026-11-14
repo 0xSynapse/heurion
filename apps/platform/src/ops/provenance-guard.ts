@@ -55,7 +55,9 @@ const citesIn = (node: PMNode): Set<string> => {
  * 安全小改的处数上限按回合累计，AI 不能把改动拆成多批绕过。
  */
 export function assessProvenance(before: PMNode, after: PMNode, used = 0): ProvenanceAssessment {
-  const was = blocks(before, false)
+  // 改前改后用同一种取法（修订版按它取代的原块，跳过待删除的原文版本）：否则合作者待采纳修订所在的段落里，
+  // 改前拿到的是修订版自己的 id、改后拿到的是原块 id，修订版被当成「删掉的段落」，合作者自己的改动也被算进本批
+  const was = blocks(before, true)
   const now = blocks(after, true)
   const touches: HumanTouch[] = []
   const regions: ProvenanceAssessment['regions'] = []
@@ -122,6 +124,7 @@ export function protectionSummary(events: Array<{ kind: string; detail: string }
   const out: string[] = []
   if (n('suggest')) out.push(`有 ${n('suggest')} 批修改改到了你写的文字，已转为待采纳修订，采纳后生效`)
   if (n('conflict_user_edited')) out.push(`保留了你在 AI 读过之后改的内容（${n('conflict_user_edited')} 次）`)
+  if (n('coauthor_revision_pending')) out.push(`有 ${n('coauthor_revision_pending')} 次修改落在合作者待采纳的修订里，没有写入（请先采纳或拒绝那条修订）`)
   if (n('unobserved_number')) out.push(`拦下了找不到出处的数字：${sample('unobserved_number')}`)
   if (n('unread_citation')) out.push(`拦下了 ${n('unread_citation')} 次未读原文就插入的引用`)
   const cite = n('existing_citation') + n('citation_not_registered') + n('citation_unknown')

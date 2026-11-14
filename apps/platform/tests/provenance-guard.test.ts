@@ -136,6 +136,22 @@ describe('规则一：改人写的文字', () => {
     expect(hasSuggestions(docs.get(docId))).toBe(false)
   })
 
+  it('合作者待采纳修订所在的段落：规则一要求转建议时拒绝（不并进合作者的修订），安全小改仍直接生效', () => {
+    const { docs, ops, docId, ids } = setup()
+    // 把第二段变成合作者「Li Ming」的待采纳修订对（与导入 Word 修订后的结构相同）
+    const doc = docs.get(docId)
+    const para = doc.child(1)
+    const orig = para.type.create({ ...para.attrs, suggest: 'delete', suggest_group: 'gx', suggest_author: 'Li Ming' }, para.content)
+    const rev = para.type.create({ ...para.attrs, id: 'revx', suggest: 'insert', suggest_group: 'gx', suggest_of: para.attrs.id, suggest_author: 'Li Ming' }, schema.text('在 120 名患者中，pCR 率为 37%，R0 切除率为 97%（意向性人群）。'))
+    const content: PMNode[] = []
+    doc.forEach((n, _o, i) => { if (i === 1) content.push(orig, rev); else content.push(n) })
+    docs.commit(docId, doc.type.create(doc.attrs, content), { actor: 'user', turnId: null, ops: [] })
+    expect(code(() => ops.edit({ doc_id: docId, base_rev: docs.rev(docId), mode: 'apply', ops: [{ op: 'replace_text', id: 'revx', find: '在 120 名患者中', replace: '在全部可评估的 120 名患者中，按方案人群分析结果提示' }] }, AI()))).toBe('coauthor_revision_pending')
+    const r = ops.edit({ doc_id: docId, base_rev: docs.rev(docId), mode: 'apply', ops: [{ op: 'replace_text', id: 'revx', find: '名患者', replace: '名可评估患者' }] }, AI())
+    expect(r.provenance?.converted_to_suggest).toBeUndefined()
+    expect(ids.length).toBeGreaterThan(0)
+  })
+
   it('一次改人写的文字超过 5 处：转为待采纳修订', () => {
     const { ops, docId, ids } = setup('# 讨论\n\n甲乙丙丁戊己庚辛壬癸，子丑寅卯辰巳午未申酉。')
     const r = ops.edit({ doc_id: docId, base_rev: 0, mode: 'apply', ops: ['甲', '丙', '戊', '庚', '壬', '子'].map(c => ({ op: 'replace_text' as const, id: ids[1]!, find: c, replace: `${c}之` })) }, AI())
