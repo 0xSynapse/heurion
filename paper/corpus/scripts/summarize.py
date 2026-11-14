@@ -19,7 +19,7 @@ def arms():
 
 def summarize(arm):
     rows = []
-    tasks_file = 'tasks_b.json' if arm.endswith('-b') else 'tasks.json'
+    tasks_file = 'tasks_b.json' if arm.endswith('-b') else 'tasks_c.json' if arm.endswith('-c') else 'tasks.json'
     for d in sorted(os.listdir(os.path.join(ROOT, 'out'))):
         run = os.path.join(ROOT, 'out', d, 'runs', arm)
         if not re.fullmatch(r'[QP]\d\d', d) or not os.path.exists(os.path.join(run, 'score.json')):
@@ -61,6 +61,8 @@ def table(arm, rows):
     td = {}
     for r in ok:
         for k, v in r['tasks'].items():
+            if k.startswith('S'):
+                continue  # 第二组任务见下面各自的核对
             td.setdefault(k, [0, 0])
             td[k][0] += bool(v['done'])
             td[k][1] += 1

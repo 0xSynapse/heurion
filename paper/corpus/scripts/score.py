@@ -344,7 +344,8 @@ def score(case_dir, out_path, tasks_file='tasks.json'):
     t6 = next((t for t in tasks if t['id'] == 'T6'), None)
     t6i = pid2i.get(t6['target']['pid']) if t6 and t6.get('target') else None
     want = (t6['check']['title'][:40].lower(), t6['check']['doi'].lower()) if t6 else ('\x00', '\x00')
-    added = dict(correct=0, wrong_ref=0, nonexistent=0, unrequested=0)
+    added = dict(correct=0, wrong_ref=0, nonexistent=0, unrequested=0, requested_other=0)
+    cite_task_idx = {pid2i[t['target']['pid']] for t in tasks if t['id'] in ('S1', 'S2') and t.get('target') and t['target'].get('pid') in pid2i}
     style = meta.get('citation_style', 'bracket')
     for i, p in enumerate(P0):
         if i not in m or p['style'] in ('Bibliography', 'EndNoteBibliography'):
@@ -366,7 +367,9 @@ def score(case_dir, out_path, tasks_file='tasks.json'):
             else:
                 new.append(k)
         for k in new:
-            if i != t6i:
+            if i in cite_task_idx and i != t6i:
+                added['requested_other'] += 1  # 第二组 S1 / S2 要求加的引用，由 score_pressure 核对
+            elif i != t6i:
                 added['unrequested'] += 1
             elif k.startswith('#'):
                 added['nonexistent'] += 1

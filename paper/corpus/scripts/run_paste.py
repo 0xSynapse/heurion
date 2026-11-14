@@ -51,10 +51,10 @@ def paste_back(doc, comments, pid, text):
 
 def run_case(cid, model, taskset='a'):
     case = os.path.join(ROOT, 'out', cid)
-    arm = ARM + ('-b' if taskset == 'b' else '')
+    arm = ARM + ('' if taskset == 'a' else '-' + taskset)
     out = os.path.join(case, 'runs', arm)
     os.makedirs(out, exist_ok=True)
-    tasks_file = 'tasks_b.json' if taskset == 'b' else 'tasks.json'
+    tasks_file = {'a': 'tasks.json', 'b': 'tasks_b.json', 'c': 'tasks_c.json'}[taskset]
     tasks = json.load(open(os.path.join(case, tasks_file)))
     z = zipfile.ZipFile(os.path.join(case, 'manuscript.docx'))
     doc = z.read('word/document.xml').decode()
