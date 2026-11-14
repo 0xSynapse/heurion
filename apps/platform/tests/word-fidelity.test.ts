@@ -444,6 +444,26 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
     expect([...body.matchAll(/<w:commentRangeEnd w:id="(\d+)"\/>/g)].map(m => m[1])).toEqual(starts)
   })
 
+  it('合作者修订所在的段落既有平台评论、AI 又改了修订以外的文字：按原文 XML 打补丁，合作者的词级修订仍归在他名下，评论作为整段批注（论文一实验 S4：曾整段删除 + 整段插入、全记在导师名下）', () => {
+    const t = importInto(docx(TRACKED + p('其他。')))
+    const ins = t.docs.get(t.docId).child(1).attrs.id as string
+    const c = t.store.addComment({ doc_id: t.docId, node_id: ins, snippet: '总生存期' })
+    t.store.addReply(c.id, 'ai', '建议把这段改得更简洁，请先处理 Li Ming 的修订')
+    t.docs.commit(t.docId, attachComment(t.docs.get(t.docId), ins, '总生存期', c.id).doc, { actor: 'user', turnId: null, ops: [] })
+    t.ops.edit({ doc_id: t.docId, base_rev: t.docs.rev(t.docId), mode: 'apply', ops: [{ op: 'replace_text', id: ins, find: '主要终点为', replace: '首要终点是' }] }, { actor: 'ai', turnId: 't1' })
+    const body = bodyOf(t.exportNow().bytes)
+    // 合作者的修订仍是词级的、仍归在他名下；AI 的小改打在原文 XML 上，没有并进他的修订
+    expect(body).toContain('首要终点是总生存期')
+    expect(body).toContain('<w:del w:id="1" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"><w:r><w:delText>。</w:delText></w:r></w:del>')
+    expect(body).toContain('<w:ins w:id="2" w:author="Li Ming" w:date="2026-10-18T08:00:00Z"><w:r><w:t>（意向性治疗人群）。</w:t></w:r></w:ins>')
+    expect(body).not.toMatch(/<w:rPr><w:del w:id="\d+" w:author="Li Ming"/)
+    expect(body).not.toMatch(/<w:ins [^>]*w:author="Li Ming"[^>]*><w:r><w:t>首要终点是/)
+    expect(body.match(/总生存期/g)).toHaveLength(1)
+    const starts = [...body.matchAll(/<w:commentRangeStart w:id="(\d+)"\/>/g)].map(m => m[1])
+    expect(starts).toHaveLength(1)
+    expect([...body.matchAll(/<w:commentRangeEnd w:id="(\d+)"\/>/g)].map(m => m[1])).toEqual(starts)
+  })
+
   it('用户本人以待采纳模式改合作者修订以外的文字：仍是同一对修订，不另起一对', () => {
     const t = importInto(docx(TRACKED))
     const ins = t.docs.get(t.docId).child(1).attrs.id as string
