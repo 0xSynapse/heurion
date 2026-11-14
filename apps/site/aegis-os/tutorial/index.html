@@ -6,7 +6,7 @@
   <title>Aegis OS 教程 · 从安装到第一个多 Agent 任务</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="shortcut icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-10 -2 112 104'%3E%3Crect x='-10' y='-2' width='112' height='104' rx='22' fill='%23FAF8F4' stroke='%23E5E0D6' stroke-width='2'/%3E%3Crect x='6' y='18' width='16' height='66' rx='8' fill='%23151C19'/%3E%3Crect x='60' y='35' width='16' height='49' rx='8' fill='%23151C19'/%3E%3Crect x='18' y='45' width='46' height='16' rx='8' fill='%230A7D52'/%3E%3Ccircle cx='76' cy='24' r='10' fill='%2300C472'/%3E%3C/svg%3E" />
-  <meta name="description" content="Aegis OS 完整教程：安装、接入 Claude/Codex/AGY、UOMP 记忆同意、A2A 多 Agent 任务、任务级租约、撤销与审计。" />
+  <meta name="description" content="Aegis OS 完整教程：安装、接入 Claude/Codex/AGY、OrgVault 加密影子持久化、UOMP 记忆同意、A2A 多 Agent 任务、任务级租约、升级/恢复/卸载与审计。" />
   <meta name="keywords" content="Aegis OS tutorial, aegis-os install, UOMP, A2A, multi-agent, memory consent, Claude Code, Codex" />
   <meta name="author" content="Heurion Research" />
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
@@ -132,7 +132,8 @@
         <a href="#memory">3. 记忆同意</a>
         <a href="#a2a">4. 多 Agent / A2A</a>
         <a href="#revoke">5. 撤销与审计</a>
-        <a href="#troubleshoot">6. 故障排查</a>
+        <a href="#lifecycle">6. 升级、恢复与卸载</a>
+        <a href="#troubleshoot">7. 故障排查</a>
       </aside>
 
       <div class="tut-body">
@@ -142,7 +143,7 @@
           <p>你需要：</p>
           <ul class="checklist">
             <li>macOS 或 Linux 终端</li>
-            <li>Homebrew（macOS / Linux 均可）</li>
+            <li>Homebrew（macOS / Linux 均可），或使用一行签名安装脚本</li>
             <li>一个 coding agent：Claude Code、OpenCode、Codex CLI、Hermes 或 AGY</li>
             <li>一个 Markdown / Obsidian 笔记库（可选，用于记忆同意）</li>
           </ul>
@@ -165,7 +166,7 @@ aegis-os --version
 aegis-os doctor
 aegis-os audit-me</pre>
           <p>Homebrew 安装二进制后，运行一次 <code>aegis-os install</code>，把 Aegis OS 接入 <code>agy</code>、<code>claude</code>、<code>opencode</code>、<code>codex</code> 与 <code>hermes</code>；随后 <code>doctor</code> 应全部通过。</p>
-          <p class="note">如果不用 Homebrew：从 <a href="https://github.com/heurion-org/aegis-os/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载对应平台二进制，或从源码 <code>cargo install --path crates/aos-cli</code>。安装后同样运行 <code>aegis-os install</code>。</p>
+          <p class="note">如果不用 Homebrew：运行一行 Ed25519 签名安装脚本 <code>curl -fsSL https://heurion.org/aegis-cloud/install.sh | sh</code>，或从 <a href="https://github.com/heurion-org/aegis-os/releases" target="_blank" rel="noopener">GitHub Releases</a> 下载对应平台二进制，或从源码 <code>cargo install --path crates/aos-cli</code>。使用二进制/源码手动安装后同样运行一次 <code>aegis-os install</code>。</p>
         </section>
 
         <section id="agent">
@@ -185,8 +186,8 @@ aegis-os run -- opencode</pre>
           <table class="tut-table">
             <thead><tr><th>模式</th><th>说明与入口</th></tr></thead>
             <tbody>
-              <tr><td><strong>Local</strong></td><td>免费本地模式（默认）：本机 CoW 影子工作区 + 内核沙箱，启动即用。</td></tr>
-              <tr><td><strong>Cloud</strong></td><td>远程 64GB Linux btrfs 运行时（本地零 CPU/RAM 负载）：支持免费体验档（<code>aegis-os cloud up</code>）与 Pro 专业版（$29/月，8 个并行 Agent）。前往 <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">Aegis Cloud 控制台 (/aegis-cloud/dashboard) →</a> 或运行 <code>aegis-os cloud subscribe --plan pro --wait</code>。</td></tr>
+              <tr><td><strong>Local</strong></td><td>免费本地模式（默认）：本机 CoW 影子工作区 + 内核沙箱，默认落盘于 <code>~/.aegis</code> 按组织隔离的 OS 加密卷 <code>OrgVault</code>（macOS 无 root APFS Encrypted <code>.sparsebundle</code> / Linux <code>LUKS2 + Btrfs</code> 或 <code>gocryptfs</code>，<code>AES-256-GCM</code> 信封密钥 + <code>fsync</code> 原子刷盘），不脏宿主 Git 工作树且支持崩溃后无损恢复。</td></tr>
+              <tr><td><strong>Cloud</strong></td><td>远程 64GB Linux <code>LUKS2 + Btrfs</code> 运行时（本地零 CPU/RAM 负载，空闲自动密码学级 Scale-to-Zero 休眠 <code>umount</code> + <code>cryptsetup close</code>，唤醒自动解锁）：支持免费体验档（<code>aegis-os cloud up</code>）与 Pro 专业版（$29/月，8 个并行 Agent）。前往 <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">Aegis Cloud 控制台 (/aegis-cloud/dashboard) →</a> 或运行 <code>aegis-os cloud subscribe --plan pro --wait</code>。</td></tr>
             </tbody>
           </table>
           <p>也可以在对话里直接说“切换到 Local 模式”或“切换到 Cloud 模式”。</p>
@@ -200,7 +201,7 @@ aegis-os run -- opencode</pre>
             <li><strong>防 TOCTOU 篡改的密码学哈希锁定（<code>批准本次 · SHA-256 锁定</code>）</strong>：单次批准会将租约严格锚定至审批时刻的规范化 Diff 摘要（<code>sha256:&lt;evidence_hash&gt;</code>，最长 15 分钟有效）。若 Agent 在你点击同意后偷偷修改哪怕 1 个字节，二次提交将立即因哈希失配被拦截。</li>
             <li><strong>多敏感文件合并单卡审批与时间窗租约</strong>：一次提交若同时触碰多个构建/钩子敏感文件（如 <code>Cargo.toml</code>、<code>package.json</code>、<code>Makefile</code>），系统会自动合并为单张 <code>workspace_commit_sensitive</code> 审批单；同时也支持授予 <strong>15 分钟</strong>或 <strong>1 小时</strong>常规文本提交租约。</li>
           </ul>
-          <p>纯终端/SSH 下也可运行 <code>aegis-os approve</code>（或简写 <code>aos approve</code>）一键放行。</p>
+          <p>纯终端/SSH 下可运行 <code>aegis-os approve</code>（或简写 <code>aos approve</code>），在 Enforced 会话中也可通过 <code>aegis-os diff --json</code> 与 <code>aegis-os commit --expected-diff-hash &lt;sha256&gt;</code> 完成哈希锁定落盘。</p>
         </section>
 
         <section id="memory">
@@ -275,8 +276,44 @@ aegis-os a2a board</pre>
           <p>如果任务通过 gateway 进入终态（例如 <code>tasks/cancel</code> 或父任务级联取消），Aegis OS 会自动释放该任务绑定的所有文件锁（<code>coord_claim</code>）、撤销任务级租约，并调用 memory server 的 <code>revoke-by-task</code> 自动撤销关联的 memory sessions。</p>
         </section>
 
+        <section id="lifecycle">
+          <p class="label-caps">06 / LIFECYCLE</p>
+          <h2 class="heading-2">升级、崩溃恢复与卸载</h2>
+
+          <h3>1. 原地升级与配置同步</h3>
+          <p><code>aegis-os upgrade</code> 会自动识别当前安装来源（Homebrew、Cargo、本地源码或通过编译内置公钥 <code>RELEASE_SIGNER</code> 执行 <code>ssh-keygen -Y verify</code> 校验的官方签名发行版），原地升级后自动刷新 AGY / Claude Code / Codex / OpenCode 全局配置与现有 Shim，并将遗留 <code>/tmp/aegis-os-runtime</code> 指向无损迁移至 <code>~/.aegis</code>。</p>
+          <pre class="cmd"><span class="c"># 检查版本与客户端配置漂移</span>
+aegis-os upgrade --check
+
+<span class="c"># 原地升级并同步全局配置与 Shim（仅刷新配置可加 --refresh-only）</span>
+aegis-os upgrade
+aegis-os upgrade --refresh-only</pre>
+
+          <h3>2. <code>OrgVault</code> 加密卷与崩溃孤儿影子恢复</h3>
+          <p>默认情况下，所有未提交的 CoW 影子写入都通过 <code>fsync</code> 持久保存在 <code>~/.aegis</code> 按组织隔离的 OS 加密卷 <code>OrgVault</code> 中。若终端或 Agent 进程异常退出，可查看并手动接管未提交的孤儿影子，或手动锁定/解锁加密卷：</p>
+          <pre class="cmd"><span class="c"># 检查各组织 OrgVault 状态（后端、挂载状态、密钥来源）及可恢复的孤儿影子</span>
+aegis-os vault status
+
+<span class="c"># 接管上次异常退出的孤儿影子，或在跨会话时手动解锁/锁定加密卷</span>
+aegis-os vault recover --from-agent &lt;agent-id&gt;
+aegis-os vault unlock
+aegis-os vault lock</pre>
+
+          <h3>3. 外科手术式卸载</h3>
+          <p>卸载时默认只移除 Aegis 注入的 Shim 与各客户端配置块，完整保留用户的其他个人配置以及 <code>~/.aegis</code> 中的加密卷与未提交影子；仅在显式指定 <code>--purge --yes</code> 时才会在锁定卸载所有 <code>OrgVault</code> 后清除运行时数据与主密钥 KEK 材料（所有模式均支持 <code>--dry-run</code> 预览）：</p>
+          <pre class="cmd"><span class="c"># 仅移除 ~/.aegis/bin PATH Shim 与 shell PATH 块（保留 MCP / Hook）</span>
+aegis-os uninstall --shim-only
+
+<span class="c"># 标准卸载：外科手术式移除 4 款客户端 Aegis 条目与 Shim（保留 ~/.aegis 加密卷）</span>
+aegis-os uninstall --dry-run
+aegis-os uninstall
+
+<span class="c"># 彻底销毁（含工作区 .agents/ 与 ~/.aegis 加密卷、KEK 密钥材料）</span>
+aegis-os uninstall --workspace-clean --purge --yes</pre>
+        </section>
+
         <section id="troubleshoot">
-          <p class="label-caps">06 / TROUBLESHOOT</p>
+          <p class="label-caps">07 / TROUBLESHOOT</p>
           <h2 class="heading-2">故障排查</h2>
           <table class="tut-table">
             <thead><tr><th>问题</th><th>处理</th></tr></thead>
@@ -287,6 +324,8 @@ aegis-os a2a board</pre>
               <tr><td>同意页 9375 端口被占用</td><td>运行 <code>aegis-os memory ui --listen 127.0.0.1:9376 --url http://127.0.0.1:9374</code>；或关闭占用 9375 的进程。</td></tr>
               <tr><td><code>SESSION_NOT_ACTIVE</code></td><td>session 过期或被撤销；重新发起请求，或 <code>aegis-os memory connect claude --scope notes/projects</code>。</td></tr>
               <tr><td><code>ACCESS_DENIED</code></td><td>key/tag 不在批准范围；查看 <code>aegis-os memory audit</code> 和 consent request scope。</td></tr>
+              <tr><td>Agent 或终端意外崩溃，未提交的改动还在吗？</td><td>仍在 <code>~/.aegis</code> 的 <code>OrgVault</code> 加密卷中；运行 <code>aegis-os vault status</code> 查看孤儿影子，再用 <code>aegis-os vault recover --from-agent &lt;id&gt;</code>（或在新会话调用 <code>workspace_sync</code>）恢复。</td></tr>
+              <tr><td>升级后客户端配置漂移或旧 <code>/tmp</code> 路径残留</td><td>运行 <code>aegis-os upgrade --refresh-only</code> 自动重刷 MCP / Hook / Shim 并迁移配置，再运行 <code>aegis-os doctor</code> 校验。</td></tr>
               <tr><td>自定义 runtime 下 task 没变化</td><td><code>a2a</code> / <code>memory revoke</code> 命令补上同一个 <code>--runtime-dir</code>。</td></tr>
               <tr><td>Windows</td><td>不支持；请使用 macOS 或 Linux。</td></tr>
             </tbody>
@@ -296,7 +335,7 @@ aegis-os a2a board</pre>
             <a class="link-arrow" href="/aegis-os/">返回 Aegis OS 概览 →</a>
             <a class="link-arrow" href="/aegis-cloud/approve">边界审批台 (/approve) →</a>
             <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">Paper 1 (arXiv:2611.08516) →</a>
-            <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf" target="_blank" rel="noopener">Paper 2 (Enforced Runtime PDF) →</a>
+            <a class="link-arrow" href="https://doi.org/10.5281/zenodo.24170505" target="_blank" rel="noopener">Paper 2 (DOI: 10.5281/zenodo.24170505) →</a>
             <a class="link-arrow" href="/blog/from-agent-plugins-to-enforced-runtime">专论 04：从插件到内核运行时 →</a>
             <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub 仓库 →</a>
             <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP 规范 →</a>
@@ -319,7 +358,7 @@ aegis-os a2a board</pre>
           <span class="brand-word">HEURION</span>
         </a>
         <div class="foot-right">
-          <span>© 2026 Heurion Research · MIT Licensed</span>
+          <span>© 2026 Heurion Research · Aegis OS (Apache-2.0)</span>
           <a href="/llms.txt" class="foot-link">LLMs.txt</a>
           <a href="/sitemap.xml" class="foot-link">Sitemap</a>
         </div>

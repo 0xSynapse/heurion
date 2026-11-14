@@ -316,7 +316,7 @@
                 <p class="arch-stage-desc">Zero prompts inside the sandbox; split-plane L4/L7 proxy injects <code>$AOS_SECRET_*</code> keys at the host boundary (+0.221 ms TTFT); host commits use frozen-stage <code>SHA-256</code> TOCTOU pinning and phone TOTP.</p>
               </div>
               <div class="arch-tags">
-                <span class="arch-tag arch-tag-core"><strong>aos-vfs</strong> · CoW &amp; Split .git</span>
+                <span class="arch-tag arch-tag-core"><strong>aos-vfs</strong> · Encrypted OrgVault &amp; Split .git</span>
                 <span class="arch-tag arch-tag-core"><strong>aos-egress</strong> · L4/L7 Vault &amp; DLP</span>
                 <span class="arch-tag arch-tag-core"><strong>aos-ipc</strong> · A2A DAG &amp; Glob Claims</span>
                 <span class="arch-tag arch-tag-core"><strong>aos-policy</strong> · SHA-256 Pinned Lease</span>
@@ -367,7 +367,12 @@ aegis-os run -- claude       <span class="c"># or: opencode / agy / hermes / cod
 aegis-os diff --json &amp;&amp; aegis-os commit --expected-diff-hash &lt;sha256&gt;
 
 <span class="c"># Launch 64GB cloud workspace (includes 1 free trial workspace)</span>
-aegis-os cloud up</pre>
+aegis-os cloud up
+
+<span class="c"># Lifecycle management: encrypted vault recovery / in-place upgrade / clean uninstall</span>
+aegis-os vault status        <span class="c"># Inspect per-org OrgVault encryption &amp; recover orphaned shadows</span>
+aegis-os upgrade             <span class="c"># Upgrade binary (Brew / Cargo / signed release) &amp; refresh clients</span>
+aegis-os uninstall           <span class="c"># Remove shims &amp; client entries (--purge --yes wipes ~/.aegis vaults)</span></pre>
         <p class="note" style="margin-top:1.25rem;">
           <strong>New Cross-Platform &amp; 54-Run (60-Cell Matrix) Live CLI Agent Evaluation:</strong> Across 30 executable V1–V6 bypass payloads on macOS Seatbelt &amp; Ubuntu 24.04 Linux plus 54 executed live cloud-API runs (60-cell matrix) of <code>claude</code> (Sonnet 5.5 &amp; Opus 5.5), <code>opencode</code>, <code>agy</code>, and <code>hermes</code>, in-process advisory hooks suffer <strong>93.3%</strong> bypass coverage, vendor sandboxes suffer <strong>73.3%–83.3%</strong>, and <code>nerdctl</code> devcontainers suffer <strong>80.0%</strong>, whereas <code>aegis-os run</code> achieves <strong>0/30 (0.0%) bypass coverage and 0% live repo-trap compromise</strong> with a <strong>9.91 ms</strong> Linux / <strong>20.38 ms</strong> macOS startup latency (<strong>22.4× faster</strong> than containers) and <strong>100% (8/8)</strong> benign and multi-file test pass rate.
         </p>
@@ -375,7 +380,7 @@ aegis-os cloud up</pre>
           <a class="btn-solid" href="/en/aegis-os/tutorial/">Read the full tutorial →</a>
           <a class="link-arrow" href="#pricing" onclick="setTimeout(()=>document.getElementById('pro-email-input')?.focus(),150)">Upgrade to Pro for 16 Workspaces &amp; 8 Parallel Agents ($29/mo) →</a>
           <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">Paper 1: Transactional Agent OS (arXiv:2611.08516) →</a>
-          <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf" target="_blank" rel="noopener">Paper 2: Why Agent Plugins Are Not a Security Boundary (PDF) →</a>
+          <a class="link-arrow" href="https://doi.org/10.5281/zenodo.24170505" target="_blank" rel="noopener">Paper 2: Why Agent Plugins Are Not a Security Boundary (DOI: 10.5281/zenodo.24170505) →</a>
           <a class="link-arrow" href="/en/blog/from-agent-plugins-to-enforced-runtime">Monograph 04 →</a>
           <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub Repository →</a>
         </div>
@@ -464,7 +469,7 @@ aegis-os cloud up</pre>
           <span class="brand-word">HEURION</span>
         </a>
         <div class="foot-right">
-          <span>© 2026 Heurion Research · MIT Licensed</span>
+          <span>© 2026 Heurion Research · Aegis OS (Apache-2.0)</span>
           <a href="/en/aegis-os/tutorial/" class="foot-link">Tutorial</a>
           <a href="/aegis-cloud/dashboard" class="foot-link">My Console</a>
           <a href="/llms.txt" class="foot-link">LLMs.txt</a>

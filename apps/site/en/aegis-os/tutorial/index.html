@@ -6,7 +6,7 @@
   <title>Aegis OS Tutorial · Install to First Multi-Agent Task</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="shortcut icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-10 -2 112 104'%3E%3Crect x='-10' y='-2' width='112' height='104' rx='22' fill='%23FAF8F4' stroke='%23E5E0D6' stroke-width='2'/%3E%3Crect x='6' y='18' width='16' height='66' rx='8' fill='%23151C19'/%3E%3Crect x='60' y='35' width='16' height='49' rx='8' fill='%23151C19'/%3E%3Crect x='18' y='45' width='46' height='16' rx='8' fill='%230A7D52'/%3E%3Ccircle cx='76' cy='24' r='10' fill='%2300C472'/%3E%3C/svg%3E" />
-  <meta name="description" content="Aegis OS tutorial: install, connect Claude/Codex/AGY, UOMP memory consent, A2A multi-agent tasks, task-scoped leases, revocation, and audit." />
+  <meta name="description" content="Aegis OS tutorial: install, connect Claude/Codex/AGY, OrgVault encrypted persistence, UOMP memory consent, A2A multi-agent tasks, task-scoped leases, upgrade/recovery/uninstall, and audit." />
   <meta name="keywords" content="Aegis OS tutorial, aegis-os install, UOMP, A2A, multi-agent, memory consent, Claude Code, Codex" />
   <meta name="author" content="Heurion Research" />
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
@@ -131,7 +131,8 @@
         <a href="#memory">3. Memory consent</a>
         <a href="#a2a">4. Multi-agent / A2A</a>
         <a href="#revoke">5. Revoke and audit</a>
-        <a href="#troubleshoot">6. Troubleshooting</a>
+        <a href="#lifecycle">6. Upgrade, vault &amp; uninstall</a>
+        <a href="#troubleshoot">7. Troubleshooting</a>
       </aside>
 
       <div class="tut-body">
@@ -141,7 +142,7 @@
           <p>You need:</p>
           <ul class="checklist">
             <li>macOS or Linux terminal</li>
-            <li>Homebrew</li>
+            <li>Homebrew, or use the one-line signed installer script</li>
             <li>A coding agent: Claude Code, OpenCode, Codex CLI, Hermes, or AGY</li>
             <li>A Markdown / Obsidian vault (optional, for memory consent)</li>
           </ul>
@@ -164,7 +165,7 @@ aegis-os --version
 aegis-os doctor
 aegis-os audit-me</pre>
           <p>After Homebrew installs the binary, run <code>aegis-os install</code> once to wire Aegis OS into <code>agy</code>, <code>claude</code>, <code>opencode</code>, <code>codex</code>, and <code>hermes</code>; <code>doctor</code> should then pass.</p>
-          <p class="note">Without Homebrew: download the platform binary from <a href="https://github.com/heurion-org/aegis-os/releases" target="_blank" rel="noopener">GitHub Releases</a> or build with <code>cargo install --path crates/aos-cli</code>. Then run <code>aegis-os install</code>.</p>
+          <p class="note">Without Homebrew: run the Ed25519-signed installer <code>curl -fsSL https://heurion.org/aegis-cloud/install.sh | sh</code>, download a release archive from <a href="https://github.com/heurion-org/aegis-os/releases" target="_blank" rel="noopener">GitHub Releases</a>, or build from source with <code>cargo install --path crates/aos-cli</code>, then run <code>aegis-os install</code> once.</p>
         </section>
 
         <section id="agent">
@@ -184,8 +185,8 @@ aegis-os run -- opencode</pre>
           <table class="tut-table">
             <thead><tr><th>Mode</th><th>What it means &amp; entry point</th></tr></thead>
             <tbody>
-              <tr><td><strong>Local</strong></td><td>Free local mode (default): CoW shadow workspace + native OS sandbox, ready immediately with zero setup prompts.</td></tr>
-              <tr><td><strong>Cloud</strong></td><td>Remote 64GB Linux btrfs runtime (0% local CPU/RAM load): supports both a free tier (<code>aegis-os cloud up</code>) and Pro ($29/mo, 8 parallel Agents). Open the <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">Aegis Cloud Console (/aegis-cloud/dashboard) →</a> or run <code>aegis-os cloud subscribe --plan pro --wait</code>.</td></tr>
+              <tr><td><strong>Local</strong></td><td>Free local mode (default): CoW shadow workspace + native OS sandbox persisted inside a per-org OS-encrypted <code>OrgVault</code> volume under <code>~/.aegis</code> (rootless APFS Encrypted <code>.sparsebundle</code> on macOS / <code>LUKS2 + Btrfs</code> or <code>gocryptfs</code> on Linux, <code>AES-256-GCM</code> envelope keys + <code>fsync</code> durability) with zero host Git pollution and crash recovery.</td></tr>
+              <tr><td><strong>Cloud</strong></td><td>Remote 64GB Linux <code>LUKS2 + Btrfs</code> runtime (0% local CPU/RAM load, cryptographic scale-to-zero hibernation with <code>umount</code> + <code>cryptsetup close</code> on idle and auto-unlock on wake): supports both a free tier (<code>aegis-os cloud up</code>) and Pro ($29/mo, 8 parallel Agents). Open the <a href="/aegis-cloud/dashboard" style="color:var(--accent);font-weight:500;">Aegis Cloud Console (/aegis-cloud/dashboard) →</a> or run <code>aegis-os cloud subscribe --plan pro --wait</code>.</td></tr>
             </tbody>
           </table>
           <p>You can switch later by telling the agent “switch to Local mode” or “switch to Cloud mode”.</p>
@@ -199,7 +200,7 @@ Update the README title, inspect the diff, and commit it back to the host repo</
             <li><strong>Cryptographic TOCTOU-Pinned Approval (<code>Approve Once · SHA-256 Pinned</code>)</strong>: One-shot approval pins the lease to the exact SHA-256 digest of the canonical diff and commit flags (<code>sha256:&lt;evidence_hash&gt;</code>, bounded to 15m). If an agent alters even a single byte after you click approve, the commit is blocked immediately.</li>
             <li><strong>Batched Single-Card Sensitive Approval &amp; Bounded TTL Leases</strong>: Commits touching multiple sensitive build or hook files (<code>Cargo.toml</code>, <code>package.json</code>, <code>Makefile</code>) are consolidated into a single <code>workspace_commit_sensitive</code> card, alongside optional <strong>15-minute</strong> or <strong>1-hour</strong> session leases for routine text commits.</li>
           </ul>
-          <p>On headless SSH sessions you can also run <code>aegis-os approve</code> (alias: <code>aos approve</code>).</p>
+          <p>On headless SSH sessions you can run <code>aegis-os approve</code> (alias: <code>aos approve</code>), or in Enforced sessions run <code>aegis-os diff --json</code> followed by <code>aegis-os commit --expected-diff-hash &lt;sha256&gt;</code>.</p>
         </section>
 
         <section id="memory">
@@ -274,8 +275,44 @@ aegis-os a2a board</pre>
           <p>If a task reaches a terminal state through the gateway (for example <code>tasks/cancel</code> or parent cascade cancellation), Aegis OS automatically releases all task-bound file claims (<code>coord_claim</code>), revokes task-scoped leases, and calls the memory server's <code>revoke-by-task</code> endpoint to revoke that task's memory sessions.</p>
         </section>
 
+        <section id="lifecycle">
+          <p class="label-caps">06 / LIFECYCLE</p>
+          <h2 class="heading-2">Upgrade, crash recovery &amp; uninstall</h2>
+
+          <h3>1. In-place upgrade &amp; client config sync</h3>
+          <p><code>aegis-os upgrade</code> detects your install method (Homebrew, Cargo, local source checkout, or release tarballs verified with <code>ssh-keygen -Y verify</code> against the pinned <code>RELEASE_SIGNER</code> key), updates the binary in place, refreshes global MCP/Hook/rule integrations and existing shims, and migrates any legacy <code>/tmp/aegis-os-runtime</code> paths to <code>~/.aegis</code>.</p>
+          <pre class="cmd"><span class="c"># Inspect current vs. latest release and check client config drift</span>
+aegis-os upgrade --check
+
+<span class="c"># Upgrade in place and sync client configs/shims (or only refresh configs via --refresh-only)</span>
+aegis-os upgrade
+aegis-os upgrade --refresh-only</pre>
+
+          <h3>2. <code>OrgVault</code> inspection &amp; dead-PID orphan recovery</h3>
+          <p>All uncommitted CoW shadow writes are flushed with <code>fsync</code> inside per-org OS-encrypted <code>OrgVault</code> volumes under <code>~/.aegis</code>. If an agent or terminal crashes, you can inspect recoverable dead-PID shadows, adopt them into a new session, or lock/unlock the vault manually:</p>
+          <pre class="cmd"><span class="c"># Inspect OrgVault backend/mount/key-source status and recoverable orphaned shadows</span>
+aegis-os vault status
+
+<span class="c"># Adopt an uncommitted shadow from a crashed session, or manually unlock/lock the vault</span>
+aegis-os vault recover --from-agent &lt;agent-id&gt;
+aegis-os vault unlock
+aegis-os vault lock</pre>
+
+          <h3>3. Surgical uninstall</h3>
+          <p>By default, <code>aegis-os uninstall</code> removes Aegis PATH shims and client MCP/Hook/rule entries across AGY, Claude Code, Codex, and OpenCode while preserving all non-Aegis settings and leaving your <code>~/.aegis</code> vaults intact. Pass <code>--purge --yes</code> only when you want to lock/detach every <code>OrgVault</code> and erase <code>~/.aegis</code> plus master KEK material (all modes support <code>--dry-run</code>):</p>
+          <pre class="cmd"><span class="c"># Remove only ~/.aegis/bin PATH shims and shell RC PATH block (keeps MCP/Hook entries)</span>
+aegis-os uninstall --shim-only
+
+<span class="c"># Standard uninstall: surgically remove Aegis client entries &amp; shims (keeps ~/.aegis vaults)</span>
+aegis-os uninstall --dry-run
+aegis-os uninstall
+
+<span class="c"># Full purge: clean repo .agents/, detach all OrgVaults, and wipe ~/.aegis &amp; KEK material</span>
+aegis-os uninstall --workspace-clean --purge --yes</pre>
+        </section>
+
         <section id="troubleshoot">
-          <p class="label-caps">06 / TROUBLESHOOT</p>
+          <p class="label-caps">07 / TROUBLESHOOT</p>
           <h2 class="heading-2">Troubleshooting</h2>
           <table class="tut-table">
             <thead><tr><th>Problem</th><th>Fix</th></tr></thead>
@@ -286,6 +323,8 @@ aegis-os a2a board</pre>
               <tr><td>Port 9375 for the consent page is in use</td><td>Run <code>aegis-os memory ui --listen 127.0.0.1:9376 --url http://127.0.0.1:9374</code>; or stop the process using 9375.</td></tr>
               <tr><td><code>SESSION_NOT_ACTIVE</code></td><td>The session expired or was revoked; make a new request, or run <code>aegis-os memory connect claude --scope notes/projects</code>.</td></tr>
               <tr><td><code>ACCESS_DENIED</code></td><td>The key/tag is outside the approved scope; inspect the consent request and <code>aegis-os memory audit</code>.</td></tr>
+              <tr><td>Did my uncommitted work survive an agent or terminal crash?</td><td>Yes—shadow writes are persisted inside your encrypted <code>OrgVault</code> under <code>~/.aegis</code>. Run <code>aegis-os vault status</code> and recover via <code>aegis-os vault recover --from-agent &lt;id&gt;</code> (or <code>workspace_sync</code>).</td></tr>
+              <tr><td>Config drift or stale <code>/tmp</code> runtime paths after an upgrade</td><td>Run <code>aegis-os upgrade --refresh-only</code> to re-sync MCP/Hook/shim entries, then run <code>aegis-os doctor</code>.</td></tr>
               <tr><td>Task does not change with a custom runtime</td><td>Pass the same <code>--runtime-dir</code> to <code>a2a</code> / <code>memory revoke</code>.</td></tr>
               <tr><td>Windows</td><td>Not supported; use macOS or Linux.</td></tr>
             </tbody>
@@ -295,7 +334,7 @@ aegis-os a2a board</pre>
             <a class="link-arrow" href="/en/aegis-os/">Back to Aegis OS overview →</a>
             <a class="link-arrow" href="/aegis-cloud/approve">Boundary Approval Console (/approve) →</a>
             <a class="link-arrow" href="https://arxiv.org/abs/2611.08516" target="_blank" rel="noopener">Paper 1 (arXiv:2611.08516) →</a>
-            <a class="link-arrow" href="https://github.com/heurion-org/aegis-os/blob/main/paper2/aegis_enforced_runtime_arxiv_preprint.pdf" target="_blank" rel="noopener">Paper 2 (Enforced Runtime PDF) →</a>
+            <a class="link-arrow" href="https://doi.org/10.5281/zenodo.24170505" target="_blank" rel="noopener">Paper 2 (DOI: 10.5281/zenodo.24170505) →</a>
             <a class="link-arrow" href="/en/blog/from-agent-plugins-to-enforced-runtime">Monograph 04: Enforced Runtime →</a>
             <a class="link-arrow" href="https://github.com/heurion-org/aegis-os" target="_blank" rel="noopener">GitHub repository →</a>
             <a class="link-arrow" href="https://www.uomp.org/spec/" target="_blank" rel="noopener">UOMP spec →</a>
@@ -318,7 +357,7 @@ aegis-os a2a board</pre>
           <span class="brand-word">HEURION</span>
         </a>
         <div class="foot-right">
-          <span>© 2026 Heurion Research · MIT Licensed</span>
+          <span>© 2026 Heurion Research · Aegis OS (Apache-2.0)</span>
           <a href="/llms.txt" class="foot-link">LLMs.txt</a>
           <a href="/sitemap.xml" class="foot-link">Sitemap</a>
         </div>
