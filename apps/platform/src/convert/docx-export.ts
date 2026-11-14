@@ -11,7 +11,7 @@ import { looksLikeHeaderRow } from '../model/table-header.ts'
 import type { CitationRow, CommentRow, ReplyRow } from '../store/db.ts'
 import { bodyChildrenRaw, elementChildrenRaw, safeUnzipDocx } from './docx-import.ts'
 import { patchParagraph } from './docx-patch.ts'
-import { stripProv } from '../model/provenance.ts'
+import { hasAiText, stripProv, withoutAiText } from '../model/provenance.ts'
 
 /**
  * 平台模型 → docx（PLATFORM.md §6 导出）：修补式。
@@ -34,6 +34,8 @@ export interface ExportInput {
   measurements?: MeasureLookup
   comments: CommentRow[]
   asset: (id: string) => { mime: string; bytes: Uint8Array } | null
+  /** AI 未确认的文字是否写成 AI 名下的修订（默认是；false = 按普通文字导出，例如用户明确要一份干净稿） */
+  aiAsRevisions?: boolean
 }
 
 export interface ExportResult { bytes: Uint8Array; warnings: string[] }
@@ -255,9 +257,41 @@ function restoreIds(n: PMNode, rootId: string | null = null): PMNode {
   return n.type.create(attrs, n.isLeaf ? undefined : kids, n.marks)
 }
 
+/** 导出时 AI 未确认文字的修订作者（Word 里显示的名字） */
+export const AI_AUTHOR = 'Heurion AI'
+
+/**
+ * AI 写的、还没人确认的文字（来源标记，docs/design/PROVENANCE.md）在 Word 里写成 AI 名下的修订：
+ * 顶层段落 / 标题里有这种文字的，改成一对待采纳修订（原文版本 = 拒绝 AI 的文字后的样子，修订版 = 现在的样子），
+ * 由下面的修订导出写成词级的 w:ins / w:del；整段都是 AI 新写的段落写成整段插入。
+ * 这样 Word 里也看得出哪些是 AI 写的、没人确认过，医生接受修订即确认。已经是待采纳修订的块（本来就以修订导出）不动；
+ * 表格单元格、列表项里的 AI 文字仍按普通文字导出（局限，见 PROVENANCE.md）。
+ */
+function aiTextAsRevisions(doc: PMNode, baseline: PMNode | null | undefined): PMNode {
+  const base = new Map<string, PMNode>()
+  baseline?.forEach(n => { if (n.attrs.id) base.set(n.attrs.id as string, n) })
+  const out: PMNode[] = []
+  let changed = false
+  doc.forEach(n => {
+    if (!n.isTextblock || n.attrs.suggest || !('suggest' in n.attrs) || !hasAiText(n)) { out.push(n); return }
+    changed = true
+    const id = n.attrs.id as string
+    const group = `prov-${id}`
+    const now = stripProv(n)
+    const orig = withoutAiText(n, base.get(id))
+    if (!orig.textContent.trim() && !base.has(id)) {
+      out.push(now.type.create({ ...now.attrs, suggest: 'insert', suggest_group: group, suggest_of: null, suggest_author: AI_AUTHOR }, now.content, now.marks))
+      return
+    }
+    out.push(orig.type.create({ ...orig.attrs, suggest: 'delete', suggest_group: group, suggest_of: null, suggest_author: AI_AUTHOR }, orig.content, orig.marks))
+    out.push(now.type.create({ ...now.attrs, id: `${id}~ai`, suggest: 'insert', suggest_group: group, suggest_of: id, suggest_author: AI_AUTHOR }, now.content, now.marks))
+  })
+  return changed ? doc.copy(Fragment.from(out)) : doc
+}
+
 export function exportDocx(input: ExportInput): ExportResult {
-  // 来源标记只在平台内部用，不进 Word：先去掉，免得同一段文字因标记不同被拆成多个 run
-  input = { ...input, doc: stripProv(input.doc) }
+  // AI 未确认的文字写成 AI 名下的修订；其余来源标记只在平台内部用，不进 Word：去掉，免得同一段文字因标记不同被拆成多个 run
+  input = { ...input, doc: stripProv(input.aiAsRevisions === false ? input.doc : aiTextAsRevisions(input.doc, input.baseline)) }
   let baseFiles: Record<string, Uint8Array> | null = null
   if (input.pkg) {
     try {

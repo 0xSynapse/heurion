@@ -96,6 +96,37 @@ export function hasAiText(block: PMNode): boolean {
   return found
 }
 
+/**
+ * 「拒绝 AI 未确认的文字」后的块（导出 Word 时把 AI 的文字写成 AI 名下的修订，拒绝即回到这里）：
+ * 去掉 AI 写的词；与 base（导入时的版本）按词对齐，紧挨着 AI 文字被删掉的原文放回原处（AI 替换掉的人写文字）。
+ * 没有 base 时只去掉 AI 的词。返回的块不带来源标记。
+ */
+export function withoutAiText(block: PMNode, base?: PMNode | null): PMNode {
+  const cur = tokens(block)
+  const old = base?.isTextblock ? tokens(base) : []
+  const map = old.length ? alignTokens(old.map(t => t.sig), cur.map(t => t.sig)) : cur.map(() => -1)
+  const out: Tok[] = []
+  let nextOld = 0
+  let run: Tok[] = []
+  // 一段「base 里删掉的 + 当前新写的」：新写的里有 AI 的词，就把删掉的原文放回；人写的新词保留，AI 的词去掉
+  const flush = (upTo: number) => {
+    const deleted = old.slice(nextOld, upTo)
+    if (run.some(t => t.ai)) out.push(...deleted)
+    out.push(...run.filter(t => !t.ai))
+    run = []
+    nextOld = upTo
+  }
+  cur.forEach((t, j) => {
+    const i = map[j]!
+    if (i < 0 || i < nextOld) { run.push(t); return }
+    flush(i)
+    out.push(t)
+    nextOld = i + 1
+  })
+  flush(old.length)
+  return rebuild(block, out, () => ({ ai: false, turn: null }))
+}
+
 /** 去掉块里全部来源标记（人采纳 / 确认）。 */
 export function stripProv(block: PMNode): PMNode {
   if (!hasAiText(block)) return block

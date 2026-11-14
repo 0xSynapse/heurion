@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { exportDocx } from '../src/convert/docx-export.ts'
 import { bindAssets, bindComments, importDocx } from '../src/convert/docx-import.ts'
 import { attachComment } from '../src/model/anchors.ts'
+import { confirmBlocks } from '../src/model/provenance.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { OpService } from '../src/ops/service.ts'
 import type { DocOp } from '../src/ops/types.ts'
@@ -10,6 +11,7 @@ import { resolveSuggestions } from '../src/ops/suggest.ts'
 import { newCommentId, Store } from '../src/store/db.ts'
 import { read } from '../src/views/read.ts'
 import { docx, p } from './fixtures.ts'
+import { acceptedText } from './helpers.ts'
 
 /** 模拟 API 的导入流程（与 export.test.ts 相同）。 */
 function importInto(bytes: Uint8Array) {
@@ -63,7 +65,7 @@ describe('Word 行内结构：脚注引用与域代码', () => {
     expect(t.view()).toContain('[@w:w1] 域代码（显示为「1」）')
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: 'Patient characteristics', replace: 'Baseline characteristics' }] }, { actor: 'ai', turnId: 't1' })
     const first = firstPara(t.exportNow().bytes)
-    expect(first).toContain('Baseline characteristics')
+    expect(acceptedText(first)).toContain('Baseline characteristics')
     expect(first).toContain('SEQ Table')
   })
 
@@ -73,7 +75,7 @@ describe('Word 行内结构：脚注引用与域代码', () => {
     expect(t.view()).toContain('[@w:w1] 域代码（显示为「[3]」）')
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_block', id, markdown: '多项既往研究支持这一结论[@w:w1]。' }] }, { actor: 'ai', turnId: 't1' })
     const first = firstPara(t.exportNow().bytes)
-    expect(first).toContain('多项既往研究')
+    expect(acceptedText(first)).toContain('多项既往研究')
     expect(first).toContain('ADDIN EN.CITE')
     expect(first.match(/fldCharType="(begin|end)"/g)).toEqual(['fldCharType="begin"', 'fldCharType="end"'])
 
@@ -291,7 +293,7 @@ describe('Word 批注：导入为平台评论线程，导出为 Word 线程回�
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '随访 3 年', replace: '中位随访 36 个月' }] }, { actor: 'ai', turnId: 't1' })
     const out = t.exportNow()
     const first = firstPara(out)
-    expect(first).toContain('中位随访 36 个月')
+    expect(acceptedText(first)).toContain('中位随访 36 个月')
     expect(first).toContain('<w:commentRangeStart w:id="7"/>')
     expect(first).toContain('<w:commentReference w:id="7"/>')
     expect(part(out, 'word/comments.xml').match(/<w:comment w:id="7"/g)).toHaveLength(1)
@@ -397,7 +399,7 @@ describe('Word 修订：导入为待采纳修订（带原作者），导出为 W
     t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: ids[2]!, find: '结果段落', replace: '结果部分' }] }, { actor: 'ai', turnId: 't2' })
     const body = bodyOf(t.exportNow().bytes)
     expect(body).toContain(TRACKED)
-    expect(body).toContain('结果部分')
+    expect(acceptedText(body)).toContain('结果部分')
   })
 
   it('修订版里合作者修订以外的文字可以改：同步到原文版本，采纳或拒绝都保留改动；导出时合作者的修订原样、仍归在他名下', () => {
@@ -711,3 +713,56 @@ describe('Phase 1b 赛后归因回归：批注+修订共存、有序列表替换
   })
 })
 
+
+describe('AI 未确认的文字导出为 AI 名下的修订（docs/design/PROVENANCE.md）', () => {
+  const rejectAll = (xml: string) => xml.replace(/<w:ins\b[^>]*>[\s\S]*?<\/w:ins>/g, '').replace(/<w:del\b[^>]*>([\s\S]*?)<\/w:del>/g, '$1').replace(/<w:delText\b[^>]*>/g, '<w:t>').replace(/<\/w:delText>/g, '</w:t>').replace(/<[^>]+>/g, '')
+
+  it('AI 改了人写的词：写成 Heurion AI 的词级修订；接受得到 AI 的版本，拒绝回到人写的原文', () => {
+    const t = importInto(docx(p('共纳入 98 名 patients，随访 3 年。') + p('其他。')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: 'patients', replace: 'participants' }] }, { actor: 'ai', turnId: 't1' })
+    const first = firstPara(t.exportNow().bytes)
+    expect(first).toMatch(/<w:del [^>]*w:author="Heurion AI"[^>]*><w:r><w:delText xml:space="preserve">patients<\/w:delText>/)
+    expect(first).toMatch(/<w:ins [^>]*w:author="Heurion AI"[^>]*><w:r><w:t xml:space="preserve">participants<\/w:t>/)
+    expect(acceptedText(first)).toBe('共纳入 98 名 participants，随访 3 年。')
+    expect(rejectAll(first)).toBe('共纳入 98 名 patients，随访 3 年。')
+    // 没动的段落原样
+    expect(bodyOf(t.exportNow().bytes)).toContain(p('其他。'))
+  })
+
+  it('AI 新写的整段：整段写成 Heurion AI 的插入（含段落标记，拒绝后不留空段）', () => {
+    const t = importInto(docx(p('结果段落。')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'insert_after', anchor_id: id, markdown: 'AI 补充的一段说明。' }] }, { actor: 'ai', turnId: 't1' })
+    const paras = bodyOf(t.exportNow().bytes).split('</w:p>')
+    const added = paras.find(x => x.includes('AI 补充的一段说明'))!
+    expect(added).toMatch(/<w:rPr><w:ins [^>]*w:author="Heurion AI"/)
+    expect(added).toMatch(/<w:ins [^>]*w:author="Heurion AI"[^>]*><w:r>[\s\S]*AI 补充的一段说明/)
+    expect(added).not.toContain('<w:del ')
+  })
+
+  it('用户自己改的文字、用户确认过的 AI 文字：按普通文字导出，不是修订', () => {
+    const t = importInto(docx(p('随访 3 年。') + p('结果段落。')))
+    const [a, b] = [0, 1].map(i => t.docs.get(t.docId).child(i).attrs.id as string)
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id: a!, find: '3 年', replace: '36 个月' }] }, { actor: 'user', turnId: null })
+    t.ops.edit({ doc_id: t.docId, base_rev: t.docs.rev(t.docId), mode: 'apply', ops: [{ op: 'replace_text', id: b!, find: '结果段落', replace: '结果部分' }] }, { actor: 'ai', turnId: 't1' })
+    expect(bodyOf(t.exportNow().bytes)).toContain('Heurion AI')
+    // 用户确认 AI 写的文字（去掉来源标记）
+    t.docs.commit(t.docId, confirmBlocks(t.docs.get(t.docId), null).doc, { actor: 'system', turnId: null, ops: [] })
+    const body = bodyOf(t.exportNow().bytes)
+    expect(body).not.toContain('<w:ins ')
+    expect(body).not.toContain('<w:del ')
+    expect(acceptedText(body)).toContain('随访 36 个月。')
+    expect(acceptedText(body)).toContain('结果部分。')
+  })
+
+  it('要一份干净稿（aiAsRevisions = false）：AI 的文字按普通文字导出', () => {
+    const t = importInto(docx(p('结果段落。')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '结果段落', replace: '结果部分' }] }, { actor: 'ai', turnId: 't1' })
+    const r = t.docs.get(t.docId)
+    const clean = exportDocx({ doc: r, baseline: t.docs.versionDoc(t.docId, 1), pkg: null, src: () => null, citations: [], comments: [], asset: () => null, aiAsRevisions: false })
+    expect(bodyOf(clean.bytes)).not.toContain('Heurion AI')
+    expect(bodyOf(clean.bytes)).toContain('结果部分')
+  })
+})
