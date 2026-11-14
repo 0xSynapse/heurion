@@ -911,6 +911,7 @@ async function open(docId: string): Promise<void> {
   $('deckToolbar').hidden = meta.kind !== 'deck' || readOnly
   if (meta.kind === 'deck') void initDeckToolbar()
   $('exportDocxBtn').hidden = meta.kind === 'deck'
+  $('exportDocxCleanBtn').hidden = meta.kind === 'deck'
   $('aiDisclosureBtn').hidden = meta.kind === 'deck'
   $('provProofBtn').hidden = meta.kind === 'deck'
   $('exportMdBtn').hidden = meta.kind === 'deck'
@@ -4518,6 +4519,14 @@ $('exportDocxBtn').onclick = async () => {
   const merge = refMergeText()
   if (merge) showNotice(`${merge}。`)
   location.href = `/api/docs/${session.docId}/export.docx?token=${encodeURIComponent(TOKEN)}&fonts=${exportFonts()}`
+}
+// 干净稿：AI 未确认的文字按普通文字导出（默认的 Word 导出把它写成「Heurion AI」名下的修订）
+$('exportDocxCleanBtn').onclick = async () => {
+  if (!session) return
+  await ensureSuggestionsResolvedBeforeExport()
+  const merge = refMergeText()
+  if (merge) showNotice(`${merge}。`)
+  location.href = `/api/docs/${session.docId}/export.docx?token=${encodeURIComponent(TOKEN)}&fonts=${exportFonts()}&clean=1`
 }
 $('exportPptxBtn').onclick = async () => {
   if (!session) return

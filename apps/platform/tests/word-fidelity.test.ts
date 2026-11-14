@@ -1,6 +1,7 @@
 import { strFromU8, unzipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 import { exportDocx } from '../src/convert/docx-export.ts'
+import { docxFor } from '../src/convert/exports.ts'
 import { bindAssets, bindComments, importDocx } from '../src/convert/docx-import.ts'
 import { attachComment } from '../src/model/anchors.ts'
 import { confirmBlocks } from '../src/model/provenance.ts'
@@ -754,6 +755,20 @@ describe('AI 未确认的文字导出为 AI 名下的修订（docs/design/PROVEN
     expect(body).not.toContain('<w:del ')
     expect(acceptedText(body)).toContain('随访 36 个月。')
     expect(acceptedText(body)).toContain('结果部分。')
+  })
+
+  it('导出接口：默认 AI 文字为修订并说明；clean 导出干净稿并说明；没有 AI 文字时不提', () => {
+    const t = importInto(docx(p('结果段落。') + p('其他。')))
+    const id = t.docs.get(t.docId).child(0).attrs.id as string
+    expect(docxFor(t.docs, t.docId).warnings.join()).not.toContain('Heurion AI')
+    t.ops.edit({ doc_id: t.docId, base_rev: 0, mode: 'apply', ops: [{ op: 'replace_text', id, find: '结果段落', replace: '结果部分' }] }, { actor: 'ai', turnId: 't1' })
+    const normal = docxFor(t.docs, t.docId)
+    expect(bodyOf(normal.bytes)).toContain('w:author="Heurion AI"')
+    expect(normal.warnings[0]).toContain('Word 干净稿')
+    const clean = docxFor(t.docs, t.docId, undefined, { clean: true })
+    expect(bodyOf(clean.bytes)).not.toContain('Heurion AI')
+    expect(bodyOf(clean.bytes)).toContain('结果部分')
+    expect(clean.warnings[0]).toContain('干净稿')
   })
 
   it('要一份干净稿（aiAsRevisions = false）：AI 的文字按普通文字导出', () => {

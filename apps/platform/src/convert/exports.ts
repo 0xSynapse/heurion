@@ -3,6 +3,7 @@ import { orgLogo } from '../model/org-templates.ts'
 import type { Documents } from '../model/runtime.ts'
 import { pendingGroups, withoutPending } from '../ops/suggest.ts'
 import { exportDocx } from './docx-export.ts'
+import { hasAiText } from '../model/provenance.ts'
 import { exportPptx } from './pptx-export.ts'
 import { isPlatformPackage, pptxTemplate } from './pptx-template.ts'
 import { themePhoto } from '../model/theme-photos.ts'
@@ -18,7 +19,10 @@ function baselineOf(docs: Documents, docId: string) {
  * 导出 docx：导入的文档以原始文件包为底座、未改动的块原样写回。
  * measurements：测量原子在导出者眼里的值（与界面同一份，见 measurements/service.ts）；不给时按快照之外的「未登记」处理。
  */
-export function docxFor(docs: Documents, docId: string, measurements?: MeasureLookup) {
+/**
+ * opts.clean：干净稿——AI 写的、还没人确认的文字按普通文字导出（默认写成「Heurion AI」名下的修订，在 Word 里接受即确认）。
+ */
+export function docxFor(docs: Documents, docId: string, measurements?: MeasureLookup, opts: { clean?: boolean } = {}) {
   docs.flush(docId)
   const store = docs.store
   const stored = store.getPackage(docId)
@@ -42,7 +46,14 @@ export function docxFor(docs: Documents, docId: string, measurements?: MeasureLo
       const bytes = a ? store.getAssetBytes(cleanId) : null
       return a && bytes ? { mime: a.mime, bytes } : null
     },
+    aiAsRevisions: !opts.clean,
   })
+  // AI 未确认的文字在文件里的样子：默认是 AI 名下的修订；干净稿里是普通文字（说明一句，免得以为已经确认）
+  if (hasAiText(current)) {
+    result.warnings.unshift(opts.clean
+      ? '这是干净稿：AI 写的、还没确认的文字按普通文字导出，Word 里看不出哪些是 AI 写的'
+      : 'AI 写的、还没确认的文字以「Heurion AI」名下的修订导出，在 Word 里接受修订即确认；需要不带这些修订的文件，请在导出菜单选「Word 干净稿」')
+  }
   // 明确告诉用户待采纳修订在文件里的样子，免得以为已经生效
   if (pending > 0) result.warnings.unshift(`文档里还有 ${pending} 条待采纳修订：段落的修订在导出文件里是 Word 修订，可在 Word 里逐条接受或拒绝；表格、列表、图的修订导出的是采纳前的内容`)
   return result
