@@ -179,12 +179,12 @@ export const ADMIN_TOOLS: ToolSpec[] = [
   },
   {
     name: 'doc_manage',
-    description: '文档管理：import 把工作区里的 docx / pptx 文件 file_path 导入为新文档（保留原格式）；rename / move_project（project_id 为空 = 移出项目）；duplicate 复制；trash 移到回收站（可恢复）；trash_list 回收站；restore 从回收站恢复；purge 彻底删除（不可恢复，需确认）；save_version 存一个版本；restore_version 恢复到版本 seq；revert_turn 撤销某一轮 AI 修改；export 导出 docx / pptx / md 到工作区（fonts=mac|win）；provenance 来源证明；ai_disclosure AI 使用声明草稿（lang=zh|en）。',
+    description: '文档管理：import 把工作区里的 docx / pptx 文件 file_path 导入为新文档（保留原格式）；rename / move_project（project_id 为空 = 移出项目）；duplicate 复制；trash 移到回收站（可恢复）；trash_list 回收站；restore 从回收站恢复；purge 彻底删除（不可恢复，需确认）；save_version 存一个版本；restore_version 恢复到版本 seq；revert_turn 撤销某一轮 AI 修改；export 导出 docx / pptx / md 到工作区（fonts=mac|win；docx 默认把 AI 未确认的文字写成 Heurion AI 名下的修订，clean=true 导出干净稿）；provenance 来源证明；ai_disclosure AI 使用声明草稿（lang=zh|en）。',
     input: {
       action: z.enum(['import', 'rename', 'move_project', 'duplicate', 'trash', 'trash_list', 'restore', 'purge', 'save_version', 'restore_version', 'revert_turn', 'export', 'provenance', 'ai_disclosure']),
       lang: z.enum(['zh', 'en']).optional(),
       doc_id: z.string().optional(), title: z.string().max(200).optional(), project_id: z.string().nullable().optional(), seq: z.number().int().optional(), turn_id: z.string().optional(),
-      format: z.enum(['docx', 'pptx', 'md']).optional(), fonts: z.enum(['mac', 'win']).optional(), file_path: z.string().optional(), reason: reasonField,
+      format: z.enum(['docx', 'pptx', 'md']).optional(), fonts: z.enum(['mac', 'win']).optional(), clean: z.boolean().optional(), file_path: z.string().optional(), reason: reasonField,
     },
     actions: {
       import: { method: 'POST', path: () => '/api/docs', body: (a, file) => ({ form: (a.project_id ? { project_id: String(a.project_id) } : {}) as Record<string, string>, file: file(a.file_path) }) },
@@ -198,7 +198,7 @@ export const ADMIN_TOOLS: ToolSpec[] = [
       save_version: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/save` },
       restore_version: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/versions/${enc(a.seq)}/restore` },
       revert_turn: { method: 'POST', path: a => `/api/docs/${enc(a.doc_id)}/turns/${enc(a.turn_id || 'latest')}/revert` },
-      export: { method: 'GET', path: a => `/api/docs/${enc(a.doc_id)}/export.${a.format ?? 'docx'}${q({ fonts: a.fonts })}`, save: a => `exports/${a.doc_id}.${a.format ?? 'docx'}` },
+      export: { method: 'GET', path: a => `/api/docs/${enc(a.doc_id)}/export.${a.format ?? 'docx'}${q({ fonts: a.fonts, clean: a.clean && (a.format ?? 'docx') === 'docx' ? '1' : undefined })}`, save: a => `exports/${a.doc_id}.${a.format ?? 'docx'}` },
       provenance: { method: 'GET', path: a => `/api/docs/${enc(a.doc_id)}/provenance` },
       ai_disclosure: { method: 'GET', path: a => `/api/docs/${enc(a.doc_id)}/ai-disclosure${q({ lang: a.lang })}` },
     },

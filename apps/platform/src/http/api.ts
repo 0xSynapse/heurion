@@ -1859,10 +1859,12 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/api/docs/:id/export.docx', c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
-    const result = docxFor(docs, row.id, measureViews(c, row))
+    // clean=1：干净稿（AI 未确认的文字按普通文字导出）；默认写成 AI 名下的修订
+    const clean = c.req.query('clean') === '1'
+    const result = docxFor(docs, row.id, measureViews(c, row), { clean })
     return c.body(Buffer.from(withFonts(result.bytes, exportFontsParam(c.req.query('fonts')))), 200, {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(row.title)}.docx`,
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(clean ? `${row.title}（干净稿）` : row.title)}.docx`,
       ...(result.warnings.length > 0 ? { 'X-Heurion-Warnings': encodeURIComponent(result.warnings.join('；')) } : {}),
     })
   })
