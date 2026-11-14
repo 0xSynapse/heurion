@@ -37,7 +37,7 @@ import { AnchorError, attachComment, locate, threadMarks } from '../model/anchor
 import { sourcePager } from '../convert/source-pages.ts'
 import type { Documents } from '../model/runtime.ts'
 import type { OpService } from '../ops/service.ts'
-import { DocOp, EditBatch, OpError, type RevisionDecision } from '../ops/types.ts'
+import { DocOp, EditBatch, OpError, targetIds, type RevisionDecision } from '../ops/types.ts'
 import type { RevisionFollowup } from '../ops/revision-decision.ts'
 import { referencePlan } from '../model/references.ts'
 import { diff, outline, read, ReadError, search } from '../views/read.ts'
@@ -412,11 +412,14 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
   function revisionCard(docId: string, batch: EditBatch, decision: RevisionDecision): { resolution: RevisionDecision; action_id: string; note: string } {
     const path = `/api/docs/${docId}/suggestions/${encodeURIComponent(decision.group)}/accept`
     const existing = store.listPendingActions(claims.u, 'pending').find(a => a.action === 'accept_revision' && a.path === path)
-    const note = `已在对话里给用户生成「采纳 ${decision.author} 的修订」确认卡。用户确认后，平台会先采纳这条修订，再自动按你这次的修改重新提交（仍经全部检查）。向用户说明原因，不要重复提交这批修改；结果用 action_status 查。用户也可能拒绝，那时改用 comment_add 把建议写成评论。`
+    const note = `已在对话里给用户生成「采纳 ${decision.author} 的修订」确认卡。用户确认后，平台会先采纳这条修订，再自动按你这次的修改重新提交（仍经全部检查）。向用户说明原因；确认后只会重新提交这批里碰到这段（{#${decision.revision_id ?? decision.original_id}}）的修改，不要再提交它们；同批里不涉及这段的修改请去掉这段后另行提交。结果用 action_status 查。用户也可能拒绝，那时改用 comment_add 把建议写成评论。`
     if (existing) return { resolution: decision, action_id: existing.id, note }
     const turn = ctx.activeTurn(docId)
+    // 卡里只记碰到这条修订的操作：同批里其余的修改 AI 会另行提交，重新提交时它们已经改过、会导致整批失败
+    const pair = new Set([decision.original_id, decision.revision_id].filter((x): x is string => !!x))
+    const mine = batch.ops.filter(op => [...targetIds(op), ...('anchor_id' in op ? [op.anchor_id] : [])].some(id => pair.has(id)))
     const followup: RevisionFollowup = {
-      kind: 'revision_decision', decision, batch: { ...batch, dry_run: undefined },
+      kind: 'revision_decision', decision, batch: { ...batch, dry_run: undefined, ops: mine.length ? mine : batch.ops },
       meta: { turnId: ctx.turnId, observe: ctx.observeKey, answering: turn?.answering ?? null },
     }
     const row = store.addPendingAction({

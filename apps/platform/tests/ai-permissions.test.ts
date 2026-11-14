@@ -233,7 +233,7 @@ describe('修订决定卡（docs/design/PROTECTION_RESOLUTION.md 第一步）', 
     const content: PMNode[] = [doc.child(0), orig, rev]
     t.docs.commit(row.id, doc.type.create(doc.attrs, content), { actor: 'user', turnId: null, ops: [] })
     const ai = await t.connect(user)
-    const batch = { doc_id: row.id, base_rev: t.docs.rev(row.id), mode: 'apply', ops: [{ op: 'replace_text', id: 'revx', find: '总生存期（意向性人群）', replace: '总生存期（意向性人群，随访 5 年）' }] }
+    const batch = { doc_id: row.id, base_rev: t.docs.rev(row.id), mode: 'apply', ops: [{ op: 'replace_text', id: doc.child(0).attrs.id as string, find: '第一段', replace: '首段' }, { op: 'replace_text', id: 'revx', find: '总生存期（意向性人群）', replace: '总生存期（意向性人群，随访 5 年）' }] }
     const r = await ai('doc_edit', batch)
     expect(r.isError).toBe(true)
     expect(r.data.code).toBe('pending_suggestion')
@@ -248,7 +248,8 @@ describe('修订决定卡（docs/design/PROTECTION_RESOLUTION.md 第一步）', 
     expect(ok.status).toBe(200)
     expect(ok.json.status).toBe('done')
     expect(ok.json.result).toMatchObject({ ok: true, retry: { ok: true, mode: 'apply' } })
-    // 导师的修订已采纳，AI 的修改在采纳后的文字上生效；没有东西记在导师名下
+    // 导师的修订已采纳，AI 的修改在采纳后的文字上生效；没有东西记在导师名下。
+    // 卡里只记碰到这段的操作：同批里改第一段的那处不随卡重新提交（AI 另行提交）
     const after: Array<{ text: string; suggest: unknown; author: unknown }> = []
     t.docs.get(row.id).forEach(n => after.push({ text: n.textContent, suggest: n.attrs.suggest, author: n.attrs.suggest_author }))
     expect(after.some(b => b.author === 'Li Ming')).toBe(false)
