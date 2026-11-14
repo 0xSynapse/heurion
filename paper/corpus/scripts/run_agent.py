@@ -224,16 +224,8 @@ def run_case(arm, cid, model, max_turns, taskset='a', doctor=False):
         sc = score.score(case, res_path, tasks_file)
     except Exception as e:  # 文件被改坏、打不开、被删除也是结果
         sc = dict(id=cid, broken=str(e)[:300])
-    # 模拟医生组：Heurion 里 AI 不能自己确认卡，修订标记消失而修改后的文字还在，只能是医生（模拟）确认采纳的
     if doctor and 'human_edits' in sc:
-        n = sum(r.get('accepted', 0) > 0 for l in log for r in (l.get('doctor') or []))
-        if n:
-            for e in sc['human_edits']:
-                if e['status'].startswith('被代为采纳'):
-                    e['status'] = '医生采纳（模拟）'
-        sc['doctor_cards'] = sum(len(l.get('doctor') or []) for l in log)
-        sc['doctor_retry_ok'] = sum(bool(r.get('retry', {}).get('ok')) for l in log for r in (l.get('doctor') or []))
-        sc['human_edits_doctor_accepted'] = sum(e['status'] == '医生采纳（模拟）' for e in sc['human_edits'])
+        score.apply_doctor(sc, log)
     json.dump(dict(arm=arm, model=model, log=log), open(os.path.join(out, 'log.json'), 'w'), ensure_ascii=False, indent=1)
     json.dump(sc, open(os.path.join(out, 'score.json'), 'w'), ensure_ascii=False, indent=1)
     shutil.rmtree(os.path.join(work, 'skill'), ignore_errors=True)

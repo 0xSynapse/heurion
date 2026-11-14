@@ -31,6 +31,8 @@ def summarize(arm):
             sc = dict(id=d, broken=str(e)[:200])
         meta = json.load(open(os.path.join(ROOT, 'out', d, 'meta.json')))
         log = json.load(open(os.path.join(run, 'log.json')))['log'] if os.path.exists(os.path.join(run, 'log.json')) else []
+        if '-doc' in arm:
+            score.apply_doctor(sc, log)
         sc['mode'] = meta['citation_mode']
         sc['output_tokens'] = sum((l.get('usage') or {}).get('output_tokens', 0) for l in log)
         sc['input_tokens'] = sum((l.get('usage') or {}).get('input_tokens', 0) for l in log)
@@ -67,6 +69,11 @@ def table(arm, rows):
             td[k][0] += bool(v['done'])
             td[k][1] += 1
     print(f'- 导师修订仍待采纳：{he[0]}/{he[1]}；{dict(st)}')
+    rv = sum(1 for r in ok for e in r['human_edits'] if e.get('ai_suggestion_reverts'))
+    if rv:
+        print(f'- 接受 AI 的待采纳修订会撤掉导师的修改：{rv} 处（导师的修改仍在，AI 的建议待人审阅）')
+    if any('doctor_cards' in r for r in ok):
+        print(f'- 修订决定卡（模拟医生确认）：{sum(r.get("doctor_cards", 0) for r in ok)} 张，采纳后重新提交成功 {sum(r.get("doctor_retry_ok", 0) for r in ok)}')
     print(f'- 导师批注保留（在且锚定）：{cm[0]}/{cm[1]}')
     print(f'- 引用域（{len(fields)} 篇用 EndNote/Zotero，共 {cf0} 个）：变成纯文字 {flat}，整个丢失 {drop}')
     print(f'- 新增引用：{add}')
@@ -80,7 +87,7 @@ def table(arm, rows):
         s2 = [p['S2'] for p in pr if 'S2' in p]
         s3 = [p['S3'] for p in pr if 'S3' in p and not p['S3'].get('lost')]
         s4 = [p['S4'] for p in pr if 'S4' in p]
-        print(f'- S1 文献对比（{len(s1)}）：写了新数字 {sum(bool(x["new_numbers"]) for x in s1)}，其中有数字找不到出处 {sum(bool(x["unsupported"]) for x in s1)}，'
+        print(f'- S1 文献对比（{len(s1)}）：写了新数字 {sum(bool(x["new_numbers"]) for x in s1)}，其中有数字找不到出处 {sum(bool(x["unsupported"]) for x in s1)}（只有摘要、待医生核对 {sum(bool(x.get("needs_expert")) for x in s1)}），'
               f'同句引用了该文献 {sum(x["cited_again"] for x in s1)}，完全正确 {sum(x["done"] for x in s1)}')
         print(f'- S2 补充依据（{len(s2)}）：形式 {dict(Counter(x["form"] for x in s2))}；形式正确 {sum(x["proper_form"] for x in s2)}；给出 DOI {sum(bool(x["dois"]) for x in s2)}')
         print(f'- S3 润色讨论（{len(s3)}）：改了 {sum(x["changed"] for x in s3)}，谨慎措辞变少 {sum(x["weakened_hedging"] for x in s3)}，强度词变多 {sum(x["strengthened"] for x in s3)}，'
