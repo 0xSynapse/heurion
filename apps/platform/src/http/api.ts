@@ -49,6 +49,7 @@ import { registerMailCalendarRoutes } from './routes/mail-calendar.ts'
 import { registerResearchRoutes } from './routes/research.ts'
 import { registerPublicToolsApi } from './routes/public-tools-api.ts'
 import { SURVEY_ID, SURVEY_VERSION, SurveyError, exportCsv, exportJson, validateSubmission, type SurveyResponseRow } from '../survey/clinician-survey.ts'
+import { ReviewError, hashReviewToken, newReviewToken, parseUpload as parseReviewUpload, progress as reviewProgress, validateAnswer as validateReviewAnswer, type ReviewPackage } from '../review/expert-review.ts'
 import type { MemoryEvolution } from '../memory/evolve.ts'
 import { MemoryError, type MemoryService } from '../memory/service.ts'
 import { SkillTrainingService } from '../memory/skill-trainer.ts'
@@ -487,6 +488,54 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     }
   })
 
+  // —— 专家审阅页（/review/<token>，review/expert-review.ts）：凭私密链接免登录；读题、逐条存答案、下载测试稿 ——
+  const reviewOf = (c: Context) => {
+    const token = c.req.param('token') ?? ''
+    const id = token.length >= 20 && token.length <= 64 ? store.expertReviewByToken(hashReviewToken(token)) : undefined
+    return id ? store.getExpertReview(id) : undefined
+  }
+  const reviewWrites = new Map<string, number[]>()
+  app.get('/api/public/expert-review/:token', c => {
+    const r = reviewOf(c)
+    if (!r) return c.json({ error: '链接无效或已失效', code: 'not_found' }, 404)
+    const pkg = r.pkg as ReviewPackage
+    const answers = Object.fromEntries(store.expertReviewAnswers(r.id).map(a => [a.key, a.value]))
+    c.header('Cache-Control', 'no-store')
+    return c.json({ package: pkg, answers, progress: reviewProgress(pkg, answers), updated_at: r.updated_at })
+  })
+  app.put('/api/public/expert-review/:token/answers', async c => {
+    const r = reviewOf(c)
+    if (!r) return c.json({ error: '链接无效或已失效', code: 'not_found' }, 404)
+    const t = Date.now()
+    const recent = (reviewWrites.get(r.id) ?? []).filter(x => t - x < 60_000)
+    if (recent.length >= 300) return c.json({ error: '保存太频繁，请稍后再试', code: 'rate_limited' }, 429)
+    recent.push(t)
+    reviewWrites.set(r.id, recent)
+    const text = await c.req.text()
+    if (text.length > 200_000) return c.json({ error: '提交内容过大', code: 'too_large' }, 413)
+    let body: { answers?: Array<{ key?: unknown; value?: unknown }> }
+    try { body = JSON.parse(text) } catch { return c.json({ error: '提交格式不对', code: 'bad_request' }, 400) }
+    const pkg = r.pkg as ReviewPackage
+    try {
+      const list = (Array.isArray(body.answers) ? body.answers : []).slice(0, 200).map(a => validateReviewAnswer(pkg, a?.key, a?.value))
+      for (const a of list) store.setExpertReviewAnswer(r.id, a.key, a.value)
+    } catch (err) {
+      if (err instanceof ReviewError) return c.json({ error: err.message, code: err.code }, 400)
+      throw err
+    }
+    const answers = Object.fromEntries(store.expertReviewAnswers(r.id).map(a => [a.key, a.value]))
+    return c.json({ ok: true, progress: reviewProgress(pkg, answers) })
+  })
+  app.get('/api/public/expert-review/:token/files/:name', c => {
+    const r = reviewOf(c)
+    const f = r ? store.expertReviewFile(r.id, c.req.param('name')) : undefined
+    if (!f) return c.json({ error: '没有这个文件', code: 'not_found' }, 404)
+    return c.body(Buffer.from(f.bytes), 200, {
+      'Content-Type': f.mime, 'Cache-Control': 'no-store',
+      'Content-Disposition': `attachment; filename="${c.req.param('name').replace(/[^\w.-]/g, '_')}"`,
+    })
+  })
+
   // —— AAP-1.0 统一身份鉴权与 MCP 网关（支持 RFC 8628 设备码免密绑定、Session 令牌、账号密码兑换、或 aegis_at_heurion.* 令牌） ——
   app.post('/api/aegis/auth/device', async c => {
     if (viaByReq.get(c.req.raw)) {
@@ -651,6 +700,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       c.req.path === '/api/imaging/pacs/webhook' ||
       c.req.path.startsWith('/api/public/tools/') ||
       c.req.path.startsWith('/api/public/survey/') ||
+      // 专家审阅页：凭私密链接里的 token 访问（库里只存哈希），见 review/expert-review.ts
+      c.req.path.startsWith('/api/public/expert-review/') ||
       c.req.path === '/api/aegis/auth/device' ||
       c.req.path === '/api/aegis/auth/token' ||
       c.req.path === '/api/aegis/mcp'
@@ -1264,6 +1315,41 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return format === 'csv'
       ? c.json({ filename: `${SURVEY_ID}-${date}.csv`, mime: 'text/csv;charset=utf-8', count: rows.length, content: exportCsv(rows) })
       : c.json({ filename: `${SURVEY_ID}-${date}.json`, mime: 'application/json', count: rows.length, content: JSON.stringify(exportJson(rows), null, 2) })
+  })
+
+  // 管理员：专家审阅页——上传题目包（新建时返回只显示一次的私密链接；带 id 则替换题目，链接与答案不变）、列表、导出答案。
+  // 只能由管理员本人操作：AI 的进程内调用一律拒绝（题目包含未公开的测试稿，链接等同于访问凭据）
+  app.post('/api/admin/expert-reviews', async c => {
+    if (viaByReq.get(c.req.raw)) return c.json({ error: '只能由管理员本人上传', code: 'human_only' }, 403)
+    const text = await c.req.text()
+    if (text.length > 30_000_000) return c.json({ error: '题目包过大（上限约 20 MB）', code: 'too_large' }, 413)
+    let body: { id?: unknown }
+    try { body = JSON.parse(text) } catch { return c.json({ error: '提交格式不对', code: 'bad_request' }, 400) }
+    try {
+      const { pkg, files } = parseReviewUpload(body)
+      if (typeof body.id === 'string') {
+        if (!store.getExpertReview(body.id)) return c.json({ error: '没有这份审阅', code: 'not_found' }, 404)
+        store.putExpertReview({ id: body.id, title: pkg.title, pkg, files, by: c.get('user') })
+        audit(c, 'expert_review.update', { target: body.id, detail: `${pkg.title}，${files.length} 个附件` })
+        return c.json({ id: body.id, replaced: true })
+      }
+      const token = newReviewToken()
+      const id = store.putExpertReview({ tokenHash: hashReviewToken(token), title: pkg.title, pkg, files, by: c.get('user') })
+      audit(c, 'expert_review.create', { target: id, detail: `${pkg.title}，${files.length} 个附件` })
+      return c.json({ id, token, path: `/review/${token}` })
+    } catch (err) {
+      if (err instanceof ReviewError) return c.json({ error: err.message, code: err.code }, 400)
+      throw err
+    }
+  })
+  app.get('/api/admin/expert-reviews', c => c.json(store.listExpertReviews()))
+  app.get('/api/admin/expert-reviews/:id/answers', c => {
+    const r = store.getExpertReview(c.req.param('id'))
+    if (!r) return c.json({ error: '没有这份审阅', code: 'not_found' }, 404)
+    const rows = store.expertReviewAnswers(r.id)
+    audit(c, 'expert_review.export', { target: r.id, detail: `${rows.length} 条答案` })
+    const answers = Object.fromEntries(rows.map(a => [a.key, a.value]))
+    return c.json({ id: r.id, title: r.title, updated_at: r.updated_at, progress: reviewProgress(r.pkg as ReviewPackage, answers), answers: rows })
   })
 
   // 管理员：本实例停用记忆（同时删除所有用户的记忆）

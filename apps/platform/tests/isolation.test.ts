@@ -55,6 +55,8 @@ const PARAMS: Record<string, (s: Seed) => string> = {
   lkid: () => 'lk000000000000',
   // 科研队列影像去标识导出申请（T2.8）：不存在的 id 也必须 4xx
   eid: () => 'ie-none',
+  // 专家审阅页的私密链接：库里只有哈希，不知道 token 的人带任何值（含任何文件名）都必须 404
+  token: () => 'x'.repeat(32), name: () => 'Q01.docx',
 }
 /** 按设计公开的接口（不需要登录或本身就是给持有链接的人用的）。 */
 const PUBLIC: Record<string, string> = {
@@ -260,6 +262,8 @@ describe('越权：MCP 工具，别的机构的 AI 带着 A 的 id 都碰不到'
     var_ids: () => ['l3_smi'], ct_sample_id: () => 'x', pet_sample_id: () => 'x', roi_mask_sample_id: () => 'x', gtv_mask_sample_id: () => 'x', mask_sample_id: () => 'x', cite_id: () => 'c0', asset_id: s => s.asset, project: s => s.project, patient_id: s => s.patient, patient_ids: s => [s.patient], record_id: s => s.record, lab_id: s => s.lab, study_id: s => s.study, ref_id: s => s.doc, section_id: () => 'b0', slide_ids: () => ['s0'], from_id: () => 'b0', to_id: () => 'b0', claim_id: () => 'k0', photo_id: () => 'p0', user_id: s => s.userA,
     to_user_id: s => s.userA, template_id: s => s.orgTemplate, share_id: s => s.share, department_id: s => s.department, doctor_id: s => s.userA, user_ids: s => [s.userA], tenant_id: s => s.tenantA, project_id: s => s.project, turn_id: s => s.turn, memory_id: s => s.memory, job_id: s => s.job, action_id: s => s.action, member_id: s => s.patient,
     model_id: () => 'lung_nodule_segmenter',
+    // 专家审阅（平台运营导出答案）：不存在的审阅 4xx
+    review_id: () => 'er-none',
     sample_id: () => 'spleen_test',
     baseline_sample_id: () => 'spleen_test',
     followup_sample_id: () => 'spleen_test',

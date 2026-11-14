@@ -946,6 +946,19 @@ export class Store {
       id TEXT PRIMARY KEY, survey TEXT NOT NULL, version TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_survey_responses_survey ON survey_responses (survey, created_at);`)
+    // 专家审阅页（review/expert-review.ts）：题目包与附件由管理员上传；只存访问 token 的哈希；答案按「题目键.问题键」逐条存
+    this.db.exec(`CREATE TABLE IF NOT EXISTS expert_reviews (
+      id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, title TEXT NOT NULL, package TEXT NOT NULL,
+      created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS expert_review_files (
+      review_id TEXT NOT NULL REFERENCES expert_reviews(id) ON DELETE CASCADE, name TEXT NOT NULL, mime TEXT NOT NULL, bytes BLOB NOT NULL,
+      PRIMARY KEY (review_id, name)
+    );
+    CREATE TABLE IF NOT EXISTS expert_review_answers (
+      review_id TEXT NOT NULL REFERENCES expert_reviews(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY (review_id, key)
+    );`)
     this.cleanLegacyCitations()
     // 科室与知家分享（docs/design/SHARING.md）
     this.db.exec(`CREATE TABLE IF NOT EXISTS tenant_departments (
@@ -1518,6 +1531,43 @@ export class Store {
   listSurveyResponses(survey: string): Array<{ id: string; version: string; created_at: string; data: unknown }> {
     const rows = this.db.prepare('SELECT id, version, data, created_at FROM survey_responses WHERE survey = ? ORDER BY created_at, id').all(survey) as Array<{ id: string; version: string; data: string; created_at: string }>
     return rows.map(r => ({ id: r.id, version: r.version, created_at: r.created_at, data: JSON.parse(r.data) }))
+  }
+
+  // —— 专家审阅页 ——
+  /** 新建（id 为空）或替换题目包与附件；替换时 token 与已填答案不变。 */
+  putExpertReview(r: { id?: string; tokenHash?: string; title: string; pkg: unknown; files: Array<{ name: string; mime: string; bytes: Uint8Array }>; by: string | null }): string {
+    const t = now()
+    const id = r.id ?? randomUUID()
+    this.db.exec('BEGIN')
+    try {
+      if (r.id) this.db.prepare('UPDATE expert_reviews SET title = ?, package = ?, updated_at = ? WHERE id = ?').run(r.title, JSON.stringify(r.pkg), t, id)
+      else this.db.prepare('INSERT INTO expert_reviews (id, token_hash, title, package, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, r.tokenHash!, r.title, JSON.stringify(r.pkg), r.by, t, t)
+      this.db.prepare('DELETE FROM expert_review_files WHERE review_id = ?').run(id)
+      const ins = this.db.prepare('INSERT INTO expert_review_files (review_id, name, mime, bytes) VALUES (?, ?, ?, ?)')
+      for (const f of r.files) ins.run(id, f.name, f.mime, f.bytes)
+      this.db.exec('COMMIT')
+    } catch (err) { this.db.exec('ROLLBACK'); throw err }
+    return id
+  }
+  getExpertReview(id: string): { id: string; title: string; pkg: unknown; created_at: string; updated_at: string } | undefined {
+    const r = this.db.prepare('SELECT id, title, package, created_at, updated_at FROM expert_reviews WHERE id = ?').get(id) as { id: string; title: string; package: string; created_at: string; updated_at: string } | undefined
+    return r ? { id: r.id, title: r.title, pkg: JSON.parse(r.package), created_at: r.created_at, updated_at: r.updated_at } : undefined
+  }
+  expertReviewByToken(tokenHash: string): string | undefined {
+    return (this.db.prepare('SELECT id FROM expert_reviews WHERE token_hash = ?').get(tokenHash) as { id: string } | undefined)?.id
+  }
+  listExpertReviews(): Array<{ id: string; title: string; created_at: string; updated_at: string; answers: number }> {
+    return this.db.prepare('SELECT r.id, r.title, r.created_at, r.updated_at, (SELECT COUNT(*) FROM expert_review_answers a WHERE a.review_id = r.id) AS answers FROM expert_reviews r ORDER BY r.created_at DESC').all() as Array<{ id: string; title: string; created_at: string; updated_at: string; answers: number }>
+  }
+  expertReviewFile(id: string, name: string): { mime: string; bytes: Uint8Array } | undefined {
+    return this.db.prepare('SELECT mime, bytes FROM expert_review_files WHERE review_id = ? AND name = ?').get(id, name) as { mime: string; bytes: Uint8Array } | undefined
+  }
+  expertReviewAnswers(id: string): Array<{ key: string; value: string; updated_at: string }> {
+    return this.db.prepare('SELECT key, value, updated_at FROM expert_review_answers WHERE review_id = ? ORDER BY key').all(id) as Array<{ key: string; value: string; updated_at: string }>
+  }
+  setExpertReviewAnswer(id: string, key: string, value: string | null): void {
+    if (value === null) this.db.prepare('DELETE FROM expert_review_answers WHERE review_id = ? AND key = ?').run(id, key)
+    else this.db.prepare('INSERT INTO expert_review_answers (review_id, key, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (review_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(id, key, value, now())
   }
 
   surveyStats(survey: string): { count: number; latest: string | null } {

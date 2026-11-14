@@ -685,6 +685,7 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
     </div>
     <div class="org-panel" id="tabAdminSurveys" hidden>
       <div id="adminSurveys" class="admin-surveys">加载中…</div>
+      <div id="adminExpertReviews" class="admin-surveys">加载中…</div>
     </div>
     <div class="org-panel" id="tabAdminReviewQ" hidden>
       <div id="adminReviewQ" class="admin-surveys">加载中…</div>
@@ -754,6 +755,54 @@ async function openAdmin(me: Me, api: <T = any>(path: string, opts?: RequestInit
     box.querySelector<HTMLButtonElement>('#surveyJson')!.onclick = () => void save('json')
   }
   void renderSurveys().catch(err => notify((err as Error).message, true))
+  // 专家审阅页（review/expert-review.ts）：上传题目包（实验脚本 build_review.py 生成的 JSON），新建时私密链接只显示这一次；替换题目时链接与答案不变
+  const renderExpertReviews = async () => {
+    const list = await api<Array<{ id: string; title: string; created_at: string; updated_at: string; answers: number }>>('/api/admin/expert-reviews')
+    const box = dlg.querySelector('#adminExpertReviews')!
+    const t = (s: string) => new Date(s).toLocaleString('zh-CN', { hour12: false })
+    box.innerHTML = `<div><b>专家审阅</b> <span class="muted small">给受邀医生的私密页面：凭链接免登录作答，答案自动保存</span></div>
+      ${list.length ? `<table class="mini-table"><tbody>${list.map(r => `<tr data-er="${esc(r.id)}">
+        <td>${esc(r.title)}<div class="muted small">建于 ${t(r.created_at)} · 题目更新于 ${t(r.updated_at)} · 已答 ${r.answers} 问</div></td>
+        <td style="white-space:nowrap"><button data-act="replace">替换题目</button> <button data-act="export">${icon('download')} 导出答案</button></td></tr>`).join('')}</tbody></table>` : '<div class="muted small">还没有专家审阅</div>'}
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button id="erNew">新建专家审阅…</button></div>
+      <div id="erLink" hidden></div>
+      <input type="file" id="erFile" accept="application/json,.json" hidden>`
+    const file = box.querySelector<HTMLInputElement>('#erFile')!
+    let target: string | null = null
+    const pick = (id: string | null) => { target = id; file.value = ''; file.click() }
+    box.querySelector<HTMLButtonElement>('#erNew')!.onclick = () => pick(null)
+    file.onchange = async () => {
+      const f = file.files?.[0]
+      if (!f) return
+      try {
+        const body = JSON.parse(await f.text()) as Record<string, unknown>
+        if (target) body.id = target
+        const r = await api<{ id: string; token?: string; path?: string; replaced?: boolean }>('/api/admin/expert-reviews', { method: 'POST', body: JSON.stringify(body) })
+        await renderExpertReviews()
+        if (r.path) {
+          // 链接只在这里显示一次（服务器只存哈希）：请复制后发给医生
+          const url = `${location.origin}${r.path}`
+          const link = box.querySelector<HTMLElement>('#erLink')!
+          link.hidden = false
+          link.innerHTML = `<div class="danger-confirm">医生的私密链接只显示这一次，请现在复制并妥善发送：<br><code style="word-break:break-all">${esc(url)}</code><br><button id="erCopy">复制链接</button></div>`
+          link.querySelector<HTMLButtonElement>('#erCopy')!.onclick = () => void navigator.clipboard.writeText(url).then(() => notify('已复制'))
+        } else notify('题目已替换，链接和已填答案不变')
+      } catch (err) { notify((err as Error).message, true) }
+    }
+    box.querySelectorAll<HTMLTableRowElement>('tr[data-er]').forEach(row => {
+      const id = row.dataset.er!
+      row.querySelector<HTMLButtonElement>('[data-act="replace"]')!.onclick = () => pick(id)
+      row.querySelector<HTMLButtonElement>('[data-act="export"]')!.onclick = async () => {
+        try {
+          const r = await api<unknown>(`/api/admin/expert-reviews/${encodeURIComponent(id)}/answers`)
+          const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([JSON.stringify(r, null, 2)], { type: 'application/json' })), download: `expert-review-${id.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.json` })
+          a.click()
+          setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+        } catch (err) { notify((err as Error).message, true) }
+      }
+    })
+  }
+  void renderExpertReviews().catch(err => notify((err as Error).message, true))
   // 审稿质量（docs/design/REVIEW_QUALITY.md）：由真实审稿与医生对意见的处理统计，不另跑测试集
   const renderReviewQuality = async () => {
     const q = await api<any>('/api/admin/review-quality?days=30')
