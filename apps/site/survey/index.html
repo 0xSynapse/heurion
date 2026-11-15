@@ -140,7 +140,7 @@ label.opt input { accent-color: var(--mint-text); margin: 0; flex: none; }
   <header class="masthead">
     <div class="eyebrow">Heurion · 研究问卷</div>
     <h1>医生科研写作与 AI 使用</h1>
-    <p class="lede">我们想了解医生写论文的真实过程，以及 AI 工具在其中的作用。没有对错之分，按实际情况选择即可。问卷匿名，不收集姓名、单位和联系方式，结果只用于研究。</p>
+    <p class="lede">我们想了解医生写论文的真实过程，以及 AI 工具在其中的作用。没有对错之分，按实际情况选择即可。问卷匿名，不收集姓名和联系方式；所在机构和城市为选填，只用于了解答卷来自哪些地区和机构。结果只用于研究。</p>
     <div class="facts"><span>约 <b>10 分钟</b></span><span><b id="countRequired">19</b> 道选择题 + 1 道选填</span></div>
   </header>
 
@@ -191,7 +191,8 @@ label.opt input { accent-color: var(--mint-text); margin: 0; flex: none; }
 
   /* —— 渲染 —— */
   function qHtml(q) {
-    var num = String(Number(q.id.slice(1)));
+    // 题号按在问卷里出现的顺序（题目编号 q01… 只用于保存与导出，新增的题编号接在最后）
+    var num = String(ORDER[q.id]);
     var kind = q.type === "single" ? "单选" : q.type === "multi" ? (q.max ? "多选 · 最多 " + q.max + " 项" : "多选") : q.type === "scale" ? "1–5 分" : "选填";
     var h = '<fieldset class="q" id="f_' + q.id + '"><legend><span class="num">' + num + '</span><span class="text">' + esc(q.t) + '</span>' +
       '<span class="kind">' + kind + '</span>' + (q.s ? '<span class="scenario">' + esc(q.s) + '</span>' : "") + '</legend><div class="body">';
@@ -207,10 +208,15 @@ label.opt input { accent-color: var(--mint-text); margin: 0; flex: none; }
         return '<label class="opt"><input type="radio" name="' + q.id + '" id="' + q.id + '_' + n + '" value="' + n + '">' + n + '</label>';
       }).join("") + '<span class="end">' + esc(q.ends[1]) + '</span></div>';
     } else {
-      h += '<textarea id="' + q.id + '" data-text="' + q.id + '" rows="3" maxlength="2000" placeholder="选填"></textarea>';
+      h += q.short
+        ? '<input type="text" id="' + q.id + '" data-text="' + q.id + '" maxlength="100" autocomplete="off" placeholder="' + esc(q.placeholder || "选填") + '">'
+        : '<textarea id="' + q.id + '" data-text="' + q.id + '" rows="3" maxlength="2000" placeholder="' + esc(q.placeholder || "选填") + '"></textarea>';
     }
     return h + '</div></fieldset>';
   }
+
+  var ORDER = {}, seq = 0;
+  PARTS.forEach(function (p) { p.qs.forEach(function (q) { ORDER[q.id] = ++seq; }); });
 
   document.getElementById("parts").innerHTML = PARTS.map(function (p) {
     return '<section class="part"><div class="part-head"><h2>' + esc(p.title) + '</h2><span class="eyebrow">' +

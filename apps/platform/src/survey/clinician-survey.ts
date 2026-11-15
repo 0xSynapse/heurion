@@ -7,7 +7,7 @@
  */
 
 export const SURVEY_ID = 'clinician-writing'
-export const SURVEY_VERSION = '2026-11-13'
+export const SURVEY_VERSION = '2026-11-15'
 
 export type QuestionType = 'single' | 'multi' | 'scale' | 'text'
 
@@ -28,6 +28,10 @@ export interface SurveyQuestion {
   /** 1–5 分量表两端的说明 */
   ends?: [string, string]
   optional?: boolean
+  /** 文字题：单行短答（机构、城市等，最多 SHORT_MAX 字），默认多行 */
+  short?: boolean
+  /** 文字题的输入提示 */
+  placeholder?: string
 }
 
 export interface SurveySection { id: string; title: string; qs: SurveyQuestion[] }
@@ -37,6 +41,9 @@ export const SURVEY_SECTIONS: SurveySection[] = [
     { id: 'q01', type: 'single', t: '您目前的职位是？', o: ['主任 / PI', '副主任医师', '主治医师', '住院医师', '博士研究生', '硕士研究生', '博士后 / 研究员', '其他'] },
     { id: 'q02', type: 'single', t: '您主要做哪类研究？', o: ['临床研究为主', '基础研究为主', '两者都有'] },
     { id: 'q03', type: 'single', t: '近两年，您作为主笔完成的论文大约有几篇？', o: ['0 篇', '1–2 篇', '3–5 篇', '6–10 篇', '10 篇以上'] },
+    // 2026-11-15 新增（选填）：了解答卷来自哪些地区和机构；编号接在最后一题之后，页面按出现顺序显示题号
+    { id: 'q21', type: 'text', short: true, optional: true, t: '您所在的机构', placeholder: '例如：某某大学附属医院（选填）' },
+    { id: 'q22', type: 'text', short: true, optional: true, t: '您所在的城市', placeholder: '例如：合肥（选填）' },
   ] },
   { id: 's2', title: '写作与协作', qs: [
     { id: 'q04', type: 'multi', t: '您写论文主要用什么工具？', o: ['Word', 'WPS', 'LaTeX / Overleaf', '腾讯文档等在线文档', 'Pages', '其他'] },
@@ -73,6 +80,7 @@ export const SURVEY_SECTIONS: SurveySection[] = [
 export const SURVEY_QUESTIONS: SurveyQuestion[] = SURVEY_SECTIONS.flatMap(s => s.qs)
 
 const TEXT_MAX = 2000
+const SHORT_MAX = 100
 const OTHER_MAX = 200
 
 export type SurveyAnswer = string | string[] | number | null
@@ -123,7 +131,7 @@ export function validateSubmission(raw: unknown): SurveySubmission {
       if (!Number.isInteger(n) || n < 1 || n > 5) throw new SurveyError(`第 ${q.id} 题应为 1–5 分`, 'bad_option')
       answers[q.id] = n
     } else {
-      const s = typeof v === 'string' ? v.trim().slice(0, TEXT_MAX) : ''
+      const s = typeof v === 'string' ? v.trim().slice(0, q.short ? SHORT_MAX : TEXT_MAX) : ''
       answers[q.id] = s || null
     }
     const a = answers[q.id]
