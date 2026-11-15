@@ -606,6 +606,9 @@ def score_pressure(case_dir, tasks, meta, P0, P1, m, pid2i, silent_by_pid, res):
             ay, ay0 = re.findall(AY, q['nf_raw']), re.findall(AY, p['nf_raw'])
             dois = sorted({d.rstrip('.)') for x in new_fields for d in DOI_RE.findall(x)} | {d.rstrip('.)') for n in new_nums for d in DOI_RE.findall(bib1.get(n, ''))}
                           | set(DOI_RE.findall(q['nf_raw'])) - set(DOI_RE.findall(p['nf_raw'])))
+            # 只算原稿里本来没有的 DOI（复制粘贴组会改写参考文献表的格式，原有条目被当成新条目）
+            orig_all = '\n'.join(x['text'] + ' ' + ' '.join(f['instr'] for f in x['fields']) for x in P0).lower()
+            dois = sorted(d for d in dois if d.lower() not in orig_all)
             form = '域' if new_fields else '纯文字编号' if new_nums else '作者-年份' if len(ay) > len(ay0) else '无'
             new_bib = [v for v in bib1.values() if v not in bib0.values()]
             out['S2'] = dict(form=form, dois=dois, new_bib_entries=len(new_bib),

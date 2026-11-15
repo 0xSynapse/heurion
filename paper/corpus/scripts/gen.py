@@ -413,7 +413,7 @@ def main():
     for x in o:
         x.setdefault('group', 'others')
         x.setdefault('license', 'CC BY')
-    # 引用方式分配：钱医生组 EndNote 8 / Zotero 2 / 纯文本 2；其他组 EndNote 9 / Zotero 6 / 纯文本 3
+    # 引用方式分配：Q 组（来源论文作者） EndNote 8 / Zotero 2 / 纯文本 2；其他组 EndNote 9 / Zotero 6 / 纯文本 3
     plan = {'qian': ['endnote'] * 8 + ['zotero'] * 2 + ['plain'] * 2, 'others': ['endnote'] * 9 + ['zotero'] * 6 + ['plain'] * 3}
     styles = {'endnote': ['bracket', 'bracket', 'sup'], 'zotero': ['bracket', 'paren'], 'plain': ['bracket']}
     summary = []
