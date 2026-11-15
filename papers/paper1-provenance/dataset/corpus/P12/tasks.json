@@ -1,0 +1,100 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 4,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 4 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 67.1 应为 67.4，请只改这一处：“Of the included patients, 473 (67.1%) underwent unilateral surgery, and 232 (32.9%) had bilateral surgeries, with an average of 1.8 ± 1.12 surgeries per patient”",
+  "target": {
+   "pid": "3250A1B5",
+   "section": "Results",
+   "para_start": "Of the included patients, 473 (67.1%) underwent unilateral s"
+  },
+  "check": {
+   "old": "67.1",
+   "new": "67.4",
+   "sentence": "Of the included patients, 473 (67.1%) underwent unilateral surgery, and 232 (32.9%) had bilateral surgeries, with an average of 1.8 ± 1.12 surgeries per patient.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 1中「Age」行、「Present」列的 62.8 改为 62.9（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "2397FCA4",
+   "table": "Table 1",
+   "row": "Age",
+   "col": "Present",
+   "cell_text": "62.8 ± 19.24"
+  },
+  "check": {
+   "old": "62.8",
+   "new": "62.9",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “Interestingly, the prevalence of strabismus increa…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "7E455FC7",
+   "section": "Discussion",
+   "para_start": "Interestingly, the prevalence of strabismus increases expone"
+  },
+  "check": {
+   "words_before": 109,
+   "numbers": [
+    "5",
+    "1.64%",
+    "12.50%"
+   ],
+   "cited_refs": [
+    "10.1007/s00417-020-04630-x"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“Please compare this with previous studies here.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "6BC21724",
+   "comment_id": 0,
+   "anchor": "The etiology of strabismus following the implantation of glaucoma drainage devices is multifactorial and may result from various factors including the mass effect of the implant, implant-induced restriction, adherence of retro-orbital fat, intraoperative trauma to extraocular muscles, muscle scarring, or displacement of the muscle pathway."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Discussion」这句话末尾补充引用：“The most common form of postoperative strabismus observed is restrictive strabismus” 文献：Abdelaziz A, Capó H, Banitt MR et al. Diplopia after glaucoma drainage device implantation. J AAPOS. 2013. doi:10.1016/j.jaapos.2012.11.017",
+  "target": {
+   "pid": "2A98AD31",
+   "section": "Discussion",
+   "para_start": "The most common form of postoperative strabismus observed is"
+  },
+  "check": {
+   "doi": "10.1016/j.jaapos.2012.11.017",
+   "title": "Diplopia after glaucoma drainage device implantation",
+   "sentence": "The most common form of postoperative strabismus observed is restrictive strabismus",
+   "ref_cited_elsewhere": true,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

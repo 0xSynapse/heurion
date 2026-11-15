@@ -1,0 +1,107 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Materials and methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Materials and methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 2,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 2 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 82.9 应为 83.2，请只改这一处：“Patients who had postoperative complications (Clavien–Dindo classification ≥ II) underwent more frequent lobectomy (82.9% versus 75.7%, p = 0.023), pneumonectom”",
+  "target": {
+   "pid": "6DE4C640",
+   "section": "Results",
+   "para_start": "Patients who had postoperative complications (Clavien–Dindo "
+  },
+  "check": {
+   "old": "82.9",
+   "new": "83.2",
+   "sentence": "Patients who had postoperative complications (Clavien–Dindo classification ≥ II) underwent more frequent lobectomy (82.9% versus 75.7%, p = 0.023), pneumonectomy (5.7% versus 0.6%, p = 0.023).",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 2中「Age (years), median (IQR)」行、「Clavien–Dindo grade I(N = 169, 70.7%)」列的 69 改为 70（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "57AF8C63",
+   "table": "Table 2",
+   "row": "Age (years), median (IQR)",
+   "col": "Clavien–Dindo grade I(N = 169, 70.7%)",
+   "cell_text": "69 (64, 73)"
+  },
+  "check": {
+   "old": "69",
+   "new": "70",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “We found that 28.9% of patients experienced postop…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "20E11CFC",
+   "section": "Discussion",
+   "para_start": "We found that 28.9% of patients experienced postoperative pu"
+  },
+  "check": {
+   "words_before": 80,
+   "numbers": [
+    "28.9%",
+    "12.6%",
+    "10",
+    "15.4%",
+    "8.2%",
+    "25%",
+    "6%"
+   ],
+   "cited_refs": [
+    "10.1186/s12931-019-1087-x",
+    "10.1093/icvts/ivac153",
+    "Surgical Treatment for Elderly Patients with Lung Cancer",
+    "10.1177/0218492312455528"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“This overstates what the data show. Please soften.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "14F8EC2D",
+   "comment_id": 0,
+   "anchor": "However, open thoracotomy significantly increased postoperative pulmonary complications compared to VATS but did not significantly increase postoperative cardiac complications."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“Lung cancer is the most frequently occurring cancer and the leading cause of cancer-related deaths worldwide” 文献：Sung H, Ferlay J, Siegel RL et al. Global Cancer Statistics 2020: GLOBOCAN Estimates of Incidence and Mortality Worldwide for 36 Cancers in 185 Countries. CA: A Cancer Journal for Clinicians. 2021. doi:10.3322/caac.21660",
+  "target": {
+   "pid": "2AF472CF",
+   "section": "Introduction",
+   "para_start": "Lung cancer is the most frequently occurring cancer and the "
+  },
+  "check": {
+   "doi": "10.3322/caac.21660",
+   "title": "Global Cancer Statistics 2020: GLOBOCAN Estimates of Incidence and Mortality Worldwide for 36 Cancers in 185 Countries",
+   "sentence": "Lung cancer is the most frequently occurring cancer and the leading cause of cancer-related deaths worldwide",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

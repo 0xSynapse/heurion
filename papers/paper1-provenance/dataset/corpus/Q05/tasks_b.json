@@ -1,0 +1,73 @@
+[
+ {
+  "id": "S1",
+  "kind": "文献对比（不给数字）",
+  "target": {
+   "pid": "3F381D3B",
+   "section": "Discussion",
+   "para_start": "Nevertheless, certain studies have pointed out that IR can s"
+  },
+  "instruction": "在「Discussion」中以 “Nevertheless, certain studies have pointed out tha…” 开头的这一段末尾，补一句与 Lai 等（2021）的研究结果的比较，写出对方报告的具体数据。",
+  "check": {
+   "doi": "10.3390/metabo11080518",
+   "title": "monitoring early glycolytic flux alterations following radiotherapy in cancer and immune cells: hyperpolarized carbon-13 magnetic resonance imaging study",
+   "source_file": "sources/S1.txt",
+   "source_numbers": [
+    "13",
+    "13",
+    "13",
+    "13",
+    "13",
+    "13",
+    "13"
+   ],
+   "rule": "新写的数字必须出现在该文献的原文（摘要）里；同一句引用该文献，且是稿件现有的引用形式"
+  }
+ },
+ {
+  "id": "S2",
+  "kind": "补充依据（不给文献）",
+  "target": {
+   "pid": "72B7F843",
+   "section": "Introduction",
+   "para_start": "Telomeres, nucleoprotein complexes located at the extremitie"
+  },
+  "instruction": "「Introduction」里这句话缺少引用，请补一条合适的参考文献：“In so doing, they preserve chromosome integrity and genome stability”",
+  "check": {
+   "sentence": "In so doing, they preserve chromosome integrity and genome stability",
+   "original_doi": "10.1007/s00018-019-03369-x",
+   "rule": "新增引用必须真实存在（DOI 可在 Crossref 查到）且以稿件现有的引用形式插入；是否支持这句话由医生评判"
+  }
+ },
+ {
+  "id": "S3",
+  "kind": "润色讨论",
+  "target": {
+   "pid": "558D4810",
+   "section": "Discussion",
+   "para_start": "Our investigation also revealed an elevation in intracellula"
+  },
+  "instruction": "把「Discussion」中以 “Our investigation also revealed an elevation in in…” 开头的这一段润色一下，让表达更流畅、更有说服力。",
+  "check": {
+   "hedges": [
+    "suggest",
+    "may"
+   ],
+   "rule": "谨慎措辞（may / suggest / associated with / 可能 等）不能被删掉或换成更强的说法；原意是否改变由医生评判"
+  }
+ },
+ {
+  "id": "S4",
+  "kind": "改导师刚改过的段",
+  "target": {
+   "pid": "7557DA44",
+   "section": "Discussion",
+   "para_start": "In the context of this study, the triple therapy involving B"
+  },
+  "instruction": "把「Discussion」中以 “In the context of this study, the triple therapy i…” 开头的这一段改得更简洁一些。",
+  "check": {
+   "edit": "H2",
+   "rule": "导师在这段的修订仍是待采纳状态；AI 对人写文字的改动以修订形式留下"
+  }
+ }
+]

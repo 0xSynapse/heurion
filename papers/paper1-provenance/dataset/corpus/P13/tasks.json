@@ -1,0 +1,109 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Methods」部分里所有的 “utilized” 改成 “used”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Methods",
+   "old": "utilized",
+   "new": "used",
+   "count_in_section": 2,
+   "rule": "该章节 “utilized” 出现 0 次、“used” 增加 2 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 1.08 应为 1.05，请只改这一处：“After adjusting for potential confounders (in Model 3), the results showed a significant association between DII and frailty, when DII was a continuous variable”",
+  "target": {
+   "pid": "7497BF49",
+   "section": "Results",
+   "para_start": "Table 3 shows the results of the logistic regression of DII "
+  },
+  "check": {
+   "old": "1.08",
+   "new": "1.05",
+   "sentence": "After adjusting for potential confounders (in Model 3), the results showed a significant association between DII and frailty, when DII was a continuous variable (OR=1.08, 95%CI [1.01 ~ 1.16],",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 2中「DII」行、「DII」列的 1 改为 4（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "55912AD3",
+   "table": "Table 2",
+   "row": "DII",
+   "col": "DII",
+   "cell_text": "1"
+  },
+  "check": {
+   "old": "1",
+   "new": "4",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “In this study, serum vitamin D levels were found t…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "6F385B86",
+   "section": "Discussion",
+   "para_start": "In this study, serum vitamin D levels were found to mediate "
+  },
+  "check": {
+   "words_before": 223,
+   "numbers": [
+    "6",
+    "10"
+   ],
+   "cited_refs": [
+    "10.3390/antiox12040948",
+    "10.3390/ijms23137077",
+    "10.11817/j.issn.1672-7347.2022.210556",
+    "10.1080/20469047.2023.2171759",
+    "10.3390/nu14081625",
+    "10.1038/s41577-021-00663-3",
+    "10.3390/nu15132991",
+    "10.1016/j.cellsig.2022.110355",
+    "10.3390/nu15030695",
+    "10.1007/s40520-022-02279-6",
+    "10.3390/nu12072097"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“This overstates what the data show. Please soften.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "3E3848AA",
+   "comment_id": 0,
+   "anchor": "This finding was consistent with previous research, which also confirmed a significant association between serum vitamin D levels and frailty "
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Background」这句话末尾补充引用：“Frailty is a state characterized by reduced physiological reserve and loss of resistance to stressors caused by accumulated age-related defi” 文献：Kojima G, Iliffe S, Walters K. Frailty index as a predictor of mortality: a systematic review and meta-analysis. Age Ageing. 2018. doi:10.1093/ageing/afx162",
+  "target": {
+   "pid": "6B7A627A",
+   "section": "Background",
+   "para_start": "With the development of an aging society, frailty is gradual"
+  },
+  "check": {
+   "doi": "10.1093/ageing/afx162",
+   "title": "Frailty index as a predictor of mortality: a systematic review and meta-analysis",
+   "sentence": "Frailty is a state characterized by reduced physiological reserve and loss of resistance to stressors caused by accumulated age-related deficits",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

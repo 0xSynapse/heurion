@@ -1,0 +1,133 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Materials and methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Materials and methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 5,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 5 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 1.954 应为 1.957，请只改这一处：“< 0.0001, log-rank test, HR = 1.954, 95% CI = 1.358–2.811, Fig.”",
+  "target": {
+   "pid": "7C96589C",
+   "section": "Results",
+   "para_start": "To address the clinical significance of overexpressed PGAM5 "
+  },
+  "check": {
+   "old": "1.954",
+   "new": "1.957",
+   "sentence": "< 0.0001, log-rank test, HR = 1.954, 95% CI = 1.358–2.811, Fig.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改数字（本稿无可用表格）",
+  "instruction": "重新分析后，「Materials and methods」中这句话里的 0.6 应为 0.9，请只改这一处：“Triplicate 0.6 mm diameter cylinders (two identical cylinders taken from intra-tumoural tissue and one cylinder from peritumoural tissue) were punched from repr”",
+  "target": {
+   "pid": "6A71953C",
+   "section": "Materials and methods",
+   "para_start": "TMAs were constructed in according with a previously describ"
+  },
+  "check": {
+   "old": "0.6",
+   "new": "0.9",
+   "sentence": "Triplicate 0.6 mm diameter cylinders (two identical cylinders taken from intra-tumoural tissue and one cylinder from peritumoural tissue) were punched from representative areas of an individual donor tissue block, and re-embedded into a recipient paraffin block in a defined position, using a tissue array instrument (Beecher Instruments, Silver Spring, Maryland, USA)",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “An important factor for the ineffectiveness of che…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "18A54FE0",
+   "section": "Discussion",
+   "para_start": "An important factor for the ineffectiveness of chemotherapy "
+  },
+  "check": {
+   "words_before": 311,
+   "numbers": [
+    "5",
+    "5",
+    "5",
+    "5",
+    "5",
+    "3",
+    "5",
+    "5",
+    "5",
+    "5",
+    "5",
+    "1",
+    "3",
+    "5",
+    "5",
+    "5",
+    "5",
+    "5",
+    "5",
+    "7",
+    "5",
+    "5"
+   ],
+   "cited_refs": [
+    "10.1073/pnas.0901823106",
+    "10.1016/j.cell.2011.11.030",
+    "10.1021/acs.biochem.6b00306",
+    "10.1371/journal.pone.0147792",
+    "10.1016/j.molcel.2012.10.022",
+    "10.1111/j.1440-0960.2010.00680.x",
+    "10.1007/s00018-016-2130-4",
+    "Etoposide-induced cytotoxicity in two human T-cell leukemic ",
+    "10.1038/cr.2014.75",
+    "10.1016/j.cell.2011.11.030",
+    "10.1371/journal.pone.0147792",
+    "10.1371/journal.pone.0147792",
+    "10.1038/cddis.2017.483",
+    "10.4049/jimmunol.1501662",
+    "10.1038/onc.2016.310",
+    "10.1136/gutjnl-2016-312775"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“这句结论下得太满了，改成更谨慎的说法。”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "7C67D652",
+   "comment_id": 0,
+   "anchor": "Our results are the first to clearly show that PGAM5 is frequently amplified and overexpressed in HCC tissues compared with non-tumor tissues and may be important for the acquisition of malignant HCC phenotypes."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“Worldwide, hepatocellular carcinoma (HCC) is one of the leading causes of cancer-related deaths;” 文献：Siegel RL, Miller KD, Jemal A. Cancer statistics, 2018. CA. 2018. doi:10.3322/caac.21442",
+  "target": {
+   "pid": "3FF27770",
+   "section": "Introduction",
+   "para_start": "Worldwide, hepatocellular carcinoma (HCC) is one of the lead"
+  },
+  "check": {
+   "doi": "10.3322/caac.21442",
+   "title": "Cancer statistics, 2018",
+   "sentence": "Worldwide, hepatocellular carcinoma (HCC) is one of the leading causes of cancer-related deaths;",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

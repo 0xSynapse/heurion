@@ -1,0 +1,116 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Materials and methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Materials and methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 5,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 5 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 5.0 应为 4.7，请只改这一处：“188 (5.0%) patients died at hospital and 767 (20.4%) patients died during one-year follow-up.”",
+  "target": {
+   "pid": "5266A4ED",
+   "section": "Results",
+   "para_start": "188 (5.0%) patients died at hospital and 767 (20.4%) patient"
+  },
+  "check": {
+   "old": "5.0",
+   "new": "4.7",
+   "sentence": "188 (5.0%) patients died at hospital and 767 (20.4%) patients died during one-year follow-up.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 1中「Age」行、「SHR < 0.964 (n = 1865)」列的 69 改为 72（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "6AACD05B",
+   "table": "Table 1",
+   "row": "Age",
+   "col": "SHR < 0.964 (n = 1865)",
+   "cell_text": "69 ± 13"
+  },
+  "check": {
+   "old": "69",
+   "new": "72",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “It is widely recognized that stress hyperglycemia …” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "596B922B",
+   "section": "Discussion",
+   "para_start": "It is widely recognized that stress hyperglycemia is linked "
+  },
+  "check": {
+   "words_before": 391,
+   "numbers": [
+    "45",
+    "000",
+    "4.4",
+    "7.8",
+    "6.1",
+    "4.4",
+    "6.1",
+    "2",
+    "2",
+    "2",
+    "2"
+   ],
+   "cited_refs": [
+    "10.1016/S0140-6736(99)08415-9",
+    "10.1016/j.ecl.2017.10.005",
+    "10.1056/NEJMoa0810625",
+    "10.1056/NEJMoa0810625",
+    "10.1186/cc12547",
+    "10.1186/s12933-025-02751-3",
+    "10.1016/j.archger.2024.105658",
+    "10.1093/eurheartj/ehad195",
+    "10.1016/j.biopha.2022.113606"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“This overstates what the data show. Please soften.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "60512EE5",
+   "comment_id": 0,
+   "anchor": "Our findings demonstrate that a higher SHR is correlated with a higher risk of one-year mortality in patients with HF, irrespective of the presence of DM."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“The mortality rate among these patients is relatively high, with one-year mortality ranging from 15%−30%” 文献：Savarese G, Becher PM, Lund LH et al. Global burden of heart failure: a comprehensive and updated review of epidemiology. Cardiovasc Res. 2023. doi:10.1093/cvr/cvac013",
+  "target": {
+   "pid": "1D58BD42",
+   "section": "Introduction",
+   "para_start": "Heart failure (HF) is a prevalent cardiovascular disease, in"
+  },
+  "check": {
+   "doi": "10.1093/cvr/cvac013",
+   "title": "Global burden of heart failure: a comprehensive and updated review of epidemiology",
+   "sentence": "The mortality rate among these patients is relatively high, with one-year mortality ranging from 15%−30%",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

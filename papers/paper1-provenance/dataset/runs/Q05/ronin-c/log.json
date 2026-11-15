@@ -1,0 +1,514 @@
+{
+ "arm": "ronin",
+ "model": "deepseek-flash",
+ "log": [
+  {
+   "task": "S1",
+   "turns": 11,
+   "hit_limit": false,
+   "tool_calls": [
+    {
+     "tool": "open_document",
+     "input": {
+      "path": "<bench>/out/Q05/runs/ronin-c/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "{\n  \"handle\": \"__default__\",\n  \"path\": \"<bench>/out/Q05/runs/ronin-c/work/manuscript.docx\",\n  \"size_bytes\": 52653,\n  \"paragraph_count\": 172,\n  \"heading_count\": 42,\n  \"image_count\": 0,\n  \"comment_count\": 3,\n  \"parts\": [\n    \"[Content_Types].xml\",\n    \"docProps/core.xml\",\n    \"word/_rels/document.xml.rels\",\n    \"word/comments.xml\",\n    \"word/document.xml\",\n    \"word/settings.xml\",\n    \"word/styles.xml\"\n  ]\n}"
+    },
+    {
+     "tool": "search_text",
+     "input": {
+      "query": "Nevertheless, certain studies have pointed out tha"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"source\": \"document\",\n    \"paraId\": \"3F381D3B\",\n    \"text\": \"Nevertheless, certain studies have pointed out that IR can stimulate the DNA damage response pathway, leading to an increase in PD-L1 expression and the formation of an inhibitory tumour immune microenvironment [50]. It is important to note that the effect of IR on the TIME varies with the radiation\",\n    \"matches\": null\n  }\n]"
+    },
+    {
+     "tool": "get_paragraph",
+     "input": {
+      "para_id": "3F381D3B"
+     },
+     "error": false,
+     "output": "{\n  \"paraId\": \"3F381D3B\",\n  \"style\": \"\",\n  \"text\": \"Nevertheless, certain studies have pointed out that IR can stimulate the DNA damage response pathway, leading to an increase in PD-L1 expression and the formation of an inhibitory tumour immune microenvironment [50]. It is important to note that the effect of IR on the TIME varies with the radiation dosage. High-dose radiation primarily heightens antigen release and presentation through immunogenic cell death, while low-dose radiation can induce immune regulation. Lymphocytes, for instance, are notably sensitive to radiation, and low-dose irradiation can both expedite the apoptosis of most naive lymphocytes and contribute to the activation of effector T cells [51, 52]. Moreover, low-dose radiation can facilitate the release of inflammatory cytokines and damage-associated molecular patterns, thereby enhancing the mobilisation and activity of immune cells. Research has shown that when low-dose irradiation is combined with ICIs, it can synergistically trigger both natural and adaptive immunity, leading to the transformation of the TIME from a pro-tumorigenic or immunosuppressive state to one characterised by the infiltration of cytotoxic T cells that actively target and destroy cancer cells. This approach has shown a remarkable increase in the complete response rate in preclinical tumour models [53, 54].\"\n}"
+    },
+    {
+     "tool": "get_document_info",
+     "input": {},
+     "error": false,
+     "output": "{\n  \"path\": \"<bench>/out/Q05/runs/ronin-c/work/manuscript.docx\",\n  \"size_bytes\": 52653,\n  \"paragraph_count\": 172,\n  \"heading_count\": 42,\n  \"image_count\": 0,\n  \"comment_count\": 3,\n  \"parts\": [\n    \"[Content_Types].xml\",\n    \"docProps/core.xml\",\n    \"word/_rels/document.xml.rels\",\n    \"word/comments.xml\",\n    \"word/document.xml\",\n    \"word/settings.xml\",\n    \"word/styles.xml\"\n  ]\n}"
+    },
+    {
+     "tool": "search_text",
+     "input": {
+      "query": "Lai"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"source\": \"document\",\n    \"paraId\": \"212F1E5E\",\n    \"text\": \"51.Lai YC, Hsieh CY, Lu KY et al. monitoring early glycolytic flux alterations following radiotherapy in cancer and immune cells: hyperpolarized carbon-13 magnetic resonance imaging study. metabolites. 2021;11. doi:10.3390/metabo11080518\",\n    \"matches\": null\n  }\n]"
+    },
+    {
+     "tool": "literature_search",
+     "input": {
+      "query": "Lai 2021 radiotherapy PD-L1 immune microenvironment low-dose irradiation"
+     },
+     "error": false,
+     "output": "- Wen Y, Cheng N, Zhou S, Zhu H, Ge Q. Beyond local control: radiotherapy-immunotherapy combinations from &lt;i&gt;in situ&lt;/i&gt; vaccination to systemic immune remodeling. Frontiers in genetics 2026. DOI: 10.3389/fgene.2026.1927654 PMID: 42820221\n  摘要： Background Radiotherapy (RT) is evolving from local cytotoxicity to systemic immunomodulation. Acting as an  in situ  vaccine, RT initiates antitumor immunity via immunogenic cell death and cGAS-STING activation. However, RT concurrently triggers counter-regulatory immunosuppression-upregulating PD-L1/TGF-β, expanding Tregs/MDSCs, and inducing T-cell exhaustion-limiting durable systemic control. Methods We integrate preclinical mechanisms and key clinical evidence for radioimmunotherapy combinations. We analyze how radiation dose, fractionation, and delivery techniques remodel the tumor immune microenvironment and outline matching therapeutic strategies. Key findings Optimal combination requires balancing local tumor control with systemic immune activation while preserving lymphoid reserves. Consolidation durvalumab following concurrent chemoradiotherapy has been shown to improve survival in patients with unresectable stage III non-small cell lung cancer, and SBRT combined with PD-(L)1 blockade has demonstrated benefits in oligometastatic settings. Conversely, radioimmunotherapy combinations have yielded disappointing outcomes in extensive-stage small cell lung cancer and head and neck cancers. Low-dose RT and novel spatial"
+    },
+    {
+     "tool": "fetch_abstract",
+     "input": {
+      "id": "10.3390/metabo11080518"
+     },
+     "error": false,
+     "output": "- Lai YC, Hsieh CY, Lu KY, Sung CH, Ho HY, Cheng ML, Chen AP, Ng SH, Chen FH, Lin G. Monitoring Early Glycolytic Flux Alterations Following Radiotherapy in Cancer and Immune Cells: Hyperpolarized Carbon-13 Magnetic Resonance Imaging Study. Metabolites 2021. DOI: 10.3390/metabo11080518 PMID: 34436459\n  摘要：Alterations in metabolism following radiotherapy affect therapeutic efficacy, although the mechanism underlying such alterations is unclear. A new imaging technique-named dynamic nuclear polarization (DNP) carbon-13 magnetic resonance imaging (MRI)-probes the glycolytic flux in a real-time, dynamic manner. The [1- 13 C]pyruvate is transported by the monocarboxylate transporter (MCT) into cells and converted into [1- 13 C]lactate by lactate dehydrogenase (LDH). To capture the early glycolytic alterations in the irradiated cancer and immune cells, we designed a preliminary DNP  13 C-MRI study by using hyperpolarized [1- 13 C]pyruvate to study human FaDu squamous carcinoma cells, HMC3 microglial cells, and THP-1 monocytes before and after irradiation. The pyruvate-to-lactate conversion rate ( k  PL  [Pyr.]) calculated by kinetic modeling was used to evaluate the metabolic alterations. Western blotting was performed to assess the expressions of LDHA, LDHB, MCT1, and MCT4 proteins. Following irradiation, the pyruvate-to-lactate conversion rates on DNP  13 C-MRI were significantly decreased in the FaDu and the HMC3 cells but increased in the THP-1 cells. Western blot analysis confi"
+    },
+    {
+     "tool": "get_comments",
+     "input": {},
+     "error": false,
+     "output": "[\n  {\n    \"id\": 0,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-05T09:48:00Z\",\n    \"text\": \"这句结论下得太满了，改成更谨慎的说法。\"\n  },\n  {\n    \"id\": 1,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-05T11:38:00Z\",\n    \"text\": \"这个数和表里的对一下。\"\n  },\n  {\n    \"id\": 2,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-05T17:23:00Z\",\n    \"text\": \"摘要超字数了，最后统一压缩。\"\n  }\n]"
+    },
+    {
+     "tool": "get_body_text",
+     "input": {},
+     "error": false,
+     "output": "{\n  \"body\": \"BIBR1532 combined with radiotherapy induces ferroptosis in NSCLC cells and activates cGAS-STING pathway to promote anti-tumor immunity\\nAbstract\\nBackground: Telomerase, by safeguarding damaged telomeres and bolstering DNA damage repair, has the capacity to heighten the radioresistance of tumour cells. Thus, in turn, can compromise the efficacy of radiotherapy (RT) and radioimmunotherapy. Our previous studies have revealed that the highly selective telomerase inhibitor, BIBR1532, possesses the potential to enhance the radiosensitivity of Non-small cell lung cancer (NSCLC). In this study, we delve further into the impact of BIBR1532 on the immune activation induced by RT and elucidate the underlying mechanisms.\\nMethods: Biological information analyses, immunofluorescence assays, western blot assays, flow cytometry analysis were conducted to elucidate the functions of the combination of BIBR1532 with radiotherapy in NSCLC. Intracellular levels of lipid peroxides, glutathione, malondialdehyde, and Fe2+ were measured as indicators of ferroptosis status. Both in vitro and in vivo studies were conducted to examine the antitumor effects.\\nResults: Our findings indicate that the confluence of BIBR1532 with RT significantly augments the activation of the cGAS-STING pathway in both in vivo and in vitro settings, thereby fostering an effective anti-tumoral immune response. The effects can be ascribed to two key processes. Firstly, ionizing radiation, in precipitating DNA d"
+    },
+    {
+     "tool": "search_text",
+     "input": {
+      "query": "Discussion"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"source\": \"document\",\n    \"paraId\": \"5A95C344\",\n    \"text\": \"Discussion\",\n    \"matches\": null\n  }\n]"
+    },
+    {
+     "tool": "fetch_abstract",
+     "input": {
+      "id": "34436459"
+     },
+     "error": false,
+     "output": "- Lai YC, Hsieh CY, Lu KY, Sung CH, Ho HY, Cheng ML, Chen AP, Ng SH, Chen FH, Lin G. Monitoring Early Glycolytic Flux Alterations Following Radiotherapy in Cancer and Immune Cells: Hyperpolarized Carbon-13 Magnetic Resonance Imaging Study. Metabolites 2021. DOI: 10.3390/metabo11080518 PMID: 34436459\n  摘要：Alterations in metabolism following radiotherapy affect therapeutic efficacy, although the mechanism underlying such alterations is unclear. A new imaging technique-named dynamic nuclear polarization (DNP) carbon-13 magnetic resonance imaging (MRI)-probes the glycolytic flux in a real-time, dynamic manner. The [1- 13 C]pyruvate is transported by the monocarboxylate transporter (MCT) into cells and converted into [1- 13 C]lactate by lactate dehydrogenase (LDH). To capture the early glycolytic alterations in the irradiated cancer and immune cells, we designed a preliminary DNP  13 C-MRI study by using hyperpolarized [1- 13 C]pyruvate to study human FaDu squamous carcinoma cells, HMC3 microglial cells, and THP-1 monocytes before and after irradiation. The pyruvate-to-lactate conversion rate ( k  PL  [Pyr.]) calculated by kinetic modeling was used to evaluate the metabolic alterations. Western blotting was performed to assess the expressions of LDHA, LDHB, MCT1, and MCT4 proteins. Following irradiation, the pyruvate-to-lactate conversion rates on DNP  13 C-MRI were significantly decreased in the FaDu and the HMC3 cells but increased in the THP-1 cells. Western blot analysis confi"
+    },
+    {
+     "tool": "insert_text",
+     "input": {
+      "para_id": "3F381D3B",
+      "text": " In line with this compartment-dependent view, Lai et al. used hyperpolarised [1-13C]pyruvate dynamic nuclear polarisation 13C-MRI to show that the pyruvate-to-lactate conversion rate constant (kPL) decreased significantly in irradiated FaDu head-and-neck squamous carcinoma cells and HMC3 microglial cells, but increased in THP-1 monocytes, with western blotting confirming concordant trends in LDHA and LDHB expression [51].",
+      "position": "end",
+      "author": "Claude"
+     },
+     "error": false,
+     "output": "{\n  \"change_id\": 104,\n  \"type\": \"insertion\",\n  \"author\": \"Claude\",\n  \"date\": \"2026-11-14T12:04:12Z\"\n}"
+    },
+    {
+     "tool": "get_paragraph",
+     "input": {
+      "para_id": "3F381D3B"
+     },
+     "error": false,
+     "output": "{\n  \"paraId\": \"3F381D3B\",\n  \"style\": \"\",\n  \"text\": \"Nevertheless, certain studies have pointed out that IR can stimulate the DNA damage response pathway, leading to an increase in PD-L1 expression and the formation of an inhibitory tumour immune microenvironment [50]. It is important to note that the effect of IR on the TIME varies with the radiation dosage. High-dose radiation primarily heightens antigen release and presentation through immunogenic cell death, while low-dose radiation can induce immune regulation. Lymphocytes, for instance, are notably sensitive to radiation, and low-dose irradiation can both expedite the apoptosis of most naive lymphocytes and contribute to the activation of effector T cells [51, 52]. Moreover, low-dose radiation can facilitate the release of inflammatory cytokines and damage-associated molecular patterns, thereby enhancing the mobilisation and activity of immune cells. Research has shown that when low-dose irradiation is combined with ICIs, it can synergistically trigger both natural and adaptive immunity, leading to the transformation of the TIME from a pro-tumorigenic or immunosuppressive state to one characterised by the infiltration of cytotoxic T cells that actively target and destroy cancer cells. This approach has shown a remarkable increase in the complete response rate in preclinical tumour models [53, 54]. In line with this compartment-dependent view, Lai et al. used hyperpolarised [1-13C]pyruvate dynamic nuclear polarisation 13C"
+    },
+    {
+     "tool": "save_document",
+     "input": {},
+     "error": false,
+     "output": "{\n  \"path\": \"<bench>/out/Q05/runs/ronin-c/work/manuscript.docx\",\n  \"size_bytes\": 52871,\n  \"modified_parts\": [\n    \"word/document.xml\"\n  ],\n  \"repairs\": {\n    \"orphan_footnotes_removed\": 0,\n    \"orphan_endnotes_removed\": 0,\n    \"paraids_deduplicated\": 0,\n    \"broken_rels_removed\": 0\n  },\n  \"warnings\": [],\n  \"backup\": \"<bench>/out/Q05/runs/ronin-c/work/manuscript.docx.bak\"\n}"
+    },
+    {
+     "tool": "get_tracked_changes",
+     "input": {},
+     "error": false,
+     "output": "[\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 101,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-04T18:51:00Z\",\n    \"para_id\": \"16EAD860\",\n    \"text\": \" This study was reported in accordance with the STROBE statement.\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 104,\n    \"author\": \"Claude\",\n    \"date\": \"2026-11-14T12:04:12Z\",\n    \"para_id\": \"3F381D3B\",\n    \"text\": \" In line with this compartment-dependent view, Lai et al. used hyperpolarised [1-13C]pyruvate dynamic nuclear polarisation 13C-MRI to show that the pyruvate-to-lactate conversion rate constant (kPL) decreased significantly in irradiated FaDu head-and-neck squamous carcinoma cells and HMC3 microglial cells, but increased in THP-1 monocytes, with western blotting confirming concordant trends in LDHA and LDHB expression [51].\"\n  },\n  {\n    \"type\": \"deletion\",\n    \"change_id\": 102,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-03T15:49:00Z\",\n    \"para_id\": \"7557DA44\",\n    \"text\": \"demonstrated\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 103,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-03T21:30:00Z\",\n    \"para_id\": \"7557DA44\",\n    \"text\": \"suggested\"\n  }\n]"
+    }
+   ],
+   "usage": {
+    "input_tokens": 40173,
+    "output_tokens": 2860
+   },
+   "seconds": 30.9,
+   "final": "已修改并保存（同名覆盖，原文件已备份为 `manuscript.docx.bak`）。\n\n## 修改内容\n\n**位置**：Discussion 中以 \"Nevertheless, certain studies have pointed out tha…\" 开头的那一段（段末，即 \"…complete response rate in preclinical tumour models [53, 54].\" 之后）\n\n**新增的一句**（以修订/插入形式标记，作者 Claude，可在 Word 里接受或拒绝）：\n\n> In line with this compartment-dependent view, Lai et al. used hyperpolarised [1-13C]pyruvate dynamic nuclear polarisation 13C-MRI to show that the pyruvate-to-lactate conversion rate constant (kPL) decreased significantly in irradiated FaDu head-and-neck squamous carcinoma cells and HMC3 microglial cells, but increased in THP-1 monocytes, with western blotting confirming concordant trends in LDHA and LDHB expression [51].\n\n这样写是为了承接你本段\"IR 对 TIME 的影响取决于剂量、且对肿瘤细胞与免疫细胞作用不同\"的论点，用 Lai 等的结果作为\"同一照射剂量下肿瘤区室与免疫区室反应相反\"的旁证。引用编号沿用文中已有的 **[51]**（即参考文献表第 51 条 Lai YC, et al. *Metabolites*. 2021;11:518. doi:10.3390/metabo11080518），无需新增文献。\n\n## 一点需要说明的事\n\n我查到了原文（PMID 34436459），所以**没有凭记忆编数字**。但需要提醒你：\n\n- 原文摘要只报告了**方向性结果**（FaDu 和 HMC3 的 kPL 显著下降、THP-1 的 kPL 升高，LDHA/LDHB 蛋白变化趋势一致），**没有在摘要中给出具体 kPL 数值和照射剂量**。我手上没有全文的数值表，所以句子里只写了方向和细胞系，没有编造 kPL 的具体数字或 Gy 剂量。\n- 如果你要的是\"kPL 由 0.0xx 降至 0.0xx（−xx%）\"这类硬数字，需要调出 Metabolites 全文（MDPI 开放获取，正文图表里有），我可以据此再补精确值。若你有 PDF 也可以给我路径。\n\n另外提醒：这段的结论句 \"This approach has shown a remarkable increase in the complete response rate in preclinical tumour models\" 与张教授留在文档里的批注（\"这句结论下得太满了，改成更谨慎的说法\"）可能相关，但那条批注锚定在别的段落，我没有擅自改动。需要的话我可以一并处理。"
+  },
+  {
+   "task": "S2",
+   "turns": 30,
+   "hit_limit": true,
+   "tool_calls": [
+    {
+     "tool": "open_document",
+     "input": {
+      "path": "<bench>/out/Q05/runs/ronin-c/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "{\n  \"handle\": \"__default__\",\n  \"path\": \"<bench>/out/Q05/runs/ronin-c/work/manuscript.docx\",\n  \"size_bytes\": 52871,\n  \"paragraph_count\": 172,\n  \"heading_count\": 42,\n  \"image_count\": 0,\n  \"comment_count\": 3,\n  \"parts\": [\n    \"[Content_Types].xml\",\n    \"docProps/core.xml\",\n    \"word/_rels/document.xml.rels\",\n    \"word/comments.xml\",\n    \"word/document.xml\",\n    \"word/settings.xml\",\n    \"word/styles.xml\"\n  ]\n}"
+    },
+    {
+     "tool": "search_text",
+     "input": {
+      "query": "preserve chromosome integrity"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"source\": \"document\",\n    \"paraId\": \"72B7F843\",\n    \"text\": \"Telomeres, nucleoprotein complexes located at the extremities of linear eukaryotic chromosomes, serve to stabilise the structure of chromosome ends and avert fusion between ends. In so doing, they preserve chromosome integrity and genome stability . Due to replication deficiencies, normal cells expe\",\n    \"matches\": null\n  }\n]"
+    },
+    {
+     "tool": "get_paragraph",
+     "input": {
+      "para_id": "72B7F843"
+     },
+     "error": false,
+     "output": "{\n  \"paraId\": \"72B7F843\",\n  \"style\": \"\",\n  \"text\": \"Telomeres, nucleoprotein complexes located at the extremities of linear eukaryotic chromosomes, serve to stabilise the structure of chromosome ends and avert fusion between ends. In so doing, they preserve chromosome integrity and genome stability . Due to replication deficiencies, normal cells experience telomere shortening with each mitosis. When telomeres reach a critical length, they activate a DNA damage response (DDR), ultimately culminating in cellular senescence and apoptosis, a biological phenomenon referred to as the telomere crisis [7]. Most tumour cells navigate the telomere crisis by reactivating telomerase, enabling them to evade cell cycle checkpoints, thus attaining unbridled proliferation and immortality, including in lung cancer [8, 9]. Telomerase, a ribonucleoprotein reverse transcriptase comprising of a human ribonucleoprotein reverse transcriptase (hTERT) and RNA template, chiefly functions to maintain telomere length. In the majority of adult somatic cells, telomerase is inhibited [10]. An escalating body of research underscores that chemical agents which target telomeres or telomerase, in conjunction with ionising radiation, constitute a promising anti-tumour strategy [11, 12]. Drugs with direct effects on telomeres encompass telomere oligomers (T-oligos) and G-quadruplex stabilisers (telomere inhibitors, RHPS4), which could heighten RT sensitivity. Targeting telomerase activity alongside ionising radi"
+    },
+    {
+     "tool": "get_headings",
+     "input": {},
+     "error": false,
+     "output": "[\n  {\n    \"level\": 1,\n    \"text\": \"Abstract\",\n    \"style\": \"Heading1\",\n    \"paraId\": \"310F1C23\"\n  },\n  {\n    \"level\": 1,\n    \"text\": \"Introduction\",\n    \"style\": \"Heading1\",\n    \"paraId\": \"1866B061\"\n  },\n  {\n    \"level\": 1,\n    \"text\": \"Materials and methods\",\n    \"style\": \"Heading1\",\n    \"paraId\": \"7812B8F6\"\n  },\n  {\n    \"level\": 2,\n    \"text\": \"Cell lines and cell culture\",\n    \"style\": \"Heading2\",\n    \"paraId\": \"591FB75F\"\n  },\n  {\n    \"level\": 2,\n    \"text\": \"Cell viability and cytotoxicity assay\",\n    \"style\": \"Heading2\",\n    \"paraId\": \"67596F42\"\n  },\n  {\n    \"level\": 2,\n    \"text\": \"Colony formation assay\",\n    \"style\": \"Heading2\",\n    \"paraId\": \"1FCDF0F9\"\n  },\n  {\n    \"level\": 2,\n    \"text\": \"Cell migration and invasion assay\",\n    \"style\": \"Heading2\",\n    \"paraId\": \"344A3AC8\"\n  },\n  {\n    \"level\": 2,\n    \"text\": \"Animal model induction and treatment\",\n    \"style\": \"Heading2\",\n    \"paraId\": \"4392A958\"\n  },\n  {\n    \"level\": 2,\n    \"text\": \"Nude mouse model\",\n    \"style\": \"Heading2\",\n    \"paraId\": \"7F8439A3\"\n  },\n  {\n    \"level\": 2,\n    \"text\": \"Syngeneic mouse model\",\n    \"style\": \"Heading2\",\n    \"paraId\": \"1EB94649\"\n  },\n  {\n    \"level\": 2,\n    \"text\": \"Immunofluorescence (IF) assay\",\n    \"style\": \"Heading2\",\n    \"paraId\": \"13890EFB\"\n  },\n  {\n    \"level\": 2,\n    \"text\": \"PicoGreen staining\",\n    \"style\": \"Heading2\",\n    \"paraId\": \"22547D40\"\n  },\n  {\n    \"level\": 2,\n    \"text\": \"Western blot analysis\",\n    \"style\": \"Heading2\",\n    \"paraId\": \"148883E6\"\n  },\n  {\n    \"level"
+    },
+    {
+     "tool": "search_text",
+     "input": {
+      "query": "10\\.1038|doi|Nature|Cell",
+      "regex": true
+     },
+     "error": false,
+     "output": "[\n  {\n    \"source\": \"document\",\n    \"paraId\": \"72B7F843\",\n    \"text\": \"Telomeres, nucleoprotein complexes located at the extremities of linear eukaryotic chromosomes, serve to stabilise the structure of chromosome ends and avert fusion between ends. In so doing, they preserve chromosome integrity and genome stability . Due to replication deficiencies, normal cells expe\",\n    \"matches\": [\n      {\n        \"start\": 185,\n        \"end\": 188,\n        \"match\": \"doi\"\n      }\n    ]\n  },\n  {\n    \"source\": \"document\",\n    \"paraId\": \"591FB75F\",\n    \"text\": \"Cell lines and cell culture\",\n    \"matches\": [\n      {\n        \"start\": 0,\n        \"end\": 4,\n        \"match\": \"Cell\"\n      }\n    ]\n  },\n  {\n    \"source\": \"document\",\n    \"paraId\": \"16EAD860\",\n    \"text\": \"Human NSCLC cell lines, namely H460 and A549, were procured from the Shanghai Cell Bank of the Chinese Academy of Sciences (Shanghai, China). The LLC-OVA cell line, which expresses a single coding OVA SIINFEKL polypeptide and H-2Kbb2-M polypeptide, was graciously provided by Dr. Han at Tianjin Medic\",\n    \"matches\": [\n      {\n        \"start\": 78,\n        \"end\": 82,\n        \"match\": \"Cell\"\n      }\n    ]\n  },\n  {\n    \"source\": \"document\",\n    \"paraId\": \"7FA3A711\",\n    \"text\": \"BIBR1532 was procured from Selleck Chemicals (S1186, Houston, TX, USA). Cells were pre-treated with either BIBR1532 or dimethyl sulfoxide (DMSO) for 72 h, followed by exposure to radiation. with drug concentrations of A549 at 40 µM and H460 at 20 µM. Normal mediu"
+    },
+    {
+     "tool": "get_body_text",
+     "input": {},
+     "error": false,
+     "output": "{\n  \"body\": \"BIBR1532 combined with radiotherapy induces ferroptosis in NSCLC cells and activates cGAS-STING pathway to promote anti-tumor immunity\\nAbstract\\nBackground: Telomerase, by safeguarding damaged telomeres and bolstering DNA damage repair, has the capacity to heighten the radioresistance of tumour cells. Thus, in turn, can compromise the efficacy of radiotherapy (RT) and radioimmunotherapy. Our previous studies have revealed that the highly selective telomerase inhibitor, BIBR1532, possesses the potential to enhance the radiosensitivity of Non-small cell lung cancer (NSCLC). In this study, we delve further into the impact of BIBR1532 on the immune activation induced by RT and elucidate the underlying mechanisms.\\nMethods: Biological information analyses, immunofluorescence assays, western blot assays, flow cytometry analysis were conducted to elucidate the functions of the combination of BIBR1532 with radiotherapy in NSCLC. Intracellular levels of lipid peroxides, glutathione, malondialdehyde, and Fe2+ were measured as indicators of ferroptosis status. Both in vitro and in vivo studies were conducted to examine the antitumor effects.\\nResults: Our findings indicate that the confluence of BIBR1532 with RT significantly augments the activation of the cGAS-STING pathway in both in vivo and in vitro settings, thereby fostering an effective anti-tumoral immune response. The effects can be ascribed to two key processes. Firstly, ionizing radiation, in precipitating DNA d"
+    },
+    {
+     "tool": "get_body_text",
+     "input": {
+      "document_handle": "__default__"
+     },
+     "error": false,
+     "output": "{\n  \"body\": \"BIBR1532 combined with radiotherapy induces ferroptosis in NSCLC cells and activates cGAS-STING pathway to promote anti-tumor immunity\\nAbstract\\nBackground: Telomerase, by safeguarding damaged telomeres and bolstering DNA damage repair, has the capacity to heighten the radioresistance of tumour cells. Thus, in turn, can compromise the efficacy of radiotherapy (RT) and radioimmunotherapy. Our previous studies have revealed that the highly selective telomerase inhibitor, BIBR1532, possesses the potential to enhance the radiosensitivity of Non-small cell lung cancer (NSCLC). In this study, we delve further into the impact of BIBR1532 on the immune activation induced by RT and elucidate the underlying mechanisms.\\nMethods: Biological information analyses, immunofluorescence assays, western blot assays, flow cytometry analysis were conducted to elucidate the functions of the combination of BIBR1532 with radiotherapy in NSCLC. Intracellular levels of lipid peroxides, glutathione, malondialdehyde, and Fe2+ were measured as indicators of ferroptosis status. Both in vitro and in vivo studies were conducted to examine the antitumor effects.\\nResults: Our findings indicate that the confluence of BIBR1532 with RT significantly augments the activation of the cGAS-STING pathway in both in vivo and in vitro settings, thereby fostering an effective anti-tumoral immune response. The effects can be ascribed to two key processes. Firstly, ionizing radiation, in precipitating DNA d"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:p[contains(normalize-space(.),'doi:')]"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:p[contains(normalize-space(.),'doi:')]\",\n  \"part\": \"word/document.xml\",\n  \"count\": 55,\n  \"returned\": 50,\n  \"results\": [\n    \"<w:p xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w14:paraId=\\\"1FAA1540\\\" w14:textId=\\\"77777777\\\">\\n  <w:pPr>\\n    <w:pStyle w:val=\\\"EndNoteBibliography\\\"/>\\n    <w:ind w:left=\\\"720\\\" w:hanging=\\\"720\\\"/>\\n  </w:pPr>\\n  <w:r>\\n    <w:fldChar w:fldCharType=\\\"begin\\\"/>\\n  </w:r>\\n  <w:r>\\n    <w:instrText xml:space=\\\"preserve\\\"> ADDIN EN.REFLIST </w:instrText>\\n  </w:r>\\n  <w:r>\\n    <w:fldChar w:fldCharType=\\\"separate\\\"/>\\n  </w:r>\\n  <w:r>\\n    <w:t xml:space=\\\"preserve\\\">1.</w:t>\\n  </w:r>\\n  <w:r>\\n    <w:tab/>\\n  </w:r>\\n  <w:r>\\n    <w:rPr>\\n      <w:noProof/>\\n    </w:rPr>\\n    <w:t xml:space=\\\"preserve\\\">Imyanitov EN, Iyevleva AG, Levchenko EV. Molecular testing and targeted therapy for non-small cell lung cancer: current status and perspectives. Crit Rev Oncol Hematol. 2021;157:103194. doi:10.1016/j.critrevonc.2020.103194</w:t>\\n  </w:r>\\n</w:p>\\n\",\n    \"<w:p xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:mc=\\\""
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:p[w:pPr/w:pStyle/@w:val='EndNoteBibliography']"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:p[w:pPr/w:pStyle/@w:val='EndNoteBibliography']\",\n  \"part\": \"word/document.xml\",\n  \"count\": 56,\n  \"returned\": 50,\n  \"results\": [\n    \"<w:p xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w14:paraId=\\\"1FAA1540\\\" w14:textId=\\\"77777777\\\">\\n  <w:pPr>\\n    <w:pStyle w:val=\\\"EndNoteBibliography\\\"/>\\n    <w:ind w:left=\\\"720\\\" w:hanging=\\\"720\\\"/>\\n  </w:pPr>\\n  <w:r>\\n    <w:fldChar w:fldCharType=\\\"begin\\\"/>\\n  </w:r>\\n  <w:r>\\n    <w:instrText xml:space=\\\"preserve\\\"> ADDIN EN.REFLIST </w:instrText>\\n  </w:r>\\n  <w:r>\\n    <w:fldChar w:fldCharType=\\\"separate\\\"/>\\n  </w:r>\\n  <w:r>\\n    <w:t xml:space=\\\"preserve\\\">1.</w:t>\\n  </w:r>\\n  <w:r>\\n    <w:tab/>\\n  </w:r>\\n  <w:r>\\n    <w:rPr>\\n      <w:noProof/>\\n    </w:rPr>\\n    <w:t xml:space=\\\"preserve\\\">Imyanitov EN, Iyevleva AG, Levchenko EV. Molecular testing and targeted therapy for non-small cell lung cancer: current status and perspectives. Crit Rev Oncol Hematol. 2021;157:103194. doi:10.1016/j.critrevonc.2020.103194</w:t>\\n  </w:r>\\n</w:p>\\n\",\n    \"<w:p xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xml"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:p[w:pPr/w:pStyle/@w:val='EndNoteBibliography' and (starts-with(normalize-space(.),'3') or starts-with(normalize-space(.),'4') or starts-with(normalize-space(.),'5') or starts-with(normalize-space(.),'6'))]/w:r/w:t[1]"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:p[w:pPr/w:pStyle/@w:val='EndNoteBibliography' and (starts-with(normalize-space(.),'3') or starts-with(normalize-space(.),'4') or starts-with(normalize-space(.),'5') or starts-with(normalize-space(.),'6'))]/w:r/w:t[1]\",\n  \"part\": \"word/document.xml\",\n  \"count\": 62,\n  \"returned\": 50,\n  \"results\": [\n    \"<w:t xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" xml:space=\\\"preserve\\\">3.</w:t>\\n\",\n    \"<w:t xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" xml:space=\\\"preserve\\\">Vulto A, Louwman M, Rodrigus P, Coebergh JW. Referral rates and trends in radiotherapy as part of primary treatment of cancer in South Netherlands, 1988&#8211;2002. Radiother Oncol. 2006;78:131-7. doi:10.1016/j.radonc.2005.12.010</w:t>\\n\",\n    \"<w:t xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/mark"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:p[w:pPr/w:pStyle/@w:val='EndNoteBibliography' and (starts-with(normalize-space(.),'5') or starts-with(normalize-space(.),'6'))]/w:r/w:t[1]"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:p[w:pPr/w:pStyle/@w:val='EndNoteBibliography' and (starts-with(normalize-space(.),'5') or starts-with(normalize-space(.),'6'))]/w:r/w:t[1]\",\n  \"part\": \"word/document.xml\",\n  \"count\": 18,\n  \"returned\": 18,\n  \"results\": [\n    \"<w:t xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" xml:space=\\\"preserve\\\">5.</w:t>\\n\",\n    \"<w:t xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" xml:space=\\\"preserve\\\">Verry C, Dufort S, Lemasson B. Targeting brain metastases with ultrasmall theranostic nanoparticles, a first-in-human trial from an MRI perspective. Sci Adv. 2020;6:y5279. doi:10.1126/sciadv.aay5279</w:t>\\n\",\n    \"<w:t xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" xml:space=\\\"preserve\\\">6.</w:t>\\n\",\n    \"<w:t xmlns:w=\\\"http://schemas.openxmlformats"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:fldChar"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:fldChar\",\n  \"part\": \"word/document.xml\",\n  \"count\": 143,\n  \"returned\": 50,\n  \"results\": [\n    \"<w:fldChar xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w:fldCharType=\\\"begin\\\"/>\\n\",\n    \"<w:fldChar xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w:fldCharType=\\\"separate\\\"/>\\n\",\n    \"<w:fldChar xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w:fldCharType=\\\"end\\\"/>\\n\",\n    \"<w:fldChar xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w:fldCharType=\\\"begin\\\">\\n  <w:fldData xml:space=\\\"preserve\\\">PEV"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:instrText"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:instrText\",\n  \"part\": \"word/document.xml\",\n  \"count\": 53,\n  \"returned\": 50,\n  \"results\": [\n    \"<w:instrText xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" xml:space=\\\"preserve\\\"> ADDIN EN.CITE &lt;EndNote&gt;&lt;Cite&gt;&lt;Author&gt;Imyanitov&lt;/Author&gt;&lt;Year&gt;2021&lt;/Year&gt;&lt;RecNum&gt;1&lt;/RecNum&gt;&lt;DisplayText&gt;[1]&lt;/DisplayText&gt;&lt;record&gt;&lt;rec-number&gt;1&lt;/rec-number&gt;&lt;foreign-keys&gt;&lt;key app=\\\"EN\\\" db-id=\\\"dz2k4ajqtgan0mze09pcor7ywcug0m3p\\\" timestamp=\\\"1700000000\\\"&gt;1&lt;/key&gt;&lt;/foreign-keys&gt;&lt;ref-type name=\\\"Journal Article\\\"&gt;17&lt;/ref-type&gt;&lt;contributors&gt;&lt;authors&gt;&lt;author&gt;Imyanitov, EN&lt;/author&gt;&lt;author&gt;Iyevleva, AG&lt;/author&gt;&lt;author&gt;Levchenko, EV&lt;/author&gt;&lt;/authors&gt;&lt;/contributors&gt;&lt;titles&gt;&lt;title&gt;Molecular testing and targeted therapy for non-small cell lung cancer: current status and perspectives&lt;/title&gt;&lt;secondary-title&gt;Crit Rev Oncol Hematol&lt;/secondary-title&gt;&lt;/titles&gt;&lt;pages&gt;103194&lt;/pages&gt;&lt;volume&gt;157&lt;/volume&gt;&lt;dates&gt;&lt;year&gt;2021&lt;/year&gt;&lt;/dates&gt;&lt;electronic-resource-num&gt;10.1016/j.critrevonc.2020.103194&lt;/electro"
+    },
+    {
+     "tool": "literature_search",
+     "input": {
+      "query": "O'Sullivan Karlseder Telomeres protecting chromosomes against genome instability Nat Rev Mol Cell Biol 2010"
+     },
+     "error": false,
+     "output": "- O'Sullivan RJ, Karlseder J. Telomeres: protecting chromosomes against genome instability. Nature reviews. Molecular cell biology 2010. DOI: 10.1038/nrm2848 PMID: 20125188\n  摘要：The natural ends of linear chromosomes require unique genetic and structural adaptations to facilitate the protection of genetic material. This is achieved by the sequestration of the telomeric sequence into a protective nucleoprotein cap that masks the ends from constitutive exposure to the DNA damage response machinery. When telomeres are unmasked, genome instability arises. Balancing capping requirements with telomere replication and the enzymatic processing steps that are obligatory for telomere function is a complex problem. Telomeric proteins and their interacting factors create an environment at chromosome ends that inhibits DNA repair; however, the repair machinery is essential for proper telomere function."
+    },
+    {
+     "tool": "get_runs",
+     "input": {
+      "para_id": "72B7F843"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"run_idx\": 0,\n    \"text\": \"Telomeres, nucleoprotein complexes located at the extremities of linear eukaryotic chromosomes, serve to stabilise the structure of chromosome ends and avert fusion between ends. In so doing, they preserve chromosome integrity and genome stability \",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 1,\n    \"text\": \". Due to replication deficiencies, normal cells experience telomere shortening with each mitosis. When telomeres reach a critical length, they activate a DNA damage response (DDR), ultimately culminating in cellular senescence and apoptosis, a biological phenomenon referred to as the telomere crisis \",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 2,\n    \"text\": \"\",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 3,\n    \"text\": \"\",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 4,\n    \"text\": \"\",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 5,\n    \"text\": \"[7]\",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 6,\n    \"text\": \"\",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_"
+    },
+    {
+     "tool": "search_text",
+     "input": {
+      "query": "Pivotal roles of tumor-draining lymph nodes"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"source\": \"document\",\n    \"paraId\": \"6241F885\",\n    \"text\": \"56.Liu Z, Yu Z, Chen D. Pivotal roles of tumor-draining lymph nodes in the abscopal effects from combined immunotherapy and radiotherapy. Cancer Commun (Lond) 2022;42(10):971–86. 2022;42:971-86. doi:10.1002/cac2.12348\",\n    \"matches\": null\n  }\n]"
+    },
+    {
+     "tool": "get_paragraph",
+     "input": {
+      "para_id": "7FAA0D0D"
+     },
+     "error": false,
+     "output": "{\n  \"paraId\": \"7FAA0D0D\",\n  \"style\": \"Heading1\",\n  \"text\": \"References\"\n}"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:p[@w14:paraId='6241F885']/following-sibling::w:p[position()&lt;=8]"
+     },
+     "error": true,
+     "output": "Error executing tool xpath_query: XPath error: Invalid predicate"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:p[@w14:paraId=\"6241F885\"]/following-sibling::w:p[1]"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:p[@w14:paraId=\\\"6241F885\\\"]/following-sibling::w:p[1]\",\n  \"part\": \"word/document.xml\",\n  \"count\": 0,\n  \"returned\": 0,\n  \"results\": []\n}"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:p[@w14:paraId=\"6241F885\"]/../w:p[last()]"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:p[@w14:paraId=\\\"6241F885\\\"]/../w:p[last()]\",\n  \"part\": \"word/document.xml\",\n  \"count\": 1,\n  \"returned\": 1,\n  \"results\": [\n    \"<w:p xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w14:paraId=\\\"6241F885\\\" w14:textId=\\\"77777777\\\">\\n  <w:pPr>\\n    <w:pStyle w:val=\\\"EndNoteBibliography\\\"/>\\n    <w:ind w:left=\\\"720\\\" w:hanging=\\\"720\\\"/>\\n  </w:pPr>\\n  <w:r>\\n    <w:t xml:space=\\\"preserve\\\">56.</w:t>\\n  </w:r>\\n  <w:r>\\n    <w:tab/>\\n  </w:r>\\n  <w:r>\\n    <w:rPr>\\n      <w:noProof/>\\n    </w:rPr>\\n    <w:t xml:space=\\\"preserve\\\">Liu Z, Yu Z, Chen D. Pivotal roles of tumor-draining lymph nodes in the abscopal effects from combined immunotherapy and radiotherapy. Cancer Commun (Lond) 2022;42(10):971&#8211;86. 2022;42:971-86. doi:10.1002/cac2.12348</w:t>\\n  </w:r>\\n  <w:r>\\n    <w:fldChar w:fldCharType=\\\"end\\\"/>\\n  </w:r>\\n</w:p>\\n\"\n  ]\n}"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:p[w:pPr/w:pStyle/@w:val=\"Heading1\"]"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:p[w:pPr/w:pStyle/@w:val=\\\"Heading1\\\"]\",\n  \"part\": \"word/document.xml\",\n  \"count\": 10,\n  \"returned\": 10,\n  \"results\": [\n    \"<w:p xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w14:paraId=\\\"310F1C23\\\" w14:textId=\\\"77777777\\\">\\n  <w:pPr>\\n    <w:pStyle w:val=\\\"Heading1\\\"/>\\n  </w:pPr>\\n  <w:r>\\n    <w:t xml:space=\\\"preserve\\\">Abstract</w:t>\\n  </w:r>\\n</w:p>\\n\",\n    \"<w:p xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w14:paraId=\\\"1866B061\\\" w14:textId=\\\"77777777\\\">\\n  <w:pPr>\\n    <w:pStyle w:val=\\\"Heading1\\\"/>\\n  </w:pPr>\\n  <w:r>\\n    <w:t xml:space=\\\"preserve\\\">Introduction</w:t>\\n  </w:r>\\n</w:p>\\n\",\n    \"<w:p xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w14:paraId=\\\"7812B8F6\\\" w14:textId=\\\"77777777\\\">\\n  <w:pPr>\\n    <w:pStyle w"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "count(//w:p[@w14:paraId=\"7FAA0D0D\"]/preceding::w:p)"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"count(//w:p[@w14:paraId=\\\"7FAA0D0D\\\"]/preceding::w:p)\",\n  \"part\": \"word/document.xml\",\n  \"count\": 1,\n  \"returned\": 1,\n  \"results\": [\n    \"115.0\"\n  ]\n}"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "count(//w:p[@w14:paraId=\"6241F885\"]/preceding::w:p)"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"count(//w:p[@w14:paraId=\\\"6241F885\\\"]/preceding::w:p)\",\n  \"part\": \"word/document.xml\",\n  \"count\": 1,\n  \"returned\": 1,\n  \"results\": [\n    \"171.0\"\n  ]\n}"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "count(//w:p[@w14:paraId=\"205E5018\"]/preceding::w:p) | count(//w:p[@w14:paraId=\"1FAA1540\"]/preceding::w:p) | count(//w:p[@w14:paraId=\"17D0243C\"]/preceding::w:p)"
+     },
+     "error": true,
+     "output": "Error executing tool xpath_query: XPath error: Invalid type"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "count(//w:p[@w14:paraId=\"1FAA1540\"]/preceding::w:p)"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"count(//w:p[@w14:paraId=\\\"1FAA1540\\\"]/preceding::w:p)\",\n  \"part\": \"word/document.xml\",\n  \"count\": 1,\n  \"returned\": 1,\n  \"results\": [\n    \"116.0\"\n  ]\n}"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "count(//w:p[@w14:paraId=\"205E5018\"]/preceding::w:p)"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"count(//w:p[@w14:paraId=\\\"205E5018\\\"]/preceding::w:p)\",\n  \"part\": \"word/document.xml\",\n  \"count\": 1,\n  \"returned\": 1,\n  \"results\": [\n    \"110.0\"\n  ]\n}"
+    },
+    {
+     "tool": "replace_text",
+     "input": {
+      "para_id": "72B7F843",
+      "find": "genome stability .",
+      "replace": "genome stability [57].",
+      "author": "Claude"
+     },
+     "error": false,
+     "output": "{\n  \"del_id\": 105,\n  \"ins_id\": 106,\n  \"type\": \"replacement\",\n  \"author\": \"Claude\",\n  \"date\": \"2026-11-14T12:06:02Z\"\n}"
+    },
+    {
+     "tool": "get_runs",
+     "input": {
+      "para_id": "72B7F843"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"run_idx\": 0,\n    \"text\": \"Telomeres, nucleoprotein complexes located at the extremities of linear eukaryotic chromosomes, serve to stabilise the structure of chromosome ends and avert fusion between ends. In so doing, they preserve chromosome integrity and genome stability \",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 1,\n    \"text\": \" Due to replication deficiencies, normal cells experience telomere shortening with each mitosis. When telomeres reach a critical length, they activate a DNA damage response (DDR), ultimately culminating in cellular senescence and apoptosis, a biological phenomenon referred to as the telomere crisis \",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 2,\n    \"text\": \"\",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 3,\n    \"text\": \"\",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 4,\n    \"text\": \"\",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 5,\n    \"text\": \"[7]\",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_pt\": null,\n    \"color\": null\n  },\n  {\n    \"run_idx\": 6,\n    \"text\": \"\",\n    \"bold\": false,\n    \"italic\": false,\n    \"font\": null,\n    \"size_p"
+    },
+    {
+     "tool": "get_tracked_changes",
+     "input": {},
+     "error": false,
+     "output": "[\n  {\n    \"type\": \"deletion\",\n    \"change_id\": 105,\n    \"author\": \"Claude\",\n    \"date\": \"2026-11-14T12:06:02Z\",\n    \"para_id\": \"72B7F843\",\n    \"text\": \".\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 106,\n    \"author\": \"Claude\",\n    \"date\": \"2026-11-14T12:06:02Z\",\n    \"para_id\": \"72B7F843\",\n    \"text\": \"[57].\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 101,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-04T18:51:00Z\",\n    \"para_id\": \"16EAD860\",\n    \"text\": \" This study was reported in accordance with the STROBE statement.\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 104,\n    \"author\": \"Claude\",\n    \"date\": \"2026-11-14T12:04:12Z\",\n    \"para_id\": \"3F381D3B\",\n    \"text\": \" In line with this compartment-dependent view, Lai et al. used hyperpolarised [1-13C]pyruvate dynamic nuclear polarisation 13C-MRI to show that the pyruvate-to-lactate conversion rate constant (kPL) decreased significantly in irradiated FaDu head-and-neck squamous carcinoma cells and HMC3 microglial cells, but increased in THP-1 monocytes, with western blotting confirming concordant trends in LDHA and LDHB expression [51].\"\n  },\n  {\n    \"type\": \"deletion\",\n    \"change_id\": 102,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-03T15:49:00Z\",\n    \"para_id\": \"7557DA44\",\n    \"text\": \"demonstrated\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 103,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-03T21:30:00Z\",\n    \"para_id\": \"7557DA44\",\n    \"text\": \"suggested\"\n  }\n]"
+    },
+    {
+     "tool": "insert_paragraph",
+     "input": {
+      "after_para_id": "6241F885",
+      "text": "57.\tO’Sullivan RJ, Karlseder J. Telomeres: protecting chromosomes against genome instability. Nat Rev Mol Cell Biol. 2010;11:171-81. doi:10.1038/nrm2848",
+      "style": "EndNoteBibliography"
+     },
+     "error": false,
+     "output": "{\n  \"para_id\": \"34E1577D\",\n  \"text\": \"57.\\tO’Sullivan RJ, Karlseder J. Telomeres: protecting chromosomes against genome instability. Nat Rev Mol Cell Biol. 2010;11:171-81. doi:10.1038/nrm2848\"\n}"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:p[@w14:paraId=\"34E1577D\"]"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:p[@w14:paraId=\\\"34E1577D\\\"]\",\n  \"part\": \"word/document.xml\",\n  \"count\": 1,\n  \"returned\": 1,\n  \"results\": [\n    \"<w:p xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w14:paraId=\\\"34E1577D\\\">\\n  <w:pPr>\\n    <w:pStyle w:val=\\\"EndNoteBibliography\\\"/>\\n  </w:pPr>\\n  <w:r>\\n    <w:t xml:space=\\\"preserve\\\">57.\\tO&#8217;Sullivan RJ, Karlseder J. Telomeres: protecting chromosomes against genome instability. Nat Rev Mol Cell Biol. 2010;11:171-81. doi:10.1038/nrm2848</w:t>\\n  </w:r>\\n</w:p>\\n\"\n  ]\n}"
+    },
+    {
+     "tool": "replace_text",
+     "input": {
+      "find": "57.\tO’Sullivan",
+      "para_id": "34E1577D",
+      "replace": "57.    O’Sullivan",
+      "tracked": false
+     },
+     "error": false,
+     "output": "{\n  \"del_id\": null,\n  \"ins_id\": null,\n  \"type\": \"replacement\",\n  \"author\": \"Claude\",\n  \"date\": \"2026-11-14T12:06:31Z\"\n}"
+    },
+    {
+     "tool": "get_style",
+     "input": {
+      "name_or_id": "EndNoteBibliography"
+     },
+     "error": false,
+     "output": "{\n  \"style_id\": \"EndNoteBibliography\",\n  \"name\": \"EndNote Bibliography\",\n  \"type\": \"paragraph\",\n  \"base_style\": \"Normal\",\n  \"next_style\": \"\"\n}"
+    },
+    {
+     "tool": "set_paragraph_indentation",
+     "input": {
+      "para_id": "34E1577D",
+      "left_cm": 1.27,
+      "hanging_cm": 1.27
+     },
+     "error": false,
+     "output": "{\n  \"para_id\": \"34E1577D\",\n  \"left_cm\": 1.27,\n  \"right_cm\": null,\n  \"first_line_cm\": null,\n  \"hanging_cm\": 1.27\n}"
+    },
+    {
+     "tool": "get_tracked_changes",
+     "input": {},
+     "error": false,
+     "output": "[\n  {\n    \"type\": \"deletion\",\n    \"change_id\": 105,\n    \"author\": \"Claude\",\n    \"date\": \"2026-11-14T12:06:02Z\",\n    \"para_id\": \"72B7F843\",\n    \"text\": \".\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 106,\n    \"author\": \"Claude\",\n    \"date\": \"2026-11-14T12:06:02Z\",\n    \"para_id\": \"72B7F843\",\n    \"text\": \"[57].\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 101,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-04T18:51:00Z\",\n    \"para_id\": \"16EAD860\",\n    \"text\": \" This study was reported in accordance with the STROBE statement.\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 104,\n    \"author\": \"Claude\",\n    \"date\": \"2026-11-14T12:04:12Z\",\n    \"para_id\": \"3F381D3B\",\n    \"text\": \" In line with this compartment-dependent view, Lai et al. used hyperpolarised [1-13C]pyruvate dynamic nuclear polarisation 13C-MRI to show that the pyruvate-to-lactate conversion rate constant (kPL) decreased significantly in irradiated FaDu head-and-neck squamous carcinoma cells and HMC3 microglial cells, but increased in THP-1 monocytes, with western blotting confirming concordant trends in LDHA and LDHB expression [51].\"\n  },\n  {\n    \"type\": \"deletion\",\n    \"change_id\": 102,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-03T15:49:00Z\",\n    \"para_id\": \"7557DA44\",\n    \"text\": \"demonstrated\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 103,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-03T21:30:00Z\",\n    \"para_id\": \"7557DA44\",\n    \"text\": \"suggested\"\n  }\n]"
+    },
+    {
+     "tool": "get_comments",
+     "input": {},
+     "error": false,
+     "output": "[\n  {\n    \"id\": 0,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-05T09:48:00Z\",\n    \"text\": \"这句结论下得太满了，改成更谨慎的说法。\"\n  },\n  {\n    \"id\": 1,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-05T11:38:00Z\",\n    \"text\": \"这个数和表里的对一下。\"\n  },\n  {\n    \"id\": 2,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-05T17:23:00Z\",\n    \"text\": \"摘要超字数了，最后统一压缩。\"\n  }\n]"
+    },
+    {
+     "tool": "xpath_query",
+     "input": {
+      "xpath": "//w:p[@w14:paraId=\"34E1577D\"]"
+     },
+     "error": false,
+     "output": "{\n  \"xpath\": \"//w:p[@w14:paraId=\\\"34E1577D\\\"]\",\n  \"part\": \"word/document.xml\",\n  \"count\": 1,\n  \"returned\": 1,\n  \"results\": [\n    \"<w:p xmlns:w=\\\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\\\" xmlns:w14=\\\"http://schemas.microsoft.com/office/word/2010/wordml\\\" xmlns:r=\\\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\\\" xmlns:mc=\\\"http://schemas.openxmlformats.org/markup-compatibility/2006\\\" w14:paraId=\\\"34E1577D\\\">\\n  <w:pPr>\\n    <w:pStyle w:val=\\\"EndNoteBibliography\\\"/>\\n    <w:ind w:left=\\\"720\\\" w:hanging=\\\"720\\\"/>\\n  </w:pPr>\\n  <w:r>\\n    <w:t xml:space=\\\"preserve\\\">57.</w:t>\\n  </w:r>\\n  <w:r>\\n    <w:t xml:space=\\\"preserve\\\">    </w:t>\\n  </w:r>\\n  <w:r>\\n    <w:t xml:space=\\\"preserve\\\">O&#8217;Sullivan RJ, Karlseder J. Telomeres: protecting chromosomes against genome instability. Nat Rev Mol Cell Biol. 2010;11:171-81. doi:10.1038/nrm2848</w:t>\\n  </w:r>\\n</w:p>\\n\"\n  ]\n}"
+    },
+    {
+     "tool": "search_text",
+     "input": {
+      "query": "genome stability [57]"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"source\": \"document\",\n    \"paraId\": \"72B7F843\",\n    \"text\": \"Telomeres, nucleoprotein complexes located at the extremities of linear eukaryotic chromosomes, serve to stabilise the structure of chromosome ends and avert fusion between ends. In so doing, they preserve chromosome integrity and genome stability [57]. Due to replication deficiencies, normal cells \",\n    \"matches\": null\n  }\n]"
+    },
+    {
+     "tool": "search_text",
+     "input": {
+      "query": "O’Sullivan"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"source\": \"document\",\n    \"paraId\": \"34E1577D\",\n    \"text\": \"57.    O’Sullivan RJ, Karlseder J. Telomeres: protecting chromosomes against genome instability. Nat Rev Mol Cell Biol. 2010;11:171-81. doi:10.1038/nrm2848\",\n    \"matches\": null\n  }\n]"
+    },
+    {
+     "tool": "validate_paraids",
+     "input": {},
+     "error": false,
+     "output": "{\n  \"valid\": true,\n  \"total\": 176,\n  \"duplicates\": {},\n  \"out_of_range\": []\n}"
+    },
+    {
+     "tool": "save_document",
+     "input": {},
+     "error": false,
+     "output": "{\n  \"path\": \"<bench>/out/Q05/runs/ronin-c/work/manuscript.docx\",\n  \"size_bytes\": 53041,\n  \"modified_parts\": [\n    \"word/document.xml\"\n  ],\n  \"repairs\": {\n    \"orphan_footnotes_removed\": 0,\n    \"orphan_endnotes_removed\": 0,\n    \"paraids_deduplicated\": 0,\n    \"broken_rels_removed\": 0\n  },\n  \"warnings\": [],\n  \"backup\": \"<bench>/out/Q05/runs/ronin-c/work/manuscript.docx.bak2\"\n}"
+    },
+    {
+     "tool": "open_document",
+     "input": {
+      "path": "<bench>/out/Q05/runs/ronin-c/work/manuscript.docx",
+      "document_handle": "verify"
+     },
+     "error": false,
+     "output": "{\n  \"handle\": \"verify\",\n  \"path\": \"<bench>/out/Q05/runs/ronin-c/work/manuscript.docx\",\n  \"size_bytes\": 53041,\n  \"paragraph_count\": 173,\n  \"heading_count\": 42,\n  \"image_count\": 0,\n  \"comment_count\": 3,\n  \"parts\": [\n    \"[Content_Types].xml\",\n    \"docProps/core.xml\",\n    \"word/_rels/document.xml.rels\",\n    \"word/comments.xml\",\n    \"word/document.xml\",\n    \"word/settings.xml\",\n    \"word/styles.xml\"\n  ]\n}"
+    },
+    {
+     "tool": "search_text",
+     "input": {
+      "query": "genome stability \\[57\\]",
+      "regex": true,
+      "document_handle": "verify"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"source\": \"document\",\n    \"paraId\": \"72B7F843\",\n    \"text\": \"Telomeres, nucleoprotein complexes located at the extremities of linear eukaryotic chromosomes, serve to stabilise the structure of chromosome ends and avert fusion between ends. In so doing, they preserve chromosome integrity and genome stability [57]. Due to replication deficiencies, normal cells \",\n    \"matches\": [\n      {\n        \"start\": 231,\n        \"end\": 252,\n        \"match\": \"genome stability [57]\"\n      }\n    ]\n  }\n]"
+    },
+    {
+     "tool": "search_text",
+     "input": {
+      "query": "nrm2848",
+      "document_handle": "verify"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"source\": \"document\",\n    \"paraId\": \"34E1577D\",\n    \"text\": \"57.    O’Sullivan RJ, Karlseder J. Telomeres: protecting chromosomes against genome instability. Nat Rev Mol Cell Biol. 2010;11:171-81. doi:10.1038/nrm2848\",\n    \"matches\": null\n  }\n]"
+    },
+    {
+     "tool": "get_tracked_changes",
+     "input": {
+      "document_handle": "verify"
+     },
+     "error": false,
+     "output": "[\n  {\n    \"type\": \"deletion\",\n    \"change_id\": 105,\n    \"author\": \"Claude\",\n    \"date\": \"2026-11-14T12:06:02Z\",\n    \"para_id\": \"72B7F843\",\n    \"text\": \".\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 106,\n    \"author\": \"Claude\",\n    \"date\": \"2026-11-14T12:06:02Z\",\n    \"para_id\": \"72B7F843\",\n    \"text\": \"[57].\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 101,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-04T18:51:00Z\",\n    \"para_id\": \"16EAD860\",\n    \"text\": \" This study was reported in accordance with the STROBE statement.\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 104,\n    \"author\": \"Claude\",\n    \"date\": \"2026-11-14T12:04:12Z\",\n    \"para_id\": \"3F381D3B\",\n    \"text\": \" In line with this compartment-dependent view, Lai et al. used hyperpolarised [1-13C]pyruvate dynamic nuclear polarisation 13C-MRI to show that the pyruvate-to-lactate conversion rate constant (kPL) decreased significantly in irradiated FaDu head-and-neck squamous carcinoma cells and HMC3 microglial cells, but increased in THP-1 monocytes, with western blotting confirming concordant trends in LDHA and LDHB expression [51].\"\n  },\n  {\n    \"type\": \"deletion\",\n    \"change_id\": 102,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-03T15:49:00Z\",\n    \"para_id\": \"7557DA44\",\n    \"text\": \"demonstrated\"\n  },\n  {\n    \"type\": \"insertion\",\n    \"change_id\": 103,\n    \"author\": \"张教授\",\n    \"date\": \"2026-11-03T21:30:00Z\",\n    \"para_id\": \"7557DA44\",\n    \"text\": \"suggested\"\n  }\n]"
+    },
+    {
+     "tool": "close_document",
+     "input": {
+      "document_handle": "verify"
+     },
+     "error": false,
+     "output": "Document 'verify' closed."
+    }
+   ],
+   "usage": {
+    "input_tokens": 52409,
+    "output_tokens": 16658
+   },
+   "seconds": 149.0,
+   "final": ""
+  }
+ ]
+}

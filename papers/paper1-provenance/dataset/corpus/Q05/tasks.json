@@ -1,0 +1,106 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Materials and methods」部分里所有的 “was performed” 改成 “was conducted”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Materials and methods",
+   "old": "was performed",
+   "new": "was conducted",
+   "count_in_section": 4,
+   "rule": "该章节 “was performed” 出现 0 次、“was conducted” 增加 4 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 81.42 应为 81.39，请只改这一处：“The IC50 values were 81.42 µM for A549 and 35.34 µM for H460”",
+  "target": {
+   "pid": "7D9CF0D3",
+   "section": "Results",
+   "para_start": "A549 and H460 cells were exposed to various concentrations o"
+  },
+  "check": {
+   "old": "81.42",
+   "new": "81.39",
+   "sentence": "The IC50 values were 81.42 µM for A549 and 35.34 µM for H460",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改数字（本稿无可用表格）",
+  "instruction": "重新分析后，「Materials and methods」中这句话里的 0.5 应为 0.2，请只改这一处：“Following colony formation, the cells were fixed with 4% paraformaldehyde for 15 min, and subsequently stained with 0.5% crystal violet at room temperature.”",
+  "target": {
+   "pid": "4F9A4D45",
+   "section": "Materials and methods",
+   "para_start": "A549 and H460 cells were pre-treated with either DMSO or BIB"
+  },
+  "check": {
+   "old": "0.5",
+   "new": "0.2",
+   "sentence": "Following colony formation, the cells were fixed with 4% paraformaldehyde for 15 min, and subsequently stained with 0.5% crystal violet at room temperature.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “More significantly, our study delves into the impa…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "643806D4",
+   "section": "Discussion",
+   "para_start": "More significantly, our study delves into the impact and pot"
+  },
+  "check": {
+   "words_before": 242,
+   "numbers": [
+    "1532",
+    "1532",
+    "1532",
+    "1532",
+    "1532",
+    "1",
+    "3"
+   ],
+   "cited_refs": [
+    "10.1080/07357900802072905",
+    "10.1146/annurev.biochem.052308.093131",
+    "10.1089/ars.2013.5668",
+    "10.1016/j.immuni.2014.10.019"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“这句结论下得太满了，改成更谨慎的说法。”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "46805654",
+   "comment_id": 0,
+   "anchor": "Furthermore, we have confirmed its radiosensitizing effect in the RT of NSCLC, both in vitro and in vivo."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“In so doing, they preserve chromosome integrity and genome stability” 文献：Smith EM, Pendlebury DF, Nandakumar J. Structural biology of telomeres and telomerase. Cell Mol Life Sci. 2020. doi:10.1007/s00018-019-03369-x",
+  "target": {
+   "pid": "72B7F843",
+   "section": "Introduction",
+   "para_start": "Telomeres, nucleoprotein complexes located at the extremitie"
+  },
+  "check": {
+   "doi": "10.1007/s00018-019-03369-x",
+   "title": "Structural biology of telomeres and telomerase",
+   "sentence": "In so doing, they preserve chromosome integrity and genome stability",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

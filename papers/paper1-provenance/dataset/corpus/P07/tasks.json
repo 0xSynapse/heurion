@@ -1,0 +1,100 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Methods」部分里所有的 “subjects” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Methods",
+   "old": "subjects",
+   "new": "participants",
+   "count_in_section": 6,
+   "rule": "该章节 “subjects” 出现 0 次、“participants” 增加 6 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 10.8 应为 10.5，请只改这一处：“infection, 10.8% were seropositive and 89.2% were seronegative.”",
+  "target": {
+   "pid": "74AB6A23",
+   "section": "Results",
+   "para_start": "Of the 12,620 subjects 6 years of age or older tested for T."
+  },
+  "check": {
+   "old": "10.8",
+   "new": "10.5",
+   "sentence": "infection, 10.8% were seropositive and 89.2% were seronegative.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 2中「Positive」行、「AICa」列的 14780 改为 14778（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "3B6A4286",
+   "table": "Table 2",
+   "row": "Positive",
+   "col": "AICa",
+   "cell_text": "14780"
+  },
+  "check": {
+   "old": "14780",
+   "new": "14778",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “For all adjusted regression models, no significant…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "3EC36741",
+   "section": "Discussion",
+   "para_start": "For all adjusted regression models, no significant relations"
+  },
+  "check": {
+   "words_before": 136,
+   "numbers": [],
+   "cited_refs": [
+    "",
+    "10.1016/j.cegh.2020.02.005",
+    "10.1111/j.1365-3083.2008.02090.x",
+    "10.21608/zumj.2021.93142.2331",
+    "10.1016/j.imbio.2007.03.002"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“Please compare this with previous studies here.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "28C71B05",
+   "comment_id": 0,
+   "anchor": "No significant relationship was detected between "
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“Asthma is a complex syndrome characterized by increased bronchial reactivity and airway obstruction that can result in death” 文献：Dannemiller KC, Gent JF, Leaderer BP et al. Indoor microbial communities: influence on asthma severity in atopic and nonatopic children. J Allergy Clin Immunol. 2016. doi:10.1016/j.jaci.2015.11.027",
+  "target": {
+   "pid": "7A08B817",
+   "section": "Introduction",
+   "para_start": "Asthma is a complex syndrome characterized by increased bron"
+  },
+  "check": {
+   "doi": "10.1016/j.jaci.2015.11.027",
+   "title": "Indoor microbial communities: influence on asthma severity in atopic and nonatopic children",
+   "sentence": "Asthma is a complex syndrome characterized by increased bronchial reactivity and airway obstruction that can result in death",
+   "ref_cited_elsewhere": true,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

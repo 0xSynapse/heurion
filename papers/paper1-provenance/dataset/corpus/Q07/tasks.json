@@ -1,0 +1,132 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 6,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 6 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 20.3 应为 20.0，请只改这一处：“For the D-CRT group, the complete response (CR) rate was 20.3% (15/74) and partial response rate (PR) rate was 79.7% (59/74).”",
+  "target": {
+   "pid": "494A3104",
+   "section": "Results",
+   "para_start": "For the D-CRT group, the complete response (CR) rate was 20."
+  },
+  "check": {
+   "old": "20.3",
+   "new": "20.0",
+   "sentence": "For the D-CRT group, the complete response (CR) rate was 20.3% (15/74) and partial response rate (PR) rate was 79.7% (59/74).",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 4中「Local recurrence」行、「CRT-S (n = 32)」列的 1 改为 2（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "49905E04",
+   "table": "Table 4",
+   "row": "Local recurrence",
+   "col": "CRT-S (n = 32)",
+   "cell_text": "1"
+  },
+  "check": {
+   "old": "1",
+   "new": "2",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “The therapeutic strategy for locally advanced inop…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "5A86A266",
+   "section": "Discussion",
+   "para_start": "The therapeutic strategy for locally advanced inoperable ESC"
+  },
+  "check": {
+   "words_before": 200,
+   "numbers": [
+    "44.9%",
+    "36.0%",
+    "27.9%",
+    "4",
+    "6.0",
+    "12.7",
+    "43.9",
+    "0.001",
+    "0.05",
+    "4",
+    "50%",
+    "3",
+    "37.5%",
+    "4",
+    "17",
+    "14.3",
+    "4",
+    "5",
+    "19%"
+   ],
+   "cited_refs": [
+    "10.5761/atcs.ra.11.01676",
+    "10.1002/ags3.12222",
+    "10.1200/JCO.2005.00.034",
+    "10.1245/s10434-018-6656-6",
+    "10.1002/jso.20259",
+    "10.1007/s00268-004-7590-2",
+    "10.1186/s13014-018-1183-y",
+    "10.1245/s10434-018-7074-5",
+    "10.21037/jtd.2019.12.59",
+    "10.1245/s10434-018-6656-6",
+    "10.1111/ases.12731",
+    "10.1245/s10434-021-10568-z",
+    "10.1097/coc.0000000000000499",
+    "Chemoradiotherapy with and without esophagectomy for advance",
+    "10.1097/coc.0000000000000499",
+    "10.1016/j.ejso.2019.10.023",
+    "10.1007/s10388-019-00709-5"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“这句结论下得太满了，改成更谨慎的说法。”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "7C12FCB8",
+   "comment_id": 0,
+   "anchor": "In conclusion, the present study has demonstrated that CRT-S was superior to D-CRT for T4 ESCC patients who were downstaged by neo-CRT with respect to longer OS and PFS."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“Until now, D-CRT has been the standard alternative curative management for patients with locally advanced disease who are not eligible for o” 文献：Ajani JA. Esophageal and esophagogastric junction cancers, version 2.2019, NCCN clinical practice guidelines in oncology. J Natl Compr Canc Netw. 2019. doi:10.6004/jnccn.2019.0033",
+  "target": {
+   "pid": "6524C501",
+   "section": "Introduction",
+   "para_start": "Two distinct therapeutic options are currently available for"
+  },
+  "check": {
+   "doi": "10.6004/jnccn.2019.0033",
+   "title": "Esophageal and esophagogastric junction cancers, version 2.2019, NCCN clinical practice guidelines in oncology",
+   "sentence": "Until now, D-CRT has been the standard alternative curative management for patients with locally advanced disease who are not eligible for or refuse surgery",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]
