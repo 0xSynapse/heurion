@@ -4,8 +4,8 @@ import * as proceduralMod from '../src/memory/procedural.ts'
 import { ProceduralHarnessService } from '../src/memory/procedural.ts'
 import { MemoryService } from '../src/memory/service.ts'
 import { SkillTrainingService, computeDomainAlignment } from '../src/memory/skill-trainer.ts'
-import { runCrossDomainEval } from '../../../paper/benchmarks/v2/cross-domain-eval.ts'
-import { runOnlineExp3ZeroTemplatePilot } from '../../../paper/benchmarks/v2/exp3-zero-template-pilot.ts'
+import { runCrossDomainEval } from '../../../papers/paper2-deep-review/benchmarks/v2/cross-domain-eval.ts'
+import { runOnlineExp3ZeroTemplatePilot } from '../../../papers/paper2-deep-review/benchmarks/v2/exp3-zero-template-pilot.ts'
 import { setup } from './helpers.ts'
 
 describe('Cross-Domain Self-Evolution Kernel & Skill-Training Integration', () => {

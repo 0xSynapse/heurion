@@ -4,7 +4,7 @@
 
 ## 1. 为什么要重建
 
-- 现有 `paper/benchmarks/run-7papers-review.ts` 的 7 篇论文（8 个已知错误）已经被规则针对过：`claims/extract.ts` 的豁免与检查规则里写死了这些论文的具体数字和句式。它们只能作为开发集，不能用来报告效果。
+- 现有 `papers/paper2-deep-review/benchmarks/run-7papers-review.ts` 的 7 篇论文（8 个已知错误）已经被规则针对过：`claims/extract.ts` 的豁免与检查规则里写死了这些论文的具体数字和句式。它们只能作为开发集，不能用来报告效果。
 - 深度审稿的成败在误报，而参考的 PAT 论文（arXiv:2606.28277）也只测了召回、没有测误报。我们必须自己测「干净稿件上报了多少假问题」。
 - 实测（2026-11-08）：一篇无错误的中文稿件被报 3 条，全是误报，其中 2 条为「致命」。
 
@@ -193,7 +193,7 @@ apps/platform/eval/deep-review/
     - **Track A（`narrow` 范式边界豁免）**：针对 7 类研究设计（`rct`、`cohort_retro`、`case_control`、`diagnostic`、`cross_sectional`、`meta_analysis`、`other` 动物/TMA 双队列）在合法范式边界上的误报（如 ITT 分配人数 vs 完成随访人数、PSM 匹配前粗队列 vs 匹配后队列、单模型粗 OR vs 多因素调整 aOR、活检标本数 vs 患者数、横断面子队列分母、Meta 分析主结局 k 项研究 vs 亚组研究数），作者提交方法学合理解释（`dismissed: true`）后自动做实例数值脱敏（`hasInstanceLeakage === false`），蒸馏为 7 条精准方法学边界豁免规则。
     - **Track B（`procedural` 程序化核查结晶）**：作者采纳客观错误批注并修复（`acceptedFix: true`）后，写入已脱敏的程序化经验信号（`procedural_signals`），当同一 subtype 跨稿件达到阈值（$\ge 3$）时自动结晶为全局程序化核查规则（`procedural_rules`）。
     - **不可豁免安全底线（`NON_EXEMPTABLE_SUBTYPES`）**：对客观算术/统计矛盾、点估计越界 CI、摘要与正文主要结局冲突、组间比较方向反转、方法学与统计检验矛盾、自造指南与非显著结果夸大（Spin）施加硬性安全锁，阻断恶意或错误申诉对真实客观错误的静默豁免。
-- **19 篇 PMC 稿件 × 57 处植入错误（`E1`–`E7`）四工况评测结果**（独立论文目录：`paper-deep-review/main.tex`，复现脚本：`paper-deep-review/benchmarks/run-injected-review-evolution.ts`，结果产物：`paper-deep-review/results/injected_deep_review_evolution.json`）：
+- **19 篇 PMC 稿件 × 57 处植入错误（`E1`–`E7`）四工况评测结果**（独立论文目录：`papers/paper2-deep-review/main.tex`，复现脚本：`papers/paper2-deep-review/benchmarks/run-injected-review-evolution.ts`，结果产物：`papers/paper2-deep-review/results/injected_deep_review_evolution.json`）：
 
   | 评测工况 | 注入错误召回率 (`E1`–`E7`) | 干净稿件 Crit/Maj 误报 | 范式边界误报（干净 / 植入） | 精确率 (Precision) | F1 分数 | 实例数值泄露率 |
   |---|---|---|---|---|---|---|
