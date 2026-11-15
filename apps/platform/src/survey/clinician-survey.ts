@@ -41,9 +41,9 @@ export const SURVEY_SECTIONS: SurveySection[] = [
     { id: 'q01', type: 'single', t: '您目前的职位是？', o: ['主任 / PI', '副主任医师', '主治医师', '住院医师', '博士研究生', '硕士研究生', '博士后 / 研究员', '其他'] },
     { id: 'q02', type: 'single', t: '您主要做哪类研究？', o: ['临床研究为主', '基础研究为主', '两者都有'] },
     { id: 'q03', type: 'single', t: '近两年，您作为主笔完成的论文大约有几篇？', o: ['0 篇', '1–2 篇', '3–5 篇', '6–10 篇', '10 篇以上'] },
-    // 2026-11-15 新增（选填）：了解答卷来自哪些地区和机构；编号接在最后一题之后，页面按出现顺序显示题号
+    // 2026-11-15 新增：了解答卷来自哪些地区和机构（机构选填、城市必填）；编号接在最后一题之后，页面按出现顺序显示题号
     { id: 'q21', type: 'text', short: true, optional: true, t: '您所在的机构', placeholder: '例如：某某大学附属医院（选填）' },
-    { id: 'q22', type: 'text', short: true, optional: true, t: '您所在的城市', placeholder: '例如：合肥（选填）' },
+    { id: 'q22', type: 'text', short: true, t: '您所在的城市', placeholder: '例如：合肥' },
   ] },
   { id: 's2', title: '写作与协作', qs: [
     { id: 'q04', type: 'multi', t: '您写论文主要用什么工具？', o: ['Word', 'WPS', 'LaTeX / Overleaf', '腾讯文档等在线文档', 'Pages', '其他'] },
