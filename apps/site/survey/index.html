@@ -140,7 +140,7 @@ label.opt input { accent-color: var(--mint-text); margin: 0; flex: none; }
   <header class="masthead">
     <div class="eyebrow">Heurion · 研究问卷</div>
     <h1>医生科研写作与 AI 使用</h1>
-    <p class="lede">我们想了解医生写论文的真实过程，以及 AI 工具在其中的作用。没有对错之分，按实际情况选择即可。问卷匿名，不收集姓名和联系方式；所在机构和城市为选填，只用于了解答卷来自哪些地区和机构。结果只用于研究。</p>
+    <p class="lede">我们想了解医生写论文的真实过程，以及 AI 工具在其中的作用。没有对错之分，按实际情况选择即可。问卷匿名，不收集姓名和联系方式；所在城市为必填、所在机构为选填，只用于了解答卷来自哪些地区和机构。结果只用于研究。</p>
     <div class="facts"><span>约 <b>10 分钟</b></span><span><b id="countRequired">19</b> 道选择题 + 1 道选填</span></div>
   </header>
 
@@ -193,7 +193,7 @@ label.opt input { accent-color: var(--mint-text); margin: 0; flex: none; }
   function qHtml(q) {
     // 题号按在问卷里出现的顺序（题目编号 q01… 只用于保存与导出，新增的题编号接在最后）
     var num = String(ORDER[q.id]);
-    var kind = q.type === "single" ? "单选" : q.type === "multi" ? (q.max ? "多选 · 最多 " + q.max + " 项" : "多选") : q.type === "scale" ? "1–5 分" : "选填";
+    var kind = q.type === "single" ? "单选" : q.type === "multi" ? (q.max ? "多选 · 最多 " + q.max + " 项" : "多选") : q.type === "scale" ? "1–5 分" : q.optional ? "选填" : "必填";
     var h = '<fieldset class="q" id="f_' + q.id + '"><legend><span class="num">' + num + '</span><span class="text">' + esc(q.t) + '</span>' +
       '<span class="kind">' + kind + '</span>' + (q.s ? '<span class="scenario">' + esc(q.s) + '</span>' : "") + '</legend><div class="body">';
     if (q.type === "single" || q.type === "multi") {
@@ -253,7 +253,7 @@ label.opt input { accent-color: var(--mint-text); margin: 0; flex: none; }
     other.hidden = !(Array.isArray(v) ? v.indexOf("其他") >= 0 : v === "其他");
   }
 
-  function answered(q) { var v = state.v[q.id]; return Array.isArray(v) ? v.length > 0 : v != null && v !== ""; }
+  function answered(q) { var v = state.v[q.id]; return Array.isArray(v) ? v.length > 0 : v != null && String(v).trim() !== ""; }
 
   function progress() {
     var done = REQUIRED.filter(answered).length;

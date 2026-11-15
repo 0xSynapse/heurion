@@ -29,10 +29,9 @@ function fullAnswers(): Record<string, unknown> {
 }
 
 describe('问卷校验', () => {
-  it('机构、城市只能选填：问到单位、医院、机构、城市的题都不是必答（2026-11-15 起收集，问卷仍不收姓名和联系方式）', () => {
+  it('机构选填、城市必填（2026-11-15 起收集）；问卷仍不收姓名和联系方式', () => {
     const where = SURVEY_QUESTIONS.filter(q => /单位|医院|机构|城市/.test(q.t))
-    expect(where.map(q => q.id)).toEqual(['q21', 'q22'])
-    expect(where.every(q => q.optional)).toBe(true)
+    expect(where.map(q => [q.id, !!q.optional])).toEqual([['q21', true], ['q22', false]])
     expect(SURVEY_QUESTIONS.some(q => /姓名|电话|手机|邮箱|微信号/.test(q.t))).toBe(false)
   })
 
@@ -44,7 +43,7 @@ describe('问卷校验', () => {
     expect(sub.answers.q20).toBeNull()
   })
 
-  it('所在机构、城市：选填的单行短答，最多 100 字，导出 CSV 各占一列', () => {
+  it('所在机构、城市：单行短答，最多 100 字，导出 CSV 各占一列', () => {
     const sub = validateSubmission({ consent: true, answers: { ...fullAnswers(), q21: `  某某大学附属医院${'院'.repeat(200)}`, q22: '合肥' } })
     expect(sub.answers.q21).toHaveLength(100)
     expect(String(sub.answers.q21).startsWith('某某大学附属医院')).toBe(true)
@@ -54,7 +53,7 @@ describe('问卷校验', () => {
     const header = exportCsv([{ id: 'r1', version: 'v', created_at: '2026-11-15T00:00:00.000Z', data: sub }]).slice(1).split('\r\n')[0]!
     expect(header.split(',')).toEqual(expect.arrayContaining(['q21', 'q22']))
     const q = SURVEY_QUESTIONS.filter(x => x.id === 'q21' || x.id === 'q22')
-    expect(q.every(x => x.optional && x.short)).toBe(true)
+    expect(q.every(x => x.short)).toBe(true)
   })
 
   it('必须同意说明', () => {
