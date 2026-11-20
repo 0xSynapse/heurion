@@ -208,6 +208,7 @@ const AI_CONFIRM = [
 /** 不给 AI 的（只是界面机制，或必须本人亲自做）；每条写清理由。 */
 const NOT_FOR_AI: Record<string, string> = {
   // 原版 PDF 视图（docs/design/PDF_ORIGINAL_VIEW.md）：页面渲染用的原文件与词坐标；AI 读转换稿（doc_read），评论照常经评论工具
+  'GET /api/docs/:id/package-media': '画布近似预览显示母版 / 组合里的图片（只是显示层）；AI 看页面用 slide_render 的渲染图',
   'GET /api/docs/:id/original.pdf': '原版视图在浏览器里用 pdf.js 渲染的 PDF 原文件；AI 读的是同一份内容的转换稿（doc_read）',
   'GET /api/docs/:id/source-map': '原版视图的词坐标与块对齐，只用来在页面上画高亮、把选区换回块；AI 用块 id 与文字（comments_list）定位',
   'POST /api/docs/:id/source-map/rebuild': '给早期导入的 PDF 稿补生成原版视图的显示数据（不改文档内容）；AI 不用原版视图，按块 id 与文字定位',

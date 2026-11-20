@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
@@ -120,6 +121,48 @@ export class SlideRenderer {
       engine: mode === 'builtin' ? 'Resvg-Native' : mode === 'local' ? 'LibreOffice-Local' : 'LibreOffice-Container',
       installHint: mode === 'builtin' ? '当前使用服务端内置的高保真矢量光栅化引擎（自闭环免外部依赖）' : '当前使用 LibreOffice 导出级渲染引擎',
     }
+  }
+
+  private readonly imageJobs = new Map<string, Promise<Uint8Array | null>>()
+
+  /**
+   * emf / wmf（Office 里粘贴的矢量图，浏览器不能显示）→ png，按内容哈希缓存。
+   * 用与精确预览同一个 LibreOffice；没有 LibreOffice（内置渲染模式）时返回 null，画布不显示这张图。
+   */
+  async vectorToPng(bytes: Uint8Array, ext: 'emf' | 'wmf'): Promise<Uint8Array | null> {
+    const hash = createHash('sha256').update(bytes).digest('hex')
+    const root = resolve(this.cacheDir, 'vector-images')
+    const target = join(root, `${hash}.png`)
+    if (existsSync(target)) return new Uint8Array(readFileSync(target))
+    let job = this.imageJobs.get(hash)
+    if (!job) {
+      job = (async () => {
+        const mode = await this.detect()
+        if (mode === 'builtin') return null
+        const dir = join(root, `${hash}-work`)
+        mkdirSync(dir, { recursive: true })
+        try {
+          writeFileSync(join(dir, `image.${ext}`), bytes)
+          const script = `export HOME=/tmp && "$SOFFICE" "-env:UserInstallation=file://$P/lo-profile" --headless --convert-to png --outdir "$P" "$P/image.${ext}" >/dev/null 2>&1`
+          if (mode === 'local') {
+            await run('bash', ['-c', script], { env: enhancedEnv({ P: dir, SOFFICE: this.sofficeBin ?? 'soffice' }), timeout: 60_000 })
+          } else {
+            await run(this.engine, ['run', '--rm', '-v', `${dir}:/x:Z`, '--user', 'root', '-e', 'P=/x', '-e', 'SOFFICE=soffice', '--entrypoint', 'bash', this.image, '-c', script], { timeout: 120_000 })
+          }
+          const out = join(dir, 'image.png')
+          if (!existsSync(out)) return null
+          const png = readFileSync(out)
+          writeFileSync(target, png)
+          return new Uint8Array(png)
+        } catch {
+          return null
+        } finally {
+          rmSync(dir, { recursive: true, force: true })
+        }
+      })().finally(() => this.imageJobs.delete(hash))
+      this.imageJobs.set(hash, job)
+    }
+    return job
   }
 
   /** 渲染整份 deck，返回每页 PNG 的路径（按页序）。 */

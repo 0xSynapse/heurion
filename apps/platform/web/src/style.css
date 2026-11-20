@@ -1524,15 +1524,35 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .render-warning-fallback { font-size: 10px; color: #80868b; }
 .shape { position: absolute; overflow: hidden; line-height: 1.2; transition: background .8s; }
 .shape p { margin: 0 0 .2em; white-space: pre-wrap; word-break: break-word; }
-.slide p.bullet::before { content: '• '; }
+.slide p.bullet::before { content: attr(data-bu) ' '; }
+/* 导入的 pptx：文字超出文本框时照常显示（PowerPoint 不裁剪）；wrap="none" 的文本框不折行 */
+.slide.imported .shape.shape-text, .slide.imported .shape.shape-shape { overflow: visible; }
+.slide .shape.nowrap p { white-space: pre; }
+/* 导入的表格：行高按原文件网格，段落不留额外间距 */
+.slide.imported .shape td p { margin: 0; line-height: 1.15; }
+.slide.imported .shape td p.empty-para { font-size: 0 !important; line-height: 0; }
+/* 没装 Office 字体时的字宽替代（Calibri 比 Arial 窄约一成；Arial Narrow 约窄两成） */
+@font-face { font-family: 'HR Calibri Fallback'; src: local('Arial'), local('Helvetica'), local('Liberation Sans'); size-adjust: 90%; }
+@font-face { font-family: 'HR Narrow Fallback'; src: local('Arial'), local('Helvetica'), local('Liberation Sans'); size-adjust: 82%; }
 .shape-shape { border: 1px dashed rgba(0, 0, 0, .08); display: flex; align-items: center; }
 .shape-shape[style*="background:#"] { border: 0; }
 .shape-shape .shape-text { width: 100%; padding: 4px 8px; }
 .shape-image img { width: 100%; height: 100%; object-fit: contain; }
+.shape-image img.img-crop { position: absolute; max-width: none; object-fit: fill; }
 .shape-chart, .shape-group, .shape-opaque { border: 1px dashed #cbd5e1; display: flex; align-items: center; justify-content: center; }
 .shape-chart:has(.chart-svg) { border: 0; }
 .chart-svg { display: block; font-family: inherit; }
 .shape-label { font-size: 11px; color: #64748b; padding: 4px; text-align: center; }
+/* 导入 pptx 的显示层：版式 / 母版背景与装饰、组合展开后的子形状（只显示，不可选中） */
+.slide .vis-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.slide .vis-layer { position: absolute; inset: 0; pointer-events: none; }
+.slide .shape.has-vis { border: 0; display: block; overflow: visible; }
+.slide .vis { position: absolute; overflow: visible; box-sizing: border-box; pointer-events: none; }
+.slide .vis:has(> img) { overflow: hidden; }
+.slide svg.vis { overflow: visible; }
+.slide .vis img { position: absolute; display: block; max-width: none; }
+.slide .vis-text { position: absolute; inset: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.slide .vis-text p { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .shape table { border-collapse: collapse; width: 100%; height: 100%; }
 .shape td { border: 1px solid #cbd5e1; padding: 2px 4px; vertical-align: top; }
 .shape.ai-flash { background: rgba(0, 255, 147, .22); }

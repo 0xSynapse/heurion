@@ -166,7 +166,13 @@ export const DeckEditBatch = z.object({
 export type DeckEditBatch = z.infer<typeof DeckEditBatch>
 
 /** 占位符从版式 / 母版继承的文字样式（画布据此显示导入的占位符，与 PowerPoint 一致）。 */
-export interface PlaceholderStyle { anchor?: 't' | 'ctr' | 'b'; align?: 'l' | 'ctr' | 'r' | 'just'; size?: number; bold?: boolean }
+export interface PlaceholderStyle {
+  anchor?: 't' | 'ctr' | 'b'; align?: 'l' | 'ctr' | 'r' | 'just'; size?: number; bold?: boolean
+  /** 一级段落的项目符号（'' 为不要符号；没写则沿用默认的「•」）。 */
+  bullet?: string
+  /** 一级段落的文字颜色（a:defRPr 的填充原文，主题色由画布按版式配色解析）。 */
+  colorXml?: string
+}
 
 export interface LayoutInfo {
   name: string
