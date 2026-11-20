@@ -1142,6 +1142,9 @@ const FONT_FALLBACKS: Record<string, string[]> = {
   '等线': ['DengXian', 'PingFang SC', 'Noto Sans CJK SC'], '等线 light': ['DengXian Light', 'PingFang SC', 'Noto Sans CJK SC'],
   '宋体': ['SimSun', 'Songti SC', 'Noto Serif CJK SC'], '黑体': ['SimHei', 'PingFang SC', 'Noto Sans CJK SC'],
   '楷体': ['KaiTi', 'Kaiti SC'], '仿宋': ['FangSong', 'STFangsong'],
+  // 平台导出时选了「Mac 字体」的文件：在 Windows 上反过来找对应的字体
+  'pingfang sc': ['Microsoft YaHei', 'Hiragino Sans GB', 'Noto Sans CJK SC'], 'songti sc': ['SimSun', 'Noto Serif CJK SC'],
+  'kaiti sc': ['KaiTi'], 'stfangsong': ['FangSong'],
 }
 
 /** 字体名列表 → CSS font-family（逐个加引号、补上替代字体，最后兜底无衬线）。 */
