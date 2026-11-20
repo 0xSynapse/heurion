@@ -10,6 +10,8 @@
 import { icon } from '../../../apps/platform/web/src/icons.ts'
 import { measureExportText, type MeasureView } from '../../../apps/platform/src/model/measurements.ts'
 import { resolvedThreadIds, type CommentThreadStatus } from './comments.ts'
+import { fillColorOf, textColorOf, type SchemeColors } from '../../../apps/platform/src/model/ooxml-color.ts'
+import type { DeckVisuals, ShapeVisuals, VisualBg, VisualPart } from '../../../apps/platform/src/convert/pptx-visuals.ts'
 
 interface PMJson { type: string; attrs?: Record<string, any>; content?: PMJson[]; text?: string; marks?: Array<{ type: string; attrs?: Record<string, any> }> }
 
@@ -64,6 +66,8 @@ export class DeckView {
     /** 批注线程状态：已关闭的锚点不再显示高亮 / 下划线（GET /api/docs/:id/deck） */
     comments?: CommentThreadStatus[]
     ph_styles?: Record<string, Array<{ type: string; idx: string | null; style: PhStyle }>>
+    /** 导入 pptx 的显示层：版式背景与装饰、主题色、组合展开（平台新建的 deck 为 null）。 */
+    visuals?: (DeckVisuals & { shapes: Record<string, ShapeVisuals> }) | null
     render_info?: {
       available: boolean
       mode: string
@@ -75,6 +79,9 @@ export class DeckView {
   } | null = null
   /** 正在渲染的形状继承的占位符样式（导入的占位符才有）。 */
   private phStyle: PhStyle | null = null
+  /** 正在渲染的页的主题配色、正在渲染的形状的显示层信息（导入的 pptx 才有）。 */
+  private colors: SchemeColors = {}
+  private shapeVis: ShapeVisuals | null = null
   /** 已关闭批注线程：锚点保留，但不再显示高亮 / 下划线。 */
   private resolvedThreads = new Set<string>()
   private precise = new Set<number>()
@@ -196,7 +203,16 @@ export class DeckView {
     this.mount.innerHTML = slides.map((slide, i) => {
       const notes = slide.content?.find(c => c.type === 'notes')
       const suggest = slide.attrs?.suggest ? ` data-suggest="${slide.attrs.suggest}" data-suggest-group="${esc(slide.attrs.suggest_group)}"` : ''
-      const shapesHtml = (slide.content ?? []).filter(c => c.type === 'shape').map(s => this.shape(s, slide.attrs?.layout as string | undefined, slide.attrs?.layout_name as string | undefined)).join('')
+      // 导入的 pptx：版式 / 母版的背景与装饰画在形状下面（不可选中），主题色按这一页的版式解析
+      const lv = slide.attrs?.layout ? this.data!.visuals?.layouts[slide.attrs.layout as string] : undefined
+      const sv = slide.attrs?.part ? this.data!.visuals?.slides[slide.attrs.part as string] : undefined
+      this.colors = lv?.colors ?? {}
+      const vbg: VisualBg | null | undefined = slide.attrs?.bg ? null : (sv?.bg ?? lv?.bg)
+      const bgColor = (slide.attrs?.bg as string | undefined) ?? vbg?.color
+      const bgStyle = bgColor ? `background:#${bgColor};${isDark(bgColor) ? 'color:#E2E8F0;' : ''}` : ''
+      const bgImg = vbg?.img ? `<img class="vis-bg" src="${this.mediaUrl(vbg.img)}" alt="">` : ''
+      const layer = lv && !sv?.hideMaster && lv.parts.length > 0 ? `<div class="vis-layer">${this.partsHtml(lv.parts, this.width, height)}</div>` : ''
+      const shapesHtml = bgImg + layer + (slide.content ?? []).filter(c => c.type === 'shape').map(s => this.shape(s, slide.attrs?.layout as string | undefined, slide.attrs?.layout_name as string | undefined)).join('')
       const renderUnavailableHtml = `
         <div class="render-warning-overlay">
           <div class="render-warning-card">
@@ -218,7 +234,7 @@ export class DeckView {
         : shapesHtml
       return `<div class="slide-wrap" data-id="${esc(slide.attrs?.id)}" data-index="${i}"${suggest}>
         <div class="slide-head"><span>第 ${i + 1} 页 · ${esc(slide.attrs?.layout_name || '无版式')}</span><button data-precise="${i}">${this.precise.has(i) ? '近似预览' : '精确预览'}</button></div>
-        <div class="slide"${slide.attrs?.theme ? ` data-theme="${esc(slide.attrs.theme)}"` : ''} style="width:${this.width}px;height:${height}px;${slide.attrs?.bg ? `background:#${slide.attrs.bg};${isDark(slide.attrs.bg) ? 'color:#E2E8F0;' : ''}` : ''}">${body}</div>
+        <div class="slide"${slide.attrs?.theme ? ` data-theme="${esc(slide.attrs.theme)}"` : ''} style="width:${this.width}px;height:${height}px;${bgStyle}">${body}</div>
         <div class="slide-notes"><span class="notes-label">备注</span><div class="notes-text${notes && this.text(notes) ? '' : ' empty'}" data-notes="${esc(slide.attrs?.id)}" title="双击编辑演讲者备注">${notes && this.text(notes) ? esc(this.text(notes)) : '双击添加演讲者备注'}</div></div>
       </div>`
     }).join('')
@@ -646,15 +662,21 @@ export class DeckView {
     const a = s.attrs!
     const k = this.scale()
     this.phStyle = this.inheritedStyle(a, layout)
+    this.shapeVis = this.data?.visuals?.shapes[a.id as string] ?? null
     const anchor = this.phStyle?.anchor ? `display:flex;flex-direction:column;justify-content:${{ t: 'flex-start', ctr: 'center', b: 'flex-end' }[this.phStyle.anchor]};` : ''
     const box = `left:${a.x / EMU_PER_PT * k}px;top:${a.y / EMU_PER_PT * k}px;width:${a.w / EMU_PER_PT * k}px;height:${a.h / EMU_PER_PT * k}px;${a.rot ? `transform:rotate(${a.rot / 60000}deg);` : ''}`
     const suggest = a.suggest ? ` data-suggest="${a.suggest}" data-suggest-group="${esc(a.suggest_group)}"` : ''
-    const fill = a.fill === 'none' ? 'background:transparent;border:0;' : a.fill ? `background:#${a.fill};border:0;` : ''
-    const radius = a.geom === 'ellipse' ? 'border-radius:50%;' : a.geom === 'roundRect' ? `border-radius:${Math.min(a.w, a.h) / EMU_PER_PT * k * 0.16}px;` : ''
+    const vfill = !a.fill && this.shapeVis?.fill ? this.shapeVis.fill : null
+    const vline = !a.fill && this.shapeVis?.line && a.kind !== 'line' ? `box-shadow:inset 0 0 0 ${Math.max(0.5, this.shapeVis.line.w * k)}px #${this.shapeVis.line.color};` : ''
+    const fill = (a.fill === 'none' ? 'background:transparent;border:0;' : a.fill ? `background:#${a.fill};border:0;` : vfill ? `background:#${vfill};border:0;` : '') + vline
+    // 导入的形状模型里没有几何（以原文为准）：按原文的预设几何显示外形
+    const geom = a.geom ?? (a.kind === 'text' || a.kind === 'shape' ? this.shapeVis?.geom : undefined)
+    const radius = (geom === 'ellipse' ? 'border-radius:50%;' : geom === 'roundRect' ? `border-radius:${Math.min(a.w, a.h) / EMU_PER_PT * k * 0.16}px;` : '')
+      + (!a.geom && geom && CLIP[geom] ? `clip-path:${CLIP[geom]};` : '')
     this.pIndex = 0
     const sel = this.selected.includes(a.id) ? ' selected' : ''
     // 带几何 / 实心填充的文本框按色块显示（文字垂直居中，与导出的 anchor="ctr" 一致）
-    const block = a.kind === 'text' && !a.ph && (a.geom || (a.fill && a.fill !== 'none'))
+    const block = a.kind === 'text' && !a.ph && (a.geom || (a.fill && a.fill !== 'none') || !!vfill)
     // 模板装饰：不可选中、不挡点击（换模板时自动替换）
     const deco = String(a.name ?? '').startsWith('deco:') ? ' deco' : ''
     // 还没写字的模板占位符：显示提示（双击输入）
@@ -667,14 +689,85 @@ export class DeckView {
     if (a.kind === 'table') {
       const table = s.content?.[0]
       // 单元格底色取自 a:tcPr 的纯色填充
-      const cellBg = (c: PMJson) => { const m = /<a:solidFill>\s*<a:srgbClr val="([0-9A-Fa-f]{6})"/.exec(String(c.attrs?.tcpr ?? '')); return m ? ` style="background:#${m[1]}"` : '' }
+      const cellBg = (c: PMJson) => { const hex = fillColorOf(String(c.attrs?.tcpr ?? '').replace(/<a:ln[A-Z]\w*\b[\s\S]*?<\/a:ln[A-Z]\w*>/g, ''), this.colors); return hex ? ` style="background:#${hex}"` : '' }
       const rows = (table?.content ?? []).map((r, ri) => `<tr>${(r.content ?? []).map((c, ci) => `<td data-r="${ri}" data-c="${ci}"${cellBg(c)}>${(c.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</td>`).join('')}</tr>`).join('')
       return `<div ${common}><table>${rows}</table></div>`
     }
     // 色块 / 卡片：文字垂直居中（与导出的 anchor="ctr" 一致）
     if (a.kind === 'shape') return `<div ${common}><div class="shape-text">${(s.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</div></div>`
     if (a.kind === 'chart' && a.chart) return `<div ${common} title="双击编辑图表数据">${chartSvg(a.chart as ChartData, a.w / EMU_PER_PT * k, a.h / EMU_PER_PT * k)}</div>`
+    // 导入的组合 / 连接线：按原文展开成子形状显示（整体仍是一个可移动、可删除的形状）
+    if (this.shapeVis?.parts?.length) {
+      const vis = common.replace('class="shape ', 'class="shape has-vis ')
+      return `<div ${vis}>${this.partsHtml(this.shapeVis.parts, a.w / EMU_PER_PT * k, a.h / EMU_PER_PT * k)}</div>`
+    }
     return `<div ${common}><span class="shape-label">${esc(a.description || a.kind)}</span></div>`
+  }
+
+  private mediaUrl(path: string): string {
+    return `/api/docs/${this.opts.docId}/package-media?path=${encodeURIComponent(path)}&token=${encodeURIComponent(this.opts.token)}`
+  }
+
+  /** 显示层的形状（比例坐标）画进 W×H 的框：色块、线条、图片、文字。只显示，不可选中。 */
+  private partsHtml(parts: VisualPart[], W: number, H: number): string {
+    const k = this.scale()
+    return parts.map(p => {
+      const l = p.x * W, t = p.y * H, w = p.w * W, h = p.h * H
+      if (p.connector) {
+        const x1 = p.flipH ? w : 0, x2 = p.flipH ? 0 : w, y1 = p.flipV ? h : 0, y2 = p.flipV ? 0 : h
+        const sw = Math.max(0.5, (p.line?.w ?? 0.75) * k)
+        return `<svg class="vis" style="left:${l}px;top:${t}px;width:${Math.max(w, 1)}px;height:${Math.max(h, 1)}px;${p.rot ? `transform:rotate(${p.rot}deg);` : ''}" viewBox="0 0 ${Math.max(w, 1)} ${Math.max(h, 1)}" preserveAspectRatio="none"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#${p.line?.color ?? '000000'}" stroke-width="${sw}"/></svg>`
+      }
+      if (p.paths?.length) {
+        const transform = [p.rot ? `rotate(${p.rot}deg)` : '', p.flipH ? 'scaleX(-1)' : '', p.flipV ? 'scaleY(-1)' : ''].filter(Boolean).join(' ')
+        const sw = Math.max(0.5, (p.line?.w ?? 0.75) * k)
+        const d = p.paths.map(path => `<path d="${esc(path.d)}" fill="${path.fill && p.fill ? `#${p.fill}` : 'none'}" stroke="${path.stroke && p.line ? `#${p.line.color}` : 'none'}" stroke-width="${sw}" vector-effect="non-scaling-stroke"/>`).join('')
+        const svg = `<svg class="vis" style="left:${l}px;top:${t}px;width:${w}px;height:${h}px;${transform ? `transform:${transform};` : ''}" viewBox="0 0 1 1" preserveAspectRatio="none" fill-rule="evenodd">${d}</svg>`
+        return p.text ? svg + this.partsHtml([{ x: p.x, y: p.y, w: p.w, h: p.h, rot: p.rot, text: p.text }], W, H) : svg
+      }
+      const clip = p.geom ? CLIP[p.geom] : undefined
+      const radius = p.geom === 'ellipse' ? 'border-radius:50%;' : p.geom === 'roundRect' ? `border-radius:${Math.min(w, h) * 0.16}px;` : ''
+      const transform = [p.rot ? `rotate(${p.rot}deg)` : '', p.flipH && !p.text ? 'scaleX(-1)' : '', p.flipV && !p.text ? 'scaleY(-1)' : ''].filter(Boolean).join(' ')
+      const style = [
+        `left:${l}px;top:${t}px;width:${w}px;height:${h}px`,
+        p.fill ? `background:#${p.fill}` : '',
+        p.line && !clip ? `box-shadow:inset 0 0 0 ${Math.max(0.5, p.line.w * k)}px #${p.line.color}` : '',
+        clip ? `clip-path:${clip}` : '',
+        transform ? `transform:${transform}` : '',
+      ].filter(Boolean).join(';') + ';' + radius
+      let inner = ''
+      if (p.img) {
+        const [cl, ct, cr, cb] = p.crop ?? [0, 0, 0, 0]
+        const iw = 1 / Math.max(0.01, 1 - cl - cr), ih = 1 / Math.max(0.01, 1 - ct - cb)
+        inner += `<img src="${this.mediaUrl(p.img)}" alt="" style="width:${iw * 100}%;height:${ih * 100}%;left:${-cl * iw * 100}%;top:${-ct * ih * 100}%">`
+      }
+      if (p.text) {
+        const tx = p.text
+        const just = { t: 'flex-start', ctr: 'center', b: 'flex-end' }[tx.anchor]
+        const paras = tx.paras.map(para => {
+          const runs = para.runs.map(r => {
+            if (r.br) return '<br>'
+            let html = esc(r.t)
+            if (r.sup) html = `<sup>${html}</sup>`
+            if (r.sub) html = `<sub>${html}</sub>`
+            const st = [
+              r.sz ? `font-size:${r.sz * k}px` : '',
+              r.color ? `color:#${r.color}` : '',
+              r.font ? `font-family:${esc(r.font)}` : '',
+              r.b ? 'font-weight:700' : '',
+              r.i ? 'font-style:italic' : '',
+              r.u ? 'text-decoration:underline' : '',
+            ].filter(Boolean).join(';')
+            return `<span style="${st}">${html}</span>`
+          }).join('')
+          const align = para.align ? `text-align:${{ l: 'left', ctr: 'center', r: 'right', just: 'justify' }[para.align]};` : ''
+          return `<p style="font-size:${para.sz * k}px;${align}">${runs || '&nbsp;'}</p>`
+        }).join('')
+        const [il, it, ir, ib] = tx.ins.map(v => v * k)
+        inner += `<div class="vis-text" style="justify-content:${just};padding:${it}px ${ir}px ${ib}px ${il}px;${tx.wrap ? '' : 'white-space:nowrap;'}">${paras}</div>`
+      }
+      return `<div class="vis" style="${style}">${inner}</div>`
+    }).join('')
   }
 
   private paragraph(shape: PMJson, p: PMJson, k: number): string {
@@ -697,7 +790,7 @@ export class DeckView {
       const rpr = c.marks?.find(m => m.type === 'rpr')?.attrs?.xml as string | undefined
       const ts = c.marks?.find(m => m.type === 'text_style')?.attrs as { font_family?: string; font_size?: string; color?: string } | undefined
       const sz = rpr ? /\ssz="(\d+)"/.exec(rpr)?.[1] : ts?.font_size ? String(Math.round(parseFloat(ts.font_size) * 100)) : undefined
-      const color = rpr ? /<a:srgbClr val="([0-9A-Fa-f]{6})"/.exec(rpr)?.[1] : ts?.color ? ts.color.replace(/^#/, '') : undefined
+      const color = rpr ? (textColorOf(rpr, this.colors) ?? this.shapeVis?.color) : ts?.color ? ts.color.replace(/^#/, '') : this.shapeVis?.color
       const font = rpr ? (/<a:latin typeface="([^"]+)"/.exec(rpr)?.[1] ?? /<a:ea typeface="([^"]+)"/.exec(rpr)?.[1]) : ts?.font_family
       if (sz && !size) size = Number(sz) / 100
       let html = esc(c.text)
@@ -956,6 +1049,27 @@ export function chartSvg(c: ChartData, w: number, h: number): string {
 }
 
 /** 深色背景（图表的坐标轴与文字用浅色）。 */
+/** 常见预设几何的近似外形（clip-path）。 */
+const CLIP: Record<string, string> = {
+  hexagon: 'polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%)',
+  octagon: 'polygon(29% 0, 71% 0, 100% 29%, 100% 71%, 71% 100%, 29% 100%, 0 71%, 0 29%)',
+  diamond: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)',
+  triangle: 'polygon(50% 0, 100% 100%, 0 100%)',
+  rtTriangle: 'polygon(0 0, 100% 100%, 0 100%)',
+  parallelogram: 'polygon(25% 0, 100% 0, 75% 100%, 0 100%)',
+  trapezoid: 'polygon(25% 0, 75% 0, 100% 100%, 0 100%)',
+  pentagon: 'polygon(50% 0, 100% 38%, 82% 100%, 18% 100%, 0 38%)',
+  homePlate: 'polygon(0 0, 80% 0, 100% 50%, 80% 100%, 0 100%)',
+  chevron: 'polygon(0 0, 80% 0, 100% 50%, 80% 100%, 0 100%, 20% 50%)',
+  rightArrow: 'polygon(0 25%, 70% 25%, 70% 0, 100% 50%, 70% 100%, 70% 75%, 0 75%)',
+  leftArrow: 'polygon(100% 25%, 30% 25%, 30% 0, 0 50%, 30% 100%, 30% 75%, 100% 75%)',
+  upArrow: 'polygon(25% 100%, 25% 30%, 0 30%, 50% 0, 100% 30%, 75% 30%, 75% 100%)',
+  downArrow: 'polygon(25% 0, 75% 0, 75% 70%, 100% 70%, 50% 100%, 0 70%, 25% 70%)',
+  flowChartExtract: 'polygon(50% 0, 100% 100%, 0 100%)',
+  flowChartMerge: 'polygon(0 0, 100% 0, 50% 100%)',
+  flowChartDecision: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)',
+}
+
 function isDark(hex: string): boolean {
   const n = parseInt(hex, 16)
   return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 < 128

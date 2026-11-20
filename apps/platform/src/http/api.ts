@@ -59,6 +59,7 @@ import { verifyPrompt } from '../claims/service.ts'
 import { docxFor, pptxFor } from '../convert/exports.ts'
 import { bindDeckAssets, importPptx, PptxImportError } from '../convert/pptx-import.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
+import { PptxVisuals, type ShapeVisuals } from '../convert/pptx-visuals.ts'
 import { sourceIndex } from '../convert/source-pages.ts'
 import { rebindSourceMap } from '../convert/source-rebind.ts'
 import { indexById } from '../model/ids.ts'
@@ -1887,7 +1888,76 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     // ph_styles：各版式占位符继承的文字样式（画布显示导入的占位符用）
     const ph_styles = Object.fromEntries(info.layouts.map(l => [l.part, l.placeholders.map(p => ({ type: p.type, idx: p.idx, style: p.style ?? {} }))]))
     const render_info = await deps.renderer.diagnose()
-    return c.json({ rev: docs.rev(row.id), size: info.size, layouts: info.layouts.map(l => l.name), ph_styles, doc: docs.get(row.id).toJSON(), measurements: [...measureViews(c, row).values()], comments: store.listComments(row.id).map(x => ({ id: x.id, status: x.status })), render_info })
+    const doc = docs.get(row.id)
+    return c.json({ rev: docs.rev(row.id), size: info.size, layouts: info.layouts.map(l => l.name), ph_styles, doc: doc.toJSON(), visuals: info.platform ? null : deckVisuals(row.id, doc), measurements: [...measureViews(c, row).values()], comments: store.listComments(row.id).map(x => ({ id: x.id, status: x.status })), render_info })
+  })
+
+  /**
+   * 导入 pptx 的显示层（convert/pptx-visuals.ts）：版式背景与装饰、主题色、组合展开。只给画布近似预览用。
+   * 原始包导入后不变，解析结果按文档缓存；组合等形状按原文逐个解析（原文按形状 id 存，不随移动改变）。
+   */
+  const visualsCache = new Map<string, PptxVisuals | null>()
+  /** 形状的显示层：原文按形状 id 存、导入后不变，按（文档, 形状, 版式）缓存。 */
+  const shapeVisualsCache = new Map<string, Map<string, ShapeVisuals | null>>()
+  const visualsOf = (docId: string): PptxVisuals | null => {
+    if (!visualsCache.has(docId)) {
+      const pkg = store.getPackage(docId)
+      let v: PptxVisuals | null = null
+      try { v = pkg && pkg[0] === 0x50 && pkg[1] === 0x4B ? new PptxVisuals(pkg) : null } catch { v = null }
+      if (visualsCache.size >= 16) {
+        const oldest = visualsCache.keys().next().value!
+        visualsCache.delete(oldest)
+        shapeVisualsCache.delete(oldest)
+      }
+      visualsCache.set(docId, v)
+    }
+    return visualsCache.get(docId) ?? null
+  }
+  const deckVisuals = (docId: string, doc: ReturnType<typeof docs.get>) => {
+    const v = visualsOf(docId)
+    if (!v) return null
+    try {
+      const deck = v.deck()
+      const shapes: Record<string, ShapeVisuals> = {}
+      let cache = shapeVisualsCache.get(docId)
+      if (!cache) shapeVisualsCache.set(docId, cache = new Map())
+      doc.forEach(slide => {
+        slide.forEach(shape => {
+          if (shape.type.name !== 'shape' || !shape.attrs.id) return
+          // 只需要原文的：组合、连接线，以及模型里没有颜色的填充（主题色）
+          const kind = shape.attrs.kind as string
+          if (kind !== 'group' && kind !== 'line' && kind !== 'text' && kind !== 'shape') return
+          const key = `${shape.attrs.id}|${slide.attrs.layout ?? ''}`
+          if (!cache.has(key)) {
+            const xml = store.getNodeSrc(docId, shape.attrs.id as string)
+            cache.set(key, xml ? v.shape(xml, slide.attrs.part as string | null, slide.attrs.layout as string | null) : null)
+          }
+          const sv = cache.get(key)
+          if (sv) shapes[shape.attrs.id as string] = sv
+        })
+      })
+      // 只发这份 deck 用到的版式（模板常带上百个版式）
+      const used = new Set<string>()
+      doc.forEach(slide => { if (slide.attrs.layout) used.add(slide.attrs.layout as string) })
+      const layouts = Object.fromEntries(Object.entries(deck.layouts).filter(([k]) => used.has(k)))
+      return { layouts, slides: deck.slides, shapes }
+    } catch (err) {
+      console.warn('[deck visuals]', (err as Error).message)
+      return null
+    }
+  }
+
+  /** 原始 pptx 包里的图片（画布显示母版 / 版式装饰与组合里的图片）。 */
+  app.get('/api/docs/:id/package-media', c => {
+    const row = owned(c)
+    if (!row || row.kind !== 'deck') return c.json({ error: 'not found' }, 404)
+    const pkg = store.getPackage(row.id)
+    const path = c.req.query('path') ?? ''
+    const bytes = pkg ? PptxVisuals.mediaBytes(pkg, path) : null
+    if (!bytes) return c.json({ error: 'not found' }, 404)
+    const ext = path.split('.').pop()!.toLowerCase()
+    const mime = ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', webp: 'image/webp' } as Record<string, string>)[ext] ?? 'application/octet-stream'
+    return c.body(new Uint8Array(bytes), 200, { 'Content-Type': mime, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', ...(ext === 'svg' ? { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" } : {}) })
   })
 
 
