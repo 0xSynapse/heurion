@@ -1926,7 +1926,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
           if (shape.type.name !== 'shape' || !shape.attrs.id) return
           // 只需要原文的：组合、连接线，以及模型里没有颜色的填充（主题色）
           const kind = shape.attrs.kind as string
-          if (kind !== 'group' && kind !== 'line' && kind !== 'text' && kind !== 'shape' && kind !== 'image') return
+          if (kind !== 'group' && kind !== 'line' && kind !== 'text' && kind !== 'shape' && kind !== 'image' && kind !== 'table') return
           const key = `${shape.attrs.id}|${slide.attrs.layout ?? ''}`
           if (!cache.has(key)) {
             const xml = store.getNodeSrc(docId, shape.attrs.id as string)

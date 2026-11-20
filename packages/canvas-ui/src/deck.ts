@@ -10,7 +10,7 @@
 import { icon } from '../../../apps/platform/web/src/icons.ts'
 import { measureExportText, type MeasureView } from '../../../apps/platform/src/model/measurements.ts'
 import { resolvedThreadIds, type CommentThreadStatus } from './comments.ts'
-import { bulletOf, fillColorOf, textColorOf, type SchemeColors } from '../../../apps/platform/src/model/ooxml-color.ts'
+import { autoNumOf, bulletOf, colorOf, fillColorOf, formatAutoNum, textColorOf, type SchemeColors } from '../../../apps/platform/src/model/ooxml-color.ts'
 import type { DeckVisuals, ShapeVisuals, VisualBg, VisualPart } from '../../../apps/platform/src/convert/pptx-visuals.ts'
 
 interface PMJson { type: string; attrs?: Record<string, any>; content?: PMJson[]; text?: string; marks?: Array<{ type: string; attrs?: Record<string, any> }> }
@@ -83,6 +83,8 @@ export class DeckView {
   private colors: SchemeColors = {}
   private fonts: { major: string; minor: string } | null = null
   private shapeVis: ShapeVisuals | null = null
+  /** 当前形状里各级自动编号的计数（连续的同样式编号累加）。 */
+  private numState = new Map<number, { type: string; n: number }>()
   /** 已关闭批注线程：锚点保留，但不再显示高亮 / 下划线。 */
   private resolvedThreads = new Set<string>()
   private precise = new Set<number>()
@@ -679,6 +681,7 @@ export class DeckView {
     const radius = (geom === 'ellipse' ? 'border-radius:50%;' : geom === 'roundRect' ? `border-radius:${Math.min(a.w, a.h) / EMU_PER_PT * k * 0.16}px;` : '')
       + (!a.geom && geom && CLIP[geom] ? `clip-path:${CLIP[geom]};` : '')
     this.pIndex = 0
+    this.numState.clear()
     const sel = this.selected.includes(a.id) ? ' selected' : ''
     // 带几何 / 实心填充的文本框按色块显示（文字垂直居中，与导出的 anchor="ctr" 一致）
     const block = a.kind === 'text' && !a.ph && (a.geom || (a.fill && a.fill !== 'none') || !!vfill)
@@ -688,16 +691,42 @@ export class DeckView {
     const hint = LAYOUT_HINT[`${layoutName ?? ''}/${a.ph_idx ?? ''}`] ?? PH_HINT[a.ph as string] ?? '双击输入文字'
     const empty = a.kind === 'text' && a.ph && !this.text(s).trim() ? ` ph-empty" data-hint="${esc(hint)}` : ''
     const nowrap = /\bwrap="none"/.test(String(a.body_pr ?? '')) ? ' nowrap' : ''
-    const common = `class="shape shape-${block ? 'shape' : a.kind}${sel}${deco}${nowrap}${empty}" data-id="${esc(a.id)}"${a.ph ? ` data-ph="${esc(a.ph)}"` : ''}${suggest} style="${box}${fill}${radius}${anchor}${titleFont}"`
+    const vert = /\bvert="(\w+)"/.exec(String(a.body_pr ?? ''))?.[1]
+    const vertStyle = vert && vert !== 'horz' ? (vert === 'vert270' ? 'writing-mode:sideways-lr;' : 'writing-mode:vertical-rl;') : ''
+    // 裁成六边形等外形的形状：边框线用 SVG 描在外形上（clip-path 会把 outline 裁掉）
+    const clipOutline = !a.geom && geom && CLIP[geom] && this.shapeVis?.line ? outlineSvg(CLIP[geom]!, this.shapeVis.line.color, lw * 2) : ''
+    const common = `class="shape shape-${block ? 'shape' : a.kind}${sel}${deco}${nowrap}${empty}" data-id="${esc(a.id)}"${a.ph ? ` data-ph="${esc(a.ph)}"` : ''}${suggest} style="${box}${fill}${radius}${anchor}${titleFont}${vertStyle}"`
     if (a.kind === 'image' && a.asset_id) return `<div ${common}><img src="/api/assets/${esc(a.asset_id)}?token=${encodeURIComponent(this.opts.token)}" alt=""></div>`
-    if (a.kind === 'text' && !block) return `<div ${common}>${(s.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</div>`
-    if (block) return `<div ${common}><div class="shape-text">${(s.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</div></div>`
+    if (a.kind === 'text' && !block) return `<div ${common}>${clipOutline}${(s.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</div>`
+    if (block) return `<div ${common}>${clipOutline}<div class="shape-text">${(s.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</div></div>`
     if (a.kind === 'table') {
       const table = s.content?.[0]
       // 单元格底色取自 a:tcPr 的纯色填充
       const cellBg = (c: PMJson) => { const hex = fillColorOf(String(c.attrs?.tcpr ?? '').replace(/<a:ln[A-Z]\w*\b[\s\S]*?<\/a:ln[A-Z]\w*>/g, ''), this.colors); return hex ? ` style="background:#${hex}"` : '' }
-      const rows = (table?.content ?? []).map((r, ri) => `<tr>${(r.content ?? []).map((c, ci) => `<td data-r="${ri}" data-c="${ci}"${cellBg(c)}>${(c.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</td>`).join('')}</tr>`).join('')
-      return `<div ${common}><table>${rows}</table></div>`
+      // 导入的表格：单元格边距、垂直对齐、边框按 a:tcPr；列宽、行高按原文件网格（行列数和模型一致时）
+      const cellStyle = (c: PMJson) => {
+        const tcpr = String(c.attrs?.tcpr ?? '')
+        if (!this.data?.visuals || !tcpr) return cellBg(c)
+        const mar = (name: string, d: number) => Number(new RegExp(`\\b${name}="(\\d+)"`).exec(/<a:tcPr\b[^>]*>/.exec(tcpr)?.[0] ?? '')?.[1] ?? d) / EMU_PER_PT * k
+        const anchor = /<a:tcPr\b[^>]*\banchor="(ctr|b)"/.exec(tcpr)?.[1]
+        const border = (side: 'L' | 'R' | 'T' | 'B', css: string) => {
+          const ln = new RegExp(`<a:ln${side}\\b([^>]*)>([\\s\\S]*?)<\\/a:ln${side}>`).exec(tcpr)
+          if (!ln) return ''
+          if (/<a:noFill\/>/.test(ln[2]!)) return `border-${css}:0;`
+          const hex = fillColorOf(ln[2], this.colors)
+          const w = Math.max(0.5, Number(/\bw="(\d+)"/.exec(ln[1]!)?.[1] ?? 12700) / EMU_PER_PT * k)
+          return hex ? `border-${css}:${w}px solid #${hex};` : ''
+        }
+        const bg = cellBg(c).replace(/^ style="|"$/g, '') + (cellBg(c) ? ';' : '')
+        return ` style="${bg}padding:${mar('marT', 45720)}px ${mar('marR', 91440)}px ${mar('marB', 45720)}px ${mar('marL', 91440)}px;${anchor ? `vertical-align:${anchor === 'ctr' ? 'middle' : 'bottom'};` : ''}${border('L', 'left')}${border('R', 'right')}${border('T', 'top')}${border('B', 'bottom')}"`
+      }
+      const grid = this.shapeVis?.table
+      const modelRows = table?.content ?? []
+      const fit = grid && grid.rows.length === modelRows.length
+      const colgroup = fit && grid.cols.length > 0 ? `<colgroup>${grid.cols.map(w => `<col style="width:${w * 100}%">`).join('')}</colgroup>` : ''
+      const rowH = (ri: number) => (fit ? ` style="height:${grid.rows[ri]! * a.h / EMU_PER_PT * k}px"` : '')
+      const rows = modelRows.map((r, ri) => `<tr${rowH(ri)}>${(r.content ?? []).map((c, ci) => { this.numState.clear(); return `<td data-r="${ri}" data-c="${ci}"${(c.attrs?.colspan ?? 1) > 1 ? ` colspan="${c.attrs!.colspan}"` : ''}${(c.attrs?.rowspan ?? 1) > 1 ? ` rowspan="${c.attrs!.rowspan}"` : ''}${cellStyle(c)}>${(c.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</td>` }).join('')}</tr>`).join('')
+      return `<div ${common}><table${fit && colgroup ? ' style="table-layout:fixed;height:auto"' : ''}>${colgroup}${rows}</table></div>`
     }
     // 色块 / 卡片：文字垂直居中（与导出的 anchor="ctr" 一致）
     if (a.kind === 'shape') return `<div ${common}><div class="shape-text">${(s.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</div></div>`
@@ -776,12 +805,16 @@ export class DeckView {
             return `<span style="${st}">${html}</span>`
           }).join('')
           const align = para.align ? `text-align:${{ l: 'left', ctr: 'center', r: 'right', just: 'justify' }[para.align]};` : ''
-          return `<p style="font-size:${para.sz * k}px;${align}">${runs || '&nbsp;'}</p>`
+          const bu = para.bu ? `<span style="${para.runs[0]?.color ? `color:#${para.runs[0].color};` : ''}">${esc(para.bu)} </span>` : ''
+          return `<p style="font-size:${para.sz * k}px;${align}${para.lvl ? `margin-left:${para.lvl * 18 * k}px;` : ''}">${bu}${runs || '&nbsp;'}</p>`
         }).join('')
         const [il, it, ir, ib] = tx.ins.map(v => v * k)
-        inner += `<div class="vis-text" style="justify-content:${just};padding:${it}px ${ir}px ${ib}px ${il}px;${tx.wrap ? '' : 'white-space:nowrap;'}">${paras}</div>`
+        const vert = tx.vert === 'vert270' ? 'writing-mode:sideways-lr;' : tx.vert ? 'writing-mode:vertical-rl;' : ''
+        inner += `<div class="vis-text" style="justify-content:${just};padding:${it}px ${ir}px ${ib}px ${il}px;${tx.wrap ? '' : 'white-space:nowrap;'}${vert}">${paras}</div>`
       }
-      return `<div class="vis" style="${style}">${inner}</div>`
+      // 裁成外形的形状：边框线另画一层 SVG（不受 clip-path 裁剪）
+      const outline = clip && p.line ? `<svg class="vis" style="left:${l}px;top:${t}px;width:${w}px;height:${h}px;${transform ? `transform:${transform};` : ''}" viewBox="0 0 100 100" preserveAspectRatio="none">${outlinePolygon(clip, p.line.color, Math.max(0.5, p.line.w * k))}</svg>` : ''
+      return `<div class="vis" style="${style}">${inner}</div>${outline}`
     }).join('')
   }
 
@@ -834,14 +867,26 @@ export class DeckView {
     if (!size) size = (lvl === 0 && this.phStyle?.size) || (ph && PH_SIZE[ph]) || (ph === 'body' || ph === 'obj' ? BODY_LEVELS[lvl] ?? 18 : 18)
     // 项目符号用 CSS 画，不进选区文字
     // 项目符号：段落自己写的优先（含 Wingdings 符号），没写的占位符沿用版式 / 母版（默认「•」）
-    const own = bulletOf(String(p.attrs?.ppr ?? ''))
-    const bu = own !== undefined ? own : (ph === 'body' || ph === 'obj') ? (this.phStyle?.bullet ?? '•') : ''
+    const ppr = String(p.attrs?.ppr ?? '')
+    const own = bulletOf(ppr)
+    let bu = own !== undefined ? own : (ph === 'body' || ph === 'obj') ? (this.phStyle?.bullet ?? '•') : ''
+    // 自动编号：同一级连续的同样式编号累加；更深的级别遇到上一级段落时重新计数
+    for (const lv of [...this.numState.keys()]) if (lv > lvl) this.numState.delete(lv)
+    const an = autoNumOf(ppr)
+    if (an && runs) {
+      const prev = this.numState.get(lvl)
+      const n = prev && prev.type === an.type ? prev.n + 1 : an.start
+      this.numState.set(lvl, { type: an.type, n })
+      bu = formatAutoNum(an.type, n)
+    } else this.numState.delete(lvl)
     const bullet = bu && runs ? ` class="bullet" data-bu="${esc(bu)}"` : ''
     const inherited = this.phStyle?.align ? { l: 'left', ctr: 'center', r: 'right', just: 'justify' }[this.phStyle.align] : null
     const align = p.attrs?.align ? `text-align:${p.attrs.align};` : inherited ? `text-align:${inherited};` : ''
     const weight = this.phStyle?.bold ? 'font-weight:700;' : ''
     this.paras.set(`${shape.attrs!.id}#${this.pIndex}`, p)
-    return `<p data-p="${this.pIndex++}" data-len="${offset}" data-lvl="${lvl}"${bullet} style="font-size:${size * k}px;margin-left:${lvl * 18 * k}px;${align}${weight}">${runs || '&nbsp;'}</p>`
+    // 导入表格里的空段落不占行高（原文件里它的字号写在 endParaRPr，模型里没有）
+    const emptyCls = !runs && this.data?.visuals && shape.attrs!.kind === 'table' ? ' class="empty-para"' : ''
+    return `<p data-p="${this.pIndex++}" data-len="${offset}" data-lvl="${lvl}"${bullet}${emptyCls} style="font-size:${size * k}px;margin-left:${lvl * 18 * k}px;${align}${weight}">${runs || '&nbsp;'}</p>`
   }
 
   private reportSelection(e?: MouseEvent): void {
@@ -1090,6 +1135,17 @@ function cssFonts(list: string): string {
   const names = list.split(',').map(f => f.trim().replace(/['"\\<>;]/g, '')).filter(Boolean)
   const all = [...new Set(names.flatMap(n => [n, ...(FONT_FALLBACKS[n.toLowerCase()] ?? [])]))]
   return all.map(f => (f === 'serif' || f === 'sans-serif' ? f : `'${f}'`)).join(', ') + ', sans-serif'
+}
+
+/** clip-path 的 polygon(...) → SVG 多边形描边（坐标 0–100）。 */
+function outlinePolygon(clip: string, color: string, width: number): string {
+  const pts = (/polygon\(([^)]*)\)/.exec(clip)?.[1] ?? '').split(',').map(pt => pt.trim().split(/\s+/).map(v => parseFloat(v)).join(',')).join(' ')
+  return `<polygon points="${pts}" fill="none" stroke="#${color}" stroke-width="${width}" vector-effect="non-scaling-stroke"/>`
+}
+
+/** 顶层形状（本身被 clip-path 裁成外形）里的描边层：线宽加倍（外侧一半会被裁掉）。 */
+function outlineSvg(clip: string, color: string, width: number): string {
+  return `<svg style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible" viewBox="0 0 100 100" preserveAspectRatio="none">${outlinePolygon(clip, color, width)}</svg>`
 }
 
 /** 常见预设几何的近似外形（clip-path）。 */

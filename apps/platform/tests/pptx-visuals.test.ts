@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { importPptx } from '../src/convert/pptx-import.ts'
 import { pptxTemplate } from '../src/convert/pptx-template.ts'
 import { PptxVisuals } from '../src/convert/pptx-visuals.ts'
-import { bulletOf, colorOf, fillColorOf, textColorOf } from '../src/model/ooxml-color.ts'
+import { autoNumOf, bulletOf, colorOf, fillColorOf, formatAutoNum, textColorOf } from '../src/model/ooxml-color.ts'
 import { readLayouts } from '../src/convert/pptx-layouts.ts'
 import { Accounts } from '../src/auth/accounts.ts'
 import { BotGuard } from '../src/auth/bot-guard.ts'
@@ -82,6 +82,19 @@ describe('项目符号', () => {
   })
 })
 
+describe('自动编号', () => {
+  it('编号样式与起始号；各种格式的编号文字', () => {
+    expect(autoNumOf('<a:pPr><a:buAutoNum type="alphaLcPeriod" startAt="3"/></a:pPr>')).toEqual({ type: 'alphaLcPeriod', start: 3 })
+    expect(autoNumOf('<a:pPr><a:buChar char="•"/></a:pPr>')).toBeNull()
+    expect(formatAutoNum('arabicPeriod', 3)).toBe('3.')
+    expect(formatAutoNum('arabicParenR', 2)).toBe('2)')
+    expect(formatAutoNum('alphaLcPeriod', 27)).toBe('aa.')
+    expect(formatAutoNum('romanUcPeriod', 4)).toBe('IV.')
+    expect(formatAutoNum('alphaUcParenBoth', 1)).toBe('(A)')
+    expect(formatAutoNum('circleNumDbPlain', 3)).toBe('③')
+  })
+})
+
 describe('导入 pptx 的显示层', () => {
   const bytes = externalDeck()
   const imported = importPptx(bytes)
@@ -148,6 +161,17 @@ describe('导入 pptx 的显示层', () => {
     expect(fillColorOf(title.style?.colorXml)).toBe('0F172A')
     const body = phs.find(p => p.type === 'body' || p.type === 'obj')
     if (body) expect(body.style?.bullet).toBe('•')
+  })
+
+  it('表格的列宽、行高按原文件网格；组合里文本的自动编号连续累加', () => {
+    const v = new PptxVisuals(bytes)
+    const tbl = '<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="40" name="表格"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="3000000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid><a:gridCol w="1000000"/><a:gridCol w="2000000"/></a:tblGrid><a:tr h="400000"><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody></a:tc><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody></a:tc></a:tr><a:tr h="600000"><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody></a:tc><a:tc><a:txBody><a:bodyPr/><a:p/></a:txBody></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>'
+    expect(v.shape(tbl, 'ppt/slides/slide1.xml', 'ppt/slideLayouts/slideLayout2.xml')).toEqual({ table: { cols: [0.33333, 0.66667], rows: [0.4, 0.6] } })
+    const para = (t: string, ppr = '<a:pPr><a:buAutoNum type="arabicPeriod"/></a:pPr>') => `<a:p>${ppr}<a:r><a:t>${t}</a:t></a:r></a:p>`
+    const text = `<p:sp><p:nvSpPr><p:cNvPr id="50" name="说明"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/>${para('一')}${para('二')}${para('插话', '<a:pPr><a:buNone/></a:pPr>')}${para('重新')}</p:txBody></p:sp>`
+    const group = `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="49" name="g"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/><a:chOff x="0" y="0"/><a:chExt cx="100" cy="100"/></a:xfrm></p:grpSpPr>${text}</p:grpSp>`
+    const paras = v.shape(group, 'ppt/slides/slide1.xml', 'ppt/slideLayouts/slideLayout2.xml')!.parts![0]!.text!.paras
+    expect(paras.map(p => p.bu)).toEqual(['1.', '2.', undefined, '1.'])
   })
 
   it('媒体只取 ppt/media/ 下浏览器能显示的图片', () => {

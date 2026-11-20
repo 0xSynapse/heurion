@@ -75,6 +75,30 @@ export function bulletOf(ppr: string | null | undefined): string | undefined {
   return /wingdings|symbol/i.test(font) || ['Ø', '§', 'ü', 'Ÿ', 'è', 'Ü'].includes(char) ? (SYMBOL_BULLETS[char] ?? '•') : char
 }
 
+/** 段落的自动编号（a:buAutoNum）：编号样式与起始号；没写返回 null。 */
+export function autoNumOf(ppr: string | null | undefined): { type: string; start: number } | null {
+  const m = ppr ? /<a:buAutoNum\b([^>]*)\/?>/.exec(ppr) : null
+  if (!m) return null
+  return { type: /\btype="([^"]*)"/.exec(m[1]!)?.[1] ?? 'arabicPeriod', start: Number(/\bstartAt="(\d+)"/.exec(m[1]!)?.[1] ?? 1) }
+}
+
+/** 编号文字：arabicPeriod → 「3.」，alphaLcParenR → 「c)」，romanUcPeriod → 「III.」，circleNumDbPlain → 「③」…… */
+export function formatAutoNum(type: string, n: number): string {
+  const roman = (v: number) => {
+    let out = ''
+    for (const [k, r] of [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']] as const) while (v >= k) { out += r; v -= k }
+    return out
+  }
+  const alpha = (v: number) => { let out = ''; while (v > 0) { v--; out = String.fromCharCode(97 + (v % 26)) + out; v = Math.floor(v / 26) } return out }
+  if (/^circleNum/.test(type)) return n >= 1 && n <= 20 ? String.fromCodePoint(0x2460 + n - 1) : `(${n})`
+  const base = /^alphaLc/.test(type) ? alpha(n) : /^alphaUc/.test(type) ? alpha(n).toUpperCase()
+    : /^romanLc/.test(type) ? roman(n).toLowerCase() : /^romanUc/.test(type) ? roman(n) : String(n)
+  if (/ParenBoth$/.test(type)) return `(${base})`
+  if (/ParenR$/.test(type)) return `${base})`
+  if (/Plain$/.test(type)) return base
+  return `${base}.`
+}
+
 function applyMods(hex: string, body: string): string {
   if (!body) return hex
   let [h, s, l] = rgbToHsl(hex)

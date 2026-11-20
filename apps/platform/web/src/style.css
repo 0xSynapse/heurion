@@ -1528,6 +1528,9 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 /* 导入的 pptx：文字超出文本框时照常显示（PowerPoint 不裁剪）；wrap="none" 的文本框不折行 */
 .slide.imported .shape.shape-text, .slide.imported .shape.shape-shape { overflow: visible; }
 .slide .shape.nowrap p { white-space: pre; }
+/* 导入的表格：行高按原文件网格，段落不留额外间距 */
+.slide.imported .shape td p { margin: 0; line-height: 1.15; }
+.slide.imported .shape td p.empty-para { font-size: 0 !important; line-height: 0; }
 /* 没装 Office 字体时的字宽替代（Calibri 比 Arial 窄约一成；Arial Narrow 约窄两成） */
 @font-face { font-family: 'HR Calibri Fallback'; src: local('Arial'), local('Helvetica'), local('Liberation Sans'); size-adjust: 90%; }
 @font-face { font-family: 'HR Narrow Fallback'; src: local('Arial'), local('Helvetica'), local('Liberation Sans'); size-adjust: 82%; }

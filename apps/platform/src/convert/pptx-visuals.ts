@@ -1,6 +1,6 @@
 import { DOMParser, type Element as XElement, type Node as XNode } from '@xmldom/xmldom'
 import { strFromU8, unzipSync } from 'fflate'
-import { colorOf, fillColorOf, textColorOf, type SchemeColors } from '../model/ooxml-color.ts'
+import { autoNumOf, bulletOf, colorOf, fillColorOf, formatAutoNum, textColorOf, type SchemeColors } from '../model/ooxml-color.ts'
 
 /**
  * 导入 pptx 的「显示层」（只给画布的近似预览用，不进文档模型、不影响导出）。
@@ -18,12 +18,14 @@ const A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 
 export interface VisualRun { t?: string; br?: true; sz?: number; b?: true; i?: true; u?: true; sup?: true; sub?: true; color?: string; font?: string }
-export interface VisualPara { align?: 'l' | 'ctr' | 'r' | 'just'; sz: number; runs: VisualRun[] }
+export interface VisualPara { align?: 'l' | 'ctr' | 'r' | 'just'; sz: number; runs: VisualRun[]; lvl?: number; /** 项目符号或编号文字。 */ bu?: string }
 export interface VisualText {
   anchor: 't' | 'ctr' | 'b'
   /** 内边距（pt）：左、上、右、下。 */
   ins: [number, number, number, number]
   wrap: boolean
+  /** 竖排：vert / eaVert（自上而下）、vert270（自下而上）。 */
+  vert?: 'vert' | 'vert270'
   paras: VisualPara[]
 }
 /** 一个显示用的形状；x / y / w / h 是相对所在框（页面或组合）的比例。 */
@@ -52,7 +54,11 @@ export interface LayoutVisuals {
   fonts: { major: string; minor: string }
 }
 export interface SlideVisuals { bg: VisualBg | null; hideMaster: boolean }
-export interface ShapeVisuals { fill?: string; line?: VisualLine; color?: string; geom?: string; parts?: VisualPart[] }
+export interface ShapeVisuals {
+  fill?: string; line?: VisualLine; color?: string; geom?: string; parts?: VisualPart[]
+  /** 表格的列宽与行高（相对表格框的比例；与原文件的网格一致）。 */
+  table?: { cols: number[]; rows: number[] }
+}
 export interface DeckVisuals { layouts: Record<string, LayoutVisuals>; slides: Record<string, SlideVisuals> }
 
 /** 浏览器能直接显示的图片格式（emf / wmf / tiff 不画）。 */
@@ -260,6 +266,16 @@ export class PptxVisuals {
       out.parts = parts
       return out
     }
+    if (name === 'graphicFrame') {
+      const tbl = deep(el, A, 'tbl')
+      const ext = first(first(el, P, 'xfrm'), A, 'ext')
+      if (!tbl || !ext) return null
+      const cols = kids(first(tbl, A, 'tblGrid')).map(c => num(c.getAttribute('w')))
+      const rows = kids(tbl).filter(c => local(c) === 'tr').map(r => num(r.getAttribute('h')))
+      const W = cols.reduce((a, b) => a + b, 0) || num(ext.getAttribute('cx')) || 1
+      const H = Math.max(rows.reduce((a, b) => a + b, 0), num(ext.getAttribute('cy'))) || 1
+      return { table: { cols: cols.map(c => round(c / W)), rows: rows.map(r => round(r / H)) } }
+    }
     const spPr = first(el, P, 'spPr')
     const fill = this.fill(el, spPr, ctx)
     if (fill) out.fill = fill
@@ -428,7 +444,12 @@ export class PptxVisuals {
       if (face.startsWith('+mn')) return ctx.fonts.minor || undefined
       return face
     }
+    const vertAttr = bodyPr?.getAttribute('vert')
+    const vert = vertAttr === 'vert270' ? 'vert270' as const : vertAttr && vertAttr !== 'horz' ? 'vert' as const : undefined
+    /** 自动编号：同一级连续的同样式编号累加，换级或换样式重新计数。 */
+    const counters = new Map<number, { type: string; n: number }>()
     return {
+      ...(vert ? { vert } : {}),
       anchor: anchor === 'ctr' || anchor === 'b' ? anchor : 't',
       ins: [ins('lIns', 91440), ins('tIns', 45720), ins('rIns', 91440), ins('bIns', 45720)],
       wrap: bodyPr?.getAttribute('wrap') !== 'none',
@@ -468,6 +489,19 @@ export class PptxVisuals {
         }
         const algn = pPr?.getAttribute('algn') ?? levelDef?.getAttribute('algn')
         const para: VisualPara = { sz: Math.round(baseSz * scale * 10) / 10, runs }
+        if (lvl) para.lvl = lvl
+        for (const k of [...counters.keys()]) if (k > lvl) counters.delete(k)
+        const an = autoNumOf(pPr?.toString()) ?? (bulletOf(pPr?.toString()) === undefined ? autoNumOf(levelDef?.toString()) : null)
+        if (an && runs.length > 0) {
+          const prev = counters.get(lvl)
+          const n = prev && prev.type === an.type ? prev.n + 1 : an.start
+          counters.set(lvl, { type: an.type, n })
+          para.bu = formatAutoNum(an.type, n)
+        } else {
+          counters.delete(lvl)
+          const bu = bulletOf(pPr?.toString()) ?? bulletOf(levelDef?.toString())
+          if (bu && runs.length > 0) para.bu = bu
+        }
         if (algn === 'l' || algn === 'ctr' || algn === 'r' || algn === 'just') para.align = algn
         return para
       }),
