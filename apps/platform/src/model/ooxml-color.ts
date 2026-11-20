@@ -70,7 +70,8 @@ export function bulletOf(ppr: string | null | undefined): string | undefined {
   if (/<a:buNone\b/.test(ppr) || /<a:buAutoNum\b/.test(ppr)) return ''
   const ch = /<a:buChar\b[^>]*\bchar="([^"]*)"/.exec(ppr)?.[1]
   if (ch === undefined) return undefined
-  const char = ch.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+  // 一次替换完成反转义（分步替换会把 &amp;lt; 二次反转义成 <）
+  const char = ch.replace(/&(amp|lt|gt|quot|apos);/g, (_m, e: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" } as Record<string, string>)[e]!)
   const font = /<a:buFont\b[^>]*\btypeface="([^"]*)"/.exec(ppr)?.[1] ?? ''
   return /wingdings|symbol/i.test(font) || ['Ø', '§', 'ü', 'Ÿ', 'è', 'Ü'].includes(char) ? (SYMBOL_BULLETS[char] ?? '•') : char
 }

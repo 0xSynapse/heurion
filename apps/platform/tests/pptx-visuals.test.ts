@@ -79,6 +79,7 @@ describe('项目符号', () => {
     expect(bulletOf('<a:pPr><a:buNone/></a:pPr>')).toBe('')
     expect(bulletOf('<a:pPr><a:buAutoNum type="arabicPeriod"/></a:pPr>')).toBe('')
     expect(bulletOf('<a:pPr algn="l"/>')).toBeUndefined()
+    expect(bulletOf('<a:pPr><a:buChar char="&amp;lt;"/></a:pPr>')).toBe('&lt;')
   })
 })
 
