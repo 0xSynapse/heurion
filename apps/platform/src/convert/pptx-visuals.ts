@@ -56,13 +56,15 @@ export interface LayoutVisuals {
 export interface SlideVisuals { bg: VisualBg | null; hideMaster: boolean }
 export interface ShapeVisuals {
   fill?: string; line?: VisualLine; color?: string; geom?: string; parts?: VisualPart[]
+  /** 图片裁剪（比例）：左、上、右、下。 */
+  crop?: [number, number, number, number]
   /** 表格的列宽与行高（相对表格框的比例；与原文件的网格一致）。 */
   table?: { cols: number[]; rows: number[] }
 }
 export interface DeckVisuals { layouts: Record<string, LayoutVisuals>; slides: Record<string, SlideVisuals> }
 
-/** 浏览器能直接显示的图片格式（emf / wmf / tiff 不画）。 */
-const WEB_IMAGE = /\.(png|jpe?g|gif|bmp|svg|webp)$/i
+/** 画布能显示的图片格式：浏览器原生支持的，加上服务端转成 png 的 emf / wmf（tiff 不画）。 */
+const WEB_IMAGE = /\.(png|jpe?g|gif|bmp|svg|webp|emf|wmf)$/i
 
 const kids = (el: XNode | null | undefined): XElement[] => {
   const out: XElement[] = []
@@ -275,6 +277,11 @@ export class PptxVisuals {
       const W = cols.reduce((a, b) => a + b, 0) || num(ext.getAttribute('cx')) || 1
       const H = Math.max(rows.reduce((a, b) => a + b, 0), num(ext.getAttribute('cy'))) || 1
       return { table: { cols: cols.map(c => round(c / W)), rows: rows.map(r => round(r / H)) } }
+    }
+    if (name === 'pic') {
+      const src = first(first(el, P, 'blipFill'), A, 'srcRect')
+      const c = ['l', 't', 'r', 'b'].map(k => num(src?.getAttribute(k)) / 100000) as [number, number, number, number]
+      if (c.some(v => v !== 0)) out.crop = c
     }
     const spPr = first(el, P, 'spPr')
     const fill = this.fill(el, spPr, ctx)

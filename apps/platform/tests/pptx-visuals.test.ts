@@ -174,10 +174,44 @@ describe('导入 pptx 的显示层', () => {
     expect(paras.map(p => p.bu)).toEqual(['1.', '2.', undefined, '1.'])
   })
 
-  it('媒体只取 ppt/media/ 下浏览器能显示的图片', () => {
+  it('媒体只取 ppt/media/ 下画布能显示的图片（含要转换的 emf / wmf）', () => {
     expect(PptxVisuals.mediaBytes(bytes, 'ppt/media/logo.png')).toEqual(PNG)
+    const files = unzipSync(bytes)
+    files['ppt/media/x.emf'] = PNG
+    files['ppt/media/x.tif'] = PNG
+    expect(PptxVisuals.mediaBytes(zipSync(files), 'ppt/media/x.emf')).toEqual(PNG)
+    expect(PptxVisuals.mediaBytes(zipSync(files), 'ppt/media/x.tif')).toBeNull()
     expect(PptxVisuals.mediaBytes(bytes, 'ppt/slides/slide1.xml')).toBeNull()
     expect(PptxVisuals.mediaBytes(bytes, 'ppt/media/../slides/slide1.xml')).toBeNull()
+  })
+})
+
+describe('emf / wmf 转 png', () => {
+  it('画布显示时（view=1）给转换后的 png，其余情况给原文件；包里的 emf 同样转换', async () => {
+    const store = new Store(':memory:')
+    const docs = new Documents(store)
+    const pool = { liveSession: () => null, run: () => new Promise(() => {}), cancel: async () => {} } as unknown as HarnessPool
+    const mailer = { configured: true, available: true, mode: 'dev-mock' as const, async send() { return { success: true, mode: 'simulated' as const, messageId: 'm' } } }
+    const accounts = new Accounts(store, { secret: 's', devMode: true, devToken: 'dev', devUser: 'dev', botGuard: new BotGuard({ secret: 's', baseMax: 300, minDelayMs: 0 }), mailer })
+    const renderer = new SlideRenderer(mkdtempSync(join(tmpdir(), 'hr-')))
+    const calls: string[] = []
+    renderer.vectorToPng = async (_b, ext) => { calls.push(ext); return PNG }
+    const app = buildApi({ docs, ops: new OpService(docs), turns: new TurnService(docs, pool, new TurnRegistry()), postcheck: new PostCheck(docs), crossref: {} as CrossrefClient, renderer, accounts, devMode: true, devUser: 'dev' })
+    const asset = store.putAsset({ owner: 'dev', mime: 'image/emf', name: 'a.emf', bytes: new Uint8Array([1, 2, 3]) })
+    const H = { Authorization: 'Bearer dev' }
+    const view = await app.request(`/api/assets/${asset.id}?view=1`, { headers: H })
+    expect(view.headers.get('content-type')).toBe('image/png')
+    const raw = await app.request(`/api/assets/${asset.id}`, { headers: H })
+    expect(raw.headers.get('content-type')).toBe('image/emf')
+    const files = unzipSync(externalDeck())
+    files['ppt/media/chart.emf'] = new Uint8Array([9, 9])
+    const form = new FormData()
+    form.append('file', new File([new Uint8Array(zipSync(files))], 'ext.pptx'))
+    const row = await (await app.request('/api/docs', { method: 'POST', headers: H, body: form })).json() as { id: string }
+    const media = await app.request(`/api/docs/${row.id}/package-media?path=ppt/media/chart.emf`, { headers: H })
+    expect(media.status).toBe(200)
+    expect(media.headers.get('content-type')).toBe('image/png')
+    expect(calls).toEqual(['emf', 'emf'])
   })
 })
 
@@ -209,6 +243,8 @@ describe('显示层接口', () => {
     expect(img.status).toBe(200)
     expect(img.headers.get('content-type')).toBe('image/png')
     expect((await app.request(`/api/docs/${row.id}/package-media?path=ppt/presentation.xml`, { headers: H })).status).toBe(404)
+    // emf：画布显示时转成 png（转换器不可用时 404，画布不显示这张图）
+    expect((await app.request(`/api/docs/${row.id}/package-media?path=ppt/media/chart.emf`, { headers: H })).status).toBe(404)
     const plain = await (await app.request('/api/docs', { method: 'POST', headers: { ...H, 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 't', kind: 'deck' }) })).json() as { id: string }
     expect((await (await app.request(`/api/docs/${plain.id}/deck`, { headers: H })).json() as { visuals: unknown }).visuals).toBeNull()
   })

@@ -1948,14 +1948,19 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   }
 
   /** 原始 pptx 包里的图片（画布显示母版 / 版式装饰与组合里的图片）。 */
-  app.get('/api/docs/:id/package-media', c => {
+  app.get('/api/docs/:id/package-media', async c => {
     const row = owned(c)
     if (!row || row.kind !== 'deck') return c.json({ error: 'not found' }, 404)
     const pkg = store.getPackage(row.id)
     const path = c.req.query('path') ?? ''
-    const bytes = pkg ? PptxVisuals.mediaBytes(pkg, path) : null
+    let bytes = pkg ? PptxVisuals.mediaBytes(pkg, path) : null
     if (!bytes) return c.json({ error: 'not found' }, 404)
-    const ext = path.split('.').pop()!.toLowerCase()
+    let ext = path.split('.').pop()!.toLowerCase()
+    if (ext === 'emf' || ext === 'wmf') {
+      bytes = await deps.renderer.vectorToPng(bytes, ext)
+      if (!bytes) return c.json({ error: '没有可用的 LibreOffice，无法显示 emf / wmf 图片' }, 404)
+      ext = 'png'
+    }
     const mime = ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', webp: 'image/webp' } as Record<string, string>)[ext] ?? 'application/octet-stream'
     return c.body(new Uint8Array(bytes), 200, { 'Content-Type': mime, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff', ...(ext === 'svg' ? { 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" } : {}) })
   })
@@ -2857,7 +2862,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (!asset || !access.canAsset(c.get('user'), asset)) return c.json({ error: 'not found' }, 404)
     return c.json(store.getAssetProvenance(asset.id))
   })
-  app.get('/api/assets/:id', c => {
+  app.get('/api/assets/:id', async c => {
     // 带图模板的内置照片（公开授权，任何登录用户可取）
     const builtin = themePhoto(c.req.param('id'))
     if (builtin) return c.body(Buffer.from(builtin.bytes), 200, { 'Content-Type': builtin.mime, 'Cache-Control': 'public, max-age=86400' })
@@ -2868,6 +2873,12 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (!asset || asset.size <= 0 || !access.canAsset(c.get('user'), asset)) return c.json({ error: 'not found' }, 404)
     const bytes = store.getAssetBytes(asset.id)
     if (!bytes || bytes.length === 0) return c.json({ error: 'not found' }, 404)
+    // 画布显示（view=1）：emf / wmf 浏览器不能显示，转成 png；下载与导出仍给原文件
+    const vector = /(^|\/)(x-)?(emf|wmf)$/.exec(asset.mime)?.[3] as 'emf' | 'wmf' | undefined
+    if (c.req.query('view') === '1' && vector) {
+      const png = await deps.renderer.vectorToPng(bytes, vector)
+      if (png) return c.body(Buffer.from(png), 200, { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=31536000, immutable' })
+    }
     return c.body(Buffer.from(bytes), 200, { 'Content-Type': asset.mime, 'Cache-Control': 'private, max-age=31536000, immutable' })
   })
 

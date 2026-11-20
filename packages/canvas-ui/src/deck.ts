@@ -696,7 +696,17 @@ export class DeckView {
     // 裁成六边形等外形的形状：边框线用 SVG 描在外形上（clip-path 会把 outline 裁掉）
     const clipOutline = !a.geom && geom && CLIP[geom] && this.shapeVis?.line ? outlineSvg(CLIP[geom]!, this.shapeVis.line.color, lw * 2) : ''
     const common = `class="shape shape-${block ? 'shape' : a.kind}${sel}${deco}${nowrap}${empty}" data-id="${esc(a.id)}"${a.ph ? ` data-ph="${esc(a.ph)}"` : ''}${suggest} style="${box}${fill}${radius}${anchor}${titleFont}${vertStyle}"`
-    if (a.kind === 'image' && a.asset_id) return `<div ${common}><img src="/api/assets/${esc(a.asset_id)}?token=${encodeURIComponent(this.opts.token)}" alt=""></div>`
+    if (a.kind === 'image' && a.asset_id) {
+      const src = `/api/assets/${esc(a.asset_id)}?token=${encodeURIComponent(this.opts.token)}&view=1`
+      // 导入的图片：和 PowerPoint 一样拉伸铺满图片框，并按原文件裁剪（srcRect）
+      if (this.data?.visuals && this.shapeVis) {
+        const [cl, ct, cr, cb] = this.shapeVis.crop ?? [0, 0, 0, 0]
+        const iw = 1 / Math.max(0.01, 1 - cl - cr), ih = 1 / Math.max(0.01, 1 - ct - cb)
+        return `<div ${common}><img class="img-crop" src="${src}" alt="" style="width:${iw * 100}%;height:${ih * 100}%;left:${-cl * iw * 100}%;top:${-ct * ih * 100}%"></div>`
+      }
+      if (this.data?.visuals) return `<div ${common}><img class="img-crop" src="${src}" alt="" style="width:100%;height:100%;left:0;top:0"></div>`
+      return `<div ${common}><img src="${src}" alt=""></div>`
+    }
     if (a.kind === 'text' && !block) return `<div ${common}>${clipOutline}${(s.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</div>`
     if (block) return `<div ${common}>${clipOutline}<div class="shape-text">${(s.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</div></div>`
     if (a.kind === 'table') {
@@ -855,7 +865,11 @@ export class DeckView {
           html = `<mark class="comment${resolved ? ' comment-resolved' : ''}" data-thread="${esc(m.attrs?.thread)}">${html}</mark>`
         }
       }
+      // 文字高亮（a:highlight）：画成底色
+      const hl = rpr ? /<a:highlight\b[^>]*>([\s\S]*?)<\/a:highlight>/.exec(rpr)?.[1] : undefined
+      const highlight = hl ? colorOf(hl, this.colors) : null
       const styles = [
+        highlight ? `background:#${highlight}` : '',
         color ? `color:#${color}` : '',
         font ? `font-family:${cssFonts(font.startsWith('+mj') ? this.fonts?.major || 'sans-serif' : font.startsWith('+mn') ? this.fonts?.minor || 'sans-serif' : font)}` : '',
         sz ? `font-size:${Number(sz) / 100 * k}px` : '',
