@@ -1524,7 +1524,13 @@ button.ghost-dark:hover:not(:disabled) { border-color: var(--text); background: 
 .render-warning-fallback { font-size: 10px; color: #80868b; }
 .shape { position: absolute; overflow: hidden; line-height: 1.2; transition: background .8s; }
 .shape p { margin: 0 0 .2em; white-space: pre-wrap; word-break: break-word; }
-.slide p.bullet::before { content: '• '; }
+.slide p.bullet::before { content: attr(data-bu) ' '; }
+/* 导入的 pptx：文字超出文本框时照常显示（PowerPoint 不裁剪）；wrap="none" 的文本框不折行 */
+.slide.imported .shape.shape-text, .slide.imported .shape.shape-shape { overflow: visible; }
+.slide .shape.nowrap p { white-space: pre; }
+/* 没装 Office 字体时的字宽替代（Calibri 比 Arial 窄约一成；Arial Narrow 约窄两成） */
+@font-face { font-family: 'HR Calibri Fallback'; src: local('Arial'), local('Helvetica'), local('Liberation Sans'); size-adjust: 90%; }
+@font-face { font-family: 'HR Narrow Fallback'; src: local('Arial'), local('Helvetica'), local('Liberation Sans'); size-adjust: 82%; }
 .shape-shape { border: 1px dashed rgba(0, 0, 0, .08); display: flex; align-items: center; }
 .shape-shape[style*="background:#"] { border: 0; }
 .shape-shape .shape-text { width: 100%; padding: 4px 8px; }

@@ -6,7 +6,8 @@ import { describe, expect, it } from 'vitest'
 import { importPptx } from '../src/convert/pptx-import.ts'
 import { pptxTemplate } from '../src/convert/pptx-template.ts'
 import { PptxVisuals } from '../src/convert/pptx-visuals.ts'
-import { colorOf, fillColorOf, textColorOf } from '../src/model/ooxml-color.ts'
+import { bulletOf, colorOf, fillColorOf, textColorOf } from '../src/model/ooxml-color.ts'
+import { readLayouts } from '../src/convert/pptx-layouts.ts'
 import { Accounts } from '../src/auth/accounts.ts'
 import { BotGuard } from '../src/auth/bot-guard.ts'
 import { PostCheck } from '../src/collab/postcheck.ts'
@@ -71,6 +72,16 @@ describe('DrawingML 颜色解析', () => {
   })
 })
 
+describe('项目符号', () => {
+  it('段落写了就用（Wingdings 符号换成 Unicode），buNone / 自动编号不显示，没写返回 undefined', () => {
+    expect(bulletOf('<a:pPr><a:buFont typeface="Wingdings"/><a:buChar char="Ø"/></a:pPr>')).toBe('➢')
+    expect(bulletOf('<a:pPr><a:buFont typeface="Arial"/><a:buChar char="–"/></a:pPr>')).toBe('–')
+    expect(bulletOf('<a:pPr><a:buNone/></a:pPr>')).toBe('')
+    expect(bulletOf('<a:pPr><a:buAutoNum type="arabicPeriod"/></a:pPr>')).toBe('')
+    expect(bulletOf('<a:pPr algn="l"/>')).toBeUndefined()
+  })
+})
+
 describe('导入 pptx 的显示层', () => {
   const bytes = externalDeck()
   const imported = importPptx(bytes)
@@ -115,6 +126,28 @@ describe('导入 pptx 的显示层', () => {
     let fill: unknown = 'x'
     slide.forEach(s => { if (s.attrs.name === '六边形') fill = s.attrs.fill })
     expect(fill).toBeNull()
+  })
+
+  it('连接线箭头；版式带主题字体；占位符样式带项目符号与文字颜色', () => {
+    const files = unzipSync(externalDeck())
+    const slide1 = strFromU8(files['ppt/slides/slide1.xml']!).replace('<a:ln w="25400">', '<a:ln w="25400"><a:tailEnd type="triangle"/>')
+    files['ppt/slides/slide1.xml'] = strToU8(slide1)
+    const pkg = zipSync(files)
+    const v = new PptxVisuals(pkg)
+    const imp = importPptx(pkg)
+    const s = imp.doc.child(0)
+    let id = ''
+    s.forEach(n => { if (n.attrs.name === '直线 19') id = n.attrs.id as string })
+    const line = v.shape(imp.src.find(x => x.node_id === id)!.xml, s.attrs.part as string, s.attrs.layout as string)!
+    expect(line.parts?.[0]?.line).toEqual({ color: '0F172A', w: 2, tail: true })
+    expect(v.deck().layouts[s.attrs.layout as string]!.fonts.minor).toBeTruthy()
+    // 版式标题：lstStyle 写了 buNone 与颜色（版式自己的优先于母版）；正文沿用母版的「•」与颜色
+    const phs = readLayouts(pkg).layouts.find(l => l.part === 'ppt/slideLayouts/slideLayout2.xml')!.placeholders
+    const title = phs.find(p => p.type === 'title')!
+    expect(title.style?.bullet).toBe('')
+    expect(fillColorOf(title.style?.colorXml)).toBe('0F172A')
+    const body = phs.find(p => p.type === 'body' || p.type === 'obj')
+    if (body) expect(body.style?.bullet).toBe('•')
   })
 
   it('媒体只取 ppt/media/ 下浏览器能显示的图片', () => {

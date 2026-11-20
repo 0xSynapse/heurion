@@ -1,6 +1,7 @@
 import { DOMParser, type Element as XElement } from '@xmldom/xmldom'
 import { strFromU8, unzipSync } from 'fflate'
 import type { LayoutInfo, PlaceholderStyle } from '../ops/deck.ts'
+import { bulletOf } from '../model/ooxml-color.ts'
 
 const P = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 const A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
@@ -71,6 +72,10 @@ function lvl1(el: XElement | undefined | null): PlaceholderStyle {
   const r = p.getElementsByTagNameNS(A, 'defRPr')[0]
   if (r?.getAttribute('sz')) out.size = Number(r.getAttribute('sz')) / 100
   if (r?.getAttribute('b')) out.bold = r.getAttribute('b') === '1'
+  const fill = r ? (r.getElementsByTagNameNS(A, 'solidFill')[0] as XElement | undefined) : undefined
+  if (fill && fill.parentNode === r) out.colorXml = fill.toString()
+  const bullet = bulletOf(p.toString())
+  if (bullet !== undefined) out.bullet = bullet
   return out
 }
 

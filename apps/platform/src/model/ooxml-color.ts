@@ -58,6 +58,23 @@ export function textColorOf(rpr: string | null | undefined, scheme: SchemeColors
   return fillColorOf(own, scheme)
 }
 
+/** Wingdings 等符号字体里常用作项目符号的字符 → 对应的 Unicode 字符。 */
+const SYMBOL_BULLETS: Record<string, string> = { 'Ø': '➢', 'l': '●', 'n': '■', 'q': '❑', 'ü': '✔', '§': '■', 'v': '❖', 'Ÿ': '•', 'è': '➔', 'à': '➔', 'Ü': '➢', 'p': '□', 'u': '◆' }
+
+/**
+ * 段落属性（a:pPr / a:lvl1pPr）规定的项目符号：'' 表示不要符号（buNone），字符表示用它，undefined 表示没写（沿用版式 / 母版）。
+ * 自动编号（buAutoNum）没法在单段里算出序号，按不显示处理。
+ */
+export function bulletOf(ppr: string | null | undefined): string | undefined {
+  if (!ppr) return undefined
+  if (/<a:buNone\b/.test(ppr) || /<a:buAutoNum\b/.test(ppr)) return ''
+  const ch = /<a:buChar\b[^>]*\bchar="([^"]*)"/.exec(ppr)?.[1]
+  if (ch === undefined) return undefined
+  const char = ch.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+  const font = /<a:buFont\b[^>]*\btypeface="([^"]*)"/.exec(ppr)?.[1] ?? ''
+  return /wingdings|symbol/i.test(font) || ['Ø', '§', 'ü', 'Ÿ', 'è', 'Ü'].includes(char) ? (SYMBOL_BULLETS[char] ?? '•') : char
+}
+
 function applyMods(hex: string, body: string): string {
   if (!body) return hex
   let [h, s, l] = rgbToHsl(hex)

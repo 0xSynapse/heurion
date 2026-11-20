@@ -115,7 +115,7 @@ describe('deck：导出 XML 结构', () => {
     const { layouts } = readLayouts(pptxTemplate())
     expect(layouts.map(l => l.name)).toEqual(['封面', '标题和内容', '空白', '章节页', '两栏', '图文', '大数字', '致谢'])
     const cover = layouts.find(l => l.name === '封面')!.placeholders
-    expect(cover.find(p => p.type === 'ctrTitle')!.style).toEqual({ anchor: 't', align: 'l', size: 44, bold: true })
+    expect(cover.find(p => p.type === 'ctrTitle')!.style).toMatchObject({ anchor: 't', align: 'l', size: 44, bold: true })
     expect(cover.find(p => p.type === 'subTitle')!.style).toMatchObject({ anchor: 't', align: 'l', size: 20 })
     const content = layouts.find(l => l.name === '标题和内容')!.placeholders
     expect(content.find(p => p.type === 'title')!.style).toMatchObject({ align: 'l', size: 32, bold: true })

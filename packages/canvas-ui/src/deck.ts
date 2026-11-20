@@ -10,7 +10,7 @@
 import { icon } from '../../../apps/platform/web/src/icons.ts'
 import { measureExportText, type MeasureView } from '../../../apps/platform/src/model/measurements.ts'
 import { resolvedThreadIds, type CommentThreadStatus } from './comments.ts'
-import { fillColorOf, textColorOf, type SchemeColors } from '../../../apps/platform/src/model/ooxml-color.ts'
+import { bulletOf, fillColorOf, textColorOf, type SchemeColors } from '../../../apps/platform/src/model/ooxml-color.ts'
 import type { DeckVisuals, ShapeVisuals, VisualBg, VisualPart } from '../../../apps/platform/src/convert/pptx-visuals.ts'
 
 interface PMJson { type: string; attrs?: Record<string, any>; content?: PMJson[]; text?: string; marks?: Array<{ type: string; attrs?: Record<string, any> }> }
@@ -53,7 +53,7 @@ const LAYOUT_HINT: Record<string, string> = {
   '章节页/1': '双击输入一句说明', '图文/2': '双击输入说明（图片放在左侧区域）', '致谢/1': '双击输入联系方式或问答提示',
 }
 
-interface PhStyle { anchor?: 't' | 'ctr' | 'b'; align?: 'l' | 'ctr' | 'r' | 'just'; size?: number; bold?: boolean }
+interface PhStyle { anchor?: 't' | 'ctr' | 'b'; align?: 'l' | 'ctr' | 'r' | 'just'; size?: number; bold?: boolean; bullet?: string; colorXml?: string }
 const BODY_LEVELS = [28, 24, 20, 18, 18]
 
 export class DeckView {
@@ -81,6 +81,7 @@ export class DeckView {
   private phStyle: PhStyle | null = null
   /** 正在渲染的页的主题配色、正在渲染的形状的显示层信息（导入的 pptx 才有）。 */
   private colors: SchemeColors = {}
+  private fonts: { major: string; minor: string } | null = null
   private shapeVis: ShapeVisuals | null = null
   /** 已关闭批注线程：锚点保留，但不再显示高亮 / 下划线。 */
   private resolvedThreads = new Set<string>()
@@ -207,9 +208,11 @@ export class DeckView {
       const lv = slide.attrs?.layout ? this.data!.visuals?.layouts[slide.attrs.layout as string] : undefined
       const sv = slide.attrs?.part ? this.data!.visuals?.slides[slide.attrs.part as string] : undefined
       this.colors = lv?.colors ?? {}
+      this.fonts = lv?.fonts ?? null
       const vbg: VisualBg | null | undefined = slide.attrs?.bg ? null : (sv?.bg ?? lv?.bg)
       const bgColor = (slide.attrs?.bg as string | undefined) ?? vbg?.color
-      const bgStyle = bgColor ? `background:#${bgColor};${isDark(bgColor) ? 'color:#E2E8F0;' : ''}` : ''
+      // 没写字体的文字用主题的正文字体（和 PowerPoint 一样），不用网页字体
+      const bgStyle = (bgColor ? `background:#${bgColor};${isDark(bgColor) ? 'color:#E2E8F0;' : ''}` : '') + (lv?.fonts.minor ? `font-family:${cssFonts(lv.fonts.minor)};` : '')
       const bgImg = vbg?.img ? `<img class="vis-bg" src="${this.mediaUrl(vbg.img)}" alt="">` : ''
       const layer = lv && !sv?.hideMaster && lv.parts.length > 0 ? `<div class="vis-layer">${this.partsHtml(lv.parts, this.width, height)}</div>` : ''
       const shapesHtml = bgImg + layer + (slide.content ?? []).filter(c => c.type === 'shape').map(s => this.shape(s, slide.attrs?.layout as string | undefined, slide.attrs?.layout_name as string | undefined)).join('')
@@ -234,7 +237,7 @@ export class DeckView {
         : shapesHtml
       return `<div class="slide-wrap" data-id="${esc(slide.attrs?.id)}" data-index="${i}"${suggest}>
         <div class="slide-head"><span>第 ${i + 1} 页 · ${esc(slide.attrs?.layout_name || '无版式')}</span><button data-precise="${i}">${this.precise.has(i) ? '近似预览' : '精确预览'}</button></div>
-        <div class="slide"${slide.attrs?.theme ? ` data-theme="${esc(slide.attrs.theme)}"` : ''} style="width:${this.width}px;height:${height}px;${bgStyle}">${body}</div>
+        <div class="slide${lv ? ' imported' : ''}"${slide.attrs?.theme ? ` data-theme="${esc(slide.attrs.theme)}"` : ''} style="width:${this.width}px;height:${height}px;${bgStyle}">${body}</div>
         <div class="slide-notes"><span class="notes-label">备注</span><div class="notes-text${notes && this.text(notes) ? '' : ' empty'}" data-notes="${esc(slide.attrs?.id)}" title="双击编辑演讲者备注">${notes && this.text(notes) ? esc(this.text(notes)) : '双击添加演讲者备注'}</div></div>
       </div>`
     }).join('')
@@ -667,7 +670,9 @@ export class DeckView {
     const box = `left:${a.x / EMU_PER_PT * k}px;top:${a.y / EMU_PER_PT * k}px;width:${a.w / EMU_PER_PT * k}px;height:${a.h / EMU_PER_PT * k}px;${a.rot ? `transform:rotate(${a.rot / 60000}deg);` : ''}`
     const suggest = a.suggest ? ` data-suggest="${a.suggest}" data-suggest-group="${esc(a.suggest_group)}"` : ''
     const vfill = !a.fill && this.shapeVis?.fill ? this.shapeVis.fill : null
-    const vline = !a.fill && this.shapeVis?.line && a.kind !== 'line' ? `box-shadow:inset 0 0 0 ${Math.max(0.5, this.shapeVis.line.w * k)}px #${this.shapeVis.line.color};` : ''
+    const lw = this.shapeVis?.line ? Math.max(0.5, this.shapeVis.line.w * k) : 0
+    const vline = !a.fill && this.shapeVis?.line && a.kind !== 'line' ? `outline:${lw}px solid #${this.shapeVis.line.color};outline-offset:-${lw}px;` : ''
+    const titleFont = (a.ph === 'title' || a.ph === 'ctrTitle') && this.fonts?.major ? `font-family:${cssFonts(this.fonts.major)};` : ''
     const fill = (a.fill === 'none' ? 'background:transparent;border:0;' : a.fill ? `background:#${a.fill};border:0;` : vfill ? `background:#${vfill};border:0;` : '') + vline
     // 导入的形状模型里没有几何（以原文为准）：按原文的预设几何显示外形
     const geom = a.geom ?? (a.kind === 'text' || a.kind === 'shape' ? this.shapeVis?.geom : undefined)
@@ -682,7 +687,8 @@ export class DeckView {
     // 还没写字的模板占位符：显示提示（双击输入）
     const hint = LAYOUT_HINT[`${layoutName ?? ''}/${a.ph_idx ?? ''}`] ?? PH_HINT[a.ph as string] ?? '双击输入文字'
     const empty = a.kind === 'text' && a.ph && !this.text(s).trim() ? ` ph-empty" data-hint="${esc(hint)}` : ''
-    const common = `class="shape shape-${block ? 'shape' : a.kind}${sel}${deco}${empty}" data-id="${esc(a.id)}"${a.ph ? ` data-ph="${esc(a.ph)}"` : ''}${suggest} style="${box}${fill}${radius}${anchor}"`
+    const nowrap = /\bwrap="none"/.test(String(a.body_pr ?? '')) ? ' nowrap' : ''
+    const common = `class="shape shape-${block ? 'shape' : a.kind}${sel}${deco}${nowrap}${empty}" data-id="${esc(a.id)}"${a.ph ? ` data-ph="${esc(a.ph)}"` : ''}${suggest} style="${box}${fill}${radius}${anchor}${titleFont}"`
     if (a.kind === 'image' && a.asset_id) return `<div ${common}><img src="/api/assets/${esc(a.asset_id)}?token=${encodeURIComponent(this.opts.token)}" alt=""></div>`
     if (a.kind === 'text' && !block) return `<div ${common}>${(s.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</div>`
     if (block) return `<div ${common}><div class="shape-text">${(s.content ?? []).map(p => this.paragraph(s, p, k)).join('')}</div></div>`
@@ -716,7 +722,16 @@ export class DeckView {
       if (p.connector) {
         const x1 = p.flipH ? w : 0, x2 = p.flipH ? 0 : w, y1 = p.flipV ? h : 0, y2 = p.flipV ? 0 : h
         const sw = Math.max(0.5, (p.line?.w ?? 0.75) * k)
-        return `<svg class="vis" style="left:${l}px;top:${t}px;width:${Math.max(w, 1)}px;height:${Math.max(h, 1)}px;${p.rot ? `transform:rotate(${p.rot}deg);` : ''}" viewBox="0 0 ${Math.max(w, 1)} ${Math.max(h, 1)}" preserveAspectRatio="none"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#${p.line?.color ?? '000000'}" stroke-width="${sw}"/></svg>`
+        const color = `#${p.line?.color ?? '000000'}`
+        // 箭头：headEnd 在起点、tailEnd 在终点
+        const arrow = (tx: number, ty: number, fx: number, fy: number) => {
+          const len = Math.hypot(tx - fx, ty - fy) || 1
+          const ux = (tx - fx) / len, uy = (ty - fy) / len
+          const a = Math.max(4, sw * 3)
+          return `<polygon points="${tx},${ty} ${tx - ux * a - uy * a * 0.6},${ty - uy * a + ux * a * 0.6} ${tx - ux * a + uy * a * 0.6},${ty - uy * a - ux * a * 0.6}" fill="${color}"/>`
+        }
+        const heads = (p.line?.head ? arrow(x1, y1, x2, y2) : '') + (p.line?.tail ? arrow(x2, y2, x1, y1) : '')
+        return `<svg class="vis" style="left:${l}px;top:${t}px;width:${Math.max(w, 1)}px;height:${Math.max(h, 1)}px;${p.rot ? `transform:rotate(${p.rot}deg);` : ''}" viewBox="0 0 ${Math.max(w, 1)} ${Math.max(h, 1)}" preserveAspectRatio="none"><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${sw}"/>${heads}</svg>`
       }
       if (p.paths?.length) {
         const transform = [p.rot ? `rotate(${p.rot}deg)` : '', p.flipH ? 'scaleX(-1)' : '', p.flipV ? 'scaleY(-1)' : ''].filter(Boolean).join(' ')
@@ -753,7 +768,7 @@ export class DeckView {
             const st = [
               r.sz ? `font-size:${r.sz * k}px` : '',
               r.color ? `color:#${r.color}` : '',
-              r.font ? `font-family:${esc(r.font)}` : '',
+              r.font ? `font-family:${cssFonts(r.font)}` : '',
               r.b ? 'font-weight:700' : '',
               r.i ? 'font-style:italic' : '',
               r.u ? 'text-decoration:underline' : '',
@@ -790,7 +805,9 @@ export class DeckView {
       const rpr = c.marks?.find(m => m.type === 'rpr')?.attrs?.xml as string | undefined
       const ts = c.marks?.find(m => m.type === 'text_style')?.attrs as { font_family?: string; font_size?: string; color?: string } | undefined
       const sz = rpr ? /\ssz="(\d+)"/.exec(rpr)?.[1] : ts?.font_size ? String(Math.round(parseFloat(ts.font_size) * 100)) : undefined
-      const color = rpr ? (textColorOf(rpr, this.colors) ?? this.shapeVis?.color) : ts?.color ? ts.color.replace(/^#/, '') : this.shapeVis?.color
+      // 文字颜色：文字段自己的 → 形状样式的 → 版式 / 母版占位符样式的
+      const inheritedColor = this.shapeVis?.color ?? (this.phStyle?.colorXml ? fillColorOf(this.phStyle.colorXml, this.colors) ?? undefined : undefined)
+      const color = rpr ? (textColorOf(rpr, this.colors) ?? inheritedColor) : ts?.color ? ts.color.replace(/^#/, '') : inheritedColor
       const font = rpr ? (/<a:latin typeface="([^"]+)"/.exec(rpr)?.[1] ?? /<a:ea typeface="([^"]+)"/.exec(rpr)?.[1]) : ts?.font_family
       if (sz && !size) size = Number(sz) / 100
       let html = esc(c.text)
@@ -807,7 +824,7 @@ export class DeckView {
       }
       const styles = [
         color ? `color:#${color}` : '',
-        font ? `font-family:${font}` : '',
+        font ? `font-family:${cssFonts(font.startsWith('+mj') ? this.fonts?.major || 'sans-serif' : font.startsWith('+mn') ? this.fonts?.minor || 'sans-serif' : font)}` : '',
         sz ? `font-size:${Number(sz) / 100 * k}px` : '',
       ].filter(Boolean).join(';')
       return `<span data-o="${o}"${styles ? ` style="${styles}"` : ''}>${html}</span>`
@@ -816,7 +833,10 @@ export class DeckView {
     if (!size) { const d = /<a:defRPr\b[^>]*\ssz="(\d+)"/.exec(String(p.attrs?.ppr ?? '')); if (d) size = Number(d[1]) / 100 }
     if (!size) size = (lvl === 0 && this.phStyle?.size) || (ph && PH_SIZE[ph]) || (ph === 'body' || ph === 'obj' ? BODY_LEVELS[lvl] ?? 18 : 18)
     // 项目符号用 CSS 画，不进选区文字
-    const bullet = (ph === 'body' || ph === 'obj') && runs && !/<a:buNone\b/.test(String(p.attrs?.ppr ?? '')) ? ' class="bullet"' : ''
+    // 项目符号：段落自己写的优先（含 Wingdings 符号），没写的占位符沿用版式 / 母版（默认「•」）
+    const own = bulletOf(String(p.attrs?.ppr ?? ''))
+    const bu = own !== undefined ? own : (ph === 'body' || ph === 'obj') ? (this.phStyle?.bullet ?? '•') : ''
+    const bullet = bu && runs ? ` class="bullet" data-bu="${esc(bu)}"` : ''
     const inherited = this.phStyle?.align ? { l: 'left', ctr: 'center', r: 'right', just: 'justify' }[this.phStyle.align] : null
     const align = p.attrs?.align ? `text-align:${p.attrs.align};` : inherited ? `text-align:${inherited};` : ''
     const weight = this.phStyle?.bold ? 'font-weight:700;' : ''
@@ -1049,6 +1069,29 @@ export function chartSvg(c: ChartData, w: number, h: number): string {
 }
 
 /** 深色背景（图表的坐标轴与文字用浅色）。 */
+/**
+ * Office 常用字体在没装 Office 的电脑上的替代：字宽相同的开源字体（Carlito / Arimo / Tinos …），
+ * 再不行用按字宽缩放过的系统字体（style.css 里的 HR * Fallback），让每行折行位置接近原文件。
+ */
+const FONT_FALLBACKS: Record<string, string[]> = {
+  'calibri': ['Carlito', 'HR Calibri Fallback'], 'calibri light': ['Carlito', 'HR Calibri Fallback'],
+  'cambria': ['Caladea', 'Georgia', 'serif'],
+  'arial': ['Arimo', 'Liberation Sans', 'Helvetica'], 'arial narrow': ['Liberation Sans Narrow', 'HR Narrow Fallback'],
+  'times new roman': ['Tinos', 'Liberation Serif', 'Times', 'serif'],
+  '微软雅黑': ['Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC'],
+  'microsoft yahei': ['PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC'],
+  '等线': ['DengXian', 'PingFang SC', 'Noto Sans CJK SC'], '等线 light': ['DengXian Light', 'PingFang SC', 'Noto Sans CJK SC'],
+  '宋体': ['SimSun', 'Songti SC', 'Noto Serif CJK SC'], '黑体': ['SimHei', 'PingFang SC', 'Noto Sans CJK SC'],
+  '楷体': ['KaiTi', 'Kaiti SC'], '仿宋': ['FangSong', 'STFangsong'],
+}
+
+/** 字体名列表 → CSS font-family（逐个加引号、补上替代字体，最后兜底无衬线）。 */
+function cssFonts(list: string): string {
+  const names = list.split(',').map(f => f.trim().replace(/['"\\<>;]/g, '')).filter(Boolean)
+  const all = [...new Set(names.flatMap(n => [n, ...(FONT_FALLBACKS[n.toLowerCase()] ?? [])]))]
+  return all.map(f => (f === 'serif' || f === 'sans-serif' ? f : `'${f}'`)).join(', ') + ', sans-serif'
+}
+
 /** 常见预设几何的近似外形（clip-path）。 */
 const CLIP: Record<string, string> = {
   hexagon: 'polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%)',

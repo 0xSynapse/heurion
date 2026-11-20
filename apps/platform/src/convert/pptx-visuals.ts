@@ -32,8 +32,8 @@ export interface VisualPart {
   rot?: number; flipH?: true; flipV?: true
   geom?: string
   fill?: string
-  /** 线条（颜色、粗细 pt）。 */
-  line?: { color: string; w: number }
+  /** 线条（颜色、粗细 pt；head / tail：起点 / 终点有箭头）。 */
+  line?: VisualLine
   /** 连接线 / 直线：按框的对角线画。 */
   connector?: true
   /** 自由曲线（custGeom）：路径按框归一化到 0–1；fill / stroke 为 false 表示这条路径不填充 / 不描边。 */
@@ -44,10 +44,15 @@ export interface VisualPart {
   crop?: [number, number, number, number]
   text?: VisualText
 }
+export interface VisualLine { color: string; w: number; head?: true; tail?: true }
 export interface VisualBg { color?: string; img?: string }
-export interface LayoutVisuals { bg: VisualBg | null; parts: VisualPart[]; colors: SchemeColors }
+export interface LayoutVisuals {
+  bg: VisualBg | null; parts: VisualPart[]; colors: SchemeColors
+  /** 主题字体（标题 / 正文；没写字体的文字用它）。 */
+  fonts: { major: string; minor: string }
+}
 export interface SlideVisuals { bg: VisualBg | null; hideMaster: boolean }
-export interface ShapeVisuals { fill?: string; line?: { color: string; w: number }; color?: string; geom?: string; parts?: VisualPart[] }
+export interface ShapeVisuals { fill?: string; line?: VisualLine; color?: string; geom?: string; parts?: VisualPart[] }
 export interface DeckVisuals { layouts: Record<string, LayoutVisuals>; slides: Record<string, SlideVisuals> }
 
 /** 浏览器能直接显示的图片格式（emf / wmf / tiff 不画）。 */
@@ -206,7 +211,7 @@ export class PptxVisuals {
       if (master && showMaster) this.tree(master, { part: master, colors, fonts }, full, parts)
       this.tree(layout, { part: layout, colors, fonts }, full, parts)
       const bg = this.background(layout, { part: layout, colors, fonts }) ?? (master ? this.background(master, { part: master, colors, fonts }) : null)
-      layouts[layout] = { bg, parts, colors }
+      layouts[layout] = { bg, parts, colors, fonts }
     }
     for (const slide of Object.keys(this.files).filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))) {
       const layout = this.relOfType(slide, 'slideLayout')
@@ -379,18 +384,24 @@ export class PptxVisuals {
     return undefined
   }
 
-  private line(el: XElement, spPr: XElement | undefined, ctx: Ctx, connector: boolean): { color: string; w: number } | undefined {
+  private line(el: XElement, spPr: XElement | undefined, ctx: Ctx, connector: boolean): VisualLine | undefined {
     const ln = first(spPr, A, 'ln')
     const w = num(ln?.getAttribute('w'), 9525) / 12700
+    const ends = (out: VisualLine): VisualLine => {
+      const end = (name: string) => { const t = first(ln, A, name)?.getAttribute('type'); return !!t && t !== 'none' }
+      if (end('headEnd')) out.head = true
+      if (end('tailEnd')) out.tail = true
+      return out
+    }
     if (ln) {
       if (first(ln, A, 'noFill')) return undefined
       const color = fillColorOf(ln.toString(), ctx.colors)
-      if (color) return { color, w }
+      if (color) return ends({ color, w })
     }
     const ref = deep(first(el, P, 'style'), A, 'lnRef')
     if (ref && (num(ref.getAttribute('idx')) > 0 || connector)) {
       const color = colorOf(ref.toString(), ctx.colors)
-      if (color) return { color, w }
+      if (color) return ends({ color, w })
     }
     return undefined
   }
