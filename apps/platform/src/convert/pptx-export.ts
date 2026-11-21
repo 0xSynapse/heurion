@@ -512,6 +512,18 @@ export function exportPptx(input: PptxExportInput): { bytes: Uint8Array; warning
   }
   put('ppt/_rels/presentation.xml.rels', presRels)
   put('[Content_Types].xml', contentTypes)
+  // 剥离非超链接类型的外部关系（TargetMode="External"），防止恶意关系在 LibreOffice 导出渲染时触发外连/SSRF
+  for (const name of Object.keys(files)) {
+    if (!name.endsWith('.rels')) continue
+    const rawRels = text(name)
+    if (!/TargetMode\s*=\s*["']External["']/i.test(rawRels)) continue
+    const cleaned = rawRels.replace(/<Relationship\b[^>]*?(?:\/>|>[\s\S]*?<\/Relationship>)/gi, tag => {
+      if (!/\bTargetMode\s*=\s*["']External["']/i.test(tag)) return tag
+      const type = /\bType\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] ?? ''
+      return type.endsWith('/hyperlink') ? tag : ''
+    })
+    if (cleaned !== rawRels) put(name, cleaned)
+  }
   return { bytes: zipSync(files), warnings }
 
   function patchNotes(part: string, slide: PMNode, before: PMNode | undefined): void {

@@ -185,7 +185,7 @@ const indexed = search.backfill()
 if (indexed) console.log(`全文索引：补齐 ${indexed} 份文档`)
 // 回收站：30 天后自动彻底删除（启动时一次，之后每 12 小时）
 // 审计日志保留 365 天
-const purge = () => { for (const id of store.purgeTrash(30)) { docs.unload(id); store.unindexDoc(id) } store.purgeAudit(365); store.purgeMemorySignals(60); store.purgeObservedNumbers(14) }
+const purge = () => { for (const id of store.purgeTrash(30)) { docs.unload(id); store.unindexDoc(id) } store.purgeAudit(365); store.purgeMemorySignals(60); store.purgeObservedNumbers(14); store.purgeAuthArtifacts() }
 purge()
 setInterval(purge, 12 * 3600_000).unref()
 // 来源标记回填（docs/design/PROVENANCE.md 6.1）：只执行一次；逐份文档提交，单份失败不影响其余
@@ -245,7 +245,7 @@ if (config.reviewVisionModel) VISION_MODELS.add(config.reviewVisionModel)
 const reviewVision = config.reviewTableVision
   ? makeVisionComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.reviewVisionModel || config.model, timeoutMs: 120_000 })
   : null
-const app = buildApi({ docs, reviewVision, reviewComplete: llmComplete, fulltext, claims, ops, turns, turnRegistry: registry, mcpDeps, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, aegisEnabled: config.aegisEnabled, imagingAcceptIdentified: config.imagingAcceptIdentified, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, alerts, workspaceDir: userId => pool.workspaceDir(userId) })
+const app = buildApi({ docs, reviewVision, reviewComplete: llmComplete, fulltext, claims, ops, turns, turnRegistry: registry, mcpDeps, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, aegisEnabled: config.aegisEnabled, publicOrigin: config.publicOrigin || undefined, trustProxy: config.trustProxy, imagingAcceptIdentified: config.imagingAcceptIdentified, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, alerts, workspaceDir: userId => pool.workspaceDir(userId) })
 // MCP 的管理类工具以用户身份进程内调用同一个 HTTP 应用（AI 的权限 = 用户的权限，见 http/invoke.ts）
 ;(mcpDeps as { invoke?: Invoke }).invoke = makeInvoker(app)
 

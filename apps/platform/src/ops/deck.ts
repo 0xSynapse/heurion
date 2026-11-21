@@ -886,7 +886,11 @@ function rprWithSize(xml: string, size: number): string {
 
 export function rprWithFont(xml: string, font: string): string {
   const clean = font.split(',')[0]!.trim().replace(/^['"]+|['"]+$/g, '')
-  const escFont = (clean || font).replace(/"/g, '&quot;')
+  const escFont = (clean || font)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
   const fontTags = `<a:latin typeface="${escFont}"/><a:ea typeface="${escFont}"/>`
   const self = /^(<a:rPr\b[^>]*?)\s*\/>$/.exec(xml.trim())
   if (self) return `${self[1]}>${fontTags}</a:rPr>`

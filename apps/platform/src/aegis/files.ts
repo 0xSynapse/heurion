@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path'
 
 /**
@@ -19,6 +19,8 @@ export const MCP_PUT_MAX = 10 * 1024 * 1024
 export const MCP_GET_MAX = 5 * 1024 * 1024
 /** 经 HTTP 直传的上限（生产 Caddy 对普通请求体限 110MB，见 deploy/Caddyfile）。 */
 export const HTTP_PUT_MAX = 100 * 1024 * 1024
+/** 单个工作区 `aegis-files/` 目录的总容量上限（500MB）。 */
+export const MAX_WORKSPACE_FILES_BYTES = 500 * 1024 * 1024
 
 export class WorkspaceFileError extends Error {
   constructor(readonly code: string, message: string, readonly status = 400) { super(message) }
@@ -38,6 +40,27 @@ function cleanRel(path: string): string {
   return norm
 }
 
+function dirTotalBytes(dir: string): number {
+  let total = 0
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  for (const e of entries) {
+    if (e.isSymbolicLink()) continue
+    const p = join(dir, e.name)
+    try {
+      const st = lstatSync(p)
+      if (st.isSymbolicLink()) continue
+      if (st.isDirectory()) total += dirTotalBytes(p)
+      else if (st.isFile()) total += st.size
+    } catch { /* 忽略并发删除 */ }
+  }
+  return total
+}
+
 /**
  * 写入目标：`aegis-files/<path>`（path 已带 aegis-files/ 前缀时不重复加）。
  * 返回绝对路径与相对工作区的路径（交给其他工具的 path / file_path 用）。
@@ -53,6 +76,68 @@ export function writeTarget(workspace: string, path: string): { abs: string; rel
   // 父目录（可能是已有的符号链接）也必须在工作区里
   if (!inside(root, realpathSync(dirname(abs)))) throw new WorkspaceFileError('invalid_path', '路径不能跳出工作区')
   if (existsSync(abs) && (lstatSync(abs).isSymbolicLink() || lstatSync(abs).isDirectory())) throw new WorkspaceFileError('invalid_path', '目标已存在且不是普通文件')
+  return { abs, rel }
+}
+
+/**
+ * 并发安全的原子防逃逸写入：
+ * 1. 从 workspace 真实根目录起逐段校验并创建目录，每段均拒绝符号链接与非目录；
+ * 2. 校验 `aegis-files/` 总占用（含本次写入 ≤ 500MB）；
+ * 3. 使用 `O_NOFOLLOW` 打开目标描述符写入（拒绝悬空软链替身攻击）。
+ */
+export function writeWorkspaceFile(workspace: string, path: string, bytes: Uint8Array): { abs: string; rel: string } {
+  mkdirSync(workspace, { recursive: true })
+  const root = realpathSync(workspace)
+  let rel = cleanRel(path)
+  if (rel !== AEGIS_FILES_DIR && !rel.startsWith(`${AEGIS_FILES_DIR}/`)) rel = `${AEGIS_FILES_DIR}/${rel}`
+  if (rel === AEGIS_FILES_DIR) throw new WorkspaceFileError('invalid_path', '要给文件名')
+
+  const segs = rel.split('/')
+  let cur = root
+  for (let i = 0; i < segs.length - 1; i++) {
+    cur = join(cur, segs[i]!)
+    let st
+    try { st = lstatSync(cur) } catch (err: any) {
+      if (err?.code === 'ENOENT') {
+        mkdirSync(cur)
+        st = lstatSync(cur)
+      } else {
+        throw err
+      }
+    }
+    if (st.isSymbolicLink() || !st.isDirectory()) {
+      throw new WorkspaceFileError('invalid_path', '路径不能经过符号链接或非目录')
+    }
+  }
+
+  const abs = join(cur, segs[segs.length - 1]!)
+  if (!inside(root, realpathSync(dirname(abs)))) {
+    throw new WorkspaceFileError('invalid_path', '路径不能跳出工作区')
+  }
+
+  let existingSize = 0
+  try {
+    const st = lstatSync(abs)
+    if (st.isSymbolicLink() || st.isDirectory()) {
+      throw new WorkspaceFileError('invalid_path', '目标已存在且不是普通文件')
+    }
+    existingSize = st.size
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') throw err
+  }
+
+  const usedBytes = dirTotalBytes(join(root, AEGIS_FILES_DIR)) - existingSize
+  if (usedBytes + bytes.byteLength > MAX_WORKSPACE_FILES_BYTES) {
+    throw new WorkspaceFileError('quota_exceeded', `工作区 ${AEGIS_FILES_DIR}/ 总容量不能超过 500MB`, 413)
+  }
+
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0)
+  const fd = openSync(abs, flags, 0o644)
+  try {
+    writeFileSync(fd, bytes)
+  } finally {
+    closeSync(fd)
+  }
   return { abs, rel }
 }
 

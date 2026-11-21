@@ -110,6 +110,10 @@ export const config = {
   imagingRetentionDays: retentionDays(env('IMAGING_RETENTION_DAYS', '0')),
   /** 每个回合开新的 dsh 会话（实验用：排除会话内上下文带来的跨任务学习）。 */
   freshSessionPerTurn: env('HARNESS_FRESH_SESSION', '0') === '1',
+  /** 反向代理后平台公开 Origin（例如 https://heurion.org）；配置后优先用于发现元数据与 OAuth 回调 origin。 */
+  publicOrigin: (process.env.HEURION_PUBLIC_ORIGIN ?? '').trim().replace(/\/+$/, ''),
+  /** 是否信任反向代理的 X-Forwarded-Host / http 降级头；仅在内网可控代理后设为 1。 */
+  trustProxy: env('HEURION_TRUST_PROXY', '0') === '1',
 }
 
 function retentionDays(v: string): number {
