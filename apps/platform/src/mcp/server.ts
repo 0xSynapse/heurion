@@ -18,6 +18,7 @@ import type { ClaimService } from '../claims/service.ts'
 import { pptxFor } from '../convert/exports.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
 import { toolInScope } from './scope.ts'
+import { moduleOf, READ_ONLY_TOOLS, type ModuleId } from './modules.ts'
 import { DeckEditBatch, DeckOp, newTemplateDeck } from '../ops/deck.ts'
 import { LAYOUTS, layoutSpec, templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
@@ -2431,12 +2432,15 @@ function wrapToolRegistration(
   ctx: Ctx,
   claims: TokenClaims,
   aegisToolScope?: AgentGrantRow['tool_scope'],
+  modules?: ReadonlySet<ModuleId>,
 ): void {
   const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown
   ;(server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) => {
     const n = String(name)
     if (claims.t && !toolInScope(n, claims.t)) return undefined
     if (!aegisScopeAllows(n, aegisToolScope)) return undefined
+    // 只挂指定模块时：不属于这些模块（或没有登记归属）的工具不注册
+    if (modules) { const m = moduleOf(n); if (!m || !modules.has(m)) return undefined }
     if (typeof cb !== 'function') return register(name, config, cb)
     const wrapped = async (args: unknown, extra: unknown) => {
       const docId = (args && typeof args === 'object' && 'doc_id' in args && typeof (args as { doc_id?: unknown }).doc_id === 'string')
@@ -2516,18 +2520,19 @@ export function buildCanvasMcpServer(deps: CanvasMcpDeps, claims: TokenClaims): 
 }
 
 export interface AegisMcpServerOptions {
+  /** 只挂这些模块的工具（mcp/modules.ts）；不给时挂全部模块。 */
+  modules?: readonly ModuleId[]
   agentId?: string
   leaseAuthorizer?: (input: LeaseAuthorizeInput) => LeaseAuthorizeResult
   aegisToolScope?: AgentGrantRow['tool_scope']
 }
 
 const AEGIS_CANVAS_ONLY = /^(doc_|docs_|deck_|slide_|layout_|comment|pubmed_|openalex_|oa_|doi_|insert_citation|import_references|list_citations|insert_measurement|list_measurements|verify_claims|claim_report|asset_upload|diagram_render|image_search)/
-const AEGIS_READONLY_TOOLS = /^(doc_list|docs_search|doc_outline|doc_read|doc_search|doc_validate|doc_history|doc_diff|deck_templates|slide_read|layout_check|slide_render|comments_list|pubmed_search|openalex_search|oa_fulltext|doi_lookup|list_citations|list_measurements|verify_claims|dataset_list|dataset_describe|patient_list|patient_read|labs_query|report_read|patient_access_log|share_list|share_read|share_labs|share_file|study_list|study_read|study_cohort_preview|study_cohort_list|study_vars_list|kb_search|kb_read|memory_search|phr_member_links|patient_claims_list|phi_scan|imaging_status|imaging_models|account|action_status|asset_provenance)$/
 
 function aegisScopeAllows(toolName: string, scope?: AgentGrantRow['tool_scope']): boolean {
   if (!scope || scope === 'all') return true
   if (scope === 'canvas') return AEGIS_CANVAS_ONLY.test(toolName)
-  if (scope === 'readonly') return AEGIS_READONLY_TOOLS.test(toolName)
+  if (scope === 'readonly') return READ_ONLY_TOOLS.has(toolName)
   return true
 }
 
@@ -2542,7 +2547,7 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
   const ctx = new Ctx(deps, claims, aegisOpts?.agentId, aegisOpts?.leaseAuthorizer)
   const server = new McpServer({ name: 'heurion', version: '2.0.0' }, { instructions: INSTRUCTIONS })
   // 工具范围（令牌里的 t 或 AAP-1.0 tool_scope）与工具错误信号钩子
-  wrapToolRegistration(server, ctx, claims, aegisOpts?.aegisToolScope)
+  wrapToolRegistration(server, ctx, claims, aegisOpts?.aegisToolScope, aegisOpts?.modules ? new Set(aegisOpts.modules) : undefined)
 
   registerCanvasTools(server, ctx)
   registerHealthcareTools(server, ctx)
