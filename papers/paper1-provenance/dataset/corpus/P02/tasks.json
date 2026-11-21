@@ -1,0 +1,98 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把全文的 “this study” 统一改成 “the present study”。",
+  "target": null,
+  "check": {
+   "old": "this study",
+   "new": "the present study",
+   "rule": "全文替换"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 38.8 应为 38.5，请只改这一处：“The majority of the participants were aged (20–21) years (38.8%), Saudi (91.4%), Northern area of Riyadh (40.2%), from Imam Mohammed Ibn Saud University (33.3%)”",
+  "target": {
+   "pid": "36F47729",
+   "section": "Results",
+   "para_start": "Out of the total number of participants (523), the median ag"
+  },
+  "check": {
+   "old": "38.8",
+   "new": "38.5",
+   "sentence": "The majority of the participants were aged (20–21) years (38.8%), Saudi (91.4%), Northern area of Riyadh (40.2%), from Imam Mohammed Ibn Saud University (33.3%), from the science college (44.6%), of the fourth academic year (26.0%), and those with a monthly income of more than 10,000 Saudi Riyal (SAR) (61.2%) as shown in Table 1.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 1中「Age groups」行、「N」列的 189 改为 187（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "198C0E51",
+   "table": "Table 1",
+   "row": "Age groups",
+   "col": "N",
+   "cell_text": "189"
+  },
+  "check": {
+   "old": "189",
+   "new": "187",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “The current study evaluated the general awareness …” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "3895807A",
+   "section": "Discussion",
+   "para_start": "The current study evaluated the general awareness of CKD amo"
+  },
+  "check": {
+   "words_before": 110,
+   "numbers": [
+    "53.2%",
+    "57.1%"
+   ],
+   "cited_refs": [
+    "10.3390/healthcare10081377",
+    "10.2147/PPA.S315369"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“This overstates what the data show. Please soften.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "59D6EB4F",
+   "comment_id": 0,
+   "anchor": "Our study found that only 56.6% of non-medical female university students in Riyadh City, Saudi Arabia, demonstrated adequate knowledge of CKD risk factors, which is higher than a previous Saudi study "
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“Despite the severity of CKD and its associated complications, public awareness regarding the disease, especially in non-medical populations,” 文献：Abdel-Kader K, Unruh ML, Weisbord SD. Symptom burden, depression, and quality of life in chronic and end-stage kidney disease. Clin J Am Soc Nephrol. 2009. doi:10.2215/CJN.00430109",
+  "target": {
+   "pid": "759977EA",
+   "section": "Introduction",
+   "para_start": "CKD is a growing global health concern that significantly af"
+  },
+  "check": {
+   "doi": "10.2215/CJN.00430109",
+   "title": "Symptom burden, depression, and quality of life in chronic and end-stage kidney disease",
+   "sentence": "Despite the severity of CKD and its associated complications, public awareness regarding the disease, especially in non-medical populations, remains insufficient",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

@@ -1,0 +1,489 @@
+{
+ "arm": "gongrzhe",
+ "model": "deepseek-flash",
+ "log": [
+  {
+   "task": "S1",
+   "turns": 11,
+   "hit_limit": false,
+   "tool_calls": [
+    {
+     "tool": "get_document_text",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use during pregnancy: A descriptive cross-sectional survey\nAbstract\nIntroduction: Tobacco smoking is associated with adverse health outcomes for both pregnant women and their offspring. Smoking cessation counseling is an effective method to help women quit smoking. Developing a targeted smoking cessation intervention could benefit those who struggle to quit tobacco and potentially reduce the harm due to any co-occurring tobacco use. Assessing the prevalence of tobacco, electronic nicotine delivery systems (ENDS), nicotine replacement therapy (NRT), and cannabinoid use in pregnancy is key to developing such interventions. Thus, we aimed to assess the prevalence and patterns of tobacco, ENDS, NRT, and cannabinoid use in pregnancy. We further aimed to assess the prevalence of smoking cessation counseling intervention.\nMaterials and methods: We conducted a cross-sectional survey among pregnant women attending regular clinical visits at Spitalzentrum Biel between February and May 2023 (n = 262). Frequency and proportion along with 95% confidence intervals (CI) were reported for tobacco, ENDS, NRT, and cannabinoid use in pregnancy.\nResults: Tobacco use was reported among 7.6% (20/262, 95% CI: 4.2%−11.1%) of the included pregnant women. Tobacco cigarettes (conventional or roll-on) were used by 7.3% (19/262, 95% CI: 3.8%−10.7%) of the surveyed pregnant women, with 0.8% (2/262, 95% CI: 0.0%−3.4"
+    },
+    {
+     "tool": "find_text_in_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "text_to_find": "Previously conducted studies observed the prevalen"
+     },
+     "error": false,
+     "output": "{\n  \"query\": \"Previously conducted studies observed the prevalen\",\n  \"match_case\": true,\n  \"whole_word\": false,\n  \"occurrences\": [\n    {\n      \"paragraph_index\": 66,\n      \"position\": 0,\n      \"context\": \"Previously conducted studies observed the prevalence of tobacco use among pregnant women in Switzerl...\"\n    }\n  ],\n  \"total_count\": 1\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 66
+     },
+     "error": false,
+     "output": "{\n  \"index\": 66,\n  \"text\": \"Previously conducted studies observed the prevalence of tobacco use among pregnant women in Switzerland to vary between 7.0% and 21.0% 46\\u201348. This is in line with the current study showing a prevalence of 7.6%. The prevalence of tobacco use observed in our study is, however, lower than that observed in the National perinatal survey conducted in France. In the French perinatal survey, 16.6% of women smoked tobacco in their third trimester of pregnancy in 2016, which then decreased to 12.2% in 2021 49\\u201351. However, the observed difference could stem from the social and cultural differences around smoking in both the countries, particularly with the strong cultural legacy of smoking in France 52. Nevertheless, more studies are necessary to understand how various social, cultural, and economic factors influence the observed disparity in smoking prevalence between France and Switzerland to the fullest extent. Additionally, upon stratifying tobacco use by trimester, we observed that the number of tobacco product users in the second trimester was nearly twice as high as in the third trimester. It is, however, not clear if this difference is due to ceasing tobacco use fearing adverse effects during later stages of pregnancy, due to underreporting, or chance 53, 54. While assessing the prevalence of cannabinoid use, none of the pregnant women reported using cannabinoid products with THC > 1% but reported use of only CBD products. This could be due "
+    },
+    {
+     "tool": "find_text_in_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "text_to_find": "Dupraz",
+      "match_case": false
+     },
+     "error": false,
+     "output": "{\n  \"query\": \"Dupraz\",\n  \"match_case\": false,\n  \"whole_word\": false,\n  \"occurrences\": [\n    {\n      \"paragraph_index\": 121,\n      \"position\": 4,\n      \"context\": \"46.\\tDupraz J, Graff V, Barasche J, Etter J-F, Boulvain M. Tobacco and alcohol during pregnancy: prev...\"\n    }\n  ],\n  \"total_count\": 1\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 121
+     },
+     "error": false,
+     "output": "{\n  \"index\": 121,\n  \"text\": \"46.\\tDupraz J, Graff V, Barasche J, Etter J-F, Boulvain M. Tobacco and alcohol during pregnancy: prevalence and determinants in Geneva in 2008. Swiss Med Wkly. 2013;143:w13795. doi:10.4414/smw.2013.13795\",\n  \"style\": \"EndNote Bibliography\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "fetch_abstract",
+     "input": {
+      "id": "10.4414/smw.2013.13795"
+     },
+     "error": false,
+     "output": "- Dupraz J, Graff V, Barasche J, Etter JF, Boulvain M. Tobacco and alcohol during pregnancy: prevalence and determinants in Geneva in 2008. Swiss medical weekly 2013. DOI: 10.4414/smw.2013.13795 PMID: 23740290\n  摘要： Objectives To describe alcohol and tobacco consumption during pregnancy in women giving birth in a public hospital in Geneva, to evaluate risk factors related to these consumptions and to explore the influence of close relatives on the consumption habits of pregnant women. Methods A cross-sectional questionnaire survey after delivery in 207 women in the maternity ward of the Geneva University Hospitals in 2008. We used retrospective self-reports of smoking during pregnancy (including temporary smoking), smoking during the entire pregnancy and alcohol drinking during pregnancy (even a single glass). Results The proportion of smokers decreased from 31.2% before pregnancy to 21.7% during pregnancy (temporary smoking included), and 9.2% of women smoked continuously until delivery. Major factors associated with tobacco use were living alone, living with a smoker and tobacco consumption of the husband/partner in the presence of the pregnant woman. Regarding alcohol consumption, 62.7% of the participants reported drinking (even occasionally) before pregnancy, and 36.3% of the women drank at least one glass of alcohol during pregnancy. The alcohol consumption of the husband/partner and invitations to drink from other people were associated with alcohol consumption during "
+    },
+    {
+     "tool": "literature_search",
+     "input": {
+      "query": "Dupraz tobacco alcohol during pregnancy prevalence determinants Geneva 2008"
+     },
+     "error": false,
+     "output": "- Dupraz J, Graff V, Barasche J, Etter JF, Boulvain M. Tobacco and alcohol during pregnancy: prevalence and determinants in Geneva in 2008. Swiss medical weekly 2013. DOI: 10.4414/smw.2013.13795 PMID: 23740290\n  摘要： Objectives To describe alcohol and tobacco consumption during pregnancy in women giving birth in a public hospital in Geneva, to evaluate risk factors related to these consumptions and to explore the influence of close relatives on the consumption habits of pregnant women. Methods A cross-sectional questionnaire survey after delivery in 207 women in the maternity ward of the Geneva University Hospitals in 2008. We used retrospective self-reports of smoking during pregnancy (including temporary smoking), smoking during the entire pregnancy and alcohol drinking during pregnancy (even a single glass). Results The proportion of smokers decreased from 31.2% before pregnancy to 21.7% during pregnancy (temporary smoking included), and 9.2% of women smoked continuously until delivery. Major factors associated with tobacco use were living alone, living with a smoker and tobacco consumption of the husband/partner in the presence of the pregnant woman. Regarding alcohol consumption, 62.7% of the participants reported drinking (even occasionally) before pregnancy, and 36.3% of the women drank at least one glass of alcohol during pregnancy. The alcohol consumption of the husband/partner and invitations to drink from other people were associated with alcohol consumption during "
+    },
+    {
+     "tool": "search_and_replace",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "find_text": "Additionally, the form or route of consumption of CBD was not collected in this study.",
+      "replace_text": "Additionally, the form or route of consumption of CBD was not collected in this study. In comparison, Dupraz et al., in their survey of 207 women giving birth at the Geneva University Hospitals in 2008, reported that the proportion of smokers decreased from 31.2% before pregnancy to 21.7% during pregnancy when temporary smoking was included, while 9.2% of the women smoked continuously until delivery 46. Thus, the prevalence of tobacco use observed in our study (7.6%) is considerably lower than the overall prevalence during pregnancy reported by Dupraz et al. (21.7%), but is closer to the proportion of women who smoked continuously until delivery (9.2%)."
+     },
+     "error": false,
+     "output": "Replaced 1 occurrence(s) of 'Additionally, the form or route of consumption of CBD was not collected in this study.' with 'Additionally, the form or route of consumption of CBD was not collected in this study. In comparison, Dupraz et al., in their survey of 207 women giving birth at the Geneva University Hospitals in 2008, reported that the proportion of smokers decreased from 31.2% before pregnancy to 21.7% during pregnancy when temporary smoking was included, while 9.2% of the women smoked continuously until delivery 46. Thus, the prevalence of tobacco use observed in our study (7.6%) is considerably lower than the overall prevalence during pregnancy reported by Dupraz et al. (21.7%), but is closer to the proportion of women who smoked continuously until delivery (9.2%).'."
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 66
+     },
+     "error": false,
+     "output": "{\n  \"index\": 66,\n  \"text\": \"Previously conducted studies observed the prevalence of tobacco use among pregnant women in Switzerland to vary between 7.0% and 21.0% 46\\u201348. This is in line with the current study showing a prevalence of 7.6%. The prevalence of tobacco use observed in our study is, however, lower than that observed in the National perinatal survey conducted in France. In the French perinatal survey, 16.6% of women smoked tobacco in their third trimester of pregnancy in 2016, which then decreased to 12.2% in 2021 49\\u201351. However, the observed difference could stem from the social and cultural differences around smoking in both the countries, particularly with the strong cultural legacy of smoking in France 52. Nevertheless, more studies are necessary to understand how various social, cultural, and economic factors influence the observed disparity in smoking prevalence between France and Switzerland to the fullest extent. Additionally, upon stratifying tobacco use by trimester, we observed that the number of tobacco product users in the second trimester was nearly twice as high as in the third trimester. It is, however, not clear if this difference is due to ceasing tobacco use fearing adverse effects during later stages of pregnancy, due to underreporting, or chance 53, 54. While assessing the prevalence of cannabinoid use, none of the pregnant women reported using cannabinoid products with THC > 1% but reported use of only CBD products. This could be due "
+    },
+    {
+     "tool": "get_document_xml",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"w14\"><w:body><w:p w14:paraId=\"183404EE\" w14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"Title\"/></w:pPr><w:r><w:t xml:space=\"preserve\">Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use during pregnancy: A descriptive cross-sectional survey</w:t></w:r></w:p><w:p w14:paraId=\"32C23612\" w14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t xml:space=\"preserve\">Abstract</w:t></w:r></w:p><w:p w14:paraId=\"223475CB\" w14:textId=\"77777777\"><w:pPr><w:spacing w:line=\"360\" w:lineRule=\"auto\"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Introduction: </w:t></w:r><w:r><w:t xml:space=\"preserve\">Tobacco smoking is associated with adverse health outcomes for both pregnant women and their offspring. Smoking cessation counseling is an effective method to help women quit smoking. Developing a targeted smoking cessation intervention could benefit those who struggle to quit tobacco and potentially reduce the harm due to any co-occurring tobacco use. </w:t></w:r><w:commentRangeStart w:id=\"2\"/><w:r><w:t xml:space=\"preserve\">Assessing the prevalence of tobacco, e"
+    },
+    {
+     "tool": "get_document_info",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "{\n  \"title\": \"Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use during pregnancy: A descriptive cross-sectional survey\",\n  \"author\": \"Author\",\n  \"subject\": \"\",\n  \"keywords\": \"\",\n  \"created\": \"2026-10-20 08:00:00+00:00\",\n  \"modified\": \"2026-11-02 10:30:00+00:00\",\n  \"last_modified_by\": \"M. Keller\",\n  \"revision\": 0,\n  \"page_count\": 1,\n  \"word_count\": 6519,\n  \"paragraph_count\": 149,\n  \"table_count\": 6\n}"
+    },
+    {
+     "tool": "find_text_in_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "match_case": false,
+      "text_to_find": "smoked continuously until delivery"
+     },
+     "error": false,
+     "output": "{\n  \"query\": \"smoked continuously until delivery\",\n  \"match_case\": false,\n  \"whole_word\": false,\n  \"occurrences\": [\n    {\n      \"paragraph_index\": 66,\n      \"position\": 2990,\n      \"context\": \"Previously conducted studies observed the prevalence of tobacco use among pregnant women in Switzerl...\"\n    },\n    {\n      \"paragraph_index\": 66,\n      \"position\": 3241,\n      \"context\": \"Previously conducted studies observed the prevalence of tobacco use among pregnant women in Switzerl...\"\n    }\n  ],\n  \"total_count\": 2\n}"
+    }
+   ],
+   "usage": {
+    "input_tokens": 18284,
+    "output_tokens": 5768
+   },
+   "seconds": 40.1,
+   "final": "已完成修改，文件已同名覆盖保存。\n\n## 修改内容\n\n**位置**：Discussion 部分，以 “Previously conducted studies observed the prevalence…” 开头的段落（第 67 段，索引 66）**末尾**。\n\n**在原有末句 “…the form or route of consumption of CBD was not collected in this study.” 之后新增了两句**（约 95 词）：\n\n> In comparison, Dupraz et al., in their survey of 207 women giving birth at the Geneva University Hospitals in 2008, reported that the proportion of smokers decreased from 31.2% before pregnancy to 21.7% during pregnancy when temporary smoking was included, while 9.2% of the women smoked continuously until delivery ⁴⁶. Thus, the prevalence of tobacco use observed in our study (7.6%) is considerably lower than the overall prevalence during pregnancy reported by Dupraz et al. (21.7%), but is closer to the proportion of women who smoked continuously until delivery (9.2%).\n\n## 数据来源与核对\n\n我核对了文中参考文献第 46 条（Dupraz J, Graff V, Barasche J, Etter J-F, Boulvain M. *Tobacco and alcohol during pregnancy: prevalence and determinants in Geneva in 2008.* Swiss Med Wkly. 2013;143:w13795）并调取了其摘要原文，其中报告的具体数据为：\n\n- 2008 年日内瓦大学医院产科分娩后问卷调查，**207 名**产妇；\n- 孕期吸烟比例由孕前 **31.2%** 降至孕期 **21.7%**（含偶尔/暂时吸烟）；\n- **9.2%** 持续吸烟至分娩。\n\n这些数字与我写入的句子完全一致，且与段首已引用的“瑞士孕期吸烟率 7.0%–21.0%（文献 46–48）”前后呼应。\n\n## 两点提示\n\n1. **引用编号格式**：该段其他文献编号都是 EndNote 域生成的**上标**数字，而我用文本编辑工具插入的 “46” 是普通文本（工具不支持上标/域）。建议在 Word 中用 EndNote 重新插入该处引用（Cite While You Write），以确保上标格式统一、且在文献重新编号时不会错位。文献表中 46 号确为 Dupraz 2013，当前编号本身是正确的。\n2. 这段结尾正在讨论 CBD，其后突然转入 Dupraz 的烟草数据略显跳跃（因按您要求放在段末）。若希望更顺畅，可考虑把该句移到段首“瑞士吸烟率 7.0%–21.0%”之后，我可以再帮您调整位置。\n\n文档完整性未受影响：共 149 段落、6 个表格、6519 词，其余内容（标题、摘要、方法、结果、表格脚注、参考文献）均保持原样。"
+  },
+  {
+   "task": "S2",
+   "turns": 16,
+   "hit_limit": false,
+   "tool_calls": [
+    {
+     "tool": "get_document_info",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "{\n  \"title\": \"Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use during pregnancy: A descriptive cross-sectional survey\",\n  \"author\": \"Author\",\n  \"subject\": \"\",\n  \"keywords\": \"\",\n  \"created\": \"2026-10-20 08:00:00+00:00\",\n  \"modified\": \"2026-11-02 10:30:00+00:00\",\n  \"last_modified_by\": \"M. Keller\",\n  \"revision\": 0,\n  \"page_count\": 1,\n  \"word_count\": 6519,\n  \"paragraph_count\": 149,\n  \"table_count\": 6\n}"
+    },
+    {
+     "tool": "find_text_in_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "text_to_find": "The global prevalence of smoking during pregnancy"
+     },
+     "error": false,
+     "output": "{\n  \"query\": \"The global prevalence of smoking during pregnancy\",\n  \"match_case\": true,\n  \"whole_word\": false,\n  \"occurrences\": [\n    {\n      \"paragraph_index\": 7,\n      \"position\": 109,\n      \"context\": \"Smoking tobacco in pregnancy is a prevalent, modifiable risk factor for infant mortality and morbidi...\"\n    }\n  ],\n  \"total_count\": 1\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 7
+     },
+     "error": false,
+     "output": "{\n  \"index\": 7,\n  \"text\": \"Smoking tobacco in pregnancy is a prevalent, modifiable risk factor for infant mortality and morbidity 1, 2. The global prevalence of smoking during pregnancy was estimated at 1.8%, with Europe reporting a prevalence of 8.1% . In the USA, 5.4% of women who gave birth in 2021 reported smoking while being pregnant 3. In 2022, 8.3% of women giving birth in Australia admitted to smoking during the first 20 weeks of pregnancy, with 71% of them continuing to smoke throughout their pregnancy 4. Smoking during pregnancy is associated with an increased risk of several adverse maternal and neonatal outcomes, such as placenta previa, placental abruption, premature rupture of membranes, stillbirth, preterm birth, and small for gestational age 5\\u20139. However, smoking cessation can help reduce these adverse effects 10\\u201312.\",\n  \"style\": \"Normal\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_document_text",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use during pregnancy: A descriptive cross-sectional survey\nAbstract\nIntroduction: Tobacco smoking is associated with adverse health outcomes for both pregnant women and their offspring. Smoking cessation counseling is an effective method to help women quit smoking. Developing a targeted smoking cessation intervention could benefit those who struggle to quit tobacco and potentially reduce the harm due to any co-occurring tobacco use. Assessing the prevalence of tobacco, electronic nicotine delivery systems (ENDS), nicotine replacement therapy (NRT), and cannabinoid use in pregnancy is key to developing such interventions. Thus, we aimed to assess the prevalence and patterns of tobacco, ENDS, NRT, and cannabinoid use in pregnancy. We further aimed to assess the prevalence of smoking cessation counseling intervention.\nMaterials and methods: We conducted a cross-sectional survey among pregnant women attending regular clinical visits at Spitalzentrum Biel between February and May 2023 (n = 262). Frequency and proportion along with 95% confidence intervals (CI) were reported for tobacco, ENDS, NRT, and cannabinoid use in pregnancy.\nResults: Tobacco use was reported among 7.6% (20/262, 95% CI: 4.2%−11.1%) of the included pregnant women. Tobacco cigarettes (conventional or roll-on) were used by 7.3% (19/262, 95% CI: 3.8%−10.7%) of the surveyed pregnant women, with 0.8% (2/262, 95% CI: 0.0%−3.4"
+    },
+    {
+     "tool": "get_document_outline",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "{\n  \"paragraphs\": [\n    {\n      \"index\": 0,\n      \"text\": \"Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use duri...\",\n      \"style\": \"Title\"\n    },\n    {\n      \"index\": 1,\n      \"text\": \"Abstract\",\n      \"style\": \"Heading 1\"\n    },\n    {\n      \"index\": 2,\n      \"text\": \"Introduction: Tobacco smoking is associated with adverse health outcomes for both pregnant women and...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 3,\n      \"text\": \"Materials and methods: We conducted a cross-sectional survey among pregnant women attending regular ...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 4,\n      \"text\": \"Results: Tobacco use was reported among 7.6% (20/262, 95% CI: 4.2%\\u221211.1%) of the included pregnant w...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 5,\n      \"text\": \"Conclusion: The estimated prevalence of tobacco, ENDS, NRT, and cannabinoid use among the pregnant w...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 6,\n      \"text\": \"Introduction\",\n      \"style\": \"Heading 1\"\n    },\n    {\n      \"index\": 7,\n      \"text\": \"Smoking tobacco in pregnancy is a prevalent, modifiable risk factor for infant mortality and morbidi...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 8,\n      \"text\": \"Smoking cessation counseling has been beneficial in supporting pregnant women to quit tobacco use, b...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 9,\n      \"text\": \"Furthermore, cannabinoids have al"
+    },
+    {
+     "tool": "get_document_xml",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"w14\"><w:body><w:p w14:paraId=\"183404EE\" w14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"Title\"/></w:pPr><w:r><w:t xml:space=\"preserve\">Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use during pregnancy: A descriptive cross-sectional survey</w:t></w:r></w:p><w:p w14:paraId=\"32C23612\" w14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t xml:space=\"preserve\">Abstract</w:t></w:r></w:p><w:p w14:paraId=\"223475CB\" w14:textId=\"77777777\"><w:pPr><w:spacing w:line=\"360\" w:lineRule=\"auto\"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Introduction: </w:t></w:r><w:r><w:t xml:space=\"preserve\">Tobacco smoking is associated with adverse health outcomes for both pregnant women and their offspring. Smoking cessation counseling is an effective method to help women quit smoking. Developing a targeted smoking cessation intervention could benefit those who struggle to quit tobacco and potentially reduce the harm due to any co-occurring tobacco use. </w:t></w:r><w:commentRangeStart w:id=\"2\"/><w:r><w:t xml:space=\"preserve\">Assessing the prevalence of tobacco, e"
+    },
+    {
+     "tool": "literature_search",
+     "input": {
+      "query": "national regional global prevalence of smoking during pregnancy systematic review meta-analysis"
+     },
+     "error": false,
+     "output": "- Azumara S, Arodiogbu E, Cook P, Mukherjee R, Gilbert D. What Do We Know About Alcohol Consumption During Pregnancy and Fetal Alcohol Spectrum Disorder in Nigeria? A Narrative Review Health science reports 2026. DOI: - PMID: -\n  摘要：\n- Alshehri A, Alkhrayef M, Alzaidi R, Tawfik Y, Aldossary A, Altammami M, Alradwan I, Altaf M, Almughem F, Majrashi M, Alo Stroke in Saudi Arabia: epidemiology, prevention, clinical management, and emerging innovations—a narrative review Frontiers in medicine . DOI: - PMID: -\n  摘要：\n- Izah S, Dunga K, Aseibai E, Etim N, Ogwu M, Promise V, Alum E, Ohanusi I. Male reproductive health under environmental, pharmacological, and disease influences: a scoping review Frontiers in endocrinology . DOI: - PMID: -\n  摘要：\n- Aymerich C, De Prisco M, Melillo A, Pedruzo B, Catalan A, Oliver D, Diederen K, MacCabe J, Twumasi R, Uher R, Davies C,  Evidence-based atlas of risk and protective factors for psychotic disorders: an umbrella review to inform personalized prognosis and prevention. World psychiatry : official journal of the World Psychiatric Association (WPA) 2026. DOI: 10.1002/wps.70093 PMID: 42742591\n  摘要：Identifying updated, evidence-based risk and protective factors for psychotic disorders is essential to advancing scientific and clinical knowledge of their etiology. Since the most recent umbrella review published in this journal, the evidence base has expanded substantially. Following a pre-registered protocol, we searched the Web of Science for systema"
+    },
+    {
+     "tool": "fetch_abstract",
+     "input": {
+      "id": "10.1016/S2214-109X(18)30223-7"
+     },
+     "error": false,
+     "output": "- Lange S, Probst C, Rehm J, Popova S. National, regional, and global prevalence of smoking during pregnancy in the general population: a systematic review and meta-analysis. The Lancet. Global health 2018. DOI: 10.1016/s2214-109x(18)30223-7 PMID: 29859815\n  摘要： Background Smoking during pregnancy has been linked to numerous adverse health consequences for both the developing fetus and mother. We estimated the prevalence of smoking during pregnancy by country, WHO region, and globally and the proportion of pregnant women who smoked during pregnancy, by frequency and quantity, on a global level. Methods For this systematic review and meta-analysis, we did a comprehensive systematic literature search for studies reporting the prevalence of smoking during pregnancy in the general population, published between Jan 1, 1985 and Feb 1, 2016, using several electronic bibliographic databases (CINAHL, Embase, ERIC, Medline, Medline in process, PsychINFO, Scopus, and Web of Science), without language or geographical restrictions. We included original research studies published in a peer-reviewed journal and assessed study quality using a tool specifically developed for use in systematic reviews addressing questions of prevalence. Studies were excluded if they did not include lifetime non-smokers in their sample or estimate, used a sample not generalisable to the general population of the respective country, or did not provide primary data. To estimate the prevalence by country, we did c"
+    },
+    {
+     "tool": "copy_document",
+     "input": {
+      "source_filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "destination_filename": "<bench>/out/P09/runs/gongrzhe-b/work/test_copy.docx"
+     },
+     "error": false,
+     "output": "Document copied to <bench>/out/P09/runs/gongrzhe-b/work/test_copy.docx"
+    },
+    {
+     "tool": "fetch_abstract",
+     "input": {
+      "id": "29859815"
+     },
+     "error": false,
+     "output": "- Lange S, Probst C, Rehm J, Popova S. National, regional, and global prevalence of smoking during pregnancy in the general population: a systematic review and meta-analysis. The Lancet. Global health 2018. DOI: 10.1016/s2214-109x(18)30223-7 PMID: 29859815\n  摘要： Background Smoking during pregnancy has been linked to numerous adverse health consequences for both the developing fetus and mother. We estimated the prevalence of smoking during pregnancy by country, WHO region, and globally and the proportion of pregnant women who smoked during pregnancy, by frequency and quantity, on a global level. Methods For this systematic review and meta-analysis, we did a comprehensive systematic literature search for studies reporting the prevalence of smoking during pregnancy in the general population, published between Jan 1, 1985 and Feb 1, 2016, using several electronic bibliographic databases (CINAHL, Embase, ERIC, Medline, Medline in process, PsychINFO, Scopus, and Web of Science), without language or geographical restrictions. We included original research studies published in a peer-reviewed journal and assessed study quality using a tool specifically developed for use in systematic reviews addressing questions of prevalence. Studies were excluded if they did not include lifetime non-smokers in their sample or estimate, used a sample not generalisable to the general population of the respective country, or did not provide primary data. To estimate the prevalence by country, we did c"
+    },
+    {
+     "tool": "search_and_replace",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/test_copy.docx",
+      "find_text": "with Europe reporting a prevalence of 8.1% . In the USA",
+      "replace_text": "with Europe reporting a prevalence of 8.1% 46. In the USA"
+     },
+     "error": false,
+     "output": "No occurrences of 'with Europe reporting a prevalence of 8.1% . In the USA' found."
+    },
+    {
+     "tool": "search_and_replace",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/test_copy.docx",
+      "find_text": "with Europe reporting a prevalence of 8.1% ",
+      "replace_text": "with Europe reporting a prevalence of 8.1% 46"
+     },
+     "error": false,
+     "output": "Replaced 1 occurrence(s) of 'with Europe reporting a prevalence of 8.1% ' with 'with Europe reporting a prevalence of 8.1% 46'."
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/test_copy.docx",
+      "paragraph_index": 7
+     },
+     "error": false,
+     "output": "{\n  \"index\": 7,\n  \"text\": \"Smoking tobacco in pregnancy is a prevalent, modifiable risk factor for infant mortality and morbidity 1, 2. The global prevalence of smoking during pregnancy was estimated at 1.8%, with Europe reporting a prevalence of 8.1% 46. In the USA, 5.4% of women who gave birth in 2021 reported smoking while being pregnant 3. In 2022, 8.3% of women giving birth in Australia admitted to smoking during the first 20 weeks of pregnancy, with 71% of them continuing to smoke throughout their pregnancy 4. Smoking during pregnancy is associated with an increased risk of several adverse maternal and neonatal outcomes, such as placenta previa, placental abruption, premature rupture of membranes, stillbirth, preterm birth, and small for gestational age 5\\u20139. However, smoking cessation can help reduce these adverse effects 10\\u201312.\",\n  \"style\": \"Normal\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 144
+     },
+     "error": false,
+     "output": "{\n  \"index\": 144,\n  \"text\": \"69.\\tPesola F, Smith KM, Phillips-Waller A, Przulj D, Griffiths C, Walton R. Safety of e-cigarettes and nicotine patches as stop-smoking aids in pregnancy: Secondary analysis of the Pregnancy Trial of E-cigarettes and Patches (PREP) randomized controlled trial. Addiction. 2024;119:875-84. doi:10.1111/add.16422\",\n  \"style\": \"EndNote Bibliography\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 145
+     },
+     "error": false,
+     "output": "{\n  \"index\": 145,\n  \"text\": \"70.\\tTran DT, Cohen JM, Donald S, Cesta CE, Furu K, Parkin L. Risk of Major Congenital Malformations Following Prenatal Exposure to Smoking Cessation Medicines. JAMA Intern Med. 2025;185:656-67. doi:10.1001/jamainternmed.2025.0290\",\n  \"style\": \"EndNote Bibliography\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 146
+     },
+     "error": false,
+     "output": "{\n  \"index\": 146,\n  \"text\": \"71.\\tColeman T, Orton S. Using Pharmacologic Smoking Cessation Treatments in Pregnancy. JAMA Intern Med. 2025;185:667-8. doi:10.1001/jamainternmed.2025.0278\",\n  \"style\": \"EndNote Bibliography\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 147
+     },
+     "error": false,
+     "output": "{\n  \"index\": 147,\n  \"text\": \"72.\\tDavid J-C, Fonte D, Sutter-Dallay A-L, Auriacombe M, Serre F, Rascle N. The stigma of smoking among women: A systematic review. Soc Sci Med. 2024;340:116491. doi:10.1016/j.socscimed.2023.116491\",\n  \"style\": \"EndNote Bibliography\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 148
+     },
+     "error": false,
+     "output": "{\n  \"index\": 148,\n  \"text\": \"73.\\tGriffiths SE, Parsons J, Naughton F, Fulton EA, Tombor I, Brown KE. Are digital interventions for smoking cessation in pregnancy effective? A systematic review and meta-analysis. Health Psychol Rev. 2018;12:333-56. doi:10.1080/17437199.2018.1488602\",\n  \"style\": \"EndNote Bibliography\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 65
+     },
+     "error": false,
+     "output": "{\n  \"index\": 65,\n  \"text\": \"In this cross-sectional survey of 262 pregnant women coming for their regular clinical visits in one center in Switzerland, we found a prevalence of tobacco products at 7.6%, ENDS at 0.8%, NRT at 0.4%, and cannabinoid use at 3.8%.\",\n  \"style\": \"Normal\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 66
+     },
+     "error": false,
+     "output": "{\n  \"index\": 66,\n  \"text\": \"Previously conducted studies observed the prevalence of tobacco use among pregnant women in Switzerland to vary between 7.0% and 21.0% 46\\u201348. This is in line with the current study showing a prevalence of 7.6%. The prevalence of tobacco use observed in our study is, however, lower than that observed in the National perinatal survey conducted in France. In the French perinatal survey, 16.6% of women smoked tobacco in their third trimester of pregnancy in 2016, which then decreased to 12.2% in 2021 49\\u201351. However, the observed difference could stem from the social and cultural differences around smoking in both the countries, particularly with the strong cultural legacy of smoking in France 52. Nevertheless, more studies are necessary to understand how various social, cultural, and economic factors influence the observed disparity in smoking prevalence between France and Switzerland to the fullest extent. Additionally, upon stratifying tobacco use by trimester, we observed that the number of tobacco product users in the second trimester was nearly twice as high as in the third trimester. It is, however, not clear if this difference is due to ceasing tobacco use fearing adverse effects during later stages of pregnancy, due to underreporting, or chance 53, 54. While assessing the prevalence of cannabinoid use, none of the pregnant women reported using cannabinoid products with THC > 1% but reported use of only CBD products. This could be due "
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 69
+     },
+     "error": false,
+     "output": "{\n  \"index\": 69,\n  \"text\": \"It is noteworthy that, despite many pregnant tobacco users willing to quit or reduce tobacco use, only 25% of pregnant tobacco users received smoking cessation counseling in our study. This could be due to the potential underreporting of tobacco use in pregnancy to healthcare providers. Underreporting of tobacco use in pregnancy could arise due to the stigma and stereotypes associated with it 53. The stigma associated with smoking could motivate women to conceal smoking and sometimes encourage them to binge smoke, which could have harmful effects on the mother and fetus 72. The fact that a considerable proportion of pregnant women smoking cigarettes reported their intentions to quit (32%) or reduce (37%) tobacco use in this anonymous survey highlights the potential need for an intervention that effectively maintains patient anonymity to support smoking cessation efforts. A digital intervention, such as a smartphone app for smoking cessation, could be an effective solution, as it is cost-effective, highly flexible, and preserves patient anonymity 73. Further studies should be conducted to fully understand the potential for a personalized digital intervention for smoking cessation in pregnant women. In our anonymized survey, 4.2% of included pregnant women still did not provide any response when questioned on their tobacco, ENDS, NRT, and cannabinoid use. However, these participants had provided data on age and gestational week and were therefore ret"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 71
+     },
+     "error": false,
+     "output": "{\n  \"index\": 71,\n  \"text\": \"In contrast to previous studies, this study assessed the frequency of use of tobacco, ENDS, NRT, and cannabinoid products stratified by pregnancy trimester. Notably, it is among the few studies that also examined cannabinoid use among pregnant women. Nonetheless, the study has several limitations. This is a single-centered study with a small sample size, and key information on predictors of substance use and cessation such as education, employment status, relationship status, the socioeconomic and psychological characteristics of the women included in the study was not collected. Thus, it was not possible to assess if our study cohort was a representative sample of the pregnant population in Switzerland or a high-risk group. Due to the cross-sectional design of the study, it was not possible to collect information on if tobacco users tend to quit tobacco or switch to using ENDS/NRT over time in pregnancy. Another important limitation is that tobacco and cannabinoid use in this survey has been self-reported, which could also be prone to underreporting, thus resulting in an underestimation of the prevalence of such use in our sample. Future studies could incorporate additional laboratory tests to validate the anonymized self-report, based on the cost and feasibility of such tests, to accurately identify the users. In the case of cannabinoid use, legal constraints on THC use in Switzerland could also have resulted in the underreporting of THC use in p"
+    },
+    {
+     "tool": "search_and_replace",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "find_text": "with Europe reporting a prevalence of 8.1% ",
+      "replace_text": "with Europe reporting a prevalence of 8.1% 74"
+     },
+     "error": false,
+     "output": "Replaced 1 occurrence(s) of 'with Europe reporting a prevalence of 8.1% ' with 'with Europe reporting a prevalence of 8.1% 74'."
+    },
+    {
+     "tool": "add_paragraph",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "text": "74.\tLange S, Probst C, Rehm J, Popova S. National, regional, and global prevalence of smoking during pregnancy in the general population: a systematic review and meta-analysis. Lancet Glob Health. 2018;6:e769-76. doi:10.1016/S2214-109X(18)30223-7",
+      "style": "EndNote Bibliography"
+     },
+     "error": false,
+     "output": "Paragraph added to <bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 7
+     },
+     "error": false,
+     "output": "{\n  \"index\": 7,\n  \"text\": \"Smoking tobacco in pregnancy is a prevalent, modifiable risk factor for infant mortality and morbidity 1, 2. The global prevalence of smoking during pregnancy was estimated at 1.8%, with Europe reporting a prevalence of 8.1% 74. In the USA, 5.4% of women who gave birth in 2021 reported smoking while being pregnant 3. In 2022, 8.3% of women giving birth in Australia admitted to smoking during the first 20 weeks of pregnancy, with 71% of them continuing to smoke throughout their pregnancy 4. Smoking during pregnancy is associated with an increased risk of several adverse maternal and neonatal outcomes, such as placenta previa, placental abruption, premature rupture of membranes, stillbirth, preterm birth, and small for gestational age 5\\u20139. However, smoking cessation can help reduce these adverse effects 10\\u201312.\",\n  \"style\": \"Normal\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 149
+     },
+     "error": false,
+     "output": "{\n  \"index\": 149,\n  \"text\": \"74.\\tLange S, Probst C, Rehm J, Popova S. National, regional, and global prevalence of smoking during pregnancy in the general population: a systematic review and meta-analysis. Lancet Glob Health. 2018;6:e769-76. doi:10.1016/S2214-109X(18)30223-7\",\n  \"style\": \"EndNote Bibliography\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_document_info",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "{\n  \"title\": \"Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use during pregnancy: A descriptive cross-sectional survey\",\n  \"author\": \"Author\",\n  \"subject\": \"\",\n  \"keywords\": \"\",\n  \"created\": \"2026-10-20 08:00:00+00:00\",\n  \"modified\": \"2026-11-02 10:30:00+00:00\",\n  \"last_modified_by\": \"M. Keller\",\n  \"revision\": 0,\n  \"page_count\": 1,\n  \"word_count\": 6551,\n  \"paragraph_count\": 150,\n  \"table_count\": 6\n}"
+    },
+    {
+     "tool": "convert_to_pdf",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "output_filename": "<bench>/out/P09/runs/gongrzhe-b/work/_check.pdf"
+     },
+     "error": false,
+     "output": "Document successfully converted to PDF via soffice: <bench>/out/P09/runs/gongrzhe-b/work/_check.pdf"
+    },
+    {
+     "tool": "get_document_xml",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"w14\"><w:body><w:p w14:paraId=\"183404EE\" w14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"Title\"/></w:pPr><w:r><w:t xml:space=\"preserve\">Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use during pregnancy: A descriptive cross-sectional survey</w:t></w:r></w:p><w:p w14:paraId=\"32C23612\" w14:textId=\"77777777\"><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t xml:space=\"preserve\">Abstract</w:t></w:r></w:p><w:p w14:paraId=\"223475CB\" w14:textId=\"77777777\"><w:pPr><w:spacing w:line=\"360\" w:lineRule=\"auto\"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Introduction: </w:t></w:r><w:r><w:t xml:space=\"preserve\">Tobacco smoking is associated with adverse health outcomes for both pregnant women and their offspring. Smoking cessation counseling is an effective method to help women quit smoking. Developing a targeted smoking cessation intervention could benefit those who struggle to quit tobacco and potentially reduce the harm due to any co-occurring tobacco use. </w:t></w:r><w:commentRangeStart w:id=\"2\"/><w:r><w:t xml:space=\"preserve\">Assessing the prevalence of tobacco, e"
+    }
+   ],
+   "usage": {
+    "input_tokens": 23922,
+    "output_tokens": 12049
+   },
+   "seconds": 84.2,
+   "final": "Done. Here's what I changed in `<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx` (saved in place):\n\n## 1. In-text citation added (Introduction, 1st paragraph)\nThe sentence had a telltale gap — it read `…prevalence of 8.1% .` (a space where a citation had been deleted). I inserted a citation marker there so it now reads:\n\n> \"The global prevalence of smoking during pregnancy was estimated at 1.8%, with Europe reporting a prevalence of 8.1% **74**. In the USA, 5.4%…\"\n\nThe marker sits before the full stop, matching the style of every other citation in the paragraph (e.g., \"…morbidity 1, 2.\").\n\n## 2. New reference added to the reference list\nAppended as entry **74** in the same \"EndNote Bibliography\" style/format as the others:\n\n> 74. Lange S, Probst C, Rehm J, Popova S. National, regional, and global prevalence of smoking during pregnancy in the general population: a systematic review and meta-analysis. Lancet Glob Health. 2018;6:e769-76. doi:10.1016/S2214-109X(18)30223-7\n\n**Why this source:** it is the systematic review/meta-analysis (PMID 29859815) that is the standard origin of exactly these two figures — the 1.8% global prevalence of smoking during pregnancy and the 8.1% prevalence in the WHO European Region — so the numbers in the sentence are supported by the cited paper rather than a proxy.\n\n## Two things you should know\n- **The number is plain text, not superscript, and not an EndNote field.** The 73 existing references and their in-text numbers are locked EndNote fields (each number is its own field-result run with superscript formatting), and the available editing tools can't modify field codes or apply superscript. So the \"74\" displays as normal text — please select it and apply superscript (Ctrl/⌘ + Shift + \"+\") if my screen-level result differs from your expectation.\n- **Numbering is out of sequence (74 sits in the Introduction).** Renumbering 3→4 … 73→74 was not feasible without destroying the EndNote field struct"
+  },
+  {
+   "task": "S4",
+   "turns": 8,
+   "hit_limit": false,
+   "tool_calls": [
+    {
+     "tool": "get_document_text",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use during pregnancy: A descriptive cross-sectional survey\nAbstract\nIntroduction: Tobacco smoking is associated with adverse health outcomes for both pregnant women and their offspring. Smoking cessation counseling is an effective method to help women quit smoking. Developing a targeted smoking cessation intervention could benefit those who struggle to quit tobacco and potentially reduce the harm due to any co-occurring tobacco use. Assessing the prevalence of tobacco, electronic nicotine delivery systems (ENDS), nicotine replacement therapy (NRT), and cannabinoid use in pregnancy is key to developing such interventions. Thus, we aimed to assess the prevalence and patterns of tobacco, ENDS, NRT, and cannabinoid use in pregnancy. We further aimed to assess the prevalence of smoking cessation counseling intervention.\nMaterials and methods: We conducted a cross-sectional survey among pregnant women attending regular clinical visits at Spitalzentrum Biel between February and May 2023 (n = 262). Frequency and proportion along with 95% confidence intervals (CI) were reported for tobacco, ENDS, NRT, and cannabinoid use in pregnancy.\nResults: Tobacco use was reported among 7.6% (20/262, 95% CI: 4.2%−11.1%) of the included pregnant women. Tobacco cigarettes (conventional or roll-on) were used by 7.3% (19/262, 95% CI: 3.8%−10.7%) of the surveyed pregnant women, with 0.8% (2/262, 95% CI: 0.0%−3.4"
+    },
+    {
+     "tool": "find_text_in_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "text_to_find": "In this survey, 7.6% (20/262"
+     },
+     "error": false,
+     "output": "{\n  \"query\": \"In this survey, 7.6% (20/262\",\n  \"match_case\": true,\n  \"whole_word\": false,\n  \"occurrences\": [\n    {\n      \"paragraph_index\": 31,\n      \"position\": 0,\n      \"context\": \"In this survey, 7.6% (20/262, 95% CI: 4.2%\\u221211.1%) of the included pregnant women reported use of tob...\"\n    }\n  ],\n  \"total_count\": 1\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 31
+     },
+     "error": false,
+     "output": "{\n  \"index\": 31,\n  \"text\": \"In this survey, 7.6% (20/262, 95% CI: 4.2%\\u221211.1%) of the included pregnant women reported use of tobacco products. The tobacco products that were reportedly used in this study included tobacco cigarettes (7.3%, 19/262, 95% CI: 3.8%\\u221210.7%) and tobacco heating systems (0.4%, 1/262, 95% CI: 0.0%\\u22123.8%). Tobacco cigarettes were used along with ENDS in 0.8% (2/262, 95% CI: 0.0\\u20133.4%) and with NRT in 0.4% (1/262, 95% CI: 0.0\\u20133.8%) of the pregnant women in the survey. Cannabinoid use was reported among 3.8% (10/262, 95% CI: 1.1%\\u2212%) of the pregnant women. All the cannabinoid product users reported using products containing CBD only, and no one used products with THC > 1%. No concomitant use of tobacco and cannabinoids was reported among the pregnant women. The results are presented in Table 1.\",\n  \"style\": \"Normal\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_document_outline",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx"
+     },
+     "error": false,
+     "output": "{\n  \"paragraphs\": [\n    {\n      \"index\": 0,\n      \"text\": \"Tobacco, electronic nicotine delivery system, nicotine replacement therapy, and cannabinoid use duri...\",\n      \"style\": \"Title\"\n    },\n    {\n      \"index\": 1,\n      \"text\": \"Abstract\",\n      \"style\": \"Heading 1\"\n    },\n    {\n      \"index\": 2,\n      \"text\": \"Introduction: Tobacco smoking is associated with adverse health outcomes for both pregnant women and...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 3,\n      \"text\": \"Materials and methods: We conducted a cross-sectional survey among pregnant women attending regular ...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 4,\n      \"text\": \"Results: Tobacco use was reported among 7.6% (20/262, 95% CI: 4.2%\\u221211.1%) of the included pregnant w...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 5,\n      \"text\": \"Conclusion: The estimated prevalence of tobacco, ENDS, NRT, and cannabinoid use among the pregnant w...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 6,\n      \"text\": \"Introduction\",\n      \"style\": \"Heading 1\"\n    },\n    {\n      \"index\": 7,\n      \"text\": \"Smoking tobacco in pregnancy is a prevalent, modifiable risk factor for infant mortality and morbidi...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 8,\n      \"text\": \"Smoking cessation counseling has been beneficial in supporting pregnant women to quit tobacco use, b...\",\n      \"style\": \"Normal\"\n    },\n    {\n      \"index\": 9,\n      \"text\": \"Furthermore, cannabinoids have al"
+    },
+    {
+     "tool": "insert_line_or_paragraph_near_text",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "target_paragraph_index": 31,
+      "position": "after",
+      "line_style": "Normal",
+      "line_text": "In this survey, 7.6% (20/262, 95% CI: 4.2%−11.1%) of the included pregnant women reported tobacco use. Tobacco cigarettes (7.3%, 19/262, 95% CI: 3.8%−10.7%) and tobacco heating systems (0.4%, 1/262, 95% CI: 0.0%−3.8%) were the products used; cigarettes were used alongside ENDS by 0.8% (2/262, 95% CI: 0.0–3.4%) and alongside NRT by 0.4% (1/262, 95% CI: 0.0–3.8%) of the women. Cannabinoid use was reported by 3.8% (10/262, 95% CI: 1.1%−7.0%), all of whom used CBD-only products, with no use of products containing THC >1%. No concomitant use of tobacco and cannabinoids was reported. The results are presented in Table 1."
+     },
+     "error": false,
+     "output": "Line/paragraph inserted after paragraph (index 31) with style 'Normal'."
+    },
+    {
+     "tool": "delete_paragraph",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 31
+     },
+     "error": false,
+     "output": "Paragraph at index 31 deleted successfully."
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 31
+     },
+     "error": false,
+     "output": "{\n  \"index\": 31,\n  \"text\": \"In this survey, 7.6% (20/262, 95% CI: 4.2%\\u221211.1%) of the included pregnant women reported tobacco use. Tobacco cigarettes (7.3%, 19/262, 95% CI: 3.8%\\u221210.7%) and tobacco heating systems (0.4%, 1/262, 95% CI: 0.0%\\u22123.8%) were the products used; cigarettes were used alongside ENDS by 0.8% (2/262, 95% CI: 0.0\\u20133.4%) and alongside NRT by 0.4% (1/262, 95% CI: 0.0\\u20133.8%) of the women. Cannabinoid use was reported by 3.8% (10/262, 95% CI: 1.1%\\u22127.0%), all of whom used CBD-only products, with no use of products containing THC >1%. No concomitant use of tobacco and cannabinoids was reported. The results are presented in Table 1.\",\n  \"style\": \"Normal\",\n  \"is_heading\": false\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 30
+     },
+     "error": false,
+     "output": "{\n  \"index\": 30,\n  \"text\": \"Prevalence of use of tobacco, ENDS, NRT, and cannabinoid in pregnancy\",\n  \"style\": \"Heading 2\",\n  \"is_heading\": true\n}"
+    },
+    {
+     "tool": "get_paragraph_text_from_document",
+     "input": {
+      "filename": "<bench>/out/P09/runs/gongrzhe-b/work/manuscript.docx",
+      "paragraph_index": 32
+     },
+     "error": false,
+     "output": "{\n  \"index\": 32,\n  \"text\": \"Table 1 Prevalence of tobacco, electronic nicotine delivery systems, nicotine replacement therapy, and cannabinoid use in pregnancy.\",\n  \"style\": \"Caption\",\n  \"is_heading\": false\n}"
+    }
+   ],
+   "usage": {
+    "input_tokens": 7873,
+    "output_tokens": 3322
+   },
+   "seconds": 21.0,
+   "final": "已按要求直接修改并保存到原文件（同名覆盖）。文档结构未受影响：小节标题、Table 1 标题、脚注均完好，段落样式仍为 Normal。\n\n**改的是 Results →「Prevalence of use of tobacco, ENDS, NRT, and cannabinoid in pregnancy」下的那一段。**\n\n改前（7 句，约 120 词）：\n> In this survey, 7.6% (20/262, 95% CI: 4.2%−11.1%) of the included pregnant women reported use of tobacco products. The tobacco products that were reportedly used in this study included tobacco cigarettes (7.3%, 19/262, 95% CI: 3.8%−10.7%) and tobacco heating systems (0.4%, 1/262, 95% CI: 0.0%−3.8%). Tobacco cigarettes were used along with ENDS in 0.8% (2/262, 95% CI: 0.0–3.4%) and with NRT in 0.4% (1/262, 95% CI: 0.0–3.8%) of the pregnant women in the survey. Cannabinoid use was reported among 3.8% (10/262, 95% CI: 1.1%−%) of the pregnant women. All the cannabinoid product users reported using products containing CBD only, and no one used products with THC > 1%. No concomitant use of tobacco and cannabinoids was reported among the pregnant women. The results are presented in Table 1.\n\n改后（5 句，约 95 词）：\n> In this survey, 7.6% (20/262, 95% CI: 4.2%−11.1%) of the included pregnant women reported tobacco use. Tobacco cigarettes (7.3%, 19/262, 95% CI: 3.8%−10.7%) and tobacco heating systems (0.4%, 1/262, 95% CI: 0.0%−3.8%) were the products used; cigarettes were used alongside ENDS by 0.8% (2/262, 95% CI: 0.0–3.4%) and alongside NRT by 0.4% (1/262, 95% CI: 0.0–3.8%) of the women. Cannabinoid use was reported by 3.8% (10/262, 95% CI: 1.1%−7.0%), all of whom used CBD-only products, with no use of products containing THC >1%. No concomitant use of tobacco and cannabinoids was reported. The results are presented in Table 1.\n\n具体做了什么：\n\n1. **压缩冗语**：「The tobacco products that were reportedly used in this study included…」→ 直接列出产品；「of the pregnant women in the survey」「among the pregnant women」等重复限定语删去（本段已明确是受调查孕妇）。\n2. **合并分句**：把「ENDS 合用」「NRT 合用」两个独立句并用分号合并为一句；把「CBD only」与「无人用 THC >1%」合并为同位语结构。\n3. **保留全部数据**：20/262、19/262、1/262、2/262、1/262、10/262 及各自 95% CI 与 Table 1 交叉引用完全未变，仅调整表述。\n4. **顺手修正一处笔误**：原文「9"
+  }
+ ]
+}

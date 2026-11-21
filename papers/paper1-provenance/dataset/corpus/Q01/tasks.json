@@ -1,0 +1,124 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Materials and methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Materials and methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 6,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 6 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 32.6 应为 32.4，请只改这一处：“Low NS1-BP expression was associated with shorter DSS in the training cohort (median 18.6 versus 32.6 months,”",
+  "target": {
+   "pid": "1A8CAE30",
+   "section": "Results",
+   "para_start": "Univariate analysis revealed significant differences in dise"
+  },
+  "check": {
+   "old": "32.6",
+   "new": "32.4",
+   "sentence": "Low NS1-BP expression was associated with shorter DSS in the training cohort (median 18.6 versus 32.6 months,",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改数字（本稿无可用表格）",
+  "instruction": "重新分析后，「Abstract」中这句话里的 85 应为 82，请只改这一处：“In the training cohort, NS1-BP downregulation was observed in 59% (85/144) of the ESCC specimens.”",
+  "target": {
+   "pid": "202179DC",
+   "section": "Abstract",
+   "para_start": "Results: In the training cohort, NS1-BP downregulation was o"
+  },
+  "check": {
+   "old": "85",
+   "new": "82",
+   "sentence": "In the training cohort, NS1-BP downregulation was observed in 59% (85/144) of the ESCC specimens.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “c-Myc regulates 15% of all human genes, and plays …” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "106A2A91",
+   "section": "Discussion",
+   "para_start": "c-Myc regulates 15% of all human genes, and plays an importa"
+  },
+  "check": {
+   "words_before": 255,
+   "numbers": [
+    "15%",
+    "4",
+    "1",
+    "27",
+    "1",
+    "2",
+    "1",
+    "2",
+    "1",
+    "1",
+    "2",
+    "1",
+    "1",
+    "2",
+    "2",
+    "1",
+    "1",
+    "2",
+    "2",
+    "1",
+    "2",
+    "1",
+    "1",
+    "1"
+   ],
+   "cited_refs": [
+    "10.1016/j.cell.2012.08.026",
+    "10.3390/genes8050142",
+    "10.3892/ijo.2014.2614",
+    "10.3892/ijo.2014.2614",
+    "10.1016/j.drudis.2011.12.009"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“这句结论下得太满了，改成更谨慎的说法。”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "60680927",
+   "comment_id": 0,
+   "anchor": "In the present study, we first demonstrated that NS1-BP expression was lower in ESCC tissues than paired adjacent normal esophageal mucosal tissues."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Background」这句话末尾补充引用：“Based on this structure, most BTB-kelch proteins function as substrate adapters, recruiting proteins destined for ubiquitination to the cull” 文献：Tseng LA, Bixby JL. Interaction of an intracellular pentraxin with a BTB-Kelch protein is associated with ubiquitylation, aggregation and neuronal apoptosis. Mol Cell Neurosci. 2011. doi:10.1016/j.mcn.2011.04.005",
+  "target": {
+   "pid": "3E579397",
+   "section": "Background",
+   "para_start": "The BTB-kelch protein family consists of a group of approxim"
+  },
+  "check": {
+   "doi": "10.1016/j.mcn.2011.04.005",
+   "title": "Interaction of an intracellular pentraxin with a BTB-Kelch protein is associated with ubiquitylation, aggregation and neuronal apoptosis",
+   "sentence": "Based on this structure, most BTB-kelch proteins function as substrate adapters, recruiting proteins destined for ubiquitination to the cullin-RING E3 ubiquitin ligases, and enable the identification of a wide range of substrates for ubiquitination",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

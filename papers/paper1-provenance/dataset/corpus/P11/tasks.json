@@ -1,0 +1,114 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把全文的 “this study” 统一改成 “the present study”。",
+  "target": null,
+  "check": {
+   "old": "this study",
+   "new": "the present study",
+   "rule": "全文替换"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 79.9 应为 79.6，请只改这一处：“A higher proportion of females (79.9%) were at risk of depression compared to males (73.9%) (χ² = 9.77, p = 0.002).”",
+  "target": {
+   "pid": "5954DF12",
+   "section": "Results",
+   "para_start": "The relationship between socio-demographic factors and both "
+  },
+  "check": {
+   "old": "79.9",
+   "new": "79.6",
+   "sentence": "A higher proportion of females (79.9%) were at risk of depression compared to males (73.9%) (χ² = 9.77, p = 0.002).",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 1中「Age (in years)」行、「n (%)」列的 21.99 改为 22.09（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "55798AB7",
+   "table": "Table 1",
+   "row": "Age (in years)",
+   "col": "n (%)",
+   "cell_text": "21.99 ± 1.61"
+  },
+  "check": {
+   "old": "21.99",
+   "new": "22.09",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “The prevalence of depression risk in the present s…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "711440C2",
+   "section": "Discussion",
+   "para_start": "The prevalence of depression risk in the present study among"
+  },
+  "check": {
+   "words_before": 176,
+   "numbers": [
+    "5",
+    "5",
+    "9",
+    "9",
+    "42",
+    "42%",
+    "52%",
+    "50.4%",
+    "49.6%",
+    "21"
+   ],
+   "cited_refs": [
+    "10.4103/shb.shb_11_24",
+    "10.1016/j.jad.2020.12.137",
+    "10.1016/j.heliyon.2021.e06401",
+    "10.1016/j.cegh.2024.101677",
+    "10.1016/j.jad.2020.12.137",
+    "10.4103/shb.shb_11_24",
+    "10.1016/j.heliyon.2021.e06401",
+    "10.1016/j.cegh.2024.101677",
+    "10.1007/s11469-020-00242-y",
+    "10.1002/hsr2.559"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“Please compare this with previous studies here.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "649DC6D1",
+   "comment_id": 0,
+   "anchor": "The aim of our study was to assess the relationship between depression and personal hygiene practices among university students along with the validation of our newly developed personal hygiene questionnaire in order to make this self-rated questionnaire."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“As a common yet often under-recognized condition, depression affects millions worldwide, with a notable prevalence among university students” 文献：Islam MA, Barna SD, Raihan H et al. Depression and anxiety among university students during the COVID-19 pandemic in Bangladesh: A web-based cross-sectional survey. PLoS One. 2020. doi:10.1371/journal.pone.0238162",
+  "target": {
+   "pid": "7C7723EB",
+   "section": "Introduction",
+   "para_start": "Depression is a common mental health disease that has a subs"
+  },
+  "check": {
+   "doi": "10.1371/journal.pone.0238162",
+   "title": "Depression and anxiety among university students during the COVID-19 pandemic in Bangladesh: A web-based cross-sectional survey",
+   "sentence": "As a common yet often under-recognized condition, depression affects millions worldwide, with a notable prevalence among university students",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

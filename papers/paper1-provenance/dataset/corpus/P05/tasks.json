@@ -1,0 +1,108 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 16,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 16 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Result」中这句话里的 52.1 应为 51.9，请只改这一处：“More than half (52.1%) of the participants were reported no history of alcohol consumption, while a greater (76.5%) proportion did not have a history of cigaret”",
+  "target": {
+   "pid": "2FC65AD5",
+   "section": "Result",
+   "para_start": "More than half (52.1%) of the participants were reported no "
+  },
+  "check": {
+   "old": "52.1",
+   "new": "51.9",
+   "sentence": "More than half (52.1%) of the participants were reported no history of alcohol consumption, while a greater (76.5%) proportion did not have a history of cigarette smoking.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 1中「Age (year)」行、「Frequency」列的 129 改为 132（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "2B88E7DB",
+   "table": "Table 1",
+   "row": "Age (year)",
+   "col": "Frequency",
+   "cell_text": "129"
+  },
+  "check": {
+   "old": "129",
+   "new": "132",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “Globally, TB is a significant public health issue,…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "1541B675",
+   "section": "Discussion",
+   "para_start": "Globally, TB is a significant public health issue, with one "
+  },
+  "check": {
+   "words_before": 143,
+   "numbers": [
+    "86.9%",
+    "88%",
+    "88%",
+    "2024",
+    "85.5%",
+    "87.1%",
+    "4"
+   ],
+   "cited_refs": [
+    "Prevalence of tuberculosis in Sub-Saharan Africa",
+    "10.1016/j.ijtb.2020.02.005",
+    "Global tuberculosis report 2024",
+    "10.1371/journal.pgph.0000161",
+    "10.1155/2016/1354356"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“This overstates what the data show. Please soften.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "1FBBF1F1",
+   "comment_id": 0,
+   "anchor": "This finding contrasts with previous studies, which demonstrated unmarried individuals had a lower social support system "
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“It is a disease that disproportionately affects people living in resource-limited settings” 文献：Litvinjenko S, Magwood O, Wu S et al. Burden of tuberculosis among vulnerable populations worldwide: an overview of systematic reviews. Lancet Infect Dis. 2023. doi:10.1016/S1473-3099(23)00372-9",
+  "target": {
+   "pid": "41DC6873",
+   "section": "Introduction",
+   "para_start": "Tuberculosis (TB) has continued to be one of the major publi"
+  },
+  "check": {
+   "doi": "10.1016/S1473-3099(23)00372-9",
+   "title": "Burden of tuberculosis among vulnerable populations worldwide: an overview of systematic reviews",
+   "sentence": "It is a disease that disproportionately affects people living in resource-limited settings",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

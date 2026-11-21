@@ -95,7 +95,7 @@ export const BLOG_POSTS: readonly BlogPostMeta[] = [
       { val: '99.6%', lbl_zh: '输出 Token 节省率', lbl_en: 'Output Token Savings' },
     ],
     repo_url: 'https://github.com/heurion-org/heurion',
-    paper_url: 'https://github.com/heurion-org/heurion/blob/main/paper/main.pdf',
+    paper_url: 'https://github.com/heurion-org/heurion/blob/main/papers/paper2-deep-review/heurion2_integrated_main.pdf',
     toc: [
       { id: 'sec-paradigm-mismatch', zh: '01. 范式错配：为什么不能让 Agent 写脚本直接改论文文件？', en: '01. The Paradigm Mismatch: Why Script-Based Manuscript Mutation Fails' },
       { id: 'sec-dual-surface', zh: '02. 双表面对偶投影：同一棵 ProseMirror + Yjs 状态树，两套正交视图', en: '02. Dual-Surface Projection: One ProseMirror + Yjs Tree, Two Orthogonal Views' },
@@ -726,7 +726,7 @@ export function revertByNodes(
       { val: '3-Tier', lbl_zh: '自主/确认卡/人类主权分层', lbl_en: 'Governance Boundary' },
     ],
     repo_url: 'https://github.com/heurion-org/heurion',
-    paper_url: 'https://github.com/heurion-org/heurion/blob/main/paper/main.pdf',
+    paper_url: 'https://github.com/heurion-org/heurion/blob/main/papers/paper2-deep-review/heurion2_integrated_main.pdf',
     toc: [
       { id: 'sec-why-rebuild', zh: '01. 为什么传统软件无法支撑真正的人机协作？', en: '01. Why Legacy Software Fails at Human-AI Collaboration' },
       { id: 'sec-parity-axiom', zh: '02. 第一设计公理：AI 的权限 = 用户的权限，人类的能力 = AI 的能力', en: '02. The First Axiom: Capability & Permission Parity' },
@@ -3013,7 +3013,7 @@ export const DRAFT_BLOG_POSTS: ReadonlyArray<Omit<BlogPostMeta, 'slug'> & { slug
       { val: '+161%', lbl_zh: '跨模态对齐增益', lbl_en: 'Cross-Modal Alignment' },
     ],
     repo_url: 'https://github.com/heurion-org/heurion',
-    paper_url: 'https://github.com/heurion-org/heurion/blob/main/paper/main.pdf',
+    paper_url: 'https://github.com/heurion-org/heurion/blob/main/papers/paper2-deep-review/heurion2_integrated_main.pdf',
     toc: [
       { id: 'sec-static-ceiling', zh: '01. 静态 Agent 的天花板：跨五模态科研中的重复犯错与专科假警报', en: '01. The Static Agent Ceiling Across Five Clinical Modalities' },
       { id: 'sec-four-stage-review', zh: '02. 四阶段临床深度审稿与四级正交证据对齐（Table / Fulltext / Abstract）', en: '02. Four-Stage Clinical Deep Review & Orthogonal Evidence Tiers' },
@@ -3417,7 +3417,7 @@ export const DRAFT_BLOG_POSTS: ReadonlyArray<Omit<BlogPostMeta, 'slug'> & { slug
       { val: 'Live', lbl_zh: '文内可交互双表面沙盒', lbl_en: 'Embedded CRDT Studio' },
     ],
     repo_url: 'https://github.com/heurion-org/heurion',
-    paper_url: 'https://github.com/heurion-org/heurion/blob/main/paper/main.pdf',
+    paper_url: 'https://github.com/heurion-org/heurion/blob/main/papers/paper2-deep-review/heurion2_integrated_main.pdf',
     toc: [
       { id: 'sec-why-standalone', zh: '01. 为什么世界需要一个独立的 AI-Native Document 引擎？', en: '01. Why the World Needs a Standalone AI-Native Document Engine' },
       { id: 'sec-four-pillars', zh: '02. 独立引擎的四大核心抽象：从 {#id} 寻址到多靶向编译器', en: '02. The Four Core Abstractions of the AI-Native Document Substrate' },

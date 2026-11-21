@@ -423,7 +423,7 @@ export function publishCrdtDocumentToBlog(input: {
       { val: compiledZh.phi_clean ? '100%' : 'WARN', lbl_zh: '写前守卫通过', lbl_en: 'Pre-Write Guard' },
     ],
     repo_url: 'https://github.com/heurion-org/heurion',
-    paper_url: 'https://github.com/heurion-org/heurion/blob/main/paper/main.pdf',
+    paper_url: 'https://github.com/heurion-org/heurion/blob/main/papers/paper2-deep-review/heurion2_integrated_main.pdf',
     toc: compiledZh.toc.length
       ? compiledZh.toc
       : [{ id: 'sec-overview', zh: '01. 核心内容', en: '01. Overview' }],

@@ -220,7 +220,7 @@ interface BlogGeoExtra {
 const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
   'dual-surface-crdt-clinical-ai': {
     repoUrl: 'https://github.com/heurion-org/heurion',
-    paperUrl: 'https://github.com/heurion-org/heurion/blob/main/paper/main.pdf',
+    paperUrl: 'https://github.com/heurion-org/heurion/blob/main/papers/paper2-deep-review/heurion2_integrated_main.pdf',
     links_zh: [
       {
         label: 'Table 1 原生 Word (.docx) 生成器',
@@ -278,7 +278,7 @@ const BLOG_GEO_EXTRAS: Record<string, BlogGeoExtra> = {
   },
   'human-agent-capability-parity-ai-native-software': {
     repoUrl: 'https://github.com/heurion-org/heurion',
-    paperUrl: 'https://github.com/heurion-org/heurion/blob/main/paper/main.pdf',
+    paperUrl: 'https://github.com/heurion-org/heurion/blob/main/papers/paper2-deep-review/heurion2_integrated_main.pdf',
     links_zh: [
       {
         label: '临床病历与文稿 PHI 隐私扫描与脱敏器',

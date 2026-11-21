@@ -1,0 +1,101 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Materials and Methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Materials and Methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 10,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 10 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 54.2 应为 54.0，请只改这一处：“In our study, the 1-year PFS rate was 54.2%, exceeding the prespecified target.”",
+  "target": {
+   "pid": "69722920",
+   "section": "Results",
+   "para_start": "At the cutoff date (2025 September 30), the median follow-up"
+  },
+  "check": {
+   "old": "54.2",
+   "new": "54.0",
+   "sentence": "In our study, the 1-year PFS rate was 54.2%, exceeding the prespecified target.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改数字（本稿无可用表格）",
+  "instruction": "重新分析后，「Abstract」中这句话里的 83 应为 80，请只改这一处：“A total of 83 patients were enrolled from 2022 May 9 to 2023 December 31.”",
+  "target": {
+   "pid": "73FD940D",
+   "section": "Abstract",
+   "para_start": "Background: Immune checkpoint inhibitor (ICI)-based chemoimm"
+  },
+  "check": {
+   "old": "83",
+   "new": "80",
+   "sentence": "A total of 83 patients were enrolled from 2022 May 9 to 2023 December 31.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “This prospective, multicenter phase II study evalu…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "5C521648",
+   "section": "Discussion",
+   "para_start": "This prospective, multicenter phase II study evaluated the e"
+  },
+  "check": {
+   "words_before": 90,
+   "numbers": [
+    "1",
+    "54.2%",
+    "16.1"
+   ],
+   "cited_refs": [
+    "10.1016/j.trecan.2021.10.003",
+    "10.1016/j.tranon.2022.101366",
+    "10.1038/s41577-021-00568-1"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“这句结论下得太满了，改成更谨慎的说法。”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "5191DEA0",
+   "comment_id": 0,
+   "anchor": "Thus, IHBRT demonstrates broad applicability irrespective of PD-L1 expression and histologic subtype."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Background」这句话末尾补充引用：“Non-small cell lung cancer (NSCLC) comprises heterogeneous pathological subtypes and molecular profiles” 文献：Nicholson AG, Scagliotti G, Tsao MS et al. 2021 WHO classification of lung cancer: A globally applicable and molecular biomarker-relevant classification. J Thorac Oncol. 2022. doi:10.1016/j.jtho.2022.07.006",
+  "target": {
+   "pid": "7B1F1599",
+   "section": "Background",
+   "para_start": "Non-small cell lung cancer (NSCLC) comprises heterogeneous p"
+  },
+  "check": {
+   "doi": "10.1016/j.jtho.2022.07.006",
+   "title": "2021 WHO classification of lung cancer: A globally applicable and molecular biomarker-relevant classification",
+   "sentence": "Non-small cell lung cancer (NSCLC) comprises heterogeneous pathological subtypes and molecular profiles",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

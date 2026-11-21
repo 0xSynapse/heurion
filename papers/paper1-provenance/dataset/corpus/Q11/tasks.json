@@ -1,0 +1,103 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Material and Methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Material and Methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 7,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 7 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 38.2 应为 37.9，请只改这一处：“38.2% (13/34) of patients in the concurrent arm and 29.4% (10/34) of patients in the sequential arm received PE induction chemotherapy.”",
+  "target": {
+   "pid": "65B52850",
+   "section": "Results",
+   "para_start": "All eligible patients completed 3-4 cycles of induction chem"
+  },
+  "check": {
+   "old": "38.2",
+   "new": "37.9",
+   "sentence": "38.2% (13/34) of patients in the concurrent arm and 29.4% (10/34) of patients in the sequential arm received PE induction chemotherapy.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改数字（本稿无可用表格）",
+  "instruction": "重新分析后，「Abstract」中这句话里的 63.3 应为 63.0，请只改这一处：“The median follow-up time was 63.3 months (95% confidence interval [CI], 50.8-75.8).”",
+  "target": {
+   "pid": "58C1335E",
+   "section": "Abstract",
+   "para_start": "The current study was to compare the efficacy and safety bet"
+  },
+  "check": {
+   "old": "63.3",
+   "new": "63.0",
+   "sentence": "The median follow-up time was 63.3 months (95% confidence interval [CI], 50.8-75.8).",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “As regard to optimal timing of TRT related to indu…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "2D3CC90B",
+   "section": "Discussion",
+   "para_start": "As regard to optimal timing of TRT related to induction chem"
+  },
+  "check": {
+   "words_before": 222,
+   "numbers": [
+    "3",
+    "4",
+    "4",
+    "26.0",
+    "11.2",
+    "35.0",
+    "26.8"
+   ],
+   "cited_refs": [
+    "10.1093/annonc/mdt140"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“这句结论下得太满了，改成更谨慎的说法。”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "79AA5C9B",
+   "comment_id": 0,
+   "anchor": "The concurrent radiotherapy in combination with chemotherapy, which has been demonstrated to bring survival benefit, was regarded as the standard treatment for LS-SCLC "
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“In a Korean study of LS-SCLC, TRT starting in the third cycle of chemotherapy was not inferior to early TRT and had a more favorable profile” 文献：Sun JM, Ahn YC, Choi EK et al. et al. Phase III trial of concurrent thoracic radiotherapy with either first- or third-cycle chemotherapy for limited-disease small-cell lung cancer. 2013. doi:10.1093/annonc/mdt140",
+  "target": {
+   "pid": "22D5C809",
+   "section": "Introduction",
+   "para_start": "The concurrent thoracic radiotherapy (TRT) combined with che"
+  },
+  "check": {
+   "doi": "10.1093/annonc/mdt140",
+   "title": "et al",
+   "sentence": "In a Korean study of LS-SCLC, TRT starting in the third cycle of chemotherapy was not inferior to early TRT and had a more favorable profile with regard to neutropenic fever",
+   "ref_cited_elsewhere": true,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

@@ -16,7 +16,7 @@ export interface ReviewPaper {
   language: 'en' | 'zh'
   license: string
   url: string
-  /** 已被规则或提示词针对过（如 paper/benchmarks 的 7 篇）：只能做开发集，不能报告效果 */
+  /** 已被规则或提示词针对过（如 papers/paper2-deep-review/benchmarks 的 7 篇）：只能做开发集，不能报告效果 */
   contaminated?: boolean
 }
 
