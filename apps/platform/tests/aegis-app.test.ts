@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1304,7 +1305,7 @@ describe('aegis-os v0.9：声明式 MCP Bundle 与标准 RFC 8628 设备码', ()
     const dev = await app.request('http://127.0.0.1:8799/api/aegis/auth/device', form({ client_id: 'aegis-os', scope: 'writing:rw literature:r' }))
     expect(dev.status).toBe(201)
     const d = (await dev.json()) as any
-    expect(d.verification_uri).toMatch(/^http:\/\/127\.0\.0\.1:8799\/\?aegis_device=HEUR-/)
+    expect(d.verification_uri).toMatch(/^http:\/\/127\.0\.0\.1:8799\/app\?aegis_device=HEUR-/)
     expect(d.verification_uri_complete).toBe(d.verification_uri)
     const poll = () => app.request('http://127.0.0.1:8799/api/aegis/auth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: d.device_code, client_id: 'aegis-os' }))
     const pending = (await (await poll()).json()) as any
@@ -1331,5 +1332,120 @@ describe('aegis-os v0.9：声明式 MCP Bundle 与标准 RFC 8628 设备码', ()
     expect(((await init.json()) as any).result.serverInfo.name).toBe('heurion')
     const tools = ((await (await mcp('tools/list', {})).json()) as any).result.tools.map((t: any) => t.name)
     expect(tools).toContain('doc_edit')
+  })
+})
+
+describe('MCP 的 OAuth 2.1（授权码 + PKCE、动态注册、资源元数据）', () => {
+  const O = 'http://127.0.0.1:8799'
+  const verifier = 'v'.repeat(43) + 'erifier-for-pkce-test'
+  const challenge = createHash('sha256').update(verifier).digest('base64url')
+  const form = (o: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(o).toString() })
+  const setup = async () => {
+    const env = createTestEnv()
+    const reg = await env.app.request(`${O}/oauth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Claude Code', redirect_uris: ['http://127.0.0.1:33418/callback'], token_endpoint_auth_method: 'none' }) })
+    expect(reg.status).toBe(201)
+    const client = (await reg.json()) as { client_id: string }
+    const authorize = async (extra: Record<string, string> = {}) => env.app.request(`${O}/oauth/authorize?${new URLSearchParams({
+      response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1:33418/callback', code_challenge: challenge, code_challenge_method: 'S256',
+      state: 'st-1', scope: 'writing:rw literature:r', resource: `${O}/api/mcp`, ...extra,
+    })}`)
+    const consent = async (approve: boolean, modules?: unknown) => {
+      const loc = (await authorize()).headers.get('location')!
+      const id = new URL(loc).searchParams.get('mcp_authorize')!
+      const view = (await (await env.app.request(`${O}/api/oauth/requests/${id}`, { headers: { authorization: `Bearer ${env.reg.token}` } })).json()) as any
+      const d = await env.app.request(`${O}/api/oauth/requests/${id}/decision`, { method: 'POST', headers: { authorization: `Bearer ${env.reg.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ approve, modules }) })
+      return { view, status: d.status, redirect: new URL(((await d.json()) as any).redirect ?? 'http://x/') }
+    }
+    const exchange = (code: string, v = verifier) => env.app.request(`${O}/oauth/token`, form({ grant_type: 'authorization_code', code, code_verifier: v, client_id: client.client_id, redirect_uri: 'http://127.0.0.1:33418/callback', resource: `${O}/api/mcp` }))
+    const mcp = (token: string, path = '/api/mcp/writing') => env.app.request(`${O}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) })
+    return { ...env, client, authorize, consent, exchange, mcp }
+  }
+
+  it('发现：401 带 WWW-Authenticate 指向资源元数据；资源元数据指向本站授权服务器；授权服务器元数据齐全', async () => {
+    const { app } = createTestEnv()
+    const res = await app.request(`${O}/api/mcp/writing`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    expect(res.status).toBe(401)
+    expect(res.headers.get('www-authenticate')).toBe(`Bearer resource_metadata="${O}/.well-known/oauth-protected-resource/api/mcp/writing", scope="writing:rw"`)
+    const all = await app.request(`${O}/api/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    expect(all.headers.get('www-authenticate')).toContain('scope="writing:rw literature:rw knowledge:rw memory:rw"')
+    const prm = (await (await app.request(`${O}/.well-known/oauth-protected-resource/api/mcp/writing`)).json()) as any
+    expect(prm).toMatchObject({ resource: `${O}/api/mcp/writing`, authorization_servers: [O], bearer_methods_supported: ['header'] })
+    expect(prm.scopes_supported).toContain('writing:rw')
+    const asm = (await (await app.request(`${O}/.well-known/oauth-authorization-server`)).json()) as any
+    expect(asm).toMatchObject({
+      issuer: O, authorization_endpoint: `${O}/oauth/authorize`, token_endpoint: `${O}/oauth/token`, registration_endpoint: `${O}/oauth/register`,
+      code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'], grant_types_supported: ['authorization_code', 'refresh_token'],
+    })
+    const pre = await app.request(`${O}/oauth/token`, { method: 'OPTIONS', headers: { origin: 'http://localhost:6274', 'access-control-request-method': 'POST' } })
+    expect(pre.headers.get('access-control-allow-origin')).toBe('*')
+    const off = createTestEnv({ aegisEnabled: false }).app
+    expect((await off.request(`${O}/.well-known/oauth-authorization-server`)).status).toBe(404)
+    expect((await off.request(`${O}/oauth/authorize`)).status).toBe(404)
+  })
+
+  it('完整流程：注册 → 授权 → 用户按模块确认 → 授权码 + PKCE 换令牌 → 只能用批准的模块；授权码一次性', async () => {
+    const t = await setup()
+    const loc = (await t.authorize()).headers.get('location')!
+    expect(loc).toMatch(new RegExp(`^${O}/app\\?mcp_authorize=oar_`))
+    const { view, status, redirect } = await t.consent(true, { writing: 'rw' })
+    expect(view).toMatchObject({ client_name: 'Claude Code', redirect_host: '127.0.0.1:33418', requested: { writing: 'rw', literature: 'r' } })
+    expect(status).toBe(200)
+    expect(`${redirect.origin}${redirect.pathname}`).toBe('http://127.0.0.1:33418/callback')
+    expect(redirect.searchParams.get('state')).toBe('st-1')
+    expect(redirect.searchParams.get('iss')).toBe(O)
+    const code = redirect.searchParams.get('code')!
+    expect((await t.exchange(code, 'w'.repeat(50))).status).toBe(400) // 错误的 code_verifier
+    const code2 = (await t.consent(true, { writing: 'rw' })).redirect.searchParams.get('code')!
+    const tokRes = await t.exchange(code2)
+    expect(tokRes.status).toBe(200)
+    expect(tokRes.headers.get('cache-control')).toBe('no-store')
+    const tok = (await tokRes.json()) as any
+    expect(tok).toMatchObject({ token_type: 'Bearer', expires_in: 3600, scope: 'writing:rw' })
+    expect(tok.access_token).toMatch(/^hr_oat\.g_/)
+    expect(tok.refresh_token).toMatch(/^hr_ort\.g_/)
+    expect(((await (await t.exchange(code2)).json()) as any).error).toBe('invalid_grant') // 授权码只能用一次
+    expect((await t.mcp(tok.access_token)).status).toBe(200)
+    const lit = await t.mcp(tok.access_token, '/api/mcp/literature')
+    expect(lit.status).toBe(403)
+    expect(lit.headers.get('www-authenticate')).toContain('error="insufficient_scope", scope="literature:rw"')
+    const list = (await (await t.app.request('/api/me/mcp-tokens', { headers: { authorization: `Bearer ${t.reg.token}` } })).json()) as any
+    expect(list.grants.some((g: any) => g.kind === 'oauth' && g.name === 'Claude Code')).toBe(true)
+  })
+
+  it('刷新令牌轮换（旧访问令牌、旧刷新令牌立即失效）；访问令牌 1 小时过期；设置页吊销后刷新也失败；用户拒绝则回 access_denied', async () => {
+    const t = await setup()
+    const tok = (await (await t.exchange((await t.consent(true)).redirect.searchParams.get('code')!)).json()) as any
+    const refresh = (rt: string) => t.app.request(`${O}/oauth/token`, form({ grant_type: 'refresh_token', refresh_token: rt, client_id: t.client.client_id }))
+    const r1 = (await (await refresh(tok.refresh_token)).json()) as any
+    expect(r1.access_token, JSON.stringify(r1)).toMatch(/^hr_oat\./)
+    expect(r1.access_token).not.toBe(tok.access_token)
+    expect((await t.mcp(tok.access_token)).status).toBe(401)
+    expect((await t.mcp(r1.access_token)).status).toBe(200)
+    expect(((await (await refresh(tok.refresh_token)).json()) as any).error).toBe('invalid_grant')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + 61 * 60_000)
+      expect((await t.mcp(r1.access_token)).status).toBe(401)
+    } finally { vi.useRealTimers() }
+    const grantId = r1.access_token.split('.')[1]
+    expect((await t.app.request(`/api/me/mcp-tokens/${grantId}`, { method: 'DELETE', headers: { authorization: `Bearer ${t.reg.token}` } })).status).toBe(200)
+    expect(((await (await refresh(r1.refresh_token)).json()) as any).error).toBe('invalid_grant')
+    const denied = await t.consent(false)
+    expect(denied.redirect.searchParams.get('error')).toBe('access_denied')
+    expect(denied.redirect.searchParams.get('state')).toBe('st-1')
+  })
+
+  it('拒绝不安全的请求：回调地址不合规的注册、未注册的客户端、回调地址不匹配（不重定向）、缺 PKCE（重定向报错）、别处的 resource', async () => {
+    const t = await setup()
+    const bad = await t.app.request(`${O}/oauth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['http://evil.example/cb'] }) })
+    expect(((await bad.json()) as any).error).toBe('invalid_redirect_uri')
+    expect((await t.authorize({ client_id: 'mcpc_none' })).status).toBe(400)
+    const mismatch = await t.authorize({ redirect_uri: 'https://evil.example/cb' })
+    expect(mismatch.status).toBe(400)
+    expect(mismatch.headers.get('location')).toBeNull()
+    const noPkce = new URL((await t.authorize({ code_challenge_method: 'plain' })).headers.get('location')!)
+    expect(noPkce.searchParams.get('error')).toBe('invalid_request')
+    const otherRes = new URL((await t.authorize({ resource: 'https://other.example/api/mcp' })).headers.get('location')!)
+    expect(otherRes.searchParams.get('error')).toBe('invalid_target')
   })
 })

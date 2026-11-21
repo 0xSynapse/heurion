@@ -224,6 +224,11 @@ export function initUserMenu(me: Me, api: <T = any>(path: string, opts?: Request
     history.replaceState(null, '', '/app')
     void openJoin(linkCode, api, notify)
   }
+  // 外部 MCP 客户端的授权：OAuth 确认页（/app?mcp_authorize=<id>）；aegis-os 设备码链接（/app?aegis_device=<码>）直接打开设置并填好设备码
+  const params = new URLSearchParams(location.search)
+  const oauthReq = params.get('mcp_authorize')
+  if (oauthReq && me.aegis) { history.replaceState(null, '', '/app'); void openMcpConsent(oauthReq, api, notify) }
+  else if (params.get('aegis_device') && me.aegis) openSettings(me, api, notify)
   $('userMenuLeave').hidden = !!me.dev || !me.tenant?.in_org
   $('userMenuPhr').hidden = !!me.dev
   if (!me.dev) void refreshInvites(api, notify)
@@ -508,8 +513,8 @@ interface AegisGrantItem {
   token_prefix: string
   aegis_node_pubkey: string | null
   tool_scope: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
-  /** pat = 个人访问令牌（通用 MCP）；aap = Aegis-OS 设备码 / AAP-1.0 令牌 */
-  kind?: 'pat' | 'aap'
+  /** pat = 个人访问令牌；oauth = MCP 客户端经 OAuth 授权；aap = Aegis-OS 设备码 / AAP-1.0 令牌 */
+  kind?: 'pat' | 'oauth' | 'aap'
   /** 实际生效的模块权限（旧授权由 tool_scope 换算） */
   modules: Record<string, 'r' | 'rw'>
   /** 授权了、但所在机构没有允许给外部智能体的模块 */
@@ -530,6 +535,45 @@ const MODULE_DEFAULT: Record<AegisModuleItem['external'], '' | 'r' | 'rw'> = { o
 function modulesLabel(mods: Record<string, 'r' | 'rw'>, catalog: AegisModuleItem[]): string {
   const parts = catalog.filter(m => mods[m.id]).map(m => `${m.title}${mods[m.id] === 'r' ? '（只读）' : ''}`)
   return parts.length ? parts.join('、') : '无'
+}
+
+/** OAuth 授权确认：某个 MCP 客户端请求访问 Heurion，用户逐个模块选择后批准或拒绝，然后跳回客户端。 */
+async function openMcpConsent(id: string, api: <T = any>(path: string, opts?: RequestInit) => Promise<T>, notify: (msg: string, error?: boolean) => void): Promise<void> {
+  let req: { client_name: string; redirect_host: string; requested: Record<string, 'r' | 'rw'>; modules: AegisModuleItem[] }
+  try { req = await api(`/api/oauth/requests/${encodeURIComponent(id)}`) } catch (err) { notify((err as Error).message, true); return }
+  const dlg = openDialog('授权 MCP 客户端', `
+    <p><b>${esc(req.client_name)}</b> 请求以你的身份访问 Heurion。批准后会跳回 <code>${esc(req.redirect_host)}</code>。</p>
+    <p class="muted small">它只能使用下面勾选的模块，权限不超过你本人；写进稿件同样经过平台的写作保护，高风险操作仍要你在「待确认操作」里批准。授权可随时在「设置 → MCP 访问令牌」里吊销。</p>
+    <form id="mcpConsentForm" class="form">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">
+        ${req.modules.map(m => `
+          <label class="small" title="${esc(m.summary)}" style="display:flex;align-items:center;gap:6px">
+            <span style="flex:1">${esc(m.title)}</span>
+            ${m.org_allowed === false ? '<span class="muted small" title="机构管理员在机构设置里开启后才能授权">机构未开启</span>' : `<select name="module_${esc(m.id)}" aria-label="${esc(m.title)} 权限">
+              <option value=""${!req.requested[m.id] ? ' selected' : ''}>不开放</option>
+              <option value="r"${req.requested[m.id] === 'r' ? ' selected' : ''}>只读</option>
+              <option value="rw"${req.requested[m.id] === 'rw' ? ' selected' : ''}>读写</option>
+            </select>`}
+          </label>`).join('')}
+      </div>
+      <div class="row end" style="gap:8px;margin-top:12px"><button type="button" id="mcpConsentDeny">拒绝</button><button class="primary" type="submit">批准</button></div>
+    </form>`)
+  const form = dlg.querySelector<HTMLFormElement>('#mcpConsentForm')!
+  const decide = async (approve: boolean) => {
+    const f = new FormData(form)
+    const modules = Object.fromEntries(req.modules.map(m => [m.id, String(f.get(`module_${m.id}`) ?? '')]).filter(([, v]) => v))
+    if (approve && !Object.keys(modules).length) { notify('至少选一个模块', true); return }
+    form.querySelectorAll('button').forEach(b => { b.disabled = true })
+    try {
+      const r = await api<{ redirect: string }>(`/api/oauth/requests/${encodeURIComponent(id)}/decision`, { method: 'POST', body: JSON.stringify({ approve, modules }) })
+      location.href = r.redirect
+    } catch (err) {
+      notify((err as Error).message, true)
+      form.querySelectorAll('button').forEach(b => { b.disabled = false })
+    }
+  }
+  form.onsubmit = e => { e.preventDefault(); void decide(true) }
+  dlg.querySelector<HTMLButtonElement>('#mcpConsentDeny')!.onclick = () => void decide(false)
 }
 
 async function mountAegisGrants(
@@ -574,7 +618,7 @@ async function mountAegisGrants(
           </div>
         </div>
       ` : ''}
-      <details style="margin-bottom:10px"><summary class="muted small">经 Aegis-OS 接入（设备码，AAP-1.0 兼容方式，计划停用）</summary>
+      <details style="margin-bottom:10px"${urlDeviceCode ? ' open' : ''}><summary class="muted small">经 Aegis-OS 接入（设备码，AAP-1.0 兼容方式，计划停用）</summary>
         <form id="aegisDeviceApproveForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">
           <input type="text" name="user_code" placeholder="输入终端显示的 8 位设备码（如 HEUR-8492-K7QW）" value="${esc(urlDeviceCode)}" maxlength="16" required style="flex:1 1 220px;font-family:var(--mono);text-transform:uppercase">
           <button class="primary" type="submit">确认设备码绑定</button>
@@ -588,7 +632,7 @@ async function mountAegisGrants(
               <tr data-gid="${esc(g.id)}" class="${g.revoked_at ? 'disabled' : ''}">
                 <td>
                   <b>${esc(g.name)}</b>
-                  <div class="muted small" style="font-family:var(--mono)">${esc(g.token_prefix)}…${g.kind === 'aap' ? ' · Aegis-OS（AAP）' : ''}${g.aegis_node_pubkey ? ' · 已绑节点公钥' : ''}</div>
+                  <div class="muted small" style="font-family:var(--mono)">${esc(g.token_prefix)}…${g.kind === 'aap' ? ' · Aegis-OS（AAP）' : g.kind === 'oauth' ? ' · OAuth 授权（自动续期）' : ''}${g.aegis_node_pubkey ? ' · 已绑节点公钥' : ''}</div>
                 </td>
                 <td class="small">${esc(modulesLabel(g.modules ?? {}, catalog))}${g.blocked_by_org?.length ? `<div class="muted small">机构未开启：${esc(catalog.filter(m => g.blocked_by_org!.includes(m.id)).map(m => m.title).join('、'))}（暂不可用）</div>` : ''}<div class="muted small">${g.write_mode === 'tracked' ? '留痕修订' : '直接写入'}</div></td>
                 <td class="muted small">${g.last_agent_id ? `<code>${esc(g.last_agent_id)}</code><br>${when(g.last_used_at)}` : '尚未使用'}</td>

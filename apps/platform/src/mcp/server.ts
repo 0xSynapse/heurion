@@ -2591,7 +2591,7 @@ export function buildAegisMcpServer(
   }
   const rawToken = auth.slice('Bearer '.length).trim()
   // 智能体 id：请求头可选（AAP 的 X-Aegis-Agent-Id，或通用的 X-Agent-Id）；没有时 AAP 令牌记为 aegis-agent，个人令牌记为 mcp-client
-  const agentId = (reqCtx.agentId?.trim() || (rawToken.startsWith('hr_pat.') ? 'mcp-client' : 'aegis-agent')).replace(/[^a-zA-Z0-9._-]/g, '_')
+  const agentId = (reqCtx.agentId?.trim() || (/^hr_(pat|oat)\./.test(rawToken) ? 'mcp-client' : 'aegis-agent')).replace(/[^a-zA-Z0-9._-]/g, '_')
   const authSvc = new AegisAuthService(store, 'heurion')
   const verifiedRes = authSvc.verifyGrantToken(rawToken, agentId)
   if (!verifiedRes.ok) {

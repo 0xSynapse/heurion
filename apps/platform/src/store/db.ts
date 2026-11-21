@@ -1153,6 +1153,47 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_agent_device_codes_user_code ON agent_device_codes(user_code, status);
     `)
+    // MCP 的 OAuth 2.1（docs/design/MCP_MODULES.md §0.4）：客户端（动态注册）、授权请求、授权码、刷新令牌。
+    // 访问令牌本身仍是 agent_grants 的一行（一次授权一行，刷新时换哈希与过期时间），网关校验路径不变。
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_clients (
+        client_id TEXT PRIMARY KEY,
+        client_name TEXT NOT NULL,
+        redirect_uris TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS oauth_requests (
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        redirect_uri TEXT NOT NULL,
+        state TEXT,
+        code_challenge TEXT NOT NULL,
+        scope TEXT,
+        resource TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+      );
+      CREATE TABLE IF NOT EXISTS oauth_codes (
+        code_hash TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        redirect_uri TEXT NOT NULL,
+        code_challenge TEXT NOT NULL,
+        resource TEXT,
+        user_id TEXT NOT NULL,
+        grant_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+        token_hash TEXT PRIMARY KEY,
+        grant_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_oauth_refresh_grant ON oauth_refresh_tokens(grant_id);
+    `)
     // 模块权限（MCP_MODULES.md §3.3）：授权与设备码各加一列，旧记录为空、按 tool_scope 换算
     for (const table of ['agent_grants', 'agent_device_codes']) {
       const cols = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name)
@@ -3225,6 +3266,47 @@ export class Store {
 
   listAgentGrants(userId: string): AgentGrantRow[] {
     return this.db.prepare('SELECT * FROM agent_grants WHERE user_id = ? ORDER BY created_at DESC').all(userId) as unknown as AgentGrantRow[]
+  }
+
+  // —— MCP 的 OAuth 2.1 ——
+  addOAuthClient(c: { client_id: string; client_name: string; redirect_uris: string[] }): void {
+    this.db.prepare('INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at) VALUES (?, ?, ?, ?)').run(c.client_id, c.client_name, JSON.stringify(c.redirect_uris), now())
+  }
+  getOAuthClient(clientId: string): { client_id: string; client_name: string; redirect_uris: string[] } | undefined {
+    const r = this.db.prepare('SELECT * FROM oauth_clients WHERE client_id = ?').get(clientId) as { client_id: string; client_name: string; redirect_uris: string } | undefined
+    return r ? { ...r, redirect_uris: JSON.parse(r.redirect_uris) as string[] } : undefined
+  }
+  addOAuthRequest(r: { id: string; client_id: string; redirect_uri: string; state: string | null; code_challenge: string; scope: string | null; resource: string | null; ttl_ms: number }): void {
+    this.db.prepare('INSERT INTO oauth_requests (id, client_id, redirect_uri, state, code_challenge, scope, resource, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(r.id, r.client_id, r.redirect_uri, r.state, r.code_challenge, r.scope, r.resource, now(), new Date(Date.now() + r.ttl_ms).toISOString())
+  }
+  getOAuthRequest(id: string): { id: string; client_id: string; redirect_uri: string; state: string | null; code_challenge: string; scope: string | null; resource: string | null; expires_at: string; status: string } | undefined {
+    return this.db.prepare('SELECT * FROM oauth_requests WHERE id = ?').get(id) as never
+  }
+  /** 把待处理的请求标为已决定（只成功一次，防重复提交）。 */
+  decideOAuthRequest(id: string, status: 'approved' | 'denied'): boolean {
+    return this.db.prepare("UPDATE oauth_requests SET status = ? WHERE id = ? AND status = 'pending' AND expires_at > ?").run(status, id, now()).changes === 1
+  }
+  addOAuthCode(c: { code_hash: string; client_id: string; redirect_uri: string; code_challenge: string; resource: string | null; user_id: string; grant_id: string; ttl_ms: number }): void {
+    this.db.prepare('INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, resource, user_id, grant_id, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(c.code_hash, c.client_id, c.redirect_uri, c.code_challenge, c.resource, c.user_id, c.grant_id, new Date(Date.now() + c.ttl_ms).toISOString())
+  }
+  /** 取出并作废授权码（一次性）；过期或用过返回 undefined。 */
+  takeOAuthCode(codeHash: string): { client_id: string; redirect_uri: string; code_challenge: string; resource: string | null; user_id: string; grant_id: string } | undefined {
+    const ok = this.db.prepare('UPDATE oauth_codes SET used_at = ? WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?').run(now(), codeHash, now()).changes === 1
+    return ok ? this.db.prepare('SELECT * FROM oauth_codes WHERE code_hash = ?').get(codeHash) as never : undefined
+  }
+  addOAuthRefreshToken(r: { token_hash: string; grant_id: string; client_id: string; ttl_ms: number }): void {
+    this.db.prepare('INSERT INTO oauth_refresh_tokens (token_hash, grant_id, client_id, expires_at) VALUES (?, ?, ?, ?)').run(r.token_hash, r.grant_id, r.client_id, new Date(Date.now() + r.ttl_ms).toISOString())
+  }
+  /** 取出并作废刷新令牌（轮换：每个只能用一次）。 */
+  takeOAuthRefreshToken(tokenHash: string): { grant_id: string; client_id: string } | undefined {
+    const ok = this.db.prepare('UPDATE oauth_refresh_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?').run(now(), tokenHash, now()).changes === 1
+    return ok ? this.db.prepare('SELECT grant_id, client_id FROM oauth_refresh_tokens WHERE token_hash = ?').get(tokenHash) as never : undefined
+  }
+  /** 刷新一次授权的访问令牌：换哈希、前缀与过期时间（旧访问令牌立即失效）。 */
+  rotateAgentGrantToken(id: string, tokenHash: string, tokenPrefix: string, expiresAt: string): void {
+    this.db.prepare('UPDATE agent_grants SET token_hash = ?, token_prefix = ?, expires_at = ? WHERE id = ?').run(tokenHash, tokenPrefix, expiresAt, id)
   }
 
   touchAgentGrant(id: string, agentId?: string | null): void {

@@ -63,6 +63,8 @@ const PARAMS: Record<string, (s: Seed) => string> = {
   path: () => 'aegis-files/x.txt', skill: () => 'heurion-writing',
   // 别人的访问令牌 id：只能吊销自己的
   tkid: () => 'g_none',
+  // OAuth 授权请求：还没有归属（谁登录谁批准、授权给自己），不存在的 id 必须 4xx
+  oarid: () => 'oar_none',
 }
 /** 按设计公开的接口（不需要登录或本身就是给持有链接的人用的）。 */
 const PUBLIC: Record<string, string> = {

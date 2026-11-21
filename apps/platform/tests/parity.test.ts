@@ -347,6 +347,8 @@ const NOT_FOR_AI: Record<string, string> = {
   'GET /api/me/mcp-tokens': '用户在设置页查看自己的 MCP 访问令牌',
   'POST /api/me/mcp-tokens': '访问令牌只能由用户本人在设置页签发（AI 不能给自己签令牌）',
   'DELETE /api/me/mcp-tokens/:tkid': '访问令牌只能由用户本人在设置页吊销',
+  'GET /api/oauth/requests/:oarid': 'OAuth 确认页读取授权请求（用户本人在浏览器里）',
+  'POST /api/oauth/requests/:oarid/decision': 'OAuth 授权只能由用户本人在确认页批准或拒绝（AI 不能替用户授权）',
   'GET /api/aegis/leases/escalations': '医生/研究员在待确认列表查看 Aegis-OS 智能体发起的 [Lease-Gated] 提权申请与生效租约',
   'POST /api/aegis/leases/approve': '医生/研究员本人审批 [Lease-Gated] 提权申请（AI 不能自我批准租约）',
   'POST /api/aegis/leases/reject': '医生/研究员本人拒绝 [Lease-Gated] 提权申请（AI 不能自我决定租约）',
