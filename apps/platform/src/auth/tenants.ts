@@ -1,3 +1,4 @@
+import { ORG_OPT_IN_MODULES, type ModuleId } from '../mcp/modules.ts'
 import type { DepartmentRow, Store, TenantInviteRow, TenantRow, UserRow } from '../store/db.ts'
 
 /**
@@ -30,9 +31,24 @@ export interface TenantSettings {
    * true = 审核医师可以定稿自己初写的检查（人手不足的科室）。定稿记录里标明 mode = self。个人空间不受此限（单人模式）。
    */
   imaging_self_review: boolean
+  /**
+   * 外部智能体（经 Aegis-OS）可以授权的「机构开启后才能用」的模块（docs/design/MCP_MODULES.md §3.5）：
+   * patients / imaging / research / analysis，默认都不开。外部智能体背后是别家大模型，这些模块返回的
+   * 化验、报告、影像结论会进入那家厂商。external_model_for_patients 关闭时一律不开。
+   */
+  aegis_modules: string[]
 }
 
-export const DEFAULT_SETTINGS: TenantSettings = { patient_module: true, external_model_for_patients: true, patient_visibility: 'care_team', ai_patient_writes: 'review', accept_patient_shares: true, imaging_ai_visibility: 'visible', imaging_self_review: false }
+export const DEFAULT_SETTINGS: TenantSettings = { patient_module: true, external_model_for_patients: true, patient_visibility: 'care_team', ai_patient_writes: 'review', accept_patient_shares: true, imaging_ai_visibility: 'visible', imaging_self_review: false, aegis_modules: [] }
+
+/** 解析机构设置（坏的设置当默认）；不需要 TenantService 的地方（如外部网关）直接用。 */
+export function tenantSettings(t: Pick<TenantRow, 'settings'>): TenantSettings {
+  let raw: Partial<TenantSettings> = {}
+  try { raw = JSON.parse(t.settings || '{}') as Partial<TenantSettings> } catch { /* 坏的设置当默认 */ }
+  const out = { ...DEFAULT_SETTINGS, ...raw }
+  if (!Array.isArray(out.aegis_modules)) out.aegis_modules = []
+  return out
+}
 
 export class TenantError extends Error {
   constructor(readonly code: string, message: string, readonly status: 400 | 403 | 404 | 409 = 400) { super(message) }
@@ -119,9 +135,7 @@ export class TenantService {
   }
 
   settings(t: TenantRow): TenantSettings {
-    let raw: Partial<TenantSettings> = {}
-    try { raw = JSON.parse(t.settings || '{}') as Partial<TenantSettings> } catch { /* 坏的设置当默认 */ }
-    return { ...DEFAULT_SETTINGS, ...raw }
+    return tenantSettings(t)
   }
 
   view(userId: string): TenantView {
@@ -157,6 +171,11 @@ export class TenantService {
       if (typeof s.accept_patient_shares === 'boolean') cur.accept_patient_shares = s.accept_patient_shares
       if (s.imaging_ai_visibility === 'visible' || s.imaging_ai_visibility === 'shadow') cur.imaging_ai_visibility = s.imaging_ai_visibility
       if (typeof s.imaging_self_review === 'boolean') cur.imaging_self_review = s.imaging_self_review
+      if (Array.isArray(s.aegis_modules)) {
+        const bad = s.aegis_modules.filter(m => !ORG_OPT_IN_MODULES.includes(m as ModuleId))
+        if (bad.length) throw new TenantError('bad_setting', `这些模块不需要机构开启或不存在：${bad.map(String).join('、')}（可选：${ORG_OPT_IN_MODULES.join('、')}）`)
+        cur.aegis_modules = [...new Set(s.aegis_modules as string[])]
+      }
       next.settings = JSON.stringify(cur)
     }
     this.store.updateTenant(t.id, next)
