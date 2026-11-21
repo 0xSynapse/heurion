@@ -324,7 +324,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
 
   const aegisAuth = new AegisAuthService(store, 'heurion')
-  const oauth = new OAuthService(store, aegisAuth)
+  const mcpAs = new OAuthService(store, aegisAuth)
   const aegisTurnRegistry = deps.turnRegistry ?? ((turns as unknown as { registry?: TurnRegistry })?.registry ?? new TurnRegistry())
   const aegisPubmed = deps.pubmed ?? new PubMedClient(fetch)
   const sharedClaims = deps.claims ?? new ClaimService(docs, aegisPubmed, deps.fulltext ?? null)
@@ -631,9 +631,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
 
   // —— MCP 的 OAuth 2.1（aegis/oauth.ts；MCP_MODULES.md §0.4）——
   // 元数据、注册、令牌、撤销对浏览器里的 MCP 客户端（如 MCP Inspector）开放跨域：都用 Bearer，不涉及 Cookie
-  const oauthCors = cors({ origin: '*', allowMethods: ['GET', 'POST', 'OPTIONS'], allowHeaders: ['Content-Type', 'Authorization', 'Mcp-Protocol-Version'], exposeHeaders: ['WWW-Authenticate'], maxAge: 600 })
-  for (const p of ['/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/*', '/oauth/register', '/oauth/token', '/oauth/revoke']) app.use(p, oauthCors)
-  const oauthFail = (c: Context, err: unknown) => {
+  const mcpAsCors = cors({ origin: '*', allowMethods: ['GET', 'POST', 'OPTIONS'], allowHeaders: ['Content-Type', 'Authorization', 'Mcp-Protocol-Version'], exposeHeaders: ['WWW-Authenticate'], maxAge: 600 })
+  for (const p of ['/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/*', '/oauth/register', '/oauth/token', '/oauth/revoke']) app.use(p, mcpAsCors)
+  const mcpAsFail = (c: Context, err: unknown) => {
     if (err instanceof OAuthError) return c.json(err.body(), err.status as 400)
     throw err
   }
@@ -649,16 +649,16 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     c.header('Vary', 'Host, X-Forwarded-Host, X-Forwarded-Proto')
     return c.json(protectedResourceMetadata(requestOrigin(c), c.req.path.slice('/.well-known/oauth-protected-resource'.length)))
   })
-  const oauthRegisterLimit = new RateLimiter(30, 60 * 60_000)
+  const mcpRegisterLimit = new RateLimiter(30, 60 * 60_000)
   const deviceIssueLimit = new RateLimiter(20, 15 * 60_000)
   const tokenIssueLimit = new RateLimiter(120, 5 * 60_000)
   app.post('/oauth/register', async c => {
-    if (oauthRegisterLimit.hit(clientIp(c))) return c.json({ error: 'temporarily_unavailable', error_description: '注册太频繁，请稍后再试' }, 429)
-    try { return c.json(oauth.register(await c.req.json().catch(() => ({})) as Record<string, unknown>), 201) } catch (err) { return oauthFail(c, err) }
+    if (mcpRegisterLimit.hit(clientIp(c))) return c.json({ error: 'temporarily_unavailable', error_description: '注册太频繁，请稍后再试' }, 429)
+    try { return c.json(mcpAs.register(await c.req.json().catch(() => ({})) as Record<string, unknown>), 201) } catch (err) { return mcpAsFail(c, err) }
   })
   app.get('/oauth/authorize', c => {
     try {
-      return c.redirect(oauth.authorize(c.req.query(), requestOrigin(c)).redirect, 302)
+      return c.redirect(mcpAs.authorize(c.req.query(), requestOrigin(c)).redirect, 302)
     } catch (err) {
       // 客户端或回调地址不对：不能重定向回去（防开放重定向），直接显示错误
       if (err instanceof OAuthError) return c.text(`授权请求无效：${err.message}`, 400)
@@ -668,14 +668,14 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.post('/oauth/token', async c => {
     c.header('Cache-Control', 'no-store')
     if (tokenIssueLimit.hit(clientIp(c))) return c.json({ error: 'slow_down', error_description: '请求过于频繁，请稍后再试' }, 429)
-    try { return c.json(oauth.token(await readAuthBody(c), requestOrigin(c))) } catch (err) { return oauthFail(c, err) }
+    try { return c.json(mcpAs.token(await readAuthBody(c), requestOrigin(c))) } catch (err) { return mcpAsFail(c, err) }
   })
   app.post('/oauth/revoke', async c => {
     try {
       const body = await readAuthBody(c)
-      oauth.revoke(typeof body.token === 'string' ? body.token : undefined)
+      mcpAs.revoke(typeof body.token === 'string' ? body.token : undefined)
       return c.body(null, 200)
-    } catch (err) { return oauthFail(c, err) }
+    } catch (err) { return mcpAsFail(c, err) }
   })
 
   app.post('/api/aegis/auth/device', async c => {
@@ -1065,13 +1065,13 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
   // OAuth 确认页（应用里 /app?mcp_authorize=<id>）：看请求、批准或拒绝；只能由用户本人在界面上做
   app.get('/api/oauth/requests/:oarid', c => {
-    try { return c.json({ ...oauth.requestView(c.req.param('oarid')), modules: tokenListing(c.get('user')).modules }) } catch (err) { return oauthFail(c, err) }
+    try { return c.json({ ...mcpAs.requestView(c.req.param('oarid')), modules: tokenListing(c.get('user')).modules }) } catch (err) { return mcpAsFail(c, err) }
   })
   app.post('/api/oauth/requests/:oarid/decision', async c => {
     if (viaByReq.get(c.req.raw)) return c.json({ error: 'AI 不能替用户批准授权', code: 'human_only' }, 403)
     const body = await c.req.json().catch(() => ({})) as { approve?: boolean; modules?: unknown }
     try {
-      const r = oauth.decide(c.req.param('oarid'), c.get('user'), body.approve === true, body.modules, requestOrigin(c))
+      const r = mcpAs.decide(c.req.param('oarid'), c.get('user'), body.approve === true, body.modules, requestOrigin(c))
       audit(c, body.approve === true ? 'mcp.oauth_approve' : 'mcp.oauth_deny', { target: c.req.param('oarid'), status: 200 })
       return c.json(r)
     } catch (err) {

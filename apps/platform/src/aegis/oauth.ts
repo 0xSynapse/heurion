@@ -106,7 +106,7 @@ export function scopeToModules(scope: string | null | undefined): ModuleGrant {
 }
 
 export class OAuthService {
-  constructor(private readonly store: Store, private readonly auth: AegisAuthService) {}
+  constructor(private readonly store: Store, private readonly grants: AegisAuthService) {}
 
   /** 动态客户端注册（RFC 7591）：只发公开客户端。 */
   register(body: Record<string, unknown>) {
@@ -165,7 +165,7 @@ export class OAuthService {
     if (!this.store.decideOAuthRequest(id, approve ? 'approved' : 'denied')) throw new OAuthError('invalid_request', '授权请求已处理或已过期，请回到客户端重新发起', 409)
     if (!approve) return { redirect: withParams(r.redirect_uri, { error: 'access_denied', error_description: '用户拒绝了授权', state: r.state ?? undefined, iss: origin }) }
     const client = this.store.getOAuthClient(r.client_id)!
-    const issued = this.auth.issueGrant({ kind: 'oauth', userId, name: client.client_name, modules: modules ?? scopeToModules(r.scope), ttlDays: 1 })
+    const issued = this.grants.issueGrant({ kind: 'oauth', userId, name: client.client_name, modules: modules ?? scopeToModules(r.scope), ttlDays: 1 })
     const code = b64url(randomBytes(32))
     this.store.addOAuthCode({ code_hash: sha256(code), client_id: r.client_id, redirect_uri: r.redirect_uri, code_challenge: r.code_challenge, resource: r.resource, user_id: userId, grant_id: issued.grant.id, ttl_ms: CODE_TTL_MS })
     return { redirect: withParams(r.redirect_uri, { code, state: r.state ?? undefined, iss: origin }) }
@@ -198,7 +198,7 @@ export class OAuthService {
     if (str('grant_type') === 'urn:ietf:params:oauth:grant-type:device_code') {
       const deviceCode = str('device_code')
       if (!deviceCode) throw new OAuthError('invalid_request', '需要 device_code')
-      const polled = this.auth.pollDeviceCode(deviceCode)
+      const polled = this.grants.pollDeviceCode(deviceCode)
       if (polled.status === 'pending') throw new OAuthError('authorization_pending', polled.error)
       if (polled.status === 'expired') throw new OAuthError('expired_token', polled.error)
       if (polled.status === 'consumed') throw new OAuthError('access_denied', polled.error)
