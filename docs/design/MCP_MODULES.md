@@ -1,6 +1,29 @@
-# MCP 模块化与 Aegis-OS 接入
+# MCP 模块化与外部接入
 
-**状态：** 阶段 0–4 已完成；阶段 5 用单一地址跑通，按模块挂载与回合粒度等 Aegis 侧（§3.7）。生产环境已打开 `HEURION_AEGIS`（2026-11-21；见 §5 阶段表）· 本文是 MCP 对外接入与 Aegis 融合的**唯一**现行文档，实施时在这里更新状态。取代已删除的 `design/AEGIS_APP_PROTOCOL.md` 与 aegis-app-sdk 包的 README（历史版本见 git）。
+**状态：** 阶段 0–4 已完成；通用接入（个人访问令牌）与 aegis-os v0.9 声明式清单已实现；阶段 5 用单一地址跑通（§3.7）。生产环境已打开 `HEURION_AEGIS`（2026-11-21；见 §5 阶段表）· 本文是 MCP 对外接入的**唯一**现行文档，实施时在这里更新状态。AAP-1.0（`aegis_at_*` 令牌、`aegis-app.json`）是兼容层、计划停用（§0.3）。取代已删除的 `design/AEGIS_APP_PROTOCOL.md` 与 aegis-app-sdk 包的 README（历史版本见 git）。
+
+## 0. 接入指南
+
+Heurion 的 MCP 是标准的 Streamable HTTP（只用 POST，响应一律 JSON，无状态），任何 MCP 客户端都能接，不依赖某个智能体运行时的协议。按工作台分成九个模块（§3.2），可以接全部已授权模块，也可以只接一个。站点开关 `HEURION_AEGIS` 关闭时以下地址一律 404。
+
+### 0.1 通用接入：个人访问令牌（推荐）
+
+1. 登录 Heurion →「设置 → MCP 访问令牌」→ 逐个模块选「不开放 / 只读 / 读写」→ 签发，得到 `hr_pat.<id>.<secret>`（只显示一次；默认 90 天，可随时吊销）。患者、影像、临床研究、数据分析要所在机构先在机构设置里打开（§3.5）。
+2. 地址：`https://<站点>/api/mcp`（全部已授权模块）或 `https://<站点>/api/mcp/<模块>`（`writing`、`literature`、`analysis`、`patients`、`imaging`、`research`、`knowledge`、`memory`、`admin`）。请求头只需 `Authorization: Bearer <令牌>`。例如 Claude Code：`claude mcp add --transport http heurion https://heurion.org/api/mcp --header "Authorization: Bearer hr_pat.…"`（设置页可一键复制）。
+3. 可选请求头：`X-Agent-Id`（智能体标识，审计与撤销按它区分，缺省 `mcp-client`）、`X-Aegis-Session-Id`（同一会话读到的数字写进稿件时算有出处，缺省按回合）、`X-Aegis-Turn-Id`（同一回合的写入可整回合撤销；缺省时同一令牌闲置 10 分钟算新回合）。
+4. 发现：公开的模块目录 `GET /api/mcp/modules`（地址、只读工具、需要批准的工具、技能文档）；每个模块的说明 `/.well-known/aegis-skills/heurion-<模块>/SKILL.md`；连接时 `initialize` 返回的说明只含所连模块。
+5. 文件：`workspace_put` 放进工作区（≤10MB），更大的 `PUT /api/mcp/files/<path>`；`workspace_get` / `GET /api/mcp/files/<path>` 取回（§3.4）。
+6. 高风险操作（不可恢复的删除、机构设置、临床确认等）返回 `approval_required`，由用户在 Heurion 网页「待确认操作」里批准后重试。写进稿件一律经服务端的操作层与来源规则，不依赖客户端自觉。
+
+### 0.2 经 aegis-os v0.9：声明式 MCP 清单 + 标准设备码
+
+- 清单 `GET /.well-known/mcp-bundle.json`（schema `aegis-mcp-bundle/v1`，`aegis/bundle.ts` 由模块注册表生成）：每个模块一个服务器 `heurion-<模块>`，地址是完整 URL（按请求的 origin，生产在反向代理后按 `X-Forwarded-Proto` 还原 https）；`trust_level = trusted_internal`、`dlp_mode = off`（作者邮箱、机构名不在本地假名化；患者在平台侧只用代号且受机构外发策略管控）、文献与资料库开 `strip_prompt_injection`、`request_timeout_ms = 300000`；`profiles`：默认开放的模块 `default / open / <模块>`，管理 `default / admin`，患者等四个 `clinical / full / <模块>`。`tool_overrides`：服务端已有回合撤销与来源规则保护的写工具标 `read_only`（免得本地防火墙把每次写入放进待审队列），需要租约的高风险工具标 `staged_write`。
+- 鉴权：`auth_realm` 指向 RFC 8628 设备码端点 `/api/aegis/auth/device` 与 `/api/aegis/auth/token`。两者都接受表单（`application/x-www-form-urlencoded`）和 JSON；OAuth 的 `scope`（如 `writing:rw literature:r`）在没给 `modules` 时当作模块权限；`verification_uri` / `verification_uri_complete` 是完整 URL；轮询按 RFC 8628 §3.5 在顶层 `error` 返回 `authorization_pending` / `expired_token` / `access_denied` / `invalid_grant`，中文说明在 `error_description`（`code` 保留给老客户端）。拿到的令牌是 `aegis_at_heurion.*`，地址用 `/api/aegis/mcp/<模块>`（与 `/api/mcp/<模块>` 是同一个处理函数）。
+- 字段名与枚举值按 aegis-os 源码（`aos-mcp-gateway/src/mcp_bundle.rs`、`mcp_firewall.rs`、`aos-egress/src/pseudonym.rs`）核对；尚未用 v0.9 的二进制实际跑过。
+
+### 0.3 AAP-1.0（兼容，计划停用）
+
+`/.well-known/aegis-app.json`、`aegis_at_heurion.*` 令牌、`/api/aegis/mcp`、`X-Aegis-*` 请求头、Ed25519 离线租约照常可用（§2.2、§3.6），但新接入请用 §0.1 或 §0.2。停用条件：aegis-os 全部改用 §0.2 的清单与标准设备码（或 OAuth 2.1）之后，先停签新的 AAP 令牌，再关地址。
 
 ## 1. 目标与用户体验
 
@@ -14,12 +37,13 @@ Heurion 现在主要给人用：浏览器登录、在界面里操作；AI 经平
 
 ## 2. 现状（以代码为准，2026-11-21）
 
-### 2.1 两条接入路径
+### 2.1 接入路径
 
 | 接入方 | 入口 | 鉴权 | 工具范围 |
 |---|---|---|---|
 | 平台内的 dsh 回合 | `/mcp`（`handleMcp`，只允许回环地址；对外由 Caddy 返回 404） | 平台签发的 MCP 令牌，`claims.u` 用户、`d` 文档、`p` 权限、`s` dsh 进程、`t` 范围；进程停止后令牌立即失效（`isLiveSession`） | `mcp/scope.ts`：`t=doc` 普通稿件、`t=deck` 幻灯片、缺省全部 |
-| 外部智能体（AAP-1.0） | Hono 路由 `POST /api/aegis/mcp`（授权里的全部模块）与 `POST /api/aegis/mcp/:module`（只挂该模块）→ `handleAegisMcpRequest`（MCP SDK 的 Web 标准 Streamable HTTP，无状态，响应一律 JSON；支持批量与通知；只声明 `application/json` 的客户端照常可用）。依赖与 dsh 同一份（`index.ts` 的 `mcpDeps` 经 `buildApi({ mcpDeps })` 传入） | 授权令牌 `aegis_at_heurion.<grant_id>.<secret>`（服务端只存哈希，随用户令牌版本、用户与机构状态失效）；请求头 `X-Aegis-Agent-Id / Org-Id / Session-Id / Turn-Id / Lease-Token` | 授权上的模块权限 |
+| 外部 MCP 客户端（通用） | `POST /api/mcp`、`POST /api/mcp/:module`，与下一行是同一个处理函数 | 个人访问令牌 `hr_pat.<grant_id>.<secret>`（设置页签发，存在同一张授权表里；`/api/me/mcp-tokens` 列出、签发、吊销）；请求头只要 `Authorization` | 令牌上的模块权限 ∩ 机构允许 |
+| 外部智能体（AAP-1.0 兼容 / aegis-os） | Hono 路由 `POST /api/aegis/mcp`（授权里的全部模块）与 `POST /api/aegis/mcp/:module`（只挂该模块）→ `handleAegisMcpRequest`（MCP SDK 的 Web 标准 Streamable HTTP，无状态，响应一律 JSON；支持批量与通知；只声明 `application/json` 的客户端照常可用）。依赖与 dsh 同一份（`index.ts` 的 `mcpDeps` 经 `buildApi({ mcpDeps })` 传入） | 授权令牌 `aegis_at_heurion.<grant_id>.<secret>`（服务端只存哈希，随用户令牌版本、用户与机构状态失效）；请求头 `X-Aegis-Agent-Id / Org-Id / Session-Id / Turn-Id / Lease-Token` | 授权上的模块权限 |
 
 两条路径都由 `buildMcpServer()`（`apps/platform/src/mcp/server.ts`）构建；外部路径经 `buildAegisMcpServer()` 包一层，加上模块权限 `aegisModules`、观察记录键、租约检查 `leaseAuthorizer`、代理 id 与回合前缀 `aegis:<agent>:`。
 
@@ -177,6 +201,10 @@ dsh 回合的数据外发边界由 `harness/profile/heurion.cordis.yml` 守住�
 | 2 按模块开放 | `/api/aegis/mcp/:module`、清单 `modules[]`（由注册表生成）、授权上的模块权限（取代 `tool_scope` 正则，旧值换算）、设置页按模块授权、观察记录键 `sess:<授权>:<会话>`、SDK 与平台合为一份实现。dsh 的 doc / deck 范围**没有**改（见 §6 第 5 项） | `aegis-app.test.ts` 新增 5 项：清单九个模块且列出的工具都存在；按模块地址只挂该模块、只读权限只挂只读工具、未授权 403、未知模块 404；非法模块权限拒绝签发；旧 `tool_scope` 换算；同一会话换地址换回合读到的数字可写进另一篇稿件、换会话被来源规则拒绝。SDK 测试改为平台清单经 SDK 校验、租约互通 | ✅ 2026-11-21 |
 | 3 外部适配 | 工作区文件通道（MCP 三个工具 + HTTP 直传）；说明按模块拆、dsh 原文不变；每个模块的 SKILL.md | `mcp-instructions.test.ts`（dsh 说明指纹、外部只含所连模块、文件工具只在外部、SKILL.md）；`aegis-app.test.ts` 新增 5 项：本机图片 → 工作区 → 资产 → 插入稿件；取回文本、路径越界拒绝、只读不能放；HTTP 直传 6MB 与下载、401 / 403；自己放的文件读回不算出处；SKILL.md 与 initialize 的说明。本地真实服务验证 MCP 与 HTTP 进出、SKILL.md。原计划的「本机分析 → 登记 → 写入」改为「平台分析工具算 → 登记 → 写入」（§3.3） | ✅ 2026-11-21 |
 | 4 外发策略 | 机构设置 `aegis_modules`（默认关、随 `external_model_for_patients`）；运行时取授权 ∩ 机构允许；四个模块的调用审计；机构设置与授权页界面。生产环境**未**打开 `HEURION_AEGIS`（2026-11-21 定：等阶段 5） | `aegis-app.test.ts` 新增 3 项：默认关时授权了也用不了、模块地址 403、文件直传 403、授权列表标出；机构打开 / 关掉立即生效，非法设置 400，不许交给外部模型时一律不开；调用审计（谁、哪个智能体、哪个患者、成败），管理员可查，默认开放模块不记 | ✅ 2026-11-21 |
+| 6 通用接入 | 个人访问令牌 `hr_pat.*`（设置页签发 / 吊销）；通用地址 `/api/mcp[/<模块>]`、`/api/mcp/files/*`、模块目录 `/api/mcp/modules`；`X-Aegis-*` 请求头全部可选（智能体缺省 `mcp-client`，闲置 10 分钟算新回合）；对外说明、技能文档、批准提示改为中性（网页「待确认操作」批准） | `aegis-app.test.ts` 新增 3 项：只带 `Authorization` 的普通客户端接通用地址、吊销即失效；闲置换回合；模块目录与文件、开关关闭 404。本地用 MCP 官方 SDK 的标准客户端只带个人令牌连写作地址：29 个工具、能建稿件 | ✅ 2026-11-21 |
+| 7 aegis-os v0.9 | `/.well-known/mcp-bundle.json`（aegis-mcp-bundle/v1）；设备码与令牌端点兼容 RFC 8628（表单、`scope` → 模块、完整 `verification_uri`、标准 `error`）；网关超时 120 → 300 秒 | `aegis-app.test.ts` 新增 2 项：清单字段与枚举、九个完整 URL、技能可拉取、反向代理 https、开关关闭 404；表单方式跑通设备码到 `tools/list`。未用 v0.9 二进制实测 | ✅ 2026-11-21 |
+| 8 OAuth 2.1 | 按 MCP 鉴权规范：受保护资源元数据、授权码 + PKCE、客户端注册、scope = 模块权限 | 支持 OAuth 的客户端只填地址即可登录授权 | 未开始 |
+| 9 停用 AAP | 停签 `aegis_at_*`，再关 AAP 地址与清单（§0.3） | — | 未开始 |
 | 5 端到端 | agy 经 Aegis 跑通「写作 + 文献」，再扩到其他模块 | 单一地址下 agy 完成一轮修改与引用、无出处数字被拒、可撤销（§3.7）；按模块挂载、回合粒度等 Aegis 侧缺口修复后再验；带引用句里的编造数字已改为转待采纳修订（§6 第 6 项，`aegis-app.test.ts`、`provenance-guard.test.ts` 覆盖） | 部分完成 2026-11-21 |
 
 ## 6. 待决定
@@ -190,6 +218,7 @@ dsh 回合的数据外发边界由 `harness/profile/heurion.cordis.yml` 守住�
 
 ## 7. 变更记录
 
+- 2026-11-21：文档定位改为「MCP 模块化与外部接入」，新增 §0 接入指南。通用接入：个人访问令牌 `hr_pat.*`、`/api/mcp[/<模块>]`、模块目录、请求头可选、闲置换回合（阶段 6）。对齐 aegis-os v0.9：`mcp-bundle.json`、RFC 8628 表单与标准错误码、网关超时 300 秒（阶段 7）。AAP-1.0 标为兼容层、计划停用。
 - 2026-11-21：生产环境打开 `HEURION_AEGIS`（`deploy/docker-compose.yml`）：设置页「智能体授权」与机构设置里的模块开关对用户可见；患者、影像、研究、分析仍默认关。大文件直传上限降到 100MB，与 Caddy 的请求体限制一致。
 - 2026-11-21：来源规则二收紧：文献只有摘要、数字在摘要里找不到时，整批转为待采纳修订（原为写入并提示核对；dsh 与外部智能体同一规则）。
 - 2026-11-21：阶段 5（部分）：agy 经 Aegis-OS 单一地址端到端跑通写作 + 文献；记录 Aegis 侧 5 处缺口与规则二的摘要缺口（§3.7、§6 第 6 项）。

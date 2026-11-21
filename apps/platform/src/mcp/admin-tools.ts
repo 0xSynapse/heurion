@@ -420,7 +420,7 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
               summary: row.summary,
               reason: leaseCheck.reason,
               suggested_lease_scope: leaseCheck.suggestedLeaseScope,
-              message: '这是 [Lease-Gated] 高风险操作，已在平台生成待确认动作与提权申请；请在 Aegis-OS 终端或 Web 端批准租约后重试。',
+              message: '这是 [Lease-Gated] 高风险操作，已在平台生成待确认动作与提权申请；请用户在 Heurion 网页「待确认操作」里批准（经 Aegis-OS 接入的也可在终端批准租约）后重试。',
             })
           }
 

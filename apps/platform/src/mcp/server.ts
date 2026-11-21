@@ -2551,6 +2551,10 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
   return server
 }
 
+/** 没有回合头时，闲置多久算新的一轮（见 buildAegisMcpServer）。 */
+export const AEGIS_TURN_IDLE_MS = 10 * 60 * 1000
+const lastSeenByGeneration = new Map<string, number>()
+
 /**
  * 外部智能体实际能用的模块：授权的模块权限 ∩ 用户所在机构允许的模块（§3.5）。
  * MCP 网关、文件直传、授权列表都用它，机构关掉立即生效。
@@ -2586,7 +2590,8 @@ export function buildAegisMcpServer(
     return { ok: false, status: 401, code: 'missing_bearer_token', error: '缺少 Authorization: Bearer aegis_at_heurion.* 令牌' }
   }
   const rawToken = auth.slice('Bearer '.length).trim()
-  const agentId = (reqCtx.agentId?.trim() || 'aegis-agent').replace(/[^a-zA-Z0-9._-]/g, '_')
+  // 智能体 id：请求头可选（AAP 的 X-Aegis-Agent-Id，或通用的 X-Agent-Id）；没有时 AAP 令牌记为 aegis-agent，个人令牌记为 mcp-client
+  const agentId = (reqCtx.agentId?.trim() || (rawToken.startsWith('hr_pat.') ? 'mcp-client' : 'aegis-agent')).replace(/[^a-zA-Z0-9._-]/g, '_')
   const authSvc = new AegisAuthService(store, 'heurion')
   const verifiedRes = authSvc.verifyGrantToken(rawToken, agentId)
   if (!verifiedRes.ok) {
@@ -2616,9 +2621,14 @@ export function buildAegisMcpServer(
   const existingTurn = deps.turns.active(user.id, generation)
   const rawTurnHeader = reqCtx.turnIdHeader?.trim()
   const turnPrefix = `aegis:${agentId}:`
+  // 没有回合头的客户端（普通 MCP 客户端都不带）：同一授权、同一智能体闲置超过 AEGIS_TURN_IDLE_MS 就开新回合，
+  // 免得「撤销这一轮」把它自始至终的改动一起撤掉
+  const now = Date.now()
+  const idle = now - (lastSeenByGeneration.get(generation) ?? now) > AEGIS_TURN_IDLE_MS
+  lastSeenByGeneration.set(generation, now)
   const turnId = rawTurnHeader
     ? (rawTurnHeader.startsWith(turnPrefix) ? rawTurnHeader : `${turnPrefix}${rawTurnHeader}`)
-    : (existingTurn?.turnId ?? `${turnPrefix}${randomUUID().replace(/-/g, '').slice(0, 10)}`)
+    : (existingTurn && !idle ? existingTurn.turnId : `${turnPrefix}${randomUUID().replace(/-/g, '').slice(0, 10)}`)
 
   if (!existingTurn || existingTurn.turnId !== turnId) {
     deps.turns.begin(
@@ -2713,13 +2723,13 @@ export function buildAegisMcpServer(
  * 照常可用：缺少 text/event-stream 时补齐（协议要求两者都声明，但本网关从不回 SSE 流）。
  * 依赖与平台内 dsh 回合用的是同一份（index.ts 的 mcpDeps）。
  */
-/** 外部网关单个请求的上限：超时回 504，连接与本次请求的 server 一并释放（工具本身不中断）。 */
-const AEGIS_MCP_TIMEOUT_MS = 120_000
+/** 外部网关单个请求的上限：超时回 504，连接与本次请求的 server 一并释放（工具本身不中断）。300 秒与 aegis-os v0.9 的默认流式超时一致（影像分割、大队列统计）。 */
+const AEGIS_MCP_TIMEOUT_MS = 300_000
 
 export async function handleAegisMcpRequest(deps: McpDeps, req: Request, module?: string): Promise<Response> {
   const built = buildAegisMcpServer(deps, {
     authHeader: req.headers.get('authorization') ?? '',
-    agentId: req.headers.get('x-aegis-agent-id'),
+    agentId: req.headers.get('x-aegis-agent-id') ?? req.headers.get('x-agent-id'),
     orgId: req.headers.get('x-aegis-org-id'),
     turnIdHeader: req.headers.get('x-aegis-turn-id'),
     sessionIdHeader: req.headers.get('x-aegis-session-id'),

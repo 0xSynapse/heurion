@@ -50,14 +50,14 @@ const LINES: ReadonlyArray<readonly [Tag, string, string?]> = [
   ["imaging", "    返回的 markdown_insert 可直接用 doc_edit 插入文档，或用 deck_edit 的 add_image 放入幻灯片；"],
   ["imaging", "  - imaging_recist_evaluate 比较基线与随访病灶长径总和，自动评定 RECIST 1.1 疗效等级（CR/PR/SD/PD）与变化率。"],
   ["writing", "- 幻灯片（kind=deck）：doc_outline 看各页 → slide_read 读一页（形状 id、位置、文字）→ deck_edit 修改（新页用 add_slide 按版式填内容，不必算坐标）→ layout_check 检查溢出与重叠，必要时 slide_render 看图。"],
-  ["common", "- 权限：你代表当前用户操作，拥有和用户本人完全一样的权限——用户是机构管理员 / 平台运营，你就能做对应的管理（account 看用户是谁、什么角色；tenant_admin、org_template、platform_admin、doc_manage、dataset_manage、kb_manage、memory_manage、patient_admin、study_admin 等）；用户不能做的你也不能做。高风险操作（不可恢复的删除、机构设置与成员权限、邀请、紧急访问、交接与转交、平台运营的写操作、上传院徽）调用后不会立刻执行，而是返回 pending_confirmation 并在对话里给用户弹出确认卡：先向用户说明要做什么、为什么，然后等用户确认，不要重复提交，结果用 action_status 查。你不能确认自己的操作。", "- 权限：你代表当前用户操作，权限不超过用户本人，也不超过这次授权开放的模块。高风险操作（不可恢复的删除、机构设置与成员权限、临床确认等）返回 approval_required：先向用户说明要做什么、为什么，请用户在 Aegis 里批准租约后再重试，不要重复提交；结果用 action_status 查。你不能批准自己的操作。"],
+  ["common", "- 权限：你代表当前用户操作，拥有和用户本人完全一样的权限——用户是机构管理员 / 平台运营，你就能做对应的管理（account 看用户是谁、什么角色；tenant_admin、org_template、platform_admin、doc_manage、dataset_manage、kb_manage、memory_manage、patient_admin、study_admin 等）；用户不能做的你也不能做。高风险操作（不可恢复的删除、机构设置与成员权限、邀请、紧急访问、交接与转交、平台运营的写操作、上传院徽）调用后不会立刻执行，而是返回 pending_confirmation 并在对话里给用户弹出确认卡：先向用户说明要做什么、为什么，然后等用户确认，不要重复提交，结果用 action_status 查。你不能确认自己的操作。", "- 权限：你代表当前用户操作，权限不超过用户本人，也不超过这次授权开放的模块。高风险操作（不可恢复的删除、机构设置与成员权限、临床确认等）返回 approval_required：先向用户说明要做什么、为什么，请用户在 Heurion 网页「待确认操作」里批准（经 Aegis-OS 接入的也可在 Aegis 里批准租约）后再重试，不要重复提交；结果用 action_status 查。你不能批准自己的操作。"],
   ["writing", "- 幻灯片配图：image_search 按关键词（英文效果更好）搜 Unsplash 图库 → slide_add_photo 把选中的照片插入某一页（图文版式自动放进图片区）。署名（Photo by 摄影师 on Unsplash）由平台写进图片说明和这一页的演讲备注，不要删；回复用户时也要提到署名。图库没配置时这两个工具返回 unsplash_unconfigured，改用用户上传的图片。"],
 ]
 
 /** 外部智能体的文件进出（它的文件在用户本机，服务器上的路径对它没有意义）。 */
 const EXTERNAL_FILES = [
-  '- 文件：要交给平台的文件（数据集、报告、Word / PPT、资料、院徽等）先用 workspace_put（data_base64，≤10MB）放进工作区，拿到返回的 path 再传给工具的 path / file_path 参数；更大的文件用 PUT /api/aegis/files/<path>（同一授权令牌）直传。',
-  '  平台写到工作区的文件（如 doc_manage export 导出的 docx / pptx）用 workspace_get 取回（≤5MB 直接返回内容，更大的给下载地址 GET /api/aegis/files/<path>）；workspace_list 列目录。asset_upload、report_upload 也可以直接给 data_base64。',
+  '- 文件：要交给平台的文件（数据集、报告、Word / PPT、资料、院徽等）先用 workspace_put（data_base64，≤10MB）放进工作区，拿到返回的 path 再传给工具的 path / file_path 参数；更大的文件用 PUT /api/mcp/files/<path>（同一令牌）直传。',
+  '  平台写到工作区的文件（如 doc_manage export 导出的 docx / pptx）用 workspace_get 取回（≤5MB 直接返回内容，更大的给下载地址 GET /api/mcp/files/<path>）；workspace_list 列目录。asset_upload、report_upload 也可以直接给 data_base64。',
 ]
 
 const external = (l: readonly [Tag, string, string?]) => l[2] ?? l[1]
@@ -88,7 +88,7 @@ export function moduleSkill(module: ModuleId, tools: readonly string[]): string 
     '',
     `# 知衡 Heurion · ${m.title}`,
     '',
-    `MCP 地址：\`POST /api/aegis/mcp/${m.id}\`（Streamable HTTP；授权令牌 \`aegis_at_heurion.*\` 由 Aegis 出站注入，不进模型上下文）。`,
+    `MCP 地址：\`POST /api/mcp/${m.id}\`（Streamable HTTP；请求头 \`Authorization: Bearer <个人访问令牌 hr_pat.*>\`，在 Heurion「设置 → MCP 访问令牌」签发）。经 Aegis-OS 接入时令牌由 Aegis 出站注入，不进模型上下文。`,
     '',
     '## 共同规则',
     '',

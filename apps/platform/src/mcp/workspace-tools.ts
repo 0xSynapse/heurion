@@ -16,7 +16,7 @@ const fail = (code: string, message: string, extra: Record<string, unknown> = {}
   isError: true as const,
   content: [{ type: 'text' as const, text: JSON.stringify({ code, message, ...extra }, null, 2) }],
 })
-const filesUrl = (rel: string) => `/api/aegis/files/${rel.split('/').map(encodeURIComponent).join('/')}`
+const filesUrl = (rel: string) => `/api/mcp/files/${rel.split('/').map(encodeURIComponent).join('/')}`
 const asFail = (err: unknown) => {
   if (err instanceof WorkspaceFileError) return fail(err.code, err.message)
   throw err
@@ -27,7 +27,7 @@ export function registerWorkspaceTools(server: McpServer, deps: { claims: TokenC
   const workspace = () => deps.workspaceDir(claims.u)
 
   server.registerTool('workspace_put', {
-    description: '把你本机的文件放进 Heurion 工作区（落在 aegis-files/ 下），返回 path；再把 path 传给其他工具的 path / file_path 参数（数据集上传、资料库上传、Word / PPT 导入、记忆导入等）。内容用 base64，≤10MB；更大的文件用 PUT /api/aegis/files/<path> 直传。同名覆盖。',
+    description: '把你本机的文件放进 Heurion 工作区（落在 aegis-files/ 下），返回 path；再把 path 传给其他工具的 path / file_path 参数（数据集上传、资料库上传、Word / PPT 导入、记忆导入等）。内容用 base64，≤10MB；更大的文件用 PUT /api/mcp/files/<path> 直传。同名覆盖。',
     inputSchema: {
       path: z.string().min(1).max(300).describe('文件名或相对路径，如 data/cohort.csv（自动放在 aegis-files/ 下）'),
       data_base64: z.string().min(1).describe('文件内容的 base64'),
@@ -35,7 +35,7 @@ export function registerWorkspaceTools(server: McpServer, deps: { claims: TokenC
   }, async ({ path, data_base64 }) => {
     if (!claims.p.includes('write')) return fail('forbidden', '当前授权是只读的，不能放文件')
     const bytes = Buffer.from(data_base64, 'base64')
-    if (bytes.byteLength > MCP_PUT_MAX) return fail('too_large', `文件超过 ${MCP_PUT_MAX / 1024 / 1024}MB`, { hint: '改用 PUT /api/aegis/files/<path> 直传（同一授权令牌）。' })
+    if (bytes.byteLength > MCP_PUT_MAX) return fail('too_large', `文件超过 ${MCP_PUT_MAX / 1024 / 1024}MB`, { hint: '改用 PUT /api/mcp/files/<path> 直传（同一令牌）。' })
     try {
       const t = writeTarget(workspace(), path)
       writeFileSync(t.abs, bytes)

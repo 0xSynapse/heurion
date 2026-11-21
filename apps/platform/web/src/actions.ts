@@ -119,7 +119,7 @@ export function initActions(api: Api, notice: Notice) {
           : cur.status === 'rejected'
           ? '已拒绝提权申请'
           : cur.status
-      el.innerHTML = `<div class="action-card-head">Aegis-OS 智能体请求短期租约 [Lease-Gated]</div>
+      el.innerHTML = `<div class="action-card-head">外部智能体请求批准（短期租约）</div>
         <div class="action-summary">${esc(cur.summary)}</div>
         <div class="muted small" style="margin:4px 0">Agent: <code>${esc(cur.agent_id)}</code> · Scope: <code>${esc(cur.scope)}</code> · ID: <code>${esc(cur.id)}</code></div>
         ${cur.reason ? `<div class="action-reason"><span class="muted">申请理由：</span>${esc(cur.reason)}</div>` : ''}

@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Accounts } from '../src/auth/accounts.ts'
 import { TenantService } from '../src/auth/tenants.ts'
 import { generateAegisNodeKeyPair, signAegisLeaseToken } from '../src/aegis/auth.ts'
@@ -857,10 +857,10 @@ describe('AAP-1.0 网关（阶段 1：一个处理函数、与 dsh 同一份依�
     expect(((await res.json()) as { result: { tools: unknown[] } }).result.tools.length).toBeGreaterThan(0)
   })
 
-  it('旧的 /api/mcp 别名已移除；网关只接受 POST', async () => {
+  it('网关只接受 POST（通用地址与 AAP 兼容地址都一样）', async () => {
     const { app } = createTestEnv()
     const token = await issue(app)
-    expect((await app.request('/api/mcp', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' })).status).not.toBe(200)
+    expect((await app.request('/api/mcp', { method: 'GET', headers: { authorization: `Bearer ${token}` } })).status).not.toBe(200)
     expect((await app.request('/api/aegis/mcp', { method: 'GET', headers: { authorization: `Bearer ${token}` } })).status).not.toBe(200)
   })
 })
@@ -1042,7 +1042,7 @@ describe('AAP-1.0 外部智能体适配（阶段 3）', () => {
     expect(put.status).toBe(201)
     expect(((await put.json()) as any).path).toBe('aegis-files/data/big.bin')
     const meta = await call(app, token, '/api/aegis/mcp/analysis', 'workspace_get', { path: 'aegis-files/data/big.bin' })
-    expect(meta.body.download_url).toBe('/api/aegis/files/aegis-files/data/big.bin')
+    expect(meta.body.download_url).toBe('/api/mcp/files/aegis-files/data/big.bin')
     const got = await app.request(meta.body.download_url, { headers: { authorization: `Bearer ${token}` } })
     expect(got.status).toBe(200)
     expect((await got.arrayBuffer()).byteLength).toBe(big.byteLength)
@@ -1180,5 +1180,156 @@ describe('AAP-1.0 端到端发现的规则缺口（阶段 5）', () => {
     let pending = false
     docs.get(docId).descendants(n => { if (n.attrs.suggest) pending = true; return true })
     expect(pending).toBe(true)
+  })
+})
+
+describe('通用 MCP 接入：个人访问令牌（与 AAP-1.0 无关）', () => {
+  const issuePat = async (app: ReturnType<typeof createTestEnv>['app'], session: string, body: Record<string, unknown> = {}) => {
+    const res = await app.request('/api/me/mcp-tokens', { method: 'POST', headers: { authorization: `Bearer ${session}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Claude Code', ...body }) })
+    return { status: res.status, body: (await res.json()) as any }
+  }
+  // 普通 MCP 客户端：只带 Authorization，不带任何 X-Aegis-* 头
+  const plain = async (app: ReturnType<typeof createTestEnv>['app'], token: string, path: string, method: string, params: unknown) => {
+    const res = await app.request(path, {
+      method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    })
+    return { status: res.status, turn: res.headers.get('x-aegis-turn-id'), body: (await res.json()) as any }
+  }
+
+  it('设置页签发 hr_pat 令牌；普通 MCP 客户端不带任何 Aegis 头即可接 /api/mcp 与按模块地址；吊销立即失效', async () => {
+    const { app, reg } = createTestEnv()
+    const { status, body } = await issuePat(app, reg.token, { modules: 'writing:rw,literature:r' })
+    expect(status).toBe(201)
+    expect(body.token).toMatch(/^hr_pat\.g_[0-9a-f]+\./)
+    expect(body.modules).toEqual({ writing: 'rw', literature: 'r' })
+    const init = await plain(app, body.token, '/api/mcp/writing', 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'claude-code', version: '0' } })
+    expect(init.status).toBe(200)
+    expect(init.body.result.instructions).toContain('/api/mcp/files')
+    expect(init.turn).toMatch(/^aegis:mcp-client:/)
+    const names = ((await plain(app, body.token, '/api/mcp', 'tools/list', {})).body.result.tools as Array<{ name: string }>).map(t => t.name)
+    expect(names).toContain('doc_edit')
+    expect(names).toContain('pubmed_search')
+    expect(names).not.toContain('insert_citation')
+    const created = await plain(app, body.token, '/api/mcp/writing', 'tools/call', { name: 'doc_create', arguments: { title: '通用接入', markdown: '正文。' } })
+    expect(created.body.result.isError).toBeFalsy()
+    const list = (await (await app.request('/api/me/mcp-tokens', { headers: { authorization: `Bearer ${reg.token}` } })).json()) as any
+    expect(list.grants[0].kind).toBe('pat')
+    expect((await app.request(`/api/me/mcp-tokens/${body.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${reg.token}` } })).status).toBe(200)
+    expect((await plain(app, body.token, '/api/mcp', 'tools/list', {})).status).toBe(401)
+  })
+
+  it('不带回合头：同一令牌闲置超过 10 分钟算新回合（撤销只撤这一轮）', async () => {
+    const { app, reg } = createTestEnv()
+    const token = (await issuePat(app, reg.token)).body.token
+    const t0 = Date.now()
+    const spy = vi.spyOn(Date, 'now')
+    try {
+      spy.mockReturnValue(t0)
+      const a = (await plain(app, token, '/api/mcp', 'tools/list', {})).turn
+      spy.mockReturnValue(t0 + 5 * 60_000)
+      const b = (await plain(app, token, '/api/mcp', 'tools/list', {})).turn
+      spy.mockReturnValue(t0 + 5 * 60_000 + 11 * 60_000)
+      const c = (await plain(app, token, '/api/mcp', 'tools/list', {})).turn
+      expect(b).toBe(a)
+      expect(c).not.toBe(a)
+    } finally { spy.mockRestore() }
+  })
+
+  it('模块目录公开、地址是通用的；大文件走 /api/mcp/files；外部接入关闭时通用地址同样 404', async () => {
+    const { app, reg } = createTestEnv()
+    const dir = (await (await app.request('/api/mcp/modules')).json()) as any
+    expect(dir.mcp).toBe('/api/mcp')
+    expect(dir.modules.find((m: any) => m.id === 'writing').mcp).toBe('/api/mcp/writing')
+    const token = (await issuePat(app, reg.token)).body.token
+    expect((await app.request('/api/mcp/files/notes/a.txt', { method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: 'hello' })).status).toBe(201)
+    expect(await (await app.request('/api/mcp/files/aegis-files/notes/a.txt', { headers: { authorization: `Bearer ${token}` } })).text()).toBe('hello')
+    const off = createTestEnv({ aegisEnabled: false })
+    expect((await off.app.request('/api/mcp/modules')).status).toBe(404)
+    expect((await off.app.request('/api/mcp', { method: 'POST', body: '{}' })).status).toBe(404)
+    expect((await off.app.request('/api/me/mcp-tokens', { headers: { authorization: `Bearer ${off.reg.token}` } })).status).toBe(404)
+  })
+})
+
+describe('aegis-os v0.9：声明式 MCP Bundle 与标准 RFC 8628 设备码', () => {
+  it('GET /.well-known/mcp-bundle.json：aegis-mcp-bundle/v1，九个模块各一个完整 URL 的服务器，枚举值与 aegis-os 一致，技能都有 id 且能拉取', async () => {
+    const { app } = createTestEnv()
+    const res = await app.request('http://127.0.0.1:8799/.well-known/mcp-bundle.json')
+    expect(res.status).toBe(200)
+    const b = (await res.json()) as any
+    expect(b.schema).toBe('aegis-mcp-bundle/v1')
+    expect(b.bundle_id).toBe('heurion')
+    expect(b.auth_realm).toMatchObject({
+      realm_id: 'heurion', issuer_url: 'http://127.0.0.1:8799', client_id: 'aegis-os', allowed_hosts: ['127.0.0.1'], scopes: [],
+      device_authorization_endpoint: 'http://127.0.0.1:8799/api/aegis/auth/device', token_endpoint: 'http://127.0.0.1:8799/api/aegis/auth/token',
+    })
+    expect(b.servers.map((s: any) => s.server_id)).toEqual(['writing', 'literature', 'analysis', 'patients', 'imaging', 'research', 'knowledge', 'memory', 'admin'].map(id => `heurion-${id}`))
+    for (const s of b.servers) {
+      expect(s.url).toBe(`http://127.0.0.1:8799/api/aegis/mcp/${s.server_id.slice('heurion-'.length)}`)
+      expect(s.trust_level).toBe('trusted_internal')
+      expect(s.dlp_mode).toBe('off')
+      expect(s.request_timeout_ms).toBe(300000)
+      for (const v of Object.values(s.tool_overrides)) expect(['read_only', 'staged_write', 'destructive', 'forbidden']).toContain(v)
+    }
+    const by = (id: string) => b.servers.find((s: any) => s.server_id === `heurion-${id}`)
+    expect(by('literature').strip_prompt_injection).toBe(true)
+    expect(by('knowledge').strip_prompt_injection).toBe(true)
+    expect(by('writing').strip_prompt_injection).toBe(false)
+    expect(by('writing').profiles).toEqual(['default', 'open', 'writing'])
+    expect(by('admin').profiles).toEqual(['default', 'admin'])
+    expect(by('patients').profiles).toEqual(['clinical', 'full', 'patients'])
+    // 服务端已有回合撤销与来源规则保护的写工具不进本地待审队列；需要租约的高风险工具进
+    expect(by('writing').tool_overrides).toMatchObject({ doc_create: 'read_only', doc_edit: 'read_only', deck_edit: 'read_only', workspace_put: 'read_only' })
+    expect(by('literature').tool_overrides.insert_citation).toBe('read_only')
+    expect(by('patients').tool_overrides).toEqual({ lab_resolve: 'staged_write', report_resolve: 'staged_write' })
+    expect(by('admin').tool_overrides.tenant_admin).toBe('staged_write')
+    expect(Object.keys(by('admin').tool_overrides)).toHaveLength(12)
+    expect(b.skills.map((s: any) => s.id)).toEqual([...b.servers.map((s: any) => s.server_id), 'heurion-clinical-research'])
+    for (const s of b.skills) {
+      expect(s.url).toMatch(/^http:\/\/127\.0\.0\.1:8799\/\.well-known\/aegis-skills\//)
+      expect((await app.request(s.url)).status).toBe(200)
+    }
+    // 生产：反向代理后面按 X-Forwarded-Proto 还原 https；heurion.org 放行子域名
+    const prod = (await (await app.request('http://heurion.org/.well-known/mcp-bundle.json', { headers: { 'x-forwarded-proto': 'https' } })).json()) as any
+    expect(prod.servers[0].url).toBe('https://heurion.org/api/aegis/mcp/writing')
+    expect(prod.auth_realm.allowed_hosts).toEqual(['heurion.org', '*.heurion.org'])
+    // 旧的 AAP-1.0 清单照常保留
+    expect((await app.request('/.well-known/aegis-app.json')).status).toBe(200)
+    expect((await createTestEnv({ aegisEnabled: false }).app.request('/.well-known/mcp-bundle.json')).status).toBe(404)
+  })
+
+  it('表单方式跑通 RFC 8628：发起（scope → 模块）→ 未批准时 error=authorization_pending → 用户批准 → 拿到令牌 → 调 /api/aegis/mcp/writing', async () => {
+    const { app, reg } = createTestEnv()
+    const form = (o: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(o).toString() })
+    const dev = await app.request('http://127.0.0.1:8799/api/aegis/auth/device', form({ client_id: 'aegis-os', scope: 'writing:rw literature:r' }))
+    expect(dev.status).toBe(201)
+    const d = (await dev.json()) as any
+    expect(d.verification_uri).toMatch(/^http:\/\/127\.0\.0\.1:8799\/\?aegis_device=HEUR-/)
+    expect(d.verification_uri_complete).toBe(d.verification_uri)
+    const poll = () => app.request('http://127.0.0.1:8799/api/aegis/auth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: d.device_code, client_id: 'aegis-os' }))
+    const pending = (await (await poll()).json()) as any
+    expect(pending.error).toBe('authorization_pending')
+    expect(pending.error_description).toContain(d.user_code)
+    expect(pending.code).toBe('authorization_pending')
+    const approve = await app.request('/api/aegis/auth/device/approve', {
+      method: 'POST', headers: { authorization: `Bearer ${reg.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ user_code: d.user_code }),
+    })
+    expect(approve.status).toBe(200)
+    const tokRes = await poll()
+    expect(tokRes.status).toBe(201)
+    const tok = (await tokRes.json()) as any
+    expect(tok.access_token).toMatch(/^aegis_at_heurion\./)
+    expect(tok.modules).toEqual({ writing: 'rw', literature: 'r' })
+    const again = (await (await poll()).json()) as any
+    expect(again).toMatchObject({ error: 'access_denied', code: 'token_already_consumed' })
+    const mcp = (method: string, params: unknown) => app.request('/api/aegis/mcp/writing', {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${tok.access_token}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    })
+    const init = await mcp('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'aegis-os', version: '0.9.0' } })
+    expect(init.status).toBe(200)
+    expect(((await init.json()) as any).result.serverInfo.name).toBe('heurion')
+    const tools = ((await (await mcp('tools/list', {})).json()) as any).result.tools.map((t: any) => t.name)
+    expect(tools).toContain('doc_edit')
   })
 })
