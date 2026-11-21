@@ -241,12 +241,21 @@ describe('规则二：数字要有出处', () => {
     expect(attempt(c => `The pathologic complete response rate was 29%. In the CROSS trial, neoadjuvant chemoradiotherapy achieved a high pathologic complete response rate [@c:${c}].`)).toBe('unobserved_number')
   })
 
-  it('所引文献只有摘要、摘要里找不到：写入，但交给用户核对', () => {
-    const { store, ops, docId, ids } = setup()
+  it('所引文献只有摘要、摘要里找不到：不拒绝，但整批转为待采纳修订（由人对照全文确认，平台强制）', () => {
+    const { docs, store, ops, docId, ids } = setup()
     const neo = store.upsertCitation({ doc_id: docId, doi: '10.1000/neo', pmid: null, formatted: 'NEO', url: null })
     store.putAbstract('10.1000/neo', null, 'Neoadjuvant chemoradiotherapy improved 3-year overall survival in esophageal squamous cell carcinoma.')
     const r = addPara(ops, docId, ids[2]!, `Neoadjuvant chemoradiotherapy improved 3-year overall survival to 64.4% in esophageal squamous cell carcinoma [@c:${neo.id}].`)
     expect(r.provenance?.unverifiable_numbers?.[0]?.number).toBe('64.4%')
+    expect(r.provenance?.converted_to_suggest?.join('')).toContain('只有摘要')
+    expect(hasSuggestions(docs.get(docId))).toBe(true)
+    // 有全文、全文里有这个数：直接写入，不转修订
+    const t = setup()
+    const full = t.store.upsertCitation({ doc_id: t.docId, doi: '10.1000/full', pmid: null, formatted: 'FULL', url: null })
+    t.store.putFullText('10.1000/full', { source: 'pmc', url: null, license: 'cc-by', text: 'The 3-year overall survival was 64.4% in the chemoradiotherapy group.' })
+    const ok = addPara(t.ops, t.docId, t.ids[2]!, `Neoadjuvant chemoradiotherapy improved 3-year overall survival to 64.4% [@c:${full.id}].`)
+    expect(ok.provenance?.converted_to_suggest).toBeUndefined()
+    expect(hasSuggestions(t.docs.get(t.docId))).toBe(false)
   })
 
   it('新插的引用要有保存的摘要或全文', () => {
