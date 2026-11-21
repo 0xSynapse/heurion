@@ -1,6 +1,6 @@
 # PRD：Heurion 2.0 自演进记忆治理与可验证证据分级
 
-- **文档状态**：Draft v1.0（已对齐 [`docs/MEMORY_PAPER_ROADMAP.md`](../MEMORY_PAPER_ROADMAP.md) 修正版）
+- **文档状态**：部分已实现（2026-11-21 核对）。已实现：规则准入的证据门控（CoEM：`harness_rules` 的 pending → active，`memory/procedural.ts`）、规则版本与回滚（Skill-V：`harness_rule_versions`）、论断核对的证据层级（`verify_claims` / `claim_report` 的 `evidence_tier`：table / fulltext / abstract / none，附原文摘录）。未实现：主动取景（SafeVantage 的 abstain 分支）、规则可靠性与证据指针（MSCE）、hard-case 队列（MemSkill）。原「论文 → 落地对照」与 P0 测试报告已并入本节，历史版本见 git。
 - **关联代码模块**：`src/memory/procedural.ts`、`src/claims/service.ts`、`src/store/db.ts`、`web/src/main.ts`、`web/src/memory.ts`
 - **目标用户**：临床医生（论文第一作者/通讯作者）、生物统计师、专病队列研究员、课题组 PI
 

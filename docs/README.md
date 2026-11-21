@@ -1,58 +1,30 @@
-# Heurion 2.0 文档导航 (Documentation Index)
+# Heurion 2.0 文档导航
 
-欢迎阅读 Heurion 2.0 平台工程与设计文档。本目录按职责划分为**核心架构与部署**、**业务与临床科研设计**、**自演进记忆与研究**以及**视觉资产**四个部分。
+## 架构与部署
 
----
-
-## 核心架构与部署 (Core Architecture & Ops)
-
-| 文档 | 描述 |
+| 文档 | 内容 |
 |---|---|
-| [**PLATFORM.md**](PLATFORM.md) | **平台核心架构**：基于 ProseMirror + Yjs CRDT 的文档与幻灯片双模引擎、写前守卫（Write Guards）、三层自演进记忆引擎、双服务解耦（`platform` 与 `canvas-service`）、Model Context Protocol (MCP) 接口体系。 |
-| [**DEPLOY.md**](DEPLOY.md) | **生产环境部署指南**：单机 Docker Compose 架构、Caddy 反向代理、容器安全沙箱与 UID 隔离、S3 增量异地备份。 |
+| [PLATFORM.md](PLATFORM.md) | 平台架构：文档 / 幻灯片双内核（ProseMirror + Yjs）、操作层与写前守卫、评论与引用、导入导出、MCP 接口面（dsh 回合）、决策记录 |
+| [DEPLOY.md](DEPLOY.md) | 生产部署：Docker Compose、Caddy、发布流程、Secrets、备份与恢复、影像存储 |
+| [design/MCP_MODULES.md](design/MCP_MODULES.md) | MCP 模块化与 Aegis-OS 接入：现有接入路径与 AAP-1.0 部件、按模块开放 MCP 的方案、外发策略、阶段状态 |
 
----
+## 设计文档（`design/`）
 
-## 业务与临床科研系统设计 (Domain Designs)
-
-位于 [`design/`](design/) 目录，涵盖临床多租户、课题组、患者档案、记忆治理与安全红线设计：
-
-| 文档 | 模块 | 关键内容 |
+| 文档 | 模块 | 状态 |
 |---|---|---|
-| [`design/TENANCY.md`](design/TENANCY.md) | 租户与空间 | 工作空间（机构/科室）与个人空间的双重身份、邀请/加入/退出机制、数据隔离边界。 |
-| [`design/TEAM.md`](design/TEAM.md) | 课题团队 | 角色模型（PI 主要研究者、Co-PI、CRA、研究员等）、权限矩阵与课题协作。 |
-| [`design/PATIENT.md`](design/PATIENT.md) | 患者档案 (知家) | 患者档案模型、检查检验指标、PHI 隐私脱敏与受试者编码。 |
-| [`design/SHARING.md`](design/SHARING.md) | 档案共享凭证 | 家属端向医生/医院安全共享档案的授权 Claims、只读访问控制、审计流水。 |
-| [`design/COHORT.md`](design/COHORT.md) | 临床科研队列 | 复合条件检索、入组与排除标准自动筛选、队列样本集管理。 |
-| [`design/AI_PERMISSIONS.md`](design/AI_PERMISSIONS.md) | AI 权限与红线 | 医疗大模型外发红线、操作前权限校验、安全话术兜底机制。 |
-| [`design/AEGIS_APP_PROTOCOL.md`](design/AEGIS_APP_PROTOCOL.md) | Aegis OS 应用协议 (`AAP-1.0`) | 第一方/第三方统一鉴权、App Store 自发现清单 (`/.well-known/aegis-app.json`)、Ed25519 加密租约验签与 Heurion 2.0 接入方案。 |
-| [`design/MEMORY_GOVERNANCE_PRD.md`](design/MEMORY_GOVERNANCE_PRD.md) | 自演进记忆治理 PRD | 从临床医生、统计师与 PI 视角定义三层记忆治理升级的用户场景、UI 显性交互变化、对话隐性体感指标与完整架构逻辑。 |
-| [`design/DEEP_REVIEW_PRODUCT.md`](design/DEEP_REVIEW_PRODUCT.md) | 深度审稿独立产品（草案） | 定位、现状摸底、单篇成本实测、产品形态、付费与数据政策、学科扩展与里程碑。 |
-| [`design/DEEP_REVIEW_EVAL.md`](design/DEEP_REVIEW_EVAL.md) | 深度审稿评测集 | 干净 / 植入错误 / 真实勘误三类样本、误报为主指标、开发集与封存测试集、标注与判定格式。 |
-| [`design/IMPORT_EVAL.md`](design/IMPORT_EVAL.md) | 导入质量评测 | 以同版本 JATS 为标准答案逐项比对 PDF（Docling / poppler）与 Word 导入，基线与防退步容差。 |
-| [`design/PDF_ORIGINAL_VIEW.md`](design/PDF_ORIGINAL_VIEW.md) | 学术 PDF 原版视图（第 1–4 阶段已实现） | pdf.js 逐页显示原版，PDF 词与转换稿块的对齐映射，评论、深度审稿标注画在原版上并可在原版上新建评论（只读）。 |
-| [`design/IMAGING_STUDIES.md`](design/IMAGING_STUDIES.md) | 医学影像与阅片 | Orthanc DICOMweb 代理、浏览器端 PS3.15 去标识上传、肺结节模型链与 DICOM SEG、OHIF 结节面板与点选补漏、随访配准与 VDT、所见草稿与 RIS 纯文本、审核定稿与效率埋点。 |
-
----
-
-## 产品需求与工作计划 (PRD & Workplan)
-
-| 文档 | 描述 |
-|---|---|
-| [`prd/IMAGING_PRD_v3.md`](prd/IMAGING_PRD_v3.md) | **医学影像一期产品需求文档（v3.0）**：在线 PRD 完整快照（含第 13 节工作列表），覆盖放射科 W1–W7 工作流、AI 职责边界、隐私合规与分期关口。 |
-| [`prd/IMAGING_WORKPLAN.md`](prd/IMAGING_WORKPLAN.md) | **影像一期工作列表与后续安排**：记录各阶段任务完成进度、生产实测发现的问题与后续工程/临床评估优先级。 |
-
----
-
-## 研究与演进 (Research & Evolution)
-
-| 文档 | 描述 |
-|---|---|
-| [**MEMORY_PAPER_ROADMAP.md**](MEMORY_PAPER_ROADMAP.md) | **自演进记忆论文落地对照**：CoEM / SafeVantage / Skill-V / MSCE / MemSkill / MemTransfer 六篇前沿论文机制，与 Heurion 三层自演进记忆实现的差距、落点文件、DDL 规范与分阶段演进路线。 |
-| [**MEMORY_P0_EVALUATION.md**](MEMORY_P0_EVALUATION.md) | **P0 阶段研究作用与测试数据报告**：详解 CoEM 与 SafeVantage 对 Heurion 2.0 产品的赋能机制、三维裁决矩阵、状态流转图，以及 7 大测试套件（63 项用例）的实测数据汇总。 |
-
----
-
-## 视觉与图表资产 (Assets)
-
-- [`icons/`](icons/)：包含平台与 README 使用的高保真矢量 SVG 图标（如 `studio.svg`, `features.svg`, `dna.svg`, `shield.svg`, `book.svg` 等）。
+| [TENANCY.md](design/TENANCY.md) | 机构与个人空间、数据隔离、加密患者库 | 现行 |
+| [TEAM.md](design/TEAM.md) | 研究团队角色与权限 | 现行 |
+| [AI_PERMISSIONS.md](design/AI_PERMISSIONS.md) | AI 的权限 = 用户的权限；高风险操作的确认 | 现行 |
+| [PATIENT.md](design/PATIENT.md) | 知家：家庭健康档案 | 部分实现 |
+| [SHARING.md](design/SHARING.md) | 知家「分享给医生」 | 现行 |
+| [COHORT.md](design/COHORT.md) | 研究入组与研究数据集 | 现行 |
+| [IMAGING_STUDIES.md](design/IMAGING_STUDIES.md) | 影像检查（DICOM）、去标识、结节模型链、阅片与所见草稿 | 现行 |
+| [PROVENANCE.md](design/PROVENANCE.md) | 来源等级：AI 文字来源标记、观察记录、写前检查 | 分期上线中 |
+| [PROTECTION_RESOLUTION.md](design/PROTECTION_RESOLUTION.md) | 写作保护拦下之后的处理 | 草案 |
+| [WORD_ROUNDTRIP.md](design/WORD_ROUNDTRIP.md) | Word 回流三方合并 | 草案 |
+| [PDF_ORIGINAL_VIEW.md](design/PDF_ORIGINAL_VIEW.md) | 学术 PDF 原版视图 | 第 1–4 阶段已实现 |
+| [IMPORT_EVAL.md](design/IMPORT_EVAL.md) | PDF / Word 导入质量评测 | 现行 |
+| [REVIEW_QUALITY.md](design/REVIEW_QUALITY.md) | 深度审稿质量记录与自演进 | 第一步已实现 |
+| [DEEP_REVIEW_PRODUCT.md](design/DEEP_REVIEW_PRODUCT.md) | 深度审稿独立产品 | 草案 |
+| [DEEP_REVIEW_EVAL.md](design/DEEP_REVIEW_EVAL.md) | 深度审稿评测集 | 草案 |
+| [MEMORY_GOVERNANCE_PRD.md](design/MEMORY_GOVERNANCE_PRD.md) | 自演进记忆治理与证据分级 | 部分实现 |
