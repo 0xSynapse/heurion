@@ -238,3 +238,31 @@ export function moduleGrantAllows(tool: string, grant: ModuleGrant): boolean {
 export function formatModuleGrant(grant: ModuleGrant): string {
   return MODULE_IDS.filter(id => grant[id]).map(id => `${id}:${grant[id]}`).join(',')
 }
+
+// —— 机构外发策略（MCP_MODULES.md §3.5，阶段 4） ——
+
+/** 需要机构开启后外部智能体才能用的模块。 */
+export const ORG_OPT_IN_MODULES: readonly ModuleId[] = MODULES.filter(m => m.external === 'org_opt_in').map(m => m.id)
+
+/**
+ * 机构允许外部智能体用的模块：默认开放（open / readonly_default）的全部 + 机构开启的 org_opt_in 模块；
+ * 机构关闭了「患者数据可以交给外部模型」时，org_opt_in 模块一律不开。
+ */
+export function orgAllowedModules(settings: { aegis_modules?: readonly string[]; external_model_for_patients?: boolean }): Set<ModuleId> {
+  const out = new Set<ModuleId>(MODULES.filter(m => m.external !== 'org_opt_in').map(m => m.id))
+  if (settings.external_model_for_patients === false) return out
+  for (const m of settings.aegis_modules ?? []) if ((ORG_OPT_IN_MODULES as readonly string[]).includes(m)) out.add(m as ModuleId)
+  return out
+}
+
+/** 授权的模块权限 ∩ 机构允许的模块。 */
+export function restrictToOrg(grant: ModuleGrant, allowed: ReadonlySet<ModuleId>): { effective: ModuleGrant; blocked: ModuleId[] } {
+  const effective: ModuleGrant = {}
+  const blocked: ModuleId[] = []
+  for (const id of MODULE_IDS) {
+    if (!grant[id]) continue
+    if (allowed.has(id)) effective[id] = grant[id]
+    else blocked.push(id)
+  }
+  return { effective, blocked }
+}

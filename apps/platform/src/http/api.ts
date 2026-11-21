@@ -9,8 +9,8 @@ import { chmodIfOwned, CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
 import { HTTP_PUT_MAX, listDir, readTarget, WorkspaceFileError, writeTarget } from '../aegis/files.ts'
-import { handleAegisMcpRequest, type McpDeps } from '../mcp/server.ts'
-import { formatModuleGrant, grantModules, MODULE_IDS, MODULES, type ModuleId } from '../mcp/modules.ts'
+import { aegisEffectiveModules, handleAegisMcpRequest, type McpDeps } from '../mcp/server.ts'
+import { formatModuleGrant, grantModules, MODULE_IDS, MODULES, orgAllowedModules, type ModuleId } from '../mcp/modules.ts'
 import { moduleSkillDoc } from '../mcp/skills.ts'
 import { TurnRegistry } from '../mcp/turns.ts'
 import { ClaimService, type ReviewProgress } from '../claims/service.ts'
@@ -26,7 +26,7 @@ import type { SearchIndex } from '../model/search-index.ts'
 import { ExtractError, extractText } from '../kb/extract.ts'
 import type { KbService } from '../kb/service.ts'
 import type { DatasetService } from '../datasets/service.ts'
-import { TenantError, TenantService } from '../auth/tenants.ts'
+import { TenantError, TenantService, tenantSettings } from '../auth/tenants.ts'
 import type { StudyService } from '../research/service.ts'
 import { PatientError, type PatientService } from '../tenancy/patients.ts'
 import { ShareService } from '../tenancy/shares.ts'
@@ -85,7 +85,7 @@ import { importReferences, parseReferences } from '../literature/import-refs.ts'
 import { formatAma, formatCitation, normalizeDoi } from '../literature/format.ts'
 import type { Article } from '../literature/types.ts'
 import type { OpenAlexClient } from '../literature/openalex.ts'
-import { newCommentId, type DocRow } from '../store/db.ts'
+import { newCommentId, type AgentGrantRow, type DocRow } from '../store/db.ts'
 import { bindAssets, bindComments, DocxImportError, importDocx } from '../convert/docx-import.ts'
 import type { DocParser } from '../convert/doc-parser.ts'
 import type { Alerts } from '../ops-alert/alerts.ts'
@@ -724,7 +724,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (!auth.startsWith('Bearer ')) return { error: c.json({ error: '缺少 Authorization: Bearer aegis_at_heurion.* 令牌', code: 'missing_bearer_token' }, 401) }
     const v = aegisAuth.verifyGrantToken(auth.slice(7).trim(), c.req.header('x-aegis-agent-id') ?? null)
     if (!v.ok) return { error: c.json({ error: v.error, code: v.code }, 401) }
-    const perms = Object.values(grantModules(v.verified.grant))
+    const perms = Object.values(aegisEffectiveModules(store, v.verified.user, v.verified.grant).effective)
     if (!perms.length || (write && !perms.includes('rw'))) return { error: c.json({ error: '当前授权不能' + (write ? '写入' : '读取') + '工作区文件', code: 'forbidden' }, 403) }
     return { userId: v.verified.user.id }
   }
@@ -813,9 +813,15 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
 
   app.get('/api/aegis/auth/grants', c => {
-    const grants = store.listAgentGrants(c.get('user')).map(({ token_hash: _h, ...rest }) => ({ ...rest, modules: grantModules(rest) }))
-    // 设置页按模块勾选权限用的目录
-    return c.json({ grants, modules: MODULES.map(m => ({ id: m.id, title: m.title, summary: m.summary, external: m.external })) })
+    const me = store.getUser(c.get('user'))
+    const grants = store.listAgentGrants(c.get('user')).map(({ token_hash: _h, ...rest }) => {
+      const eff = me ? aegisEffectiveModules(store, me, rest as AgentGrantRow) : { effective: {}, blocked: [] }
+      return { ...rest, modules: grantModules(rest), blocked_by_org: eff.blocked }
+    })
+    // 设置页按模块勾选权限用的目录；org_allowed = 所在机构允许外部智能体用的模块（§3.5）
+    const tenant = me ? store.getTenant(me.tenant_id ?? me.personal_tenant_id ?? '') : undefined
+    const allowed = orgAllowedModules(tenant ? tenantSettings(tenant) : {})
+    return c.json({ grants, modules: MODULES.map(m => ({ id: m.id, title: m.title, summary: m.summary, external: m.external, org_allowed: allowed.has(m.id) })) })
   })
 
   // 每个账号 15 分钟内最多试 10 次设备码，防止穷举把别人的终端绑进自己账号

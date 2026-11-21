@@ -32,7 +32,7 @@ import { kekFrom, TenantKeys } from '../src/tenancy/keys.ts'
 import { PatientService } from '../src/tenancy/patients.ts'
 import { TurnService } from '../src/turns/service.ts'
 
-function createTestEnv(opts: { aegisEnabled?: boolean; provenance?: boolean; mcpDeps?: (base: { docs: Documents; ops: OpService; registry: TurnRegistry; dir: string }) => McpDeps } = {}) {
+function createTestEnv(opts: { aegisEnabled?: boolean; provenance?: boolean; orgModules?: string[]; mcpDeps?: (base: { docs: Documents; ops: OpService; registry: TurnRegistry; dir: string }) => McpDeps } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'heurion-aegis-'))
   const store = new Store(':memory:')
   const docs = new Documents(store)
@@ -108,6 +108,14 @@ function createTestEnv(opts: { aegisEnabled?: boolean; provenance?: boolean; mcp
     },
     '127.0.0.1',
   )
+  // 机构外发策略（阶段 4）：患者 / 影像 / 研究 / 分析默认不对外部智能体开放。别的用例测的不是策略，
+  // 默认替机构全部打开；策略用例显式传 orgModules: []
+  {
+    const u = store.getUserByName('dr_zhang')!
+    const tid = u.tenant_id ?? u.personal_tenant_id!
+    const t = store.getTenant(tid)!
+    store.updateTenant(tid, { settings: JSON.stringify({ ...JSON.parse(t.settings || '{}'), aegis_modules: opts.orgModules ?? ['analysis', 'patients', 'imaging', 'research'] }) })
+  }
 
   /** 通过 /api/aegis/mcp 发送 MCP JSON-RPC tools/call 请求 */
   const callAegisTool = async (
@@ -1062,5 +1070,75 @@ describe('AAP-1.0 外部智能体适配（阶段 3）', () => {
     expect(instructions).toContain('pubmed_search')
     expect(instructions).not.toContain('imaging_analyze')
     expect(instructions).not.toContain('shell')
+  })
+})
+
+describe('AAP-1.0 患者数据外发策略（阶段 4）', () => {
+  const issue = async (app: ReturnType<typeof createTestEnv>['app'], grant: Record<string, unknown>) => {
+    const res = await app.request('/api/aegis/auth/token', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'dr_zhang', password: 'Password123!', name: 'node', node_pubkey: generateAegisNodeKeyPair().publicKey, ...grant }),
+    })
+    return ((await res.json()) as { access_token: string }).access_token
+  }
+  const rpc = async (app: ReturnType<typeof createTestEnv>['app'], token: string, path: string, method: string, params: unknown) => {
+    const res = await app.request(path, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, 'x-aegis-agent-id': 'agy-1' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    })
+    return { status: res.status, body: (await res.json()) as any }
+  }
+  const tools = async (app: ReturnType<typeof createTestEnv>['app'], token: string, path = '/api/aegis/mcp') =>
+    ((await rpc(app, token, path, 'tools/list', {})).body.result.tools as Array<{ name: string }>).map(t => t.name)
+  const setOrg = (app: ReturnType<typeof createTestEnv>['app'], userToken: string, settings: Record<string, unknown>) =>
+    app.request('/api/tenant', { method: 'PATCH', headers: { authorization: `Bearer ${userToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ settings }) })
+
+  it('默认关：授权了患者等模块也用不了，模块地址 403；授权列表标出被机构挡住的模块', async () => {
+    const { app, reg } = createTestEnv({ orgModules: [] })
+    const token = await issue(app, { tool_scope: 'all' })
+    const names = await tools(app, token)
+    expect(names).toContain('doc_edit')
+    for (const blocked of ['patient_read', 'study_list', 'dataset_describe', 'imaging_status']) expect(names).not.toContain(blocked)
+    const r = await rpc(app, token, '/api/aegis/mcp/patients', 'tools/list', {})
+    expect(r.status).toBe(403)
+    expect(r.body.code).toBe('module_not_allowed_by_org')
+    const list = (await (await app.request('/api/aegis/auth/grants', { headers: { authorization: `Bearer ${reg.token}` } })).json()) as any
+    expect(list.grants[0].blocked_by_org.sort()).toEqual(['analysis', 'imaging', 'patients', 'research'])
+    expect(list.modules.find((m: any) => m.id === 'patients').org_allowed).toBe(false)
+    expect(list.modules.find((m: any) => m.id === 'writing').org_allowed).toBe(true)
+    // 只授权了被挡住的模块：整个网关拒绝
+    const onlyPatients = await issue(app, { modules: 'patients:rw' })
+    expect((await rpc(app, onlyPatients, '/api/aegis/mcp', 'tools/list', {})).status).toBe(403)
+    expect((await app.request('/api/aegis/files/x.txt', { method: 'PUT', headers: { authorization: `Bearer ${onlyPatients}` }, body: 'x' })).status).toBe(403)
+  })
+
+  it('机构管理员逐个打开，立即生效、关掉也立即生效；不需要开的模块和未知模块拒绝；不许交给外部模型时一律不开', async () => {
+    const { app, reg } = createTestEnv({ orgModules: [] })
+    const token = await issue(app, { tool_scope: 'all' })
+    expect((await setOrg(app, reg.token, { aegis_modules: ['patients'] })).status).toBe(200)
+    expect(await tools(app, token)).toContain('patient_read')
+    expect(await tools(app, token)).not.toContain('study_list')
+    expect((await rpc(app, token, '/api/aegis/mcp/patients', 'tools/list', {})).status).toBe(200)
+    expect((await setOrg(app, reg.token, { aegis_modules: ['writing'] })).status).toBe(400)
+    expect((await setOrg(app, reg.token, { aegis_modules: ['nope'] })).status).toBe(400)
+    expect((await setOrg(app, reg.token, { external_model_for_patients: false })).status).toBe(200)
+    expect(await tools(app, token)).not.toContain('patient_read')
+    expect((await setOrg(app, reg.token, { external_model_for_patients: true, aegis_modules: [] })).status).toBe(200)
+    expect(await tools(app, token)).not.toContain('patient_read')
+  })
+
+  it('开放模块的每次调用记审计（谁、哪个智能体、哪个患者），机构管理员可查；默认开放的模块不记', async () => {
+    const { app, reg, store } = createTestEnv({ orgModules: ['patients'] })
+    const token = await issue(app, { tool_scope: 'all' })
+    await rpc(app, token, '/api/aegis/mcp', 'tools/call', { name: 'patient_list', arguments: {} })
+    await rpc(app, token, '/api/aegis/mcp', 'tools/call', { name: 'patient_read', arguments: { patient_id: 'p-none' } })
+    await rpc(app, token, '/api/aegis/mcp', 'tools/call', { name: 'doc_list', arguments: {} })
+    const rows = store.listAudit({ action: 'aegis.tool_call' })
+    expect(rows.map(r => r.detail?.split(' · ')[1]).sort()).toEqual(['patient_list（patients）', 'patient_read（patients）'])
+    expect(rows.every(r => r.detail?.startsWith('agy-1 · ') && r.via === 'aegis')).toBe(true)
+    expect(rows.find(r => r.detail?.includes('patient_read'))!.target).toBe('patient_id=p-none')
+    expect(rows.find(r => r.detail?.includes('patient_read'))!.status).toBe(400)
+    const audit = (await (await app.request('/api/tenant/audit?action=aegis.tool_call', { headers: { authorization: `Bearer ${reg.token}` } })).json()) as any
+    expect(JSON.stringify(audit)).toContain('patient_read')
   })
 })

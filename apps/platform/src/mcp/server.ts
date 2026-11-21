@@ -13,14 +13,15 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { z } from 'zod'
 import { canAccess, verifyToken, type Permission, type TokenClaims } from '../auth/token.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
-import type { AgentGrantRow, DocRow, UserRow } from '../store/db.ts'
+import type { AgentGrantRow, DocRow, Store, TenantRow, UserRow } from '../store/db.ts'
 import type { ClaimService } from '../claims/service.ts'
 import { pptxFor } from '../convert/exports.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
 import { toolInScope } from './scope.ts'
 import { DSH_INSTRUCTIONS, externalInstructions } from './instructions.ts'
 import { registerWorkspaceTools } from './workspace-tools.ts'
-import { grantModules, legacyScopeModules, MODULE_IDS, moduleGrantAllows, moduleOf, SHARED_TOOLS, type ModuleGrant, type ModuleId } from './modules.ts'
+import { tenantSettings } from '../auth/tenants.ts'
+import { grantModules, legacyScopeModules, MODULE_IDS, moduleGrantAllows, moduleOf, ORG_OPT_IN_MODULES, orgAllowedModules, restrictToOrg, SHARED_TOOLS, type ModuleGrant, type ModuleId } from './modules.ts'
 import { DeckEditBatch, DeckOp, newTemplateDeck } from '../ops/deck.ts'
 import { LAYOUTS, layoutSpec, templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
@@ -2397,6 +2398,7 @@ function wrapToolRegistration(
   claims: TokenClaims,
   aegisModules?: ModuleGrant,
   modules?: ReadonlySet<ModuleId>,
+  onToolCall?: (tool: string, args: unknown, ok: boolean) => void,
 ): void {
   const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown
   ;(server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) => {
@@ -2454,8 +2456,10 @@ function wrapToolRegistration(
             failedArgs: { tool: n, args },
           })
         }
+        if (onToolCall) try { onToolCall(n, args, !(res && typeof res === 'object' && (res as { isError?: boolean }).isError === true)) } catch (e) { console.error('[aegis] audit:', e) }
         return res
       } catch (err) {
+        if (onToolCall) try { onToolCall(n, args, false) } catch (e) { console.error('[aegis] audit:', e) }
         ctx.deps.executionSignals?.recordToolFailure({
           owner: claims.u,
           docId,
@@ -2500,6 +2504,8 @@ export interface AegisMcpServerOptions {
    * 经任何模块读到的数字，再经写作模块写进稿件时都算「看到过」。
    */
   observeKey?: string
+  /** 每次工具调用之后（外部网关用来记审计，§3.5）。 */
+  onToolCall?: (tool: string, args: unknown, ok: boolean) => void
 }
 
 /** Heurion 综合医疗业务 MCP 服务：聚合画布与文档、医疗临床与科研、管理审批全部工具 */
@@ -2518,7 +2524,7 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
     : DSH_INSTRUCTIONS
   const server = new McpServer({ name: 'heurion', version: '2.0.0' }, { instructions })
   // 工具范围（令牌里的 t 或 AAP-1.0 tool_scope）与工具错误信号钩子
-  wrapToolRegistration(server, ctx, claims, aegisModules, aegisOpts?.modules ? new Set(aegisOpts.modules) : undefined)
+  wrapToolRegistration(server, ctx, claims, aegisModules, aegisOpts?.modules ? new Set(aegisOpts.modules) : undefined, aegisOpts?.onToolCall)
 
   registerCanvasTools(server, ctx)
   registerHealthcareTools(server, ctx)
@@ -2543,6 +2549,15 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
     claims.u,
   )
   return server
+}
+
+/**
+ * 外部智能体实际能用的模块：授权的模块权限 ∩ 用户所在机构允许的模块（§3.5）。
+ * MCP 网关、文件直传、授权列表都用它，机构关掉立即生效。
+ */
+export function aegisEffectiveModules(store: Store, user: UserRow, grant: AgentGrantRow): { effective: ModuleGrant; blocked: ModuleId[]; tenant: TenantRow | null } {
+  const tenant = store.getTenant(user.tenant_id ?? user.personal_tenant_id ?? '') ?? null
+  return { ...restrictToOrg(grantModules(grant), orgAllowedModules(tenant ? tenantSettings(tenant) : {})), tenant }
 }
 
 export interface AegisRequestContext {
@@ -2578,14 +2593,17 @@ export function buildAegisMcpServer(
     return { ok: false, status: 401, code: verifiedRes.code, error: verifiedRes.error }
   }
   const { grant, user } = verifiedRes.verified
-  const granted = grantModules(grant)
+  // 机构外发策略（§3.5）：授权的模块再与用户所在机构允许的模块取交集（机构随时可以关，立即生效）
+  const { effective: granted, blocked, tenant: tenantRow } = aegisEffectiveModules(store, user, grant)
   let onlyModules: ModuleId[] | undefined
   if (reqCtx.module != null) {
     const m = reqCtx.module as ModuleId
     if (!MODULE_IDS.includes(m)) return { ok: false, status: 404, code: 'unknown_module', error: `没有这个模块：${reqCtx.module}（可选：${MODULE_IDS.join('、')}）` }
+    if (blocked.includes(m)) return { ok: false, status: 403, code: 'module_not_allowed_by_org', error: `所在机构没有允许外部智能体使用模块 ${m}；需要机构管理员在机构设置里开启` }
     if (!granted[m]) return { ok: false, status: 403, code: 'module_not_granted', error: `该授权没有开放模块 ${m}；请在 Heurion 设置页重新授权` }
     onlyModules = [m]
   }
+  if (!Object.keys(granted).length) return { ok: false, status: 403, code: 'module_not_allowed_by_org', error: '该授权的模块都没有被所在机构允许给外部智能体使用' }
 
   // 校验可选的 X-Aegis-Org-Id 请求头，防止跨机构越权
   const reqOrg = reqCtx.orgId?.trim()
@@ -2674,6 +2692,14 @@ export function buildAegisMcpServer(
     aegisModules: granted,
     modules: onlyModules,
     observeKey: `sess:${grant.id}:${session}`,
+    // 机构开启后才能用的模块（患者、影像、研究、分析）：每次调用记审计（谁、哪个智能体、哪个患者 / 数据集 / 研究）
+    onToolCall: (tool, args, ok) => {
+      const m = moduleOf(tool)
+      if (!m || !ORG_OPT_IN_MODULES.includes(m)) return
+      const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
+      const target = ['patient_id', 'dataset_id', 'study_id', 'share_id', 'imaging_study_id', 'lesion_id'].filter(k => typeof a[k] === 'string').map(k => `${k}=${a[k]}`).join(' ') || null
+      store.addAudit({ actor: user.id, action: 'aegis.tool_call', target, detail: `${agentId} · ${tool}（${m}） · ${grant.id}`, ip: 'aegis', status: ok ? 200 : 400, tenant_id: tenantRow?.id ?? null, via: 'aegis' })
+    },
   })
 
   return { ok: true, server, user, grant, agentId, turnId, generation }

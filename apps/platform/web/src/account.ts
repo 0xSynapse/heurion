@@ -32,7 +32,7 @@ export interface Me {
 /** 当前实例是否接了影像存储（initUserMenu 时记下；机构管理对话框据此显示影像相关设置） */
 let dicomEnabled = false
 
-interface TenantSettings { patient_module: boolean; external_model_for_patients: boolean; patient_visibility: 'care_team' | 'tenant'; ai_patient_writes: 'review' | 'direct'; accept_patient_shares?: boolean; imaging_ai_visibility?: 'visible' | 'shadow'; imaging_self_review?: boolean }
+interface TenantSettings { patient_module: boolean; external_model_for_patients: boolean; patient_visibility: 'care_team' | 'tenant'; ai_patient_writes: 'review' | 'direct'; accept_patient_shares?: boolean; imaging_ai_visibility?: 'visible' | 'shadow'; imaging_self_review?: boolean; aegis_modules?: string[] }
 
 /** 邀请链接里的邀请码（/app?invite=…）。 */
 export const inviteCode = (): string | null => new URLSearchParams(location.search).get('invite')
@@ -510,6 +510,8 @@ interface AegisGrantItem {
   tool_scope: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
   /** 实际生效的模块权限（旧授权由 tool_scope 换算） */
   modules: Record<string, 'r' | 'rw'>
+  /** 授权了、但所在机构没有允许给外部智能体的模块 */
+  blocked_by_org?: string[]
   write_mode: 'direct' | 'tracked'
   created_at: string
   expires_at: string | null
@@ -518,7 +520,7 @@ interface AegisGrantItem {
   revoked_at: string | null
 }
 
-interface AegisModuleItem { id: string; title: string; summary: string; external: 'open' | 'org_opt_in' | 'readonly_default' }
+interface AegisModuleItem { id: string; title: string; summary: string; external: 'open' | 'org_opt_in' | 'readonly_default'; org_allowed?: boolean }
 
 /** 签发表单里每个模块的默认权限：默认开放的读写，管理只读，患者 / 影像 / 研究 / 分析默认不开。 */
 const MODULE_DEFAULT: Record<AegisModuleItem['external'], '' | 'r' | 'rw'> = { open: 'rw', readonly_default: 'r', org_opt_in: '' }
@@ -551,11 +553,11 @@ async function mountAegisGrants(
           ${catalog.map(m => `
             <label class="small" title="${esc(m.summary)}" style="display:flex;align-items:center;gap:6px">
               <span style="flex:1">${esc(m.title)}</span>
-              <select name="module_${esc(m.id)}" aria-label="${esc(m.title)} 权限">
+              ${m.org_allowed === false ? '<span class="muted small" title="机构管理员在机构设置里开启后才能授权">机构未开启</span>' : `<select name="module_${esc(m.id)}" aria-label="${esc(m.title)} 权限">
                 <option value=""${MODULE_DEFAULT[m.external] === '' ? ' selected' : ''}>不开放</option>
                 <option value="r"${MODULE_DEFAULT[m.external] === 'r' ? ' selected' : ''}>只读</option>
                 <option value="rw"${MODULE_DEFAULT[m.external] === 'rw' ? ' selected' : ''}>读写</option>
-              </select>
+              </select>`}
             </label>`).join('')}
         </div>
         <select name="write_mode" aria-label="写入模式">
@@ -585,7 +587,7 @@ async function mountAegisGrants(
                   <b>${esc(g.name)}</b>
                   <div class="muted small" style="font-family:var(--mono)">${esc(g.token_prefix)}…${g.aegis_node_pubkey ? ' · 已绑节点公钥' : ''}</div>
                 </td>
-                <td class="small">${esc(modulesLabel(g.modules ?? {}, catalog))}<div class="muted small">${g.write_mode === 'tracked' ? '留痕修订' : '直接写入'}</div></td>
+                <td class="small">${esc(modulesLabel(g.modules ?? {}, catalog))}${g.blocked_by_org?.length ? `<div class="muted small">机构未开启：${esc(catalog.filter(m => g.blocked_by_org!.includes(m.id)).map(m => m.title).join('、'))}（暂不可用）</div>` : ''}<div class="muted small">${g.write_mode === 'tracked' ? '留痕修订' : '直接写入'}</div></td>
                 <td class="muted small">${g.last_agent_id ? `<code>${esc(g.last_agent_id)}</code><br>${when(g.last_used_at)}` : '尚未使用'}</td>
                 <td>${g.revoked_at ? '<span class="pill off">已吊销</span>' : '<span class="pill ok">生效中</span>'}</td>
                 <td class="actions">${g.revoked_at ? '' : `<button type="button" class="danger" data-revoke-grant="${esc(g.id)}">吊销</button>`}</td>
@@ -1082,6 +1084,9 @@ async function mountDepartments(box: HTMLElement, api: ApiFn, notify: Notify, ad
   await render()
 }
 
+/** 机构开启后外部智能体才能用的模块（mcp/modules.ts 的 org_opt_in）。 */
+const AEGIS_ORG_MODULES: Array<[string, string]> = [['patients', '患者与知家'], ['imaging', '影像'], ['research', '临床研究'], ['analysis', '数据分析']]
+
 async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
   const t = await api('/api/tenant')
   const title = t.kind === 'org' ? (t.name ? `机构管理 · ${t.name}` : '机构管理') : (t.name ? `机构与邀请 · ${t.name}` : '机构与邀请')
@@ -1117,6 +1122,9 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
         <div class="muted small">影像检查的定稿只允许「审核」阅片角色的成员，在「成员与邀请」里设置。默认初写与审核须为不同的人。</div>` : ''}
         <div><button type="button" class="small-btn" id="shadowReportBtn">查看影子期对照报告</button></div>
         <div id="shadowReport" class="small"></div>` : ''}
+        ${me.aegis ? `<h3 class="mem-h">外部智能体（Aegis-OS）可访问的模块</h3>
+        <div class="muted small">写作、文献、资料库、记忆默认可以授权给外部智能体；下面这些含患者或研究数据的模块要在这里打开后，成员才能授权。外部智能体背后是别家大模型，这些模块返回的化验、报告、影像结论、数据会交给那家厂商；每次调用都记入安全审计。关闭「患者数据可以交给外部模型分析」时一律不开放。</div>
+        ${AEGIS_ORG_MODULES.map(([id, label]) => `<label class="toggle"><input type="checkbox" data-aegis-mod="${id}" ${(t.settings.aegis_modules ?? []).includes(id) ? 'checked' : ''}> ${label}</label>`).join('')}` : ''}
       </div>
     </div>
 
@@ -1230,6 +1238,11 @@ async function openTenant(me: Me, api: ApiFn, notify: Notify): Promise<void> {
   dlg.querySelector('.tenant-settings')!.addEventListener('change', async e => {
     e.stopPropagation()
     const el = e.target as HTMLInputElement | HTMLSelectElement
+    if ((el as HTMLInputElement).dataset.aegisMod) {
+      const mods = [...dlg.querySelectorAll<HTMLInputElement>('[data-aegis-mod]')].filter(x => x.checked).map(x => x.dataset.aegisMod!)
+      try { await api('/api/tenant', { method: 'PATCH', body: JSON.stringify({ settings: { aegis_modules: mods } }) }); notify('设置已保存') } catch (err) { notify((err as Error).message, true) }
+      return
+    }
     const key = el.dataset.set
     if (!key) return
     const value = el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : el.value
