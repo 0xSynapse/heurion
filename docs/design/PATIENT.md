@@ -62,15 +62,15 @@
 
 ## 6. MCP 工具面（人机同等）
 
-档案本身是 doc，读写复用 doc_*；新增只在模型没覆盖处：
+档案本身是 doc，读写复用 doc_*；家人在个人空间里就是患者，建档、改信息、上传报告、化验查询复用 `patient_*` / `report_*` / `labs_query` 与管理工具 `patient_admin`。只在这些没覆盖处另设（对照以 `tests/parity.test.ts` 为准）：
 
 | 界面 | MCP |
 | --- | --- |
-| 家庭成员（建 / 改 / 归档） `POST /api/phr/members` | `phr_member`（action: create / list / update / archive） |
-| 化验趋势（按成员：项目、窗口、曲线） `GET /api/phr/trends` | `phr_trends`（member_id） |
-| 上传家人的报告 / 出院小结 → 解析预览 → 逐项确认入档 `POST /api/phr/import`（member_id） | 患者逐项确认后落档；AI 发起导入须经患者确认（对齐机构侧 `patient_record_propose` 的 mode） |
-| 就诊简报（按成员，从档案生成 doc） | `visit_brief`（member_id；一步到位动作，内容由 doc_create + 红线守卫产出） |
-| 授权管理（发 / 列 / 撤 + 对方访问记录） `POST /api/phr/shares` | `phr_share`（action: grant / list / revoke）/ `phr_access_log` |
+| 授权管理（可分享的医院 / 科室 / 医生、发 / 列 / 撤） `GET /api/phr/directory`、`GET/POST /api/phr/:ptid/shares`、`DELETE /api/phr/shares/:shid` | 管理工具 `phr_share`（action: directory / list / create / revoke） |
+| 成员关联的机构记录 `GET /api/phr/:ptid/links` | `phr_member_links` |
+| 归档到档案 `POST /api/phr/:ptid/archive` | `patient_doc_link` |
+| 就诊简报 `POST /api/phr/:ptid/brief` | 不给 AI：服务端组装指令起回合（AI 不自己给自己排队） |
+| 认领码 `POST /api/phr/:ptid/claim` | 不给 AI：须患者 / 家属本人操作 |
 
 ## 7. 分期
 

@@ -1,6 +1,6 @@
 # Heurion 2.0 平台架构
 
-**Status:** 现行生产架构（`apps/platform`）· 覆盖 doc / deck 双模内核、写前守卫、论断核对（Google PAT 四阶段流水线）、多租户与课题协作、三层自演进记忆治理 · **决策人:** JZ
+**Status:** 现行生产架构（`apps/platform`）· 覆盖 doc / deck 双模内核、写前守卫、论断核对、多租户与课题协作、三层自演进记忆治理 · 外部智能体接入（Aegis-OS）见 [`design/MCP_MODULES.md`](design/MCP_MODULES.md) · **决策人:** JZ
 
 ## 目录
 
@@ -34,14 +34,14 @@
 3. **用户优先。** AI 的写入不能覆盖 `base_rev` 之后用户改过的块（`conflict_user_edited`）；用户的写入不受 AI 守卫阻挡。用户在编辑器里的编辑经协同层实时写入同一个 Y.Doc（CRDT 更新流），AI 写入前先把尚未落库的用户编辑落掉，冲突守卫因此看得到用户正在改的块。
 4. **dsh 仍是执行层。** 对话循环、工具执行、LLM 调用、子代理、上下文压缩不变；「office 文件读写」从 dsh 职责中移出（文档模型与守卫是平台核心，dsh 的 office 技能给不了结构化 id、写前守卫与原子 ops）。
 5. **产品规则保留：** 评论 = 带锚点的编辑指令、用户优先、引用规范（insert_citation 单通道）、可回滚。语义不变，实现位置迁移到操作层。
-6. **自研 = 组合成熟件，不从零造。** doc 内核采用 ProseMirror + Yjs（编辑器直接用 ProseMirror，schema 前后端共用一份）；deck 内核采用 ProseMirror + Yjs 结构化形状树 + 自建画布（`web/src/deck.ts`）与 `@resvg/resvg-js` 矢量光栅化。
+6. **自研 = 组合成熟件，不从零造。** doc 内核采用 ProseMirror + Yjs（编辑器直接用 ProseMirror，schema 前后端共用一份）；deck 内核采用 ProseMirror + Yjs 结构化形状树 + 自建画布（`packages/canvas-ui/src/deck.ts`）与 `@resvg/resvg-js` 矢量光栅化。
 
 ## 3. 总体架构
 
 ```
-dsh 子进程（每用户一个；shell 仅计算；工具 = heurion MCP）
-   │ MCP（Streamable HTTP，/mcp，用户级范围令牌）
-   ▼
+dsh 子进程（每用户一个；shell 仅计算；工具 = heurion MCP）        外部智能体（经 Aegis-OS，HEURION_AEGIS 开启时）
+   │ MCP（Streamable HTTP，/mcp，回环，用户级范围令牌）              │ /api/aegis/mcp（授权令牌 + 租约，见 design/MCP_MODULES.md）
+   ▼                                                                ▼
 apps/platform（Node + Hono）
  ├─ mcp/        MCP 工具面（读视图 / doc_edit / deck_edit / 评论 / 文献 / 引用 / 论断核对 / 临床科研 / 资产）+ 回合登记
  ├─ ops/        操作层：zod 校验 → 写前守卫 → 内存应用（prosemirror-transform）→ 单个 Yjs 事务
@@ -56,6 +56,10 @@ apps/platform（Node + Hono）
  ├─ kb/         参考资料库：抽取（pdftotext / docx / pptx）→ 切块（保留页码）→ 向量化 → 混合检索（FTS5 + 余弦，RRF）
  ├─ tenancy/    机构与个人双空间隔离、每租户独立加密患者库（DEK/KEK）、知家（PHR）与家庭分享授权
  ├─ research/   临床研究立项、团队角色协作（owner/editor/viewer）、复合纳排队列筛选与去标识化数据集快照
+ ├─ datasets/   数据集（实验室数据分析）、measurements/ 测量原子
+ ├─ imaging/    影像检查（DICOM 去标识、Orthanc 代理、结节模型链、随访、所见草稿）
+ ├─ review/     深度审稿；subagents/ 子专家协同；mail/、calendar/ 邮件与日程
+ ├─ aegis/      Aegis-OS 应用协议（清单、授权令牌、设备码、Ed25519 租约），默认关闭
  ├─ web/        前端工作台（ProseMirror 协同编辑器、幻灯片自建画布、审稿伴随面板、队列与统计工作室、知家移动端）
  └─ store/      node:sqlite
 
@@ -65,6 +69,9 @@ apps/embedder（127.0.0.1:8003，本地 bge-m3 q8，Transformers.js + ONNX；/he
 apps/doc-parser（127.0.0.1:8005，Docling：版面、表格结构、公式 → LaTeX、扫描页 OCR；/health、/parse）
    PDF 导入主路径；模型部署时预下载，运行时离线，容器只接入无外网的 internal 网络。
    没配置 / 预热未完成（/health 503）/ 解析失败时平台退回 poppler 启发式方案，导入结果的 importEngine 记录路径（DOC_PARSER_URL 配地址）
+
+apps/imaging-worker（MONAI 影像推理）；apps/canvas-service（只含文档与画布工具的独立服务，MCP 服务名 omnicanvas）
+packages/canvas-ui（编辑器与幻灯片画布前端组件）；packages/aegis-app-sdk（Aegis 应用协议工具函数）
 ```
 
 ## 4. 数据模型
@@ -190,7 +197,7 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 | 导出 | 修补式（`convert/docx-export.ts`） | 以原始文件包为底座（样式、编号、关系、媒体、页面设置）；导入后**未改动的块原样写回**（与图混排的段落：拆出的图也原样跟随时才整段写回，避免图重复）；**改过的段落按原文 XML 打补丁**（`convert/docx-patch.ts`）：把原段落拆成与导入一致的文字记号，对比导入时与现在的段落（字符 + 格式，做语义清理避免把词拆碎），只在原 run 里删改变化的字符、新文字沿用相邻 run 的格式，书签、符号、文字格式、字符样式、注音、公式、编辑权限、内容控件、智能标记、批注范围、合作者修订（修订容器冻结，新文字不会算进别人的修订）等模型表达不了的内容原样留在原处；块类型 / 样式 / 对齐 / 列表层级变了、平台新建批注的范围要重写等情况退回重新生成：沿用原段落属性（间距、缩进、对齐）、首个文字 run 的字体字号与段落开始标签的属性（w14:paraId、修订标识）；新增的块按模型生成，新列表沿用原文件同类列表的编号定义与段落样式；导入的表格结构没变（行、单元格、合并、每格段落数相同）时以原表 XML 为底、改过的单元格段落同样打补丁（嵌套表、行的修订、单元格属性原样保留），结构变了时按单元格首段 id 对回原表：沿用 tblPr 样式、列宽（列数变化时按原总宽平均分）、行高与单元格属性（底纹、边框、对齐），未改段落原样写回，改过 / 新增的段落沿用原段落属性与首个 run 的字体字号，新增行列借同列相邻单元格的格式；新建文档用内置模板（宋体 / Times New Roman、标题样式）。引用为上标 [n] + 参考文献表（正文末尾已有文献表 [1]…[k]（也认「[1]作者」与全角「［1］」）时合并进去：已有条目一律原样保留，平台引用与某条 DOI 或文本相同的沿用其编号，其余从 [k+1] 起编号；平台导出的文件再上传后同样适用，不会越积越多；编号规则在 `model/references.ts`，编辑器、网页预览、markdown 导出、MCP、论断核对共用，引用页与导出时提示用户）；待采纳修订：只含顶层段落 / 标题的修订组写成 Word 修订（原文版本为 w:del、修订版为 w:ins，段落标记一并标记；导入后未动过的合作者修订整段原样写回），涉及表格、列表、图的修订组按未采纳导出；评论写成 Word 的「根批注 + 回复」线程（commentsExtended.xml 记回复关系）：导入的 Word 批注沿用原批注 id，未改动且没有新回复时 comments.xml 原样保留，平台里的新回复追加为子批注、在平台里解决的标为已解决；平台新建的 open 线程第一条为根批注、其余为回复；图片嵌入 |
 | 撤销 | 用户：浏览器 yUndoPlugin；AI：每个回合一个服务端 Y.UndoManager（§5.6）；任何时候：版本回滚 | |
 
-保真口径：**未改动的块逐字节保真**；**改过的段落只改变化的文字**，其余原样。评测曾在 `papers/paper2-deep-review/benchmarks/v2/fidelity/`（已于 2026-10 从仓库移除，见提交 b3668683；回归测试在 `apps/platform/tests/word-fidelity.test.ts`）：47 个复杂格式夹具（行内格式、域与文献管理器、脚注尾注、批注、各类修订、内容控件、图与文本框与图表与 OLE、段落属性、多级列表、复杂表格、分节、部件）× 4 层（不改；改相邻段；改特征段里的一句；整段改写）全部保留特征、XML 完整、LibreOffice 可打开，且除被改的块外其余正文块逐字节不变；LibreOffice 另存的同一批文件同样通过。新增的块按平台样式生成。不使用 mammoth（转 HTML 丢失原始 XML，无法修补式导出）与 docx npm 包（整份重新生成）。
+保真口径：**未改动的块逐字节保真**；**改过的段落只改变化的文字**，其余原样。回归测试见 `apps/platform/tests/word-fidelity.test.ts`（行内格式、域与文献管理器、脚注尾注、批注、各类修订、内容控件、对象、复杂表格等在「不改 / 改相邻段 / 改特征段 / 整段改写」下保留特征，除被改的块外其余正文逐字节不变）。新增的块按平台样式生成。不使用 mammoth（转 HTML 丢失原始 XML，无法修补式导出）与 docx npm 包（整份重新生成）。
 
 ## 7. deck 内核
 
@@ -205,11 +212,11 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 - **渲染**（`render/slides.ts`）：LibreOffice 转 PDF → pdftoppm 转 PNG，按（文档, rev）缓存；容器内直接运行，本地开发自动改用 heurion2:dev 镜像。
 - **版面检查**（`views/layout.ts`）：按字号近似估算文字溢出、形状重叠、超出页面、字号过小。
 - **MCP 面**：`doc_outline`（各页 id / 版式 / 标题 + 可用版式）/ `slide_read`（形状 id、种类、占位符、几何 pt、文字）/ `deck_edit(ops)`（add_slide 按版式填占位符 / delete_slide / move_slide / set_text / replace_text / add_shape / set_xfrm / delete_shape / set_notes / table_set_cells）/ `layout_check` / `slide_render`（PNG 交给多模态模型自查；有待采纳修订时按修订后的样子渲染，目标页本身待删除时按采纳前渲染，画布精确预览同此）；守卫同 §5.3，按形状判定。
-- **页面**：deck 查看器按模型近似渲染（位置、文字、填充、图片），每页可切换 LibreOffice 精确预览；AI 改动高亮、修订标红 / 绿。评论按最小颗粒度：形状里一个段落内选中文字，或单击形状评论整个形状（§5.1）。编辑走对话。
+- **页面**：deck 查看器按模型近似渲染（位置、文字、填充、图片），每页可切换 LibreOffice 精确预览。导入的 pptx 另有只用于显示的显示层（`convert/pptx-visuals.ts`，随 `GET /api/docs/:id/deck` 的 `visuals` 返回）：从原始包与形状原文读出母版 / 版式的背景与装饰、主题色与主题字体、组合展开后的子形状（自由曲线转 SVG 路径）、表格网格、图片裁剪、连接线箭头等，不进模型、不影响导出；emf / wmf 图片显示时经 LibreOffice 转 png（`SlideRenderer.vectorToPng`）。AI 改动高亮、修订标红 / 绿。评论按最小颗粒度：形状里一个段落内选中文字，或单击形状评论整个形状（§5.1）。编辑走对话。
 - **形状内 `replace_text`**：逐段匹配（同 doc 的规则，不跨段落），改文字时沿用原文字段的 `a:rPr`。
 - **样式与素材操作（C1）**：`set_fill`（形状填充 / 无填充）、`set_background`（页面背景）、`set_text_style`（颜色、字号、粗斜体、对齐，整个形状或某一段）、`add_shape` 带 `geometry`（rect / roundRect / ellipse）与 `fill` / `color`（色块、标题条、卡片）、`add_image`（资产插图，高度按原图比例）、`set_z`（叠放顺序）、`apply_theme`（`model/deck-themes.ts` 的四套主题：背景、标题 / 正文颜色、强调色；之后新加的页沿用）。颜色可写主题记号（accent / title / body / surface…），按该页主题取色，换主题时跟着变。导出全部写回 pptx：`spPr` 填充与几何、`p:bg`、文字段 `a:rPr` 颜色与字号、`a:pPr` 对齐、`p:pic` + `ppt/media` + 关系、pptx 主题的强调色与字体。`slide_read` 显示主题、背景、填充、文字颜色与字号，AI 看得到样式。
 - **AI 生成图片**：`diagram_render`（MCP）——模型写自包含 SVG（机制、流程、研究设计图），平台用 resvg 本地渲染成 PNG 存为资产，再插入文档（`![图注](asset:id)`）或幻灯片（`add_image`）；脚本、事件属性、外部引用一律拒绝。数据图仍用 shell 里的 matplotlib + `asset_upload`。照片式插画需要图像生成模型（未接入，待定）。
-- **画布（`web/src/deck.ts`）**：单击选中形状 → 拖顶部手柄移动、拖 8 个控制点缩放（图片拖角保持比例）、方向键微调（Shift 10pt，连续按键合并成一次提交）、Delete 删除；选中框画在页面外层，形状超出页面时控制点仍可拖；形状里拖动仍是选文字评论，与移动互不干扰。幻灯片工具条：主题、背景、插入文本框 / 色块 / 图片、填充、文字色、字号、粗体、对齐、置顶 / 置底、删除；颜色板列当前主题的颜色（以主题记号提交）+ 自定义。幻灯片宽度随中间栏自适应。
+- **画布（`packages/canvas-ui/src/deck.ts`）**：单击选中形状 → 拖顶部手柄移动、拖 8 个控制点缩放（图片拖角保持比例）、方向键微调（Shift 10pt，连续按键合并成一次提交）、Delete 删除；选中框画在页面外层，形状超出页面时控制点仍可拖；形状里拖动仍是选文字评论，与移动互不干扰。幻灯片工具条：主题、背景、插入文本框 / 色块 / 图片、填充、文字色、字号、粗体、对齐、置顶 / 置底、删除；颜色板列当前主题的颜色（以主题记号提交）+ 自定义。幻灯片宽度随中间栏自适应。
 - **为什么不用 Univer（2026-10-02 调研）**：开源版 slides 是原型（元素修改是 OPERATION 不是 MUTATION，没有撤销与协同事件，没有表格 / 图表），pptx 导入导出、表格、图表、协同都在 Univer Pro（商业许可）；还要引入 React 与约 1MB 的界面框架，并维护两套模型的映射。Casual Slides 基于改过的 Univer OSS，导入层输出 Univer 的模型，不适合作我们的数据来源。
 - **画布上直接改字（C1 第 2 周）**：双击文本框 / 色块 / 占位符原地改字，点别处或 ⌘↩ 提交、Esc 取消；回车新起一段；引用角标是整体、不会被打散；光标落在双击处（浏览器双击选中的一片可能带着分段，直接打字会并段）。提交 `set_paragraphs`：逐段最小差异，未改的字保留原有颜色、加粗、引用与评论标记——AI 改多段文字时同样用它。表格单元格双击改字（`table_set_cells`）；每页下方的备注区双击编辑（`set_notes`）。改字期间服务端回推的更新先缓一缓，改完再重绘。
 - **表格**：`add_table`（画布「＋表格」与 MCP 同一个操作）——表头用主题强调色、白色粗体，交替行用卡片色；导出为 PowerPoint 原生表格（`p:graphicFrame` + `a:tbl`）；换主题时表头与交替行底色跟着换、表头保持白字。
@@ -222,11 +229,15 @@ turns(id, user_id, doc_id, message, status) / messages(doc_id, role, text, turn_
 
 ## 8. MCP 接口面
 
-dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`，模型看到的工具名为 `mcp__heurion__<tool>`。令牌按 `(用户, 文档集合, 权限, 过期时间, 用途=mcp)` 签发，一个会话可编辑该用户的多份文档；浏览器令牌与 MCP 令牌不通用。
+本节只讲平台内 dsh 回合的接入；外部智能体经 Aegis-OS 接入、按模块开放 MCP 的现状与方案见 [`design/MCP_MODULES.md`](design/MCP_MODULES.md)。
 
-**工具范围**（`mcp/scope.ts`）：每一步模型调用都带全部工具的说明，平台工具一百多个（约 9.6 万字符）。dsh 进程按回合所在文档的范围分槽（普通稿件 `doc_*`、幻灯片 `deck_*`、患者文档与随航等 `full_*`），MCP 令牌带范围 `t`，范围外的工具不注册：普通稿件不含幻灯片、影像、患者 / 家庭健康档案、检验、报告、分享与管理工具（63 个、约 4.4 万字符）；幻灯片在此基础上加幻灯片工具。稿件回合里新建的幻灯片只建封面，提示用户到幻灯片里继续。
+dsh 经 `/mcp`（Streamable HTTP，无状态，只允许回环地址）访问；MCP server 名 `heurion`，模型看到的工具名为 `mcp__heurion__<tool>`。令牌按 `(用户, 文档集合, 权限, 过期时间, 用途=mcp)` 签发，一个会话可编辑该用户的多份文档；浏览器令牌与 MCP 令牌不通用。
 
-### 8.1 工具
+**工具范围**（`mcp/scope.ts`）：每一步模型调用都带全部工具的说明，平台工具一百多个（约 9.6 万字符）。dsh 进程按回合所在文档的范围分槽（普通稿件 `doc_*`、幻灯片 `deck_*`、患者文档与随航等 `full_*`），MCP 令牌带范围 `t`，范围外的工具不注册：普通稿件不含幻灯片、影像、患者 / 家庭健康档案、检验、报告、分享与管理工具；幻灯片在此基础上加幻灯片工具。稿件回合里新建的幻灯片只建封面，提示用户到幻灯片里继续。
+
+### 8.1 主要工具
+
+下表只列写作相关的核心工具；完整清单以 `mcp/server.ts` 与 `mcp/*-tools.ts` 的注册为准（约 124 个，另有 15 个管理工具），按模块的划分见 `design/MCP_MODULES.md` §3.2。
 
 | 工具 | 输入 | 输出 |
 | --- | --- | --- |
@@ -283,9 +294,9 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 
 ## 9. 前端
 
-- **P0**（`apps/platform/src/web/index.html`，无构建）：文档列表、新建 / 上传 docx；只读预览（文档变更 SSE 推送，AI 改动的块高亮闪烁）；选中文字 → 评论 / 评论并让 AI 处理；对话（工具步骤可见、可停止）；版本（保存、对比、回滚）；引用；导出 md / docx；读视图（看模型看到的内容）。
+- **P0**（已被 P1 前端取代）：文档列表、只读预览、选区评论、对话、版本、引用、导出。
 - **P1**（`apps/platform/web`，Vite 构建，server 托管 `dist-web/`）：ProseMirror 编辑器（schema 与服务端共用）+ y-prosemirror + 自制 provider（断线重连、重连后补齐双方缺失更新）；工具栏（段落 / 标题、粗斜下划线、上下标、列表、表格、撤销重做）与快捷键、Markdown 式输入规则、表格编辑（prosemirror-tables）；AI 改动的块高亮；选区评论与 @heurion；修订在正文里标红 / 绿并可就地采纳或拒绝；有待采纳修订时正文上方出现修订提示条（处数、上一处 / 下一处、全部采纳 / 拒绝），不单设页签；对话里每轮可「撤销本轮修改」；事后检查提示。视觉语言取自 Heurion logo：墨蓝石板主色 + 天蓝 AI / 强调色、圆角胶囊，左栏墨色底带品牌标识，支持深色模式。交互：没有浏览器原生弹窗（新建直接建「未命名」并就地改标题、点标题重命名，其余用页内对话框）；导出合并为一个菜单；没打开文档时是欢迎页（新建 / 上传 + 示例指令，点示例新建并把指令填进对话框）；AI 的工作过程以人话显示（「检索 PubMed：…」「修改文档（2 处操作）」），每轮结束折叠成「已完成 · N 步」；每轮改动后正文上方出现「本轮 AI 改了 N 处 · 上一处 / 下一处 · 撤销本轮」；失败 / 超时 / 被停止的回合可一键重试（原要求、原选项）；三栏各自滚动，对话输入框始终可见。多人光标（awareness）留到 P3。
-- **P2**（`apps/platform/web/src/deck.ts`）：自建幻灯片交互画布（形状单选/多选、拖拽移动与吸附参考线、8 控制点缩放、双击原地改字、原生表格与图表数据编辑器、主题切换、评论面板 / 形状段落级锚点）。
+- **P2**（`packages/canvas-ui/src/deck.ts`，平台经 `web/src/deck.ts` 引用）：自建幻灯片交互画布（形状单选/多选、拖拽移动与吸附参考线、8 控制点缩放、双击原地改字、原生表格与图表数据编辑器、主题切换、评论面板 / 形状段落级锚点）。
 
 ## 10. 决策记录
 
@@ -334,7 +345,7 @@ dsh 经 `/mcp`（Streamable HTTP，无状态）访问；MCP server 名 `heurion`
 | **P2 deck 内核** | deck 模型（PM + Yjs）；pptx 导入 / 修补式导出 / 新建模板；`slide_read` / `deck_edit` / `layout_check` / `slide_render`；自建交互画布（形状拖拽、缩放、对齐分布、原地改字、表格与图表数据编辑、主题系统） | deck e2e 全绿；未改动 deck 导出逐字节一致；人机共享同一套 `DeckOp` | ✅ 2026-10 |
 | **P3 硬化与领域扩展** | 多租户机构隔离与加密患者库（[`TENANCY.md`](design/TENANCY.md)）、研究团队协作（[`TEAM.md`](design/TEAM.md)）、队列纳排（[`COHORT.md`](design/COHORT.md)）、知家家庭健康顾问（[`PATIENT.md`](design/PATIENT.md)）、三层自演进记忆治理（[`MEMORY_GOVERNANCE_PRD.md`](design/MEMORY_GOVERNANCE_PRD.md)） | 跨租户越权测试与 API/MCP 对等测试 100% 通过 | ✅ 2026-10 |
 
-**验证（2026-10-01）**：单测 41 项（模型 / 操作层 / 守卫 / MCP / docx 往返 / 协同网关 / 修订）；浏览器测试 11 项（`pnpm ui`，真实 Chromium：打字同步、拆段 id、工具栏、选区评论、修订就地采纳、撤销、断线重连）；e2e 19 项（`pnpm e2e`，真实 dsh + deepseek-flash，含 @heurion 自动触发、修订模式、撤销本轮、LibreOffice 打开导出文件）；3 份真实 docx「导入 → 不改 → 导出」正文逐字节一致。
+**P0 退出时的验证（2026-10-01，历史记录）**：单测 41 项（模型 / 操作层 / 守卫 / MCP / docx 往返 / 协同网关 / 修订）；浏览器测试 11 项（`pnpm ui`，真实 Chromium：打字同步、拆段 id、工具栏、选区评论、修订就地采纳、撤销、断线重连）；e2e 19 项（`pnpm e2e`，真实 dsh + deepseek-flash，含 @heurion 自动触发、修订模式、撤销本轮、LibreOffice 打开导出文件）；3 份真实 docx「导入 → 不改 → 导出」正文逐字节一致。
 
 **P0 实测（deepseek-flash，2026-10-01）**
 

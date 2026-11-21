@@ -24,6 +24,10 @@ push `0xSynapse/heurion` 的 main 分支，GitHub Actions 就会构建镜像（G
 - 出站白名单：入口脚本用 iptables 只允许隔离 uid 连本机平台端口（MCP 和模型代理），外网和内部网络的其他服务（含 Orthanc、阅片器）一律拒绝。所以容器需要 `cap_add: [NET_ADMIN]`。
 - 部署后用 `deploy/sandbox/probe.sh` 自检。
 
+**外部智能体接入（Aegis-OS）**：由环境变量 `HEURION_AEGIS` 控制，默认 `0`（生产当前关闭）。关闭时 `/api/aegis/*` 与 `/.well-known/aegis-*` 一律 404；开启后才暴露设备码登录、授权令牌、租约批准与 MCP 网关 `/api/aegis/mcp`。现状、开放顺序与外发策略见 [`design/MCP_MODULES.md`](design/MCP_MODULES.md)。`deploy/Caddyfile` 里的 `/aegis-cloud/*` 段转发到宿主机上的 Aegis Cloud 守护进程（systemd，17080 端口），与平台的 Aegis 接入是两回事。
+
+`apps/canvas-service`（只含文档与画布工具的独立服务）不在生产部署里。
+
 服务器上的目录 `/opt/heurion2`：`docker-compose.yml`、`Caddyfile`、`orthanc/orthanc.json`（启用 pacs 时用；内容变了 deploy.sh 重建 Orthanc）、`.env.production`（权限 0600，由 CI 用 secret 生成）、`scripts/`、`backup-status.json`。
 
 ## 网络与 DNS

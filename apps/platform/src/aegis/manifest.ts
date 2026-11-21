@@ -3,7 +3,7 @@
  *
  * 暴露在 `GET /.well-known/aegis-app.json`，供本地 Aegis-OS Daemon (`aegis app search/info/install/login`)
  * 自动发现应用元数据、鉴权端点、MCP 网关地址与能力分级（Zero-Prompt vs Lease-Gated）。
- * 详见 docs/design/AEGIS_APP_PROTOCOL.md §3 & §6。
+ * 现状与按模块开放的方案见 docs/design/MCP_MODULES.md。
  */
 
 export interface AegisCapabilityPreview {
