@@ -1,6 +1,6 @@
 # MCP 模块化与 Aegis-OS 接入
 
-**状态：** 方案已定稿，未开始实施（见 §5 阶段表）· 本文是 MCP 对外接入与 Aegis 融合的**唯一**现行文档，实施时在这里更新状态。取代已删除的 `design/AEGIS_APP_PROTOCOL.md` 与 aegis-app-sdk 包的 README（历史版本见 git）。
+**状态：** 阶段 0 已完成，阶段 1 未开始（见 §5 阶段表）· 本文是 MCP 对外接入与 Aegis 融合的**唯一**现行文档，实施时在这里更新状态。取代已删除的 `design/AEGIS_APP_PROTOCOL.md` 与 aegis-app-sdk 包的 README（历史版本见 git）。
 
 ## 1. 目标与用户体验
 
@@ -59,7 +59,7 @@ Heurion 现在主要给人用：浏览器登录、在界面里操作；AI 经平
 
 ### 3.1 模块注册表
 
-新增 `apps/platform/src/mcp/modules/`，每个模块一个声明：
+目标形态：每个模块一个声明（阶段 0 先落了注册表 `mcp/modules.ts`，见下文）：
 
 ```ts
 interface HeurionModule {
@@ -77,19 +77,25 @@ interface HeurionModule {
 - `buildMcpServer()` 改为挂上全部模块，给 dsh 用，**行为不变**。
 - `mcp/scope.ts`（doc / deck）与 `aegisScopeAllows`（正则）都改成按「模块 + 只读标记」计算，不再靠工具名前缀。
 
+**阶段 0 的实际做法**（`apps/platform/src/mcp/modules.ts`）：工具注册代码暂不搬家，注册表按工具名（名字优先、其次前缀）登记每个工具属于哪个模块；`buildMcpServer` 新增可选的 `modules`，只挂指定模块的工具，不给时与拆分前逐字一致。只读工具集合 `READ_ONLY_TOOLS` 移进注册表，取代 `AEGIS_READONLY_TOOLS` 正则（测试证明逐个一致）。两处范围规则留到阶段 2，因为它们不能写成模块的并集、硬改会改变行为：
+- Aegis 的 `canvas` 范围正则 `/^(doc_|comment…)/` 顺带放进了 `doc_manage`、`comment_manage` 两个管理工具；
+- dsh 的 doc / deck 范围只排除了一部分管理工具（`tenant_admin`、`platform_admin` 等），`doc_manage`、`dataset_manage` 等仍在稿件范围里。
+
 ### 3.2 模块划分（按工作台界面）
 
-| 模块 | 工具（前缀 / 名称） | 约数 | 默认对外部智能体 |
-|---|---|---|---|
-| `writing` 写作 | doc_*、docs_search、deck_*、slide_*、layout_check、comment*、asset_upload、diagram_render、image_search、insert_measurement、list_measurements | 25 | 开放 |
-| `literature` 文献 | pubmed_search、openalex_search、oa_fulltext、doi_lookup、insert_citation、list_citations、import_references、verify_claims、claim_report | 9 | 开放 |
-| `analysis` 数据分析 | dataset_*、result_* | 11 | 机构开启后 |
-| `patients` 患者与知家 | patient_*、report_*、lab_*、labs_*、share_*、phr_*、phi_scan | 24 | 机构开启后 |
-| `imaging` 影像 | imaging_* | 33 | 机构开启后 |
-| `research` 临床研究 | study_* | 16 | 机构开启后 |
-| `knowledge` 资料库 | kb_search、kb_read | 2 | 开放 |
-| `memory` 记忆 | memory_* | 4 | 开放 |
-| `admin` 管理 | 15 个管理工具、action_status、delegate_task | 17 | 仅只读，写操作走租约 |
+| 模块 | 工具（前缀 / 名称） | 工具数 | 说明字数 | 默认对外部智能体 |
+|---|---|---|---|---|
+| `writing` 写作 | doc_*、docs_search、deck_templates、deck_edit、slide_*、layout_check、comments_list、comment_add / reply / resolve、image_search、insert_measurement、list_measurements、asset_upload、diagram_render | 26 | 约 3.4 万 | 开放 |
+| `literature` 文献 | pubmed_search、openalex_search、oa_fulltext、doi_lookup、insert_citation、list_citations、import_references、verify_claims、claim_report | 9 | 约 0.5 万 | 开放 |
+| `analysis` 数据分析 | dataset_*（dataset_manage 除外）、result_register、result_list | 12 | 约 1.1 万 | 机构开启后 |
+| `patients` 患者与知家 | patient_*（patient_admin 除外）、labs_*、lab_*、report_*、share_*、phr_member_links、phi_scan | 25 | 约 1.0 万 | 机构开启后 |
+| `imaging` 影像 | imaging_* | 29 | 约 2.5 万 | 机构开启后 |
+| `research` 临床研究 | study_*（study_admin 除外） | 16 | 约 1.3 万 | 机构开启后 |
+| `knowledge` 资料库 | kb_search、kb_read | 2 | 约 0.1 万 | 开放 |
+| `memory` 记忆 | memory_*（memory_manage 除外） | 4 | 约 0.2 万 | 开放 |
+| `admin` 管理 | 15 个管理工具、action_status、delegate_task | 17 | 约 1.5 万 | 只读开放，写操作走租约 |
+
+合计 140 个工具（124 个业务工具 + 15 个管理工具 + action_status）。说明字数按工具定义的 JSON 长度计。
 
 跨模块引用（例如写作里的 `insert_measurement` 要读影像 / 分析的结果）由服务端完成，不要求智能体同时挂两个模块。
 
@@ -126,7 +132,8 @@ dsh 回合的数据外发边界由 `harness/profile/heurion.cordis.yml` 守住�
 
 | 文件 | 改动 |
 |---|---|
-| `apps/platform/src/mcp/server.ts` | 注册函数按模块拆到 `mcp/modules/`；`buildMcpServer` 改为挂全部模块；`INSTRUCTIONS` 拆分；`aegisScopeAllows` 换成模块权限 |
+| `apps/platform/src/mcp/modules.ts` | 模块注册表（阶段 0 已建） |
+| `apps/platform/src/mcp/server.ts` | （以后）注册函数按模块拆到 `mcp/modules/`；`buildMcpServer` 改为挂全部模块；`INSTRUCTIONS` 拆分；`aegisScopeAllows` 换成模块权限 |
 | `apps/platform/src/mcp/scope.ts` | doc / deck 范围改为按模块计算 |
 | `apps/platform/src/index.ts`、`apps/platform/src/http/api.ts` | 合并两套 Aegis 处理函数与依赖；新增 `/api/aegis/mcp/:module` |
 | `apps/platform/src/aegis/manifest.ts` | 由模块注册表生成 `modules[]` 与能力预览 |
@@ -138,19 +145,20 @@ dsh 回合的数据外发边界由 `harness/profile/heurion.cordis.yml` 守住�
 
 | 阶段 | 内容 | 验证 | 状态 |
 |---|---|---|---|
-| 0 拆模块 | 模块注册表；`buildMcpServer` = 全部模块；scope 按模块 | 拆分前后 dsh 看到的工具清单与说明逐字一致；全部测试通过 | 未开始 |
+| 0 拆模块 | 模块注册表（`mcp/modules.ts`）；`buildMcpServer` 可选 `modules`；只读集合移进注册表 | `tests/mcp-modules.test.ts`：每个工具恰好一个模块、全部模块与不指定逐字一致、各模块并集 = 全部、只读集合与旧正则一致；全部测试通过 | ✅ 2026-11-21 |
 | 1 合并接入 | 两个处理函数合一，统一依赖 | `aegis-app.test.ts` 通过；外部令牌在会话停止、用户停用后被拒 | 未开始 |
-| 2 按模块开放 | `/api/aegis/mcp/:module`、清单 `modules[]`、模块权限、跨模块观察记录、SDK 对齐 | 每个模块只暴露自己的工具；只读授权写入被拒；患者模块读到的数字可经写作模块写入 | 未开始 |
+| 2 按模块开放 | `/api/aegis/mcp/:module`、清单 `modules[]`、模块权限（取代 `canvas` 范围正则）、dsh 的 doc / deck 范围改按模块计算、跨模块观察记录、SDK 对齐 | 每个模块只暴露自己的工具；只读授权写入被拒；患者模块读到的数字可经写作模块写入 | 未开始 |
 | 3 外部适配 | 文件统一 base64 / 上传地址；说明与技能按模块拆 | 不经服务器工作区完成「上传图 → 插入稿件」「导出数据集 → 本机分析 → 登记结果 → 写入」 | 未开始 |
 | 4 外发策略 | 机构开关、审计；生产逐模块开 `HEURION_AEGIS` | 未开启的机构授权患者模块被拒；审计可查 | 未开始 |
 | 5 端到端 | agy 经 Aegis 跑通「写作 + 文献」，再扩到其他模块 | 真实稿件上完成一轮修改与引用，守卫生效、可整回合撤销 | 未开始 |
 
 ## 6. 待决定
 
-1. 模块划分是否按 §3.2 的九个。
-2. 同一进程按模块出多个地址（建议），还是像 `canvas-service` 那样拆成独立部署。
-3. 患者类模块对外部智能体的开放策略（§3.5）。
+1. ~~模块划分~~：按 §3.2 的九个（2026-11-21 定）。
+2. ~~部署形态~~：同一进程按模块出多个地址（2026-11-21 定）。
+3. 患者类模块对外部智能体的开放策略（§3.5）：待定，阶段 4 前定。
 
 ## 7. 变更记录
 
+- 2026-11-21：阶段 0 完成：模块注册表与按模块构建；模块划分定为九个、同一进程按模块出多个地址（§6 第 1、2 项已定）。
 - 2026-11-21：新建，合并并取代 AEGIS_APP_PROTOCOL.md 与 aegis-app-sdk 包的 README；现状按代码重新核对。
