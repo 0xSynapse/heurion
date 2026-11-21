@@ -8,8 +8,10 @@ import { H_AS, internalVia, makeInvoker, type Invoke, type ViaInfo } from './inv
 import { chmodIfOwned, CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
+import { HTTP_PUT_MAX, listDir, readTarget, WorkspaceFileError, writeTarget } from '../aegis/files.ts'
 import { handleAegisMcpRequest, type McpDeps } from '../mcp/server.ts'
-import { formatModuleGrant, grantModules, MODULES } from '../mcp/modules.ts'
+import { formatModuleGrant, grantModules, MODULE_IDS, MODULES, type ModuleId } from '../mcp/modules.ts'
+import { moduleSkillDoc } from '../mcp/skills.ts'
 import { TurnRegistry } from '../mcp/turns.ts'
 import { ClaimService, type ReviewProgress } from '../claims/service.ts'
 import { detectRegression, reviewQualityReport, trackReview } from '../claims/review-quality.ts'
@@ -255,6 +257,14 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/.well-known/aegis-app.json', c => {
     c.header('Cache-Control', 'public, max-age=300')
     return c.json(AEGIS_APP_MANIFEST)
+  })
+
+  // 按模块的技能文档（MCP_MODULES.md §3.4）：说明与工具清单由模块注册表生成
+  app.get('/.well-known/aegis-skills/:skill/SKILL.md', async (c, next) => {
+    const m = /^heurion-([a-z]+)$/.exec(c.req.param('skill'))
+    if (!m || !(MODULE_IDS as readonly string[]).includes(m[1]!)) return next()
+    c.header('Cache-Control', 'public, max-age=300')
+    return c.body(await moduleSkillDoc(m[1] as ModuleId), 200, { 'Content-Type': 'text/markdown; charset=utf-8' })
   })
 
   // AAP-1.0 第一方智能体技能包（供 `aegis-os app install heurion` 自动拉取至本地 Agent Skills 目录）
@@ -708,6 +718,46 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   // 按模块的地址：只挂这一个模块的工具（还要在授权的模块权限里）
   app.post('/api/aegis/mcp/:module', c => handleAegisMcpRequest(aegisMcpDeps, c.req.raw, c.req.param('module')))
 
+  // 外部智能体的大文件直传 / 取回（aegis/files.ts）：同一授权令牌；写入要有读写模块，落在工作区 aegis-files/ 下
+  const aegisFileAuth = (c: Context, write: boolean) => {
+    const auth = c.req.header('authorization') ?? ''
+    if (!auth.startsWith('Bearer ')) return { error: c.json({ error: '缺少 Authorization: Bearer aegis_at_heurion.* 令牌', code: 'missing_bearer_token' }, 401) }
+    const v = aegisAuth.verifyGrantToken(auth.slice(7).trim(), c.req.header('x-aegis-agent-id') ?? null)
+    if (!v.ok) return { error: c.json({ error: v.error, code: v.code }, 401) }
+    const perms = Object.values(grantModules(v.verified.grant))
+    if (!perms.length || (write && !perms.includes('rw'))) return { error: c.json({ error: '当前授权不能' + (write ? '写入' : '读取') + '工作区文件', code: 'forbidden' }, 403) }
+    return { userId: v.verified.user.id }
+  }
+  const aegisFilePath = (c: Context) => decodeURIComponent(c.req.path.slice('/api/aegis/files/'.length))
+  app.put('/api/aegis/files/:path{.+}', async c => {
+    const a = aegisFileAuth(c, true)
+    if ('error' in a) return a.error as Response
+    const len = Number(c.req.header('content-length') ?? 0)
+    if (len > HTTP_PUT_MAX) return c.json({ error: `文件超过 ${HTTP_PUT_MAX / 1024 / 1024}MB`, code: 'too_large' }, 413)
+    try {
+      const bytes = new Uint8Array(await c.req.arrayBuffer())
+      if (bytes.byteLength > HTTP_PUT_MAX) return c.json({ error: `文件超过 ${HTTP_PUT_MAX / 1024 / 1024}MB`, code: 'too_large' }, 413)
+      const t = writeTarget(aegisMcpDeps.workspaceDir(a.userId), aegisFilePath(c))
+      writeFileSync(t.abs, bytes)
+      return c.json({ path: t.rel, bytes: bytes.byteLength }, 201)
+    } catch (err) {
+      if (err instanceof WorkspaceFileError) return c.json({ error: err.message, code: err.code }, err.status as 400)
+      throw err
+    }
+  })
+  app.get('/api/aegis/files/:path{.+}', (c): Response => {
+    const a = aegisFileAuth(c, false)
+    if ('error' in a) return a.error as Response
+    try {
+      const t = readTarget(aegisMcpDeps.workspaceDir(a.userId), aegisFilePath(c))
+      if (t.dir) return c.json({ path: t.rel, entries: listDir(t.abs) })
+      return c.body(new Uint8Array(readFileSync(t.abs)), 200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(t.rel.split('/').pop() ?? 'file')}` })
+    } catch (err) {
+      if (err instanceof WorkspaceFileError) return c.json({ error: err.message, code: err.code }, err.status as 400)
+      throw err
+    }
+  })
+
   // 鉴权：账户令牌（开发模式下也接受开发令牌，见 auth/accounts.ts）。EventSource / <img> 用 ?token=。
   app.use('/api/*', async (c, next) => {
     // 外部来信 Webhook 无需用户 Session；公开微型工具接口无需登录；Aegis 独立鉴权接口已在上方处理
@@ -721,7 +771,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       c.req.path === '/api/aegis/auth/device' ||
       c.req.path === '/api/aegis/auth/token' ||
       c.req.path === '/api/aegis/mcp' ||
-      c.req.path.startsWith('/api/aegis/mcp/')
+      c.req.path.startsWith('/api/aegis/mcp/') ||
+      c.req.path.startsWith('/api/aegis/files/')
     ) {
       return next()
     }

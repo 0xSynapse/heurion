@@ -137,6 +137,12 @@ for (const m of MODULES) for (const n of m.names) {
   BY_NAME.set(n, m.id)
 }
 
+/**
+ * 外部智能体专用、不属于任何模块的工具：挂在每个模块的地址上（mcp/workspace-tools.ts）。
+ * 只读授权下只挂只读的那几个；dsh 不注册它们。
+ */
+export const SHARED_TOOLS: ReadonlySet<string> = new Set(['workspace_put', 'workspace_get', 'workspace_list'])
+
 /** 工具所属模块；没有登记的工具返回 null（测试保证平台注册的每个工具都有归属）。 */
 export function moduleOf(tool: string): ModuleId | null {
   const named = BY_NAME.get(tool)
@@ -158,6 +164,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'study_list', 'study_read', 'study_cohort_preview', 'study_cohort_list', 'study_vars_list',
   'kb_search', 'kb_read', 'memory_search', 'phr_member_links', 'patient_claims_list', 'phi_scan', 'imaging_status', 'imaging_models',
   'account', 'action_status', 'asset_provenance',
+  'workspace_get', 'workspace_list',
 ])
 
 // —— 外部智能体的模块权限（docs/design/MCP_MODULES.md §3.3，阶段 2） ——
@@ -218,6 +225,10 @@ export function grantModules(grant: { modules?: string | null; tool_scope: Legac
 
 /** 按模块权限判断外部智能体能否用这个工具：所属模块已授权；只读权限下只能用只读工具。 */
 export function moduleGrantAllows(tool: string, grant: ModuleGrant): boolean {
+  if (SHARED_TOOLS.has(tool)) {
+    const perms = Object.values(grant)
+    return READ_ONLY_TOOLS.has(tool) ? perms.length > 0 : perms.includes('rw')
+  }
   const m = moduleOf(tool)
   const perm = m ? grant[m] : undefined
   if (!perm) return false

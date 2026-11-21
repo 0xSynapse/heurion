@@ -59,6 +59,8 @@ const PARAMS: Record<string, (s: Seed) => string> = {
   token: () => 'x'.repeat(32), name: () => 'Q01.docx',
   // 外部智能体按模块的 MCP 地址：只认 Aegis 授权令牌（MCP_MODULES.md §3.3）
   module: () => 'writing',
+  // 外部智能体的工作区文件（只认 Aegis 授权令牌）与按模块的技能文档（公开）
+  path: () => 'aegis-files/x.txt', skill: () => 'heurion-writing',
 }
 /** 按设计公开的接口（不需要登录或本身就是给持有链接的人用的）。 */
 const PUBLIC: Record<string, string> = {

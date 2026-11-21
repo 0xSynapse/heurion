@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { describe, expect, it } from 'vitest'
 import type { TokenClaims } from '../src/auth/token.ts'
-import { MODULE_IDS, MODULES, moduleOf, READ_ONLY_TOOLS, type ModuleId } from '../src/mcp/modules.ts'
+import { MODULE_IDS, MODULES, moduleOf, READ_ONLY_TOOLS, SHARED_TOOLS, type ModuleId } from '../src/mcp/modules.ts'
 import { buildMcpServer, type AegisMcpServerOptions } from '../src/mcp/server.ts'
 
 /** 只列工具：注册阶段不调用依赖，给一个什么都返回空的替身即可（同 mcp-scope.test.ts）。 */
@@ -69,9 +69,10 @@ describe('MCP 模块注册表（阶段 0：拆模块，不改行为）', () => {
   it('只读工具集合与拆分前的正则逐个一致；只读授权 + 模块过滤可以叠加', async () => {
     const all = (await list()).map(t => t.name)
     expect(all.filter(n => READ_ONLY_TOOLS.has(n))).toEqual(all.filter(n => OLD_READONLY.test(n)))
-    const ro = (await list({ aegisToolScope: 'readonly' })).map(t => t.name)
+    // 外部网关另挂只读的工作区文件工具（阶段 3，dsh 没有），比较时去掉
+    const ro = (await list({ aegisToolScope: 'readonly' })).map(t => t.name).filter(n => !SHARED_TOOLS.has(n))
     expect(ro).toEqual(all.filter(n => OLD_READONLY.test(n)))
-    const roWriting = (await list({ aegisToolScope: 'readonly', modules: ['writing'] })).map(t => t.name)
+    const roWriting = (await list({ aegisToolScope: 'readonly', modules: ['writing'] })).map(t => t.name).filter(n => !SHARED_TOOLS.has(n))
     expect(roWriting).toContain('doc_read')
     expect(roWriting).not.toContain('doc_edit')
     expect(roWriting.every(n => moduleOf(n) === 'writing' && READ_ONLY_TOOLS.has(n))).toBe(true)

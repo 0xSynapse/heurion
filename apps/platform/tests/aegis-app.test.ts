@@ -918,7 +918,7 @@ describe('AAP-1.0 按模块开放（阶段 2）', () => {
     expect((await issue(app, { modules: { writing: 'admin' } })).status).toBe(400)
     const { body } = await issue(app, { modules: { knowledge: 'r' } })
     const tools = await toolNames(app, body.access_token)
-    expect(tools.sort()).toEqual(['kb_read', 'kb_search'])
+    expect(tools.sort()).toEqual(['kb_read', 'kb_search', 'workspace_get', 'workspace_list'])
   })
 
   it('旧的 tool_scope 换算成模块权限：clinical 不含研究、research 不含患者、readonly 不含写工具', async () => {
@@ -932,7 +932,7 @@ describe('AAP-1.0 按模块开放（阶段 2）', () => {
     expect(research).toContain('study_list')
     expect(research).not.toContain('patient_read')
     const canvas = await toolNames(app, (await issue(app, { tool_scope: 'canvas' })).body.access_token)
-    expect(canvas.every(n => ['writing', 'literature'].includes(String(moduleOf(n))))).toBe(true)
+    expect(canvas.filter(n => !n.startsWith('workspace_')).every(n => ['writing', 'literature'].includes(String(moduleOf(n))))).toBe(true)
     const ro = await toolNames(app, (await issue(app, { tool_scope: 'readonly' })).body.access_token)
     expect(ro).toContain('doc_read')
     expect(ro).not.toContain('doc_edit')
@@ -960,5 +960,107 @@ describe('AAP-1.0 按模块开放（阶段 2）', () => {
     expect(other.content[0]!.text).toContain('unobserved_number')
     const same = await edit('s1', tgt.rev)
     expect(same.isError, same.content[0]?.text).toBeFalsy()
+  })
+})
+
+describe('AAP-1.0 外部智能体适配（阶段 3）', () => {
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const issue = async (app: ReturnType<typeof createTestEnv>['app'], grant: Record<string, unknown>) => {
+    const res = await app.request('/api/aegis/auth/token', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'dr_zhang', password: 'Password123!', name: 'node', node_pubkey: generateAegisNodeKeyPair().publicKey, ...grant }),
+    })
+    return ((await res.json()) as { access_token: string }).access_token
+  }
+  const call = async (app: ReturnType<typeof createTestEnv>['app'], token: string, path: string, name: string, args: Record<string, unknown>) => {
+    const res = await app.request(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, 'x-aegis-agent-id': 'agy', 'x-aegis-session-id': 's1' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+    })
+    const r = ((await res.json()) as any).result as { isError?: boolean; content: Array<{ text: string }> }
+    const text = r.content[0]!.text
+    let body: any = text
+    try { body = JSON.parse(text) } catch { /* doc_read 等返回纯文本 */ }
+    return { isError: Boolean(r.isError), body }
+  }
+
+  it('不经服务器路径完成「本机图片 → 工作区 → 资产 → 插入稿件」', async () => {
+    const { app } = createTestEnv()
+    const token = await issue(app, { modules: 'writing:rw' })
+    const put = await call(app, token, '/api/aegis/mcp/writing', 'workspace_put', { path: 'figs/km.png', data_base64: PNG })
+    expect(put.isError).toBe(false)
+    expect(put.body.path).toBe('aegis-files/figs/km.png')
+    const asset = await call(app, token, '/api/aegis/mcp/writing', 'asset_upload', { path: put.body.path })
+    expect(asset.isError, JSON.stringify(asset.body)).toBe(false)
+    const doc = await call(app, token, '/api/aegis/mcp/writing', 'doc_create', { title: '插图', markdown: `![生存曲线](asset:${asset.body.asset_id} "图 1 生存曲线")` })
+    expect(doc.isError, JSON.stringify(doc.body)).toBe(false)
+    const read = await call(app, token, '/api/aegis/mcp/writing', 'doc_read', { doc_id: doc.body.doc_id })
+    expect(JSON.stringify(read.body)).toContain(asset.body.asset_id)
+  })
+
+  it('workspace_get 取回文本 / 二进制；路径不能跳出工作区；只读授权不能放文件', async () => {
+    const { app } = createTestEnv()
+    const token = await issue(app, { modules: 'writing:rw' })
+    await call(app, token, '/api/aegis/mcp', 'workspace_put', { path: 'a.csv', data_base64: Buffer.from('x,y\n1,2\n').toString('base64') })
+    expect((await call(app, token, '/api/aegis/mcp', 'workspace_get', { path: 'aegis-files/a.csv' })).body.text).toBe('x,y\n1,2\n')
+    expect((await call(app, token, '/api/aegis/mcp', 'workspace_get', { path: 'aegis-files/missing' })).body.code).toBe('file_not_found')
+    expect((await call(app, token, '/api/aegis/mcp', 'workspace_put', { path: '../../etc/x', data_base64: 'eA==' })).body.code).toBe('invalid_path')
+    expect((await call(app, token, '/api/aegis/mcp', 'workspace_get', { path: '../../etc/passwd' })).body.code).toBe('invalid_path')
+    const list = await call(app, token, '/api/aegis/mcp', 'workspace_list', { path: 'aegis-files' })
+    expect(list.body.entries.map((e: any) => e.name)).toContain('a.csv')
+    const ro = await issue(app, { modules: 'writing:r' })
+    const roPut = await app.request('/api/aegis/mcp', {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${ro}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'workspace_put', arguments: { path: 'b', data_base64: 'eA==' } } }),
+    })
+    expect(JSON.stringify(await roPut.json())).toMatch(/not found|isError/)
+  })
+
+  it('自己放进工作区再读回来的数字不算「看到过」（不能借文件绕过来源规则）', async () => {
+    const { app, store } = createTestEnv({ provenance: true })
+    const token = await issue(app, { modules: 'writing:rw' })
+    await call(app, token, '/api/aegis/mcp', 'workspace_put', { path: 'fake.txt', data_base64: Buffer.from('HR 0.42').toString('base64') })
+    expect((await call(app, token, '/api/aegis/mcp', 'workspace_get', { path: 'aegis-files/fake.txt' })).body.text).toBe('HR 0.42')
+    const seen = ((store as any).db.prepare("SELECT value FROM observed_numbers WHERE obs_key LIKE 'sess:%'").all() as Array<{ value: number }>).map(r => r.value)
+    expect(seen).not.toContain(0.42)
+  })
+
+  it('大文件经 HTTP 直传与取回：同一授权令牌；只读授权不能写、没有令牌 401', async () => {
+    const { app } = createTestEnv()
+    const token = await issue(app, { modules: 'analysis:rw' })
+    const big = new Uint8Array(6 * 1024 * 1024).fill(65)
+    const put = await app.request('/api/aegis/files/data/big.bin', { method: 'PUT', headers: { authorization: `Bearer ${token}` }, body: big })
+    expect(put.status).toBe(201)
+    expect(((await put.json()) as any).path).toBe('aegis-files/data/big.bin')
+    const meta = await call(app, token, '/api/aegis/mcp/analysis', 'workspace_get', { path: 'aegis-files/data/big.bin' })
+    expect(meta.body.download_url).toBe('/api/aegis/files/aegis-files/data/big.bin')
+    const got = await app.request(meta.body.download_url, { headers: { authorization: `Bearer ${token}` } })
+    expect(got.status).toBe(200)
+    expect((await got.arrayBuffer()).byteLength).toBe(big.byteLength)
+    expect((await app.request('/api/aegis/files/x.txt', { method: 'PUT', body: 'x' })).status).toBe(401)
+    const ro = await issue(app, { modules: 'analysis:r' })
+    expect((await app.request('/api/aegis/files/x.txt', { method: 'PUT', headers: { authorization: `Bearer ${ro}` }, body: 'x' })).status).toBe(403)
+    expect((await app.request('/api/aegis/files/..%2F..%2Fetc%2Fpasswd', { headers: { authorization: `Bearer ${ro}` } })).status).toBe(400)
+  })
+
+  it('每个模块发布 SKILL.md，清单里有地址；外部智能体拿到的说明只含所连模块', async () => {
+    const { app } = createTestEnv()
+    const manifest = (await (await app.request('/.well-known/aegis-app.json')).json()) as any
+    expect(manifest.modules[0].skill_url).toBe('/.well-known/aegis-skills/heurion-writing/SKILL.md')
+    const md = await (await app.request(manifest.modules[0].skill_url)).text()
+    expect(md).toMatch(/^---\nname: heurion-writing/)
+    expect(md).toContain('- `doc_edit`')
+    expect(md).toContain('- `workspace_put`')
+    expect((await app.request('/.well-known/aegis-skills/heurion-nope/SKILL.md')).status).toBe(404)
+    const token = await issue(app, { tool_scope: 'all' })
+    const init = await app.request('/api/aegis/mcp/literature', {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'agy', version: '0' } } }),
+    })
+    const instructions = ((await init.json()) as any).result.instructions as string
+    expect(instructions).toContain('pubmed_search')
+    expect(instructions).not.toContain('imaging_analyze')
+    expect(instructions).not.toContain('shell')
   })
 })

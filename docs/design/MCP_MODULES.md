@@ -1,6 +1,6 @@
 # MCP 模块化与 Aegis-OS 接入
 
-**状态：** 阶段 0–2 已完成，阶段 3 未开始（见 §5 阶段表）· 本文是 MCP 对外接入与 Aegis 融合的**唯一**现行文档，实施时在这里更新状态。取代已删除的 `design/AEGIS_APP_PROTOCOL.md` 与 aegis-app-sdk 包的 README（历史版本见 git）。
+**状态：** 阶段 0–3 已完成，阶段 4 未开始（见 §5 阶段表）· 本文是 MCP 对外接入与 Aegis 融合的**唯一**现行文档，实施时在这里更新状态。取代已删除的 `design/AEGIS_APP_PROTOCOL.md` 与 aegis-app-sdk 包的 README（历史版本见 git）。
 
 ## 1. 目标与用户体验
 
@@ -53,8 +53,8 @@ Heurion 现在主要给人用：浏览器登录、在界面里操作；AI 经平
 | ~~SDK 与平台不一致~~（协议名、请求头、租约格式、错误码、包名）：平台改用 SDK 的实现 | `packages/aegis-app-sdk` | ✅ 2 |
 | ~~外部智能体读到的数字不算「看到过」~~：网关总会开平台回合，观察记录键落在回合 id 上，而回合 id 下没人记录，开了来源规则（生产开着）时外部智能体写数字一律被拒。改为 `sess:<授权>:<会话>` 并由网关记录 | `mcp/server.ts` | ✅ 2 |
 | ~~两套接入代码与两份依赖~~：已合为一个处理函数、同一份依赖（外部网关有意去掉 `subagents`、`executionSignals`，见 §6 第 4 项） | `index.ts`、`http/api.ts` | ✅ 1 |
-| 工具说明 `INSTRUCTIONS` 是一整段，含 dsh 专用内容（shell 里跑 Python、工作区 `data/`） | `mcp/server.ts` | 3 |
-| 接收文件的工具多数只认服务器工作区里的 `path` | asset、报告、知识库、数据集、DICOM | 3 |
+| ~~工具说明是一整段、含 dsh 专用内容~~：按行标上所属，外部智能体只拿共同规则与所连模块 | `mcp/instructions.ts` | ✅ 3 |
+| ~~接收文件的工具只认服务器工作区里的 `path`~~：外部智能体先把文件放进工作区再传 path（§3.4） | `aegis/files.ts`、`mcp/workspace-tools.ts` | ✅ 3 |
 
 ## 3. 方案
 
@@ -105,14 +105,20 @@ interface HeurionModule {
 - **地址**：`/api/aegis/mcp/:module`，每次请求只构建该模块的 McpServer。Aegis 三级发现的第三级只拉一个模块的工具定义。
 - **清单**：`aegis-app.json` 增加 `modules[]`（id、一句话说明、MCP 地址、只读工具、需租约的工具、技能文档地址），能力预览由注册表生成，不再手写。仍是一个应用 `heurion`：一次登录、一个授权。
 - **授权**：`agent_grants.tool_scope` 改为模块权限列表，例如 `writing:rw, literature:r, patients:r`；设备码确认页逐个列出模块让用户勾选。旧的 `all / canvas / readonly` 迁移为等价的模块列表。
-- **跨模块观察记录**：来源规则二的观察记录键统一为 `sess:<grant>:<X-Aegis-Session-Id>`（没有会话头时退回 Turn-Id）。智能体经患者模块读到的数字，再经写作模块写进稿件时仍算「看到过」。外部智能体在本机影子工作区里自己算出的数字**不算**，要经 `result_register` 登记后才能写入。
+- **跨模块观察记录**：来源规则二的观察记录键统一为 `sess:<grant>:<X-Aegis-Session-Id>`（没有会话头时退回 Turn-Id）。智能体经患者模块读到的数字，再经写作模块写进稿件时仍算「看到过」。外部智能体在本机自己算出的数字**不算**，`result_register` 也登记不了（登记同样要求数值出现在平台记录的输出里）：要写进稿件的统计量用平台的分析工具（`dataset_survival`、`dataset_logistic` 等）算。自己放进工作区再用 `workspace_get` 读回的数字也不算。
 - **合并接入代码**：两个处理函数合成一个，依赖统一用 `index.ts` 的 `mcpDeps`（真实密钥、真实会话判断、`invoke`）。
 
-### 3.4 外部智能体适配
+### 3.4 外部智能体适配（阶段 3 已实现）
 
-- **文件进**：外部智能体的文件在用户本机的影子工作区，`path` 对它没有意义。所有接收文件的工具统一支持 `data_base64`；大文件（DICOM、数据集）走「申请上传地址 → 直传 → 拿到 id」。
-- **文件出**：`dataset_open` 一类对外部智能体一律直接返回内容（≤5MB）或给下载地址。
-- **说明拆分**：`INSTRUCTIONS` 拆成三部分：共同规则（来源规则、引用、测量、沟通方式）、各模块自己的说明、dsh 专用（shell、工作区）。外部智能体只拿共同规则和所连模块的部分；每个模块另发布 `/.well-known/aegis-skills/<module>/SKILL.md`。
+- **文件进出**：平台接收文件的工具（数据集、资料库、文档导入、院徽、记忆导入、资产）都按用户工作区解析 `path` / `file_path`，所以不逐个改工具，而是给外部智能体一条进出工作区的通道（`aegis/files.ts`）：
+  - MCP 工具 `workspace_put`（base64，≤10MB，落在工作区 `aegis-files/` 下，返回 path）、`workspace_get`（≤5MB 直接返回文字或 base64，更大的给下载地址）、`workspace_list`（`mcp/workspace-tools.ts`）。只在外部网关注册、挂在每个模块的地址上（`SHARED_TOOLS`），dsh 不注册；只读授权只挂后两个。
+  - HTTP `PUT / GET /api/aegis/files/<path>`（同一授权令牌，写入要有读写模块，≤200MB）。
+  - 一律按真实路径判断，`..`、绝对路径、指到工作区外的符号链接都拒绝。
+  - `asset_upload`、`report_upload` 原本就支持 `data_base64`；`dataset_open`、`labs_open` 对外部智能体默认直接返回内容。
+  - 影像工具的 `file_path` 不在此列：AI 直接给的影像路径本来就被 `tenancy/imaging-guard.ts` 拦下，影像只能经患者档案进入。
+- **出处**：工作区文件工具的返回不计入观察记录（文件可能是智能体自己放进来的）。本机分析的数字不能登记、不能写进稿件（见 §3.3）。
+- **说明拆分**（`mcp/instructions.ts`）：原说明按行标上所属（共同规则或某个模块）。dsh 拿全部、原文不变（测试用指纹锁定）；外部智能体只拿共同规则与所连模块的行，涉及 dsh 专有环境的行（shell 里跑 Python、回合开头注入的记忆、对话里的确认卡）换成外部版本，并附文件进出说明。
+- **技能文档**：每个模块发布 `/.well-known/aegis-skills/heurion-<module>/SKILL.md`（共同规则 + 本模块说明 + 该地址上实际的工具清单），清单 `modules[].skill_url` 与 `skills[]` 列出。
 
 ### 3.5 患者数据外发策略
 
@@ -149,7 +155,7 @@ dsh 回合的数据外发边界由 `harness/profile/heurion.cordis.yml` 守住�
 | 0 拆模块 | 模块注册表（`mcp/modules.ts`）；`buildMcpServer` 可选 `modules`；只读集合移进注册表 | `tests/mcp-modules.test.ts`：每个工具恰好一个模块、全部模块与不指定逐字一致、各模块并集 = 全部、只读集合与旧正则一致；全部测试通过 | ✅ 2026-11-21 |
 | 1 合并接入 | `handleAegisMcpRequest` 取代 Node 处理器与手写 JSON-RPC 转发；`buildApi` 接收 dsh 的 `mcpDeps`；去掉只在 SSE 下可用的 `/api/mcp` 别名；非 JSON 的 Content-Type 按 JSON 处理；单个请求 120 秒超时回 504 | `aegis-app.test.ts`（含新增：initialize 握手、声明 SSE 的客户端拿到 JSON、批量、通知 202、网关使用传入依赖）；本地真实服务 `HEURION_AEGIS=1` 下纯 JSON 客户端、SSE 客户端、批量请求均通过；令牌随用户停用 / 全端下线 / 吊销失效（原有用例） | ✅ 2026-11-21 |
 | 2 按模块开放 | `/api/aegis/mcp/:module`、清单 `modules[]`（由注册表生成）、授权上的模块权限（取代 `tool_scope` 正则，旧值换算）、设置页按模块授权、观察记录键 `sess:<授权>:<会话>`、SDK 与平台合为一份实现。dsh 的 doc / deck 范围**没有**改（见 §6 第 5 项） | `aegis-app.test.ts` 新增 5 项：清单九个模块且列出的工具都存在；按模块地址只挂该模块、只读权限只挂只读工具、未授权 403、未知模块 404；非法模块权限拒绝签发；旧 `tool_scope` 换算；同一会话换地址换回合读到的数字可写进另一篇稿件、换会话被来源规则拒绝。SDK 测试改为平台清单经 SDK 校验、租约互通 | ✅ 2026-11-21 |
-| 3 外部适配 | 文件统一 base64 / 上传地址；说明与技能按模块拆 | 不经服务器工作区完成「上传图 → 插入稿件」「导出数据集 → 本机分析 → 登记结果 → 写入」 | 未开始 |
+| 3 外部适配 | 工作区文件通道（MCP 三个工具 + HTTP 直传）；说明按模块拆、dsh 原文不变；每个模块的 SKILL.md | `mcp-instructions.test.ts`（dsh 说明指纹、外部只含所连模块、文件工具只在外部、SKILL.md）；`aegis-app.test.ts` 新增 5 项：本机图片 → 工作区 → 资产 → 插入稿件；取回文本、路径越界拒绝、只读不能放；HTTP 直传 6MB 与下载、401 / 403；自己放的文件读回不算出处；SKILL.md 与 initialize 的说明。本地真实服务验证 MCP 与 HTTP 进出、SKILL.md。原计划的「本机分析 → 登记 → 写入」改为「平台分析工具算 → 登记 → 写入」（§3.3） | ✅ 2026-11-21 |
 | 4 外发策略 | 机构开关、审计；生产逐模块开 `HEURION_AEGIS` | 未开启的机构授权患者模块被拒；审计可查 | 未开始 |
 | 5 端到端 | agy 经 Aegis 跑通「写作 + 文献」，再扩到其他模块 | 真实稿件上完成一轮修改与引用，守卫生效、可整回合撤销 | 未开始 |
 
@@ -163,6 +169,7 @@ dsh 回合的数据外发边界由 `harness/profile/heurion.cordis.yml` 守住�
 
 ## 7. 变更记录
 
+- 2026-11-21：阶段 3 完成：外部智能体的工作区文件通道、工具说明按模块拆（dsh 不变）、每个模块的 SKILL.md；本机分析的数字不能登记写入，自己放进工作区的文件读回不算出处。
 - 2026-11-21：阶段 2 完成：按模块的地址与清单、授权改为模块权限、设置页按模块授权、跨模块观察记录（顺带修复外部智能体写数字一律被来源规则拒绝）、SDK 与平台合为一份实现；dsh 范围暂不改（§6 第 5 项）。
 - 2026-11-21：阶段 1 完成：外部智能体网关合为一个处理函数，与 dsh 共用依赖；`/api/mcp` 别名移除；外部网关不挂 `delegate_task`、不记执行信号（§6 第 4 项）。
 - 2026-11-21：阶段 0 完成：模块注册表与按模块构建；模块划分定为九个、同一进程按模块出多个地址（§6 第 1、2 项已定）。
