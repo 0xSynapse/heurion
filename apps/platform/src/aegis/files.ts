@@ -17,8 +17,8 @@ export const AEGIS_FILES_DIR = 'aegis-files'
 /** 经 MCP（base64 放在 JSON 里）上传 / 取回的上限。 */
 export const MCP_PUT_MAX = 10 * 1024 * 1024
 export const MCP_GET_MAX = 5 * 1024 * 1024
-/** 经 HTTP 直传的上限。 */
-export const HTTP_PUT_MAX = 200 * 1024 * 1024
+/** 经 HTTP 直传的上限（生产 Caddy 对普通请求体限 110MB，见 deploy/Caddyfile）。 */
+export const HTTP_PUT_MAX = 100 * 1024 * 1024
 
 export class WorkspaceFileError extends Error {
   constructor(readonly code: string, message: string, readonly status = 400) { super(message) }
