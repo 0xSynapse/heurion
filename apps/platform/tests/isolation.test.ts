@@ -57,6 +57,8 @@ const PARAMS: Record<string, (s: Seed) => string> = {
   eid: () => 'ie-none',
   // 专家审阅页的私密链接：库里只有哈希，不知道 token 的人带任何值（含任何文件名）都必须 404
   token: () => 'x'.repeat(32), name: () => 'Q01.docx',
+  // 外部智能体按模块的 MCP 地址：只认 Aegis 授权令牌（MCP_MODULES.md §3.3）
+  module: () => 'writing',
 }
 /** 按设计公开的接口（不需要登录或本身就是给持有链接的人用的）。 */
 const PUBLIC: Record<string, string> = {

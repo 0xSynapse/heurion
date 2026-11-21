@@ -9,6 +9,7 @@ import { chmodIfOwned, CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
 import { handleAegisMcpRequest, type McpDeps } from '../mcp/server.ts'
+import { formatModuleGrant, grantModules, MODULES } from '../mcp/modules.ts'
 import { TurnRegistry } from '../mcp/turns.ts'
 import { ClaimService, type ReviewProgress } from '../claims/service.ts'
 import { detectRegression, reviewQualityReport, trackReview } from '../claims/review-quality.ts'
@@ -552,6 +553,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       name?: string
       node_pubkey?: string
       tool_scope?: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+      modules?: unknown
       write_mode?: 'direct' | 'tracked'
       ttl_secs?: number
     }
@@ -560,6 +562,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         name: body.name,
         nodePubkey: body.node_pubkey ?? null,
         toolScope: body.tool_scope ?? 'all',
+        modules: body.modules,
         writeMode: body.write_mode ?? 'tracked',
         ttlSecs: body.ttl_secs,
       })
@@ -581,6 +584,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       name?: string
       node_pubkey?: string
       tool_scope?: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+      modules?: unknown
       permissions?: string[]
       doc_ids?: string[] | null
       write_mode?: 'direct' | 'tracked'
@@ -618,6 +622,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
           : null,
         bound_node_pubkey: polled.grant.aegis_node_pubkey,
         tool_scope: polled.grant.tool_scope,
+        modules: grantModules(polled.grant),
         write_mode: polled.grant.write_mode,
         expires_at: polled.grant.expires_at,
       }, 201)
@@ -640,6 +645,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         name: body.name,
         nodePubkey: body.node_pubkey ?? null,
         toolScope: body.tool_scope ?? 'all',
+        modules: body.modules,
         permissions: body.permissions ?? ['*'],
         docIds: body.doc_ids ?? null,
         writeMode: body.write_mode ?? 'tracked',
@@ -648,7 +654,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       audit(c, 'aegis.grant_issue', {
         actor: userId,
         target: issued.grant.id,
-        detail: `Aegis Grant ${issued.grant.name} (scope=${issued.grant.tool_scope})`,
+        detail: `Aegis Grant ${issued.grant.name} (modules=${formatModuleGrant(grantModules(issued.grant))})`,
         status: 201,
       })
       return c.json({
@@ -669,6 +675,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
           : null,
         bound_node_pubkey: issued.grant.aegis_node_pubkey,
         tool_scope: issued.grant.tool_scope,
+        modules: grantModules(issued.grant),
         write_mode: issued.grant.write_mode,
         expires_at: issued.grant.expires_at,
       }, 201)
@@ -698,6 +705,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
 
   app.post('/api/aegis/mcp', c => handleAegisMcpRequest(aegisMcpDeps, c.req.raw))
+  // 按模块的地址：只挂这一个模块的工具（还要在授权的模块权限里）
+  app.post('/api/aegis/mcp/:module', c => handleAegisMcpRequest(aegisMcpDeps, c.req.raw, c.req.param('module')))
 
   // 鉴权：账户令牌（开发模式下也接受开发令牌，见 auth/accounts.ts）。EventSource / <img> 用 ?token=。
   app.use('/api/*', async (c, next) => {
@@ -711,7 +720,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       c.req.path.startsWith('/api/public/expert-review/') ||
       c.req.path === '/api/aegis/auth/device' ||
       c.req.path === '/api/aegis/auth/token' ||
-      c.req.path === '/api/aegis/mcp'
+      c.req.path === '/api/aegis/mcp' ||
+      c.req.path.startsWith('/api/aegis/mcp/')
     ) {
       return next()
     }
@@ -752,8 +762,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
 
   app.get('/api/aegis/auth/grants', c => {
-    const grants = store.listAgentGrants(c.get('user')).map(({ token_hash: _h, ...rest }) => rest)
-    return c.json({ grants })
+    const grants = store.listAgentGrants(c.get('user')).map(({ token_hash: _h, ...rest }) => ({ ...rest, modules: grantModules(rest) }))
+    // 设置页按模块勾选权限用的目录
+    return c.json({ grants, modules: MODULES.map(m => ({ id: m.id, title: m.title, summary: m.summary, external: m.external })) })
   })
 
   // 每个账号 15 分钟内最多试 10 次设备码，防止穷举把别人的终端绑进自己账号
@@ -768,6 +779,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const body = await c.req.json().catch(() => ({})) as {
       user_code?: string
       tool_scope?: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+      modules?: unknown
       write_mode?: 'direct' | 'tracked'
       ttl_days?: number | null
     }
@@ -779,13 +791,14 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         userCode: body.user_code,
         userId: c.get('user'),
         toolScope: body.tool_scope,
+        modules: body.modules,
         writeMode: body.write_mode,
         ttlDays: body.ttl_days,
       })
       audit(c, 'aegis.device_approve', {
         actor: c.get('user'),
         target: approved.grant.id,
-        detail: `Aegis Device Code ${approved.user_code} -> Grant ${approved.grant.name} (scope=${approved.grant.tool_scope})`,
+        detail: `Aegis Device Code ${approved.user_code} -> Grant ${approved.grant.name} (modules=${formatModuleGrant(grantModules(approved.grant))})`,
         status: 200,
       })
       return c.json({
@@ -797,6 +810,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
           name: approved.grant.name,
           token_prefix: approved.grant.token_prefix,
           tool_scope: approved.grant.tool_scope,
+          modules: grantModules(approved.grant),
           write_mode: approved.grant.write_mode,
           aegis_node_pubkey: approved.grant.aegis_node_pubkey,
           expires_at: approved.grant.expires_at,

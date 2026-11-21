@@ -1,6 +1,6 @@
 # MCP 模块化与 Aegis-OS 接入
 
-**状态：** 阶段 0、1 已完成，阶段 2 未开始（见 §5 阶段表）· 本文是 MCP 对外接入与 Aegis 融合的**唯一**现行文档，实施时在这里更新状态。取代已删除的 `design/AEGIS_APP_PROTOCOL.md` 与 aegis-app-sdk 包的 README（历史版本见 git）。
+**状态：** 阶段 0–2 已完成，阶段 3 未开始（见 §5 阶段表）· 本文是 MCP 对外接入与 Aegis 融合的**唯一**现行文档，实施时在这里更新状态。取代已删除的 `design/AEGIS_APP_PROTOCOL.md` 与 aegis-app-sdk 包的 README（历史版本见 git）。
 
 ## 1. 目标与用户体验
 
@@ -19,21 +19,21 @@ Heurion 现在主要给人用：浏览器登录、在界面里操作；AI 经平
 | 接入方 | 入口 | 鉴权 | 工具范围 |
 |---|---|---|---|
 | 平台内的 dsh 回合 | `/mcp`（`handleMcp`，只允许回环地址；对外由 Caddy 返回 404） | 平台签发的 MCP 令牌，`claims.u` 用户、`d` 文档、`p` 权限、`s` dsh 进程、`t` 范围；进程停止后令牌立即失效（`isLiveSession`） | `mcp/scope.ts`：`t=doc` 普通稿件、`t=deck` 幻灯片、缺省全部 |
-| 外部智能体（AAP-1.0） | Hono 路由 `POST /api/aegis/mcp` → `handleAegisMcpRequest`（MCP SDK 的 Web 标准 Streamable HTTP，无状态，响应一律 JSON；支持批量与通知；只声明 `application/json` 的客户端照常可用）。依赖与 dsh 同一份（`index.ts` 的 `mcpDeps` 经 `buildApi({ mcpDeps })` 传入） | 授权令牌 `aegis_at_heurion.<grant_id>.<secret>`（服务端只存哈希，随用户令牌版本、用户与机构状态失效）；请求头 `X-Aegis-Agent-Id / Org-Id / Turn-Id / Lease-Token` | 授权上的 `tool_scope` |
+| 外部智能体（AAP-1.0） | Hono 路由 `POST /api/aegis/mcp`（授权里的全部模块）与 `POST /api/aegis/mcp/:module`（只挂该模块）→ `handleAegisMcpRequest`（MCP SDK 的 Web 标准 Streamable HTTP，无状态，响应一律 JSON；支持批量与通知；只声明 `application/json` 的客户端照常可用）。依赖与 dsh 同一份（`index.ts` 的 `mcpDeps` 经 `buildApi({ mcpDeps })` 传入） | 授权令牌 `aegis_at_heurion.<grant_id>.<secret>`（服务端只存哈希，随用户令牌版本、用户与机构状态失效）；请求头 `X-Aegis-Agent-Id / Org-Id / Session-Id / Turn-Id / Lease-Token` | 授权上的模块权限 |
 
-两条路径都由 `buildMcpServer()`（`apps/platform/src/mcp/server.ts`）构建；外部路径经 `buildAegisMcpServer()` 包一层，加上 `aegisToolScope`、租约检查 `leaseAuthorizer`、代理 id 与回合前缀 `aegis:<agent>:`。
+两条路径都由 `buildMcpServer()`（`apps/platform/src/mcp/server.ts`）构建；外部路径经 `buildAegisMcpServer()` 包一层，加上模块权限 `aegisModules`、观察记录键、租约检查 `leaseAuthorizer`、代理 id 与回合前缀 `aegis:<agent>:`。
 
 **开关：** 外部路径全部受 `HEURION_AEGIS` 控制（`config.ts` 的 `aegisEnabled`，默认关，生产环境关）。关闭时 `/api/aegis/*` 与 `/.well-known/aegis-*` 一律 404。
 
 ### 2.2 已实现的 AAP-1.0 部件
 
-- **应用清单** `GET /.well-known/aegis-app.json`（`aegis/manifest.ts`）：`schema_version: 'AAP-1.0'`、各鉴权端点、能力预览（`zero_prompt` / `lease_gated`）、技能包 `/.well-known/aegis-skills/heurion-clinical-research/SKILL.md`。
+- **应用清单** `GET /.well-known/aegis-app.json`（`aegis/manifest.ts`）：`schema_version: 'AAP-1.0'`、各鉴权端点、`modules[]`（每个模块的地址、默认开放方式、只读工具、需要租约的工具）与能力预览，均由模块注册表生成；技能包 `/.well-known/aegis-skills/heurion-clinical-research/SKILL.md`。
 - **鉴权**（`aegis/auth.ts` + `http/api.ts`）：
   - 设备码登录（RFC 8628）：`/api/aegis/auth/device`、`/device/approve`，表 `agent_device_codes`；
   - 令牌兑换与吊销：`POST / DELETE /api/aegis/auth/token`（AI 不能自己签发，`human_only`）；
   - 授权列表 `/api/aegis/auth/grants`，表 `agent_grants`。
 - **租约**：离线租约由本地 Aegis 节点用 Ed25519 私钥签名，Heurion 用授权登记的节点公钥验签，最长 15 分钟（`MAX_OFFLINE_LEASE_SEC`）；在线租约由用户经 `/api/aegis/leases/approve` 批准。
-- **工具范围** `tool_scope`（`store/db.ts`）：`all | canvas | clinical | research | readonly`，由 `aegisScopeAllows` 按工具名正则过滤。
+- **模块权限**：授权与设备码上的 `modules` 列（JSON，如 `{"writing":"rw","literature":"r"}`）；`r` 只挂该模块的只读工具，`rw` 挂全部。签发 / 设备码接口接受 `modules`（对象、`writing:rw,literature:r` 或数组）；设置页按模块选「不开放 / 只读 / 读写」。旧的 `tool_scope` 仍保留，没有 `modules` 的授权按它换算（`legacyScopeModules`）：`all` 全部读写、`readonly` 全部只读、`canvas` 写作 + 文献、`clinical` 写作 / 文献 / 资料库 / 记忆 + 患者 + 影像、`research` 同上换成分析 + 临床研究。
 - **回合与回滚**：外部智能体的写入记在 `aegis:<agent>:` 前缀的回合下，`doc_revert_turn` 可按回合或代理撤销。
 - **为外部智能体准备的参数**：`asset_upload` 与报告上传支持 `data_base64`；数据集与化验长表的导出支持 `return_content`。
 
@@ -42,15 +42,16 @@ Heurion 现在主要给人用：浏览器登录、在界面里操作；AI 经平
 - 共 124 个 `registerTool`，分在 7 个注册函数里：`registerCanvasTools`（38）、`registerHealthcareTools`、4 个影像注册函数、`registerAdminTools`（15 个管理工具：account、tenant_admin、org_template、phr_share、platform_admin、doc_manage、project_manage、comment_manage、dataset_manage、kb_manage、memory_manage、patient_admin、study_admin、task_queue、asset_provenance）。
 - 所有工具共用一个请求上下文 `Ctx`：文档权限（`check`）、当前回合、来源规则二的观察记录键（`observeKey`）、租约检查。
 - `apps/canvas-service` 用 `buildCanvasMcpServer()` 只挂画布工具（服务名 `omnicanvas`），单独部署，是「按模块拆分」的先例。
-- `packages/aegis-app-sdk`（只有 `src/index.ts`，没有 `package.json`）：给第三方应用用的清单校验、令牌、请求头解析、Ed25519 租约工具；平台经相对路径 `aegis/sdk.ts` 引用，`tests/aegis-app.test.ts` 在用。
+- `packages/aegis-app-sdk`（`@heurion2/aegis-app-sdk`）：清单类型与校验、授权令牌、请求头解析、Ed25519 离线租约签发与验签、`approval_required` 返回格式。平台的令牌与租约校验（`aegis/auth.ts`）直接用它，第三方照它实现与平台逐字一致。
 
 ### 2.4 已知不一致（实施时修）
 
 | 问题 | 位置 | 处理阶段 |
 |---|---|---|
-| 清单宣称不存在的能力：`dataset_analyze`、`phr_share_admin`、`mail_admin` | `aegis/manifest.ts` | 2（清单按模块生成） |
-| `tool_scope` 的 `clinical`、`research` 没有过滤规则，等同 `all` | `aegisScopeAllows` | 2（改为模块权限） |
-| SDK 与平台不一致：协议名 `aegis-app/1.0` vs `AAP-1.0`；请求头 `X-Aegis-Session-Id` vs `X-Aegis-Turn-Id`；错误码 `lease_required` vs `approval_required`；包无法按名导入 | `packages/aegis-app-sdk` | 2 |
+| ~~清单宣称不存在的能力~~：清单改由模块注册表生成，测试保证列出的工具都存在 | `aegis/manifest.ts` | ✅ 2 |
+| ~~`clinical`、`research` 没有过滤规则~~：改为模块权限，旧值按 §2.2 换算（`canvas` 不再顺带放进 `doc_manage`、`comment_manage`） | `mcp/modules.ts` | ✅ 2 |
+| ~~SDK 与平台不一致~~（协议名、请求头、租约格式、错误码、包名）：平台改用 SDK 的实现 | `packages/aegis-app-sdk` | ✅ 2 |
+| ~~外部智能体读到的数字不算「看到过」~~：网关总会开平台回合，观察记录键落在回合 id 上，而回合 id 下没人记录，开了来源规则（生产开着）时外部智能体写数字一律被拒。改为 `sess:<授权>:<会话>` 并由网关记录 | `mcp/server.ts` | ✅ 2 |
 | ~~两套接入代码与两份依赖~~：已合为一个处理函数、同一份依赖（外部网关有意去掉 `subagents`、`executionSignals`，见 §6 第 4 项） | `index.ts`、`http/api.ts` | ✅ 1 |
 | 工具说明 `INSTRUCTIONS` 是一整段，含 dsh 专用内容（shell 里跑 Python、工作区 `data/`） | `mcp/server.ts` | 3 |
 | 接收文件的工具多数只认服务器工作区里的 `path` | asset、报告、知识库、数据集、DICOM | 3 |
@@ -147,7 +148,7 @@ dsh 回合的数据外发边界由 `harness/profile/heurion.cordis.yml` 守住�
 |---|---|---|---|
 | 0 拆模块 | 模块注册表（`mcp/modules.ts`）；`buildMcpServer` 可选 `modules`；只读集合移进注册表 | `tests/mcp-modules.test.ts`：每个工具恰好一个模块、全部模块与不指定逐字一致、各模块并集 = 全部、只读集合与旧正则一致；全部测试通过 | ✅ 2026-11-21 |
 | 1 合并接入 | `handleAegisMcpRequest` 取代 Node 处理器与手写 JSON-RPC 转发；`buildApi` 接收 dsh 的 `mcpDeps`；去掉只在 SSE 下可用的 `/api/mcp` 别名；非 JSON 的 Content-Type 按 JSON 处理；单个请求 120 秒超时回 504 | `aegis-app.test.ts`（含新增：initialize 握手、声明 SSE 的客户端拿到 JSON、批量、通知 202、网关使用传入依赖）；本地真实服务 `HEURION_AEGIS=1` 下纯 JSON 客户端、SSE 客户端、批量请求均通过；令牌随用户停用 / 全端下线 / 吊销失效（原有用例） | ✅ 2026-11-21 |
-| 2 按模块开放 | `/api/aegis/mcp/:module`、清单 `modules[]`、模块权限（取代 `canvas` 范围正则）、dsh 的 doc / deck 范围改按模块计算、跨模块观察记录、SDK 对齐 | 每个模块只暴露自己的工具；只读授权写入被拒；患者模块读到的数字可经写作模块写入 | 未开始 |
+| 2 按模块开放 | `/api/aegis/mcp/:module`、清单 `modules[]`（由注册表生成）、授权上的模块权限（取代 `tool_scope` 正则，旧值换算）、设置页按模块授权、观察记录键 `sess:<授权>:<会话>`、SDK 与平台合为一份实现。dsh 的 doc / deck 范围**没有**改（见 §6 第 5 项） | `aegis-app.test.ts` 新增 5 项：清单九个模块且列出的工具都存在；按模块地址只挂该模块、只读权限只挂只读工具、未授权 403、未知模块 404；非法模块权限拒绝签发；旧 `tool_scope` 换算；同一会话换地址换回合读到的数字可写进另一篇稿件、换会话被来源规则拒绝。SDK 测试改为平台清单经 SDK 校验、租约互通 | ✅ 2026-11-21 |
 | 3 外部适配 | 文件统一 base64 / 上传地址；说明与技能按模块拆 | 不经服务器工作区完成「上传图 → 插入稿件」「导出数据集 → 本机分析 → 登记结果 → 写入」 | 未开始 |
 | 4 外发策略 | 机构开关、审计；生产逐模块开 `HEURION_AEGIS` | 未开启的机构授权患者模块被拒；审计可查 | 未开始 |
 | 5 端到端 | agy 经 Aegis 跑通「写作 + 文献」，再扩到其他模块 | 真实稿件上完成一轮修改与引用，守卫生效、可整回合撤销 | 未开始 |
@@ -158,9 +159,11 @@ dsh 回合的数据外发边界由 `harness/profile/heurion.cordis.yml` 守住�
 2. ~~部署形态~~：同一进程按模块出多个地址（2026-11-21 定）。
 3. 患者类模块对外部智能体的开放策略（§3.5）：待定，阶段 4 前定。
 4. 外部智能体能否用子专家委派（`delegate_task`）、其工具失败是否记进执行信号：阶段 1 暂不开放、不记录。开放 `delegate_task` 前，它的入组数据守卫要先接租约授权；执行信号若要记录，需带来源标记，避免第三方调用噪声混进 dsh 的演进。
+5. dsh 的 doc / deck 范围（`mcp/scope.ts`）按模块计算：未做。现行范围不是模块的并集（稿件范围里有 `doc_manage`、`dataset_manage` 等管理工具），改成按模块会改变 dsh 在稿件回合里能用的工具，需要单独评估；外部接入不受影响。
 
 ## 7. 变更记录
 
+- 2026-11-21：阶段 2 完成：按模块的地址与清单、授权改为模块权限、设置页按模块授权、跨模块观察记录（顺带修复外部智能体写数字一律被来源规则拒绝）、SDK 与平台合为一份实现；dsh 范围暂不改（§6 第 5 项）。
 - 2026-11-21：阶段 1 完成：外部智能体网关合为一个处理函数，与 dsh 共用依赖；`/api/mcp` 别名移除；外部网关不挂 `delegate_task`、不记执行信号（§6 第 4 项）。
 - 2026-11-21：阶段 0 完成：模块注册表与按模块构建；模块划分定为九个、同一进程按模块出多个地址（§6 第 1、2 项已定）。
 - 2026-11-21：新建，合并并取代 AEGIS_APP_PROTOCOL.md 与 aegis-app-sdk 包的 README；现状按代码重新核对。

@@ -508,6 +508,8 @@ interface AegisGrantItem {
   token_prefix: string
   aegis_node_pubkey: string | null
   tool_scope: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+  /** 实际生效的模块权限（旧授权由 tool_scope 换算） */
+  modules: Record<string, 'r' | 'rw'>
   write_mode: 'direct' | 'tracked'
   created_at: string
   expires_at: string | null
@@ -516,12 +518,14 @@ interface AegisGrantItem {
   revoked_at: string | null
 }
 
-const SCOPE_LABELS: Record<string, string> = {
-  all: '全量工作站 (all)',
-  canvas: '仅论文与幻灯片 (canvas)',
-  clinical: '仅临床患者与影像 (clinical)',
-  research: '仅临床研究与统计 (research)',
-  readonly: '只读检阅 (readonly)',
+interface AegisModuleItem { id: string; title: string; summary: string; external: 'open' | 'org_opt_in' | 'readonly_default' }
+
+/** 签发表单里每个模块的默认权限：默认开放的读写，管理只读，患者 / 影像 / 研究 / 分析默认不开。 */
+const MODULE_DEFAULT: Record<AegisModuleItem['external'], '' | 'r' | 'rw'> = { open: 'rw', readonly_default: 'r', org_opt_in: '' }
+
+function modulesLabel(mods: Record<string, 'r' | 'rw'>, catalog: AegisModuleItem[]): string {
+  const parts = catalog.filter(m => mods[m.id]).map(m => `${m.title}${mods[m.id] === 'r' ? '（只读）' : ''}`)
+  return parts.length ? parts.join('、') : '无'
 }
 
 async function mountAegisGrants(
@@ -532,8 +536,9 @@ async function mountAegisGrants(
   let newlyIssuedToken: string | null = null
   const urlDeviceCode = new URLSearchParams(location.search).get('aegis_device')?.trim() ?? ''
   const render = async () => {
-    const res = await api<{ grants: AegisGrantItem[] }>('/api/aegis/auth/grants').catch(() => ({ grants: [] }))
+    const res = await api<{ grants: AegisGrantItem[]; modules?: AegisModuleItem[] }>('/api/aegis/auth/grants').catch(() => ({ grants: [], modules: [] }))
     const grants = res.grants ?? []
+    const catalog = res.modules ?? []
     box.className = ''
     box.innerHTML = `
       <form id="aegisDeviceApproveForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border)">
@@ -542,13 +547,17 @@ async function mountAegisGrants(
       </form>
       <form id="aegisGrantIssueForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
         <input type="text" name="name" placeholder="终端名称（如：Mac Studio / agy-research）" maxlength="60" required style="flex:1 1 200px">
-        <select name="tool_scope" aria-label="权限范围">
-          <option value="all">全量工作站 (all)</option>
-          <option value="canvas">仅文稿与幻灯片 (canvas)</option>
-          <option value="clinical">仅临床患者 (clinical)</option>
-          <option value="research">仅临床研究与统计 (research)</option>
-          <option value="readonly">只读模式 (readonly)</option>
-        </select>
+        <div class="aegis-modules" style="flex:1 1 100%;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">
+          ${catalog.map(m => `
+            <label class="small" title="${esc(m.summary)}" style="display:flex;align-items:center;gap:6px">
+              <span style="flex:1">${esc(m.title)}</span>
+              <select name="module_${esc(m.id)}" aria-label="${esc(m.title)} 权限">
+                <option value=""${MODULE_DEFAULT[m.external] === '' ? ' selected' : ''}>不开放</option>
+                <option value="r"${MODULE_DEFAULT[m.external] === 'r' ? ' selected' : ''}>只读</option>
+                <option value="rw"${MODULE_DEFAULT[m.external] === 'rw' ? ' selected' : ''}>读写</option>
+              </select>
+            </label>`).join('')}
+        </div>
         <select name="write_mode" aria-label="写入模式">
           <option value="tracked">留痕修订 (tracked)</option>
           <option value="direct">直接生效 (direct)</option>
@@ -569,14 +578,14 @@ async function mountAegisGrants(
       ${grants.length === 0
         ? '<div class="muted small">尚未绑定任何 Aegis-OS 智能体终端。</div>'
         : `<table class="users">
-            <thead><tr><th>终端名称</th><th>范围 / 写模式</th><th>最近调用 Agent</th><th>状态</th><th></th></tr></thead>
+            <thead><tr><th>终端名称</th><th>模块权限 / 写模式</th><th>最近调用 Agent</th><th>状态</th><th></th></tr></thead>
             <tbody>${grants.map(g => `
               <tr data-gid="${esc(g.id)}" class="${g.revoked_at ? 'disabled' : ''}">
                 <td>
                   <b>${esc(g.name)}</b>
                   <div class="muted small" style="font-family:var(--mono)">${esc(g.token_prefix)}…${g.aegis_node_pubkey ? ' · 已绑节点公钥' : ''}</div>
                 </td>
-                <td class="small">${esc(SCOPE_LABELS[g.tool_scope] ?? g.tool_scope)}<div class="muted small">${g.write_mode === 'tracked' ? '留痕修订' : '直接写入'}</div></td>
+                <td class="small">${esc(modulesLabel(g.modules ?? {}, catalog))}<div class="muted small">${g.write_mode === 'tracked' ? '留痕修订' : '直接写入'}</div></td>
                 <td class="muted small">${g.last_agent_id ? `<code>${esc(g.last_agent_id)}</code><br>${when(g.last_used_at)}` : '尚未使用'}</td>
                 <td>${g.revoked_at ? '<span class="pill off">已吊销</span>' : '<span class="pill ok">生效中</span>'}</td>
                 <td class="actions">${g.revoked_at ? '' : `<button type="button" class="danger" data-revoke-grant="${esc(g.id)}">吊销</button>`}</td>
@@ -614,7 +623,7 @@ async function mountAegisGrants(
             method: 'POST',
             body: JSON.stringify({
               name: String(f.get('name') ?? '').trim(),
-              tool_scope: String(f.get('tool_scope') ?? 'all'),
+              modules: Object.fromEntries(catalog.map(m => [m.id, String(f.get(`module_${m.id}`) ?? '')]).filter(([, v]) => v)),
               write_mode: String(f.get('write_mode') ?? 'tracked'),
               node_pubkey: String(f.get('node_pubkey') ?? '').trim() || undefined,
             }),

@@ -1,5 +1,19 @@
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, KeyObject, randomBytes, timingSafeEqual, verify as cryptoVerify, sign as cryptoSign } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
+// 令牌、租约的格式与验签只有一份实现，在 SDK 里（第三方应用与平台逐字一致）
+import {
+  type AegisLeasePayload,
+  generateAegisNodeKeyPair,
+  MAX_OFFLINE_LEASE_SEC,
+  matchLeasePattern,
+  parseEd25519PrivateKey,
+  parseEd25519PublicKey,
+  safeEqualHex,
+  sha256Hex,
+  signAegisLeaseToken,
+  verifyAegisLeaseToken,
+} from './sdk.ts'
 import { secureRandomInt } from '../auth/random.ts'
+import { parseModuleGrant } from '../mcp/modules.ts'
 import type { AgentGrantRow, Store, TenantRow, UserRow } from '../store/db.ts'
 
 /**
@@ -14,119 +28,19 @@ import type { AgentGrantRow, Store, TenantRow, UserRow } from '../store/db.ts'
  *    - 支持在线租约表 `agent_leases`：由用户在 Web/CLI 调用 `/api/aegis/leases/approve` 批准 `escalation_id` 后签发。
  */
 
-export interface AegisLeasePayload {
-  /** 租约 ID（如 lease-9f8e7d6c） */
-  iss: string
-  /** 绑定的 App Grant ID（如 g_01HXYZ） */
-  sub: string
-  /** 目标应用 ID（如 'heurion'） */
-  app: string
-  /** 允许的 Agent ID（如 'agent-writer' 或 '*'） */
-  agent: string
-  /** 授权作用域（如 'heurion:mail_admin.send'、'heurion:clinical_confirm'、'heurion:*'） */
-  scope: string
-  /** 授权资源范围（如 'patient:P001' 或 '*'） */
-  resource: string
-  /** 签发时间戳（秒） */
-  iat: number
-  /** 过期时间戳（秒） */
-  exp: number
-}
-
 export interface VerifiedAegisGrant {
   grant: AgentGrantRow
   user: UserRow
   tenant: TenantRow | null
 }
 
-/** Raw 32-byte Ed25519 public key ASN.1 SPKI DER prefix */
-const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex')
-/** Raw 32-byte Ed25519 private key ASN.1 PKCS#8 DER prefix */
-const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex')
+export { MAX_OFFLINE_LEASE_SEC, generateAegisNodeKeyPair, matchLeasePattern, parseEd25519PrivateKey, parseEd25519PublicKey, signAegisLeaseToken }
+export type { AegisLeasePayload }
 
-/** 离线（本地节点自签）租约的最长有效期：避免一张租约长期替代人工审批。 */
-export const MAX_OFFLINE_LEASE_SEC = 15 * 60
-
-function sha256Hex(input: string): string {
-  return createHash('sha256').update(input, 'utf8').digest('hex')
-}
-
-function safeHexEqual(aHex: string, bHex: string): boolean {
-  const a = Buffer.from(aHex, 'utf8')
-  const b = Buffer.from(bHex, 'utf8')
-  if (a.length !== b.length) return false
-  return timingSafeEqual(a, b)
-}
-
-/**
- * 解析 Ed25519 公钥（支持 PEM、SPKI base64/base64url、或 `ed25519:<base64/hex>` 32 字节裸公钥）。
- */
-export function parseEd25519PublicKey(pubkeyStr: string): KeyObject {
-  const trimmed = pubkeyStr.trim()
-  if (trimmed.startsWith('-----BEGIN')) {
-    return createPublicKey(trimmed)
-  }
-  const rawPart = trimmed.startsWith('ed25519:') ? trimmed.slice('ed25519:'.length).trim() : trimmed
-  // 64 hex chars = 32 bytes raw Ed25519 public key
-  if (/^[0-9a-fA-F]{64}$/.test(rawPart)) {
-    const raw = Buffer.from(rawPart, 'hex')
-    return createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, raw]), format: 'der', type: 'spki' })
-  }
-  const buf = Buffer.from(rawPart, 'base64')
-  if (buf.length === 32) {
-    return createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, buf]), format: 'der', type: 'spki' })
-  }
-  return createPublicKey({ key: buf, format: 'der', type: 'spki' })
-}
-
-/**
- * 解析 Ed25519 私钥（支持 PEM、PKCS#8 DER base64、或 32 字节 hex/base64 种子）。
- */
-export function parseEd25519PrivateKey(privkeyStr: string | KeyObject): KeyObject {
-  if (typeof privkeyStr !== 'string') return privkeyStr
-  const trimmed = privkeyStr.trim()
-  if (trimmed.startsWith('-----BEGIN')) {
-    return createPrivateKey(trimmed)
-  }
-  const rawPart = trimmed.startsWith('ed25519:') ? trimmed.slice('ed25519:'.length).trim() : trimmed
-  if (/^[0-9a-fA-F]{64}$/.test(rawPart)) {
-    const raw = Buffer.from(rawPart, 'hex')
-    return createPrivateKey({ key: Buffer.concat([ED25519_PKCS8_PREFIX, raw]), format: 'der', type: 'pkcs8' })
-  }
-  const buf = Buffer.from(rawPart, 'base64')
-  if (buf.length === 32) {
-    return createPrivateKey({ key: Buffer.concat([ED25519_PKCS8_PREFIX, buf]), format: 'der', type: 'pkcs8' })
-  }
-  return createPrivateKey({ key: buf, format: 'der', type: 'pkcs8' })
-}
-
-/** 生成本地 Aegis-OS 节点 Ed25519 密钥对（返回 `ed25519:<base64>` 格式公钥与 PEM 私钥）。 */
-export function generateAegisNodeKeyPair(): { publicKey: string; privateKeyPem: string } {
-  const { publicKey, privateKey } = generateKeyPairSync('ed25519')
-  const spki = publicKey.export({ format: 'der', type: 'spki' }) as Buffer
-  const raw32 = spki.subarray(spki.length - 32)
-  return {
-    publicKey: `ed25519:${raw32.toString('base64')}`,
-    privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }) as string,
-  }
-}
-
-/** 使用节点 Ed25519 私钥签发 `X-Aegis-Lease-Token`（`<payload_b64url>.<sig_b64url>`）。 */
-export function signAegisLeaseToken(payload: AegisLeasePayload, privateKey: string | KeyObject): string {
-  const keyObj = parseEd25519PrivateKey(privateKey)
-  const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
-  const sig = cryptoSign(null, Buffer.from(payloadB64, 'utf8'), keyObj)
-  return `${payloadB64}.${sig.toString('base64url')}`
-}
-
-/** 通配符作用域匹配：支持完全匹配、`heurion:mail_admin.*`、`heurion:*` 或 `*`。 */
-export function matchLeasePattern(grantedPattern: string, requiredValue: string): boolean {
-  if (grantedPattern === '*' || grantedPattern === requiredValue) return true
-  if (grantedPattern.endsWith('*')) {
-    const prefix = grantedPattern.slice(0, -1)
-    return requiredValue.startsWith(prefix)
-  }
-  return false
+/** 规范化模块权限为存库的 JSON；不给返回 null（按 tool_scope 换算）。格式不对抛错。 */
+function normalizeModules(input: unknown): string | null {
+  if (input === undefined || input === null || input === '') return null
+  return JSON.stringify(parseModuleGrant(input))
 }
 
 export class AegisAuthService {
@@ -146,6 +60,8 @@ export class AegisAuthService {
     name?: string
     nodePubkey?: string | null
     toolScope?: AgentGrantRow['tool_scope']
+    /** 模块权限（JSON 对象、`writing:rw,literature:r` 或模块数组）；给了就以它为准，不给按 toolScope 换算。 */
+    modules?: unknown
     permissions?: string[]
     docIds?: string[] | null
     writeMode?: AgentGrantRow['write_mode']
@@ -182,6 +98,7 @@ export class AegisAuthService {
       token_prefix: `${prefix}.${grantId}.${secret.slice(0, 4)}…`,
       aegis_node_pubkey: input.nodePubkey ?? null,
       tool_scope: input.toolScope ?? 'all',
+      modules: normalizeModules(input.modules),
       permissions: input.permissions ?? ['*'],
       doc_ids: input.docIds ?? null,
       write_mode: input.writeMode ?? 'tracked',
@@ -200,6 +117,8 @@ export class AegisAuthService {
     name?: string
     nodePubkey?: string | null
     toolScope?: AgentGrantRow['tool_scope']
+    /** 模块权限（JSON 对象、`writing:rw,literature:r` 或模块数组）；给了就以它为准，不给按 toolScope 换算。 */
+    modules?: unknown
     writeMode?: AgentGrantRow['write_mode']
     ttlSecs?: number
   }): {
@@ -229,6 +148,7 @@ export class AegisAuthService {
       name: input.name?.trim() || 'Aegis-OS Workstation',
       aegis_node_pubkey: input.nodePubkey ?? null,
       tool_scope: input.toolScope ?? 'all',
+      modules: normalizeModules(input.modules),
       write_mode: input.writeMode ?? 'tracked',
       ttl_secs: ttlSecs,
     })
@@ -249,6 +169,8 @@ export class AegisAuthService {
     userCode: string
     userId: string
     toolScope?: AgentGrantRow['tool_scope']
+    /** 模块权限（JSON 对象、`writing:rw,literature:r` 或模块数组）；给了就以它为准，不给按 toolScope 换算。 */
+    modules?: unknown
     writeMode?: AgentGrantRow['write_mode']
     ttlDays?: number | null
   }): { grant: AgentGrantRow; user: UserRow; tenant: TenantRow | null; user_code: string } {
@@ -270,6 +192,8 @@ export class AegisAuthService {
       name: row.name,
       nodePubkey: row.aegis_node_pubkey,
       toolScope: input.toolScope ?? row.tool_scope,
+      // 用户在确认页另选了范围就以确认页为准；否则沿用终端发起时请求的模块
+      modules: input.modules ?? (input.toolScope ? undefined : row.modules ?? undefined),
       writeMode: input.writeMode ?? row.write_mode,
       ttlDays: input.ttlDays === undefined ? 90 : input.ttlDays,
     })
@@ -349,7 +273,7 @@ export class AegisAuthService {
       : token
     const canonicalHash = sha256Hex(canonicalToken)
 
-    if (!safeHexEqual(grant.token_hash, directHash) && !safeHexEqual(grant.token_hash, canonicalHash)) {
+    if (!safeEqualHex(grant.token_hash, directHash) && !safeEqualHex(grant.token_hash, canonicalHash)) {
       return { ok: false, code: 'invalid_grant_secret', error: '授权令牌密钥校验失败' }
     }
 
@@ -389,46 +313,11 @@ export class AegisAuthService {
       if (!input.grant.aegis_node_pubkey) {
         return { authorized: false, reason: '当前 Grant 未绑定本地 Aegis-OS 节点 Ed25519 公钥，无法验签 X-Aegis-Lease-Token' }
       }
-      const parts = input.leaseTokenHeader.trim().split('.')
-      if (parts.length !== 2) {
-        return { authorized: false, reason: 'X-Aegis-Lease-Token 格式非法（应为 <payload_b64url>.<sig_b64url>）' }
-      }
-      const payloadB64 = parts[0]!
-      const sigB64 = parts[1]!
-      try {
-        const pubKey = parseEd25519PublicKey(input.grant.aegis_node_pubkey)
-        const sigBuf = Buffer.from(sigB64, 'base64url')
-        const validSig = cryptoVerify(null, Buffer.from(payloadB64, 'utf8'), pubKey, sigBuf)
-        if (!validSig) {
-          return { authorized: false, reason: 'X-Aegis-Lease-Token Ed25519 签名校验失败' }
-        }
-        const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as AegisLeasePayload
-        const nowSec = Math.floor(Date.now() / 1000)
-        if (payload.app !== this.appId) {
-          return { authorized: false, reason: `Lease 目标应用不匹配（期望 ${this.appId}，实际 ${payload.app}）` }
-        }
-        if (payload.sub !== input.grant.id) {
-          return { authorized: false, reason: `Lease sub 与当前 Grant ID 不匹配` }
-        }
-        if (typeof payload.exp !== 'number' || payload.exp <= nowSec) {
-          return { authorized: false, reason: 'X-Aegis-Lease-Token 租约已过期' }
-        }
-        if (payload.exp - nowSec > MAX_OFFLINE_LEASE_SEC) {
-          return { authorized: false, reason: `X-Aegis-Lease-Token 有效期过长（离线租约最长 ${MAX_OFFLINE_LEASE_SEC / 60} 分钟）` }
-        }
-        if (payload.agent && payload.agent !== '*' && payload.agent !== input.agentId) {
-          return { authorized: false, reason: `Lease 绑定的 Agent (${payload.agent}) 与当前调用方 (${input.agentId}) 不一致` }
-        }
-        if (!matchLeasePattern(payload.scope, input.requiredScope)) {
-          return { authorized: false, reason: `Lease 作用域 (${payload.scope}) 未覆盖所需操作 (${input.requiredScope})` }
-        }
-        if (!matchLeasePattern(payload.resource ?? '*', reqResource)) {
-          return { authorized: false, reason: `Lease 资源范围 (${payload.resource}) 未覆盖目标资源 (${reqResource})` }
-        }
-        return { authorized: true, via: 'ed25519_header', leaseId: payload.iss || 'lease-ed25519' }
-      } catch (err) {
-        return { authorized: false, reason: `X-Aegis-Lease-Token 解析或验签异常：${(err as Error).message}` }
-      }
+      const check = verifyAegisLeaseToken(input.leaseTokenHeader, input.grant.aegis_node_pubkey, {
+        appId: this.appId, grantId: input.grant.id, agentId: input.agentId, scope: input.requiredScope, resource: reqResource,
+      })
+      if (!check.ok) return { authorized: false, reason: check.reason }
+      return { authorized: true, via: 'ed25519_header', leaseId: check.payload.iss || 'lease-ed25519' }
     }
 
     // 2. 检查服务端已批准的短期租约表 agent_leases

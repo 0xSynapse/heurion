@@ -44,6 +44,8 @@ export interface AgentGrantRow {
   aegis_node_pubkey: string | null
   /** 'all' | 'canvas' | 'clinical' | 'research' | 'readonly' */
   tool_scope: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+  /** 模块权限 JSON（如 {"writing":"rw","literature":"r"}，mcp/modules.ts）；为空时由 tool_scope 换算 */
+  modules: string | null
   /** JSON 字符串数组，默认 ["*"] */
   permissions: string
   /** JSON 字符串数组或 null（限制允许访问的文档 ID） */
@@ -1151,6 +1153,11 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_agent_device_codes_user_code ON agent_device_codes(user_code, status);
     `)
+    // 模块权限（MCP_MODULES.md §3.3）：授权与设备码各加一列，旧记录为空、按 tool_scope 换算
+    for (const table of ['agent_grants', 'agent_device_codes']) {
+      const cols = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name)
+      if (!cols.includes('modules')) this.db.exec(`ALTER TABLE ${table} ADD COLUMN modules TEXT`)
+    }
   }
 
 
@@ -3179,6 +3186,7 @@ export class Store {
     token_prefix: string
     aegis_node_pubkey?: string | null
     tool_scope?: AgentGrantRow['tool_scope']
+    modules?: string | null
     permissions?: string[]
     doc_ids?: string[] | null
     write_mode?: AgentGrantRow['write_mode']
@@ -3189,8 +3197,8 @@ export class Store {
     this.db.prepare(`
       INSERT INTO agent_grants (
         id, app_id, user_id, name, token_hash, token_prefix, aegis_node_pubkey,
-        tool_scope, permissions, doc_ids, write_mode, user_token_version, created_at, expires_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        tool_scope, modules, permissions, doc_ids, write_mode, user_token_version, created_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.id,
       input.app_id ?? 'heurion',
@@ -3200,6 +3208,7 @@ export class Store {
       input.token_prefix,
       input.aegis_node_pubkey ?? null,
       input.tool_scope ?? 'all',
+      input.modules ?? null,
       JSON.stringify(input.permissions ?? ['*']),
       input.doc_ids ? JSON.stringify(input.doc_ids) : null,
       input.write_mode ?? 'tracked',
@@ -3359,6 +3368,7 @@ export class Store {
     name: string
     aegis_node_pubkey?: string | null
     tool_scope?: AgentGrantRow['tool_scope']
+    modules?: string | null
     write_mode?: AgentGrantRow['write_mode']
     ttl_secs?: number
   }): {
@@ -3368,6 +3378,7 @@ export class Store {
     name: string
     aegis_node_pubkey: string | null
     tool_scope: AgentGrantRow['tool_scope']
+    modules: string | null
     write_mode: AgentGrantRow['write_mode']
     status: 'pending' | 'approved' | 'consumed' | 'expired'
     user_id: string | null
@@ -3381,8 +3392,8 @@ export class Store {
     const expiresAt = new Date(Date.now() + Math.max(10, input.ttl_secs ?? 600) * 1000).toISOString()
     this.db.prepare(`
       INSERT INTO agent_device_codes (
-        device_code, user_code, app_id, name, aegis_node_pubkey, tool_scope, write_mode, status, created_at, expires_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        device_code, user_code, app_id, name, aegis_node_pubkey, tool_scope, modules, write_mode, status, created_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
     `).run(
       input.device_code,
       input.user_code,
@@ -3390,6 +3401,7 @@ export class Store {
       input.name,
       input.aegis_node_pubkey ?? null,
       input.tool_scope ?? 'all',
+      input.modules ?? null,
       input.write_mode ?? 'tracked',
       createdAt,
       expiresAt,
@@ -3405,6 +3417,7 @@ export class Store {
       name: string
       aegis_node_pubkey: string | null
       tool_scope: AgentGrantRow['tool_scope']
+      modules: string | null
       write_mode: AgentGrantRow['write_mode']
       status: 'pending' | 'approved' | 'consumed' | 'expired'
       user_id: string | null

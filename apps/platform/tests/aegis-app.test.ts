@@ -8,13 +8,12 @@ import { generateAegisNodeKeyPair, signAegisLeaseToken } from '../src/aegis/auth
 import {
   defineAegisManifest,
   extractAegisHeaders,
-  formatLeaseRequiredError,
-  generateAegisNodeKeyPair as sdkGenerateKeyPair,
+  formatApprovalRequired,
   issueAegisGrantTokenString,
   parseAegisGrantTokenString,
-  signAegisLeaseToken as sdkSignLease,
-  verifyEd25519LeaseToken as sdkVerifyLease,
+  verifyAegisLeaseToken,
 } from '../../../packages/aegis-app-sdk/src/index.ts'
+import { buildAegisManifest } from '../src/aegis/manifest.ts'
 import { PostCheck } from '../src/collab/postcheck.ts'
 import { DatasetService } from '../src/datasets/service.ts'
 import type { HarnessPool } from '../src/harness/pool.ts'
@@ -22,6 +21,7 @@ import { buildApi } from '../src/http/api.ts'
 import type { CrossrefClient } from '../src/literature/crossref.ts'
 import type { PubMedClient } from '../src/literature/pubmed.ts'
 import { TurnRegistry } from '../src/mcp/turns.ts'
+import { moduleOf } from '../src/mcp/modules.ts'
 import type { McpDeps } from '../src/mcp/server.ts'
 import { ClaimService } from '../src/claims/service.ts'
 import { Documents } from '../src/model/runtime.ts'
@@ -32,11 +32,11 @@ import { kekFrom, TenantKeys } from '../src/tenancy/keys.ts'
 import { PatientService } from '../src/tenancy/patients.ts'
 import { TurnService } from '../src/turns/service.ts'
 
-function createTestEnv(opts: { aegisEnabled?: boolean; mcpDeps?: (base: { docs: Documents; ops: OpService; registry: TurnRegistry; dir: string }) => McpDeps } = {}) {
+function createTestEnv(opts: { aegisEnabled?: boolean; provenance?: boolean; mcpDeps?: (base: { docs: Documents; ops: OpService; registry: TurnRegistry; dir: string }) => McpDeps } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'heurion-aegis-'))
   const store = new Store(':memory:')
   const docs = new Documents(store)
-  const ops = new OpService(docs)
+  const ops = new OpService(docs, undefined, undefined, { provenance: opts.provenance ?? false })
   const registry = new TurnRegistry()
   const accounts = new Accounts(store, {
     secret: 'test-secret',
@@ -657,86 +657,38 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     expect(approveAfterReject.status).toBe(409)
   })
 
-  it('8. 独立第三方应用 SDK (@heurion/aegis-app-sdk) 原语校验与离线 Ed25519 Lease 验签', () => {
-    const manifest = defineAegisManifest({
-      protocol: 'aegis-app/1.0',
-      app: {
-        id: 'acme-bio-eln',
-        name: 'Acme Bio ELN',
-        version: '1.0.0',
-        vendor: 'Acme Bio',
-        description: 'Third-party ELN integrated with Aegis-OS',
-      },
-      mcp: {
-        transport: 'streamable-http',
-        endpoint: '/api/aegis/mcp',
-        eager_tools: ['eln_read'],
-        lazy_tools: 'all_remaining',
-      },
-      auth: {
-        modes: ['user_grant_token'],
-        token_exchange_endpoint: '/api/aegis/auth/token',
-        token_revoke_endpoint: '/api/aegis/auth/token',
-        token_prefix: 'aegis_at_acme-bio-eln.',
-        identity_binding: {
-          requires_user_account: true,
-          supports_org_tenancy: true,
-          binds_aegis_node_pubkey: true,
-        },
-        required_headers: ['Authorization', 'X-Aegis-Agent-Id'],
-      },
-      capabilities: [],
-      security: {
-        network_egress: ['localhost'],
-        supports_cow_turn_revert: true,
-        lease_verification: {
-          supports_ed25519_offline_verify: true,
-          supports_server_escalation: true,
-        },
-      },
-    })
-    expect(manifest.app.id).toBe('acme-bio-eln')
+  it('8. SDK 与平台同一份实现：平台清单通过 SDK 校验；令牌、请求头、离线租约、需要租约的返回', () => {
+    const manifest = defineAegisManifest(buildAegisManifest())
+    expect(manifest.schema_version).toBe('AAP-1.0')
+    expect(() => defineAegisManifest({ ...manifest, schema_version: 'aegis-app/1.0' as 'AAP-1.0' })).toThrow()
 
     const tokenObj = issueAegisGrantTokenString('acme-bio-eln')
-    expect(tokenObj.rawToken).toMatch(/^aegis_at_acme-bio-eln\.ag_[0-9a-f]+\./)
+    expect(tokenObj.rawToken).toMatch(/^aegis_at_acme-bio-eln\.g_[0-9a-f]+\./)
     const parsed = parseAegisGrantTokenString(tokenObj.rawToken, 'acme-bio-eln')
     expect(parsed?.grantId).toBe(tokenObj.grantId)
     expect(parsed?.tokenHash).toBe(tokenObj.tokenHash)
+    expect(parseAegisGrantTokenString(tokenObj.rawToken, 'heurion')).toBeNull()
 
     const headers = extractAegisHeaders({
       Authorization: `Bearer ${tokenObj.rawToken}`,
       'X-Aegis-Agent-Id': 'hermes-01',
       'X-Aegis-Session-Id': 'sess-99',
+      'X-Aegis-Turn-Id': 'turn-7',
     })
-    expect(headers.agentId).toBe('hermes-01')
-    expect(headers.sessionId).toBe('sess-99')
+    expect(headers).toMatchObject({ agentId: 'hermes-01', sessionId: 'sess-99', turnId: 'turn-7' })
 
-    const kp = sdkGenerateKeyPair()
+    // 平台导出的签名函数就是 SDK 的：用它签的租约，SDK 验签通过；改了作用域或超过 15 分钟则拒绝
+    const kp = generateAegisNodeKeyPair()
     const nowSec = Math.floor(Date.now() / 1000)
-    const leaseTok = sdkSignLease(
-      {
-        iss: 'aegis-local-node',
-        sub: tokenObj.grantId,
-        aud: 'acme-bio-eln',
-        agt: 'hermes-01',
-        scp: 'acme-bio-eln:sign_experiment',
-        res: 'exp-42',
-        iat: nowSec,
-        exp: nowSec + 300,
-      },
-      kp.privateKeyBase64,
-    )
-    const verified = sdkVerifyLease(leaseTok, kp.publicKeyBase64, 'acme-bio-eln:sign_experiment', 'exp-42', 'acme-bio-eln')
-    expect(verified.ok).toBe(true)
+    const payload = { iss: 'lease-1', sub: tokenObj.grantId, app: 'acme-bio-eln', agent: 'hermes-01', scope: 'acme-bio-eln:sign.*', resource: 'exp-42', iat: nowSec, exp: nowSec + 300 }
+    const expectOk = { appId: 'acme-bio-eln', grantId: tokenObj.grantId, agentId: 'hermes-01', scope: 'acme-bio-eln:sign.experiment', resource: 'exp-42' }
+    expect(verifyAegisLeaseToken(signAegisLeaseToken(payload, kp.privateKeyPem), kp.publicKey, expectOk).ok).toBe(true)
+    expect(verifyAegisLeaseToken(signAegisLeaseToken(payload, kp.privateKeyPem), kp.publicKey, { ...expectOk, scope: 'acme-bio-eln:delete' }).ok).toBe(false)
+    expect(verifyAegisLeaseToken(signAegisLeaseToken({ ...payload, exp: nowSec + 3600 }, kp.privateKeyPem), kp.publicKey, expectOk).ok).toBe(false)
 
-    const errPayload = formatLeaseRequiredError({
-      escalation_id: 'esc-acme-001',
-      scope: 'acme-bio-eln:sign_experiment',
-      resource: 'exp-42',
-      reason: '电子实验记录签章归档不可撤销',
-    })
-    expect(errPayload.code).toBe('lease_required')
-    expect(errPayload.escalation_id).toBe('esc-acme-001')
+    const errPayload = formatApprovalRequired({ escalation_id: 'esc-acme-001', scope: 'acme-bio-eln:sign.experiment', resource: 'exp-42', reason: '签章归档不可撤销' })
+    expect(errPayload.status).toBe('approval_required')
+    expect(errPayload.suggested_lease_scope).toBe('action=acme-bio-eln:sign.experiment, resource=exp-42')
   })
 
   it('9. RFC 8628 设备码免密终端绑定与第一方智能体技能包自动发现', async () => {
@@ -902,5 +854,111 @@ describe('AAP-1.0 网关（阶段 1：一个处理函数、与 dsh 同一份依�
     const token = await issue(app)
     expect((await app.request('/api/mcp', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' })).status).not.toBe(200)
     expect((await app.request('/api/aegis/mcp', { method: 'GET', headers: { authorization: `Bearer ${token}` } })).status).not.toBe(200)
+  })
+})
+
+describe('AAP-1.0 按模块开放（阶段 2）', () => {
+  const issue = async (app: ReturnType<typeof createTestEnv>['app'], grant: Record<string, unknown>) => {
+    const res = await app.request('/api/aegis/auth/token', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'dr_zhang', password: 'Password123!', name: 'node', node_pubkey: generateAegisNodeKeyPair().publicKey, ...grant }),
+    })
+    return { status: res.status, body: (await res.json()) as { access_token: string; modules?: Record<string, string>; error?: string } }
+  }
+  const rpc = async (app: ReturnType<typeof createTestEnv>['app'], token: string, path: string, method: string, params: unknown, headers: Record<string, string> = {}) => {
+    const res = await app.request(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, 'x-aegis-agent-id': 'agent-m', ...headers },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    })
+    return { status: res.status, body: (await res.json()) as any }
+  }
+  const toolNames = async (app: ReturnType<typeof createTestEnv>['app'], token: string, path = '/api/aegis/mcp') =>
+    ((await rpc(app, token, path, 'tools/list', {})).body.result.tools as Array<{ name: string }>).map(t => t.name)
+
+  it('清单按模块注册表生成：九个模块、各自地址；列出的工具都真实存在，不再有虚构能力', async () => {
+    const { app } = createTestEnv()
+    const manifest = (await (await app.request('/.well-known/aegis-app.json')).json()) as any
+    expect(manifest.modules.map((m: any) => m.id)).toEqual(['writing', 'literature', 'analysis', 'patients', 'imaging', 'research', 'knowledge', 'memory', 'admin'])
+    expect(manifest.modules[0].mcp_http).toBe('/api/aegis/mcp/writing')
+    const all = new Set(await toolNames(app, (await issue(app, { tool_scope: 'all' })).body.access_token))
+    const listed = [
+      ...manifest.capabilities_preview.map((c: any) => c.name),
+      ...manifest.modules.flatMap((m: any) => [...m.read_only_tools, ...Object.keys(m.lease_gated)]),
+    ]
+    expect(listed.filter((n: string) => !all.has(n))).toEqual([])
+    for (const fake of ['dataset_analyze', 'phr_share_admin', 'mail_admin']) expect(listed).not.toContain(fake)
+  })
+
+  it('按模块的地址只挂该模块；未授权的模块 403、不存在的模块 404', async () => {
+    const { app } = createTestEnv()
+    const { body } = await issue(app, { modules: 'writing:rw,literature:r' })
+    expect(body.modules).toEqual({ writing: 'rw', literature: 'r' })
+    const lit = await toolNames(app, body.access_token, '/api/aegis/mcp/literature')
+    expect(lit).toContain('pubmed_search')
+    expect(lit).not.toContain('insert_citation') // 只读权限
+    expect(lit).not.toContain('doc_edit') // 别的模块
+    const writing = await toolNames(app, body.access_token, '/api/aegis/mcp/writing')
+    expect(writing).toContain('doc_edit')
+    expect(writing).not.toContain('pubmed_search')
+    const all = await toolNames(app, body.access_token)
+    expect(all).toContain('doc_edit')
+    expect(all).toContain('pubmed_search')
+    expect(all).not.toContain('patient_read')
+    const denied = await rpc(app, body.access_token, '/api/aegis/mcp/patients', 'tools/list', {})
+    expect(denied.status).toBe(403)
+    expect(denied.body.code).toBe('module_not_granted')
+    expect((await rpc(app, body.access_token, '/api/aegis/mcp/nope', 'tools/list', {})).status).toBe(404)
+  })
+
+  it('模块权限校验：未知模块、空权限拒绝签发；授权列表返回实际生效的模块与模块目录', async () => {
+    const { app } = createTestEnv()
+    expect((await issue(app, { modules: 'writing:rw,secret:rw' })).status).toBe(400)
+    expect((await issue(app, { modules: {} })).status).toBe(400)
+    expect((await issue(app, { modules: { writing: 'admin' } })).status).toBe(400)
+    const { body } = await issue(app, { modules: { knowledge: 'r' } })
+    const tools = await toolNames(app, body.access_token)
+    expect(tools.sort()).toEqual(['kb_read', 'kb_search'])
+  })
+
+  it('旧的 tool_scope 换算成模块权限：clinical 不含研究、research 不含患者、readonly 不含写工具', async () => {
+    const { app } = createTestEnv()
+    const clinical = await toolNames(app, (await issue(app, { tool_scope: 'clinical' })).body.access_token)
+    expect(clinical).toContain('patient_read')
+    expect(clinical).toContain('doc_edit')
+    expect(clinical.some(n => n.startsWith('study_'))).toBe(false)
+    expect(clinical).not.toContain('tenant_admin')
+    const research = await toolNames(app, (await issue(app, { tool_scope: 'research' })).body.access_token)
+    expect(research).toContain('study_list')
+    expect(research).not.toContain('patient_read')
+    const canvas = await toolNames(app, (await issue(app, { tool_scope: 'canvas' })).body.access_token)
+    expect(canvas.every(n => ['writing', 'literature'].includes(String(moduleOf(n))))).toBe(true)
+    const ro = await toolNames(app, (await issue(app, { tool_scope: 'readonly' })).body.access_token)
+    expect(ro).toContain('doc_read')
+    expect(ro).not.toContain('doc_edit')
+  })
+
+  it('观察记录跨模块、跨回合共享：同一会话读到的数字可以写进另一篇稿件；换个会话就不算看到过', async () => {
+    const { app, store, docs } = createTestEnv({ provenance: true })
+    const token = (await issue(app, { tool_scope: 'all' })).body.access_token
+    const call = (path: string, name: string, args: Record<string, unknown>, headers: Record<string, string>) =>
+      rpc(app, token, path, 'tools/call', { name, arguments: args }, headers).then(r => r.body.result as { isError?: boolean; content: Array<{ text: string }> })
+    // 来源文稿由用户本人写（AI 新建文稿时写数字同样要有出处）
+    const owner = store.getUserByName('dr_zhang')!.id
+    const srcId = docs.create({ owner, title: '来源', markdown: '中位随访 37.6 个月。' }).id
+    const target = await call('/api/aegis/mcp/writing', 'doc_create', { title: '目标', markdown: '随访结果待补充。' }, { 'x-aegis-session-id': 's1', 'x-aegis-turn-id': 't0' })
+    const tgt = JSON.parse(target.content[0]!.text) as { doc_id: string; rev: number }
+    // 换一个模块地址、换一个回合读来源（患者 / 影像等模块读到的结果同理）
+    expect((await call('/api/aegis/mcp', 'doc_read', { doc_id: srcId }, { 'x-aegis-session-id': 's1', 'x-aegis-turn-id': 't1' })).isError).toBeFalsy()
+    const read = await call('/api/aegis/mcp/writing', 'doc_read', { doc_id: tgt.doc_id }, { 'x-aegis-session-id': 's1', 'x-aegis-turn-id': 't1' })
+    const para = /\{#([a-z0-9]+)\} 随访结果待补充。/.exec(read.content[0]!.text.replace(/[⟦⟧]/g, ''))![1]!
+    const edit = (session: string, rev: number) => call('/api/aegis/mcp', 'doc_edit', {
+      doc_id: tgt.doc_id, base_rev: rev, ops: [{ op: 'replace_text', id: para, find: '随访结果待补充。', replace: '中位随访 37.6 个月。' }],
+    }, { 'x-aegis-session-id': session, 'x-aegis-turn-id': 't2' })
+    const other = await edit('s2', tgt.rev)
+    expect(other.isError).toBe(true)
+    expect(other.content[0]!.text).toContain('unobserved_number')
+    const same = await edit('s1', tgt.rev)
+    expect(same.isError, same.content[0]?.text).toBeFalsy()
   })
 })
