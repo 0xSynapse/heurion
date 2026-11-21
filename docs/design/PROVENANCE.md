@@ -1,7 +1,7 @@
 # 来源等级（Provenance）设计方案
 
 > 状态：已确认（2026-11-13），按「分期实施」逐期落地，每期单独提交。
-> 关联：论文一（`paper/`）的核心主张；`docs/design/AI_PERMISSIONS.md`；`docs/design/IMAGING_STUDIES.md` 中的测量原子与 `cohort_stat`。
+> 关联：论文一（`papers/paper1-provenance/`）的核心主张；`docs/design/AI_PERMISSIONS.md`；`docs/design/IMAGING_STUDIES.md` 中的测量原子与 `cohort_stat`。
 
 ## 1. 要解决的问题
 
@@ -227,7 +227,7 @@ prov: {
 2. **文献类工具的数字不算「看到过」**（原先观察记录不区分来源，检索结果里另一项研究的数字可以不挂引用写入）。见 2.2。
 3. **读视图用 ⟦⟧ 标出 AI 未确认的文字**（原先未实现，工具说明却告诉 AI「自己写的未确认文字可直接改」，AI 分不出哪些是自己写的）。见 4.2。
 
-其余与实现不一致的地方（模块与表名、检查顺序、安全小改的判定方式、开关位置、`unread_citation` 的含义、来源名、文字照抄未实现）已在正文对应位置注明，以实现为准。论文的描述见 `paper/SYSTEM_DESIGN.md`。
+其余与实现不一致的地方（模块与表名、检查顺序、安全小改的判定方式、开关位置、`unread_citation` 的含义、来源名、文字照抄未实现）已在正文对应位置注明，以实现为准。论文的描述见 `papers/paper1-provenance/SYSTEM_DESIGN.md`。
 
 2026-11-14 测量研究的 Heurion 组又发现两处，已修：
 

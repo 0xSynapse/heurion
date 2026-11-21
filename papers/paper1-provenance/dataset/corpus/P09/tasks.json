@@ -1,0 +1,107 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把全文的 “this study” 统一改成 “the present study”。",
+  "target": null,
+  "check": {
+   "old": "this study",
+   "new": "the present study",
+   "rule": "全文替换"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 10.3 应为 10.1，请只改这一处：“When stratified by trimester, 10.3% (12/117,95% CI: 5.1%−16.1%) of pregnant women in their second trimester reported using tobacco products, while only 5.5% (8/”",
+  "target": {
+   "pid": "74390E6D",
+   "section": "Results",
+   "para_start": "When stratified by trimester, 10.3% (12/117,95% CI: 5.1%−16."
+  },
+  "check": {
+   "old": "10.3",
+   "new": "10.1",
+   "sentence": "When stratified by trimester, 10.3% (12/117,95% CI: 5.1%−16.1%) of pregnant women in their second trimester reported using tobacco products, while only 5.5% (8/145, 95% CI: 1.4%−9.9%) of the pregnant women in their third trimester reported any such use.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 1中「Missing data on the use of tobacco, ENDS, NRT, and」行、「N = 262」列的 11 改为 12（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "460530D7",
+   "table": "Table 1",
+   "row": "Missing data on the use of tobacco, ENDS, NRT, and cannabinoids",
+   "col": "N = 262",
+   "cell_text": "11"
+  },
+  "check": {
+   "old": "11",
+   "new": "12",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “On assessing their intention to quit smoking, 32% …” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "3F7492A0",
+   "section": "Discussion",
+   "para_start": "On assessing their intention to quit smoking, 32% of pregnan"
+  },
+  "check": {
+   "words_before": 190,
+   "numbers": [
+    "32%",
+    "2011",
+    "2017",
+    "37%",
+    "26%"
+   ],
+   "cited_refs": [
+    "10.1016/j.hjc.2018.09.001",
+    "10.1111/j.1471-0528.1988.tb09481.x",
+    "10.1016/j.jpeds.2014.06.031",
+    "10.2105/ajph.84.7.1127",
+    "10.1177/2042098618775366",
+    "10.1001/jamanetworkopen.2019.2514",
+    "10.1016/j.hjc.2018.09.001",
+    "10.36416/1806-3756/e20210050"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“Please compare this with previous studies here.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "79926B29",
+   "comment_id": 0,
+   "anchor": "In this cross-sectional survey of 262 pregnant women coming for their regular clinical visits in one center in Switzerland, we found a prevalence of tobacco products at 7.6%, ENDS at 0.8%, NRT at 0.4%, and cannabinoid use at 3.8%."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“The global prevalence of smoking during pregnancy was estimated at 1.8%, with Europe reporting a prevalence of 8.1%” 文献：Lange S, Probst C, Rehm J et al. National, regional, and global prevalence of smoking during pregnancy in the general population: a systematic review and meta-analysis. Lancet Glob Health. 2018. doi:10.1016/S2214-109X(18)30223-7",
+  "target": {
+   "pid": "1578D9FB",
+   "section": "Introduction",
+   "para_start": "Smoking tobacco in pregnancy is a prevalent, modifiable risk"
+  },
+  "check": {
+   "doi": "10.1016/S2214-109X(18)30223-7",
+   "title": "National, regional, and global prevalence of smoking during pregnancy in the general population: a systematic review and meta-analysis",
+   "sentence": "The global prevalence of smoking during pregnancy was estimated at 1.8%, with Europe reporting a prevalence of 8.1%",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

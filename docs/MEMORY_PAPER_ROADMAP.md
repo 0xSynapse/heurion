@@ -17,7 +17,7 @@
 | [Skill-V](#33-skill-v--规则版本化与非退化回放p2) | 版本化 contract + 非退化回放 | 规则更新路径 | P2 |
 | [MSCE](#34-msce--只借可靠性与证据指针p2) | reliability 估计 + 证据指针 | `harness_rules` schema | P2 |
 | [MemSkill](#35-memskill--hard-case-队列p3) | designer 只看 hard case | Track B 信号筛选 | P3 |
-| [MemTransfer](#36-memtransfer--只用于评测协议论文侧) | 单轴 mismatch 评测协议 | `paper/benchmarks/v2/` | 论文侧 |
+| [MemTransfer](#36-memtransfer--只用于评测协议论文侧) | 单轴 mismatch 评测协议 | `papers/paper2-deep-review/benchmarks/v2/` | 论文侧 |
 | [A-MEM](#37-a-mem--不建议) | Zettelkasten 链接 | — | 不建议 |
 | [K-Risk](#38-k-risk--不适用) | 自动驾驶长尾场景 | — | 不适用 |
 
@@ -154,7 +154,7 @@ CREATE INDEX IF NOT EXISTS harness_rule_versions_rule ON harness_rule_versions (
 **建议改动**：
 
 1. 建 `harness_rule_versions`（见 §3.1 DDL），每次 `narrow / strengthen / merge` 前写快照
-2. 修订落库前跑 `paper/benchmarks/v2/cross-domain-eval.ts` 的 replay 子集，掉点则拒绝并回滚
+2. 修订落库前跑 `papers/paper2-deep-review/benchmarks/v2/cross-domain-eval.ts` 的 replay 子集，掉点则拒绝并回滚
 3. **受保护的语义约束（修复用户影子副本漏洞）**：虽然 `refineWithBackward()`（`procedural.ts:504`）已过滤掉 `owner === 'system'`，但 `evolveFromSignals()`（`procedural.ts:372-385`）在用户触发基线错误码时会克隆一份 `owner = user` 的用户副本，且 `forPrompt()`（`procedural.ts:564-571`）会用该副本**屏蔽（shadow）**系统基线规则。若 `refineWithBackward()` 将该用户副本 `narrow` 或 `merge` 掉，基线约束就会实质丢失。因此需将 5 条 `BASELINE_RULES` **及其同源用户影子副本的核心守卫子句**设为受保护不变量，禁止被 `merge` 归档或删减核心约束
 
 **工作量**：中。主要成本在于先把 replay 集固化成可重复执行的基准，状态机本身不难。
@@ -210,7 +210,7 @@ CREATE INDEX IF NOT EXISTS harness_rule_versions_rule ON harness_rule_versions (
 | 路径可用性变化 | 换领域（manuscript → biostats → deck） |
 | 历史量/相关性变化 | 换用户 / 换措辞 / 换历史条数 |
 
-**建议**：把 `paper/benchmarks/v2/cross-domain-eval.ts` 扩成「固定 policy，只动一轴」的矩阵。这能把论文第 7 节（`§7.4 Online Zero-Template Evolution and Cross-Domain Skill Training`）的「零负迁移」从一句断言升级为可复现协议。
+**建议**：把 `papers/paper2-deep-review/benchmarks/v2/cross-domain-eval.ts` 扩成「固定 policy，只动一轴」的矩阵。这能把论文第 7 节（`§7.4 Online Zero-Template Evolution and Cross-Domain Skill Training`）的「零负迁移」从一句断言升级为可复现协议。
 
 ---
 
@@ -275,4 +275,4 @@ P3  MemSkill hard-case 筛选        2 天       依赖 reliability
 | 7 | A-MEM: Agentic Memory for LLM Agents. *NeurIPS 2025* | Wujiang Xu, Zujie Liang, Kai Mei, Hang Gao, Juntao Tan, Yongfeng Zhang | <https://arxiv.org/abs/2502.12110> |
 | 8 | K-Risk: 知识驱动的自动驾驶长尾风险数据集 | Heye Huang, Jingguang Li, Zhiyuan Zhou, Paul Liang, Mingyu Wu, Kitae Jang, Jianqiang Wang | <https://github.com/benmagnifico/K-Risk> |
 
-**内部对照**：Heurion 自身的三层自演进记忆设计见 [`paper/main.tex`](../paper/main.tex) 第 5 节（`Three-Layer Self-Evolving Agent Architecture`）。
+**内部对照**：Heurion 自身的三层自演进记忆设计见 [`papers/paper2-deep-review/heurion2_integrated_main.tex`](../papers/paper2-deep-review/heurion2_integrated_main.tex) 的「Cross-Domain Three-Layer Self-Evolving Memory」一节。

@@ -1,0 +1,101 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Patients and methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Patients and methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 9,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 9 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 11.5 应为 11.3，请只改这一处：“Of all study participants, 16 (11.5%) either suffered a CVE or were diagnosed with atherosclerotic disease after a mean (SD) of 14 (6) years.”",
+  "target": {
+   "pid": "20D4DF51",
+   "section": "Results",
+   "para_start": "Of all study participants, 16 (11.5%) either suffered a CVE "
+  },
+  "check": {
+   "old": "11.5",
+   "new": "11.3",
+   "sentence": "Of all study participants, 16 (11.5%) either suffered a CVE or were diagnosed with atherosclerotic disease after a mean (SD) of 14 (6) years.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 1中「Age at surgery, y (SD)」行、「No osteolysis (n = 106)」列的 54.0 改为 54.1（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "4E78BC4D",
+   "table": "Table 1",
+   "row": "Age at surgery, y (SD)",
+   "col": "No osteolysis (n = 106)",
+   "cell_text": "54.0 (8.1)"
+  },
+  "check": {
+   "old": "54.0",
+   "new": "54.1",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “From an implant perspective, all articulations had…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "28C1227B",
+   "section": "Discussion",
+   "para_start": "From an implant perspective, all articulations had 28 mm cob"
+  },
+  "check": {
+   "words_before": 113,
+   "numbers": [
+    "28",
+    "2005",
+    "57%"
+   ],
+   "cited_refs": [
+    "10.1007/s00402-017-2624-z",
+    "10.2106/jbjs.17.00616"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“This overstates what the data show. Please soften.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "7482F693",
+   "comment_id": 0,
+   "anchor": "There was a problem of mismatched observation time, clearly displayed in Fig 2, implying less time for the control group to develop CVD."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“Primary osteoarthritis is a multifactorial disease with a low-grade inflammatory component” 文献：Berenbaum F. Osteoarthritis as an inflammatory disease (osteoarthritis is not osteoarthrosis!). Osteoarthritis Cartil. 2013. doi:10.1016/j.joca.2012.11.012",
+  "target": {
+   "pid": "1C40349F",
+   "section": "Introduction",
+   "para_start": "Primary osteoarthritis is a multifactorial disease with a lo"
+  },
+  "check": {
+   "doi": "10.1016/j.joca.2012.11.012",
+   "title": "Osteoarthritis as an inflammatory disease (osteoarthritis is not osteoarthrosis!)",
+   "sentence": "Primary osteoarthritis is a multifactorial disease with a low-grade inflammatory component",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

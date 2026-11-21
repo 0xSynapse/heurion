@@ -1,0 +1,113 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「2. Materials and methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "2. Materials and methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 9,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 9 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「3. Results」中这句话里的 11.794 应为 11.797，请只改这一处：“Finally, according to univariable binary logistic regression analysis, patients with a HALP score ≤ 17.975 had a 1-year mortality risk 11.794 times that of pati”",
+  "target": {
+   "pid": "2CD1ADBE",
+   "section": "3. Results",
+   "para_start": "Finally, according to univariable binary logistic regression"
+  },
+  "check": {
+   "old": "11.794",
+   "new": "11.797",
+   "sentence": "Finally, according to univariable binary logistic regression analysis, patients with a HALP score ≤ 17.975 had a 1-year mortality risk 11.794 times that of patients with a HALP score ≥ 17.975 (OR: 11.794, 95% CI [7.194–19.338], p < 0.001); the risk of patients with CRP > 28.145 was 3.714 times that of patients with CRP ≤ 28.145 (OR: 3.714, 95% CI [2.417–5.705], p < 0.001) and the risk of patients with CAR > 0.6574 was 4.139 times that of patients with CAR ≤ 0.6574 (OR: 4.139, 95% CI [2.685–6.380], p < 0.001) (Table 4).",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 1中「Age (years), ± SD」行、「Non-survival」列的 83.60 改为 83.70（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "69713F40",
+   "table": "Table 1",
+   "row": "Age (years), ± SD",
+   "col": "Non-survival",
+   "cell_text": "83.60 ±7.61"
+  },
+  "check": {
+   "old": "83.60",
+   "new": "83.70",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「4. Discussion」中以 “Farag et al. analyzed 32 tumor studies associated …” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "5D39FF68",
+   "section": "4. Discussion",
+   "para_start": "Farag et al. analyzed 32 tumor studies associated with HALP "
+  },
+  "check": {
+   "words_before": 138,
+   "numbers": [
+    "32",
+    "31.2",
+    "56.8",
+    "44.56",
+    "26.5",
+    "22.2",
+    "23.35",
+    "30",
+    "1"
+   ],
+   "cited_refs": [
+    "10.18632/oncotarget.28367",
+    "10.18632/oncotarget.5629",
+    "10.18632/oncotarget.12271",
+    "10.2147/CMAR.S365612",
+    "10.21037/atm-21-2120",
+    "10.1186/s12894-018-0333-8",
+    "10.3748/wjg.v26.i8.828",
+    "10.1038/s41598-018-19146-y"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“This overstates what the data show. Please soften.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "38B70738",
+   "comment_id": 0,
+   "anchor": "In addition, HALP has also shown remarkable prognostic ability in predicting survival and as a disease severity index in some non-cancer studies "
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「1. Introduction」这句话末尾补充引用：“The femoral head, neck, and intertrochanteric/subtrochanteric fractures are the main subcategories based on their location” 文献：Sheehan SE, Shyu JY, Weaver MJ et al. Proximal Femoral Fractures: What the Orthopedic Surgeon Wants to Know. Radiographics. 2015. doi:10.1148/rg.2015140301",
+  "target": {
+   "pid": "66F9D727",
+   "section": "1. Introduction",
+   "para_start": "Proximal femoral fractures (PFFs) occur around the hip joint"
+  },
+  "check": {
+   "doi": "10.1148/rg.2015140301",
+   "title": "Proximal Femoral Fractures: What the Orthopedic Surgeon Wants to Know",
+   "sentence": "The femoral head, neck, and intertrochanteric/subtrochanteric fractures are the main subcategories based on their location",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

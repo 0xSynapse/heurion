@@ -1,0 +1,109 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Methods」部分里所有的 “patients” 改成 “participants”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Methods",
+   "old": "patients",
+   "new": "participants",
+   "count_in_section": 11,
+   "rule": "该章节 “patients” 出现 0 次、“participants” 增加 11 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 13.3 应为 13.1，请只改这一处：“The median age of the pooled population was 65 (range: 26, 92) years, and 13.3% (131/987) were aged ≥ 75 years.”",
+  "target": {
+   "pid": "7E841B27",
+   "section": "Results",
+   "para_start": "The median age of the pooled population was 65 (range: 26, 9"
+  },
+  "check": {
+   "old": "13.3",
+   "new": "13.1",
+   "sentence": "The median age of the pooled population was 65 (range: 26, 92) years, and 13.3% (131/987) were aged ≥ 75 years.",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 1中「Median age (range), years」行、「2nd line (n = 398)」列的 64 改为 62（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "68978377",
+   "table": "Table 1",
+   "row": "Median age (range), years",
+   "col": "2nd line (n = 398)",
+   "cell_text": "64 (30–86)"
+  },
+  "check": {
+   "old": "64",
+   "new": "62",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “The real-world effectiveness of camrelizumab in ou…” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "5DBC5AE3",
+   "section": "Discussion",
+   "para_start": "The real-world effectiveness of camrelizumab in our advanced"
+  },
+  "check": {
+   "words_before": 187,
+   "numbers": [
+    "8",
+    "75",
+    "13.3%",
+    "2",
+    "6.7%"
+   ],
+   "cited_refs": [
+    "10.1001/jama.2021.12836",
+    "10.1002/cac2.12119",
+    "10.1016/s1470-2045(20)30110-8",
+    "10.1016/s2468-1253(21)00378-2",
+    "10.1016/s1470-2045(17)30181-x",
+    "10.1001/jamaoncol.2018.5441",
+    "10.1001/jama.2023.4221",
+    "10.1161/circulationaha.120.051718"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“这里需要和既往研究比较一下，说明一致还是不一致。”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "2C1E8472",
+   "comment_id": 0,
+   "anchor": "With the approvals of PD-1/PD-L1 inhibitors in esophageal cancer, clinicians are now faced with substantial new questions concerning effectiveness, safety, and optimal treatment patterns in a broader patient population we deal with in daily life, including fragile patients with older age and those with poor performance status that are generally excluded from pivotal trials."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“Esophageal cancer is one of the leading causes of cancer-related deaths worldwide, with approximately 511,000 new cases and 445,000 deaths i” 文献：Bray F, Laversanne M, Sung H et al. Global cancer statistics 2022: GLOBOCAN estimates of incidence and mortality worldwide for 36 cancers in 185 countries. CA Cancer J Clin. 2024. doi:10.3322/caac.21834",
+  "target": {
+   "pid": "1D9300A2",
+   "section": "Introduction",
+   "para_start": "Esophageal cancer is one of the leading causes of cancer-rel"
+  },
+  "check": {
+   "doi": "10.3322/caac.21834",
+   "title": "Global cancer statistics 2022: GLOBOCAN estimates of incidence and mortality worldwide for 36 cancers in 185 countries",
+   "sentence": "Esophageal cancer is one of the leading causes of cancer-related deaths worldwide, with approximately 511,000 new cases and 445,000 deaths in 2022",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]

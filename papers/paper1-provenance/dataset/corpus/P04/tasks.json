@@ -1,0 +1,101 @@
+[
+ {
+  "id": "T1",
+  "kind": "改短语",
+  "instruction": "把「Materials and methods」部分里所有的 “was performed” 改成 “was conducted”，其他章节不要动。",
+  "target": null,
+  "check": {
+   "section": "Materials and methods",
+   "old": "was performed",
+   "new": "was conducted",
+   "count_in_section": 3,
+   "rule": "该章节 “was performed” 出现 0 次、“was conducted” 增加 3 次；其他章节文字不变"
+  }
+ },
+ {
+  "id": "T2",
+  "kind": "改数字",
+  "instruction": "重新分析后，「Results」中这句话里的 63.0 应为 63.2，请只改这一处：“In this study that enrolled 384 HIV positive children attended antiretroviral treatment clinic at Kayunga Regional Referral Hospital (KRRH), Majority of the par”",
+  "target": {
+   "pid": "6A14B4A0",
+   "section": "Results",
+   "para_start": "In this study that enrolled 384 HIV positive children attend"
+  },
+  "check": {
+   "old": "63.0",
+   "new": "63.2",
+   "sentence": "In this study that enrolled 384 HIV positive children attended antiretroviral treatment clinic at Kayunga Regional Referral Hospital (KRRH), Majority of the participants had an detected viral load 242 (63.0%), though majority were classified as HIV stage one 299 (77.9%).",
+   "rule": "该句中只有这个数字由 old 变为 new；句中其他数字、引用不变；文档其他位置的同一数字不变"
+  }
+ },
+ {
+  "id": "T3",
+  "kind": "改表格",
+  "instruction": "Table 1中「6-24」行、「Percentage」列的 11.7 改为 11.8（核对原始数据后发现录入错误）。",
+  "target": {
+   "pid": "19958C24",
+   "table": "Table 1",
+   "row": "6-24",
+   "col": "Percentage",
+   "cell_text": "11.7"
+  },
+  "check": {
+   "old": "11.7",
+   "new": "11.8",
+   "rule": "只有这个单元格变化；表格行列数、其他单元格、表注不变"
+  }
+ },
+ {
+  "id": "T4",
+  "kind": "改写段落",
+  "instruction": "把「Discussion」中以 “It is also important to note that, undernutrition …” 开头的这一段精简到原来的 70% 左右，意思不变，所有数字和引用都要保留。",
+  "target": {
+   "pid": "7F2510CE",
+   "section": "Discussion",
+   "para_start": "It is also important to note that, undernutrition is often a"
+  },
+  "check": {
+   "words_before": 123,
+   "numbers": [
+    "3",
+    "70%",
+    "1"
+   ],
+   "cited_refs": [
+    "Indicators for assessing infant and young child feeding prac",
+    "10.1155/2020/3720572"
+   ],
+   "rule": "字数降到 55%–85%；数字集合不变；引用域个数与指向的文献不变；需要人工判断原意是否改变"
+  }
+ },
+ {
+  "id": "T5",
+  "kind": "回复批注",
+  "instruction": "按导师的批注（“Please compare this with previous studies here.”）修改批注对应的那句话，并在批注下回复说明改了什么。",
+  "target": {
+   "pid": "44603093",
+   "comment_id": 0,
+   "anchor": "Regarding, the prevalence, 57.3% of the participants had anemia, which was predominantly moderate according to severity with Microcytosis and hypochromia."
+  },
+  "check": {
+   "rule": "批注所指句子已修改；批注仍在且有一条回复；其他批注（C2、C3）原样保留；需要人工判断是否按意见改到位"
+  }
+ },
+ {
+  "id": "T6",
+  "kind": "新增引用",
+  "instruction": "在「Introduction」这句话末尾补充引用：“Globally, anemia affects approximately 42% of children under five years, with the highest prevalence in sub-Saharan Africa” 文献：Rahman MS, Mushfiquee M, Masud MS et al. Association between malnutrition and anemia in under-five children and women of reproductive age: Evidence from Bangladesh Demographic and Health Survey 2011. PLoS One. 2019. doi:10.1371/journal.pone.0219170",
+  "target": {
+   "pid": "6369AE0B",
+   "section": "Introduction",
+   "para_start": "Globally, anemia affects approximately 42% of children under"
+  },
+  "check": {
+   "doi": "10.1371/journal.pone.0219170",
+   "title": "Association between malnutrition and anemia in under-five children and women of reproductive age: Evidence from Bangladesh Demographic and Health Survey 2011",
+   "sentence": "Globally, anemia affects approximately 42% of children under five years, with the highest prevalence in sub-Saharan Africa",
+   "ref_cited_elsewhere": false,
+   "rule": "该句末尾出现一个指向此 DOI 的引用（与稿件现有引用同一种形式：EndNote/Zotero 域或纯文本编号）；参考文献表随之更新；其他引用不变"
+  }
+ }
+]
