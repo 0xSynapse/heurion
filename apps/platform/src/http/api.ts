@@ -8,9 +8,10 @@ import { H_AS, internalVia, makeInvoker, type Invoke, type ViaInfo } from './inv
 import { chmodIfOwned, CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
+import { buildMcpBundleManifest } from '../aegis/bundle.ts'
 import { HTTP_PUT_MAX, listDir, readTarget, WorkspaceFileError, writeTarget } from '../aegis/files.ts'
 import { aegisEffectiveModules, handleAegisMcpRequest, type McpDeps } from '../mcp/server.ts'
-import { formatModuleGrant, grantModules, MODULE_IDS, MODULES, orgAllowedModules, type ModuleId } from '../mcp/modules.ts'
+import { formatModuleGrant, grantModules, MODULE_IDS, MODULES, moduleOf, orgAllowedModules, READ_ONLY_TOOLS, type ModuleId } from '../mcp/modules.ts'
 import { moduleSkillDoc } from '../mcp/skills.ts'
 import { TurnRegistry } from '../mcp/turns.ts'
 import { ClaimService, type ReviewProgress } from '../claims/service.ts'
@@ -234,7 +235,12 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   if (!deps.aegisEnabled) {
     const aegisOff: MiddlewareHandler = async c => c.json({ error: 'not found' }, 404)
     app.use('/api/aegis/*', aegisOff)
+    app.use('/api/mcp', aegisOff)
+    app.use('/api/mcp/*', aegisOff)
+    app.use('/api/me/mcp-tokens', aegisOff)
+    app.use('/api/me/mcp-tokens/*', aegisOff)
     app.use('/.well-known/aegis-*', aegisOff)
+    app.use('/.well-known/mcp-bundle.json', aegisOff)
   }
   app.onError((err, c) => {
     const anyErr = err as any
@@ -257,6 +263,21 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   app.get('/.well-known/aegis-app.json', c => {
     c.header('Cache-Control', 'public, max-age=300')
     return c.json(AEGIS_APP_MANIFEST)
+  })
+
+  // 请求方看到的站点地址：生产在 Caddy 后面，Node 收到的是 http，按反向代理给的 X-Forwarded-Proto / Host 还原成 https://heurion.org
+  // （只用于拼返回给请求方自己的链接，伪造只影响他自己）
+  const requestOrigin = (c: Context) => {
+    const u = new URL(c.req.url)
+    const proto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim()
+    const host = c.req.header('x-forwarded-host')?.split(',')[0]?.trim() || c.req.header('host') || u.host
+    return `${proto === 'https' || proto === 'http' ? proto : u.protocol.replace(':', '')}://${host}`
+  }
+
+  // aegis-os v0.9 的声明式 MCP 清单（aegis-mcp-bundle/v1）：地址按请求的 origin 生成完整 URL
+  app.get('/.well-known/mcp-bundle.json', async c => {
+    c.header('Cache-Control', 'public, max-age=300')
+    return c.json(await buildMcpBundleManifest(requestOrigin(c)))
   })
 
   // 按模块的技能文档（MCP_MODULES.md §3.4）：说明与工具清单由模块注册表生成
@@ -555,11 +576,27 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
 
   // —— AAP-1.0 统一身份鉴权与 MCP 网关（支持 RFC 8628 设备码免密绑定、Session 令牌、账号密码兑换、或 aegis_at_heurion.* 令牌） ——
+  // RFC 8628 / OAuth 客户端（如 aegis-os v0.9 的 `mcp login --device-code`）用表单提交，老客户端用 JSON：两种都收。
+  // OAuth 的 scope（空格或逗号分隔，如 `writing:rw literature:r`）在没给 modules 时当作模块权限。
+  const readAuthBody = async (c: Context): Promise<Record<string, unknown>> => {
+    let body: Record<string, unknown>
+    if ((c.req.header('content-type') ?? '').includes('application/x-www-form-urlencoded')) {
+      body = Object.fromEntries(new URLSearchParams(await c.req.text()))
+      for (const k of ['ttl_secs', 'ttl_days']) if (typeof body[k] === 'string' && body[k] !== '') body[k] = Number(body[k])
+    } else {
+      body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    }
+    if ((body.modules === undefined || body.modules === '') && typeof body.scope === 'string' && body.scope.trim()) {
+      body.modules = body.scope.trim().split(/[\s,]+/).filter(Boolean).join(',')
+    }
+    return body
+  }
+
   app.post('/api/aegis/auth/device', async c => {
     if (viaByReq.get(c.req.raw)) {
       return c.json({ error: 'AI 不能自行发起设备授权码', code: 'human_only' }, 403)
     }
-    const body = await c.req.json().catch(() => ({})) as {
+    const body = await readAuthBody(c) as {
       name?: string
       node_pubkey?: string
       tool_scope?: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
@@ -576,7 +613,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         writeMode: body.write_mode ?? 'tracked',
         ttlSecs: body.ttl_secs,
       })
-      return c.json(created, 201)
+      // RFC 8628：verification_uri 给完整地址，另给 verification_uri_complete（带用户码，终端可直接打印成可点链接）
+      const uri = `${requestOrigin(c)}${created.verification_uri}`
+      return c.json({ ...created, verification_uri: uri, verification_uri_complete: uri }, 201)
     } catch (err) {
       return c.json({ error: (err as Error).message, code: 'bad_device_request' }, 400)
     }
@@ -586,7 +625,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (viaByReq.get(c.req.raw)) {
       return c.json({ error: 'AI 不能自行签发 Aegis 授权令牌', code: 'human_only' }, 403)
     }
-    const body = await c.req.json().catch(() => ({})) as {
+    const body = await readAuthBody(c) as {
       grant_type?: string
       device_code?: string
       username?: string
@@ -602,15 +641,17 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     }
     if (body.device_code) {
       const polled = aegisAuth.pollDeviceCode(body.device_code)
+      // RFC 8628 §3.5：标准客户端读顶层 error 的英文错误码决定继续轮询还是放弃，中文说明放 error_description；code 保留给老客户端
       if (polled.status === 'pending') {
-        return c.json({ error: polled.error, code: 'authorization_pending' }, 428 as any)
+        return c.json({ error: 'authorization_pending', error_description: polled.error, code: 'authorization_pending' }, 428 as any)
       }
       if (polled.status === 'expired') {
-        return c.json({ error: polled.error, code: 'expired_token' }, 400)
+        return c.json({ error: 'expired_token', error_description: polled.error, code: 'expired_token' }, 400)
       }
       if (polled.status !== 'approved') {
         return c.json({
-          error: polled.error,
+          error: polled.status === 'consumed' ? 'access_denied' : 'invalid_grant',
+          error_description: polled.error,
           code: polled.status === 'consumed' ? 'token_already_consumed' : 'invalid_device_code',
         }, 400)
       }
@@ -714,49 +755,69 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json({ ok: true, revoked_grant_id: grantId })
   })
 
-  app.post('/api/aegis/mcp', c => handleAegisMcpRequest(aegisMcpDeps, c.req.raw))
-  // 按模块的地址：只挂这一个模块的工具（还要在授权的模块权限里）
-  app.post('/api/aegis/mcp/:module', c => handleAegisMcpRequest(aegisMcpDeps, c.req.raw, c.req.param('module')))
+  // —— 外部 MCP 接入（docs/design/MCP_MODULES.md）——
+  // 通用地址 /api/mcp[/<模块>]：任何 MCP 客户端（Streamable HTTP）带个人访问令牌 hr_pat.* 即可接入；
+  // /api/aegis/mcp[/<模块>] 是 AAP-1.0 的兼容地址（计划停用），两者是同一个处理函数。
+  for (const base of ['/api/mcp', '/api/aegis/mcp']) {
+    app.post(base, c => handleAegisMcpRequest(aegisMcpDeps, c.req.raw))
+    // 按模块的地址：只挂这一个模块的工具（还要在授权的模块权限里）
+    app.post(`${base}/:module`, c => handleAegisMcpRequest(aegisMcpDeps, c.req.raw, c.req.param('module')))
+  }
+  // 模块目录（公开）：客户端据此挑选要接的模块；与 AAP 清单内容一致，地址用通用的 /api/mcp
+  app.get('/api/mcp/modules', c => {
+    c.header('Cache-Control', 'public, max-age=300')
+    return c.json({
+      mcp: '/api/mcp',
+      auth: { type: 'bearer', token_prefix: 'hr_pat.', issue: '登录 Heurion → 设置 → MCP 访问令牌' },
+      optional_headers: { 'X-Agent-Id': '智能体标识（审计与撤销按它区分）', 'X-Aegis-Session-Id': '会话：同一会话读到的数字写进稿件时算有出处', 'X-Aegis-Turn-Id': '回合：同一回合的写入可整回合撤销（不带时闲置 10 分钟算新回合）' },
+      modules: MODULES.map(m => ({
+        id: m.id, title: m.title, summary: m.summary, external: m.external, mcp: `/api/mcp/${m.id}`,
+        skill: `/.well-known/aegis-skills/heurion-${m.id}/SKILL.md`, read_only_tools: [...READ_ONLY_TOOLS].filter(t => moduleOf(t) === m.id), lease_gated: m.leaseGated,
+      })),
+    })
+  })
 
-  // 外部智能体的大文件直传 / 取回（aegis/files.ts）：同一授权令牌；写入要有读写模块，落在工作区 aegis-files/ 下
+  // 外部智能体的大文件直传 / 取回（aegis/files.ts）：同一令牌；写入要有读写模块，落在工作区 aegis-files/ 下
   const aegisFileAuth = (c: Context, write: boolean) => {
     const auth = c.req.header('authorization') ?? ''
-    if (!auth.startsWith('Bearer ')) return { error: c.json({ error: '缺少 Authorization: Bearer aegis_at_heurion.* 令牌', code: 'missing_bearer_token' }, 401) }
-    const v = aegisAuth.verifyGrantToken(auth.slice(7).trim(), c.req.header('x-aegis-agent-id') ?? null)
+    if (!auth.startsWith('Bearer ')) return { error: c.json({ error: '缺少 Authorization: Bearer <个人访问令牌 hr_pat.*>', code: 'missing_bearer_token' }, 401) }
+    const v = aegisAuth.verifyGrantToken(auth.slice(7).trim(), c.req.header('x-aegis-agent-id') ?? c.req.header('x-agent-id') ?? null)
     if (!v.ok) return { error: c.json({ error: v.error, code: v.code }, 401) }
     const perms = Object.values(aegisEffectiveModules(store, v.verified.user, v.verified.grant).effective)
     if (!perms.length || (write && !perms.includes('rw'))) return { error: c.json({ error: '当前授权不能' + (write ? '写入' : '读取') + '工作区文件', code: 'forbidden' }, 403) }
     return { userId: v.verified.user.id }
   }
-  const aegisFilePath = (c: Context) => decodeURIComponent(c.req.path.slice('/api/aegis/files/'.length))
-  app.put('/api/aegis/files/:path{.+}', async c => {
-    const a = aegisFileAuth(c, true)
-    if ('error' in a) return a.error as Response
-    const len = Number(c.req.header('content-length') ?? 0)
-    if (len > HTTP_PUT_MAX) return c.json({ error: `文件超过 ${HTTP_PUT_MAX / 1024 / 1024}MB`, code: 'too_large' }, 413)
-    try {
-      const bytes = new Uint8Array(await c.req.arrayBuffer())
-      if (bytes.byteLength > HTTP_PUT_MAX) return c.json({ error: `文件超过 ${HTTP_PUT_MAX / 1024 / 1024}MB`, code: 'too_large' }, 413)
-      const t = writeTarget(aegisMcpDeps.workspaceDir(a.userId), aegisFilePath(c))
-      writeFileSync(t.abs, bytes)
-      return c.json({ path: t.rel, bytes: bytes.byteLength }, 201)
-    } catch (err) {
-      if (err instanceof WorkspaceFileError) return c.json({ error: err.message, code: err.code }, err.status as 400)
-      throw err
-    }
-  })
-  app.get('/api/aegis/files/:path{.+}', (c): Response => {
-    const a = aegisFileAuth(c, false)
-    if ('error' in a) return a.error as Response
-    try {
-      const t = readTarget(aegisMcpDeps.workspaceDir(a.userId), aegisFilePath(c))
-      if (t.dir) return c.json({ path: t.rel, entries: listDir(t.abs) })
-      return c.body(new Uint8Array(readFileSync(t.abs)), 200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(t.rel.split('/').pop() ?? 'file')}` })
-    } catch (err) {
-      if (err instanceof WorkspaceFileError) return c.json({ error: err.message, code: err.code }, err.status as 400)
-      throw err
-    }
-  })
+  const aegisFilePath = (c: Context, base: string) => decodeURIComponent(c.req.path.slice(`${base}/`.length))
+  for (const base of ['/api/mcp/files', '/api/aegis/files']) {
+    app.put(`${base}/:path{.+}`, async c => {
+      const a = aegisFileAuth(c, true)
+      if ('error' in a) return a.error as Response
+      const len = Number(c.req.header('content-length') ?? 0)
+      if (len > HTTP_PUT_MAX) return c.json({ error: `文件超过 ${HTTP_PUT_MAX / 1024 / 1024}MB`, code: 'too_large' }, 413)
+      try {
+        const bytes = new Uint8Array(await c.req.arrayBuffer())
+        if (bytes.byteLength > HTTP_PUT_MAX) return c.json({ error: `文件超过 ${HTTP_PUT_MAX / 1024 / 1024}MB`, code: 'too_large' }, 413)
+        const t = writeTarget(aegisMcpDeps.workspaceDir(a.userId), aegisFilePath(c, base))
+        writeFileSync(t.abs, bytes)
+        return c.json({ path: t.rel, bytes: bytes.byteLength }, 201)
+      } catch (err) {
+        if (err instanceof WorkspaceFileError) return c.json({ error: err.message, code: err.code }, err.status as 400)
+        throw err
+      }
+    })
+    app.get(`${base}/:path{.+}`, (c): Response => {
+      const a = aegisFileAuth(c, false)
+      if ('error' in a) return a.error as Response
+      try {
+        const t = readTarget(aegisMcpDeps.workspaceDir(a.userId), aegisFilePath(c, base))
+        if (t.dir) return c.json({ path: t.rel, entries: listDir(t.abs) })
+        return c.body(new Uint8Array(readFileSync(t.abs)), 200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(t.rel.split('/').pop() ?? 'file')}` })
+      } catch (err) {
+        if (err instanceof WorkspaceFileError) return c.json({ error: err.message, code: err.code }, err.status as 400)
+        throw err
+      }
+    })
+  }
 
   // 鉴权：账户令牌（开发模式下也接受开发令牌，见 auth/accounts.ts）。EventSource / <img> 用 ?token=。
   app.use('/api/*', async (c, next) => {
@@ -772,7 +833,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       c.req.path === '/api/aegis/auth/token' ||
       c.req.path === '/api/aegis/mcp' ||
       c.req.path.startsWith('/api/aegis/mcp/') ||
-      c.req.path.startsWith('/api/aegis/files/')
+      c.req.path.startsWith('/api/aegis/files/') ||
+      c.req.path === '/api/mcp' ||
+      c.req.path.startsWith('/api/mcp/')
     ) {
       return next()
     }
@@ -812,16 +875,40 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json({ ...accounts.me(c.get('user')), dev_mode: deps.devMode, aegis: Boolean(deps.aegisEnabled), tenant, features: { dicom: Boolean(orthanc) } })
   })
 
-  app.get('/api/aegis/auth/grants', c => {
-    const me = store.getUser(c.get('user'))
-    const grants = store.listAgentGrants(c.get('user')).map(({ token_hash: _h, ...rest }) => {
+  // 用户的全部外部访问令牌（个人访问令牌 hr_pat 与 AAP 令牌），附模块目录：org_allowed = 所在机构允许外部智能体用的模块（§3.5）
+  const tokenListing = (userId: string) => {
+    const me = store.getUser(userId)
+    const grants = store.listAgentGrants(userId).map(({ token_hash: _h, ...rest }) => {
       const eff = me ? aegisEffectiveModules(store, me, rest as AgentGrantRow) : { effective: {}, blocked: [] }
-      return { ...rest, modules: grantModules(rest), blocked_by_org: eff.blocked }
+      return { ...rest, kind: rest.token_prefix.startsWith('hr_pat.') ? 'pat' as const : 'aap' as const, modules: grantModules(rest), blocked_by_org: eff.blocked }
     })
-    // 设置页按模块勾选权限用的目录；org_allowed = 所在机构允许外部智能体用的模块（§3.5）
     const tenant = me ? store.getTenant(me.tenant_id ?? me.personal_tenant_id ?? '') : undefined
     const allowed = orgAllowedModules(tenant ? tenantSettings(tenant) : {})
-    return c.json({ grants, modules: MODULES.map(m => ({ id: m.id, title: m.title, summary: m.summary, external: m.external, org_allowed: allowed.has(m.id) })) })
+    return { grants, modules: MODULES.map(m => ({ id: m.id, title: m.title, summary: m.summary, external: m.external, org_allowed: allowed.has(m.id) })) }
+  }
+  app.get('/api/aegis/auth/grants', c => c.json(tokenListing(c.get('user'))))
+
+  // 个人访问令牌（通用 MCP，与 AAP 无关）：设置页签发、列出、吊销；只能由用户本人在界面上做
+  app.get('/api/me/mcp-tokens', c => c.json(tokenListing(c.get('user'))))
+  app.post('/api/me/mcp-tokens', async c => {
+    if (viaByReq.get(c.req.raw)) return c.json({ error: 'AI 不能自行签发访问令牌', code: 'human_only' }, 403)
+    const body = await c.req.json().catch(() => ({})) as { name?: string; modules?: unknown; write_mode?: 'direct' | 'tracked'; ttl_days?: number | null }
+    try {
+      const issued = aegisAuth.issueGrant({
+        kind: 'pat', userId: c.get('user'), name: body.name?.trim() || 'MCP 客户端', modules: body.modules ?? 'writing:rw,literature:rw',
+        writeMode: body.write_mode ?? 'tracked', ttlDays: body.ttl_days === undefined ? 90 : body.ttl_days,
+      })
+      audit(c, 'mcp.token_issue', { target: issued.grant.id, detail: `${issued.grant.name} (modules=${formatModuleGrant(grantModules(issued.grant))})`, status: 201 })
+      return c.json({ token: issued.token, id: issued.grant.id, name: issued.grant.name, modules: grantModules(issued.grant), expires_at: issued.grant.expires_at, mcp: '/api/mcp' }, 201)
+    } catch (err) {
+      return c.json({ error: (err as Error).message, code: 'bad_token_request' }, 400)
+    }
+  })
+  app.delete('/api/me/mcp-tokens/:tkid', c => {
+    if (viaByReq.get(c.req.raw)) return c.json({ error: 'AI 不能吊销访问令牌', code: 'human_only' }, 403)
+    if (!store.revokeAgentGrant(c.req.param('tkid'), c.get('user'))) return c.json({ error: '没有这个令牌或已吊销', code: 'not_found' }, 404)
+    audit(c, 'mcp.token_revoke', { target: c.req.param('tkid'), status: 200 })
+    return c.json({ ok: true })
   })
 
   // 每个账号 15 分钟内最多试 10 次设备码，防止穷举把别人的终端绑进自己账号

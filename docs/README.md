@@ -6,7 +6,7 @@
 |---|---|
 | [PLATFORM.md](PLATFORM.md) | 平台架构：文档 / 幻灯片双内核（ProseMirror + Yjs）、操作层与写前守卫、评论与引用、导入导出、MCP 接口面（dsh 回合）、决策记录 |
 | [DEPLOY.md](DEPLOY.md) | 生产部署：Docker Compose、Caddy、发布流程、Secrets、备份与恢复、影像存储 |
-| [design/MCP_MODULES.md](design/MCP_MODULES.md) | MCP 模块化与 Aegis-OS 接入：现有接入路径与 AAP-1.0 部件、按模块开放 MCP 的方案、外发策略、阶段状态 |
+| [design/MCP_MODULES.md](design/MCP_MODULES.md) | MCP 模块化与外部接入：接入指南（个人访问令牌、aegis-os 清单与设备码、AAP 兼容）、按模块开放、外发策略、阶段状态 |
 
 ## 设计文档（`design/`）
 

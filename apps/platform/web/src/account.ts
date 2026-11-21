@@ -413,8 +413,8 @@ function openSettings(me: Me, api: <T = any>(path: string, opts?: RequestInit) =
       <div class="row end"><button class="primary">修改密码</button></div>
     </form>
     ${me.aegis ? `<div id="aegisGrantsSection" class="form">
-      <h3>Aegis-OS 智能体终端授权 (AAP-1.0)</h3>
-      <div class="muted small">将您的医生/研究员账户与本地 Aegis-OS 运行时（Antigravity / Hermes 多智能体协同沙箱）绑定。智能体将以您的身份和租户权限执行操作，高危对外动作需您批准短期租约 (Session Lease)。</div>
+      <h3>MCP 访问令牌（外部智能体）</h3>
+      <div class="muted small">任何支持 MCP（Streamable HTTP）的智能体或客户端（Claude Code、Cursor、agy 等）都可以用访问令牌接入 Heurion，以你的身份、只在你勾选的模块里操作。写进稿件同样经过平台的写作保护；高风险操作要你在「待确认操作」里批准。</div>
       <div id="aegisGrantsBox" class="muted small" style="margin-top:8px">加载中…</div>
     </div>` : ''}`, true)
   // AI 写作保护（docs/design/PROVENANCE.md）：两个开关，改了立即保存
@@ -508,6 +508,8 @@ interface AegisGrantItem {
   token_prefix: string
   aegis_node_pubkey: string | null
   tool_scope: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+  /** pat = 个人访问令牌（通用 MCP）；aap = Aegis-OS 设备码 / AAP-1.0 令牌 */
+  kind?: 'pat' | 'aap'
   /** 实际生效的模块权限（旧授权由 tool_scope 换算） */
   modules: Record<string, 'r' | 'rw'>
   /** 授权了、但所在机构没有允许给外部智能体的模块 */
@@ -538,17 +540,13 @@ async function mountAegisGrants(
   let newlyIssuedToken: string | null = null
   const urlDeviceCode = new URLSearchParams(location.search).get('aegis_device')?.trim() ?? ''
   const render = async () => {
-    const res = await api<{ grants: AegisGrantItem[]; modules?: AegisModuleItem[] }>('/api/aegis/auth/grants').catch(() => ({ grants: [], modules: [] }))
+    const res = await api<{ grants: AegisGrantItem[]; modules?: AegisModuleItem[] }>('/api/me/mcp-tokens').catch(() => ({ grants: [], modules: [] }))
     const grants = res.grants ?? []
     const catalog = res.modules ?? []
     box.className = ''
     box.innerHTML = `
-      <form id="aegisDeviceApproveForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border)">
-        <input type="text" name="user_code" placeholder="输入终端 8 位设备码免密绑定（如 HEUR-8492-K7QW）" value="${esc(urlDeviceCode)}" maxlength="16" required style="flex:1 1 220px;font-family:var(--mono);text-transform:uppercase">
-        <button class="primary" type="submit">确认设备码绑定</button>
-      </form>
       <form id="aegisGrantIssueForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-        <input type="text" name="name" placeholder="终端名称（如：Mac Studio / agy-research）" maxlength="60" required style="flex:1 1 200px">
+        <input type="text" name="name" placeholder="令牌名称（如：Claude Code / 实验室 Mac）" maxlength="60" required style="flex:1 1 200px">
         <div class="aegis-modules" style="flex:1 1 100%;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">
           ${catalog.map(m => `
             <label class="small" title="${esc(m.summary)}" style="display:flex;align-items:center;gap:6px">
@@ -564,28 +562,33 @@ async function mountAegisGrants(
           <option value="tracked">留痕修订 (tracked)</option>
           <option value="direct">直接生效 (direct)</option>
         </select>
-        <input type="text" name="node_pubkey" placeholder="可选：Aegis-OS 节点 Ed25519 公钥" style="flex:1 1 180px">
-        <button class="primary" type="submit">签发授权令牌</button>
+        <button class="primary" type="submit">签发访问令牌</button>
       </form>
       ${newlyIssuedToken ? `
         <div class="invite-link" style="margin-bottom:10px">
-          <div class="muted small">新签发的 Aegis-OS 授权令牌（请立即复制，关闭后不再显示明文）：</div>
+          <div class="muted small">新签发的访问令牌（请立即复制，关闭后不再显示明文）。MCP 地址：<code>${esc(location.origin)}/api/mcp</code>（全部已授权模块），或 <code>${esc(location.origin)}/api/mcp/&lt;模块&gt;</code>；请求头 <code>Authorization: Bearer &lt;令牌&gt;</code>。</div>
           <div class="field-row" style="margin-top:4px">
             <input type="text" id="aegisIssuedTokenInput" readonly value="${esc(newlyIssuedToken)}">
             <button type="button" id="aegisCopyTokenBtn">复制令牌</button>
-            <button type="button" class="primary" id="aegisCopyCmdBtn">复制 CLI 登录命令</button>
+            <button type="button" class="primary" id="aegisCopyCmdBtn">复制 Claude Code 接入命令</button>
           </div>
         </div>
       ` : ''}
+      <details style="margin-bottom:10px"><summary class="muted small">经 Aegis-OS 接入（设备码，AAP-1.0 兼容方式，计划停用）</summary>
+        <form id="aegisDeviceApproveForm" class="inline-form" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">
+          <input type="text" name="user_code" placeholder="输入终端显示的 8 位设备码（如 HEUR-8492-K7QW）" value="${esc(urlDeviceCode)}" maxlength="16" required style="flex:1 1 220px;font-family:var(--mono);text-transform:uppercase">
+          <button class="primary" type="submit">确认设备码绑定</button>
+        </form>
+      </details>
       ${grants.length === 0
-        ? '<div class="muted small">尚未绑定任何 Aegis-OS 智能体终端。</div>'
+        ? '<div class="muted small">还没有签发过访问令牌。</div>'
         : `<table class="users">
-            <thead><tr><th>终端名称</th><th>模块权限 / 写模式</th><th>最近调用 Agent</th><th>状态</th><th></th></tr></thead>
+            <thead><tr><th>令牌名称</th><th>模块权限 / 写模式</th><th>最近调用 Agent</th><th>状态</th><th></th></tr></thead>
             <tbody>${grants.map(g => `
               <tr data-gid="${esc(g.id)}" class="${g.revoked_at ? 'disabled' : ''}">
                 <td>
                   <b>${esc(g.name)}</b>
-                  <div class="muted small" style="font-family:var(--mono)">${esc(g.token_prefix)}…${g.aegis_node_pubkey ? ' · 已绑节点公钥' : ''}</div>
+                  <div class="muted small" style="font-family:var(--mono)">${esc(g.token_prefix)}…${g.kind === 'aap' ? ' · Aegis-OS（AAP）' : ''}${g.aegis_node_pubkey ? ' · 已绑节点公钥' : ''}</div>
                 </td>
                 <td class="small">${esc(modulesLabel(g.modules ?? {}, catalog))}${g.blocked_by_org?.length ? `<div class="muted small">机构未开启：${esc(catalog.filter(m => g.blocked_by_org!.includes(m.id)).map(m => m.title).join('、'))}（暂不可用）</div>` : ''}<div class="muted small">${g.write_mode === 'tracked' ? '留痕修订' : '直接写入'}</div></td>
                 <td class="muted small">${g.last_agent_id ? `<code>${esc(g.last_agent_id)}</code><br>${when(g.last_used_at)}` : '尚未使用'}</td>
@@ -621,17 +624,16 @@ async function mountAegisGrants(
         e.preventDefault()
         const f = new FormData(form)
         try {
-          const issued = await api<{ access_token: string }>('/api/aegis/auth/token', {
+          const issued = await api<{ token: string }>('/api/me/mcp-tokens', {
             method: 'POST',
             body: JSON.stringify({
               name: String(f.get('name') ?? '').trim(),
               modules: Object.fromEntries(catalog.map(m => [m.id, String(f.get(`module_${m.id}`) ?? '')]).filter(([, v]) => v)),
               write_mode: String(f.get('write_mode') ?? 'tracked'),
-              node_pubkey: String(f.get('node_pubkey') ?? '').trim() || undefined,
             }),
           })
-          newlyIssuedToken = issued.access_token
-          notify('已签发 Aegis-OS 授权令牌')
+          newlyIssuedToken = issued.token
+          notify('已签发访问令牌')
           await render()
         } catch (err) {
           notify((err as Error).message, true)
@@ -641,24 +643,21 @@ async function mountAegisGrants(
     box.querySelector<HTMLButtonElement>('#aegisCopyTokenBtn')?.addEventListener('click', async () => {
       if (!newlyIssuedToken) return
       await navigator.clipboard.writeText(newlyIssuedToken).catch(() => {})
-      notify('已复制 Aegis 授权令牌')
+      notify('已复制访问令牌')
     })
     box.querySelector<HTMLButtonElement>('#aegisCopyCmdBtn')?.addEventListener('click', async () => {
       if (!newlyIssuedToken) return
-      const cmd = `aegis app login heurion --url ${location.origin} --token ${newlyIssuedToken}`
+      const cmd = `claude mcp add --transport http heurion ${location.origin}/api/mcp --header "Authorization: Bearer ${newlyIssuedToken}"`
       await navigator.clipboard.writeText(cmd).catch(() => {})
-      notify('已复制 CLI 登录命令')
+      notify('已复制 Claude Code 接入命令')
     })
     box.querySelectorAll<HTMLButtonElement>('[data-revoke-grant]').forEach(btn => {
       btn.onclick = async () => {
         const gid = btn.dataset.revokeGrant
         if (!gid) return
         try {
-          await api('/api/aegis/auth/token', {
-            method: 'DELETE',
-            body: JSON.stringify({ grant_id: gid }),
-          })
-          notify('已吊销该 Aegis-OS 终端授权，其关联租约已立即失效')
+          await api(`/api/me/mcp-tokens/${encodeURIComponent(gid)}`, { method: 'DELETE' })
+          notify('已吊销该访问令牌，立即失效')
           await render()
         } catch (err) {
           notify((err as Error).message, true)

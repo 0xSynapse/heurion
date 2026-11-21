@@ -56,6 +56,8 @@ export class AegisAuthService {
    * 为指定用户签发新的 `aegis_at_<app_id>.<grant_id>.<secret>` 应用授权令牌。
    */
   issueGrant(input: {
+    /** pat = 个人访问令牌 `hr_pat.<id>.<secret>`（通用 MCP）；不给 = AAP-1.0 令牌 `aegis_at_<app>.…` */
+    kind?: 'pat' | 'aap'
     userId: string
     name?: string
     nodePubkey?: string | null
@@ -81,7 +83,8 @@ export class AegisAuthService {
     }
     const grantId = 'g_' + randomBytes(8).toString('hex')
     const secret = randomBytes(24).toString('base64url')
-    const prefix = `aegis_at_${this.appId}`
+    // 个人访问令牌（hr_pat）：给任何 MCP 客户端用的通用令牌，与 AAP-1.0 无关；aegis_at_<app> 是 AAP 兼容令牌（计划停用）
+    const prefix = input.kind === 'pat' ? 'hr_pat' : `aegis_at_${this.appId}`
     const token = `${prefix}.${grantId}.${secret}`
     const tokenHash = sha256Hex(token)
     const expiresAt =
@@ -250,7 +253,7 @@ export class AegisAuthService {
    */
   verifyGrantToken(rawToken: string, agentId?: string | null): { ok: true; verified: VerifiedAegisGrant } | { ok: false; code: string; error: string } {
     const token = rawToken.trim()
-    const m = /^(?:aegis_at_[a-z0-9_-]+|h1_agt)\.(g_[a-zA-Z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(token)
+    const m = /^(?:aegis_at_[a-z0-9_-]+|h1_agt|hr_pat)\.(g_[a-zA-Z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(token)
     if (!m) {
       return { ok: false, code: 'invalid_grant_format', error: '无效的 Aegis 应用授权令牌格式' }
     }

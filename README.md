@@ -6,7 +6,7 @@
 
 - **结构化文档模型**：文档与幻灯片是带稳定块 id 的 ProseMirror + Yjs 模型；Word / PowerPoint 文件只是导入 / 导出视图，导出时未改动的部分逐字节写回原文件。
 - **AI 只能经操作层写入**：AI 的每次修改都是结构化操作，先过写前守卫（用户优先、来源规则、引用规范、评论锚点）再原子应用；没有「用文件整体替换文档」的入口。
-- **MCP 工具面**：平台把文档、文献、数据分析、患者、影像、研究等能力以 MCP 工具暴露，平台内的 AI 回合（dsh）经它工作；外部智能体经 Aegis-OS 接入的方案见 [`docs/design/MCP_MODULES.md`](docs/design/MCP_MODULES.md)。
+- **MCP 工具面**：平台把文档、文献、数据分析、患者、影像、研究等能力以 MCP 工具暴露，平台内的 AI 回合（dsh）经它工作；外部 MCP 客户端与智能体的接入（个人访问令牌、按模块地址）见 [`docs/design/MCP_MODULES.md`](docs/design/MCP_MODULES.md) §0。
 - **多租户与隐私**：机构与个人空间隔离、每机构独立加密的患者库、患者只用代号，AI 的权限等于所代表用户的权限。
 
 ## 仓库结构
@@ -54,7 +54,7 @@ pnpm --filter @heurion2/platform e2e              # 真实 AI 回合（需要 DE
 - [文档导航](docs/README.md)
 - [平台架构](docs/PLATFORM.md)
 - [部署](docs/DEPLOY.md)
-- [MCP 模块化与 Aegis-OS 接入](docs/design/MCP_MODULES.md)
+- [MCP 模块化与外部接入](docs/design/MCP_MODULES.md)
 
 ## 许可
 

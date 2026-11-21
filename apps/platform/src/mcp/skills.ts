@@ -10,6 +10,14 @@ import { buildMcpServer } from './server.ts'
  * 工具清单按外部智能体在该模块地址上实际看到的列出（读写授权；只注册、不调用，所以用空替身即可）。
  */
 const cache = new Map<ModuleId, Promise<string>>()
+const toolCache = new Map<ModuleId, Promise<string[]>>()
+
+/** 外部智能体在某个模块地址上实际看到的工具（读写授权；结果缓存）。 */
+export function moduleToolNames(module: ModuleId): Promise<string[]> {
+  let p = toolCache.get(module)
+  if (!p) { p = externalToolNames(module); toolCache.set(module, p) }
+  return p
+}
 
 async function externalToolNames(module: ModuleId): Promise<string[]> {
   const stub: any = new Proxy({}, { get: () => new Proxy(() => ({}), { get: () => () => ({}) }) })
@@ -25,6 +33,6 @@ async function externalToolNames(module: ModuleId): Promise<string[]> {
 
 export function moduleSkillDoc(module: ModuleId): Promise<string> {
   let p = cache.get(module)
-  if (!p) { p = externalToolNames(module).then(tools => moduleSkill(module, tools)); cache.set(module, p) }
+  if (!p) { p = moduleToolNames(module).then(tools => moduleSkill(module, tools)); cache.set(module, p) }
   return p
 }

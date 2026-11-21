@@ -52,7 +52,7 @@ describe('工具说明按模块拆分（阶段 3）', () => {
   it('模块的 SKILL.md：名字、地址、共同规则、本模块说明与工具清单', () => {
     const md = moduleSkill('analysis', ['dataset_describe', 'workspace_put'])
     expect(md).toMatch(/^---\nname: heurion-analysis\n/)
-    expect(md).toContain('POST /api/aegis/mcp/analysis')
+    expect(md).toContain('POST /api/mcp/analysis')
     expect(md).toContain('来源规则')
     expect(md).toContain('本机算出的数字平台无法核对')
     expect(md).toContain('- `dataset_describe`')
