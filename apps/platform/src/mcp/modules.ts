@@ -23,7 +23,15 @@ export interface HeurionModule {
   names: readonly string[]
   /** 按前缀归入本模块的工具。 */
   prefixes: readonly string[]
+  /** 需要租约的工具 → 租约作用域（外部智能体缺租约时返回 approval_required）。 */
+  leaseGated: Readonly<Record<string, string>>
 }
+
+/** 有「需确认」操作的管理工具：外部智能体执行这些操作要租约，作用域 `heurion:<工具>.<动作>`（mcp/admin-tools.ts）。 */
+const ADMIN_CONFIRM_TOOLS = [
+  'account', 'tenant_admin', 'org_template', 'phr_share', 'platform_admin', 'doc_manage', 'comment_manage', 'dataset_manage',
+  'kb_manage', 'memory_manage', 'patient_admin', 'study_admin',
+] as const
 
 export const MODULES: readonly HeurionModule[] = [
   {
@@ -38,6 +46,7 @@ export const MODULES: readonly HeurionModule[] = [
       'insert_measurement', 'list_measurements', 'asset_upload', 'diagram_render',
     ],
     prefixes: [],
+    leaseGated: {},
   },
   {
     id: 'literature',
@@ -46,6 +55,7 @@ export const MODULES: readonly HeurionModule[] = [
     external: 'open',
     names: ['pubmed_search', 'openalex_search', 'oa_fulltext', 'doi_lookup', 'insert_citation', 'import_references', 'list_citations', 'verify_claims', 'claim_report'],
     prefixes: [],
+    leaseGated: {},
   },
   {
     id: 'analysis',
@@ -54,6 +64,7 @@ export const MODULES: readonly HeurionModule[] = [
     external: 'org_opt_in',
     names: ['result_register', 'result_list'],
     prefixes: ['dataset_'],
+    leaseGated: {},
   },
   {
     id: 'patients',
@@ -66,6 +77,7 @@ export const MODULES: readonly HeurionModule[] = [
       'report_upload', 'report_read', 'report_lab_add', 'report_resolve', 'phr_member_links', 'phi_scan',
     ],
     prefixes: ['share_'],
+    leaseGated: { lab_resolve: 'heurion:clinical_confirm', report_resolve: 'heurion:clinical_confirm' },
   },
   {
     id: 'imaging',
@@ -74,6 +86,7 @@ export const MODULES: readonly HeurionModule[] = [
     external: 'org_opt_in',
     names: [],
     prefixes: ['imaging_'],
+    leaseGated: {},
   },
   {
     id: 'research',
@@ -82,6 +95,7 @@ export const MODULES: readonly HeurionModule[] = [
     external: 'org_opt_in',
     names: [],
     prefixes: ['study_'],
+    leaseGated: {},
   },
   {
     id: 'knowledge',
@@ -90,6 +104,7 @@ export const MODULES: readonly HeurionModule[] = [
     external: 'open',
     names: ['kb_search', 'kb_read'],
     prefixes: [],
+    leaseGated: {},
   },
   {
     id: 'memory',
@@ -98,6 +113,7 @@ export const MODULES: readonly HeurionModule[] = [
     external: 'open',
     names: [],
     prefixes: ['memory_'],
+    leaseGated: {},
   },
   {
     id: 'admin',
@@ -109,6 +125,7 @@ export const MODULES: readonly HeurionModule[] = [
       'kb_manage', 'memory_manage', 'patient_admin', 'study_admin', 'task_queue', 'asset_provenance', 'action_status', 'delegate_task',
     ],
     prefixes: [],
+    leaseGated: Object.fromEntries(ADMIN_CONFIRM_TOOLS.map(t => [t, `heurion:${t}.*`])),
   },
 ]
 
@@ -142,3 +159,71 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'kb_search', 'kb_read', 'memory_search', 'phr_member_links', 'patient_claims_list', 'phi_scan', 'imaging_status', 'imaging_models',
   'account', 'action_status', 'asset_provenance',
 ])
+
+// —— 外部智能体的模块权限（docs/design/MCP_MODULES.md §3.3，阶段 2） ——
+
+/** r：只读工具；rw：模块全部工具。 */
+export type ModulePerm = 'r' | 'rw'
+export type ModuleGrant = Partial<Record<ModuleId, ModulePerm>>
+
+/** 旧的 tool_scope 五值 → 等价的模块权限（没有存模块权限的授权按这个算）。 */
+export type LegacyToolScope = 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
+
+const BASE: ModuleGrant = { writing: 'rw', literature: 'rw', knowledge: 'rw', memory: 'rw' }
+
+export function legacyScopeModules(scope: LegacyToolScope): ModuleGrant {
+  switch (scope) {
+    case 'all': return Object.fromEntries(MODULE_IDS.map(id => [id, 'rw'])) as ModuleGrant
+    case 'readonly': return Object.fromEntries(MODULE_IDS.map(id => [id, 'r'])) as ModuleGrant
+    case 'canvas': return { writing: 'rw', literature: 'rw' }
+    case 'clinical': return { ...BASE, patients: 'rw', imaging: 'rw' }
+    case 'research': return { ...BASE, analysis: 'rw', research: 'rw' }
+  }
+}
+
+/**
+ * 解析模块权限：JSON 对象 `{"writing":"rw"}`、或逗号分隔 `writing:rw,literature:r`（省略权限按 rw）。
+ * 未知模块或权限抛错；空结果抛错（授权至少要有一个模块）。
+ */
+export function parseModuleGrant(input: unknown): ModuleGrant {
+  let entries: Array<[string, unknown]>
+  if (typeof input === 'string') {
+    const t = input.trim()
+    if (t.startsWith('{')) return parseModuleGrant(JSON.parse(t))
+    entries = t.split(',').map(x => x.trim()).filter(Boolean).map(x => { const [k, v] = x.split(':'); return [k!.trim(), (v ?? 'rw').trim()] })
+  } else if (input && typeof input === 'object' && !Array.isArray(input)) {
+    entries = Object.entries(input)
+  } else if (Array.isArray(input)) {
+    entries = input.map(x => [String(x), 'rw'])
+  } else {
+    throw new Error('模块权限格式无效')
+  }
+  const out: ModuleGrant = {}
+  for (const [k, v] of entries) {
+    if (!(MODULE_IDS as readonly string[]).includes(k)) throw new Error(`未知模块：${k}（可选：${MODULE_IDS.join('、')}）`)
+    if (v !== 'r' && v !== 'rw') throw new Error(`模块 ${k} 的权限只能是 r 或 rw`)
+    out[k as ModuleId] = v
+  }
+  if (!Object.keys(out).length) throw new Error('模块权限不能为空')
+  return out
+}
+
+/** 授权实际生效的模块权限：存了模块权限用它，否则由旧的 tool_scope 换算。 */
+export function grantModules(grant: { modules?: string | null; tool_scope: LegacyToolScope }): ModuleGrant {
+  if (grant.modules) {
+    try { return parseModuleGrant(grant.modules) } catch { return {} }
+  }
+  return legacyScopeModules(grant.tool_scope)
+}
+
+/** 按模块权限判断外部智能体能否用这个工具：所属模块已授权；只读权限下只能用只读工具。 */
+export function moduleGrantAllows(tool: string, grant: ModuleGrant): boolean {
+  const m = moduleOf(tool)
+  const perm = m ? grant[m] : undefined
+  if (!perm) return false
+  return perm === 'rw' || READ_ONLY_TOOLS.has(tool)
+}
+
+export function formatModuleGrant(grant: ModuleGrant): string {
+  return MODULE_IDS.filter(id => grant[id]).map(id => `${id}:${grant[id]}`).join(',')
+}

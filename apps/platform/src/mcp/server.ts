@@ -18,7 +18,7 @@ import type { ClaimService } from '../claims/service.ts'
 import { pptxFor } from '../convert/exports.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
 import { toolInScope } from './scope.ts'
-import { moduleOf, READ_ONLY_TOOLS, type ModuleId } from './modules.ts'
+import { grantModules, legacyScopeModules, MODULE_IDS, moduleGrantAllows, moduleOf, type ModuleGrant, type ModuleId } from './modules.ts'
 import { DeckEditBatch, DeckOp, newTemplateDeck } from '../ops/deck.ts'
 import { LAYOUTS, layoutSpec, templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
@@ -178,6 +178,8 @@ class Ctx {
     readonly claims: TokenClaims,
     readonly agentId?: string,
     readonly leaseAuthorizer?: (input: LeaseAuthorizeInput) => LeaseAuthorizeResult,
+    /** 外部智能体的观察记录键（跨模块共享）；给了就用它，不用平台回合 id。 */
+    readonly externalObserveKey?: string,
   ) {}
 
   /** 测量原子在 AI 所代表用户眼里的值（按该用户对来源的权限；没有患者模块时只有快照）。 */
@@ -191,10 +193,10 @@ class Ctx {
 
   /**
    * 来源规则二的观察记录键：平台回合用回合 id（dsh 的全部工具结果都记在它名下）；
-   * 外部智能体（Aegis 等，没有平台回合）用会话，只能记到经本 MCP 返回的结果。
+   * 外部智能体用网关给的键 `sess:<授权>:<会话>`，只记经本 MCP 返回的结果（跨模块共享）。
    */
   get observeKey(): string | null {
-    return this.turnId ?? (this.claims.s ? `sess:${this.claims.s}` : null)
+    return this.externalObserveKey ?? this.turnId ?? (this.claims.s ? `sess:${this.claims.s}` : null)
   }
 
   activeTurn(docId?: string) {
@@ -2431,14 +2433,15 @@ function wrapToolRegistration(
   server: McpServer,
   ctx: Ctx,
   claims: TokenClaims,
-  aegisToolScope?: AgentGrantRow['tool_scope'],
+  aegisModules?: ModuleGrant,
   modules?: ReadonlySet<ModuleId>,
 ): void {
   const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown
   ;(server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, cb: unknown) => {
     const n = String(name)
     if (claims.t && !toolInScope(n, claims.t)) return undefined
-    if (!aegisScopeAllows(n, aegisToolScope)) return undefined
+    // 外部智能体：按授权上的模块权限过滤（模块未授权不挂；只读权限只挂只读工具）
+    if (aegisModules && !moduleGrantAllows(n, aegisModules)) return undefined
     // 只挂指定模块时：不属于这些模块（或没有登记归属）的工具不注册
     if (modules) { const m = moduleOf(n); if (!m || !modules.has(m)) return undefined }
     if (typeof cb !== 'function') return register(name, config, cb)
@@ -2450,10 +2453,11 @@ function wrapToolRegistration(
         const res = await (cb as (a: unknown, e: unknown) => Promise<unknown>)(args, extra)
         // 来源规则二：外部智能体（没有平台回合）只能从本 MCP 的结果里记下看到过的数字；平台回合由 turns 服务统一记
         // 文献类工具的结果不算（别人的研究，写进稿件须同句引用该文献）
-        if (!ctx.turnId && claims.s && !isLiteratureTool(n) && res && typeof res === 'object' && (res as { isError?: boolean }).isError !== true) {
+        const ownKey = ctx.externalObserveKey ?? (!ctx.turnId && claims.s ? `sess:${claims.s}` : null)
+        if (ownKey && !isLiteratureTool(n) && res && typeof res === 'object' && (res as { isError?: boolean }).isError !== true) {
           const text = (res as { content?: Array<{ text?: string }> }).content?.map(c => c.text ?? '').join('\n') ?? ''
           if (text) {
-            try { ctx.deps.docs.store.addObservedNumbers(`sess:${claims.s}`, allNumbers(text)) } catch (err) { console.error('[provenance] observe:', err) }
+            try { ctx.deps.docs.store.addObservedNumbers(ownKey, allNumbers(text)) } catch (err) { console.error('[provenance] observe:', err) }
           }
         }
         if (
@@ -2524,16 +2528,15 @@ export interface AegisMcpServerOptions {
   modules?: readonly ModuleId[]
   agentId?: string
   leaseAuthorizer?: (input: LeaseAuthorizeInput) => LeaseAuthorizeResult
+  /** 外部智能体授权上的模块权限（MCP_MODULES.md §3.3）。 */
+  aegisModules?: ModuleGrant
+  /** 旧的 tool_scope 五值：没给 aegisModules 时按它换算。 */
   aegisToolScope?: AgentGrantRow['tool_scope']
-}
-
-const AEGIS_CANVAS_ONLY = /^(doc_|docs_|deck_|slide_|layout_|comment|pubmed_|openalex_|oa_|doi_|insert_citation|import_references|list_citations|insert_measurement|list_measurements|verify_claims|claim_report|asset_upload|diagram_render|image_search)/
-
-function aegisScopeAllows(toolName: string, scope?: AgentGrantRow['tool_scope']): boolean {
-  if (!scope || scope === 'all') return true
-  if (scope === 'canvas') return AEGIS_CANVAS_ONLY.test(toolName)
-  if (scope === 'readonly') return READ_ONLY_TOOLS.has(toolName)
-  return true
+  /**
+   * 外部智能体的观察记录键（来源规则二）：同一授权、同一智能体会话跨模块共用一份，
+   * 经任何模块读到的数字，再经写作模块写进稿件时都算「看到过」。
+   */
+  observeKey?: string
 }
 
 /** Heurion 综合医疗业务 MCP 服务：聚合画布与文档、医疗临床与科研、管理审批全部工具 */
@@ -2544,10 +2547,11 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
   if (deps.datasets && !deps.datasets.access) deps.datasets.access = deps.access
   if (deps.images && !deps.images.access) deps.images.access = deps.access
   if (deps.subagents && !deps.subagents.access) deps.subagents.access = deps.access
-  const ctx = new Ctx(deps, claims, aegisOpts?.agentId, aegisOpts?.leaseAuthorizer)
+  const ctx = new Ctx(deps, claims, aegisOpts?.agentId, aegisOpts?.leaseAuthorizer, aegisOpts?.observeKey)
   const server = new McpServer({ name: 'heurion', version: '2.0.0' }, { instructions: INSTRUCTIONS })
   // 工具范围（令牌里的 t 或 AAP-1.0 tool_scope）与工具错误信号钩子
-  wrapToolRegistration(server, ctx, claims, aegisOpts?.aegisToolScope, aegisOpts?.modules ? new Set(aegisOpts.modules) : undefined)
+  const aegisModules = aegisOpts?.aegisModules ?? (aegisOpts?.aegisToolScope ? legacyScopeModules(aegisOpts.aegisToolScope) : undefined)
+  wrapToolRegistration(server, ctx, claims, aegisModules, aegisOpts?.modules ? new Set(aegisOpts.modules) : undefined)
 
   registerCanvasTools(server, ctx)
   registerHealthcareTools(server, ctx)
@@ -2578,7 +2582,10 @@ export interface AegisRequestContext {
   agentId?: string | null
   orgId?: string | null
   turnIdHeader?: string | null
+  sessionIdHeader?: string | null
   leaseTokenHeader?: string | null
+  /** 按模块的地址 `/api/aegis/mcp/:module` 带来的模块；不给时挂授权里的全部模块。 */
+  module?: string | null
 }
 
 /**
@@ -2603,6 +2610,14 @@ export function buildAegisMcpServer(
     return { ok: false, status: 401, code: verifiedRes.code, error: verifiedRes.error }
   }
   const { grant, user } = verifiedRes.verified
+  const granted = grantModules(grant)
+  let onlyModules: ModuleId[] | undefined
+  if (reqCtx.module != null) {
+    const m = reqCtx.module as ModuleId
+    if (!MODULE_IDS.includes(m)) return { ok: false, status: 404, code: 'unknown_module', error: `没有这个模块：${reqCtx.module}（可选：${MODULE_IDS.join('、')}）` }
+    if (!granted[m]) return { ok: false, status: 403, code: 'module_not_granted', error: `该授权没有开放模块 ${m}；请在 Heurion 设置页重新授权` }
+    onlyModules = [m]
+  }
 
   // 校验可选的 X-Aegis-Org-Id 请求头，防止跨机构越权
   const reqOrg = reqCtx.orgId?.trim()
@@ -2640,7 +2655,7 @@ export function buildAegisMcpServer(
     } catch {}
   }
 
-  const perms: Permission[] = grant.tool_scope === 'readonly' ? ['read'] : ['read', 'write']
+  const perms: Permission[] = Object.values(granted).includes('rw') ? ['read', 'write'] : ['read']
   const claims: TokenClaims = {
     u: user.id,
     d: parsedDocs,
@@ -2683,10 +2698,14 @@ export function buildAegisMcpServer(
 
   // 外部智能体不挂子专家委派（delegate_task 的入组数据守卫未接租约授权），工具失败也不记进 dsh 的执行信号
   // （那些信号用于 dsh 的记忆与技能演进，不该混进第三方智能体的调用噪声）。是否开放见 MCP_MODULES.md §6。
+  // 观察记录键：同一授权下同一智能体会话共用（没有会话头时按回合），跨模块读到的数字写稿时都算看到过
+  const session = reqCtx.sessionIdHeader?.trim().replace(/[^a-zA-Z0-9._:-]/g, '_').slice(0, 128) || turnId
   const server = buildMcpServer({ ...deps, subagents: undefined, executionSignals: undefined }, claims, {
     agentId,
     leaseAuthorizer,
-    aegisToolScope: grant.tool_scope,
+    aegisModules: granted,
+    modules: onlyModules,
+    observeKey: `sess:${grant.id}:${session}`,
   })
 
   return { ok: true, server, user, grant, agentId, turnId, generation }
@@ -2703,13 +2722,15 @@ export function buildAegisMcpServer(
 /** 外部网关单个请求的上限：超时回 504，连接与本次请求的 server 一并释放（工具本身不中断）。 */
 const AEGIS_MCP_TIMEOUT_MS = 120_000
 
-export async function handleAegisMcpRequest(deps: McpDeps, req: Request): Promise<Response> {
+export async function handleAegisMcpRequest(deps: McpDeps, req: Request, module?: string): Promise<Response> {
   const built = buildAegisMcpServer(deps, {
     authHeader: req.headers.get('authorization') ?? '',
     agentId: req.headers.get('x-aegis-agent-id'),
     orgId: req.headers.get('x-aegis-org-id'),
     turnIdHeader: req.headers.get('x-aegis-turn-id'),
+    sessionIdHeader: req.headers.get('x-aegis-session-id'),
     leaseTokenHeader: req.headers.get('x-aegis-lease-token'),
+    module,
   })
   if (!built.ok) {
     return new Response(JSON.stringify({ error: built.error, code: built.code }), {
