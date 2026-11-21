@@ -1,5 +1,6 @@
 import { DOMParser, type Element as XElement, type Node as XNode } from '@xmldom/xmldom'
-import { strFromU8, unzipSync } from 'fflate'
+import { strFromU8 } from 'fflate'
+import { safeUnzipPptx } from './safe-unzip.ts'
 import { autoNumOf, bulletOf, colorOf, fillColorOf, formatAutoNum, textColorOf, type SchemeColors } from '../model/ooxml-color.ts'
 
 /**
@@ -119,7 +120,7 @@ export class PptxVisuals {
 
   constructor(pkg: Uint8Array) {
     // 只解出 XML 与关系部件（媒体不解压，图片按路径另取）
-    this.files = unzipSync(pkg, { filter: f => /\.(xml|rels)$/i.test(f.name) })
+    this.files = safeUnzipPptx(pkg, name => /\.(xml|rels)$/i.test(name))
     const sz = this.parse('ppt/presentation.xml')?.getElementsByTagNameNS(P, 'sldSz')[0]
     this.size = { cx: num(sz?.getAttribute('cx'), 12192000), cy: num(sz?.getAttribute('cy'), 6858000) }
   }
@@ -518,7 +519,7 @@ export class PptxVisuals {
   /** 原始包里的一个媒体文件（画布显示母版 / 组合里的图片用）；路径必须在 ppt/media/ 下。 */
   static mediaBytes(pkg: Uint8Array, path: string): Uint8Array | null {
     if (!/^ppt\/media\/[\w.-]+$/.test(path) || !WEB_IMAGE.test(path)) return null
-    const files = unzipSync(pkg, { filter: f => f.name === path })
+    const files = safeUnzipPptx(pkg, name => name === path)
     return files[path] ?? null
   }
 }

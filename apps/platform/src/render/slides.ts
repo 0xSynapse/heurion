@@ -1,12 +1,30 @@
-import { createHash } from 'node:crypto'
-import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { execFile, spawn } from 'node:child_process'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type { Node as PMNode } from 'prosemirror-model'
 import { renderSlideToPng } from './slide-raster.ts'
 
 const run = promisify(execFile)
+
+const MAX_CONCURRENT_LO = 2
+const MAX_VECTOR_CACHE_FILES = 200
+let activeLo = 0
+const waitLo: Array<() => void> = []
+
+async function withLoSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeLo >= MAX_CONCURRENT_LO) {
+    await new Promise<void>(resolveSlot => waitLo.push(resolveSlot))
+  }
+  activeLo++
+  try {
+    return await fn()
+  } finally {
+    activeLo--
+    waitLo.shift()?.()
+  }
+}
 
 const SOFFICE_CANDIDATES = [
   'soffice',
@@ -23,11 +41,72 @@ const PDFTOPPM_CANDIDATES = [
   '/usr/bin/pdftoppm',
 ]
 
-function enhancedEnv(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
-  const currentPath = process.env.PATH || ''
+function cleanSubprocessEnv(): NodeJS.ProcessEnv {
+  const currentPath = process.env.PATH || '/usr/local/bin:/usr/bin:/bin'
   const extraPaths = ['/opt/homebrew/bin', '/usr/local/bin']
-  const newPath = [...extraPaths.filter(p => !currentPath.includes(p)), currentPath].join(':')
-  return { ...process.env, PATH: newPath, ...extra }
+  const newPath = [...extraPaths.filter(p => !currentPath.includes(p)), currentPath].filter(Boolean).join(':')
+  return { PATH: newPath, HOME: '/tmp', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' }
+}
+
+function spawnCleanGroup(bin: string, args: string[], timeoutMs: number, onTimeout?: () => Promise<void> | void): Promise<void> {
+  return new Promise((resolveDone, rejectDone) => {
+    const child = spawn(bin, args, {
+      detached: true,
+      stdio: 'ignore',
+      env: cleanSubprocessEnv(),
+    })
+    let settled = false
+    let timedOut = false
+    const finish = (err?: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (err) rejectDone(err)
+      else resolveDone()
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      if (child.pid) {
+        try { process.kill(-child.pid, 'SIGKILL') } catch { /* 进程组可能已退出 */ }
+      }
+      Promise.resolve(onTimeout?.()).catch(() => {}).finally(() => {
+        setTimeout(() => finish(new Error(`${bin} 执行超时 (${timeoutMs}ms)`)), 500).unref()
+      })
+    }, timeoutMs)
+    child.once('error', err => finish(err))
+    child.once('close', (code, signal) => {
+      if (timedOut) {
+        finish(new Error(`${bin} 执行超时 (${timeoutMs}ms)`))
+      } else if (code === 0) {
+        finish()
+      } else {
+        finish(new Error(`${bin} 退出异常 (${signal ?? code})`))
+      }
+    })
+  })
+}
+
+async function rmContainer(engine: string, name: string): Promise<void> {
+  try {
+    await spawnCleanGroup(engine, ['rm', '-f', name], 10_000)
+  } catch { /* ignore */ }
+}
+
+function pruneVectorCache(root: string): void {
+  try {
+    const entries = readdirSync(root)
+      .filter(f => f.endsWith('.png'))
+      .map(f => {
+        const p = join(root, f)
+        try { return { p, mtime: statSync(p).mtimeMs } } catch { return null }
+      })
+      .filter((x): x is { p: string; mtime: number } => x !== null)
+    if (entries.length <= MAX_VECTOR_CACHE_FILES) return
+    entries.sort((a, b) => a.mtime - b.mtime)
+    for (const old of entries.slice(0, entries.length - MAX_VECTOR_CACHE_FILES)) {
+      try { rmSync(old.p, { force: true }) } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
 }
 
 export interface DeckRenderSource {
@@ -61,7 +140,7 @@ export class SlideRenderer {
   constructor(private readonly cacheDir: string, private readonly image = 'heurion2:dev') {}
 
   private async probeBinary(candidates: string[], testArg: string[]): Promise<string | null> {
-    const env = enhancedEnv()
+    const env = cleanSubprocessEnv()
     for (const cmd of candidates) {
       if (cmd.includes('/') && !existsSync(cmd)) continue
       try {
@@ -86,7 +165,7 @@ export class SlideRenderer {
 
     for (const engine of ['podman', 'docker']) {
       try {
-        await run(engine, ['image', 'exists', this.image], { env: enhancedEnv(), timeout: 10_000 })
+        await run(engine, ['image', 'exists', this.image], { env: cleanSubprocessEnv(), timeout: 10_000 })
         this.engine = engine
         this.mode = 'container'
         return this.mode
@@ -139,26 +218,43 @@ export class SlideRenderer {
       job = (async () => {
         const mode = await this.detect()
         if (mode === 'builtin') return null
-        const dir = join(root, `${hash}-work`)
-        mkdirSync(dir, { recursive: true })
-        try {
-          writeFileSync(join(dir, `image.${ext}`), bytes)
-          const script = `export HOME=/tmp && "$SOFFICE" "-env:UserInstallation=file://$P/lo-profile" --headless --convert-to png --outdir "$P" "$P/image.${ext}" >/dev/null 2>&1`
-          if (mode === 'local') {
-            await run('bash', ['-c', script], { env: enhancedEnv({ P: dir, SOFFICE: this.sofficeBin ?? 'soffice' }), timeout: 60_000 })
-          } else {
-            await run(this.engine, ['run', '--rm', '-v', `${dir}:/x:Z`, '--user', 'root', '-e', 'P=/x', '-e', 'SOFFICE=soffice', '--entrypoint', 'bash', this.image, '-c', script], { timeout: 120_000 })
+        return withLoSlot(async () => {
+          const dir = join(root, `${hash}-work`)
+          mkdirSync(dir, { recursive: true })
+          try {
+            writeFileSync(join(dir, `image.${ext}`), bytes)
+            if (mode === 'local') {
+              await spawnCleanGroup(
+                this.sofficeBin ?? 'soffice',
+                [`-env:UserInstallation=file://${dir}/lo-profile`, '--headless', '--convert-to', 'png', '--outdir', dir, join(dir, `image.${ext}`)],
+                60_000,
+              )
+            } else {
+              const cname = `heurion-vec-${randomBytes(6).toString('hex')}`
+              await spawnCleanGroup(
+                this.engine,
+                [
+                  'run', '--rm', '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+                  '--memory=1g', '--pids-limit=64', '--name', cname,
+                  '-v', `${dir}:/x:Z`, '-e', 'HOME=/tmp', '--entrypoint', 'soffice', this.image,
+                  '-env:UserInstallation=file:///x/lo-profile', '--headless', '--convert-to', 'png', '--outdir', '/x', `/x/image.${ext}`,
+                ],
+                120_000,
+                () => rmContainer(this.engine, cname),
+              )
+            }
+            const out = join(dir, 'image.png')
+            if (!existsSync(out)) return null
+            const png = readFileSync(out)
+            writeFileSync(target, png)
+            pruneVectorCache(root)
+            return new Uint8Array(png)
+          } catch {
+            return null
+          } finally {
+            rmSync(dir, { recursive: true, force: true })
           }
-          const out = join(dir, 'image.png')
-          if (!existsSync(out)) return null
-          const png = readFileSync(out)
-          writeFileSync(target, png)
-          return new Uint8Array(png)
-        } catch {
-          return null
-        } finally {
-          rmSync(dir, { recursive: true, force: true })
-        }
+        })
       })().finally(() => this.imageJobs.delete(hash))
       this.imageJobs.set(hash, job)
     }
@@ -216,15 +312,47 @@ export class SlideRenderer {
     if (source.pptx) writeFileSync(join(dir, 'deck.pptx'), source.pptx())
 
     try {
-      if (mode === 'local') {
-        const soffice = this.sofficeBin ?? 'soffice'
-        const pdftoppm = this.pdftoppmBin ?? 'pdftoppm'
-        const script = `export HOME=/tmp && "${soffice}" "-env:UserInstallation=file://$D/lo-profile" --headless --convert-to pdf --outdir "$D" "$D/deck.pptx" >/dev/null 2>&1 && "${pdftoppm}" -png -r 72 "$D/deck.pdf" "$D/slide"`
-        await run('bash', ['-c', script], { env: enhancedEnv({ D: dir }), timeout: 180_000 })
-      } else if (mode === 'container') {
-        const script = 'export HOME=/tmp && soffice "-env:UserInstallation=file:///x/lo-profile" --headless --convert-to pdf --outdir "$D" "$D/deck.pptx" >/dev/null 2>&1 && pdftoppm -png -r 72 "$D/deck.pdf" "$D/slide"'
-        await run(this.engine, ['run', '--rm', '-v', `${dir}:/x:Z`, '--user', 'root', '-e', 'D=/x', '--entrypoint', 'bash', this.image, '-c', script], { timeout: 300_000 })
-      }
+      await withLoSlot(async () => {
+        if (mode === 'local') {
+          const soffice = this.sofficeBin ?? 'soffice'
+          const pdftoppm = this.pdftoppmBin ?? 'pdftoppm'
+          await spawnCleanGroup(
+            soffice,
+            [`-env:UserInstallation=file://${dir}/lo-profile`, '--headless', '--convert-to', 'pdf', '--outdir', dir, join(dir, 'deck.pptx')],
+            150_000,
+          )
+          await spawnCleanGroup(
+            pdftoppm,
+            ['-png', '-r', '72', join(dir, 'deck.pdf'), join(dir, 'slide')],
+            30_000,
+          )
+        } else if (mode === 'container') {
+          const pdfCname = `heurion-lo-pdf-${randomBytes(6).toString('hex')}`
+          await spawnCleanGroup(
+            this.engine,
+            [
+              'run', '--rm', '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+              '--memory=1g', '--pids-limit=64', '--name', pdfCname,
+              '-v', `${dir}:/x:Z`, '-e', 'HOME=/tmp', '--entrypoint', 'soffice', this.image,
+              '-env:UserInstallation=file:///x/lo-profile', '--headless', '--convert-to', 'pdf', '--outdir', '/x', '/x/deck.pptx',
+            ],
+            240_000,
+            () => rmContainer(this.engine, pdfCname),
+          )
+          const ppmCname = `heurion-lo-ppm-${randomBytes(6).toString('hex')}`
+          await spawnCleanGroup(
+            this.engine,
+            [
+              'run', '--rm', '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+              '--memory=1g', '--pids-limit=64', '--name', ppmCname,
+              '-v', `${dir}:/x:Z`, '-e', 'HOME=/tmp', '--entrypoint', 'pdftoppm', this.image,
+              '-png', '-r', '72', '/x/deck.pdf', '/x/slide',
+            ],
+            60_000,
+            () => rmContainer(this.engine, ppmCname),
+          )
+        }
+      })
 
       const outs = readdirSync(dir).filter(f => /^slide-\d+\.png$/.test(f))
       if (outs.length > 0) {

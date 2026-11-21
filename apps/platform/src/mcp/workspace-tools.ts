@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { listDir, looksText, MCP_GET_MAX, MCP_PUT_MAX, readTarget, WorkspaceFileError, writeTarget } from '../aegis/files.ts'
+import { listDir, looksText, MCP_GET_MAX, MCP_PUT_MAX, readTarget, WorkspaceFileError, writeWorkspaceFile } from '../aegis/files.ts'
 import type { TokenClaims } from '../auth/token.ts'
 
 /**
@@ -37,8 +37,7 @@ export function registerWorkspaceTools(server: McpServer, deps: { claims: TokenC
     const bytes = Buffer.from(data_base64, 'base64')
     if (bytes.byteLength > MCP_PUT_MAX) return fail('too_large', `文件超过 ${MCP_PUT_MAX / 1024 / 1024}MB`, { hint: '改用 PUT /api/mcp/files/<path> 直传（同一令牌）。' })
     try {
-      const t = writeTarget(workspace(), path)
-      writeFileSync(t.abs, bytes)
+      const t = writeWorkspaceFile(workspace(), path, bytes)
       return json({ path: t.rel, bytes: bytes.byteLength })
     } catch (err) { return asFail(err) }
   })

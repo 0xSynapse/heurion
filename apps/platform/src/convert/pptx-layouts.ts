@@ -1,5 +1,6 @@
 import { DOMParser, type Element as XElement } from '@xmldom/xmldom'
-import { strFromU8, unzipSync } from 'fflate'
+import { strFromU8 } from 'fflate'
+import { safeUnzipPptx } from './safe-unzip.ts'
 import type { LayoutInfo, PlaceholderStyle } from '../ops/deck.ts'
 import { bulletOf } from '../model/ooxml-color.ts'
 
@@ -8,7 +9,7 @@ const A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 
 /** pptx 包里的版式（名称、部件、占位符几何）与页面尺寸。 */
 export function readLayouts(pkg: Uint8Array): { layouts: LayoutInfo[]; size: { cx: number; cy: number } } {
-  const files = unzipSync(pkg)
+  const files = safeUnzipPptx(pkg, name => name === 'ppt/presentation.xml' || /^ppt\/(slideLayouts|slideMasters)\//.test(name))
   const parse = (name: string) => files[name] ? new DOMParser().parseFromString(strFromU8(files[name]!), 'text/xml') : null
   const pres = parse('ppt/presentation.xml')
   const sz = pres?.getElementsByTagNameNS(P, 'sldSz')[0]

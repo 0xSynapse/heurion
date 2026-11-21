@@ -13,12 +13,6 @@ import { AEGIS_APP_MANIFEST } from './manifest.ts'
 
 type RiskClass = 'read_only' | 'staged_write' | 'destructive' | 'forbidden'
 
-/**
- * 写工具在 Heurion 服务端已有回合撤销与来源规则保护：这些模块里不需要租约的工具标 read_only，
- * 免得 Aegis 本地防火墙把每次写入都放进待审队列。需要租约的高风险工具一律 staged_write。
- */
-const SERVER_GUARDED: ReadonlySet<string> = new Set(['writing', 'literature', 'knowledge', 'memory', 'analysis', 'imaging', 'research'])
-
 function profilesOf(m: HeurionModule): string[] {
   if (m.external === 'open') return ['default', 'open', m.id]
   if (m.external === 'readonly_default') return ['default', 'admin']
@@ -26,17 +20,17 @@ function profilesOf(m: HeurionModule): string[] {
 }
 
 export async function buildMcpBundleManifest(origin: string) {
-  const host = new URL(origin).hostname
+  const host = new URL(origin).hostname.replace(/^\[|\]$/g, '')
   const allowedHosts = host === 'heurion.org' ? ['heurion.org', '*.heurion.org'] : [host]
   const servers = await Promise.all(MODULES.map(async m => {
     const overrides: Record<string, RiskClass> = {}
-    if (SERVER_GUARDED.has(m.id)) for (const t of await moduleToolNames(m.id)) if (!m.leaseGated[t]) overrides[t] = 'read_only'
-    for (const t of Object.keys(m.leaseGated)) overrides[t] = 'staged_write'
+    // 单点服务端审批（[C-2]）：全模块工具在 Aegis 侧统一设为 read_only，由 Heurion 服务端 leaseAuthorizer + 网页「待确认操作」统一管控
+    for (const t of await moduleToolNames(m.id)) overrides[t] = 'read_only'
     return {
       server_id: `heurion-${m.id}`,
-      url: `${origin}/api/aegis/mcp/${m.id}`,
+      url: `${origin}/api/mcp/${m.id}`,
       description: m.summary,
-      trust_level: 'trusted_internal' as const,
+      trust_level: (m.id === 'literature' || m.id === 'knowledge') ? ('untrusted_external' as const) : ('trusted_internal' as const),
       // 不在本地做假名化：作者邮箱、机构名会被替换后写进稿件；患者在平台侧只用代号且受机构外发策略管控
       dlp_mode: 'off' as const,
       strip_prompt_injection: m.id === 'literature' || m.id === 'knowledge',
@@ -62,9 +56,10 @@ export async function buildMcpBundleManifest(origin: string) {
     auth_realm: {
       realm_id: 'heurion',
       issuer_url: origin,
+      authorization_endpoint: `${origin}/oauth/authorize`,
+      token_endpoint: `${origin}/oauth/token`,
       device_authorization_endpoint: `${origin}/api/aegis/auth/device`,
-      token_endpoint: `${origin}/api/aegis/auth/token`,
-      client_id: 'aegis-os',
+      registration_endpoint: `${origin}/oauth/register`,
       allowed_hosts: allowedHosts,
       scopes: [] as string[],
     },

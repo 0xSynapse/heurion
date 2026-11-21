@@ -3,6 +3,7 @@ import { basename, extname, isAbsolute, join, relative } from 'node:path'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { Invoke, InvokeBody } from '../http/invoke.ts'
+import type { ModuleGrant } from './modules.ts'
 import type { Store } from '../store/db.ts'
 import type { TurnRegistry } from './turns.ts'
 
@@ -334,6 +335,8 @@ export interface AdminToolDeps {
   invoke?: Invoke
   workspaceDir: (userId: string) => string
   generation?: string
+  /** AAP-1.0 外部网关实际生效的模块权限；传入时用于限制跨模块敏感管理工具。 */
+  aegisModules?: ModuleGrant
   /** AAP-1.0 [Lease-Gated] 授权钩子：当经由 /api/aegis/mcp 调用时注入 */
   leaseAuthorizer?: (input: LeaseAuthorizeInput) => LeaseAuthorizeResult
 }
@@ -375,6 +378,17 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
     server.registerTool(spec.name, { description: spec.description, inputSchema: spec.input }, async (args: Args) => {
       const op = spec.actions[args.action as string]
       if (!op) return fail('bad_action', `不支持的 action：${args.action}`)
+      if (deps.aegisModules) {
+        if ((spec.name === 'patient_admin' || spec.name === 'phr_share') && !deps.aegisModules.patients) {
+          return fail('module_not_allowed', '当前外部智能体令牌未获患者模块授权（或机构已关闭患者数据外发）')
+        }
+        if (spec.name === 'dataset_manage' && !deps.aegisModules.analysis) {
+          return fail('module_not_allowed', '当前外部智能体令牌未获统计分析模块授权（或机构已关闭分析数据外发）')
+        }
+        if (spec.name === 'study_admin' && !deps.aegisModules.research) {
+          return fail('module_not_allowed', '当前外部智能体令牌未获临床研究模块授权（或机构已关闭临床研究外发）')
+        }
+      }
       if (!deps.invoke) return fail('unavailable', '平台没有接通管理接口')
       try {
         if (op.confirm) {

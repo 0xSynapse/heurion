@@ -67,7 +67,7 @@ import type { ImageService } from '../images/service.ts'
 import { UnsplashError } from '../images/unsplash.ts'
 import { registerImagingTools } from './imaging-tools.ts'
 import { registerImagingReviewTools } from './imaging-review-tools.ts'
-import { MeasurementError, MeasurementService, measureSpace, SOURCE_KINDS } from '../measurements/service.ts'
+import { MeasurementError, MeasurementService, measureSpace, SOURCE_KINDS, type SourceKind } from '../measurements/service.ts'
 import { FOLLOWUP_FIELDS, LESION_FIELDS, MEASURE_UNITS, RESULT_FIELDS } from '../model/measurements.ts'
 import { ResultError, registerResult, visibleResults } from '../research/results.ts'
 import { registerImagingFollowupTools } from './imaging-followup-tools.ts'
@@ -134,6 +134,20 @@ const IMAGE_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image
 const MAX_ASSET = 10 * 1024 * 1024
 
 
+function allowedMeasurementSources(mods?: ModuleGrant): ReadonlySet<SourceKind> | undefined {
+  if (!mods) return undefined
+  const allowed = new Set<SourceKind>()
+  if (mods.analysis) allowed.add('analysis_result')
+  if (mods.imaging || mods.patients) {
+    allowed.add('imaging_lesion')
+    allowed.add('imaging_followup')
+  }
+  if (mods.research && (mods.imaging || mods.patients)) {
+    allowed.add('cohort_stat')
+  }
+  return allowed
+}
+
 /** 一次 MCP 请求的上下文。 */
 class Ctx {
   constructor(
@@ -143,11 +157,17 @@ class Ctx {
     readonly leaseAuthorizer?: (input: LeaseAuthorizeInput) => LeaseAuthorizeResult,
     /** 外部智能体的观察记录键（跨模块共享）；给了就用它，不用平台回合 id。 */
     readonly externalObserveKey?: string,
+    /** 外部智能体生效的模块授权（用于过滤测量数据源访问）。 */
+    readonly aegisModules?: ModuleGrant,
   ) {}
 
   /** 测量原子在 AI 所代表用户眼里的值（按该用户对来源的权限；没有患者模块时只有快照）。 */
   measureViews(row: DocRow) {
-    return new MeasurementService(this.deps.docs.store, this.deps.patients).views(row, { userId: this.claims.u, via: 'ai', space: measureSpace(row) })
+    return new MeasurementService(this.deps.docs.store, this.deps.patients).views(
+      row,
+      { userId: this.claims.u, via: 'ai', space: measureSpace(row) },
+      allowedMeasurementSources(this.aegisModules),
+    )
   }
 
   get turnId(): string | null {
@@ -983,6 +1003,11 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     const denied = ctx.check(doc_id, 'write')
     if (denied) return denied
     const row = store.getDoc(doc_id)!
+    const allowedSources = allowedMeasurementSources(ctx.aegisModules)
+    const effectiveKind: SourceKind = source ?? 'imaging_lesion'
+    if (allowedSources && !allowedSources.has(effectiveKind)) {
+      return fail('module_not_allowed', `当前外部智能体未获来源 ${effectiveKind} 对应模块授权（或机构已关闭相关数据外发）`)
+    }
     const sid = source_id ?? lesion_id
     if (!sid) return fail('missing_source', '缺少来源 id：病灶用 lesion_id，分析结果用 source_id（result_register 返回的 result_id）')
     try {
@@ -2516,8 +2541,8 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
   if (deps.datasets && !deps.datasets.access) deps.datasets.access = deps.access
   if (deps.images && !deps.images.access) deps.images.access = deps.access
   if (deps.subagents && !deps.subagents.access) deps.subagents.access = deps.access
-  const ctx = new Ctx(deps, claims, aegisOpts?.agentId, aegisOpts?.leaseAuthorizer, aegisOpts?.observeKey)
   const aegisModules = aegisOpts?.aegisModules ?? (aegisOpts?.aegisToolScope ? legacyScopeModules(aegisOpts.aegisToolScope) : undefined)
+  const ctx = new Ctx(deps, claims, aegisOpts?.agentId, aegisOpts?.leaseAuthorizer, aegisOpts?.observeKey, aegisModules)
   // 外部智能体只拿共同规则与所连模块的说明（instructions.ts）；dsh 拿全部、原文不变
   const instructions = aegisModules
     ? externalInstructions((aegisOpts?.modules ?? MODULE_IDS).filter(m => aegisModules[m]))
@@ -2544,6 +2569,7 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
       invoke: deps.invoke,
       workspaceDir: deps.workspaceDir,
       generation: claims.s,
+      aegisModules,
       leaseAuthorizer: aegisOpts?.leaseAuthorizer,
     },
     claims.u,
@@ -2554,6 +2580,9 @@ export function buildMcpServer(deps: McpDeps, claims: TokenClaims, aegisOpts?: A
 /** 没有回合头时，闲置多久算新的一轮（见 buildAegisMcpServer）。 */
 export const AEGIS_TURN_IDLE_MS = 10 * 60 * 1000
 const lastSeenByGeneration = new Map<string, number>()
+/** 没有 X-Aegis-Session-Id 时，外部观察记录键的滑动保活窗口（2 小时）。 */
+export const AEGIS_OBSERVE_IDLE_MS = 2 * 3600_000
+const observeSessionByGeneration = new Map<string, { id: string; lastSeen: number }>()
 
 /**
  * 外部智能体实际能用的模块：授权的模块权限 ∩ 用户所在机构允许的模块（§3.5）。
@@ -2694,18 +2723,35 @@ export function buildAegisMcpServer(
 
   // 外部智能体不挂子专家委派（delegate_task 的入组数据守卫未接租约授权），工具失败也不记进 dsh 的执行信号
   // （那些信号用于 dsh 的记忆与技能演进，不该混进第三方智能体的调用噪声）。是否开放见 MCP_MODULES.md §6。
-  // 观察记录键：同一授权下同一智能体会话共用（没有会话头时按回合），跨模块读到的数字写稿时都算看到过
-  const session = reqCtx.sessionIdHeader?.trim().replace(/[^a-zA-Z0-9._:-]/g, '_').slice(0, 128) || turnId
+  // 观察记录键：同一授权下同一智能体会话共用（没有会话头时使用独立 2 小时滑动窗口，不随 10 分钟回合轮换失效）
+  let session = reqCtx.sessionIdHeader?.trim().replace(/[^a-zA-Z0-9._:-]/g, '_').slice(0, 128)
+  if (!session) {
+    const obsEntry = observeSessionByGeneration.get(generation)
+    if (obsEntry && now - obsEntry.lastSeen <= AEGIS_OBSERVE_IDLE_MS) {
+      obsEntry.lastSeen = now
+      session = obsEntry.id
+    } else {
+      session = randomUUID().replace(/-/g, '').slice(0, 12)
+      observeSessionByGeneration.set(generation, { id: session, lastSeen: now })
+      if (observeSessionByGeneration.size > 1024) {
+        for (const [k, v] of observeSessionByGeneration) {
+          if (now - v.lastSeen > AEGIS_OBSERVE_IDLE_MS || observeSessionByGeneration.size > 1024) {
+            observeSessionByGeneration.delete(k)
+          }
+        }
+      }
+    }
+  }
   const server = buildMcpServer({ ...deps, subagents: undefined, executionSignals: undefined }, claims, {
     agentId,
     leaseAuthorizer,
     aegisModules: granted,
     modules: onlyModules,
     observeKey: `sess:${grant.id}:${session}`,
-    // 机构开启后才能用的模块（患者、影像、研究、分析）：每次调用记审计（谁、哪个智能体、哪个患者 / 数据集 / 研究）
+    // 机构开启后才能用的模块（患者、影像、研究、分析）与管理模块：每次调用记审计
     onToolCall: (tool, args, ok) => {
       const m = moduleOf(tool)
-      if (!m || !ORG_OPT_IN_MODULES.includes(m)) return
+      if (!m || (!ORG_OPT_IN_MODULES.includes(m) && m !== 'admin')) return
       const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>
       const target = ['patient_id', 'dataset_id', 'study_id', 'share_id', 'imaging_study_id', 'lesion_id'].filter(k => typeof a[k] === 'string').map(k => `${k}=${a[k]}`).join(' ') || null
       store.addAudit({ actor: user.id, action: 'aegis.tool_call', target, detail: `${agentId} · ${tool}（${m}） · ${grant.id}`, ip: 'aegis', status: ok ? 200 : 400, tenant_id: tenantRow?.id ?? null, via: 'aegis' })

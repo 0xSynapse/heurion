@@ -1,9 +1,10 @@
 import { DOMParser, type Element as XElement, type Node as XNode } from '@xmldom/xmldom'
-import { strFromU8, unzipSync } from 'fflate'
+import { strFromU8 } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { assignIds } from '../model/ids.ts'
 import { deckSchema, type ShapeKind } from '../model/deck-schema.ts'
 import { readChart } from './pptx-chart.ts'
+import { PptxImportError, safeUnzipPptx } from './safe-unzip.ts'
 import type { ImportedAsset } from './docx-import.ts'
 
 /**
@@ -29,7 +30,7 @@ export interface PptxImport {
   warnings: string[]
 }
 
-export class PptxImportError extends Error {}
+export { PptxImportError, safeUnzipPptx }
 
 const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml', emf: 'image/emf', wmf: 'image/wmf', tif: 'image/tiff', tiff: 'image/tiff' }
 
@@ -85,24 +86,6 @@ const relsPath = (part: string) => part.replace(/([^/]+)$/, '_rels/$1.rels')
 
 interface Geometry { x: number; y: number; w: number; h: number; rot: number }
 
-const MAX_ZIP_BYTES = 150 * 1024 * 1024
-const MAX_ZIP_ENTRIES = 2500
-
-export function safeUnzipPptx(bytes: Uint8Array): Record<string, Uint8Array> {
-  let totalBytes = 0
-  let entries = 0
-  return unzipSync(bytes, {
-    filter(file) {
-      entries++
-      totalBytes += file.originalSize ?? 0
-      if (entries > MAX_ZIP_ENTRIES || totalBytes > MAX_ZIP_BYTES) {
-        throw new PptxImportError('PPTX_INVALID: zip 解压体积或条目数超限')
-      }
-      return true
-    },
-  })
-}
-
 export function importPptx(bytes: Uint8Array): PptxImport {
   let files: Record<string, Uint8Array>
   try {
@@ -120,7 +103,10 @@ export function importPptx(bytes: Uint8Array): PptxImport {
     const list = doc.getElementsByTagName('Relationship')
     for (let i = 0; i < list.length; i++) {
       const r = list.item(i)!
-      out.set(r.getAttribute('Id') ?? '', { target: r.getAttribute('Target') ?? '', type: r.getAttribute('Type') ?? '' })
+      const targetMode = (r.getAttribute('TargetMode') ?? '').trim().toLowerCase()
+      const relType = r.getAttribute('Type') ?? ''
+      if (targetMode === 'external' && !relType.endsWith('/hyperlink')) continue
+      out.set(r.getAttribute('Id') ?? '', { target: r.getAttribute('Target') ?? '', type: relType })
     }
     return out
   }

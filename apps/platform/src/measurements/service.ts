@@ -294,13 +294,14 @@ export class MeasurementService {
    * 文档里各测量在读者眼里的值与状态。viewer = null（公开分享、无法确定读者）时一律只给快照。
    * 读来源出错（无权限、来源不存在、患者模块未开、AI 不能读患者数据……）一律按「无权查看」处理，不透露原因。
    */
-  views(doc: DocRow, viewer: Actor | null): Map<string, MeasureView> {
+  views(doc: DocRow, viewer: Actor | null, allowedSources?: ReadonlySet<SourceKind>): Map<string, MeasureView> {
     const rows = this.store.listMeasurements(doc.id)
     const out = new Map<string, MeasureView>()
     const cache = new Map<string, SourceReading | null>()
     for (const row of rows) {
       let reading: SourceReading | null = null
-      if (viewer && (this.patients || row.source_kind === 'analysis_result')) {
+      const sourceAllowed = !allowedSources || allowedSources.has(row.source_kind as SourceKind)
+      if (viewer && sourceAllowed && (this.patients || row.source_kind === 'analysis_result')) {
         const key = `${row.source_kind}:${row.source_id}`
         if (!cache.has(key)) {
           try { cache.set(key, this.source(row.source_kind).read(viewer, row.source_id)) } catch { cache.set(key, null) }

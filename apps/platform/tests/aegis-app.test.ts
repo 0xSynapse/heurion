@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { zipSync } from 'fflate'
 import { describe, expect, it, vi } from 'vitest'
+import { WorkspaceFileError, writeWorkspaceFile } from '../src/aegis/files.ts'
+import { PptxImportError, safeUnzipPptx } from '../src/convert/pptx-import.ts'
 import { Accounts } from '../src/auth/accounts.ts'
 import { TenantService } from '../src/auth/tenants.ts'
 import { generateAegisNodeKeyPair, signAegisLeaseToken } from '../src/aegis/auth.ts'
@@ -27,13 +30,14 @@ import type { McpDeps } from '../src/mcp/server.ts'
 import { ClaimService } from '../src/claims/service.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { OpService } from '../src/ops/service.ts'
+import { makeInvoker } from '../src/http/invoke.ts'
 import { SlideRenderer } from '../src/render/slides.ts'
 import { Store } from '../src/store/db.ts'
 import { kekFrom, TenantKeys } from '../src/tenancy/keys.ts'
 import { PatientService } from '../src/tenancy/patients.ts'
 import { TurnService } from '../src/turns/service.ts'
 
-function createTestEnv(opts: { aegisEnabled?: boolean; provenance?: boolean; orgModules?: string[]; mcpDeps?: (base: { docs: Documents; ops: OpService; registry: TurnRegistry; dir: string }) => McpDeps } = {}) {
+function createTestEnv(opts: { aegisEnabled?: boolean; provenance?: boolean; orgModules?: string[]; publicOrigin?: string; trustProxy?: boolean; mcpDeps?: (base: { docs: Documents; ops: OpService; registry: TurnRegistry; dir: string }) => McpDeps } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'heurion-aegis-'))
   const store = new Store(':memory:')
   const docs = new Documents(store)
@@ -93,6 +97,8 @@ function createTestEnv(opts: { aegisEnabled?: boolean; provenance?: boolean; org
     accounts,
     devMode: false,
     aegisEnabled: opts.aegisEnabled ?? true,
+    publicOrigin: opts.publicOrigin,
+    trustProxy: opts.trustProxy,
     devUser: 'dev',
     patients,
     datasets,
@@ -1261,16 +1267,20 @@ describe('aegis-os v0.9：声明式 MCP Bundle 与标准 RFC 8628 设备码', ()
     expect(b.schema).toBe('aegis-mcp-bundle/v1')
     expect(b.bundle_id).toBe('heurion')
     expect(b.auth_realm).toMatchObject({
-      realm_id: 'heurion', issuer_url: 'http://127.0.0.1:8799', client_id: 'aegis-os', allowed_hosts: ['127.0.0.1'], scopes: [],
-      device_authorization_endpoint: 'http://127.0.0.1:8799/api/aegis/auth/device', token_endpoint: 'http://127.0.0.1:8799/api/aegis/auth/token',
+      realm_id: 'heurion', issuer_url: 'http://127.0.0.1:8799',
+      authorization_endpoint: 'http://127.0.0.1:8799/oauth/authorize', token_endpoint: 'http://127.0.0.1:8799/oauth/token',
+      device_authorization_endpoint: 'http://127.0.0.1:8799/api/aegis/auth/device', registration_endpoint: 'http://127.0.0.1:8799/oauth/register',
+      allowed_hosts: ['127.0.0.1'], scopes: [],
     })
+    expect(b.auth_realm.client_id).toBeUndefined()
     expect(b.servers.map((s: any) => s.server_id)).toEqual(['writing', 'literature', 'analysis', 'patients', 'imaging', 'research', 'knowledge', 'memory', 'admin'].map(id => `heurion-${id}`))
     for (const s of b.servers) {
-      expect(s.url).toBe(`http://127.0.0.1:8799/api/aegis/mcp/${s.server_id.slice('heurion-'.length)}`)
-      expect(s.trust_level).toBe('trusted_internal')
+      const modId = s.server_id.slice('heurion-'.length)
+      expect(s.url).toBe(`http://127.0.0.1:8799/api/mcp/${modId}`)
+      expect(s.trust_level).toBe(modId === 'literature' || modId === 'knowledge' ? 'untrusted_external' : 'trusted_internal')
       expect(s.dlp_mode).toBe('off')
       expect(s.request_timeout_ms).toBe(300000)
-      for (const v of Object.values(s.tool_overrides)) expect(['read_only', 'staged_write', 'destructive', 'forbidden']).toContain(v)
+      for (const v of Object.values(s.tool_overrides)) expect(v).toBe('read_only')
     }
     const by = (id: string) => b.servers.find((s: any) => s.server_id === `heurion-${id}`)
     expect(by('literature').strip_prompt_injection).toBe(true)
@@ -1279,12 +1289,12 @@ describe('aegis-os v0.9：声明式 MCP Bundle 与标准 RFC 8628 设备码', ()
     expect(by('writing').profiles).toEqual(['default', 'open', 'writing'])
     expect(by('admin').profiles).toEqual(['default', 'admin'])
     expect(by('patients').profiles).toEqual(['clinical', 'full', 'patients'])
-    // 服务端已有回合撤销与来源规则保护的写工具不进本地待审队列；需要租约的高风险工具进
+    // 单点服务端审批：Aegis 本地统一标 read_only，由服务端 leaseAuthorizer + 「待确认操作」统一卡控
     expect(by('writing').tool_overrides).toMatchObject({ doc_create: 'read_only', doc_edit: 'read_only', deck_edit: 'read_only', workspace_put: 'read_only' })
     expect(by('literature').tool_overrides.insert_citation).toBe('read_only')
-    expect(by('patients').tool_overrides).toEqual({ lab_resolve: 'staged_write', report_resolve: 'staged_write' })
-    expect(by('admin').tool_overrides.tenant_admin).toBe('staged_write')
-    expect(Object.keys(by('admin').tool_overrides)).toHaveLength(12)
+    expect(by('patients').tool_overrides).toMatchObject({ lab_resolve: 'read_only', report_resolve: 'read_only' })
+    expect(by('admin').tool_overrides.tenant_admin).toBe('read_only')
+    expect(Object.keys(by('admin').tool_overrides)).toHaveLength(20)
     expect(b.skills.map((s: any) => s.id)).toEqual([...b.servers.map((s: any) => s.server_id), 'heurion-clinical-research'])
     for (const s of b.skills) {
       expect(s.url).toMatch(/^http:\/\/127\.0\.0\.1:8799\/\.well-known\/aegis-skills\//)
@@ -1292,7 +1302,7 @@ describe('aegis-os v0.9：声明式 MCP Bundle 与标准 RFC 8628 设备码', ()
     }
     // 生产：反向代理后面按 X-Forwarded-Proto 还原 https；heurion.org 放行子域名
     const prod = (await (await app.request('http://heurion.org/.well-known/mcp-bundle.json', { headers: { 'x-forwarded-proto': 'https' } })).json()) as any
-    expect(prod.servers[0].url).toBe('https://heurion.org/api/aegis/mcp/writing')
+    expect(prod.servers[0].url).toBe('https://heurion.org/api/mcp/writing')
     expect(prod.auth_realm.allowed_hosts).toEqual(['heurion.org', '*.heurion.org'])
     // 旧的 AAP-1.0 清单照常保留
     expect((await app.request('/.well-known/aegis-app.json')).status).toBe(200)
@@ -1374,7 +1384,7 @@ describe('MCP 的 OAuth 2.1（授权码 + PKCE、动态注册、资源元数据�
     const asm = (await (await app.request(`${O}/.well-known/oauth-authorization-server`)).json()) as any
     expect(asm).toMatchObject({
       issuer: O, authorization_endpoint: `${O}/oauth/authorize`, token_endpoint: `${O}/oauth/token`, registration_endpoint: `${O}/oauth/register`,
-      code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'], grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'], grant_types_supported: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:device_code'],
     })
     const pre = await app.request(`${O}/oauth/token`, { method: 'OPTIONS', headers: { origin: 'http://localhost:6274', 'access-control-request-method': 'POST' } })
     expect(pre.headers.get('access-control-allow-origin')).toBe('*')
@@ -1447,5 +1457,148 @@ describe('MCP 的 OAuth 2.1（授权码 + PKCE、动态注册、资源元数据�
     expect(noPkce.searchParams.get('error')).toBe('invalid_request')
     const otherRes = new URL((await t.authorize({ resource: 'https://other.example/api/mcp' })).headers.get('location')!)
     expect(otherRes.searchParams.get('error')).toBe('invalid_target')
+  })
+})
+
+describe('跨仓安全审计回归加固 (OAuth/Bundle/工作区文件/机构外发/PPTX)', () => {
+  const O = 'http://127.0.0.1:8799'
+  const form = (o: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(o).toString() })
+
+  it('writeWorkspaceFile 拒绝悬空软链与父路径软链穿越，正常路径安全写入', () => {
+    const ws = mkdtempSync(join(tmpdir(), 'heurion-ws-'))
+    const outside = mkdtempSync(join(tmpdir(), 'heurion-outside-'))
+    mkdirSync(join(ws, 'aegis-files'), { recursive: true })
+    // 1. 悬空叶节点符号链接
+    symlinkSync(join(outside, 'pwned.txt'), join(ws, 'aegis-files', 'dangling.txt'))
+    expect(() => writeWorkspaceFile(ws, 'dangling.txt', new Uint8Array([1, 2, 3]))).toThrow(WorkspaceFileError)
+    // 2. 父目录符号链接
+    symlinkSync(outside, join(ws, 'aegis-files', 'linked-dir'))
+    expect(() => writeWorkspaceFile(ws, 'linked-dir/sub.txt', new Uint8Array([4, 5]))).toThrow(WorkspaceFileError)
+    // 3. 合法写入
+    const ok = writeWorkspaceFile(ws, 'nested/ok.txt', new Uint8Array([7, 8, 9]))
+    expect(ok.rel).toBe('aegis-files/nested/ok.txt')
+  })
+
+  it('RFC 8252 §7.3 回环动态端口二次登录与 /oauth/token 设备码流（含 integer expires_in）', async () => {
+    const env = createTestEnv()
+    const verifier = 'k'.repeat(43) + '-pkce-loopback'
+    const challenge = createHash('sha256').update(verifier).digest('base64url')
+    const regRes = await env.app.request(`${O}/oauth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ client_name: 'aegis-cli', redirect_uris: ['http://127.0.0.1:41000/callback'], token_endpoint_auth_method: 'none' }),
+    })
+    const client = (await regRes.json()) as { client_id: string }
+    const authRes = await env.app.request(`${O}/oauth/authorize?${new URLSearchParams({
+      response_type: 'code', client_id: client.client_id, redirect_uri: 'http://127.0.0.1:52999/callback',
+      code_challenge: challenge, code_challenge_method: 'S256', state: 'st-dyn', resource: `${O}/api/mcp`,
+    })}`)
+    expect(authRes.status).toBe(302)
+    expect(authRes.headers.get('location')).toContain('/app?mcp_authorize=')
+
+    // 设备码走 /oauth/token（Bundle auth_realm.token_endpoint 对齐）
+    const devRes = await env.app.request(`${O}/api/aegis/auth/device`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    expect(devRes.status).toBe(201)
+    const dev = (await devRes.json()) as any
+    const pend = await env.app.request(`${O}/oauth/token`, form({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: dev.device_code }))
+    expect(pend.status).toBe(400)
+    expect(((await pend.json()) as any).error).toBe('authorization_pending')
+
+    await env.app.request('/api/aegis/auth/device/approve', {
+      method: 'POST', headers: { authorization: `Bearer ${env.reg.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ user_code: dev.user_code }),
+    })
+    const tokRes = await env.app.request(`${O}/oauth/token`, form({ grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: dev.device_code }))
+    expect(tokRes.status).toBe(200)
+    const tok = (await tokRes.json()) as any
+    expect(tok.access_token).toMatch(/^aegis_at_heurion\./)
+    expect(Number.isInteger(tok.expires_in)).toBe(true)
+    expect(tok.expires_in).toBeGreaterThan(0)
+    // 默认未传 modules / tool_scope 时收紧为默认安全集合，不含 admin:rw 与 patients:rw
+    expect(tok.scope).toContain('writing:rw')
+    expect(tok.scope).toContain('admin:r')
+    expect(tok.scope).not.toContain('admin:rw')
+    expect(tok.scope).not.toContain('patients:')
+  })
+
+  it('Origin 防投毒、/api/mcp* 405 合规、机构外发门禁与 AI 禁改 tenant 设置', async () => {
+    const env = createTestEnv({ orgModules: [] })
+    const bSpoof = await env.app.request('http://127.0.0.1:8799/.well-known/mcp-bundle.json', {
+      headers: { 'x-forwarded-host': 'evil.attacker.tld' },
+    })
+    expect(bSpoof.headers.get('vary')).toContain('X-Forwarded-Host')
+    expect(((await bSpoof.json()) as any).auth_realm.issuer_url).toBe('http://127.0.0.1:8799')
+
+    const pubEnv = createTestEnv({ publicOrigin: 'https://heurion.org' })
+    const bPub = await pubEnv.app.request('http://127.0.0.1:8799/.well-known/mcp-bundle.json', {
+      headers: { host: 'evil.local', 'x-forwarded-host': 'evil2.local' },
+    })
+    expect(((await bPub.json()) as any).auth_realm.issuer_url).toBe('https://heurion.org')
+
+    // 405 合规
+    for (const [m, p] of [['GET', '/api/mcp'], ['DELETE', '/api/mcp'], ['GET', '/api/mcp/writing'], ['DELETE', '/api/mcp/writing']] as const) {
+      const r = await env.app.request(p, { method: m })
+      expect(r.status).toBe(405)
+      expect(r.headers.get('allow')).toBe('POST')
+    }
+
+    // 签发仅含 admin:rw + writing:rw 的令牌（机构未开 patients / analysis）
+    const tokRes = await env.app.request('/api/aegis/auth/token', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${env.reg.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'test', modules: { writing: 'rw', admin: 'rw', patients: 'rw', analysis: 'rw' } }),
+    })
+    const { access_token } = (await tokRes.json()) as { access_token: string }
+
+    // 1. patient_admin / dataset_manage / insert_measurement(analysis_result) 均被机构门禁拒止
+    const pAdmin = await env.app.request('/api/aegis/mcp', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${access_token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'patient_admin', arguments: { action: 'directory' } } }),
+    })
+    expect((await pAdmin.json()) as any).toMatchObject({ result: { isError: true } })
+
+    const doc = env.docs.create({ owner: env.reg.user.id, title: '测试绑定测量门禁' })
+    const mBind = await env.app.request('/api/mcp/writing', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${access_token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'insert_measurement', arguments: { doc_id: doc.id, source: 'analysis_result', source_id: 'res_1', field: 'estimate' } } }),
+    })
+    expect(JSON.stringify(await mBind.json())).toContain('module_not_allowed')
+
+    // 2. AI 通过 tenant_admin.update_settings 修改 aegis_modules 时即便确认也要被 /api/tenant 拦下（或挂起前直接校验）
+    const patchRes = await env.app.request('/api/mcp/admin', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${access_token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'tenant_admin', arguments: { action: 'update_settings', settings: { aegis_modules: ['patients'] } } } }),
+    })
+    const patchBody = (await patchRes.json()) as any
+    expect(JSON.stringify(patchBody)).toContain('approval_required')
+
+    const inv = makeInvoker(env.app)
+    const directAiPatch = await inv(env.reg.user.id, 'PATCH', '/api/tenant', { json: { settings: { aegis_modules: ['patients'] } } }, { via: 'ai-confirmed', confirmedBy: env.reg.user.id })
+    expect(directAiPatch.status).toBe(403)
+    expect((directAiPatch.json as any).code).toBe('human_only')
+  })
+
+  it('safeUnzipPptx 流式解压校验实际产出字节，拦截伪造 originalSize=0 的 Zip 炸弹', () => {
+    const big = new Uint8Array(600 * 1024).fill(0x41)
+    const zipped = zipSync({ 'ppt/slides/slide1.xml': big }, { level: 9 })
+    // 构造足够大导致超过 150MB？在单元测试用轻量断言也验证超多高压缩全零 chunk：260 * 600KB = 156MB
+    const parts: Record<string, Uint8Array> = {}
+    for (let i = 0; i < 260; i++) parts[`ppt/slides/s${i}.xml`] = big
+    const bomb = zipSync(parts, { level: 9 })
+    // 把局部文件头与中央目录里的原始长度字段全部清零（模拟伪造 originalSize=0 的炸弹包），确保不靠 header 也必被流式解压拦截
+    const spoofed = new Uint8Array(bomb)
+    for (let i = 0; i < spoofed.length - 30; i++) {
+      if (spoofed[i] === 0x50 && spoofed[i + 1] === 0x4b && spoofed[i + 2] === 0x03 && spoofed[i + 3] === 0x04) {
+        spoofed.fill(0, i + 22, i + 26)
+      }
+      if (spoofed[i] === 0x50 && spoofed[i + 1] === 0x4b && spoofed[i + 2] === 0x01 && spoofed[i + 3] === 0x02) {
+        spoofed.fill(0, i + 24, i + 28)
+      }
+    }
+    expect(zipped.byteLength).toBeGreaterThan(0)
+    expect(() => safeUnzipPptx(spoofed)).toThrow(PptxImportError)
   })
 })

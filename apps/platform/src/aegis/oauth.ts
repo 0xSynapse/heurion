@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { grantModules, MODULE_IDS, MODULES, parseModuleGrant, type ModuleGrant } from '../mcp/modules.ts'
 import type { Store } from '../store/db.ts'
 import type { AegisAuthService } from './auth.ts'
+import { safeEqualHex } from './sdk.ts'
 
 /**
  * MCP 的 OAuth 2.1 授权服务器（docs/design/MCP_MODULES.md §0.4；MCP 鉴权规范）。
@@ -39,7 +40,7 @@ export function authServerMetadata(origin: string) {
     registration_endpoint: `${origin}/oauth/register`,
     revocation_endpoint: `${origin}/oauth/revoke`,
     response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code', 'refresh_token'],
+    grant_types_supported: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:device_code'],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
     revocation_endpoint_auth_methods_supported: ['none'],
@@ -83,6 +84,20 @@ function validRedirect(uri: string): boolean {
   return /^[a-z][a-z0-9+.-]*:$/.test(u.protocol) && !['javascript:', 'data:', 'file:', 'vbscript:', 'blob:', 'about:'].includes(u.protocol)
 }
 
+/** RFC 8252 §7.3：本机回环 http 回调允许端口动态变化，其余 URI 必须精确匹配。 */
+function redirectUriMatches(registeredList: string[], actual: string): boolean {
+  if (registeredList.includes(actual)) return true
+  let act: URL
+  try { act = new URL(actual) } catch { return false }
+  if (act.hash || act.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(act.hostname)) return false
+  return registeredList.some(reg => {
+    try {
+      const r = new URL(reg)
+      return r.protocol === 'http:' && r.hostname === act.hostname && r.pathname === act.pathname && r.search === act.search
+    } catch { return false }
+  })
+}
+
 /** scope（空格或逗号分隔）→ 预选的模块权限；不认识的 scope 忽略，什么都没有时预选默认开放的模块读写。 */
 export function scopeToModules(scope: string | null | undefined): ModuleGrant {
   const parts = (scope ?? '').split(/[\s,]+/).filter(p => /^[a-z]+(:(r|rw))?$/.test(p) && (MODULE_IDS as readonly string[]).includes(p.split(':')[0]!))
@@ -118,7 +133,7 @@ export class OAuthService {
     const client = q.client_id ? this.store.getOAuthClient(q.client_id) : undefined
     if (!client) throw new OAuthError('invalid_client', '未注册的 client_id')
     const redirect = q.redirect_uri ?? (client.redirect_uris.length === 1 ? client.redirect_uris[0] : undefined)
-    if (!redirect || !client.redirect_uris.includes(redirect)) throw new OAuthError('invalid_request', 'redirect_uri 与注册的不一致')
+    if (!redirect || !redirectUriMatches(client.redirect_uris, redirect)) throw new OAuthError('invalid_request', 'redirect_uri 与注册的不一致')
     const back = (error: string, description: string) => ({ redirect: withParams(redirect, { error, error_description: description, state: q.state, iss: origin }) })
     if (q.response_type !== 'code') return back('unsupported_response_type', '只支持 response_type=code')
     if (!q.code_challenge || q.code_challenge_method !== 'S256') return back('invalid_request', '必须用 PKCE（code_challenge_method=S256）')
@@ -180,7 +195,21 @@ export class OAuthService {
       checkResource(str('resource'), origin)
       return this.issue(r.grant_id, clientId)
     }
-    throw new OAuthError('unsupported_grant_type', '只支持 authorization_code 与 refresh_token')
+    if (str('grant_type') === 'urn:ietf:params:oauth:grant-type:device_code') {
+      const deviceCode = str('device_code')
+      if (!deviceCode) throw new OAuthError('invalid_request', '需要 device_code')
+      const polled = this.auth.pollDeviceCode(deviceCode)
+      if (polled.status === 'pending') throw new OAuthError('authorization_pending', polled.error)
+      if (polled.status === 'expired') throw new OAuthError('expired_token', polled.error)
+      if (polled.status === 'consumed') throw new OAuthError('access_denied', polled.error)
+      if (polled.status !== 'approved') throw new OAuthError('invalid_grant', polled.error)
+      const scope = Object.entries(grantModules(polled.grant)).map(([k, v]) => `${k}:${v}`).join(' ')
+      const expiresIn = polled.grant.expires_at
+        ? Math.max(1, Math.floor((Date.parse(polled.grant.expires_at) - Date.now()) / 1000))
+        : ACCESS_TTL_MS / 1000
+      return { access_token: polled.token, token_type: 'Bearer', expires_in: expiresIn, scope }
+    }
+    throw new OAuthError('unsupported_grant_type', '只支持 authorization_code、refresh_token 与 device_code')
   }
 
   /** 撤销（RFC 7009）：访问令牌或刷新令牌都会吊销整条授权。不认识的令牌也回 200。 */
@@ -190,7 +219,7 @@ export class OAuthService {
     if (!m) return
     const grant = this.store.getAgentGrant(m[1]!)
     if (!grant) return
-    const ok = token.startsWith('hr_oat.') ? grant.token_hash === sha256(token.trim()) : !!this.store.takeOAuthRefreshToken(sha256(token.trim()))
+    const ok = token.startsWith('hr_oat.') ? safeEqualHex(grant.token_hash, sha256(token.trim())) : !!this.store.takeOAuthRefreshToken(sha256(token.trim()))
     if (ok) this.store.revokeAgentGrant(grant.id)
   }
 

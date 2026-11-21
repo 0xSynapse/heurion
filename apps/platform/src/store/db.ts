@@ -3309,6 +3309,15 @@ export class Store {
     this.db.prepare('UPDATE agent_grants SET token_hash = ?, token_prefix = ?, expires_at = ? WHERE id = ?').run(tokenHash, tokenPrefix, expiresAt, id)
   }
 
+  /** 清理过期的设备码、OAuth 请求与已用完/过期的授权码和刷新令牌。 */
+  purgeAuthArtifacts(): void {
+    const t = now()
+    this.db.prepare('DELETE FROM agent_device_codes WHERE expires_at <= ?').run(t)
+    this.db.prepare('DELETE FROM oauth_requests WHERE expires_at <= ?').run(t)
+    this.db.prepare('DELETE FROM oauth_codes WHERE expires_at <= ? OR used_at IS NOT NULL').run(t)
+    this.db.prepare('DELETE FROM oauth_refresh_tokens WHERE expires_at <= ? OR used_at IS NOT NULL').run(t)
+  }
+
   touchAgentGrant(id: string, agentId?: string | null): void {
     this.db.prepare('UPDATE agent_grants SET last_used_at = ?, last_agent_id = COALESCE(?, last_agent_id) WHERE id = ?')
       .run(now(), agentId ?? null, id)

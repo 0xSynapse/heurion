@@ -9,9 +9,9 @@ import { chmodIfOwned, CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
 import { buildMcpBundleManifest } from '../aegis/bundle.ts'
-import { authServerMetadata, OAuthError, OAuthService, protectedResourceMetadata } from '../aegis/oauth.ts'
+import { authServerMetadata, OAuthError, OAuthService, protectedResourceMetadata, scopeToModules } from '../aegis/oauth.ts'
 import { cors } from 'hono/cors'
-import { HTTP_PUT_MAX, listDir, readTarget, WorkspaceFileError, writeTarget } from '../aegis/files.ts'
+import { HTTP_PUT_MAX, listDir, readTarget, WorkspaceFileError, writeWorkspaceFile } from '../aegis/files.ts'
 import { aegisEffectiveModules, handleAegisMcpRequest, type McpDeps } from '../mcp/server.ts'
 import { formatModuleGrant, grantModules, MODULE_IDS, MODULES, moduleOf, orgAllowedModules, READ_ONLY_TOOLS, type ModuleId } from '../mcp/modules.ts'
 import { moduleSkillDoc } from '../mcp/skills.ts'
@@ -140,6 +140,10 @@ export interface ApiDeps {
   devMode: boolean
   /** Aegis-OS 接入是否开放（config.aegisEnabled）；关闭时相关接口一律 404。 */
   aegisEnabled?: boolean
+  /** 固定对外公开 Origin（优先用于 OAuth/MCP 发现元数据，防 Host/Forwarded 头投毒）。 */
+  publicOrigin?: string
+  /** 是否信任反向代理发送的 X-Forwarded-Host / X-Forwarded-Proto: http。 */
+  trustProxy?: boolean
   /** 全文索引（改名、复制后立即更新）。 */
   search?: SearchIndex
   /** 参考资料库。 */
@@ -268,18 +272,27 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json(AEGIS_APP_MANIFEST)
   })
 
-  // 请求方看到的站点地址：生产在 Caddy 后面，Node 收到的是 http，按反向代理给的 X-Forwarded-Proto / Host 还原成 https://heurion.org
-  // （只用于拼返回给请求方自己的链接，伪造只影响他自己）
+  // 请求方看到的站点地址：优先取显式配置的 publicOrigin；未配置时校验 Host（仅当 trustProxy=true 时采信 X-Forwarded-Host 或降级 http）
+  const VALID_HOST_RE = /^(?:\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.-]+)(?::\d{1,5})?$/
   const requestOrigin = (c: Context) => {
+    if (deps.publicOrigin) return deps.publicOrigin
     const u = new URL(c.req.url)
-    const proto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim()
-    const host = c.req.header('x-forwarded-host')?.split(',')[0]?.trim() || c.req.header('host') || u.host
-    return `${proto === 'https' || proto === 'http' ? proto : u.protocol.replace(':', '')}://${host}`
+    const rawProto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
+    let proto = u.protocol.replace(':', '')
+    if (rawProto === 'https') proto = 'https'
+    else if (rawProto === 'http' && deps.trustProxy) proto = 'http'
+    const rawXfHost = deps.trustProxy ? c.req.header('x-forwarded-host')?.split(',')[0]?.trim() : undefined
+    const rawHost = c.req.header('host')?.trim()
+    const host = (rawXfHost && VALID_HOST_RE.test(rawXfHost) ? rawXfHost : undefined)
+      || (rawHost && VALID_HOST_RE.test(rawHost) ? rawHost : undefined)
+      || u.host
+    return `${proto}://${host}`
   }
 
   // aegis-os v0.9 的声明式 MCP 清单（aegis-mcp-bundle/v1）：地址按请求的 origin 生成完整 URL
   app.get('/.well-known/mcp-bundle.json', async c => {
     c.header('Cache-Control', 'public, max-age=300')
+    c.header('Vary', 'Host, X-Forwarded-Host, X-Forwarded-Proto')
     return c.json(await buildMcpBundleManifest(requestOrigin(c)))
   })
 
@@ -583,15 +596,32 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   // RFC 8628 / OAuth 客户端（如 aegis-os v0.9 的 `mcp login --device-code`）用表单提交，老客户端用 JSON：两种都收。
   // OAuth 的 scope（空格或逗号分隔，如 `writing:rw literature:r`）在没给 modules 时当作模块权限。
   const readAuthBody = async (c: Context): Promise<Record<string, unknown>> => {
-    let body: Record<string, unknown>
+    const AUTH_BODY_MAX = 16 * 1024
+    const contentLen = Number(c.req.header('content-length') ?? 0)
+    if (Number.isFinite(contentLen) && contentLen > AUTH_BODY_MAX) {
+      throw new OAuthError('invalid_request', '请求体超过 16KB 上限', 413)
+    }
+    const rawBytes = new Uint8Array(await c.req.arrayBuffer())
+    if (rawBytes.byteLength > AUTH_BODY_MAX) {
+      throw new OAuthError('invalid_request', '请求体超过 16KB 上限', 413)
+    }
+    const rawText = new TextDecoder('utf-8').decode(rawBytes)
+    let body: Record<string, unknown> = {}
     if ((c.req.header('content-type') ?? '').includes('application/x-www-form-urlencoded')) {
-      body = Object.fromEntries(new URLSearchParams(await c.req.text()))
+      body = Object.fromEntries(new URLSearchParams(rawText))
       for (const k of ['ttl_secs', 'ttl_days']) if (typeof body[k] === 'string' && body[k] !== '') body[k] = Number(body[k])
-    } else {
-      body = await c.req.json().catch(() => ({})) as Record<string, unknown>
+    } else if (rawText.trim()) {
+      try {
+        const parsed = JSON.parse(rawText)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body = parsed as Record<string, unknown>
+      } catch { /* 保持空对象 */ }
     }
     if ((body.modules === undefined || body.modules === '') && typeof body.scope === 'string' && body.scope.trim()) {
-      body.modules = body.scope.trim().split(/[\s,]+/).filter(Boolean).join(',')
+      const hasValidModuleScope = body.scope.trim().split(/[\s,]+/).some(p => /^[a-z]+(:(r|rw))?$/.test(p) && (MODULE_IDS as readonly string[]).includes(p.split(':')[0]!))
+      if (hasValidModuleScope) {
+        const parsedScope = scopeToModules(body.scope)
+        if (Object.keys(parsedScope).length > 0) body.modules = parsedScope
+      }
     }
     return body
   }
@@ -607,10 +637,21 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (err instanceof OAuthError) return c.json(err.body(), err.status as 400)
     throw err
   }
-  app.get('/.well-known/oauth-authorization-server', c => c.json(authServerMetadata(requestOrigin(c))))
-  app.get('/.well-known/oauth-protected-resource', c => c.json(protectedResourceMetadata(requestOrigin(c), '/api/mcp')))
-  app.get('/.well-known/oauth-protected-resource/*', c => c.json(protectedResourceMetadata(requestOrigin(c), c.req.path.slice('/.well-known/oauth-protected-resource'.length))))
+  app.get('/.well-known/oauth-authorization-server', c => {
+    c.header('Vary', 'Host, X-Forwarded-Host, X-Forwarded-Proto')
+    return c.json(authServerMetadata(requestOrigin(c)))
+  })
+  app.get('/.well-known/oauth-protected-resource', c => {
+    c.header('Vary', 'Host, X-Forwarded-Host, X-Forwarded-Proto')
+    return c.json(protectedResourceMetadata(requestOrigin(c), '/api/mcp'))
+  })
+  app.get('/.well-known/oauth-protected-resource/*', c => {
+    c.header('Vary', 'Host, X-Forwarded-Host, X-Forwarded-Proto')
+    return c.json(protectedResourceMetadata(requestOrigin(c), c.req.path.slice('/.well-known/oauth-protected-resource'.length)))
+  })
   const oauthRegisterLimit = new RateLimiter(30, 60 * 60_000)
+  const deviceIssueLimit = new RateLimiter(20, 15 * 60_000)
+  const tokenIssueLimit = new RateLimiter(120, 5 * 60_000)
   app.post('/oauth/register', async c => {
     if (oauthRegisterLimit.hit(clientIp(c))) return c.json({ error: 'temporarily_unavailable', error_description: '注册太频繁，请稍后再试' }, 429)
     try { return c.json(oauth.register(await c.req.json().catch(() => ({})) as Record<string, unknown>), 201) } catch (err) { return oauthFail(c, err) }
@@ -626,19 +667,25 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
   app.post('/oauth/token', async c => {
     c.header('Cache-Control', 'no-store')
+    if (tokenIssueLimit.hit(clientIp(c))) return c.json({ error: 'slow_down', error_description: '请求过于频繁，请稍后再试' }, 429)
     try { return c.json(oauth.token(await readAuthBody(c), requestOrigin(c))) } catch (err) { return oauthFail(c, err) }
   })
   app.post('/oauth/revoke', async c => {
-    const body = await readAuthBody(c)
-    oauth.revoke(typeof body.token === 'string' ? body.token : undefined)
-    return c.body(null, 200)
+    try {
+      const body = await readAuthBody(c)
+      oauth.revoke(typeof body.token === 'string' ? body.token : undefined)
+      return c.body(null, 200)
+    } catch (err) { return oauthFail(c, err) }
   })
 
   app.post('/api/aegis/auth/device', async c => {
     if (viaByReq.get(c.req.raw)) {
       return c.json({ error: 'AI 不能自行发起设备授权码', code: 'human_only' }, 403)
     }
-    const body = await readAuthBody(c) as {
+    if (deviceIssueLimit.hit(clientIp(c))) {
+      return c.json({ error: 'slow_down', error_description: '请求过于频繁，请稍后再试', code: 'rate_limited' }, 429)
+    }
+    let body: {
       name?: string
       node_pubkey?: string
       tool_scope?: 'all' | 'canvas' | 'clinical' | 'research' | 'readonly'
@@ -647,11 +694,20 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       ttl_secs?: number
     }
     try {
+      body = await readAuthBody(c) as typeof body
+    } catch (err) {
+      if (err instanceof OAuthError) return c.json({ ...err.body(), code: err.error }, err.status as 413)
+      throw err
+    }
+    const defaultModules = body.modules === undefined && body.tool_scope === undefined
+      ? { writing: 'rw', literature: 'rw', knowledge: 'rw', memory: 'rw', admin: 'r' }
+      : body.modules
+    try {
       const created = aegisAuth.createDeviceCode({
         name: body.name,
         nodePubkey: body.node_pubkey ?? null,
         toolScope: body.tool_scope ?? 'all',
-        modules: body.modules,
+        modules: defaultModules,
         writeMode: body.write_mode ?? 'tracked',
         ttlSecs: body.ttl_secs,
       })
@@ -664,10 +720,14 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
 
   app.post('/api/aegis/auth/token', async c => {
+    c.header('Cache-Control', 'no-store')
     if (viaByReq.get(c.req.raw)) {
       return c.json({ error: 'AI 不能自行签发 Aegis 授权令牌', code: 'human_only' }, 403)
     }
-    const body = await readAuthBody(c) as {
+    if (tokenIssueLimit.hit(clientIp(c))) {
+      return c.json({ error: 'slow_down', error_description: '请求过于频繁，请稍后再试', code: 'rate_limited' }, 429)
+    }
+    let body: {
       grant_type?: string
       device_code?: string
       username?: string
@@ -681,6 +741,15 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       write_mode?: 'direct' | 'tracked'
       ttl_days?: number | null
     }
+    try {
+      body = await readAuthBody(c) as typeof body
+    } catch (err) {
+      if (err instanceof OAuthError) return c.json({ ...err.body(), code: err.error }, err.status as 413)
+      throw err
+    }
+    const expiresInSec = (expiresAt: string | null) => expiresAt
+      ? Math.max(1, Math.floor((Date.parse(expiresAt) - Date.now()) / 1000))
+      : undefined
     if (body.device_code) {
       const polled = aegisAuth.pollDeviceCode(body.device_code)
       // RFC 8628 §3.5：标准客户端读顶层 error 的英文错误码决定继续轮询还是放弃，中文说明放 error_description；code 保留给老客户端
@@ -697,6 +766,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
           code: polled.status === 'consumed' ? 'token_already_consumed' : 'invalid_device_code',
         }, 400)
       }
+      const expIn = expiresInSec(polled.grant.expires_at)
       return c.json({
         access_token: polled.token,
         token_type: 'Bearer',
@@ -718,6 +788,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         modules: grantModules(polled.grant),
         write_mode: polled.grant.write_mode,
         expires_at: polled.grant.expires_at,
+        ...(expIn !== undefined ? { expires_in: expIn } : {}),
       }, 201)
     }
     let userId = accounts.userFor(requestToken(c))
@@ -750,6 +821,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         detail: `Aegis Grant ${issued.grant.name} (modules=${formatModuleGrant(grantModules(issued.grant))})`,
         status: 201,
       })
+      const expIn = expiresInSec(issued.grant.expires_at)
       return c.json({
         access_token: issued.token,
         token_type: 'Bearer',
@@ -771,6 +843,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
         modules: grantModules(issued.grant),
         write_mode: issued.grant.write_mode,
         expires_at: issued.grant.expires_at,
+        ...(expIn !== undefined ? { expires_in: expIn } : {}),
       }, 201)
     } catch (err) {
       return c.json({ error: (err as Error).message, code: 'bad_grant_request' }, 400)
@@ -779,7 +852,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
 
   app.delete('/api/aegis/auth/token', async c => {
     const rawBearer = requestToken(c)?.trim() ?? ''
-    if (/^(?:aegis_at_[a-z0-9_-]+|h1_agt)\./.test(rawBearer)) {
+    if (/^(?:aegis_at_[a-z0-9_-]+|h1_agt|hr_pat|hr_oat)\./.test(rawBearer)) {
       const v = aegisAuth.verifyGrantToken(rawBearer)
       if (!v.ok) return c.json({ error: v.error, code: v.code }, 401)
       store.revokeAgentGrant(v.verified.grant.id, v.verified.user.id)
@@ -817,11 +890,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   for (const base of ['/api/mcp', '/api/aegis/mcp']) {
     app.use(base, mcpCors)
     app.use(`${base}/*`, mcpCors)
-    app.post(base, async c => withAuthChallenge(c, await handleAegisMcpRequest(aegisMcpDeps, c.req.raw)))
-    // 按模块的地址：只挂这一个模块的工具（还要在授权的模块权限里）
-    app.post(`${base}/:module`, async c => withAuthChallenge(c, await handleAegisMcpRequest(aegisMcpDeps, c.req.raw, c.req.param('module'))))
   }
-  // 模块目录（公开）：客户端据此挑选要接的模块；与 AAP 清单内容一致，地址用通用的 /api/mcp
+  // 模块目录（公开）：客户端据此挑选要接的模块（须注册在 /api/mcp/:module 通配之前）
   app.get('/api/mcp/modules', c => {
     c.header('Cache-Control', 'public, max-age=300')
     return c.json({
@@ -834,6 +904,15 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       })),
     })
   })
+  for (const base of ['/api/mcp', '/api/aegis/mcp']) {
+    app.post(base, async c => withAuthChallenge(c, await handleAegisMcpRequest(aegisMcpDeps, c.req.raw)))
+    app.get(base, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+    app.delete(base, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+    // 按模块的地址：只挂这一个模块的工具（还要在授权的模块权限里）
+    app.post(`${base}/:module`, async c => withAuthChallenge(c, await handleAegisMcpRequest(aegisMcpDeps, c.req.raw, c.req.param('module'))))
+    app.get(`${base}/:module`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+    app.delete(`${base}/:module`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+  }
 
   // 外部智能体的大文件直传 / 取回（aegis/files.ts）：同一令牌；写入要有读写模块，落在工作区 aegis-files/ 下
   const aegisFileAuth = (c: Context, write: boolean) => {
@@ -845,7 +924,30 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (!perms.length || (write && !perms.includes('rw'))) return { error: c.json({ error: '当前授权不能' + (write ? '写入' : '读取') + '工作区文件', code: 'forbidden' }, 403) }
     return { userId: v.verified.user.id }
   }
-  const aegisFilePath = (c: Context, base: string) => decodeURIComponent(c.req.path.slice(`${base}/`.length))
+  const aegisFilePath = (c: Context, base: string) => {
+    try { return decodeURIComponent(c.req.path.slice(`${base}/`.length)) }
+    catch { throw new WorkspaceFileError('bad_path', '无效路径编码', 400) }
+  }
+  const streamPutBytes = async (req: Request, maxBytes: number): Promise<Uint8Array | null> => {
+    if (!req.body) return new Uint8Array(0)
+    const reader = req.body.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {})
+        return null
+      }
+      chunks.push(value)
+    }
+    const out = new Uint8Array(total)
+    let offset = 0
+    for (const ch of chunks) { out.set(ch, offset); offset += ch.byteLength }
+    return out
+  }
   for (const base of ['/api/mcp/files', '/api/aegis/files']) {
     app.put(`${base}/:path{.+}`, async c => {
       const a = aegisFileAuth(c, true)
@@ -853,10 +955,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       const len = Number(c.req.header('content-length') ?? 0)
       if (len > HTTP_PUT_MAX) return c.json({ error: `文件超过 ${HTTP_PUT_MAX / 1024 / 1024}MB`, code: 'too_large' }, 413)
       try {
-        const bytes = new Uint8Array(await c.req.arrayBuffer())
-        if (bytes.byteLength > HTTP_PUT_MAX) return c.json({ error: `文件超过 ${HTTP_PUT_MAX / 1024 / 1024}MB`, code: 'too_large' }, 413)
-        const t = writeTarget(aegisMcpDeps.workspaceDir(a.userId), aegisFilePath(c, base))
-        writeFileSync(t.abs, bytes)
+        const bytes = await streamPutBytes(c.req.raw, HTTP_PUT_MAX)
+        if (bytes === null) return c.json({ error: `文件超过 ${HTTP_PUT_MAX / 1024 / 1024}MB`, code: 'too_large' }, 413)
+        const t = writeWorkspaceFile(aegisMcpDeps.workspaceDir(a.userId), aegisFilePath(c, base), bytes)
         return c.json({ path: t.rel, bytes: bytes.byteLength }, 201)
       } catch (err) {
         if (err instanceof WorkspaceFileError) return c.json({ error: err.message, code: err.code }, err.status as 400)
@@ -1104,7 +1205,18 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     try { return c.json(tenants.view(c.get('user'))) } catch (err) { return tenantFailure(c, err) }
   })
   app.patch('/api/tenant', async c => {
-    try { return c.json(tenants.update(c.get('user'), await c.req.json())) } catch (err) { return tenantFailure(c, err) }
+    try {
+      const body = await c.req.json() as { settings?: Record<string, unknown> }
+      if (
+        viaByReq.get(c.req.raw) &&
+        body?.settings &&
+        typeof body.settings === 'object' &&
+        (body.settings.aegis_modules !== undefined || body.settings.external_model_for_patients !== undefined)
+      ) {
+        return c.json({ error: '机构患者外发与外部智能体开关只能由管理员本人在界面修改', code: 'human_only' }, 403)
+      }
+      return c.json(tenants.update(c.get('user'), body))
+    } catch (err) { return tenantFailure(c, err) }
   })
   app.get('/api/tenant/members', c => {
     try { return c.json(tenants.members(c.get('user'))) } catch (err) { return tenantFailure(c, err) }
