@@ -48,6 +48,9 @@ services:
       # 影像分析同时派发数（按用户轮转排队）；worker 侧另有内存预算排队
       - IMAGING_PIPELINE_CONCURRENCY=1
       - DOC_PARSER_URL=http://doc-parser:8005
+      # 外部智能体接入（Aegis-OS / MCP，docs/design/MCP_MODULES.md）：开放设置页授权与 /api/aegis/*；
+      # 患者、影像、研究、分析模块仍需机构在机构设置里逐个打开
+      - HEURION_AEGIS=1
     volumes:
       # 平台数据：SQLite（文档、版本、评论、资料库、记忆、账户）、用户工作区、渲染缓存、OCR 语言模型
       - data:/app/data

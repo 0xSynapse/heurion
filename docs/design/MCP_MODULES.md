@@ -1,6 +1,6 @@
 # MCP 模块化与 Aegis-OS 接入
 
-**状态：** 阶段 0–4 已完成；阶段 5 用单一地址跑通，按模块挂载与回合粒度等 Aegis 侧（§3.7）。生产环境仍未打开 `HEURION_AEGIS`（见 §5 阶段表）· 本文是 MCP 对外接入与 Aegis 融合的**唯一**现行文档，实施时在这里更新状态。取代已删除的 `design/AEGIS_APP_PROTOCOL.md` 与 aegis-app-sdk 包的 README（历史版本见 git）。
+**状态：** 阶段 0–4 已完成；阶段 5 用单一地址跑通，按模块挂载与回合粒度等 Aegis 侧（§3.7）。生产环境已打开 `HEURION_AEGIS`（2026-11-21；见 §5 阶段表）· 本文是 MCP 对外接入与 Aegis 融合的**唯一**现行文档，实施时在这里更新状态。取代已删除的 `design/AEGIS_APP_PROTOCOL.md` 与 aegis-app-sdk 包的 README（历史版本见 git）。
 
 ## 1. 目标与用户体验
 
@@ -23,7 +23,7 @@ Heurion 现在主要给人用：浏览器登录、在界面里操作；AI 经平
 
 两条路径都由 `buildMcpServer()`（`apps/platform/src/mcp/server.ts`）构建；外部路径经 `buildAegisMcpServer()` 包一层，加上模块权限 `aegisModules`、观察记录键、租约检查 `leaseAuthorizer`、代理 id 与回合前缀 `aegis:<agent>:`。
 
-**开关：** 外部路径全部受 `HEURION_AEGIS` 控制（`config.ts` 的 `aegisEnabled`，默认关，生产环境关）。关闭时 `/api/aegis/*` 与 `/.well-known/aegis-*` 一律 404。
+**开关：** 外部路径全部受 `HEURION_AEGIS` 控制（`config.ts` 的 `aegisEnabled`，代码默认关；生产 2026-11-21 起在 `deploy/docker-compose.yml` 打开）。关闭时 `/api/aegis/*` 与 `/.well-known/aegis-*` 一律 404。
 
 ### 2.2 已实现的 AAP-1.0 部件
 
@@ -112,7 +112,7 @@ interface HeurionModule {
 
 - **文件进出**：平台接收文件的工具（数据集、资料库、文档导入、院徽、记忆导入、资产）都按用户工作区解析 `path` / `file_path`，所以不逐个改工具，而是给外部智能体一条进出工作区的通道（`aegis/files.ts`）：
   - MCP 工具 `workspace_put`（base64，≤10MB，落在工作区 `aegis-files/` 下，返回 path）、`workspace_get`（≤5MB 直接返回文字或 base64，更大的给下载地址）、`workspace_list`（`mcp/workspace-tools.ts`）。只在外部网关注册、挂在每个模块的地址上（`SHARED_TOOLS`），dsh 不注册；只读授权只挂后两个。
-  - HTTP `PUT / GET /api/aegis/files/<path>`（同一授权令牌，写入要有读写模块，≤200MB）。
+  - HTTP `PUT / GET /api/aegis/files/<path>`（同一授权令牌，写入要有读写模块，≤100MB）。
   - 一律按真实路径判断，`..`、绝对路径、指到工作区外的符号链接都拒绝。
   - `asset_upload`、`report_upload` 原本就支持 `data_base64`；`dataset_open`、`labs_open` 对外部智能体默认直接返回内容。
   - 影像工具的 `file_path` 不在此列：AI 直接给的影像路径本来就被 `tenancy/imaging-guard.ts` 拦下，影像只能经患者档案进入。
@@ -129,7 +129,7 @@ dsh 回合的数据外发边界由 `harness/profile/heurion.cordis.yml` 守住�
 - 生效方式：每次请求都用「授权的模块权限 ∩ 用户所在机构允许的模块」（`aegisEffectiveModules`，`mcp/server.ts`），MCP 网关、文件直传、授权列表一致；机构打开或关掉立即生效，不用重新授权。被挡住的模块地址返回 403 `module_not_allowed_by_org`。设置页签发授权时这些模块显示「机构未开启」、不能选；已有授权里被挡住的模块标出「暂不可用」。
 - 审计：这四个模块的每次工具调用记一条 `aegis.tool_call`（用户、智能体 id、工具与模块、授权 id、患者 / 数据集 / 研究等资源 id、成功与否），归到用户所在机构，机构管理员在「安全审计」里可查。默认开放的模块不记。
 - 外部智能体自己也可以经 `tenant_admin update_settings` 提议打开，但那是需确认的操作，要用户批准租约。
-- 生产环境：阶段 4 只实现策略，`HEURION_AEGIS` 仍关闭；阶段 5 用 agy 端到端跑通后再决定打开。
+- 生产环境：阶段 4 只实现策略；阶段 5 单一地址跑通后于 2026-11-21 打开 `HEURION_AEGIS`。
 
 ### 3.6 Aegis 侧约定（代码不在本仓库）
 
@@ -183,13 +183,14 @@ dsh 回合的数据外发边界由 `harness/profile/heurion.cordis.yml` 守住�
 
 1. ~~模块划分~~：按 §3.2 的九个（2026-11-21 定）。
 2. ~~部署形态~~：同一进程按模块出多个地址（2026-11-21 定）。
-3. ~~患者类模块对外部智能体的开放策略~~：机构开关、默认关、调用审计（§3.5，2026-11-21 定）；生产环境等阶段 5 后再决定是否打开。
+3. ~~患者类模块对外部智能体的开放策略~~：机构开关、默认关、调用审计（§3.5，2026-11-21 定）；生产环境已于 2026-11-21 打开。
 4. 外部智能体能否用子专家委派（`delegate_task`）、其工具失败是否记进执行信号：阶段 1 暂不开放、不记录。开放 `delegate_task` 前，它的入组数据守卫要先接租约授权；执行信号若要记录，需带来源标记，避免第三方调用噪声混进 dsh 的演进。
 5. dsh 的 doc / deck 范围（`mcp/scope.ts`）按模块计算：未做。现行范围不是模块的并集（稿件范围里有 `doc_manage`、`dataset_manage` 等管理工具），改成按模块会改变 dsh 在稿件回合里能用的工具，需要单独评估；外部接入不受影响。
 6. ~~外部智能体在「只存了摘要的文献」所在句子里写数字~~：不拒绝（全文可能在付费墙后），整批转为待采纳修订，由人对照全文确认后采纳；dsh 与外部智能体同一规则（`ops/service.ts` 的 `guardProvenance`，PROVENANCE.md 2.2；2026-11-21 定）。
 
 ## 7. 变更记录
 
+- 2026-11-21：生产环境打开 `HEURION_AEGIS`（`deploy/docker-compose.yml`）：设置页「智能体授权」与机构设置里的模块开关对用户可见；患者、影像、研究、分析仍默认关。大文件直传上限降到 100MB，与 Caddy 的请求体限制一致。
 - 2026-11-21：来源规则二收紧：文献只有摘要、数字在摘要里找不到时，整批转为待采纳修订（原为写入并提示核对；dsh 与外部智能体同一规则）。
 - 2026-11-21：阶段 5（部分）：agy 经 Aegis-OS 单一地址端到端跑通写作 + 文献；记录 Aegis 侧 5 处缺口与规则二的摘要缺口（§3.7、§6 第 6 项）。
 - 2026-11-21：阶段 4 完成：患者、影像、研究、分析四个模块对外部智能体默认关，机构逐个打开、立即生效，调用记审计；生产环境仍不打开（§6 第 3 项已定）。
