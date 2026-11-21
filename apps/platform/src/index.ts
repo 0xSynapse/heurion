@@ -48,7 +48,7 @@ import { CrossrefClient } from './literature/crossref.ts'
 import { OpenAlexClient } from './literature/openalex.ts'
 import { FullTextClient } from './literature/fulltext.ts'
 import { PubMedClient } from './literature/pubmed.ts'
-import { handleAegisMcp, handleMcp } from './mcp/server.ts'
+import { handleMcp } from './mcp/server.ts'
 import { TurnRegistry } from './mcp/turns.ts'
 import { Documents } from './model/runtime.ts'
 import { OpService } from './ops/service.ts'
@@ -245,7 +245,7 @@ if (config.reviewVisionModel) VISION_MODELS.add(config.reviewVisionModel)
 const reviewVision = config.reviewTableVision
   ? makeVisionComplete({ upstream: config.llmUpstream, apiKey: config.deepseekApiKey, model: config.reviewVisionModel || config.model, timeoutMs: 120_000 })
   : null
-const app = buildApi({ docs, reviewVision, reviewComplete: llmComplete, fulltext, claims, ops, turns, turnRegistry: registry, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, aegisEnabled: config.aegisEnabled, imagingAcceptIdentified: config.imagingAcceptIdentified, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, alerts, workspaceDir: userId => pool.workspaceDir(userId) })
+const app = buildApi({ docs, reviewVision, reviewComplete: llmComplete, fulltext, claims, ops, turns, turnRegistry: registry, mcpDeps, postcheck, crossref, pubmed, openalex, renderer, accounts, devMode: config.devMode, aegisEnabled: config.aegisEnabled, imagingAcceptIdentified: config.imagingAcceptIdentified, devUser: config.devUser, search, kb, memory, evolution, skillTrainer, datasets, patients, shares, studies, cohort, images, access, mail, calendar, pdfOcr: reportOcr, docParser, alerts, workspaceDir: userId => pool.workspaceDir(userId) })
 // MCP 的管理类工具以用户身份进程内调用同一个 HTTP 应用（AI 的权限 = 用户的权限，见 http/invoke.ts）
 ;(mcpDeps as { invoke?: Invoke }).invoke = makeInvoker(app)
 
@@ -400,13 +400,6 @@ const server = createServer((req, res) => {
     handleLlmProxy({ secret: config.secret, upstream: config.llmUpstream, apiKey: config.deepseekApiKey, isLive: (u, s) => pool.isLive(u, s) }, req, res).catch(err => {
       console.error('[llm-proxy]', err)
       if (!res.headersSent) res.writeHead(502).end()
-    })
-    return
-  }
-  if (config.aegisEnabled && (req.url?.startsWith('/api/aegis/mcp') || req.url?.startsWith('/api/mcp')) && (req.headers.accept ?? '').includes('text/event-stream')) {
-    handleAegisMcp(mcpDeps, req, res).catch(err => {
-      console.error('[aegis-mcp]', err)
-      if (!res.headersSent) res.writeHead(500).end(String(err))
     })
     return
   }

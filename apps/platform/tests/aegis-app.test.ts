@@ -22,6 +22,8 @@ import { buildApi } from '../src/http/api.ts'
 import type { CrossrefClient } from '../src/literature/crossref.ts'
 import type { PubMedClient } from '../src/literature/pubmed.ts'
 import { TurnRegistry } from '../src/mcp/turns.ts'
+import type { McpDeps } from '../src/mcp/server.ts'
+import { ClaimService } from '../src/claims/service.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { OpService } from '../src/ops/service.ts'
 import { SlideRenderer } from '../src/render/slides.ts'
@@ -30,7 +32,7 @@ import { kekFrom, TenantKeys } from '../src/tenancy/keys.ts'
 import { PatientService } from '../src/tenancy/patients.ts'
 import { TurnService } from '../src/turns/service.ts'
 
-function createTestEnv(opts: { aegisEnabled?: boolean } = {}) {
+function createTestEnv(opts: { aegisEnabled?: boolean; mcpDeps?: (base: { docs: Documents; ops: OpService; registry: TurnRegistry; dir: string }) => McpDeps } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'heurion-aegis-'))
   const store = new Store(':memory:')
   const docs = new Documents(store)
@@ -94,6 +96,7 @@ function createTestEnv(opts: { aegisEnabled?: boolean } = {}) {
     patients,
     datasets,
     workspaceDir: () => dir,
+    ...(opts.mcpDeps ? { mcpDeps: opts.mcpDeps({ docs, ops, registry, dir }) } : {}),
   })
 
   // 注册一名医生用户（首个用户为平台运营 + 个人机构管理员）
@@ -820,5 +823,84 @@ describe('Aegis Application Protocol (AAP-1.0) & Heurion 2.0 第一方集成', (
     )
     expect(created.isError).toBe(false)
     expect(created.body.doc_id).toBeTruthy()
+  })
+})
+
+describe('AAP-1.0 网关（阶段 1：一个处理函数、与 dsh 同一份依赖）', () => {
+  const issue = async (app: ReturnType<typeof createTestEnv>['app']) => {
+    const res = await app.request('/api/aegis/auth/token', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'dr_zhang', password: 'Password123!', name: 'test-node', node_pubkey: generateAegisNodeKeyPair().publicKey, tool_scope: 'all' }),
+    })
+    return ((await res.json()) as { access_token: string }).access_token
+  }
+  const rpc = (app: ReturnType<typeof createTestEnv>['app'], token: string, body: unknown, accept?: string) => app.request('/api/aegis/mcp', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, 'x-aegis-agent-id': 'agent-p1', ...(accept ? { accept } : {}) },
+    body: JSON.stringify(body),
+  })
+
+  it('标准 MCP 客户端：initialize 握手、声明 SSE 的客户端也拿到 JSON、批量请求、通知', async () => {
+    const { app } = createTestEnv()
+    const token = await issue(app)
+    const init = await rpc(app, token, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'agy', version: '0' } } }, 'application/json, text/event-stream')
+    expect(init.status).toBe(200)
+    expect(init.headers.get('content-type')).toContain('application/json')
+    expect(init.headers.get('x-aegis-turn-id')).toMatch(/^aegis:agent-p1:/)
+    expect(((await init.json()) as { result: { serverInfo: { name: string } } }).result.serverInfo.name).toBe('heurion')
+
+    const batch = await rpc(app, token, [
+      { jsonrpc: '2.0', id: 'a', method: 'tools/call', params: { name: 'doc_list', arguments: {} } },
+      { jsonrpc: '2.0', id: 'b', method: 'tools/list', params: {} },
+    ])
+    expect(batch.status).toBe(200)
+    const out = (await batch.json()) as Array<{ id: string; result: { content?: unknown; tools?: Array<{ name: string }> } }>
+    expect(out.map(r => r.id).sort()).toEqual(['a', 'b'])
+    expect(out.find(r => r.id === 'b')!.result.tools!.some(t => t.name === 'doc_edit')).toBe(true)
+
+    const note = await rpc(app, token, { jsonrpc: '2.0', method: 'notifications/initialized' })
+    expect(note.status).toBe(202)
+  })
+
+  it('网关用的是传入的 dsh 依赖；但不挂子专家委派、工具失败不记进 dsh 的执行信号', async () => {
+    const failures: Array<{ code: string }> = []
+    const searched: string[] = []
+    const { app } = createTestEnv({
+      mcpDeps: ({ docs, ops, registry, dir }) => ({
+        docs, ops, turns: registry, secret: 's', claims: new ClaimService(docs, {} as PubMedClient), renderer: new SlideRenderer(join(dir, 'r2')),
+        pubmed: { search: async (q: string) => { searched.push(q); return [] } } as unknown as PubMedClient,
+        crossref: {} as CrossrefClient, workspaceDir: () => dir, isLiveSession: () => true,
+        subagents: {} as McpDeps['subagents'],
+        executionSignals: { recordToolFailure: (f: { code: string }) => { failures.push(f) } } as unknown as McpDeps['executionSignals'],
+      }),
+    })
+    const token = await issue(app)
+    const search = await rpc(app, token, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'pubmed_search', arguments: { query: 'esophageal cancer' } } })
+    expect(search.status).toBe(200)
+    expect(searched).toEqual(['esophageal cancer'])
+    const tools = (await (await rpc(app, token, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json()) as { result: { tools: Array<{ name: string }> } }
+    expect(tools.result.tools.map(t => t.name)).not.toContain('delegate_task')
+    const res = await rpc(app, token, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'doc_read', arguments: { doc_id: 'no-such-doc' } } })
+    expect(((await res.json()) as { result: { isError: boolean } }).result.isError).toBe(true)
+    expect(failures).toEqual([])
+  })
+
+  it('不带 JSON Content-Type 的请求（如 curl -d）也按 JSON-RPC 处理', async () => {
+    const { app } = createTestEnv()
+    const token = await issue(app)
+    const res = await app.request('/api/aegis/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { result: { tools: unknown[] } }).result.tools.length).toBeGreaterThan(0)
+  })
+
+  it('旧的 /api/mcp 别名已移除；网关只接受 POST', async () => {
+    const { app } = createTestEnv()
+    const token = await issue(app)
+    expect((await app.request('/api/mcp', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' })).status).not.toBe(200)
+    expect((await app.request('/api/aegis/mcp', { method: 'GET', headers: { authorization: `Bearer ${token}` } })).status).not.toBe(200)
   })
 })

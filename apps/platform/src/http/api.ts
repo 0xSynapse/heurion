@@ -8,7 +8,7 @@ import { H_AS, internalVia, makeInvoker, type Invoke, type ViaInfo } from './inv
 import { chmodIfOwned, CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
-import { handleAegisMcpJsonRpc, type McpDeps } from '../mcp/server.ts'
+import { handleAegisMcpRequest, type McpDeps } from '../mcp/server.ts'
 import { TurnRegistry } from '../mcp/turns.ts'
 import { ClaimService, type ReviewProgress } from '../claims/service.ts'
 import { detectRegression, reviewQualityReport, trackReview } from '../claims/review-quality.ts'
@@ -73,7 +73,7 @@ import { exportFontsParam, withFonts } from '../convert/fonts.ts'
 import { templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
 import { newTemplateDeck } from '../ops/deck.ts'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { slideRenderKey, type SlideRenderer } from '../render/slides.ts'
@@ -185,6 +185,11 @@ export interface ApiDeps {
   calendar?: CalendarService
   /** Aegis-OS / MCP 共享回合注册表（可选；不传时在 buildApi 内自动创建）。 */
   turnRegistry?: TurnRegistry
+  /**
+   * 平台内 dsh 回合用的 MCP 依赖（index.ts 的 mcpDeps）。给了就让 Aegis 网关用同一份，
+   * 保证外部智能体与 dsh 的工具行为一致；只在测试里不给，此时按本函数的依赖现拼一份。
+   */
+  mcpDeps?: McpDeps
   devUser: string
 }
 
@@ -274,7 +279,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   const aegisTurnRegistry = deps.turnRegistry ?? ((turns as unknown as { registry?: TurnRegistry })?.registry ?? new TurnRegistry())
   const aegisPubmed = deps.pubmed ?? new PubMedClient(fetch)
   const sharedClaims = deps.claims ?? new ClaimService(docs, aegisPubmed, deps.fulltext ?? null)
-  const aegisMcpDeps: McpDeps = {
+  const aegisMcpDeps: McpDeps = deps.mcpDeps ?? {
     docs,
     ops,
     claims: sharedClaims,
@@ -284,7 +289,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     crossref: deps.crossref,
     openalex: deps.openalex,
     ...(deps.fulltext ? { fulltext: deps.fulltext } : {}),
-    secret: 'aegis-internal-secret',
+    // 以下两项只给 dsh 的 /mcp 校验平台签发的令牌用；Aegis 网关用授权令牌（AegisAuthService），不经过它们
+    secret: randomBytes(32).toString('hex'), // 每进程随机，防止将来有人误用它签名时落到空密钥
     devMode: deps.devMode,
     devUser: deps.devUser,
     workspaceDir: deps.workspaceDir ?? (() => tmpdir()),
@@ -691,7 +697,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     return c.json({ ok: true, revoked_grant_id: grantId })
   })
 
-  app.post('/api/aegis/mcp', c => handleAegisMcpJsonRpc(aegisMcpDeps, c.req.raw))
+  app.post('/api/aegis/mcp', c => handleAegisMcpRequest(aegisMcpDeps, c.req.raw))
 
   // 鉴权：账户令牌（开发模式下也接受开发令牌，见 auth/accounts.ts）。EventSource / <img> 用 ?token=。
   app.use('/api/*', async (c, next) => {

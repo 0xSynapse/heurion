@@ -9,7 +9,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, relative, isAbsolute } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { z } from 'zod'
 import { canAccess, verifyToken, type Permission, type TokenClaims } from '../auth/token.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
@@ -2681,7 +2681,9 @@ export function buildAegisMcpServer(
     }
   }
 
-  const server = buildMcpServer(deps, claims, {
+  // 外部智能体不挂子专家委派（delegate_task 的入组数据守卫未接租约授权），工具失败也不记进 dsh 的执行信号
+  // （那些信号用于 dsh 的记忆与技能演进，不该混进第三方智能体的调用噪声）。是否开放见 MCP_MODULES.md §6。
+  const server = buildMcpServer({ ...deps, subagents: undefined, executionSignals: undefined }, claims, {
     agentId,
     leaseAuthorizer,
     aegisToolScope: grant.tool_scope,
@@ -2691,32 +2693,17 @@ export function buildAegisMcpServer(
 }
 
 /**
- * AAP-1.0 统一 MCP 网关（Node HTTP StreamableHTTPServerTransport 处理器，挂载于 `/api/aegis/mcp` 与 `/api/mcp`）。
+ * AAP-1.0 MCP 网关（`/api/aegis/mcp`，挂在 Hono 上）：一个处理函数承担全部外部智能体请求。
+ *
+ * 用 MCP SDK 的 Web 标准 Streamable HTTP 传输（无状态、每个请求新建 server）；响应一律用 JSON
+ * （enableJsonResponse），批量请求与通知按协议处理。只声明 `Accept: application/json` 的客户端
+ * 照常可用：缺少 text/event-stream 时补齐（协议要求两者都声明，但本网关从不回 SSE 流）。
+ * 依赖与平台内 dsh 回合用的是同一份（index.ts 的 mcpDeps）。
  */
-export async function handleAegisMcp(deps: McpDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const built = buildAegisMcpServer(deps, {
-    authHeader: req.headers.authorization ?? '',
-    agentId: (req.headers['x-aegis-agent-id'] as string | undefined) ?? null,
-    orgId: (req.headers['x-aegis-org-id'] as string | undefined) ?? null,
-    turnIdHeader: (req.headers['x-aegis-turn-id'] as string | undefined) ?? null,
-    leaseTokenHeader: (req.headers['x-aegis-lease-token'] as string | undefined) ?? null,
-  })
-  if (!built.ok) {
-    res.writeHead(built.status, { 'content-type': 'application/json; charset=utf-8' })
-      .end(JSON.stringify({ error: built.error, code: built.code }))
-    return
-  }
-  const { server } = built
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-  res.on('close', () => { void transport.close(); void server.close() })
-  await server.connect(transport)
-  await transport.handleRequest(req, res)
-}
+/** 外部网关单个请求的上限：超时回 504，连接与本次请求的 server 一并释放（工具本身不中断）。 */
+const AEGIS_MCP_TIMEOUT_MS = 120_000
 
-/**
- * AAP-1.0 统一 MCP 网关（Web Fetch / JSON-RPC 处理器，供 Hono `app.request('/api/aegis/mcp')` 直接调用）。
- */
-export async function handleAegisMcpJsonRpc(deps: McpDeps, req: Request): Promise<Response> {
+export async function handleAegisMcpRequest(deps: McpDeps, req: Request): Promise<Response> {
   const built = buildAegisMcpServer(deps, {
     authHeader: req.headers.get('authorization') ?? '',
     agentId: req.headers.get('x-aegis-agent-id'),
@@ -2731,49 +2718,33 @@ export async function handleAegisMcpJsonRpc(deps: McpDeps, req: Request): Promis
     })
   }
   const { server } = built
-  const body = await req.json().catch(() => null) as { jsonrpc?: string; id?: unknown; method?: string; params?: unknown } | null
-  if (!body || typeof body.method !== 'string') {
-    await server.close()
-    return new Response(JSON.stringify({ error: '无效的 MCP JSON-RPC 请求体', code: 'invalid_jsonrpc' }), {
-      status: 400,
-      headers: { 'content-type': 'application/json; charset=utf-8' },
-    })
+  const accept = req.headers.get('accept') ?? ''
+  let request = req
+  const contentType = req.headers.get('content-type') ?? ''
+  // 请求体一律按 JSON-RPC 解析：补齐 Accept，并把缺失或不对的 Content-Type 改成 JSON（如 curl -d 默认的表单类型）
+  if (req.method === 'POST' && (!(accept.includes('application/json') && accept.includes('text/event-stream')) || !contentType.includes('application/json'))) {
+    const headers = new Headers(req.headers)
+    headers.set('accept', 'application/json, text/event-stream')
+    headers.set('content-type', 'application/json')
+    request = new Request(req.url, { method: req.method, headers, body: await req.arrayBuffer() })
   }
-
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  await server.connect(serverTransport)
-  await clientTransport.start()
-
+  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const reqId = body.id ?? 1
-    const responseMsg = await new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('MCP request timeout')), 15_000)
-      clientTransport.onmessage = msg => {
-        if ('id' in msg && msg.id === reqId) {
-          clearTimeout(timer)
-          resolve(msg)
-        }
-      }
-      clientTransport.onerror = err => {
-        clearTimeout(timer)
-        reject(err)
-      }
-      void clientTransport.send({
-        jsonrpc: '2.0',
-        id: reqId as string | number,
-        method: body.method!,
-        params: (body.params as Record<string, unknown>) ?? {},
-      })
+    await server.connect(transport)
+    const timeout = new Promise<Response>(resolve => {
+      timer = setTimeout(() => resolve(new Response(
+        JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32001, message: `请求超过 ${AEGIS_MCP_TIMEOUT_MS / 1000} 秒未完成` } }),
+        { status: 504, headers: { 'content-type': 'application/json; charset=utf-8' } },
+      )), AEGIS_MCP_TIMEOUT_MS)
     })
-    return new Response(JSON.stringify(responseMsg), {
-      status: 200,
-      headers: {
-        'content-type': 'application/json; charset=utf-8',
-        'x-aegis-turn-id': built.turnId,
-      },
-    })
+    const res = await Promise.race([transport.handleRequest(request), timeout])
+    const headers = new Headers(res.headers)
+    headers.set('x-aegis-turn-id', built.turnId)
+    return new Response(await res.arrayBuffer(), { status: res.status, statusText: res.statusText, headers })
   } finally {
-    await clientTransport.close()
+    clearTimeout(timer)
+    await transport.close()
     await server.close()
   }
 }
