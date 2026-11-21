@@ -20,6 +20,7 @@ const modules: AegisAppModule[] = MODULES.map(m => ({
   external: m.external,
   read_only_tools: [...READ_ONLY_TOOLS].filter(t => moduleOf(t) === m.id),
   lease_gated: { ...m.leaseGated },
+  skill_url: `/.well-known/aegis-skills/heurion-${m.id}/SKILL.md`,
 }))
 
 const capabilities: AegisCapabilityPreview[] = [
@@ -61,6 +62,7 @@ export const AEGIS_APP_MANIFEST: AegisAppManifest = defineAegisManifest({
   modules,
   capabilities_preview: capabilities,
   skills: [
+    ...MODULES.map(m => ({ name: `heurion-${m.id}`, description: `「${m.title}」模块：${m.summary}`, url: `/.well-known/aegis-skills/heurion-${m.id}/SKILL.md` })),
     {
       name: 'heurion-clinical-research',
       description: '知衡 (Heurion 2.0) 临床病历核对、真实世界队列纳排、统计建模与论文 / 幻灯片协同写作的标准作业规程',

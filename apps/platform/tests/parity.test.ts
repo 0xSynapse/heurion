@@ -344,6 +344,8 @@ const NOT_FOR_AI: Record<string, string> = {
   'POST /api/aegis/leases/reject': '医生/研究员本人拒绝 [Lease-Gated] 提权申请（AI 不能自我决定租约）',
   'POST /api/aegis/mcp': 'AAP-1.0 统一 MCP 协议网关入口本身（承载全部 MCP 工具调用）',
   'POST /api/aegis/mcp/:module': 'AAP-1.0 按模块的 MCP 网关入口本身（只挂该模块的工具）',
+  'PUT /api/aegis/files/:path{.+}': '外部智能体大文件直传进工作区（MCP 里对应 workspace_put，≤10MB）',
+  'GET /api/aegis/files/:path{.+}': '外部智能体从工作区取回大文件（MCP 里对应 workspace_get）',
   'PUT /api/imaging/findings-templates': '所见模板是科室的书写规范（决定之后所有草稿的措辞），由机构管理员或本科室审核医师本人维护；AI 只读（imaging_findings_templates），服务层同样拒绝 via=ai',
   'PUT /api/docs/:id/measurements/policy': '测量严格模式是用户对 AI 写入的约束（禁止裸测量数字），AI 不能自己开关；接口同样拒绝 via=ai',
   // 阶段 3 扩展（T3.2–T3.4, T3.6, T3.7, T3.8）：模型演进门控、双人审批、MRMC 盲法读片、危急值确认与 PACS 回调严禁 AI 代操作

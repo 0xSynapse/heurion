@@ -45,6 +45,8 @@ export interface AegisAppModule {
   read_only_tools: string[]
   /** 需要租约的工具 → 租约作用域。 */
   lease_gated: Record<string, string>
+  /** 该模块的技能文档（说明 + 工具清单）。 */
+  skill_url?: string
 }
 
 export interface AegisAppManifest {
