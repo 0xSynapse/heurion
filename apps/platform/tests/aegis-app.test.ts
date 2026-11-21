@@ -1142,3 +1142,43 @@ describe('AAP-1.0 患者数据外发策略（阶段 4）', () => {
     expect(JSON.stringify(audit)).toContain('patient_read')
   })
 })
+
+describe('AAP-1.0 端到端发现的规则缺口（阶段 5）', () => {
+  it('外部智能体把编造的数字放进「只存了摘要」的引用句：不直接进正文，转为待采纳修订', async () => {
+    const { app, store, docs } = createTestEnv({ provenance: true })
+    const tok = await app.request('/api/aegis/auth/token', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'dr_zhang', password: 'Password123!', name: 'agy', node_pubkey: generateAegisNodeKeyPair().publicKey, modules: 'writing:rw,literature:rw' }),
+    })
+    const token = ((await tok.json()) as { access_token: string }).access_token
+    const created = await (async () => {
+      const res = await app.request('/api/aegis/mcp/writing', {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, 'x-aegis-agent-id': 'agy' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'doc_create', arguments: { title: '转化治疗', markdown: 'Conversion therapy for locally advanced esophageal cancer remains controversial.' } } }),
+      })
+      return JSON.parse(((await res.json()) as any).result.content[0].text) as { doc_id: string; rev: number }
+    })()
+    // 原句是智能体自己写的（规则一不管），转修订只可能来自规则二的「只有摘要」
+    const docId = created.doc_id
+    const cite = store.upsertCitation({ doc_id: docId, doi: '10.1000/conv', pmid: null, formatted: 'CONV', url: null })
+    store.putAbstract('10.1000/conv', null, 'Several studies have indicated encouraging survival outcomes for patients after conversion surgery with R0 resection.')
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const res = await app.request('/api/aegis/mcp/writing', {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, 'x-aegis-agent-id': 'agy' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+      })
+      return ((await res.json()) as any).result as { isError?: boolean; content: Array<{ text: string }> }
+    }
+    const read = await call('doc_read', { doc_id: docId })
+    const para = /\{#([a-z0-9]+)\} Conversion therapy/.exec(read.content[0]!.text.replace(/[⟦⟧]/g, ''))![1]!
+    const edit = await call('doc_edit', { doc_id: docId, base_rev: created.rev, ops: [{ op: 'replace_text', id: para, find: 'remains controversial.', replace: `remains controversial, although conversion surgery with R0 resection showed encouraging survival outcomes with a 5-year overall survival of 52.4% [@c:${cite.id}].` }] })
+    expect(edit.isError, edit.content[0]!.text).toBeFalsy()
+    const body = JSON.parse(edit.content[0]!.text)
+    expect(body.mode).toBe('suggest')
+    expect(body.needs_user_check.numbers[0].number).toBe('52.4%')
+    // 编造的数字只在待采纳修订里，不进正文
+    let pending = false
+    docs.get(docId).descendants(n => { if (n.attrs.suggest) pending = true; return true })
+    expect(pending).toBe(true)
+  })
+})

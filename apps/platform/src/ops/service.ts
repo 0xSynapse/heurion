@@ -340,6 +340,9 @@ export class OpService {
     let safeTouches = 0
     if (batch.mode !== 'suggest') {
       const reasons = suggestReasons(a, this.safeEditsOn(owner))
+      // 规则二的「无法核对」：数字所在句子引用的文献只存了摘要、摘要里找不到。不拒绝（全文可能在付费墙后），
+      // 但不能直接进正文——整批转为待采纳修订，由人对照全文确认后采纳（确认由平台强制，不靠 AI 转告；MCP_MODULES.md §6 第 6 项）
+      if (note.unverifiable_numbers?.length) reasons.push(`数字 ${[...new Set(note.unverifiable_numbers.map(n => n.number))].slice(0, 6).join('、')} 所在句子引用的文献只有摘要、摘要里找不到，需要对照全文确认`)
       if (reasons.length) note.converted_to_suggest = reasons
       else safeTouches = a.touches.length
     }

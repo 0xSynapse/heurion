@@ -357,9 +357,9 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
         changed: result.changes.length,
         mode: effectiveMode,
         note: result.changes.length === 0 ? '操作没有改变文档内容'
-          : converted?.length ? `这批修改改到了人写的文字（${converted.join('；')}），已整批作为待采纳修订提交，用户采纳后生效。不必重试；只改 AI 自己写的文字、或不涉及数字 / 否定词 / 措辞强度的短小改动才会直接生效。`
+          : converted?.length ? `这批修改需要人确认（${converted.join('；')}），已整批作为待采纳修订提交，用户采纳后生效。不必重试，告诉用户去采纳；只改 AI 自己写的文字、或不涉及数字 / 否定词 / 措辞强度的短小改动才会直接生效。`
             : effectiveMode === 'suggest' ? '已作为待采纳修订提交，用户采纳后生效' : undefined,
-        ...(unverifiable?.length ? { needs_user_check: { numbers: unverifiable, note: '这些数字所在句子引用的文献只有摘要，摘要里找不到；已写入，请在回复里请用户对照全文核对。' } } : {}),
+        ...(unverifiable?.length ? { needs_user_check: { numbers: unverifiable, note: '这些数字所在句子引用的文献只有摘要，摘要里找不到；已转为待采纳修订，请在回复里请用户对照全文核对后采纳。能取到全文时先用 oa_fulltext，全文里有这个数就会直接写入。' } } : {}),
       })
     } catch (err) {
       if (err instanceof OpError && err.extra.resolution && !args.dry_run) {
