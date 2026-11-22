@@ -9,10 +9,14 @@ import { chmodIfOwned, CONFIRM_ROUTES } from '../mcp/admin-tools.ts'
 import { AEGIS_APP_MANIFEST } from '../aegis/manifest.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
 import { buildMcpBundleManifest } from '../aegis/bundle.ts'
-import { authServerMetadata, OAuthError, OAuthService, protectedResourceMetadata, scopeToModules } from '../aegis/oauth.ts'
+import { authServerMetadata, OAuthError, OAuthService, protectedResourceMetadata, scopeToModules, type OAuthServiceOptions } from '../aegis/oauth.ts'
 import { cors } from 'hono/cors'
 import { HTTP_PUT_MAX, listDir, readTarget, WorkspaceFileError, writeWorkspaceFile } from '../aegis/files.ts'
 import { aegisEffectiveModules, handleAegisMcpRequest, type McpDeps } from '../mcp/server.ts'
+import { ToolCatalog } from '../mcp-hub/catalog.ts'
+import { handleHubMcpRequest } from '../mcp-hub/gateway.ts'
+import { handlePublicMcpRequest } from '../mcp-hub/public-mcp.ts'
+import type { Embedder } from '../kb/embedder.ts'
 import { formatModuleGrant, grantModules, MODULE_IDS, MODULES, moduleOf, orgAllowedModules, READ_ONLY_TOOLS, type ModuleId } from '../mcp/modules.ts'
 import { moduleSkillDoc } from '../mcp/skills.ts'
 import { TurnRegistry } from '../mcp/turns.ts'
@@ -144,6 +148,12 @@ export interface ApiDeps {
   publicOrigin?: string
   /** 是否信任反向代理发送的 X-Forwarded-Host / X-Forwarded-Proto: http。 */
   trustProxy?: boolean
+  /** 语义检索嵌入服务（bge-m3，可选；供 KB 与 MCP Hub 工具目录混合排序使用）。 */
+  embedder?: Embedder | null
+  /** 外部注入的持久化工具目录（可选，默认按 store 创建）。 */
+  toolCatalog?: ToolCatalog
+  /** OAuth / CIMD 可选依赖注入（测试与自定义抓取器用）。 */
+  oauthOpts?: OAuthServiceOptions
   /** 全文索引（改名、复制后立即更新）。 */
   search?: SearchIndex
   /** 参考资料库。 */
@@ -324,7 +334,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
 
   const aegisAuth = new AegisAuthService(store, 'heurion')
-  const mcpAs = new OAuthService(store, aegisAuth)
+  const mcpAs = new OAuthService(store, aegisAuth, deps.oauthOpts)
+  const mcpToolCatalog = deps.toolCatalog ?? new ToolCatalog(store)
   const aegisTurnRegistry = deps.turnRegistry ?? ((turns as unknown as { registry?: TurnRegistry })?.registry ?? new TurnRegistry())
   const aegisPubmed = deps.pubmed ?? new PubMedClient(fetch)
   const sharedClaims = deps.claims ?? new ClaimService(docs, aegisPubmed, deps.fulltext ?? null)
@@ -656,9 +667,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (mcpRegisterLimit.hit(clientIp(c))) return c.json({ error: 'temporarily_unavailable', error_description: '注册太频繁，请稍后再试' }, 429)
     try { return c.json(mcpAs.register(await c.req.json().catch(() => ({})) as Record<string, unknown>), 201) } catch (err) { return mcpAsFail(c, err) }
   })
-  app.get('/oauth/authorize', c => {
+  app.get('/oauth/authorize', async c => {
     try {
-      return c.redirect(mcpAs.authorize(c.req.query(), requestOrigin(c)).redirect, 302)
+      return c.redirect((await mcpAs.authorize(c.req.query(), requestOrigin(c))).redirect, 302)
     } catch (err) {
       // 客户端或回调地址不对：不能重定向回去（防开放重定向），直接显示错误
       if (err instanceof OAuthError) return c.text(`授权请求无效：${err.message}`, 400)
@@ -880,13 +891,23 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const meta = `resource_metadata="${requestOrigin(c)}/.well-known/oauth-protected-resource${c.req.path}"`
     const mod = c.req.param('module')
     const scope = mod && (MODULE_IDS as readonly string[]).includes(mod) ? `${mod}:rw` : MODULES.filter(m => m.external === 'open').map(m => `${m.id}:rw`).join(' ')
-    if (res.status === 401) res.headers.set('WWW-Authenticate', `Bearer ${meta}, scope="${scope}"`)
-    else if (res.status === 403 && mod) {
+    if (res.status === 401 && !res.headers.has('www-authenticate')) res.headers.set('WWW-Authenticate', `Bearer ${meta}, scope="${scope}"`)
+    else if (res.status === 403 && mod && !res.headers.has('www-authenticate')) {
       const code = ((await res.clone().json().catch(() => ({}))) as { code?: string }).code
       if (code === 'module_not_granted') res.headers.set('WWW-Authenticate', `Bearer error="insufficient_scope", scope="${scope}", ${meta}`)
     }
     return res
   }
+  // Phase 0：零鉴权无状态公共临床科研 MCP 服务（不受 HEURION_AEGIS 开关限制，服务 Official MCP Registry）
+  app.use('/api/public/mcp', mcpCors)
+  app.post('/api/public/mcp', async c => {
+    const ip = clientIp(c)
+    const effIp = ip === 'unknown' ? (c.req.header('x-real-ip')?.trim() || 'local') : ip
+    return handlePublicMcpRequest({ pubmed: deps.pubmed, crossref: deps.crossref }, c.req.raw, effIp)
+  })
+  app.get('/api/public/mcp', c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+  app.delete('/api/public/mcp', c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+
   for (const base of ['/api/mcp', '/api/aegis/mcp']) {
     app.use(base, mcpCors)
     app.use(`${base}/*`, mcpCors)
@@ -896,6 +917,8 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     c.header('Cache-Control', 'public, max-age=300')
     return c.json({
       mcp: '/api/mcp',
+      hub: '/api/mcp/hub',
+      public_mcp: '/api/public/mcp',
       auth: { type: 'bearer', token_prefix: 'hr_pat.', issue: '登录 Heurion → 设置 → MCP 访问令牌' },
       optional_headers: { 'X-Agent-Id': '智能体标识（审计与撤销按它区分）', 'X-Aegis-Session-Id': '会话：同一会话读到的数字写进稿件时算有出处', 'X-Aegis-Turn-Id': '回合：同一回合的写入可整回合撤销（不带时闲置 10 分钟算新回合）' },
       modules: MODULES.map(m => ({
@@ -905,11 +928,15 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     })
   })
   for (const base of ['/api/mcp', '/api/aegis/mcp']) {
-    app.post(base, async c => withAuthChallenge(c, await handleAegisMcpRequest(aegisMcpDeps, c.req.raw)))
+    app.post(base, async c => withAuthChallenge(c, await handleAegisMcpRequest(aegisMcpDeps, c.req.raw, undefined, { publicOrigin: requestOrigin(c) })))
     app.get(base, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
     app.delete(base, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+    // 渐进式发现网关（须注册在 /:module 通配之前）
+    app.post(`${base}/hub`, async c => withAuthChallenge(c, await handleHubMcpRequest(aegisMcpDeps, c.req.raw, { catalog: mcpToolCatalog, embedder: deps.embedder ?? null, publicOrigin: requestOrigin(c) })))
+    app.get(`${base}/hub`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+    app.delete(`${base}/hub`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
     // 按模块的地址：只挂这一个模块的工具（还要在授权的模块权限里）
-    app.post(`${base}/:module`, async c => withAuthChallenge(c, await handleAegisMcpRequest(aegisMcpDeps, c.req.raw, c.req.param('module'))))
+    app.post(`${base}/:module`, async c => withAuthChallenge(c, await handleAegisMcpRequest(aegisMcpDeps, c.req.raw, c.req.param('module'), { publicOrigin: requestOrigin(c) })))
     app.get(`${base}/:module`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
     app.delete(`${base}/:module`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
   }
@@ -984,6 +1011,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     if (
       c.req.path === '/api/mail/inbound' ||
       c.req.path === '/api/imaging/pacs/webhook' ||
+      c.req.path === '/api/public/mcp' ||
       c.req.path.startsWith('/api/public/tools/') ||
       c.req.path.startsWith('/api/public/survey/') ||
       // 专家审阅页：凭私密链接里的 token 访问（库里只存哈希），见 review/expert-review.ts

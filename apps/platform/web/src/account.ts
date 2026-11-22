@@ -229,6 +229,7 @@ export function initUserMenu(me: Me, api: <T = any>(path: string, opts?: Request
   const oauthReq = params.get('mcp_authorize')
   if (oauthReq && me.aegis) { history.replaceState(null, '', '/app'); void openMcpConsent(oauthReq, api, notify) }
   else if (params.get('aegis_device') && me.aegis) openSettings(me, api, notify)
+  else if (params.get('action')) { history.replaceState(null, '', '/app'); $('userMenuActions').click() }
   $('userMenuLeave').hidden = !!me.dev || !me.tenant?.in_org
   $('userMenuPhr').hidden = !!me.dev
   if (!me.dev) void refreshInvites(api, notify)
