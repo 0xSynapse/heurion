@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
+import dns from 'node:dns/promises'
+import net from 'node:net'
 import { grantModules, MODULE_IDS, MODULES, parseModuleGrant, type ModuleGrant } from '../mcp/modules.ts'
 import type { Store } from '../store/db.ts'
 import type { AegisAuthService } from './auth.ts'
@@ -20,6 +22,43 @@ export const ACCESS_TTL_MS = 60 * 60 * 1000
 export const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const REQUEST_TTL_MS = 10 * 60 * 1000
 const CODE_TTL_MS = 5 * 60 * 1000
+const CIMD_CACHE_TTL_MS = 3600_000
+const CIMD_MAX_BODY_BYTES = 64 * 1024
+
+export type CimdFetcher = (url: string) => Promise<{
+  ok: boolean
+  status: number
+  text?: () => Promise<string>
+  json?: () => Promise<unknown>
+}>
+
+export interface OAuthServiceOptions {
+  cimdFetcher?: CimdFetcher
+  dnsLookup?: (host: string) => Promise<Array<{ address: string }>>
+}
+
+export function isPrivateOrLoopbackIp(ip: string): boolean {
+  const clean = ip.replace(/^::ffff:/i, '').replace(/^\[|\]$/g, '').split('%')[0] ?? ''
+  const ver = net.isIP(clean)
+  if (ver === 4) {
+    const segs = clean.split('.').map(Number)
+    const a = segs[0] ?? 0
+    const b = segs[1] ?? 0
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return true
+    if (a === 169 && b === 254) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 192 && b === 168) return true
+    if (a === 100 && b >= 64 && b <= 127) return true
+    return false
+  }
+  if (ver === 6) {
+    const low = clean.toLowerCase()
+    if (low === '::1' || low === '::') return true
+    if (low.startsWith('fc') || low.startsWith('fd') || low.startsWith('fe80:') || low.startsWith('ff')) return true
+    return false
+  }
+  return true
+}
 
 export class OAuthError extends Error {
   constructor(readonly error: string, message: string, readonly status = 400) { super(message) }
@@ -46,6 +85,7 @@ export function authServerMetadata(origin: string) {
     revocation_endpoint_auth_methods_supported: ['none'],
     scopes_supported: SCOPES_SUPPORTED,
     authorization_response_iss_parameter_supported: true,
+    client_id_metadata_document_supported: true,
     service_documentation: `${origin}/api/mcp/modules`,
   }
 }
@@ -106,7 +146,83 @@ export function scopeToModules(scope: string | null | undefined): ModuleGrant {
 }
 
 export class OAuthService {
-  constructor(private readonly store: Store, private readonly grants: AegisAuthService) {}
+  private readonly cimdFetcher: CimdFetcher
+  private readonly dnsLookup: (host: string) => Promise<Array<{ address: string }>>
+
+  constructor(
+    private readonly store: Store,
+    private readonly grants: AegisAuthService,
+    opts?: OAuthServiceOptions,
+  ) {
+    this.cimdFetcher = opts?.cimdFetcher ?? (url => fetch(url, { signal: AbortSignal.timeout(5000), redirect: 'error' }))
+    this.dnsLookup = opts?.dnsLookup ?? (host => dns.lookup(host, { all: true }))
+  }
+
+  /** 解析 OAuth client_id：支持已缓存 DCR 客户端与带 SSRF 防护的 https:// CIMD 元数据文档。 */
+  async resolveClient(clientId: string): Promise<{ client_id: string; client_name: string; redirect_uris: string[]; expires_at: string | null }> {
+    const cid = clientId.trim()
+    if (!cid) throw new OAuthError('invalid_client', '缺少 client_id')
+    const cached = this.store.getOAuthClient(cid)
+    if (cached && (!cached.expires_at || cached.expires_at > new Date().toISOString())) {
+      return cached
+    }
+    if (!/^https:\/\//i.test(cid)) throw new OAuthError('invalid_client', '未注册的 client_id')
+
+    let u: URL
+    try { u = new URL(cid) } catch { throw new OAuthError('invalid_client', '无效的 CIMD client_id URL') }
+    if (u.protocol !== 'https:' || u.hash || u.username || u.password) {
+      throw new OAuthError('invalid_client', 'CIMD client_id 必须是干净的 HTTPS URL（不含认证信息或 fragment）')
+    }
+    const host = u.hostname.toLowerCase()
+    const cleanIp = host.replace(/^\[|\]$/g, '')
+    if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) {
+      throw new OAuthError('invalid_client', 'CIMD client_id 不允许指向本地主机')
+    }
+    if (net.isIP(cleanIp)) {
+      if (isPrivateOrLoopbackIp(cleanIp)) throw new OAuthError('invalid_client', 'CIMD client_id 不允许指向私网/回环 IP')
+    } else {
+      let addrs: Array<{ address: string }> = []
+      try { addrs = await this.dnsLookup(host) } catch { addrs = [] }
+      if (!addrs.length || addrs.some(a => isPrivateOrLoopbackIp(a.address))) {
+        throw new OAuthError('invalid_client', 'CIMD client_id DNS 解析失败或命中受限内网地址')
+      }
+    }
+
+    const resp = await this.cimdFetcher(cid).catch(() => null)
+    if (!resp || !resp.ok) throw new OAuthError('invalid_client', '无法获取 CIMD 客户端元数据文档')
+
+    let rawMeta: unknown = null
+    try {
+      if (typeof resp.text === 'function') {
+        const txt = await resp.text()
+        if (Buffer.byteLength(txt, 'utf8') > CIMD_MAX_BODY_BYTES) {
+          throw new OAuthError('invalid_client', 'CIMD 元数据文档体积过大')
+        }
+        rawMeta = JSON.parse(txt)
+      } else if (typeof resp.json === 'function') {
+        rawMeta = await resp.json()
+      }
+    } catch (err) {
+      if (err instanceof OAuthError) throw err
+      rawMeta = null
+    }
+    if (!rawMeta || typeof rawMeta !== 'object' || Array.isArray(rawMeta)) {
+      throw new OAuthError('invalid_client', 'CIMD 元数据格式无效')
+    }
+    const meta = rawMeta as Record<string, unknown>
+    if (meta.client_id !== cid) throw new OAuthError('invalid_client', 'CIMD 元数据 client_id 与请求不一致')
+    if (meta.token_endpoint_auth_method !== undefined && meta.token_endpoint_auth_method !== 'none') {
+      throw new OAuthError('invalid_client', '只支持公开客户端（token_endpoint_auth_method = none）')
+    }
+    const uris = Array.isArray(meta.redirect_uris) ? meta.redirect_uris.filter((uri): uri is string => typeof uri === 'string') : []
+    if (!uris.length || uris.length > 10 || uris.some(uri => !validRedirect(uri))) {
+      throw new OAuthError('invalid_client', 'CIMD 元数据缺少安全合规的 redirect_uris（1–10 个）')
+    }
+    const client_name = (typeof meta.client_name === 'string' && meta.client_name.trim() ? meta.client_name.trim() : u.hostname).slice(0, 100) || u.hostname
+    const expires_at = new Date(Date.now() + CIMD_CACHE_TTL_MS).toISOString()
+    this.store.upsertOAuthClient({ client_id: cid, client_name, redirect_uris: uris, expires_at })
+    return { client_id: cid, client_name, redirect_uris: uris, expires_at }
+  }
 
   /** 动态客户端注册（RFC 7591）：只发公开客户端。 */
   register(body: Record<string, unknown>) {
@@ -129,8 +245,8 @@ export class OAuthService {
    * 授权请求：校验客户端与回调地址后记下请求，返回应用里确认页的地址。
    * 客户端或回调地址不对时不能重定向回去（防开放重定向），抛 OAuthError 由调用方显示错误页；其余错误按规范重定向回客户端。
    */
-  authorize(q: Record<string, string | undefined>, origin: string): { redirect: string } {
-    const client = q.client_id ? this.store.getOAuthClient(q.client_id) : undefined
+  async authorize(q: Record<string, string | undefined>, origin: string): Promise<{ redirect: string }> {
+    const client = q.client_id ? await this.resolveClient(q.client_id) : undefined
     if (!client) throw new OAuthError('invalid_client', '未注册的 client_id')
     const redirect = q.redirect_uri ?? (client.redirect_uris.length === 1 ? client.redirect_uris[0] : undefined)
     if (!redirect || !redirectUriMatches(client.redirect_uris, redirect)) throw new OAuthError('invalid_request', 'redirect_uri 与注册的不一致')

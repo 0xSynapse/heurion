@@ -6,7 +6,7 @@ Heurion Research (`https://heurion.org` · `https://github.com/heurion-org`) is 
 
 ### Layer 1: Flagship 01 — Heurion 2.0 & OmniCanvas (`heurion-org/heurion`)
 Heurion is structured as a modular medical AI and clinical research workstation composed of:
-1. `@heurion2/platform`: TypeScript/Node/Hono platform server orchestrating real-time Yjs CRDT documents, SQLite/WAL storage, user sessions, study management, AAP-1.0 discovery (`/.well-known/aegis-app.json`), and 65+ MCP bridges.
+1. `@heurion2/platform`: TypeScript/Node/Hono platform server orchestrating real-time Yjs CRDT documents, SQLite/WAL storage, user sessions, study management, AAP-1.0 / Aegis-OS bundle discovery (`/.well-known/aegis-app.json`, `/.well-known/mcp-bundle.json`), zero-auth public research tools (`https://heurion.org/api/public/mcp`), and the OAuth 2.1 + PKCE + CIMD + SEP-1036 progressive MCP Hub (`https://heurion.org/api/mcp/hub`) alongside 9 modularized MCP gateways (`/api/mcp/:module`).
 2. `@heurion2/canvas-service`: Standalone OmniCanvas / AgentDoc canvas service with pure generic document manipulation and MCP server tools.
 3. `apps/imaging-worker`: High-performance Python/FastAPI medical computing microservice running MONAI, PyTorch, Nibabel, and Pydicom.
 4. `apps/embedder`: Local embedding service using GTE-multilingual for vector retrieval and memory deduplication.

@@ -337,21 +337,26 @@ export function renderSubgroupForestPlotSvg(
 
 /** 轻量内存级 IP 限流器（滑动窗口 60 秒） */
 const ipBuckets = new Map<string, { count: number; resetAt: number }>()
-function checkRateLimit(ip: string, limitPerMin = 40): boolean {
+export function checkPublicRateLimit(ip: string, bucket = 'default', limitPerMin = 40): boolean {
+  const key = `${bucket}:${ip}`
   const now = Date.now()
-  if (ipBuckets.size > 2000) {
+  if (ipBuckets.size > 4000) {
     for (const [k, v] of ipBuckets) {
       if (v.resetAt < now) ipBuckets.delete(k)
     }
   }
-  const cur = ipBuckets.get(ip)
+  const cur = ipBuckets.get(key)
   if (!cur || cur.resetAt < now) {
-    ipBuckets.set(ip, { count: 1, resetAt: now + 60_000 })
+    ipBuckets.set(key, { count: 1, resetAt: now + 60_000 })
     return true
   }
   if (cur.count >= limitPerMin) return false
   cur.count++
   return true
+}
+
+function checkRateLimit(ip: string, limitPerMin = 40): boolean {
+  return checkPublicRateLimit(ip, 'default', limitPerMin)
 }
 
 /**
@@ -570,6 +575,53 @@ export interface CitationVerificationItem {
   message_en: string
 }
 
+interface CachedCitationRecord {
+  pmid: string | null
+  doi: string | null
+  title: string
+  journal: string | null
+  year: string | null
+  authors: string[]
+  abstractText: string | null
+}
+
+const CITATION_CACHE_TTL_MS = 24 * 3600_000
+const CITATION_CACHE_MAX = 2000
+const DEFAULT_CITATION_OWNER = {}
+let citationCacheOwners = new WeakMap<object, Map<string, { at: number; value: CachedCitationRecord }>>()
+
+export function clearPublicCitationCache(): void {
+  citationCacheOwners = new WeakMap()
+}
+
+function getCitationCacheFor(deps: PublicToolsDeps): Map<string, { at: number; value: CachedCitationRecord }> {
+  const owner = (deps.pubmed ?? deps.crossref ?? DEFAULT_CITATION_OWNER) as object
+  let map = citationCacheOwners.get(owner)
+  if (!map) {
+    map = new Map()
+    citationCacheOwners.set(owner, map)
+  }
+  return map
+}
+
+function readCachedCitation(cache: Map<string, { at: number; value: CachedCitationRecord }>, key: string): CachedCitationRecord | null {
+  const hit = cache.get(key)
+  if (!hit) return null
+  if (Date.now() - hit.at > CITATION_CACHE_TTL_MS) {
+    cache.delete(key)
+    return null
+  }
+  return hit.value
+}
+
+function writeCachedCitation(cache: Map<string, { at: number; value: CachedCitationRecord }>, key: string, value: CachedCitationRecord): void {
+  if (cache.size >= CITATION_CACHE_MAX && !cache.has(key)) {
+    const oldestKey = cache.keys().next().value
+    if (oldestKey !== undefined) cache.delete(oldestKey)
+  }
+  cache.set(key, { at: Date.now(), value })
+}
+
 /**
  * 从文稿段落中提取 PMID / DOI 及其所在句子中的效应量数值，并对照 PubMed 核验
  */
@@ -637,6 +689,7 @@ export async function verifyManuscriptCitations(
     return [...nums]
   }
 
+  const cache = getCitationCacheFor(deps)
   const items: CitationVerificationItem[] = []
   for (const t of targets.slice(0, 8)) {
     let pmid: string | null = t.kind === 'pmid' ? t.value : null
@@ -647,10 +700,12 @@ export async function verifyManuscriptCitations(
     let authors: string[] = []
     let abstractText: string | null = null
 
-    // 1. 先检查内置权威试验种子库
+    const cacheKey = `${t.kind}:${t.value}`
+    // 1. 先检查内置权威试验种子库与 24h TTL 缓存
     const seedByPmid = pmid ? LANDMARK_TRIALS[pmid] : undefined
     const seedByDoi = doi ? Object.values(LANDMARK_TRIALS).find(s => s.doi === doi) : undefined
     const seed = seedByPmid ?? seedByDoi
+    const cached = !seed ? readCachedCitation(cache, cacheKey) : null
 
     if (seed) {
       pmid = seed.pmid
@@ -660,6 +715,14 @@ export async function verifyManuscriptCitations(
       year = seed.year
       authors = seed.authors
       abstractText = seed.abstract
+    } else if (cached) {
+      pmid = cached.pmid
+      doi = cached.doi
+      title = cached.title
+      journal = cached.journal
+      year = cached.year
+      authors = cached.authors
+      abstractText = cached.abstractText
     } else if (deps.pubmed) {
       try {
         if (!pmid && doi) {
@@ -694,6 +757,13 @@ export async function verifyManuscriptCitations(
       } catch {
         // ignore
       }
+    }
+
+    if (title && !seed && !cached) {
+      const rec: CachedCitationRecord = { pmid, doi, title, journal, year, authors, abstractText }
+      writeCachedCitation(cache, cacheKey, rec)
+      if (pmid) writeCachedCitation(cache, `pmid:${pmid}`, rec)
+      if (doi) writeCachedCitation(cache, `doi:${doi.toLowerCase()}`, rec)
     }
 
     const claimedNums = extractEffectNumbers(t.contextText)
@@ -770,6 +840,357 @@ export async function verifyManuscriptCitations(
   }
 }
 
+export class PublicToolError extends Error {
+  constructor(message: string, readonly status: 400 | 429 = 400) {
+    super(message)
+  }
+}
+
+export function runEValueTool(body: EValueInput & { lang?: 'zh' | 'en' }) {
+  const lang: 'zh' | 'en' = body.lang === 'en' ? 'en' : 'zh'
+  const res = calculateEValue(body)
+  const svg = renderEValueCurveSvg(res, lang)
+  const rebuttal_zh =
+    `【审稿人回复模板 (Response to Reviewer)】\n` +
+    `感谢审稿人关于潜在未测量混杂因素（unmeasured confounding）的重要指正。为定量评估本研究结论对潜在未测量混杂偏倚的稳健性，我们依据 VanderWeele 与 Ding（Ann Intern Med, 2017;167:268-274）提出的方法补充了 E-value 敏感性分析。\n\n` +
+    `${res.academic_defense_zh}\n\n` +
+    `我们已在修订稿的 Methods（Statistical Analysis）与 Results 章节中补充了上述 E-value 敏感性分析结果。`
+  const rebuttal_en =
+    `[Response to Reviewer Template]\n` +
+    `We thank the Reviewer for raising this important point regarding potential residual and unmeasured confounding. To formally quantify the robustness of our primary finding against potential unmeasured confounding, we conducted an E-value sensitivity analysis following the methodology of VanderWeele and Ding (Ann Intern Med. 2017;167(4):268-274).\n\n` +
+    `${res.academic_defense_en}\n\n` +
+    `We have incorporated this sensitivity analysis into the revised Methods and Results sections.`
+  return { ...res, svg, rebuttal_zh, rebuttal_en }
+}
+
+export function runConsortTool(body: ConsortDiagramData) {
+  const lang: 'zh' | 'en' = body.lang === 'en' ? 'en' : 'zh'
+  const isEn = lang === 'en'
+  const safeExclusions = Array.isArray(body.exclusions) ? body.exclusions.slice(0, 15) : []
+  const safeArms = Array.isArray(body.arms) ? body.arms.slice(0, 4) : []
+  const totalAssessed = Math.max(0, Number(body.total_assessed) || 0)
+  const totalExcluded = safeExclusions.reduce((s, e) => s + (Math.max(0, Number(e.count) || 0)), 0)
+  const eligibleTotal = body.eligible_total !== undefined
+    ? Math.max(0, Number(body.eligible_total) || 0)
+    : Math.max(0, totalAssessed - totalExcluded)
+  const normalized: ConsortDiagramData = {
+    title: (body.title || 'CONSORT 2010 / STROBE Flow Diagram').slice(0, 120),
+    lang,
+    total_assessed: totalAssessed,
+    exclusions: safeExclusions.map(e => ({
+      reason: String(e.reason || (isEn ? 'Did not meet inclusion criteria' : '未满足入排标准')).slice(0, 80),
+      count: Math.max(0, Number(e.count) || 0),
+    })),
+    eligible_total: eligibleTotal,
+    arms: safeArms.map(a => ({
+      name: String(a.name || (isEn ? 'Study Arm' : '研究组')).slice(0, 60),
+      allocated: Math.max(0, Number(a.allocated) || 0),
+      lost_to_followup: Math.max(0, Number(a.lost_to_followup) || 0),
+      discontinued: Math.max(0, Number(a.discontinued) || 0),
+      analyzed: Math.max(0, Number(a.analyzed) || 0),
+    })),
+  }
+  const svg = renderConsortSvg(normalized)
+  const mermaid = renderConsortMermaid(normalized)
+  const arithmeticWarning = totalAssessed - totalExcluded !== eligibleTotal
+    ? (isEn
+        ? `Arithmetic warning: Total Assessed (${totalAssessed}) minus Total Excluded (${totalExcluded}) = ${totalAssessed - totalExcluded}, which does not match Eligible (${eligibleTotal}).`
+        : `注意：初筛总人数 (${totalAssessed}) 减去排除人数总和 (${totalExcluded}) = ${totalAssessed - totalExcluded}，与当前填写的合格入组人数 (${eligibleTotal}) 不一致。`)
+    : null
+  return { svg, mermaid, normalized, arithmetic_warning: arithmeticWarning }
+}
+
+export function runTable1Tool(body: { csv?: string; records?: Array<Record<string, unknown>>; options?: Table1Options }) {
+  const rawText = typeof body.csv === 'string' ? body.csv.slice(0, 200_000) : JSON.stringify(body.records ?? []).slice(0, 200_000)
+  const phiFindings: PhiFinding[] = scanPhi(rawText)
+  const records = typeof body.csv === 'string'
+    ? parseTabularText(body.csv, 500)
+    : Array.isArray(body.records)
+      ? body.records.slice(0, 500)
+      : []
+  if (records.length === 0) {
+    throw new PublicToolError('未解析到有效的数据行（请至少提供表头与 2 行数据）', 400)
+  }
+  const table1 = generateTable1FromData(records, body.options ?? {})
+  return {
+    phi_clean: phiFindings.length === 0,
+    phi_findings_count: phiFindings.length,
+    phi_findings: phiFindings.slice(0, 10).map(f => ({
+      type: f.type,
+      redacted: f.redacted,
+      description: f.description,
+    })),
+    row_count: records.length,
+    columns: Object.keys(records[0] ?? {}),
+    table1,
+  }
+}
+
+export function runTable1DocxTool(body: { csv?: string; records?: Array<Record<string, unknown>>; options?: Table1Options }) {
+  const records = typeof body.csv === 'string'
+    ? parseTabularText(body.csv, 500)
+    : Array.isArray(body.records)
+      ? body.records.slice(0, 500)
+      : []
+  if (records.length === 0) {
+    throw new PublicToolError('未解析到有效的数据行', 400)
+  }
+  const table1 = generateTable1FromData(records, body.options ?? {})
+  const docxBytes = exportTable1ToDocx(table1)
+  return { docxBytes, table1 }
+}
+
+export function runKaplanMeierTool(body: {
+  csv?: string
+  records?: Array<Record<string, unknown>>
+  time_col?: string
+  event_col?: string
+  group_col?: string
+  time_unit?: string
+  title?: string
+  lang?: 'zh' | 'en'
+}) {
+  const records = typeof body.csv === 'string'
+    ? parseTabularText(body.csv, 500)
+    : Array.isArray(body.records)
+      ? body.records.slice(0, 500)
+      : []
+  if (records.length < 2) {
+    throw new PublicToolError('请至少提供包含表头与 2 行有效随访记录的数据 / Please provide at least 2 survival records', 400)
+  }
+  const cols = Object.keys(records[0] ?? {})
+  const time_col = body.time_col?.trim() || cols.find(k => /time|month|day|year|os|pfs|followup/i.test(k)) || cols[1] || 'time'
+  const event_col = body.event_col?.trim() || cols.find(k => /event|status|dead|death|censor/i.test(k)) || cols[2] || 'event'
+  const group_col = body.group_col?.trim() || cols.find(k => /group|arm|treat|cohort/i.test(k)) || undefined
+  const time_unit = (body.time_unit?.trim() || 'Months').slice(0, 24)
+  const title = (body.title?.trim() || 'Kaplan-Meier Cumulative Survival Curve').slice(0, 120)
+
+  const result = generateSurvivalAnalysis(records, {
+    time_col,
+    event_col,
+    group_col,
+    time_unit,
+    title,
+  })
+
+  const gSummariesZh = result.groups.map(g => {
+    const med = g.median_time !== null ? `${g.median_time} ${time_unit}` : '未达到 (Not Reached)'
+    return `${g.label}组（n=${g.total_n}，结局事件 ${g.events_n} 例 [${g.event_rate.toFixed(1)}%]，中位生存期：${med}）`
+  })
+  let narrative_zh = `生存分析共纳入 ${result.groups.reduce((s, g) => s + g.total_n, 0)} 例受试者，按分组比较：${gSummariesZh.join(' vs. ')}。`
+  if (result.log_rank) {
+    const sigText = result.log_rank.p_value < 0.05 ? '组间生存曲线差异具有统计学意义' : '组间生存曲线差异未达统计学显著性'
+    narrative_zh += ` Kaplan-Meier 生存分析显示${sigText}（Log-rank 检验 Chi-Square = ${result.log_rank.chi2}，df = ${result.log_rank.df}，P = ${result.log_rank.p_value_formatted}）。`
+  }
+  if (result.cox && result.cox.covariates.length > 0) {
+    const cov0 = result.cox.covariates[0]!
+    narrative_zh += ` Cox 比例风险回归模型提示 ${cov0.label} 的风险比（Hazard Ratio, HR）为 ${cov0.hr_formatted}（P = ${cov0.p_value_formatted}，C-index = ${result.cox.c_index}）。`
+  }
+
+  return {
+    title: result.title,
+    time_col: result.time_col,
+    event_col: result.event_col,
+    group_col: result.group_col,
+    time_unit: result.time_unit,
+    groups: result.groups.map(g => ({
+      group: g.group,
+      label: g.label,
+      total_n: g.total_n,
+      events_n: g.events_n,
+      censored_n: g.censored_n,
+      event_rate: Number(g.event_rate.toFixed(1)),
+      median_time: g.median_time,
+      median_ci: g.median_ci,
+      milestone_survival: g.milestone_survival,
+    })),
+    log_rank: result.log_rank,
+    cox: result.cox,
+    risk_table: result.risk_table,
+    svg: result.svg,
+    forest_svg: result.forest_svg,
+    narrative_en: result.narrative,
+    narrative_zh,
+    markdown_table: result.markdown_table,
+    r_script: result.native_exports?.r_script ?? '',
+  }
+}
+
+export function runForestPlotTool(body: ForestPlotInput) {
+  const lang: 'zh' | 'en' = body.lang === 'en' ? 'en' : 'zh'
+  const isEn = lang === 'en'
+  const effect_type: 'HR' | 'OR' | 'RR' =
+    body.effect_type === 'OR' || body.effect_type === 'RR' ? body.effect_type : 'HR'
+  const null_value = Number(body.null_value) > 0 ? Number(body.null_value) : 1.0
+  const rows = Array.isArray(body.rows) && body.rows.length > 0
+    ? body.rows.slice(0, 40)
+    : parseForestPlotLines(body.raw_lines ?? '')
+
+  const numericRows = rows.filter(r => !r.is_header && r.ci_lower > 0 && r.ci_upper > 0)
+  if (numericRows.length === 0) {
+    throw new PublicToolError(
+      isEn ? 'Please provide at least 1 valid row (Label | Estimate | CI_Lower | CI_Upper)' : '请至少输入 1 行有效的效应量数据（格式：亚组名称 | 点估计值 | CI下限 | CI上限 | P值）',
+      400,
+    )
+  }
+
+  const title = (body.title || (isEn ? 'Subgroup & Multivariable Effect Size Forest Plot' : 'Subgroup & Multivariable Forest Plot')).slice(0, 120)
+  const left_label = (body.left_label || (isEn ? 'Favors Intervention' : 'Favors Intervention')).slice(0, 45)
+  const right_label = (body.right_label || (isEn ? 'Favors Control' : 'Favors Control')).slice(0, 45)
+
+  const svg = renderSubgroupForestPlotSvg({
+    title,
+    effect_type,
+    null_value,
+    left_label,
+    right_label,
+    rows,
+    lang,
+  })
+
+  const sigCount = numericRows.filter(r => !r.is_summary && (r.ci_upper < null_value || r.ci_lower > null_value)).length
+  const summaryRow = numericRows.find(r => r.is_summary) ?? numericRows[0]!
+  const narrative_en =
+    `Across ${numericRows.length} evaluated strata/covariates, the primary ${effect_type} in ${summaryRow.label} was ${summaryRow.estimate.toFixed(2)} (95% CI, ${summaryRow.ci_lower.toFixed(2)} to ${summaryRow.ci_upper.toFixed(2)}${summaryRow.p_value ? `; P = ${summaryRow.p_value}` : ''}). ` +
+    `Consistent directional effects or statistically significant associations (95% CI excluding ${null_value.toFixed(1)}) were observed in ${sigCount} of ${numericRows.filter(r => !r.is_summary).length || numericRows.length} subgroups.`
+  const narrative_zh =
+    `森林图共纳入 ${numericRows.length} 项亚组/协变量评估，其中 ${summaryRow.label} 的效应量 ${effect_type} 为 ${summaryRow.estimate.toFixed(2)}（95% CI ${summaryRow.ci_lower.toFixed(2)}–${summaryRow.ci_upper.toFixed(2)}${summaryRow.p_value ? `，P = ${summaryRow.p_value}` : ''}）。` +
+    `在全部评估的亚组中，共有 ${sigCount} 项的 95% 置信区间未跨过无效线（${effect_type} = ${null_value.toFixed(1)}），各预设亚组间效应方向保持一致。`
+
+  const r_script =
+    `# Reproducible R Script (forestploter)\n` +
+    `library(forestploter)\n` +
+    `df <- data.frame(\n` +
+    `  Subgroup = c(${numericRows.map(r => `"${r.label.replace(/([\\"])/g, '\\$1')}"`).join(', ')}),\n` +
+    `  Est = c(${numericRows.map(r => r.estimate.toFixed(3)).join(', ')}),\n` +
+    `  Low = c(${numericRows.map(r => r.ci_lower.toFixed(3)).join(', ')}),\n` +
+    `  High = c(${numericRows.map(r => r.ci_upper.toFixed(3)).join(', ')})\n` +
+    `)\n` +
+    `df$\`${effect_type} (95% CI)\` <- sprintf("%.2f (%.2f-%.2f)", df$Est, df$Low, df$High)\n`
+
+  return {
+    svg,
+    rows_count: numericRows.length,
+    effect_type,
+    narrative_en,
+    narrative_zh,
+    r_script,
+  }
+}
+
+export function runPhiScanTool(body: { text?: string; lang?: 'zh' | 'en' }) {
+  const rawText = typeof body.text === 'string' ? body.text.slice(0, 50_000) : ''
+  if (!rawText.trim()) {
+    throw new PublicToolError('请输入需要脱敏检查的临床病历或病例报告草稿 / Please provide clinical text to scan', 400)
+  }
+
+  // 1. 执行核心确定性 PHI 扫描（身份证 MOD 11-2、大陆手机号、银行卡 Luhn、中文病案号与患者姓名）
+  const baseFindings = scanPhi(rawText)
+  let redactedText = redactPhi(rawText)
+
+  // 2. 补充英文/国际 HIPAA Safe Harbor 标识符扫描（Email、US SSN、英文 MRN/Patient Name/Phone）
+  const extraFindings: Array<{
+    type: string
+    value: string
+    redacted: string
+    description_zh: string
+    description_en: string
+    score: number
+  }> = []
+
+  const applyExtraRegex = (
+    re: RegExp,
+    type: string,
+    descZh: string,
+    descEn: string,
+    maskFn: (match: string) => string,
+  ) => {
+    redactedText = redactedText.replace(re, match => {
+      const masked = maskFn(match)
+      extraFindings.push({
+        type,
+        value: match,
+        redacted: masked,
+        description_zh: descZh,
+        description_en: descEn,
+        score: 0.95,
+      })
+      return masked
+    })
+  }
+
+  // 电子邮箱
+  applyExtraRegex(
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+    'email',
+    '电子邮箱地址 (HIPAA Identifier #13)',
+    'Email Address (HIPAA Identifier #13)',
+    m => {
+      const atIdx = m.indexOf('@')
+      return (m[0] ?? '*') + '***' + m.slice(atIdx)
+    },
+  )
+  // US SSN
+  applyExtraRegex(
+    /\b\d{3}-\d{2}-\d{4}\b/g,
+    'ssn',
+    '美国社会安全号 SSN (HIPAA Identifier #7)',
+    'US Social Security Number (HIPAA Identifier #7)',
+    m => '***-**-' + m.slice(-4),
+  )
+  // 英文 MRN / Hospital ID
+  applyExtraRegex(
+    /\b(?:MRN|Medical\s+Record\s+(?:No|Number)|Hospital\s+ID|Patient\s+ID)\s*[:#]?\s*([A-Za-z0-9-]{4,20})\b/gi,
+    'medical_record_no',
+    '英文病案号/住院号 (HIPAA Identifier #8)',
+    'Medical Record Number / MRN (HIPAA Identifier #8)',
+    m => m.replace(/([A-Za-z0-9-]{4,20})$/, '[REDACTED-MRN]'),
+  )
+  // 英文 Patient Name 标签
+  applyExtraRegex(
+    /\b(?:Patient\s+Name|Patient|Subject\s+Name)\s*:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g,
+    'patient_name',
+    '英文患者姓名标签 (HIPAA Identifier #1)',
+    'Labeled Patient Name (HIPAA Identifier #1)',
+    m => m.replace(/:\s*(.+)$/, ': [REDACTED-NAME]'),
+  )
+
+  const typeLabelEn: Record<string, string> = {
+    id_card: 'National ID Card (ISO 7064 Checksum Verified)',
+    phone: 'Mobile Phone Number',
+    bank_card: 'Bank / Insurance Card Number (Luhn Verified)',
+    medical_record_no: 'Medical Record / Inpatient / Outpatient ID',
+    name_with_diagnosis: 'Patient Real Name Linked with Clinical Diagnosis',
+  }
+
+  const unifiedFindings = [
+    ...baseFindings.map(f => ({
+      type: f.type,
+      value: f.value,
+      redacted: f.redacted,
+      description_zh: f.description,
+      description_en: typeLabelEn[f.type] || f.description,
+      score: f.score,
+    })),
+    ...extraFindings,
+  ]
+
+  return {
+    clean: unifiedFindings.length === 0,
+    findings_count: unifiedFindings.length,
+    findings: unifiedFindings,
+    redacted_text: redactedText,
+    compliance_summary_zh:
+      unifiedFindings.length === 0
+        ? '✓ 未检出显式个人身份标识（身份证、手机号、病案号、邮箱或关联姓名），符合论文投稿与数据出境前置脱敏基线。'
+        : `⚠ 共拦截并掩码 ${unifiedFindings.length} 处潜在 PHI 敏感实体。请使用下方已脱敏文本用于病例报告撰写或大模型交互。`,
+    compliance_summary_en:
+      unifiedFindings.length === 0
+        ? '✓ Zero explicit PHI identifiers detected (National IDs, MRNs, phones, emails, or labeled patient names). Safe for manuscript drafting.'
+        : `⚠ Detected and masked ${unifiedFindings.length} PHI identifier(s) under HIPAA Safe Harbor / PIPL rules. Use the redacted text below for sharing or LLM prompting.`,
+  }
+}
+
 export function registerPublicToolsApi(app: Hono<any>, deps: PublicToolsDeps = {}): void {
   const getIp = (c: any): string => c.req.header('x-real-ip')?.trim() || 'local'
 
@@ -786,20 +1207,7 @@ export function registerPublicToolsApi(app: Hono<any>, deps: PublicToolsDeps = {
     recordToolInvocation('e-value-calculator')
     try {
       const body = await c.req.json<EValueInput & { lang?: 'zh' | 'en' }>()
-      const lang: 'zh' | 'en' = body.lang === 'en' ? 'en' : 'zh'
-      const res = calculateEValue(body)
-      const svg = renderEValueCurveSvg(res, lang)
-      const rebuttal_zh =
-        `【审稿人回复模板 (Response to Reviewer)】\n` +
-        `感谢审稿人关于潜在未测量混杂因素（unmeasured confounding）的重要指正。为定量评估本研究结论对潜在未测量混杂偏倚的稳健性，我们依据 VanderWeele 与 Ding（Ann Intern Med, 2017;167:268-274）提出的方法补充了 E-value 敏感性分析。\n\n` +
-        `${res.academic_defense_zh}\n\n` +
-        `我们已在修订稿的 Methods（Statistical Analysis）与 Results 章节中补充了上述 E-value 敏感性分析结果。`
-      const rebuttal_en =
-        `[Response to Reviewer Template]\n` +
-        `We thank the Reviewer for raising this important point regarding potential residual and unmeasured confounding. To formally quantify the robustness of our primary finding against potential unmeasured confounding, we conducted an E-value sensitivity analysis following the methodology of VanderWeele and Ding (Ann Intern Med. 2017;167(4):268-274).\n\n` +
-        `${res.academic_defense_en}\n\n` +
-        `We have incorporated this sensitivity analysis into the revised Methods and Results sections.`
-      return c.json({ ...res, svg, rebuttal_zh, rebuttal_en })
+      return c.json(runEValueTool(body))
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400)
     }
@@ -813,40 +1221,7 @@ export function registerPublicToolsApi(app: Hono<any>, deps: PublicToolsDeps = {
     recordToolInvocation('consort-strobe-flowchart')
     try {
       const body = await c.req.json<ConsortDiagramData>()
-      const lang: 'zh' | 'en' = body.lang === 'en' ? 'en' : 'zh'
-      const isEn = lang === 'en'
-      const safeExclusions = Array.isArray(body.exclusions) ? body.exclusions.slice(0, 15) : []
-      const safeArms = Array.isArray(body.arms) ? body.arms.slice(0, 4) : []
-      const totalAssessed = Math.max(0, Number(body.total_assessed) || 0)
-      const totalExcluded = safeExclusions.reduce((s, e) => s + (Math.max(0, Number(e.count) || 0)), 0)
-      const eligibleTotal = body.eligible_total !== undefined
-        ? Math.max(0, Number(body.eligible_total) || 0)
-        : Math.max(0, totalAssessed - totalExcluded)
-      const normalized: ConsortDiagramData = {
-        title: (body.title || 'CONSORT 2010 / STROBE Flow Diagram').slice(0, 120),
-        lang,
-        total_assessed: totalAssessed,
-        exclusions: safeExclusions.map(e => ({
-          reason: String(e.reason || (isEn ? 'Did not meet inclusion criteria' : '未满足入排标准')).slice(0, 80),
-          count: Math.max(0, Number(e.count) || 0),
-        })),
-        eligible_total: eligibleTotal,
-        arms: safeArms.map(a => ({
-          name: String(a.name || (isEn ? 'Study Arm' : '研究组')).slice(0, 60),
-          allocated: Math.max(0, Number(a.allocated) || 0),
-          lost_to_followup: Math.max(0, Number(a.lost_to_followup) || 0),
-          discontinued: Math.max(0, Number(a.discontinued) || 0),
-          analyzed: Math.max(0, Number(a.analyzed) || 0),
-        })),
-      }
-      const svg = renderConsortSvg(normalized)
-      const mermaid = renderConsortMermaid(normalized)
-      const arithmeticWarning = totalAssessed - totalExcluded !== eligibleTotal
-        ? (isEn
-            ? `Arithmetic warning: Total Assessed (${totalAssessed}) minus Total Excluded (${totalExcluded}) = ${totalAssessed - totalExcluded}, which does not match Eligible (${eligibleTotal}).`
-            : `注意：初筛总人数 (${totalAssessed}) 减去排除人数总和 (${totalExcluded}) = ${totalAssessed - totalExcluded}，与当前填写的合格入组人数 (${eligibleTotal}) 不一致。`)
-        : null
-      return c.json({ svg, mermaid, normalized, arithmetic_warning: arithmeticWarning })
+      return c.json(runConsortTool(body))
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400)
     }
@@ -864,29 +1239,7 @@ export function registerPublicToolsApi(app: Hono<any>, deps: PublicToolsDeps = {
         records?: Array<Record<string, unknown>>
         options?: Table1Options
       }>()
-      const rawText = typeof body.csv === 'string' ? body.csv.slice(0, 200_000) : JSON.stringify(body.records ?? []).slice(0, 200_000)
-      const phiFindings: PhiFinding[] = scanPhi(rawText)
-      const records = typeof body.csv === 'string'
-        ? parseTabularText(body.csv, 500)
-        : Array.isArray(body.records)
-          ? body.records.slice(0, 500)
-          : []
-      if (records.length === 0) {
-        return c.json({ error: '未解析到有效的数据行（请至少提供表头与 2 行数据）' }, 400)
-      }
-      const table1 = generateTable1FromData(records, body.options ?? {})
-      return c.json({
-        phi_clean: phiFindings.length === 0,
-        phi_findings_count: phiFindings.length,
-        phi_findings: phiFindings.slice(0, 10).map(f => ({
-          type: f.type,
-          redacted: f.redacted,
-          description: f.description,
-        })),
-        row_count: records.length,
-        columns: Object.keys(records[0] ?? {}),
-        table1,
-      })
+      return c.json(runTable1Tool(body))
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400)
     }
@@ -904,16 +1257,7 @@ export function registerPublicToolsApi(app: Hono<any>, deps: PublicToolsDeps = {
         records?: Array<Record<string, unknown>>
         options?: Table1Options
       }>()
-      const records = typeof body.csv === 'string'
-        ? parseTabularText(body.csv, 500)
-        : Array.isArray(body.records)
-          ? body.records.slice(0, 500)
-          : []
-      if (records.length === 0) {
-        return c.json({ error: '未解析到有效的数据行' }, 400)
-      }
-      const table1 = generateTable1FromData(records, body.options ?? {})
-      const docxBytes = exportTable1ToDocx(table1)
+      const { docxBytes } = runTable1DocxTool(body)
       return c.body(docxBytes as unknown as ArrayBuffer, 200, {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'Content-Disposition': `attachment; filename="Heurion_Table1_Baseline.docx"`,
@@ -959,70 +1303,7 @@ export function registerPublicToolsApi(app: Hono<any>, deps: PublicToolsDeps = {
         title?: string
         lang?: 'zh' | 'en'
       }>()
-      const records = typeof body.csv === 'string'
-        ? parseTabularText(body.csv, 500)
-        : Array.isArray(body.records)
-          ? body.records.slice(0, 500)
-          : []
-      if (records.length < 2) {
-        return c.json({ error: '请至少提供包含表头与 2 行有效随访记录的数据 / Please provide at least 2 survival records' }, 400)
-      }
-      const cols = Object.keys(records[0] ?? {})
-      const time_col = body.time_col?.trim() || cols.find(k => /time|month|day|year|os|pfs|followup/i.test(k)) || cols[1] || 'time'
-      const event_col = body.event_col?.trim() || cols.find(k => /event|status|dead|death|censor/i.test(k)) || cols[2] || 'event'
-      const group_col = body.group_col?.trim() || cols.find(k => /group|arm|treat|cohort/i.test(k)) || undefined
-      const time_unit = (body.time_unit?.trim() || 'Months').slice(0, 24)
-      const title = (body.title?.trim() || 'Kaplan-Meier Cumulative Survival Curve').slice(0, 120)
-
-      const result = generateSurvivalAnalysis(records, {
-        time_col,
-        event_col,
-        group_col,
-        time_unit,
-        title,
-      })
-
-      const gSummariesZh = result.groups.map(g => {
-        const med = g.median_time !== null ? `${g.median_time} ${time_unit}` : '未达到 (Not Reached)'
-        return `${g.label}组（n=${g.total_n}，结局事件 ${g.events_n} 例 [${g.event_rate.toFixed(1)}%]，中位生存期：${med}）`
-      })
-      let narrative_zh = `生存分析共纳入 ${ result.groups.reduce((s, g) => s + g.total_n, 0) } 例受试者，按分组比较：${gSummariesZh.join(' vs. ')}。`
-      if (result.log_rank) {
-        const sigText = result.log_rank.p_value < 0.05 ? '组间生存曲线差异具有统计学意义' : '组间生存曲线差异未达统计学显著性'
-        narrative_zh += ` Kaplan-Meier 生存分析显示${sigText}（Log-rank 检验 Chi-Square = ${result.log_rank.chi2}，df = ${result.log_rank.df}，P = ${result.log_rank.p_value_formatted}）。`
-      }
-      if (result.cox && result.cox.covariates.length > 0) {
-        const cov0 = result.cox.covariates[0]!
-        narrative_zh += ` Cox 比例风险回归模型提示 ${cov0.label} 的风险比（Hazard Ratio, HR）为 ${cov0.hr_formatted}（P = ${cov0.p_value_formatted}，C-index = ${result.cox.c_index}）。`
-      }
-
-      return c.json({
-        title: result.title,
-        time_col: result.time_col,
-        event_col: result.event_col,
-        group_col: result.group_col,
-        time_unit: result.time_unit,
-        groups: result.groups.map(g => ({
-          group: g.group,
-          label: g.label,
-          total_n: g.total_n,
-          events_n: g.events_n,
-          censored_n: g.censored_n,
-          event_rate: Number(g.event_rate.toFixed(1)),
-          median_time: g.median_time,
-          median_ci: g.median_ci,
-          milestone_survival: g.milestone_survival,
-        })),
-        log_rank: result.log_rank,
-        cox: result.cox,
-        risk_table: result.risk_table,
-        svg: result.svg,
-        forest_svg: result.forest_svg,
-        narrative_en: result.narrative,
-        narrative_zh,
-        markdown_table: result.markdown_table,
-        r_script: result.native_exports?.r_script ?? '',
-      })
+      return c.json(runKaplanMeierTool(body))
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400)
     }
@@ -1036,62 +1317,7 @@ export function registerPublicToolsApi(app: Hono<any>, deps: PublicToolsDeps = {
     recordToolInvocation('forest-plot-generator')
     try {
       const body = await c.req.json<ForestPlotInput>()
-      const lang: 'zh' | 'en' = body.lang === 'en' ? 'en' : 'zh'
-      const isEn = lang === 'en'
-      const effect_type: 'HR' | 'OR' | 'RR' =
-        body.effect_type === 'OR' || body.effect_type === 'RR' ? body.effect_type : 'HR'
-      const null_value = Number(body.null_value) > 0 ? Number(body.null_value) : 1.0
-      const rows = Array.isArray(body.rows) && body.rows.length > 0
-        ? body.rows.slice(0, 40)
-        : parseForestPlotLines(body.raw_lines ?? '')
-
-      const numericRows = rows.filter(r => !r.is_header && r.ci_lower > 0 && r.ci_upper > 0)
-      if (numericRows.length === 0) {
-        return c.json({ error: isEn ? 'Please provide at least 1 valid row (Label | Estimate | CI_Lower | CI_Upper)' : '请至少输入 1 行有效的效应量数据（格式：亚组名称 | 点估计值 | CI下限 | CI上限 | P值）' }, 400)
-      }
-
-      const title = (body.title || (isEn ? 'Subgroup & Multivariable Effect Size Forest Plot' : 'Subgroup & Multivariable Forest Plot')).slice(0, 120)
-      const left_label = (body.left_label || (isEn ? 'Favors Intervention' : 'Favors Intervention')).slice(0, 45)
-      const right_label = (body.right_label || (isEn ? 'Favors Control' : 'Favors Control')).slice(0, 45)
-
-      const svg = renderSubgroupForestPlotSvg({
-        title,
-        effect_type,
-        null_value,
-        left_label,
-        right_label,
-        rows,
-        lang,
-      })
-
-      const sigCount = numericRows.filter(r => !r.is_summary && (r.ci_upper < null_value || r.ci_lower > null_value)).length
-      const summaryRow = numericRows.find(r => r.is_summary) ?? numericRows[0]!
-      const narrative_en =
-        `Across ${numericRows.length} evaluated strata/covariates, the primary ${effect_type} in ${summaryRow.label} was ${summaryRow.estimate.toFixed(2)} (95% CI, ${summaryRow.ci_lower.toFixed(2)} to ${summaryRow.ci_upper.toFixed(2)}${summaryRow.p_value ? `; P = ${summaryRow.p_value}` : ''}). ` +
-        `Consistent directional effects or statistically significant associations (95% CI excluding ${null_value.toFixed(1)}) were observed in ${sigCount} of ${numericRows.filter(r => !r.is_summary).length || numericRows.length} subgroups.`
-      const narrative_zh =
-        `森林图共纳入 ${numericRows.length} 项亚组/协变量评估，其中 ${summaryRow.label} 的效应量 ${effect_type} 为 ${summaryRow.estimate.toFixed(2)}（95% CI ${summaryRow.ci_lower.toFixed(2)}–${summaryRow.ci_upper.toFixed(2)}${summaryRow.p_value ? `，P = ${summaryRow.p_value}` : ''}）。` +
-        `在全部评估的亚组中，共有 ${sigCount} 项的 95% 置信区间未跨过无效线（${effect_type} = ${null_value.toFixed(1)}），各预设亚组间效应方向保持一致。`
-
-      const r_script =
-        `# Reproducible R Script (forestploter)\n` +
-        `library(forestploter)\n` +
-        `df <- data.frame(\n` +
-        `  Subgroup = c(${numericRows.map(r => `"${r.label.replace(/([\\"])/g, '\\$1')}"`).join(', ')}),\n` +
-        `  Est = c(${numericRows.map(r => r.estimate.toFixed(3)).join(', ')}),\n` +
-        `  Low = c(${numericRows.map(r => r.ci_lower.toFixed(3)).join(', ')}),\n` +
-        `  High = c(${numericRows.map(r => r.ci_upper.toFixed(3)).join(', ')})\n` +
-        `)\n` +
-        `df$\`${effect_type} (95% CI)\` <- sprintf("%.2f (%.2f-%.2f)", df$Est, df$Low, df$High)\n`
-
-      return c.json({
-        svg,
-        rows_count: numericRows.length,
-        effect_type,
-        narrative_en,
-        narrative_zh,
-        r_script,
-      })
+      return c.json(runForestPlotTool(body))
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400)
     }
@@ -1105,116 +1331,7 @@ export function registerPublicToolsApi(app: Hono<any>, deps: PublicToolsDeps = {
     recordToolInvocation('phi-deidentifier')
     try {
       const body = await c.req.json<{ text?: string; lang?: 'zh' | 'en' }>()
-      const rawText = typeof body.text === 'string' ? body.text.slice(0, 50_000) : ''
-      if (!rawText.trim()) {
-        return c.json({ error: '请输入需要脱敏检查的临床病历或病例报告草稿 / Please provide clinical text to scan' }, 400)
-      }
-
-      // 1. 执行核心确定性 PHI 扫描（身份证 MOD 11-2、大陆手机号、银行卡 Luhn、中文病案号与患者姓名）
-      const baseFindings = scanPhi(rawText)
-      let redactedText = redactPhi(rawText)
-
-      // 2. 补充英文/国际 HIPAA Safe Harbor 标识符扫描（Email、US SSN、英文 MRN/Patient Name/Phone）
-      const extraFindings: Array<{
-        type: string
-        value: string
-        redacted: string
-        description_zh: string
-        description_en: string
-        score: number
-      }> = []
-
-      const applyExtraRegex = (
-        re: RegExp,
-        type: string,
-        descZh: string,
-        descEn: string,
-        maskFn: (match: string) => string,
-      ) => {
-        redactedText = redactedText.replace(re, match => {
-          const masked = maskFn(match)
-          extraFindings.push({
-            type,
-            value: match,
-            redacted: masked,
-            description_zh: descZh,
-            description_en: descEn,
-            score: 0.95,
-          })
-          return masked
-        })
-      }
-
-      // 电子邮箱
-      applyExtraRegex(
-        /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
-        'email',
-        '电子邮箱地址 (HIPAA Identifier #13)',
-        'Email Address (HIPAA Identifier #13)',
-        m => {
-          const atIdx = m.indexOf('@')
-          return (m[0] ?? '*') + '***' + m.slice(atIdx)
-        },
-      )
-      // US SSN
-      applyExtraRegex(
-        /\b\d{3}-\d{2}-\d{4}\b/g,
-        'ssn',
-        '美国社会安全号 SSN (HIPAA Identifier #7)',
-        'US Social Security Number (HIPAA Identifier #7)',
-        m => '***-**-' + m.slice(-4),
-      )
-      // 英文 MRN / Hospital ID
-      applyExtraRegex(
-        /\b(?:MRN|Medical\s+Record\s+(?:No|Number)|Hospital\s+ID|Patient\s+ID)\s*[:#]?\s*([A-Za-z0-9-]{4,20})\b/gi,
-        'medical_record_no',
-        '英文病案号/住院号 (HIPAA Identifier #8)',
-        'Medical Record Number / MRN (HIPAA Identifier #8)',
-        m => m.replace(/([A-Za-z0-9-]{4,20})$/, '[REDACTED-MRN]'),
-      )
-      // 英文 Patient Name 标签
-      applyExtraRegex(
-        /\b(?:Patient\s+Name|Patient|Subject\s+Name)\s*:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/g,
-        'patient_name',
-        '英文患者姓名标签 (HIPAA Identifier #1)',
-        'Labeled Patient Name (HIPAA Identifier #1)',
-        m => m.replace(/:\s*(.+)$/, ': [REDACTED-NAME]'),
-      )
-
-      const typeLabelEn: Record<string, string> = {
-        id_card: 'National ID Card (ISO 7064 Checksum Verified)',
-        phone: 'Mobile Phone Number',
-        bank_card: 'Bank / Insurance Card Number (Luhn Verified)',
-        medical_record_no: 'Medical Record / Inpatient / Outpatient ID',
-        name_with_diagnosis: 'Patient Real Name Linked with Clinical Diagnosis',
-      }
-
-      const unifiedFindings = [
-        ...baseFindings.map(f => ({
-          type: f.type,
-          value: f.value,
-          redacted: f.redacted,
-          description_zh: f.description,
-          description_en: typeLabelEn[f.type] || f.description,
-          score: f.score,
-        })),
-        ...extraFindings,
-      ]
-
-      return c.json({
-        clean: unifiedFindings.length === 0,
-        findings_count: unifiedFindings.length,
-        findings: unifiedFindings,
-        redacted_text: redactedText,
-        compliance_summary_zh:
-          unifiedFindings.length === 0
-            ? '✓ 未检出显式个人身份标识（身份证、手机号、病案号、邮箱或关联姓名），符合论文投稿与数据出境前置脱敏基线。'
-            : `⚠ 共拦截并掩码 ${unifiedFindings.length} 处潜在 PHI 敏感实体。请使用下方已脱敏文本用于病例报告撰写或大模型交互。`,
-        compliance_summary_en:
-          unifiedFindings.length === 0
-            ? '✓ Zero explicit PHI identifiers detected (National IDs, MRNs, phones, emails, or labeled patient names). Safe for manuscript drafting.'
-            : `⚠ Detected and masked ${unifiedFindings.length} PHI identifier(s) under HIPAA Safe Harbor / PIPL rules. Use the redacted text below for sharing or LLM prompting.`,
-      })
+      return c.json(runPhiScanTool(body))
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400)
     }

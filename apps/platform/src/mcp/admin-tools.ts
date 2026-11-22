@@ -339,6 +339,10 @@ export interface AdminToolDeps {
   aegisModules?: ModuleGrant
   /** AAP-1.0 [Lease-Gated] 授权钩子：当经由 /api/aegis/mcp 调用时注入 */
   leaseAuthorizer?: (input: LeaseAuthorizeInput) => LeaseAuthorizeResult
+  /** 对外公开基址（用于拼接高风险操作带外确认 URL）。 */
+  publicOrigin?: string
+  /** 支持 MCP URL Mode Elicitation (SEP-1036) 时注入的带外确认诱导回调。 */
+  elicitApproval?: (input: { actionId: string; summary: string; approveUrl: string }) => Promise<'accepted' | 'declined' | 'unsupported'>
 }
 
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
@@ -402,6 +406,40 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
           const reasonText = typeof args.reason === 'string' ? args.reason : null
           const scope = `heurion:${spec.name}.${String(args.action)}`
           const resource = String(args.patient_id ?? args.doc_id ?? args.study_id ?? args.dataset_id ?? args.tenant_id ?? '*')
+          const origin = (deps.publicOrigin || 'https://heurion.org').replace(/\/+$/, '')
+          const buildApproveUrl = (actionId: string) => `${origin}/app?action=${encodeURIComponent(actionId)}`
+
+          const createPendingRow = () => {
+            const stored = !body ? null : 'json' in body ? { json: body.json } : 'bytes' in body ? { bytes_b64: Buffer.from(body.bytes).toString('base64'), mime: body.mime }
+              : { form: body.form, ...(body.file ? { file: { b64: Buffer.from(body.file.bytes).toString('base64'), name: body.file.name, mime: body.file.mime } } : {}) }
+            const turn = deps.turns.active(userId, gen)
+            const row = store.addPendingAction({
+              user_id: userId, tool: spec.name, action: args.action, method: op.method, path: op.path(args), body: stored ? JSON.stringify(stored) : null,
+              summary: summaryText, reason: reasonText,
+              editable: op.editable ? JSON.stringify(op.editable(args)) : null, doc_id: turn?.docId ?? null, turn_id: turn?.turnId ?? null,
+            })
+            deps.turns.notify(userId, { type: 'action', action: { id: row.id, tool: row.tool, action: row.action, summary: row.summary, reason: row.reason, editable: op.editable ? op.editable(args) : null, status: 'pending', created_at: row.created_at } }, gen)
+            return row
+          }
+
+          const tryElicit = async (row: ReturnType<typeof createPendingRow>, approveUrl: string) => {
+            if (!deps.elicitApproval) return null
+            const elicitOutcome = await deps.elicitApproval({ actionId: row.id, summary: row.summary, approveUrl }).catch(() => 'unsupported' as const)
+            if (elicitOutcome === 'unsupported') return null
+            const updated = store.getPendingAction(row.id)
+            if (updated?.status === 'done') {
+              const parsed = updated.result ? JSON.parse(updated.result) as { response?: unknown } : null
+              return json({ status: 'done', action_id: row.id, confirmed_by_user: true, result: parsed?.response ?? { ok: true } })
+            }
+            if (updated?.status === 'rejected' || elicitOutcome === 'declined') {
+              return json({ status: 'rejected', action_id: row.id, message: '用户拒绝了该高风险操作，平台未执行。' })
+            }
+            if (updated?.status === 'failed') {
+              const parsed = updated.result ? JSON.parse(updated.result) as { response?: unknown } : null
+              return fail('action_failed', '用户确认后执行失败', { action_id: row.id, result: parsed?.response ?? null })
+            }
+            return null
+          }
 
           if (deps.leaseAuthorizer) {
             const leaseCheck = deps.leaseAuthorizer({
@@ -418,19 +456,15 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
               const basePayload = typeof r.json === 'object' && r.json !== null ? (r.json as Record<string, unknown>) : { ok: true, data: r.json ?? r.text }
               return json({ ...basePayload, lease_authorized: true, lease_id: leaseCheck.leaseId, lease_via: leaseCheck.via })
             }
-            const stored = !body ? null : 'json' in body ? { json: body.json } : 'bytes' in body ? { bytes_b64: Buffer.from(body.bytes).toString('base64'), mime: body.mime }
-              : { form: body.form, ...(body.file ? { file: { b64: Buffer.from(body.file.bytes).toString('base64'), name: body.file.name, mime: body.file.mime } } : {}) }
-            const turn = deps.turns.active(userId, gen)
-            const row = store.addPendingAction({
-              user_id: userId, tool: spec.name, action: args.action, method: op.method, path: op.path(args), body: stored ? JSON.stringify(stored) : null,
-              summary: summaryText, reason: reasonText,
-              editable: op.editable ? JSON.stringify(op.editable(args)) : null, doc_id: turn?.docId ?? null, turn_id: turn?.turnId ?? null,
-            })
-            deps.turns.notify(userId, { type: 'action', action: { id: row.id, tool: row.tool, action: row.action, summary: row.summary, reason: row.reason, editable: op.editable ? op.editable(args) : null, status: 'pending', created_at: row.created_at } }, gen)
+            const row = createPendingRow()
+            const approveUrl = buildApproveUrl(row.id)
+            const elicited = await tryElicit(row, approveUrl)
+            if (elicited) return elicited
             return json({
               status: 'approval_required',
               escalation_id: leaseCheck.escalationId,
               action_id: row.id,
+              approve_url: approveUrl,
               summary: row.summary,
               reason: leaseCheck.reason,
               suggested_lease_scope: leaseCheck.suggestedLeaseScope,
@@ -438,16 +472,11 @@ export function registerAdminTools(server: McpServer, deps: AdminToolDeps, userI
             })
           }
 
-          const stored = !body ? null : 'json' in body ? { json: body.json } : 'bytes' in body ? { bytes_b64: Buffer.from(body.bytes).toString('base64'), mime: body.mime }
-            : { form: body.form, ...(body.file ? { file: { b64: Buffer.from(body.file.bytes).toString('base64'), name: body.file.name, mime: body.file.mime } } : {}) }
-          const turn = deps.turns.active(userId, gen)
-          const row = store.addPendingAction({
-            user_id: userId, tool: spec.name, action: args.action, method: op.method, path: op.path(args), body: stored ? JSON.stringify(stored) : null,
-            summary: summaryText, reason: reasonText,
-            editable: op.editable ? JSON.stringify(op.editable(args)) : null, doc_id: turn?.docId ?? null, turn_id: turn?.turnId ?? null,
-          })
-          deps.turns.notify(userId, { type: 'action', action: { id: row.id, tool: row.tool, action: row.action, summary: row.summary, reason: row.reason, editable: op.editable ? op.editable(args) : null, status: 'pending', created_at: row.created_at } }, gen)
-          return json({ status: 'pending_confirmation', action_id: row.id, summary: row.summary, message: '这是高风险操作，已在对话里给用户生成确认卡；用户确认后平台才会执行。向用户说明为什么要做，然后等待，不要重复提交。之后用 action_status 查结果。' })
+          const row = createPendingRow()
+          const approveUrl = buildApproveUrl(row.id)
+          const elicited = await tryElicit(row, approveUrl)
+          if (elicited) return elicited
+          return json({ status: 'pending_confirmation', action_id: row.id, approve_url: approveUrl, summary: row.summary, message: '这是高风险操作，已在对话里给用户生成确认卡；用户确认后平台才会执行。向用户说明为什么要做，然后等待，不要重复提交。之后用 action_status 查结果。' })
         }
         const r = await deps.invoke(userId, op.method, op.path(args), op.body?.(args, file))
         if (!r.ok) return errorOf(r)

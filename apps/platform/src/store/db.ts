@@ -94,6 +94,20 @@ export interface AgentLeaseRow {
   revoked_at: string | null
 }
 
+/** MCP Hub 渐进式发现持久化工具目录行（支持 FTS5 trigram + bge-m3 混合检索）。 */
+export interface McpToolCatalogRow {
+  tool_name: string
+  module: string
+  summary: string
+  description: string
+  required_scope: string
+  risk_tier: 'read' | 'write' | 'confirm'
+  input_schema_json: string
+  embedding: Uint8Array | null
+  schema_hash: string
+  updated_at: string
+}
+
 export interface UserRow {
   id: string
   username: string
@@ -1199,6 +1213,24 @@ export class Store {
       const cols = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name)
       if (!cols.includes('modules')) this.db.exec(`ALTER TABLE ${table} ADD COLUMN modules TEXT`)
     }
+    const oauthClientCols = (this.db.prepare('PRAGMA table_info(oauth_clients)').all() as Array<{ name: string }>).map(c => c.name)
+    if (!oauthClientCols.includes('expires_at')) this.db.exec('ALTER TABLE oauth_clients ADD COLUMN expires_at TEXT')
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mcp_tool_catalog (
+        tool_name TEXT PRIMARY KEY,
+        module TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        description TEXT NOT NULL,
+        required_scope TEXT NOT NULL,
+        risk_tier TEXT NOT NULL CHECK(risk_tier IN ('read','write','confirm')),
+        input_schema_json TEXT NOT NULL,
+        embedding BLOB,
+        schema_hash TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_mcp_tool_module ON mcp_tool_catalog(module);
+      CREATE VIRTUAL TABLE IF NOT EXISTS mcp_tool_fts USING fts5(tool_name, module, text, tokenize = 'trigram');
+    `)
   }
 
 
@@ -3269,12 +3301,22 @@ export class Store {
   }
 
   // —— MCP 的 OAuth 2.1 ——
-  addOAuthClient(c: { client_id: string; client_name: string; redirect_uris: string[] }): void {
-    this.db.prepare('INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at) VALUES (?, ?, ?, ?)').run(c.client_id, c.client_name, JSON.stringify(c.redirect_uris), now())
+  addOAuthClient(c: { client_id: string; client_name: string; redirect_uris: string[]; expires_at?: string | null }): void {
+    this.upsertOAuthClient(c)
   }
-  getOAuthClient(clientId: string): { client_id: string; client_name: string; redirect_uris: string[] } | undefined {
-    const r = this.db.prepare('SELECT * FROM oauth_clients WHERE client_id = ?').get(clientId) as { client_id: string; client_name: string; redirect_uris: string } | undefined
-    return r ? { ...r, redirect_uris: JSON.parse(r.redirect_uris) as string[] } : undefined
+  upsertOAuthClient(c: { client_id: string; client_name: string; redirect_uris: string[]; expires_at?: string | null }): void {
+    this.db.prepare(`
+      INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(client_id) DO UPDATE SET
+        client_name = excluded.client_name,
+        redirect_uris = excluded.redirect_uris,
+        expires_at = excluded.expires_at
+    `).run(c.client_id, c.client_name, JSON.stringify(c.redirect_uris), now(), c.expires_at ?? null)
+  }
+  getOAuthClient(clientId: string): { client_id: string; client_name: string; redirect_uris: string[]; expires_at: string | null } | undefined {
+    const r = this.db.prepare('SELECT * FROM oauth_clients WHERE client_id = ?').get(clientId) as { client_id: string; client_name: string; redirect_uris: string; expires_at?: string | null } | undefined
+    return r ? { client_id: r.client_id, client_name: r.client_name, redirect_uris: JSON.parse(r.redirect_uris) as string[], expires_at: r.expires_at ?? null } : undefined
   }
   addOAuthRequest(r: { id: string; client_id: string; redirect_uri: string; state: string | null; code_challenge: string; scope: string | null; resource: string | null; ttl_ms: number }): void {
     this.db.prepare('INSERT INTO oauth_requests (id, client_id, redirect_uri, state, code_challenge, scope, resource, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -3573,6 +3615,86 @@ export class Store {
        LIMIT 1
     `).get(docId) as { turn_id: string } | undefined
     return row?.turn_id ?? null
+  }
+
+  // —— MCP Hub 渐进式工具目录与 FTS5 索引（docs/design/MCP_HUB.md） ——
+
+  listMcpToolCatalog(): McpToolCatalogRow[] {
+    return this.db.prepare('SELECT * FROM mcp_tool_catalog ORDER BY module, tool_name').all() as unknown as McpToolCatalogRow[]
+  }
+
+  getMcpToolCatalog(toolName: string): McpToolCatalogRow | undefined {
+    return this.db.prepare('SELECT * FROM mcp_tool_catalog WHERE tool_name = ?').get(toolName) as McpToolCatalogRow | undefined
+  }
+
+  upsertMcpToolCatalog(row: Omit<McpToolCatalogRow, 'updated_at'>): void {
+    const t = now()
+    this.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO mcp_tool_catalog (
+          tool_name, module, summary, description, required_scope, risk_tier,
+          input_schema_json, embedding, schema_hash, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tool_name) DO UPDATE SET
+          module = excluded.module,
+          summary = excluded.summary,
+          description = excluded.description,
+          required_scope = excluded.required_scope,
+          risk_tier = excluded.risk_tier,
+          input_schema_json = excluded.input_schema_json,
+          embedding = COALESCE(excluded.embedding, mcp_tool_catalog.embedding),
+          schema_hash = excluded.schema_hash,
+          updated_at = excluded.updated_at
+      `).run(
+        row.tool_name,
+        row.module,
+        row.summary,
+        row.description,
+        row.required_scope,
+        row.risk_tier,
+        row.input_schema_json,
+        row.embedding,
+        row.schema_hash,
+        t,
+      )
+      this.db.prepare('DELETE FROM mcp_tool_fts WHERE tool_name = ?').run(row.tool_name)
+      this.db.prepare('INSERT INTO mcp_tool_fts (tool_name, module, text) VALUES (?, ?, ?)').run(
+        row.tool_name,
+        row.module,
+        `${row.tool_name} ${row.module} ${row.summary} ${row.description}`,
+      )
+    })
+  }
+
+  setMcpToolEmbedding(toolName: string, vec: Float32Array | null): void {
+    this.db.prepare('UPDATE mcp_tool_catalog SET embedding = ? WHERE tool_name = ?').run(
+      vec ? new Uint8Array(vec.buffer, vec.byteOffset, vec.byteLength) : null,
+      toolName,
+    )
+  }
+
+  searchMcpToolsFts(query: string, limit = 30): Array<{ tool_name: string; score: number }> {
+    const q = query.trim()
+    if (!q) return []
+    const terms = kbQueryTerms(q)
+    if (terms.length > 0) {
+      const match = terms.map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ')
+      return this.db.prepare(`
+        SELECT tool_name, -bm25(mcp_tool_fts) AS score
+          FROM mcp_tool_fts
+         WHERE mcp_tool_fts MATCH ?
+         ORDER BY bm25(mcp_tool_fts)
+         LIMIT ?
+      `).all(match, limit) as Array<{ tool_name: string; score: number }>
+    }
+    const like = `%${q.replace(/[%_\\]/g, m => '\\' + m)}%`
+    return this.db.prepare(`
+      SELECT tool_name, 1.0 AS score
+        FROM mcp_tool_catalog
+       WHERE tool_name LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'
+       ORDER BY tool_name
+       LIMIT ?
+    `).all(like, like, like, limit) as Array<{ tool_name: string; score: number }>
   }
 }
 
