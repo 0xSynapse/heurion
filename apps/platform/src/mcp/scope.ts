@@ -11,11 +11,13 @@ export type ToolScope = 'doc' | 'deck'
 const CLINICAL = /^(imaging_|patient_|phr_|lab_|labs_|report_|share_|tenant_admin$|platform_admin$|account$|org_template$|asset_provenance$)/
 /** 只有幻灯片用得到的。 */
 const DECK = /^(deck_|slide_|layout_check$|image_search$)/
+/** 外部 MCP 网关专用桥接工具（.docx 导入导出、外部 Markdown 审稿与异步深审轮询）：不占用 dsh 单文档回合上下文。 */
+const EXTERNAL_BRIDGE = /^(doc_(import|export)_docx|deep_review_(audit_markdown|audit|start|status))$/
 
 /** 这个工具在该范围里是否暴露；scope 缺省为全部。 */
 export function toolInScope(name: string, scope: ToolScope | undefined): boolean {
   if (!scope) return true
-  if (CLINICAL.test(name)) return false
+  if (CLINICAL.test(name) || EXTERNAL_BRIDGE.test(name)) return false
   return scope === 'deck' || !DECK.test(name)
 }
 

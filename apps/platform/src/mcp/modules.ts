@@ -44,6 +44,7 @@ export const MODULES: readonly HeurionModule[] = [
       'deck_templates', 'slide_read', 'deck_edit', 'layout_check', 'slide_render', 'image_search', 'slide_add_photo',
       'comments_list', 'comment_add', 'comment_reply', 'comment_resolve',
       'insert_measurement', 'list_measurements', 'asset_upload', 'diagram_render',
+      'doc_import_docx', 'doc_export_docx',
     ],
     prefixes: [],
     leaseGated: {},
@@ -53,7 +54,10 @@ export const MODULES: readonly HeurionModule[] = [
     title: '文献',
     summary: '文献检索、开放全文、规范引用登记与论断核对',
     external: 'open',
-    names: ['pubmed_search', 'openalex_search', 'oa_fulltext', 'doi_lookup', 'insert_citation', 'import_references', 'list_citations', 'verify_claims', 'claim_report'],
+    names: [
+      'pubmed_search', 'openalex_search', 'oa_fulltext', 'doi_lookup', 'insert_citation', 'import_references', 'list_citations',
+      'verify_claims', 'claim_report', 'deep_review_audit_markdown', 'deep_review_audit', 'deep_review_start', 'deep_review_status',
+    ],
     prefixes: [],
     leaseGated: {},
   },
@@ -156,9 +160,10 @@ export function moduleOf(tool: string): ModuleId | null {
  * 与拆分前 `AEGIS_READONLY_TOOLS` 正则逐个一致（tests/mcp-modules.test.ts 校验）。
  */
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
-  'doc_list', 'docs_search', 'doc_outline', 'doc_read', 'doc_search', 'doc_validate', 'doc_history', 'doc_diff',
+  'doc_list', 'docs_search', 'doc_outline', 'doc_read', 'doc_search', 'doc_validate', 'doc_history', 'doc_diff', 'doc_export_docx',
   'deck_templates', 'slide_read', 'layout_check', 'slide_render', 'comments_list',
-  'pubmed_search', 'openalex_search', 'oa_fulltext', 'doi_lookup', 'list_citations', 'list_measurements', 'verify_claims',
+  'pubmed_search', 'openalex_search', 'oa_fulltext', 'doi_lookup', 'list_citations', 'list_measurements',
+  'verify_claims', 'deep_review_audit_markdown', 'deep_review_audit', 'deep_review_status',
   'dataset_list', 'dataset_describe',
   'patient_list', 'patient_read', 'labs_query', 'report_read', 'patient_access_log', 'share_list', 'share_read', 'share_labs', 'share_file',
   'study_list', 'study_read', 'study_cohort_preview', 'study_cohort_list', 'study_vars_list',

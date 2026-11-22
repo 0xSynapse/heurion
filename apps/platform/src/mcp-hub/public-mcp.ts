@@ -2,6 +2,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { z } from 'zod'
 import {
+  MAX_PUBLIC_AUDIT_MARKDOWN_CHARS,
+  runDeterministicDeepReviewOnMarkdown,
+} from '../claims/markdown-audit.ts'
+import {
   checkPublicRateLimit,
   recordToolInvocation,
   runConsortTool,
@@ -15,16 +19,21 @@ import {
 } from '../http/routes/public-tools-api.ts'
 
 /**
- * Phase 0：零鉴权无状态公共临床科研 MCP 服务（挂载于 `POST /api/public/mcp`）
- * 对齐 Official MCP Registry 条目 `org.heurion/clinical-research-tools`。
- * 安全边界：不读写 SQLite 数据库、不触及用户工作区 / PHI 存储，仅暴露 7 个纯计算或公开文献核验工具。
+ * Phase 0：零鉴权无状态公共临床科研 MCP 服务（挂载于 `POST /api/public/mcp` 与 `POST /api/public/deep-review/mcp`）
+ * 对齐 Official MCP Registry 条目 `org.heurion/clinical-research-tools` 与零成本 Deep Review AST 试用入口。
+ * 安全边界：不读写 SQLite 数据库、不触发服务端大模型、不触及用户工作区 / PHI 存储。
  */
 
 const PUBLIC_MCP_TIMEOUT_MS = 30_000
 
 const PUBLIC_INSTRUCTIONS =
   'Heurion Public Clinical Research Tools (Zero-Auth Stateless MCP). ' +
-  'Provides 7 deterministic clinical biostatistics, diagram, PHI de-identification, and PubMed citation-verification engines without database state or user credentials.'
+  'Provides 8 deterministic clinical biostatistics, diagram, PHI de-identification, Deep Review AST audit, and PubMed citation-verification engines without database state or user credentials.'
+
+const PUBLIC_DEEP_REVIEW_INSTRUCTIONS =
+  'Heurion Deep Review — Zero-Auth Deterministic AST & PubMed Verification Trial MCP. ' +
+  'Performs zero-LLM structural manuscript auditing (Table-Text arithmetic, statistical method-result consistency, Spin bias, CONSORT/STROBE checks) and PubMed/Crossref effect-size verification. ' +
+  'For persistent 4-stage LLM review with anchored Word comments and physician rebuttal memory, connect via OAuth 2.1 to https://heurion.org/api/mcp/deep-review.'
 
 function jsonTextResult(payload: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] }
@@ -244,6 +253,43 @@ export function buildPublicMcpServer(deps: PublicToolsDeps = {}, opts: PublicMcp
     },
   )
 
+  registerPublicDeepReviewAuditTool(server, clientIp)
+  registerPublicPubmedCitationTool(server, deps, clientIp)
+  return server
+}
+
+function registerPublicDeepReviewAuditTool(server: McpServer, clientIp: string): void {
+  server.registerTool(
+    'public_deep_review_audit',
+    {
+      title: 'Deterministic Deep Review AST Auditor (Zero LLM Cost)',
+      description: '零大模型消耗的临床论文审稿审计：解析 Markdown 为文档 AST 与 TableSummary，自动发现摘要–正文–表格算术矛盾、方法–结果统计不一致、Spin Bias 夸大及 CONSORT/STROBE 规范缺口。单 IP 每分钟限 20 次。',
+      inputSchema: {
+        markdown: z.string().min(20).max(MAX_PUBLIC_AUDIT_MARKDOWN_CHARS).describe('待审计的临床研究论文 Markdown 原文（支持 GFM 表格）'),
+        title: z.string().max(200).optional().describe('可选文稿标题'),
+        include_scratchpad: z.boolean().optional().describe('是否返回跨章节共享结构化草稿板（样本量、研究设计、统计检验与缩写汇总），默认 true'),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async args => {
+      if (!checkPublicRateLimit(clientIp, 'public_mcp_deep_review', 20)) {
+        return errorTextResult('Deep Review AST 试用请求过于频繁（单 IP 每分钟限 20 次），请稍后再试 / Rate limit exceeded (20/min)')
+      }
+      recordToolInvocation('deep-review-ast-audit')
+      try {
+        return jsonTextResult(runDeterministicDeepReviewOnMarkdown(args.markdown, {
+          title: args.title,
+          activeRules: [],
+          includeScratchpad: args.include_scratchpad !== false,
+        }))
+      } catch (err) {
+        return errorTextResult((err as Error).message)
+      }
+    },
+  )
+}
+
+function registerPublicPubmedCitationTool(server: McpServer, deps: PublicToolsDeps, clientIp: string): void {
   server.registerTool(
     'public_pubmed_citation_check',
     {
@@ -268,8 +314,6 @@ export function buildPublicMcpServer(deps: PublicToolsDeps = {}, opts: PublicMcp
       }
     },
   )
-
-  return server
 }
 
 function ipFromRequest(req: Request): string {
@@ -279,27 +323,7 @@ function ipFromRequest(req: Request): string {
   return fwd || 'local'
 }
 
-/** Web Standard Streamable HTTP MCP 处理器（挂载于 Hono `POST /api/public/mcp`） */
-export async function handlePublicMcpRequest(
-  deps: PublicToolsDeps,
-  req: Request,
-  clientIpOverride?: string,
-): Promise<Response> {
-  const ip = clientIpOverride || ipFromRequest(req)
-  if (!checkPublicRateLimit(ip, 'public_mcp', 30)) {
-    return new Response(
-      JSON.stringify({ error: '请求过于频繁，请稍后再试 / Rate limit exceeded', code: 'rate_limited' }),
-      {
-        status: 429,
-        headers: {
-          'content-type': 'application/json; charset=utf-8',
-          'retry-after': '60',
-        },
-      },
-    )
-  }
-
-  const server = buildPublicMcpServer(deps, { clientIp: ip })
+async function servePublicMcpTransport(server: McpServer, req: Request): Promise<Response> {
   const accept = req.headers.get('accept') ?? ''
   const contentType = req.headers.get('content-type') ?? ''
   let request = req
@@ -327,4 +351,63 @@ export async function handlePublicMcpRequest(
     await transport.close()
     await server.close()
   }
+}
+
+export function buildPublicDeepReviewMcpServer(deps: PublicToolsDeps = {}, opts: PublicMcpServerOptions = {}): McpServer {
+  const clientIp = opts.clientIp || 'local'
+  const server = new McpServer(
+    { name: 'heurion-deep-review-public', version: '1.0.0' },
+    { instructions: PUBLIC_DEEP_REVIEW_INSTRUCTIONS },
+  )
+  registerPublicDeepReviewAuditTool(server, clientIp)
+  registerPublicPubmedCitationTool(server, deps, clientIp)
+  return server
+}
+
+/** Web Standard Streamable HTTP 处理器（挂载于 Hono `POST /api/public/mcp`） */
+export async function handlePublicMcpRequest(
+  deps: PublicToolsDeps,
+  req: Request,
+  clientIpOverride?: string,
+): Promise<Response> {
+  const ip = clientIpOverride || ipFromRequest(req)
+  if (!checkPublicRateLimit(ip, 'public_mcp', 30)) {
+    return new Response(
+      JSON.stringify({ error: '请求过于频繁，请稍后再试 / Rate limit exceeded', code: 'rate_limited' }),
+      {
+        status: 429,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'retry-after': '60',
+        },
+      },
+    )
+  }
+
+  const server = buildPublicMcpServer(deps, { clientIp: ip })
+  return servePublicMcpTransport(server, req)
+}
+
+/** 零鉴权 Deep Review 确定性 AST 试用网关（挂载于 Hono `POST /api/public/deep-review/mcp`） */
+export async function handlePublicDeepReviewMcpRequest(
+  deps: PublicToolsDeps,
+  req: Request,
+  clientIpOverride?: string,
+): Promise<Response> {
+  const ip = clientIpOverride || ipFromRequest(req)
+  if (!checkPublicRateLimit(ip, 'public_mcp_deep_review_endpoint', 30)) {
+    return new Response(
+      JSON.stringify({ error: '请求过于频繁，请稍后再试 / Rate limit exceeded', code: 'rate_limited' }),
+      {
+        status: 429,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'retry-after': '60',
+        },
+      },
+    )
+  }
+
+  const server = buildPublicDeepReviewMcpServer(deps, { clientIp: ip })
+  return servePublicMcpTransport(server, req)
 }

@@ -103,7 +103,7 @@ export function protectedResourceMetadata(origin: string, path: string) {
   }
 }
 
-const isMcpPath = (p: string) => /^\/api\/(aegis\/)?mcp(\/[a-z]+)?$/.test(p)
+const isMcpPath = (p: string) => /^\/api\/(aegis\/)?mcp(\/[a-z][a-z0-9-]*)?$/.test(p)
 
 /** resource 参数（RFC 8707）：可以不给；给了就必须是本站的 MCP 地址。 */
 function checkResource(resource: string | null | undefined, origin: string): string | null {

@@ -114,6 +114,7 @@ describe('Phase 0 · Zero-Auth Public Clinical Research MCP (/api/public/mcp)', 
     const names = listJson.result!.tools.map(t => t.name).sort()
     expect(names).toEqual([
       'public_consort_diagram',
+      'public_deep_review_audit',
       'public_e_value_calculate',
       'public_forest_plot_generate',
       'public_kaplan_meier_survival',

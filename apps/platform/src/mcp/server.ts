@@ -15,8 +15,14 @@ import { z } from 'zod'
 import { canAccess, verifyToken, type Permission, type TokenClaims } from '../auth/token.ts'
 import { AegisAuthService } from '../aegis/auth.ts'
 import type { AgentGrantRow, DocRow, Store, TenantRow, UserRow } from '../store/db.ts'
-import type { ClaimService } from '../claims/service.ts'
-import { pptxFor } from '../convert/exports.ts'
+import { newCommentId } from '../store/db.ts'
+import type { ClaimService, DeepReviewMode, ReviewProgress } from '../claims/service.ts'
+import { buildManuscriptScratchpad, extractTableSummaries } from '../claims/extract.ts'
+import { MAX_AUTH_AUDIT_MARKDOWN_CHARS, runDeterministicDeepReviewOnMarkdown } from '../claims/markdown-audit.ts'
+import { docxFor, pptxFor } from '../convert/exports.ts'
+import { bindAssets, bindComments, DocxImportError, importDocx } from '../convert/docx-import.ts'
+import { exportFontsParam, withFonts } from '../convert/fonts.ts'
+import { writeWorkspaceFile, WorkspaceFileError } from '../aegis/files.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
 import { toolInScope } from './scope.ts'
 import { DSH_INSTRUCTIONS, externalInstructions } from './instructions.ts'
@@ -122,6 +128,25 @@ export interface McpDeps {
   invoke?: Invoke
   /** Subagent 子专家协同调度服务。 */
   subagents?: SubagentService
+  /** 异步四阶段大模型深度审稿任务控制器（由 HTTP 网关注入）。 */
+  deepReviewJobs?: {
+    start: (
+      row: DocRow,
+      userId: string,
+      opts?: { mode?: DeepReviewMode; anchorComments?: boolean },
+    ) => { job_id: string }
+    status: (
+      docId: string,
+      jobId: string,
+      userId: string,
+    ) => {
+      status: 'running' | 'done' | 'error'
+      steps: Record<string, ReviewProgress>
+      elapsed_ms: number
+      result?: unknown
+      error?: string
+    } | null
+  }
 }
 
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
@@ -133,6 +158,9 @@ const fail = (code: string, message: string, extra: Record<string, unknown> = {}
 
 const IMAGE_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp' }
 const MAX_ASSET = 10 * 1024 * 1024
+const MAX_INLINE_DOCX = 8 * 1024 * 1024
+const MAX_DEEP_REVIEW_STARTS_PER_HOUR = 6
+const deepReviewStartHits = new Map<string, number[]>()
 
 
 function allowedMeasurementSources(mods?: ModuleGrant): ReadonlySet<SourceKind> | undefined {
@@ -527,6 +555,111 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       rev: docs.rev(doc_id),
       changes: r.event?.changes.length ?? 0,
       skipped: r.skipped,
+    })
+  })
+
+  server.registerTool('doc_import_docx', {
+    description: '导入工作区 .docx 或 base64 .docx 为可协作文档（保留格式、图片与 Word 批注），返回 doc_id。',
+    inputSchema: {
+      path: z.string().min(1).optional().describe('工作区内的 .docx 相对路径'),
+      data_base64: z.string().min(1).optional().describe('.docx 文件 base64 编码内容（与 path 二选一）'),
+      filename: z.string().min(1).max(200).optional().describe('原始文件名'),
+      title: z.string().min(1).max(200).optional().describe('导入后的文档标题'),
+    },
+  }, async ({ path, data_base64, filename, title }) => {
+    if (!claims.p.includes('write') || claims.d !== '*') return fail('forbidden', '当前令牌不能导入文档')
+    let bytes: Uint8Array
+    const fallbackName = (filename || path || 'Imported Manuscript.docx').split('/').pop() ?? 'Imported Manuscript.docx'
+    if (data_base64) {
+      const buf = Buffer.from(data_base64.replace(/\s+/g, ''), 'base64')
+      if (!buf.byteLength) return fail('invalid_docx', 'base64 解码后的 .docx 为空')
+      if (buf.byteLength > MAX_ASSET) return fail('too_large', '文件超过 10MB 上限')
+      bytes = new Uint8Array(buf)
+    } else if (path) {
+      const root = realpathSync(deps.workspaceDir(claims.u))
+      let file: string
+      try {
+        file = realpathSync(isAbsolute(path) ? path : join(root, path))
+      } catch {
+        return fail('file_not_found', `找不到文件 ${path}`, { hint: '路径相对于工作目录。' })
+      }
+      const rel = relative(root, file)
+      if (rel.startsWith('..') || isAbsolute(rel)) return fail('forbidden', '只能读取工作目录内的文件')
+      if (!/\.docx$/i.test(file)) return fail('unsupported_type', 'doc_import_docx 仅支持 .docx 文件')
+      if (statSync(file).size > MAX_ASSET) return fail('too_large', '文件超过 10MB 上限')
+      bytes = new Uint8Array(readFileSync(file))
+    } else {
+      return fail('missing_file', '需要提供 path 或 data_base64')
+    }
+    try {
+      const imported = importDocx(bytes)
+      const ids = new Map(imported.assets.map(a => [a.key, store.putAsset({ owner: claims.u, mime: a.mime, name: a.name, bytes: a.bytes }).id]))
+      const bound = bindComments(bindAssets(imported.doc, ids), imported.comments, newCommentId)
+      const resolvedTitle = title?.trim() || fallbackName.replace(/\.docx$/i, '').slice(0, 200) || 'Imported Manuscript'
+      const row = docs.create({ owner: claims.u, title: resolvedTitle, content: bound.doc, source: 'import' })
+      store.putNodeSrc(row.id, imported.src)
+      store.putPackage(row.id, 'docx', bytes)
+      for (const t of bound.threads) {
+        store.addComment({ id: t.id, doc_id: row.id, node_id: t.node_id, snippet: t.snippet, source_ref: `word:${t.word_id}:${t.replies.length}` })
+        store.addReply(t.id, 'user', t.text, null, t.author)
+        for (const r of t.replies) store.addReply(t.id, 'user', r.text, null, r.author)
+        if (t.done) store.setCommentStatus(row.id, t.id, 'resolved', 'user')
+      }
+      ctx.touch(row.id)
+      return json({
+        doc_id: row.id,
+        title: row.title,
+        rev: docs.rev(row.id),
+        comments_imported: bound.threads.length,
+        warnings: imported.warnings,
+      })
+    } catch (err) {
+      if (err instanceof DocxImportError) return fail('docx_import_error', err.message)
+      throw err
+    }
+  })
+
+  server.registerTool('doc_export_docx', {
+    description: '将文档导出为 Word (.docx)，默认保留 AI 待确认修订标记（clean=true 导出干净稿），可存工作区或返回 base64。',
+    inputSchema: {
+      doc_id: z.string(),
+      clean: z.boolean().optional().describe('true 时按干净稿导出（去掉 AI 修订标记）'),
+      fonts: z.string().optional().describe('可选字体方案参数'),
+      output_path: z.string().min(1).optional().describe('可选保存到工作区相对路径'),
+      return_base64: z.boolean().optional().describe('是否返回 data_base64（默认 true，超过 8MB 时建议传 output_path）'),
+    },
+  }, async ({ doc_id, clean, fonts, output_path, return_base64 }) => {
+    const denied = ctx.check(doc_id, 'read')
+    if (denied) return denied
+    const row = store.getDoc(doc_id)!
+    if (row.kind !== 'doc') return fail('not_a_doc', 'doc_export_docx 仅支持文稿文档（kind=doc）')
+    docs.flush(doc_id)
+    const result = docxFor(docs, row.id, ctx.measureViews(row), { clean: clean === true })
+    const finalBytes = new Uint8Array(withFonts(result.bytes, exportFontsParam(fonts)))
+    let workspacePath: string | undefined
+    let downloadPath: string | undefined
+    if (output_path) {
+      if (!claims.p.includes('write')) return fail('forbidden', '当前令牌为只读权限，不能写入工作区文件')
+      try {
+        const written = writeWorkspaceFile(deps.workspaceDir(claims.u), output_path, finalBytes)
+        workspacePath = written.rel
+        downloadPath = `/api/mcp/files/${written.rel.split('/').map(encodeURIComponent).join('/')}`
+      } catch (err) {
+        if (err instanceof WorkspaceFileError) return fail(err.code, err.message)
+        throw err
+      }
+    }
+    const wantBase64 = return_base64 !== false && finalBytes.byteLength <= MAX_INLINE_DOCX
+    return json({
+      doc_id: row.id,
+      title: row.title,
+      filename: `${clean ? `${row.title}（干净稿）` : row.title}.docx`,
+      bytes: finalBytes.byteLength,
+      warnings: result.warnings,
+      ...(workspacePath ? { workspace_path: workspacePath, download_path: downloadPath } : {}),
+      ...(wantBase64
+        ? { data_base64: Buffer.from(finalBytes).toString('base64') }
+        : { base64_omitted: true, ...(return_base64 !== false ? { hint: '文件超过 8MB，请传 output_path 后经 download_path 取回' } : {}) }),
     })
   })
 
@@ -1100,6 +1233,116 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     const out = deps.claims.report(doc_id, results)
     if (out.some(r => r.status === 'commented')) ctx.notify({ type: 'comment_reply', doc_id, comment_id: '' })
     return json({ results: out, note: out.some(r => r.status === 'stale') ? 'stale：该句已被修改或不存在，请重新 verify_claims' : undefined })
+  })
+
+  server.registerTool('deep_review_audit_markdown', {
+    description: '零模型消耗确定性审稿：对外部传入的 Markdown 执行 AST 表文算术、方法-结果配对及 Spin Bias 审计。',
+    inputSchema: {
+      markdown: z.string().min(20).max(MAX_AUTH_AUDIT_MARKDOWN_CHARS),
+      title: z.string().max(200).optional(),
+      use_memory: z.boolean().optional().describe('是否应用当前用户经批注反驳沉淀的审稿边界规则（默认 true）'),
+      include_scratchpad: z.boolean().optional().describe('是否返回共享结构化草稿板（默认 true）'),
+    },
+  }, async ({ markdown, title, use_memory, include_scratchpad }) => {
+    const activeRules = use_memory !== false ? deps.claims.getActiveBoundaryRules(claims.u) : []
+    return json(runDeterministicDeepReviewOnMarkdown(markdown, {
+      title,
+      activeRules,
+      includeScratchpad: include_scratchpad !== false,
+    }))
+  })
+
+  server.registerTool('deep_review_audit', {
+    description: '零模型消耗确定性审稿：对平台文档执行表文算术、方法-结果配对及 Spin Bias 审计（应用用户反驳规则）。',
+    inputSchema: {
+      doc_id: z.string(),
+      use_memory: z.boolean().optional().describe('是否应用当前用户的审稿边界规则（默认 true）'),
+      include_scratchpad: z.boolean().optional().describe('是否返回共享结构化草稿板（默认 true）'),
+    },
+  }, async ({ doc_id, use_memory, include_scratchpad }) => {
+    const denied = ctx.check(doc_id, 'read')
+    if (denied) return denied
+    const row = store.getDoc(doc_id)!
+    if (row.kind !== 'doc') return fail('wrong_tool', '深度审稿仅支持论文文稿（kind=doc）')
+    docs.flush(doc_id)
+    const imp = store.getImportInfo(doc_id)
+    const popplerUnreliable = imp?.kind === 'pdf' && imp.import_engine === 'poppler'
+    const findings = deps.claims.auditDeepReviewPasses(doc_id, {
+      includeInternal: !popplerUnreliable,
+      useMemory: use_memory !== false,
+      owner: claims.u,
+    })
+    const doc = docs.get(doc_id)
+    const tables = popplerUnreliable ? [] : extractTableSummaries(doc)
+    const scratchpad = include_scratchpad !== false ? buildManuscriptScratchpad(doc, tables) : undefined
+    return json({
+      ok: true,
+      doc_id,
+      rev: docs.rev(doc_id),
+      findings_total: findings.length,
+      findings,
+      ...(scratchpad ? { scratchpad } : {}),
+      warnings: popplerUnreliable ? ['PDF 由 poppler 兜底导入，表格结构不可靠，已跳过表文算术一致性核查。'] : [],
+    })
+  })
+
+  server.registerTool('deep_review_start', {
+    description: '异步启动完整四阶段大模型临床深度审稿（含正文/表格/文献复核与批注锚定），返回 job_id 轮询。',
+    inputSchema: {
+      doc_id: z.string(),
+      mode: z.enum(['heurion_evolved', 'heurion_deep', 'pat_baseline']).optional().describe('审稿模式，默认 heurion_evolved'),
+      anchor_comments: z.boolean().optional().describe('是否将核查结果作为批注锚定到文稿（默认 true）'),
+    },
+  }, async ({ doc_id, mode, anchor_comments }) => {
+    const anchor = anchor_comments !== false
+    const denied = ctx.check(doc_id, anchor ? 'write' : 'read')
+    if (denied) return denied
+    const row = store.getDoc(doc_id)!
+    if (row.kind !== 'doc') return fail('wrong_tool', '深度审稿仅支持论文文稿（kind=doc）')
+    if (!deps.deepReviewJobs) {
+      return fail('not_configured', '当前服务未启用异步四阶段深度审稿队列，请改用 deep_review_audit 或 deep_review_audit_markdown')
+    }
+    const now = Date.now()
+    const recent = (deepReviewStartHits.get(claims.u) ?? []).filter(t => now - t < 3600_000)
+    if (recent.length >= MAX_DEEP_REVIEW_STARTS_PER_HOUR) {
+      return fail('rate_limited', `每小时最多发起 ${MAX_DEEP_REVIEW_STARTS_PER_HOUR} 次完整四阶段大模型深度审稿，请稍后再试或先用 zero-LLM 的 deep_review_audit`)
+    }
+    recent.push(now)
+    deepReviewStartHits.set(claims.u, recent)
+    if (deepReviewStartHits.size > 1000) {
+      for (const [k, ts] of deepReviewStartHits) {
+        if (!ts.some(t => now - t < 3600_000)) deepReviewStartHits.delete(k)
+      }
+    }
+    const resolvedMode: DeepReviewMode = mode ?? 'heurion_evolved'
+    const { job_id } = deps.deepReviewJobs.start(row, claims.u, { mode: resolvedMode, anchorComments: anchor })
+    return json({
+      ok: true,
+      job_id,
+      doc_id,
+      mode: resolvedMode,
+      anchor_comments: anchor,
+      status: 'running',
+      poll_tool: 'deep_review_status',
+      note: '已异步启动四阶段深度审稿，请调用 deep_review_status 轮询进度与完整结果。',
+    })
+  })
+
+  server.registerTool('deep_review_status', {
+    description: '查询异步四阶段深度审稿任务（deep_review_start）的各阶段进度与完整审稿报告。',
+    inputSchema: {
+      doc_id: z.string(),
+      job_id: z.string().min(1),
+    },
+  }, async ({ doc_id, job_id }) => {
+    const denied = ctx.check(doc_id, 'read')
+    if (denied) return denied
+    if (!deps.deepReviewJobs) {
+      return fail('not_configured', '当前服务未启用异步深度审稿队列')
+    }
+    const st = deps.deepReviewJobs.status(doc_id, job_id, claims.u)
+    if (!st) return fail('not_found', '未找到该深度审稿任务或无权查看')
+    return json({ ok: true, doc_id, job_id, ...st })
   })
 
   // —— 资产 ——

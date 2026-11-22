@@ -90,9 +90,14 @@ Literature citations are checked against bibliographic databases:
 
 ## Model Context Protocol (MCP) Integration
 
-Heurion exposes compliant Anthropic Model Context Protocol (MCP) servers allowing autonomous agents (such as Claude Desktop, Cursor, and Cline) to directly orchestrate clinical workflows:
-- Protocol Version: 2024-11-05 (stdio & SSE transport).
-- Endpoint: `/mcp` on platform server and standalone canvas MCP at `canvas-service/src/mcp-server.ts`.
+Heurion exposes compliant Model Context Protocol (MCP) servers allowing autonomous agents (such as Claude Desktop, Cursor, OpenCode, and Cline) to directly orchestrate clinical research, scientific writing, and manuscript deep review:
+- Protocol Version: Streamable HTTP (OAuth 2.1 + PKCE S256 + CIMD) & zero-auth stateless Streamable HTTP trials.
+- Vertical & Official MCP Registry Endpoints:
+  - `org.heurion/writing` (`https://heurion.org/api/mcp/writing-studio`): Citation-guarded `.docx`/`.pptx` authoring, PubMed/Crossref/OpenAlex search & `insert_citation`, `doc_import_docx`/`doc_export_docx`, comments, and per-turn CoW rollback.
+  - `org.heurion/deep-review` (`https://heurion.org/api/mcp/deep-review`): Four-stage clinical manuscript deep review (`deep_review_start`/`deep_review_status`), zero-LLM AST table-text & Spin Bias audit (`deep_review_audit`, `deep_review_audit_markdown`), PubMed `verify_claims`, and comment-rebuttal self-evolution (`https://heurion.org/api/public/deep-review/mcp` for zero-auth AST trial).
+  - `org.heurion/clinical-research-tools` (`https://heurion.org/api/public/mcp`): Zero-auth public biostatistics, diagram, PHI scan, AST audit, and PubMed verifier.
+  - `org.heurion/heurion` (`https://heurion.org/api/mcp/hub`): Enterprise full-platform progressive discovery Hub across all 9 clinical, imaging, cohort, and research modules.
+- Legacy / Internal Endpoints: `/mcp` (internal platform turns), `/api/mcp/:module` (modular gateway), and standalone canvas MCP at `canvas-service/src/mcp-server.ts`.
 - Available Tools:
   - `imaging_models`: Query registered MONAI and PyTorch models and device health.
   - `imaging_analyze`: Run volumetric inference on NIfTI/DICOM series and return quantitative biomarkers.

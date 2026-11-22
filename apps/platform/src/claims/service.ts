@@ -836,7 +836,7 @@ export class ClaimService {
     private readonly fulltext: FullTextClient | null = null,
   ) {}
 
-  private getActiveBoundaryRules(owner?: string): string[] {
+  getActiveBoundaryRules(owner?: string): string[] {
     const store = this.docs.store as any
     if (typeof store?.listMemories !== 'function') return []
     const resolvedOwner = owner ?? 'local'

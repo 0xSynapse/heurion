@@ -19,6 +19,7 @@ async function list(opts?: AegisMcpServerOptions, t?: 'doc' | 'deck') {
 
 /** 拆分前 server.ts 里的只读工具正则（原样保留在测试里，证明注册表与它逐个一致）。 */
 const OLD_READONLY = /^(doc_list|docs_search|doc_outline|doc_read|doc_search|doc_validate|doc_history|doc_diff|deck_templates|slide_read|layout_check|slide_render|comments_list|pubmed_search|openalex_search|oa_fulltext|doi_lookup|list_citations|list_measurements|verify_claims|dataset_list|dataset_describe|patient_list|patient_read|labs_query|report_read|patient_access_log|share_list|share_read|share_labs|share_file|study_list|study_read|study_cohort_preview|study_cohort_list|study_vars_list|kb_search|kb_read|memory_search|phr_member_links|patient_claims_list|phi_scan|imaging_status|imaging_models|account|action_status|asset_provenance)$/
+const VERTICAL_READONLY = new Set(['doc_export_docx', 'deep_review_audit_markdown', 'deep_review_audit', 'deep_review_status'])
 
 describe('MCP 模块注册表（阶段 0：拆模块，不改行为）', () => {
   it('平台注册的每个工具恰好属于一个模块；注册表里登记的名字都真实存在；九个模块都不空', async () => {
@@ -68,10 +69,10 @@ describe('MCP 模块注册表（阶段 0：拆模块，不改行为）', () => {
 
   it('只读工具集合与拆分前的正则逐个一致；只读授权 + 模块过滤可以叠加', async () => {
     const all = (await list()).map(t => t.name)
-    expect(all.filter(n => READ_ONLY_TOOLS.has(n))).toEqual(all.filter(n => OLD_READONLY.test(n)))
+    expect(all.filter(n => READ_ONLY_TOOLS.has(n))).toEqual(all.filter(n => OLD_READONLY.test(n) || VERTICAL_READONLY.has(n)))
     // 外部网关另挂只读的工作区文件工具（阶段 3，dsh 没有），比较时去掉
     const ro = (await list({ aegisToolScope: 'readonly' })).map(t => t.name).filter(n => !SHARED_TOOLS.has(n))
-    expect(ro).toEqual(all.filter(n => OLD_READONLY.test(n)))
+    expect(ro).toEqual(all.filter(n => OLD_READONLY.test(n) || VERTICAL_READONLY.has(n)))
     const roWriting = (await list({ aegisToolScope: 'readonly', modules: ['writing'] })).map(t => t.name).filter(n => !SHARED_TOOLS.has(n))
     expect(roWriting).toContain('doc_read')
     expect(roWriting).not.toContain('doc_edit')

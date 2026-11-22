@@ -307,6 +307,17 @@ jobs:
           rm -f "$hub_hdrs"
           curl -fsS https://heurion.org/.well-known/oauth-authorization-server | grep -q 'client_id_metadata_document_supported'
           curl -fsS https://heurion.org/.well-known/oauth-protected-resource/api/mcp/hub | grep -q 'https://heurion.org/api/mcp/hub'
+          # 垂直 Writing / Deep Review 与零鉴权 AST 审稿试用端点检查
+          curl -fsS -X POST -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' https://heurion.org/api/public/deep-review/mcp | grep -q 'public_deep_review_audit'
+          for v_ep in writing-studio deep-review; do
+            v_hdrs=$(mktemp)
+            v_code=$(curl -s -o /dev/null -D "$v_hdrs" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "https://heurion.org/api/mcp/${v_ep}")
+            [ "$v_code" = "401" ] && grep -qi 'oauth-protected-resource' "$v_hdrs" && grep -qi 'writing:rw literature:rw' "$v_hdrs"
+            rm -f "$v_hdrs"
+            curl -fsS "https://heurion.org/.well-known/oauth-protected-resource/api/mcp/${v_ep}" | grep -q "https://heurion.org/api/mcp/${v_ep}"
+          done
           # 影像存储（启用 pacs 时）
           case "${ENABLE_PACS:-}" in 1|true|TRUE|yes) ;; *) exit 0 ;; esac
           # 匿名访问 /api/me 不暴露 features 等信息
