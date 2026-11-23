@@ -15,12 +15,13 @@ import { HTTP_PUT_MAX, listDir, readTarget, WorkspaceFileError, writeWorkspaceFi
 import { aegisEffectiveModules, handleAegisMcpRequest, type McpDeps } from '../mcp/server.ts'
 import { ToolCatalog } from '../mcp-hub/catalog.ts'
 import { handleHubMcpRequest } from '../mcp-hub/gateway.ts'
-import { handlePublicMcpRequest } from '../mcp-hub/public-mcp.ts'
+import { handlePublicDeepReviewMcpRequest, handlePublicMcpRequest } from '../mcp-hub/public-mcp.ts'
+import { handleVerticalMcpRequest, VERTICAL_REQUIRED_SCOPE, type VerticalMcpId } from '../mcp-hub/verticals.ts'
 import type { Embedder } from '../kb/embedder.ts'
 import { formatModuleGrant, grantModules, MODULE_IDS, MODULES, moduleOf, orgAllowedModules, READ_ONLY_TOOLS, type ModuleId } from '../mcp/modules.ts'
 import { moduleSkillDoc } from '../mcp/skills.ts'
 import { TurnRegistry } from '../mcp/turns.ts'
-import { ClaimService, type ReviewProgress } from '../claims/service.ts'
+import { ClaimService, DeepReviewLimitError, type DeepReviewMode, type ReviewProgress } from '../claims/service.ts'
 import { detectRegression, reviewQualityReport, trackReview } from '../claims/review-quality.ts'
 import { PubMedClient } from '../literature/pubmed.ts'
 import { tmpdir } from 'node:os'
@@ -382,7 +383,10 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     try { remote = getConnInfo(c).remote.address ?? 'unknown' } catch { /* 测试环境没有连接信息 */ }
     const forwarded = c.req.header('x-real-ip')?.trim()
     const viaProxy = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|::ffff:(127|10|192\.168|172\.(1[6-9]|2\d|3[01]))\.|fc|fd)/i.test(remote)
-    return forwarded && viaProxy ? forwarded : remote
+    if (forwarded && (viaProxy || (remote === 'unknown' && (deps.trustProxy === true || Boolean(process.env.VITEST))))) {
+      return forwarded
+    }
+    return remote
   }
   /** 审计：谁、什么时候、从哪里、对什么做了什么（M2；管理员在「用户管理 → 审计日志」查看）。 */
   const audit = (c: Context, action: string, e: { actor?: string | null; target?: string | null; detail?: string | null; status?: number } = {}) => {
@@ -527,7 +531,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   })
 
   // —— 免登录临床科研公开小工具接口（无状态、限流） ——
-  registerPublicToolsApi(app, { pubmed: deps.pubmed, crossref: deps.crossref })
+  registerPublicToolsApi(app, { pubmed: deps.pubmed, crossref: deps.crossref, getClientIp: clientIp })
 
   // —— 官网匿名问卷（/survey）：免登录提交；IP 只用于内存里的限流，不写库 ——
   const surveyHits = new Map<string, number[]>()
@@ -638,7 +642,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   }
 
   // 浏览器里的 MCP 客户端直连网关要跨域：只用 Bearer 令牌、不带 Cookie，开放 * 不放大权限
-  const mcpCors = cors({ origin: '*', allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'], allowHeaders: ['Content-Type', 'Authorization', 'Accept', 'Mcp-Protocol-Version', 'Mcp-Session-Id', 'X-Agent-Id', 'X-Aegis-Agent-Id', 'X-Aegis-Session-Id', 'X-Aegis-Turn-Id', 'X-Aegis-Lease-Token'], exposeHeaders: ['WWW-Authenticate', 'Mcp-Session-Id', 'X-Aegis-Turn-Id'], maxAge: 600 })
+  const mcpCors = cors({ origin: '*', allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'], allowHeaders: ['Content-Type', 'Authorization', 'Accept', 'Mcp-Protocol-Version', 'Mcp-Session-Id', 'X-Agent-Id', 'X-Aegis-Agent-Id', 'X-Aegis-Org-Id', 'X-Aegis-Session-Id', 'X-Aegis-Turn-Id', 'X-Aegis-Lease-Token'], exposeHeaders: ['WWW-Authenticate', 'Mcp-Session-Id', 'X-Aegis-Turn-Id'], maxAge: 600 })
 
   // —— MCP 的 OAuth 2.1（aegis/oauth.ts；MCP_MODULES.md §0.4）——
   // 元数据、注册、令牌、撤销对浏览器里的 MCP 客户端（如 MCP Inspector）开放跨域：都用 Bearer，不涉及 Cookie
@@ -890,9 +894,18 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   const withAuthChallenge = async (c: Context, res: Response) => {
     const meta = `resource_metadata="${requestOrigin(c)}/.well-known/oauth-protected-resource${c.req.path}"`
     const mod = c.req.param('module')
-    const scope = mod && (MODULE_IDS as readonly string[]).includes(mod) ? `${mod}:rw` : MODULES.filter(m => m.external === 'open').map(m => `${m.id}:rw`).join(' ')
+    const vertical: VerticalMcpId | null = c.req.path.endsWith('/writing-studio')
+      ? 'writing-studio'
+      : c.req.path.endsWith('/deep-review')
+        ? 'deep-review'
+        : null
+    const scope = vertical
+      ? VERTICAL_REQUIRED_SCOPE[vertical]
+      : mod && (MODULE_IDS as readonly string[]).includes(mod)
+        ? `${mod}:rw`
+        : MODULES.filter(m => m.external === 'open').map(m => `${m.id}:rw`).join(' ')
     if (res.status === 401 && !res.headers.has('www-authenticate')) res.headers.set('WWW-Authenticate', `Bearer ${meta}, scope="${scope}"`)
-    else if (res.status === 403 && mod && !res.headers.has('www-authenticate')) {
+    else if (res.status === 403 && (mod || vertical) && !res.headers.has('www-authenticate')) {
       const code = ((await res.clone().json().catch(() => ({}))) as { code?: string }).code
       if (code === 'module_not_granted') res.headers.set('WWW-Authenticate', `Bearer error="insufficient_scope", scope="${scope}", ${meta}`)
     }
@@ -901,12 +914,18 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
   // Phase 0：零鉴权无状态公共临床科研 MCP 服务（不受 HEURION_AEGIS 开关限制，服务 Official MCP Registry）
   app.use('/api/public/mcp', mcpCors)
   app.post('/api/public/mcp', async c => {
-    const ip = clientIp(c)
-    const effIp = ip === 'unknown' ? (c.req.header('x-real-ip')?.trim() || 'local') : ip
-    return handlePublicMcpRequest({ pubmed: deps.pubmed, crossref: deps.crossref }, c.req.raw, effIp)
+    return handlePublicMcpRequest({ pubmed: deps.pubmed, crossref: deps.crossref }, c.req.raw, clientIp(c))
   })
   app.get('/api/public/mcp', c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
   app.delete('/api/public/mcp', c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+
+  // 零鉴权 Deep Review 确定性 AST 审计试用入口（零服务端 LLM 消耗）
+  app.use('/api/public/deep-review/mcp', mcpCors)
+  app.post('/api/public/deep-review/mcp', async c => {
+    return handlePublicDeepReviewMcpRequest({ pubmed: deps.pubmed, crossref: deps.crossref }, c.req.raw, clientIp(c))
+  })
+  app.get('/api/public/deep-review/mcp', c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+  app.delete('/api/public/deep-review/mcp', c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
 
   for (const base of ['/api/mcp', '/api/aegis/mcp']) {
     app.use(base, mcpCors)
@@ -919,6 +938,11 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       mcp: '/api/mcp',
       hub: '/api/mcp/hub',
       public_mcp: '/api/public/mcp',
+      verticals: {
+        writing: '/api/mcp/writing-studio',
+        deep_review: '/api/mcp/deep-review',
+        deep_review_public: '/api/public/deep-review/mcp',
+      },
       auth: { type: 'bearer', token_prefix: 'hr_pat.', issue: '登录 Heurion → 设置 → MCP 访问令牌' },
       optional_headers: { 'X-Agent-Id': '智能体标识（审计与撤销按它区分）', 'X-Aegis-Session-Id': '会话：同一会话读到的数字写进稿件时算有出处', 'X-Aegis-Turn-Id': '回合：同一回合的写入可整回合撤销（不带时闲置 10 分钟算新回合）' },
       modules: MODULES.map(m => ({
@@ -935,6 +959,12 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     app.post(`${base}/hub`, async c => withAuthChallenge(c, await handleHubMcpRequest(aegisMcpDeps, c.req.raw, { catalog: mcpToolCatalog, embedder: deps.embedder ?? null, publicOrigin: requestOrigin(c) })))
     app.get(`${base}/hub`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
     app.delete(`${base}/hub`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+    // 垂直场景 MCP：Writing Studio 与 Deep Review（须注册在 /:module 通配之前）
+    for (const vertical of ['writing-studio', 'deep-review'] as const) {
+      app.post(`${base}/${vertical}`, async c => withAuthChallenge(c, await handleVerticalMcpRequest(aegisMcpDeps, c.req.raw, vertical, { publicOrigin: requestOrigin(c) })))
+      app.get(`${base}/${vertical}`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+      app.delete(`${base}/${vertical}`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
+    }
     // 按模块的地址：只挂这一个模块的工具（还要在授权的模块权限里）
     app.post(`${base}/:module`, async c => withAuthChallenge(c, await handleAegisMcpRequest(aegisMcpDeps, c.req.raw, c.req.param('module'), { publicOrigin: requestOrigin(c) })))
     app.get(`${base}/:module`, c => { c.header('Allow', 'POST'); return c.json({ error: 'Method Not Allowed', code: 'method_not_allowed' }, 405) })
@@ -1012,6 +1042,7 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
       c.req.path === '/api/mail/inbound' ||
       c.req.path === '/api/imaging/pacs/webhook' ||
       c.req.path === '/api/public/mcp' ||
+      c.req.path === '/api/public/deep-review/mcp' ||
       c.req.path.startsWith('/api/public/tools/') ||
       c.req.path.startsWith('/api/public/survey/') ||
       // 专家审阅页：凭私密链接里的 token 访问（库里只存哈希），见 review/expert-review.ts
@@ -2631,7 +2662,56 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
    * 界面用 GET …/deep-review/jobs/:job 轮询每一步的进度，结束后取结果（AI 调用时仍同步等待）。
    */
   const reviewJobs = new Map<string, { doc_id: string; user: string; status: 'running' | 'done' | 'error'; steps: Record<string, ReviewProgress>; started_at: number; result?: unknown; error?: string }>()
-  const runReview = async (row: DocRow, userId: string, onProgress?: (p: ReviewProgress) => void) => {
+  const MAX_CONCURRENT_REVIEW_JOBS_PER_USER = 2
+  const MAX_CONCURRENT_REVIEW_JOBS_GLOBAL = 12
+  const MAX_REVIEW_JOBS_STORED = 200
+  const MAX_DEEP_REVIEW_STARTS_PER_HOUR = 6
+  const reviewStartHits = new Map<string, number[]>()
+
+  const checkAndConsumeReviewQuota = (userId: string) => {
+    let userRunning = 0
+    let totalRunning = 0
+    for (const j of reviewJobs.values()) {
+      if (j.status === 'running') {
+        totalRunning++
+        if (j.user === userId) userRunning++
+      }
+    }
+    if (userRunning >= MAX_CONCURRENT_REVIEW_JOBS_PER_USER) {
+      throw new DeepReviewLimitError(
+        'concurrency_limited',
+        `同时最多运行 ${MAX_CONCURRENT_REVIEW_JOBS_PER_USER} 个深度审稿任务，请等待当前任务完成后再试`,
+      )
+    }
+    if (totalRunning >= MAX_CONCURRENT_REVIEW_JOBS_GLOBAL) {
+      throw new DeepReviewLimitError(
+        'concurrency_limited',
+        '当前深度审稿队列繁忙，请稍后再试',
+      )
+    }
+    const now = Date.now()
+    const recent = (reviewStartHits.get(userId) ?? []).filter(t => now - t < 3600_000)
+    if (recent.length >= MAX_DEEP_REVIEW_STARTS_PER_HOUR) {
+      throw new DeepReviewLimitError(
+        'rate_limited',
+        `每小时最多发起 ${MAX_DEEP_REVIEW_STARTS_PER_HOUR} 次完整四阶段大模型深度审稿，请稍后再试或先用 zero-LLM 的 deep_review_audit`,
+      )
+    }
+    recent.push(now)
+    reviewStartHits.set(userId, recent)
+    if (reviewStartHits.size > 1000) {
+      for (const [k, ts] of reviewStartHits) {
+        if (!ts.some(t => now - t < 3600_000)) reviewStartHits.delete(k)
+      }
+    }
+  }
+
+  const runReview = async (
+    row: DocRow,
+    userId: string,
+    onProgress?: (p: ReviewProgress) => void,
+    opts?: { mode?: DeepReviewMode; anchorComments?: boolean },
+  ) => {
     docs.flush(row.id)
     const llmComplete =
       deps.reviewComplete ??
@@ -2646,9 +2726,9 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     const mapGz = docling && deps.reviewVision ? store.getSourceMapGz(row.id) : null
     const pdf = mapGz ? store.getPackage(row.id) : null
     const { runId, result } = await trackReview(store, { docId: row.id, owner: userId, rev: () => docs.rev(row.id) }, onP => sharedClaims.deepReview(row.id, {
-      mode: 'heurion_evolved',
+      mode: opts?.mode ?? 'heurion_evolved',
       owner: userId,
-      anchorComments: true,
+      anchorComments: opts?.anchorComments ?? true,
       tablesUnreliable: imp?.kind === 'pdf' && imp.import_engine === 'poppler',
       // Docling 导入的 PDF：表格由版面推断，逐表判断可信度
       assessTables: docling,
@@ -2676,28 +2756,72 @@ export function buildApi(deps: ApiDeps): Hono<{ Variables: { user: string } }> {
     }
   }
 
+  const startReviewJob = (
+    row: DocRow,
+    userId: string,
+    opts?: { mode?: DeepReviewMode; anchorComments?: boolean },
+  ) => {
+    const now = Date.now()
+    for (const [k, j] of reviewJobs) if (now - j.started_at > 3600_000 && j.status !== 'running') reviewJobs.delete(k)
+    if (reviewJobs.size >= MAX_REVIEW_JOBS_STORED) {
+      for (const [k, j] of reviewJobs) {
+        if (j.status !== 'running') {
+          reviewJobs.delete(k)
+          if (reviewJobs.size < MAX_REVIEW_JOBS_STORED) break
+        }
+      }
+    }
+    if (reviewJobs.size >= MAX_REVIEW_JOBS_STORED) {
+      throw new DeepReviewLimitError('concurrency_limited', '当前深度审稿队列繁忙，请稍后再试')
+    }
+    checkAndConsumeReviewQuota(userId)
+    const jobId = `job${randomUUID().replace(/-/g, '').slice(0, 10)}`
+    const job = { doc_id: row.id, user: userId, status: 'running' as 'running' | 'done' | 'error', steps: {} as Record<string, ReviewProgress>, started_at: now, result: undefined as unknown, error: undefined as string | undefined }
+    reviewJobs.set(jobId, job)
+    void runReview(row, userId, p => { job.steps[p.step] = p }, opts)
+      .then(r => { job.result = r; job.status = 'done' })
+      .catch(err => {
+        console.error('[deep-review]', err)
+        job.error = err instanceof DeepReviewLimitError ? err.message : '深度审稿执行失败，请稍后重试'
+        job.status = 'error'
+      })
+    return { job_id: jobId }
+  }
+
+  const getReviewJobStatus = (docId: string, jobId: string, userId: string) => {
+    const job = reviewJobs.get(jobId)
+    if (!job || job.doc_id !== docId || job.user !== userId) return null
+    return { status: job.status, steps: job.steps, elapsed_ms: Date.now() - job.started_at, ...(job.status === 'done' ? { result: job.result } : {}), ...(job.error ? { error: job.error } : {}) }
+  }
+
+  if (!aegisMcpDeps.deepReviewJobs) {
+    aegisMcpDeps.deepReviewJobs = { start: startReviewJob, status: getReviewJobStatus }
+  }
+
   app.post('/api/docs/:id/deep-review', async c => {
     const row = owned(c)
     if (!row) return c.json({ error: 'not found' }, 404)
     const userId = c.get('user')
-    if (c.req.query('async') !== '1') return c.json(await runReview(row, userId))
-    // 清掉一小时前的任务
-    for (const [k, j] of reviewJobs) if (Date.now() - j.started_at > 3600_000) reviewJobs.delete(k)
-    const jobId = `job${randomUUID().replace(/-/g, '').slice(0, 10)}`
-    const job = { doc_id: row.id, user: userId, status: 'running' as 'running' | 'done' | 'error', steps: {} as Record<string, ReviewProgress>, started_at: Date.now(), result: undefined as unknown, error: undefined as string | undefined }
-    reviewJobs.set(jobId, job)
-    void runReview(row, userId, p => { job.steps[p.step] = p })
-      .then(r => { job.result = r; job.status = 'done' })
-      .catch(err => { job.error = (err as Error).message ?? String(err); job.status = 'error' })
-    return c.json({ job_id: jobId })
+    try {
+      if (c.req.query('async') !== '1') {
+        checkAndConsumeReviewQuota(userId)
+        return c.json(await runReview(row, userId))
+      }
+      return c.json(startReviewJob(row, userId))
+    } catch (err) {
+      if (err instanceof DeepReviewLimitError) {
+        return c.json({ error: err.message, code: err.code }, 429)
+      }
+      throw err
+    }
   })
 
   /** 深度审稿任务的进度（界面轮询）：每一步的状态与计数，结束后带结果。 */
   app.get('/api/docs/:id/deep-review/jobs/:job', c => {
     const row = owned(c)
-    const job = reviewJobs.get(c.req.param('job'))
-    if (!row || !job || job.doc_id !== row.id || job.user !== c.get('user')) return c.json({ error: 'not found' }, 404)
-    return c.json({ status: job.status, steps: job.steps, elapsed_ms: Date.now() - job.started_at, ...(job.status === 'done' ? { result: job.result } : {}), ...(job.error ? { error: job.error } : {}) })
+    const st = row ? getReviewJobStatus(row.id, c.req.param('job'), c.get('user')) : null
+    if (!row || !st) return c.json({ error: 'not found' }, 404)
+    return c.json(st)
   })
 
   /** 采纳 / 拒绝待采纳修订（group = all 表示全部）。 */

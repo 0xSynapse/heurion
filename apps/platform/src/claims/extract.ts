@@ -1139,6 +1139,10 @@ export function auditInternalConsistency(
     }
   }
 
+  const GROUP_SUBJECT_RE = /\ba\s+[^\r\n,;.()]{1,80}?\s+group\s+with\s+(\d+)\s+subjects/gi
+  const allGroupSubjectMatches = [...fullDocText.matchAll(GROUP_SUBJECT_RE)]
+  const table0NumSet = resolvedTables[0] && resolvedTables[0].numbers.length > 0 ? new Set(resolvedTables[0].numbers) : null
+
   for (const [blkIdx, blk] of blocks.entries()) {
     const { nodeId, text, sectionTitle, sectionRole } = blk
     const nearbyText = blocks
@@ -1223,28 +1227,29 @@ export function auditInternalConsistency(
       }
     }
 
-    const localGroupSubjectMatches = [...text.matchAll(/\ba\s+[^,;.()]+?\s+group\s+with\s+(\d+)\s+subjects/gi)]
-    const allGroupSubjectMatches = [...fullDocText.matchAll(/\ba\s+[^,;.()]+?\s+group\s+with\s+(\d+)\s+subjects/gi)]
-    if (localGroupSubjectMatches.length >= 1 && allGroupSubjectMatches.length >= 2) {
-      const lastGlobalM = allGroupSubjectMatches[allGroupSubjectMatches.length - 1]!
-      const isLastBlock = localGroupSubjectMatches.some(m => m[0] === lastGlobalM[0])
-      if (isLastBlock) {
-        const sumSubj = allGroupSubjectMatches.reduce((acc, m) => acc + Number(m[1]), 0)
-        const totM = /\b([A-Za-z-]+|\d+)\s+(?:[a-z0-9/-]+\s+){0,4}?(?:mice|animals|rats|subjects)\s+were\s+(?:randomly\s+)?divided\s+into/i.exec(fullDocText)
-        const totN = totM ? parseNumberToken(totM[1]!) : animalCohortMentions[0]?.n ?? null
-        if (totN != null && sumSubj !== totN) {
-          pushIfNotExempt({
-            node_id: nodeId,
-            sentence: text,
-            snippet: lastGlobalM[0],
-            ...(sectionTitle ? { section_title: sectionTitle } : {}),
-            section_role: sectionRole,
-            category: 'internal_inconsistency',
-            subtype: 'prose_table_sample_size_mismatch',
-            severity: 'critical',
-            reason: `实验分组动物/受试者数加总（${allGroupSubjectMatches.map(m => m[1]).join(' + ')} = ${sumSubj}）与总样本量（${totN}，「${totM?.[0] ?? animalCohortMentions[0]?.sentence ?? ''}」）不一致：「${lastGlobalM[0]}」。`,
-            suggestion: '请核对各给药组与对照组动物数量之和是否等于总动物数。',
-          })
+    if (allGroupSubjectMatches.length >= 2) {
+      const localGroupSubjectMatches = [...text.matchAll(GROUP_SUBJECT_RE)]
+      if (localGroupSubjectMatches.length >= 1) {
+        const lastGlobalM = allGroupSubjectMatches[allGroupSubjectMatches.length - 1]!
+        const isLastBlock = localGroupSubjectMatches.some(m => m[0] === lastGlobalM[0])
+        if (isLastBlock) {
+          const sumSubj = allGroupSubjectMatches.reduce((acc, m) => acc + Number(m[1]), 0)
+          const totM = /\b([A-Za-z-]+|\d+)\s+(?:[a-z0-9/-]+\s+){0,4}?(?:mice|animals|rats|subjects)\s+were\s+(?:randomly\s+)?divided\s+into/i.exec(fullDocText)
+          const totN = totM ? parseNumberToken(totM[1]!) : animalCohortMentions[0]?.n ?? null
+          if (totN != null && sumSubj !== totN) {
+            pushIfNotExempt({
+              node_id: nodeId,
+              sentence: text,
+              snippet: lastGlobalM[0],
+              ...(sectionTitle ? { section_title: sectionTitle } : {}),
+              section_role: sectionRole,
+              category: 'internal_inconsistency',
+              subtype: 'prose_table_sample_size_mismatch',
+              severity: 'critical',
+              reason: `实验分组动物/受试者数加总（${allGroupSubjectMatches.map(m => m[1]).join(' + ')} = ${sumSubj}）与总样本量（${totN}，「${totM?.[0] ?? animalCohortMentions[0]?.sentence ?? ''}」）不一致：「${lastGlobalM[0]}」。`,
+              suggestion: '请核对各给药组与对照组动物数量之和是否等于总动物数。',
+            })
+          }
         }
       }
     }
@@ -1371,17 +1376,16 @@ export function auditInternalConsistency(
     }
 
     // 2. 正文单句直接引用「表 1 / Table 1」时的百分比对齐检查（按单句粒度核对，避免跨句误匹配）
-    if (/(?:表\s*1\b|\bTable\s*1\b)/i.test(text) && resolvedTables[0] && resolvedTables[0].numbers.length > 0) {
+    if (/(?:表\s*1\b|\bTable\s*1\b)/i.test(text) && table0NumSet) {
       for (const sent of blk.sents) {
         if (!/(?:表\s*1\b|\bTable\s*1\b)/i.test(sent)) continue
         const withoutCi = sent.replace(/\b95%\s*CI\b/gi, '')
         const pctMatches: string[] = withoutCi.match(/\b\d+(?:\.\d+)?[%％]/g) ?? []
-        const tableNums = resolvedTables[0].numbers
         // 表格里的百分比常不写 % 号（「Sex (% male) 60」「54 (66.7)」），去掉 % 后在表里也算对上
         const missingPcts = pctMatches.filter(p => {
           const norm = p.replace(/％/g, '%')
           const bare = norm.replace(/%$/, '')
-          return ![norm, norm.replace(/\.0%$/, '%'), bare, bare.replace(/\.0$/, '')].some(x => tableNums.includes(x))
+          return ![norm, norm.replace(/\.0%$/, '%'), bare, bare.replace(/\.0$/, '')].some(x => table0NumSet.has(x))
         })
         if (pctMatches.length > 0 && missingPcts.length === pctMatches.length) {
           pushIfNotExempt({
@@ -1834,16 +1838,47 @@ export function auditInternalConsistency(
       const m = /^(\d+)\s*\(\s*(\d+(?:\.\d+)?)\s*[%％]?\s*\)$/.exec((c ?? '').trim())
       return m && Number(m[2]) > 0 ? { n: (Number(m[1]) * 100) / Number(m[2]), pct: Number(m[2]) } : null
     }))
+    const colCount = tbl.rows.reduce((max, row) => Math.max(max, row.length), 0)
+    const sameColPeer: boolean[][] = parsedPct.map(row => new Array<boolean>(row.length).fill(false))
+    for (let c = 0; c < colCount; c++) {
+      const entries: Array<{ r: number; n: number }> = []
+      for (let r = 0; r < parsedPct.length; r++) {
+        const entry = parsedPct[r]?.[c]
+        if (entry != null) entries.push({ r, n: entry.n })
+      }
+      if (entries.length < 2) continue
+      entries.sort((a, b) => a.n - b.n)
+      for (let k = 0; k < entries.length; k++) {
+        const cur = entries[k]!
+        const tol = Math.max(1, cur.n * 0.02)
+        const prevOk = k > 0 && Math.abs(entries[k - 1]!.n - cur.n) <= tol
+        const nextOk = k + 1 < entries.length && Math.abs(entries[k + 1]!.n - cur.n) <= tol
+        if (prevOk || nextOk) sameColPeer[cur.r]![c] = true
+      }
+    }
+    const rowPctStats = parsedPct.map(row => {
+      const cells = row.filter((x): x is { n: number; pct: number } => x != null)
+      if (cells.length < 2) return null
+      let sum = 0
+      let minN = Infinity
+      let maxN = -Infinity
+      for (const x of cells) {
+        sum += x.pct
+        if (x.n < minN) minN = x.n
+        if (x.n > maxN) maxN = x.n
+      }
+      return Math.abs(sum - 100) <= 1.5 ? { minN, maxN } : null
+    })
     const sharedDenominator = (r: number, c: number, colN: number): boolean => {
       const n = parsedPct[r]?.[c]?.n
       if (n == null) return false
-      const near = (x: { n: number } | null | undefined) => x != null && Math.abs(x.n - n) <= Math.max(1, n * 0.02)
       // 亚组：同一列别的行反推出同一个更小的分母
-      if (n < colN && parsedPct.some((row, rr) => rr !== r && near(row[c]))) return true
+      if (n < colN && sameColPeer[r]?.[c]) return true
       // 按行算的百分比：这一行的百分比加起来约 100，且各格反推的分母一致
-      const rowCells = (parsedPct[r] ?? []).filter((x): x is { n: number; pct: number } => x != null)
-      const rowSum = rowCells.reduce((s, x) => s + x.pct, 0)
-      return rowCells.length >= 2 && Math.abs(rowSum - 100) <= 1.5 && rowCells.every(x => near(x))
+      const rs = rowPctStats[r]
+      if (!rs) return false
+      const tol = Math.max(1, n * 0.02)
+      return rs.maxN - n <= tol && n - rs.minN <= tol
     }
 
     let currentRowDenom: number | null = null

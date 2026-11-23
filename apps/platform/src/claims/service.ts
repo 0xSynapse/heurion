@@ -51,6 +51,16 @@ import { normForMatch, numberKey, parseVerdicts, quotedIn, VERIFY_SYSTEM } from 
  * - Stage 4：全局合成 Judge（跨章节去重、严重度门控、基于自进化记忆过滤假阳性，并挂载为文内批注 {#c:id}）。
  */
 
+export class DeepReviewLimitError extends Error {
+  constructor(
+    readonly code: 'rate_limited' | 'concurrency_limited',
+    message: string,
+    readonly status = 429,
+  ) {
+    super(message)
+  }
+}
+
 const PAGE = 8
 /** 给模型的摘要上限（C2 评测：1800 字时六成摘要的结果 / 结论段被截掉，数字类召回低 16 个百分点）。 */
 export const ABSTRACT_MAX = 4000
@@ -836,7 +846,7 @@ export class ClaimService {
     private readonly fulltext: FullTextClient | null = null,
   ) {}
 
-  private getActiveBoundaryRules(owner?: string): string[] {
+  getActiveBoundaryRules(owner?: string): string[] {
     const store = this.docs.store as any
     if (typeof store?.listMemories !== 'function') return []
     const resolvedOwner = owner ?? 'local'

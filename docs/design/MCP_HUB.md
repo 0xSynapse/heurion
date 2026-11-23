@@ -26,13 +26,21 @@
 
 ## 4. Official MCP Registry 清单
 
+- `deploy/mcp-registry/writing.server.json` -> `org.heurion/writing`（`https://heurion.org/api/mcp/writing-studio`）—— 主打科学写作与幻灯片垂直工作台（含 `.docx` 导入导出与 `literature` 引用闭环）
+- `deploy/mcp-registry/deep-review.server.json` -> `org.heurion/deep-review`（`https://heurion.org/api/mcp/deep-review`）—— 主打四阶段临床深度审稿（含零模型消耗 AST 试用 `https://heurion.org/api/public/deep-review/mcp`）
 - `deploy/mcp-registry/clinical-research-tools.server.json` -> `org.heurion/clinical-research-tools`（`https://heurion.org/api/public/mcp`）
-- `deploy/mcp-registry/heurion.server.json` -> `org.heurion/heurion`（`https://heurion.org/api/mcp/hub`）
+- `deploy/mcp-registry/heurion.server.json` -> `org.heurion/heurion`（`https://heurion.org/api/mcp/hub`）—— 定位为企业全功能 Hub
+
+## 5. Writing 与 Deep Review 垂直端点架构
+
+- **`POST /api/mcp/writing-studio`**（`apps/platform/src/mcp-hub/verticals.ts`）：打包 `writing` + `literature` 模块全部能力及 `doc_import_docx` / `doc_export_docx`，排除重型审稿编排工具，使外部 Agent 在单连接内完成「文献检索 → 引用登记 → 写前守卫 → 协同修改 → Word 交付」。
+- **`POST /api/mcp/deep-review`**（`apps/platform/src/mcp-hub/verticals.ts`）：暴露 22 个聚焦审稿的工具（`deep_review_audit_markdown`、`deep_review_audit`、`deep_review_start`、`deep_review_status`、`verify_claims`、`claim_report`、文献检索、`doc_import_docx`、只读阅稿与批注反驳进化），默认仅申请 `writing:rw literature:rw` 作用域。
+- **`POST /api/public/deep-review/mcp`**（`apps/platform/src/mcp-hub/public-mcp.ts`）：零鉴权、零服务端大模型消耗的确定性 AST 表文自洽 + PubMed 文献核验试用入口（20–30 次/分钟 IP 限流）。
 
 发布流程（部署上线并验证冒烟通过后执行）：
 
 ```bash
 mcp-publisher login dns --domain heurion.org --private-key <HEX_ED25519_PRIVATE_KEY>
-mcp-publisher publish deploy/mcp-registry/clinical-research-tools.server.json
-mcp-publisher publish deploy/mcp-registry/heurion.server.json
+mcp-publisher publish deploy/mcp-registry/writing.server.json
+mcp-publisher publish deploy/mcp-registry/deep-review.server.json
 ```

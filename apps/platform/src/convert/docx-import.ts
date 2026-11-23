@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { DOMParser, XMLSerializer, type Element as XElement, type Node as XNode } from '@xmldom/xmldom'
-import { strFromU8, unzipSync } from 'fflate'
+import { strFromU8, Unzip, UnzipInflate } from 'fflate'
 import type { Mark, Node as PMNode } from 'prosemirror-model'
 import { threadMarks } from '../model/anchors.ts'
 import { assignIds } from '../model/ids.ts'
@@ -182,22 +182,61 @@ function childrenFrom(xml: string, from: number): string[] {
 interface StyleInfo { name: string; outline: number | null; basedOn: string | null; numId: string | null; ilvl: number | null }
 interface ListInfo { numId: string; ilvl: number; ordered: boolean }
 
+const MAX_DOCX_COMPRESSED_BYTES = 64 * 1024 * 1024
 const MAX_ZIP_BYTES = 150 * 1024 * 1024
 const MAX_ZIP_ENTRIES = 2500
 
 export function safeUnzipDocx(bytes: Uint8Array): Record<string, Uint8Array> {
-  let totalBytes = 0
+  if (bytes.byteLength > MAX_DOCX_COMPRESSED_BYTES) {
+    throw new DocxImportError('DOCX_INVALID: zip 文件体积超限')
+  }
+  const out: Record<string, Uint8Array> = {}
   let entries = 0
-  return unzipSync(bytes, {
-    filter(file) {
-      entries++
-      totalBytes += file.originalSize ?? 0
-      if (entries > MAX_ZIP_ENTRIES || totalBytes > MAX_ZIP_BYTES) {
-        throw new DocxImportError('DOCX_INVALID: zip 解压体积或条目数超限')
+  let declaredBytes = 0
+  let actualBytes = 0
+  const unzip = new Unzip(file => {
+    const name = file.name
+    if (!name || name.includes('\0') || name.startsWith('/') || name.startsWith('\\') || name.split(/[\\/]/).includes('..')) {
+      throw new DocxImportError('DOCX_INVALID: zip 条目路径非法')
+    }
+    entries++
+    if (entries > MAX_ZIP_ENTRIES) {
+      throw new DocxImportError('DOCX_INVALID: zip 条目数超限')
+    }
+    if (name.endsWith('/')) return
+    declaredBytes += file.originalSize ?? 0
+    if (declaredBytes > MAX_ZIP_BYTES) {
+      throw new DocxImportError('DOCX_INVALID: zip 解压体积超限')
+    }
+    const chunks: Uint8Array[] = []
+    let entryBytes = 0
+    file.ondata = (err, data, final) => {
+      if (err) throw new DocxImportError('不是有效的 docx 文件（zip 解析失败）')
+      actualBytes += data.byteLength
+      if (actualBytes > MAX_ZIP_BYTES) {
+        throw new DocxImportError('DOCX_INVALID: zip 解压体积超限 (疑似压缩炸弹)')
       }
-      return true
-    },
+      entryBytes += data.byteLength
+      chunks.push(data)
+      if (final) {
+        if (chunks.length === 1) {
+          out[name] = chunks[0]!
+        } else {
+          const buf = new Uint8Array(entryBytes)
+          let off = 0
+          for (const ch of chunks) {
+            buf.set(ch, off)
+            off += ch.byteLength
+          }
+          out[name] = buf
+        }
+      }
+    }
+    file.start()
   })
+  unzip.register(UnzipInflate)
+  unzip.push(bytes, true)
+  return out
 }
 
 export function importDocx(bytes: Uint8Array): DocxImport {

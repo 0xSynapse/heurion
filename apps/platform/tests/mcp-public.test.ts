@@ -92,7 +92,7 @@ describe('Phase 0 · Zero-Auth Public Clinical Research MCP (/api/public/mcp)', 
     clearPublicCitationCache()
   })
 
-  it('exposes exactly 7 stateless tools without auth, supports 405 & CORS, and stays active when aegisEnabled=false', async () => {
+  it('exposes 8 stateless tools without auth, supports 405 & CORS, and stays active when aegisEnabled=false', async () => {
     const { app, store } = setupPublicApp({ aegisEnabled: false })
 
     const initRes = await rpcCall(app, {
@@ -114,6 +114,7 @@ describe('Phase 0 · Zero-Auth Public Clinical Research MCP (/api/public/mcp)', 
     const names = listJson.result!.tools.map(t => t.name).sort()
     expect(names).toEqual([
       'public_consort_diagram',
+      'public_deep_review_audit',
       'public_e_value_calculate',
       'public_forest_plot_generate',
       'public_kaplan_meier_survival',
