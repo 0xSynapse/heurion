@@ -3,13 +3,15 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { z } from 'zod'
 import type { Embedder } from '../kb/embedder.ts'
 import type { AdminToolDeps } from '../mcp/admin-tools.ts'
+import { MAX_AUTH_MCP_BODY_BYTES, readBoundedBody, toRequestBody } from '../mcp/bounded-body.ts'
 import { externalInstructions } from '../mcp/instructions.ts'
 import {
+  missingScopesForTool,
   MODULE_IDS,
   moduleGrantAllows,
   moduleOf,
-  READ_ONLY_TOOLS,
   SHARED_TOOLS,
+  toolModuleRequirements,
   type ModuleId,
 } from '../mcp/modules.ts'
 import {
@@ -95,18 +97,15 @@ function isToolPermittedByRbac(session: PreparedExternalSession, toolName: strin
 function isToolVisibleByOrgAndRbac(session: PreparedExternalSession, toolName: string): boolean {
   if (!isToolPermittedByRbac(session, toolName)) return false
   if (SHARED_TOOLS.has(toolName)) return true
-  const mod = moduleOf(toolName)
-  if (!mod || !session.orgAllowed.has(mod)) return false
-  return true
+  const reqs = toolModuleRequirements(toolName)
+  return reqs.length > 0 && reqs.every(r => session.orgAllowed.has(r.module))
 }
 
 function oauthScopeForMissingTool(session: PreparedExternalSession, toolName: string): string {
-  if (SHARED_TOOLS.has(toolName)) {
-    const firstMod = MODULE_IDS.find(id => session.effective[id]) ?? 'writing'
-    return `${firstMod}:${READ_ONLY_TOOLS.has(toolName) ? 'r' : 'rw'}`
-  }
+  const missing = missingScopesForTool(toolName, session.effective)
+  if (missing.length > 0) return missing.join(' ')
   const mod = moduleOf(toolName) ?? 'writing'
-  return `${mod}:${READ_ONLY_TOOLS.has(toolName) ? 'r' : 'rw'}`
+  return `${mod}:rw`
 }
 
 function checkToolAuthorization(session: PreparedExternalSession, toolName: string): ToolAuthResult {
@@ -114,9 +113,10 @@ function checkToolAuthorization(session: PreparedExternalSession, toolName: stri
     return { ok: false, kind: 'rbac_denied' }
   }
   if (!SHARED_TOOLS.has(toolName)) {
-    const mod = moduleOf(toolName)
-    if (!mod || !session.orgAllowed.has(mod)) {
-      return { ok: false, kind: 'org_blocked', module: mod ?? 'admin' }
+    const reqs = toolModuleRequirements(toolName)
+    const disallowed = reqs.find(r => !session.orgAllowed.has(r.module))
+    if (reqs.length === 0 || disallowed) {
+      return { ok: false, kind: 'org_blocked', module: disallowed?.module ?? 'admin' }
     }
   }
   if (!moduleGrantAllows(toolName, session.effective)) {
@@ -332,16 +332,27 @@ export async function handleHubMcpRequest(
   }
   const { session } = prep
 
-  const rawBytes = await req.arrayBuffer()
+  let rawBytes: Uint8Array = new Uint8Array(0)
+  if (req.method === 'POST') {
+    const bounded = await readBoundedBody(req, MAX_AUTH_MCP_BODY_BYTES)
+    if (!bounded.ok) return bounded.response
+    rawBytes = bounded.bytes
+  }
   const reqUrl = new URL(req.url)
   const reqPath = reqUrl.pathname
   const origin = (opts.publicOrigin || reqUrl.origin).replace(/\/+$/, '')
 
   if (req.method === 'POST' && rawBytes.byteLength > 0) {
-    let parsed: { method?: unknown; params?: unknown } | null = null
-    try { parsed = JSON.parse(new TextDecoder('utf-8').decode(rawBytes)) as { method?: unknown; params?: unknown } } catch {}
-    if (parsed && parsed.method === 'tools/call' && parsed.params && typeof parsed.params === 'object') {
-      const p = parsed.params as { name?: unknown; arguments?: Record<string, unknown> }
+    let parsed: unknown = null
+    try { parsed = JSON.parse(new TextDecoder('utf-8').decode(rawBytes)) } catch {}
+    const messages = Array.isArray(parsed)
+      ? parsed
+      : (parsed && typeof parsed === 'object' ? [parsed] : [])
+    for (const msg of messages) {
+      if (!msg || typeof msg !== 'object') continue
+      const rpc = msg as { method?: unknown; params?: unknown }
+      if (rpc.method !== 'tools/call' || !rpc.params || typeof rpc.params !== 'object') continue
+      const p = rpc.params as { name?: unknown; arguments?: Record<string, unknown> }
       const invokedName = typeof p.name === 'string' ? p.name : ''
       const targetName = invokedName === 'hub_call_tool'
         ? (typeof p.arguments?.tool_name === 'string' ? p.arguments.tool_name : '')
@@ -387,10 +398,15 @@ export async function handleHubMcpRequest(
     headers.set('accept', 'application/json, text/event-stream')
     headers.set('content-type', 'application/json')
   }
-  const normalizedReq = new Request(req.url, { method: req.method, headers, body: rawBytes.byteLength > 0 ? rawBytes : undefined })
+  const body = req.method === 'POST' ? toRequestBody(rawBytes) : undefined
+  const normalizedReq = new Request(req.url, { method: req.method, headers, ...(body !== undefined ? { body } : {}) })
 
   const built = buildHubMcpServer(deps, session, opts)
-  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+    maxRequestBodySize: MAX_AUTH_MCP_BODY_BYTES,
+  })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await built.server.connect(transport)

@@ -16,19 +16,21 @@ import { canAccess, verifyToken, type Permission, type TokenClaims } from '../au
 import { AegisAuthService } from '../aegis/auth.ts'
 import type { AgentGrantRow, DocRow, Store, TenantRow, UserRow } from '../store/db.ts'
 import { newCommentId } from '../store/db.ts'
-import type { ClaimService, DeepReviewMode, ReviewProgress } from '../claims/service.ts'
+import type { DeepReviewMode, ReviewProgress } from '../claims/service.ts'
+import { DeepReviewLimitError, type ClaimService } from '../claims/service.ts'
 import { buildManuscriptScratchpad, extractTableSummaries } from '../claims/extract.ts'
-import { MAX_AUTH_AUDIT_MARKDOWN_CHARS, runDeterministicDeepReviewOnMarkdown } from '../claims/markdown-audit.ts'
+import { MarkdownAuditError, MAX_AUTH_AUDIT_MARKDOWN_CHARS, runDeterministicDeepReviewOnMarkdown } from '../claims/markdown-audit.ts'
 import { docxFor, pptxFor } from '../convert/exports.ts'
 import { bindAssets, bindComments, DocxImportError, importDocx } from '../convert/docx-import.ts'
 import { exportFontsParam, withFonts } from '../convert/fonts.ts'
-import { writeWorkspaceFile, WorkspaceFileError } from '../aegis/files.ts'
+import { readTarget, writeWorkspaceFile, WorkspaceFileError } from '../aegis/files.ts'
 import { pptxTemplate } from '../convert/pptx-template.ts'
+import { MAX_AUTH_MCP_BODY_BYTES, readBoundedBody, toRequestBody } from './bounded-body.ts'
 import { toolInScope } from './scope.ts'
 import { DSH_INSTRUCTIONS, externalInstructions } from './instructions.ts'
 import { registerWorkspaceTools } from './workspace-tools.ts'
 import { tenantSettings } from '../auth/tenants.ts'
-import { grantModules, legacyScopeModules, MODULE_IDS, moduleGrantAllows, moduleOf, ORG_OPT_IN_MODULES, orgAllowedModules, restrictToOrg, SHARED_TOOLS, type ModuleGrant, type ModuleId } from './modules.ts'
+import { grantModules, legacyScopeModules, MODULE_IDS, moduleGrantAllows, moduleOf, ORG_OPT_IN_MODULES, orgAllowedModules, restrictToOrg, SHARED_TOOLS, type ModuleGrant, type ModuleId, type ModulePerm } from './modules.ts'
 import { DeckEditBatch, DeckOp, newTemplateDeck } from '../ops/deck.ts'
 import { LAYOUTS, layoutSpec, templateCatalog } from '../model/deck-templates.ts'
 import { DECK_THEMES, DEFAULT_THEME } from '../model/deck-themes.ts'
@@ -159,8 +161,14 @@ const fail = (code: string, message: string, extra: Record<string, unknown> = {}
 const IMAGE_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp' }
 const MAX_ASSET = 10 * 1024 * 1024
 const MAX_INLINE_DOCX = 8 * 1024 * 1024
-const MAX_DEEP_REVIEW_STARTS_PER_HOUR = 6
-const deepReviewStartHits = new Map<string, number[]>()
+const MAX_DOCX_BASE64_CHARS = Math.ceil(MAX_ASSET * 1.45)
+
+function sanitizeFilename(raw: string, fallback: string, keepFull = false): string {
+  const normalized = raw.replace(/\\/g, '/')
+  const segment = keepFull ? normalized : (normalized.split('/').pop() ?? '')
+  const clean = segment.replace(/[/\\<>:"|?*\x00-\x1f\x7f]/g, '_').trim().slice(0, 180)
+  return clean || fallback
+}
 
 
 function allowedMeasurementSources(mods?: ModuleGrant): ReadonlySet<SourceKind> | undefined {
@@ -233,6 +241,16 @@ class Ctx {
     if (!row || !role) return fail('doc_not_found', `文档 ${docId} 不存在`, { hint: '用 doc_list 查看可访问的文档（回收站里的文档不可访问）。' })
     if (roleLevel === 'write' && !allows(role, 'write')) return fail('forbidden', `用户在这份文档所在的研究里是只读成员，不能修改文档 ${docId}`, { hint: '可以读、评论；要修改请研究负责人把用户改成「可编辑」。' })
     if (!canAccess(this.claims, docId, perm)) return fail('forbidden', `没有${perm === 'write' ? '写' : '读'}文档 ${docId} 的权限`)
+    return null
+  }
+
+  /** 外部智能体模块粒度的读/写门禁，防止持有单一模块写权限时跨模块调用写作或审稿写操作。 */
+  checkModule(mod: ModuleId, perm: ModulePerm): ReturnType<typeof fail> | null {
+    if (!this.aegisModules) return null
+    const granted = this.aegisModules[mod]
+    if (!granted || (perm === 'rw' && granted !== 'rw')) {
+      return fail('insufficient_scope', `当前授权缺少模块权限 ${mod}:${perm}`)
+    }
     return null
   }
 }
@@ -562,32 +580,34 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     description: '导入工作区 .docx 或 base64 .docx 为可协作文档（保留格式、图片与 Word 批注），返回 doc_id。',
     inputSchema: {
       path: z.string().min(1).optional().describe('工作区内的 .docx 相对路径'),
-      data_base64: z.string().min(1).optional().describe('.docx 文件 base64 编码内容（与 path 二选一）'),
+      data_base64: z.string().min(1).max(MAX_DOCX_BASE64_CHARS).optional().describe('.docx 文件 base64 编码内容（与 path 二选一）'),
       filename: z.string().min(1).max(200).optional().describe('原始文件名'),
       title: z.string().min(1).max(200).optional().describe('导入后的文档标题'),
     },
   }, async ({ path, data_base64, filename, title }) => {
+    const modDenied = ctx.checkModule('writing', 'rw')
+    if (modDenied) return modDenied
     if (!claims.p.includes('write') || claims.d !== '*') return fail('forbidden', '当前令牌不能导入文档')
     let bytes: Uint8Array
-    const fallbackName = (filename || path || 'Imported Manuscript.docx').split('/').pop() ?? 'Imported Manuscript.docx'
+    const cleanFallback = sanitizeFilename(filename || path || 'Imported Manuscript.docx', 'Imported Manuscript.docx')
     if (data_base64) {
+      if (data_base64.length > MAX_DOCX_BASE64_CHARS) return fail('too_large', '文件超过 10MB 上限')
       const buf = Buffer.from(data_base64.replace(/\s+/g, ''), 'base64')
       if (!buf.byteLength) return fail('invalid_docx', 'base64 解码后的 .docx 为空')
       if (buf.byteLength > MAX_ASSET) return fail('too_large', '文件超过 10MB 上限')
       bytes = new Uint8Array(buf)
     } else if (path) {
-      const root = realpathSync(deps.workspaceDir(claims.u))
-      let file: string
+      let target: ReturnType<typeof readTarget>
       try {
-        file = realpathSync(isAbsolute(path) ? path : join(root, path))
-      } catch {
-        return fail('file_not_found', `找不到文件 ${path}`, { hint: '路径相对于工作目录。' })
+        target = readTarget(deps.workspaceDir(claims.u), path)
+      } catch (err) {
+        if (err instanceof WorkspaceFileError) return fail(err.code, err.message)
+        throw err
       }
-      const rel = relative(root, file)
-      if (rel.startsWith('..') || isAbsolute(rel)) return fail('forbidden', '只能读取工作目录内的文件')
-      if (!/\.docx$/i.test(file)) return fail('unsupported_type', 'doc_import_docx 仅支持 .docx 文件')
-      if (statSync(file).size > MAX_ASSET) return fail('too_large', '文件超过 10MB 上限')
-      bytes = new Uint8Array(readFileSync(file))
+      if (target.dir || !statSync(target.abs).isFile()) return fail('invalid_path', '目标不是普通文件')
+      if (!/\.docx$/i.test(target.rel)) return fail('unsupported_type', 'doc_import_docx 仅支持 .docx 文件')
+      if (target.size > MAX_ASSET) return fail('too_large', '文件超过 10MB 上限')
+      bytes = new Uint8Array(readFileSync(target.abs))
     } else {
       return fail('missing_file', '需要提供 path 或 data_base64')
     }
@@ -595,7 +615,7 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       const imported = importDocx(bytes)
       const ids = new Map(imported.assets.map(a => [a.key, store.putAsset({ owner: claims.u, mime: a.mime, name: a.name, bytes: a.bytes }).id]))
       const bound = bindComments(bindAssets(imported.doc, ids), imported.comments, newCommentId)
-      const resolvedTitle = title?.trim() || fallbackName.replace(/\.docx$/i, '').slice(0, 200) || 'Imported Manuscript'
+      const resolvedTitle = title?.trim() || cleanFallback.replace(/\.docx$/i, '').slice(0, 200) || 'Imported Manuscript'
       const row = docs.create({ owner: claims.u, title: resolvedTitle, content: bound.doc, source: 'import' })
       store.putNodeSrc(row.id, imported.src)
       store.putPackage(row.id, 'docx', bytes)
@@ -615,7 +635,8 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       })
     } catch (err) {
       if (err instanceof DocxImportError) return fail('docx_import_error', err.message)
-      throw err
+      console.error('[doc_import_docx]', err)
+      return fail('docx_import_failed', '导入 .docx 失败，请检查文件格式与结构是否完整')
     }
   })
 
@@ -624,18 +645,28 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
     inputSchema: {
       doc_id: z.string(),
       clean: z.boolean().optional().describe('true 时按干净稿导出（去掉 AI 修订标记）'),
-      fonts: z.string().optional().describe('可选字体方案参数'),
+      fonts: z.enum(['win', 'mac']).optional().describe('可选字体方案参数：win（默认）或 mac'),
       output_path: z.string().min(1).optional().describe('可选保存到工作区相对路径'),
       return_base64: z.boolean().optional().describe('是否返回 data_base64（默认 true，超过 8MB 时建议传 output_path）'),
     },
   }, async ({ doc_id, clean, fonts, output_path, return_base64 }) => {
+    const modDenied = ctx.checkModule('writing', 'r')
+    if (modDenied) return modDenied
     const denied = ctx.check(doc_id, 'read')
     if (denied) return denied
     const row = store.getDoc(doc_id)!
     if (row.kind !== 'doc') return fail('not_a_doc', 'doc_export_docx 仅支持文稿文档（kind=doc）')
-    docs.flush(doc_id)
-    const result = docxFor(docs, row.id, ctx.measureViews(row), { clean: clean === true })
-    const finalBytes = new Uint8Array(withFonts(result.bytes, exportFontsParam(fonts)))
+    let finalBytes: Uint8Array
+    let warnings: string[]
+    try {
+      docs.flush(doc_id)
+      const result = docxFor(docs, row.id, ctx.measureViews(row), { clean: clean === true })
+      finalBytes = new Uint8Array(withFonts(result.bytes, exportFontsParam(fonts)))
+      warnings = result.warnings
+    } catch (err) {
+      console.error('[doc_export_docx]', err)
+      return fail('export_failed', '文档导出失败，请检查文档格式后重试')
+    }
     let workspacePath: string | undefined
     let downloadPath: string | undefined
     if (output_path) {
@@ -646,16 +677,31 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
         downloadPath = `/api/mcp/files/${written.rel.split('/').map(encodeURIComponent).join('/')}`
       } catch (err) {
         if (err instanceof WorkspaceFileError) return fail(err.code, err.message)
-        throw err
+        console.error('[doc_export_docx:workspace]', err)
+        return fail('export_failed', '写入导出文件到工作区失败')
       }
     }
+    try {
+      store.addAudit({
+        actor: claims.u,
+        action: 'doc.export',
+        target: row.id,
+        detail: 'mcp doc_export_docx',
+        ip: 'ai',
+        status: 200,
+        via: 'ai',
+      })
+    } catch (err) {
+      console.error('[audit]', err)
+    }
     const wantBase64 = return_base64 !== false && finalBytes.byteLength <= MAX_INLINE_DOCX
+    const baseName = sanitizeFilename(clean ? `${row.title}（干净稿）` : row.title, 'document', true)
     return json({
       doc_id: row.id,
       title: row.title,
-      filename: `${clean ? `${row.title}（干净稿）` : row.title}.docx`,
+      filename: `${baseName}.docx`,
       bytes: finalBytes.byteLength,
-      warnings: result.warnings,
+      warnings,
       ...(workspacePath ? { workspace_path: workspacePath, download_path: downloadPath } : {}),
       ...(wantBase64
         ? { data_base64: Buffer.from(finalBytes).toString('base64') }
@@ -1206,6 +1252,8 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       '逐条判断后用 claim_report 提交；按 next_cursor 翻页。只核对，不修改正文。',
     inputSchema: { doc_id: z.string(), cursor: z.number().int().min(0).optional() },
   }, async ({ doc_id, cursor }) => {
+    const modDenied = ctx.checkModule('writing', 'r')
+    if (modDenied) return modDenied
     const denied = ctx.check(doc_id, 'read')
     if (denied) return denied
     return json(await deps.claims.evidence(doc_id, cursor ?? 0))
@@ -1228,6 +1276,8 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       })).min(1).max(50),
     },
   }, async ({ doc_id, results }) => {
+    const modDenied = ctx.checkModule('writing', 'rw')
+    if (modDenied) return modDenied
     const denied = ctx.check(doc_id, 'write')
     if (denied) return denied
     const out = deps.claims.report(doc_id, results)
@@ -1244,12 +1294,19 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       include_scratchpad: z.boolean().optional().describe('是否返回共享结构化草稿板（默认 true）'),
     },
   }, async ({ markdown, title, use_memory, include_scratchpad }) => {
-    const activeRules = use_memory !== false ? deps.claims.getActiveBoundaryRules(claims.u) : []
-    return json(runDeterministicDeepReviewOnMarkdown(markdown, {
-      title,
-      activeRules,
-      includeScratchpad: include_scratchpad !== false,
-    }))
+    if (!markdown.trim()) return fail('invalid_input', '待审计的 Markdown 内容不能为空')
+    try {
+      const activeRules = use_memory !== false ? deps.claims.getActiveBoundaryRules(claims.u) : []
+      return json(runDeterministicDeepReviewOnMarkdown(markdown, {
+        title,
+        activeRules,
+        includeScratchpad: include_scratchpad !== false,
+      }))
+    } catch (err) {
+      if (err instanceof MarkdownAuditError) return fail('invalid_markdown', err.message)
+      console.error('[deep_review_audit_markdown]', err)
+      return fail('audit_failed', 'Markdown 审稿审计失败，请检查文稿格式后重试')
+    }
   })
 
   server.registerTool('deep_review_audit', {
@@ -1260,6 +1317,8 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       include_scratchpad: z.boolean().optional().describe('是否返回共享结构化草稿板（默认 true）'),
     },
   }, async ({ doc_id, use_memory, include_scratchpad }) => {
+    const modDenied = ctx.checkModule('writing', 'r')
+    if (modDenied) return modDenied
     const denied = ctx.check(doc_id, 'read')
     if (denied) return denied
     const row = store.getDoc(doc_id)!
@@ -1294,38 +1353,36 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       anchor_comments: z.boolean().optional().describe('是否将核查结果作为批注锚定到文稿（默认 true）'),
     },
   }, async ({ doc_id, mode, anchor_comments }) => {
+    const writingDenied = ctx.checkModule('writing', 'rw')
+    if (writingDenied) return writingDenied
+    const litDenied = ctx.checkModule('literature', 'rw')
+    if (litDenied) return litDenied
     const anchor = anchor_comments !== false
-    const denied = ctx.check(doc_id, anchor ? 'write' : 'read')
+    const denied = ctx.check(doc_id, anchor ? 'write' : 'read', 'write')
     if (denied) return denied
     const row = store.getDoc(doc_id)!
     if (row.kind !== 'doc') return fail('wrong_tool', '深度审稿仅支持论文文稿（kind=doc）')
     if (!deps.deepReviewJobs) {
       return fail('not_configured', '当前服务未启用异步四阶段深度审稿队列，请改用 deep_review_audit 或 deep_review_audit_markdown')
     }
-    const now = Date.now()
-    const recent = (deepReviewStartHits.get(claims.u) ?? []).filter(t => now - t < 3600_000)
-    if (recent.length >= MAX_DEEP_REVIEW_STARTS_PER_HOUR) {
-      return fail('rate_limited', `每小时最多发起 ${MAX_DEEP_REVIEW_STARTS_PER_HOUR} 次完整四阶段大模型深度审稿，请稍后再试或先用 zero-LLM 的 deep_review_audit`)
-    }
-    recent.push(now)
-    deepReviewStartHits.set(claims.u, recent)
-    if (deepReviewStartHits.size > 1000) {
-      for (const [k, ts] of deepReviewStartHits) {
-        if (!ts.some(t => now - t < 3600_000)) deepReviewStartHits.delete(k)
-      }
-    }
     const resolvedMode: DeepReviewMode = mode ?? 'heurion_evolved'
-    const { job_id } = deps.deepReviewJobs.start(row, claims.u, { mode: resolvedMode, anchorComments: anchor })
-    return json({
-      ok: true,
-      job_id,
-      doc_id,
-      mode: resolvedMode,
-      anchor_comments: anchor,
-      status: 'running',
-      poll_tool: 'deep_review_status',
-      note: '已异步启动四阶段深度审稿，请调用 deep_review_status 轮询进度与完整结果。',
-    })
+    try {
+      const { job_id } = deps.deepReviewJobs.start(row, claims.u, { mode: resolvedMode, anchorComments: anchor })
+      return json({
+        ok: true,
+        job_id,
+        doc_id,
+        mode: resolvedMode,
+        anchor_comments: anchor,
+        status: 'running',
+        poll_tool: 'deep_review_status',
+        note: '已异步启动四阶段深度审稿，请调用 deep_review_status 轮询进度与完整结果。',
+      })
+    } catch (err) {
+      if (err instanceof DeepReviewLimitError) return fail(err.code, err.message)
+      console.error('[deep_review_start]', err)
+      return fail('deep_review_start_failed', '启动深度审稿失败，请稍后重试')
+    }
   })
 
   server.registerTool('deep_review_status', {
@@ -1335,6 +1392,8 @@ export function registerCanvasTools(server: McpServer, ctx: Ctx): void {
       job_id: z.string().min(1),
     },
   }, async ({ doc_id, job_id }) => {
+    const modDenied = ctx.checkModule('writing', 'r')
+    if (modDenied) return modDenied
     const denied = ctx.check(doc_id, 'read')
     if (denied) return denied
     if (!deps.deepReviewJobs) {
@@ -3180,17 +3239,26 @@ export async function handleAegisMcpRequest(
     })
   }
   const { server } = built
-  const accept = req.headers.get('accept') ?? ''
   let request = req
-  const contentType = req.headers.get('content-type') ?? ''
-  // 请求体一律按 JSON-RPC 解析：补齐 Accept，并把缺失或不对的 Content-Type 改成 JSON（如 curl -d 默认的表单类型）
-  if (req.method === 'POST' && (!(accept.includes('application/json') && accept.includes('text/event-stream')) || !contentType.includes('application/json'))) {
+  if (req.method === 'POST') {
+    const bounded = await readBoundedBody(req, MAX_AUTH_MCP_BODY_BYTES)
+    if (!bounded.ok) return bounded.response
+    const accept = req.headers.get('accept') ?? ''
+    const contentType = req.headers.get('content-type') ?? ''
     const headers = new Headers(req.headers)
-    headers.set('accept', 'application/json, text/event-stream')
-    headers.set('content-type', 'application/json')
-    request = new Request(req.url, { method: req.method, headers, body: await req.arrayBuffer() })
+    // 请求体一律按 JSON-RPC 解析：补齐 Accept，并把缺失或不对的 Content-Type 改成 JSON（如 curl -d 默认的表单类型）
+    if (!(accept.includes('application/json') && accept.includes('text/event-stream')) || !contentType.includes('application/json')) {
+      headers.set('accept', 'application/json, text/event-stream')
+      headers.set('content-type', 'application/json')
+    }
+    const body = toRequestBody(bounded.bytes)
+    request = new Request(req.url, { method: req.method, headers, ...(body !== undefined ? { body } : {}) })
   }
-  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+    maxRequestBodySize: MAX_AUTH_MCP_BODY_BYTES,
+  })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await server.connect(transport)

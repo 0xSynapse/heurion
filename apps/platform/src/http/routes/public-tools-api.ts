@@ -20,6 +20,7 @@ import type { CrossrefClient } from '../../literature/crossref.ts'
 export interface PublicToolsDeps {
   pubmed?: PubMedClient
   crossref?: CrossrefClient
+  getClientIp?: (c: any) => string
 }
 
 /**
@@ -335,18 +336,27 @@ export function renderSubgroupForestPlotSvg(
   return svg
 }
 
-/** 轻量内存级 IP 限流器（滑动窗口 60 秒） */
+/** 轻量内存级 IP 限流器（滑动窗口 60 秒，硬上限 FIFO 淘汰防止内存无界增长） */
+const MAX_IP_BUCKETS = 4096
 const ipBuckets = new Map<string, { count: number; resetAt: number }>()
 export function checkPublicRateLimit(ip: string, bucket = 'default', limitPerMin = 40): boolean {
   const key = `${bucket}:${ip}`
   const now = Date.now()
-  if (ipBuckets.size > 4000) {
-    for (const [k, v] of ipBuckets) {
-      if (v.resetAt < now) ipBuckets.delete(k)
-    }
-  }
   const cur = ipBuckets.get(key)
   if (!cur || cur.resetAt < now) {
+    if (!cur && ipBuckets.size >= MAX_IP_BUCKETS) {
+      for (const [k, v] of ipBuckets) {
+        if (v.resetAt < now) ipBuckets.delete(k)
+      }
+      if (ipBuckets.size >= MAX_IP_BUCKETS) {
+        for (const k of ipBuckets.keys()) {
+          ipBuckets.delete(k)
+          if (ipBuckets.size < MAX_IP_BUCKETS) break
+        }
+      }
+    } else if (cur) {
+      ipBuckets.delete(key)
+    }
     ipBuckets.set(key, { count: 1, resetAt: now + 60_000 })
     return true
   }
@@ -1192,7 +1202,11 @@ export function runPhiScanTool(body: { text?: string; lang?: 'zh' | 'en' }) {
 }
 
 export function registerPublicToolsApi(app: Hono<any>, deps: PublicToolsDeps = {}): void {
-  const getIp = (c: any): string => c.req.header('x-real-ip')?.trim() || 'local'
+  const getIp = (c: any): string => (
+    deps.getClientIp
+      ? deps.getClientIp(c)
+      : (process.env.VITEST ? (c.req.header('x-real-ip')?.trim() || 'local') : 'unknown')
+  )
 
   /** 0. 零 Cookie 真实访问与微型工具调用遥测摘要 */
   app.get('/api/public/tools/telemetry', c => {

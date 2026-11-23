@@ -90,9 +90,18 @@ export function authServerMetadata(origin: string) {
   }
 }
 
+const VALID_MCP_SUBPATHS = new Set<string>(['hub', 'writing-studio', 'deep-review', ...MODULE_IDS])
+
+const isMcpPath = (p: string) => {
+  const norm = p.replace(/\/+$/, '')
+  const m = /^\/api\/(?:aegis\/)?mcp(?:\/([a-z][a-z0-9-]*))?$/.exec(norm)
+  return Boolean(m && (!m[1] || VALID_MCP_SUBPATHS.has(m[1])))
+}
+
 /** 受保护资源元数据：resource 是客户端要连的 MCP 地址（按 well-known 后面的路径），授权服务器就是本站。 */
 export function protectedResourceMetadata(origin: string, path: string) {
-  const resource = isMcpPath(path) ? `${origin}${path}` : `${origin}/api/mcp`
+  const normPath = path.replace(/\/+$/, '')
+  const resource = isMcpPath(normPath) ? `${origin}${normPath}` : `${origin}/api/mcp`
   return {
     resource,
     authorization_servers: [origin],
@@ -103,15 +112,14 @@ export function protectedResourceMetadata(origin: string, path: string) {
   }
 }
 
-const isMcpPath = (p: string) => /^\/api\/(aegis\/)?mcp(\/[a-z][a-z0-9-]*)?$/.test(p)
-
 /** resource 参数（RFC 8707）：可以不给；给了就必须是本站的 MCP 地址。 */
 function checkResource(resource: string | null | undefined, origin: string): string | null {
   if (!resource) return null
   let u: URL
   try { u = new URL(resource) } catch { throw new OAuthError('invalid_target', 'resource 不是有效的 URL') }
-  if (u.origin !== origin || !isMcpPath(u.pathname.replace(/\/$/, ''))) throw new OAuthError('invalid_target', `resource 必须是本站的 MCP 地址（${origin}/api/mcp…）`)
-  return `${u.origin}${u.pathname.replace(/\/$/, '')}`
+  const normPath = u.pathname.replace(/\/+$/, '')
+  if (u.origin !== origin || !isMcpPath(normPath)) throw new OAuthError('invalid_target', `resource 必须是本站的 MCP 地址（${origin}/api/mcp…）`)
+  return `${u.origin}${normPath}`
 }
 
 /** 回调地址：https，或本机回环的 http（原生客户端），或私有 URI scheme（如 cursor://…）。 */

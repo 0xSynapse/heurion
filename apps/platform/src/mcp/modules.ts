@@ -147,6 +147,32 @@ for (const m of MODULES) for (const n of m.names) {
  */
 export const SHARED_TOOLS: ReadonlySet<string> = new Set(['workspace_put', 'workspace_get', 'workspace_list'])
 
+/** 跨模块联合授权要求：归属 `literature` 但实际读取或修改 `writing` 稿件与批注的工具。 */
+export const TOOL_EXTRA_MODULES: Readonly<Record<string, Readonly<Partial<Record<ModuleId, ModulePerm>>>>> = {
+  verify_claims: { writing: 'r' },
+  deep_review_audit: { writing: 'r' },
+  deep_review_status: { writing: 'r' },
+  claim_report: { writing: 'rw' },
+  deep_review_start: { writing: 'rw' },
+}
+
+/** 列出某工具所需的全部（模块, 权限）约束；共享工作区工具或未知工具返回空数组。 */
+export function toolModuleRequirements(tool: string): Array<{ module: ModuleId; perm: ModulePerm }> {
+  if (SHARED_TOOLS.has(tool)) return []
+  const primary = moduleOf(tool)
+  if (!primary) return []
+  const reqs = new Map<ModuleId, ModulePerm>([[primary, READ_ONLY_TOOLS.has(tool) ? 'r' : 'rw']])
+  const extras = TOOL_EXTRA_MODULES[tool]
+  if (extras) {
+    for (const [mod, perm] of Object.entries(extras) as Array<[ModuleId, ModulePerm | undefined]>) {
+      if (!perm) continue
+      const prev = reqs.get(mod)
+      if (!prev || perm === 'rw') reqs.set(mod, perm)
+    }
+  }
+  return [...reqs.entries()].map(([module, perm]) => ({ module, perm }))
+}
+
 /** 工具所属模块；没有登记的工具返回 null（测试保证平台注册的每个工具都有归属）。 */
 export function moduleOf(tool: string): ModuleId | null {
   const named = BY_NAME.get(tool)
@@ -228,16 +254,36 @@ export function grantModules(grant: { modules?: string | null; tool_scope: Legac
   return legacyScopeModules(grant.tool_scope)
 }
 
-/** 按模块权限判断外部智能体能否用这个工具：所属模块已授权；只读权限下只能用只读工具。 */
+/** 按模块权限判断外部智能体能否用这个工具：所属模块及跨模块依赖均已授权；只读权限下只能用只读工具。 */
 export function moduleGrantAllows(tool: string, grant: ModuleGrant): boolean {
   if (SHARED_TOOLS.has(tool)) {
     const perms = Object.values(grant)
     return READ_ONLY_TOOLS.has(tool) ? perms.length > 0 : perms.includes('rw')
   }
-  const m = moduleOf(tool)
-  const perm = m ? grant[m] : undefined
-  if (!perm) return false
-  return perm === 'rw' || READ_ONLY_TOOLS.has(tool)
+  const reqs = toolModuleRequirements(tool)
+  if (reqs.length === 0) return false
+  return reqs.every(({ module, perm }) => {
+    const g = grant[module]
+    return Boolean(g) && (perm === 'r' || g === 'rw')
+  })
+}
+
+/** 计算当前授权调用目标工具尚缺少的 scope（例如 `writing:rw` 或 `literature:r writing:r`）。 */
+export function missingScopesForTool(tool: string, grant: ModuleGrant): string[] {
+  if (SHARED_TOOLS.has(tool)) {
+    if (moduleGrantAllows(tool, grant)) return []
+    const perm: ModulePerm = READ_ONLY_TOOLS.has(tool) ? 'r' : 'rw'
+    const firstMod = MODULE_IDS.find(id => Boolean(grant[id])) ?? 'writing'
+    return [`${firstMod}:${perm}`]
+  }
+  const missing: string[] = []
+  for (const { module, perm } of toolModuleRequirements(tool)) {
+    const g = grant[module]
+    if (!g || (perm === 'rw' && g !== 'rw')) {
+      missing.push(`${module}:${perm}`)
+    }
+  }
+  return missing
 }
 
 export function formatModuleGrant(grant: ModuleGrant): string {

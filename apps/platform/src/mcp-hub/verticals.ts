@@ -10,12 +10,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import type { AdminToolDeps } from '../mcp/admin-tools.ts'
+import { MAX_AUTH_MCP_BODY_BYTES, readBoundedBody, toRequestBody } from '../mcp/bounded-body.ts'
 import { externalInstructions } from '../mcp/instructions.ts'
 import {
+  missingScopesForTool,
   moduleGrantAllows,
-  moduleOf,
-  READ_ONLY_TOOLS,
   SHARED_TOOLS,
+  toolModuleRequirements,
   type ModuleId,
 } from '../mcp/modules.ts'
 import {
@@ -75,21 +76,29 @@ export function isToolInVertical(vertical: VerticalMcpId, toolName: string): boo
   if (vertical === 'deep-review') return DEEP_REVIEW_VERTICAL_TOOLS.has(toolName)
   if (WRITING_STUDIO_EXCLUDED.has(toolName)) return false
   if (SHARED_TOOLS.has(toolName)) return true
-  const mod = moduleOf(toolName)
-  return mod === 'writing' || mod === 'literature'
+  const reqs = toolModuleRequirements(toolName)
+  return reqs.length > 0 && reqs.every(r => r.module === 'writing' || r.module === 'literature')
 }
 
 export function verticalInstructions(vertical: VerticalMcpId, grantedModules: readonly ModuleId[]): string {
-  const header = vertical === 'writing-studio'
-    ? 'Heurion Scientific Writing & Slides Studio MCP（学术写作与幻灯片垂直工作台）。' +
+  if (vertical === 'writing-studio') {
+    const header =
+      'Heurion Scientific Writing & Slides Studio MCP（学术写作与幻灯片垂直工作台）。' +
       '整合论文写作/幻灯片制作（`doc_*`、`deck_*`、`doc_import_docx`、`doc_export_docx`）与文献引用闭环' +
       '（`pubmed_search` / `doi_lookup` -> `insert_citation` -> `doc_edit`）。\n\n'
-    : 'Heurion Clinical Deep Review MCP（四阶段临床深度审稿垂直服务）。\n' +
-      '推荐审稿流程：1) 外部 Markdown 可直接调 `deep_review_audit_markdown`（零模型消耗、免建文档）；' +
-      '2) 已有 `.docx` 可先 `doc_import_docx` 后调 `deep_review_audit`（确定性 AST 表文算术与方法-结果审计）；' +
-      '3) 需要完整四阶段大模型深审与批注锚定时调 `deep_review_start` -> 轮询 `deep_review_status`；' +
-      '4) 结合 `verify_claims` / `claim_report` 与 `comment_*`（用户批注反驳将沉淀为规则记忆）。\n\n'
-  return `${header}${externalInstructions(grantedModules)}`
+    return `${header}${externalInstructions(grantedModules)}`
+  }
+  return [
+    'Heurion Clinical Deep Review MCP（四阶段临床深度审稿垂直服务）。',
+    '和用户沟通一律用简体中文：过程说明、审稿报告、反驳回复建议均使用中文（统计符号、工具参数名照常）。',
+    '',
+    '推荐审稿工作流（仅使用本垂直端点的 22 个聚焦工具）：',
+    '1) 外部 Markdown 可直接调 `deep_review_audit_markdown`（零大模型消耗、免建文档，支持 `use_memory` 应用用户反驳规则）；',
+    '2) 已有 `.docx` 原稿可用 `workspace_put`（或 `data_base64`）传给 `doc_import_docx` 建稿后调 `deep_review_audit`（确定性 AST 表文算术、方法-结果配对、Spin Bias 与 CONSORT/STROBE 审计），或 `doc_list` / `doc_outline` / `doc_read` 阅读已有文稿；',
+    '3) 需要完整四阶段大模型深审与批注锚定时调 `deep_review_start` -> 轮询 `deep_review_status`（需同时具备 `writing:rw` 与 `literature:rw` 及文稿写权限）；',
+    '4) 结合 `pubmed_search` / `openalex_search` / `oa_fulltext` / `doi_lookup` 与 `verify_claims` -> `claim_report` 完成引文核对，并通过 `comments_list` / `comment_add` / `comment_reply` / `comment_resolve` 管理批注（医生批注反驳会沉淀为后续审稿边界规则）；',
+    '5) 文件进出通过 `workspace_put` / `workspace_get` / `workspace_list`（大于 10MB 走 `/api/mcp/files/<path>`），回复用户时请用自然语言指明章节位置，勿暴露内部 id。',
+  ].join('\n')
 }
 
 export function buildVerticalMcpServer(
@@ -125,8 +134,8 @@ export function buildVerticalMcpServer(
   for (const tool of collected) {
     if (!isToolInVertical(vertical, tool.name)) continue
     if (!SHARED_TOOLS.has(tool.name)) {
-      const mod = moduleOf(tool.name)
-      if (!mod || !session.orgAllowed.has(mod)) continue
+      const reqs = toolModuleRequirements(tool.name)
+      if (!reqs.length || !reqs.every(r => session.orgAllowed.has(r.module))) continue
     }
     if (!moduleGrantAllows(tool.name, session.effective)) continue
     server.registerTool(
@@ -142,12 +151,6 @@ export function buildVerticalMcpServer(
   }
 
   return server
-}
-
-function requiredScopeForTool(toolName: string): string {
-  const perm = READ_ONLY_TOOLS.has(toolName) ? 'r' : 'rw'
-  const mod = SHARED_TOOLS.has(toolName) ? 'writing' : (moduleOf(toolName) ?? 'writing')
-  return `${mod}:${perm}`
 }
 
 /** 垂直 MCP Streamable HTTP 请求处理（`writing-studio` / `deep-review`） */
@@ -186,22 +189,36 @@ export async function handleVerticalMcpRequest(
     })
   }
 
-  const rawBytes = await req.arrayBuffer()
+  let rawBytes: Uint8Array = new Uint8Array(0)
+  if (req.method === 'POST') {
+    const bounded = await readBoundedBody(req, MAX_AUTH_MCP_BODY_BYTES)
+    if (!bounded.ok) return bounded.response
+    rawBytes = bounded.bytes
+  }
   const reqUrl = new URL(req.url)
   const origin = (opts.publicOrigin || reqUrl.origin).replace(/\/+$/, '')
 
   if (req.method === 'POST' && rawBytes.byteLength > 0) {
-    let parsed: { method?: unknown; params?: unknown } | null = null
-    try { parsed = JSON.parse(new TextDecoder('utf-8').decode(rawBytes)) as { method?: unknown; params?: unknown } } catch {}
-    if (parsed && parsed.method === 'tools/call' && parsed.params && typeof parsed.params === 'object') {
-      const targetName = typeof (parsed.params as { name?: unknown }).name === 'string'
-        ? (parsed.params as { name: string }).name
+    let parsed: unknown = null
+    try { parsed = JSON.parse(new TextDecoder('utf-8').decode(rawBytes)) } catch {}
+    const messages = Array.isArray(parsed)
+      ? parsed
+      : (parsed && typeof parsed === 'object' ? [parsed] : [])
+    for (const msg of messages) {
+      if (!msg || typeof msg !== 'object') continue
+      const rpc = msg as { method?: unknown; params?: unknown }
+      if (rpc.method !== 'tools/call' || !rpc.params || typeof rpc.params !== 'object') continue
+      const targetName = typeof (rpc.params as { name?: unknown }).name === 'string'
+        ? (rpc.params as { name: string }).name
         : ''
-      if (targetName && isToolInVertical(vertical, targetName)) {
-        const mod = moduleOf(targetName)
-        if (!SHARED_TOOLS.has(targetName) && (!mod || !session.orgAllowed.has(mod))) {
+      if (!targetName || !isToolInVertical(vertical, targetName)) continue
+      if (!SHARED_TOOLS.has(targetName)) {
+        const reqs = toolModuleRequirements(targetName)
+        const disallowed = reqs.find(r => !session.orgAllowed.has(r.module))
+        if (reqs.length === 0 || disallowed) {
+          const mod = disallowed?.module ?? 'admin'
           return new Response(JSON.stringify({
-            error: `所在机构未对外部智能体开放模块 ${mod ?? 'admin'}；请由机构管理员开启`,
+            error: `所在机构未对外部智能体开放模块 ${mod}；请由机构管理员开启`,
             code: 'module_not_allowed_by_org',
             module: mod,
           }), {
@@ -212,22 +229,23 @@ export async function handleVerticalMcpRequest(
             },
           })
         }
-        if (!moduleGrantAllows(targetName, session.effective)) {
-          const scope = requiredScopeForTool(targetName)
-          return new Response(JSON.stringify({
-            error: `调用 ${targetName} 需要权限 ${scope}；请追加授权后重试`,
-            code: 'insufficient_scope',
-            required_scope: scope,
-            tool: targetName,
-          }), {
-            status: 403,
-            headers: {
-              'content-type': 'application/json; charset=utf-8',
-              'www-authenticate': `Bearer error="insufficient_scope", scope="${scope}", resource_metadata="${origin}/.well-known/oauth-protected-resource${reqUrl.pathname}"`,
-              'x-aegis-turn-id': session.turnId,
-            },
-          })
-        }
+      }
+      if (!moduleGrantAllows(targetName, session.effective)) {
+        const missing = missingScopesForTool(targetName, session.effective)
+        const scope = missing.join(' ') || VERTICAL_REQUIRED_SCOPE[vertical]
+        return new Response(JSON.stringify({
+          error: `调用 ${targetName} 需要权限 ${scope}；请追加授权后重试`,
+          code: 'insufficient_scope',
+          required_scope: scope,
+          tool: targetName,
+        }), {
+          status: 403,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            'www-authenticate': `Bearer error="insufficient_scope", scope="${scope}", resource_metadata="${origin}/.well-known/oauth-protected-resource${reqUrl.pathname}"`,
+            'x-aegis-turn-id': session.turnId,
+          },
+        })
       }
     }
   }
@@ -239,10 +257,15 @@ export async function handleVerticalMcpRequest(
     headers.set('accept', 'application/json, text/event-stream')
     headers.set('content-type', 'application/json')
   }
-  const normalizedReq = new Request(req.url, { method: req.method, headers, body: rawBytes.byteLength > 0 ? rawBytes : undefined })
+  const body = req.method === 'POST' ? toRequestBody(rawBytes) : undefined
+  const normalizedReq = new Request(req.url, { method: req.method, headers, ...(body !== undefined ? { body } : {}) })
 
   const server = buildVerticalMcpServer(deps, session, vertical, opts)
-  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+    maxRequestBodySize: MAX_AUTH_MCP_BODY_BYTES,
+  })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await server.connect(transport)

@@ -2,9 +2,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { z } from 'zod'
 import {
+  MarkdownAuditError,
   MAX_PUBLIC_AUDIT_MARKDOWN_CHARS,
   runDeterministicDeepReviewOnMarkdown,
 } from '../claims/markdown-audit.ts'
+import { MAX_PUBLIC_MCP_BODY_BYTES, readBoundedBody, toRequestBody } from '../mcp/bounded-body.ts'
 import {
   checkPublicRateLimit,
   recordToolInvocation,
@@ -48,7 +50,7 @@ export interface PublicMcpServerOptions {
 }
 
 export function buildPublicMcpServer(deps: PublicToolsDeps = {}, opts: PublicMcpServerOptions = {}): McpServer {
-  const clientIp = opts.clientIp || 'local'
+  const clientIp = opts.clientIp || 'unknown'
   const server = new McpServer(
     { name: 'heurion-clinical-research-tools', version: '2.0.0' },
     { instructions: PUBLIC_INSTRUCTIONS },
@@ -283,7 +285,9 @@ function registerPublicDeepReviewAuditTool(server: McpServer, clientIp: string):
           includeScratchpad: args.include_scratchpad !== false,
         }))
       } catch (err) {
-        return errorTextResult((err as Error).message)
+        if (err instanceof MarkdownAuditError) return errorTextResult(err.message)
+        console.error('[public_deep_review_audit]', err)
+        return errorTextResult('Markdown 审计执行失败，请检查格式后重试 / Deep review audit failed')
       }
     },
   )
@@ -310,31 +314,34 @@ function registerPublicPubmedCitationTool(server: McpServer, deps: PublicToolsDe
         if (!text) return errorTextResult('请输入需要核验的医学论文段落或参考文献列表')
         return jsonTextResult(await verifyManuscriptCitations(text, deps))
       } catch (err) {
-        return errorTextResult((err as Error).message)
+        console.error('[public_pubmed_citation_check]', err)
+        return errorTextResult('PubMed 文献核验暂时不可用，请稍后再试 / PubMed verification temporarily unavailable')
       }
     },
   )
 }
 
-function ipFromRequest(req: Request): string {
-  const realIp = req.headers.get('x-real-ip')?.trim()
-  if (realIp) return realIp
-  const fwd = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-  return fwd || 'local'
-}
-
 async function servePublicMcpTransport(server: McpServer, req: Request): Promise<Response> {
-  const accept = req.headers.get('accept') ?? ''
-  const contentType = req.headers.get('content-type') ?? ''
   let request = req
-  if (req.method === 'POST' && (!(accept.includes('application/json') && accept.includes('text/event-stream')) || !contentType.includes('application/json'))) {
+  if (req.method === 'POST') {
+    const bounded = await readBoundedBody(req, MAX_PUBLIC_MCP_BODY_BYTES)
+    if (!bounded.ok) return bounded.response
+    const accept = req.headers.get('accept') ?? ''
+    const contentType = req.headers.get('content-type') ?? ''
     const headers = new Headers(req.headers)
-    headers.set('accept', 'application/json, text/event-stream')
-    headers.set('content-type', 'application/json')
-    request = new Request(req.url, { method: req.method, headers, body: await req.arrayBuffer() })
+    if (!(accept.includes('application/json') && accept.includes('text/event-stream')) || !contentType.includes('application/json')) {
+      headers.set('accept', 'application/json, text/event-stream')
+      headers.set('content-type', 'application/json')
+    }
+    const body = toRequestBody(bounded.bytes)
+    request = new Request(req.url, { method: req.method, headers, ...(body !== undefined ? { body } : {}) })
   }
 
-  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+    maxRequestBodySize: MAX_PUBLIC_MCP_BODY_BYTES,
+  })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await server.connect(transport)
@@ -354,7 +361,7 @@ async function servePublicMcpTransport(server: McpServer, req: Request): Promise
 }
 
 export function buildPublicDeepReviewMcpServer(deps: PublicToolsDeps = {}, opts: PublicMcpServerOptions = {}): McpServer {
-  const clientIp = opts.clientIp || 'local'
+  const clientIp = opts.clientIp || 'unknown'
   const server = new McpServer(
     { name: 'heurion-deep-review-public', version: '1.0.0' },
     { instructions: PUBLIC_DEEP_REVIEW_INSTRUCTIONS },
@@ -370,7 +377,7 @@ export async function handlePublicMcpRequest(
   req: Request,
   clientIpOverride?: string,
 ): Promise<Response> {
-  const ip = clientIpOverride || ipFromRequest(req)
+  const ip = clientIpOverride || 'unknown'
   if (!checkPublicRateLimit(ip, 'public_mcp', 30)) {
     return new Response(
       JSON.stringify({ error: '请求过于频繁，请稍后再试 / Rate limit exceeded', code: 'rate_limited' }),
@@ -394,7 +401,7 @@ export async function handlePublicDeepReviewMcpRequest(
   req: Request,
   clientIpOverride?: string,
 ): Promise<Response> {
-  const ip = clientIpOverride || ipFromRequest(req)
+  const ip = clientIpOverride || 'unknown'
   if (!checkPublicRateLimit(ip, 'public_mcp_deep_review_endpoint', 30)) {
     return new Response(
       JSON.stringify({ error: '请求过于频繁，请稍后再试 / Rate limit exceeded', code: 'rate_limited' }),

@@ -56,12 +56,24 @@ export interface MarkdownDeepReviewResult {
   next_steps_hint: string
 }
 
+export class MarkdownAuditError extends Error {}
+
 const TIER_RANK: Record<VerificationTier, number> = { light: 0, medium: 1, high: 2 }
 
 function countWords(text: string): number {
   const cjk = (text.match(/[\u4e00-\u9fff]/g) ?? []).length
-  const latin = (text.replace(/[\u4e00-\u9fff]/g, ' ').trim().match(/\S+/g) ?? []).length
+  const latin = (text.replace(/[\u4e00-\u9fff]/g, ' ').replace(/\|/g, ' ').trim().match(/\S+/g) ?? []).length
   return cjk + latin
+}
+
+function neutralizeExternalImages(md: string): string {
+  return md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (full, alt: string, inner: string) => {
+    const trimmedInner = inner.trim()
+    const target = (trimmedInner.startsWith('<') ? trimmedInner.slice(1).split('>')[0] : trimmedInner.split(/\s+/)[0]) ?? ''
+    if (/^asset:[a-z0-9]+$/i.test(target)) return full
+    const label = alt.trim()
+    return label ? `[Figure: ${label}]` : '[Figure]'
+  })
 }
 
 export function runDeterministicDeepReviewOnMarkdown(
@@ -70,10 +82,15 @@ export function runDeterministicDeepReviewOnMarkdown(
 ): MarkdownDeepReviewResult {
   const trimmed = markdown.trim()
   if (!trimmed) {
-    throw new Error('Markdown manuscript content must not be empty')
+    throw new MarkdownAuditError('Markdown manuscript content must not be empty')
   }
 
-  const parsedBlocks = parseBlocks(trimmed)
+  let parsedBlocks
+  try {
+    parsedBlocks = parseBlocks(neutralizeExternalImages(trimmed))
+  } catch (err) {
+    throw new MarkdownAuditError(err instanceof Error ? err.message : 'Invalid Markdown structure')
+  }
   const blocks = parsedBlocks.length > 0 ? parsedBlocks : [schema.node('paragraph')]
   const rawDoc = schema.node('doc', null, blocks)
   const doc = assignIds(rawDoc, new Set())
@@ -84,6 +101,7 @@ export function runDeterministicDeepReviewOnMarkdown(
 
   const sections: MarkdownSectionSummary[] = []
   const roleTracker = new SectionRoleTracker()
+  let firstHeadingTitle: string | null = null
   let current: MarkdownSectionSummary = {
     title: opts.title?.trim() || 'Abstract / Header',
     role: 'other',
@@ -96,9 +114,16 @@ export function runDeterministicDeepReviewOnMarkdown(
   doc.forEach(node => {
     if (node.type.name === 'heading') {
       const hTitle = headingText(node) || 'Section'
+      if (firstHeadingTitle === null) firstHeadingTitle = hTitle
       if (current.blocks > 0 || current.words > 0) sections.push(current)
       const role = roleTracker.onHeading(Number(node.attrs.level ?? 2), hTitle)
-      current = { title: hTitle, role, tier: 'light', blocks: 0, words: 0 }
+      current = {
+        title: hTitle,
+        role,
+        tier: role === 'methods' || role === 'results' ? 'high' : 'light',
+        blocks: 0,
+        words: 0,
+      }
       return
     }
     const text = plainText(node).trim()
@@ -125,7 +150,7 @@ export function runDeterministicDeepReviewOnMarkdown(
     bySeverity[f.severity] = (bySeverity[f.severity] ?? 0) + 1
   }
 
-  const resolvedTitle = opts.title?.trim() || (sections[0]?.title ?? 'Untitled Manuscript')
+  const resolvedTitle = opts.title?.trim() || firstHeadingTitle || sections[0]?.title || 'Untitled Manuscript'
   return {
     ok: true,
     engine: 'heurion-deterministic-ast-v1',

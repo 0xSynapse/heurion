@@ -1,18 +1,22 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { zipSync } from 'fflate'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Accounts } from '../src/auth/accounts.ts'
 import { TenantService } from '../src/auth/tenants.ts'
+import { runDeterministicDeepReviewOnMarkdown } from '../src/claims/markdown-audit.ts'
 import { PostCheck } from '../src/collab/postcheck.ts'
+import { DocxImportError, safeUnzipDocx } from '../src/convert/docx-import.ts'
 import { DatasetService } from '../src/datasets/service.ts'
 import type { HarnessPool } from '../src/harness/pool.ts'
 import { buildApi } from '../src/http/api.ts'
-import { clearPublicCitationCache } from '../src/http/routes/public-tools-api.ts'
+import { clearPublicCitationCache, checkPublicRateLimit } from '../src/http/routes/public-tools-api.ts'
 import type { CrossrefClient } from '../src/literature/crossref.ts'
 import type { PubMedClient } from '../src/literature/pubmed.ts'
+import { verticalInstructions } from '../src/mcp-hub/verticals.ts'
 import { TurnRegistry } from '../src/mcp/turns.ts'
 import { Documents } from '../src/model/runtime.ts'
 import { OpService } from '../src/ops/service.ts'
@@ -465,5 +469,348 @@ describe('Writing Studio & Deep Review Vertical MCP Endpoints', () => {
       expect(doc.remotes?.[0]?.type).toBe('streamable-http')
       expect(doc.remotes?.[0]?.url).toMatch(/^https:\/\/heurion\.org\/api\//)
     }
+  })
+
+  it('6. H1: enforces bounded streaming request body (413), hard ipBuckets cap, and linear extractor runtime', async () => {
+    const { app } = setupVerticalEnv()
+
+    const hugeJson = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'public_deep_review_audit', arguments: { markdown: 'x'.repeat(1_150_000) } },
+    })
+    const overClRes = await app.request('/api/public/deep-review/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-real-ip': '198.51.100.200' },
+      body: hugeJson,
+    })
+    expect(overClRes.status).toBe(413)
+    expect(((await overClRes.json()) as { code?: string }).code).toBe('payload_too_large')
+
+    const streamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(600_000).fill(0x20))
+        controller.enqueue(new Uint8Array(600_000).fill(0x20))
+        controller.close()
+      },
+    })
+    const overStreamRes = await app.request('/api/public/deep-review/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-real-ip': '198.51.100.201' },
+      body: streamBody,
+      duplex: 'half',
+    } as RequestInit)
+    expect(overStreamRes.status).toBe(413)
+    expect(((await overStreamRes.json()) as { code?: string }).code).toBe('payload_too_large')
+
+    // ipBuckets hard cap (4096) handles 4200 unique IPs without crashing or unbounded Map growth
+    for (let i = 0; i < 4200; i++) {
+      expect(checkPublicRateLimit(`10.99.${Math.floor(i / 250)}.${i % 250}`, 'vertical_cap_test', 5)).toBe(true)
+    }
+    expect(checkPublicRateLimit('10.99.255.254', 'vertical_cap_test', 5)).toBe(true)
+
+    // Pathological repeated clause + larger table stays fast
+    const tableRows = Array.from({ length: 60 }, (_, idx) => `| Feature ${idx} | ${10 + (idx % 10)} (${20 + (idx % 20)}%) | ${12 + (idx % 10)} (${24 + (idx % 20)}%) |`).join('\n')
+    const heavyMd = [
+      '# Methods',
+      'Forty mice were randomly divided into four groups.',
+      ...Array.from({ length: 20 }, (_, i) => `A ${'long_cohort_label_'.repeat(3)}${i} group with 10 subjects received treatment.`),
+      '',
+      '| Variable | Arm A (n=50) | Arm B (n=50) |',
+      '|---|---|---|',
+      tableRows,
+    ].join('\n\n')
+    const t0 = Date.now()
+    const audited = runDeterministicDeepReviewOnMarkdown(heavyMd)
+    expect(audited.ok).toBe(true)
+    expect(Date.now() - t0).toBeLessThan(1500)
+  })
+
+  it('7. H2: blocks cross-module privilege escalation, study viewer deep_review_start, and enforces concurrency/hourly quotas', async () => {
+    let releaseHold!: () => void
+    const holdPromise = new Promise<void>(resolve => { releaseHold = resolve })
+    const { app, store, docs, user, accounts } = (() => {
+      const dir = mkdtempSync(join(tmpdir(), 'mcp-h2-'))
+      const store = new Store(':memory:')
+      const docs = new Documents(store)
+      const ops = new OpService(docs)
+      const registry = new TurnRegistry()
+      const accounts = new Accounts(store, {
+        secret: 'h2-test-secret',
+        devMode: false,
+        devToken: 'dev',
+        devUser: 'dev',
+        botGuard: { issue: () => ({} as never), verify: () => {} } as never,
+      })
+      const tenants = new TenantService(store, { devMode: false })
+      const keys = new TenantKeys(store, kekFrom({ secret: 'h2-test-secret' }))
+      const patients = new PatientService(join(dir, 'tenants'), tenants, keys, store)
+      const pool = {
+        liveSession: () => null,
+        run: () => new Promise(() => {}),
+        cancel: async () => {},
+        workspaceDir: () => dir,
+      } as unknown as HarnessPool
+      const pubmed = {
+        search: async () => [],
+        fetch: async () => [],
+        abstract: async () => null,
+        lookup: async () => null,
+      } as unknown as PubMedClient
+      const app = buildApi({
+        docs,
+        ops,
+        turns: new TurnService(docs, pool, registry),
+        turnRegistry: registry,
+        postcheck: new PostCheck(docs),
+        crossref: {} as CrossrefClient,
+        pubmed,
+        renderer: new SlideRenderer(join(dir, 'render')),
+        accounts,
+        devMode: false,
+        aegisEnabled: true,
+        publicOrigin: 'https://heurion.org',
+        devUser: 'dev',
+        patients,
+        workspaceDir: () => dir,
+        reviewComplete: async () => {
+          await holdPromise
+          return '[]'
+        },
+      })
+      const user = accounts.register({ username: 'pi_user', password: 'Password123!', display_name: 'PI' }, '127.0.0.1')
+      return { app, store, docs, user, accounts }
+    })()
+
+    const issueFor = async (sessionTok: string, modules: unknown) => {
+      const r = await app.request('/api/me/mcp-tokens', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${sessionTok}` },
+        body: JSON.stringify({ name: 'Scoped Client', modules }),
+      })
+      expect(r.status).toBe(201)
+      return ((await r.json()) as { token: string }).token
+    }
+
+    // 7a. writing:r + literature:rw cannot see or call deep_review_start / claim_report (needs writing:rw)
+    const writingReadLitRw = await issueFor(user.token, { writing: 'r', literature: 'rw' })
+    const toolsWr = (await listTools(app, '/api/mcp/deep-review', writingReadLitRw)).map(t => t.name)
+    expect(toolsWr).toContain('verify_claims')
+    expect(toolsWr).toContain('deep_review_audit')
+    expect(toolsWr).not.toContain('deep_review_start')
+    expect(toolsWr).not.toContain('claim_report')
+
+    const deniedStart = await mcpToolCall(app, '/api/mcp/deep-review', 'deep_review_start', { doc_id: 'd_any' }, { token: writingReadLitRw })
+    expect(deniedStart.status).toBe(403)
+    expect(deniedStart.data.code).toBe('insufficient_scope')
+    expect(deniedStart.headers.get('www-authenticate')).toContain('writing:rw')
+
+    const deniedClaimReport = await mcpToolCall(app, '/api/mcp/deep-review', 'claim_report', {
+      doc_id: 'd_any',
+      results: [{ claim_id: 'c1', verdict: 'supported', reason: 'ok' }],
+    }, { token: writingReadLitRw })
+    expect(deniedClaimReport.status).toBe(403)
+    expect(deniedClaimReport.data.code).toBe('insufficient_scope')
+
+    // 7b. literature:rw only (no writing) cannot see or call deep_review_audit / verify_claims (needs writing:r)
+    const litOnly = await issueFor(user.token, { literature: 'rw' })
+    const toolsLitOnly = (await listTools(app, '/api/mcp/deep-review', litOnly)).map(t => t.name)
+    expect(toolsLitOnly).not.toContain('deep_review_audit')
+    expect(toolsLitOnly).not.toContain('verify_claims')
+    const deniedAudit = await mcpToolCall(app, '/api/mcp/deep-review', 'deep_review_audit', { doc_id: 'd_any' }, { token: litOnly })
+    expect(deniedAudit.status).toBe(403)
+    expect(deniedAudit.data.code).toBe('insufficient_scope')
+    expect(deniedAudit.headers.get('www-authenticate')).toContain('writing:r')
+
+    // 7c. Study viewer (read-only collaborator) cannot launch LLM deep_review_start even with anchor_comments=false
+    const viewer = accounts.register({ username: 'viewer_user', password: 'Password123!', display_name: 'Viewer' }, '127.0.0.1')
+    const study = store.addStudy({ owner: user.user.id, title: 'Collab Study', design: 'retrospective_cohort', status: 'ongoing', summary: '' })
+    const studyDoc = docs.create({
+      owner: user.user.id,
+      title: 'Shared Study Manuscript',
+      markdown: '# Abstract\n100 patients enrolled.\n\n# Results\n10/50 (40%) responded.',
+    })
+    store.setDocContext(studyDoc.id, { kind: 'study', study_id: study.id, title: study.title, role: 'manuscript' })
+    store.addStudyItem({ study_id: study.id, kind: 'doc', ref_id: studyDoc.id, role: 'manuscript' })
+    store.setStudyMember({ study_id: study.id, user_id: viewer.user.id, role: 'viewer', added_by: user.user.id })
+
+    const viewerTok = await issueFor(viewer.token, { writing: 'rw', literature: 'rw' })
+    const viewerStart = await mcpToolCall(app, '/api/mcp/deep-review', 'deep_review_start', {
+      doc_id: studyDoc.id,
+      anchor_comments: false,
+    }, { token: viewerTok })
+    expect(viewerStart.isError).toBe(true)
+    expect(viewerStart.data.code).toBe('forbidden')
+
+    // 7d. Shared concurrency cap (2 running) + hourly cap (6/hr) across MCP & HTTP
+    const piRwTok = await issueFor(user.token, { writing: 'rw', literature: 'rw' })
+    const j1 = await mcpToolCall(app, '/api/mcp/deep-review', 'deep_review_start', { doc_id: studyDoc.id }, { token: piRwTok })
+    const j2 = await mcpToolCall(app, '/api/mcp/deep-review', 'deep_review_start', { doc_id: studyDoc.id }, { token: piRwTok })
+    expect(j1.isError).toBe(false)
+    expect(j2.isError).toBe(false)
+
+    const j3Concurrent = await mcpToolCall(app, '/api/mcp/deep-review', 'deep_review_start', { doc_id: studyDoc.id }, { token: piRwTok })
+    expect(j3Concurrent.isError).toBe(true)
+    expect(j3Concurrent.data.code).toBe('concurrency_limited')
+
+    releaseHold()
+    for (const jid of [j1.data.job_id, j2.data.job_id]) {
+      for (let i = 0; i < 40; i++) {
+        const st = await mcpToolCall(app, '/api/mcp/deep-review', 'deep_review_status', { doc_id: studyDoc.id, job_id: jid }, { token: piRwTok })
+        if (st.data.status !== 'running') break
+        await new Promise(r => setTimeout(r, 10))
+      }
+    }
+
+    for (let k = 0; k < 4; k++) {
+      const jk = await mcpToolCall(app, '/api/mcp/deep-review', 'deep_review_start', { doc_id: studyDoc.id }, { token: piRwTok })
+      expect(jk.isError).toBe(false)
+      for (let i = 0; i < 40; i++) {
+        const st = await mcpToolCall(app, '/api/mcp/deep-review', 'deep_review_status', { doc_id: studyDoc.id, job_id: jk.data.job_id }, { token: piRwTok })
+        if (st.data.status !== 'running') break
+        await new Promise(r => setTimeout(r, 10))
+      }
+    }
+
+    const j7Rate = await mcpToolCall(app, '/api/mcp/deep-review', 'deep_review_start', { doc_id: studyDoc.id }, { token: piRwTok })
+    expect(j7Rate.isError).toBe(true)
+    expect(j7Rate.data.code).toBe('rate_limited')
+
+    const httpRateRes = await app.request(`/api/docs/${studyDoc.id}/deep-review?async=1`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${user.token}` },
+    })
+    expect(httpRateRes.status).toBe(429)
+    expect(((await httpRateRes.json()) as { code?: string }).code).toBe('rate_limited')
+  })
+
+  it('8. H3 & M1: safeUnzipDocx blocks zip bomb & traversal; doc_import_docx hardens workspace paths; doc_export_docx writes audit log', async () => {
+    const big = new Uint8Array(600 * 1024).fill(0x41)
+    const parts: Record<string, Uint8Array> = {}
+    for (let i = 0; i < 260; i++) parts[`word/media/p${i}.bin`] = big
+    const bomb = zipSync(parts, { level: 9 })
+    const spoofed = new Uint8Array(bomb)
+    for (let i = 0; i < spoofed.length - 30; i++) {
+      if (spoofed[i] === 0x50 && spoofed[i + 1] === 0x4b && spoofed[i + 2] === 0x03 && spoofed[i + 3] === 0x04) {
+        spoofed.fill(0, i + 22, i + 26)
+      }
+      if (spoofed[i] === 0x50 && spoofed[i + 1] === 0x4b && spoofed[i + 2] === 0x01 && spoofed[i + 3] === 0x02) {
+        spoofed.fill(0, i + 24, i + 28)
+      }
+    }
+    expect(() => safeUnzipDocx(spoofed)).toThrow(DocxImportError)
+
+    const travRaw = zipSync({ 'xx/evil.xml': new Uint8Array([1, 2, 3]) })
+    const needle = new TextEncoder().encode('xx/evil.xml')
+    const patched = new TextEncoder().encode('../evil.xml')
+    const trav = new Uint8Array(travRaw)
+    for (let i = 0; i <= trav.length - needle.length; i++) {
+      if (needle.every((b, j) => trav[i + j] === b)) trav.set(patched, i)
+    }
+    expect(() => safeUnzipDocx(trav)).toThrow(DocxImportError)
+
+    const { app, store, dir, issuePat } = setupVerticalEnv()
+    const token = await issuePat({ writing: 'rw', literature: 'rw' })
+
+    // Missing workspace directory does not crash (structured file_not_found)
+    rmSync(dir, { recursive: true, force: true })
+    const missingWs = await mcpToolCall(app, '/api/mcp/writing-studio', 'doc_import_docx', { path: 'missing.docx' }, { token })
+    expect(missingWs.isError).toBe(true)
+    expect(missingWs.data.code).toBe('file_not_found')
+
+    // Symlink escape outside workspace rejected with invalid_path
+    mkdirSync(dir, { recursive: true })
+    const outsideDir = mkdtempSync(join(tmpdir(), 'outside-docx-'))
+    const outsideFile = join(outsideDir, 'secret.docx')
+    writeFileSync(outsideFile, 'dummy')
+    symlinkSync(outsideFile, join(dir, 'escape.docx'))
+    const escapeRes = await mcpToolCall(app, '/api/mcp/writing-studio', 'doc_import_docx', { path: 'escape.docx' }, { token })
+    expect(escapeRes.isError).toBe(true)
+    expect(escapeRes.data.code).toBe('invalid_path')
+
+    // Export audit log (M1) + base64 import + >10MB base64 rejection
+    const created = await mcpToolCall(app, '/api/mcp/writing-studio', 'doc_create', {
+      title: 'Audit/Escape\\Test',
+      markdown: '# Intro\n\nManuscript body for export.\n',
+    }, { token })
+    const docId = created.data.doc_id as string
+    const exported = await mcpToolCall(app, '/api/mcp/writing-studio', 'doc_export_docx', { doc_id: docId, fonts: 'mac' }, { token })
+    expect(exported.isError).toBe(false)
+    expect(exported.data.filename).toBe('Audit_Escape_Test.docx')
+    expect(store.listAudit({ action: 'doc.export' }).some(a => a.target === docId && a.detail === 'mcp doc_export_docx')).toBe(true)
+
+    const importedB64 = await mcpToolCall(app, '/api/mcp/writing-studio', 'doc_import_docx', {
+      data_base64: exported.data.data_base64,
+      filename: '../../weird.docx',
+    }, { token })
+    expect(importedB64.isError).toBe(false)
+    expect(importedB64.data.doc_id).toBeTruthy()
+
+    const over10MbB64 = await mcpToolCall(app, '/api/mcp/writing-studio', 'doc_import_docx', {
+      data_base64: 'A'.repeat(14_000_000),
+    }, { token })
+    expect(over10MbB64.isError).toBe(true)
+    expect(over10MbB64.data.code).toBe('too_large')
+  })
+
+  it('9. M2, M3, L1 & L2: AST external image safety, H1 title, JSON-RPC batch guard, PRM slug validation, tailored instructions & CORS', async () => {
+    const md = [
+      '# Randomized Cardiac Trial',
+      '',
+      '![Kaplan Curve](https://example.com/km.png)',
+      '',
+      '## Methods',
+      'We enrolled 100 patients and analyzed baseline data | Col |.',
+    ].join('\n')
+    const res = runDeterministicDeepReviewOnMarkdown(md)
+    expect(res.ok).toBe(true)
+    expect(res.summary.title).toBe('Randomized Cardiac Trial')
+    const methodsSec = res.sections.find(s => s.title === 'Methods')
+    expect(methodsSec?.tier).toBe('high')
+
+    const { app, issuePat } = setupVerticalEnv()
+    const roTok = await issuePat({ writing: 'r', literature: 'r' })
+    const batchRes = await mcpRpc(app, '/api/mcp/deep-review', [
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'deep_review_start', arguments: { doc_id: 'd1' } } },
+    ], { token: roTok })
+    expect(batchRes.status).toBe(403)
+    expect(((await batchRes.json()) as { code?: string }).code).toBe('insufficient_scope')
+
+    const trailPrm = await (await app.request('/.well-known/oauth-protected-resource/api/mcp/deep-review/')).json() as { resource: string }
+    expect(trailPrm.resource).toBe('https://heurion.org/api/mcp/deep-review')
+    const badSlugPrm = await (await app.request('/.well-known/oauth-protected-resource/api/mcp/does-not-exist')).json() as { resource: string }
+    expect(badSlugPrm.resource).toBe('https://heurion.org/api/mcp')
+
+    const reg = await app.request('/oauth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ client_name: 'Resource Check', redirect_uris: ['http://127.0.0.1:43211/cb'], token_endpoint_auth_method: 'none' }),
+    })
+    const { client_id } = await reg.json() as { client_id: string }
+    const badTargetAuth = await app.request(
+      `/oauth/authorize?${new URLSearchParams({
+        response_type: 'code',
+        client_id,
+        redirect_uri: 'http://127.0.0.1:43211/cb',
+        code_challenge: 'a'.repeat(43),
+        code_challenge_method: 'S256',
+        resource: 'https://heurion.org/api/mcp/does-not-exist',
+      }).toString()}`,
+    )
+    expect(badTargetAuth.status).toBe(302)
+    expect(new URL(badTargetAuth.headers.get('location')!).searchParams.get('error')).toBe('invalid_target')
+
+    const drInst = verticalInstructions('deep-review', ['writing', 'literature'])
+    expect(drInst).not.toContain('doc_edit')
+    expect(drInst).not.toContain('deck_edit')
+    expect(drInst).not.toContain('insert_citation')
+
+    const corsRes = await app.request('/api/mcp/deep-review', {
+      method: 'OPTIONS',
+      headers: { origin: 'http://localhost:6274', 'access-control-request-method': 'POST', 'access-control-request-headers': 'X-Aegis-Org-Id, Authorization' },
+    })
+    expect((corsRes.headers.get('access-control-allow-headers') ?? '').toLowerCase()).toContain('x-aegis-org-id')
   })
 })
